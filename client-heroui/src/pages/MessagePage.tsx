@@ -43,15 +43,16 @@ export const MessagePage: React.FC = () => {
   const [roomToJoin, setRoomToJoin] = useState<{ id: string; name: string } | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const [searchParams] = useSearchParams();
+  // 修改处：同时获取 setSearchParams 方法
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const toggleTheme = () => setTheme(isDark ? "light" : "dark");
 
-  // 工具函数：清除 URL 中的 room 参数
+  // 修改处：使用 setSearchParams 更新 URL 参数
   const clearRoomUrlParam = () => {
-    const url = new URL(window.location.href);
-    url.searchParams.delete('room');
-    window.history.pushState({}, '', url);
+    const newParams = new URLSearchParams(searchParams);
+    newParams.delete('room');
+    setSearchParams(newParams);
   };
 
   // 初次加载时加载已保存房间
@@ -126,7 +127,8 @@ export const MessagePage: React.FC = () => {
     if (currentRoom) {
       leaveRoom(currentRoom.id);
       setCurrentRoom(null);
-      // 离开房间后保持当前视图（例如 rooms 或 saved），也可以根据需要切换视图
+      // 修复BUG：离开房间时清除 URL 中的 room 参数，防止重复弹出加入房间确认弹窗
+      clearRoomUrlParam();
     }
   };
 
