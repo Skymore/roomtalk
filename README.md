@@ -1,6 +1,4 @@
-## 🔄 English Version
-
-# Message System
+# RoomTalk
 
 [中文版](./README.zh.md)
 
