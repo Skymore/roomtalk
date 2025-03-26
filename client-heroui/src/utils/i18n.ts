@@ -20,7 +20,7 @@ const resources = {
       "copied": "Copied!",
       "shareSuccess": "Room link copied to clipboard!",
       "send": "Send",
-      "yourUserId": "Your User ID",
+      "yourUserId": "Click to copy your full User ID",
       
       // 房间列表
       "yourRooms": "Your Rooms",
@@ -67,7 +67,9 @@ const resources = {
       "noMessages": "No messages in this room yet",
       "beFirstToMessage": "Be the first to start the conversation",
       "newMessages": "New messages",
-      "typeMessage": "Type your message..."
+      "typeMessage": "Type your message...",
+      "clickToCopyRoomId": "Click to copy Room ID",
+      "copySuccess": "Copied to clipboard!"
     }
   },
   zh: {
@@ -86,7 +88,7 @@ const resources = {
       "copied": "已复制!",
       "shareSuccess": "房间链接已复制到剪贴板！",
       "send": "发送",
-      "yourUserId": "你的用户ID",
+      "yourUserId": "点击复制您的完整用户ID",
       
       // 房间列表
       "yourRooms": "你的房间",
@@ -133,7 +135,9 @@ const resources = {
       "noMessages": "房间里还没有消息",
       "beFirstToMessage": "来发送第一条消息吧",
       "newMessages": "新消息",
-      "typeMessage": "输入消息..."
+      "typeMessage": "输入消息...",
+      "clickToCopyRoomId": "点击复制房间ID",
+      "copySuccess": "已复制到剪贴板！"
     }
   }
 };

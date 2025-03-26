@@ -154,6 +154,16 @@ export const MessagePage: React.FC = () => {
     }
   };
 
+  const handleCopyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text)
+      .then(() => {
+        setError(null);
+        setSuccess(t('copySuccess'));
+        setTimeout(() => setSuccess(null), 2000);
+      })
+      .catch(err => console.error('Could not copy text:', err));
+  };
+
   return (
       <div className="flex flex-col h-screen">
         <Navbar isBordered maxWidth="full">
@@ -173,9 +183,10 @@ export const MessagePage: React.FC = () => {
                     variant="flat"
                     color="primary"
                     size="sm"
-                    className="sm:flex"
+                    className="sm:flex cursor-pointer"
+                    onClick={() => handleCopyToClipboard(clientId)}
                   >
-                    ID: {clientId.slice(0, 8)}
+                    ID: {clientId.slice(0, 8)}...
                   </Chip>
                 </Tooltip>
                 <LanguageSwitcher />
@@ -269,9 +280,13 @@ export const MessagePage: React.FC = () => {
                       {/* 房间信息卡片 */}
                       <div className="flex-1">
                         <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm text-default-600">
-                          <div className="flex items-center gap-1">
+                          <div className="flex items-center gap-1 cursor-pointer" onClick={() => handleCopyToClipboard(currentRoom.id)}>
                             <Icon icon="lucide:hash" className="text-xs" />
-                            <Chip size="sm" color="primary" variant="flat">{currentRoom.id}</Chip>
+                            <Tooltip content={t('clickToCopyRoomId')}>
+                              <div className="flex items-center">
+                                <Chip size="sm" color="primary" variant="flat">{t('roomID')}: {currentRoom.id}</Chip>
+                              </div>
+                            </Tooltip>
                           </div>
                           <div className="flex items-center gap-1">
                             <Icon icon="lucide:user" className="text-xs" />

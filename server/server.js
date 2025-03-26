@@ -106,9 +106,10 @@ io.on('connection', (socket) => {
     // 将当前连接加入以 userId 命名的房间，实现广播到该用户所有连接
     socket.join(userId);
     
-    // 注册后发送所有房间（这里发送所有房间，客户端可以根据需要过滤）
+    // 注册后发送当前用户创建的房间
     const allRooms = await readRooms();
-    socket.emit('room_list', allRooms);
+    const myRooms = allRooms.filter(room => room.creatorId === userId);
+    socket.emit('room_list', myRooms);
   });
 
   // 2. 获取当前客户端创建的房间列表
@@ -119,6 +120,7 @@ io.on('connection', (socket) => {
       return;
     }
     
+    // 强制从Redis读取最新数据
     const allRooms = await readRooms();
     // 只返回由当前 clientId 创建的房间
     const myRooms = allRooms.filter(room => room.creatorId === clientId);
