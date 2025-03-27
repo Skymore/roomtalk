@@ -1,6 +1,7 @@
-import { io, Socket } from 'socket.io-client';
+import { default as io } from 'socket.io-client';
 import { v4 as uuidv4 } from 'uuid';
 import { Room } from './types';
+import { Socket } from 'socket.io-client';
 
 // Get client ID from local storage or create a new one
 // This ID persists across browser sessions and uniquely identifies the user
@@ -14,7 +15,7 @@ const getClientId = (): string => {
 };
 
 // Create and configure Socket connection
-const createSocketConnection = (): Socket => {
+const createSocketConnection = (): typeof Socket => {
   const socketUrl = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3012';
   const socket = io(socketUrl);
   
@@ -26,12 +27,12 @@ const createSocketConnection = (): Socket => {
   });
   
   // Handle connection errors
-  socket.on('connect_error', (error) => {
+  socket.on('connect_error', (error: Error) => {
     console.error('Socket connection error:', error);
   });
   
   // Handle disconnection
-  socket.on('disconnect', (reason) => {
+  socket.on('disconnect', (reason: string) => {
     console.log('Socket disconnected:', reason);
   });
   
