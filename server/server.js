@@ -127,11 +127,11 @@ io.on('connection', (socket) => {
     socket.emit('room_list', myRooms);
   });
 
-  // 3. 创建房间
+  // 3. 创建房间，传入 roomData 和 clientId，roomData.name不能为空
   socket.on('create_room', async (roomData, callback) => {
     const clientId = connectedClients.get(socket.id);
-    if (!clientId) {
-      socket.emit('error', { message: 'You are not registered' });
+    if (!clientId || !roomData?.name) {
+      socket.emit('error', { message: 'You are not registered or room name is required' });
       return;
     }
     
@@ -172,7 +172,7 @@ io.on('connection', (socket) => {
     socket.join(roomId);
     userRooms.set(socket.id, [roomId]);
     console.log(`Socket ${socket.id} joined room ${roomId}`);
-    
+     
     // 读取该房间的消息历史记录并发送给客户端
     const messages = await readMessages();
     const roomMessages = messages.filter(msg => msg.roomId === roomId);
@@ -247,31 +247,19 @@ io.on('connection', (socket) => {
 
 // ---------------------- HTTP API 端点 ----------------------
 
-// 获取消息记录接口：要求传入 clientId，若传入 roomId，还需检查该房间是否属于当前 clientId
-app.get('/api/messages', async (req, res) => {
-  const { clientId, roomId } = req.query;
-  if (!clientId) {
-    return res.status(400).json({ error: 'Client ID is required' });
+// 获取指定房间消息记录接口：要求传入 roomId
+app.get('/api/room_messages', async (req, res) => {
+  const { roomId } = req.query;
+  if (!roomId) {
+    return res.status(400).json({ error: 'Room ID is required' });
   }
   
   const messages = await readMessages();
 
-  if (roomId) {
-    // 检查该房间是否存在并且是否由当前 clientId 创建
-    const rooms = await readRooms();
-    const room = rooms.find(r => r.id === roomId);
-    if (!room || room.creatorId !== clientId) {
-      return res.status(403).json({ error: 'Access denied: Room does not belong to client' });
-    }
-    // 返回当前 client 在该房间中发送的消息
-    const filteredMessages = messages.filter(
-      msg => msg.roomId === roomId && msg.clientId === clientId
-    );
-    return res.json(filteredMessages);
-  }
-  
-  // 未传入 roomId 时，返回当前 client 发送的所有消息
-  const filteredMessages = messages.filter(msg => msg.clientId === clientId);
+  const filteredMessages = messages.filter(
+    msg => msg.roomId === roomId
+  );
+
   return res.json(filteredMessages);
 });
 
@@ -287,17 +275,17 @@ app.get('/api/rooms', async (req, res) => {
   res.json(myRooms);
 });
 
-// 创建新房间接口
+// 创建新房间接口，传入 roomData 和 clientId
 app.post('/api/rooms', async (req, res) => {
-  const { name, description, clientId } = req.body;
-  if (!name || !clientId) {
+  const { roomData, clientId } = req.body;
+  if (!roomData?.name || !clientId) {
     return res.status(400).json({ error: 'Room name and client ID are required' });
   }
   
   const room = {
     id: uuidv4(),
-    name,
-    description: description || "",
+    name: roomData.name,
+    description: roomData.description || "",
     createdAt: new Date().toISOString(),
     creatorId: clientId
   };

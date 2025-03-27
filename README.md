@@ -92,7 +92,7 @@ npm run dev
 |------|--------|-------------|
 | `/api/rooms` | `GET` | Get rooms created by current user |
 | `/api/rooms` | `POST` | Create a new room |
-| `/api/messages` | `GET` | Get user messages (optional `roomId`) |
+| `/api/messages` | `GET` | Get room messages (require `roomId`) |
 | `/api/messages` | `POST` | Send message |
 | `/api/rooms/:id` | `GET` | Get specific room (if owned) |
 

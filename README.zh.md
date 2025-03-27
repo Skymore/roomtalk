@@ -94,7 +94,7 @@ npm run dev
 |------|------|------|
 | `/api/rooms` | `GET` | 获取当前用户创建的房间 |
 | `/api/rooms` | `POST` | 创建房间 |
-| `/api/messages` | `GET` | 获取用户消息（可选传入 roomId） |
+| `/api/messages` | `GET` | 获取房间消息（需要传入 roomId） |
 | `/api/messages` | `POST` | 发送消息 |
 | `/api/rooms/:id` | `GET` | 获取指定房间（仅限创建者） |
 
