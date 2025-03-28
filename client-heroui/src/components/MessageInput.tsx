@@ -151,13 +151,33 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
       // 创建头像信息对象
       const avatar = { text: avatarText, color: avatarColor };
       
-      // 按顺序发送每个内容项，包括用户名和头像信息
-      for (const item of contentItems) {
-        if (item.type === 'text' && item.content.trim() !== '') {
-          sendMessage(item.content, roomId, 'text', username, avatar);
+      // 新的消息合并逻辑
+      // 如果有图片，以图片为分隔点；如果没有图片，合并所有文本内容
+      let currentTextContent = '';
+      
+      for (let i = 0; i < contentItems.length; i++) {
+        const item = contentItems[i];
+        
+        if (item.type === 'text') {
+          // 收集文本内容
+          if (item.content.trim() !== '') {
+            currentTextContent += (currentTextContent ? '\n' : '') + item.content;
+          }
         } else if (item.type === 'image') {
+          // 如果积累了文本内容，先发送文本
+          if (currentTextContent.trim() !== '') {
+            sendMessage(currentTextContent, roomId, 'text', username, avatar);
+            currentTextContent = ''; // 重置文本内容
+          }
+          
+          // 发送图片
           sendMessage(item.content, roomId, 'image', username, avatar);
         }
+      }
+      
+      // 发送剩余的文本内容
+      if (currentTextContent.trim() !== '') {
+        sendMessage(currentTextContent, roomId, 'text', username, avatar);
       }
       
       // 清空编辑器
