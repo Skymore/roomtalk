@@ -39,8 +39,8 @@ const resources = {
       "previewAvatar": "Your avatar preview",
       
       // 房间列表
-      "yourRooms": "Your Rooms",
-      "savedRooms": "Saved Rooms",
+      "yourRooms": "Owned",
+      "savedRooms": "Saved",
       "noRoomsAvailable": "No Rooms Available",
       "noRoomsDescription": "You haven't created any rooms yet. Create your first room to get started.",
       "noSavedRooms": "No Saved Rooms",
@@ -138,8 +138,8 @@ const resources = {
       "previewAvatar": "头像预览",
       
       // 房间列表
-      "yourRooms": "你的房间",
-      "savedRooms": "已保存的房间",
+      "yourRooms": "你创建的",
+      "savedRooms": "已保存的",
       "noRoomsAvailable": "没有可用的房间",
       "noRoomsDescription": "你还没有创建任何房间。创建你的第一个房间开始使用。",
       "noSavedRooms": "没有已保存的房间",

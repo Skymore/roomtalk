@@ -145,7 +145,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect }) => {
           >
             <div className="flex items-start">
               <div className="p-2 rounded-full bg-primary/10 mr-3">
-                <Icon icon="lucide:message-circle" className="text-primary" />
+      <Icon icon="lucide:message-circle" className="text-primary" aria-hidden="true" />
               </div>
               <div className="flex-1">
                 <h3 className="font-medium">{room.name}</h3>
