@@ -73,6 +73,8 @@ const resources = {
       "confirmJoinTitle": "Join Room?",
       "confirmJoinDescription": "Would you like to join the room \"{{roomName}}\"?",
       "join": "Join",
+      "errorRoomNoLongerExists": "The previously joined room no longer exists.",
+      "errorRestoringRoom": "Failed to reconnect to the previously joined room.",
       
       // 删除确认
       "confirmDelete": "Confirm Delete",
@@ -172,6 +174,8 @@ const resources = {
       "confirmJoinTitle": "加入房间？",
       "confirmJoinDescription": "您想加入房间 \"{{roomName}}\" 吗？",
       "join": "加入",
+      "errorRoomNoLongerExists": "之前加入的房间已不存在。",
+      "errorRestoringRoom": "重新连接到之前的房间失败。",
       
       // 删除确认
       "confirmDelete": "确认删除",

@@ -446,7 +446,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
               type="button"
               isIconOnly
               variant="light"
-              onClick={() => fileInputRef.current?.click()}
+              onPress={() => fileInputRef.current?.click()}
               disabled={isSending || imageCount >= MAX_IMAGES}
               className="rounded-full"
               aria-label={t('uploadImage')}

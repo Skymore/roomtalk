@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Navbar,
   NavbarBrand,
@@ -126,7 +126,44 @@ const getStoredUsername = (): string => {
   return localStorage.getItem("roomtalk_username") || "";
 };
 
+// 保存当前视图状态到本地存储
+const saveCurrentView = (view: string) => {
+  localStorage.setItem("roomtalk_current_view", view);
+};
+
+// 从本地存储获取视图状态
+const getStoredView = (): string => {
+  return localStorage.getItem("roomtalk_current_view") || "rooms";
+};
+
+// 保存当前房间信息到本地存储
+const saveCurrentRoom = (room: Room | null) => {
+  if (room) {
+    console.log("saveCurrentRoom: save room to storage", room)
+    localStorage.setItem("roomtalk_current_room", JSON.stringify(room));
+  } else {
+    localStorage.removeItem("roomtalk_current_room");
+  }
+};
+
+// 从本地存储获取房间信息
+const getStoredRoom = (): Room | null => {
+  const roomJson = localStorage.getItem("roomtalk_current_room");
+  console.log("Stored room JSON:", roomJson);
+  if (roomJson) {
+    try {
+      return JSON.parse(roomJson) as Room;
+    } catch (e) {
+      console.error("Failed to parse stored room:", e);
+      localStorage.removeItem("roomtalk_current_room");
+    }
+  }
+  return null;
+};
+
 export const MessagePage: React.FC = () => {
+  // 添加初始化标志，防止初始渲染时清除存储的房间
+  const isInitialMount = useRef(true);
   // 添加视口高度状态
   const [viewportHeight, setViewportHeight] = useState(window.innerHeight);
   const { t, i18n } = useTranslation();
@@ -137,7 +174,11 @@ export const MessagePage: React.FC = () => {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [savedRooms, setSavedRooms] = useState<Room[]>([]);
   const [currentRoom, setCurrentRoom] = useState<Room | null>(null);
-  const [view, setView] = useState<"chat" | "rooms" | "saved" | "settings">("rooms");
+  // 初始化视图状态，默认从localStorage读取
+  const [view, setView] = useState<"chat" | "rooms" | "saved" | "settings">(() => {
+    const storedView = getStoredView();
+    return (storedView as "chat" | "rooms" | "saved" | "settings") || "rooms";
+  });
   const [error, setError] = useState<string | null>(null);
   const [isLoadingRoom, setIsLoadingRoom] = useState(false);
   // 当 URL 参数包含房间时，先保存待确认的房间信息
@@ -208,6 +249,87 @@ export const MessagePage: React.FC = () => {
       socket.emit("set_username", username);
     }
   }, [username]);
+
+  // 视图变化时保存到localStorage
+  useEffect(() => {
+    if (view) {
+      saveCurrentView(view);
+    }
+  }, [view]);
+
+  // 当前房间变化时保存到localStorage
+  useEffect(() => {
+    // 跳过组件首次渲染时的保存操作，避免清除已存储的房间
+    if (isInitialMount.current) {
+      console.log("Initial mount - skip saving room to storage");
+      isInitialMount.current = false;
+      return;
+    }
+    
+    console.log("Room changed - save current room state:", currentRoom ? currentRoom.id : "null");
+    saveCurrentRoom(currentRoom);
+  }, [currentRoom]);
+
+  // 恢复保存的房间状态
+  useEffect(() => {
+    // 首先检查是否从URL加载房间
+    console.log("Attempting to restore room from storage");
+    const roomIdFromUrl = searchParams.get("room");
+    
+    if (roomIdFromUrl) {
+      console.log("URL contains room ID, prioritize URL parameter:", roomIdFromUrl);
+      // URL参数优先，这个逻辑不变
+      return;
+    }
+
+    // 如果没有URL房间参数，且当前没有活跃房间，尝试从localStorage恢复
+    if (!currentRoom && !isLoadingRoom) {
+      const storedRoom = getStoredRoom();
+      
+      if (storedRoom) {
+        setIsLoadingRoom(true);
+        console.log("Found stored room, attempting to restore:", storedRoom.id);
+        
+        // 验证房间是否仍然存在
+        getRoomById(storedRoom.id)
+          .then((roomInfo) => {
+            setIsLoadingRoom(false);
+            if (roomInfo) {
+              console.log("Successfully restored room:", roomInfo.name);
+              joinRoom(storedRoom.id);
+              setCurrentRoom(roomInfo);
+              setMemberCount(getRoomMemberCount(storedRoom.id));
+              
+              // 根据保存的视图状态决定是否切换到chat视图
+              const savedView = getStoredView();
+              console.log("Restored room with saved view:", savedView);
+              
+              // 只有当保存的视图是chat时，才切换到chat视图
+              if (savedView === "chat" && view !== "chat") {
+                console.log("Switching to chat view based on saved view state");
+                setView("chat");
+              } else {
+                console.log("Keeping current view:", view);
+              }
+            } else {
+              console.log("Stored room no longer exists");
+              // 房间不存在，清除存储
+              saveCurrentRoom(null);
+              setError(t("errorRoomNoLongerExists"));
+            }
+          })
+          .catch((err) => {
+            console.error("Error restoring room:", err);
+            setIsLoadingRoom(false);
+            saveCurrentRoom(null);
+            setError(t("errorRestoringRoom"));
+          });
+      } else {
+        console.log("No stored room found");
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);  // 仅在组件挂载时执行一次
 
   // 当组件加载或 URL 参数变化时，如果 URL 包含 room 参数，则先加载房间信息并要求确认
   useEffect(() => {
@@ -320,6 +442,8 @@ export const MessagePage: React.FC = () => {
       setCurrentRoom(null);
       // 修复BUG：离开房间时清除 URL 中的 room 参数，防止重复弹出加入房间确认弹窗
       clearRoomUrlParam();
+      // 明确清除localStorage中的房间信息
+      saveCurrentRoom(null);
     }
   };
 
