@@ -44,7 +44,7 @@ A lightweight WebSocket-based real-time messaging system with Redis storage. Use
 - Node.js installed
 - Redis installed and running locally (default on `localhost:6379`)
 
-### Install dependencies
+### Install Dependencies
 
 ```bash
 # Server
@@ -56,7 +56,7 @@ cd ../client
 npm install
 ```
 
-### Start the system
+### Start the System
 
 Use the provided script:
 
@@ -88,28 +88,28 @@ npm run dev
 
 ### HTTP Endpoints
 
-| Path | Method | Description |
-|------|--------|-------------|
-| `/api/rooms` | `GET` | Get rooms created by current user |
-| `/api/rooms` | `POST` | Create a new room |
-| `/api/messages` | `GET` | Get room messages (require `roomId`) |
-| `/api/messages` | `POST` | Send message |
-| `/api/rooms/:id` | `GET` | Get specific room (if owned) |
+| Path                                        | Method | Description                                                       |
+|---------------------------------------------|--------|-------------------------------------------------------------------|
+| `/api/rooms/:roomId/messages`               | `GET`  | Get messages for the specified room                               |
+| `/api/clients/:clientId/rooms`              | `GET`  | Get rooms created by the specified client                         |
+| `/api/clients/:clientId/rooms`              | `POST` | Create a new room for the specified client                        |
+| `/api/clients/:clientId/rooms/:roomId`        | `GET`  | Get specific room details (only if owned by the client)             |
+| `/api/rooms/:roomId/messages`               | `POST` | Send a message to the specified room                              |
 
 ### WebSocket Events
 
-| Event | Direction | Description |
-|-------|-----------|-------------|
-| `register` | Client → Server | Register user with clientId |
-| `get_rooms` | Client → Server | Get rooms created by user |
-| `create_room` | Client → Server | Create room |
-| `join_room` | Client → Server | Join room |
-| `leave_room` | Client → Server | Leave room |
-| `send_message` | Client → Server | Send a message |
-| `get_room_by_id` | Client → Server | Get room info via ID |
-| `message_history` | Server → Client | Room message history |
-| `new_room` | Server → Client | New room notification (scoped to client) |
-| `new_message` | Server → Client | New message broadcast to room |
+| Event             | Direction       | Description                                               |
+|-------------------|-----------------|-----------------------------------------------------------|
+| `register`        | Client → Server | Register user with clientId                               |
+| `get_rooms`       | Client → Server | Request rooms created by the user                         |
+| `create_room`     | Client → Server | Create a new room                                         |
+| `join_room`       | Client → Server | Join an existing room                                     |
+| `leave_room`      | Client → Server | Leave a room                                              |
+| `send_message`    | Client → Server | Send a message to a room                                  |
+| `get_room_by_id`  | Client → Server | Request room details via room ID                          |
+| `message_history` | Server → Client | Deliver room message history                              |
+| `new_room`        | Server → Client | Notify user of a new room created (scoped to client)      |
+| `new_message`     | Server → Client | Broadcast new message to room participants                |
 
 ---
 
@@ -117,30 +117,30 @@ npm run dev
 
 ### Server `.env`
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | 3012 | Server port |
-| `CLIENT_URL` | http://localhost:3011 | CORS origin |
+| Variable    | Default                   | Description   |
+|-------------|---------------------------|---------------|
+| `PORT`      | 3012                      | Server port   |
+| `CLIENT_URL`| http://localhost:3011     | CORS origin   |
 
 ### Client `.env`
 
-`.env.development`:
+**.env.development:**
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `VITE_SOCKET_URL` | http://localhost:3012 | WebSocket base URL |
+| Variable         | Default              | Description                  |
+|------------------|----------------------|------------------------------|
+| `VITE_SOCKET_URL`| http://localhost:3012| WebSocket base URL           |
 
-`.env.production`:
+**.env.production:**
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `VITE_SOCKET_URL` | `/` | Use relative path for same-origin deployment |
+| Variable         | Default | Description                                        |
+|------------------|---------|----------------------------------------------------|
+| `VITE_SOCKET_URL`| `/`     | Use relative path for same-origin deployment       |
 
 ---
 
 ## 📦 Redis Persistence
 
-The system uses **RDB snapshot** persistence by default. You may enable **AOF** or adjust the save policies via `redis.conf`.
+The system uses **RDB snapshot** persistence by default. You may enable **AOF** or adjust save policies via `redis.conf`.
 
 ---
 
@@ -167,5 +167,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
