@@ -84,7 +84,7 @@ const Math: React.FC<MathProps> = ({ children, inline = false }) => {
             '\\ZZ': '\\mathbb{Z}',
             '\\CC': '\\mathbb{C}'
           },
-          errorColor: '#ff0000'
+          errorColor: '#EF4444' // Changed to new danger color
         });
         setError(null);
       } catch (err) {
@@ -205,7 +205,7 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ className, children }) => {
 /** 行内代码组件 */
 const InlineCode: React.FC<{ children: ReactNode }> = ({ children }) => {
   return (
-    <code className="text-gray-800 dark:text-gray-400 px-1.5 py-0.5 rounded text-sm">
+    <code className="text-gray-800 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-sm">
       {children}
     </code>
   );
@@ -241,16 +241,16 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({ content}) => {
         margin: 0.5em 0;
       }
       .katex-error {
-        color: #ff0000;
-        background: rgba(255,0,0,0.1) !important;
+        color: #EF4444;
+        background: rgba(239,68,68,0.1) !important;
         padding: 2px 4px;
         border-radius: 2px;
       }
       .markdown-container :not(pre) > code {
-        background: #f3f4f6 !important;
+        background: #F3F4F6 !important;
       }
       .dark .markdown-container :not(pre) > code {
-        background: #171717 !important;
+        background: #374151 !important;
       }
     `;
     document.head.appendChild(style);

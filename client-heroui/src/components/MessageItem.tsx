@@ -83,7 +83,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
               rounded-lg shadow-sm w-fit overflow-hidden 
               ${
                 isMine
-                  ? "bg-gray-300 dark:bg-gray-800 text-gray-800 dark:text-white"
+                  ? "bg-blue-100 dark:bg-blue-900 text-gray-800 dark:text-white"
                   : "bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-white"
               }
             `}
@@ -98,7 +98,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
         )}
 
         <div
-          className={`text-tiny mt-1 text-default-400 transition-opacity ${
+          className={`text-tiny mt-1 text-gray-500 dark:text-gray-400 transition-opacity ${
             isHovered ? "opacity-100" : "opacity-0 md:group-hover:opacity-70"
           }`}
         >
