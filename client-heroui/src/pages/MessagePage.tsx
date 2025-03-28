@@ -37,7 +37,7 @@ import { saveRoom, removeRoom, isRoomSaved, getSavedRooms } from '../utils/stora
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { LanguageSwitcher } from '../components/LanguageSwitcher';
-import { IoMdPersonAdd, IoMdRemove } from 'react-icons/io';
+// import { IoMdPersonAdd, IoMdRemove } from 'react-icons/io';
 
 // 随机名字库 - 分为中文和英文两类，使用形容词+名词可爱组合
 const CN_ADJECTIVES = ['可爱', '萌萌', '温柔', '活泼', '聪明', '快乐', '甜蜜', '淘气', '软软', '闪亮', '乖巧', '迷你'];
@@ -653,7 +653,7 @@ export const MessagePage: React.FC = () => {
         </Modal>
       )}
 
-      {/* 成员加入/离开提示 */}
+      {/* 成员加入/离开提示
       {memberEvent && (
         <div className={`flex items-center p-2 text-sm ${memberEvent.type === 'join' ? 'bg-green-50' : 'bg-red-50'}`}>
           <span className="flex items-center">
@@ -668,7 +668,7 @@ export const MessagePage: React.FC = () => {
             <span className="ml-1">{memberEvent.userId.substring(0, 8)}</span>
           </span>
         </div>
-      )}
+      )} */}
     </div>
   );
 };
