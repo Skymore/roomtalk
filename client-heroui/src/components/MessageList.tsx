@@ -145,7 +145,7 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
       className="flex flex-col p-4 h-full overflow-y-auto"
       onScroll={handleScroll}
     >
-      <div className="flex flex-col space-y-4">
+      <div className="flex flex-col space-y-2">
         {messages.map((message) => (
           <MessageItem key={message.id} message={message} />
         ))}
