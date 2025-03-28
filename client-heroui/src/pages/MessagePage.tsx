@@ -549,7 +549,7 @@ export const MessagePage: React.FC = () => {
                           <div className="flex items-center cursor-pointer" onClick={() => handleCopyToClipboard(currentRoom.id)}>
                             <Icon icon="lucide:hash" className="mr-1" width={14} />
                             <Tooltip content={t('clickToCopyRoomId')}>
-                              <span>{currentRoom.id.substring(0, 8)}...</span>
+                              <span>{currentRoom.id.length > 10 ? `${currentRoom.id.substring(0, 8)}...` : currentRoom.id}</span>
                             </Tooltip>
                           </div>
                           <div className="flex items-center">

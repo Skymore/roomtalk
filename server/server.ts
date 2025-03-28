@@ -6,8 +6,33 @@ import cors from 'cors';
 import path from 'path';
 import {createClient, RedisClientType } from 'redis';
 import dotenv from 'dotenv';
+import { customAlphabet } from 'nanoid';
 
 dotenv.config();
+
+// 创建nanoid生成器 - 使用字母和数字，生成10位ID
+const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
+
+// 生成唯一房间ID并进行碰撞检测
+async function generateUniqueRoomId(redisClient: any): Promise<string> {
+  let attempts = 0;
+  const maxAttempts = 5; // 最多尝试5次
+  
+  while (attempts < maxAttempts) {
+    const id = nanoid();
+    // 检查ID是否已存在
+    const exists = await redisClient.hExists("rooms", id);
+    if (!exists) {
+      return id; // 找到未使用的ID
+    }
+    attempts++;
+    console.log(`Room ID collision detected, retrying (${attempts}/${maxAttempts})...`);
+  }
+  
+  // 如果多次尝试后仍有冲突，生成更长的ID
+  console.log("Multiple collisions detected, using longer ID");
+  return nanoid(12); // 使用12位ID降低碰撞概率
+}
 
 // ---------------------- 类型定义 ----------------------
 interface Message {
@@ -213,8 +238,12 @@ io.on('connection', (socket) => {
       socket.emit('error', { message: 'You are not registered or room name is required' });
       return;
     }
+    
+    // 使用nanoid生成房间ID并检查重复
+    const roomId = await generateUniqueRoomId(redisClient);
+    
     const room: Room = {
-      id: uuidv4(),
+      id: roomId,
       name: roomData.name,
       description: roomData.description || "",
       createdAt: new Date().toISOString(),
@@ -418,15 +447,23 @@ app.get('/api/clients/:clientId/rooms', async (req: Request, res: Response) => {
   res.json(myRooms);
 });
 
-// 3. 创建新房间（客户端 ID 从 URL 中获取，房间数据在请求体中）
+// 3. 创建新房间（通过 HTTP API）
 app.post('/api/clients/:clientId/rooms', async (req: Request, res: Response) => {
   const { clientId } = req.params;
-  const { roomData } = req.body;
+  if (!clientId) {
+    return res.status(400).json({ error: 'Client ID is required' });
+  }
+  
+  const roomData = req.body;
   if (!roomData?.name || !clientId) {
     return res.status(400).json({ error: 'Room name and client ID are required' });
   }
+  
+  // 使用nanoid生成房间ID并检查重复
+  const roomId = await generateUniqueRoomId(redisClient);
+  
   const room: Room = {
-    id: uuidv4(),
+    id: roomId,
     name: roomData.name,
     description: roomData.description || "",
     createdAt: new Date().toISOString(),
