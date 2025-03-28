@@ -127,6 +127,8 @@ const getStoredUsername = (): string => {
 };
 
 export const MessagePage: React.FC = () => {
+  // 添加视口高度状态
+  const [viewportHeight, setViewportHeight] = useState(window.innerHeight);
   const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
   const isDark = theme === "dark";
@@ -167,6 +169,25 @@ export const MessagePage: React.FC = () => {
     newParams.delete("room");
     setSearchParams(newParams);
   };
+
+  // 添加: 更新视口高度的处理
+  useEffect(() => {
+    const updateViewportHeight = () => {
+      setViewportHeight(window.innerHeight);
+    };
+
+    // 初始设置
+    updateViewportHeight();
+
+    // 监听事件
+    window.addEventListener("resize", updateViewportHeight);
+    window.addEventListener("orientationchange", updateViewportHeight);
+
+    return () => {
+      window.removeEventListener("resize", updateViewportHeight);
+      window.removeEventListener("orientationchange", updateViewportHeight);
+    };
+  }, []);
 
   // 初次加载时加载已保存房间和用户名
   useEffect(() => {
@@ -241,13 +262,13 @@ export const MessagePage: React.FC = () => {
     // 处理页面可见性变化
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
-        console.log("页面恢复到前台，检查连接状态...");
+        console.log("Page is visible, checking connection status...");
         // 尝试重新连接socket
         reconnectSocket();
 
         // 如果在房间中，刷新消息
         if (currentRoom) {
-          console.log("刷新当前房间消息:", currentRoom.id);
+          console.log("Refreshing messages for current room:", currentRoom.id);
           socket.emit("get_room_messages", currentRoom.id);
         }
       }
@@ -352,7 +373,8 @@ export const MessagePage: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-screen max-h-screen overflow-hidden">
+    // 修改: 使用动态计算的视口高度而不是 h-screen
+    <div className="flex flex-col overflow-hidden" style={{ height: `${viewportHeight}px` }}>
       <Navbar isBordered maxWidth="full">
         <div className="w-full max-w-[1400px] mx-auto px-2 sm:px-8 flex justify-between items-center">
           <NavbarBrand>
@@ -518,6 +540,7 @@ export const MessagePage: React.FC = () => {
         </div>
       </div>
 
+      {/* 修改: 确保内容区有正确的滚动设置 */}
       <main className="flex-1 overflow-hidden bg-content1">
         <div className="h-full max-w-[1400px] mx-auto px-4">
           <div className="h-full bg-content1 rounded-lg flex flex-col">
@@ -528,12 +551,16 @@ export const MessagePage: React.FC = () => {
                 <p className="text-default-500 text-center">{t("loadingDescription")}</p>
               </div>
             ) : view === "rooms" ? (
-              <RoomList rooms={rooms} onRoomSelect={handleRoomSelect} />
+              <div className="h-full overflow-y-auto">
+                <RoomList rooms={rooms} onRoomSelect={handleRoomSelect} />
+              </div>
             ) : view === "saved" ? (
-              <SavedRoomList rooms={savedRooms} onRoomSelect={handleRoomSelect} onRoomsChange={setSavedRooms} />
+              <div className="h-full overflow-y-auto">
+                <SavedRoomList rooms={savedRooms} onRoomSelect={handleRoomSelect} onRoomsChange={setSavedRooms} />
+              </div>
             ) : view === "settings" ? (
               // 设置页面 - 极简设计
-              <div className="flex flex-col w-full max-w-md mx-auto p-6">
+              <div className="flex flex-col w-full max-w-md mx-auto p-6 h-full overflow-y-auto">
                 {/* 头像展示 */}
                 <div className="flex flex-col items-center mb-8">
                   <Avatar name={getAvatarText(username)} color={getAvatarColor(username) as any} size="lg" />
@@ -628,7 +655,7 @@ export const MessagePage: React.FC = () => {
                           {memberCount}
                           {memberEvent && (
                             <span className="ml-1 text-tiny animate-fade-in">
-                              {memberEvent.type === "join" ? "👋" : "👋"} {memberEvent.userId.substring(0, 6)}...
+                              {memberEvent.type === "join" ? "🎉" : "🚶"} {memberEvent.userId.substring(0, 4)}...
                             </span>
                           )}
                         </div>
@@ -643,41 +670,50 @@ export const MessagePage: React.FC = () => {
                             </span>
                           </Tooltip>
                         </div>
-                        <div className="flex items-center">
+                        {/* <div className="flex items-center">
                           <Icon icon="lucide:user" className="mr-1" width={14} />
                           {currentRoom.creatorId === clientId ? (
                             <span className="text-success-500">{t("createdBy")}</span>
                           ) : (
                             <span className="text-primary-500">{t("joined")}</span>
                           )}
-                        </div>
+                        </div> */}
                       </div>
                     </div>
                   </div>
                   <div className="flex">
-                    <Button isIconOnly variant="light" aria-label="Share" onClick={handleShareRoom} className="mr-1">
-                      <Icon icon="lucide:share" width={20} />
+                    <Button
+                      isIconOnly
+                      variant="light"
+                      aria-label="Share"
+                      onPress={handleShareRoom}
+                      className="mr-1 md:w-10 md:h-10 w-8 h-8"
+                    >
+                      {" "}
+                      {/* 添加宽高控制 */}
+                      <Icon icon="lucide:share" width={20} className="md:w-5 w-4" /> {/* 调整图标大小 */}
                     </Button>
                     <Button
                       isIconOnly
                       variant="light"
                       aria-label="Save"
-                      onClick={handleToggleSave}
-                      className={isRoomSaved(currentRoom.id) ? "text-warning mr-1" : "text-primary mr-1"}
+                      onPress={handleToggleSave}
+                      className={`${isRoomSaved(currentRoom.id) ? "text-warning" : "text-primary"} mr-1 md:w-10 md:h-10 w-8 h-8`}
                     >
                       <Icon
                         icon={isRoomSaved(currentRoom.id) ? "lucide:bookmark-minus" : "lucide:bookmark-plus"}
                         width={20}
+                        className="md:w-5 w-4"
                       />
                     </Button>
                     <Button
                       isIconOnly
                       variant="light"
                       aria-label="Leave"
-                      onClick={handleLeaveRoom}
-                      className="text-danger"
+                      onPress={handleLeaveRoom}
+                      className="text-danger md:w-10 md:h-10 w-8 h-8"
                     >
-                      <Icon icon="lucide:log-out" width={20} />
+                      <Icon icon="lucide:log-out" width={20} className="md:w-5 w-4" />
                     </Button>
                   </div>
                 </div>
@@ -697,7 +733,7 @@ export const MessagePage: React.FC = () => {
               </div>
             ) : (
               // 欢迎页面
-              <div className="flex flex-col items-center justify-center h-full p-4">
+              <div className="flex flex-col items-center justify-center h-full p-4 overflow-y-auto">
                 <Icon icon="lucide:message-circle" className="w-16 h-16 mb-4 text-default-400" />
                 <h2 className="text-xl font-semibold mb-2">{t("welcomeMessage")}</h2>
                 <p className="text-default-500 mb-6 text-center">{t("welcomeDescription")}</p>
