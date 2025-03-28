@@ -1,5 +1,5 @@
 import React from 'react';
-import { Avatar, Card } from '@heroui/react';
+import { Avatar, Card, Image } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { clientId } from '../utils/socket';
 import { formatTime } from '../utils/formatters';
@@ -12,6 +12,22 @@ interface MessageItemProps {
 export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
   const isMine = message.clientId === clientId;
   const [isHovered, setIsHovered] = React.useState(false);
+  const [imageError, setImageError] = React.useState(false);
+  const isImage = message.messageType === 'image';
+
+  // Handle image loading errors
+  const handleImageError = () => {
+    setImageError(true);
+  };
+  
+  // 转换颜色为有效的Avatar颜色类型
+  const getValidColor = (color: string | undefined): "primary" | "secondary" | "success" | "warning" | "danger" | "default" | undefined => {
+    if (!color) return "default";
+    if (["primary", "secondary", "success", "warning", "danger", "default"].includes(color)) {
+      return color as "primary" | "secondary" | "success" | "warning" | "danger" | "default";
+    }
+    return "default";
+  };
 
   return (
     <div 
@@ -21,7 +37,9 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
     >
       {!isMine && (
         <Avatar 
-          icon={<Icon icon="lucide:user" />}
+          name={message.avatar?.text || undefined}
+          icon={!message.avatar?.text ? <Icon icon="lucide:user" /> : undefined}
+          color={getValidColor(message.avatar?.color)}
           classNames={{
             base: "mr-2",
           }}
@@ -29,30 +47,53 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
       )}
       
       <div className="max-w-[75%] sm:max-w-[60%] md:max-w-[50%]">
+        {!isMine && message.username && (
+          <div className="text-tiny text-default-500 mb-1 ml-1">
+            {message.username}
+          </div>
+        )}
         <Card
           className={`${isMine ? 'bg-primary-500 text-white' : 'bg-content2'} rounded-lg shadow-sm`}
         >
           <div className="p-3">
-            <p className="text-sm whitespace-pre-wrap">
-              {message.content.split(' ').map((word, i) => {
-                const urlPattern = /^(https?:\/\/[^\s]+)$/;
-                return urlPattern.test(word) ? (
-                  <a 
-                    key={i}
-                    href={word}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className={`${isMine ? 'text-blue-100 underline' : 'text-primary'} hover:opacity-80`}
-                  >
-                    {word}
-                  </a>
-                ) : (
-                  <React.Fragment key={i}>
-                    {i > 0 ? ' ' : ''}{word}
-                  </React.Fragment>
-                );
-              })}
-            </p>
+            {isImage ? (
+              imageError ? (
+                <div className="text-sm text-danger">
+                  <Icon icon="lucide:alert-triangle" className="inline mr-1" />
+                  {/* Show error message if image cannot be loaded */}
+                  Failed to load image
+                </div>
+              ) : (
+                <Image
+                  src={message.content}
+                  alt="Shared image"
+                  className="max-w-full rounded"
+                  onError={handleImageError}
+                  isBlurred
+                />
+              )
+            ) : (
+              <p className="text-sm whitespace-pre-wrap">
+                {message.content.split(' ').map((word, i) => {
+                  const urlPattern = /^(https?:\/\/[^\s]+)$/;
+                  return urlPattern.test(word) ? (
+                    <a 
+                      key={i}
+                      href={word}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={`${isMine ? 'text-blue-100 underline' : 'text-primary'} hover:opacity-80`}
+                    >
+                      {word}
+                    </a>
+                  ) : (
+                    <React.Fragment key={i}>
+                      {i > 0 ? ' ' : ''}{word}
+                    </React.Fragment>
+                  );
+                })}
+              </p>
+            )}
           </div>
         </Card>
         <div 
@@ -66,11 +107,12 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
 
       {isMine && (
         <Avatar 
-          icon={<Icon icon="lucide:user" />}
+          name={message.avatar?.text || undefined}
+          icon={!message.avatar?.text ? <Icon icon="lucide:user" /> : undefined}
+          color={getValidColor(message.avatar?.color) || "primary"}
           classNames={{
             base: "ml-2",
           }}
-          color="primary"
         />
       )}
     </div>

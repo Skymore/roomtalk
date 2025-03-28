@@ -12,7 +12,9 @@ import {
   ModalHeader,
   ModalBody,
   ModalFooter,
-  Chip
+  Chip,
+  Avatar,
+  Input,
 } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTheme } from '@heroui/use-theme';
@@ -20,15 +22,83 @@ import { MessageList } from '../components/MessageList';
 import { MessageInput } from '../components/MessageInput';
 import { RoomList } from '../components/RoomList';
 import { SavedRoomList } from '../components/SavedRoomList';
-import { socket, joinRoom, leaveRoom, getRoomById, clientId } from '../utils/socket';
-import { Room } from '../utils/types';
+import { 
+  socket, 
+  joinRoom, 
+  leaveRoom, 
+  getRoomById, 
+  clientId, 
+  getRoomMemberCount,
+  onRoomMemberChange,
+  reconnectSocket
+} from '../utils/socket';
+import { Room, RoomMemberEvent } from '../utils/types';
 import { saveRoom, removeRoom, isRoomSaved, getSavedRooms } from '../utils/storage';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { LanguageSwitcher } from '../components/LanguageSwitcher';
+import { IoMdPersonAdd, IoMdRemove } from 'react-icons/io';
+
+// 随机名字库 - 分为中文和英文两类，使用形容词+名词可爱组合
+const CN_ADJECTIVES = ['可爱', '萌萌', '温柔', '活泼', '聪明', '快乐', '甜蜜', '淘气', '软软', '闪亮', '乖巧', '迷你'];
+const CN_NOUNS = ['小猫', '小熊', '小兔', '小鹿', '小狐', '小鸭', '小狗', '小象', '小猪', '小鸟', '花朵', '星星', '气球'];
+
+const EN_ADJECTIVES = ['Fluffy', 'Tiny', 'Sweet', 'Bubbly', 'Cuddly', 'Sparkly', 'Happy', 'Cozy', 'Rosy', 'Playful'];
+const EN_NOUNS = ['Bunny', 'Kitten', 'Puppy', 'Panda', 'Cookie', 'Muffin', 'Star', 'Fox', 'Duckling', 'Unicorn', 'Whale'];
+
+// 生成随机名字 - 根据i18n语言设置决定生成中文还是英文名字
+const generateRandomName = (language: string): string => {
+  // 如果语言设置为中文，或者开头为zh（如zh-CN），则生成中文名字
+  if (language === 'zh' || language.startsWith('zh-')) {
+    const adj = CN_ADJECTIVES[Math.floor(Math.random() * CN_ADJECTIVES.length)];
+    const noun = CN_NOUNS[Math.floor(Math.random() * CN_NOUNS.length)];
+    return adj + noun;
+  } else {
+    // 否则生成英文名字
+    const adj = EN_ADJECTIVES[Math.floor(Math.random() * EN_ADJECTIVES.length)];
+    const noun = EN_NOUNS[Math.floor(Math.random() * EN_NOUNS.length)];
+    return adj + noun;
+  }
+};
+
+// 从名字获取显示字符（首字母或首汉字）
+const getAvatarText = (name: string): string => {
+  if (!name) return '?';
+  // 检查是否是汉字（Unicode范围）
+  const firstChar = name.charAt(0);
+  if (/[\u4e00-\u9fa5]/.test(firstChar)) {
+    return firstChar;
+  }
+  // 英文则返回大写首字母
+  return firstChar.toUpperCase();
+};
+
+// 从用户名生成固定颜色
+const getAvatarColor = (name: string): string => {
+  if (!name) return 'primary';
+  // 简单哈希算法，根据名字生成固定颜色
+  const colors = ['primary', 'secondary', 'success', 'warning', 'danger'];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const index = Math.abs(hash) % colors.length;
+  return colors[index];
+};
+
+// 保存用户名到本地存储
+const saveUsername = (name: string) => {
+  localStorage.setItem('roomtalk_username', name);
+  return name;
+};
+
+// 从本地存储获取用户名
+const getStoredUsername = (): string => {
+  return localStorage.getItem('roomtalk_username') || '';
+};
 
 export const MessagePage: React.FC = () => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
   const isDark = theme === "dark";
 
@@ -36,12 +106,20 @@ export const MessagePage: React.FC = () => {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [savedRooms, setSavedRooms] = useState<Room[]>([]);
   const [currentRoom, setCurrentRoom] = useState<Room | null>(null);
-  const [view, setView] = useState<'chat' | 'rooms' | 'saved'>('rooms');
+  const [view, setView] = useState<'chat' | 'rooms' | 'saved' | 'settings'>('rooms');
   const [error, setError] = useState<string | null>(null);
   const [isLoadingRoom, setIsLoadingRoom] = useState(false);
   // 当 URL 参数包含房间时，先保存待确认的房间信息
   const [roomToJoin, setRoomToJoin] = useState<{ id: string; name: string } | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  // 添加房间成员数量状态
+  const [memberCount, setMemberCount] = useState<number>(0);
+  // 添加最近加入/离开消息状态
+  const [memberEvent, setMemberEvent] = useState<{ type: 'join' | 'leave', userId: string } | null>(null);
+  // 添加用户名状态
+  const [username, setUsername] = useState<string>('');
+  // 是否显示修改用户名弹窗
+  const [showEditUsername, setShowEditUsername] = useState<boolean>(false);
 
   // 修改处：同时获取 setSearchParams 方法
   const [searchParams, setSearchParams] = useSearchParams();
@@ -55,10 +133,25 @@ export const MessagePage: React.FC = () => {
     setSearchParams(newParams);
   };
 
-  // 初次加载时加载已保存房间
+  // 初次加载时加载已保存房间和用户名
   useEffect(() => {
     setSavedRooms(getSavedRooms());
-  }, []);
+    
+    // 加载或生成用户名
+    let storedName = getStoredUsername();
+    if (!storedName) {
+      // 使用当前i18n语言设置生成随机名字
+      storedName = saveUsername(generateRandomName(i18n.language));
+    }
+    setUsername(storedName);
+  }, [i18n.language]);
+
+  // 用户名变更时通知socket服务
+  useEffect(() => {
+    if (username) {
+      socket.emit('set_username', username);
+    }
+  }, [username]);
 
   // 当组件加载或 URL 参数变化时，如果 URL 包含 room 参数，则先加载房间信息并要求确认
   useEffect(() => {
@@ -87,11 +180,51 @@ export const MessagePage: React.FC = () => {
     socket.on('room_list', (roomList: Room[]) => setRooms(roomList));
     socket.emit('get_rooms');
     socket.on('new_room', (room: Room) => setRooms(prev => [...prev, room]));
+    
+    // 取消注册回调的清理函数
+    const unsubscribe = onRoomMemberChange((event: RoomMemberEvent) => {
+      if (currentRoom && event.roomId === currentRoom.id) {
+        setMemberCount(event.count);
+        setMemberEvent({ type: event.action, userId: event.user.id });
+        
+        // 5秒后清除成员事件显示
+        setTimeout(() => {
+          setMemberEvent(null);
+        }, 5000);
+      }
+    });
+    
     return () => {
       socket.off('room_list');
       socket.off('new_room');
+      unsubscribe();
     };
-  }, []);
+  }, [currentRoom]);
+
+  // 添加页面可见性变化处理
+  useEffect(() => {
+    // 处理页面可见性变化
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        console.log('页面恢复到前台，检查连接状态...');
+        // 尝试重新连接socket
+        reconnectSocket();
+        
+        // 如果在房间中，刷新消息
+        if (currentRoom) {
+          console.log('刷新当前房间消息:', currentRoom.id);
+          socket.emit('get_room_messages', currentRoom.id);
+        }
+      }
+    };
+
+    // 注册页面可见性变化事件
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [currentRoom]);
 
   // 直接加入房间：点击房间卡片或确认弹窗后调用
   const handleRoomSelect = async (roomId: string) => {
@@ -106,6 +239,8 @@ export const MessagePage: React.FC = () => {
     }
     joinRoom(roomId);
     setCurrentRoom(roomInfo);
+    // 更新成员数量
+    setMemberCount(getRoomMemberCount(roomId));
     // 进入房间时切换到聊天视图
     setView('chat');
     clearRoomUrlParam();
@@ -166,6 +301,19 @@ export const MessagePage: React.FC = () => {
       .catch(err => console.error('Could not copy text:', err));
   };
 
+  // 保存用户名
+  const handleSaveUsername = () => {
+    const trimmedName = username.trim();
+    if (!trimmedName) {
+      setError(t('errorEmptyUsername'));
+      return;
+    }
+    saveUsername(trimmedName);
+    setShowEditUsername(false);
+    setSuccess(t('usernameUpdated'));
+    setTimeout(() => setSuccess(null), 2000);
+  };
+
   return (
       <div className="flex flex-col h-screen">
         <Navbar isBordered maxWidth="full">
@@ -180,6 +328,7 @@ export const MessagePage: React.FC = () => {
             </NavbarBrand>
             <NavbarContent justify="end">
               <div className="flex items-center gap-2">
+
                 <Tooltip content={t('yourUserId')}>
                   <Chip
                     variant="flat"
@@ -190,6 +339,15 @@ export const MessagePage: React.FC = () => {
                   >
                     ID: {clientId.slice(0, 8)}...
                   </Chip>
+                </Tooltip>
+                <Tooltip content={t('profile')}>
+                  <Avatar
+                    name={getAvatarText(username)}
+                    color={getAvatarColor(username) as any}
+                    size="sm"
+                    className="cursor-pointer"
+                    onClick={() => setView('settings')}
+                  />
                 </Tooltip>
                 <LanguageSwitcher />
                 <Button
@@ -237,18 +395,22 @@ export const MessagePage: React.FC = () => {
         <div className="max-w-[1400px] mx-auto px-4">
           <Tabs 
             selectedKey={view} 
-            onSelectionChange={(key) => setView(key as 'chat' | 'rooms' | 'saved')}
+            onSelectionChange={(key) => setView(key as 'chat' | 'rooms' | 'saved' | 'settings')}
             className="p-2"
           >
             <Tab key="rooms" title={t('yourRooms')} />
             <Tab key="saved" title={t('savedRooms')} />
+            <Tab key="settings" title={
+              <div className="flex items-center gap-2">
+                <Icon icon="lucide:settings" className="text-sm" />
+                {t('settings')}
+              </div>
+            } />
             {currentRoom && (
               <Tab key="chat" title={
                 <div className="flex items-center gap-2">
+                  <Icon icon="lucide:home" className="text-sm" />
                   {currentRoom.name || t('room')}
-                  <span>
-                    <Icon icon="lucide:log-in" className="text-xs" />
-                  </span>
                 </div>
               } />
             )}
@@ -273,68 +435,176 @@ export const MessagePage: React.FC = () => {
                 onRoomSelect={handleRoomSelect} 
                 onRoomsChange={setSavedRooms}
               />
+            ) : view === 'settings' ? (
+              // 设置页面 - 极简设计
+              <div className="flex flex-col w-full max-w-md mx-auto p-6">
+                {/* 头像展示 */}
+                <div className="flex justify-center mb-8">
+                  <Avatar
+                    name={getAvatarText(username)}
+                    color={getAvatarColor(username) as any}
+                    size="lg"
+                  />
+                </div>
+                
+                {/* 资料列表 */}
+                <div className="space-y-6">
+                  {/* 用户名行 - 内联编辑 */}
+                  <div className="flex items-center">
+                    <div className="w-24 text-default-500">{t('username')}:</div>
+                    {showEditUsername ? (
+                      <div className="flex-1 flex gap-2">
+                        <Input
+                          autoFocus
+                          size="sm"
+                          className="flex-1"
+                          value={username}
+                          onChange={(e) => setUsername(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleSaveUsername();
+                            if (e.key === 'Escape') setShowEditUsername(false);
+                          }}
+                        />
+                        <div className="flex gap-1">
+                          <Button 
+                            isIconOnly
+                            size="sm"
+                            color="primary"
+                            onPress={handleSaveUsername}
+                          >
+                            <Icon icon="lucide:check" className="text-sm" />
+                          </Button>
+                          <Button 
+                            isIconOnly
+                            size="sm"
+                            variant="flat"
+                            onPress={() => setShowEditUsername(false)}
+                          >
+                            <Icon icon="lucide:x" className="text-sm" />
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <code className="flex-1 bg-default-100 px-3 py-1 rounded text-sm font-semibold">{username}</code>
+                        <Button 
+                          isIconOnly
+                          size="sm"
+                          variant="light"
+                          className="min-w-0 w-8 h-8 ml-1"
+                          onPress={() => setShowEditUsername(true)}
+                        >
+                          <Icon icon="lucide:edit" className="text-sm" />
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                  
+                  {/* ID行 */}
+                  <div className="flex items-center">
+                    <div className="w-24 text-default-500">{t('userId')}:</div>
+                    <code className="flex-1 bg-default-100 px-3 py-1 rounded text-xs overflow-hidden text-ellipsis break-all">{clientId}</code>
+                    <Button 
+                      isIconOnly
+                      size="sm"
+                      variant="light"
+                      className="min-w-0 w-8 h-8 ml-1"
+                      onPress={() => handleCopyToClipboard(clientId)}
+                    >
+                      <Icon icon="lucide:copy" className="text-sm" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
             ) : (
               // Chat 视图
               currentRoom ? (
                 <div className="flex flex-col h-full">
-                  <div className="p-4">
-                    <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
-                      {/* 房间信息卡片 */}
-                      <div className="flex-1">
-                        <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm text-default-600">
-                          <div className="flex items-center gap-1 cursor-pointer" onClick={() => handleCopyToClipboard(currentRoom.id)}>
-                            <Icon icon="lucide:hash" className="text-xs" />
+                  <div className="flex justify-between items-center p-2 border-b">
+                    <div className="flex items-center">
+                      <Button
+                        isIconOnly
+                        variant="light"
+                        aria-label="Back"
+                        onClick={() => {
+                          setView('rooms');
+                          clearRoomUrlParam();
+                        }}
+                        className="mr-2"
+                      >
+                        <Icon icon="lucide:chevron-left" width={24} />
+                      </Button>
+                      <div>
+                        <h2 className="text-xl font-bold">{currentRoom.name}</h2>
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-default-500">
+                          <div className="flex items-center">
+                            <Icon icon="lucide:users" className="mr-1" width={14} />
+                            {memberCount} {t('members')}
+                            {memberEvent && (
+                              <span className="ml-1 text-tiny animate-fade-in">
+                                {memberEvent.type === 'join' ? '👋' : '👋'} {memberEvent.userId.substring(0, 6)}...
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center cursor-pointer" onClick={() => handleCopyToClipboard(currentRoom.id)}>
+                            <Icon icon="lucide:hash" className="mr-1" width={14} />
                             <Tooltip content={t('clickToCopyRoomId')}>
-                              <div className="flex items-center">
-                                <Chip size="sm" color="primary" variant="flat">{t('roomID')}: {currentRoom.id}</Chip>
-                              </div>
+                              <span>{currentRoom.id.substring(0, 8)}...</span>
                             </Tooltip>
                           </div>
-                          <div className="flex items-center gap-1">
-                            <Icon icon="lucide:user" className="text-xs" />
+                          <div className="flex items-center">
+                            <Icon icon="lucide:user" className="mr-1" width={14} />
                             {currentRoom.creatorId === clientId ? (
-                              <Chip size="sm" color="success" variant="flat">{t('createdBy')}</Chip>
+                              <span className="text-success-500">{t('createdBy')}</span>
                             ) : (
-                              <Chip size="sm" color="success" variant="flat">{t('joined')}</Chip>
+                              <span className="text-primary-500">{t('joined')}</span>
                             )}
                           </div>
                         </div>
                       </div>
-                      
-                      {/* 操作按钮组 */}
-                      <div className="flex gap-2">
-                        <Button 
-                          size="sm" 
-                          color="secondary" 
-                          variant="flat"
-                          onPress={handleShareRoom}
-                          startContent={<Icon icon="lucide:share" />}
-                        >
-                          {t('share')}
-                        </Button>
-                        <Button 
-                          size="sm" 
-                          color={isRoomSaved(currentRoom.id) ? "warning" : "primary"} 
-                          variant="flat"
-                          onPress={handleToggleSave}
-                          startContent={<Icon icon={isRoomSaved(currentRoom.id) ? "lucide:bookmark-minus" : "lucide:bookmark-plus"} />}
-                        >
-                          {isRoomSaved(currentRoom.id) ? t('unsave') : t('save')}
-                        </Button>
-                        <Button 
-                          size="sm" 
-                          color="danger" 
-                          variant="flat"
-                          onPress={handleLeaveRoom}
-                          startContent={<Icon icon="lucide:log-out" />}
-                        >
-                          {t('leave')}
-                        </Button>
-                      </div>
+                    </div>
+                    <div className="flex">
+                      <Button
+                        isIconOnly
+                        variant="light"
+                        aria-label="Share"
+                        onClick={handleShareRoom}
+                        className="mr-1"
+                      >
+                        <Icon icon="lucide:share" width={20} />
+                      </Button>
+                      <Button
+                        isIconOnly
+                        variant="light"
+                        aria-label="Save"
+                        onClick={handleToggleSave}
+                        className={isRoomSaved(currentRoom.id) ? "text-warning mr-1" : "text-primary mr-1"}
+                      >
+                        <Icon icon={isRoomSaved(currentRoom.id) ? "lucide:bookmark-minus" : "lucide:bookmark-plus"} width={20} />
+                      </Button>
+                      <Button
+                        isIconOnly
+                        variant="light"
+                        aria-label="Leave"
+                        onClick={handleLeaveRoom}
+                        className="text-danger"
+                      >
+                        <Icon icon="lucide:log-out" width={20} />
+                      </Button>
                     </div>
                   </div>
-                  <div className="flex-1 overflow-hidden">
+                  
+                  <div className="flex-grow overflow-y-auto px-2 pt-2">
                     <MessageList roomId={currentRoom.id} />
+                  </div>
+                  
+                  <div className="border-t p-2">
+                    <MessageInput 
+                      roomId={currentRoom.id} 
+                      username={username}
+                      avatarText={getAvatarText(username)}
+                      avatarColor={getAvatarColor(username)}
+                    />
                   </div>
                 </div>
               ) : (
@@ -359,7 +629,7 @@ export const MessagePage: React.FC = () => {
 
       <footer className="bg-content1 border-t border-divider">
         <div className="max-w-[1400px] mx-auto px-4">
-          {currentRoom && view === 'chat' && <MessageInput roomId={currentRoom.id} />}
+          {/* 移除这行代码，避免重复的输入框 */}
         </div>
       </footer>
 
@@ -381,6 +651,23 @@ export const MessagePage: React.FC = () => {
             </ModalFooter>
           </ModalContent>
         </Modal>
+      )}
+
+      {/* 成员加入/离开提示 */}
+      {memberEvent && (
+        <div className={`flex items-center p-2 text-sm ${memberEvent.type === 'join' ? 'bg-green-50' : 'bg-red-50'}`}>
+          <span className="flex items-center">
+            {memberEvent.type === 'join' ? (
+              <IoMdPersonAdd className="text-green-500 mr-1" />
+            ) : (
+              <IoMdRemove className="text-red-500 mr-1" />
+            )}
+            <span className="font-medium">
+              {memberEvent.type === 'join' ? t('userJoined') : t('userLeft')}:
+            </span>
+            <span className="ml-1">{memberEvent.userId.substring(0, 8)}</span>
+          </span>
+        </div>
       )}
     </div>
   );

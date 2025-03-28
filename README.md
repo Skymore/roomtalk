@@ -4,6 +4,8 @@
 
 A lightweight WebSocket-based real-time messaging system with Redis storage. Useful as a foundation for chat apps, internal tools, or collaborative platforms.
 
+**Current Version: 0.3** (Added avatar and username display)
+
 ---
 
 ## 🚀 Tech Stack
@@ -25,6 +27,45 @@ A lightweight WebSocket-based real-time messaging system with Redis storage. Use
 
 ---
 
+## 🔧 Technical Challenges
+
+### WebSocket Reliability on Mobile Devices
+
+One of the most significant challenges we faced was maintaining reliable WebSocket connections on mobile devices, particularly when apps transition between foreground and background states.
+
+#### Problem
+- When a mobile app moves to the background, browsers may suspend WebSocket connections
+- Even when connections appear active, event listeners often become unresponsive
+- Users can send messages (via HTTP fallback) but not receive them without refreshing
+- Different browsers and mobile platforms handle background connections inconsistently
+
+#### Our Solution
+We implemented a multi-layered approach to ensure connection reliability:
+
+1. **Enhanced Socket.io Configuration**
+   - Configured automatic reconnection with optimized timeouts and delays
+   - Implemented connection state tracking to detect "zombie" connections
+   - Added transport fallback mechanisms (WebSocket → HTTP polling)
+
+2. **Event Listener Management**
+   - Created a system to detect and rebind event listeners when they become unresponsive
+   - Implemented event reference tracking to prevent duplicate event bindings
+   - Added message deduplication to prevent repeated messages after reconnection
+
+3. **Visibility-Based Recovery**
+   - Utilized the Page Visibility API to detect when apps return to the foreground
+   - Implemented connection health checks when visibility changes
+   - Automatically refresh message data when returning from background state
+
+4. **Active Room Tracking**
+   - Maintained client-side records of active room participation
+   - Automatically rejoined rooms after connection reestablishment
+   - Implemented server-side session recovery mechanisms
+
+This comprehensive approach ensures message delivery reliability across different devices and network conditions, maintaining a seamless user experience even in challenging mobile environments.
+
+---
+
 ## 🌟 Features
 
 - ✅ Real-time message sending/receiving
@@ -34,6 +75,14 @@ A lightweight WebSocket-based real-time messaging system with Redis storage. Use
 - ✅ Dark/light mode toggle
 - ✅ Responsive UI
 - ✅ Multi-language (English & Chinese)
+- ✅ Image message support (added in v0.2)
+  - Rich media messaging with up to 9 images per message
+  - Intuitive image handling (clipboard paste, file upload)
+  - Mixed content editing (text and images together)
+- ✅ User identity system (added in v0.3)
+  - Personalized avatars based on username
+  - Username display in chat messages
+  - Improved chat UI with better visual cues for message ownership
 
 ---
 
@@ -167,3 +216,33 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## 📝 Version History
+
+### v0.3 - User Identity System
+- **Personalized Avatars**: Implemented username-based avatar generation with consistent colors
+  - Developed intelligent avatar text extraction algorithm that handles both English initials and Chinese characters
+  - Created hash-based color mapping for consistent user identification
+  - Implemented fallback icon system for missing avatar information
+- **Enhanced Chat Experience**: Added username display for each message to improve conversation clarity
+  - Extended Message data structure with username and avatar fields
+  - Modified socket communication to transmit user identity with each message
+  - Persisted user identity data in Redis for message history consistency
+- **Improved UI**: Redesigned chat interface with better indication of message ownership and streamlined room information display
+  - Applied conditional styling based on message ownership
+  - Optimized avatar display for various screen sizes
+  - Implemented proper type validation for component properties
+- **Localized Random Names**: Added cute random name generation in both English and Chinese based on language settings
+  - Created separate adjective and noun libraries for English and Chinese
+  - Implemented automatic language detection and name generation based on i18n settings
+  - Used localStorage for username persistence across sessions
+
+### v0.2 - Enhanced Messaging with Image Support
+- **Comprehensive Image System**: Implemented a robust message type framework with Base64 encoding, supporting up to 9 images per message with optimized aspect ratio display and seamless viewing across devices
+- **Advanced Content Editor**: Developed a sophisticated mixed-content editor with intuitive clipboard operations, intelligent cursor positioning, and natural editing experience similar to modern messaging platforms
+- **Performance & Experience Enhancements**: Engineered throttling mechanisms and asynchronous processing to ensure smooth operation with large images, while maintaining responsive UI across all device types
+
+### v0.1 - Initial Release
+- **Core Messaging System**: Implemented real-time messaging with Socket.IO and Redis persistence
+- **Room Management**: Created comprehensive room creation, joining, and access control systems
+- **Foundation Features**: Established multi-language support, theme toggling, and responsive design principles

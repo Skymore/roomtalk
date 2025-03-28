@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Spinner, Button } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { socket } from '../utils/socket';
@@ -12,34 +12,49 @@ interface MessageListProps {
 
 export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
   const { t } = useTranslation();
-  const [messages, setMessages] = React.useState<Message[]>([]);
-  const [isLoading, setIsLoading] = React.useState(true);
-  const messagesEndRef = React.useRef<HTMLDivElement>(null);
-  const containerRef = React.useRef<HTMLDivElement>(null);
-  const [showScrollButton, setShowScrollButton] = React.useState(false);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [showScrollButton, setShowScrollButton] = useState(false);
+  const eventBound = useRef<boolean>(false);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  React.useEffect(() => {
-    // Reset state when room changes
-    setMessages([]);
-    setIsLoading(true);
-
-    // Listen for message history for this room
+  // 注册消息事件监听
+  const setupMessageEvents = () => {
+    if (eventBound.current) return;
+    
+    console.log('Setting up message event listeners for room:', roomId);
+    
+    // 先清除可能存在的旧监听器
+    socket.off('message_history');
+    socket.off('new_message');
+    
+    // 监听消息历史
     socket.on('message_history', (messageHistory: Message[]) => {
-      // Filter messages for this room
+      console.log('Received message history, count:', messageHistory.length);
+      // 过滤当前房间的消息
       const roomMessages = messageHistory.filter(message => message.roomId === roomId);
       setMessages(roomMessages);
       setIsLoading(false);
       setTimeout(scrollToBottom, 100);
     });
 
-    // Listen for new messages for this room
+    // 监听新消息
     socket.on('new_message', (message: Message) => {
+      console.log('Received new message:', message.id);
       if (message.roomId === roomId) {
-        setMessages(prev => [...prev, message]);
+        setMessages(prev => {
+          // 避免重复消息
+          if (prev.some(m => m.id === message.id)) {
+            return prev;
+          }
+          return [...prev, message];
+        });
+        
         const container = containerRef.current;
         if (container) {
           const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
@@ -49,8 +64,21 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
         }
       }
     });
+    
+    eventBound.current = true;
+  };
 
-    // Request message history for this room
+  // 处理房间变更
+  useEffect(() => {
+    // 重置状态
+    setMessages([]);
+    setIsLoading(true);
+    eventBound.current = false;
+
+    // 设置消息事件监听器
+    setupMessageEvents();
+
+    // 请求房间消息历史
     socket.emit('get_room_messages', roomId);
 
     const loadingTimeout = setTimeout(() => {
@@ -60,9 +88,26 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
     }, 3000);
 
     return () => {
+      // 清理事件监听器
       socket.off('message_history');
       socket.off('new_message');
       clearTimeout(loadingTimeout);
+      eventBound.current = false;
+    };
+  }, [roomId]);
+
+  // 监听socket连接状态
+  useEffect(() => {
+    const handleConnect = () => {
+      console.log('Socket connected, setting up message events again');
+      setupMessageEvents();
+      socket.emit('get_room_messages', roomId);
+    };
+
+    socket.on('connect', handleConnect);
+
+    return () => {
+      socket.off('connect', handleConnect);
     };
   }, [roomId]);
 

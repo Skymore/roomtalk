@@ -32,6 +32,12 @@ trap cleanup SIGINT SIGTERM
 # 启动服务端
 echo "启动服务端..."
 cd server || { echo "无法进入 server 目录"; exit 1; }
+
+# 编译TypeScript代码
+echo "编译服务端TypeScript代码..."
+npm run build || { echo "编译失败"; exit 1; }
+
+# 启动编译后的服务端
 NODE_ENV=$NODE_ENV PORT=$SERVER_PORT npm start &
 SERVER_PID=$!
 echo "等待服务端启动..."

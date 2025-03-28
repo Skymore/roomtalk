@@ -22,6 +22,22 @@ const resources = {
       "send": "Send",
       "yourUserId": "Click to copy your full User ID",
       
+      // 设置页面
+      "settings": "Settings",
+      "profile": "Profile",
+      "username": "Username",
+      "userId": "User ID",
+      "editUsername": "Edit Username",
+      "enterUsername": "Enter your username",
+      "usernameUpdated": "Username updated successfully!",
+      "errorEmptyUsername": "Username cannot be empty",
+      "appearance": "Appearance",
+      "language": "Language",
+      "lightMode": "Light Mode",
+      "darkMode": "Dark Mode",
+      "clickToCopy": "Click to copy",
+      "previewAvatar": "Your avatar preview",
+      
       // 房间列表
       "yourRooms": "Your Rooms",
       "savedRooms": "Saved Rooms",
@@ -69,7 +85,22 @@ const resources = {
       "newMessages": "New messages",
       "typeMessage": "Type your message...",
       "clickToCopyRoomId": "Click to copy Room ID",
-      "copySuccess": "Copied to clipboard!"
+      "copySuccess": "Copied to clipboard!",
+      
+      // 图片消息
+      "uploadImage": "Upload Image",
+      "onlyImagesAllowed": "Only image files are allowed",
+      "imageTooLarge": "Image too large (max 5MB)",
+      "errorReadingImage": "Error reading image file",
+      "replaceExistingImage": "Replace existing image?",
+      "maxImagesReached": "Maximum {{max}} images allowed",
+      "images": "images",
+      
+      // 房间成员
+      "roomMembers": "Room Members",
+      "members": "members",
+      "userJoined": "User joined",
+      "userLeft": "User left"
     }
   },
   zh: {
@@ -89,6 +120,22 @@ const resources = {
       "shareSuccess": "房间链接已复制到剪贴板！",
       "send": "发送",
       "yourUserId": "点击复制您的完整用户ID",
+      
+      // 设置页面
+      "settings": "设置",
+      "profile": "个人资料",
+      "username": "用户名",
+      "userId": "用户ID",
+      "editUsername": "编辑用户名",
+      "enterUsername": "输入您的用户名",
+      "usernameUpdated": "用户名更新成功！",
+      "errorEmptyUsername": "用户名不能为空",
+      "appearance": "外观",
+      "language": "语言",
+      "lightMode": "浅色模式",
+      "darkMode": "深色模式",
+      "clickToCopy": "点击复制",
+      "previewAvatar": "头像预览",
       
       // 房间列表
       "yourRooms": "你的房间",
@@ -137,7 +184,22 @@ const resources = {
       "newMessages": "新消息",
       "typeMessage": "输入消息...",
       "clickToCopyRoomId": "点击复制房间ID",
-      "copySuccess": "已复制到剪贴板！"
+      "copySuccess": "已复制到剪贴板！",
+      
+      // 图片消息
+      "uploadImage": "上传图片",
+      "onlyImagesAllowed": "只允许上传图片文件",
+      "imageTooLarge": "图片太大（最大5MB）",
+      "errorReadingImage": "读取图片文件出错",
+      "replaceExistingImage": "替换已有图片？",
+      "maxImagesReached": "最多允许{{max}}张图片",
+      "images": "张图片",
+      
+      // 房间成员
+      "roomMembers": "房间成员",
+      "members": "成员",
+      "userJoined": "用户加入",
+      "userLeft": "用户离开"
     }
   }
 };

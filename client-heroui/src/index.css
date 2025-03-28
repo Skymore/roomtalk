@@ -1,3 +1,13 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+[contenteditable]:empty:before {
+  content: attr(data-placeholder);
+  color: #a1a1aa;
+  cursor: text;
+}
+
+[contenteditable]:focus {
+  outline: none;
+}

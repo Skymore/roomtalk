@@ -16,6 +16,12 @@ interface Message {
   content: string;
   roomId: string;
   timestamp: string;
+  messageType: 'text' | 'image'; // 新增消息类型字段，区分文本和图片
+  username?: string; // 添加用户名字段
+  avatar?: {
+    text: string;
+    color: string;
+  }; // 添加头像信息
 }
 
 interface Room {
@@ -26,12 +32,27 @@ interface Room {
   creatorId: string;
 }
 
+// 用户信息类型
+interface UserInfo {
+  id: string;
+  // 可以在此添加更多用户信息字段，如用户名、头像等
+}
+
+// 房间成员变动事件类型
+interface RoomMemberEvent {
+  roomId: string;
+  user: UserInfo;
+  count: number; // 房间内当前成员数量
+  action: 'join' | 'leave'; // 加入或离开
+  timestamp: string;
+}
+
 // ---------------------- 初始化 Express 应用 ----------------------
 const app = express();
 app.use(cors());
 app.use(express.json());
 // 提供前端构建后的静态文件服务
-app.use(express.static(path.join(__dirname, '../client-heroui/dist')));
+app.use(express.static(path.join(__dirname, '../../client-heroui/dist')));
 
 // ---------------------- 创建 HTTP 服务器 ----------------------
 const server = http.createServer(app);
@@ -117,10 +138,49 @@ async function getRoomById(roomId: string): Promise<Room | null> {
   }
 }
 
-// ---------------------- Socket.IO 逻辑 ----------------------
-const connectedClients = new Map<string, string>(); // 映射 socket.id -> clientId
-const userRooms = new Map<string, string[]>();        // 映射 socket.id -> [roomId]
+// 处理日志输出时的消息格式化
+function formatMessageForLog(message: Message): any {
+  // 创建消息对象的副本，避免修改原始数据
+  const logMessage = { ...message };
+  
+  // 如果是图片消息，截断内容
+  if (logMessage.messageType === 'image' && logMessage.content) {
+    // 只保留前30个字符，后面用...代替
+    const contentStart = logMessage.content.substring(0, 30);
+    logMessage.content = `${contentStart}... [BASE64_IMAGE_DATA_TRUNCATED]`;
+  }
+  
+  return logMessage;
+}
 
+// ---------------------- 初始化变量 ----------------------
+const connectedClients = new Map<string, string>(); // 映射 socket.id -> clientId
+const userRooms = new Map<string, string[]>();      // 映射 socket.id -> [roomId]
+const roomMembers = new Map<string, Set<string>>();  // 映射 roomId -> Set<clientId>
+
+// 更新并获取房间成员数
+function updateRoomMemberCount(roomId: string, clientId: string, isJoining: boolean): number {
+  if (!roomMembers.has(roomId)) {
+    roomMembers.set(roomId, new Set());
+  }
+  
+  const members = roomMembers.get(roomId)!;
+  
+  if (isJoining) {
+    members.add(clientId);
+  } else if (members.has(clientId)) {
+    members.delete(clientId);
+  }
+  
+  return members.size;
+}
+
+// 获取指定房间的成员计数
+function getRoomMemberCount(roomId: string): number {
+  return roomMembers.has(roomId) ? roomMembers.get(roomId)!.size : 0;
+}
+
+// ---------------------- Socket.IO 逻辑 ----------------------
 io.on('connection', (socket) => {
   console.log('Socket connected:', socket.id);
 
@@ -174,30 +234,80 @@ io.on('connection', (socket) => {
       socket.emit('error', { message: 'You are not registered' });
       return;
     }
+    
     // 离开之前加入的所有房间
     if (userRooms.has(socket.id)) {
       const prevRooms = userRooms.get(socket.id)!;
       for (const r of prevRooms) {
+        // 通知房间其他成员该用户已离开
+        const memberCount = updateRoomMemberCount(r, userId, false);
+        const leaveEvent: RoomMemberEvent = {
+          roomId: r,
+          user: { id: userId },
+          count: memberCount,
+          action: 'leave',
+          timestamp: new Date().toISOString()
+        };
+        socket.to(r).emit('room_member_change', leaveEvent);
         socket.leave(r);
       }
     }
+    
     // 检查房间是否存在
     const room = await getRoomById(roomId);
     if (!room) {
       socket.emit('error', { message: 'Room not found' });
       return;
     }
+    
     socket.join(roomId);
     userRooms.set(socket.id, [roomId]);
-    console.log(`Socket ${socket.id} joined room ${roomId}`);
+    
+    // 更新房间成员计数并通知所有房间成员
+    const memberCount = updateRoomMemberCount(roomId, userId, true);
+    const joinEvent: RoomMemberEvent = {
+      roomId,
+      user: { id: userId },
+      count: memberCount,
+      action: 'join',
+      timestamp: new Date().toISOString()
+    };
+    
+    // 通知房间内所有成员（包括新加入者）
+    io.to(roomId).emit('room_member_change', joinEvent);
+    
+    console.log(`Socket ${socket.id} joined room ${roomId}. Current member count: ${memberCount}`);
+    
+    // 发送房间消息历史
     const roomMessages = await readMessagesByRoom(roomId);
     socket.emit('message_history', roomMessages);
+    
+    // 发送当前房间成员数
+    socket.emit('room_member_count', { roomId, count: memberCount });
   });
 
   // 离开房间
   socket.on('leave_room', (roomId: string) => {
+    const userId = connectedClients.get(socket.id);
+    if (!userId) return;
+    
     socket.leave(roomId);
-    console.log(`Socket ${socket.id} left room ${roomId}`);
+    
+    // 更新房间成员计数并通知所有房间成员
+    const memberCount = updateRoomMemberCount(roomId, userId, false);
+    const leaveEvent: RoomMemberEvent = {
+      roomId,
+      user: { id: userId },
+      count: memberCount,
+      action: 'leave',
+      timestamp: new Date().toISOString()
+    };
+    
+    // 通知房间内剩余成员
+    io.to(roomId).emit('room_member_change', leaveEvent);
+    
+    console.log(`Socket ${socket.id} left room ${roomId}. Current member count: ${memberCount}`);
+    
     if (userRooms.has(socket.id)) {
       const rooms = userRooms.get(socket.id)!.filter(id => id !== roomId);
       userRooms.set(socket.id, rooms);
@@ -211,7 +321,16 @@ io.on('connection', (socket) => {
   });
 
   // 发送新消息
-  socket.on('send_message', async (messageData: { roomId: string; content: string }) => {
+  socket.on('send_message', async (messageData: { 
+    roomId: string; 
+    content: string; 
+    messageType?: 'text' | 'image';
+    username?: string;
+    avatar?: { 
+      text: string;
+      color: string;
+    }
+  }) => {
     const clientId = connectedClients.get(socket.id);
     if (!clientId) {
       socket.emit('error', { message: 'You are not registered' });
@@ -226,9 +345,12 @@ io.on('connection', (socket) => {
       clientId,
       content: messageData.content,
       roomId: messageData.roomId,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      messageType: messageData.messageType || 'text', // 默认为文本消息
+      username: messageData.username, // 添加用户名字段
+      avatar: messageData.avatar // 添加头像信息
     };
-    console.log(`Received WebSocket message: ${JSON.stringify(message)}`);
+    console.log(`Received WebSocket message: ${JSON.stringify(formatMessageForLog(message))}`);
     await saveMessage(message);
     io.to(messageData.roomId).emit('new_message', message);
   });
@@ -237,7 +359,7 @@ io.on('connection', (socket) => {
   socket.on('get_room_by_id', async (roomId: string, callback: (room: Room | null) => void) => {
     const room = await getRoomById(roomId);
     if (room) {
-      console.log(`Socket ${socket.id} requested info for room: ${roomId}`);
+      console.log(`Socket ${socket.id} requested info for room: ${roomId}, room: ${JSON.stringify(room, null, 2)}`);
       callback(room);
     } else {
       console.log(`Socket ${socket.id} requested info for non-existent room: ${roomId}`);
@@ -248,6 +370,27 @@ io.on('connection', (socket) => {
   // 断开连接时清理数据
   socket.on('disconnect', () => {
     console.log('Socket disconnected:', socket.id);
+    const userId = connectedClients.get(socket.id);
+    
+    // 处理用户离开所有加入的房间
+    if (userId && userRooms.has(socket.id)) {
+      const rooms = userRooms.get(socket.id)!;
+      for (const roomId of rooms) {
+        // 更新房间成员计数并通知所有房间成员
+        const memberCount = updateRoomMemberCount(roomId, userId, false);
+        const leaveEvent: RoomMemberEvent = {
+          roomId,
+          user: { id: userId },
+          count: memberCount,
+          action: 'leave',
+          timestamp: new Date().toISOString()
+        };
+        
+        // 通知房间内剩余成员
+        io.to(roomId).emit('room_member_change', leaveEvent);
+      }
+    }
+    
     connectedClients.delete(socket.id);
     userRooms.delete(socket.id);
   });
@@ -300,7 +443,7 @@ app.post('/api/clients/:clientId/rooms', async (req: Request, res: Response) => 
 // 4. 发送新消息到指定房间（房间 ID 从 URL 中获取）
 app.post('/api/rooms/:roomId/messages', async (req: Request, res: Response) => {
   const { roomId } = req.params;
-  const { clientId, content } = req.body;
+  const { clientId, content, messageType } = req.body;
   if (!clientId || !content || !roomId) {
     return res.status(400).json({ error: 'Client ID, room ID, and message content are required' });
   }
@@ -309,9 +452,10 @@ app.post('/api/rooms/:roomId/messages', async (req: Request, res: Response) => {
     clientId,
     content,
     roomId,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    messageType: messageType || 'text' // 默认为文本消息
   };
-  console.log(`Received HTTP API message: ${JSON.stringify(message)}`);
+  console.log(`Received HTTP API message: ${JSON.stringify(formatMessageForLog(message))}`);
   await saveMessage(message);
   io.to(roomId).emit('new_message', message);
   res.status(201).json(message);
@@ -332,7 +476,7 @@ app.get('/api/clients/:clientId/rooms/:roomId', async (req: Request, res: Respon
 
 // 6. Catch-all 路由：返回前端应用的入口 HTML 文件（支持前端路由）
 app.get('*', (req: Request, res: Response) => {
-  res.sendFile(path.join(__dirname, '../client-heroui/dist', 'index.html'));
+  res.sendFile(path.join(__dirname, '../../client-heroui/dist', 'index.html'));
 });
 
 // ---------------------- 启动服务器 ----------------------
