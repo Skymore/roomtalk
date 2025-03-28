@@ -46,33 +46,39 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
         />
       )}
       
-      <div className="max-w-[75%] sm:max-w-[60%] md:max-w-[50%]">
+      <div className={`max-w-[75%] sm:max-w-[60%] md:max-w-[50%] ${isMine ? '' : ''}`}>
         {!isMine && message.username && (
           <div className="text-tiny text-default-500 mb-1 ml-1">
             {message.username}
           </div>
         )}
-        <Card
-          className={`${isMine ? 'bg-primary-500 text-white' : 'bg-content2'} rounded-lg shadow-sm`}
-        >
-          <div className="p-3">
-            {isImage ? (
-              imageError ? (
-                <div className="text-sm text-danger">
-                  <Icon icon="lucide:alert-triangle" className="inline mr-1" />
-                  {/* Show error message if image cannot be loaded */}
-                  Failed to load image
-                </div>
-              ) : (
+        
+        {isImage ? (
+          // 图片消息使用单独样式
+          <div className="w-fit">
+            {imageError ? (
+              <div className="text-sm text-danger p-2 bg-default-100 rounded-md w-fit">
+                <Icon icon="lucide:alert-triangle" className="inline mr-1" />
+                Failed to load image
+              </div>
+            ) : (
+              <div className="border border-default-200 rounded-md p-0.5 max-w-full overflow-hidden">
                 <Image
                   src={message.content}
                   alt="Shared image"
-                  className="max-w-full rounded"
+                  className="max-h-[300px] max-w-full object-contain rounded"
                   onError={handleImageError}
                   isBlurred
                 />
-              )
-            ) : (
+              </div>
+            )}
+          </div>
+        ) : (
+          // 文本消息使用气泡样式
+          <Card
+            className={`${isMine ? 'bg-primary-500 text-white' : 'bg-content2'} rounded-lg shadow-sm w-fit`}
+          >
+            <div className="p-3">
               <p className="text-sm whitespace-pre-wrap">
                 {message.content.split(' ').map((word, i) => {
                   const urlPattern = /^(https?:\/\/[^\s]+)$/;
@@ -93,9 +99,10 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
                   );
                 })}
               </p>
-            )}
-          </div>
-        </Card>
+            </div>
+          </Card>
+        )}
+        
         <div 
           className={`text-tiny mt-1 text-default-400 transition-opacity ${
             isHovered ? 'opacity-100' : 'opacity-0 md:group-hover:opacity-70'
