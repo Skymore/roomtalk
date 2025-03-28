@@ -8,6 +8,7 @@ import { Image } from '@heroui/react';
 import 'katex/dist/katex.min.css';
 import katex from 'katex';
 import { Tooltip } from '@heroui/react';
+import { useTranslation } from 'react-i18next';
 // 如果要用 tailwindcss 的插件，在全局样式里 import：
 
 interface MarkdownContentProps {
@@ -212,6 +213,7 @@ const InlineCode: React.FC<{ children: ReactNode }> = ({ children }) => {
 
 /** 入口组件 */
 const MarkdownContent: React.FC<MarkdownContentProps> = ({ content}) => {
+  const { t } = useTranslation();
   // 1. 预处理
   let processed = preprocessMarkdown(content);
   // 2. 数学公式 parse
@@ -324,7 +326,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({ content}) => {
 
       {/* 底部按钮栏（示例：复制原文） */}
       <div className="mt-2 flex items-center space-x-4 text-gray-500 dark:text-gray-400">
-        <Tooltip content={'Copy'}>
+        <Tooltip content={t('copy')}>
         <button
           onClick={handleCopyRaw}
           className="flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
@@ -332,7 +334,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({ content}) => {
           <Icon icon="lucide:copy" className="w-4 h-4" />
         </button>
         </Tooltip>
-        <Tooltip content={'Like'}>
+        <Tooltip content={t('like')}>
         <button
           onClick={() => {}}
           className="flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
@@ -340,7 +342,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({ content}) => {
           <Icon icon="lucide:thumbs-up" className="w-4 h-4" />
         </button>
         </Tooltip>
-        <Tooltip content={'Dislike'}>
+        <Tooltip content={t('dislike')}>
         <button
           onClick={() => {}}
           className="flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
@@ -348,7 +350,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({ content}) => {
           <Icon icon="lucide:thumbs-down" className="w-4 h-4" />
         </button>
         </Tooltip>
-        <Tooltip content={'Refresh'}>
+        <Tooltip content={t('refresh')}>
         <button
           onClick={() => {}}
           className="flex items-center gap-1 opacity-40 cursor-not-allowed dark:text-gray-500"
@@ -357,7 +359,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({ content}) => {
           <Icon icon="lucide:refresh-cw" className="w-4 h-4" />
         </button>
         </Tooltip>
-        <Tooltip content={'Edit'}>
+        <Tooltip content={t('edit')}>
         <button
           onClick={() => {}}
           className="flex items-center gap-1 opacity-40 cursor-not-allowed dark:text-gray-500"

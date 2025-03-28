@@ -21,6 +21,11 @@ const resources = {
       "shareSuccess": "Room link copied to clipboard!",
       "send": "Send",
       "yourUserId": "Click to copy your full User ID",
+      "like": "Like",
+      "dislike": "Dislike",
+      "refresh": "Refresh",
+      "edit": "Edit",
+      "copy": "Copy",
       
       // 设置页面
       "settings": "Settings",
@@ -122,6 +127,11 @@ const resources = {
       "shareSuccess": "房间链接已复制到剪贴板！",
       "send": "发送",
       "yourUserId": "点击复制您的完整用户ID",
+      "like": "点赞",
+      "dislike": "踩",
+      "refresh": "刷新",
+      "edit": "编辑",
+      "copy": "复制",
       
       // 设置页面
       "settings": "设置",
