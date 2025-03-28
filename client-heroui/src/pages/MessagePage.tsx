@@ -669,6 +669,7 @@ export const MessagePage: React.FC = () => {
                               {currentRoom.id.length > 10 ? `${currentRoom.id.substring(0, 8)}...` : currentRoom.id}
                             </span>
                           </Tooltip>
+                          <Icon icon="lucide:copy" className="ml-1 text-default-400" width={12} />
                         </div>
                         {/* <div className="flex items-center">
                           <Icon icon="lucide:user" className="mr-1" width={14} />
