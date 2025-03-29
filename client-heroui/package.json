@@ -10,14 +10,17 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@heroicons/react": "^2.2.0",
     "@heroui/react": "2.7.5",
     "@heroui/use-theme": "2.1.6",
     "@iconify/react": "latest",
+    "@tabler/icons-react": "^3.31.0",
     "@tailwindcss/typography": "^0.5.16",
     "@types/katex": "^0.16.7",
     "@types/socket.io-client": "^1.4.36",
     "@types/uuid": "^10.0.0",
     "framer-motion": "^11.18.2",
+    "heroicons": "^2.2.0",
     "i18next": "^24.2.3",
     "i18next-browser-languagedetector": "^8.0.4",
     "katex": "^0.16.21",

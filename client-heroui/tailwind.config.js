@@ -14,7 +14,7 @@ export default {
   plugins: [
     heroui(),
     require('@tailwindcss/typography'),
-    require('@tailwindcss/forms'),
+    // require('@tailwindcss/forms'),
     require('@tailwindcss/aspect-ratio'),
   ],
 };
