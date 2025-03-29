@@ -158,72 +158,60 @@ const CodeBlock = memo<CodeBlockProps>(({ className, children }) => {
 
   return (
     // 添加一个宽度为100%的容器，防止溢出
-    <div className="w-full my-2">
-      <div className="border border-gray-600 text-sm rounded-md">
-        {/* 代码块顶部栏 */}
-        <div className="flex items-center justify-between px-2 py-1 bg-gray-800 text-gray-300 border-b border-gray-600">
-          <div className="flex items-center gap-2">
-            {language === "python" ? (
-              <Icon icon="tabler:brand-python" className="w-3.5 h-3.5" />
-            ) : language === "javascript" || language === "js" ? (
-              <Icon icon="tabler:brand-javascript" className="w-3.5 h-3.5" />
-            ) : language === "typescript" || language === "ts" ? (
-              <Icon icon="tabler:brand-typescript" className="w-3.5 h-3.5" />
-            ) : language === "html" ? (
-              <Icon icon="tabler:brand-html5" className="w-3.5 h-3.5" />
-            ) : language === "css" ? (
-              <Icon icon="tabler:brand-css3" className="w-3.5 h-3.5" />
-            ) : (
-              <Icon icon="tabler:code" className="w-3.5 h-3.5" />
-            )}
-            <span className="text-xs font-medium uppercase">{language}</span>
-          </div>
-          <button
-            className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded hover:bg-gray-200 transition-colors min-w-[52px]"
-            onClick={handleCopyCode}
-            type="button"
-          >
-            {copied ? (
-              <>
-                <Icon icon="lucide:check" className="w-3 h-3" />
-                <span>Copied</span>
-              </>
-            ) : (
-              <>
-                <Icon icon="lucide:copy" className="w-3 h-3" />
-                <span>Copy</span>
-              </>
-            )}
-          </button>
+    <div className="w-full border border-gray-600 text-sm">
+      {/* 代码块顶部栏 */}
+      <div className="flex items-center justify-between px-2 py-1 bg-gray-800 text-gray-300 border-b border-gray-600">
+        <div className="flex items-center gap-2">
+          {language === "python" ? (
+            <Icon icon="tabler:brand-python" className="w-3.5 h-3.5" />
+          ) : language === "javascript" || language === "js" ? (
+            <Icon icon="tabler:brand-javascript" className="w-3.5 h-3.5" />
+          ) : language === "typescript" || language === "ts" ? (
+            <Icon icon="tabler:brand-typescript" className="w-3.5 h-3.5" />
+          ) : language === "html" ? (
+            <Icon icon="tabler:brand-html5" className="w-3.5 h-3.5" />
+          ) : language === "css" ? (
+            <Icon icon="tabler:brand-css3" className="w-3.5 h-3.5" />
+          ) : (
+            <Icon icon="tabler:code" className="w-3.5 h-3.5" />
+          )}
+          <span className="text-xs font-medium uppercase">{language}</span>
         </div>
-
-        {/* 添加内部滚动容器，允许代码内容可滚动 */}
-        <div className="overflow-x-auto">
-          <SyntaxHighlighter
-            language={language}
-            style={oneDark}
-            customStyle={{
-              margin: 0,
-              padding: "0.5rem 0.75rem",
-              fontSize: "0.8125rem",
-              lineHeight: "1.5",
-              background: "#282c34",
-              borderRadius: 0,
-            }}
-            showLineNumbers
-            wrapLines
-            codeTagProps={{
-              className: `language-${language}`,
-              style: {
-                fontFamily: 'Menlo, Monaco, Consolas, "Courier New", monospace',
-                fontSize: "0.8125rem",
-              },
-            }}
-          >
-            {code}
-          </SyntaxHighlighter>
-        </div>
+        <button
+          className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded hover:bg-gray-200 transition-colors min-w-[52px]"
+          onClick={handleCopyCode}
+          type="button"
+        >
+          {copied ? (
+            <>
+              <Icon icon="lucide:check" className="w-3 h-3" />
+              <span>Copied</span>
+            </>
+          ) : (
+            <>
+              <Icon icon="lucide:copy" className="w-3 h-3" />
+              <span>Copy</span>
+            </>
+          )}
+        </button>
       </div>
+
+      {/* 添加内部滚动容器，允许代码内容可滚动 */}
+      <SyntaxHighlighter
+        language={language}
+        style={oneDark}
+        showLineNumbers
+        wrapLines
+        codeTagProps={{
+          className: `language-${language}`,
+          style: {
+            fontFamily: 'Menlo, Monaco, Consolas, "Courier New", monospace',
+            fontSize: "0.8125rem",
+          },
+        }}
+      >
+        {code}
+      </SyntaxHighlighter>
     </div>
   );
 });
@@ -579,13 +567,13 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content }
         box-sizing: border-box;
       }
       
-/* 让代码块自身不要超过父容器 */
-.markdown-container pre {
-  max-width: 100%;
-  overflow-x: auto;
-  overflow-y: visible;
-  box-sizing: border-box;
-}
+      /* 让代码块自身不要超过父容器 */
+      .markdown-container pre {
+        max-width: 100%;
+        overflow-x: auto;
+        overflow-y: visible;
+        box-sizing: border-box;
+      }
 
       
       /* 确保表格也不会导致页面水平滚动 */
