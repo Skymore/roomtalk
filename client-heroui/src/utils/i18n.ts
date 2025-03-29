@@ -93,6 +93,7 @@ const resources = {
       "beFirstToMessage": "Be the first to start the conversation",
       "newMessages": "New messages",
       "typeMessage": "Type your message...",
+      "messageInput": "Message Input",
       "clickToCopyRoomId": "Click to copy Room ID",
       "copySuccess": "Copied to clipboard!",
       
@@ -201,6 +202,7 @@ const resources = {
       "beFirstToMessage": "来发送第一条消息吧",
       "newMessages": "新消息",
       "typeMessage": "输入消息...",
+      "messageInput": "消息输入框",
       "clickToCopyRoomId": "点击复制房间ID",
       "copySuccess": "已复制到剪贴板！",
       

@@ -116,7 +116,7 @@ const Math: React.FC<MathProps> = ({ children, inline = false }) => {
   return (
     <span
       ref={mathRef}
-      className={inline ? "inline-block align-middle katex-container" : "block text-center my-2 katex-container"}
+      className={inline ? "inline-block align-middle katex-container" : "block text-center my-1 katex-container"}
     />
   );
 };

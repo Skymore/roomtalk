@@ -442,6 +442,10 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
             lineHeight: '1.5',
             whiteSpace: 'pre-wrap',
           }}
+          role="textbox"
+          aria-label={t('messageInput')}
+          aria-multiline="true"
+          title={t('messageInput')}
         />
         
         {errorMessage && (
@@ -461,6 +465,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
               onChange={handleImageUpload}
               disabled={isSending || imageCount >= MAX_IMAGES}
               multiple
+              aria-label={t('uploadImage')}
+              title={t('uploadImage')}
             />
             <Button
               type="button"

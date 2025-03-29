@@ -584,7 +584,7 @@ export const MessagePage: React.FC = () => {
           <div className="max-w-[1400px] mx-auto px-4 flex items-center gap-2">
             <Icon icon="lucide:alert-circle" />
             <p>{error}</p>
-            <Button size="sm" variant="flat" color="danger" className="ml-auto" onPress={() => setError(null)}>
+            <Button size="sm" variant="flat" color="danger" className="ml-auto" onPress={() => setError(null)} aria-label={t("close")}>
               {t("close")}
             </Button>
           </div>
@@ -617,6 +617,7 @@ export const MessagePage: React.FC = () => {
           >
             <Tab
               key="rooms"
+              aria-label={t("yourRooms")}
               title={
                 <Tooltip content={t("yourRooms")}>
                   <div className="flex items-center gap-1">
@@ -627,6 +628,7 @@ export const MessagePage: React.FC = () => {
             />
             <Tab
               key="saved"
+              aria-label={t("savedRooms")}
               title={
                 <Tooltip content={t("savedRooms")}>
                   <div className="flex items-center gap-1">
@@ -637,6 +639,7 @@ export const MessagePage: React.FC = () => {
             />
             <Tab
               key="settings"
+              aria-label={t("settings")}
               title={
                 <Tooltip content={t("settings")}>
                   <div className="flex items-center gap-1">
@@ -648,6 +651,7 @@ export const MessagePage: React.FC = () => {
             {currentRoom && (
               <Tab
                 key="chat"
+                aria-label={t("chatRoom", { name: currentRoom.name })}
                 title={
                   <Tooltip content={currentRoom.name}>
                     <div className="flex items-center gap-1">
@@ -710,10 +714,10 @@ export const MessagePage: React.FC = () => {
                           }}
                         />
                         <div className="flex gap-1">
-                          <Button isIconOnly size="sm" color="primary" onPress={handleSaveUsername}>
+                          <Button isIconOnly size="sm" color="primary" onPress={handleSaveUsername} aria-label={t("save")}>
                             <Icon icon="lucide:check" className="text-sm" />
                           </Button>
-                          <Button isIconOnly size="sm" variant="flat" onPress={() => setShowEditUsername(false)}>
+                          <Button isIconOnly size="sm" variant="flat" onPress={() => setShowEditUsername(false)} aria-label={t("cancel")}>
                             <Icon icon="lucide:x" className="text-sm" />
                           </Button>
                         </div>
@@ -729,6 +733,7 @@ export const MessagePage: React.FC = () => {
                           variant="light"
                           className="min-w-0 w-8 h-8 ml-1"
                           onPress={() => setShowEditUsername(true)}
+                          aria-label={t("editUsername")}
                         >
                           <Icon icon="lucide:edit" className="text-sm" />
                         </Button>
@@ -748,6 +753,7 @@ export const MessagePage: React.FC = () => {
                       variant="light"
                       className="min-w-0 w-8 h-8 ml-1"
                       onPress={() => handleCopyToClipboard(clientId)}
+                      aria-label={t("copyUserId")}
                     >
                       <Icon icon="lucide:copy" className="text-sm" />
                     </Button>
