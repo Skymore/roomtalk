@@ -33,3 +33,7 @@ yarn-error.log*
 *.njsproj
 *.sln
 *.sw? 
+
+# Ignore all files in the logs directory
+logs/*
+*/logs/*
