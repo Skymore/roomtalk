@@ -39,42 +39,70 @@ A modern, feature-rich real-time messaging system built with WebSocket and Redis
 
 ---
 
-## 🔧 Technical Challenges
+## 📐 System Architecture
 
-### WebSocket Reliability on Mobile Devices
+```mermaid
+graph TB
+    subgraph Client["Client Layer"]
+        R[React + TypeScript]
+        T[TailwindCSS + HeroUI]
+        SC[Socket.io Client]
+        RT[React Router]
+        I[i18next]
+        M[Markdown-to-JSX]
+    end
 
-One of the most significant challenges we faced was maintaining reliable WebSocket connections on mobile devices, particularly when apps transition between foreground and background states.
+    subgraph Server["Server Layer"]
+        E[Express.js]
+        SS[Socket.io Server]
+        RA[Redis Adapter]
+        API[REST API]
+    end
 
-#### Problem
-- When a mobile app moves to the background, browsers may suspend WebSocket connections
-- Even when connections appear active, event listeners often become unresponsive
-- Users can send messages (via HTTP fallback) but not receive them without refreshing
-- Different browsers and mobile platforms handle background connections inconsistently
+    subgraph Data["Data Layer"]
+        RD[Redis]
+        RP[Redis Pub/Sub]
+        RS[Redis Storage]
+    end
 
-#### Our Solution
-We implemented a multi-layered approach to ensure connection reliability:
+    subgraph Deploy["Deployment Layer"]
+        F[Fly.io]
+        D[Docker]
+        MI[Multi-Instance]
+        HM[Health Monitor]
+    end
 
-1. **Enhanced Socket.io Configuration**
-   - Configured automatic reconnection with optimized timeouts and delays
-   - Implemented connection state tracking to detect "zombie" connections
-   - Added transport fallback mechanisms (WebSocket → HTTP polling)
+    %% Client to Server connections
+    R --> SC
+    SC --> SS
+    R --> API
 
-2. **Event Listener Management**
-   - Created a system to detect and rebind event listeners when they become unresponsive
-   - Implemented event reference tracking to prevent duplicate event bindings
-   - Added message deduplication to prevent repeated messages after reconnection
+    %% Server internal connections
+    E --> API
+    SS --> RA
+    RA --> RP
 
-3. **Visibility-Based Recovery**
-   - Utilized the Page Visibility API to detect when apps return to the foreground
-   - Implemented connection health checks when visibility changes
-   - Automatically refresh message data when returning from background state
+    %% Data connections
+    RA --> RD
+    API --> RS
+    SS --> RS
+    RS --> RD
+    RP --> RD
 
-4. **Active Room Tracking**
-   - Maintained client-side records of active room participation
-   - Automatically rejoined rooms after connection reestablishment
-   - Implemented server-side session recovery mechanisms
+    %% Deployment connections
+    Server --> D
+    D --> F
+    F --> MI
+    MI --> HM
 
-This comprehensive approach ensures message delivery reliability across different devices and network conditions, maintaining a seamless user experience even in challenging mobile environments.
+    style Client fill:#f9f,stroke:#333,stroke-width:2px
+    style Server fill:#bbf,stroke:#333,stroke-width:2px
+    style Data fill:#bfb,stroke:#333,stroke-width:2px
+    style Deploy fill:#fbb,stroke:#333,stroke-width:2px
+```
+
+--- 
+
 
 ---
 
@@ -147,6 +175,45 @@ npm run dev
 
 ---
 
+## 🔧 Technical Challenges
+
+### WebSocket Reliability on Mobile Devices
+
+One of the most significant challenges we faced was maintaining reliable WebSocket connections on mobile devices, particularly when apps transition between foreground and background states.
+
+#### Problem
+- When a mobile app moves to the background, browsers may suspend WebSocket connections
+- Even when connections appear active, event listeners often become unresponsive
+- Users can send messages (via HTTP fallback) but not receive them without refreshing
+- Different browsers and mobile platforms handle background connections inconsistently
+
+#### Our Solution
+We implemented a multi-layered approach to ensure connection reliability:
+
+1. **Enhanced Socket.io Configuration**
+   - Configured automatic reconnection with optimized timeouts and delays
+   - Implemented connection state tracking to detect "zombie" connections
+   - Added transport fallback mechanisms (WebSocket → HTTP polling)
+
+2. **Event Listener Management**
+   - Created a system to detect and rebind event listeners when they become unresponsive
+   - Implemented event reference tracking to prevent duplicate event bindings
+   - Added message deduplication to prevent repeated messages after reconnection
+
+3. **Visibility-Based Recovery**
+   - Utilized the Page Visibility API to detect when apps return to the foreground
+   - Implemented connection health checks when visibility changes
+   - Automatically refresh message data when returning from background state
+
+4. **Active Room Tracking**
+   - Maintained client-side records of active room participation
+   - Automatically rejoined rooms after connection reestablishment
+   - Implemented server-side session recovery mechanisms
+
+This comprehensive approach ensures message delivery reliability across different devices and network conditions, maintaining a seamless user experience even in challenging mobile environments.
+
+---
+
 ## 🔌 API Overview
 
 ### HTTP Endpoints
@@ -203,7 +270,24 @@ npm run dev
 
 ## 📦 Redis Persistence
 
-The system uses **RDB snapshot** persistence by default. You may enable **AOF** or adjust save policies via `redis.conf`.
+The system supports two Redis deployment options:
+
+### Local Development
+Uses standard Redis with **RDB snapshot** persistence by default. You may enable **AOF** or adjust save policies via `redis.conf`.
+
+### Production (Upstash Redis)
+For production environments, we recommend using Upstash Redis, which offers:
+
+- **Instant Persistence**: Data is immediately saved to block storage alongside memory, making it reliable as a primary database
+- **Multi-Region Replication**: Automatic data replication across regions for better availability
+- **Serverless Architecture**: No Redis instance management needed, scales automatically
+- **REST API Access**: Supports both Redis protocol and HTTP/REST API access
+
+Configuration example:
+```env
+REDIS_URL=your-upstash-redis-url
+REDIS_TOKEN=your-upstash-token
+```
 
 ---
 

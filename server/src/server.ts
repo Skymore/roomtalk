@@ -573,6 +573,7 @@ io.on('connection', (socket) => {
 });
 
 // HTTP API 端点
+// 获取指定房间的消息历史记录
 app.get('/api/rooms/:roomId/messages', async (req: Request, res: Response) => {
   const { roomId } = req.params;
   if (!roomId) {
@@ -585,6 +586,7 @@ app.get('/api/rooms/:roomId/messages', async (req: Request, res: Response) => {
   return res.json(filteredMessages);
 });
 
+// 获取指定客户端创建的房间列表
 app.get('/api/clients/:clientId/rooms', async (req: Request, res: Response) => {
   const { clientId } = req.params;
   if (!clientId) {
@@ -597,6 +599,7 @@ app.get('/api/clients/:clientId/rooms', async (req: Request, res: Response) => {
   res.json(myRooms);
 });
 
+// 创建新房间
 app.post('/api/clients/:clientId/rooms', async (req: Request, res: Response) => {
   const { clientId } = req.params;
   if (!clientId) {
@@ -677,6 +680,7 @@ app.post('/api/rooms/:roomId/messages', async (req: Request, res: Response) => {
   res.status(201).json(message);
 });
 
+// 获取指定房间的详细信息
 app.get('/api/clients/:clientId/rooms/:roomId', async (req: Request, res: Response) => {
   const { clientId, roomId } = req.params;
   
