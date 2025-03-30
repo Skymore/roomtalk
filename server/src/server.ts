@@ -4,6 +4,7 @@ import { Logger, httpLogger, defaultLogger } from './logger';
 import express, { Request, Response, NextFunction } from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
+import { createAdapter } from '@socket.io/redis-adapter';
 import { v4 as uuidv4 } from 'uuid';
 import cors from 'cors';
 import path from 'path';
@@ -80,19 +81,49 @@ interface RoomMemberEvent {
 
 // 初始化 Express 应用
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: process.env.CLIENT_URL || '*',
+  methods: ['GET', 'POST'],
+  credentials: true
+}));
+console.log(`process.env.CLIENT_URL: ${process.env.CLIENT_URL}`);
 app.use(express.json());
 
 // 添加HTTP请求日志中间件
 app.use(httpLogger);
 
 // 提供前端构建后的静态文件服务
-app.use(express.static(path.join(__dirname, '../../client-heroui/dist')));
+app.use(express.static(path.join(__dirname, '../../../client-heroui/dist')));
 
 // 创建 HTTP 服务器
 const server = http.createServer(app);
 
-// 初始化 Socket.IO 服务器
+// 从环境变量获取 Redis URL
+const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
+
+// 初始化 Redis 客户端
+const redisClient: RedisClientType = createClient({
+  url: REDIS_URL
+});
+
+redisClient.on('error', (err) => {
+  redisLogger.error('Redis connection error', { error: err.message, stack: err.stack });
+});
+
+// 创建 Redis 适配器所需的客户端
+const pubClient = createClient({ url: REDIS_URL });
+const subClient = pubClient.duplicate();
+
+// 监听 Redis 客户端错误
+pubClient.on('error', (err) => {
+  redisLogger.error('Redis Pub Client Error:', { error: err.message, stack: err.stack });
+});
+
+subClient.on('error', (err) => {
+  redisLogger.error('Redis Sub Client Error:', { error: err.message, stack: err.stack });
+});
+
+// 初始化 Socket.IO 服务器（暂不设置适配器，等待 Redis 连接后再设置）
 const io = new Server(server, {
   cors: {
     origin: '*',
@@ -100,18 +131,27 @@ const io = new Server(server, {
   }
 });
 
-// 初始化 Redis 客户端
-const redisClient: RedisClientType = createClient();
-
-redisClient.on('error', (err) => {
-  redisLogger.error('Redis connection error', { error: err.message, stack: err.stack });
-});
-
-redisClient.connect().then(() => {
-  redisLogger.info('Connected to Redis');
-}).catch(err => {
-  redisLogger.error('Failed to connect to Redis', { error: err.message, stack: err.stack });
-});
+// 使用立即执行异步函数来初始化 Redis 和 Socket.IO 适配器
+(async () => {
+  try {
+    // 连接所有 Redis 客户端
+    await Promise.all([
+      redisClient.connect(),
+      pubClient.connect(),
+      subClient.connect()
+    ]);
+    
+    // 设置 Socket.IO Redis 适配器
+    io.adapter(createAdapter(pubClient, subClient));
+    
+    redisLogger.info('Connected to Redis and Socket.IO adapter initialized');
+  } catch (err) {
+    redisLogger.error('Failed to connect to Redis or initialize adapter', { 
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined
+    });
+  }
+})();
 
 // Redis 数据存储操作
 async function saveMessage(message: Message): Promise<void> {
@@ -171,31 +211,85 @@ async function getRoomById(roomId: string): Promise<Room | null> {
   }
 }
 
-// 初始化变量
-const connectedClients = new Map<string, string>();
-const userRooms = new Map<string, string[]>();
-const roomMembers = new Map<string, Set<string>>();
-
+// 将房间成员信息迁移到 Redis，而不是内存中存储
 // 更新并获取房间成员数
-function updateRoomMemberCount(roomId: string, clientId: string, isJoining: boolean): number {
-  if (!roomMembers.has(roomId)) {
-    roomMembers.set(roomId, new Set());
+async function updateRoomMemberCount(roomId: string, clientId: string, isJoining: boolean): Promise<number> {
+  try {
+    const roomMembersKey = `room:${roomId}:members`;
+    
+    if (isJoining) {
+      await redisClient.sAdd(roomMembersKey, clientId);
+    } else {
+      await redisClient.sRem(roomMembersKey, clientId);
+    }
+    
+    const count = await redisClient.sCard(roomMembersKey);
+    return count;
+  } catch (error) {
+    redisLogger.error('Error updating room member count', { error, roomId, clientId, isJoining });
+    return 0;
   }
-  
-  const members = roomMembers.get(roomId)!;
-  
-  if (isJoining) {
-    members.add(clientId);
-  } else if (members.has(clientId)) {
-    members.delete(clientId);
-  }
-  
-  return members.size;
 }
 
 // 获取指定房间的成员计数
-function getRoomMemberCount(roomId: string): number {
-  return roomMembers.has(roomId) ? roomMembers.get(roomId)!.size : 0;
+async function getRoomMemberCount(roomId: string): Promise<number> {
+  try {
+    const roomMembersKey = `room:${roomId}:members`;
+    return await redisClient.sCard(roomMembersKey);
+  } catch (error) {
+    redisLogger.error('Error getting room member count', { error, roomId });
+    return 0;
+  }
+}
+
+// 将用户会话数据迁移到 Redis
+async function storeClientSession(socketId: string, userId: string): Promise<void> {
+  try {
+    await redisClient.hSet('socket:clients', socketId, userId);
+  } catch (error) {
+    redisLogger.error('Error storing client session', { error, socketId, userId });
+  }
+}
+
+async function getClientId(socketId: string): Promise<string | null> {
+  try {
+    const clientId = await redisClient.hGet('socket:clients', socketId);
+    return clientId || null;
+  } catch (error) {
+    redisLogger.error('Error getting client ID', { error, socketId });
+    return null;
+  }
+}
+
+async function removeClientSession(socketId: string): Promise<void> {
+  try {
+    await redisClient.hDel('socket:clients', socketId);
+  } catch (error) {
+    redisLogger.error('Error removing client session', { error, socketId });
+  }
+}
+
+// 存储用户的房间信息
+async function storeUserRooms(socketId: string, roomIds: string[]): Promise<void> {
+  try {
+    if (roomIds.length > 0) {
+      await redisClient.hSet('socket:rooms', socketId, JSON.stringify(roomIds));
+    } else {
+      await redisClient.hDel('socket:rooms', socketId);
+    }
+  } catch (error) {
+    redisLogger.error('Error storing user rooms', { error, socketId, roomIds });
+  }
+}
+
+async function getUserRooms(socketId: string): Promise<string[]> {
+  try {
+    const roomsJson = await redisClient.hGet('socket:rooms', socketId);
+    return roomsJson ? JSON.parse(roomsJson) : [];
+  } catch (error) {
+    redisLogger.error('Error getting user rooms', { error, socketId });
+    return [];
+  }
 }
 
 // Socket.IO 逻辑
@@ -205,7 +299,7 @@ io.on('connection', (socket) => {
   // 客户端注册
   socket.on('register', async (clientId: string) => {
     const userId = clientId || uuidv4();
-    connectedClients.set(socket.id, userId);
+    await storeClientSession(socket.id, userId);
     socketLogger.info('Client registered', { socketId: socket.id, clientId: userId });
     
     socket.join(userId);
@@ -215,7 +309,7 @@ io.on('connection', (socket) => {
 
   // 获取当前客户端创建的房间列表
   socket.on('get_rooms', async () => {
-    const clientId = connectedClients.get(socket.id);
+    const clientId = await getClientId(socket.id);
     if (!clientId) {
       socketLogger.warn('Unregistered client tried to get rooms', { socketId: socket.id });
       socket.emit('error', { message: 'You are not registered' });
@@ -229,7 +323,7 @@ io.on('connection', (socket) => {
 
   // 创建房间
   socket.on('create_room', async (roomData: { name: string; description?: string }, callback?: (roomId: string) => void) => {
-    const clientId = connectedClients.get(socket.id);
+    const clientId = await getClientId(socket.id);
     if (!clientId || !roomData?.name) {
       socketLogger.warn('Invalid room creation attempt', { 
         socketId: socket.id, 
@@ -268,7 +362,7 @@ io.on('connection', (socket) => {
 
   // 加入房间
   socket.on('join_room', async (roomId: string) => {
-    const userId = connectedClients.get(socket.id);
+    const userId = await getClientId(socket.id);
     if (!userId) {
       socketLogger.warn('Unregistered client tried to join room', { socketId: socket.id, roomId });
       socket.emit('error', { message: 'You are not registered' });
@@ -276,29 +370,27 @@ io.on('connection', (socket) => {
     }
     
     // 离开之前加入的所有房间
-    if (userRooms.has(socket.id)) {
-      const prevRooms = userRooms.get(socket.id)!;
-      for (const r of prevRooms) {
-        // 通知房间其他成员该用户已离开
-        const memberCount = updateRoomMemberCount(r, userId, false);
-        const leaveEvent: RoomMemberEvent = {
-          roomId: r,
-          user: { id: userId },
-          count: memberCount,
-          action: 'leave',
-          timestamp: new Date().toISOString()
-        };
-        
-        socketLogger.debug('User left previous room before joining new one', {
-          socketId: socket.id,
-          userId,
-          roomId: r,
-          memberCount
-        });
-        
-        socket.to(r).emit('room_member_change', leaveEvent);
-        socket.leave(r);
-      }
+    const prevRooms = await getUserRooms(socket.id);
+    for (const r of prevRooms) {
+      // 通知房间其他成员该用户已离开
+      const memberCount = await updateRoomMemberCount(r, userId, false);
+      const leaveEvent: RoomMemberEvent = {
+        roomId: r,
+        user: { id: userId },
+        count: memberCount,
+        action: 'leave',
+        timestamp: new Date().toISOString()
+      };
+      
+      socketLogger.debug('User left previous room before joining new one', {
+        socketId: socket.id,
+        userId,
+        roomId: r,
+        memberCount
+      });
+      
+      socket.to(r).emit('room_member_change', leaveEvent);
+      socket.leave(r);
     }
     
     // 检查房间是否存在
@@ -310,10 +402,10 @@ io.on('connection', (socket) => {
     }
     
     socket.join(roomId);
-    userRooms.set(socket.id, [roomId]);
+    await storeUserRooms(socket.id, [roomId]);
     
     // 更新房间成员计数并通知所有房间成员
-    const memberCount = updateRoomMemberCount(roomId, userId, true);
+    const memberCount = await updateRoomMemberCount(roomId, userId, true);
     const joinEvent: RoomMemberEvent = {
       roomId,
       user: { id: userId },
@@ -342,14 +434,14 @@ io.on('connection', (socket) => {
   });
 
   // 离开房间
-  socket.on('leave_room', (roomId: string) => {
-    const userId = connectedClients.get(socket.id);
+  socket.on('leave_room', async (roomId: string) => {
+    const userId = await getClientId(socket.id);
     if (!userId) return;
     
     socket.leave(roomId);
     
     // 更新房间成员计数并通知所有房间成员
-    const memberCount = updateRoomMemberCount(roomId, userId, false);
+    const memberCount = await updateRoomMemberCount(roomId, userId, false);
     const leaveEvent: RoomMemberEvent = {
       roomId,
       user: { id: userId },
@@ -363,15 +455,15 @@ io.on('connection', (socket) => {
     
     socketLogger.info('User left room', { socketId: socket.id, userId, roomId, memberCount });
     
-    if (userRooms.has(socket.id)) {
-      const rooms = userRooms.get(socket.id)!.filter(id => id !== roomId);
-      userRooms.set(socket.id, rooms);
-    }
+    // 更新用户房间列表
+    const userRooms = await getUserRooms(socket.id);
+    const updatedRooms = userRooms.filter(id => id !== roomId);
+    await storeUserRooms(socket.id, updatedRooms);
   });
 
   // 获取指定房间的消息历史记录
   socket.on('get_room_messages', async (roomId: string) => {
-    const userId = connectedClients.get(socket.id);
+    const userId = await getClientId(socket.id);
     socketLogger.debug('Client requested message history', { socketId: socket.id, userId, roomId });
     
     const roomMessages = await readMessagesByRoom(roomId);
@@ -389,7 +481,7 @@ io.on('connection', (socket) => {
       color: string;
     }
   }) => {
-    const clientId = connectedClients.get(socket.id);
+    const clientId = await getClientId(socket.id);
     if (!clientId) {
       socketLogger.warn('Unregistered client tried to send message', { socketId: socket.id });
       socket.emit('error', { message: 'You are not registered' });
@@ -423,7 +515,7 @@ io.on('connection', (socket) => {
   // 根据房间 ID 获取房间详细信息
   socket.on('get_room_by_id', async (roomId: string, callback: (room: Room | null) => void) => {
     const room = await getRoomById(roomId);
-    const userId = connectedClients.get(socket.id);
+    const userId = await getClientId(socket.id);
     
     if (room) {
       socketLogger.debug('Room info requested', { 
@@ -444,16 +536,16 @@ io.on('connection', (socket) => {
   });
 
   // 断开连接时清理数据
-  socket.on('disconnect', () => {
-    const userId = connectedClients.get(socket.id);
+  socket.on('disconnect', async () => {
+    const userId = await getClientId(socket.id);
     socketLogger.info('Socket disconnected', { socketId: socket.id, userId });
     
     // 处理用户离开所有加入的房间
-    if (userId && userRooms.has(socket.id)) {
-      const rooms = userRooms.get(socket.id)!;
+    if (userId) {
+      const rooms = await getUserRooms(socket.id);
       for (const roomId of rooms) {
         // 更新房间成员计数并通知所有房间成员
-        const memberCount = updateRoomMemberCount(roomId, userId, false);
+        const memberCount = await updateRoomMemberCount(roomId, userId, false);
         const leaveEvent: RoomMemberEvent = {
           roomId,
           user: { id: userId },
@@ -474,8 +566,9 @@ io.on('connection', (socket) => {
       }
     }
     
-    connectedClients.delete(socket.id);
-    userRooms.delete(socket.id);
+    // 清理会话数据
+    await removeClientSession(socket.id);
+    await storeUserRooms(socket.id, []);
   });
 });
 
@@ -618,6 +711,27 @@ app.get('/api/clients/:clientId/rooms/:roomId', async (req: Request, res: Respon
   });
   
   res.json(room);
+});
+
+// 系统状态端点
+app.get('/api/status', async (req: Request, res: Response) => {
+  try {
+    const redisStatus = redisClient.isOpen ? 'connected' : 'disconnected';
+    const roomCount = await redisClient.hLen('rooms');
+    
+    routeLogger.info('System status requested', { endpoint: '/api/status', ip: req.ip });
+    
+    res.json({
+      status: 'online',
+      redis: redisStatus,
+      socketAdapterReady: io.of('/').adapter ? true : false,
+      rooms: roomCount,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    routeLogger.error('Error getting system status', { error, ip: req.ip });
+    res.status(500).json({ error: 'Error getting system status' });
+  }
 });
 
 // 6. Catch-all 路由：返回前端应用的入口 HTML 文件（支持前端路由）

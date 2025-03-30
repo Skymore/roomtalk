@@ -2,9 +2,9 @@
 
 [English Version](./README.md)
 
-一个基于 WebSocket 和 Redis 的轻量级实时消息系统，支持房间管理、消息持久化、本地主题切换等功能。适合作为 IM、团队协作、聊天室功能的基础模块。
+一个现代化、功能丰富的实时消息系统，基于 WebSocket 和 Redis 构建。支持 Markdown 格式化、图片分享、用户头像和多实例部署。完美适用于构建聊天应用、团队协作工具或任何实时通信平台。
 
-**当前版本: 0.3** (新增头像和用户名显示)
+**当前版本: 0.4** (新增 Fly.io 部署和 Markdown 消息显示)
 
 ---
 
@@ -12,18 +12,30 @@
 
 ### 客户端（Client）
 
-- React + TypeScript
-- Tailwind CSS
-- React Router
+- React + TypeScript + Vite
+- Tailwind CSS + HeroUI 组件库
+- React Router v6
 - Socket.io Client
 - i18next 多语言支持
+- Markdown-to-JSX（富文本渲染）
+- KaTeX（数学公式支持）
 
 ### 服务端（Server）
 
 - Node.js + Express.js
-- Socket.io
-- Redis（数据持久化）
-- UUID 用户标识
+- Socket.io（配备 Redis 适配器）
+- Redis（用于持久化和发布/订阅）
+- UUID 用户身份系统
+- 多实例部署支持
+- Docker 容器化
+
+### 运维与部署
+
+- Fly.io 云平台
+- Docker 多阶段构建
+- Redis 集群
+- 基于环境的配置
+- 健康监控端点
 
 ---
 
@@ -83,6 +95,8 @@
   - 基于用户名生成个性化头像
   - 聊天消息显示用户名
   - 改进聊天界面，提供更好的消息归属视觉提示
+- ✅ Markdown 消息显示（v0.4版本新增）
+  - 支持消息中的富文本格式
 
 ---
 
@@ -208,6 +222,14 @@ MIT License
 本软件按"原样"提供，不附带任何明示或暗示的保证，包括但不限于对适销性、特定用途适用性及非侵权性的保证。在任何情况下，作者或版权持有人均不对因软件或软件的使用或其他交易产生的任何索赔、损害或其他责任承担责任，无论是在合同、侵权或其他方面。
 
 ## 📝 版本历史
+
+### v0.4 - Fly.io 部署 & Markdown 消息显示
+- **Fly.io 部署**：支持在 Fly.io 上部署应用，具备多实例能力
+  - 更新了 Fly.io 的部署脚本和文档
+  - 实现了 Fly.io 的环境变量管理
+- **Markdown 消息显示**：增强了消息渲染，支持 Markdown 格式
+  - 在聊天界面中集成了 Markdown 解析和渲染
+  - 提升了用户体验，支持富文本消息
 
 ### v0.3 - 用户身份系统
 - **个性化头像**：实现基于用户名的头像生成，带有一致性颜色标识

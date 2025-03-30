@@ -2,9 +2,9 @@
 
 [中文版](./README.zh.md)
 
-A lightweight WebSocket-based real-time messaging system with Redis storage. Useful as a foundation for chat apps, internal tools, or collaborative platforms.
+A modern, feature-rich real-time messaging system built with WebSocket and Redis. Supports Markdown formatting, image sharing, user avatars, and multi-instance deployment. Perfect for building chat applications, team collaboration tools, or any real-time communication platform.
 
-**Current Version: 0.3** (Added avatar and username display)
+**Current Version: 0.4** (Added Fly.io deployment and Markdown message display)
 
 ---
 
@@ -12,18 +12,30 @@ A lightweight WebSocket-based real-time messaging system with Redis storage. Use
 
 ### Client
 
-- React + TypeScript
-- Tailwind CSS
-- React Router
+- React + TypeScript + Vite
+- Tailwind CSS + HeroUI Components
+- React Router v6
 - Socket.io Client
 - i18next (Internationalization)
+- Markdown-to-JSX (Rich Text Rendering)
+- KaTeX (Math Formula Support)
 
 ### Server
 
 - Node.js + Express
-- Socket.io
-- Redis (as storage engine)
-- UUID-based identity
+- Socket.io with Redis Adapter
+- Redis (for persistence and pub/sub)
+- UUID-based identity system
+- Multi-instance support
+- Docker containerization
+
+### DevOps & Deployment
+
+- Fly.io cloud platform
+- Docker multi-stage builds
+- Redis clustering
+- Environment-based configuration
+- Health monitoring endpoints
 
 ---
 
@@ -83,6 +95,8 @@ This comprehensive approach ensures message delivery reliability across differen
   - Personalized avatars based on username
   - Username display in chat messages
   - Improved chat UI with better visual cues for message ownership
+- ✅ Markdown message display (added in v0.4)
+  - Supports rich text formatting in messages
 
 ---
 
@@ -218,6 +232,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ## 📝 Version History
+
+### v0.4 - Fly.io Deployment & Markdown Message Display
+- **Fly.io Deployment**: Added support for deploying the application on Fly.io with multi-instance capabilities
+  - Updated deployment scripts and documentation for Fly.io
+  - Implemented environment variable management for Fly.io
+- **Markdown Message Display**: Enhanced message rendering to support Markdown formatting
+  - Integrated Markdown parsing and rendering in the chat interface
+  - Improved user experience with rich text message support
 
 ### v0.3 - User Identity System
 - **Personalized Avatars**: Implemented username-based avatar generation with consistent colors

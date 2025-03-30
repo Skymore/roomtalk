@@ -30,7 +30,7 @@ export const getRoomMemberCount = (roomId: string): number => {
 
 // Create and configure Socket connection
 const createSocketConnection = (): typeof Socket => {
-  const socketUrl = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3012';
+  const socketUrl = import.meta.env.VITE_SOCKET_URL;
   // 强化的Socket.io配置，添加自动重连和超时设置
   const socket = io(socketUrl, {
     reconnection: true,          // 启用自动重连
