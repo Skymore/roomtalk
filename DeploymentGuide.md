@@ -36,7 +36,7 @@ This guide provides simplified instructions for deploying your chat application 
 Create a `Dockerfile` in the project root:
 
 ```dockerfile
-FROM node:18-alpine
+FROM node:22-alpine
 
 WORKDIR /app
 
