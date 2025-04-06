@@ -19,6 +19,7 @@
     "@types/katex": "^0.16.7",
     "@types/socket.io-client": "^1.4.36",
     "@types/uuid": "^10.0.0",
+    "browser-image-compression": "^2.0.2",
     "framer-motion": "^11.18.2",
     "heroicons": "^2.2.0",
     "i18next": "^24.2.3",
