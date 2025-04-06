@@ -11,6 +11,7 @@ import path from 'path';
 import { createClient, RedisClientType } from 'redis';
 import dotenv from 'dotenv';
 import { customAlphabet } from 'nanoid';
+import sharp from 'sharp'; // 新增：用于无损压缩图片
 
 dotenv.config();
 
@@ -57,6 +58,7 @@ interface Message {
     text: string;
     color: string;
   };
+  mimeType?: string;
 }
 
 interface Room {
@@ -214,8 +216,7 @@ async function getRoomById(roomId: string): Promise<Room | null> {
   }
 }
 
-// 将房间成员信息迁移到 Redis，而不是内存中存储
-// 更新并获取房间成员数
+// 更新并获取房间成员数（将房间成员信息迁移到 Redis）
 async function updateRoomMemberCount(roomId: string, clientId: string, isJoining: boolean): Promise<number> {
   try {
     const roomMembersKey = `room:${roomId}:members`;
@@ -298,6 +299,9 @@ async function getUserRooms(socketId: string): Promise<string[]> {
 // Socket.IO 逻辑
 io.on('connection', (socket) => {
   socketLogger.info('Socket connected', { socketId: socket.id });
+
+  // 存储当前连接的分段上传会话，格式为：fileId -> { chunks: Buffer[], totalChunks, roomId, clientId }
+  const imageUploadSessions: Record<string, { chunks: Buffer[]; totalChunks: number; roomId: string; clientId: string }> = {};
 
   // 客户端注册
   socket.on('register', async (clientId: string) => {
@@ -473,7 +477,7 @@ io.on('connection', (socket) => {
     socket.emit('message_history', roomMessages);
   });
 
-  // 发送新消息
+  // 发送新消息（文本或图片，若图片直接通过分段上传处理则不用走这里）
   socket.on('send_message', async (messageData: { 
     roomId: string; 
     content: string; 
@@ -515,28 +519,71 @@ io.on('connection', (socket) => {
     io.to(messageData.roomId).emit('new_message', message);
   });
 
-  // 根据房间 ID 获取房间详细信息
-  socket.on('get_room_by_id', async (roomId: string, callback: (room: Room | null) => void) => {
-    const room = await getRoomById(roomId);
-    const userId = await getClientId(socket.id);
-    
-    if (room) {
-      socketLogger.debug('Room info requested', { 
-        socketId: socket.id,
-        userId,
-        roomId, 
-        roomName: room.name
-      });
-      callback(room);
-    } else {
-      socketLogger.warn('Room info requested for non-existent room', { 
-        socketId: socket.id,
-        userId,
-        roomId
-      });
-      callback(null);
+  // ----------------- 新增：分段图片上传事件 -----------------
+
+  // 客户端开始上传图片时发送，payload 包含 fileId、totalChunks、roomId
+  socket.on('start_image_upload', async (payload: { fileId: string; totalChunks: number; roomId: string }) => {
+    const clientId = await getClientId(socket.id);
+    if (!clientId) {
+      socket.emit('error', { message: 'You are not registered' });
+      return;
     }
+    imageUploadSessions[payload.fileId] = { chunks: [], totalChunks: payload.totalChunks, roomId: payload.roomId, clientId };
+    socketLogger.info('Started image upload', { fileId: payload.fileId, totalChunks: payload.totalChunks, roomId: payload.roomId, clientId });
   });
+
+  // 客户端上传单个图片分段，payload 包含 fileId、chunkIndex 和 base64 编码后的 chunkData
+  socket.on('upload_image_chunk', (payload: { fileId: string; chunkIndex: number; chunkData: string }) => {
+    if (!imageUploadSessions[payload.fileId]) {
+      socket.emit('error', { message: 'No upload session for this fileId' });
+      return;
+    }
+    // 将 base64 数据转换为 Buffer 并存储到对应分段位置
+    const chunkBuffer = Buffer.from(payload.chunkData, 'base64');
+    imageUploadSessions[payload.fileId].chunks[payload.chunkIndex] = chunkBuffer;
+    socketLogger.debug('Received image chunk', { fileId: payload.fileId, chunkIndex: payload.chunkIndex });
+  });
+
+  // 客户端通知上传完成，服务器将所有分段合并并用 sharp 进行无损压缩转换
+  socket.on('finish_image_upload', async (payload: { fileId: string }) => {
+    const session = imageUploadSessions[payload.fileId];
+    if (!session) {
+      socket.emit('error', { message: 'No upload session for this fileId' });
+      return;
+    }
+    // 检查是否已收到所有分段
+    if (session.chunks.length !== session.totalChunks) {
+      socket.emit('error', { message: 'Not all chunks received' });
+      return;
+    }
+    // 合并所有分段
+    const completeBuffer = Buffer.concat(session.chunks);
+    try {
+      // 用 sharp 进行无损 WebP 转换
+      const webpBuffer = await sharp(completeBuffer)
+        .webp({ lossless: true })
+        .toBuffer();
+      // 生成图片消息，将图片数据以 base64 格式存储在消息 content 中
+      const message: Message = {
+        id: uuidv4(),
+        clientId: session.clientId,
+        content: webpBuffer.toString('base64'),
+        roomId: session.roomId,
+        timestamp: new Date().toISOString(),
+        messageType: 'image',
+        mimeType: 'image/webp'
+      };
+      await saveMessage(message);
+      io.to(session.roomId).emit('new_message', message);
+      socketLogger.info('Completed image upload and processed message', { fileId: payload.fileId, roomId: session.roomId, clientId: session.clientId });
+    } catch (err) {
+      socketLogger.error('Error processing image upload', { fileId: payload.fileId, error: err });
+      socket.emit('error', { message: 'Error processing image upload' });
+    }
+    // 清理上传会话
+    delete imageUploadSessions[payload.fileId];
+  });
+  // ----------------- 结束分段上传事件 -----------------
 
   // 断开连接时清理数据
   socket.on('disconnect', async () => {
@@ -547,7 +594,6 @@ io.on('connection', (socket) => {
     if (userId) {
       const rooms = await getUserRooms(socket.id);
       for (const roomId of rooms) {
-        // 更新房间成员计数并通知所有房间成员
         const memberCount = await updateRoomMemberCount(roomId, userId, false);
         const leaveEvent: RoomMemberEvent = {
           roomId,
@@ -556,15 +602,7 @@ io.on('connection', (socket) => {
           action: 'leave',
           timestamp: new Date().toISOString()
         };
-        
-        socketLogger.debug('User left room due to disconnect', { 
-          socketId: socket.id,
-          userId,
-          roomId,
-          memberCount
-        });
-        
-        // 通知房间内剩余成员
+        socketLogger.debug('User left room due to disconnect', { socketId: socket.id, userId, roomId, memberCount });
         io.to(roomId).emit('room_member_change', leaveEvent);
       }
     }
@@ -573,10 +611,25 @@ io.on('connection', (socket) => {
     await removeClientSession(socket.id);
     await storeUserRooms(socket.id, []);
   });
+  
+  // -----------------------------------
+  
+  // 根据房间 ID 获取房间详细信息
+  socket.on('get_room_by_id', async (roomId: string, callback: (room: Room | null) => void) => {
+    const room = await getRoomById(roomId);
+    const userId = await getClientId(socket.id);
+    
+    if (room) {
+      socketLogger.debug('Room info requested', { socketId: socket.id, userId, roomId, roomName: room.name });
+      callback(room);
+    } else {
+      socketLogger.warn('Room info requested for non-existent room', { socketId: socket.id, userId, roomId });
+      callback(null);
+    }
+  });
 });
 
 // HTTP API 端点
-// 获取指定房间的消息历史记录
 app.get('/api/rooms/:roomId/messages', async (req: Request, res: Response) => {
   const { roomId } = req.params;
   if (!roomId) {
@@ -589,7 +642,6 @@ app.get('/api/rooms/:roomId/messages', async (req: Request, res: Response) => {
   return res.json(filteredMessages);
 });
 
-// 获取指定客户端创建的房间列表
 app.get('/api/clients/:clientId/rooms', async (req: Request, res: Response) => {
   const { clientId } = req.params;
   if (!clientId) {
@@ -602,7 +654,6 @@ app.get('/api/clients/:clientId/rooms', async (req: Request, res: Response) => {
   res.json(myRooms);
 });
 
-// 创建新房间
 app.post('/api/clients/:clientId/rooms', async (req: Request, res: Response) => {
   const { clientId } = req.params;
   if (!clientId) {
@@ -612,12 +663,7 @@ app.post('/api/clients/:clientId/rooms', async (req: Request, res: Response) => 
   
   const roomData = req.body;
   if (!roomData?.name || !clientId) {
-    routeLogger.warn('Invalid room creation via API', { 
-      endpoint: 'POST /api/clients/:clientId/rooms',
-      clientId,
-      hasRoomName: !!roomData?.name,
-      ip: req.ip
-    });
+    routeLogger.warn('Invalid room creation via API', { endpoint: 'POST /api/clients/:clientId/rooms', clientId, hasRoomName: !!roomData?.name, ip: req.ip });
     return res.status(400).json({ error: 'Room name and client ID are required' });
   }
   
@@ -632,13 +678,7 @@ app.post('/api/clients/:clientId/rooms', async (req: Request, res: Response) => 
     creatorId: clientId
   };
   
-  routeLogger.info('Room creation via API', {
-    endpoint: 'POST /api/clients/:clientId/rooms',
-    clientId,
-    roomId,
-    roomName: roomData.name,
-    ip: req.ip
-  });
+  routeLogger.info('Room creation via API', { endpoint: 'POST /api/clients/:clientId/rooms', clientId, roomId, roomName: roomData.name, ip: req.ip });
   
   const savedRoom = await saveRoom(room);
   if (!savedRoom) {
@@ -655,13 +695,7 @@ app.post('/api/rooms/:roomId/messages', async (req: Request, res: Response) => {
   const { clientId, content, messageType } = req.body;
   
   if (!clientId || !content || !roomId) {
-    routeLogger.warn('Invalid message creation via API', {
-      endpoint: 'POST /api/rooms/:roomId/messages',
-      hasClientId: !!clientId,
-      hasContent: !!content,
-      hasRoomId: !!roomId,
-      ip: req.ip
-    });
+    routeLogger.warn('Invalid message creation via API', { endpoint: 'POST /api/rooms/:roomId/messages', hasClientId: !!clientId, hasContent: !!content, hasRoomId: !!roomId, ip: req.ip });
     return res.status(400).json({ error: 'Client ID, room ID, and message content are required' });
   }
   
@@ -674,7 +708,6 @@ app.post('/api/rooms/:roomId/messages', async (req: Request, res: Response) => {
     messageType: messageType || 'text'
   };
   
-  // 使用日志格式化处理器来安全地记录消息
   const loggableMessage = routeLogger.formatMessageForLog(message);
   routeLogger.info('Received HTTP API message', { ...loggableMessage, ip: req.ip });
   
@@ -683,44 +716,24 @@ app.post('/api/rooms/:roomId/messages', async (req: Request, res: Response) => {
   res.status(201).json(message);
 });
 
-// 获取指定房间的详细信息
 app.get('/api/clients/:clientId/rooms/:roomId', async (req: Request, res: Response) => {
   const { clientId, roomId } = req.params;
   
   if (!clientId) {
-    routeLogger.warn('API request missing client ID', {
-      endpoint: '/api/clients/:clientId/rooms/:roomId',
-      roomId,
-      ip: req.ip
-    });
+    routeLogger.warn('API request missing client ID', { endpoint: '/api/clients/:clientId/rooms/:roomId', roomId, ip: req.ip });
     return res.status(400).json({ error: 'Client ID is required' });
   }
   
   const room = await getRoomById(roomId);
   if (!room || room.creatorId !== clientId) {
-    routeLogger.warn('Room not found or not owned by client', {
-      endpoint: '/api/clients/:clientId/rooms/:roomId',
-      clientId,
-      roomId,
-      found: !!room,
-      authorized: room?.creatorId === clientId,
-      ip: req.ip
-    });
+    routeLogger.warn('Room not found or not owned by client', { endpoint: '/api/clients/:clientId/rooms/:roomId', clientId, roomId, found: !!room, authorized: room?.creatorId === clientId, ip: req.ip });
     return res.status(404).json({ error: 'Room not found' });
   }
   
-  routeLogger.info('Room details requested via API', {
-    endpoint: '/api/clients/:clientId/rooms/:roomId',
-    clientId,
-    roomId,
-    roomName: room.name,
-    ip: req.ip
-  });
-  
+  routeLogger.info('Room details requested via API', { endpoint: '/api/clients/:clientId/rooms/:roomId', clientId, roomId, roomName: room.name, ip: req.ip });
   res.json(room);
 });
 
-// 系统状态端点
 app.get('/api/status', async (req: Request, res: Response) => {
   try {
     const redisStatus = redisClient.isOpen ? 'connected' : 'disconnected';
@@ -741,7 +754,7 @@ app.get('/api/status', async (req: Request, res: Response) => {
   }
 });
 
-// 6. Catch-all 路由：返回前端应用的入口 HTML 文件（支持前端路由）
+// Catch-all 路由，返回前端应用的入口 HTML 文件（支持前端路由）
 app.get('*', (req: Request, res: Response) => {
   routeLogger.debug('Serving client application', { path: req.path, ip: req.ip });
   res.sendFile(path.join(__dirname, '../../client-heroui/dist', 'index.html'));
@@ -750,13 +763,7 @@ app.get('*', (req: Request, res: Response) => {
 // 全局错误处理中间件
 app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
   const errorLogger = new Logger('Error');
-  errorLogger.error('Unhandled application error', { 
-    error: err.message,
-    stack: err.stack,
-    path: req.path,
-    method: req.method,
-    ip: req.ip
-  });
+  errorLogger.error('Unhandled application error', { error: err.message, stack: err.stack, path: req.path, method: req.method, ip: req.ip });
   
   res.status(500).json({ 
     error: 'Internal server error',
@@ -768,10 +775,8 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
 process.on('uncaughtException', (error) => {
   const errorLogger = new Logger('Process');
   errorLogger.error('Uncaught exception', { error: error.message, stack: error.stack });
-  // 在生产环境可能需要重启进程或通知管理员
   if (process.env.NODE_ENV === 'production') {
-    // 记录错误后优雅地退出
-    // process.exit(1); // 根据您的需要决定是否退出
+    // 根据需要处理，比如优雅退出
   }
 });
 

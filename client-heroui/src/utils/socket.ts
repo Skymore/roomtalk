@@ -39,7 +39,8 @@ const createSocketConnection = (): typeof Socket => {
     reconnectionDelayMax: 5000,  // 最大重连延迟(ms)
     timeout: 20000,              // 连接超时时间(ms)
     autoConnect: true,           // 创建实例时自动连接
-    transports: ['websocket', 'polling'] // 优先使用WebSocket
+    transports: ['websocket'],   // 强制使用WebSocket
+    upgrade: false,              // 禁用自动升级
   });
   
   // Register client ID when socket connection is established

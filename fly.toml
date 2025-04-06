@@ -20,3 +20,6 @@ primary_region = 'dfw'
   memory = '1gb'
   cpu_kind = 'shared'
   cpus = 1
+
+[http]
+  max_request_body_size = "10MB"  # 调整HTTP请求体大小限制

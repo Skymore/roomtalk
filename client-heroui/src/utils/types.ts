@@ -10,6 +10,7 @@ export interface Message {
     text: string;
     color: string;
   };
+  mimeType?: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' | 'image/jpg';
 }
 
 export interface Room {

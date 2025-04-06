@@ -69,7 +69,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
               ) : (
                 <div className="border border-gray-200 dark:border-gray-600 rounded-md p-0.5 max-w-full">
                   <Image
-                    src={message.content}
+                    src={isImage ? `data:${message.mimeType || 'image/png'};base64,${message.content}` : message.content}
                     alt="Shared image"
                     className="max-h-[300px] max-w-full object-contain rounded"
                     onError={handleImageError}
