@@ -128,7 +128,10 @@ const io = new Server(server, {
   cors: {
     origin: '*',
     methods: ['GET', 'POST']
-  }
+  },
+  maxHttpBufferSize: 5 * 1024 * 1024, // 设置最大消息大小为 5MB
+  pingTimeout: 60000, // 60秒超时
+  pingInterval: 25000 // 25秒ping一次
 });
 
 // 使用立即执行异步函数来初始化 Redis 和 Socket.IO 适配器
