@@ -522,7 +522,7 @@ io.on('connection', (socket) => {
   // ----------------- 新增：分段图片上传事件 -----------------
 
   // 客户端开始上传图片时发送，payload 包含 fileId、totalChunks、roomId
-  socket.on('start_image_upload', async (payload: { fileId: string; totalChunks: number; roomId: string }) => {
+  socket.on('start_image_upload', async (payload: { fileId: string; totalChunks: number; roomId: string; username?: string; avatar?: { text: string; color: string } }) => {
     const clientId = await getClientId(socket.id);
     if (!clientId) {
       socket.emit('error', { message: 'You are not registered' });
@@ -545,7 +545,7 @@ io.on('connection', (socket) => {
   });
 
   // 客户端通知上传完成，服务器将所有分段合并并用 sharp 进行无损压缩转换
-  socket.on('finish_image_upload', async (payload: { fileId: string }) => {
+  socket.on('finish_image_upload', async (payload: { fileId: string, username?: string, avatar?: { text: string; color: string } }) => {
     const session = imageUploadSessions[payload.fileId];
     if (!session) {
       socket.emit('error', { message: 'No upload session for this fileId' });
@@ -571,7 +571,9 @@ io.on('connection', (socket) => {
         roomId: session.roomId,
         timestamp: new Date().toISOString(),
         messageType: 'image',
-        mimeType: 'image/webp'
+        mimeType: 'image/webp',
+        username: payload.username,
+        avatar: payload.avatar
       };
       await saveMessage(message);
       io.to(session.roomId).emit('new_message', message);
