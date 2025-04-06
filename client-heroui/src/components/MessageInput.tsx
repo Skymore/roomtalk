@@ -3,6 +3,7 @@ import { Button } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { sendMessage } from '../utils/socket';
 import { useTranslation } from 'react-i18next';
+import imageCompression from 'browser-image-compression';
 
 interface MessageInputProps {
   roomId: string;
@@ -15,7 +16,12 @@ interface MessageInputProps {
 type ContentItem = {
   type: 'text' | 'image';
   content: string;
+  file?: File;  // 添加file字段用于存储原始文件
+  previewUrl?: string;  // 添加previewUrl字段用于存储预览URL
 };
+
+// 使用WeakMap存储图片元素和对应的File对象
+const imageFileMap = new WeakMap<HTMLImageElement, File>();
 
 export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, avatarText, avatarColor }) => {
   const { t } = useTranslation();
@@ -107,10 +113,24 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
           // 图片节点
           const img = element as HTMLImageElement;
           if (images < MAX_IMAGES) {
-            newItems.push({ type: 'image', content: img.src });
+            const file = imageFileMap.get(img);
+            if (file) {
+              newItems.push({ 
+                type: 'image', 
+                content: img.src,
+                previewUrl: img.src,
+                file: file
+              });
+            } else {
+              newItems.push({ type: 'image', content: img.src });
+            }
             images++;
           } else if (element.parentNode) {
             // 如果超出最大图片数，移除多余图片
+            if (img.src.startsWith('blob:')) {
+              URL.revokeObjectURL(img.src);
+              imageFileMap.delete(img);
+            }
             element.parentNode.removeChild(element);
           }
         } else if (element.tagName === 'DIV' || element.tagName === 'P') {
@@ -152,7 +172,6 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
       const avatar = { text: avatarText, color: avatarColor };
       
       // 新的消息合并逻辑
-      // 如果有图片，以图片为分隔点；如果没有图片，合并所有文本内容
       let currentTextContent = '';
       
       for (let i = 0; i < contentItems.length; i++) {
@@ -163,15 +182,43 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
           if (item.content.trim() !== '') {
             currentTextContent += (currentTextContent ? '\n' : '') + item.content;
           }
-        } else if (item.type === 'image') {
+        } else if (item.type === 'image' && item.file) {
           // 如果积累了文本内容，先发送文本
           if (currentTextContent.trim() !== '') {
             sendMessage(currentTextContent, roomId, 'text', username, avatar);
             currentTextContent = ''; // 重置文本内容
           }
           
-          // 发送图片
-          sendMessage(item.content, roomId, 'image', username, avatar);
+          try {
+            // 压缩图片
+            const options = {
+              maxSizeMB: 2,
+              useWebWorker: true
+            };
+            
+            const compressedFile = await imageCompression(item.file, options);
+            
+            // 将压缩后的文件转换为Base64
+            const reader = new FileReader();
+            const base64Promise = new Promise<string>((resolve, reject) => {
+              reader.onload = () => resolve(reader.result as string);
+              reader.onerror = reject;
+              reader.readAsDataURL(compressedFile);
+            });
+            
+            const base64String = await base64Promise;
+            
+            // 发送压缩后的图片
+            sendMessage(base64String, roomId, 'image', username, avatar);
+            
+            // 如果有预览URL，释放它
+            if (item.previewUrl) {
+              URL.revokeObjectURL(item.previewUrl);
+            }
+          } catch (error) {
+            console.error('Error compressing image:', error);
+            setErrorMessage(t('errorCompressingImage'));
+          }
         }
       }
       
@@ -182,6 +229,14 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
       
       // 清空编辑器
       if (editorRef.current) {
+        // 释放所有预览URL
+        const images = editorRef.current.querySelectorAll('img');
+        images.forEach(img => {
+          if (img.src.startsWith('blob:')) {
+            URL.revokeObjectURL(img.src);
+          }
+        });
+        
         editorRef.current.innerHTML = '';
       }
       
@@ -231,8 +286,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
       return;
     }
     
-    // 检查文件大小
-    if (file.size > 5 * 1024 * 1024) {
+    // 检查文件大小 - 仍然保留初步的大小检查，但提高到10MB
+    if (file.size > 10 * 1024 * 1024) {
       setErrorMessage(t('imageTooLarge'));
       return;
     }
@@ -243,33 +298,23 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
       setErrorMessage(t('maxImagesReached', { max: MAX_IMAGES }));
       return;
     }
+
+    // 创建预览URL
+    const previewUrl = URL.createObjectURL(file);
     
-    // 转换为Base64
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const base64String = event.target?.result as string;
+    // 创建并插入图片元素
+    if (imageCountRef.current < MAX_IMAGES) {
+      insertImageToEditor(previewUrl, file);
       
-      // 创建并插入图片元素
-      if (imageCountRef.current < MAX_IMAGES) {
-        insertImageToEditor(base64String);
-        
-        // 重置文件输入
-        if (fileInputRef.current) {
-          fileInputRef.current.value = '';
-        }
+      // 重置文件输入
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
       }
-    };
-    
-    reader.onerror = () => {
-      console.error('Error reading file');
-      setErrorMessage(t('errorReadingImage'));
-    };
-    
-    reader.readAsDataURL(file);
+    }
   };
 
   // 向编辑器插入图片 - 优化性能
-  const insertImageToEditor = (imageData: string) => {
+  const insertImageToEditor = (previewUrl: string, file: File) => {
     const editor = editorRef.current;
     if (!editor) return;
     
@@ -283,8 +328,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
     imageCountRef.current += 1;
     
     const img = document.createElement('img');
-    img.src = imageData;
+    img.src = previewUrl;
     img.className = 'max-w-32 max-h-32 inline-block object-contain m-1 align-middle';
+    
+    // 将File对象存储在WeakMap中
+    imageFileMap.set(img, file);
     
     // 获取当前选中区域并插入图片
     const selection = window.getSelection();
