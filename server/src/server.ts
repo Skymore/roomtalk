@@ -3,7 +3,7 @@ import { Logger, httpLogger, defaultLogger } from './logger';
 
 import express, { Request, Response, NextFunction } from 'express';
 import http from 'http';
-import { Server } from 'socket.io';
+import { Server, Socket } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { v4 as uuidv4 } from 'uuid';
 import cors from 'cors';
@@ -108,7 +108,7 @@ const redisClient: RedisClientType = createClient({
   url: REDIS_URL
 });
 
-redisClient.on('error', (err) => {
+redisClient.on('error', (err: Error) => {
   redisLogger.error('Redis connection error', { error: err.message, stack: err.stack });
 });
 
@@ -117,11 +117,11 @@ const pubClient = createClient({ url: REDIS_URL });
 const subClient = pubClient.duplicate();
 
 // 监听 Redis 客户端错误
-pubClient.on('error', (err) => {
+pubClient.on('error', (err: Error) => {
   redisLogger.error('Redis Pub Client Error:', { error: err.message, stack: err.stack });
 });
 
-subClient.on('error', (err) => {
+subClient.on('error', (err: Error) => {
   redisLogger.error('Redis Sub Client Error:', { error: err.message, stack: err.stack });
 });
 
@@ -172,7 +172,7 @@ async function readMessagesByRoom(roomId: string): Promise<Message[]> {
   try {
     const messages = await redisClient.lRange(`room:${roomId}:messages`, 0, -1);
     redisLogger.debug('Messages read from Redis', { roomId, count: messages.length });
-    return messages.map((msg) => JSON.parse(msg));
+    return messages.map((msg: string) => JSON.parse(msg));
   } catch (error) {
     redisLogger.error('Error reading messages from Redis', { error, roomId });
     return [];
@@ -195,10 +195,10 @@ async function readRoomsByUser(clientId: string): Promise<Room[]> {
   try {
     const roomIds = await redisClient.sMembers(`user:${clientId}:rooms`);
     const rooms = await Promise.all(
-      roomIds.map(id => redisClient.hGet("rooms", id))
+      roomIds.map((id: string) => redisClient.hGet("rooms", id))
     );
     redisLogger.debug('Rooms read by user from Redis', { clientId, count: roomIds.length });
-    return rooms.map(room => JSON.parse(room!));
+    return rooms.map((room: string | undefined) => JSON.parse(room!));
   } catch (error) {
     redisLogger.error('Error reading rooms for user from Redis', { error, clientId });
     return [];
@@ -297,7 +297,7 @@ async function getUserRooms(socketId: string): Promise<string[]> {
 }
 
 // Socket.IO 逻辑
-io.on('connection', (socket) => {
+io.on('connection', (socket: Socket) => {
   socketLogger.info('Socket connected', { socketId: socket.id });
 
   // 存储当前连接的分段上传会话，格式为：fileId -> { chunks: Buffer[], totalChunks, roomId, clientId }
