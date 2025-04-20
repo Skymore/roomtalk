@@ -6,10 +6,10 @@ import './index.css'
 import './utils/i18n'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
+  // <React.StrictMode>
     <HeroUIProvider>
       <ToastProvider />
       <App />
     </HeroUIProvider>
-  </React.StrictMode>,
+  // </React.StrictMode>,
 )
