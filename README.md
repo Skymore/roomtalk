@@ -25,6 +25,7 @@ A modern, feature-rich real-time messaging system built with WebSocket and Redis
 - Node.js + Express
 - Socket.io with Redis Adapter
 - Redis (for persistence and pub/sub)
+- OpenAI SDK (for AI streaming responses)
 - UUID-based identity system
 - Multi-instance support
 - Docker containerization
@@ -71,14 +72,31 @@ sequenceDiagram
 
 ## 🌟 Features
 
-- ✅ Real-time messaging with text, images, and streaming AI replies
-- ✅ Customizable AI assistant (role manager, system prompts, multi-model support)
-- ✅ Join, create, save, and share rooms with presence indicators
-- ✅ Markdown rendering, image compression, and rich editor with clipboard support
-- ✅ Responsive HeroUI interface with desktop header and mobile bottom navigation
-- ✅ Multi-language support (English, 中文, हिन्दी) with automatic random-name localization
-- ✅ Local persistence for usernames, saved rooms, and last active room
-- ✅ Redis-backed persistence and multi-instance Socket.IO scaling
+### v1.0 - Streaming AI & Experience Refresh
+- ✅ **AI assistant**: Streaming responses via OpenAI, customizable roles with saved system prompts
+- ✅ **Message input**: Mixed media editor with improved clipboard + image handling  
+- ✅ **Presence & storage**: Room member counts, join/leave events, persistent room/username/saved lists
+- ✅ **UI refresh**: New desktop navbar, mobile bottom nav, status banners, shareable room links
+- ✅ **Internationalization**: Added Hindi, localized random usernames, expanded translation keys
+
+### v0.4 - Fly.io Deployment & Markdown Support
+- ✅ **Fly.io deployment**: Multi-instance capabilities with environment variable management
+- ✅ **Markdown rendering**: Rich text message support with integrated parsing and KaTeX math formulas
+
+### v0.3 - User Identity System  
+- ✅ **Personalized avatars**: Username-based generation with intelligent text extraction and hash-based color mapping
+- ✅ **Enhanced chat**: Username display, message ownership indication, and Redis persistence for consistency
+- ✅ **Localized names**: Cute random name generation in English and Chinese with localStorage persistence
+
+### v0.2 - Enhanced Messaging with Image Support
+- ✅ **Comprehensive image system**: Base64 encoding, up to 9 images per message
+- ✅ **Advanced content editor**: Mixed-content editing with clipboard operations
+- ✅ **Performance optimization**: Throttling and async processing for large images
+
+### v0.1 - Core Foundation
+- ✅ **Real-time messaging**: Socket.IO with Redis persistence and pub/sub for multi-instance scaling
+- ✅ **Room management**: Comprehensive creation, joining, and access control systems  
+- ✅ **Foundation features**: Multi-language support, theme toggling, and responsive design principles
 
 ---
 
