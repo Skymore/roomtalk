@@ -10,6 +10,7 @@ const resources = {
       "chatRooms": "Chat Rooms",
       "room": "Room",
       "rooms": "Rooms",
+      "home": "Home",
       "save": "Save Room",
       "unsave": "Unsave",
       "share": "Share",
@@ -28,6 +29,8 @@ const resources = {
       "refresh": "Refresh",
       "edit": "Edit",
       "copy": "Copy",
+      
+      "newLine": "New Line",
       
       // 设置页面
       "settings": "Settings",
@@ -110,7 +113,39 @@ const resources = {
       "roomMembers": "Room Members",
       "members": "members",
       "userJoined": "User joined",
-      "userLeft": "User left"
+      "userLeft": "User left",
+
+      // Join Room by ID
+      "joinRoomById": "Join Room by ID",
+      "enterRoomId": "Enter Room ID",
+      "joinButton": "Join Room",
+      
+      // Language selection
+      "languageSelection": "Language",
+      "english": "English",
+      "chinese": "中文",
+      "hindi": "हिंदी",
+      
+      // AI助手功能
+      "aiSettings": "AI Settings",
+      "aiRoles": "AI Roles",
+      "existingRoles": "Existing Roles",
+      "createNewRole": "Create New Role",
+      "editRole": "Edit Role",
+      "askAI": "Ask AI",
+      "selectAIRole": "Select AI Role",
+      "emptyPrompt": "Please enter a prompt",
+      "errorSendingAiRequest": "Error sending AI request",
+      "aiProcessing": "AI is thinking...",
+      "systemPrompt": "System Prompt",
+      "roleName": "Role Name",
+      "roleIcon": "Icon",
+      "roleColor": "Color",
+      "typeMessageHere": "Type your message here...",
+      "addImage": "Add Image",
+      "confirmDeleteRole": "Confirm Delete Role",
+      "confirmDeleteRoleDescription": "Are you sure you want to delete this role? This action cannot be undone.",
+      "createRole": "Create Role"
     }
   },
   zh: {
@@ -119,6 +154,7 @@ const resources = {
       "chatRooms": "聊天房间",
       "room": "房间",
       "rooms": "房间",
+      "home": "主页",
       "save": "保存房间",
       "unsave": "取消保存",
       "share": "分享",
@@ -137,6 +173,8 @@ const resources = {
       "refresh": "刷新",
       "edit": "编辑",
       "copy": "复制",
+      
+      "newLine": "换行",
       
       // 设置页面
       "settings": "设置",
@@ -219,7 +257,183 @@ const resources = {
       "roomMembers": "房间成员",
       "members": "成员",
       "userJoined": "用户加入",
-      "userLeft": "用户离开"
+      "userLeft": "用户离开",
+      
+      // Join Room by ID
+      "joinRoomById": "通过ID加入房间",
+      "enterRoomId": "输入房间ID",
+      "joinButton": "加入房间",
+      
+      // Language selection
+      "languageSelection": "语言选择",
+      "english": "English",
+      "chinese": "中文",
+      "hindi": "हिंदी",
+      
+      // AI助手功能
+      "aiSettings": "AI设置",
+      "aiRoles": "AI角色",
+      "existingRoles": "现有角色",
+      "createNewRole": "创建新角色",
+      "editRole": "编辑角色",
+      "askAI": "问AI",
+      "selectAIRole": "选择AI角色",
+      "emptyPrompt": "请输入提示内容",
+      "errorSendingAiRequest": "发送AI请求时出错",
+      "aiProcessing": "AI思考中...",
+      "systemPrompt": "系统提示词",
+      "roleName": "角色名称",
+      "roleIcon": "图标",
+      "roleColor": "颜色",
+      "typeMessageHere": "在此输入消息...",
+      "addImage": "添加图片",
+      "confirmDeleteRole": "确认删除角色",
+      "confirmDeleteRoleDescription": "您确定要删除这个角色吗？此操作无法撤销。",
+      "createRole": "创建角色"
+    }
+  },
+  hi: {
+    translation: {
+      // 通用
+      "chatRooms": "चैट रूम",
+      "room": "रूम",
+      "rooms": "रूम्स",
+      "home": "होम",
+      "save": "रूम सेव करें",
+      "unsave": "सेव हटाएं",
+      "share": "शेयर करें",
+      "leave": "रूम छोड़ें",
+      "create": "रूम बनाएं",
+      "cancel": "रद्द करें",
+      "close": "बंद करें",
+      "copied": "कॉपी हो गया!",
+      "shareSuccess": "रूम लिंक क्लिपबोर्ड पर कॉपी हो गया!",
+      "send": "भेजें",
+      "yourUserId": "अपना पूरा यूज़र आईडी कॉपी करने के लिए क्लिक करें",
+      "like": "पसंद",
+      "cancelLike": "पसंद रद्द करें",
+      "dislike": "नापसंद",
+      "cancelDislike": "नापसंद रद्द करें",
+      "refresh": "रिफ्रेश करें",
+      "edit": "संपादित करें",
+      "copy": "कॉपी करें",
+      
+      "newLine": "नई पंक्ति",
+      
+      // 设置页面
+      "settings": "सेटिंग्स",
+      "profile": "प्रोफाइल",
+      "username": "यूजरनेम",
+      "userId": "यूजर आईडी",
+      "editUsername": "यूजरनेम बदलें",
+      "enterUsername": "अपना यूजरनेम दर्ज करें",
+      "usernameUpdated": "यूजरनेम सफलतापूर्वक अपडेट किया गया!",
+      "errorEmptyUsername": "यूजरनेम खाली नहीं हो सकता",
+      "appearance": "दिखावट",
+      "language": "भाषा",
+      "lightMode": "लाइट मोड",
+      "darkMode": "डार्क मोड",
+      "clickToCopy": "कॉपी करने के लिए क्लिक करें",
+      "previewAvatar": "आपके अवतार का पूर्वावलोकन",
+      
+      // 房间列表
+      "yourRooms": "आपके रूम",
+      "savedRooms": "सेव किए गए",
+      "noRoomsAvailable": "कोई रूम उपलब्ध नहीं",
+      "noRoomsDescription": "आपने अभी तक कोई रूम नहीं बनाया है। शुरू करने के लिए अपना पहला रूम बनाएं।",
+      "noSavedRooms": "कोई सेव किया गया रूम नहीं",
+      "noSavedRoomsDescription": "आपने अभी तक कोई रूम सेव नहीं किया है। किसी रूम में शामिल हों और बाद में जल्दी से एक्सेस करने के लिए \"रूम सेव करें\" पर क्लिक करें।",
+      "quickAccess": "सेव किए गए रूम तक जल्दी पहुंचें",
+      "welcomeMessage": "RoomTalk में आपका स्वागत है",
+      "welcomeDescription": "शुरू करने के लिए किसी रूम में शामिल हों या एक नया बनाएं।",
+      
+      // 房间详情
+      "roomName": "रूम का नाम",
+      "roomID": "रूम आईडी",
+      "status": "स्थिति",
+      "created": "बनाया गया",
+      "description": "विवरण",
+      "optional": "वैकल्पिक",
+      "enterRoomName": "रूम का नाम दर्ज करें",
+      "describeRoom": "इस रूम का वर्णन करें",
+      "createdBy": "आपका रूम",
+      "joined": "शामिल हुए (स्वामित्व नहीं)",
+      
+      // 创建房间
+      "createNewRoom": "नया रूम बनाएं",
+      
+      // 加载和错误
+      "loading": "रूम लोड हो रहा है...",
+      "loadingDescription": "कृपया प्रतीक्षा करें जबकि हम अनुरोधित रूम लोड कर रहे हैं।",
+      "errorRoomNotFound": "आईडी {{roomId}} वाला रूम नहीं मिला। हो सकता है कि यह हटा दिया गया हो या मौजूद न हो।",
+      "errorLoading": "रूम लोड करने में त्रुटि। कृपया बाद में पुनः प्रयास करें।",
+      "pleaseSelectRoom": "कृपया पहले एक रूम चुनें",
+      "confirmJoinTitle": "रूम में शामिल हों?",
+      "confirmJoinDescription": "क्या आप रूम \"{{roomName}}\" में शामिल होना चाहते हैं?",
+      "join": "शामिल हों",
+      "errorRoomNoLongerExists": "पहले शामिल हुआ रूम अब मौजूद नहीं है।",
+      "errorRestoringRoom": "पहले के रूम से पुनः कनेक्ट करने में विफल।",
+      
+      // 删除确认
+      "confirmDelete": "हटाने की पुष्टि करें",
+      "confirmDeleteDescription": "क्या आप वाकई इस रूम को अपनी सेव की गई सूची से हटाना चाहते हैं? यह रूम को हटाएगा नहीं, केवल आपकी सेव की गई सूची से हटाएगा।",
+      "delete": "हटाएं",
+
+      // 消息列表
+      "noMessages": "इस रूम में अभी तक कोई संदेश नहीं है",
+      "beFirstToMessage": "बातचीत शुरू करने वाले पहले व्यक्ति बनें",
+      "newMessages": "नए संदेश",
+      "typeMessage": "अपना संदेश टाइप करें...",
+      "messageInput": "संदेश इनपुट",
+      "clickToCopyRoomId": "रूम आईडी कॉपी करने के लिए क्लिक करें",
+      "copySuccess": "क्लिपबोर्ड पर कॉपी किया गया!",
+      
+      // 图片消息
+      "uploadImage": "छवि अपलोड करें",
+      "onlyImagesAllowed": "केवल छवि फाइलों की अनुमति है",
+      "imageTooLarge": "छवि बहुत बड़ी है (अधिकतम 5MB)",
+      "errorReadingImage": "छवि फ़ाइल पढ़ने में त्रुटि",
+      "replaceExistingImage": "मौजूदा छवि बदलें?",
+      "maxImagesReached": "अधिकतम {{max}} छवियों की अनुमति है",
+      "images": "छवियाँ",
+      
+      // 房间成员
+      "roomMembers": "रूम के सदस्य",
+      "members": "सदस्य",
+      "userJoined": "उपयोगकर्ता शामिल हुआ",
+      "userLeft": "उपयोगकर्ता छोड़ गया",
+      
+      // Join Room by ID
+      "joinRoomById": "आईडी से रूम में शामिल हों",
+      "enterRoomId": "रूम आईडी दर्ज करें",
+      "joinButton": "शामिल हों",
+      
+      // Language selection
+      "languageSelection": "भाषा",
+      "english": "English",
+      "chinese": "中文",
+      "hindi": "हिंदी",
+      
+      // AI助手功能
+      "aiSettings": "AI सेटिंग्स",
+      "aiRoles": "AI भूमिकाएँ",
+      "existingRoles": "मौजूदा भूमिकाएँ",
+      "createNewRole": "नई भूमिका बनाएं",
+      "editRole": "भूमिका संपादित करें",
+      "askAI": "AI से पूछें",
+      "selectAIRole": "AI भूमिका चुनें",
+      "emptyPrompt": "कृपया प्रॉम्प्ट दर्ज करें",
+      "errorSendingAiRequest": "AI अनुरोध भेजने में त्रुटि",
+      "aiProcessing": "AI सोच रहा है...",
+      "systemPrompt": "सिस्टम प्रॉम्प्ट",
+      "roleName": "भूमिका का नाम",
+      "roleIcon": "आइकन",
+      "roleColor": "रंग",
+      "typeMessageHere": "यहां अपना संदेश टाइप करें...",
+      "addImage": "छवि जोड़ें",
+      "confirmDeleteRole": "भूमिका हटाने की पुष्टि करें",
+      "confirmDeleteRoleDescription": "क्या आप वाकई इस भूमिका को हटाना चाहते हैं? यह क्रिया वापस नहीं ली जा सकती है।",
+      "createRole": "भूमिका बनाएं"
     }
   }
 };

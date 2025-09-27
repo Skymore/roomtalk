@@ -4,7 +4,7 @@
 
 一个现代化、功能丰富的实时消息系统，基于 WebSocket 和 Redis 构建。支持 Markdown 格式化、图片分享、用户头像和多实例部署。完美适用于构建聊天应用、团队协作工具或任何实时通信平台。
 
-**当前版本: 0.4** (新增 Fly.io 部署和 Markdown 消息显示)
+**当前版本: 1.0**（AI 助手与体验全面升级）
 
 ---
 
@@ -39,89 +39,45 @@
 
 ---
 
-## 📐 系统架构
+## 📐 系统架构 & AI 流程
 
 ```mermaid
-graph TB
-    subgraph Client["客户端层"]
-        R[React + TypeScript]
-        T[TailwindCSS + HeroUI]
-        SC[Socket.io 客户端]
-        RT[React Router]
-        I[i18next]
-        M[Markdown-to-JSX]
-    end
+sequenceDiagram
+    participant 用户
+    participant 客户端
+    participant 服务端
+    participant Redis
+    participant OpenAI
 
-    subgraph Server["服务端层"]
-        E[Express.js]
-        SS[Socket.io 服务端]
-        RA[Redis 适配器]
-        API[REST API]
-    end
-
-    subgraph Data["数据层"]
-        RD[Redis]
-        RP[Redis 发布/订阅]
-        RS[Redis 存储]
-    end
-
-    subgraph Deploy["部署层"]
-        F[Fly.io]
-        D[Docker]
-        MI[多实例支持]
-        HM[健康监控]
-    end
-
-    %% 客户端到服务端的连接
-    R --> SC
-    SC --> SS
-    R --> API
-
-    %% 服务端内部连接
-    E --> API
-    SS --> RA
-    RA --> RP
-
-    %% 数据连接
-    RA --> RD
-    API --> RS
-    SS --> RS
-    RS --> RD
-    RP --> RD
-
-    %% 部署连接
-    Server --> D
-    D --> F
-    F --> MI
-    MI --> HM
-
-    style Client fill:#f9f,stroke:#333,stroke-width:2px
-    style Server fill:#bbf,stroke:#333,stroke-width:2px
-    style Data fill:#bfb,stroke:#333,stroke-width:2px
-    style Deploy fill:#fbb,stroke:#333,stroke-width:2px
+    用户->>客户端: 输入消息 / 粘贴图片 / 选择 AI 角色
+    客户端->>服务端: send_message / ask_ai
+    服务端->>Redis: 写入房间消息 / 会话状态
+    服务端->>OpenAI: 携带上下文发起流式补全
+    OpenAI-->>服务端: 返回流式 token (ai_chunk)
+    服务端-->>客户端: new_message / ai_chunk / ai_stream_end
+    客户端-->>用户: 消息列表实时更新，AI 实时补全
 ```
+
+## ✨ v0.5 新增要点
+
+- 桌面端顶部导航 + 移动端底部导航，房间/保存/聊天/设置四大视图
+- 房间成员实时提醒、加入确认对话框、顶部状态条
+- AI 角色管理器：多角色、颜色/图标、系统提示词本地持久化
+- OpenAI 流式回复，支持重试/编辑后的上下文重算
+- URL 房间分享（`/?room=ID`）+ 本地恢复上次房间
 
 ---
 
-## 🌟 功能特点
+## 🌟 功能亮点
 
-- ✅ 实时消息收发
-- ✅ 加入或创建房间
-- ✅ 本地保存房间列表
-- ✅ 消息与房间数据持久化（使用 Redis）
-- ✅ 暗色/亮色模式切换
-- ✅ 响应式设计（适用于手机与桌面）
-- ✅ 中英文多语言支持
-- ✅ 图片消息支持（v0.2版本新增）
-  - 丰富的媒体消息，单条支持最多9张图片
-  - 直观的图片处理（剪贴板粘贴、文件上传）
-  - 混合内容编辑（文字和图片共存）
-- ✅ 用户身份系统（v0.3版本新增）
-  - 基于用户名生成个性化头像
-  - 聊天消息显示用户名
-  - 改进聊天界面，提供更好的消息归属视觉提示
-- ✅ Markdown 消息显示（v0.4版本新增）
-  - 支持消息中的富文本格式
+- ✅ 实时消息（文本、图片、AI 流式回复全支持）
+- ✅ 可自定义的 AI 助手（角色管理、系统提示词、多模型配置）
+- ✅ 创建/加入/保存/分享房间，实时成员统计
+- ✅ 富文本编辑（Markdown 渲染、图片压缩、粘贴上传）
+- ✅ HeroUI 自适应界面：桌面顶部导航 + 移动底部导航
+- ✅ 多语言界面（English / 中文 / हिन्दी），随机用户名本地化
+- ✅ 本地持久化用户名、房间列表、最后访问房间
+- ✅ Redis 持久化 + Socket.IO 多实例扩展能力
 
 ---
 
@@ -130,7 +86,7 @@ graph TB
 ### 环境准备
 
 - 安装 Node.js
-- 安装并运行本地 Redis（默认地址：`localhost:6379`）
+- 安装并启动 Redis（默认 `localhost:6379`）
 
 ### 安装依赖
 
@@ -140,13 +96,22 @@ cd server
 npm install
 
 # 安装客户端依赖
-cd ../client
+cd ../client-heroui
 npm install
+```
+
+### 构建（生产模式需要）
+
+```bash
+cd client-heroui
+npm run build
+cd ../server
+npm run build
 ```
 
 ### 启动系统
 
-你可以使用脚本一键启动：
+可以使用脚本一键启动：
 
 ```bash
 ./start.sh
@@ -155,65 +120,41 @@ npm install
 或者分开启动：
 
 ```bash
-# 启动服务端
+# 启动服务端（开发模式）
 cd server
-npm start
+npm run dev
 
 # 启动客户端
-cd ../client
+cd ../client-heroui
 npm run dev
 ```
 
----
-
-## 🧭 使用说明
-
-1. 打开浏览器访问 [http://localhost:3011](http://localhost:3011)
-2. 页面将自动为用户分配唯一 ID（存储在 localStorage）
-3. 创建房间、加入房间、开始聊天
+生产模式需先在 `server` 目录执行 `npm run build`，再运行 `npm start` 使用编译后的 `dist/` 代码。
 
 ---
 
-## 🔧 技术挑战
+## 🧭 使用指南
 
-### 移动设备上的WebSocket连接可靠性
-
-我们面临的最显著挑战之一是在移动设备上保持WebSocket连接的可靠性，特别是当应用在前台和后台状态之间切换时。
-
-#### 问题
-- 当移动应用切换到后台时，浏览器可能会暂停WebSocket连接
-- 即使连接看似活跃，事件监听器也常常变得无响应
-- 用户可以发送消息（通过HTTP回退机制），但无法接收消息，除非刷新页面
-- 不同浏览器和移动平台对后台连接的处理方式各不相同
-
-#### 解决方案
-我们实现了多层次的方法来确保连接可靠性：
-
-1. **增强的Socket.io配置**
-   - 配置自动重连机制，优化超时和延迟参数
-   - 实现连接状态跟踪，检测"僵尸"连接
-   - 添加传输回退机制（WebSocket → HTTP轮询）
-
-2. **事件监听器管理**
-   - 创建系统检测并重新绑定无响应的事件监听器
-   - 实现事件引用跟踪，防止重复绑定事件
-   - 添加消息去重功能，防止重连后消息重复显示
-
-3. **基于可见性的恢复机制**
-   - 利用页面可见性API检测应用何时返回前台
-   - 在可见性变化时实现连接健康检查
-   - 从后台状态返回时自动刷新消息数据
-
-4. **活动房间跟踪**
-   - 维护客户端活动房间参与记录
-   - 连接重新建立后自动重新加入房间
-   - 实现服务器端会话恢复机制
-
-这种综合方法确保了在不同设备和网络条件下消息传递的可靠性，即使在复杂的移动环境中也能维持无缝的用户体验。
+1. 启动前后端后访问 [http://localhost:3011](http://localhost:3011)
+2. 系统会生成并保存唯一的 `clientId`（导航/设置中可查看并复制）
+3. 在主页创建、加入或保存房间，亦可通过分享链接 `/?room=ID` 直接进入
+4. 在消息输入框点击齿轮配置 AI 角色，`Ctrl/⌘ + Enter` 触发 AI 回复
+5. 在设置页修改用户名、主题、语言并管理保存房间
 
 ---
 
-## 🔌 API 接口说明
+## 🔧 技术亮点
+
+- **Redis & Socket.IO 扩展**：`rooms` 哈希、`room:{id}:messages` 列表、成员集合，配合 Redis 适配器支持 Fly.io 多实例
+- **AI 流水线**：`ask_ai` 事件整合上下文、OpenAI 流式响应、前端分块渲染与重试逻辑
+- **富文本编辑器**：文本/图片混排，粘贴节流，图片压缩
+- **自适应外壳**：HeroUI 布局、房间宫格、状态条、移动底部导航、保存房间管理
+- **多语言**：i18next 支持 English/中文/हिन्दी，随机用户名根据语言生成
+- **部署**：`fly.toml` 指向 Node 22，Redis URL 通过 Secrets 下发，提供 Docker 多阶段构建
+
+---
+
+## 🔌 API 接口概览
 
 ### HTTP 接口
 
@@ -244,14 +185,17 @@ npm run dev
 
 ## ⚙️ 配置
 
-### 服务端 `.env`
+### 服务端环境变量
 
-| 变量名       | 默认值                  | 说明       |
-|--------------|-------------------------|------------|
-| `PORT`       | 3012                    | 服务端端口 |
-| `CLIENT_URL` | http://localhost:3011    | CORS 配置  |
+| 变量名           | 默认值                    | 说明                      |
+|------------------|---------------------------|---------------------------|
+| `PORT`           | 3012                      | 服务端端口                |
+| `CLIENT_URL`     | http://localhost:3011     | CORS 配置                 |
+| `REDIS_URL`      | redis://localhost:6379    | Redis 连接地址            |
+| `OPENAI_API_KEY` | —                         | OpenAI API 密钥（启用 AI 必填）|
+| `OPENAI_MODEL`   | gpt-5                     | OpenAI 模型（可选）       |
 
-### 客户端 `.env`
+### 客户端环境变量
 
 **.env.development:**
 
@@ -265,7 +209,33 @@ npm run dev
 |-------------------|--------|---------------------------------------|
 | `VITE_SOCKET_URL` | `/`    | 同域部署时使用相对路径                 |
 
----
+### 配置说明
+
+**本地开发：**
+
+创建 `server/.env` 文件：
+
+```env
+PORT=3012
+CLIENT_URL=http://localhost:3011
+REDIS_URL=redis://localhost:6379
+OPENAI_API_KEY=sk-...
+# 可选
+OPENAI_MODEL=gpt-5
+```
+
+客户端（Vite）按模式读取：
+- `client-heroui/.env.development` 用于 `npm run dev`
+- `client-heroui/.env.production` 用于打包
+
+**生产环境（Fly.io）：**
+
+```bash
+fly secrets set OPENAI_API_KEY="sk-..."
+fly secrets set REDIS_URL="redis://..."
+# 可选
+fly secrets set OPENAI_MODEL="gpt-4"
+```
 
 ## 📦 Redis 持久化
 
@@ -303,6 +273,13 @@ MIT License
 本软件按"原样"提供，不附带任何明示或暗示的保证，包括但不限于对适销性、特定用途适用性及非侵权性的保证。在任何情况下，作者或版权持有人均不对因软件或软件的使用或其他交易产生的任何索赔、损害或其他责任承担责任，无论是在合同、侵权或其他方面。
 
 ## 📝 版本历史
+
+-### v1.0 - 流式 AI 与体验升级
+- **AI 助手**：接入 OpenAI 流式回复，自定义角色/系统提示词并本地保存
+- **消息输入**：混合内容编辑器，粘贴/图片交互优化
+- **房间体验**：成员数量、加入/离开提示、用户名/房间信息持久化
+- **界面焕新**：桌面导航、移动底部栏、状态提示、分享链接
+- **多语言**：新增印地语翻译，随机用户名根据语言自动生成
 
 ### v0.4 - Fly.io 部署 & Markdown 消息显示
 - **Fly.io 部署**：支持在 Fly.io 上部署应用，具备多实例能力
@@ -342,4 +319,3 @@ MIT License
 
 ---
 
-以上即为更新后的英文和中文 README 文件，两份文档中 API 接口部分均采用了更明确的路径参数设计，清晰表达了资源之间的层级关系。

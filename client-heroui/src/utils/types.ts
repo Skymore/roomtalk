@@ -4,13 +4,14 @@ export interface Message {
   content: string;
   timestamp: string;
   roomId: string;
-  messageType: 'text' | 'image';
+  messageType: 'text' | 'image' | 'ai';
   username?: string;
   avatar?: {
     text: string;
     color: string;
   };
   mimeType?: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' | 'image/jpg';
+  status?: 'streaming' | 'complete' | 'error';
 }
 
 export interface Room {
@@ -37,4 +38,18 @@ export interface RoomMemberEvent {
 export interface RoomMemberCount {
   roomId: string;
   count: number;
+}
+
+export interface AIChunkEvent {
+  messageId: string;
+  chunk: string;
+}
+
+export interface AIStreamEndEvent {
+  messageId: string;
+}
+
+export interface AIStreamErrorEvent {
+  messageId: string;
+  error: string;
 } 

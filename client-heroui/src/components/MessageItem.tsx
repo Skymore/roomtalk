@@ -15,6 +15,8 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
   const [isHovered, setIsHovered] = React.useState(false);
   const [imageError, setImageError] = React.useState(false);
   const isImage = message.messageType === "image";
+  const isAI = message.clientId === 'ai_assistant';
+  const isStreaming = isAI && message.status === 'streaming';
 
   // Handle image loading errors
   const handleImageError = () => {
@@ -34,33 +36,37 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
 
   return (
     <div
-    className={`group flex items-start ${isMine ? "justify-end" : "justify-start"} mb-1`}
-    onMouseEnter={() => setIsHovered(true)}
+      className={`group flex w-full items-start ${isMine ? "justify-end" : "justify-start"} mb-1`}
+      onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
-      {/* 对方的头像 */}
-      {!isMine && (
+      {/* 对方的头像或AI头像 */}
+      {(!isMine || isAI) && !isMine && (
         <Avatar
           name={message.avatar?.text || undefined}
-          icon={!message.avatar?.text ? <Icon icon="lucide:user" /> : undefined}
-          color={getValidColor(message.avatar?.color)}
+          icon={isAI ? <Icon icon="lucide:bot" /> : (!message.avatar?.text ? <Icon icon="lucide:user" /> : undefined)}
+          color={getValidColor(isAI ? "secondary" : message.avatar?.color)}
+          size="sm"
           classNames={{
-            base: "mr-2",
+            base: "mr-1 flex-shrink-0", // Added flex-shrink-0
           }}
         />
       )}
 
-      <div className={`max-w-[75%] sm:max-w-[60%]`}>
-        {/* 显示对方用户名 */}
-        {!isMine && message.username && (
-          <div className="text-tiny text-default-500 mb-1 ml-1">{message.username}</div>
+      {/* Message Content Area - 更严格的宽度控制 */}
+      <div className={`max-w-[60%] sm:max-w-[65%] flex flex-col min-w-0 ${isMine ? 'items-end' : 'items-start'}`}>
+        {/* 显示对方用户名或AI助手名称 */}
+        {(!isMine || isAI) && !isMine && (message.username || isAI) && (
+          <div className="text-tiny text-default-500 mb-0.5 ml-1">
+            {isAI ? (message.username || 'AI Assistant') : message.username}
+          </div>
         )}
 
-        {/* 添加一个高度固定的容器来包裹消息内容和时间戳 */}
-        <div className="relative">
+        {/* Container for message bubble + timestamp - 添加固定宽度和溢出控制 */}
+        <div className="relative inline-block max-w-full w-full min-w-0">
           {isImage ? (
             // ========== 图片消息 ==========
-            <div className="w-fit">
+            <div className="w-fit"> {/* Ensure image container doesn't force width */}
               {imageError ? (
                 <div className="text-sm text-danger p-2 bg-gray-100 dark:bg-gray-700 rounded-md w-fit">
                   <Icon icon="lucide:alert-triangle" className="inline mr-1" />
@@ -69,12 +75,13 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
               ) : (
                 <div className="border border-gray-200 dark:border-gray-600 rounded-md p-0.5 max-w-full">
                   <Image
-                    src={isImage 
-                      ? (message.content.startsWith('data:') 
-                          ? message.content 
-                          : `data:${message.mimeType || 'image/png'};base64,${message.content}`) 
-                      : message.content}                    alt="Shared image"
-                    className="max-h-[300px] max-w-full object-contain rounded"
+                    src={isImage
+                      ? (message.content.startsWith('data:')
+                          ? message.content
+                          : `data:${message.mimeType || 'image/png'};base64,${message.content}`)
+                      : message.content}
+                    alt="Shared image"
+                    className="block max-h-[300px] max-w-full object-contain rounded" // Ensure image is block
                     onError={handleImageError}
                     isBlurred
                   />
@@ -82,45 +89,59 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message }) => {
               )}
             </div>
           ) : (
-            // ========== 文本消息（聊天气泡） ==========
+            // ========== 文本消息（聊天气泡） - MODIFIED ==========
             <Card
               className={`
-                rounded-lg shadow-sm max-w-full overflow-visible
+                rounded-lg shadow-sm max-w-full w-full overflow-hidden
                 ${
                   isMine
                     ? "bg-blue-100 dark:bg-blue-900 text-gray-800 dark:text-white"
-                    : "bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-white"
+                    : isAI
+                      ? "bg-purple-100 dark:bg-purple-900 text-gray-800 dark:text-white" // Example AI style
+                      : "bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-white"
                 }
               `}
             >
-              <div className="p-3">
-                <div className="text-sm whitespace-pre-wrap">
-                  <MarkdownContent content={message.content} />
+              {/* 强制约束文本内容宽度 */}
+              <div className="p-2 max-w-full">
+                {/* 添加更严格的溢出和断词控制 */}
+                <div className="text-xs break-words break-all whitespace-pre-wrap overflow-hidden max-w-full">
+                  {/* 创建一个额外的容器来约束内部内容 */}
+                  <div className="max-w-full overflow-x-auto" style={{ wordBreak: 'break-word', overflowWrap: 'break-word' }}>
+                    <MarkdownContent content={message.content} />
+                    {/* 为AI消息流添加闪烁光标 */}
+                    {isStreaming && (
+                      <span className="inline-block w-1.5 h-3 bg-current animate-pulse ml-0.5 align-baseline"></span>
+                    )}
+                  </div>
                 </div>
               </div>
             </Card>
+            // ========== END MODIFIED ==========
           )}
 
-          {/* 时间戳 - 始终保持占位，仅改变可见性 */}
+          {/* 时间戳 - Placed below the bubble/image */}
           <div
-            className={`text-tiny mt-1 text-gray-500 dark:text-gray-400 transition-opacity h-4 ${
-              isHovered ? "opacity-100" : "opacity-0 md:group-hover:opacity-70"
-            }`}
-            aria-hidden={!isHovered}
+            className={`text-tiny mt-0.5 text-gray-500 dark:text-gray-400 transition-opacity h-3 ${
+              isHovered || isStreaming ? "opacity-100" : "opacity-0 md:group-hover:opacity-70"
+            } ${isMine ? 'text-right' : 'text-left'}`} // Align timestamp based on sender
+            aria-hidden={!isHovered && !isStreaming}
           >
             {formatTime(message.timestamp)}
+            {isStreaming && " • Typing..."}
           </div>
-        </div>
-      </div>
+        </div> {/* End relative container */}
+      </div> {/* End Message Content Area */}
 
       {/* 自己的头像 */}
-      {isMine && (
+      {isMine && !isAI && ( // Don't show avatar for AI assistant itself if isMine=true
         <Avatar
           name={message.avatar?.text || undefined}
           icon={!message.avatar?.text ? <Icon icon="lucide:user" /> : undefined}
           color={getValidColor(message.avatar?.color) || "primary"}
+          size="sm"
           classNames={{
-            base: "ml-2",
+            base: "ml-1 flex-shrink-0", // Added flex-shrink-0
           }}
         />
       )}

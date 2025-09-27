@@ -1,24 +1,9 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
-  Navbar,
-  NavbarBrand,
-  NavbarContent,
   Button,
   Tabs,
   Tab,
   Tooltip,
-  Modal,
-  ModalContent,
-  ModalHeader,
-  ModalBody,
-  ModalFooter,
-  Chip,
-  Avatar,
-  Input,
-  Dropdown,
-  DropdownTrigger,
-  DropdownMenu,
-  DropdownItem,
 } from "@heroui/react";
 import { Icon } from "@iconify/react";
 import { useTheme } from "@heroui/use-theme";
@@ -40,9 +25,14 @@ import { Room, RoomMemberEvent } from "../utils/types";
 import { saveRoom, removeRoom, isRoomSaved, getSavedRooms } from "../utils/storage";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-// import { IoMdPersonAdd, IoMdRemove } from 'react-icons/io';
+import { AppHeader } from "../components/AppHeader";
+import { SettingsView } from "../components/SettingsView";
+import { ChatHeader } from "../components/ChatHeader";
+import { RoomJoinModal } from "../components/RoomJoinModal";
+import { BottomNav } from "../components/BottomNav";
+import { StatusMessage } from "../components/StatusMessage";
 
-// 随机名字库 - 分为中文和英文两类，使用形容词+名词可爱组合
+// 修改随机名字库 - 为印地语添加新的形容词和名词
 const CN_ADJECTIVES = ["可爱", "萌萌", "温柔", "活泼", "聪明", "快乐", "甜蜜", "淘气", "软软", "闪亮", "乖巧", "迷你"];
 const CN_NOUNS = [
   "小猫",
@@ -75,13 +65,34 @@ const EN_NOUNS = [
   "Whale",
 ];
 
-// 生成随机名字 - 根据i18n语言设置决定生成中文还是英文名字
+// Hindi adjectives and nouns for random name generation
+const HI_ADJECTIVES = ["प्यारा", "छोटा", "मीठा", "चंचल", "सुंदर", "उज्ज्वल", "खुश", "आरामदायक", "रंगीन", "खेलपूर्ण"];
+const HI_NOUNS = [
+  "खरगोश",
+  "बिल्ली",
+  "कुत्ता",
+  "पांडा",
+  "कुकी",
+  "तारा",
+  "लोमड़ी",
+  "बतख",
+  "हाथी",
+  "तितली",
+  "फूल",
+];
+
+// 生成随机名字 - 根据i18n语言设置决定生成中文、英文或印地语名字
 const generateRandomName = (language: string): string => {
   // 如果语言设置为中文，或者开头为zh（如zh-CN），则生成中文名字
   if (language === "zh" || language.startsWith("zh-")) {
     const adj = CN_ADJECTIVES[Math.floor(Math.random() * CN_ADJECTIVES.length)];
     const noun = CN_NOUNS[Math.floor(Math.random() * CN_NOUNS.length)];
     return adj + noun;
+  } else if (language === "hi") {
+    // 生成印地语名字
+    const adj = HI_ADJECTIVES[Math.floor(Math.random() * HI_ADJECTIVES.length)];
+    const noun = HI_NOUNS[Math.floor(Math.random() * HI_NOUNS.length)];
+    return adj + " " + noun;
   } else {
     // 否则生成英文名字
     const adj = EN_ADJECTIVES[Math.floor(Math.random() * EN_ADJECTIVES.length)];
@@ -91,7 +102,7 @@ const generateRandomName = (language: string): string => {
 };
 
 // 从名字获取显示字符（首字母或首汉字）
-const getAvatarText = (name: string): string => {
+export const getAvatarText = (name: string): string => {
   if (!name) return "?";
   // 检查是否是汉字（Unicode范围）
   const firstChar = name.charAt(0);
@@ -103,7 +114,7 @@ const getAvatarText = (name: string): string => {
 };
 
 // 从用户名生成固定颜色
-const getAvatarColor = (name: string): string => {
+export const getAvatarColor = (name: string): string => {
   if (!name) return "primary";
   // 简单哈希算法，根据名字生成固定颜色
   const colors = ["primary", "secondary", "success", "warning", "danger"];
@@ -161,11 +172,35 @@ const getStoredRoom = (): Room | null => {
   return null;
 };
 
+// Welcome component for empty state
+interface WelcomeViewProps {
+  onEnterRooms: () => void;
+}
+
+const WelcomeView = ({ onEnterRooms }: WelcomeViewProps) => {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-col items-center justify-center h-full p-4 overflow-y-auto">
+      <Icon icon="lucide:message-circle" className="w-16 h-16 mb-4 text-violet-500" />
+      <h2 className="text-xl font-semibold mb-2">{t("welcomeMessage")}</h2>
+      <p className="text-default-500 mb-6 text-center">{t("welcomeDescription")}</p>
+      <Button 
+        color="secondary" 
+        onPress={onEnterRooms} 
+        startContent={<Icon icon="lucide:users" />}
+        className="bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white"
+      >
+        {t("home")}
+      </Button>
+    </div>
+  );
+};
+
 export const MessagePage: React.FC = () => {
+  // 不操作 html/body 滚动，页面固定高度由容器本身管理
   // 添加初始化标志，防止初始渲染时清除存储的房间
   const isInitialMount = useRef(true);
-  // 添加视口高度状态
-  const [viewportHeight, setViewportHeight] = useState(window.innerHeight);
+  // 用 CSS h-screen 来撑满视口，无需 JS 计算高度
   const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
   const isDark = theme === "dark";
@@ -198,10 +233,15 @@ export const MessagePage: React.FC = () => {
 
   const toggleTheme = () => setTheme(isDark ? "light" : "dark");
 
-  // 切换语言
-  const toggleLanguage = () => {
-    const newLanguage = i18n.language.startsWith("zh") ? "en" : "zh";
-    i18n.changeLanguage(newLanguage);
+  // 切换语言方法修改为支持多语言
+  const changeLanguage = (language: string) => {
+    i18n.changeLanguage(language);
+    // 如果用户名是自动生成的，可以更新为新语言的随机名
+    if (!getStoredUsername()) {
+      const newName = generateRandomName(language);
+      setUsername(newName);
+      saveUsername(newName);
+    }
   };
 
   // 修改处：使用 setSearchParams 更新 URL 参数
@@ -210,25 +250,6 @@ export const MessagePage: React.FC = () => {
     newParams.delete("room");
     setSearchParams(newParams);
   };
-
-  // 添加: 更新视口高度的处理
-  useEffect(() => {
-    const updateViewportHeight = () => {
-      setViewportHeight(window.innerHeight);
-    };
-
-    // 初始设置
-    updateViewportHeight();
-
-    // 监听事件
-    window.addEventListener("resize", updateViewportHeight);
-    window.addEventListener("orientationchange", updateViewportHeight);
-
-    return () => {
-      window.removeEventListener("resize", updateViewportHeight);
-      window.removeEventListener("orientationchange", updateViewportHeight);
-    };
-  }, []);
 
   // 初次加载时加载已保存房间和用户名
   useEffect(() => {
@@ -431,6 +452,8 @@ export const MessagePage: React.FC = () => {
       clearRoomUrlParam();
       return;
     }
+    // 确保进入房间后切换到聊天视图，这样不会使用设置页(max-w-md)布局
+    setView("chat");
     handleRoomSelect(roomToJoin.id);
     setRoomToJoin(null);
   };
@@ -496,130 +519,121 @@ export const MessagePage: React.FC = () => {
     setTimeout(() => setSuccess(null), 2000);
   };
 
-  return (
-    // 修改: 使用动态计算的视口高度而不是 h-screen
-    <div className="flex flex-col overflow-hidden" style={{ height: `${viewportHeight}px` }}>
-      <Navbar isBordered maxWidth="full">
-        <div className="w-full max-w-[1400px] mx-auto px-2 sm:px-8 flex justify-between items-center">
-          <NavbarBrand>
-            <img src="/roomtalk-logo.svg" alt="RoomTalk Logo" className="w-10 h-10" />
-            <p className="font-bold text-inherit ml-2">RoomTalk</p>
-          </NavbarBrand>
-          <NavbarContent justify="end">
-            <div className="flex items-center gap-2">
-              {/* 始终显示的用户ID */}
-              <Tooltip content={t("yourUserId")}>
-                <Chip
-                  variant="flat"
-                  color="primary"
-                  size="sm"
-                  className="cursor-pointer"
-                  onClick={() => handleCopyToClipboard(clientId)}
-                >
-                  ID: {clientId.slice(0, 8)}...
-                </Chip>
-              </Tooltip>
+  // Render content based on current view
+  const renderContent = () => {
+    if (isLoadingRoom) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full p-4">
+          <Icon icon="lucide:loader" className="w-16 h-16 mb-4 text-violet-500 animate-spin" />
+          <h2 className="text-xl font-semibold mb-2">{t("loading")}</h2>
+          <p className="text-default-500 text-center">{t("loadingDescription")}</p>
+        </div>
+      );
+    }
 
-              {/* 桌面版：直接显示头像、语言切换和主题切换 */}
-              <div className="hidden md:flex items-center gap-2">
-                <Avatar name={getAvatarText(username)} color={getAvatarColor(username) as any} size="sm" />
-                <Tooltip content={i18n.language.startsWith("zh") ? "Switch to English" : "切换到中文"}>
-                  <Button isIconOnly variant="light" onPress={toggleLanguage} aria-label="Change language">
-                    <Icon icon="lucide:languages" width={20} />
-                  </Button>
-                </Tooltip>
-                <Tooltip content={isDark ? t("lightMode") : t("darkMode")}>
-                  <Button
-                    isIconOnly
-                    variant="light"
-                    onPress={toggleTheme}
-                    aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
-                  >
-                    <Icon icon={isDark ? "lucide:sun" : "lucide:moon"} width={20} />
-                  </Button>
-                </Tooltip>
+    switch (view) {
+      case "rooms":
+        return (
+          <div className="h-full overflow-y-auto">
+            <RoomList rooms={rooms} onRoomSelect={handleRoomSelect} />
+          </div>
+        );
+      case "saved":
+        return (
+          <div className="h-full overflow-y-auto">
+            <SavedRoomList rooms={savedRooms} onRoomSelect={handleRoomSelect} onRoomsChange={setSavedRooms} />
+          </div>
+        );
+      case "settings":
+        return (
+          <SettingsView 
+            username={username}
+            setUsername={setUsername}
+            showEditUsername={showEditUsername}
+            setShowEditUsername={setShowEditUsername}
+            handleSaveUsername={handleSaveUsername}
+            handleCopyToClipboard={handleCopyToClipboard}
+            isDark={isDark}
+            setTheme={setTheme}
+            i18n={i18n}
+            changeLanguage={changeLanguage}
+          />
+        );
+      case "chat":
+        if (currentRoom) {
+          return (
+            <div className="flex flex-col flex-1 w-full min-h-0">
+              <ChatHeader
+                currentRoom={currentRoom}
+                memberCount={memberCount}
+                memberEvent={memberEvent}
+                handleCopyToClipboard={handleCopyToClipboard}
+                handleShareRoom={handleShareRoom}
+                handleToggleSave={handleToggleSave}
+                handleLeaveRoom={handleLeaveRoom}
+                isRoomSaved={isRoomSaved}
+                setView={setView}
+                clearRoomUrlParam={clearRoomUrlParam}
+              />
+
+              <div className="flex-1 w-full overflow-y-auto">
+                <MessageList roomId={currentRoom.id} />
               </div>
 
-              {/* 移动版：显示头像但使用三点菜单作为下拉触发器 */}
-              <div className="flex md:hidden items-center gap-2">
-                <Avatar name={getAvatarText(username)} color={getAvatarColor(username) as any} size="sm" />
-                <Dropdown>
-                  <DropdownTrigger>
-                    <Button isIconOnly variant="light" aria-label="Menu" className="min-w-0">
-                      <Icon icon="lucide:more-vertical" width={20} />
-                    </Button>
-                  </DropdownTrigger>
-                  <DropdownMenu aria-label="User actions">
-                    <DropdownItem
-                      key="settings"
-                      startContent={<Icon icon="lucide:settings" />}
-                      onPress={() => setView("settings")}
-                    >
-                      {t("settings")}
-                    </DropdownItem>
-                    <DropdownItem
-                      key="language"
-                      startContent={<Icon icon="lucide:languages" />}
-                      onPress={toggleLanguage}
-                    >
-                      {i18n.language.startsWith("zh") ? "English" : "中文"}
-                    </DropdownItem>
-                    <DropdownItem
-                      key="theme"
-                      startContent={<Icon icon={isDark ? "lucide:sun" : "lucide:moon"} />}
-                      onPress={toggleTheme}
-                    >
-                      {isDark ? t("lightMode") : t("darkMode")}
-                    </DropdownItem>
-                  </DropdownMenu>
-                </Dropdown>
+              <div className="border-t p-1 flex-shrink-0 border-violet-100 dark:border-gray-800">
+                <MessageInput
+                  roomId={currentRoom.id}
+                  username={username}
+                  avatarText={getAvatarText(username)}
+                  avatarColor={getAvatarColor(username)}
+                />
               </div>
             </div>
-          </NavbarContent>
-        </div>
-      </Navbar>
+          );
+        }
+        return <WelcomeView onEnterRooms={() => setView("rooms")} />;
+      default:
+        return <WelcomeView onEnterRooms={() => setView("rooms")} />;
+    }
+  };
 
-      {error && (
-        <div className="bg-danger-100 p-3 text-danger">
-          <div className="max-w-[1400px] mx-auto px-4 flex items-center gap-2">
-            <Icon icon="lucide:alert-circle" />
-            <p>{error}</p>
-            <Button size="sm" variant="flat" color="danger" className="ml-auto" onPress={() => setError(null)} aria-label={t("close")}>
-              {t("close")}
-            </Button>
-          </div>
-        </div>
-      )}
+  return (
+    <div className="flex flex-col h-[100dvh] overflow-hidden bg-white/60 dark:bg-gray-900/60 backdrop-blur-md">
+      <AppHeader 
+        clientId={clientId}
+        username={username}
+        setView={setView}
+        view={view}
+        currentRoom={currentRoom}
+        i18n={i18n}
+        changeLanguage={changeLanguage}
+        toggleTheme={toggleTheme}
+        isDark={isDark}
+        handleCopyToClipboard={handleCopyToClipboard}
+      />
 
-      {success && (
-        <div className="bg-success-100 p-3 text-success">
-          <div className="max-w-[1400px] mx-auto px-4 flex items-center gap-2">
-            <Icon icon="lucide:check-circle" />
-            <p>{success}</p>
-          </div>
-        </div>
-      )}
+      <StatusMessage error={error} setError={setError} success={success} />
 
-      {/* Tab 切换：点击 rooms/saved 按钮仅切换视图，不影响已进入的房间 */}
-      <div className="bg-default-100 border-b border-divider">
+      {/* Tab 切换 - 桌面版 */}
+      <div className="bg-white/60 dark:bg-gray-900/60 backdrop-blur-sm border-b border-violet-200 dark:border-gray-800 hidden md:block">
         <div className="max-w-[1400px] mx-auto px-4">
           <Tabs
             selectedKey={view}
             onSelectionChange={(key) => setView(key as "chat" | "rooms" | "saved" | "settings")}
             className="p-2"
-            variant="light" // 尝试使用更轻量的变体
-            // 或者完全自定义样式
+            variant="light"
+            color="secondary"
             classNames={{
               tabList: "gap-2",
-              tab: "data-[selected=true]:bg-transparent data-[selected=true]:shadow-none border-none",
-              cursor: "bg-transparent shadow-none", // 移除选中指示器
+              tab: "data-[selected=true]:bg-gradient-to-r data-[selected=true]:from-violet-500 data-[selected=true]:to-fuchsia-500 data-[selected=true]:text-white",
+              cursor: "",
             }}
           >
             <Tab
               key="rooms"
-              aria-label={t("yourRooms")}
+              aria-label={t("home")}
               title={
-                <Tooltip content={t("yourRooms")}>
+                <Tooltip content={t("home")}>
                   <div className="flex items-center gap-1">
                     <Icon icon="lucide:home" className="text-lg" />
                   </div>
@@ -651,14 +665,11 @@ export const MessagePage: React.FC = () => {
             {currentRoom && (
               <Tab
                 key="chat"
-                aria-label={t("chatRoom", { name: currentRoom.name })}
+                aria-label={currentRoom.name}
                 title={
                   <Tooltip content={currentRoom.name}>
                     <div className="flex items-center gap-1">
                       <Icon icon="lucide:message-circle" className="text-lg" />
-                      <span className="max-w-24 truncate text-xs hidden sm:inline-block">
-                        {currentRoom.name || t("room")}
-                      </span>
                     </div>
                   </Tooltip>
                 }
@@ -668,236 +679,27 @@ export const MessagePage: React.FC = () => {
         </div>
       </div>
 
-      {/* 修改: 确保内容区有正确的滚动设置 */}
-      <main className="flex-1 overflow-hidden bg-content1">
-        <div className="h-full max-w-[1400px] mx-auto px-4">
-          <div className="h-full bg-content1 rounded-lg flex flex-col">
-            {isLoadingRoom ? (
-              <div className="flex flex-col items-center justify-center h-full p-4">
-                <Icon icon="lucide:loader" className="w-16 h-16 mb-4 text-primary animate-spin" />
-                <h2 className="text-xl font-semibold mb-2">{t("loading")}</h2>
-                <p className="text-default-500 text-center">{t("loadingDescription")}</p>
-              </div>
-            ) : view === "rooms" ? (
-              <div className="h-full overflow-y-auto">
-                <RoomList rooms={rooms} onRoomSelect={handleRoomSelect} />
-              </div>
-            ) : view === "saved" ? (
-              <div className="h-full overflow-y-auto">
-                <SavedRoomList rooms={savedRooms} onRoomSelect={handleRoomSelect} onRoomsChange={setSavedRooms} />
-              </div>
-            ) : view === "settings" ? (
-              // 设置页面 - 极简设计
-              <div className="flex flex-col w-full max-w-md mx-auto p-6 h-full overflow-y-auto">
-                {/* 头像展示 */}
-                <div className="flex flex-col items-center mb-8">
-                  <Avatar name={getAvatarText(username)} color={getAvatarColor(username) as any} size="lg" />
-                  <p className="text-sm text-default-500 mt-2">{t("profile")}</p>
-                </div>
-
-                {/* 资料列表 */}
-                <div className="space-y-6">
-                  {/* 用户名行 - 内联编辑 */}
-                  <div className="flex items-center">
-                    <div className="w-24 text-default-500">{t("username")}:</div>
-                    {showEditUsername ? (
-                      <div className="flex-1 flex gap-2">
-                        <Input
-                          autoFocus
-                          size="sm"
-                          className="flex-1"
-                          value={username}
-                          onChange={(e) => setUsername(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") handleSaveUsername();
-                            if (e.key === "Escape") setShowEditUsername(false);
-                          }}
-                        />
-                        <div className="flex gap-1">
-                          <Button isIconOnly size="sm" color="primary" onPress={handleSaveUsername} aria-label={t("save")}>
-                            <Icon icon="lucide:check" className="text-sm" />
-                          </Button>
-                          <Button isIconOnly size="sm" variant="flat" onPress={() => setShowEditUsername(false)} aria-label={t("cancel")}>
-                            <Icon icon="lucide:x" className="text-sm" />
-                          </Button>
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                        <code className="flex-1 bg-default-100 px-3 py-1 rounded text-sm font-semibold">
-                          {username}
-                        </code>
-                        <Button
-                          isIconOnly
-                          size="sm"
-                          variant="light"
-                          className="min-w-0 w-8 h-8 ml-1"
-                          onPress={() => setShowEditUsername(true)}
-                          aria-label={t("editUsername")}
-                        >
-                          <Icon icon="lucide:edit" className="text-sm" />
-                        </Button>
-                      </>
-                    )}
-                  </div>
-
-                  {/* ID行 */}
-                  <div className="flex items-center">
-                    <div className="w-24 text-default-500">{t("userId")}:</div>
-                    <code className="flex-1 bg-default-100 px-3 py-1 rounded text-xs overflow-hidden text-ellipsis break-all">
-                      {clientId}
-                    </code>
-                    <Button
-                      isIconOnly
-                      size="sm"
-                      variant="light"
-                      className="min-w-0 w-8 h-8 ml-1"
-                      onPress={() => handleCopyToClipboard(clientId)}
-                      aria-label={t("copyUserId")}
-                    >
-                      <Icon icon="lucide:copy" className="text-sm" />
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            ) : // Chat 视图
-            currentRoom ? (
-              <div className="flex flex-col h-full overflow-hidden">
-                <div className="flex justify-between items-center p-2 border-b">
-                  <div className="flex items-center">
-                    <Button
-                      isIconOnly
-                      variant="light"
-                      aria-label="Back"
-                      onPress={() => {
-                        setView("rooms");
-                        clearRoomUrlParam();
-                      }}
-                      className="mr-2"
-                    >
-                      <Icon icon="lucide:chevron-left" width={24} />
-                    </Button>
-                    <div>
-                      <h2 className="text-xl font-bold truncate max-w-[150px]">{currentRoom.name}</h2>
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-default-500">
-                        <div className="flex items-center">
-                          <Icon icon="lucide:users" className="mr-1" width={14} />
-                          {memberCount}
-                          {memberEvent && (
-                            <span className="ml-1 text-tiny animate-fade-in">
-                              {memberEvent.type === "join" ? "🎉" : "🚶"} {memberEvent.userId.substring(0, 4)}...
-                            </span>
-                          )}
-                        </div>
-                        <div
-                          className="flex items-center cursor-pointer"
-                          onClick={() => handleCopyToClipboard(currentRoom.id)}
-                        >
-                          <Icon icon="lucide:hash" className="mr-1" width={14} />
-                          <Tooltip content={t("clickToCopyRoomId")}>
-                            <span>
-                              {currentRoom.id.length > 10 ? `${currentRoom.id.substring(0, 8)}...` : currentRoom.id}
-                            </span>
-                          </Tooltip>
-                          <Icon icon="lucide:copy" className="ml-1 text-default-400" width={12} />
-                        </div>
-                        {/* <div className="flex items-center">
-                          <Icon icon="lucide:user" className="mr-1" width={14} />
-                          {currentRoom.creatorId === clientId ? (
-                            <span className="text-success-500">{t("createdBy")}</span>
-                          ) : (
-                            <span className="text-primary-500">{t("joined")}</span>
-                          )}
-                        </div> */}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex">
-                    <Button
-                      isIconOnly
-                      variant="light"
-                      aria-label="Share"
-                      onPress={handleShareRoom}
-                      className="mr-1 md:w-10 md:h-10 w-8 h-8"
-                    >
-                      {" "}
-                      {/* 添加宽高控制 */}
-                      <Icon icon="lucide:share" width={20} className="md:w-5 w-4" /> {/* 调整图标大小 */}
-                    </Button>
-                    <Button
-                      isIconOnly
-                      variant="light"
-                      aria-label="Save"
-                      onPress={handleToggleSave}
-                      className={`${isRoomSaved(currentRoom.id) ? "text-warning" : "text-primary"} mr-1 md:w-10 md:h-10 w-8 h-8`}
-                    >
-                      <Icon
-                        icon={isRoomSaved(currentRoom.id) ? "lucide:bookmark-minus" : "lucide:bookmark-plus"}
-                        width={20}
-                        className="md:w-5 w-4"
-                      />
-                    </Button>
-                    <Button
-                      isIconOnly
-                      variant="light"
-                      aria-label="Leave"
-                      onPress={handleLeaveRoom}
-                      className="text-danger md:w-10 md:h-10 w-8 h-8"
-                    >
-                      <Icon icon="lucide:log-out" width={20} className="md:w-5 w-4" />
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="flex-1 overflow-y-auto px-2 pt-2">
-                  <MessageList roomId={currentRoom.id} />
-                </div>
-
-                <div className="border-t p-2 flex-shrink-0">
-                  <MessageInput
-                    roomId={currentRoom.id}
-                    username={username}
-                    avatarText={getAvatarText(username)}
-                    avatarColor={getAvatarColor(username)}
-                  />
-                </div>
-              </div>
-            ) : (
-              // 欢迎页面
-              <div className="flex flex-col items-center justify-center h-full p-4 overflow-y-auto">
-                <Icon icon="lucide:message-circle" className="w-16 h-16 mb-4 text-default-400" />
-                <h2 className="text-xl font-semibold mb-2">{t("welcomeMessage")}</h2>
-                <p className="text-default-500 mb-6 text-center">{t("welcomeDescription")}</p>
-                <Button color="primary" onPress={() => setView("rooms")} startContent={<Icon icon="lucide:users" />}>
-                  {t("yourRooms")}
-                </Button>
-              </div>
-            )}
+      {/* 主要内容区 */}
+      <main className="flex flex-col flex-1 min-h-0 pb-12 md:pb-0">
+        <div className="flex flex-1 min-h-0 w-full max-w-[1400px] mx-auto px-4">
+          <div className="flex-1 flex flex-col min-h-0">
+            {renderContent()}
           </div>
         </div>
       </main>
 
       {/* URL 加载房间时的确认弹窗 */}
-      {roomToJoin && (
-        <Modal isOpen={!!roomToJoin} onClose={() => handleConfirmJoin(false)}>
-          <ModalContent>
-            <ModalHeader className="flex flex-col gap-1">{t("confirmJoinTitle")}</ModalHeader>
-            <ModalBody>
-              <p>{t("confirmJoinDescription", { roomName: roomToJoin.name })}</p>
-            </ModalBody>
-            <ModalFooter>
-              <Button variant="flat" onPress={() => handleConfirmJoin(false)}>
-                {t("cancel")}
-              </Button>
-              <Button color="primary" onPress={() => handleConfirmJoin(true)}>
-                {t("join")}
-              </Button>
-            </ModalFooter>
-          </ModalContent>
-        </Modal>
-      )}
+      <RoomJoinModal 
+        roomToJoin={roomToJoin}
+        handleConfirmJoin={handleConfirmJoin}
+      />
 
-      {/* 成员加入/离开提示已在其他位置实现，此处不再重复 */}
+      {/* 底部导航 - 移动端 */}
+      <BottomNav 
+        view={view}
+        setView={setView}
+        currentRoom={currentRoom}
+      />
     </div>
   );
 };
