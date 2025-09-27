@@ -11,7 +11,7 @@ const resources = {
       "room": "Room",
       "rooms": "Rooms",
       "home": "Home",
-      "save": "Save Room",
+      "save": "Save",
       "unsave": "Unsave",
       "share": "Share",
       "leave": "Leave Room",
@@ -19,7 +19,9 @@ const resources = {
       "cancel": "Cancel",
       "close": "Close",
       "copied": "Copied!",
-      "shareSuccess": "Room link copied to clipboard!",
+      "shareSuccess": "Room link copied!",
+      "copyRoomId": "Copy Room ID",
+      "copyRoomIdSuccess": "Room ID copied!",
       "send": "Send",
       "yourUserId": "Click to copy your full User ID",
       "like": "Like",
@@ -27,10 +29,21 @@ const resources = {
       "dislike": "Dislike",
       "cancelDislike": "Cancel Dislike",
       "refresh": "Refresh",
+      "retry": "Retry",
       "edit": "Edit",
       "copy": "Copy",
-      
       "newLine": "New Line",
+      
+      // ChatHeader specific aria-labels
+      "ariaLabelBack": "Back",
+      "ariaLabelRoomActions": "Room Actions",
+      
+      // Dropdown menu items and confirmation prompts
+      "clearChatHistory": "Clear Chat History",
+      "confirmClearChat": "Clear chat history?",
+      "confirmLeaveRoom": "Leave this room?",
+      "saveAction": "Save",
+      "copyRoomIdAction": "Copy Room ID",
       
       // 设置页面
       "settings": "Settings",
@@ -145,7 +158,28 @@ const resources = {
       "addImage": "Add Image",
       "confirmDeleteRole": "Confirm Delete Role",
       "confirmDeleteRoleDescription": "Are you sure you want to delete this role? This action cannot be undone.",
-      "createRole": "Create Role"
+      "createRole": "Create Role",
+
+      // 新增/修改 删除/取消收藏相关
+      "deleteRoom": "Delete Room",
+      "confirmUnsave": "Confirm Unsave?",
+      "confirmUnsaveDescription": "Are you sure you want to remove this room from your saved list?",
+      "confirmDeleteRoomTitle": "Confirm Delete Room?",
+      "confirmDeleteRoomDescription": "Are you sure you want to permanently delete the room \"{{roomName}}\"? This action cannot be undone.",
+      "roomDeletedSuccess": "Room deleted successfully.",
+      "errorDeletingRoom": "Failed to delete room.",
+
+      // Modal related
+      "confirmDeletion": "Confirm Deletion",
+      "confirmDeleteMessagePrompt": "Are you sure you want to delete this message? This action cannot be undone.",
+      "editMessage": "Edit Message",
+      "enterYourMessage": "Enter your message...",
+      "saveAndAskAI": "Save & Ask AI",
+      "saveTitle": "Save (Enter)",
+      "saveAndAskAITitle": "Save and Ask AI (Ctrl+Enter)",
+      "errorEditingMessage": "Error editing message: {{error}}",
+      "errorDeletingMessage": "Error deleting message: {{error}}",
+      "deleteMessage": "Delete Message",
     }
   },
   zh: {
@@ -155,7 +189,7 @@ const resources = {
       "room": "房间",
       "rooms": "房间",
       "home": "主页",
-      "save": "保存房间",
+      "save": "保存",
       "unsave": "取消保存",
       "share": "分享",
       "leave": "退出房间",
@@ -163,7 +197,9 @@ const resources = {
       "cancel": "取消",
       "close": "关闭",
       "copied": "已复制!",
-      "shareSuccess": "房间链接已复制到剪贴板！",
+      "shareSuccess": "房间链接已复制！",
+      "copyRoomId": "复制房间ID",
+      "copyRoomIdSuccess": "房间ID已复制！",
       "send": "发送",
       "yourUserId": "点击复制您的完整用户ID",
       "like": "点赞",
@@ -171,10 +207,21 @@ const resources = {
       "dislike": "踩",
       "cancelDislike": "取消踩",
       "refresh": "刷新",
+      "retry": "重试",
       "edit": "编辑",
       "copy": "复制",
-      
       "newLine": "换行",
+      
+      // ChatHeader specific aria-labels
+      "ariaLabelBack": "返回",
+      "ariaLabelRoomActions": "房间操作",
+      
+      // Dropdown menu items and confirmation prompts
+      "clearChatHistory": "清空聊天记录",
+      "confirmClearChat": "确定清空聊天记录吗？",
+      "confirmLeaveRoom": "确定离开此房间吗？",
+      "saveAction": "保存",
+      "copyRoomIdAction": "复制房间ID",
       
       // 设置页面
       "settings": "设置",
@@ -289,7 +336,28 @@ const resources = {
       "addImage": "添加图片",
       "confirmDeleteRole": "确认删除角色",
       "confirmDeleteRoleDescription": "您确定要删除这个角色吗？此操作无法撤销。",
-      "createRole": "创建角色"
+      "createRole": "创建角色",
+
+      // 新增/修改 删除/取消收藏相关
+      "deleteRoom": "删除房间",
+      "confirmUnsave": "确认取消保存？",
+      "confirmUnsaveDescription": "您确定要将此房间从保存列表中移除吗？",
+      "confirmDeleteRoomTitle": "确认删除房间？",
+      "confirmDeleteRoomDescription": "您确定要永久删除房间 \"{{roomName}}\" 吗？此操作无法撤销。",
+      "roomDeletedSuccess": "房间删除成功。",
+      "errorDeletingRoom": "删除房间失败。",
+
+      // Modal related
+      "confirmDeletion": "确认删除",
+      "confirmDeleteMessagePrompt": "您确定要删除这条消息吗？此操作无法撤销。",
+      "editMessage": "编辑消息",
+      "enterYourMessage": "输入您的消息...",
+      "saveAndAskAI": "保存并问 AI",
+      "saveTitle": "保存 (Enter)",
+      "saveAndAskAITitle": "保存并问 AI (Ctrl+Enter)",
+      "errorEditingMessage": "编辑消息时出错: {{error}}",
+      "errorDeletingMessage": "删除消息时出错: {{error}}",
+      "deleteMessage": "删除消息",
     }
   },
   hi: {
@@ -299,7 +367,7 @@ const resources = {
       "room": "रूम",
       "rooms": "रूम्स",
       "home": "होम",
-      "save": "रूम सेव करें",
+      "save": "सेव करें",
       "unsave": "सेव हटाएं",
       "share": "शेयर करें",
       "leave": "रूम छोड़ें",
@@ -307,7 +375,9 @@ const resources = {
       "cancel": "रद्द करें",
       "close": "बंद करें",
       "copied": "कॉपी हो गया!",
-      "shareSuccess": "रूम लिंक क्लिपबोर्ड पर कॉपी हो गया!",
+      "shareSuccess": "रूम लिंक कॉपी हो गया!",
+      "copyRoomId": "रूम आईडी कॉपी करें",
+      "copyRoomIdSuccess": "रूम आईडी कॉपी हो गया!",
       "send": "भेजें",
       "yourUserId": "अपना पूरा यूज़र आईडी कॉपी करने के लिए क्लिक करें",
       "like": "पसंद",
@@ -315,10 +385,21 @@ const resources = {
       "dislike": "नापसंद",
       "cancelDislike": "नापसंद रद्द करें",
       "refresh": "रिफ्रेश करें",
+      "retry": "पुनः प्रयास करें",
       "edit": "संपादित करें",
       "copy": "कॉपी करें",
-      
       "newLine": "नई पंक्ति",
+      
+      // ChatHeader specific aria-labels
+      "ariaLabelBack": "वापस",
+      "ariaLabelRoomActions": "रूम क्रियाएँ",
+      
+      // Dropdown menu items and confirmation prompts
+      "clearChatHistory": "चैट इतिहास साफ़ करें",
+      "confirmClearChat": "चैट इतिहास साफ़ करें?",
+      "confirmLeaveRoom": "यह रूम छोड़ें?",
+      "saveAction": "सेव करें",
+      "copyRoomIdAction": "रूम आईडी कॉपी करें",
       
       // 设置页面
       "settings": "सेटिंग्स",
@@ -433,7 +514,28 @@ const resources = {
       "addImage": "छवि जोड़ें",
       "confirmDeleteRole": "भूमिका हटाने की पुष्टि करें",
       "confirmDeleteRoleDescription": "क्या आप वाकई इस भूमिका को हटाना चाहते हैं? यह क्रिया वापस नहीं ली जा सकती है।",
-      "createRole": "भूमिका बनाएं"
+      "createRole": "भूमिका बनाएं",
+
+      // 新增/修改 删除/取消收藏相关
+      "deleteRoom": "रूम हटाएं",
+      "confirmUnsave": "सेव हटाना सुनिश्चित करें?",
+      "confirmUnsaveDescription": "क्या आप वाकई इस रूम को अपनी सेव की गई सूची से हटाना चाहते हैं?",
+      "confirmDeleteRoomTitle": "रूम हटाना सुनिश्चित करें?",
+      "confirmDeleteRoomDescription": "क्या आप वाकई रूम \"{{roomName}}\" को स्थायी रूप से हटाना चाहते हैं? यह क्रिया वापस नहीं ली जा सकती है।",
+      "roomDeletedSuccess": "रूम सफलतापूर्वक हटा दिया गया है।",
+      "errorDeletingRoom": "रूम हटाने में विफल।",
+
+      // Modal related
+      "confirmDeletion": "हटाने की पुष्टि करें",
+      "confirmDeleteMessagePrompt": "क्या आप वाकई इस संदेश को हटाना चाहते हैं? यह क्रिया पूर्ववत नहीं की जा सकती।",
+      "editMessage": "संदेश संपादित करें",
+      "enterYourMessage": "अपना संदेश दर्ज करें...",
+      "saveAndAskAI": "सहेजें और AI से पूछें",
+      "saveTitle": "सहेजें (Enter)",
+      "saveAndAskAITitle": "सहेजें और AI से पूछें (Ctrl+Enter)",
+      "errorEditingMessage": "संदेश संपादित करने में त्रुटि: {{error}}",
+      "errorDeletingMessage": "संदेश हटाने में त्रुटि: {{error}}",
+      "deleteMessage": "संदेश हटाएं",
     }
   }
 };

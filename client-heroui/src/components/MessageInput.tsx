@@ -269,39 +269,34 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
       
       if (!prompt) {
         setErrorMessage(t('emptyPrompt'));
+        setIsAiProcessing(false); // 重置状态
         return;
       }
       
-      // 获取选中的AI角色
-      const selectedRole = getSelectedRole();
-      
-      // 发送用户问题作为普通消息
+      // 重新加入：先发送用户消息保存到历史记录
       sendMessage(prompt, roomId, 'text', username, avatar);
       
-      // 触发AI请求，发送带角色信息的请求
+      const selectedRole = getSelectedRole();
+      
+      // 移除 prompt 参数
       socket.emit('ask_ai', { 
         roomId, 
-        prompt,
         systemPrompt: selectedRole.systemPrompt,
         roleName: selectedRole.name 
       });
       
-      console.log('Sent AI request with role:', selectedRole.name);
+      console.log('Sent AI request (without prompt) with role:', selectedRole.name);
       
-      // 清空编辑器
+      // 清空编辑器等后续操作不变
       if (editorRef.current) {
-        // 释放所有预览URL
         const images = editorRef.current.querySelectorAll('img');
         images.forEach(img => {
           if (img.src.startsWith('blob:')) {
             URL.revokeObjectURL(img.src);
           }
         });
-        
         editorRef.current.innerHTML = '';
       }
-      
-      // 重置状态
       setContentItems([{ type: 'text', content: '' }]);
       setImageCount(0);
       imageCountRef.current = 0;
@@ -314,43 +309,34 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
     }
   };
 
-  // 修改原来的handleSubmit方法，移除AI请求相关的代码
-  // 只保留普通消息的发送逻辑
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    // 解析最新内容
+  // Handle regular message submission
+  const handleSubmit = async () => {
+    // Parse latest content (might be redundant if useEffect handles it well)
     parseEditorContent();
-    
-    // 检查是否有内容可发送
-    const hasContent = contentItems.some(item => 
-      (item.type === 'text' && item.content.trim() !== '') || 
+
+    const hasContent = contentItems.some(item =>
+      (item.type === 'text' && item.content.trim() !== '') ||
       item.type === 'image'
     );
-    
-    if (!hasContent) return;
-    
+
+    if (!hasContent || isSending || isAiProcessing) return;
+
     setIsSending(true);
     try {
-      // 创建头像信息对象
       const avatar = { text: avatarText, color: avatarColor };
-      
-      // 新的消息合并逻辑
       let currentTextContent = '';
-      
+
       for (let i = 0; i < contentItems.length; i++) {
         const item = contentItems[i];
-        
         if (item.type === 'text') {
-          // 收集文本内容
           if (item.content.trim() !== '') {
             currentTextContent += (currentTextContent ? '\n' : '') + item.content;
           }
         } else if (item.type === 'image' && item.file) {
-          // 如果积累了文本内容，发送文本
+          // Send pending text first
           if (currentTextContent.trim() !== '') {
             sendMessage(currentTextContent, roomId, 'text', username, avatar);
-            currentTextContent = ''; // 重置文本内容
+            currentTextContent = '';
           }
           
           try {
@@ -386,38 +372,28 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
         }
       }
       
-      // 发送剩余的文本内容
+      // Send remaining text
       if (currentTextContent.trim() !== '') {
         sendMessage(currentTextContent, roomId, 'text', username, avatar);
       }
-      
-      // 清空编辑器
+
+      // Clear editor and state
       if (editorRef.current) {
-        // 释放所有预览URL
         const images = editorRef.current.querySelectorAll('img');
-        images.forEach(img => {
-          if (img.src.startsWith('blob:')) {
-            URL.revokeObjectURL(img.src);
-          }
-        });
-        
+        images.forEach(img => { if (img.src.startsWith('blob:')) URL.revokeObjectURL(img.src); });
         editorRef.current.innerHTML = '';
       }
-      
-      // 重置状态
       setContentItems([{ type: 'text', content: '' }]);
       setImageCount(0);
       imageCountRef.current = 0;
       setErrorMessage(null);
+
     } catch (error) {
       console.error('Error sending message:', error);
+      setErrorMessage(t('errorSendingMessage') || 'Failed to send message');
     } finally {
       setIsSending(false);
-      
-      // 聚焦回输入框
-      setTimeout(() => {
-        editorRef.current?.focus();
-      }, 0);
+      setTimeout(() => editorRef.current?.focus(), 0);
     }
   };
 
@@ -633,7 +609,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
       // 单独Enter: 发送消息
       else {
         e.preventDefault();
-        handleSubmit(e);
+        handleSubmit();
       }
     }
   };
@@ -652,6 +628,46 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
     };
   }, []);
 
+  const [currentInputText, setCurrentInputText] = useState(''); // Add state to track raw text
+
+  // Update currentInputText whenever editor content changes
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    const updateTextState = () => {
+      setCurrentInputText(editor.innerText || '');
+    };
+
+    // Use MutationObserver for better real-time updates
+    const observer = new MutationObserver(() => {
+      updateTextState();
+      // Also update image count and parse content items if needed
+      const currentImageCount = editor.querySelectorAll('img').length;
+      if (currentImageCount !== imageCountRef.current) {
+        imageCountRef.current = currentImageCount;
+        setImageCount(currentImageCount);
+      }
+      parseEditorContent(); // Keep parsing for mixed content handling
+    });
+
+    observer.observe(editor, {
+      childList: true,
+      subtree: true,
+      characterData: true
+    });
+
+    editor.addEventListener('input', updateTextState); // Also listen to input event
+
+    // Initial check
+    updateTextState();
+
+    return () => {
+      observer.disconnect();
+      editor.removeEventListener('input', updateTextState);
+    };
+  }, []);
+
   return (
     <div className="relative">
       {/* 错误消息显示 */}
@@ -663,7 +679,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
         </div>
       )}
       
-      <form onSubmit={handleSubmit} className="flex flex-col w-full pb-0.5">
+      <div className="flex flex-col w-full pb-0.5">
         <div className="flex bg-content2 dark:bg-content1 rounded-lg border-1 border-content3 dark:border-content2 overflow-hidden">
           {/* 编辑区域 */}
           <div 
@@ -687,32 +703,28 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
           {/* 辅助按钮区 */}
           <div className="flex flex-col justify-between py-1 border-l-1 border-content3 dark:border-content2">
             {/* 图片上传按钮 */}
-            <Tooltip content={t('addImage')}>
-              <Button
-                isIconOnly
-                size="sm"
-                variant="light"
-                className="text-default-600"
-                onPress={() => fileInputRef.current?.click()}
-                isDisabled={imageCount >= MAX_IMAGES || isSending || isAiProcessing} // 禁用图片上传当 AI 处理中
-              >
-                <Icon icon="lucide:image" />
-              </Button>
-            </Tooltip>
-            
+            <Button
+              isIconOnly
+              size="sm"
+              variant="light"
+              className="text-default-600"
+              onPress={() => fileInputRef.current?.click()}
+              isDisabled={imageCount >= MAX_IMAGES || isSending || isAiProcessing} // 禁用图片上传当 AI 处理中
+            >
+              <Icon icon="lucide:image" />
+            </Button>
+
             {/* AI设置按钮 (原来的AI按钮) */}
-            <Tooltip content={t('aiSettings') || "AI Settings"}>
-              <Button
-                isIconOnly
-                size="sm"
-                variant="light"
-                className="text-default-600"
-                onPress={onAISettingsOpen}
-                isDisabled={isSending || isAiProcessing}
-              >
-                <Icon icon="lucide:settings-2" />
-              </Button>
-            </Tooltip>
+            <Button
+              isIconOnly
+              size="sm"
+              variant="light"
+              className="text-default-600"
+              onPress={onAISettingsOpen}
+              isDisabled={isSending || isAiProcessing}
+            >
+              <Icon icon="lucide:settings-2" />
+            </Button>
             
             {/* 隐藏的文件输入 */}
             <input
@@ -768,14 +780,16 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
               </Button>
             </Tooltip>
             
-            {/* 发送按钮 */}
+            {/* Send Button */}
             <Tooltip content={`${t('send')} (Enter)`} placement="top">
               <Button
-                type="submit"
+                type="button" // Important: Change type to button
+                onClick={handleSubmit} // Call handleSubmit without event
                 color="primary"
                 size="sm"
                 isLoading={isSending}
-                isDisabled={isAiProcessing}
+                // Disable if sending, AI processing, or no content (check images too)
+                isDisabled={isSending || isAiProcessing || (!currentInputText.trim() && imageCount === 0)}
                 className="px-4"
                 startContent={<Icon icon="lucide:send" className="h-4 w-4" />}
               >
@@ -785,8 +799,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
           </div>
         </div>
 
-      </form>
-
+      </div>
+      
       {/* 新增：AI设置模态框 */}
       <Modal isOpen={isAISettingsOpen} onClose={onAISettingsClose} size="3xl">
         <ModalContent>

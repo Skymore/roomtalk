@@ -1,9 +1,6 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Button,
-  Tabs,
-  Tab,
-  Tooltip,
 } from "@heroui/react";
 import { Icon } from "@iconify/react";
 import { useTheme } from "@heroui/use-theme";
@@ -21,7 +18,9 @@ import {
   onRoomMemberChange,
   reconnectSocket,
 } from "../utils/socket";
-import { Room, RoomMemberEvent } from "../utils/types";
+import {
+  Room, RoomMemberEvent,
+} from "../utils/types";
 import { saveRoom, removeRoom, isRoomSaved, getSavedRooms } from "../utils/storage";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -30,7 +29,7 @@ import { SettingsView } from "../components/SettingsView";
 import { ChatHeader } from "../components/ChatHeader";
 import { RoomJoinModal } from "../components/RoomJoinModal";
 import { BottomNav } from "../components/BottomNav";
-import { StatusMessage } from "../components/StatusMessage";
+import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 
 // 修改随机名字库 - 为印地语添加新的形容词和名词
 const CN_ADJECTIVES = ["可爱", "萌萌", "温柔", "活泼", "聪明", "快乐", "甜蜜", "淘气", "软软", "闪亮", "乖巧", "迷你"];
@@ -214,11 +213,12 @@ export const MessagePage: React.FC = () => {
     const storedView = getStoredView();
     return (storedView as "chat" | "rooms" | "saved" | "settings") || "rooms";
   });
-  const [error, setError] = useState<string | null>(null);
+  const [_error, setError] = useState<string | null>(null);
+  const [_success, setSuccess] = useState<string | null>(null);
+
   const [isLoadingRoom, setIsLoadingRoom] = useState(false);
   // 当 URL 参数包含房间时，先保存待确认的房间信息
   const [roomToJoin, setRoomToJoin] = useState<{ id: string; name: string } | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
   // 添加房间成员数量状态
   const [memberCount, setMemberCount] = useState<number>(0);
   // 添加最近加入/离开消息状态
@@ -425,6 +425,16 @@ export const MessagePage: React.FC = () => {
     };
   }, [currentRoom]);
 
+  // --- 添加清空聊天记录的处理函数 (Stays the same) ---
+  const handleClearChatMessages = useCallback(() => {
+    if (currentRoom) {
+      console.log(`Emitting clear_room_messages for room ${currentRoom.id}`);
+      socket.emit('clear_room_messages', currentRoom.id);
+    } else {
+      console.warn("Attempted to clear messages but no current room.");
+    }
+  }, [currentRoom]);
+
   // 直接加入房间：点击房间卡片或确认弹窗后调用
   const handleRoomSelect = async (roomId: string) => {
     // 如果已经在其他房间，则先离开
@@ -519,11 +529,86 @@ export const MessagePage: React.FC = () => {
     setTimeout(() => setSuccess(null), 2000);
   };
 
+  // 新增：处理实际删除房间的函数 (与服务器交互)
+  const handleDeleteRoom = useCallback((roomId: string) => {
+    // Check if user is the creator before sending? Optional, server validates.
+    console.log('Requesting PERMANENT delete room:', roomId);
+    socket.emit('delete_room', roomId, (response: { success: boolean; message?: string }) => {
+      if (response.success) {
+        console.log('Server confirmed PERMANENT room deletion:', roomId);
+        // No need to update savedRooms here, that's handled by unsave.
+        // The room list (`rooms` state) will be updated automatically 
+        // when the server sends the new 'room_list' event.
+        
+        // If currently in the deleted room, navigate away
+        if (currentRoom && currentRoom.id === roomId) {
+          setCurrentRoom(null);
+          setView('rooms');
+          saveCurrentRoom(null);
+          clearRoomUrlParam();
+        }
+        setSuccess(t('roomDeletedSuccess')); // Use a new key? e.g., roomDeletedPermanentlySuccess
+        setTimeout(() => setSuccess(null), 3000);
+      } else {
+        console.error('Server failed to PERMANENTLY delete room:', response.message);
+        setError(response.message || t('errorDeletingRoom')); // Use a new key? e.g., errorDeletingRoomPermanently
+      }
+    });
+  }, [currentRoom, setView, t]); // Dependencies
+
+  // 分离聊天视图的渲染逻辑
+  const renderChatView = () => {
+    if (!currentRoom) {
+        return <WelcomeView onEnterRooms={() => setView("rooms")} />;
+    }
+
+    return (
+        // Use PanelGroup for horizontal resizing
+        <PanelGroup direction="horizontal" className="flex flex-1 w-full h-full min-h-0">
+            <PanelResizeHandle className="w-px bg-violet-100 dark:bg-gray-800 hover:bg-violet-200 dark:hover:bg-gray-700 transition-colors cursor-col-resize data-[resize-handle-active]:bg-violet-400 data-[resize-handle-active]:dark:bg-violet-500"/>
+            {/* --- Right Panel: Chat Interface --- */}
+            <Panel defaultSize={50} minSize={30}>
+                <div className="flex flex-col flex-1 h-full min-h-0"> { /* Keep the right side as flex column */}
+                     <ChatHeader
+                        currentRoom={currentRoom}
+                        memberCount={memberCount}
+                        memberEvent={memberEvent}
+                        handleCopyToClipboard={handleCopyToClipboard}
+                        handleShareRoom={handleShareRoom}
+                        handleToggleSave={handleToggleSave}
+                        handleLeaveRoom={handleLeaveRoom}
+                        isRoomSaved={isRoomSaved}
+                        setView={setView}
+                        clearRoomUrlParam={clearRoomUrlParam}
+                        handleClearChatMessages={handleClearChatMessages}
+                        handleDeleteRoom={handleDeleteRoom}
+                        clientId={clientId}
+                     />
+
+                     <div className="flex-1 w-full overflow-y-auto"> {/* 消息列表区域 */} 
+                         <MessageList roomId={currentRoom.id} />
+                     </div>
+
+                     <div className="border-t p-1 flex-shrink-0 border-violet-100 dark:border-gray-800"> {/* 输入框区域 */} 
+                         <MessageInput
+                             roomId={currentRoom.id}
+                             username={username}
+                             avatarText={getAvatarText(username)}
+                             avatarColor={getAvatarColor(username)}
+                         />
+                     </div>
+                </div>
+            </Panel>
+        </PanelGroup>
+    );
+
+  }
+
   // Render content based on current view
   const renderContent = () => {
     if (isLoadingRoom) {
       return (
-        <div className="flex flex-col items-center justify-center h-full p-4">
+        <div className="flex flex-col items-center justify-center h-full p-4"> {/* 保持全屏居中 */} 
           <Icon icon="lucide:loader" className="w-16 h-16 mb-4 text-violet-500 animate-spin" />
           <h2 className="text-xl font-semibold mb-2">{t("loading")}</h2>
           <p className="text-default-500 text-center">{t("loadingDescription")}</p>
@@ -534,14 +619,24 @@ export const MessagePage: React.FC = () => {
     switch (view) {
       case "rooms":
         return (
-          <div className="h-full overflow-y-auto">
-            <RoomList rooms={rooms} onRoomSelect={handleRoomSelect} />
+          <div className="h-full overflow-y-auto"> {/* 占据全部可用空间 */} 
+            <RoomList 
+              rooms={rooms} 
+              onRoomSelect={handleRoomSelect} 
+              handleDeleteRoom={handleDeleteRoom}
+              clientId={clientId}
+              username={username}
+            />
           </div>
         );
       case "saved":
         return (
-          <div className="h-full overflow-y-auto">
-            <SavedRoomList rooms={savedRooms} onRoomSelect={handleRoomSelect} onRoomsChange={setSavedRooms} />
+          <div className="h-full overflow-y-auto"> {/* 占据全部可用空间 */} 
+            <SavedRoomList 
+              rooms={savedRooms} 
+              onRoomSelect={handleRoomSelect} 
+              onRoomsChange={setSavedRooms}
+            />
           </div>
         );
       case "settings":
@@ -560,45 +655,15 @@ export const MessagePage: React.FC = () => {
           />
         );
       case "chat":
-        if (currentRoom) {
-          return (
-            <div className="flex flex-col flex-1 w-full min-h-0">
-              <ChatHeader
-                currentRoom={currentRoom}
-                memberCount={memberCount}
-                memberEvent={memberEvent}
-                handleCopyToClipboard={handleCopyToClipboard}
-                handleShareRoom={handleShareRoom}
-                handleToggleSave={handleToggleSave}
-                handleLeaveRoom={handleLeaveRoom}
-                isRoomSaved={isRoomSaved}
-                setView={setView}
-                clearRoomUrlParam={clearRoomUrlParam}
-              />
-
-              <div className="flex-1 w-full overflow-y-auto">
-                <MessageList roomId={currentRoom.id} />
-              </div>
-
-              <div className="border-t p-1 flex-shrink-0 border-violet-100 dark:border-gray-800">
-                <MessageInput
-                  roomId={currentRoom.id}
-                  username={username}
-                  avatarText={getAvatarText(username)}
-                  avatarColor={getAvatarColor(username)}
-                />
-              </div>
-            </div>
-          );
-        }
-        return <WelcomeView onEnterRooms={() => setView("rooms")} />;
+        // 委托给新的渲染函数
+        return renderChatView();
       default:
         return <WelcomeView onEnterRooms={() => setView("rooms")} />;
     }
   };
 
   return (
-    <div className="flex flex-col h-[100dvh] overflow-hidden bg-white/60 dark:bg-gray-900/60 backdrop-blur-md">
+    <div className="flex flex-col h-screen bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100"> {/* 确保根容器是 flex 列且占满屏幕高度 */} 
       <AppHeader 
         clientId={clientId}
         username={username}
@@ -612,94 +677,25 @@ export const MessagePage: React.FC = () => {
         handleCopyToClipboard={handleCopyToClipboard}
       />
 
-      <StatusMessage error={error} setError={setError} success={success} />
+      {/* 错误和成功消息 - 暂时移除直接调用，依赖其他组件处理 */} 
+      {/* {error && <SomeErrorComponent message={error} />} */} 
+      {/* {success && <SomeSuccessComponent message={success} />} */} 
 
-      {/* Tab 切换 - 桌面版 */}
-      <div className="bg-white/60 dark:bg-gray-900/60 backdrop-blur-sm border-b border-violet-200 dark:border-gray-800 hidden md:block">
-        <div className="max-w-[1400px] mx-auto px-4">
-          <Tabs
-            selectedKey={view}
-            onSelectionChange={(key) => setView(key as "chat" | "rooms" | "saved" | "settings")}
-            className="p-2"
-            variant="light"
-            color="secondary"
-            classNames={{
-              tabList: "gap-2",
-              tab: "data-[selected=true]:bg-gradient-to-r data-[selected=true]:from-violet-500 data-[selected=true]:to-fuchsia-500 data-[selected=true]:text-white",
-              cursor: "",
-            }}
-          >
-            <Tab
-              key="rooms"
-              aria-label={t("home")}
-              title={
-                <Tooltip content={t("home")}>
-                  <div className="flex items-center gap-1">
-                    <Icon icon="lucide:home" className="text-lg" />
-                  </div>
-                </Tooltip>
-              }
-            />
-            <Tab
-              key="saved"
-              aria-label={t("savedRooms")}
-              title={
-                <Tooltip content={t("savedRooms")}>
-                  <div className="flex items-center gap-1">
-                    <Icon icon="lucide:bookmark" className="text-lg" />
-                  </div>
-                </Tooltip>
-              }
-            />
-            <Tab
-              key="settings"
-              aria-label={t("settings")}
-              title={
-                <Tooltip content={t("settings")}>
-                  <div className="flex items-center gap-1">
-                    <Icon icon="lucide:settings" className="text-lg" />
-                  </div>
-                </Tooltip>
-              }
-            />
-            {currentRoom && (
-              <Tab
-                key="chat"
-                aria-label={currentRoom.name}
-                title={
-                  <Tooltip content={currentRoom.name}>
-                    <div className="flex items-center gap-1">
-                      <Icon icon="lucide:message-circle" className="text-lg" />
-                    </div>
-                  </Tooltip>
-                }
-              />
-            )}
-          </Tabs>
-        </div>
-      </div>
-
-      {/* 主要内容区 */}
-      <main className="flex flex-col flex-1 min-h-0 pb-12 md:pb-0">
-        <div className="flex flex-1 min-h-0 w-full max-w-[1400px] mx-auto px-4">
-          <div className="flex-1 flex flex-col min-h-0">
-            {renderContent()}
-          </div>
-        </div>
+      {/* 主内容区域， flex-1 使其填充剩余空间，overflow-hidden 避免双重滚动条 */} 
+      <main className="flex-1 overflow-hidden"> 
+        {renderContent()} {/* 渲染当前视图 */} 
       </main>
 
-      {/* URL 加载房间时的确认弹窗 */}
-      <RoomJoinModal 
-        roomToJoin={roomToJoin}
-        handleConfirmJoin={handleConfirmJoin}
-      />
+      {/* 底部导航栏 - 移除 view !== "settings" 条件 */}
+      <BottomNav view={view} setView={setView} currentRoom={currentRoom} />
 
-      {/* 底部导航 - 移动端 */}
-      <BottomNav 
-        view={view}
-        setView={setView}
-        currentRoom={currentRoom}
-      />
+      {/* 加入房间确认弹窗 - 恢复之前的属性传递 */} 
+      {roomToJoin && (
+          <RoomJoinModal
+            roomToJoin={roomToJoin} // 传递整个对象
+            handleConfirmJoin={handleConfirmJoin} // 传递处理函数
+          />
+      )}
     </div>
   );
 };

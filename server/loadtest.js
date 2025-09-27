@@ -92,9 +92,6 @@ export default function () {
         } else if (msg.event === 'new_message') {
           // 处理新消息事件
           console.log(`New message: ${msg.content}`);
-        } else if (msg.event === 'room_member_count') {
-          // 处理房间成员数事件
-          console.log(`Room member count: ${msg.count}`);
         }
       });
 

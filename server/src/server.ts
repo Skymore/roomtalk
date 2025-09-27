@@ -35,7 +35,7 @@ const openai = new OpenAI({
 const DEFAULT_SYSTEM_MESSAGE = 'You are a helpful, creative, friendly assistant. Respond concisely and clearly.';
 
 // 最大上下文消息数量，避免超出 token 限制
-const MAX_CONTEXT_MESSAGES = 20;
+const MAX_CONTEXT_MESSAGES = 40;
 
 // 生成唯一房间ID并进行碰撞检测
 async function generateUniqueRoomId(redisClient: any): Promise<string> {
@@ -173,12 +173,27 @@ const io = new Server(server, {
 })();
 
 // Redis 数据存储操作
-async function saveMessage(message: Message): Promise<void> {
+async function appendMessage(message: Message): Promise<void> {
   try {
     await redisClient.rPush(`room:${message.roomId}:messages`, JSON.stringify(message));
-    redisLogger.debug('Message saved to Redis', { messageId: message.id, roomId: message.roomId });
+    redisLogger.debug('Message appended to Redis list', { messageId: message.id, roomId: message.roomId });
   } catch (error) {
-    redisLogger.error('Error saving message to Redis', { error, messageId: message.id, roomId: message.roomId });
+    redisLogger.error('Error appending message to Redis', { error, messageId: message.id, roomId: message.roomId });
+    // Consider throwing the error or handling it based on requirements
+  }
+}
+
+async function saveMessageHistory(roomId: string, messages: Message[]): Promise<void> {
+  try {
+    const messageKey = `room:${roomId}:messages`;
+    await redisClient.del(messageKey);
+    if (messages.length > 0) {
+      const messageStrings = messages.map(msg => JSON.stringify(msg));
+      await redisClient.rPush(messageKey, messageStrings);
+    }
+    redisLogger.debug('Message history saved/overwritten to Redis', { roomId, count: messages.length });
+  } catch (error) {
+    redisLogger.error('Error saving message history to Redis', { error, roomId });
   }
 }
 
@@ -212,7 +227,8 @@ async function readRoomsByUser(clientId: string): Promise<Room[]> {
       roomIds.map((id: string) => redisClient.hGet("rooms", id))
     );
     redisLogger.debug('Rooms read by user from Redis', { clientId, count: roomIds.length });
-    return rooms.map((room: string | undefined) => JSON.parse(room!));
+    // Filter out null rooms in case of deletion race conditions
+    return rooms.filter(room => room).map((room: string | undefined) => JSON.parse(room!)); 
   } catch (error) {
     redisLogger.error('Error reading rooms for user from Redis', { error, clientId });
     return [];
@@ -454,9 +470,6 @@ io.on('connection', (socket: Socket) => {
     // 发送房间消息历史
     const roomMessages = await readMessagesByRoom(roomId);
     socket.emit('message_history', roomMessages);
-    
-    // 发送当前房间成员数
-    socket.emit('room_member_count', { roomId, count: memberCount });
   });
 
   // 离开房间
@@ -534,7 +547,9 @@ io.on('connection', (socket: Socket) => {
     const loggableMessage = socketLogger.formatMessageForLog(message);
     socketLogger.info('Received WebSocket message', loggableMessage);
     
-    await saveMessage(message);
+    // === 使用 appendMessage 保存新消息 ===
+    await appendMessage(message); // Use appendMessage here
+    
     io.to(messageData.roomId).emit('new_message', message);
   });
 
@@ -594,7 +609,7 @@ io.on('connection', (socket: Socket) => {
         username: payload.username,
         avatar: payload.avatar
       };
-      await saveMessage(message);
+      await appendMessage(message);
       io.to(session.roomId).emit('new_message', message);
       socketLogger.info('Completed image upload and processed message', { fileId: payload.fileId, roomId: session.roomId, clientId: session.clientId });
     } catch (err) {
@@ -606,37 +621,38 @@ io.on('connection', (socket: Socket) => {
   });
   // ----------------- 结束分段上传事件 -----------------
 
-  // ----------------- 修改：处理 AI 请求事件 (集成 OpenAI) -----------------
-  socket.on('ask_ai', async (data: { 
-    roomId: string; 
-    prompt: string; 
+  // --- Modified: Handle AI request using history context --- 
+  socket.on('ask_ai', async (data: {
+    roomId: string;
     systemPrompt?: string;
     roleName?: string;
+    editedMessageId?: string; // ID of the message that was just edited
+    retryForMessageId?: string; // ID of the AI message to retry generating
   }) => {
     const clientId = await getClientId(socket.id);
     if (!clientId) {
       socket.emit('error', { message: 'You are not registered' });
       return;
     }
-    if (!data.roomId || !data.prompt) {
-      socket.emit('error', { message: 'Room ID and prompt are required for AI request' });
+    if (!data.roomId) {
+      socket.emit('error', { message: 'Room ID is required for AI request' });
       return;
     }
 
-    const { roomId, prompt, systemPrompt = DEFAULT_SYSTEM_MESSAGE, roleName = 'AI Assistant' } = data;
-    socketLogger.info('Received AI request (streaming)', { 
-      socketId: socket.id, 
-      clientId, 
-      roomId, 
-      promptLength: prompt.length,
-      roleName 
+    const { roomId, systemPrompt = DEFAULT_SYSTEM_MESSAGE, roleName = 'AI Assistant', editedMessageId, retryForMessageId } = data;
+
+    socketLogger.info(`Received AI request (history-based)${editedMessageId ? ' after edit ' + editedMessageId : ''}${retryForMessageId ? ' as retry for ' + retryForMessageId : ''}`, {
+      socketId: socket.id,
+      clientId,
+      roomId,
+      roleName
     });
 
-    // 创建头像和用户名（基于角色）
+    // 创建头像和用户名
     const aiAvatar = { text: 'AI', color: 'secondary' };
     const aiUsername = roleName || 'AI Assistant';
 
-    // 1. 创建初始 AI 消息结构
+    // 1. 创建初始 AI 消息结构 (给客户端占位)
     const aiMessageId = uuidv4();
     const initialAiMessage: Message = {
       id: aiMessageId,
@@ -649,129 +665,390 @@ io.on('connection', (socket: Socket) => {
       avatar: aiAvatar,
       status: 'streaming'
     };
+    io.to(roomId).emit('new_message', initialAiMessage); // 发送占位消息
 
-    // 2. 发送初始消息结构给客户端，让其准备接收流
-    io.to(roomId).emit('new_message', initialAiMessage);
-
-    // 3. 获取上下文消息（当前房间的最近消息历史）
+    // 2. 获取并处理上下文消息
     let contextMessages: Message[] = [];
+    let historyUsedForContext: Message[] = [];
+
     try {
-      // 读取房间历史消息
-      const allMessages = await readMessagesByRoom(roomId);
-      
-      // 过滤掉图片消息，只保留文本消息
-      contextMessages = allMessages
-        .filter(msg => msg.messageType === 'text' || msg.messageType === 'ai')
-        .slice(-MAX_CONTEXT_MESSAGES); // 只取最近的 MAX_CONTEXT_MESSAGES 条消息
-      
-      openaiLogger.debug('Loaded context messages', { 
-        roomId, 
-        contextMessageCount: contextMessages.length 
-      });
+      const fullHistory = await readMessagesByRoom(roomId);
+      historyUsedForContext = fullHistory; // 默认使用完整历史
+
+      // 处理重试：截断到重试消息之前
+      if (retryForMessageId) {
+        const retryIndex = historyUsedForContext.findIndex(msg => msg.id === retryForMessageId);
+        if (retryIndex !== -1) {
+          openaiLogger.info('Truncating message history for retry', { roomId, retryForMessageId, originalCount: historyUsedForContext.length, newCount: retryIndex });
+          historyUsedForContext = historyUsedForContext.slice(0, retryIndex);
+        } else {
+          openaiLogger.warn('Retry message ID not found in history, using full history', { roomId, retryForMessageId });
+        }
+      }
+      // 处理编辑：截断到编辑消息（包含）
+      else if (editedMessageId) {
+        const editIndex = historyUsedForContext.findIndex(msg => msg.id === editedMessageId);
+        if (editIndex !== -1) {
+          openaiLogger.info('Truncating message history after edit', { roomId, editedMessageId, originalCount: historyUsedForContext.length, newCount: editIndex + 1 });
+          historyUsedForContext = historyUsedForContext.slice(0, editIndex + 1);
+        } else {
+          openaiLogger.warn('Edited message ID not found in history, using full history', { roomId, editedMessageId });
+        }
+      }
+      // 普通请求：historyUsedForContext 保持为 fullHistory
+
+      // 检查处理后的历史记录是否为空（比如重试第一条消息）
+      if (historyUsedForContext.length === 0) {
+           // 对于普通请求，客户端应该已经发送了第一条消息，所以这里通常只会在重试空历史时发生
+           openaiLogger.warn('History for context is empty after processing.', { roomId, editedMessageId, retryForMessageId });
+           // 即使历史为空，我们仍然可以尝试调用 OpenAI，仅使用系统提示
+           // 如果 OpenAI 需要至少一条 user/assistant 消息，它会报错，错误处理逻辑会捕获
+      }
+
+      // 处理提示和控制消息，并从上下文中移除
+      const processedMessages: Message[] = [];
+      for (const msg of historyUsedForContext) {
+        // 普通消息
+        processedMessages.push(msg);
+      }
+
+      // 应用 MAX_CONTEXT_MESSAGES 限制
+      if (processedMessages.length > MAX_CONTEXT_MESSAGES) {
+        contextMessages = processedMessages.slice(-MAX_CONTEXT_MESSAGES);
+        openaiLogger.debug('Applying MAX_CONTEXT limit to determined history', {
+          roomId,
+          originalCount: processedMessages.length,
+          limitedCount: contextMessages.length
+        });
+      } else {
+        contextMessages = processedMessages;
+      }
+
     } catch (error) {
-      openaiLogger.error('Error loading context messages', { error, roomId });
-      // 出错时继续，但没有上下文
-      contextMessages = [];
+      openaiLogger.error('Error loading/processing context messages', { error, roomId });
+      contextMessages = []; // 出错时继续，但没有上下文
+      // 即使加载历史出错，我们仍然可以尝试仅用系统提示调用 OpenAI
     }
 
-    // 4. 调用 OpenAI API
+    openaiLogger.debug("contextMessages", contextMessages);
+
+    // 3. 调用 OpenAI API
     try {
-      // 准备消息格式
-      const messages = [
-        { role: 'system', content: systemPrompt || DEFAULT_SYSTEM_MESSAGE },
-        
-        // 添加上下文消息
+      // 准备消息格式 - 不再需要 finalPrompt
+      const messagesForAPI = [
+        { role: 'system', content: systemPrompt },
+        // 直接映射处理后的上下文历史
         ...contextMessages.map(msg => {
-          const role = msg.clientId === 'ai_assistant' ? 'assistant' : 'user';
-          const namePrefix = msg.clientId !== 'ai_assistant' && msg.username ? `${msg.username}: ` : '';
-          return { 
-            role, 
-            content: namePrefix + msg.content 
-          };
-        }),
-        
-        // 添加当前用户问题
-        { role: 'user', content: prompt }
+            if (msg.messageType === 'image') {
+              const formatedImageUrl = msg.content.startsWith('data:')
+                            ? msg.content
+                            : `data:${msg.mimeType || 'image/png'};base64,${msg.content}`;
+              return {
+                role: msg.clientId === 'ai_assistant' ? 'assistant' : 'user', // Corrected based on previous fix
+                content: [
+                  {
+                    type: "image_url",
+                    image_url: {
+                      url: formatedImageUrl,
+                      detail: "auto"
+                    }
+                  }
+                ]
+              };
+            } else {
+              // 文本或AI消息
+              return {
+                role: msg.clientId === 'ai_assistant' ? 'assistant' : 'user', // Corrected based on previous fix
+                content: msg.content
+              };
+            }
+        })
       ];
+
+      // 过滤掉空的 content 消息
+      const validMessagesForAPI = messagesForAPI.filter(msg => {
+          if (Array.isArray(msg.content)) {
+             return msg.content.length > 0 && msg.content.every(item => item.type === 'image_url' && item.image_url?.url);
+          }
+          return typeof msg.content === 'string' && msg.content.trim() !== '';
+      });
+
+      // 确保至少有一条 user 或 assistant 消息（如果 context 为空，这里会阻止调用）
+      const hasUserOrAssistantMessage = validMessagesForAPI.some(msg => msg.role === 'user' || msg.role === 'assistant');
+      if (!hasUserOrAssistantMessage && validMessagesForAPI.length <= 1) {
+        openaiLogger.error('Cannot call OpenAI API without user or assistant messages in context.', { roomId });
+        io.to(roomId).emit('ai_stream_error', {
+          messageId: aiMessageId,
+          error: 'Sorry, cannot generate a response without any context or question.',
+          roomId
+        });
+        // 清理掉已发送的占位消息 (可选，或者让它显示错误)
+         saveMessageHistory(roomId, historyUsedForContext).catch(err => openaiLogger.error('Failed to save history after empty context error', { error: err }));
+        return; 
+      }
+
+      openaiLogger.debug('Sending messages to OpenAI (history-based)', { messages: validMessagesForAPI, contextLengthUsed: contextMessages.length });
 
       // 创建流式请求
       const stream = await openai.chat.completions.create({
-        model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
-        messages: messages as any,
+        model: process.env.OPENAI_MODEL || 'gpt-4',
+        messages: validMessagesForAPI as any,
         stream: true,
         temperature: 1,
       });
 
       let fullContent = '';
-
-      // 逐块处理流式响应
       for await (const chunk of stream) {
-        if (chunk.choices[0]?.delta?.content) {
-          const contentChunk = chunk.choices[0].delta.content;
-          fullContent += contentChunk;
-          
-          // 发送数据块给客户端
-          io.to(roomId).emit('ai_chunk', {
-            messageId: aiMessageId,
-            chunk: contentChunk,
-          });
-          
-          // 限制日志量，只记录简短的调试信息
-          if (fullContent.length % 100 === 0) {
-            openaiLogger.debug('Streaming AI chunk', { 
-              messageId: aiMessageId, 
-              contentLength: fullContent.length 
-            });
-          }
+           if (chunk.choices[0]?.delta?.content) {
+              const contentChunk = chunk.choices[0].delta.content;
+              fullContent += contentChunk;
+              io.to(roomId).emit('ai_chunk', { messageId: aiMessageId, chunk: contentChunk, roomId });
+              if (fullContent.length % 100 === 0) {
+                openaiLogger.debug('Streaming AI chunk', { messageId: aiMessageId, contentLength: fullContent.length });
+              }
+            }
         }
-      }
 
-      // 通知客户端流结束
-      io.to(roomId).emit('ai_stream_end', { messageId: aiMessageId });
-      openaiLogger.info('AI stream ended', { 
-        messageId: aiMessageId, 
-        contentLength: fullContent.length 
-      });
+      io.to(roomId).emit('ai_stream_end', { messageId: aiMessageId, roomId });
+      openaiLogger.info('AI stream ended', { messageId: aiMessageId, contentLength: fullContent.length });
 
-      // 流结束后，保存完整消息到 Redis
-      const finalMessage: Message = {
+      // --- 保存最终的 AI 消息和它所基于的上下文 --- 
+      const finalAiMessage: Message = {
         ...initialAiMessage,
         content: fullContent,
         status: 'complete',
         timestamp: new Date().toISOString(),
       };
-      
-      // 保存最终消息
-      saveMessage(finalMessage).then(() => {
-        openaiLogger.info('Saved final AI message to Redis', { messageId: aiMessageId });
+      // 将新 AI 消息附加到 *用于生成它* 的上下文历史后面
+      const finalHistoryToSave = [...contextMessages, finalAiMessage];
+
+      // 保存这个新的历史状态回 Redis
+      saveMessageHistory(roomId, finalHistoryToSave).then(() => {
+        openaiLogger.info('Saved final AI message and its context history to Redis', {
+          messageId: aiMessageId,
+          historyLength: finalHistoryToSave.length,
+          contextLengthUsed: contextMessages.length
+        });
       }).catch(err => {
-        openaiLogger.error('Failed to save AI message to Redis', { error: err, messageId: aiMessageId });
+        openaiLogger.error('Failed to save final AI history to Redis', { error: err, messageId: aiMessageId });
       });
+      // --- End Save Logic --- 
 
     } catch (error) {
-      socketLogger.error('Error processing AI stream request', { 
-        error: error instanceof Error ? error.message : error, 
-        socketId: socket.id, 
-        clientId, 
-        roomId 
-      });
-      
-      // 发送错误信息给客户端
-      io.to(roomId).emit('ai_stream_error', {
-        messageId: aiMessageId,
-        error: 'Sorry, an error occurred while generating the AI response.',
-      });
+        socketLogger.error('Error processing AI stream request', {
+          error: error instanceof Error ? error.message : error,
+          socketId: socket.id,
+          clientId,
+          roomId
+        });
+        io.to(roomId).emit('ai_stream_error', {
+          messageId: aiMessageId,
+          error: 'Sorry, an error occurred while generating the AI response.',
+          roomId
+        });
+       // 可以在这里更新 Redis 中占位消息的状态为 error (可选)
+       const errorAiMessage: Message = { ...initialAiMessage, status: 'error', content: 'Error generating response.' };
+       saveMessageHistory(roomId, [...contextMessages, errorAiMessage]).catch(err => openaiLogger.error('Failed to save error AI history', { error: err }));
     }
   });
-  // ----------------- 结束处理 AI 请求事件 -----------------
+  // --- End Modified ask_ai ---
+
+  // --- New: Handle Edit Message --- 
+  socket.on('edit_message', async (data: { roomId: string; messageId: string; newContent: string }, callback?: (response: { success: boolean; updatedMessage?: Message; error?: string }) => void) => {
+    const clientId = await getClientId(socket.id); // Still get clientId for logging/context
+    if (!clientId) {
+      return callback?.({ success: false, error: 'Not registered' });
+    }
+    if (!data.roomId || !data.messageId || typeof data.newContent !== 'string') {
+      return callback?.({ success: false, error: 'Missing required fields' });
+    }
+
+    socketLogger.info('Received edit message request', { ...data, editorClientId: clientId }); // Log who initiated the edit
+
+    try {
+      const messages = await readMessagesByRoom(data.roomId);
+      const messageIndex = messages.findIndex(m => m.id === data.messageId);
+
+      if (messageIndex === -1) {
+        return callback?.({ success: false, error: 'Message not found' });
+      }
+
+      const messageToEdit = messages[messageIndex];
+      
+      // 移除限制，允许编辑所有类型的消息（包括AI消息）
+      // 原来有文本类型检查: if (messageToEdit.messageType !== 'text') { ... }
+
+      // Update message content and timestamp
+      const updatedMessage: Message = {
+        ...messageToEdit,
+        content: data.newContent,
+        timestamp: new Date().toISOString(), // Update timestamp on edit
+      };
+      messages[messageIndex] = updatedMessage;
+
+      // Save the entire updated history back to Redis
+      await saveMessageHistory(data.roomId, messages);
+
+      // Broadcast the update to the room
+      io.to(data.roomId).emit('message_edited', updatedMessage);
+      socketLogger.info('Message edited successfully', { messageId: data.messageId, roomId: data.roomId, editorClientId: clientId });
+
+      // Send success back to the sender (including the updated message)
+      callback?.({ success: true, updatedMessage });
+
+    } catch (error) {
+      socketLogger.error('Error editing message', { error, ...data, editorClientId: clientId });
+      callback?.({ success: false, error: 'Server error while editing message' });
+    }
+  });
+  // --- End Edit Message --- 
+
+  // --- New: Handle Delete Message --- 
+  socket.on('delete_message', async (data: { roomId: string; messageId: string }, callback?: (response: { success: boolean; error?: string }) => void) => {
+    const clientId = await getClientId(socket.id); // Still get clientId for logging/context
+    if (!clientId) {
+      return callback?.({ success: false, error: 'Not registered' });
+    }
+    if (!data.roomId || !data.messageId) {
+      return callback?.({ success: false, error: 'Missing required fields' });
+    }
+
+    socketLogger.info('Received delete message request', { ...data, deleterClientId: clientId }); // Log who initiated delete
+
+    try {
+      const messages = await readMessagesByRoom(data.roomId);
+      const messageIndex = messages.findIndex(m => m.id === data.messageId);
+
+      if (messageIndex === -1) {
+        socketLogger.warn('Attempted to delete message not found', { ...data, deleterClientId: clientId });
+        return callback?.({ success: true }); 
+      }
+
+      // Filter out the message
+      const updatedMessages = messages.filter(m => m.id !== data.messageId);
+
+      // Save the updated history back to Redis
+      await saveMessageHistory(data.roomId, updatedMessages);
+
+      // Broadcast the deletion to the room
+      io.to(data.roomId).emit('message_deleted', data.messageId, data.roomId);
+      socketLogger.info('Message deleted successfully', { messageId: data.messageId, roomId: data.roomId, deleterClientId: clientId });
+
+      // Send success back to the sender
+      callback?.({ success: true });
+
+    } catch (error) {
+      socketLogger.error('Error deleting message', { error, ...data, deleterClientId: clientId });
+      callback?.({ success: false, error: 'Server error while deleting message' });
+    }
+  });
+  // --- End Delete Message --- 
+
+  // --- 新增：处理清空房间消息事件 ---
+  socket.on('clear_room_messages', async (roomId: string) => {
+    const clientId = await getClientId(socket.id);
+    if (!clientId) {
+      socketLogger.warn('Unregistered client tried to clear messages', { socketId: socket.id, roomId });
+      socket.emit('error', { message: 'You are not registered' });
+      return;
+    }
+    if (!roomId) {
+      socketLogger.warn('Client tried to clear messages without room ID', { socketId: socket.id, clientId });
+      socket.emit('error', { message: 'Room ID is required' });
+      return;
+    }
+
+    // TODO: Add permission check here if needed (e.g., only creator can clear)
+
+    try {
+      const messageKey = `room:${roomId}:messages`;
+      const result = await redisClient.del(messageKey);
+      if (result > 0) {
+        socketLogger.info('Cleared room messages from Redis', { socketId: socket.id, clientId, roomId });
+        // 向房间内所有客户端广播消息已清空事件
+        io.to(roomId).emit('messages_cleared', roomId);
+      } else {
+        socketLogger.debug('No messages to clear or key did not exist', { socketId: socket.id, clientId, roomId });
+        // 即使没有消息删除，也通知客户端刷新状态，确保UI一致
+        io.to(roomId).emit('messages_cleared', roomId);
+      }
+    } catch (error) {
+      socketLogger.error('Error clearing room messages from Redis', { error, socketId: socket.id, clientId, roomId });
+      socket.emit('error', { message: 'Failed to clear room messages' });
+    }
+  });
+  // --- 结束：处理清空房间消息事件 ---
+
+  // --- 新增：处理删除房间事件 ---
+  socket.on('delete_room', async (roomId: string, callback?: (result: { success: boolean; message?: string }) => void) => {
+    const clientId = await getClientId(socket.id);
+    if (!clientId) {
+      socketLogger.warn('Unregistered client tried to delete room', { socketId: socket.id, roomId });
+      if (callback) callback({ success: false, message: 'You are not registered' });
+      return;
+    }
+    if (!roomId) {
+      socketLogger.warn('Client tried to delete room without room ID', { socketId: socket.id, clientId });
+      if (callback) callback({ success: false, message: 'Room ID is required' });
+      return;
+    }
+
+    try {
+      const room = await getRoomById(roomId);
+      if (!room) {
+        socketLogger.warn('Attempted to delete non-existent room', { socketId: socket.id, clientId, roomId });
+        if (callback) callback({ success: false, message: 'Room not found' });
+        return;
+      }
+
+      // 权限检查：只有创建者可以删除
+      if (room.creatorId !== clientId) {
+        socketLogger.warn('Unauthorized attempt to delete room', { socketId: socket.id, clientId, roomId, creatorId: room.creatorId });
+        if (callback) callback({ success: false, message: 'You are not authorized to delete this room' });
+        return;
+      }
+
+      socketLogger.info('Attempting to delete room', { socketId: socket.id, clientId, roomId, roomName: room.name });
+
+      // 执行删除操作
+      const deletePromises = [
+        redisClient.hDel("rooms", roomId),               // 删除房间详情
+        redisClient.del(`room:${roomId}:messages`),      // 删除房间消息
+        redisClient.del(`room:${roomId}:members`),       // 删除房间成员列表
+        redisClient.sRem(`user:${clientId}:rooms`, roomId) // 从创建者列表中移除
+      ];
+
+      await Promise.all(deletePromises);
+
+      socketLogger.info('Room deleted successfully', { socketId: socket.id, clientId, roomId });
+
+      // 向创建者发送更新后的房间列表 (重要：要发送给 clientId 对应的所有 socket 连接)
+      const userSockets = await io.in(clientId).allSockets(); 
+      const updatedRooms = await readRoomsByUser(clientId);
+      userSockets.forEach(sid => {
+        io.to(sid).emit('room_list', updatedRooms);
+      });
+      
+      if (callback) callback({ success: true });
+
+    } catch (error) {
+      socketLogger.error('Error deleting room', { 
+         error: error instanceof Error ? error.message : String(error), 
+         stack: error instanceof Error ? error.stack : undefined,
+         socketId: socket.id, 
+         clientId, 
+         roomId 
+      });
+      if (callback) callback({ success: false, message: 'Failed to delete room due to server error' });
+    }
+  });
+  // --- 结束：处理删除房间事件 ---
 
   // 断开连接时清理数据
-  socket.on('disconnect', async () => {
+  socket.on('disconnect', async (reason: string) => {
     const userId = await getClientId(socket.id);
-    socketLogger.info('Socket disconnected', { socketId: socket.id, userId });
-    
-    // 处理用户离开所有加入的房间
     if (userId) {
+      socketLogger.info('Client disconnected', { socketId: socket.id, userId, reason });
       const rooms = await getUserRooms(socket.id);
       for (const roomId of rooms) {
         const memberCount = await updateRoomMemberCount(roomId, userId, false);
@@ -782,14 +1059,14 @@ io.on('connection', (socket: Socket) => {
           action: 'leave',
           timestamp: new Date().toISOString()
         };
-        socketLogger.debug('User left room due to disconnect', { socketId: socket.id, userId, roomId, memberCount });
         io.to(roomId).emit('room_member_change', leaveEvent);
+        socketLogger.debug('Client left room due to disconnect', { socketId: socket.id, userId, roomId, memberCount });
       }
+      await removeClientSession(socket.id);
+      await storeUserRooms(socket.id, []);
+    } else {
+      socketLogger.info(`Unidentified socket disconnected: ${socket.id}`, { reason });
     }
-    
-    // 清理会话数据
-    await removeClientSession(socket.id);
-    await storeUserRooms(socket.id, []);
   });
   
   // -----------------------------------
@@ -891,7 +1168,7 @@ app.post('/api/rooms/:roomId/messages', async (req: Request, res: Response) => {
   const loggableMessage = routeLogger.formatMessageForLog(message);
   routeLogger.info('Received HTTP API message', { ...loggableMessage, ip: req.ip });
   
-  await saveMessage(message);
+  await appendMessage(message);
   io.to(roomId).emit('new_message', message);
   res.status(201).json(message);
 });
