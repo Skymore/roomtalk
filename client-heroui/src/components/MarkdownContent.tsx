@@ -159,38 +159,60 @@ useEffect(() => {
 
   if (language === "mermaid") {
     return (
-      <div className="border border-gray-600 rounded overflow-hidden mb-2">
+      <div className="border border-gray-600 rounded overflow-hidden mb-2 max-w-full min-w-0">
         <div className="flex items-center justify-between bg-gray-800 text-gray-300 px-2 py-1">
           <span className="text-xs uppercase">{language}</span>
           <button onClick={handleCopy} className="text-xs">
             {copied ? "Copied" : "Copy"}
           </button>
         </div>
-        <div ref={containerRef} className="p-2 bg-white dark:bg-gray-800" />
+        <div
+          ref={containerRef}
+          className="p-2 bg-white dark:bg-gray-800 
+                     whitespace-pre-wrap break-all"
+        />
       </div>
     );
   }
 
   // 普通代码高亮
   return (
-    <div className="border border-gray-600 rounded overflow-hidden mb-2">
+    // Outer container for border and header
+    <div className="border border-gray-600 rounded overflow-hidden mb-2 max-w-full min-w-0">
+      {/* Header */}
       <div className="flex items-center justify-between bg-gray-800 text-gray-300 px-2 py-1">
         <span className="text-xs uppercase">{language}</span>
         <button onClick={handleCopy} className="text-xs">
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
-      <SyntaxHighlighter
-        language={language}
-        style={themeDark ? oneDark : oneLight}
-        showLineNumbers
-        wrapLines
-        customStyle={{
-          margin: '0px',
-        }}
-      >
-        {code}
-      </SyntaxHighlighter>
+
+      {/* Add this wrapper div for horizontal scrolling */}
+      <div
+        className="overflow-x-auto bg-white dark:bg-gray-800 
+                   whitespace-pre-wrap break-all"
+      > {/* Apply background here too */}
+        <SyntaxHighlighter
+          language={language}
+          style={themeDark ? oneDark : oneLight}
+          showLineNumbers
+          wrapLines={true} // Keep wrapLines for better readability within the scrollable area
+          customStyle={{
+            margin: '0',      // Remove default margins
+            padding: '0.5rem', // Add some internal padding
+            // Ensure background matches the theme if not inherited correctly
+            // background: 'transparent', // Or set specific theme background
+            boxSizing: 'border-box',
+            // Let highlighter itself inherit pre-wrap
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-all',
+          }}
+          // Optional: If styles conflict, force pre tag to behave like a block
+          // PreTag="div"
+        >
+          {code}
+        </SyntaxHighlighter>
+      </div>
     </div>
   );
 });
@@ -251,7 +273,7 @@ const ContentActionButtons: React.FC<{ content: string }> = memo(({ content }) =
         onClick={onClick}
         disabled={disabled}
         className={
-          `p-1 rounded-full transition active:scale-95 ` +
+          `p-0.5 rounded-full transition active:scale-95 ` +
           (disabled
             ? "opacity-40 cursor-not-allowed"
             : `hover:bg-gray-200 dark:hover:bg-gray-700 ${isActive ? "text-blue-500" : "text-gray-500"}`)
@@ -263,7 +285,7 @@ const ContentActionButtons: React.FC<{ content: string }> = memo(({ content }) =
     </Tooltip>
   );
   return (
-    <div className="flex items-center gap-4 mt-2">
+    <div className="flex items-center gap-3 mt-1">
       {renderButton({
         onClick: handleCopyRaw,
         icon: <Icon icon="lucide:copy" />,
@@ -317,7 +339,7 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content }
   };
 
   return (
-    <div className="markdown-container prose dark:prose-invert max-w-full">
+    <div className="markdown-container prose prose-sm dark:prose-invert max-w-full">
       <Markdown options={mdOptions}>{processed}</Markdown>
       <ContentActionButtons content={content} />
     </div>

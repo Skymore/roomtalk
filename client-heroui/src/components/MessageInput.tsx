@@ -1,9 +1,24 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Button } from '@heroui/react';
+import {
+  Button,
+  Card,
+  Tooltip,
+  useDisclosure,
+  Modal,
+  ModalContent,
+  ModalHeader,
+  ModalBody,
+  ModalFooter,
+  Select,
+  SelectItem,
+  Tabs,
+  Tab,
+} from "@heroui/react";
 import { Icon } from '@iconify/react';
-import { sendMessage } from '../utils/socket';
+import { sendMessage, socket } from '../utils/socket';
 import { useTranslation } from 'react-i18next';
 import imageCompression from 'browser-image-compression';
+import { AIRole, AIRoleManager, getSavedAIRoles, saveAIRoles } from './AIRoleManager';
 
 interface MessageInputProps {
   roomId: string;
@@ -37,6 +52,41 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
   const MAX_IMAGES = 9;
   const INITIAL_PASTE_THROTTLE_MS = 200; // 首次粘贴间隔限制(毫秒)
   const SUBSEQUENT_PASTE_THROTTLE_MS = 50; // 后续粘贴间隔限制(毫秒)
+  const [isAiProcessing, setIsAiProcessing] = useState(false); // 新增: 跟踪 AI 处理状态
+  
+  // 检测是否为移动设备
+  const [_isMobile, setIsMobile] = useState(false);
+  // 检测操作系统类型
+  const [isMacOS, setIsMacOS] = useState(false);
+  
+  // 检测设备和操作系统类型
+  useEffect(() => {
+    // 检测移动设备
+    const checkMobile = () => {
+      const userAgent = navigator.userAgent || navigator.vendor || (window as any).opera;
+      return /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(userAgent.toLowerCase());
+    };
+    
+    // 检测 macOS
+    const checkMacOS = () => {
+      return navigator.platform.toLowerCase().includes('mac');
+    };
+    
+    setIsMobile(checkMobile());
+    setIsMacOS(checkMacOS());
+  }, []);
+
+  // 新增 AI 角色相关状态
+  const [aiRoles, setAiRoles] = useState<AIRole[]>(getSavedAIRoles());
+  const [selectedRoleId, setSelectedRoleId] = useState<string>('default');
+  
+  // 新增角色设置模态框的状态
+  const { isOpen: isAISettingsOpen, onOpen: onAISettingsOpen, onClose: onAISettingsClose } = useDisclosure();
+
+  // 在组件加载时从本地存储获取AI角色
+  useEffect(() => {
+    setAiRoles(getSavedAIRoles());
+  }, []);
 
   // 清除错误信息的定时器
   useEffect(() => {
@@ -151,7 +201,121 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
     setContentItems(newItems);
   };
 
-  // 发送消息
+  // 获取当前选中的AI角色
+  const getSelectedRole = (): AIRole => {
+    return aiRoles.find(role => role.id === selectedRoleId) || aiRoles[0];
+  };
+
+  // 处理AI角色变更
+  const handleRoleChange = (roleId: string) => {
+    setSelectedRoleId(roleId);
+  };
+
+  // 添加新的AI角色
+  const handleAddRole = (newRole: AIRole) => {
+    const updatedRoles = [...aiRoles, newRole];
+    setAiRoles(updatedRoles);
+    saveAIRoles(updatedRoles);
+    setSelectedRoleId(newRole.id);
+  };
+
+  // 更新现有AI角色
+  const handleUpdateRole = (updatedRole: AIRole) => {
+    const updatedRoles = aiRoles.map(role => 
+      role.id === updatedRole.id ? updatedRole : role
+    );
+    setAiRoles(updatedRoles);
+    saveAIRoles(updatedRoles);
+  };
+
+  // 删除AI角色
+  const handleDeleteRole = (roleId: string) => {
+    // 不允许删除所有角色，至少保留一个
+    if (aiRoles.length <= 1) return;
+    
+    const updatedRoles = aiRoles.filter(role => role.id !== roleId);
+    setAiRoles(updatedRoles);
+    saveAIRoles(updatedRoles);
+    
+    // 如果删除的是当前选中的角色，则选择第一个角色
+    if (roleId === selectedRoleId) {
+      setSelectedRoleId(updatedRoles[0].id);
+    }
+  };
+
+  // 发送AI消息的新方法
+  const handleAskAI = async () => {
+    parseEditorContent();
+    
+    // 检查是否有内容可发送
+    const hasContent = contentItems.some(item => 
+      (item.type === 'text' && item.content.trim() !== '') || 
+      item.type === 'image'
+    );
+    
+    if (!hasContent) return;
+    
+    setIsAiProcessing(true);
+    try {
+      // 创建头像信息对象
+      const avatar = { text: avatarText, color: avatarColor };
+      
+      // 收集所有文本内容
+      let prompt = contentItems
+        .filter(item => item.type === 'text')
+        .map(item => item.content.trim())
+        .filter(content => content !== '')
+        .join('\n');
+      
+      if (!prompt) {
+        setErrorMessage(t('emptyPrompt'));
+        return;
+      }
+      
+      // 获取选中的AI角色
+      const selectedRole = getSelectedRole();
+      
+      // 发送用户问题作为普通消息
+      sendMessage(prompt, roomId, 'text', username, avatar);
+      
+      // 触发AI请求，发送带角色信息的请求
+      socket.emit('ask_ai', { 
+        roomId, 
+        prompt,
+        systemPrompt: selectedRole.systemPrompt,
+        roleName: selectedRole.name 
+      });
+      
+      console.log('Sent AI request with role:', selectedRole.name);
+      
+      // 清空编辑器
+      if (editorRef.current) {
+        // 释放所有预览URL
+        const images = editorRef.current.querySelectorAll('img');
+        images.forEach(img => {
+          if (img.src.startsWith('blob:')) {
+            URL.revokeObjectURL(img.src);
+          }
+        });
+        
+        editorRef.current.innerHTML = '';
+      }
+      
+      // 重置状态
+      setContentItems([{ type: 'text', content: '' }]);
+      setImageCount(0);
+      imageCountRef.current = 0;
+      
+    } catch (error) {
+      console.error('Error sending AI request:', error);
+      setErrorMessage(t('errorSendingAiRequest'));
+    } finally {
+      setIsAiProcessing(false);
+    }
+  };
+
+  // 修改原来的handleSubmit方法，移除AI请求相关的代码
+  // 只保留普通消息的发送逻辑
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -183,7 +347,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
             currentTextContent += (currentTextContent ? '\n' : '') + item.content;
           }
         } else if (item.type === 'image' && item.file) {
-          // 如果积累了文本内容，先发送文本
+          // 如果积累了文本内容，发送文本
           if (currentTextContent.trim() !== '') {
             sendMessage(currentTextContent, roomId, 'text', username, avatar);
             currentTextContent = ''; // 重置文本内容
@@ -456,9 +620,21 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
 
   // 处理回车事件
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSubmit(e);
+    if (e.key === 'Enter') {
+      // Shift+Enter: 默认行为（换行）
+      if (e.shiftKey) {
+        return; // 允许默认的换行行为
+      }
+      // Mac用Command+Enter, Windows用Ctrl+Enter: 询问AI
+      else if ((isMacOS && e.metaKey) || (!isMacOS && e.ctrlKey)) {
+        e.preventDefault();
+        handleAskAI();
+      }
+      // 单独Enter: 发送消息
+      else {
+        e.preventDefault();
+        handleSubmit(e);
+      }
     }
   };
 
@@ -477,78 +653,165 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
   }, []);
 
   return (
-    <form onSubmit={handleSubmit} className="p-2">
-      <div className="flex flex-col">
-        <div 
-          ref={editorRef}
-          contentEditable={!isSending}
-          className="min-h-16 max-h-60 overflow-y-auto overflow-x-hidden w-full p-2 border border-default-200 rounded-lg focus:border-primary focus:outline-none"
-          onPaste={handlePaste}
-          onKeyDown={handleKeyDown}
-          data-placeholder={t('typeMessage')}
-          style={{
-            lineHeight: '1.5',
-            whiteSpace: 'pre-wrap',
-          }}
-          role="textbox"
-          aria-label={t('messageInput')}
-          aria-multiline="true"
-          title={t('messageInput')}
-        />
+    <div className="relative">
+      {/* 错误消息显示 */}
+      {errorMessage && (
+        <div className="absolute -top-10 left-0 right-0 flex justify-center">
+          <Card className="bg-danger-100 text-danger text-xs px-3 py-1.5 shadow-sm">
+            <Icon icon="lucide:alert-circle" className="inline-block mr-1 text-xs" />{errorMessage}
+          </Card>
+        </div>
+      )}
+      
+      <form onSubmit={handleSubmit} className="flex flex-col w-full pb-0.5">
+        <div className="flex bg-content2 dark:bg-content1 rounded-lg border-1 border-content3 dark:border-content2 overflow-hidden">
+          {/* 编辑区域 */}
+          <div 
+            className="flex-1 min-h-12 max-h-40 overflow-y-auto p-2 text-sm"
+            contentEditable={!isSending && !isAiProcessing} // 禁用编辑区域当 AI 处理中
+            onInput={parseEditorContent}
+            onPaste={handlePaste}
+            onKeyDown={handleKeyDown}
+            ref={editorRef}
+            data-placeholder={isAiProcessing ? t('aiProcessing') : t('typeMessageHere')}
+            style={{
+              lineHeight: '1.5',
+              whiteSpace: 'pre-wrap',
+            }}
+            role="textbox"
+            aria-label={t('messageInput')}
+            aria-multiline="true"
+            title={`${t('messageInput')} (Enter: ${t('send')}, Shift+Enter: ${t('newLine')}, ${isMacOS ? 'Command+Enter' : 'Ctrl+Enter'}: ${t('askAI')})`}
+          ></div>
         
-        {errorMessage && (
-          <div className="text-danger text-sm mt-1 mb-1 transition-opacity duration-300 animate-pulse">
-            <Icon icon="lucide:alert-circle" className="inline-block mr-1" /> 
-            {errorMessage}
-          </div>
-        )}
-        
-        <div className="flex justify-between items-center mt-2">
-          <div className="flex gap-2">
+          {/* 辅助按钮区 */}
+          <div className="flex flex-col justify-between py-1 border-l-1 border-content3 dark:border-content2">
+            {/* 图片上传按钮 */}
+            <Tooltip content={t('addImage')}>
+              <Button
+                isIconOnly
+                size="sm"
+                variant="light"
+                className="text-default-600"
+                onPress={() => fileInputRef.current?.click()}
+                isDisabled={imageCount >= MAX_IMAGES || isSending || isAiProcessing} // 禁用图片上传当 AI 处理中
+              >
+                <Icon icon="lucide:image" />
+              </Button>
+            </Tooltip>
+            
+            {/* AI设置按钮 (原来的AI按钮) */}
+            <Tooltip content={t('aiSettings') || "AI Settings"}>
+              <Button
+                isIconOnly
+                size="sm"
+                variant="light"
+                className="text-default-600"
+                onPress={onAISettingsOpen}
+                isDisabled={isSending || isAiProcessing}
+              >
+                <Icon icon="lucide:settings-2" />
+              </Button>
+            </Tooltip>
+            
+            {/* 隐藏的文件输入 */}
             <input
               type="file"
               ref={fileInputRef}
-              accept="image/*"
               className="hidden"
+              accept="image/*"
+              multiple={true}
               onChange={handleImageUpload}
-              disabled={isSending || imageCount >= MAX_IMAGES}
-              multiple
-              aria-label={t('uploadImage')}
-              title={t('uploadImage')}
+              disabled={isSending || isAiProcessing} // 禁用文件输入当 AI 处理中
             />
-            <Button
-              type="button"
-              isIconOnly
-              variant="light"
-              onPress={() => fileInputRef.current?.click()}
-              disabled={isSending || imageCount >= MAX_IMAGES}
-              className="rounded-full"
-              aria-label={t('uploadImage')}
-            >
-              <Icon icon="lucide:image" />
-            </Button>
-            {imageCount > 0 && (
-              <span className={`text-xs ${imageCount >= MAX_IMAGES ? 'text-danger' : 'text-default-400'} self-center font-medium`}>
-                {imageCount}/{MAX_IMAGES} {t('images')}
-              </span>
-            )}
           </div>
-          
-          <Button
-            type="submit"
-            color="primary"
-            aria-label={t('send')}
-            isLoading={isSending}
-            isDisabled={contentItems.every(item => 
-              (item.type === 'text' && item.content.trim() === '') || 
-              (item.type !== 'text' && item.type !== 'image')
-            ) || isSending}
-          >
-            <Icon icon="lucide:send" className="mr-1" />
-            {t('send')}
-          </Button>
         </div>
-      </div>
-    </form>
+        
+        {/* AI角色选择和发送按钮区 */}
+        <div className="flex justify-between items-center mt-1.5">
+          {/* AI角色选择下拉框 */}
+          <div className="flex-1 mr-2">
+            <Select
+              size="sm"
+              aria-label={t('selectAIRole') || "Select AI Role"}
+              selectedKeys={[selectedRoleId]}
+              onSelectionChange={(keys) => {
+                const selectedKey = Array.from(keys)[0]?.toString();
+                if (selectedKey) handleRoleChange(selectedKey);
+              }}
+              className="max-w-xs"
+              isDisabled={isSending || isAiProcessing}
+            >
+              {aiRoles.map((role) => (
+                <SelectItem key={role.id} startContent={<Icon icon={role.icon} />}>
+                  {role.name}
+                </SelectItem>
+              ))}
+            </Select>
+          </div>
+        
+          
+          {/* 按钮区 */}
+          <div className="flex space-x-2">
+            {/* AI问答按钮 */}
+            <Tooltip content={`${t('askAI')} (${isMacOS ? 'Command' : 'Ctrl'}+Enter)`} placement="top">
+              <Button
+                color={getSelectedRole().color}
+                size="sm"
+                onPress={handleAskAI}
+                isLoading={isAiProcessing}
+                isDisabled={isSending}
+                className="px-4"
+                startContent={<Icon icon={getSelectedRole().icon} className="h-4 w-4" />}
+              >
+                {t('askAI') || "Ask AI"}
+              </Button>
+            </Tooltip>
+            
+            {/* 发送按钮 */}
+            <Tooltip content={`${t('send')} (Enter)`} placement="top">
+              <Button
+                type="submit"
+                color="primary"
+                size="sm"
+                isLoading={isSending}
+                isDisabled={isAiProcessing}
+                className="px-4"
+                startContent={<Icon icon="lucide:send" className="h-4 w-4" />}
+              >
+                {t('send')}
+              </Button>
+            </Tooltip>
+          </div>
+        </div>
+
+      </form>
+
+      {/* 新增：AI设置模态框 */}
+      <Modal isOpen={isAISettingsOpen} onClose={onAISettingsClose} size="3xl">
+        <ModalContent>
+          <ModalHeader>{t('aiSettings') || "AI Assistant Settings"}</ModalHeader>
+          <ModalBody>
+            <Tabs aria-label="AI Settings Tabs">
+              <Tab key="roles" title="AI Roles">
+                <div className="mt-2">
+                  <AIRoleManager 
+                    roles={aiRoles} 
+                    selectedRoleId={selectedRoleId}
+                    onSelectRole={handleRoleChange}
+                    onAddRole={handleAddRole}
+                    onUpdateRole={handleUpdateRole}
+                    onDeleteRole={handleDeleteRole}
+                  />
+                </div>
+              </Tab>
+            </Tabs>
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="light" onPress={onAISettingsClose}>{t('close')}</Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+    </div>
   );
 };

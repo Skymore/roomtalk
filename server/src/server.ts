@@ -12,6 +12,7 @@ import { createClient, RedisClientType } from 'redis';
 import dotenv from 'dotenv';
 import { customAlphabet } from 'nanoid';
 import sharp from 'sharp'; // 新增：用于无损压缩图片
+import OpenAI from 'openai'; // 添加 OpenAI SDK
 
 dotenv.config();
 
@@ -20,9 +21,21 @@ const serverLogger = new Logger('Server');
 const redisLogger = new Logger('Redis');
 const socketLogger = new Logger('SocketIO');
 const routeLogger = new Logger('Routes');
+const openaiLogger = new Logger('OpenAI');
 
 // nanoid生成器保持不变
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
+
+// 初始化 OpenAI 客户端
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY || '', // 从环境变量获取 API 密钥
+});
+
+// 设置默认的 AI 助手系统消息
+const DEFAULT_SYSTEM_MESSAGE = 'You are a helpful, creative, friendly assistant. Respond concisely and clearly.';
+
+// 最大上下文消息数量，避免超出 token 限制
+const MAX_CONTEXT_MESSAGES = 20;
 
 // 生成唯一房间ID并进行碰撞检测
 async function generateUniqueRoomId(redisClient: any): Promise<string> {
@@ -52,13 +65,14 @@ interface Message {
   content: string;
   roomId: string;
   timestamp: string;
-  messageType: 'text' | 'image';
+  messageType: 'text' | 'image' | 'ai';
   username?: string;
   avatar?: {
     text: string;
     color: string;
   };
   mimeType?: string;
+  status?: 'streaming' | 'complete' | 'error';
 }
 
 interface Room {
@@ -302,6 +316,11 @@ io.on('connection', (socket: Socket) => {
 
   // 存储当前连接的分段上传会话，格式为：fileId -> { chunks: Buffer[], totalChunks, roomId, clientId }
   const imageUploadSessions: Record<string, { chunks: Buffer[]; totalChunks: number; roomId: string; clientId: string }> = {};
+
+  // ----------------- 新增：AI 助手相关 -----------------
+  const aiAvatar = { text: 'AI', color: 'secondary' }; // AI 头像信息
+  const aiUsername = 'AI Assistant'; // AI 用户名
+  // ----------------- 结束：AI 助手相关 -----------------
 
   // 客户端注册
   socket.on('register', async (clientId: string) => {
@@ -587,6 +606,165 @@ io.on('connection', (socket: Socket) => {
   });
   // ----------------- 结束分段上传事件 -----------------
 
+  // ----------------- 修改：处理 AI 请求事件 (集成 OpenAI) -----------------
+  socket.on('ask_ai', async (data: { 
+    roomId: string; 
+    prompt: string; 
+    systemPrompt?: string;
+    roleName?: string;
+  }) => {
+    const clientId = await getClientId(socket.id);
+    if (!clientId) {
+      socket.emit('error', { message: 'You are not registered' });
+      return;
+    }
+    if (!data.roomId || !data.prompt) {
+      socket.emit('error', { message: 'Room ID and prompt are required for AI request' });
+      return;
+    }
+
+    const { roomId, prompt, systemPrompt = DEFAULT_SYSTEM_MESSAGE, roleName = 'AI Assistant' } = data;
+    socketLogger.info('Received AI request (streaming)', { 
+      socketId: socket.id, 
+      clientId, 
+      roomId, 
+      promptLength: prompt.length,
+      roleName 
+    });
+
+    // 创建头像和用户名（基于角色）
+    const aiAvatar = { text: 'AI', color: 'secondary' };
+    const aiUsername = roleName || 'AI Assistant';
+
+    // 1. 创建初始 AI 消息结构
+    const aiMessageId = uuidv4();
+    const initialAiMessage: Message = {
+      id: aiMessageId,
+      clientId: 'ai_assistant',
+      content: '',
+      roomId,
+      timestamp: new Date().toISOString(),
+      messageType: 'ai',
+      username: aiUsername,
+      avatar: aiAvatar,
+      status: 'streaming'
+    };
+
+    // 2. 发送初始消息结构给客户端，让其准备接收流
+    io.to(roomId).emit('new_message', initialAiMessage);
+
+    // 3. 获取上下文消息（当前房间的最近消息历史）
+    let contextMessages: Message[] = [];
+    try {
+      // 读取房间历史消息
+      const allMessages = await readMessagesByRoom(roomId);
+      
+      // 过滤掉图片消息，只保留文本消息
+      contextMessages = allMessages
+        .filter(msg => msg.messageType === 'text' || msg.messageType === 'ai')
+        .slice(-MAX_CONTEXT_MESSAGES); // 只取最近的 MAX_CONTEXT_MESSAGES 条消息
+      
+      openaiLogger.debug('Loaded context messages', { 
+        roomId, 
+        contextMessageCount: contextMessages.length 
+      });
+    } catch (error) {
+      openaiLogger.error('Error loading context messages', { error, roomId });
+      // 出错时继续，但没有上下文
+      contextMessages = [];
+    }
+
+    // 4. 调用 OpenAI API
+    try {
+      // 准备消息格式
+      const messages = [
+        { role: 'system', content: systemPrompt || DEFAULT_SYSTEM_MESSAGE },
+        
+        // 添加上下文消息
+        ...contextMessages.map(msg => {
+          const role = msg.clientId === 'ai_assistant' ? 'assistant' : 'user';
+          const namePrefix = msg.clientId !== 'ai_assistant' && msg.username ? `${msg.username}: ` : '';
+          return { 
+            role, 
+            content: namePrefix + msg.content 
+          };
+        }),
+        
+        // 添加当前用户问题
+        { role: 'user', content: prompt }
+      ];
+
+      // 创建流式请求
+      const stream = await openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
+        messages: messages as any,
+        stream: true,
+        temperature: 0.7,
+      });
+
+      let fullContent = '';
+
+      // 逐块处理流式响应
+      for await (const chunk of stream) {
+        if (chunk.choices[0]?.delta?.content) {
+          const contentChunk = chunk.choices[0].delta.content;
+          fullContent += contentChunk;
+          
+          // 发送数据块给客户端
+          io.to(roomId).emit('ai_chunk', {
+            messageId: aiMessageId,
+            chunk: contentChunk,
+          });
+          
+          // 限制日志量，只记录简短的调试信息
+          if (fullContent.length % 100 === 0) {
+            openaiLogger.debug('Streaming AI chunk', { 
+              messageId: aiMessageId, 
+              contentLength: fullContent.length 
+            });
+          }
+        }
+      }
+
+      // 通知客户端流结束
+      io.to(roomId).emit('ai_stream_end', { messageId: aiMessageId });
+      openaiLogger.info('AI stream ended', { 
+        messageId: aiMessageId, 
+        contentLength: fullContent.length 
+      });
+
+      // 流结束后，保存完整消息到 Redis
+      const finalMessage: Message = {
+        ...initialAiMessage,
+        content: fullContent,
+        status: 'complete',
+        timestamp: new Date().toISOString(),
+      };
+      
+      // 保存最终消息
+      saveMessage(finalMessage).then(() => {
+        openaiLogger.info('Saved final AI message to Redis', { messageId: aiMessageId });
+      }).catch(err => {
+        openaiLogger.error('Failed to save AI message to Redis', { error: err, messageId: aiMessageId });
+      });
+
+    } catch (error) {
+      socketLogger.error('Error processing AI stream request', { 
+        error: error instanceof Error ? error.message : error, 
+        socketId: socket.id, 
+        clientId, 
+        roomId 
+      });
+      
+      // 发送错误信息给客户端
+      io.to(roomId).emit('ai_stream_error', {
+        messageId: aiMessageId,
+        error: 'Sorry, an error occurred while generating the AI response.',
+      });
+    }
+  });
+  // ----------------- 结束处理 AI 请求事件 -----------------
+
   // 断开连接时清理数据
   socket.on('disconnect', async () => {
     const userId = await getClientId(socket.id);
@@ -791,7 +969,9 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // ---------------------- 启动服务器 ----------------------
-const PORT = process.env.PORT || 3012;
-server.listen(PORT, () => {
-  serverLogger.info(`Server started`, { port: PORT, env: process.env.NODE_ENV || 'development' });
+const PORT: number = parseInt(process.env.PORT || '3012', 10);
+const HOST: string = '0.0.0.0';
+
+server.listen(PORT, HOST, () => { 
+  serverLogger.info(`Server started`, { port: PORT, host: HOST, env: process.env.NODE_ENV || 'development' });
 });

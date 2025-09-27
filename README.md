@@ -4,7 +4,7 @@
 
 A modern, feature-rich real-time messaging system built with WebSocket and Redis. Supports Markdown formatting, image sharing, user avatars, and multi-instance deployment. Perfect for building chat applications, team collaboration tools, or any real-time communication platform.
 
-**Current Version: 0.4** (Added Fly.io deployment and Markdown message display)
+**Current Version: 1.0** (AI assistant & experience refresh)
 
 ---
 
@@ -25,6 +25,7 @@ A modern, feature-rich real-time messaging system built with WebSocket and Redis
 - Node.js + Express
 - Socket.io with Redis Adapter
 - Redis (for persistence and pub/sub)
+- OpenAI SDK (for AI streaming responses)
 - UUID-based identity system
 - Multi-instance support
 - Docker containerization
@@ -42,89 +43,60 @@ A modern, feature-rich real-time messaging system built with WebSocket and Redis
 ## 📐 System Architecture
 
 ```mermaid
-graph TB
-    subgraph Client["Client Layer"]
-        R[React + TypeScript]
-        T[TailwindCSS + HeroUI]
-        SC[Socket.io Client]
-        RT[React Router]
-        I[i18next]
-        M[Markdown-to-JSX]
-    end
+sequenceDiagram
+    participant User
+    participant Client
+    participant Server
+    participant Redis
+    participant OpenAI
 
-    subgraph Server["Server Layer"]
-        E[Express.js]
-        SS[Socket.io Server]
-        RA[Redis Adapter]
-        API[REST API]
-    end
-
-    subgraph Data["Data Layer"]
-        RD[Redis]
-        RP[Redis Pub/Sub]
-        RS[Redis Storage]
-    end
-
-    subgraph Deploy["Deployment Layer"]
-        F[Fly.io]
-        D[Docker]
-        MI[Multi-Instance]
-        HM[Health Monitor]
-    end
-
-    %% Client to Server connections
-    R --> SC
-    SC --> SS
-    R --> API
-
-    %% Server internal connections
-    E --> API
-    SS --> RA
-    RA --> RP
-
-    %% Data connections
-    RA --> RD
-    API --> RS
-    SS --> RS
-    RS --> RD
-    RP --> RD
-
-    %% Deployment connections
-    Server --> D
-    D --> F
-    F --> MI
-    MI --> HM
-
-    style Client fill:#f9f,stroke:#333,stroke-width:2px
-    style Server fill:#bbf,stroke:#333,stroke-width:2px
-    style Data fill:#bfb,stroke:#333,stroke-width:2px
-    style Deploy fill:#fbb,stroke:#333,stroke-width:2px
+    User->>Client: Type message / paste media / invoke AI role
+    Client->>Server: send_message / ask_ai (Socket.IO)
+    Server->>Redis: Append message history / store sessions
+    Server->>OpenAI: Stream completions with context (ask_ai)
+    OpenAI-->>Server: Streaming tokens (ai_chunk)
+    Server-->>Client: new_message / ai_chunk / ai_stream_end
+    Client-->>User: Live UI updates (MessageList, AI streaming)
 ```
 
---- 
+## ✨ Highlights since v0.5
 
+- Intelligent multi-language UI (English/中文/हिन्दी) with localized random usernames
+- Desktop navbar + mobile bottom navigation for room, saved, chat, settings views
+- In-room presence indicators, join confirmations, and toast-style status messages
+- AI role manager with persistent custom roles, system prompts, icon/color badges
+- Streaming AI responses rendered incrementally with retry awareness
+- Sticky room history (localStorage) and shareable deep links (`/?room=ID`)
 
 ---
 
 ## 🌟 Features
 
-- ✅ Real-time message sending/receiving
-- ✅ Join or create rooms
-- ✅ Local saved rooms
-- ✅ Persistent room/message storage via Redis
-- ✅ Dark/light mode toggle
-- ✅ Responsive UI
-- ✅ Multi-language (English & Chinese)
-- ✅ Image message support (added in v0.2)
-  - Rich media messaging with up to 9 images per message
-  - Intuitive image handling (clipboard paste, file upload)
-  - Mixed content editing (text and images together)
-- ✅ User identity system (added in v0.3)
-  - Personalized avatars based on username
-  - Username display in chat messages
-  - Improved chat UI with better visual cues for message ownership
-- ✅ Markdown message display (added in v0.4)
-  - Supports rich text formatting in messages
+### v1.0 - Streaming AI & Experience Refresh
+- ✅ **AI assistant**: Streaming responses via OpenAI, customizable roles with saved system prompts
+- ✅ **Message input**: Mixed media editor with improved clipboard + image handling  
+- ✅ **Presence & storage**: Room member counts, join/leave events, persistent room/username/saved lists
+- ✅ **UI refresh**: New desktop navbar, mobile bottom nav, status banners, shareable room links
+- ✅ **Internationalization**: Added Hindi, localized random usernames, expanded translation keys
+
+### v0.4 - Fly.io Deployment & Markdown Support
+- ✅ **Fly.io deployment**: Multi-instance capabilities with environment variable management
+- ✅ **Markdown rendering**: Rich text message support with integrated parsing and KaTeX math formulas
+
+### v0.3 - User Identity System  
+- ✅ **Personalized avatars**: Username-based generation with intelligent text extraction and hash-based color mapping
+- ✅ **Enhanced chat**: Username display, message ownership indication, and Redis persistence for consistency
+- ✅ **Localized names**: Cute random name generation in English and Chinese with localStorage persistence
+
+### v0.2 - Enhanced Messaging with Image Support
+- ✅ **Comprehensive image system**: Base64 encoding, up to 9 images per message
+- ✅ **Advanced content editor**: Mixed-content editing with clipboard operations
+- ✅ **Performance optimization**: Throttling and async processing for large images
+
+### v0.1 - Core Foundation
+- ✅ **Real-time messaging**: Socket.IO with Redis persistence and pub/sub for multi-instance scaling
+- ✅ **Room management**: Comprehensive creation, joining, and access control systems  
+- ✅ **Foundation features**: Multi-language support, theme toggling, and responsive design principles
 
 ---
 
@@ -143,8 +115,17 @@ cd server
 npm install
 
 # Client
-cd ../client
+cd ../client-heroui
 npm install
+```
+
+### Build (optional, required for production)
+
+```bash
+cd client-heroui
+npm run build
+cd ../server
+npm run build
 ```
 
 ### Start the System
@@ -158,20 +139,26 @@ Use the provided script:
 Or start manually:
 
 ```bash
+# Start the server (development mode)
 cd server
-npm start
+npm run dev
 
-cd ../client
+# Start the client
+cd ../client-heroui
 npm run dev
 ```
+
+To run the server in production mode, first execute `npm run build` inside the `server` directory, then run `npm start` to launch the compiled code from `dist/`.
 
 ---
 
 ## 🧭 Usage
 
-1. Visit [http://localhost:3011](http://localhost:3011)
-2. A unique `clientId` will be assigned and saved in `localStorage`
-3. Create or join a room and chat in real time
+1. Visit [http://localhost:3011](http://localhost:3011) after starting both client and server
+2. A persistent `clientId` is generated and stored locally (also displayed in header/settings)
+3. Create or join rooms from the home view, or paste a shared link like `/?room=ID`
+4. Customize AI roles via the message input settings cog, then trigger with `Ctrl/⌘ + Enter`
+5. Manage saved rooms, change language/theme, and edit username in the Settings tab
 
 ---
 
@@ -214,6 +201,17 @@ This comprehensive approach ensures message delivery reliability across differen
 
 ---
 
+## 🔧 Technical Highlights
+
+- **Redis persistence & Socket.IO scaling**: Hash + list storage (`rooms`, `room:{id}:messages`, membership sets) and Redis adapter for multi-instance Fly.io deployments
+- **AI streaming pipeline**: Context-aware prompts, `ask_ai` Socket.IO event, OpenAI streaming, client-side chunk rendering, and retry/edit workflows
+- **Rich message editor**: Mixed text/image contentEditable with throttled paste, compression
+- **Responsive shell**: HeroUI-based header, status banners, room list grids, and mobile bottom navigation with saved-room management
+- **Internationalization**: i18next resources for English/中文/हिन्दी including localized prompts, button labels, and random usernames
+- **Deployment**: Fly.io app (`fly.toml`) targeting Node 22 runtime with Redis secrets; Docker-based multi-stage build included
+
+---
+
 ## 🔌 API Overview
 
 ### HTTP Endpoints
@@ -245,14 +243,17 @@ This comprehensive approach ensures message delivery reliability across differen
 
 ## ⚙️ Configuration
 
-### Server `.env`
+### Server Environment Variables
 
-| Variable    | Default                   | Description   |
-|-------------|---------------------------|---------------|
-| `PORT`      | 3012                      | Server port   |
-| `CLIENT_URL`| http://localhost:3011     | CORS origin   |
+| Variable         | Default                   | Description                     |
+|------------------|---------------------------|---------------------------------|
+| `PORT`           | 3012                      | Server port                     |
+| `CLIENT_URL`     | http://localhost:3011     | CORS origin                     |
+| `REDIS_URL`      | redis://localhost:6379    | Redis connection URL            |
+| `OPENAI_API_KEY` | —                         | OpenAI API key (required for AI)|
+| `OPENAI_MODEL`   | gpt-5                     | OpenAI model (optional)         |
 
-### Client `.env`
+### Client Environment Variables
 
 **.env.development:**
 
@@ -264,9 +265,35 @@ This comprehensive approach ensures message delivery reliability across differen
 
 | Variable         | Default | Description                                        |
 |------------------|---------|----------------------------------------------------|
-| `VITE_SOCKET_URL`| `/`     | Use relative path for same-origin deployment       |
+| `VITE_SOCKET_URL`| `/`     | Use relative path for same-origin deployment      |
 
----
+### Setup Instructions
+
+**Local Development:**
+
+Create `server/.env` file:
+
+```env
+PORT=3012
+CLIENT_URL=http://localhost:3011
+REDIS_URL=redis://localhost:6379
+OPENAI_API_KEY=sk-...
+# optional
+OPENAI_MODEL=gpt-4
+```
+
+Client uses mode-specific files:
+- `client-heroui/.env.development` for `npm run dev`
+- `client-heroui/.env.production` for builds
+
+**Production (Fly.io):**
+
+```bash
+fly secrets set OPENAI_API_KEY="sk-..."
+fly secrets set REDIS_URL="redis://..."
+# optional
+fly secrets set OPENAI_MODEL="gpt-5"
+```
 
 ## 📦 Redis Persistence
 
@@ -316,6 +343,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ## 📝 Version History
+
+### v1.0 - Streaming AI & Experience Refresh
+- **AI assistant**: Streaming responses via OpenAI, customizable roles with saved system prompts
+- **Message input**: Mixed media editor with improved clipboard + image handling
+- **Presence & storage**: Room member counts, join/leave events, persistent room/username/saved lists
+- **UI refresh**: New desktop navbar, mobile bottom nav, status banners, shareable room links
+- **Internationalization**: Added Hindi, localized random usernames, expanded translation keys
 
 ### v0.4 - Fly.io Deployment & Markdown Message Display
 - **Fly.io Deployment**: Added support for deploying the application on Fly.io with multi-instance capabilities
