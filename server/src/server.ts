@@ -699,7 +699,7 @@ io.on('connection', (socket: Socket) => {
         model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
         messages: messages as any,
         stream: true,
-        temperature: 0.7,
+        temperature: 1,
       });
 
       let fullContent = '';
