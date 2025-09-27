@@ -34,6 +34,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   clientId,
   username,
   setView,
+  view,
   i18n,
   changeLanguage,
   toggleTheme,
@@ -48,11 +49,59 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       maxWidth="full" 
       className="bg-white/70 dark:bg-gray-900/70 backdrop-blur-md border-b border-violet-200 dark:border-gray-800 hidden md:flex"
     >
-      <div className="w-full max-w-[1400px] mx-auto px-2 sm:px-8 flex justify-between items-center">
-        <NavbarBrand>
+      <div className="w-full mx-auto px-2 sm:px-8 flex justify-between items-center">
+        <NavbarBrand 
+          className="cursor-pointer" 
+          onClick={() => setView('rooms')}
+        >
           <img src="/roomtalk-logo.svg" alt="RoomTalk Logo" className="w-8 h-8" />
           <p className="font-bold ml-2 bg-gradient-to-r from-violet-600 to-pink-600 bg-clip-text text-transparent text-sm">RoomTalk</p>
         </NavbarBrand>
+
+        {/* 桌面导航按钮 (仅图标) - 移动到 Brand 右侧 */}
+        <div className="hidden md:flex items-center gap-1 pl-4">
+          <Tooltip content={t('home')}>
+            <Button
+              isIconOnly
+              size="sm"
+              variant={view === 'rooms' || view === 'chat' ? 'flat' : 'light'} // Home active if in rooms or chat
+              color={view === 'rooms' || view === 'chat' ? 'secondary' : 'default'}
+              aria-label={t('home')}
+              onPress={() => setView('rooms')}
+              className={` ${view === 'rooms' || view === 'chat' ? 'text-secondary-foreground' : 'text-default-600 dark:text-default-400'}`}
+            >
+              <Icon icon="lucide:home" width={18}/>
+            </Button>
+          </Tooltip>
+          {/* 使用 t('savedRooms') 作为 tooltip 内容 */}
+          <Tooltip content={t('savedRooms')}>
+            <Button
+              isIconOnly
+              size="sm"
+              variant={view === 'saved' ? 'flat' : 'light'}
+              color={view === 'saved' ? 'secondary' : 'default'}
+              aria-label={t('savedRooms')}
+              onPress={() => setView('saved')}
+              className={` ${view === 'saved' ? 'text-secondary-foreground' : 'text-default-600 dark:text-default-400'}`}
+            >
+              <Icon icon="lucide:bookmark" width={18}/>
+            </Button>
+          </Tooltip>
+           <Tooltip content={t('settings')}>
+            <Button
+              isIconOnly
+              size="sm"
+              variant={view === 'settings' ? 'flat' : 'light'}
+              color={view === 'settings' ? 'secondary' : 'default'}
+              aria-label={t('settings')}
+              onPress={() => setView('settings')}
+              className={` ${view === 'settings' ? 'text-secondary-foreground' : 'text-default-600 dark:text-default-400'}`}
+            >
+              <Icon icon="lucide:settings" width={18}/>
+            </Button>
+          </Tooltip>
+        </div>
+
         <NavbarContent justify="end">
           <div className="flex items-center gap-2">
             {/* 始终显示的用户ID */}
@@ -68,7 +117,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               </Chip>
             </Tooltip>
 
-            {/* 桌面版：直接显示头像、语言切换和主题切换 */}
+            {/* 桌面版：用户头像、语言切换和主题切换 */}
             <div className="hidden md:flex items-center gap-2">
               <Avatar name={getAvatarText(username)} color={getAvatarColor(username) as any} size="sm" />
               

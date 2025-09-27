@@ -1,6 +1,6 @@
 import { default as io } from 'socket.io-client';
 import { v4 as uuidv4 } from 'uuid';
-import { Room, RoomMemberEvent, RoomMemberCount } from './types';
+import { Room, RoomMemberEvent } from './types';
 import { Socket } from 'socket.io-client';
 
 // Get client ID from local storage or create a new one
@@ -81,11 +81,6 @@ const createSocketConnection = (): typeof Socket => {
 
   socket.on('reconnect_failed', () => {
     console.error('Socket reconnection failed');
-  });
-
-  // Handle room member count updates
-  socket.on('room_member_count', (data: RoomMemberCount) => {
-    roomMemberCounts.set(data.roomId, data.count);
   });
 
   // Handle room member changes (join/leave events)

@@ -218,11 +218,6 @@ useEffect(() => {
 });
 CodeBlock.displayName = "CodeBlock";
 
-/** 行内代码 */
-const InlineCode: React.FC<{ children: ReactNode }> = ({ children }) => (
-  <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded text-sm">{children}</code>
-);
-
 /** 操作按钮（复制/点赞/点踩） */
 const ContentActionButtons: React.FC<{ content: string }> = memo(({ content }) => {
   const { t } = useTranslation();
@@ -324,14 +319,25 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content }
 
   const mdOptions = {
     forceBlock: true,
-    disableParsingRawHTML: false, // 允许渲染 SVG 等原始 HTML :contentReference[oaicite:13]{index=13}
+    disableParsingRawHTML: false,
     overrides: {
       p: { component: ({ children }: { children: ReactNode }) => <div>{children}</div> },
       MathBlock: { component: ({ children }: any) => <Math inline={false}>{children}</Math> },
       MathInline: { component: ({ children }: any) => <Math inline>{children}</Math> },
-      pre: { component: ({ children }: { children: ReactNode }) => <>{children}</> },
-      code: { component: CodeBlock },
-      inlineCode: { component: InlineCode },
+      // 将代码块渲染为 CodeBlock
+      pre: {
+        component: ({ children }: { children: ReactNode }) => {
+          // children 是单个 <code> 元素
+          const codeElement = React.Children.only(children) as React.ReactElement & { props: { className?: string; children: ReactNode } };
+          return <CodeBlock className={codeElement.props.className}>{codeElement.props.children}</CodeBlock>;
+        }
+      },
+      // 行内代码统一渲染为普通文本
+      code: { component: ({ children }: { children: ReactNode }) => (
+        <code className="bg-gray-100 dark:bg-gray-700 px-1 text-xs font-mono">
+          {children}
+        </code>
+      ) },
       img: {
         component: ({ alt, src }: any) => <Image src={src!} alt={alt} className="max-w-full rounded my-2" isBlurred />,
       },

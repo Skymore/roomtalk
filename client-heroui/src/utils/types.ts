@@ -39,17 +39,19 @@ export interface RoomMemberCount {
   roomId: string;
   count: number;
 }
-
 export interface AIChunkEvent {
   messageId: string;
   chunk: string;
+  roomId: string;
 }
 
 export interface AIStreamEndEvent {
   messageId: string;
+  roomId: string;
 }
 
 export interface AIStreamErrorEvent {
   messageId: string;
   error: string;
+  roomId: string;
 } 

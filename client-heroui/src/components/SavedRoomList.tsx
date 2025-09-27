@@ -1,14 +1,14 @@
 import React, { useState } from 'react';
-import { Card, Modal, ModalContent, ModalBody, ModalFooter, Button } from '@heroui/react';
+import { Card, Modal, ModalContent, ModalBody, ModalFooter, Button, Tooltip } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { Room } from '../utils/types';
-import { removeRoom, isRoomSaved } from '../utils/storage';
+import { removeRoom } from '../utils/storage';
 import { useTranslation } from 'react-i18next';
 
 interface SavedRoomListProps {
   rooms: Room[];
   onRoomSelect: (roomId: string, isJoined?: boolean) => void;
-  onRoomsChange?: (rooms: Room[]) => void;
+  onRoomsChange: (rooms: Room[]) => void;
 }
 
 export const SavedRoomList: React.FC<SavedRoomListProps> = ({ 
@@ -32,22 +32,14 @@ export const SavedRoomList: React.FC<SavedRoomListProps> = ({
     setRoomToDelete(null);
   };
   
-  // 确认删除房间
+  // 确认取消收藏
   const confirmDelete = () => {
     if (!roomToDelete) return;
     
-    console.log('确认删除房间:', roomToDelete);
-    console.log('删除前检查该房间是否已保存:', isRoomSaved(roomToDelete));
-    
-    // 更新本地存储
+    console.log('确认取消收藏房间:', roomToDelete);
+    // Restore original logic: update local storage and notify parent
     const updatedRooms = removeRoom(roomToDelete);
-    console.log('删除后的房间列表:', updatedRooms);
-    console.log('删除后检查该房间是否已保存:', isRoomSaved(roomToDelete));
-    
-    // 更新父组件状态
-    if (onRoomsChange) {
-      onRoomsChange(updatedRooms);
-    }
+    onRoomsChange(updatedRooms);
     
     // 关闭对话框
     closeDeleteConfirm();
@@ -100,12 +92,15 @@ export const SavedRoomList: React.FC<SavedRoomListProps> = ({
                     {t('created')}: {new Date(room.createdAt).toLocaleDateString()}
                   </p>
                   <div className="flex items-center gap-1">
-                    <span 
-                      className="cursor-pointer p-1 rounded hover:bg-gray-100 inline-flex text-danger"
-                      onClick={(e) => openDeleteConfirm(e, room.id)}
-                    >
-                      <Icon icon="lucide:trash-2" className="w-4 h-4" />
-                    </span>
+                    <Tooltip content={t('unsave')}> 
+                      <span 
+                        className="cursor-pointer p-1 rounded hover:bg-gray-100 inline-flex text-warning-600 dark:text-warning-500"
+                        onClick={(e) => openDeleteConfirm(e, room.id)}
+                        aria-label={t('unsave')}
+                      >
+                        <Icon icon="lucide:bookmark-minus" className="w-4 h-4" />
+                      </span>
+                    </Tooltip>
                   </div>
                 </div>
               </div>
@@ -120,9 +115,9 @@ export const SavedRoomList: React.FC<SavedRoomListProps> = ({
           <ModalBody className="py-5">
             <div className="flex flex-col items-center gap-2">
               <Icon icon="lucide:alert-triangle" className="text-danger w-10 h-10" />
-              <h3 className="text-xl font-medium">{t('confirmDelete')}</h3>
+              <h3 className="text-xl font-medium">{t('confirmUnsave')}</h3>
               <p className="text-center text-default-500">
-                {t('confirmDeleteDescription')}
+                {t('confirmUnsaveDescription')}
               </p>
             </div>
           </ModalBody>
@@ -130,8 +125,8 @@ export const SavedRoomList: React.FC<SavedRoomListProps> = ({
             <Button variant="flat" onPress={closeDeleteConfirm}>
               {t('cancel')}
             </Button>
-            <Button color="danger" onPress={confirmDelete}>
-              {t('delete')}
+            <Button color="warning" onPress={confirmDelete}>
+              {t('unsave')}
             </Button>
           </ModalFooter>
         </ModalContent>
