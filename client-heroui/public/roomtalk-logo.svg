@@ -1,10 +1,21 @@
 <svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
-  <!-- 背景圆，扩大尺寸 -->
-  <circle cx="60" cy="60" r="50" fill="#0070F3"/>
+  <!-- 渐变背景 -->
+  <defs>
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#8b5cf6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#d946ef;stop-opacity:1" />
+    </linearGradient>
+  </defs>
   
-  <!-- 主要气泡，相应扩大 -->
-  <path d="M40 43c-6 0-11 5-11 11v5.5c0 6 5 11 11 11h5.5l5.5 11v-11h5.5c6 0 11-5 11-11v-5.5c0-6-5-11-11-11H40z" fill="white"/>
+  <!-- 背景圆 -->
+  <circle cx="60" cy="60" r="55" fill="url(#grad1)"/>
   
-  <!-- 次要气泡，相应扩大 -->
-  <path d="M53 48h27.5c3 0 5.5 2.5 5.5 5.5V67c0 3-2.5 5.5-5.5 5.5h-5.5l-5.5 9V72.5H53c-3 0-5.5-2.5-5.5-5.5V53.5c0-3 2.5-5.5 5.5-5.5z" fill="white" fill-opacity="0.5"/>
+  <!-- 消息气泡形状 -->
+  <path d="M60 35 L75 35 C82 35 88 41 88 48 L88 72 C88 79 82 85 75 85 L60 85 L50 95 L50 85 L45 85 C38 85 32 79 32 72 L32 48 C32 41 38 35 45 35 Z" 
+        fill="white" fill-opacity="0.2" stroke="white" stroke-width="2.5"/>
+  
+  <!-- 消息指示点 -->
+  <circle cx="48" cy="60" r="4" fill="white"/>
+  <circle cx="60" cy="60" r="4" fill="white"/>
+  <circle cx="72" cy="60" r="4" fill="white"/>
 </svg>

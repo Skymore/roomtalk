@@ -30,12 +30,16 @@ export default {
               marginTop: theme("spacing.10"),
               marginBottom: theme("spacing.10"),
               overflowX: "auto",
+              minWidth: "0", 
+              maxWidth: "100%",
             },
             /* 行内 code */
             "code": {
               backgroundColor: theme("colors.gray.200"),
               padding: `${theme("spacing.0.5")} ${theme("spacing.1")}`,
               borderRadius: theme("borderRadius.md"),
+              minWidth: "0", 
+              maxWidth: "100%",
             },
           },
         },
