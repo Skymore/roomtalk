@@ -1,18 +1,18 @@
 import React, { useState } from 'react';
-import { 
-  Avatar, 
-  Button, 
-  Card, 
-  Input, 
-  Textarea, 
-  Select, 
-  SelectItem, 
-  useDisclosure, 
-  Modal, 
-  ModalContent, 
-  ModalHeader, 
-  ModalBody, 
-  ModalFooter 
+import {
+  Avatar,
+  Button,
+  Card,
+  Input,
+  Textarea,
+  Select,
+  SelectItem,
+  useDisclosure,
+  Modal,
+  ModalContent,
+  ModalHeader,
+  ModalBody,
+  ModalFooter
 } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
@@ -51,6 +51,22 @@ export const defaultAIRoles: AIRole[] = [
   }
 ];
 
+const defaultRoleKeys: Record<string, { nameKey: string; promptKey: string }> = {
+  default: { nameKey: 'roleAssistantName', promptKey: 'roleAssistantPrompt' },
+  coder: { nameKey: 'roleCodeExpertName', promptKey: 'roleCodeExpertPrompt' },
+  creative: { nameKey: 'roleCreativeWriterName', promptKey: 'roleCreativeWriterPrompt' },
+};
+
+export const getAIRoleDisplayName = (role: AIRole, t: (key: string) => string) => {
+  const roleKeys = defaultRoleKeys[role.id];
+  return roleKeys ? t(roleKeys.nameKey) : role.name;
+};
+
+export const getAIRoleDisplayPrompt = (role: AIRole, t: (key: string) => string) => {
+  const roleKeys = defaultRoleKeys[role.id];
+  return roleKeys ? t(roleKeys.promptKey) : role.systemPrompt;
+};
+
 // 获取本地存储的AI角色，如果不存在则使用默认值
 export const getSavedAIRoles = (): AIRole[] => {
   try {
@@ -81,19 +97,20 @@ export interface AIRoleManagerProps {
   onDeleteRole: (roleId: string) => void;
 }
 
-export const AIRoleManager: React.FC<AIRoleManagerProps> = ({ 
-  roles, 
-  selectedRoleId, 
-  onSelectRole, 
-  onAddRole, 
-  onUpdateRole, 
-  onDeleteRole 
+export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
+  roles,
+  selectedRoleId,
+  onSelectRole,
+  onAddRole,
+  onUpdateRole,
+  onDeleteRole
 }) => {
   const { t } = useTranslation();
+  const defaultSystemPrompt = t('defaultSystemPrompt');
   const [editingRole, setEditingRole] = useState<AIRole | null>(null);
   const [newRole, setNewRole] = useState<Partial<AIRole>>({
     name: '',
-    systemPrompt: 'You are a helpful assistant.',
+    systemPrompt: defaultSystemPrompt,
     color: 'primary',
     icon: 'lucide:bot'
   });
@@ -101,13 +118,13 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
   const [roleToDelete, setRoleToDelete] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState<boolean>(false);
   const { isOpen: isDeleteConfirmOpen, onOpen: onDeleteConfirmOpen, onClose: onDeleteConfirmClose } = useDisclosure();
-  
+
   // 开始删除角色过程
   const handleStartDelete = (roleId: string) => {
     setRoleToDelete(roleId);
     onDeleteConfirmOpen();
   };
-  
+
   // 确认删除角色
   const handleConfirmDelete = () => {
     if (roleToDelete) {
@@ -116,18 +133,18 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
       onDeleteConfirmClose();
     }
   };
-  
+
   // 取消删除
   const handleCancelDelete = () => {
     setRoleToDelete(null);
     onDeleteConfirmClose();
   };
-  
+
   // 开始编辑角色
   const handleEditRole = (role: AIRole) => {
     setEditingRole({...role});
   };
-  
+
   // 保存角色编辑
   const handleSaveEdit = () => {
     if (editingRole) {
@@ -135,60 +152,60 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
       setEditingRole(null);
     }
   };
-  
+
   // 取消编辑
   const handleCancelEdit = () => {
     setEditingRole(null);
   };
-  
+
   // 创建新角色
   const handleCreateRole = () => {
     if (newRole.name && newRole.systemPrompt) {
       const role: AIRole = {
         id: `role_${Date.now()}`,
         name: newRole.name,
-        systemPrompt: newRole.systemPrompt || 'You are a helpful assistant.',
+        systemPrompt: newRole.systemPrompt || defaultSystemPrompt,
         color: newRole.color as 'primary' | 'secondary' | 'success' | 'warning' | 'danger' || 'primary',
         icon: newRole.icon || 'lucide:bot'
       };
-      
+
       onAddRole(role);
-      
+
       // 重置新角色表单
       setNewRole({
         name: '',
-        systemPrompt: 'You are a helpful assistant.',
+        systemPrompt: defaultSystemPrompt,
         color: 'primary',
         icon: 'lucide:bot'
       });
     }
   };
-  
+
   const colorOptions = [
-    { value: 'primary', label: 'Primary' },
-    { value: 'secondary', label: 'Secondary' },
-    { value: 'success', label: 'Success' },
-    { value: 'warning', label: 'Warning' },
-    { value: 'danger', label: 'Danger' }
+    { value: 'primary', labelKey: 'colorPrimary' },
+    { value: 'secondary', labelKey: 'colorSecondary' },
+    { value: 'success', labelKey: 'colorSuccess' },
+    { value: 'warning', labelKey: 'colorWarning' },
+    { value: 'danger', labelKey: 'colorDanger' }
   ];
-  
+
   const iconOptions = [
-    { value: 'lucide:bot', label: 'Bot' },
-    { value: 'lucide:code', label: 'Code' },
-    { value: 'lucide:brain', label: 'Brain' },
-    { value: 'lucide:pen', label: 'Creative' },
-    { value: 'lucide:book', label: 'Book' },
-    { value: 'lucide:rocket', label: 'Rocket' }
+    { value: 'lucide:bot', labelKey: 'iconBot' },
+    { value: 'lucide:code', labelKey: 'iconCode' },
+    { value: 'lucide:brain', labelKey: 'iconBrain' },
+    { value: 'lucide:pen', labelKey: 'iconCreative' },
+    { value: 'lucide:book', labelKey: 'iconBook' },
+    { value: 'lucide:rocket', labelKey: 'iconRocket' }
   ];
-  
+
   return (
     <div className="space-y-6">
       {/* 角色列表 */}
       <div className="space-y-3">
-        <h3 className="text-lg font-medium">{t('existingRoles')}</h3>
+        <h3 className="font-serif text-lg font-medium text-[#141413] dark:text-[#faf9f5]">{t('existingRoles')}</h3>
         <div className="space-y-2">
           {roles.map(role => (
-            <Card key={role.id} className={`p-3 ${selectedRoleId === role.id ? 'border-2 border-' + role.color : ''}`}>
+            <Card key={role.id} className={`border bg-[#faf9f5] p-3 dark:bg-[#1d1d1b] ${selectedRoleId === role.id ? 'border-[#c96442] shadow-[0_0_0_1px_#c96442]' : 'border-[#dedbd0] dark:border-[#30302e]'}`}>
               <div className="flex justify-between items-center">
                 <div className="flex items-center space-x-2">
                   <Avatar
@@ -197,8 +214,8 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
                     size="sm"
                   />
                   <div>
-                    <p className="font-medium">{role.name}</p>
-                    <p className="text-xs text-default-500 truncate max-w-md">{role.systemPrompt}</p>
+                    <p className="font-medium text-[#141413] dark:text-[#faf9f5]">{getAIRoleDisplayName(role, t)}</p>
+                    <p className="max-w-md truncate text-xs text-[#5e5d59] dark:text-[#b0aea5]">{getAIRoleDisplayPrompt(role, t)}</p>
                   </div>
                 </div>
                 <div className="flex space-x-1">
@@ -208,10 +225,10 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
                   <Button isIconOnly size="sm" variant="light" onPress={() => handleEditRole(role)}>
                     <Icon icon="lucide:edit" />
                   </Button>
-                  <Button 
-                    isIconOnly 
-                    size="sm" 
-                    variant="light" 
+                  <Button
+                    isIconOnly
+                    size="sm"
+                    variant="light"
                     isDisabled={roles.length <= 1}
                     onPress={() => handleStartDelete(role.id)}
                   >
@@ -223,11 +240,11 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
           ))}
         </div>
       </div>
-      
+
       {/* 角色编辑表单 */}
       {editingRole && (
-        <Card className="p-4 space-y-4">
-          <h3 className="text-lg font-medium">{t('editRole')}</h3>
+        <Card className="space-y-4 border border-[#dedbd0] bg-[#faf9f5] p-4 dark:border-[#30302e] dark:bg-[#1d1d1b]">
+          <h3 className="font-serif text-lg font-medium text-[#141413] dark:text-[#faf9f5]">{t('editRole')}</h3>
           <Input
             label={t('roleName')}
             value={editingRole.name}
@@ -241,7 +258,7 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
             maxRows={5}
           />
           <div className="grid grid-cols-2 gap-2">
-            <Select 
+            <Select
               label={t('roleColor')}
               selectedKeys={[editingRole.color]}
               onSelectionChange={(keys) => {
@@ -251,11 +268,11 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
             >
               {colorOptions.map((option) => (
                 <SelectItem key={option.value}>
-                  {option.label}
+                  {t(option.labelKey)}
                 </SelectItem>
               ))}
             </Select>
-            <Select 
+            <Select
               label={t('roleIcon')}
               selectedKeys={[editingRole.icon]}
               onSelectionChange={(keys) => {
@@ -266,33 +283,34 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
             >
               {iconOptions.map((option) => (
                 <SelectItem key={option.value} startContent={<Icon icon={option.value} />}>
-                  {option.label}
+                  {t(option.labelKey)}
                 </SelectItem>
               ))}
             </Select>
           </div>
           <div className="flex justify-end space-x-2">
             <Button variant="light" onPress={handleCancelEdit}>{t('cancel')}</Button>
-            <Button color="primary" onPress={handleSaveEdit}>{t('save')}</Button>
+            <Button color="secondary" className="bg-[#c96442] text-[#faf9f5]" onPress={handleSaveEdit}>{t('save')}</Button>
           </div>
         </Card>
       )}
-      
+
       {/* 新角色创建按钮和表单 */}
       {!showCreateForm ? (
         <div className="flex justify-center">
           <Button
-            color="primary"
+            color="secondary"
             startContent={<Icon icon="lucide:plus" />}
             onPress={() => setShowCreateForm(true)}
+            className="bg-[#c96442] text-[#faf9f5]"
           >
             {t('createNewRole')}
           </Button>
         </div>
       ) : (
-        <Card className="p-4 space-y-4">
+        <Card className="space-y-4 border border-[#dedbd0] bg-[#faf9f5] p-4 dark:border-[#30302e] dark:bg-[#1d1d1b]">
           <div className="flex justify-between items-center">
-            <h3 className="text-lg font-medium">{t('createNewRole')}</h3>
+            <h3 className="font-serif text-lg font-medium text-[#141413] dark:text-[#faf9f5]">{t('createNewRole')}</h3>
             <Button
               isIconOnly
               size="sm"
@@ -304,20 +322,20 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
           </div>
           <Input
             label={t('roleName')}
-            placeholder={t('enterRoomName') || "Enter role name"}
+            placeholder={t('enterRoleName')}
             value={newRole.name}
             onChange={(e) => setNewRole({...newRole, name: e.target.value})}
           />
           <Textarea
             label={t('systemPrompt')}
-            placeholder={t('describeRoom') || "Describe how the AI should behave"}
+            placeholder={t('describeAIRole')}
             value={newRole.systemPrompt}
             onChange={(e) => setNewRole({...newRole, systemPrompt: e.target.value})}
             minRows={3}
             maxRows={5}
           />
           <div className="grid grid-cols-2 gap-2">
-            <Select 
+            <Select
               label={t('roleColor')}
               selectedKeys={[newRole.color as string]}
               onSelectionChange={(keys) => {
@@ -327,11 +345,11 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
             >
               {colorOptions.map((option) => (
                 <SelectItem key={option.value}>
-                  {option.label}
+                  {t(option.labelKey)}
                 </SelectItem>
               ))}
             </Select>
-            <Select 
+            <Select
               label={t('roleIcon')}
               selectedKeys={[newRole.icon as string]}
               onSelectionChange={(keys) => {
@@ -342,14 +360,15 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
             >
               {iconOptions.map((option) => (
                 <SelectItem key={option.value} startContent={<Icon icon={option.value} />}>
-                  {option.label}
+                  {t(option.labelKey)}
                 </SelectItem>
               ))}
             </Select>
           </div>
           <div className="flex justify-end">
-            <Button 
-              color="primary" 
+            <Button
+              color="secondary"
+              className="bg-[#c96442] text-[#faf9f5]"
               onPress={() => {
                 handleCreateRole();
                 setShowCreateForm(false);
@@ -381,4 +400,4 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
       </Modal>
     </div>
   );
-}; 
+};
