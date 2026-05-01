@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
-import { 
-  Card, 
-  Button, 
-  Input, 
-  Modal, 
-  ModalContent, 
-  ModalHeader, 
-  ModalBody, 
+import {
+  Card,
+  Button,
+  Input,
+  Modal,
+  ModalContent,
+  ModalHeader,
+  ModalBody,
   ModalFooter,
   useDisclosure,
   Tooltip,
@@ -29,8 +29,8 @@ const formatDate = (dateString: string | number | Date | undefined): string => {
   if (!dateString) return 'N/A';
   try {
     // More concise date formatting for desktop view
-    return new Date(dateString).toLocaleDateString(undefined, { 
-      year: 'numeric', month: 'numeric', day: 'numeric' 
+    return new Date(dateString).toLocaleDateString(undefined, {
+      year: 'numeric', month: 'numeric', day: 'numeric'
     });
   } catch (e) {
     console.error("Error formatting date:", e);
@@ -49,7 +49,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
   const [joinRoomId, setJoinRoomId] = useState('');
   const [roomToDelete, setRoomToDelete] = useState<Room | null>(null);
   const [nameError, setNameError] = useState<string | null>(null);
-  const { 
+  const {
     isOpen: isDeleteConfirmOpen,
     onOpen: onOpenDeleteConfirm,
     onClose: onCloseDeleteConfirm
@@ -57,18 +57,18 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
 
   const handleCreateRoom = async () => {
     const trimmedName = newRoomName.trim();
-    
+
     // 验证房间名长度
     if (!trimmedName) {
       setNameError(t('errorEmptyRoomName'));
       return;
     }
-    
+
     if (trimmedName.length > 20) {
-      setNameError(t('errorRoomNameTooLong') || '房间名不能超过20个字符');
+      setNameError(t('errorRoomNameTooLong'));
       return;
     }
-    
+
     setNameError(null);
     setIsCreating(true);
     try {
@@ -114,7 +114,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
   const handleCopyRoomLink = (roomId: string) => {
     const baseUrl = window.location.origin;
     const roomUrl = `${baseUrl}/?room=${roomId}`;
-    
+
     navigator.clipboard.writeText(roomUrl)
       .then(() => {
         console.log('Room URL copied:', roomUrl);
@@ -146,13 +146,15 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
 
   if (rooms.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-full p-4">
-        <Icon icon="lucide:message-square" className="w-14 h-14 mb-3 text-violet-400" />
-        <h2 className="text-lg font-semibold mb-2 bg-gradient-to-r from-violet-600 to-fuchsia-600 bg-clip-text text-transparent">{t('noRoomsAvailable')}</h2>
-        <p className="text-default-500 mb-6 text-center text-sm">
+      <div className="flex h-full flex-col items-center justify-center p-6 text-center">
+        <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#e8e6dc] text-[#c96442] shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e] dark:text-[#d97757]">
+          <Icon icon="lucide:message-square" className="h-7 w-7" />
+        </div>
+        <h2 className="mb-2 font-serif text-xl font-medium text-[#141413] dark:text-[#faf9f5]">{t('noRoomsAvailable')}</h2>
+        <p className="mb-6 max-w-md text-sm leading-6 text-[#5e5d59] dark:text-[#b0aea5]">
           {t('noRoomsDescription')}
         </p>
-        
+
         {/* 桌面版：水平排列 */}
         <div className="hidden sm:flex flex-row gap-3 w-full max-w-md">
           <div className="flex flex-1">
@@ -164,24 +166,24 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
               className="flex-grow"
               classNames={{
                 input: "h-12",
-                inputWrapper: "h-12 rounded-r-none"
+                inputWrapper: "h-12 rounded-r-none bg-[#faf9f5] border border-[#dedbd0] dark:bg-[#1d1d1b] dark:border-[#30302e]"
               }}
               onKeyDown={(e) => { if (e.key === 'Enter') handleJoinRoom(); }}
             />
-            <Button 
-              onPress={handleJoinRoom} 
-              isDisabled={!joinRoomId.trim()} 
-              className="h-12 px-4 min-w-[120px] rounded-l-none text-sm"
+            <Button
+              onPress={handleJoinRoom}
+              isDisabled={!joinRoomId.trim()}
               aria-label={t('joinButton')}
               color="secondary"
+              className="h-12 min-w-[120px] rounded-l-none bg-[#30302e] px-4 text-sm text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413]"
             >
               {t('joinButton')}
             </Button>
           </div>
-          <Button 
-            color="secondary" 
-            onPress={handleOpenCreateModal} 
-            className="h-12 px-4 min-w-[120px] bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-sm"
+          <Button
+            color="secondary"
+            onPress={handleOpenCreateModal}
+            className="h-12 min-w-[120px] bg-[#c96442] px-4 text-sm text-[#faf9f5] shadow-[0_0_0_1px_#c96442]"
           >
             {t('create')}
           </Button>
@@ -198,29 +200,29 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
               className="flex-grow"
               classNames={{
                 input: "h-12",
-                inputWrapper: "h-12 rounded-r-none"
+                inputWrapper: "h-12 rounded-r-none bg-[#faf9f5] border border-[#dedbd0] dark:bg-[#1d1d1b] dark:border-[#30302e]"
               }}
               onKeyDown={(e) => { if (e.key === 'Enter') handleJoinRoom(); }}
             />
-            <Button 
-              onPress={handleJoinRoom} 
-              isDisabled={!joinRoomId.trim()} 
-              className="h-12 px-4 min-w-[120px] rounded-l-none text-sm"
+            <Button
+              onPress={handleJoinRoom}
+              isDisabled={!joinRoomId.trim()}
               aria-label={t('joinButton')}
               color="secondary"
+              className="h-12 min-w-[120px] rounded-l-none bg-[#30302e] px-4 text-sm text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413]"
             >
               {t('joinButton')}
             </Button>
           </div>
-          <Button 
-            color="secondary" 
-            onPress={handleOpenCreateModal} 
-            className="w-full h-12 bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-sm"
+          <Button
+            color="secondary"
+            onPress={handleOpenCreateModal}
+            className="h-12 w-full bg-[#c96442] text-sm text-[#faf9f5] shadow-[0_0_0_1px_#c96442]"
           >
             {t('create')}
           </Button>
         </div>
-        
+
         <Modal isOpen={isOpen} onClose={onClose}>
           <ModalContent>
             <ModalHeader className="flex flex-col gap-1">{t('createNewRoom')}</ModalHeader>
@@ -236,7 +238,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
                 isRequired
                 isInvalid={!!nameError}
                 errorMessage={nameError}
-                description={t('roomNameMaxLength') || '房间名最多20个字符'}
+                description={t('roomNameMaxLength')}
               />
               <Input
                 label={`${t('description')} (${t('optional')})`}
@@ -254,12 +256,12 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
               >
                 {t('cancel')}
               </Button>
-              <Button 
-                color="secondary" 
+              <Button
+                color="secondary"
                 onPress={handleCreateRoom}
                 isLoading={isCreating}
                 isDisabled={!newRoomName.trim() || isCreating}
-                className="bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white"
+                className="bg-[#c96442] text-[#faf9f5]"
               >
                 {t('create')}
               </Button>
@@ -271,9 +273,9 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
   }
 
   return (
-    <div className="p-4">
-      <div className="flex flex-wrap justify-between items-center gap-4 mb-4">
-        <h2 className="text-lg font-semibold bg-gradient-to-r from-violet-600 to-fuchsia-600 bg-clip-text text-transparent">{t('home')}</h2>
+    <div className="p-4 md:p-6">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
+        <h2 className="font-serif text-2xl font-medium text-[#141413] dark:text-[#faf9f5]">{t('home')}</h2>
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex">
             <Input
@@ -284,30 +286,30 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
               className="flex-grow"
               classNames={{
                 input: "h-10",
-                inputWrapper: "h-10 rounded-r-none"
+                inputWrapper: "h-10 rounded-r-none bg-[#faf9f5] border border-[#dedbd0] dark:bg-[#1d1d1b] dark:border-[#30302e]"
               }}
               onKeyDown={(e) => { if (e.key === 'Enter') handleJoinRoom(); }}
             />
-            <Button 
-              onPress={handleJoinRoom} 
-              isDisabled={!joinRoomId.trim()} 
-              className="h-10 px-4 min-w-[100px] rounded-l-none text-sm"
+            <Button
+              onPress={handleJoinRoom}
+              isDisabled={!joinRoomId.trim()}
+              className="h-10 min-w-[100px] rounded-l-none bg-[#30302e] px-4 text-sm text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413]"
               aria-label={t('joinButton')}
               color="secondary"
             >
               {t('joinButton')}
             </Button>
-            <Button 
-              color="secondary" 
+            <Button
+              color="secondary"
               onPress={handleOpenCreateModal}
-              className="h-10 px-4 min-w-[100px] ml-3 bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-sm"
+              className="ml-3 h-10 min-w-[100px] bg-[#c96442] px-4 text-sm text-[#faf9f5] shadow-[0_0_0_1px_#c96442]"
             >
               {t('create')}
             </Button>
           </div>
         </div>
       </div>
-      
+
       <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
         {rooms.map(room => {
           // 为每个房间创建单独的事件处理函数，避免事件冒泡
@@ -315,21 +317,21 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
             e.stopPropagation();
             handleCopyRoomId(room.id);
           };
-          
+
           const copyRoomLink = (e: React.MouseEvent) => {
             e.stopPropagation();
             handleCopyRoomLink(room.id);
           };
-          
+
           const deleteRoom = (e: React.MouseEvent) => {
             e.stopPropagation();
             openDeleteModal(room);
           };
-          
+
           return (
-            <Card 
-              key={room.id} 
-              className="p-4 hover:bg-gray-100/50 dark:hover:bg-gray-800/30 active:bg-gray-200/50 dark:active:bg-gray-700/40 transition-all duration-200 cursor-pointer border-1 border-violet-100 dark:border-gray-800 shadow-sm"
+            <Card
+              key={room.id}
+              className="cursor-pointer border border-[#dedbd0] bg-[#faf9f5] p-4 shadow-[0_0_0_1px_rgba(194,192,182,0.4)] transition-all duration-200 hover:bg-[#f0eee6] active:bg-[#e8e6dc] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:hover:bg-[#30302e]"
               isPressable // 使用 isPressable 替代 onClick 以利用 HeroUI 的按压效果
               onPress={() => {
                 console.log('Card pressed, selecting room:', room.id);
@@ -337,38 +339,38 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
               }}
             >
               <div className="flex items-start">
-                <div className="p-2.5 rounded-full bg-gradient-to-r from-violet-500/20 to-fuchsia-500/20 mr-3">
-                  <Icon icon="lucide:message-circle" className="text-violet-600 dark:text-violet-400 w-5 h-5" aria-hidden="true" />
+                <div className="mr-3 rounded-xl bg-[#e8e6dc] p-2.5 text-[#c96442] dark:bg-[#30302e] dark:text-[#d97757]">
+                  <Icon icon="lucide:message-circle" className="h-5 w-5" aria-hidden="true" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h3 className="font-medium text-sm mb-1 line-clamp-1">{room.name}</h3>
+                  <h3 className="mb-1 line-clamp-1 font-medium text-[#141413] dark:text-[#faf9f5]">{room.name}</h3>
                   {room.description && (
-                    <p className="text-xs text-default-500 mb-2 line-clamp-2">{room.description}</p>
+                    <p className="mb-2 line-clamp-2 text-xs text-[#5e5d59] dark:text-[#b0aea5]">{room.description}</p>
                   )}
                   <div className="flex justify-between items-center mt-2 gap-2">
-                    <p className="text-xs text-default-400 truncate flex-shrink min-w-0">
+                    <p className="min-w-0 flex-shrink truncate text-xs text-[#87867f] dark:text-[#b0aea5]">
                       <span className="hidden md:inline">ID: </span>
                       <span className="md:hidden">{room.id.substring(0, 8)}...</span>
                       <span className="hidden md:inline">{room.id}</span>
                     </p>
-                    
+
                     {room.createdAt && (
-                       <span className="hidden md:inline-block text-xs text-default-400 ml-2 whitespace-nowrap">
+                       <span className="ml-2 hidden whitespace-nowrap text-xs text-[#87867f] dark:text-[#b0aea5] md:inline-block">
                          {formatDate(room.createdAt)}
                        </span>
                     )}
-  
-                    <div 
+
+                    <div
                       className="flex items-center gap-0.5 ml-auto flex-shrink-0" // 减小按钮间距
                     >
-                       <Tooltip content={copiedRoomId === room.id ? t('copyRoomIdSuccess') : t('copyRoomId') || '复制房间ID'}>
+                       <Tooltip content={copiedRoomId === room.id ? t('copyRoomIdSuccess') : t('copyRoomId')}>
                          <Button
                            isIconOnly
                            size="sm"
                            variant="light" // 使用 light variant
-                           className="text-default-500" // 默认颜色
+                           className="text-[#5e5d59] dark:text-[#b0aea5]" // 默认颜色
                            onClick={copyRoomId}
-                           aria-label={t('copyRoomId') || '复制房间ID'}
+                           aria-label={t('copyRoomId')}
                          >
                             <Icon icon={copiedRoomId === room.id ? "lucide:check" : "lucide:copy"} className="w-3.5 h-3.5" />
                           </Button>
@@ -378,7 +380,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
                           isIconOnly
                           size="sm"
                           variant="light"
-                          className="text-default-500"
+                          className="text-[#5e5d59] dark:text-[#b0aea5]"
                           onClick={copyRoomLink}
                           aria-label={t('share')}
                         >
@@ -386,7 +388,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
                         </Button>
                       </Tooltip>
                       {room.creatorId === clientId && (
-                        <Tooltip content={t('deleteRoom')}> 
+                        <Tooltip content={t('deleteRoom')}>
                           <Button
                             isIconOnly
                             size="sm"
@@ -408,12 +410,12 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
           );
         })}
       </div>
-      
+
       <Modal isOpen={isDeleteConfirmOpen} onClose={onCloseDeleteConfirm}>
         <ModalContent>
-          <ModalHeader>{t('confirmDeleteRoomTitle')}</ModalHeader> 
+          <ModalHeader>{t('confirmDeleteRoomTitle')}</ModalHeader>
           <ModalBody>
-            <p>{t('confirmDeleteRoomDescription', { roomName: roomToDelete?.name })}</p> 
+            <p>{t('confirmDeleteRoomDescription', { roomName: roomToDelete?.name })}</p>
           </ModalBody>
           <ModalFooter>
             <Button variant="flat" onPress={onCloseDeleteConfirm}>
@@ -441,7 +443,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
               isRequired
               isInvalid={!!nameError}
               errorMessage={nameError}
-              description={t('roomNameMaxLength') || '房间名最多20个字符'}
+              description={t('roomNameMaxLength')}
             />
             <Input
               label={`${t('description')} (${t('optional')})`}
@@ -459,12 +461,12 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
             >
               {t('cancel')}
             </Button>
-            <Button 
-              color="secondary" 
+            <Button
+              color="secondary"
               onPress={handleCreateRoom}
               isLoading={isCreating}
               isDisabled={!newRoomName.trim() || isCreating}
-              className="bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white"
+              className="bg-[#c96442] text-[#faf9f5]"
             >
               {t('create')}
             </Button>
@@ -473,4 +475,4 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
       </Modal>
     </div>
   );
-}; 
+};

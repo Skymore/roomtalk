@@ -7,12 +7,12 @@ interface RoomJoinModalProps {
   handleConfirmJoin: (confirmed: boolean) => void;
 }
 
-export const RoomJoinModal: React.FC<RoomJoinModalProps> = ({ 
+export const RoomJoinModal: React.FC<RoomJoinModalProps> = ({
   roomToJoin,
   handleConfirmJoin
 }) => {
   const { t } = useTranslation();
-  
+
   if (!roomToJoin) return null;
 
   return (
@@ -26,10 +26,10 @@ export const RoomJoinModal: React.FC<RoomJoinModalProps> = ({
           <Button variant="flat" onPress={() => handleConfirmJoin(false)}>
             {t("cancel")}
           </Button>
-          <Button 
-            color="secondary" 
+          <Button
+            color="secondary"
             onPress={() => handleConfirmJoin(true)}
-            className="bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white"
+            className="bg-[#c96442] text-[#faf9f5]"
           >
             {t("join")}
           </Button>
@@ -37,4 +37,4 @@ export const RoomJoinModal: React.FC<RoomJoinModalProps> = ({
       </ModalContent>
     </Modal>
   );
-}; 
+};
