@@ -64,7 +64,7 @@ export const EditMessageModal: React.FC<EditMessageModalProps> = ({
       // Alternative: Call a different function? Or adjust onSaveAndAskAI?
       // For now, we only proceed if content changed.
       onClose();
-      return; 
+      return;
     }
     onClose(); // Close modal after action
   };
@@ -93,16 +93,16 @@ export const EditMessageModal: React.FC<EditMessageModalProps> = ({
       isOpen={isOpen}
       onRequestClose={onClose}
       // Apply overlay classes directly
-      overlayClassName="fixed inset-0 bg-black bg-opacity-50 backdrop-blur-sm z-[1000] flex items-center justify-center"
+      overlayClassName="fixed inset-0 bg-black/50 backdrop-blur-sm z-[1000] flex items-center justify-center"
       // Apply content classes directly
-      className="relative bg-content2 dark:bg-content1 rounded-lg shadow-xl p-5 m-4 max-w-lg w-full border-1 border-content3 dark:border-content2 outline-none transition-all duration-200" 
+      className="relative m-4 w-full max-w-lg rounded-2xl border border-[#dedbd0] bg-[#faf9f5] p-5 text-[#141413] shadow-xl outline-none transition-all duration-200 dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5]"
       contentLabel={t('editMessage')}
       ariaHideApp={false} // Set to true if you configure appElement
     >
       {message && ( // Only render content if message exists
         <div className="flex flex-col">
           {/* Use Tailwind classes */}
-          <h2 className="text-lg font-semibold mb-3 text-foreground dark:text-foreground">
+          <h2 className="mb-3 font-serif text-lg font-medium text-[#141413] dark:text-[#faf9f5]">
             {t('editMessage')}
           </h2>
           <Textarea
@@ -117,37 +117,37 @@ export const EditMessageModal: React.FC<EditMessageModalProps> = ({
             variant="bordered"
             className="text-sm mb-4" // Use text-sm for consistency
             classNames={{
-              input: "text-foreground dark:text-foreground text-sm leading-normal placeholder:text-foreground-400 dark:placeholder:text-foreground-500", // Ensure dark text is visible
-              inputWrapper: "p-2 bg-content3 dark:bg-content2 border-content4 dark:border-content3 focus-within:border-primary dark:focus-within:border-primary transition-colors", // Style wrapper
+              input: "text-[#141413] dark:text-[#faf9f5] text-sm leading-normal placeholder:text-[#87867f]",
+              inputWrapper: "p-2 bg-[#e8e6dc] dark:bg-[#30302e] border-[#dedbd0] dark:border-[#4d4c48] focus-within:border-[#c96442] transition-colors",
             }}
             placeholder={t('enterYourMessage')} // Use translation for placeholder
           />
           <div className="flex justify-end gap-2 mt-2">
             {/* Use t function for buttons */}
-            <Button 
-              variant="flat" 
-              size="sm" 
+            <Button
+              variant="flat"
+              size="sm"
               onPress={onClose}
-              className="text-default-600 hover:bg-content3 dark:hover:bg-content2 transition-colors"
+              className="text-[#5e5d59] transition-colors hover:bg-[#e8e6dc] dark:text-[#b0aea5] dark:hover:bg-[#30302e]"
             >
               {t('cancel')}
             </Button>
-            <Button 
-              variant="light" 
-              color="primary" 
-              size="sm" 
-              onPress={handleSaveClick} 
+            <Button
+              variant="light"
+              color="primary"
+              size="sm"
+              onPress={handleSaveClick}
               title={t('saveTitle')}
-              className="text-primary hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-colors"
+              className="text-[#30302e] transition-colors hover:bg-[#e8e6dc] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
             >
               <Icon icon="lucide:save" className="mr-1" width={14} height={14}/> {t('save')}
             </Button>
-            <Button 
-              color="primary" 
-              size="sm" 
-              onPress={handleSaveAndAskAIClick} 
+            <Button
+              color="primary"
+              size="sm"
+              onPress={handleSaveAndAskAIClick}
               title={t('saveAndAskAITitle')}
-              className="bg-primary hover:bg-primary-600 dark:bg-primary-700 dark:hover:bg-primary-800 text-white transition-colors"
+              className="bg-[#c96442] text-[#faf9f5] transition-colors hover:bg-[#b85737]"
             >
                <Icon icon="lucide:sparkles" className="mr-1" width={14} height={14}/> {t('saveAndAskAI')}
             </Button>
@@ -156,4 +156,4 @@ export const EditMessageModal: React.FC<EditMessageModalProps> = ({
       )}
     </Modal>
   );
-}; 
+};

@@ -12,52 +12,54 @@ interface BottomNavProps {
 
 export const BottomNav: React.FC<BottomNavProps> = ({ view, setView, currentRoom }) => {
   const { t } = useTranslation();
+  const activeClass = "bg-[#30302e] text-[#faf9f5] shadow-[0_0_0_1px_#30302e] dark:bg-[#faf9f5] dark:text-[#141413] dark:shadow-[0_0_0_1px_#faf9f5]";
+  const inactiveClass = "text-[#5e5d59] data-[hover=true]:bg-[#e8e6dc] dark:text-[#b0aea5] dark:data-[hover=true]:bg-[#30302e]";
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-t border-violet-200 dark:border-gray-800 md:hidden z-10">
+    <div className="safe-bottom z-10 flex-shrink-0 border-t border-[#dedbd0] bg-[#faf9f5]/95 backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/95 md:hidden">
       <div className="flex justify-center">
-        <div className="flex items-center justify-between px-3 py-1 w-full max-w-md">
+        <div className="flex w-full max-w-md items-center justify-between px-4 pt-2">
           <Button
             isIconOnly
             variant={view === "rooms" ? "solid" : "light"}
-            color={view === "rooms" ? "secondary" : "default"}
+            color="default"
             onPress={() => setView("rooms")}
-            className={`h-9 w-9 min-w-0 ${view === "rooms" ? "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white" : ""}`}
+            className={`h-10 w-10 min-w-0 rounded-xl ${view === "rooms" ? activeClass : inactiveClass}`}
             aria-label={t("home")}
           >
             <Icon icon="lucide:home" className="text-lg" />
           </Button>
-          
+
           <Button
             isIconOnly
             variant={view === "saved" ? "solid" : "light"}
-            color={view === "saved" ? "secondary" : "default"}
+            color="default"
             onPress={() => setView("saved")}
-            className={`h-9 w-9 min-w-0 ${view === "saved" ? "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white" : ""}`}
+            className={`h-10 w-10 min-w-0 rounded-xl ${view === "saved" ? activeClass : inactiveClass}`}
             aria-label={t("savedRooms")}
           >
             <Icon icon="lucide:bookmark" className="text-lg" />
           </Button>
-          
+
           {/* 聊天按钮 - 无论是否在房间中都显示，但样式会不同 */}
           <Button
             isIconOnly
             variant={view === "chat" ? "solid" : "light"}
-            color={view === "chat" ? "secondary" : "default"}
+            color="default"
             onPress={() => currentRoom ? setView("chat") : null}
             isDisabled={!currentRoom}
-            className={`h-10 w-10 min-w-0 ${view === "chat" ? "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white" : ""}`}
+            className={`h-11 w-11 min-w-0 rounded-2xl ${view === "chat" ? "bg-[#c96442] text-[#faf9f5] shadow-[0_0_0_1px_#c96442]" : inactiveClass}`}
             aria-label={currentRoom ? currentRoom.name : t("chatRooms")}
           >
             <Icon icon="lucide:message-circle" className="text-xl" />
           </Button>
-          
+
           <Button
             isIconOnly
             variant={view === "settings" ? "solid" : "light"}
-            color={view === "settings" ? "secondary" : "default"}
+            color="default"
             onPress={() => setView("settings")}
-            className={`h-9 w-9 min-w-0 ${view === "settings" ? "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white" : ""}`}
+            className={`h-10 w-10 min-w-0 rounded-xl ${view === "settings" ? activeClass : inactiveClass}`}
             aria-label={t("settings")}
           >
             <Icon icon="lucide:settings" className="text-lg" />
@@ -66,4 +68,4 @@ export const BottomNav: React.FC<BottomNavProps> = ({ view, setView, currentRoom
       </div>
     </div>
   );
-}; 
+};

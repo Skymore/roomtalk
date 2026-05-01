@@ -45,8 +45,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   };
 
   return (
-    <div className="flex justify-between items-center p-2 border-b border-violet-100 dark:border-gray-800">
-      <div className="flex items-center">
+    <div className="safe-top flex items-center justify-between border-b border-[#dedbd0] bg-[#faf9f5]/90 p-2 backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/90">
+      <div className="flex min-w-0 items-center">
         <Button
           isIconOnly
           variant="light"
@@ -55,25 +55,26 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             setView("rooms");
             clearRoomUrlParam();
           }}
-          className="mr-2 text-violet-500"
+          className="mr-2 rounded-xl text-[#c96442] dark:text-[#d97757]"
         >
           <Icon icon="lucide:chevron-left" width={24} />
         </Button>
-        <div className="flex items-center gap-2 flex-wrap">
-          <h2 className="text-lg font-semibold truncate max-w-[150px]">{currentRoom.name}</h2>
-          <span className="text-default-300">|</span>
-          <div className="flex flex-wrap items-center gap-2 text-xs text-default-500">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <h2 className="max-w-[150px] truncate font-serif text-lg font-medium leading-tight text-[#141413] dark:text-[#faf9f5]">{currentRoom.name}</h2>
+          <span className="text-[#c2c0b6]">|</span>
+          <div className="flex flex-wrap items-center gap-2 text-xs text-[#5e5d59] dark:text-[#b0aea5]">
             <div className="flex items-center">
               <Icon icon="lucide:users" className="mr-1" width={14} />
               {memberCount}
               {memberEvent && (
-                <span className="ml-1 text-tiny animate-fade-in">
-                  {memberEvent.type === "join" ? "🎉" : "🚶"} {memberEvent.userId.substring(0, 4)}...
+                <span className="ml-1 inline-flex items-center gap-1 text-tiny animate-fade-in">
+                  <Icon icon={memberEvent.type === "join" ? "lucide:user-plus" : "lucide:user-minus"} width={12} />
+                  {memberEvent.userId.substring(0, 4)}...
                 </span>
               )}
             </div>
             <div
-              className="flex items-center cursor-pointer"
+              className="flex cursor-pointer items-center rounded-md px-1 transition-colors hover:bg-[#e8e6dc] dark:hover:bg-[#30302e]"
               onClick={() => handleCopyToClipboard(currentRoom.id)}
             >
               <Icon icon="lucide:hash" className="mr-1" width={14} />
@@ -82,15 +83,15 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                   {currentRoom.id.length > 10 ? `${currentRoom.id.substring(0, 8)}...` : currentRoom.id}
                 </span>
               </Tooltip>
-              <Icon icon="lucide:copy" className="ml-1 text-default-400" width={12} />
+              <Icon icon="lucide:copy" className="ml-1 text-[#87867f] dark:text-[#b0aea5]" width={12} />
             </div>
           </div>
         </div>
       </div>
-      <div className="flex items-center">
+      <div className="flex flex-shrink-0 items-center">
         <Dropdown placement="top-end">
           <DropdownTrigger>
-            <Button isIconOnly variant="light" aria-label={t('ariaLabelRoomActions')}>
+            <Button isIconOnly variant="light" aria-label={t('ariaLabelRoomActions')} className="rounded-xl text-[#5e5d59] dark:text-[#b0aea5]">
               <Icon icon="lucide:more-vertical" width={20} className="md:w-5 w-4" />
             </Button>
           </DropdownTrigger>
@@ -101,28 +102,28 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             <DropdownItem key="share" startContent={<Icon icon="lucide:share-2" />} onPress={handleShareRoom}>
               {t('share')}
             </DropdownItem>
-            <DropdownItem 
-              key="save" 
-              startContent={<Icon icon={isSaved ? "lucide:bookmark-minus" : "lucide:bookmark-plus"} />} 
+            <DropdownItem
+              key="save"
+              startContent={<Icon icon={isSaved ? "lucide:bookmark-minus" : "lucide:bookmark-plus"} />}
               onPress={handleToggleSave}
               className={isSaved ? "text-warning-600 dark:text-warning-500" : ""}
             >
               {isSaved ? t('unsave') : t('saveAction')}
             </DropdownItem>
-            <DropdownItem 
-              key="clearChat" 
-              className="text-danger" 
-              color="danger" 
-              startContent={<Icon icon="lucide:eraser" />} 
+            <DropdownItem
+              key="clearChat"
+              className="text-danger"
+              color="danger"
+              startContent={<Icon icon="lucide:eraser" />}
               onPress={handleClearChatMessages}
             >
               {t('clearChatHistory')}
             </DropdownItem>
-            <DropdownItem 
-              key="leave" 
-              className="text-danger" 
-              color="danger" 
-              startContent={<Icon icon="lucide:log-out" />} 
+            <DropdownItem
+              key="leave"
+              className="text-danger"
+              color="danger"
+              startContent={<Icon icon="lucide:log-out" />}
               onPress={onConfirmLeave}
             >
               {t('leave')}
@@ -136,7 +137,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                   </PopoverTrigger>
                   <PopoverContent className="p-2">
                     <div className="text-sm font-medium mb-2">{t('confirmDeleteRoomTitle')}</div>
-                    <p className="text-xs text-default-500 mb-3">{t('confirmDeleteRoomDescription', { roomName: currentRoom.name })}</p>
+                    <p className="mb-3 text-xs text-[#5e5d59] dark:text-[#b0aea5]">{t('confirmDeleteRoomDescription', { roomName: currentRoom.name })}</p>
                     <Button size="sm" color="danger" onPress={() => handleDeleteRoom(currentRoom.id)} className="w-full">
                       {t('delete')}
                     </Button>
@@ -149,4 +150,4 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
       </div>
     </div>
   );
-}; 
+};
