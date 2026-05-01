@@ -31,7 +31,7 @@ import { RoomJoinModal } from "../components/RoomJoinModal";
 import { BottomNav } from "../components/BottomNav";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 
-// 修改随机名字库 - 为印地语添加新的形容词和名词
+// Random display names follow the active app language.
 const CN_ADJECTIVES = ["可爱", "萌萌", "温柔", "活泼", "聪明", "快乐", "甜蜜", "淘气", "软软", "闪亮", "乖巧", "迷你"];
 const CN_NOUNS = [
   "小猫",
@@ -80,7 +80,37 @@ const HI_NOUNS = [
   "फूल",
 ];
 
-// 生成随机名字 - 根据i18n语言设置决定生成中文、英文或印地语名字
+const JA_ADJECTIVES = ["ふわふわ", "小さな", "やさしい", "元気な", "きらきら", "楽しい", "のんびり", "かわいい", "陽気な", "まるい"];
+const JA_NOUNS = [
+  "うさぎ",
+  "こねこ",
+  "こいぬ",
+  "パンダ",
+  "クッキー",
+  "星",
+  "きつね",
+  "あひる",
+  "花",
+  "くじら",
+  "蝶",
+];
+
+const KO_ADJECTIVES = ["포근한", "작은", "달콤한", "발랄한", "반짝이는", "즐거운", "느긋한", "귀여운", "상냥한", "동그란"];
+const KO_NOUNS = [
+  "토끼",
+  "고양이",
+  "강아지",
+  "판다",
+  "쿠키",
+  "별",
+  "여우",
+  "오리",
+  "꽃",
+  "고래",
+  "나비",
+];
+
+// 生成随机名字 - 根据i18n语言设置决定生成对应语言名字
 const generateRandomName = (language: string): string => {
   // 如果语言设置为中文，或者开头为zh（如zh-CN），则生成中文名字
   if (language === "zh" || language.startsWith("zh-")) {
@@ -91,6 +121,14 @@ const generateRandomName = (language: string): string => {
     // 生成印地语名字
     const adj = HI_ADJECTIVES[Math.floor(Math.random() * HI_ADJECTIVES.length)];
     const noun = HI_NOUNS[Math.floor(Math.random() * HI_NOUNS.length)];
+    return adj + " " + noun;
+  } else if (language === "ja" || language.startsWith("ja-")) {
+    const adj = JA_ADJECTIVES[Math.floor(Math.random() * JA_ADJECTIVES.length)];
+    const noun = JA_NOUNS[Math.floor(Math.random() * JA_NOUNS.length)];
+    return adj + noun;
+  } else if (language === "ko" || language.startsWith("ko-")) {
+    const adj = KO_ADJECTIVES[Math.floor(Math.random() * KO_ADJECTIVES.length)];
+    const noun = KO_NOUNS[Math.floor(Math.random() * KO_NOUNS.length)];
     return adj + " " + noun;
   } else {
     // 否则生成英文名字
@@ -179,15 +217,17 @@ interface WelcomeViewProps {
 const WelcomeView = ({ onEnterRooms }: WelcomeViewProps) => {
   const { t } = useTranslation();
   return (
-    <div className="flex flex-col items-center justify-center h-full p-4 overflow-y-auto">
-      <Icon icon="lucide:message-circle" className="w-16 h-16 mb-4 text-violet-500" />
-      <h2 className="text-xl font-semibold mb-2">{t("welcomeMessage")}</h2>
-      <p className="text-default-500 mb-6 text-center">{t("welcomeDescription")}</p>
-      <Button 
-        color="secondary" 
-        onPress={onEnterRooms} 
+    <div className="flex h-full flex-col items-center justify-center overflow-y-auto p-6 text-center">
+      <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-[#e8e6dc] text-[#c96442] shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e] dark:text-[#d97757]">
+        <Icon icon="lucide:message-circle" className="h-8 w-8" />
+      </div>
+      <h2 className="mb-2 font-serif text-2xl font-medium leading-tight text-[#141413] dark:text-[#faf9f5]">{t("welcomeMessage")}</h2>
+      <p className="mb-6 max-w-md text-sm leading-6 text-[#5e5d59] dark:text-[#b0aea5]">{t("welcomeDescription")}</p>
+      <Button
+        color="secondary"
+        onPress={onEnterRooms}
         startContent={<Icon icon="lucide:users" />}
-        className="bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white"
+        className="bg-[#c96442] text-[#faf9f5] shadow-[0_0_0_1px_#c96442]"
       >
         {t("home")}
       </Button>
@@ -199,7 +239,7 @@ export const MessagePage: React.FC = () => {
   // 不操作 html/body 滚动，页面固定高度由容器本身管理
   // 添加初始化标志，防止初始渲染时清除存储的房间
   const isInitialMount = useRef(true);
-  // 用 CSS h-screen 来撑满视口，无需 JS 计算高度
+  // 页面高度由 App shell 的 visual viewport 变量控制
   const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
   const isDark = theme === "dark";
@@ -286,7 +326,7 @@ export const MessagePage: React.FC = () => {
       isInitialMount.current = false;
       return;
     }
-    
+
     console.log("Room changed - save current room state:", currentRoom ? currentRoom.id : "null");
     saveCurrentRoom(currentRoom);
   }, [currentRoom]);
@@ -296,7 +336,7 @@ export const MessagePage: React.FC = () => {
     // 首先检查是否从URL加载房间
     console.log("Attempting to restore room from storage");
     const roomIdFromUrl = searchParams.get("room");
-    
+
     if (roomIdFromUrl) {
       console.log("URL contains room ID, prioritize URL parameter:", roomIdFromUrl);
       // URL参数优先，这个逻辑不变
@@ -306,11 +346,11 @@ export const MessagePage: React.FC = () => {
     // 如果没有URL房间参数，且当前没有活跃房间，尝试从localStorage恢复
     if (!currentRoom && !isLoadingRoom) {
       const storedRoom = getStoredRoom();
-      
+
       if (storedRoom) {
         setIsLoadingRoom(true);
         console.log("Found stored room, attempting to restore:", storedRoom.id);
-        
+
         // 验证房间是否仍然存在
         getRoomById(storedRoom.id)
           .then((roomInfo) => {
@@ -320,11 +360,11 @@ export const MessagePage: React.FC = () => {
               joinRoom(storedRoom.id);
               setCurrentRoom(roomInfo);
               setMemberCount(getRoomMemberCount(storedRoom.id));
-              
+
               // 根据保存的视图状态决定是否切换到chat视图
               const savedView = getStoredView();
               console.log("Restored room with saved view:", savedView);
-              
+
               // 只有当保存的视图是chat时，才切换到chat视图
               if (savedView === "chat" && view !== "chat") {
                 console.log("Switching to chat view based on saved view state");
@@ -537,9 +577,9 @@ export const MessagePage: React.FC = () => {
       if (response.success) {
         console.log('Server confirmed PERMANENT room deletion:', roomId);
         // No need to update savedRooms here, that's handled by unsave.
-        // The room list (`rooms` state) will be updated automatically 
+        // The room list (`rooms` state) will be updated automatically
         // when the server sends the new 'room_list' event.
-        
+
         // If currently in the deleted room, navigate away
         if (currentRoom && currentRoom.id === roomId) {
           setCurrentRoom(null);
@@ -564,11 +604,11 @@ export const MessagePage: React.FC = () => {
 
     return (
         // Use PanelGroup for horizontal resizing
-        <PanelGroup direction="horizontal" className="flex flex-1 w-full h-full min-h-0">
-            <PanelResizeHandle className="w-px bg-violet-100 dark:bg-gray-800 hover:bg-violet-200 dark:hover:bg-gray-700 transition-colors cursor-col-resize data-[resize-handle-active]:bg-violet-400 data-[resize-handle-active]:dark:bg-violet-500"/>
+        <PanelGroup direction="horizontal" className="flex h-full min-h-0 w-full flex-1">
+            <PanelResizeHandle className="w-px cursor-col-resize bg-[#dedbd0] transition-colors hover:bg-[#c2c0b6] data-[resize-handle-active]:bg-[#c96442] dark:bg-[#30302e] dark:hover:bg-[#4d4c48] dark:data-[resize-handle-active]:bg-[#d97757]"/>
             {/* --- Right Panel: Chat Interface --- */}
             <Panel defaultSize={50} minSize={30}>
-                <div className="flex flex-col flex-1 h-full min-h-0"> { /* Keep the right side as flex column */}
+                <div className="flex h-full min-h-0 flex-1 flex-col bg-[#f5f4ed] dark:bg-[#141413]"> { /* Keep the right side as flex column */}
                      <ChatHeader
                         currentRoom={currentRoom}
                         memberCount={memberCount}
@@ -585,11 +625,11 @@ export const MessagePage: React.FC = () => {
                         clientId={clientId}
                      />
 
-                     <div className="flex-1 w-full overflow-y-auto"> {/* 消息列表区域 */} 
+                     <div className="min-h-0 w-full flex-1 overflow-hidden"> {/* 消息列表区域 */}
                          <MessageList roomId={currentRoom.id} />
                      </div>
 
-                     <div className="border-t p-1 flex-shrink-0 border-violet-100 dark:border-gray-800"> {/* 输入框区域 */} 
+                     <div className="flex-shrink-0 border-t border-[#dedbd0] bg-[#faf9f5]/92 p-2 backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/92"> {/* 输入框区域 */}
                          <MessageInput
                              roomId={currentRoom.id}
                              username={username}
@@ -608,10 +648,10 @@ export const MessagePage: React.FC = () => {
   const renderContent = () => {
     if (isLoadingRoom) {
       return (
-        <div className="flex flex-col items-center justify-center h-full p-4"> {/* 保持全屏居中 */} 
-          <Icon icon="lucide:loader" className="w-16 h-16 mb-4 text-violet-500 animate-spin" />
-          <h2 className="text-xl font-semibold mb-2">{t("loading")}</h2>
-          <p className="text-default-500 text-center">{t("loadingDescription")}</p>
+        <div className="flex flex-col items-center justify-center h-full p-4"> {/* 保持全屏居中 */}
+          <Icon icon="lucide:loader" className="mb-4 h-16 w-16 animate-spin text-[#c96442]" />
+          <h2 className="mb-2 font-serif text-xl font-medium text-[#141413] dark:text-[#faf9f5]">{t("loading")}</h2>
+          <p className="text-center text-[#5e5d59] dark:text-[#b0aea5]">{t("loadingDescription")}</p>
         </div>
       );
     }
@@ -619,10 +659,10 @@ export const MessagePage: React.FC = () => {
     switch (view) {
       case "rooms":
         return (
-          <div className="h-full overflow-y-auto"> {/* 占据全部可用空间 */} 
-            <RoomList 
-              rooms={rooms} 
-              onRoomSelect={handleRoomSelect} 
+          <div className="h-full overflow-y-auto"> {/* 占据全部可用空间 */}
+            <RoomList
+              rooms={rooms}
+              onRoomSelect={handleRoomSelect}
               handleDeleteRoom={handleDeleteRoom}
               clientId={clientId}
               username={username}
@@ -631,17 +671,17 @@ export const MessagePage: React.FC = () => {
         );
       case "saved":
         return (
-          <div className="h-full overflow-y-auto"> {/* 占据全部可用空间 */} 
-            <SavedRoomList 
-              rooms={savedRooms} 
-              onRoomSelect={handleRoomSelect} 
+          <div className="h-full overflow-y-auto"> {/* 占据全部可用空间 */}
+            <SavedRoomList
+              rooms={savedRooms}
+              onRoomSelect={handleRoomSelect}
               onRoomsChange={setSavedRooms}
             />
           </div>
         );
       case "settings":
         return (
-          <SettingsView 
+          <SettingsView
             username={username}
             setUsername={setUsername}
             showEditUsername={showEditUsername}
@@ -663,8 +703,8 @@ export const MessagePage: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-screen bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100"> {/* 确保根容器是 flex 列且占满屏幕高度 */} 
-      <AppHeader 
+    <div className="flex h-full min-h-0 flex-col bg-[#f5f4ed] text-[#141413] dark:bg-[#141413] dark:text-[#faf9f5]"> {/* 确保根容器是 flex 列且占满屏幕高度 */}
+      <AppHeader
         clientId={clientId}
         username={username}
         setView={setView}
@@ -677,19 +717,19 @@ export const MessagePage: React.FC = () => {
         handleCopyToClipboard={handleCopyToClipboard}
       />
 
-      {/* 错误和成功消息 - 暂时移除直接调用，依赖其他组件处理 */} 
-      {/* {error && <SomeErrorComponent message={error} />} */} 
-      {/* {success && <SomeSuccessComponent message={success} />} */} 
+      {/* 错误和成功消息 - 暂时移除直接调用，依赖其他组件处理 */}
+      {/* {error && <SomeErrorComponent message={error} />} */}
+      {/* {success && <SomeSuccessComponent message={success} />} */}
 
-      {/* 主内容区域， flex-1 使其填充剩余空间，overflow-hidden 避免双重滚动条 */} 
-      <main className="flex-1 overflow-hidden"> 
-        {renderContent()} {/* 渲染当前视图 */} 
+      {/* 主内容区域， flex-1 使其填充剩余空间，overflow-hidden 避免双重滚动条 */}
+      <main className="min-h-0 flex-1 overflow-hidden">
+        {renderContent()} {/* 渲染当前视图 */}
       </main>
 
       {/* 底部导航栏 - 移除 view !== "settings" 条件 */}
       <BottomNav view={view} setView={setView} currentRoom={currentRoom} />
 
-      {/* 加入房间确认弹窗 - 恢复之前的属性传递 */} 
+      {/* 加入房间确认弹窗 - 恢复之前的属性传递 */}
       {roomToJoin && (
           <RoomJoinModal
             roomToJoin={roomToJoin} // 传递整个对象

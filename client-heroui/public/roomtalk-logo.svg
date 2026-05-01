@@ -1,21 +1,15 @@
-<svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
-  <!-- 渐变背景 -->
-  <defs>
-    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#8b5cf6;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#d946ef;stop-opacity:1" />
-    </linearGradient>
-  </defs>
-  
-  <!-- 背景圆 -->
-  <circle cx="60" cy="60" r="55" fill="url(#grad1)"/>
-  
-  <!-- 消息气泡形状 -->
-  <path d="M60 35 L75 35 C82 35 88 41 88 48 L88 72 C88 79 82 85 75 85 L60 85 L50 95 L50 85 L45 85 C38 85 32 79 32 72 L32 48 C32 41 38 35 45 35 Z" 
-        fill="white" fill-opacity="0.2" stroke="white" stroke-width="2.5"/>
-  
-  <!-- 消息指示点 -->
-  <circle cx="48" cy="60" r="4" fill="white"/>
-  <circle cx="60" cy="60" r="4" fill="white"/>
-  <circle cx="72" cy="60" r="4" fill="white"/>
+<svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="RoomTalk">
+  <circle cx="60" cy="60" r="54" fill="#30302e"/>
+  <circle cx="60" cy="60" r="54" fill="none" stroke="#dedbd0" stroke-width="4"/>
+  <path
+    d="M35 47c0-9.4 7.6-17 17-17h26c9.4 0 17 7.6 17 17v19c0 9.4-7.6 17-17 17H64.5L49.5 95V83H52c-9.4 0-17-7.6-17-17V47Z"
+    fill="#faf9f5"
+  />
+  <path
+    d="M43 47c0-5 4-9 9-9h26c5 0 9 4 9 9v19c0 5-4 9-9 9H61.5L55 80.5V75h-3c-5 0-9-4-9-9V47Z"
+    fill="#c96442"
+  />
+  <circle cx="57" cy="57" r="4" fill="#faf9f5"/>
+  <circle cx="67" cy="57" r="4" fill="#faf9f5"/>
+  <path d="M45 31c4.5-6 12.6-9 22-7" fill="none" stroke="#d97757" stroke-width="4" stroke-linecap="round"/>
 </svg>

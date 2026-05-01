@@ -2,9 +2,115 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --app-height: 100dvh;
+  --rt-paper: #f5f4ed;
+  --rt-ivory: #faf9f5;
+  --rt-sand: #e8e6dc;
+  --rt-border: #dedbd0;
+  --rt-text: #141413;
+  --rt-muted: #5e5d59;
+  --rt-terracotta: #c96442;
+  --rt-coral: #d97757;
+  --rt-dark: #141413;
+  --rt-dark-surface: #30302e;
+  --rt-dark-text: #faf9f5;
+  --rt-dark-muted: #b0aea5;
+  background: var(--rt-paper);
+  color: var(--rt-text);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  background: var(--rt-paper);
+}
+
+body {
+  margin: 0;
+  touch-action: manipulation;
+  color: var(--rt-text);
+}
+
+.dark {
+  color-scheme: dark;
+  color: var(--rt-dark-text);
+}
+
+.dark body,
+.dark #root {
+  background: var(--rt-dark);
+  color: var(--rt-dark-text);
+}
+
+.app-shell {
+  width: 100%;
+  height: 100dvh;
+  height: var(--app-height, 100dvh);
+  overflow: hidden;
+  background: var(--rt-paper);
+}
+
+.dark .app-shell {
+  background: var(--rt-dark);
+}
+
+.safe-bottom {
+  padding-bottom: max(env(safe-area-inset-bottom), 0.5rem);
+}
+
+.safe-top {
+  padding-top: max(env(safe-area-inset-top), 0rem);
+}
+
+.roomtalk-ring {
+  box-shadow: 0 0 0 1px rgba(194, 192, 182, 0.82), 0 10px 24px rgba(20, 20, 19, 0.05);
+}
+
+.markdown-container {
+  color: inherit;
+  --tw-prose-body: currentColor;
+  --tw-prose-headings: currentColor;
+  --tw-prose-lead: currentColor;
+  --tw-prose-links: currentColor;
+  --tw-prose-bold: currentColor;
+  --tw-prose-counters: currentColor;
+  --tw-prose-bullets: currentColor;
+  --tw-prose-quotes: currentColor;
+  --tw-prose-quote-borders: rgba(194, 192, 182, 0.78);
+  --tw-prose-captions: currentColor;
+  --tw-prose-code: currentColor;
+  --tw-prose-th-borders: rgba(194, 192, 182, 0.78);
+  --tw-prose-td-borders: rgba(194, 192, 182, 0.42);
+}
+
+.markdown-container :where(p, div, span, li, strong, em, blockquote):not(:where(pre, pre *, [class~="not-prose"], [class~="not-prose"] *)) {
+  color: inherit;
+}
+
+.markdown-container :where(a):not(:where(pre, pre *, [class~="not-prose"], [class~="not-prose"] *)) {
+  color: inherit;
+  text-decoration-color: currentColor;
+  text-underline-offset: 3px;
+}
+
+.markdown-container :where(code):not(:where(pre code, [class~="not-prose"], [class~="not-prose"] *)) {
+  color: inherit;
+}
+
+.message-markdown :where(p, div, span, li, strong, em, blockquote, code, a):not(:where(pre, pre *)) {
+  color: inherit !important;
+}
+
 [contenteditable]:empty:before {
   content: attr(data-placeholder);
-  color: #a1a1aa;
+  color: #87867f;
   cursor: text;
 }
 
