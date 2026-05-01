@@ -16,6 +16,7 @@ import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { Room } from "../utils/types";
 import { getAvatarText, getAvatarColor } from "../pages/MessagePage";
+import { getLanguageOption, languageOptions } from "../utils/languages";
 
 interface AppHeaderProps {
   clientId: string;
@@ -42,20 +43,21 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   handleCopyToClipboard
 }) => {
   const { t } = useTranslation();
+  const currentLanguage = getLanguageOption(i18n.language);
 
   return (
-    <Navbar 
-      isBordered 
-      maxWidth="full" 
-      className="bg-white/70 dark:bg-gray-900/70 backdrop-blur-md border-b border-violet-200 dark:border-gray-800 hidden md:flex"
+    <Navbar
+      isBordered
+      maxWidth="full"
+      className="hidden border-b border-[#dedbd0] bg-[#faf9f5]/88 backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/88 md:flex"
     >
       <div className="w-full mx-auto px-2 sm:px-8 flex justify-between items-center">
-        <NavbarBrand 
-          className="cursor-pointer" 
+        <NavbarBrand
+          className="cursor-pointer"
           onClick={() => setView('rooms')}
         >
           <img src="/roomtalk-logo.svg" alt="RoomTalk Logo" className="w-8 h-8" />
-          <p className="font-bold ml-2 bg-gradient-to-r from-violet-600 to-pink-600 bg-clip-text text-transparent text-sm">RoomTalk</p>
+          <p className="ml-2 font-serif text-base font-medium text-[#141413] dark:text-[#faf9f5]">RoomTalk</p>
         </NavbarBrand>
 
         {/* 桌面导航按钮 (仅图标) - 移动到 Brand 右侧 */}
@@ -68,7 +70,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               color={view === 'rooms' || view === 'chat' ? 'secondary' : 'default'}
               aria-label={t('home')}
               onPress={() => setView('rooms')}
-              className={` ${view === 'rooms' || view === 'chat' ? 'text-secondary-foreground' : 'text-default-600 dark:text-default-400'}`}
+              className={`rounded-xl ${view === 'rooms' || view === 'chat' ? 'bg-[#c96442] text-[#faf9f5]' : 'text-[#5e5d59] dark:text-[#b0aea5]'}`}
             >
               <Icon icon="lucide:home" width={18}/>
             </Button>
@@ -82,7 +84,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               color={view === 'saved' ? 'secondary' : 'default'}
               aria-label={t('savedRooms')}
               onPress={() => setView('saved')}
-              className={` ${view === 'saved' ? 'text-secondary-foreground' : 'text-default-600 dark:text-default-400'}`}
+              className={`rounded-xl ${view === 'saved' ? 'bg-[#c96442] text-[#faf9f5]' : 'text-[#5e5d59] dark:text-[#b0aea5]'}`}
             >
               <Icon icon="lucide:bookmark" width={18}/>
             </Button>
@@ -95,7 +97,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               color={view === 'settings' ? 'secondary' : 'default'}
               aria-label={t('settings')}
               onPress={() => setView('settings')}
-              className={` ${view === 'settings' ? 'text-secondary-foreground' : 'text-default-600 dark:text-default-400'}`}
+              className={`rounded-xl ${view === 'settings' ? 'bg-[#c96442] text-[#faf9f5]' : 'text-[#5e5d59] dark:text-[#b0aea5]'}`}
             >
               <Icon icon="lucide:settings" width={18}/>
             </Button>
@@ -110,7 +112,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
                 variant="flat"
                 color="secondary"
                 size="sm"
-                className="cursor-pointer text-xs"
+                className="cursor-pointer bg-[#e8e6dc] text-xs text-[#4d4c48] dark:bg-[#30302e] dark:text-[#faf9f5]"
                 onClick={() => handleCopyToClipboard(clientId)}
               >
                 ID: {clientId.slice(0, 8)}...
@@ -120,38 +122,40 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             {/* 桌面版：用户头像、语言切换和主题切换 */}
             <div className="hidden md:flex items-center gap-2">
               <Avatar name={getAvatarText(username)} color={getAvatarColor(username) as any} size="sm" />
-              
+
               {/* 替换语言切换按钮为下拉菜单 */}
               <Dropdown>
                 <DropdownTrigger>
-                  <Button 
-                    variant="light" 
-                    className="min-w-unit-24 px-2" 
+                  <Button
+                    variant="light"
+                    className="min-w-unit-24 px-2 text-[#5e5d59] dark:text-[#b0aea5]"
                     startContent={<Icon icon="lucide:languages" width={20} />}
                     endContent={<Icon icon="lucide:chevron-down" width={14} />}
                   >
-                    {i18n.language.startsWith("zh") ? "中文" : i18n.language === "hi" ? "हिंदी" : "English"}
+                    {currentLanguage.displayName}
                   </Button>
                 </DropdownTrigger>
                 <DropdownMenu aria-label={t("languageSelection")}>
-                  <DropdownItem key="en" onPress={() => changeLanguage("en")} startContent={<Icon icon="circle-flags:uk" />}>
-                    {t("english")}
-                  </DropdownItem>
-                  <DropdownItem key="zh" onPress={() => changeLanguage("zh")} startContent={<Icon icon="circle-flags:cn" />}>
-                    {t("chinese")}
-                  </DropdownItem>
-                  <DropdownItem key="hi" onPress={() => changeLanguage("hi")} startContent={<Icon icon="circle-flags:in" />}>
-                    {t("hindi")}
-                  </DropdownItem>
+                  {languageOptions.map((option) => (
+                    <DropdownItem
+                      key={option.key}
+                      textValue={t(option.labelKey)}
+                      onPress={() => changeLanguage(option.key)}
+                      startContent={<Icon icon={option.icon} />}
+                    >
+                      {t(option.labelKey)}
+                    </DropdownItem>
+                  ))}
                 </DropdownMenu>
               </Dropdown>
-              
+
               <Tooltip content={isDark ? t("lightMode") : t("darkMode")}>
                 <Button
                   isIconOnly
                   variant="light"
                   onPress={toggleTheme}
-                  aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+                  aria-label={isDark ? t("switchToLightMode") : t("switchToDarkMode")}
+                  className="text-[#5e5d59] dark:text-[#b0aea5]"
                 >
                   <Icon icon={isDark ? "lucide:sun" : "lucide:moon"} width={20} />
                 </Button>
@@ -163,11 +167,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               <Avatar name={getAvatarText(username)} color={getAvatarColor(username) as any} size="sm" />
               <Dropdown>
                 <DropdownTrigger>
-                  <Button isIconOnly variant="light" aria-label="Menu" className="min-w-0">
+                  <Button isIconOnly variant="light" aria-label={t("menu")} className="min-w-0">
                     <Icon icon="lucide:more-vertical" width={20} />
                   </Button>
                 </DropdownTrigger>
-                <DropdownMenu aria-label="User actions">
+                <DropdownMenu aria-label={t("userActions")}>
                   <DropdownItem
                     key="settings"
                     startContent={<Icon icon="lucide:settings" />}
@@ -175,27 +179,48 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
                   >
                     {t("settings")}
                   </DropdownItem>
-                  
-                  {/* 语言菜单 */}
-                  <DropdownItem key="english" textValue={t("english")}
+
+                  <DropdownItem
+                    key="language-en"
+                    textValue={t("english")}
                     startContent={<Icon icon="circle-flags:uk" />}
                     onPress={() => changeLanguage("en")}
                   >
                     {t("english")}
                   </DropdownItem>
-                  <DropdownItem key="chinese" textValue={t("chinese")}
-                    startContent={<Icon icon="circle-flags:cn" />} 
+                  <DropdownItem
+                    key="language-zh"
+                    textValue={t("chinese")}
+                    startContent={<Icon icon="circle-flags:cn" />}
                     onPress={() => changeLanguage("zh")}
                   >
                     {t("chinese")}
                   </DropdownItem>
-                  <DropdownItem key="hindi" textValue={t("hindi")}
+                  <DropdownItem
+                    key="language-hi"
+                    textValue={t("hindi")}
                     startContent={<Icon icon="circle-flags:in" />}
                     onPress={() => changeLanguage("hi")}
                   >
                     {t("hindi")}
                   </DropdownItem>
-                  
+                  <DropdownItem
+                    key="language-ja"
+                    textValue={t("japanese")}
+                    startContent={<Icon icon="circle-flags:jp" />}
+                    onPress={() => changeLanguage("ja")}
+                  >
+                    {t("japanese")}
+                  </DropdownItem>
+                  <DropdownItem
+                    key="language-ko"
+                    textValue={t("korean")}
+                    startContent={<Icon icon="circle-flags:kr" />}
+                    onPress={() => changeLanguage("ko")}
+                  >
+                    {t("korean")}
+                  </DropdownItem>
+
                   <DropdownItem
                     key="theme"
                     startContent={<Icon icon={isDark ? "lucide:sun" : "lucide:moon"} />}
@@ -211,4 +236,4 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       </div>
     </Navbar>
   );
-}; 
+};

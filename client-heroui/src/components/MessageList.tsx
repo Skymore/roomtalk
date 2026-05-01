@@ -12,7 +12,7 @@ import { EditMessageModal } from './EditMessageModal';
 
 // Reminder: Set the app element for react-modal for accessibility
 // Ideally in your root component file (e.g., App.tsx or main.tsx)
-// Modal.setAppElement('#root'); 
+// Modal.setAppElement('#root');
 
 interface MessageListProps {
   roomId: string;
@@ -77,33 +77,33 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
   };
 
   // --- Modal Handlers (Keep dependencies as they are or simplify if possible) ---
-  const handleOpenDeleteModal = useCallback((messageId: string) => { 
+  const handleOpenDeleteModal = useCallback((messageId: string) => {
     const msg = messages.find(m => m.id === messageId);
     if (msg) {
       setMessageToDelete(msg);
       setIsDeleteModalOpen(true);
     }
    }, [messages]);
-  const handleCloseDeleteModal = useCallback(() => { 
+  const handleCloseDeleteModal = useCallback(() => {
       setIsDeleteModalOpen(false);
     setMessageToDelete(null);
    }, []);
-  const handleOpenEditModal = useCallback((messageId: string) => { 
+  const handleOpenEditModal = useCallback((messageId: string) => {
       const msg = messages.find(m => m.id === messageId);
     if (msg) {
       setMessageToEdit(msg);
       setIsEditModalOpen(true);
     }
   }, [messages]);
-  const handleCloseEditModal = useCallback(() => { 
+  const handleCloseEditModal = useCallback(() => {
       setIsEditModalOpen(false);
     setMessageToEdit(null);
    }, []);
 
-  // --- Edit/Delete Logic --- 
+  // --- Edit/Delete Logic ---
   const handleSaveEdit = useCallback((messageId: string, newContent: string) => {
     console.log('Saving edit (from modal):', messageId, newContent);
-    const originalMessages = messages; 
+    const originalMessages = messages;
     updateMessages(prev =>
       prev.map(msg =>
         msg.id === messageId ? { ...msg, content: newContent } : msg
@@ -123,26 +123,26 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
         console.error('Failed to save edit on server:', response.error);
         updateMessages(originalMessages);
         // Use translation key for alert
-        alert(t('errorEditingMessage', { error: response.error || 'Unknown error' })); 
+        alert(t('errorEditingMessage', { error: response.error || t('unknownError') }));
       }
     });
   }, [roomId, messages, t]);
 
   const handleSaveEditAndAskAI = useCallback((messageId: string, newContent: string) => {
     console.log('Saving edit and triggering AI (from modal):', messageId, newContent);
-    const originalMessages = messages; 
+    const originalMessages = messages;
     let editIndex = -1;
 
     // 1. Optimistic Update & Truncation
     updateMessages(prev => {
         editIndex = prev.findIndex(msg => msg.id === messageId);
         if (editIndex === -1) return prev; // Should not happen
-        
+
         // Create updated message
         const updatedMsg = { ...prev[editIndex], content: newContent };
 
         // Return truncated history including the updated message
-        return [...prev.slice(0, editIndex), updatedMsg]; 
+        return [...prev.slice(0, editIndex), updatedMsg];
     });
     // No need to close modal here, EditMessageModal handles it
 
@@ -157,24 +157,24 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
     socket.emit('edit_message', { roomId, messageId, newContent }, (response: { success: boolean; updatedMessage?: Message; error?: string }) => {
       if (response.success && response.updatedMessage) {
         console.log('Edit successful on server, triggering AI');
-         
+
          // Optionally update the timestamp of the edited message in the already truncated state
         updateMessages(prev =>
           prev.map(msg => (msg.id === messageId ? response.updatedMessage! : msg))
         );
 
          // 3. NOW trigger AI, but without the prompt
-        socket.emit('ask_ai', { 
-          roomId, 
+        socket.emit('ask_ai', {
+          roomId,
           editedMessageId: messageId // Server uses this to determine context
         });
-       
+
       } else {
         console.error('Failed to save edit before asking AI:', response.error);
         // Revert optimistic update (both content and truncation)
         updateMessages(originalMessages);
          // Use translation key for alert
-        alert(t('errorEditingMessage', { error: response.error || 'Unknown error' }));
+        alert(t('errorEditingMessage', { error: response.error || t('unknownError') }));
       }
     });
   }, [roomId, messages, t]);
@@ -185,7 +185,7 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
 
     const messageIdToDelete = messageToDelete.id;
     console.log('Confirmed deleting message:', messageIdToDelete);
-    
+
     // 1. Close modal & Optimistically remove from UI
     handleCloseDeleteModal(); // Close modal first
     updateMessages(prev => prev.filter(msg => msg.id !== messageIdToDelete));
@@ -195,9 +195,9 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
       if (!response.success) {
         console.error('Failed to delete message on server:', response.error);
         // Refetch history on error to ensure consistency
-        socket.emit('get_room_messages', roomId); 
+        socket.emit('get_room_messages', roomId);
          // Use translation key for alert
-        alert(t('errorDeletingMessage', { error: response.error || 'Unknown error' })); 
+        alert(t('errorDeletingMessage', { error: response.error || t('unknownError') }));
       }
     });
   }, [roomId, messageToDelete, handleCloseDeleteModal, t]);
@@ -248,8 +248,8 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
     socket.off('ai_stream_end');
     socket.off('ai_stream_error');
     socket.off('messages_cleared');
-    socket.off('message_edited'); 
-    socket.off('message_deleted'); 
+    socket.off('message_edited');
+    socket.off('message_deleted');
 
     // Listen for message history
     socket.on('message_history', (messageHistory: Message[]) => {
@@ -271,7 +271,7 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
           if (prev.some(m => m.id === message.id)) return prev;
           return [...prev, message];
         });
-        
+
         // Scroll logic based on current scroll position
         const container = containerRef.current;
         if (container) {
@@ -287,7 +287,7 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
 
     // Listen for AI chunks
     socket.on('ai_chunk', (data: AIChunkEvent) => {
-      if (data.roomId !== roomId) return; 
+      if (data.roomId !== roomId) return;
       console.log('Received AI chunk for message:', data.messageId);
       updateMessages(prev =>
         prev.map(msg =>
@@ -295,7 +295,7 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
             ? { ...msg, content: (msg.content || '') + data.chunk, status: 'streaming' } // Ensure content is string
             : msg
         )
-       ); 
+       );
       // Scroll logic based on current scroll position
       const container = containerRef.current;
       if (container) {
@@ -314,7 +314,7 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
         prev.map(msg => (msg.id === data.messageId ? { ...msg, status: 'complete' } : msg))
       );
     });
-    
+
     // Listen for AI stream error
     socket.on('ai_stream_error', (data: AIStreamErrorEvent) => {
        if (data.roomId !== roomId) return;
@@ -322,7 +322,7 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
       updateMessages(prev =>
         prev.map(msg =>
           msg.id === data.messageId
-            ? { ...msg, content: (msg.content || '') + '\n\n⚠️ ' + data.error, status: 'error' }
+            ? { ...msg, content: (msg.content || '') + `\n\n${t('warningPrefix')}: ` + data.error, status: 'error' }
             : msg
         )
       );
@@ -340,7 +340,7 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
         handleCloseDeleteModal();
       }
     });
-    
+
     // Handle message edited event
     socket.on('message_edited', (updatedMessage: Message) => {
       if (updatedMessage.roomId === roomId) {
@@ -350,7 +350,7 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
         );
         // Check if the message currently in the edit modal was the one updated
         // Access state directly here, or potentially use a ref if needed
-        if (messageToEdit?.id === updatedMessage.id) { 
+        if (messageToEdit?.id === updatedMessage.id) {
             handleCloseEditModal(); // Close stale edit modal
         }
       }
@@ -373,7 +373,7 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
 
     eventBound.current = true;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId, handleCloseDeleteModal, handleCloseEditModal]); // Keep modal closers, roomId is essential
+  }, [roomId, handleCloseDeleteModal, handleCloseEditModal, t]); // Keep modal closers, roomId is essential
 
   // OPTIMIZE: useEffect dependencies only need roomId and the setup function
   useEffect(() => {
@@ -389,7 +389,7 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
     socket.emit('get_room_messages', roomId);
 
     const loadingTimeout = setTimeout(() => {
-      if (messages.length === 0 && isLoading) { 
+      if (messages.length === 0 && isLoading) {
         setIsLoading(false);
       }
     }, 5000);
@@ -406,8 +406,8 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
     const handleConnect = () => {
       console.log('Socket connected, setting up message events again');
       // Reset bound flag to allow setup to run
-      eventBound.current = false; 
-      setupMessageEvents(); 
+      eventBound.current = false;
+      setupMessageEvents();
       socket.emit('get_room_messages', roomId);
     };
     socket.on('connect', handleConnect);
@@ -430,23 +430,23 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
   // ... return statement with JSX ...
 
   return (
-    <> 
-      <div 
+    <>
+      <div
         id={scrollContainerId}
         ref={containerRef}
-        className="flex flex-col p-3 w-full relative h-full overflow-y-auto" 
+        className="relative flex h-full w-full flex-col overflow-y-auto bg-[#f5f4ed] p-3 dark:bg-[#141413]"
         onScroll={handleScroll}
       >
         {/* ... Loading/Empty/List rendering ... */}
          {!isLoading && messages.length > 0 && (
-            <div className="flex flex-col space-y-1.5 pb-10"> 
+            <div className="flex flex-col space-y-2 pb-4">
                 {messages
                 .map((message) => (
-                    <MessageItem 
-                    key={message.id} 
-                    message={message} 
-                    onStartEdit={handleOpenEditModal} 
-                    onDeleteMessage={handleOpenDeleteModal} 
+                    <MessageItem
+                    key={message.id}
+                    message={message}
+                    onStartEdit={handleOpenEditModal}
+                    onDeleteMessage={handleOpenDeleteModal}
                     onRefreshAI={handleRefreshAI}
                     />
                 ))}
@@ -454,14 +454,14 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
         )}
         <div ref={messagesEndRef} />
         {/* Scroll Button */}
-        {showScrollButton && ( 
+        {showScrollButton && (
              <Button
                 isIconOnly
                 color="primary"
                 variant="solid"
                 size="sm"
                 radius="full"
-                className="absolute bottom-4 left-1/2 transform -translate-x-1/2 shadow-lg z-10"
+                className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 bg-[#30302e] text-[#faf9f5] shadow-[0_0_0_1px_rgba(194,192,182,0.7),0_10px_24px_rgba(20,20,19,0.12)] dark:bg-[#faf9f5] dark:text-[#141413]"
                 aria-label={t('scrollToBottom')}
                 onPress={() => scrollToBottom('smooth')}
                 >
@@ -474,7 +474,7 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
       <DeleteConfirmationModal
         isOpen={isDeleteModalOpen}
         onClose={handleCloseDeleteModal}
-        onConfirm={handleConfirmDelete} 
+        onConfirm={handleConfirmDelete}
         messageContent={messageToDelete?.content ? messageToDelete.content.substring(0, 100) : ''}
       />
       <EditMessageModal

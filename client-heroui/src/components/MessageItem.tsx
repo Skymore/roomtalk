@@ -40,9 +40,9 @@ async function copyImageToClipboard(base64Image: string): Promise<boolean> {
   }
 }
 
-export const MessageItem: React.FC<MessageItemProps> = ({ 
-  message, 
-  onStartEdit, 
+export const MessageItem: React.FC<MessageItemProps> = ({
+  message,
+  onStartEdit,
   onDeleteMessage,
   onRefreshAI
 }) => {
@@ -94,11 +94,11 @@ export const MessageItem: React.FC<MessageItemProps> = ({
 
   return (
     <div
-      className={`group flex w-full items-start ${isMine ? "justify-end" : "justify-start"} mb-1`}
+      className={`group mb-1 flex w-full items-start ${isMine ? "justify-end" : "justify-start"}`}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
-      {/* Opponent's avatar or AI avatar */} 
+      {/* Opponent's avatar or AI avatar */}
       {(!isMine || isAI) && !isMine && (
         <Avatar
           name={message.avatar?.text || undefined}
@@ -106,39 +106,39 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           color={getValidColor(isAI ? "secondary" : message.avatar?.color)}
           size="sm"
           classNames={{
-            base: "mr-1 flex-shrink-0",
+            base: "mr-2 flex-shrink-0 bg-[#e8e6dc] text-[#4d4c48] dark:bg-[#30302e] dark:text-[#faf9f5]",
           }}
         />
       )}
 
-      {/* Message Content Area */} 
-      <div className={`max-w-[60%] sm:max-w-[65%] flex flex-col min-w-0 ${isMine ? 'items-end' : 'items-start'}`}> 
-        {/* Username or AI name */} 
+      {/* Message Content Area */}
+      <div className={`flex max-w-[82%] flex-col min-w-0 sm:max-w-[70%] ${isMine ? 'items-end' : 'items-start'}`}>
+        {/* Username or AI name */}
         {(!isMine || isAI) && !isMine && (message.username || isAI) && (
-          <div className="text-tiny text-default-500 mb-0.5 ml-1">
-            {isAI ? (message.username || 'AI Assistant') : message.username}
+          <div className="mb-1 ml-1 text-tiny text-[#5e5d59] dark:text-[#b0aea5]">
+            {isAI ? (message.username || t('aiAssistantName')) : message.username}
           </div>
         )}
 
-        {/* Container for bubble/image */} 
+        {/* Container for bubble/image */}
         <div className="relative inline-block max-w-full w-full min-w-0">
           {isImage ? (
-            <div className="w-fit cursor-pointer" onClick={handleCopyClick}> 
-              <Tooltip content={copyStatus === 'success' ? 'Copied!' : (copyStatus === 'error' ? 'Copy Failed' : 'Copy Image')} placement="top" size="sm">
+            <div className="w-fit cursor-pointer" onClick={handleCopyClick}>
+              <Tooltip content={copyStatus === 'success' ? t('copied') : (copyStatus === 'error' ? t('copyFailed') : t('copyImage'))} placement="top" size="sm">
                 {imageError ? (
-                  <div className="text-sm text-danger p-2 bg-gray-100 dark:bg-gray-700 rounded-md w-fit">
+                  <div className="w-fit rounded-md bg-[#e8e6dc] p-2 text-sm text-danger dark:bg-[#30302e]">
                     <Icon icon="lucide:alert-triangle" className="inline mr-1" />
-                    Failed to load image
+                    {t('imageLoadFailed')}
                   </div>
                 ) : (
-                  <div className="border border-gray-200 dark:border-gray-600 rounded-md p-0.5 max-w-full">
+                  <div className="max-w-full rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-0.5 dark:border-[#30302e] dark:bg-[#1d1d1b]">
                     <Image
                       src={isImage
                         ? (message.content.startsWith('data:')
                             ? message.content
                             : `data:${message.mimeType || 'image/png'};base64,${message.content}`)
                         : message.content}
-                      alt="Shared image"
+                      alt={t('sharedImage')}
                       className="block max-h-[300px] max-w-full object-contain rounded"
                       onError={handleImageError}
                       isBlurred
@@ -148,20 +148,20 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               </Tooltip>
             </div>
           ) : (
-            // ========== Text Message (Display Mode) ========== 
+            // ========== Text Message (Display Mode) ==========
             <Card
               className={`
-                rounded-lg shadow-sm max-w-full w-full overflow-hidden
+                max-w-full w-full overflow-hidden rounded-xl
                 ${isMine
-                  ? "bg-blue-100 dark:bg-blue-900 text-gray-800 dark:text-white"
-                  : message.messageType === 'ai' 
-                    ? "bg-purple-100 dark:bg-purple-900 text-gray-800 dark:text-white"
-                    : "bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-white"
+                  ? "bg-[#e8e6dc] text-[#141413] shadow-[0_0_0_1px_rgba(194,192,182,0.85)] dark:bg-[#30302e] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)]"
+                  : message.messageType === 'ai'
+                    ? "bg-[#faf9f5] text-[#141413] shadow-[0_0_0_1px_rgba(222,219,208,0.95)] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(48,48,46,0.95)]"
+                    : "bg-[#f0eee6] text-[#141413] shadow-[0_0_0_1px_rgba(222,219,208,0.95)] dark:bg-[#242421] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(61,61,58,0.9)]"
                 }
               `}
             >
-              <div className="p-2 max-w-full">
-                <div className="text-xs break-words break-all whitespace-pre-wrap overflow-hidden max-w-full">
+              <div className="max-w-full p-2.5">
+                <div className="max-w-full overflow-hidden whitespace-pre-wrap break-words text-sm leading-6">
                   <div className="max-w-full overflow-x-auto" style={{ wordBreak: 'break-word', overflowWrap: 'break-word' }}>
                     <MarkdownContent content={message.content} />
                     {isStreaming && (
@@ -174,14 +174,14 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             // ========== END MODIFIED ==========
           )}
         </div>
-        {/* Timestamp and Actions Area - Below the bubble/image */} 
+        {/* Timestamp and Actions Area - Below the bubble/image */}
         <div
             className={`flex items-center mt-0.5 h-5 ${isMine ? 'justify-end' : 'justify-start'}`}
         >
-            {/* Timestamp */} 
-            <span className={`text-tiny text-gray-500 dark:text-gray-400 ${showActions ? 'mr-1' : ''}`}> 
+            {/* Timestamp */}
+            <span className={`text-tiny text-[#87867f] dark:text-[#b0aea5] ${showActions ? 'mr-1' : ''}`}>
               {formatTime(message.timestamp)}
-              {isStreaming && " • Typing..."}
+              {isStreaming && ` • ${t('typing')}`}
             </span>
 
             {/* Action Buttons: Show on hover */}
@@ -193,7 +193,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                       isIconOnly
                       size="sm"
                       variant="light"
-                      className="min-w-0 w-5 h-5 text-default-500"
+                      className="h-5 w-5 min-w-0 text-[#5e5d59] dark:text-[#b0aea5]"
                       onPress={() => onStartEdit(message.id)}
                     >
                       <Icon icon="lucide:pencil" width={12} height={12}/>
@@ -203,9 +203,9 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 <Tooltip content={t('deleteMessage')} placement="top" size="sm" delay={500}>
                   <Button
                     isIconOnly
-                    size="sm"
-                    variant="light"
-                    className="min-w-0 w-5 h-5 text-danger-500"
+                      size="sm"
+                      variant="light"
+                      className="h-5 w-5 min-w-0 text-danger-500"
                     onPress={() => onDeleteMessage(message.id)}
                   >
                     <Icon icon="lucide:trash-2" width={12} height={12}/>
@@ -218,7 +218,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                       isIconOnly
                       size="sm"
                       variant="light"
-                      className="min-w-0 w-5 h-5 text-primary-500"
+                      className="h-5 w-5 min-w-0 text-[#c96442] dark:text-[#d97757]"
                       onPress={handleRefreshAIClick}
                       isDisabled={isStreaming}
                     >
@@ -232,7 +232,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         </div>
       </div>
 
-      {/* Your avatar */} 
+      {/* Your avatar */}
       {isMine && !isAI && (
         <Avatar
           name={message.avatar?.text || undefined}
@@ -240,7 +240,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           color={getValidColor(message.avatar?.color) || "primary"}
           size="sm"
           classNames={{
-            base: "ml-1 flex-shrink-0",
+            base: "ml-2 flex-shrink-0 bg-[#30302e] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413]",
           }}
         />
       )}

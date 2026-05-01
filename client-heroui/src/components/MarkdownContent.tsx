@@ -64,6 +64,7 @@ const preprocessMarkdown = (content: string): string => {
 
 /** KaTeX 渲染组件 */
 const Math: React.FC<MathProps> = ({ children, inline = false }) => {
+  const { t } = useTranslation();
   const ref = useRef<HTMLSpanElement>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -84,7 +85,7 @@ const Math: React.FC<MathProps> = ({ children, inline = false }) => {
     }
   }, [children, inline]);
   return error ? (
-    <span className="katex-error p-1 rounded text-red-500 bg-red-50">Error rendering formula</span>
+    <span className="rounded bg-danger-50 p-1 text-danger-700">{t('formulaRenderError')}</span>
   ) : (
     <span ref={ref} className={inline ? "inline-block align-middle" : "block text-center my-2"} />
   );
@@ -92,6 +93,7 @@ const Math: React.FC<MathProps> = ({ children, inline = false }) => {
 
 /** 块级代码组件（支持 Mermaid 渲染） */
 const CodeBlock = memo<CodeBlockProps>(({ className, children }) => {
+  const { t } = useTranslation();
   const [themeDark, setThemeDark] = useState(
     typeof document !== "undefined" && document.documentElement.classList.contains("dark")
   );
@@ -150,26 +152,29 @@ useEffect(() => {
       .catch(err => {
           console.error("Mermaid render error:", err); // Ensure errors are caught and logged
           if (containerRef.current) {
-            containerRef.current.innerHTML = '<div class="text-red-500">Error rendering Mermaid diagram</div>'; // Show error in UI
+            containerRef.current.innerHTML = "";
+            const errorElement = document.createElement("div");
+            errorElement.className = "text-red-500";
+            errorElement.textContent = t('mermaidRenderError');
+            containerRef.current.appendChild(errorElement);
           }
       });
   }
-}, [language, code, themeDark, mermaidId]);
+}, [language, code, themeDark, mermaidId, t]);
 
 
   if (language === "mermaid") {
     return (
-      <div className="border border-gray-600 rounded overflow-hidden mb-2 max-w-full min-w-0">
-        <div className="flex items-center justify-between bg-gray-800 text-gray-300 px-2 py-1">
+      <div className="mb-2 max-w-full min-w-0 overflow-hidden rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-[#141413] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5]">
+        <div className="flex items-center justify-between bg-[#30302e] px-2 py-1 text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413]">
           <span className="text-xs uppercase">{language}</span>
-          <button onClick={handleCopy} className="text-xs">
-            {copied ? "Copied" : "Copy"}
+          <button onClick={handleCopy} className="rounded px-1 text-xs transition-colors hover:bg-white/10 dark:hover:bg-black/10">
+            {copied ? t('copied') : t('copy')}
           </button>
         </div>
         <div
           ref={containerRef}
-          className="p-2 bg-white dark:bg-gray-800 
-                     whitespace-pre-wrap break-all"
+          className="whitespace-pre-wrap break-all bg-[#faf9f5] p-2 dark:bg-[#1d1d1b]"
         />
       </div>
     );
@@ -178,19 +183,18 @@ useEffect(() => {
   // 普通代码高亮
   return (
     // Outer container for border and header
-    <div className="border border-gray-600 rounded overflow-hidden mb-2 max-w-full min-w-0">
+    <div className="mb-2 max-w-full min-w-0 overflow-hidden rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-[#141413] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5]">
       {/* Header */}
-      <div className="flex items-center justify-between bg-gray-800 text-gray-300 px-2 py-1">
+      <div className="flex items-center justify-between bg-[#30302e] px-2 py-1 text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413]">
         <span className="text-xs uppercase">{language}</span>
-        <button onClick={handleCopy} className="text-xs">
-          {copied ? "Copied" : "Copy"}
+        <button onClick={handleCopy} className="rounded px-1 text-xs transition-colors hover:bg-white/10 dark:hover:bg-black/10">
+          {copied ? t('copied') : t('copy')}
         </button>
       </div>
 
       {/* Add this wrapper div for horizontal scrolling */}
       <div
-        className="overflow-x-auto bg-white dark:bg-gray-800 
-                   whitespace-pre-wrap break-all"
+        className="overflow-x-auto bg-[#faf9f5] whitespace-pre-wrap break-all dark:bg-[#1d1d1b]"
       > {/* Apply background here too */}
         <SyntaxHighlighter
           language={language}
@@ -271,7 +275,7 @@ const ContentActionButtons: React.FC<{ content: string }> = memo(({ content }) =
           `p-0.5 rounded-full transition active:scale-95 ` +
           (disabled
             ? "opacity-40 cursor-not-allowed"
-            : `hover:bg-gray-200 dark:hover:bg-gray-700 ${isActive ? "text-blue-500" : "text-gray-500"}`)
+            : `text-current opacity-70 hover:bg-current/10 hover:opacity-100 ${isActive ? "text-[#c96442] opacity-100 dark:text-[#d97757]" : ""}`)
         }
         aria-label={t(isActive && activeTooltip ? activeTooltip : tooltip)}
       >
@@ -334,7 +338,7 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content }
       },
       // 行内代码统一渲染为普通文本
       code: { component: ({ children }: { children: ReactNode }) => (
-        <code className="bg-gray-100 dark:bg-gray-700 px-1 text-xs font-mono">
+        <code className="rounded bg-current/10 px-1 font-mono text-xs text-inherit">
           {children}
         </code>
       ) },
@@ -345,7 +349,7 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content }
   };
 
   return (
-    <div className="markdown-container prose prose-sm dark:prose-invert max-w-full">
+    <div className="markdown-container message-markdown prose prose-sm max-w-full text-current">
       <Markdown options={mdOptions}>{processed}</Markdown>
       <ContentActionButtons content={content} />
     </div>
