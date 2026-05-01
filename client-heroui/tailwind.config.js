@@ -9,6 +9,17 @@ export default {
   ],
   theme: {
     extend: {
+      colors: {
+        paper: "#f5f4ed",
+        ivory: "#faf9f5",
+        sand: "#e8e6dc",
+        warmBorder: "#dedbd0",
+        warmText: "#141413",
+        warmMuted: "#5e5d59",
+        terracotta: "#c96442",
+        coral: "#d97757",
+        ink: "#30302e",
+      },
       typography: (theme) => ({
         DEFAULT: {
           css: {
@@ -30,7 +41,7 @@ export default {
               marginTop: theme("spacing.10"),
               marginBottom: theme("spacing.10"),
               overflowX: "auto",
-              minWidth: "0", 
+              minWidth: "0",
               maxWidth: "100%",
             },
             /* 行内 code */
@@ -38,7 +49,7 @@ export default {
               backgroundColor: theme("colors.gray.200"),
               padding: `${theme("spacing.0.5")} ${theme("spacing.1")}`,
               borderRadius: theme("borderRadius.md"),
-              minWidth: "0", 
+              minWidth: "0",
               maxWidth: "100%",
             },
           },
@@ -60,7 +71,57 @@ export default {
   },
   darkMode: "class",
   plugins: [
-    heroui(),
+    heroui({
+      themes: {
+        light: {
+          colors: {
+            background: "#f5f4ed",
+            foreground: "#141413",
+            content1: "#faf9f5",
+            content2: "#f0eee6",
+            content3: "#e8e6dc",
+            content4: "#d1cfc5",
+            divider: "#dedbd0",
+            focus: "#3898ec",
+            primary: {
+              DEFAULT: "#30302e",
+              foreground: "#faf9f5",
+            },
+            secondary: {
+              DEFAULT: "#c96442",
+              foreground: "#faf9f5",
+            },
+          },
+        },
+        dark: {
+          colors: {
+            background: "#141413",
+            foreground: "#faf9f5",
+            content1: "#1d1d1b",
+            content2: "#30302e",
+            content3: "#3d3d3a",
+            content4: "#4d4c48",
+            divider: "#30302e",
+            focus: "#3898ec",
+            primary: {
+              DEFAULT: "#faf9f5",
+              foreground: "#141413",
+            },
+            secondary: {
+              DEFAULT: "#d97757",
+              foreground: "#141413",
+            },
+          },
+        },
+      },
+      layout: {
+        radius: {
+          small: "6px",
+          medium: "8px",
+          large: "12px",
+        },
+      },
+    }),
     require("@tailwindcss/typography"),
     // require('@tailwindcss/forms'),
     require("@tailwindcss/aspect-ratio"),
