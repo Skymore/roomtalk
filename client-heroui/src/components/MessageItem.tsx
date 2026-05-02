@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Avatar, Card, Image, Button, Tooltip } from "@heroui/react";
 import { Icon } from "@iconify/react";
 import { clientId } from "../utils/socket";
-import { formatTime } from "../utils/formatters";
+import { formatTime, formatUsdCost } from "../utils/formatters";
 import { Message } from "../utils/types";
 import { MarkdownContent } from "./MarkdownContent";
 import { useTranslation } from "react-i18next";
@@ -55,6 +55,9 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   const isStreaming = isAI && message.status === 'streaming';
   const canBeEdited = isText || (message.messageType === 'ai' && message.status !== 'streaming');
   const { t } = useTranslation();
+  const aiCostLabel = isAI && message.cost
+    ? `${message.aiModel?.label ? `${message.aiModel.label} · ` : ''}${formatUsdCost(message.cost.totalUsd)}${message.cost.estimated ? ` ${t('estimatedCost')}` : ''}`
+    : '';
 
   const [copyStatus, setCopyStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
@@ -176,12 +179,13 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         </div>
         {/* Timestamp and Actions Area - Below the bubble/image */}
         <div
-            className={`flex items-center mt-0.5 h-5 ${isMine ? 'justify-end' : 'justify-start'}`}
+            className={`mt-0.5 flex min-h-5 max-w-full flex-wrap items-center ${isMine ? 'justify-end' : 'justify-start'}`}
         >
             {/* Timestamp */}
-            <span className={`text-tiny text-[#87867f] dark:text-[#b0aea5] ${showActions ? 'mr-1' : ''}`}>
+            <span className={`max-w-full text-tiny text-[#87867f] dark:text-[#b0aea5] ${showActions ? 'mr-1' : ''}`}>
               {formatTime(message.timestamp)}
               {isStreaming && ` • ${t('typing')}`}
+              {aiCostLabel && ` • ${aiCostLabel}`}
             </span>
 
             {/* Action Buttons: Show on hover */}

@@ -19,6 +19,15 @@ import { sendMessage, socket } from '../utils/socket';
 import { useTranslation } from 'react-i18next';
 import imageCompression from 'browser-image-compression';
 import { AIRole, AIRoleManager, getAIRoleDisplayName, getSavedAIRoles, saveAIRoles } from './AIRoleManager';
+import {
+  AIModelOption,
+  FALLBACK_AI_MODEL,
+  FALLBACK_AI_MODELS,
+  fetchAIModels,
+  formatModelPrice,
+  getStoredAIModel,
+  saveStoredAIModel,
+} from '../utils/aiModels';
 
 interface MessageInputProps {
   roomId: string;
@@ -49,9 +58,12 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
   const imageCountRef = useRef(0); // 用于实时跟踪图片数量，避免状态更新延迟
   const lastPasteTime = useRef(0); // 用于限制粘贴频率
   const pasteCountRef = useRef(0); // 用于跟踪连续粘贴次数
+  const isComposingRef = useRef(false);
+  const lastCompositionEndAtRef = useRef(0);
   const MAX_IMAGES = 9;
   const INITIAL_PASTE_THROTTLE_MS = 200; // 首次粘贴间隔限制(毫秒)
   const SUBSEQUENT_PASTE_THROTTLE_MS = 50; // 后续粘贴间隔限制(毫秒)
+  const COMPOSITION_END_GRACE_MS = 80;
   const [isAiProcessing, setIsAiProcessing] = useState(false); // 新增: 跟踪 AI 处理状态
 
   // 检测是否为移动设备
@@ -79,6 +91,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
   // 新增 AI 角色相关状态
   const [aiRoles, setAiRoles] = useState<AIRole[]>(getSavedAIRoles());
   const [selectedRoleId, setSelectedRoleId] = useState<string>('default');
+  const [aiModels, setAiModels] = useState<AIModelOption[]>(FALLBACK_AI_MODELS);
+  const [defaultAIModel, setDefaultAIModel] = useState<string>(FALLBACK_AI_MODEL);
+  const [selectedAIModel, setSelectedAIModel] = useState<string>(() => getStoredAIModel() || FALLBACK_AI_MODEL);
 
   // 新增角色设置模态框的状态
   const { isOpen: isAISettingsOpen, onOpen: onAISettingsOpen, onClose: onAISettingsClose } = useDisclosure();
@@ -86,6 +101,33 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
   // 在组件加载时从本地存储获取AI角色
   useEffect(() => {
     setAiRoles(getSavedAIRoles());
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    fetchAIModels()
+      .then(({ defaultModel, models }) => {
+        if (!isMounted) return;
+
+        setDefaultAIModel(defaultModel);
+        setAiModels(models);
+
+        const storedModel = getStoredAIModel();
+        const nextModel = storedModel && models.some(model => model.id === storedModel)
+          ? storedModel
+          : defaultModel;
+
+        setSelectedAIModel(nextModel);
+        saveStoredAIModel(nextModel);
+      })
+      .catch(error => {
+        console.warn('Failed to load AI models, using fallback models.', error);
+      });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // 清除错误信息的定时器
@@ -211,6 +253,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
     setSelectedRoleId(roleId);
   };
 
+  const handleModelChange = (model: string) => {
+    setSelectedAIModel(model);
+    saveStoredAIModel(model);
+  };
+
   // 添加新的AI角色
   const handleAddRole = (newRole: AIRole) => {
     const updatedRoles = [...aiRoles, newRole];
@@ -282,10 +329,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
       socket.emit('ask_ai', {
         roomId,
         systemPrompt: selectedRole.systemPrompt,
-        roleName: selectedRole.name
+        roleName: selectedRole.name,
+        model: selectedAIModel || defaultAIModel
       });
 
-      console.log('Sent AI request (without prompt) with role:', selectedRole.name);
+      console.log('Sent AI request (without prompt) with role and model:', selectedRole.name, selectedAIModel || defaultAIModel);
 
       // 清空编辑器等后续操作不变
       if (editorRef.current) {
@@ -594,9 +642,37 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
     }
   };
 
+  const isConfirmingIMEComposition = (e: React.KeyboardEvent) => {
+    const nativeEvent = e.nativeEvent as KeyboardEvent & {
+      isComposing?: boolean;
+      keyCode?: number;
+    };
+
+    return (
+      isComposingRef.current ||
+      nativeEvent.isComposing ||
+      nativeEvent.keyCode === 229 ||
+      Date.now() - lastCompositionEndAtRef.current < COMPOSITION_END_GRACE_MS
+    );
+  };
+
+  const handleCompositionStart = () => {
+    isComposingRef.current = true;
+  };
+
+  const handleCompositionEnd = () => {
+    isComposingRef.current = false;
+    lastCompositionEndAtRef.current = Date.now();
+    parseEditorContent();
+  };
+
   // 处理回车事件
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
+      if (isConfirmingIMEComposition(e)) {
+        return;
+      }
+
       // Shift+Enter: 默认行为（换行）
       if (e.shiftKey) {
         return; // 允许默认的换行行为
@@ -688,6 +764,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
             onInput={parseEditorContent}
             onPaste={handlePaste}
             onKeyDown={handleKeyDown}
+            onCompositionStart={handleCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
             ref={editorRef}
             data-placeholder={isAiProcessing ? t('aiProcessing') : t('typeMessageHere')}
             style={{
@@ -740,9 +818,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
         </div>
 
         {/* AI角色选择和发送按钮区 */}
-        <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="mt-2 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
           {/* AI角色选择下拉框 */}
-          <div className="min-w-0 flex-1 sm:mr-2">
+          <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-2 lg:mr-2">
             <Select
               size="sm"
               aria-label={t('selectAIRole')}
@@ -760,6 +838,30 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
               {aiRoles.map((role) => (
                 <SelectItem key={role.id} startContent={<Icon icon={role.icon} />}>
                   {getAIRoleDisplayName(role, t)}
+                </SelectItem>
+              ))}
+            </Select>
+            <Select
+              size="sm"
+              aria-label={t('selectAIModel')}
+              selectedKeys={[selectedAIModel || defaultAIModel]}
+              onSelectionChange={(keys) => {
+                const selectedKey = Array.from(keys)[0]?.toString();
+                if (selectedKey) handleModelChange(selectedKey);
+              }}
+              className="w-full sm:max-w-xs"
+              classNames={{
+                trigger: "bg-[#e8e6dc] text-[#4d4c48] data-[hover=true]:bg-[#dedbd0] dark:bg-[#30302e] dark:text-[#faf9f5]",
+              }}
+              isDisabled={isSending || isAiProcessing}
+              startContent={<Icon icon="lucide:brain-circuit" />}
+            >
+              {aiModels.map((model) => (
+                <SelectItem
+                  key={model.id}
+                  description={`${formatModelPrice(model)}${model.provider ? ` · ${model.provider}` : ''}`}
+                >
+                  {model.isDefault ? `${model.label} (${t('defaultModel')})` : model.label}
                 </SelectItem>
               ))}
             </Select>

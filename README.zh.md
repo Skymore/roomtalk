@@ -210,8 +210,11 @@ npm run dev
 | `PORT`           | 3012                      | 服务端端口                |
 | `CLIENT_URL`     | http://localhost:3011     | CORS 配置                 |
 | `REDIS_URL`      | redis://localhost:6379    | Redis 连接地址            |
-| `OPENAI_API_KEY` | —                         | OpenAI API 密钥（启用 AI 必填）|
-| `OPENAI_MODEL`   | gpt-5                     | OpenAI 模型（可选）       |
+| `OPENROUTER_API_KEY` | —                     | OpenRouter API 密钥（启用 AI 必填） |
+| `AI_MODEL`       | gpt-5.5                   | 默认 AI 模型 ID          |
+| `AI_MODEL_OPTIONS` | gpt-5.5,claude-sonnet-4.6,deepseek-v4-pro,kimi-k2.6,glm-5.1,minimax-m2.7 | 用户可选择的模型 ID，逗号分隔 |
+| `OPENROUTER_HTTP_REFERER` | `CLIENT_URL`      | 可选 OpenRouter Referer 请求头 |
+| `OPENROUTER_APP_NAME` | RoomTalk              | 可选 OpenRouter 应用名称请求头 |
 
 ### 客户端环境变量
 
@@ -237,9 +240,11 @@ npm run dev
 PORT=3012
 CLIENT_URL=http://localhost:3011
 REDIS_URL=redis://localhost:6379
-OPENAI_API_KEY=sk-...
-# 可选
-OPENAI_MODEL=gpt-5
+OPENROUTER_API_KEY=sk-or-...
+AI_MODEL=gpt-5.5
+AI_MODEL_OPTIONS=gpt-5.5,claude-sonnet-4.6,deepseek-v4-pro,kimi-k2.6,glm-5.1,minimax-m2.7
+OPENROUTER_HTTP_REFERER=http://localhost:5173
+OPENROUTER_APP_NAME=RoomTalk
 ```
 
 客户端（Vite）按模式读取：
@@ -249,10 +254,11 @@ OPENAI_MODEL=gpt-5
 **生产环境（Fly.io）：**
 
 ```bash
-fly secrets set OPENAI_API_KEY="sk-..."
+fly secrets set OPENROUTER_API_KEY="sk-or-..."
 fly secrets set REDIS_URL="redis://..."
 # 可选
-fly secrets set OPENAI_MODEL="gpt-4"
+fly secrets set AI_MODEL="gpt-5.5"
+fly secrets set AI_MODEL_OPTIONS="gpt-5.5,claude-sonnet-4.6,deepseek-v4-pro,kimi-k2.6,glm-5.1,minimax-m2.7"
 ```
 
 ## 📦 Redis 持久化
@@ -336,4 +342,3 @@ MIT License
 - **基础功能支持**：建立了多语言支持、主题切换和响应式设计原则
 
 ---
-
