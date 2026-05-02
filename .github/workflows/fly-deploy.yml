@@ -1,18 +1,63 @@
-# See https://fly.io/docs/app-guides/continuous-deployment-with-github-actions/
+name: CI/CD
 
-name: Fly Deploy
 on:
   push:
     branches:
-      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
 jobs:
-  deploy:
-    name: Deploy app
+  build-and-deploy:
+    name: Build and Deploy
     runs-on: ubuntu-latest
-    concurrency: deploy-group    # optional: ensure only one action runs at a time
+    concurrency:
+      group: fly-deploy-${{ github.ref }}
+      cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-      - run: flyctl deploy --remote-only
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install server dependencies
+        working-directory: server
+        run: npm ci
+
+      - name: Build server
+        working-directory: server
+        run: npm run build
+
+      - name: Install client dependencies
+        working-directory: client-heroui
+        run: npm ci
+
+      - name: Check client translations
+        working-directory: client-heroui
+        run: npm run translate:i18n:dry
+
+      - name: Build client
+        working-directory: client-heroui
+        run: npm run build
+
+      - name: Setup Fly
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Verify Fly runtime secrets
+        run: |
+          flyctl secrets list -a message-system | grep -q '^OPENROUTER_API_KEY[[:space:]]' || {
+            echo "::error::Fly secret OPENROUTER_API_KEY is missing. Run: fly secrets set OPENROUTER_API_KEY=..."
+            exit 1
+          }
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Deploy to Fly
+        run: flyctl deploy --remote-only -a message-system
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

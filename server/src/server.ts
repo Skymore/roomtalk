@@ -93,11 +93,10 @@ interface RoomAICostTotal {
   totalUsd: number;
 }
 
-const DEFAULT_AI_MODEL_ID = process.env.AI_MODEL || process.env.OPENROUTER_MODEL || process.env.OPENAI_MODEL || 'gpt-5.5';
+const DEFAULT_AI_MODEL_ID = process.env.AI_MODEL || process.env.OPENROUTER_MODEL || 'gpt-5.5';
 const CONFIGURED_AI_MODEL_OPTIONS =
   process.env.AI_MODEL_OPTIONS ||
-  process.env.OPENROUTER_MODEL_OPTIONS ||
-  process.env.OPENAI_MODEL_OPTIONS;
+  process.env.OPENROUTER_MODEL_OPTIONS;
 
 const REQUESTED_AI_MODEL_CATALOG: AIModelOption[] = [
   {
