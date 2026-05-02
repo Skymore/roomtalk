@@ -45,4 +45,24 @@ export const formatTime = (timestamp: string): string => {
     hour: '2-digit',
     minute: '2-digit'
   });
-}; 
+};
+
+export const formatUsdCost = (value?: number | null): string => {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return '$0.000000';
+  }
+
+  if (value < 0.000001) {
+    return '<$0.000001';
+  }
+
+  if (value < 0.01) {
+    return `$${value.toFixed(6)}`;
+  }
+
+  if (value < 1) {
+    return `$${value.toFixed(4)}`;
+  }
+
+  return `$${value.toFixed(2)}`;
+};

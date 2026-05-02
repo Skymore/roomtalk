@@ -250,8 +250,11 @@ This comprehensive approach ensures message delivery reliability across differen
 | `PORT`           | 3012                      | Server port                     |
 | `CLIENT_URL`     | http://localhost:3011     | CORS origin                     |
 | `REDIS_URL`      | redis://localhost:6379    | Redis connection URL            |
-| `OPENAI_API_KEY` | —                         | OpenAI API key (required for AI)|
-| `OPENAI_MODEL`   | gpt-5                     | OpenAI model (optional)         |
+| `OPENROUTER_API_KEY` | —                     | OpenRouter API key (required for AI) |
+| `AI_MODEL`       | gpt-5.5                   | Default AI model id             |
+| `AI_MODEL_OPTIONS` | gpt-5.5,claude-sonnet-4.6,deepseek-v4-pro,kimi-k2.6,glm-5.1,minimax-m2.7 | Comma-separated model ids users can select |
+| `OPENROUTER_HTTP_REFERER` | `CLIENT_URL`      | Optional OpenRouter referer header |
+| `OPENROUTER_APP_NAME` | RoomTalk              | Optional OpenRouter app title header |
 
 ### Client Environment Variables
 
@@ -277,9 +280,11 @@ Create `server/.env` file:
 PORT=3012
 CLIENT_URL=http://localhost:3011
 REDIS_URL=redis://localhost:6379
-OPENAI_API_KEY=sk-...
-# optional
-OPENAI_MODEL=gpt-4
+OPENROUTER_API_KEY=sk-or-...
+AI_MODEL=gpt-5.5
+AI_MODEL_OPTIONS=gpt-5.5,claude-sonnet-4.6,deepseek-v4-pro,kimi-k2.6,glm-5.1,minimax-m2.7
+OPENROUTER_HTTP_REFERER=http://localhost:5173
+OPENROUTER_APP_NAME=RoomTalk
 ```
 
 Client uses mode-specific files:
@@ -289,10 +294,11 @@ Client uses mode-specific files:
 **Production (Fly.io):**
 
 ```bash
-fly secrets set OPENAI_API_KEY="sk-..."
+fly secrets set OPENROUTER_API_KEY="sk-or-..."
 fly secrets set REDIS_URL="redis://..."
 # optional
-fly secrets set OPENAI_MODEL="gpt-5"
+fly secrets set AI_MODEL="gpt-5.5"
+fly secrets set AI_MODEL_OPTIONS="gpt-5.5,claude-sonnet-4.6,deepseek-v4-pro,kimi-k2.6,glm-5.1,minimax-m2.7"
 ```
 
 ## 📦 Redis Persistence

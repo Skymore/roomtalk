@@ -29,6 +29,9 @@ export const EditMessageModal: React.FC<EditMessageModalProps> = ({
   const { t } = useTranslation(); // Get t function
   const [editedContent, setEditedContent] = useState('');
   const editInputRef = useRef<HTMLTextAreaElement>(null);
+  const isComposingRef = useRef(false);
+  const lastCompositionEndAtRef = useRef(0);
+  const COMPOSITION_END_GRACE_MS = 80;
 
   // Update text area when message changes or modal opens
   useEffect(() => {
@@ -69,9 +72,36 @@ export const EditMessageModal: React.FC<EditMessageModalProps> = ({
     onClose(); // Close modal after action
   };
 
-   // Handle keydown in textarea (Ctrl+Enter to Save & Ask AI, Enter to Save)
-   const handleKeyDown = (e: React.KeyboardEvent) => {
+  const isConfirmingIMEComposition = (e: React.KeyboardEvent) => {
+    const nativeEvent = e.nativeEvent as KeyboardEvent & {
+      isComposing?: boolean;
+      keyCode?: number;
+    };
+
+    return (
+      isComposingRef.current ||
+      nativeEvent.isComposing ||
+      nativeEvent.keyCode === 229 ||
+      Date.now() - lastCompositionEndAtRef.current < COMPOSITION_END_GRACE_MS
+    );
+  };
+
+  const handleCompositionStart = () => {
+    isComposingRef.current = true;
+  };
+
+  const handleCompositionEnd = () => {
+    isComposingRef.current = false;
+    lastCompositionEndAtRef.current = Date.now();
+  };
+
+  // Handle keydown in textarea (Ctrl+Enter to Save & Ask AI, Enter to Save)
+  const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
+      if (isConfirmingIMEComposition(e)) {
+        return;
+      }
+
       if (e.ctrlKey || e.metaKey) { // Ctrl+Enter or Cmd+Enter
         e.preventDefault();
         handleSaveAndAskAIClick();
@@ -110,6 +140,8 @@ export const EditMessageModal: React.FC<EditMessageModalProps> = ({
             value={editedContent}
             onChange={(e) => setEditedContent(e.target.value)}
             onKeyDown={handleKeyDown as unknown as KeyboardEventHandler<HTMLInputElement>} // Use onKeyDown on Textarea
+            onCompositionStart={handleCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
             fullWidth
             minRows={3}
             maxRows={10}

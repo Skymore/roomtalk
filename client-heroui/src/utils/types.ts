@@ -12,6 +12,14 @@ export interface Message {
   };
   mimeType?: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' | 'image/jpg';
   status?: 'streaming' | 'complete' | 'error';
+  aiModel?: {
+    id: string;
+    apiModel: string;
+    provider: 'openai' | 'openrouter';
+    label: string;
+  };
+  usage?: AIUsage;
+  cost?: AICost;
 }
 
 export interface Room {
@@ -48,10 +56,39 @@ export interface AIChunkEvent {
 export interface AIStreamEndEvent {
   messageId: string;
   roomId: string;
+  aiModel?: Message['aiModel'];
+  usage?: AIUsage;
+  cost?: AICost;
+  sessionCost?: AICostTotalEvent;
 }
 
 export interface AIStreamErrorEvent {
   messageId: string;
   error: string;
   roomId: string;
-} 
+}
+
+export interface AIUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  cachedPromptTokens?: number;
+  source: 'reported' | 'estimated';
+}
+
+export interface AICost {
+  currency: 'USD';
+  inputUsd: number;
+  outputUsd: number;
+  totalUsd: number;
+  inputPerMillion: number;
+  outputPerMillion: number;
+  cachedInputPerMillion?: number;
+  estimated: boolean;
+}
+
+export interface AICostTotalEvent {
+  roomId: string;
+  currency: 'USD';
+  totalUsd: number;
+}

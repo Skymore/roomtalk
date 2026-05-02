@@ -3,8 +3,10 @@ import { Button } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { socket } from '../utils/socket';
 import { MessageItem } from './MessageItem';
-import { Message, AIChunkEvent, AIStreamEndEvent, AIStreamErrorEvent } from '../utils/types';
+import { Message, AIChunkEvent, AIStreamEndEvent, AIStreamErrorEvent, AICostTotalEvent } from '../utils/types';
 import { useTranslation } from 'react-i18next';
+import { getStoredAIModel } from '../utils/aiModels';
+import { formatUsdCost } from '../utils/formatters';
 
 // Import your new modals
 import { DeleteConfirmationModal } from './DeleteConfirmationModal';
@@ -33,6 +35,7 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
   const [messageToDelete, setMessageToDelete] = useState<Message | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [messageToEdit, setMessageToEdit] = useState<Message | null>(null);
+  const [sessionCostUsd, setSessionCostUsd] = useState(0);
 
   const sortMessages = useCallback((msgs: Message[]) => {
     return [...msgs].sort((a, b) => {
@@ -163,10 +166,11 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
           prev.map(msg => (msg.id === messageId ? response.updatedMessage! : msg))
         );
 
-         // 3. NOW trigger AI, but without the prompt
+        // 3. NOW trigger AI, but without the prompt
         socket.emit('ask_ai', {
           roomId,
-          editedMessageId: messageId // Server uses this to determine context
+          editedMessageId: messageId, // Server uses this to determine context
+          model: getStoredAIModel() || undefined
         });
 
       } else {
@@ -224,7 +228,8 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
     socket.emit('ask_ai', {
       roomId,
       // prompt: '', // Prompt is now determined by the server based on truncated history
-      retryForMessageId: messageId // 新增：告知服务器这是针对哪条消息的重试
+      retryForMessageId: messageId, // 新增：告知服务器这是针对哪条消息的重试
+      model: getStoredAIModel() || undefined
       // TODO: Consider sending current role/system prompt if needed
     });
     console.log('Emitted ask_ai for retry with retryForMessageId:', messageId);
@@ -247,6 +252,7 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
     socket.off('ai_chunk');
     socket.off('ai_stream_end');
     socket.off('ai_stream_error');
+    socket.off('ai_cost_total');
     socket.off('messages_cleared');
     socket.off('message_edited');
     socket.off('message_deleted');
@@ -311,8 +317,22 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
       if (data.roomId !== roomId) return;
       console.log('AI stream ended for message:', data.messageId);
       updateMessages(prev =>
-        prev.map(msg => (msg.id === data.messageId ? { ...msg, status: 'complete' } : msg))
+        prev.map(msg => (msg.id === data.messageId ? {
+          ...msg,
+          status: 'complete',
+          aiModel: data.aiModel || msg.aiModel,
+          usage: data.usage || msg.usage,
+          cost: data.cost || msg.cost,
+        } : msg))
       );
+      if (data.sessionCost) {
+        setSessionCostUsd(data.sessionCost.totalUsd);
+      }
+    });
+
+    socket.on('ai_cost_total', (data: AICostTotalEvent) => {
+      if (data.roomId !== roomId) return;
+      setSessionCostUsd(data.totalUsd);
     });
 
     // Listen for AI stream error
@@ -380,6 +400,7 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
     updateMessages([]);
     updateMessages([]);
     setIsLoading(true);
+    setSessionCostUsd(0);
     handleCloseDeleteModal();
     handleCloseEditModal();
     eventBound.current = false;
@@ -437,6 +458,12 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
         className="relative flex h-full w-full flex-col overflow-y-auto bg-[#f5f4ed] p-3 dark:bg-[#141413]"
         onScroll={handleScroll}
       >
+        <div className="sticky top-0 z-20 mb-2 flex justify-end">
+          <div className="flex items-center gap-1 rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-2.5 py-1 text-tiny font-medium text-[#4d4c48] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc]">
+            <Icon icon="lucide:coins" className="h-3.5 w-3.5" />
+            <span>{t('sessionCost')}: {formatUsdCost(sessionCostUsd)}</span>
+          </div>
+        </div>
         {/* ... Loading/Empty/List rendering ... */}
          {!isLoading && messages.length > 0 && (
             <div className="flex flex-col space-y-2 pb-4">

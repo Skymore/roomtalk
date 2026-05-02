@@ -26,13 +26,242 @@ const openaiLogger = new Logger('OpenAI');
 // nanoid生成器保持不变
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 
-// 初始化 OpenAI 客户端
+// OpenAI SDK also supports OpenAI-compatible endpoints; OpenRouter is the primary provider.
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || '', // 从环境变量获取 API 密钥
 });
 
+const openrouterHeaders: Record<string, string> = {
+  'X-Title': process.env.OPENROUTER_APP_NAME || 'RoomTalk',
+};
+
+const openrouterReferer = process.env.OPENROUTER_HTTP_REFERER || process.env.CLIENT_URL;
+if (openrouterReferer) {
+  openrouterHeaders['HTTP-Referer'] = openrouterReferer;
+}
+
+const openrouter = new OpenAI({
+  apiKey: process.env.OPENROUTER_API_KEY || 'missing-openrouter-api-key',
+  baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
+  defaultHeaders: openrouterHeaders,
+});
+
 // 设置默认的 AI 助手系统消息
 const DEFAULT_SYSTEM_MESSAGE = 'You are a helpful, creative, friendly assistant. Respond concisely and clearly.';
+
+type AIModelProvider = 'openai' | 'openrouter';
+
+interface AIModelPricing {
+  currency: 'USD';
+  inputPerMillion: number;
+  outputPerMillion: number;
+  cachedInputPerMillion?: number;
+}
+
+interface AIModelOption {
+  id: string;
+  apiModel: string;
+  provider: AIModelProvider;
+  label: string;
+  description: string;
+  pricing?: AIModelPricing;
+  isDefault?: boolean;
+}
+
+interface AIUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  cachedPromptTokens?: number;
+  source: 'reported' | 'estimated';
+}
+
+interface AICost {
+  currency: 'USD';
+  inputUsd: number;
+  outputUsd: number;
+  totalUsd: number;
+  inputPerMillion: number;
+  outputPerMillion: number;
+  cachedInputPerMillion?: number;
+  estimated: boolean;
+}
+
+interface RoomAICostTotal {
+  roomId: string;
+  currency: 'USD';
+  totalUsd: number;
+}
+
+const DEFAULT_AI_MODEL_ID = process.env.AI_MODEL || process.env.OPENROUTER_MODEL || process.env.OPENAI_MODEL || 'gpt-5.5';
+const CONFIGURED_AI_MODEL_OPTIONS =
+  process.env.AI_MODEL_OPTIONS ||
+  process.env.OPENROUTER_MODEL_OPTIONS ||
+  process.env.OPENAI_MODEL_OPTIONS;
+
+const REQUESTED_AI_MODEL_CATALOG: AIModelOption[] = [
+  {
+    id: 'gpt-5.5',
+    apiModel: 'openai/gpt-5.5',
+    provider: 'openrouter',
+    label: 'GPT-5.5',
+    description: 'OpenAI GPT-5.5 routed through OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 5, cachedInputPerMillion: 0.5, outputPerMillion: 30 },
+  },
+  {
+    id: 'claude-sonnet-4.6',
+    apiModel: 'anthropic/claude-sonnet-4.6',
+    provider: 'openrouter',
+    label: 'Claude Sonnet 4.6',
+    description: 'Anthropic Sonnet model via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 3, outputPerMillion: 15 },
+  },
+  {
+    id: 'deepseek-v4-pro',
+    apiModel: 'deepseek/deepseek-v4-pro',
+    provider: 'openrouter',
+    label: 'DeepSeek V4 Pro',
+    description: 'DeepSeek long-context reasoning model via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 1.74, outputPerMillion: 3.48 },
+  },
+  {
+    id: 'kimi-k2.6',
+    apiModel: 'moonshotai/kimi-k2.6',
+    provider: 'openrouter',
+    label: 'Kimi K2.6',
+    description: 'Moonshot Kimi model via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 0.74, outputPerMillion: 3.49 },
+  },
+  {
+    id: 'glm-5.1',
+    apiModel: 'z-ai/glm-5.1',
+    provider: 'openrouter',
+    label: 'GLM 5.1',
+    description: 'Latest GLM model via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 1.05, outputPerMillion: 3.5 },
+  },
+  {
+    id: 'minimax-m2.7',
+    apiModel: 'minimax/minimax-m2.7',
+    provider: 'openrouter',
+    label: 'MiniMax M2.7',
+    description: 'Latest MiniMax model via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 0.3, outputPerMillion: 1.2 },
+  },
+];
+
+const LEGACY_AI_MODEL_CATALOG: AIModelOption[] = [
+  {
+    id: 'gpt-5',
+    apiModel: 'openai/gpt-5',
+    provider: 'openrouter',
+    label: 'GPT-5',
+    description: 'OpenAI GPT-5 routed through OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 1.25, cachedInputPerMillion: 0.125, outputPerMillion: 10 },
+  },
+  {
+    id: 'gpt-5-mini',
+    apiModel: 'openai/gpt-5-mini',
+    provider: 'openrouter',
+    label: 'GPT-5 mini',
+    description: 'OpenAI GPT-5 mini routed through OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 0.25, cachedInputPerMillion: 0.025, outputPerMillion: 2 },
+  },
+  {
+    id: 'gpt-5-nano',
+    apiModel: 'openai/gpt-5-nano',
+    provider: 'openrouter',
+    label: 'GPT-5 nano',
+    description: 'OpenAI GPT-5 nano routed through OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 0.05, cachedInputPerMillion: 0.005, outputPerMillion: 0.4 },
+  },
+];
+
+const AI_MODEL_CATALOG = [...REQUESTED_AI_MODEL_CATALOG, ...LEGACY_AI_MODEL_CATALOG];
+
+const normalizeModelLookupKey = (value: string) => value.trim().toLowerCase();
+
+const createConfiguredOpenRouterModel = (model: string): AIModelOption => ({
+  id: model,
+  apiModel: model,
+  provider: 'openrouter',
+  label: model,
+  description: 'Configured OpenRouter model',
+});
+
+const resolveCatalogModel = (model: string): AIModelOption | undefined => {
+  const key = normalizeModelLookupKey(model);
+  return AI_MODEL_CATALOG.find(option =>
+    normalizeModelLookupKey(option.id) === key ||
+    normalizeModelLookupKey(option.apiModel) === key
+  );
+};
+
+const resolveAIModelOption = (model: string): AIModelOption => {
+  return resolveCatalogModel(model) || createConfiguredOpenRouterModel(model);
+};
+
+const addUniqueModel = (models: AIModelOption[], model: AIModelOption) => {
+  if (!models.some(existing => existing.id === model.id)) {
+    models.push({ ...model });
+  }
+};
+
+const parseAIModelOptions = (value?: string): AIModelOption[] => {
+  const configuredModels = value
+    ?.split(',')
+    .map(model => model.trim())
+    .filter(Boolean) ?? [];
+
+  const models: AIModelOption[] = [];
+  const defaultModel = resolveAIModelOption(DEFAULT_AI_MODEL_ID);
+
+  addUniqueModel(models, defaultModel);
+  configuredModels.forEach(model => addUniqueModel(models, resolveAIModelOption(model)));
+  REQUESTED_AI_MODEL_CATALOG.forEach(model => addUniqueModel(models, model));
+
+  return models.map(model => ({
+    ...model,
+    isDefault: model.id === defaultModel.id,
+  }));
+};
+
+const AI_MODEL_OPTIONS = parseAIModelOptions(CONFIGURED_AI_MODEL_OPTIONS);
+const DEFAULT_AI_MODEL = AI_MODEL_OPTIONS.find(model => model.isDefault) || AI_MODEL_OPTIONS[0];
+
+const normalizeAIModel = (requestedModel?: string): AIModelOption => {
+  if (requestedModel) {
+    const requested = normalizeModelLookupKey(requestedModel);
+    const selectedModel = AI_MODEL_OPTIONS.find(model =>
+      normalizeModelLookupKey(model.id) === requested ||
+      normalizeModelLookupKey(model.apiModel) === requested
+    );
+
+    if (selectedModel) {
+      return selectedModel;
+    }
+
+    openaiLogger.warn('Requested AI model is not allowed, using default model', {
+      requestedModel,
+      defaultModel: DEFAULT_AI_MODEL.id,
+    });
+  }
+
+  return DEFAULT_AI_MODEL;
+};
+
+const getAIModelResponse = () => ({
+  defaultModel: DEFAULT_AI_MODEL.id,
+  models: AI_MODEL_OPTIONS.map(model => ({
+    id: model.id,
+    apiModel: model.apiModel,
+    provider: model.provider,
+    label: model.label,
+    description: model.description,
+    pricing: model.pricing,
+    isDefault: model.isDefault,
+  })),
+});
 
 // 最大上下文消息数量，避免超出 token 限制
 const MAX_CONTEXT_MESSAGES = 40;
@@ -73,6 +302,14 @@ interface Message {
   };
   mimeType?: string;
   status?: 'streaming' | 'complete' | 'error';
+  aiModel?: {
+    id: string;
+    apiModel: string;
+    provider: AIModelProvider;
+    label: string;
+  };
+  usage?: AIUsage;
+  cost?: AICost;
 }
 
 interface Room {
@@ -206,6 +443,149 @@ async function readMessagesByRoom(roomId: string): Promise<Message[]> {
     redisLogger.error('Error reading messages from Redis', { error, roomId });
     return [];
   }
+}
+
+function getRoomAICostKey(roomId: string): string {
+  return `room:${roomId}:ai_cost_total_usd`;
+}
+
+async function readRoomAICost(roomId: string): Promise<RoomAICostTotal> {
+  try {
+    const total = await redisClient.get(getRoomAICostKey(roomId));
+    const totalUsd = Number.parseFloat(total || '0');
+
+    return {
+      roomId,
+      currency: 'USD',
+      totalUsd: Number.isFinite(totalUsd) ? totalUsd : 0,
+    };
+  } catch (error) {
+    redisLogger.error('Error reading room AI cost total', { error, roomId });
+    return { roomId, currency: 'USD', totalUsd: 0 };
+  }
+}
+
+async function incrementRoomAICost(roomId: string, cost: AICost | null): Promise<RoomAICostTotal> {
+  if (!cost || !Number.isFinite(cost.totalUsd) || cost.totalUsd <= 0) {
+    return readRoomAICost(roomId);
+  }
+
+  try {
+    const total = await redisClient.incrByFloat(getRoomAICostKey(roomId), cost.totalUsd);
+    const totalUsd = typeof total === 'number' ? total : Number.parseFloat(String(total));
+    return {
+      roomId,
+      currency: 'USD',
+      totalUsd: Number.isFinite(totalUsd) ? totalUsd : cost.totalUsd,
+    };
+  } catch (error) {
+    redisLogger.error('Error incrementing room AI cost total', { error, roomId, cost });
+    return readRoomAICost(roomId);
+  }
+}
+
+function getAIClientForModel(model: AIModelOption): OpenAI {
+  if (model.provider === 'openrouter') {
+    if (!process.env.OPENROUTER_API_KEY) {
+      throw new Error('OPENROUTER_API_KEY is required for OpenRouter models');
+    }
+
+    return openrouter;
+  }
+
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY is required for OpenAI models');
+  }
+
+  return openai;
+}
+
+function estimateTokenCount(text: string): number {
+  if (!text.trim()) return 0;
+  return Math.max(1, Math.ceil(text.length / 4));
+}
+
+function estimatePromptTokens(messages: Array<{ content: any }>): number {
+  return messages.reduce((total, message) => {
+    if (typeof message.content === 'string') {
+      return total + estimateTokenCount(message.content);
+    }
+
+    if (Array.isArray(message.content)) {
+      return total + message.content.reduce((itemTotal: number, item: any) => {
+        if (item.type === 'text' && typeof item.text === 'string') {
+          return itemTotal + estimateTokenCount(item.text);
+        }
+
+        if (item.type === 'image_url') {
+          return itemTotal + 1000;
+        }
+
+        return itemTotal;
+      }, 0);
+    }
+
+    return total;
+  }, 0);
+}
+
+function normalizeUsage(apiUsage: any, messages: Array<{ content: any }>, outputContent: string): AIUsage {
+  if (apiUsage && typeof apiUsage.prompt_tokens === 'number' && typeof apiUsage.completion_tokens === 'number') {
+    const cachedPromptTokens = apiUsage.prompt_tokens_details?.cached_tokens;
+    return {
+      promptTokens: apiUsage.prompt_tokens,
+      completionTokens: apiUsage.completion_tokens,
+      totalTokens: typeof apiUsage.total_tokens === 'number'
+        ? apiUsage.total_tokens
+        : apiUsage.prompt_tokens + apiUsage.completion_tokens,
+      cachedPromptTokens: typeof cachedPromptTokens === 'number' ? cachedPromptTokens : undefined,
+      source: 'reported',
+    };
+  }
+
+  const promptTokens = estimatePromptTokens(messages);
+  const completionTokens = estimateTokenCount(outputContent);
+
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens: promptTokens + completionTokens,
+    source: 'estimated',
+  };
+}
+
+function calculateAICost(model: AIModelOption, usage: AIUsage): AICost | undefined {
+  if (!model.pricing) {
+    return undefined;
+  }
+
+  const cachedPromptTokens = Math.min(usage.cachedPromptTokens || 0, usage.promptTokens);
+  const uncachedPromptTokens = Math.max(usage.promptTokens - cachedPromptTokens, 0);
+  const cachedInputPerMillion = model.pricing.cachedInputPerMillion;
+  const inputUsd =
+    (uncachedPromptTokens / 1_000_000) * model.pricing.inputPerMillion +
+    (cachedPromptTokens / 1_000_000) * (cachedInputPerMillion ?? model.pricing.inputPerMillion);
+  const outputUsd = (usage.completionTokens / 1_000_000) * model.pricing.outputPerMillion;
+
+  return {
+    currency: model.pricing.currency,
+    inputUsd,
+    outputUsd,
+    totalUsd: inputUsd + outputUsd,
+    inputPerMillion: model.pricing.inputPerMillion,
+    outputPerMillion: model.pricing.outputPerMillion,
+    cachedInputPerMillion,
+    estimated: usage.source === 'estimated',
+  };
+}
+
+function getMessageAIModel(model: AIModelOption): Message['aiModel'] {
+  return {
+    id: model.id,
+    apiModel: model.apiModel,
+    provider: model.provider,
+    label: model.label,
+  };
 }
 
 async function saveRoom(room: Room): Promise<Room | null> {
@@ -470,6 +850,7 @@ io.on('connection', (socket: Socket) => {
     // 发送房间消息历史
     const roomMessages = await readMessagesByRoom(roomId);
     socket.emit('message_history', roomMessages);
+    socket.emit('ai_cost_total', await readRoomAICost(roomId));
   });
 
   // 离开房间
@@ -507,6 +888,7 @@ io.on('connection', (socket: Socket) => {
     
     const roomMessages = await readMessagesByRoom(roomId);
     socket.emit('message_history', roomMessages);
+    socket.emit('ai_cost_total', await readRoomAICost(roomId));
   });
 
   // 发送新消息（文本或图片，若图片直接通过分段上传处理则不用走这里）
@@ -626,6 +1008,7 @@ io.on('connection', (socket: Socket) => {
     roomId: string;
     systemPrompt?: string;
     roleName?: string;
+    model?: string;
     editedMessageId?: string; // ID of the message that was just edited
     retryForMessageId?: string; // ID of the AI message to retry generating
   }) => {
@@ -640,12 +1023,16 @@ io.on('connection', (socket: Socket) => {
     }
 
     const { roomId, systemPrompt = DEFAULT_SYSTEM_MESSAGE, roleName = 'AI Assistant', editedMessageId, retryForMessageId } = data;
+    const selectedModel = normalizeAIModel(data.model);
 
     socketLogger.info(`Received AI request (history-based)${editedMessageId ? ' after edit ' + editedMessageId : ''}${retryForMessageId ? ' as retry for ' + retryForMessageId : ''}`, {
       socketId: socket.id,
       clientId,
       roomId,
-      roleName
+      roleName,
+      model: selectedModel.id,
+      apiModel: selectedModel.apiModel,
+      provider: selectedModel.provider,
     });
 
     // 创建头像和用户名
@@ -663,7 +1050,8 @@ io.on('connection', (socket: Socket) => {
       messageType: 'ai',
       username: aiUsername,
       avatar: aiAvatar,
-      status: 'streaming'
+      status: 'streaming',
+      aiModel: getMessageAIModel(selectedModel),
     };
     io.to(roomId).emit('new_message', initialAiMessage); // 发送占位消息
 
@@ -787,18 +1175,30 @@ io.on('connection', (socket: Socket) => {
         return; 
       }
 
-      openaiLogger.debug('Sending messages to OpenAI (history-based)', { messages: validMessagesForAPI, contextLengthUsed: contextMessages.length });
+      openaiLogger.debug('Sending messages to AI provider (history-based)', {
+        messages: validMessagesForAPI,
+        contextLengthUsed: contextMessages.length,
+        model: selectedModel.id,
+        apiModel: selectedModel.apiModel,
+        provider: selectedModel.provider,
+      });
 
       // 创建流式请求
-      const stream = await openai.chat.completions.create({
-        model: process.env.OPENAI_MODEL || 'gpt-4',
+      const aiClient = getAIClientForModel(selectedModel);
+      const stream = await aiClient.chat.completions.create({
+        model: selectedModel.apiModel,
         messages: validMessagesForAPI as any,
         stream: true,
         temperature: 1,
-      });
+        stream_options: { include_usage: true },
+      } as any);
 
       let fullContent = '';
-      for await (const chunk of stream) {
+      let reportedUsage: any = null;
+      for await (const chunk of stream as any) {
+           if (chunk.usage) {
+              reportedUsage = chunk.usage;
+            }
            if (chunk.choices[0]?.delta?.content) {
               const contentChunk = chunk.choices[0].delta.content;
               fullContent += contentChunk;
@@ -809,8 +1209,27 @@ io.on('connection', (socket: Socket) => {
             }
         }
 
-      io.to(roomId).emit('ai_stream_end', { messageId: aiMessageId, roomId });
-      openaiLogger.info('AI stream ended', { messageId: aiMessageId, contentLength: fullContent.length });
+      const usage = normalizeUsage(reportedUsage, validMessagesForAPI, fullContent);
+      const cost = calculateAICost(selectedModel, usage);
+      const roomCostTotal = await incrementRoomAICost(roomId, cost || null);
+
+      io.to(roomId).emit('ai_stream_end', {
+        messageId: aiMessageId,
+        roomId,
+        aiModel: getMessageAIModel(selectedModel),
+        usage,
+        cost,
+        sessionCost: roomCostTotal,
+      });
+      io.to(roomId).emit('ai_cost_total', roomCostTotal);
+      openaiLogger.info('AI stream ended', {
+        messageId: aiMessageId,
+        contentLength: fullContent.length,
+        model: selectedModel.id,
+        usage,
+        cost,
+        roomCostTotal,
+      });
 
       // --- 保存最终的 AI 消息和它所基于的上下文 --- 
       const finalAiMessage: Message = {
@@ -818,6 +1237,9 @@ io.on('connection', (socket: Socket) => {
         content: fullContent,
         status: 'complete',
         timestamp: new Date().toISOString(),
+        aiModel: getMessageAIModel(selectedModel),
+        usage,
+        cost,
       };
       // 将新 AI 消息附加到 *用于生成它* 的上下文历史后面
       const finalHistoryToSave = [...contextMessages, finalAiMessage];
@@ -967,10 +1389,12 @@ io.on('connection', (socket: Socket) => {
         socketLogger.info('Cleared room messages from Redis', { socketId: socket.id, clientId, roomId });
         // 向房间内所有客户端广播消息已清空事件
         io.to(roomId).emit('messages_cleared', roomId);
+        io.to(roomId).emit('ai_cost_total', await readRoomAICost(roomId));
       } else {
         socketLogger.debug('No messages to clear or key did not exist', { socketId: socket.id, clientId, roomId });
         // 即使没有消息删除，也通知客户端刷新状态，确保UI一致
         io.to(roomId).emit('messages_cleared', roomId);
+        io.to(roomId).emit('ai_cost_total', await readRoomAICost(roomId));
       }
     } catch (error) {
       socketLogger.error('Error clearing room messages from Redis', { error, socketId: socket.id, clientId, roomId });
@@ -1014,6 +1438,7 @@ io.on('connection', (socket: Socket) => {
       const deletePromises = [
         redisClient.hDel("rooms", roomId),               // 删除房间详情
         redisClient.del(`room:${roomId}:messages`),      // 删除房间消息
+        redisClient.del(getRoomAICostKey(roomId)),        // 删除房间 AI 费用累计
         redisClient.del(`room:${roomId}:members`),       // 删除房间成员列表
         redisClient.sRem(`user:${clientId}:rooms`, roomId) // 从创建者列表中移除
       ];
@@ -1171,6 +1596,20 @@ app.post('/api/rooms/:roomId/messages', async (req: Request, res: Response) => {
   await appendMessage(message);
   io.to(roomId).emit('new_message', message);
   res.status(201).json(message);
+});
+
+app.get('/api/ai-models', (_req: Request, res: Response) => {
+  res.json(getAIModelResponse());
+});
+
+app.get('/api/rooms/:roomId/ai-cost', async (req: Request, res: Response) => {
+  const { roomId } = req.params;
+  if (!roomId) {
+    routeLogger.warn('API request missing room ID', { endpoint: '/api/rooms/:roomId/ai-cost', ip: req.ip });
+    return res.status(400).json({ error: 'Room ID is required' });
+  }
+
+  res.json(await readRoomAICost(roomId));
 });
 
 app.get('/api/clients/:clientId/rooms/:roomId', async (req: Request, res: Response) => {
