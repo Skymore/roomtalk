@@ -147,6 +147,30 @@ const REQUESTED_AI_MODEL_CATALOG: AIModelOption[] = [
     description: 'Latest MiniMax model via OpenRouter',
     pricing: { currency: 'USD', inputPerMillion: 0.3, outputPerMillion: 1.2 },
   },
+  {
+    id: 'x-ai/grok-4.3',
+    apiModel: 'x-ai/grok-4.3',
+    provider: 'openrouter',
+    label: 'Grok 4.3',
+    description: 'xAI Grok 4.3 via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 1.25, cachedInputPerMillion: 0.2, outputPerMillion: 2.5 },
+  },
+  {
+    id: 'tencent/hy3-preview:free',
+    apiModel: 'tencent/hy3-preview:free',
+    provider: 'openrouter',
+    label: 'Tencent Hy3 Preview',
+    description: 'Tencent Hy3 preview free tier via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 0, outputPerMillion: 0 },
+  },
+  {
+    id: '~google/gemini-pro-latest',
+    apiModel: '~google/gemini-pro-latest',
+    provider: 'openrouter',
+    label: 'Gemini Pro Latest',
+    description: 'Google Gemini Pro Latest via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 2, cachedInputPerMillion: 0.2, outputPerMillion: 12 },
+  },
 ];
 
 const LEGACY_AI_MODEL_CATALOG: AIModelOption[] = [

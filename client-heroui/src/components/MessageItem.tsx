@@ -14,6 +14,10 @@ interface MessageItemProps {
   onRefreshAI?: (messageId: string, content: string) => void;
 }
 
+const tooltipClassNames = {
+  content: "border border-[#dedbd0] bg-[#faf9f5] px-2 py-1 text-xs font-medium text-[#141413] shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5]",
+};
+
 // Helper to copy image to clipboard
 async function copyImageToClipboard(base64Image: string): Promise<boolean> {
   if (!base64Image.startsWith('data:image')) {
@@ -127,7 +131,12 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         <div className="relative inline-block max-w-full w-full min-w-0">
           {isImage ? (
             <div className="w-fit cursor-pointer" onClick={handleCopyClick}>
-              <Tooltip content={copyStatus === 'success' ? t('copied') : (copyStatus === 'error' ? t('copyFailed') : t('copyImage'))} placement="top" size="sm">
+              <Tooltip
+                content={copyStatus === 'success' ? t('copied') : (copyStatus === 'error' ? t('copyFailed') : t('copyImage'))}
+                placement="top"
+                size="sm"
+                classNames={tooltipClassNames}
+              >
                 {imageError ? (
                   <div className="w-fit rounded-md bg-[#e8e6dc] p-2 text-sm text-danger dark:bg-[#30302e]">
                     <Icon icon="lucide:alert-triangle" className="inline mr-1" />
@@ -192,7 +201,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             {showActions && (
               <div className="flex items-center gap-0.5 transition-opacity opacity-100">
                 {canBeEdited && (
-                  <Tooltip content={t('editMessage')} placement="top" size="sm" delay={500}>
+                  <Tooltip content={t('editMessage')} placement="top" size="sm" delay={500} classNames={tooltipClassNames}>
                     <Button
                       isIconOnly
                       size="sm"
@@ -204,7 +213,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                     </Button>
                   </Tooltip>
                 )}
-                <Tooltip content={t('deleteMessage')} placement="top" size="sm" delay={500}>
+                <Tooltip content={t('deleteMessage')} placement="top" size="sm" delay={500} classNames={tooltipClassNames}>
                   <Button
                     isIconOnly
                       size="sm"
@@ -217,7 +226,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 </Tooltip>
                 {/* 刷新按钮 - 仅对AI消息显示 */}
                 {isAI && !isStreaming && onRefreshAI && (
-                  <Tooltip content={t('retry')} placement="top" size="sm" delay={500}>
+                  <Tooltip content={t('retry')} placement="top" size="sm" delay={500} classNames={tooltipClassNames}>
                     <Button
                       isIconOnly
                       size="sm"

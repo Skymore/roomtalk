@@ -852,6 +852,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
               className="w-full sm:max-w-xs"
               classNames={{
                 trigger: "bg-[#e8e6dc] text-[#4d4c48] data-[hover=true]:bg-[#dedbd0] dark:bg-[#30302e] dark:text-[#faf9f5]",
+                popoverContent: "border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
+                listboxWrapper: "relative max-h-[18rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent] after:pointer-events-none after:sticky after:bottom-0 after:block after:h-8 after:bg-gradient-to-t after:from-[#faf9f5] after:to-transparent dark:after:from-[#1d1d1b]",
               }}
               isDisabled={isSending || isAiProcessing}
               startContent={<Icon icon="lucide:brain-circuit" />}

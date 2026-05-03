@@ -26,6 +26,10 @@ interface MathProps {
   inline?: boolean;
 }
 
+const tooltipClassNames = {
+  content: "border border-[#dedbd0] bg-[#faf9f5] px-2 py-1 text-xs font-medium text-[#141413] shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5]",
+};
+
 /** 预处理：移除仅分割线行 */
 const removeSeparators = (content: string): string =>
   content
@@ -267,7 +271,7 @@ const ContentActionButtons: React.FC<{ content: string }> = memo(({ content }) =
     tooltip: string;
     activeTooltip?: string;
   }) => (
-    <Tooltip content={t(isActive && activeTooltip ? activeTooltip : tooltip)}>
+    <Tooltip content={t(isActive && activeTooltip ? activeTooltip : tooltip)} classNames={tooltipClassNames}>
       <button
         onClick={onClick}
         disabled={disabled}
