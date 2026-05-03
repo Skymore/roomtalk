@@ -58,7 +58,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   const isAI = message.clientId === 'ai_assistant';
   const isStreaming = isAI && message.status === 'streaming';
   const canBeEdited = isText || (message.messageType === 'ai' && message.status !== 'streaming');
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const aiCostLabel = isAI && message.cost
     ? `${message.aiModel?.label ? `${message.aiModel.label} · ` : ''}${formatUsdCost(message.cost.totalUsd)}${message.cost.estimated ? ` ${t('estimatedCost')}` : ''}`
     : '';
@@ -192,7 +192,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         >
             {/* Timestamp */}
             <span className={`max-w-full text-tiny text-[#87867f] dark:text-[#b0aea5] ${showActions ? 'mr-1' : ''}`}>
-              {formatTime(message.timestamp)}
+              {formatTime(message.timestamp, i18n.language)}
               {isStreaming && ` • ${t('typing')}`}
               {aiCostLabel && ` • ${aiCostLabel}`}
             </span>

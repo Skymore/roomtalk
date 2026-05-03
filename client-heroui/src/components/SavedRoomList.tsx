@@ -4,6 +4,7 @@ import { Icon } from '@iconify/react';
 import { Room } from '../utils/types';
 import { removeRoom } from '../utils/storage';
 import { useTranslation } from 'react-i18next';
+import { formatDate } from '../utils/formatters';
 
 interface SavedRoomListProps {
   rooms: Room[];
@@ -16,14 +17,13 @@ export const SavedRoomList: React.FC<SavedRoomListProps> = ({
   onRoomSelect,
   onRoomsChange
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [roomToDelete, setRoomToDelete] = useState<string | null>(null);
 
   // 打开删除确认对话框
   const openDeleteConfirm = (e: React.MouseEvent, roomId: string) => {
     e.stopPropagation(); // 停止事件传播，防止触发Card的onClick
     e.preventDefault(); // 阻止默认行为
-    console.log('准备删除房间:', roomId);
     setRoomToDelete(roomId);
   };
 
@@ -36,7 +36,6 @@ export const SavedRoomList: React.FC<SavedRoomListProps> = ({
   const confirmDelete = () => {
     if (!roomToDelete) return;
 
-    console.log('确认取消收藏房间:', roomToDelete);
     // Restore original logic: update local storage and notify parent
     const updatedRooms = removeRoom(roomToDelete);
     onRoomsChange(updatedRooms);
@@ -91,7 +90,7 @@ export const SavedRoomList: React.FC<SavedRoomListProps> = ({
                 )}
                 <div className="flex justify-between items-center mt-2">
                   <p className="text-xs text-[#87867f] dark:text-[#b0aea5]">
-                    {t('created')}: {new Date(room.createdAt).toLocaleDateString()}
+                    {t('created')}: {formatDate(room.createdAt, i18n.language)}
                   </p>
                   <div className="flex items-center gap-1">
                     <Tooltip content={t('unsave')}>

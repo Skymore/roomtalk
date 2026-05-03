@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import ts from "typescript";
 
 const ROOT = process.cwd();
 const SRC_DIR = path.join(ROOT, "src");
@@ -132,7 +133,13 @@ const extractUsedKeys = () => {
 };
 
 const HARD_CODED_UI_ALLOWLIST = new Set(["RoomTalk", "ID:"]);
+const LOCALIZED_LITERAL_ALLOWLIST = new Set([
+  "src/pages/MessagePage.tsx",
+  "src/utils/i18n.ts",
+  "src/utils/languages.ts",
+]);
 const hasHumanText = (value) => /[A-Za-z\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0900-\u097F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/u.test(value);
+const hasLocalizedScript = (value) => /[\u0900-\u097F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/u.test(value);
 const cleanLiteral = (value) => value.replace(/\s+/g, " ").trim();
 const isExpressionFragment = (value) =>
   value.startsWith(":") ||
@@ -177,12 +184,92 @@ const findHardcodedUiStrings = () => {
   return issues;
 };
 
+const getStringLiteralText = (node) => {
+  if (ts.isStringLiteralLike(node)) return node.text;
+  return "";
+};
+
+const findLocalizedSourceLiterals = () => {
+  const issues = [];
+  const files = walk(SRC_DIR);
+
+  for (const filePath of files) {
+    const relativePath = path.relative(ROOT, filePath);
+    if (LOCALIZED_LITERAL_ALLOWLIST.has(relativePath)) continue;
+
+    const content = read(filePath);
+    const sourceFile = ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, true);
+
+    const visit = (node) => {
+      const literalText = getStringLiteralText(node);
+      if (literalText && hasLocalizedScript(literalText)) {
+        const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+        issues.push({
+          file: relativePath,
+          line: line + 1,
+          value: cleanLiteral(literalText),
+        });
+      }
+
+      ts.forEachChild(node, visit);
+    };
+
+    visit(sourceFile);
+  }
+
+  return issues;
+};
+
+const getPropertyName = (expression) => {
+  if (ts.isPropertyAccessExpression(expression)) {
+    return expression.name.text;
+  }
+  return "";
+};
+
+const findHardcodedLocaleFormatting = () => {
+  const issues = [];
+  const files = walk(SRC_DIR);
+  const localeMethods = new Set(["toLocaleDateString", "toLocaleString", "toLocaleTimeString"]);
+
+  for (const filePath of files) {
+    const relativePath = path.relative(ROOT, filePath);
+    const content = read(filePath);
+    const sourceFile = ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, true);
+
+    const visit = (node) => {
+      if (ts.isCallExpression(node) && localeMethods.has(getPropertyName(node.expression))) {
+        const firstArg = node.arguments[0];
+        const locale = firstArg ? getStringLiteralText(firstArg) : "";
+
+        if (locale) {
+          const { line } = sourceFile.getLineAndCharacterOfPosition(firstArg.getStart(sourceFile));
+          issues.push({
+            file: relativePath,
+            line: line + 1,
+            value: locale,
+            method: getPropertyName(node.expression),
+          });
+        }
+      }
+
+      ts.forEachChild(node, visit);
+    };
+
+    visit(sourceFile);
+  }
+
+  return issues;
+};
+
 const i18nContent = read(I18N_FILE);
 const sourceBlock = extractLocaleBlock(i18nContent, SOURCE_LOCALE);
 const sourceKeys = extractTranslationKeys(sourceBlock);
 const usedKeys = extractUsedKeys();
 const missingSourceKeys = [...usedKeys].filter((key) => !sourceKeys.has(key)).sort();
 const hardcodedUiStrings = findHardcodedUiStrings();
+const localizedSourceLiterals = findLocalizedSourceLiterals();
+const hardcodedLocaleFormatting = findHardcodedLocaleFormatting();
 
 if (missingSourceKeys.length > 0) {
   console.error("Missing source translation keys:");
@@ -196,6 +283,22 @@ if (hardcodedUiStrings.length > 0) {
   console.error("Hardcoded UI strings found. Move these through i18n or add a deliberate allowlist entry:");
   for (const issue of hardcodedUiStrings) {
     console.error(`  - ${issue.file}:${issue.line} [${issue.kind}] "${issue.value}"`);
+  }
+  process.exit(1);
+}
+
+if (localizedSourceLiterals.length > 0) {
+  console.error("Localized source literals found outside the locale catalog. Move UI text through i18n or add a deliberate allowlist entry:");
+  for (const issue of localizedSourceLiterals) {
+    console.error(`  - ${issue.file}:${issue.line} "${issue.value}"`);
+  }
+  process.exit(1);
+}
+
+if (hardcodedLocaleFormatting.length > 0) {
+  console.error("Hardcoded locale formatting found. Use the active i18n language when formatting dates, times, and numbers:");
+  for (const issue of hardcodedLocaleFormatting) {
+    console.error(`  - ${issue.file}:${issue.line} ${issue.method}("${issue.value}")`);
   }
   process.exit(1);
 }
