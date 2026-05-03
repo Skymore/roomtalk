@@ -2,10 +2,11 @@ import React from 'react';
 import { Avatar, Button, Input, Dropdown, DropdownTrigger, DropdownMenu, DropdownItem } from "@heroui/react";
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
-import { getAvatarText, getAvatarColor } from "../pages/MessagePage";
+import { getAvatarText, getAvatarColor } from "../utils/userProfile";
 import { getLanguageOption, languageOptions } from "../utils/languages";
 
 interface SettingsViewProps {
+  clientId: string;
   username: string;
   setUsername: (username: string) => void;
   showEditUsername: boolean;
@@ -19,6 +20,7 @@ interface SettingsViewProps {
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
+  clientId,
   username,
   setUsername,
   showEditUsername,
@@ -31,7 +33,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   changeLanguage
 }) => {
   const { t } = useTranslation();
-  const clientId = localStorage.getItem('clientId') || '';
   const currentLanguage = getLanguageOption(i18n.language);
 
   return (

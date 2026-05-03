@@ -5,17 +5,20 @@ import { Room } from '../utils/types';
 import { removeRoom } from '../utils/storage';
 import { useTranslation } from 'react-i18next';
 import { formatDate } from '../utils/formatters';
+import { isJoinedRoomForClient } from '../utils/roomState';
 
 interface SavedRoomListProps {
   rooms: Room[];
   onRoomSelect: (roomId: string, isJoined?: boolean) => void;
   onRoomsChange: (rooms: Room[]) => void;
+  clientId: string;
 }
 
 export const SavedRoomList: React.FC<SavedRoomListProps> = ({
   rooms,
   onRoomSelect,
-  onRoomsChange
+  onRoomsChange,
+  clientId
 }) => {
   const { t, i18n } = useTranslation();
   const [roomToDelete, setRoomToDelete] = useState<string | null>(null);
@@ -75,7 +78,7 @@ export const SavedRoomList: React.FC<SavedRoomListProps> = ({
             isPressable
             onPress={() => {
               console.log('Saved room card pressed:', room.id);
-              const isJoined = room.creatorId !== localStorage.getItem('clientId');
+              const isJoined = isJoinedRoomForClient(room, clientId);
               onRoomSelect(room.id, isJoined);
             }}
           >
