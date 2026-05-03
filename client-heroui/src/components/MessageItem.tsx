@@ -4,7 +4,6 @@ import { Icon } from "@iconify/react";
 import { clientId } from "../utils/socket";
 import { formatTime, formatUsdCost } from "../utils/formatters";
 import { Message } from "../utils/types";
-import { MarkdownContent } from "./MarkdownContent";
 import { useTranslation } from "react-i18next";
 
 interface MessageItemProps {
@@ -17,6 +16,10 @@ interface MessageItemProps {
 const tooltipClassNames = {
   content: "border border-[#dedbd0] bg-[#faf9f5] px-2 py-1 text-xs font-medium text-[#141413] shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5]",
 };
+
+const MarkdownContent = React.lazy(() =>
+  import("./MarkdownContent").then(module => ({ default: module.MarkdownContent }))
+);
 
 // Helper to copy image to clipboard
 async function copyImageToClipboard(base64Image: string): Promise<boolean> {
@@ -64,6 +67,15 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     : '';
 
   const [copyStatus, setCopyStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const copyResetTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  React.useEffect(() => {
+    return () => {
+      if (copyResetTimerRef.current) {
+        clearTimeout(copyResetTimerRef.current);
+      }
+    };
+  }, []);
 
   const handleImageError = () => {
     setImageError(true);
@@ -77,7 +89,13 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                       : `data:${message.mimeType || 'image/png'};base64,${message.content}`;
     const success = await copyImageToClipboard(imageData);
     setCopyStatus(success ? 'success' : 'error');
-    setTimeout(() => setCopyStatus('idle'), 1500); // Reset status after a delay
+    if (copyResetTimerRef.current) {
+      clearTimeout(copyResetTimerRef.current);
+    }
+    copyResetTimerRef.current = setTimeout(() => {
+      setCopyStatus('idle');
+      copyResetTimerRef.current = null;
+    }, 1500); // Reset status after a delay
   };
 
   // 修改成不使用事件参数的简单处理函数，避免类型错误
@@ -175,7 +193,9 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               <div className="max-w-full p-2.5">
                 <div className="max-w-full overflow-hidden whitespace-pre-wrap break-words text-sm leading-6">
                   <div className="max-w-full overflow-x-auto" style={{ wordBreak: 'break-word', overflowWrap: 'break-word' }}>
-                    <MarkdownContent content={message.content} />
+                    <React.Suspense fallback={<div className="whitespace-pre-wrap break-words">{message.content}</div>}>
+                      <MarkdownContent content={message.content} />
+                    </React.Suspense>
                     {isStreaming && (
                       <span className="inline-block w-1.5 h-3 bg-current animate-pulse ml-0.5 align-baseline"></span>
                     )}
