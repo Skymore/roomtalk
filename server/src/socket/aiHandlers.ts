@@ -1,0 +1,222 @@
+import { v4 as uuidv4 } from 'uuid';
+import { buildFinalAIHistory, MAX_CONTEXT_MESSAGES, selectAIHistory } from '../services/aiHistory';
+import { calculateAICost, DEFAULT_SYSTEM_MESSAGE, getMessageAIModel, normalizeUsage } from '../services/aiModels';
+import {
+  buildAIProviderMessages,
+  createAIPlaceholderMessage,
+} from '../services/messageDomain';
+import { Message } from '../types';
+import { SocketConnectionContext } from './types';
+
+export function registerAIHandlers({
+  io,
+  socket,
+  store,
+  socketLogger,
+  openaiLogger,
+  normalizeAIModel,
+  getAIClientForModel,
+}: SocketConnectionContext) {
+  socket.on('ask_ai', async (data: {
+    roomId: string;
+    systemPrompt?: string;
+    roleName?: string;
+    model?: string;
+    editedMessageId?: string;
+    retryForMessageId?: string;
+  }) => {
+    const clientId = await store.getClientId(socket.id);
+    if (!clientId) {
+      socket.emit('error', { message: 'You are not registered' });
+      return;
+    }
+
+    if (!data.roomId) {
+      socket.emit('error', { message: 'Room ID is required for AI request' });
+      return;
+    }
+
+    const { roomId, systemPrompt = DEFAULT_SYSTEM_MESSAGE, roleName = 'AI Assistant', editedMessageId, retryForMessageId } = data;
+    const selectedModel = normalizeAIModel(data.model);
+
+    socketLogger.info(`Received AI request (history-based)${editedMessageId ? ' after edit ' + editedMessageId : ''}${retryForMessageId ? ' as retry for ' + retryForMessageId : ''}`, {
+      socketId: socket.id,
+      clientId,
+      roomId,
+      roleName,
+      model: selectedModel.id,
+      apiModel: selectedModel.apiModel,
+      provider: selectedModel.provider,
+    });
+
+    const aiMessageId = uuidv4();
+    const initialAiMessage = createAIPlaceholderMessage({
+      id: aiMessageId,
+      roomId,
+      roleName,
+      model: selectedModel,
+    });
+    io.to(roomId).emit('new_message', initialAiMessage);
+
+    let contextMessages: Message[] = [];
+    let historyUsedForContext: Message[] = [];
+
+    try {
+      const fullHistory = await store.readMessagesByRoom(roomId);
+      const selection = selectAIHistory(fullHistory, {
+        editedMessageId,
+        retryForMessageId,
+        maxContextMessages: MAX_CONTEXT_MESSAGES,
+      });
+
+      historyUsedForContext = selection.historyUsedForContext;
+      contextMessages = selection.contextMessages;
+
+      if (retryForMessageId) {
+        if (selection.truncationReason === 'retry') {
+          openaiLogger.info('Truncating message history for retry', {
+            roomId,
+            retryForMessageId,
+            originalCount: fullHistory.length,
+            newCount: historyUsedForContext.length,
+          });
+        } else {
+          openaiLogger.warn('Retry message ID not found in history, using full history', { roomId, retryForMessageId });
+        }
+      } else if (editedMessageId) {
+        if (selection.truncationReason === 'edit') {
+          openaiLogger.info('Truncating message history after edit', {
+            roomId,
+            editedMessageId,
+            originalCount: fullHistory.length,
+            newCount: historyUsedForContext.length,
+          });
+        } else {
+          openaiLogger.warn('Edited message ID not found in history, using full history', { roomId, editedMessageId });
+        }
+      }
+
+      if (historyUsedForContext.length === 0) {
+        openaiLogger.warn('History for context is empty after processing.', { roomId, editedMessageId, retryForMessageId });
+      }
+
+      if (selection.truncationReason === 'max-context') {
+        openaiLogger.debug('Applying MAX_CONTEXT limit to determined history', {
+          roomId,
+          originalCount: historyUsedForContext.length,
+          limitedCount: contextMessages.length,
+        });
+      }
+    } catch (error) {
+      openaiLogger.error('Error loading/processing context messages', { error, roomId });
+      contextMessages = [];
+    }
+
+    openaiLogger.debug('contextMessages', contextMessages);
+
+    try {
+      const validMessagesForAPI = buildAIProviderMessages(systemPrompt, contextMessages);
+      const hasUserOrAssistantMessage = validMessagesForAPI.some(msg => msg.role === 'user' || msg.role === 'assistant');
+      if (!hasUserOrAssistantMessage && validMessagesForAPI.length <= 1) {
+        openaiLogger.error('Cannot call OpenAI API without user or assistant messages in context.', { roomId });
+        io.to(roomId).emit('ai_stream_error', {
+          messageId: aiMessageId,
+          error: 'Sorry, cannot generate a response without any context or question.',
+          roomId,
+        });
+        store.saveMessageHistory(roomId, historyUsedForContext).catch(err => openaiLogger.error('Failed to save history after empty context error', { error: err }));
+        return;
+      }
+
+      openaiLogger.debug('Sending messages to AI provider (history-based)', {
+        messages: validMessagesForAPI,
+        contextLengthUsed: contextMessages.length,
+        model: selectedModel.id,
+        apiModel: selectedModel.apiModel,
+        provider: selectedModel.provider,
+      });
+
+      const aiClient = getAIClientForModel(selectedModel);
+      const stream = await aiClient.chat.completions.create({
+        model: selectedModel.apiModel,
+        messages: validMessagesForAPI as any,
+        stream: true,
+        temperature: 1,
+        stream_options: { include_usage: true },
+      } as any);
+
+      let fullContent = '';
+      let reportedUsage: any = null;
+      for await (const chunk of stream as any) {
+        if (chunk.usage) {
+          reportedUsage = chunk.usage;
+        }
+        if (chunk.choices[0]?.delta?.content) {
+          const contentChunk = chunk.choices[0].delta.content;
+          fullContent += contentChunk;
+          io.to(roomId).emit('ai_chunk', { messageId: aiMessageId, chunk: contentChunk, roomId });
+          if (fullContent.length % 100 === 0) {
+            openaiLogger.debug('Streaming AI chunk', { messageId: aiMessageId, contentLength: fullContent.length });
+          }
+        }
+      }
+
+      const usage = normalizeUsage(reportedUsage, validMessagesForAPI, fullContent);
+      const cost = calculateAICost(selectedModel, usage);
+      const roomCostTotal = await store.incrementRoomAICost(roomId, cost || null);
+
+      io.to(roomId).emit('ai_stream_end', {
+        messageId: aiMessageId,
+        roomId,
+        aiModel: getMessageAIModel(selectedModel),
+        usage,
+        cost,
+        sessionCost: roomCostTotal,
+      });
+      io.to(roomId).emit('ai_cost_total', roomCostTotal);
+      openaiLogger.info('AI stream ended', {
+        messageId: aiMessageId,
+        contentLength: fullContent.length,
+        model: selectedModel.id,
+        usage,
+        cost,
+        roomCostTotal,
+      });
+
+      const finalAiMessage: Message = {
+        ...initialAiMessage,
+        content: fullContent,
+        status: 'complete',
+        timestamp: new Date().toISOString(),
+        aiModel: getMessageAIModel(selectedModel),
+        usage,
+        cost,
+      };
+      const finalHistoryToSave = buildFinalAIHistory(historyUsedForContext, finalAiMessage);
+
+      store.saveMessageHistory(roomId, finalHistoryToSave).then(() => {
+        openaiLogger.info('Saved final AI message and its context history to Redis', {
+          messageId: aiMessageId,
+          historyLength: finalHistoryToSave.length,
+          contextLengthUsed: contextMessages.length,
+        });
+      }).catch(err => {
+        openaiLogger.error('Failed to save final AI history to Redis', { error: err, messageId: aiMessageId });
+      });
+    } catch (error) {
+      socketLogger.error('Error processing AI stream request', {
+        error: error instanceof Error ? error.message : error,
+        socketId: socket.id,
+        clientId,
+        roomId,
+      });
+      io.to(roomId).emit('ai_stream_error', {
+        messageId: aiMessageId,
+        error: 'Sorry, an error occurred while generating the AI response.',
+        roomId,
+      });
+      const errorAiMessage: Message = { ...initialAiMessage, status: 'error', content: 'Error generating response.' };
+      store.saveMessageHistory(roomId, buildFinalAIHistory(historyUsedForContext, errorAiMessage)).catch(err => openaiLogger.error('Failed to save error AI history', { error: err }));
+    }
+  });
+}
