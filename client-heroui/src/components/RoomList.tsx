@@ -15,6 +15,7 @@ import { Icon } from '@iconify/react';
 import { Room } from '../utils/types';
 import { createRoom } from '../utils/socket';
 import { useTranslation } from 'react-i18next';
+import { formatDate } from '../utils/formatters';
 
 interface RoomListProps {
   rooms: Room[];
@@ -24,22 +25,8 @@ interface RoomListProps {
   username: string;
 }
 
-// Helper function to format date (can be customized)
-const formatDate = (dateString: string | number | Date | undefined): string => {
-  if (!dateString) return 'N/A';
-  try {
-    // More concise date formatting for desktop view
-    return new Date(dateString).toLocaleDateString(undefined, {
-      year: 'numeric', month: 'numeric', day: 'numeric'
-    });
-  } catch (e) {
-    console.error("Error formatting date:", e);
-    return 'Invalid Date';
-  }
-};
-
 export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleDeleteRoom, clientId, username }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { isOpen, onOpen, onClose } = useDisclosure();
   const [newRoomName, setNewRoomName] = useState('');
   const [newRoomDescription, setNewRoomDescription] = useState('');
@@ -356,7 +343,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
 
                     {room.createdAt && (
                        <span className="ml-2 hidden whitespace-nowrap text-xs text-[#87867f] dark:text-[#b0aea5] md:inline-block">
-                         {formatDate(room.createdAt)}
+                         {formatDate(room.createdAt, i18n.language)}
                        </span>
                     )}
 
