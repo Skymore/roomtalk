@@ -1,33 +1,38 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Button,
   Card,
-  Tooltip,
   useDisclosure,
-  Modal,
-  ModalContent,
-  ModalHeader,
-  ModalBody,
-  ModalFooter,
-  Select,
-  SelectItem,
-  Tabs,
-  Tab,
 } from "@heroui/react";
 import { Icon } from '@iconify/react';
 import { sendMessage, socket } from '../utils/socket';
 import { useTranslation } from 'react-i18next';
 import imageCompression from 'browser-image-compression';
-import { AIRole, AIRoleManager, getAIRoleDisplayName, getSavedAIRoles, saveAIRoles } from './AIRoleManager';
 import {
-  AIModelOption,
-  FALLBACK_AI_MODEL,
-  FALLBACK_AI_MODELS,
-  fetchAIModels,
-  formatModelPrice,
-  getStoredAIModel,
-  saveStoredAIModel,
-} from '../utils/aiModels';
+  buildAIPrompt,
+  buildOutgoingMessageItems,
+  emptyMessageContent,
+  hasMessageContent,
+  MessageContentItem,
+} from '../utils/messageInputState';
+import {
+  getAvailableImageSlots,
+  getFirstClipboardImageFile,
+  hasClipboardImageItem,
+  ImageInputValidationError,
+  MAX_MESSAGE_IMAGES,
+  PASTE_RESET_IDLE_MS,
+  shouldResetPasteCount,
+  shouldThrottlePaste,
+  validateImageFile,
+} from '../utils/imageInput';
+import { useAIRoles } from '../hooks/useAIRoles';
+import { useAIModelSelection } from '../hooks/useAIModelSelection';
+import { MessageInputAIControls, MessageInputAISettingsButton } from './MessageInputAIControls';
+import {
+  getKeyboardCompositionSnapshot,
+  isConfirmingIMEComposition,
+} from '../utils/keyboardComposition';
 
 interface MessageInputProps {
   roomId: string;
@@ -36,34 +41,25 @@ interface MessageInputProps {
   avatarColor: string;
 }
 
-// 消息内容项类型
-type ContentItem = {
-  type: 'text' | 'image';
-  content: string;
-  file?: File;  // 添加file字段用于存储原始文件
-  previewUrl?: string;  // 添加previewUrl字段用于存储预览URL
-};
-
 // 使用WeakMap存储图片元素和对应的File对象
 const imageFileMap = new WeakMap<HTMLImageElement, File>();
 
 export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, avatarText, avatarColor }) => {
   const { t } = useTranslation();
-  const [contentItems, setContentItems] = useState<ContentItem[]>([{ type: 'text', content: '' }]);
+  const [_contentItems, setContentItems] = useState<MessageContentItem[]>(emptyMessageContent());
   const [isSending, setIsSending] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
   const [imageCount, setImageCount] = useState(0);
+  const [currentInputText, setCurrentInputText] = useState('');
   const imageCountRef = useRef(0); // 用于实时跟踪图片数量，避免状态更新延迟
   const lastPasteTime = useRef(0); // 用于限制粘贴频率
   const pasteCountRef = useRef(0); // 用于跟踪连续粘贴次数
+  const pasteResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isComposingRef = useRef(false);
   const lastCompositionEndAtRef = useRef(0);
-  const MAX_IMAGES = 9;
-  const INITIAL_PASTE_THROTTLE_MS = 200; // 首次粘贴间隔限制(毫秒)
-  const SUBSEQUENT_PASTE_THROTTLE_MS = 50; // 后续粘贴间隔限制(毫秒)
-  const COMPOSITION_END_GRACE_MS = 80;
   const [isAiProcessing, setIsAiProcessing] = useState(false); // 新增: 跟踪 AI 处理状态
 
   // 检测是否为移动设备
@@ -88,108 +84,32 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
     setIsMacOS(checkMacOS());
   }, []);
 
-  // 新增 AI 角色相关状态
-  const [aiRoles, setAiRoles] = useState<AIRole[]>(getSavedAIRoles());
-  const [selectedRoleId, setSelectedRoleId] = useState<string>('default');
-  const [aiModels, setAiModels] = useState<AIModelOption[]>(FALLBACK_AI_MODELS);
-  const [defaultAIModel, setDefaultAIModel] = useState<string>(FALLBACK_AI_MODEL);
-  const [selectedAIModel, setSelectedAIModel] = useState<string>(() => getStoredAIModel() || FALLBACK_AI_MODEL);
+  const {
+    aiRoles,
+    selectedRoleId,
+    selectedRole,
+    handleRoleChange,
+    handleAddRole,
+    handleUpdateRole,
+    handleDeleteRole,
+  } = useAIRoles();
+  const {
+    aiModels,
+    defaultAIModel,
+    selectedAIModel,
+    handleModelChange,
+  } = useAIModelSelection();
 
   // 新增角色设置模态框的状态
   const { isOpen: isAISettingsOpen, onOpen: onAISettingsOpen, onClose: onAISettingsClose } = useDisclosure();
 
-  // 在组件加载时从本地存储获取AI角色
-  useEffect(() => {
-    setAiRoles(getSavedAIRoles());
-  }, []);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    fetchAIModels()
-      .then(({ defaultModel, models }) => {
-        if (!isMounted) return;
-
-        setDefaultAIModel(defaultModel);
-        setAiModels(models);
-
-        const storedModel = getStoredAIModel();
-        const nextModel = storedModel && models.some(model => model.id === storedModel)
-          ? storedModel
-          : defaultModel;
-
-        setSelectedAIModel(nextModel);
-        saveStoredAIModel(nextModel);
-      })
-      .catch(error => {
-        console.warn('Failed to load AI models, using fallback models.', error);
-      });
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  // 清除错误信息的定时器
-  useEffect(() => {
-    if (errorMessage) {
-      const timer = setTimeout(() => {
-        setErrorMessage(null);
-      }, 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [errorMessage]);
-
-  // 同步imageCountRef和imageCount
-  useEffect(() => {
-    imageCountRef.current = imageCount;
-  }, [imageCount]);
-
-  // 监听编辑器内容变化
-  useEffect(() => {
-    const editor = editorRef.current;
-    if (!editor) return;
-
-    const handleInput = () => {
-      // 提取编辑器内容，转换为ContentItem数组
-      parseEditorContent();
-    };
-
-    // 使用MutationObserver监听DOM变化，更准确地捕获图片添加/删除
-    const observer = new MutationObserver(() => {
-      // 直接计算当前编辑器中的图片数量
-      const currentImageCount = editor.querySelectorAll('img').length;
-
-      // 如果图片数量变化，立即更新
-      if (currentImageCount !== imageCountRef.current) {
-        imageCountRef.current = currentImageCount;
-        setImageCount(currentImageCount);
-      }
-
-      // 更新内容项
-      parseEditorContent();
-    });
-
-    observer.observe(editor, {
-      childList: true,
-      subtree: true,
-      characterData: true
-    });
-
-    editor.addEventListener('input', handleInput);
-    return () => {
-      observer.disconnect();
-      editor.removeEventListener('input', handleInput);
-    };
-  }, []);
-
   // 将编辑器内容解析为ContentItem数组
-  const parseEditorContent = () => {
+  const parseEditorContent = useCallback((): MessageContentItem[] => {
     const editor = editorRef.current;
-    if (!editor) return;
+    if (!editor) return emptyMessageContent();
 
     // 暂存解析结果
-    const newItems: ContentItem[] = [];
+    const newItems: MessageContentItem[] = [];
     let images = 0;
 
     // 遍历所有子节点
@@ -204,7 +124,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
         if (element.tagName === 'IMG') {
           // 图片节点
           const img = element as HTMLImageElement;
-          if (images < MAX_IMAGES) {
+          if (images < MAX_MESSAGE_IMAGES) {
             const file = imageFileMap.get(img);
             if (file) {
               newItems.push({
@@ -236,83 +156,76 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
 
     // 确保至少有一个文本项
     if (newItems.length === 0) {
-      newItems.push({ type: 'text', content: '' });
+      newItems.push(...emptyMessageContent());
     }
 
     // 更新内容项状态
     setContentItems(newItems);
-  };
+    return newItems;
+  }, []);
 
-  // 获取当前选中的AI角色
-  const getSelectedRole = (): AIRole => {
-    return aiRoles.find(role => role.id === selectedRoleId) || aiRoles[0];
-  };
-
-  // 处理AI角色变更
-  const handleRoleChange = (roleId: string) => {
-    setSelectedRoleId(roleId);
-  };
-
-  const handleModelChange = (model: string) => {
-    setSelectedAIModel(model);
-    saveStoredAIModel(model);
-  };
-
-  // 添加新的AI角色
-  const handleAddRole = (newRole: AIRole) => {
-    const updatedRoles = [...aiRoles, newRole];
-    setAiRoles(updatedRoles);
-    saveAIRoles(updatedRoles);
-    setSelectedRoleId(newRole.id);
-  };
-
-  // 更新现有AI角色
-  const handleUpdateRole = (updatedRole: AIRole) => {
-    const updatedRoles = aiRoles.map(role =>
-      role.id === updatedRole.id ? updatedRole : role
-    );
-    setAiRoles(updatedRoles);
-    saveAIRoles(updatedRoles);
-  };
-
-  // 删除AI角色
-  const handleDeleteRole = (roleId: string) => {
-    // 不允许删除所有角色，至少保留一个
-    if (aiRoles.length <= 1) return;
-
-    const updatedRoles = aiRoles.filter(role => role.id !== roleId);
-    setAiRoles(updatedRoles);
-    saveAIRoles(updatedRoles);
-
-    // 如果删除的是当前选中的角色，则选择第一个角色
-    if (roleId === selectedRoleId) {
-      setSelectedRoleId(updatedRoles[0].id);
+  // 清除错误信息的定时器
+  useEffect(() => {
+    if (errorMessage) {
+      const timer = setTimeout(() => {
+        setErrorMessage(null);
+      }, 3000);
+      return () => clearTimeout(timer);
     }
-  };
+  }, [errorMessage]);
+
+  // 同步imageCountRef和imageCount
+  useEffect(() => {
+    imageCountRef.current = imageCount;
+  }, [imageCount]);
+
+  // 监听编辑器内容变化
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    const syncEditorState = () => {
+      setCurrentInputText(editor.innerText || '');
+
+      const currentImageCount = editor.querySelectorAll('img').length;
+      if (currentImageCount !== imageCountRef.current) {
+        imageCountRef.current = currentImageCount;
+        setImageCount(currentImageCount);
+      }
+
+      parseEditorContent();
+    };
+
+    // 使用MutationObserver监听DOM变化，更准确地捕获图片添加/删除
+    const observer = new MutationObserver(syncEditorState);
+
+    observer.observe(editor, {
+      childList: true,
+      subtree: true,
+      characterData: true
+    });
+
+    editor.addEventListener('input', syncEditorState);
+    syncEditorState();
+
+    return () => {
+      observer.disconnect();
+      editor.removeEventListener('input', syncEditorState);
+    };
+  }, [parseEditorContent]);
 
   // 发送AI消息的新方法
   const handleAskAI = async () => {
-    parseEditorContent();
+    const latestContentItems = parseEditorContent();
 
-    // 检查是否有内容可发送
-    const hasContent = contentItems.some(item =>
-      (item.type === 'text' && item.content.trim() !== '') ||
-      item.type === 'image'
-    );
-
-    if (!hasContent) return;
+    if (!hasMessageContent(latestContentItems)) return;
 
     setIsAiProcessing(true);
     try {
       // 创建头像信息对象
       const avatar = { text: avatarText, color: avatarColor };
 
-      // 收集所有文本内容
-      let prompt = contentItems
-        .filter(item => item.type === 'text')
-        .map(item => item.content.trim())
-        .filter(content => content !== '')
-        .join('\n');
+      const prompt = buildAIPrompt(latestContentItems);
 
       if (!prompt) {
         setErrorMessage(t('emptyPrompt'));
@@ -322,8 +235,6 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
 
       // 重新加入：先发送用户消息保存到历史记录
       sendMessage(prompt, roomId, 'text', username, avatar);
-
-      const selectedRole = getSelectedRole();
 
       // 移除 prompt 参数
       socket.emit('ask_ai', {
@@ -345,7 +256,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
         });
         editorRef.current.innerHTML = '';
       }
-      setContentItems([{ type: 'text', content: '' }]);
+      setContentItems(emptyMessageContent());
       setImageCount(0);
       imageCountRef.current = 0;
 
@@ -360,33 +271,19 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
   // Handle regular message submission
   const handleSubmit = async () => {
     // Parse latest content (might be redundant if useEffect handles it well)
-    parseEditorContent();
+    const latestContentItems = parseEditorContent();
 
-    const hasContent = contentItems.some(item =>
-      (item.type === 'text' && item.content.trim() !== '') ||
-      item.type === 'image'
-    );
-
-    if (!hasContent || isSending || isAiProcessing) return;
+    if (!hasMessageContent(latestContentItems) || isSending || isAiProcessing) return;
 
     setIsSending(true);
     try {
       const avatar = { text: avatarText, color: avatarColor };
-      let currentTextContent = '';
+      const outgoingItems = buildOutgoingMessageItems(latestContentItems);
 
-      for (let i = 0; i < contentItems.length; i++) {
-        const item = contentItems[i];
+      for (const item of outgoingItems) {
         if (item.type === 'text') {
-          if (item.content.trim() !== '') {
-            currentTextContent += (currentTextContent ? '\n' : '') + item.content;
-          }
-        } else if (item.type === 'image' && item.file) {
-          // Send pending text first
-          if (currentTextContent.trim() !== '') {
-            sendMessage(currentTextContent, roomId, 'text', username, avatar);
-            currentTextContent = '';
-          }
-
+          sendMessage(item.content, roomId, 'text', username, avatar);
+        } else {
           try {
             // 压缩图片
             const options = {
@@ -420,18 +317,13 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
         }
       }
 
-      // Send remaining text
-      if (currentTextContent.trim() !== '') {
-        sendMessage(currentTextContent, roomId, 'text', username, avatar);
-      }
-
       // Clear editor and state
       if (editorRef.current) {
         const images = editorRef.current.querySelectorAll('img');
         images.forEach(img => { if (img.src.startsWith('blob:')) URL.revokeObjectURL(img.src); });
         editorRef.current.innerHTML = '';
       }
-      setContentItems([{ type: 'text', content: '' }]);
+      setContentItems(emptyMessageContent());
       setImageCount(0);
       imageCountRef.current = 0;
       setErrorMessage(null);
@@ -441,8 +333,23 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
       setErrorMessage(t('errorSendingMessage'));
     } finally {
       setIsSending(false);
-      setTimeout(() => editorRef.current?.focus(), 0);
+      if (focusTimerRef.current) {
+        clearTimeout(focusTimerRef.current);
+      }
+      focusTimerRef.current = setTimeout(() => {
+        editorRef.current?.focus();
+        focusTimerRef.current = null;
+      }, 0);
     }
+  };
+
+  const setImageInputError = (error: ImageInputValidationError) => {
+    if (error.errorKey === 'maxImagesReached') {
+      setErrorMessage(t(error.errorKey, { max: error.max ?? MAX_MESSAGE_IMAGES }));
+      return;
+    }
+
+    setErrorMessage(t(error.errorKey));
   };
 
   // 处理图片上传
@@ -453,10 +360,10 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
     // 使用ref获取当前实际图片数量
     const currentImageCount = imageCountRef.current;
     // 检查图片数量限制
-    const availableSlots = MAX_IMAGES - currentImageCount;
+    const availableSlots = getAvailableImageSlots(currentImageCount);
 
     if (availableSlots <= 0) {
-      setErrorMessage(t('maxImagesReached', { max: MAX_IMAGES }));
+      setImageInputError({ errorKey: 'maxImagesReached', max: MAX_MESSAGE_IMAGES });
       return;
     }
 
@@ -468,22 +375,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
 
   // 处理图片文件 - 优化性能
   const processImageFile = (file: File) => {
-    // 检查文件类型
-    if (!file.type.startsWith('image/')) {
-      setErrorMessage(t('onlyImagesAllowed'));
-      return;
-    }
-
-    // 检查文件大小 - 仍然保留初步的大小检查，但提高到10MB
-    if (file.size > 10 * 1024 * 1024) {
-      setErrorMessage(t('imageTooLarge'));
-      return;
-    }
-
-    // 直接在这里更新计数，避免延迟
-    const newCount = imageCountRef.current + 1;
-    if (newCount > MAX_IMAGES) {
-      setErrorMessage(t('maxImagesReached', { max: MAX_IMAGES }));
+    const validation = validateImageFile(file, imageCountRef.current);
+    if (!validation.ok) {
+      setImageInputError(validation.error);
       return;
     }
 
@@ -491,7 +385,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
     const previewUrl = URL.createObjectURL(file);
 
     // 创建并插入图片元素
-    if (imageCountRef.current < MAX_IMAGES) {
+    if (imageCountRef.current < MAX_MESSAGE_IMAGES) {
       insertImageToEditor(previewUrl, file);
 
       // 重置文件输入
@@ -507,8 +401,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
     if (!editor) return;
 
     // 再次检查图片数量限制
-    if (imageCountRef.current >= MAX_IMAGES) {
-      setErrorMessage(t('maxImagesReached', { max: MAX_IMAGES }));
+    if (imageCountRef.current >= MAX_MESSAGE_IMAGES) {
+      setImageInputError({ errorKey: 'maxImagesReached', max: MAX_MESSAGE_IMAGES });
       return;
     }
 
@@ -565,14 +459,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
 
   // 处理粘贴事件 - 防止快速粘贴和同步更新计数
   const handlePaste = (e: React.ClipboardEvent) => {
-    // 动态确定粘贴间隔限制
-    const throttleTime = pasteCountRef.current <= 1
-      ? INITIAL_PASTE_THROTTLE_MS
-      : SUBSEQUENT_PASTE_THROTTLE_MS;
-
     // 限制粘贴频率
     const now = Date.now();
-    if (now - lastPasteTime.current < throttleTime) {
+    if (shouldThrottlePaste(now, lastPasteTime.current, pasteCountRef.current)) {
       e.preventDefault();
       return;
     }
@@ -582,18 +471,23 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
     pasteCountRef.current += 1;
 
     // 设置自动重置粘贴计数的定时器（如果2秒内没有新的粘贴，重置计数）
-    setTimeout(() => {
-      if (Date.now() - lastPasteTime.current >= 2000) {
+    if (pasteResetTimerRef.current) {
+      clearTimeout(pasteResetTimerRef.current);
+    }
+    pasteResetTimerRef.current = setTimeout(() => {
+      if (shouldResetPasteCount(Date.now(), lastPasteTime.current)) {
         pasteCountRef.current = 0;
       }
-    }, 2000);
+    }, PASTE_RESET_IDLE_MS);
+
+    const clipboardItems = Array.from(e.clipboardData.items);
 
     // 检查是否达到图片数量上限 - 使用ref实时获取
-    if (imageCountRef.current >= MAX_IMAGES) {
+    if (imageCountRef.current >= MAX_MESSAGE_IMAGES) {
       // 如果有图片类型内容，显示提示
-      if (Array.from(e.clipboardData.items).some(item => item.type.indexOf('image') !== -1)) {
+      if (hasClipboardImageItem(clipboardItems)) {
         e.preventDefault();
-        setErrorMessage(t('maxImagesReached', { max: MAX_IMAGES }));
+        setImageInputError({ errorKey: 'maxImagesReached', max: MAX_MESSAGE_IMAGES });
         return;
       }
 
@@ -606,28 +500,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
       return;
     }
 
-    // 获取粘贴的所有内容
-    const items = e.clipboardData.items;
-    let hasProcessedImage = false;
-
-    // 首先处理图片
-    for (let i = 0; i < items.length; i++) {
-      if (items[i].type.indexOf('image') !== -1) {
-        // 再次检查实时图片数量
-        if (imageCountRef.current < MAX_IMAGES) {
-          const file = items[i].getAsFile();
-          if (file) {
-            e.preventDefault(); // 阻止默认粘贴行为
-            processImageFile(file);
-            hasProcessedImage = true;
-            break; // 一次只处理一张图片，避免界面混乱
-          }
-        } else {
-          e.preventDefault();
-          setErrorMessage(t('maxImagesReached', { max: MAX_IMAGES }));
-          return;
-        }
-      }
+    const imageFile = getFirstClipboardImageFile(clipboardItems);
+    const hasProcessedImage = Boolean(imageFile);
+    if (imageFile) {
+      e.preventDefault();
+      processImageFile(imageFile);
     }
 
     // 如果没有处理图片，则使用默认行为处理文本
@@ -640,20 +517,6 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
         e.preventDefault();
       }
     }
-  };
-
-  const isConfirmingIMEComposition = (e: React.KeyboardEvent) => {
-    const nativeEvent = e.nativeEvent as KeyboardEvent & {
-      isComposing?: boolean;
-      keyCode?: number;
-    };
-
-    return (
-      isComposingRef.current ||
-      nativeEvent.isComposing ||
-      nativeEvent.keyCode === 229 ||
-      Date.now() - lastCompositionEndAtRef.current < COMPOSITION_END_GRACE_MS
-    );
   };
 
   const handleCompositionStart = () => {
@@ -669,7 +532,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
   // 处理回车事件
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
-      if (isConfirmingIMEComposition(e)) {
+      if (isConfirmingIMEComposition(getKeyboardCompositionSnapshot(
+        e,
+        isComposingRef.current,
+        lastCompositionEndAtRef.current
+      ))) {
         return;
       }
 
@@ -701,48 +568,14 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
 
     return () => {
       window.removeEventListener('blur', resetPasteCount);
-    };
-  }, []);
-
-  const [currentInputText, setCurrentInputText] = useState(''); // Add state to track raw text
-
-  // Update currentInputText whenever editor content changes
-  useEffect(() => {
-    const editor = editorRef.current;
-    if (!editor) return;
-
-    const updateTextState = () => {
-      setCurrentInputText(editor.innerText || '');
-    };
-
-    // Use MutationObserver for better real-time updates
-    const observer = new MutationObserver(() => {
-      updateTextState();
-      // Also update image count and parse content items if needed
-      const currentImageCount = editor.querySelectorAll('img').length;
-      if (currentImageCount !== imageCountRef.current) {
-        imageCountRef.current = currentImageCount;
-        setImageCount(currentImageCount);
+      if (pasteResetTimerRef.current) {
+        clearTimeout(pasteResetTimerRef.current);
       }
-      parseEditorContent(); // Keep parsing for mixed content handling
-    });
-
-    observer.observe(editor, {
-      childList: true,
-      subtree: true,
-      characterData: true
-    });
-
-    editor.addEventListener('input', updateTextState); // Also listen to input event
-
-    // Initial check
-    updateTextState();
-
-    return () => {
-      observer.disconnect();
-      editor.removeEventListener('input', updateTextState);
+      if (focusTimerRef.current) {
+        clearTimeout(focusTimerRef.current);
+      }
     };
-  }, []);
+  }, [parseEditorContent]);
 
   return (
     <div className="relative">
@@ -787,22 +620,16 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
               variant="light"
               className="rounded-lg text-[#5e5d59] dark:text-[#b0aea5]"
               onPress={() => fileInputRef.current?.click()}
-              isDisabled={imageCount >= MAX_IMAGES || isSending || isAiProcessing} // 禁用图片上传当 AI 处理中
+              isDisabled={imageCount >= MAX_MESSAGE_IMAGES || isSending || isAiProcessing} // 禁用图片上传当 AI 处理中
             >
               <Icon icon="lucide:image" />
             </Button>
 
             {/* AI设置按钮 (原来的AI按钮) */}
-            <Button
-              isIconOnly
-              size="sm"
-              variant="light"
-              className="rounded-lg text-[#5e5d59] dark:text-[#b0aea5]"
-              onPress={onAISettingsOpen}
+            <MessageInputAISettingsButton
+              onOpen={onAISettingsOpen}
               isDisabled={isSending || isAiProcessing}
-            >
-              <Icon icon="lucide:settings-2" />
-            </Button>
+            />
 
             {/* 隐藏的文件输入 */}
             <input
@@ -818,121 +645,29 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
         </div>
 
         {/* AI角色选择和发送按钮区 */}
-        <div className="mt-2 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-          {/* AI角色选择下拉框 */}
-          <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-2 lg:mr-2">
-            <Select
-              size="sm"
-              aria-label={t('selectAIRole')}
-              selectedKeys={[selectedRoleId]}
-              onSelectionChange={(keys) => {
-                const selectedKey = Array.from(keys)[0]?.toString();
-                if (selectedKey) handleRoleChange(selectedKey);
-              }}
-              className="w-full sm:max-w-xs"
-              classNames={{
-                trigger: "bg-[#e8e6dc] text-[#4d4c48] data-[hover=true]:bg-[#dedbd0] dark:bg-[#30302e] dark:text-[#faf9f5]",
-              }}
-              isDisabled={isSending || isAiProcessing}
-            >
-              {aiRoles.map((role) => (
-                <SelectItem key={role.id} startContent={<Icon icon={role.icon} />}>
-                  {getAIRoleDisplayName(role, t)}
-                </SelectItem>
-              ))}
-            </Select>
-            <Select
-              size="sm"
-              aria-label={t('selectAIModel')}
-              selectedKeys={[selectedAIModel || defaultAIModel]}
-              onSelectionChange={(keys) => {
-                const selectedKey = Array.from(keys)[0]?.toString();
-                if (selectedKey) handleModelChange(selectedKey);
-              }}
-              className="w-full sm:max-w-xs"
-              classNames={{
-                trigger: "bg-[#e8e6dc] text-[#4d4c48] data-[hover=true]:bg-[#dedbd0] dark:bg-[#30302e] dark:text-[#faf9f5]",
-                popoverContent: "border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
-                listboxWrapper: "relative max-h-[18rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent] after:pointer-events-none after:sticky after:bottom-0 after:block after:h-8 after:bg-gradient-to-t after:from-[#faf9f5] after:to-transparent dark:after:from-[#1d1d1b]",
-              }}
-              isDisabled={isSending || isAiProcessing}
-              startContent={<Icon icon="lucide:brain-circuit" />}
-            >
-              {aiModels.map((model) => (
-                <SelectItem
-                  key={model.id}
-                  description={`${formatModelPrice(model)}${model.provider ? ` · ${model.provider}` : ''}`}
-                >
-                  {model.isDefault ? `${model.label} (${t('defaultModel')})` : model.label}
-                </SelectItem>
-              ))}
-            </Select>
-          </div>
-
-
-          {/* 按钮区 */}
-          <div className="flex justify-end gap-2">
-            {/* AI问答按钮 */}
-            <Tooltip content={`${t('askAI')} (${isMacOS ? 'Command' : 'Ctrl'}+Enter)`} placement="top">
-              <Button
-                color={getSelectedRole().color}
-                size="sm"
-                onPress={handleAskAI}
-                isLoading={isAiProcessing}
-                isDisabled={isSending}
-                className="bg-[#30302e] px-4 text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413]"
-                startContent={<Icon icon={getSelectedRole().icon} className="h-4 w-4" />}
-              >
-                {t('askAI')}
-              </Button>
-            </Tooltip>
-
-            {/* Send Button */}
-            <Tooltip content={`${t('send')} (Enter)`} placement="top">
-              <Button
-                type="button" // Important: Change type to button
-                onClick={handleSubmit} // Call handleSubmit without event
-                color="primary"
-                size="sm"
-                isLoading={isSending}
-                // Disable if sending, AI processing, or no content (check images too)
-                isDisabled={isSending || isAiProcessing || (!currentInputText.trim() && imageCount === 0)}
-                className="bg-[#c96442] px-4 text-[#faf9f5] shadow-[0_0_0_1px_#c96442]"
-                startContent={<Icon icon="lucide:send" className="h-4 w-4" />}
-              >
-                {t('send')}
-              </Button>
-            </Tooltip>
-          </div>
-        </div>
-
+        <MessageInputAIControls
+          roles={aiRoles}
+          selectedRoleId={selectedRoleId}
+          selectedRole={selectedRole}
+          aiModels={aiModels}
+          selectedAIModel={selectedAIModel}
+          defaultAIModel={defaultAIModel}
+          isSending={isSending}
+          isAiProcessing={isAiProcessing}
+          isMacOS={isMacOS}
+          currentInputText={currentInputText}
+          imageCount={imageCount}
+          isSettingsOpen={isAISettingsOpen}
+          onSettingsClose={onAISettingsClose}
+          onRoleChange={handleRoleChange}
+          onModelChange={handleModelChange}
+          onAddRole={handleAddRole}
+          onUpdateRole={handleUpdateRole}
+          onDeleteRole={handleDeleteRole}
+          onAskAI={handleAskAI}
+          onSend={handleSubmit}
+        />
       </div>
-
-      {/* 新增：AI设置模态框 */}
-      <Modal isOpen={isAISettingsOpen} onClose={onAISettingsClose} size="3xl">
-        <ModalContent>
-          <ModalHeader>{t('aiSettings')}</ModalHeader>
-          <ModalBody>
-            <Tabs aria-label={t('aiSettings')}>
-              <Tab key="roles" title={t('aiRoles')}>
-                <div className="mt-2">
-                  <AIRoleManager
-                    roles={aiRoles}
-                    selectedRoleId={selectedRoleId}
-                    onSelectRole={handleRoleChange}
-                    onAddRole={handleAddRole}
-                    onUpdateRole={handleUpdateRole}
-                    onDeleteRole={handleDeleteRole}
-                  />
-                </div>
-              </Tab>
-            </Tabs>
-          </ModalBody>
-          <ModalFooter>
-            <Button variant="light" onPress={onAISettingsClose}>{t('close')}</Button>
-          </ModalFooter>
-        </ModalContent>
-      </Modal>
     </div>
   );
 };

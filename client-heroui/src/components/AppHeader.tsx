@@ -15,7 +15,7 @@ import {
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { Room } from "../utils/types";
-import { getAvatarText, getAvatarColor } from "../pages/MessagePage";
+import { getAvatarText, getAvatarColor } from "../utils/userProfile";
 import { getLanguageOption, languageOptions } from "../utils/languages";
 
 interface AppHeaderProps {

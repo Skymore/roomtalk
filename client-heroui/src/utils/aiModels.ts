@@ -124,6 +124,16 @@ export const saveStoredAIModel = (model: string) => {
   }
 };
 
+export const resolveSelectedAIModel = (
+  storedModel: string,
+  defaultModel: string,
+  models: AIModelOption[]
+) => {
+  return storedModel && models.some(model => model.id === storedModel)
+    ? storedModel
+    : defaultModel;
+};
+
 export const fetchAIModels = async (): Promise<AIModelResponse> => {
   const response = await fetch(`${getApiBaseUrl()}/api/ai-models`);
 

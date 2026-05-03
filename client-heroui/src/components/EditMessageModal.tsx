@@ -4,6 +4,10 @@ import { Button, Textarea } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { Message } from '../utils/types'; // Import Message type
 import { useTranslation } from 'react-i18next'; // Import useTranslation
+import {
+  getKeyboardCompositionSnapshot,
+  isConfirmingIMEComposition,
+} from '../utils/keyboardComposition';
 
 // --- Remove Modal Styling object ---
 // const customStyles: Modal.Styles = { /* ... */ };
@@ -31,15 +35,22 @@ export const EditMessageModal: React.FC<EditMessageModalProps> = ({
   const editInputRef = useRef<HTMLTextAreaElement>(null);
   const isComposingRef = useRef(false);
   const lastCompositionEndAtRef = useRef(0);
-  const COMPOSITION_END_GRACE_MS = 80;
 
   // Update text area when message changes or modal opens
   useEffect(() => {
+    let focusTimer: ReturnType<typeof setTimeout> | undefined;
+
     if (isOpen && message) {
       setEditedContent(message.content);
       // Auto-focus
-      setTimeout(() => editInputRef.current?.focus(), 50);
+      focusTimer = setTimeout(() => editInputRef.current?.focus(), 50);
     }
+
+    return () => {
+      if (focusTimer) {
+        clearTimeout(focusTimer);
+      }
+    };
   }, [isOpen, message]);
 
   const handleSaveClick = () => {
@@ -72,20 +83,6 @@ export const EditMessageModal: React.FC<EditMessageModalProps> = ({
     onClose(); // Close modal after action
   };
 
-  const isConfirmingIMEComposition = (e: React.KeyboardEvent) => {
-    const nativeEvent = e.nativeEvent as KeyboardEvent & {
-      isComposing?: boolean;
-      keyCode?: number;
-    };
-
-    return (
-      isComposingRef.current ||
-      nativeEvent.isComposing ||
-      nativeEvent.keyCode === 229 ||
-      Date.now() - lastCompositionEndAtRef.current < COMPOSITION_END_GRACE_MS
-    );
-  };
-
   const handleCompositionStart = () => {
     isComposingRef.current = true;
   };
@@ -98,7 +95,11 @@ export const EditMessageModal: React.FC<EditMessageModalProps> = ({
   // Handle keydown in textarea (Ctrl+Enter to Save & Ask AI, Enter to Save)
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
-      if (isConfirmingIMEComposition(e)) {
+      if (isConfirmingIMEComposition(getKeyboardCompositionSnapshot(
+        e,
+        isComposingRef.current,
+        lastCompositionEndAtRef.current
+      ))) {
         return;
       }
 

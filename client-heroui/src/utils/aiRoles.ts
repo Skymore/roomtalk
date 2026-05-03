@@ -1,0 +1,95 @@
+export type AIRoleColor = "primary" | "secondary" | "success" | "warning" | "danger";
+
+export interface AIRole {
+  id: string;
+  name: string;
+  systemPrompt: string;
+  color: AIRoleColor;
+  icon: string;
+}
+
+export const defaultAIRoles: AIRole[] = [
+  {
+    id: "default",
+    name: "Assistant",
+    systemPrompt: "You are a helpful, creative, friendly assistant. Respond concisely and clearly.",
+    color: "secondary",
+    icon: "lucide:bot",
+  },
+  {
+    id: "coder",
+    name: "Code Expert",
+    systemPrompt: "You are a programming expert who provides detailed technical solutions and code examples. Focus on best practices and performance.",
+    color: "primary",
+    icon: "lucide:code",
+  },
+  {
+    id: "creative",
+    name: "Creative Writer",
+    systemPrompt: "You are a creative writing assistant with a vivid imagination. Help users with storytelling and creative content.",
+    color: "success",
+    icon: "lucide:pen",
+  },
+];
+
+const AI_ROLES_KEY = "aiRoles";
+
+const defaultRoleKeys: Record<string, { nameKey: string; promptKey: string }> = {
+  default: { nameKey: "roleAssistantName", promptKey: "roleAssistantPrompt" },
+  coder: { nameKey: "roleCodeExpertName", promptKey: "roleCodeExpertPrompt" },
+  creative: { nameKey: "roleCreativeWriterName", promptKey: "roleCreativeWriterPrompt" },
+};
+
+export const getAIRoleDisplayName = (role: AIRole, t: (key: string) => string) => {
+  const roleKeys = defaultRoleKeys[role.id];
+  return roleKeys ? t(roleKeys.nameKey) : role.name;
+};
+
+export const getAIRoleDisplayPrompt = (role: AIRole, t: (key: string) => string) => {
+  const roleKeys = defaultRoleKeys[role.id];
+  return roleKeys ? t(roleKeys.promptKey) : role.systemPrompt;
+};
+
+export const getSavedAIRoles = (): AIRole[] => {
+  try {
+    const saved = localStorage.getItem(AI_ROLES_KEY);
+    return saved ? JSON.parse(saved) : defaultAIRoles;
+  } catch (e) {
+    console.error("Error loading AI roles:", e);
+    return defaultAIRoles;
+  }
+};
+
+export const saveAIRoles = (roles: AIRole[]) => {
+  try {
+    localStorage.setItem(AI_ROLES_KEY, JSON.stringify(roles));
+  } catch (e) {
+    console.error("Error saving AI roles:", e);
+  }
+};
+
+export const addAIRole = (roles: AIRole[], role: AIRole) => [...roles, role];
+
+export const updateAIRole = (roles: AIRole[], updatedRole: AIRole) => {
+  return roles.map(role => role.id === updatedRole.id ? updatedRole : role);
+};
+
+export const getSelectedAIRole = (roles: AIRole[], selectedRoleId: string) => {
+  return roles.find(role => role.id === selectedRoleId) || roles[0] || defaultAIRoles[0];
+};
+
+export const deleteAIRole = (
+  roles: AIRole[],
+  roleId: string,
+  selectedRoleId: string
+): { roles: AIRole[]; selectedRoleId: string } => {
+  if (roles.length <= 1) {
+    return { roles, selectedRoleId };
+  }
+
+  const updatedRoles = roles.filter(role => role.id !== roleId);
+  return {
+    roles: updatedRoles,
+    selectedRoleId: roleId === selectedRoleId ? updatedRoles[0].id : selectedRoleId,
+  };
+};

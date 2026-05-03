@@ -17,7 +17,7 @@ const walk = (dir, files = []) => {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       walk(fullPath, files);
-    } else if (/\.(ts|tsx)$/.test(entry.name)) {
+    } else if (/\.(ts|tsx)$/.test(entry.name) && !/\.test\.(ts|tsx)$/.test(entry.name)) {
       files.push(fullPath);
     }
   }
@@ -137,6 +137,7 @@ const LOCALIZED_LITERAL_ALLOWLIST = new Set([
   "src/pages/MessagePage.tsx",
   "src/utils/i18n.ts",
   "src/utils/languages.ts",
+  "src/utils/userProfile.ts",
 ]);
 const hasHumanText = (value) => /[A-Za-z\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0900-\u097F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/u.test(value);
 const hasLocalizedScript = (value) => /[\u0900-\u097F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/u.test(value);
