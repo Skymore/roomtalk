@@ -4,7 +4,6 @@
 
 import React, { memo, useState, useEffect, useRef, ReactNode } from "react";
 import Markdown from "markdown-to-jsx";
-import mermaid from "mermaid";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { Icon } from "@iconify/react";
@@ -129,42 +128,39 @@ const CodeBlock = memo<CodeBlockProps>(({ className, children }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [mermaidId] = useState(() => "mermaid-" + globalThis.Math.random().toString(36).substr(2, 9));
 
-// Mermaid 渲染
-useEffect(() => {
-  console.log(`▶️ mermaid effect run: ${language}, |${code}|, ${containerRef.current}`);
+  // Mermaid 渲染
+  useEffect(() => {
+    if (language !== "mermaid" || !containerRef.current) return;
 
-  if (language === "mermaid" && containerRef.current) {
-    console.log("▶️ mermaid effect run: initialize mermaid");
-    mermaid.initialize({ startOnLoad: false, theme: themeDark ? "dark" : "default" });
-    containerRef.current.innerHTML = "";
-    // 只传 id 和 脚本，拿到 svg 字符串后自己插
-    mermaid
-      .render(mermaidId, code)
-      .then(({ svg }) => {
-        console.log(`▶️ mermaid render success: ${svg}`);
-        if (containerRef.current) {
-           console.log("Container exists. Setting innerHTML...");
-           containerRef.current.innerHTML = svg;
-           // Check immediately after setting
-           console.log("Container innerHTML length AFTER set:", containerRef.current.innerHTML.length);
-           // Check if the SVG element is queryable
-           console.log("SVG element found in container:", !!containerRef.current.querySelector('svg'));
-        } else {
-           console.error("Container ref was NULL when trying to set innerHTML!");
-        }
+    let isCurrent = true;
+    const container = containerRef.current;
+    container.innerHTML = "";
+
+    import("mermaid")
+      .then(({ default: mermaid }) => {
+        if (!isCurrent) return null;
+        mermaid.initialize({ startOnLoad: false, theme: themeDark ? "dark" : "default" });
+        return mermaid.render(mermaidId, code);
+      })
+      .then((result) => {
+        if (!result || !isCurrent || containerRef.current !== container) return;
+        container.innerHTML = result.svg;
       })
       .catch(err => {
-          console.error("Mermaid render error:", err); // Ensure errors are caught and logged
-          if (containerRef.current) {
-            containerRef.current.innerHTML = "";
-            const errorElement = document.createElement("div");
-            errorElement.className = "text-red-500";
-            errorElement.textContent = t('mermaidRenderError');
-            containerRef.current.appendChild(errorElement);
-          }
+        console.error("Mermaid render error:", err);
+        if (!isCurrent || containerRef.current !== container) return;
+
+        container.innerHTML = "";
+        const errorElement = document.createElement("div");
+        errorElement.className = "text-red-500";
+        errorElement.textContent = t('mermaidRenderError');
+        container.appendChild(errorElement);
       });
-  }
-}, [language, code, themeDark, mermaidId, t]);
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [language, code, themeDark, mermaidId, t]);
 
 
   if (language === "mermaid") {
