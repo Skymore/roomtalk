@@ -93,6 +93,21 @@ class MemoryRedis {
   }
 }
 
+class CollisionThenUniqueRedis extends MemoryRedis {
+  hExistsCalls = 0;
+
+  async hExists(key: string, field: string) {
+    this.hExistsCalls++;
+    return this.hExistsCalls <= 5;
+  }
+}
+
+class FailingDeleteRedis extends MemoryRedis {
+  async del(key: string): Promise<0 | 1> {
+    throw new Error(`delete failed for ${key}`);
+  }
+}
+
 const logger = {
   debug() {},
   error() {},
@@ -134,6 +149,16 @@ const createStore = () => {
 };
 
 describe('RedisStore', () => {
+  it('checks fallback room IDs for uniqueness after repeated collisions', async () => {
+    const redis = new CollisionThenUniqueRedis();
+    const store = new RedisStore(redis as any, logger as any);
+
+    const id = await store.generateUniqueRoomId();
+
+    assert.equal(redis.hExistsCalls, 6);
+    assert.equal(id.length, 12);
+  });
+
   it('saves, reads, lists, and deletes rooms with related room state', async () => {
     const { redis, store } = createStore();
     const savedRoom = room();
@@ -152,6 +177,25 @@ describe('RedisStore', () => {
     assert.deepEqual(await store.readRoomsByUser('client-1'), []);
     assert.equal(await store.getRoomMemberCount('room-1'), 0);
     assert.equal(await redis.get(store.getRoomAICostKey('room-1')), undefined);
+  });
+
+  it('logs and swallows Redis delete failures when deleting a room', async () => {
+    const errors: any[] = [];
+    const testLogger = {
+      debug() {},
+      warn() {},
+      error(message: string, payload: any) {
+        errors.push({ message, payload });
+      },
+    };
+    const store = new RedisStore(new FailingDeleteRedis() as any, testLogger as any);
+
+    await assert.doesNotReject(() => store.deleteRoom('room-1', 'client-1'));
+
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0].message, 'Error deleting room from Redis');
+    assert.equal(errors[0].payload.roomId, 'room-1');
+    assert.equal(errors[0].payload.creatorId, 'client-1');
   });
 
   it('appends, overwrites, and clears room message history', async () => {

@@ -9,6 +9,8 @@ import {
 import { Message } from '../types';
 import { SocketConnectionContext } from './types';
 
+export const DEFAULT_ANTHROPIC_MAX_TOKENS = 8096;
+
 export function registerAIHandlers({
   io,
   socket,
@@ -146,7 +148,7 @@ export function registerAIHandlers({
         const anthropicMessages = buildAnthropicMessages(contextMessages);
         const stream = aiClientWrapper.client.messages.stream({
           model: selectedModel.apiModel,
-          max_tokens: 8096,
+          max_tokens: DEFAULT_ANTHROPIC_MAX_TOKENS,
           system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }] as any,
           messages: anthropicMessages as any,
         });

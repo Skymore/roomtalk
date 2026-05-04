@@ -293,9 +293,15 @@ export function normalizeUsage(apiUsage: any, messages: Array<{ content: any }>,
     };
   }
 
-  // OpenAI / DeepSeek format: { prompt_tokens, completion_tokens, prompt_tokens_details.cached_tokens }
+  // OpenAI / DeepSeek format:
+  // OpenAI: { prompt_tokens, completion_tokens, prompt_tokens_details.cached_tokens }
+  // DeepSeek: { prompt_tokens, completion_tokens, prompt_cache_hit_tokens, prompt_cache_miss_tokens }
   if (apiUsage && typeof apiUsage.prompt_tokens === 'number' && typeof apiUsage.completion_tokens === 'number') {
-    const cachedPromptTokens = apiUsage.prompt_tokens_details?.cached_tokens;
+    const deepSeekCacheHitTokens = apiUsage.prompt_cache_hit_tokens;
+    const openAICachedTokens = apiUsage.prompt_tokens_details?.cached_tokens;
+    const cachedPromptTokens = typeof deepSeekCacheHitTokens === 'number'
+      ? deepSeekCacheHitTokens
+      : openAICachedTokens;
     const cacheHitRate = typeof cachedPromptTokens === 'number' && apiUsage.prompt_tokens > 0
       ? Math.min(Math.max(cachedPromptTokens / apiUsage.prompt_tokens, 0), 1)
       : undefined;

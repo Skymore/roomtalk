@@ -105,6 +105,25 @@ describe('normalizeUsage', () => {
     });
   });
 
+  it('uses DeepSeek cache hit fields when provided', () => {
+    const usage = normalizeUsage({
+      prompt_tokens: 100,
+      completion_tokens: 20,
+      total_tokens: 120,
+      prompt_cache_hit_tokens: 64,
+      prompt_cache_miss_tokens: 36,
+    }, [], 'output');
+
+    assert.deepEqual(usage, {
+      promptTokens: 100,
+      completionTokens: 20,
+      totalTokens: 120,
+      cachedPromptTokens: 64,
+      cacheHitRate: 0.64,
+      source: 'reported',
+    });
+  });
+
   it('caps cache hit rate when cached tokens exceed prompt tokens', () => {
     const usage = normalizeUsage({
       prompt_tokens: 100,
