@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Avatar, Card, Image, Button, Tooltip } from "@heroui/react";
 import { Icon } from "@iconify/react";
 import { clientId } from "../utils/socket";
-import { formatTime, formatUsdCost } from "../utils/formatters";
+import { formatPercentage, formatTime, formatUsdCost } from "../utils/formatters";
 import { Message } from "../utils/types";
 import { useTranslation } from "react-i18next";
 
@@ -62,9 +62,17 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   const isStreaming = isAI && message.status === 'streaming';
   const canBeEdited = isText || (message.messageType === 'ai' && message.status !== 'streaming');
   const { t, i18n } = useTranslation();
-  const aiCostLabel = isAI && message.cost
-    ? `${message.aiModel?.label ? `${message.aiModel.label} · ` : ''}${formatUsdCost(message.cost.totalUsd)}${message.cost.estimated ? ` ${t('estimatedCost')}` : ''}`
-    : '';
+  const aiMetadataParts = isAI
+    ? [
+        message.aiModel?.label,
+        message.cost ? formatUsdCost(message.cost.totalUsd) : null,
+        message.cost?.estimated ? t('estimatedCost') : null,
+        typeof message.usage?.cacheHitRate === 'number'
+          ? `${t('cacheHitRate')} ${formatPercentage(message.usage.cacheHitRate)}`
+          : null,
+      ].filter(Boolean)
+    : [];
+  const aiCostLabel = aiMetadataParts.join(' · ');
 
   const [copyStatus, setCopyStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const copyResetTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -193,12 +201,16 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               <div className="max-w-full p-2.5">
                 <div className="max-w-full overflow-hidden whitespace-pre-wrap break-words text-sm leading-6">
                   <div className="max-w-full overflow-x-auto" style={{ wordBreak: 'break-word', overflowWrap: 'break-word' }}>
-                    <React.Suspense fallback={<div className="whitespace-pre-wrap break-words">{message.content}</div>}>
-                      <MarkdownContent content={message.content} />
+                    <React.Suspense fallback={
+                      <div className="whitespace-pre-wrap break-words">
+                        {message.content}
+                        {isStreaming && (
+                          <span className="inline-block w-1.5 h-3 bg-current animate-pulse ml-0.5 align-baseline"></span>
+                        )}
+                      </div>
+                    }>
+                      <MarkdownContent content={message.content} isStreaming={isStreaming} />
                     </React.Suspense>
-                    {isStreaming && (
-                      <span className="inline-block w-1.5 h-3 bg-current animate-pulse ml-0.5 align-baseline"></span>
-                    )}
                   </div>
                 </div>
               </div>

@@ -1,4 +1,4 @@
-import { Dispatch, RefObject, SetStateAction, useEffect } from 'react';
+import { Dispatch, RefObject, SetStateAction, useEffect, useRef } from 'react';
 import { socket } from '../utils/socket';
 import { AICostTotalEvent, AIChunkEvent, AIStreamEndEvent, AIStreamErrorEvent, Message } from '../utils/types';
 import { appendAIChunk, completeAIMessage, upsertMessage } from '../utils/messageState';
@@ -32,6 +32,17 @@ export const useRoomMessageEvents = ({
   messageToEditId,
   warningPrefix,
 }: UseRoomMessageEventsArgs) => {
+  const messageToDeleteIdRef = useRef(messageToDeleteId);
+  const messageToEditIdRef = useRef(messageToEditId);
+
+  useEffect(() => {
+    messageToDeleteIdRef.current = messageToDeleteId;
+  }, [messageToDeleteId]);
+
+  useEffect(() => {
+    messageToEditIdRef.current = messageToEditId;
+  }, [messageToEditId]);
+
   useEffect(() => {
     updateMessages([]);
     setIsLoading(true);
@@ -137,7 +148,7 @@ export const useRoomMessageEvents = ({
         updateMessages(prev =>
           prev.map(msg => (msg.id === updatedMessage.id ? updatedMessage : msg))
         );
-        if (messageToEditId === updatedMessage.id) {
+        if (messageToEditIdRef.current === updatedMessage.id) {
           closeEditModal();
         }
       }
@@ -147,10 +158,10 @@ export const useRoomMessageEvents = ({
       if (deletedRoomId === roomId) {
         console.log('Received message_deleted event:', deletedMessageId);
         updateMessages(prev => prev.filter(msg => msg.id !== deletedMessageId));
-        if (messageToDeleteId === deletedMessageId) {
+        if (messageToDeleteIdRef.current === deletedMessageId) {
           closeDeleteModal();
         }
-        if (messageToEditId === deletedMessageId) {
+        if (messageToEditIdRef.current === deletedMessageId) {
           closeEditModal();
         }
       }
@@ -195,8 +206,6 @@ export const useRoomMessageEvents = ({
     scrollToBottom,
     closeDeleteModal,
     closeEditModal,
-    messageToDeleteId,
-    messageToEditId,
     warningPrefix,
   ]);
 

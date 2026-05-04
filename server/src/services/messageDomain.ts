@@ -115,6 +115,38 @@ export function deleteMessageFromHistory(messages: Message[], messageId: string)
   };
 }
 
+type AnthropicContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
+
+type AnthropicMessage = {
+  role: 'user' | 'assistant';
+  content: string | AnthropicContentBlock[];
+};
+
+export function buildAnthropicMessages(contextMessages: Message[]): AnthropicMessage[] {
+  return contextMessages
+    .map((message): AnthropicMessage | null => {
+      const role = message.clientId === 'ai_assistant' ? 'assistant' as const : 'user' as const;
+
+      if (message.messageType === 'image') {
+        const dataUrl = message.content.startsWith('data:')
+          ? message.content
+          : `data:${message.mimeType || 'image/png'};base64,${message.content}`;
+        const commaIdx = dataUrl.indexOf(',');
+        const header = dataUrl.slice(0, commaIdx);
+        const data = dataUrl.slice(commaIdx + 1);
+        const mediaType = header.match(/data:([^;]+)/)?.[1] || 'image/png';
+        if (!data) return null;
+        return { role, content: [{ type: 'image', source: { type: 'base64', media_type: mediaType, data } }] };
+      }
+
+      if (typeof message.content !== 'string' || !message.content.trim()) return null;
+      return { role, content: message.content };
+    })
+    .filter((m): m is AnthropicMessage => m !== null);
+}
+
 type AIProviderMessage = {
   role: 'system' | 'user' | 'assistant';
   content: string | Array<{

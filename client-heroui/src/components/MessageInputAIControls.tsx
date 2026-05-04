@@ -15,7 +15,7 @@ import {
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 import { AIRoleManager } from './AIRoleManager';
-import { AIModelOption, formatModelPrice } from '../utils/aiModels';
+import { AIModelOption, formatModelPrice, isPremiumAIModel } from '../utils/aiModels';
 import { AIRole, getAIRoleDisplayName } from '../utils/aiRoles';
 
 interface MessageInputAISettingsButtonProps {
@@ -84,6 +84,42 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   onSend,
 }) => {
   const { t } = useTranslation();
+  const [pendingPremiumModelId, setPendingPremiumModelId] = React.useState<string | null>(null);
+  const [premiumConfirmationStep, setPremiumConfirmationStep] = React.useState<1 | 2>(1);
+  const pendingPremiumModel = aiModels.find(model => model.id === pendingPremiumModelId);
+
+  const closePremiumConfirmation = () => {
+    setPendingPremiumModelId(null);
+    setPremiumConfirmationStep(1);
+  };
+
+  const requestModelChange = (modelId: string) => {
+    if (modelId === selectedAIModel) return;
+
+    const model = aiModels.find(item => item.id === modelId);
+    if (model && isPremiumAIModel(model)) {
+      setPendingPremiumModelId(model.id);
+      setPremiumConfirmationStep(1);
+      return;
+    }
+
+    onModelChange(modelId);
+  };
+
+  const confirmPremiumModelChange = () => {
+    if (!pendingPremiumModel) {
+      closePremiumConfirmation();
+      return;
+    }
+
+    if (premiumConfirmationStep === 1) {
+      setPremiumConfirmationStep(2);
+      return;
+    }
+
+    onModelChange(pendingPremiumModel.id);
+    closePremiumConfirmation();
+  };
 
   return (
     <>
@@ -115,7 +151,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
             selectedKeys={[selectedAIModel || defaultAIModel]}
             onSelectionChange={(keys) => {
               const selectedKey = Array.from(keys)[0]?.toString();
-              if (selectedKey) onModelChange(selectedKey);
+              if (selectedKey) requestModelChange(selectedKey);
             }}
             className="w-full sm:max-w-xs"
             classNames={{
@@ -129,7 +165,8 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
             {aiModels.map((model) => (
               <SelectItem
                 key={model.id}
-                description={`${formatModelPrice(model)}${model.provider ? ` · ${model.provider}` : ''}`}
+                description={`${formatModelPrice(model)}${model.provider ? ` · ${model.provider}` : ''}${isPremiumAIModel(model) ? ` · ${t('premiumModel')}` : ''}`}
+                startContent={isPremiumAIModel(model) ? <Icon icon="lucide:diamond" className="text-warning" /> : undefined}
               >
                 {model.isDefault ? `${model.label} (${t('defaultModel')})` : model.label}
               </SelectItem>
@@ -190,6 +227,47 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
           </ModalBody>
           <ModalFooter>
             <Button variant="light" onPress={onSettingsClose}>{t('close')}</Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      <Modal
+        isOpen={Boolean(pendingPremiumModel)}
+        onClose={closePremiumConfirmation}
+        isDismissable={false}
+        size="md"
+      >
+        <ModalContent>
+          <ModalHeader>
+            {premiumConfirmationStep === 1
+              ? t('premiumModelPriceConfirmationTitle')
+              : t('premiumModelFinalConfirmationTitle')}
+          </ModalHeader>
+          <ModalBody>
+            {pendingPremiumModel && (
+              <div className="space-y-3 text-sm text-[#4d4c48] dark:text-[#b0aea5]">
+                <p>
+                  {premiumConfirmationStep === 1
+                    ? t('premiumModelPriceConfirmationBody', {
+                        model: pendingPremiumModel.label,
+                        price: formatModelPrice(pendingPremiumModel),
+                      })
+                    : t('premiumModelFinalConfirmationBody', {
+                        model: pendingPremiumModel.label,
+                        price: formatModelPrice(pendingPremiumModel),
+                      })}
+                </p>
+                <div className="rounded-md border border-warning-300 bg-warning-50 px-3 py-2 text-warning-700 dark:border-warning-700 dark:bg-warning-950/30 dark:text-warning-200">
+                  {formatModelPrice(pendingPremiumModel)}
+                </div>
+              </div>
+            )}
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="light" onPress={closePremiumConfirmation}>{t('cancel')}</Button>
+            <Button color="warning" onPress={confirmPremiumModelChange}>
+              {premiumConfirmationStep === 1 ? t('premiumModelPriceConfirmationContinue') : t('switchPremiumModel')}
+            </Button>
           </ModalFooter>
         </ModalContent>
       </Modal>

@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AIModelOption,
   fetchAIModels,
+  FALLBACK_AI_MODEL,
   formatModelPrice,
   getStoredAIModel,
+  isPremiumAIModel,
   resolveSelectedAIModel,
   saveStoredAIModel,
 } from "./aiModels";
@@ -23,7 +25,7 @@ class MemoryStorage {
 const pricedModel: AIModelOption = {
   id: "priced",
   label: "Priced",
-  pricing: { currency: "USD", inputPerMillion: 1.5, outputPerMillion: 12 },
+  pricing: { currency: "USD", inputPerMillion: 1.5, cachedInputPerMillion: 0.15, outputPerMillion: 12 },
 };
 
 describe("aiModels", () => {
@@ -40,8 +42,16 @@ describe("aiModels", () => {
     expect(getStoredAIModel()).toBe("gpt-5.5");
   });
 
+  it("uses DeepSeek as the fallback default and detects premium model families", () => {
+    expect(FALLBACK_AI_MODEL).toBe("deepseek-v4-pro");
+    expect(isPremiumAIModel({ id: "gpt-5.5", label: "GPT-5.5" })).toBe(true);
+    expect(isPremiumAIModel({ id: "claude-opus-4.7", label: "Claude Opus 4.7" })).toBe(true);
+    expect(isPremiumAIModel({ id: "~google/gemini-pro-latest", label: "Gemini Pro Latest" })).toBe(true);
+    expect(isPremiumAIModel({ id: "deepseek-v4-pro", label: "DeepSeek V4 Pro" })).toBe(false);
+  });
+
   it("formats model pricing and missing pricing", () => {
-    expect(formatModelPrice(pricedModel)).toBe("$1.5/M in · $12/M out");
+    expect(formatModelPrice(pricedModel)).toBe("$1.5/M in · $0.15/M cached · $12/M out");
     expect(formatModelPrice({ id: "custom", label: "Custom" })).toBe("Price unavailable");
     expect(formatModelPrice({
       id: "free",

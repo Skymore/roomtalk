@@ -17,6 +17,7 @@ export interface Message {
     apiModel: string;
     provider: 'openai' | 'openrouter';
     label: string;
+    isPremium?: boolean;
   };
   usage?: AIUsage;
   cost?: AICost;
@@ -73,6 +74,7 @@ export interface AIUsage {
   completionTokens: number;
   totalTokens: number;
   cachedPromptTokens?: number;
+  cacheHitRate?: number;
   source: 'reported' | 'estimated';
 }
 

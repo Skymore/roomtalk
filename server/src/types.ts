@@ -1,4 +1,4 @@
-export type AIModelProvider = 'openai' | 'openrouter';
+export type AIModelProvider = 'openai' | 'openrouter' | 'deepseek' | 'anthropic';
 
 export interface AIModelPricing {
   currency: 'USD';
@@ -14,6 +14,7 @@ export interface AIModelOption {
   label: string;
   description: string;
   pricing?: AIModelPricing;
+  isPremium?: boolean;
   isDefault?: boolean;
 }
 
@@ -22,6 +23,7 @@ export interface AIUsage {
   completionTokens: number;
   totalTokens: number;
   cachedPromptTokens?: number;
+  cacheHitRate?: number;
   source: 'reported' | 'estimated';
 }
 
@@ -61,6 +63,7 @@ export interface Message {
     apiModel: string;
     provider: AIModelProvider;
     label: string;
+    isPremium?: boolean;
   };
   usage?: AIUsage;
   cost?: AICost;

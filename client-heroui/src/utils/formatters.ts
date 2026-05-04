@@ -91,3 +91,12 @@ export const formatUsdCost = (value?: number | null): string => {
 
   return `$${value.toFixed(2)}`;
 };
+
+export const formatPercentage = (value?: number | null): string => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return '0%';
+  }
+
+  const bounded = Math.min(Math.max(value, 0), 1);
+  return `${Math.round(bounded * 100)}%`;
+};

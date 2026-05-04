@@ -1,6 +1,7 @@
 import { AICost, AIModelOption, AIUsage, Message } from '../types';
 
 export const DEFAULT_SYSTEM_MESSAGE = 'You are a helpful, creative, friendly assistant. Respond concisely and clearly.';
+export const DEFAULT_AI_MODEL_ID = 'deepseek-v4-pro';
 
 interface AIModelLogger {
   warn(message: string, meta?: unknown): void;
@@ -8,28 +9,39 @@ interface AIModelLogger {
 
 export const REQUESTED_AI_MODEL_CATALOG: AIModelOption[] = [
   {
+    id: 'deepseek-v4-pro',
+    apiModel: 'deepseek-chat',
+    provider: 'deepseek',
+    label: 'DeepSeek V4 Pro',
+    description: 'DeepSeek V4 Pro via official API (with prompt caching)',
+    pricing: { currency: 'USD', inputPerMillion: 0.27, cachedInputPerMillion: 0.07, outputPerMillion: 1.10 },
+  },
+  {
     id: 'gpt-5.5',
     apiModel: 'openai/gpt-5.5',
     provider: 'openrouter',
     label: 'GPT-5.5',
     description: 'OpenAI GPT-5.5 routed through OpenRouter',
     pricing: { currency: 'USD', inputPerMillion: 5, cachedInputPerMillion: 0.5, outputPerMillion: 30 },
+    isPremium: true,
   },
   {
     id: 'claude-sonnet-4.6',
-    apiModel: 'anthropic/claude-sonnet-4.6',
-    provider: 'openrouter',
+    apiModel: 'claude-sonnet-4-6',
+    provider: 'anthropic',
     label: 'Claude Sonnet 4.6',
-    description: 'Anthropic Sonnet model via OpenRouter',
-    pricing: { currency: 'USD', inputPerMillion: 3, outputPerMillion: 15 },
+    description: 'Anthropic Claude Sonnet 4.6 via official API (with prompt caching)',
+    pricing: { currency: 'USD', inputPerMillion: 3, cachedInputPerMillion: 0.30, outputPerMillion: 15 },
+    isPremium: true,
   },
   {
-    id: 'deepseek-v4-pro',
-    apiModel: 'deepseek/deepseek-v4-pro',
-    provider: 'openrouter',
-    label: 'DeepSeek V4 Pro',
-    description: 'DeepSeek long-context reasoning model via OpenRouter',
-    pricing: { currency: 'USD', inputPerMillion: 1.74, outputPerMillion: 3.48 },
+    id: 'claude-opus-4.7',
+    apiModel: 'claude-opus-4-7',
+    provider: 'anthropic',
+    label: 'Claude Opus 4.7',
+    description: 'Anthropic Claude Opus 4.7 via official API (with prompt caching)',
+    pricing: { currency: 'USD', inputPerMillion: 15, cachedInputPerMillion: 1.50, outputPerMillion: 75 },
+    isPremium: true,
   },
   {
     id: 'kimi-k2.6',
@@ -78,6 +90,7 @@ export const REQUESTED_AI_MODEL_CATALOG: AIModelOption[] = [
     label: 'Gemini Pro Latest',
     description: 'Google Gemini Pro Latest via OpenRouter',
     pricing: { currency: 'USD', inputPerMillion: 2, cachedInputPerMillion: 0.2, outputPerMillion: 12 },
+    isPremium: true,
   },
 ];
 
@@ -89,6 +102,7 @@ export const LEGACY_AI_MODEL_CATALOG: AIModelOption[] = [
     label: 'GPT-5',
     description: 'OpenAI GPT-5 routed through OpenRouter',
     pricing: { currency: 'USD', inputPerMillion: 1.25, cachedInputPerMillion: 0.125, outputPerMillion: 10 },
+    isPremium: true,
   },
   {
     id: 'gpt-5-mini',
@@ -97,6 +111,7 @@ export const LEGACY_AI_MODEL_CATALOG: AIModelOption[] = [
     label: 'GPT-5 mini',
     description: 'OpenAI GPT-5 mini routed through OpenRouter',
     pricing: { currency: 'USD', inputPerMillion: 0.25, cachedInputPerMillion: 0.025, outputPerMillion: 2 },
+    isPremium: true,
   },
   {
     id: 'gpt-5-nano',
@@ -105,6 +120,7 @@ export const LEGACY_AI_MODEL_CATALOG: AIModelOption[] = [
     label: 'GPT-5 nano',
     description: 'OpenAI GPT-5 nano routed through OpenRouter',
     pricing: { currency: 'USD', inputPerMillion: 0.05, cachedInputPerMillion: 0.005, outputPerMillion: 0.4 },
+    isPremium: true,
   },
 ];
 
@@ -112,12 +128,30 @@ const AI_MODEL_CATALOG = [...REQUESTED_AI_MODEL_CATALOG, ...LEGACY_AI_MODEL_CATA
 
 const normalizeModelLookupKey = (value: string) => value.trim().toLowerCase();
 
+export const isPremiumAIModel = (model: Pick<AIModelOption, 'id' | 'apiModel' | 'label' | 'isPremium'>): boolean => {
+  if (typeof model.isPremium === 'boolean') {
+    return model.isPremium;
+  }
+
+  const modelText = `${model.id} ${model.apiModel} ${model.label}`.toLowerCase();
+  return (
+    modelText.includes('gpt') ||
+    modelText.includes('openai/') ||
+    modelText.includes('claude') ||
+    modelText.includes('anthropic/') ||
+    modelText.includes('gemini') ||
+    modelText.includes('google/') ||
+    modelText.includes('~google/')
+  );
+};
+
 const createConfiguredOpenRouterModel = (model: string): AIModelOption => ({
   id: model,
   apiModel: model,
   provider: 'openrouter',
   label: model,
   description: 'Configured OpenRouter model',
+  isPremium: isPremiumAIModel({ id: model, apiModel: model, label: model }),
 });
 
 const resolveCatalogModel = (model: string): AIModelOption | undefined => {
@@ -153,6 +187,7 @@ export const parseAIModelOptions = (defaultModelId: string, value?: string): AIM
 
   return models.map(model => ({
     ...model,
+    isPremium: isPremiumAIModel(model),
     isDefault: model.id === defaultModel.id,
   }));
 };
@@ -162,7 +197,7 @@ export function createAIModelRegistry(options: {
   configuredModelOptions?: string;
   logger?: AIModelLogger;
 } = {}) {
-  const modelOptions = parseAIModelOptions(options.defaultModelId || 'gpt-5.5', options.configuredModelOptions);
+  const modelOptions = parseAIModelOptions(options.defaultModelId || DEFAULT_AI_MODEL_ID, options.configuredModelOptions);
   const defaultModel = modelOptions.find(model => model.isDefault) || modelOptions[0];
 
   const normalizeAIModel = (requestedModel?: string): AIModelOption => {
@@ -195,6 +230,7 @@ export function createAIModelRegistry(options: {
       label: model.label,
       description: model.description,
       pricing: model.pricing,
+      isPremium: model.isPremium,
       isDefault: model.isDefault,
     })),
   });
@@ -237,8 +273,33 @@ function estimatePromptTokens(messages: Array<{ content: any }>): number {
 }
 
 export function normalizeUsage(apiUsage: any, messages: Array<{ content: any }>, outputContent: string): AIUsage {
+  // Anthropic native format: { input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens }
+  if (apiUsage && typeof apiUsage.input_tokens === 'number' && typeof apiUsage.output_tokens === 'number') {
+    const cacheRead = apiUsage.cache_read_input_tokens || 0;
+    const cacheCreated = apiUsage.cache_creation_input_tokens || 0;
+    const promptTokens = apiUsage.input_tokens + cacheRead + cacheCreated;
+    const completionTokens = apiUsage.output_tokens;
+    const cacheHitRate = promptTokens > 0 && cacheRead > 0
+      ? Math.min(cacheRead / promptTokens, 1)
+      : undefined;
+
+    return {
+      promptTokens,
+      completionTokens,
+      totalTokens: promptTokens + completionTokens,
+      cachedPromptTokens: cacheRead > 0 ? cacheRead : undefined,
+      cacheHitRate,
+      source: 'reported',
+    };
+  }
+
+  // OpenAI / DeepSeek format: { prompt_tokens, completion_tokens, prompt_tokens_details.cached_tokens }
   if (apiUsage && typeof apiUsage.prompt_tokens === 'number' && typeof apiUsage.completion_tokens === 'number') {
     const cachedPromptTokens = apiUsage.prompt_tokens_details?.cached_tokens;
+    const cacheHitRate = typeof cachedPromptTokens === 'number' && apiUsage.prompt_tokens > 0
+      ? Math.min(Math.max(cachedPromptTokens / apiUsage.prompt_tokens, 0), 1)
+      : undefined;
+
     return {
       promptTokens: apiUsage.prompt_tokens,
       completionTokens: apiUsage.completion_tokens,
@@ -246,6 +307,7 @@ export function normalizeUsage(apiUsage: any, messages: Array<{ content: any }>,
         ? apiUsage.total_tokens
         : apiUsage.prompt_tokens + apiUsage.completion_tokens,
       cachedPromptTokens: typeof cachedPromptTokens === 'number' ? cachedPromptTokens : undefined,
+      cacheHitRate,
       source: 'reported',
     };
   }
@@ -292,5 +354,6 @@ export function getMessageAIModel(model: AIModelOption): Message['aiModel'] {
     apiModel: model.apiModel,
     provider: model.provider,
     label: model.label,
+    isPremium: model.isPremium,
   };
 }

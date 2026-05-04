@@ -15,6 +15,7 @@ import { useTranslation } from "react-i18next";
 
 interface MarkdownContentProps {
   content: string;
+  isStreaming?: boolean;
 }
 interface CodeBlockProps {
   className?: string;
@@ -315,7 +316,7 @@ const ContentActionButtons: React.FC<{ content: string }> = memo(({ content }) =
 ContentActionButtons.displayName = "ContentActionButtons";
 
 /** 主组件 */
-export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content }) => {
+export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content, isStreaming }) => {
   const processed = React.useMemo(() => {
     let text = preprocessMarkdown(content);
     return parseMath(text);
@@ -351,7 +352,10 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content }
   return (
     <div className="markdown-container message-markdown prose prose-sm max-w-full text-current">
       <Markdown options={mdOptions}>{processed}</Markdown>
-      <ContentActionButtons content={content} />
+      {isStreaming
+        ? <span className="inline-block w-1.5 h-3 bg-current animate-pulse ml-0.5 align-baseline"></span>
+        : <ContentActionButtons content={content} />
+      }
     </div>
   );
 });

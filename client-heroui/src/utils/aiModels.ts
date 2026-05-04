@@ -10,6 +10,7 @@ export interface AIModelOption {
     outputPerMillion: number;
     cachedInputPerMillion?: number;
   };
+  isPremium?: boolean;
   isDefault?: boolean;
 }
 
@@ -22,13 +23,22 @@ const SELECTED_AI_MODEL_KEY = 'roomtalk:selected-ai-model';
 
 export const FALLBACK_AI_MODELS: AIModelOption[] = [
   {
+    id: 'deepseek-v4-pro',
+    apiModel: 'deepseek/deepseek-v4-pro',
+    provider: 'openrouter',
+    label: 'DeepSeek V4 Pro',
+    description: 'DeepSeek via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 0.435, cachedInputPerMillion: 0.003625, outputPerMillion: 0.87 },
+    isDefault: true,
+  },
+  {
     id: 'gpt-5.5',
     apiModel: 'openai/gpt-5.5',
     provider: 'openrouter',
     label: 'GPT-5.5',
     description: 'OpenAI GPT-5.5 via OpenRouter',
     pricing: { currency: 'USD', inputPerMillion: 5, cachedInputPerMillion: 0.5, outputPerMillion: 30 },
-    isDefault: true,
+    isPremium: true,
   },
   {
     id: 'claude-sonnet-4.6',
@@ -37,14 +47,16 @@ export const FALLBACK_AI_MODELS: AIModelOption[] = [
     label: 'Claude Sonnet 4.6',
     description: 'Anthropic via OpenRouter',
     pricing: { currency: 'USD', inputPerMillion: 3, outputPerMillion: 15 },
+    isPremium: true,
   },
   {
-    id: 'deepseek-v4-pro',
-    apiModel: 'deepseek/deepseek-v4-pro',
+    id: 'claude-opus-4.7',
+    apiModel: 'anthropic/claude-opus-4.7',
     provider: 'openrouter',
-    label: 'DeepSeek V4 Pro',
-    description: 'DeepSeek via OpenRouter',
-    pricing: { currency: 'USD', inputPerMillion: 1.74, outputPerMillion: 3.48 },
+    label: 'Claude Opus 4.7',
+    description: 'Anthropic via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 5, cachedInputPerMillion: 0.5, outputPerMillion: 25 },
+    isPremium: true,
   },
   {
     id: 'kimi-k2.6',
@@ -93,6 +105,7 @@ export const FALLBACK_AI_MODELS: AIModelOption[] = [
     label: 'Gemini Pro Latest',
     description: 'Google via OpenRouter',
     pricing: { currency: 'USD', inputPerMillion: 2, cachedInputPerMillion: 0.2, outputPerMillion: 12 },
+    isPremium: true,
   },
 ];
 
@@ -134,6 +147,23 @@ export const resolveSelectedAIModel = (
     : defaultModel;
 };
 
+export const isPremiumAIModel = (model: Pick<AIModelOption, 'id' | 'apiModel' | 'label' | 'isPremium'>) => {
+  if (typeof model.isPremium === 'boolean') {
+    return model.isPremium;
+  }
+
+  const modelText = `${model.id} ${model.apiModel || ''} ${model.label}`.toLowerCase();
+  return (
+    modelText.includes('gpt') ||
+    modelText.includes('openai/') ||
+    modelText.includes('claude') ||
+    modelText.includes('anthropic/') ||
+    modelText.includes('gemini') ||
+    modelText.includes('google/') ||
+    modelText.includes('~google/')
+  );
+};
+
 export const fetchAIModels = async (): Promise<AIModelResponse> => {
   const response = await fetch(`${getApiBaseUrl()}/api/ai-models`);
 
@@ -162,5 +192,9 @@ export const formatModelPrice = (model: AIModelOption) => {
     return 'Price unavailable';
   }
 
-  return `$${formatRate(model.pricing.inputPerMillion)}/M in · $${formatRate(model.pricing.outputPerMillion)}/M out`;
+  const cachedPrice = typeof model.pricing.cachedInputPerMillion === 'number'
+    ? ` · $${formatRate(model.pricing.cachedInputPerMillion)}/M cached`
+    : '';
+
+  return `$${formatRate(model.pricing.inputPerMillion)}/M in${cachedPrice} · $${formatRate(model.pricing.outputPerMillion)}/M out`;
 };
