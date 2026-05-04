@@ -83,11 +83,11 @@ export const truncateBeforeMessage = (
 };
 
 export const appendAIChunk = (messages: Message[], messageId: string, chunk: string) => {
-  return sortMessages(messages.map(message =>
+  return messages.map(message =>
     message.id === messageId
       ? { ...message, content: (message.content || "") + chunk, status: "streaming" as const }
       : message
-  ));
+  );
 };
 
 export const completeAIMessage = (
@@ -95,15 +95,15 @@ export const completeAIMessage = (
   messageId: string,
   updates: Pick<Message, "aiModel" | "usage" | "cost">
 ) => {
-  return sortMessages(messages.map(message =>
+  return messages.map(message =>
     message.id === messageId
       ? {
           ...message,
           status: "complete" as const,
-          aiModel: updates.aiModel || message.aiModel,
-          usage: updates.usage || message.usage,
-          cost: updates.cost || message.cost,
+          aiModel: updates.aiModel ?? message.aiModel,
+          usage: updates.usage ?? message.usage,
+          cost: updates.cost ?? message.cost,
         }
       : message
-  ));
+  );
 };

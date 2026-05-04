@@ -13,7 +13,6 @@ import {
   editMessageContent,
   getMessageById,
   replaceMessage,
-  sortMessages,
   truncateBeforeMessage,
 } from '../utils/messageState';
 import { useRoomMessageEvents } from '../hooks/useRoomMessageEvents';
@@ -58,7 +57,7 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
         return prev;
       }
 
-      return sortMessages(next);
+      return next;
     });
   }, []);
 

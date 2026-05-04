@@ -1,7 +1,7 @@
 import { Dispatch, RefObject, SetStateAction, useEffect, useRef } from 'react';
-import { socket } from '../utils/socket';
+import { clientId, socket } from '../utils/socket';
 import { AICostTotalEvent, AIChunkEvent, AIStreamEndEvent, AIStreamErrorEvent, Message } from '../utils/types';
-import { appendAIChunk, completeAIMessage, upsertMessage } from '../utils/messageState';
+import { appendAIChunk, completeAIMessage, sortMessages, upsertMessage } from '../utils/messageState';
 
 interface UseRoomMessageEventsArgs {
   roomId: string;
@@ -49,29 +49,27 @@ export const useRoomMessageEvents = ({
     setSessionCostUsd(0);
     closeDeleteModal();
     closeEditModal();
-    const scrollTimers: ReturnType<typeof setTimeout>[] = [];
+    let scrollTimer: ReturnType<typeof setTimeout> | null = null;
 
     const scheduleScroll = (behavior: ScrollBehavior, delayMs: number) => {
-      const timer = setTimeout(() => {
+      if (scrollTimer) {
+        clearTimeout(scrollTimer);
+      }
+
+      scrollTimer = setTimeout(() => {
+        scrollTimer = null;
         scrollToBottom(behavior);
-        const index = scrollTimers.indexOf(timer);
-        if (index !== -1) {
-          scrollTimers.splice(index, 1);
-        }
       }, delayMs);
-      scrollTimers.push(timer);
     };
 
     const handleMessageHistory = (messageHistory: Message[]) => {
-      console.log('Received message history, count:', messageHistory.length);
-      const roomMessages = messageHistory.filter(message => message.roomId === roomId);
+      const roomMessages = sortMessages(messageHistory.filter(message => message.roomId === roomId));
       updateMessages(roomMessages);
       setIsLoading(false);
       scheduleScroll('auto', 100);
     };
 
     const handleNewMessage = (message: Message) => {
-      console.log('Received new message:', message.id);
       if (message.roomId !== roomId) return;
 
       updateMessages(prev => upsertMessage(prev, message));
@@ -79,7 +77,7 @@ export const useRoomMessageEvents = ({
       const container = containerRef.current;
       if (container) {
         const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
-        if (isAtBottom || message.clientId === socket.id || message.clientId === 'ai_assistant') {
+        if (isAtBottom || message.clientId === clientId || message.clientId === 'ai_assistant') {
           scheduleScroll('smooth', 100);
         } else {
           setShowScrollButton(true);
@@ -89,7 +87,6 @@ export const useRoomMessageEvents = ({
 
     const handleAIChunk = (data: AIChunkEvent) => {
       if (data.roomId !== roomId) return;
-      console.log('Received AI chunk for message:', data.messageId);
       updateMessages(prev => appendAIChunk(prev, data.messageId, data.chunk));
 
       const container = containerRef.current;
@@ -103,7 +100,6 @@ export const useRoomMessageEvents = ({
 
     const handleAIStreamEnd = (data: AIStreamEndEvent) => {
       if (data.roomId !== roomId) return;
-      console.log('AI stream ended for message:', data.messageId);
       updateMessages(prev => completeAIMessage(prev, data.messageId, {
         aiModel: data.aiModel,
         usage: data.usage,
@@ -132,9 +128,7 @@ export const useRoomMessageEvents = ({
     };
 
     const handleMessagesCleared = (clearedRoomId: string) => {
-      console.log('[Server Broadcast] messages_cleared for room:', clearedRoomId);
       if (clearedRoomId === roomId) {
-        console.log('[Local] Clearing messages for room:', roomId);
         updateMessages([]);
         setShowScrollButton(false);
         closeEditModal();
@@ -144,7 +138,6 @@ export const useRoomMessageEvents = ({
 
     const handleMessageEdited = (updatedMessage: Message) => {
       if (updatedMessage.roomId === roomId) {
-        console.log('Received message_edited event:', updatedMessage.id);
         updateMessages(prev =>
           prev.map(msg => (msg.id === updatedMessage.id ? updatedMessage : msg))
         );
@@ -156,7 +149,6 @@ export const useRoomMessageEvents = ({
 
     const handleMessageDeleted = (deletedMessageId: string, deletedRoomId: string) => {
       if (deletedRoomId === roomId) {
-        console.log('Received message_deleted event:', deletedMessageId);
         updateMessages(prev => prev.filter(msg => msg.id !== deletedMessageId));
         if (messageToDeleteIdRef.current === deletedMessageId) {
           closeDeleteModal();
@@ -185,7 +177,9 @@ export const useRoomMessageEvents = ({
 
     return () => {
       clearTimeout(loadingTimeout);
-      scrollTimers.forEach(clearTimeout);
+      if (scrollTimer) {
+        clearTimeout(scrollTimer);
+      }
       socket.off('message_history', handleMessageHistory);
       socket.off('new_message', handleNewMessage);
       socket.off('ai_chunk', handleAIChunk);
@@ -211,7 +205,6 @@ export const useRoomMessageEvents = ({
 
   useEffect(() => {
     const handleConnect = () => {
-      console.log('Socket connected, refreshing room messages');
       socket.emit('get_room_messages', roomId);
     };
     socket.on('connect', handleConnect);

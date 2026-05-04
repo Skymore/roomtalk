@@ -62,6 +62,21 @@ describe("messageState", () => {
     expect(completed[0].cost?.totalUsd).toBe(3);
   });
 
+  it("preserves message order while updating streaming AI messages", () => {
+    const later = message({ id: "later", timestamp: "2026-05-03T10:00:02.000Z" });
+    const ai = message({ id: "ai1", clientId: "ai_assistant", content: "hel", messageType: "ai", status: "streaming" });
+
+    const chunked = appendAIChunk([later, ai], "ai1", "lo");
+    expect(chunked.map(item => item.id)).toEqual(["later", "ai1"]);
+
+    const completed = completeAIMessage(chunked, "ai1", {
+      aiModel: { id: "gpt", apiModel: "openai/gpt", provider: "openrouter", label: "GPT" },
+      usage: { promptTokens: 1, completionTokens: 2, totalTokens: 3, source: "reported" },
+      cost: { currency: "USD", inputUsd: 1, outputUsd: 2, totalUsd: 3, inputPerMillion: 1, outputPerMillion: 2, estimated: false },
+    });
+    expect(completed.map(item => item.id)).toEqual(["later", "ai1"]);
+  });
+
   it("finds, edits, replaces, and deletes messages by id", () => {
     const first = message({ id: "m1", content: "first" });
     const second = message({ id: "m2", content: "second" });

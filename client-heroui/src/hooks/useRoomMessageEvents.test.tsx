@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { Dispatch, SetStateAction, useRef } from 'react';
-import { cleanup, render } from '@testing-library/react';
+import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { Message } from '../utils/types';
 import { useRoomMessageEvents } from './useRoomMessageEvents';
@@ -32,6 +32,7 @@ const socketMock = vi.hoisted(() => {
 
 vi.mock('../utils/socket', () => ({
   socket: socketMock,
+  clientId: 'client-1',
 }));
 
 const message = (overrides: Partial<Message> = {}): Message => ({
@@ -126,6 +127,7 @@ describe('useRoomMessageEvents', () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
   });
 
   it('does not reset subscriptions or close modals when the active edit/delete target changes', () => {
@@ -155,6 +157,61 @@ describe('useRoomMessageEvents', () => {
     expect(socketMock.emit).not.toHaveBeenCalledWith('get_room_messages', 'room-1');
     expect(socketMock.on).not.toHaveBeenCalled();
     expect(socketMock.off).not.toHaveBeenCalled();
+  });
+
+  it('sorts loaded room history before setting messages', () => {
+    const props = createHarnessProps();
+    render(<Harness {...props} />);
+    props.updateMessages.mockClear();
+
+    socketMock.trigger('message_history', [
+      message({ id: 'later', timestamp: '2026-05-03T10:00:02.000Z' }),
+      message({ id: 'first', timestamp: '2026-05-03T10:00:00.000Z' }),
+      message({ id: 'other-room', roomId: 'room-2' }),
+    ]);
+
+    expect(props.updateMessages).toHaveBeenCalledWith([
+      message({ id: 'first', timestamp: '2026-05-03T10:00:00.000Z' }),
+      message({ id: 'later', timestamp: '2026-05-03T10:00:02.000Z' }),
+    ]);
+  });
+
+  it('uses the persistent client id when deciding whether a new message should auto-scroll', () => {
+    vi.useFakeTimers();
+    const props = createHarnessProps();
+    const { getByTestId } = render(<Harness {...props} />);
+    const container = getByTestId('container');
+    Object.defineProperty(container, 'scrollHeight', { configurable: true, value: 1000 });
+    Object.defineProperty(container, 'scrollTop', { configurable: true, value: 0 });
+    Object.defineProperty(container, 'clientHeight', { configurable: true, value: 100 });
+
+    act(() => {
+      socketMock.trigger('new_message', message({ id: 'own-message', clientId: 'client-1' }));
+      vi.advanceTimersByTime(100);
+    });
+
+    expect(props.scrollToBottom).toHaveBeenCalledWith('smooth');
+    expect(props.setShowScrollButton).not.toHaveBeenCalledWith(true);
+  });
+
+  it('debounces scheduled scrolls during AI streaming', () => {
+    vi.useFakeTimers();
+    const props = createHarnessProps();
+    render(<Harness {...props} />);
+
+    act(() => {
+      socketMock.trigger('ai_chunk', { roomId: 'room-1', messageId: 'ai1', chunk: 'a' });
+      socketMock.trigger('ai_chunk', { roomId: 'room-1', messageId: 'ai1', chunk: 'b' });
+      socketMock.trigger('ai_chunk', { roomId: 'room-1', messageId: 'ai1', chunk: 'c' });
+      vi.advanceTimersByTime(49);
+    });
+    expect(props.scrollToBottom).not.toHaveBeenCalledWith('smooth');
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(props.scrollToBottom).toHaveBeenCalledTimes(1);
+    expect(props.scrollToBottom).toHaveBeenCalledWith('smooth');
   });
 
   it('uses the latest edit target when deciding whether an edit broadcast should close the modal', () => {
