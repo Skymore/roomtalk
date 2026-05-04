@@ -24,11 +24,14 @@ interface MessageInputAISettingsButtonProps {
 }
 
 export const MessageInputAISettingsButton: React.FC<MessageInputAISettingsButtonProps> = ({ onOpen, isDisabled }) => {
+  const { t } = useTranslation();
+
   return (
     <Button
       isIconOnly
       size="sm"
       variant="light"
+      aria-label={t('aiSettings')}
       className="rounded-lg text-[#5e5d59] dark:text-[#b0aea5]"
       onPress={onOpen}
       isDisabled={isDisabled}
@@ -148,6 +151,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
           <Select
             size="sm"
             aria-label={t('selectAIModel')}
+            data-testid="ai-model-select"
             selectedKeys={[selectedAIModel || defaultAIModel]}
             onSelectionChange={(keys) => {
               const selectedKey = Array.from(keys)[0]?.toString();

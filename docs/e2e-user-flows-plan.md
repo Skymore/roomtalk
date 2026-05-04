@@ -142,6 +142,24 @@ The E2E suite must catch failures where the UI looks correct but a real user can
 - Add documentation for local E2E execution.
 - Optionally wire E2E into CI after local stability is confirmed.
 
+### Local Execution
+
+Run E2E from the client package:
+
+```bash
+cd client-heroui
+npx playwright install chromium
+npm run test:e2e
+```
+
+The Playwright config starts the backend and frontend automatically. The backend uses `redis://127.0.0.1:6379/15`, enables `E2E_TEST_MODE=true`, and uses `E2E_FAKE_AI=true`, so E2E runs do not call real AI providers. The reset endpoint flushes only the selected Redis DB.
+
+Optional overrides:
+
+```bash
+E2E_CLIENT_PORT=3311 E2E_SERVER_PORT=3312 npm run test:e2e
+```
+
 ### Acceptance Criteria
 
 - `npm run test:e2e` is documented.

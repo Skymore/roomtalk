@@ -5,6 +5,9 @@ node_modules/
 
 # Testing
 coverage/
+client-heroui/test-results/
+client-heroui/playwright-report/
+client-heroui/blob-report/
 
 # Production
 client-heroui/dist/

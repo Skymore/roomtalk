@@ -127,6 +127,8 @@ export const MessageItem: React.FC<MessageItemProps> = ({
 
   return (
     <div
+      data-testid="message-item"
+      data-message-id={message.id}
       className={`group mb-1 flex w-full items-start ${isMine ? "justify-end" : "justify-start"}`}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
@@ -238,6 +240,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                       isIconOnly
                       size="sm"
                       variant="light"
+                      aria-label={t('editMessage')}
                       className="h-5 w-5 min-w-0 text-[#5e5d59] dark:text-[#b0aea5]"
                       onPress={() => onStartEdit(message.id)}
                     >
@@ -250,6 +253,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                     isIconOnly
                       size="sm"
                       variant="light"
+                      aria-label={t('deleteMessage')}
                       className="h-5 w-5 min-w-0 text-danger-500"
                     onPress={() => onDeleteMessage(message.id)}
                   >
@@ -263,6 +267,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                       isIconOnly
                       size="sm"
                       variant="light"
+                      aria-label={t('retry')}
                       className="h-5 w-5 min-w-0 text-[#c96442] dark:text-[#d97757]"
                       onPress={handleRefreshAIClick}
                       isDisabled={isStreaming}
