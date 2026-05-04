@@ -26,7 +26,19 @@ export class RedisStore {
     }
 
     this.logger.warn('Multiple collisions detected, using longer ID');
-    return nanoid(12);
+    attempts = 0;
+    while (attempts < maxAttempts) {
+      const id = nanoid(12);
+      const exists = await this.redisClient.hExists('rooms', id);
+      if (!exists) {
+        return id;
+      }
+      attempts++;
+      this.logger.debug('Long room ID collision detected, retrying', { attempt: attempts, maxAttempts });
+    }
+
+    this.logger.warn('Multiple long room ID collisions detected, using extra-long ID');
+    return nanoid(16);
   }
 
   async appendMessage(message: Message): Promise<void> {
@@ -218,12 +230,17 @@ export class RedisStore {
   }
 
   async deleteRoom(roomId: string, creatorId: string): Promise<void> {
-    await Promise.all([
-      this.redisClient.hDel('rooms', roomId),
-      this.redisClient.del(`room:${roomId}:messages`),
-      this.redisClient.del(this.getRoomAICostKey(roomId)),
-      this.redisClient.del(`room:${roomId}:members`),
-      this.redisClient.sRem(`user:${creatorId}:rooms`, roomId),
-    ]);
+    try {
+      await Promise.all([
+        this.redisClient.hDel('rooms', roomId),
+        this.redisClient.del(`room:${roomId}:messages`),
+        this.redisClient.del(this.getRoomAICostKey(roomId)),
+        this.redisClient.del(`room:${roomId}:members`),
+        this.redisClient.sRem(`user:${creatorId}:rooms`, roomId),
+      ]);
+      this.logger.debug('Room deleted from Redis', { roomId, creatorId });
+    } catch (error) {
+      this.logger.error('Error deleting room from Redis', { error, roomId, creatorId });
+    }
   }
 }
