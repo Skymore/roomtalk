@@ -78,20 +78,13 @@ export default defineConfig({
 						return "vendor-markdown";
 					}
 
-					if (includesAny(normalizedId, [
-						"/node_modules/socket.io-client/",
-						"/node_modules/@socket.io/",
-						"/node_modules/engine.io-client/",
-					])) {
-						return "vendor-socket";
-					}
-
 					return "vendor";
 				},
 			},
 		},
 	},
 	server: {
+		port: 3011,
 		allowedHosts: true,
 	},
 });
