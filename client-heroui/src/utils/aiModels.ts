@@ -1,7 +1,7 @@
 export interface AIModelOption {
   id: string;
   apiModel?: string;
-  provider?: 'openai' | 'openrouter';
+  provider?: 'openai' | 'openrouter' | 'deepseek' | 'anthropic';
   label: string;
   description?: string;
   pricing?: {
@@ -24,11 +24,10 @@ const SELECTED_AI_MODEL_KEY = 'roomtalk:selected-ai-model';
 export const FALLBACK_AI_MODELS: AIModelOption[] = [
   {
     id: 'deepseek-v4-pro',
-    apiModel: 'deepseek/deepseek-v4-pro',
-    provider: 'openrouter',
+    apiModel: 'deepseek-chat',
+    provider: 'deepseek',
     label: 'DeepSeek V4 Pro',
-    description: 'DeepSeek via OpenRouter',
-    pricing: { currency: 'USD', inputPerMillion: 0.435, cachedInputPerMillion: 0.003625, outputPerMillion: 0.87 },
+    pricing: { currency: 'USD', inputPerMillion: 0.27, cachedInputPerMillion: 0.07, outputPerMillion: 1.10 },
     isDefault: true,
   },
   {
@@ -36,26 +35,23 @@ export const FALLBACK_AI_MODELS: AIModelOption[] = [
     apiModel: 'openai/gpt-5.5',
     provider: 'openrouter',
     label: 'GPT-5.5',
-    description: 'OpenAI GPT-5.5 via OpenRouter',
     pricing: { currency: 'USD', inputPerMillion: 5, cachedInputPerMillion: 0.5, outputPerMillion: 30 },
     isPremium: true,
   },
   {
     id: 'claude-sonnet-4.6',
-    apiModel: 'anthropic/claude-sonnet-4.6',
-    provider: 'openrouter',
+    apiModel: 'claude-sonnet-4-6',
+    provider: 'anthropic',
     label: 'Claude Sonnet 4.6',
-    description: 'Anthropic via OpenRouter',
-    pricing: { currency: 'USD', inputPerMillion: 3, outputPerMillion: 15 },
+    pricing: { currency: 'USD', inputPerMillion: 3, cachedInputPerMillion: 0.30, outputPerMillion: 15 },
     isPremium: true,
   },
   {
     id: 'claude-opus-4.7',
-    apiModel: 'anthropic/claude-opus-4.7',
-    provider: 'openrouter',
+    apiModel: 'claude-opus-4-7',
+    provider: 'anthropic',
     label: 'Claude Opus 4.7',
-    description: 'Anthropic via OpenRouter',
-    pricing: { currency: 'USD', inputPerMillion: 5, cachedInputPerMillion: 0.5, outputPerMillion: 25 },
+    pricing: { currency: 'USD', inputPerMillion: 15, cachedInputPerMillion: 1.50, outputPerMillion: 75 },
     isPremium: true,
   },
   {
@@ -178,6 +174,16 @@ export const fetchAIModels = async (): Promise<AIModelResponse> => {
   }
 
   return data;
+};
+
+export const getProviderLabel = (provider?: string): string => {
+  const labels: Record<string, string> = {
+    anthropic: 'Anthropic',
+    deepseek: 'DeepSeek',
+    openai: 'OpenAI',
+    openrouter: 'OpenRouter',
+  };
+  return labels[provider ?? ''] ?? provider ?? '';
 };
 
 const formatRate = (value: number) => {
