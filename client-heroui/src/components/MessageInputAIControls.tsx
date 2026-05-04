@@ -15,7 +15,7 @@ import {
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 import { AIRoleManager } from './AIRoleManager';
-import { AIModelOption, formatModelPrice, isPremiumAIModel } from '../utils/aiModels';
+import { AIModelOption, formatModelPrice, getProviderLabel, isPremiumAIModel } from '../utils/aiModels';
 import { AIRole, getAIRoleDisplayName } from '../utils/aiRoles';
 
 interface MessageInputAISettingsButtonProps {
@@ -165,10 +165,17 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
             {aiModels.map((model) => (
               <SelectItem
                 key={model.id}
-                description={`${formatModelPrice(model)}${model.provider ? ` · ${model.provider}` : ''}${isPremiumAIModel(model) ? ` · ${t('premiumModel')}` : ''}`}
-                startContent={isPremiumAIModel(model) ? <Icon icon="lucide:diamond" className="text-warning" /> : undefined}
+                description={formatModelPrice(model)}
               >
-                {model.isDefault ? `${model.label} (${t('defaultModel')})` : model.label}
+                <span className="flex items-center gap-1.5">
+                  <span>{model.isDefault ? `${model.label} (${t('defaultModel')})` : model.label}</span>
+                  <span className="inline-flex items-center rounded px-1 py-px text-[9px] font-semibold leading-none border border-[#c2c0b6]/60 bg-[#e8e6dc] text-[#4d4c48] dark:border-[#4d4c48]/60 dark:bg-[#30302e] dark:text-[#b0aea5] whitespace-nowrap">
+                    {getProviderLabel(model.provider)}
+                  </span>
+                  {isPremiumAIModel(model) && (
+                    <Icon icon="lucide:gem" className="text-warning" width={11} height={11} />
+                  )}
+                </span>
               </SelectItem>
             ))}
           </Select>
