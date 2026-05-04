@@ -255,6 +255,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
           }
         });
         editorRef.current.innerHTML = '';
+        editorRef.current.blur();
       }
       setContentItems(emptyMessageContent());
       setImageCount(0);
