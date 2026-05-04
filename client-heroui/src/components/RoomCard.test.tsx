@@ -1,0 +1,66 @@
+// @vitest-environment jsdom
+
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Room } from '../utils/types';
+import { RoomCard } from './RoomCard';
+
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string) => key,
+    i18n: { language: 'en' },
+  }),
+}));
+
+const room: Room = {
+  id: 'room-1',
+  name: 'Test Room',
+  description: '',
+  createdAt: '2026-05-04T00:00:00.000Z',
+  creatorId: 'client-1',
+};
+
+const renderRoomCard = () => {
+  const props = {
+    room,
+    clientId: 'client-1',
+    copiedRoomId: null,
+    copiedLinkId: null,
+    onSelect: vi.fn(),
+    onCopyRoomId: vi.fn(),
+    onCopyRoomLink: vi.fn(),
+    onDelete: vi.fn(),
+  };
+
+  render(<RoomCard {...props} />);
+  return props;
+};
+
+describe('RoomCard', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('selects the room when the card is pressed', () => {
+    const props = renderRoomCard();
+    const card = screen.getByText('Test Room').closest('[role="button"]');
+
+    expect(card).not.toBeNull();
+    fireEvent.click(card!);
+
+    expect(props.onSelect).toHaveBeenCalledWith('room-1');
+  });
+
+  it('does not select the room when action buttons are clicked', () => {
+    const props = renderRoomCard();
+
+    fireEvent.click(screen.getByLabelText('copyRoomId'));
+    fireEvent.click(screen.getByLabelText('share'));
+    fireEvent.click(screen.getByLabelText('deleteRoom'));
+
+    expect(props.onSelect).not.toHaveBeenCalled();
+    expect(props.onCopyRoomId).toHaveBeenCalledWith('room-1');
+    expect(props.onCopyRoomLink).toHaveBeenCalledWith('room-1');
+    expect(props.onDelete).toHaveBeenCalledWith(room);
+  });
+});

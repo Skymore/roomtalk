@@ -45,9 +45,9 @@ export const RoomCard: React.FC<RoomCardProps> = ({
 
   return (
     <Card
-      as="div"
+      isPressable
       className="cursor-pointer border border-[#dedbd0] bg-[#faf9f5] p-4 shadow-[0_0_0_1px_rgba(194,192,182,0.4)] transition-all duration-200 hover:bg-[#f0eee6] active:bg-[#e8e6dc] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:hover:bg-[#30302e]"
-      onClick={() => onSelect(room.id)}
+      onPress={() => onSelect(room.id)}
     >
       <div className="flex items-start">
         <div className="mr-3 rounded-xl bg-[#e8e6dc] p-2.5 text-[#c96442] dark:bg-[#30302e] dark:text-[#d97757]">
