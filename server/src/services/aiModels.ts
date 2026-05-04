@@ -40,7 +40,7 @@ export const REQUESTED_AI_MODEL_CATALOG: AIModelOption[] = [
     provider: 'anthropic',
     label: 'Claude Opus 4.7',
     description: 'Anthropic Claude Opus 4.7 via official API (with prompt caching)',
-    pricing: { currency: 'USD', inputPerMillion: 15, cachedInputPerMillion: 1.50, outputPerMillion: 75 },
+    pricing: { currency: 'USD', inputPerMillion: 5, cachedInputPerMillion: 0.50, outputPerMillion: 25 },
     isPremium: true,
   },
   {
