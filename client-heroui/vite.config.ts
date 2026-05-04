@@ -42,43 +42,7 @@ export default defineConfig({
 						return "vendor-icons";
 					}
 
-					if (normalizedId.includes("/node_modules/elkjs/")) {
-						return "vendor-elk";
-					}
-
-					if (normalizedId.includes("/node_modules/d3-")) {
-						return "vendor-d3";
-					}
-
-					if (includesAny(normalizedId, [
-						"/node_modules/dagre",
-						"/node_modules/cytoscape",
-					])) {
-						return "vendor-graph";
-					}
-
-					if (normalizedId.includes("/node_modules/mermaid/")) {
-						return "vendor-mermaid";
-					}
-
-					if (includesAny(normalizedId, [
-						"/node_modules/react-markdown/",
-						"/node_modules/remark-",
-						"/node_modules/rehype-",
-						"/node_modules/unified/",
-						"/node_modules/unist-util-",
-						"/node_modules/mdast-util-",
-						"/node_modules/hast-util-",
-						"/node_modules/micromark",
-						"/node_modules/vfile",
-						"/node_modules/katex/",
-						"/node_modules/react-syntax-highlighter/",
-						"/node_modules/highlight.js/",
-					])) {
-						return "vendor-markdown";
-					}
-
-					return "vendor";
+						return "vendor";
 				},
 			},
 		},
