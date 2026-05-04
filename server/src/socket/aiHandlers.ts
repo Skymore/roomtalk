@@ -11,6 +11,11 @@ import { SocketConnectionContext } from './types';
 
 export const DEFAULT_ANTHROPIC_MAX_TOKENS = 8096;
 
+const isE2EFakeAIEnabled = () =>
+  process.env.E2E_TEST_MODE === 'true' && process.env.E2E_FAKE_AI === 'true';
+
+const wait = (delayMs: number) => new Promise(resolve => setTimeout(resolve, delayMs));
+
 export function registerAIHandlers({
   io,
   socket,
@@ -116,6 +121,61 @@ export function registerAIHandlers({
     }
 
     openaiLogger.debug('contextMessages', contextMessages);
+
+    if (isE2EFakeAIEnabled()) {
+      const lastUserMessage = [...contextMessages].reverse().find(message => message.clientId !== 'ai_assistant');
+      const targetContent = lastUserMessage?.content?.trim() || 'empty prompt';
+      const chunks = [
+        'E2E AI response ',
+        `to: ${targetContent}`,
+      ];
+      let fullContent = '';
+
+      for (const chunk of chunks) {
+        fullContent += chunk;
+        io.to(roomId).emit('ai_chunk', { messageId: aiMessageId, chunk, roomId });
+        await wait(5);
+      }
+
+      const usage = {
+        promptTokens: 100,
+        completionTokens: 20,
+        totalTokens: 120,
+        cachedPromptTokens: 25,
+        cacheHitRate: 0.25,
+        source: 'reported' as const,
+      };
+      const cost = calculateAICost(selectedModel, usage);
+      const roomCostTotal = await store.incrementRoomAICost(roomId, cost || null);
+      const aiModel = getMessageAIModel(selectedModel);
+
+      io.to(roomId).emit('ai_stream_end', {
+        messageId: aiMessageId,
+        roomId,
+        aiModel,
+        usage,
+        cost,
+        sessionCost: roomCostTotal,
+      });
+      io.to(roomId).emit('ai_cost_total', roomCostTotal);
+
+      const finalAiMessage: Message = {
+        ...initialAiMessage,
+        content: fullContent,
+        status: 'complete',
+        timestamp: new Date().toISOString(),
+        aiModel,
+        usage,
+        cost,
+      };
+
+      try {
+        await store.saveMessageHistory(roomId, buildFinalAIHistory(historyUsedForContext, finalAiMessage));
+      } catch (err) {
+        openaiLogger.error('Failed to save E2E fake AI history', { error: err, messageId: aiMessageId });
+      }
+      return;
+    }
 
     try {
       const validMessagesForAPI = buildAIProviderMessages(systemPrompt, contextMessages);

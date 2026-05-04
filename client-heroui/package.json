@@ -11,6 +11,8 @@
     "translate:i18n:dry": "node scripts/translate-i18n.mjs --dry-run",
     "build": "npm run check:i18n && tsc && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -51,6 +53,7 @@
     "uuid": "^11.1.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@tailwindcss/aspect-ratio": "^0.4.2",
     "@tailwindcss/forms": "^0.5.10",
     "@testing-library/react": "^16.3.2",

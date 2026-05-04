@@ -152,4 +152,17 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       return res.status(500).json({ error: 'Error getting system status' });
     }
   });
+
+  if (process.env.E2E_TEST_MODE === 'true') {
+    app.post('/api/e2e/reset', async (_req: Request, res: Response) => {
+      try {
+        await redisClient.flushDb();
+        routeLogger.warn('E2E Redis database reset');
+        return res.json({ ok: true });
+      } catch (error) {
+        routeLogger.error('Failed to reset E2E Redis database', { error });
+        return res.status(500).json({ error: 'Failed to reset E2E database' });
+      }
+    });
+  }
 }

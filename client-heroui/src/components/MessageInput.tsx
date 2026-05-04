@@ -419,7 +419,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
 
     // 获取当前选中区域并插入图片
     const selection = window.getSelection();
-    const range = selection?.getRangeAt(0);
+    const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
 
     if (range) {
       // 插入图片到选中位置
@@ -607,6 +607,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
               whiteSpace: 'pre-wrap',
             }}
             role="textbox"
+            data-testid="message-editor"
             aria-label={t('messageInput')}
             aria-multiline="true"
             title={`${t('messageInput')} (Enter: ${t('send')}, Shift+Enter: ${t('newLine')}, ${isMacOS ? 'Command+Enter' : 'Ctrl+Enter'}: ${t('askAI')})`}
@@ -619,6 +620,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
               isIconOnly
               size="sm"
               variant="light"
+              aria-label={t('uploadImage')}
               className="rounded-lg text-[#5e5d59] dark:text-[#b0aea5]"
               onPress={() => fileInputRef.current?.click()}
               isDisabled={imageCount >= MAX_MESSAGE_IMAGES || isSending || isAiProcessing} // 禁用图片上传当 AI 处理中
@@ -635,6 +637,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
             {/* 隐藏的文件输入 */}
             <input
               type="file"
+              data-testid="image-upload-input"
               ref={fileInputRef}
               className="hidden"
               accept="image/*"

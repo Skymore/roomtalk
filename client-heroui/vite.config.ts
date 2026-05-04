@@ -1,5 +1,5 @@
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { configDefaults, defineConfig } from "vitest/config";
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -10,5 +10,8 @@ export default defineConfig({
 	server: {
 		port: 3011,
 		allowedHosts: true,
+	},
+	test: {
+		exclude: [...configDefaults.exclude, "e2e/**"],
 	},
 });
