@@ -11,7 +11,7 @@ import path from 'path';
 import { createClient, RedisClientType } from 'redis';
 import dotenv from 'dotenv';
 import { RedisStore } from './repositories/redisStore';
-import { createAIModelRegistry } from './services/aiModels';
+import { createAIModelRegistry, DEFAULT_AI_MODEL_ID } from './services/aiModels';
 import { registerApiRoutes } from './routes/apiRoutes';
 import { registerSocketHandlers } from './socket/registerSocketHandlers';
 import { createAIClients } from './services/aiClients';
@@ -26,7 +26,7 @@ const routeLogger = new Logger('Routes');
 const openaiLogger = new Logger('OpenAI');
 
 const aiModelRegistry = createAIModelRegistry({
-  defaultModelId: process.env.AI_MODEL || process.env.OPENROUTER_MODEL || 'gpt-5.5',
+  defaultModelId: process.env.AI_MODEL || process.env.OPENROUTER_MODEL || DEFAULT_AI_MODEL_ID,
   configuredModelOptions: process.env.AI_MODEL_OPTIONS || process.env.OPENROUTER_MODEL_OPTIONS,
   logger: openaiLogger,
 });

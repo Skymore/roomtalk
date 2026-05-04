@@ -1,0 +1,200 @@
+// @vitest-environment jsdom
+
+import { Dispatch, SetStateAction, useRef } from 'react';
+import { cleanup, render } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import { Message } from '../utils/types';
+import { useRoomMessageEvents } from './useRoomMessageEvents';
+
+const socketMock = vi.hoisted(() => {
+  const handlers = new Map<string, Set<(...args: any[]) => void>>();
+
+  return {
+    id: 'socket-1',
+    handlers,
+    on: vi.fn((event: string, handler: (...args: any[]) => void) => {
+      const eventHandlers = handlers.get(event) || new Set();
+      eventHandlers.add(handler);
+      handlers.set(event, eventHandlers);
+    }),
+    off: vi.fn((event: string, handler: (...args: any[]) => void) => {
+      handlers.get(event)?.delete(handler);
+    }),
+    emit: vi.fn(),
+    trigger: (event: string, ...args: any[]) => {
+      handlers.get(event)?.forEach(handler => handler(...args));
+    },
+    reset: () => {
+      handlers.clear();
+    },
+  };
+});
+
+vi.mock('../utils/socket', () => ({
+  socket: socketMock,
+}));
+
+const message = (overrides: Partial<Message> = {}): Message => ({
+  id: 'm1',
+  clientId: 'client-1',
+  content: 'hello',
+  roomId: 'room-1',
+  timestamp: '2026-05-03T10:00:00.000Z',
+  messageType: 'text',
+  ...overrides,
+});
+
+type UpdateMessages = (updater: SetStateAction<Message[]>) => void;
+type SetBoolean = Dispatch<SetStateAction<boolean>>;
+type SetNumber = Dispatch<SetStateAction<number>>;
+type ScrollToBottom = (behavior?: ScrollBehavior) => void;
+type CloseModal = () => void;
+type MockedFunction<T extends (...args: any[]) => any> = T & Mock<T>;
+
+type HarnessProps = {
+  roomId?: string;
+  messageToDeleteId?: string;
+  messageToEditId?: string;
+  updateMessages: UpdateMessages;
+  setIsLoading: SetBoolean;
+  setSessionCostUsd: SetNumber;
+  setShowScrollButton: SetBoolean;
+  scrollToBottom: ScrollToBottom;
+  closeDeleteModal: CloseModal;
+  closeEditModal: CloseModal;
+};
+
+type HarnessTestProps = Omit<HarnessProps, 'roomId' | 'messageToDeleteId' | 'messageToEditId'> & {
+  updateMessages: MockedFunction<UpdateMessages>;
+  setIsLoading: MockedFunction<SetBoolean>;
+  setSessionCostUsd: MockedFunction<SetNumber>;
+  setShowScrollButton: MockedFunction<SetBoolean>;
+  scrollToBottom: MockedFunction<ScrollToBottom>;
+  closeDeleteModal: MockedFunction<CloseModal>;
+  closeEditModal: MockedFunction<CloseModal>;
+};
+
+const Harness = ({
+  roomId = 'room-1',
+  messageToDeleteId,
+  messageToEditId,
+  updateMessages,
+  setIsLoading,
+  setSessionCostUsd,
+  setShowScrollButton,
+  scrollToBottom,
+  closeDeleteModal,
+  closeEditModal,
+}: HarnessProps) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useRoomMessageEvents({
+    roomId,
+    containerRef,
+    updateMessages,
+    setIsLoading,
+    setSessionCostUsd,
+    setShowScrollButton,
+    scrollToBottom,
+    closeDeleteModal,
+    closeEditModal,
+    messageToDeleteId,
+    messageToEditId,
+    warningPrefix: 'Warning',
+  });
+
+  return <div ref={containerRef} data-testid="container" />;
+};
+
+const mockFunction = <T extends (...args: any[]) => any>() => vi.fn<T>() as unknown as MockedFunction<T>;
+
+const createHarnessProps = (): HarnessTestProps => ({
+  updateMessages: mockFunction<UpdateMessages>(),
+  setIsLoading: mockFunction<SetBoolean>(),
+  setSessionCostUsd: mockFunction<SetNumber>(),
+  setShowScrollButton: mockFunction<SetBoolean>(),
+  scrollToBottom: mockFunction<ScrollToBottom>(),
+  closeDeleteModal: mockFunction<CloseModal>(),
+  closeEditModal: mockFunction<CloseModal>(),
+});
+
+describe('useRoomMessageEvents', () => {
+  beforeEach(() => {
+    socketMock.reset();
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('does not reset subscriptions or close modals when the active edit/delete target changes', () => {
+    const props = createHarnessProps();
+    const { rerender } = render(<Harness {...props} />);
+
+    expect(props.closeEditModal).toHaveBeenCalledTimes(1);
+    expect(props.closeDeleteModal).toHaveBeenCalledTimes(1);
+    expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', 'room-1');
+
+    props.closeEditModal.mockClear();
+    props.closeDeleteModal.mockClear();
+    socketMock.emit.mockClear();
+    socketMock.on.mockClear();
+    socketMock.off.mockClear();
+
+    rerender(
+      <Harness
+        {...props}
+        messageToEditId="m1"
+        messageToDeleteId="m2"
+      />
+    );
+
+    expect(props.closeEditModal).not.toHaveBeenCalled();
+    expect(props.closeDeleteModal).not.toHaveBeenCalled();
+    expect(socketMock.emit).not.toHaveBeenCalledWith('get_room_messages', 'room-1');
+    expect(socketMock.on).not.toHaveBeenCalled();
+    expect(socketMock.off).not.toHaveBeenCalled();
+  });
+
+  it('uses the latest edit target when deciding whether an edit broadcast should close the modal', () => {
+    const props = createHarnessProps();
+    const { rerender } = render(<Harness {...props} />);
+
+    props.closeEditModal.mockClear();
+    rerender(<Harness {...props} messageToEditId="m1" />);
+    props.closeEditModal.mockClear();
+
+    socketMock.trigger('message_edited', message({ id: 'other' }));
+    expect(props.closeEditModal).not.toHaveBeenCalled();
+
+    socketMock.trigger('message_edited', message({ id: 'm1' }));
+    expect(props.closeEditModal).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the latest delete target when deciding whether delete broadcasts should close modals', () => {
+    const props = createHarnessProps();
+    const { rerender } = render(<Harness {...props} />);
+
+    rerender(
+      <Harness
+        {...props}
+        messageToDeleteId="m2"
+        messageToEditId="m1"
+      />
+    );
+    props.closeDeleteModal.mockClear();
+    props.closeEditModal.mockClear();
+
+    socketMock.trigger('message_deleted', 'other', 'room-1');
+    expect(props.closeDeleteModal).not.toHaveBeenCalled();
+    expect(props.closeEditModal).not.toHaveBeenCalled();
+
+    socketMock.trigger('message_deleted', 'm2', 'room-1');
+    expect(props.closeDeleteModal).toHaveBeenCalledTimes(1);
+    expect(props.closeEditModal).not.toHaveBeenCalled();
+
+    socketMock.trigger('message_deleted', 'm1', 'room-1');
+    expect(props.closeEditModal).toHaveBeenCalledTimes(1);
+  });
+});

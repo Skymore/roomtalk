@@ -3,6 +3,7 @@ import { buildFinalAIHistory, MAX_CONTEXT_MESSAGES, selectAIHistory } from '../s
 import { calculateAICost, DEFAULT_SYSTEM_MESSAGE, getMessageAIModel, normalizeUsage } from '../services/aiModels';
 import {
   buildAIProviderMessages,
+  buildAnthropicMessages,
   createAIPlaceholderMessage,
 } from '../services/messageDomain';
 import { Message } from '../types';
@@ -136,27 +137,50 @@ export function registerAIHandlers({
         provider: selectedModel.provider,
       });
 
-      const aiClient = getAIClientForModel(selectedModel);
-      const stream = await aiClient.chat.completions.create({
-        model: selectedModel.apiModel,
-        messages: validMessagesForAPI as any,
-        stream: true,
-        temperature: 1,
-        stream_options: { include_usage: true },
-      } as any);
+      const aiClientWrapper = getAIClientForModel(selectedModel);
 
       let fullContent = '';
       let reportedUsage: any = null;
-      for await (const chunk of stream as any) {
-        if (chunk.usage) {
-          reportedUsage = chunk.usage;
+
+      if (aiClientWrapper.provider === 'anthropic') {
+        const anthropicMessages = buildAnthropicMessages(contextMessages);
+        const stream = aiClientWrapper.client.messages.stream({
+          model: selectedModel.apiModel,
+          max_tokens: 8096,
+          system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }] as any,
+          messages: anthropicMessages as any,
+        });
+
+        for await (const event of stream as any) {
+          if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+            const contentChunk: string = event.delta.text;
+            fullContent += contentChunk;
+            io.to(roomId).emit('ai_chunk', { messageId: aiMessageId, chunk: contentChunk, roomId });
+          }
         }
-        if (chunk.choices[0]?.delta?.content) {
-          const contentChunk = chunk.choices[0].delta.content;
-          fullContent += contentChunk;
-          io.to(roomId).emit('ai_chunk', { messageId: aiMessageId, chunk: contentChunk, roomId });
-          if (fullContent.length % 100 === 0) {
-            openaiLogger.debug('Streaming AI chunk', { messageId: aiMessageId, contentLength: fullContent.length });
+
+        const finalMsg = await stream.finalMessage();
+        reportedUsage = finalMsg.usage;
+      } else {
+        const stream = await aiClientWrapper.client.chat.completions.create({
+          model: selectedModel.apiModel,
+          messages: validMessagesForAPI as any,
+          stream: true,
+          temperature: 1,
+          stream_options: { include_usage: true },
+        } as any);
+
+        for await (const chunk of stream as any) {
+          if (chunk.usage) {
+            reportedUsage = chunk.usage;
+          }
+          if (chunk.choices[0]?.delta?.content) {
+            const contentChunk = chunk.choices[0].delta.content;
+            fullContent += contentChunk;
+            io.to(roomId).emit('ai_chunk', { messageId: aiMessageId, chunk: contentChunk, roomId });
+            if (fullContent.length % 100 === 0) {
+              openaiLogger.debug('Streaming AI chunk', { messageId: aiMessageId, contentLength: fullContent.length });
+            }
           }
         }
       }
