@@ -51,7 +51,7 @@ export const FALLBACK_AI_MODELS: AIModelOption[] = [
     apiModel: 'claude-opus-4-7',
     provider: 'anthropic',
     label: 'Claude Opus 4.7',
-    pricing: { currency: 'USD', inputPerMillion: 15, cachedInputPerMillion: 1.50, outputPerMillion: 75 },
+    pricing: { currency: 'USD', inputPerMillion: 5, cachedInputPerMillion: 0.50, outputPerMillion: 25 },
     isPremium: true,
   },
   {

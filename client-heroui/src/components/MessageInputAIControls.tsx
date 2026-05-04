@@ -166,6 +166,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               <SelectItem
                 key={model.id}
                 description={formatModelPrice(model)}
+                textValue={model.isDefault ? `${model.label} (${t('defaultModel')})` : model.label}
               >
                 <span className="flex items-center gap-1.5">
                   <span>{model.isDefault ? `${model.label} (${t('defaultModel')})` : model.label}</span>
