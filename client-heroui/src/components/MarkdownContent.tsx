@@ -30,6 +30,21 @@ const tooltipClassNames = {
   content: "border border-[#dedbd0] bg-[#faf9f5] px-2 py-1 text-xs font-medium text-[#141413] shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5]",
 };
 
+const codeBlockFrameClassName =
+  "mb-2 max-w-full min-w-0 overflow-hidden rounded-lg border border-[#dedbd0] bg-[#fbfaf6] text-[#141413] shadow-[0_0_0_1px_rgba(194,192,182,0.18)] dark:border-[#3d3d3a] dark:bg-[#242421] dark:text-[#faf9f5] dark:shadow-none";
+
+const codeBlockHeaderClassName =
+  "flex items-center justify-between border-b border-[#dedbd0] bg-[#f0eee6] px-2.5 py-1.5 text-[#4d4c48] dark:border-[#3d3d3a] dark:bg-[#1d1d1b] dark:text-[#e8e6dc]";
+
+const codeBlockCopyButtonClassName =
+  "rounded px-1.5 py-0.5 text-xs font-medium text-[#5e5d59] transition-colors hover:bg-[#dedbd0] hover:text-[#141413] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]";
+
+const codeBlockBodyClassName =
+  "overflow-x-auto bg-[#fbfaf6] whitespace-pre-wrap break-all dark:bg-[#242421]";
+
+const inlineCodeClassName =
+  "rounded-md border border-[#dedbd0] bg-[#f0eee6] px-1.5 py-0.5 font-mono text-[0.92em] font-semibold text-[#7a321f] shadow-[inset_0_0_0_1px_rgba(250,249,245,0.35)] dark:border-[#4d4c48] dark:bg-[#30302e] dark:text-[#ffd7c2] dark:shadow-none";
+
 /** 预处理：移除仅分割线行 */
 const removeSeparators = (content: string): string =>
   content
@@ -166,10 +181,10 @@ const CodeBlock = memo<CodeBlockProps>(({ className, children }) => {
 
   if (language === "mermaid") {
     return (
-      <div className="mb-2 max-w-full min-w-0 overflow-hidden rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-[#141413] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5]">
-        <div className="flex items-center justify-between bg-[#30302e] px-2 py-1 text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413]">
-          <span className="text-xs uppercase">{language}</span>
-          <button onClick={handleCopy} className="rounded px-1 text-xs transition-colors hover:bg-white/10 dark:hover:bg-black/10">
+      <div className={codeBlockFrameClassName}>
+        <div className={codeBlockHeaderClassName}>
+          <span className="text-xs font-semibold uppercase tracking-wide">{language}</span>
+          <button onClick={handleCopy} className={codeBlockCopyButtonClassName}>
             {copied ? t('copied') : t('copy')}
           </button>
         </div>
@@ -184,19 +199,17 @@ const CodeBlock = memo<CodeBlockProps>(({ className, children }) => {
   // 普通代码高亮
   return (
     // Outer container for border and header
-    <div className="mb-2 max-w-full min-w-0 overflow-hidden rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-[#141413] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5]">
+    <div className={codeBlockFrameClassName}>
       {/* Header */}
-      <div className="flex items-center justify-between bg-[#30302e] px-2 py-1 text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413]">
-        <span className="text-xs uppercase">{language}</span>
-        <button onClick={handleCopy} className="rounded px-1 text-xs transition-colors hover:bg-white/10 dark:hover:bg-black/10">
+      <div className={codeBlockHeaderClassName}>
+        <span className="text-xs font-semibold uppercase tracking-wide">{language}</span>
+        <button onClick={handleCopy} className={codeBlockCopyButtonClassName}>
           {copied ? t('copied') : t('copy')}
         </button>
       </div>
 
       {/* Add this wrapper div for horizontal scrolling */}
-      <div
-        className="overflow-x-auto bg-[#faf9f5] whitespace-pre-wrap break-all dark:bg-[#1d1d1b]"
-      > {/* Apply background here too */}
+      <div className={codeBlockBodyClassName}>
         <SyntaxHighlighter
           language={language}
           style={themeDark ? oneDark : oneLight}
@@ -339,7 +352,7 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content, 
       },
       // 行内代码统一渲染为普通文本
       code: { component: ({ children }: { children: ReactNode }) => (
-        <code className="rounded bg-current/10 px-1 font-mono text-xs text-inherit">
+        <code className={inlineCodeClassName}>
           {children}
         </code>
       ) },
