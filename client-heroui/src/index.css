@@ -104,7 +104,7 @@ body {
   color: inherit;
 }
 
-.message-markdown :where(p, div, span, li, strong, em, blockquote, code, a):not(:where(pre, pre *)) {
+.message-markdown :where(p, div, span, li, strong, em, blockquote, a):not(:where(pre, pre *)) {
   color: inherit !important;
 }
 
