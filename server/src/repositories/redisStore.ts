@@ -5,6 +5,23 @@ import { AICost, Message, Room, RoomAICostTotal } from '../types';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 
+const parseTime = (timestamp?: string): number => {
+  const time = Date.parse(timestamp || '');
+  return Number.isFinite(time) ? time : 0;
+};
+
+const getRoomActivityTime = (room: Room): number => parseTime(room.lastActivityAt || room.createdAt);
+
+const getLatestMessageTimestamp = (messages: Message[]): string | undefined => {
+  return messages.reduce<string | undefined>((latest, message) => {
+    if (!latest || parseTime(message.timestamp) > parseTime(latest)) {
+      return message.timestamp;
+    }
+
+    return latest;
+  }, undefined);
+};
+
 export class RedisStore {
   constructor(
     private readonly redisClient: RedisClientType,
@@ -41,16 +58,19 @@ export class RedisStore {
     return nanoid(16);
   }
 
-  async appendMessage(message: Message): Promise<void> {
+  async appendMessage(message: Message): Promise<Room | null> {
     try {
       await this.redisClient.rPush(`room:${message.roomId}:messages`, JSON.stringify(message));
+      const updatedRoom = await this.updateRoomLastActivity(message.roomId, message.timestamp);
       this.logger.debug('Message appended to Redis list', { messageId: message.id, roomId: message.roomId });
+      return updatedRoom;
     } catch (error) {
       this.logger.error('Error appending message to Redis', { error, messageId: message.id, roomId: message.roomId });
+      return null;
     }
   }
 
-  async saveMessageHistory(roomId: string, messages: Message[]): Promise<void> {
+  async saveMessageHistory(roomId: string, messages: Message[]): Promise<Room | null> {
     try {
       const messageKey = `room:${roomId}:messages`;
       await this.redisClient.del(messageKey);
@@ -58,9 +78,12 @@ export class RedisStore {
         const messageStrings = messages.map(message => JSON.stringify(message));
         await this.redisClient.rPush(messageKey, messageStrings);
       }
+      const updatedRoom = await this.updateRoomLastActivity(roomId, getLatestMessageTimestamp(messages));
       this.logger.debug('Message history saved/overwritten to Redis', { roomId, count: messages.length });
+      return updatedRoom;
     } catch (error) {
       this.logger.error('Error saving message history to Redis', { error, roomId });
+      return null;
     }
   }
 
@@ -137,7 +160,10 @@ export class RedisStore {
         roomIds.map((id: string) => this.redisClient.hGet('rooms', id))
       );
       this.logger.debug('Rooms read by user from Redis', { clientId, count: roomIds.length });
-      return rooms.filter(room => room).map((room: string | undefined) => JSON.parse(room!));
+      return rooms
+        .filter(room => room)
+        .map((room: string | undefined) => JSON.parse(room!))
+        .sort((first: Room, second: Room) => getRoomActivityTime(second) - getRoomActivityTime(first));
     } catch (error) {
       this.logger.error('Error reading rooms for user from Redis', { error, clientId });
       return [];
@@ -151,6 +177,26 @@ export class RedisStore {
       return roomStr ? JSON.parse(roomStr) : null;
     } catch (error) {
       this.logger.error('Error reading room by id from Redis', { error, roomId });
+      return null;
+    }
+  }
+
+  async updateRoomLastActivity(roomId: string, lastActivityAt?: string): Promise<Room | null> {
+    try {
+      const room = await this.getRoomById(roomId);
+      if (!room) {
+        this.logger.warn('Cannot update last activity for missing room', { roomId });
+        return null;
+      }
+
+      const updatedRoom = {
+        ...room,
+        lastActivityAt: lastActivityAt || room.createdAt,
+      };
+      await this.redisClient.hSet('rooms', roomId, JSON.stringify(updatedRoom));
+      return updatedRoom;
+    } catch (error) {
+      this.logger.error('Error updating room last activity', { error, roomId, lastActivityAt });
       return null;
     }
   }

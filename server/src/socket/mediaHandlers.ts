@@ -69,7 +69,10 @@ export function registerMediaHandlers({ io, socket, store, socketLogger }: Socke
         username: payload.username,
         avatar: payload.avatar,
       });
-      await store.appendMessage(message);
+      const updatedRoom = await store.appendMessage(message);
+      if (updatedRoom) {
+        io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+      }
       io.to(session.roomId).emit('new_message', message);
       socketLogger.info('Completed image upload and processed message', { fileId: payload.fileId, roomId: session.roomId, clientId: session.clientId });
     } catch (err) {

@@ -19,13 +19,14 @@ import {
 import { saveRoom, removeRoom, isRoomSaved, getSavedRooms } from "../utils/storage";
 import { generateRandomName } from "../utils/userProfile";
 import { getStoredRoom, getStoredUsername, getStoredView, saveCurrentRoom, saveCurrentView, saveUsername, AppView } from "../utils/appPersistence";
-import { buildRoomShareUrl, getRoomMemberUpdate, upsertRoom } from "../utils/roomState";
+import { buildRoomShareUrl, getRoomMemberUpdate, sortRoomsByLastActivityDesc, upsertRoom } from "../utils/roomState";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { AppHeader } from "../components/AppHeader";
 import { SettingsView } from "../components/SettingsView";
 import { RoomJoinModal } from "../components/RoomJoinModal";
 import { BottomNav } from "../components/BottomNav";
+import { DesktopSidebar } from "../components/DesktopSidebar";
 import { WelcomeView } from "../components/WelcomeView";
 import { ChatRoomView } from "../components/ChatRoomView";
 
@@ -231,13 +232,18 @@ export const MessagePage: React.FC = () => {
 
   // 监听服务器返回的房间列表和新增房间
   useEffect(() => {
-    const handleRoomList = (roomList: Room[]) => setRooms(roomList);
-    const handleNewRoom = (room: Room) => setRooms((prev) => upsertRoom(prev, room));
+    const handleRoomList = (roomList: Room[]) => setRooms(sortRoomsByLastActivityDesc(roomList));
+    const handleRoomUpdate = (room: Room) => {
+      setRooms((prev) => sortRoomsByLastActivityDesc(upsertRoom(prev, room)));
+      setCurrentRoom((current) => current?.id === room.id ? { ...current, ...room } : current);
+      setSavedRooms((prev) => prev.map((savedRoom) => savedRoom.id === room.id ? { ...savedRoom, ...room } : savedRoom));
+    };
     let clearMemberEventTimer: ReturnType<typeof setTimeout> | undefined;
 
     socket.on("room_list", handleRoomList);
     socket.emit("get_rooms");
-    socket.on("new_room", handleNewRoom);
+    socket.on("new_room", handleRoomUpdate);
+    socket.on("room_updated", handleRoomUpdate);
 
     // 取消注册回调的清理函数
     const unsubscribe = onRoomMemberChange((event: RoomMemberEvent) => {
@@ -261,7 +267,8 @@ export const MessagePage: React.FC = () => {
         clearTimeout(clearMemberEventTimer);
       }
       socket.off("room_list", handleRoomList);
-      socket.off("new_room", handleNewRoom);
+      socket.off("new_room", handleRoomUpdate);
+      socket.off("room_updated", handleRoomUpdate);
       unsubscribe();
     };
   }, [currentRoom]);
@@ -510,14 +517,29 @@ export const MessagePage: React.FC = () => {
         handleCopyToClipboard={handleCopyToClipboard}
       />
 
-      {/* 错误和成功消息 - 暂时移除直接调用，依赖其他组件处理 */}
-      {/* {error && <SomeErrorComponent message={error} />} */}
-      {/* {success && <SomeSuccessComponent message={success} />} */}
+      <div className="min-h-0 flex-1 overflow-hidden md:flex">
+        <DesktopSidebar
+          clientId={clientId}
+          username={username}
+          view={view}
+          setView={setView}
+          rooms={rooms}
+          savedRooms={savedRooms}
+          currentRoom={currentRoom}
+          i18n={i18n}
+          changeLanguage={changeLanguage}
+          toggleTheme={toggleTheme}
+          isDark={isDark}
+          handleCopyToClipboard={handleCopyToClipboard}
+          onRoomSelect={handleRoomSelect}
+          onDeleteRoom={handleDeleteRoom}
+        />
 
-      {/* 主内容区域， flex-1 使其填充剩余空间，overflow-hidden 避免双重滚动条 */}
-      <main className="min-h-0 flex-1 overflow-hidden">
-        {renderContent()} {/* 渲染当前视图 */}
-      </main>
+        {/* 主内容区域， flex-1 使其填充剩余空间，overflow-hidden 避免双重滚动条 */}
+        <main className="min-h-0 flex-1 overflow-hidden">
+          {renderContent()} {/* 渲染当前视图 */}
+        </main>
+      </div>
 
       {/* 底部导航栏 - 移除 view !== "settings" 条件 */}
       <BottomNav view={view} setView={setView} currentRoom={currentRoom} />

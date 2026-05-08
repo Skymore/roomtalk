@@ -55,11 +55,13 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     }
 
     const roomId = await store.generateUniqueRoomId();
+    const timestamp = new Date().toISOString();
     const room: Room = {
       id: roomId,
       name: roomData.name,
       description: roomData.description || '',
-      createdAt: new Date().toISOString(),
+      createdAt: timestamp,
+      lastActivityAt: timestamp,
       creatorId: clientId,
     };
 
@@ -96,7 +98,10 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     const loggableMessage = routeLogger.formatMessageForLog(message);
     routeLogger.info('Received HTTP API message', { ...loggableMessage, ip: req.ip });
 
-    await store.appendMessage(message);
+    const updatedRoom = await store.appendMessage(message);
+    if (updatedRoom) {
+      io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+    }
     io.to(roomId).emit('new_message', message);
     return res.status(201).json(message);
   });

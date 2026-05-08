@@ -13,11 +13,13 @@ export function createRoomRecord(input: {
   creatorId: string;
   now?: Date;
 }): Room {
+  const timestamp = (input.now || new Date()).toISOString();
   return {
     id: input.roomId,
     name: input.name,
     description: input.description || '',
-    createdAt: (input.now || new Date()).toISOString(),
+    createdAt: timestamp,
+    lastActivityAt: timestamp,
     creatorId: input.creatorId,
   };
 }

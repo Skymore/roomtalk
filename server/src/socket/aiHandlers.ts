@@ -170,7 +170,10 @@ export function registerAIHandlers({
       };
 
       try {
-        await store.saveMessageHistory(roomId, buildFinalAIHistory(historyUsedForContext, finalAiMessage));
+        const updatedRoom = await store.saveMessageHistory(roomId, buildFinalAIHistory(historyUsedForContext, finalAiMessage));
+        if (updatedRoom) {
+          io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+        }
       } catch (err) {
         openaiLogger.error('Failed to save E2E fake AI history', { error: err, messageId: aiMessageId });
       }
@@ -280,7 +283,10 @@ export function registerAIHandlers({
       };
       const finalHistoryToSave = buildFinalAIHistory(historyUsedForContext, finalAiMessage);
 
-      store.saveMessageHistory(roomId, finalHistoryToSave).then(() => {
+      store.saveMessageHistory(roomId, finalHistoryToSave).then((updatedRoom) => {
+        if (updatedRoom) {
+          io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+        }
         openaiLogger.info('Saved final AI message and its context history to Redis', {
           messageId: aiMessageId,
           historyLength: finalHistoryToSave.length,

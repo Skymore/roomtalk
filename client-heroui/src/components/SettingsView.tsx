@@ -36,133 +36,144 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const currentLanguage = getLanguageOption(i18n.language);
 
   return (
-    <div className="flex h-full w-full overflow-y-auto p-4 md:p-6">
-      <div className="mx-auto flex w-full max-w-md flex-col rounded-2xl border border-[#dedbd0] bg-[#faf9f5] p-6 shadow-[0_0_0_1px_rgba(194,192,182,0.35)] dark:border-[#30302e] dark:bg-[#1d1d1b]">
-      {/* 头像展示 */}
-      <div className="flex flex-col items-center mb-8">
-        <Avatar
-          name={getAvatarText(username)}
-          color={getAvatarColor(username) as any}
-          size="lg"
-          className="bg-[#30302e] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413]"
-        />
-        <p className="mt-2 text-sm text-[#5e5d59] dark:text-[#b0aea5]">{t("profile")}</p>
-      </div>
+    <div className="h-full w-full overflow-y-auto p-4 md:p-8">
+      <div className="mx-auto flex w-full max-w-3xl flex-col">
+        <div className="mb-8 flex items-center gap-4">
+          <Avatar
+            name={getAvatarText(username)}
+            color={getAvatarColor(username) as any}
+            size="lg"
+            className="bg-[#30302e] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413]"
+          />
+          <div className="min-w-0">
+            <h2 className="text-xl font-semibold text-[#141413] dark:text-[#faf9f5]">{t("settings")}</h2>
+            <p className="mt-1 truncate text-sm text-[#5e5d59] dark:text-[#b0aea5]">{t("profile")}</p>
+          </div>
+        </div>
 
-      {/* 资料列表 */}
-      <div className="space-y-6">
-        {/* 用户名行 - 内联编辑 */}
-        <div className="flex items-center">
-          <div className="w-24 text-[#5e5d59] dark:text-[#b0aea5]">{t("username")}:</div>
-          {showEditUsername ? (
-            <div className="flex-1 flex gap-2">
-              <Input
-                autoFocus
-                size="sm"
-                className="flex-1"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleSaveUsername();
-                  if (e.key === "Escape") setShowEditUsername(false);
-                }}
-              />
-              <div className="flex gap-1">
-                <Button isIconOnly size="sm" color="secondary" onPress={handleSaveUsername} aria-label={t("save")}>
-                  <Icon icon="lucide:check" className="text-sm" />
-                </Button>
-                <Button isIconOnly size="sm" variant="flat" onPress={() => setShowEditUsername(false)} aria-label={t("cancel")}>
-                  <Icon icon="lucide:x" className="text-sm" />
+        <section className="border-t border-[#dedbd0] dark:border-[#30302e]">
+          <div className="flex min-h-[72px] flex-col gap-3 border-b border-[#dedbd0] py-4 dark:border-[#30302e] sm:flex-row sm:items-center">
+            <div className="w-full text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5] sm:w-32">
+              {t("username")}
+            </div>
+            {showEditUsername ? (
+              <div className="flex min-w-0 flex-1 gap-2">
+                <Input
+                  autoFocus
+                  size="sm"
+                  className="min-w-0 flex-1"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleSaveUsername();
+                    if (e.key === "Escape") setShowEditUsername(false);
+                  }}
+                />
+                <div className="flex flex-shrink-0 gap-1">
+                  <Button isIconOnly size="sm" color="secondary" onPress={handleSaveUsername} aria-label={t("save")}>
+                    <Icon icon="lucide:check" className="text-sm" />
+                  </Button>
+                  <Button isIconOnly size="sm" variant="flat" onPress={() => setShowEditUsername(false)} aria-label={t("cancel")}>
+                    <Icon icon="lucide:x" className="text-sm" />
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex min-w-0 flex-1 items-center gap-2">
+                <code className="min-w-0 flex-1 truncate rounded-md bg-[#e8e6dc] px-3 py-2 text-sm font-semibold text-[#4d4c48] dark:bg-[#30302e] dark:text-[#faf9f5]">
+                  {username}
+                </code>
+                <Button
+                  isIconOnly
+                  size="sm"
+                  variant="light"
+                  className="h-8 w-8 min-w-8 flex-shrink-0 text-[#c96442] dark:text-[#d97757]"
+                  onPress={() => setShowEditUsername(true)}
+                  aria-label={t("editUsername")}
+                >
+                  <Icon icon="lucide:edit" className="text-sm" />
                 </Button>
               </div>
+            )}
+          </div>
+
+          <div className="flex min-h-[72px] flex-col gap-3 border-b border-[#dedbd0] py-4 dark:border-[#30302e] sm:flex-row sm:items-center">
+            <div className="w-full text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5] sm:w-32">
+              {t("userId")}
             </div>
-          ) : (
-            <>
-              <code className="flex-1 rounded bg-[#e8e6dc] px-3 py-1 text-sm font-semibold text-[#4d4c48] dark:bg-[#30302e] dark:text-[#faf9f5]">
-                {username}
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <code className="min-w-0 flex-1 break-all rounded-md bg-[#e8e6dc] px-3 py-2 text-xs text-[#4d4c48] dark:bg-[#30302e] dark:text-[#faf9f5]">
+                {clientId}
               </code>
               <Button
                 isIconOnly
                 size="sm"
                 variant="light"
-                className="ml-1 h-8 w-8 min-w-0 text-[#c96442] dark:text-[#d97757]"
-                onPress={() => setShowEditUsername(true)}
-                aria-label={t("editUsername")}
+                className="h-8 w-8 min-w-8 flex-shrink-0 text-[#c96442] dark:text-[#d97757]"
+                onPress={() => handleCopyToClipboard(clientId)}
+                aria-label={t("copyUserId")}
               >
-                <Icon icon="lucide:edit" className="text-sm" />
+                <Icon icon="lucide:copy" className="text-sm" />
               </Button>
-            </>
-          )}
-        </div>
+            </div>
+          </div>
+        </section>
 
-        {/* ID行 */}
-        <div className="flex items-center">
-          <div className="w-24 text-[#5e5d59] dark:text-[#b0aea5]">{t("userId")}:</div>
-          <code className="flex-1 overflow-hidden text-ellipsis break-all rounded bg-[#e8e6dc] px-3 py-1 text-xs text-[#4d4c48] dark:bg-[#30302e] dark:text-[#faf9f5]">
-            {clientId}
-          </code>
-          <Button
-            isIconOnly
-            size="sm"
-            variant="light"
-            className="ml-1 h-8 w-8 min-w-0 text-[#c96442] dark:text-[#d97757]"
-            onPress={() => handleCopyToClipboard(clientId)}
-            aria-label={t("copyUserId")}
-          >
-            <Icon icon="lucide:copy" className="text-sm" />
-          </Button>
-        </div>
+        <section className="mt-8 border-t border-[#dedbd0] dark:border-[#30302e]">
+          <div className="flex min-h-[72px] flex-col gap-3 border-b border-[#dedbd0] py-4 dark:border-[#30302e] sm:flex-row sm:items-center">
+            <div className="w-full text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5] sm:w-32">
+              {t("language")}
+            </div>
+            <Dropdown>
+              <DropdownTrigger>
+                <Button
+                  variant="flat"
+                  className="w-full justify-start rounded-lg bg-[#e8e6dc] text-[#4d4c48] dark:bg-[#30302e] dark:text-[#faf9f5] sm:max-w-sm"
+                  startContent={<Icon icon={currentLanguage.icon} />}
+                  endContent={<Icon icon="lucide:chevron-down" width={14} />}
+                >
+                  {t(currentLanguage.labelKey)}
+                </Button>
+              </DropdownTrigger>
+              <DropdownMenu
+                aria-label={t("languageSelection")}
+                onAction={(key) => changeLanguage(String(key))}
+              >
+                {languageOptions.map((option) => (
+                  <DropdownItem key={option.key} textValue={t(option.labelKey)} startContent={<Icon icon={option.icon} />}>
+                    {t(option.labelKey)}
+                  </DropdownItem>
+                ))}
+              </DropdownMenu>
+            </Dropdown>
+          </div>
 
-        {/* 语言选择 */}
-        <div className="flex items-center">
-          <div className="w-24 text-[#5e5d59] dark:text-[#b0aea5]">{t("language")}:</div>
-          <Dropdown>
-            <DropdownTrigger>
+          <div className="flex min-h-[72px] flex-col gap-3 border-b border-[#dedbd0] py-4 dark:border-[#30302e] sm:flex-row sm:items-center">
+            <div className="w-full text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5] sm:w-32">
+              {t("appearance")}
+            </div>
+            <div className="flex w-full gap-2 sm:max-w-sm">
               <Button
-                variant="flat"
-                className="flex-1"
-                startContent={<Icon icon={currentLanguage.icon} />}
-                endContent={<Icon icon="lucide:chevron-down" width={14} />}
+                className={`flex-1 ${!isDark ? "bg-[#c96442] text-[#faf9f5]" : ""}`}
+                variant={isDark ? "flat" : "solid"}
+                color="secondary"
+                startContent={<Icon icon="lucide:sun" />}
+                onPress={() => isDark && setTheme("light")}
               >
-                {t(currentLanguage.labelKey)}
+                {t("lightMode")}
               </Button>
-            </DropdownTrigger>
-            <DropdownMenu
-              aria-label={t("languageSelection")}
-              onAction={(key) => changeLanguage(String(key))}
-            >
-              {languageOptions.map((option) => (
-                <DropdownItem key={option.key} textValue={t(option.labelKey)} startContent={<Icon icon={option.icon} />}>
-                  {t(option.labelKey)}
-                </DropdownItem>
-              ))}
-            </DropdownMenu>
-          </Dropdown>
-        </div>
-
-        {/* 主题选择 */}
-        <div className="flex items-center">
-          <div className="w-24 text-[#5e5d59] dark:text-[#b0aea5]">{t("appearance")}:</div>
-          <Button
-            className={`flex-1 ${!isDark ? "bg-[#c96442] text-[#faf9f5]" : ""}`}
-            variant={isDark ? "flat" : "solid"}
-            color="secondary"
-            startContent={<Icon icon="lucide:sun" />}
-            onPress={() => isDark && setTheme("light")}
-          >
-            {t("lightMode")}
-          </Button>
-          <Button
-            className={`ml-2 flex-1 ${isDark ? "bg-[#c96442] text-[#faf9f5]" : ""}`}
-            variant={!isDark ? "flat" : "solid"}
-            color="secondary"
-            startContent={<Icon icon="lucide:moon" />}
-            onPress={() => !isDark && setTheme("dark")}
-          >
-            {t("darkMode")}
-          </Button>
-        </div>
-      </div>
+              <Button
+                className={`flex-1 ${isDark ? "bg-[#c96442] text-[#faf9f5]" : ""}`}
+                variant={!isDark ? "flat" : "solid"}
+                color="secondary"
+                startContent={<Icon icon="lucide:moon" />}
+                onPress={() => !isDark && setTheme("dark")}
+              >
+                {t("darkMode")}
+              </Button>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
   );

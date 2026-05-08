@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   buildRoomShareUrl,
+  getRoomActivityAt,
   getRoomMemberUpdate,
   isJoinedRoomForClient,
   removeRoomById,
+  sortRoomsByLastActivityDesc,
   upsertRoom,
   validateRoomName,
 } from "./roomState";
@@ -33,6 +35,19 @@ describe("roomState", () => {
 
     expect(removeRoomById([first, second], "room-1")).toEqual([second]);
     expect(removeRoomById([first], "missing")).toEqual([first]);
+  });
+
+  it("sorts by last activity with a created-at fallback", () => {
+    const first = room("room-1", "First");
+    const second = room("room-2", "Second");
+    const third = room("room-3", "Third");
+    first.createdAt = "2026-01-01T00:00:00.000Z";
+    second.createdAt = "2026-01-02T00:00:00.000Z";
+    third.createdAt = "2026-01-03T00:00:00.000Z";
+    first.lastActivityAt = "2026-01-05T00:00:00.000Z";
+
+    expect(getRoomActivityAt(second)).toBe(second.createdAt);
+    expect(sortRoomsByLastActivityDesc([second, first, third])).toEqual([first, third, second]);
   });
 
   it("maps member updates only for the active room", () => {

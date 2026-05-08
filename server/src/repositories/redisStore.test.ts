@@ -167,7 +167,9 @@ describe('RedisStore', () => {
     assert.deepEqual(await store.getRoomById('room-1'), savedRoom);
     assert.deepEqual(await store.readRoomsByUser('client-1'), [savedRoom]);
 
-    await store.appendMessage(message());
+    const updatedRoom = await store.appendMessage(message({ timestamp: '2026-05-04T00:00:00.000Z' }));
+    assert.equal(updatedRoom?.lastActivityAt, '2026-05-04T00:00:00.000Z');
+    assert.deepEqual(await store.readRoomsByUser('client-1'), [updatedRoom]);
     await store.updateRoomMemberCount('room-1', 'client-1', true);
     await store.incrementRoomAICost('room-1', cost(0.5));
     await store.deleteRoom('room-1', 'client-1');

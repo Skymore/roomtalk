@@ -49,7 +49,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     <Navbar
       isBordered
       maxWidth="full"
-      className="hidden border-b border-[#dedbd0] bg-[#faf9f5]/88 backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/88 md:flex"
+      className="flex border-b border-[#dedbd0] bg-[#faf9f5]/88 backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/88 md:hidden"
     >
       <div className="w-full mx-auto px-2 sm:px-8 flex justify-between items-center">
         <NavbarBrand

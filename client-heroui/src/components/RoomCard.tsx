@@ -4,6 +4,7 @@ import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 import { Room } from '../utils/types';
 import { formatDate } from '../utils/formatters';
+import { getRoomActivityAt } from '../utils/roomState';
 
 interface RoomCardProps {
   room: Room;
@@ -27,6 +28,7 @@ export const RoomCard: React.FC<RoomCardProps> = ({
   onDelete,
 }) => {
   const { t, i18n } = useTranslation();
+  const activityAt = getRoomActivityAt(room);
 
   const copyRoomId = (event: React.MouseEvent) => {
     event.stopPropagation();
@@ -67,9 +69,9 @@ export const RoomCard: React.FC<RoomCardProps> = ({
               <span className="hidden md:inline">{room.id}</span>
             </p>
 
-            {room.createdAt && (
+            {activityAt && (
               <span className="ml-2 hidden whitespace-nowrap text-xs text-[#87867f] dark:text-[#b0aea5] md:inline-block">
-                {formatDate(room.createdAt, i18n.language)}
+                {formatDate(activityAt, i18n.language)}
               </span>
             )}
 
