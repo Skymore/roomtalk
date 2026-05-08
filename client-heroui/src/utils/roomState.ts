@@ -11,6 +11,19 @@ export const upsertRoom = (rooms: Room[], room: Room): Room[] => {
   return updatedRooms;
 };
 
+export const getRoomActivityAt = (room: Room): string => {
+  return room.lastActivityAt || room.createdAt;
+};
+
+const getRoomActivityAtTime = (room: Room): number => {
+  const time = Date.parse(getRoomActivityAt(room));
+  return Number.isFinite(time) ? time : 0;
+};
+
+export const sortRoomsByLastActivityDesc = (rooms: Room[]): Room[] => {
+  return [...rooms].sort((first, second) => getRoomActivityAtTime(second) - getRoomActivityAtTime(first));
+};
+
 export const removeRoomById = (rooms: Room[], roomId: string): Room[] => {
   return rooms.filter(room => room.id !== roomId);
 };

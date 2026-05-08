@@ -215,7 +215,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
   return (
     <div className="p-4 md:p-6">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
-        <h2 className="font-serif text-2xl font-medium text-[#141413] dark:text-[#faf9f5]">{t('home')}</h2>
+        <h2 className="font-serif text-2xl font-medium text-[#141413] dark:text-[#faf9f5]">{t('chatRooms')}</h2>
         <div className="flex flex-wrap items-center gap-3">
           <RoomJoinControl
             value={joinRoomId}

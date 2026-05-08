@@ -31,6 +31,7 @@ describe('message domain', () => {
       name: 'General',
       description: '',
       createdAt: at.toISOString(),
+      lastActivityAt: at.toISOString(),
       creatorId: 'client-1',
     });
   });

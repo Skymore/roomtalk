@@ -53,7 +53,10 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
     const loggableMessage = socketLogger.formatMessageForLog(message);
     socketLogger.info('Received WebSocket message', loggableMessage);
 
-    await store.appendMessage(message);
+    const updatedRoom = await store.appendMessage(message);
+    if (updatedRoom) {
+      io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+    }
     io.to(messageData.roomId).emit('new_message', message);
   });
 
@@ -78,7 +81,10 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       }
 
       const updatedMessage = editResult.updatedMessage;
-      await store.saveMessageHistory(data.roomId, editResult.messages);
+      const updatedRoom = await store.saveMessageHistory(data.roomId, editResult.messages);
+      if (updatedRoom) {
+        io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+      }
 
       io.to(data.roomId).emit('message_edited', updatedMessage);
       socketLogger.info('Message edited successfully', { messageId: data.messageId, roomId: data.roomId, editorClientId: clientId });
@@ -111,7 +117,10 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
         return callback?.({ success: true });
       }
 
-      await store.saveMessageHistory(data.roomId, deleteResult.messages);
+      const updatedRoom = await store.saveMessageHistory(data.roomId, deleteResult.messages);
+      if (updatedRoom) {
+        io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+      }
 
       io.to(data.roomId).emit('message_deleted', data.messageId, data.roomId);
       socketLogger.info('Message deleted successfully', { messageId: data.messageId, roomId: data.roomId, deleterClientId: clientId });

@@ -28,6 +28,7 @@ export interface Room {
   name: string;
   description?: string;
   createdAt: string;
+  lastActivityAt?: string;
   creatorId: string;
 }
 
