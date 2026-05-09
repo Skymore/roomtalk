@@ -29,36 +29,89 @@ export interface RealtimeRoomStore {
   resetAllDataForTests?(): Promise<void>;
 }
 
+export interface RoomMessageCacheStore {
+  readCachedRoomMessages(roomId: string): Promise<Message[] | null>;
+  writeRoomMessagesCache(roomId: string, messages: Message[]): Promise<void>;
+  invalidateRoomMessagesCache(roomId: string): Promise<void>;
+  invalidateAllRoomMessagesCaches(): Promise<void>;
+}
+
 export type RoomStore = DurableRoomStore & RealtimeRoomStore;
 
 export class CompositeRoomStore implements RoomStore {
   constructor(
     private readonly durableStore: DurableRoomStore,
-    private readonly realtimeStore: RealtimeRoomStore
+    private readonly realtimeStore: RealtimeRoomStore,
+    private readonly messageCacheStore?: RoomMessageCacheStore
   ) {}
+
+  private async ignoreCacheFailure(work: () => Promise<void>): Promise<void> {
+    try {
+      await work();
+    } catch {
+      // Cache failures must not affect durable writes.
+    }
+  }
+
+  private async invalidateRoomMessagesCache(roomId: string): Promise<void> {
+    if (!this.messageCacheStore) {
+      return;
+    }
+
+    await this.ignoreCacheFailure(() => this.messageCacheStore!.invalidateRoomMessagesCache(roomId));
+  }
 
   generateUniqueRoomId() {
     return this.durableStore.generateUniqueRoomId();
   }
 
-  appendMessage(message: Message) {
-    return this.durableStore.appendMessage(message);
+  async appendMessage(message: Message) {
+    const updatedRoom = await this.durableStore.appendMessage(message);
+    if (updatedRoom) {
+      await this.invalidateRoomMessagesCache(message.roomId);
+    }
+    return updatedRoom;
   }
 
-  upsertMessage(message: Message) {
-    return this.durableStore.upsertMessage(message);
+  async upsertMessage(message: Message) {
+    const updatedRoom = await this.durableStore.upsertMessage(message);
+    if (updatedRoom) {
+      await this.invalidateRoomMessagesCache(message.roomId);
+    }
+    return updatedRoom;
   }
 
-  saveMessageHistory(roomId: string, messages: Message[]) {
-    return this.durableStore.saveMessageHistory(roomId, messages);
+  async saveMessageHistory(roomId: string, messages: Message[]) {
+    const updatedRoom = await this.durableStore.saveMessageHistory(roomId, messages);
+    if (updatedRoom) {
+      await this.invalidateRoomMessagesCache(roomId);
+    }
+    return updatedRoom;
   }
 
-  clearRoomMessages(roomId: string) {
-    return this.durableStore.clearRoomMessages(roomId);
+  async clearRoomMessages(roomId: string) {
+    const count = await this.durableStore.clearRoomMessages(roomId);
+    await this.invalidateRoomMessagesCache(roomId);
+    return count;
   }
 
-  readMessagesByRoom(roomId: string) {
-    return this.durableStore.readMessagesByRoom(roomId);
+  async readMessagesByRoom(roomId: string) {
+    if (this.messageCacheStore) {
+      try {
+        const cachedMessages = await this.messageCacheStore.readCachedRoomMessages(roomId);
+        if (cachedMessages) {
+          return cachedMessages;
+        }
+      } catch {
+        // Cache failures must fall through to durable reads.
+      }
+    }
+
+    const messages = await this.durableStore.readMessagesByRoom(roomId);
+    if (this.messageCacheStore) {
+      await this.ignoreCacheFailure(() => this.messageCacheStore!.writeRoomMessagesCache(roomId, messages));
+    }
+    return messages;
   }
 
   readRoomAICost(roomId: string) {
@@ -81,8 +134,9 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.getRoomById(roomId);
   }
 
-  deleteRoom(roomId: string, creatorId: string) {
-    return this.durableStore.deleteRoom(roomId, creatorId);
+  async deleteRoom(roomId: string, creatorId: string) {
+    await this.durableStore.deleteRoom(roomId, creatorId);
+    await this.invalidateRoomMessagesCache(roomId);
   }
 
   countRooms() {
@@ -108,8 +162,12 @@ export class CompositeRoomStore implements RoomStore {
     }
   }
 
-  failInterruptedStreamingMessages(content: string) {
-    return this.durableStore.failInterruptedStreamingMessages?.(content) || Promise.resolve(0);
+  async failInterruptedStreamingMessages(content: string) {
+    const updatedCount = await (this.durableStore.failInterruptedStreamingMessages?.(content) || Promise.resolve(0));
+    if (updatedCount > 0 && this.messageCacheStore) {
+      await this.ignoreCacheFailure(() => this.messageCacheStore!.invalidateAllRoomMessagesCaches());
+    }
+    return updatedCount;
   }
 
   updateRoomMemberCount(roomId: string, clientId: string, isJoining: boolean) {

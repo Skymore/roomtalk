@@ -87,7 +87,7 @@ if (PERSISTENCE_STORE === 'postgres') {
   }
 
   postgresStore = new PostgresStore(createPostgresPool(databaseUrl, postgresLogger), postgresLogger);
-  store = new CompositeRoomStore(postgresStore, redisStore);
+  store = new CompositeRoomStore(postgresStore, redisStore, redisStore);
   activePersistenceStore = 'postgres';
 } else if (PERSISTENCE_STORE !== 'redis') {
   serverLogger.warn('Unknown PERSISTENCE_STORE value, falling back to Redis', { persistenceStore: PERSISTENCE_STORE });

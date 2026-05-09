@@ -2,9 +2,22 @@ import { customAlphabet } from 'nanoid';
 import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
 import { AICost, Message, Room, RoomAICostTotal } from '../types';
-import { RoomStore } from './store';
+import { RoomMessageCacheStore, RoomStore } from './store';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
+const DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS = 30;
+const ROOM_MESSAGES_CACHE_KEY_PREFIX = 'cache:room:';
+const ROOM_MESSAGES_CACHE_KEY_SUFFIX = ':messages';
+
+export const resolveRoomMessagesCacheTtlSeconds = (env: NodeJS.ProcessEnv = process.env): number => {
+  const rawValue = env.ROOM_MESSAGES_CACHE_TTL_SECONDS;
+  if (!rawValue) {
+    return DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS;
+  }
+
+  const parsed = Number.parseInt(rawValue, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+};
 
 const APPEND_MESSAGE_LIST_SCRIPT = `
 local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
@@ -112,11 +125,107 @@ const parseScriptRoom = (result: unknown, index: number): Room | null => {
   }
 };
 
-export class RedisStore implements RoomStore {
+export class RedisStore implements RoomStore, RoomMessageCacheStore {
   constructor(
     private readonly redisClient: RedisClientType,
-    private readonly logger: Logger
+    private readonly logger: Logger,
+    private readonly roomMessagesCacheTtlSeconds = resolveRoomMessagesCacheTtlSeconds()
   ) {}
+
+  getRoomMessagesCacheKey(roomId: string): string {
+    return `${ROOM_MESSAGES_CACHE_KEY_PREFIX}${roomId}${ROOM_MESSAGES_CACHE_KEY_SUFFIX}`;
+  }
+
+  async readCachedRoomMessages(roomId: string): Promise<Message[] | null> {
+    const cacheKey = this.getRoomMessagesCacheKey(roomId);
+    try {
+      const cached = await this.redisClient.get(cacheKey);
+      if (!cached) {
+        this.logger.debug('Room message cache miss', { roomId });
+        return null;
+      }
+
+      const parsed = JSON.parse(cached);
+      if (!Array.isArray(parsed)) {
+        await this.redisClient.del(cacheKey);
+        this.logger.warn('Invalid room message cache payload discarded', { roomId });
+        return null;
+      }
+
+      this.logger.debug('Room message cache hit', { roomId, count: parsed.length });
+      return parsed as Message[];
+    } catch (error) {
+      this.logger.error('Error reading room message cache', { error, roomId });
+      return null;
+    }
+  }
+
+  async writeRoomMessagesCache(roomId: string, messages: Message[]): Promise<void> {
+    if (this.roomMessagesCacheTtlSeconds <= 0) {
+      return;
+    }
+
+    try {
+      await this.redisClient.setEx(
+        this.getRoomMessagesCacheKey(roomId),
+        this.roomMessagesCacheTtlSeconds,
+        JSON.stringify(messages)
+      );
+      this.logger.debug('Room message cache written', { roomId, count: messages.length, ttlSeconds: this.roomMessagesCacheTtlSeconds });
+    } catch (error) {
+      this.logger.error('Error writing room message cache', { error, roomId });
+    }
+  }
+
+  async invalidateRoomMessagesCache(roomId: string): Promise<void> {
+    try {
+      await this.redisClient.del(this.getRoomMessagesCacheKey(roomId));
+      this.logger.debug('Room message cache invalidated', { roomId });
+    } catch (error) {
+      this.logger.error('Error invalidating room message cache', { error, roomId });
+    }
+  }
+
+  async invalidateAllRoomMessagesCaches(): Promise<void> {
+    try {
+      const pattern = `${ROOM_MESSAGES_CACHE_KEY_PREFIX}*${ROOM_MESSAGES_CACHE_KEY_SUFFIX}`;
+      const scanIterator = (this.redisClient as any).scanIterator;
+      const pendingKeys: string[] = [];
+
+      if (typeof scanIterator === 'function') {
+        for await (const keyOrKeys of scanIterator.call(this.redisClient, {
+          MATCH: pattern,
+          COUNT: 100,
+        })) {
+          if (Array.isArray(keyOrKeys)) {
+            pendingKeys.push(...keyOrKeys.map(String));
+          } else {
+            pendingKeys.push(String(keyOrKeys));
+          }
+
+          if (pendingKeys.length >= 100) {
+            await this.redisClient.del(pendingKeys.splice(0));
+          }
+        }
+      } else if (typeof (this.redisClient as any).keys === 'function') {
+        this.logger.warn('Redis scanIterator unavailable; falling back to KEYS for room message cache invalidation');
+        const keys = await (this.redisClient as any).keys(pattern);
+        if (Array.isArray(keys)) {
+          pendingKeys.push(...keys.map(String));
+        }
+      } else {
+        this.logger.error('Cannot invalidate all room message caches because Redis client supports neither scanIterator nor keys');
+        return;
+      }
+
+      if (pendingKeys.length > 0) {
+        await this.redisClient.del(pendingKeys);
+      }
+      this.logger.debug('All room message caches invalidated');
+    } catch (error) {
+      this.logger.error('Error invalidating all room message caches', { error });
+    }
+  }
 
   async generateUniqueRoomId(): Promise<string> {
     let attempts = 0;
@@ -407,6 +516,7 @@ export class RedisStore implements RoomStore {
       await Promise.all([
         this.redisClient.hDel('rooms', roomId),
         this.redisClient.del(`room:${roomId}:messages`),
+        this.redisClient.del(this.getRoomMessagesCacheKey(roomId)),
         this.redisClient.del(this.getRoomAICostKey(roomId)),
         this.redisClient.del(`room:${roomId}:members`),
         this.redisClient.sRem(`user:${creatorId}:rooms`, roomId),
@@ -442,12 +552,13 @@ export class RedisStore implements RoomStore {
       for (const roomId of roomIds) {
         const messages = await this.readMessagesByRoom(roomId);
         let changed = false;
+        let changedCount = 0;
         const updatedMessages = messages.map(message => {
           if (message.status !== 'streaming') {
             return message;
           }
           changed = true;
-          updatedCount++;
+          changedCount++;
           return {
             ...message,
             status: 'error' as const,
@@ -457,7 +568,11 @@ export class RedisStore implements RoomStore {
         });
 
         if (changed) {
-          await this.saveMessageHistory(roomId, updatedMessages);
+          const updatedRoom = await this.saveMessageHistory(roomId, updatedMessages);
+          if (updatedRoom) {
+            updatedCount += changedCount;
+            await this.invalidateRoomMessagesCache(roomId);
+          }
         }
       }
 

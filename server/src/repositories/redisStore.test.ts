@@ -74,14 +74,21 @@ class MemoryRedis {
     return list.slice(start, end);
   }
 
-  async del(key: string) {
-    const deleted = [
-      this.hashes.delete(key),
-      this.lists.delete(key),
-      this.sets.delete(key),
-      this.strings.delete(key),
-    ].some(Boolean);
-    return deleted ? 1 : 0;
+  async del(key: string | string[]) {
+    const keys = Array.isArray(key) ? key : [key];
+    let deletedCount = 0;
+    for (const item of keys) {
+      const deleted = [
+        this.hashes.delete(item),
+        this.lists.delete(item),
+        this.sets.delete(item),
+        this.strings.delete(item),
+      ].some(Boolean);
+      if (deleted) {
+        deletedCount++;
+      }
+    }
+    return deletedCount;
   }
 
   async sAdd(key: string, value: string) {
@@ -102,6 +109,10 @@ class MemoryRedis {
 
   async get(key: string) {
     return this.strings.get(key);
+  }
+
+  async setEx(key: string, _seconds: number, value: string) {
+    this.strings.set(key, value);
   }
 
   async incrByFloat(key: string, value: number) {
@@ -166,6 +177,33 @@ class MemoryRedis {
     this.sets.clear();
     this.strings.clear();
   }
+
+  async *scanIterator(options: { MATCH?: string }) {
+    const pattern = options.MATCH || '*';
+    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+    const matcher = new RegExp(`^${escaped}$`);
+    for (const key of [
+      ...this.hashes.keys(),
+      ...this.lists.keys(),
+      ...this.sets.keys(),
+      ...this.strings.keys(),
+    ]) {
+      if (matcher.test(key)) {
+        yield key;
+      }
+    }
+  }
+
+  async keys(pattern: string) {
+    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+    const matcher = new RegExp(`^${escaped}$`);
+    return [
+      ...this.hashes.keys(),
+      ...this.lists.keys(),
+      ...this.sets.keys(),
+      ...this.strings.keys(),
+    ].filter(key => matcher.test(key));
+  }
 }
 
 class CollisionThenUniqueRedis extends MemoryRedis {
@@ -178,8 +216,24 @@ class CollisionThenUniqueRedis extends MemoryRedis {
 }
 
 class FailingDeleteRedis extends MemoryRedis {
-  async del(key: string): Promise<0 | 1> {
+  async del(key: string | string[]): Promise<number> {
     throw new Error(`delete failed for ${key}`);
+  }
+}
+
+class KeysOnlyRedis extends MemoryRedis {
+  constructor() {
+    super();
+    (this as any).scanIterator = undefined;
+  }
+}
+
+class FailingReplaceRedis extends MemoryRedis {
+  async eval(script: string, options: { keys: string[]; arguments: string[] }) {
+    if (script.includes('for i = 3, #ARGV do')) {
+      throw new Error('replace failed');
+    }
+    return super.eval(script, options);
   }
 }
 
@@ -246,6 +300,7 @@ describe('RedisStore', () => {
     const updatedRoom = await store.appendMessage(message({ timestamp: '2026-05-04T00:00:00.000Z' }));
     assert.equal(updatedRoom?.lastActivityAt, '2026-05-04T00:00:00.000Z');
     assert.deepEqual(await store.readRoomsByUser('client-1'), [updatedRoom]);
+    await store.writeRoomMessagesCache('room-1', [message()]);
     await store.updateRoomMemberCount('room-1', 'client-1', true);
     await store.incrementRoomAICost('room-1', cost(0.5));
     await store.deleteRoom('room-1', 'client-1');
@@ -253,6 +308,7 @@ describe('RedisStore', () => {
     assert.equal(await store.countRooms(), 0);
     assert.equal(await store.getRoomById('room-1'), null);
     assert.deepEqual(await store.readMessagesByRoom('room-1'), []);
+    assert.equal(await store.readCachedRoomMessages('room-1'), null);
     assert.deepEqual(await store.readRoomsByUser('client-1'), []);
     assert.equal(await store.getRoomMemberCount('room-1'), 0);
     assert.equal(await redis.get(store.getRoomAICostKey('room-1')), undefined);
@@ -348,6 +404,41 @@ describe('RedisStore', () => {
     assert.deepEqual(await store.readRoomAICost('room-bad'), { roomId: 'room-bad', currency: 'USD', totalUsd: 0 });
   });
 
+  it('reads, writes, and invalidates room message caches', async () => {
+    const { redis, store } = createStore();
+    const cachedMessages = [message({ id: 'cached-message' })];
+    const cacheKey = store.getRoomMessagesCacheKey('room-1');
+
+    assert.equal(await store.readCachedRoomMessages('room-1'), null);
+
+    await store.writeRoomMessagesCache('room-1', cachedMessages);
+    assert.equal(typeof await redis.get(cacheKey), 'string');
+    assert.deepEqual(await store.readCachedRoomMessages('room-1'), cachedMessages);
+
+    await store.invalidateRoomMessagesCache('room-1');
+    assert.equal(await store.readCachedRoomMessages('room-1'), null);
+
+    await store.writeRoomMessagesCache('room-1', cachedMessages);
+    await store.writeRoomMessagesCache('room-2', [message({ id: 'cached-message-2', roomId: 'room-2' })]);
+    await store.invalidateAllRoomMessagesCaches();
+
+    assert.equal(await store.readCachedRoomMessages('room-1'), null);
+    assert.equal(await store.readCachedRoomMessages('room-2'), null);
+  });
+
+  it('falls back to KEYS when scanIterator is unavailable during full cache invalidation', async () => {
+    const redis = new KeysOnlyRedis();
+    const store = new RedisStore(redis as any, logger as any);
+
+    await store.writeRoomMessagesCache('room-1', [message({ id: 'cached-message-1' })]);
+    await store.writeRoomMessagesCache('room-2', [message({ id: 'cached-message-2', roomId: 'room-2' })]);
+
+    await store.invalidateAllRoomMessagesCaches();
+
+    assert.equal(await store.readCachedRoomMessages('room-1'), null);
+    assert.equal(await store.readCachedRoomMessages('room-2'), null);
+  });
+
   it('tracks member counts, client sessions, and per-socket room membership', async () => {
     const { store } = createStore();
 
@@ -384,23 +475,41 @@ describe('RedisStore', () => {
 
   it('marks interrupted streaming messages as errors on startup recovery', async () => {
     const { store } = createStore();
+    const streamingMessage = message({ id: 'm1', status: 'streaming', content: '' });
+    const completeMessage = message({ id: 'm2', status: 'complete', content: 'done' });
     await store.saveRoom(room());
     await store.saveMessageHistory('room-1', [
-      message({ id: 'm1', status: 'streaming', content: '' }),
-      message({ id: 'm2', status: 'complete', content: 'done' }),
+      streamingMessage,
+      completeMessage,
     ]);
+    await store.writeRoomMessagesCache('room-1', [streamingMessage, completeMessage]);
 
     assert.equal(await store.failInterruptedStreamingMessages('Response interrupted.'), 1);
+    assert.equal(await store.readCachedRoomMessages('room-1'), null);
 
-    assert.deepEqual(await store.readMessagesByRoom('room-1'), [
+    const recoveredMessages = await store.readMessagesByRoom('room-1');
+    assert.notEqual(recoveredMessages[0].timestamp, streamingMessage.timestamp);
+    assert.deepEqual(recoveredMessages, [
       {
-        ...message({ id: 'm1', status: 'streaming', content: '' }),
+        ...streamingMessage,
         status: 'error',
         content: 'Response interrupted.',
-        timestamp: (await store.readMessagesByRoom('room-1'))[0].timestamp,
+        timestamp: recoveredMessages[0].timestamp,
       },
-      message({ id: 'm2', status: 'complete', content: 'done' }),
+      completeMessage,
     ]);
+  });
+
+  it('does not count interrupted streaming messages when recovery persistence fails', async () => {
+    const redis = new FailingReplaceRedis();
+    const store = new RedisStore(redis as any, logger as any);
+    const streamingMessage = message({ id: 'm1', status: 'streaming', content: '' });
+
+    await store.saveRoom(room());
+    await redis.rPush('room:room-1:messages', JSON.stringify(streamingMessage));
+
+    assert.equal(await store.failInterruptedStreamingMessages('Response interrupted.'), 0);
+    assert.deepEqual(await store.readMessagesByRoom('room-1'), [streamingMessage]);
   });
 
   it('returns safe fallbacks when stored JSON cannot be parsed', async () => {
