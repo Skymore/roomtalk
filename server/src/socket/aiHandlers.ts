@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { buildFinalAIHistory, MAX_CONTEXT_MESSAGES, selectAIHistory } from '../services/aiHistory';
+import { MAX_CONTEXT_MESSAGES, selectAIHistory } from '../services/aiHistory';
 import { calculateAICost, DEFAULT_SYSTEM_MESSAGE, getMessageAIModel, normalizeUsage } from '../services/aiModels';
 import {
   buildAIProviderMessages,
@@ -10,6 +10,8 @@ import { Message } from '../types';
 import { SocketConnectionContext } from './types';
 
 export const DEFAULT_ANTHROPIC_MAX_TOKENS = 8096;
+const ERROR_STATE_SAVE_ATTEMPTS = 3;
+const ERROR_STATE_SAVE_RETRY_DELAY_MS = 25;
 
 const isE2EFakeAIEnabled = () =>
   process.env.E2E_TEST_MODE === 'true' && process.env.E2E_FAKE_AI === 'true';
@@ -57,17 +59,9 @@ export function registerAIHandlers({
       provider: selectedModel.provider,
     });
 
-    const aiMessageId = uuidv4();
-    const initialAiMessage = createAIPlaceholderMessage({
-      id: aiMessageId,
-      roomId,
-      roleName,
-      model: selectedModel,
-    });
-    io.to(roomId).emit('new_message', initialAiMessage);
-
     let contextMessages: Message[] = [];
     let historyUsedForContext: Message[] = [];
+    let truncationReason: 'retry' | 'edit' | 'max-context' | undefined;
 
     try {
       const fullHistory = await store.readMessagesByRoom(roomId);
@@ -79,6 +73,7 @@ export function registerAIHandlers({
 
       historyUsedForContext = selection.historyUsedForContext;
       contextMessages = selection.contextMessages;
+      truncationReason = selection.truncationReason;
 
       if (retryForMessageId) {
         if (selection.truncationReason === 'retry') {
@@ -122,6 +117,85 @@ export function registerAIHandlers({
 
     openaiLogger.debug('contextMessages', contextMessages);
 
+    const aiMessageId = uuidv4();
+    const initialAiMessage = createAIPlaceholderMessage({
+      id: aiMessageId,
+      roomId,
+      roleName,
+      model: selectedModel,
+    });
+
+    if ((truncationReason === 'retry' || truncationReason === 'edit') && historyUsedForContext.length > 0) {
+      const updatedRoom = await store.saveMessageHistory(roomId, historyUsedForContext);
+      if (!updatedRoom) {
+        openaiLogger.error('Failed to truncate persistent history before AI request', { roomId, truncationReason, editedMessageId, retryForMessageId });
+        io.to(roomId).emit('ai_stream_error', {
+          messageId: aiMessageId,
+          error: 'Sorry, unable to update message history before generating a response.',
+          roomId,
+        });
+        return;
+      }
+      io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+    }
+
+    const saveAIMessage = async (message: Message, logLabel: string): Promise<boolean> => {
+      try {
+        const updatedRoom = await store.upsertMessage(message);
+        if (!updatedRoom) {
+          openaiLogger.error(`Persistent store rejected ${logLabel} AI message`, { messageId: message.id, roomId, status: message.status });
+          return false;
+        }
+        io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+        openaiLogger.info(`Saved ${logLabel} AI message to persistent history`, {
+          messageId: message.id,
+          roomId,
+          status: message.status,
+        });
+        return true;
+      } catch (err) {
+        openaiLogger.error(`Failed to save ${logLabel} AI message to persistent history`, { error: err, messageId: message.id, roomId });
+        return false;
+      }
+    };
+
+    const saveAIErrorMessage = async (message: Message, logLabel: string): Promise<boolean> => {
+      for (let attempt = 1; attempt <= ERROR_STATE_SAVE_ATTEMPTS; attempt++) {
+        const saved = await saveAIMessage(message, attempt === 1 ? logLabel : `${logLabel} retry ${attempt}`);
+        if (saved) {
+          return true;
+        }
+
+        if (attempt < ERROR_STATE_SAVE_ATTEMPTS) {
+          await wait(ERROR_STATE_SAVE_RETRY_DELAY_MS * attempt);
+        }
+      }
+
+      openaiLogger.error('Failed to persist AI error state after retries; streaming message may need startup recovery', {
+        messageId: message.id,
+        roomId,
+        status: message.status,
+        attempts: ERROR_STATE_SAVE_ATTEMPTS,
+      });
+      io.to(roomId).emit('ai_persistence_error', {
+        messageId: message.id,
+        error: 'AI response status could not be saved. It will be recovered if the server restarts.',
+        roomId,
+      });
+      return false;
+    };
+
+    const placeholderSaved = await saveAIMessage(initialAiMessage, 'streaming placeholder');
+    if (!placeholderSaved) {
+      io.to(roomId).emit('ai_stream_error', {
+        messageId: aiMessageId,
+        error: 'Sorry, unable to start a durable AI response.',
+        roomId,
+      });
+      return;
+    }
+    io.to(roomId).emit('new_message', initialAiMessage);
+
     if (isE2EFakeAIEnabled()) {
       const lastUserMessage = [...contextMessages].reverse().find(message => message.clientId !== 'ai_assistant');
       const targetContent = lastUserMessage?.content?.trim() || 'empty prompt';
@@ -149,16 +223,6 @@ export function registerAIHandlers({
       const roomCostTotal = await store.incrementRoomAICost(roomId, cost || null);
       const aiModel = getMessageAIModel(selectedModel);
 
-      io.to(roomId).emit('ai_stream_end', {
-        messageId: aiMessageId,
-        roomId,
-        aiModel,
-        usage,
-        cost,
-        sessionCost: roomCostTotal,
-      });
-      io.to(roomId).emit('ai_cost_total', roomCostTotal);
-
       const finalAiMessage: Message = {
         ...initialAiMessage,
         content: fullContent,
@@ -169,14 +233,31 @@ export function registerAIHandlers({
         cost,
       };
 
-      try {
-        const updatedRoom = await store.saveMessageHistory(roomId, buildFinalAIHistory(historyUsedForContext, finalAiMessage));
-        if (updatedRoom) {
-          io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
-        }
-      } catch (err) {
-        openaiLogger.error('Failed to save E2E fake AI history', { error: err, messageId: aiMessageId });
+      const finalSaved = await saveAIMessage(finalAiMessage, 'E2E fake complete');
+      if (!finalSaved) {
+        await saveAIErrorMessage({
+          ...initialAiMessage,
+          status: 'error',
+          content: 'Error saving response.',
+          timestamp: new Date().toISOString(),
+        }, 'E2E fake final-save error');
+        io.to(roomId).emit('ai_stream_error', {
+          messageId: aiMessageId,
+          error: 'Sorry, unable to save the AI response.',
+          roomId,
+        });
+        return;
       }
+
+      io.to(roomId).emit('ai_stream_end', {
+        messageId: aiMessageId,
+        roomId,
+        aiModel,
+        usage,
+        cost,
+        sessionCost: roomCostTotal,
+      });
+      io.to(roomId).emit('ai_cost_total', roomCostTotal);
       return;
     }
 
@@ -185,12 +266,18 @@ export function registerAIHandlers({
       const hasUserOrAssistantMessage = validMessagesForAPI.some(msg => msg.role === 'user' || msg.role === 'assistant');
       if (!hasUserOrAssistantMessage && validMessagesForAPI.length <= 1) {
         openaiLogger.error('Cannot call OpenAI API without user or assistant messages in context.', { roomId });
+        const errorAiMessage: Message = {
+          ...initialAiMessage,
+          status: 'error',
+          content: 'Cannot generate a response without any context or question.',
+          timestamp: new Date().toISOString(),
+        };
+        await saveAIErrorMessage(errorAiMessage, 'empty-context error');
         io.to(roomId).emit('ai_stream_error', {
           messageId: aiMessageId,
           error: 'Sorry, cannot generate a response without any context or question.',
           roomId,
         });
-        store.saveMessageHistory(roomId, historyUsedForContext).catch(err => openaiLogger.error('Failed to save history after empty context error', { error: err }));
         return;
       }
 
@@ -253,11 +340,37 @@ export function registerAIHandlers({
       const usage = normalizeUsage(reportedUsage, validMessagesForAPI, fullContent);
       const cost = calculateAICost(selectedModel, usage);
       const roomCostTotal = await store.incrementRoomAICost(roomId, cost || null);
+      const aiModel = getMessageAIModel(selectedModel);
+
+      const finalAiMessage: Message = {
+        ...initialAiMessage,
+        content: fullContent,
+        status: 'complete',
+        timestamp: new Date().toISOString(),
+        aiModel,
+        usage,
+        cost,
+      };
+      const finalSaved = await saveAIMessage(finalAiMessage, 'complete');
+      if (!finalSaved) {
+        await saveAIErrorMessage({
+          ...initialAiMessage,
+          status: 'error',
+          content: 'Error saving response.',
+          timestamp: new Date().toISOString(),
+        }, 'final-save error');
+        io.to(roomId).emit('ai_stream_error', {
+          messageId: aiMessageId,
+          error: 'Sorry, unable to save the AI response.',
+          roomId,
+        });
+        return;
+      }
 
       io.to(roomId).emit('ai_stream_end', {
         messageId: aiMessageId,
         roomId,
-        aiModel: getMessageAIModel(selectedModel),
+        aiModel,
         usage,
         cost,
         sessionCost: roomCostTotal,
@@ -271,30 +384,6 @@ export function registerAIHandlers({
         cost,
         roomCostTotal,
       });
-
-      const finalAiMessage: Message = {
-        ...initialAiMessage,
-        content: fullContent,
-        status: 'complete',
-        timestamp: new Date().toISOString(),
-        aiModel: getMessageAIModel(selectedModel),
-        usage,
-        cost,
-      };
-      const finalHistoryToSave = buildFinalAIHistory(historyUsedForContext, finalAiMessage);
-
-      store.saveMessageHistory(roomId, finalHistoryToSave).then((updatedRoom) => {
-        if (updatedRoom) {
-          io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
-        }
-        openaiLogger.info('Saved final AI message and its context history to Redis', {
-          messageId: aiMessageId,
-          historyLength: finalHistoryToSave.length,
-          contextLengthUsed: contextMessages.length,
-        });
-      }).catch(err => {
-        openaiLogger.error('Failed to save final AI history to Redis', { error: err, messageId: aiMessageId });
-      });
     } catch (error) {
       socketLogger.error('Error processing AI stream request', {
         error: error instanceof Error ? error.message : error,
@@ -302,13 +391,18 @@ export function registerAIHandlers({
         clientId,
         roomId,
       });
+      const errorAiMessage: Message = {
+        ...initialAiMessage,
+        status: 'error',
+        content: 'Error generating response.',
+        timestamp: new Date().toISOString(),
+      };
+      await saveAIErrorMessage(errorAiMessage, 'stream error');
       io.to(roomId).emit('ai_stream_error', {
         messageId: aiMessageId,
         error: 'Sorry, an error occurred while generating the AI response.',
         roomId,
       });
-      const errorAiMessage: Message = { ...initialAiMessage, status: 'error', content: 'Error generating response.' };
-      store.saveMessageHistory(roomId, buildFinalAIHistory(historyUsedForContext, errorAiMessage)).catch(err => openaiLogger.error('Failed to save error AI history', { error: err }));
     }
   });
 }

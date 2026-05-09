@@ -1,7 +1,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { registerMessageHandlers } from './messageHandlers';
-import { Message, RoomAICostTotal } from '../types';
+import { Message, Room, RoomAICostTotal } from '../types';
 
 type SocketEmit = {
   event: string;
@@ -66,6 +66,15 @@ const message = (overrides: Partial<Message> = {}): Message => ({
   ...overrides,
 });
 
+const room = (overrides: Partial<Room> = {}): Room => ({
+  id: 'room-1',
+  name: 'Room 1',
+  description: '',
+  createdAt: '2026-05-03T00:00:00.000Z',
+  creatorId: 'client-1',
+  ...overrides,
+});
+
 const roomCost = (roomId = 'room-1'): RoomAICostTotal => ({
   roomId,
   currency: 'USD',
@@ -93,6 +102,7 @@ const createHarness = (clientId: string | null = 'client-1') => {
     async appendMessage(newMessage: Message) {
       this.appendedMessages.push(newMessage);
       this.messages.push(newMessage);
+      return room({ lastActivityAt: newMessage.timestamp });
     },
     async saveMessageHistory(_roomId: string, messages: Message[]) {
       this.savedHistory.push(messages);
@@ -150,7 +160,24 @@ describe('message socket handlers', () => {
     assert.equal(created.roomId, 'room-1');
     assert.equal(created.content, 'created through socket');
     assert.equal(created.messageType, 'text');
-    assert.deepEqual(valid.io.roomEmits, [{ roomId: 'room-1', event: 'new_message', args: [created] }]);
+    assert.deepEqual(valid.io.roomEmits, [
+      { roomId: 'client-1', event: 'room_updated', args: [room({ lastActivityAt: created.timestamp })] },
+      { roomId: 'room-1', event: 'new_message', args: [created] },
+    ]);
+  });
+
+  it('does not broadcast WebSocket messages when persistence fails', async () => {
+    const failing = createHarness('client-2');
+    failing.store.appendMessage = async (newMessage: Message) => {
+      failing.store.appendedMessages.push(newMessage);
+      return null as any;
+    };
+
+    await failing.socket.invoke('send_message', { roomId: 'room-1', content: 'unsaved' });
+
+    assert.equal(failing.store.appendedMessages.length, 1);
+    assert.deepEqual(failing.io.roomEmits, []);
+    assert.deepEqual(failing.socket.emitted, [{ event: 'error', args: [{ message: 'Failed to save message' }] }]);
   });
 
   it('edits messages with callbacks and broadcasts successful updates', async () => {

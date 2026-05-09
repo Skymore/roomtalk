@@ -19,6 +19,21 @@ class MemoryRedis {
     return this.sets.get(key)!;
   }
 
+  private updateRoomActivity(roomId: string, lastActivityAt: string) {
+    const roomJson = this.hash('rooms').get(roomId);
+    if (!roomJson) {
+      return null;
+    }
+
+    const parsedRoom = JSON.parse(roomJson);
+    const updatedRoom = {
+      ...parsedRoom,
+      lastActivityAt,
+    };
+    this.hash('rooms').set(roomId, JSON.stringify(updatedRoom));
+    return updatedRoom;
+  }
+
   async hExists(key: string, field: string) {
     return this.hash(key).has(field);
   }
@@ -37,6 +52,10 @@ class MemoryRedis {
 
   async hLen(key: string) {
     return this.hash(key).size;
+  }
+
+  async hKeys(key: string) {
+    return Array.from(this.hash(key).keys());
   }
 
   async rPush(key: string, value: string | string[]) {
@@ -90,6 +109,62 @@ class MemoryRedis {
     const next = current + value;
     this.strings.set(key, String(next));
     return next;
+  }
+
+  async eval(script: string, options: { keys: string[]; arguments: string[] }) {
+    if (script.includes('local messagePayload')) {
+      const [, messageKey] = options.keys;
+      const [roomId, payload, lastActivityAt] = options.arguments;
+      const updatedRoom = this.updateRoomActivity(roomId, lastActivityAt);
+      if (!updatedRoom) {
+        return [0, ''];
+      }
+      const list = this.lists.get(messageKey) || [];
+      list.push(payload);
+      this.lists.set(messageKey, list);
+      return [1, JSON.stringify(updatedRoom)];
+    }
+
+    if (script.includes('local targetId')) {
+      const [, messageKey] = options.keys;
+      const [roomId, targetId, payload, lastActivityAt] = options.arguments;
+      const updatedRoom = this.updateRoomActivity(roomId, lastActivityAt);
+      if (!updatedRoom) {
+        return [0, 0, 0, ''];
+      }
+      const list = this.lists.get(messageKey) || [];
+      const index = list.findIndex(item => {
+        try {
+          return JSON.parse(item).id === targetId;
+        } catch {
+          return false;
+        }
+      });
+      if (index === -1) {
+        list.push(payload);
+        this.lists.set(messageKey, list);
+        return [1, 0, list.length, JSON.stringify(updatedRoom)];
+      }
+      list[index] = payload;
+      this.lists.set(messageKey, list);
+      return [1, 1, list.length, JSON.stringify(updatedRoom)];
+    }
+
+    const [, messageKey] = options.keys;
+    const [roomId, lastActivityAt, ...messages] = options.arguments;
+    const updatedRoom = this.updateRoomActivity(roomId, lastActivityAt);
+    if (!updatedRoom) {
+      return [0, 0, ''];
+    }
+    this.lists.set(messageKey, messages);
+    return [1, messages.length, JSON.stringify(updatedRoom)];
+  }
+
+  async flushDb() {
+    this.hashes.clear();
+    this.lists.clear();
+    this.sets.clear();
+    this.strings.clear();
   }
 }
 
@@ -164,6 +239,7 @@ describe('RedisStore', () => {
     const savedRoom = room();
 
     assert.deepEqual(await store.saveRoom(savedRoom), savedRoom);
+    assert.equal(await store.countRooms(), 1);
     assert.deepEqual(await store.getRoomById('room-1'), savedRoom);
     assert.deepEqual(await store.readRoomsByUser('client-1'), [savedRoom]);
 
@@ -174,12 +250,25 @@ describe('RedisStore', () => {
     await store.incrementRoomAICost('room-1', cost(0.5));
     await store.deleteRoom('room-1', 'client-1');
 
+    assert.equal(await store.countRooms(), 0);
     assert.equal(await store.getRoomById('room-1'), null);
     assert.deepEqual(await store.readMessagesByRoom('room-1'), []);
     assert.deepEqual(await store.readRoomsByUser('client-1'), []);
     assert.equal(await store.getRoomMemberCount('room-1'), 0);
     assert.equal(await redis.get(store.getRoomAICostKey('room-1')), undefined);
   });
+
+  it('lists user rooms by most recent activity first', async () => {
+    const { store } = createStore();
+    const olderRoom = room({ id: 'older-room', lastActivityAt: '2026-05-03T00:00:00.000Z' });
+    const newerRoom = room({ id: 'newer-room', lastActivityAt: '2026-05-05T00:00:00.000Z' });
+
+    await store.saveRoom(olderRoom);
+    await store.saveRoom(newerRoom);
+
+    assert.deepEqual((await store.readRoomsByUser('client-1')).map(item => item.id), ['newer-room', 'older-room']);
+  });
+
 
   it('logs and swallows Redis delete failures when deleting a room', async () => {
     const errors: any[] = [];
@@ -206,15 +295,43 @@ describe('RedisStore', () => {
     const second = message({ id: 'm2', content: 'second' });
     const replacement = message({ id: 'm3', content: 'replacement' });
 
+    await store.saveRoom(room());
     await store.appendMessage(first);
     await store.appendMessage(second);
     assert.deepEqual(await store.readMessagesByRoom('room-1'), [first, second]);
+
+    await store.upsertMessage(message({ id: 'm2', content: 'updated second', timestamp: '2026-05-05T00:00:00.000Z' }));
+    assert.deepEqual(await store.readMessagesByRoom('room-1'), [
+      first,
+      message({ id: 'm2', content: 'updated second', timestamp: '2026-05-05T00:00:00.000Z' }),
+    ]);
+
+    await store.upsertMessage(message({ id: 'm4', content: 'inserted' }));
+    assert.deepEqual(await store.readMessagesByRoom('room-1'), [
+      first,
+      message({ id: 'm2', content: 'updated second', timestamp: '2026-05-05T00:00:00.000Z' }),
+      message({ id: 'm4', content: 'inserted' }),
+    ]);
 
     await store.saveMessageHistory('room-1', [replacement]);
     assert.deepEqual(await store.readMessagesByRoom('room-1'), [replacement]);
 
     assert.equal(await store.clearRoomMessages('room-1'), 1);
     assert.deepEqual(await store.readMessagesByRoom('room-1'), []);
+  });
+
+  it('does not create orphan message lists for missing rooms', async () => {
+    const { redis, store } = createStore();
+    const missingRoomMessage = message({ roomId: 'missing-room' });
+
+    assert.equal(await store.appendMessage(missingRoomMessage), null);
+    assert.deepEqual(await redis.lRange('room:missing-room:messages', 0, -1), []);
+
+    assert.equal(await store.upsertMessage(missingRoomMessage), null);
+    assert.deepEqual(await redis.lRange('room:missing-room:messages', 0, -1), []);
+
+    assert.equal(await store.saveMessageHistory('missing-room', [missingRoomMessage]), null);
+    assert.deepEqual(await redis.lRange('room:missing-room:messages', 0, -1), []);
   });
 
   it('tracks AI cost totals and ignores empty, invalid, or non-positive increments', async () => {
@@ -249,6 +366,41 @@ describe('RedisStore', () => {
     assert.deepEqual(await store.getUserRooms('socket-1'), ['room-1', 'room-2']);
     await store.storeUserRooms('socket-1', []);
     assert.deepEqual(await store.getUserRooms('socket-1'), []);
+  });
+
+  it('resets all Redis test data through the store abstraction', async () => {
+    const { store } = createStore();
+
+    await store.saveRoom(room());
+    await store.appendMessage(message());
+    await store.storeClientSession('socket-1', 'client-1');
+
+    await store.resetAllDataForTests();
+
+    assert.equal(await store.countRooms(), 0);
+    assert.deepEqual(await store.readMessagesByRoom('room-1'), []);
+    assert.equal(await store.getClientId('socket-1'), null);
+  });
+
+  it('marks interrupted streaming messages as errors on startup recovery', async () => {
+    const { store } = createStore();
+    await store.saveRoom(room());
+    await store.saveMessageHistory('room-1', [
+      message({ id: 'm1', status: 'streaming', content: '' }),
+      message({ id: 'm2', status: 'complete', content: 'done' }),
+    ]);
+
+    assert.equal(await store.failInterruptedStreamingMessages('Response interrupted.'), 1);
+
+    assert.deepEqual(await store.readMessagesByRoom('room-1'), [
+      {
+        ...message({ id: 'm1', status: 'streaming', content: '' }),
+        status: 'error',
+        content: 'Response interrupted.',
+        timestamp: (await store.readMessagesByRoom('room-1'))[0].timestamp,
+      },
+      message({ id: 'm2', status: 'complete', content: 'done' }),
+    ]);
   });
 
   it('returns safe fallbacks when stored JSON cannot be parsed', async () => {

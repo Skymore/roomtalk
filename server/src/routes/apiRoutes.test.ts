@@ -25,13 +25,13 @@ type TestServer = {
     readRoomsByUser: (clientId: string) => Promise<Room[]>;
     generateUniqueRoomId: () => Promise<string>;
     saveRoom: (room: Room) => Promise<Room | null>;
-    appendMessage: (message: Message) => Promise<void>;
+    appendMessage: (message: Message) => Promise<Room | null>;
     readRoomAICost: (roomId: string) => Promise<{ roomId: string; currency: 'USD'; totalUsd: number }>;
     getRoomById: (roomId: string) => Promise<Room | null>;
+    countRooms: () => Promise<number>;
   };
   redisClient: {
     isOpen: boolean;
-    hLen: (key: string) => Promise<number>;
   };
 };
 
@@ -81,12 +81,16 @@ async function createTestServer(): Promise<TestServer> {
     async appendMessage(message: Message) {
       this.appendedMessages.push(message);
       this.messages.push(message);
+      return sampleRoom({ lastActivityAt: message.timestamp });
     },
     async readRoomAICost(roomId: string) {
       return { roomId, currency: 'USD' as const, totalUsd: 1.25 };
     },
     async getRoomById(roomId: string) {
       return this.rooms.find(room => room.id === roomId) || null;
+    },
+    async countRooms() {
+      return this.rooms.length;
     },
   };
 
@@ -105,10 +109,6 @@ async function createTestServer(): Promise<TestServer> {
 
   const redisClient = {
     isOpen: true,
-    async hLen(key: string) {
-      assert.equal(key, 'rooms');
-      return store.rooms.length;
-    },
   };
 
   const routeLogger = {
@@ -133,7 +133,7 @@ async function createTestServer(): Promise<TestServer> {
   });
 
   const server = await new Promise<HttpServer>(resolve => {
-    const listener = app.listen(0, () => resolve(listener));
+    const listener = app.listen(0, '127.0.0.1', () => resolve(listener));
   });
   const { port } = server.address() as AddressInfo;
 
@@ -177,8 +177,9 @@ describe('API routes', () => {
 
     const statusResponse = await fetch(`${server.baseUrl}/api/status`);
     assert.equal(statusResponse.status, 200);
-    const status = await statusResponse.json() as { status: string; redis: string; rooms: number };
+    const status = await statusResponse.json() as { status: string; persistenceStore: string; redis: string; rooms: number };
     assert.equal(status.status, 'online');
+    assert.equal(status.persistenceStore, 'redis');
     assert.equal(status.redis, 'connected');
     assert.equal(status.rooms, 1);
   });
@@ -231,7 +232,24 @@ describe('API routes', () => {
     assert.equal(message.content, 'hello from API');
     assert.equal(message.messageType, 'text');
     assert.equal(server.store.appendedMessages[0].id, message.id);
-    assert.deepEqual(server.emitted, [{ target: 'room-1', event: 'new_message', payload: message }]);
+    assert.deepEqual(server.emitted, [
+      { target: 'client-1', event: 'room_updated', payload: sampleRoom({ lastActivityAt: message.timestamp }) },
+      { target: 'room-1', event: 'new_message', payload: message },
+    ]);
+  });
+
+  it('does not emit ghost API messages when persistence fails', async () => {
+    server.store.appendMessage = async () => null;
+
+    const response = await fetch(`${server.baseUrl}/api/rooms/room-1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-2', content: 'unsaved message' }),
+    });
+
+    assert.equal(response.status, 500);
+    assert.deepEqual(await response.json(), { error: 'Failed to create message' });
+    assert.deepEqual(server.emitted, []);
   });
 
   it('returns client rooms and protects owner-only room detail lookup', async () => {
@@ -248,9 +266,9 @@ describe('API routes', () => {
     assert.deepEqual(await unauthorizedResponse.json(), { error: 'Room not found' });
   });
 
-  it('returns a status error when Redis status lookup fails', async () => {
-    server.redisClient.hLen = async () => {
-      throw new Error('redis failed');
+  it('returns a status error when store status lookup fails', async () => {
+    server.store.countRooms = async () => {
+      throw new Error('store failed');
     };
 
     const response = await fetch(`${server.baseUrl}/api/status`);
