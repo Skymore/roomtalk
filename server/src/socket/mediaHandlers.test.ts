@@ -2,7 +2,7 @@ import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import sharp from 'sharp';
 import { registerMediaHandlers } from './mediaHandlers';
-import { Message } from '../types';
+import { Message, Room } from '../types';
 
 type SocketEmit = {
   event: string;
@@ -53,6 +53,15 @@ const logger = {
   info() {},
 };
 
+const room = (overrides: Partial<Room> = {}): Room => ({
+  id: 'room-1',
+  name: 'Room 1',
+  description: '',
+  createdAt: '2026-05-03T00:00:00.000Z',
+  creatorId: 'client-1',
+  ...overrides,
+});
+
 const createHarness = (clientId: string | null = 'client-1') => {
   const socket = new FakeSocket();
   const io = new FakeIo();
@@ -64,6 +73,7 @@ const createHarness = (clientId: string | null = 'client-1') => {
     },
     async appendMessage(message: Message) {
       this.appendedMessages.push(message);
+      return room({ lastActivityAt: message.timestamp });
     },
   };
 
@@ -164,7 +174,35 @@ describe('media socket handlers', () => {
     assert.equal(created.mimeType, 'image/webp');
     assert.equal(created.username, 'Ada');
     assert.ok(Buffer.from(created.content, 'base64').length > 0);
-    assert.deepEqual(io.roomEmits, [{ roomId: 'room-1', event: 'new_message', args: [created] }]);
+    assert.deepEqual(io.roomEmits, [
+      { roomId: 'client-1', event: 'room_updated', args: [room({ lastActivityAt: created.timestamp })] },
+      { roomId: 'room-1', event: 'new_message', args: [created] },
+    ]);
     assert.deepEqual(socket.emitted, []);
+  });
+
+  it('does not broadcast image messages when persistence fails', async () => {
+    const imageBuffer = await createTinyPng();
+    const { io, socket, store } = createHarness('client-2');
+    store.appendMessage = async (message: Message) => {
+      store.appendedMessages.push(message);
+      return null as any;
+    };
+
+    await socket.invoke('start_image_upload', {
+      fileId: 'file-fail',
+      totalChunks: 1,
+      roomId: 'room-1',
+    });
+    await socket.invoke('upload_image_chunk', {
+      fileId: 'file-fail',
+      chunkIndex: 0,
+      chunkData: imageBuffer.toString('base64'),
+    });
+    await socket.invoke('finish_image_upload', { fileId: 'file-fail' });
+
+    assert.equal(store.appendedMessages.length, 1);
+    assert.deepEqual(io.roomEmits, []);
+    assert.deepEqual(socket.emitted, [{ event: 'error', args: [{ message: 'Failed to save image message' }] }]);
   });
 });

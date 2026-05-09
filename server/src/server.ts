@@ -11,6 +11,9 @@ import path from 'path';
 import { createClient, RedisClientType } from 'redis';
 import dotenv from 'dotenv';
 import { RedisStore } from './repositories/redisStore';
+import { createPostgresPool } from './repositories/postgresPool';
+import { PostgresStore } from './repositories/postgresStore';
+import { CompositeRoomStore, RoomStore } from './repositories/store';
 import { createAIModelRegistry, DEFAULT_AI_MODEL_ID } from './services/aiModels';
 import { registerApiRoutes } from './routes/apiRoutes';
 import { registerSocketHandlers } from './socket/registerSocketHandlers';
@@ -21,6 +24,7 @@ dotenv.config();
 // 创建各模块的日志记录器
 const serverLogger = new Logger('Server');
 const redisLogger = new Logger('Redis');
+const postgresLogger = new Logger('PostgreSQL');
 const socketLogger = new Logger('SocketIO');
 const routeLogger = new Logger('Routes');
 const openaiLogger = new Logger('OpenAI');
@@ -69,7 +73,25 @@ const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const redisClient: RedisClientType = createClient({
   url: REDIS_URL
 });
-const store = new RedisStore(redisClient, redisLogger);
+const redisStore = new RedisStore(redisClient, redisLogger);
+
+const PERSISTENCE_STORE = (process.env.PERSISTENCE_STORE || 'redis').toLowerCase();
+let activePersistenceStore = 'redis';
+let store: RoomStore = redisStore;
+let postgresStore: PostgresStore | null = null;
+
+if (PERSISTENCE_STORE === 'postgres') {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    throw new Error('PERSISTENCE_STORE=postgres requires DATABASE_URL');
+  }
+
+  postgresStore = new PostgresStore(createPostgresPool(databaseUrl, postgresLogger), postgresLogger);
+  store = new CompositeRoomStore(postgresStore, redisStore);
+  activePersistenceStore = 'postgres';
+} else if (PERSISTENCE_STORE !== 'redis') {
+  serverLogger.warn('Unknown PERSISTENCE_STORE value, falling back to Redis', { persistenceStore: PERSISTENCE_STORE });
+}
 
 redisClient.on('error', (err: Error) => {
   redisLogger.error('Redis connection error', { error: err.message, stack: err.stack });
@@ -99,8 +121,8 @@ const io = new Server(server, {
   pingInterval: 25000 // 25秒ping一次
 });
 
-// 使用立即执行异步函数来初始化 Redis 和 Socket.IO 适配器
-(async () => {
+// 初始化 Redis、PostgreSQL schema 和 Socket.IO 适配器
+const infrastructureReady = (async () => {
   try {
     // 连接所有 Redis 客户端
     await Promise.all([
@@ -111,13 +133,19 @@ const io = new Server(server, {
     
     // 设置 Socket.IO Redis 适配器
     io.adapter(createAdapter(pubClient, subClient));
+
+    if (postgresStore) {
+      await postgresStore.initializeSchema();
+    }
+    await store.failInterruptedStreamingMessages?.('Response interrupted.');
     
-    redisLogger.info('Connected to Redis and Socket.IO adapter initialized');
+    redisLogger.info('Connected to Redis and Socket.IO adapter initialized', { persistenceStore: activePersistenceStore });
   } catch (err) {
-    redisLogger.error('Failed to connect to Redis or initialize adapter', { 
+    redisLogger.error('Failed to connect to Redis, PostgreSQL, or initialize adapter', {
       error: err instanceof Error ? err.message : String(err),
       stack: err instanceof Error ? err.stack : undefined
     });
+    throw err;
   }
 })();
 
@@ -136,6 +164,7 @@ registerApiRoutes(app, {
   redisClient,
   routeLogger,
   getAIModelResponse,
+  persistenceStore: activePersistenceStore,
 });
 
 // Catch-all 路由，返回前端应用的入口 HTML 文件（支持前端路由）
@@ -176,6 +205,17 @@ process.on('unhandledRejection', (reason, promise) => {
 const PORT: number = parseInt(process.env.PORT || '3012', 10);
 const HOST: string = '0.0.0.0';
 
-server.listen(PORT, HOST, () => { 
-  serverLogger.info(`Server started`, { port: PORT, host: HOST, env: process.env.NODE_ENV || 'development' });
-});
+infrastructureReady
+  .then(() => {
+    server.listen(PORT, HOST, () => {
+      serverLogger.info(`Server started`, { port: PORT, host: HOST, env: process.env.NODE_ENV || 'development', persistenceStore: activePersistenceStore });
+    });
+  })
+  .catch((error) => {
+    serverLogger.error('Server startup aborted', {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+      persistenceStore: activePersistenceStore,
+    });
+    process.exit(1);
+  });

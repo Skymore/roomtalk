@@ -54,9 +54,13 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
     socketLogger.info('Received WebSocket message', loggableMessage);
 
     const updatedRoom = await store.appendMessage(message);
-    if (updatedRoom) {
-      io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+    if (!updatedRoom) {
+      socketLogger.error('Failed to append WebSocket message', { messageId: message.id, roomId: message.roomId, clientId });
+      socket.emit('error', { message: 'Failed to save message' });
+      return;
     }
+
+    io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
     io.to(messageData.roomId).emit('new_message', message);
   });
 

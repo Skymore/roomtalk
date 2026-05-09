@@ -3,19 +3,20 @@ import { Server } from 'socket.io';
 import { RedisClientType } from 'redis';
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../logger';
-import { RedisStore } from '../repositories/redisStore';
+import { RoomStore } from '../repositories/store';
 import { Message, Room } from '../types';
 
 interface ApiRouteOptions {
-  store: RedisStore;
+  store: RoomStore;
   io: Server;
   redisClient: RedisClientType;
   routeLogger: Logger;
   getAIModelResponse: () => unknown;
+  persistenceStore?: string;
 }
 
 export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
-  const { store, io, redisClient, routeLogger, getAIModelResponse } = options;
+  const { store, io, redisClient, routeLogger, getAIModelResponse, persistenceStore = 'redis' } = options;
 
   app.get('/api/rooms/:roomId/messages', async (req: Request, res: Response) => {
     const { roomId } = req.params;
@@ -99,9 +100,12 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     routeLogger.info('Received HTTP API message', { ...loggableMessage, ip: req.ip });
 
     const updatedRoom = await store.appendMessage(message);
-    if (updatedRoom) {
-      io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+    if (!updatedRoom) {
+      routeLogger.error('Failed to append message via API', { roomId, messageId: message.id, ip: req.ip });
+      return res.status(500).json({ error: 'Failed to create message' });
     }
+
+    io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
     io.to(roomId).emit('new_message', message);
     return res.status(201).json(message);
   });
@@ -141,12 +145,13 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   app.get('/api/status', async (req: Request, res: Response) => {
     try {
       const redisStatus = redisClient.isOpen ? 'connected' : 'disconnected';
-      const roomCount = await redisClient.hLen('rooms');
+      const roomCount = await store.countRooms();
 
       routeLogger.info('System status requested', { endpoint: '/api/status', ip: req.ip });
 
       return res.json({
         status: 'online',
+        persistenceStore,
         redis: redisStatus,
         socketAdapterReady: io.of('/').adapter ? true : false,
         rooms: roomCount,
@@ -161,11 +166,15 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   if (process.env.E2E_TEST_MODE === 'true') {
     app.post('/api/e2e/reset', async (_req: Request, res: Response) => {
       try {
-        await redisClient.flushDb();
-        routeLogger.warn('E2E Redis database reset');
+        if (store.resetAllDataForTests) {
+          await store.resetAllDataForTests();
+        } else {
+          await redisClient.flushDb();
+        }
+        routeLogger.warn('E2E database reset');
         return res.json({ ok: true });
       } catch (error) {
-        routeLogger.error('Failed to reset E2E Redis database', { error });
+        routeLogger.error('Failed to reset E2E database', { error });
         return res.status(500).json({ error: 'Failed to reset E2E database' });
       }
     });

@@ -70,9 +70,13 @@ export function registerMediaHandlers({ io, socket, store, socketLogger }: Socke
         avatar: payload.avatar,
       });
       const updatedRoom = await store.appendMessage(message);
-      if (updatedRoom) {
-        io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+      if (!updatedRoom) {
+        socketLogger.error('Failed to append image message', { fileId: payload.fileId, roomId: session.roomId, clientId: session.clientId, messageId: message.id });
+        socket.emit('error', { message: 'Failed to save image message' });
+        return;
       }
+
+      io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
       io.to(session.roomId).emit('new_message', message);
       socketLogger.info('Completed image upload and processed message', { fileId: payload.fileId, roomId: session.roomId, clientId: session.clientId });
     } catch (err) {
