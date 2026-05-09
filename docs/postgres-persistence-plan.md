@@ -157,7 +157,7 @@
 
 ## 本轮执行范围
 
-本轮先完成阶段 1、阶段 2 和阶段 3。阶段 4-5 是后续切片，不能在没有真实 PostgreSQL 环境验证前一次性切到生产默认路径。
+已完成阶段 1、阶段 2、阶段 3 和阶段 4。阶段 5 是下一切片，负责迁移脚本和部署说明。
 
 ## 本轮执行结果
 
@@ -186,7 +186,13 @@
   - API、文本 socket、图片 socket 在持久化 append 失败时不再广播未落库的消息。
   - Redis append/upsert/saveHistory 写消息前会在同一条 Lua 命令里确认房间存在并更新 `lastActivityAt`，避免缺失房间留下孤儿 message list。
   - AI 终态保存失败后的 error fallback 会重试并发出 `ai_persistence_error`，避免持久化失败被静默吞掉。
+- 阶段 4：已完成。
+  - Postgres 模式下 `CompositeRoomStore` 使用 Redis 作为短 TTL room message cache。
+  - 缓存 miss 时读取 durable store 并回填；缓存 hit 直接返回同序消息和 metadata。
+  - append/upsert/saveHistory/clear/delete 成功后失效对应 room cache。
+  - startup stale streaming recovery 后会清理相关缓存；全量失效支持 `scanIterator`，不可用时降级到 `KEYS` 并记录 warning。
+  - 缓存读写和失效失败不会阻塞 PostgreSQL durable 读写。
 - 验收：
   - `npm run build` 通过。
-  - `npm test` 通过，76/76。
+  - `npm test` 通过，82/82。
   - `npm run test:e2e` 通过，14/14。
