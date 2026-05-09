@@ -6,6 +6,7 @@
     "start": "node dist/src/server.js",
     "dev": "ts-node-dev --respawn src/server.ts",
     "start:e2e": "ts-node src/server.ts",
+    "migrate:redis-to-postgres": "ts-node src/scripts/migrateRedisToPostgres.ts",
     "build": "tsc",
     "test": "node -r ts-node/register --test \"src/**/*.test.ts\""
   },

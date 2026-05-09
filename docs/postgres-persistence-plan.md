@@ -157,7 +157,7 @@
 
 ## 本轮执行范围
 
-已完成阶段 1、阶段 2、阶段 3 和阶段 4。阶段 5 是下一切片，负责迁移脚本和部署说明。
+已完成阶段 1、阶段 2、阶段 3、阶段 4 和阶段 5。
 
 ## 本轮执行结果
 
@@ -192,7 +192,15 @@
   - append/upsert/saveHistory/clear/delete 成功后失效对应 room cache。
   - startup stale streaming recovery 后会清理相关缓存；全量失效支持 `scanIterator`，不可用时降级到 `KEYS` 并记录 warning。
   - 缓存读写和失效失败不会阻塞 PostgreSQL durable 读写。
+- 阶段 5：已完成。
+  - 新增 Redis 到 PostgreSQL 迁移脚本：`npm run migrate:redis-to-postgres`。
+  - dry-run：`REDIS_URL=... npm run migrate:redis-to-postgres -- --dry-run`，只读取 Redis，不初始化或写入 PostgreSQL。
+  - 正式迁移：`REDIS_URL=... DATABASE_URL=... npm run migrate:redis-to-postgres`。
+  - 迁移会逐房间保存 room、完整覆盖 message history，并用精确赋值写入 AI cost total，重复执行不会重复消息或累计成本。
+  - 迁移输出统计包括 rooms/messages/costs 的读取和写入数量，以及逐房间失败列表；单房间失败不会中断后续房间。
+  - 切换 PostgreSQL 模式：部署环境设置 `PERSISTENCE_STORE=postgres`、`DATABASE_URL=...`，需要 TLS 时设置 `POSTGRES_SSL=true`。
+  - 可选缓存 TTL：`ROOM_MESSAGES_CACHE_TTL_SECONDS`，默认 30 秒；小于等于 0 时禁用 room message cache 写入。
 - 验收：
   - `npm run build` 通过。
-  - `npm test` 通过，82/82。
+  - `npm test` 通过，86/86。
   - `npm run test:e2e` 通过，14/14。

@@ -303,6 +303,20 @@ describe('PostgresStore', () => {
           assert.deepEqual(call.params, ['room-1', 0.25]);
         },
       },
+      {
+        rows: [{ total_usd: '1.5' }],
+        assertCall(call) {
+          assert.match(call.sql, /total_usd = EXCLUDED\.total_usd/);
+          assert.deepEqual(call.params, ['room-1', 1.5]);
+        },
+      },
+      {
+        rowCount: 1,
+        assertCall(call) {
+          assert.match(call.sql, /DELETE FROM room_ai_cost_totals/);
+          assert.deepEqual(call.params, ['room-1']);
+        },
+      },
       { rowCount: 0, assertCall: call => assert.match(call.sql, /TRUNCATE room_ai_cost_totals/) },
       { rowCount: 2, assertCall: call => assert.match(call.sql, /WHERE status = 'streaming'/) },
     ]);
@@ -310,6 +324,8 @@ describe('PostgresStore', () => {
 
     assert.deepEqual(await store.incrementRoomAICost('room-1', null), { roomId: 'room-1', currency: 'USD', totalUsd: 0 });
     assert.deepEqual(await store.incrementRoomAICost('room-1', cost(0.25)), { roomId: 'room-1', currency: 'USD', totalUsd: 0.25 });
+    assert.deepEqual(await store.setRoomAICostTotal('room-1', 1.5), { roomId: 'room-1', currency: 'USD', totalUsd: 1.5 });
+    assert.deepEqual(await store.setRoomAICostTotal('room-1', 0), { roomId: 'room-1', currency: 'USD', totalUsd: 0 });
     await store.resetAllDataForTests();
     assert.equal(await store.failInterruptedStreamingMessages('Response interrupted.'), 2);
   });
