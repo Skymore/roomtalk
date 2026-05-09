@@ -19,6 +19,7 @@ export interface PostgresClient {
 export interface PostgresPool {
   query<T = any>(sql: string, params?: unknown[]): Promise<PostgresQueryResult<T>>;
   connect(): Promise<PostgresClient>;
+  end?(): Promise<void>;
 }
 
 type RoomRow = {
@@ -377,6 +378,38 @@ export class PostgresStore implements DurableRoomStore {
       };
     } catch (error) {
       this.logger.error('Error incrementing PostgreSQL room AI cost total', { error, roomId, cost });
+      return this.readRoomAICost(roomId);
+    }
+  }
+
+  async setRoomAICostTotal(roomId: string, totalUsd: number): Promise<RoomAICostTotal> {
+    if (!Number.isFinite(totalUsd) || totalUsd <= 0) {
+      try {
+        await this.pool.query('DELETE FROM room_ai_cost_totals WHERE room_id = $1', [roomId]);
+      } catch (error) {
+        this.logger.error('Error clearing PostgreSQL room AI cost total', { error, roomId, totalUsd });
+      }
+      return { roomId, currency: 'USD', totalUsd: 0 };
+    }
+
+    try {
+      const result = await this.pool.query<{ total_usd: string | number }>(
+        `INSERT INTO room_ai_cost_totals (room_id, total_usd)
+        VALUES ($1, $2)
+        ON CONFLICT (room_id) DO UPDATE SET
+          total_usd = EXCLUDED.total_usd,
+          updated_at = NOW()
+        RETURNING total_usd`,
+        [roomId, totalUsd]
+      );
+      const savedTotalUsd = Number.parseFloat(String(result.rows[0]?.total_usd || totalUsd));
+      return {
+        roomId,
+        currency: 'USD',
+        totalUsd: Number.isFinite(savedTotalUsd) ? savedTotalUsd : totalUsd,
+      };
+    } catch (error) {
+      this.logger.error('Error setting PostgreSQL room AI cost total', { error, roomId, totalUsd });
       return this.readRoomAICost(roomId);
     }
   }
