@@ -22,7 +22,7 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      testIgnore: /.*mobile.*\.spec\.ts/,
+      testIgnore: /.*(mobile|postgres).*\.spec\.ts/,
       use: { ...devices['Desktop Chrome'] },
     },
     {

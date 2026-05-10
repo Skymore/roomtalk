@@ -137,6 +137,10 @@ const infrastructureReady = (async () => {
     if (postgresStore) {
       await postgresStore.initializeSchema();
     }
+    if (process.env.E2E_TEST_MODE === 'true' && process.env.E2E_RESET_ON_START === 'true') {
+      await store.resetAllDataForTests?.();
+      serverLogger.warn('E2E data reset on startup', { persistenceStore: activePersistenceStore });
+    }
     await store.failInterruptedStreamingMessages?.('Response interrupted.');
     
     redisLogger.info('Connected to Redis and Socket.IO adapter initialized', { persistenceStore: activePersistenceStore });

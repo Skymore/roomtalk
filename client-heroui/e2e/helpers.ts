@@ -49,6 +49,12 @@ export async function createRoomViaApi(
   return await response.json() as TestRoom;
 }
 
+export async function getClientRoomsViaApi(request: APIRequestContext, clientId: string) {
+  const response = await request.get(`${serverURL}/api/clients/${clientId}/rooms`);
+  expect(response.ok()).toBeTruthy();
+  return await response.json() as TestRoom[];
+}
+
 export async function postMessageViaApi(
   request: APIRequestContext,
   roomId: string,
