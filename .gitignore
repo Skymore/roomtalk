@@ -8,6 +8,7 @@ coverage/
 client-heroui/test-results/
 client-heroui/playwright-report/
 client-heroui/blob-report/
+server/test-results/
 
 # Production
 client-heroui/dist/
