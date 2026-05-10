@@ -86,10 +86,12 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
 
       const updatedMessage = editResult.updatedMessage;
       const updatedRoom = await store.saveMessageHistory(data.roomId, editResult.messages);
-      if (updatedRoom) {
-        io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+      if (!updatedRoom) {
+        socketLogger.error('Failed to persist edited message history', { ...data, editorClientId: clientId });
+        return callback?.({ success: false, error: 'Failed to save edited message' });
       }
 
+      io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
       io.to(data.roomId).emit('message_edited', updatedMessage);
       socketLogger.info('Message edited successfully', { messageId: data.messageId, roomId: data.roomId, editorClientId: clientId });
 
@@ -122,10 +124,12 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       }
 
       const updatedRoom = await store.saveMessageHistory(data.roomId, deleteResult.messages);
-      if (updatedRoom) {
-        io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+      if (!updatedRoom) {
+        socketLogger.error('Failed to persist deleted message history', { ...data, deleterClientId: clientId });
+        return callback?.({ success: false, error: 'Failed to delete message' });
       }
 
+      io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
       io.to(data.roomId).emit('message_deleted', data.messageId, data.roomId);
       socketLogger.info('Message deleted successfully', { messageId: data.messageId, roomId: data.roomId, deleterClientId: clientId });
 

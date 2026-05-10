@@ -81,6 +81,10 @@ const roomCost = (roomId = 'room-1'): RoomAICostTotal => ({
   totalUsd: 0.5,
 });
 
+const roomActivityForMessages = (messages: Message[]) => room({
+  lastActivityAt: messages[messages.length - 1]?.timestamp || '2026-05-03T00:00:00.000Z',
+});
+
 const createHarness = (clientId: string | null = 'client-1') => {
   const socket = new FakeSocket();
   const io = new FakeIo();
@@ -107,6 +111,7 @@ const createHarness = (clientId: string | null = 'client-1') => {
     async saveMessageHistory(_roomId: string, messages: Message[]) {
       this.savedHistory.push(messages);
       this.messages = messages;
+      return roomActivityForMessages(messages);
     },
     async clearRoomMessages(roomId: string) {
       this.clearedRooms.push(roomId);
@@ -204,7 +209,27 @@ describe('message socket handlers', () => {
     assert.equal(response?.success, true);
     assert.equal(response?.updatedMessage?.content, 'edited');
     assert.equal(valid.store.savedHistory[0][0].content, 'edited');
-    assert.deepEqual(valid.io.roomEmits, [{ roomId: 'room-1', event: 'message_edited', args: [response!.updatedMessage] }]);
+    assert.deepEqual(valid.io.roomEmits, [
+      { roomId: 'client-1', event: 'room_updated', args: [roomActivityForMessages(valid.store.savedHistory[0])] },
+      { roomId: 'room-1', event: 'message_edited', args: [response!.updatedMessage] },
+    ]);
+  });
+
+  it('does not broadcast edited messages when history persistence fails', async () => {
+    const failing = createHarness();
+    failing.store.saveMessageHistory = async (_roomId: string, messages: Message[]) => {
+      failing.store.savedHistory.push(messages);
+      return null as any;
+    };
+
+    let response: unknown;
+    await failing.socket.invoke('edit_message', { roomId: 'room-1', messageId: 'message-1', newContent: 'edited' }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.deepEqual(response, { success: false, error: 'Failed to save edited message' });
+    assert.equal(failing.store.savedHistory.length, 1);
+    assert.deepEqual(failing.io.roomEmits, []);
   });
 
   it('deletes messages idempotently and broadcasts only real deletions', async () => {
@@ -230,7 +255,27 @@ describe('message socket handlers', () => {
     });
     assert.deepEqual(response, { success: true });
     assert.deepEqual(valid.store.savedHistory[0], []);
-    assert.deepEqual(valid.io.roomEmits, [{ roomId: 'room-1', event: 'message_deleted', args: ['message-1', 'room-1'] }]);
+    assert.deepEqual(valid.io.roomEmits, [
+      { roomId: 'client-1', event: 'room_updated', args: [roomActivityForMessages(valid.store.savedHistory[0])] },
+      { roomId: 'room-1', event: 'message_deleted', args: ['message-1', 'room-1'] },
+    ]);
+  });
+
+  it('does not broadcast deleted messages when history persistence fails', async () => {
+    const failing = createHarness();
+    failing.store.saveMessageHistory = async (_roomId: string, messages: Message[]) => {
+      failing.store.savedHistory.push(messages);
+      return null as any;
+    };
+
+    let response: unknown;
+    await failing.socket.invoke('delete_message', { roomId: 'room-1', messageId: 'message-1' }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.deepEqual(response, { success: false, error: 'Failed to delete message' });
+    assert.equal(failing.store.savedHistory.length, 1);
+    assert.deepEqual(failing.io.roomEmits, []);
   });
 
   it('clears room messages and emits reset events for registered clients', async () => {
@@ -250,5 +295,19 @@ describe('message socket handlers', () => {
       { roomId: 'room-1', event: 'messages_cleared', args: ['room-1'] },
       { roomId: 'room-1', event: 'ai_cost_total', args: [roomCost()] },
     ]);
+  });
+
+  it('does not broadcast clear events when clearing persistence throws', async () => {
+    const failing = createHarness();
+    failing.store.clearRoomMessages = async (roomId: string) => {
+      failing.store.clearedRooms.push(roomId);
+      throw new Error('clear failed');
+    };
+
+    await failing.socket.invoke('clear_room_messages', 'room-1');
+
+    assert.deepEqual(failing.store.clearedRooms, ['room-1']);
+    assert.deepEqual(failing.io.roomEmits, []);
+    assert.deepEqual(failing.socket.emitted, [{ event: 'error', args: [{ message: 'Failed to clear room messages' }] }]);
   });
 });

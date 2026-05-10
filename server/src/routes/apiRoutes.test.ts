@@ -1,8 +1,10 @@
 import assert from 'assert/strict';
 import express from 'express';
+import { mkdir, writeFile } from 'fs/promises';
 import { AddressInfo } from 'net';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { Server as HttpServer } from 'http';
+import path from 'path';
 import { registerApiRoutes } from './apiRoutes';
 import { Message, Room } from '../types';
 
@@ -53,6 +55,42 @@ const sampleMessage = (overrides: Partial<Message> = {}): Message => ({
   messageType: 'text',
   ...overrides,
 });
+
+const largeMessage = (index: number): Message => sampleMessage({
+  id: `large-message-${index.toString().padStart(3, '0')}`,
+  content: `large message ${index} ${'x'.repeat(2048)}`,
+  timestamp: new Date(Date.UTC(2026, 4, 3, 0, 0, index)).toISOString(),
+  usage: { promptTokens: index + 1, completionTokens: 1, totalTokens: index + 2, source: 'reported' },
+  cost: {
+    currency: 'USD',
+    inputUsd: 0.000001,
+    outputUsd: 0.000001,
+    totalUsd: 0.000002,
+    inputPerMillion: 1,
+    outputPerMillion: 1,
+    estimated: false,
+  },
+});
+
+const writeLargeHistoryBaseline = async (payload: {
+  messageCount: number;
+  responseBytes: number;
+  firstMessageId: string;
+  lastMessageId: string;
+}) => {
+  const outputDir = path.join(process.cwd(), 'test-results');
+  const outputPath = path.join(outputDir, 'large-message-history-baseline.json');
+  try {
+    await mkdir(outputDir, { recursive: true });
+    await writeFile(
+      outputPath,
+      `${JSON.stringify(payload, null, 2)}\n`,
+      'utf8'
+    );
+  } catch (error) {
+    assert.fail(`Failed to write large message history baseline to ${outputPath}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
 
 async function createTestServer(): Promise<TestServer> {
   const app = express();
@@ -184,6 +222,29 @@ describe('API routes', () => {
     assert.equal(status.rooms, 1);
   });
 
+  it('returns large room message histories as complete ordered JSON and writes a response-size baseline', async () => {
+    const largeMessages = Array.from({ length: 120 }, (_, index) => largeMessage(index));
+    server.store.messages = largeMessages;
+
+    const response = await fetch(`${server.baseUrl}/api/rooms/room-1/messages`);
+
+    assert.equal(response.status, 200);
+    const rawBody = await response.text();
+    const parsed = JSON.parse(rawBody) as Message[];
+    assert.equal(parsed.length, largeMessages.length);
+    assert.deepEqual(parsed.map(item => item.id), largeMessages.map(item => item.id));
+    assert.deepEqual(parsed.map(item => item.content), largeMessages.map(item => item.content));
+
+    const responseBytes = Buffer.byteLength(rawBody, 'utf8');
+    assert.ok(responseBytes > 200_000, `Expected large response baseline, got ${responseBytes} bytes`);
+    await writeLargeHistoryBaseline({
+      messageCount: parsed.length,
+      responseBytes,
+      firstMessageId: parsed[0].id,
+      lastMessageId: parsed[parsed.length - 1].id,
+    });
+  });
+
   it('creates rooms and broadcasts the new room to the creator', async () => {
     const response = await fetch(`${server.baseUrl}/api/clients/client-2/rooms`, {
       method: 'POST',
@@ -198,6 +259,24 @@ describe('API routes', () => {
     assert.equal(room.description, 'API room');
     assert.equal(room.creatorId, 'client-2');
     assert.deepEqual(server.emitted, [{ target: 'client-2', event: 'new_room', payload: room }]);
+  });
+
+  it('does not emit API rooms when room persistence fails', async () => {
+    server.store.saveRoom = async (room: Room) => {
+      server.store.savedRooms.push(room);
+      return null;
+    };
+
+    const response = await fetch(`${server.baseUrl}/api/clients/client-2/rooms`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Unsaved Room' }),
+    });
+
+    assert.equal(response.status, 500);
+    assert.deepEqual(await response.json(), { error: 'Failed to create room' });
+    assert.equal(server.store.savedRooms.length, 1);
+    assert.deepEqual(server.emitted, []);
   });
 
   it('rejects invalid room and message creation requests', async () => {
