@@ -155,9 +155,23 @@
 - 迁移后房间数量、消息数量、成本总额一致。
 - 支持先在 Redis 默认模式运行，再切换到 PostgreSQL 模式。
 
+### 阶段 6：上线运行手册和回滚保护
+
+范围：
+
+- 更新 README、部署指南和 `.env.example`，明确 PostgreSQL 模式、迁移命令、缓存 TTL 和 TLS 配置。
+- 增加上线 runbook，覆盖 dry-run、迁移、切换、验证、回滚和清理时机。
+- 保持 Redis-only 默认路径，确保旧部署不因缺少 PostgreSQL 环境变量而中断。
+
+验收标准：
+
+- 文档包含生产切换命令、状态检查和回滚命令。
+- 文档明确切换验证前不能清理 Redis 原始数据。
+- `npm run build`、`npm test`、E2E 仍通过。
+
 ## 本轮执行范围
 
-已完成阶段 1、阶段 2、阶段 3、阶段 4 和阶段 5。
+已完成阶段 1、阶段 2、阶段 3、阶段 4、阶段 5 和阶段 6。
 
 ## 本轮执行结果
 
@@ -200,6 +214,11 @@
   - 迁移输出统计包括 rooms/messages/costs 的读取和写入数量，以及逐房间失败列表；单房间失败不会中断后续房间。
   - 切换 PostgreSQL 模式：部署环境设置 `PERSISTENCE_STORE=postgres`、`DATABASE_URL=...`，需要 TLS 时设置 `POSTGRES_SSL=true`。
   - 可选缓存 TTL：`ROOM_MESSAGES_CACHE_TTL_SECONDS`，默认 30 秒；小于等于 0 时禁用 room message cache 写入。
+- 阶段 6：已完成。
+  - README / README.zh 已更新 PostgreSQL 持久化模式、迁移命令、回滚说明和当前默认模型配置。
+  - DeploymentGuide / 部署指南 已增加 PostgreSQL 上线流程和环境变量。
+  - `server/.env.example` 已补齐 PostgreSQL、TLS 和缓存 TTL 配置。
+  - 新增 PostgreSQL rollout runbook，覆盖 dry-run、迁移、切换、验证、回滚和清理窗口。
 - 验收：
   - `npm run build` 通过。
   - `npm test` 通过，86/86。

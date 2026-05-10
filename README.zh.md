@@ -210,9 +210,14 @@ npm run dev
 | `PORT`           | 3012                      | 服务端端口                |
 | `CLIENT_URL`     | http://localhost:3011     | CORS 配置                 |
 | `REDIS_URL`      | redis://localhost:6379    | Redis 连接地址            |
+| `PERSISTENCE_STORE` | redis                  | 持久化模式：`redis` 或 `postgres` |
+| `DATABASE_URL`   | —                         | PostgreSQL 连接地址，`PERSISTENCE_STORE=postgres` 时必填 |
+| `POSTGRES_SSL`   | false                     | 是否启用 PostgreSQL TLS |
+| `POSTGRES_SSL_REJECT_UNAUTHORIZED` | true     | 仅在明确使用自签名 PostgreSQL TLS 时设为 `false` |
+| `ROOM_MESSAGES_CACHE_TTL_SECONDS` | 30        | PostgreSQL 模式下 Redis 房间消息缓存 TTL；`0` 禁用缓存写入 |
 | `OPENROUTER_API_KEY` | —                     | OpenRouter API 密钥（启用 AI 必填） |
-| `AI_MODEL`       | gpt-5.5                   | 默认 AI 模型 ID          |
-| `AI_MODEL_OPTIONS` | gpt-5.5,claude-sonnet-4.6,deepseek-v4-pro,kimi-k2.6,glm-5.1,minimax-m2.7 | 用户可选择的模型 ID，逗号分隔 |
+| `AI_MODEL`       | deepseek-v4-pro           | 默认 AI 模型 ID          |
+| `AI_MODEL_OPTIONS` | deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7 | 用户可选择的模型 ID，逗号分隔 |
 | `OPENROUTER_HTTP_REFERER` | `CLIENT_URL`      | 可选 OpenRouter Referer 请求头 |
 | `OPENROUTER_APP_NAME` | RoomTalk              | 可选 OpenRouter 应用名称请求头 |
 
@@ -240,9 +245,10 @@ npm run dev
 PORT=3012
 CLIENT_URL=http://localhost:3011
 REDIS_URL=redis://localhost:6379
+PERSISTENCE_STORE=redis
 OPENROUTER_API_KEY=sk-or-...
-AI_MODEL=gpt-5.5
-AI_MODEL_OPTIONS=gpt-5.5,claude-sonnet-4.6,deepseek-v4-pro,kimi-k2.6,glm-5.1,minimax-m2.7
+AI_MODEL=deepseek-v4-pro
+AI_MODEL_OPTIONS=deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7
 OPENROUTER_HTTP_REFERER=http://localhost:5173
 OPENROUTER_APP_NAME=RoomTalk
 ```
@@ -257,11 +263,44 @@ OPENROUTER_APP_NAME=RoomTalk
 fly secrets set OPENROUTER_API_KEY="sk-or-..."
 fly secrets set REDIS_URL="redis://..."
 # 可选
-fly secrets set AI_MODEL="gpt-5.5"
-fly secrets set AI_MODEL_OPTIONS="gpt-5.5,claude-sonnet-4.6,deepseek-v4-pro,kimi-k2.6,glm-5.1,minimax-m2.7"
+fly secrets set AI_MODEL="deepseek-v4-pro"
+fly secrets set AI_MODEL_OPTIONS="deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7"
 ```
 
-## 📦 Redis 持久化
+## 📦 持久化
+
+Redis 仍是本地开发和现有部署的默认持久化路径。也可以启用 PostgreSQL 作为持久事实来源，此时 Redis 继续负责 Socket.IO 多实例同步、实时会话状态、在线成员集合和短 TTL 消息缓存。
+
+### PostgreSQL 切换流程
+
+1. 先执行只读 dry-run：
+   ```bash
+   cd server
+   REDIS_URL="redis://..." npm run migrate:redis-to-postgres -- --dry-run
+   ```
+2. 执行幂等迁移：
+   ```bash
+   REDIS_URL="redis://..." DATABASE_URL="postgres://..." npm run migrate:redis-to-postgres
+   ```
+3. 切换持久化模式：
+   ```bash
+   fly secrets set PERSISTENCE_STORE="postgres"
+   fly secrets set DATABASE_URL="postgres://..."
+   fly secrets set POSTGRES_SSL="true"
+   ```
+4. 检查 `/api/status` 返回 `persistenceStore: "postgres"`，并确认房间数量符合预期。
+
+回滚只需要将 `PERSISTENCE_STORE` 设回 `redis` 并重启/重新部署：
+
+```bash
+fly secrets set PERSISTENCE_STORE="redis"
+```
+
+PostgreSQL 切换验证完成前，不要清理 Redis 里的原始数据。
+
+完整上线检查清单见：[docs/postgres-rollout-runbook.md](docs/postgres-rollout-runbook.md)。
+
+### Redis 持久化
 
 系统支持两种Redis部署方案：
 
