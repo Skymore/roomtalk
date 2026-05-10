@@ -30,7 +30,10 @@ if not ok then
   return { 0, '' }
 end
 
-room['lastActivityAt'] = ARGV[3]
+local currentLastActivityAt = room['lastActivityAt'] or room['createdAt'] or ''
+if ARGV[3] > currentLastActivityAt then
+  room['lastActivityAt'] = ARGV[3]
+end
 local messagePayload = ARGV[2]
 redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
 redis.call('RPUSH', KEYS[2], messagePayload)
@@ -86,7 +89,10 @@ if found == 0 then
   table.insert(existing, payload)
 end
 
-room['lastActivityAt'] = ARGV[4]
+local currentLastActivityAt = room['lastActivityAt'] or room['createdAt'] or ''
+if ARGV[4] > currentLastActivityAt then
+  room['lastActivityAt'] = ARGV[4]
+end
 redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
 redis.call('DEL', KEYS[2])
 for i = 1, #existing do

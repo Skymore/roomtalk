@@ -236,7 +236,7 @@ export class PostgresStore implements DurableRoomStore {
         await client.query(INSERT_MESSAGE_SQL, messageParams(message, position));
 
         const updatedRoom = await client.query<RoomRow>(
-          `UPDATE rooms SET last_activity_at = $2 WHERE id = $1 RETURNING ${ROOM_COLUMNS}`,
+          `UPDATE rooms SET last_activity_at = GREATEST(last_activity_at, $2::timestamptz) WHERE id = $1 RETURNING ${ROOM_COLUMNS}`,
           [message.roomId, message.timestamp]
         );
         this.logger.debug('Message appended to PostgreSQL', { roomId: message.roomId, messageId: message.id });
