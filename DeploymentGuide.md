@@ -216,8 +216,45 @@ The application requires these environment variables:
 |----------|-------------|---------------|
 | PORT | Server listening port | 3012 |
 | REDIS_URL | Redis connection URL | redis://user:pass@host:port |
+| PERSISTENCE_STORE | Durable store mode, `redis` or `postgres` | postgres |
+| DATABASE_URL | PostgreSQL connection URL, required for `PERSISTENCE_STORE=postgres` | postgres://user:pass@host:5432/db |
+| POSTGRES_SSL | Enable PostgreSQL TLS | true |
+| POSTGRES_SSL_REJECT_UNAUTHORIZED | Validate PostgreSQL TLS certificate | true |
+| ROOM_MESSAGES_CACHE_TTL_SECONDS | Redis message cache TTL in PostgreSQL mode; `0` disables cache writes | 30 |
 | NODE_ENV | Running environment | production |
 | CLIENT_URL | Client address (optional) | https://example.com |
+
+## PostgreSQL Rollout
+
+Redis-only persistence remains the default and is the safest rollback path. To cut over durable data to PostgreSQL:
+
+1. Keep the current Redis deployment running and create a PostgreSQL database.
+2. Preview migration without writing PostgreSQL:
+   ```bash
+   cd server
+   REDIS_URL="redis://..." npm run migrate:redis-to-postgres -- --dry-run
+   ```
+3. Run the idempotent migration:
+   ```bash
+   REDIS_URL="redis://..." DATABASE_URL="postgres://..." npm run migrate:redis-to-postgres
+   ```
+4. Set production secrets and restart/deploy:
+   ```bash
+   fly secrets set PERSISTENCE_STORE="postgres"
+   fly secrets set DATABASE_URL="postgres://..."
+   fly secrets set POSTGRES_SSL="true"
+   ```
+5. Verify `/api/status` shows `persistenceStore: "postgres"` and the expected room count.
+
+Rollback is configuration-only: set `PERSISTENCE_STORE` back to `redis` and restart/redeploy:
+
+```bash
+fly secrets set PERSISTENCE_STORE="redis"
+```
+
+Keep Redis data until PostgreSQL mode has been verified with production smoke tests.
+
+Detailed checklist: [docs/postgres-rollout-runbook.md](docs/postgres-rollout-runbook.md).
 
 ## Multi-Instance Considerations
 
@@ -246,6 +283,7 @@ Access the `/api/status` endpoint to view system status, example response:
   "status": "online",
   "redis": "connected",
   "socketAdapterReady": true,
+  "persistenceStore": "postgres",
   "rooms": 5,
   "timestamp": "2023-03-30T12:00:00Z"
 }

@@ -203,7 +203,7 @@ This comprehensive approach ensures message delivery reliability across differen
 
 ## 🔧 Technical Highlights
 
-- **Redis persistence & Socket.IO scaling**: Hash + list storage (`rooms`, `room:{id}:messages`, membership sets) and Redis adapter for multi-instance Fly.io deployments
+- **Durable persistence options**: Redis-only by default, or PostgreSQL as the durable source of truth with Redis for Socket.IO scaling, realtime state, and short TTL message cache
 - **AI streaming pipeline**: Context-aware prompts, `ask_ai` Socket.IO event, OpenAI streaming, client-side chunk rendering, and retry/edit workflows
 - **Rich message editor**: Mixed text/image contentEditable with throttled paste, compression
 - **Responsive shell**: HeroUI-based header, status banners, room list grids, and mobile bottom navigation with saved-room management
@@ -250,9 +250,14 @@ This comprehensive approach ensures message delivery reliability across differen
 | `PORT`           | 3012                      | Server port                     |
 | `CLIENT_URL`     | http://localhost:3011     | CORS origin                     |
 | `REDIS_URL`      | redis://localhost:6379    | Redis connection URL            |
+| `PERSISTENCE_STORE` | redis                  | `redis` or `postgres` durable storage mode |
+| `DATABASE_URL`   | —                         | PostgreSQL connection URL, required when `PERSISTENCE_STORE=postgres` |
+| `POSTGRES_SSL`   | false                     | Set `true` to enable PostgreSQL TLS |
+| `POSTGRES_SSL_REJECT_UNAUTHORIZED` | true     | Set `false` only for intentionally self-signed PostgreSQL TLS |
+| `ROOM_MESSAGES_CACHE_TTL_SECONDS` | 30        | Redis room message cache TTL in PostgreSQL mode; `0` disables cache writes |
 | `OPENROUTER_API_KEY` | —                     | OpenRouter API key (required for AI) |
-| `AI_MODEL`       | gpt-5.5                   | Default AI model id             |
-| `AI_MODEL_OPTIONS` | gpt-5.5,claude-sonnet-4.6,deepseek-v4-pro,kimi-k2.6,glm-5.1,minimax-m2.7 | Comma-separated model ids users can select |
+| `AI_MODEL`       | deepseek-v4-pro           | Default AI model id             |
+| `AI_MODEL_OPTIONS` | deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7 | Comma-separated model ids users can select |
 | `OPENROUTER_HTTP_REFERER` | `CLIENT_URL`      | Optional OpenRouter referer header |
 | `OPENROUTER_APP_NAME` | RoomTalk              | Optional OpenRouter app title header |
 
@@ -280,9 +285,10 @@ Create `server/.env` file:
 PORT=3012
 CLIENT_URL=http://localhost:3011
 REDIS_URL=redis://localhost:6379
+PERSISTENCE_STORE=redis
 OPENROUTER_API_KEY=sk-or-...
-AI_MODEL=gpt-5.5
-AI_MODEL_OPTIONS=gpt-5.5,claude-sonnet-4.6,deepseek-v4-pro,kimi-k2.6,glm-5.1,minimax-m2.7
+AI_MODEL=deepseek-v4-pro
+AI_MODEL_OPTIONS=deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7
 OPENROUTER_HTTP_REFERER=http://localhost:5173
 OPENROUTER_APP_NAME=RoomTalk
 ```
@@ -297,11 +303,44 @@ Client uses mode-specific files:
 fly secrets set OPENROUTER_API_KEY="sk-or-..."
 fly secrets set REDIS_URL="redis://..."
 # optional
-fly secrets set AI_MODEL="gpt-5.5"
-fly secrets set AI_MODEL_OPTIONS="gpt-5.5,claude-sonnet-4.6,deepseek-v4-pro,kimi-k2.6,glm-5.1,minimax-m2.7"
+fly secrets set AI_MODEL="deepseek-v4-pro"
+fly secrets set AI_MODEL_OPTIONS="deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7"
 ```
 
-## 📦 Redis Persistence
+## 📦 Persistence
+
+Redis remains the default durable store for local development and existing deployments. PostgreSQL can be enabled as the durable source of truth while Redis continues to handle Socket.IO scaling, realtime session state, online member sets, and short TTL message cache.
+
+### PostgreSQL Cutover
+
+1. Run a read-only migration preview:
+   ```bash
+   cd server
+   REDIS_URL="redis://..." npm run migrate:redis-to-postgres -- --dry-run
+   ```
+2. Run the idempotent migration:
+   ```bash
+   REDIS_URL="redis://..." DATABASE_URL="postgres://..." npm run migrate:redis-to-postgres
+   ```
+3. Switch durable storage:
+   ```bash
+   fly secrets set PERSISTENCE_STORE="postgres"
+   fly secrets set DATABASE_URL="postgres://..."
+   fly secrets set POSTGRES_SSL="true"
+   ```
+4. Verify `/api/status` reports `persistenceStore: "postgres"` and expected room count.
+
+Rollback is configuration-only: set `PERSISTENCE_STORE` back to `redis` and redeploy/restart:
+
+```bash
+fly secrets set PERSISTENCE_STORE="redis"
+```
+
+Keep Redis data intact until the PostgreSQL cutover has been verified.
+
+Full rollout checklist: [docs/postgres-rollout-runbook.md](docs/postgres-rollout-runbook.md).
+
+### Redis Persistence
 
 The system supports two Redis deployment options:
 
