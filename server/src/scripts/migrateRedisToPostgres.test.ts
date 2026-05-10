@@ -2,6 +2,7 @@ import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import {
   migrateRedisToPostgres,
+  RedisMigrationSource,
   RedisToPostgresMigrationSource,
   RedisToPostgresMigrationTarget,
 } from './migrateRedisToPostgres';
@@ -67,10 +68,67 @@ class MemoryMigrationTarget implements RedisToPostgresMigrationTarget {
 
   async setRoomAICostTotal(roomId: string, totalUsd: number) {
     this.calls.push(`setCost:${roomId}:${totalUsd}`);
+    if (totalUsd <= 0) {
+      this.costsByRoom.delete(roomId);
+      return { roomId, currency: 'USD' as const, totalUsd: 0 };
+    }
     this.costsByRoom.set(roomId, totalUsd);
     return { roomId, currency: 'USD' as const, totalUsd };
   }
 }
+
+class LimitFailingRedisList {
+  constructor(
+    readonly messages: string[],
+    readonly failFullRangeThreshold: number
+  ) {}
+
+  async hKeys() {
+    return ['room-1'];
+  }
+
+  async hGet(_key: string, field: string) {
+    return field === 'room-1' ? JSON.stringify(room()) : null;
+  }
+
+  async lRange(_key: string, start: number, stop: number) {
+    if (start === 0 && stop === -1 && this.messages.length > this.failFullRangeThreshold) {
+      throw new Error('Response size exceeds Upstash limit');
+    }
+    const end = stop === -1 ? this.messages.length : stop + 1;
+    return this.messages.slice(start, end);
+  }
+
+  async lLen() {
+    return this.messages.length;
+  }
+
+  async lIndex(_key: string, index: number) {
+    return this.messages[index] ?? null;
+  }
+
+  async get() {
+    return null;
+  }
+}
+
+class BrokenFallbackRedisList extends LimitFailingRedisList {
+  async lLen(): Promise<number> {
+    throw new Error('fallback length read failed');
+  }
+}
+
+class UnusedRedisStore {
+  async readRoomAICost(roomId: string) {
+    return { roomId, currency: 'USD' as const, totalUsd: 0 };
+  }
+}
+
+const logger = {
+  info() {},
+  error() {},
+  warn() {},
+};
 
 describe('migrateRedisToPostgres', () => {
   it('does not write to the target during dry-run and still reports source counts', async () => {
@@ -124,7 +182,7 @@ describe('migrateRedisToPostgres', () => {
     assert.deepEqual(target.messagesByRoom.get('room-1')?.map(item => item.id), ['message-1']);
     assert.deepEqual(target.messagesByRoom.get('room-2')?.map(item => item.id), ['message-2']);
     assert.equal(target.costsByRoom.get('room-1'), 0.5);
-    assert.equal(target.costsByRoom.get('room-2'), 0);
+    assert.equal(target.costsByRoom.has('room-2'), false);
   });
 
   it('records failures and continues with later rooms', async () => {
@@ -153,7 +211,7 @@ describe('migrateRedisToPostgres', () => {
     }]);
     assert.deepEqual(target.messagesByRoom.get('room-2'), undefined);
     assert.equal(target.costsByRoom.has('room-1'), false);
-    assert.equal(target.costsByRoom.get('room-2'), 0);
+    assert.equal(target.costsByRoom.has('room-2'), false);
   });
 
   it('records thrown target write failures and keeps migrating later rooms', async () => {
@@ -193,6 +251,63 @@ describe('migrateRedisToPostgres', () => {
       { roomId: 'room-2', stage: 'save_messages', error: 'message write failed' },
     ]);
     assert.deepEqual(target.messagesByRoom.get('room-3')?.map(item => item.id), ['message-3']);
-    assert.equal(target.costsByRoom.get('room-3'), 0);
+    assert.equal(target.costsByRoom.has('room-3'), false);
+  });
+
+  it('falls back to index-by-index Redis reads when full message list reads exceed provider limits', async () => {
+    const sourceMessages = Array.from({ length: 105 }, (_, index) => message({
+      id: `message-${index.toString().padStart(3, '0')}`,
+      content: `message ${index}`,
+      timestamp: new Date(Date.UTC(2026, 4, 3, 0, 0, index)).toISOString(),
+    }));
+    const redisClient = new LimitFailingRedisList(
+      sourceMessages.map(item => JSON.stringify(item)),
+      100
+    );
+    const source = new RedisMigrationSource(redisClient as any, new UnusedRedisStore() as any, logger as any);
+    const target = new MemoryMigrationTarget();
+
+    const stats = await migrateRedisToPostgres({ source, target });
+
+    assert.equal(stats.roomsWritten, 1);
+    assert.equal(stats.messagesRead, sourceMessages.length);
+    assert.equal(stats.messagesWritten, sourceMessages.length);
+    assert.deepEqual(
+      target.messagesByRoom.get('room-1')?.map(item => item.id),
+      sourceMessages.map(item => item.id)
+    );
+    assert.deepEqual(
+      target.messagesByRoom.get('room-1')?.map(item => item.content),
+      sourceMessages.map(item => item.content)
+    );
+
+    const secondRun = await migrateRedisToPostgres({ source, target });
+    assert.equal(secondRun.messagesWritten, sourceMessages.length);
+    assert.deepEqual(
+      target.messagesByRoom.get('room-1')?.map(item => item.id),
+      sourceMessages.map(item => item.id)
+    );
+  });
+
+  it('records a room data failure when the Redis fallback read path also fails', async () => {
+    const sourceMessages = Array.from({ length: 3 }, (_, index) => message({ id: `message-${index}` }));
+    const redisClient = new BrokenFallbackRedisList(
+      sourceMessages.map(item => JSON.stringify(item)),
+      1
+    );
+    const source = new RedisMigrationSource(redisClient as any, new UnusedRedisStore() as any, logger as any);
+    const target = new MemoryMigrationTarget();
+
+    const stats = await migrateRedisToPostgres({ source, target });
+
+    assert.equal(stats.roomsRead, 1);
+    assert.equal(stats.roomsFailed, 1);
+    assert.equal(stats.roomsWritten, 0);
+    assert.deepEqual(stats.failures, [{
+      roomId: 'room-1',
+      stage: 'read_room_data',
+      error: 'fallback length read failed',
+    }]);
+    assert.deepEqual(target.calls, []);
   });
 });

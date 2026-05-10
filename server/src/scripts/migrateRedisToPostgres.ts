@@ -186,8 +186,49 @@ export class RedisMigrationSource implements RedisToPostgresMigrationSource {
     return rooms.filter((room): room is Room => Boolean(room));
   }
 
-  readMessagesByRoom(roomId: string): Promise<Message[]> {
-    return this.redisStore.readMessagesByRoom(roomId);
+  private parseMessages(roomId: string, payloads: string[]): Message[] {
+    return payloads.flatMap((payload, index) => {
+      try {
+        return [JSON.parse(payload) as Message];
+      } catch (error) {
+        this.logger.warn('Skipping Redis message with invalid JSON during migration', { error, roomId, index });
+        return [];
+      }
+    });
+  }
+
+  private async readMessagesByIndex(roomId: string): Promise<string[]> {
+    const messageKey = `room:${roomId}:messages`;
+    const client = this.redisClient as any;
+
+    if (typeof client.lLen !== 'function' || typeof client.lIndex !== 'function') {
+      throw new Error('Redis client does not support index-by-index message fallback');
+    }
+
+    const length = Number(await client.lLen(messageKey));
+    const payloads: string[] = [];
+
+    for (let index = 0; index < length; index++) {
+      const payload = await client.lIndex(messageKey, index);
+      if (typeof payload === 'string') {
+        payloads.push(payload);
+      }
+    }
+
+    return payloads;
+  }
+
+  async readMessagesByRoom(roomId: string): Promise<Message[]> {
+    const messageKey = `room:${roomId}:messages`;
+
+    try {
+      const payloads = await this.redisClient.lRange(messageKey, 0, -1);
+      return this.parseMessages(roomId, payloads);
+    } catch (error) {
+      this.logger.warn('Full Redis message list read failed during migration; falling back to index-by-index read', { error, roomId });
+      const payloads = await this.readMessagesByIndex(roomId);
+      return this.parseMessages(roomId, payloads);
+    }
   }
 
   readRoomAICost(roomId: string): Promise<RoomAICostTotal> {
