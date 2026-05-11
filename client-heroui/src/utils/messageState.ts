@@ -93,12 +93,13 @@ export const appendAIChunk = (messages: Message[], messageId: string, chunk: str
 export const completeAIMessage = (
   messages: Message[],
   messageId: string,
-  updates: Pick<Message, "aiModel" | "usage" | "cost">
+  updates: Pick<Message, "aiModel" | "usage" | "cost"> & { content?: string }
 ) => {
   return messages.map(message =>
     message.id === messageId
       ? {
           ...message,
+          content: updates.content ?? message.content,
           status: "complete" as const,
           aiModel: updates.aiModel ?? message.aiModel,
           usage: updates.usage ?? message.usage,

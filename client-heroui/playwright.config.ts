@@ -39,6 +39,7 @@ export default defineConfig({
         'REDIS_URL=redis://127.0.0.1:6379/15',
         'E2E_TEST_MODE=true',
         'E2E_FAKE_AI=true',
+        'E2E_FAKE_AI_CHUNK_DELAY_MS=1000',
         'AI_MODEL=deepseek-v4-pro',
         'OPENAI_API_KEY=e2e',
         'OPENROUTER_API_KEY=e2e',
