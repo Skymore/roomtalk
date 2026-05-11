@@ -252,6 +252,35 @@ TEST_DATABASE_URL="postgres://localhost/message_system_test" npm run smoke:persi
 
 说明：Redis 在 PostgreSQL 模式下同时承担 Socket.IO adapter、realtime session 和 message cache。进程级 smoke 无法只打坏 cache 而保持 Redis adapter 可用，所以“Redis cache 故障不影响 PostgreSQL durable 写入”由 `CompositeRoomStore` 单元测试覆盖，验证 cache read/write/invalidate 抛错时 durable read、append、upsert、save history、clear 仍然可用。
 
+## 执行状态
+
+截至 2026-05-11，本计划的阶段 0 到阶段 5 已完成并提交：
+
+- `aced733 docs: add postgres test coverage plan`
+- `d969a31 test(server): add durable store parity coverage`
+- `1919bc3 test(server): strengthen redis postgres migration coverage`
+- `4861002 test(server): cover large histories and persistence failures`
+- `7c18406 test(e2e): add postgres mode user flow coverage`
+- `b2d1210 test(e2e): cover multi-client realtime flows`
+- `4dfa749 test: add persistence mode smoke coverage`
+
+本地最终验收结果：
+
+- `cd server && npm test`：通过，103/103。
+- `cd server && npm run build`：通过。
+- `cd server && npm run smoke:persistence`：通过 Redis 正向 smoke；PostgreSQL 正向 smoke 因未配置 disposable test database 按设计跳过；PostgreSQL 不可达 fail-closed smoke 通过。
+- `cd client-heroui && npm test`：通过，53/53。
+- `cd client-heroui && npm run lint`：通过。
+- `cd client-heroui && npm run build`：通过。
+- `cd client-heroui && npm run test:e2e`：通过，16/16。
+
+仍需外部测试数据库完成的正向验收：
+
+- `cd server && TEST_DATABASE_URL="postgres://.../message_system_test" npm run smoke:persistence`
+- `cd client-heroui && E2E_DATABASE_URL="postgres://.../message_system_e2e" npm run test:e2e:postgres`
+
+这两个命令必须使用一次性 PostgreSQL 测试库，数据库名需要包含独立的 `test` 或 `e2e` token。当前本机没有可用 PostgreSQL 测试库，Docker daemon 也不可用，所以只记录为外部环境验收项；默认 Redis 路径和 PostgreSQL 不可达 fail-closed 路径已经自动化覆盖。
+
 ## 最终验收矩阵
 
 全部阶段完成后，需要通过：
@@ -260,6 +289,7 @@ TEST_DATABASE_URL="postgres://localhost/message_system_test" npm run smoke:persi
 cd server
 npm test
 npm run build
+npm run smoke:persistence
 ```
 
 ```bash
