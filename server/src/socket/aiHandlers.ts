@@ -39,15 +39,17 @@ export function registerAIHandlers({
     model?: string;
     editedMessageId?: string;
     retryForMessageId?: string;
-  }) => {
+  }, callback?: (response: { success: boolean; messageId?: string; error?: string }) => void) => {
     const clientId = await store.getClientId(socket.id);
     if (!clientId) {
       socket.emit('error', { message: 'You are not registered' });
+      callback?.({ success: false, error: 'You are not registered' });
       return;
     }
 
     if (!data.roomId) {
       socket.emit('error', { message: 'Room ID is required for AI request' });
+      callback?.({ success: false, error: 'Room ID is required for AI request' });
       return;
     }
 
@@ -139,6 +141,7 @@ export function registerAIHandlers({
           error: 'Sorry, unable to update message history before generating a response.',
           roomId,
         });
+        callback?.({ success: false, error: 'Unable to update message history before generating a response' });
         return;
       }
       io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
@@ -197,12 +200,14 @@ export function registerAIHandlers({
         error: 'Sorry, unable to start a durable AI response.',
         roomId,
       });
+      callback?.({ success: false, error: 'Unable to start a durable AI response' });
       return;
     }
     io.to(roomId).emit('new_message', initialAiMessage);
+    callback?.({ success: true, messageId: aiMessageId });
 
     if (isE2EFakeAIEnabled()) {
-      const lastUserMessage = [...contextMessages].reverse().find(message => message.clientId !== 'ai_assistant');
+      const lastUserMessage = [...historyUsedForContext].reverse().find(message => message.clientId !== 'ai_assistant');
       const targetContent = lastUserMessage?.content?.trim() || 'empty prompt';
       const chunks = [
         'E2E AI response ',
@@ -212,9 +217,9 @@ export function registerAIHandlers({
       const chunkDelayMs = getE2EFakeAIChunkDelayMs();
 
       for (const chunk of chunks) {
+        await wait(chunkDelayMs);
         fullContent += chunk;
         io.to(roomId).emit('ai_chunk', { messageId: aiMessageId, chunk, roomId });
-        await wait(chunkDelayMs);
       }
 
       const usage = {

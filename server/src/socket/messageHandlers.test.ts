@@ -93,6 +93,8 @@ const createHarness = (clientId: string | null = 'client-1') => {
     messages: [message()],
     savedHistory: [] as Message[][],
     appendedMessages: [] as Message[],
+    editedMessages: [] as Array<{ roomId: string; messageId: string; newContent: string }>,
+    deletedMessages: [] as Array<{ roomId: string; messageId: string }>,
     clearedRooms: [] as string[],
     async getClientId() {
       return this.clientId;
@@ -112,6 +114,31 @@ const createHarness = (clientId: string | null = 'client-1') => {
       this.savedHistory.push(messages);
       this.messages = messages;
       return roomActivityForMessages(messages);
+    },
+    async updateMessageContent(roomId: string, messageId: string, newContent: string) {
+      this.editedMessages.push({ roomId, messageId, newContent });
+      const messageIndex = this.messages.findIndex(item => item.roomId === roomId && item.id === messageId);
+      if (messageIndex === -1) {
+        return { room: roomActivityForMessages(this.messages), found: false };
+      }
+
+      const updatedMessage = {
+        ...this.messages[messageIndex],
+        content: newContent,
+        timestamp: '2026-05-03T00:00:10.000Z',
+      };
+      this.messages = this.messages.map(item => item.id === messageId ? updatedMessage : item);
+      return { room: roomActivityForMessages(this.messages), found: true, updatedMessage };
+    },
+    async deleteMessageById(roomId: string, messageId: string) {
+      this.deletedMessages.push({ roomId, messageId });
+      const found = this.messages.some(item => item.roomId === roomId && item.id === messageId);
+      if (!found) {
+        return { room: roomActivityForMessages(this.messages), deleted: false };
+      }
+
+      this.messages = this.messages.filter(item => !(item.roomId === roomId && item.id === messageId));
+      return { room: roomActivityForMessages(this.messages), deleted: true };
     },
     async clearRoomMessages(roomId: string) {
       this.clearedRooms.push(roomId);
@@ -144,19 +171,30 @@ describe('message socket handlers', () => {
 
   it('rejects unregistered or invalid sends and broadcasts valid messages', async () => {
     const unregistered = createHarness(null);
-    await unregistered.socket.invoke('send_message', { roomId: 'room-1', content: 'hello' });
+    let unregisteredResponse: unknown;
+    await unregistered.socket.invoke('send_message', { roomId: 'room-1', content: 'hello' }, (response: unknown) => {
+      unregisteredResponse = response;
+    });
     assert.deepEqual(unregistered.socket.emitted, [{ event: 'error', args: [{ message: 'You are not registered' }] }]);
+    assert.deepEqual(unregisteredResponse, { success: false, error: 'You are not registered' });
 
     const invalid = createHarness();
-    await invalid.socket.invoke('send_message', { content: 'hello' });
+    let invalidResponse: unknown;
+    await invalid.socket.invoke('send_message', { content: 'hello' }, (response: unknown) => {
+      invalidResponse = response;
+    });
     assert.deepEqual(invalid.socket.emitted, [{ event: 'error', args: [{ message: 'Room ID is required' }] }]);
+    assert.deepEqual(invalidResponse, { success: false, error: 'Room ID is required' });
 
     const valid = createHarness('client-2');
+    let validResponse: { success: boolean; message?: Message } | undefined;
     await valid.socket.invoke('send_message', {
       roomId: 'room-1',
       content: 'created through socket',
       username: 'Ada',
       avatar: { text: 'A', color: 'primary' },
+    }, (response: { success: boolean; message?: Message }) => {
+      validResponse = response;
     });
 
     assert.equal(valid.store.appendedMessages.length, 1);
@@ -169,6 +207,7 @@ describe('message socket handlers', () => {
       { roomId: 'client-1', event: 'room_updated', args: [room({ lastActivityAt: created.timestamp })] },
       { roomId: 'room-1', event: 'new_message', args: [created] },
     ]);
+    assert.deepEqual(validResponse, { success: true, message: created });
   });
 
   it('does not broadcast WebSocket messages when persistence fails', async () => {
@@ -178,11 +217,15 @@ describe('message socket handlers', () => {
       return null as any;
     };
 
-    await failing.socket.invoke('send_message', { roomId: 'room-1', content: 'unsaved' });
+    let failureResponse: unknown;
+    await failing.socket.invoke('send_message', { roomId: 'room-1', content: 'unsaved' }, (response: unknown) => {
+      failureResponse = response;
+    });
 
     assert.equal(failing.store.appendedMessages.length, 1);
     assert.deepEqual(failing.io.roomEmits, []);
     assert.deepEqual(failing.socket.emitted, [{ event: 'error', args: [{ message: 'Failed to save message' }] }]);
+    assert.deepEqual(failureResponse, { success: false, error: 'Failed to save message' });
   });
 
   it('edits messages with callbacks and broadcasts successful updates', async () => {
@@ -208,17 +251,18 @@ describe('message socket handlers', () => {
 
     assert.equal(response?.success, true);
     assert.equal(response?.updatedMessage?.content, 'edited');
-    assert.equal(valid.store.savedHistory[0][0].content, 'edited');
+    assert.deepEqual(valid.store.editedMessages, [{ roomId: 'room-1', messageId: 'message-1', newContent: 'edited' }]);
+    assert.equal(valid.store.savedHistory.length, 0);
     assert.deepEqual(valid.io.roomEmits, [
-      { roomId: 'client-1', event: 'room_updated', args: [roomActivityForMessages(valid.store.savedHistory[0])] },
+      { roomId: 'client-1', event: 'room_updated', args: [roomActivityForMessages(valid.store.messages)] },
       { roomId: 'room-1', event: 'message_edited', args: [response!.updatedMessage] },
     ]);
   });
 
-  it('does not broadcast edited messages when history persistence fails', async () => {
+  it('does not broadcast edited messages when message mutation fails', async () => {
     const failing = createHarness();
-    failing.store.saveMessageHistory = async (_roomId: string, messages: Message[]) => {
-      failing.store.savedHistory.push(messages);
+    failing.store.updateMessageContent = async (roomId: string, messageId: string, newContent: string) => {
+      failing.store.editedMessages.push({ roomId, messageId, newContent });
       return null as any;
     };
 
@@ -228,7 +272,8 @@ describe('message socket handlers', () => {
     });
 
     assert.deepEqual(response, { success: false, error: 'Failed to save edited message' });
-    assert.equal(failing.store.savedHistory.length, 1);
+    assert.equal(failing.store.editedMessages.length, 1);
+    assert.equal(failing.store.savedHistory.length, 0);
     assert.deepEqual(failing.io.roomEmits, []);
   });
 
@@ -254,17 +299,18 @@ describe('message socket handlers', () => {
       response = result;
     });
     assert.deepEqual(response, { success: true });
-    assert.deepEqual(valid.store.savedHistory[0], []);
+    assert.deepEqual(valid.store.deletedMessages, [{ roomId: 'room-1', messageId: 'message-1' }]);
+    assert.equal(valid.store.savedHistory.length, 0);
     assert.deepEqual(valid.io.roomEmits, [
-      { roomId: 'client-1', event: 'room_updated', args: [roomActivityForMessages(valid.store.savedHistory[0])] },
+      { roomId: 'client-1', event: 'room_updated', args: [roomActivityForMessages(valid.store.messages)] },
       { roomId: 'room-1', event: 'message_deleted', args: ['message-1', 'room-1'] },
     ]);
   });
 
-  it('does not broadcast deleted messages when history persistence fails', async () => {
+  it('does not broadcast deleted messages when message mutation fails', async () => {
     const failing = createHarness();
-    failing.store.saveMessageHistory = async (_roomId: string, messages: Message[]) => {
-      failing.store.savedHistory.push(messages);
+    failing.store.deleteMessageById = async (roomId: string, messageId: string) => {
+      failing.store.deletedMessages.push({ roomId, messageId });
       return null as any;
     };
 
@@ -274,7 +320,8 @@ describe('message socket handlers', () => {
     });
 
     assert.deepEqual(response, { success: false, error: 'Failed to delete message' });
-    assert.equal(failing.store.savedHistory.length, 1);
+    assert.equal(failing.store.deletedMessages.length, 1);
+    assert.equal(failing.store.savedHistory.length, 0);
     assert.deepEqual(failing.io.roomEmits, []);
   });
 

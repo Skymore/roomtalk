@@ -5,7 +5,7 @@ import {
   useDisclosure,
 } from "@heroui/react";
 import { Icon } from '@iconify/react';
-import { sendMessage, socket } from '../utils/socket';
+import { requestAIResponse, sendMessage } from '../utils/socket';
 import { useTranslation } from 'react-i18next';
 import imageCompression from 'browser-image-compression';
 import {
@@ -218,7 +218,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
   const handleAskAI = async () => {
     const latestContentItems = parseEditorContent();
 
-    if (!hasMessageContent(latestContentItems)) return;
+    if (!hasMessageContent(latestContentItems) || isSending || isAiProcessing) return;
 
     setIsAiProcessing(true);
     try {
@@ -229,15 +229,14 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
 
       if (!prompt) {
         setErrorMessage(t('emptyPrompt'));
-        setIsAiProcessing(false); // 重置状态
         return;
       }
 
       // 重新加入：先发送用户消息保存到历史记录
-      sendMessage(prompt, roomId, 'text', username, avatar);
+      await sendMessage(prompt, roomId, 'text', username, avatar);
 
       // 移除 prompt 参数
-      socket.emit('ask_ai', {
+      await requestAIResponse({
         roomId,
         systemPrompt: selectedRole.systemPrompt,
         roleName: selectedRole.name,
@@ -283,7 +282,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
 
       for (const item of outgoingItems) {
         if (item.type === 'text') {
-          sendMessage(item.content, roomId, 'text', username, avatar);
+          await sendMessage(item.content, roomId, 'text', username, avatar);
         } else {
           try {
             // 压缩图片
@@ -305,7 +304,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
             const base64String = await base64Promise;
 
             // 发送压缩后的图片
-            sendMessage(base64String, roomId, 'image', username, avatar);
+            await sendMessage(base64String, roomId, 'image', username, avatar);
 
             // 如果有预览URL，释放它
             if (item.previewUrl) {
