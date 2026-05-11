@@ -268,18 +268,37 @@ TEST_DATABASE_URL="postgres://localhost/message_system_test" npm run smoke:persi
 
 - `cd server && npm test`：通过，103/103。
 - `cd server && npm run build`：通过。
-- `cd server && npm run smoke:persistence`：通过 Redis 正向 smoke；PostgreSQL 正向 smoke 因未配置 disposable test database 按设计跳过；PostgreSQL 不可达 fail-closed smoke 通过。
+- `cd server && npm run smoke:persistence`：通过 Redis 正向 smoke；未配置测试库时 PostgreSQL 正向 smoke 按设计跳过；PostgreSQL 不可达 fail-closed smoke 通过。
+- `cd server && TEST_DATABASE_URL="postgres://sky@127.0.0.1:55432/message_system_test" npm run smoke:persistence`：通过，补齐 PostgreSQL 正向 smoke。
 - `cd client-heroui && npm test`：通过，53/53。
 - `cd client-heroui && npm run lint`：通过。
 - `cd client-heroui && npm run build`：通过。
 - `cd client-heroui && npm run test:e2e`：通过，16/16。
+- `cd client-heroui && E2E_DATABASE_URL="postgres://sky@127.0.0.1:55432/message_system_e2e" npm run test:e2e:postgres`：通过，3/3。
 
-仍需外部测试数据库完成的正向验收：
+本次补齐 PostgreSQL 正向验收使用的是本机一次性测试库：
 
-- `cd server && TEST_DATABASE_URL="postgres://.../message_system_test" npm run smoke:persistence`
-- `cd client-heroui && E2E_DATABASE_URL="postgres://.../message_system_e2e" npm run test:e2e:postgres`
+```bash
+brew install postgresql@17
+PG_BIN=/opt/homebrew/opt/postgresql@17/bin
+PGDATA=/private/tmp/message-system-pg-e2e
+PORT=55432
+"$PG_BIN/initdb" -D "$PGDATA" --locale=en_US.UTF-8 -E UTF8 --auth=trust
+"$PG_BIN/pg_ctl" -D "$PGDATA" -o "-h 127.0.0.1 -p $PORT" -l "$PGDATA/postgres.log" start
+"$PG_BIN/createdb" -h 127.0.0.1 -p "$PORT" -U sky message_system_test
+"$PG_BIN/createdb" -h 127.0.0.1 -p "$PORT" -U sky message_system_e2e
+```
 
-这两个命令必须使用一次性 PostgreSQL 测试库，数据库名需要包含独立的 `test` 或 `e2e` token。当前本机没有可用 PostgreSQL 测试库，Docker daemon 也不可用，所以只记录为外部环境验收项；默认 Redis 路径和 PostgreSQL 不可达 fail-closed 路径已经自动化覆盖。
+测试库是临时本地集群，不是系统服务。需要停止时执行：
+
+```bash
+/opt/homebrew/opt/postgresql@17/bin/pg_ctl -D /private/tmp/message-system-pg-e2e stop
+```
+
+PostgreSQL E2E 首次运行暴露并修复了两个问题：
+
+- E2E `seedClient()` 之前每次 `page.reload()` 都会重置 `roomtalk_current_view` 和当前房间，测试辅助函数本身破坏了刷新恢复链路；现在只在新 clientId seed 时清理状态，同一 context reload 会保留当前房间。
+- `Ask AI` 之前只是 fire-and-forget 发送用户消息；PostgreSQL 落库慢于 Redis 时，`ask_ai` 可能先读取历史并看到空 prompt。现在服务端 `send_message` 返回持久化 ACK，前端等 ACK 后再发起 `ask_ai`，并带超时保护避免断线时 UI 卡住。
 
 ## 最终验收矩阵
 

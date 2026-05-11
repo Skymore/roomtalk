@@ -540,13 +540,15 @@ Claude review 发现的问题大多不是 happy path，而是：
 - 大 message history API、持久化失败不广播幽灵消息。
 - PostgreSQL 模式专用 E2E 入口，带测试库安全校验和启动前重置。
 - 多客户端 realtime E2E，覆盖 send/edit/delete/clear、成员数、AI streaming 和 late joiner。
-- persistence smoke，覆盖 Redis mode 正向、PostgreSQL 不可达 fail-closed、以及切回 Redis 后基础 API。
+- persistence smoke，覆盖 Redis mode 正向、PostgreSQL mode 正向、PostgreSQL 不可达 fail-closed、以及切回 Redis 后基础 API。
 
-本地最终矩阵已通过：server 单测 103/103、server build、client 单测 53/53、client lint、client build、Redis E2E 16/16、persistence smoke。唯一尚未在本机完成的是需要 disposable PostgreSQL 测试库的正向 smoke 和 PostgreSQL E2E；这两个命令已经写入测试计划文档，等有安全测试库后即可执行。
+后续又用本机临时 PostgreSQL 17 测试库补齐了正向验收：`message_system_test` 用于 persistence smoke，`message_system_e2e` 用于 PostgreSQL E2E。最终本地矩阵已通过：server 单测 103/103、server build、client 单测 53/53、client lint、client build、Redis E2E 16/16、PostgreSQL E2E 3/3、persistence smoke。
+
+这次真实 PostgreSQL E2E 还暴露了两个隐藏问题：测试辅助函数 `seedClient()` 在 reload 时错误清理当前房间状态；以及 `Ask AI` 在用户消息 durable 写入完成前就触发 `ask_ai`，PostgreSQL 落库慢时会读到空 prompt。前者通过只在新 clientId seed 时清理状态修复；后者通过 `send_message` 持久化 ACK 和前端等待 ACK 后再 `ask_ai` 修复，并加入 ACK 超时保护避免断线时 UI 卡住。
 
 ## 后续建议
 
-1. 配置一次性 PostgreSQL 测试库后，补跑 `TEST_DATABASE_URL=... npm run smoke:persistence` 和 `E2E_DATABASE_URL=... npm run test:e2e:postgres`。
+1. 将一次性 PostgreSQL 测试库接入 CI，把 `TEST_DATABASE_URL=... npm run smoke:persistence` 和 `E2E_DATABASE_URL=... npm run test:e2e:postgres` 变成自动门禁。
 2. 为 message history API 增加分页或 lazy loading，避免单个房间返回十几 MB 甚至更大的 payload。
 3. 为 PostgreSQL 增加备份和恢复演练；当前 Fly Postgres 是 unmanaged，备份责任在我们。
 4. 如果未来要真正零停机迁移，先实现双写 outbox 和 shadow read mismatch 指标。
