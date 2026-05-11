@@ -219,7 +219,7 @@ describe('CompositeRoomStore', () => {
     ]);
   });
 
-  it('ignores cache failures and keeps durable reads and writes usable', async () => {
+  it('ignores Redis message-cache failures and keeps PostgreSQL durable reads and writes usable', async () => {
     const durable: DurableRoomStore = {
       async generateUniqueRoomId() { return 'room-1'; },
       async appendMessage() { return room(); },
@@ -254,6 +254,8 @@ describe('CompositeRoomStore', () => {
 
     assert.deepEqual(await store.readMessagesByRoom('room-1'), [message({ id: 'durable-message' })]);
     assert.deepEqual(await store.appendMessage(message()), room());
+    assert.deepEqual(await store.upsertMessage(message({ id: 'upsert' })), room());
+    assert.deepEqual(await store.saveMessageHistory('room-1', [message({ id: 'history' })]), room());
     assert.equal(await store.clearRoomMessages('room-1'), 0);
   });
 
