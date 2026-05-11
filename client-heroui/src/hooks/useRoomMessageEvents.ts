@@ -101,6 +101,7 @@ export const useRoomMessageEvents = ({
     const handleAIStreamEnd = (data: AIStreamEndEvent) => {
       if (data.roomId !== roomId) return;
       updateMessages(prev => completeAIMessage(prev, data.messageId, {
+        content: data.content,
         aiModel: data.aiModel,
         usage: data.usage,
         cost: data.cost,

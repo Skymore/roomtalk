@@ -58,6 +58,7 @@ export interface AIChunkEvent {
 export interface AIStreamEndEvent {
   messageId: string;
   roomId: string;
+  content: string;
   aiModel?: Message['aiModel'];
   usage?: AIUsage;
   cost?: AICost;

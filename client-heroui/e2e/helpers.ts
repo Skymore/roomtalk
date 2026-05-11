@@ -82,9 +82,20 @@ export async function openRoomFromCard(page: Page, room: Pick<TestRoom, 'id' | '
   await expectChatRoom(page, room.name);
 }
 
+export async function joinRoomById(page: Page, room: Pick<TestRoom, 'id' | 'name'>) {
+  await openRoomsPage(page);
+  await page.getByRole('textbox', { name: 'Enter Room ID' }).first().fill(room.id);
+  await page.getByRole('button', { name: 'Join Room' }).click();
+  await expectChatRoom(page, room.name);
+}
+
 export async function expectChatRoom(page: Page, roomName: string) {
   await expect(page.getByTestId('chat-room-title')).toHaveText(roomName);
   await expect(page.getByTestId('message-editor')).toBeVisible();
+}
+
+export async function expectMemberCount(page: Page, count: number) {
+  await expect(page.getByTestId('room-member-count')).toContainText(String(count));
 }
 
 export async function sendTextMessage(page: Page, text: string) {

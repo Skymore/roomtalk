@@ -16,6 +16,11 @@ const ERROR_STATE_SAVE_RETRY_DELAY_MS = 25;
 const isE2EFakeAIEnabled = () =>
   process.env.E2E_TEST_MODE === 'true' && process.env.E2E_FAKE_AI === 'true';
 
+const getE2EFakeAIChunkDelayMs = () => {
+  const delayMs = Number.parseInt(process.env.E2E_FAKE_AI_CHUNK_DELAY_MS || '5', 10);
+  return Number.isFinite(delayMs) && delayMs >= 0 ? delayMs : 5;
+};
+
 const wait = (delayMs: number) => new Promise(resolve => setTimeout(resolve, delayMs));
 
 export function registerAIHandlers({
@@ -204,11 +209,12 @@ export function registerAIHandlers({
         `to: ${targetContent}`,
       ];
       let fullContent = '';
+      const chunkDelayMs = getE2EFakeAIChunkDelayMs();
 
       for (const chunk of chunks) {
         fullContent += chunk;
         io.to(roomId).emit('ai_chunk', { messageId: aiMessageId, chunk, roomId });
-        await wait(5);
+        await wait(chunkDelayMs);
       }
 
       const usage = {
@@ -252,6 +258,7 @@ export function registerAIHandlers({
       io.to(roomId).emit('ai_stream_end', {
         messageId: aiMessageId,
         roomId,
+        content: finalAiMessage.content,
         aiModel,
         usage,
         cost,
@@ -370,6 +377,7 @@ export function registerAIHandlers({
       io.to(roomId).emit('ai_stream_end', {
         messageId: aiMessageId,
         roomId,
+        content: finalAiMessage.content,
         aiModel,
         usage,
         cost,

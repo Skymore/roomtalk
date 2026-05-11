@@ -62,6 +62,20 @@ describe("messageState", () => {
     expect(completed[0].cost?.totalUsd).toBe(3);
   });
 
+  it("uses final AI stream content when a client missed earlier chunks", () => {
+    const ai = message({ id: "ai1", clientId: "ai_assistant", content: "to: question", messageType: "ai", status: "streaming" });
+
+    const completed = completeAIMessage([ai], "ai1", {
+      content: "E2E AI response to: question",
+      aiModel: { id: "gpt", apiModel: "openai/gpt", provider: "openrouter", label: "GPT" },
+      usage: { promptTokens: 1, completionTokens: 2, totalTokens: 3, source: "reported" },
+      cost: { currency: "USD", inputUsd: 1, outputUsd: 2, totalUsd: 3, inputPerMillion: 1, outputPerMillion: 2, estimated: false },
+    });
+
+    expect(completed[0].content).toBe("E2E AI response to: question");
+    expect(completed[0].status).toBe("complete");
+  });
+
   it("preserves message order while updating streaming AI messages", () => {
     const later = message({ id: "later", timestamp: "2026-05-03T10:00:02.000Z" });
     const ai = message({ id: "ai1", clientId: "ai_assistant", content: "hel", messageType: "ai", status: "streaming" });

@@ -7,6 +7,7 @@ import {
   expectChatRoom,
   expectMessage,
   getClientRoomsViaApi,
+  joinRoomById,
   openRoomFromCard,
   openRoomsPage,
   postMessageViaApi,
@@ -135,5 +136,43 @@ test('persists fake AI, image messages, and shared room joins in PostgreSQL mode
     await expectMessage(joinPage, responseText).toBeVisible();
   } finally {
     await joinContext.close();
+  }
+});
+
+test('syncs PostgreSQL-backed room messages to a second client without refresh', async ({ page, context, request, browser }) => {
+  await expectPostgresMode(request);
+  const ownerId = await seedClient(context, uniqueName('pg-realtime-owner'));
+  const room = await createRoomViaApi(request, ownerId, shortName('pg-realtime'));
+
+  await openRoomsPage(page);
+  await openRoomFromCard(page, room);
+
+  const peerContext = await browser.newContext();
+  try {
+    await seedClient(peerContext, uniqueName('pg-realtime-peer'));
+    const peerPage = await peerContext.newPage();
+    await joinRoomById(peerPage, room);
+
+    const ownerMessage = uniqueName('pg-owner-live');
+    await sendTextMessage(page, ownerMessage);
+    await expectMessage(peerPage, ownerMessage).toBeVisible();
+
+    const peerMessage = uniqueName('pg-peer-live');
+    await sendTextMessage(peerPage, peerMessage);
+    await expectMessage(page, peerMessage).toBeVisible();
+
+    const freshContext = await browser.newContext();
+    try {
+      await seedClient(freshContext, ownerId);
+      const freshPage = await freshContext.newPage();
+      await openRoomsPage(freshPage);
+      await openRoomFromCard(freshPage, room);
+      await expectMessage(freshPage, ownerMessage).toBeVisible();
+      await expectMessage(freshPage, peerMessage).toBeVisible();
+    } finally {
+      await freshContext.close();
+    }
+  } finally {
+    await peerContext.close();
   }
 });

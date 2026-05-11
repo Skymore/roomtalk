@@ -63,7 +63,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           <h2 data-testid="chat-room-title" className="max-w-[150px] truncate font-serif text-lg font-medium leading-tight text-[#141413] dark:text-[#faf9f5] md:max-w-[360px]">{currentRoom.name}</h2>
           <span className="text-[#c2c0b6]">|</span>
           <div className="flex flex-wrap items-center gap-2 text-xs text-[#5e5d59] dark:text-[#b0aea5]">
-            <div className="flex items-center">
+            <div className="flex items-center" data-testid="room-member-count">
               <Icon icon="lucide:users" className="mr-1" width={14} />
               {memberCount}
               {memberEvent && (
