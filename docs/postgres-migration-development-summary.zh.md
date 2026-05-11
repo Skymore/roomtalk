@@ -529,11 +529,26 @@ Claude review 发现的问题大多不是 happy path，而是：
 
 这是一类非常值得学习的后端系统演进能力。
 
+## 测试覆盖补充结果
+
+迁移完成后又按独立计划补齐了 PostgreSQL 迁移测试覆盖：[docs/postgres-test-coverage-plan.zh.md](./postgres-test-coverage-plan.zh.md)。
+
+已完成的新增覆盖包括：
+
+- RedisStore/PostgresStore 共享 durable contract，防止两种模式语义漂移。
+- Upstash 大 Redis list 读取限制、迁移分批顺序、幂等迁移和失败后重跑。
+- 大 message history API、持久化失败不广播幽灵消息。
+- PostgreSQL 模式专用 E2E 入口，带测试库安全校验和启动前重置。
+- 多客户端 realtime E2E，覆盖 send/edit/delete/clear、成员数、AI streaming 和 late joiner。
+- persistence smoke，覆盖 Redis mode 正向、PostgreSQL 不可达 fail-closed、以及切回 Redis 后基础 API。
+
+本地最终矩阵已通过：server 单测 103/103、server build、client 单测 53/53、client lint、client build、Redis E2E 16/16、persistence smoke。唯一尚未在本机完成的是需要 disposable PostgreSQL 测试库的正向 smoke 和 PostgreSQL E2E；这两个命令已经写入测试计划文档，等有安全测试库后即可执行。
+
 ## 后续建议
 
-1. 按独立计划补齐迁移后的测试覆盖：[docs/postgres-test-coverage-plan.zh.md](./postgres-test-coverage-plan.zh.md)。
+1. 配置一次性 PostgreSQL 测试库后，补跑 `TEST_DATABASE_URL=... npm run smoke:persistence` 和 `E2E_DATABASE_URL=... npm run test:e2e:postgres`。
 2. 为 message history API 增加分页或 lazy loading，避免单个房间返回十几 MB 甚至更大的 payload。
 3. 为 PostgreSQL 增加备份和恢复演练；当前 Fly Postgres 是 unmanaged，备份责任在我们。
 4. 如果未来要真正零停机迁移，先实现双写 outbox 和 shadow read mismatch 指标。
 5. 为迁移脚本加入更强的数据校验，例如每房间 message count、latest message id、cost total checksum。
-6. 在 E2E 中增加 PostgreSQL 模式专项链路，覆盖创建房间、发送消息、AI streaming、刷新后历史恢复。
+6. 在 CI 中加入可选 PostgreSQL 测试库服务后，把 PostgreSQL E2E 和正向 smoke 纳入自动门禁。
