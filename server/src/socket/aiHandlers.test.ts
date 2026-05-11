@@ -170,7 +170,10 @@ describe('AI socket handlers', () => {
   it('persists a streaming placeholder before completing an AI response', async () => {
     const { io, socket, store } = createHarness();
 
-    await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id });
+    let response: unknown;
+    await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id }, (ack: unknown) => {
+      response = ack;
+    });
 
     assert.equal(store.upsertedMessages.length, 2);
     const streamingMessage = store.upsertedMessages[0];
@@ -188,6 +191,7 @@ describe('AI socket handlers', () => {
 
     assert.equal(io.roomEmits.some(event => event.event === 'new_message'), true);
     assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_end'), true);
+    assert.deepEqual(response, { success: true, messageId: streamingMessage.id });
     const aiChunkEvents = io.roomEmits.filter(event => event.event === 'ai_chunk');
     assert.deepEqual(aiChunkEvents.map(event => (event.args[0] as { chunk: string }).chunk), [
       'E2E AI response ',
@@ -198,7 +202,10 @@ describe('AI socket handlers', () => {
   it('emits an error and does not stream when the placeholder cannot be persisted', async () => {
     const { io, socket, store } = createHarness({ rejectSaves: true });
 
-    await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id });
+    let response: unknown;
+    await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id }, (ack: unknown) => {
+      response = ack;
+    });
 
     assert.equal(store.upsertedMessages.length, 1);
     assert.equal(io.roomEmits.some(event => event.event === 'new_message'), false);
@@ -212,6 +219,7 @@ describe('AI socket handlers', () => {
         roomId: 'room-1',
       }],
     }]);
+    assert.deepEqual(response, { success: false, error: 'Unable to start a durable AI response' });
   });
 
   it('emits an error and marks the durable placeholder failed when final persistence fails', async () => {

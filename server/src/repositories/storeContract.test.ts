@@ -458,6 +458,14 @@ type StoreFixture = {
   store: DurableRoomStore;
 };
 
+type DurableRoomStoreWithMessageMutations = DurableRoomStore & {
+  updateMessageContent(roomId: string, messageId: string, newContent: string, updatedAt?: string): Promise<{ room: Room; found: boolean; updatedMessage?: Message } | null>;
+  deleteMessageById(roomId: string, messageId: string): Promise<{ room: Room; deleted: boolean } | null>;
+  truncateBeforeMessage(roomId: string, messageId: string): Promise<{ room: Room; messages: Message[]; targetFound: boolean } | null>;
+  truncateAfterMessage(roomId: string, messageId: string): Promise<{ room: Room; messages: Message[]; targetFound: boolean } | null>;
+  updateMessageAndTruncateAfter(roomId: string, messageId: string, newContent: string, updatedAt?: string): Promise<{ room: Room; targetFound: boolean; updatedMessage?: Message; messages: Message[] } | null>;
+};
+
 const storeFactories: Array<[string, () => StoreFixture]> = [
   ['RedisStore', () => ({ store: new RedisStore(new MemoryRedis() as any, logger as any) })],
   ['PostgresStore', () => ({ store: new PostgresStore(new StatefulPostgresPool(), logger as any) })],
@@ -526,6 +534,7 @@ for (const [storeName, createFixture] of storeFactories) {
 
     it('keeps retry and edit-and-ask truncation semantics consistent', async () => {
       const { store } = createFixture();
+      const mutableStore = store as DurableRoomStoreWithMessageMutations;
       const baseRoom = room();
       const userOne = message({ id: 'u1', content: 'first prompt', timestamp: '2026-05-03T00:00:01.000Z' });
       const aiOne = message({ id: 'ai1', clientId: 'ai_assistant', content: 'first answer', messageType: 'ai', status: 'complete', timestamp: '2026-05-03T00:00:02.000Z' });
@@ -540,24 +549,64 @@ for (const [storeName, createFixture] of storeFactories) {
       await store.saveRoom(baseRoom);
 
       await store.saveMessageHistory(baseRoom.id, fullHistory);
-      await store.saveMessageHistory(baseRoom.id, [userOne, aiOne, userTwo]);
+      const retryTruncation = await mutableStore.truncateBeforeMessage(baseRoom.id, 'ai2');
+      assert.equal(retryTruncation?.targetFound, true);
+      assert.deepEqual(retryTruncation?.messages.map(item => item.id), ['u1', 'ai1', 'u2']);
       await store.upsertMessage(retryPlaceholder);
       assert.deepEqual((await store.readMessagesByRoom(baseRoom.id)).map(item => item.id), ['u1', 'ai1', 'u2', 'retry-ai']);
 
-      const editedUserTwo = { ...userTwo, content: 'edited second prompt', timestamp: '2026-05-03T00:00:09.000Z' };
-      await store.saveMessageHistory(baseRoom.id, [userOne, aiOne, editedUserTwo, aiTwo, tail]);
-      await store.saveMessageHistory(baseRoom.id, [userOne, aiOne, editedUserTwo]);
+      await store.saveMessageHistory(baseRoom.id, fullHistory);
+      const editAndTruncate = await mutableStore.updateMessageAndTruncateAfter(baseRoom.id, 'u2', 'edited second prompt', '2026-05-03T00:00:09.000Z');
+      assert.equal(editAndTruncate?.targetFound, true);
+      assert.equal(editAndTruncate?.updatedMessage.content, 'edited second prompt');
+      assert.deepEqual(editAndTruncate?.messages.map(item => item.id), ['u1', 'ai1', 'u2']);
       await store.upsertMessage(editPlaceholder);
-      assert.deepEqual(await store.readMessagesByRoom(baseRoom.id), [userOne, aiOne, editedUserTwo, editPlaceholder]);
+      assert.deepEqual((await store.readMessagesByRoom(baseRoom.id)).map(item => item.id), ['u1', 'ai1', 'u2', 'edit-ai']);
+      assert.equal((await store.readMessagesByRoom(baseRoom.id))[2].content, 'edited second prompt');
 
       await store.saveMessageHistory(baseRoom.id, fullHistory);
+      const missingRetryTruncation = await mutableStore.truncateBeforeMessage(baseRoom.id, 'missing');
+      assert.equal(missingRetryTruncation?.targetFound, false);
+      assert.deepEqual(missingRetryTruncation?.messages.map(item => item.id), ['u1', 'ai1', 'u2', 'ai2', 'tail']);
       await store.upsertMessage(missingTargetPlaceholder);
       assert.deepEqual((await store.readMessagesByRoom(baseRoom.id)).map(item => item.id), ['u1', 'ai1', 'u2', 'ai2', 'tail', 'missing-target-ai']);
 
       await store.saveMessageHistory(baseRoom.id, fullHistory);
-      await store.saveMessageHistory(baseRoom.id, fullHistory);
+      const lastTargetTruncation = await mutableStore.truncateAfterMessage(baseRoom.id, 'tail');
+      assert.equal(lastTargetTruncation?.targetFound, true);
+      assert.deepEqual(lastTargetTruncation?.messages.map(item => item.id), ['u1', 'ai1', 'u2', 'ai2', 'tail']);
       await store.upsertMessage(message({ id: 'after-last-target', clientId: 'ai_assistant', content: '', messageType: 'ai', status: 'streaming', timestamp: '2026-05-03T00:00:10.000Z' }));
       assert.deepEqual((await store.readMessagesByRoom(baseRoom.id)).map(item => item.id), ['u1', 'ai1', 'u2', 'ai2', 'tail', 'after-last-target']);
+    });
+
+    it('updates and deletes individual messages without replacing whole histories', async () => {
+      const { store } = createFixture();
+      const mutableStore = store as DurableRoomStoreWithMessageMutations;
+      const baseRoom = room();
+      const first = message({ id: 'first', content: 'first', timestamp: '2026-05-03T00:00:01.000Z' });
+      const second = message({ id: 'second', content: 'second', timestamp: '2026-05-03T00:00:02.000Z' });
+      const third = message({ id: 'third', content: 'third', timestamp: '2026-05-03T00:00:03.000Z' });
+
+      await store.saveRoom(baseRoom);
+      await store.saveMessageHistory(baseRoom.id, [first, second, third]);
+
+      const editResult = await mutableStore.updateMessageContent(baseRoom.id, 'second', 'edited second', '2026-05-03T00:00:04.000Z');
+      assert.equal(editResult?.found, true);
+      assert.equal(editResult?.updatedMessage.content, 'edited second');
+      assert.deepEqual((await store.readMessagesByRoom(baseRoom.id)).map(item => item.id), ['first', 'second', 'third']);
+      assert.equal((await store.readMessagesByRoom(baseRoom.id))[1].content, 'edited second');
+
+      const missingEditResult = await mutableStore.updateMessageContent(baseRoom.id, 'missing', 'missing edit', '2026-05-03T00:00:05.000Z');
+      assert.equal(missingEditResult?.found, false);
+      assert.deepEqual((await store.readMessagesByRoom(baseRoom.id)).map(item => item.id), ['first', 'second', 'third']);
+
+      const deleteResult = await mutableStore.deleteMessageById(baseRoom.id, 'second');
+      assert.equal(deleteResult?.deleted, true);
+      assert.deepEqual((await store.readMessagesByRoom(baseRoom.id)).map(item => item.id), ['first', 'third']);
+
+      const missingDeleteResult = await mutableStore.deleteMessageById(baseRoom.id, 'missing');
+      assert.equal(missingDeleteResult?.deleted, false);
+      assert.deepEqual((await store.readMessagesByRoom(baseRoom.id)).map(item => item.id), ['first', 'third']);
     });
 
     it('rejects message mutations for missing rooms without creating orphan histories', async () => {

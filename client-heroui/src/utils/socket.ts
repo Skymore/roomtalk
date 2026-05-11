@@ -22,6 +22,13 @@ const roomMemberChangeCallbacks: ((event: RoomMemberEvent) => void)[] = [];
 
 // Store current active room to rejoin after reconnection
 let activeRoomId: string | null = null;
+const SEND_MESSAGE_ACK_TIMEOUT_MS = 15000;
+const SEND_MESSAGE_CONNECT_TIMEOUT_MS = 15000;
+
+type SocketAckResponse = {
+  success: boolean;
+  error?: string;
+};
 
 // Get current member count for a room
 export const getRoomMemberCount = (roomId: string): number => {
@@ -93,6 +100,97 @@ const createSocketConnection = (): typeof Socket => {
   return socket;
 };
 
+const waitForConnectedSocket = () => new Promise<void>((resolve, reject) => {
+  if (socket.connected) {
+    resolve();
+    return;
+  }
+
+  console.log('Socket disconnected, attempting to reconnect...');
+
+  let timeoutId: number;
+  let settled = false;
+
+  function cleanup() {
+    window.clearTimeout(timeoutId);
+    socket.off('connect', handleConnect);
+    socket.off('disconnect', handleDisconnect);
+  }
+
+  function settle(fn: () => void) {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    cleanup();
+    fn();
+  }
+
+  function handleConnect() {
+    settle(resolve);
+  }
+
+  function handleDisconnect() {
+    settle(() => reject(new Error('Socket disconnected before sending message')));
+  }
+
+  timeoutId = window.setTimeout(() => {
+    settle(() => reject(new Error('Timed out while reconnecting socket')));
+  }, SEND_MESSAGE_CONNECT_TIMEOUT_MS);
+
+  socket.once('connect', handleConnect);
+  socket.once('disconnect', handleDisconnect);
+  socket.connect();
+});
+
+const emitWithAck = <TResponse extends SocketAckResponse>(
+  event: string,
+  payload: unknown,
+  timeoutMessage: string,
+  fallbackError: string,
+): Promise<TResponse> => waitForConnectedSocket().then(() => new Promise<TResponse>((resolve, reject) => {
+  if (!socket.connected) {
+    reject(new Error('Socket disconnected before sending message'));
+    return;
+  }
+
+  let settled = false;
+  let timeoutId: number;
+
+  function cleanup() {
+    window.clearTimeout(timeoutId);
+    socket.off('disconnect', handleDisconnect);
+  }
+
+  function settle(fn: () => void) {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    cleanup();
+    fn();
+  }
+
+  function handleDisconnect() {
+    settle(() => reject(new Error('Socket disconnected while waiting for server acknowledgement')));
+  }
+
+  timeoutId = window.setTimeout(() => {
+    settle(() => reject(new Error(timeoutMessage)));
+  }, SEND_MESSAGE_ACK_TIMEOUT_MS);
+
+  socket.once('disconnect', handleDisconnect);
+  socket.emit(event, payload, (response: TResponse) => {
+    settle(() => {
+      if (response?.success) {
+        resolve(response);
+        return;
+      }
+      reject(new Error(response?.error || fallbackError));
+    });
+  });
+}));
+
 // Join a chat room
 export const joinRoom = (roomId: string) => {
   activeRoomId = roomId; // 记录当前活动房间ID，用于重连后重新加入
@@ -118,13 +216,20 @@ export const createRoom = (roomName: string, description?: string) => {
 
 // Send message to a specific room
 export const sendMessage = (content: string, roomId: string, messageType: 'text' | 'image' = 'text', username?: string, avatar?: { text: string; color: string }) => {
-  // 检查socket连接状态，如果断开则尝试重连
-  if (!socket.connected) {
-    console.log('Socket disconnected, attempting to reconnect...');
-    socket.connect();
-  }
-  
-  socket.emit('send_message', { content, roomId, messageType, username, avatar });
+  return emitWithAck('send_message', { content, roomId, messageType, username, avatar }, 'Timed out while saving message', 'Failed to save message')
+    .then(() => undefined);
+};
+
+export const requestAIResponse = (data: {
+  roomId: string;
+  systemPrompt?: string;
+  roleName?: string;
+  model?: string;
+  editedMessageId?: string;
+  retryForMessageId?: string;
+}) => {
+  return emitWithAck('ask_ai', data, 'Timed out while starting AI response', 'Failed to start AI response')
+    .then(() => undefined);
 };
 
 // Get a room by ID (for joining rooms by ID)

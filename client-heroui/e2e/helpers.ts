@@ -24,12 +24,15 @@ export async function resetE2EData(request: APIRequestContext) {
 
 export async function seedClient(context: BrowserContext, clientId = uniqueName('client')) {
   await context.addInitScript(({ seededClientId }) => {
+    const existingClientId = window.localStorage.getItem('clientId');
     window.localStorage.setItem('clientId', seededClientId);
     window.localStorage.setItem('roomtalk_username', seededClientId);
-    window.localStorage.setItem('roomtalk_current_view', 'rooms');
     window.localStorage.setItem('i18nextLng', 'en');
-    window.localStorage.removeItem('roomtalk_current_room');
-    window.localStorage.removeItem('roomtalk:selected-ai-model');
+    if (existingClientId !== seededClientId) {
+      window.localStorage.setItem('roomtalk_current_view', 'rooms');
+      window.localStorage.removeItem('roomtalk_current_room');
+      window.localStorage.removeItem('roomtalk:selected-ai-model');
+    }
   }, { seededClientId: clientId });
 
   return clientId;
@@ -102,9 +105,11 @@ export async function sendTextMessage(page: Page, text: string) {
   const editor = page.getByTestId('message-editor');
   await editor.click();
   await page.keyboard.insertText(text);
-  await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled();
-  await page.getByRole('button', { name: 'Send' }).click();
-  await expectMessage(page, text).toBeVisible();
+  const sendButton = page.getByRole('button', { name: 'Send' });
+  await expect(sendButton).toBeEnabled();
+  await sendButton.click();
+  await expect(sendButton).not.toHaveAttribute('data-loading', 'true', { timeout: 20000 });
+  await expectMessage(page, text).toBeVisible({ timeout: 10000 });
 }
 
 export function messageItem(page: Page, text: string): Locator {

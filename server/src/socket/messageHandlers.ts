@@ -17,26 +17,31 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
     socket.emit('ai_cost_total', await store.readRoomAICost(roomId));
   });
 
-  socket.on('send_message', async (messageData: {
-    roomId: string;
-    content: string;
-    messageType?: 'text' | 'image';
-    username?: string;
-    avatar?: {
-      text: string;
-      color: string;
-    };
-  }) => {
+  socket.on('send_message', async (
+    messageData: {
+      roomId: string;
+      content: string;
+      messageType?: 'text' | 'image';
+      username?: string;
+      avatar?: {
+        text: string;
+        color: string;
+      };
+    },
+    callback?: (response: { success: boolean; message?: Message; error?: string }) => void,
+  ) => {
     const clientId = await store.getClientId(socket.id);
     if (!clientId) {
       socketLogger.warn('Unregistered client tried to send message', { socketId: socket.id });
       socket.emit('error', { message: 'You are not registered' });
+      callback?.({ success: false, error: 'You are not registered' });
       return;
     }
 
     if (!messageData.roomId) {
       socketLogger.warn('Client tried to send message without room ID', { socketId: socket.id, clientId });
       socket.emit('error', { message: 'Room ID is required' });
+      callback?.({ success: false, error: 'Room ID is required' });
       return;
     }
 
@@ -57,11 +62,13 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
     if (!updatedRoom) {
       socketLogger.error('Failed to append WebSocket message', { messageId: message.id, roomId: message.roomId, clientId });
       socket.emit('error', { message: 'Failed to save message' });
+      callback?.({ success: false, error: 'Failed to save message' });
       return;
     }
 
     io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
     io.to(messageData.roomId).emit('new_message', message);
+    callback?.({ success: true, message });
   });
 
   socket.on('edit_message', async (data: { roomId: string; messageId: string; newContent: string }, callback?: (response: { success: boolean; updatedMessage?: Message; error?: string }) => void) => {
@@ -157,7 +164,7 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
     try {
       const result = await store.clearRoomMessages(roomId);
       if (result > 0) {
-        socketLogger.info('Cleared room messages from Redis', { socketId: socket.id, clientId, roomId });
+        socketLogger.info('Cleared room messages from store', { socketId: socket.id, clientId, roomId });
       } else {
         socketLogger.debug('No messages to clear or key did not exist', { socketId: socket.id, clientId, roomId });
       }
@@ -165,7 +172,7 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       io.to(roomId).emit('messages_cleared', roomId);
       io.to(roomId).emit('ai_cost_total', await store.readRoomAICost(roomId));
     } catch (error) {
-      socketLogger.error('Error clearing room messages from Redis', { error, socketId: socket.id, clientId, roomId });
+      socketLogger.error('Error clearing room messages from store', { error, socketId: socket.id, clientId, roomId });
       socket.emit('error', { message: 'Failed to clear room messages' });
     }
   });
