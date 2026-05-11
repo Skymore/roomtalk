@@ -234,6 +234,24 @@
 
 - `test: add persistence mode smoke coverage`
 
+本地运行命令：
+
+```bash
+cd server
+npm run smoke:persistence
+```
+
+默认只使用本地 Redis 测试库 `redis://127.0.0.1:6379/15`，不会继承可能指向生产的 `REDIS_URL`。如果要覆盖 PostgreSQL 正向 smoke，需要显式设置一次性测试库：
+
+```bash
+cd server
+TEST_DATABASE_URL="postgres://localhost/message_system_test" npm run smoke:persistence
+```
+
+脚本会拒绝数据库名不包含独立 `test` 或 `e2e` token 的 URL。未配置测试库时，PostgreSQL 正向 smoke 会清晰跳过；不可达 PostgreSQL URL 的 smoke 仍会验证服务在启动期 fail-closed，不接受写入。
+
+说明：Redis 在 PostgreSQL 模式下同时承担 Socket.IO adapter、realtime session 和 message cache。进程级 smoke 无法只打坏 cache 而保持 Redis adapter 可用，所以“Redis cache 故障不影响 PostgreSQL durable 写入”由 `CompositeRoomStore` 单元测试覆盖，验证 cache read/write/invalidate 抛错时 durable read、append、upsert、save history、clear 仍然可用。
+
 ## 最终验收矩阵
 
 全部阶段完成后，需要通过：

@@ -340,6 +340,24 @@ Keep Redis data intact until the PostgreSQL cutover has been verified.
 
 Full rollout checklist: [docs/postgres-rollout-runbook.md](docs/postgres-rollout-runbook.md).
 
+### Persistence Smoke Tests
+
+Run a local smoke check before and after persistence-mode changes:
+
+```bash
+cd server
+npm run smoke:persistence
+```
+
+By default, the smoke runner only uses local Redis at `redis://127.0.0.1:6379/15`; it does not inherit `REDIS_URL`, which avoids accidentally targeting production Redis. To test PostgreSQL mode, point it at a disposable database whose name includes `test` or `e2e` as a separated token:
+
+```bash
+cd server
+TEST_DATABASE_URL="postgres://localhost/message_system_test" npm run smoke:persistence
+```
+
+The script verifies Redis mode `/api/status`, basic room/message API writes, PostgreSQL mode when a safe test database is configured, Redis mode after switching back, and PostgreSQL fail-closed startup behavior when the database is unreachable.
+
 ### Redis Persistence
 
 The system supports two Redis deployment options:
