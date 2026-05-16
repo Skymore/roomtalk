@@ -226,12 +226,16 @@ const resources: Record<string, { translation: Record<string, string> }> = {
 
       // 新增/修改 删除/取消收藏相关
       "deleteRoom": "Delete Room",
+      "renameRoom": "Rename Room",
+      "editRoomName": "Edit Room Name",
       "confirmUnsave": "Confirm Unsave?",
       "confirmUnsaveDescription": "Are you sure you want to remove this room from your saved list?",
       "confirmDeleteRoomTitle": "Confirm Delete Room?",
       "confirmDeleteRoomDescription": "Are you sure you want to permanently delete the room \"{{roomName}}\"? This action cannot be undone.",
       "roomDeletedSuccess": "Room deleted successfully.",
       "errorDeletingRoom": "Failed to delete room.",
+      "roomRenamedSuccess": "Room renamed successfully.",
+      "errorRenamingRoom": "Failed to rename room.",
 
       // Modal related
       "confirmDeletion": "Confirm Deletion",
@@ -466,12 +470,16 @@ const resources: Record<string, { translation: Record<string, string> }> = {
 
       // 新增/修改 删除/取消收藏相关
       "deleteRoom": "删除房间",
+      "renameRoom": "重命名房间",
+      "editRoomName": "编辑房间名称",
       "confirmUnsave": "确认取消保存？",
       "confirmUnsaveDescription": "您确定要将此房间从保存列表中移除吗？",
       "confirmDeleteRoomTitle": "确认删除房间？",
       "confirmDeleteRoomDescription": "您确定要永久删除房间 \"{{roomName}}\" 吗？此操作无法撤销。",
       "roomDeletedSuccess": "房间删除成功。",
       "errorDeletingRoom": "删除房间失败。",
+      "roomRenamedSuccess": "房间名称已更新。",
+      "errorRenamingRoom": "重命名房间失败。",
 
       // Modal related
       "confirmDeletion": "确认删除",
@@ -698,12 +706,16 @@ const resources: Record<string, { translation: Record<string, string> }> = {
 
       // 新增/修改 删除/取消收藏相关
       "deleteRoom": "रूम हटाएं",
+      "renameRoom": "रूम का नाम बदलें",
+      "editRoomName": "रूम का नाम संपादित करें",
       "confirmUnsave": "सेव हटाना सुनिश्चित करें?",
       "confirmUnsaveDescription": "क्या आप वाकई इस रूम को अपनी सेव की गई सूची से हटाना चाहते हैं?",
       "confirmDeleteRoomTitle": "रूम हटाना सुनिश्चित करें?",
       "confirmDeleteRoomDescription": "क्या आप वाकई रूम \"{{roomName}}\" को स्थायी रूप से हटाना चाहते हैं? यह क्रिया वापस नहीं ली जा सकती है।",
       "roomDeletedSuccess": "रूम सफलतापूर्वक हटा दिया गया है।",
       "errorDeletingRoom": "रूम हटाने में विफल।",
+      "roomRenamedSuccess": "रूम का नाम अपडेट हो गया।",
+      "errorRenamingRoom": "रूम का नाम बदलने में विफल।",
 
       // Modal related
       "confirmDeletion": "हटाने की पुष्टि करें",
@@ -902,12 +914,16 @@ resources.ja = {
     "confirmDeleteRoleDescription": "このロールを削除しますか? この操作は元に戻せません。",
     "createRole": "ロールを作成",
     "deleteRoom": "ルームを削除",
+    "renameRoom": "ルーム名を変更",
+    "editRoomName": "ルーム名を編集",
     "confirmUnsave": "保存を解除しますか?",
     "confirmUnsaveDescription": "このルームを保存リストから削除しますか?",
     "confirmDeleteRoomTitle": "ルームを削除しますか?",
     "confirmDeleteRoomDescription": "ルーム「{{roomName}}」を完全に削除しますか? この操作は元に戻せません。",
     "roomDeletedSuccess": "ルームを削除しました。",
     "errorDeletingRoom": "ルームの削除に失敗しました。",
+    "roomRenamedSuccess": "ルーム名を更新しました。",
+    "errorRenamingRoom": "ルーム名の変更に失敗しました。",
     "confirmDeletion": "削除の確認",
     "confirmDeleteMessagePrompt": "このメッセージを削除しますか? この操作は元に戻せません。",
     "editMessage": "メッセージを編集",
@@ -1103,12 +1119,16 @@ resources.ko = {
     "confirmDeleteRoleDescription": "이 역할을 삭제할까요? 이 작업은 되돌릴 수 없습니다.",
     "createRole": "역할 만들기",
     "deleteRoom": "방 삭제",
+    "renameRoom": "방 이름 변경",
+    "editRoomName": "방 이름 수정",
     "confirmUnsave": "저장을 해제할까요?",
     "confirmUnsaveDescription": "이 방을 저장 목록에서 제거할까요?",
     "confirmDeleteRoomTitle": "방을 삭제할까요?",
     "confirmDeleteRoomDescription": "\"{{roomName}}\" 방을 영구적으로 삭제할까요? 이 작업은 되돌릴 수 없습니다.",
     "roomDeletedSuccess": "방이 삭제되었습니다.",
     "errorDeletingRoom": "방 삭제에 실패했습니다.",
+    "roomRenamedSuccess": "방 이름이 업데이트되었습니다.",
+    "errorRenamingRoom": "방 이름 변경에 실패했습니다.",
     "confirmDeletion": "삭제 확인",
     "confirmDeleteMessagePrompt": "이 메시지를 삭제할까요? 이 작업은 되돌릴 수 없습니다.",
     "editMessage": "메시지 수정",

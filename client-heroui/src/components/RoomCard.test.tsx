@@ -29,6 +29,7 @@ const renderRoomCard = () => {
     onSelect: vi.fn(),
     onCopyRoomId: vi.fn(),
     onCopyRoomLink: vi.fn(),
+    onRename: vi.fn(),
     onDelete: vi.fn(),
   };
 
@@ -56,11 +57,13 @@ describe('RoomCard', () => {
 
     fireEvent.click(screen.getByLabelText('copyRoomId'));
     fireEvent.click(screen.getByLabelText('share'));
+    fireEvent.click(screen.getByLabelText('editRoomName'));
     fireEvent.click(screen.getByLabelText('deleteRoom'));
 
     expect(props.onSelect).not.toHaveBeenCalled();
     expect(props.onCopyRoomId).toHaveBeenCalledWith('room-1');
     expect(props.onCopyRoomLink).toHaveBeenCalledWith('room-1');
+    expect(props.onRename).toHaveBeenCalledWith(room);
     expect(props.onDelete).toHaveBeenCalledWith(room);
   });
 });

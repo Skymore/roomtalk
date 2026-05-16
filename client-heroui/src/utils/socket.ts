@@ -28,6 +28,7 @@ const SEND_MESSAGE_CONNECT_TIMEOUT_MS = 15000;
 type SocketAckResponse = {
   success: boolean;
   error?: string;
+  message?: string;
 };
 
 // Get current member count for a room
@@ -186,7 +187,7 @@ const emitWithAck = <TResponse extends SocketAckResponse>(
         resolve(response);
         return;
       }
-      reject(new Error(response?.error || fallbackError));
+      reject(new Error(response?.error || response?.message || fallbackError));
     });
   });
 }));
@@ -214,6 +215,20 @@ export const createRoom = (roomName: string, description?: string) => {
   });
 };
 
+export const renameRoom = (roomId: string, name: string): Promise<Room> => {
+  return emitWithAck<SocketAckResponse & { room?: Room }>(
+    'rename_room',
+    { roomId, name },
+    'Timed out while renaming room',
+    'Failed to rename room',
+  ).then((response) => {
+    if (!response.room) {
+      throw new Error('Failed to rename room');
+    }
+    return response.room;
+  });
+};
+
 // Send message to a specific room
 export const sendMessage = (content: string, roomId: string, messageType: 'text' | 'image' = 'text', username?: string, avatar?: { text: string; color: string }) => {
   return emitWithAck('send_message', { content, roomId, messageType, username, avatar }, 'Timed out while saving message', 'Failed to save message')
@@ -232,12 +247,58 @@ export const requestAIResponse = (data: {
     .then(() => undefined);
 };
 
+export const requestEditMessageAndAIResponse = (data: {
+  roomId: string;
+  messageId: string;
+  newContent: string;
+  systemPrompt?: string;
+  roleName?: string;
+  model?: string;
+}) => {
+  return emitWithAck('edit_message_and_ask_ai', data, 'Timed out while starting AI response', 'Failed to start AI response')
+    .then(() => undefined);
+};
+
 // Get a room by ID (for joining rooms by ID)
 export const getRoomById = (roomId: string): Promise<Room | null> => {
-  return new Promise((resolve) => {
+  return waitForConnectedSocket().then(() => new Promise<Room | null>((resolve, reject) => {
+    if (!socket.connected) {
+      reject(new Error('Socket disconnected before getting room'));
+      return;
+    }
+
+    let settled = false;
+    let timeoutId: number;
+
+    function cleanup() {
+      window.clearTimeout(timeoutId);
+      socket.off('disconnect', handleDisconnect);
+    }
+
+    function settle(fn: () => void) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      fn();
+    }
+
+    function handleDisconnect() {
+      settle(() => reject(new Error('Socket disconnected while getting room')));
+    }
+
+    timeoutId = window.setTimeout(() => {
+      settle(() => reject(new Error('Timed out while getting room')));
+    }, SEND_MESSAGE_ACK_TIMEOUT_MS);
+
+    socket.once('disconnect', handleDisconnect);
     socket.emit('get_room_by_id', roomId, (room: Room | null) => {
-      resolve(room);
+      settle(() => resolve(room));
     });
+  })).catch((error) => {
+    console.error('Failed to get room by ID:', error);
+    return null;
   });
 };
 

@@ -4,7 +4,7 @@ import { MessageInput } from './MessageInput';
 import { MessageList } from './MessageList';
 import { AppView } from '../utils/appPersistence';
 import { getAvatarColor, getAvatarText } from '../utils/userProfile';
-import { Room } from '../utils/types';
+import { Room, RoomRenameHandler } from '../utils/types';
 
 interface ChatRoomViewProps {
   currentRoom: Room;
@@ -21,6 +21,7 @@ interface ChatRoomViewProps {
   clearRoomUrlParam: () => void;
   handleClearChatMessages: () => void;
   handleDeleteRoom: (roomId: string) => void;
+  handleRenameRoom: RoomRenameHandler;
 }
 
 export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
@@ -38,6 +39,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
   clearRoomUrlParam,
   handleClearChatMessages,
   handleDeleteRoom,
+  handleRenameRoom,
 }) => {
   return (
     <div className="flex h-full min-h-0 w-full flex-1 flex-col bg-[#f5f4ed] dark:bg-[#141413]">
@@ -54,6 +56,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
         clearRoomUrlParam={clearRoomUrlParam}
         handleClearChatMessages={handleClearChatMessages}
         handleDeleteRoom={handleDeleteRoom}
+        handleRenameRoom={handleRenameRoom}
         clientId={clientId}
       />
 
@@ -61,7 +64,10 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
         <MessageList roomId={currentRoom.id} />
       </div>
 
-      <div className="flex-shrink-0 border-t border-[#dedbd0] bg-[#faf9f5]/92 p-2 backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/92 md:p-3">
+      <div
+        data-testid="message-input-panel"
+        className="flex-shrink-0 border-t border-[#dedbd0] bg-[#faf9f5]/92 p-2 backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/92 md:p-3"
+      >
         <MessageInput
           roomId={currentRoom.id}
           username={username}

@@ -32,6 +32,8 @@ export interface Room {
   creatorId: string;
 }
 
+export type RoomRenameHandler = (roomId: string, name: string) => Promise<void>;
+
 export interface UserInfo {
   id: string;
   // 可以根据需要扩展更多用户信息

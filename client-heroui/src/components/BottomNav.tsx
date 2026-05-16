@@ -16,7 +16,10 @@ export const BottomNav: React.FC<BottomNavProps> = ({ view, setView, currentRoom
   const inactiveClass = "text-[#5e5d59] data-[hover=true]:bg-[#e8e6dc] dark:text-[#b0aea5] dark:data-[hover=true]:bg-[#30302e]";
 
   return (
-    <div className="safe-bottom z-10 flex-shrink-0 border-t border-[#dedbd0] bg-[#faf9f5]/95 backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/95 md:hidden">
+    <div
+      data-testid="bottom-nav"
+      className="safe-bottom z-10 flex-shrink-0 border-t border-[#dedbd0] bg-[#faf9f5]/95 backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/95 md:hidden"
+    >
       <div className="flex justify-center">
         <div className="flex w-full max-w-md items-center justify-between px-4 pt-2">
           <Button

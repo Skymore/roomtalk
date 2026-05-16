@@ -12,6 +12,7 @@ import {
   getRoomMemberCount,
   onRoomMemberChange,
   reconnectSocket,
+  renameRoom,
 } from "../utils/socket";
 import {
   Room, RoomMemberEvent,
@@ -30,6 +31,10 @@ import { DesktopSidebar } from "../components/DesktopSidebar";
 import { WelcomeView } from "../components/WelcomeView";
 import { ChatRoomView } from "../components/ChatRoomView";
 
+const isDesktopLayout = () => (
+  typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches
+);
+
 export const MessagePage: React.FC = () => {
   // 不操作 html/body 滚动，页面固定高度由容器本身管理
   // 添加初始化标志，防止初始渲染时清除存储的房间
@@ -46,7 +51,7 @@ export const MessagePage: React.FC = () => {
   // 初始化视图状态，默认从localStorage读取
   const [view, setView] = useState<AppView>(() => {
     const storedView = getStoredView();
-    return storedView;
+    return storedView === "saved" && isDesktopLayout() ? "rooms" : storedView;
   });
   const [_error, setError] = useState<string | null>(null);
   const [_success, setSuccess] = useState<string | null>(null);
@@ -133,6 +138,19 @@ export const MessagePage: React.FC = () => {
       saveCurrentView(view);
     }
   }, [view]);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(min-width: 768px)');
+    const redirectDesktopSavedView = () => {
+      if (mediaQuery.matches) {
+        setView((currentView) => currentView === "saved" ? "rooms" : currentView);
+      }
+    };
+
+    redirectDesktopSavedView();
+    mediaQuery.addEventListener('change', redirectDesktopSavedView);
+    return () => mediaQuery.removeEventListener('change', redirectDesktopSavedView);
+  }, []);
 
   // 当前房间变化时保存到localStorage
   useEffect(() => {
@@ -376,6 +394,10 @@ export const MessagePage: React.FC = () => {
     }
   };
 
+  const handleUnsaveRoom = useCallback((roomId: string) => {
+    setSavedRooms(removeRoom(roomId));
+  }, []);
+
   const handleCopyToClipboard = (text: string) => {
     navigator.clipboard
       .writeText(text)
@@ -424,6 +446,19 @@ export const MessagePage: React.FC = () => {
     });
   }, [currentRoom, setView, clearRoomUrlParam, showSuccess, t]); // Dependencies
 
+  const handleRenameRoom = useCallback(async (roomId: string, name: string) => {
+    try {
+      const updatedRoom = await renameRoom(roomId, name);
+      setRooms((prev) => sortRoomsByLastActivityDesc(upsertRoom(prev, updatedRoom)));
+      setCurrentRoom((current) => current?.id === updatedRoom.id ? { ...current, ...updatedRoom } : current);
+      setSavedRooms((prev) => prev.map((savedRoom) => savedRoom.id === updatedRoom.id ? { ...savedRoom, ...updatedRoom } : savedRoom));
+      showSuccess(t('roomRenamedSuccess'));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t('errorRenamingRoom');
+      throw new Error(message);
+    }
+  }, [showSuccess, t]);
+
   // Render content based on current view
   const renderContent = () => {
     if (isLoadingRoom) {
@@ -444,6 +479,7 @@ export const MessagePage: React.FC = () => {
               rooms={rooms}
               onRoomSelect={handleRoomSelect}
               handleDeleteRoom={handleDeleteRoom}
+              handleRenameRoom={handleRenameRoom}
               clientId={clientId}
               username={username}
             />
@@ -456,7 +492,6 @@ export const MessagePage: React.FC = () => {
               rooms={savedRooms}
               onRoomSelect={handleRoomSelect}
               onRoomsChange={setSavedRooms}
-              clientId={clientId}
             />
           </div>
         );
@@ -493,6 +528,7 @@ export const MessagePage: React.FC = () => {
             clearRoomUrlParam={clearRoomUrlParam}
             handleClearChatMessages={handleClearChatMessages}
             handleDeleteRoom={handleDeleteRoom}
+            handleRenameRoom={handleRenameRoom}
           />
         ) : (
           <WelcomeView onEnterRooms={() => setView("rooms")} />
@@ -517,7 +553,7 @@ export const MessagePage: React.FC = () => {
         handleCopyToClipboard={handleCopyToClipboard}
       />
 
-      <div className="min-h-0 flex-1 overflow-hidden md:flex">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         <DesktopSidebar
           clientId={clientId}
           username={username}
@@ -533,10 +569,12 @@ export const MessagePage: React.FC = () => {
           handleCopyToClipboard={handleCopyToClipboard}
           onRoomSelect={handleRoomSelect}
           onDeleteRoom={handleDeleteRoom}
+          onUnsaveRoom={handleUnsaveRoom}
+          onRenameRoom={handleRenameRoom}
         />
 
         {/* 主内容区域， flex-1 使其填充剩余空间，overflow-hidden 避免双重滚动条 */}
-        <main className="min-h-0 flex-1 overflow-hidden">
+        <main className="flex min-h-0 flex-1 overflow-hidden">
           {renderContent()} {/* 渲染当前视图 */}
         </main>
       </div>

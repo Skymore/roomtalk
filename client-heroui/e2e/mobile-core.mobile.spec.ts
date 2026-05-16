@@ -1,6 +1,8 @@
-import { test } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import {
+  createRoomViaApi,
   expectChatRoom,
+  openRoomFromCard,
   openRoomsPage,
   resetE2EData,
   seedClient,
@@ -24,4 +26,44 @@ test('creates a room and sends a message on mobile', async ({ page, context }) =
 
   await expectChatRoom(page, roomName);
   await sendTextMessage(page, message);
+});
+
+test('keeps the chat scroller expanded above the mobile input panel', async ({ page, context, request }) => {
+  const clientId = await seedClient(context);
+  const room = await createRoomViaApi(request, clientId, shortName('mobile-layout'));
+
+  await openRoomsPage(page);
+  await openRoomFromCard(page, room);
+
+  const messageList = page.getByTestId('message-list-scroll');
+  const inputPanel = page.getByTestId('message-input-panel');
+  const bottomNav = page.getByTestId('bottom-nav');
+
+  await expect(messageList).toBeVisible();
+  await expect(inputPanel).toBeVisible();
+  await expect(bottomNav).toBeVisible();
+
+  const layout = await page.evaluate(() => {
+    const rectFor = (testId: string) => {
+      const element = document.querySelector(`[data-testid="${testId}"]`);
+      if (!element) throw new Error(`Missing ${testId}`);
+      const rect = element.getBoundingClientRect();
+      return {
+        top: rect.top,
+        bottom: rect.bottom,
+        height: rect.height,
+      };
+    };
+
+    return {
+      viewportHeight: window.innerHeight,
+      messageList: rectFor('message-list-scroll'),
+      inputPanel: rectFor('message-input-panel'),
+      bottomNav: rectFor('bottom-nav'),
+    };
+  });
+
+  expect(layout.messageList.height).toBeGreaterThan(layout.viewportHeight * 0.2);
+  expect(layout.inputPanel.top).toBeGreaterThanOrEqual(layout.messageList.bottom - 1);
+  expect(layout.bottomNav.top - layout.inputPanel.bottom).toBeLessThanOrEqual(4);
 });

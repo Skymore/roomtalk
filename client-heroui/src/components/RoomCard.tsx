@@ -1,5 +1,5 @@
 import React from 'react';
-import { Button, Card, Tooltip } from '@heroui/react';
+import { Button, Tooltip } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 import { Room } from '../utils/types';
@@ -14,6 +14,7 @@ interface RoomCardProps {
   onSelect: (roomId: string) => void;
   onCopyRoomId: (roomId: string) => void;
   onCopyRoomLink: (roomId: string) => void;
+  onRename: (room: Room) => void;
   onDelete: (room: Room) => void;
 }
 
@@ -25,6 +26,7 @@ export const RoomCard: React.FC<RoomCardProps> = ({
   onSelect,
   onCopyRoomId,
   onCopyRoomLink,
+  onRename,
   onDelete,
 }) => {
   const { t, i18n } = useTranslation();
@@ -45,13 +47,28 @@ export const RoomCard: React.FC<RoomCardProps> = ({
     onDelete(room);
   };
 
+  const renameRoom = (event: React.MouseEvent) => {
+    event.stopPropagation();
+    onRename(room);
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key !== 'Enter' && event.key !== ' ') {
+      return;
+    }
+    event.preventDefault();
+    onSelect(room.id);
+  };
+
   return (
-    <Card
-      isPressable
+    <div
+      role="button"
+      tabIndex={0}
       data-testid="room-card"
       data-room-id={room.id}
       className="cursor-pointer border border-[#dedbd0] bg-[#faf9f5] p-4 shadow-[0_0_0_1px_rgba(194,192,182,0.4)] transition-all duration-200 hover:bg-[#f0eee6] active:bg-[#e8e6dc] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:hover:bg-[#30302e]"
-      onPress={() => onSelect(room.id)}
+      onClick={() => onSelect(room.id)}
+      onKeyDown={handleKeyDown}
     >
       <div className="flex items-start">
         <div className="mr-3 rounded-xl bg-[#e8e6dc] p-2.5 text-[#c96442] dark:bg-[#30302e] dark:text-[#d97757]">
@@ -101,24 +118,38 @@ export const RoomCard: React.FC<RoomCardProps> = ({
                 </Button>
               </Tooltip>
               {room.creatorId === clientId && (
-                <Tooltip content={t('deleteRoom')}>
-                  <Button
-                    isIconOnly
-                    size="sm"
-                    variant="light"
-                    color="danger"
-                    className="text-danger-500"
-                    onClick={deleteRoom}
-                    aria-label={t('deleteRoom')}
-                  >
-                    <Icon icon="lucide:trash-2" className="h-3.5 w-3.5" />
-                  </Button>
-                </Tooltip>
+                <>
+                  <Tooltip content={t('editRoomName')}>
+                    <Button
+                      isIconOnly
+                      size="sm"
+                      variant="light"
+                      className="text-[#5e5d59] dark:text-[#b0aea5]"
+                      onClick={renameRoom}
+                      aria-label={t('editRoomName')}
+                    >
+                      <Icon icon="lucide:pencil" className="h-3.5 w-3.5" />
+                    </Button>
+                  </Tooltip>
+                  <Tooltip content={t('deleteRoom')}>
+                    <Button
+                      isIconOnly
+                      size="sm"
+                      variant="light"
+                      color="danger"
+                      className="text-danger-500"
+                      onClick={deleteRoom}
+                      aria-label={t('deleteRoom')}
+                    >
+                      <Icon icon="lucide:trash-2" className="h-3.5 w-3.5" />
+                    </Button>
+                  </Tooltip>
+                </>
               )}
             </div>
           </div>
         </div>
       </div>
-    </Card>
+    </div>
   );
 };

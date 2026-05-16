@@ -1,24 +1,21 @@
 import React, { useState } from 'react';
-import { Card, Modal, ModalContent, ModalBody, ModalFooter, Button, Tooltip } from '@heroui/react';
+import { Modal, ModalContent, ModalBody, ModalFooter, Button, Tooltip } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { Room } from '../utils/types';
 import { removeRoom } from '../utils/storage';
 import { useTranslation } from 'react-i18next';
 import { formatDate } from '../utils/formatters';
-import { isJoinedRoomForClient } from '../utils/roomState';
 
 interface SavedRoomListProps {
   rooms: Room[];
-  onRoomSelect: (roomId: string, isJoined?: boolean) => void;
+  onRoomSelect: (roomId: string) => void;
   onRoomsChange: (rooms: Room[]) => void;
-  clientId: string;
 }
 
 export const SavedRoomList: React.FC<SavedRoomListProps> = ({
   rooms,
   onRoomSelect,
   onRoomsChange,
-  clientId
 }) => {
   const { t, i18n } = useTranslation();
   const [roomToDelete, setRoomToDelete] = useState<string | null>(null);
@@ -47,6 +44,18 @@ export const SavedRoomList: React.FC<SavedRoomListProps> = ({
     closeDeleteConfirm();
   };
 
+  const selectRoom = (roomId: string) => {
+    onRoomSelect(roomId);
+  };
+
+  const handleRoomKeyDown = (event: React.KeyboardEvent, roomId: string) => {
+    if (event.key !== 'Enter' && event.key !== ' ') {
+      return;
+    }
+    event.preventDefault();
+    selectRoom(roomId);
+  };
+
   if (rooms.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center p-6 text-center">
@@ -72,15 +81,13 @@ export const SavedRoomList: React.FC<SavedRoomListProps> = ({
 
       <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
         {rooms.map(room => (
-          <Card
+          <div
             key={room.id}
+            role="button"
+            tabIndex={0}
             className="cursor-pointer border border-[#dedbd0] bg-[#faf9f5] p-4 shadow-[0_0_0_1px_rgba(194,192,182,0.4)] transition-all duration-200 hover:bg-[#f0eee6] active:bg-[#e8e6dc] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:hover:bg-[#30302e]"
-            isPressable
-            onPress={() => {
-              console.log('Saved room card pressed:', room.id);
-              const isJoined = isJoinedRoomForClient(room, clientId);
-              onRoomSelect(room.id, isJoined);
-            }}
+            onClick={() => selectRoom(room.id)}
+            onKeyDown={(event) => handleRoomKeyDown(event, room.id)}
           >
             <div className="flex items-start">
               <div className="mr-3 rounded-xl bg-[#e8e6dc] p-2 text-[#c96442] dark:bg-[#30302e] dark:text-[#d97757]">
@@ -97,19 +104,23 @@ export const SavedRoomList: React.FC<SavedRoomListProps> = ({
                   </p>
                   <div className="flex items-center gap-1">
                     <Tooltip content={t('unsave')}>
-                      <span
-                        className="inline-flex cursor-pointer rounded p-1 text-[#c96442] hover:bg-[#e8e6dc] dark:text-[#d97757] dark:hover:bg-[#30302e]"
+                      <Button
+                        size="sm"
+                        variant="light"
+                        color="warning"
+                        className="h-8 rounded-md px-2 text-[#c96442] dark:text-[#d97757]"
                         onClick={(e) => openDeleteConfirm(e, room.id)}
                         aria-label={t('unsave')}
+                        startContent={<Icon icon="lucide:bookmark-minus" className="h-4 w-4" />}
                       >
-                        <Icon icon="lucide:bookmark-minus" className="w-4 h-4" />
-                      </span>
+                        {t('unsave')}
+                      </Button>
                     </Tooltip>
                   </div>
                 </div>
               </div>
             </div>
-          </Card>
+          </div>
         ))}
       </div>
 
