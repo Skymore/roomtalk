@@ -33,11 +33,15 @@ const cost = (): AICost => ({
 });
 
 const durableMutationStubs = () => ({
+  async appendMessageWithAtomicPosition() { return room(); },
   async updateMessageContent() { return { room: room(), found: true, updatedMessage: message() }; },
   async deleteMessageById() { return { room: room(), deleted: true }; },
   async truncateBeforeMessage() { return { room: room(), messages: [message()], targetFound: true }; },
   async truncateAfterMessage() { return { room: room(), messages: [message()], targetFound: true }; },
   async updateMessageAndTruncateAfter() { return { room: room(), messages: [message()], targetFound: true, updatedMessage: message() }; },
+  async compareAndSetRoomSandboxStatus() { return room({ type: 'coco', sandboxStatus: 'creating' }); },
+  async findInterruptedCocoRooms() { return []; },
+  async findDanglingToolCalls() { return []; },
 });
 
 describe('CompositeRoomStore', () => {
@@ -46,6 +50,7 @@ describe('CompositeRoomStore', () => {
     const durable: DurableRoomStore = {
       async generateUniqueRoomId() { calls.push('durable.generateUniqueRoomId'); return 'room-1'; },
       async appendMessage(_message: Message) { calls.push('durable.appendMessage'); return room(); },
+      async appendMessageWithAtomicPosition(_message: Message) { calls.push('durable.appendMessageWithAtomicPosition'); return room(); },
       async upsertMessage(_message: Message) { calls.push('durable.upsertMessage'); return room(); },
       async updateMessageContent() { calls.push('durable.updateMessageContent'); return { room: room(), found: true, updatedMessage: message() }; },
       async deleteMessageById() { calls.push('durable.deleteMessageById'); return { room: room(), deleted: true }; },
@@ -63,6 +68,9 @@ describe('CompositeRoomStore', () => {
       async updateRoomName(_roomId: string, _creatorId: string, _name: string) { calls.push('durable.updateRoomName'); return room({ name: 'Renamed' }); },
       async deleteRoom(_roomId: string, _creatorId: string) { calls.push('durable.deleteRoom'); },
       async countRooms() { calls.push('durable.countRooms'); return 1; },
+      async compareAndSetRoomSandboxStatus() { calls.push('durable.compareAndSetRoomSandboxStatus'); return room({ type: 'coco', sandboxStatus: 'creating' }); },
+      async findInterruptedCocoRooms() { calls.push('durable.findInterruptedCocoRooms'); return [room({ type: 'coco', sandboxStatus: 'creating' })]; },
+      async findDanglingToolCalls() { calls.push('durable.findDanglingToolCalls'); return [message({ messageType: 'tool_call', toolCallId: 'tool-1' })]; },
       async resetAllDataForTests() { calls.push('durable.resetAllDataForTests'); },
       async failInterruptedStreamingMessages(_content: string) { calls.push('durable.failInterruptedStreamingMessages'); return 2; },
     };
@@ -80,6 +88,7 @@ describe('CompositeRoomStore', () => {
 
     assert.equal(await store.generateUniqueRoomId(), 'room-1');
     assert.deepEqual(await store.appendMessage(message()), room());
+    assert.deepEqual(await store.appendMessageWithAtomicPosition(message()), room());
     assert.deepEqual(await store.upsertMessage(message()), room());
     assert.deepEqual(await store.updateMessageContent('room-1', 'message-1', 'edited'), { room: room(), found: true, updatedMessage: message() });
     assert.deepEqual(await store.deleteMessageById('room-1', 'message-1'), { room: room(), deleted: true });
@@ -97,6 +106,9 @@ describe('CompositeRoomStore', () => {
     assert.deepEqual(await store.updateRoomName('room-1', 'client-1', 'Renamed'), room({ name: 'Renamed' }));
     await store.deleteRoom('room-1', 'client-1');
     assert.equal(await store.countRooms(), 1);
+    assert.deepEqual(await store.compareAndSetRoomSandboxStatus('room-1', ['none'], 'creating'), room({ type: 'coco', sandboxStatus: 'creating' }));
+    assert.deepEqual(await store.findInterruptedCocoRooms(), [room({ type: 'coco', sandboxStatus: 'creating' })]);
+    assert.deepEqual(await store.findDanglingToolCalls(), [message({ messageType: 'tool_call', toolCallId: 'tool-1' })]);
     assert.equal(await store.updateRoomMemberCount('room-1', 'client-1', true), 1);
     assert.equal(await store.getRoomMemberCount('room-1'), 1);
     await store.storeClientSession('socket-1', 'client-1');
@@ -110,6 +122,7 @@ describe('CompositeRoomStore', () => {
     assert.deepEqual(calls, [
       'durable.generateUniqueRoomId',
       'durable.appendMessage',
+      'durable.appendMessageWithAtomicPosition',
       'durable.upsertMessage',
       'durable.updateMessageContent',
       'durable.deleteMessageById',
@@ -127,6 +140,9 @@ describe('CompositeRoomStore', () => {
       'durable.updateRoomName',
       'durable.deleteRoom',
       'durable.countRooms',
+      'durable.compareAndSetRoomSandboxStatus',
+      'durable.findInterruptedCocoRooms',
+      'durable.findDanglingToolCalls',
       'realtime.updateRoomMemberCount',
       'realtime.getRoomMemberCount',
       'realtime.storeClientSession',
@@ -158,6 +174,9 @@ describe('CompositeRoomStore', () => {
       async updateRoomName() { return null; },
       async deleteRoom() {},
       async countRooms() { return 0; },
+      async compareAndSetRoomSandboxStatus() { return null; },
+      async findInterruptedCocoRooms() { return []; },
+      async findDanglingToolCalls() { return []; },
     };
     const realtime: RealtimeRoomStore = {
       async updateRoomMemberCount() { return 0; },
@@ -192,6 +211,7 @@ describe('CompositeRoomStore', () => {
     const durable: DurableRoomStore = {
       async generateUniqueRoomId() { return 'room-1'; },
       async appendMessage(newMessage: Message) { calls.push(`durable.append:${newMessage.id}`); return newMessage.id === 'fail' ? null : room(); },
+      async appendMessageWithAtomicPosition(newMessage: Message) { calls.push(`durable.atomicAppend:${newMessage.id}`); return newMessage.id === 'fail-atomic' ? null : room(); },
       async upsertMessage(newMessage: Message) { calls.push(`durable.upsert:${newMessage.id}`); return room(); },
       async updateMessageContent() { calls.push('durable.updateMessageContent'); return { room: room(), found: true, updatedMessage: message() }; },
       async deleteMessageById() { calls.push('durable.deleteMessageById'); return { room: room(), deleted: true }; },
@@ -209,6 +229,9 @@ describe('CompositeRoomStore', () => {
       async updateRoomName() { return null; },
       async deleteRoom() { calls.push('durable.delete'); },
       async countRooms() { return 0; },
+      async compareAndSetRoomSandboxStatus() { return null; },
+      async findInterruptedCocoRooms() { return []; },
+      async findDanglingToolCalls() { return []; },
       async failInterruptedStreamingMessages() { calls.push('durable.failInterrupted'); return 2; },
     };
     const realtime: RealtimeRoomStore = {
@@ -230,6 +253,8 @@ describe('CompositeRoomStore', () => {
 
     assert.deepEqual(await store.appendMessage(message({ id: 'ok' })), room());
     assert.equal(await store.appendMessage(message({ id: 'fail' })), null);
+    assert.deepEqual(await store.appendMessageWithAtomicPosition(message({ id: 'ok-atomic' })), room());
+    assert.equal(await store.appendMessageWithAtomicPosition(message({ id: 'fail-atomic' })), null);
     assert.deepEqual(await store.upsertMessage(message({ id: 'upsert' })), room());
     assert.deepEqual(await store.updateMessageContent('room-1', 'message-1', 'edited'), { room: room(), found: true, updatedMessage: message() });
     assert.deepEqual(await store.deleteMessageById('room-1', 'message-1'), { room: room(), deleted: true });
@@ -245,6 +270,9 @@ describe('CompositeRoomStore', () => {
       'durable.append:ok',
       'cache.invalidate:room-1',
       'durable.append:fail',
+      'durable.atomicAppend:ok-atomic',
+      'cache.invalidate:room-1',
+      'durable.atomicAppend:fail-atomic',
       'durable.upsert:upsert',
       'cache.invalidate:room-1',
       'durable.updateMessageContent',
@@ -285,6 +313,9 @@ describe('CompositeRoomStore', () => {
       async updateRoomName() { return null; },
       async deleteRoom() {},
       async countRooms() { return 0; },
+      async compareAndSetRoomSandboxStatus() { return null; },
+      async findInterruptedCocoRooms() { return []; },
+      async findDanglingToolCalls() { return []; },
     };
     const realtime: RealtimeRoomStore = {
       async updateRoomMemberCount() { return 0; },

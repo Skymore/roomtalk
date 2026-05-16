@@ -1,7 +1,7 @@
 import { customAlphabet } from 'nanoid';
 import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
-import { AICost, Message, Room, RoomAICostTotal } from '../types';
+import { AICost, Message, Room, RoomAICostTotal, RoomSandboxStatus } from '../types';
 import { RoomMessageCacheStore, RoomStore } from './store';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
@@ -60,6 +60,20 @@ end
 return { 1, #ARGV - 2, cjson.encode(room) }
 `;
 
+const REPLACE_MESSAGE_LIST_PRESERVE_ROOM_SCRIPT = `
+local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
+if not roomJson then
+  return { 0, 0 }
+end
+
+redis.call('DEL', KEYS[2])
+for i = 2, #ARGV do
+  redis.call('RPUSH', KEYS[2], ARGV[i])
+end
+
+return { 1, #ARGV - 1 }
+`;
+
 const UPSERT_MESSAGE_LIST_SCRIPT = `
 local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
 if not roomJson then
@@ -100,6 +114,40 @@ for i = 1, #existing do
 end
 
 return { 1, found, #existing, cjson.encode(room) }
+`;
+
+const COMPARE_AND_SET_SANDBOX_STATUS_SCRIPT = `
+local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
+if not roomJson then
+  return { 0, '' }
+end
+
+local ok, room = pcall(cjson.decode, roomJson)
+if not ok then
+  return { 0, '' }
+end
+
+local currentValue = room['sandboxStatus']
+local current = 'none'
+if currentValue ~= nil and currentValue ~= cjson.null then
+  current = currentValue
+end
+local matches = 0
+for i = 4, #ARGV do
+  if current == ARGV[i] then
+    matches = 1
+    break
+  end
+end
+
+if matches == 0 then
+  return { 0, cjson.encode(room) }
+end
+
+room['sandboxStatus'] = ARGV[2]
+room['sandboxUpdatedAt'] = ARGV[3]
+redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
+return { 1, cjson.encode(room) }
 `;
 
 const UPDATE_MESSAGE_CONTENT_SCRIPT = `
@@ -300,7 +348,26 @@ const parseTime = (timestamp?: string): number => {
   return Number.isFinite(time) ? time : 0;
 };
 
+const latestTimestamp = (first?: string, second?: string): string | undefined => {
+  if (!first) return second;
+  if (!second) return first;
+  return parseTime(first) >= parseTime(second) ? first : second;
+};
+
 const getRoomActivityTime = (room: Room): number => parseTime(room.lastActivityAt || room.createdAt);
+
+const normalizeRoom = (room: Room): Room => {
+  const normalized = room.type === 'chat'
+    ? (() => {
+      const { type: _type, ...rest } = room;
+      return rest;
+    })()
+    : { ...room };
+
+  return Object.fromEntries(
+    Object.entries(normalized).filter(([, value]) => value !== undefined)
+  ) as unknown as Room;
+};
 
 const getLatestMessageTimestamp = (messages: Message[]): string | undefined => {
   return messages.reduce<string | undefined>((latest, message) => {
@@ -480,6 +547,10 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
   }
 
   async appendMessage(message: Message): Promise<Room | null> {
+    return this.appendMessageWithAtomicPosition(message);
+  }
+
+  async appendMessageWithAtomicPosition(message: Message): Promise<Room | null> {
     try {
       const result = await (this.redisClient as any).eval(APPEND_MESSAGE_LIST_SCRIPT, {
         keys: ['rooms', `room:${message.roomId}:messages`],
@@ -715,10 +786,22 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
 
   async saveRoom(room: Room): Promise<Room | null> {
     try {
-      await this.redisClient.hSet('rooms', room.id, JSON.stringify(room));
-      await this.redisClient.sAdd(`user:${room.creatorId}:rooms`, room.id);
+      const existingRoom = await this.getRoomById(room.id);
+      const roomToSave = normalizeRoom(existingRoom ? {
+        ...existingRoom,
+        ...room,
+        type: existingRoom.type === 'coco' && (!room.type || room.type === 'chat') ? existingRoom.type : (room.type || existingRoom.type),
+        sandboxId: room.sandboxId ?? existingRoom.sandboxId,
+        sandboxStatus: room.sandboxStatus ?? existingRoom.sandboxStatus,
+        sandboxUpdatedAt: room.sandboxUpdatedAt ?? existingRoom.sandboxUpdatedAt,
+        cocoSessionId: room.cocoSessionId ?? existingRoom.cocoSessionId,
+        cocoStatus: room.cocoStatus ?? existingRoom.cocoStatus,
+        lastActivityAt: latestTimestamp(existingRoom.lastActivityAt || existingRoom.createdAt, room.lastActivityAt || room.createdAt),
+      } : room);
+      await this.redisClient.hSet('rooms', roomToSave.id, JSON.stringify(roomToSave));
+      await this.redisClient.sAdd(`user:${roomToSave.creatorId}:rooms`, roomToSave.id);
       this.logger.debug('Room saved to Redis', { roomId: room.id, creatorId: room.creatorId });
-      return room;
+      return roomToSave;
     } catch (error) {
       this.logger.error('Error saving room to Redis', { error, roomId: room.id });
       return null;
@@ -734,7 +817,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       this.logger.debug('Rooms read by user from Redis', { clientId, count: roomIds.length });
       return rooms
         .filter(room => room)
-        .map((room: string | undefined) => JSON.parse(room!))
+        .map((room: string | undefined) => normalizeRoom(JSON.parse(room!)))
         .sort((first: Room, second: Room) => getRoomActivityTime(second) - getRoomActivityTime(first));
     } catch (error) {
       this.logger.error('Error reading rooms for user from Redis', { error, clientId });
@@ -746,10 +829,83 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     try {
       const roomStr = await this.redisClient.hGet('rooms', roomId);
       this.logger.debug('Room read by ID from Redis', { roomId, found: !!roomStr });
-      return roomStr ? JSON.parse(roomStr) : null;
+      return roomStr ? normalizeRoom(JSON.parse(roomStr)) : null;
     } catch (error) {
       this.logger.error('Error reading room by id from Redis', { error, roomId });
       return null;
+    }
+  }
+
+  async compareAndSetRoomSandboxStatus(
+    roomId: string,
+    expectedStatuses: RoomSandboxStatus[],
+    nextStatus: RoomSandboxStatus,
+    updatedAt = new Date().toISOString()
+  ): Promise<Room | null> {
+    if (expectedStatuses.length === 0) {
+      return null;
+    }
+
+    try {
+      const result = await (this.redisClient as any).eval(COMPARE_AND_SET_SANDBOX_STATUS_SCRIPT, {
+        keys: ['rooms'],
+        arguments: [roomId, nextStatus, updatedAt, ...expectedStatuses],
+      });
+      const updated = Array.isArray(result) ? Number(result[0]) === 1 : false;
+      const room = parseScriptRoom(result, 1);
+      return updated ? room : null;
+    } catch (error) {
+      this.logger.error('Error comparing and setting Redis room sandbox status', { error, roomId, expectedStatuses, nextStatus });
+      return null;
+    }
+  }
+
+  async findInterruptedCocoRooms(): Promise<Room[]> {
+    try {
+      const roomIds = await this.redisClient.hKeys('rooms');
+      const rooms = await Promise.all(roomIds.map((id: string) => this.redisClient.hGet('rooms', id)));
+      return rooms
+        .filter((room): room is string => !!room)
+        .map(room => JSON.parse(room) as Room)
+        .filter(room => room.type === 'coco' && (room.sandboxStatus === 'creating' || room.cocoStatus === 'running'));
+    } catch (error) {
+      this.logger.error('Error finding interrupted Redis Coco rooms', { error });
+      return [];
+    }
+  }
+
+  async findDanglingToolCalls(): Promise<Message[]> {
+    try {
+      const roomIds = await this.redisClient.hKeys('rooms');
+      const dangling: Message[] = [];
+
+      for (const roomId of roomIds) {
+        const room = await this.getRoomById(roomId);
+        if (room?.type !== 'coco') {
+          continue;
+        }
+
+        const messages = await this.readMessagesByRoom(roomId);
+        const resultToolCallIds = new Set(
+          messages
+            .filter(message => message.messageType === 'tool_result' && message.toolCallId)
+            .map(message => message.toolCallId)
+        );
+
+        messages
+          .filter(message => message.messageType === 'tool_call')
+          .forEach(message => {
+            const toolCallId = message.toolCallId || message.id;
+            if (!resultToolCallIds.has(toolCallId)) {
+              dangling.push(message);
+            }
+          });
+      }
+
+      return dangling.sort((first, second) => parseTime(first.timestamp) - parseTime(second.timestamp));
+    } catch (error) {
+      this.logger.error('Error finding dangling Redis tool calls', { error });
+      return [];
     }
   }
 
@@ -930,8 +1086,12 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         });
 
         if (changed) {
-          const updatedRoom = await this.saveMessageHistory(roomId, updatedMessages);
-          if (updatedRoom) {
+          const result = await (this.redisClient as any).eval(REPLACE_MESSAGE_LIST_PRESERVE_ROOM_SCRIPT, {
+            keys: ['rooms', `room:${roomId}:messages`],
+            arguments: [roomId, ...updatedMessages.map(message => JSON.stringify(message))],
+          });
+          const replaced = Array.isArray(result) && Number(result[0]) === 1;
+          if (replaced) {
             updatedCount += changedCount;
             await this.invalidateRoomMessagesCache(roomId);
           }

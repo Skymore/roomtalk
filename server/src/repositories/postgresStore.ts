@@ -1,8 +1,8 @@
 import { customAlphabet } from 'nanoid';
 import { Logger } from '../logger';
-import { AICost, Message, Room, RoomAICostTotal } from '../types';
+import { AICost, Message, Room, RoomAICostTotal, RoomSandboxStatus } from '../types';
 import { DurableRoomStore } from './store';
-import { POSTGRES_SCHEMA_SQL } from './postgresSchema';
+import { POSTGRES_BASE_SCHEMA_SQL, POSTGRES_COCO_SCHEMA_MIGRATION_SQL, POSTGRES_COCO_SCHEMA_MIGRATION_VERSION } from './postgresSchema';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 
@@ -29,6 +29,12 @@ type RoomRow = {
   created_at: string | Date;
   last_activity_at: string | Date;
   creator_id: string;
+  type?: Room['type'] | null;
+  sandbox_id?: string | null;
+  sandbox_status?: Room['sandboxStatus'] | null;
+  sandbox_updated_at?: string | Date | null;
+  coco_session_id?: string | null;
+  coco_status?: Room['cocoStatus'] | null;
 };
 
 type MessageRow = {
@@ -42,14 +48,22 @@ type MessageRow = {
   avatar: unknown;
   mime_type: string | null;
   status: Message['status'] | null;
+  turn_id?: string | null;
+  tool_call_id?: string | null;
+  tool_name?: string | null;
+  tool_args?: unknown;
+  tool_output_preview?: string | null;
+  exit_code?: number | string | null;
+  is_error?: boolean | null;
   ai_model: unknown;
   usage: unknown;
   cost: unknown;
   position?: number | string;
 };
 
-const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id';
-const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, message_type, username, avatar, mime_type, status, ai_model, usage, cost';
+const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, type, sandbox_id, sandbox_status, sandbox_updated_at, coco_session_id, coco_status';
+const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost';
+const aliasedColumns = (alias: string, columns: string) => columns.split(', ').map(column => `${alias}.${column}`).join(', ');
 
 const parseTime = (timestamp?: string): number => {
   const time = Date.parse(timestamp || '');
@@ -93,14 +107,25 @@ const parseJsonValue = <T>(value: unknown): T | undefined => {
 
 const toJsonb = (value: unknown) => value === undefined ? null : JSON.stringify(value);
 
-const mapRoom = (row: RoomRow): Room => ({
-  id: row.id,
-  name: row.name,
-  description: row.description || '',
-  createdAt: toIsoString(row.created_at),
-  lastActivityAt: toIsoString(row.last_activity_at || row.created_at),
-  creatorId: row.creator_id,
-});
+const mapRoom = (row: RoomRow): Room => {
+  const room: Room = {
+    id: row.id,
+    name: row.name,
+    description: row.description || '',
+    createdAt: toIsoString(row.created_at),
+    lastActivityAt: toIsoString(row.last_activity_at || row.created_at),
+    creatorId: row.creator_id,
+  };
+
+  if (row.type === 'coco') room.type = 'coco';
+  if (row.sandbox_id) room.sandboxId = row.sandbox_id;
+  if (row.sandbox_status) room.sandboxStatus = row.sandbox_status;
+  if (row.sandbox_updated_at) room.sandboxUpdatedAt = toIsoString(row.sandbox_updated_at);
+  if (row.coco_session_id) room.cocoSessionId = row.coco_session_id;
+  if (row.coco_status) room.cocoStatus = row.coco_status;
+
+  return room;
+};
 
 const mapMessage = (row: MessageRow): Message => {
   const avatar = parseJsonValue<Message['avatar']>(row.avatar);
@@ -121,6 +146,14 @@ const mapMessage = (row: MessageRow): Message => {
   if (avatar) message.avatar = avatar;
   if (row.mime_type) message.mimeType = row.mime_type;
   if (row.status) message.status = row.status;
+  if (row.turn_id) message.turnId = row.turn_id;
+  if (row.tool_call_id) message.toolCallId = row.tool_call_id;
+  if (row.tool_name) message.toolName = row.tool_name;
+  const toolArgs = parseJsonValue<Record<string, unknown>>(row.tool_args);
+  if (toolArgs) message.toolArgs = toolArgs;
+  if (row.tool_output_preview) message.toolOutputPreview = row.tool_output_preview;
+  if (row.exit_code !== null && row.exit_code !== undefined) message.exitCode = Number(row.exit_code);
+  if (typeof row.is_error === 'boolean') message.isError = row.is_error;
   if (aiModel) message.aiModel = aiModel;
   if (usage) message.usage = usage;
   if (cost) message.cost = cost;
@@ -139,6 +172,13 @@ const messageParams = (message: Message, position: number): unknown[] => [
   toJsonb(message.avatar),
   message.mimeType || null,
   message.status || null,
+  message.turnId || null,
+  message.toolCallId || null,
+  message.toolName || null,
+  toJsonb(message.toolArgs),
+  message.toolOutputPreview || null,
+  message.exitCode ?? null,
+  message.isError ?? null,
   toJsonb(message.aiModel),
   toJsonb(message.usage),
   toJsonb(message.cost),
@@ -156,12 +196,19 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   avatar,
   mime_type,
   status,
+  turn_id,
+  tool_call_id,
+  tool_name,
+  tool_args,
+  tool_output_preview,
+  exit_code,
+  is_error,
   ai_model,
   usage,
   cost,
   position
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14
+  $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13, $14::jsonb, $15, $16, $17, $18::jsonb, $19::jsonb, $20::jsonb, $21
 ) ON CONFLICT (id) DO UPDATE SET
   room_id = EXCLUDED.room_id,
   client_id = EXCLUDED.client_id,
@@ -172,6 +219,13 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   avatar = EXCLUDED.avatar,
   mime_type = EXCLUDED.mime_type,
   status = EXCLUDED.status,
+  turn_id = EXCLUDED.turn_id,
+  tool_call_id = EXCLUDED.tool_call_id,
+  tool_name = EXCLUDED.tool_name,
+  tool_args = EXCLUDED.tool_args,
+  tool_output_preview = EXCLUDED.tool_output_preview,
+  exit_code = EXCLUDED.exit_code,
+  is_error = EXCLUDED.is_error,
   ai_model = EXCLUDED.ai_model,
   usage = EXCLUDED.usage,
   cost = EXCLUDED.cost,
@@ -184,9 +238,21 @@ export class PostgresStore implements DurableRoomStore {
   ) {}
 
   async initializeSchema(): Promise<void> {
-    for (const sql of POSTGRES_SCHEMA_SQL) {
+    for (const sql of POSTGRES_BASE_SCHEMA_SQL) {
       await this.pool.query(sql);
     }
+
+    const migration = await this.pool.query(
+      'SELECT 1 FROM schema_migrations WHERE version = $1 LIMIT 1',
+      [POSTGRES_COCO_SCHEMA_MIGRATION_VERSION]
+    );
+    if (migration.rows.length === 0) {
+      for (const sql of POSTGRES_COCO_SCHEMA_MIGRATION_SQL) {
+        await this.pool.query(sql);
+      }
+      this.logger.info('PostgreSQL Coco schema migration applied', { version: POSTGRES_COCO_SCHEMA_MIGRATION_VERSION });
+    }
+
     this.logger.info('PostgreSQL schema initialized');
   }
 
@@ -219,6 +285,10 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async appendMessage(message: Message): Promise<Room | null> {
+    return this.appendMessageWithAtomicPosition(message);
+  }
+
+  async appendMessageWithAtomicPosition(message: Message): Promise<Room | null> {
     try {
       return await this.transaction(async client => {
         const room = await client.query<RoomRow>(
@@ -506,7 +576,7 @@ export class PostgresStore implements DurableRoomStore {
   async readMessagesByRoom(roomId: string): Promise<Message[]> {
     try {
       const result = await this.pool.query<MessageRow>(
-        `SELECT id, room_id, client_id, content, timestamp, message_type, username, avatar, mime_type, status, ai_model, usage, cost
+        `SELECT ${MESSAGE_COLUMNS}
         FROM room_messages
         WHERE room_id = $1
         ORDER BY position ASC, timestamp ASC`,
@@ -599,12 +669,31 @@ export class PostgresStore implements DurableRoomStore {
   async saveRoom(room: Room): Promise<Room | null> {
     try {
       const result = await this.pool.query<RoomRow>(
-        `INSERT INTO rooms (id, name, description, created_at, last_activity_at, creator_id)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        `INSERT INTO rooms (
+          id,
+          name,
+          description,
+          created_at,
+          last_activity_at,
+          creator_id,
+          type,
+          sandbox_id,
+          sandbox_status,
+          sandbox_updated_at,
+          coco_session_id,
+          coco_status
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         ON CONFLICT (id) DO UPDATE SET
           name = EXCLUDED.name,
           description = EXCLUDED.description,
-          last_activity_at = GREATEST(rooms.last_activity_at, EXCLUDED.last_activity_at)
+          last_activity_at = GREATEST(rooms.last_activity_at, EXCLUDED.last_activity_at),
+          type = CASE WHEN rooms.type = 'coco' AND EXCLUDED.type = 'chat' THEN rooms.type ELSE EXCLUDED.type END,
+          sandbox_id = COALESCE(EXCLUDED.sandbox_id, rooms.sandbox_id),
+          sandbox_status = COALESCE(EXCLUDED.sandbox_status, rooms.sandbox_status),
+          sandbox_updated_at = COALESCE(EXCLUDED.sandbox_updated_at, rooms.sandbox_updated_at),
+          coco_session_id = COALESCE(EXCLUDED.coco_session_id, rooms.coco_session_id),
+          coco_status = COALESCE(EXCLUDED.coco_status, rooms.coco_status)
         RETURNING ${ROOM_COLUMNS}`,
         [
           room.id,
@@ -613,6 +702,12 @@ export class PostgresStore implements DurableRoomStore {
           room.createdAt,
           room.lastActivityAt || room.createdAt,
           room.creatorId,
+          room.type || 'chat',
+          room.sandboxId || null,
+          room.sandboxStatus || null,
+          room.sandboxUpdatedAt || null,
+          room.cocoSessionId || null,
+          room.cocoStatus || null,
         ]
       );
       this.logger.debug('Room saved to PostgreSQL', { roomId: room.id, creatorId: room.creatorId });
@@ -689,6 +784,71 @@ export class PostgresStore implements DurableRoomStore {
     } catch (error) {
       this.logger.error('Error counting PostgreSQL rooms', { error });
       return 0;
+    }
+  }
+
+  async compareAndSetRoomSandboxStatus(
+    roomId: string,
+    expectedStatuses: RoomSandboxStatus[],
+    nextStatus: RoomSandboxStatus,
+    updatedAt = new Date().toISOString()
+  ): Promise<Room | null> {
+    if (expectedStatuses.length === 0) {
+      return null;
+    }
+
+    try {
+      const result = await this.pool.query<RoomRow>(
+        `UPDATE rooms
+        SET sandbox_status = $3,
+          sandbox_updated_at = $4
+        WHERE id = $1
+          AND COALESCE(sandbox_status, 'none') = ANY($2::text[])
+        RETURNING ${ROOM_COLUMNS}`,
+        [roomId, expectedStatuses, nextStatus, updatedAt]
+      );
+      return result.rows[0] ? mapRoom(result.rows[0]) : null;
+    } catch (error) {
+      this.logger.error('Error comparing and setting PostgreSQL room sandbox status', { error, roomId, expectedStatuses, nextStatus });
+      return null;
+    }
+  }
+
+  async findInterruptedCocoRooms(): Promise<Room[]> {
+    try {
+      const result = await this.pool.query<RoomRow>(
+        `SELECT ${ROOM_COLUMNS}
+        FROM rooms
+        WHERE type = 'coco'
+          AND (sandbox_status = 'creating' OR coco_status = 'running')`
+      );
+      return result.rows.map(mapRoom);
+    } catch (error) {
+      this.logger.error('Error finding interrupted PostgreSQL Coco rooms', { error });
+      return [];
+    }
+  }
+
+  async findDanglingToolCalls(): Promise<Message[]> {
+    try {
+      const result = await this.pool.query<MessageRow>(
+        `SELECT ${aliasedColumns('calls', MESSAGE_COLUMNS)}
+        FROM room_messages calls
+        INNER JOIN rooms room ON room.id = calls.room_id AND room.type = 'coco'
+        WHERE calls.message_type = 'tool_call'
+          AND NOT EXISTS (
+            SELECT 1
+            FROM room_messages results
+            WHERE results.room_id = calls.room_id
+              AND results.message_type = 'tool_result'
+              AND results.tool_call_id = COALESCE(calls.tool_call_id, calls.id)
+          )
+        ORDER BY calls.timestamp ASC`
+      );
+      return result.rows.map(mapMessage);
+    } catch (error) {
+      this.logger.error('Error finding dangling PostgreSQL tool calls', { error });
+      return [];
     }
   }
 

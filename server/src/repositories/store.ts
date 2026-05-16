@@ -1,4 +1,4 @@
-import { AICost, Message, Room, RoomAICostTotal } from '../types';
+import { AICost, Message, Room, RoomAICostTotal, RoomSandboxStatus } from '../types';
 
 export interface MessageUpdateResult {
   room: Room;
@@ -27,6 +27,12 @@ export interface MessageUpdateAndTruncateResult {
 export interface DurableRoomStore {
   generateUniqueRoomId(): Promise<string>;
   appendMessage(message: Message): Promise<Room | null>;
+  /**
+   * Appends a new message while allocating its room-local position inside the
+   * same durable operation. Coco uses this explicit name for rapid tool events;
+   * appendMessage delegates to this path in durable implementations.
+   */
+  appendMessageWithAtomicPosition(message: Message): Promise<Room | null>;
   upsertMessage(message: Message): Promise<Room | null>;
   updateMessageContent(roomId: string, messageId: string, newContent: string, updatedAt?: string): Promise<MessageUpdateResult | null>;
   deleteMessageById(roomId: string, messageId: string): Promise<MessageDeleteResult | null>;
@@ -44,6 +50,9 @@ export interface DurableRoomStore {
   updateRoomName(roomId: string, creatorId: string, name: string): Promise<Room | null>;
   deleteRoom(roomId: string, creatorId: string): Promise<void>;
   countRooms(): Promise<number>;
+  compareAndSetRoomSandboxStatus(roomId: string, expectedStatuses: RoomSandboxStatus[], nextStatus: RoomSandboxStatus, updatedAt?: string): Promise<Room | null>;
+  findInterruptedCocoRooms(): Promise<Room[]>;
+  findDanglingToolCalls(): Promise<Message[]>;
   resetAllDataForTests?(): Promise<void>;
   failInterruptedStreamingMessages?(content: string): Promise<number>;
 }
@@ -97,6 +106,14 @@ export class CompositeRoomStore implements RoomStore {
 
   async appendMessage(message: Message) {
     const updatedRoom = await this.durableStore.appendMessage(message);
+    if (updatedRoom) {
+      await this.invalidateRoomMessagesCache(message.roomId);
+    }
+    return updatedRoom;
+  }
+
+  async appendMessageWithAtomicPosition(message: Message) {
+    const updatedRoom = await this.durableStore.appendMessageWithAtomicPosition(message);
     if (updatedRoom) {
       await this.invalidateRoomMessagesCache(message.roomId);
     }
@@ -215,6 +232,18 @@ export class CompositeRoomStore implements RoomStore {
 
   countRooms() {
     return this.durableStore.countRooms();
+  }
+
+  compareAndSetRoomSandboxStatus(roomId: string, expectedStatuses: RoomSandboxStatus[], nextStatus: RoomSandboxStatus, updatedAt?: string) {
+    return this.durableStore.compareAndSetRoomSandboxStatus(roomId, expectedStatuses, nextStatus, updatedAt);
+  }
+
+  findInterruptedCocoRooms() {
+    return this.durableStore.findInterruptedCocoRooms();
+  }
+
+  findDanglingToolCalls() {
+    return this.durableStore.findDanglingToolCalls();
   }
 
   async resetAllDataForTests() {
