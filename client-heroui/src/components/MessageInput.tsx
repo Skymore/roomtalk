@@ -612,18 +612,18 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
             title={`${t('messageInput')} (Enter: ${t('send')}, Shift+Enter: ${t('newLine')}, ${isMacOS ? 'Command+Enter' : 'Ctrl+Enter'}: ${t('askAI')})`}
           ></div>
 
-          <div className="flex min-h-12 items-center gap-1.5 px-2 pb-2 sm:gap-2 sm:px-3">
+          <div className="flex min-h-11 items-center gap-1 px-1.5 pb-2 sm:min-h-12 sm:gap-2 sm:px-3">
             {/* 图片上传按钮 */}
             <Button
               isIconOnly
               size="sm"
               variant="light"
               aria-label={t('uploadImage')}
-              className="h-9 w-9 min-w-9 rounded-full text-[#5e5d59] dark:text-[#b0aea5]"
+              className="h-8 w-8 min-w-8 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
               onPress={() => fileInputRef.current?.click()}
               isDisabled={imageCount >= MAX_MESSAGE_IMAGES || isSending || isAiProcessing} // 禁用图片上传当 AI 处理中
             >
-              <Icon icon="lucide:plus" className="h-5 w-5" />
+              <Icon icon="lucide:plus" className="h-4 w-4 sm:h-5 sm:w-5" />
             </Button>
 
             {/* AI设置按钮 (原来的AI按钮) */}

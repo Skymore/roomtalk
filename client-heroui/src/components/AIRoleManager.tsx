@@ -130,36 +130,38 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
   ];
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-4 sm:space-y-6">
       {/* 角色列表 */}
       <div className="space-y-3">
         <h3 className="font-serif text-lg font-medium text-[#141413] dark:text-[#faf9f5]">{t('existingRoles')}</h3>
         <div className="space-y-2">
           {roles.map(role => (
-            <Card key={role.id} className={`border bg-[#faf9f5] p-3 dark:bg-[#1d1d1b] ${selectedRoleId === role.id ? 'border-[#c96442] shadow-[0_0_0_1px_#c96442]' : 'border-[#dedbd0] dark:border-[#30302e]'}`}>
-              <div className="flex justify-between items-center">
-                <div className="flex items-center space-x-2">
+            <Card key={role.id} className={`min-w-0 border bg-[#faf9f5] p-3 dark:bg-[#1d1d1b] ${selectedRoleId === role.id ? 'border-[#c96442] shadow-[0_0_0_1px_#c96442]' : 'border-[#dedbd0] dark:border-[#30302e]'}`}>
+              <div className="flex min-w-0 items-center gap-2">
+                <div className="flex min-w-0 flex-1 items-center gap-2">
                   <Avatar
                     icon={<Icon icon={role.icon} />}
                     color={role.color}
                     size="sm"
+                    className="flex-shrink-0"
                   />
-                  <div>
-                    <p className="font-medium text-[#141413] dark:text-[#faf9f5]">{getAIRoleDisplayName(role, t)}</p>
-                    <p className="max-w-md truncate text-xs text-[#5e5d59] dark:text-[#b0aea5]">{getAIRoleDisplayPrompt(role, t)}</p>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-medium text-[#141413] dark:text-[#faf9f5]">{getAIRoleDisplayName(role, t)}</p>
+                    <p className="truncate text-xs text-[#5e5d59] dark:text-[#b0aea5]">{getAIRoleDisplayPrompt(role, t)}</p>
                   </div>
                 </div>
-                <div className="flex space-x-1">
-                  <Button isIconOnly size="sm" variant="light" onPress={() => onSelectRole(role.id)}>
+                <div className="flex flex-shrink-0 gap-1">
+                  <Button isIconOnly size="sm" variant="light" className="h-8 w-8 min-w-8" onPress={() => onSelectRole(role.id)}>
                     <Icon icon="lucide:check" />
                   </Button>
-                  <Button isIconOnly size="sm" variant="light" onPress={() => handleEditRole(role)}>
+                  <Button isIconOnly size="sm" variant="light" className="h-8 w-8 min-w-8" onPress={() => handleEditRole(role)}>
                     <Icon icon="lucide:edit" />
                   </Button>
                   <Button
                     isIconOnly
                     size="sm"
                     variant="light"
+                    className="h-8 w-8 min-w-8"
                     isDisabled={roles.length <= 1}
                     onPress={() => handleStartDelete(role.id)}
                   >
@@ -188,7 +190,7 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
             minRows={3}
             maxRows={5}
           />
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <Select
               label={t('roleColor')}
               selectedKeys={[editingRole.color]}
@@ -233,7 +235,7 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
             color="secondary"
             startContent={<Icon icon="lucide:plus" />}
             onPress={() => setShowCreateForm(true)}
-            className="bg-[#c96442] text-[#faf9f5]"
+            className="w-full bg-[#c96442] text-[#faf9f5] sm:w-auto"
           >
             {t('createNewRole')}
           </Button>
@@ -265,7 +267,7 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
             minRows={3}
             maxRows={5}
           />
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <Select
               label={t('roleColor')}
               selectedKeys={[newRole.color as string]}
