@@ -2,6 +2,8 @@ import { expect, test } from '@playwright/test';
 import {
   createRoomViaApi,
   expectChatRoom,
+  getClientRoomsViaApi,
+  joinRoomById,
   openRoomFromCard,
   openRoomsPage,
   resetE2EData,
@@ -33,6 +35,52 @@ test('creates a room through the UI and enters chat', async ({ page, context }) 
   await page.locator('[role="dialog"]').getByRole('button', { name: 'Create Room' }).click();
 
   await expectChatRoom(page, roomName);
+});
+
+test('renames an owned room from the room card and current room header', async ({ page, context, request }) => {
+  const clientId = await seedClient(context);
+  const room = await createRoomViaApi(request, clientId, uniqueName('rename-room'));
+  const cardRename = shortName('card');
+  const headerRename = shortName('header');
+
+  await openRoomsPage(page);
+
+  const card = page.getByTestId('room-card').filter({ hasText: room.name });
+  await card.getByRole('button', { name: 'Edit Room Name' }).click();
+  await expect(page.getByText('Rename Room')).toBeVisible();
+  await page.getByRole('dialog').getByLabel('Room Name').fill(cardRename);
+  await page.getByRole('dialog').getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByTestId('room-card').filter({ hasText: cardRename })).toBeVisible();
+
+  await openRoomFromCard(page, { id: room.id, name: cardRename });
+  await page.getByRole('button', { name: 'Edit Room Name', exact: true }).click();
+  await expect(page.getByText('Rename Room')).toBeVisible();
+  await page.getByRole('dialog').getByLabel('Room Name').fill(headerRename);
+  await page.getByRole('dialog').getByRole('button', { name: 'Save' }).click();
+
+  await expectChatRoom(page, headerRename);
+  const rooms = await getClientRoomsViaApi(request, clientId);
+  expect(rooms.find(item => item.id === room.id)?.name).toBe(headerRename);
+});
+
+test('uses the desktop saved list without a separate saved navigation card', async ({ page, context, request }) => {
+  await seedClient(context);
+  const room = await createRoomViaApi(request, uniqueName('saved-owner'), uniqueName('saved-room'));
+  await context.addInitScript(({ savedRoom }) => {
+    window.localStorage.setItem('saved_rooms', JSON.stringify([savedRoom]));
+    window.localStorage.setItem('roomtalk_current_view', 'saved');
+  }, { savedRoom: room });
+
+  await openRoomsPage(page);
+
+  await expect(page.getByRole('button', { name: 'Saved', exact: true })).toHaveCount(0);
+  const savedSection = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Saved' }) });
+  await expect(savedSection.getByRole('button', { name: new RegExp(room.name) })).toBeVisible();
+
+  await savedSection.getByRole('button', { name: `Unsave ${room.id}` }).click();
+  await expect(savedSection.getByRole('button', { name: new RegExp(room.name) })).toHaveCount(0);
+
+  await joinRoomById(page, room);
 });
 
 test('joins a room by ID from a separate client', async ({ page, context, request }) => {

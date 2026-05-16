@@ -81,7 +81,7 @@ export async function openRoomsPage(page: Page) {
 export async function openRoomFromCard(page: Page, room: Pick<TestRoom, 'id' | 'name'>) {
   const card = page.getByTestId('room-card').filter({ hasText: room.name });
   await expect(card).toBeVisible();
-  await card.click();
+  await card.getByRole('heading', { name: room.name }).click();
   await expectChatRoom(page, room.name);
 }
 

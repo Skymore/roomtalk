@@ -21,9 +21,10 @@ import { formatDate } from '../utils/formatters';
 import { getLanguageOption, languageOptions } from '../utils/languages';
 import { buildRoomShareUrl, getRoomActivityAt, validateRoomName } from '../utils/roomState';
 import { createRoom } from '../utils/socket';
-import { Room } from '../utils/types';
+import { Room, RoomRenameHandler } from '../utils/types';
 import { getAvatarColor, getAvatarText } from '../utils/userProfile';
 import { RoomCreateModal } from './RoomCreateModal';
+import { RoomRenameModal } from './RoomRenameModal';
 
 interface DesktopSidebarProps {
   clientId: string;
@@ -40,6 +41,8 @@ interface DesktopSidebarProps {
   handleCopyToClipboard: (text: string) => void;
   onRoomSelect: (roomId: string) => void;
   onDeleteRoom: (roomId: string) => void;
+  onUnsaveRoom: (roomId: string) => void;
+  onRenameRoom: RoomRenameHandler;
 }
 
 interface SidebarNavItemProps {
@@ -95,7 +98,9 @@ interface SidebarRoomRowProps {
   onPress: () => void;
   onCopyRoomId: (roomId: string) => void;
   onShareRoom: (room: Room) => void;
-  onDeleteRoom: (room: Room) => void;
+  onRenameRoom?: (room: Room) => void;
+  onDeleteRoom?: (room: Room) => void;
+  onUnsaveRoom?: (room: Room) => void;
 }
 
 const SidebarRoomRow: React.FC<SidebarRoomRowProps> = ({
@@ -107,11 +112,13 @@ const SidebarRoomRow: React.FC<SidebarRoomRowProps> = ({
   onPress,
   onCopyRoomId,
   onShareRoom,
+  onRenameRoom,
   onDeleteRoom,
+  onUnsaveRoom,
 }) => {
   const { t, i18n } = useTranslation();
   const activityAt = getRoomActivityAt(room);
-  const canDelete = room.creatorId === clientId;
+  const canManageRoom = room.creatorId === clientId;
 
   if (isCollapsed) {
     return (
@@ -200,20 +207,48 @@ const SidebarRoomRow: React.FC<SidebarRoomRowProps> = ({
             <Icon icon="lucide:share-2" className="h-3.5 w-3.5" />
           </Button>
         </Tooltip>
-        {canDelete && (
-          <Tooltip content={t('deleteRoom')}>
+        {onUnsaveRoom && (
+          <Tooltip content={t('unsave')}>
             <Button
               isIconOnly
               size="sm"
               variant="light"
-              color="danger"
-              aria-label={`${t('removeRoomFromSidebar')} ${room.id}`}
-              className="h-7 w-7 min-w-7 rounded-md text-danger-500"
-              onPress={() => onDeleteRoom(room)}
+              aria-label={`${t('unsave')} ${room.id}`}
+              className="h-7 w-7 min-w-7 rounded-md text-[#87867f] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:text-[#faf9f5]"
+              onPress={() => onUnsaveRoom(room)}
             >
-              <Icon icon="lucide:trash-2" className="h-3.5 w-3.5" />
+              <Icon icon="lucide:bookmark-minus" className="h-3.5 w-3.5" />
             </Button>
           </Tooltip>
+        )}
+        {canManageRoom && !onUnsaveRoom && onRenameRoom && onDeleteRoom && (
+          <>
+            <Tooltip content={t('editRoomName')}>
+              <Button
+                isIconOnly
+                size="sm"
+                variant="light"
+                aria-label={`${t('editRoomName')} ${room.id}`}
+                className="h-7 w-7 min-w-7 rounded-md text-[#87867f] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:text-[#faf9f5]"
+                onPress={() => onRenameRoom(room)}
+              >
+                <Icon icon="lucide:pencil" className="h-3.5 w-3.5" />
+              </Button>
+            </Tooltip>
+            <Tooltip content={t('deleteRoom')}>
+              <Button
+                isIconOnly
+                size="sm"
+                variant="light"
+                color="danger"
+                aria-label={`${t('removeRoomFromSidebar')} ${room.id}`}
+                className="h-7 w-7 min-w-7 rounded-md text-danger-500"
+                onPress={() => onDeleteRoom(room)}
+              >
+                <Icon icon="lucide:trash-2" className="h-3.5 w-3.5" />
+              </Button>
+            </Tooltip>
+          </>
         )}
       </span>
     </div>
@@ -235,6 +270,8 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
   handleCopyToClipboard,
   onRoomSelect,
   onDeleteRoom,
+  onUnsaveRoom,
+  onRenameRoom,
 }) => {
   const { t } = useTranslation();
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -245,9 +282,8 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
   const [nameError, setNameError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [roomToDelete, setRoomToDelete] = useState<Room | null>(null);
+  const [roomToRename, setRoomToRename] = useState<Room | null>(null);
   const currentLanguage = getLanguageOption(i18n.language);
-  const visibleRooms = rooms;
-  const quickSavedRooms = savedRooms.slice(0, 5);
 
   const handleJoinRoom = () => {
     const trimmedRoomId = joinRoomId.trim();
@@ -419,13 +455,6 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
             </>
           )}
 
-          <SidebarNavItem
-            icon="lucide:bookmark"
-            label={t('savedRooms')}
-            isActive={view === 'saved'}
-            onPress={() => setView('saved')}
-            isCollapsed={isCollapsed}
-          />
         </div>
 
         <div className={`min-h-0 flex-1 overflow-y-auto ${isCollapsed ? 'px-2 py-3' : 'px-3 py-4'}`}>
@@ -439,8 +468,8 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
               </div>
             )}
             <div className={isCollapsed ? 'flex flex-col items-center gap-1' : 'space-y-1'}>
-              {visibleRooms.length > 0 ? (
-                visibleRooms.map((room) => (
+              {rooms.length > 0 ? (
+                rooms.map((room) => (
                   <SidebarRoomRow
                     key={room.id}
                     clientId={clientId}
@@ -451,6 +480,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
                     onPress={() => onRoomSelect(room.id)}
                     onCopyRoomId={handleCopyToClipboard}
                     onShareRoom={handleShareRoom}
+                    onRenameRoom={setRoomToRename}
                     onDeleteRoom={setRoomToDelete}
                   />
                 ))
@@ -472,8 +502,8 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
               </div>
             )}
             <div className={isCollapsed ? 'flex flex-col items-center gap-1' : 'space-y-1'}>
-              {quickSavedRooms.length > 0 ? (
-                quickSavedRooms.map((room) => (
+              {savedRooms.length > 0 ? (
+                savedRooms.map((room) => (
                   <SidebarRoomRow
                     key={room.id}
                     clientId={clientId}
@@ -484,7 +514,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
                     onPress={() => onRoomSelect(room.id)}
                     onCopyRoomId={handleCopyToClipboard}
                     onShareRoom={handleShareRoom}
-                    onDeleteRoom={setRoomToDelete}
+                    onUnsaveRoom={(savedRoom) => onUnsaveRoom(savedRoom.id)}
                   />
                 ))
               ) : !isCollapsed ? (
@@ -657,6 +687,13 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
           </ModalFooter>
         </ModalContent>
       </Modal>
+
+      <RoomRenameModal
+        isOpen={!!roomToRename}
+        room={roomToRename}
+        onClose={() => setRoomToRename(null)}
+        onRename={onRenameRoom}
+      />
     </>
   );
 };

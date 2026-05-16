@@ -10,22 +10,24 @@ import {
 } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
-import { Room } from '../utils/types';
+import { Room, RoomRenameHandler } from '../utils/types';
 import { createRoom } from '../utils/socket';
 import { buildRoomShareUrl, validateRoomName } from '../utils/roomState';
 import { RoomCard } from './RoomCard';
 import { RoomCreateModal } from './RoomCreateModal';
 import { RoomJoinControl } from './RoomJoinControl';
+import { RoomRenameModal } from './RoomRenameModal';
 
 interface RoomListProps {
   rooms: Room[];
   onRoomSelect: (roomId: string, isNotOwned?: boolean) => void;
   handleDeleteRoom: (roomId: string) => void;
+  handleRenameRoom: RoomRenameHandler;
   clientId: string;
   username: string;
 }
 
-export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleDeleteRoom, clientId, username }) => {
+export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleDeleteRoom, handleRenameRoom, clientId, username }) => {
   const { t } = useTranslation();
   const { isOpen, onOpen, onClose } = useDisclosure();
   const [newRoomName, setNewRoomName] = useState('');
@@ -35,6 +37,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
   const [copiedRoomId, setCopiedRoomId] = useState<string | null>(null);
   const [joinRoomId, setJoinRoomId] = useState('');
   const [roomToDelete, setRoomToDelete] = useState<Room | null>(null);
+  const [roomToRename, setRoomToRename] = useState<Room | null>(null);
   const [nameError, setNameError] = useState<string | null>(null);
   const copyFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const {
@@ -243,6 +246,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
             onSelect={onRoomSelect}
             onCopyRoomId={handleCopyRoomId}
             onCopyRoomLink={handleCopyRoomLink}
+            onRename={setRoomToRename}
             onDelete={openDeleteModal}
           />
         ))}
@@ -266,6 +270,12 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
       </Modal>
 
       {createModal}
+      <RoomRenameModal
+        isOpen={!!roomToRename}
+        room={roomToRename}
+        onClose={() => setRoomToRename(null)}
+        onRename={handleRenameRoom}
+      />
     </div>
   );
 };

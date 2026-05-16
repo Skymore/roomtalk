@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { Button } from '@heroui/react';
 import { Icon } from '@iconify/react';
-import { socket } from '../utils/socket';
+import { requestAIResponse, requestEditMessageAndAIResponse, socket } from '../utils/socket';
 import { MessageItem } from './MessageItem';
 import { Message } from '../utils/types';
 import { useTranslation } from 'react-i18next';
@@ -133,28 +133,15 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
         return;
     }
 
-    // 2. Emit edit_message to server
-    socket.emit('edit_message', { roomId, messageId, newContent }, (response: { success: boolean; updatedMessage?: Message; error?: string }) => {
-      if (response.success && response.updatedMessage) {
-        console.log('Edit successful on server, triggering AI');
-
-         // Optionally update the timestamp of the edited message in the already truncated state
-        updateMessages(prev => replaceMessage(prev, response.updatedMessage!));
-
-        // 3. NOW trigger AI, but without the prompt
-        socket.emit('ask_ai', {
-          roomId,
-          editedMessageId: messageId, // Server uses this to determine context
-          model: getStoredAIModel() || undefined
-        });
-
-      } else {
-        console.error('Failed to save edit before asking AI:', response.error);
-        // Revert optimistic update (both content and truncation)
-        updateMessages(originalMessages);
-         // Use translation key for alert
-        alert(t('errorEditingMessage', { error: response.error || t('unknownError') }));
-      }
+    requestEditMessageAndAIResponse({
+      roomId,
+      messageId,
+      newContent,
+      model: getStoredAIModel() || undefined,
+    }).catch((error) => {
+      console.error('Failed to save edit before asking AI:', error);
+      updateMessages(originalMessages);
+      alert(t('errorEditingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
     });
   }, [roomId, messages, updateMessages, t]);
 
@@ -199,12 +186,15 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
 
     // 向服务器发送 ask_ai 事件，并带上 retryForMessageId 标识
     // 服务器将根据这个ID来截断 redis 中的历史记录
-    socket.emit('ask_ai', {
+    requestAIResponse({
       roomId,
       // prompt: '', // Prompt is now determined by the server based on truncated history
       retryForMessageId: messageId, // 新增：告知服务器这是针对哪条消息的重试
       model: getStoredAIModel() || undefined
       // TODO: Consider sending current role/system prompt if needed
+    }).catch((error) => {
+      console.error('Failed to retry AI response:', error);
+      socket.emit('get_room_messages', roomId);
     });
     console.log('Emitted ask_ai for retry with retryForMessageId:', messageId);
 
@@ -249,6 +239,7 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
     <>
       <div
         id={scrollContainerId}
+        data-testid="message-list-scroll"
         ref={containerRef}
         className="relative flex h-full w-full flex-col overflow-y-auto bg-[#f5f4ed] p-3 dark:bg-[#141413]"
         onScroll={handleScroll}
