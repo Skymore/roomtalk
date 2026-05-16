@@ -588,11 +588,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
         </div>
       )}
 
-      <div className="flex flex-col w-full pb-0.5">
-        <div className="flex overflow-hidden rounded-xl border border-[#dedbd0] bg-[#faf9f5] shadow-[0_0_0_1px_rgba(194,192,182,0.35)] dark:border-[#30302e] dark:bg-[#1d1d1b]">
+      <div className="w-full pb-0.5">
+        <div className="overflow-hidden rounded-[1.65rem] border border-[#dedbd0] bg-[#faf9f5] shadow-[0_0_0_1px_rgba(194,192,182,0.35)] dark:border-[#30302e] dark:bg-[#2a2a28]">
           {/* 编辑区域 */}
           <div
-            className="min-h-12 max-h-36 flex-1 overflow-y-auto p-3 text-sm leading-6 text-[#141413] dark:text-[#faf9f5]"
+            className="min-h-16 max-h-36 w-full overflow-y-auto px-4 pb-2 pt-4 text-sm leading-6 text-[#141413] dark:text-[#faf9f5]"
             contentEditable={!isSending && !isAiProcessing} // 禁用编辑区域当 AI 处理中
             onInput={parseEditorContent}
             onPaste={handlePaste}
@@ -612,19 +612,18 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
             title={`${t('messageInput')} (Enter: ${t('send')}, Shift+Enter: ${t('newLine')}, ${isMacOS ? 'Command+Enter' : 'Ctrl+Enter'}: ${t('askAI')})`}
           ></div>
 
-          {/* 辅助按钮区 */}
-          <div className="flex flex-col justify-between border-l border-[#dedbd0] py-1 dark:border-[#30302e]">
+          <div className="flex min-h-12 items-center gap-1.5 px-2 pb-2 sm:gap-2 sm:px-3">
             {/* 图片上传按钮 */}
             <Button
               isIconOnly
               size="sm"
               variant="light"
               aria-label={t('uploadImage')}
-              className="rounded-lg text-[#5e5d59] dark:text-[#b0aea5]"
+              className="h-9 w-9 min-w-9 rounded-full text-[#5e5d59] dark:text-[#b0aea5]"
               onPress={() => fileInputRef.current?.click()}
               isDisabled={imageCount >= MAX_MESSAGE_IMAGES || isSending || isAiProcessing} // 禁用图片上传当 AI 处理中
             >
-              <Icon icon="lucide:image" />
+              <Icon icon="lucide:plus" className="h-5 w-5" />
             </Button>
 
             {/* AI设置按钮 (原来的AI按钮) */}
@@ -644,32 +643,32 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
               onChange={handleImageUpload}
               disabled={isSending || isAiProcessing} // 禁用文件输入当 AI 处理中
             />
+
+            {/* AI角色选择和发送按钮区 */}
+            <MessageInputAIControls
+              roles={aiRoles}
+              selectedRoleId={selectedRoleId}
+              selectedRole={selectedRole}
+              aiModels={aiModels}
+              selectedAIModel={selectedAIModel}
+              defaultAIModel={defaultAIModel}
+              isSending={isSending}
+              isAiProcessing={isAiProcessing}
+              isMacOS={isMacOS}
+              currentInputText={currentInputText}
+              imageCount={imageCount}
+              isSettingsOpen={isAISettingsOpen}
+              onSettingsClose={onAISettingsClose}
+              onRoleChange={handleRoleChange}
+              onModelChange={handleModelChange}
+              onAddRole={handleAddRole}
+              onUpdateRole={handleUpdateRole}
+              onDeleteRole={handleDeleteRole}
+              onAskAI={handleAskAI}
+              onSend={handleSubmit}
+            />
           </div>
         </div>
-
-        {/* AI角色选择和发送按钮区 */}
-        <MessageInputAIControls
-          roles={aiRoles}
-          selectedRoleId={selectedRoleId}
-          selectedRole={selectedRole}
-          aiModels={aiModels}
-          selectedAIModel={selectedAIModel}
-          defaultAIModel={defaultAIModel}
-          isSending={isSending}
-          isAiProcessing={isAiProcessing}
-          isMacOS={isMacOS}
-          currentInputText={currentInputText}
-          imageCount={imageCount}
-          isSettingsOpen={isAISettingsOpen}
-          onSettingsClose={onAISettingsClose}
-          onRoleChange={handleRoleChange}
-          onModelChange={handleModelChange}
-          onAddRole={handleAddRole}
-          onUpdateRole={handleUpdateRole}
-          onDeleteRole={handleDeleteRole}
-          onAskAI={handleAskAI}
-          onSend={handleSubmit}
-        />
       </div>
     </div>
   );
