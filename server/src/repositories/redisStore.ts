@@ -102,6 +102,199 @@ end
 return { 1, found, #existing, cjson.encode(room) }
 `;
 
+const UPDATE_MESSAGE_CONTENT_SCRIPT = `
+local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
+if not roomJson then
+  return { 0, 0, '', '' }
+end
+
+local roomOk, room = pcall(cjson.decode, roomJson)
+if not roomOk then
+  return { 0, 0, '', '' }
+end
+
+local existing = redis.call('LRANGE', KEYS[2], 0, -1)
+local targetId = ARGV[2]
+local updatedPayload = ''
+local found = 0
+
+for i = 1, #existing do
+  local ok, decoded = pcall(cjson.decode, existing[i])
+  if ok and decoded['id'] == targetId then
+    decoded['content'] = ARGV[3]
+    decoded['timestamp'] = ARGV[4]
+    updatedPayload = cjson.encode(decoded)
+    redis.call('LSET', KEYS[2], i - 1, updatedPayload)
+    found = 1
+    break
+  end
+end
+
+if found == 1 then
+  local currentLastActivityAt = room['lastActivityAt'] or room['createdAt'] or ''
+  if ARGV[4] > currentLastActivityAt then
+    room['lastActivityAt'] = ARGV[4]
+  end
+  redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
+end
+
+return { 1, found, cjson.encode(room), updatedPayload }
+`;
+
+const DELETE_MESSAGE_BY_ID_SCRIPT = `
+local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
+if not roomJson then
+  return { 0, 0, 0, '' }
+end
+
+local roomOk, room = pcall(cjson.decode, roomJson)
+if not roomOk then
+  return { 0, 0, 0, '' }
+end
+
+local existing = redis.call('LRANGE', KEYS[2], 0, -1)
+local remaining = {}
+local targetId = ARGV[2]
+local found = 0
+local latestTimestamp = ''
+
+for i = 1, #existing do
+  local ok, decoded = pcall(cjson.decode, existing[i])
+  if ok and decoded['id'] == targetId then
+    found = 1
+  else
+    table.insert(remaining, existing[i])
+    if ok and decoded['timestamp'] and decoded['timestamp'] > latestTimestamp then
+      latestTimestamp = decoded['timestamp']
+    end
+  end
+end
+
+if found == 1 then
+  room['lastActivityAt'] = latestTimestamp ~= '' and latestTimestamp or room['createdAt']
+  redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
+  redis.call('DEL', KEYS[2])
+  for i = 1, #remaining do
+    redis.call('RPUSH', KEYS[2], remaining[i])
+  end
+end
+
+return { 1, found, #remaining, cjson.encode(room) }
+`;
+
+const TRUNCATE_MESSAGE_LIST_SCRIPT = `
+local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
+if not roomJson then
+  return { 0, 0, 0, '' }
+end
+
+local roomOk, room = pcall(cjson.decode, roomJson)
+if not roomOk then
+  return { 0, 0, 0, '' }
+end
+
+local existing = redis.call('LRANGE', KEYS[2], 0, -1)
+local targetId = ARGV[2]
+local mode = ARGV[3]
+local targetIndex = 0
+
+for i = 1, #existing do
+  local ok, decoded = pcall(cjson.decode, existing[i])
+  if ok and decoded['id'] == targetId then
+    targetIndex = i
+    break
+  end
+end
+
+local remaining = {}
+local found = targetIndex > 0 and 1 or 0
+
+if found == 1 then
+  local keepCount = mode == 'before' and targetIndex - 1 or targetIndex
+  local latestTimestamp = ''
+  for i = 1, keepCount do
+    table.insert(remaining, existing[i])
+    local ok, decoded = pcall(cjson.decode, existing[i])
+    if ok and decoded['timestamp'] and decoded['timestamp'] > latestTimestamp then
+      latestTimestamp = decoded['timestamp']
+    end
+  end
+
+  room['lastActivityAt'] = latestTimestamp ~= '' and latestTimestamp or room['createdAt']
+  redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
+  redis.call('DEL', KEYS[2])
+  for i = 1, #remaining do
+    redis.call('RPUSH', KEYS[2], remaining[i])
+  end
+else
+  remaining = existing
+end
+
+local response = { 1, found, #remaining, cjson.encode(room) }
+for i = 1, #remaining do
+  table.insert(response, remaining[i])
+end
+return response
+`;
+
+const UPDATE_AND_TRUNCATE_AFTER_SCRIPT = `
+local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
+if not roomJson then
+  return { 0, 0, 0, '', '' }
+end
+
+local roomOk, room = pcall(cjson.decode, roomJson)
+if not roomOk then
+  return { 0, 0, 0, '', '' }
+end
+
+local existing = redis.call('LRANGE', KEYS[2], 0, -1)
+local targetId = ARGV[2]
+local targetIndex = 0
+local updatedPayload = ''
+
+for i = 1, #existing do
+  local ok, decoded = pcall(cjson.decode, existing[i])
+  if ok and decoded['id'] == targetId then
+    decoded['content'] = ARGV[3]
+    decoded['timestamp'] = ARGV[4]
+    updatedPayload = cjson.encode(decoded)
+    existing[i] = updatedPayload
+    targetIndex = i
+    break
+  end
+end
+
+local remaining = {}
+local found = targetIndex > 0 and 1 or 0
+
+if found == 1 then
+  local latestTimestamp = ''
+  for i = 1, targetIndex do
+    table.insert(remaining, existing[i])
+    local ok, decoded = pcall(cjson.decode, existing[i])
+    if ok and decoded['timestamp'] and decoded['timestamp'] > latestTimestamp then
+      latestTimestamp = decoded['timestamp']
+    end
+  end
+
+  room['lastActivityAt'] = latestTimestamp ~= '' and latestTimestamp or room['createdAt']
+  redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
+  redis.call('DEL', KEYS[2])
+  for i = 1, #remaining do
+    redis.call('RPUSH', KEYS[2], remaining[i])
+  end
+else
+  remaining = existing
+end
+
+local response = { 1, found, #remaining, cjson.encode(room), updatedPayload }
+for i = 1, #remaining do
+  table.insert(response, remaining[i])
+end
+return response
+`;
+
 const parseTime = (timestamp?: string): number => {
   const time = Date.parse(timestamp || '');
   return Number.isFinite(time) ? time : 0;
@@ -129,6 +322,29 @@ const parseScriptRoom = (result: unknown, index: number): Room | null => {
   } catch {
     return null;
   }
+};
+
+const parseScriptMessage = (value: unknown): Message | undefined => {
+  if (typeof value !== 'string' || !value) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(value) as Message;
+  } catch {
+    return undefined;
+  }
+};
+
+const parseScriptMessages = (result: unknown, startIndex: number): Message[] => {
+  if (!Array.isArray(result)) {
+    return [];
+  }
+
+  return result
+    .slice(startIndex)
+    .map(parseScriptMessage)
+    .filter((message): message is Message => !!message);
 };
 
 export class RedisStore implements RoomStore, RoomMessageCacheStore {
@@ -304,6 +520,120 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
+  async updateMessageContent(roomId: string, messageId: string, newContent: string, updatedAt = new Date().toISOString()) {
+    try {
+      const result = await (this.redisClient as any).eval(UPDATE_MESSAGE_CONTENT_SCRIPT, {
+        keys: ['rooms', `room:${roomId}:messages`],
+        arguments: [roomId, messageId, newContent, updatedAt],
+      });
+      const updatedRoom = parseScriptRoom(result, 2);
+      if (!updatedRoom) {
+        this.logger.warn('Cannot update message for missing or invalid Redis room', { messageId, roomId });
+        return null;
+      }
+
+      const found = Array.isArray(result) ? Number(result[1]) === 1 : false;
+      if (!found) {
+        return { room: updatedRoom, found: false };
+      }
+
+      const updatedMessage = parseScriptMessage(Array.isArray(result) ? result[3] : undefined);
+      if (!updatedMessage) {
+        this.logger.warn('Redis message update succeeded without returning an updated message', { messageId, roomId });
+        return null;
+      }
+
+      this.logger.debug('Message updated in Redis list', { messageId, roomId });
+      return { room: updatedRoom, found: true, updatedMessage };
+    } catch (error) {
+      this.logger.error('Error updating message in Redis', { error, messageId, roomId });
+      return null;
+    }
+  }
+
+  async deleteMessageById(roomId: string, messageId: string) {
+    try {
+      const result = await (this.redisClient as any).eval(DELETE_MESSAGE_BY_ID_SCRIPT, {
+        keys: ['rooms', `room:${roomId}:messages`],
+        arguments: [roomId, messageId],
+      });
+      const updatedRoom = parseScriptRoom(result, 3);
+      if (!updatedRoom) {
+        this.logger.warn('Cannot delete message for missing or invalid Redis room', { messageId, roomId });
+        return null;
+      }
+
+      const deleted = Array.isArray(result) ? Number(result[1]) === 1 : false;
+      this.logger.debug('Message delete processed in Redis list', { messageId, roomId, deleted });
+      return { room: updatedRoom, deleted };
+    } catch (error) {
+      this.logger.error('Error deleting message in Redis', { error, messageId, roomId });
+      return null;
+    }
+  }
+
+  private async truncateMessages(roomId: string, messageId: string, mode: 'before' | 'after') {
+    try {
+      const result = await (this.redisClient as any).eval(TRUNCATE_MESSAGE_LIST_SCRIPT, {
+        keys: ['rooms', `room:${roomId}:messages`],
+        arguments: [roomId, messageId, mode],
+      });
+      const updatedRoom = parseScriptRoom(result, 3);
+      if (!updatedRoom) {
+        this.logger.warn('Cannot truncate messages for missing or invalid Redis room', { messageId, roomId, mode });
+        return null;
+      }
+
+      const targetFound = Array.isArray(result) ? Number(result[1]) === 1 : false;
+      const messages = parseScriptMessages(result, 4);
+      this.logger.debug('Message truncation processed in Redis list', { messageId, roomId, mode, targetFound, count: messages.length });
+      return { room: updatedRoom, messages, targetFound };
+    } catch (error) {
+      this.logger.error('Error truncating messages in Redis', { error, messageId, roomId, mode });
+      return null;
+    }
+  }
+
+  truncateBeforeMessage(roomId: string, messageId: string) {
+    return this.truncateMessages(roomId, messageId, 'before');
+  }
+
+  truncateAfterMessage(roomId: string, messageId: string) {
+    return this.truncateMessages(roomId, messageId, 'after');
+  }
+
+  async updateMessageAndTruncateAfter(roomId: string, messageId: string, newContent: string, updatedAt = new Date().toISOString()) {
+    try {
+      const result = await (this.redisClient as any).eval(UPDATE_AND_TRUNCATE_AFTER_SCRIPT, {
+        keys: ['rooms', `room:${roomId}:messages`],
+        arguments: [roomId, messageId, newContent, updatedAt],
+      });
+      const updatedRoom = parseScriptRoom(result, 3);
+      if (!updatedRoom) {
+        this.logger.warn('Cannot update and truncate message for missing or invalid Redis room', { messageId, roomId });
+        return null;
+      }
+
+      const targetFound = Array.isArray(result) ? Number(result[1]) === 1 : false;
+      const messages = parseScriptMessages(result, 5);
+      if (!targetFound) {
+        return { room: updatedRoom, messages, targetFound: false };
+      }
+
+      const updatedMessage = parseScriptMessage(Array.isArray(result) ? result[4] : undefined);
+      if (!updatedMessage) {
+        this.logger.warn('Redis update-and-truncate succeeded without returning an updated message', { messageId, roomId });
+        return null;
+      }
+
+      this.logger.debug('Message updated and history truncated in Redis list', { messageId, roomId, count: messages.length });
+      return { room: updatedRoom, messages, targetFound: true, updatedMessage };
+    } catch (error) {
+      this.logger.error('Error updating and truncating message in Redis', { error, messageId, roomId });
+      return null;
+    }
+  }
+
   async saveMessageHistory(roomId: string, messages: Message[]): Promise<Room | null> {
     try {
       const messageKey = `room:${roomId}:messages`;
@@ -419,6 +749,32 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       return roomStr ? JSON.parse(roomStr) : null;
     } catch (error) {
       this.logger.error('Error reading room by id from Redis', { error, roomId });
+      return null;
+    }
+  }
+
+  async updateRoomName(roomId: string, creatorId: string, name: string): Promise<Room | null> {
+    try {
+      const room = await this.getRoomById(roomId);
+      if (!room) {
+        this.logger.warn('Cannot rename missing Redis room', { roomId, creatorId });
+        return null;
+      }
+
+      if (room.creatorId !== creatorId) {
+        this.logger.warn('Cannot rename Redis room for non-creator', { roomId, creatorId, roomCreatorId: room.creatorId });
+        return null;
+      }
+
+      const updatedRoom = {
+        ...room,
+        name,
+      };
+      await this.redisClient.hSet('rooms', roomId, JSON.stringify(updatedRoom));
+      this.logger.debug('Room renamed in Redis', { roomId, creatorId });
+      return updatedRoom;
+    } catch (error) {
+      this.logger.error('Error renaming room in Redis', { error, roomId, creatorId });
       return null;
     }
   }

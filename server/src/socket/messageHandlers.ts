@@ -1,8 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import {
-  applyMessageEdit,
   createUserMessage,
-  deleteMessageFromHistory,
 } from '../services/messageDomain';
 import { Message } from '../types';
 import { SocketConnectionContext } from './types';
@@ -84,25 +82,21 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
     socketLogger.info('Received edit message request', { ...data, editorClientId: clientId });
 
     try {
-      const messages = await store.readMessagesByRoom(data.roomId);
-      const editResult = applyMessageEdit(messages, data.messageId, data.newContent);
-
-      if (!editResult.found) {
-        return callback?.({ success: false, error: 'Message not found' });
-      }
-
-      const updatedMessage = editResult.updatedMessage;
-      const updatedRoom = await store.saveMessageHistory(data.roomId, editResult.messages);
-      if (!updatedRoom) {
-        socketLogger.error('Failed to persist edited message history', { ...data, editorClientId: clientId });
+      const editResult = await store.updateMessageContent(data.roomId, data.messageId, data.newContent);
+      if (!editResult) {
+        socketLogger.error('Failed to persist edited message', { ...data, editorClientId: clientId });
         return callback?.({ success: false, error: 'Failed to save edited message' });
       }
 
-      io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
-      io.to(data.roomId).emit('message_edited', updatedMessage);
+      if (!editResult.found || !editResult.updatedMessage) {
+        return callback?.({ success: false, error: 'Message not found' });
+      }
+
+      io.to(editResult.room.creatorId).emit('room_updated', editResult.room);
+      io.to(data.roomId).emit('message_edited', editResult.updatedMessage);
       socketLogger.info('Message edited successfully', { messageId: data.messageId, roomId: data.roomId, editorClientId: clientId });
 
-      callback?.({ success: true, updatedMessage });
+      callback?.({ success: true, updatedMessage: editResult.updatedMessage });
     } catch (error) {
       socketLogger.error('Error editing message', { error, ...data, editorClientId: clientId });
       callback?.({ success: false, error: 'Server error while editing message' });
@@ -122,21 +116,18 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
     socketLogger.info('Received delete message request', { ...data, deleterClientId: clientId });
 
     try {
-      const messages = await store.readMessagesByRoom(data.roomId);
-      const deleteResult = deleteMessageFromHistory(messages, data.messageId);
+      const deleteResult = await store.deleteMessageById(data.roomId, data.messageId);
+      if (!deleteResult) {
+        socketLogger.error('Failed to persist deleted message', { ...data, deleterClientId: clientId });
+        return callback?.({ success: false, error: 'Failed to delete message' });
+      }
 
-      if (!deleteResult.found) {
+      if (!deleteResult.deleted) {
         socketLogger.warn('Attempted to delete message not found', { ...data, deleterClientId: clientId });
         return callback?.({ success: true });
       }
 
-      const updatedRoom = await store.saveMessageHistory(data.roomId, deleteResult.messages);
-      if (!updatedRoom) {
-        socketLogger.error('Failed to persist deleted message history', { ...data, deleterClientId: clientId });
-        return callback?.({ success: false, error: 'Failed to delete message' });
-      }
-
-      io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+      io.to(deleteResult.room.creatorId).emit('room_updated', deleteResult.room);
       io.to(data.roomId).emit('message_deleted', data.messageId, data.roomId);
       socketLogger.info('Message deleted successfully', { messageId: data.messageId, roomId: data.roomId, deleterClientId: clientId });
 

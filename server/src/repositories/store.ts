@@ -1,9 +1,38 @@
 import { AICost, Message, Room, RoomAICostTotal } from '../types';
 
+export interface MessageUpdateResult {
+  room: Room;
+  found: boolean;
+  updatedMessage?: Message;
+}
+
+export interface MessageDeleteResult {
+  room: Room;
+  deleted: boolean;
+}
+
+export interface MessageTruncateResult {
+  room: Room;
+  messages: Message[];
+  targetFound: boolean;
+}
+
+export interface MessageUpdateAndTruncateResult {
+  room: Room;
+  messages: Message[];
+  targetFound: boolean;
+  updatedMessage?: Message;
+}
+
 export interface DurableRoomStore {
   generateUniqueRoomId(): Promise<string>;
   appendMessage(message: Message): Promise<Room | null>;
   upsertMessage(message: Message): Promise<Room | null>;
+  updateMessageContent(roomId: string, messageId: string, newContent: string, updatedAt?: string): Promise<MessageUpdateResult | null>;
+  deleteMessageById(roomId: string, messageId: string): Promise<MessageDeleteResult | null>;
+  truncateBeforeMessage(roomId: string, messageId: string): Promise<MessageTruncateResult | null>;
+  truncateAfterMessage(roomId: string, messageId: string): Promise<MessageTruncateResult | null>;
+  updateMessageAndTruncateAfter(roomId: string, messageId: string, newContent: string, updatedAt?: string): Promise<MessageUpdateAndTruncateResult | null>;
   saveMessageHistory(roomId: string, messages: Message[]): Promise<Room | null>;
   clearRoomMessages(roomId: string): Promise<number>;
   readMessagesByRoom(roomId: string): Promise<Message[]>;
@@ -12,6 +41,7 @@ export interface DurableRoomStore {
   saveRoom(room: Room): Promise<Room | null>;
   readRoomsByUser(clientId: string): Promise<Room[]>;
   getRoomById(roomId: string): Promise<Room | null>;
+  updateRoomName(roomId: string, creatorId: string, name: string): Promise<Room | null>;
   deleteRoom(roomId: string, creatorId: string): Promise<void>;
   countRooms(): Promise<number>;
   resetAllDataForTests?(): Promise<void>;
@@ -89,6 +119,46 @@ export class CompositeRoomStore implements RoomStore {
     return updatedRoom;
   }
 
+  async updateMessageContent(roomId: string, messageId: string, newContent: string, updatedAt?: string) {
+    const result = await this.durableStore.updateMessageContent(roomId, messageId, newContent, updatedAt);
+    if (result?.found) {
+      await this.invalidateRoomMessagesCache(roomId);
+    }
+    return result;
+  }
+
+  async deleteMessageById(roomId: string, messageId: string) {
+    const result = await this.durableStore.deleteMessageById(roomId, messageId);
+    if (result?.deleted) {
+      await this.invalidateRoomMessagesCache(roomId);
+    }
+    return result;
+  }
+
+  async truncateBeforeMessage(roomId: string, messageId: string) {
+    const result = await this.durableStore.truncateBeforeMessage(roomId, messageId);
+    if (result?.targetFound) {
+      await this.invalidateRoomMessagesCache(roomId);
+    }
+    return result;
+  }
+
+  async truncateAfterMessage(roomId: string, messageId: string) {
+    const result = await this.durableStore.truncateAfterMessage(roomId, messageId);
+    if (result?.targetFound) {
+      await this.invalidateRoomMessagesCache(roomId);
+    }
+    return result;
+  }
+
+  async updateMessageAndTruncateAfter(roomId: string, messageId: string, newContent: string, updatedAt?: string) {
+    const result = await this.durableStore.updateMessageAndTruncateAfter(roomId, messageId, newContent, updatedAt);
+    if (result?.targetFound) {
+      await this.invalidateRoomMessagesCache(roomId);
+    }
+    return result;
+  }
+
   async clearRoomMessages(roomId: string) {
     const count = await this.durableStore.clearRoomMessages(roomId);
     await this.invalidateRoomMessagesCache(roomId);
@@ -132,6 +202,10 @@ export class CompositeRoomStore implements RoomStore {
 
   getRoomById(roomId: string) {
     return this.durableStore.getRoomById(roomId);
+  }
+
+  updateRoomName(roomId: string, creatorId: string, name: string) {
+    return this.durableStore.updateRoomName(roomId, creatorId, name);
   }
 
   async deleteRoom(roomId: string, creatorId: string) {

@@ -3,6 +3,31 @@ import { createRoomMemberEvent, createRoomRecord } from '../services/messageDoma
 import { Room } from '../types';
 import { SocketConnectionContext } from './types';
 
+const MAX_ROOM_NAME_LENGTH = 20;
+
+type RenameRoomAck = {
+  success: boolean;
+  room?: Room;
+  error?: string;
+};
+
+const validateRoomName = (name: unknown): { ok: true; name: string } | { ok: false; error: string } => {
+  if (typeof name !== 'string') {
+    return { ok: false, error: 'Room name is required' };
+  }
+
+  const trimmedName = name.trim();
+  if (!trimmedName) {
+    return { ok: false, error: 'Room name is required' };
+  }
+
+  if (trimmedName.length > MAX_ROOM_NAME_LENGTH) {
+    return { ok: false, error: `Room name cannot exceed ${MAX_ROOM_NAME_LENGTH} characters` };
+  }
+
+  return { ok: true, name: trimmedName };
+};
+
 export function registerRoomHandlers({ io, socket, store, socketLogger }: SocketConnectionContext) {
   socket.on('register', async (clientId: string) => {
     const userId = clientId || uuidv4();
@@ -197,6 +222,68 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
         roomId,
       });
       callback?.({ success: false, message: 'Failed to delete room due to server error' });
+    }
+  });
+
+  socket.on('rename_room', async (
+    data: { roomId?: string; name?: string },
+    callback?: (result: RenameRoomAck) => void
+  ) => {
+    const clientId = await store.getClientId(socket.id);
+    if (!clientId) {
+      socketLogger.warn('Unregistered client tried to rename room', { socketId: socket.id, roomId: data?.roomId });
+      callback?.({ success: false, error: 'You are not registered' });
+      return;
+    }
+
+    const roomId = data?.roomId;
+    if (!roomId) {
+      socketLogger.warn('Client tried to rename room without room ID', { socketId: socket.id, clientId });
+      callback?.({ success: false, error: 'Room ID is required' });
+      return;
+    }
+
+    const validation = validateRoomName(data?.name);
+    if (!validation.ok) {
+      socketLogger.warn('Client tried to rename room with invalid name', { socketId: socket.id, clientId, roomId });
+      callback?.({ success: false, error: validation.error });
+      return;
+    }
+
+    try {
+      const room = await store.getRoomById(roomId);
+      if (!room) {
+        socketLogger.warn('Attempted to rename non-existent room', { socketId: socket.id, clientId, roomId });
+        callback?.({ success: false, error: 'Room not found' });
+        return;
+      }
+
+      if (room.creatorId !== clientId) {
+        socketLogger.warn('Unauthorized attempt to rename room', { socketId: socket.id, clientId, roomId, creatorId: room.creatorId });
+        callback?.({ success: false, error: 'You are not authorized to rename this room' });
+        return;
+      }
+
+      const updatedRoom = await store.updateRoomName(roomId, clientId, validation.name);
+      if (!updatedRoom) {
+        socketLogger.error('Room rename failed after authorization', { socketId: socket.id, clientId, roomId });
+        callback?.({ success: false, error: 'Failed to rename room' });
+        return;
+      }
+
+      io.to(clientId).emit('room_updated', updatedRoom);
+      io.to(roomId).emit('room_updated', updatedRoom);
+      socketLogger.info('Room renamed successfully', { socketId: socket.id, clientId, roomId });
+      callback?.({ success: true, room: updatedRoom });
+    } catch (error) {
+      socketLogger.error('Error renaming room', {
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        socketId: socket.id,
+        clientId,
+        roomId,
+      });
+      callback?.({ success: false, error: 'Failed to rename room due to server error' });
     }
   });
 
