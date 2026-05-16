@@ -143,6 +143,11 @@ const cocoSandboxLifecycle = new CocoSandboxLifecycleService(store, cocoSandboxS
   maxActiveSandboxes: parsePositiveIntegerEnv('COCO_MAX_ACTIVE_SANDBOXES', Number.POSITIVE_INFINITY),
   maxActiveSandboxesPerUser: parsePositiveIntegerEnv('COCO_MAX_ACTIVE_SANDBOXES_PER_USER', Number.POSITIVE_INFINITY),
 });
+const fakeCocoToolOutput = [
+  'stdout: hello from Coco fake runner',
+  'stderr: simulated warning for UI coverage',
+  'line '.repeat(260).trim(),
+].join('\n');
 const cocoSessionService = new CocoSessionService(
   store,
   io,
@@ -151,8 +156,10 @@ const cocoSessionService = new CocoSessionService(
   new FakeCocoRunnerClient([
     { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'status', turnId: 'fake', status: 'starting', message: 'Coco fake runner starting' },
     { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'fake-ai', delta: 'Coco fake runner received the task.' },
+    { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'fake-tool-1', name: 'Shell', args: { command: 'printf "hello from Coco fake runner\\n"' } },
+    { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'fake-tool-1', name: 'Shell', success: false, output: fakeCocoToolOutput, exitCode: 2, truncated: true },
     { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'fake-ai', answer: 'Coco fake runner received the task.', sessionId: 'fake-coco-session' },
-  ]),
+  ], { eventDelayMs: parsePositiveIntegerEnv('COCO_FAKE_RUNNER_EVENT_DELAY_MS', 0) }),
   cocoLogger,
   {
     enabled: process.env.COCO_ENABLED === 'true',

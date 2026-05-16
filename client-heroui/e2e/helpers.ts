@@ -9,6 +9,9 @@ export interface TestRoom {
   description: string;
   createdAt: string;
   creatorId: string;
+  type?: 'chat' | 'coco';
+  sandboxStatus?: 'none' | 'creating' | 'ready' | 'expired' | 'error';
+  cocoStatus?: 'idle' | 'running' | 'error';
 }
 
 export const uniqueName = (prefix: string) =>
@@ -43,9 +46,10 @@ export async function createRoomViaApi(
   clientId: string,
   name = uniqueName('room'),
   description = '',
+  type: 'chat' | 'coco' = 'chat',
 ) {
   const response = await request.post(`${serverURL}/api/clients/${clientId}/rooms`, {
-    data: { name, description },
+    data: { name, description, type },
   });
 
   expect(response.ok()).toBeTruthy();

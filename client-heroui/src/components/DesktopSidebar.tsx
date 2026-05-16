@@ -21,7 +21,7 @@ import { formatDate } from '../utils/formatters';
 import { getLanguageOption, languageOptions } from '../utils/languages';
 import { buildRoomShareUrl, getRoomActivityAt, validateRoomName } from '../utils/roomState';
 import { createRoom } from '../utils/socket';
-import { Room, RoomRenameHandler } from '../utils/types';
+import { Room, RoomRenameHandler, RoomType } from '../utils/types';
 import { getAvatarColor, getAvatarText } from '../utils/userProfile';
 import { RoomCreateModal } from './RoomCreateModal';
 import { RoomRenameModal } from './RoomRenameModal';
@@ -279,7 +279,9 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [newRoomName, setNewRoomName] = useState('');
   const [newRoomDescription, setNewRoomDescription] = useState('');
+  const [newRoomType, setNewRoomType] = useState<RoomType>('chat');
   const [nameError, setNameError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [roomToDelete, setRoomToDelete] = useState<Room | null>(null);
   const [roomToRename, setRoomToRename] = useState<Room | null>(null);
@@ -295,7 +297,9 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
   const openCreateModal = () => {
     setNewRoomName(`${username}'s Room`);
     setNewRoomDescription('');
+    setNewRoomType('chat');
     setNameError(null);
+    setCreateError(null);
     setIsCreateOpen(true);
   };
 
@@ -307,6 +311,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
   const handleRoomNameChange = (value: string) => {
     setNewRoomName(value);
     setNameError(null);
+    setCreateError(null);
   };
 
   const handleCreateRoom = async () => {
@@ -318,15 +323,18 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
     }
 
     setNameError(null);
+    setCreateError(null);
     setIsCreating(true);
     try {
-      const roomId = await createRoom(validation.name, newRoomDescription);
+      const roomId = await createRoom(validation.name, newRoomDescription, newRoomType);
       setNewRoomName('');
       setNewRoomDescription('');
+      setNewRoomType('chat');
       setIsCreateOpen(false);
       onRoomSelect(roomId as string);
     } catch (error) {
       console.error('Error creating room from sidebar:', error);
+      setCreateError(error instanceof Error ? error.message : t('createRoomFailed'));
     } finally {
       setIsCreating(false);
     }
@@ -462,7 +470,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
             {!isCollapsed && (
               <div className="mb-2 flex items-center justify-between px-1">
                 <h2 className="text-xs font-semibold uppercase text-[#87867f] dark:text-[#8f8d86]">
-                  {t('chatRooms')}
+                  {t('rooms')}
                 </h2>
                 <span className="text-xs text-[#87867f] dark:text-[#8f8d86]">{rooms.length}</span>
               </div>
@@ -475,7 +483,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
                     clientId={clientId}
                     room={room}
                     isActive={currentRoom?.id === room.id && view === 'chat'}
-                    icon="lucide:message-square"
+                    icon={room.type === 'coco' ? 'lucide:terminal-square' : 'lucide:message-square'}
                     isCollapsed={isCollapsed}
                     onPress={() => onRoomSelect(room.id)}
                     onCopyRoomId={handleCopyToClipboard}
@@ -664,10 +672,13 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
         onClose={closeCreateModal}
         roomName={newRoomName}
         roomDescription={newRoomDescription}
+        roomType={newRoomType}
         nameError={nameError}
+        createError={createError}
         isCreating={isCreating}
         onRoomNameChange={handleRoomNameChange}
         onRoomDescriptionChange={setNewRoomDescription}
+        onRoomTypeChange={setNewRoomType}
         onCreate={handleCreateRoom}
       />
 

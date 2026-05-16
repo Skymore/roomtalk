@@ -1,6 +1,6 @@
 import { default as io } from 'socket.io-client';
 import { v4 as uuidv4 } from 'uuid';
-import { Room, RoomMemberEvent } from './types';
+import { Room, RoomMemberEvent, RoomType } from './types';
 import { Socket } from 'socket.io-client';
 
 // Get client ID from local storage or create a new one
@@ -207,11 +207,17 @@ export const leaveRoom = (roomId: string) => {
 };
 
 // Create a new room
-export const createRoom = (roomName: string, description?: string) => {
-  return new Promise((resolve) => {
-    socket.emit('create_room', { name: roomName, description }, (roomId: string) => {
-      resolve(roomId);
-    });
+export const createRoom = (roomName: string, description?: string, type: RoomType = 'chat') => {
+  return emitWithAck<SocketAckResponse & { roomId?: string }>(
+    'create_room',
+    { name: roomName, description, type },
+    'Timed out while creating room',
+    'Failed to create room',
+  ).then((response) => {
+    if (!response.roomId) {
+      throw new Error('Failed to create room');
+    }
+    return response.roomId;
   });
 };
 

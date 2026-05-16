@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { Button, Dropdown, DropdownTrigger, DropdownMenu, DropdownItem, Popover, PopoverTrigger, PopoverContent, Tooltip } from '@heroui/react';
+import { Button, Chip, Dropdown, DropdownTrigger, DropdownMenu, DropdownItem, Popover, PopoverTrigger, PopoverContent, Tooltip } from '@heroui/react';
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { Room, RoomRenameHandler } from "../utils/types";
 import { RoomRenameModal } from './RoomRenameModal';
+import { getCocoAgentStatusClassName, getCocoStatusLabelKey, getSandboxStatusClassName, getSandboxStatusLabelKey, isCocoRoom } from '../utils/cocoRoom';
 
 interface ChatHeaderProps {
   currentRoom: Room;
@@ -42,6 +43,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   const isSaved = isRoomSaved(currentRoom.id);
   const [isRenameOpen, setIsRenameOpen] = useState(false);
   const canRename = currentRoom.creatorId === clientId;
+  const isCoco = isCocoRoom(currentRoom);
 
   const onConfirmLeave = () => {
     handleLeaveRoom();
@@ -67,6 +69,19 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
         </Button>
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <h2 data-testid="chat-room-title" className="max-w-[150px] truncate font-serif text-lg font-medium leading-tight text-[#141413] dark:text-[#faf9f5] md:max-w-[360px]">{currentRoom.name}</h2>
+          {isCoco && (
+            <Chip
+              size="sm"
+              variant="flat"
+              startContent={<Icon icon="lucide:terminal" className="h-3 w-3" />}
+              classNames={{
+                base: 'h-6 flex-shrink-0 border border-[#c96442]/40 bg-[#c96442]/10 px-1.5 text-[#a34d32] dark:text-[#f0a487]',
+                content: 'px-0 text-[11px] font-semibold',
+              }}
+            >
+              {t('cocoRoomType')}
+            </Chip>
+          )}
           {canRename && (
             <Tooltip content={t('editRoomName')}>
               <Button
@@ -105,6 +120,18 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               </Tooltip>
               <Icon icon="lucide:copy" className="ml-1 text-[#87867f] dark:text-[#b0aea5]" width={12} />
             </div>
+            {isCoco && (
+              <div className="hidden min-w-0 flex-wrap items-center gap-1 md:flex">
+                <span className={`inline-flex max-w-[120px] items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${getSandboxStatusClassName(currentRoom.sandboxStatus)}`}>
+                  <Icon icon="lucide:box" className="h-3 w-3 flex-shrink-0" />
+                  <span className="truncate">{t(getSandboxStatusLabelKey(currentRoom.sandboxStatus))}</span>
+                </span>
+                <span className={`inline-flex max-w-[120px] items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${getCocoAgentStatusClassName(currentRoom.cocoStatus)}`}>
+                  <Icon icon="lucide:bot" className="h-3 w-3 flex-shrink-0" />
+                  <span className="truncate">{t(getCocoStatusLabelKey(currentRoom.cocoStatus))}</span>
+                </span>
+              </div>
+            )}
           </div>
         </div>
       </div>

@@ -10,7 +10,7 @@ import {
 } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
-import { Room, RoomRenameHandler } from '../utils/types';
+import { Room, RoomRenameHandler, RoomType } from '../utils/types';
 import { createRoom } from '../utils/socket';
 import { buildRoomShareUrl, validateRoomName } from '../utils/roomState';
 import { RoomCard } from './RoomCard';
@@ -32,6 +32,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
   const { isOpen, onOpen, onClose } = useDisclosure();
   const [newRoomName, setNewRoomName] = useState('');
   const [newRoomDescription, setNewRoomDescription] = useState('');
+  const [newRoomType, setNewRoomType] = useState<RoomType>('chat');
   const [isCreating, setIsCreating] = useState(false);
   const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null);
   const [copiedRoomId, setCopiedRoomId] = useState<string | null>(null);
@@ -39,6 +40,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
   const [roomToDelete, setRoomToDelete] = useState<Room | null>(null);
   const [roomToRename, setRoomToRename] = useState<Room | null>(null);
   const [nameError, setNameError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
   const copyFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const {
     isOpen: isDeleteConfirmOpen,
@@ -86,15 +88,18 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
     }
 
     setNameError(null);
+    setCreateError(null);
     setIsCreating(true);
     try {
-      const roomId = await createRoom(validation.name, newRoomDescription);
+      const roomId = await createRoom(validation.name, newRoomDescription, newRoomType);
       setNewRoomName('');
       setNewRoomDescription('');
+      setNewRoomType('chat');
       onClose();
       onRoomSelect(roomId as string);
     } catch (error) {
       console.error('Error creating room:', error);
+      setCreateError(error instanceof Error ? error.message : t('createRoomFailed'));
     } finally {
       setIsCreating(false);
     }
@@ -110,7 +115,9 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
   const handleOpenCreateModal = () => {
     setNewRoomName(`${username}'s Room`);
     setNewRoomDescription('');
+    setNewRoomType('chat');
     setNameError(null);
+    setCreateError(null);
     onOpen();
   };
 
@@ -147,6 +154,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
   const handleRoomNameChange = (value: string) => {
     setNewRoomName(value);
     setNameError(null);
+    setCreateError(null);
   };
 
   const createModal = (
@@ -155,10 +163,13 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
       onClose={onClose}
       roomName={newRoomName}
       roomDescription={newRoomDescription}
+      roomType={newRoomType}
       nameError={nameError}
+      createError={createError}
       isCreating={isCreating}
       onRoomNameChange={handleRoomNameChange}
       onRoomDescriptionChange={setNewRoomDescription}
+      onRoomTypeChange={setNewRoomType}
       onCreate={handleCreateRoom}
     />
   );
@@ -218,7 +229,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
   return (
     <div className="p-4 md:p-6">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
-        <h2 className="font-serif text-2xl font-medium text-[#141413] dark:text-[#faf9f5]">{t('chatRooms')}</h2>
+        <h2 className="font-serif text-2xl font-medium text-[#141413] dark:text-[#faf9f5]">{t('rooms')}</h2>
         <div className="flex flex-wrap items-center gap-3">
           <RoomJoinControl
             value={joinRoomId}
