@@ -44,9 +44,10 @@ describe('RoomCard', () => {
 
   it('selects the room when the card is pressed', () => {
     const props = renderRoomCard();
-    const card = screen.getByText('Test Room').closest('[role="button"]');
+    const card = screen.getByText('Test Room').closest('button');
 
     expect(card).not.toBeNull();
+    expect(screen.getByTestId('room-card').className).toContain('rounded-lg');
     fireEvent.click(card!);
 
     expect(props.onSelect).toHaveBeenCalledWith('room-1');
