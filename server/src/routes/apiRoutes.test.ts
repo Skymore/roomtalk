@@ -261,6 +261,22 @@ describe('API routes', () => {
     assert.deepEqual(server.emitted, [{ target: 'client-2', event: 'new_room', payload: room }]);
   });
 
+  it('creates Coco rooms through the HTTP API', async () => {
+    const response = await fetch(`${server.baseUrl}/api/clients/client-2/rooms`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Coco Room', type: 'coco' }),
+    });
+
+    assert.equal(response.status, 201);
+    const room = await response.json() as Room;
+    assert.equal(room.type, 'coco');
+    assert.equal(room.sandboxStatus, 'none');
+    assert.equal(room.cocoStatus, 'idle');
+    assert.ok(room.sandboxUpdatedAt);
+    assert.deepEqual(server.emitted, [{ target: 'client-2', event: 'new_room', payload: room }]);
+  });
+
   it('does not emit API rooms when room persistence fails', async () => {
     server.store.saveRoom = async (room: Room) => {
       server.store.savedRooms.push(room);
@@ -286,7 +302,15 @@ describe('API routes', () => {
       body: JSON.stringify({ description: 'missing name' }),
     });
     assert.equal(roomResponse.status, 400);
-    assert.deepEqual(await roomResponse.json(), { error: 'Room name and client ID are required' });
+    assert.deepEqual(await roomResponse.json(), { error: 'Room name is required' });
+
+    const tooLongRoomResponse = await fetch(`${server.baseUrl}/api/clients/client-1/rooms`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'x'.repeat(21) }),
+    });
+    assert.equal(tooLongRoomResponse.status, 400);
+    assert.deepEqual(await tooLongRoomResponse.json(), { error: 'Room name cannot exceed 20 characters' });
 
     const messageResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/messages`, {
       method: 'POST',

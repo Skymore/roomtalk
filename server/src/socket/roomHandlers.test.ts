@@ -201,18 +201,48 @@ describe('room socket handlers', () => {
 
   it('creates rooms and emits them to the creator room', async () => {
     const invalid = createHarness(null);
-    await invalid.socket.invoke('create_room', { name: 'No session' });
-    assert.deepEqual(invalid.socket.emitted, [{ event: 'error', args: [{ message: 'You are not registered or room name is required' }] }]);
+    let invalidResult: { success: boolean; error?: string } | undefined;
+    await invalid.socket.invoke('create_room', { name: 'No session' }, (result: { success: boolean; error?: string }) => {
+      invalidResult = result;
+    });
+    assert.deepEqual(invalidResult, { success: false, error: 'You are not registered' });
+    assert.deepEqual(invalid.socket.emitted, []);
+
+    const tooLong = createHarness('client-1');
+    let tooLongResult: { success: boolean; error?: string } | undefined;
+    await tooLong.socket.invoke('create_room', { name: 'x'.repeat(21) }, (result: { success: boolean; error?: string }) => {
+      tooLongResult = result;
+    });
+    assert.deepEqual(tooLongResult, { success: false, error: 'Room name cannot exceed 20 characters' });
+    assert.equal(tooLong.store.savedRooms.length, 0);
 
     const valid = createHarness('client-1');
     let createdRoomId: string | undefined;
-    await valid.socket.invoke('create_room', { name: 'Created', description: 'Room' }, (roomId: string) => {
-      createdRoomId = roomId;
+    await valid.socket.invoke('create_room', { name: 'Created', description: 'Room' }, (result: { success: boolean; roomId?: string }) => {
+      createdRoomId = result.roomId;
+      assert.equal(result.success, true);
     });
 
     assert.equal(createdRoomId, 'generated-room');
     assert.equal(valid.store.savedRooms[0].name, 'Created');
     assert.deepEqual(valid.io.roomEmits, [{ roomId: 'client-1', event: 'new_room', args: [valid.store.savedRooms[0]] }]);
+  });
+
+  it('creates Coco rooms with initial sandbox state', async () => {
+    const valid = createHarness('client-1');
+
+    let createdResult: { success: boolean; roomId?: string } | undefined;
+    await valid.socket.invoke('create_room', { name: 'Coco', description: 'Code work', type: 'coco' }, (result: { success: boolean; roomId?: string }) => {
+      createdResult = result;
+    });
+
+    const savedRoom = valid.store.savedRooms[0];
+    assert.deepEqual(createdResult, { success: true, roomId: 'generated-room' });
+    assert.equal(savedRoom.type, 'coco');
+    assert.equal(savedRoom.sandboxStatus, 'none');
+    assert.equal(savedRoom.cocoStatus, 'idle');
+    assert.ok(savedRoom.sandboxUpdatedAt);
+    assert.deepEqual(valid.io.roomEmits, [{ roomId: 'client-1', event: 'new_room', args: [savedRoom] }]);
   });
 
   it('joins existing rooms, leaves previous rooms, and sends room state', async () => {

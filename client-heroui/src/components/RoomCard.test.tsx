@@ -20,9 +20,9 @@ const room: Room = {
   creatorId: 'client-1',
 };
 
-const renderRoomCard = () => {
+const renderRoomCard = (roomOverride: Room = room) => {
   const props = {
-    room,
+    room: roomOverride,
     clientId: 'client-1',
     copiedRoomId: null,
     copiedLinkId: null,
@@ -66,5 +66,19 @@ describe('RoomCard', () => {
     expect(props.onCopyRoomLink).toHaveBeenCalledWith('room-1');
     expect(props.onRename).toHaveBeenCalledWith(room);
     expect(props.onDelete).toHaveBeenCalledWith(room);
+  });
+
+  it('shows Coco room status without changing card shape', () => {
+    renderRoomCard({
+      ...room,
+      type: 'coco',
+      sandboxStatus: 'ready',
+      cocoStatus: 'running',
+    });
+
+    expect(screen.getByText('cocoRoomType')).toBeTruthy();
+    expect(screen.getByText('sandboxStatusReady')).toBeTruthy();
+    expect(screen.getByText('cocoStatusRunning')).toBeTruthy();
+    expect(screen.getByTestId('room-card').className).toContain('rounded-lg');
   });
 });

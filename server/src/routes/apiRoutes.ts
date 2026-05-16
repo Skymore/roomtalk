@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../logger';
 import { RoomStore } from '../repositories/store';
 import { Message, Room } from '../types';
+import { createRoomRecord, validateRoomNameInput } from '../services/messageDomain';
 
 interface ApiRouteOptions {
   store: RoomStore;
@@ -50,23 +51,22 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     }
 
     const roomData = req.body;
-    if (!roomData?.name || !clientId) {
-      routeLogger.warn('Invalid room creation via API', { endpoint: 'POST /api/clients/:clientId/rooms', clientId, hasRoomName: !!roomData?.name, ip: req.ip });
-      return res.status(400).json({ error: 'Room name and client ID are required' });
+    const roomName = validateRoomNameInput(roomData?.name);
+    if (!roomName.ok) {
+      routeLogger.warn('Invalid room creation via API', { endpoint: 'POST /api/clients/:clientId/rooms', clientId, roomNameValid: false, ip: req.ip });
+      return res.status(400).json({ error: roomName.error });
     }
 
     const roomId = await store.generateUniqueRoomId();
-    const timestamp = new Date().toISOString();
-    const room: Room = {
-      id: roomId,
-      name: roomData.name,
-      description: roomData.description || '',
-      createdAt: timestamp,
-      lastActivityAt: timestamp,
+    const room: Room = createRoomRecord({
+      roomId,
+      name: roomName.name,
+      description: roomData.description,
       creatorId: clientId,
-    };
+      type: roomData.type === 'coco' ? 'coco' : undefined,
+    });
 
-    routeLogger.info('Room creation via API', { endpoint: 'POST /api/clients/:clientId/rooms', clientId, roomId, roomName: roomData.name, ip: req.ip });
+    routeLogger.info('Room creation via API', { endpoint: 'POST /api/clients/:clientId/rooms', clientId, roomId, roomName: roomName.name, ip: req.ip });
 
     const savedRoom = await store.saveRoom(room);
     if (!savedRoom) {

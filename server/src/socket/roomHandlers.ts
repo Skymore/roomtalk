@@ -1,9 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
-import { createRoomMemberEvent, createRoomRecord } from '../services/messageDomain';
-import { Room } from '../types';
+import { createRoomMemberEvent, createRoomRecord, validateRoomNameInput } from '../services/messageDomain';
+import { Room, RoomType } from '../types';
 import { SocketConnectionContext } from './types';
-
-const MAX_ROOM_NAME_LENGTH = 20;
 
 type RenameRoomAck = {
   success: boolean;
@@ -11,22 +9,21 @@ type RenameRoomAck = {
   error?: string;
 };
 
-const validateRoomName = (name: unknown): { ok: true; name: string } | { ok: false; error: string } => {
-  if (typeof name !== 'string') {
-    return { ok: false, error: 'Room name is required' };
-  }
-
-  const trimmedName = name.trim();
-  if (!trimmedName) {
-    return { ok: false, error: 'Room name is required' };
-  }
-
-  if (trimmedName.length > MAX_ROOM_NAME_LENGTH) {
-    return { ok: false, error: `Room name cannot exceed ${MAX_ROOM_NAME_LENGTH} characters` };
-  }
-
-  return { ok: true, name: trimmedName };
+type CreateRoomAck = {
+  success: boolean;
+  roomId?: string;
+  error?: string;
 };
+
+type CreateRoomPayload = {
+  name: string;
+  description?: string;
+  type?: unknown;
+};
+
+const normalizeRoomType = (type: unknown): RoomType | undefined => (
+  type === 'coco' ? 'coco' : undefined
+);
 
 export function registerRoomHandlers({ io, socket, store, socketLogger }: SocketConnectionContext) {
   socket.on('register', async (clientId: string) => {
@@ -52,39 +49,63 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
     socket.emit('room_list', myRooms);
   });
 
-  socket.on('create_room', async (roomData: { name: string; description?: string }, callback?: (roomId: string) => void) => {
+  socket.on('create_room', async (roomData: CreateRoomPayload, callback?: (result: CreateRoomAck) => void) => {
     const clientId = await store.getClientId(socket.id);
-    if (!clientId || !roomData?.name) {
+    if (!clientId) {
       socketLogger.warn('Invalid room creation attempt', {
         socketId: socket.id,
-        clientRegistered: !!clientId,
+        clientRegistered: false,
         roomDataValid: !!roomData?.name,
       });
-      socket.emit('error', { message: 'You are not registered or room name is required' });
+      callback?.({ success: false, error: 'You are not registered' });
       return;
+    }
+
+    const roomName = validateRoomNameInput(roomData?.name);
+    if (!roomName.ok) {
+      socketLogger.warn('Invalid room creation attempt', {
+        socketId: socket.id,
+        clientRegistered: true,
+        roomDataValid: false,
+      });
+      callback?.({ success: false, error: roomName.error });
+      return;
+    }
+
+    if (roomData?.type !== undefined && roomData.type !== 'chat' && roomData.type !== 'coco') {
+      socketLogger.warn('Unknown room type ignored during room creation', {
+        socketId: socket.id,
+        clientId,
+        roomType: roomData.type,
+      });
     }
 
     const roomId = await store.generateUniqueRoomId();
     const room = createRoomRecord({
       roomId,
-      name: roomData.name,
-      description: roomData.description,
+      name: roomName.name,
+      description: roomData?.description,
       creatorId: clientId,
+      type: normalizeRoomType(roomData.type),
     });
 
     socketLogger.info('Room creation requested', {
       socketId: socket.id,
       clientId,
       roomId,
-      roomName: roomData.name,
+      roomName: roomName.name,
+      roomType: room.type || 'chat',
     });
 
     const savedRoom = await store.saveRoom(room);
     if (savedRoom) {
       io.to(clientId).emit('new_room', savedRoom);
       socketLogger.info('Room created successfully', { roomId, clientId });
-      callback?.(room.id);
+      callback?.({ success: true, roomId: room.id });
+      return;
     }
+
+    callback?.({ success: false, error: 'Failed to create room' });
   });
 
   socket.on('join_room', async (roomId: string) => {
@@ -243,7 +264,7 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
       return;
     }
 
-    const validation = validateRoomName(data?.name);
+    const validation = validateRoomNameInput(data?.name);
     if (!validation.ok) {
       socketLogger.warn('Client tried to rename room with invalid name', { socketId: socket.id, clientId, roomId });
       callback?.({ success: false, error: validation.error });

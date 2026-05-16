@@ -22,7 +22,10 @@ export interface CocoRunnerRunResult {
 export class FakeCocoRunnerClient implements CocoRunnerClient {
   readonly requests: CocoRunnerRunRequest[] = [];
 
-  constructor(private readonly scriptedEvents: CocoRunnerEvent[]) {}
+  constructor(
+    private readonly scriptedEvents: CocoRunnerEvent[],
+    private readonly options: { eventDelayMs?: number } = {}
+  ) {}
 
   async run(
     request: CocoRunnerRunRequest,
@@ -34,6 +37,10 @@ export class FakeCocoRunnerClient implements CocoRunnerClient {
     let errorEvent: CocoRunnerErrorEvent | undefined;
 
     for (const event of this.scriptedEvents) {
+      if (this.options.eventDelayMs && this.options.eventDelayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, this.options.eventDelayMs));
+      }
+
       const cloned = cloneEvent(event);
       emitted.push(cloned);
       await handlers.onEvent(cloned);

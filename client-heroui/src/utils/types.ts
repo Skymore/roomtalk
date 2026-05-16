@@ -1,10 +1,16 @@
+export type RoomType = 'chat' | 'coco';
+export type RoomSandboxStatus = 'none' | 'creating' | 'ready' | 'expired' | 'error';
+export type RoomCocoStatus = 'idle' | 'running' | 'error';
+export type MessageType = 'text' | 'image' | 'ai' | 'tool_call' | 'tool_result' | 'sandbox_status';
+export type AIModelProvider = 'openai' | 'openrouter' | 'deepseek' | 'anthropic';
+
 export interface Message {
   id: string;
   clientId: string;
   content: string;
   timestamp: string;
   roomId: string;
-  messageType: 'text' | 'image' | 'ai';
+  messageType: MessageType;
   username?: string;
   avatar?: {
     text: string;
@@ -12,10 +18,17 @@ export interface Message {
   };
   mimeType?: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' | 'image/jpg';
   status?: 'streaming' | 'complete' | 'error';
+  turnId?: string;
+  toolCallId?: string;
+  toolName?: string;
+  toolArgs?: Record<string, unknown>;
+  toolOutputPreview?: string;
+  exitCode?: number;
+  isError?: boolean;
   aiModel?: {
     id: string;
     apiModel: string;
-    provider: 'openai' | 'openrouter';
+    provider: AIModelProvider;
     label: string;
     isPremium?: boolean;
   };
@@ -30,6 +43,12 @@ export interface Room {
   createdAt: string;
   lastActivityAt?: string;
   creatorId: string;
+  type?: RoomType;
+  sandboxId?: string;
+  sandboxStatus?: RoomSandboxStatus;
+  sandboxUpdatedAt?: string;
+  cocoSessionId?: string;
+  cocoStatus?: RoomCocoStatus;
 }
 
 export type RoomRenameHandler = (roomId: string, name: string) => Promise<void>;

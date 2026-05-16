@@ -1,5 +1,24 @@
-import { AIModelOption, Message, Room, RoomMemberEvent } from '../types';
+import { AIModelOption, Message, Room, RoomMemberEvent, RoomType } from '../types';
 import { getMessageAIModel } from './aiModels';
+
+export const MAX_ROOM_NAME_LENGTH = 20;
+
+export const validateRoomNameInput = (name: unknown): { ok: true; name: string } | { ok: false; error: string } => {
+  if (typeof name !== 'string') {
+    return { ok: false, error: 'Room name is required' };
+  }
+
+  const trimmedName = name.trim();
+  if (!trimmedName) {
+    return { ok: false, error: 'Room name is required' };
+  }
+
+  if (trimmedName.length > MAX_ROOM_NAME_LENGTH) {
+    return { ok: false, error: `Room name cannot exceed ${MAX_ROOM_NAME_LENGTH} characters` };
+  }
+
+  return { ok: true, name: trimmedName };
+};
 
 export interface AvatarPayload {
   text: string;
@@ -11,10 +30,11 @@ export function createRoomRecord(input: {
   name: string;
   description?: string;
   creatorId: string;
+  type?: RoomType;
   now?: Date;
 }): Room {
   const timestamp = (input.now || new Date()).toISOString();
-  return {
+  const room: Room = {
     id: input.roomId,
     name: input.name,
     description: input.description || '',
@@ -22,6 +42,15 @@ export function createRoomRecord(input: {
     lastActivityAt: timestamp,
     creatorId: input.creatorId,
   };
+
+  if (input.type === 'coco') {
+    room.type = 'coco';
+    room.sandboxStatus = 'none';
+    room.sandboxUpdatedAt = timestamp;
+    room.cocoStatus = 'idle';
+  }
+
+  return room;
 }
 
 export function createRoomMemberEvent(input: {

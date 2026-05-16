@@ -5,6 +5,7 @@ import { clientId } from "../utils/socket";
 import { formatPercentage, formatTime, formatUsdCost } from "../utils/formatters";
 import { Message } from "../utils/types";
 import { useTranslation } from "react-i18next";
+import { CocoToolMessage } from './CocoToolMessage';
 
 interface MessageItemProps {
   message: Message;
@@ -59,6 +60,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   const isImage = message.messageType === "image";
   const isText = message.messageType === "text";
   const isAI = message.clientId === 'ai_assistant';
+  const isCocoEvent = message.messageType === 'tool_call' || message.messageType === 'tool_result' || message.messageType === 'sandbox_status';
   const isStreaming = isAI && message.status === 'streaming';
   const canBeEdited = isText || (message.messageType === 'ai' && message.status !== 'streaming');
   const { t, i18n } = useTranslation();
@@ -124,6 +126,76 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   };
 
   const showActions = isHovered;
+  const renderMessageBody = () => {
+    if (isCocoEvent) {
+      return <CocoToolMessage message={message} />;
+    }
+
+    if (isImage) {
+      const imageSrc = message.content.startsWith('data:')
+        ? message.content
+        : `data:${message.mimeType || 'image/png'};base64,${message.content}`;
+
+      return (
+        <div className="w-fit cursor-pointer" onClick={handleCopyClick}>
+          <Tooltip
+            content={copyStatus === 'success' ? t('copied') : (copyStatus === 'error' ? t('copyFailed') : t('copyImage'))}
+            placement="top"
+            size="sm"
+            classNames={tooltipClassNames}
+          >
+            {imageError ? (
+              <div className="w-fit rounded-md bg-[#e8e6dc] p-2 text-sm text-danger dark:bg-[#30302e]">
+                <Icon icon="lucide:alert-triangle" className="inline mr-1" />
+                {t('imageLoadFailed')}
+              </div>
+            ) : (
+              <div className="max-w-full rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-0.5 dark:border-[#30302e] dark:bg-[#1d1d1b]">
+                <Image
+                  src={imageSrc}
+                  alt={t('sharedImage')}
+                  className="block max-h-[300px] max-w-full object-contain rounded"
+                  onError={handleImageError}
+                  isBlurred
+                />
+              </div>
+            )}
+          </Tooltip>
+        </div>
+      );
+    }
+
+    return (
+      <Card
+        className={`
+          max-w-full w-full overflow-hidden rounded-xl
+          ${isMine
+            ? "bg-[#e8e6dc] text-[#141413] shadow-[0_0_0_1px_rgba(194,192,182,0.85)] dark:bg-[#30302e] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)]"
+            : message.messageType === 'ai'
+              ? "bg-[#faf9f5] text-[#141413] shadow-[0_0_0_1px_rgba(222,219,208,0.95)] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(48,48,46,0.95)]"
+              : "bg-[#f0eee6] text-[#141413] shadow-[0_0_0_1px_rgba(222,219,208,0.95)] dark:bg-[#242421] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(61,61,58,0.9)]"
+          }
+        `}
+      >
+        <div className="max-w-full p-2.5">
+          <div className="max-w-full overflow-hidden whitespace-pre-wrap break-words text-sm leading-6">
+            <div className="max-w-full overflow-x-auto" style={{ wordBreak: 'break-word', overflowWrap: 'break-word' }}>
+              <React.Suspense fallback={
+                <div className="whitespace-pre-wrap break-words">
+                  {message.content}
+                  {isStreaming && (
+                    <span className="inline-block w-1.5 h-3 bg-current animate-pulse ml-0.5 align-baseline"></span>
+                  )}
+                </div>
+              }>
+                <MarkdownContent content={message.content} isStreaming={isStreaming} />
+              </React.Suspense>
+            </div>
+          </div>
+        </div>
+      </Card>
+    );
+  };
 
   return (
     <div
@@ -137,8 +209,8 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       {(!isMine || isAI) && !isMine && (
         <Avatar
           name={message.avatar?.text || undefined}
-          icon={isAI ? <Icon icon="lucide:bot" /> : (!message.avatar?.text ? <Icon icon="lucide:user" /> : undefined)}
-          color={getValidColor(isAI ? "secondary" : message.avatar?.color)}
+          icon={isAI ? <Icon icon="lucide:bot" /> : isCocoEvent ? <Icon icon="lucide:terminal" /> : (!message.avatar?.text ? <Icon icon="lucide:user" /> : undefined)}
+          color={getValidColor(isAI || isCocoEvent ? "secondary" : message.avatar?.color)}
           size="sm"
           classNames={{
             base: "mr-2 flex-shrink-0 bg-[#e8e6dc] text-[#4d4c48] dark:bg-[#30302e] dark:text-[#faf9f5]",
@@ -149,76 +221,15 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       {/* Message Content Area */}
       <div className={`flex max-w-[82%] flex-col min-w-0 sm:max-w-[70%] ${isMine ? 'items-end' : 'items-start'}`}>
         {/* Username or AI name */}
-        {(!isMine || isAI) && !isMine && (message.username || isAI) && (
+        {(!isMine || isAI) && !isMine && (message.username || isAI || isCocoEvent) && (
           <div className="mb-1 ml-1 text-tiny text-[#5e5d59] dark:text-[#b0aea5]">
-            {isAI ? (message.username || t('aiAssistantName')) : message.username}
+            {isAI ? (message.username || t('aiAssistantName')) : isCocoEvent ? t('cocoRoomType') : message.username}
           </div>
         )}
 
         {/* Container for bubble/image */}
         <div className="relative inline-block max-w-full w-full min-w-0">
-          {isImage ? (
-            <div className="w-fit cursor-pointer" onClick={handleCopyClick}>
-              <Tooltip
-                content={copyStatus === 'success' ? t('copied') : (copyStatus === 'error' ? t('copyFailed') : t('copyImage'))}
-                placement="top"
-                size="sm"
-                classNames={tooltipClassNames}
-              >
-                {imageError ? (
-                  <div className="w-fit rounded-md bg-[#e8e6dc] p-2 text-sm text-danger dark:bg-[#30302e]">
-                    <Icon icon="lucide:alert-triangle" className="inline mr-1" />
-                    {t('imageLoadFailed')}
-                  </div>
-                ) : (
-                  <div className="max-w-full rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-0.5 dark:border-[#30302e] dark:bg-[#1d1d1b]">
-                    <Image
-                      src={isImage
-                        ? (message.content.startsWith('data:')
-                            ? message.content
-                            : `data:${message.mimeType || 'image/png'};base64,${message.content}`)
-                        : message.content}
-                      alt={t('sharedImage')}
-                      className="block max-h-[300px] max-w-full object-contain rounded"
-                      onError={handleImageError}
-                      isBlurred
-                    />
-                  </div>
-                )}
-              </Tooltip>
-            </div>
-          ) : (
-            // ========== Text Message (Display Mode) ==========
-            <Card
-              className={`
-                max-w-full w-full overflow-hidden rounded-xl
-                ${isMine
-                  ? "bg-[#e8e6dc] text-[#141413] shadow-[0_0_0_1px_rgba(194,192,182,0.85)] dark:bg-[#30302e] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)]"
-                  : message.messageType === 'ai'
-                    ? "bg-[#faf9f5] text-[#141413] shadow-[0_0_0_1px_rgba(222,219,208,0.95)] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(48,48,46,0.95)]"
-                    : "bg-[#f0eee6] text-[#141413] shadow-[0_0_0_1px_rgba(222,219,208,0.95)] dark:bg-[#242421] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(61,61,58,0.9)]"
-                }
-              `}
-            >
-              <div className="max-w-full p-2.5">
-                <div className="max-w-full overflow-hidden whitespace-pre-wrap break-words text-sm leading-6">
-                  <div className="max-w-full overflow-x-auto" style={{ wordBreak: 'break-word', overflowWrap: 'break-word' }}>
-                    <React.Suspense fallback={
-                      <div className="whitespace-pre-wrap break-words">
-                        {message.content}
-                        {isStreaming && (
-                          <span className="inline-block w-1.5 h-3 bg-current animate-pulse ml-0.5 align-baseline"></span>
-                        )}
-                      </div>
-                    }>
-                      <MarkdownContent content={message.content} isStreaming={isStreaming} />
-                    </React.Suspense>
-                  </div>
-                </div>
-              </div>
-            </Card>
-            // ========== END MODIFIED ==========
-          )}
+          {renderMessageBody()}
         </div>
         {/* Timestamp and Actions Area - Below the bubble/image */}
         <div
