@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Modal, ModalContent, ModalBody, ModalFooter, Button, Tooltip } from '@heroui/react';
+import { Modal, ModalContent, ModalBody, ModalFooter, Button, Card, Tooltip } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { Room } from '../utils/types';
 import { removeRoom } from '../utils/storage';
@@ -21,9 +21,7 @@ export const SavedRoomList: React.FC<SavedRoomListProps> = ({
   const [roomToDelete, setRoomToDelete] = useState<string | null>(null);
 
   // 打开删除确认对话框
-  const openDeleteConfirm = (e: React.MouseEvent, roomId: string) => {
-    e.stopPropagation(); // 停止事件传播，防止触发Card的onClick
-    e.preventDefault(); // 阻止默认行为
+  const openDeleteConfirm = (roomId: string) => {
     setRoomToDelete(roomId);
   };
 
@@ -46,14 +44,6 @@ export const SavedRoomList: React.FC<SavedRoomListProps> = ({
 
   const selectRoom = (roomId: string) => {
     onRoomSelect(roomId);
-  };
-
-  const handleRoomKeyDown = (event: React.KeyboardEvent, roomId: string) => {
-    if (event.key !== 'Enter' && event.key !== ' ') {
-      return;
-    }
-    event.preventDefault();
-    selectRoom(roomId);
   };
 
   if (rooms.length === 0) {
@@ -81,46 +71,46 @@ export const SavedRoomList: React.FC<SavedRoomListProps> = ({
 
       <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
         {rooms.map(room => (
-          <div
+          <Card
             key={room.id}
-            role="button"
-            tabIndex={0}
-            className="cursor-pointer border border-[#dedbd0] bg-[#faf9f5] p-4 shadow-[0_0_0_1px_rgba(194,192,182,0.4)] transition-all duration-200 hover:bg-[#f0eee6] active:bg-[#e8e6dc] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:hover:bg-[#30302e]"
-            onClick={() => selectRoom(room.id)}
-            onKeyDown={(event) => handleRoomKeyDown(event, room.id)}
+            className="cursor-pointer rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-4 shadow-[0_0_0_1px_rgba(194,192,182,0.4)] transition-all duration-200 hover:bg-[#f0eee6] active:bg-[#e8e6dc] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:hover:bg-[#30302e]"
           >
             <div className="flex items-start">
-              <div className="mr-3 rounded-xl bg-[#e8e6dc] p-2 text-[#c96442] dark:bg-[#30302e] dark:text-[#d97757]">
-                <Icon icon="lucide:bookmark" />
-              </div>
-              <div className="flex-1">
-                <h3 className="font-medium text-[#141413] dark:text-[#faf9f5]">{room.name}</h3>
-                {room.description && (
-                  <p className="mt-1 text-sm text-[#5e5d59] dark:text-[#b0aea5]">{room.description}</p>
-                )}
-                <div className="flex justify-between items-center mt-2">
+              <button
+                type="button"
+                className="flex min-w-0 flex-1 items-start text-left outline-none"
+                onClick={() => selectRoom(room.id)}
+              >
+                <div className="mr-3 rounded-xl bg-[#e8e6dc] p-2 text-[#c96442] dark:bg-[#30302e] dark:text-[#d97757]">
+                  <Icon icon="lucide:bookmark" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="font-medium text-[#141413] dark:text-[#faf9f5]">{room.name}</h3>
+                  {room.description && (
+                    <p className="mt-1 text-sm text-[#5e5d59] dark:text-[#b0aea5]">{room.description}</p>
+                  )}
                   <p className="text-xs text-[#87867f] dark:text-[#b0aea5]">
                     {t('created')}: {formatDate(room.createdAt, i18n.language)}
                   </p>
-                  <div className="flex items-center gap-1">
+                </div>
+              </button>
+              <div className="ml-2 flex flex-shrink-0 items-center gap-1">
                     <Tooltip content={t('unsave')}>
                       <Button
                         size="sm"
                         variant="light"
                         color="warning"
                         className="h-8 rounded-md px-2 text-[#c96442] dark:text-[#d97757]"
-                        onClick={(e) => openDeleteConfirm(e, room.id)}
+                        onPress={() => openDeleteConfirm(room.id)}
                         aria-label={t('unsave')}
                         startContent={<Icon icon="lucide:bookmark-minus" className="h-4 w-4" />}
                       >
                         {t('unsave')}
                       </Button>
                     </Tooltip>
-                  </div>
-                </div>
               </div>
             </div>
-          </div>
+          </Card>
         ))}
       </div>
 
