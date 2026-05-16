@@ -161,6 +161,16 @@ class MemoryRedis {
       return [1, 1, list.length, JSON.stringify(updatedRoom)];
     }
 
+    if (script.includes('return { 1, #ARGV - 1 }')) {
+      const [, messageKey] = options.keys;
+      const [roomId, ...messages] = options.arguments;
+      if (!this.hash('rooms').has(roomId)) {
+        return [0, 0];
+      }
+      this.lists.set(messageKey, messages);
+      return [1, messages.length];
+    }
+
     const [, messageKey] = options.keys;
     const [roomId, lastActivityAt, ...messages] = options.arguments;
     const updatedRoom = this.updateRoomActivity(roomId, lastActivityAt);
@@ -230,7 +240,7 @@ class KeysOnlyRedis extends MemoryRedis {
 
 class FailingReplaceRedis extends MemoryRedis {
   async eval(script: string, options: { keys: string[]; arguments: string[] }) {
-    if (script.includes('for i = 3, #ARGV do')) {
+    if (script.includes('for i = 3, #ARGV do') || script.includes('return { 1, #ARGV - 1 }')) {
       throw new Error('replace failed');
     }
     return super.eval(script, options);
@@ -483,9 +493,11 @@ describe('RedisStore', () => {
       completeMessage,
     ]);
     await store.writeRoomMessagesCache('room-1', [streamingMessage, completeMessage]);
+    const roomBeforeRecovery = await store.getRoomById('room-1');
 
     assert.equal(await store.failInterruptedStreamingMessages('Response interrupted.'), 1);
     assert.equal(await store.readCachedRoomMessages('room-1'), null);
+    assert.deepEqual(await store.getRoomById('room-1'), roomBeforeRecovery);
 
     const recoveredMessages = await store.readMessagesByRoom('room-1');
     assert.notEqual(recoveredMessages[0].timestamp, streamingMessage.timestamp);

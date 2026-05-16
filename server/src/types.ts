@@ -1,4 +1,8 @@
 export type AIModelProvider = 'openai' | 'openrouter' | 'deepseek' | 'anthropic';
+export type RoomType = 'chat' | 'coco';
+export type RoomSandboxStatus = 'none' | 'creating' | 'ready' | 'expired' | 'error';
+export type RoomCocoStatus = 'idle' | 'running' | 'error';
+export type MessageType = 'text' | 'image' | 'ai' | 'tool_call' | 'tool_result' | 'sandbox_status';
 
 export interface AIModelPricing {
   currency: 'USD';
@@ -50,7 +54,7 @@ export interface Message {
   content: string;
   roomId: string;
   timestamp: string;
-  messageType: 'text' | 'image' | 'ai';
+  messageType: MessageType;
   username?: string;
   avatar?: {
     text: string;
@@ -58,6 +62,13 @@ export interface Message {
   };
   mimeType?: string;
   status?: 'streaming' | 'complete' | 'error';
+  turnId?: string;
+  toolCallId?: string;
+  toolName?: string;
+  toolArgs?: Record<string, unknown>;
+  toolOutputPreview?: string;
+  exitCode?: number;
+  isError?: boolean;
   aiModel?: {
     id: string;
     apiModel: string;
@@ -76,6 +87,12 @@ export interface Room {
   createdAt: string;
   lastActivityAt?: string;
   creatorId: string;
+  type?: RoomType;
+  sandboxId?: string;
+  sandboxStatus?: RoomSandboxStatus;
+  sandboxUpdatedAt?: string;
+  cocoSessionId?: string;
+  cocoStatus?: RoomCocoStatus;
 }
 
 export interface UserInfo {
