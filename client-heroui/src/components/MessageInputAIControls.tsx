@@ -73,11 +73,11 @@ export const MessageInputAISettingsButton: React.FC<MessageInputAISettingsButton
       size="sm"
       variant="light"
       aria-label={t('aiSettings')}
-      className="h-9 w-9 min-w-9 rounded-full text-[#5e5d59] dark:text-[#b0aea5]"
+      className="h-8 w-8 min-w-8 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
       onPress={onOpen}
       isDisabled={isDisabled}
     >
-      <Icon icon="lucide:settings-2" />
+      <Icon icon="lucide:settings-2" className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
     </Button>
   );
 };
@@ -128,6 +128,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   onSend,
 }) => {
   const { t } = useTranslation();
+  const [isMobileViewport, setIsMobileViewport] = React.useState(false);
   const [pendingPremiumModelId, setPendingPremiumModelId] = React.useState<string | null>(null);
   const [premiumConfirmationStep, setPremiumConfirmationStep] = React.useState<1 | 2>(1);
   const pendingPremiumModel = aiModels.find(model => model.id === pendingPremiumModelId);
@@ -137,6 +138,16 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
     title: "text-xs font-medium leading-4 text-[#141413] dark:text-[#faf9f5]",
     wrapper: "min-w-0 w-full",
   };
+
+  React.useEffect(() => {
+    const query = window.matchMedia('(max-width: 640px)');
+    const updateViewport = () => setIsMobileViewport(query.matches);
+
+    updateViewport();
+    query.addEventListener('change', updateViewport);
+
+    return () => query.removeEventListener('change', updateViewport);
+  }, []);
 
   const closePremiumConfirmation = () => {
     setPendingPremiumModelId(null);
@@ -173,8 +184,8 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
 
   return (
     <>
-      <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
-        <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
+      <div className="flex min-w-0 flex-1 items-center gap-1 sm:gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-1 sm:gap-2">
           <Select
             size="sm"
             aria-label={t('selectAIRole')}
@@ -183,13 +194,18 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               const selectedKey = Array.from(keys)[0]?.toString();
               if (selectedKey) onRoleChange(selectedKey);
             }}
-            className="min-w-0 flex-[0.9]"
+            className="min-w-0 flex-[0.68] sm:flex-[0.9]"
             classNames={{
-              trigger: "h-9 min-h-9 rounded-full bg-transparent px-2 text-[#4d4c48] data-[hover=true]:bg-[#e8e6dc] dark:text-[#faf9f5] dark:data-[hover=true]:bg-[#3a3a38]",
-              value: "truncate text-[11px] sm:text-xs",
-              selectorIcon: "text-[#87867f] dark:text-[#b0aea5]",
-              popoverContent: "border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
+              trigger: "h-8 min-h-8 rounded-full bg-transparent px-1.5 text-[#4d4c48] data-[hover=true]:bg-[#e8e6dc] dark:text-[#faf9f5] dark:data-[hover=true]:bg-[#3a3a38] sm:h-9 sm:min-h-9 sm:px-2",
+              value: "truncate text-[10px] font-semibold sm:text-xs",
+              selectorIcon: "h-3 w-3 text-[#87867f] dark:text-[#b0aea5] sm:h-4 sm:w-4",
+              popoverContent: "w-52 border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b] sm:w-auto",
               listboxWrapper: "relative max-h-[14rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]",
+            }}
+            popoverProps={{
+              placement: isMobileViewport ? 'top-start' : 'top',
+              offset: 8,
+              containerPadding: 12,
             }}
             isDisabled={isSending || isAiProcessing}
           >
@@ -212,17 +228,22 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               const selectedKey = Array.from(keys)[0]?.toString();
               if (selectedKey) requestModelChange(selectedKey);
             }}
-            className="min-w-0 flex-[1.25]"
+            className="min-w-0 flex-[1.62] sm:flex-[1.25]"
             classNames={{
-              trigger: "h-9 min-h-9 rounded-full bg-transparent px-2 text-[#4d4c48] data-[hover=true]:bg-[#e8e6dc] dark:text-[#faf9f5] dark:data-[hover=true]:bg-[#3a3a38]",
-              value: "truncate text-[11px] sm:text-xs",
-              selectorIcon: "text-[#87867f] dark:text-[#b0aea5]",
-              popoverContent: "w-[min(22rem,calc(100vw-2rem))] border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
+              trigger: "h-8 min-h-8 rounded-full bg-transparent px-1.5 text-[#4d4c48] data-[hover=true]:bg-[#e8e6dc] dark:text-[#faf9f5] dark:data-[hover=true]:bg-[#3a3a38] sm:h-9 sm:min-h-9 sm:px-2",
+              value: "truncate text-[10px] font-semibold sm:text-xs",
+              selectorIcon: "h-3 w-3 text-[#87867f] dark:text-[#b0aea5] sm:h-4 sm:w-4",
+              popoverContent: "w-52 border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b] sm:w-[min(22rem,calc(100vw-2rem))]",
               listbox: "w-full",
               listboxWrapper: "relative max-h-[16rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]",
             }}
+            popoverProps={{
+              placement: isMobileViewport ? 'top-end' : 'top',
+              offset: 8,
+              containerPadding: 12,
+            }}
             isDisabled={isSending || isAiProcessing}
-            startContent={<Icon icon="lucide:brain-circuit" />}
+            startContent={<Icon icon="lucide:brain-circuit" className="h-3.5 w-3.5 sm:h-4 sm:w-4" />}
             renderValue={() => (
               <span className="flex min-w-0 items-center gap-1.5">
                 <span className="min-w-0 truncate">{selectedModel?.label}</span>
@@ -231,8 +252,8 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                     icon="lucide:badge-check"
                     aria-label={t('defaultModel')}
                     className="flex-shrink-0 text-[#c96442] dark:text-[#ff9b76]"
-                    width={13}
-                    height={13}
+                    width={11}
+                    height={11}
                   />
                 )}
               </span>
@@ -272,7 +293,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
           </Select>
         </div>
 
-        <div className="flex flex-shrink-0 justify-end gap-1.5 sm:gap-2">
+        <div className="flex flex-shrink-0 justify-end gap-1 sm:gap-2">
           <Tooltip content={`${t('askAI')} (${isMacOS ? 'Command' : 'Ctrl'}+Enter)`} placement="top">
             <Button
               color={selectedRole.color}
@@ -280,9 +301,9 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               onPress={onAskAI}
               isLoading={isAiProcessing}
               isDisabled={isSending}
-              className="h-9 min-w-9 rounded-full bg-[#30302e] px-2 text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413] sm:px-3"
+              className="h-8 w-8 min-w-8 rounded-full bg-[#30302e] px-0 text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413] sm:h-9 sm:w-auto sm:min-w-9 sm:px-3"
             >
-              <Icon icon={selectedRole.icon} className="h-4 w-4" />
+              <Icon icon={selectedRole.icon} className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
               <span className="hidden sm:inline">{t('askAI')}</span>
             </Button>
           </Tooltip>
@@ -295,16 +316,30 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               size="sm"
               isLoading={isSending}
               isDisabled={isSending || isAiProcessing || (!currentInputText.trim() && imageCount === 0)}
-              className="h-9 min-w-9 rounded-full bg-[#c96442] px-2 text-[#faf9f5] shadow-[0_0_0_1px_#c96442] sm:px-3"
+              className="h-8 w-8 min-w-8 rounded-full bg-[#c96442] px-0 text-[#faf9f5] shadow-[0_0_0_1px_#c96442] sm:h-9 sm:w-auto sm:min-w-9 sm:px-3"
             >
-              <Icon icon="lucide:arrow-up" className="h-4 w-4" />
+              <Icon icon="lucide:arrow-up" className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
               <span className="hidden sm:inline">{t('send')}</span>
             </Button>
           </Tooltip>
         </div>
       </div>
 
-      <Modal isOpen={isSettingsOpen} onClose={onSettingsClose} size="3xl">
+      <Modal
+        isOpen={isSettingsOpen}
+        onClose={onSettingsClose}
+        size={isMobileViewport ? 'md' : '3xl'}
+        placement={isMobileViewport ? 'bottom' : 'center'}
+        scrollBehavior="inside"
+        classNames={{
+          wrapper: "items-end px-0 sm:items-center sm:px-6",
+          base: "m-0 max-h-[82dvh] w-full max-w-none rounded-b-none rounded-t-2xl border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b] sm:m-4 sm:max-h-[85dvh] sm:w-full sm:max-w-3xl sm:rounded-large",
+          header: "px-5 pb-2 pt-5 sm:px-6",
+          body: "px-5 py-3 sm:px-6",
+          footer: "px-5 pb-5 pt-2 sm:px-6",
+          closeButton: "right-4 top-4",
+        }}
+      >
         <ModalContent>
           <ModalHeader>{t('aiSettings')}</ModalHeader>
           <ModalBody>
