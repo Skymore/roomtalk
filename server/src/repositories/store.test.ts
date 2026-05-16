@@ -32,6 +32,14 @@ const cost = (): AICost => ({
   estimated: false,
 });
 
+const durableMutationStubs = () => ({
+  async updateMessageContent() { return { room: room(), found: true, updatedMessage: message() }; },
+  async deleteMessageById() { return { room: room(), deleted: true }; },
+  async truncateBeforeMessage() { return { room: room(), messages: [message()], targetFound: true }; },
+  async truncateAfterMessage() { return { room: room(), messages: [message()], targetFound: true }; },
+  async updateMessageAndTruncateAfter() { return { room: room(), messages: [message()], targetFound: true, updatedMessage: message() }; },
+});
+
 describe('CompositeRoomStore', () => {
   it('routes durable operations to the durable store and realtime operations to the realtime store', async () => {
     const calls: string[] = [];
@@ -39,6 +47,11 @@ describe('CompositeRoomStore', () => {
       async generateUniqueRoomId() { calls.push('durable.generateUniqueRoomId'); return 'room-1'; },
       async appendMessage(_message: Message) { calls.push('durable.appendMessage'); return room(); },
       async upsertMessage(_message: Message) { calls.push('durable.upsertMessage'); return room(); },
+      async updateMessageContent() { calls.push('durable.updateMessageContent'); return { room: room(), found: true, updatedMessage: message() }; },
+      async deleteMessageById() { calls.push('durable.deleteMessageById'); return { room: room(), deleted: true }; },
+      async truncateBeforeMessage() { calls.push('durable.truncateBeforeMessage'); return { room: room(), messages: [message()], targetFound: true }; },
+      async truncateAfterMessage() { calls.push('durable.truncateAfterMessage'); return { room: room(), messages: [message()], targetFound: true }; },
+      async updateMessageAndTruncateAfter() { calls.push('durable.updateMessageAndTruncateAfter'); return { room: room(), messages: [message()], targetFound: true, updatedMessage: message() }; },
       async saveMessageHistory(_roomId: string, _messages: Message[]) { calls.push('durable.saveMessageHistory'); return room(); },
       async clearRoomMessages(_roomId: string) { calls.push('durable.clearRoomMessages'); return 1; },
       async readMessagesByRoom(_roomId: string) { calls.push('durable.readMessagesByRoom'); return [message()]; },
@@ -47,6 +60,7 @@ describe('CompositeRoomStore', () => {
       async saveRoom(newRoom: Room) { calls.push('durable.saveRoom'); return newRoom; },
       async readRoomsByUser(_clientId: string) { calls.push('durable.readRoomsByUser'); return [room()]; },
       async getRoomById(_roomId: string) { calls.push('durable.getRoomById'); return room(); },
+      async updateRoomName(_roomId: string, _creatorId: string, _name: string) { calls.push('durable.updateRoomName'); return room({ name: 'Renamed' }); },
       async deleteRoom(_roomId: string, _creatorId: string) { calls.push('durable.deleteRoom'); },
       async countRooms() { calls.push('durable.countRooms'); return 1; },
       async resetAllDataForTests() { calls.push('durable.resetAllDataForTests'); },
@@ -67,6 +81,11 @@ describe('CompositeRoomStore', () => {
     assert.equal(await store.generateUniqueRoomId(), 'room-1');
     assert.deepEqual(await store.appendMessage(message()), room());
     assert.deepEqual(await store.upsertMessage(message()), room());
+    assert.deepEqual(await store.updateMessageContent('room-1', 'message-1', 'edited'), { room: room(), found: true, updatedMessage: message() });
+    assert.deepEqual(await store.deleteMessageById('room-1', 'message-1'), { room: room(), deleted: true });
+    assert.deepEqual(await store.truncateBeforeMessage('room-1', 'message-1'), { room: room(), messages: [message()], targetFound: true });
+    assert.deepEqual(await store.truncateAfterMessage('room-1', 'message-1'), { room: room(), messages: [message()], targetFound: true });
+    assert.deepEqual(await store.updateMessageAndTruncateAfter('room-1', 'message-1', 'edited'), { room: room(), messages: [message()], targetFound: true, updatedMessage: message() });
     assert.deepEqual(await store.saveMessageHistory('room-1', [message()]), room());
     assert.equal(await store.clearRoomMessages('room-1'), 1);
     assert.deepEqual(await store.readMessagesByRoom('room-1'), [message()]);
@@ -75,6 +94,7 @@ describe('CompositeRoomStore', () => {
     assert.deepEqual(await store.saveRoom(room()), room());
     assert.deepEqual(await store.readRoomsByUser('client-1'), [room()]);
     assert.deepEqual(await store.getRoomById('room-1'), room());
+    assert.deepEqual(await store.updateRoomName('room-1', 'client-1', 'Renamed'), room({ name: 'Renamed' }));
     await store.deleteRoom('room-1', 'client-1');
     assert.equal(await store.countRooms(), 1);
     assert.equal(await store.updateRoomMemberCount('room-1', 'client-1', true), 1);
@@ -91,6 +111,11 @@ describe('CompositeRoomStore', () => {
       'durable.generateUniqueRoomId',
       'durable.appendMessage',
       'durable.upsertMessage',
+      'durable.updateMessageContent',
+      'durable.deleteMessageById',
+      'durable.truncateBeforeMessage',
+      'durable.truncateAfterMessage',
+      'durable.updateMessageAndTruncateAfter',
       'durable.saveMessageHistory',
       'durable.clearRoomMessages',
       'durable.readMessagesByRoom',
@@ -99,6 +124,7 @@ describe('CompositeRoomStore', () => {
       'durable.saveRoom',
       'durable.readRoomsByUser',
       'durable.getRoomById',
+      'durable.updateRoomName',
       'durable.deleteRoom',
       'durable.countRooms',
       'realtime.updateRoomMemberCount',
@@ -120,6 +146,7 @@ describe('CompositeRoomStore', () => {
       async generateUniqueRoomId() { return 'room-1'; },
       async appendMessage() { return room(); },
       async upsertMessage() { return room(); },
+      ...durableMutationStubs(),
       async saveMessageHistory() { return room(); },
       async clearRoomMessages() { return 0; },
       async readMessagesByRoom() { calls.push('durable.readMessagesByRoom'); return [message({ id: 'durable-message' })]; },
@@ -128,6 +155,7 @@ describe('CompositeRoomStore', () => {
       async saveRoom(newRoom: Room) { return newRoom; },
       async readRoomsByUser() { return []; },
       async getRoomById() { return null; },
+      async updateRoomName() { return null; },
       async deleteRoom() {},
       async countRooms() { return 0; },
     };
@@ -165,6 +193,11 @@ describe('CompositeRoomStore', () => {
       async generateUniqueRoomId() { return 'room-1'; },
       async appendMessage(newMessage: Message) { calls.push(`durable.append:${newMessage.id}`); return newMessage.id === 'fail' ? null : room(); },
       async upsertMessage(newMessage: Message) { calls.push(`durable.upsert:${newMessage.id}`); return room(); },
+      async updateMessageContent() { calls.push('durable.updateMessageContent'); return { room: room(), found: true, updatedMessage: message() }; },
+      async deleteMessageById() { calls.push('durable.deleteMessageById'); return { room: room(), deleted: true }; },
+      async truncateBeforeMessage() { calls.push('durable.truncateBeforeMessage'); return { room: room(), messages: [message()], targetFound: true }; },
+      async truncateAfterMessage() { calls.push('durable.truncateAfterMessage'); return { room: room(), messages: [message()], targetFound: true }; },
+      async updateMessageAndTruncateAfter() { calls.push('durable.updateMessageAndTruncateAfter'); return { room: room(), messages: [message()], targetFound: true, updatedMessage: message() }; },
       async saveMessageHistory(_roomId: string) { calls.push('durable.saveHistory'); return room(); },
       async clearRoomMessages(_roomId: string) { calls.push('durable.clear'); return 1; },
       async readMessagesByRoom() { return []; },
@@ -173,6 +206,7 @@ describe('CompositeRoomStore', () => {
       async saveRoom(newRoom: Room) { return newRoom; },
       async readRoomsByUser() { return []; },
       async getRoomById() { return null; },
+      async updateRoomName() { return null; },
       async deleteRoom() { calls.push('durable.delete'); },
       async countRooms() { return 0; },
       async failInterruptedStreamingMessages() { calls.push('durable.failInterrupted'); return 2; },
@@ -197,6 +231,11 @@ describe('CompositeRoomStore', () => {
     assert.deepEqual(await store.appendMessage(message({ id: 'ok' })), room());
     assert.equal(await store.appendMessage(message({ id: 'fail' })), null);
     assert.deepEqual(await store.upsertMessage(message({ id: 'upsert' })), room());
+    assert.deepEqual(await store.updateMessageContent('room-1', 'message-1', 'edited'), { room: room(), found: true, updatedMessage: message() });
+    assert.deepEqual(await store.deleteMessageById('room-1', 'message-1'), { room: room(), deleted: true });
+    assert.deepEqual(await store.truncateBeforeMessage('room-1', 'message-1'), { room: room(), messages: [message()], targetFound: true });
+    assert.deepEqual(await store.truncateAfterMessage('room-1', 'message-1'), { room: room(), messages: [message()], targetFound: true });
+    assert.deepEqual(await store.updateMessageAndTruncateAfter('room-1', 'message-1', 'edited'), { room: room(), messages: [message()], targetFound: true, updatedMessage: message() });
     assert.deepEqual(await store.saveMessageHistory('room-1', [message()]), room());
     assert.equal(await store.clearRoomMessages('room-1'), 1);
     await store.deleteRoom('room-1', 'client-1');
@@ -207,6 +246,16 @@ describe('CompositeRoomStore', () => {
       'cache.invalidate:room-1',
       'durable.append:fail',
       'durable.upsert:upsert',
+      'cache.invalidate:room-1',
+      'durable.updateMessageContent',
+      'cache.invalidate:room-1',
+      'durable.deleteMessageById',
+      'cache.invalidate:room-1',
+      'durable.truncateBeforeMessage',
+      'cache.invalidate:room-1',
+      'durable.truncateAfterMessage',
+      'cache.invalidate:room-1',
+      'durable.updateMessageAndTruncateAfter',
       'cache.invalidate:room-1',
       'durable.saveHistory',
       'cache.invalidate:room-1',
@@ -224,6 +273,7 @@ describe('CompositeRoomStore', () => {
       async generateUniqueRoomId() { return 'room-1'; },
       async appendMessage() { return room(); },
       async upsertMessage() { return room(); },
+      ...durableMutationStubs(),
       async saveMessageHistory() { return room(); },
       async clearRoomMessages() { return 0; },
       async readMessagesByRoom() { return [message({ id: 'durable-message' })]; },
@@ -232,6 +282,7 @@ describe('CompositeRoomStore', () => {
       async saveRoom(newRoom: Room) { return newRoom; },
       async readRoomsByUser() { return []; },
       async getRoomById() { return null; },
+      async updateRoomName() { return null; },
       async deleteRoom() {},
       async countRooms() { return 0; },
     };
@@ -265,6 +316,7 @@ describe('CompositeRoomStore', () => {
       async generateUniqueRoomId() { return 'room-1'; },
       async appendMessage() { return room(); },
       async upsertMessage() { return room(); },
+      ...durableMutationStubs(),
       async saveMessageHistory() { return room(); },
       async clearRoomMessages() { return 0; },
       async readMessagesByRoom() { return []; },
@@ -273,6 +325,7 @@ describe('CompositeRoomStore', () => {
       async saveRoom(newRoom: Room) { return newRoom; },
       async readRoomsByUser() { return []; },
       async getRoomById() { return null; },
+      async updateRoomName() { return null; },
       async deleteRoom() {},
       async countRooms() { return 0; },
       async resetAllDataForTests() {

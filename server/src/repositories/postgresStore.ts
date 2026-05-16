@@ -45,9 +45,11 @@ type MessageRow = {
   ai_model: unknown;
   usage: unknown;
   cost: unknown;
+  position?: number | string;
 };
 
 const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id';
+const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, message_type, username, avatar, mime_type, status, ai_model, usage, cost';
 
 const parseTime = (timestamp?: string): number => {
   const time = Date.parse(timestamp || '');
@@ -280,6 +282,186 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
+  async updateMessageContent(roomId: string, messageId: string, newContent: string, updatedAt = new Date().toISOString()) {
+    try {
+      return await this.transaction(async client => {
+        const room = await client.query<RoomRow>(
+          `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
+          [roomId]
+        );
+        if (room.rows.length === 0) {
+          this.logger.warn('Cannot update message for missing PostgreSQL room', { roomId, messageId });
+          return null;
+        }
+
+        const updated = await client.query<MessageRow>(
+          `UPDATE room_messages
+          SET content = $3,
+            timestamp = $4
+          WHERE room_id = $1 AND id = $2
+          RETURNING ${MESSAGE_COLUMNS}`,
+          [roomId, messageId, newContent, updatedAt]
+        );
+        if (updated.rows.length === 0) {
+          return { room: mapRoom(room.rows[0]), found: false };
+        }
+
+        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at));
+        if (!updatedRoom) {
+          return null;
+        }
+
+        this.logger.debug('Message updated in PostgreSQL', { roomId, messageId });
+        return { room: updatedRoom, found: true, updatedMessage: mapMessage(updated.rows[0]) };
+      });
+    } catch (error) {
+      this.logger.error('Error updating message in PostgreSQL', { error, roomId, messageId });
+      return null;
+    }
+  }
+
+  async deleteMessageById(roomId: string, messageId: string) {
+    try {
+      return await this.transaction(async client => {
+        const room = await client.query<RoomRow>(
+          `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
+          [roomId]
+        );
+        if (room.rows.length === 0) {
+          this.logger.warn('Cannot delete message for missing PostgreSQL room', { roomId, messageId });
+          return null;
+        }
+
+        const deleted = await client.query<{ id: string }>(
+          'DELETE FROM room_messages WHERE room_id = $1 AND id = $2 RETURNING id',
+          [roomId, messageId]
+        );
+        if (deleted.rows.length === 0) {
+          return { room: mapRoom(room.rows[0]), deleted: false };
+        }
+
+        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at));
+        if (!updatedRoom) {
+          return null;
+        }
+
+        this.logger.debug('Message deleted from PostgreSQL', { roomId, messageId });
+        return { room: updatedRoom, deleted: true };
+      });
+    } catch (error) {
+      this.logger.error('Error deleting message from PostgreSQL', { error, roomId, messageId });
+      return null;
+    }
+  }
+
+  private async truncateMessages(roomId: string, messageId: string, mode: 'before' | 'after') {
+    try {
+      return await this.transaction(async client => {
+        const room = await client.query<RoomRow>(
+          `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
+          [roomId]
+        );
+        if (room.rows.length === 0) {
+          this.logger.warn('Cannot truncate messages for missing PostgreSQL room', { roomId, messageId, mode });
+          return null;
+        }
+
+        const target = await client.query<{ position: number | string }>(
+          'SELECT position FROM room_messages WHERE room_id = $1 AND id = $2',
+          [roomId, messageId]
+        );
+        if (target.rows.length === 0) {
+          const messages = await this.readMessagesByRoomInTransaction(client, roomId);
+          return { room: mapRoom(room.rows[0]), messages, targetFound: false };
+        }
+
+        const operator = mode === 'before' ? '>=' : '>';
+        await client.query(
+          `DELETE FROM room_messages WHERE room_id = $1 AND position ${operator} $2`,
+          [roomId, Number(target.rows[0].position)]
+        );
+
+        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at));
+        if (!updatedRoom) {
+          return null;
+        }
+
+        const messages = await this.readMessagesByRoomInTransaction(client, roomId);
+        this.logger.debug('Messages truncated in PostgreSQL', { roomId, messageId, mode, count: messages.length });
+        return { room: updatedRoom, messages, targetFound: true };
+      });
+    } catch (error) {
+      this.logger.error('Error truncating messages in PostgreSQL', { error, roomId, messageId, mode });
+      return null;
+    }
+  }
+
+  truncateBeforeMessage(roomId: string, messageId: string) {
+    return this.truncateMessages(roomId, messageId, 'before');
+  }
+
+  truncateAfterMessage(roomId: string, messageId: string) {
+    return this.truncateMessages(roomId, messageId, 'after');
+  }
+
+  async updateMessageAndTruncateAfter(roomId: string, messageId: string, newContent: string, updatedAt = new Date().toISOString()) {
+    try {
+      return await this.transaction(async client => {
+        const room = await client.query<RoomRow>(
+          `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
+          [roomId]
+        );
+        if (room.rows.length === 0) {
+          this.logger.warn('Cannot update and truncate message for missing PostgreSQL room', { roomId, messageId });
+          return null;
+        }
+
+        const target = await client.query<{ position: number | string }>(
+          'SELECT position FROM room_messages WHERE room_id = $1 AND id = $2',
+          [roomId, messageId]
+        );
+        if (target.rows.length === 0) {
+          const messages = await this.readMessagesByRoomInTransaction(client, roomId);
+          return { room: mapRoom(room.rows[0]), messages, targetFound: false };
+        }
+
+        const updated = await client.query<MessageRow>(
+          `UPDATE room_messages
+          SET content = $3,
+            timestamp = $4
+          WHERE room_id = $1 AND id = $2
+          RETURNING ${MESSAGE_COLUMNS}`,
+          [roomId, messageId, newContent, updatedAt]
+        );
+        if (updated.rows.length === 0) {
+          return null;
+        }
+
+        await client.query(
+          'DELETE FROM room_messages WHERE room_id = $1 AND position > $2',
+          [roomId, Number(target.rows[0].position)]
+        );
+
+        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at));
+        if (!updatedRoom) {
+          return null;
+        }
+
+        const messages = await this.readMessagesByRoomInTransaction(client, roomId);
+        this.logger.debug('Message updated and history truncated in PostgreSQL', { roomId, messageId, count: messages.length });
+        return {
+          room: updatedRoom,
+          messages,
+          targetFound: true,
+          updatedMessage: mapMessage(updated.rows[0]),
+        };
+      });
+    } catch (error) {
+      this.logger.error('Error updating and truncating message in PostgreSQL', { error, roomId, messageId });
+      return null;
+    }
+  }
+
   async saveMessageHistory(roomId: string, messages: Message[]): Promise<Room | null> {
     try {
       return await this.transaction(async client => {
@@ -470,6 +652,26 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
+  async updateRoomName(roomId: string, creatorId: string, name: string): Promise<Room | null> {
+    try {
+      const result = await this.pool.query<RoomRow>(
+        `UPDATE rooms
+        SET name = $3
+        WHERE id = $1 AND creator_id = $2
+        RETURNING ${ROOM_COLUMNS}`,
+        [roomId, creatorId, name]
+      );
+      const updatedRoom = result.rows[0] ? mapRoom(result.rows[0]) : null;
+      if (!updatedRoom) {
+        this.logger.warn('PostgreSQL room rename skipped because room was missing or unauthorized', { roomId, creatorId });
+      }
+      return updatedRoom;
+    } catch (error) {
+      this.logger.error('Error renaming PostgreSQL room', { error, roomId, creatorId });
+      return null;
+    }
+  }
+
   async deleteRoom(roomId: string, creatorId: string): Promise<void> {
     try {
       await this.pool.query('DELETE FROM rooms WHERE id = $1 AND creator_id = $2', [roomId, creatorId]);
@@ -528,5 +730,32 @@ export class PostgresStore implements DurableRoomStore {
     } finally {
       client.release();
     }
+  }
+
+  private async updateRoomLastActivityFromMessages(client: PostgresClient, roomId: string, fallbackTimestamp: string): Promise<Room | null> {
+    const latestMessage = await client.query<{ timestamp: string | Date }>(
+      'SELECT timestamp FROM room_messages WHERE room_id = $1 ORDER BY timestamp DESC LIMIT 1',
+      [roomId]
+    );
+    const lastActivityAt = latestMessage.rows[0]?.timestamp
+      ? toIsoString(latestMessage.rows[0].timestamp)
+      : fallbackTimestamp;
+
+    const updatedRoom = await client.query<RoomRow>(
+      `UPDATE rooms SET last_activity_at = $2 WHERE id = $1 RETURNING ${ROOM_COLUMNS}`,
+      [roomId, lastActivityAt]
+    );
+    return updatedRoom.rows[0] ? mapRoom(updatedRoom.rows[0]) : null;
+  }
+
+  private async readMessagesByRoomInTransaction(client: PostgresClient, roomId: string): Promise<Message[]> {
+    const result = await client.query<MessageRow>(
+      `SELECT ${MESSAGE_COLUMNS}
+      FROM room_messages
+      WHERE room_id = $1
+      ORDER BY position ASC, timestamp ASC`,
+      [roomId]
+    );
+    return result.rows.map(mapMessage);
   }
 }

@@ -93,6 +93,10 @@ const roomCost = (roomId = 'room-1'): RoomAICostTotal => ({
   totalUsd: 0.0001,
 });
 
+const roomActivityForMessages = (messages: Message[]) => room({
+  lastActivityAt: messages[messages.length - 1]?.timestamp || room().createdAt,
+});
+
 const createHarness = (options: { rejectSaves?: boolean; rejectSaveNumbers?: number[] } = {}) => {
   const socket = new FakeSocket();
   const io = new FakeIo();
@@ -100,6 +104,9 @@ const createHarness = (options: { rejectSaves?: boolean; rejectSaveNumbers?: num
     messages: [message()],
     upsertedMessages: [] as Message[],
     savedHistories: [] as Message[][],
+    truncateBeforeCalls: [] as Array<{ roomId: string; messageId: string }>,
+    truncateAfterCalls: [] as Array<{ roomId: string; messageId: string }>,
+    editAndTruncateCalls: [] as Array<{ roomId: string; messageId: string; newContent: string }>,
     async getClientId() {
       return 'client-1';
     },
@@ -110,6 +117,47 @@ const createHarness = (options: { rejectSaves?: boolean; rejectSaveNumbers?: num
       this.savedHistories.push(messages);
       this.messages = messages;
       return room({ lastActivityAt: messages[messages.length - 1]?.timestamp || room().createdAt });
+    },
+    async truncateBeforeMessage(roomId: string, messageId: string) {
+      this.truncateBeforeCalls.push({ roomId, messageId });
+      const roomMessages = this.messages.filter(item => item.roomId === roomId);
+      const targetIndex = roomMessages.findIndex(item => item.id === messageId);
+      if (targetIndex === -1) {
+        return { room: roomActivityForMessages(roomMessages), messages: roomMessages, targetFound: false };
+      }
+
+      const remainingMessages = roomMessages.slice(0, targetIndex);
+      this.messages = this.messages.filter(item => item.roomId !== roomId).concat(remainingMessages);
+      return { room: roomActivityForMessages(remainingMessages), messages: remainingMessages, targetFound: true };
+    },
+    async truncateAfterMessage(roomId: string, messageId: string) {
+      this.truncateAfterCalls.push({ roomId, messageId });
+      const roomMessages = this.messages.filter(item => item.roomId === roomId);
+      const targetIndex = roomMessages.findIndex(item => item.id === messageId);
+      if (targetIndex === -1) {
+        return { room: roomActivityForMessages(roomMessages), messages: roomMessages, targetFound: false };
+      }
+
+      const remainingMessages = roomMessages.slice(0, targetIndex + 1);
+      this.messages = this.messages.filter(item => item.roomId !== roomId).concat(remainingMessages);
+      return { room: roomActivityForMessages(remainingMessages), messages: remainingMessages, targetFound: true };
+    },
+    async updateMessageAndTruncateAfter(roomId: string, messageId: string, newContent: string) {
+      this.editAndTruncateCalls.push({ roomId, messageId, newContent });
+      const roomMessages = this.messages.filter(item => item.roomId === roomId);
+      const targetIndex = roomMessages.findIndex(item => item.id === messageId);
+      if (targetIndex === -1) {
+        return { room: roomActivityForMessages(roomMessages), messages: roomMessages, targetFound: false };
+      }
+
+      const updatedMessage = {
+        ...roomMessages[targetIndex],
+        content: newContent,
+        timestamp: '2026-05-03T00:00:10.000Z',
+      };
+      const remainingMessages = [...roomMessages.slice(0, targetIndex), updatedMessage];
+      this.messages = this.messages.filter(item => item.roomId !== roomId).concat(remainingMessages);
+      return { room: roomActivityForMessages(remainingMessages), messages: remainingMessages, targetFound: true, updatedMessage };
     },
     async upsertMessage(newMessage: Message) {
       this.upsertedMessages.push(newMessage);
@@ -267,8 +315,8 @@ describe('AI socket handlers', () => {
 
     await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id, retryForMessageId: 'ai-old' });
 
-    assert.equal(store.savedHistories.length, 1);
-    assert.deepEqual(store.savedHistories[0].map(item => item.id), ['message-1']);
+    assert.deepEqual(store.truncateBeforeCalls, [{ roomId: 'room-1', messageId: 'ai-old' }]);
+    assert.equal(store.savedHistories.length, 0);
     assert.deepEqual(store.messages.map(item => item.id), ['message-1', store.upsertedMessages[1].id]);
     assert.equal(store.messages[1].status, 'complete');
   });
@@ -287,9 +335,42 @@ describe('AI socket handlers', () => {
 
     await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id, editedMessageId: 'message-edited' });
 
-    assert.equal(store.savedHistories.length, 1);
-    assert.deepEqual(store.savedHistories[0].map(item => item.id), ['message-1', 'message-edited']);
+    assert.deepEqual(store.truncateAfterCalls, [{ roomId: 'room-1', messageId: 'message-edited' }]);
+    assert.equal(store.savedHistories.length, 0);
     assert.equal(store.messages[2].status, 'complete');
     assert.equal(store.messages[2].content, 'E2E AI response to: edited prompt');
+  });
+
+  it('edits, truncates, and starts AI generation in one event', async () => {
+    const { io, socket, store } = createHarness();
+    const editedUser = message({ id: 'message-edited', content: 'original prompt' });
+    const staleAI = message({
+      id: 'ai-stale',
+      clientId: 'ai_assistant',
+      content: 'stale answer',
+      messageType: 'ai',
+      status: 'complete',
+    });
+    store.messages = [message(), editedUser, staleAI];
+
+    let response: unknown;
+    await socket.invoke('edit_message_and_ask_ai', {
+      roomId: 'room-1',
+      messageId: 'message-edited',
+      newContent: 'edited prompt',
+      model: selectedModel.id,
+    }, (ack: unknown) => {
+      response = ack;
+    });
+
+    assert.deepEqual(store.editAndTruncateCalls, [{ roomId: 'room-1', messageId: 'message-edited', newContent: 'edited prompt' }]);
+    assert.equal(store.savedHistories.length, 0);
+    const editedEvent = io.roomEmits.find(event => event.event === 'message_edited');
+    assert.equal((editedEvent?.args[0] as Message).content, 'edited prompt');
+    const historyEvent = io.roomEmits.find(event => event.event === 'message_history');
+    assert.deepEqual((historyEvent?.args[0] as Message[]).map(item => item.id), ['message-1', 'message-edited']);
+    assert.equal(store.messages[2].status, 'complete');
+    assert.equal(store.messages[2].content, 'E2E AI response to: edited prompt');
+    assert.deepEqual(response, { success: true, messageId: store.upsertedMessages[0].id });
   });
 });

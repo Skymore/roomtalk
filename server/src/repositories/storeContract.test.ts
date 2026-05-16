@@ -132,7 +132,98 @@ class MemoryRedis {
       return [1, JSON.stringify(updatedRoom)];
     }
 
-    if (script.includes('local targetId')) {
+    if (script.includes('redis.call(\'LSET\'')) {
+      const [, messageKey] = options.keys;
+      const [roomId, messageId, newContent, updatedAt] = options.arguments;
+      const updatedRoom = this.updateRoomActivity(roomId, updatedAt, true);
+      if (!updatedRoom) return [0, 0, '', ''];
+      const list = this.lists.get(messageKey) || [];
+      const index = list.findIndex(item => {
+        try {
+          return JSON.parse(item).id === messageId;
+        } catch {
+          return false;
+        }
+      });
+      if (index === -1) return [1, 0, JSON.stringify(updatedRoom), ''];
+      const updatedMessage = { ...JSON.parse(list[index]), content: newContent, timestamp: updatedAt };
+      list[index] = JSON.stringify(updatedMessage);
+      this.lists.set(messageKey, list);
+      return [1, 1, JSON.stringify(updatedRoom), list[index]];
+    }
+
+    if (script.includes('return { 1, found, #remaining, cjson.encode(room) }')) {
+      const [, messageKey] = options.keys;
+      const [roomId, messageId] = options.arguments;
+      const roomJson = this.hash('rooms').get(roomId);
+      if (!roomJson) return [0, 0, 0, ''];
+      const list = this.lists.get(messageKey) || [];
+      const remaining = list.filter(item => {
+        try {
+          return JSON.parse(item).id !== messageId;
+        } catch {
+          return true;
+        }
+      });
+      const found = remaining.length !== list.length;
+      if (!found) return [1, 0, list.length, roomJson];
+      const latestTimestamp = getLatestMessageTimestamp(remaining.map(item => JSON.parse(item)));
+      const room = JSON.parse(roomJson);
+      const updatedRoom = { ...room, lastActivityAt: latestTimestamp || room.createdAt };
+      this.hash('rooms').set(roomId, JSON.stringify(updatedRoom));
+      this.lists.set(messageKey, remaining);
+      return [1, 1, remaining.length, JSON.stringify(updatedRoom)];
+    }
+
+    if (script.includes('local mode = ARGV[3]')) {
+      const [, messageKey] = options.keys;
+      const [roomId, messageId, mode] = options.arguments;
+      const roomJson = this.hash('rooms').get(roomId);
+      if (!roomJson) return [0, 0, 0, ''];
+      const list = this.lists.get(messageKey) || [];
+      const targetIndex = list.findIndex(item => {
+        try {
+          return JSON.parse(item).id === messageId;
+        } catch {
+          return false;
+        }
+      });
+      if (targetIndex === -1) return [1, 0, list.length, roomJson, ...list];
+      const keepCount = mode === 'before' ? targetIndex : targetIndex + 1;
+      const remaining = list.slice(0, keepCount);
+      const latestTimestamp = getLatestMessageTimestamp(remaining.map(item => JSON.parse(item)));
+      const room = JSON.parse(roomJson);
+      const updatedRoom = { ...room, lastActivityAt: latestTimestamp || room.createdAt };
+      this.hash('rooms').set(roomId, JSON.stringify(updatedRoom));
+      this.lists.set(messageKey, remaining);
+      return [1, 1, remaining.length, JSON.stringify(updatedRoom), ...remaining];
+    }
+
+    if (script.includes('cjson.encode(room), updatedPayload')) {
+      const [, messageKey] = options.keys;
+      const [roomId, messageId, newContent, updatedAt] = options.arguments;
+      const roomJson = this.hash('rooms').get(roomId);
+      if (!roomJson) return [0, 0, 0, '', ''];
+      const list = this.lists.get(messageKey) || [];
+      const targetIndex = list.findIndex(item => {
+        try {
+          return JSON.parse(item).id === messageId;
+        } catch {
+          return false;
+        }
+      });
+      if (targetIndex === -1) return [1, 0, list.length, roomJson, '', ...list];
+      const updatedMessage = { ...JSON.parse(list[targetIndex]), content: newContent, timestamp: updatedAt };
+      const remaining = [...list.slice(0, targetIndex), JSON.stringify(updatedMessage)];
+      const latestTimestamp = getLatestMessageTimestamp(remaining.map(item => JSON.parse(item)));
+      const room = JSON.parse(roomJson);
+      const updatedRoom = { ...room, lastActivityAt: latestTimestamp || room.createdAt };
+      this.hash('rooms').set(roomId, JSON.stringify(updatedRoom));
+      this.lists.set(messageKey, remaining);
+      return [1, 1, remaining.length, JSON.stringify(updatedRoom), JSON.stringify(updatedMessage), ...remaining];
+    }
+
+    if (script.includes('local payload = ARGV[3]')) {
       const [, messageKey] = options.keys;
       const [roomId, targetId, payload, lastActivityAt] = options.arguments;
       const updatedRoom = this.updateRoomActivity(roomId, lastActivityAt, true);
@@ -199,6 +290,13 @@ type MessageRow = {
 
 const toTime = (value: string) => Date.parse(value) || 0;
 const latest = (first: string, second: string) => toTime(first) >= toTime(second) ? first : second;
+function getLatestMessageTimestamp(messages: Message[]): string | undefined {
+  return messages.reduce<string | undefined>((currentLatest, item) => (
+    !currentLatest || toTime(item.timestamp) > toTime(currentLatest)
+      ? item.timestamp
+      : currentLatest
+  ), undefined);
+}
 const jsonValue = (value: unknown) => value === null || value === undefined ? null : value;
 
 class StatefulPostgresPool implements PostgresPool, PostgresClient {
@@ -323,6 +421,58 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       const updated = { ...room, last_activity_at: timestamp };
       this.rooms.set(roomId, updated);
       return { rows: [updated] as T[], rowCount: 1 };
+    }
+
+    if (/UPDATE rooms SET name = \$3 WHERE id = \$1 AND creator_id = \$2 RETURNING/.test(compactSql)) {
+      const [roomId, creatorId, name] = params.map(String);
+      const room = this.rooms.get(roomId);
+      if (!room || room.creator_id !== creatorId) return { rows: [], rowCount: 0 };
+      const updated = { ...room, name };
+      this.rooms.set(roomId, updated);
+      return { rows: [updated] as T[], rowCount: 1 };
+    }
+
+    if (/UPDATE room_messages SET content = \$3, timestamp = \$4 WHERE room_id = \$1 AND id = \$2 RETURNING/.test(compactSql)) {
+      const [roomId, messageId, content, timestamp] = params.map(String);
+      const rows = this.messages.get(roomId) || [];
+      const index = rows.findIndex(row => row.id === messageId);
+      if (index === -1) return { rows: [], rowCount: 0 };
+      const updated = { ...rows[index], content, timestamp };
+      rows[index] = updated;
+      this.messages.set(roomId, rows);
+      return { rows: [updated] as T[], rowCount: 1 };
+    }
+
+    if (/DELETE FROM room_messages WHERE room_id = \$1 AND id = \$2 RETURNING id/.test(compactSql)) {
+      const [roomId, messageId] = params.map(String);
+      const rows = this.messages.get(roomId) || [];
+      const remaining = rows.filter(row => row.id !== messageId);
+      const deleted = remaining.length !== rows.length;
+      this.messages.set(roomId, remaining);
+      return { rows: (deleted ? [{ id: messageId }] : []) as T[], rowCount: deleted ? 1 : 0 };
+    }
+
+    if (/SELECT position FROM room_messages WHERE room_id = \$1 AND id = \$2/.test(compactSql)) {
+      const [roomId, messageId] = params.map(String);
+      const row = (this.messages.get(roomId) || []).find(item => item.id === messageId);
+      return { rows: (row ? [{ position: row.position }] : []) as T[], rowCount: row ? 1 : 0 };
+    }
+
+    if (/DELETE FROM room_messages WHERE room_id = \$1 AND position (>=|>) \$2/.test(compactSql)) {
+      const roomId = String(params[0]);
+      const position = Number(params[1]);
+      const deleteAtOrAfter = /position >= \$2/.test(compactSql);
+      const rows = this.messages.get(roomId) || [];
+      const remaining = rows.filter(row => deleteAtOrAfter ? row.position < position : row.position <= position);
+      const deletedCount = rows.length - remaining.length;
+      this.messages.set(roomId, remaining);
+      return { rows: [], rowCount: deletedCount };
+    }
+
+    if (/SELECT timestamp FROM room_messages WHERE room_id = \$1 ORDER BY timestamp DESC LIMIT 1/.test(compactSql)) {
+      const rows = [...(this.messages.get(String(params[0])) || [])]
+        .sort((first, second) => toTime(second.timestamp) - toTime(first.timestamp));
+      return { rows: (rows[0] ? [{ timestamp: rows[0].timestamp }] : []) as T[], rowCount: rows[0] ? 1 : 0 };
     }
 
     if (/DELETE FROM room_messages WHERE room_id = \$1/.test(compactSql)) {
@@ -532,6 +682,26 @@ for (const [storeName, createFixture] of storeFactories) {
       assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), []);
     });
 
+    it('renames rooms only for the creator without changing room activity', async () => {
+      const { store } = createFixture();
+      const initialRoom = room({
+        name: 'Original Room',
+        createdAt: '2026-05-03T00:00:00.000Z',
+        lastActivityAt: '2026-05-03T00:00:10.000Z',
+      });
+
+      await store.saveRoom(initialRoom);
+
+      assert.equal(await store.updateRoomName(initialRoom.id, 'client-2', 'Unauthorized Rename'), null);
+      assert.deepEqual(await store.getRoomById(initialRoom.id), initialRoom);
+
+      const renamedRoom = await store.updateRoomName(initialRoom.id, initialRoom.creatorId, 'Renamed Room');
+
+      assert.deepEqual(renamedRoom, { ...initialRoom, name: 'Renamed Room' });
+      assert.deepEqual(await store.getRoomById(initialRoom.id), { ...initialRoom, name: 'Renamed Room' });
+      assert.deepEqual(await store.readRoomsByUser(initialRoom.creatorId), [{ ...initialRoom, name: 'Renamed Room' }]);
+    });
+
     it('keeps retry and edit-and-ask truncation semantics consistent', async () => {
       const { store } = createFixture();
       const mutableStore = store as DurableRoomStoreWithMessageMutations;
@@ -558,7 +728,8 @@ for (const [storeName, createFixture] of storeFactories) {
       await store.saveMessageHistory(baseRoom.id, fullHistory);
       const editAndTruncate = await mutableStore.updateMessageAndTruncateAfter(baseRoom.id, 'u2', 'edited second prompt', '2026-05-03T00:00:09.000Z');
       assert.equal(editAndTruncate?.targetFound, true);
-      assert.equal(editAndTruncate?.updatedMessage.content, 'edited second prompt');
+      assert.ok(editAndTruncate?.updatedMessage);
+      assert.equal(editAndTruncate.updatedMessage.content, 'edited second prompt');
       assert.deepEqual(editAndTruncate?.messages.map(item => item.id), ['u1', 'ai1', 'u2']);
       await store.upsertMessage(editPlaceholder);
       assert.deepEqual((await store.readMessagesByRoom(baseRoom.id)).map(item => item.id), ['u1', 'ai1', 'u2', 'edit-ai']);
@@ -592,7 +763,8 @@ for (const [storeName, createFixture] of storeFactories) {
 
       const editResult = await mutableStore.updateMessageContent(baseRoom.id, 'second', 'edited second', '2026-05-03T00:00:04.000Z');
       assert.equal(editResult?.found, true);
-      assert.equal(editResult?.updatedMessage.content, 'edited second');
+      assert.ok(editResult?.updatedMessage);
+      assert.equal(editResult.updatedMessage.content, 'edited second');
       assert.deepEqual((await store.readMessagesByRoom(baseRoom.id)).map(item => item.id), ['first', 'second', 'third']);
       assert.equal((await store.readMessagesByRoom(baseRoom.id))[1].content, 'edited second');
 

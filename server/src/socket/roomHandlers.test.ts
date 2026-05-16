@@ -144,6 +144,14 @@ const createHarness = (clientId: string | null = 'client-1') => {
     async getRoomById(roomId: string) {
       return this.rooms.find(item => item.id === roomId) || null;
     },
+    async updateRoomName(roomId: string, creatorId: string, name: string) {
+      const index = this.rooms.findIndex(item => item.id === roomId && item.creatorId === creatorId);
+      if (index === -1) {
+        return null;
+      }
+      this.rooms[index] = { ...this.rooms[index], name };
+      return this.rooms[index];
+    },
     async readMessagesByRoom(roomId: string) {
       return this.messages.filter(item => item.roomId === roomId);
     },
@@ -273,6 +281,57 @@ describe('room socket handlers', () => {
     assert.deepEqual(valid.io.roomEmits, [
       { roomId: 'socket-1', event: 'room_list', args: [[]] },
       { roomId: 'socket-2', event: 'room_list', args: [[]] },
+    ]);
+  });
+
+  it('renames owned rooms and broadcasts updated room state', async () => {
+    const unregistered = createHarness(null);
+    let unregisteredResponse: unknown;
+    await unregistered.socket.invoke('rename_room', { roomId: 'room-1', name: 'Renamed' }, (response: unknown) => {
+      unregisteredResponse = response;
+    });
+    assert.deepEqual(unregisteredResponse, { success: false, error: 'You are not registered' });
+
+    const invalid = createHarness('client-1');
+    let invalidResponse: unknown;
+    await invalid.socket.invoke('rename_room', { roomId: 'room-1', name: '   ' }, (response: unknown) => {
+      invalidResponse = response;
+    });
+    assert.deepEqual(invalidResponse, { success: false, error: 'Room name is required' });
+
+    const tooLong = createHarness('client-1');
+    let tooLongResponse: unknown;
+    await tooLong.socket.invoke('rename_room', { roomId: 'room-1', name: 'a'.repeat(21) }, (response: unknown) => {
+      tooLongResponse = response;
+    });
+    assert.deepEqual(tooLongResponse, { success: false, error: 'Room name cannot exceed 20 characters' });
+
+    const missing = createHarness('client-1');
+    let missingResponse: unknown;
+    await missing.socket.invoke('rename_room', { roomId: 'missing', name: 'Renamed' }, (response: unknown) => {
+      missingResponse = response;
+    });
+    assert.deepEqual(missingResponse, { success: false, error: 'Room not found' });
+
+    const unauthorized = createHarness('client-2');
+    let unauthorizedResponse: unknown;
+    await unauthorized.socket.invoke('rename_room', { roomId: 'room-1', name: 'Renamed' }, (response: unknown) => {
+      unauthorizedResponse = response;
+    });
+    assert.deepEqual(unauthorizedResponse, { success: false, error: 'You are not authorized to rename this room' });
+
+    const valid = createHarness('client-1');
+    let response: { success: boolean; room?: Room } | undefined;
+    await valid.socket.invoke('rename_room', { roomId: 'room-1', name: '  Renamed Room  ' }, (result: typeof response) => {
+      response = result;
+    });
+
+    assert.equal(response?.success, true);
+    assert.equal(response?.room?.name, 'Renamed Room');
+    assert.equal(valid.store.rooms[0].name, 'Renamed Room');
+    assert.deepEqual(valid.io.roomEmits, [
+      { roomId: 'client-1', event: 'room_updated', args: [valid.store.rooms[0]] },
+      { roomId: 'room-1', event: 'room_updated', args: [valid.store.rooms[0]] },
     ]);
   });
 

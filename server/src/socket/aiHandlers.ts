@@ -23,6 +23,22 @@ const getE2EFakeAIChunkDelayMs = () => {
 
 const wait = (delayMs: number) => new Promise(resolve => setTimeout(resolve, delayMs));
 
+type AIRequestData = {
+  roomId: string;
+  systemPrompt?: string;
+  roleName?: string;
+  model?: string;
+  editedMessageId?: string;
+  retryForMessageId?: string;
+};
+
+type EditMessageAndAskAIData = AIRequestData & {
+  messageId: string;
+  newContent: string;
+};
+
+type AIAckCallback = (response: { success: boolean; messageId?: string; error?: string }) => void;
+
 export function registerAIHandlers({
   io,
   socket,
@@ -32,29 +48,15 @@ export function registerAIHandlers({
   normalizeAIModel,
   getAIClientForModel,
 }: SocketConnectionContext) {
-  socket.on('ask_ai', async (data: {
-    roomId: string;
-    systemPrompt?: string;
-    roleName?: string;
-    model?: string;
-    editedMessageId?: string;
-    retryForMessageId?: string;
-  }, callback?: (response: { success: boolean; messageId?: string; error?: string }) => void) => {
-    const clientId = await store.getClientId(socket.id);
-    if (!clientId) {
-      socket.emit('error', { message: 'You are not registered' });
-      callback?.({ success: false, error: 'You are not registered' });
-      return;
-    }
-
-    if (!data.roomId) {
-      socket.emit('error', { message: 'Room ID is required for AI request' });
-      callback?.({ success: false, error: 'Room ID is required for AI request' });
-      return;
-    }
-
+  const startAIResponse = async (
+    data: AIRequestData,
+    clientId: string,
+    callback?: AIAckCallback,
+    preparedHistory?: Message[],
+  ) => {
     const { roomId, systemPrompt = DEFAULT_SYSTEM_MESSAGE, roleName = 'AI Assistant', editedMessageId, retryForMessageId } = data;
     const selectedModel = normalizeAIModel(data.model);
+    const aiMessageId = uuidv4();
 
     socketLogger.info(`Received AI request (history-based)${editedMessageId ? ' after edit ' + editedMessageId : ''}${retryForMessageId ? ' as retry for ' + retryForMessageId : ''}`, {
       socketId: socket.id,
@@ -68,43 +70,68 @@ export function registerAIHandlers({
 
     let contextMessages: Message[] = [];
     let historyUsedForContext: Message[] = [];
-    let truncationReason: 'retry' | 'edit' | 'max-context' | undefined;
 
     try {
-      const fullHistory = await store.readMessagesByRoom(roomId);
-      const selection = selectAIHistory(fullHistory, {
-        editedMessageId,
-        retryForMessageId,
-        maxContextMessages: MAX_CONTEXT_MESSAGES,
-      });
+      if (preparedHistory) {
+        historyUsedForContext = preparedHistory;
+      } else if (retryForMessageId) {
+        const truncation = await store.truncateBeforeMessage(roomId, retryForMessageId);
+        if (!truncation) {
+          openaiLogger.error('Failed to truncate persistent history before AI retry', { roomId, retryForMessageId });
+          io.to(roomId).emit('ai_stream_error', {
+            messageId: aiMessageId,
+            error: 'Sorry, unable to update message history before generating a response.',
+            roomId,
+          });
+          callback?.({ success: false, error: 'Unable to update message history before generating a response' });
+          return;
+        }
 
-      historyUsedForContext = selection.historyUsedForContext;
-      contextMessages = selection.contextMessages;
-      truncationReason = selection.truncationReason;
-
-      if (retryForMessageId) {
-        if (selection.truncationReason === 'retry') {
+        historyUsedForContext = truncation.messages;
+        if (truncation.targetFound) {
           openaiLogger.info('Truncating message history for retry', {
             roomId,
             retryForMessageId,
-            originalCount: fullHistory.length,
             newCount: historyUsedForContext.length,
           });
+          io.to(truncation.room.creatorId).emit('room_updated', truncation.room);
+          io.to(roomId).emit('message_history', truncation.messages);
         } else {
           openaiLogger.warn('Retry message ID not found in history, using full history', { roomId, retryForMessageId });
         }
       } else if (editedMessageId) {
-        if (selection.truncationReason === 'edit') {
+        const truncation = await store.truncateAfterMessage(roomId, editedMessageId);
+        if (!truncation) {
+          openaiLogger.error('Failed to truncate persistent history after edit before AI request', { roomId, editedMessageId });
+          io.to(roomId).emit('ai_stream_error', {
+            messageId: aiMessageId,
+            error: 'Sorry, unable to update message history before generating a response.',
+            roomId,
+          });
+          callback?.({ success: false, error: 'Unable to update message history before generating a response' });
+          return;
+        }
+
+        historyUsedForContext = truncation.messages;
+        if (truncation.targetFound) {
           openaiLogger.info('Truncating message history after edit', {
             roomId,
             editedMessageId,
-            originalCount: fullHistory.length,
             newCount: historyUsedForContext.length,
           });
+          io.to(truncation.room.creatorId).emit('room_updated', truncation.room);
+          io.to(roomId).emit('message_history', truncation.messages);
         } else {
           openaiLogger.warn('Edited message ID not found in history, using full history', { roomId, editedMessageId });
         }
+      } else {
+        historyUsedForContext = await store.readMessagesByRoom(roomId);
       }
+
+      const selection = selectAIHistory(historyUsedForContext, {
+        maxContextMessages: MAX_CONTEXT_MESSAGES,
+      });
+      contextMessages = selection.contextMessages;
 
       if (historyUsedForContext.length === 0) {
         openaiLogger.warn('History for context is empty after processing.', { roomId, editedMessageId, retryForMessageId });
@@ -124,28 +151,12 @@ export function registerAIHandlers({
 
     openaiLogger.debug('contextMessages', contextMessages);
 
-    const aiMessageId = uuidv4();
     const initialAiMessage = createAIPlaceholderMessage({
       id: aiMessageId,
       roomId,
       roleName,
       model: selectedModel,
     });
-
-    if ((truncationReason === 'retry' || truncationReason === 'edit') && historyUsedForContext.length > 0) {
-      const updatedRoom = await store.saveMessageHistory(roomId, historyUsedForContext);
-      if (!updatedRoom) {
-        openaiLogger.error('Failed to truncate persistent history before AI request', { roomId, truncationReason, editedMessageId, retryForMessageId });
-        io.to(roomId).emit('ai_stream_error', {
-          messageId: aiMessageId,
-          error: 'Sorry, unable to update message history before generating a response.',
-          roomId,
-        });
-        callback?.({ success: false, error: 'Unable to update message history before generating a response' });
-        return;
-      }
-      io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
-    }
 
     const saveAIMessage = async (message: Message, logLabel: string): Promise<boolean> => {
       try {
@@ -417,5 +428,58 @@ export function registerAIHandlers({
         roomId,
       });
     }
+  };
+
+  socket.on('ask_ai', async (data: AIRequestData, callback?: AIAckCallback) => {
+    const clientId = await store.getClientId(socket.id);
+    if (!clientId) {
+      socket.emit('error', { message: 'You are not registered' });
+      callback?.({ success: false, error: 'You are not registered' });
+      return;
+    }
+
+    if (!data.roomId) {
+      socket.emit('error', { message: 'Room ID is required for AI request' });
+      callback?.({ success: false, error: 'Room ID is required for AI request' });
+      return;
+    }
+
+    await startAIResponse(data, clientId, callback);
+  });
+
+  socket.on('edit_message_and_ask_ai', async (data: EditMessageAndAskAIData, callback?: AIAckCallback) => {
+    const clientId = await store.getClientId(socket.id);
+    if (!clientId) {
+      socket.emit('error', { message: 'You are not registered' });
+      callback?.({ success: false, error: 'You are not registered' });
+      return;
+    }
+
+    if (!data.roomId || !data.messageId || typeof data.newContent !== 'string') {
+      callback?.({ success: false, error: 'Missing required fields' });
+      return;
+    }
+
+    const editResult = await store.updateMessageAndTruncateAfter(data.roomId, data.messageId, data.newContent);
+    if (!editResult) {
+      callback?.({ success: false, error: 'Failed to save edited message' });
+      return;
+    }
+
+    if (!editResult.targetFound || !editResult.updatedMessage) {
+      callback?.({ success: false, error: 'Message not found' });
+      return;
+    }
+
+    io.to(editResult.room.creatorId).emit('room_updated', editResult.room);
+    io.to(data.roomId).emit('message_edited', editResult.updatedMessage);
+    io.to(data.roomId).emit('message_history', editResult.messages);
+
+    await startAIResponse({
+      roomId: data.roomId,
+      systemPrompt: data.systemPrompt,
+      roleName: data.roleName,
+      model: data.model,
+    }, clientId, callback, editResult.messages);
   });
 }
