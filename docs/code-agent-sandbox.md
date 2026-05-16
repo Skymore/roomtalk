@@ -1,6 +1,6 @@
 # Coco Code Agent Sandbox 方案
 
-> 状态：实施计划
+> 状态：分阶段实施中
 > 日期：2026-05-16
 > 范围：RoomTalk 中新增 Coco 代码助手房间
 > 关键约束：文件/进程沙盒仍然必须存在；沙盒内运行现有 Coco 助手，而不是在 RoomTalk 里重写代码 agent。
@@ -633,6 +633,26 @@ E2E 默认使用 fake runner：
 
 ## 11. 阶段计划和验收标准
 
+### 11.0 当前进度
+
+| Phase | 状态 | Commit | 结果 |
+| --- | --- | --- | --- |
+| Phase 0：文档、边界和 Coco 适配点确认 | 完成 | `6069d5e docs: plan coco sandbox integration` | 方案、边界、runner 协议和 review 规则已落文档 |
+| Phase 1：Runner Contract 和 fake runner | 完成 | `5444525 feat: add coco runner contract` | runner contract、JSONL 解析、fake runner 测试已完成 |
+| Phase 2：类型、迁移和持久化 | 完成 | `275c2f3 feat: add coco persistence primitives` | 新字段、migration、store 原语和 recovery 基础已完成 |
+| Phase 3：沙盒生命周期 | 完成 | `fdf906c feat: add coco sandbox lifecycle` | fake/E2B sandbox lifecycle、CAS、recovery、destroy 路径已完成 |
+| Phase 4：Coco ask_ai 主链路 | 完成 | `cbce88c feat: route coco ask ai turns` | Coco 房间 ask_ai 主链路、运行锁、事件持久化和广播已完成 |
+| Phase 5：前端 Coco UI | 待执行 | 待提交 | 创建入口、状态展示、工具消息组件和移动端适配 |
+| Phase 6：真实 Coco runner 和沙盒镜像 | 待执行 | 待提交 | 沙盒内运行 `/Users/sky/projects/coco` 对应固定版本 Coco |
+| Phase 7：灰度上线和回滚 | 待执行 | 待提交 | feature flag、allowlist、生产 smoke、回滚开关 |
+
+后续执行规则：
+
+1. 每个 Phase 单独实现、测试、Claude Code Opus 4.7 只读 review、修复高优先级问题、提交。
+2. 任何 Phase 的验收标准不满足，不进入下一 Phase。
+3. 真实 Coco 集成不能绕过文件/进程沙盒；RoomTalk 只编排沙盒和 runner 协议。
+4. UI 改动必须同时检查桌面端和移动端，不允许横向溢出、底部控件遮挡或弹层超出视口。
+
 ### Phase 0：文档、边界和 Coco 适配点确认
 
 范围：
@@ -857,22 +877,86 @@ COCO_MODEL_PROXY_TOKEN_SECRET=
 
 ---
 
-## 16. 当前开放问题
+## 16. 当前决策和开放问题
 
-1. `roomtalk_coco_runner` 是放进 RoomTalk repo，还是放进 Coco repo 作为官方 headless/web adapter？这个问题必须在 Phase 1 前定。
-2. Coco 是否直接增加 `on_tool_result` callback？这个问题必须在 Phase 1 前定 API 形状。
-3. 第一个真实沙盒模板需要预装哪些语言环境：Node、Python、Git 是否足够？
-4. 文件上传到 Coco workspace 是否进入 MVP？
-5. 沙盒过期后默认自动重建，还是要求用户手动 Reset？
-6. `acceptEdits` 是否默认允许 Shell，还是需要 RoomTalk 自己做一层 command approval？这个问题必须在真实沙盒前解决。
+### 16.1 已定决策
+
+1. `roomtalk_coco_runner` 的产品边界在 RoomTalk：RoomTalk 管理房间、权限、持久化、沙盒生命周期和 JSONL 协议。
+2. Coco 的代码助手能力不在 RoomTalk 重写：沙盒内运行现有 Coco 能力。
+3. Phase 5 先完成 fake runner UI 和 E2E 可视链路；真实 Coco 放到 Phase 6。
+4. `acceptEdits` 不等于无限制宿主执行；真实 Shell 只能在沙盒内运行，且不能注入 RoomTalk 服务端 secrets。
+5. 真实沙盒前必须固定 Coco 版本来源，不能生产依赖开发机路径。
+
+### 16.2 仍需在 Phase 6 前关闭的问题
+
+1. `roomtalk_coco_runner` 的代码最终放在 RoomTalk repo 还是 Coco repo：Phase 6 实现前必须确定。
+2. Coco 是否直接增加 `on_tool_result` callback，还是 runner 从现有 `tool_log` 衍生工具结果事件：Phase 6 实现前必须确定。
+3. 第一个真实沙盒模板预装范围：Node、Python、Git 是最小集，是否还要预装常见包管理器缓存需要按 smoke 结果决定。
+4. 文件上传到 Coco workspace 是否进入 MVP：Phase 5/6 不默认做，除非另开独立验收。
+5. 沙盒过期后默认自动重建，还是要求用户手动 Reset：Phase 6 按 TTL smoke 和成本策略定。
+6. Shell 是否需要 RoomTalk command approval：真实生产打开前必须决策；本地/测试沙盒可以先用 allowlist 和 scoped key 限制。
 
 ---
 
-## 17. 下一步
+## 17. 后续执行计划
 
-建议下一步只做 Phase 0 的收尾：
+### Step 1：提交计划更新
 
-1. 和 Coco repo 对齐 headless runner 的最小改动。
-2. 确定 runner 放在哪个 repo。
-3. 确定 `on_tool_result` API 和 Shell/key 策略。
-4. 进入 Phase 1：实现 runner contract 和 fake runner。
+验收标准：
+
+- 本文档反映当前 Phase 0-4 已完成状态。
+- 剩余 Phase 5-7 有明确范围和验收标准。
+- 提交只包含计划文档更新。
+
+### Step 2：Phase 5 前端 Coco UI
+
+执行顺序：
+
+1. 后端房间创建接口支持 `type: 'coco'`。
+2. 前端类型和 socket contract 支持 Coco room、sandbox 状态、工具消息类型。
+3. 创建房间弹窗增加 Chat/Coco 选择。
+4. 房间列表和聊天 header 增加 Coco badge、sandbox/coco 状态。
+5. 消息流增加 `tool_call`、`tool_result`、`sandbox_status` 组件。
+6. 补测试和 fake runner E2E。
+
+验收标准：
+
+- `server` 单测和构建通过。
+- `client-heroui` 单测和构建通过。
+- fake runner Coco E2E 通过。
+- 桌面端和移动端浏览器检查无横向溢出、菜单遮挡和弹层超视口。
+- Claude Code Opus 4.7 review 无 blocking/high findings。
+
+### Step 3：Phase 6 真实 Coco runner 和沙盒镜像
+
+执行顺序：
+
+1. 在沙盒内安装固定版本 Coco，或构建可复制的 runner artifact。
+2. 实现 `roomtalk_coco_runner` JSONL adapter。
+3. E2B service 从 skeleton 接到真实 create/connect/start runner。
+4. 接入 scoped provider key 或 model proxy。
+5. 增加 real Coco smoke，默认仅在显式环境变量开启时运行。
+
+验收标准：
+
+- fake runner 全部测试仍通过。
+- 有真实 sandbox/key 时 real smoke 通过。
+- 无真实 sandbox/key 时测试稳定跳过，UI 入口按 feature flag 禁用。
+- 沙盒内 Coco 不能访问 allowed paths 之外文件。
+- Claude Code Opus 4.7 review 无 blocking/high findings。
+
+### Step 4：Phase 7 灰度上线和回滚
+
+执行顺序：
+
+1. 配置 `COCO_ENABLED=false` 默认关闭。
+2. 配置 allowlist、secrets 和生产 smoke。
+3. 部署后先验证普通聊天回归，再 allowlist 打开 Coco。
+4. 记录回滚流程和 sandbox 清理流程。
+
+验收标准：
+
+- 关闭 flag 可隐藏 Coco 入口并阻断后端 ask。
+- 普通聊天、房间创建、编辑、保存、删除链路不回归。
+- 生产 smoke 有明确命令和预期输出。
+- Claude Code Opus 4.7 review 无 blocking/high findings。
