@@ -1,0 +1,306 @@
+import assert from 'assert/strict';
+import { describe, it } from 'node:test';
+import { AICost, Message, Room, RoomAICostTotal, RoomSandboxStatus } from '../types';
+import { RoomStore } from '../repositories/store';
+import { CocoSandboxLifecycleService } from './cocoSandboxLifecycle';
+import { FakeCocoSandboxService } from './fakeCocoSandboxService';
+
+class MemoryRoomStore implements RoomStore {
+  rooms = new Map<string, Room>();
+  messages = new Map<string, Message[]>();
+  failNextSaveRoom = false;
+  forceStatusBeforeNextSandboxCas: RoomSandboxStatus | null = null;
+
+  constructor(initialRooms: Room[] = []) {
+    initialRooms.forEach(room => this.rooms.set(room.id, room));
+  }
+
+  async generateUniqueRoomId() { return 'room-1'; }
+  async appendMessage(message: Message) { return this.appendMessageWithAtomicPosition(message); }
+  async appendMessageWithAtomicPosition(message: Message) {
+    const room = this.rooms.get(message.roomId);
+    if (!room) return null;
+    this.messages.set(message.roomId, [...(this.messages.get(message.roomId) || []), message]);
+    return room;
+  }
+  async upsertMessage(message: Message) {
+    const room = this.rooms.get(message.roomId);
+    if (!room) return null;
+    const messages = this.messages.get(message.roomId) || [];
+    const index = messages.findIndex(item => item.id === message.id);
+    if (index === -1) messages.push(message);
+    else messages[index] = message;
+    this.messages.set(message.roomId, messages);
+    return room;
+  }
+  async updateMessageContent() { return null; }
+  async deleteMessageById() { return null; }
+  async truncateBeforeMessage() { return null; }
+  async truncateAfterMessage() { return null; }
+  async updateMessageAndTruncateAfter() { return null; }
+  async saveMessageHistory(roomId: string, messages: Message[]) {
+    const room = this.rooms.get(roomId);
+    if (!room) return null;
+    this.messages.set(roomId, messages);
+    return room;
+  }
+  async clearRoomMessages(roomId: string) { const count = this.messages.get(roomId)?.length || 0; this.messages.delete(roomId); return count; }
+  async readMessagesByRoom(roomId: string) { return this.messages.get(roomId) || []; }
+  async readRoomAICost(roomId: string): Promise<RoomAICostTotal> { return { roomId, currency: 'USD', totalUsd: 0 }; }
+  async incrementRoomAICost(roomId: string, _cost: AICost | null): Promise<RoomAICostTotal> { return { roomId, currency: 'USD', totalUsd: 0 }; }
+  async saveRoom(room: Room) {
+    if (this.failNextSaveRoom) {
+      this.failNextSaveRoom = false;
+      return null;
+    }
+    const savedRoom = { ...(this.rooms.get(room.id) || {}), ...room };
+    this.rooms.set(room.id, savedRoom as Room);
+    return savedRoom as Room;
+  }
+  async readRoomsByUser(clientId: string) { return [...this.rooms.values()].filter(room => room.creatorId === clientId); }
+  async getRoomById(roomId: string) { return this.rooms.get(roomId) || null; }
+  async updateRoomName(roomId: string, creatorId: string, name: string) {
+    const room = this.rooms.get(roomId);
+    if (!room || room.creatorId !== creatorId) return null;
+    return this.saveRoom({ ...room, name });
+  }
+  async deleteRoom(roomId: string, _creatorId: string) { this.rooms.delete(roomId); this.messages.delete(roomId); }
+  async countRooms() { return this.rooms.size; }
+  async compareAndSetRoomSandboxStatus(roomId: string, expectedStatuses: RoomSandboxStatus[], nextStatus: RoomSandboxStatus, updatedAt = new Date().toISOString()) {
+    let room = this.rooms.get(roomId);
+    if (!room) return null;
+    if (this.forceStatusBeforeNextSandboxCas) {
+      room = { ...room, sandboxStatus: this.forceStatusBeforeNextSandboxCas };
+      this.rooms.set(roomId, room);
+      this.forceStatusBeforeNextSandboxCas = null;
+    }
+    const current = room.sandboxStatus || 'none';
+    if (!expectedStatuses.includes(current)) return null;
+    const updatedRoom = { ...room, sandboxStatus: nextStatus, sandboxUpdatedAt: updatedAt };
+    this.rooms.set(roomId, updatedRoom);
+    return updatedRoom;
+  }
+  async findInterruptedCocoRooms() {
+    return [...this.rooms.values()].filter(room => room.type === 'coco' && (room.sandboxStatus === 'creating' || room.cocoStatus === 'running'));
+  }
+  async findDanglingToolCalls() { return []; }
+  async updateRoomMemberCount() { return 0; }
+  async getRoomMemberCount() { return 0; }
+  async storeClientSession() {}
+  async getClientId() { return null; }
+  async removeClientSession() {}
+  async storeUserRooms() {}
+  async getUserRooms() { return []; }
+}
+
+const logger = {
+  debug() {},
+  error() {},
+  info() {},
+  warn() {},
+};
+
+const room = (overrides: Partial<Room> = {}): Room => ({
+  id: 'room-1',
+  name: 'Room 1',
+  description: '',
+  createdAt: '2026-05-03T00:00:00.000Z',
+  lastActivityAt: '2026-05-03T00:00:00.000Z',
+  creatorId: 'client-1',
+  type: 'coco',
+  ...overrides,
+});
+
+const createLifecycle = (store: MemoryRoomStore, sandboxService = new FakeCocoSandboxService(() => new Date('2026-05-03T00:00:00.000Z')), now = () => new Date('2026-05-03T00:00:00.000Z')) => ({
+  sandboxService,
+  lifecycle: new CocoSandboxLifecycleService(store, sandboxService, logger as any, {
+    sandboxTtlMs: 60 * 60 * 1000,
+    turnTimeoutMs: 5 * 60 * 1000,
+    creatingStaleMs: 2 * 60 * 1000,
+    maxActiveSandboxes: 10,
+    maxActiveSandboxesPerUser: 10,
+  }, now),
+});
+
+type EnsureSandboxResult = Awaited<ReturnType<CocoSandboxLifecycleService['ensureReadySandbox']>>;
+
+const failureReason = (result: EnsureSandboxResult) => {
+  if (result.ok) {
+    throw new Error('Expected ensureReadySandbox to fail');
+  }
+  return result.reason;
+};
+
+describe('CocoSandboxLifecycleService', () => {
+  it('creates a sandbox once and reconnects on later ensure calls', async () => {
+    const store = new MemoryRoomStore([room()]);
+    const { lifecycle, sandboxService } = createLifecycle(store);
+
+    const first = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+    assert.equal(first.ok, true);
+    assert.equal(first.ok && first.created, true);
+    assert.equal(await sandboxService.countActiveSandboxes(), 1);
+    const savedRoom = await store.getRoomById('room-1');
+    assert.equal(savedRoom?.sandboxStatus, 'ready');
+    assert.equal(savedRoom?.sandboxId, first.ok && first.handle.id);
+
+    const second = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+    assert.equal(second.ok, true);
+    assert.equal(second.ok && second.created, false);
+    assert.equal(second.ok && first.ok && second.handle.id, first.ok && first.handle.id);
+    assert.equal(await sandboxService.countActiveSandboxes(), 1);
+  });
+
+  it('rejects missing, non-Coco, and unauthorized rooms', async () => {
+    const store = new MemoryRoomStore([room({ id: 'chat-room', type: undefined })]);
+    const { lifecycle } = createLifecycle(store);
+
+    assert.deepEqual(await lifecycle.ensureReadySandbox('missing', 'client-1'), { ok: false, reason: 'missing_room' });
+    assert.equal(failureReason(await lifecycle.ensureReadySandbox('chat-room', 'client-1')), 'not_coco_room');
+    assert.equal(failureReason(await lifecycle.ensureReadySandbox('chat-room', 'client-2')), 'not_coco_room');
+
+    await store.saveRoom(room({ id: 'coco-room' }));
+    assert.equal(failureReason(await lifecycle.ensureReadySandbox('coco-room', 'client-2')), 'forbidden');
+  });
+
+  it('holds fresh creating locks but recovers stale creating rooms', async () => {
+    const store = new MemoryRoomStore([
+      room({ sandboxStatus: 'creating', sandboxUpdatedAt: '2026-05-03T00:00:30.000Z' }),
+    ]);
+    const { lifecycle, sandboxService } = createLifecycle(store, new FakeCocoSandboxService(() => new Date('2026-05-03T00:01:00.000Z')), () => new Date('2026-05-03T00:01:00.000Z'));
+
+    assert.equal(failureReason(await lifecycle.ensureReadySandbox('room-1', 'client-1')), 'creating');
+    assert.equal(await sandboxService.countActiveSandboxes(), 0);
+
+    await store.saveRoom(room({ sandboxStatus: 'creating', sandboxUpdatedAt: '2026-05-02T23:58:00.000Z' }));
+    const recovered = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+    assert.equal(recovered.ok, true);
+    assert.equal(recovered.ok && recovered.created, true);
+    assert.equal((await store.getRoomById('room-1'))?.sandboxStatus, 'ready');
+  });
+
+  it('marks expired reconnects and near-expiry sandboxes before creating a new sandbox', async () => {
+    const store = new MemoryRoomStore([
+      room({ sandboxStatus: 'ready', sandboxId: 'missing-sandbox', sandboxUpdatedAt: '2026-05-03T00:00:00.000Z' }),
+    ]);
+    const { lifecycle } = createLifecycle(store, new FakeCocoSandboxService(() => new Date('2026-05-03T00:56:00.000Z')), () => new Date('2026-05-03T00:56:00.000Z'));
+
+    const reconnectRecovered = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+    assert.equal(reconnectRecovered.ok, true);
+    assert.equal(reconnectRecovered.ok && reconnectRecovered.created, true);
+    const firstNewSandboxId = (await store.getRoomById('room-1'))?.sandboxId;
+    assert.notEqual(firstNewSandboxId, 'missing-sandbox');
+
+    await store.saveRoom(room({ sandboxStatus: 'ready', sandboxId: firstNewSandboxId, sandboxUpdatedAt: '2026-05-03T00:00:00.000Z' }));
+    const ttlRecovered = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+    assert.equal(ttlRecovered.ok, true);
+    assert.equal(ttlRecovered.ok && ttlRecovered.created, true);
+    assert.notEqual((await store.getRoomById('room-1'))?.sandboxId, firstNewSandboxId);
+  });
+
+  it('destroys a newly-created sandbox when persisting ready state fails', async () => {
+    const store = new MemoryRoomStore([room()]);
+    const { lifecycle, sandboxService } = createLifecycle(store);
+    store.failNextSaveRoom = true;
+
+    const result = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+    assert.equal(failureReason(result), 'store_conflict');
+    assert.equal(sandboxService.destroyedSandboxIds.length, 1);
+    assert.equal((await store.getRoomById('room-1'))?.sandboxStatus, 'error');
+  });
+
+  it('enforces global and per-user active sandbox limits before creating', async () => {
+    const store = new MemoryRoomStore([room({ id: 'room-1' }), room({ id: 'room-2' })]);
+    const sandboxService = new FakeCocoSandboxService(() => new Date('2026-05-03T00:00:00.000Z'));
+    await sandboxService.create({ roomId: 'existing', creatorId: 'client-1', ttlMs: 60_000 });
+    const lifecycle = new CocoSandboxLifecycleService(store, sandboxService, logger as any, {
+      sandboxTtlMs: 60_000,
+      turnTimeoutMs: 1_000,
+      creatingStaleMs: 1_000,
+      maxActiveSandboxes: 1,
+      maxActiveSandboxesPerUser: 10,
+    }, () => new Date('2026-05-03T00:00:00.000Z'));
+
+    assert.equal(failureReason(await lifecycle.ensureReadySandbox('room-1', 'client-1')), 'limit_exceeded');
+
+    const perUserLifecycle = new CocoSandboxLifecycleService(store, sandboxService, logger as any, {
+      sandboxTtlMs: 60_000,
+      turnTimeoutMs: 1_000,
+      creatingStaleMs: 1_000,
+      maxActiveSandboxes: 10,
+      maxActiveSandboxesPerUser: 1,
+    }, () => new Date('2026-05-03T00:00:00.000Z'));
+    assert.equal(failureReason(await perUserLifecycle.ensureReadySandbox('room-2', 'client-1')), 'limit_exceeded');
+  });
+
+  it('recovers interrupted creating and running room states', async () => {
+    const store = new MemoryRoomStore([
+      room({ id: 'creating-room', sandboxStatus: 'creating', sandboxUpdatedAt: '2026-05-03T00:00:00.000Z' }),
+      room({ id: 'running-room', sandboxStatus: 'ready', cocoStatus: 'running' }),
+      room({ id: 'both-room', sandboxStatus: 'creating', cocoStatus: 'running', sandboxUpdatedAt: '2026-05-03T00:00:00.000Z' }),
+      room({ id: 'ready-room', sandboxStatus: 'ready', cocoStatus: 'idle' }),
+    ]);
+    const { lifecycle } = createLifecycle(store);
+
+    assert.equal(await lifecycle.recoverInterruptedSandboxes(), 3);
+    assert.equal((await store.getRoomById('creating-room'))?.sandboxStatus, 'error');
+    assert.equal((await store.getRoomById('running-room'))?.cocoStatus, 'error');
+    assert.equal((await store.getRoomById('both-room'))?.sandboxStatus, 'error');
+    assert.equal((await store.getRoomById('both-room'))?.cocoStatus, 'error');
+    assert.equal((await store.getRoomById('ready-room'))?.cocoStatus, 'idle');
+  });
+
+  it('destroys existing room sandboxes before destructive room cleanup', async () => {
+    const store = new MemoryRoomStore([room()]);
+    const { lifecycle, sandboxService } = createLifecycle(store);
+    const ensured = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+    assert.equal(ensured.ok, true);
+
+    const result = await lifecycle.destroyRoomSandbox('room-1', 'client-1');
+    assert.equal(result.destroyed, true);
+    assert.deepEqual(sandboxService.destroyedSandboxIds, [ensured.ok ? ensured.handle.id : '']);
+    assert.equal((await store.getRoomById('room-1'))?.sandboxStatus, 'expired');
+
+    const recreated = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+    assert.equal(recreated.ok, true);
+    assert.equal(recreated.ok && recreated.created, true);
+    assert.notEqual(recreated.ok ? recreated.handle.id : '', ensured.ok ? ensured.handle.id : '');
+  });
+
+  it('does not destroy sandboxes while room creation is still in progress', async () => {
+    const store = new MemoryRoomStore([
+      room({ sandboxStatus: 'creating', sandboxId: 'old-sandbox', sandboxUpdatedAt: '2026-05-03T00:00:00.000Z' }),
+    ]);
+    const { lifecycle, sandboxService } = createLifecycle(store);
+
+    const result = await lifecycle.destroyRoomSandbox('room-1', 'client-1');
+    assert.equal(result.destroyed, false);
+    assert.deepEqual(sandboxService.destroyedSandboxIds, []);
+    assert.equal((await store.getRoomById('room-1'))?.sandboxStatus, 'creating');
+  });
+
+  it('keeps sandbox state unchanged when destroy fails', async () => {
+    const store = new MemoryRoomStore([room()]);
+    const { lifecycle, sandboxService } = createLifecycle(store);
+    const ensured = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+    assert.equal(ensured.ok, true);
+    sandboxService.failNext('destroy');
+
+    const result = await lifecycle.destroyRoomSandbox('room-1', 'client-1');
+    assert.equal(result.destroyed, false);
+    assert.match(result.error?.message || '', /destroy failed/);
+    assert.equal((await store.getRoomById('room-1'))?.sandboxStatus, 'ready');
+  });
+
+  it('does not overwrite a concurrent creating transition while destroying a previous sandbox', async () => {
+    const store = new MemoryRoomStore([room()]);
+    const { lifecycle } = createLifecycle(store);
+    const ensured = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+    assert.equal(ensured.ok, true);
+    store.forceStatusBeforeNextSandboxCas = 'creating';
+
+    const result = await lifecycle.destroyRoomSandbox('room-1', 'client-1');
+    assert.equal(result.destroyed, true);
+    assert.equal((await store.getRoomById('room-1'))?.sandboxStatus, 'creating');
+  });
+});
