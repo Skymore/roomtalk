@@ -18,6 +18,47 @@ import { AIRoleManager } from './AIRoleManager';
 import { AIModelOption, formatModelPrice, getProviderLabel, isPremiumAIModel } from '../utils/aiModels';
 import { AIRole, getAIRoleDisplayName } from '../utils/aiRoles';
 
+const formatPriceRate = (value: number | undefined) => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
+  if (value >= 10) return `$${value.toFixed(0)}`;
+  if (value >= 1) return `$${value.toFixed(2).replace(/\.?0+$/, '')}`;
+  return `$${value.toFixed(3).replace(/\.?0+$/, '')}`;
+};
+
+const ModelPriceGrid: React.FC<{ model: AIModelOption }> = ({ model }) => {
+  if (!model.pricing) {
+    return (
+      <div className="mt-1 text-[11px] leading-4 text-[#87867f] dark:text-[#b0aea5]">
+        —
+      </div>
+    );
+  }
+
+  const priceItems = [
+    { label: 'IN', value: formatPriceRate(model.pricing.inputPerMillion) },
+    { label: 'CACHE', value: formatPriceRate(model.pricing.cachedInputPerMillion) },
+    { label: 'OUT', value: formatPriceRate(model.pricing.outputPerMillion) },
+  ];
+
+  return (
+    <div className="mt-1 grid w-full grid-cols-3 gap-x-3 border-t border-[#dedbd0]/60 pt-1 dark:border-[#4d4c48]/55">
+      {priceItems.map((item) => (
+        <span
+          key={item.label}
+          className="min-w-0"
+        >
+          <span className="block truncate text-[8px] font-semibold leading-3 text-[#87867f] dark:text-[#8f8d86]">
+            {item.label}
+          </span>
+          <span className="block truncate text-[10px] font-semibold leading-3 text-[#141413] dark:text-[#faf9f5]">
+            {item.value === '—' ? item.value : `${item.value}/M`}
+          </span>
+        </span>
+      ))}
+    </div>
+  );
+};
+
 interface MessageInputAISettingsButtonProps {
   onOpen: () => void;
   isDisabled: boolean;
@@ -32,7 +73,7 @@ export const MessageInputAISettingsButton: React.FC<MessageInputAISettingsButton
       size="sm"
       variant="light"
       aria-label={t('aiSettings')}
-      className="rounded-lg text-[#5e5d59] dark:text-[#b0aea5]"
+      className="h-9 w-9 min-w-9 rounded-full text-[#5e5d59] dark:text-[#b0aea5]"
       onPress={onOpen}
       isDisabled={isDisabled}
     >
@@ -90,6 +131,12 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   const [pendingPremiumModelId, setPendingPremiumModelId] = React.useState<string | null>(null);
   const [premiumConfirmationStep, setPremiumConfirmationStep] = React.useState<1 | 2>(1);
   const pendingPremiumModel = aiModels.find(model => model.id === pendingPremiumModelId);
+  const selectedModel = aiModels.find(model => model.id === (selectedAIModel || defaultAIModel));
+  const compactItemClassNames = {
+    base: "w-full px-2 py-2",
+    title: "text-xs font-medium leading-4 text-[#141413] dark:text-[#faf9f5]",
+    wrapper: "min-w-0 w-full",
+  };
 
   const closePremiumConfirmation = () => {
     setPendingPremiumModelId(null);
@@ -126,8 +173,8 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
 
   return (
     <>
-      <div className="mt-2 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-        <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-2 lg:mr-2">
+      <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
           <Select
             size="sm"
             aria-label={t('selectAIRole')}
@@ -136,14 +183,22 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               const selectedKey = Array.from(keys)[0]?.toString();
               if (selectedKey) onRoleChange(selectedKey);
             }}
-            className="w-full sm:max-w-xs"
+            className="min-w-0 flex-[0.9]"
             classNames={{
-              trigger: "bg-[#e8e6dc] text-[#4d4c48] data-[hover=true]:bg-[#dedbd0] dark:bg-[#30302e] dark:text-[#faf9f5]",
+              trigger: "h-9 min-h-9 rounded-full bg-transparent px-2 text-[#4d4c48] data-[hover=true]:bg-[#e8e6dc] dark:text-[#faf9f5] dark:data-[hover=true]:bg-[#3a3a38]",
+              value: "truncate text-[11px] sm:text-xs",
+              selectorIcon: "text-[#87867f] dark:text-[#b0aea5]",
+              popoverContent: "border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
+              listboxWrapper: "relative max-h-[14rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]",
             }}
             isDisabled={isSending || isAiProcessing}
           >
             {roles.map((role) => (
-              <SelectItem key={role.id} startContent={<Icon icon={role.icon} />}>
+              <SelectItem
+                key={role.id}
+                classNames={compactItemClassNames}
+                startContent={<Icon icon={role.icon} className="h-3.5 w-3.5" />}
+              >
                 {getAIRoleDisplayName(role, t)}
               </SelectItem>
             ))}
@@ -157,36 +212,67 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               const selectedKey = Array.from(keys)[0]?.toString();
               if (selectedKey) requestModelChange(selectedKey);
             }}
-            className="w-full sm:max-w-xs"
+            className="min-w-0 flex-[1.25]"
             classNames={{
-              trigger: "bg-[#e8e6dc] text-[#4d4c48] data-[hover=true]:bg-[#dedbd0] dark:bg-[#30302e] dark:text-[#faf9f5]",
-              popoverContent: "border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
-              listboxWrapper: "relative max-h-[18rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent] after:pointer-events-none after:sticky after:bottom-0 after:block after:h-8 after:bg-gradient-to-t after:from-[#faf9f5] after:to-transparent dark:after:from-[#1d1d1b]",
+              trigger: "h-9 min-h-9 rounded-full bg-transparent px-2 text-[#4d4c48] data-[hover=true]:bg-[#e8e6dc] dark:text-[#faf9f5] dark:data-[hover=true]:bg-[#3a3a38]",
+              value: "truncate text-[11px] sm:text-xs",
+              selectorIcon: "text-[#87867f] dark:text-[#b0aea5]",
+              popoverContent: "w-[min(22rem,calc(100vw-2rem))] border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
+              listbox: "w-full",
+              listboxWrapper: "relative max-h-[16rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]",
             }}
             isDisabled={isSending || isAiProcessing}
             startContent={<Icon icon="lucide:brain-circuit" />}
+            renderValue={() => (
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="min-w-0 truncate">{selectedModel?.label}</span>
+                {selectedModel?.isDefault && (
+                  <Icon
+                    icon="lucide:badge-check"
+                    aria-label={t('defaultModel')}
+                    className="flex-shrink-0 text-[#c96442] dark:text-[#ff9b76]"
+                    width={13}
+                    height={13}
+                  />
+                )}
+              </span>
+            )}
           >
             {aiModels.map((model) => (
               <SelectItem
                 key={model.id}
-                description={formatModelPrice(model)}
-                textValue={model.isDefault ? `${model.label} (${t('defaultModel')})` : model.label}
+                classNames={compactItemClassNames}
+                textValue={model.label}
               >
-                <span className="flex items-center gap-1.5">
-                  <span>{model.isDefault ? `${model.label} (${t('defaultModel')})` : model.label}</span>
-                  <span className="inline-flex items-center rounded px-1 py-px text-[9px] font-semibold leading-none border border-[#c2c0b6]/60 bg-[#e8e6dc] text-[#4d4c48] dark:border-[#4d4c48]/60 dark:bg-[#30302e] dark:text-[#b0aea5] whitespace-nowrap">
-                    {getProviderLabel(model.provider)}
+                <span className="block w-full min-w-0">
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span className="min-w-0 truncate text-xs font-medium leading-4">
+                      {model.label}
+                    </span>
+                    {model.isDefault && (
+                      <Icon
+                        icon="lucide:badge-check"
+                        aria-label={t('defaultModel')}
+                        className="flex-shrink-0 text-[#c96442] dark:text-[#ff9b76]"
+                        width={11}
+                        height={11}
+                      />
+                    )}
+                    <span className="inline-flex flex-shrink-0 items-center rounded px-1 py-px text-[9px] font-semibold leading-none border border-[#c2c0b6]/60 bg-[#e8e6dc] text-[#4d4c48] dark:border-[#4d4c48]/60 dark:bg-[#30302e] dark:text-[#b0aea5] whitespace-nowrap">
+                      {getProviderLabel(model.provider)}
+                    </span>
+                    {isPremiumAIModel(model) && (
+                      <Icon icon="lucide:gem" className="flex-shrink-0 text-warning" width={10} height={10} />
+                    )}
                   </span>
-                  {isPremiumAIModel(model) && (
-                    <Icon icon="lucide:gem" className="text-warning" width={11} height={11} />
-                  )}
+                  <ModelPriceGrid model={model} />
                 </span>
               </SelectItem>
             ))}
           </Select>
         </div>
 
-        <div className="flex justify-end gap-2">
+        <div className="flex flex-shrink-0 justify-end gap-1.5 sm:gap-2">
           <Tooltip content={`${t('askAI')} (${isMacOS ? 'Command' : 'Ctrl'}+Enter)`} placement="top">
             <Button
               color={selectedRole.color}
@@ -194,10 +280,10 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               onPress={onAskAI}
               isLoading={isAiProcessing}
               isDisabled={isSending}
-              className="bg-[#30302e] px-4 text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413]"
-              startContent={<Icon icon={selectedRole.icon} className="h-4 w-4" />}
+              className="h-9 min-w-9 rounded-full bg-[#30302e] px-2 text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413] sm:px-3"
             >
-              {t('askAI')}
+              <Icon icon={selectedRole.icon} className="h-4 w-4" />
+              <span className="hidden sm:inline">{t('askAI')}</span>
             </Button>
           </Tooltip>
 
@@ -209,10 +295,10 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               size="sm"
               isLoading={isSending}
               isDisabled={isSending || isAiProcessing || (!currentInputText.trim() && imageCount === 0)}
-              className="bg-[#c96442] px-4 text-[#faf9f5] shadow-[0_0_0_1px_#c96442]"
-              startContent={<Icon icon="lucide:send" className="h-4 w-4" />}
+              className="h-9 min-w-9 rounded-full bg-[#c96442] px-2 text-[#faf9f5] shadow-[0_0_0_1px_#c96442] sm:px-3"
             >
-              {t('send')}
+              <Icon icon="lucide:arrow-up" className="h-4 w-4" />
+              <span className="hidden sm:inline">{t('send')}</span>
             </Button>
           </Tooltip>
         </div>
