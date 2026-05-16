@@ -47,6 +47,7 @@ export function registerAIHandlers({
   openaiLogger,
   normalizeAIModel,
   getAIClientForModel,
+  cocoSessionService,
 }: SocketConnectionContext) {
   const startAIResponse = async (
     data: AIRequestData,
@@ -444,6 +445,23 @@ export function registerAIHandlers({
       return;
     }
 
+    const room = await store.getRoomById(data.roomId);
+    if (room?.type === 'coco') {
+      if (!cocoSessionService) {
+        callback?.({ success: false, error: 'Coco is unavailable' });
+        socket.emit('error', { message: 'Coco is unavailable' });
+        return;
+      }
+
+      await cocoSessionService.startTurn({
+        roomId: data.roomId,
+        clientId,
+        selectedModel: normalizeAIModel(data.model),
+        roleName: data.roleName,
+      }, callback);
+      return;
+    }
+
     await startAIResponse(data, clientId, callback);
   });
 
@@ -457,6 +475,12 @@ export function registerAIHandlers({
 
     if (!data.roomId || !data.messageId || typeof data.newContent !== 'string') {
       callback?.({ success: false, error: 'Missing required fields' });
+      return;
+    }
+
+    const room = await store.getRoomById(data.roomId);
+    if (room?.type === 'coco') {
+      callback?.({ success: false, error: 'Coco edit-and-ask is not supported' });
       return;
     }
 

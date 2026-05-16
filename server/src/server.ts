@@ -18,6 +18,11 @@ import { createAIModelRegistry, DEFAULT_AI_MODEL_ID } from './services/aiModels'
 import { registerApiRoutes } from './routes/apiRoutes';
 import { registerSocketHandlers } from './socket/registerSocketHandlers';
 import { createAIClients } from './services/aiClients';
+import { CocoSandboxLifecycleService } from './services/cocoSandboxLifecycle';
+import { CocoSessionService } from './services/cocoSessionService';
+import { COCO_RUNNER_SCHEMA_VERSION } from './services/cocoRunnerProtocol';
+import { FakeCocoRunnerClient } from './services/fakeCocoRunner';
+import { FakeCocoSandboxService } from './services/fakeCocoSandboxService';
 
 dotenv.config();
 
@@ -28,6 +33,7 @@ const postgresLogger = new Logger('PostgreSQL');
 const socketLogger = new Logger('SocketIO');
 const routeLogger = new Logger('Routes');
 const openaiLogger = new Logger('OpenAI');
+const cocoLogger = new Logger('Coco');
 
 const aiModelRegistry = createAIModelRegistry({
   defaultModelId: process.env.AI_MODEL || process.env.OPENROUTER_MODEL || DEFAULT_AI_MODEL_ID,
@@ -93,6 +99,14 @@ if (PERSISTENCE_STORE === 'postgres') {
   serverLogger.warn('Unknown PERSISTENCE_STORE value, falling back to Redis', { persistenceStore: PERSISTENCE_STORE });
 }
 
+const parsePositiveIntegerEnv = (name: string, fallback: number) => {
+  const value = Number.parseInt(process.env[name] || '', 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+};
+
+const parseCsvEnv = (value?: string) =>
+  value?.split(',').map(item => item.trim()).filter(Boolean) || [];
+
 redisClient.on('error', (err: Error) => {
   redisLogger.error('Redis connection error', { error: err.message, stack: err.stack });
 });
@@ -121,6 +135,34 @@ const io = new Server(server, {
   pingInterval: 25000 // 25秒ping一次
 });
 
+const cocoSandboxService = new FakeCocoSandboxService();
+const cocoSandboxLifecycle = new CocoSandboxLifecycleService(store, cocoSandboxService, cocoLogger, {
+  sandboxTtlMs: parsePositiveIntegerEnv('COCO_SANDBOX_TTL_MS', 60 * 60 * 1000),
+  turnTimeoutMs: parsePositiveIntegerEnv('COCO_TURN_TIMEOUT_MS', 5 * 60 * 1000),
+  creatingStaleMs: parsePositiveIntegerEnv('COCO_CREATING_STALE_MS', 2 * 60 * 1000),
+  maxActiveSandboxes: parsePositiveIntegerEnv('COCO_MAX_ACTIVE_SANDBOXES', Number.POSITIVE_INFINITY),
+  maxActiveSandboxesPerUser: parsePositiveIntegerEnv('COCO_MAX_ACTIVE_SANDBOXES_PER_USER', Number.POSITIVE_INFINITY),
+});
+const cocoSessionService = new CocoSessionService(
+  store,
+  io,
+  cocoSandboxLifecycle,
+  cocoSandboxService,
+  new FakeCocoRunnerClient([
+    { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'status', turnId: 'fake', status: 'starting', message: 'Coco fake runner starting' },
+    { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'fake-ai', delta: 'Coco fake runner received the task.' },
+    { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'fake-ai', answer: 'Coco fake runner received the task.', sessionId: 'fake-coco-session' },
+  ]),
+  cocoLogger,
+  {
+    enabled: process.env.COCO_ENABLED === 'true',
+    allowedClientIds: parseCsvEnv(process.env.COCO_ALLOWED_USER_IDS),
+    mode: process.env.COCO_MODE === 'plan' ? 'plan' : 'acceptEdits',
+    runnerCommand: process.env.COCO_RUNNER_COMMAND || 'python -m roomtalk_coco_runner',
+    allowedPaths: parseCsvEnv(process.env.COCO_ALLOWED_PATHS || '.'),
+  }
+);
+
 // 初始化 Redis、PostgreSQL schema 和 Socket.IO 适配器
 const infrastructureReady = (async () => {
   try {
@@ -142,6 +184,7 @@ const infrastructureReady = (async () => {
       serverLogger.warn('E2E data reset on startup', { persistenceStore: activePersistenceStore });
     }
     await store.failInterruptedStreamingMessages?.('Response interrupted.');
+    await cocoSandboxLifecycle.recoverInterruptedSandboxes();
     
     redisLogger.info('Connected to Redis and Socket.IO adapter initialized', { persistenceStore: activePersistenceStore });
   } catch (err) {
@@ -160,6 +203,7 @@ registerSocketHandlers({
   openaiLogger,
   normalizeAIModel,
   getAIClientForModel,
+  cocoSessionService,
 });
 
 registerApiRoutes(app, {

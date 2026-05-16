@@ -97,7 +97,12 @@ const roomActivityForMessages = (messages: Message[]) => room({
   lastActivityAt: messages[messages.length - 1]?.timestamp || room().createdAt,
 });
 
-const createHarness = (options: { rejectSaves?: boolean; rejectSaveNumbers?: number[] } = {}) => {
+const createHarness = (options: {
+  rejectSaves?: boolean;
+  rejectSaveNumbers?: number[];
+  currentRoom?: Room | null;
+  cocoSessionService?: { startTurn: (...args: any[]) => Promise<unknown> };
+} = {}) => {
   const socket = new FakeSocket();
   const io = new FakeIo();
   const store = {
@@ -109,6 +114,9 @@ const createHarness = (options: { rejectSaves?: boolean; rejectSaveNumbers?: num
     editAndTruncateCalls: [] as Array<{ roomId: string; messageId: string; newContent: string }>,
     async getClientId() {
       return 'client-1';
+    },
+    async getRoomById() {
+      return options.currentRoom === undefined ? room() : options.currentRoom;
     },
     async readMessagesByRoom(roomId: string) {
       return this.messages.filter(item => item.roomId === roomId);
@@ -185,6 +193,7 @@ const createHarness = (options: { rejectSaves?: boolean; rejectSaveNumbers?: num
     getAIClientForModel: () => {
       throw new Error('E2E fake AI should not request a real client');
     },
+    cocoSessionService: options.cocoSessionService as any,
   });
 
   return { io, socket, store };
@@ -245,6 +254,37 @@ describe('AI socket handlers', () => {
       'E2E AI response ',
       'to: hello',
     ]);
+  });
+
+  it('routes Coco room AI requests to the Coco session service', async () => {
+    const calls: unknown[][] = [];
+    const cocoSessionService = {
+      async startTurn(...args: unknown[]) {
+        calls.push(args);
+        const callback = args[1] as ((response: unknown) => void) | undefined;
+        callback?.({ success: true, messageId: 'coco-ai-1' });
+        return { success: true, messageId: 'coco-ai-1' };
+      },
+    };
+    const { socket, store } = createHarness({
+      currentRoom: room({ type: 'coco' }),
+      cocoSessionService,
+    });
+
+    let response: unknown;
+    await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id }, (ack: unknown) => {
+      response = ack;
+    });
+
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0][0], {
+      roomId: 'room-1',
+      clientId: 'client-1',
+      selectedModel,
+      roleName: undefined,
+    });
+    assert.deepEqual(response, { success: true, messageId: 'coco-ai-1' });
+    assert.equal(store.upsertedMessages.length, 0);
   });
 
   it('emits an error and does not stream when the placeholder cannot be persisted', async () => {
@@ -372,5 +412,23 @@ describe('AI socket handlers', () => {
     assert.equal(store.messages[2].status, 'complete');
     assert.equal(store.messages[2].content, 'E2E AI response to: edited prompt');
     assert.deepEqual(response, { success: true, messageId: store.upsertedMessages[0].id });
+  });
+
+  it('does not route Coco edit-and-ask through the ordinary chat AI path', async () => {
+    const { socket, store } = createHarness({ currentRoom: room({ type: 'coco' }) });
+
+    let response: unknown;
+    await socket.invoke('edit_message_and_ask_ai', {
+      roomId: 'room-1',
+      messageId: 'message-1',
+      newContent: 'edited prompt',
+      model: selectedModel.id,
+    }, (ack: unknown) => {
+      response = ack;
+    });
+
+    assert.deepEqual(response, { success: false, error: 'Coco edit-and-ask is not supported' });
+    assert.deepEqual(store.editAndTruncateCalls, []);
+    assert.equal(store.upsertedMessages.length, 0);
   });
 });
