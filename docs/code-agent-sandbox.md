@@ -642,7 +642,7 @@ E2E 默认使用 fake runner：
 | Phase 2：类型、迁移和持久化 | 完成 | `275c2f3 feat: add coco persistence primitives` | 新字段、migration、store 原语和 recovery 基础已完成 |
 | Phase 3：沙盒生命周期 | 完成 | `fdf906c feat: add coco sandbox lifecycle` | fake/E2B sandbox lifecycle、CAS、recovery、destroy 路径已完成 |
 | Phase 4：Coco ask_ai 主链路 | 完成 | `cbce88c feat: route coco ask ai turns` | Coco 房间 ask_ai 主链路、运行锁、事件持久化和广播已完成 |
-| Phase 5：前端 Coco UI | 待执行 | 待提交 | 创建入口、状态展示、工具消息组件和移动端适配 |
+| Phase 5：前端 Coco UI | 完成 | `f4ea991 feat: add coco room ui` | 创建入口、状态展示、工具消息组件、fake runner E2E spec 和移动端适配已完成；完整浏览器 E2E 运行受当前 Codex 沙箱本机网络限制阻塞 |
 | Phase 6：真实 Coco runner 和沙盒镜像 | 待执行 | 待提交 | 沙盒内运行 `/Users/sky/projects/coco` 对应固定版本 Coco |
 | Phase 7：灰度上线和回滚 | 待执行 | 待提交 | feature flag、allowlist、生产 smoke、回滚开关 |
 
@@ -926,6 +926,15 @@ COCO_MODEL_PROXY_TOKEN_SECRET=
 - fake runner Coco E2E 通过。
 - 桌面端和移动端浏览器检查无横向溢出、菜单遮挡和弹层超视口。
 - Claude Code Opus 4.7 review 无 blocking/high findings。
+
+执行结果：
+
+- 已提交：`f4ea991 feat: add coco room ui`。
+- 已通过：`server npm test`（158 tests）、`server npm run build`。
+- 已通过：`client-heroui npm test`（57 tests）、`npm run lint`、`npm run check:i18n`、`npm run build`。
+- 已通过：`npx playwright test --list e2e/coco-flows.spec.ts`，确认新增 fake Coco E2E spec 可发现，共 2 条链路。
+- 未在当前 Codex 沙箱内完成实际浏览器 E2E 执行：沙箱无法连接本机 Redis/localhost，系统环境提升权限又被平台额度限制拒绝。代码层已保留可运行命令：`E2E_CLIENT_PORT=3421 E2E_SERVER_PORT=3422 npm run test:e2e -- e2e/coco-flows.spec.ts`。
+- Claude Code Opus 4.7 review 已完成三轮：第一轮指出图标、ack、错误提示和 E2E 断言问题；修复后复审无 blocking/high；最终窄复审无剩余 findings。
 
 ### Step 3：Phase 6 真实 Coco runner 和沙盒镜像
 
