@@ -11,9 +11,14 @@ import { Readable, Writable } from 'stream';
 export interface E2BSandboxDriverHandle {
   id: string;
   commands?: {
-    run(command: string, options?: { env?: Record<string, string> }): Promise<E2BCommandResult>;
+    run(command: string, options?: { env?: Record<string, string>; timeoutMs?: number }): Promise<E2BCommandResult>;
   };
   kill?(): Promise<void>;
+}
+
+export interface E2BListedSandbox {
+  id: string;
+  metadata: Record<string, string>;
 }
 
 export interface E2BCommandResult {
@@ -28,6 +33,7 @@ export interface E2BCommandResult {
 export interface E2BSandboxDriver {
   create(input: { templateId: string; timeoutMs: number; metadata: Record<string, string> }): Promise<E2BSandboxDriverHandle>;
   connect(sandboxId: string): Promise<E2BSandboxDriverHandle>;
+  list?(input?: { metadata?: Record<string, string> }): Promise<E2BListedSandbox[]>;
 }
 
 export interface E2BCocoSandboxServiceOptions {
@@ -35,6 +41,9 @@ export interface E2BCocoSandboxServiceOptions {
   workspace?: string;
   artifactVersion?: string;
   cocoSourceRef?: string;
+  logger?: {
+    warn(message: string, meta?: unknown): void;
+  };
 }
 
 export class E2BCocoSandboxService implements CocoSandboxService {
@@ -89,7 +98,10 @@ export class E2BCocoSandboxService implements CocoSandboxService {
     if (!handle.commands?.run) {
       throw new Error('E2B sandbox driver handle does not support command execution');
     }
-    const commandResult = await handle.commands.run(input.command, { env: input.env || {} });
+    const commandResult = await handle.commands.run(input.command, {
+      env: input.env || {},
+      ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+    });
     return {
       pid: commandResult?.pid,
       command: input.command,
@@ -109,5 +121,27 @@ export class E2BCocoSandboxService implements CocoSandboxService {
       throw new Error('E2B sandbox driver handle does not support kill');
     }
     await handle.kill();
+  }
+
+  async countActiveSandboxes(): Promise<number | undefined> {
+    const sandboxes = await this.listActiveSandboxes();
+    return sandboxes?.length;
+  }
+
+  async countActiveSandboxesForUser(creatorId: string): Promise<number | undefined> {
+    const sandboxes = await this.listActiveSandboxes({ metadata: { creatorId } });
+    return sandboxes?.length;
+  }
+
+  private async listActiveSandboxes(input?: { metadata?: Record<string, string> }): Promise<E2BListedSandbox[] | undefined> {
+    try {
+      return await this.driver.list?.(input);
+    } catch (error) {
+      this.options.logger?.warn('Unable to count active E2B sandboxes', {
+        error,
+        metadata: input?.metadata,
+      });
+      return undefined;
+    }
   }
 }

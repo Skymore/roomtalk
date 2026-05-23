@@ -5,15 +5,18 @@ import { E2BCocoSandboxService, E2BSandboxDriver, E2BSandboxDriverHandle } from 
 
 class FakeE2BDriver implements E2BSandboxDriver {
   readonly handles = new Map<string, E2BSandboxDriverHandle>();
+  readonly metadata = new Map<string, Record<string, string>>();
   readonly killed: string[] = [];
   readonly commands: string[] = [];
   readonly commandOptions: Record<string, unknown>[] = [];
   readonly createInputs: unknown[] = [];
+  failList = false;
 
   async create(input: { templateId: string; timeoutMs: number; metadata: Record<string, string> }): Promise<E2BSandboxDriverHandle> {
     this.createInputs.push(input);
     const handle = this.createHandle(`e2b-${this.handles.size + 1}`);
     this.handles.set(handle.id, handle);
+    this.metadata.set(handle.id, input.metadata);
     return handle;
   }
 
@@ -23,6 +26,15 @@ class FakeE2BDriver implements E2BSandboxDriver {
       throw new Error(`Missing sandbox: ${sandboxId}`);
     }
     return handle;
+  }
+
+  async list(input: { metadata?: Record<string, string> } = {}) {
+    if (this.failList) {
+      throw new Error('E2B list unavailable');
+    }
+    return [...this.handles.keys()]
+      .map(id => ({ id, metadata: this.metadata.get(id) || {} }))
+      .filter(item => Object.entries(input.metadata || {}).every(([key, value]) => item.metadata[key] === value));
   }
 
   createHandle(id: string): E2BSandboxDriverHandle {
@@ -44,6 +56,7 @@ class FakeE2BDriver implements E2BSandboxDriver {
       kill: async () => {
         this.killed.push(id);
         this.handles.delete(id);
+        this.metadata.delete(id);
       },
     };
   }
@@ -79,6 +92,7 @@ describe('E2BCocoSandboxService', () => {
       handle,
       command: 'python -m roomtalk_coco_runner',
       env: { PYTHONUNBUFFERED: '1' },
+      timeoutMs: 300_000,
     });
     assert.equal(runner.pid, 42);
     assert.ok(runner.stdin);
@@ -86,7 +100,20 @@ describe('E2BCocoSandboxService', () => {
     assert.ok(runner.stderr);
     assert.deepEqual(await runner.completed, { exitCode: 0, signal: null });
     assert.deepEqual(driver.commands, ['python -m roomtalk_coco_runner']);
-    assert.deepEqual(driver.commandOptions, [{ env: { PYTHONUNBUFFERED: '1' } }]);
+    assert.deepEqual(driver.commandOptions, [{ env: { PYTHONUNBUFFERED: '1' }, timeoutMs: 300_000 }]);
+    assert.equal(await service.countActiveSandboxes(), 1);
+    assert.equal(await service.countActiveSandboxesForUser('client-1'), 1);
+    assert.equal(await service.countActiveSandboxesForUser('client-2'), 0);
+
+    const warnings: unknown[] = [];
+    const serviceWithLogger = new E2BCocoSandboxService(driver, {
+      templateId: 'roomtalk-coco',
+      logger: { warn: (_message, meta) => warnings.push(meta) },
+    });
+    driver.failList = true;
+    assert.equal(await serviceWithLogger.countActiveSandboxes(), undefined);
+    assert.equal(await serviceWithLogger.countActiveSandboxesForUser('client-1'), undefined);
+    assert.equal(warnings.length, 2);
 
     await service.destroy(handle.id);
     assert.deepEqual(driver.killed, [handle.id]);

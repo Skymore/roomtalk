@@ -74,6 +74,7 @@ COCO_SANDBOX_PROVIDER=e2b
 COCO_RUNNER_CLIENT=jsonl
 COCO_MODE=plan
 COCO_E2B_TEMPLATE_ID=roomtalk-coco-2026-05-22-4f4ecc9
+E2B_API_KEY=...
 COCO_ARTIFACT_MODE=production
 COCO_ARTIFACT_VERSION=roomtalk-coco-2026-05-22-4f4ecc9
 COCO_SOURCE_REF=4f4ecc99589c68cffcb150b6a2df9f55144cc2d1
@@ -92,6 +93,7 @@ COCO_RUNNER_CLIENT=jsonl
 COCO_MODE=plan
 COCO_ARTIFACT_MODE=development
 COCO_E2B_TEMPLATE_ID=roomtalk-coco-dev
+E2B_API_KEY=...
 COCO_SOURCE_DIR=/Users/sky/projects/coco/src
 ```
 
@@ -104,4 +106,5 @@ This is intentionally not accepted as production config.
 - Python dependencies are pinned and hash-verified in `ops/coco-sandbox/requirements.lock`.
 - `server/roomtalk_coco_runner` has package metadata and is loaded from a fixed source tree in the artifact.
 - Production E2B JSONL startup requires pinned artifact metadata.
+- E2B JSONL startup requires either `E2B_API_KEY` or `E2B_ACCESS_TOKEN`.
 - Development mode is the only mode allowed to use the local Coco source path.

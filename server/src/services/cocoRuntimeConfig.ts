@@ -148,6 +148,14 @@ const validateEnabledConfig = (config: CocoRuntimeConfig, env: NodeJS.ProcessEnv
   if (config.sandboxProvider === 'e2b' && !config.e2bTemplateId) {
     throw new Error('COCO_SANDBOX_PROVIDER=e2b requires COCO_E2B_TEMPLATE_ID');
   }
+  if (
+    config.sandboxProvider === 'e2b' &&
+    config.runnerClient === 'jsonl' &&
+    !env.E2B_API_KEY &&
+    !env.E2B_ACCESS_TOKEN
+  ) {
+    throw new Error('COCO_SANDBOX_PROVIDER=e2b requires E2B_API_KEY or E2B_ACCESS_TOKEN');
+  }
 
   const shellEnabled = config.runnerEnv.ROOMTALK_COCO_ALLOW_SHELL === 'true';
   const writeToolsEnabled = config.runnerEnv.ROOMTALK_COCO_ALLOW_WRITE_TOOLS === 'true' || config.mode === 'acceptEdits';

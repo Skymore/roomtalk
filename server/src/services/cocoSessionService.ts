@@ -22,6 +22,7 @@ export interface CocoSessionServiceOptions {
   allowedClientIds?: string[];
   mode?: CocoRunnerMode;
   runnerCommand?: string;
+  turnTimeoutMs?: number;
   allowedPaths?: string[];
   runnerEnv?: Record<string, string>;
   runnerProviderEnvByProvider?: Partial<Record<AIModelOption['provider'], Record<string, string>>>;
@@ -140,6 +141,7 @@ export class CocoSessionService {
         handle: sandbox.handle,
         command: this.options.runnerCommand || DEFAULT_COCO_RUNNER_COMMAND,
         env: this.buildRunnerEnv(input.selectedModel),
+        timeoutMs: this.options.turnTimeoutMs,
       });
 
       let fullContent = '';
