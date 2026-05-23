@@ -33,6 +33,8 @@ export interface E2BSandboxDriver {
 export interface E2BCocoSandboxServiceOptions {
   templateId: string;
   workspace?: string;
+  artifactVersion?: string;
+  cocoSourceRef?: string;
 }
 
 export class E2BCocoSandboxService implements CocoSandboxService {
@@ -53,6 +55,8 @@ export class E2BCocoSandboxService implements CocoSandboxService {
       metadata: {
         roomId: input.roomId,
         creatorId: input.creatorId,
+        ...(this.options.artifactVersion ? { artifactVersion: this.options.artifactVersion } : {}),
+        ...(this.options.cocoSourceRef ? { cocoSourceRef: this.options.cocoSourceRef } : {}),
       },
     });
     const createdAt = this.now().toISOString();

@@ -8,8 +8,10 @@ class FakeE2BDriver implements E2BSandboxDriver {
   readonly killed: string[] = [];
   readonly commands: string[] = [];
   readonly commandOptions: Record<string, unknown>[] = [];
+  readonly createInputs: unknown[] = [];
 
-  async create(): Promise<E2BSandboxDriverHandle> {
+  async create(input: { templateId: string; timeoutMs: number; metadata: Record<string, string> }): Promise<E2BSandboxDriverHandle> {
+    this.createInputs.push(input);
     const handle = this.createHandle(`e2b-${this.handles.size + 1}`);
     this.handles.set(handle.id, handle);
     return handle;
@@ -50,7 +52,11 @@ class FakeE2BDriver implements E2BSandboxDriver {
 describe('E2BCocoSandboxService', () => {
   it('creates, starts commands, and destroys E2B sandboxes through the driver', async () => {
     const driver = new FakeE2BDriver();
-    const service = new E2BCocoSandboxService(driver, { templateId: 'roomtalk-coco' }, () => new Date('2026-05-03T00:00:00.000Z'));
+    const service = new E2BCocoSandboxService(driver, {
+      templateId: 'roomtalk-coco',
+      artifactVersion: 'roomtalk-coco-2026-05-22-4f4ecc9',
+      cocoSourceRef: '4f4ecc99589c68cffcb150b6a2df9f55144cc2d1',
+    }, () => new Date('2026-05-03T00:00:00.000Z'));
 
     const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
     assert.equal(handle.id, 'e2b-1');
@@ -58,6 +64,16 @@ describe('E2BCocoSandboxService', () => {
     assert.equal(handle.workspace, '/workspace');
     assert.equal(handle.createdAt, '2026-05-03T00:00:00.000Z');
     assert.equal(handle.expiresAt, '2026-05-03T00:01:00.000Z');
+    assert.deepEqual(driver.createInputs[0], {
+      templateId: 'roomtalk-coco',
+      timeoutMs: 60_000,
+      metadata: {
+        roomId: 'room-1',
+        creatorId: 'client-1',
+        artifactVersion: 'roomtalk-coco-2026-05-22-4f4ecc9',
+        cocoSourceRef: '4f4ecc99589c68cffcb150b6a2df9f55144cc2d1',
+      },
+    });
 
     const runner = await service.startRunner({
       handle,
