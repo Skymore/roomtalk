@@ -1,11 +1,13 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
+import { PassThrough } from 'stream';
 import { E2BCocoSandboxService, E2BSandboxDriver, E2BSandboxDriverHandle } from './e2bCocoSandboxService';
 
 class FakeE2BDriver implements E2BSandboxDriver {
   readonly handles = new Map<string, E2BSandboxDriverHandle>();
   readonly killed: string[] = [];
   readonly commands: string[] = [];
+  readonly commandOptions: Record<string, unknown>[] = [];
 
   async create(): Promise<E2BSandboxDriverHandle> {
     const handle = this.createHandle(`e2b-${this.handles.size + 1}`);
@@ -25,9 +27,16 @@ class FakeE2BDriver implements E2BSandboxDriver {
     return {
       id,
       commands: {
-        run: async command => {
+        run: async (command, options) => {
           this.commands.push(command);
-          return { pid: 42 };
+          this.commandOptions.push(options || {});
+          return {
+            pid: 42,
+            stdin: new PassThrough(),
+            stdout: new PassThrough(),
+            stderr: new PassThrough(),
+            completed: Promise.resolve({ exitCode: 0, signal: null }),
+          };
         },
       },
       kill: async () => {
@@ -50,9 +59,18 @@ describe('E2BCocoSandboxService', () => {
     assert.equal(handle.createdAt, '2026-05-03T00:00:00.000Z');
     assert.equal(handle.expiresAt, '2026-05-03T00:01:00.000Z');
 
-    const runner = await service.startRunner({ handle, command: 'python -m roomtalk_coco_runner' });
+    const runner = await service.startRunner({
+      handle,
+      command: 'python -m roomtalk_coco_runner',
+      env: { PYTHONUNBUFFERED: '1' },
+    });
     assert.equal(runner.pid, 42);
+    assert.ok(runner.stdin);
+    assert.ok(runner.stdout);
+    assert.ok(runner.stderr);
+    assert.deepEqual(await runner.completed, { exitCode: 0, signal: null });
     assert.deepEqual(driver.commands, ['python -m roomtalk_coco_runner']);
+    assert.deepEqual(driver.commandOptions, [{ env: { PYTHONUNBUFFERED: '1' } }]);
 
     await service.destroy(handle.id);
     assert.deepEqual(driver.killed, [handle.id]);

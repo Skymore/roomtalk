@@ -18,9 +18,14 @@ describe('FakeCocoSandboxService', () => {
     assert.equal(await service.countActiveSandboxes(), 1);
     assert.equal(await service.countActiveSandboxesForUser('client-1'), 1);
 
-    const runner = await service.startRunner({ handle, command: 'python -m roomtalk_coco_runner' });
+    const runner = await service.startRunner({
+      handle,
+      command: 'python -m roomtalk_coco_runner',
+      env: { PYTHONUNBUFFERED: '1' },
+    });
     assert.equal(runner.command, 'python -m roomtalk_coco_runner');
     assert.deepEqual(service.startedRunnerCommands, ['python -m roomtalk_coco_runner']);
+    assert.deepEqual(service.startedRunnerEnvs, [{ PYTHONUNBUFFERED: '1' }]);
 
     await service.destroy(handle.id);
     assert.deepEqual(service.destroyedSandboxIds, [handle.id]);

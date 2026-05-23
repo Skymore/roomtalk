@@ -176,6 +176,7 @@ const createService = (options: {
   enabled?: boolean;
   allowedClientIds?: string[];
   ids?: string[];
+  runnerEnv?: Record<string, string>;
 } = {}) => {
   const store = options.store || new MemoryCocoStore(room(), [userMessage()]);
   const emitter = new FakeEmitter();
@@ -198,6 +199,7 @@ const createService = (options: {
     {
       enabled: options.enabled ?? true,
       allowedClientIds: options.allowedClientIds,
+      runnerEnv: options.runnerEnv,
       now: () => new Date('2026-05-03T00:00:00.000Z'),
       createId: () => ids.shift() || 'id-fallback',
     }
@@ -235,6 +237,7 @@ describe('CocoSessionService', () => {
     assert.deepEqual(ack, { success: true, messageId: 'ai-1' });
     assert.deepEqual(result, { success: true, messageId: 'ai-1' });
     assert.equal(sandboxService.startedRunnerCommands[0], 'python -m roomtalk_coco_runner');
+    assert.deepEqual(sandboxService.startedRunnerEnvs[0], { PYTHONUNBUFFERED: '1' });
     assert.equal(runner.requests[0].prompt, 'inspect the project');
     assert.equal(runner.requests[0].apiModel, 'deepseek-chat');
     assert.equal(runner.requests[0].workspace, '/workspace/room-1');
@@ -248,6 +251,34 @@ describe('CocoSessionService', () => {
     assert.equal((await store.getRoomById('room-1'))?.cocoSessionId, 'session-1');
     assert.equal(emitter.roomEmits.some(event => event.event === 'ai_chunk'), true);
     assert.equal(emitter.roomEmits.some(event => event.event === 'ai_stream_end'), true);
+  });
+
+  it('passes only explicit minimal environment to runner processes', async () => {
+    const previousAnthropicKey = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'must-not-leak';
+    try {
+      const runner = new FakeCocoRunnerClient([
+        { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+      ]);
+      const { sandboxService, service } = createService({
+        runner,
+        runnerEnv: { COCO_SOURCE_DIR: '/sandbox/coco/src' },
+      });
+
+      await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+      assert.deepEqual(sandboxService.startedRunnerEnvs[0], {
+        PYTHONUNBUFFERED: '1',
+        COCO_SOURCE_DIR: '/sandbox/coco/src',
+      });
+      assert.equal('ANTHROPIC_API_KEY' in sandboxService.startedRunnerEnvs[0], false);
+    } finally {
+      if (previousAnthropicKey === undefined) {
+        delete process.env.ANTHROPIC_API_KEY;
+      } else {
+        process.env.ANTHROPIC_API_KEY = previousAnthropicKey;
+      }
+    }
   });
 
   it('rejects concurrent turns in the same Coco room', async () => {

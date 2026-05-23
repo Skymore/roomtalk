@@ -1,17 +1,28 @@
 import {
   CocoRunnerProcess,
+  CocoRunnerProcessExit,
   CocoSandboxHandle,
   CocoSandboxService,
   CreateCocoSandboxInput,
   StartCocoRunnerInput,
 } from './cocoSandboxService';
+import { Readable, Writable } from 'stream';
 
 export interface E2BSandboxDriverHandle {
   id: string;
   commands?: {
-    run(command: string, options?: Record<string, unknown>): Promise<{ pid?: number; stop?(): Promise<void> }>;
+    run(command: string, options?: { env?: Record<string, string> }): Promise<E2BCommandResult>;
   };
   kill?(): Promise<void>;
+}
+
+export interface E2BCommandResult {
+  pid?: number;
+  stdin?: Writable;
+  stdout?: Readable;
+  stderr?: Readable;
+  completed?: Promise<CocoRunnerProcessExit>;
+  stop?(): Promise<void>;
 }
 
 export interface E2BSandboxDriver {
@@ -74,10 +85,14 @@ export class E2BCocoSandboxService implements CocoSandboxService {
     if (!handle.commands?.run) {
       throw new Error('E2B sandbox driver handle does not support command execution');
     }
-    const commandResult = await handle.commands.run(input.command);
+    const commandResult = await handle.commands.run(input.command, { env: input.env || {} });
     return {
       pid: commandResult?.pid,
       command: input.command,
+      stdin: commandResult?.stdin,
+      stdout: commandResult?.stdout,
+      stderr: commandResult?.stderr,
+      completed: commandResult?.completed,
       stop: async () => {
         await commandResult?.stop?.();
       },
