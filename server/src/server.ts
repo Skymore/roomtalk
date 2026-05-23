@@ -147,13 +147,15 @@ const createUnavailableE2BDriver = (): E2BSandboxDriver => ({
 });
 
 if (cocoRuntimeConfig.enabled && cocoRuntimeConfig.sandboxProvider === 'e2b') {
-  cocoLogger.warn('E2B sandbox provider selected; external driver wiring is staged for the sandbox artifact phase');
+  cocoLogger.warn(`E2B sandbox provider selected; driver wiring is staged until the sandbox artifact is available (${cocoRuntimeConfig.artifactMode} mode)`);
 }
 
 const cocoSandboxService = cocoRuntimeConfig.enabled && cocoRuntimeConfig.sandboxProvider === 'e2b'
   ? new E2BCocoSandboxService(createUnavailableE2BDriver(), {
     templateId: cocoRuntimeConfig.e2bTemplateId || '',
     workspace: cocoRuntimeConfig.e2bWorkspace,
+    artifactVersion: cocoRuntimeConfig.artifactVersion,
+    cocoSourceRef: cocoRuntimeConfig.cocoSourceRef,
   })
   : new FakeCocoSandboxService();
 const cocoSandboxLifecycle = new CocoSandboxLifecycleService(store, cocoSandboxService, cocoLogger, {

@@ -190,6 +190,15 @@ Acceptance:
 - Local smoke can mount `/Users/sky/projects/coco` only for development mode.
 - Production config uses the pinned artifact.
 
+Implementation note:
+
+- Artifact details live in `docs/coco-sandbox-artifact.md`.
+- The lock file is `ops/coco-sandbox/artifact.lock.json`.
+- Python dependencies are pinned and hash-verified in `ops/coco-sandbox/requirements.lock`; the Dockerfile loads fixed Coco and runner source trees through `PYTHONPATH` to avoid implicit build-time dependency downloads.
+- The base image is pinned by digest and the runtime user is non-root.
+- Production startup validation requires `COCO_ARTIFACT_VERSION` and `COCO_SOURCE_REF` for E2B JSONL mode and rejects `COCO_SOURCE_DIR`.
+- Development artifact mode is the only accepted way to use `/Users/sky/projects/coco/src`.
+
 ### Phase 6.5: Model Access Strategy
 
 Scope:

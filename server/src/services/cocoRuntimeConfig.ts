@@ -3,11 +3,15 @@ import { CocoSandboxProvider } from './cocoSandboxService';
 import { CocoRunnerMode } from './cocoRunnerProtocol';
 
 export type CocoRunnerClientKind = 'fake' | 'jsonl';
+export type CocoArtifactMode = 'production' | 'development';
 
 export interface CocoRuntimeConfig {
   enabled: boolean;
   sandboxProvider: CocoSandboxProvider;
   runnerClient: CocoRunnerClientKind;
+  artifactMode: CocoArtifactMode;
+  artifactVersion?: string;
+  cocoSourceRef?: string;
   allowedClientIds: string[];
   mode: CocoRunnerMode;
   runnerCommand: string;
@@ -43,6 +47,14 @@ const readRunnerClient = (env: NodeJS.ProcessEnv): CocoRunnerClientKind => {
     return value;
   }
   throw new Error(`Unsupported COCO_RUNNER_CLIENT: ${value}`);
+};
+
+const readArtifactMode = (env: NodeJS.ProcessEnv): CocoArtifactMode => {
+  const value = (env.COCO_ARTIFACT_MODE || 'production').toLowerCase();
+  if (value === 'production' || value === 'development') {
+    return value;
+  }
+  throw new Error(`Unsupported COCO_ARTIFACT_MODE: ${value}`);
 };
 
 const hasApprovedModelAccess = (env: NodeJS.ProcessEnv) => {
@@ -97,15 +109,33 @@ const validateEnabledConfig = (config: CocoRuntimeConfig, env: NodeJS.ProcessEnv
   if (config.runnerClient === 'jsonl' && (shellEnabled || writeEnabled) && !hasApprovedModelAccess(env)) {
     throw new Error('JSONL Coco acceptEdits/write/Shell mode requires model proxy or scoped provider key configuration');
   }
+
+  if (config.sandboxProvider === 'e2b' && config.runnerClient === 'jsonl') {
+    if (config.artifactMode === 'production') {
+      if (!config.artifactVersion || !config.cocoSourceRef) {
+        throw new Error('Production Coco E2B JSONL mode requires COCO_ARTIFACT_VERSION and COCO_SOURCE_REF');
+      }
+      if (config.runnerEnv.COCO_SOURCE_DIR) {
+        throw new Error('Production Coco E2B JSONL mode must use the pinned sandbox artifact, not COCO_SOURCE_DIR');
+      }
+    }
+    if (config.artifactMode === 'development' && !config.runnerEnv.COCO_SOURCE_DIR) {
+      throw new Error('Development Coco E2B JSONL mode requires COCO_SOURCE_DIR for the mounted Coco source');
+    }
+  }
 };
 
 export const resolveCocoRuntimeConfig = (env: NodeJS.ProcessEnv): CocoRuntimeConfig => {
   const mode: CocoRunnerMode = env.COCO_MODE === 'plan' ? 'plan' : 'acceptEdits';
   const runnerClient = readRunnerClient(env);
+  const artifactMode = readArtifactMode(env);
   const config: CocoRuntimeConfig = {
     enabled: env.COCO_ENABLED === 'true',
     sandboxProvider: readSandboxProvider(env),
     runnerClient,
+    artifactMode,
+    artifactVersion: env.COCO_ARTIFACT_VERSION,
+    cocoSourceRef: env.COCO_SOURCE_REF,
     allowedClientIds: parseCsvEnv(env.COCO_ALLOWED_USER_IDS),
     mode,
     runnerCommand: env.COCO_RUNNER_COMMAND || DEFAULT_COCO_RUNNER_COMMAND,
