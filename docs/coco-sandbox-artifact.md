@@ -108,3 +108,4 @@ This is intentionally not accepted as production config.
 - Production E2B JSONL startup requires pinned artifact metadata.
 - E2B JSONL startup requires either `E2B_API_KEY` or `E2B_ACCESS_TOKEN`.
 - Development mode is the only mode allowed to use the local Coco source path.
+- Real sandbox smoke is available through `cd server && npm run smoke:coco:e2b`; it skips unless `RUN_COCO_E2B_SMOKE=true` and the E2B/model credentials are configured.

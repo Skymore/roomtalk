@@ -878,10 +878,11 @@ COCO_MODEL_PROXY_TOKEN=
 每个 Phase 完成后：
 
 1. 本地测试和构建通过。
-2. 调用 Claude Code Opus 4.7 做只读 review。
+2. 异步启动 Claude Code Opus 4.7 做只读 review；review 运行时只继续不依赖 review 结果的准备工作。
 3. Review prompt 必须明确当前架构是“沙盒内运行现有 Coco”，不是“RoomTalk 自己实现工具循环”。
-4. 高优先级问题修完后再进入下一 Phase。
-5. 每个 Phase 的验收标准全部满足后再继续。
+4. 提交或进入下一 Phase 前必须等待 review 结果。
+5. Blocking/high/medium 问题修完后再进入下一 Phase。
+6. 每个 Phase 的验收标准全部满足后再继续。
 
 ---
 
@@ -960,6 +961,7 @@ COCO_MODEL_PROXY_TOKEN=
 - 有真实 sandbox/key 时 real smoke 通过。
 - 无真实 sandbox/key 时测试稳定跳过，UI 入口按 feature flag 禁用。
 - E2B JSONL 启动配置缺少 `E2B_API_KEY` / `E2B_ACCESS_TOKEN` 时服务直接拒绝启动。
+- `cd server && npm run smoke:coco:e2b` 作为真实 E2B/Coco smoke 入口；默认跳过，只有显式 `RUN_COCO_E2B_SMOKE=true` 且凭据齐全才创建真实 sandbox。
 - 沙盒内 Coco 不能访问 allowed paths 之外文件。
 - Claude Code Opus 4.7 review 无 blocking/high findings。
 

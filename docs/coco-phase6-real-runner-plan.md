@@ -238,17 +238,19 @@ Additional Phase 6 checks:
 
 ```bash
 pytest server/roomtalk_coco_runner
+cd server && npm run smoke:coco:e2b
 cd client-heroui && npx playwright test --list e2e/coco-flows.spec.ts
 ```
 
-Actual browser E2E and real E2B smoke may require system environment access to local Redis/localhost and external credentials. If the Codex sandbox blocks those, the command, reason, and exact gap must be recorded before moving on.
+Actual browser E2E and real E2B smoke may require system environment access to local Redis/localhost and external credentials. `npm run smoke:coco:e2b` skips cleanly unless `RUN_COCO_E2B_SMOKE=true`, `COCO_E2B_TEMPLATE_ID`, E2B credentials, and model access are configured. If the Codex sandbox blocks those, the command, reason, and exact gap must be recorded before moving on.
 
 ## Review Rule
 
 After each implementation sub-phase:
 
 1. Run verification.
-2. Call Claude Code Opus 4.7 in read-only mode.
-3. Fix blocking/high findings.
-4. Commit that sub-phase.
-5. Continue to the next sub-phase.
+2. Start Claude Code Opus 4.7 in read-only mode as an async review checkpoint.
+3. While review runs, continue only non-overlapping preparation work that does not depend on the review result.
+4. Before commit or entering the next sub-phase, wait for the review result and fix blocking/high/medium findings.
+5. Commit that sub-phase only after tests/builds and the review gate are clean.
+6. Continue to the next sub-phase.
