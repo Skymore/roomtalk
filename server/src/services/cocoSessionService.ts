@@ -8,6 +8,7 @@ import { CocoSandboxService, CocoRunnerProcess } from './cocoSandboxService';
 import { mapCocoRunnerEvent } from './cocoEventMapper';
 import { CocoRunnerClient } from './fakeCocoRunner';
 import { COCO_RUNNER_SCHEMA_VERSION, CocoRunnerEvent, CocoRunnerMode } from './cocoRunnerProtocol';
+import { DEFAULT_COCO_RUNNER_COMMAND } from './cocoRuntimeConfig';
 import { createAIPlaceholderMessage } from './messageDomain';
 
 export interface CocoRoomEmitter {
@@ -23,6 +24,7 @@ export interface CocoSessionServiceOptions {
   runnerCommand?: string;
   allowedPaths?: string[];
   runnerEnv?: Record<string, string>;
+  runnerProviderEnvByProvider?: Partial<Record<AIModelOption['provider'], Record<string, string>>>;
   now?: () => Date;
   createId?: () => string;
 }
@@ -36,8 +38,6 @@ export interface CocoTurnInput {
 
 export type CocoTurnAck = { success: boolean; messageId?: string; error?: string };
 export type CocoTurnAckCallback = (response: CocoTurnAck) => void;
-
-const DEFAULT_RUNNER_COMMAND = 'python -m roomtalk_coco_runner';
 
 export class CocoSessionService {
   private readonly activeTurns = new Set<string>();
@@ -138,8 +138,8 @@ export class CocoSessionService {
 
       runnerProcess = await this.sandboxService.startRunner({
         handle: sandbox.handle,
-        command: this.options.runnerCommand || DEFAULT_RUNNER_COMMAND,
-        env: this.buildRunnerEnv(),
+        command: this.options.runnerCommand || DEFAULT_COCO_RUNNER_COMMAND,
+        env: this.buildRunnerEnv(input.selectedModel),
       });
 
       let fullContent = '';
@@ -341,10 +341,11 @@ export class CocoSessionService {
     return this.store.saveRoom({ ...currentRoom, ...patch });
   }
 
-  private buildRunnerEnv() {
+  private buildRunnerEnv(selectedModel: AIModelOption) {
     return {
       PYTHONUNBUFFERED: '1',
       ...(this.options.runnerEnv || {}),
+      ...(this.options.runnerProviderEnvByProvider?.[selectedModel.provider] || {}),
     };
   }
 }

@@ -20,9 +20,12 @@ import { registerSocketHandlers } from './socket/registerSocketHandlers';
 import { createAIClients } from './services/aiClients';
 import { CocoSandboxLifecycleService } from './services/cocoSandboxLifecycle';
 import { CocoSessionService } from './services/cocoSessionService';
+import { E2BCocoSandboxService, E2BSandboxDriver } from './services/e2bCocoSandboxService';
 import { COCO_RUNNER_SCHEMA_VERSION } from './services/cocoRunnerProtocol';
+import { resolveCocoRuntimeConfig } from './services/cocoRuntimeConfig';
 import { FakeCocoRunnerClient } from './services/fakeCocoRunner';
 import { FakeCocoSandboxService } from './services/fakeCocoSandboxService';
+import { JsonlCocoRunnerClient } from './services/jsonlCocoRunner';
 
 dotenv.config();
 
@@ -104,23 +107,7 @@ const parsePositiveIntegerEnv = (name: string, fallback: number) => {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 };
 
-const parseCsvEnv = (value?: string) =>
-  value?.split(',').map(item => item.trim()).filter(Boolean) || [];
-
-const pickCocoRunnerEnv = (env: NodeJS.ProcessEnv) => {
-  const allowedNames = [
-    'COCO_SOURCE_DIR',
-    'COCO_MAX_TOKENS',
-    'ROOMTALK_COCO_MAX_TOKENS',
-    'ROOMTALK_COCO_ALLOW_WRITE_TOOLS',
-    'ROOMTALK_COCO_ALLOW_SHELL',
-  ];
-  return Object.fromEntries(
-    allowedNames
-      .map(name => [name, env[name]])
-      .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].length > 0)
-  );
-};
+const cocoRuntimeConfig = resolveCocoRuntimeConfig(process.env);
 
 redisClient.on('error', (err: Error) => {
   redisLogger.error('Redis connection error', { error: err.message, stack: err.stack });
@@ -150,7 +137,25 @@ const io = new Server(server, {
   pingInterval: 25000 // 25秒ping一次
 });
 
-const cocoSandboxService = new FakeCocoSandboxService();
+const createUnavailableE2BDriver = (): E2BSandboxDriver => ({
+  async create() {
+    throw new Error('E2B sandbox driver is not configured in this server build');
+  },
+  async connect() {
+    throw new Error('E2B sandbox driver is not configured in this server build');
+  },
+});
+
+if (cocoRuntimeConfig.enabled && cocoRuntimeConfig.sandboxProvider === 'e2b') {
+  cocoLogger.warn('E2B sandbox provider selected; external driver wiring is staged for the sandbox artifact phase');
+}
+
+const cocoSandboxService = cocoRuntimeConfig.enabled && cocoRuntimeConfig.sandboxProvider === 'e2b'
+  ? new E2BCocoSandboxService(createUnavailableE2BDriver(), {
+    templateId: cocoRuntimeConfig.e2bTemplateId || '',
+    workspace: cocoRuntimeConfig.e2bWorkspace,
+  })
+  : new FakeCocoSandboxService();
 const cocoSandboxLifecycle = new CocoSandboxLifecycleService(store, cocoSandboxService, cocoLogger, {
   sandboxTtlMs: parsePositiveIntegerEnv('COCO_SANDBOX_TTL_MS', 60 * 60 * 1000),
   turnTimeoutMs: parsePositiveIntegerEnv('COCO_TURN_TIMEOUT_MS', 5 * 60 * 1000),
@@ -168,7 +173,7 @@ const cocoSessionService = new CocoSessionService(
   io,
   cocoSandboxLifecycle,
   cocoSandboxService,
-  new FakeCocoRunnerClient([
+  cocoRuntimeConfig.runnerClient === 'jsonl' ? new JsonlCocoRunnerClient() : new FakeCocoRunnerClient([
     { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'status', turnId: 'fake', status: 'starting', message: 'Coco fake runner starting' },
     { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'fake-ai', delta: 'Coco fake runner received the task.' },
     { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'fake-tool-1', name: 'Shell', args: { command: 'printf "hello from Coco fake runner\\n"' } },
@@ -177,12 +182,13 @@ const cocoSessionService = new CocoSessionService(
   ], { eventDelayMs: parsePositiveIntegerEnv('COCO_FAKE_RUNNER_EVENT_DELAY_MS', 0) }),
   cocoLogger,
   {
-    enabled: process.env.COCO_ENABLED === 'true',
-    allowedClientIds: parseCsvEnv(process.env.COCO_ALLOWED_USER_IDS),
-    mode: process.env.COCO_MODE === 'plan' ? 'plan' : 'acceptEdits',
-    runnerCommand: process.env.COCO_RUNNER_COMMAND || 'python -m roomtalk_coco_runner',
-    allowedPaths: parseCsvEnv(process.env.COCO_ALLOWED_PATHS || '.'),
-    runnerEnv: pickCocoRunnerEnv(process.env),
+    enabled: cocoRuntimeConfig.enabled,
+    allowedClientIds: cocoRuntimeConfig.allowedClientIds,
+    mode: cocoRuntimeConfig.mode,
+    runnerCommand: cocoRuntimeConfig.runnerCommand,
+    allowedPaths: cocoRuntimeConfig.allowedPaths,
+    runnerEnv: cocoRuntimeConfig.runnerEnv,
+    runnerProviderEnvByProvider: cocoRuntimeConfig.runnerProviderEnvByProvider,
   }
 );
 
