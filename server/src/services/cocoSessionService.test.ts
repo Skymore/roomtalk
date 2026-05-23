@@ -304,6 +304,46 @@ describe('CocoSessionService', () => {
     });
   });
 
+  it('keeps host provider keys out of proxied runner environments', async () => {
+    const previousOpenAIKey = process.env.OPENAI_API_KEY;
+    const previousAnthropicKey = process.env.ANTHROPIC_API_KEY;
+    process.env.OPENAI_API_KEY = 'host-openai-key';
+    process.env.ANTHROPIC_API_KEY = 'host-anthropic-key';
+    try {
+      const runner = new FakeCocoRunnerClient([
+        { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+      ]);
+      const { sandboxService, service } = createService({
+        runner,
+        runnerEnv: {
+          COCO_MODEL_PROXY_URL: 'https://model-proxy.internal',
+          COCO_MODEL_PROXY_TOKEN: 'short-lived-proxy-token',
+        },
+      });
+
+      await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+      assert.deepEqual(sandboxService.startedRunnerEnvs[0], {
+        PYTHONUNBUFFERED: '1',
+        COCO_MODEL_PROXY_URL: 'https://model-proxy.internal',
+        COCO_MODEL_PROXY_TOKEN: 'short-lived-proxy-token',
+      });
+      assert.equal('OPENAI_API_KEY' in sandboxService.startedRunnerEnvs[0], false);
+      assert.equal('ANTHROPIC_API_KEY' in sandboxService.startedRunnerEnvs[0], false);
+    } finally {
+      if (previousOpenAIKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAIKey;
+      }
+      if (previousAnthropicKey === undefined) {
+        delete process.env.ANTHROPIC_API_KEY;
+      } else {
+        process.env.ANTHROPIC_API_KEY = previousAnthropicKey;
+      }
+    }
+  });
+
   it('rejects concurrent turns in the same Coco room', async () => {
     const runner = new BlockingRunner();
     const { service } = createService({ runner });

@@ -7,6 +7,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, TextIO
+from urllib.parse import urlparse
 
 SCHEMA_VERSION = 1
 READ_ONLY_TOOLS = ("Read", "Glob", "Grep")
@@ -130,7 +131,8 @@ def canonical_allowed_paths_for_engine(workspace: Path, allowed_paths: Iterable[
 
 
 def tool_names_for_mode(mode: str, env: dict[str, str] | None = None) -> tuple[str, ...]:
-    env = env or os.environ
+    if env is None:
+        env = os.environ
     if mode == "plan":
         return READ_ONLY_TOOLS
     tools = [*READ_ONLY_TOOLS]
@@ -155,7 +157,30 @@ def _provider_for_coco(provider: str):
     raise RunnerError(f"Unsupported provider for Coco: {provider}", code="unsupported_provider")
 
 
+def _model_proxy_url(env: dict[str, str]) -> str | None:
+    proxy_url = (env.get("COCO_MODEL_PROXY_URL") or "").strip()
+    if not proxy_url:
+        return None
+    parsed = urlparse(proxy_url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise RunnerError(
+            "COCO_MODEL_PROXY_URL must be an HTTPS URL",
+            code="invalid_model_proxy_url",
+        )
+    return proxy_url.rstrip("/")
+
+
+def _model_proxy_token(env: dict[str, str]) -> str | None:
+    token = (env.get("COCO_MODEL_PROXY_TOKEN") or "").strip()
+    return token or None
+
+
 def _api_key_for(provider: str, env: dict[str, str]) -> str | None:
+    if _model_proxy_url(env):
+        token = _model_proxy_token(env)
+        if not token:
+            raise RunnerError("COCO_MODEL_PROXY_TOKEN is required when COCO_MODEL_PROXY_URL is set", code="model_proxy_token_missing")
+        return token
     if provider == "anthropic":
         return env.get("ANTHROPIC_API_KEY")
     if provider == "openrouter":
@@ -166,6 +191,9 @@ def _api_key_for(provider: str, env: dict[str, str]) -> str | None:
 
 
 def _base_url_for(provider: str, env: dict[str, str]) -> str | None:
+    proxy_url = _model_proxy_url(env)
+    if proxy_url:
+        return proxy_url
     if provider == "anthropic":
         return env.get("ANTHROPIC_BASE_URL")
     if provider == "openrouter":
@@ -197,7 +225,8 @@ def _add_coco_source_to_path(env: dict[str, str]) -> None:
 
 
 def create_coco_engine(request: RunnerRequest, env: dict[str, str] | None = None):
-    env = env or os.environ
+    if env is None:
+        env = os.environ
     _add_coco_source_to_path(env)
 
     from core.engine import Engine

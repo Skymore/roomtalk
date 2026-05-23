@@ -342,6 +342,8 @@ export class CocoSessionService {
   }
 
   private buildRunnerEnv(selectedModel: AIModelOption) {
+    // This is the complete runner environment. Do not merge process.env here:
+    // Coco subprocesses must only receive explicit sandbox/model credentials.
     return {
       PYTHONUNBUFFERED: '1',
       ...(this.options.runnerEnv || {}),

@@ -213,6 +213,15 @@ Acceptance:
 - Tests or documented smoke prove `acceptEdits` production config refuses to start without proxy/scoped-key configuration.
 - After this phase, E2B `acceptEdits` smoke may run only through the approved proxy/scoped-key path.
 
+Implementation note:
+
+- The finalized model access contract is documented in `docs/coco-model-access.md`.
+- Proxy mode requires `COCO_MODEL_ACCESS_STRATEGY=proxy`, HTTPS `COCO_MODEL_PROXY_URL`, and `COCO_MODEL_PROXY_TOKEN`.
+- Proxy settings without explicit proxy strategy are rejected so direct provider keys cannot coexist with proxy-routed runner config.
+- Scoped-key mode requires TTL, budget, and audit id metadata.
+- The Python runner uses proxy URL/token in preference to any direct provider credentials.
+- Runner subprocess environments are explicit and covered by tests that prevent host provider key inheritance.
+
 ## Commands Per Sub-Phase
 
 Minimum local verification after every sub-phase:
