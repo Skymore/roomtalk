@@ -57,14 +57,58 @@ const readArtifactMode = (env: NodeJS.ProcessEnv): CocoArtifactMode => {
   throw new Error(`Unsupported COCO_ARTIFACT_MODE: ${value}`);
 };
 
+const hasPositiveNumber = (value?: string) => {
+  if (typeof value !== 'string' || !value.trim()) {
+    return false;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0;
+};
+
+const isHttpsUrl = (value?: string) => {
+  if (typeof value !== 'string' || !value.trim()) {
+    return false;
+  }
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
+const hasModelProxySettings = (env: NodeJS.ProcessEnv) => (
+  Boolean(env.COCO_MODEL_PROXY_URL) || Boolean(env.COCO_MODEL_PROXY_TOKEN)
+);
+
+const hasModelProxyContract = (env: NodeJS.ProcessEnv) => (
+  env.COCO_MODEL_ACCESS_STRATEGY === 'proxy' &&
+  isHttpsUrl(env.COCO_MODEL_PROXY_URL) &&
+  typeof env.COCO_MODEL_PROXY_TOKEN === 'string' &&
+  env.COCO_MODEL_PROXY_TOKEN.trim().length > 0
+);
+
+const hasScopedProviderKeyContract = (env: NodeJS.ProcessEnv) => (
+  env.COCO_SCOPED_PROVIDER_KEY === 'true' &&
+  hasPositiveNumber(env.COCO_SCOPED_PROVIDER_KEY_TTL_SECONDS) &&
+  hasPositiveNumber(env.COCO_SCOPED_PROVIDER_KEY_BUDGET_USD) &&
+  typeof env.COCO_SCOPED_PROVIDER_KEY_AUDIT_ID === 'string' &&
+  env.COCO_SCOPED_PROVIDER_KEY_AUDIT_ID.length > 0
+);
+
+const usesOutOfBandModelAccess = (env: NodeJS.ProcessEnv) => (
+  env.COCO_MODEL_ACCESS_STRATEGY === 'proxy' ||
+  hasModelProxySettings(env) ||
+  env.COCO_SCOPED_PROVIDER_KEY === 'true'
+);
+
 const hasApprovedModelAccess = (env: NodeJS.ProcessEnv) => {
-  if (env.COCO_MODEL_ACCESS_STRATEGY === 'proxy' && env.COCO_MODEL_PROXY_URL) {
+  if (hasModelProxyContract(env)) {
     return true;
   }
   // This flag means the sandbox image/session already has a short-lived scoped
   // provider key provisioned out of band. RoomTalk must not forward long-lived
   // provider keys when this contract or a model proxy is configured.
-  return env.COCO_SCOPED_PROVIDER_KEY === 'true';
+  return hasScopedProviderKeyContract(env);
 };
 
 const pickRunnerEnv = (env: NodeJS.ProcessEnv) => pickEnv(env, [
@@ -74,6 +118,7 @@ const pickRunnerEnv = (env: NodeJS.ProcessEnv) => pickEnv(env, [
   'ROOMTALK_COCO_ALLOW_WRITE_TOOLS',
   'ROOMTALK_COCO_ALLOW_SHELL',
   'COCO_MODEL_PROXY_URL',
+  'COCO_MODEL_PROXY_TOKEN',
 ]);
 
 const providerEnv = (env: NodeJS.ProcessEnv): Partial<Record<AIModelProvider, Record<string, string>>> => ({
@@ -86,7 +131,7 @@ const providerEnv = (env: NodeJS.ProcessEnv): Partial<Record<AIModelProvider, Re
 const shouldForwardProviderEnv = (env: NodeJS.ProcessEnv, runnerClient: CocoRunnerClientKind, mode: CocoRunnerMode) => (
   runnerClient === 'jsonl' &&
   mode === 'plan' &&
-  !hasApprovedModelAccess(env)
+  !usesOutOfBandModelAccess(env)
 );
 
 const validateEnabledConfig = (config: CocoRuntimeConfig, env: NodeJS.ProcessEnv) => {
@@ -105,9 +150,22 @@ const validateEnabledConfig = (config: CocoRuntimeConfig, env: NodeJS.ProcessEnv
   }
 
   const shellEnabled = config.runnerEnv.ROOMTALK_COCO_ALLOW_SHELL === 'true';
-  const writeEnabled = config.runnerEnv.ROOMTALK_COCO_ALLOW_WRITE_TOOLS === 'true' || config.mode === 'acceptEdits';
-  if (config.runnerClient === 'jsonl' && (shellEnabled || writeEnabled) && !hasApprovedModelAccess(env)) {
-    throw new Error('JSONL Coco acceptEdits/write/Shell mode requires model proxy or scoped provider key configuration');
+  const writeToolsEnabled = config.runnerEnv.ROOMTALK_COCO_ALLOW_WRITE_TOOLS === 'true' || config.mode === 'acceptEdits';
+  const requiresModelAccessContract = shellEnabled || writeToolsEnabled;
+  if (
+    hasModelProxySettings(env) &&
+    env.COCO_MODEL_ACCESS_STRATEGY !== 'proxy'
+  ) {
+    throw new Error('Coco model proxy settings require COCO_MODEL_ACCESS_STRATEGY=proxy');
+  }
+  if (env.COCO_MODEL_ACCESS_STRATEGY === 'proxy' && !hasModelProxyContract(env)) {
+    throw new Error('Coco model proxy mode requires HTTPS COCO_MODEL_PROXY_URL and COCO_MODEL_PROXY_TOKEN');
+  }
+  if (config.runnerClient === 'jsonl' && env.COCO_SCOPED_PROVIDER_KEY === 'true' && !hasScopedProviderKeyContract(env)) {
+    throw new Error('JSONL Coco scoped provider key mode requires TTL, budget, and audit id');
+  }
+  if (config.runnerClient === 'jsonl' && requiresModelAccessContract && !hasApprovedModelAccess(env)) {
+    throw new Error('JSONL Coco acceptEdits/write/Shell mode requires model proxy with token or scoped provider key contract');
   }
 
   if (config.sandboxProvider === 'e2b' && config.runnerClient === 'jsonl') {

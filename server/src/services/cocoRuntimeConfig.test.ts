@@ -7,6 +7,19 @@ const pinnedArtifactEnv = {
   COCO_SOURCE_REF: '4f4ecc99589c68cffcb150b6a2df9f55144cc2d1',
 };
 
+const scopedProviderKeyEnv = {
+  COCO_SCOPED_PROVIDER_KEY: 'true',
+  COCO_SCOPED_PROVIDER_KEY_TTL_SECONDS: '900',
+  COCO_SCOPED_PROVIDER_KEY_BUDGET_USD: '0.25',
+  COCO_SCOPED_PROVIDER_KEY_AUDIT_ID: 'turn-audit-1',
+};
+
+const modelProxyEnv = {
+  COCO_MODEL_ACCESS_STRATEGY: 'proxy',
+  COCO_MODEL_PROXY_URL: 'https://model-proxy.internal',
+  COCO_MODEL_PROXY_TOKEN: 'short-lived-proxy-token',
+};
+
 describe('resolveCocoRuntimeConfig', () => {
   it('defaults to disabled fake sandbox and fake runner', () => {
     const config = resolveCocoRuntimeConfig({});
@@ -138,7 +151,7 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_RUNNER_CLIENT: 'jsonl',
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
       ...pinnedArtifactEnv,
-    }), /requires model proxy or scoped provider key/);
+    }), /requires model proxy with token or scoped provider key contract/);
 
     assert.throws(() => resolveCocoRuntimeConfig({
       COCO_ENABLED: 'true',
@@ -148,15 +161,82 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
       ROOMTALK_COCO_ALLOW_SHELL: 'true',
       ...pinnedArtifactEnv,
-    }), /requires model proxy or scoped provider key/);
+    }), /requires model proxy with token or scoped provider key contract/);
+
+    assert.throws(() => resolveCocoRuntimeConfig({
+      COCO_ENABLED: 'true',
+      COCO_SANDBOX_PROVIDER: 'e2b',
+      COCO_RUNNER_CLIENT: 'jsonl',
+      COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
+      COCO_MODEL_ACCESS_STRATEGY: 'proxy',
+      COCO_MODEL_PROXY_URL: 'https://model-proxy.internal',
+      ...pinnedArtifactEnv,
+    }), /requires HTTPS COCO_MODEL_PROXY_URL and COCO_MODEL_PROXY_TOKEN/);
+
+    assert.throws(() => resolveCocoRuntimeConfig({
+      COCO_ENABLED: 'true',
+      COCO_SANDBOX_PROVIDER: 'e2b',
+      COCO_RUNNER_CLIENT: 'jsonl',
+      COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
+      COCO_MODEL_ACCESS_STRATEGY: 'proxy',
+      COCO_MODEL_PROXY_URL: 'http://model-proxy.internal',
+      COCO_MODEL_PROXY_TOKEN: 'short-lived-proxy-token',
+      ...pinnedArtifactEnv,
+    }), /requires HTTPS COCO_MODEL_PROXY_URL and COCO_MODEL_PROXY_TOKEN/);
+
+    assert.throws(() => resolveCocoRuntimeConfig({
+      COCO_ENABLED: 'true',
+      COCO_SANDBOX_PROVIDER: 'e2b',
+      COCO_RUNNER_CLIENT: 'jsonl',
+      COCO_MODE: 'plan',
+      COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
+      COCO_MODEL_PROXY_URL: 'https://model-proxy.internal',
+      COCO_MODEL_PROXY_TOKEN: 'short-lived-proxy-token',
+      DEEPSEEK_API_KEY: 'must-not-forward',
+      ...pinnedArtifactEnv,
+    }), /require COCO_MODEL_ACCESS_STRATEGY=proxy/);
+
+    assert.throws(() => resolveCocoRuntimeConfig({
+      COCO_ENABLED: 'true',
+      COCO_MODEL_PROXY_URL: 'https://model-proxy.internal',
+      COCO_MODEL_PROXY_TOKEN: 'short-lived-proxy-token',
+    }), /require COCO_MODEL_ACCESS_STRATEGY=proxy/);
+
+    assert.throws(() => resolveCocoRuntimeConfig({
+      COCO_ENABLED: 'true',
+      COCO_MODEL_ACCESS_STRATEGY: 'proxy',
+      COCO_MODEL_PROXY_URL: 'http://model-proxy.internal',
+      COCO_MODEL_PROXY_TOKEN: 'short-lived-proxy-token',
+    }), /requires HTTPS COCO_MODEL_PROXY_URL and COCO_MODEL_PROXY_TOKEN/);
+
+    assert.throws(() => resolveCocoRuntimeConfig({
+      COCO_ENABLED: 'true',
+      COCO_SANDBOX_PROVIDER: 'e2b',
+      COCO_RUNNER_CLIENT: 'jsonl',
+      COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
+      COCO_MODEL_ACCESS_STRATEGY: 'proxy',
+      COCO_MODEL_PROXY_URL: 'https://model-proxy.internal',
+      COCO_MODEL_PROXY_TOKEN: '   ',
+      ...pinnedArtifactEnv,
+    }), /requires HTTPS COCO_MODEL_PROXY_URL and COCO_MODEL_PROXY_TOKEN/);
+
+    assert.throws(() => resolveCocoRuntimeConfig({
+      COCO_ENABLED: 'true',
+      COCO_SANDBOX_PROVIDER: 'e2b',
+      COCO_RUNNER_CLIENT: 'jsonl',
+      COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
+      COCO_SCOPED_PROVIDER_KEY: 'true',
+      COCO_SCOPED_PROVIDER_KEY_TTL_SECONDS: '900',
+      ...pinnedArtifactEnv,
+    }), /requires TTL, budget, and audit id/);
 
     const scoped = resolveCocoRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
-      COCO_SCOPED_PROVIDER_KEY: 'true',
       DEEPSEEK_API_KEY: 'must-not-forward',
+      ...scopedProviderKeyEnv,
       ...pinnedArtifactEnv,
     });
     assert.equal(scoped.mode, 'acceptEdits');
@@ -170,8 +250,8 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_RUNNER_CLIENT: 'jsonl',
       COCO_MODE: 'plan',
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
-      COCO_SCOPED_PROVIDER_KEY: 'true',
       DEEPSEEK_API_KEY: 'must-not-forward',
+      ...scopedProviderKeyEnv,
       ...pinnedArtifactEnv,
     });
     assert.deepEqual(scoped.runnerProviderEnvByProvider, {});
@@ -182,12 +262,15 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_RUNNER_CLIENT: 'jsonl',
       COCO_MODE: 'plan',
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
-      COCO_MODEL_ACCESS_STRATEGY: 'proxy',
-      COCO_MODEL_PROXY_URL: 'https://model-proxy.internal',
       DEEPSEEK_API_KEY: 'must-not-forward',
+      ...modelProxyEnv,
       ...pinnedArtifactEnv,
     });
     assert.deepEqual(proxied.runnerProviderEnvByProvider, {});
+    assert.deepEqual(proxied.runnerEnv, {
+      COCO_MODEL_PROXY_URL: 'https://model-proxy.internal',
+      COCO_MODEL_PROXY_TOKEN: 'short-lived-proxy-token',
+    });
   });
 
   it('allows JSONL acceptEdits through an explicit model proxy configuration', () => {
@@ -196,13 +279,13 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
-      COCO_MODEL_ACCESS_STRATEGY: 'proxy',
-      COCO_MODEL_PROXY_URL: 'https://model-proxy.internal',
+      ...modelProxyEnv,
       ...pinnedArtifactEnv,
     });
 
     assert.equal(proxy.mode, 'acceptEdits');
     assert.equal(proxy.runnerEnv.COCO_MODEL_PROXY_URL, 'https://model-proxy.internal');
+    assert.equal(proxy.runnerEnv.COCO_MODEL_PROXY_TOKEN, 'short-lived-proxy-token');
     assert.deepEqual(proxy.runnerProviderEnvByProvider, {});
   });
 });

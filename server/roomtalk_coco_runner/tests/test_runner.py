@@ -13,6 +13,8 @@ from roomtalk_coco_runner.runner import (
     RunnerError,
     RunnerRequest,
     _add_coco_source_to_path,
+    _api_key_for,
+    _base_url_for,
     canonical_allowed_paths_for_engine,
     main,
     parse_request,
@@ -93,6 +95,13 @@ def test_tool_policy_keeps_plan_read_only_and_requires_explicit_write_or_shell_f
         "ROOMTALK_COCO_ALLOW_WRITE_TOOLS": "true",
         "ROOMTALK_COCO_ALLOW_SHELL": "true",
     }) == ("Read", "Glob", "Grep", "Write", "Edit", "Shell")
+
+
+def test_tool_policy_treats_empty_env_as_an_isolated_environment(monkeypatch):
+    monkeypatch.setenv("ROOMTALK_COCO_ALLOW_WRITE_TOOLS", "true")
+    monkeypatch.setenv("ROOMTALK_COCO_ALLOW_SHELL", "true")
+
+    assert tool_names_for_mode("acceptEdits", {}) == ("Read", "Glob", "Grep")
 
 
 def test_replay_tool_events_preserves_pairing_and_result_metadata():
@@ -179,6 +188,27 @@ def test_add_coco_source_to_path_validates_configured_directory(tmp_path: Path):
 
     with pytest.raises(RunnerError, match="COCO_SOURCE_DIR does not exist"):
         _add_coco_source_to_path({"COCO_SOURCE_DIR": str(tmp_path / "missing")})
+
+
+def test_model_proxy_env_overrides_direct_provider_credentials():
+    env = {
+        "COCO_MODEL_PROXY_URL": "https://model-proxy.internal/",
+        "COCO_MODEL_PROXY_TOKEN": "short-lived-proxy-token",
+        "DEEPSEEK_API_KEY": "must-not-use",
+        "DEEPSEEK_BASE_URL": "https://api.deepseek.com",
+    }
+
+    assert _api_key_for("deepseek", env) == "short-lived-proxy-token"
+    assert _base_url_for("deepseek", env) == "https://model-proxy.internal"
+
+    with pytest.raises(RunnerError, match="COCO_MODEL_PROXY_TOKEN is required"):
+        _api_key_for("deepseek", {"COCO_MODEL_PROXY_URL": "https://model-proxy.internal"})
+
+    with pytest.raises(RunnerError, match="COCO_MODEL_PROXY_URL must be an HTTPS URL"):
+        _base_url_for("deepseek", {
+            "COCO_MODEL_PROXY_URL": "http://model-proxy.internal",
+            "COCO_MODEL_PROXY_TOKEN": "short-lived-proxy-token",
+        })
 
 
 @dataclass
