@@ -644,7 +644,7 @@ E2E 默认使用 fake runner：
 | Phase 3：沙盒生命周期 | 完成 | `fdf906c feat: add coco sandbox lifecycle` | fake/E2B sandbox lifecycle、CAS、recovery、destroy 路径已完成 |
 | Phase 4：Coco ask_ai 主链路 | 完成 | `cbce88c feat: route coco ask ai turns` | Coco 房间 ask_ai 主链路、运行锁、事件持久化和广播已完成 |
 | Phase 5：前端 Coco UI | 完成 | `f4ea991 feat: add coco room ui` | 创建入口、状态展示、工具消息组件、fake runner E2E spec 和移动端适配已完成；完整浏览器 E2E 运行受当前 Codex 沙箱本机网络限制阻塞 |
-| Phase 6：真实 Coco runner 和沙盒镜像 | 待执行 | 待提交 | 沙盒内运行 `/Users/sky/projects/coco` 对应固定版本 Coco |
+| Phase 6：真实 Coco runner 和沙盒镜像 | 进行中 | 待提交 | runner adapter、artifact、model access contract 已完成；当前切片接入官方 E2B SDK driver |
 | Phase 7：灰度上线和回滚 | 待执行 | 待提交 | feature flag、allowlist、生产 smoke、回滚开关 |
 
 后续执行规则：
@@ -805,6 +805,12 @@ COCO_ALLOWED_USER_IDS=
 # Sandbox
 COCO_SANDBOX_PROVIDER=e2b
 COCO_E2B_TEMPLATE_ID=
+E2B_API_KEY=
+E2B_ACCESS_TOKEN=
+E2B_DOMAIN=
+E2B_API_URL=
+E2B_SANDBOX_URL=
+E2B_REQUEST_TIMEOUT_MS=60000
 COCO_SANDBOX_TTL_MS=3600000
 COCO_MAX_ACTIVE_SANDBOXES=5
 COCO_MAX_ACTIVE_SANDBOXES_PER_USER=1
@@ -944,7 +950,7 @@ COCO_MODEL_PROXY_TOKEN=
 
 1. 在沙盒内安装固定版本 Coco，或构建可复制的 runner artifact。
 2. 实现 `roomtalk_coco_runner` JSONL adapter。
-3. E2B service 从 skeleton 接到真实 create/connect/start runner。
+3. E2B service 通过官方 `e2b` TypeScript SDK 创建/连接 sandbox、启动 JSONL runner、按 metadata 统计 active sandbox。
 4. 接入 scoped provider key 或 model proxy。
 5. 增加 real Coco smoke，默认仅在显式环境变量开启时运行。
 
@@ -953,6 +959,7 @@ COCO_MODEL_PROXY_TOKEN=
 - fake runner 全部测试仍通过。
 - 有真实 sandbox/key 时 real smoke 通过。
 - 无真实 sandbox/key 时测试稳定跳过，UI 入口按 feature flag 禁用。
+- E2B JSONL 启动配置缺少 `E2B_API_KEY` / `E2B_ACCESS_TOKEN` 时服务直接拒绝启动。
 - 沙盒内 Coco 不能访问 allowed paths 之外文件。
 - Claude Code Opus 4.7 review 无 blocking/high findings。
 

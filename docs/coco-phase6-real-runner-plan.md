@@ -198,6 +198,9 @@ Implementation note:
 - The base image is pinned by digest and the runtime user is non-root.
 - Production startup validation requires `COCO_ARTIFACT_VERSION` and `COCO_SOURCE_REF` for E2B JSONL mode and rejects `COCO_SOURCE_DIR`.
 - Development artifact mode is the only accepted way to use `/Users/sky/projects/coco/src`.
+- RoomTalk now uses the official `e2b` TypeScript SDK for create/connect/list/kill and background command execution. `COCO_SANDBOX_PROVIDER=e2b` with `COCO_RUNNER_CLIENT=jsonl` requires `E2B_API_KEY` or `E2B_ACCESS_TOKEN` at startup.
+- Runner commands receive `COCO_TURN_TIMEOUT_MS` as the E2B command timeout so real Coco turns are not limited by the SDK's shorter default command timeout.
+- Active sandbox limits count E2B's currently running sandboxes through metadata filters (`creatorId`, plus global running state). If the SDK list call is unavailable, lifecycle code treats the count as unknown instead of enforcing a misleading local-only count.
 
 ### Phase 6.5: Model Access Strategy
 

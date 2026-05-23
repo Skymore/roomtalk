@@ -21,6 +21,7 @@ import { createAIClients } from './services/aiClients';
 import { CocoSandboxLifecycleService } from './services/cocoSandboxLifecycle';
 import { CocoSessionService } from './services/cocoSessionService';
 import { E2BCocoSandboxService, E2BSandboxDriver } from './services/e2bCocoSandboxService';
+import { createE2BSdkDriver } from './services/e2bSdkDriver';
 import { COCO_RUNNER_SCHEMA_VERSION } from './services/cocoRunnerProtocol';
 import { resolveCocoRuntimeConfig } from './services/cocoRuntimeConfig';
 import { FakeCocoRunnerClient } from './services/fakeCocoRunner';
@@ -137,30 +138,32 @@ const io = new Server(server, {
   pingInterval: 25000 // 25秒ping一次
 });
 
-const createUnavailableE2BDriver = (): E2BSandboxDriver => ({
-  async create() {
-    throw new Error('E2B sandbox driver is not configured in this server build');
-  },
-  async connect() {
-    throw new Error('E2B sandbox driver is not configured in this server build');
-  },
+const createE2BDriver = (): E2BSandboxDriver => createE2BSdkDriver({
+  apiKey: process.env.E2B_API_KEY,
+  accessToken: process.env.E2B_ACCESS_TOKEN,
+  domain: process.env.E2B_DOMAIN,
+  apiUrl: process.env.E2B_API_URL,
+  sandboxUrl: process.env.E2B_SANDBOX_URL,
+  requestTimeoutMs: parsePositiveIntegerEnv('E2B_REQUEST_TIMEOUT_MS', 60_000),
 });
 
 if (cocoRuntimeConfig.enabled && cocoRuntimeConfig.sandboxProvider === 'e2b') {
-  cocoLogger.warn(`E2B sandbox provider selected; driver wiring is staged until the sandbox artifact is available (${cocoRuntimeConfig.artifactMode} mode)`);
+  cocoLogger.info('E2B sandbox provider selected', { artifactMode: cocoRuntimeConfig.artifactMode });
 }
 
 const cocoSandboxService = cocoRuntimeConfig.enabled && cocoRuntimeConfig.sandboxProvider === 'e2b'
-  ? new E2BCocoSandboxService(createUnavailableE2BDriver(), {
+  ? new E2BCocoSandboxService(createE2BDriver(), {
     templateId: cocoRuntimeConfig.e2bTemplateId || '',
     workspace: cocoRuntimeConfig.e2bWorkspace,
     artifactVersion: cocoRuntimeConfig.artifactVersion,
     cocoSourceRef: cocoRuntimeConfig.cocoSourceRef,
+    logger: cocoLogger,
   })
   : new FakeCocoSandboxService();
+const cocoTurnTimeoutMs = parsePositiveIntegerEnv('COCO_TURN_TIMEOUT_MS', 5 * 60 * 1000);
 const cocoSandboxLifecycle = new CocoSandboxLifecycleService(store, cocoSandboxService, cocoLogger, {
   sandboxTtlMs: parsePositiveIntegerEnv('COCO_SANDBOX_TTL_MS', 60 * 60 * 1000),
-  turnTimeoutMs: parsePositiveIntegerEnv('COCO_TURN_TIMEOUT_MS', 5 * 60 * 1000),
+  turnTimeoutMs: cocoTurnTimeoutMs,
   creatingStaleMs: parsePositiveIntegerEnv('COCO_CREATING_STALE_MS', 2 * 60 * 1000),
   maxActiveSandboxes: parsePositiveIntegerEnv('COCO_MAX_ACTIVE_SANDBOXES', Number.POSITIVE_INFINITY),
   maxActiveSandboxesPerUser: parsePositiveIntegerEnv('COCO_MAX_ACTIVE_SANDBOXES_PER_USER', Number.POSITIVE_INFINITY),
@@ -188,6 +191,7 @@ const cocoSessionService = new CocoSessionService(
     allowedClientIds: cocoRuntimeConfig.allowedClientIds,
     mode: cocoRuntimeConfig.mode,
     runnerCommand: cocoRuntimeConfig.runnerCommand,
+    turnTimeoutMs: cocoTurnTimeoutMs,
     allowedPaths: cocoRuntimeConfig.allowedPaths,
     runnerEnv: cocoRuntimeConfig.runnerEnv,
     runnerProviderEnvByProvider: cocoRuntimeConfig.runnerProviderEnvByProvider,

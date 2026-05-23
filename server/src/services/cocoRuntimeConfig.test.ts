@@ -7,6 +7,10 @@ const pinnedArtifactEnv = {
   COCO_SOURCE_REF: '4f4ecc99589c68cffcb150b6a2df9f55144cc2d1',
 };
 
+const e2bCredentialEnv = {
+  E2B_API_KEY: 'e2b-test-key',
+};
+
 const scopedProviderKeyEnv = {
   COCO_SCOPED_PROVIDER_KEY: 'true',
   COCO_SCOPED_PROVIDER_KEY_TTL_SECONDS: '900',
@@ -78,6 +82,7 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_RUNNER_CLIENT: 'jsonl',
       COCO_MODE: 'plan',
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
+      ...e2bCredentialEnv,
     }), /requires COCO_ARTIFACT_VERSION and COCO_SOURCE_REF/);
 
     assert.throws(() => resolveCocoRuntimeConfig({
@@ -87,8 +92,20 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_MODE: 'plan',
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
       COCO_SOURCE_DIR: '/Users/sky/projects/coco/src',
+      ...e2bCredentialEnv,
       ...pinnedArtifactEnv,
     }), /must use the pinned sandbox artifact/);
+  });
+
+  it('requires E2B credentials for enabled E2B JSONL mode', () => {
+    assert.throws(() => resolveCocoRuntimeConfig({
+      COCO_ENABLED: 'true',
+      COCO_SANDBOX_PROVIDER: 'e2b',
+      COCO_RUNNER_CLIENT: 'jsonl',
+      COCO_MODE: 'plan',
+      COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
+      ...pinnedArtifactEnv,
+    }), /requires E2B_API_KEY or E2B_ACCESS_TOKEN/);
   });
 
   it('allows local Coco source mounts only in development artifact mode', () => {
@@ -99,6 +116,7 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_MODE: 'plan',
       COCO_ARTIFACT_MODE: 'development',
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco-dev',
+      ...e2bCredentialEnv,
     }), /requires COCO_SOURCE_DIR/);
 
     const config = resolveCocoRuntimeConfig({
@@ -109,6 +127,7 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_ARTIFACT_MODE: 'development',
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco-dev',
       COCO_SOURCE_DIR: '/Users/sky/projects/coco/src',
+      ...e2bCredentialEnv,
     });
 
     assert.equal(config.artifactMode, 'development');
@@ -128,6 +147,7 @@ describe('resolveCocoRuntimeConfig', () => {
       DEEPSEEK_BASE_URL: 'https://api.deepseek.com',
       ANTHROPIC_API_KEY: 'anthropic-key',
       UNRELATED_SECRET: 'must-not-leak',
+      ...e2bCredentialEnv,
       ...pinnedArtifactEnv,
     });
 
@@ -150,6 +170,7 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
+      ...e2bCredentialEnv,
       ...pinnedArtifactEnv,
     }), /requires model proxy with token or scoped provider key contract/);
 
@@ -160,6 +181,7 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_MODE: 'plan',
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
       ROOMTALK_COCO_ALLOW_SHELL: 'true',
+      ...e2bCredentialEnv,
       ...pinnedArtifactEnv,
     }), /requires model proxy with token or scoped provider key contract/);
 
@@ -170,6 +192,7 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
       COCO_MODEL_ACCESS_STRATEGY: 'proxy',
       COCO_MODEL_PROXY_URL: 'https://model-proxy.internal',
+      ...e2bCredentialEnv,
       ...pinnedArtifactEnv,
     }), /requires HTTPS COCO_MODEL_PROXY_URL and COCO_MODEL_PROXY_TOKEN/);
 
@@ -181,6 +204,7 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_MODEL_ACCESS_STRATEGY: 'proxy',
       COCO_MODEL_PROXY_URL: 'http://model-proxy.internal',
       COCO_MODEL_PROXY_TOKEN: 'short-lived-proxy-token',
+      ...e2bCredentialEnv,
       ...pinnedArtifactEnv,
     }), /requires HTTPS COCO_MODEL_PROXY_URL and COCO_MODEL_PROXY_TOKEN/);
 
@@ -193,6 +217,7 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_MODEL_PROXY_URL: 'https://model-proxy.internal',
       COCO_MODEL_PROXY_TOKEN: 'short-lived-proxy-token',
       DEEPSEEK_API_KEY: 'must-not-forward',
+      ...e2bCredentialEnv,
       ...pinnedArtifactEnv,
     }), /require COCO_MODEL_ACCESS_STRATEGY=proxy/);
 
@@ -217,6 +242,7 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_MODEL_ACCESS_STRATEGY: 'proxy',
       COCO_MODEL_PROXY_URL: 'https://model-proxy.internal',
       COCO_MODEL_PROXY_TOKEN: '   ',
+      ...e2bCredentialEnv,
       ...pinnedArtifactEnv,
     }), /requires HTTPS COCO_MODEL_PROXY_URL and COCO_MODEL_PROXY_TOKEN/);
 
@@ -227,6 +253,7 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
       COCO_SCOPED_PROVIDER_KEY: 'true',
       COCO_SCOPED_PROVIDER_KEY_TTL_SECONDS: '900',
+      ...e2bCredentialEnv,
       ...pinnedArtifactEnv,
     }), /requires TTL, budget, and audit id/);
 
@@ -236,6 +263,7 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_RUNNER_CLIENT: 'jsonl',
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
       DEEPSEEK_API_KEY: 'must-not-forward',
+      ...e2bCredentialEnv,
       ...scopedProviderKeyEnv,
       ...pinnedArtifactEnv,
     });
@@ -251,6 +279,7 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_MODE: 'plan',
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
       DEEPSEEK_API_KEY: 'must-not-forward',
+      ...e2bCredentialEnv,
       ...scopedProviderKeyEnv,
       ...pinnedArtifactEnv,
     });
@@ -263,6 +292,7 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_MODE: 'plan',
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
       DEEPSEEK_API_KEY: 'must-not-forward',
+      ...e2bCredentialEnv,
       ...modelProxyEnv,
       ...pinnedArtifactEnv,
     });
@@ -279,6 +309,7 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
+      ...e2bCredentialEnv,
       ...modelProxyEnv,
       ...pinnedArtifactEnv,
     });

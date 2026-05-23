@@ -37,6 +37,7 @@ export interface StartCocoRunnerInput {
   handle: CocoSandboxHandle;
   command: string;
   env?: Record<string, string>;
+  timeoutMs?: number;
 }
 
 export interface CocoSandboxService {
@@ -44,6 +45,6 @@ export interface CocoSandboxService {
   connect(sandboxId: string): Promise<CocoSandboxHandle>;
   startRunner(input: StartCocoRunnerInput): Promise<CocoRunnerProcess>;
   destroy(sandboxId: string): Promise<void>;
-  countActiveSandboxes?(): Promise<number>;
-  countActiveSandboxesForUser?(creatorId: string): Promise<number>;
+  countActiveSandboxes?(): Promise<number | undefined>;
+  countActiveSandboxesForUser?(creatorId: string): Promise<number | undefined>;
 }
