@@ -8,6 +8,7 @@ import { COCO_RUNNER_SCHEMA_VERSION, CocoRunnerEvent, CocoRunnerRunRequest } fro
 import { CocoRunnerClient, CocoRunnerRunResult } from './fakeCocoRunner';
 import { FakeCocoRunnerClient } from './fakeCocoRunner';
 import { FakeCocoSandboxService } from './fakeCocoSandboxService';
+import { DEFAULT_COCO_RUNNER_COMMAND } from './cocoRuntimeConfig';
 
 type RoomEmit = {
   roomId: string;
@@ -177,6 +178,7 @@ const createService = (options: {
   allowedClientIds?: string[];
   ids?: string[];
   runnerEnv?: Record<string, string>;
+  runnerProviderEnvByProvider?: Partial<Record<AIModelOption['provider'], Record<string, string>>>;
 } = {}) => {
   const store = options.store || new MemoryCocoStore(room(), [userMessage()]);
   const emitter = new FakeEmitter();
@@ -200,6 +202,7 @@ const createService = (options: {
       enabled: options.enabled ?? true,
       allowedClientIds: options.allowedClientIds,
       runnerEnv: options.runnerEnv,
+      runnerProviderEnvByProvider: options.runnerProviderEnvByProvider,
       now: () => new Date('2026-05-03T00:00:00.000Z'),
       createId: () => ids.shift() || 'id-fallback',
     }
@@ -236,7 +239,7 @@ describe('CocoSessionService', () => {
 
     assert.deepEqual(ack, { success: true, messageId: 'ai-1' });
     assert.deepEqual(result, { success: true, messageId: 'ai-1' });
-    assert.equal(sandboxService.startedRunnerCommands[0], 'python -m roomtalk_coco_runner');
+    assert.equal(sandboxService.startedRunnerCommands[0], DEFAULT_COCO_RUNNER_COMMAND);
     assert.deepEqual(sandboxService.startedRunnerEnvs[0], { PYTHONUNBUFFERED: '1' });
     assert.equal(runner.requests[0].prompt, 'inspect the project');
     assert.equal(runner.requests[0].apiModel, 'deepseek-chat');
@@ -279,6 +282,26 @@ describe('CocoSessionService', () => {
         process.env.ANTHROPIC_API_KEY = previousAnthropicKey;
       }
     }
+  });
+
+  it('passes only the selected model provider env to runner processes', async () => {
+    const runner = new FakeCocoRunnerClient([
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    ]);
+    const { sandboxService, service } = createService({
+      runner,
+      runnerProviderEnvByProvider: {
+        deepseek: { DEEPSEEK_API_KEY: 'deepseek-key' },
+        anthropic: { ANTHROPIC_API_KEY: 'anthropic-key' },
+      },
+    });
+
+    await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.deepEqual(sandboxService.startedRunnerEnvs[0], {
+      PYTHONUNBUFFERED: '1',
+      DEEPSEEK_API_KEY: 'deepseek-key',
+    });
   });
 
   it('rejects concurrent turns in the same Coco room', async () => {
