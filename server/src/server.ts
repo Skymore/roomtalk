@@ -107,6 +107,21 @@ const parsePositiveIntegerEnv = (name: string, fallback: number) => {
 const parseCsvEnv = (value?: string) =>
   value?.split(',').map(item => item.trim()).filter(Boolean) || [];
 
+const pickCocoRunnerEnv = (env: NodeJS.ProcessEnv) => {
+  const allowedNames = [
+    'COCO_SOURCE_DIR',
+    'COCO_MAX_TOKENS',
+    'ROOMTALK_COCO_MAX_TOKENS',
+    'ROOMTALK_COCO_ALLOW_WRITE_TOOLS',
+    'ROOMTALK_COCO_ALLOW_SHELL',
+  ];
+  return Object.fromEntries(
+    allowedNames
+      .map(name => [name, env[name]])
+      .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].length > 0)
+  );
+};
+
 redisClient.on('error', (err: Error) => {
   redisLogger.error('Redis connection error', { error: err.message, stack: err.stack });
 });
@@ -167,6 +182,7 @@ const cocoSessionService = new CocoSessionService(
     mode: process.env.COCO_MODE === 'plan' ? 'plan' : 'acceptEdits',
     runnerCommand: process.env.COCO_RUNNER_COMMAND || 'python -m roomtalk_coco_runner',
     allowedPaths: parseCsvEnv(process.env.COCO_ALLOWED_PATHS || '.'),
+    runnerEnv: pickCocoRunnerEnv(process.env),
   }
 );
 

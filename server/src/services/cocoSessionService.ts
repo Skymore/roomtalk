@@ -22,6 +22,7 @@ export interface CocoSessionServiceOptions {
   mode?: CocoRunnerMode;
   runnerCommand?: string;
   allowedPaths?: string[];
+  runnerEnv?: Record<string, string>;
   now?: () => Date;
   createId?: () => string;
 }
@@ -138,6 +139,7 @@ export class CocoSessionService {
       runnerProcess = await this.sandboxService.startRunner({
         handle: sandbox.handle,
         command: this.options.runnerCommand || DEFAULT_RUNNER_COMMAND,
+        env: this.buildRunnerEnv(),
       });
 
       let fullContent = '';
@@ -158,6 +160,9 @@ export class CocoSessionService {
         onEvent: async event => {
           fullContent = await this.handleRunnerEvent(event, input.roomId, turnId, aiMessageId, fullContent);
         },
+      }, {
+        process: runnerProcess,
+        sandbox: sandbox.handle,
       });
 
       if (runResult.errorEvent) {
@@ -334,5 +339,12 @@ export class CocoSessionService {
       return null;
     }
     return this.store.saveRoom({ ...currentRoom, ...patch });
+  }
+
+  private buildRunnerEnv() {
+    return {
+      PYTHONUNBUFFERED: '1',
+      ...(this.options.runnerEnv || {}),
+    };
   }
 }

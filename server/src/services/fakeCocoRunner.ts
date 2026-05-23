@@ -5,11 +5,22 @@ import {
   CocoRunnerRunRequest,
   parseCocoRunnerEventLine,
 } from './cocoRunnerProtocol';
+import { CocoRunnerProcess, CocoSandboxHandle } from './cocoSandboxService';
+
+export interface CocoRunnerHandlers {
+  onEvent: (event: CocoRunnerEvent) => void | Promise<void>;
+}
+
+export interface CocoRunnerRunContext {
+  process: CocoRunnerProcess;
+  sandbox: CocoSandboxHandle;
+}
 
 export interface CocoRunnerClient {
   run(
     request: CocoRunnerRunRequest,
-    handlers: { onEvent: (event: CocoRunnerEvent) => void | Promise<void> }
+    handlers: CocoRunnerHandlers,
+    context?: CocoRunnerRunContext
   ): Promise<CocoRunnerRunResult>;
 }
 
@@ -29,7 +40,7 @@ export class FakeCocoRunnerClient implements CocoRunnerClient {
 
   async run(
     request: CocoRunnerRunRequest,
-    handlers: { onEvent: (event: CocoRunnerEvent) => void | Promise<void> }
+    handlers: CocoRunnerHandlers
   ): Promise<CocoRunnerRunResult> {
     this.requests.push(request);
     const emitted: CocoRunnerEvent[] = [];
