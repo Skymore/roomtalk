@@ -16,7 +16,7 @@ import {
 } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
-import { AIRole, AIRoleColor, getAIRoleDisplayName, getAIRoleDisplayPrompt } from '../utils/aiRoles';
+import { AIRole, AIRoleColor, generateAIRoleDraft, getAIRoleDisplayName, getAIRoleDisplayPrompt } from '../utils/aiRoles';
 
 // AI角色管理组件接口
 export interface AIRoleManagerProps {
@@ -48,6 +48,10 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
   // 添加删除确认和创建表单状态
   const [roleToDelete, setRoleToDelete] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState<boolean>(false);
+  const [showAICreateModal, setShowAICreateModal] = useState<boolean>(false);
+  const [roleIdea, setRoleIdea] = useState<string>('');
+  const [isGeneratingRole, setIsGeneratingRole] = useState<boolean>(false);
+  const [roleGenerationError, setRoleGenerationError] = useState<boolean>(false);
   const { isOpen: isDeleteConfirmOpen, onOpen: onDeleteConfirmOpen, onClose: onDeleteConfirmClose } = useDisclosure();
 
   // 开始删除角色过程
@@ -87,6 +91,33 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
   // 取消编辑
   const handleCancelEdit = () => {
     setEditingRole(null);
+  };
+
+  const closeAICreateModal = () => {
+    if (isGeneratingRole) return;
+    setShowAICreateModal(false);
+    setRoleGenerationError(false);
+  };
+
+  const handleGenerateRole = async () => {
+    if (!roleIdea.trim() || isGeneratingRole) return;
+
+    setIsGeneratingRole(true);
+    setRoleGenerationError(false);
+    try {
+      const draft = await generateAIRoleDraft(roleIdea.trim());
+      setNewRole(current => ({
+        ...current,
+        name: draft.name,
+        systemPrompt: draft.systemPrompt,
+      }));
+      setRoleIdea('');
+      setShowAICreateModal(false);
+    } catch {
+      setRoleGenerationError(true);
+    } finally {
+      setIsGeneratingRole(false);
+    }
   };
 
   // 创建新角色
@@ -253,6 +284,25 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
               <Icon icon="lucide:x" />
             </Button>
           </div>
+          <Button
+            variant="bordered"
+            startContent={<Icon icon="lucide:sparkles" className="text-[#c96442] dark:text-[#ff9b76]" />}
+            onPress={() => {
+              setRoleGenerationError(false);
+              setShowAICreateModal(true);
+            }}
+            className="h-auto w-full justify-start border-[#dedbd0] px-4 py-3 text-left dark:border-[#30302e]"
+          >
+            <span className="flex flex-col items-start">
+              <span className="font-medium text-[#141413] dark:text-[#faf9f5]">{t('createWithAI')}</span>
+              <span className="text-xs font-normal text-[#5e5d59] dark:text-[#b0aea5]">{t('poweredByGeminiFlash')}</span>
+            </span>
+          </Button>
+          <div className="flex items-center gap-3 text-xs text-[#87867f] dark:text-[#b0aea5]">
+            <span className="h-px flex-1 bg-[#dedbd0] dark:bg-[#30302e]" />
+            <span>{t('orCreateManually')}</span>
+            <span className="h-px flex-1 bg-[#dedbd0] dark:bg-[#30302e]" />
+          </div>
           <Input
             label={t('roleName')}
             placeholder={t('enterRoleName')}
@@ -313,6 +363,44 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
           </div>
         </Card>
       )}
+
+      <Modal isOpen={showAICreateModal} onClose={closeAICreateModal} size="md">
+        <ModalContent>
+          <ModalHeader className="flex flex-col items-start gap-1">
+            <span>{t('createWithAI')}</span>
+            <span className="text-xs font-normal text-[#5e5d59] dark:text-[#b0aea5]">{t('poweredByGeminiFlash')}</span>
+          </ModalHeader>
+          <ModalBody>
+            <Textarea
+              label={t('aiRoleIntentQuestion')}
+              placeholder={t('aiRoleIntentPlaceholder')}
+              value={roleIdea}
+              onChange={(event) => setRoleIdea(event.target.value)}
+              minRows={4}
+              maxRows={7}
+              maxLength={2000}
+              isDisabled={isGeneratingRole}
+            />
+            {roleGenerationError && (
+              <p className="text-sm text-danger">{t('errorGeneratingRole')}</p>
+            )}
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="light" onPress={closeAICreateModal} isDisabled={isGeneratingRole}>
+              {t('cancel')}
+            </Button>
+            <Button
+              color="secondary"
+              className="bg-[#c96442] text-[#faf9f5]"
+              onPress={handleGenerateRole}
+              isDisabled={!roleIdea.trim() || isGeneratingRole}
+              isLoading={isGeneratingRole}
+            >
+              {isGeneratingRole ? t('generatingRole') : t('generateRole')}
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
 
       {/* 删除确认对话框 */}
       <Modal isOpen={isDeleteConfirmOpen} onClose={handleCancelDelete} size="sm">
