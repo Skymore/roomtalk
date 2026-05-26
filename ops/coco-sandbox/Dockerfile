@@ -1,4 +1,4 @@
-FROM python:3.12-slim-bookworm@sha256:c1b74bdacbd4903bcfbf73f5b8683478c83435cfa8e293068efaa102ecc56ea8
+FROM python:3.12-slim-bookworm@sha256:42ada43c4265e1ed6db62ad8df62af99a4abb9a9d49622032522ac76efb0bcef
 
 ENV PYTHONUNBUFFERED=1
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -14,12 +14,7 @@ COPY artifact.lock.json /opt/roomtalk-coco-artifact.lock.json
 COPY requirements.lock /opt/roomtalk-coco-requirements.lock
 
 RUN python -m pip install --no-cache-dir --require-hashes -r /opt/roomtalk-coco-requirements.lock \
-  && python - <<'PY'
-import importlib
-
-importlib.import_module("core.engine")
-importlib.import_module("roomtalk_coco_runner.runner")
-PY
+  && python -c 'import importlib; importlib.import_module("core.engine"); importlib.import_module("roomtalk_coco_runner.runner")'
 
 RUN useradd --create-home --uid 10001 roomtalk \
   && chown -R roomtalk:roomtalk /workspace

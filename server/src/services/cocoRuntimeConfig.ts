@@ -23,6 +23,8 @@ export interface CocoRuntimeConfig {
 }
 
 export const DEFAULT_COCO_RUNNER_COMMAND = 'python -m roomtalk_coco_runner';
+export const DEFAULT_COCO_RUNNER_PYTHONPATH = '/opt/coco/src:/opt/roomtalk_coco_runner';
+export const DEFAULT_COCO_WORKSPACE_ROOT = '/workspace';
 
 const parseCsvEnv = (value?: string) =>
   value?.split(',').map(item => item.trim()).filter(Boolean) || [];
@@ -55,6 +57,18 @@ const readArtifactMode = (env: NodeJS.ProcessEnv): CocoArtifactMode => {
     return value;
   }
   throw new Error(`Unsupported COCO_ARTIFACT_MODE: ${value}`);
+};
+
+const readMode = (env: NodeJS.ProcessEnv): CocoRunnerMode => {
+  const value = env.COCO_MODE?.trim();
+  if (!value || value === 'plan') {
+    return 'plan';
+  }
+  if (value === 'acceptEdits') {
+    return 'acceptEdits';
+  }
+  console.warn(`Unsupported COCO_MODE: ${value}; falling back to plan`);
+  return 'plan';
 };
 
 const hasPositiveNumber = (value?: string) => {
@@ -113,6 +127,7 @@ const hasApprovedModelAccess = (env: NodeJS.ProcessEnv) => {
 
 const pickRunnerEnv = (env: NodeJS.ProcessEnv) => pickEnv(env, [
   'COCO_SOURCE_DIR',
+  'COCO_WORKSPACE_ROOT',
   'COCO_MAX_TOKENS',
   'ROOMTALK_COCO_MAX_TOKENS',
   'ROOMTALK_COCO_ALLOW_WRITE_TOOLS',
@@ -120,6 +135,20 @@ const pickRunnerEnv = (env: NodeJS.ProcessEnv) => pickEnv(env, [
   'COCO_MODEL_PROXY_URL',
   'COCO_MODEL_PROXY_TOKEN',
 ]);
+
+const baseRunnerEnv = (
+  env: NodeJS.ProcessEnv,
+  sandboxProvider: CocoSandboxProvider,
+  runnerClient: CocoRunnerClientKind
+): Record<string, string> => {
+  if (sandboxProvider !== 'e2b' || runnerClient !== 'jsonl') {
+    return {};
+  }
+  return {
+    PYTHONPATH: env.COCO_RUNNER_PYTHONPATH || DEFAULT_COCO_RUNNER_PYTHONPATH,
+    COCO_WORKSPACE_ROOT: env.COCO_WORKSPACE_ROOT || env.COCO_E2B_WORKSPACE || DEFAULT_COCO_WORKSPACE_ROOT,
+  };
+};
 
 const providerEnv = (env: NodeJS.ProcessEnv): Partial<Record<AIModelProvider, Record<string, string>>> => ({
   anthropic: pickEnv(env, ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL']),
@@ -192,12 +221,13 @@ const validateEnabledConfig = (config: CocoRuntimeConfig, env: NodeJS.ProcessEnv
 };
 
 export const resolveCocoRuntimeConfig = (env: NodeJS.ProcessEnv): CocoRuntimeConfig => {
-  const mode: CocoRunnerMode = env.COCO_MODE === 'plan' ? 'plan' : 'acceptEdits';
+  const mode = readMode(env);
   const runnerClient = readRunnerClient(env);
+  const sandboxProvider = readSandboxProvider(env);
   const artifactMode = readArtifactMode(env);
   const config: CocoRuntimeConfig = {
     enabled: env.COCO_ENABLED === 'true',
-    sandboxProvider: readSandboxProvider(env),
+    sandboxProvider,
     runnerClient,
     artifactMode,
     artifactVersion: env.COCO_ARTIFACT_VERSION,
@@ -206,7 +236,10 @@ export const resolveCocoRuntimeConfig = (env: NodeJS.ProcessEnv): CocoRuntimeCon
     mode,
     runnerCommand: env.COCO_RUNNER_COMMAND || DEFAULT_COCO_RUNNER_COMMAND,
     allowedPaths: parseCsvEnv(env.COCO_ALLOWED_PATHS || '.'),
-    runnerEnv: pickRunnerEnv(env),
+    runnerEnv: {
+      ...baseRunnerEnv(env, sandboxProvider, runnerClient),
+      ...pickRunnerEnv(env),
+    },
     runnerProviderEnvByProvider: shouldForwardProviderEnv(env, runnerClient, mode) ? providerEnv(env) : {},
     e2bTemplateId: env.COCO_E2B_TEMPLATE_ID,
     e2bWorkspace: env.COCO_E2B_WORKSPACE,

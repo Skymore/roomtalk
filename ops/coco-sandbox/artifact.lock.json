@@ -6,7 +6,7 @@
   "baseImage": {
     "name": "python",
     "tag": "3.12-slim-bookworm",
-    "digest": "sha256:c1b74bdacbd4903bcfbf73f5b8683478c83435cfa8e293068efaa102ecc56ea8"
+    "digest": "sha256:42ada43c4265e1ed6db62ad8df62af99a4abb9a9d49622032522ac76efb0bcef"
   },
   "coco": {
     "packageName": "coco",

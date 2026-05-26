@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { DEFAULT_COCO_RUNNER_COMMAND, resolveCocoRuntimeConfig } from './cocoRuntimeConfig';
+import {
+  DEFAULT_COCO_RUNNER_COMMAND,
+  DEFAULT_COCO_RUNNER_PYTHONPATH,
+  DEFAULT_COCO_WORKSPACE_ROOT,
+  resolveCocoRuntimeConfig,
+} from './cocoRuntimeConfig';
 
 const pinnedArtifactEnv = {
   COCO_ARTIFACT_VERSION: 'roomtalk-coco-2026-05-22-4f4ecc9',
@@ -32,10 +37,28 @@ describe('resolveCocoRuntimeConfig', () => {
     assert.equal(config.sandboxProvider, 'fake');
     assert.equal(config.runnerClient, 'fake');
     assert.equal(config.artifactMode, 'production');
-    assert.equal(config.mode, 'acceptEdits');
+    assert.equal(config.mode, 'plan');
     assert.equal(config.runnerCommand, DEFAULT_COCO_RUNNER_COMMAND);
     assert.deepEqual(config.allowedPaths, ['.']);
     assert.deepEqual(config.runnerEnv, {});
+  });
+
+  it('falls back to plan mode and warns when COCO_MODE is invalid', () => {
+    const originalWarn = console.warn;
+    const warnings: string[] = [];
+    console.warn = (message?: unknown) => {
+      warnings.push(String(message));
+    };
+
+    try {
+      const config = resolveCocoRuntimeConfig({ COCO_MODE: 'accept_edits' });
+
+      assert.equal(config.mode, 'plan');
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0], /Unsupported COCO_MODE: accept_edits/);
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 
   it('rejects jsonl runner with fake sandbox when Coco is enabled', () => {
@@ -131,6 +154,7 @@ describe('resolveCocoRuntimeConfig', () => {
     });
 
     assert.equal(config.artifactMode, 'development');
+    assert.equal(config.runnerEnv.PYTHONPATH, DEFAULT_COCO_RUNNER_PYTHONPATH);
     assert.equal(config.runnerEnv.COCO_SOURCE_DIR, '/Users/sky/projects/coco/src');
     assert.equal(config.artifactVersion, undefined);
     assert.equal(config.cocoSourceRef, undefined);
@@ -151,7 +175,10 @@ describe('resolveCocoRuntimeConfig', () => {
       ...pinnedArtifactEnv,
     });
 
-    assert.deepEqual(config.runnerEnv, {});
+    assert.deepEqual(config.runnerEnv, {
+      PYTHONPATH: DEFAULT_COCO_RUNNER_PYTHONPATH,
+      COCO_WORKSPACE_ROOT: DEFAULT_COCO_WORKSPACE_ROOT,
+    });
     assert.equal(config.artifactVersion, pinnedArtifactEnv.COCO_ARTIFACT_VERSION);
     assert.equal(config.cocoSourceRef, pinnedArtifactEnv.COCO_SOURCE_REF);
     assert.deepEqual(config.runnerProviderEnvByProvider.deepseek, {
@@ -169,6 +196,7 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
+      COCO_MODE: 'acceptEdits',
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
       ...e2bCredentialEnv,
       ...pinnedArtifactEnv,
@@ -261,6 +289,7 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
+      COCO_MODE: 'acceptEdits',
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
       DEEPSEEK_API_KEY: 'must-not-forward',
       ...e2bCredentialEnv,
@@ -298,6 +327,8 @@ describe('resolveCocoRuntimeConfig', () => {
     });
     assert.deepEqual(proxied.runnerProviderEnvByProvider, {});
     assert.deepEqual(proxied.runnerEnv, {
+      PYTHONPATH: DEFAULT_COCO_RUNNER_PYTHONPATH,
+      COCO_WORKSPACE_ROOT: DEFAULT_COCO_WORKSPACE_ROOT,
       COCO_MODEL_PROXY_URL: 'https://model-proxy.internal',
       COCO_MODEL_PROXY_TOKEN: 'short-lived-proxy-token',
     });
@@ -308,6 +339,7 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
+      COCO_MODE: 'acceptEdits',
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
       ...e2bCredentialEnv,
       ...modelProxyEnv,
@@ -315,6 +347,8 @@ describe('resolveCocoRuntimeConfig', () => {
     });
 
     assert.equal(proxy.mode, 'acceptEdits');
+    assert.equal(proxy.runnerEnv.PYTHONPATH, DEFAULT_COCO_RUNNER_PYTHONPATH);
+    assert.equal(proxy.runnerEnv.COCO_WORKSPACE_ROOT, DEFAULT_COCO_WORKSPACE_ROOT);
     assert.equal(proxy.runnerEnv.COCO_MODEL_PROXY_URL, 'https://model-proxy.internal');
     assert.equal(proxy.runnerEnv.COCO_MODEL_PROXY_TOKEN, 'short-lived-proxy-token');
     assert.deepEqual(proxy.runnerProviderEnvByProvider, {});

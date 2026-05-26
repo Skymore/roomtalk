@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,7 +22,9 @@ from roomtalk_coco_runner.runner import (
     replay_tool_events,
     resolve_allowed_roots,
     run_request,
+    scoped_workspace_cwd,
     tool_names_for_mode,
+    validate_workspace_path,
 )
 
 
@@ -75,6 +78,23 @@ def test_allowed_paths_are_workspace_relative_and_cannot_escape(tmp_path: Path):
 
     with pytest.raises(RunnerError, match="escapes workspace"):
         resolve_allowed_roots(workspace, [".."])
+
+
+def test_workspace_path_must_stay_inside_configured_root(tmp_path: Path, monkeypatch):
+    workspace_root = tmp_path / "workspaces"
+    inside = workspace_root / "room-1"
+    outside = tmp_path / "outside"
+    monkeypatch.setenv("COCO_WORKSPACE_ROOT", str(workspace_root))
+
+    assert validate_workspace_path(inside) == inside.resolve()
+
+    with pytest.raises(RunnerError, match="absolute path"):
+        validate_workspace_path(Path("relative-workspace"))
+
+    with pytest.raises(RunnerError, match="COCO_WORKSPACE_ROOT"):
+        validate_workspace_path(outside)
+
+    assert not outside.exists()
 
 
 def test_tool_policy_keeps_plan_read_only_and_requires_explicit_write_or_shell_flags():
@@ -250,9 +270,10 @@ class FakeEngine:
         )
 
 
-def test_run_request_emits_tool_events_before_terminal_final():
+def test_run_request_emits_tool_events_before_terminal_final(monkeypatch):
     output = io.StringIO()
     parsed = parse_request(json.dumps(request()))
+    monkeypatch.setenv("COCO_WORKSPACE_ROOT", "/tmp")
 
     run_request(parsed, emitter=EventEmitter(output), engine_factory=lambda _request: FakeEngine())
 
@@ -270,6 +291,65 @@ def test_run_request_emits_tool_events_before_terminal_final():
     assert events[-1]["sessionId"] == "turn-1"
     assert events[-1]["usage"]["promptTokens"] == 10
     assert events[-1]["usage"]["cachedPromptTokens"] == 4
+
+
+def test_run_request_scopes_and_restores_cwd(tmp_path: Path, monkeypatch):
+    output = io.StringIO()
+    workspace = tmp_path / "workspace"
+    parsed = parse_request(json.dumps(request(workspace=str(workspace))))
+    original_cwd = Path.cwd()
+    monkeypatch.setenv("COCO_WORKSPACE_ROOT", str(tmp_path))
+
+    class CwdCheckingEngine:
+        def run(self, prompt, on_text_chunk=None):
+            assert Path.cwd() == workspace.resolve()
+            return EngineResult(answer="ok", messages=[])
+
+    def engine_factory(_request):
+        assert Path.cwd() == workspace.resolve()
+        return CwdCheckingEngine()
+
+    run_request(parsed, emitter=EventEmitter(output), engine_factory=engine_factory)
+
+    assert Path.cwd() == original_cwd
+    assert workspace.is_dir()
+
+
+def test_scoped_workspace_cwd_restores_cwd_after_error(tmp_path: Path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    original_cwd = Path.cwd()
+    monkeypatch.setenv("COCO_WORKSPACE_ROOT", str(tmp_path))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with scoped_workspace_cwd(workspace):
+            assert Path.cwd() == workspace.resolve()
+            raise RuntimeError("boom")
+
+    assert Path.cwd() == original_cwd
+
+
+def test_current_coco_file_tools_resolve_relative_paths_against_scoped_cwd(tmp_path: Path, monkeypatch):
+    coco_source = Path(os.environ.get("COCO_SOURCE_DIR") or "/Users/sky/projects/coco/src")
+    if not (coco_source / "core/tools/file_read.py").exists():
+        pytest.skip("Coco source is not available for file tool contract testing")
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "README.md").write_text("hello from scoped workspace\n", encoding="utf-8")
+    monkeypatch.setenv("COCO_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.syspath_prepend(str(coco_source))
+
+    from core.tools import FileReadTool, GlobTool, GrepTool
+
+    with scoped_workspace_cwd(workspace):
+        read_result = FileReadTool().invoke({"file_path": "README.md"})
+        glob_result = GlobTool().invoke({"pattern": "*.md"})
+        grep_result = GrepTool().invoke({"pattern": "scoped"})
+
+    assert read_result.success is True
+    assert "hello from scoped workspace" in read_result.content
+    assert "README.md" in glob_result.content
+    assert "README.md" in grep_result.content
 
 
 def test_main_emits_error_for_invalid_json():

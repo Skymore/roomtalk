@@ -57,6 +57,7 @@ describe('buildCocoE2BSmokePlan', () => {
     const plan = assertRunnable(baseEnv);
 
     assert.equal(plan.selectedModel.provider, 'deepseek');
+    assert.equal(plan.runnerEnv.PYTHONPATH, '/opt/coco/src:/opt/roomtalk_coco_runner');
     assert.equal(plan.runnerEnv.DEEPSEEK_API_KEY, 'deepseek-test-key');
     assert.equal(plan.runnerEnv.E2B_API_KEY, undefined);
     assert.equal(plan.runnerEnv.E2B_ACCESS_TOKEN, undefined);
@@ -76,6 +77,7 @@ describe('buildCocoE2BSmokePlan', () => {
 
     assert.equal(plan.runnerEnv.COCO_MODEL_PROXY_URL, 'https://model-proxy.internal');
     assert.equal(plan.runnerEnv.COCO_MODEL_PROXY_TOKEN, 'proxy-token');
+    assert.equal(plan.runnerEnv.PYTHONPATH, '/opt/coco/src:/opt/roomtalk_coco_runner');
     assert.equal(plan.runnerEnv.DEEPSEEK_API_KEY, undefined);
   });
 

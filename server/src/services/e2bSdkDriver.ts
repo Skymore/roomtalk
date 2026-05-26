@@ -211,7 +211,15 @@ const createE2BStdin = (sandbox: E2BSdkSandbox, pid: number) => new Writable({
       callback();
       return;
     }
-    sandbox.commands.closeStdin(pid).then(() => callback()).catch(callback);
+    sandbox.commands.closeStdin(pid)
+      .then(() => callback())
+      .catch(error => {
+        if (isE2BProcessAlreadyClosedError(error)) {
+          callback();
+          return;
+        }
+        callback(error);
+      });
   },
 });
 
@@ -220,3 +228,11 @@ const isCommandExitError = (error: unknown): error is E2BSdkCommandError & { exi
   error !== null &&
   typeof (error as E2BSdkCommandError).exitCode === 'number'
 );
+
+const isE2BProcessAlreadyClosedError = (error: unknown) => {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return message.includes('[not_found]') && message.includes('process') && message.includes('not found');
+};
