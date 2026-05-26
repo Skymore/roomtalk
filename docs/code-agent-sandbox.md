@@ -645,7 +645,7 @@ E2E 默认使用 fake runner：
 | Phase 4：Coco ask_ai 主链路 | 完成 | `cbce88c feat: route coco ask ai turns` | Coco 房间 ask_ai 主链路、运行锁、事件持久化和广播已完成 |
 | Phase 5：前端 Coco UI | 完成 | `f4ea991 feat: add coco room ui` | 创建入口、状态展示、工具消息组件、fake runner E2E spec 和移动端适配已完成；完整浏览器 E2E 运行受当前 Codex 沙箱本机网络限制阻塞 |
 | Phase 6：真实 Coco runner 和沙盒镜像 | 完成 | `f34f0df`、`e02efd6`、`daf6bee`、`dcc6621`、`d4cdc2d`、`01771bf`、`94550bf`、`e2c5398` | runner adapter、JSONL client、runtime guardrails、artifact、model access contract、E2B SDK driver 和 smoke 入口已完成 |
-| Phase 7：灰度上线和回滚 | 完成 | `PHASE7_COMMIT` | feature flag、allowlist、前后端创建/加入/详情查询入口阻断、Coco 运行中输入锁定、回归测试和 Claude review |
+| Phase 7：灰度上线和回滚 | 完成 | `3a5cc32 feat: add coco rollout controls` | feature flag、allowlist、前后端创建/加入/详情查询入口阻断、Coco 运行中输入锁定、回归测试和 Claude review |
 
 后续执行规则：
 
