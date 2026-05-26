@@ -4,8 +4,8 @@ import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 import { formatUsdCost } from '../utils/formatters';
 import { summarizeCocoMessages } from '../utils/cocoWorkspace';
-import { FeatureFlags } from '../utils/features';
 import { Message, Room } from '../utils/types';
+import { CodeAgentMode, getCodeAgentStatus } from '../utils/codeAgent';
 import {
   getCocoAgentStatusClassName,
   getCocoStatusLabelKey,
@@ -13,24 +13,25 @@ import {
   getSandboxStatusLabelKey,
 } from '../utils/cocoRoom';
 
-interface CocoWorkspacePanelProps {
+interface CodeAgentWorkspacePanelProps {
   room: Room;
   messages: Message[];
-  cocoMode: FeatureFlags['coco']['mode'];
+  mode: CodeAgentMode;
   sessionCostUsd: number;
 }
 
 const statClassName = 'min-w-0 rounded-lg border border-[#dedbd0] bg-[#faf9f5] px-3 py-2 dark:border-[#30302e] dark:bg-[#1d1d1b]';
 
-export const CocoWorkspacePanel: React.FC<CocoWorkspacePanelProps> = ({
+export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = ({
   room,
   messages,
-  cocoMode,
+  mode,
   sessionCostUsd,
 }) => {
   const { t } = useTranslation();
   const summary = React.useMemo(() => summarizeCocoMessages(messages), [messages]);
-  const isPlanMode = cocoMode === 'plan';
+  const isPlanMode = mode === 'plan';
+  const agentStatus = getCodeAgentStatus(room);
   const visibleFiles = summary.touchedFiles.slice(0, 8);
   const hiddenFileCount = Math.max(0, summary.touchedFiles.length - visibleFiles.length);
 
@@ -74,9 +75,9 @@ export const CocoWorkspacePanel: React.FC<CocoWorkspacePanelProps> = ({
             <Icon icon="lucide:box" className="h-3 w-3 flex-shrink-0" />
             <span className="truncate">{t(getSandboxStatusLabelKey(room.sandboxStatus))}</span>
           </span>
-          <span className={`inline-flex max-w-[150px] items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium ${getCocoAgentStatusClassName(room.cocoStatus)}`}>
+          <span className={`inline-flex max-w-[150px] items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium ${getCocoAgentStatusClassName(agentStatus)}`}>
             <Icon icon="lucide:bot" className="h-3 w-3 flex-shrink-0" />
-            <span className="truncate">{t(getCocoStatusLabelKey(room.cocoStatus))}</span>
+            <span className="truncate">{t(getCocoStatusLabelKey(agentStatus))}</span>
           </span>
           <span className="inline-flex items-center gap-1 rounded-full border border-[#dedbd0] bg-[#faf9f5] px-2 py-1 text-[11px] font-medium text-[#4d4c48] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#e8e6dc]">
             <Icon icon="lucide:coins" className="h-3 w-3" />

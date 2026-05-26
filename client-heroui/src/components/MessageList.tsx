@@ -6,8 +6,8 @@ import { MessageItem } from './MessageItem';
 import { Message, Room } from '../utils/types';
 import { useTranslation } from 'react-i18next';
 import { getStoredAIModel } from '../utils/aiModels';
+import { CodeAgentMode } from '../utils/codeAgent';
 import { formatUsdCost } from '../utils/formatters';
-import { FeatureFlags } from '../utils/features';
 import {
   deleteMessageById,
   editMessageAndTruncateAfter,
@@ -21,7 +21,7 @@ import { useRoomMessageEvents } from '../hooks/useRoomMessageEvents';
 // Import your new modals
 import { DeleteConfirmationModal } from './DeleteConfirmationModal';
 import { EditMessageModal } from './EditMessageModal';
-import { CocoWorkspacePanel } from './CocoWorkspacePanel';
+import { CodeAgentWorkspacePanel } from './CodeAgentWorkspacePanel';
 
 // Reminder: Set the app element for react-modal for accessibility
 // Ideally in your root component file (e.g., App.tsx or main.tsx)
@@ -31,14 +31,14 @@ interface MessageListProps {
   roomId: string;
   presentation?: 'chat' | 'code-agent';
   currentRoom?: Room;
-  cocoMode?: FeatureFlags['coco']['mode'];
+  codeAgentMode?: CodeAgentMode;
 }
 
 export const MessageList: React.FC<MessageListProps> = ({
   roomId,
   presentation = 'chat',
   currentRoom,
-  cocoMode = 'plan',
+  codeAgentMode = 'plan',
 }) => {
   const { t } = useTranslation();
   // generate a stable ID for the scroll container
@@ -255,10 +255,10 @@ export const MessageList: React.FC<MessageListProps> = ({
         onScroll={handleScroll}
       >
         {presentation === 'code-agent' && currentRoom ? (
-          <CocoWorkspacePanel
+          <CodeAgentWorkspacePanel
             room={currentRoom}
             messages={messages}
-            cocoMode={cocoMode}
+            mode={codeAgentMode}
             sessionCostUsd={sessionCostUsd}
           />
         ) : (

@@ -23,6 +23,7 @@ import { buildRoomShareUrl, getRoomActivityAt, validateRoomName } from '../utils
 import { createRoom } from '../utils/socket';
 import { Room, RoomRenameHandler, RoomType } from '../utils/types';
 import { getAvatarColor, getAvatarText } from '../utils/userProfile';
+import { isCodeAgentRoom } from '../utils/codeAgent';
 import { RoomCreateModal } from './RoomCreateModal';
 import { RoomRenameModal } from './RoomRenameModal';
 
@@ -485,7 +486,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
                     clientId={clientId}
                     room={room}
                     isActive={currentRoom?.id === room.id && view === 'chat'}
-                    icon={room.type === 'coco' ? 'lucide:terminal-square' : 'lucide:message-square'}
+                    icon={isCodeAgentRoom(room) ? 'lucide:terminal-square' : 'lucide:message-square'}
                     isCollapsed={isCollapsed}
                     onPress={() => onRoomSelect(room.id)}
                     onCopyRoomId={handleCopyToClipboard}

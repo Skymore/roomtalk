@@ -4,7 +4,8 @@ import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 import { Room } from '../utils/types';
 import { formatDate } from '../utils/formatters';
-import { getCocoAgentStatusClassName, getCocoStatusLabelKey, getSandboxStatusClassName, getSandboxStatusLabelKey, isCocoRoom } from '../utils/cocoRoom';
+import { getCodeAgentBackend, getCodeAgentStatus, isSupportedCodeAgentBackend } from '../utils/codeAgent';
+import { getCocoAgentStatusClassName, getCocoStatusLabelKey, getSandboxStatusClassName, getSandboxStatusLabelKey } from '../utils/cocoRoom';
 import { getRoomActivityAt } from '../utils/roomState';
 
 interface RoomCardProps {
@@ -32,7 +33,10 @@ export const RoomCard: React.FC<RoomCardProps> = ({
 }) => {
   const { t, i18n } = useTranslation();
   const activityAt = getRoomActivityAt(room);
-  const isCoco = isCocoRoom(room);
+  const codeAgentBackend = getCodeAgentBackend(room);
+  const isCodeAgent = codeAgentBackend !== null;
+  const isSupportedCodeAgent = isSupportedCodeAgentBackend(codeAgentBackend);
+  const agentStatus = getCodeAgentStatus(room);
 
   const copyRoomId = () => {
     onCopyRoomId(room.id);
@@ -63,12 +67,12 @@ export const RoomCard: React.FC<RoomCardProps> = ({
           onClick={() => onSelect(room.id)}
         >
           <div className="mr-3 rounded-xl bg-[#e8e6dc] p-2.5 text-[#c96442] dark:bg-[#30302e] dark:text-[#d97757]">
-            <Icon icon={isCoco ? 'lucide:terminal' : 'lucide:message-circle'} className="h-5 w-5" aria-hidden="true" />
+            <Icon icon={isCodeAgent ? 'lucide:terminal' : 'lucide:message-circle'} className="h-5 w-5" aria-hidden="true" />
           </div>
           <div className="min-w-0 flex-1">
             <div className="mb-1 flex min-w-0 flex-wrap items-center gap-1.5">
               <h3 className="min-w-0 flex-1 truncate font-medium text-[#141413] dark:text-[#faf9f5]">{room.name}</h3>
-              {isCoco && (
+              {isCodeAgent && (
                 <Chip
                   size="sm"
                   variant="flat"
@@ -78,22 +82,22 @@ export const RoomCard: React.FC<RoomCardProps> = ({
                     content: 'px-0 text-[10px] font-semibold',
                   }}
                 >
-                  {t('cocoRoomType')}
+                  {t('codeAgentRoomType')}
                 </Chip>
               )}
             </div>
             {room.description && (
               <p className="mb-2 line-clamp-2 text-xs text-[#5e5d59] dark:text-[#b0aea5]">{room.description}</p>
             )}
-            {isCoco && (
+            {isSupportedCodeAgent && (
               <div className="mb-2 flex min-w-0 flex-wrap items-center gap-1.5">
                 <span className={`inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${getSandboxStatusClassName(room.sandboxStatus)}`}>
                   <Icon icon="lucide:box" className="h-3 w-3 flex-shrink-0" />
                   <span className="truncate">{t(getSandboxStatusLabelKey(room.sandboxStatus))}</span>
                 </span>
-                <span className={`inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${getCocoAgentStatusClassName(room.cocoStatus)}`}>
+                <span className={`inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${getCocoAgentStatusClassName(agentStatus)}`}>
                   <Icon icon="lucide:bot" className="h-3 w-3 flex-shrink-0" />
-                  <span className="truncate">{t(getCocoStatusLabelKey(room.cocoStatus))}</span>
+                  <span className="truncate">{t(getCocoStatusLabelKey(agentStatus))}</span>
                 </span>
               </div>
             )}

@@ -3,7 +3,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Message, Room } from '../utils/types';
-import { CocoWorkspacePanel } from './CocoWorkspacePanel';
+import { CodeAgentWorkspacePanel } from './CodeAgentWorkspacePanel';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -32,17 +32,17 @@ const toolCall: Message = {
   toolArgs: { file_path: '/workspace/src/App.tsx' },
 };
 
-describe('CocoWorkspacePanel', () => {
+describe('CodeAgentWorkspacePanel', () => {
   afterEach(() => {
     cleanup();
   });
 
   it('renders plan mode as read-only workspace state', () => {
     render(
-      <CocoWorkspacePanel
+      <CodeAgentWorkspacePanel
         room={room}
         messages={[]}
-        cocoMode="plan"
+        mode="plan"
         sessionCostUsd={0}
       />
     );
@@ -54,10 +54,10 @@ describe('CocoWorkspacePanel', () => {
 
   it('renders acceptEdits mode and derived tool activity', () => {
     render(
-      <CocoWorkspacePanel
+      <CodeAgentWorkspacePanel
         room={{ ...room, cocoStatus: 'running' }}
         messages={[toolCall]}
-        cocoMode="acceptEdits"
+        mode="acceptEdits"
         sessionCostUsd={0.25}
       />
     );
@@ -76,10 +76,10 @@ describe('CocoWorkspacePanel', () => {
     }));
 
     render(
-      <CocoWorkspacePanel
+      <CodeAgentWorkspacePanel
         room={room}
         messages={messages}
-        cocoMode="plan"
+        mode="plan"
         sessionCostUsd={0}
       />
     );
