@@ -4,6 +4,7 @@ import {
   AIRole,
   defaultAIRoles,
   deleteAIRole,
+  generateAIRoleDraft,
   getAIRoleDisplayName,
   getAIRoleDisplayPrompt,
   getSavedAIRoles,
@@ -91,5 +92,29 @@ describe("aiRoles", () => {
       roles: [customRole],
       selectedRoleId: "custom",
     });
+  });
+
+  it("requests and validates AI generated role drafts", async () => {
+    const draft = { name: "Reviewer", systemPrompt: "Review code carefully." };
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      json: async () => draft,
+    })));
+
+    await expect(generateAIRoleDraft("Create a reviewer")).resolves.toEqual(draft);
+    expect(fetch).toHaveBeenCalledWith("/api/ai-role-draft", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ idea: "Create a reviewer" }),
+    });
+
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 502 })));
+    await expect(generateAIRoleDraft("fail")).rejects.toThrow("Failed to generate AI role draft: 502");
+
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ name: "Missing prompt" }),
+    })));
+    await expect(generateAIRoleDraft("invalid")).rejects.toThrow("AI role draft response is invalid");
   });
 });

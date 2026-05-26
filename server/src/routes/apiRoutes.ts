@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../logger';
 import { RoomStore } from '../repositories/store';
 import { Message, Room } from '../types';
+import { AIRoleDraft, MAX_AI_ROLE_IDEA_LENGTH } from '../services/aiRoleGenerator';
 
 interface ApiRouteOptions {
   store: RoomStore;
@@ -12,11 +13,12 @@ interface ApiRouteOptions {
   redisClient: RedisClientType;
   routeLogger: Logger;
   getAIModelResponse: () => unknown;
+  generateAIRoleDraft: (idea: string) => Promise<AIRoleDraft>;
   persistenceStore?: string;
 }
 
 export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
-  const { store, io, redisClient, routeLogger, getAIModelResponse, persistenceStore = 'redis' } = options;
+  const { store, io, redisClient, routeLogger, getAIModelResponse, generateAIRoleDraft, persistenceStore = 'redis' } = options;
 
   app.get('/api/rooms/:roomId/messages', async (req: Request, res: Response) => {
     const { roomId } = req.params;
@@ -112,6 +114,23 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
 
   app.get('/api/ai-models', (_req: Request, res: Response) => {
     res.json(getAIModelResponse());
+  });
+
+  app.post('/api/ai-role-draft', async (req: Request, res: Response) => {
+    const idea = typeof req.body?.idea === 'string' ? req.body.idea.trim() : '';
+    if (!idea || idea.length > MAX_AI_ROLE_IDEA_LENGTH) {
+      return res.status(400).json({ error: 'Role idea is required and must be 2000 characters or fewer' });
+    }
+
+    try {
+      return res.json(await generateAIRoleDraft(idea));
+    } catch (error) {
+      routeLogger.error('Failed to generate AI role draft', {
+        error: error instanceof Error ? error.message : error,
+        ip: req.ip,
+      });
+      return res.status(502).json({ error: 'Failed to generate AI role draft' });
+    }
   });
 
   app.get('/api/rooms/:roomId/ai-cost', async (req: Request, res: Response) => {

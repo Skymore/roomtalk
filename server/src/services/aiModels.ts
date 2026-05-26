@@ -2,6 +2,7 @@ import { AICost, AIModelOption, AIUsage, Message } from '../types';
 
 export const DEFAULT_SYSTEM_MESSAGE = 'You are a helpful, creative, friendly assistant. Respond concisely and clearly.';
 export const DEFAULT_AI_MODEL_ID = 'deepseek-v4-pro';
+export const AI_ROLE_GENERATOR_MODEL_ID = 'google/gemini-3.5-flash';
 export const PREMIUM_OUTPUT_PRICE_THRESHOLD = 10;
 
 interface AIModelLogger {
