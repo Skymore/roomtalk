@@ -31,6 +31,7 @@ import { BottomNav } from "../components/BottomNav";
 import { DesktopSidebar } from "../components/DesktopSidebar";
 import { WelcomeView } from "../components/WelcomeView";
 import { ChatRoomView } from "../components/ChatRoomView";
+import { CodeAgentRoomView } from "../components/CodeAgentRoomView";
 
 const isDesktopLayout = () => (
   typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches
@@ -98,21 +99,36 @@ export const MessagePage: React.FC = () => {
 
   useEffect(() => {
     let cancelled = false;
-    fetchFeatureFlags(clientId)
-      .then((flags) => {
-        if (!cancelled) {
-          setFeatureFlags(flags);
-        }
-      })
-      .catch((error) => {
-        console.error("Failed to load feature flags:", error);
-        if (!cancelled) {
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const retryDelaysMs = [0, 1000, 3000];
+
+    const loadFeatureFlags = (attempt = 0) => {
+      fetchFeatureFlags(clientId)
+        .then((flags) => {
+          if (!cancelled) {
+            setFeatureFlags(flags);
+          }
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          const nextDelay = retryDelaysMs[attempt + 1];
+          if (nextDelay !== undefined) {
+            retryTimer = setTimeout(() => loadFeatureFlags(attempt + 1), nextDelay);
+            return;
+          }
+
+          console.error("Failed to load feature flags:", error);
           setFeatureFlags(FALLBACK_FEATURE_FLAGS);
-        }
-      });
+        });
+    };
+
+    loadFeatureFlags();
 
     return () => {
       cancelled = true;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+      }
     };
   }, []);
 
@@ -496,7 +512,7 @@ export const MessagePage: React.FC = () => {
     switch (view) {
       case "rooms":
         return (
-          <div className="h-full overflow-y-auto"> {/* 占据全部可用空间 */}
+          <div className="h-full w-full overflow-y-auto"> {/* 占据全部可用空间 */}
             <RoomList
               rooms={rooms}
               onRoomSelect={handleRoomSelect}
@@ -510,7 +526,7 @@ export const MessagePage: React.FC = () => {
         );
       case "saved":
         return (
-          <div className="h-full overflow-y-auto"> {/* 占据全部可用空间 */}
+          <div className="h-full w-full overflow-y-auto"> {/* 占据全部可用空间 */}
             <SavedRoomList
               rooms={savedRooms}
               onRoomSelect={handleRoomSelect}
@@ -536,23 +552,44 @@ export const MessagePage: React.FC = () => {
         );
       case "chat":
         return currentRoom ? (
-          <ChatRoomView
-            currentRoom={currentRoom}
-            memberCount={memberCount}
-            memberEvent={memberEvent}
-            username={username}
-            clientId={clientId}
-            handleCopyToClipboard={handleCopyToClipboard}
-            handleShareRoom={handleShareRoom}
-            handleToggleSave={handleToggleSave}
-            handleLeaveRoom={handleLeaveRoom}
-            isRoomSaved={isRoomSaved}
-            setView={setView}
-            clearRoomUrlParam={clearRoomUrlParam}
-            handleClearChatMessages={handleClearChatMessages}
-            handleDeleteRoom={handleDeleteRoom}
-            handleRenameRoom={handleRenameRoom}
-          />
+          currentRoom.type === 'coco' ? (
+            <CodeAgentRoomView
+              currentRoom={currentRoom}
+              memberCount={memberCount}
+              memberEvent={memberEvent}
+              username={username}
+              clientId={clientId}
+              cocoMode={featureFlags.coco.mode}
+              handleCopyToClipboard={handleCopyToClipboard}
+              handleShareRoom={handleShareRoom}
+              handleToggleSave={handleToggleSave}
+              handleLeaveRoom={handleLeaveRoom}
+              isRoomSaved={isRoomSaved}
+              setView={setView}
+              clearRoomUrlParam={clearRoomUrlParam}
+              handleClearChatMessages={handleClearChatMessages}
+              handleDeleteRoom={handleDeleteRoom}
+              handleRenameRoom={handleRenameRoom}
+            />
+          ) : (
+            <ChatRoomView
+              currentRoom={currentRoom}
+              memberCount={memberCount}
+              memberEvent={memberEvent}
+              username={username}
+              clientId={clientId}
+              handleCopyToClipboard={handleCopyToClipboard}
+              handleShareRoom={handleShareRoom}
+              handleToggleSave={handleToggleSave}
+              handleLeaveRoom={handleLeaveRoom}
+              isRoomSaved={isRoomSaved}
+              setView={setView}
+              clearRoomUrlParam={clearRoomUrlParam}
+              handleClearChatMessages={handleClearChatMessages}
+              handleDeleteRoom={handleDeleteRoom}
+              handleRenameRoom={handleRenameRoom}
+            />
+          )
         ) : (
           <WelcomeView onEnterRooms={() => setView("rooms")} />
         );

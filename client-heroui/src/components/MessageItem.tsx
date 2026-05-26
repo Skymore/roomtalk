@@ -11,7 +11,8 @@ interface MessageItemProps {
   message: Message;
   onStartEdit: (messageId: string) => void;
   onDeleteMessage: (messageId: string) => void;
-  onRefreshAI?: (messageId: string, content: string) => void;
+  onRefreshAI?: (messageId: string) => void;
+  presentation?: 'chat' | 'code-agent';
 }
 
 const tooltipClassNames = {
@@ -52,9 +53,11 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   message,
   onStartEdit,
   onDeleteMessage,
-  onRefreshAI
+  onRefreshAI,
+  presentation = 'chat',
 }) => {
   const isMine = message.clientId === clientId;
+  const isCodeAgent = presentation === 'code-agent';
   const [isHovered, setIsHovered] = React.useState(false);
   const [imageError, setImageError] = React.useState(false);
   const isImage = message.messageType === "image";
@@ -111,7 +114,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   // 修改成不使用事件参数的简单处理函数，避免类型错误
   const handleRefreshAIClick = () => {
     if (isAI && onRefreshAI && !isStreaming) {
-      onRefreshAI(message.id, message.content);
+      onRefreshAI(message.id);
     }
   };
 
@@ -201,12 +204,12 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     <div
       data-testid="message-item"
       data-message-id={message.id}
-      className={`group mb-1 flex w-full items-start ${isMine ? "justify-end" : "justify-start"}`}
+      className={`group mb-1 flex w-full items-start ${isMine && !isCodeAgent ? "justify-end" : "justify-start"}`}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
       {/* Opponent's avatar or AI avatar */}
-      {(!isMine || isAI) && !isMine && (
+      {(!isCodeAgent && (!isMine || isAI) && !isMine) && (
         <Avatar
           name={message.avatar?.text || undefined}
           icon={isAI ? <Icon icon="lucide:bot" /> : isCocoEvent ? <Icon icon="lucide:terminal" /> : (!message.avatar?.text ? <Icon icon="lucide:user" /> : undefined)}
@@ -219,9 +222,9 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       )}
 
       {/* Message Content Area */}
-      <div className={`flex max-w-[82%] flex-col min-w-0 sm:max-w-[70%] ${isMine ? 'items-end' : 'items-start'}`}>
+      <div className={`flex min-w-0 flex-col ${isCodeAgent ? 'w-full max-w-full items-start' : `max-w-[82%] sm:max-w-[70%] ${isMine ? 'items-end' : 'items-start'}`}`}>
         {/* Username or AI name */}
-        {(!isMine || isAI) && !isMine && (message.username || isAI || isCocoEvent) && (
+        {(!isCodeAgent && (!isMine || isAI) && !isMine && (message.username || isAI || isCocoEvent)) && (
           <div className="mb-1 ml-1 text-tiny text-[#5e5d59] dark:text-[#b0aea5]">
             {isAI ? (message.username || t('aiAssistantName')) : isCocoEvent ? t('cocoRoomType') : message.username}
           </div>

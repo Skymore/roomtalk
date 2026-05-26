@@ -36,7 +36,7 @@ async function askCoco(page: Parameters<typeof openRoomsPage>[0], prompt: string
   const editor = page.getByTestId('message-editor');
   await editor.click();
   await page.keyboard.insertText(prompt);
-  await page.getByRole('button', { name: 'Ask AI' }).click();
+  await page.getByRole('button', { name: 'Run' }).click();
   await expectMessage(page, prompt).toBeVisible();
 }
 
@@ -46,6 +46,9 @@ test('runs a fake Coco turn and restores tool history after refresh', async ({ p
 
   await askCoco(page, prompt);
 
+  await expect(page.getByTestId('code-agent-workspace')).toBeVisible();
+  await expect(page.getByText('Plan mode')).toBeVisible();
+  await expect(page.getByText('Agent activity')).toBeVisible();
   await expectMessage(page, 'Coco fake runner received the task.').toBeVisible();
   await expect(page.getByText('Tool call')).toBeVisible();
   await expect(page.getByText('Shell').first()).toBeVisible();
@@ -69,7 +72,7 @@ test('locks Coco ask controls while the room turn is running', async ({ page, co
 
   const prompt = uniqueName('coco-first');
   const editor = page.getByTestId('message-editor');
-  const askButton = page.getByRole('button', { name: 'Ask AI' });
+  const askButton = page.getByRole('button', { name: 'Run' });
 
   await editor.click();
   await page.keyboard.insertText(prompt);

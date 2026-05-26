@@ -6,6 +6,7 @@ import { Logger } from '../logger';
 import { RoomStore } from '../repositories/store';
 import { Message, Room } from '../types';
 import { CocoAccessControl, createCocoAccessControl } from '../services/cocoAccessControl';
+import { CocoRunnerMode } from '../services/cocoRunnerProtocol';
 import { createRoomRecord, validateRoomNameInput } from '../services/messageDomain';
 
 interface ApiRouteOptions {
@@ -16,6 +17,7 @@ interface ApiRouteOptions {
   getAIModelResponse: () => unknown;
   persistenceStore?: string;
   cocoAccess?: CocoAccessControl;
+  cocoMode?: CocoRunnerMode;
 }
 
 export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
@@ -27,6 +29,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     getAIModelResponse,
     persistenceStore = 'redis',
     cocoAccess = createCocoAccessControl({ enabled: false }),
+    cocoMode = 'plan',
   } = options;
 
   app.get('/api/rooms/:roomId/messages', async (req: Request, res: Response) => {
@@ -139,7 +142,10 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   app.get('/api/features', (req: Request, res: Response) => {
     const clientId = typeof req.query.clientId === 'string' ? req.query.clientId : undefined;
     return res.json({
-      coco: cocoAccess.toFeaturePayload(clientId),
+      coco: {
+        ...cocoAccess.toFeaturePayload(clientId),
+        mode: cocoMode,
+      },
     });
   });
 
@@ -187,6 +193,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
           coco: {
             enabled: cocoAccess.enabled,
             rollout: !cocoAccess.enabled ? 'disabled' : cocoAccess.hasAllowlist ? 'allowlist' : 'all',
+            mode: cocoMode,
           },
         },
         rooms: roomCount,
