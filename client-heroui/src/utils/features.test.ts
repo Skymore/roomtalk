@@ -8,20 +8,31 @@ describe('feature flags', () => {
 
   it('defaults Coco to disabled for fail-closed UI behavior', () => {
     expect(FALLBACK_FEATURE_FLAGS).toEqual({
-      coco: { enabled: false, rollout: 'disabled' },
+      coco: { enabled: false, mode: 'plan', rollout: 'disabled' },
     });
   });
 
   it('fetches per-client feature flags', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: true,
-      json: async () => ({ coco: { enabled: true, rollout: 'allowlist' } }),
+      json: async () => ({ coco: { enabled: true, mode: 'acceptEdits', rollout: 'allowlist' } }),
     })));
 
     await expect(fetchFeatureFlags('client-1')).resolves.toEqual({
-      coco: { enabled: true, rollout: 'allowlist', reason: undefined },
+      coco: { enabled: true, mode: 'acceptEdits', rollout: 'allowlist', reason: undefined },
     });
     expect(fetch).toHaveBeenCalledWith('/api/features?clientId=client-1');
+  });
+
+  it('defaults unknown or missing Coco mode to plan', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ coco: { enabled: true, rollout: 'all' } }),
+    })));
+
+    await expect(fetchFeatureFlags('client-1')).resolves.toMatchObject({
+      coco: { enabled: true, mode: 'plan' },
+    });
   });
 
   it('rejects failed or invalid feature responses', async () => {

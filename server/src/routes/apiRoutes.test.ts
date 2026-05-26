@@ -8,6 +8,7 @@ import path from 'path';
 import { registerApiRoutes } from './apiRoutes';
 import { Message, Room } from '../types';
 import { CocoAccessControl, createCocoAccessControl } from '../services/cocoAccessControl';
+import { CocoRunnerMode } from '../services/cocoRunnerProtocol';
 
 type EmittedEvent = {
   target: string;
@@ -93,7 +94,7 @@ const writeLargeHistoryBaseline = async (payload: {
   }
 };
 
-async function createTestServer(options: { cocoAccess?: CocoAccessControl } = {}): Promise<TestServer> {
+async function createTestServer(options: { cocoAccess?: CocoAccessControl; cocoMode?: CocoRunnerMode } = {}): Promise<TestServer> {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
 
@@ -170,6 +171,7 @@ async function createTestServer(options: { cocoAccess?: CocoAccessControl } = {}
       models: [{ id: 'gpt-5.5', label: 'GPT-5.5' }],
     }),
     cocoAccess: options.cocoAccess,
+    cocoMode: options.cocoMode,
   });
 
   const server = await new Promise<HttpServer>(resolve => {
@@ -222,31 +224,32 @@ describe('API routes', () => {
       persistenceStore: string;
       redis: string;
       rooms: number;
-      features: { coco: { enabled: boolean; rollout: string } };
+      features: { coco: { enabled: boolean; rollout: string; mode: string } };
     };
     assert.equal(status.status, 'online');
     assert.equal(status.persistenceStore, 'redis');
     assert.equal(status.redis, 'connected');
     assert.equal(status.rooms, 1);
-    assert.deepEqual(status.features.coco, { enabled: false, rollout: 'disabled' });
+    assert.deepEqual(status.features.coco, { enabled: false, rollout: 'disabled', mode: 'plan' });
   });
 
   it('returns Coco feature flags per client', async () => {
     await server.close();
     server = await createTestServer({
       cocoAccess: createCocoAccessControl({ enabled: true, allowedClientIds: ['client-1'] }),
+      cocoMode: 'acceptEdits',
     });
 
     const allowedResponse = await fetch(`${server.baseUrl}/api/features?clientId=client-1`);
     assert.equal(allowedResponse.status, 200);
     assert.deepEqual(await allowedResponse.json(), {
-      coco: { enabled: true, rollout: 'allowlist' },
+      coco: { enabled: true, rollout: 'allowlist', mode: 'acceptEdits' },
     });
 
     const deniedResponse = await fetch(`${server.baseUrl}/api/features?clientId=client-2`);
     assert.equal(deniedResponse.status, 200);
     assert.deepEqual(await deniedResponse.json(), {
-      coco: { enabled: false, rollout: 'allowlist', reason: 'not_allowed' },
+      coco: { enabled: false, rollout: 'allowlist', reason: 'not_allowed', mode: 'acceptEdits' },
     });
   });
 

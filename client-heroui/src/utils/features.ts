@@ -1,13 +1,14 @@
 export interface FeatureFlags {
   coco: {
     enabled: boolean;
+    mode: 'plan' | 'acceptEdits';
     rollout?: 'disabled' | 'allowlist' | 'all';
     reason?: string;
   };
 }
 
 export const FALLBACK_FEATURE_FLAGS: FeatureFlags = {
-  coco: { enabled: false, rollout: 'disabled' },
+  coco: { enabled: false, mode: 'plan', rollout: 'disabled' },
 };
 
 const getApiBaseUrl = () => {
@@ -32,10 +33,12 @@ export const fetchFeatureFlags = async (clientId: string): Promise<FeatureFlags>
   if (typeof data?.coco?.enabled !== 'boolean') {
     throw new Error('Feature flag response is invalid');
   }
+  const cocoMode = data.coco.mode === 'acceptEdits' ? 'acceptEdits' : 'plan';
 
   return {
     coco: {
       enabled: data.coco.enabled,
+      mode: cocoMode,
       rollout: data.coco.rollout,
       reason: data.coco.reason,
     },

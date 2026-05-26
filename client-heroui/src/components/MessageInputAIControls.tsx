@@ -104,6 +104,7 @@ interface MessageInputAIControlsProps {
   onDeleteRole: (roleId: string) => void;
   onAskAI: () => void;
   onSend: () => void;
+  isCodeAgentRoom?: boolean;
 }
 
 export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
@@ -128,6 +129,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   onDeleteRole,
   onAskAI,
   onSend,
+  isCodeAgentRoom = false,
 }) => {
   const { t } = useTranslation();
   const [isMobileViewport, setIsMobileViewport] = React.useState(false);
@@ -137,6 +139,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   const selectedModel = aiModels.find(model => model.id === (selectedAIModel || defaultAIModel));
   const hasInputContent = currentInputText.trim().length > 0 || imageCount > 0;
   const isControlLocked = isSending || isInputLocked;
+  const askActionLabel = isCodeAgentRoom ? t('runAgent') : t('askAI');
   const compactItemClassNames = {
     base: "w-full px-2 py-2",
     title: "text-xs font-medium leading-4 text-[#141413] dark:text-[#faf9f5]",
@@ -298,18 +301,18 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
         </div>
 
         <div className="flex flex-shrink-0 justify-end gap-1 sm:gap-2">
-          <Tooltip content={`${t('askAI')} (${isMacOS ? 'Command' : 'Ctrl'}+Enter)`} placement="top">
+          <Tooltip content={`${askActionLabel} (${isMacOS ? 'Command' : 'Ctrl'}+Enter)`} placement="top">
             <Button
               color={selectedRole.color}
               size="sm"
-              aria-label={t('askAI')}
+              aria-label={askActionLabel}
               onPress={onAskAI}
               isLoading={isAiProcessing}
               isDisabled={isControlLocked || !hasInputContent}
               className="h-8 w-8 min-w-8 rounded-full bg-[#30302e] px-0 text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413] sm:h-9 sm:w-auto sm:min-w-9 sm:px-3"
             >
               <Icon icon={selectedRole.icon} className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-              <span className="hidden sm:inline">{t('askAI')}</span>
+              <span className="hidden sm:inline">{askActionLabel}</span>
             </Button>
           </Tooltip>
 

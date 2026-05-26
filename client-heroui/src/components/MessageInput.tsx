@@ -40,12 +40,13 @@ interface MessageInputProps {
   avatarText: string;
   avatarColor: string;
   isRoomAIProcessing?: boolean;
+  isCodeAgentRoom?: boolean;
 }
 
 // 使用WeakMap存储图片元素和对应的File对象
 const imageFileMap = new WeakMap<HTMLImageElement, File>();
 
-export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, avatarText, avatarColor, isRoomAIProcessing = false }) => {
+export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, avatarText, avatarColor, isRoomAIProcessing = false, isCodeAgentRoom = false }) => {
   const { t } = useTranslation();
   const [_contentItems, setContentItems] = useState<MessageContentItem[]>(emptyMessageContent());
   const [isSending, setIsSending] = useState(false);
@@ -669,6 +670,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
               onDeleteRole={handleDeleteRole}
               onAskAI={handleAskAI}
               onSend={handleSubmit}
+              isCodeAgentRoom={isCodeAgentRoom}
             />
           </div>
         </div>

@@ -255,6 +255,7 @@ registerApiRoutes(app, {
   getAIModelResponse,
   persistenceStore: activePersistenceStore,
   cocoAccess,
+  cocoMode: cocoRuntimeConfig.mode,
 });
 
 // Catch-all 路由，返回前端应用的入口 HTML 文件（支持前端路由）

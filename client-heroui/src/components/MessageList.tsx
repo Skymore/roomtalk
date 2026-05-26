@@ -3,10 +3,11 @@ import { Button } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { requestAIResponse, requestEditMessageAndAIResponse, socket } from '../utils/socket';
 import { MessageItem } from './MessageItem';
-import { Message } from '../utils/types';
+import { Message, Room } from '../utils/types';
 import { useTranslation } from 'react-i18next';
 import { getStoredAIModel } from '../utils/aiModels';
 import { formatUsdCost } from '../utils/formatters';
+import { FeatureFlags } from '../utils/features';
 import {
   deleteMessageById,
   editMessageAndTruncateAfter,
@@ -20,6 +21,7 @@ import { useRoomMessageEvents } from '../hooks/useRoomMessageEvents';
 // Import your new modals
 import { DeleteConfirmationModal } from './DeleteConfirmationModal';
 import { EditMessageModal } from './EditMessageModal';
+import { CocoWorkspacePanel } from './CocoWorkspacePanel';
 
 // Reminder: Set the app element for react-modal for accessibility
 // Ideally in your root component file (e.g., App.tsx or main.tsx)
@@ -27,9 +29,17 @@ import { EditMessageModal } from './EditMessageModal';
 
 interface MessageListProps {
   roomId: string;
+  presentation?: 'chat' | 'code-agent';
+  currentRoom?: Room;
+  cocoMode?: FeatureFlags['coco']['mode'];
 }
 
-export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
+export const MessageList: React.FC<MessageListProps> = ({
+  roomId,
+  presentation = 'chat',
+  currentRoom,
+  cocoMode = 'plan',
+}) => {
   const { t } = useTranslation();
   // generate a stable ID for the scroll container
   const scrollContainerId = `message-list-scroll-${roomId}`;
@@ -241,18 +251,30 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
         id={scrollContainerId}
         data-testid="message-list-scroll"
         ref={containerRef}
-        className="relative flex h-full w-full flex-col overflow-y-auto bg-[#f5f4ed] p-3 dark:bg-[#141413]"
+        className={`relative flex h-full w-full flex-col overflow-y-auto bg-[#f5f4ed] p-3 dark:bg-[#141413] ${presentation === 'code-agent' ? 'sm:p-4' : ''}`}
         onScroll={handleScroll}
       >
-        <div className="sticky top-0 z-20 mb-2 flex justify-end">
-          <div className="flex items-center gap-1 rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-2.5 py-1 text-tiny font-medium text-[#4d4c48] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc]">
-            <Icon icon="lucide:coins" className="h-3.5 w-3.5" />
-            <span>{t('sessionCost')}: {formatUsdCost(sessionCostUsd)}</span>
+        {presentation === 'code-agent' && currentRoom ? (
+          <CocoWorkspacePanel
+            room={currentRoom}
+            messages={messages}
+            cocoMode={cocoMode}
+            sessionCostUsd={sessionCostUsd}
+          />
+        ) : (
+          <div className="sticky top-0 z-20 mb-2 flex justify-end">
+            <div className="flex items-center gap-1 rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-2.5 py-1 text-tiny font-medium text-[#4d4c48] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc]">
+              <Icon icon="lucide:coins" className="h-3.5 w-3.5" />
+              <span>{t('sessionCost')}: {formatUsdCost(sessionCostUsd)}</span>
+            </div>
           </div>
-        </div>
+        )}
         {/* ... Loading/Empty/List rendering ... */}
          {!isLoading && messages.length > 0 && (
-            <div className="flex flex-col space-y-2 pb-4">
+            <div
+              data-testid={presentation === 'code-agent' ? 'code-agent-message-stream' : undefined}
+              className={`flex flex-col space-y-2 pb-4 ${presentation === 'code-agent' ? 'mx-auto w-full max-w-5xl' : ''}`}
+            >
                 {messages
                 .map((message) => (
                     <MessageItem
@@ -261,6 +283,7 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
                     onStartEdit={handleOpenEditModal}
                     onDeleteMessage={handleOpenDeleteModal}
                     onRefreshAI={handleRefreshAI}
+                    presentation={presentation}
                     />
                 ))}
             </div>
