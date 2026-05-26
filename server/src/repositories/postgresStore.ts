@@ -45,11 +45,12 @@ type MessageRow = {
   ai_model: unknown;
   usage: unknown;
   cost: unknown;
+  reply_to: unknown;
   position?: number | string;
 };
 
 const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id';
-const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, message_type, username, avatar, mime_type, status, ai_model, usage, cost';
+const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, message_type, username, avatar, mime_type, status, ai_model, usage, cost, reply_to';
 
 const parseTime = (timestamp?: string): number => {
   const time = Date.parse(timestamp || '');
@@ -107,6 +108,7 @@ const mapMessage = (row: MessageRow): Message => {
   const aiModel = parseJsonValue<Message['aiModel']>(row.ai_model);
   const usage = parseJsonValue<Message['usage']>(row.usage);
   const cost = parseJsonValue<Message['cost']>(row.cost);
+  const replyTo = parseJsonValue<Message['replyTo']>(row.reply_to);
 
   const message: Message = {
     id: row.id,
@@ -124,6 +126,7 @@ const mapMessage = (row: MessageRow): Message => {
   if (aiModel) message.aiModel = aiModel;
   if (usage) message.usage = usage;
   if (cost) message.cost = cost;
+  if (replyTo) message.replyTo = replyTo;
 
   return message;
 };
@@ -142,6 +145,7 @@ const messageParams = (message: Message, position: number): unknown[] => [
   toJsonb(message.aiModel),
   toJsonb(message.usage),
   toJsonb(message.cost),
+  toJsonb(message.replyTo),
   position,
 ];
 
@@ -159,9 +163,10 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   ai_model,
   usage,
   cost,
+  reply_to,
   position
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14
+  $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15
 ) ON CONFLICT (id) DO UPDATE SET
   room_id = EXCLUDED.room_id,
   client_id = EXCLUDED.client_id,
@@ -175,6 +180,7 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   ai_model = EXCLUDED.ai_model,
   usage = EXCLUDED.usage,
   cost = EXCLUDED.cost,
+  reply_to = EXCLUDED.reply_to,
   position = room_messages.position`;
 
 export class PostgresStore implements DurableRoomStore {
@@ -506,7 +512,7 @@ export class PostgresStore implements DurableRoomStore {
   async readMessagesByRoom(roomId: string): Promise<Message[]> {
     try {
       const result = await this.pool.query<MessageRow>(
-        `SELECT id, room_id, client_id, content, timestamp, message_type, username, avatar, mime_type, status, ai_model, usage, cost
+        `SELECT ${MESSAGE_COLUMNS}
         FROM room_messages
         WHERE room_id = $1
         ORDER BY position ASC, timestamp ASC`,

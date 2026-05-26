@@ -11,6 +11,7 @@ interface MessageItemProps {
   onStartEdit: (messageId: string) => void;
   onDeleteMessage: (messageId: string) => void;
   onRefreshAI?: (messageId: string, content: string) => void;
+  onReply: (message: Message) => void;
 }
 
 const tooltipClassNames = {
@@ -51,7 +52,8 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   message,
   onStartEdit,
   onDeleteMessage,
-  onRefreshAI
+  onRefreshAI,
+  onReply,
 }) => {
   const isMine = message.clientId === clientId;
   const [isHovered, setIsHovered] = React.useState(false);
@@ -73,6 +75,17 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       ].filter(Boolean)
     : [];
   const aiCostLabel = aiMetadataParts.join(' · ');
+  const replySenderName = message.replyTo?.username
+    || (message.replyTo?.messageType === 'ai' ? t('aiAssistantName') : t('participant'));
+  const replyPreview = message.replyTo?.messageType === 'image'
+    ? t('sharedImage')
+    : message.replyTo?.preview;
+  const replyReference = message.replyTo ? (
+    <div className="mb-2 max-w-full border-l-2 border-[#c96442] pl-2 text-xs text-[#5e5d59] dark:text-[#b0aea5]">
+      <div className="truncate font-medium">{t('replyingTo', { name: replySenderName })}</div>
+      <div className="truncate">{replyPreview}</div>
+    </div>
+  ) : null;
 
   const [copyStatus, setCopyStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const copyResetTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -158,34 +171,35 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         {/* Container for bubble/image */}
         <div className="relative inline-block max-w-full w-full min-w-0">
           {isImage ? (
-            <div className="w-fit cursor-pointer" onClick={handleCopyClick}>
-              <Tooltip
-                content={copyStatus === 'success' ? t('copied') : (copyStatus === 'error' ? t('copyFailed') : t('copyImage'))}
-                placement="top"
-                size="sm"
-                classNames={tooltipClassNames}
-              >
-                {imageError ? (
-                  <div className="w-fit rounded-md bg-[#e8e6dc] p-2 text-sm text-danger dark:bg-[#30302e]">
-                    <Icon icon="lucide:alert-triangle" className="inline mr-1" />
-                    {t('imageLoadFailed')}
-                  </div>
-                ) : (
-                  <div className="max-w-full rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-0.5 dark:border-[#30302e] dark:bg-[#1d1d1b]">
-                    <Image
-                      src={isImage
-                        ? (message.content.startsWith('data:')
-                            ? message.content
-                            : `data:${message.mimeType || 'image/png'};base64,${message.content}`)
-                        : message.content}
-                      alt={t('sharedImage')}
-                      className="block max-h-[300px] max-w-full object-contain rounded"
-                      onError={handleImageError}
-                      isBlurred
-                    />
-                  </div>
-                )}
-              </Tooltip>
+            <div className="w-fit max-w-full">
+              {replyReference}
+              <div className="cursor-pointer" onClick={handleCopyClick}>
+                <Tooltip
+                  content={copyStatus === 'success' ? t('copied') : (copyStatus === 'error' ? t('copyFailed') : t('copyImage'))}
+                  placement="top"
+                  size="sm"
+                  classNames={tooltipClassNames}
+                >
+                  {imageError ? (
+                    <div className="w-fit rounded-md bg-[#e8e6dc] p-2 text-sm text-danger dark:bg-[#30302e]">
+                      <Icon icon="lucide:alert-triangle" className="inline mr-1" />
+                      {t('imageLoadFailed')}
+                    </div>
+                  ) : (
+                    <div className="max-w-full rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-0.5 dark:border-[#30302e] dark:bg-[#1d1d1b]">
+                      <Image
+                        src={message.content.startsWith('data:')
+                          ? message.content
+                          : `data:${message.mimeType || 'image/png'};base64,${message.content}`}
+                        alt={t('sharedImage')}
+                        className="block max-h-[300px] max-w-full object-contain rounded"
+                        onError={handleImageError}
+                        isBlurred
+                      />
+                    </div>
+                  )}
+                </Tooltip>
+              </div>
             </div>
           ) : (
             // ========== Text Message (Display Mode) ==========
@@ -201,6 +215,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               `}
             >
               <div className="max-w-full p-2.5">
+                {replyReference}
                 <div className="max-w-full overflow-hidden whitespace-pre-wrap break-words text-sm leading-6">
                   <div className="max-w-full overflow-x-auto" style={{ wordBreak: 'break-word', overflowWrap: 'break-word' }}>
                     <React.Suspense fallback={
@@ -231,9 +246,23 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               {aiCostLabel && ` • ${aiCostLabel}`}
             </span>
 
-            {/* Action Buttons: Show on hover */}
-            {showActions && (
-              <div className="flex items-center gap-0.5 transition-opacity opacity-100">
+            <div className="ml-1 flex items-center gap-0.5">
+              <Tooltip content={t('replyToMessage')} placement="top" size="sm" delay={500} classNames={tooltipClassNames}>
+                <Button
+                  isIconOnly
+                  size="sm"
+                  variant="light"
+                  aria-label={t('replyToMessage')}
+                  className="h-5 w-5 min-w-0 text-[#5e5d59] dark:text-[#b0aea5]"
+                  onPress={() => onReply(message)}
+                  isDisabled={isStreaming}
+                >
+                  <Icon icon="lucide:reply" width={12} height={12}/>
+                </Button>
+              </Tooltip>
+              {/* Action Buttons: Show on hover */}
+              {showActions && (
+                <>
                 {canBeEdited && (
                   <Tooltip content={t('editMessage')} placement="top" size="sm" delay={500} classNames={tooltipClassNames}>
                     <Button
@@ -276,9 +305,9 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                     </Button>
                   </Tooltip>
                 )}
-              </div>
-            )}
-            {!showActions && <div className="w-10 h-5"></div>}
+                </>
+              )}
+            </div>
         </div>
       </div>
 

@@ -23,8 +23,10 @@ export const POSTGRES_SCHEMA_SQL = [
     ai_model JSONB,
     usage JSONB,
     cost JSONB,
+    reply_to JSONB,
     position INTEGER NOT NULL
   )`,
+  `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS reply_to JSONB`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_room_messages_room_position
     ON room_messages (room_id, position)`,
   `CREATE INDEX IF NOT EXISTS idx_room_messages_room_timestamp
