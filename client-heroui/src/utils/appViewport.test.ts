@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installAppViewportSizing } from './appViewport';
 
-const createVisualViewport = (initialHeight: number) => {
+const createVisualViewport = (initialHeight: number, initialOffsetTop = 0) => {
   const target = new EventTarget();
 
   return {
@@ -12,6 +12,12 @@ const createVisualViewport = (initialHeight: number) => {
     },
     set height(nextHeight: number) {
       initialHeight = nextHeight;
+    },
+    get offsetTop() {
+      return initialOffsetTop;
+    },
+    set offsetTop(nextOffsetTop: number) {
+      initialOffsetTop = nextOffsetTop;
     },
     addEventListener: target.addEventListener.bind(target),
     removeEventListener: target.removeEventListener.bind(target),
@@ -31,6 +37,7 @@ const setVisualViewport = (viewport: ReturnType<typeof createVisualViewport> | u
 describe('installAppViewportSizing', () => {
   beforeEach(() => {
     document.documentElement.style.removeProperty('--app-height');
+    document.documentElement.style.removeProperty('--app-viewport-top');
 
     Object.defineProperty(window, 'innerHeight', {
       configurable: true,
@@ -56,30 +63,37 @@ describe('installAppViewportSizing', () => {
     const cleanup = installAppViewportSizing();
 
     expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('640px');
+    expect(document.documentElement.style.getPropertyValue('--app-viewport-top')).toBe('0px');
 
     viewport.height = 420;
+    viewport.offsetTop = 24;
     viewport.dispatch('resize');
 
     expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('420px');
+    expect(document.documentElement.style.getPropertyValue('--app-viewport-top')).toBe('24px');
 
     cleanup();
 
     viewport.height = 360;
+    viewport.offsetTop = 48;
     viewport.dispatch('resize');
 
     expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('420px');
+    expect(document.documentElement.style.getPropertyValue('--app-viewport-top')).toBe('24px');
   });
 
-  it('ignores visualViewport scroll events from mobile keyboard panning', () => {
+  it('updates visualViewport top offset on mobile keyboard panning without changing height', () => {
     const viewport = createVisualViewport(640);
     setVisualViewport(viewport);
 
     const cleanup = installAppViewportSizing();
 
     viewport.height = 420;
+    viewport.offsetTop = 180;
     viewport.dispatch('scroll');
 
     expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('640px');
+    expect(document.documentElement.style.getPropertyValue('--app-viewport-top')).toBe('180px');
 
     cleanup();
   });
@@ -90,6 +104,7 @@ describe('installAppViewportSizing', () => {
     const cleanup = installAppViewportSizing();
 
     expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('800px');
+    expect(document.documentElement.style.getPropertyValue('--app-viewport-top')).toBe('0px');
 
     cleanup();
   });
