@@ -594,7 +594,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
         <div className="overflow-hidden rounded-[1.65rem] border border-[#dedbd0] bg-[#faf9f5] shadow-[0_0_0_1px_rgba(194,192,182,0.35)] dark:border-[#30302e] dark:bg-[#2a2a28]">
           {/* 编辑区域 */}
           <div
-            className="min-h-16 max-h-36 w-full overflow-y-auto px-4 pb-2 pt-4 text-sm leading-6 text-[#141413] dark:text-[#faf9f5]"
+            className="min-h-16 max-h-36 w-full overflow-y-auto px-4 pb-2 pt-4 text-base leading-6 text-[#141413] dark:text-[#faf9f5] sm:text-sm"
             contentEditable={!isSending && !isAIInputLocked} // 禁用编辑区域当 AI 处理中
             onInput={parseEditorContent}
             onPaste={handlePaste}
