@@ -228,6 +228,41 @@ describe('message socket handlers', () => {
     assert.deepEqual(failureResponse, { success: false, error: 'Failed to save message' });
   });
 
+  it('resolves quoted messages on the server and rejects missing quote targets', async () => {
+    const valid = createHarness('client-2');
+    valid.store.messages = [message({ id: 'quoted', username: 'Ada', content: 'original' })];
+    let validResponse: { success: boolean; message?: Message } | undefined;
+
+    await valid.socket.invoke('send_message', {
+      roomId: 'room-1',
+      content: 'answer',
+      username: 'Grace',
+      replyToMessageId: 'quoted',
+    }, (response: { success: boolean; message?: Message }) => {
+      validResponse = response;
+    });
+
+    assert.deepEqual(validResponse?.message?.replyTo, {
+      messageId: 'quoted',
+      username: 'Ada',
+      messageType: 'text',
+      preview: 'original',
+    });
+
+    const missing = createHarness('client-2');
+    let missingResponse: unknown;
+    await missing.socket.invoke('send_message', {
+      roomId: 'room-1',
+      content: 'answer',
+      replyToMessageId: 'missing',
+    }, (response: unknown) => {
+      missingResponse = response;
+    });
+
+    assert.equal(missing.store.appendedMessages.length, 0);
+    assert.deepEqual(missingResponse, { success: false, error: 'Quoted message not found' });
+  });
+
   it('edits messages with callbacks and broadcasts successful updates', async () => {
     const unregistered = createHarness(null);
     let unregisteredResponse: unknown;
