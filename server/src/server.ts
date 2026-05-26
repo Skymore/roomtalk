@@ -18,6 +18,7 @@ import { createAIModelRegistry, DEFAULT_AI_MODEL_ID } from './services/aiModels'
 import { registerApiRoutes } from './routes/apiRoutes';
 import { registerSocketHandlers } from './socket/registerSocketHandlers';
 import { createAIClients } from './services/aiClients';
+import { createCocoAccessControl } from './services/cocoAccessControl';
 import { CocoSandboxLifecycleService } from './services/cocoSandboxLifecycle';
 import { CocoSessionService } from './services/cocoSessionService';
 import { E2BCocoSandboxService, E2BSandboxDriver } from './services/e2bCocoSandboxService';
@@ -109,6 +110,10 @@ const parsePositiveIntegerEnv = (name: string, fallback: number) => {
 };
 
 const cocoRuntimeConfig = resolveCocoRuntimeConfig(process.env);
+const cocoAccess = createCocoAccessControl({
+  enabled: cocoRuntimeConfig.enabled,
+  allowedClientIds: cocoRuntimeConfig.allowedClientIds,
+});
 
 redisClient.on('error', (err: Error) => {
   redisLogger.error('Redis connection error', { error: err.message, stack: err.stack });
@@ -239,6 +244,7 @@ registerSocketHandlers({
   normalizeAIModel,
   getAIClientForModel,
   cocoSessionService,
+  cocoAccess,
 });
 
 registerApiRoutes(app, {
@@ -248,6 +254,7 @@ registerApiRoutes(app, {
   routeLogger,
   getAIModelResponse,
   persistenceStore: activePersistenceStore,
+  cocoAccess,
 });
 
 // Catch-all 路由，返回前端应用的入口 HTML 文件（支持前端路由）

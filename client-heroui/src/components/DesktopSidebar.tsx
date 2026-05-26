@@ -43,6 +43,7 @@ interface DesktopSidebarProps {
   onDeleteRoom: (roomId: string) => void;
   onUnsaveRoom: (roomId: string) => void;
   onRenameRoom: RoomRenameHandler;
+  isCocoEnabled: boolean;
 }
 
 interface SidebarNavItemProps {
@@ -272,6 +273,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
   onDeleteRoom,
   onUnsaveRoom,
   onRenameRoom,
+  isCocoEnabled,
 }) => {
   const { t } = useTranslation();
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -326,7 +328,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
     setCreateError(null);
     setIsCreating(true);
     try {
-      const roomId = await createRoom(validation.name, newRoomDescription, newRoomType);
+      const roomId = await createRoom(validation.name, newRoomDescription, isCocoEnabled ? newRoomType : 'chat');
       setNewRoomName('');
       setNewRoomDescription('');
       setNewRoomType('chat');
@@ -676,6 +678,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
         nameError={nameError}
         createError={createError}
         isCreating={isCreating}
+        isCocoEnabled={isCocoEnabled}
         onRoomNameChange={handleRoomNameChange}
         onRoomDescriptionChange={setNewRoomDescription}
         onRoomTypeChange={setNewRoomType}

@@ -244,6 +244,23 @@ cd client-heroui && npx playwright test --list e2e/coco-flows.spec.ts
 
 Actual browser E2E and real E2B smoke may require system environment access to local Redis/localhost and external credentials. `npm run smoke:coco:e2b` skips cleanly unless `RUN_COCO_E2B_SMOKE=true`, `COCO_E2B_TEMPLATE_ID`, E2B credentials, and model access are configured. If the Codex sandbox blocks those, the command, reason, and exact gap must be recorded before moving on.
 
+Phase 7 rollout-control follow-up:
+
+```bash
+cd server && npm test && npm run build
+cd client-heroui && npm test && npm run lint && npm run check:i18n && npm run build
+pytest server/roomtalk_coco_runner
+cd server && npm run smoke:coco:e2b
+cd client-heroui && npm run test:e2e
+```
+
+Expected behavior:
+
+- `COCO_ENABLED=false` keeps Coco creation hidden in the frontend and rejected by API/socket create paths.
+- `COCO_ALLOWED_USER_IDS` limits Coco creation to explicit client IDs while preserving ordinary chat rooms.
+- Feature flag fetch failures fail closed for Coco.
+- A running Coco turn locks the current room input controls until the turn finishes or errors.
+
 ## Review Rule
 
 After each implementation sub-phase:

@@ -91,6 +91,7 @@ interface MessageInputAIControlsProps {
   defaultAIModel: string;
   isSending: boolean;
   isAiProcessing: boolean;
+  isInputLocked: boolean;
   isMacOS: boolean;
   currentInputText: string;
   imageCount: number;
@@ -114,6 +115,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   defaultAIModel,
   isSending,
   isAiProcessing,
+  isInputLocked,
   isMacOS,
   currentInputText,
   imageCount,
@@ -133,6 +135,8 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   const [premiumConfirmationStep, setPremiumConfirmationStep] = React.useState<1 | 2>(1);
   const pendingPremiumModel = aiModels.find(model => model.id === pendingPremiumModelId);
   const selectedModel = aiModels.find(model => model.id === (selectedAIModel || defaultAIModel));
+  const hasInputContent = currentInputText.trim().length > 0 || imageCount > 0;
+  const isControlLocked = isSending || isInputLocked;
   const compactItemClassNames = {
     base: "w-full px-2 py-2",
     title: "text-xs font-medium leading-4 text-[#141413] dark:text-[#faf9f5]",
@@ -207,7 +211,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               offset: 8,
               containerPadding: 12,
             }}
-            isDisabled={isSending || isAiProcessing}
+            isDisabled={isControlLocked}
           >
             {roles.map((role) => (
               <SelectItem
@@ -242,7 +246,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               offset: 8,
               containerPadding: 12,
             }}
-            isDisabled={isSending || isAiProcessing}
+            isDisabled={isControlLocked}
             startContent={<Icon icon="lucide:brain-circuit" className="h-3.5 w-3.5 sm:h-4 sm:w-4" />}
             renderValue={() => (
               <span className="flex min-w-0 items-center gap-1.5">
@@ -298,9 +302,10 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
             <Button
               color={selectedRole.color}
               size="sm"
+              aria-label={t('askAI')}
               onPress={onAskAI}
               isLoading={isAiProcessing}
-              isDisabled={isSending}
+              isDisabled={isControlLocked || !hasInputContent}
               className="h-8 w-8 min-w-8 rounded-full bg-[#30302e] px-0 text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413] sm:h-9 sm:w-auto sm:min-w-9 sm:px-3"
             >
               <Icon icon={selectedRole.icon} className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
@@ -311,11 +316,12 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
           <Tooltip content={`${t('send')} (Enter)`} placement="top">
             <Button
               type="button"
+              aria-label={t('send')}
               onClick={onSend}
               color="primary"
               size="sm"
               isLoading={isSending}
-              isDisabled={isSending || isAiProcessing || (!currentInputText.trim() && imageCount === 0)}
+              isDisabled={isControlLocked || !hasInputContent}
               className="h-8 w-8 min-w-8 rounded-full bg-[#c96442] px-0 text-[#faf9f5] shadow-[0_0_0_1px_#c96442] sm:h-9 sm:w-auto sm:min-w-9 sm:px-3"
             >
               <Icon icon="lucide:arrow-up" className="h-3.5 w-3.5 sm:h-4 sm:w-4" />

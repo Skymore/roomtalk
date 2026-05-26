@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import {
+  expectCocoFeatureEnabled,
   expectChatRoom,
   expectMessage,
   messageItem,
@@ -14,8 +15,9 @@ test.beforeEach(async ({ request }) => {
   await resetE2EData(request);
 });
 
-async function createCocoRoom(page: Parameters<typeof openRoomsPage>[0], context: Parameters<typeof seedClient>[0]) {
-  await seedClient(context);
+async function createCocoRoom(page: Parameters<typeof openRoomsPage>[0], context: Parameters<typeof seedClient>[0], request: Parameters<typeof expectCocoFeatureEnabled>[0]) {
+  const seededClientId = await seedClient(context);
+  await expectCocoFeatureEnabled(request, seededClientId);
   const roomName = shortName('coco');
 
   await openRoomsPage(page);
@@ -38,8 +40,8 @@ async function askCoco(page: Parameters<typeof openRoomsPage>[0], prompt: string
   await expectMessage(page, prompt).toBeVisible();
 }
 
-test('runs a fake Coco turn and restores tool history after refresh', async ({ page, context }) => {
-  const roomName = await createCocoRoom(page, context);
+test('runs a fake Coco turn and restores tool history after refresh', async ({ page, context, request }) => {
+  const roomName = await createCocoRoom(page, context, request);
   const prompt = uniqueName('coco-task');
 
   await askCoco(page, prompt);
@@ -62,15 +64,25 @@ test('runs a fake Coco turn and restores tool history after refresh', async ({ p
   await expect(page.getByText('Tool failed')).toBeVisible();
 });
 
-test('rejects a second Coco request while the room turn is running', async ({ page, context }) => {
-  await createCocoRoom(page, context);
+test('locks Coco ask controls while the room turn is running', async ({ page, context, request }) => {
+  await createCocoRoom(page, context, request);
 
-  await askCoco(page, uniqueName('coco-first'));
-  // Wait until the fake runner is mid-turn so the second request exercises the active-turn guard.
+  const prompt = uniqueName('coco-first');
+  const editor = page.getByTestId('message-editor');
+  const askButton = page.getByRole('button', { name: 'Ask AI' });
+
+  await editor.click();
+  await page.keyboard.insertText(prompt);
+  await askButton.click();
+  await expectMessage(page, prompt).toBeVisible();
+  await expect(askButton).toBeDisabled();
+  await expect(editor).toHaveAttribute('contenteditable', 'false');
+
   await expect(page.getByText('Tool call')).toBeVisible();
-  await askCoco(page, uniqueName('coco-second'));
-
-  await expect(page.getByText('Error sending AI request')).toBeVisible();
   await expect(messageItem(page, 'Coco fake runner received the task.')).toBeVisible();
   await expect(page.getByText('Coco fake runner received the task.')).toHaveCount(1);
+  await expect(editor).toHaveAttribute('contenteditable', 'true');
+  await editor.click();
+  await page.keyboard.insertText(uniqueName('coco-next'));
+  await expect(askButton).toBeEnabled();
 });

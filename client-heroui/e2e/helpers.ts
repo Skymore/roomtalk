@@ -25,6 +25,16 @@ export async function resetE2EData(request: APIRequestContext) {
   expect(response.ok()).toBeTruthy();
 }
 
+export async function expectCocoFeatureEnabled(request: APIRequestContext, clientId: string) {
+  const response = await request.get(`${serverURL}/api/features?clientId=${encodeURIComponent(clientId)}`);
+  expect(response.ok()).toBeTruthy();
+  const features = await response.json();
+  expect(
+    features.coco?.enabled,
+    `Coco E2E tests require the seeded client to be rollout-enabled. clientId=${clientId} response=${JSON.stringify(features.coco)}`,
+  ).toBe(true);
+}
+
 export async function seedClient(context: BrowserContext, clientId = uniqueName('client')) {
   await context.addInitScript(({ seededClientId }) => {
     const existingClientId = window.localStorage.getItem('clientId');
@@ -44,7 +54,7 @@ export async function seedClient(context: BrowserContext, clientId = uniqueName(
 export async function createRoomViaApi(
   request: APIRequestContext,
   clientId: string,
-  name = uniqueName('room'),
+  name = shortName('room'),
   description = '',
   type: 'chat' | 'coco' = 'chat',
 ) {

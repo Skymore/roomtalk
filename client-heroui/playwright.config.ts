@@ -41,6 +41,7 @@ export default defineConfig({
         'E2E_FAKE_AI=true',
         'E2E_FAKE_AI_CHUNK_DELAY_MS=1000',
         'COCO_ENABLED=true',
+        'COCO_ALLOWED_USER_IDS=',
         'COCO_FAKE_RUNNER_EVENT_DELAY_MS=250',
         'AI_MODEL=deepseek-v4-pro',
         'OPENAI_API_KEY=e2e',

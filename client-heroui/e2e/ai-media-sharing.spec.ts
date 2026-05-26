@@ -21,7 +21,7 @@ test.beforeEach(async ({ request }) => {
 
 async function openOwnedRoom(page: Parameters<typeof openRoomsPage>[0], context: Parameters<typeof seedClient>[0], request: Parameters<typeof createRoomViaApi>[0]) {
   const clientId = await seedClient(context);
-  const room = await createRoomViaApi(request, clientId, uniqueName('ai-room'));
+  const room = await createRoomViaApi(request, clientId, shortName('ai-room'));
   await openRoomsPage(page);
   await openRoomFromCard(page, room);
   return room;
