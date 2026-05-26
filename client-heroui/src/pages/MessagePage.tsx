@@ -21,6 +21,7 @@ import { saveRoom, removeRoom, isRoomSaved, getSavedRooms } from "../utils/stora
 import { generateRandomName } from "../utils/userProfile";
 import { getStoredRoom, getStoredUsername, getStoredView, saveCurrentRoom, saveCurrentView, saveUsername, AppView } from "../utils/appPersistence";
 import { buildRoomShareUrl, getRoomMemberUpdate, sortRoomsByLastActivityDesc, upsertRoom } from "../utils/roomState";
+import { FALLBACK_FEATURE_FLAGS, fetchFeatureFlags, FeatureFlags } from "../utils/features";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { AppHeader } from "../components/AppHeader";
@@ -66,6 +67,7 @@ export const MessagePage: React.FC = () => {
   const [memberEvent, setMemberEvent] = useState<{ type: "join" | "leave"; userId: string } | null>(null);
   // 添加用户名状态
   const [username, setUsername] = useState<string>("");
+  const [featureFlags, setFeatureFlags] = useState<FeatureFlags>(FALLBACK_FEATURE_FLAGS);
   // 是否显示修改用户名弹窗
   const [showEditUsername, setShowEditUsername] = useState<boolean>(false);
 
@@ -91,6 +93,26 @@ export const MessagePage: React.FC = () => {
       if (successTimerRef.current) {
         clearTimeout(successTimerRef.current);
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchFeatureFlags(clientId)
+      .then((flags) => {
+        if (!cancelled) {
+          setFeatureFlags(flags);
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to load feature flags:", error);
+        if (!cancelled) {
+          setFeatureFlags(FALLBACK_FEATURE_FLAGS);
+        }
+      });
+
+    return () => {
+      cancelled = true;
     };
   }, []);
 
@@ -482,6 +504,7 @@ export const MessagePage: React.FC = () => {
               handleRenameRoom={handleRenameRoom}
               clientId={clientId}
               username={username}
+              isCocoEnabled={featureFlags.coco.enabled}
             />
           </div>
         );
@@ -571,6 +594,7 @@ export const MessagePage: React.FC = () => {
           onDeleteRoom={handleDeleteRoom}
           onUnsaveRoom={handleUnsaveRoom}
           onRenameRoom={handleRenameRoom}
+          isCocoEnabled={featureFlags.coco.enabled}
         />
 
         {/* 主内容区域， flex-1 使其填充剩余空间，overflow-hidden 避免双重滚动条 */}

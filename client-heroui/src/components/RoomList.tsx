@@ -25,9 +25,10 @@ interface RoomListProps {
   handleRenameRoom: RoomRenameHandler;
   clientId: string;
   username: string;
+  isCocoEnabled: boolean;
 }
 
-export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleDeleteRoom, handleRenameRoom, clientId, username }) => {
+export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleDeleteRoom, handleRenameRoom, clientId, username, isCocoEnabled }) => {
   const { t } = useTranslation();
   const { isOpen, onOpen, onClose } = useDisclosure();
   const [newRoomName, setNewRoomName] = useState('');
@@ -91,7 +92,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
     setCreateError(null);
     setIsCreating(true);
     try {
-      const roomId = await createRoom(validation.name, newRoomDescription, newRoomType);
+      const roomId = await createRoom(validation.name, newRoomDescription, isCocoEnabled ? newRoomType : 'chat');
       setNewRoomName('');
       setNewRoomDescription('');
       setNewRoomType('chat');
@@ -167,6 +168,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
       nameError={nameError}
       createError={createError}
       isCreating={isCreating}
+      isCocoEnabled={isCocoEnabled}
       onRoomNameChange={handleRoomNameChange}
       onRoomDescriptionChange={setNewRoomDescription}
       onRoomTypeChange={setNewRoomType}

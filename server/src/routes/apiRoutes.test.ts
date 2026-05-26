@@ -7,6 +7,7 @@ import { Server as HttpServer } from 'http';
 import path from 'path';
 import { registerApiRoutes } from './apiRoutes';
 import { Message, Room } from '../types';
+import { CocoAccessControl, createCocoAccessControl } from '../services/cocoAccessControl';
 
 type EmittedEvent = {
   target: string;
@@ -92,7 +93,7 @@ const writeLargeHistoryBaseline = async (payload: {
   }
 };
 
-async function createTestServer(): Promise<TestServer> {
+async function createTestServer(options: { cocoAccess?: CocoAccessControl } = {}): Promise<TestServer> {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
 
@@ -168,6 +169,7 @@ async function createTestServer(): Promise<TestServer> {
       defaultModel: 'gpt-5.5',
       models: [{ id: 'gpt-5.5', label: 'GPT-5.5' }],
     }),
+    cocoAccess: options.cocoAccess,
   });
 
   const server = await new Promise<HttpServer>(resolve => {
@@ -215,11 +217,37 @@ describe('API routes', () => {
 
     const statusResponse = await fetch(`${server.baseUrl}/api/status`);
     assert.equal(statusResponse.status, 200);
-    const status = await statusResponse.json() as { status: string; persistenceStore: string; redis: string; rooms: number };
+    const status = await statusResponse.json() as {
+      status: string;
+      persistenceStore: string;
+      redis: string;
+      rooms: number;
+      features: { coco: { enabled: boolean; rollout: string } };
+    };
     assert.equal(status.status, 'online');
     assert.equal(status.persistenceStore, 'redis');
     assert.equal(status.redis, 'connected');
     assert.equal(status.rooms, 1);
+    assert.deepEqual(status.features.coco, { enabled: false, rollout: 'disabled' });
+  });
+
+  it('returns Coco feature flags per client', async () => {
+    await server.close();
+    server = await createTestServer({
+      cocoAccess: createCocoAccessControl({ enabled: true, allowedClientIds: ['client-1'] }),
+    });
+
+    const allowedResponse = await fetch(`${server.baseUrl}/api/features?clientId=client-1`);
+    assert.equal(allowedResponse.status, 200);
+    assert.deepEqual(await allowedResponse.json(), {
+      coco: { enabled: true, rollout: 'allowlist' },
+    });
+
+    const deniedResponse = await fetch(`${server.baseUrl}/api/features?clientId=client-2`);
+    assert.equal(deniedResponse.status, 200);
+    assert.deepEqual(await deniedResponse.json(), {
+      coco: { enabled: false, rollout: 'allowlist', reason: 'not_allowed' },
+    });
   });
 
   it('returns large room message histories as complete ordered JSON and writes a response-size baseline', async () => {
@@ -262,6 +290,11 @@ describe('API routes', () => {
   });
 
   it('creates Coco rooms through the HTTP API', async () => {
+    await server.close();
+    server = await createTestServer({
+      cocoAccess: createCocoAccessControl({ enabled: true }),
+    });
+
     const response = await fetch(`${server.baseUrl}/api/clients/client-2/rooms`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -293,6 +326,41 @@ describe('API routes', () => {
     assert.deepEqual(await response.json(), { error: 'Failed to create room' });
     assert.equal(server.store.savedRooms.length, 1);
     assert.deepEqual(server.emitted, []);
+  });
+
+  it('gates Coco room creation via API with rollout controls', async () => {
+    const disabledResponse = await fetch(`${server.baseUrl}/api/clients/client-1/rooms`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Coco', type: 'coco' }),
+    });
+    assert.equal(disabledResponse.status, 403);
+    assert.deepEqual(await disabledResponse.json(), { error: 'Coco is disabled' });
+    assert.equal(server.store.savedRooms.length, 0);
+
+    await server.close();
+    server = await createTestServer({
+      cocoAccess: createCocoAccessControl({ enabled: true, allowedClientIds: ['client-1'] }),
+    });
+
+    const deniedResponse = await fetch(`${server.baseUrl}/api/clients/client-2/rooms`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Coco', type: 'coco' }),
+    });
+    assert.equal(deniedResponse.status, 403);
+    assert.deepEqual(await deniedResponse.json(), { error: 'Coco is not enabled for this user' });
+    assert.equal(server.store.savedRooms.length, 0);
+
+    const allowedResponse = await fetch(`${server.baseUrl}/api/clients/client-1/rooms`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Coco', type: 'coco' }),
+    });
+    assert.equal(allowedResponse.status, 201);
+    const room = await allowedResponse.json() as Room;
+    assert.equal(room.type, 'coco');
+    assert.equal(server.store.savedRooms.length, 1);
   });
 
   it('rejects invalid room and message creation requests', async () => {

@@ -39,12 +39,13 @@ interface MessageInputProps {
   username: string;
   avatarText: string;
   avatarColor: string;
+  isRoomAIProcessing?: boolean;
 }
 
 // 使用WeakMap存储图片元素和对应的File对象
 const imageFileMap = new WeakMap<HTMLImageElement, File>();
 
-export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, avatarText, avatarColor }) => {
+export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, avatarText, avatarColor, isRoomAIProcessing = false }) => {
   const { t } = useTranslation();
   const [_contentItems, setContentItems] = useState<MessageContentItem[]>(emptyMessageContent());
   const [isSending, setIsSending] = useState(false);
@@ -66,6 +67,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
   const [_isMobile, setIsMobile] = useState(false);
   // 检测操作系统类型
   const [isMacOS, setIsMacOS] = useState(false);
+  const isAIInputLocked = isAiProcessing || isRoomAIProcessing;
 
   // 检测设备和操作系统类型
   useEffect(() => {
@@ -218,7 +220,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
   const handleAskAI = async () => {
     const latestContentItems = parseEditorContent();
 
-    if (!hasMessageContent(latestContentItems) || isSending || isAiProcessing) return;
+    if (!hasMessageContent(latestContentItems) || isSending || isAIInputLocked) return;
 
     setIsAiProcessing(true);
     try {
@@ -273,7 +275,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
     // Parse latest content (might be redundant if useEffect handles it well)
     const latestContentItems = parseEditorContent();
 
-    if (!hasMessageContent(latestContentItems) || isSending || isAiProcessing) return;
+    if (!hasMessageContent(latestContentItems) || isSending || isAIInputLocked) return;
 
     setIsSending(true);
     try {
@@ -593,14 +595,14 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
           {/* 编辑区域 */}
           <div
             className="min-h-16 max-h-36 w-full overflow-y-auto px-4 pb-2 pt-4 text-sm leading-6 text-[#141413] dark:text-[#faf9f5]"
-            contentEditable={!isSending && !isAiProcessing} // 禁用编辑区域当 AI 处理中
+            contentEditable={!isSending && !isAIInputLocked} // 禁用编辑区域当 AI 处理中
             onInput={parseEditorContent}
             onPaste={handlePaste}
             onKeyDown={handleKeyDown}
             onCompositionStart={handleCompositionStart}
             onCompositionEnd={handleCompositionEnd}
             ref={editorRef}
-            data-placeholder={isAiProcessing ? t('aiProcessing') : t('typeMessageHere')}
+            data-placeholder={isAIInputLocked ? t('aiProcessing') : t('typeMessageHere')}
             style={{
               lineHeight: '1.5',
               whiteSpace: 'pre-wrap',
@@ -621,7 +623,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
               aria-label={t('uploadImage')}
               className="h-8 w-8 min-w-8 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
               onPress={() => fileInputRef.current?.click()}
-              isDisabled={imageCount >= MAX_MESSAGE_IMAGES || isSending || isAiProcessing} // 禁用图片上传当 AI 处理中
+              isDisabled={imageCount >= MAX_MESSAGE_IMAGES || isSending || isAIInputLocked} // 禁用图片上传当 AI 处理中
             >
               <Icon icon="lucide:plus" className="h-4 w-4 sm:h-5 sm:w-5" />
             </Button>
@@ -629,7 +631,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
             {/* AI设置按钮 (原来的AI按钮) */}
             <MessageInputAISettingsButton
               onOpen={onAISettingsOpen}
-              isDisabled={isSending || isAiProcessing}
+              isDisabled={isSending || isAIInputLocked}
             />
 
             {/* 隐藏的文件输入 */}
@@ -641,7 +643,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
               accept="image/*"
               multiple={true}
               onChange={handleImageUpload}
-              disabled={isSending || isAiProcessing} // 禁用文件输入当 AI 处理中
+              disabled={isSending || isAIInputLocked} // 禁用文件输入当 AI 处理中
             />
 
             {/* AI角色选择和发送按钮区 */}
@@ -654,6 +656,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
               defaultAIModel={defaultAIModel}
               isSending={isSending}
               isAiProcessing={isAiProcessing}
+              isInputLocked={isAIInputLocked}
               isMacOS={isMacOS}
               currentInputText={currentInputText}
               imageCount={imageCount}

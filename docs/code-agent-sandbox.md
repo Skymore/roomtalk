@@ -644,8 +644,8 @@ E2E 默认使用 fake runner：
 | Phase 3：沙盒生命周期 | 完成 | `fdf906c feat: add coco sandbox lifecycle` | fake/E2B sandbox lifecycle、CAS、recovery、destroy 路径已完成 |
 | Phase 4：Coco ask_ai 主链路 | 完成 | `cbce88c feat: route coco ask ai turns` | Coco 房间 ask_ai 主链路、运行锁、事件持久化和广播已完成 |
 | Phase 5：前端 Coco UI | 完成 | `f4ea991 feat: add coco room ui` | 创建入口、状态展示、工具消息组件、fake runner E2E spec 和移动端适配已完成；完整浏览器 E2E 运行受当前 Codex 沙箱本机网络限制阻塞 |
-| Phase 6：真实 Coco runner 和沙盒镜像 | 进行中 | 待提交 | runner adapter、artifact、model access contract 已完成；当前切片接入官方 E2B SDK driver |
-| Phase 7：灰度上线和回滚 | 待执行 | 待提交 | feature flag、allowlist、生产 smoke、回滚开关 |
+| Phase 6：真实 Coco runner 和沙盒镜像 | 完成 | `f34f0df`、`e02efd6`、`daf6bee`、`dcc6621`、`d4cdc2d`、`01771bf`、`94550bf`、`e2c5398` | runner adapter、JSONL client、runtime guardrails、artifact、model access contract、E2B SDK driver 和 smoke 入口已完成 |
+| Phase 7：灰度上线和回滚 | 完成 | `PHASE7_COMMIT` | feature flag、allowlist、前后端创建/加入/详情查询入口阻断、Coco 运行中输入锁定、回归测试和 Claude review |
 
 后续执行规则：
 
@@ -977,6 +977,19 @@ COCO_MODEL_PROXY_TOKEN=
 验收标准：
 
 - 关闭 flag 可隐藏 Coco 入口并阻断后端 ask。
+- allowlist 可限制 Coco 房间创建、加入和详情查询入口，API 和 socket 路径语义一致。
+- 前端获取 feature flag 失败时 fail closed，不显示 Coco 创建入口。
+- Coco turn 运行中禁用同房间输入、上传、设置、发送和 Ask AI 控件。
 - 普通聊天、房间创建、编辑、保存、删除链路不回归。
 - 生产 smoke 有明确命令和预期输出。
 - Claude Code Opus 4.7 review 无 blocking/high findings。
+
+执行记录：
+
+- 后端新增 `CocoAccessControl`，统一处理全局 flag、clientId 缺失和 allowlist 拒绝原因。
+- `create_room`、`join_room`、`get_room_by_id` socket 路径和 `POST /api/clients/:clientId/rooms` API 路径都会在访问 Coco 房间前检查 rollout 权限。
+- 新增 `GET /api/features?clientId=...`，前端启动后读取 feature flag；读取失败时按 Coco disabled 处理。
+- 创建房间弹窗在 Coco disabled 时隐藏 Coco 类型；Coco running 时锁定同房间输入面板，避免重复提交同一工作区 turn。
+- 回归命令：`cd server && npm test && npm run build`、`cd client-heroui && npm test && npm run lint && npm run check:i18n && npm run build`、`pytest server/roomtalk_coco_runner`、`cd server && npm run smoke:coco:e2b`、`cd client-heroui && npm run test:e2e`。
+- 验收结果：服务端单测 195/195、前端单测 62/62、Python runner 12/12、Playwright E2E 21/21 均通过；`smoke:coco:e2b` 在未设置 `RUN_COCO_E2B_SMOKE=true` 时按预期跳过。
+- Claude Code Opus 4.7 终审结果：无 blocking/high/medium findings。

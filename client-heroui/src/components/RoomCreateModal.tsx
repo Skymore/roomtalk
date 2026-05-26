@@ -21,6 +21,7 @@ interface RoomCreateModalProps {
   nameError: string | null;
   createError: string | null;
   isCreating: boolean;
+  isCocoEnabled: boolean;
   onRoomNameChange: (value: string) => void;
   onRoomDescriptionChange: (value: string) => void;
   onRoomTypeChange: (value: RoomType) => void;
@@ -36,6 +37,7 @@ export const RoomCreateModal: React.FC<RoomCreateModalProps> = ({
   nameError,
   createError,
   isCreating,
+  isCocoEnabled,
   onRoomNameChange,
   onRoomDescriptionChange,
   onRoomTypeChange,
@@ -48,10 +50,10 @@ export const RoomCreateModal: React.FC<RoomCreateModalProps> = ({
       <ModalContent>
         <ModalHeader className="flex flex-col gap-1">{t('createNewRoom')}</ModalHeader>
         <ModalBody>
-          <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label={t('roomType')}>
+          <div className={`grid gap-2 ${isCocoEnabled ? 'grid-cols-2' : 'grid-cols-1'}`} role="radiogroup" aria-label={t('roomType')}>
             {([
               { type: 'chat' as const, icon: 'lucide:message-circle', label: t('chatRoomType'), description: t('chatRoomDescription') },
-              { type: 'coco' as const, icon: 'lucide:terminal-square', label: t('cocoRoomType'), description: t('cocoRoomDescription') },
+              ...(isCocoEnabled ? [{ type: 'coco' as const, icon: 'lucide:terminal-square', label: t('cocoRoomType'), description: t('cocoRoomDescription') }] : []),
             ]).map(option => {
               const isSelected = roomType === option.type;
               return (

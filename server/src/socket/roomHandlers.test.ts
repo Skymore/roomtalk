@@ -2,6 +2,7 @@ import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { registerRoomHandlers } from './roomHandlers';
 import { Message, Room, RoomAICostTotal } from '../types';
+import { createCocoAccessControl } from '../services/cocoAccessControl';
 
 type SocketEmit = {
   event: string;
@@ -104,7 +105,10 @@ const roomCost = (roomId = 'room-1'): RoomAICostTotal => ({
   totalUsd: 0.5,
 });
 
-const createHarness = (clientId: string | null = 'client-1') => {
+const createHarness = (
+  clientId: string | null = 'client-1',
+  cocoAccess = createCocoAccessControl({ enabled: true }),
+) => {
   const socket = new FakeSocket();
   const io = new FakeIo();
   const store = {
@@ -173,6 +177,7 @@ const createHarness = (clientId: string | null = 'client-1') => {
     socket: socket as any,
     store: store as any,
     socketLogger: logger as any,
+    cocoAccess,
   } as any);
 
   return { io, socket, store };
@@ -245,6 +250,28 @@ describe('room socket handlers', () => {
     assert.deepEqual(valid.io.roomEmits, [{ roomId: 'client-1', event: 'new_room', args: [savedRoom] }]);
   });
 
+  it('rejects Coco room creation when rollout controls deny access', async () => {
+    const disabled = createHarness('client-1', createCocoAccessControl({ enabled: false }));
+    let disabledResult: { success: boolean; error?: string } | undefined;
+    await disabled.socket.invoke('create_room', { name: 'Coco', type: 'coco' }, (result: { success: boolean; error?: string }) => {
+      disabledResult = result;
+    });
+
+    assert.deepEqual(disabledResult, { success: false, error: 'Coco is disabled' });
+    assert.equal(disabled.store.savedRooms.length, 0);
+    assert.deepEqual(disabled.io.roomEmits, []);
+
+    const notAllowed = createHarness('client-2', createCocoAccessControl({ enabled: true, allowedClientIds: ['client-1'] }));
+    let notAllowedResult: { success: boolean; error?: string } | undefined;
+    await notAllowed.socket.invoke('create_room', { name: 'Coco', type: 'coco' }, (result: { success: boolean; error?: string }) => {
+      notAllowedResult = result;
+    });
+
+    assert.deepEqual(notAllowedResult, { success: false, error: 'Coco is not enabled for this user' });
+    assert.equal(notAllowed.store.savedRooms.length, 0);
+    assert.deepEqual(notAllowed.io.roomEmits, []);
+  });
+
   it('joins existing rooms, leaves previous rooms, and sends room state', async () => {
     const unregistered = createHarness(null);
     await unregistered.socket.invoke('join_room', 'room-1');
@@ -270,6 +297,20 @@ describe('room socket handlers', () => {
       { event: 'message_history', args: [[message()]] },
       { event: 'ai_cost_total', args: [roomCost()] },
     ]);
+  });
+
+  it('rejects joining Coco rooms when rollout controls deny access', async () => {
+    const denied = createHarness('client-2', createCocoAccessControl({ enabled: true, allowedClientIds: ['client-1'] }));
+    denied.store.rooms.push(room({ id: 'coco-room', name: 'Coco Room', type: 'coco' }));
+    denied.store.socketRooms = ['room-1'];
+
+    await denied.socket.invoke('join_room', 'coco-room');
+
+    assert.deepEqual(denied.socket.emitted, [{ event: 'error', args: [{ message: 'Coco is not enabled for this user' }] }]);
+    assert.deepEqual(denied.socket.joined, []);
+    assert.deepEqual(denied.socket.left, []);
+    assert.deepEqual(denied.store.socketRooms, ['room-1']);
+    assert.deepEqual(denied.io.roomEmits, []);
   });
 
   it('leaves rooms and updates stored socket memberships', async () => {
@@ -388,5 +429,17 @@ describe('room socket handlers', () => {
       missingRoom = result;
     });
     assert.equal(missingRoom, null);
+  });
+
+  it('hides Coco room lookup metadata when rollout controls deny access', async () => {
+    const { socket, store } = createHarness('client-2', createCocoAccessControl({ enabled: true, allowedClientIds: ['client-1'] }));
+    store.rooms.push(room({ id: 'coco-room', name: 'Coco Room', type: 'coco' }));
+    let foundRoom: Room | null | undefined;
+
+    await socket.invoke('get_room_by_id', 'coco-room', (result: Room | null) => {
+      foundRoom = result;
+    });
+
+    assert.equal(foundRoom, null);
   });
 });

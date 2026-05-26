@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import { createCocoAccessControl } from '../services/cocoAccessControl';
 import { createRoomMemberEvent, createRoomRecord, validateRoomNameInput } from '../services/messageDomain';
 import { Room, RoomType } from '../types';
 import { SocketConnectionContext } from './types';
@@ -25,7 +26,7 @@ const normalizeRoomType = (type: unknown): RoomType | undefined => (
   type === 'coco' ? 'coco' : undefined
 );
 
-export function registerRoomHandlers({ io, socket, store, socketLogger }: SocketConnectionContext) {
+export function registerRoomHandlers({ io, socket, store, socketLogger, cocoAccess = createCocoAccessControl({ enabled: false }) }: SocketConnectionContext) {
   socket.on('register', async (clientId: string) => {
     const userId = clientId || uuidv4();
     await store.storeClientSession(socket.id, userId);
@@ -79,6 +80,18 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
         roomType: roomData.type,
       });
     }
+    if (roomData?.type === 'coco') {
+      const access = cocoAccess.canUse(clientId);
+      if (!access.allowed) {
+        socketLogger.warn('Coco room creation rejected by rollout controls', {
+          socketId: socket.id,
+          clientId,
+          reason: access.reason,
+        });
+        callback?.({ success: false, error: access.message || 'Coco is unavailable' });
+        return;
+      }
+    }
 
     const roomId = await store.generateUniqueRoomId();
     const room = createRoomRecord({
@@ -116,6 +129,26 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
       return;
     }
 
+    const room = await store.getRoomById(roomId);
+    if (!room) {
+      socketLogger.warn('Client tried to join non-existent room', { socketId: socket.id, userId, roomId });
+      socket.emit('error', { message: 'Room not found' });
+      return;
+    }
+    if (room.type === 'coco') {
+      const access = cocoAccess.canUse(userId);
+      if (!access.allowed) {
+        socketLogger.warn('Coco room join rejected by rollout controls', {
+          socketId: socket.id,
+          userId,
+          roomId,
+          reason: access.reason,
+        });
+        socket.emit('error', { message: access.message || 'Coco is unavailable' });
+        return;
+      }
+    }
+
     const prevRooms = await store.getUserRooms(socket.id);
     for (const r of prevRooms) {
       const memberCount = await store.updateRoomMemberCount(r, userId, false);
@@ -135,13 +168,6 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
 
       socket.to(r).emit('room_member_change', leaveEvent);
       socket.leave(r);
-    }
-
-    const room = await store.getRoomById(roomId);
-    if (!room) {
-      socketLogger.warn('Client tried to join non-existent room', { socketId: socket.id, userId, roomId });
-      socket.emit('error', { message: 'Room not found' });
-      return;
     }
 
     socket.join(roomId);
@@ -336,6 +362,19 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
     const userId = await store.getClientId(socket.id);
 
     if (room) {
+      if (room.type === 'coco') {
+        const access = cocoAccess.canUse(userId);
+        if (!access.allowed) {
+          socketLogger.warn('Coco room info lookup rejected by rollout controls', {
+            socketId: socket.id,
+            userId,
+            roomId,
+            reason: access.reason,
+          });
+          callback(null);
+          return;
+        }
+      }
       socketLogger.debug('Room info requested', { socketId: socket.id, userId, roomId, roomName: room.name });
       callback(room);
     } else {

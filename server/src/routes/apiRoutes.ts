@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../logger';
 import { RoomStore } from '../repositories/store';
 import { Message, Room } from '../types';
+import { CocoAccessControl, createCocoAccessControl } from '../services/cocoAccessControl';
 import { createRoomRecord, validateRoomNameInput } from '../services/messageDomain';
 
 interface ApiRouteOptions {
@@ -14,10 +15,19 @@ interface ApiRouteOptions {
   routeLogger: Logger;
   getAIModelResponse: () => unknown;
   persistenceStore?: string;
+  cocoAccess?: CocoAccessControl;
 }
 
 export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
-  const { store, io, redisClient, routeLogger, getAIModelResponse, persistenceStore = 'redis' } = options;
+  const {
+    store,
+    io,
+    redisClient,
+    routeLogger,
+    getAIModelResponse,
+    persistenceStore = 'redis',
+    cocoAccess = createCocoAccessControl({ enabled: false }),
+  } = options;
 
   app.get('/api/rooms/:roomId/messages', async (req: Request, res: Response) => {
     const { roomId } = req.params;
@@ -55,6 +65,18 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     if (!roomName.ok) {
       routeLogger.warn('Invalid room creation via API', { endpoint: 'POST /api/clients/:clientId/rooms', clientId, roomNameValid: false, ip: req.ip });
       return res.status(400).json({ error: roomName.error });
+    }
+    if (roomData?.type === 'coco') {
+      const access = cocoAccess.canUse(clientId);
+      if (!access.allowed) {
+        routeLogger.warn('Coco room creation via API rejected by rollout controls', {
+          endpoint: 'POST /api/clients/:clientId/rooms',
+          clientId,
+          reason: access.reason,
+          ip: req.ip,
+        });
+        return res.status(403).json({ error: access.message || 'Coco is unavailable' });
+      }
     }
 
     const roomId = await store.generateUniqueRoomId();
@@ -114,6 +136,13 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     res.json(getAIModelResponse());
   });
 
+  app.get('/api/features', (req: Request, res: Response) => {
+    const clientId = typeof req.query.clientId === 'string' ? req.query.clientId : undefined;
+    return res.json({
+      coco: cocoAccess.toFeaturePayload(clientId),
+    });
+  });
+
   app.get('/api/rooms/:roomId/ai-cost', async (req: Request, res: Response) => {
     const { roomId } = req.params;
     if (!roomId) {
@@ -154,6 +183,12 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
         persistenceStore,
         redis: redisStatus,
         socketAdapterReady: io.of('/').adapter ? true : false,
+        features: {
+          coco: {
+            enabled: cocoAccess.enabled,
+            rollout: !cocoAccess.enabled ? 'disabled' : cocoAccess.hasAllowlist ? 'allowlist' : 'all',
+          },
+        },
         rooms: roomCount,
         timestamp: new Date().toISOString(),
       });

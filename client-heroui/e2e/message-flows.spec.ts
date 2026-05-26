@@ -11,6 +11,7 @@ import {
   resetE2EData,
   seedClient,
   sendTextMessage,
+  shortName,
   uniqueName,
 } from './helpers';
 
@@ -20,7 +21,7 @@ test.beforeEach(async ({ request }) => {
 
 async function openOwnedRoom(page: Parameters<typeof openRoomsPage>[0], context: Parameters<typeof seedClient>[0], request: Parameters<typeof createRoomViaApi>[0]) {
   const clientId = await seedClient(context);
-  const room = await createRoomViaApi(request, clientId, uniqueName('message-room'));
+  const room = await createRoomViaApi(request, clientId, shortName('message-room'));
   await openRoomsPage(page);
   await openRoomFromCard(page, room);
   return { clientId, room };
