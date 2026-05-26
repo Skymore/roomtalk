@@ -27,9 +27,10 @@ import { EditMessageModal } from './EditMessageModal';
 
 interface MessageListProps {
   roomId: string;
+  onReply: (message: Message) => void;
 }
 
-export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
+export const MessageList: React.FC<MessageListProps> = ({ roomId, onReply }) => {
   const { t } = useTranslation();
   // generate a stable ID for the scroll container
   const scrollContainerId = `message-list-scroll-${roomId}`;
@@ -261,6 +262,7 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId }) => {
                     onStartEdit={handleOpenEditModal}
                     onDeleteMessage={handleOpenDeleteModal}
                     onRefreshAI={handleRefreshAI}
+                    onReply={onReply}
                     />
                 ))}
             </div>

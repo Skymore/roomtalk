@@ -4,7 +4,7 @@ import { MessageInput } from './MessageInput';
 import { MessageList } from './MessageList';
 import { AppView } from '../utils/appPersistence';
 import { getAvatarColor, getAvatarText } from '../utils/userProfile';
-import { Room, RoomRenameHandler } from '../utils/types';
+import { Message, Room, RoomRenameHandler } from '../utils/types';
 
 interface ChatRoomViewProps {
   currentRoom: Room;
@@ -41,6 +41,12 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
   handleDeleteRoom,
   handleRenameRoom,
 }) => {
+  const [replyToMessage, setReplyToMessage] = React.useState<Message | null>(null);
+
+  React.useEffect(() => {
+    setReplyToMessage(null);
+  }, [currentRoom.id]);
+
   return (
     <div className="flex h-full min-h-0 w-full flex-1 flex-col bg-[#f5f4ed] dark:bg-[#141413]">
       <ChatHeader
@@ -61,7 +67,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
       />
 
       <div className="min-h-0 w-full flex-1 overflow-hidden">
-        <MessageList roomId={currentRoom.id} />
+        <MessageList roomId={currentRoom.id} onReply={setReplyToMessage} />
       </div>
 
       <div
@@ -73,6 +79,8 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
           username={username}
           avatarText={getAvatarText(username)}
           avatarColor={getAvatarColor(username)}
+          replyToMessage={replyToMessage}
+          onCancelReply={() => setReplyToMessage(null)}
         />
       </div>
     </div>

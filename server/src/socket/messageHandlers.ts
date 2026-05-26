@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import {
+  createReplyReference,
   createUserMessage,
 } from '../services/messageDomain';
 import { Message } from '../types';
@@ -25,6 +26,7 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
         text: string;
         color: string;
       };
+      replyToMessageId?: string;
     },
     callback?: (response: { success: boolean; message?: Message; error?: string }) => void,
   ) => {
@@ -43,6 +45,17 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       return;
     }
 
+    let replyTo;
+    if (messageData.replyToMessageId) {
+      const roomMessages = await store.readMessagesByRoom(messageData.roomId);
+      const quotedMessage = roomMessages.find(message => message.id === messageData.replyToMessageId);
+      if (!quotedMessage) {
+        callback?.({ success: false, error: 'Quoted message not found' });
+        return;
+      }
+      replyTo = createReplyReference(quotedMessage);
+    }
+
     const message = createUserMessage({
       id: uuidv4(),
       clientId,
@@ -51,6 +64,7 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       messageType: messageData.messageType || 'text',
       username: messageData.username,
       avatar: messageData.avatar,
+      replyTo,
     });
 
     const loggableMessage = socketLogger.formatMessageForLog(message);
