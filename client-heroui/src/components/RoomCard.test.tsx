@@ -76,7 +76,7 @@ describe('RoomCard', () => {
       cocoStatus: 'running',
     });
 
-    expect(screen.getByText('cocoRoomType')).toBeTruthy();
+    expect(screen.getByText('codeAgentRoomType')).toBeTruthy();
     expect(screen.getByText('sandboxStatusReady')).toBeTruthy();
     expect(screen.getByText('cocoStatusRunning')).toBeTruthy();
     expect(screen.getByTestId('room-card').className).toContain('rounded-lg');

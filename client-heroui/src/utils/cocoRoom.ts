@@ -1,6 +1,4 @@
-import { Room, RoomCocoStatus, RoomSandboxStatus } from './types';
-
-export const isCocoRoom = (room: Room | null | undefined): boolean => room?.type === 'coco';
+import { RoomCocoStatus, RoomSandboxStatus } from './types';
 
 const sandboxStatusLabelKeys: Record<RoomSandboxStatus, string> = {
   none: 'sandboxStatusNone',

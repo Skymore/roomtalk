@@ -22,6 +22,7 @@ import { generateRandomName } from "../utils/userProfile";
 import { getStoredRoom, getStoredUsername, getStoredView, saveCurrentRoom, saveCurrentView, saveUsername, AppView } from "../utils/appPersistence";
 import { buildRoomShareUrl, getRoomMemberUpdate, sortRoomsByLastActivityDesc, upsertRoom } from "../utils/roomState";
 import { FALLBACK_FEATURE_FLAGS, fetchFeatureFlags, FeatureFlags } from "../utils/features";
+import { getCodeAgentBackend, getCodeAgentMode } from "../utils/codeAgent";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { AppHeader } from "../components/AppHeader";
@@ -550,16 +551,18 @@ export const MessagePage: React.FC = () => {
             changeLanguage={changeLanguage}
           />
         );
-      case "chat":
+      case "chat": {
+        const codeAgentBackend = getCodeAgentBackend(currentRoom);
         return currentRoom ? (
-          currentRoom.type === 'coco' ? (
+          codeAgentBackend ? (
             <CodeAgentRoomView
               currentRoom={currentRoom}
               memberCount={memberCount}
               memberEvent={memberEvent}
               username={username}
               clientId={clientId}
-              cocoMode={featureFlags.coco.mode}
+              backend={codeAgentBackend}
+              mode={getCodeAgentMode(featureFlags)}
               handleCopyToClipboard={handleCopyToClipboard}
               handleShareRoom={handleShareRoom}
               handleToggleSave={handleToggleSave}
@@ -593,6 +596,7 @@ export const MessagePage: React.FC = () => {
         ) : (
           <WelcomeView onEnterRooms={() => setView("rooms")} />
         );
+      }
       default:
         return <WelcomeView onEnterRooms={() => setView("rooms")} />;
     }

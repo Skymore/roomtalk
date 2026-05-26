@@ -73,7 +73,6 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
           username={username}
           avatarText={getAvatarText(username)}
           avatarColor={getAvatarColor(username)}
-          isRoomAIProcessing={currentRoom.type === 'coco' && currentRoom.cocoStatus === 'running'}
         />
       </div>
     </div>

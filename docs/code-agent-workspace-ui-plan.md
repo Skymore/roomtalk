@@ -1,6 +1,6 @@
 # Code Agent Workspace UI Plan
 
-> Status: Phase 1 accepted; Phase 2 queued
+> Status: Phase 2 accepted; Phase 3 queued
 > Date: 2026-05-26
 > Scope: turn RoomTalk Coco rooms into a code-agent workspace UI, while preparing a future `codeAgentBackend = coco | codex` abstraction.
 
@@ -132,6 +132,14 @@ Phase 1 completion record (2026-05-26):
 - Closed Claude review findings by scoping Coco's working directory per turn, validating `COCO_WORKSPACE_ROOT`, exercising real local Coco file-tool cwd behavior, sanitizing displayed file references, and exposing file-list truncation.
 - Verified client unit tests (`73/73`), server unit tests (`197/197`), Python runner tests (`16/16`), frontend/backend builds, Coco desktop E2E (`2/2`), and Coco mobile E2E (`1/1`).
 - Claude Code follow-up review: no blockers; Phase 1 may proceed.
+
+Phase 2 completion record (2026-05-26):
+
+- Added generic frontend helpers for code-agent backend, mode, support, and status while preserving persisted `type: 'coco'` fields.
+- Renamed the neutral workspace display component to `CodeAgentWorkspacePanel` and moved view/card/header/sidebar routing behind the new adapters.
+- Added a controlled unavailable state for a future `codex` room so partial rollout data cannot crash render or expose runnable controls before backend support exists.
+- Verified client unit tests (`78/78`), i18n coverage, production build, and Coco desktop/mobile E2E (`3/3`).
+- Claude Code follow-up review: no blockers; Phase 2 is ready to commit.
 
 ### Phase 0: Source Audit And Plan Review
 

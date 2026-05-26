@@ -4,7 +4,8 @@ import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { Room, RoomRenameHandler } from "../utils/types";
 import { RoomRenameModal } from './RoomRenameModal';
-import { getCocoAgentStatusClassName, getCocoStatusLabelKey, getSandboxStatusClassName, getSandboxStatusLabelKey, isCocoRoom } from '../utils/cocoRoom';
+import { getCodeAgentBackend, getCodeAgentStatus, isSupportedCodeAgentBackend } from '../utils/codeAgent';
+import { getCocoAgentStatusClassName, getCocoStatusLabelKey, getSandboxStatusClassName, getSandboxStatusLabelKey } from '../utils/cocoRoom';
 
 interface ChatHeaderProps {
   currentRoom: Room;
@@ -43,7 +44,10 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   const isSaved = isRoomSaved(currentRoom.id);
   const [isRenameOpen, setIsRenameOpen] = useState(false);
   const canRename = currentRoom.creatorId === clientId;
-  const isCoco = isCocoRoom(currentRoom);
+  const codeAgentBackend = getCodeAgentBackend(currentRoom);
+  const isCodeAgent = codeAgentBackend !== null;
+  const isSupportedCodeAgent = isSupportedCodeAgentBackend(codeAgentBackend);
+  const agentStatus = getCodeAgentStatus(currentRoom);
 
   const onConfirmLeave = () => {
     handleLeaveRoom();
@@ -69,7 +73,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
         </Button>
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <h2 data-testid="chat-room-title" className="max-w-[150px] truncate font-serif text-lg font-medium leading-tight text-[#141413] dark:text-[#faf9f5] md:max-w-[360px]">{currentRoom.name}</h2>
-          {isCoco && (
+          {isCodeAgent && (
             <Chip
               size="sm"
               variant="flat"
@@ -79,7 +83,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                 content: 'px-0 text-[11px] font-semibold',
               }}
             >
-              {t('cocoRoomType')}
+              {t('codeAgentRoomType')}
             </Chip>
           )}
           {canRename && (
@@ -120,15 +124,15 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               </Tooltip>
               <Icon icon="lucide:copy" className="ml-1 text-[#87867f] dark:text-[#b0aea5]" width={12} />
             </div>
-            {isCoco && (
+            {isSupportedCodeAgent && (
               <div className="hidden min-w-0 flex-wrap items-center gap-1 md:flex">
                 <span className={`inline-flex max-w-[120px] items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${getSandboxStatusClassName(currentRoom.sandboxStatus)}`}>
                   <Icon icon="lucide:box" className="h-3 w-3 flex-shrink-0" />
                   <span className="truncate">{t(getSandboxStatusLabelKey(currentRoom.sandboxStatus))}</span>
                 </span>
-                <span className={`inline-flex max-w-[120px] items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${getCocoAgentStatusClassName(currentRoom.cocoStatus)}`}>
+                <span className={`inline-flex max-w-[120px] items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${getCocoAgentStatusClassName(agentStatus)}`}>
                   <Icon icon="lucide:bot" className="h-3 w-3 flex-shrink-0" />
-                  <span className="truncate">{t(getCocoStatusLabelKey(currentRoom.cocoStatus))}</span>
+                  <span className="truncate">{t(getCocoStatusLabelKey(agentStatus))}</span>
                 </span>
               </div>
             )}
