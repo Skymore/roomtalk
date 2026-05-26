@@ -165,7 +165,7 @@ describe('PostgresStore', () => {
         assertCall(call) {
           assert.match(call.sql, /INSERT INTO room_messages/);
           assert.equal(call.params?.[0], 'message-1');
-          assert.equal(call.params?.[13], 2);
+          assert.equal(call.params?.[14], 2);
         },
       },
       { rows: [roomRow({ last_activity_at: '2026-05-04T00:00:00.000Z' })] },
@@ -190,7 +190,7 @@ describe('PostgresStore', () => {
           assert.match(call.sql, /ON CONFLICT \(id\) DO UPDATE/);
           assert.match(call.sql, /position = room_messages.position/);
           assert.equal(call.params?.[0], 'message-1');
-          assert.equal(call.params?.[13], 3);
+          assert.equal(call.params?.[14], 3);
         },
       },
       {
@@ -257,12 +257,24 @@ describe('PostgresStore', () => {
       aiModel: { id: 'deepseek-v4-pro', apiModel: 'deepseek-chat', provider: 'deepseek', label: 'DeepSeek V4 Pro' },
       usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, source: 'reported' },
       cost: cost(0.01),
+      replyTo: {
+        messageId: 'm1',
+        username: 'Ada',
+        messageType: 'text',
+        preview: 'question',
+      },
     });
     const client = new ScriptedClient([
       { rowCount: 0 },
       { rows: [roomRow()] },
       { rowCount: 1, assertCall: call => assert.match(call.sql, /DELETE FROM room_messages/) },
-      { rowCount: 1, assertCall: call => assert.equal(call.params?.[13], 0) },
+      {
+        rowCount: 1,
+        assertCall(call) {
+          assert.equal(call.params?.[13], JSON.stringify(aiMessage.replyTo));
+          assert.equal(call.params?.[14], 0);
+        },
+      },
       { rows: [roomRow({ last_activity_at: '2026-05-04T00:00:00.000Z' })] },
       { rowCount: 0 },
     ]);
@@ -282,6 +294,7 @@ describe('PostgresStore', () => {
           ai_model: aiMessage.aiModel,
           usage: aiMessage.usage,
           cost: aiMessage.cost,
+          reply_to: aiMessage.replyTo,
         }],
       },
       { rowCount: 2 },
