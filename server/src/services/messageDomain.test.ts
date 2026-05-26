@@ -3,6 +3,8 @@ import { describe, it } from 'node:test';
 import {
   applyMessageEdit,
   buildAIProviderMessages,
+  buildAnthropicMessages,
+  createReplyReference,
   createRoomMemberEvent,
   createRoomRecord,
   createUserMessage,
@@ -64,6 +66,29 @@ describe('message domain', () => {
     assert.equal(message.username, 'Sky');
   });
 
+  it('normalizes display names and stores bounded server-created reply references', () => {
+    const replyTo = createReplyReference(createMessage({
+      id: 'source',
+      username: ' Bob\nBuilder ',
+      content: ` first line\n${'long '.repeat(40)}`,
+    }));
+    const message = createUserMessage({
+      id: 'm2',
+      clientId: 'client-2',
+      roomId: 'room-1',
+      content: 'reply',
+      username: ' Alice\nModerator ',
+      replyTo,
+      now: at,
+    });
+
+    assert.equal(message.username, 'Alice Moderator');
+    assert.equal(message.replyTo?.messageId, 'source');
+    assert.equal(message.replyTo?.username, 'Bob Builder');
+    assert.equal(message.replyTo?.preview.includes('\n'), false);
+    assert.ok((message.replyTo?.preview.length || 0) <= 120);
+  });
+
   it('edits one message while preserving the rest of history', () => {
     const editedAt = new Date('2026-05-03T10:01:00.000Z');
     const first = createMessage({ id: 'm1', content: 'before' });
@@ -90,21 +115,31 @@ describe('message domain', () => {
 });
 
 describe('AI provider messages', () => {
-  it('maps text, AI, and image messages into provider format', () => {
+  it('includes display-name and reply context without exposing client IDs', () => {
+    const replyTo = createReplyReference(createMessage({
+      id: 'source',
+      clientId: 'private-client-id',
+      username: 'Bob',
+      content: 'original question',
+    }));
     const result = buildAIProviderMessages('system prompt', [
-      createMessage({ id: 'm1', clientId: 'client-1', content: 'user text' }),
+      createMessage({ id: 'm1', clientId: 'private-client-id', username: 'Alice', content: 'user text', replyTo }),
       createMessage({ id: 'ai1', clientId: 'ai_assistant', content: 'assistant text', messageType: 'ai' }),
-      createMessage({ id: 'img1', clientId: 'client-1', content: 'abc123', messageType: 'image', mimeType: 'image/webp' }),
+      createMessage({ id: 'img1', clientId: 'client-1', username: 'Alice', content: 'abc123', messageType: 'image', mimeType: 'image/webp' }),
       createMessage({ id: 'empty', content: '' }),
     ]);
 
     assert.equal(result.length, 4);
     assert.deepEqual(result[0], { role: 'system', content: 'system prompt' });
-    assert.deepEqual(result[1], { role: 'user', content: 'user text' });
+    assert.deepEqual(result[1], {
+      role: 'user',
+      content: '[Sender: Alice]\n[Replying to Bob: original question]\nuser text',
+    });
     assert.deepEqual(result[2], { role: 'assistant', content: 'assistant text' });
     assert.deepEqual(result[3], {
       role: 'user',
       content: [
+        { type: 'text', text: '[Sender: Alice]\n[Image attachment]' },
         {
           type: 'image_url',
           image_url: {
@@ -114,5 +149,24 @@ describe('AI provider messages', () => {
         },
       ],
     });
+    assert.equal(JSON.stringify(result).includes('private-client-id'), false);
+  });
+
+  it('includes the same human speaker context for Anthropic messages', () => {
+    const result = buildAnthropicMessages([
+      createMessage({ username: 'Alice', content: 'hello' }),
+      createMessage({ username: 'Alice', content: 'abc123', messageType: 'image', mimeType: 'image/webp' }),
+      createMessage({ clientId: 'ai_assistant', content: 'answer', messageType: 'ai' }),
+    ]);
+
+    assert.deepEqual(result[0], { role: 'user', content: '[Sender: Alice]\nhello' });
+    assert.deepEqual(result[1], {
+      role: 'user',
+      content: [
+        { type: 'text', text: '[Sender: Alice]\n[Image attachment]' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/webp', data: 'abc123' } },
+      ],
+    });
+    assert.deepEqual(result[2], { role: 'assistant', content: 'answer' });
   });
 });
