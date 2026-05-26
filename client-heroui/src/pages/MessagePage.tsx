@@ -474,7 +474,7 @@ export const MessagePage: React.FC = () => {
     switch (view) {
       case "rooms":
         return (
-          <div className="h-full overflow-y-auto"> {/* 占据全部可用空间 */}
+          <div className="h-full w-full overflow-y-auto"> {/* 占据全部可用空间 */}
             <RoomList
               rooms={rooms}
               onRoomSelect={handleRoomSelect}
@@ -487,7 +487,7 @@ export const MessagePage: React.FC = () => {
         );
       case "saved":
         return (
-          <div className="h-full overflow-y-auto"> {/* 占据全部可用空间 */}
+          <div className="h-full w-full overflow-y-auto"> {/* 占据全部可用空间 */}
             <SavedRoomList
               rooms={savedRooms}
               onRoomSelect={handleRoomSelect}
