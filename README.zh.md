@@ -217,7 +217,7 @@ npm run dev
 | `ROOM_MESSAGES_CACHE_TTL_SECONDS` | 30        | PostgreSQL 模式下 Redis 房间消息缓存 TTL；`0` 禁用缓存写入 |
 | `OPENROUTER_API_KEY` | —                     | OpenRouter API 密钥（启用 AI 必填） |
 | `AI_MODEL`       | deepseek-v4-pro           | 默认 AI 模型 ID          |
-| `AI_MODEL_OPTIONS` | deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7 | 用户可选择的模型 ID，逗号分隔 |
+| `AI_MODEL_OPTIONS` | deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7,tencent/hy3-preview,google/gemini-3.5-flash | 用户可选择的模型 ID，逗号分隔 |
 | `OPENROUTER_HTTP_REFERER` | `CLIENT_URL`      | 可选 OpenRouter Referer 请求头 |
 | `OPENROUTER_APP_NAME` | RoomTalk              | 可选 OpenRouter 应用名称请求头 |
 
@@ -248,7 +248,7 @@ REDIS_URL=redis://localhost:6379
 PERSISTENCE_STORE=redis
 OPENROUTER_API_KEY=sk-or-...
 AI_MODEL=deepseek-v4-pro
-AI_MODEL_OPTIONS=deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7
+AI_MODEL_OPTIONS=deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7,tencent/hy3-preview,google/gemini-3.5-flash
 OPENROUTER_HTTP_REFERER=http://localhost:5173
 OPENROUTER_APP_NAME=RoomTalk
 ```
@@ -264,7 +264,7 @@ fly secrets set OPENROUTER_API_KEY="sk-or-..."
 fly secrets set REDIS_URL="redis://..."
 # 可选
 fly secrets set AI_MODEL="deepseek-v4-pro"
-fly secrets set AI_MODEL_OPTIONS="deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7"
+fly secrets set AI_MODEL_OPTIONS="deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7,tencent/hy3-preview,google/gemini-3.5-flash"
 ```
 
 ## 📦 持久化

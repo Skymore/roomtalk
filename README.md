@@ -257,7 +257,7 @@ This comprehensive approach ensures message delivery reliability across differen
 | `ROOM_MESSAGES_CACHE_TTL_SECONDS` | 30        | Redis room message cache TTL in PostgreSQL mode; `0` disables cache writes |
 | `OPENROUTER_API_KEY` | —                     | OpenRouter API key (required for AI) |
 | `AI_MODEL`       | deepseek-v4-pro           | Default AI model id             |
-| `AI_MODEL_OPTIONS` | deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7 | Comma-separated model ids users can select |
+| `AI_MODEL_OPTIONS` | deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7,tencent/hy3-preview,google/gemini-3.5-flash | Comma-separated model ids users can select |
 | `OPENROUTER_HTTP_REFERER` | `CLIENT_URL`      | Optional OpenRouter referer header |
 | `OPENROUTER_APP_NAME` | RoomTalk              | Optional OpenRouter app title header |
 
@@ -288,7 +288,7 @@ REDIS_URL=redis://localhost:6379
 PERSISTENCE_STORE=redis
 OPENROUTER_API_KEY=sk-or-...
 AI_MODEL=deepseek-v4-pro
-AI_MODEL_OPTIONS=deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7
+AI_MODEL_OPTIONS=deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7,tencent/hy3-preview,google/gemini-3.5-flash
 OPENROUTER_HTTP_REFERER=http://localhost:5173
 OPENROUTER_APP_NAME=RoomTalk
 ```
@@ -304,7 +304,7 @@ fly secrets set OPENROUTER_API_KEY="sk-or-..."
 fly secrets set REDIS_URL="redis://..."
 # optional
 fly secrets set AI_MODEL="deepseek-v4-pro"
-fly secrets set AI_MODEL_OPTIONS="deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7"
+fly secrets set AI_MODEL_OPTIONS="deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7,tencent/hy3-preview,google/gemini-3.5-flash"
 ```
 
 ## 📦 Persistence

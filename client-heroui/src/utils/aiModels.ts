@@ -20,6 +20,7 @@ interface AIModelResponse {
 }
 
 const SELECTED_AI_MODEL_KEY = 'roomtalk:selected-ai-model';
+const PREMIUM_OUTPUT_PRICE_THRESHOLD = 10;
 
 export const FALLBACK_AI_MODELS: AIModelOption[] = [
   {
@@ -36,7 +37,6 @@ export const FALLBACK_AI_MODELS: AIModelOption[] = [
     provider: 'openrouter',
     label: 'GPT-5.5',
     pricing: { currency: 'USD', inputPerMillion: 5, cachedInputPerMillion: 0.5, outputPerMillion: 30 },
-    isPremium: true,
   },
   {
     id: 'claude-sonnet-4.6',
@@ -44,7 +44,6 @@ export const FALLBACK_AI_MODELS: AIModelOption[] = [
     provider: 'anthropic',
     label: 'Claude Sonnet 4.6',
     pricing: { currency: 'USD', inputPerMillion: 3, cachedInputPerMillion: 0.30, outputPerMillion: 15 },
-    isPremium: true,
   },
   {
     id: 'claude-opus-4.7',
@@ -52,7 +51,6 @@ export const FALLBACK_AI_MODELS: AIModelOption[] = [
     provider: 'anthropic',
     label: 'Claude Opus 4.7',
     pricing: { currency: 'USD', inputPerMillion: 5, cachedInputPerMillion: 0.50, outputPerMillion: 25 },
-    isPremium: true,
   },
   {
     id: 'kimi-k2.6',
@@ -87,12 +85,20 @@ export const FALLBACK_AI_MODELS: AIModelOption[] = [
     pricing: { currency: 'USD', inputPerMillion: 1.25, cachedInputPerMillion: 0.2, outputPerMillion: 2.5 },
   },
   {
-    id: 'tencent/hy3-preview:free',
-    apiModel: 'tencent/hy3-preview:free',
+    id: 'tencent/hy3-preview',
+    apiModel: 'tencent/hy3-preview',
     provider: 'openrouter',
     label: 'Tencent Hy3 Preview',
     description: 'Tencent via OpenRouter',
-    pricing: { currency: 'USD', inputPerMillion: 0, outputPerMillion: 0 },
+    pricing: { currency: 'USD', inputPerMillion: 0.066, cachedInputPerMillion: 0.029, outputPerMillion: 0.26 },
+  },
+  {
+    id: 'google/gemini-3.5-flash',
+    apiModel: 'google/gemini-3.5-flash',
+    provider: 'openrouter',
+    label: 'Gemini 3.5 Flash',
+    description: 'Google via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 1.5, cachedInputPerMillion: 0.15, outputPerMillion: 9 },
   },
   {
     id: '~google/gemini-pro-latest',
@@ -101,7 +107,6 @@ export const FALLBACK_AI_MODELS: AIModelOption[] = [
     label: 'Gemini Pro Latest',
     description: 'Google via OpenRouter',
     pricing: { currency: 'USD', inputPerMillion: 2, cachedInputPerMillion: 0.2, outputPerMillion: 12 },
-    isPremium: true,
   },
 ];
 
@@ -143,21 +148,13 @@ export const resolveSelectedAIModel = (
     : defaultModel;
 };
 
-export const isPremiumAIModel = (model: Pick<AIModelOption, 'id' | 'apiModel' | 'label' | 'isPremium'>) => {
+export const isPremiumAIModel = (model: Pick<AIModelOption, 'pricing' | 'isPremium'>) => {
   if (typeof model.isPremium === 'boolean') {
     return model.isPremium;
   }
 
-  const modelText = `${model.id} ${model.apiModel || ''} ${model.label}`.toLowerCase();
-  return (
-    modelText.includes('gpt') ||
-    modelText.includes('openai/') ||
-    modelText.includes('claude') ||
-    modelText.includes('anthropic/') ||
-    modelText.includes('gemini') ||
-    modelText.includes('google/') ||
-    modelText.includes('~google/')
-  );
+  // Mirror the server rule while using fallback models before the API responds.
+  return (model.pricing?.outputPerMillion ?? 0) > PREMIUM_OUTPUT_PRICE_THRESHOLD;
 };
 
 export const fetchAIModels = async (): Promise<AIModelResponse> => {
