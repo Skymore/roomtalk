@@ -2,6 +2,7 @@ import { AICost, AIModelOption, AIUsage, Message } from '../types';
 
 export const DEFAULT_SYSTEM_MESSAGE = 'You are a helpful, creative, friendly assistant. Respond concisely and clearly.';
 export const DEFAULT_AI_MODEL_ID = 'deepseek-v4-pro';
+export const PREMIUM_OUTPUT_PRICE_THRESHOLD = 10;
 
 interface AIModelLogger {
   warn(message: string, meta?: unknown): void;
@@ -23,7 +24,6 @@ export const REQUESTED_AI_MODEL_CATALOG: AIModelOption[] = [
     label: 'GPT-5.5',
     description: 'OpenAI GPT-5.5 routed through OpenRouter',
     pricing: { currency: 'USD', inputPerMillion: 5, cachedInputPerMillion: 0.5, outputPerMillion: 30 },
-    isPremium: true,
   },
   {
     id: 'claude-sonnet-4.6',
@@ -32,7 +32,6 @@ export const REQUESTED_AI_MODEL_CATALOG: AIModelOption[] = [
     label: 'Claude Sonnet 4.6',
     description: 'Anthropic Claude Sonnet 4.6 via official API (with prompt caching)',
     pricing: { currency: 'USD', inputPerMillion: 3, cachedInputPerMillion: 0.30, outputPerMillion: 15 },
-    isPremium: true,
   },
   {
     id: 'claude-opus-4.7',
@@ -41,7 +40,6 @@ export const REQUESTED_AI_MODEL_CATALOG: AIModelOption[] = [
     label: 'Claude Opus 4.7',
     description: 'Anthropic Claude Opus 4.7 via official API (with prompt caching)',
     pricing: { currency: 'USD', inputPerMillion: 5, cachedInputPerMillion: 0.50, outputPerMillion: 25 },
-    isPremium: true,
   },
   {
     id: 'kimi-k2.6',
@@ -76,12 +74,20 @@ export const REQUESTED_AI_MODEL_CATALOG: AIModelOption[] = [
     pricing: { currency: 'USD', inputPerMillion: 1.25, cachedInputPerMillion: 0.2, outputPerMillion: 2.5 },
   },
   {
-    id: 'tencent/hy3-preview:free',
-    apiModel: 'tencent/hy3-preview:free',
+    id: 'tencent/hy3-preview',
+    apiModel: 'tencent/hy3-preview',
     provider: 'openrouter',
     label: 'Tencent Hy3 Preview',
-    description: 'Tencent Hy3 preview free tier via OpenRouter',
-    pricing: { currency: 'USD', inputPerMillion: 0, outputPerMillion: 0 },
+    description: 'Tencent Hy3 preview via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 0.066, cachedInputPerMillion: 0.029, outputPerMillion: 0.26 },
+  },
+  {
+    id: 'google/gemini-3.5-flash',
+    apiModel: 'google/gemini-3.5-flash',
+    provider: 'openrouter',
+    label: 'Gemini 3.5 Flash',
+    description: 'Google Gemini 3.5 Flash via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 1.5, cachedInputPerMillion: 0.15, outputPerMillion: 9 },
   },
   {
     id: '~google/gemini-pro-latest',
@@ -90,7 +96,6 @@ export const REQUESTED_AI_MODEL_CATALOG: AIModelOption[] = [
     label: 'Gemini Pro Latest',
     description: 'Google Gemini Pro Latest via OpenRouter',
     pricing: { currency: 'USD', inputPerMillion: 2, cachedInputPerMillion: 0.2, outputPerMillion: 12 },
-    isPremium: true,
   },
 ];
 
@@ -102,7 +107,6 @@ export const LEGACY_AI_MODEL_CATALOG: AIModelOption[] = [
     label: 'GPT-5',
     description: 'OpenAI GPT-5 routed through OpenRouter',
     pricing: { currency: 'USD', inputPerMillion: 1.25, cachedInputPerMillion: 0.125, outputPerMillion: 10 },
-    isPremium: true,
   },
   {
     id: 'gpt-5-mini',
@@ -111,7 +115,6 @@ export const LEGACY_AI_MODEL_CATALOG: AIModelOption[] = [
     label: 'GPT-5 mini',
     description: 'OpenAI GPT-5 mini routed through OpenRouter',
     pricing: { currency: 'USD', inputPerMillion: 0.25, cachedInputPerMillion: 0.025, outputPerMillion: 2 },
-    isPremium: true,
   },
   {
     id: 'gpt-5-nano',
@@ -120,7 +123,6 @@ export const LEGACY_AI_MODEL_CATALOG: AIModelOption[] = [
     label: 'GPT-5 nano',
     description: 'OpenAI GPT-5 nano routed through OpenRouter',
     pricing: { currency: 'USD', inputPerMillion: 0.05, cachedInputPerMillion: 0.005, outputPerMillion: 0.4 },
-    isPremium: true,
   },
 ];
 
@@ -128,21 +130,9 @@ const AI_MODEL_CATALOG = [...REQUESTED_AI_MODEL_CATALOG, ...LEGACY_AI_MODEL_CATA
 
 const normalizeModelLookupKey = (value: string) => value.trim().toLowerCase();
 
-export const isPremiumAIModel = (model: Pick<AIModelOption, 'id' | 'apiModel' | 'label' | 'isPremium'>): boolean => {
-  if (typeof model.isPremium === 'boolean') {
-    return model.isPremium;
-  }
-
-  const modelText = `${model.id} ${model.apiModel} ${model.label}`.toLowerCase();
-  return (
-    modelText.includes('gpt') ||
-    modelText.includes('openai/') ||
-    modelText.includes('claude') ||
-    modelText.includes('anthropic/') ||
-    modelText.includes('gemini') ||
-    modelText.includes('google/') ||
-    modelText.includes('~google/')
-  );
+export const isPremiumAIModel = (model: Pick<AIModelOption, 'pricing'>): boolean => {
+  // Only models above $10 per million output tokens require premium confirmation.
+  return (model.pricing?.outputPerMillion ?? 0) > PREMIUM_OUTPUT_PRICE_THRESHOLD;
 };
 
 const createConfiguredOpenRouterModel = (model: string): AIModelOption => ({
@@ -151,7 +141,6 @@ const createConfiguredOpenRouterModel = (model: string): AIModelOption => ({
   provider: 'openrouter',
   label: model,
   description: 'Configured OpenRouter model',
-  isPremium: isPremiumAIModel({ id: model, apiModel: model, label: model }),
 });
 
 const resolveCatalogModel = (model: string): AIModelOption | undefined => {
