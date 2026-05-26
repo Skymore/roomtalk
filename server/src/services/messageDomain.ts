@@ -1,9 +1,37 @@
-import { AIModelOption, Message, Room, RoomMemberEvent } from '../types';
+import { AIModelOption, Message, MessageReplyReference, Room, RoomMemberEvent } from '../types';
 import { getMessageAIModel } from './aiModels';
+
+const MAX_DISPLAY_NAME_LENGTH = 48;
+const MAX_REPLY_PREVIEW_LENGTH = 120;
 
 export interface AvatarPayload {
   text: string;
   color: string;
+}
+
+const collapseInlineText = (value: string) => value
+  .replace(/[\u0000-\u001f\u007f]/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+export function normalizeDisplayName(username?: string): string | undefined {
+  if (typeof username !== 'string') return undefined;
+  const normalized = collapseInlineText(username).slice(0, MAX_DISPLAY_NAME_LENGTH).trim();
+  return normalized || undefined;
+}
+
+export function createReplyReference(message: Message): MessageReplyReference {
+  const textualPreview = message.messageType === 'image'
+    ? '[Image attachment]'
+    : collapseInlineText(message.content);
+  const preview = textualPreview.slice(0, MAX_REPLY_PREVIEW_LENGTH).trim() || '[Empty message]';
+
+  return {
+    messageId: message.id,
+    username: normalizeDisplayName(message.username),
+    messageType: message.messageType,
+    preview,
+  };
 }
 
 export function createRoomRecord(input: {
@@ -49,6 +77,7 @@ export function createUserMessage(input: {
   username?: string;
   avatar?: AvatarPayload;
   mimeType?: string;
+  replyTo?: MessageReplyReference;
   now?: Date;
 }): Message {
   return {
@@ -58,9 +87,10 @@ export function createUserMessage(input: {
     roomId: input.roomId,
     timestamp: (input.now || new Date()).toISOString(),
     messageType: input.messageType || 'text',
-    username: input.username,
+    username: normalizeDisplayName(input.username),
     avatar: input.avatar,
     mimeType: input.mimeType,
+    replyTo: input.replyTo,
   };
 }
 
@@ -126,6 +156,26 @@ type AnthropicMessage = {
   content: string | AnthropicContentBlock[];
 };
 
+const getDisplayNameForAI = (message: Pick<Message, 'clientId' | 'username'>) => (
+  normalizeDisplayName(message.username)
+  || (message.clientId === 'ai_assistant' ? 'AI Assistant' : 'Participant')
+);
+
+const getReplyDisplayNameForAI = (replyTo: MessageReplyReference) => (
+  normalizeDisplayName(replyTo.username)
+  || (replyTo.messageType === 'ai' ? 'AI Assistant' : 'Participant')
+);
+
+const formatHumanContextForAI = (message: Message, content: string) => {
+  const lines = [`[Sender: ${getDisplayNameForAI(message)}]`];
+  if (message.replyTo) {
+    const preview = collapseInlineText(message.replyTo.preview).slice(0, MAX_REPLY_PREVIEW_LENGTH).trim() || '[Empty message]';
+    lines.push(`[Replying to ${getReplyDisplayNameForAI(message.replyTo)}: ${preview}]`);
+  }
+  lines.push(content);
+  return lines.join('\n');
+};
+
 export function buildAnthropicMessages(contextMessages: Message[]): AnthropicMessage[] {
   return contextMessages
     .map((message): AnthropicMessage | null => {
@@ -140,11 +190,19 @@ export function buildAnthropicMessages(contextMessages: Message[]): AnthropicMes
         const data = dataUrl.slice(commaIdx + 1);
         const mediaType = header.match(/data:([^;]+)/)?.[1] || 'image/png';
         if (!data) return null;
-        return { role, content: [{ type: 'image', source: { type: 'base64', media_type: mediaType, data } }] };
+        const blocks: AnthropicContentBlock[] = [];
+        if (role === 'user') {
+          blocks.push({ type: 'text', text: formatHumanContextForAI(message, '[Image attachment]') });
+        }
+        blocks.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data } });
+        return { role, content: blocks };
       }
 
       if (typeof message.content !== 'string' || !message.content.trim()) return null;
-      return { role, content: message.content };
+      return {
+        role,
+        content: role === 'user' ? formatHumanContextForAI(message, message.content) : message.content,
+      };
     })
     .filter((m): m is AnthropicMessage => m !== null);
 }
@@ -152,6 +210,9 @@ export function buildAnthropicMessages(contextMessages: Message[]): AnthropicMes
 type AIProviderMessage = {
   role: 'system' | 'user' | 'assistant';
   content: string | Array<{
+    type: 'text';
+    text: string;
+  } | {
     type: 'image_url';
     image_url: {
       url: string;
@@ -174,6 +235,9 @@ export function buildAIProviderMessages(systemPrompt: string, contextMessages: M
         return {
           role,
           content: [
+            ...(role === 'user'
+              ? [{ type: 'text' as const, text: formatHumanContextForAI(message, '[Image attachment]') }]
+              : []),
             {
               type: 'image_url' as const,
               image_url: {
@@ -185,16 +249,20 @@ export function buildAIProviderMessages(systemPrompt: string, contextMessages: M
         };
       }
 
+      if (typeof message.content !== 'string' || !message.content.trim()) {
+        return { role, content: '' };
+      }
+
       return {
         role,
-        content: message.content,
+        content: role === 'user' ? formatHumanContextForAI(message, message.content) : message.content,
       };
     }),
   ];
 
   return messagesForAPI.filter(message => {
     if (Array.isArray(message.content)) {
-      return message.content.length > 0 && message.content.every(item => item.type === 'image_url' && item.image_url?.url);
+      return message.content.some(item => item.type === 'image_url' && item.image_url?.url);
     }
 
     return typeof message.content === 'string' && message.content.trim() !== '';

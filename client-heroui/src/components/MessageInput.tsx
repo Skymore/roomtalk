@@ -33,18 +33,21 @@ import {
   getKeyboardCompositionSnapshot,
   isConfirmingIMEComposition,
 } from '../utils/keyboardComposition';
+import { Message } from '../utils/types';
 
 interface MessageInputProps {
   roomId: string;
   username: string;
   avatarText: string;
   avatarColor: string;
+  replyToMessage: Message | null;
+  onCancelReply: () => void;
 }
 
 // 使用WeakMap存储图片元素和对应的File对象
 const imageFileMap = new WeakMap<HTMLImageElement, File>();
 
-export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, avatarText, avatarColor }) => {
+export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, avatarText, avatarColor, replyToMessage, onCancelReply }) => {
   const { t } = useTranslation();
   const [_contentItems, setContentItems] = useState<MessageContentItem[]>(emptyMessageContent());
   const [isSending, setIsSending] = useState(false);
@@ -233,7 +236,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
       }
 
       // 重新加入：先发送用户消息保存到历史记录
-      await sendMessage(prompt, roomId, 'text', username, avatar);
+      await sendMessage(prompt, roomId, 'text', username, avatar, replyToMessage?.id);
+      onCancelReply();
 
       // 移除 prompt 参数
       await requestAIResponse({
@@ -279,10 +283,15 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
     try {
       const avatar = { text: avatarText, color: avatarColor };
       const outgoingItems = buildOutgoingMessageItems(latestContentItems);
+      let replyToMessageId = replyToMessage?.id;
 
       for (const item of outgoingItems) {
         if (item.type === 'text') {
-          await sendMessage(item.content, roomId, 'text', username, avatar);
+          await sendMessage(item.content, roomId, 'text', username, avatar, replyToMessageId);
+          if (replyToMessageId) {
+            replyToMessageId = undefined;
+            onCancelReply();
+          }
         } else {
           try {
             // 压缩图片
@@ -304,7 +313,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
             const base64String = await base64Promise;
 
             // 发送压缩后的图片
-            await sendMessage(base64String, roomId, 'image', username, avatar);
+            await sendMessage(base64String, roomId, 'image', username, avatar, replyToMessageId);
+            if (replyToMessageId) {
+              replyToMessageId = undefined;
+              onCancelReply();
+            }
 
             // 如果有预览URL，释放它
             if (item.previewUrl) {
@@ -577,6 +590,12 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
     };
   }, [parseEditorContent]);
 
+  const replySenderName = replyToMessage?.username
+    || (replyToMessage?.messageType === 'ai' ? t('aiAssistantName') : t('participant'));
+  const replyPreview = replyToMessage?.messageType === 'image'
+    ? t('sharedImage')
+    : replyToMessage?.content.replace(/\s+/g, ' ').trim().slice(0, 120);
+
   return (
     <div className="relative">
       {/* 错误消息显示 */}
@@ -590,6 +609,24 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
 
       <div className="w-full pb-0.5">
         <div className="overflow-hidden rounded-[1.65rem] border border-[#dedbd0] bg-[#faf9f5] shadow-[0_0_0_1px_rgba(194,192,182,0.35)] dark:border-[#30302e] dark:bg-[#2a2a28]">
+          {replyToMessage && (
+            <div className="mx-3 mt-3 flex items-start gap-2 rounded-md border-l-2 border-[#c96442] bg-[#f0eee6] px-2.5 py-2 text-xs text-[#5e5d59] dark:bg-[#242421] dark:text-[#b0aea5]">
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-medium">{t('replyingTo', { name: replySenderName })}</div>
+                <div className="truncate">{replyPreview}</div>
+              </div>
+              <Button
+                isIconOnly
+                size="sm"
+                variant="light"
+                aria-label={t('cancelReply')}
+                className="h-6 w-6 min-w-6 text-[#5e5d59] dark:text-[#b0aea5]"
+                onPress={onCancelReply}
+              >
+                <Icon icon="lucide:x" className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          )}
           {/* 编辑区域 */}
           <div
             className="min-h-16 max-h-36 w-full overflow-y-auto px-4 pb-2 pt-4 text-base leading-6 text-[#141413] dark:text-[#faf9f5] sm:text-sm"
