@@ -230,8 +230,8 @@ export const renameRoom = (roomId: string, name: string): Promise<Room> => {
 };
 
 // Send message to a specific room
-export const sendMessage = (content: string, roomId: string, messageType: 'text' | 'image' = 'text', username?: string, avatar?: { text: string; color: string }) => {
-  return emitWithAck('send_message', { content, roomId, messageType, username, avatar }, 'Timed out while saving message', 'Failed to save message')
+export const sendMessage = (content: string, roomId: string, messageType: 'text' | 'image' = 'text', username?: string, avatar?: { text: string; color: string }, replyToMessageId?: string) => {
+  return emitWithAck('send_message', { content, roomId, messageType, username, avatar, replyToMessageId }, 'Timed out while saving message', 'Failed to save message')
     .then(() => undefined);
 };
 

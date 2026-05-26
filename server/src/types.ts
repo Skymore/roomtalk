@@ -44,6 +44,13 @@ export interface RoomAICostTotal {
   totalUsd: number;
 }
 
+export interface MessageReplyReference {
+  messageId: string;
+  username?: string;
+  messageType: 'text' | 'image' | 'ai';
+  preview: string;
+}
+
 export interface Message {
   id: string;
   clientId: string;
@@ -67,6 +74,7 @@ export interface Message {
   };
   usage?: AIUsage;
   cost?: AICost;
+  replyTo?: MessageReplyReference;
 }
 
 export interface Room {

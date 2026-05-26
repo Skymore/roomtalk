@@ -285,6 +285,7 @@ type MessageRow = {
   ai_model: unknown;
   usage: unknown;
   cost: unknown;
+  reply_to: unknown;
   position: number;
 };
 
@@ -373,6 +374,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         aiModel,
         usage,
         cost,
+        replyTo,
         position,
       ] = params;
       const roomMessages = this.messages.get(String(roomId)) || [];
@@ -392,6 +394,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         ai_model: jsonValue(aiModel),
         usage: jsonValue(usage),
         cost: jsonValue(cost),
+        reply_to: jsonValue(replyTo),
         position: existingPosition,
       };
       if (existingIndex === -1) {
