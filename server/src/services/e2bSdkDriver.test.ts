@@ -195,4 +195,32 @@ describe('E2B SDK driver', () => {
     assert.deepEqual(fake.calls.sentStdin, [{ pid: 77, data: '{"schemaVersion":1}\n' }]);
     assert.deepEqual(fake.calls.closedStdin, []);
   });
+
+  it('treats E2B process-not-found during stdin close as already finalized', async () => {
+    const fake = createFakeSandboxClass();
+    const sandboxClass = {
+      ...fake.sandboxClass,
+      connect: async (sandboxId: string, options: Record<string, unknown>) => {
+        const sandbox = await fake.sandboxClass.connect(sandboxId, options);
+        return {
+          ...sandbox,
+          commands: {
+            ...sandbox.commands,
+            closeStdin: async () => {
+              throw new Error('[not_found] process with pid 77 not found');
+            },
+          },
+        };
+      },
+    };
+    const driver = createE2BSdkDriver({ sandboxClass });
+    const connected = await driver.connect('sdk-existing-1');
+    const command = await connected.commands!.run('python -m roomtalk_coco_runner');
+
+    command.stdin!.end('{"schemaVersion":1}\n');
+    await once(command.stdin!, 'finish');
+
+    assert.deepEqual(fake.calls.sentStdin, [{ pid: 77, data: '{"schemaVersion":1}\n' }]);
+    assert.deepEqual(fake.calls.closedStdin, []);
+  });
 });

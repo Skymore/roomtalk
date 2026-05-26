@@ -27,7 +27,7 @@ cocoSourceRef: 4f4ecc99589c68cffcb150b6a2df9f55144cc2d1
 cocoPackageVersion: 0.1.3a0
 runnerPackageVersion: 0.1.0
 pythonVersion: 3.12
-baseImage: python:3.12-slim-bookworm@sha256:c1b74bdacbd4903bcfbf73f5b8683478c83435cfa8e293068efaa102ecc56ea8
+baseImage: python:3.12-slim-bookworm@sha256:42ada43c4265e1ed6db62ad8df62af99a4abb9a9d49622032522ac76efb0bcef
 requirementsLock: ops/coco-sandbox/requirements.lock
 ```
 
@@ -62,7 +62,7 @@ docker build -t roomtalk-coco:roomtalk-coco-2026-05-22-4f4ecc9 /tmp/roomtalk-coc
 
 Publish that image as the E2B template named by `COCO_E2B_TEMPLATE_ID`.
 
-The Dockerfile installs Python dependencies from `requirements.lock` with `--require-hashes`, then loads the pinned Coco and `roomtalk_coco_runner` source trees through `PYTHONPATH`. This avoids implicit build-isolation downloads for local source packages. The base image is pinned by digest and the container runs as the non-root `roomtalk` user.
+The Dockerfile installs Python dependencies from `requirements.lock` with `--require-hashes`, then loads the pinned Coco and `roomtalk_coco_runner` source trees through `PYTHONPATH`. This avoids implicit build-isolation downloads for local source packages. The base image is pinned by digest and the container runs as the non-root `roomtalk` user. RoomTalk also passes `PYTHONPATH=/opt/coco/src:/opt/roomtalk_coco_runner` explicitly when starting the E2B command, because E2B command-level envs do not reliably inherit image-level `ENV` values.
 
 ## Production Config
 
@@ -78,6 +78,8 @@ E2B_API_KEY=...
 COCO_ARTIFACT_MODE=production
 COCO_ARTIFACT_VERSION=roomtalk-coco-2026-05-22-4f4ecc9
 COCO_SOURCE_REF=4f4ecc99589c68cffcb150b6a2df9f55144cc2d1
+# Optional, only for custom image layouts:
+# COCO_RUNNER_PYTHONPATH=/opt/coco/src:/opt/roomtalk_coco_runner
 ```
 
 RoomTalk validates these values at startup. If production E2B JSONL mode is enabled without `COCO_ARTIFACT_VERSION` and `COCO_SOURCE_REF`, or if it tries to use `COCO_SOURCE_DIR`, startup fails.

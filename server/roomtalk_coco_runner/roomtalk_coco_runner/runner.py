@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, TextIO
@@ -14,6 +15,7 @@ READ_ONLY_TOOLS = ("Read", "Glob", "Grep")
 WRITE_TOOLS = ("Write", "Edit")
 SHELL_TOOL = "Shell"
 MAX_TOOL_OUTPUT_CHARS = 20_000
+DEFAULT_WORKSPACE_ROOT = "/workspace"
 ERROR_OUTPUT_RE = re.compile(
     r"(^|\n)\s*(error|fatal|exception|traceback\b|permission denied\b|file not found\b|"
     r"[A-Za-z_][A-Za-z0-9_]*(Error|Exception):)",
@@ -130,6 +132,32 @@ def canonical_allowed_paths_for_engine(workspace: Path, allowed_paths: Iterable[
     return tuple(engine_paths)
 
 
+def workspace_root_from_env(env: dict[str, str] | None = None) -> Path:
+    if env is None:
+        env = os.environ
+    raw_root = (env.get("COCO_WORKSPACE_ROOT") or DEFAULT_WORKSPACE_ROOT).strip()
+    root = Path(raw_root).expanduser()
+    if not root.is_absolute():
+        raise RunnerError("COCO_WORKSPACE_ROOT must be an absolute path", code="invalid_workspace")
+    return root.resolve(strict=False)
+
+
+def validate_workspace_path(workspace: Path, env: dict[str, str] | None = None) -> Path:
+    if not workspace.is_absolute():
+        raise RunnerError("workspace must be an absolute path", code="invalid_workspace")
+
+    resolved_workspace = workspace.expanduser().resolve(strict=False)
+    root = workspace_root_from_env(env)
+    try:
+        resolved_workspace.relative_to(root)
+    except ValueError as exc:
+        raise RunnerError(
+            f"workspace must be inside COCO_WORKSPACE_ROOT: {workspace}",
+            code="invalid_workspace",
+        ) from exc
+    return resolved_workspace
+
+
 def tool_names_for_mode(mode: str, env: dict[str, str] | None = None) -> tuple[str, ...]:
     if env is None:
         env = os.environ
@@ -224,6 +252,20 @@ def _add_coco_source_to_path(env: dict[str, str]) -> None:
             sys.path.insert(0, source_entry)
 
 
+@contextmanager
+def scoped_workspace_cwd(workspace: Path):
+    resolved_workspace = validate_workspace_path(workspace)
+    resolved_workspace.mkdir(parents=True, exist_ok=True)
+    previous_cwd = Path.cwd()
+    # Coco's current file tools resolve relative paths from cwd. Keep cwd scoped
+    # to the duration of one runner turn and always restore it for tests/local use.
+    os.chdir(resolved_workspace)
+    try:
+        yield resolved_workspace
+    finally:
+        os.chdir(previous_cwd)
+
+
 def create_coco_engine(request: RunnerRequest, env: dict[str, str] | None = None):
     if env is None:
         env = os.environ
@@ -241,15 +283,15 @@ def create_coco_engine(request: RunnerRequest, env: dict[str, str] | None = None
     tool_names = tool_names_for_mode(request.mode, env)
     tools = []
     if "Read" in tool_names:
-        tools.append(FileReadTool(workspace))
+        tools.append(FileReadTool())
     if "Glob" in tool_names:
-        tools.append(GlobTool(workspace))
+        tools.append(GlobTool())
     if "Grep" in tool_names:
-        tools.append(GrepTool(workspace))
+        tools.append(GrepTool())
     if "Write" in tool_names:
-        tools.append(FileWriteTool(workspace))
+        tools.append(FileWriteTool())
     if "Edit" in tool_names:
-        tools.append(FileEditTool(workspace))
+        tools.append(FileEditTool())
     if "Shell" in tool_names:
         # Shell is intentionally env-gated because PermissionChecker runs with
         # auto-approve below. The Node caller must only enable this for trusted
@@ -411,32 +453,34 @@ def run_request(
         "status": "starting",
         "message": "Coco runner starting",
     })
-    engine = engine_factory(request)
-    emitter.emit({
-        "type": "status",
-        "turnId": request.turn_id,
-        "status": "running",
-        "message": "Coco engine running",
-    })
 
-    def on_text_chunk(delta: str) -> None:
-        emitter.emit({"type": "text_delta", "messageId": message_id, "turnId": request.turn_id, "delta": delta})
+    with scoped_workspace_cwd(request.workspace):
+        engine = engine_factory(request)
+        emitter.emit({
+            "type": "status",
+            "turnId": request.turn_id,
+            "status": "running",
+            "message": "Coco engine running",
+        })
 
-    result = engine.run(request.prompt, on_text_chunk=on_text_chunk)
-    for event in replay_tool_events(getattr(result, "messages", []) or [], turn_id=request.turn_id):
-        emitter.emit(event)
+        def on_text_chunk(delta: str) -> None:
+            emitter.emit({"type": "text_delta", "messageId": message_id, "turnId": request.turn_id, "delta": delta})
 
-    usage = _usage_to_event_usage(getattr(result, "usage", None))
-    final_event: dict[str, Any] = {
-        "type": "final",
-        "messageId": message_id,
-        "turnId": request.turn_id,
-        "answer": str(getattr(result, "answer", "") or ""),
-        "sessionId": request.session_id or request.turn_id,
-    }
-    if usage:
-        final_event["usage"] = usage
-    emitter.emit(final_event)
+        result = engine.run(request.prompt, on_text_chunk=on_text_chunk)
+        for event in replay_tool_events(getattr(result, "messages", []) or [], turn_id=request.turn_id):
+            emitter.emit(event)
+
+        usage = _usage_to_event_usage(getattr(result, "usage", None))
+        final_event: dict[str, Any] = {
+            "type": "final",
+            "messageId": message_id,
+            "turnId": request.turn_id,
+            "answer": str(getattr(result, "answer", "") or ""),
+            "sessionId": request.session_id or request.turn_id,
+        }
+        if usage:
+            final_event["usage"] = usage
+        emitter.emit(final_event)
 
 
 def _emit_error(stream: TextIO, error: Exception, turn_id: str | None = None) -> None:
