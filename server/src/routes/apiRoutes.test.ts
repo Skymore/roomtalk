@@ -18,6 +18,7 @@ type TestServer = {
   baseUrl: string;
   close: () => Promise<void>;
   emitted: EmittedEvent[];
+  generatedRoleIdeas: string[];
   store: {
     messages: Message[];
     rooms: Room[];
@@ -97,6 +98,7 @@ async function createTestServer(): Promise<TestServer> {
   app.use(express.json({ limit: '1mb' }));
 
   const emitted: EmittedEvent[] = [];
+  const generatedRoleIdeas: string[] = [];
   const store = {
     messages: [sampleMessage()],
     rooms: [sampleRoom()],
@@ -168,6 +170,13 @@ async function createTestServer(): Promise<TestServer> {
       defaultModel: 'gpt-5.5',
       models: [{ id: 'gpt-5.5', label: 'GPT-5.5' }],
     }),
+    generateAIRoleDraft: async (idea: string) => {
+      generatedRoleIdeas.push(idea);
+      if (idea === 'fail generation') {
+        throw new Error('provider failed');
+      }
+      return { name: 'Review Expert', systemPrompt: 'Review implementation decisions carefully.' };
+    },
   });
 
   const server = await new Promise<HttpServer>(resolve => {
@@ -181,6 +190,7 @@ async function createTestServer(): Promise<TestServer> {
       server.close(error => error ? reject(error) : resolve());
     }),
     emitted,
+    generatedRoleIdeas,
     store,
     redisClient,
   };
@@ -243,6 +253,36 @@ describe('API routes', () => {
       firstMessageId: parsed[0].id,
       lastMessageId: parsed[parsed.length - 1].id,
     });
+  });
+
+  it('generates AI role drafts and rejects invalid or failed generation requests', async () => {
+    const response = await fetch(`${server.baseUrl}/api/ai-role-draft`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ idea: '  Create a strict reviewer  ' }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      name: 'Review Expert',
+      systemPrompt: 'Review implementation decisions carefully.',
+    });
+    assert.deepEqual(server.generatedRoleIdeas, ['Create a strict reviewer']);
+
+    const invalidResponse = await fetch(`${server.baseUrl}/api/ai-role-draft`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ idea: ' ' }),
+    });
+    assert.equal(invalidResponse.status, 400);
+
+    const failedResponse = await fetch(`${server.baseUrl}/api/ai-role-draft`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ idea: 'fail generation' }),
+    });
+    assert.equal(failedResponse.status, 502);
+    assert.deepEqual(await failedResponse.json(), { error: 'Failed to generate AI role draft' });
   });
 
   it('creates rooms and broadcasts the new room to the creator', async () => {

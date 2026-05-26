@@ -14,10 +14,11 @@ import { RedisStore } from './repositories/redisStore';
 import { createPostgresPool } from './repositories/postgresPool';
 import { PostgresStore } from './repositories/postgresStore';
 import { CompositeRoomStore, RoomStore } from './repositories/store';
-import { createAIModelRegistry, DEFAULT_AI_MODEL_ID } from './services/aiModels';
+import { AI_ROLE_GENERATOR_MODEL_ID, createAIModelRegistry, DEFAULT_AI_MODEL_ID } from './services/aiModels';
 import { registerApiRoutes } from './routes/apiRoutes';
 import { registerSocketHandlers } from './socket/registerSocketHandlers';
 import { createAIClients } from './services/aiClients';
+import { createAIRoleDraftGenerator } from './services/aiRoleGenerator';
 
 dotenv.config();
 
@@ -36,6 +37,10 @@ const aiModelRegistry = createAIModelRegistry({
 });
 const { normalizeAIModel, getAIModelResponse } = aiModelRegistry;
 const { getAIClientForModel } = createAIClients(process.env);
+const generateAIRoleDraft = createAIRoleDraftGenerator({
+  model: normalizeAIModel(AI_ROLE_GENERATOR_MODEL_ID),
+  getAIClientForModel,
+});
 
 const resolveClientDistPath = () => {
   const candidates = [
@@ -168,6 +173,7 @@ registerApiRoutes(app, {
   redisClient,
   routeLogger,
   getAIModelResponse,
+  generateAIRoleDraft,
   persistenceStore: activePersistenceStore,
 });
 

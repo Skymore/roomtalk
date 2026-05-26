@@ -8,6 +8,11 @@ export interface AIRole {
   icon: string;
 }
 
+export interface AIRoleDraft {
+  name: string;
+  systemPrompt: string;
+}
+
 export const defaultAIRoles: AIRole[] = [
   {
     id: "default",
@@ -33,6 +38,11 @@ export const defaultAIRoles: AIRole[] = [
 ];
 
 const AI_ROLES_KEY = "aiRoles";
+
+const getApiBaseUrl = () => {
+  const socketUrl = import.meta.env.VITE_SOCKET_URL;
+  return !socketUrl || socketUrl === "/" ? "" : socketUrl.replace(/\/$/, "");
+};
 
 const defaultRoleKeys: Record<string, { nameKey: string; promptKey: string }> = {
   default: { nameKey: "roleAssistantName", promptKey: "roleAssistantPrompt" },
@@ -92,4 +102,23 @@ export const deleteAIRole = (
     roles: updatedRoles,
     selectedRoleId: roleId === selectedRoleId ? updatedRoles[0].id : selectedRoleId,
   };
+};
+
+export const generateAIRoleDraft = async (idea: string): Promise<AIRoleDraft> => {
+  const response = await fetch(`${getApiBaseUrl()}/api/ai-role-draft`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ idea }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to generate AI role draft: ${response.status}`);
+  }
+
+  const draft = await response.json() as Partial<AIRoleDraft>;
+  if (!draft.name || !draft.systemPrompt) {
+    throw new Error("AI role draft response is invalid");
+  }
+
+  return { name: draft.name, systemPrompt: draft.systemPrompt };
 };
