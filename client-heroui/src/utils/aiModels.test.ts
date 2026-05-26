@@ -3,6 +3,7 @@ import {
   AIModelOption,
   fetchAIModels,
   FALLBACK_AI_MODEL,
+  FALLBACK_AI_MODELS,
   formatModelPrice,
   getStoredAIModel,
   isPremiumAIModel,
@@ -42,12 +43,14 @@ describe("aiModels", () => {
     expect(getStoredAIModel()).toBe("gpt-5.5");
   });
 
-  it("uses DeepSeek as the fallback default and detects premium model families", () => {
+  it("uses DeepSeek as the fallback default and flags only high output prices as premium", () => {
     expect(FALLBACK_AI_MODEL).toBe("deepseek-v4-pro");
-    expect(isPremiumAIModel({ id: "gpt-5.5", label: "GPT-5.5" })).toBe(true);
-    expect(isPremiumAIModel({ id: "claude-opus-4.7", label: "Claude Opus 4.7" })).toBe(true);
-    expect(isPremiumAIModel({ id: "~google/gemini-pro-latest", label: "Gemini Pro Latest" })).toBe(true);
-    expect(isPremiumAIModel({ id: "deepseek-v4-pro", label: "DeepSeek V4 Pro" })).toBe(false);
+    expect(isPremiumAIModel(FALLBACK_AI_MODELS.find(model => model.id === "gpt-5.5")!)).toBe(true);
+    expect(isPremiumAIModel(FALLBACK_AI_MODELS.find(model => model.id === "~google/gemini-pro-latest")!)).toBe(true);
+    expect(isPremiumAIModel(FALLBACK_AI_MODELS.find(model => model.id === "google/gemini-3.5-flash")!)).toBe(false);
+    expect(FALLBACK_AI_MODELS.find(model => model.id === "tencent/hy3-preview")?.pricing?.outputPerMillion).toBe(0.26);
+    expect(isPremiumAIModel({ pricing: { currency: "USD", inputPerMillion: 1, outputPerMillion: 10 } })).toBe(false);
+    expect(isPremiumAIModel({ pricing: { currency: "USD", inputPerMillion: 1, outputPerMillion: 10.01 } })).toBe(true);
   });
 
   it("formats model pricing and missing pricing", () => {
