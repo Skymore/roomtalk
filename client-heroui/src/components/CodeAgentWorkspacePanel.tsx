@@ -1,9 +1,9 @@
 import React from 'react';
-import { Chip } from '@heroui/react';
+import { Button, Chip } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 import { formatUsdCost } from '../utils/formatters';
-import { summarizeCocoMessages } from '../utils/cocoWorkspace';
+import { CodeAgentWorkspaceSnapshot, mergeCocoWorkspaceSummaries, summarizeCocoMessages } from '../utils/cocoWorkspace';
 import { Message, Room } from '../utils/types';
 import { CodeAgentMode, getCodeAgentStatus } from '../utils/codeAgent';
 import {
@@ -18,6 +18,10 @@ interface CodeAgentWorkspacePanelProps {
   messages: Message[];
   mode: CodeAgentMode;
   sessionCostUsd: number;
+  workspaceSnapshot?: CodeAgentWorkspaceSnapshot | null;
+  isRefreshingWorkspace?: boolean;
+  workspaceRefreshError?: string | null;
+  onRefreshWorkspace?: () => void;
 }
 
 const statClassName = 'min-w-0 rounded-lg border border-[#dedbd0] bg-[#faf9f5] px-3 py-2 dark:border-[#30302e] dark:bg-[#1d1d1b]';
@@ -27,9 +31,21 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   messages,
   mode,
   sessionCostUsd,
+  workspaceSnapshot,
+  isRefreshingWorkspace = false,
+  workspaceRefreshError,
+  onRefreshWorkspace,
 }) => {
   const { t } = useTranslation();
-  const summary = React.useMemo(() => summarizeCocoMessages(messages), [messages]);
+  const messageSummary = React.useMemo(() => summarizeCocoMessages(messages), [messages]);
+  const summary = React.useMemo(
+    () => mergeCocoWorkspaceSummaries(messageSummary, workspaceSnapshot?.summary),
+    [messageSummary, workspaceSnapshot?.summary]
+  );
+  const recentCommands = React.useMemo(
+    () => (workspaceSnapshot?.commands || []).slice(-3).reverse(),
+    [workspaceSnapshot?.commands]
+  );
   const isPlanMode = mode === 'plan';
   const agentStatus = getCodeAgentStatus(room);
   const visibleFiles = summary.touchedFiles.slice(0, 8);
@@ -64,10 +80,30 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
             >
               {isPlanMode ? t('codeAgentReadOnlyMode') : t('codeAgentEditMode')}
             </Chip>
+            {onRefreshWorkspace && (
+              <Button
+                isIconOnly
+                size="sm"
+                variant="flat"
+                radius="full"
+                isLoading={isRefreshingWorkspace}
+                aria-label={t('codeAgentRefreshWorkspace')}
+                data-testid="code-agent-refresh-workspace"
+                className="h-6 w-6 min-w-6 border border-[#dedbd0] bg-[#faf9f5] text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242421] dark:text-[#faf9f5]"
+                onPress={onRefreshWorkspace}
+              >
+                <Icon icon="lucide:refresh-cw" className="h-3.5 w-3.5" />
+              </Button>
+            )}
           </div>
           <p className="mt-1 max-w-3xl text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">
             {isPlanMode ? t('codeAgentReadOnlyDescription') : t('codeAgentEditDescription')}
           </p>
+          {workspaceRefreshError && (
+            <p role="alert" className="mt-1 text-xs font-medium text-[#9f462c] dark:text-[#ff9b78]">
+              {t('codeAgentWorkspaceRefreshFailed')}
+            </p>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
@@ -140,6 +176,26 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
             </p>
           ) : (
             <p className="text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentNoActivity')}</p>
+          )}
+          {recentCommands.length > 0 && (
+            <div className="mt-2 flex max-h-20 flex-col gap-1 overflow-y-auto pr-1">
+              {recentCommands.map(command => (
+                <div key={command.id} className="min-w-0 rounded-md border border-[#dedbd0] px-2 py-1 dark:border-[#30302e]">
+                  <div className="flex min-w-0 items-center gap-1.5 text-[11px] font-semibold text-[#4d4c48] dark:text-[#e8e6dc]">
+                    <Icon
+                      icon={command.status === 'failed' ? 'lucide:circle-alert' : command.status === 'succeeded' ? 'lucide:check' : 'lucide:loader'}
+                      className="h-3 w-3 flex-shrink-0"
+                    />
+                    <span className="truncate">{command.name}</span>
+                  </div>
+                  {command.preview && (
+                    <p className="mt-0.5 truncate font-mono text-[10px] text-[#87867f] dark:text-[#8f8d86]" title={command.preview}>
+                      {command.preview}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
           )}
         </div>
       </div>

@@ -47,6 +47,10 @@ test('runs a fake Coco turn and restores tool history after refresh', async ({ p
   await askCoco(page, prompt);
 
   await expect(page.getByTestId('code-agent-workspace')).toBeVisible();
+  const refreshWorkspace = page.getByTestId('code-agent-refresh-workspace');
+  await expect(refreshWorkspace).toBeVisible();
+  await refreshWorkspace.click();
+  await expect(page.getByText('Workspace refresh failed')).toHaveCount(0);
   await expect(page.getByText('Plan mode')).toBeVisible();
   await expect(page.getByText('Agent activity')).toBeVisible();
   await expectMessage(page, 'Coco fake runner received the task.').toBeVisible();

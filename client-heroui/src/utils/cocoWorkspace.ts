@@ -8,7 +8,48 @@ export interface CocoWorkspaceSummary {
   lastToolName?: string;
 }
 
+export interface CodeAgentWorkspaceCommand {
+  id: string;
+  name: string;
+  status: 'started' | 'succeeded' | 'failed';
+  exitCode?: number;
+  preview?: string;
+}
+
+export interface CodeAgentWorkspaceSnapshot {
+  roomId: string;
+  backend: 'coco';
+  source: 'messages';
+  generatedAt: string;
+  status: {
+    sandboxStatus: string;
+    agentStatus: string;
+    hasSession: boolean;
+  };
+  summary: CocoWorkspaceSummary;
+  files: {
+    touched: string[];
+    hiddenCount: number;
+  };
+  changes: {
+    available: false;
+    changedFiles: string[];
+    diffSummary: null;
+  };
+  commands: CodeAgentWorkspaceCommand[];
+}
+
 const fileArgKeys = ['file_path', 'path', 'filename', 'target_file'];
+const MAX_PATH_LENGTH = 140;
+
+const truncateMiddle = (value: string, maxLength: number) => {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  const prefixLength = Math.max(1, Math.floor((maxLength - 3) / 2));
+  const suffixLength = Math.max(1, maxLength - 3 - prefixLength);
+  return `${value.slice(0, prefixLength)}...${value.slice(-suffixLength)}`;
+};
 
 const sanitizeRelativeFileRef = (value: string): string => {
   const parts = value
@@ -24,15 +65,15 @@ const sanitizeFileRef = (value: string): string => {
 
   if (normalized === '/workspace') return '.';
   if (normalized.startsWith('/workspace/')) {
-    return sanitizeRelativeFileRef(normalized.slice('/workspace/'.length));
+    return truncateMiddle(sanitizeRelativeFileRef(normalized.slice('/workspace/'.length)), MAX_PATH_LENGTH);
   }
 
   if (normalized.startsWith('/')) {
     const parts = normalized.split('/').filter(Boolean).slice(-3);
-    return parts.length > 0 ? `.../${parts.join('/')}` : '.';
+    return truncateMiddle(parts.length > 0 ? `.../${parts.join('/')}` : '.', MAX_PATH_LENGTH);
   }
 
-  return sanitizeRelativeFileRef(normalized);
+  return truncateMiddle(sanitizeRelativeFileRef(normalized), MAX_PATH_LENGTH);
 };
 
 const readFileRef = (args: Record<string, unknown> | undefined): string | null => {
@@ -82,4 +123,64 @@ export const summarizeCocoMessages = (messages: Message[]): CocoWorkspaceSummary
     touchedFiles: Array.from(touchedFiles).sort((a, b) => a.localeCompare(b)),
     lastToolName,
   };
+};
+
+export const mergeCocoWorkspaceSummaries = (
+  messageSummary: CocoWorkspaceSummary,
+  snapshotSummary?: CocoWorkspaceSummary | null
+): CocoWorkspaceSummary => {
+  if (!snapshotSummary) {
+    return messageSummary;
+  }
+
+  const touchedFiles = new Set([
+    ...snapshotSummary.touchedFiles,
+    ...messageSummary.touchedFiles,
+  ]);
+
+  return {
+    toolCalls: Math.max(messageSummary.toolCalls, snapshotSummary.toolCalls),
+    toolResults: Math.max(messageSummary.toolResults, snapshotSummary.toolResults),
+    toolErrors: Math.max(messageSummary.toolErrors, snapshotSummary.toolErrors),
+    touchedFiles: Array.from(touchedFiles).sort((a, b) => a.localeCompare(b)),
+    lastToolName: messageSummary.lastToolName || snapshotSummary.lastToolName,
+  };
+};
+
+const getApiBaseUrl = () => {
+  const socketUrl = import.meta.env.VITE_SOCKET_URL;
+
+  if (!socketUrl || socketUrl === '/') {
+    return '';
+  }
+
+  return socketUrl.replace(/\/$/, '');
+};
+
+export const fetchCodeAgentWorkspaceSnapshot = async (
+  clientId: string,
+  roomId: string,
+  options: { signal?: AbortSignal } = {}
+): Promise<CodeAgentWorkspaceSnapshot> => {
+  const response = await fetch(
+    `${getApiBaseUrl()}/api/clients/${encodeURIComponent(clientId)}/rooms/${encodeURIComponent(roomId)}/workspace`,
+    { signal: options.signal }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to load workspace snapshot: ${response.status}`);
+  }
+
+  const data = await response.json();
+  if (
+    data?.backend !== 'coco' ||
+    data?.source !== 'messages' ||
+    !data?.summary ||
+    typeof data?.status?.hasSession !== 'boolean' ||
+    !Array.isArray(data.summary.touchedFiles)
+  ) {
+    throw new Error('Workspace snapshot response is invalid');
+  }
+
+  return data as CodeAgentWorkspaceSnapshot;
 };

@@ -7,6 +7,7 @@ import { RoomStore } from '../repositories/store';
 import { Message, Room } from '../types';
 import { CocoAccessControl, createCocoAccessControl } from '../services/cocoAccessControl';
 import { CocoRunnerMode } from '../services/cocoRunnerProtocol';
+import { buildCodeAgentWorkspaceSnapshot } from '../services/codeAgentWorkspace';
 import { createRoomRecord, validateRoomNameInput } from '../services/messageDomain';
 
 interface ApiRouteOptions {
@@ -157,6 +158,56 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     }
 
     return res.json(await store.readRoomAICost(roomId));
+  });
+
+  app.get('/api/clients/:clientId/rooms/:roomId/workspace', async (req: Request, res: Response) => {
+    const { clientId, roomId } = req.params;
+    if (!clientId || !roomId) {
+      routeLogger.warn('Workspace snapshot request missing parameters', {
+        endpoint: '/api/clients/:clientId/rooms/:roomId/workspace',
+        hasClientId: !!clientId,
+        hasRoomId: !!roomId,
+        ip: req.ip,
+      });
+      return res.status(400).json({ error: 'Client ID and room ID are required' });
+    }
+
+    try {
+      const room = await store.getRoomById(roomId);
+      if (!room || room.creatorId !== clientId) {
+        routeLogger.warn('Workspace snapshot room not found or unauthorized', {
+          endpoint: '/api/clients/:clientId/rooms/:roomId/workspace',
+          clientId,
+          roomId,
+          found: !!room,
+          authorized: room?.creatorId === clientId,
+          ip: req.ip,
+        });
+        return res.status(404).json({ error: 'Room not found' });
+      }
+
+      const access = cocoAccess.canUse(clientId);
+      if (!access.allowed) {
+        routeLogger.warn('Workspace snapshot rejected by Coco rollout controls', {
+          endpoint: '/api/clients/:clientId/rooms/:roomId/workspace',
+          clientId,
+          roomId,
+          reason: access.reason,
+          ip: req.ip,
+        });
+        return res.status(403).json({ error: access.message || 'Coco is unavailable' });
+      }
+
+      if (room.type !== 'coco') {
+        return res.status(400).json({ error: 'Workspace snapshots are only available for Coco rooms' });
+      }
+
+      const messages = await store.readMessagesByRoom(roomId);
+      return res.json(buildCodeAgentWorkspaceSnapshot(room, messages));
+    } catch (error) {
+      routeLogger.error('Failed to build workspace snapshot', { error, clientId, roomId, ip: req.ip });
+      return res.status(500).json({ error: 'Failed to load workspace snapshot' });
+    }
   });
 
   app.get('/api/clients/:clientId/rooms/:roomId', async (req: Request, res: Response) => {
