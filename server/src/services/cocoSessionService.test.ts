@@ -2,6 +2,7 @@ import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { Logger } from '../logger';
 import { AIModelOption, Message, Room, RoomAICostTotal } from '../types';
+import { CocoCodeAgentRunner } from './codeAgentRunner';
 import { CocoSandboxLifecycleService } from './cocoSandboxLifecycle';
 import { CocoSessionService } from './cocoSessionService';
 import { COCO_RUNNER_SCHEMA_VERSION, CocoRunnerEvent, CocoRunnerRunRequest } from './cocoRunnerProtocol';
@@ -196,7 +197,7 @@ const createService = (options: {
     emitter,
     lifecycle,
     sandboxService,
-    options.runner || new FakeCocoRunnerClient([]),
+    new CocoCodeAgentRunner(options.runner || new FakeCocoRunnerClient([])),
     logger,
     {
       enabled: options.enabled ?? true,
@@ -243,6 +244,7 @@ describe('CocoSessionService', () => {
     assert.deepEqual(sandboxService.startedRunnerEnvs[0], { PYTHONUNBUFFERED: '1' });
     assert.equal(runner.requests[0].prompt, 'inspect the project');
     assert.equal(runner.requests[0].apiModel, 'deepseek-chat');
+    assert.equal(runner.requests[0].mode, 'plan');
     assert.equal(runner.requests[0].workspace, '/workspace/room-1');
     const messages = store.messages.get('room-1') || [];
     assert.deepEqual(messages.map(message => message.messageType), ['text', 'ai', 'sandbox_status', 'tool_call', 'tool_result']);

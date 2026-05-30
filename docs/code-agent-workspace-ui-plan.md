@@ -1,6 +1,6 @@
 # Code Agent Workspace UI Plan
 
-> Status: Phase 2 accepted; Phase 3 queued
+> Status: Phase 3 accepted; Phase 4 queued
 > Date: 2026-05-26
 > Scope: turn RoomTalk Coco rooms into a code-agent workspace UI, while preparing a future `codeAgentBackend = coco | codex` abstraction.
 
@@ -140,6 +140,16 @@ Phase 2 completion record (2026-05-26):
 - Added a controlled unavailable state for a future `codex` room so partial rollout data cannot crash render or expose runnable controls before backend support exists.
 - Verified client unit tests (`78/78`), i18n coverage, production build, and Coco desktop/mobile E2E (`3/3`).
 - Claude Code follow-up review: no blockers; Phase 2 is ready to commit.
+
+Phase 3 completion record (2026-05-29):
+
+- Added a server-side `CodeAgentRunner` boundary and a `CocoCodeAgentRunner` adapter above the existing Coco runner clients.
+- Added `CODE_AGENT_BACKEND`, defaulting to `coco`; unsupported values fail at config resolution and `codex` is explicitly rejected until a runner exists.
+- Moved `CocoSessionService` onto the generic runner boundary while keeping the existing Coco request/event protocol unchanged for compatibility.
+- Changed the direct-construction fallback mode from `acceptEdits` to fail-closed `plan`, with test coverage.
+- Added delegation, context-forwarding, backend factory, and config rejection tests.
+- Verified server unit tests (`201/201`), server build, Python runner tests (`16/16`), and Coco desktop/mobile E2E (`3/3`).
+- Claude Code review found no blockers; follow-up fixes added an exhaustive backend guard and explicit runner context-forwarding coverage.
 
 ### Phase 0: Source Audit And Plan Review
 
