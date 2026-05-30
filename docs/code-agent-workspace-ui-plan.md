@@ -1,6 +1,6 @@
 # Code Agent Workspace UI Plan
 
-> Status: Phase 4 accepted; Phase 5 queued
+> Status: Phase 5 accepted; Phase 6 queued
 > Date: 2026-05-26
 > Scope: turn RoomTalk Coco rooms into a code-agent workspace UI, while preparing a future `codeAgentBackend = coco | codex` abstraction.
 
@@ -161,6 +161,25 @@ Phase 4 completion record (2026-05-29):
 - Added a workspace refresh control in the code-agent panel; API errors stay non-blocking and do not break message history rendering.
 - Verified server unit tests (`208/208`), frontend unit tests (`84/84`), server/client builds, Python runner tests (`16/16`), i18n coverage, and Coco desktop/mobile E2E (`3/3`).
 - Claude Code review blockers were resolved; final follow-up review reported no remaining Phase 4 blockers.
+
+Phase 5 source audit record (2026-05-30):
+
+- Reviewed T3 Code repository `https://github.com/pingdotgg/t3code` at commit `b3e8c0334b25238e2b55868a87bd6270e234b7de`.
+- Upstream license is MIT (`Copyright (c) 2026 T3 Tools Inc.`), which allows reuse with the required copyright and license notice.
+- Audited the Web UI shape around `apps/web/src/components/chat/ChatComposer.tsx`, `CompactComposerControlsMenu.tsx`, `ChangedFilesTree.tsx`, and related status/timeline components.
+- Decision: Phase 5 will not copy source code or import T3 packages. It will implement original RoomTalk components inspired by T3 Code's compact coding-session patterns: dense status strips, tabbed workspace details, command history rows, and file list rows.
+- Because no T3 Code source is copied or closely adapted in this phase, no local MIT attribution file is required for the Phase 5 implementation. If later phases copy upstream code, update the Attribution section before committing that change.
+
+Phase 5 completion record (2026-05-30):
+
+- Reworked the code-agent workspace panel into a compact tabbed surface with Overview, Agent activity, and Files views.
+- Replaced large summary cards with dense status rows, expanded command history to the five most recent commands, and rendered touched files as filename/directory rows.
+- Kept the UI display-only: command/file rows are not clickable and no browser-to-Coco or browser-to-E2B controls were added.
+- Added command status labels for running/done/failed states, animated running command icons, and kept all new strings covered across supported locales.
+- Tightened workspace refresh lifecycle guards so manual refresh cannot update loading/error state after unmount.
+- Added component coverage for default Overview rendering, all command statuses, root-level file paths, file truncation, and tabbed activity/files behavior.
+- Verified frontend lint, frontend unit tests (`85/85`), client build, i18n coverage, and Coco desktop/mobile E2E (`3/3`).
+- Claude Code review findings were resolved; final follow-up review reported Phase 5 is safe to commit.
 
 ### Phase 0: Source Audit And Plan Review
 

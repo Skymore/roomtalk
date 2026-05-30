@@ -49,6 +49,10 @@ describe('CodeAgentWorkspacePanel', () => {
 
     expect(screen.getByText('codeAgentReadOnlyMode')).toBeTruthy();
     expect(screen.getByText('codeAgentReadOnlyDescription')).toBeTruthy();
+    expect(screen.getByText('codeAgentTools')).toBeTruthy();
+    expect(screen.getByText('codeAgentResults')).toBeTruthy();
+    expect(screen.getByText('codeAgentErrors')).toBeTruthy();
+    fireEvent.click(screen.getByText('codeAgentActivity'));
     expect(screen.getByText('codeAgentNoActivity')).toBeTruthy();
   });
 
@@ -66,7 +70,12 @@ describe('CodeAgentWorkspacePanel', () => {
 
     expect(screen.getByText('codeAgentEditMode')).toBeTruthy();
     expect(screen.getByText('codeAgentEditDescription')).toBeTruthy();
-    expect(screen.getByText('src/App.tsx')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('codeAgentFiles'));
+    expect(screen.getByText('App.tsx')).toBeTruthy();
+    expect(screen.getByText('src')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('codeAgentActivity'));
     expect(screen.getByText('Read')).toBeTruthy();
     expect(screen.getByLabelText('codeAgentRefreshWorkspace')).toBeTruthy();
   });
@@ -113,25 +122,62 @@ describe('CodeAgentWorkspacePanel', () => {
           },
           files: { touched: ['src/App.tsx'], hiddenCount: 0 },
           changes: { available: false, changedFiles: [], diffSummary: null },
-          commands: [{
-            id: 'tool-1',
-            name: 'Shell',
-            status: 'succeeded',
-            preview: 'npm test',
-          }],
+          commands: [
+            {
+              id: 'tool-1',
+              name: 'Shell',
+              status: 'succeeded',
+              preview: 'npm test',
+            },
+            {
+              id: 'tool-2',
+              name: 'Write',
+              status: 'started',
+            },
+            {
+              id: 'tool-3',
+              name: 'Edit',
+              status: 'failed',
+              preview: 'permission denied',
+            },
+          ],
         }}
       />
     );
 
+    fireEvent.click(screen.getByText('codeAgentActivity'));
     expect(screen.getAllByText('Shell').length).toBeGreaterThan(0);
     expect(screen.getByText('npm test')).toBeTruthy();
+    expect(screen.getByText('codeAgentCommandStarted')).toBeTruthy();
+    expect(screen.getByText('codeAgentCommandSucceeded')).toBeTruthy();
+    expect(screen.getByText('codeAgentCommandFailed')).toBeTruthy();
+    expect(screen.getByText('permission denied')).toBeTruthy();
+  });
+
+  it('renders root-level touched files with a repo-root directory marker', () => {
+    render(
+      <CodeAgentWorkspacePanel
+        room={room}
+        messages={[{
+          ...toolCall,
+          id: 'root-tool',
+          toolArgs: { file_path: '/workspace/README.md' },
+        }]}
+        mode="plan"
+        sessionCostUsd={0}
+      />
+    );
+
+    fireEvent.click(screen.getByText('codeAgentFiles'));
+    expect(screen.getByText('README.md')).toBeTruthy();
+    expect(screen.getByText('.')).toBeTruthy();
   });
 
   it('indicates when the touched file list is truncated', () => {
-    const messages = Array.from({ length: 10 }, (_, index): Message => ({
+    const messages = Array.from({ length: 12 }, (_, index): Message => ({
       ...toolCall,
       id: `tool-${index}`,
-      toolArgs: { file_path: `/workspace/src/file-${index}.ts` },
+      toolArgs: { file_path: `/workspace/src/file-${String(index).padStart(2, '0')}.ts` },
     }));
 
     render(
@@ -143,8 +189,9 @@ describe('CodeAgentWorkspacePanel', () => {
       />
     );
 
-    expect(screen.getByText('src/file-0.ts')).toBeTruthy();
-    expect(screen.queryByText('src/file-9.ts')).toBeNull();
+    fireEvent.click(screen.getByText('codeAgentFiles'));
+    expect(screen.getByText('file-00.ts')).toBeTruthy();
+    expect(screen.queryByText('file-11.ts')).toBeNull();
     expect(screen.getByText('+2')).toBeTruthy();
   });
 });

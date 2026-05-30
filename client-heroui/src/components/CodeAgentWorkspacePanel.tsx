@@ -1,9 +1,14 @@
 import React from 'react';
-import { Button, Chip } from '@heroui/react';
+import { Button, Chip, Tab, Tabs } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 import { formatUsdCost } from '../utils/formatters';
-import { CodeAgentWorkspaceSnapshot, mergeCocoWorkspaceSummaries, summarizeCocoMessages } from '../utils/cocoWorkspace';
+import {
+  CodeAgentWorkspaceCommand,
+  CodeAgentWorkspaceSnapshot,
+  mergeCocoWorkspaceSummaries,
+  summarizeCocoMessages,
+} from '../utils/cocoWorkspace';
 import { Message, Room } from '../utils/types';
 import { CodeAgentMode, getCodeAgentStatus } from '../utils/codeAgent';
 import {
@@ -24,7 +29,35 @@ interface CodeAgentWorkspacePanelProps {
   onRefreshWorkspace?: () => void;
 }
 
-const statClassName = 'min-w-0 rounded-lg border border-[#dedbd0] bg-[#faf9f5] px-3 py-2 dark:border-[#30302e] dark:bg-[#1d1d1b]';
+const workspaceSurfaceClassName = 'rounded-xl border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]';
+
+const commandStatusIcon: Record<CodeAgentWorkspaceCommand['status'], string> = {
+  started: 'lucide:loader',
+  succeeded: 'lucide:check',
+  failed: 'lucide:circle-alert',
+};
+
+const commandStatusClassName: Record<CodeAgentWorkspaceCommand['status'], string> = {
+  started: 'text-[#7a5a18] dark:text-[#ffd166]',
+  succeeded: 'text-[#2f6f4e] dark:text-[#65d08a]',
+  failed: 'text-[#9f462c] dark:text-[#ff9b78]',
+};
+
+const commandStatusLabelKey: Record<CodeAgentWorkspaceCommand['status'], string> = {
+  started: 'codeAgentCommandStarted',
+  succeeded: 'codeAgentCommandSucceeded',
+  failed: 'codeAgentCommandFailed',
+};
+
+const getFileName = (filePath: string) => filePath.split('/').filter(Boolean).pop() || filePath;
+
+const getDirectoryName = (filePath: string) => {
+  const parts = filePath.split('/').filter(Boolean);
+  if (parts.length <= 1) {
+    return '.';
+  }
+  return parts.slice(0, -1).join('/');
+};
 
 export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = ({
   room,
@@ -43,12 +76,12 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
     [messageSummary, workspaceSnapshot?.summary]
   );
   const recentCommands = React.useMemo(
-    () => (workspaceSnapshot?.commands || []).slice(-3).reverse(),
+    () => (workspaceSnapshot?.commands || []).slice(-5).reverse(),
     [workspaceSnapshot?.commands]
   );
   const isPlanMode = mode === 'plan';
   const agentStatus = getCodeAgentStatus(room);
-  const visibleFiles = summary.touchedFiles.slice(0, 8);
+  const visibleFiles = summary.touchedFiles.slice(0, 10);
   const hiddenFileCount = Math.max(0, summary.touchedFiles.length - visibleFiles.length);
 
   const stats = [
@@ -58,11 +91,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   ];
 
   return (
-    <section
-      data-testid="code-agent-workspace"
-      className="mb-3 border-b border-[#dedbd0] bg-[#f5f4ed] pb-3 dark:border-[#30302e] dark:bg-[#141413]"
-      aria-label={t('codeAgentWorkspace')}
-    >
+    <section data-testid="code-agent-workspace" className="mb-3 border-b border-[#dedbd0] pb-3 dark:border-[#30302e]" aria-label={t('codeAgentWorkspace')}>
       <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -122,82 +151,136 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
         </div>
       </div>
 
-      <div className="mt-3 grid gap-2 sm:grid-cols-3">
-        {stats.map((item) => (
-          <div key={item.label} className={statClassName}>
-            <div className="flex items-center gap-2 text-xs text-[#87867f] dark:text-[#b0aea5]">
-              <Icon icon={item.icon} className="h-3.5 w-3.5" />
-              <span className="truncate">{item.label}</span>
-            </div>
-            <div className="mt-1 text-lg font-semibold text-[#141413] dark:text-[#faf9f5]">{item.value}</div>
-          </div>
-        ))}
-      </div>
-
-      <div className="mt-2 grid gap-2 lg:grid-cols-[1.2fr_0.8fr]">
-        <div className={statClassName}>
-          <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-[#5e5d59] dark:text-[#b0aea5]">
-            <Icon icon="lucide:file-code-2" className="h-3.5 w-3.5" />
-            {t('codeAgentFiles')}
-          </div>
-          {summary.touchedFiles.length > 0 ? (
-            <div className="flex max-h-20 flex-wrap gap-1 overflow-y-auto pr-1">
-              {visibleFiles.map(file => (
-                <span
-                  key={file}
-                  className="max-w-full truncate rounded-md bg-[#e8e6dc] px-2 py-1 font-mono text-[11px] text-[#4d4c48] dark:bg-[#30302e] dark:text-[#e8e6dc]"
-                  title={file}
-                >
-                  {file}
-                </span>
-              ))}
-              {hiddenFileCount > 0 && (
-                <span
-                  className="rounded-md border border-[#dedbd0] px-2 py-1 text-[11px] font-semibold text-[#5e5d59] dark:border-[#30302e] dark:text-[#b0aea5]"
-                  title={summary.touchedFiles.slice(8).join('\n')}
-                >
-                  +{hiddenFileCount}
-                </span>
-              )}
-            </div>
-          ) : (
-            <p className="text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentNoFiles')}</p>
-          )}
-        </div>
-
-        <div className={statClassName}>
-          <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-[#5e5d59] dark:text-[#b0aea5]">
-            <Icon icon="lucide:activity" className="h-3.5 w-3.5" />
-            {t('codeAgentActivity')}
-          </div>
-          {summary.lastToolName ? (
-            <p className="truncate text-xs text-[#4d4c48] dark:text-[#e8e6dc]">
-              {t('codeAgentLatestTool')}: <span className="font-mono">{summary.lastToolName}</span>
-            </p>
-          ) : (
-            <p className="text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentNoActivity')}</p>
-          )}
-          {recentCommands.length > 0 && (
-            <div className="mt-2 flex max-h-20 flex-col gap-1 overflow-y-auto pr-1">
-              {recentCommands.map(command => (
-                <div key={command.id} className="min-w-0 rounded-md border border-[#dedbd0] px-2 py-1 dark:border-[#30302e]">
-                  <div className="flex min-w-0 items-center gap-1.5 text-[11px] font-semibold text-[#4d4c48] dark:text-[#e8e6dc]">
-                    <Icon
-                      icon={command.status === 'failed' ? 'lucide:circle-alert' : command.status === 'succeeded' ? 'lucide:check' : 'lucide:loader'}
-                      className="h-3 w-3 flex-shrink-0"
-                    />
-                    <span className="truncate">{command.name}</span>
+      <div className={`mt-3 ${workspaceSurfaceClassName}`}>
+        <Tabs
+          aria-label={t('codeAgentWorkspace')}
+          size="sm"
+          variant="underlined"
+          classNames={{
+            base: 'w-full border-b border-[#dedbd0] px-2 dark:border-[#30302e]',
+            tabList: 'gap-2',
+            cursor: 'bg-[#d66a43]',
+            tab: 'h-9 px-2 text-xs font-semibold',
+            tabContent: 'text-[#5e5d59] group-data-[selected=true]:text-[#141413] dark:text-[#b0aea5] dark:group-data-[selected=true]:text-[#faf9f5]',
+            panel: 'p-0',
+          }}
+        >
+          <Tab
+            key="overview"
+            title={
+              <span className="inline-flex items-center gap-1.5">
+                <Icon icon="lucide:gauge" className="h-3.5 w-3.5" />
+                {t('codeAgentOverview')}
+              </span>
+            }
+          >
+            <div className="grid divide-y divide-[#dedbd0] dark:divide-[#30302e] sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+              {stats.map((item) => (
+                <div key={item.label} className="flex min-w-0 items-center justify-between gap-3 px-3 py-2.5">
+                  <div className="flex min-w-0 items-center gap-2 text-xs text-[#87867f] dark:text-[#b0aea5]">
+                    <Icon icon={item.icon} className="h-3.5 w-3.5 flex-shrink-0" />
+                    <span className="truncate">{item.label}</span>
                   </div>
-                  {command.preview && (
-                    <p className="mt-0.5 truncate font-mono text-[10px] text-[#87867f] dark:text-[#8f8d86]" title={command.preview}>
-                      {command.preview}
-                    </p>
-                  )}
+                  <span className="font-mono text-sm font-semibold tabular-nums text-[#141413] dark:text-[#faf9f5]">{item.value}</span>
                 </div>
               ))}
             </div>
-          )}
-        </div>
+          </Tab>
+
+          <Tab
+            key="activity"
+            title={
+              <span className="inline-flex items-center gap-1.5">
+                <Icon icon="lucide:activity" className="h-3.5 w-3.5" />
+                {t('codeAgentActivity')}
+              </span>
+            }
+          >
+            <div className="max-h-44 overflow-y-auto px-2 py-2">
+              {summary.lastToolName ? (
+                <p className="mb-2 truncate px-1 text-xs text-[#4d4c48] dark:text-[#e8e6dc]">
+                  {t('codeAgentLatestTool')}: <span className="font-mono">{summary.lastToolName}</span>
+                </p>
+              ) : null}
+              {recentCommands.length > 0 ? (
+                <div className="space-y-1">
+                  {recentCommands.map(command => (
+                    <div
+                      key={command.id}
+                      data-testid="code-agent-command-row"
+                      className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 rounded-lg px-2 py-1.5 text-xs"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex min-w-0 items-center gap-1.5 font-semibold text-[#4d4c48] dark:text-[#e8e6dc]">
+                          <Icon
+                            icon={commandStatusIcon[command.status]}
+                            className={`h-3.5 w-3.5 flex-shrink-0 ${commandStatusClassName[command.status]} ${command.status === 'started' ? 'animate-spin' : ''}`}
+                          />
+                          <span className="truncate">{command.name}</span>
+                        </div>
+                        {command.preview && (
+                          <p className="mt-0.5 truncate font-mono text-[10px] text-[#87867f] dark:text-[#8f8d86]" title={command.preview}>
+                            {command.preview}
+                          </p>
+                        )}
+                      </div>
+                      <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${commandStatusClassName[command.status]}`}>
+                        {t(commandStatusLabelKey[command.status])}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="px-1 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentNoActivity')}</p>
+              )}
+            </div>
+          </Tab>
+
+          <Tab
+            key="files"
+            title={
+              <span className="inline-flex items-center gap-1.5">
+                <Icon icon="lucide:file-code-2" className="h-3.5 w-3.5" />
+                {t('codeAgentFiles')}
+              </span>
+            }
+          >
+            <div className="max-h-44 overflow-y-auto px-2 py-2">
+              {summary.touchedFiles.length > 0 ? (
+                <div className="space-y-1">
+                  {visibleFiles.map(file => (
+                    <div
+                      key={file}
+                      data-testid="code-agent-file-row"
+                      className="grid min-w-0 grid-cols-[1fr_auto] items-center gap-2 rounded-lg px-2 py-1.5 text-xs"
+                      title={file}
+                    >
+                      <div className="flex min-w-0 items-center gap-2">
+                        <Icon icon="lucide:file" className="h-3.5 w-3.5 flex-shrink-0 text-[#87867f] dark:text-[#b0aea5]" />
+                        <span className="truncate font-mono font-semibold text-[#4d4c48] dark:text-[#e8e6dc]">
+                          {getFileName(file)}
+                        </span>
+                      </div>
+                      <span className="min-w-0 truncate font-mono text-[10px] text-[#87867f] dark:text-[#8f8d86]">
+                        {getDirectoryName(file)}
+                      </span>
+                    </div>
+                  ))}
+                  {hiddenFileCount > 0 && (
+                    <div
+                      className="px-2 py-1 text-xs font-semibold text-[#5e5d59] dark:text-[#b0aea5]"
+                      title={summary.touchedFiles.slice(10).join('\n')}
+                    >
+                      +{hiddenFileCount}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="px-1 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentNoFiles')}</p>
+              )}
+            </div>
+          </Tab>
+        </Tabs>
       </div>
     </section>
   );
