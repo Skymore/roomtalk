@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Message } from './types';
-import { summarizeCocoMessages } from './cocoWorkspace';
+import {
+  fetchCodeAgentWorkspaceSnapshot,
+  mergeCocoWorkspaceSummaries,
+  summarizeCocoMessages,
+} from './cocoWorkspace';
 
 const message = (overrides: Partial<Message>): Message => ({
   id: overrides.id || 'message-1',
@@ -13,6 +17,10 @@ const message = (overrides: Partial<Message>): Message => ({
 });
 
 describe('summarizeCocoMessages', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('returns an empty summary when there is no tool activity', () => {
     expect(summarizeCocoMessages([])).toEqual({
       toolCalls: 0,
@@ -101,5 +109,73 @@ describe('summarizeCocoMessages', () => {
       'secrets/credentials',
       'src/server.ts',
     ]);
+  });
+
+  it('caps client-derived file references to match server snapshots', () => {
+    const summary = summarizeCocoMessages([
+      message({
+        messageType: 'tool_call',
+        toolName: 'Read',
+        toolArgs: { file_path: `/workspace/${'a'.repeat(180)}/index.ts` },
+      }),
+    ]);
+
+    expect(summary.touchedFiles[0].length).toBeLessThanOrEqual(140);
+    expect(summary.touchedFiles[0]).toContain('...');
+  });
+
+  it('merges fetched workspace snapshots with newer local message summaries', () => {
+    expect(mergeCocoWorkspaceSummaries(
+      {
+        toolCalls: 2,
+        toolResults: 1,
+        toolErrors: 0,
+        touchedFiles: ['src/App.tsx'],
+        lastToolName: 'Edit',
+      },
+      {
+        toolCalls: 1,
+        toolResults: 3,
+        toolErrors: 1,
+        touchedFiles: ['README.md', 'src/App.tsx'],
+        lastToolName: 'Read',
+      }
+    )).toEqual({
+      toolCalls: 2,
+      toolResults: 3,
+      toolErrors: 1,
+      touchedFiles: ['README.md', 'src/App.tsx'],
+      lastToolName: 'Edit',
+    });
+  });
+
+  it('fetches and validates a RoomTalk-mediated workspace snapshot', async () => {
+    const snapshot = {
+      roomId: 'room-1',
+      backend: 'coco',
+      source: 'messages',
+      generatedAt: '2026-05-29T00:00:00.000Z',
+      status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: false },
+      summary: { toolCalls: 1, toolResults: 0, toolErrors: 0, touchedFiles: ['src/App.tsx'] },
+      files: { touched: ['src/App.tsx'], hiddenCount: 0 },
+      changes: { available: false, changedFiles: [], diffSummary: null },
+      commands: [],
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => snapshot,
+    } as Response);
+
+    await expect(fetchCodeAgentWorkspaceSnapshot('client/1', 'room 1')).resolves.toEqual(snapshot);
+    expect(fetchMock).toHaveBeenCalledWith('/api/clients/client%2F1/rooms/room%201/workspace', { signal: undefined });
+  });
+
+  it('rejects invalid workspace snapshot responses', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ backend: 'coco', source: 'messages', summary: { touchedFiles: null } }),
+    } as Response);
+
+    await expect(fetchCodeAgentWorkspaceSnapshot('client-1', 'room-1')).rejects.toThrow('Workspace snapshot response is invalid');
   });
 });

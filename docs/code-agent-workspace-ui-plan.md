@@ -1,6 +1,6 @@
 # Code Agent Workspace UI Plan
 
-> Status: Phase 3 accepted; Phase 4 queued
+> Status: Phase 4 accepted; Phase 5 queued
 > Date: 2026-05-26
 > Scope: turn RoomTalk Coco rooms into a code-agent workspace UI, while preparing a future `codeAgentBackend = coco | codex` abstraction.
 
@@ -150,6 +150,17 @@ Phase 3 completion record (2026-05-29):
 - Added delegation, context-forwarding, backend factory, and config rejection tests.
 - Verified server unit tests (`201/201`), server build, Python runner tests (`16/16`), and Coco desktop/mobile E2E (`3/3`).
 - Claude Code review found no blockers; follow-up fixes added an exhaustive backend guard and explicit runner context-forwarding coverage.
+
+Phase 4 completion record (2026-05-29):
+
+- Added a RoomTalk-mediated read-only workspace snapshot API at `/api/clients/:clientId/rooms/:roomId/workspace`.
+- Derived snapshot state from persisted Coco messages only; no direct browser access to Coco, E2B, sandbox files, or provider keys.
+- Added owner, rollout, and room-type checks plus error-path coverage for workspace snapshot failures.
+- Removed internal session identifiers from responses; snapshots expose only `hasSession`.
+- Added path sanitization/length caps, command history previews, request abort handling for refresh races, and basic secret-shaped preview redaction.
+- Added a workspace refresh control in the code-agent panel; API errors stay non-blocking and do not break message history rendering.
+- Verified server unit tests (`208/208`), frontend unit tests (`84/84`), server/client builds, Python runner tests (`16/16`), i18n coverage, and Coco desktop/mobile E2E (`3/3`).
+- Claude Code review blockers were resolved; final follow-up review reported no remaining Phase 4 blockers.
 
 ### Phase 0: Source Audit And Plan Review
 

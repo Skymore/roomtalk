@@ -1,13 +1,14 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { Button } from '@heroui/react';
 import { Icon } from '@iconify/react';
-import { requestAIResponse, requestEditMessageAndAIResponse, socket } from '../utils/socket';
+import { clientId, requestAIResponse, requestEditMessageAndAIResponse, socket } from '../utils/socket';
 import { MessageItem } from './MessageItem';
 import { Message, Room } from '../utils/types';
 import { useTranslation } from 'react-i18next';
 import { getStoredAIModel } from '../utils/aiModels';
 import { CodeAgentMode } from '../utils/codeAgent';
 import { formatUsdCost } from '../utils/formatters';
+import { CodeAgentWorkspaceSnapshot, fetchCodeAgentWorkspaceSnapshot } from '../utils/cocoWorkspace';
 import {
   deleteMessageById,
   editMessageAndTruncateAfter,
@@ -48,6 +49,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const retryScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const workspaceFetchAbortRef = useRef<AbortController | null>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
   // State for modals
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -55,6 +57,9 @@ export const MessageList: React.FC<MessageListProps> = ({
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [messageToEdit, setMessageToEdit] = useState<Message | null>(null);
   const [sessionCostUsd, setSessionCostUsd] = useState(0);
+  const [workspaceSnapshot, setWorkspaceSnapshot] = useState<CodeAgentWorkspaceSnapshot | null>(null);
+  const [isWorkspaceRefreshing, setIsWorkspaceRefreshing] = useState(false);
+  const [workspaceRefreshError, setWorkspaceRefreshError] = useState<string | null>(null);
 
   const updateMessages = useCallback((updater: React.SetStateAction<Message[]>) => {
     setMessages(prev => {
@@ -75,11 +80,80 @@ export const MessageList: React.FC<MessageListProps> = ({
     messagesEndRef.current?.scrollIntoView({ behavior });
   }, []);
 
+  const refreshWorkspaceSnapshot = useCallback(async () => {
+    if (presentation !== 'code-agent' || !currentRoom) {
+      return;
+    }
+
+    workspaceFetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    workspaceFetchAbortRef.current = controller;
+    setIsWorkspaceRefreshing(true);
+    setWorkspaceRefreshError(null);
+    try {
+      const snapshot = await fetchCodeAgentWorkspaceSnapshot(clientId, currentRoom.id, { signal: controller.signal });
+      setWorkspaceSnapshot(snapshot);
+    } catch (error) {
+      if (controller.signal.aborted) {
+        return;
+      }
+      console.error('Failed to refresh code-agent workspace snapshot:', error);
+      setWorkspaceRefreshError(error instanceof Error ? error.message : 'Failed to load workspace snapshot');
+    } finally {
+      if (workspaceFetchAbortRef.current === controller) {
+        workspaceFetchAbortRef.current = null;
+        setIsWorkspaceRefreshing(false);
+      }
+    }
+  }, [currentRoom, presentation]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (presentation !== 'code-agent' || !currentRoom) {
+      setWorkspaceSnapshot(null);
+      setWorkspaceRefreshError(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    workspaceFetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    workspaceFetchAbortRef.current = controller;
+    setIsWorkspaceRefreshing(true);
+    setWorkspaceRefreshError(null);
+    fetchCodeAgentWorkspaceSnapshot(clientId, currentRoom.id, { signal: controller.signal })
+      .then(snapshot => {
+        if (!cancelled && !controller.signal.aborted) {
+          setWorkspaceSnapshot(snapshot);
+        }
+      })
+      .catch(error => {
+        if (!cancelled && !controller.signal.aborted) {
+          console.error('Failed to load code-agent workspace snapshot:', error);
+          setWorkspaceRefreshError(error instanceof Error ? error.message : 'Failed to load workspace snapshot');
+        }
+      })
+      .finally(() => {
+        if (!cancelled && workspaceFetchAbortRef.current === controller) {
+          workspaceFetchAbortRef.current = null;
+          setIsWorkspaceRefreshing(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [currentRoom?.id, presentation]);
+
   useEffect(() => {
     return () => {
       if (retryScrollTimerRef.current) {
         clearTimeout(retryScrollTimerRef.current);
       }
+      workspaceFetchAbortRef.current?.abort();
     };
   }, []);
 
@@ -260,6 +334,10 @@ export const MessageList: React.FC<MessageListProps> = ({
             messages={messages}
             mode={codeAgentMode}
             sessionCostUsd={sessionCostUsd}
+            workspaceSnapshot={workspaceSnapshot}
+            isRefreshingWorkspace={isWorkspaceRefreshing}
+            workspaceRefreshError={workspaceRefreshError}
+            onRefreshWorkspace={refreshWorkspaceSnapshot}
           />
         ) : (
           <div className="sticky top-0 z-20 mb-2 flex justify-end">

@@ -253,6 +253,102 @@ describe('API routes', () => {
     });
   });
 
+  it('returns a read-only Coco workspace snapshot for the room owner', async () => {
+    await server.close();
+    server = await createTestServer({
+      cocoAccess: createCocoAccessControl({ enabled: true, allowedClientIds: ['client-1'] }),
+    });
+    server.store.rooms = [sampleRoom({
+      type: 'coco',
+      sandboxStatus: 'ready',
+      cocoStatus: 'idle',
+      cocoSessionId: 'session-1',
+    })];
+    server.store.messages = [
+      sampleMessage({
+        id: 'tool-call-1',
+        clientId: 'coco_runner',
+        messageType: 'tool_call',
+        toolCallId: 'tool-1',
+        toolName: 'Read',
+        toolArgs: { file_path: '/workspace/app/src/index.ts' },
+      }),
+      sampleMessage({
+        id: 'tool-result-1',
+        clientId: 'coco_runner',
+        messageType: 'tool_result',
+        toolCallId: 'tool-1',
+        toolName: 'Read',
+        toolOutputPreview: 'file contents',
+      }),
+    ];
+
+    const response = await fetch(`${server.baseUrl}/api/clients/client-1/rooms/room-1/workspace`);
+
+    assert.equal(response.status, 200);
+    const snapshot = await response.json() as {
+      roomId: string;
+      backend: string;
+      source: string;
+      status: { sandboxStatus: string; agentStatus: string; hasSession: boolean };
+      summary: { toolCalls: number; toolResults: number; toolErrors: number; touchedFiles: string[]; lastToolName: string };
+      files: { touched: string[]; hiddenCount: number };
+      commands: Array<{ id: string; name: string; status: string; preview: string }>;
+    };
+    assert.equal(snapshot.roomId, 'room-1');
+    assert.equal(snapshot.backend, 'coco');
+    assert.equal(snapshot.source, 'messages');
+    assert.deepEqual(snapshot.status, { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: true });
+    assert.deepEqual(snapshot.summary, {
+      toolCalls: 1,
+      toolResults: 1,
+      toolErrors: 0,
+      touchedFiles: ['app/src/index.ts'],
+      lastToolName: 'Read',
+    });
+    assert.deepEqual(snapshot.files, { touched: ['app/src/index.ts'], hiddenCount: 0 });
+    assert.deepEqual(snapshot.commands, [{ id: 'tool-1', name: 'Read', status: 'succeeded', preview: 'file contents' }]);
+  });
+
+  it('protects Coco workspace snapshots with owner and rollout checks', async () => {
+    await server.close();
+    server = await createTestServer({
+      cocoAccess: createCocoAccessControl({ enabled: true, allowedClientIds: ['client-1'] }),
+    });
+    server.store.rooms = [sampleRoom({ type: 'coco' })];
+
+    const unauthorizedResponse = await fetch(`${server.baseUrl}/api/clients/client-2/rooms/room-1/workspace`);
+    assert.equal(unauthorizedResponse.status, 404);
+
+    const deniedByRolloutResponse = await fetch(`${server.baseUrl}/api/clients/client-2/rooms/room-missing/workspace`);
+    assert.equal(deniedByRolloutResponse.status, 404);
+
+    server.store.rooms = [sampleRoom({ id: 'room-2', type: 'coco', creatorId: 'client-2' })];
+    const deniedOwnerResponse = await fetch(`${server.baseUrl}/api/clients/client-2/rooms/room-2/workspace`);
+    assert.equal(deniedOwnerResponse.status, 403);
+
+    server.store.rooms = [sampleRoom({ type: 'chat' })];
+    const chatResponse = await fetch(`${server.baseUrl}/api/clients/client-1/rooms/room-1/workspace`);
+    assert.equal(chatResponse.status, 400);
+    assert.deepEqual(await chatResponse.json(), { error: 'Workspace snapshots are only available for Coco rooms' });
+  });
+
+  it('returns a workspace snapshot error when message history lookup fails', async () => {
+    await server.close();
+    server = await createTestServer({
+      cocoAccess: createCocoAccessControl({ enabled: true }),
+    });
+    server.store.rooms = [sampleRoom({ type: 'coco' })];
+    server.store.readMessagesByRoom = async () => {
+      throw new Error('history lookup failed');
+    };
+
+    const response = await fetch(`${server.baseUrl}/api/clients/client-1/rooms/room-1/workspace`);
+
+    assert.equal(response.status, 500);
+    assert.deepEqual(await response.json(), { error: 'Failed to load workspace snapshot' });
+  });
+
   it('returns large room message histories as complete ordered JSON and writes a response-size baseline', async () => {
     const largeMessages = Array.from({ length: 120 }, (_, index) => largeMessage(index));
     server.store.messages = largeMessages;
