@@ -1,6 +1,6 @@
 # Code Agent Workspace UI Plan
 
-> Status: Phase 5 accepted; Phase 6 queued
+> Status: Phase 6 accepted; current plan complete
 > Date: 2026-05-26
 > Scope: turn RoomTalk Coco rooms into a code-agent workspace UI, while preparing a future `codeAgentBackend = coco | codex` abstraction.
 
@@ -180,6 +180,16 @@ Phase 5 completion record (2026-05-30):
 - Added component coverage for default Overview rendering, all command statuses, root-level file paths, file truncation, and tabbed activity/files behavior.
 - Verified frontend lint, frontend unit tests (`85/85`), client build, i18n coverage, and Coco desktop/mobile E2E (`3/3`).
 - Claude Code review findings were resolved; final follow-up review reported Phase 5 is safe to commit.
+
+Phase 6 completion record (2026-05-30):
+
+- Audited local `codex-cli 0.125.0` and its experimental `codex app-server` command.
+- Audited T3 Code's Codex integration layers at `https://github.com/pingdotgg/t3code` commit `b3e8c0334b25238e2b55868a87bd6270e234b7de`, including driver, adapter, provider, session runtime, and developer-instruction layers.
+- Recorded the spike decision in `docs/code-agent-codex-backend-spike.md`.
+- Decision: Codex is feasible as a future second backend, but it remains disabled until RoomTalk has a protocol-neutral runner contract, sandboxed app-server lifecycle, approval/cancel/rollback contracts, and production credential boundaries.
+- Confirmed that no T3 Code source was copied into RoomTalk for this spike.
+- Verified server unit tests and server build.
+- Claude Code review completed with no required code changes for this docs-only phase.
 
 ### Phase 0: Source Audit And Plan Review
 
