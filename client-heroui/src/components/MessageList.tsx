@@ -50,6 +50,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const retryScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const workspaceFetchAbortRef = useRef<AbortController | null>(null);
+  const isMountedRef = useRef(true);
   const [showScrollButton, setShowScrollButton] = useState(false);
   // State for modals
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -60,6 +61,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   const [workspaceSnapshot, setWorkspaceSnapshot] = useState<CodeAgentWorkspaceSnapshot | null>(null);
   const [isWorkspaceRefreshing, setIsWorkspaceRefreshing] = useState(false);
   const [workspaceRefreshError, setWorkspaceRefreshError] = useState<string | null>(null);
+  const currentRoomId = currentRoom?.id;
 
   const updateMessages = useCallback((updater: React.SetStateAction<Message[]>) => {
     setMessages(prev => {
@@ -81,36 +83,44 @@ export const MessageList: React.FC<MessageListProps> = ({
   }, []);
 
   const refreshWorkspaceSnapshot = useCallback(async () => {
-    if (presentation !== 'code-agent' || !currentRoom) {
+    if (presentation !== 'code-agent' || !currentRoomId) {
       return;
     }
 
     workspaceFetchAbortRef.current?.abort();
     const controller = new AbortController();
     workspaceFetchAbortRef.current = controller;
-    setIsWorkspaceRefreshing(true);
-    setWorkspaceRefreshError(null);
+    if (isMountedRef.current) {
+      setIsWorkspaceRefreshing(true);
+      setWorkspaceRefreshError(null);
+    }
     try {
-      const snapshot = await fetchCodeAgentWorkspaceSnapshot(clientId, currentRoom.id, { signal: controller.signal });
-      setWorkspaceSnapshot(snapshot);
+      const snapshot = await fetchCodeAgentWorkspaceSnapshot(clientId, currentRoomId, { signal: controller.signal });
+      if (isMountedRef.current) {
+        setWorkspaceSnapshot(snapshot);
+      }
     } catch (error) {
       if (controller.signal.aborted) {
         return;
       }
       console.error('Failed to refresh code-agent workspace snapshot:', error);
-      setWorkspaceRefreshError(error instanceof Error ? error.message : 'Failed to load workspace snapshot');
+      if (isMountedRef.current) {
+        setWorkspaceRefreshError(error instanceof Error ? error.message : 'Failed to load workspace snapshot');
+      }
     } finally {
       if (workspaceFetchAbortRef.current === controller) {
         workspaceFetchAbortRef.current = null;
-        setIsWorkspaceRefreshing(false);
+        if (isMountedRef.current) {
+          setIsWorkspaceRefreshing(false);
+        }
       }
     }
-  }, [currentRoom, presentation]);
+  }, [currentRoomId, presentation]);
 
   useEffect(() => {
     let cancelled = false;
 
-    if (presentation !== 'code-agent' || !currentRoom) {
+    if (presentation !== 'code-agent' || !currentRoomId) {
       setWorkspaceSnapshot(null);
       setWorkspaceRefreshError(null);
       return () => {
@@ -123,7 +133,7 @@ export const MessageList: React.FC<MessageListProps> = ({
     workspaceFetchAbortRef.current = controller;
     setIsWorkspaceRefreshing(true);
     setWorkspaceRefreshError(null);
-    fetchCodeAgentWorkspaceSnapshot(clientId, currentRoom.id, { signal: controller.signal })
+    fetchCodeAgentWorkspaceSnapshot(clientId, currentRoomId, { signal: controller.signal })
       .then(snapshot => {
         if (!cancelled && !controller.signal.aborted) {
           setWorkspaceSnapshot(snapshot);
@@ -146,10 +156,11 @@ export const MessageList: React.FC<MessageListProps> = ({
       cancelled = true;
       controller.abort();
     };
-  }, [currentRoom?.id, presentation]);
+  }, [currentRoomId, presentation]);
 
   useEffect(() => {
     return () => {
+      isMountedRef.current = false;
       if (retryScrollTimerRef.current) {
         clearTimeout(retryScrollTimerRef.current);
       }
