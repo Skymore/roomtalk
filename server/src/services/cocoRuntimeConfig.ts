@@ -1,4 +1,5 @@
 import { AIModelProvider } from '../types';
+import { CodeAgentBackend } from './codeAgentRunner';
 import { CocoSandboxProvider } from './cocoSandboxService';
 import { CocoRunnerMode } from './cocoRunnerProtocol';
 
@@ -7,6 +8,7 @@ export type CocoArtifactMode = 'production' | 'development';
 
 export interface CocoRuntimeConfig {
   enabled: boolean;
+  backend: CodeAgentBackend;
   sandboxProvider: CocoSandboxProvider;
   runnerClient: CocoRunnerClientKind;
   artifactMode: CocoArtifactMode;
@@ -41,6 +43,17 @@ const readSandboxProvider = (env: NodeJS.ProcessEnv): CocoSandboxProvider => {
     return value;
   }
   throw new Error(`Unsupported COCO_SANDBOX_PROVIDER: ${value}`);
+};
+
+const readCodeAgentBackend = (env: NodeJS.ProcessEnv): CodeAgentBackend => {
+  const value = (env.CODE_AGENT_BACKEND || 'coco').toLowerCase();
+  if (value === 'coco') {
+    return value;
+  }
+  if (value === 'codex') {
+    throw new Error('CODE_AGENT_BACKEND=codex is not implemented');
+  }
+  throw new Error(`Unsupported CODE_AGENT_BACKEND: ${value}`);
 };
 
 const readRunnerClient = (env: NodeJS.ProcessEnv): CocoRunnerClientKind => {
@@ -222,11 +235,13 @@ const validateEnabledConfig = (config: CocoRuntimeConfig, env: NodeJS.ProcessEnv
 
 export const resolveCocoRuntimeConfig = (env: NodeJS.ProcessEnv): CocoRuntimeConfig => {
   const mode = readMode(env);
+  const backend = readCodeAgentBackend(env);
   const runnerClient = readRunnerClient(env);
   const sandboxProvider = readSandboxProvider(env);
   const artifactMode = readArtifactMode(env);
   const config: CocoRuntimeConfig = {
     enabled: env.COCO_ENABLED === 'true',
+    backend,
     sandboxProvider,
     runnerClient,
     artifactMode,

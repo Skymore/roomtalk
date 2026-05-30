@@ -6,7 +6,7 @@ import { calculateAICost, getMessageAIModel } from './aiModels';
 import { CocoSandboxLifecycleService, EnsureCocoSandboxResult } from './cocoSandboxLifecycle';
 import { CocoSandboxService, CocoRunnerProcess } from './cocoSandboxService';
 import { mapCocoRunnerEvent } from './cocoEventMapper';
-import { CocoRunnerClient } from './fakeCocoRunner';
+import { CodeAgentRunner } from './codeAgentRunner';
 import { COCO_RUNNER_SCHEMA_VERSION, CocoRunnerEvent, CocoRunnerMode } from './cocoRunnerProtocol';
 import { DEFAULT_COCO_RUNNER_COMMAND } from './cocoRuntimeConfig';
 import { createAIPlaceholderMessage } from './messageDomain';
@@ -50,7 +50,7 @@ export class CocoSessionService {
     private readonly emitter: CocoRoomEmitter,
     private readonly sandboxLifecycle: CocoSandboxLifecycleService,
     private readonly sandboxService: CocoSandboxService,
-    private readonly runnerClient: CocoRunnerClient,
+    private readonly runner: CodeAgentRunner,
     private readonly logger: Logger,
     private readonly options: CocoSessionServiceOptions
   ) {
@@ -145,14 +145,14 @@ export class CocoSessionService {
       });
 
       let fullContent = '';
-      const runResult = await this.runnerClient.run({
+      const runResult = await this.runner.run({
         schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
         type: 'run',
         roomId: input.roomId,
         turnId,
         sessionId: room!.cocoSessionId || null,
         prompt,
-        mode: this.options.mode || 'acceptEdits',
+        mode: this.options.mode || 'plan',
         provider: input.selectedModel.provider,
         modelId: input.selectedModel.id,
         apiModel: input.selectedModel.apiModel,

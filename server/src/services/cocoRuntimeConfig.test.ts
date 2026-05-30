@@ -34,6 +34,7 @@ describe('resolveCocoRuntimeConfig', () => {
     const config = resolveCocoRuntimeConfig({});
 
     assert.equal(config.enabled, false);
+    assert.equal(config.backend, 'coco');
     assert.equal(config.sandboxProvider, 'fake');
     assert.equal(config.runnerClient, 'fake');
     assert.equal(config.artifactMode, 'production');
@@ -41,6 +42,12 @@ describe('resolveCocoRuntimeConfig', () => {
     assert.equal(config.runnerCommand, DEFAULT_COCO_RUNNER_COMMAND);
     assert.deepEqual(config.allowedPaths, ['.']);
     assert.deepEqual(config.runnerEnv, {});
+  });
+
+  it('accepts only implemented code-agent backends', () => {
+    assert.equal(resolveCocoRuntimeConfig({ CODE_AGENT_BACKEND: 'coco' }).backend, 'coco');
+    assert.throws(() => resolveCocoRuntimeConfig({ CODE_AGENT_BACKEND: 'codex' }), /CODE_AGENT_BACKEND=codex is not implemented/);
+    assert.throws(() => resolveCocoRuntimeConfig({ CODE_AGENT_BACKEND: 'unknown' }), /Unsupported CODE_AGENT_BACKEND: unknown/);
   });
 
   it('falls back to plan mode and warns when COCO_MODE is invalid', () => {
