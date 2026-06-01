@@ -27,6 +27,7 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
         color: string;
       };
       replyToMessageId?: string;
+      clientMessageId?: string;
     },
     callback?: (response: { success: boolean; message?: Message; error?: string }) => void,
   ) => {
@@ -65,6 +66,7 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       username: messageData.username,
       avatar: messageData.avatar,
       replyTo,
+      clientMessageId: messageData.clientMessageId,
     });
 
     const loggableMessage = socketLogger.formatMessageForLog(message);

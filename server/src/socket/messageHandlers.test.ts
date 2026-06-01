@@ -193,6 +193,7 @@ describe('message socket handlers', () => {
       content: 'created through socket',
       username: 'Ada',
       avatar: { text: 'A', color: 'primary' },
+      clientMessageId: 'client-message-1',
     }, (response: { success: boolean; message?: Message }) => {
       validResponse = response;
     });
@@ -203,6 +204,7 @@ describe('message socket handlers', () => {
     assert.equal(created.roomId, 'room-1');
     assert.equal(created.content, 'created through socket');
     assert.equal(created.messageType, 'text');
+    assert.equal(created.clientMessageId, 'client-message-1');
     assert.deepEqual(valid.io.roomEmits, [
       { roomId: 'client-1', event: 'room_updated', args: [room({ lastActivityAt: created.timestamp })] },
       { roomId: 'room-1', event: 'new_message', args: [created] },

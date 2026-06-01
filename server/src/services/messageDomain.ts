@@ -78,6 +78,7 @@ export function createUserMessage(input: {
   avatar?: AvatarPayload;
   mimeType?: string;
   replyTo?: MessageReplyReference;
+  clientMessageId?: string;
   now?: Date;
 }): Message {
   return {
@@ -91,6 +92,7 @@ export function createUserMessage(input: {
     avatar: input.avatar,
     mimeType: input.mimeType,
     replyTo: input.replyTo,
+    clientMessageId: input.clientMessageId,
   };
 }
 

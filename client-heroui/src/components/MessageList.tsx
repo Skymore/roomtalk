@@ -7,11 +7,14 @@ import { useTranslation } from 'react-i18next';
 import { getStoredAIModel } from '../utils/aiModels';
 import { formatUsdCost } from '../utils/formatters';
 import {
+  addOptimisticMessage,
   deleteMessageById,
   editMessageAndTruncateAfter,
   editMessageContent,
   getMessageById,
+  markOptimisticMessageFailed,
   replaceMessage,
+  replaceOptimisticMessage,
   truncateBeforeMessage,
 } from '../utils/messageState';
 import { useRoomMessageEvents } from '../hooks/useRoomMessageEvents';
@@ -34,6 +37,9 @@ interface MessageListProps {
 
 export interface MessageListHandle {
   scrollToBottom: (behavior?: ScrollBehavior) => void;
+  addOptimisticMessage: (message: Message) => void;
+  replaceOptimisticMessage: (clientMessageId: string, savedMessage: Message) => void;
+  markOptimisticMessageFailed: (clientMessageId: string, error?: string) => void;
 }
 
 export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
@@ -80,7 +86,21 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
 
   useImperativeHandle(ref, () => ({
     scrollToBottom,
-  }), [scrollToBottom]);
+    addOptimisticMessage: (message: Message) => {
+      updateMessages(prev => addOptimisticMessage(prev, message));
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => scrollToBottom('auto'));
+      } else {
+        scrollToBottom('auto');
+      }
+    },
+    replaceOptimisticMessage: (clientMessageId: string, savedMessage: Message) => {
+      updateMessages(prev => replaceOptimisticMessage(prev, clientMessageId, savedMessage));
+    },
+    markOptimisticMessageFailed: (clientMessageId: string, error?: string) => {
+      updateMessages(prev => markOptimisticMessageFailed(prev, clientMessageId, error));
+    },
+  }), [scrollToBottom, updateMessages]);
 
   useEffect(() => {
     onScrollButtonVisibilityChange?.(showScrollButton);

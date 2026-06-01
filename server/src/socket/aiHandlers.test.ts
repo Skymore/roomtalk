@@ -97,18 +97,19 @@ const roomActivityForMessages = (messages: Message[]) => room({
   lastActivityAt: messages[messages.length - 1]?.timestamp || room().createdAt,
 });
 
-const createHarness = (options: { rejectSaves?: boolean; rejectSaveNumbers?: number[] } = {}) => {
+const createHarness = (options: { rejectSaves?: boolean; rejectSaveNumbers?: number[]; rejectAppend?: boolean; clientId?: string | null } = {}) => {
   const socket = new FakeSocket();
   const io = new FakeIo();
   const store = {
     messages: [message()],
+    appendedMessages: [] as Message[],
     upsertedMessages: [] as Message[],
     savedHistories: [] as Message[][],
     truncateBeforeCalls: [] as Array<{ roomId: string; messageId: string }>,
     truncateAfterCalls: [] as Array<{ roomId: string; messageId: string }>,
     editAndTruncateCalls: [] as Array<{ roomId: string; messageId: string; newContent: string }>,
     async getClientId() {
-      return 'client-1';
+      return options.clientId === undefined ? 'client-1' : options.clientId;
     },
     async readMessagesByRoom(roomId: string) {
       return this.messages.filter(item => item.roomId === roomId);
@@ -117,6 +118,14 @@ const createHarness = (options: { rejectSaves?: boolean; rejectSaveNumbers?: num
       this.savedHistories.push(messages);
       this.messages = messages;
       return room({ lastActivityAt: messages[messages.length - 1]?.timestamp || room().createdAt });
+    },
+    async appendMessage(newMessage: Message) {
+      this.appendedMessages.push(newMessage);
+      if (options.rejectAppend) {
+        return null;
+      }
+      this.messages = [...this.messages, newMessage];
+      return room({ lastActivityAt: newMessage.timestamp });
     },
     async truncateBeforeMessage(roomId: string, messageId: string) {
       this.truncateBeforeCalls.push({ roomId, messageId });
@@ -372,5 +381,113 @@ describe('AI socket handlers', () => {
     assert.equal(store.messages[2].status, 'complete');
     assert.equal(store.messages[2].content, 'E2E AI response to: edited prompt');
     assert.deepEqual(response, { success: true, messageId: store.upsertedMessages[0].id });
+  });
+
+  it('saves a user message before starting AI with prepared history', async () => {
+    const { io, socket, store } = createHarness();
+
+    let response: { success: boolean; userMessage?: Message; aiMessageId?: string } | undefined;
+    await socket.invoke('send_message_and_ask_ai', {
+      roomId: 'room-1',
+      content: 'fresh prompt',
+      username: 'Ada',
+      avatar: { text: 'A', color: 'primary' },
+      clientMessageId: 'client-message-1',
+      model: selectedModel.id,
+    }, (ack: { success: boolean; userMessage?: Message; aiMessageId?: string }) => {
+      response = ack;
+    });
+
+    assert.equal(store.appendedMessages.length, 1);
+    const userMessage = store.appendedMessages[0];
+    assert.equal(userMessage.clientId, 'client-1');
+    assert.equal(userMessage.content, 'fresh prompt');
+    assert.equal(userMessage.clientMessageId, 'client-message-1');
+    assert.equal(response?.userMessage, userMessage);
+    assert.equal(response?.aiMessageId, store.upsertedMessages[0].id);
+
+    const userMessageEventIndex = io.roomEmits.findIndex(event =>
+      event.event === 'new_message' && (event.args[0] as Message).id === userMessage.id
+    );
+    const aiPlaceholderEventIndex = io.roomEmits.findIndex(event =>
+      event.event === 'new_message' && (event.args[0] as Message).clientId === 'ai_assistant'
+    );
+    assert.ok(userMessageEventIndex !== -1);
+    assert.ok(aiPlaceholderEventIndex !== -1);
+    assert.ok(userMessageEventIndex < aiPlaceholderEventIndex);
+    assert.equal(store.upsertedMessages[1].content, 'E2E AI response to: fresh prompt');
+  });
+
+  it('does not start AI when saving the user message fails', async () => {
+    const { io, socket, store } = createHarness({ rejectAppend: true });
+
+    let response: unknown;
+    await socket.invoke('send_message_and_ask_ai', {
+      roomId: 'room-1',
+      content: 'fresh prompt',
+      model: selectedModel.id,
+    }, (ack: unknown) => {
+      response = ack;
+    });
+
+    assert.equal(store.appendedMessages.length, 1);
+    assert.equal(store.upsertedMessages.length, 0);
+    assert.equal(io.roomEmits.length, 0);
+    assert.deepEqual(response, { success: false, error: 'Failed to save message' });
+  });
+
+  it('rejects unregistered send-message-and-ask-ai requests', async () => {
+    const { socket, store } = createHarness({ clientId: null });
+
+    let response: unknown;
+    await socket.invoke('send_message_and_ask_ai', {
+      roomId: 'room-1',
+      content: 'fresh prompt',
+    }, (ack: unknown) => {
+      response = ack;
+    });
+
+    assert.equal(store.appendedMessages.length, 0);
+    assert.equal(store.upsertedMessages.length, 0);
+    assert.deepEqual(response, { success: false, error: 'You are not registered' });
+    assert.deepEqual(socket.emitted, [{ event: 'error', args: [{ message: 'You are not registered' }] }]);
+  });
+
+  it('saves reply references for send-message-and-ask-ai and rejects missing quote targets', async () => {
+    const valid = createHarness();
+    valid.store.messages = [message({ id: 'quoted', username: 'Ada', content: 'original prompt' })];
+    let validResponse: { success: boolean; userMessage?: Message } | undefined;
+
+    await valid.socket.invoke('send_message_and_ask_ai', {
+      roomId: 'room-1',
+      content: 'reply prompt',
+      replyToMessageId: 'quoted',
+      model: selectedModel.id,
+    }, (ack: { success: boolean; userMessage?: Message }) => {
+      validResponse = ack;
+    });
+
+    assert.deepEqual(validResponse?.userMessage?.replyTo, {
+      messageId: 'quoted',
+      username: 'Ada',
+      messageType: 'text',
+      preview: 'original prompt',
+    });
+    assert.equal(valid.store.upsertedMessages[1].content, 'E2E AI response to: reply prompt');
+
+    const missing = createHarness();
+    let missingResponse: unknown;
+    await missing.socket.invoke('send_message_and_ask_ai', {
+      roomId: 'room-1',
+      content: 'reply prompt',
+      replyToMessageId: 'missing',
+      model: selectedModel.id,
+    }, (ack: unknown) => {
+      missingResponse = ack;
+    });
+
+    assert.equal(missing.store.appendedMessages.length, 0);
+    assert.equal(missing.store.upsertedMessages.length, 0);
+    assert.deepEqual(missingResponse, { success: false, error: 'Quoted message not found' });
   });
 });

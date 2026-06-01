@@ -129,11 +129,19 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
         >
           <MessageInput
             roomId={currentRoom.id}
+            clientId={clientId}
             username={username}
             avatarText={getAvatarText(username)}
             avatarColor={getAvatarColor(username)}
             replyToMessage={replyToMessage}
             onCancelReply={() => setReplyToMessage(null)}
+            onOptimisticMessage={(message) => messageListRef.current?.addOptimisticMessage(message)}
+            onOptimisticMessageSaved={(clientMessageId, message) =>
+              messageListRef.current?.replaceOptimisticMessage(clientMessageId, message)
+            }
+            onOptimisticMessageFailed={(clientMessageId, error) =>
+              messageListRef.current?.markOptimisticMessageFailed(clientMessageId, error)
+            }
           />
         </div>
       </div>

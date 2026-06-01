@@ -19,6 +19,9 @@ export interface Message {
   };
   mimeType?: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' | 'image/jpg';
   status?: 'streaming' | 'complete' | 'error';
+  clientMessageId?: string;
+  deliveryStatus?: 'pending' | 'sent' | 'failed';
+  deliveryError?: string;
   aiModel?: {
     id: string;
     apiModel: string;

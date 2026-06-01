@@ -56,4 +56,33 @@ describe('MessageItem replies', () => {
     fireEvent.click(screen.getByLabelText('replyToMessage'));
     expect(onReply).toHaveBeenCalledWith(message);
   });
+
+  it('shows optimistic pending and failed delivery states', () => {
+    const { rerender } = render(
+      <MessageItem
+        message={{ ...message, clientId: 'viewer', deliveryStatus: 'pending' }}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText(/messageSending/)).toBeTruthy();
+
+    rerender(
+      <MessageItem
+        message={{
+          ...message,
+          clientId: 'viewer',
+          deliveryStatus: 'failed',
+          deliveryError: 'network down',
+        }}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText(/network down/)).toBeTruthy();
+  });
 });

@@ -1,6 +1,6 @@
 import { default as io } from 'socket.io-client';
 import { v4 as uuidv4 } from 'uuid';
-import { Room, RoomMemberEvent } from './types';
+import { Message, Room, RoomMemberEvent } from './types';
 import { Socket } from 'socket.io-client';
 
 // Get client ID from local storage or create a new one
@@ -28,7 +28,16 @@ const SEND_MESSAGE_CONNECT_TIMEOUT_MS = 15000;
 type SocketAckResponse = {
   success: boolean;
   error?: string;
-  message?: string;
+  message?: unknown;
+};
+
+type SendMessageAckResponse = SocketAckResponse & {
+  message?: Message;
+};
+
+type SendMessageAndAskAIAckResponse = SocketAckResponse & {
+  userMessage?: Message;
+  aiMessageId?: string;
 };
 
 // Get current member count for a room
@@ -187,7 +196,8 @@ const emitWithAck = <TResponse extends SocketAckResponse>(
         resolve(response);
         return;
       }
-      reject(new Error(response?.error || response?.message || fallbackError));
+      const message = typeof response?.message === 'string' ? response.message : undefined;
+      reject(new Error(response?.error || message || fallbackError));
     });
   });
 }));
@@ -230,9 +240,27 @@ export const renameRoom = (roomId: string, name: string): Promise<Room> => {
 };
 
 // Send message to a specific room
-export const sendMessage = (content: string, roomId: string, messageType: 'text' | 'image' = 'text', username?: string, avatar?: { text: string; color: string }, replyToMessageId?: string) => {
-  return emitWithAck('send_message', { content, roomId, messageType, username, avatar, replyToMessageId }, 'Timed out while saving message', 'Failed to save message')
-    .then(() => undefined);
+export const sendMessage = (
+  content: string,
+  roomId: string,
+  messageType: 'text' | 'image' = 'text',
+  username?: string,
+  avatar?: { text: string; color: string },
+  replyToMessageId?: string,
+  clientMessageId?: string,
+): Promise<Message> => {
+  return emitWithAck<SendMessageAckResponse>(
+    'send_message',
+    { content, roomId, messageType, username, avatar, replyToMessageId, clientMessageId },
+    'Timed out while saving message',
+    'Failed to save message',
+  ).then((response) => {
+    if (!response.message) {
+      throw new Error('Server did not return saved message');
+    }
+
+    return response.message;
+  });
 };
 
 export const requestAIResponse = (data: {
@@ -245,6 +273,34 @@ export const requestAIResponse = (data: {
 }) => {
   return emitWithAck('ask_ai', data, 'Timed out while starting AI response', 'Failed to start AI response')
     .then(() => undefined);
+};
+
+export const sendMessageAndAskAI = (params: {
+  roomId: string;
+  content: string;
+  username?: string;
+  avatar?: { text: string; color: string };
+  replyToMessageId?: string;
+  clientMessageId?: string;
+  systemPrompt?: string;
+  roleName?: string;
+  model?: string;
+}): Promise<{ userMessage: Message; aiMessageId: string }> => {
+  return emitWithAck<SendMessageAndAskAIAckResponse>(
+    'send_message_and_ask_ai',
+    params,
+    'Timed out while saving message and starting AI',
+    'Failed to save message and start AI',
+  ).then((response) => {
+    if (!response.userMessage || !response.aiMessageId) {
+      throw new Error('Server did not return userMessage or aiMessageId');
+    }
+
+    return {
+      userMessage: response.userMessage,
+      aiMessageId: response.aiMessageId,
+    };
+  });
 };
 
 export const requestEditMessageAndAIResponse = (data: {

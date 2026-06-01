@@ -62,6 +62,8 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   const isText = message.messageType === "text";
   const isAI = message.clientId === 'ai_assistant';
   const isStreaming = isAI && message.status === 'streaming';
+  const isPending = message.deliveryStatus === 'pending';
+  const isFailed = message.deliveryStatus === 'failed';
   const canBeEdited = isText || (message.messageType === 'ai' && message.status !== 'streaming');
   const { t, i18n } = useTranslation();
   const aiMetadataParts = isAI
@@ -206,12 +208,14 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             <Card
               className={`
                 max-w-full w-full overflow-hidden rounded-xl
+                ${isPending ? "opacity-70" : ""}
                 ${isMine
                   ? "bg-[#e8e6dc] text-[#141413] shadow-[0_0_0_1px_rgba(194,192,182,0.85)] dark:bg-[#30302e] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)]"
                   : message.messageType === 'ai'
                     ? "bg-[#faf9f5] text-[#141413] shadow-[0_0_0_1px_rgba(222,219,208,0.95)] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(48,48,46,0.95)]"
                     : "bg-[#f0eee6] text-[#141413] shadow-[0_0_0_1px_rgba(222,219,208,0.95)] dark:bg-[#242421] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(61,61,58,0.9)]"
                 }
+                ${isFailed ? "ring-1 ring-danger-500/75" : ""}
               `}
             >
               <div className="max-w-full p-2.5">
@@ -243,6 +247,8 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             <span className={`max-w-full text-tiny text-[#87867f] dark:text-[#b0aea5] ${showActions ? 'mr-1' : ''}`}>
               {formatTime(message.timestamp, i18n.language)}
               {isStreaming && ` • ${t('typing')}`}
+              {isPending && ` • ${t('messageSending')}`}
+              {isFailed && ` • ${message.deliveryError || t('messageFailedToSend')}`}
               {aiCostLabel && ` • ${aiCostLabel}`}
             </span>
 

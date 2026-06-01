@@ -5,7 +5,7 @@ import {
   useDisclosure,
 } from "@heroui/react";
 import { Icon } from '@iconify/react';
-import { requestAIResponse, sendMessage } from '../utils/socket';
+import { requestAIResponse, sendMessage, sendMessageAndAskAI } from '../utils/socket';
 import { useTranslation } from 'react-i18next';
 import imageCompression from 'browser-image-compression';
 import {
@@ -37,17 +37,44 @@ import { Message } from '../utils/types';
 
 interface MessageInputProps {
   roomId: string;
+  clientId: string;
   username: string;
   avatarText: string;
   avatarColor: string;
   replyToMessage: Message | null;
   onCancelReply: () => void;
+  onOptimisticMessage?: (message: Message) => void;
+  onOptimisticMessageSaved?: (clientMessageId: string, message: Message) => void;
+  onOptimisticMessageFailed?: (clientMessageId: string, error?: string) => void;
 }
 
 // 使用WeakMap存储图片元素和对应的File对象
 const imageFileMap = new WeakMap<HTMLImageElement, File>();
 
-export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, avatarText, avatarColor, replyToMessage, onCancelReply }) => {
+const createClientMessageId = () => {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID();
+  }
+
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+};
+
+const getErrorMessage = (error: unknown, fallback: string) => (
+  error instanceof Error ? error.message : fallback
+);
+
+export const MessageInput: React.FC<MessageInputProps> = ({
+  roomId,
+  clientId,
+  username,
+  avatarText,
+  avatarColor,
+  replyToMessage,
+  onCancelReply,
+  onOptimisticMessage,
+  onOptimisticMessageSaved,
+  onOptimisticMessageFailed,
+}) => {
   const { t } = useTranslation();
   const [_contentItems, setContentItems] = useState<MessageContentItem[]>(emptyMessageContent());
   const [isSending, setIsSending] = useState(false);
@@ -105,6 +132,61 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
 
   // 新增角色设置模态框的状态
   const { isOpen: isAISettingsOpen, onOpen: onAISettingsOpen, onClose: onAISettingsClose } = useDisclosure();
+
+  const buildReplyReference = useCallback((message: Message | null): Message['replyTo'] => {
+    if (!message) return undefined;
+
+    const preview = message.messageType === 'image'
+      ? t('sharedImage')
+      : message.content.replace(/\s+/g, ' ').trim().slice(0, 120) || '[Empty message]';
+
+    return {
+      messageId: message.id,
+      username: message.username,
+      messageType: message.messageType,
+      preview,
+    };
+  }, [t]);
+
+  const buildOptimisticTextMessage = useCallback((
+    content: string,
+    clientMessageId: string,
+    avatar: { text: string; color: string },
+    replyTo: Message | null,
+  ): Message => ({
+    id: `temp-${clientMessageId}`,
+    clientMessageId,
+    clientId,
+    roomId,
+    content,
+    timestamp: new Date().toISOString(),
+    messageType: 'text',
+    username,
+    avatar,
+    replyTo: buildReplyReference(replyTo),
+    deliveryStatus: 'pending',
+  }), [buildReplyReference, clientId, roomId, username]);
+
+  const clearEditorImmediately = useCallback((options: { blur?: boolean } = {}) => {
+    if (editorRef.current) {
+      const images = editorRef.current.querySelectorAll('img');
+      images.forEach(img => {
+        if (img.src.startsWith('blob:')) {
+          URL.revokeObjectURL(img.src);
+        }
+      });
+      editorRef.current.innerHTML = '';
+      if (options.blur) {
+        editorRef.current.blur();
+      }
+    }
+
+    setContentItems(emptyMessageContent());
+    setImageCount(0);
+    imageCountRef.current = 0;
+    setCurrentInputText('');
+    setErrorMessage(null);
+  }, []);
 
   // 将编辑器内容解析为ContentItem数组
   const parseEditorContent = useCallback((): MessageContentItem[] => {
@@ -221,8 +303,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
   const handleAskAI = async () => {
     const latestContentItems = parseEditorContent();
 
-    if (!hasMessageContent(latestContentItems) || isSending || isAiProcessing) return;
+    if (isSending || isAiProcessing) return;
 
+    let optimisticClientMessageId: string | null = null;
     setIsAiProcessing(true);
     try {
       // 创建头像信息对象
@@ -231,41 +314,42 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
       const prompt = buildAIPrompt(latestContentItems);
 
       if (!prompt) {
-        setErrorMessage(t('emptyPrompt'));
+        await requestAIResponse({
+          roomId,
+          systemPrompt: selectedRole.systemPrompt,
+          roleName: selectedRole.name,
+          model: selectedAIModel || defaultAIModel
+        });
         return;
       }
 
-      // 重新加入：先发送用户消息保存到历史记录
-      await sendMessage(prompt, roomId, 'text', username, avatar, replyToMessage?.id);
-      onCancelReply();
+      const clientMessageId = createClientMessageId();
+      optimisticClientMessageId = clientMessageId;
+      const optimisticMessage = buildOptimisticTextMessage(prompt, clientMessageId, avatar, replyToMessage);
+      onOptimisticMessage?.(optimisticMessage);
+      clearEditorImmediately({ blur: true });
 
-      // 移除 prompt 参数
-      await requestAIResponse({
+      const { userMessage } = await sendMessageAndAskAI({
         roomId,
+        content: prompt,
+        username,
+        avatar,
+        replyToMessageId: replyToMessage?.id,
+        clientMessageId,
         systemPrompt: selectedRole.systemPrompt,
         roleName: selectedRole.name,
-        model: selectedAIModel || defaultAIModel
+        model: selectedAIModel || defaultAIModel,
       });
 
+      onOptimisticMessageSaved?.(clientMessageId, userMessage);
+      onCancelReply();
       console.log('Sent AI request (without prompt) with role and model:', selectedRole.name, selectedAIModel || defaultAIModel);
-
-      // 清空编辑器等后续操作不变
-      if (editorRef.current) {
-        const images = editorRef.current.querySelectorAll('img');
-        images.forEach(img => {
-          if (img.src.startsWith('blob:')) {
-            URL.revokeObjectURL(img.src);
-          }
-        });
-        editorRef.current.innerHTML = '';
-        editorRef.current.blur();
-      }
-      setContentItems(emptyMessageContent());
-      setImageCount(0);
-      imageCountRef.current = 0;
 
     } catch (error) {
       console.error('Error sending AI request:', error);
+      if (optimisticClientMessageId) {
+        onOptimisticMessageFailed?.(optimisticClientMessageId, getErrorMessage(error, t('errorSendingAiRequest')));
+      }
       setErrorMessage(t('errorSendingAiRequest'));
     } finally {
       setIsAiProcessing(false);
@@ -279,10 +363,43 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
 
     if (!hasMessageContent(latestContentItems) || isSending || isAiProcessing) return;
 
+    const avatar = { text: avatarText, color: avatarColor };
+    const outgoingItems = buildOutgoingMessageItems(latestContentItems);
+    const singleTextItem =
+      outgoingItems.length === 1 && outgoingItems[0].type === 'text'
+        ? outgoingItems[0]
+        : null;
+
+    if (singleTextItem) {
+      const clientMessageId = createClientMessageId();
+      const optimisticMessage = buildOptimisticTextMessage(singleTextItem.content, clientMessageId, avatar, replyToMessage);
+
+      onOptimisticMessage?.(optimisticMessage);
+      clearEditorImmediately();
+      onCancelReply();
+
+      sendMessage(singleTextItem.content, roomId, 'text', username, avatar, replyToMessage?.id, clientMessageId)
+        .then((savedMessage) => {
+          onOptimisticMessageSaved?.(clientMessageId, savedMessage);
+        })
+        .catch((error) => {
+          console.error('Error sending message:', error);
+          onOptimisticMessageFailed?.(clientMessageId, getErrorMessage(error, t('errorSendingMessage')));
+          setErrorMessage(t('errorSendingMessage'));
+        });
+
+      if (focusTimerRef.current) {
+        clearTimeout(focusTimerRef.current);
+      }
+      focusTimerRef.current = setTimeout(() => {
+        editorRef.current?.focus();
+        focusTimerRef.current = null;
+      }, 0);
+      return;
+    }
+
     setIsSending(true);
     try {
-      const avatar = { text: avatarText, color: avatarColor };
-      const outgoingItems = buildOutgoingMessageItems(latestContentItems);
       let replyToMessageId = replyToMessage?.id;
 
       for (const item of outgoingItems) {
@@ -330,15 +447,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ roomId, username, av
         }
       }
 
-      // Clear editor and state
-      if (editorRef.current) {
-        const images = editorRef.current.querySelectorAll('img');
-        images.forEach(img => { if (img.src.startsWith('blob:')) URL.revokeObjectURL(img.src); });
-        editorRef.current.innerHTML = '';
-      }
-      setContentItems(emptyMessageContent());
-      setImageCount(0);
-      imageCountRef.current = 0;
+      clearEditorImmediately();
       setErrorMessage(null);
 
     } catch (error) {

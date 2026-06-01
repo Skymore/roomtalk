@@ -23,12 +23,70 @@ export const sortMessages = (messages: Message[]) => {
   });
 };
 
+export const markMessageSent = (message: Message): Message => ({
+  ...message,
+  deliveryStatus: message.deliveryStatus === "failed" ? "failed" : "sent",
+  deliveryError: undefined,
+});
+
 export const upsertMessage = (messages: Message[], message: Message) => {
-  if (messages.some(existing => existing.id === message.id)) {
+  const serverMessage = message.clientMessageId ? markMessageSent(message) : message;
+
+  if (serverMessage.clientMessageId) {
+    const clientMessageIndex = messages.findIndex(existing =>
+      existing.clientMessageId === serverMessage.clientMessageId
+    );
+
+    if (clientMessageIndex !== -1) {
+      const next = [...messages];
+      next[clientMessageIndex] = serverMessage;
+      return sortMessages(next);
+    }
+  }
+
+  const idIndex = messages.findIndex(existing => existing.id === serverMessage.id);
+  if (idIndex !== -1) {
+    const next = [...messages];
+    next[idIndex] = serverMessage;
+    return sortMessages(next);
+  }
+
+  return sortMessages([...messages, serverMessage]);
+};
+
+export const addOptimisticMessage = (messages: Message[], optimisticMessage: Message) => {
+  if (messages.some(message => message.id === optimisticMessage.id)) {
     return messages;
   }
 
-  return sortMessages([...messages, message]);
+  if (
+    optimisticMessage.clientMessageId &&
+    messages.some(message => message.clientMessageId === optimisticMessage.clientMessageId)
+  ) {
+    return messages;
+  }
+
+  return sortMessages([...messages, optimisticMessage]);
+};
+
+export const replaceOptimisticMessage = (
+  messages: Message[],
+  clientMessageId: string,
+  savedMessage: Message
+) => {
+  return upsertMessage(messages, { ...savedMessage, clientMessageId });
+};
+
+export const markOptimisticMessageFailed = (
+  messages: Message[],
+  clientMessageId: string,
+  deliveryError?: string
+) => {
+  return messages.map(message =>
+    message.clientMessageId === clientMessageId
+      ? { ...message, deliveryStatus: "failed" as const, deliveryError }
+      : message
+  );
 };
 
 export const getMessageById = (messages: Message[], messageId: string) => {
