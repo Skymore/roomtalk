@@ -144,9 +144,6 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
       memberCount,
     });
 
-    const roomMessages = await store.readMessagesByRoom(roomId);
-    socket.emit('message_history', roomMessages);
-    socket.emit('ai_cost_total', await store.readRoomAICost(roomId));
   });
 
   socket.on('leave_room', async (roomId: string) => {

@@ -50,7 +50,7 @@ describe('RoomCard', () => {
     expect(screen.getByTestId('room-card').className).toContain('rounded-lg');
     fireEvent.click(card!);
 
-    expect(props.onSelect).toHaveBeenCalledWith('room-1');
+    expect(props.onSelect).toHaveBeenCalledWith(room);
   });
 
   it('does not select the room when action buttons are clicked', () => {
