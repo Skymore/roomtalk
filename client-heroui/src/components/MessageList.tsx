@@ -1,5 +1,4 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { Button } from '@heroui/react';
+import React, { useEffect, useState, useRef, useCallback, useImperativeHandle } from 'react';
 import { Icon } from '@iconify/react';
 import { requestAIResponse, requestEditMessageAndAIResponse, socket } from '../utils/socket';
 import { MessageItem } from './MessageItem';
@@ -28,9 +27,20 @@ import { EditMessageModal } from './EditMessageModal';
 interface MessageListProps {
   roomId: string;
   onReply: (message: Message) => void;
+  bottomPaddingPx?: number;
+  onScrollButtonVisibilityChange?: (isVisible: boolean) => void;
 }
 
-export const MessageList: React.FC<MessageListProps> = ({ roomId, onReply }) => {
+export interface MessageListHandle {
+  scrollToBottom: (behavior?: ScrollBehavior) => void;
+}
+
+export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
+  roomId,
+  onReply,
+  bottomPaddingPx = 16,
+  onScrollButtonVisibilityChange,
+}, ref) => {
   const { t } = useTranslation();
   // generate a stable ID for the scroll container
   const scrollContainerId = `message-list-scroll-${roomId}`;
@@ -65,6 +75,14 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId, onReply }) => 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
     messagesEndRef.current?.scrollIntoView({ behavior });
   }, []);
+
+  useImperativeHandle(ref, () => ({
+    scrollToBottom,
+  }), [scrollToBottom]);
+
+  useEffect(() => {
+    onScrollButtonVisibilityChange?.(showScrollButton);
+  }, [showScrollButton, onScrollButtonVisibilityChange]);
 
   useEffect(() => {
     return () => {
@@ -243,6 +261,7 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId, onReply }) => 
         data-testid="message-list-scroll"
         ref={containerRef}
         className="relative flex h-full w-full flex-col overflow-y-auto bg-[#f5f4ed] p-3 dark:bg-[#141413]"
+        style={{ paddingBottom: bottomPaddingPx }}
         onScroll={handleScroll}
       >
         <div className="sticky top-0 z-20 mb-2 flex justify-end">
@@ -268,21 +287,6 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId, onReply }) => 
             </div>
         )}
         <div ref={messagesEndRef} />
-        {/* Scroll Button */}
-        {showScrollButton && (
-             <Button
-                isIconOnly
-                color="primary"
-                variant="solid"
-                size="sm"
-                radius="full"
-                className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 bg-[#30302e] text-[#faf9f5] shadow-[0_0_0_1px_rgba(194,192,182,0.7),0_10px_24px_rgba(20,20,19,0.12)] dark:bg-[#faf9f5] dark:text-[#141413]"
-                aria-label={t('scrollToBottom')}
-                onPress={() => scrollToBottom('smooth')}
-                >
-                <Icon icon="lucide:arrow-down" className="w-4 h-4" />
-            </Button>
-         )}
       </div>
 
       {/* Render Modals */}
@@ -301,4 +305,6 @@ export const MessageList: React.FC<MessageListProps> = ({ roomId, onReply }) => 
       />
     </>
   );
-};
+});
+
+MessageList.displayName = 'MessageList';
