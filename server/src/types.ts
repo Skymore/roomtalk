@@ -65,6 +65,7 @@ export interface Message {
   };
   mimeType?: string;
   status?: 'streaming' | 'complete' | 'error';
+  clientMessageId?: string;
   aiModel?: {
     id: string;
     apiModel: string;

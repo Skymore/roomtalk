@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   appendAIChunk,
+  addOptimisticMessage,
   completeAIMessage,
   deleteMessageById,
   editMessageAndTruncateAfter,
   editMessageContent,
   getMessageById,
+  markOptimisticMessageFailed,
   replaceMessage,
+  replaceOptimisticMessage,
   sortMessages,
   truncateBeforeMessage,
   upsertMessage,
@@ -39,8 +42,39 @@ describe("messageState", () => {
     const duplicate = message({ id: "m1", content: "duplicate" });
     const next = message({ id: "m2", timestamp: "2026-05-03T10:00:01.000Z" });
 
-    expect(upsertMessage([first], duplicate)).toEqual([first]);
+    expect(upsertMessage([first], duplicate)).toEqual([duplicate]);
     expect(upsertMessage([first], next).map(item => item.id)).toEqual(["m1", "m2"]);
+  });
+
+  it("adds, replaces, dedupes, and fails optimistic messages by clientMessageId", () => {
+    const pending = message({
+      id: "temp-client-message-1",
+      content: "pending text",
+      clientMessageId: "client-message-1",
+      deliveryStatus: "pending",
+    });
+    const saved = message({
+      id: "server-message-1",
+      content: "saved text",
+      clientMessageId: "client-message-1",
+    });
+
+    const withPending = addOptimisticMessage([], pending);
+    expect(withPending).toEqual([pending]);
+    expect(addOptimisticMessage(withPending, pending)).toEqual([pending]);
+
+    const replaced = replaceOptimisticMessage(withPending, "client-message-1", saved);
+    expect(replaced).toEqual([{ ...saved, deliveryStatus: "sent" }]);
+
+    const duplicateBroadcast = upsertMessage(replaced, saved);
+    expect(duplicateBroadcast).toEqual([{ ...saved, deliveryStatus: "sent" }]);
+
+    const failed = markOptimisticMessageFailed(withPending, "client-message-1", "network down");
+    expect(failed[0]).toMatchObject({
+      id: "temp-client-message-1",
+      deliveryStatus: "failed",
+      deliveryError: "network down",
+    });
   });
 
   it("appends AI chunks and marks completion metadata", () => {

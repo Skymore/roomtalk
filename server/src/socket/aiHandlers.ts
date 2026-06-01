@@ -5,6 +5,8 @@ import {
   buildAIProviderMessages,
   buildAnthropicMessages,
   createAIPlaceholderMessage,
+  createReplyReference,
+  createUserMessage,
 } from '../services/messageDomain';
 import { Message } from '../types';
 import { SocketConnectionContext } from './types';
@@ -37,7 +39,25 @@ type EditMessageAndAskAIData = AIRequestData & {
   newContent: string;
 };
 
+type SendMessageAndAskAIData = AIRequestData & {
+  content: string;
+  messageType?: 'text';
+  username?: string;
+  avatar?: {
+    text: string;
+    color: string;
+  };
+  replyToMessageId?: string;
+  clientMessageId?: string;
+};
+
 type AIAckCallback = (response: { success: boolean; messageId?: string; error?: string }) => void;
+type SendMessageAndAskAIAckCallback = (response: {
+  success: boolean;
+  userMessage?: Message;
+  aiMessageId?: string;
+  error?: string;
+}) => void;
 
 export function registerAIHandlers({
   io,
@@ -445,6 +465,96 @@ export function registerAIHandlers({
     }
 
     await startAIResponse(data, clientId, callback);
+  });
+
+  socket.on('send_message_and_ask_ai', async (
+    data: SendMessageAndAskAIData,
+    callback?: SendMessageAndAskAIAckCallback,
+  ) => {
+    const clientId = await store.getClientId(socket.id);
+    if (!clientId) {
+      socket.emit('error', { message: 'You are not registered' });
+      callback?.({ success: false, error: 'You are not registered' });
+      return;
+    }
+
+    if (!data.roomId) {
+      socket.emit('error', { message: 'Room ID is required for AI request' });
+      callback?.({ success: false, error: 'Room ID is required for AI request' });
+      return;
+    }
+
+    if (typeof data.content !== 'string' || !data.content.trim()) {
+      callback?.({ success: false, error: 'Message content is required' });
+      return;
+    }
+
+    let roomMessages: Message[] = [];
+    let replyTo;
+    if (data.replyToMessageId) {
+      roomMessages = await store.readMessagesByRoom(data.roomId);
+      const quotedMessage = roomMessages.find(message => message.id === data.replyToMessageId);
+      if (!quotedMessage) {
+        callback?.({ success: false, error: 'Quoted message not found' });
+        return;
+      }
+      replyTo = createReplyReference(quotedMessage);
+    }
+
+    const userMessage = createUserMessage({
+      id: uuidv4(),
+      clientId,
+      content: data.content,
+      roomId: data.roomId,
+      messageType: 'text',
+      username: data.username,
+      avatar: data.avatar,
+      replyTo,
+      clientMessageId: data.clientMessageId,
+    });
+
+    const updatedRoom = await store.appendMessage(userMessage);
+    if (!updatedRoom) {
+      socketLogger.error('Failed to append WebSocket message before AI request', {
+        messageId: userMessage.id,
+        roomId: data.roomId,
+        clientId,
+      });
+      socket.emit('error', { message: 'Failed to save message' });
+      callback?.({ success: false, error: 'Failed to save message' });
+      return;
+    }
+
+    io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+    io.to(data.roomId).emit('new_message', userMessage);
+
+    const latestHistory = await store.readMessagesByRoom(data.roomId);
+    const preparedHistory = latestHistory.some(message => message.id === userMessage.id)
+      ? latestHistory
+      : [...latestHistory, userMessage];
+
+    await startAIResponse(
+      {
+        roomId: data.roomId,
+        systemPrompt: data.systemPrompt,
+        roleName: data.roleName,
+        model: data.model,
+      },
+      clientId,
+      (response) => {
+        if (response.success && response.messageId) {
+          callback?.({
+            success: true,
+            userMessage,
+            aiMessageId: response.messageId,
+          });
+          return;
+        }
+
+        callback?.({ success: false, error: response.error || 'Failed to start AI response' });
+      },
+      preparedHistory,
+    );
   });
 
   socket.on('edit_message_and_ask_ai', async (data: EditMessageAndAskAIData, callback?: AIAckCallback) => {
