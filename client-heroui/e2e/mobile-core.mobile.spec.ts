@@ -28,7 +28,7 @@ test('creates a room and sends a message on mobile', async ({ page, context }) =
   await sendTextMessage(page, message);
 });
 
-test('keeps the chat scroller expanded above the mobile input panel', async ({ page, context, request }) => {
+test('keeps the chat scroller stable while the mobile keyboard and input height change', async ({ page, context, request }) => {
   const clientId = await seedClient(context);
   const room = await createRoomViaApi(request, clientId, shortName('mobile-layout'));
 
@@ -43,15 +43,17 @@ test('keeps the chat scroller expanded above the mobile input panel', async ({ p
   await expect(inputPanel).toBeVisible();
   await expect(bottomNav).toBeVisible();
 
-  const layout = await page.evaluate(() => {
+  const readLayout = () => page.evaluate(() => {
     const rectFor = (testId: string) => {
       const element = document.querySelector(`[data-testid="${testId}"]`);
       if (!element) throw new Error(`Missing ${testId}`);
       const rect = element.getBoundingClientRect();
+      const styles = getComputedStyle(element);
       return {
         top: rect.top,
         bottom: rect.bottom,
         height: rect.height,
+        paddingBottom: styles.paddingBottom,
       };
     };
 
@@ -63,7 +65,21 @@ test('keeps the chat scroller expanded above the mobile input panel', async ({ p
     };
   });
 
-  expect(layout.messageList.height).toBeGreaterThan(layout.viewportHeight * 0.2);
-  expect(layout.inputPanel.top).toBeGreaterThanOrEqual(layout.messageList.bottom - 1);
-  expect(layout.bottomNav.top - layout.inputPanel.bottom).toBeLessThanOrEqual(4);
+  const baseline = await readLayout();
+
+  await page.getByTestId('message-editor').click();
+  await page.evaluate(() => {
+    document.documentElement.style.setProperty('--app-keyboard-inset', '324px');
+  });
+  await page.keyboard.insertText('line 1\nline 2\nline 3\nline 4\nline 5\nline 6');
+
+  const keyboardOpen = await readLayout();
+
+  expect(baseline.messageList.height).toBeGreaterThan(baseline.viewportHeight * 0.2);
+  expect(keyboardOpen.messageList.top).toBeCloseTo(baseline.messageList.top, 1);
+  expect(keyboardOpen.messageList.bottom).toBeCloseTo(baseline.messageList.bottom, 1);
+  expect(keyboardOpen.messageList.height).toBeCloseTo(baseline.messageList.height, 1);
+  expect(keyboardOpen.messageList.paddingBottom).toBe(baseline.messageList.paddingBottom);
+  expect(keyboardOpen.inputPanel.bottom).toBeLessThan(baseline.inputPanel.bottom);
+  expect(keyboardOpen.inputPanel.height).toBeGreaterThan(baseline.inputPanel.height);
 });
