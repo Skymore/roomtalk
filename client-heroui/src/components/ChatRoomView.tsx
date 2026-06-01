@@ -46,9 +46,9 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
 }) => {
   const { t } = useTranslation();
   const [replyToMessage, setReplyToMessage] = React.useState<Message | null>(null);
+  const chatBodyRef = React.useRef<HTMLDivElement>(null);
   const composerRef = React.useRef<HTMLDivElement>(null);
   const messageListRef = React.useRef<MessageListHandle>(null);
-  const [composerHeight, setComposerHeight] = React.useState(96);
   const [showScrollButton, setShowScrollButton] = React.useState(false);
 
   React.useEffect(() => {
@@ -58,10 +58,11 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
 
   React.useLayoutEffect(() => {
     const el = composerRef.current;
+    const body = chatBodyRef.current;
     if (!el) return;
 
     const update = () => {
-      setComposerHeight(Math.ceil(el.getBoundingClientRect().height));
+      body?.style.setProperty('--rt-composer-height', `${Math.ceil(el.getBoundingClientRect().height)}px`);
     };
 
     update();
@@ -96,12 +97,11 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
         clientId={clientId}
       />
 
-      <div className="relative min-h-0 w-full flex-1 overflow-hidden">
+      <div ref={chatBodyRef} className="relative min-h-0 w-full flex-1 overflow-hidden [--rt-composer-height:132px]">
         <MessageList
           ref={messageListRef}
           roomId={currentRoom.id}
           onReply={setReplyToMessage}
-          bottomPaddingPx={composerHeight + 12}
           onScrollButtonVisibilityChange={setShowScrollButton}
         />
 
@@ -113,7 +113,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
             size="sm"
             radius="full"
             className="absolute left-1/2 z-40 -translate-x-1/2 bg-[#30302e] text-[#faf9f5] shadow-[0_0_0_1px_rgba(194,192,182,0.7),0_10px_24px_rgba(20,20,19,0.16)] dark:bg-[#faf9f5] dark:text-[#141413]"
-            style={{ bottom: composerHeight + 16 }}
+            style={{ bottom: 'calc(max(0px, calc(var(--app-keyboard-inset, 0px) - var(--rt-bottom-nav-height, 0px))) + var(--rt-composer-height, 132px) + 16px)' }}
             aria-label={t('scrollToBottom')}
             onPress={() => messageListRef.current?.scrollToBottom('smooth')}
           >
@@ -124,7 +124,8 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
         <div
           ref={composerRef}
           data-testid="message-input-panel"
-          className="absolute inset-x-0 bottom-0 z-30 border-t border-[#dedbd0] bg-[#faf9f5]/92 p-2 backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/92 md:p-3"
+          className="absolute inset-x-0 z-30 border-t border-[#dedbd0] bg-[#faf9f5]/92 p-2 backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/92 md:p-3"
+          style={{ bottom: 'max(0px, calc(var(--app-keyboard-inset, 0px) - var(--rt-bottom-nav-height, 0px)))' }}
         >
           <MessageInput
             roomId={currentRoom.id}

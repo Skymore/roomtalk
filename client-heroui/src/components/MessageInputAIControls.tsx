@@ -301,6 +301,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               onPress={onAskAI}
               isLoading={isAiProcessing}
               isDisabled={isSending}
+              aria-label={t('askAI')}
               className="h-8 w-8 min-w-8 rounded-full bg-[#30302e] px-0 text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413] sm:h-9 sm:w-auto sm:min-w-9 sm:px-3"
             >
               <Icon icon={selectedRole.icon} className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
@@ -316,6 +317,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               size="sm"
               isLoading={isSending}
               isDisabled={isSending || isAiProcessing || (!currentInputText.trim() && imageCount === 0)}
+              aria-label={t('send')}
               className="h-8 w-8 min-w-8 rounded-full bg-[#c96442] px-0 text-[#faf9f5] shadow-[0_0_0_1px_#c96442] sm:h-9 sm:w-auto sm:min-w-9 sm:px-3"
             >
               <Icon icon="lucide:arrow-up" className="h-3.5 w-3.5 sm:h-4 sm:w-4" />

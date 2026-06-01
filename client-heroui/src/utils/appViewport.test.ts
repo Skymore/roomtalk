@@ -38,6 +38,8 @@ describe('installAppViewportSizing', () => {
   beforeEach(() => {
     document.documentElement.style.removeProperty('--app-height');
     document.documentElement.style.removeProperty('--app-viewport-top');
+    document.documentElement.style.removeProperty('--app-keyboard-inset');
+    document.body.innerHTML = '';
 
     Object.defineProperty(window, 'innerHeight', {
       configurable: true,
@@ -56,21 +58,40 @@ describe('installAppViewportSizing', () => {
     setVisualViewport(undefined);
   });
 
-  it('uses visualViewport height and updates it on visual viewport resize', () => {
+  const focusEditable = () => {
+    const editor = document.createElement('input');
+    document.body.appendChild(editor);
+    editor.focus();
+    return editor;
+  };
+
+  it('uses a stable layout height and initializes keyboard vars', () => {
     const viewport = createVisualViewport(640);
     setVisualViewport(viewport);
 
     const cleanup = installAppViewportSizing();
 
-    expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('640px');
+    expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('800px');
     expect(document.documentElement.style.getPropertyValue('--app-viewport-top')).toBe('0px');
+    expect(document.documentElement.style.getPropertyValue('--app-keyboard-inset')).toBe('0px');
+
+    cleanup();
+  });
+
+  it('keeps app height stable when the visual viewport shrinks around a focused editor', () => {
+    const viewport = createVisualViewport(640);
+    setVisualViewport(viewport);
+
+    const cleanup = installAppViewportSizing();
+    focusEditable();
 
     viewport.height = 420;
     viewport.offsetTop = 24;
     viewport.dispatch('resize');
 
-    expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('420px');
+    expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('800px');
     expect(document.documentElement.style.getPropertyValue('--app-viewport-top')).toBe('24px');
+    expect(document.documentElement.style.getPropertyValue('--app-keyboard-inset')).toBe('380px');
 
     cleanup();
 
@@ -78,22 +99,25 @@ describe('installAppViewportSizing', () => {
     viewport.offsetTop = 48;
     viewport.dispatch('resize');
 
-    expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('420px');
+    expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('800px');
     expect(document.documentElement.style.getPropertyValue('--app-viewport-top')).toBe('24px');
+    expect(document.documentElement.style.getPropertyValue('--app-keyboard-inset')).toBe('380px');
   });
 
-  it('updates visualViewport top offset on mobile keyboard panning without changing height', () => {
+  it('updates keyboard overlay vars on mobile keyboard panning without changing height', () => {
     const viewport = createVisualViewport(640);
     setVisualViewport(viewport);
 
     const cleanup = installAppViewportSizing();
+    focusEditable();
 
     viewport.height = 420;
     viewport.offsetTop = 180;
     viewport.dispatch('scroll');
 
-    expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('640px');
+    expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('800px');
     expect(document.documentElement.style.getPropertyValue('--app-viewport-top')).toBe('180px');
+    expect(document.documentElement.style.getPropertyValue('--app-keyboard-inset')).toBe('380px');
 
     cleanup();
   });
@@ -105,6 +129,7 @@ describe('installAppViewportSizing', () => {
 
     expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('800px');
     expect(document.documentElement.style.getPropertyValue('--app-viewport-top')).toBe('0px');
+    expect(document.documentElement.style.getPropertyValue('--app-keyboard-inset')).toBe('0px');
 
     cleanup();
   });
