@@ -39,7 +39,8 @@ interface DesktopSidebarProps {
   toggleTheme: () => void;
   isDark: boolean;
   handleCopyToClipboard: (text: string) => void;
-  onRoomSelect: (roomId: string) => void;
+  onRoomSelect: (room: Room) => void;
+  onRoomSelectById: (roomId: string) => void;
   onDeleteRoom: (roomId: string) => void;
   onUnsaveRoom: (roomId: string) => void;
   onRenameRoom: RoomRenameHandler;
@@ -269,6 +270,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
   isDark,
   handleCopyToClipboard,
   onRoomSelect,
+  onRoomSelectById,
   onDeleteRoom,
   onUnsaveRoom,
   onRenameRoom,
@@ -288,7 +290,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
   const handleJoinRoom = () => {
     const trimmedRoomId = joinRoomId.trim();
     if (!trimmedRoomId) return;
-    onRoomSelect(trimmedRoomId);
+    onRoomSelectById(trimmedRoomId);
     setJoinRoomId('');
   };
 
@@ -324,7 +326,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
       setNewRoomName('');
       setNewRoomDescription('');
       setIsCreateOpen(false);
-      onRoomSelect(roomId as string);
+      onRoomSelectById(roomId as string);
     } catch (error) {
       console.error('Error creating room from sidebar:', error);
     } finally {
@@ -477,7 +479,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
                     isActive={currentRoom?.id === room.id && view === 'chat'}
                     icon="lucide:message-square"
                     isCollapsed={isCollapsed}
-                    onPress={() => onRoomSelect(room.id)}
+                    onPress={() => onRoomSelect(room)}
                     onCopyRoomId={handleCopyToClipboard}
                     onShareRoom={handleShareRoom}
                     onRenameRoom={setRoomToRename}
@@ -511,7 +513,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
                     isActive={currentRoom?.id === room.id && view === 'chat'}
                     icon="lucide:bookmark"
                     isCollapsed={isCollapsed}
-                    onPress={() => onRoomSelect(room.id)}
+                    onPress={() => onRoomSelect(room)}
                     onCopyRoomId={handleCopyToClipboard}
                     onShareRoom={handleShareRoom}
                     onUnsaveRoom={(savedRoom) => onUnsaveRoom(savedRoom.id)}

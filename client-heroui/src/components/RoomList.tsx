@@ -20,14 +20,15 @@ import { RoomRenameModal } from './RoomRenameModal';
 
 interface RoomListProps {
   rooms: Room[];
-  onRoomSelect: (roomId: string, isNotOwned?: boolean) => void;
+  onRoomSelect: (room: Room) => void;
+  onRoomSelectById: (roomId: string) => void;
   handleDeleteRoom: (roomId: string) => void;
   handleRenameRoom: RoomRenameHandler;
   clientId: string;
   username: string;
 }
 
-export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleDeleteRoom, handleRenameRoom, clientId, username }) => {
+export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, onRoomSelectById, handleDeleteRoom, handleRenameRoom, clientId, username }) => {
   const { t } = useTranslation();
   const { isOpen, onOpen, onClose } = useDisclosure();
   const [newRoomName, setNewRoomName] = useState('');
@@ -92,7 +93,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
       setNewRoomName('');
       setNewRoomDescription('');
       onClose();
-      onRoomSelect(roomId as string);
+      onRoomSelectById(roomId as string);
     } catch (error) {
       console.error('Error creating room:', error);
     } finally {
@@ -103,7 +104,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, handleD
   const handleJoinRoom = () => {
     const trimmedId = joinRoomId.trim();
     if (!trimmedId) return;
-    onRoomSelect(trimmedId, true);
+    onRoomSelectById(trimmedId);
     setJoinRoomId('');
   };
 
