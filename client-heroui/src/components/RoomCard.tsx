@@ -11,7 +11,7 @@ interface RoomCardProps {
   clientId: string;
   copiedRoomId: string | null;
   copiedLinkId: string | null;
-  onSelect: (roomId: string) => void;
+  onSelect: (room: Room) => void;
   onCopyRoomId: (roomId: string) => void;
   onCopyRoomLink: (roomId: string) => void;
   onRename: (room: Room) => void;
@@ -58,7 +58,7 @@ export const RoomCard: React.FC<RoomCardProps> = ({
         <button
           type="button"
           className="flex min-w-0 flex-1 items-start text-left outline-none"
-          onClick={() => onSelect(room.id)}
+          onClick={() => onSelect(room)}
         >
           <div className="mr-3 rounded-xl bg-[#e8e6dc] p-2.5 text-[#c96442] dark:bg-[#30302e] dark:text-[#d97757]">
             <Icon icon="lucide:message-circle" className="h-5 w-5" aria-hidden="true" />

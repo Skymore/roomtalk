@@ -39,6 +39,7 @@ export const MessagePage: React.FC = () => {
   // 不操作 html/body 滚动，页面固定高度由容器本身管理
   // 添加初始化标志，防止初始渲染时清除存储的房间
   const isInitialMount = useRef(true);
+  const pendingRestoreRoomIdRef = useRef<string | null>(null);
   // 页面高度由 App shell 的 visual viewport 变量控制
   const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
@@ -59,7 +60,7 @@ export const MessagePage: React.FC = () => {
 
   const [isLoadingRoom, setIsLoadingRoom] = useState(false);
   // 当 URL 参数包含房间时，先保存待确认的房间信息
-  const [roomToJoin, setRoomToJoin] = useState<{ id: string; name: string } | null>(null);
+  const [roomToJoin, setRoomToJoin] = useState<Room | null>(null);
   // 添加房间成员数量状态
   const [memberCount, setMemberCount] = useState<number>(0);
   // 添加最近加入/离开消息状态
@@ -178,44 +179,50 @@ export const MessagePage: React.FC = () => {
     }
 
     // 如果没有URL房间参数，且当前没有活跃房间，尝试从localStorage恢复
-    if (!currentRoom && !isLoadingRoom) {
+    if (!currentRoom) {
       const storedRoom = getStoredRoom();
 
       if (storedRoom) {
-        setIsLoadingRoom(true);
         console.log("Found stored room, attempting to restore:", storedRoom.id);
+        pendingRestoreRoomIdRef.current = storedRoom.id;
+        setCurrentRoom(storedRoom);
+
+        const savedView = getStoredView();
+        console.log("Restored stored room shell with saved view:", savedView);
+
+        if (savedView === "chat" && view !== "chat") {
+          setView("chat");
+        }
 
         // 验证房间是否仍然存在
         getRoomById(storedRoom.id)
           .then((roomInfo) => {
-            setIsLoadingRoom(false);
+            if (pendingRestoreRoomIdRef.current !== storedRoom.id) {
+              return;
+            }
+
+            pendingRestoreRoomIdRef.current = null;
             if (roomInfo) {
               console.log("Successfully restored room:", roomInfo.name);
-              joinRoom(storedRoom.id);
               setCurrentRoom(roomInfo);
-              setMemberCount(getRoomMemberCount(storedRoom.id));
-
-              // 根据保存的视图状态决定是否切换到chat视图
-              const savedView = getStoredView();
-              console.log("Restored room with saved view:", savedView);
-
-              // 只有当保存的视图是chat时，才切换到chat视图
-              if (savedView === "chat" && view !== "chat") {
-                console.log("Switching to chat view based on saved view state");
-                setView("chat");
-              } else {
-                console.log("Keeping current view:", view);
-              }
+              joinRoom(roomInfo.id);
+              setMemberCount(getRoomMemberCount(roomInfo.id));
             } else {
               console.log("Stored room no longer exists");
               // 房间不存在，清除存储
+              setCurrentRoom(null);
               saveCurrentRoom(null);
               setError(t("errorRoomNoLongerExists"));
             }
           })
           .catch((err) => {
+            if (pendingRestoreRoomIdRef.current !== storedRoom.id) {
+              return;
+            }
+
+            pendingRestoreRoomIdRef.current = null;
             console.error("Error restoring room:", err);
-            setIsLoadingRoom(false);
+            setCurrentRoom(null);
             saveCurrentRoom(null);
             setError(t("errorRestoringRoom"));
           });
@@ -236,7 +243,7 @@ export const MessagePage: React.FC = () => {
           setIsLoadingRoom(false);
           if (roomInfo) {
             // 始终要求用户确认后进入房间
-            setRoomToJoin({ id: roomIdFromUrl, name: roomInfo.name });
+            setRoomToJoin(roomInfo);
           } else {
             setError(t("errorRoomNotFound", { roomId: roomIdFromUrl }));
           }
@@ -327,23 +334,33 @@ export const MessagePage: React.FC = () => {
   }, [currentRoom]);
 
   // 直接加入房间：点击房间卡片或确认弹窗后调用
-  const handleRoomSelect = async (roomId: string) => {
+  const handleRoomSelect = (room: Room) => {
+    pendingRestoreRoomIdRef.current = null;
+
     // 如果已经在其他房间，则先离开
-    if (currentRoom && currentRoom.id !== roomId) {
+    if (currentRoom && currentRoom.id !== room.id) {
       leaveRoom(currentRoom.id);
     }
+
+    joinRoom(room.id);
+    setCurrentRoom(room);
+    // 更新成员数量
+    setMemberCount(getRoomMemberCount(room.id));
+    // 进入房间时切换到聊天视图
+    setView("chat");
+    clearRoomUrlParam();
+  };
+
+  const handleRoomSelectById = async (roomId: string) => {
+    pendingRestoreRoomIdRef.current = null;
+
     const roomInfo = await getRoomById(roomId);
     if (!roomInfo) {
       setError(t("errorRoomNotFound", { roomId }));
       return;
     }
-    joinRoom(roomId);
-    setCurrentRoom(roomInfo);
-    // 更新成员数量
-    setMemberCount(getRoomMemberCount(roomId));
-    // 进入房间时切换到聊天视图
-    setView("chat");
-    clearRoomUrlParam();
+
+    handleRoomSelect(roomInfo);
   };
 
   // URL 加载的房间确认操作
@@ -353,14 +370,14 @@ export const MessagePage: React.FC = () => {
       clearRoomUrlParam();
       return;
     }
-    // 确保进入房间后切换到聊天视图，这样不会使用设置页(max-w-md)布局
-    setView("chat");
-    handleRoomSelect(roomToJoin.id);
+    handleRoomSelect(roomToJoin);
     setRoomToJoin(null);
   };
 
   // 离开当前房间
   const handleLeaveRoom = () => {
+    pendingRestoreRoomIdRef.current = null;
+
     if (currentRoom) {
       leaveRoom(currentRoom.id);
       setCurrentRoom(null);
@@ -478,6 +495,7 @@ export const MessagePage: React.FC = () => {
             <RoomList
               rooms={rooms}
               onRoomSelect={handleRoomSelect}
+              onRoomSelectById={handleRoomSelectById}
               handleDeleteRoom={handleDeleteRoom}
               handleRenameRoom={handleRenameRoom}
               clientId={clientId}
@@ -568,6 +586,7 @@ export const MessagePage: React.FC = () => {
           isDark={isDark}
           handleCopyToClipboard={handleCopyToClipboard}
           onRoomSelect={handleRoomSelect}
+          onRoomSelectById={handleRoomSelectById}
           onDeleteRoom={handleDeleteRoom}
           onUnsaveRoom={handleUnsaveRoom}
           onRenameRoom={handleRenameRoom}

@@ -47,6 +47,7 @@ export const useRoomMessageEvents = ({
     updateMessages([]);
     setIsLoading(true);
     setSessionCostUsd(0);
+    setShowScrollButton(false);
     closeDeleteModal();
     closeEditModal();
     let scrollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -66,6 +67,7 @@ export const useRoomMessageEvents = ({
       const roomMessages = sortMessages(messageHistory.filter(message => message.roomId === roomId));
       updateMessages(roomMessages);
       setIsLoading(false);
+      setShowScrollButton(false);
       scheduleScroll('auto', 100);
     };
 

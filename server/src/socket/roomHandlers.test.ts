@@ -215,7 +215,7 @@ describe('room socket handlers', () => {
     assert.deepEqual(valid.io.roomEmits, [{ roomId: 'client-1', event: 'new_room', args: [valid.store.savedRooms[0]] }]);
   });
 
-  it('joins existing rooms, leaves previous rooms, and sends room state', async () => {
+  it('joins existing rooms and leaves previous rooms without sending message history', async () => {
     const unregistered = createHarness(null);
     await unregistered.socket.invoke('join_room', 'room-1');
     assert.deepEqual(unregistered.socket.emitted, [{ event: 'error', args: [{ message: 'You are not registered' }] }]);
@@ -236,10 +236,7 @@ describe('room socket handlers', () => {
     assert.equal(valid.socket.roomEmits[0].event, 'room_member_change');
     assert.equal(valid.io.roomEmits[0].roomId, 'room-1');
     assert.equal(valid.io.roomEmits[0].event, 'room_member_change');
-    assert.deepEqual(valid.socket.emitted, [
-      { event: 'message_history', args: [[message()]] },
-      { event: 'ai_cost_total', args: [roomCost()] },
-    ]);
+    assert.deepEqual(valid.socket.emitted, []);
   });
 
   it('leaves rooms and updates stored socket memberships', async () => {

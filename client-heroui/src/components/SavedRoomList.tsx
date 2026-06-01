@@ -8,7 +8,7 @@ import { formatDate } from '../utils/formatters';
 
 interface SavedRoomListProps {
   rooms: Room[];
-  onRoomSelect: (roomId: string) => void;
+  onRoomSelect: (room: Room) => void;
   onRoomsChange: (rooms: Room[]) => void;
 }
 
@@ -42,8 +42,8 @@ export const SavedRoomList: React.FC<SavedRoomListProps> = ({
     closeDeleteConfirm();
   };
 
-  const selectRoom = (roomId: string) => {
-    onRoomSelect(roomId);
+  const selectRoom = (room: Room) => {
+    onRoomSelect(room);
   };
 
   if (rooms.length === 0) {
@@ -79,7 +79,7 @@ export const SavedRoomList: React.FC<SavedRoomListProps> = ({
               <button
                 type="button"
                 className="flex min-w-0 flex-1 items-start text-left outline-none"
-                onClick={() => selectRoom(room.id)}
+                onClick={() => selectRoom(room)}
               >
                 <div className="mr-3 rounded-xl bg-[#e8e6dc] p-2 text-[#c96442] dark:bg-[#30302e] dark:text-[#d97757]">
                   <Icon icon="lucide:bookmark" />

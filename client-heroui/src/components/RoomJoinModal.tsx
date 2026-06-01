@@ -1,9 +1,10 @@
 import React from 'react';
 import { Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Button } from "@heroui/react";
 import { useTranslation } from "react-i18next";
+import { Room } from '../utils/types';
 
 interface RoomJoinModalProps {
-  roomToJoin: { id: string; name: string } | null;
+  roomToJoin: Room | null;
   handleConfirmJoin: (confirmed: boolean) => void;
 }
 
