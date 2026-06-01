@@ -28,6 +28,7 @@ interface MessageListProps {
   roomId: string;
   onReply: (message: Message) => void;
   bottomPaddingPx?: number;
+  bottomPadding?: string;
   onScrollButtonVisibilityChange?: (isVisible: boolean) => void;
 }
 
@@ -38,7 +39,8 @@ export interface MessageListHandle {
 export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
   roomId,
   onReply,
-  bottomPaddingPx = 16,
+  bottomPaddingPx,
+  bottomPadding,
   onScrollButtonVisibilityChange,
 }, ref) => {
   const { t } = useTranslation();
@@ -261,7 +263,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
         data-testid="message-list-scroll"
         ref={containerRef}
         className="relative flex h-full w-full flex-col overflow-y-auto bg-[#f5f4ed] p-3 dark:bg-[#141413]"
-        style={{ paddingBottom: bottomPaddingPx }}
+        style={{ paddingBottom: bottomPadding ?? (bottomPaddingPx ? `${bottomPaddingPx}px` : 'var(--rt-message-list-bottom-padding, 180px)') }}
         onScroll={handleScroll}
       >
         <div className="sticky top-0 z-20 mb-2 flex justify-end">

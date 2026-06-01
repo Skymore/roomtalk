@@ -3,8 +3,11 @@
 @tailwind utilities;
 
 :root {
-  --app-height: 100dvh;
+  --app-height: 100svh;
   --app-viewport-top: 0px;
+  --app-keyboard-inset: 0px;
+  --rt-bottom-nav-height: calc(3.3125rem + max(env(safe-area-inset-bottom), 0.5rem));
+  --rt-message-list-bottom-padding: 240px;
   --rt-paper: #f5f4ed;
   --rt-ivory: #faf9f5;
   --rt-sand: #e8e6dc;
@@ -59,15 +62,17 @@ body {
 
 .app-shell {
   position: fixed;
-  top: var(--app-viewport-top, 0px);
+  top: 0;
   left: 0;
   right: 0;
   width: 100%;
   height: 100vh;
-  height: 100dvh;
-  height: var(--app-height, 100dvh);
+  height: 100svh;
+  height: var(--app-height, 100svh);
   overflow: hidden;
   background: var(--rt-paper);
+  transform: translate3d(0, var(--app-viewport-top, 0px), 0);
+  will-change: transform;
 }
 
 .dark .app-shell {
@@ -80,6 +85,13 @@ body {
 
 .safe-top {
   padding-top: max(env(safe-area-inset-top), 0rem);
+}
+
+@media (min-width: 768px) {
+  :root {
+    --rt-bottom-nav-height: 0px;
+    --rt-message-list-bottom-padding: 180px;
+  }
 }
 
 .roomtalk-ring {
