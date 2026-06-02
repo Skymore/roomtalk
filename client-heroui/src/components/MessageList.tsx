@@ -23,6 +23,9 @@ import { useRoomMessageEvents } from '../hooks/useRoomMessageEvents';
 import { DeleteConfirmationModal } from './DeleteConfirmationModal';
 import { EditMessageModal } from './EditMessageModal';
 
+const INITIAL_VISIBLE_MESSAGE_COUNT = 80;
+const LOAD_MORE_MESSAGE_COUNT = 80;
+
 // Reminder: Set the app element for react-modal for accessibility
 // Ideally in your root component file (e.g., App.tsx or main.tsx)
 // Modal.setAppElement('#root');
@@ -31,7 +34,6 @@ interface MessageListProps {
   roomId: string;
   onReply: (message: Message) => void;
   bottomPaddingPx?: number;
-  bottomPadding?: string;
   onScrollButtonVisibilityChange?: (isVisible: boolean) => void;
 }
 
@@ -45,8 +47,7 @@ export interface MessageListHandle {
 export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
   roomId,
   onReply,
-  bottomPaddingPx,
-  bottomPadding,
+  bottomPaddingPx = 16,
   onScrollButtonVisibilityChange,
 }, ref) => {
   const { t } = useTranslation();
@@ -57,7 +58,11 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const retryScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isNearBottomRef = useRef(true);
+  const preserveScrollRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
+  const pendingScrollFrameRef = useRef<number | null>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
+  const [visibleMessageLimit, setVisibleMessageLimit] = useState(INITIAL_VISIBLE_MESSAGE_COUNT);
   // State for modals
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [messageToDelete, setMessageToDelete] = useState<Message | null>(null);
@@ -84,15 +89,27 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     messagesEndRef.current?.scrollIntoView({ behavior });
   }, []);
 
+  const scheduleScrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
+    if (typeof requestAnimationFrame !== 'function') {
+      scrollToBottom(behavior);
+      return;
+    }
+
+    if (pendingScrollFrameRef.current !== null) {
+      cancelAnimationFrame(pendingScrollFrameRef.current);
+    }
+
+    pendingScrollFrameRef.current = requestAnimationFrame(() => {
+      pendingScrollFrameRef.current = null;
+      scrollToBottom(behavior);
+    });
+  }, [scrollToBottom]);
+
   useImperativeHandle(ref, () => ({
     scrollToBottom,
     addOptimisticMessage: (message: Message) => {
       updateMessages(prev => addOptimisticMessage(prev, message));
-      if (typeof requestAnimationFrame === 'function') {
-        requestAnimationFrame(() => scrollToBottom('auto'));
-      } else {
-        scrollToBottom('auto');
-      }
+      scheduleScrollToBottom('auto');
     },
     replaceOptimisticMessage: (clientMessageId: string, savedMessage: Message) => {
       updateMessages(prev => replaceOptimisticMessage(prev, clientMessageId, savedMessage));
@@ -100,7 +117,26 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     markOptimisticMessageFailed: (clientMessageId: string, error?: string) => {
       updateMessages(prev => markOptimisticMessageFailed(prev, clientMessageId, error));
     },
-  }), [scrollToBottom, updateMessages]);
+  }), [scheduleScrollToBottom, scrollToBottom, updateMessages]);
+
+  const visibleMessages = React.useMemo(() => {
+    const startIndex = Math.max(0, messages.length - visibleMessageLimit);
+    return messages.slice(startIndex);
+  }, [messages, visibleMessageLimit]);
+
+  const hiddenMessageCount = Math.max(0, messages.length - visibleMessages.length);
+
+  const handleLoadMore = useCallback(() => {
+    const container = containerRef.current;
+    if (container) {
+      preserveScrollRef.current = {
+        scrollHeight: container.scrollHeight,
+        scrollTop: container.scrollTop,
+      };
+    }
+
+    setVisibleMessageLimit(prev => prev + LOAD_MORE_MESSAGE_COUNT);
+  }, []);
 
   useEffect(() => {
     onScrollButtonVisibilityChange?.(showScrollButton);
@@ -111,8 +147,46 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       if (retryScrollTimerRef.current) {
         clearTimeout(retryScrollTimerRef.current);
       }
+      if (pendingScrollFrameRef.current !== null && typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(pendingScrollFrameRef.current);
+      }
     };
   }, []);
+
+  useEffect(() => {
+    setVisibleMessageLimit(INITIAL_VISIBLE_MESSAGE_COUNT);
+    isNearBottomRef.current = true;
+  }, [roomId]);
+
+  React.useLayoutEffect(() => {
+    const preserveScroll = preserveScrollRef.current;
+    const container = containerRef.current;
+    if (!preserveScroll || !container) return;
+
+    preserveScrollRef.current = null;
+    container.scrollTop = preserveScroll.scrollTop + (container.scrollHeight - preserveScroll.scrollHeight);
+  }, [visibleMessages.length]);
+
+  React.useLayoutEffect(() => {
+    if (isNearBottomRef.current) {
+      scheduleScrollToBottom('auto');
+    }
+  }, [bottomPaddingPx, scheduleScrollToBottom]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || typeof ResizeObserver === 'undefined') return;
+
+    const observer = new ResizeObserver(() => {
+      if (isNearBottomRef.current) {
+        scheduleScrollToBottom('auto');
+      }
+    });
+
+    observer.observe(container);
+
+    return () => observer.disconnect();
+  }, [scheduleScrollToBottom]);
 
   // --- Modal Handlers (Keep dependencies as they are or simplify if possible) ---
   const handleOpenDeleteModal = useCallback((messageId: string) => {
@@ -269,6 +343,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     const container = containerRef.current;
     if (container) {
       const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
+      isNearBottomRef.current = isAtBottom;
       setShowScrollButton(!isAtBottom && messages.length > 0);
     }
   };
@@ -283,7 +358,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
         data-testid="message-list-scroll"
         ref={containerRef}
         className="relative flex h-full w-full flex-col overflow-y-auto bg-[#f5f4ed] p-3 dark:bg-[#141413]"
-        style={{ paddingBottom: bottomPadding ?? (bottomPaddingPx ? `${bottomPaddingPx}px` : 'var(--rt-message-list-bottom-padding, 180px)') }}
+        style={{ paddingBottom: bottomPaddingPx }}
         onScroll={handleScroll}
       >
         <div className="sticky top-0 z-20 mb-2 flex justify-end">
@@ -292,10 +367,21 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
             <span>{t('sessionCost')}: {formatUsdCost(sessionCostUsd)}</span>
           </div>
         </div>
+        {hiddenMessageCount > 0 && (
+          <div className="mb-3 flex justify-center">
+            <button
+              type="button"
+              onClick={handleLoadMore}
+              className="rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-3 py-1.5 text-xs font-medium text-[#4d4c48] shadow-sm backdrop-blur transition hover:border-[#c2c0b6] hover:text-[#141413] dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc] dark:hover:text-[#faf9f5]"
+            >
+              {t('loadMoreMessages', { count: Math.min(hiddenMessageCount, LOAD_MORE_MESSAGE_COUNT) })}
+            </button>
+          </div>
+        )}
         {/* ... Loading/Empty/List rendering ... */}
          {!isLoading && messages.length > 0 && (
             <div className="flex flex-col space-y-2 pb-4">
-                {messages
+                {visibleMessages
                 .map((message) => (
                     <MessageItem
                     key={message.id}
