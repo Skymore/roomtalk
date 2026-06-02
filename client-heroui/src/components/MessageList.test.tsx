@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Message } from '../utils/types';
@@ -155,5 +155,36 @@ describe('MessageList optimistic messages', () => {
     expect(await screen.findByText('will fail')).toBeTruthy();
     expect(screen.getByTestId('message-item').getAttribute('data-delivery-status')).toBe('failed');
     expect(screen.getByTestId('message-item').getAttribute('data-delivery-error')).toBe('network down');
+  });
+
+  it('renders a recent message window and can load older messages', async () => {
+    render(<MessageList roomId="room-1" onReply={vi.fn()} />);
+
+    const history = Array.from({ length: 85 }, (_, index) => {
+      const messageNumber = index + 1;
+      return message({
+        id: `m-${messageNumber}`,
+        content: `message ${messageNumber}`,
+        timestamp: new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(),
+      });
+    });
+
+    act(() => {
+      socketMock.trigger('message_history', history);
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('message-item')).toHaveLength(80);
+    });
+    expect(screen.queryByText('message 1')).toBeNull();
+    expect(screen.getByText('message 6')).toBeTruthy();
+    expect(screen.getByText('message 85')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('loadMoreMessages'));
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('message-item')).toHaveLength(85);
+    });
+    expect(screen.getByText('message 1')).toBeTruthy();
   });
 });
