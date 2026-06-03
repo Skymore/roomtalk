@@ -4,12 +4,23 @@ import {
   createUserMessage,
 } from '../services/messageDomain';
 import { Message } from '../types';
+import { hasRoomAccess } from './roomAccess';
 import { SocketConnectionContext } from './types';
 
 export function registerMessageHandlers({ io, socket, store, socketLogger }: SocketConnectionContext) {
   socket.on('get_room_messages', async (roomId: string) => {
     const userId = await store.getClientId(socket.id);
     socketLogger.debug('Client requested message history', { socketId: socket.id, userId, roomId });
+
+    if (!userId) {
+      socket.emit('error', { message: 'You are not registered' });
+      return;
+    }
+
+    if (!roomId || !(await hasRoomAccess(store, roomId, userId))) {
+      socket.emit('error', { message: 'You are not authorized to access this room' });
+      return;
+    }
 
     const roomMessages = await store.readMessagesByRoom(roomId);
     socket.emit('message_history', roomMessages);
@@ -43,6 +54,13 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       socketLogger.warn('Client tried to send message without room ID', { socketId: socket.id, clientId });
       socket.emit('error', { message: 'Room ID is required' });
       callback?.({ success: false, error: 'Room ID is required' });
+      return;
+    }
+
+    if (!(await hasRoomAccess(store, messageData.roomId, clientId))) {
+      socketLogger.warn('Client tried to send message without room access', { socketId: socket.id, clientId, roomId: messageData.roomId });
+      socket.emit('error', { message: 'You are not authorized to access this room' });
+      callback?.({ success: false, error: 'You are not authorized to access this room' });
       return;
     }
 
@@ -95,6 +113,10 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       return callback?.({ success: false, error: 'Missing required fields' });
     }
 
+    if (!(await hasRoomAccess(store, data.roomId, clientId))) {
+      return callback?.({ success: false, error: 'You are not authorized to access this room' });
+    }
+
     socketLogger.info('Received edit message request', { ...data, editorClientId: clientId });
 
     try {
@@ -127,6 +149,10 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
 
     if (!data.roomId || !data.messageId) {
       return callback?.({ success: false, error: 'Missing required fields' });
+    }
+
+    if (!(await hasRoomAccess(store, data.roomId, clientId))) {
+      return callback?.({ success: false, error: 'You are not authorized to access this room' });
     }
 
     socketLogger.info('Received delete message request', { ...data, deleterClientId: clientId });
@@ -165,6 +191,12 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
     if (!roomId) {
       socketLogger.warn('Client tried to clear messages without room ID', { socketId: socket.id, clientId });
       socket.emit('error', { message: 'Room ID is required' });
+      return;
+    }
+
+    if (!(await hasRoomAccess(store, roomId, clientId))) {
+      socketLogger.warn('Client tried to clear messages without room access', { socketId: socket.id, clientId, roomId });
+      socket.emit('error', { message: 'You are not authorized to access this room' });
       return;
     }
 

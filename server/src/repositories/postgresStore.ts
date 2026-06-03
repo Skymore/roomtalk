@@ -1,6 +1,6 @@
 import { customAlphabet } from 'nanoid';
 import { Logger } from '../logger';
-import { AICost, Message, Room, RoomAICostTotal } from '../types';
+import { AICost, ImageAsset, Message, MessageImageAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole } from '../types';
 import { DurableRoomStore } from './store';
 import { POSTGRES_SCHEMA_SQL } from './postgresSchema';
 
@@ -49,8 +49,29 @@ type MessageRow = {
   position?: number | string;
 };
 
+type RoomMemberRow = {
+  room_id: string;
+  client_id: string;
+  role: RoomMemberRole;
+  joined_at: string | Date;
+};
+
+type ImageAssetRow = {
+  id: string;
+  room_id: string;
+  message_id: string | null;
+  object_key: string;
+  mime_type: string;
+  byte_size: number | string;
+  width: number | string | null;
+  height: number | string | null;
+  created_at: string | Date;
+};
+
 const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id';
 const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, message_type, username, avatar, mime_type, status, ai_model, usage, cost, reply_to';
+const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
+const IMAGE_ASSET_COLUMNS = 'id, room_id, message_id, object_key, mime_type, byte_size, width, height, created_at';
 
 const parseTime = (timestamp?: string): number => {
   const time = Date.parse(timestamp || '');
@@ -102,6 +123,51 @@ const mapRoom = (row: RoomRow): Room => ({
   lastActivityAt: toIsoString(row.last_activity_at || row.created_at),
   creatorId: row.creator_id,
 });
+
+const mapRoomMember = (row: RoomMemberRow): RoomMember => ({
+  roomId: row.room_id,
+  clientId: row.client_id,
+  role: row.role,
+  joinedAt: toIsoString(row.joined_at),
+});
+
+const toOptionalNumber = (value: number | string | null): number | undefined => {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const mapImageAsset = (row: ImageAssetRow): ImageAsset => {
+  const asset: ImageAsset = {
+    id: row.id,
+    roomId: row.room_id,
+    objectKey: row.object_key,
+    mimeType: row.mime_type,
+    byteSize: Number(row.byte_size) || 0,
+    createdAt: toIsoString(row.created_at),
+  };
+
+  if (row.message_id) asset.messageId = row.message_id;
+  const width = toOptionalNumber(row.width);
+  const height = toOptionalNumber(row.height);
+  if (width !== undefined) asset.width = width;
+  if (height !== undefined) asset.height = height;
+  return asset;
+};
+
+const toMessageImageAsset = (asset: ImageAsset): MessageImageAsset => {
+  const messageAsset: MessageImageAsset = {
+    id: asset.id,
+    mimeType: asset.mimeType,
+    byteSize: asset.byteSize,
+  };
+  if (asset.width !== undefined) messageAsset.width = asset.width;
+  if (asset.height !== undefined) messageAsset.height = asset.height;
+  return messageAsset;
+};
 
 const mapMessage = (row: MessageRow): Message => {
   const avatar = parseJsonValue<Message['avatar']>(row.avatar);
@@ -518,10 +584,118 @@ export class PostgresStore implements DurableRoomStore {
         ORDER BY position ASC, timestamp ASC`,
         [roomId]
       );
-      return result.rows.map(mapMessage);
+      return this.attachImageAssets(roomId, result.rows.map(mapMessage));
     } catch (error) {
       this.logger.error('Error reading PostgreSQL room messages', { error, roomId });
       return [];
+    }
+  }
+
+  async saveImageAsset(asset: ImageAsset): Promise<ImageAsset | null> {
+    try {
+      return await this.saveImageAssetWithClient(this.pool, asset);
+    } catch (error) {
+      this.logger.error('Error saving PostgreSQL image asset', { error, assetId: asset.id, roomId: asset.roomId });
+      return null;
+    }
+  }
+
+  async replaceMessageImageAsset(roomId: string, messageId: string, asset: ImageAsset) {
+    const imageAsset: ImageAsset = {
+      ...asset,
+      roomId,
+      messageId,
+    };
+
+    try {
+      return await this.transaction(async client => {
+        const room = await client.query<RoomRow>(
+          `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
+          [roomId]
+        );
+        if (room.rows.length === 0) {
+          this.logger.warn('Cannot replace image asset for missing PostgreSQL room', { roomId, messageId, assetId: asset.id });
+          return null;
+        }
+
+        const updated = await client.query<MessageRow>(
+          `UPDATE room_messages
+          SET content = $3,
+            mime_type = $4
+          WHERE room_id = $1 AND id = $2 AND message_type = 'image'
+          RETURNING ${MESSAGE_COLUMNS}`,
+          [roomId, messageId, imageAsset.id, imageAsset.mimeType]
+        );
+        if (updated.rows.length === 0) {
+          return { room: mapRoom(room.rows[0]), found: false };
+        }
+
+        const savedAsset = await this.saveImageAssetWithClient(client, imageAsset);
+        if (!savedAsset) {
+          return null;
+        }
+
+        const updatedMessage = this.attachImageAssetsFromAssets([mapMessage(updated.rows[0])], [savedAsset])[0];
+        this.logger.debug('Image message asset replaced in PostgreSQL', { roomId, messageId, assetId: imageAsset.id });
+        return { room: mapRoom(room.rows[0]), found: true, updatedMessage };
+      });
+    } catch (error) {
+      this.logger.error('Error replacing PostgreSQL image message asset', { error, roomId, messageId, assetId: asset.id });
+      return null;
+    }
+  }
+
+  async getImageAsset(assetId: string): Promise<ImageAsset | null> {
+    try {
+      const result = await this.pool.query<ImageAssetRow>(
+        `SELECT ${IMAGE_ASSET_COLUMNS}
+        FROM image_assets
+        WHERE id = $1`,
+        [assetId]
+      );
+      return result.rows[0] ? mapImageAsset(result.rows[0]) : null;
+    } catch (error) {
+      this.logger.error('Error reading PostgreSQL image asset', { error, assetId });
+      return null;
+    }
+  }
+
+  async getImageAssetByMessageId(messageId: string): Promise<ImageAsset | null> {
+    try {
+      const result = await this.pool.query<ImageAssetRow>(
+        `SELECT ${IMAGE_ASSET_COLUMNS}
+        FROM image_assets
+        WHERE message_id = $1`,
+        [messageId]
+      );
+      return result.rows[0] ? mapImageAsset(result.rows[0]) : null;
+    } catch (error) {
+      this.logger.error('Error reading PostgreSQL image asset by message id', { error, messageId });
+      return null;
+    }
+  }
+
+  async readImageAssetsByRoom(roomId: string): Promise<ImageAsset[]> {
+    try {
+      const result = await this.pool.query<ImageAssetRow>(
+        `SELECT ${IMAGE_ASSET_COLUMNS}
+        FROM image_assets
+        WHERE room_id = $1
+        ORDER BY created_at ASC`,
+        [roomId]
+      );
+      return result.rows.map(mapImageAsset);
+    } catch (error) {
+      this.logger.error('Error reading PostgreSQL image assets by room', { error, roomId });
+      return [];
+    }
+  }
+
+  async deleteImageAsset(assetId: string): Promise<void> {
+    try {
+      await this.pool.query('DELETE FROM image_assets WHERE id = $1', [assetId]);
+    } catch (error) {
+      this.logger.error('Error deleting PostgreSQL image asset', { error, assetId });
     }
   }
 
@@ -604,38 +778,117 @@ export class PostgresStore implements DurableRoomStore {
 
   async saveRoom(room: Room): Promise<Room | null> {
     try {
-      const result = await this.pool.query<RoomRow>(
-        `INSERT INTO rooms (id, name, description, created_at, last_activity_at, creator_id)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (id) DO UPDATE SET
-          name = EXCLUDED.name,
-          description = EXCLUDED.description,
-          last_activity_at = GREATEST(rooms.last_activity_at, EXCLUDED.last_activity_at)
-        RETURNING ${ROOM_COLUMNS}`,
-        [
-          room.id,
-          room.name,
-          room.description || '',
-          room.createdAt,
-          room.lastActivityAt || room.createdAt,
-          room.creatorId,
-        ]
-      );
-      this.logger.debug('Room saved to PostgreSQL', { roomId: room.id, creatorId: room.creatorId });
-      return result.rows[0] ? mapRoom(result.rows[0]) : null;
+      return await this.transaction(async client => {
+        const result = await client.query<RoomRow>(
+          `INSERT INTO rooms (id, name, description, created_at, last_activity_at, creator_id)
+          VALUES ($1, $2, $3, $4, $5, $6)
+          ON CONFLICT (id) DO UPDATE SET
+            name = EXCLUDED.name,
+            description = EXCLUDED.description,
+            last_activity_at = GREATEST(rooms.last_activity_at, EXCLUDED.last_activity_at)
+          RETURNING ${ROOM_COLUMNS}`,
+          [
+            room.id,
+            room.name,
+            room.description || '',
+            room.createdAt,
+            room.lastActivityAt || room.createdAt,
+            room.creatorId,
+          ]
+        );
+
+        if (result.rows[0]) {
+          await client.query(
+            `INSERT INTO room_members (room_id, client_id, role, joined_at)
+            VALUES ($1, $2, 'owner', $3)
+            ON CONFLICT (room_id, client_id) DO UPDATE SET
+              role = 'owner'`,
+            [room.id, room.creatorId, room.createdAt]
+          );
+        }
+
+        this.logger.debug('Room saved to PostgreSQL', { roomId: room.id, creatorId: room.creatorId });
+        return result.rows[0] ? mapRoom(result.rows[0]) : null;
+      });
     } catch (error) {
       this.logger.error('Error saving room to PostgreSQL', { error, roomId: room.id, creatorId: room.creatorId });
       return null;
     }
   }
 
+  async addRoomMember(roomId: string, clientId: string, role: RoomMemberRole, joinedAt = new Date().toISOString()): Promise<RoomMember | null> {
+    try {
+      const result = await this.pool.query<RoomMemberRow>(
+        `INSERT INTO room_members (room_id, client_id, role, joined_at)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (room_id, client_id) DO UPDATE SET
+          role = CASE
+            WHEN room_members.role = 'owner' THEN 'owner'
+            WHEN EXCLUDED.role = 'owner' THEN 'owner'
+            ELSE room_members.role
+          END
+        RETURNING ${ROOM_MEMBER_COLUMNS}`,
+        [roomId, clientId, role, joinedAt]
+      );
+      return result.rows[0] ? mapRoomMember(result.rows[0]) : null;
+    } catch (error) {
+      this.logger.error('Error adding PostgreSQL room member', { error, roomId, clientId, role });
+      return null;
+    }
+  }
+
+  async getRoomMember(roomId: string, clientId: string): Promise<RoomMember | null> {
+    try {
+      const result = await this.pool.query<RoomMemberRow>(
+        `SELECT ${ROOM_MEMBER_COLUMNS}
+        FROM room_members
+        WHERE room_id = $1 AND client_id = $2`,
+        [roomId, clientId]
+      );
+      return result.rows[0] ? mapRoomMember(result.rows[0]) : null;
+    } catch (error) {
+      this.logger.error('Error reading PostgreSQL room member', { error, roomId, clientId });
+      return null;
+    }
+  }
+
+  async isRoomMember(roomId: string, clientId: string): Promise<boolean> {
+    try {
+      const result = await this.pool.query(
+        'SELECT 1 FROM room_members WHERE room_id = $1 AND client_id = $2 LIMIT 1',
+        [roomId, clientId]
+      );
+      return result.rows.length > 0;
+    } catch (error) {
+      this.logger.error('Error checking PostgreSQL room membership', { error, roomId, clientId });
+      return false;
+    }
+  }
+
+  async readRoomMembers(roomId: string): Promise<RoomMember[]> {
+    try {
+      const result = await this.pool.query<RoomMemberRow>(
+        `SELECT ${ROOM_MEMBER_COLUMNS}
+        FROM room_members
+        WHERE room_id = $1
+        ORDER BY joined_at ASC`,
+        [roomId]
+      );
+      return result.rows.map(mapRoomMember);
+    } catch (error) {
+      this.logger.error('Error reading PostgreSQL room members', { error, roomId });
+      return [];
+    }
+  }
+
   async readRoomsByUser(clientId: string): Promise<Room[]> {
     try {
       const result = await this.pool.query<RoomRow>(
-        `SELECT ${ROOM_COLUMNS}
-        FROM rooms
-        WHERE creator_id = $1
-        ORDER BY last_activity_at DESC, created_at DESC`,
+        `SELECT r.${ROOM_COLUMNS.replace(/, /g, ', r.')}
+        FROM rooms r
+        INNER JOIN room_members rm ON rm.room_id = r.id
+        WHERE rm.client_id = $1
+        ORDER BY r.last_activity_at DESC, r.created_at DESC`,
         [clientId]
       );
       return result.rows.map(mapRoom);
@@ -699,7 +952,7 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async resetAllDataForTests(): Promise<void> {
-    await this.pool.query('TRUNCATE room_ai_cost_totals, room_messages, rooms RESTART IDENTITY CASCADE');
+    await this.pool.query('TRUNCATE room_ai_cost_totals, image_assets, room_messages, room_members, rooms RESTART IDENTITY CASCADE');
   }
 
   async failInterruptedStreamingMessages(content: string): Promise<number> {
@@ -754,6 +1007,78 @@ export class PostgresStore implements DurableRoomStore {
     return updatedRoom.rows[0] ? mapRoom(updatedRoom.rows[0]) : null;
   }
 
+  private async saveImageAssetWithClient(client: Pick<PostgresPool, 'query'>, asset: ImageAsset): Promise<ImageAsset | null> {
+    const result = await client.query<ImageAssetRow>(
+      `INSERT INTO image_assets (
+        id,
+        room_id,
+        message_id,
+        object_key,
+        mime_type,
+        byte_size,
+        width,
+        height,
+        created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ON CONFLICT (id) DO UPDATE SET
+        message_id = EXCLUDED.message_id,
+        object_key = EXCLUDED.object_key,
+        mime_type = EXCLUDED.mime_type,
+        byte_size = EXCLUDED.byte_size,
+        width = EXCLUDED.width,
+        height = EXCLUDED.height
+      RETURNING ${IMAGE_ASSET_COLUMNS}`,
+      [
+        asset.id,
+        asset.roomId,
+        asset.messageId || null,
+        asset.objectKey,
+        asset.mimeType,
+        asset.byteSize,
+        asset.width ?? null,
+        asset.height ?? null,
+        asset.createdAt,
+      ]
+    );
+    return result.rows[0] ? mapImageAsset(result.rows[0]) : null;
+  }
+
+  private async attachImageAssets(roomId: string, messages: Message[]): Promise<Message[]> {
+    if (!messages.some(message => message.messageType === 'image')) {
+      return messages;
+    }
+
+    const assets = await this.readImageAssetsByRoom(roomId);
+    if (assets.length === 0) {
+      return messages;
+    }
+
+    return this.attachImageAssetsFromAssets(messages, assets);
+  }
+
+  private attachImageAssetsFromAssets(messages: Message[], assets: ImageAsset[]): Message[] {
+    const assetsByMessageId = new Map(assets.filter(asset => asset.messageId).map(asset => [asset.messageId!, asset]));
+    const assetsById = new Map(assets.map(asset => [asset.id, asset]));
+
+    return messages.map(message => {
+      if (message.messageType !== 'image') {
+        return message;
+      }
+
+      const asset = assetsByMessageId.get(message.id) || assetsById.get(message.content);
+      if (!asset) {
+        return message;
+      }
+
+      return {
+        ...message,
+        content: asset.id,
+        mimeType: asset.mimeType,
+        imageAsset: toMessageImageAsset(asset),
+      };
+    });
+  }
+
   private async readMessagesByRoomInTransaction(client: PostgresClient, roomId: string): Promise<Message[]> {
     const result = await client.query<MessageRow>(
       `SELECT ${MESSAGE_COLUMNS}
@@ -762,6 +1087,18 @@ export class PostgresStore implements DurableRoomStore {
       ORDER BY position ASC, timestamp ASC`,
       [roomId]
     );
-    return result.rows.map(mapMessage);
+    const messages = result.rows.map(mapMessage);
+    if (!messages.some(message => message.messageType === 'image')) {
+      return messages;
+    }
+
+    const assets = await client.query<ImageAssetRow>(
+      `SELECT ${IMAGE_ASSET_COLUMNS}
+      FROM image_assets
+      WHERE room_id = $1
+      ORDER BY created_at ASC`,
+      [roomId]
+    );
+    return this.attachImageAssetsFromAssets(messages, assets.rows.map(mapImageAsset));
   }
 }

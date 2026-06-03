@@ -51,6 +51,21 @@ export interface MessageReplyReference {
   preview: string;
 }
 
+export interface MessageImageAsset {
+  id: string;
+  mimeType: string;
+  byteSize: number;
+  width?: number;
+  height?: number;
+}
+
+export interface ImageAsset extends MessageImageAsset {
+  roomId: string;
+  messageId?: string;
+  objectKey: string;
+  createdAt: string;
+}
+
 export interface Message {
   id: string;
   clientId: string;
@@ -76,6 +91,7 @@ export interface Message {
   usage?: AIUsage;
   cost?: AICost;
   replyTo?: MessageReplyReference;
+  imageAsset?: MessageImageAsset;
 }
 
 export interface Room {
@@ -85,6 +101,15 @@ export interface Room {
   createdAt: string;
   lastActivityAt?: string;
   creatorId: string;
+}
+
+export type RoomMemberRole = 'owner' | 'member';
+
+export interface RoomMember {
+  roomId: string;
+  clientId: string;
+  role: RoomMemberRole;
+  joinedAt: string;
 }
 
 export interface UserInfo {

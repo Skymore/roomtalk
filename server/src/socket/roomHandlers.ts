@@ -123,6 +123,13 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
       return;
     }
 
+    const persistentMember = await store.addRoomMember(roomId, userId, room.creatorId === userId ? 'owner' : 'member');
+    if (!persistentMember) {
+      socketLogger.error('Failed to persist room membership while joining room', { socketId: socket.id, userId, roomId });
+      socket.emit('error', { message: 'Failed to join room' });
+      return;
+    }
+
     socket.join(roomId);
     await store.storeUserRooms(socket.id, [roomId]);
 
@@ -135,6 +142,7 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
     });
 
     io.to(roomId).emit('room_member_change', joinEvent);
+    io.to(userId).emit('room_list', await store.readRoomsByUser(userId));
 
     socketLogger.info('User joined room', {
       socketId: socket.id,

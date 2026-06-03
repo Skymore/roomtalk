@@ -91,6 +91,8 @@ const createHarness = (clientId: string | null = 'client-1') => {
   const store = {
     clientId,
     messages: [message()],
+    rooms: [room()],
+    members: new Set(['room-1:client-1', 'room-1:client-2']),
     savedHistory: [] as Message[][],
     appendedMessages: [] as Message[],
     editedMessages: [] as Array<{ roomId: string; messageId: string; newContent: string }>,
@@ -104,6 +106,31 @@ const createHarness = (clientId: string | null = 'client-1') => {
     },
     async readRoomAICost(roomId: string) {
       return roomCost(roomId);
+    },
+    async addRoomMember(roomId: string, memberClientId: string, role: 'owner' | 'member', joinedAt = '2026-05-03T00:00:00.000Z') {
+      this.members.add(`${roomId}:${memberClientId}`);
+      return { roomId, clientId: memberClientId, role, joinedAt };
+    },
+    async getRoomMember(roomId: string, memberClientId: string) {
+      return this.members.has(`${roomId}:${memberClientId}`)
+        ? { roomId, clientId: memberClientId, role: 'member' as const, joinedAt: '2026-05-03T00:00:00.000Z' }
+        : null;
+    },
+    async isRoomMember(roomId: string, memberClientId: string) {
+      return this.members.has(`${roomId}:${memberClientId}`);
+    },
+    async readRoomMembers(roomId: string) {
+      return [...this.members]
+        .filter(key => key.startsWith(`${roomId}:`))
+        .map(key => ({
+          roomId,
+          clientId: key.split(':')[1],
+          role: 'member' as const,
+          joinedAt: '2026-05-03T00:00:00.000Z',
+        }));
+    },
+    async getRoomById(roomId: string) {
+      return this.rooms.find(item => item.id === roomId) || null;
     },
     async appendMessage(newMessage: Message) {
       this.appendedMessages.push(newMessage);
@@ -167,6 +194,42 @@ describe('message socket handlers', () => {
       { event: 'message_history', args: [[message()]] },
       { event: 'ai_cost_total', args: [roomCost()] },
     ]);
+  });
+
+  it('returns slim asset-backed image history without exposing object storage keys', async () => {
+    const { socket, store } = createHarness();
+    store.messages = [
+      message({
+        id: 'image-message',
+        content: 'asset-1',
+        messageType: 'image',
+        mimeType: 'image/webp',
+        imageAsset: {
+          id: 'asset-1',
+          mimeType: 'image/webp',
+          byteSize: 123,
+          width: 10,
+          height: 20,
+        },
+      }),
+    ];
+
+    await socket.invoke('get_room_messages', 'room-1');
+
+    const history = socket.emitted[0].args[0] as Message[];
+    assert.deepEqual(history, [store.messages[0]]);
+    assert.equal(history[0].content, 'asset-1');
+    assert.equal('objectKey' in history[0].imageAsset!, false);
+    assert.equal(JSON.stringify(history).includes('data:image'), false);
+  });
+
+  it('rejects room history requests from non-members', async () => {
+    const { socket, store } = createHarness('client-3');
+    store.members.clear();
+
+    await socket.invoke('get_room_messages', 'room-1');
+
+    assert.deepEqual(socket.emitted, [{ event: 'error', args: [{ message: 'You are not authorized to access this room' }] }]);
   });
 
   it('rejects unregistered or invalid sends and broadcasts valid messages', async () => {

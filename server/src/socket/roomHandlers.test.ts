@@ -112,6 +112,8 @@ const createHarness = (clientId: string | null = 'client-1') => {
     rooms: [room()],
     messages: [message()],
     socketRooms: [] as string[],
+    members: new Set(['room-1:client-1']),
+    addedMembers: [] as Array<{ roomId: string; clientId: string; role: 'owner' | 'member' }>,
     savedRooms: [] as Room[],
     deletedRooms: [] as Array<{ roomId: string; creatorId: string }>,
     removedSessions: [] as string[],
@@ -122,7 +124,7 @@ const createHarness = (clientId: string | null = 'client-1') => {
       return this.clientId;
     },
     async readRoomsByUser(clientIdForRooms: string) {
-      return this.rooms.filter(item => item.creatorId === clientIdForRooms);
+      return this.rooms.filter(item => item.creatorId === clientIdForRooms || this.members.has(`${item.id}:${clientIdForRooms}`));
     },
     async generateUniqueRoomId() {
       return 'generated-room';
@@ -130,7 +132,26 @@ const createHarness = (clientId: string | null = 'client-1') => {
     async saveRoom(newRoom: Room) {
       this.savedRooms.push(newRoom);
       this.rooms.push(newRoom);
+      this.members.add(`${newRoom.id}:${newRoom.creatorId}`);
       return newRoom;
+    },
+    async addRoomMember(roomId: string, memberClientId: string, role: 'owner' | 'member') {
+      this.members.add(`${roomId}:${memberClientId}`);
+      this.addedMembers.push({ roomId, clientId: memberClientId, role });
+      return { roomId, clientId: memberClientId, role, joinedAt: '2026-05-03T00:00:00.000Z' };
+    },
+    async getRoomMember(roomId: string, memberClientId: string) {
+      return this.members.has(`${roomId}:${memberClientId}`)
+        ? { roomId, clientId: memberClientId, role: 'member' as const, joinedAt: '2026-05-03T00:00:00.000Z' }
+        : null;
+    },
+    async isRoomMember(roomId: string, memberClientId: string) {
+      return this.members.has(`${roomId}:${memberClientId}`);
+    },
+    async readRoomMembers(roomId: string) {
+      return [...this.members]
+        .filter(key => key.startsWith(`${roomId}:`))
+        .map(key => ({ roomId, clientId: key.split(':')[1], role: 'member' as const, joinedAt: '2026-05-03T00:00:00.000Z' }));
     },
     async getUserRooms() {
       return this.socketRooms;
@@ -232,10 +253,13 @@ describe('room socket handlers', () => {
     assert.deepEqual(valid.socket.left, ['old-room']);
     assert.deepEqual(valid.socket.joined, ['room-1']);
     assert.deepEqual(valid.store.socketRooms, ['room-1']);
+    assert.deepEqual(valid.store.addedMembers, [{ roomId: 'room-1', clientId: 'client-1', role: 'owner' }]);
     assert.equal(valid.socket.roomEmits[0].roomId, 'old-room');
     assert.equal(valid.socket.roomEmits[0].event, 'room_member_change');
     assert.equal(valid.io.roomEmits[0].roomId, 'room-1');
     assert.equal(valid.io.roomEmits[0].event, 'room_member_change');
+    assert.equal(valid.io.roomEmits[1].roomId, 'client-1');
+    assert.equal(valid.io.roomEmits[1].event, 'room_list');
     assert.deepEqual(valid.socket.emitted, []);
   });
 

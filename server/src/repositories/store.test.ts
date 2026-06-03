@@ -1,6 +1,6 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
-import { AICost, Message, Room } from '../types';
+import { AICost, ImageAsset, Message, Room, RoomMemberRole } from '../types';
 import { CompositeRoomStore, DurableRoomStore, RealtimeRoomStore, RoomMessageCacheStore } from './store';
 
 const room = (overrides: Partial<Room> = {}): Room => ({
@@ -40,6 +40,66 @@ const durableMutationStubs = () => ({
   async updateMessageAndTruncateAfter() { return { room: room(), messages: [message()], targetFound: true, updatedMessage: message() }; },
 });
 
+const durableRoomAccessStubs = () => ({
+  async addRoomMember(roomId: string, clientId: string, role: RoomMemberRole, joinedAt = '2026-05-03T00:00:00.000Z') {
+    return { roomId, clientId, role, joinedAt };
+  },
+  async getRoomMember(roomId: string, clientId: string) {
+    return { roomId, clientId, role: 'member' as const, joinedAt: '2026-05-03T00:00:00.000Z' };
+  },
+  async isRoomMember() {
+    return true;
+  },
+  async readRoomMembers(roomId: string) {
+    return [{ roomId, clientId: 'client-1', role: 'owner' as const, joinedAt: '2026-05-03T00:00:00.000Z' }];
+  },
+});
+
+const imageAsset = (overrides: Partial<ImageAsset> = {}): ImageAsset => ({
+  id: 'asset-1',
+  roomId: 'room-1',
+  messageId: 'message-1',
+  objectKey: 'rooms/room-1/asset-1.webp',
+  mimeType: 'image/webp',
+  byteSize: 123,
+  createdAt: '2026-05-03T00:00:00.000Z',
+  ...overrides,
+});
+
+const durableImageAssetStubs = () => ({
+  async saveImageAsset(asset: ImageAsset) {
+    return asset;
+  },
+  async replaceMessageImageAsset(roomId: string, messageId: string, asset: ImageAsset) {
+    return {
+      room: room(),
+      found: true,
+      updatedMessage: message({
+        id: messageId,
+        roomId,
+        content: asset.id,
+        messageType: 'image',
+        mimeType: asset.mimeType as Message['mimeType'],
+        imageAsset: {
+          id: asset.id,
+          mimeType: asset.mimeType,
+          byteSize: asset.byteSize,
+        },
+      }),
+    };
+  },
+  async getImageAsset(assetId: string) {
+    return imageAsset({ id: assetId });
+  },
+  async getImageAssetByMessageId(messageId: string) {
+    return imageAsset({ messageId });
+  },
+  async readImageAssetsByRoom(roomId: string) {
+    return [imageAsset({ roomId })];
+  },
+  async deleteImageAsset() {},
+});
+
 describe('CompositeRoomStore', () => {
   it('routes durable operations to the durable store and realtime operations to the realtime store', async () => {
     const calls: string[] = [];
@@ -55,9 +115,37 @@ describe('CompositeRoomStore', () => {
       async saveMessageHistory(_roomId: string, _messages: Message[]) { calls.push('durable.saveMessageHistory'); return room(); },
       async clearRoomMessages(_roomId: string) { calls.push('durable.clearRoomMessages'); return 1; },
       async readMessagesByRoom(_roomId: string) { calls.push('durable.readMessagesByRoom'); return [message()]; },
+      async saveImageAsset(asset: ImageAsset) { calls.push('durable.saveImageAsset'); return asset; },
+      async replaceMessageImageAsset(roomId: string, messageId: string, asset: ImageAsset) {
+        calls.push('durable.replaceMessageImageAsset');
+        return {
+          room: room(),
+          found: true,
+          updatedMessage: message({
+            id: messageId,
+            roomId,
+            content: asset.id,
+            messageType: 'image',
+            mimeType: asset.mimeType as Message['mimeType'],
+            imageAsset: {
+              id: asset.id,
+              mimeType: asset.mimeType,
+              byteSize: asset.byteSize,
+            },
+          }),
+        };
+      },
+      async getImageAsset(assetId: string) { calls.push('durable.getImageAsset'); return imageAsset({ id: assetId }); },
+      async getImageAssetByMessageId(messageId: string) { calls.push('durable.getImageAssetByMessageId'); return imageAsset({ messageId }); },
+      async readImageAssetsByRoom(roomId: string) { calls.push('durable.readImageAssetsByRoom'); return [imageAsset({ roomId })]; },
+      async deleteImageAsset(_assetId: string) { calls.push('durable.deleteImageAsset'); },
       async readRoomAICost(roomId: string) { calls.push('durable.readRoomAICost'); return { roomId, currency: 'USD', totalUsd: 1 }; },
       async incrementRoomAICost(roomId: string, _cost: AICost | null) { calls.push('durable.incrementRoomAICost'); return { roomId, currency: 'USD', totalUsd: 2 }; },
       async saveRoom(newRoom: Room) { calls.push('durable.saveRoom'); return newRoom; },
+      async addRoomMember(roomId: string, clientId: string, role: RoomMemberRole, joinedAt = '2026-05-03T00:00:00.000Z') { calls.push('durable.addRoomMember'); return { roomId, clientId, role, joinedAt }; },
+      async getRoomMember(roomId: string, clientId: string) { calls.push('durable.getRoomMember'); return { roomId, clientId, role: 'member' as const, joinedAt: '2026-05-03T00:00:00.000Z' }; },
+      async isRoomMember(_roomId: string, _clientId: string) { calls.push('durable.isRoomMember'); return true; },
+      async readRoomMembers(roomId: string) { calls.push('durable.readRoomMembers'); return [{ roomId, clientId: 'client-1', role: 'owner' as const, joinedAt: '2026-05-03T00:00:00.000Z' }]; },
       async readRoomsByUser(_clientId: string) { calls.push('durable.readRoomsByUser'); return [room()]; },
       async getRoomById(_roomId: string) { calls.push('durable.getRoomById'); return room(); },
       async updateRoomName(_roomId: string, _creatorId: string, _name: string) { calls.push('durable.updateRoomName'); return room({ name: 'Renamed' }); },
@@ -89,9 +177,32 @@ describe('CompositeRoomStore', () => {
     assert.deepEqual(await store.saveMessageHistory('room-1', [message()]), room());
     assert.equal(await store.clearRoomMessages('room-1'), 1);
     assert.deepEqual(await store.readMessagesByRoom('room-1'), [message()]);
+    assert.deepEqual(await store.saveImageAsset(imageAsset()), imageAsset());
+    assert.deepEqual(await store.replaceMessageImageAsset('room-1', 'message-1', imageAsset()), {
+      room: room(),
+      found: true,
+      updatedMessage: message({
+        content: 'asset-1',
+        messageType: 'image',
+        mimeType: 'image/webp',
+        imageAsset: {
+          id: 'asset-1',
+          mimeType: 'image/webp',
+          byteSize: 123,
+        },
+      }),
+    });
+    assert.deepEqual(await store.getImageAsset('asset-1'), imageAsset());
+    assert.deepEqual(await store.getImageAssetByMessageId('message-1'), imageAsset());
+    assert.deepEqual(await store.readImageAssetsByRoom('room-1'), [imageAsset()]);
+    await store.deleteImageAsset('asset-1');
     assert.deepEqual(await store.readRoomAICost('room-1'), { roomId: 'room-1', currency: 'USD', totalUsd: 1 });
     assert.deepEqual(await store.incrementRoomAICost('room-1', cost()), { roomId: 'room-1', currency: 'USD', totalUsd: 2 });
     assert.deepEqual(await store.saveRoom(room()), room());
+    assert.deepEqual(await store.addRoomMember('room-1', 'client-2', 'member'), { roomId: 'room-1', clientId: 'client-2', role: 'member', joinedAt: '2026-05-03T00:00:00.000Z' });
+    assert.deepEqual(await store.getRoomMember('room-1', 'client-2'), { roomId: 'room-1', clientId: 'client-2', role: 'member', joinedAt: '2026-05-03T00:00:00.000Z' });
+    assert.equal(await store.isRoomMember('room-1', 'client-2'), true);
+    assert.deepEqual(await store.readRoomMembers('room-1'), [{ roomId: 'room-1', clientId: 'client-1', role: 'owner', joinedAt: '2026-05-03T00:00:00.000Z' }]);
     assert.deepEqual(await store.readRoomsByUser('client-1'), [room()]);
     assert.deepEqual(await store.getRoomById('room-1'), room());
     assert.deepEqual(await store.updateRoomName('room-1', 'client-1', 'Renamed'), room({ name: 'Renamed' }));
@@ -119,9 +230,19 @@ describe('CompositeRoomStore', () => {
       'durable.saveMessageHistory',
       'durable.clearRoomMessages',
       'durable.readMessagesByRoom',
+      'durable.saveImageAsset',
+      'durable.replaceMessageImageAsset',
+      'durable.getImageAsset',
+      'durable.getImageAssetByMessageId',
+      'durable.readImageAssetsByRoom',
+      'durable.deleteImageAsset',
       'durable.readRoomAICost',
       'durable.incrementRoomAICost',
       'durable.saveRoom',
+      'durable.addRoomMember',
+      'durable.getRoomMember',
+      'durable.isRoomMember',
+      'durable.readRoomMembers',
       'durable.readRoomsByUser',
       'durable.getRoomById',
       'durable.updateRoomName',
@@ -150,9 +271,11 @@ describe('CompositeRoomStore', () => {
       async saveMessageHistory() { return room(); },
       async clearRoomMessages() { return 0; },
       async readMessagesByRoom() { calls.push('durable.readMessagesByRoom'); return [message({ id: 'durable-message' })]; },
+      ...durableImageAssetStubs(),
       async readRoomAICost(roomId: string) { return { roomId, currency: 'USD', totalUsd: 0 }; },
       async incrementRoomAICost(roomId: string) { return { roomId, currency: 'USD', totalUsd: 0 }; },
       async saveRoom(newRoom: Room) { return newRoom; },
+      ...durableRoomAccessStubs(),
       async readRoomsByUser() { return []; },
       async getRoomById() { return null; },
       async updateRoomName() { return null; },
@@ -201,9 +324,11 @@ describe('CompositeRoomStore', () => {
       async saveMessageHistory(_roomId: string) { calls.push('durable.saveHistory'); return room(); },
       async clearRoomMessages(_roomId: string) { calls.push('durable.clear'); return 1; },
       async readMessagesByRoom() { return []; },
+      ...durableImageAssetStubs(),
       async readRoomAICost(roomId: string) { return { roomId, currency: 'USD', totalUsd: 0 }; },
       async incrementRoomAICost(roomId: string) { return { roomId, currency: 'USD', totalUsd: 0 }; },
       async saveRoom(newRoom: Room) { return newRoom; },
+      ...durableRoomAccessStubs(),
       async readRoomsByUser() { return []; },
       async getRoomById() { return null; },
       async updateRoomName() { return null; },
@@ -277,9 +402,11 @@ describe('CompositeRoomStore', () => {
       async saveMessageHistory() { return room(); },
       async clearRoomMessages() { return 0; },
       async readMessagesByRoom() { return [message({ id: 'durable-message' })]; },
+      ...durableImageAssetStubs(),
       async readRoomAICost(roomId: string) { return { roomId, currency: 'USD', totalUsd: 0 }; },
       async incrementRoomAICost(roomId: string) { return { roomId, currency: 'USD', totalUsd: 0 }; },
       async saveRoom(newRoom: Room) { return newRoom; },
+      ...durableRoomAccessStubs(),
       async readRoomsByUser() { return []; },
       async getRoomById() { return null; },
       async updateRoomName() { return null; },
@@ -320,9 +447,11 @@ describe('CompositeRoomStore', () => {
       async saveMessageHistory() { return room(); },
       async clearRoomMessages() { return 0; },
       async readMessagesByRoom() { return []; },
+      ...durableImageAssetStubs(),
       async readRoomAICost(roomId: string) { return { roomId, currency: 'USD', totalUsd: 0 }; },
       async incrementRoomAICost(roomId: string) { return { roomId, currency: 'USD', totalUsd: 0 }; },
       async saveRoom(newRoom: Room) { return newRoom; },
+      ...durableRoomAccessStubs(),
       async readRoomsByUser() { return []; },
       async getRoomById() { return null; },
       async updateRoomName() { return null; },

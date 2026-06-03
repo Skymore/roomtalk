@@ -1,6 +1,6 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
-import { AICost, Message, Room } from '../types';
+import { AICost, ImageAsset, Message, Room, RoomMemberRole } from '../types';
 import { PostgresClient, PostgresPool, PostgresQueryResult, PostgresStore } from './postgresStore';
 import { RedisStore } from './redisStore';
 import { DurableRoomStore } from './store';
@@ -121,6 +121,28 @@ class MemoryRedis {
   }
 
   async eval(script: string, options: { keys: string[]; arguments: string[] }) {
+    if (script.includes('local imageAssetId')) {
+      const [, messageKey] = options.keys;
+      const [roomId, messageId, assetId, mimeType] = options.arguments;
+      const roomJson = this.hash('rooms').get(roomId);
+      if (!roomJson) return [0, 0, '', ''];
+      const list = this.lists.get(messageKey) || [];
+      const index = list.findIndex(item => {
+        try {
+          const parsed = JSON.parse(item);
+          return parsed.id === messageId && parsed.messageType === 'image';
+        } catch {
+          return false;
+        }
+      });
+      if (index === -1) return [1, 0, roomJson, ''];
+      const updatedMessage = { ...JSON.parse(list[index]), content: assetId, mimeType };
+      delete updatedMessage.imageAsset;
+      list[index] = JSON.stringify(updatedMessage);
+      this.lists.set(messageKey, list);
+      return [1, 1, roomJson, list[index]];
+    }
+
     if (script.includes('local messagePayload')) {
       const [, messageKey] = options.keys;
       const [roomId, payload, lastActivityAt] = options.arguments;
@@ -289,6 +311,25 @@ type MessageRow = {
   position: number;
 };
 
+type RoomMemberRow = {
+  room_id: string;
+  client_id: string;
+  role: RoomMemberRole;
+  joined_at: string;
+};
+
+type ImageAssetRow = {
+  id: string;
+  room_id: string;
+  message_id: string | null;
+  object_key: string;
+  mime_type: string;
+  byte_size: number;
+  width: number | null;
+  height: number | null;
+  created_at: string;
+};
+
 const toTime = (value: string) => Date.parse(value) || 0;
 const latest = (first: string, second: string) => toTime(first) >= toTime(second) ? first : second;
 function getLatestMessageTimestamp(messages: Message[]): string | undefined {
@@ -303,6 +344,8 @@ const jsonValue = (value: unknown) => value === null || value === undefined ? nu
 class StatefulPostgresPool implements PostgresPool, PostgresClient {
   rooms = new Map<string, RoomRow>();
   messages = new Map<string, MessageRow[]>();
+  roomMembers = new Map<string, Map<string, RoomMemberRow>>();
+  imageAssets = new Map<string, ImageAssetRow>();
   costs = new Map<string, number>();
   released = false;
 
@@ -346,6 +389,40 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         };
       this.rooms.set(id, saved);
       return { rows: [saved] as T[], rowCount: 1 };
+    }
+
+    if (/INSERT INTO room_members/.test(compactSql)) {
+      const roomId = String(params[0]);
+      const clientId = String(params[1]);
+      const role = (params.length >= 4 ? String(params[2]) : 'owner') as RoomMemberRole;
+      const joinedAt = String(params.length >= 4 ? params[3] : params[2]);
+      const roomMembers = this.roomMembers.get(roomId) || new Map<string, RoomMemberRow>();
+      const existing = roomMembers.get(clientId);
+      const member: RoomMemberRow = {
+        room_id: roomId,
+        client_id: clientId,
+        role: existing?.role === 'owner' || role === 'owner' ? 'owner' : 'member',
+        joined_at: existing?.joined_at || joinedAt,
+      };
+      roomMembers.set(clientId, member);
+      this.roomMembers.set(roomId, roomMembers);
+      return { rows: [member] as T[], rowCount: 1 };
+    }
+
+    if (/SELECT 1 FROM room_members WHERE room_id = \$1 AND client_id = \$2 LIMIT 1/.test(compactSql)) {
+      const member = this.roomMembers.get(String(params[0]))?.get(String(params[1]));
+      return { rows: (member ? [{}] : []) as T[], rowCount: member ? 1 : 0 };
+    }
+
+    if (/FROM room_members WHERE room_id = \$1 AND client_id = \$2/.test(compactSql)) {
+      const member = this.roomMembers.get(String(params[0]))?.get(String(params[1]));
+      return { rows: (member ? [member] : []) as T[], rowCount: member ? 1 : 0 };
+    }
+
+    if (/FROM room_members WHERE room_id = \$1 ORDER BY joined_at ASC/.test(compactSql)) {
+      const rows = [...(this.roomMembers.get(String(params[0]))?.values() || [])]
+        .sort((first, second) => toTime(first.joined_at) - toTime(second.joined_at));
+      return { rows: rows as T[], rowCount: rows.length };
     }
 
     if (/FROM rooms WHERE id = \$1 FOR UPDATE/.test(compactSql)) {
@@ -406,6 +483,45 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       return { rows: [], rowCount: 1 };
     }
 
+    if (/INSERT INTO image_assets/.test(compactSql)) {
+      const [id, roomId, messageId, objectKey, mimeType, byteSize, width, height, createdAt] = params;
+      const row: ImageAssetRow = {
+        id: String(id),
+        room_id: String(roomId),
+        message_id: messageId === null || messageId === undefined ? null : String(messageId),
+        object_key: String(objectKey),
+        mime_type: String(mimeType),
+        byte_size: Number(byteSize),
+        width: width === null || width === undefined ? null : Number(width),
+        height: height === null || height === undefined ? null : Number(height),
+        created_at: String(createdAt),
+      };
+      this.imageAssets.set(row.id, row);
+      return { rows: [row] as T[], rowCount: 1 };
+    }
+
+    if (/^SELECT .* FROM image_assets WHERE id = \$1/.test(compactSql)) {
+      const row = this.imageAssets.get(String(params[0]));
+      return { rows: (row ? [row] : []) as T[], rowCount: row ? 1 : 0 };
+    }
+
+    if (/^SELECT .* FROM image_assets WHERE message_id = \$1/.test(compactSql)) {
+      const row = [...this.imageAssets.values()].find(asset => asset.message_id === params[0]);
+      return { rows: (row ? [row] : []) as T[], rowCount: row ? 1 : 0 };
+    }
+
+    if (/^SELECT .* FROM image_assets WHERE room_id = \$1 ORDER BY created_at ASC/.test(compactSql)) {
+      const rows = [...this.imageAssets.values()]
+        .filter(asset => asset.room_id === params[0])
+        .sort((first, second) => toTime(first.created_at) - toTime(second.created_at));
+      return { rows: rows as T[], rowCount: rows.length };
+    }
+
+    if (/DELETE FROM image_assets WHERE id = \$1/.test(compactSql)) {
+      const deleted = this.imageAssets.delete(String(params[0]));
+      return { rows: [], rowCount: deleted ? 1 : 0 };
+    }
+
     if (/UPDATE rooms SET last_activity_at = GREATEST/.test(compactSql)) {
       const roomId = String(params[0]);
       const timestamp = String(params[1]);
@@ -432,6 +548,17 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       if (!room || room.creator_id !== creatorId) return { rows: [], rowCount: 0 };
       const updated = { ...room, name };
       this.rooms.set(roomId, updated);
+      return { rows: [updated] as T[], rowCount: 1 };
+    }
+
+    if (/UPDATE room_messages SET content = \$3, mime_type = \$4 WHERE room_id = \$1 AND id = \$2 AND message_type = 'image' RETURNING/.test(compactSql)) {
+      const [roomId, messageId, content, mimeType] = params.map(String);
+      const rows = this.messages.get(roomId) || [];
+      const index = rows.findIndex(row => row.id === messageId && row.message_type === 'image');
+      if (index === -1) return { rows: [], rowCount: 0 };
+      const updated = { ...rows[index], content, mime_type: mimeType };
+      rows[index] = updated;
+      this.messages.set(roomId, rows);
       return { rows: [updated] as T[], rowCount: 1 };
     }
 
@@ -511,9 +638,16 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       return { rows: [], rowCount: deleted ? 1 : 0 };
     }
 
-    if (/SELECT .* FROM rooms WHERE creator_id = \$1/.test(compactSql)) {
+    if (/FROM rooms r INNER JOIN room_members rm ON rm.room_id = r.id WHERE rm.client_id = \$1/.test(compactSql)) {
+      const clientId = String(params[0]);
+      const roomIds = new Set<string>();
+      for (const [roomId, members] of this.roomMembers.entries()) {
+        if (members.has(clientId)) {
+          roomIds.add(roomId);
+        }
+      }
       const rows = [...this.rooms.values()]
-        .filter(room => room.creator_id === params[0])
+        .filter(room => roomIds.has(room.id))
         .sort((first, second) => toTime(second.last_activity_at) - toTime(first.last_activity_at) || toTime(second.created_at) - toTime(first.created_at));
       return { rows: rows as T[], rowCount: rows.length };
     }
@@ -531,6 +665,12 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       }
       this.rooms.delete(roomId);
       this.messages.delete(roomId);
+      this.roomMembers.delete(roomId);
+      for (const [assetId, asset] of this.imageAssets.entries()) {
+        if (asset.room_id === roomId) {
+          this.imageAssets.delete(assetId);
+        }
+      }
       this.costs.delete(roomId);
       return { rows: [], rowCount: 1 };
     }
@@ -539,9 +679,11 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       return { rows: [{ count: String(this.rooms.size) }] as T[], rowCount: 1 };
     }
 
-    if (/TRUNCATE room_ai_cost_totals, room_messages, rooms/.test(compactSql)) {
+    if (/TRUNCATE room_ai_cost_totals, (image_assets, )?room_messages, (room_members, )?rooms/.test(compactSql)) {
       this.rooms.clear();
       this.messages.clear();
+      this.roomMembers.clear();
+      this.imageAssets.clear();
       this.costs.clear();
       return { rows: [], rowCount: 0 };
     }
@@ -683,6 +825,130 @@ for (const [storeName, createFixture] of storeFactories) {
       assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), [replacement]);
       assert.equal(await store.clearRoomMessages(initialRoom.id), 1);
       assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), []);
+    });
+
+    it('tracks durable room membership and lists joined rooms', async () => {
+      const { store } = createFixture();
+      const initialRoom = room();
+
+      assert.deepEqual(await store.saveRoom(initialRoom), initialRoom);
+      assert.deepEqual(await store.getRoomMember(initialRoom.id, initialRoom.creatorId), {
+        roomId: initialRoom.id,
+        clientId: initialRoom.creatorId,
+        role: 'owner',
+        joinedAt: initialRoom.createdAt,
+      });
+      assert.equal(await store.isRoomMember(initialRoom.id, initialRoom.creatorId), true);
+
+      assert.deepEqual(await store.addRoomMember(initialRoom.id, 'client-2', 'member', '2026-05-03T00:01:00.000Z'), {
+        roomId: initialRoom.id,
+        clientId: 'client-2',
+        role: 'member',
+        joinedAt: '2026-05-03T00:01:00.000Z',
+      });
+
+      assert.deepEqual((await store.readRoomMembers(initialRoom.id)).map(member => member.clientId), [initialRoom.creatorId, 'client-2']);
+      assert.deepEqual((await store.readRoomsByUser('client-2')).map(item => item.id), [initialRoom.id]);
+      assert.equal(await store.isRoomMember(initialRoom.id, 'missing-client'), false);
+    });
+
+    it('preserves image asset metadata without storing binary image payload in messages', async () => {
+      const { store } = createFixture();
+      const initialRoom = room();
+      const asset: ImageAsset = {
+        id: 'asset-1',
+        roomId: initialRoom.id,
+        messageId: 'image-message',
+        objectKey: 'rooms/room-1/asset-1.webp',
+        mimeType: 'image/webp',
+        byteSize: 123,
+        width: 10,
+        height: 20,
+        createdAt: '2026-05-03T00:00:00.000Z',
+      };
+      const imageMessage = message({
+        id: 'image-message',
+        content: asset.id,
+        messageType: 'image',
+        mimeType: 'image/webp',
+      });
+
+      await store.saveRoom(initialRoom);
+      assert.deepEqual(await store.saveImageAsset(asset), asset);
+      assert.deepEqual(await store.getImageAsset(asset.id), asset);
+      assert.deepEqual(await store.getImageAssetByMessageId(imageMessage.id), asset);
+      assert.deepEqual(await store.readImageAssetsByRoom(initialRoom.id), [asset]);
+
+      await store.appendMessage(imageMessage);
+
+      assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), [{
+        ...imageMessage,
+        imageAsset: {
+          id: asset.id,
+          mimeType: asset.mimeType,
+          byteSize: asset.byteSize,
+          width: asset.width,
+          height: asset.height,
+        },
+      }]);
+      await store.deleteImageAsset(asset.id);
+      assert.equal(await store.getImageAsset(asset.id), null);
+      assert.deepEqual(await store.readImageAssetsByRoom(initialRoom.id), []);
+    });
+
+    it('replaces legacy base64 image payloads with asset metadata without changing message time or room activity', async () => {
+      const { store } = createFixture();
+      const initialRoom = room({ lastActivityAt: '2026-05-03T00:00:10.000Z' });
+      const legacyImage = message({
+        id: 'legacy-image',
+        content: 'data:image/png;base64,AAAA',
+        messageType: 'image',
+        mimeType: 'image/png',
+        timestamp: '2026-05-03T00:00:02.000Z',
+      });
+      const asset: ImageAsset = {
+        id: 'asset-legacy',
+        roomId: initialRoom.id,
+        messageId: legacyImage.id,
+        objectKey: 'rooms/room-1/asset-legacy.webp',
+        mimeType: 'image/webp',
+        byteSize: 456,
+        width: 12,
+        height: 14,
+        createdAt: '2026-05-03T00:00:11.000Z',
+      };
+
+      await store.saveRoom(initialRoom);
+      await store.appendMessage(legacyImage);
+
+      const result = await store.replaceMessageImageAsset(initialRoom.id, legacyImage.id, asset);
+
+      assert.equal(result?.found, true);
+      assert.deepEqual(result?.room, initialRoom);
+      assert.deepEqual(result?.updatedMessage, {
+        ...legacyImage,
+        content: asset.id,
+        mimeType: asset.mimeType,
+        imageAsset: {
+          id: asset.id,
+          mimeType: asset.mimeType,
+          byteSize: asset.byteSize,
+          width: asset.width,
+          height: asset.height,
+        },
+      });
+      assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), [result?.updatedMessage]);
+      assert.deepEqual(await store.getRoomById(initialRoom.id), initialRoom);
+      assert.deepEqual(await store.getImageAsset(asset.id), asset);
+
+      const missingResult = await store.replaceMessageImageAsset(initialRoom.id, 'missing-image', {
+        ...asset,
+        id: 'missing-asset',
+        objectKey: 'rooms/room-1/missing-asset.webp',
+      });
+      assert.equal(missingResult?.found, false);
+      assert.equal(await store.getImageAsset('missing-asset'), null);
+      assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), [result?.updatedMessage]);
     });
 
     it('renames rooms only for the creator without changing room activity', async () => {

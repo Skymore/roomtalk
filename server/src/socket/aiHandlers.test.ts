@@ -101,6 +101,8 @@ const createHarness = (options: { rejectSaves?: boolean; rejectSaveNumbers?: num
   const socket = new FakeSocket();
   const io = new FakeIo();
   const store = {
+    rooms: [room()],
+    members: new Set(['room-1:client-1']),
     messages: [message()],
     appendedMessages: [] as Message[],
     upsertedMessages: [] as Message[],
@@ -113,6 +115,26 @@ const createHarness = (options: { rejectSaves?: boolean; rejectSaveNumbers?: num
     },
     async readMessagesByRoom(roomId: string) {
       return this.messages.filter(item => item.roomId === roomId);
+    },
+    async addRoomMember(roomId: string, memberClientId: string, role: 'owner' | 'member', joinedAt = '2026-05-03T00:00:00.000Z') {
+      this.members.add(`${roomId}:${memberClientId}`);
+      return { roomId, clientId: memberClientId, role, joinedAt };
+    },
+    async getRoomMember(roomId: string, memberClientId: string) {
+      return this.members.has(`${roomId}:${memberClientId}`)
+        ? { roomId, clientId: memberClientId, role: 'member' as const, joinedAt: '2026-05-03T00:00:00.000Z' }
+        : null;
+    },
+    async isRoomMember(roomId: string, memberClientId: string) {
+      return this.members.has(`${roomId}:${memberClientId}`);
+    },
+    async readRoomMembers(roomId: string) {
+      return [...this.members]
+        .filter(key => key.startsWith(`${roomId}:`))
+        .map(key => ({ roomId, clientId: key.split(':')[1], role: 'member' as const, joinedAt: '2026-05-03T00:00:00.000Z' }));
+    },
+    async getRoomById(roomId: string) {
+      return this.rooms.find(item => item.id === roomId) || null;
     },
     async saveMessageHistory(_roomId: string, messages: Message[]) {
       this.savedHistories.push(messages);
@@ -194,6 +216,11 @@ const createHarness = (options: { rejectSaves?: boolean; rejectSaveNumbers?: num
     getAIClientForModel: () => {
       throw new Error('E2E fake AI should not request a real client');
     },
+    imageObjectStorage: {
+      isConfigured: () => true,
+      putImageObject: async () => {},
+      createReadUrl: async () => ({ url: 'https://signed.example/image.webp', expiresAt: '2026-05-03T00:15:00.000Z' }),
+    },
   });
 
   return { io, socket, store };
@@ -254,6 +281,20 @@ describe('AI socket handlers', () => {
       'E2E AI response ',
       'to: hello',
     ]);
+  });
+
+  it('rejects AI requests from clients without room access', async () => {
+    const { io, socket, store } = createHarness({ clientId: 'client-2' });
+    store.members.clear();
+
+    let response: unknown;
+    await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id }, (ack: unknown) => {
+      response = ack;
+    });
+
+    assert.deepEqual(response, { success: false, error: 'You are not authorized to access this room' });
+    assert.deepEqual(socket.emitted, [{ event: 'error', args: [{ message: 'You are not authorized to access this room' }] }]);
+    assert.deepEqual(io.roomEmits, []);
   });
 
   it('emits an error and does not stream when the placeholder cannot be persisted', async () => {
