@@ -107,6 +107,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   const recordingActionRef = useRef<'send' | 'cancel' | 'text'>('send');
   const transcriberRef = useRef<StreamingTranscriber | null>(null);
   const recognizedTextRef = useRef('');
+  const isPointerDownRef = useRef(false); // true while the user holds the voice button
+  const micPrimedRef = useRef(false); // permission already granted this session
   const MAX_RECORDING_SECONDS = 60;
   const GESTURE_UP_THRESHOLD = 50;
   const GESTURE_LR_THRESHOLD = 60;
@@ -157,7 +159,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
     const preview = message.messageType === 'image'
       ? t('sharedImage')
-      : message.content.replace(/\s+/g, ' ').trim().slice(0, 120) || '[Empty message]';
+      : message.messageType === 'voice'
+        ? t('voiceMessage')
+        : message.content.replace(/\s+/g, ' ').trim().slice(0, 120) || '[Empty message]';
 
     return {
       messageId: message.id,
@@ -566,6 +570,14 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           setIsSending(false);
         }
       };
+      // The user may have released during the getUserMedia await (especially on
+      // the very first permission prompt). Don't start a stuck recording.
+      if (!isPointerDownRef.current) {
+        stream.getTracks().forEach(track => track.stop());
+        audioStreamRef.current = null;
+        return;
+      }
+
       recorder.start();
       mediaRecorderRef.current = recorder;
       setIsRecording(true);
@@ -626,10 +638,13 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   }, []);
 
   // Pointer gesture handlers for the hold-to-speak button
-  const handleVoicePointerDown = useCallback(async (e: React.PointerEvent<HTMLButtonElement>) => {
-    e.currentTarget.setPointerCapture(e.pointerId);
+  const handleVoicePointerDown = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    isPointerDownRef.current = true;
     voiceStartPosRef.current = { x: e.clientX, y: e.clientY };
-    await startRecording();
+    micPrimedRef.current = true;
+    void startRecording();
   }, [startRecording]);
 
   const handleVoicePointerMove = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
@@ -648,8 +663,30 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   }, []);
 
   const handleVoicePointerUp = useCallback(() => {
+    isPointerDownRef.current = false;
     stopRecordingAndFinish();
   }, [stopRecordingAndFinish]);
+
+  // Prompt for mic permission when entering voice mode (a tap, not a hold), so
+  // the first press-and-hold isn't interrupted by the permission dialog.
+  const handleToggleVoiceMode = useCallback(() => {
+    if (isRecording) {
+      isPointerDownRef.current = false;
+      stopRecordingAndFinish();
+    }
+    setIsVoiceMode((wasVoice) => {
+      const nextVoice = !wasVoice;
+      if (nextVoice && !micPrimedRef.current) {
+        navigator.mediaDevices?.getUserMedia({ audio: true })
+          .then((stream) => {
+            stream.getTracks().forEach(track => track.stop());
+            micPrimedRef.current = true;
+          })
+          .catch(() => { /* user can still try; press will surface the error */ });
+      }
+      return nextVoice;
+    });
+  }, [isRecording, stopRecordingAndFinish]);
 
   // 处理图片上传
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -880,7 +917,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     || (replyToMessage?.messageType === 'ai' ? t('aiAssistantName') : t('participant'));
   const replyPreview = replyToMessage?.messageType === 'image'
     ? t('sharedImage')
-    : replyToMessage?.content.replace(/\s+/g, ' ').trim().slice(0, 120);
+    : replyToMessage?.messageType === 'voice'
+      ? t('voiceMessage')
+      : replyToMessage?.content.replace(/\s+/g, ' ').trim().slice(0, 120);
 
   return (
     <div className="relative">
@@ -1017,7 +1056,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               variant="light"
               aria-label={isVoiceMode ? t('keyboardInput') : t('voiceInput')}
               className="h-8 w-8 min-w-8 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
-              onPress={() => { setIsVoiceMode(v => !v); if (isRecording) stopRecordingAndFinish(); }}
+              onPress={handleToggleVoiceMode}
               isDisabled={isSending || isAiProcessing}
             >
               <Icon icon={isVoiceMode ? 'lucide:keyboard' : 'lucide:mic'} className="h-4 w-4 sm:h-5 sm:w-5" />

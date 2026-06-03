@@ -32,7 +32,7 @@ export const POSTGRES_SCHEMA_SQL = [
     client_id TEXT NOT NULL,
     content TEXT NOT NULL,
     timestamp TIMESTAMPTZ NOT NULL,
-    message_type TEXT NOT NULL CHECK (message_type IN ('text', 'image', 'ai')),
+    message_type TEXT NOT NULL CHECK (message_type IN ('text', 'image', 'ai', 'voice')),
     username TEXT,
     avatar JSONB,
     mime_type TEXT,
@@ -44,6 +44,11 @@ export const POSTGRES_SCHEMA_SQL = [
     position INTEGER NOT NULL
   )`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS reply_to JSONB`,
+  // Widen the message_type check to allow 'voice' on tables created before voice
+  // messages existed. Drop-then-add keeps this idempotent across restarts.
+  `ALTER TABLE room_messages DROP CONSTRAINT IF EXISTS room_messages_message_type_check`,
+  `ALTER TABLE room_messages ADD CONSTRAINT room_messages_message_type_check
+    CHECK (message_type IN ('text', 'image', 'ai', 'voice'))`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_room_messages_room_position
     ON room_messages (room_id, position)`,
   `CREATE INDEX IF NOT EXISTS idx_room_messages_room_timestamp

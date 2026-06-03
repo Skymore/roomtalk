@@ -23,7 +23,9 @@ export function normalizeDisplayName(username?: string): string | undefined {
 export function createReplyReference(message: Message): MessageReplyReference {
   const textualPreview = message.messageType === 'image'
     ? '[Image attachment]'
-    : collapseInlineText(message.content);
+    : message.messageType === 'voice'
+      ? '[Voice message]'
+      : collapseInlineText(message.content);
   const preview = textualPreview.slice(0, MAX_REPLY_PREVIEW_LENGTH).trim() || '[Empty message]';
 
   return {
@@ -206,6 +208,12 @@ export function buildAnthropicMessages(contextMessages: Message[]): AnthropicMes
         return { role, content: blocks };
       }
 
+      if (message.messageType === 'voice') {
+        return role === 'user'
+          ? { role, content: formatHumanContextForAI(message, '[Voice message]') }
+          : null;
+      }
+
       if (typeof message.content !== 'string' || !message.content.trim()) return null;
       return {
         role,
@@ -261,6 +269,13 @@ export function buildAIProviderMessages(systemPrompt: string, contextMessages: M
               },
             },
           ],
+        };
+      }
+
+      if (message.messageType === 'voice') {
+        return {
+          role,
+          content: role === 'user' ? formatHumanContextForAI(message, '[Voice message]') : '[Voice message]',
         };
       }
 

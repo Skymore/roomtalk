@@ -1,4 +1,5 @@
 import { createTranscriptionToken } from './socket';
+import { buildTranscriptFromTurns, downsampleBuffer, floatToPCM16 } from './audioEncoding';
 
 const ASSEMBLYAI_WS_BASE = 'wss://streaming.assemblyai.com/v3/ws';
 const TARGET_SAMPLE_RATE = 16000;
@@ -9,39 +10,6 @@ export interface StreamingTranscriber {
   stop: () => Promise<void>;
   /** The full transcript accumulated so far. */
   getText: () => string;
-}
-
-// Linear-interpolation downsample from the AudioContext rate to 16 kHz mono.
-function downsampleBuffer(input: Float32Array, inputRate: number, targetRate: number): Float32Array {
-  if (targetRate >= inputRate) return input;
-  const ratio = inputRate / targetRate;
-  const outLength = Math.floor(input.length / ratio);
-  const output = new Float32Array(outLength);
-  let outIndex = 0;
-  let inIndex = 0;
-  while (outIndex < outLength) {
-    const nextInIndex = Math.round((outIndex + 1) * ratio);
-    let sum = 0;
-    let count = 0;
-    for (let i = inIndex; i < nextInIndex && i < input.length; i++) {
-      sum += input[i];
-      count++;
-    }
-    output[outIndex] = count > 0 ? sum / count : 0;
-    outIndex++;
-    inIndex = nextInIndex;
-  }
-  return output;
-}
-
-// Convert Float32 [-1, 1] samples to signed 16-bit PCM little-endian.
-function floatToPCM16(input: Float32Array): Int16Array {
-  const output = new Int16Array(input.length);
-  for (let i = 0; i < input.length; i++) {
-    const s = Math.max(-1, Math.min(1, input[i]));
-    output[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-  }
-  return output;
 }
 
 /**
@@ -69,11 +37,7 @@ export async function startStreamingTranscription(
   const turns = new Map<number, string>();
   let fullText = '';
   const rebuild = () => {
-    fullText = [...turns.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([, transcript]) => transcript)
-      .join(' ')
-      .trim();
+    fullText = buildTranscriptFromTurns(turns);
     onTranscript(fullText);
   };
 
