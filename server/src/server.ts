@@ -149,6 +149,7 @@ const infrastructureReady = (async () => {
       await store.resetAllDataForTests?.();
       serverLogger.warn('E2E data reset on startup', { persistenceStore: activePersistenceStore });
     }
+    await store.clearRealtimeRoomMembers?.();
     await store.failInterruptedStreamingMessages?.('Response interrupted.');
     
     redisLogger.info('Connected to Redis and Socket.IO adapter initialized', { persistenceStore: activePersistenceStore });

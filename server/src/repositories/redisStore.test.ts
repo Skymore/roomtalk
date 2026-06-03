@@ -270,6 +270,7 @@ class FailingReplaceRedis extends MemoryRedis {
 const logger = {
   debug() {},
   error() {},
+  info() {},
   warn() {},
 };
 
@@ -346,7 +347,7 @@ describe('RedisStore', () => {
     assert.equal(updatedRoom?.lastActivityAt, '2026-05-04T00:00:00.000Z');
     assert.deepEqual(await store.readRoomsByUser('client-1'), [updatedRoom]);
     await store.writeRoomMessagesCache('room-1', [message()]);
-    await store.updateRoomMemberCount('room-1', 'client-1', true);
+    await store.updateRoomMemberCount('room-1', 'client-1', 'socket-1', true);
     await store.incrementRoomAICost('room-1', cost(0.5));
     await store.deleteRoom('room-1', 'client-1');
 
@@ -358,6 +359,7 @@ describe('RedisStore', () => {
     assert.deepEqual(await store.readRoomsByUser('client-2'), []);
     assert.deepEqual(await store.readRoomMembers('room-1'), []);
     assert.equal(await store.getRoomMemberCount('room-1'), 0);
+    assert.equal(redis.sets.has('room:room-1:member_sockets:client-1'), false);
     assert.equal(await redis.get(store.getRoomAICostKey('room-1')), undefined);
   });
 
@@ -591,11 +593,12 @@ describe('RedisStore', () => {
   it('tracks member counts, client sessions, and per-socket room membership', async () => {
     const { store } = createStore();
 
-    assert.equal(await store.updateRoomMemberCount('room-1', 'client-1', true), 1);
-    assert.equal(await store.updateRoomMemberCount('room-1', 'client-1', true), 1);
-    assert.equal(await store.updateRoomMemberCount('room-1', 'client-2', true), 2);
+    assert.equal(await store.updateRoomMemberCount('room-1', 'client-1', 'socket-1', true), 1);
+    assert.equal(await store.updateRoomMemberCount('room-1', 'client-1', 'socket-2', true), 1);
+    assert.equal(await store.updateRoomMemberCount('room-1', 'client-2', 'socket-3', true), 2);
     assert.equal(await store.getRoomMemberCount('room-1'), 2);
-    assert.equal(await store.updateRoomMemberCount('room-1', 'client-1', false), 1);
+    assert.equal(await store.updateRoomMemberCount('room-1', 'client-1', 'socket-1', false), 2);
+    assert.equal(await store.updateRoomMemberCount('room-1', 'client-1', 'socket-2', false), 1);
 
     await store.storeClientSession('socket-1', 'client-1');
     assert.equal(await store.getClientId('socket-1'), 'client-1');
@@ -606,6 +609,28 @@ describe('RedisStore', () => {
     assert.deepEqual(await store.getUserRooms('socket-1'), ['room-1', 'room-2']);
     await store.storeUserRooms('socket-1', []);
     assert.deepEqual(await store.getUserRooms('socket-1'), []);
+  });
+
+  it('clears realtime room member state without deleting persistent room members', async () => {
+    const { redis, store } = createStore();
+
+    await store.saveRoom(room());
+    await store.addRoomMember('room-1', 'client-2', 'member', '2026-05-03T00:01:00.000Z');
+    await store.updateRoomMemberCount('room-1', 'client-1', 'socket-1', true);
+    await store.updateRoomMemberCount('room-1', 'client-1', 'socket-2', true);
+    await store.updateRoomMemberCount('room-1', 'client-2', 'socket-3', true);
+
+    assert.equal(await store.getRoomMemberCount('room-1'), 2);
+    assert.deepEqual(await redis.sMembers('room:room-1:member_sockets:client-1'), ['socket-1', 'socket-2']);
+
+    await store.clearRealtimeRoomMembers();
+
+    assert.equal(await store.getRoomMemberCount('room-1'), 0);
+    assert.deepEqual(await redis.sMembers('room:room-1:member_sockets:client-1'), []);
+    assert.deepEqual(
+      (await store.readRoomMembers('room-1')).map(member => member.clientId),
+      ['client-1', 'client-2']
+    );
   });
 
   it('resets all Redis test data through the store abstraction', async () => {
