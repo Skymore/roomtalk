@@ -340,6 +340,19 @@ Keep Redis data intact until the PostgreSQL cutover has been verified.
 
 Full rollout checklist: [docs/postgres-rollout-runbook.md](docs/postgres-rollout-runbook.md).
 
+### Image Object Storage Migration
+
+Legacy image messages may still store large base64 payloads in PostgreSQL. New image uploads use private object storage, and old image messages can be migrated with:
+
+```bash
+cd server
+npm run build
+node dist/src/scripts/migrateImageMessagesToObjectStorage.js --room-id=<ROOM_ID>
+node dist/src/scripts/migrateImageMessagesToObjectStorage.js --execute --room-id=<ROOM_ID> --backup-file="$ROOMTALK_DB_BACKUP_FILE"
+```
+
+Run this migration from a local workstation or a dedicated migration host, not from the serving Fly app VM. See [docs/image-object-storage-migration-runbook.md](docs/image-object-storage-migration-runbook.md).
+
 ### Persistence Smoke Tests
 
 Run a local smoke check before and after persistence-mode changes:

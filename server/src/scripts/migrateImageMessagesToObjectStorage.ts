@@ -115,6 +115,14 @@ export const assertBackupBeforeExecute = (dryRun: boolean, backupFile?: string) 
   }
 };
 
+export const assertMigrationHost = (env: NodeJS.ProcessEnv = process.env) => {
+  if (!env.FLY_APP_NAME || env.ALLOW_FLY_APP_VM_IMAGE_MIGRATION === 'true') {
+    return;
+  }
+
+  throw new Error('Do not run legacy image migration on the Fly app VM. Run it from a local workstation or a dedicated migration host, or set ALLOW_FLY_APP_VM_IMAGE_MIGRATION=true if you intentionally provisioned a non-serving migration environment.');
+};
+
 const parseLegacyImagePayload = (message: Message): ParsedImagePayload | null => {
   if (message.messageType !== 'image' || message.imageAsset) {
     return null;
@@ -322,6 +330,7 @@ async function main() {
   const backupFile = findArgValue('--backup-file') || process.env.ROOMTALK_DB_BACKUP_FILE;
   const databaseUrl = process.env.DATABASE_URL;
 
+  assertMigrationHost();
   assertBackupBeforeExecute(dryRun, backupFile);
 
   if (!databaseUrl) {
