@@ -19,6 +19,7 @@ import { registerApiRoutes } from './routes/apiRoutes';
 import { registerSocketHandlers } from './socket/registerSocketHandlers';
 import { createAIClients } from './services/aiClients';
 import { createAIRoleDraftGenerator } from './services/aiRoleGenerator';
+import { createImageObjectStorageFromEnv } from './services/imageObjectStorage';
 
 dotenv.config();
 
@@ -29,6 +30,8 @@ const postgresLogger = new Logger('PostgreSQL');
 const socketLogger = new Logger('SocketIO');
 const routeLogger = new Logger('Routes');
 const openaiLogger = new Logger('OpenAI');
+const imageStorageLogger = new Logger('ImageStorage');
+const imageObjectStorage = createImageObjectStorageFromEnv(imageStorageLogger);
 
 const aiModelRegistry = createAIModelRegistry({
   defaultModelId: process.env.AI_MODEL || process.env.OPENROUTER_MODEL || DEFAULT_AI_MODEL_ID,
@@ -165,6 +168,7 @@ registerSocketHandlers({
   openaiLogger,
   normalizeAIModel,
   getAIClientForModel,
+  imageObjectStorage,
 });
 
 registerApiRoutes(app, {

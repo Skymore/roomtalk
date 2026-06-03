@@ -184,6 +184,12 @@ export function buildAnthropicMessages(contextMessages: Message[]): AnthropicMes
       const role = message.clientId === 'ai_assistant' ? 'assistant' as const : 'user' as const;
 
       if (message.messageType === 'image') {
+        if (message.imageAsset) {
+          return role === 'user'
+            ? { role, content: formatHumanContextForAI(message, '[Image attachment]') }
+            : null;
+        }
+
         const dataUrl = message.content.startsWith('data:')
           ? message.content
           : `data:${message.mimeType || 'image/png'};base64,${message.content}`;
@@ -230,6 +236,13 @@ export function buildAIProviderMessages(systemPrompt: string, contextMessages: M
       const role: AIProviderMessage['role'] = message.clientId === 'ai_assistant' ? 'assistant' : 'user';
 
       if (message.messageType === 'image') {
+        if (message.imageAsset) {
+          return {
+            role,
+            content: role === 'user' ? formatHumanContextForAI(message, '[Image attachment]') : '[Image attachment]',
+          };
+        }
+
         const imageUrl = message.content.startsWith('data:')
           ? message.content
           : `data:${message.mimeType || 'image/png'};base64,${message.content}`;

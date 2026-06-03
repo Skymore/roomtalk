@@ -120,7 +120,8 @@ describe('PostgresStore', () => {
   });
 
   it('saves, reads, counts, and deletes rooms', async () => {
-    const pool = new ScriptedPool([
+    const client = new ScriptedClient([
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
       {
         rows: [roomRow({ name: 'Saved Room', description: 'desc' })],
         assertCall(call) {
@@ -130,9 +131,20 @@ describe('PostgresStore', () => {
         },
       },
       {
+        rowCount: 1,
+        assertCall(call) {
+          assert.match(call.sql, /INSERT INTO room_members/);
+          assert.deepEqual(call.params, ['room-1', 'client-1', '2026-05-03T00:00:00.000Z']);
+        },
+      },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'COMMIT') },
+    ]);
+    const pool = new ScriptedPool([
+      {
         rows: [roomRow({ name: 'Saved Room', description: 'desc' })],
         assertCall(call) {
-          assert.match(call.sql, /WHERE creator_id = \$1/);
+          assert.match(call.sql, /INNER JOIN room_members/);
+          assert.match(call.sql, /WHERE rm\.client_id = \$1/);
           assert.deepEqual(call.params, ['client-1']);
         },
       },
@@ -145,7 +157,7 @@ describe('PostgresStore', () => {
           assert.deepEqual(call.params, ['room-1', 'client-1']);
         },
       },
-    ]);
+    ], client);
     const store = new PostgresStore(pool, logger as any);
 
     assert.deepEqual(await store.saveRoom(room({ name: 'Saved Room', description: 'desc' })), room({ name: 'Saved Room', description: 'desc' }));
@@ -153,6 +165,264 @@ describe('PostgresStore', () => {
     assert.deepEqual(await store.getRoomById('room-1'), room({ name: 'Saved Room', description: 'desc' }));
     assert.equal(await store.countRooms(), 1);
     await store.deleteRoom('room-1', 'client-1');
+  });
+
+  it('persists and reads room memberships', async () => {
+    const pool = new ScriptedPool([
+      {
+        rows: [{
+          room_id: 'room-1',
+          client_id: 'client-2',
+          role: 'member',
+          joined_at: '2026-05-03T00:01:00.000Z',
+        }],
+        assertCall(call) {
+          assert.match(call.sql, /INSERT INTO room_members/);
+          assert.deepEqual(call.params, ['room-1', 'client-2', 'member', '2026-05-03T00:01:00.000Z']);
+        },
+      },
+      {
+        rows: [{
+          room_id: 'room-1',
+          client_id: 'client-2',
+          role: 'member',
+          joined_at: '2026-05-03T00:01:00.000Z',
+        }],
+        assertCall(call) {
+          assert.match(call.sql, /WHERE room_id = \$1 AND client_id = \$2/);
+        },
+      },
+      {
+        rows: [{ '?column?': 1 }],
+        assertCall(call) {
+          assert.match(call.sql, /SELECT 1 FROM room_members/);
+        },
+      },
+      {
+        rows: [
+          {
+            room_id: 'room-1',
+            client_id: 'client-1',
+            role: 'owner',
+            joined_at: '2026-05-03T00:00:00.000Z',
+          },
+          {
+            room_id: 'room-1',
+            client_id: 'client-2',
+            role: 'member',
+            joined_at: '2026-05-03T00:01:00.000Z',
+          },
+        ],
+        assertCall(call) {
+          assert.match(call.sql, /ORDER BY joined_at ASC/);
+        },
+      },
+    ]);
+    const store = new PostgresStore(pool, logger as any);
+
+    assert.deepEqual(await store.addRoomMember('room-1', 'client-2', 'member', '2026-05-03T00:01:00.000Z'), {
+      roomId: 'room-1',
+      clientId: 'client-2',
+      role: 'member',
+      joinedAt: '2026-05-03T00:01:00.000Z',
+    });
+    assert.deepEqual(await store.getRoomMember('room-1', 'client-2'), {
+      roomId: 'room-1',
+      clientId: 'client-2',
+      role: 'member',
+      joinedAt: '2026-05-03T00:01:00.000Z',
+    });
+    assert.equal(await store.isRoomMember('room-1', 'client-2'), true);
+    assert.deepEqual(await store.readRoomMembers('room-1'), [
+      {
+        roomId: 'room-1',
+        clientId: 'client-1',
+        role: 'owner',
+        joinedAt: '2026-05-03T00:00:00.000Z',
+      },
+      {
+        roomId: 'room-1',
+        clientId: 'client-2',
+        role: 'member',
+        joinedAt: '2026-05-03T00:01:00.000Z',
+      },
+    ]);
+  });
+
+  it('persists image assets and attaches public metadata to image messages', async () => {
+    const imageAssetRow = {
+      id: 'asset-1',
+      room_id: 'room-1',
+      message_id: 'image-message',
+      object_key: 'rooms/room-1/asset-1.webp',
+      mime_type: 'image/webp',
+      byte_size: 123,
+      width: 10,
+      height: 20,
+      created_at: '2026-05-03T00:00:00.000Z',
+    };
+    const imageMessageRow = {
+      id: 'image-message',
+      room_id: 'room-1',
+      client_id: 'client-1',
+      content: 'asset-1',
+      timestamp: '2026-05-03T00:00:01.000Z',
+      message_type: 'image',
+      username: null,
+      avatar: null,
+      mime_type: 'image/webp',
+      status: null,
+      ai_model: null,
+      usage: null,
+      cost: null,
+      reply_to: null,
+    };
+    const pool = new ScriptedPool([
+      {
+        rows: [imageAssetRow],
+        assertCall(call) {
+          assert.match(call.sql, /INSERT INTO image_assets/);
+          assert.equal(call.params?.[0], 'asset-1');
+          assert.equal(call.params?.[3], 'rooms/room-1/asset-1.webp');
+        },
+      },
+      { rows: [imageAssetRow], assertCall: call => assert.match(call.sql, /WHERE id = \$1/) },
+      { rows: [imageAssetRow], assertCall: call => assert.match(call.sql, /WHERE message_id = \$1/) },
+      { rows: [imageAssetRow], assertCall: call => assert.match(call.sql, /WHERE room_id = \$1/) },
+      { rows: [imageMessageRow] },
+      { rows: [imageAssetRow] },
+      { rowCount: 1, assertCall: call => assert.match(call.sql, /DELETE FROM image_assets WHERE id = \$1/) },
+    ]);
+    const store = new PostgresStore(pool, logger as any);
+    const asset = {
+      id: 'asset-1',
+      roomId: 'room-1',
+      messageId: 'image-message',
+      objectKey: 'rooms/room-1/asset-1.webp',
+      mimeType: 'image/webp',
+      byteSize: 123,
+      width: 10,
+      height: 20,
+      createdAt: '2026-05-03T00:00:00.000Z',
+    };
+
+    assert.deepEqual(await store.saveImageAsset(asset), asset);
+    assert.deepEqual(await store.getImageAsset('asset-1'), asset);
+    assert.deepEqual(await store.getImageAssetByMessageId('image-message'), asset);
+    assert.deepEqual(await store.readImageAssetsByRoom('room-1'), [asset]);
+    assert.deepEqual(await store.readMessagesByRoom('room-1'), [{
+      id: 'image-message',
+      clientId: 'client-1',
+      content: 'asset-1',
+      roomId: 'room-1',
+      timestamp: '2026-05-03T00:00:01.000Z',
+      messageType: 'image',
+      mimeType: 'image/webp',
+      imageAsset: {
+        id: 'asset-1',
+        mimeType: 'image/webp',
+        byteSize: 123,
+        width: 10,
+        height: 20,
+      },
+    }]);
+    await store.deleteImageAsset('asset-1');
+  });
+
+  it('replaces legacy image message payloads with image asset metadata without changing room activity', async () => {
+    const asset = {
+      id: 'asset-legacy',
+      roomId: 'room-1',
+      messageId: 'legacy-image',
+      objectKey: 'rooms/room-1/asset-legacy.webp',
+      mimeType: 'image/webp',
+      byteSize: 456,
+      width: 12,
+      height: 14,
+      createdAt: '2026-05-03T00:00:11.000Z',
+    };
+    const imageMessageRow = {
+      id: 'legacy-image',
+      room_id: 'room-1',
+      client_id: 'client-1',
+      content: 'asset-legacy',
+      timestamp: '2026-05-03T00:00:01.000Z',
+      message_type: 'image',
+      username: null,
+      avatar: null,
+      mime_type: 'image/webp',
+      status: null,
+      ai_model: null,
+      usage: null,
+      cost: null,
+      reply_to: null,
+    };
+    const imageAssetRow = {
+      id: 'asset-legacy',
+      room_id: 'room-1',
+      message_id: 'legacy-image',
+      object_key: 'rooms/room-1/asset-legacy.webp',
+      mime_type: 'image/webp',
+      byte_size: 456,
+      width: 12,
+      height: 14,
+      created_at: '2026-05-03T00:00:11.000Z',
+    };
+    const client = new ScriptedClient([
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
+      { rows: [roomRow({ last_activity_at: '2026-05-03T00:00:10.000Z' })] },
+      {
+        rows: [imageMessageRow],
+        assertCall(call) {
+          assert.match(call.sql, /UPDATE room_messages/);
+          assert.match(call.sql, /message_type = 'image'/);
+          assert.deepEqual(call.params, ['room-1', 'legacy-image', 'asset-legacy', 'image/webp']);
+        },
+      },
+      {
+        rows: [imageAssetRow],
+        assertCall(call) {
+          assert.match(call.sql, /INSERT INTO image_assets/);
+          assert.deepEqual(call.params, [
+            'asset-legacy',
+            'room-1',
+            'legacy-image',
+            'rooms/room-1/asset-legacy.webp',
+            'image/webp',
+            456,
+            12,
+            14,
+            '2026-05-03T00:00:11.000Z',
+          ]);
+        },
+      },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'COMMIT') },
+    ]);
+    const pool = new ScriptedPool([], client);
+    const store = new PostgresStore(pool, logger as any);
+
+    assert.deepEqual(await store.replaceMessageImageAsset('room-1', 'legacy-image', asset), {
+      room: room({ lastActivityAt: '2026-05-03T00:00:10.000Z' }),
+      found: true,
+      updatedMessage: {
+        id: 'legacy-image',
+        clientId: 'client-1',
+        content: 'asset-legacy',
+        roomId: 'room-1',
+        timestamp: '2026-05-03T00:00:01.000Z',
+        messageType: 'image',
+        mimeType: 'image/webp',
+        imageAsset: {
+          id: 'asset-legacy',
+          mimeType: 'image/webp',
+          byteSize: 456,
+          width: 12,
+          height: 14,
+        },
+      },
+    });
+    assert.equal(client.calls.some(call => /UPDATE rooms/.test(call.sql)), false);
+    assert.equal(client.released, true);
   });
 
   it('appends messages in a transaction and returns the updated room', async () => {

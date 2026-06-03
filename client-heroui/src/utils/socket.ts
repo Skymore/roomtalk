@@ -40,6 +40,11 @@ type SendMessageAndAskAIAckResponse = SocketAckResponse & {
   aiMessageId?: string;
 };
 
+type ImageDownloadUrlAckResponse = SocketAckResponse & {
+  url?: string;
+  expiresAt?: string;
+};
+
 // Get current member count for a room
 export const getRoomMemberCount = (roomId: string): number => {
   return roomMemberCounts.get(roomId) || 0;
@@ -313,6 +318,27 @@ export const requestEditMessageAndAIResponse = (data: {
 }) => {
   return emitWithAck('edit_message_and_ask_ai', data, 'Timed out while starting AI response', 'Failed to start AI response')
     .then(() => undefined);
+};
+
+export const getImageDownloadUrl = (params: {
+  roomId: string;
+  assetId: string;
+}): Promise<{ url: string; expiresAt?: string }> => {
+  return emitWithAck<ImageDownloadUrlAckResponse>(
+    'get_image_download_url',
+    params,
+    'Timed out while getting image URL',
+    'Failed to get image URL',
+  ).then((response) => {
+    if (!response.url) {
+      throw new Error('Server did not return image URL');
+    }
+
+    return {
+      url: response.url,
+      expiresAt: response.expiresAt,
+    };
+  });
 };
 
 // Get a room by ID (for joining rooms by ID)

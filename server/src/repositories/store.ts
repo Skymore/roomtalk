@@ -1,4 +1,4 @@
-import { AICost, Message, Room, RoomAICostTotal } from '../types';
+import { AICost, ImageAsset, Message, Room, RoomAICostTotal, RoomMember, RoomMemberRole } from '../types';
 
 export interface MessageUpdateResult {
   room: Room;
@@ -36,9 +36,19 @@ export interface DurableRoomStore {
   saveMessageHistory(roomId: string, messages: Message[]): Promise<Room | null>;
   clearRoomMessages(roomId: string): Promise<number>;
   readMessagesByRoom(roomId: string): Promise<Message[]>;
+  saveImageAsset(asset: ImageAsset): Promise<ImageAsset | null>;
+  replaceMessageImageAsset(roomId: string, messageId: string, asset: ImageAsset): Promise<MessageUpdateResult | null>;
+  getImageAsset(assetId: string): Promise<ImageAsset | null>;
+  getImageAssetByMessageId(messageId: string): Promise<ImageAsset | null>;
+  readImageAssetsByRoom(roomId: string): Promise<ImageAsset[]>;
+  deleteImageAsset(assetId: string): Promise<void>;
   readRoomAICost(roomId: string): Promise<RoomAICostTotal>;
   incrementRoomAICost(roomId: string, cost: AICost | null): Promise<RoomAICostTotal>;
   saveRoom(room: Room): Promise<Room | null>;
+  addRoomMember(roomId: string, clientId: string, role: RoomMemberRole, joinedAt?: string): Promise<RoomMember | null>;
+  getRoomMember(roomId: string, clientId: string): Promise<RoomMember | null>;
+  isRoomMember(roomId: string, clientId: string): Promise<boolean>;
+  readRoomMembers(roomId: string): Promise<RoomMember[]>;
   readRoomsByUser(clientId: string): Promise<Room[]>;
   getRoomById(roomId: string): Promise<Room | null>;
   updateRoomName(roomId: string, creatorId: string, name: string): Promise<Room | null>;
@@ -184,6 +194,34 @@ export class CompositeRoomStore implements RoomStore {
     return messages;
   }
 
+  saveImageAsset(asset: ImageAsset) {
+    return this.durableStore.saveImageAsset(asset);
+  }
+
+  async replaceMessageImageAsset(roomId: string, messageId: string, asset: ImageAsset) {
+    const result = await this.durableStore.replaceMessageImageAsset(roomId, messageId, asset);
+    if (result?.found) {
+      await this.invalidateRoomMessagesCache(roomId);
+    }
+    return result;
+  }
+
+  getImageAsset(assetId: string) {
+    return this.durableStore.getImageAsset(assetId);
+  }
+
+  getImageAssetByMessageId(messageId: string) {
+    return this.durableStore.getImageAssetByMessageId(messageId);
+  }
+
+  readImageAssetsByRoom(roomId: string) {
+    return this.durableStore.readImageAssetsByRoom(roomId);
+  }
+
+  deleteImageAsset(assetId: string) {
+    return this.durableStore.deleteImageAsset(assetId);
+  }
+
   readRoomAICost(roomId: string) {
     return this.durableStore.readRoomAICost(roomId);
   }
@@ -194,6 +232,22 @@ export class CompositeRoomStore implements RoomStore {
 
   saveRoom(room: Room) {
     return this.durableStore.saveRoom(room);
+  }
+
+  addRoomMember(roomId: string, clientId: string, role: RoomMemberRole, joinedAt?: string) {
+    return this.durableStore.addRoomMember(roomId, clientId, role, joinedAt);
+  }
+
+  getRoomMember(roomId: string, clientId: string) {
+    return this.durableStore.getRoomMember(roomId, clientId);
+  }
+
+  isRoomMember(roomId: string, clientId: string) {
+    return this.durableStore.isRoomMember(roomId, clientId);
+  }
+
+  readRoomMembers(roomId: string) {
+    return this.durableStore.readRoomMembers(roomId);
   }
 
   readRoomsByUser(clientId: string) {

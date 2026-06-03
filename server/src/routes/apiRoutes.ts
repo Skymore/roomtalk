@@ -6,6 +6,7 @@ import { Logger } from '../logger';
 import { RoomStore } from '../repositories/store';
 import { Message, Room } from '../types';
 import { AIRoleDraft, MAX_AI_ROLE_IDEA_LENGTH } from '../services/aiRoleGenerator';
+import { hasRoomAccess } from '../socket/roomAccess';
 
 interface ApiRouteOptions {
   store: RoomStore;
@@ -20,6 +21,11 @@ interface ApiRouteOptions {
 export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   const { store, io, redisClient, routeLogger, getAIModelResponse, generateAIRoleDraft, persistenceStore = 'redis' } = options;
 
+  const getQueryClientId = (req: Request): string | null => {
+    const clientId = req.query.clientId;
+    return typeof clientId === 'string' && clientId.trim() ? clientId : null;
+  };
+
   app.get('/api/rooms/:roomId/messages', async (req: Request, res: Response) => {
     const { roomId } = req.params;
     if (!roomId) {
@@ -27,7 +33,13 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       return res.status(400).json({ error: 'Room ID is required' });
     }
 
-    routeLogger.info('API request for room messages', { endpoint: '/api/rooms/:roomId/messages', roomId, ip: req.ip });
+    const clientId = getQueryClientId(req);
+    if (!clientId || !(await hasRoomAccess(store, roomId, clientId))) {
+      routeLogger.warn('Unauthorized API request for room messages', { endpoint: '/api/rooms/:roomId/messages', roomId, hasClientId: !!clientId, ip: req.ip });
+      return res.status(403).json({ error: 'Not authorized to access this room' });
+    }
+
+    routeLogger.info('API request for room messages', { endpoint: '/api/rooms/:roomId/messages', roomId, clientId, ip: req.ip });
     const filteredMessages = await store.readMessagesByRoom(roomId);
     return res.json(filteredMessages);
   });
@@ -89,6 +101,11 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       return res.status(400).json({ error: 'Client ID, room ID, and message content are required' });
     }
 
+    if (!(await hasRoomAccess(store, roomId, clientId))) {
+      routeLogger.warn('Unauthorized message creation via API', { endpoint: 'POST /api/rooms/:roomId/messages', clientId, roomId, ip: req.ip });
+      return res.status(403).json({ error: 'Not authorized to access this room' });
+    }
+
     const message: Message = {
       id: uuidv4(),
       clientId,
@@ -140,6 +157,12 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       return res.status(400).json({ error: 'Room ID is required' });
     }
 
+    const clientId = getQueryClientId(req);
+    if (!clientId || !(await hasRoomAccess(store, roomId, clientId))) {
+      routeLogger.warn('Unauthorized API request for room AI cost', { endpoint: '/api/rooms/:roomId/ai-cost', roomId, hasClientId: !!clientId, ip: req.ip });
+      return res.status(403).json({ error: 'Not authorized to access this room' });
+    }
+
     return res.json(await store.readRoomAICost(roomId));
   });
 
@@ -152,8 +175,8 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     }
 
     const room = await store.getRoomById(roomId);
-    if (!room || room.creatorId !== clientId) {
-      routeLogger.warn('Room not found or not owned by client', { endpoint: '/api/clients/:clientId/rooms/:roomId', clientId, roomId, found: !!room, authorized: room?.creatorId === clientId, ip: req.ip });
+    if (!room || !(await hasRoomAccess(store, roomId, clientId))) {
+      routeLogger.warn('Room not found or not accessible by client', { endpoint: '/api/clients/:clientId/rooms/:roomId', clientId, roomId, found: !!room, ip: req.ip });
       return res.status(404).json({ error: 'Room not found' });
     }
 

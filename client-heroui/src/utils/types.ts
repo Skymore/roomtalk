@@ -5,6 +5,14 @@ export interface MessageReplyReference {
   preview: string;
 }
 
+export interface MessageImageAsset {
+  id: string;
+  mimeType: string;
+  byteSize: number;
+  width?: number;
+  height?: number;
+}
+
 export interface Message {
   id: string;
   clientId: string;
@@ -32,6 +40,7 @@ export interface Message {
   usage?: AIUsage;
   cost?: AICost;
   replyTo?: MessageReplyReference;
+  imageAsset?: MessageImageAsset;
 }
 
 export interface Room {

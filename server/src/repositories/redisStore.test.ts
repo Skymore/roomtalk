@@ -3,6 +3,9 @@ import { describe, it } from 'node:test';
 import { RedisStore } from './redisStore';
 import { AICost, Message, Room } from '../types';
 
+const toTime = (value?: string) => Date.parse(value || '') || 0;
+const latest = (first?: string, second?: string) => toTime(first) >= toTime(second) ? first : second;
+
 class MemoryRedis {
   hashes = new Map<string, Map<string, string>>();
   lists = new Map<string, string[]>();
@@ -28,7 +31,7 @@ class MemoryRedis {
     const parsedRoom = JSON.parse(roomJson);
     const updatedRoom = {
       ...parsedRoom,
-      lastActivityAt,
+      lastActivityAt: latest(parsedRoom.lastActivityAt || parsedRoom.createdAt, lastActivityAt),
     };
     this.hash('rooms').set(roomId, JSON.stringify(updatedRoom));
     return updatedRoom;
@@ -123,6 +126,33 @@ class MemoryRedis {
   }
 
   async eval(script: string, options: { keys: string[]; arguments: string[] }) {
+    if (script.includes('local imageAssetId')) {
+      const [, messageKey] = options.keys;
+      const [roomId, messageId, assetId, mimeType] = options.arguments;
+      const roomJson = this.hash('rooms').get(roomId);
+      if (!roomJson) {
+        return [0, 0, '', ''];
+      }
+      const list = this.lists.get(messageKey) || [];
+      const index = list.findIndex(item => {
+        try {
+          const parsed = JSON.parse(item);
+          return parsed.id === messageId && parsed.messageType === 'image';
+        } catch {
+          return false;
+        }
+      });
+      if (index === -1) {
+        return [1, 0, roomJson, ''];
+      }
+
+      const updatedMessage = { ...JSON.parse(list[index]), content: assetId, mimeType };
+      delete updatedMessage.imageAsset;
+      list[index] = JSON.stringify(updatedMessage);
+      this.lists.set(messageKey, list);
+      return [1, 1, roomJson, list[index]];
+    }
+
     if (script.includes('local messagePayload')) {
       const [, messageKey] = options.keys;
       const [roomId, payload, lastActivityAt] = options.arguments;
@@ -296,6 +326,21 @@ describe('RedisStore', () => {
     assert.equal(await store.countRooms(), 1);
     assert.deepEqual(await store.getRoomById('room-1'), savedRoom);
     assert.deepEqual(await store.readRoomsByUser('client-1'), [savedRoom]);
+    assert.deepEqual(await store.getRoomMember('room-1', 'client-1'), {
+      roomId: 'room-1',
+      clientId: 'client-1',
+      role: 'owner',
+      joinedAt: savedRoom.createdAt,
+    });
+    assert.equal(await store.isRoomMember('room-1', 'client-1'), true);
+    assert.deepEqual(await store.addRoomMember('room-1', 'client-2', 'member', '2026-05-03T00:01:00.000Z'), {
+      roomId: 'room-1',
+      clientId: 'client-2',
+      role: 'member',
+      joinedAt: '2026-05-03T00:01:00.000Z',
+    });
+    assert.deepEqual((await store.readRoomMembers('room-1')).map(member => member.clientId), ['client-1', 'client-2']);
+    assert.deepEqual(await store.readRoomsByUser('client-2'), [savedRoom]);
 
     const updatedRoom = await store.appendMessage(message({ timestamp: '2026-05-04T00:00:00.000Z' }));
     assert.equal(updatedRoom?.lastActivityAt, '2026-05-04T00:00:00.000Z');
@@ -310,6 +355,8 @@ describe('RedisStore', () => {
     assert.deepEqual(await store.readMessagesByRoom('room-1'), []);
     assert.equal(await store.readCachedRoomMessages('room-1'), null);
     assert.deepEqual(await store.readRoomsByUser('client-1'), []);
+    assert.deepEqual(await store.readRoomsByUser('client-2'), []);
+    assert.deepEqual(await store.readRoomMembers('room-1'), []);
     assert.equal(await store.getRoomMemberCount('room-1'), 0);
     assert.equal(await redis.get(store.getRoomAICostKey('room-1')), undefined);
   });
@@ -374,6 +421,108 @@ describe('RedisStore', () => {
 
     assert.equal(await store.clearRoomMessages('room-1'), 1);
     assert.deepEqual(await store.readMessagesByRoom('room-1'), []);
+  });
+
+  it('stores image assets and attaches metadata to image messages', async () => {
+    const { store } = createStore();
+    const baseRoom = room();
+    const asset = {
+      id: 'asset-1',
+      roomId: 'room-1',
+      messageId: 'image-message',
+      objectKey: 'rooms/room-1/asset-1.webp',
+      mimeType: 'image/webp',
+      byteSize: 123,
+      width: 10,
+      height: 20,
+      createdAt: '2026-05-03T00:00:00.000Z',
+    };
+
+    await store.saveRoom(baseRoom);
+    assert.deepEqual(await store.saveImageAsset(asset), asset);
+    assert.deepEqual(await store.getImageAsset('asset-1'), asset);
+    assert.deepEqual(await store.getImageAssetByMessageId('image-message'), asset);
+    assert.deepEqual(await store.readImageAssetsByRoom('room-1'), [asset]);
+
+    await store.appendMessage(message({
+      id: 'image-message',
+      content: 'asset-1',
+      messageType: 'image',
+      mimeType: 'image/webp',
+    }));
+
+    assert.deepEqual(await store.readMessagesByRoom('room-1'), [
+      message({
+        id: 'image-message',
+        content: 'asset-1',
+        messageType: 'image',
+        mimeType: 'image/webp',
+        imageAsset: {
+          id: 'asset-1',
+          mimeType: 'image/webp',
+          byteSize: 123,
+          width: 10,
+          height: 20,
+        },
+      }),
+    ]);
+
+    await store.deleteImageAsset('asset-1');
+    assert.equal(await store.getImageAsset('asset-1'), null);
+    assert.deepEqual(await store.readImageAssetsByRoom('room-1'), []);
+  });
+
+  it('replaces legacy base64 image messages with image asset metadata', async () => {
+    const { store } = createStore();
+    const baseRoom = room({ lastActivityAt: '2026-05-03T00:00:10.000Z' });
+    const legacyImage = message({
+      id: 'legacy-image',
+      content: 'data:image/png;base64,AAAA',
+      messageType: 'image',
+      mimeType: 'image/png',
+      timestamp: '2026-05-03T00:00:01.000Z',
+    });
+    const asset = {
+      id: 'asset-legacy',
+      roomId: 'room-1',
+      messageId: 'legacy-image',
+      objectKey: 'rooms/room-1/asset-legacy.webp',
+      mimeType: 'image/webp',
+      byteSize: 456,
+      width: 12,
+      height: 14,
+      createdAt: '2026-05-03T00:00:11.000Z',
+    };
+
+    await store.saveRoom(baseRoom);
+    await store.appendMessage(legacyImage);
+
+    const result = await store.replaceMessageImageAsset('room-1', 'legacy-image', asset);
+
+    assert.equal(result?.found, true);
+    assert.deepEqual(result?.room, baseRoom);
+    assert.deepEqual(result?.updatedMessage, {
+      ...legacyImage,
+      content: 'asset-legacy',
+      mimeType: 'image/webp',
+      imageAsset: {
+        id: 'asset-legacy',
+        mimeType: 'image/webp',
+        byteSize: 456,
+        width: 12,
+        height: 14,
+      },
+    });
+    assert.deepEqual(await store.getRoomById('room-1'), baseRoom);
+    assert.deepEqual(await store.readMessagesByRoom('room-1'), [result?.updatedMessage]);
+
+    const missingResult = await store.replaceMessageImageAsset('room-1', 'missing', {
+      ...asset,
+      id: 'missing-asset',
+      objectKey: 'rooms/room-1/missing-asset.webp',
+    });
+    assert.equal(missingResult?.found, false);
+    assert.equal(await store.getImageAsset('missing-asset'), null);
   });
 
   it('does not create orphan message lists for missing rooms', async () => {

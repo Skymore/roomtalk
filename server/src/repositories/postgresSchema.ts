@@ -9,6 +9,23 @@ export const POSTGRES_SCHEMA_SQL = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_rooms_creator_activity
     ON rooms (creator_id, last_activity_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS room_members (
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    client_id TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('owner', 'member')),
+    joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (room_id, client_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_room_members_client_joined
+    ON room_members (client_id, joined_at DESC)`,
+  `INSERT INTO room_members (room_id, client_id, role, joined_at)
+    SELECT id, creator_id, 'owner', created_at
+    FROM rooms
+    ON CONFLICT (room_id, client_id) DO UPDATE SET
+      role = CASE
+        WHEN room_members.role = 'owner' THEN 'owner'
+        ELSE EXCLUDED.role
+      END`,
   `CREATE TABLE IF NOT EXISTS room_messages (
     id TEXT PRIMARY KEY,
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
@@ -31,6 +48,19 @@ export const POSTGRES_SCHEMA_SQL = [
     ON room_messages (room_id, position)`,
   `CREATE INDEX IF NOT EXISTS idx_room_messages_room_timestamp
     ON room_messages (room_id, timestamp)`,
+  `CREATE TABLE IF NOT EXISTS image_assets (
+    id TEXT PRIMARY KEY,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    message_id TEXT UNIQUE REFERENCES room_messages(id) ON DELETE SET NULL,
+    object_key TEXT NOT NULL UNIQUE,
+    mime_type TEXT NOT NULL,
+    byte_size INTEGER NOT NULL,
+    width INTEGER,
+    height INTEGER,
+    created_at TIMESTAMPTZ NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_image_assets_room
+    ON image_assets (room_id, created_at ASC)`,
   `CREATE TABLE IF NOT EXISTS room_ai_cost_totals (
     room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
     total_usd NUMERIC(18, 9) NOT NULL DEFAULT 0,

@@ -22,9 +22,14 @@ type TestServer = {
   store: {
     messages: Message[];
     rooms: Room[];
+    members: Set<string>;
     savedRooms: Room[];
     appendedMessages: Message[];
     readMessagesByRoom: (roomId: string) => Promise<Message[]>;
+    addRoomMember: (roomId: string, clientId: string, role: 'owner' | 'member', joinedAt?: string) => Promise<{ roomId: string; clientId: string; role: 'owner' | 'member'; joinedAt: string } | null>;
+    getRoomMember: (roomId: string, clientId: string) => Promise<{ roomId: string; clientId: string; role: 'owner' | 'member'; joinedAt: string } | null>;
+    isRoomMember: (roomId: string, clientId: string) => Promise<boolean>;
+    readRoomMembers: (roomId: string) => Promise<Array<{ roomId: string; clientId: string; role: 'owner' | 'member'; joinedAt: string }>>;
     readRoomsByUser: (clientId: string) => Promise<Room[]>;
     generateUniqueRoomId: () => Promise<string>;
     saveRoom: (room: Room) => Promise<Room | null>;
@@ -102,13 +107,31 @@ async function createTestServer(): Promise<TestServer> {
   const store = {
     messages: [sampleMessage()],
     rooms: [sampleRoom()],
+    members: new Set(['room-1:client-1']),
     savedRooms: [] as Room[],
     appendedMessages: [] as Message[],
     async readMessagesByRoom(roomId: string) {
       return this.messages.filter(message => message.roomId === roomId);
     },
+    async addRoomMember(roomId: string, memberClientId: string, role: 'owner' | 'member', joinedAt = '2026-05-03T00:00:00.000Z') {
+      this.members.add(`${roomId}:${memberClientId}`);
+      return { roomId, clientId: memberClientId, role, joinedAt };
+    },
+    async getRoomMember(roomId: string, memberClientId: string) {
+      return this.members.has(`${roomId}:${memberClientId}`)
+        ? { roomId, clientId: memberClientId, role: 'member' as const, joinedAt: '2026-05-03T00:00:00.000Z' }
+        : null;
+    },
+    async isRoomMember(roomId: string, memberClientId: string) {
+      return this.members.has(`${roomId}:${memberClientId}`);
+    },
+    async readRoomMembers(roomId: string) {
+      return [...this.members]
+        .filter(key => key.startsWith(`${roomId}:`))
+        .map(key => ({ roomId, clientId: key.split(':')[1], role: 'member' as const, joinedAt: '2026-05-03T00:00:00.000Z' }));
+    },
     async readRoomsByUser(clientId: string) {
-      return this.rooms.filter(room => room.creatorId === clientId);
+      return this.rooms.filter(room => room.creatorId === clientId || this.members.has(`${room.id}:${clientId}`));
     },
     async generateUniqueRoomId() {
       return 'generated-room';
@@ -116,6 +139,7 @@ async function createTestServer(): Promise<TestServer> {
     async saveRoom(room: Room) {
       this.savedRooms.push(room);
       this.rooms.push(room);
+      this.members.add(`${room.id}:${room.creatorId}`);
       return room;
     },
     async appendMessage(message: Message) {
@@ -208,7 +232,7 @@ describe('API routes', () => {
   });
 
   it('returns room messages, AI models, room cost, and status payloads', async () => {
-    const messagesResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/messages`);
+    const messagesResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/messages?clientId=client-1`);
     assert.equal(messagesResponse.status, 200);
     assert.deepEqual(await messagesResponse.json(), [sampleMessage()]);
 
@@ -219,7 +243,7 @@ describe('API routes', () => {
       models: [{ id: 'gpt-5.5', label: 'GPT-5.5' }],
     });
 
-    const costResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/ai-cost`);
+    const costResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/ai-cost?clientId=client-1`);
     assert.equal(costResponse.status, 200);
     assert.deepEqual(await costResponse.json(), { roomId: 'room-1', currency: 'USD', totalUsd: 1.25 });
 
@@ -232,11 +256,18 @@ describe('API routes', () => {
     assert.equal(status.rooms, 1);
   });
 
+  it('rejects room message API reads without membership', async () => {
+    const response = await fetch(`${server.baseUrl}/api/rooms/room-1/messages?clientId=client-2`);
+
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), { error: 'Not authorized to access this room' });
+  });
+
   it('returns large room message histories as complete ordered JSON and writes a response-size baseline', async () => {
     const largeMessages = Array.from({ length: 120 }, (_, index) => largeMessage(index));
     server.store.messages = largeMessages;
 
-    const response = await fetch(`${server.baseUrl}/api/rooms/room-1/messages`);
+    const response = await fetch(`${server.baseUrl}/api/rooms/room-1/messages?clientId=client-1`);
 
     assert.equal(response.status, 200);
     const rawBody = await response.text();
@@ -338,6 +369,7 @@ describe('API routes', () => {
   });
 
   it('creates text messages by default and broadcasts them to the room', async () => {
+    server.store.members.add('room-1:client-2');
     const response = await fetch(`${server.baseUrl}/api/rooms/room-1/messages`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -359,6 +391,7 @@ describe('API routes', () => {
 
   it('does not emit ghost API messages when persistence fails', async () => {
     server.store.appendMessage = async () => null;
+    server.store.members.add('room-1:client-2');
 
     const response = await fetch(`${server.baseUrl}/api/rooms/room-1/messages`, {
       method: 'POST',

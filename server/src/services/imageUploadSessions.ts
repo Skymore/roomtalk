@@ -3,11 +3,16 @@ export interface ImageUploadSession {
   totalChunks: number;
   roomId: string;
   clientId: string;
+  bytesReceived: number;
 }
+
+export type ImageUploadStartResult =
+  | { ok: true }
+  | { ok: false; error: 'invalid-upload' };
 
 export type ImageUploadChunkResult =
   | { ok: true }
-  | { ok: false; error: 'missing-session' | 'invalid-index' | 'invalid-chunk' };
+  | { ok: false; error: 'missing-session' | 'invalid-index' | 'invalid-chunk' | 'too-large' };
 
 export type CompletedImageUpload =
   | { ok: true; session: ImageUploadSession; buffer: Buffer }
@@ -16,18 +21,29 @@ export type CompletedImageUpload =
 export class ImageUploadSessions {
   private readonly sessions = new Map<string, ImageUploadSession>();
 
+  constructor(
+    private readonly maxUploadBytes = 10 * 1024 * 1024,
+    private readonly maxChunks = 256
+  ) {}
+
   start(input: {
     fileId: string;
     totalChunks: number;
     roomId: string;
     clientId: string;
-  }) {
+  }): ImageUploadStartResult {
+    if (!Number.isInteger(input.totalChunks) || input.totalChunks <= 0 || input.totalChunks > this.maxChunks) {
+      return { ok: false, error: 'invalid-upload' };
+    }
+
     this.sessions.set(input.fileId, {
       chunks: [],
       totalChunks: input.totalChunks,
       roomId: input.roomId,
       clientId: input.clientId,
+      bytesReceived: 0,
     });
+    return { ok: true };
   }
 
   addChunk(fileId: string, chunkIndex: number, chunkData: string): ImageUploadChunkResult {
@@ -41,7 +57,15 @@ export class ImageUploadSessions {
     }
 
     try {
-      session.chunks[chunkIndex] = Buffer.from(chunkData, 'base64');
+      const decodedChunk = Buffer.from(chunkData, 'base64');
+      const previousChunkBytes = session.chunks[chunkIndex]?.length || 0;
+      const nextBytesReceived = session.bytesReceived - previousChunkBytes + decodedChunk.length;
+      if (nextBytesReceived > this.maxUploadBytes) {
+        return { ok: false, error: 'too-large' };
+      }
+
+      session.chunks[chunkIndex] = decodedChunk;
+      session.bytesReceived = nextBytesReceived;
       return { ok: true };
     } catch {
       return { ok: false, error: 'invalid-chunk' };

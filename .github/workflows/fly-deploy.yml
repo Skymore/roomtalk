@@ -50,10 +50,34 @@ jobs:
 
       - name: Verify Fly runtime secrets
         run: |
-          flyctl secrets list -a message-system --json | grep -q '"name": "OPENROUTER_API_KEY"' || {
-            echo "::error::Fly secret OPENROUTER_API_KEY is missing. Run: fly secrets set OPENROUTER_API_KEY=..."
+          secrets_json="$(flyctl secrets list -a message-system --json)"
+
+          require_secret() {
+            local secret_name="$1"
+            echo "$secrets_json" | grep -q "\"name\": \"$secret_name\"" || {
+              echo "::error::Fly secret $secret_name is missing. Set it before deploying image object storage support."
+              exit 1
+            }
+          }
+
+          require_any_secret() {
+            local description="$1"
+            shift
+            for secret_name in "$@"; do
+              if echo "$secrets_json" | grep -q "\"name\": \"$secret_name\""; then
+                return 0
+              fi
+            done
+
+            echo "::error::Fly secret for $description is missing. Expected one of: $*"
             exit 1
           }
+
+          require_secret OPENROUTER_API_KEY
+          require_secret AWS_ACCESS_KEY_ID
+          require_secret AWS_SECRET_ACCESS_KEY
+          require_any_secret image-bucket IMAGE_BUCKET_NAME BUCKET_NAME S3_BUCKET AWS_BUCKET_NAME
+          require_any_secret image-storage-endpoint IMAGE_STORAGE_ENDPOINT AWS_ENDPOINT_URL_S3 S3_ENDPOINT
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 

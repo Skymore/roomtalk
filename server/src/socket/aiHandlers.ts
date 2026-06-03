@@ -9,6 +9,7 @@ import {
   createUserMessage,
 } from '../services/messageDomain';
 import { Message } from '../types';
+import { hasRoomAccess } from './roomAccess';
 import { SocketConnectionContext } from './types';
 
 export const DEFAULT_ANTHROPIC_MAX_TOKENS = 8096;
@@ -464,6 +465,12 @@ export function registerAIHandlers({
       return;
     }
 
+    if (!(await hasRoomAccess(store, data.roomId, clientId))) {
+      socket.emit('error', { message: 'You are not authorized to access this room' });
+      callback?.({ success: false, error: 'You are not authorized to access this room' });
+      return;
+    }
+
     await startAIResponse(data, clientId, callback);
   });
 
@@ -481,6 +488,12 @@ export function registerAIHandlers({
     if (!data.roomId) {
       socket.emit('error', { message: 'Room ID is required for AI request' });
       callback?.({ success: false, error: 'Room ID is required for AI request' });
+      return;
+    }
+
+    if (!(await hasRoomAccess(store, data.roomId, clientId))) {
+      socket.emit('error', { message: 'You are not authorized to access this room' });
+      callback?.({ success: false, error: 'You are not authorized to access this room' });
       return;
     }
 
@@ -567,6 +580,12 @@ export function registerAIHandlers({
 
     if (!data.roomId || !data.messageId || typeof data.newContent !== 'string') {
       callback?.({ success: false, error: 'Missing required fields' });
+      return;
+    }
+
+    if (!(await hasRoomAccess(store, data.roomId, clientId))) {
+      socket.emit('error', { message: 'You are not authorized to access this room' });
+      callback?.({ success: false, error: 'You are not authorized to access this room' });
       return;
     }
 

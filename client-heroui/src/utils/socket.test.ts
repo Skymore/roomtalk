@@ -64,7 +64,7 @@ vi.mock('uuid', () => ({
   v4: () => 'client-uuid',
 }));
 
-const { sendMessage, sendMessageAndAskAI } = await import('./socket');
+const { getImageDownloadUrl, sendMessage, sendMessageAndAskAI } = await import('./socket');
 
 const message = (overrides: Partial<Message> = {}): Message => ({
   id: 'm1',
@@ -154,6 +154,28 @@ describe('socket message acknowledgement helpers', () => {
         systemPrompt: 'be concise',
         roleName: 'Assistant',
         model: 'model-a',
+      },
+      expect.any(Function)
+    );
+  });
+
+  it('returns signed image download URLs from get_image_download_url acknowledgements', async () => {
+    socketMock.ackResponses.set('get_image_download_url', {
+      success: true,
+      url: 'https://signed.example/image.webp',
+      expiresAt: '2026-05-03T00:15:00.000Z',
+    });
+
+    await expect(getImageDownloadUrl({ roomId: 'room-1', assetId: 'asset-1' })).resolves.toEqual({
+      url: 'https://signed.example/image.webp',
+      expiresAt: '2026-05-03T00:15:00.000Z',
+    });
+
+    expect(socketMock.emit).toHaveBeenCalledWith(
+      'get_image_download_url',
+      {
+        roomId: 'room-1',
+        assetId: 'asset-1',
       },
       expect.any(Function)
     );

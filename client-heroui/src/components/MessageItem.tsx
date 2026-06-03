@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Avatar, Card, Image, Button, Tooltip } from "@heroui/react";
 import { Icon } from "@iconify/react";
-import { clientId } from "../utils/socket";
+import { clientId, getImageDownloadUrl } from "../utils/socket";
 import { formatPercentage, formatTime, formatUsdCost } from "../utils/formatters";
 import { Message } from "../utils/types";
 import { useTranslation } from "react-i18next";
@@ -23,19 +23,19 @@ const MarkdownContent = React.lazy(() =>
 );
 
 // Helper to copy image to clipboard
-async function copyImageToClipboard(base64Image: string): Promise<boolean> {
-  if (!base64Image.startsWith('data:image')) {
+async function copyImageToClipboard(imageSource: string): Promise<boolean> {
+  if (!imageSource.startsWith('data:image') && !imageSource.startsWith('http')) {
     console.error("Invalid image data for clipboard");
     return false;
   }
   try {
-    const response = await fetch(base64Image);
+    const response = await fetch(imageSource);
     const blob = await response.blob();
     // ClipboardItem requires a secure context (HTTPS or localhost)
     if (typeof ClipboardItem === "undefined") {
         console.warn("ClipboardItem API is not available in this context (non-secure?). Falling back to text copy.");
         // Fallback: Copy the base64 string as text
-        await navigator.clipboard.writeText(base64Image);
+        await navigator.clipboard.writeText(imageSource);
         return true; // Indicate success for text copy
     }
     const item = new ClipboardItem({ [blob.type]: blob });
@@ -58,6 +58,8 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   const isMine = message.clientId === clientId;
   const [isHovered, setIsHovered] = React.useState(false);
   const [imageError, setImageError] = React.useState(false);
+  const [signedImageUrl, setSignedImageUrl] = React.useState<string | null>(null);
+  const imageRetryCountRef = React.useRef(0);
   const isImage = message.messageType === "image";
   const isText = message.messageType === "text";
   const isAI = message.clientId === 'ai_assistant';
@@ -100,17 +102,67 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     };
   }, []);
 
+  const loadSignedImageUrl = React.useCallback(() => {
+    if (!isImage || !message.imageAsset?.id) {
+      setSignedImageUrl(null);
+      setImageError(false);
+      return () => {};
+    }
+
+    let cancelled = false;
+    setSignedImageUrl(null);
+    setImageError(false);
+
+    getImageDownloadUrl({ roomId: message.roomId, assetId: message.imageAsset.id })
+      .then(({ url }) => {
+        if (!cancelled) {
+          setSignedImageUrl(url);
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to get image URL:", error);
+        if (!cancelled) {
+          setImageError(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isImage, message.imageAsset?.id, message.roomId]);
+
+  React.useEffect(() => {
+    imageRetryCountRef.current = 0;
+    return loadSignedImageUrl();
+  }, [loadSignedImageUrl]);
+
+  const legacyImageSrc = isImage && !message.imageAsset
+    ? (message.content.startsWith('data:')
+      ? message.content
+      : `data:${message.mimeType || 'image/png'};base64,${message.content}`)
+    : null;
+  const imageSrc = isImage
+    ? (message.imageAsset ? signedImageUrl : legacyImageSrc)
+    : null;
+
   const handleImageError = () => {
+    if (message.imageAsset?.id && imageRetryCountRef.current < 1) {
+      imageRetryCountRef.current += 1;
+      loadSignedImageUrl();
+      return;
+    }
+
     setImageError(true);
   };
 
   const handleCopyClick = async (e: React.MouseEvent) => {
     e.stopPropagation(); // Prevent card click
     if (!isImage) return;
-    const imageData = message.content.startsWith('data:')
-                      ? message.content
-                      : `data:${message.mimeType || 'image/png'};base64,${message.content}`;
-    const success = await copyImageToClipboard(imageData);
+    if (!imageSrc) {
+      setCopyStatus('error');
+      return;
+    }
+    const success = await copyImageToClipboard(imageSrc);
     setCopyStatus(success ? 'success' : 'error');
     if (copyResetTimerRef.current) {
       clearTimeout(copyResetTimerRef.current);
@@ -189,15 +241,19 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                     </div>
                   ) : (
                     <div className="max-w-full rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-0.5 dark:border-[#30302e] dark:bg-[#1d1d1b]">
-                      <Image
-                        src={message.content.startsWith('data:')
-                          ? message.content
-                          : `data:${message.mimeType || 'image/png'};base64,${message.content}`}
-                        alt={t('sharedImage')}
-                        className="block max-h-[300px] max-w-full object-contain rounded"
-                        onError={handleImageError}
-                        isBlurred
-                      />
+                      {imageSrc ? (
+                        <Image
+                          src={imageSrc}
+                          alt={t('sharedImage')}
+                          className="block max-h-[300px] max-w-full object-contain rounded"
+                          onError={handleImageError}
+                          isBlurred
+                        />
+                      ) : (
+                        <div className="flex h-24 w-36 items-center justify-center rounded text-[#87867f] dark:text-[#b0aea5]">
+                          <Icon icon="lucide:image" className="h-5 w-5" />
+                        </div>
+                      )}
                     </div>
                   )}
                 </Tooltip>
