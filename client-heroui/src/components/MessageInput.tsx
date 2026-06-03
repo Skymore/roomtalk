@@ -717,9 +717,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       )}
 
       <div className="w-full pb-0.5">
-        <div className="overflow-hidden rounded-[1.65rem] border border-[#dedbd0] bg-[#faf9f5] shadow-[0_0_0_1px_rgba(194,192,182,0.35)] dark:border-[#30302e] dark:bg-[#2a2a28]">
+        <div className="flex flex-wrap items-center gap-1.5 overflow-hidden rounded-[1.45rem] border border-[#dedbd0] bg-[#faf9f5] px-1.5 py-1.5 shadow-[0_0_0_1px_rgba(194,192,182,0.35)] dark:border-[#30302e] dark:bg-[#2a2a28] sm:block sm:rounded-[1.65rem] sm:px-0 sm:py-0">
           {replyToMessage && (
-            <div className="mx-3 mt-3 flex items-start gap-2 rounded-md border-l-2 border-[#c96442] bg-[#f0eee6] px-2.5 py-2 text-xs text-[#5e5d59] dark:bg-[#242421] dark:text-[#b0aea5]">
+            <div className="mx-0 flex basis-full items-start gap-2 rounded-md border-l-2 border-[#c96442] bg-[#f0eee6] px-2.5 py-2 text-xs text-[#5e5d59] dark:bg-[#242421] dark:text-[#b0aea5] sm:mx-3 sm:mt-3">
               <div className="min-w-0 flex-1">
                 <div className="truncate font-medium">{t('replyingTo', { name: replySenderName })}</div>
                 <div className="truncate">{replyPreview}</div>
@@ -738,7 +738,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           )}
           {/* 编辑区域 */}
           <div
-            className="min-h-16 max-h-36 w-full overflow-y-auto px-4 pb-2 pt-4 text-base leading-6 text-[#141413] dark:text-[#faf9f5] sm:text-sm"
+            className="min-h-9 max-h-28 min-w-0 flex-1 overflow-y-auto px-2.5 py-1.5 text-base leading-6 text-[#141413] dark:text-[#faf9f5] sm:min-h-16 sm:max-h-36 sm:w-full sm:flex-none sm:px-4 sm:pb-2 sm:pt-4 sm:text-sm"
             contentEditable={!isSending && !isAiProcessing} // 禁用编辑区域当 AI 处理中
             onInput={parseEditorContent}
             onPaste={handlePaste}
@@ -758,7 +758,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
             title={`${t('messageInput')} (Enter: ${t('send')}, Shift+Enter: ${t('newLine')}, ${isMacOS ? 'Command+Enter' : 'Ctrl+Enter'}: ${t('askAI')})`}
           ></div>
 
-          <div className="flex min-h-11 items-center gap-1 px-1.5 pb-2 sm:min-h-12 sm:gap-2 sm:px-3">
+          <div className="flex min-h-9 flex-shrink-0 items-center gap-1 px-0 pb-0 sm:min-h-12 sm:gap-2 sm:px-3 sm:pb-2">
             {/* 图片上传按钮 */}
             <Button
               isIconOnly

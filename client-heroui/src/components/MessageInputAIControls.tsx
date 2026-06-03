@@ -184,8 +184,8 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
 
   return (
     <>
-      <div className="flex min-w-0 flex-1 items-center gap-1 sm:gap-2">
-        <div className="flex min-w-0 flex-1 items-center gap-1 sm:gap-2">
+      <div className="flex flex-shrink-0 items-center gap-1 sm:min-w-0 sm:flex-1 sm:gap-2">
+        <div className="hidden min-w-0 flex-1 items-center gap-1 sm:flex sm:gap-2">
           <Select
             size="sm"
             aria-label={t('selectAIRole')}
@@ -345,6 +345,55 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
         <ModalContent>
           <ModalHeader>{t('aiSettings')}</ModalHeader>
           <ModalBody>
+            <div className="sm:hidden">
+              <Select
+                size="sm"
+                label={t('selectAIModel')}
+                aria-label={t('selectAIModel')}
+                selectedKeys={[selectedAIModel || defaultAIModel]}
+                onSelectionChange={(keys) => {
+                  const selectedKey = Array.from(keys)[0]?.toString();
+                  if (selectedKey) requestModelChange(selectedKey);
+                }}
+                classNames={{
+                  trigger: "min-h-11 rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242421] dark:text-[#faf9f5]",
+                  label: "text-[#5e5d59] dark:text-[#b0aea5]",
+                  value: "text-sm font-semibold",
+                  popoverContent: "w-[min(22rem,calc(100vw-2rem))] border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
+                  listboxWrapper: "relative max-h-[16rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]",
+                }}
+                startContent={<Icon icon="lucide:brain-circuit" className="h-4 w-4" />}
+              >
+                {aiModels.map((model) => (
+                  <SelectItem
+                    key={model.id}
+                    classNames={compactItemClassNames}
+                    textValue={model.label}
+                  >
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span className="min-w-0 truncate text-xs font-medium leading-4">
+                        {model.label}
+                      </span>
+                      {model.isDefault && (
+                        <Icon
+                          icon="lucide:badge-check"
+                          aria-label={t('defaultModel')}
+                          className="flex-shrink-0 text-[#c96442] dark:text-[#ff9b76]"
+                          width={11}
+                          height={11}
+                        />
+                      )}
+                      <span className="inline-flex flex-shrink-0 items-center rounded px-1 py-px text-[9px] font-semibold leading-none border border-[#c2c0b6]/60 bg-[#e8e6dc] text-[#4d4c48] dark:border-[#4d4c48]/60 dark:bg-[#30302e] dark:text-[#b0aea5] whitespace-nowrap">
+                        {getProviderLabel(model.provider)}
+                      </span>
+                      {isPremiumAIModel(model) && (
+                        <Icon icon="lucide:gem" className="flex-shrink-0 text-warning" width={10} height={10} />
+                      )}
+                    </span>
+                  </SelectItem>
+                ))}
+              </Select>
+            </div>
             <Tabs aria-label={t('aiSettings')}>
               <Tab key="roles" title={t('aiRoles')}>
                 <div className="mt-2">

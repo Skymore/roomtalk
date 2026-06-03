@@ -242,7 +242,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         )}
 
         {/* Container for bubble/image */}
-        <div className="relative inline-block max-w-full w-full min-w-0">
+        <div className="relative inline-block w-fit max-w-full min-w-0">
           {isImage ? (
             <div className="w-fit max-w-full">
               {replyReference}
@@ -275,7 +275,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             // ========== Text Message (Display Mode) ==========
             <Card
               className={`
-                max-w-full w-full overflow-hidden rounded-xl
+                w-fit max-w-full overflow-hidden rounded-xl
                 ${isPending ? "opacity-70" : ""}
                 ${isMine
                   ? "bg-[#e8e6dc] text-[#141413] shadow-[0_0_0_1px_rgba(194,192,182,0.85)] dark:bg-[#30302e] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)]"
