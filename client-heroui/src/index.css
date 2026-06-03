@@ -127,6 +127,31 @@ body {
   cursor: text;
 }
 
+.dark [contenteditable]:empty:before {
+  color: #b0aea5;
+}
+
+.roomtalk-audio-player {
+  background-color: #dedbd0;
+  border-radius: 9999px;
+  box-shadow: 0 0 0 1px rgba(194, 192, 182, 1);
+  color-scheme: light;
+}
+
+.roomtalk-audio-player::-webkit-media-controls-panel {
+  background-color: #dedbd0;
+}
+
+.dark .roomtalk-audio-player {
+  background-color: #30302e;
+  box-shadow: 0 0 0 1px rgba(77, 76, 72, 0.9);
+  color-scheme: dark;
+}
+
+.dark .roomtalk-audio-player::-webkit-media-controls-panel {
+  background-color: #30302e;
+}
+
 [contenteditable]:focus {
   outline: none;
 }

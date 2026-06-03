@@ -151,4 +151,25 @@ describe('MessageItem replies', () => {
       .find(element => element.getAttribute('aria-hidden') !== 'true');
     expect(primaryImage?.getAttribute('src')).toBe('data:image/png;base64,AAAA');
   });
+
+  it('renders voice messages as a themed audio player without a media bubble wrapper', () => {
+    const { container } = render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'voice-message',
+          content: 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=',
+          messageType: 'voice',
+        }}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    const audio = container.querySelector('audio.roomtalk-audio-player');
+    expect(audio).toBeTruthy();
+    expect(audio?.getAttribute('src')).toContain('data:audio/wav;base64');
+    expect(audio?.parentElement?.className).toBe('w-fit max-w-full');
+  });
 });

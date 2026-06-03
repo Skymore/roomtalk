@@ -966,9 +966,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                 onContextMenu={(e) => e.preventDefault()}
                 disabled={isSending}
                 style={{ touchAction: 'none' }}
-                className={`w-full select-none rounded-2xl py-3 text-sm font-medium transition-colors ${
+                className={`w-full select-none rounded-2xl py-3 text-sm font-medium shadow-[0_0_0_1px_rgba(194,192,182,0.75)] transition-colors ${
                   isRecording
-                    ? 'bg-[#c96442] text-white dark:bg-[#d97757]'
+                    ? 'bg-[#c96442] text-[#faf9f5] dark:bg-[#d97757]'
                     : 'bg-[#e8e6dc] text-[#4d4c48] dark:bg-[#30302e] dark:text-[#b0aea5]'
                 } ${isSending ? 'opacity-50' : ''}`}
               >
@@ -976,53 +976,57 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               </button>
 
               {isRecording && (
-                <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/40" style={{ touchAction: 'none' }}>
+                <div className="fixed inset-0 z-50 flex flex-col justify-end bg-[#f5f4ed]/95 text-[#141413] dark:bg-[#141413]/85 dark:text-[#faf9f5]" style={{ touchAction: 'none' }}>
                   {/* Live transcript / status bubble */}
                   <div className="flex flex-1 items-center justify-center px-6">
-                    <div className={`max-w-[80%] rounded-2xl px-4 py-3 text-center transition-colors ${
+                    <div className={`max-w-[80%] rounded-2xl px-4 py-3 text-center shadow-[0_0_0_1px_rgba(194,192,182,0.75)] transition-colors dark:shadow-[0_0_0_1px_rgba(232,230,220,0.28)] ${
                       gestureZone === 'cancel'
-                        ? 'bg-[#e2654f] text-white'
+                        ? 'bg-[#b53333] text-[#faf9f5]'
                         : gestureZone === 'text'
-                          ? 'bg-[#4caf7d] text-white'
-                          : 'bg-[#95ec69] text-[#141413]'
+                          ? 'bg-[#30302e] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413]'
+                          : 'bg-[#faf9f5] text-[#141413] dark:bg-[#30302e] dark:text-[#faf9f5]'
                     }`}>
                       {gestureZone === 'text' ? (
                         <div className="min-h-[1.5rem] text-sm leading-6 break-words">
                           {liveTranscript || t('listening')}
                         </div>
                       ) : (
-                        <div className="text-base font-medium tracking-widest">
-                          {gestureZone === 'cancel' ? '✕' : `${recordingSeconds}s`}
+                        <div className="flex min-h-[1.5rem] items-center justify-center text-base font-medium">
+                          {gestureZone === 'cancel'
+                            ? <Icon icon="lucide:x" className="h-5 w-5" />
+                            : `${recordingSeconds}s`}
                         </div>
                       )}
                     </div>
                   </div>
 
-                  {/* Gesture target pills */}
-                  <div className="flex items-end justify-between px-6 pb-2">
-                    <div className={`flex h-16 w-28 items-center justify-center rounded-t-[2.5rem] text-sm transition-colors ${
-                      gestureZone === 'cancel'
-                        ? 'bg-white text-[#141413]'
-                        : 'bg-white/15 text-white'
-                    }`}>
-                      <Icon icon="lucide:x" className="mr-1 h-4 w-4" />{t('cancelRecording')}
+                  <div className="bg-[#faf9f5] px-6 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] pt-4 shadow-[0_-1px_0_rgba(194,192,182,0.75)] dark:bg-[#141413] dark:shadow-[0_-1px_0_rgba(232,230,220,0.18)]">
+                    {/* Gesture target pills */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className={`flex h-14 items-center justify-center rounded-xl px-2 text-sm font-medium shadow-[0_0_0_1px_rgba(194,192,182,0.75)] transition-colors dark:shadow-[0_0_0_1px_rgba(232,230,220,0.28)] ${
+                        gestureZone === 'cancel'
+                          ? 'bg-[#b53333] text-[#faf9f5]'
+                          : 'bg-[#e8e6dc] text-[#4d4c48] dark:bg-[#30302e] dark:text-[#b0aea5]'
+                      }`}>
+                        <Icon icon="lucide:x" className="mr-1 h-4 w-4" />{t('cancelRecording')}
+                      </div>
+                      <div className={`flex h-14 items-center justify-center rounded-xl px-3 text-center text-sm font-medium leading-4 shadow-[0_0_0_1px_rgba(194,192,182,0.75)] transition-colors dark:shadow-[0_0_0_1px_rgba(232,230,220,0.28)] ${
+                        gestureZone === 'text'
+                          ? 'bg-[#30302e] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413]'
+                          : 'bg-[#e8e6dc] text-[#4d4c48] dark:bg-[#30302e] dark:text-[#b0aea5]'
+                      }`}>
+                        {t('slideToConvertText')}
+                      </div>
                     </div>
-                    <div className={`flex h-16 w-36 items-center justify-center rounded-t-[2.5rem] text-center text-sm transition-colors ${
-                      gestureZone === 'text'
-                        ? 'bg-white text-[#141413]'
-                        : 'bg-white/15 text-white'
-                    }`}>
-                      {t('slideToConvertText')}
-                    </div>
-                  </div>
 
-                  {/* Center hint */}
-                  <div className="pb-10 text-center text-sm text-white">
-                    {gestureZone === 'cancel'
-                      ? t('releaseToCancel')
-                      : gestureZone === 'text'
-                        ? t('releaseToEditText')
-                        : t('releaseToSend')}
+                    {/* Center hint */}
+                    <div className="mt-3 text-center text-sm font-medium text-[#141413] dark:text-[#faf9f5]">
+                      {gestureZone === 'cancel'
+                        ? t('releaseToCancel')
+                        : gestureZone === 'text'
+                          ? t('releaseToEditText')
+                          : t('releaseToSend')}
+                    </div>
                   </div>
                 </div>
               )}

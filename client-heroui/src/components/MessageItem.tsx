@@ -2,7 +2,6 @@ import React, { useState } from "react";
 import {
   Avatar,
   Card,
-  Image,
   Button,
   Tooltip,
   Dropdown,
@@ -169,6 +168,33 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     setImageError(true);
   };
 
+  let imageMedia: React.ReactNode = null;
+  if (isImage) {
+    if (imageError) {
+      imageMedia = (
+        <div className="w-fit rounded-lg bg-[#e8e6dc] px-3 py-2 text-sm text-danger shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e]">
+          <Icon icon="lucide:alert-triangle" className="inline mr-1" />
+          {t('imageLoadFailed')}
+        </div>
+      );
+    } else if (imageSrc) {
+      imageMedia = (
+        <img
+          src={imageSrc}
+          alt={t('sharedImage')}
+          className="block max-h-[300px] max-w-full rounded-xl object-contain"
+          onError={handleImageError}
+        />
+      );
+    } else {
+      imageMedia = (
+        <div className="flex h-24 w-36 items-center justify-center rounded-xl bg-[#e8e6dc] text-[#87867f] shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e] dark:text-[#b0aea5] dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)]">
+          <Icon icon="lucide:image" className="h-5 w-5" />
+        </div>
+      );
+    }
+  }
+
   const handleCopyMessage = async () => {
     const success = isImage
       ? imageSrc
@@ -249,44 +275,16 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           {isImage ? (
             <div className="w-fit max-w-full">
               {replyReference}
-              <div>
-                {imageError ? (
-                  <div className="w-fit rounded-md bg-[#e8e6dc] p-2 text-sm text-danger dark:bg-[#30302e]">
-                    <Icon icon="lucide:alert-triangle" className="inline mr-1" />
-                    {t('imageLoadFailed')}
-                  </div>
-                ) : (
-                  <div className="max-w-full rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-0.5 dark:border-[#30302e] dark:bg-[#1d1d1b]">
-                    {imageSrc ? (
-                      <Image
-                        src={imageSrc}
-                        alt={t('sharedImage')}
-                        className="block max-h-[300px] max-w-full object-contain rounded"
-                        onError={handleImageError}
-                        isBlurred
-                      />
-                    ) : (
-                      <div className="flex h-24 w-36 items-center justify-center rounded text-[#87867f] dark:text-[#b0aea5]">
-                        <Icon icon="lucide:image" className="h-5 w-5" />
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
+              {imageMedia}
             </div>
           ) : isVoice ? (
             // ========== Voice Message ==========
-            <div className={`rounded-xl px-2 py-1.5 ${
-              isMine
-                ? "bg-[#e8e6dc] shadow-[0_0_0_1px_rgba(194,192,182,0.85)] dark:bg-[#30302e] dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)]"
-                : "bg-[#f0eee6] shadow-[0_0_0_1px_rgba(222,219,208,0.95)] dark:bg-[#242421] dark:shadow-[0_0_0_1px_rgba(61,61,58,0.9)]"
-            }`}>
+            <div className="w-fit max-w-full">
               {replyReference}
               <audio
                 controls
                 src={message.content}
-                className="max-w-[240px] min-w-[180px] h-9"
-                style={{ colorScheme: 'light dark' }}
+                className="roomtalk-audio-player block h-9 min-w-[180px] max-w-[240px]"
               />
             </div>
           ) : (
