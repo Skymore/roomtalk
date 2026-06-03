@@ -248,7 +248,7 @@ export const renameRoom = (roomId: string, name: string): Promise<Room> => {
 export const sendMessage = (
   content: string,
   roomId: string,
-  messageType: 'text' | 'image' = 'text',
+  messageType: 'text' | 'image' | 'voice' = 'text',
   username?: string,
   avatar?: { text: string; color: string },
   replyToMessageId?: string,

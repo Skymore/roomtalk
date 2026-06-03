@@ -92,6 +92,15 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   const lastCompositionEndAtRef = useRef(0);
   const [isAiProcessing, setIsAiProcessing] = useState(false); // 新增: 跟踪 AI 处理状态
 
+  // Voice recording state
+  const [isVoiceMode, setIsVoiceMode] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const MAX_RECORDING_SECONDS = 60;
+
   // 检测是否为移动设备
   const [_isMobile, setIsMobile] = useState(false);
   // 检测操作系统类型
@@ -474,6 +483,71 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     setErrorMessage(t(error.errorKey));
   };
 
+  // Voice recording handlers
+  const startRecording = useCallback(async () => {
+    if (isRecording || isSending) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
+        : 'audio/mp4';
+      const recorder = new MediaRecorder(stream, { mimeType });
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(audioChunksRef.current, { type: mimeType });
+        if (blob.size < 1000) return; // too short, ignore
+        setIsSending(true);
+        try {
+          const reader = new FileReader();
+          const base64 = await new Promise<string>((resolve, reject) => {
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
+          const avatar = { text: avatarText, color: avatarColor };
+          await sendMessage(base64, roomId, 'voice', username, avatar);
+        } catch {
+          setErrorMessage(t('errorSendingMessage'));
+        } finally {
+          setIsSending(false);
+        }
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      setIsRecording(true);
+      setRecordingSeconds(0);
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingSeconds(prev => {
+          if (prev >= MAX_RECORDING_SECONDS - 1) {
+            stopRecording();
+            return prev;
+          }
+          return prev + 1;
+        });
+      }, 1000);
+    } catch {
+      setErrorMessage(t('errorMicPermission'));
+    }
+  }, [avatarColor, avatarText, isRecording, isSending, roomId, t, username]);
+
+  const stopRecording = useCallback(() => {
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+    setIsRecording(false);
+    setRecordingSeconds(0);
+  }, []);
+
   // 处理图片上传
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -736,47 +810,86 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               </Button>
             </div>
           )}
-          {/* 编辑区域 */}
-          <div
-            className="min-h-9 max-h-28 min-w-0 flex-1 overflow-y-auto px-2.5 py-1.5 text-base leading-6 text-[#141413] dark:text-[#faf9f5] sm:min-h-16 sm:max-h-36 sm:w-full sm:flex-none sm:px-4 sm:pb-2 sm:pt-4 sm:text-sm"
-            contentEditable={!isSending && !isAiProcessing} // 禁用编辑区域当 AI 处理中
-            onInput={parseEditorContent}
-            onPaste={handlePaste}
-            onKeyDown={handleKeyDown}
-            onCompositionStart={handleCompositionStart}
-            onCompositionEnd={handleCompositionEnd}
-            ref={editorRef}
-            data-placeholder={isAiProcessing ? t('aiProcessing') : t('typeMessageHere')}
-            style={{
-              lineHeight: '1.5',
-              whiteSpace: 'pre-wrap',
-            }}
-            role="textbox"
-            data-testid="message-editor"
-            aria-label={t('messageInput')}
-            aria-multiline="true"
-            title={`${t('messageInput')} (Enter: ${t('send')}, Shift+Enter: ${t('newLine')}, ${isMacOS ? 'Command+Enter' : 'Ctrl+Enter'}: ${t('askAI')})`}
-          ></div>
+
+          {isVoiceMode ? (
+            /* ===== Voice mode: hold-to-speak button ===== */
+            <div className="flex min-h-9 min-w-0 flex-1 items-center justify-center px-2.5 py-1.5 sm:min-h-16 sm:px-4 sm:pb-2 sm:pt-4">
+              <button
+                type="button"
+                aria-label={isRecording ? t('releaseToSend') : t('holdToSpeak')}
+                onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); startRecording(); }}
+                onPointerUp={stopRecording}
+                onPointerLeave={stopRecording}
+                onContextMenu={(e) => e.preventDefault()}
+                disabled={isSending}
+                className={`w-full select-none rounded-2xl py-3 text-sm font-medium transition-colors ${
+                  isRecording
+                    ? 'bg-[#c96442] text-white dark:bg-[#d97757]'
+                    : 'bg-[#e8e6dc] text-[#4d4c48] dark:bg-[#30302e] dark:text-[#b0aea5]'
+                } ${isSending ? 'opacity-50' : ''}`}
+              >
+                {isRecording
+                  ? `${t('releaseToSend')} · ${recordingSeconds}s`
+                  : t('holdToSpeak')}
+              </button>
+            </div>
+          ) : (
+            /* ===== Text mode: normal editor ===== */
+            <div
+              className="min-h-9 max-h-28 min-w-0 flex-1 overflow-y-auto px-2.5 py-1.5 text-base leading-6 text-[#141413] dark:text-[#faf9f5] sm:min-h-16 sm:max-h-36 sm:w-full sm:flex-none sm:px-4 sm:pb-2 sm:pt-4 sm:text-sm"
+              contentEditable={!isSending && !isAiProcessing}
+              onInput={parseEditorContent}
+              onPaste={handlePaste}
+              onKeyDown={handleKeyDown}
+              onCompositionStart={handleCompositionStart}
+              onCompositionEnd={handleCompositionEnd}
+              ref={editorRef}
+              data-placeholder={isAiProcessing ? t('aiProcessing') : t('typeMessageHere')}
+              style={{ lineHeight: '1.5', whiteSpace: 'pre-wrap' }}
+              role="textbox"
+              data-testid="message-editor"
+              aria-label={t('messageInput')}
+              aria-multiline="true"
+              title={`${t('messageInput')} (Enter: ${t('send')}, Shift+Enter: ${t('newLine')}, ${isMacOS ? 'Command+Enter' : 'Ctrl+Enter'}: ${t('askAI')})`}
+            ></div>
+          )}
 
           <div className="flex min-h-9 flex-shrink-0 items-center gap-1 px-0 pb-0 sm:min-h-12 sm:gap-2 sm:px-3 sm:pb-2">
-            {/* 图片上传按钮 */}
+            {/* 语音/键盘切换按钮 */}
             <Button
               isIconOnly
               size="sm"
               variant="light"
-              aria-label={t('uploadImage')}
+              aria-label={isVoiceMode ? t('keyboardInput') : t('voiceInput')}
               className="h-8 w-8 min-w-8 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
-              onPress={() => fileInputRef.current?.click()}
-              isDisabled={imageCount >= MAX_MESSAGE_IMAGES || isSending || isAiProcessing} // 禁用图片上传当 AI 处理中
+              onPress={() => { setIsVoiceMode(v => !v); if (isRecording) stopRecording(); }}
+              isDisabled={isSending || isAiProcessing}
             >
-              <Icon icon="lucide:plus" className="h-4 w-4 sm:h-5 sm:w-5" />
+              <Icon icon={isVoiceMode ? 'lucide:keyboard' : 'lucide:mic'} className="h-4 w-4 sm:h-5 sm:w-5" />
             </Button>
 
-            {/* AI设置按钮 (原来的AI按钮) */}
-            <MessageInputAISettingsButton
-              onOpen={onAISettingsOpen}
-              isDisabled={isSending || isAiProcessing}
-            />
+            {!isVoiceMode && (
+              <>
+                {/* 图片上传按钮 */}
+                <Button
+                  isIconOnly
+                  size="sm"
+                  variant="light"
+                  aria-label={t('uploadImage')}
+                  className="h-8 w-8 min-w-8 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
+                  onPress={() => fileInputRef.current?.click()}
+                  isDisabled={imageCount >= MAX_MESSAGE_IMAGES || isSending || isAiProcessing}
+                >
+                  <Icon icon="lucide:plus" className="h-4 w-4 sm:h-5 sm:w-5" />
+                </Button>
+
+                {/* AI设置按钮 */}
+                <MessageInputAISettingsButton
+                  onOpen={onAISettingsOpen}
+                  isDisabled={isSending || isAiProcessing}
+                />
+              </>
+            )}
 
             {/* 隐藏的文件输入 */}
             <input
@@ -787,32 +900,34 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               accept="image/*"
               multiple={true}
               onChange={handleImageUpload}
-              disabled={isSending || isAiProcessing} // 禁用文件输入当 AI 处理中
+              disabled={isSending || isAiProcessing}
             />
 
-            {/* AI角色选择和发送按钮区 */}
-            <MessageInputAIControls
-              roles={aiRoles}
-              selectedRoleId={selectedRoleId}
-              selectedRole={selectedRole}
-              aiModels={aiModels}
-              selectedAIModel={selectedAIModel}
-              defaultAIModel={defaultAIModel}
-              isSending={isSending}
-              isAiProcessing={isAiProcessing}
-              isMacOS={isMacOS}
-              currentInputText={currentInputText}
-              imageCount={imageCount}
-              isSettingsOpen={isAISettingsOpen}
-              onSettingsClose={onAISettingsClose}
-              onRoleChange={handleRoleChange}
-              onModelChange={handleModelChange}
-              onAddRole={handleAddRole}
-              onUpdateRole={handleUpdateRole}
-              onDeleteRole={handleDeleteRole}
-              onAskAI={handleAskAI}
-              onSend={handleSubmit}
-            />
+            {/* AI角色选择和发送按钮区 (text mode only) */}
+            {!isVoiceMode && (
+              <MessageInputAIControls
+                roles={aiRoles}
+                selectedRoleId={selectedRoleId}
+                selectedRole={selectedRole}
+                aiModels={aiModels}
+                selectedAIModel={selectedAIModel}
+                defaultAIModel={defaultAIModel}
+                isSending={isSending}
+                isAiProcessing={isAiProcessing}
+                isMacOS={isMacOS}
+                currentInputText={currentInputText}
+                imageCount={imageCount}
+                isSettingsOpen={isAISettingsOpen}
+                onSettingsClose={onAISettingsClose}
+                onRoleChange={handleRoleChange}
+                onModelChange={handleModelChange}
+                onAddRole={handleAddRole}
+                onUpdateRole={handleUpdateRole}
+                onDeleteRole={handleDeleteRole}
+                onAskAI={handleAskAI}
+                onSend={handleSubmit}
+              />
+            )}
           </div>
         </div>
       </div>

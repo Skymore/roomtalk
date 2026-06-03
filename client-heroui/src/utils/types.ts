@@ -1,7 +1,7 @@
 export interface MessageReplyReference {
   messageId: string;
   username?: string;
-  messageType: 'text' | 'image' | 'ai';
+  messageType: 'text' | 'image' | 'ai' | 'voice';
   preview: string;
 }
 
@@ -19,13 +19,13 @@ export interface Message {
   content: string;
   timestamp: string;
   roomId: string;
-  messageType: 'text' | 'image' | 'ai';
+  messageType: 'text' | 'image' | 'ai' | 'voice';
   username?: string;
   avatar?: {
     text: string;
     color: string;
   };
-  mimeType?: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' | 'image/jpg';
+  mimeType?: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' | 'image/jpg' | 'audio/webm' | 'audio/webm;codecs=opus' | 'audio/mp4';
   status?: 'streaming' | 'complete' | 'error';
   clientMessageId?: string;
   deliveryStatus?: 'pending' | 'sent' | 'failed';

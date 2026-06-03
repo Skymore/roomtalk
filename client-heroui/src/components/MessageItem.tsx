@@ -70,12 +70,13 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   const [signedImageUrl, setSignedImageUrl] = React.useState<string | null>(null);
   const imageRetryCountRef = React.useRef(0);
   const isImage = message.messageType === "image";
+  const isVoice = message.messageType === "voice";
   const isText = message.messageType === "text";
   const isAI = message.clientId === 'ai_assistant';
   const isStreaming = isAI && message.status === 'streaming';
   const isPending = message.deliveryStatus === 'pending';
   const isFailed = message.deliveryStatus === 'failed';
-  const canBeEdited = isText || (message.messageType === 'ai' && message.status !== 'streaming');
+  const canBeEdited = (isText || (message.messageType === 'ai' && message.status !== 'streaming')) && !isVoice;
   const { t, i18n } = useTranslation();
   const aiMetadataParts = isAI
     ? [
@@ -270,6 +271,21 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                   </div>
                 )}
               </div>
+            </div>
+          ) : isVoice ? (
+            // ========== Voice Message ==========
+            <div className={`rounded-xl px-2 py-1.5 ${
+              isMine
+                ? "bg-[#e8e6dc] shadow-[0_0_0_1px_rgba(194,192,182,0.85)] dark:bg-[#30302e] dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)]"
+                : "bg-[#f0eee6] shadow-[0_0_0_1px_rgba(222,219,208,0.95)] dark:bg-[#242421] dark:shadow-[0_0_0_1px_rgba(61,61,58,0.9)]"
+            }`}>
+              {replyReference}
+              <audio
+                controls
+                src={message.content}
+                className="max-w-[240px] min-w-[180px] h-9"
+                style={{ colorScheme: 'light dark' }}
+              />
             </div>
           ) : (
             // ========== Text Message (Display Mode) ==========

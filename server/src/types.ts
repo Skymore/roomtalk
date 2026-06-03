@@ -47,7 +47,7 @@ export interface RoomAICostTotal {
 export interface MessageReplyReference {
   messageId: string;
   username?: string;
-  messageType: 'text' | 'image' | 'ai';
+  messageType: 'text' | 'image' | 'ai' | 'voice';
   preview: string;
 }
 
@@ -72,7 +72,7 @@ export interface Message {
   content: string;
   roomId: string;
   timestamp: string;
-  messageType: 'text' | 'image' | 'ai';
+  messageType: 'text' | 'image' | 'ai' | 'voice';
   username?: string;
   avatar?: {
     text: string;
