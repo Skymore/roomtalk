@@ -6,9 +6,7 @@ import { describe, it } from 'node:test';
 import sharp from 'sharp';
 import {
   assertBackupBeforeExecute,
-  LegacyImageMigrationCandidate,
   LegacyImageMigrationStore,
-  ReadLegacyImageMessagesOptions,
   migrateLegacyImageMessagesToObjectStorage,
 } from './migrateImageMessagesToObjectStorage';
 import { ImageAsset, Message, Room } from '../types';
@@ -48,8 +46,6 @@ const createTinyPngBase64 = async () => {
 class MemoryLegacyImageMigrationStore implements LegacyImageMigrationStore {
   assetsByMessageId = new Map<string, ImageAsset>();
   replacements: Array<{ roomId: string; messageId: string; asset: ImageAsset }> = [];
-  fullHistoryReads = 0;
-  legacyImageReads = 0;
   failReplace = false;
 
   constructor(
@@ -57,39 +53,14 @@ class MemoryLegacyImageMigrationStore implements LegacyImageMigrationStore {
     readonly messagesByRoom: Map<string, Message[]>,
   ) {}
 
-  async readLegacyImageMessages(options: ReadLegacyImageMessagesOptions): Promise<LegacyImageMigrationCandidate[]> {
-    this.legacyImageReads++;
-    const candidates = this.rooms
-      .flatMap(item => (this.messagesByRoom.get(item.id) || []).map((candidate, index) => ({
-        message: candidate,
-        cursor: { roomId: item.id, position: index + 1 },
-      })))
-      .filter(item => item.message.messageType === 'image')
-      .filter(item => !options.roomId || item.message.roomId === options.roomId)
-      .filter(item => {
-        if (!options.after) {
-          return true;
-        }
-
-        if (item.cursor.roomId !== options.after.roomId) {
-          return item.cursor.roomId > options.after.roomId;
-        }
-
-        return item.cursor.position > options.after.position;
-      })
-      .sort((left, right) => {
-        if (left.cursor.roomId !== right.cursor.roomId) {
-          return left.cursor.roomId.localeCompare(right.cursor.roomId);
-        }
-
-        return left.cursor.position - right.cursor.position;
-      });
-
-    return candidates.slice(0, options.limit);
+  async readRoomIdsWithImageMessages(roomId?: string) {
+    return this.rooms
+      .map(item => item.id)
+      .filter(item => !roomId || item === roomId)
+      .filter(item => (this.messagesByRoom.get(item) || []).some(candidate => candidate.messageType === 'image'));
   }
 
   async readMessagesByRoom(roomId: string) {
-    this.fullHistoryReads++;
     return this.messagesByRoom.get(roomId) || [];
   }
 
@@ -180,8 +151,6 @@ describe('migrateLegacyImageMessagesToObjectStorage', () => {
     assert.ok(stats.objectBytes > 0);
     assert.equal(imageObjectStorage.uploadedObjects.length, 0);
     assert.equal(store.replacements.length, 0);
-    assert.equal(store.fullHistoryReads, 0);
-    assert.ok(store.legacyImageReads > 0);
   });
 
   it('uploads converted WebP objects and replaces message payloads during execute runs', async () => {
@@ -211,7 +180,6 @@ describe('migrateLegacyImageMessagesToObjectStorage', () => {
     assert.equal(imageObjectStorage.uploadedObjects[0].mimeType, 'image/webp');
     assert.match(imageObjectStorage.uploadedObjects[0].objectKey, /^rooms\/room-1\/.+\.webp$/);
     assert.equal(store.replacements.length, 1);
-    assert.equal(store.fullHistoryReads, 0);
 
     const [updatedMessage] = await store.readMessagesByRoom('room-1');
     assert.equal(updatedMessage.content, store.replacements[0].asset.id);
@@ -223,39 +191,6 @@ describe('migrateLegacyImageMessagesToObjectStorage', () => {
       width: 1,
       height: 1,
     });
-  });
-
-  it('paginates legacy image candidates with batch size one', async () => {
-    const legacyBase64 = await createTinyPngBase64();
-    const store = new MemoryLegacyImageMigrationStore(
-      [room()],
-      new Map([['room-1', [
-        message({
-          id: 'legacy-image-1',
-          content: legacyBase64,
-          messageType: 'image',
-          mimeType: 'image/png',
-        }),
-        message({
-          id: 'legacy-image-2',
-          content: legacyBase64,
-          messageType: 'image',
-          mimeType: 'image/png',
-        }),
-      ]]])
-    );
-
-    const stats = await migrateLegacyImageMessagesToObjectStorage({
-      store,
-      imageObjectStorage: createImageObjectStorage(),
-      dryRun: true,
-      batchSize: 1,
-    });
-
-    assert.equal(stats.legacyImagesFound, 2);
-    assert.equal(stats.messagesScanned, 2);
-    assert.equal(store.fullHistoryReads, 0);
-    assert.equal(store.legacyImageReads, 3);
   });
 
   it('skips existing image assets and unsupported image payloads', async () => {
