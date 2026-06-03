@@ -6,6 +6,7 @@ import { describe, it } from 'node:test';
 import sharp from 'sharp';
 import {
   assertBackupBeforeExecute,
+  assertMigrationHost,
   LegacyImageMigrationStore,
   migrateLegacyImageMessagesToObjectStorage,
 } from './migrateImageMessagesToObjectStorage';
@@ -298,5 +299,17 @@ describe('migrateLegacyImageMessagesToObjectStorage', () => {
 
     assert.throws(() => assertBackupBeforeExecute(false, emptyBackupFile), /empty or invalid/);
     assert.doesNotThrow(() => assertBackupBeforeExecute(false, backupFile));
+  });
+
+  it('blocks running the migration on the serving Fly app VM by default', () => {
+    assert.doesNotThrow(() => assertMigrationHost({}));
+    assert.throws(
+      () => assertMigrationHost({ FLY_APP_NAME: 'message-system' }),
+      /Do not run legacy image migration on the Fly app VM/
+    );
+    assert.doesNotThrow(() => assertMigrationHost({
+      FLY_APP_NAME: 'message-system',
+      ALLOW_FLY_APP_VM_IMAGE_MIGRATION: 'true',
+    }));
   });
 });
