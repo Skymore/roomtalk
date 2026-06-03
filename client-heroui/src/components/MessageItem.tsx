@@ -93,7 +93,9 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     || (message.replyTo?.messageType === 'ai' ? t('aiAssistantName') : t('participant'));
   const replyPreview = message.replyTo?.messageType === 'image'
     ? t('sharedImage')
-    : message.replyTo?.preview;
+    : message.replyTo?.messageType === 'voice'
+      ? t('voiceMessage')
+      : message.replyTo?.preview;
   const replyReference = message.replyTo ? (
     <div className="mb-2 max-w-full border-l-2 border-[#c96442] pl-2 text-xs text-[#5e5d59] dark:text-[#b0aea5]">
       <div className="truncate font-medium">{t('replyingTo', { name: replySenderName })}</div>
