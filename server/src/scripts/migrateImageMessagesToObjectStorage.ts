@@ -10,29 +10,12 @@ import { createImageObjectStorageFromEnv, ImageObjectStorage } from '../services
 import { ImageAsset, Message } from '../types';
 
 dotenv.config();
-sharp.cache(false);
-sharp.concurrency(1);
 
 type MigrationLogger = Pick<Logger, 'info' | 'warn' | 'error'>;
 
-export interface LegacyImageMigrationCursor {
-  roomId: string;
-  position: number;
-}
-
-export interface LegacyImageMigrationCandidate {
-  message: Message;
-  cursor: LegacyImageMigrationCursor;
-}
-
-export interface ReadLegacyImageMessagesOptions {
-  roomId?: string;
-  after?: LegacyImageMigrationCursor;
-  limit: number;
-}
-
 export interface LegacyImageMigrationStore {
-  readLegacyImageMessages(options: ReadLegacyImageMessagesOptions): Promise<LegacyImageMigrationCandidate[]>;
+  readRoomIdsWithImageMessages(roomId?: string): Promise<string[]>;
+  readMessagesByRoom(roomId: string): Promise<Message[]>;
   getImageAssetByMessageId(messageId: string): Promise<ImageAsset | null>;
   replaceMessageImageAsset(roomId: string, messageId: string, asset: ImageAsset): Promise<MessageUpdateResult | null>;
 }
@@ -63,7 +46,6 @@ export interface LegacyImageMigrationOptions {
   dryRun?: boolean;
   roomId?: string;
   limit?: number;
-  batchSize?: number;
   logger?: MigrationLogger;
 }
 
@@ -77,24 +59,6 @@ type PreparedImageAsset = {
   body: Buffer;
 };
 
-type LegacyImageMessageRow = {
-  id: string;
-  room_id: string;
-  client_id: string;
-  content: string;
-  timestamp: string | Date;
-  message_type: Message['messageType'];
-  username: string | null;
-  avatar: unknown;
-  mime_type: string | null;
-  status: Message['status'] | null;
-  ai_model: unknown;
-  usage: unknown;
-  cost: unknown;
-  reply_to: unknown;
-  position: number | string;
-};
-
 const SUPPORTED_LEGACY_MIME_TYPES = new Set([
   'image/png',
   'image/jpeg',
@@ -103,7 +67,6 @@ const SUPPORTED_LEGACY_MIME_TYPES = new Set([
   'image/webp',
   'image/avif',
 ]);
-const DEFAULT_BATCH_SIZE = 1;
 
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -136,60 +99,6 @@ const findArgValue = (name: string): string | undefined => {
 };
 
 const hasArg = (name: string) => process.argv.slice(2).includes(name);
-
-const normalizeBatchSize = (value: number | undefined) => value && value > 0 ? value : DEFAULT_BATCH_SIZE;
-
-const toIsoString = (value: string | Date): string => {
-  if (value instanceof Date) {
-    return value.toISOString();
-  }
-
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
-};
-
-const parseJsonValue = <T>(value: unknown): T | undefined => {
-  if (value === null || value === undefined) {
-    return undefined;
-  }
-
-  if (typeof value === 'string') {
-    try {
-      return JSON.parse(value) as T;
-    } catch {
-      return undefined;
-    }
-  }
-
-  return value as T;
-};
-
-const mapLegacyImageMessage = (row: LegacyImageMessageRow): Message => {
-  const message: Message = {
-    id: row.id,
-    clientId: row.client_id,
-    content: row.content,
-    roomId: row.room_id,
-    timestamp: toIsoString(row.timestamp),
-    messageType: row.message_type,
-  };
-
-  if (row.username) message.username = row.username;
-  const avatar = parseJsonValue<Message['avatar']>(row.avatar);
-  if (avatar) message.avatar = avatar;
-  if (row.mime_type) message.mimeType = row.mime_type;
-  if (row.status) message.status = row.status;
-  const aiModel = parseJsonValue<Message['aiModel']>(row.ai_model);
-  if (aiModel) message.aiModel = aiModel;
-  const usage = parseJsonValue<Message['usage']>(row.usage);
-  if (usage) message.usage = usage;
-  const cost = parseJsonValue<Message['cost']>(row.cost);
-  if (cost) message.cost = cost;
-  const replyTo = parseJsonValue<Message['replyTo']>(row.reply_to);
-  if (replyTo) message.replyTo = replyTo;
-
-  return message;
-};
 
 export const assertBackupBeforeExecute = (dryRun: boolean, backupFile?: string) => {
   if (dryRun) {
@@ -231,9 +140,10 @@ const parseLegacyImagePayload = (message: Message): ParsedImagePayload | null =>
 };
 
 const prepareImageAsset = async (message: Message, parsed: ParsedImagePayload): Promise<PreparedImageAsset> => {
-  const output = await sharp(parsed.buffer)
+  const body = await sharp(parsed.buffer)
     .webp({ lossless: true })
-    .toBuffer({ resolveWithObject: true });
+    .toBuffer();
+  const metadata = await sharp(body).metadata();
   const assetId = uuidv4();
 
   const asset: ImageAsset = {
@@ -242,13 +152,13 @@ const prepareImageAsset = async (message: Message, parsed: ParsedImagePayload): 
     messageId: message.id,
     objectKey: `rooms/${message.roomId}/${assetId}.webp`,
     mimeType: 'image/webp',
-    byteSize: output.data.length,
-    width: output.info.width,
-    height: output.info.height,
+    byteSize: body.length,
+    width: metadata.width,
+    height: metadata.height,
     createdAt: message.timestamp,
   };
 
-  return { asset, body: output.data };
+  return { asset, body };
 };
 
 const deleteImageObjectBestEffort = async (
@@ -270,7 +180,6 @@ export async function migrateLegacyImageMessagesToObjectStorage({
   dryRun = true,
   roomId,
   limit,
-  batchSize,
   logger,
 }: LegacyImageMigrationOptions): Promise<LegacyImageMigrationStats> {
   if (!dryRun && !imageObjectStorage.isConfigured()) {
@@ -278,32 +187,23 @@ export async function migrateLegacyImageMessagesToObjectStorage({
   }
 
   const stats = createEmptyStats(dryRun);
-  const scannedRoomIds = new Set<string>();
-  const normalizedBatchSize = normalizeBatchSize(batchSize);
-  let cursor: LegacyImageMigrationCursor | undefined;
-  let scannedCandidates = 0;
+  const roomIds = await store.readRoomIdsWithImageMessages(roomId);
+  stats.roomsScanned = roomIds.length;
 
-  logger?.info('Scanning legacy image messages', { dryRun, roomId, limit, batchSize: normalizedBatchSize });
+  logger?.info('Scanning rooms for legacy image messages', { roomCount: roomIds.length, dryRun, roomId, limit });
 
-  while (!limit || scannedCandidates < limit) {
-    const remaining = limit ? limit - scannedCandidates : normalizedBatchSize;
-    const candidates = await store.readLegacyImageMessages({
-      roomId,
-      after: cursor,
-      limit: Math.min(normalizedBatchSize, remaining),
-    });
+  for (const scannedRoomId of roomIds) {
+    const messages = await store.readMessagesByRoom(scannedRoomId);
+    stats.messagesScanned += messages.length;
 
-    if (candidates.length === 0) {
-      break;
-    }
+    for (const message of messages) {
+      if (limit && stats.imagesMigrated + (dryRun ? stats.legacyImagesFound : 0) >= limit) {
+        return stats;
+      }
 
-    for (const candidate of candidates) {
-      cursor = candidate.cursor;
-      scannedCandidates++;
-      const message = candidate.message;
-      scannedRoomIds.add(message.roomId);
-      stats.roomsScanned = scannedRoomIds.size;
-      stats.messagesScanned++;
+      if (message.messageType !== 'image') {
+        continue;
+      }
 
       if (message.imageAsset || await store.getImageAssetByMessageId(message.id)) {
         stats.skippedExistingAssets++;
@@ -314,7 +214,7 @@ export async function migrateLegacyImageMessagesToObjectStorage({
       try {
         parsed = parseLegacyImagePayload(message);
       } catch (error) {
-        stats.failures.push({ roomId: message.roomId, messageId: message.id, stage: 'parse', error: errorMessage(error) });
+        stats.failures.push({ roomId: scannedRoomId, messageId: message.id, stage: 'parse', error: errorMessage(error) });
         continue;
       }
 
@@ -330,7 +230,7 @@ export async function migrateLegacyImageMessagesToObjectStorage({
       try {
         prepared = await prepareImageAsset(message, parsed);
       } catch (error) {
-        stats.failures.push({ roomId: message.roomId, messageId: message.id, stage: 'convert', error: errorMessage(error) });
+        stats.failures.push({ roomId: scannedRoomId, messageId: message.id, stage: 'convert', error: errorMessage(error) });
         continue;
       }
 
@@ -347,19 +247,19 @@ export async function migrateLegacyImageMessagesToObjectStorage({
           byteSize: prepared.asset.byteSize,
         });
       } catch (error) {
-        stats.failures.push({ roomId: message.roomId, messageId: message.id, stage: 'upload', error: errorMessage(error) });
+        stats.failures.push({ roomId: scannedRoomId, messageId: message.id, stage: 'upload', error: errorMessage(error) });
         continue;
       }
 
-      const result = await store.replaceMessageImageAsset(message.roomId, message.id, prepared.asset);
+      const result = await store.replaceMessageImageAsset(scannedRoomId, message.id, prepared.asset);
       if (!result?.found) {
         await deleteImageObjectBestEffort(imageObjectStorage, prepared.asset.objectKey, logger, {
-          roomId: message.roomId,
+          roomId: scannedRoomId,
           messageId: message.id,
           assetId: prepared.asset.id,
         });
         stats.failures.push({
-          roomId: message.roomId,
+          roomId: scannedRoomId,
           messageId: message.id,
           stage: 'replace',
           error: result ? 'Image message was not found during replacement' : 'Failed to replace image message payload',
@@ -369,7 +269,7 @@ export async function migrateLegacyImageMessagesToObjectStorage({
 
       stats.imagesMigrated++;
       logger?.info('Migrated legacy image message to object storage', {
-        roomId: message.roomId,
+        roomId: scannedRoomId,
         messageId: message.id,
         assetId: prepared.asset.id,
         originalBytes: parsed.buffer.length,
@@ -387,61 +287,21 @@ export class PostgresLegacyImageMigrationStore implements LegacyImageMigrationSt
     private readonly store: PostgresStore,
   ) {}
 
-  async readLegacyImageMessages(options: ReadLegacyImageMessagesOptions): Promise<LegacyImageMigrationCandidate[]> {
-    const params: unknown[] = [];
-    const where = [
-      `m.message_type = 'image'`,
-      `a.id IS NULL`,
-    ];
-
-    if (options.roomId) {
-      params.push(options.roomId);
-      where.push(`m.room_id = $${params.length}`);
-    }
-
-    if (options.after) {
-      params.push(options.after.roomId);
-      const roomParam = params.length;
-      params.push(options.after.position);
-      const positionParam = params.length;
-      where.push(`(m.room_id > $${roomParam} OR (m.room_id = $${roomParam} AND m.position > $${positionParam}))`);
-    }
-
-    params.push(options.limit);
-    const limitParam = params.length;
-
-    const result = await this.pool.query<LegacyImageMessageRow>(
-      `SELECT
-        m.id,
-        m.room_id,
-        m.client_id,
-        m.content,
-        m.timestamp,
-        m.message_type,
-        m.username,
-        m.avatar,
-        m.mime_type,
-        m.status,
-        m.ai_model,
-        m.usage,
-        m.cost,
-        m.reply_to,
-        m.position
-      FROM room_messages m
-      LEFT JOIN image_assets a ON a.message_id = m.id OR a.id = m.content
-      WHERE ${where.join(' AND ')}
-      ORDER BY m.room_id ASC, m.position ASC
-      LIMIT $${limitParam}`,
+  async readRoomIdsWithImageMessages(roomId?: string): Promise<string[]> {
+    const params = roomId ? [roomId] : [];
+    const result = await this.pool.query<{ room_id: string }>(
+      `SELECT DISTINCT room_id
+      FROM room_messages
+      WHERE message_type = 'image'
+      ${roomId ? 'AND room_id = $1' : ''}
+      ORDER BY room_id ASC`,
       params
     );
+    return result.rows.map(row => row.room_id);
+  }
 
-    return result.rows.map(row => ({
-      message: mapLegacyImageMessage(row),
-      cursor: {
-        roomId: row.room_id,
-        position: Number(row.position) || 0,
-      },
-    }));
+  readMessagesByRoom(roomId: string): Promise<Message[]> {
+    return this.store.readMessagesByRoom(roomId);
   }
 
   getImageAssetByMessageId(messageId: string): Promise<ImageAsset | null> {
@@ -459,7 +319,6 @@ async function main() {
   const dryRun = !execute;
   const roomId = findArgValue('--room-id');
   const limit = parsePositiveInteger(findArgValue('--limit'));
-  const batchSize = parsePositiveInteger(findArgValue('--batch-size'));
   const backupFile = findArgValue('--backup-file') || process.env.ROOMTALK_DB_BACKUP_FILE;
   const databaseUrl = process.env.DATABASE_URL;
 
@@ -481,7 +340,6 @@ async function main() {
       dryRun,
       roomId,
       limit,
-      batchSize,
       logger,
     });
 
