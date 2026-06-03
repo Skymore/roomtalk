@@ -73,7 +73,7 @@ export function createUserMessage(input: {
   clientId: string;
   roomId: string;
   content: string;
-  messageType?: 'text' | 'image';
+  messageType?: 'text' | 'image' | 'voice';
   username?: string;
   avatar?: AvatarPayload;
   mimeType?: string;

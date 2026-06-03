@@ -3,6 +3,7 @@ import { registerAIHandlers } from './aiHandlers';
 import { registerMediaHandlers } from './mediaHandlers';
 import { registerMessageHandlers } from './messageHandlers';
 import { registerRoomHandlers } from './roomHandlers';
+import { registerTranscriptionHandlers } from './transcriptionHandlers';
 import { SocketHandlerDeps } from './types';
 
 export function registerSocketHandlers(deps: SocketHandlerDeps) {
@@ -14,5 +15,6 @@ export function registerSocketHandlers(deps: SocketHandlerDeps) {
     registerMessageHandlers(context);
     registerMediaHandlers(context);
     registerAIHandlers(context);
+    registerTranscriptionHandlers(context);
   });
 }

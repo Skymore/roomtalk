@@ -341,6 +341,21 @@ export const getImageDownloadUrl = (params: {
   });
 };
 
+// Mint a short-lived AssemblyAI streaming token (server keeps the API key)
+export const createTranscriptionToken = (): Promise<{ token: string }> => {
+  return emitWithAck<SocketAckResponse & { token?: string }>(
+    'create_transcription_token',
+    {},
+    'Timed out while getting transcription token',
+    'Failed to get transcription token',
+  ).then((response) => {
+    if (!response.token) {
+      throw new Error('Server did not return transcription token');
+    }
+    return { token: response.token };
+  });
+};
+
 // Get a room by ID (for joining rooms by ID)
 export const getRoomById = (roomId: string): Promise<Room | null> => {
   return waitForConnectedSocket().then(() => new Promise<Room | null>((resolve, reject) => {
