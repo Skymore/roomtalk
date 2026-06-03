@@ -286,7 +286,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 ${isFailed ? "ring-1 ring-danger-500/75" : ""}
               `}
             >
-              <div className="max-w-full p-2.5">
+              <div className="max-w-full px-2 py-1.5">
                 {replyReference}
                 <div className="max-w-full overflow-hidden whitespace-pre-wrap break-words text-sm leading-6">
                   <div className="max-w-full overflow-x-auto" style={{ wordBreak: 'break-word', overflowWrap: 'break-word' }}>
