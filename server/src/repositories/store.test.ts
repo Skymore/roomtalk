@@ -155,8 +155,9 @@ describe('CompositeRoomStore', () => {
       async failInterruptedStreamingMessages(_content: string) { calls.push('durable.failInterruptedStreamingMessages'); return 2; },
     };
     const realtime: RealtimeRoomStore = {
-      async updateRoomMemberCount(_roomId: string, _clientId: string, _isJoining: boolean) { calls.push('realtime.updateRoomMemberCount'); return 1; },
+      async updateRoomMemberCount(_roomId: string, _clientId: string, _socketId: string, _isJoining: boolean) { calls.push('realtime.updateRoomMemberCount'); return 1; },
       async getRoomMemberCount(_roomId: string) { calls.push('realtime.getRoomMemberCount'); return 1; },
+      async clearRealtimeRoomMembers() { calls.push('realtime.clearRealtimeRoomMembers'); },
       async storeClientSession(_socketId: string, _userId: string) { calls.push('realtime.storeClientSession'); },
       async getClientId(_socketId: string) { calls.push('realtime.getClientId'); return 'client-1'; },
       async removeClientSession(_socketId: string) { calls.push('realtime.removeClientSession'); },
@@ -208,8 +209,9 @@ describe('CompositeRoomStore', () => {
     assert.deepEqual(await store.updateRoomName('room-1', 'client-1', 'Renamed'), room({ name: 'Renamed' }));
     await store.deleteRoom('room-1', 'client-1');
     assert.equal(await store.countRooms(), 1);
-    assert.equal(await store.updateRoomMemberCount('room-1', 'client-1', true), 1);
+    assert.equal(await store.updateRoomMemberCount('room-1', 'client-1', 'socket-1', true), 1);
     assert.equal(await store.getRoomMemberCount('room-1'), 1);
+    await store.clearRealtimeRoomMembers();
     await store.storeClientSession('socket-1', 'client-1');
     assert.equal(await store.getClientId('socket-1'), 'client-1');
     await store.removeClientSession('socket-1');
@@ -250,6 +252,7 @@ describe('CompositeRoomStore', () => {
       'durable.countRooms',
       'realtime.updateRoomMemberCount',
       'realtime.getRoomMemberCount',
+      'realtime.clearRealtimeRoomMembers',
       'realtime.storeClientSession',
       'realtime.getClientId',
       'realtime.removeClientSession',
@@ -285,6 +288,7 @@ describe('CompositeRoomStore', () => {
     const realtime: RealtimeRoomStore = {
       async updateRoomMemberCount() { return 0; },
       async getRoomMemberCount() { return 0; },
+      async clearRealtimeRoomMembers() {},
       async storeClientSession() {},
       async getClientId() { return null; },
       async removeClientSession() {},
@@ -339,6 +343,7 @@ describe('CompositeRoomStore', () => {
     const realtime: RealtimeRoomStore = {
       async updateRoomMemberCount() { return 0; },
       async getRoomMemberCount() { return 0; },
+      async clearRealtimeRoomMembers() {},
       async storeClientSession() {},
       async getClientId() { return null; },
       async removeClientSession() {},
@@ -416,6 +421,7 @@ describe('CompositeRoomStore', () => {
     const realtime: RealtimeRoomStore = {
       async updateRoomMemberCount() { return 0; },
       async getRoomMemberCount() { return 0; },
+      async clearRealtimeRoomMembers() {},
       async storeClientSession() {},
       async getClientId() { return null; },
       async removeClientSession() {},
@@ -465,6 +471,7 @@ describe('CompositeRoomStore', () => {
     const realtime: RealtimeRoomStore = {
       async updateRoomMemberCount() { return 0; },
       async getRoomMemberCount() { return 0; },
+      async clearRealtimeRoomMembers() {},
       async storeClientSession() {},
       async getClientId() { return null; },
       async removeClientSession() {},

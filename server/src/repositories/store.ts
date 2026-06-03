@@ -59,8 +59,9 @@ export interface DurableRoomStore {
 }
 
 export interface RealtimeRoomStore {
-  updateRoomMemberCount(roomId: string, clientId: string, isJoining: boolean): Promise<number>;
+  updateRoomMemberCount(roomId: string, clientId: string, socketId: string, isJoining: boolean): Promise<number>;
   getRoomMemberCount(roomId: string): Promise<number>;
+  clearRealtimeRoomMembers?(): Promise<void>;
   storeClientSession(socketId: string, userId: string): Promise<void>;
   getClientId(socketId: string): Promise<string | null>;
   removeClientSession(socketId: string): Promise<void>;
@@ -298,12 +299,16 @@ export class CompositeRoomStore implements RoomStore {
     return updatedCount;
   }
 
-  updateRoomMemberCount(roomId: string, clientId: string, isJoining: boolean) {
-    return this.realtimeStore.updateRoomMemberCount(roomId, clientId, isJoining);
+  updateRoomMemberCount(roomId: string, clientId: string, socketId: string, isJoining: boolean) {
+    return this.realtimeStore.updateRoomMemberCount(roomId, clientId, socketId, isJoining);
   }
 
   getRoomMemberCount(roomId: string) {
     return this.realtimeStore.getRoomMemberCount(roomId);
+  }
+
+  clearRealtimeRoomMembers() {
+    return this.realtimeStore.clearRealtimeRoomMembers?.() || Promise.resolve();
   }
 
   storeClientSession(socketId: string, userId: string) {

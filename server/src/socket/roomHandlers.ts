@@ -97,7 +97,7 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
 
     const prevRooms = await store.getUserRooms(socket.id);
     for (const r of prevRooms) {
-      const memberCount = await store.updateRoomMemberCount(r, userId, false);
+      const memberCount = await store.updateRoomMemberCount(r, userId, socket.id, false);
       const leaveEvent = createRoomMemberEvent({
         roomId: r,
         userId,
@@ -133,7 +133,7 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
     socket.join(roomId);
     await store.storeUserRooms(socket.id, [roomId]);
 
-    const memberCount = await store.updateRoomMemberCount(roomId, userId, true);
+    const memberCount = await store.updateRoomMemberCount(roomId, userId, socket.id, true);
     const joinEvent = createRoomMemberEvent({
       roomId,
       userId,
@@ -160,7 +160,7 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
 
     socket.leave(roomId);
 
-    const memberCount = await store.updateRoomMemberCount(roomId, userId, false);
+    const memberCount = await store.updateRoomMemberCount(roomId, userId, socket.id, false);
     const leaveEvent = createRoomMemberEvent({
       roomId,
       userId,
@@ -298,7 +298,7 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
       socketLogger.info('Client disconnected', { socketId: socket.id, userId, reason });
       const rooms = await store.getUserRooms(socket.id);
       for (const roomId of rooms) {
-        const memberCount = await store.updateRoomMemberCount(roomId, userId, false);
+        const memberCount = await store.updateRoomMemberCount(roomId, userId, socket.id, false);
         const leaveEvent = createRoomMemberEvent({
           roomId,
           userId,

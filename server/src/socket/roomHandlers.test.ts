@@ -159,7 +159,7 @@ const createHarness = (clientId: string | null = 'client-1') => {
     async storeUserRooms(_socketId: string, roomIds: string[]) {
       this.socketRooms = roomIds;
     },
-    async updateRoomMemberCount(roomId: string, _userId: string, isJoining: boolean) {
+    async updateRoomMemberCount(roomId: string, _userId: string, _socketId: string, isJoining: boolean) {
       return isJoining ? 2 : 1;
     },
     async getRoomById(roomId: string) {

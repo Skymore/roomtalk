@@ -1006,19 +1006,26 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
-  async updateRoomMemberCount(roomId: string, clientId: string, isJoining: boolean): Promise<number> {
+  async updateRoomMemberCount(roomId: string, clientId: string, socketId: string, isJoining: boolean): Promise<number> {
     try {
       const roomMembersKey = `room:${roomId}:members`;
+      const clientSocketsKey = `room:${roomId}:member_sockets:${clientId}`;
 
       if (isJoining) {
+        await this.redisClient.sAdd(clientSocketsKey, socketId);
         await this.redisClient.sAdd(roomMembersKey, clientId);
       } else {
-        await this.redisClient.sRem(roomMembersKey, clientId);
+        await this.redisClient.sRem(clientSocketsKey, socketId);
+        const remainingSockets = await this.redisClient.sCard(clientSocketsKey);
+        if (remainingSockets === 0) {
+          await this.redisClient.del(clientSocketsKey);
+          await this.redisClient.sRem(roomMembersKey, clientId);
+        }
       }
 
       return await this.redisClient.sCard(roomMembersKey);
     } catch (error) {
-      this.logger.error('Error updating room member count', { error, roomId, clientId, isJoining });
+      this.logger.error('Error updating room member count', { error, roomId, clientId, socketId, isJoining });
       return 0;
     }
   }
@@ -1029,6 +1036,55 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     } catch (error) {
       this.logger.error('Error getting room member count', { error, roomId });
       return 0;
+    }
+  }
+
+  async clearRealtimeRoomMembers(): Promise<void> {
+    try {
+      const patterns = ['room:*:members', 'room:*:member_sockets:*'];
+      const pendingKeys: string[] = [];
+      let deletedKeyCount = 0;
+      const scanIterator = (this.redisClient as any).scanIterator;
+
+      if (typeof scanIterator === 'function') {
+        for (const pattern of patterns) {
+          for await (const keyOrKeys of scanIterator.call(this.redisClient, {
+            MATCH: pattern,
+            COUNT: 100,
+          })) {
+            if (Array.isArray(keyOrKeys)) {
+              pendingKeys.push(...keyOrKeys.map(String));
+            } else {
+              pendingKeys.push(String(keyOrKeys));
+            }
+
+            if (pendingKeys.length >= 100) {
+              const keysToDelete = pendingKeys.splice(0);
+              deletedKeyCount += keysToDelete.length;
+              await this.redisClient.del(keysToDelete);
+            }
+          }
+        }
+      } else if (typeof (this.redisClient as any).keys === 'function') {
+        this.logger.warn('Redis scanIterator unavailable; falling back to KEYS for realtime room member cleanup');
+        for (const pattern of patterns) {
+          const keys = await (this.redisClient as any).keys(pattern);
+          if (Array.isArray(keys)) {
+            pendingKeys.push(...keys.map(String));
+          }
+        }
+      } else {
+        this.logger.error('Cannot clear realtime room members because Redis client supports neither scanIterator nor keys');
+        return;
+      }
+
+      if (pendingKeys.length > 0) {
+        deletedKeyCount += pendingKeys.length;
+        await this.redisClient.del(pendingKeys);
+      }
+      this.logger.info('Realtime room member state cleared', { keyCount: deletedKeyCount });
+    } catch (error) {
+      this.logger.error('Error clearing realtime room member state', { error });
     }
   }
 
@@ -1092,6 +1148,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         this.redisClient.del(`room:${roomId}:members`),
         this.redisClient.del(getPersistentRoomMembersKey(roomId)),
         this.redisClient.del(getRoomImageAssetsKey(roomId)),
+        ...members.map(member => this.redisClient.del(`room:${roomId}:member_sockets:${member.clientId}`)),
         ...imageAssets.map(asset => this.redisClient.hDel('image_assets', asset.id)),
         ...members.map(member => this.redisClient.sRem(`user:${member.clientId}:rooms`, roomId)),
         this.redisClient.sRem(`user:${creatorId}:rooms`, roomId),
