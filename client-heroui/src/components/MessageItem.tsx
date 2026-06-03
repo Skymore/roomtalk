@@ -1,5 +1,15 @@
 import React, { useState } from "react";
-import { Avatar, Card, Image, Button, Tooltip } from "@heroui/react";
+import {
+  Avatar,
+  Card,
+  Image,
+  Button,
+  Tooltip,
+  Dropdown,
+  DropdownTrigger,
+  DropdownMenu,
+  DropdownItem,
+} from "@heroui/react";
 import { Icon } from "@iconify/react";
 import { clientId, getImageDownloadUrl } from "../utils/socket";
 import { formatPercentage, formatTime, formatUsdCost } from "../utils/formatters";
@@ -56,7 +66,6 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   onReply,
 }) => {
   const isMine = message.clientId === clientId;
-  const [isHovered, setIsHovered] = React.useState(false);
   const [imageError, setImageError] = React.useState(false);
   const [signedImageUrl, setSignedImageUrl] = React.useState<string | null>(null);
   const imageRetryCountRef = React.useRef(0);
@@ -92,6 +101,8 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   ) : null;
 
   const [copyStatus, setCopyStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [liked, setLiked] = useState(false);
+  const [disliked, setDisliked] = useState(false);
   const copyResetTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   React.useEffect(() => {
@@ -155,14 +166,16 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     setImageError(true);
   };
 
-  const handleCopyClick = async (e: React.MouseEvent) => {
-    e.stopPropagation(); // Prevent card click
-    if (!isImage) return;
-    if (!imageSrc) {
-      setCopyStatus('error');
-      return;
-    }
-    const success = await copyImageToClipboard(imageSrc);
+  const handleCopyMessage = async () => {
+    const success = isImage
+      ? imageSrc
+        ? await copyImageToClipboard(imageSrc)
+        : false
+      : await navigator.clipboard.writeText(message.content).then(() => true).catch((error) => {
+        console.error("Failed to copy message:", error);
+        return false;
+      });
+
     setCopyStatus(success ? 'success' : 'error');
     if (copyResetTimerRef.current) {
       clearTimeout(copyResetTimerRef.current);
@@ -171,6 +184,16 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       setCopyStatus('idle');
       copyResetTimerRef.current = null;
     }, 1500); // Reset status after a delay
+  };
+
+  const toggleLike = () => {
+    setLiked((value) => !value);
+    if (!liked) setDisliked(false);
+  };
+
+  const toggleDislike = () => {
+    setDisliked((value) => !value);
+    if (!disliked) setLiked(false);
   };
 
   // 修改成不使用事件参数的简单处理函数，避免类型错误
@@ -190,15 +213,11 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     return "default";
   };
 
-  const showActions = isHovered;
-
   return (
     <div
       data-testid="message-item"
       data-message-id={message.id}
       className={`group mb-1 flex w-full items-start ${isMine ? "justify-end" : "justify-start"}`}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
     >
       {/* Opponent's avatar or AI avatar */}
       {(!isMine || isAI) && !isMine && (
@@ -227,36 +246,29 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           {isImage ? (
             <div className="w-fit max-w-full">
               {replyReference}
-              <div className="cursor-pointer" onClick={handleCopyClick}>
-                <Tooltip
-                  content={copyStatus === 'success' ? t('copied') : (copyStatus === 'error' ? t('copyFailed') : t('copyImage'))}
-                  placement="top"
-                  size="sm"
-                  classNames={tooltipClassNames}
-                >
-                  {imageError ? (
-                    <div className="w-fit rounded-md bg-[#e8e6dc] p-2 text-sm text-danger dark:bg-[#30302e]">
-                      <Icon icon="lucide:alert-triangle" className="inline mr-1" />
-                      {t('imageLoadFailed')}
-                    </div>
-                  ) : (
-                    <div className="max-w-full rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-0.5 dark:border-[#30302e] dark:bg-[#1d1d1b]">
-                      {imageSrc ? (
-                        <Image
-                          src={imageSrc}
-                          alt={t('sharedImage')}
-                          className="block max-h-[300px] max-w-full object-contain rounded"
-                          onError={handleImageError}
-                          isBlurred
-                        />
-                      ) : (
-                        <div className="flex h-24 w-36 items-center justify-center rounded text-[#87867f] dark:text-[#b0aea5]">
-                          <Icon icon="lucide:image" className="h-5 w-5" />
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </Tooltip>
+              <div>
+                {imageError ? (
+                  <div className="w-fit rounded-md bg-[#e8e6dc] p-2 text-sm text-danger dark:bg-[#30302e]">
+                    <Icon icon="lucide:alert-triangle" className="inline mr-1" />
+                    {t('imageLoadFailed')}
+                  </div>
+                ) : (
+                  <div className="max-w-full rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-0.5 dark:border-[#30302e] dark:bg-[#1d1d1b]">
+                    {imageSrc ? (
+                      <Image
+                        src={imageSrc}
+                        alt={t('sharedImage')}
+                        className="block max-h-[300px] max-w-full object-contain rounded"
+                        onError={handleImageError}
+                        isBlurred
+                      />
+                    ) : (
+                      <div className="flex h-24 w-36 items-center justify-center rounded text-[#87867f] dark:text-[#b0aea5]">
+                        <Icon icon="lucide:image" className="h-5 w-5" />
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           ) : (
@@ -300,7 +312,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             className={`mt-0.5 flex min-h-5 max-w-full flex-wrap items-center ${isMine ? 'justify-end' : 'justify-start'}`}
         >
             {/* Timestamp */}
-            <span className={`max-w-full text-tiny text-[#87867f] dark:text-[#b0aea5] ${showActions ? 'mr-1' : ''}`}>
+            <span className="mr-1 max-w-full text-tiny text-[#87867f] dark:text-[#b0aea5]">
               {formatTime(message.timestamp, i18n.language)}
               {isStreaming && ` • ${t('typing')}`}
               {isPending && ` • ${t('messageSending')}`}
@@ -309,6 +321,25 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             </span>
 
             <div className="ml-1 flex items-center gap-0.5">
+              <Tooltip
+                content={copyStatus === 'success' ? t('copied') : (copyStatus === 'error' ? t('copyFailed') : (isImage ? t('copyImage') : t('copy')))}
+                placement="top"
+                size="sm"
+                delay={500}
+                classNames={tooltipClassNames}
+              >
+                <Button
+                  isIconOnly
+                  size="sm"
+                  variant="light"
+                  aria-label={isImage ? t('copyImage') : t('copy')}
+                  className={`h-5 w-5 min-w-0 ${copyStatus === 'success' ? 'text-[#c96442] dark:text-[#d97757]' : 'text-[#5e5d59] dark:text-[#b0aea5]'}`}
+                  onPress={handleCopyMessage}
+                  isDisabled={isImage && (!imageSrc || imageError)}
+                >
+                  <Icon icon={copyStatus === 'success' ? "lucide:check" : "lucide:copy"} width={12} height={12}/>
+                </Button>
+              </Tooltip>
               <Tooltip content={t('replyToMessage')} placement="top" size="sm" delay={500} classNames={tooltipClassNames}>
                 <Button
                   isIconOnly
@@ -322,53 +353,80 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                   <Icon icon="lucide:reply" width={12} height={12}/>
                 </Button>
               </Tooltip>
-              {/* Action Buttons: Show on hover */}
-              {showActions && (
-                <>
-                {canBeEdited && (
-                  <Tooltip content={t('editMessage')} placement="top" size="sm" delay={500} classNames={tooltipClassNames}>
-                    <Button
-                      isIconOnly
-                      size="sm"
-                      variant="light"
-                      aria-label={t('editMessage')}
-                      className="h-5 w-5 min-w-0 text-[#5e5d59] dark:text-[#b0aea5]"
-                      onPress={() => onStartEdit(message.id)}
-                    >
-                      <Icon icon="lucide:pencil" width={12} height={12}/>
-                    </Button>
-                  </Tooltip>
-                )}
-                <Tooltip content={t('deleteMessage')} placement="top" size="sm" delay={500} classNames={tooltipClassNames}>
+              {canBeEdited && (
+                <Tooltip content={t('editMessage')} placement="top" size="sm" delay={500} classNames={tooltipClassNames}>
                   <Button
                     isIconOnly
-                      size="sm"
-                      variant="light"
-                      aria-label={t('deleteMessage')}
-                      className="h-5 w-5 min-w-0 text-danger-500"
-                    onPress={() => onDeleteMessage(message.id)}
+                    size="sm"
+                    variant="light"
+                    aria-label={t('editMessage')}
+                    className="h-5 w-5 min-w-0 text-[#5e5d59] dark:text-[#b0aea5]"
+                    onPress={() => onStartEdit(message.id)}
                   >
-                    <Icon icon="lucide:trash-2" width={12} height={12}/>
+                    <Icon icon="lucide:pencil" width={12} height={12}/>
                   </Button>
                 </Tooltip>
-                {/* 刷新按钮 - 仅对AI消息显示 */}
-                {isAI && !isStreaming && onRefreshAI && (
-                  <Tooltip content={t('retry')} placement="top" size="sm" delay={500} classNames={tooltipClassNames}>
-                    <Button
-                      isIconOnly
-                      size="sm"
-                      variant="light"
-                      aria-label={t('retry')}
-                      className="h-5 w-5 min-w-0 text-[#c96442] dark:text-[#d97757]"
-                      onPress={handleRefreshAIClick}
-                      isDisabled={isStreaming}
-                    >
-                      <Icon icon="lucide:refresh-cw" width={12} height={12}/>
-                    </Button>
-                  </Tooltip>
-                )}
-                </>
               )}
+              <Tooltip content={t('deleteMessage')} placement="top" size="sm" delay={500} classNames={tooltipClassNames}>
+                <Button
+                  isIconOnly
+                  size="sm"
+                  variant="light"
+                  aria-label={t('deleteMessage')}
+                  className="h-5 w-5 min-w-0 text-danger-500"
+                  onPress={() => onDeleteMessage(message.id)}
+                >
+                  <Icon icon="lucide:trash-2" width={12} height={12}/>
+                </Button>
+              </Tooltip>
+              {/* 刷新按钮 - 仅对AI消息显示 */}
+              {isAI && !isStreaming && onRefreshAI && (
+                <Tooltip content={t('retry')} placement="top" size="sm" delay={500} classNames={tooltipClassNames}>
+                  <Button
+                    isIconOnly
+                    size="sm"
+                    variant="light"
+                    aria-label={t('retry')}
+                    className="h-5 w-5 min-w-0 text-[#c96442] dark:text-[#d97757]"
+                    onPress={handleRefreshAIClick}
+                    isDisabled={isStreaming}
+                  >
+                    <Icon icon="lucide:refresh-cw" width={12} height={12}/>
+                  </Button>
+                </Tooltip>
+              )}
+              <Dropdown placement="top-end">
+                <DropdownTrigger>
+                  <Button
+                    isIconOnly
+                    size="sm"
+                    variant="light"
+                    aria-label={t('moreActions')}
+                    className="h-5 w-5 min-w-0 text-[#5e5d59] dark:text-[#b0aea5]"
+                    isDisabled={isStreaming}
+                  >
+                    <Icon icon="lucide:more-horizontal" width={12} height={12}/>
+                  </Button>
+                </DropdownTrigger>
+                <DropdownMenu aria-label={t('moreActions')}>
+                  <DropdownItem
+                    key="like"
+                    startContent={<Icon icon="lucide:thumbs-up" />}
+                    onPress={toggleLike}
+                    className={liked ? "text-[#c96442] dark:text-[#d97757]" : ""}
+                  >
+                    {liked ? t('cancelLike') : t('like')}
+                  </DropdownItem>
+                  <DropdownItem
+                    key="dislike"
+                    startContent={<Icon icon="lucide:thumbs-down" />}
+                    onPress={toggleDislike}
+                    className={disliked ? "text-[#c96442] dark:text-[#d97757]" : ""}
+                  >
+                    {disliked ? t('cancelDislike') : t('dislike')}
+                  </DropdownItem>
+                </DropdownMenu>
+              </Dropdown>
             </div>
         </div>
       </div>
