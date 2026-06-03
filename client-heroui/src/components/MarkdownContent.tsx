@@ -6,11 +6,9 @@ import React, { memo, useState, useEffect, useRef, ReactNode } from "react";
 import Markdown from "markdown-to-jsx";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { Icon } from "@iconify/react";
 import { Image } from "@heroui/react";
 import "katex/dist/katex.min.css";
 import katex from "katex";
-import { Tooltip } from "@heroui/react";
 import { useTranslation } from "react-i18next";
 
 interface MarkdownContentProps {
@@ -25,10 +23,6 @@ interface MathProps {
   children: string;
   inline?: boolean;
 }
-
-const tooltipClassNames = {
-  content: "border border-[#dedbd0] bg-[#faf9f5] px-2 py-1 text-xs font-medium text-[#141413] shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5]",
-};
 
 const codeBlockFrameClassName =
   "mb-2 max-w-full min-w-0 overflow-hidden rounded-lg border border-[#dedbd0] bg-[#fbfaf6] text-[#141413] shadow-[0_0_0_1px_rgba(194,192,182,0.18)] dark:border-[#3d3d3a] dark:bg-[#242421] dark:text-[#faf9f5] dark:shadow-none";
@@ -236,98 +230,6 @@ const CodeBlock = memo<CodeBlockProps>(({ className, children }) => {
 });
 CodeBlock.displayName = "CodeBlock";
 
-/** 操作按钮（复制/点赞/点踩） */
-const ContentActionButtons: React.FC<{ content: string }> = memo(({ content }) => {
-  const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-  const [liked, setLiked] = useState(false);
-  const [disliked, setDisliked] = useState(false);
-  const copyRef = useRef<number | null>(null);
-  const handleCopyRaw = () => {
-    navigator.clipboard.writeText(content).then(() => {
-      setCopied(true);
-      if (copyRef.current) clearTimeout(copyRef.current);
-      copyRef.current = window.setTimeout(() => setCopied(false), 2000);
-    });
-  };
-  const toggleLike = () => {
-    setLiked((v) => !v);
-    if (!liked) setDisliked(false);
-  };
-  const toggleDislike = () => {
-    setDisliked((v) => !v);
-    if (!disliked) setLiked(false);
-  };
-  useEffect(
-    () => () => {
-      if (copyRef.current) clearTimeout(copyRef.current);
-    },
-    []
-  );
-  const renderButton = ({
-    onClick,
-    icon,
-    activeIcon,
-    isActive,
-    disabled,
-    tooltip,
-    activeTooltip,
-  }: {
-    onClick: () => void;
-    icon: ReactNode;
-    activeIcon?: ReactNode;
-    isActive?: boolean;
-    disabled?: boolean;
-    tooltip: string;
-    activeTooltip?: string;
-  }) => (
-    <Tooltip content={t(isActive && activeTooltip ? activeTooltip : tooltip)} classNames={tooltipClassNames}>
-      <button
-        onClick={onClick}
-        disabled={disabled}
-        className={
-          `p-0.5 rounded-full transition active:scale-95 ` +
-          (disabled
-            ? "opacity-40 cursor-not-allowed"
-            : `text-current opacity-70 hover:bg-current/10 hover:opacity-100 ${isActive ? "text-[#c96442] opacity-100 dark:text-[#d97757]" : ""}`)
-        }
-        aria-label={t(isActive && activeTooltip ? activeTooltip : tooltip)}
-      >
-        {isActive && activeIcon ? activeIcon : icon}
-      </button>
-    </Tooltip>
-  );
-  return (
-    <div className="flex items-center gap-3 mt-1">
-      {renderButton({
-        onClick: handleCopyRaw,
-        icon: <Icon icon="lucide:copy" />,
-        activeIcon: <Icon icon="lucide:check" />,
-        isActive: copied,
-        tooltip: "copy",
-        activeTooltip: "copied",
-      })}
-      {renderButton({
-        onClick: toggleLike,
-        icon: <Icon icon="tabler:thumb-up" />,
-        activeIcon: <Icon icon="tabler:thumb-up" />,
-        isActive: liked,
-        tooltip: "like",
-        activeTooltip: "cancelLike",
-      })}
-      {renderButton({
-        onClick: toggleDislike,
-        icon: <Icon icon="tabler:thumb-down" />,
-        activeIcon: <Icon icon="tabler:thumb-down" />,
-        isActive: disliked,
-        tooltip: "dislike",
-        activeTooltip: "cancelDislike",
-      })}
-    </div>
-  );
-});
-ContentActionButtons.displayName = "ContentActionButtons";
-
 /** 主组件 */
 export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content, isStreaming }) => {
   const processed = React.useMemo(() => {
@@ -365,10 +267,7 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content, 
   return (
     <div className="markdown-container message-markdown prose prose-sm max-w-full text-current">
       <Markdown options={mdOptions}>{processed}</Markdown>
-      {isStreaming
-        ? <span className="inline-block w-1.5 h-3 bg-current animate-pulse ml-0.5 align-baseline"></span>
-        : <ContentActionButtons content={content} />
-      }
+      {isStreaming && <span className="inline-block w-1.5 h-3 bg-current animate-pulse ml-0.5 align-baseline"></span>}
     </div>
   );
 });

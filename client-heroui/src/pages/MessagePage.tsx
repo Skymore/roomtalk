@@ -23,7 +23,6 @@ import { getStoredRoom, getStoredUsername, getStoredView, saveCurrentRoom, saveC
 import { buildRoomShareUrl, getRoomMemberUpdate, sortRoomsByLastActivityDesc, upsertRoom } from "../utils/roomState";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { AppHeader } from "../components/AppHeader";
 import { SettingsView } from "../components/SettingsView";
 import { RoomJoinModal } from "../components/RoomJoinModal";
 import { BottomNav } from "../components/BottomNav";
@@ -558,19 +557,6 @@ export const MessagePage: React.FC = () => {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[#f5f4ed] text-[#141413] dark:bg-[#141413] dark:text-[#faf9f5]"> {/* 确保根容器是 flex 列且占满屏幕高度 */}
-      <AppHeader
-        clientId={clientId}
-        username={username}
-        setView={setView}
-        view={view}
-        currentRoom={currentRoom}
-        i18n={i18n}
-        changeLanguage={changeLanguage}
-        toggleTheme={toggleTheme}
-        isDark={isDark}
-        handleCopyToClipboard={handleCopyToClipboard}
-      />
-
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <DesktopSidebar
           clientId={clientId}
