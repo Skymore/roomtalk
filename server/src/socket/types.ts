@@ -13,6 +13,7 @@ export interface SocketHandlerDeps {
   normalizeAIModel: (requestedModel?: string) => AIModelOption;
   getAIClientForModel: (model: AIModelOption) => AIClientWrapper;
   imageObjectStorage: ImageObjectStorage;
+  assemblyAIApiKey?: string;
 }
 
 export interface SocketConnectionContext extends SocketHandlerDeps {

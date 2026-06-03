@@ -170,6 +170,7 @@ registerSocketHandlers({
   normalizeAIModel,
   getAIClientForModel,
   imageObjectStorage,
+  assemblyAIApiKey: process.env.ASSEMBLYAI_API_KEY,
 });
 
 registerApiRoutes(app, {

@@ -28,6 +28,7 @@ import {
 } from '../utils/imageInput';
 import { useAIRoles } from '../hooks/useAIRoles';
 import { useAIModelSelection } from '../hooks/useAIModelSelection';
+import { startStreamingTranscription, StreamingTranscriber } from '../utils/streamingTranscription';
 import { MessageInputAIControls, MessageInputAISettingsButton } from './MessageInputAIControls';
 import {
   getKeyboardCompositionSnapshot,
@@ -96,10 +97,19 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   const [isVoiceMode, setIsVoiceMode] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [gestureZone, setGestureZone] = useState<'send' | 'cancel' | 'text'>('send');
+  const [liveTranscript, setLiveTranscript] = useState('');
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const voiceStartPosRef = useRef<{ x: number; y: number } | null>(null);
+  const recordingActionRef = useRef<'send' | 'cancel' | 'text'>('send');
+  const transcriberRef = useRef<StreamingTranscriber | null>(null);
+  const recognizedTextRef = useRef('');
   const MAX_RECORDING_SECONDS = 60;
+  const GESTURE_UP_THRESHOLD = 50;
+  const GESTURE_LR_THRESHOLD = 60;
 
   // 检测是否为移动设备
   const [_isMobile, setIsMobile] = useState(false);
@@ -486,8 +496,12 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   // Voice recording handlers
   const startRecording = useCallback(async () => {
     if (isRecording || isSending) return;
+    recordingActionRef.current = 'send';
+    recognizedTextRef.current = '';
+    setLiveTranscript('');
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioStreamRef.current = stream;
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
         : MediaRecorder.isTypeSupported('audio/webm')
@@ -499,9 +513,43 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         if (e.data.size > 0) audioChunksRef.current.push(e.data);
       };
       recorder.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop());
+        // Stop the streaming transcription and release the shared mic stream.
+        const transcriber = transcriberRef.current;
+        transcriberRef.current = null;
+        if (transcriber) {
+          try { await transcriber.stop(); } catch { /* ignore */ }
+          const finalText = transcriber.getText().trim();
+          if (finalText) recognizedTextRef.current = finalText;
+        }
+        stream.getTracks().forEach(track => track.stop());
+        audioStreamRef.current = null;
+
+        const action = recordingActionRef.current;
+        recordingActionRef.current = 'send';
+
+        if (action === 'cancel') return;
+
+        // Swipe-right: drop the transcript into the editor for editing (松手编辑).
+        if (action === 'text') {
+          const text = recognizedTextRef.current.trim();
+          setIsVoiceMode(false);
+          requestAnimationFrame(() => {
+            if (editorRef.current) {
+              editorRef.current.textContent = text;
+              editorRef.current.focus();
+              const range = document.createRange();
+              range.selectNodeContents(editorRef.current);
+              range.collapse(false);
+              window.getSelection()?.removeAllRanges();
+              window.getSelection()?.addRange(range);
+              parseEditorContent();
+            }
+          });
+          return;
+        }
+
         const blob = new Blob(audioChunksRef.current, { type: mimeType });
-        if (blob.size < 1000) return; // too short, ignore
+        if (blob.size < 1000) return;
         setIsSending(true);
         try {
           const reader = new FileReader();
@@ -522,21 +570,38 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       mediaRecorderRef.current = recorder;
       setIsRecording(true);
       setRecordingSeconds(0);
+      setGestureZone('send');
       recordingTimerRef.current = setInterval(() => {
         setRecordingSeconds(prev => {
           if (prev >= MAX_RECORDING_SECONDS - 1) {
-            stopRecording();
+            stopRecordingAndFinish();
             return prev;
           }
           return prev + 1;
         });
       }, 1000);
+
+      // Stream the same mic audio to AssemblyAI for live transcription. Failure
+      // (no API key / network) degrades gracefully: send/cancel still work, the
+      // text gesture just yields an empty editor.
+      startStreamingTranscription(stream, (text) => {
+        recognizedTextRef.current = text;
+        setLiveTranscript(text);
+      }).then((transcriber) => {
+        if (audioStreamRef.current === stream) {
+          transcriberRef.current = transcriber;
+        } else {
+          // Recording already ended before the socket opened.
+          transcriber.stop().catch(() => { /* ignore */ });
+        }
+      }).catch(() => { /* transcription unavailable */ });
     } catch {
       setErrorMessage(t('errorMicPermission'));
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [avatarColor, avatarText, isRecording, isSending, roomId, t, username]);
 
-  const stopRecording = useCallback(() => {
+  const stopRecordingAndFinish = useCallback(() => {
     if (recordingTimerRef.current) {
       clearInterval(recordingTimerRef.current);
       recordingTimerRef.current = null;
@@ -546,7 +611,45 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     }
     setIsRecording(false);
     setRecordingSeconds(0);
+    setGestureZone('send');
+    setLiveTranscript('');
+    voiceStartPosRef.current = null;
   }, []);
+
+  // Release the mic stream / transcription session if unmounted mid-recording.
+  useEffect(() => {
+    return () => {
+      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+      transcriberRef.current?.stop().catch(() => { /* ignore */ });
+      audioStreamRef.current?.getTracks().forEach(track => track.stop());
+    };
+  }, []);
+
+  // Pointer gesture handlers for the hold-to-speak button
+  const handleVoicePointerDown = useCallback(async (e: React.PointerEvent<HTMLButtonElement>) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    voiceStartPosRef.current = { x: e.clientX, y: e.clientY };
+    await startRecording();
+  }, [startRecording]);
+
+  const handleVoicePointerMove = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
+    const start = voiceStartPosRef.current;
+    if (!start) return;
+    const dx = e.clientX - start.x;
+    const dy = e.clientY - start.y;
+    let zone: 'send' | 'cancel' | 'text' = 'send';
+    if (dy < -GESTURE_UP_THRESHOLD) {
+      if (dx < -GESTURE_LR_THRESHOLD) zone = 'cancel';
+      else if (dx > GESTURE_LR_THRESHOLD) zone = 'text';
+    }
+    setGestureZone(zone);
+    recordingActionRef.current = zone;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleVoicePointerUp = useCallback(() => {
+    stopRecordingAndFinish();
+  }, [stopRecordingAndFinish]);
 
   // 处理图片上传
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -812,26 +915,78 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           )}
 
           {isVoiceMode ? (
-            /* ===== Voice mode: hold-to-speak button ===== */
+            /* ===== Voice mode: hold-to-speak button + gesture overlay ===== */
             <div className="flex min-h-9 min-w-0 flex-1 items-center justify-center px-2.5 py-1.5 sm:min-h-16 sm:px-4 sm:pb-2 sm:pt-4">
               <button
                 type="button"
                 aria-label={isRecording ? t('releaseToSend') : t('holdToSpeak')}
-                onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); startRecording(); }}
-                onPointerUp={stopRecording}
-                onPointerLeave={stopRecording}
+                onPointerDown={handleVoicePointerDown}
+                onPointerMove={handleVoicePointerMove}
+                onPointerUp={handleVoicePointerUp}
+                onPointerCancel={handleVoicePointerUp}
                 onContextMenu={(e) => e.preventDefault()}
                 disabled={isSending}
+                style={{ touchAction: 'none' }}
                 className={`w-full select-none rounded-2xl py-3 text-sm font-medium transition-colors ${
                   isRecording
                     ? 'bg-[#c96442] text-white dark:bg-[#d97757]'
                     : 'bg-[#e8e6dc] text-[#4d4c48] dark:bg-[#30302e] dark:text-[#b0aea5]'
                 } ${isSending ? 'opacity-50' : ''}`}
               >
-                {isRecording
-                  ? `${t('releaseToSend')} · ${recordingSeconds}s`
-                  : t('holdToSpeak')}
+                {isRecording ? `${t('releaseToSend')} · ${recordingSeconds}s` : t('holdToSpeak')}
               </button>
+
+              {isRecording && (
+                <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/40" style={{ touchAction: 'none' }}>
+                  {/* Live transcript / status bubble */}
+                  <div className="flex flex-1 items-center justify-center px-6">
+                    <div className={`max-w-[80%] rounded-2xl px-4 py-3 text-center transition-colors ${
+                      gestureZone === 'cancel'
+                        ? 'bg-[#e2654f] text-white'
+                        : gestureZone === 'text'
+                          ? 'bg-[#4caf7d] text-white'
+                          : 'bg-[#95ec69] text-[#141413]'
+                    }`}>
+                      {gestureZone === 'text' ? (
+                        <div className="min-h-[1.5rem] text-sm leading-6 break-words">
+                          {liveTranscript || t('listening')}
+                        </div>
+                      ) : (
+                        <div className="text-base font-medium tracking-widest">
+                          {gestureZone === 'cancel' ? '✕' : `${recordingSeconds}s`}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Gesture target pills */}
+                  <div className="flex items-end justify-between px-6 pb-2">
+                    <div className={`flex h-16 w-28 items-center justify-center rounded-t-[2.5rem] text-sm transition-colors ${
+                      gestureZone === 'cancel'
+                        ? 'bg-white text-[#141413]'
+                        : 'bg-white/15 text-white'
+                    }`}>
+                      <Icon icon="lucide:x" className="mr-1 h-4 w-4" />{t('cancelRecording')}
+                    </div>
+                    <div className={`flex h-16 w-36 items-center justify-center rounded-t-[2.5rem] text-center text-sm transition-colors ${
+                      gestureZone === 'text'
+                        ? 'bg-white text-[#141413]'
+                        : 'bg-white/15 text-white'
+                    }`}>
+                      {t('slideToConvertText')}
+                    </div>
+                  </div>
+
+                  {/* Center hint */}
+                  <div className="pb-10 text-center text-sm text-white">
+                    {gestureZone === 'cancel'
+                      ? t('releaseToCancel')
+                      : gestureZone === 'text'
+                        ? t('releaseToEditText')
+                        : t('releaseToSend')}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             /* ===== Text mode: normal editor ===== */
@@ -862,7 +1017,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               variant="light"
               aria-label={isVoiceMode ? t('keyboardInput') : t('voiceInput')}
               className="h-8 w-8 min-w-8 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
-              onPress={() => { setIsVoiceMode(v => !v); if (isRecording) stopRecording(); }}
+              onPress={() => { setIsVoiceMode(v => !v); if (isRecording) stopRecordingAndFinish(); }}
               isDisabled={isSending || isAiProcessing}
             >
               <Icon icon={isVoiceMode ? 'lucide:keyboard' : 'lucide:mic'} className="h-4 w-4 sm:h-5 sm:w-5" />
