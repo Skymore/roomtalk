@@ -31,7 +31,7 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
     messageData: {
       roomId: string;
       content: string;
-      messageType?: 'text' | 'image';
+      messageType?: 'text' | 'image' | 'voice';
       username?: string;
       avatar?: {
         text: string;
