@@ -64,6 +64,28 @@ const getErrorMessage = (error: unknown, fallback: string) => (
   error instanceof Error ? error.message : fallback
 );
 
+const getTranscriptionErrorKey = (error: unknown) => {
+  const message = getErrorMessage(error, '').toLowerCase();
+
+  if (message.includes('not configured')) {
+    return 'errorTranscriptionNotConfigured';
+  }
+
+  if (
+    message.includes('audiocontext') ||
+    message.includes('createmediastreamsource') ||
+    message.includes('audio context')
+  ) {
+    return 'errorTranscriptionAudioUnsupported';
+  }
+
+  return 'errorTranscriptionUnavailable';
+};
+
+type VoiceWorkflow = 'choice' | 'recording-voice' | 'recording-transcript' | 'voice-preview';
+type VoiceRecordingIntent = 'voice' | 'transcript';
+type VoiceStopAction = 'preview' | 'insert' | 'cancel';
+
 export const MessageInput: React.FC<MessageInputProps> = ({
   roomId,
   clientId,
@@ -95,23 +117,27 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
   // Voice recording state
   const [isVoiceMode, setIsVoiceMode] = useState(false);
+  const [voiceWorkflow, setVoiceWorkflow] = useState<VoiceWorkflow>('choice');
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
-  const [gestureZone, setGestureZone] = useState<'send' | 'cancel' | 'text'>('send');
   const [liveTranscript, setLiveTranscript] = useState('');
+  const [recordedVoiceBlob, setRecordedVoiceBlob] = useState<Blob | null>(null);
+  const [recordedVoiceUrl, setRecordedVoiceUrl] = useState<string | null>(null);
+  const [recordedVoiceDuration, setRecordedVoiceDuration] = useState(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const voiceStartPosRef = useRef<{ x: number; y: number } | null>(null);
-  const recordingActionRef = useRef<'send' | 'cancel' | 'text'>('send');
+  const recordingSecondsRef = useRef(0);
+  const recordingSessionRef = useRef(0);
+  const recordingIntentRef = useRef<VoiceRecordingIntent>('voice');
+  const recordingStopActionRef = useRef<VoiceStopAction>('cancel');
+  const recordingMimeTypeRef = useRef('audio/webm');
+  const voiceEditorSnapshotRef = useRef('');
+  const recordedVoiceUrlRef = useRef<string | null>(null);
   const transcriberRef = useRef<StreamingTranscriber | null>(null);
   const recognizedTextRef = useRef('');
-  const isPointerDownRef = useRef(false); // true while the user holds the voice button
-  const micPrimedRef = useRef(false); // permission already granted this session
   const MAX_RECORDING_SECONDS = 60;
-  const GESTURE_UP_THRESHOLD = 50;
-  const GESTURE_LR_THRESHOLD = 60;
 
   // 检测是否为移动设备
   const [_isMobile, setIsMobile] = useState(false);
@@ -497,27 +523,122 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     setErrorMessage(t(error.errorKey));
   };
 
-  // Voice recording handlers
-  const startRecording = useCallback(async () => {
-    if (isRecording || isSending) return;
-    recordingActionRef.current = 'send';
-    recognizedTextRef.current = '';
+  const resetVoiceDraft = useCallback(() => {
+    if (recordedVoiceUrlRef.current) {
+      URL.revokeObjectURL(recordedVoiceUrlRef.current);
+      recordedVoiceUrlRef.current = null;
+    }
+    setRecordedVoiceBlob(null);
+    setRecordedVoiceUrl(null);
+    setRecordedVoiceDuration(0);
+  }, []);
+
+  const focusEditorAtEnd = useCallback((text: string) => {
+    requestAnimationFrame(() => {
+      const editor = editorRef.current;
+      if (!editor) return;
+
+      editor.textContent = text;
+      editor.focus();
+
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+      window.getSelection()?.removeAllRanges();
+      window.getSelection()?.addRange(range);
+      parseEditorContent();
+      setCurrentInputText(editor.innerText || '');
+    });
+  }, [parseEditorContent]);
+
+  const restoreEditorSnapshot = useCallback(() => {
+    focusEditorAtEnd(voiceEditorSnapshotRef.current);
+  }, [focusEditorAtEnd]);
+
+  const insertTranscriptIntoEditor = useCallback((text: string) => {
+    const transcript = text.trim();
+    const snapshot = voiceEditorSnapshotRef.current.trim();
+    const nextText = snapshot && transcript
+      ? `${snapshot} ${transcript}`
+      : snapshot || transcript;
+
+    focusEditorAtEnd(nextText);
+  }, [focusEditorAtEnd]);
+
+  const stopVoiceRecording = useCallback((action: VoiceStopAction) => {
+    recordingStopActionRef.current = action;
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+      return;
+    }
+
+    recordingSessionRef.current += 1;
+    audioStreamRef.current?.getTracks().forEach(track => track.stop());
+    audioStreamRef.current = null;
+    transcriberRef.current?.stop().catch(() => { /* ignore */ });
+    transcriberRef.current = null;
+    setIsRecording(false);
+    setRecordingSeconds(0);
+    recordingSecondsRef.current = 0;
     setLiveTranscript('');
+    setVoiceWorkflow('choice');
+
+    if (action === 'insert') {
+      setIsVoiceMode(false);
+      insertTranscriptIntoEditor(recognizedTextRef.current.trim());
+    }
+  }, [insertTranscriptIntoEditor]);
+
+  const startVoiceRecording = useCallback(async (intent: VoiceRecordingIntent) => {
+    if (isRecording || isSending) return;
+
+    const sessionId = recordingSessionRef.current + 1;
+    recordingSessionRef.current = sessionId;
+    resetVoiceDraft();
+    recognizedTextRef.current = '';
+    audioChunksRef.current = [];
+    recordingIntentRef.current = intent;
+    recordingStopActionRef.current = intent === 'voice' ? 'preview' : 'insert';
+    recordingSecondsRef.current = 0;
+    setRecordingSeconds(0);
+    setLiveTranscript('');
+    setErrorMessage(null);
+    setVoiceWorkflow(intent === 'voice' ? 'recording-voice' : 'recording-transcript');
+
     try {
+      if (typeof MediaRecorder === 'undefined') {
+        throw new Error('MediaRecorder unavailable');
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (recordingSessionRef.current !== sessionId) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
+
       audioStreamRef.current = stream;
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
         : MediaRecorder.isTypeSupported('audio/webm')
         ? 'audio/webm'
         : 'audio/mp4';
+      recordingMimeTypeRef.current = mimeType;
+
       const recorder = new MediaRecorder(stream, { mimeType });
-      audioChunksRef.current = [];
+      mediaRecorderRef.current = recorder;
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) audioChunksRef.current.push(e.data);
       };
       recorder.onstop = async () => {
-        // Stop the streaming transcription and release the shared mic stream.
+        const action = recordingStopActionRef.current;
+        const stoppedIntent = recordingIntentRef.current;
+        const stoppedDuration = Math.max(1, recordingSecondsRef.current);
+
         const transcriber = transcriberRef.current;
         transcriberRef.current = null;
         if (transcriber) {
@@ -525,108 +646,133 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           const finalText = transcriber.getText().trim();
           if (finalText) recognizedTextRef.current = finalText;
         }
+
         stream.getTracks().forEach(track => track.stop());
         audioStreamRef.current = null;
+        mediaRecorderRef.current = null;
+        setIsRecording(false);
+        setRecordingSeconds(0);
+        recordingSecondsRef.current = 0;
 
-        const action = recordingActionRef.current;
-        recordingActionRef.current = 'send';
-
-        if (action === 'cancel') return;
-
-        // Swipe-right: drop the transcript into the editor for editing (松手编辑).
-        if (action === 'text') {
-          const text = recognizedTextRef.current.trim();
-          setIsVoiceMode(false);
-          requestAnimationFrame(() => {
-            if (editorRef.current) {
-              editorRef.current.textContent = text;
-              editorRef.current.focus();
-              const range = document.createRange();
-              range.selectNodeContents(editorRef.current);
-              range.collapse(false);
-              window.getSelection()?.removeAllRanges();
-              window.getSelection()?.addRange(range);
-              parseEditorContent();
-            }
-          });
+        if (action === 'cancel') {
+          setLiveTranscript('');
+          setVoiceWorkflow('choice');
           return;
         }
 
-        const blob = new Blob(audioChunksRef.current, { type: mimeType });
-        if (blob.size < 1000) return;
-        setIsSending(true);
-        try {
-          const reader = new FileReader();
-          const base64 = await new Promise<string>((resolve, reject) => {
-            reader.onload = () => resolve(reader.result as string);
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
-          });
-          const avatar = { text: avatarText, color: avatarColor };
-          await sendMessage(base64, roomId, 'voice', username, avatar);
-        } catch {
-          setErrorMessage(t('errorSendingMessage'));
-        } finally {
-          setIsSending(false);
+        if (stoppedIntent === 'transcript') {
+          const text = recognizedTextRef.current.trim();
+          setLiveTranscript('');
+          setVoiceWorkflow('choice');
+          setIsVoiceMode(false);
+          insertTranscriptIntoEditor(text);
+          return;
         }
+
+        const blob = new Blob(audioChunksRef.current, { type: recordingMimeTypeRef.current });
+        if (blob.size < 1000) {
+          setErrorMessage(t('voiceRecordingTooShort'));
+          setVoiceWorkflow('choice');
+          return;
+        }
+
+        const previewUrl = URL.createObjectURL(blob);
+        recordedVoiceUrlRef.current = previewUrl;
+        setRecordedVoiceBlob(blob);
+        setRecordedVoiceUrl(previewUrl);
+        setRecordedVoiceDuration(stoppedDuration);
+        setVoiceWorkflow('voice-preview');
       };
-      // The user may have released during the getUserMedia await (especially on
-      // the very first permission prompt). Don't start a stuck recording.
-      if (!isPointerDownRef.current) {
-        stream.getTracks().forEach(track => track.stop());
-        audioStreamRef.current = null;
-        return;
-      }
 
       recorder.start();
-      mediaRecorderRef.current = recorder;
       setIsRecording(true);
-      setRecordingSeconds(0);
-      setGestureZone('send');
       recordingTimerRef.current = setInterval(() => {
         setRecordingSeconds(prev => {
-          if (prev >= MAX_RECORDING_SECONDS - 1) {
-            stopRecordingAndFinish();
-            return prev;
+          const next = prev + 1;
+          recordingSecondsRef.current = next;
+          if (next >= MAX_RECORDING_SECONDS) {
+            stopVoiceRecording(intent === 'voice' ? 'preview' : 'insert');
           }
-          return prev + 1;
+          return next;
         });
       }, 1000);
 
-      // Stream the same mic audio to AssemblyAI for live transcription. Failure
-      // (no API key / network) degrades gracefully: send/cancel still work, the
-      // text gesture just yields an empty editor.
-      startStreamingTranscription(stream, (text) => {
-        recognizedTextRef.current = text;
-        setLiveTranscript(text);
-      }).then((transcriber) => {
-        if (audioStreamRef.current === stream) {
-          transcriberRef.current = transcriber;
-        } else {
-          // Recording already ended before the socket opened.
-          transcriber.stop().catch(() => { /* ignore */ });
-        }
-      }).catch(() => { /* transcription unavailable */ });
+      if (intent === 'transcript') {
+        startStreamingTranscription(stream, (text) => {
+          recognizedTextRef.current = text;
+          setLiveTranscript(text);
+        }).then((transcriber) => {
+          if (audioStreamRef.current === stream) {
+            transcriberRef.current = transcriber;
+          } else {
+            transcriber.stop().catch(() => { /* ignore */ });
+          }
+        }).catch((error) => {
+          if (
+            recordingSessionRef.current !== sessionId ||
+            recordingIntentRef.current !== 'transcript' ||
+            recordingStopActionRef.current === 'cancel'
+          ) {
+            return;
+          }
+          console.warn('Voice transcription unavailable', error);
+          setErrorMessage(t(getTranscriptionErrorKey(error)));
+          stopVoiceRecording('cancel');
+        });
+      }
     } catch {
+      if (recordingSessionRef.current !== sessionId) {
+        return;
+      }
+      audioStreamRef.current?.getTracks().forEach(track => track.stop());
+      audioStreamRef.current = null;
+      setIsRecording(false);
+      setRecordingSeconds(0);
+      recordingSecondsRef.current = 0;
+      setVoiceWorkflow('choice');
       setErrorMessage(t('errorMicPermission'));
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [avatarColor, avatarText, isRecording, isSending, roomId, t, username]);
+  }, [insertTranscriptIntoEditor, isRecording, isSending, resetVoiceDraft, stopVoiceRecording, t]);
 
-  const stopRecordingAndFinish = useCallback(() => {
-    if (recordingTimerRef.current) {
-      clearInterval(recordingTimerRef.current);
-      recordingTimerRef.current = null;
+  const handleStopVoiceRecording = useCallback(() => {
+    stopVoiceRecording(recordingIntentRef.current === 'voice' ? 'preview' : 'insert');
+  }, [stopVoiceRecording]);
+
+  const handleCancelVoiceRecording = useCallback(() => {
+    stopVoiceRecording('cancel');
+  }, [stopVoiceRecording]);
+
+  const handleDiscardVoiceDraft = useCallback(() => {
+    resetVoiceDraft();
+    setVoiceWorkflow('choice');
+    setIsVoiceMode(false);
+    restoreEditorSnapshot();
+  }, [resetVoiceDraft, restoreEditorSnapshot]);
+
+  const handleSendVoiceDraft = useCallback(async () => {
+    if (!recordedVoiceBlob || isSending) return;
+
+    setIsSending(true);
+    try {
+      const reader = new FileReader();
+      const base64 = await new Promise<string>((resolve, reject) => {
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(recordedVoiceBlob);
+      });
+      const avatar = { text: avatarText, color: avatarColor };
+      await sendMessage(base64, roomId, 'voice', username, avatar, replyToMessage?.id);
+      resetVoiceDraft();
+      setVoiceWorkflow('choice');
+      setIsVoiceMode(false);
+      onCancelReply();
+      restoreEditorSnapshot();
+    } catch {
+      setErrorMessage(t('errorSendingMessage'));
+    } finally {
+      setIsSending(false);
     }
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
-    setIsRecording(false);
-    setRecordingSeconds(0);
-    setGestureZone('send');
-    setLiveTranscript('');
-    voiceStartPosRef.current = null;
-  }, []);
+  }, [avatarColor, avatarText, isSending, onCancelReply, recordedVoiceBlob, replyToMessage?.id, resetVoiceDraft, restoreEditorSnapshot, roomId, t, username]);
 
   // Release the mic stream / transcription session if unmounted mid-recording.
   useEffect(() => {
@@ -634,59 +780,32 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
       transcriberRef.current?.stop().catch(() => { /* ignore */ });
       audioStreamRef.current?.getTracks().forEach(track => track.stop());
+      if (recordedVoiceUrlRef.current) {
+        URL.revokeObjectURL(recordedVoiceUrlRef.current);
+      }
     };
   }, []);
 
-  // Pointer gesture handlers for the hold-to-speak button
-  const handleVoicePointerDown = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
-    e.preventDefault();
-    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-    isPointerDownRef.current = true;
-    voiceStartPosRef.current = { x: e.clientX, y: e.clientY };
-    micPrimedRef.current = true;
-    void startRecording();
-  }, [startRecording]);
-
-  const handleVoicePointerMove = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
-    const start = voiceStartPosRef.current;
-    if (!start) return;
-    const dx = e.clientX - start.x;
-    const dy = e.clientY - start.y;
-    let zone: 'send' | 'cancel' | 'text' = 'send';
-    if (dy < -GESTURE_UP_THRESHOLD) {
-      if (dx < -GESTURE_LR_THRESHOLD) zone = 'cancel';
-      else if (dx > GESTURE_LR_THRESHOLD) zone = 'text';
-    }
-    setGestureZone(zone);
-    recordingActionRef.current = zone;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const handleVoicePointerUp = useCallback(() => {
-    isPointerDownRef.current = false;
-    stopRecordingAndFinish();
-  }, [stopRecordingAndFinish]);
-
-  // Prompt for mic permission when entering voice mode (a tap, not a hold), so
-  // the first press-and-hold isn't interrupted by the permission dialog.
   const handleToggleVoiceMode = useCallback(() => {
     if (isRecording) {
-      isPointerDownRef.current = false;
-      stopRecordingAndFinish();
+      stopVoiceRecording('cancel');
+      return;
     }
+
     setIsVoiceMode((wasVoice) => {
-      const nextVoice = !wasVoice;
-      if (nextVoice && !micPrimedRef.current) {
-        navigator.mediaDevices?.getUserMedia({ audio: true })
-          .then((stream) => {
-            stream.getTracks().forEach(track => track.stop());
-            micPrimedRef.current = true;
-          })
-          .catch(() => { /* user can still try; press will surface the error */ });
+      if (wasVoice) {
+        recordingSessionRef.current += 1;
+        resetVoiceDraft();
+        setVoiceWorkflow('choice');
+        requestAnimationFrame(restoreEditorSnapshot);
+        return false;
       }
-      return nextVoice;
+
+      voiceEditorSnapshotRef.current = currentInputText;
+      setVoiceWorkflow('choice');
+      return true;
     });
-  }, [isRecording, stopRecordingAndFinish]);
+  }, [currentInputText, isRecording, resetVoiceDraft, restoreEditorSnapshot, stopVoiceRecording]);
 
   // 处理图片上传
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -954,82 +1073,107 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           )}
 
           {isVoiceMode ? (
-            /* ===== Voice mode: hold-to-speak button + gesture overlay ===== */
-            <div className="flex min-h-9 min-w-0 flex-1 items-center justify-center px-2.5 py-1.5 sm:min-h-16 sm:px-4 sm:pb-2 sm:pt-4">
-              <button
-                type="button"
-                aria-label={isRecording ? t('releaseToSend') : t('holdToSpeak')}
-                onPointerDown={handleVoicePointerDown}
-                onPointerMove={handleVoicePointerMove}
-                onPointerUp={handleVoicePointerUp}
-                onPointerCancel={handleVoicePointerUp}
-                onContextMenu={(e) => e.preventDefault()}
-                disabled={isSending}
-                style={{ touchAction: 'none' }}
-                className={`w-full select-none rounded-2xl py-3 text-sm font-medium shadow-[0_0_0_1px_rgba(194,192,182,0.75)] transition-colors ${
-                  isRecording
-                    ? 'bg-[#c96442] text-[#faf9f5] dark:bg-[#d97757]'
-                    : 'bg-[#e8e6dc] text-[#4d4c48] dark:bg-[#30302e] dark:text-[#b0aea5]'
-                } ${isSending ? 'opacity-50' : ''}`}
-              >
-                {isRecording ? `${t('releaseToSend')} · ${recordingSeconds}s` : t('holdToSpeak')}
-              </button>
+            <div className="flex min-h-9 min-w-0 flex-1 px-2.5 py-1.5 sm:min-h-16 sm:px-4 sm:pb-2 sm:pt-4">
+              <div className="w-full min-w-0">
+                {voiceWorkflow === 'choice' && (
+                  <div className="grid w-full grid-cols-2 gap-2">
+                    <Button
+                      type="button"
+                      className="h-11 rounded-xl bg-[#e8e6dc] px-2 text-sm font-medium text-[#4d4c48] shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e] dark:text-[#faf9f5]"
+                      onPress={() => startVoiceRecording('voice')}
+                      isDisabled={isSending}
+                    >
+                      <Icon icon="lucide:mic" className="mr-1 h-4 w-4" />
+                      {t('recordVoice')}
+                    </Button>
+                    <Button
+                      type="button"
+                      className="h-11 rounded-xl bg-[#30302e] px-2 text-sm font-medium text-[#faf9f5] shadow-[0_0_0_1px_rgba(48,48,46,0.85)] dark:bg-[#faf9f5] dark:text-[#141413]"
+                      onPress={() => startVoiceRecording('transcript')}
+                      isDisabled={isSending}
+                    >
+                      <Icon icon="lucide:captions" className="mr-1 h-4 w-4" />
+                      {t('voiceToText')}
+                    </Button>
+                  </div>
+                )}
 
-              {isRecording && (
-                <div className="fixed inset-0 z-50 flex flex-col justify-end bg-[#f5f4ed]/95 text-[#141413] dark:bg-[#141413]/85 dark:text-[#faf9f5]" style={{ touchAction: 'none' }}>
-                  {/* Live transcript / status bubble */}
-                  <div className="flex flex-1 items-center justify-center px-6">
-                    <div className={`max-w-[80%] rounded-2xl px-4 py-3 text-center shadow-[0_0_0_1px_rgba(194,192,182,0.75)] transition-colors dark:shadow-[0_0_0_1px_rgba(232,230,220,0.28)] ${
-                      gestureZone === 'cancel'
-                        ? 'bg-[#b53333] text-[#faf9f5]'
-                        : gestureZone === 'text'
-                          ? 'bg-[#30302e] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413]'
-                          : 'bg-[#faf9f5] text-[#141413] dark:bg-[#30302e] dark:text-[#faf9f5]'
-                    }`}>
-                      {gestureZone === 'text' ? (
-                        <div className="min-h-[1.5rem] text-sm leading-6 break-words">
-                          {liveTranscript || t('listening')}
-                        </div>
-                      ) : (
-                        <div className="flex min-h-[1.5rem] items-center justify-center text-base font-medium">
-                          {gestureZone === 'cancel'
-                            ? <Icon icon="lucide:x" className="h-5 w-5" />
-                            : `${recordingSeconds}s`}
-                        </div>
+                {(voiceWorkflow === 'recording-voice' || voiceWorkflow === 'recording-transcript') && (
+                  <div className="flex w-full min-w-0 flex-col gap-2">
+                    <div className="flex min-w-0 items-center gap-2 text-sm text-[#141413] dark:text-[#faf9f5]">
+                      <span className="h-2 w-2 flex-shrink-0 rounded-full bg-[#c96442]" />
+                      <span className="min-w-0 truncate font-medium">
+                        {voiceWorkflow === 'recording-voice' ? t('recordVoice') : t('voiceToText')}
+                      </span>
+                      <span className="ml-auto flex-shrink-0 tabular-nums text-[#5e5d59] dark:text-[#b0aea5]">
+                        {t('recordingSeconds', { seconds: recordingSeconds })}
+                      </span>
+                    </div>
+
+                    {voiceWorkflow === 'recording-transcript' && (
+                      <div className="max-h-20 min-h-10 overflow-y-auto rounded-xl bg-[#e8e6dc] px-3 py-2 text-sm leading-5 text-[#4d4c48] shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e] dark:text-[#faf9f5]">
+                        {liveTranscript || t('listening')}
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button
+                        type="button"
+                        className="h-10 rounded-xl bg-[#30302e] text-sm font-medium text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413]"
+                        onPress={handleStopVoiceRecording}
+                      >
+                        <Icon icon="lucide:square" className="mr-1 h-4 w-4" />
+                        {t('stopRecording')}
+                      </Button>
+                      <Button
+                        type="button"
+                        className="h-10 rounded-xl bg-[#e8e6dc] text-sm font-medium text-[#b53333] shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e] dark:text-[#ffb4a6]"
+                        onPress={handleCancelVoiceRecording}
+                      >
+                        <Icon icon="lucide:x" className="mr-1 h-4 w-4" />
+                        {t('cancelRecording')}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {voiceWorkflow === 'voice-preview' && (
+                  <div className="flex w-full min-w-0 flex-col gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      {recordedVoiceUrl && (
+                        <audio
+                          controls
+                          src={recordedVoiceUrl}
+                          className="roomtalk-audio-player block h-9 min-w-[180px] max-w-full flex-1"
+                        />
                       )}
+                      <span className="flex-shrink-0 text-xs tabular-nums text-[#5e5d59] dark:text-[#b0aea5]">
+                        {t('recordingSeconds', { seconds: recordedVoiceDuration })}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button
+                        type="button"
+                        className="h-10 rounded-xl bg-[#c96442] text-sm font-medium text-[#faf9f5] shadow-[0_0_0_1px_rgba(201,100,66,0.9)]"
+                        onPress={handleSendVoiceDraft}
+                        isDisabled={isSending || !recordedVoiceBlob}
+                      >
+                        <Icon icon="lucide:send" className="mr-1 h-4 w-4" />
+                        {t('send')}
+                      </Button>
+                      <Button
+                        type="button"
+                        className="h-10 rounded-xl bg-[#e8e6dc] text-sm font-medium text-[#4d4c48] shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e] dark:text-[#faf9f5]"
+                        onPress={handleDiscardVoiceDraft}
+                        isDisabled={isSending}
+                      >
+                        <Icon icon="lucide:trash-2" className="mr-1 h-4 w-4" />
+                        {t('doNotSend')}
+                      </Button>
                     </div>
                   </div>
-
-                  <div className="bg-[#faf9f5] px-6 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] pt-4 shadow-[0_-1px_0_rgba(194,192,182,0.75)] dark:bg-[#141413] dark:shadow-[0_-1px_0_rgba(232,230,220,0.18)]">
-                    {/* Gesture target pills */}
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className={`flex h-14 items-center justify-center rounded-xl px-2 text-sm font-medium shadow-[0_0_0_1px_rgba(194,192,182,0.75)] transition-colors dark:shadow-[0_0_0_1px_rgba(232,230,220,0.28)] ${
-                        gestureZone === 'cancel'
-                          ? 'bg-[#b53333] text-[#faf9f5]'
-                          : 'bg-[#e8e6dc] text-[#4d4c48] dark:bg-[#30302e] dark:text-[#b0aea5]'
-                      }`}>
-                        <Icon icon="lucide:x" className="mr-1 h-4 w-4" />{t('cancelRecording')}
-                      </div>
-                      <div className={`flex h-14 items-center justify-center rounded-xl px-3 text-center text-sm font-medium leading-4 shadow-[0_0_0_1px_rgba(194,192,182,0.75)] transition-colors dark:shadow-[0_0_0_1px_rgba(232,230,220,0.28)] ${
-                        gestureZone === 'text'
-                          ? 'bg-[#30302e] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413]'
-                          : 'bg-[#e8e6dc] text-[#4d4c48] dark:bg-[#30302e] dark:text-[#b0aea5]'
-                      }`}>
-                        {t('slideToConvertText')}
-                      </div>
-                    </div>
-
-                    {/* Center hint */}
-                    <div className="mt-3 text-center text-sm font-medium text-[#141413] dark:text-[#faf9f5]">
-                      {gestureZone === 'cancel'
-                        ? t('releaseToCancel')
-                        : gestureZone === 'text'
-                          ? t('releaseToEditText')
-                          : t('releaseToSend')}
-                    </div>
-                  </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           ) : (
             /* ===== Text mode: normal editor ===== */

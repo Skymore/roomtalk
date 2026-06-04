@@ -54,6 +54,15 @@ const invokeToken = async (socket: FakeSocket): Promise<TokenResponse> => {
   return response;
 };
 
+const invokeTokenWithPayload = async (socket: FakeSocket): Promise<TokenResponse> => {
+  let response: TokenResponse | undefined;
+  await socket.invoke('create_transcription_token', {}, (r: TokenResponse) => {
+    response = r;
+  });
+  assert.ok(response, 'Expected the handler to invoke the callback');
+  return response;
+};
+
 const originalFetch = globalThis.fetch;
 
 describe('transcription socket handlers', () => {
@@ -93,6 +102,20 @@ describe('transcription socket handlers', () => {
     assert.match(calls[0].url, /streaming\.assemblyai\.com\/v3\/token/);
     assert.match(calls[0].url, /expires_in_seconds=300/);
     assert.equal(calls[0].headers.Authorization, 'secret-key');
+  });
+
+  it('accepts the generic client ack shape with a payload before the callback', async () => {
+    globalThis.fetch = (async () => ({
+      ok: true,
+      async json() {
+        return { token: 'temp-token-with-payload', expires_in_seconds: 300 };
+      },
+    })) as any;
+
+    const { socket } = createHarness({ assemblyAIApiKey: 'secret-key' });
+    const response = await invokeTokenWithPayload(socket);
+
+    assert.deepEqual(response, { success: true, token: 'temp-token-with-payload', expiresInSeconds: 300 });
   });
 
   it('reports an error when AssemblyAI responds with a non-OK status', async () => {

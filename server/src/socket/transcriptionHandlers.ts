@@ -11,9 +11,25 @@ const TOKEN_EXPIRES_IN_SECONDS = 300;
  * account API key. The key stays server-side; only a 5-minute token is exposed.
  */
 export function registerTranscriptionHandlers({ socket, store, socketLogger, assemblyAIApiKey }: SocketConnectionContext) {
+  const resolveAckCallback = (
+    payloadOrCallback?: unknown,
+    maybeCallback?: unknown,
+  ): ((response: { success: boolean; token?: string; expiresInSeconds?: number; error?: string }) => void) | undefined => {
+    if (typeof payloadOrCallback === 'function') {
+      return payloadOrCallback as (response: { success: boolean; token?: string; expiresInSeconds?: number; error?: string }) => void;
+    }
+    if (typeof maybeCallback === 'function') {
+      return maybeCallback as (response: { success: boolean; token?: string; expiresInSeconds?: number; error?: string }) => void;
+    }
+    return undefined;
+  };
+
   socket.on('create_transcription_token', async (
-    callback?: (response: { success: boolean; token?: string; expiresInSeconds?: number; error?: string }) => void,
+    payloadOrCallback?: unknown,
+    maybeCallback?: unknown,
   ) => {
+    const callback = resolveAckCallback(payloadOrCallback, maybeCallback);
+
     if (!assemblyAIApiKey) {
       callback?.({ success: false, error: 'Transcription is not configured' });
       return;

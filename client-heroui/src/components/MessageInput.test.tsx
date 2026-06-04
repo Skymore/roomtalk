@@ -129,6 +129,64 @@ const setEditorText = (editor: HTMLElement, text: string) => {
   fireEvent.input(editor);
 };
 
+const installVoiceRecordingMocks = () => {
+  const trackStop = vi.fn();
+  const stream = {
+    getTracks: () => [{ stop: trackStop }],
+  };
+
+  class FakeMediaRecorder {
+    static isTypeSupported = vi.fn(() => true);
+
+    state = 'inactive';
+    mimeType: string;
+    ondataavailable: ((event: BlobEvent) => void) | null = null;
+    onstop: ((event: Event) => void) | null = null;
+
+    constructor(_stream: unknown, options?: { mimeType?: string }) {
+      this.mimeType = options?.mimeType || 'audio/webm';
+    }
+
+    start() {
+      this.state = 'recording';
+    }
+
+    stop() {
+      this.state = 'inactive';
+      const blob = new Blob([new Uint8Array(2048).fill(7)], { type: this.mimeType });
+      this.ondataavailable?.({ data: blob } as BlobEvent);
+      this.onstop?.(new Event('stop'));
+    }
+  }
+
+  class FakeFileReader {
+    result: string | ArrayBuffer | null = 'data:audio/webm;base64,dGVzdA==';
+    onload: ((event: ProgressEvent<FileReader>) => void) | null = null;
+    onerror: ((event: ProgressEvent<FileReader>) => void) | null = null;
+
+    readAsDataURL() {
+      this.onload?.({} as ProgressEvent<FileReader>);
+    }
+  }
+
+  vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
+  vi.stubGlobal('FileReader', FakeFileReader);
+  Object.defineProperty(navigator, 'mediaDevices', {
+    configurable: true,
+    value: {
+      getUserMedia: vi.fn().mockResolvedValue(stream),
+    },
+  });
+  Object.defineProperty(URL, 'createObjectURL', {
+    configurable: true,
+    value: vi.fn(() => 'blob:voice-preview'),
+  });
+  Object.defineProperty(URL, 'revokeObjectURL', {
+    configurable: true,
+    value: vi.fn(),
+  });
+};
+
 describe('MessageInput optimistic send flow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -142,6 +200,7 @@ describe('MessageInput optimistic send flow', () => {
 
   afterEach(() => {
     cleanup();
+    vi.unstubAllGlobals();
   });
 
   it('clears text input immediately and sends text with a clientMessageId', async () => {
@@ -251,5 +310,42 @@ describe('MessageInput optimistic send flow', () => {
     expect(socketMocks.sendMessageAndAskAI).not.toHaveBeenCalled();
     expect(socketMocks.sendMessage).not.toHaveBeenCalled();
     expect(props.onOptimisticMessage).not.toHaveBeenCalled();
+  });
+
+  it('opens voice mode as click choices instead of hold-to-speak', () => {
+    renderMessageInput();
+
+    fireEvent.click(screen.getByLabelText('voiceInput'));
+
+    expect(screen.getByText('recordVoice')).toBeTruthy();
+    expect(screen.getByText('voiceToText')).toBeTruthy();
+    expect(screen.queryByText('holdToSpeak')).toBeNull();
+  });
+
+  it('previews recorded voice and sends the audio draft', async () => {
+    installVoiceRecordingMocks();
+    renderMessageInput();
+
+    fireEvent.click(screen.getByLabelText('voiceInput'));
+    fireEvent.click(screen.getByText('recordVoice'));
+
+    await waitFor(() => expect(screen.getByText('stopRecording')).toBeTruthy());
+    fireEvent.click(screen.getByText('stopRecording'));
+
+    await waitFor(() => expect(screen.getByText('doNotSend')).toBeTruthy());
+    expect(document.querySelector('audio.roomtalk-audio-player')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('send'));
+
+    await waitFor(() => {
+      expect(socketMocks.sendMessage).toHaveBeenCalledWith(
+        'data:audio/webm;base64,dGVzdA==',
+        'room-1',
+        'voice',
+        'Ada',
+        { text: 'A', color: '#123456' },
+        undefined
+      );
+    });
   });
 });
