@@ -12,7 +12,6 @@ import { Message, Room, RoomRenameHandler } from '../utils/types';
 interface ChatRoomViewProps {
   currentRoom: Room;
   memberCount: number;
-  memberEvent: { type: 'join' | 'leave'; userId: string } | null;
   username: string;
   clientId: string;
   handleCopyToClipboard: (text: string) => void;
@@ -30,7 +29,6 @@ interface ChatRoomViewProps {
 export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
   currentRoom,
   memberCount,
-  memberEvent,
   username,
   clientId,
   handleCopyToClipboard,
@@ -82,7 +80,6 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
       <ChatHeader
         currentRoom={currentRoom}
         memberCount={memberCount}
-        memberEvent={memberEvent}
         handleCopyToClipboard={handleCopyToClipboard}
         handleShareRoom={handleShareRoom}
         handleToggleSave={handleToggleSave}

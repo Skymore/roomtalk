@@ -35,10 +35,6 @@ export const getRoomMemberUpdate = (currentRoom: Room | null, event: RoomMemberE
 
   return {
     count: event.count,
-    event: {
-      type: event.action,
-      userId: event.user.id,
-    },
   };
 };
 
