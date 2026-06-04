@@ -2,7 +2,7 @@ import { customAlphabet } from 'nanoid';
 import { Logger } from '../logger';
 import { AICost, ImageAsset, Message, MessageImageAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole } from '../types';
 import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, RoomMessagePageOptions } from './store';
-import { POSTGRES_SCHEMA_SQL } from './postgresSchema';
+import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 
@@ -278,7 +278,38 @@ export class PostgresStore implements DurableRoomStore {
     for (const sql of POSTGRES_SCHEMA_SQL) {
       await this.pool.query(sql);
     }
+    await this.runMigrations();
     this.logger.info('PostgreSQL schema initialized');
+  }
+
+  private async runMigrations(): Promise<void> {
+    await this.pool.query(
+      `CREATE TABLE IF NOT EXISTS schema_migrations (
+        id TEXT PRIMARY KEY,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`
+    );
+
+    for (const migration of POSTGRES_MIGRATIONS) {
+      const applied = await this.pool.query(
+        'SELECT 1 FROM schema_migrations WHERE id = $1 LIMIT 1',
+        [migration.id]
+      );
+      if (applied.rows.length > 0) {
+        continue;
+      }
+
+      // Apply the migration and record it atomically, so a crash mid-migration
+      // never leaves it marked as applied without its effect (or vice versa).
+      await this.transaction(async client => {
+        await client.query(migration.sql);
+        await client.query(
+          'INSERT INTO schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING',
+          [migration.id]
+        );
+      });
+      this.logger.info('Applied PostgreSQL migration', { id: migration.id });
+    }
   }
 
   async generateUniqueRoomId(): Promise<string> {
