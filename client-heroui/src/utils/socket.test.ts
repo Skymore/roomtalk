@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { Message } from './types';
+import { Message, Room } from './types';
 
 type AckResponse = Record<string, unknown>;
 
@@ -64,7 +64,14 @@ vi.mock('uuid', () => ({
   v4: () => 'client-uuid',
 }));
 
-const { getImageDownloadUrl, sendMessage, sendMessageAndAskAI } = await import('./socket');
+const {
+  getImageDownloadUrl,
+  getSavedRoomsFromServer,
+  saveRoomToServer,
+  sendMessage,
+  sendMessageAndAskAI,
+  unsaveRoomFromServer,
+} = await import('./socket');
 
 const message = (overrides: Partial<Message> = {}): Message => ({
   id: 'm1',
@@ -73,6 +80,15 @@ const message = (overrides: Partial<Message> = {}): Message => ({
   roomId: 'room-1',
   timestamp: '2026-05-03T10:00:00.000Z',
   messageType: 'text',
+  ...overrides,
+});
+
+const room = (overrides: Partial<Room> = {}): Room => ({
+  id: 'room-1',
+  name: 'Room 1',
+  description: '',
+  createdAt: '2026-05-03T10:00:00.000Z',
+  creatorId: 'client-uuid',
   ...overrides,
 });
 
@@ -177,6 +193,54 @@ describe('socket message acknowledgement helpers', () => {
         roomId: 'room-1',
         assetId: 'asset-1',
       },
+      expect.any(Function)
+    );
+  });
+
+  it('returns saved rooms from get_saved_rooms acknowledgements', async () => {
+    const savedRooms = [room()];
+    socketMock.ackResponses.set('get_saved_rooms', {
+      success: true,
+      rooms: savedRooms,
+    });
+
+    await expect(getSavedRoomsFromServer()).resolves.toEqual(savedRooms);
+
+    expect(socketMock.emit).toHaveBeenCalledWith(
+      'get_saved_rooms',
+      {},
+      expect.any(Function)
+    );
+  });
+
+  it('saves rooms through save_room acknowledgements', async () => {
+    const savedRoom = room({ id: 'room-2', name: 'Saved Room' });
+    socketMock.ackResponses.set('save_room', {
+      success: true,
+      room: savedRoom,
+    });
+
+    await expect(saveRoomToServer('room-2')).resolves.toEqual(savedRoom);
+
+    expect(socketMock.emit).toHaveBeenCalledWith(
+      'save_room',
+      { roomId: 'room-2' },
+      expect.any(Function)
+    );
+  });
+
+  it('removes saved rooms through unsave_room acknowledgements', async () => {
+    const remainingRooms = [room({ id: 'room-3' })];
+    socketMock.ackResponses.set('unsave_room', {
+      success: true,
+      rooms: remainingRooms,
+    });
+
+    await expect(unsaveRoomFromServer('room-2')).resolves.toEqual(remainingRooms);
+
+    expect(socketMock.emit).toHaveBeenCalledWith(
+      'unsave_room',
+      { roomId: 'room-2' },
       expect.any(Function)
     );
   });

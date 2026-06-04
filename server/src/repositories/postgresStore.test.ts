@@ -143,8 +143,8 @@ describe('PostgresStore', () => {
       {
         rows: [roomRow({ name: 'Saved Room', description: 'desc' })],
         assertCall(call) {
-          assert.match(call.sql, /INNER JOIN room_members/);
-          assert.match(call.sql, /WHERE rm\.client_id = \$1/);
+          assert.match(call.sql, /FROM rooms/);
+          assert.match(call.sql, /WHERE creator_id = \$1/);
           assert.deepEqual(call.params, ['client-1']);
         },
       },
@@ -217,6 +217,14 @@ describe('PostgresStore', () => {
           assert.match(call.sql, /ORDER BY joined_at ASC/);
         },
       },
+      {
+        rowCount: 1,
+        assertCall(call) {
+          assert.match(call.sql, /DELETE FROM room_members/);
+          assert.match(call.sql, /role <> 'owner'/);
+          assert.deepEqual(call.params, ['room-1', 'client-2']);
+        },
+      },
     ]);
     const store = new PostgresStore(pool, logger as any);
 
@@ -247,6 +255,46 @@ describe('PostgresStore', () => {
         joinedAt: '2026-05-03T00:01:00.000Z',
       },
     ]);
+    assert.equal(await store.removeRoomMember('room-1', 'client-2'), true);
+  });
+
+  it('persists and reads saved rooms independently from owned rooms', async () => {
+    const pool = new ScriptedPool([
+      {
+        rows: [{ room_id: 'room-1' }],
+        assertCall(call) {
+          assert.match(call.sql, /INSERT INTO room_saves/);
+          assert.deepEqual(call.params, ['room-1', 'client-2', '2026-05-03T00:02:00.000Z']);
+        },
+      },
+      {
+        rows: [roomRow()],
+        assertCall(call) {
+          assert.match(call.sql, /SELECT id, name, description, created_at, last_activity_at, creator_id FROM rooms WHERE id = \$1/);
+          assert.deepEqual(call.params, ['room-1']);
+        },
+      },
+      {
+        rows: [roomRow()],
+        assertCall(call) {
+          assert.match(call.sql, /INNER JOIN room_saves/);
+          assert.match(call.sql, /WHERE rs\.client_id = \$1/);
+          assert.deepEqual(call.params, ['client-2']);
+        },
+      },
+      {
+        rowCount: 1,
+        assertCall(call) {
+          assert.match(call.sql, /DELETE FROM room_saves/);
+          assert.deepEqual(call.params, ['room-1', 'client-2']);
+        },
+      },
+    ]);
+    const store = new PostgresStore(pool, logger as any);
+
+    assert.deepEqual(await store.saveRoomForUser('room-1', 'client-2', '2026-05-03T00:02:00.000Z'), room());
+    assert.deepEqual(await store.readSavedRoomsByUser('client-2'), [room()]);
+    assert.equal(await store.removeSavedRoomForUser('room-1', 'client-2'), true);
   });
 
   it('persists image assets and attaches public metadata to image messages', async () => {

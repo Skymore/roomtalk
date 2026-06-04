@@ -46,10 +46,14 @@ export interface DurableRoomStore {
   incrementRoomAICost(roomId: string, cost: AICost | null): Promise<RoomAICostTotal>;
   saveRoom(room: Room): Promise<Room | null>;
   addRoomMember(roomId: string, clientId: string, role: RoomMemberRole, joinedAt?: string): Promise<RoomMember | null>;
+  removeRoomMember(roomId: string, clientId: string): Promise<boolean>;
   getRoomMember(roomId: string, clientId: string): Promise<RoomMember | null>;
   isRoomMember(roomId: string, clientId: string): Promise<boolean>;
   readRoomMembers(roomId: string): Promise<RoomMember[]>;
   readRoomsByUser(clientId: string): Promise<Room[]>;
+  saveRoomForUser(roomId: string, clientId: string, savedAt?: string): Promise<Room | null>;
+  removeSavedRoomForUser(roomId: string, clientId: string): Promise<boolean>;
+  readSavedRoomsByUser(clientId: string): Promise<Room[]>;
   getRoomById(roomId: string): Promise<Room | null>;
   updateRoomName(roomId: string, creatorId: string, name: string): Promise<Room | null>;
   deleteRoom(roomId: string, creatorId: string): Promise<void>;
@@ -239,6 +243,10 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.addRoomMember(roomId, clientId, role, joinedAt);
   }
 
+  removeRoomMember(roomId: string, clientId: string) {
+    return this.durableStore.removeRoomMember(roomId, clientId);
+  }
+
   getRoomMember(roomId: string, clientId: string) {
     return this.durableStore.getRoomMember(roomId, clientId);
   }
@@ -253,6 +261,18 @@ export class CompositeRoomStore implements RoomStore {
 
   readRoomsByUser(clientId: string) {
     return this.durableStore.readRoomsByUser(clientId);
+  }
+
+  saveRoomForUser(roomId: string, clientId: string, savedAt?: string) {
+    return this.durableStore.saveRoomForUser(roomId, clientId, savedAt);
+  }
+
+  removeSavedRoomForUser(roomId: string, clientId: string) {
+    return this.durableStore.removeSavedRoomForUser(roomId, clientId);
+  }
+
+  readSavedRoomsByUser(clientId: string) {
+    return this.durableStore.readSavedRoomsByUser(clientId);
   }
 
   getRoomById(roomId: string) {

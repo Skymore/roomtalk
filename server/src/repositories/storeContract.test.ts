@@ -346,6 +346,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
   rooms = new Map<string, RoomRow>();
   messages = new Map<string, MessageRow[]>();
   roomMembers = new Map<string, Map<string, RoomMemberRow>>();
+  roomSaves = new Map<string, Map<string, string>>();
   imageAssets = new Map<string, ImageAssetRow>();
   costs = new Map<string, number>();
   released = false;
@@ -408,6 +409,18 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       roomMembers.set(clientId, member);
       this.roomMembers.set(roomId, roomMembers);
       return { rows: [member] as T[], rowCount: 1 };
+    }
+
+    if (/DELETE FROM room_members WHERE room_id = \$1 AND client_id = \$2 AND role <> 'owner'/.test(compactSql)) {
+      const roomId = String(params[0]);
+      const clientId = String(params[1]);
+      const roomMembers = this.roomMembers.get(roomId);
+      const existing = roomMembers?.get(clientId);
+      if (!roomMembers || !existing || existing.role === 'owner') {
+        return { rows: [], rowCount: 0 };
+      }
+      roomMembers.delete(clientId);
+      return { rows: [], rowCount: 1 };
     }
 
     if (/SELECT 1 FROM room_members WHERE room_id = \$1 AND client_id = \$2 LIMIT 1/.test(compactSql)) {
@@ -647,22 +660,52 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       return { rows: [{ total_usd: String(next) }] as T[], rowCount: 1 };
     }
 
+    if (/INSERT INTO room_saves/.test(compactSql)) {
+      const roomId = String(params[0]);
+      const clientId = String(params[1]);
+      const savedAt = String(params[2]);
+      if (!this.rooms.has(roomId)) {
+        return { rows: [], rowCount: 0 };
+      }
+
+      const roomSaves = this.roomSaves.get(clientId) || new Map<string, string>();
+      roomSaves.set(roomId, savedAt);
+      this.roomSaves.set(clientId, roomSaves);
+      return { rows: [{ room_id: roomId }] as T[], rowCount: 1 };
+    }
+
+    if (/DELETE FROM room_saves WHERE room_id = \$1 AND client_id = \$2/.test(compactSql)) {
+      const roomId = String(params[0]);
+      const clientId = String(params[1]);
+      const deleted = this.roomSaves.get(clientId)?.delete(roomId) || false;
+      return { rows: [], rowCount: deleted ? 1 : 0 };
+    }
+
     if (/DELETE FROM room_ai_cost_totals WHERE room_id = \$1/.test(compactSql)) {
       const deleted = this.costs.delete(String(params[0]));
       return { rows: [], rowCount: deleted ? 1 : 0 };
     }
 
-    if (/FROM rooms r INNER JOIN room_members rm ON rm.room_id = r.id WHERE rm.client_id = \$1/.test(compactSql)) {
+    if (/FROM rooms WHERE creator_id = \$1/.test(compactSql)) {
       const clientId = String(params[0]);
-      const roomIds = new Set<string>();
-      for (const [roomId, members] of this.roomMembers.entries()) {
-        if (members.has(clientId)) {
-          roomIds.add(roomId);
-        }
-      }
       const rows = [...this.rooms.values()]
-        .filter(room => roomIds.has(room.id))
+        .filter(room => room.creator_id === clientId)
         .sort((first, second) => toTime(second.last_activity_at) - toTime(first.last_activity_at) || toTime(second.created_at) - toTime(first.created_at));
+      return { rows: rows as T[], rowCount: rows.length };
+    }
+
+    if (/FROM rooms r INNER JOIN room_saves rs ON rs.room_id = r.id WHERE rs.client_id = \$1/.test(compactSql)) {
+      const clientId = String(params[0]);
+      const saves = this.roomSaves.get(clientId) || new Map<string, string>();
+      const rows = [...saves.entries()]
+        .map(([roomId, savedAt]) => ({ room: this.rooms.get(roomId), savedAt }))
+        .filter((item): item is { room: RoomRow; savedAt: string } => !!item.room)
+        .sort((first, second) => (
+          toTime(second.savedAt) - toTime(first.savedAt)
+          || toTime(second.room.last_activity_at) - toTime(first.room.last_activity_at)
+          || toTime(second.room.created_at) - toTime(first.room.created_at)
+        ))
+        .map(item => item.room);
       return { rows: rows as T[], rowCount: rows.length };
     }
 
@@ -680,6 +723,9 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       this.rooms.delete(roomId);
       this.messages.delete(roomId);
       this.roomMembers.delete(roomId);
+      for (const saves of this.roomSaves.values()) {
+        saves.delete(roomId);
+      }
       for (const [assetId, asset] of this.imageAssets.entries()) {
         if (asset.room_id === roomId) {
           this.imageAssets.delete(assetId);
@@ -693,10 +739,11 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       return { rows: [{ count: String(this.rooms.size) }] as T[], rowCount: 1 };
     }
 
-    if (/TRUNCATE room_ai_cost_totals, (image_assets, )?room_messages, (room_members, )?rooms/.test(compactSql)) {
+    if (/TRUNCATE room_ai_cost_totals, (image_assets, )?room_messages, (room_saves, )?(room_members, )?rooms/.test(compactSql)) {
       this.rooms.clear();
       this.messages.clear();
       this.roomMembers.clear();
+      this.roomSaves.clear();
       this.imageAssets.clear();
       this.costs.clear();
       return { rows: [], rowCount: 0 };
@@ -841,7 +888,7 @@ for (const [storeName, createFixture] of storeFactories) {
       assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), []);
     });
 
-    it('tracks durable room membership and lists joined rooms', async () => {
+    it('tracks durable room membership and saved rooms separately from owned rooms', async () => {
       const { store } = createFixture();
       const initialRoom = room();
 
@@ -862,8 +909,17 @@ for (const [storeName, createFixture] of storeFactories) {
       });
 
       assert.deepEqual((await store.readRoomMembers(initialRoom.id)).map(member => member.clientId), [initialRoom.creatorId, 'client-2']);
-      assert.deepEqual((await store.readRoomsByUser('client-2')).map(item => item.id), [initialRoom.id]);
+      assert.deepEqual((await store.readRoomsByUser('client-2')).map(item => item.id), []);
       assert.equal(await store.isRoomMember(initialRoom.id, 'missing-client'), false);
+      assert.equal(await store.removeRoomMember(initialRoom.id, initialRoom.creatorId), false);
+      assert.equal(await store.removeRoomMember(initialRoom.id, 'client-2'), true);
+      assert.equal(await store.isRoomMember(initialRoom.id, 'client-2'), false);
+
+      assert.deepEqual(await store.saveRoomForUser(initialRoom.id, 'client-2', '2026-05-03T00:02:00.000Z'), initialRoom);
+      assert.deepEqual((await store.readSavedRoomsByUser('client-2')).map(item => item.id), [initialRoom.id]);
+      assert.deepEqual((await store.readRoomsByUser('client-2')).map(item => item.id), []);
+      assert.equal(await store.removeSavedRoomForUser(initialRoom.id, 'client-2'), true);
+      assert.deepEqual(await store.readSavedRoomsByUser('client-2'), []);
     });
 
     it('preserves image asset metadata without storing binary image payload in messages', async () => {

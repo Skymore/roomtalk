@@ -10,6 +10,8 @@ const ROOM_MESSAGES_CACHE_KEY_PREFIX = 'cache:room:';
 const ROOM_MESSAGES_CACHE_KEY_SUFFIX = ':messages';
 const getPersistentRoomMembersKey = (roomId: string) => `room:${roomId}:room_members`;
 const getRoomImageAssetsKey = (roomId: string) => `room:${roomId}:image_assets`;
+const getSavedRoomsKey = (clientId: string) => `user:${clientId}:saved_rooms`;
+const getRoomSavedByKey = (roomId: string) => `room:${roomId}:saved_by`;
 
 const toMessageImageAsset = (asset: ImageAsset): MessageImageAsset => {
   const messageAsset: MessageImageAsset = {
@@ -889,11 +891,26 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         joinedAt: existing?.joinedAt || joinedAt,
       };
       await this.redisClient.hSet(getPersistentRoomMembersKey(roomId), clientId, JSON.stringify(member));
-      await this.redisClient.sAdd(`user:${clientId}:rooms`, roomId);
       return member;
     } catch (error) {
       this.logger.error('Error adding Redis room member', { error, roomId, clientId, role });
       return null;
+    }
+  }
+
+  async removeRoomMember(roomId: string, clientId: string): Promise<boolean> {
+    try {
+      const existing = await this.getRoomMember(roomId, clientId);
+      if (!existing || existing.role === 'owner') {
+        return false;
+      }
+
+      const removed = await this.redisClient.hDel(getPersistentRoomMembersKey(roomId), clientId);
+      await this.redisClient.sRem(`user:${clientId}:rooms`, roomId);
+      return removed > 0;
+    } catch (error) {
+      this.logger.error('Error removing Redis room member', { error, roomId, clientId });
+      return false;
     }
   }
 
@@ -926,7 +943,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
 
   async readRoomsByUser(clientId: string): Promise<Room[]> {
     try {
-      const roomIds = await this.redisClient.sMembers(`user:${clientId}:rooms`);
+      const roomIds = await this.redisClient.hKeys('rooms');
       const rooms = await Promise.all(
         roomIds.map((id: string) => this.redisClient.hGet('rooms', id))
       );
@@ -934,9 +951,64 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       return rooms
         .filter(room => room)
         .map((room: string | undefined) => JSON.parse(room!))
+        .filter((room: Room) => room.creatorId === clientId)
         .sort((first: Room, second: Room) => getRoomActivityTime(second) - getRoomActivityTime(first));
     } catch (error) {
       this.logger.error('Error reading rooms for user from Redis', { error, clientId });
+      return [];
+    }
+  }
+
+  async saveRoomForUser(roomId: string, clientId: string, savedAt = new Date().toISOString()): Promise<Room | null> {
+    try {
+      const room = await this.getRoomById(roomId);
+      if (!room) {
+        return null;
+      }
+
+      await this.redisClient.hSet(getSavedRoomsKey(clientId), roomId, savedAt);
+      await this.redisClient.sAdd(getRoomSavedByKey(roomId), clientId);
+      return room;
+    } catch (error) {
+      this.logger.error('Error saving Redis room for user', { error, roomId, clientId });
+      return null;
+    }
+  }
+
+  async removeSavedRoomForUser(roomId: string, clientId: string): Promise<boolean> {
+    try {
+      const removed = await this.redisClient.hDel(getSavedRoomsKey(clientId), roomId);
+      await this.redisClient.sRem(getRoomSavedByKey(roomId), clientId);
+      return removed > 0;
+    } catch (error) {
+      this.logger.error('Error removing Redis saved room for user', { error, roomId, clientId });
+      return false;
+    }
+  }
+
+  async readSavedRoomsByUser(clientId: string): Promise<Room[]> {
+    try {
+      const savedRoomIds = await this.redisClient.hKeys(getSavedRoomsKey(clientId));
+      const savedRooms = await Promise.all(savedRoomIds.map(async roomId => {
+        const [savedAt, roomJson] = await Promise.all([
+          this.redisClient.hGet(getSavedRoomsKey(clientId), roomId),
+          this.redisClient.hGet('rooms', roomId),
+        ]);
+
+        return roomJson
+          ? { room: JSON.parse(roomJson) as Room, savedAt: savedAt || '' }
+          : null;
+      }));
+
+      return savedRooms
+        .filter((item): item is { room: Room; savedAt: string } => !!item)
+        .sort((first, second) => {
+          const savedTimeDelta = Date.parse(second.savedAt) - Date.parse(first.savedAt);
+          return savedTimeDelta || getRoomActivityTime(second.room) - getRoomActivityTime(first.room);
+        })
+        .map(item => item.room);
+    } catch (error) {
+      this.logger.error('Error reading Redis saved rooms for user', { error, clientId });
       return [];
     }
   }
@@ -1132,6 +1204,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     try {
       const members = await this.readRoomMembers(roomId);
       const imageAssets = await this.readImageAssetsByRoom(roomId);
+      const savedByClientIds = await this.redisClient.sMembers(getRoomSavedByKey(roomId));
       await Promise.all([
         this.redisClient.hDel('rooms', roomId),
         this.redisClient.del(`room:${roomId}:messages`),
@@ -1143,6 +1216,8 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         ...members.map(member => this.redisClient.del(`room:${roomId}:member_sockets:${member.clientId}`)),
         ...imageAssets.map(asset => this.redisClient.hDel('image_assets', asset.id)),
         ...members.map(member => this.redisClient.sRem(`user:${member.clientId}:rooms`, roomId)),
+        ...savedByClientIds.map(clientId => this.redisClient.hDel(getSavedRoomsKey(clientId), roomId)),
+        this.redisClient.del(getRoomSavedByKey(roomId)),
         this.redisClient.sRem(`user:${creatorId}:rooms`, roomId),
       ]);
       this.logger.debug('Room deleted from Redis', { roomId, creatorId });

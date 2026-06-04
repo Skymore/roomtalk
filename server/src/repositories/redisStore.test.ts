@@ -341,11 +341,23 @@ describe('RedisStore', () => {
       joinedAt: '2026-05-03T00:01:00.000Z',
     });
     assert.deepEqual((await store.readRoomMembers('room-1')).map(member => member.clientId), ['client-1', 'client-2']);
-    assert.deepEqual(await store.readRoomsByUser('client-2'), [savedRoom]);
+    assert.deepEqual(await store.readRoomsByUser('client-2'), []);
+    assert.equal(await store.removeRoomMember('room-1', 'client-1'), false);
+    assert.equal(await store.removeRoomMember('room-1', 'client-2'), true);
+    assert.equal(await store.isRoomMember('room-1', 'client-2'), false);
+    assert.deepEqual(await store.addRoomMember('room-1', 'client-2', 'member', '2026-05-03T00:01:00.000Z'), {
+      roomId: 'room-1',
+      clientId: 'client-2',
+      role: 'member',
+      joinedAt: '2026-05-03T00:01:00.000Z',
+    });
+    assert.deepEqual(await store.saveRoomForUser('room-1', 'client-2', '2026-05-03T00:02:00.000Z'), savedRoom);
+    assert.deepEqual(await store.readSavedRoomsByUser('client-2'), [savedRoom]);
 
     const updatedRoom = await store.appendMessage(message({ timestamp: '2026-05-04T00:00:00.000Z' }));
     assert.equal(updatedRoom?.lastActivityAt, '2026-05-04T00:00:00.000Z');
     assert.deepEqual(await store.readRoomsByUser('client-1'), [updatedRoom]);
+    assert.deepEqual(await store.readSavedRoomsByUser('client-2'), [updatedRoom]);
     await store.writeRoomMessagesCache('room-1', [message()]);
     await store.updateRoomMemberCount('room-1', 'client-1', 'socket-1', true);
     await store.incrementRoomAICost('room-1', cost(0.5));
@@ -357,6 +369,7 @@ describe('RedisStore', () => {
     assert.equal(await store.readCachedRoomMessages('room-1'), null);
     assert.deepEqual(await store.readRoomsByUser('client-1'), []);
     assert.deepEqual(await store.readRoomsByUser('client-2'), []);
+    assert.deepEqual(await store.readSavedRoomsByUser('client-2'), []);
     assert.deepEqual(await store.readRoomMembers('room-1'), []);
     assert.equal(await store.getRoomMemberCount('room-1'), 0);
     assert.equal(redis.sets.has('room:room-1:member_sockets:client-1'), false);

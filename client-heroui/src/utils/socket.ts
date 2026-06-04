@@ -45,6 +45,14 @@ type ImageDownloadUrlAckResponse = SocketAckResponse & {
   expiresAt?: string;
 };
 
+type RoomAckResponse = SocketAckResponse & {
+  room?: Room;
+};
+
+type RoomListAckResponse = SocketAckResponse & {
+  rooms?: Room[];
+};
+
 // Get current member count for a room
 export const getRoomMemberCount = (roomId: string): number => {
   return roomMemberCounts.get(roomId) || 0;
@@ -231,7 +239,7 @@ export const createRoom = (roomName: string, description?: string) => {
 };
 
 export const renameRoom = (roomId: string, name: string): Promise<Room> => {
-  return emitWithAck<SocketAckResponse & { room?: Room }>(
+  return emitWithAck<RoomAckResponse>(
     'rename_room',
     { roomId, name },
     'Timed out while renaming room',
@@ -242,6 +250,38 @@ export const renameRoom = (roomId: string, name: string): Promise<Room> => {
     }
     return response.room;
   });
+};
+
+export const saveRoomToServer = (roomId: string): Promise<Room> => {
+  return emitWithAck<RoomAckResponse>(
+    'save_room',
+    { roomId },
+    'Timed out while saving room',
+    'Failed to save room',
+  ).then((response) => {
+    if (!response.room) {
+      throw new Error('Server did not return saved room');
+    }
+    return response.room;
+  });
+};
+
+export const unsaveRoomFromServer = (roomId: string): Promise<Room[]> => {
+  return emitWithAck<RoomListAckResponse>(
+    'unsave_room',
+    { roomId },
+    'Timed out while removing saved room',
+    'Failed to remove saved room',
+  ).then((response) => response.rooms || []);
+};
+
+export const getSavedRoomsFromServer = (): Promise<Room[]> => {
+  return emitWithAck<RoomListAckResponse>(
+    'get_saved_rooms',
+    {},
+    'Timed out while getting saved rooms',
+    'Failed to get saved rooms',
+  ).then((response) => response.rooms || []);
 };
 
 // Send message to a specific room
