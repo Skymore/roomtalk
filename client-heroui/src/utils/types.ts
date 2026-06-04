@@ -51,6 +51,16 @@ export interface Room {
   createdAt: string;
   lastActivityAt?: string;
   creatorId: string;
+  messageVersion?: number;
+}
+
+export interface RoomMessageHistoryPayload {
+  roomId: string;
+  messages: Message[];
+  historyVersion: number;
+  hasMore: boolean;
+  oldestMessageId?: string;
+  mode?: 'replace' | 'prepend';
 }
 
 export type RoomRenameHandler = (roomId: string, name: string) => Promise<void>;

@@ -2,7 +2,7 @@ import { customAlphabet } from 'nanoid';
 import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
 import { AICost, ImageAsset, Message, MessageImageAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole } from '../types';
-import { RoomMessageCacheStore, RoomStore } from './store';
+import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, RoomMessageCacheStore, RoomMessagePageOptions, RoomStore } from './store';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 const DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS = 30;
@@ -49,6 +49,7 @@ local currentLastActivityAt = room['lastActivityAt'] or room['createdAt'] or ''
 if ARGV[3] > currentLastActivityAt then
   room['lastActivityAt'] = ARGV[3]
 end
+room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
 local messagePayload = ARGV[2]
 redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
 redis.call('RPUSH', KEYS[2], messagePayload)
@@ -67,6 +68,7 @@ if not ok then
 end
 
 room['lastActivityAt'] = ARGV[2]
+room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
 redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
 redis.call('DEL', KEYS[2])
 for i = 3, #ARGV do
@@ -108,6 +110,7 @@ local currentLastActivityAt = room['lastActivityAt'] or room['createdAt'] or ''
 if ARGV[4] > currentLastActivityAt then
   room['lastActivityAt'] = ARGV[4]
 end
+room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
 redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
 redis.call('DEL', KEYS[2])
 for i = 1, #existing do
@@ -143,6 +146,11 @@ for i = 1, #existing do
     found = 1
     break
   end
+end
+
+if found == 1 then
+  room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
+  redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
 end
 
 return { 1, found, cjson.encode(room), updatedPayload }
@@ -213,6 +221,7 @@ end
 
 if found == 1 then
   room['lastActivityAt'] = latestTimestamp ~= '' and latestTimestamp or room['createdAt']
+  room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
   redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
   redis.call('DEL', KEYS[2])
   for i = 1, #remaining do
@@ -262,6 +271,7 @@ if found == 1 then
   end
 
   room['lastActivityAt'] = latestTimestamp ~= '' and latestTimestamp or room['createdAt']
+  room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
   redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
   redis.call('DEL', KEYS[2])
   for i = 1, #remaining do
@@ -320,6 +330,7 @@ if found == 1 then
   end
 
   room['lastActivityAt'] = latestTimestamp ~= '' and latestTimestamp or room['createdAt']
+  room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
   redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
   redis.call('DEL', KEYS[2])
   for i = 1, #remaining do
@@ -352,6 +363,19 @@ const getLatestMessageTimestamp = (messages: Message[]): string | undefined => {
     return latest;
   }, undefined);
 };
+
+const normalizeMessagePageLimit = (limit?: number): number => {
+  if (!Number.isFinite(limit)) {
+    return DEFAULT_ROOM_MESSAGE_PAGE_LIMIT;
+  }
+
+  return Math.min(200, Math.max(1, Math.floor(limit || DEFAULT_ROOM_MESSAGE_PAGE_LIMIT)));
+};
+
+const bumpRoomMessageVersion = (room: Room): Room => ({
+  ...room,
+  messageVersion: (room.messageVersion || 0) + 1,
+});
 
 const parseScriptRoom = (result: unknown, index: number): Room | null => {
   if (!Array.isArray(result) || Number(result[0]) !== 1 || typeof result[index] !== 'string' || !result[index]) {
@@ -701,7 +725,18 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
   }
 
   async clearRoomMessages(roomId: string): Promise<number> {
-    return this.redisClient.del(`room:${roomId}:messages`);
+    const messageKey = `room:${roomId}:messages`;
+    const count = await this.redisClient.del(messageKey);
+    if (count > 0) {
+      const room = await this.getRoomById(roomId);
+      if (room) {
+        await this.redisClient.hSet('rooms', roomId, JSON.stringify({
+          ...bumpRoomMessageVersion(room),
+          lastActivityAt: room.createdAt,
+        }));
+      }
+    }
+    return count;
   }
 
   async readMessagesByRoom(roomId: string): Promise<Message[]> {
@@ -712,6 +747,41 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     } catch (error) {
       this.logger.error('Error reading messages from Redis', { error, roomId });
       return [];
+    }
+  }
+
+  async readMessagePageByRoom(roomId: string, options: RoomMessagePageOptions = {}) {
+    const limit = normalizeMessagePageLimit(options.limit);
+
+    try {
+      const room = await this.getRoomById(roomId);
+      const historyVersion = room?.messageVersion || 0;
+      if (!room) {
+        return { roomId, messages: [], historyVersion, hasMore: false };
+      }
+
+      const allMessages = await this.readMessagesByRoom(roomId);
+      let endIndex = allMessages.length;
+      if (options.beforeMessageId) {
+        const targetIndex = allMessages.findIndex(message => message.id === options.beforeMessageId);
+        if (targetIndex === -1) {
+          return { roomId, messages: [], historyVersion, hasMore: false };
+        }
+        endIndex = targetIndex;
+      }
+
+      const startIndex = Math.max(0, endIndex - limit);
+      const messages = allMessages.slice(startIndex, endIndex);
+      return {
+        roomId,
+        messages,
+        historyVersion,
+        hasMore: startIndex > 0,
+        oldestMessageId: messages[0]?.id,
+      };
+    } catch (error) {
+      this.logger.error('Error reading Redis room message page', { error, roomId, options });
+      return { roomId, messages: [], historyVersion: 0, hasMore: false };
     }
   }
 

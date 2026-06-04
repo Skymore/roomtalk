@@ -95,7 +95,7 @@ describe('MessageList optimistic messages', () => {
     render(<MessageList ref={ref} roomId="room-1" onReply={vi.fn()} />);
 
     act(() => {
-      socketMock.trigger('message_history', []);
+      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], historyVersion: 0, hasMore: false, mode: 'replace' });
     });
 
     const pending = message({
@@ -139,7 +139,7 @@ describe('MessageList optimistic messages', () => {
     render(<MessageList ref={ref} roomId="room-1" onReply={vi.fn()} />);
 
     act(() => {
-      socketMock.trigger('message_history', []);
+      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], historyVersion: 0, hasMore: false, mode: 'replace' });
       ref.current?.addOptimisticMessage(message({
         id: 'temp-client-message-2',
         content: 'will fail',
@@ -170,7 +170,14 @@ describe('MessageList optimistic messages', () => {
     });
 
     act(() => {
-      socketMock.trigger('message_history', history);
+      socketMock.trigger('message_history', {
+        roomId: 'room-1',
+        messages: history.slice(5),
+        historyVersion: 1,
+        hasMore: true,
+        oldestMessageId: 'm-6',
+        mode: 'replace',
+      });
     });
 
     await waitFor(() => {
@@ -181,10 +188,61 @@ describe('MessageList optimistic messages', () => {
     expect(screen.getByText('message 85')).toBeTruthy();
 
     fireEvent.click(screen.getByText('loadMoreMessages'));
+    expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
+      roomId: 'room-1',
+      beforeMessageId: 'm-6',
+      limit: 80,
+    });
+
+    act(() => {
+      socketMock.trigger('message_history', {
+        roomId: 'room-1',
+        messages: history.slice(0, 5),
+        historyVersion: 1,
+        hasMore: false,
+        oldestMessageId: 'm-1',
+        mode: 'prepend',
+      });
+    });
 
     await waitFor(() => {
       expect(screen.getAllByTestId('message-item')).toHaveLength(85);
     });
     expect(screen.getByText('message 1')).toBeTruthy();
+  });
+
+  it('uses the server pagination cursor instead of the timestamp-sorted first message', async () => {
+    render(<MessageList roomId="room-1" onReply={vi.fn()} />);
+
+    act(() => {
+      socketMock.trigger('message_history', {
+        roomId: 'room-1',
+        messages: [
+          message({
+            id: 'position-oldest',
+            content: 'position oldest',
+            timestamp: '2026-01-01T00:02:00.000Z',
+          }),
+          message({
+            id: 'timestamp-oldest',
+            content: 'timestamp oldest',
+            timestamp: '2026-01-01T00:01:00.000Z',
+          }),
+        ],
+        historyVersion: 1,
+        hasMore: true,
+        oldestMessageId: 'position-oldest',
+        mode: 'replace',
+      });
+    });
+
+    await screen.findByText('timestamp oldest');
+    fireEvent.click(screen.getByText('loadMoreMessages'));
+
+    expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
+      roomId: 'room-1',
+      beforeMessageId: 'position-oldest',
+      limit: 80,
+    });
   });
 });

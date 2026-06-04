@@ -116,6 +116,22 @@ const createHarness = (options: { rejectSaves?: boolean; rejectSaveNumbers?: num
     async readMessagesByRoom(roomId: string) {
       return this.messages.filter(item => item.roomId === roomId);
     },
+    async readMessagePageByRoom(roomId: string, options: { limit?: number; beforeMessageId?: string } = {}) {
+      const limit = Math.max(1, Math.min(200, Math.floor(options.limit || 80)));
+      const roomMessages = this.messages.filter(item => item.roomId === roomId);
+      let endIndex = roomMessages.length;
+      if (options.beforeMessageId) {
+        const targetIndex = roomMessages.findIndex(item => item.id === options.beforeMessageId);
+        if (targetIndex === -1) {
+          return { roomId, messages: [], historyVersion: 1, hasMore: false };
+        }
+        endIndex = targetIndex;
+      }
+
+      const startIndex = Math.max(0, endIndex - limit);
+      const messages = roomMessages.slice(startIndex, endIndex);
+      return { roomId, messages, historyVersion: 1, hasMore: startIndex > 0, oldestMessageId: messages[0]?.id };
+    },
     async addRoomMember(roomId: string, memberClientId: string, role: 'owner' | 'member', joinedAt = '2026-05-03T00:00:00.000Z') {
       this.members.add(`${roomId}:${memberClientId}`);
       return { roomId, clientId: memberClientId, role, joinedAt };
@@ -418,7 +434,8 @@ describe('AI socket handlers', () => {
     const editedEvent = io.roomEmits.find(event => event.event === 'message_edited');
     assert.equal((editedEvent?.args[0] as Message).content, 'edited prompt');
     const historyEvent = io.roomEmits.find(event => event.event === 'message_history');
-    assert.deepEqual((historyEvent?.args[0] as Message[]).map(item => item.id), ['message-1', 'message-edited']);
+    const historyPayload = historyEvent?.args[0] as { messages: Message[] };
+    assert.deepEqual(historyPayload.messages.map(item => item.id), ['message-1', 'message-edited']);
     assert.equal(store.messages[2].status, 'complete');
     assert.equal(store.messages[2].content, 'E2E AI response to: edited prompt');
     assert.deepEqual(response, { success: true, messageId: store.upsertedMessages[0].id });

@@ -23,7 +23,6 @@ import { useRoomMessageEvents } from '../hooks/useRoomMessageEvents';
 import { DeleteConfirmationModal } from './DeleteConfirmationModal';
 import { EditMessageModal } from './EditMessageModal';
 
-const INITIAL_VISIBLE_MESSAGE_COUNT = 80;
 const LOAD_MORE_MESSAGE_COUNT = 80;
 
 // Reminder: Set the app element for react-modal for accessibility
@@ -55,6 +54,10 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const scrollContainerId = `message-list-scroll-${roomId}`;
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasMoreMessages, setHasMoreMessages] = useState(false);
+  const [, setHistoryVersion] = useState(0);
+  const [oldestMessageId, setOldestMessageId] = useState<string | undefined>();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const retryScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -62,7 +65,6 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const preserveScrollRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
   const pendingScrollFrameRef = useRef<number | null>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
-  const [visibleMessageLimit, setVisibleMessageLimit] = useState(INITIAL_VISIBLE_MESSAGE_COUNT);
   // State for modals
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [messageToDelete, setMessageToDelete] = useState<Message | null>(null);
@@ -119,14 +121,11 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     },
   }), [scheduleScrollToBottom, scrollToBottom, updateMessages]);
 
-  const visibleMessages = React.useMemo(() => {
-    const startIndex = Math.max(0, messages.length - visibleMessageLimit);
-    return messages.slice(startIndex);
-  }, [messages, visibleMessageLimit]);
-
-  const hiddenMessageCount = Math.max(0, messages.length - visibleMessages.length);
-
   const handleLoadMore = useCallback(() => {
+    if (isLoadingMore || !hasMoreMessages || messages.length === 0) {
+      return;
+    }
+
     const container = containerRef.current;
     if (container) {
       preserveScrollRef.current = {
@@ -135,8 +134,13 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       };
     }
 
-    setVisibleMessageLimit(prev => prev + LOAD_MORE_MESSAGE_COUNT);
-  }, []);
+    setIsLoadingMore(true);
+    socket.emit('get_room_messages', {
+      roomId,
+      beforeMessageId: oldestMessageId || messages[0].id,
+      limit: LOAD_MORE_MESSAGE_COUNT,
+    });
+  }, [hasMoreMessages, isLoadingMore, messages, oldestMessageId, roomId]);
 
   useEffect(() => {
     onScrollButtonVisibilityChange?.(showScrollButton);
@@ -154,8 +158,10 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   }, []);
 
   useEffect(() => {
-    setVisibleMessageLimit(INITIAL_VISIBLE_MESSAGE_COUNT);
     isNearBottomRef.current = true;
+    setHasMoreMessages(false);
+    setHistoryVersion(0);
+    setOldestMessageId(undefined);
   }, [roomId]);
 
   React.useLayoutEffect(() => {
@@ -165,7 +171,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
 
     preserveScrollRef.current = null;
     container.scrollTop = preserveScroll.scrollTop + (container.scrollHeight - preserveScroll.scrollHeight);
-  }, [visibleMessages.length]);
+  }, [messages.length]);
 
   React.useLayoutEffect(() => {
     if (isNearBottomRef.current) {
@@ -328,6 +334,10 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     containerRef,
     updateMessages,
     setIsLoading,
+    setIsLoadingMore,
+    setHasMoreMessages,
+    setHistoryVersion,
+    setOldestMessageId,
     setSessionCostUsd,
     setShowScrollButton,
     scrollToBottom,
@@ -367,21 +377,22 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
             <span>{t('sessionCost')}: {formatUsdCost(sessionCostUsd)}</span>
           </div>
         </div>
-        {hiddenMessageCount > 0 && (
+        {hasMoreMessages && (
           <div className="mb-3 flex justify-center">
             <button
               type="button"
               onClick={handleLoadMore}
+              disabled={isLoadingMore}
               className="rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-3 py-1.5 text-xs font-medium text-[#4d4c48] shadow-sm backdrop-blur transition hover:border-[#c2c0b6] hover:text-[#141413] dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc] dark:hover:text-[#faf9f5]"
             >
-              {t('loadMoreMessages', { count: Math.min(hiddenMessageCount, LOAD_MORE_MESSAGE_COUNT) })}
+              {isLoadingMore ? t('loading') : t('loadMoreMessages', { count: LOAD_MORE_MESSAGE_COUNT })}
             </button>
           </div>
         )}
         {/* ... Loading/Empty/List rendering ... */}
          {!isLoading && messages.length > 0 && (
             <div className="flex flex-col space-y-2 pb-4">
-                {visibleMessages
+                {messages
                 .map((message) => (
                     <MessageItem
                     key={message.id}

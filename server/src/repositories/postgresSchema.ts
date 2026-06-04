@@ -5,8 +5,10 @@ export const POSTGRES_SCHEMA_SQL = [
     description TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL,
     last_activity_at TIMESTAMPTZ NOT NULL,
-    creator_id TEXT NOT NULL
+    creator_id TEXT NOT NULL,
+    message_version BIGINT NOT NULL DEFAULT 0
   )`,
+  `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS message_version BIGINT NOT NULL DEFAULT 0`,
   `CREATE INDEX IF NOT EXISTS idx_rooms_creator_activity
     ON rooms (creator_id, last_activity_at DESC)`,
   `CREATE TABLE IF NOT EXISTS room_members (

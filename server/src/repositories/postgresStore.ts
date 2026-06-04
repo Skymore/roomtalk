@@ -1,7 +1,7 @@
 import { customAlphabet } from 'nanoid';
 import { Logger } from '../logger';
 import { AICost, ImageAsset, Message, MessageImageAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole } from '../types';
-import { DurableRoomStore } from './store';
+import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, RoomMessagePageOptions } from './store';
 import { POSTGRES_SCHEMA_SQL } from './postgresSchema';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
@@ -29,6 +29,7 @@ type RoomRow = {
   created_at: string | Date;
   last_activity_at: string | Date;
   creator_id: string;
+  message_version?: number | string | null;
 };
 
 type MessageRow = {
@@ -69,7 +70,7 @@ type ImageAssetRow = {
   created_at: string | Date;
 };
 
-const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id';
+const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version';
 const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, ai_model, usage, cost, reply_to';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const IMAGE_ASSET_COLUMNS = 'id, room_id, message_id, object_key, mime_type, byte_size, width, height, created_at';
@@ -98,6 +99,14 @@ const toIsoString = (value: string | Date): string => {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
 };
 
+const normalizeMessagePageLimit = (limit?: number): number => {
+  if (!Number.isFinite(limit)) {
+    return DEFAULT_ROOM_MESSAGE_PAGE_LIMIT;
+  }
+
+  return Math.min(200, Math.max(1, Math.floor(limit || DEFAULT_ROOM_MESSAGE_PAGE_LIMIT)));
+};
+
 const parseJsonValue = <T>(value: unknown): T | undefined => {
   if (value === null || value === undefined) {
     return undefined;
@@ -116,14 +125,19 @@ const parseJsonValue = <T>(value: unknown): T | undefined => {
 
 const toJsonb = (value: unknown) => value === undefined ? null : JSON.stringify(value);
 
-const mapRoom = (row: RoomRow): Room => ({
-  id: row.id,
-  name: row.name,
-  description: row.description || '',
-  createdAt: toIsoString(row.created_at),
-  lastActivityAt: toIsoString(row.last_activity_at || row.created_at),
-  creatorId: row.creator_id,
-});
+const mapRoom = (row: RoomRow): Room => {
+  const room: Room = {
+    id: row.id,
+    name: row.name,
+    description: row.description || '',
+    createdAt: toIsoString(row.created_at),
+    lastActivityAt: toIsoString(row.last_activity_at || row.created_at),
+    creatorId: row.creator_id,
+  };
+  const messageVersion = Number(row.message_version || 0);
+  if (messageVersion > 0) room.messageVersion = messageVersion;
+  return room;
+};
 
 const mapRoomMember = (row: RoomMemberRow): RoomMember => ({
   roomId: row.room_id,
@@ -315,7 +329,11 @@ export class PostgresStore implements DurableRoomStore {
         await client.query(INSERT_MESSAGE_SQL, messageParams(message, position));
 
         const updatedRoom = await client.query<RoomRow>(
-          `UPDATE rooms SET last_activity_at = GREATEST(last_activity_at, $2::timestamptz) WHERE id = $1 RETURNING ${ROOM_COLUMNS}`,
+          `UPDATE rooms
+          SET last_activity_at = GREATEST(last_activity_at, $2::timestamptz),
+            message_version = message_version + 1
+          WHERE id = $1
+          RETURNING ${ROOM_COLUMNS}`,
           [message.roomId, message.timestamp]
         );
         this.logger.debug('Message appended to PostgreSQL', { roomId: message.roomId, messageId: message.id });
@@ -347,7 +365,11 @@ export class PostgresStore implements DurableRoomStore {
         await client.query(INSERT_MESSAGE_SQL, messageParams(message, position));
 
         const updatedRoom = await client.query<RoomRow>(
-          `UPDATE rooms SET last_activity_at = GREATEST(last_activity_at, $2::timestamptz) WHERE id = $1 RETURNING ${ROOM_COLUMNS}`,
+          `UPDATE rooms
+          SET last_activity_at = GREATEST(last_activity_at, $2::timestamptz),
+            message_version = message_version + 1
+          WHERE id = $1
+          RETURNING ${ROOM_COLUMNS}`,
           [message.roomId, message.timestamp]
         );
         this.logger.debug('Message upserted in PostgreSQL', { roomId: message.roomId, messageId: message.id });
@@ -383,7 +405,7 @@ export class PostgresStore implements DurableRoomStore {
           return { room: mapRoom(room.rows[0]), found: false };
         }
 
-        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at));
+        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at), true);
         if (!updatedRoom) {
           return null;
         }
@@ -417,7 +439,7 @@ export class PostgresStore implements DurableRoomStore {
           return { room: mapRoom(room.rows[0]), deleted: false };
         }
 
-        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at));
+        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at), true);
         if (!updatedRoom) {
           return null;
         }
@@ -458,7 +480,7 @@ export class PostgresStore implements DurableRoomStore {
           [roomId, Number(target.rows[0].position)]
         );
 
-        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at));
+        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at), true);
         if (!updatedRoom) {
           return null;
         }
@@ -519,7 +541,7 @@ export class PostgresStore implements DurableRoomStore {
           [roomId, Number(target.rows[0].position)]
         );
 
-        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at));
+        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at), true);
         if (!updatedRoom) {
           return null;
         }
@@ -558,7 +580,11 @@ export class PostgresStore implements DurableRoomStore {
 
         const lastActivityAt = getLatestMessageTimestamp(messages) || toIsoString(room.rows[0].created_at);
         const updatedRoom = await client.query<RoomRow>(
-          `UPDATE rooms SET last_activity_at = $2 WHERE id = $1 RETURNING ${ROOM_COLUMNS}`,
+          `UPDATE rooms
+          SET last_activity_at = $2,
+            message_version = message_version + 1
+          WHERE id = $1
+          RETURNING ${ROOM_COLUMNS}`,
           [roomId, lastActivityAt]
         );
         this.logger.debug('Message history saved to PostgreSQL', { roomId, count: messages.length });
@@ -593,6 +619,65 @@ export class PostgresStore implements DurableRoomStore {
     } catch (error) {
       this.logger.error('Error reading PostgreSQL room messages', { error, roomId });
       return [];
+    }
+  }
+
+  async readMessagePageByRoom(roomId: string, options: RoomMessagePageOptions = {}) {
+    const limit = normalizeMessagePageLimit(options.limit);
+
+    try {
+      const room = await this.pool.query<RoomRow>(
+        `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1`,
+        [roomId]
+      );
+      const historyVersion = Number(room.rows[0]?.message_version || 0);
+      if (room.rows.length === 0) {
+        return { roomId, messages: [], historyVersion, hasMore: false };
+      }
+
+      let rows: MessageRow[] = [];
+      if (options.beforeMessageId) {
+        const target = await this.pool.query<{ position: number | string }>(
+          'SELECT position FROM room_messages WHERE room_id = $1 AND id = $2',
+          [roomId, options.beforeMessageId]
+        );
+        if (target.rows.length === 0) {
+          return { roomId, messages: [], historyVersion, hasMore: false };
+        }
+
+        const page = await this.pool.query<MessageRow>(
+          `SELECT ${MESSAGE_COLUMNS}, position
+          FROM room_messages
+          WHERE room_id = $1 AND position < $2
+          ORDER BY position DESC
+          LIMIT $3`,
+          [roomId, Number(target.rows[0].position), limit + 1]
+        );
+        rows = page.rows;
+      } else {
+        const page = await this.pool.query<MessageRow>(
+          `SELECT ${MESSAGE_COLUMNS}, position
+          FROM room_messages
+          WHERE room_id = $1
+          ORDER BY position DESC
+          LIMIT $2`,
+          [roomId, limit + 1]
+        );
+        rows = page.rows;
+      }
+
+      const hasMore = rows.length > limit;
+      const messages = await this.attachImageAssets(roomId, rows.slice(0, limit).reverse().map(mapMessage));
+      return {
+        roomId,
+        messages,
+        historyVersion,
+        hasMore,
+        oldestMessageId: messages[0]?.id,
+      };
+    } catch (error) {
+      this.logger.error('Error reading PostgreSQL room message page', { error, roomId, options });
+      return { roomId, messages: [], historyVersion: 0, hasMore: false };
     }
   }
 
@@ -1064,7 +1149,7 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
-  private async updateRoomLastActivityFromMessages(client: PostgresClient, roomId: string, fallbackTimestamp: string): Promise<Room | null> {
+  private async updateRoomLastActivityFromMessages(client: PostgresClient, roomId: string, fallbackTimestamp: string, incrementMessageVersion = false): Promise<Room | null> {
     const latestMessage = await client.query<{ timestamp: string | Date }>(
       'SELECT timestamp FROM room_messages WHERE room_id = $1 ORDER BY timestamp DESC LIMIT 1',
       [roomId]
@@ -1074,8 +1159,12 @@ export class PostgresStore implements DurableRoomStore {
       : fallbackTimestamp;
 
     const updatedRoom = await client.query<RoomRow>(
-      `UPDATE rooms SET last_activity_at = $2 WHERE id = $1 RETURNING ${ROOM_COLUMNS}`,
-      [roomId, lastActivityAt]
+      `UPDATE rooms
+      SET last_activity_at = $2,
+        message_version = message_version + $3
+      WHERE id = $1
+      RETURNING ${ROOM_COLUMNS}`,
+      [roomId, lastActivityAt, incrementMessageVersion ? 1 : 0]
     );
     return updatedRoom.rows[0] ? mapRoom(updatedRoom.rows[0]) : null;
   }

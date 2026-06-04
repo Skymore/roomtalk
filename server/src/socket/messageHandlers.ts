@@ -8,9 +8,12 @@ import { hasRoomAccess } from './roomAccess';
 import { SocketConnectionContext } from './types';
 
 export function registerMessageHandlers({ io, socket, store, socketLogger }: SocketConnectionContext) {
-  socket.on('get_room_messages', async (roomId: string) => {
+  socket.on('get_room_messages', async (request: { roomId: string; beforeMessageId?: string; limit?: number }) => {
+    const roomId = request?.roomId;
+    const beforeMessageId = request?.beforeMessageId;
+    const limit = request?.limit;
     const userId = await store.getClientId(socket.id);
-    socketLogger.debug('Client requested message history', { socketId: socket.id, userId, roomId });
+    socketLogger.debug('Client requested message history', { socketId: socket.id, userId, roomId, beforeMessageId, limit });
 
     if (!userId) {
       socket.emit('error', { message: 'You are not registered' });
@@ -22,8 +25,11 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       return;
     }
 
-    const roomMessages = await store.readMessagesByRoom(roomId);
-    socket.emit('message_history', roomMessages);
+    const page = await store.readMessagePageByRoom(roomId, { beforeMessageId, limit });
+    socket.emit('message_history', {
+      ...page,
+      mode: beforeMessageId ? 'prepend' : 'replace',
+    });
     socket.emit('ai_cost_total', await store.readRoomAICost(roomId));
   });
 

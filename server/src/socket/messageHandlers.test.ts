@@ -104,6 +104,22 @@ const createHarness = (clientId: string | null = 'client-1') => {
     async readMessagesByRoom(roomId: string) {
       return this.messages.filter(item => item.roomId === roomId);
     },
+    async readMessagePageByRoom(roomId: string, options: { limit?: number; beforeMessageId?: string } = {}) {
+      const limit = Math.max(1, Math.min(200, Math.floor(options.limit || 80)));
+      const roomMessages = this.messages.filter(item => item.roomId === roomId);
+      let endIndex = roomMessages.length;
+      if (options.beforeMessageId) {
+        const targetIndex = roomMessages.findIndex(item => item.id === options.beforeMessageId);
+        if (targetIndex === -1) {
+          return { roomId, messages: [], historyVersion: 1, hasMore: false };
+        }
+        endIndex = targetIndex;
+      }
+
+      const startIndex = Math.max(0, endIndex - limit);
+      const messages = roomMessages.slice(startIndex, endIndex);
+      return { roomId, messages, historyVersion: 1, hasMore: startIndex > 0, oldestMessageId: messages[0]?.id };
+    },
     async readRoomAICost(roomId: string) {
       return roomCost(roomId);
     },
@@ -188,10 +204,20 @@ describe('message socket handlers', () => {
   it('returns message history and AI cost totals for a room', async () => {
     const { socket } = createHarness();
 
-    await socket.invoke('get_room_messages', 'room-1');
+    await socket.invoke('get_room_messages', { roomId: 'room-1' });
 
     assert.deepEqual(socket.emitted, [
-      { event: 'message_history', args: [[message()]] },
+      {
+        event: 'message_history',
+        args: [{
+          roomId: 'room-1',
+          messages: [message()],
+          historyVersion: 1,
+          hasMore: false,
+          oldestMessageId: 'message-1',
+          mode: 'replace',
+        }],
+      },
       { event: 'ai_cost_total', args: [roomCost()] },
     ]);
   });
@@ -214,9 +240,10 @@ describe('message socket handlers', () => {
       }),
     ];
 
-    await socket.invoke('get_room_messages', 'room-1');
+    await socket.invoke('get_room_messages', { roomId: 'room-1' });
 
-    const history = socket.emitted[0].args[0] as Message[];
+    const historyPayload = socket.emitted[0].args[0] as { messages: Message[] };
+    const history = historyPayload.messages;
     assert.deepEqual(history, [store.messages[0]]);
     assert.equal(history[0].content, 'asset-1');
     assert.equal('objectKey' in history[0].imageAsset!, false);
@@ -227,7 +254,7 @@ describe('message socket handlers', () => {
     const { socket, store } = createHarness('client-3');
     store.members.clear();
 
-    await socket.invoke('get_room_messages', 'room-1');
+    await socket.invoke('get_room_messages', { roomId: 'room-1' });
 
     assert.deepEqual(socket.emitted, [{ event: 'error', args: [{ message: 'You are not authorized to access this room' }] }]);
   });

@@ -102,6 +102,15 @@ export interface Room {
   createdAt: string;
   lastActivityAt?: string;
   creatorId: string;
+  messageVersion?: number;
+}
+
+export interface RoomMessagePage {
+  roomId: string;
+  messages: Message[];
+  historyVersion: number;
+  hasMore: boolean;
+  oldestMessageId?: string;
 }
 
 export type RoomMemberRole = 'owner' | 'member';

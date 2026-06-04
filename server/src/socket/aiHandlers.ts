@@ -69,6 +69,14 @@ export function registerAIHandlers({
   normalizeAIModel,
   getAIClientForModel,
 }: SocketConnectionContext) {
+  const emitLatestHistoryPage = async (roomId: string) => {
+    const page = await store.readMessagePageByRoom(roomId);
+    io.to(roomId).emit('message_history', {
+      ...page,
+      mode: 'replace',
+    });
+  };
+
   const startAIResponse = async (
     data: AIRequestData,
     clientId: string,
@@ -116,7 +124,7 @@ export function registerAIHandlers({
             newCount: historyUsedForContext.length,
           });
           io.to(truncation.room.creatorId).emit('room_updated', truncation.room);
-          io.to(roomId).emit('message_history', truncation.messages);
+          await emitLatestHistoryPage(roomId);
         } else {
           openaiLogger.warn('Retry message ID not found in history, using full history', { roomId, retryForMessageId });
         }
@@ -141,7 +149,7 @@ export function registerAIHandlers({
             newCount: historyUsedForContext.length,
           });
           io.to(truncation.room.creatorId).emit('room_updated', truncation.room);
-          io.to(roomId).emit('message_history', truncation.messages);
+          await emitLatestHistoryPage(roomId);
         } else {
           openaiLogger.warn('Edited message ID not found in history, using full history', { roomId, editedMessageId });
         }
@@ -602,7 +610,7 @@ export function registerAIHandlers({
 
     io.to(editResult.room.creatorId).emit('room_updated', editResult.room);
     io.to(data.roomId).emit('message_edited', editResult.updatedMessage);
-    io.to(data.roomId).emit('message_history', editResult.messages);
+    await emitLatestHistoryPage(data.roomId);
 
     await startAIResponse({
       roomId: data.roomId,
