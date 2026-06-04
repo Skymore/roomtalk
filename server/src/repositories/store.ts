@@ -1,4 +1,11 @@
-import { AICost, ImageAsset, Message, Room, RoomAICostTotal, RoomMember, RoomMemberRole } from '../types';
+import { AICost, ImageAsset, Message, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomMessagePage } from '../types';
+
+export const DEFAULT_ROOM_MESSAGE_PAGE_LIMIT = 80;
+
+export interface RoomMessagePageOptions {
+  limit?: number;
+  beforeMessageId?: string;
+}
 
 export interface MessageUpdateResult {
   room: Room;
@@ -36,6 +43,7 @@ export interface DurableRoomStore {
   saveMessageHistory(roomId: string, messages: Message[]): Promise<Room | null>;
   clearRoomMessages(roomId: string): Promise<number>;
   readMessagesByRoom(roomId: string): Promise<Message[]>;
+  readMessagePageByRoom(roomId: string, options?: RoomMessagePageOptions): Promise<RoomMessagePage>;
   saveImageAsset(asset: ImageAsset): Promise<ImageAsset | null>;
   replaceMessageImageAsset(roomId: string, messageId: string, asset: ImageAsset): Promise<MessageUpdateResult | null>;
   getImageAsset(assetId: string): Promise<ImageAsset | null>;
@@ -197,6 +205,10 @@ export class CompositeRoomStore implements RoomStore {
       await this.ignoreCacheFailure(() => this.messageCacheStore!.writeRoomMessagesCache(roomId, messages));
     }
     return messages;
+  }
+
+  readMessagePageByRoom(roomId: string, options?: RoomMessagePageOptions) {
+    return this.durableStore.readMessagePageByRoom(roomId, options);
   }
 
   saveImageAsset(asset: ImageAsset) {

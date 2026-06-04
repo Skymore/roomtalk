@@ -291,6 +291,7 @@ type RoomRow = {
   created_at: string;
   last_activity_at: string;
   creator_id: string;
+  message_version?: number;
 };
 
 type MessageRow = {
@@ -388,6 +389,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
           created_at: createdAt,
           last_activity_at: lastActivityAt,
           creator_id: creatorId,
+          message_version: 0,
         };
       this.rooms.set(id, saved);
       return { rows: [saved] as T[], rowCount: 1 };
@@ -541,19 +543,43 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
     if (/UPDATE rooms SET last_activity_at = GREATEST/.test(compactSql)) {
       const roomId = String(params[0]);
       const timestamp = String(params[1]);
+      const messageVersionIncrement = Number(params[2] || 0);
       const room = this.rooms.get(roomId);
       if (!room) return { rows: [], rowCount: 0 };
-      const updated = { ...room, last_activity_at: latest(room.last_activity_at, timestamp) };
+      const updated = {
+        ...room,
+        last_activity_at: latest(room.last_activity_at, timestamp),
+        message_version: (room.message_version || 0) + messageVersionIncrement,
+      };
       this.rooms.set(roomId, updated);
       return { rows: [updated] as T[], rowCount: 1 };
     }
 
-    if (/UPDATE rooms SET last_activity_at = \$2 WHERE id = \$1 RETURNING/.test(compactSql)) {
+    if (/UPDATE rooms SET last_activity_at = \$2, message_version = message_version \+ \$3 WHERE id = \$1 RETURNING/.test(compactSql)) {
+      const roomId = String(params[0]);
+      const timestamp = String(params[1]);
+      const messageVersionIncrement = Number(params[2] || 0);
+      const room = this.rooms.get(roomId);
+      if (!room) return { rows: [], rowCount: 0 };
+      const updated = {
+        ...room,
+        last_activity_at: timestamp,
+        message_version: (room.message_version || 0) + messageVersionIncrement,
+      };
+      this.rooms.set(roomId, updated);
+      return { rows: [updated] as T[], rowCount: 1 };
+    }
+
+    if (/UPDATE rooms SET last_activity_at = \$2, message_version = message_version \+ 1 WHERE id = \$1 RETURNING/.test(compactSql)) {
       const roomId = String(params[0]);
       const timestamp = String(params[1]);
       const room = this.rooms.get(roomId);
       if (!room) return { rows: [], rowCount: 0 };
-      const updated = { ...room, last_activity_at: timestamp };
+      const updated = {
+        ...room,
+        last_activity_at: timestamp,
+        message_version: (room.message_version || 0) + 1,
+      };
       this.rooms.set(roomId, updated);
       return { rows: [updated] as T[], rowCount: 1 };
     }
@@ -637,6 +663,23 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       const count = this.messages.get(roomId)?.length || 0;
       this.messages.delete(roomId);
       return { rows: [], rowCount: count };
+    }
+
+    if (/FROM room_messages WHERE room_id = \$1 AND position < \$2 ORDER BY position DESC LIMIT \$3/.test(compactSql)) {
+      const [roomId, position, limit] = params;
+      const rows = [...(this.messages.get(String(roomId)) || [])]
+        .filter(row => row.position < Number(position))
+        .sort((first, second) => second.position - first.position || toTime(second.timestamp) - toTime(first.timestamp))
+        .slice(0, Number(limit));
+      return { rows: rows as T[], rowCount: rows.length };
+    }
+
+    if (/FROM room_messages WHERE room_id = \$1 ORDER BY position DESC LIMIT \$2/.test(compactSql)) {
+      const [roomId, limit] = params;
+      const rows = [...(this.messages.get(String(roomId)) || [])]
+        .sort((first, second) => second.position - first.position || toTime(second.timestamp) - toTime(first.timestamp))
+        .slice(0, Number(limit));
+      return { rows: rows as T[], rowCount: rows.length };
     }
 
     if (/FROM room_messages WHERE room_id = \$1 ORDER BY position ASC/.test(compactSql)) {
@@ -879,13 +922,43 @@ for (const [storeName, createFixture] of storeFactories) {
       assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), [first, updatedSecond, third]);
       assert.deepEqual((await store.readRoomsByUser(initialRoom.creatorId)).map(item => item.id), [initialRoom.id]);
 
-      assert.deepEqual(await store.saveMessageHistory(initialRoom.id, [replacement]), {
-        ...initialRoom,
-        lastActivityAt: replacement.timestamp,
-      });
+      const savedHistoryRoom = await store.saveMessageHistory(initialRoom.id, [replacement]);
+      assert.equal(savedHistoryRoom?.id, initialRoom.id);
+      assert.equal(savedHistoryRoom?.lastActivityAt, replacement.timestamp);
       assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), [replacement]);
       assert.equal(await store.clearRoomMessages(initialRoom.id), 1);
       assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), []);
+    });
+
+    it('reads latest message windows and older pages in durable order', async () => {
+      const { store } = createFixture();
+      const baseRoom = room();
+      const messages = [1, 2, 3, 4, 5].map(index => message({
+        id: `m${index}`,
+        content: `message ${index}`,
+        timestamp: `2026-05-03T00:00:0${index}.000Z`,
+      }));
+
+      await store.saveRoom(baseRoom);
+      for (const item of messages) {
+        await store.appendMessage(item);
+      }
+
+      const latestPage = await store.readMessagePageByRoom(baseRoom.id, { limit: 2 });
+      assert.deepEqual(latestPage.messages.map(item => item.id), ['m4', 'm5']);
+      assert.equal(latestPage.hasMore, true);
+      assert.equal(latestPage.oldestMessageId, 'm4');
+      assert.equal(typeof latestPage.historyVersion, 'number');
+
+      const previousPage = await store.readMessagePageByRoom(baseRoom.id, { limit: 2, beforeMessageId: 'm4' });
+      assert.deepEqual(previousPage.messages.map(item => item.id), ['m2', 'm3']);
+      assert.equal(previousPage.hasMore, true);
+      assert.equal(previousPage.oldestMessageId, 'm2');
+
+      const firstPage = await store.readMessagePageByRoom(baseRoom.id, { limit: 2, beforeMessageId: 'm2' });
+      assert.deepEqual(firstPage.messages.map(item => item.id), ['m1']);
+      assert.equal(firstPage.hasMore, false);
+      assert.equal(firstPage.oldestMessageId, 'm1');
     });
 
     it('tracks durable room membership and saved rooms separately from owned rooms', async () => {
