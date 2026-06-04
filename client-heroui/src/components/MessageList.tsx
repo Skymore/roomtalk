@@ -397,7 +397,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
               disabled={isLoadingMore}
               className="rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-3 py-1.5 text-xs font-medium text-[#4d4c48] shadow-sm backdrop-blur transition hover:border-[#c2c0b6] hover:text-[#141413] dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc] dark:hover:text-[#faf9f5]"
             >
-              {isLoadingMore ? t('loading') : t('loadMoreMessages', { count: LOAD_MORE_MESSAGE_COUNT })}
+              {isLoadingMore ? t('loadingMore') : t('loadMoreMessages', { count: LOAD_MORE_MESSAGE_COUNT })}
             </button>
           </div>
         )}

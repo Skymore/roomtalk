@@ -16,6 +16,15 @@ client-heroui/build/
 server/dist/
 server/build/
 
+# Local artifacts (DB dumps, scratch output, comparison screenshots)
+backups/
+tmp/
+
+# Python caches (coco runner)
+__pycache__/
+.pytest_cache/
+*.pyc
+
 # Misc
 .DS_Store
 .env
