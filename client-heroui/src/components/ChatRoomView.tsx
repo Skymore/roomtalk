@@ -121,7 +121,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
         <div
           ref={composerRef}
           data-testid="message-input-panel"
-          className="absolute inset-x-0 bottom-0 z-30 border-t border-[#dedbd0] bg-[#faf9f5]/92 p-2 backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/92 md:p-3"
+          className="absolute inset-x-0 bottom-0 z-30 flex min-h-11 items-center border-t border-[#dedbd0] bg-[#faf9f5]/92 px-1 py-1 backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/92 md:block md:min-h-0 md:p-3"
         >
           <MessageInput
             roomId={currentRoom.id}
