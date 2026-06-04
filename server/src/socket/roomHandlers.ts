@@ -11,6 +11,18 @@ type RenameRoomAck = {
   error?: string;
 };
 
+type RoomSaveAck = {
+  success: boolean;
+  room?: Room;
+  error?: string;
+};
+
+type RoomListAck = {
+  success: boolean;
+  rooms?: Room[];
+  error?: string;
+};
+
 const validateRoomName = (name: unknown): { ok: true; name: string } | { ok: false; error: string } => {
   if (typeof name !== 'string') {
     return { ok: false, error: 'Room name is required' };
@@ -28,6 +40,18 @@ const validateRoomName = (name: unknown): { ok: true; name: string } | { ok: fal
   return { ok: true, name: trimmedName };
 };
 
+const getRoomIdFromPayload = (payload: unknown): string | null => {
+  if (typeof payload === 'string') {
+    return payload;
+  }
+
+  if (payload && typeof payload === 'object' && typeof (payload as { roomId?: unknown }).roomId === 'string') {
+    return (payload as { roomId: string }).roomId;
+  }
+
+  return null;
+};
+
 export function registerRoomHandlers({ io, socket, store, socketLogger }: SocketConnectionContext) {
   socket.on('register', async (clientId: string) => {
     const userId = clientId || uuidv4();
@@ -36,7 +60,9 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
 
     socket.join(userId);
     const myRooms = await store.readRoomsByUser(userId);
+    const savedRooms = await store.readSavedRoomsByUser(userId);
     socket.emit('room_list', myRooms);
+    socket.emit('saved_room_list', savedRooms);
   });
 
   socket.on('get_rooms', async () => {
@@ -50,6 +76,27 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
     socketLogger.debug('Client requested room list', { socketId: socket.id, clientId });
     const myRooms = await store.readRoomsByUser(clientId);
     socket.emit('room_list', myRooms);
+  });
+
+  socket.on('get_saved_rooms', async (
+    payloadOrCallback?: unknown,
+    maybeCallback?: (result: RoomListAck) => void
+  ) => {
+    const callback = typeof payloadOrCallback === 'function'
+      ? payloadOrCallback as (result: RoomListAck) => void
+      : maybeCallback;
+    const clientId = await store.getClientId(socket.id);
+    if (!clientId) {
+      socketLogger.warn('Unregistered client tried to get saved rooms', { socketId: socket.id });
+      socket.emit('error', { message: 'You are not registered' });
+      callback?.({ success: false, error: 'You are not registered' });
+      return;
+    }
+
+    socketLogger.debug('Client requested saved room list', { socketId: socket.id, clientId });
+    const savedRooms = await store.readSavedRoomsByUser(clientId);
+    socket.emit('saved_room_list', savedRooms);
+    callback?.({ success: true, rooms: savedRooms });
   });
 
   socket.on('create_room', async (roomData: { name: string; description?: string }, callback?: (roomId: string) => void) => {
@@ -142,7 +189,6 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
     });
 
     io.to(roomId).emit('room_member_change', joinEvent);
-    io.to(userId).emit('room_list', await store.readRoomsByUser(userId));
 
     socketLogger.info('User joined room', {
       socketId: socket.id,
@@ -175,6 +221,59 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
     const userRooms = await store.getUserRooms(socket.id);
     const updatedRooms = userRooms.filter(id => id !== roomId);
     await store.storeUserRooms(socket.id, updatedRooms);
+
+    const room = await store.getRoomById(roomId);
+    if (room && room.creatorId !== userId) {
+      await store.removeRoomMember(roomId, userId);
+    }
+  });
+
+  socket.on('save_room', async (payload: unknown, callback?: (result: RoomSaveAck) => void) => {
+    const clientId = await store.getClientId(socket.id);
+    if (!clientId) {
+      socketLogger.warn('Unregistered client tried to save room', { socketId: socket.id });
+      callback?.({ success: false, error: 'You are not registered' });
+      return;
+    }
+
+    const roomId = getRoomIdFromPayload(payload);
+    if (!roomId) {
+      socketLogger.warn('Client tried to save room without room ID', { socketId: socket.id, clientId });
+      callback?.({ success: false, error: 'Room ID is required' });
+      return;
+    }
+
+    const savedRoom = await store.saveRoomForUser(roomId, clientId);
+    if (!savedRoom) {
+      socketLogger.warn('Client tried to save non-existent room', { socketId: socket.id, clientId, roomId });
+      callback?.({ success: false, error: 'Room not found' });
+      return;
+    }
+
+    const savedRooms = await store.readSavedRoomsByUser(clientId);
+    io.to(clientId).emit('saved_room_list', savedRooms);
+    callback?.({ success: true, room: savedRoom });
+  });
+
+  socket.on('unsave_room', async (payload: unknown, callback?: (result: RoomListAck) => void) => {
+    const clientId = await store.getClientId(socket.id);
+    if (!clientId) {
+      socketLogger.warn('Unregistered client tried to unsave room', { socketId: socket.id });
+      callback?.({ success: false, error: 'You are not registered' });
+      return;
+    }
+
+    const roomId = getRoomIdFromPayload(payload);
+    if (!roomId) {
+      socketLogger.warn('Client tried to unsave room without room ID', { socketId: socket.id, clientId });
+      callback?.({ success: false, error: 'Room ID is required' });
+      return;
+    }
+
+    await store.removeSavedRoomForUser(roomId, clientId);
+    const savedRooms = await store.readSavedRoomsByUser(clientId);
+    io.to(clientId).emit('saved_room_list', savedRooms);
+    callback?.({ success: true, rooms: savedRooms });
   });
 
   socket.on('delete_room', async (roomId: string, callback?: (result: { success: boolean; message?: string }) => void) => {
@@ -213,8 +312,10 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
 
       const userSockets = await io.in(clientId).allSockets();
       const updatedRooms = await store.readRoomsByUser(clientId);
+      const updatedSavedRooms = await store.readSavedRoomsByUser(clientId);
       userSockets.forEach(sid => {
         io.to(sid).emit('room_list', updatedRooms);
+        io.to(sid).emit('saved_room_list', updatedSavedRooms);
       });
 
       callback?.({ success: true });

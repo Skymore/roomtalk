@@ -13,11 +13,13 @@ import {
   onRoomMemberChange,
   reconnectSocket,
   renameRoom,
+  saveRoomToServer,
+  unsaveRoomFromServer,
+  getSavedRoomsFromServer,
 } from "../utils/socket";
 import {
   Room, RoomMemberEvent,
 } from "../utils/types";
-import { saveRoom, removeRoom, isRoomSaved, getSavedRooms } from "../utils/storage";
 import { generateRandomName } from "../utils/userProfile";
 import { getStoredRoom, getStoredUsername, getStoredView, saveCurrentRoom, saveCurrentView, saveUsername, AppView } from "../utils/appPersistence";
 import { buildRoomShareUrl, getRoomMemberUpdate, sortRoomsByLastActivityDesc, upsertRoom } from "../utils/roomState";
@@ -114,8 +116,6 @@ export const MessagePage: React.FC = () => {
 
   // 初次加载时加载已保存房间和用户名
   useEffect(() => {
-    setSavedRooms(getSavedRooms());
-
     // 加载或生成用户名
     let storedName = getStoredUsername();
     if (!storedName) {
@@ -257,6 +257,7 @@ export const MessagePage: React.FC = () => {
   // 监听服务器返回的房间列表和新增房间
   useEffect(() => {
     const handleRoomList = (roomList: Room[]) => setRooms(sortRoomsByLastActivityDesc(roomList));
+    const handleSavedRoomList = (roomList: Room[]) => setSavedRooms(roomList);
     const handleRoomUpdate = (room: Room) => {
       setRooms((prev) => sortRoomsByLastActivityDesc(upsertRoom(prev, room)));
       setCurrentRoom((current) => current?.id === room.id ? { ...current, ...room } : current);
@@ -266,6 +267,10 @@ export const MessagePage: React.FC = () => {
 
     socket.on("room_list", handleRoomList);
     socket.emit("get_rooms");
+    socket.on("saved_room_list", handleSavedRoomList);
+    getSavedRoomsFromServer()
+      .then(handleSavedRoomList)
+      .catch((error) => console.error("Failed to load saved rooms:", error));
     socket.on("new_room", handleRoomUpdate);
     socket.on("room_updated", handleRoomUpdate);
 
@@ -291,6 +296,7 @@ export const MessagePage: React.FC = () => {
         clearTimeout(clearMemberEventTimer);
       }
       socket.off("room_list", handleRoomList);
+      socket.off("saved_room_list", handleSavedRoomList);
       socket.off("new_room", handleRoomUpdate);
       socket.off("room_updated", handleRoomUpdate);
       unsubscribe();
@@ -400,18 +406,36 @@ export const MessagePage: React.FC = () => {
       .catch((err) => console.error("Could not copy URL:", err));
   };
 
+  const isRoomSavedById = useCallback((roomId: string) => {
+    return savedRooms.some((room) => room.id === roomId);
+  }, [savedRooms]);
+
   // 切换保存/取消保存房间
-  const handleToggleSave = () => {
+  const handleToggleSave = async () => {
     if (!currentRoom) return;
-    if (isRoomSaved(currentRoom.id)) {
-      setSavedRooms(removeRoom(currentRoom.id));
-    } else {
-      setSavedRooms(saveRoom(currentRoom));
+
+    try {
+      if (isRoomSavedById(currentRoom.id)) {
+        const updatedRooms = await unsaveRoomFromServer(currentRoom.id);
+        setSavedRooms(updatedRooms);
+      } else {
+        const savedRoom = await saveRoomToServer(currentRoom.id);
+        setSavedRooms((prev) => [savedRoom, ...prev.filter((room) => room.id !== savedRoom.id)]);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to update saved room";
+      setError(message);
     }
   };
 
-  const handleUnsaveRoom = useCallback((roomId: string) => {
-    setSavedRooms(removeRoom(roomId));
+  const handleUnsaveRoom = useCallback(async (roomId: string) => {
+    try {
+      const updatedRooms = await unsaveRoomFromServer(roomId);
+      setSavedRooms(updatedRooms);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to remove saved room";
+      setError(message);
+    }
   }, []);
 
   const handleCopyToClipboard = (text: string) => {
@@ -508,7 +532,7 @@ export const MessagePage: React.FC = () => {
             <SavedRoomList
               rooms={savedRooms}
               onRoomSelect={handleRoomSelect}
-              onRoomsChange={setSavedRooms}
+              onUnsaveRoom={handleUnsaveRoom}
             />
           </div>
         );
@@ -540,7 +564,7 @@ export const MessagePage: React.FC = () => {
             handleShareRoom={handleShareRoom}
             handleToggleSave={handleToggleSave}
             handleLeaveRoom={handleLeaveRoom}
-            isRoomSaved={isRoomSaved}
+            isRoomSaved={isRoomSavedById}
             setView={setView}
             clearRoomUrlParam={clearRoomUrlParam}
             handleClearChatMessages={handleClearChatMessages}

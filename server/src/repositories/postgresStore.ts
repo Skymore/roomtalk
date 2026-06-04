@@ -842,6 +842,20 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
+  async removeRoomMember(roomId: string, clientId: string): Promise<boolean> {
+    try {
+      const result = await this.pool.query(
+        `DELETE FROM room_members
+        WHERE room_id = $1 AND client_id = $2 AND role <> 'owner'`,
+        [roomId, clientId]
+      );
+      return (result.rowCount || 0) > 0;
+    } catch (error) {
+      this.logger.error('Error removing PostgreSQL room member', { error, roomId, clientId });
+      return false;
+    }
+  }
+
   async getRoomMember(roomId: string, clientId: string): Promise<RoomMember | null> {
     try {
       const result = await this.pool.query<RoomMemberRow>(
@@ -889,16 +903,70 @@ export class PostgresStore implements DurableRoomStore {
   async readRoomsByUser(clientId: string): Promise<Room[]> {
     try {
       const result = await this.pool.query<RoomRow>(
-        `SELECT r.${ROOM_COLUMNS.replace(/, /g, ', r.')}
-        FROM rooms r
-        INNER JOIN room_members rm ON rm.room_id = r.id
-        WHERE rm.client_id = $1
-        ORDER BY r.last_activity_at DESC, r.created_at DESC`,
+        `SELECT ${ROOM_COLUMNS}
+        FROM rooms
+        WHERE creator_id = $1
+        ORDER BY last_activity_at DESC, created_at DESC`,
         [clientId]
       );
       return result.rows.map(mapRoom);
     } catch (error) {
       this.logger.error('Error reading PostgreSQL rooms for user', { error, clientId });
+      return [];
+    }
+  }
+
+  async saveRoomForUser(roomId: string, clientId: string, savedAt = new Date().toISOString()): Promise<Room | null> {
+    try {
+      const result = await this.pool.query<{ room_id: string }>(
+        `INSERT INTO room_saves (room_id, client_id, saved_at)
+        SELECT id, $2, $3
+        FROM rooms
+        WHERE id = $1
+        ON CONFLICT (room_id, client_id) DO UPDATE SET
+          saved_at = EXCLUDED.saved_at
+        RETURNING room_id`,
+        [roomId, clientId, savedAt]
+      );
+
+      if (!result.rows[0]) {
+        return null;
+      }
+
+      return this.getRoomById(roomId);
+    } catch (error) {
+      this.logger.error('Error saving PostgreSQL room for user', { error, roomId, clientId });
+      return null;
+    }
+  }
+
+  async removeSavedRoomForUser(roomId: string, clientId: string): Promise<boolean> {
+    try {
+      const result = await this.pool.query(
+        `DELETE FROM room_saves
+        WHERE room_id = $1 AND client_id = $2`,
+        [roomId, clientId]
+      );
+      return (result.rowCount || 0) > 0;
+    } catch (error) {
+      this.logger.error('Error removing PostgreSQL saved room for user', { error, roomId, clientId });
+      return false;
+    }
+  }
+
+  async readSavedRoomsByUser(clientId: string): Promise<Room[]> {
+    try {
+      const result = await this.pool.query<RoomRow>(
+        `SELECT r.${ROOM_COLUMNS.replace(/, /g, ', r.')}
+        FROM rooms r
+        INNER JOIN room_saves rs ON rs.room_id = r.id
+        WHERE rs.client_id = $1
+        ORDER BY rs.saved_at DESC, r.last_activity_at DESC, r.created_at DESC`,
+        [clientId]
+      );
+      return result.rows.map(mapRoom);
+    } catch (error) {
+      this.logger.error('Error reading PostgreSQL saved rooms for user', { error, clientId });
       return [];
     }
   }
@@ -957,7 +1025,7 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async resetAllDataForTests(): Promise<void> {
-    await this.pool.query('TRUNCATE room_ai_cost_totals, image_assets, room_messages, room_members, rooms RESTART IDENTITY CASCADE');
+    await this.pool.query('TRUNCATE room_ai_cost_totals, image_assets, room_messages, room_saves, room_members, rooms RESTART IDENTITY CASCADE');
   }
 
   async failInterruptedStreamingMessages(content: string): Promise<number> {

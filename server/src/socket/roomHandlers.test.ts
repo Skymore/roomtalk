@@ -107,14 +107,17 @@ const roomCost = (roomId = 'room-1'): RoomAICostTotal => ({
 const createHarness = (clientId: string | null = 'client-1') => {
   const socket = new FakeSocket();
   const io = new FakeIo();
+  const memberKey = (roomId: string, memberClientId: string) => `${roomId}:${memberClientId}`;
   const store = {
     clientId,
     rooms: [room()],
     messages: [message()],
     socketRooms: [] as string[],
-    members: new Set(['room-1:client-1']),
+    members: new Set([memberKey('room-1', 'client-1')]),
+    memberRoles: new Map<string, 'owner' | 'member'>([[memberKey('room-1', 'client-1'), 'owner']]),
     addedMembers: [] as Array<{ roomId: string; clientId: string; role: 'owner' | 'member' }>,
     savedRooms: [] as Room[],
+    userSavedRooms: new Map<string, Set<string>>(),
     deletedRooms: [] as Array<{ roomId: string; creatorId: string }>,
     removedSessions: [] as string[],
     async storeClientSession(_socketId: string, userId: string) {
@@ -124,7 +127,7 @@ const createHarness = (clientId: string | null = 'client-1') => {
       return this.clientId;
     },
     async readRoomsByUser(clientIdForRooms: string) {
-      return this.rooms.filter(item => item.creatorId === clientIdForRooms || this.members.has(`${item.id}:${clientIdForRooms}`));
+      return this.rooms.filter(item => item.creatorId === clientIdForRooms);
     },
     async generateUniqueRoomId() {
       return 'generated-room';
@@ -132,26 +135,58 @@ const createHarness = (clientId: string | null = 'client-1') => {
     async saveRoom(newRoom: Room) {
       this.savedRooms.push(newRoom);
       this.rooms.push(newRoom);
-      this.members.add(`${newRoom.id}:${newRoom.creatorId}`);
+      this.members.add(memberKey(newRoom.id, newRoom.creatorId));
+      this.memberRoles.set(memberKey(newRoom.id, newRoom.creatorId), 'owner');
       return newRoom;
     },
     async addRoomMember(roomId: string, memberClientId: string, role: 'owner' | 'member') {
-      this.members.add(`${roomId}:${memberClientId}`);
+      this.members.add(memberKey(roomId, memberClientId));
+      const key = memberKey(roomId, memberClientId);
+      this.memberRoles.set(key, this.memberRoles.get(key) === 'owner' || role === 'owner' ? 'owner' : 'member');
       this.addedMembers.push({ roomId, clientId: memberClientId, role });
       return { roomId, clientId: memberClientId, role, joinedAt: '2026-05-03T00:00:00.000Z' };
     },
+    async removeRoomMember(roomId: string, memberClientId: string) {
+      const key = memberKey(roomId, memberClientId);
+      if (this.memberRoles.get(key) === 'owner') {
+        return false;
+      }
+      this.memberRoles.delete(key);
+      return this.members.delete(key);
+    },
     async getRoomMember(roomId: string, memberClientId: string) {
-      return this.members.has(`${roomId}:${memberClientId}`)
-        ? { roomId, clientId: memberClientId, role: 'member' as const, joinedAt: '2026-05-03T00:00:00.000Z' }
+      const key = memberKey(roomId, memberClientId);
+      return this.members.has(key)
+        ? { roomId, clientId: memberClientId, role: this.memberRoles.get(key) || 'member' as const, joinedAt: '2026-05-03T00:00:00.000Z' }
         : null;
     },
     async isRoomMember(roomId: string, memberClientId: string) {
-      return this.members.has(`${roomId}:${memberClientId}`);
+      return this.members.has(memberKey(roomId, memberClientId));
     },
     async readRoomMembers(roomId: string) {
       return [...this.members]
         .filter(key => key.startsWith(`${roomId}:`))
-        .map(key => ({ roomId, clientId: key.split(':')[1], role: 'member' as const, joinedAt: '2026-05-03T00:00:00.000Z' }));
+        .map(key => ({ roomId, clientId: key.split(':')[1], role: this.memberRoles.get(key) || 'member' as const, joinedAt: '2026-05-03T00:00:00.000Z' }));
+    },
+    async saveRoomForUser(roomId: string, savedClientId: string) {
+      const savedRoom = this.rooms.find(item => item.id === roomId) || null;
+      if (!savedRoom) {
+        return null;
+      }
+
+      const savedRoomIds = this.userSavedRooms.get(savedClientId) || new Set<string>();
+      savedRoomIds.add(roomId);
+      this.userSavedRooms.set(savedClientId, savedRoomIds);
+      return savedRoom;
+    },
+    async removeSavedRoomForUser(roomId: string, savedClientId: string) {
+      return this.userSavedRooms.get(savedClientId)?.delete(roomId) || false;
+    },
+    async readSavedRoomsByUser(savedClientId: string) {
+      const savedRoomIds = this.userSavedRooms.get(savedClientId) || new Set<string>();
+      return [...savedRoomIds]
+        .map(roomId => this.rooms.find(item => item.id === roomId))
+        .filter((item): item is Room => !!item);
     },
     async getUserRooms() {
       return this.socketRooms;
@@ -207,7 +242,10 @@ describe('room socket handlers', () => {
 
     assert.equal(store.clientId, 'client-1');
     assert.deepEqual(socket.joined, ['client-1']);
-    assert.deepEqual(socket.emitted, [{ event: 'room_list', args: [[room()]] }]);
+    assert.deepEqual(socket.emitted, [
+      { event: 'room_list', args: [[room()]] },
+      { event: 'saved_room_list', args: [[]] },
+    ]);
   });
 
   it('returns rooms only for registered clients', async () => {
@@ -218,6 +256,41 @@ describe('room socket handlers', () => {
     const registered = createHarness('client-1');
     await registered.socket.invoke('get_rooms');
     assert.deepEqual(registered.socket.emitted, [{ event: 'room_list', args: [[room()]] }]);
+  });
+
+  it('returns and updates saved rooms only for registered clients', async () => {
+    const unregistered = createHarness(null);
+    let unregisteredResponse: unknown;
+    await unregistered.socket.invoke('get_saved_rooms', (response: unknown) => {
+      unregisteredResponse = response;
+    });
+    assert.deepEqual(unregisteredResponse, { success: false, error: 'You are not registered' });
+    assert.deepEqual(unregistered.socket.emitted, [{ event: 'error', args: [{ message: 'You are not registered' }] }]);
+
+    const valid = createHarness('client-2');
+    let saveResponse: unknown;
+    await valid.socket.invoke('save_room', { roomId: 'room-1' }, (response: unknown) => {
+      saveResponse = response;
+    });
+    assert.deepEqual(saveResponse, { success: true, room: room() });
+    assert.deepEqual(valid.io.roomEmits, [
+      { roomId: 'client-2', event: 'saved_room_list', args: [[room()]] },
+    ]);
+    assert.deepEqual(await valid.store.readRoomsByUser('client-2'), []);
+    assert.deepEqual(await valid.store.readSavedRoomsByUser('client-2'), [room()]);
+
+    let listResponse: unknown;
+    await valid.socket.invoke('get_saved_rooms', (response: unknown) => {
+      listResponse = response;
+    });
+    assert.deepEqual(listResponse, { success: true, rooms: [room()] });
+
+    let unsaveResponse: unknown;
+    await valid.socket.invoke('unsave_room', 'room-1', (response: unknown) => {
+      unsaveResponse = response;
+    });
+    assert.deepEqual(unsaveResponse, { success: true, rooms: [] });
+    assert.deepEqual(await valid.store.readSavedRoomsByUser('client-2'), []);
   });
 
   it('creates rooms and emits them to the creator room', async () => {
@@ -258,21 +331,32 @@ describe('room socket handlers', () => {
     assert.equal(valid.socket.roomEmits[0].event, 'room_member_change');
     assert.equal(valid.io.roomEmits[0].roomId, 'room-1');
     assert.equal(valid.io.roomEmits[0].event, 'room_member_change');
-    assert.equal(valid.io.roomEmits[1].roomId, 'client-1');
-    assert.equal(valid.io.roomEmits[1].event, 'room_list');
+    assert.equal(valid.io.roomEmits.length, 1);
     assert.deepEqual(valid.socket.emitted, []);
   });
 
   it('leaves rooms and updates stored socket memberships', async () => {
-    const { io, socket, store } = createHarness('client-1');
+    const { io, socket, store } = createHarness('client-2');
     store.socketRooms = ['room-1', 'room-2'];
+    store.members.add('room-1:client-2');
+    store.memberRoles.set('room-1:client-2', 'member');
 
     await socket.invoke('leave_room', 'room-1');
 
     assert.deepEqual(socket.left, ['room-1']);
     assert.deepEqual(store.socketRooms, ['room-2']);
+    assert.equal(await store.isRoomMember('room-1', 'client-2'), false);
     assert.equal(io.roomEmits[0].roomId, 'room-1');
     assert.equal(io.roomEmits[0].event, 'room_member_change');
+  });
+
+  it('keeps owner membership when owners leave rooms', async () => {
+    const { socket, store } = createHarness('client-1');
+    store.socketRooms = ['room-1'];
+
+    await socket.invoke('leave_room', 'room-1');
+
+    assert.equal(await store.isRoomMember('room-1', 'client-1'), true);
   });
 
   it('deletes owned rooms and rejects invalid delete attempts', async () => {
@@ -301,7 +385,9 @@ describe('room socket handlers', () => {
     assert.deepEqual(valid.store.deletedRooms, [{ roomId: 'room-1', creatorId: 'client-1' }]);
     assert.deepEqual(valid.io.roomEmits, [
       { roomId: 'socket-1', event: 'room_list', args: [[]] },
+      { roomId: 'socket-1', event: 'saved_room_list', args: [[]] },
       { roomId: 'socket-2', event: 'room_list', args: [[]] },
+      { roomId: 'socket-2', event: 'saved_room_list', args: [[]] },
     ]);
   });
 

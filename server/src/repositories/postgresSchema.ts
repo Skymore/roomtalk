@@ -26,6 +26,14 @@ export const POSTGRES_SCHEMA_SQL = [
         WHEN room_members.role = 'owner' THEN 'owner'
         ELSE EXCLUDED.role
       END`,
+  `CREATE TABLE IF NOT EXISTS room_saves (
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    client_id TEXT NOT NULL,
+    saved_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (room_id, client_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_room_saves_client_saved
+    ON room_saves (client_id, saved_at DESC)`,
   `CREATE TABLE IF NOT EXISTS room_messages (
     id TEXT PRIMARY KEY,
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,

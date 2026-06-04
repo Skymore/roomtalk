@@ -2,20 +2,19 @@ import React, { useState } from 'react';
 import { Modal, ModalContent, ModalBody, ModalFooter, Button, Card, Tooltip } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { Room } from '../utils/types';
-import { removeRoom } from '../utils/storage';
 import { useTranslation } from 'react-i18next';
 import { formatDate } from '../utils/formatters';
 
 interface SavedRoomListProps {
   rooms: Room[];
   onRoomSelect: (room: Room) => void;
-  onRoomsChange: (rooms: Room[]) => void;
+  onUnsaveRoom: (roomId: string) => void;
 }
 
 export const SavedRoomList: React.FC<SavedRoomListProps> = ({
   rooms,
   onRoomSelect,
-  onRoomsChange,
+  onUnsaveRoom,
 }) => {
   const { t, i18n } = useTranslation();
   const [roomToDelete, setRoomToDelete] = useState<string | null>(null);
@@ -34,9 +33,7 @@ export const SavedRoomList: React.FC<SavedRoomListProps> = ({
   const confirmDelete = () => {
     if (!roomToDelete) return;
 
-    // Restore original logic: update local storage and notify parent
-    const updatedRooms = removeRoom(roomToDelete);
-    onRoomsChange(updatedRooms);
+    onUnsaveRoom(roomToDelete);
 
     // 关闭对话框
     closeDeleteConfirm();
