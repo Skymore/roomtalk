@@ -20,14 +20,6 @@ export const POSTGRES_SCHEMA_SQL = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_room_members_client_joined
     ON room_members (client_id, joined_at DESC)`,
-  `INSERT INTO room_members (room_id, client_id, role, joined_at)
-    SELECT id, creator_id, 'owner', created_at
-    FROM rooms
-    ON CONFLICT (room_id, client_id) DO UPDATE SET
-      role = CASE
-        WHEN room_members.role = 'owner' THEN 'owner'
-        ELSE EXCLUDED.role
-      END`,
   `CREATE TABLE IF NOT EXISTS room_saves (
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     client_id TEXT NOT NULL,
@@ -83,4 +75,31 @@ export const POSTGRES_SCHEMA_SQL = [
     total_usd NUMERIC(18, 9) NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
+];
+
+// One-time data migrations, applied at most once and recorded in the
+// schema_migrations table. Unlike POSTGRES_SCHEMA_SQL (idempotent DDL that is
+// safe to re-run every boot), these scan/rewrite rows, so re-running them on
+// every cold start is pure wasted memory/IO on a busy database. Append new
+// migrations with a fresh, never-reused id; never edit an applied migration in
+// place (change its effect with a new migration instead).
+export interface PostgresMigration {
+  id: string;
+  sql: string;
+}
+
+export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
+  {
+    // Backfill an 'owner' membership row for every existing room's creator, so
+    // rooms created before room_members existed still have an owner record.
+    id: '0001_backfill_room_member_owners',
+    sql: `INSERT INTO room_members (room_id, client_id, role, joined_at)
+      SELECT id, creator_id, 'owner', created_at
+      FROM rooms
+      ON CONFLICT (room_id, client_id) DO UPDATE SET
+        role = CASE
+          WHEN room_members.role = 'owner' THEN 'owner'
+          ELSE EXCLUDED.role
+        END`,
+  },
 ];
