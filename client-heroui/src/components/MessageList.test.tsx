@@ -59,6 +59,7 @@ vi.mock('./MessageItem', () => ({
       {message.content}
     </div>
   ),
+  preloadMarkdownContent: () => {},
 }));
 
 vi.mock('./DeleteConfirmationModal', () => ({
