@@ -37,6 +37,7 @@ type MessageRow = {
   client_id: string;
   content: string;
   timestamp: string | Date;
+  updated_at?: string | Date | null;
   message_type: Message['messageType'];
   username: string | null;
   avatar: unknown;
@@ -69,7 +70,7 @@ type ImageAssetRow = {
 };
 
 const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id';
-const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, message_type, username, avatar, mime_type, status, ai_model, usage, cost, reply_to';
+const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, ai_model, usage, cost, reply_to';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const IMAGE_ASSET_COLUMNS = 'id, room_id, message_id, object_key, mime_type, byte_size, width, height, created_at';
 
@@ -185,6 +186,7 @@ const mapMessage = (row: MessageRow): Message => {
     messageType: row.message_type,
   };
 
+  if (row.updated_at) message.updatedAt = toIsoString(row.updated_at);
   if (row.username) message.username = row.username;
   if (avatar) message.avatar = avatar;
   if (row.mime_type) message.mimeType = row.mime_type;
@@ -203,6 +205,7 @@ const messageParams = (message: Message, position: number): unknown[] => [
   message.clientId,
   message.content,
   message.timestamp,
+  message.updatedAt || null,
   message.messageType,
   message.username || null,
   toJsonb(message.avatar),
@@ -221,6 +224,7 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   client_id,
   content,
   timestamp,
+  updated_at,
   message_type,
   username,
   avatar,
@@ -232,12 +236,13 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   reply_to,
   position
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15
+  $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16
 ) ON CONFLICT (id) DO UPDATE SET
   room_id = EXCLUDED.room_id,
   client_id = EXCLUDED.client_id,
   content = EXCLUDED.content,
   timestamp = EXCLUDED.timestamp,
+  updated_at = EXCLUDED.updated_at,
   message_type = EXCLUDED.message_type,
   username = EXCLUDED.username,
   avatar = EXCLUDED.avatar,
@@ -354,7 +359,7 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
-  async updateMessageContent(roomId: string, messageId: string, newContent: string, updatedAt = new Date().toISOString()) {
+  async updateMessageContent(roomId: string, messageId: string, updatedContent: string, updatedAt = new Date().toISOString()) {
     try {
       return await this.transaction(async client => {
         const room = await client.query<RoomRow>(
@@ -369,10 +374,10 @@ export class PostgresStore implements DurableRoomStore {
         const updated = await client.query<MessageRow>(
           `UPDATE room_messages
           SET content = $3,
-            timestamp = $4
+            updated_at = $4
           WHERE room_id = $1 AND id = $2
           RETURNING ${MESSAGE_COLUMNS}`,
-          [roomId, messageId, newContent, updatedAt]
+          [roomId, messageId, updatedContent, updatedAt]
         );
         if (updated.rows.length === 0) {
           return { room: mapRoom(room.rows[0]), found: false };
@@ -476,7 +481,7 @@ export class PostgresStore implements DurableRoomStore {
     return this.truncateMessages(roomId, messageId, 'after');
   }
 
-  async updateMessageAndTruncateAfter(roomId: string, messageId: string, newContent: string, updatedAt = new Date().toISOString()) {
+  async updateMessageAndTruncateAfter(roomId: string, messageId: string, updatedContent: string, updatedAt = new Date().toISOString()) {
     try {
       return await this.transaction(async client => {
         const room = await client.query<RoomRow>(
@@ -500,10 +505,10 @@ export class PostgresStore implements DurableRoomStore {
         const updated = await client.query<MessageRow>(
           `UPDATE room_messages
           SET content = $3,
-            timestamp = $4
+            updated_at = $4
           WHERE room_id = $1 AND id = $2
           RETURNING ${MESSAGE_COLUMNS}`,
-          [roomId, messageId, newContent, updatedAt]
+          [roomId, messageId, updatedContent, updatedAt]
         );
         if (updated.rows.length === 0) {
           return null;

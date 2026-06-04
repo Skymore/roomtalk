@@ -157,8 +157,8 @@ class MemoryRedis {
     if (script.includes('redis.call(\'LSET\'')) {
       const [, messageKey] = options.keys;
       const [roomId, messageId, newContent, updatedAt] = options.arguments;
-      const updatedRoom = this.updateRoomActivity(roomId, updatedAt, true);
-      if (!updatedRoom) return [0, 0, '', ''];
+      const roomJson = this.hash('rooms').get(roomId);
+      if (!roomJson) return [0, 0, '', ''];
       const list = this.lists.get(messageKey) || [];
       const index = list.findIndex(item => {
         try {
@@ -167,11 +167,11 @@ class MemoryRedis {
           return false;
         }
       });
-      if (index === -1) return [1, 0, JSON.stringify(updatedRoom), ''];
-      const updatedMessage = { ...JSON.parse(list[index]), content: newContent, timestamp: updatedAt };
+      if (index === -1) return [1, 0, roomJson, ''];
+      const updatedMessage = { ...JSON.parse(list[index]), content: newContent, updatedAt };
       list[index] = JSON.stringify(updatedMessage);
       this.lists.set(messageKey, list);
-      return [1, 1, JSON.stringify(updatedRoom), list[index]];
+      return [1, 1, roomJson, list[index]];
     }
 
     if (script.includes('return { 1, found, #remaining, cjson.encode(room) }')) {
@@ -235,7 +235,7 @@ class MemoryRedis {
         }
       });
       if (targetIndex === -1) return [1, 0, list.length, roomJson, '', ...list];
-      const updatedMessage = { ...JSON.parse(list[targetIndex]), content: newContent, timestamp: updatedAt };
+      const updatedMessage = { ...JSON.parse(list[targetIndex]), content: newContent, updatedAt };
       const remaining = [...list.slice(0, targetIndex), JSON.stringify(updatedMessage)];
       const latestTimestamp = getLatestMessageTimestamp(remaining.map(item => JSON.parse(item)));
       const room = JSON.parse(roomJson);
@@ -299,6 +299,7 @@ type MessageRow = {
   client_id: string;
   content: string;
   timestamp: string;
+  updated_at: string | null;
   message_type: Message['messageType'];
   username: string | null;
   avatar: unknown;
@@ -443,6 +444,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         clientId,
         content,
         timestamp,
+        updatedAt,
         messageType,
         username,
         avatar,
@@ -463,6 +465,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         client_id: String(clientId),
         content: String(content),
         timestamp: String(timestamp),
+        updated_at: updatedAt === null || updatedAt === undefined ? null : String(updatedAt),
         message_type: messageType as Message['messageType'],
         username: username === null || username === undefined ? null : String(username),
         avatar: jsonValue(avatar),
@@ -562,12 +565,23 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       return { rows: [updated] as T[], rowCount: 1 };
     }
 
-    if (/UPDATE room_messages SET content = \$3, timestamp = \$4 WHERE room_id = \$1 AND id = \$2 RETURNING/.test(compactSql)) {
-      const [roomId, messageId, content, timestamp] = params.map(String);
+    if (/UPDATE room_messages SET content = \$3, updated_at = \$4 WHERE room_id = \$1 AND id = \$2 RETURNING/.test(compactSql)) {
+      const [roomId, messageId, content, updatedAt] = params.map(String);
       const rows = this.messages.get(roomId) || [];
       const index = rows.findIndex(row => row.id === messageId);
       if (index === -1) return { rows: [], rowCount: 0 };
-      const updated = { ...rows[index], content, timestamp };
+      const updated = { ...rows[index], content, updated_at: updatedAt };
+      rows[index] = updated;
+      this.messages.set(roomId, rows);
+      return { rows: [updated] as T[], rowCount: 1 };
+    }
+
+    if (/UPDATE room_messages SET content = \$3 WHERE room_id = \$1 AND id = \$2 RETURNING/.test(compactSql)) {
+      const [roomId, messageId, content] = params.map(String);
+      const rows = this.messages.get(roomId) || [];
+      const index = rows.findIndex(row => row.id === messageId);
+      if (index === -1) return { rows: [], rowCount: 0 };
+      const updated = { ...rows[index], content };
       rows[index] = updated;
       this.messages.set(roomId, rows);
       return { rows: [updated] as T[], rowCount: 1 };
@@ -999,10 +1013,14 @@ for (const [storeName, createFixture] of storeFactories) {
       assert.equal(editAndTruncate?.targetFound, true);
       assert.ok(editAndTruncate?.updatedMessage);
       assert.equal(editAndTruncate.updatedMessage.content, 'edited second prompt');
+      assert.equal(editAndTruncate.updatedMessage.timestamp, userTwo.timestamp);
+      assert.equal(editAndTruncate.updatedMessage.updatedAt, '2026-05-03T00:00:09.000Z');
       assert.deepEqual(editAndTruncate?.messages.map(item => item.id), ['u1', 'ai1', 'u2']);
       await store.upsertMessage(editPlaceholder);
       assert.deepEqual((await store.readMessagesByRoom(baseRoom.id)).map(item => item.id), ['u1', 'ai1', 'u2', 'edit-ai']);
       assert.equal((await store.readMessagesByRoom(baseRoom.id))[2].content, 'edited second prompt');
+      assert.equal((await store.readMessagesByRoom(baseRoom.id))[2].timestamp, userTwo.timestamp);
+      assert.equal((await store.readMessagesByRoom(baseRoom.id))[2].updatedAt, '2026-05-03T00:00:09.000Z');
 
       await store.saveMessageHistory(baseRoom.id, fullHistory);
       const missingRetryTruncation = await mutableStore.truncateBeforeMessage(baseRoom.id, 'missing');
@@ -1034,8 +1052,13 @@ for (const [storeName, createFixture] of storeFactories) {
       assert.equal(editResult?.found, true);
       assert.ok(editResult?.updatedMessage);
       assert.equal(editResult.updatedMessage.content, 'edited second');
+      assert.equal(editResult.updatedMessage.timestamp, second.timestamp);
+      assert.equal(editResult.updatedMessage.updatedAt, '2026-05-03T00:00:04.000Z');
+      assert.equal(editResult.room.lastActivityAt, third.timestamp);
       assert.deepEqual((await store.readMessagesByRoom(baseRoom.id)).map(item => item.id), ['first', 'second', 'third']);
       assert.equal((await store.readMessagesByRoom(baseRoom.id))[1].content, 'edited second');
+      assert.equal((await store.readMessagesByRoom(baseRoom.id))[1].timestamp, second.timestamp);
+      assert.equal((await store.readMessagesByRoom(baseRoom.id))[1].updatedAt, '2026-05-03T00:00:04.000Z');
 
       const missingEditResult = await mutableStore.updateMessageContent(baseRoom.id, 'missing', 'missing edit', '2026-05-03T00:00:05.000Z');
       assert.equal(missingEditResult?.found, false);

@@ -435,7 +435,8 @@ describe('PostgresStore', () => {
         assertCall(call) {
           assert.match(call.sql, /INSERT INTO room_messages/);
           assert.equal(call.params?.[0], 'message-1');
-          assert.equal(call.params?.[14], 2);
+          assert.equal(call.params?.[5], null);
+          assert.equal(call.params?.[15], 2);
         },
       },
       { rows: [roomRow({ last_activity_at: '2026-05-04T00:00:00.000Z' })] },
@@ -460,7 +461,8 @@ describe('PostgresStore', () => {
           assert.match(call.sql, /ON CONFLICT \(id\) DO UPDATE/);
           assert.match(call.sql, /position = room_messages.position/);
           assert.equal(call.params?.[0], 'message-1');
-          assert.equal(call.params?.[14], 3);
+          assert.equal(call.params?.[5], null);
+          assert.equal(call.params?.[15], 3);
         },
       },
       {
@@ -541,8 +543,8 @@ describe('PostgresStore', () => {
       {
         rowCount: 1,
         assertCall(call) {
-          assert.equal(call.params?.[13], JSON.stringify(aiMessage.replyTo));
-          assert.equal(call.params?.[14], 0);
+          assert.equal(call.params?.[14], JSON.stringify(aiMessage.replyTo));
+          assert.equal(call.params?.[15], 0);
         },
       },
       { rows: [roomRow({ last_activity_at: '2026-05-04T00:00:00.000Z' })] },

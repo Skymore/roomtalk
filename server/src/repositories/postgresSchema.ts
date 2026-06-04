@@ -41,9 +41,11 @@ export const POSTGRES_SCHEMA_SQL = [
     usage JSONB,
     cost JSONB,
     reply_to JSONB,
+    updated_at TIMESTAMPTZ,
     position INTEGER NOT NULL
   )`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS reply_to JSONB`,
+  `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`,
   // Widen the message_type check to allow 'voice' on tables created before voice
   // messages existed. Drop-then-add keeps this idempotent across restarts.
   `ALTER TABLE room_messages DROP CONSTRAINT IF EXISTS room_messages_message_type_check`,

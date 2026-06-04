@@ -135,20 +135,12 @@ for i = 1, #existing do
   local ok, decoded = pcall(cjson.decode, existing[i])
   if ok and decoded['id'] == targetId then
     decoded['content'] = ARGV[3]
-    decoded['timestamp'] = ARGV[4]
+    decoded['updatedAt'] = ARGV[4]
     updatedPayload = cjson.encode(decoded)
     redis.call('LSET', KEYS[2], i - 1, updatedPayload)
     found = 1
     break
   end
-end
-
-if found == 1 then
-  local currentLastActivityAt = room['lastActivityAt'] or room['createdAt'] or ''
-  if ARGV[4] > currentLastActivityAt then
-    room['lastActivityAt'] = ARGV[4]
-  end
-  redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
 end
 
 return { 1, found, cjson.encode(room), updatedPayload }
@@ -304,7 +296,7 @@ for i = 1, #existing do
   local ok, decoded = pcall(cjson.decode, existing[i])
   if ok and decoded['id'] == targetId then
     decoded['content'] = ARGV[3]
-    decoded['timestamp'] = ARGV[4]
+    decoded['updatedAt'] = ARGV[4]
     updatedPayload = cjson.encode(decoded)
     existing[i] = updatedPayload
     targetIndex = i
@@ -567,11 +559,11 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
-  async updateMessageContent(roomId: string, messageId: string, newContent: string, updatedAt = new Date().toISOString()) {
+  async updateMessageContent(roomId: string, messageId: string, updatedContent: string, updatedAt = new Date().toISOString()) {
     try {
       const result = await (this.redisClient as any).eval(UPDATE_MESSAGE_CONTENT_SCRIPT, {
         keys: ['rooms', `room:${roomId}:messages`],
-        arguments: [roomId, messageId, newContent, updatedAt],
+        arguments: [roomId, messageId, updatedContent, updatedAt],
       });
       const updatedRoom = parseScriptRoom(result, 2);
       if (!updatedRoom) {
@@ -649,11 +641,11 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     return this.truncateMessages(roomId, messageId, 'after');
   }
 
-  async updateMessageAndTruncateAfter(roomId: string, messageId: string, newContent: string, updatedAt = new Date().toISOString()) {
+  async updateMessageAndTruncateAfter(roomId: string, messageId: string, updatedContent: string, updatedAt = new Date().toISOString()) {
     try {
       const result = await (this.redisClient as any).eval(UPDATE_AND_TRUNCATE_AFTER_SCRIPT, {
         keys: ['rooms', `room:${roomId}:messages`],
-        arguments: [roomId, messageId, newContent, updatedAt],
+        arguments: [roomId, messageId, updatedContent, updatedAt],
       });
       const updatedRoom = parseScriptRoom(result, 3);
       if (!updatedRoom) {

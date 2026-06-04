@@ -28,7 +28,7 @@ export interface DurableRoomStore {
   generateUniqueRoomId(): Promise<string>;
   appendMessage(message: Message): Promise<Room | null>;
   upsertMessage(message: Message): Promise<Room | null>;
-  updateMessageContent(roomId: string, messageId: string, newContent: string, updatedAt?: string): Promise<MessageUpdateResult | null>;
+  updateMessageContent(roomId: string, messageId: string, updatedContent: string, updatedAt?: string): Promise<MessageUpdateResult | null>;
   deleteMessageById(roomId: string, messageId: string): Promise<MessageDeleteResult | null>;
   truncateBeforeMessage(roomId: string, messageId: string): Promise<MessageTruncateResult | null>;
   truncateAfterMessage(roomId: string, messageId: string): Promise<MessageTruncateResult | null>;
@@ -130,8 +130,8 @@ export class CompositeRoomStore implements RoomStore {
     return updatedRoom;
   }
 
-  async updateMessageContent(roomId: string, messageId: string, newContent: string, updatedAt?: string) {
-    const result = await this.durableStore.updateMessageContent(roomId, messageId, newContent, updatedAt);
+  async updateMessageContent(roomId: string, messageId: string, updatedContent: string, updatedAt?: string) {
+    const result = await this.durableStore.updateMessageContent(roomId, messageId, updatedContent, updatedAt);
     if (result?.found) {
       await this.invalidateRoomMessagesCache(roomId);
     }

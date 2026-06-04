@@ -72,6 +72,7 @@ export interface Message {
   content: string;
   roomId: string;
   timestamp: string;
+  updatedAt?: string;
   messageType: 'text' | 'image' | 'ai' | 'voice';
   username?: string;
   avatar?: {
