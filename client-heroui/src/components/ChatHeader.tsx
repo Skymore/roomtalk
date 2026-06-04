@@ -8,7 +8,6 @@ import { RoomRenameModal } from './RoomRenameModal';
 interface ChatHeaderProps {
   currentRoom: Room;
   memberCount: number;
-  memberEvent: { type: "join" | "leave"; userId: string } | null;
   handleCopyToClipboard: (text: string) => void;
   handleShareRoom: () => void;
   handleToggleSave: () => void;
@@ -25,7 +24,6 @@ interface ChatHeaderProps {
 export const ChatHeader: React.FC<ChatHeaderProps> = ({
   currentRoom,
   memberCount,
-  memberEvent,
   handleCopyToClipboard,
   handleShareRoom,
   handleToggleSave,
@@ -52,7 +50,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   return (
     <>
     <div className="safe-top flex items-center justify-between border-b border-[#dedbd0] bg-[#faf9f5]/90 px-2 py-1 backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/90 md:min-h-16 md:px-4">
-      <div className="flex min-w-0 items-center">
+      <div className="flex min-w-0 flex-1 items-center pr-1">
         <Button
           isIconOnly
           variant="light"
@@ -61,50 +59,27 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             setView("rooms");
             clearRoomUrlParam();
           }}
-          className="mr-2 rounded-lg text-[#c96442] dark:text-[#d97757] md:hidden"
+          className="mr-1 h-8 w-8 min-w-8 rounded-lg text-[#c96442] dark:text-[#d97757] md:hidden"
         >
-          <Icon icon="lucide:chevron-left" width={24} />
+          <Icon icon="lucide:chevron-left" className="h-5 w-5" />
         </Button>
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <h2 data-testid="chat-room-title" className="max-w-[150px] truncate font-serif text-lg font-medium leading-tight text-[#141413] dark:text-[#faf9f5] md:max-w-[360px]">{currentRoom.name}</h2>
-          {canRename && (
-            <Tooltip content={t('editRoomName')}>
-              <Button
-                isIconOnly
-                size="sm"
-                variant="light"
-                aria-label={t('editRoomName')}
-                onPress={() => setIsRenameOpen(true)}
-                className="h-7 w-7 min-w-7 rounded-md text-[#5e5d59] dark:text-[#b0aea5]"
-              >
-                <Icon icon="lucide:pencil" className="h-3.5 w-3.5" />
-              </Button>
+        <div className="flex min-w-0 flex-1 items-center gap-2 whitespace-nowrap">
+          <h2 data-testid="chat-room-title" className="w-[38vw] max-w-[148px] flex-shrink-0 truncate font-serif text-base font-medium leading-tight text-[#141413] dark:text-[#faf9f5] md:w-[360px] md:max-w-[360px] md:text-lg">{currentRoom.name}</h2>
+          <div className="flex flex-shrink-0 items-center text-xs text-[#5e5d59] dark:text-[#b0aea5]" data-testid="room-member-count">
+            <Icon icon="lucide:users" className="mr-1" width={14} />
+            {memberCount}
+          </div>
+          <div
+            className="flex min-w-0 cursor-pointer items-center rounded-md px-1 text-xs text-[#5e5d59] transition-colors hover:bg-[#e8e6dc] dark:text-[#b0aea5] dark:hover:bg-[#30302e]"
+            onClick={() => handleCopyToClipboard(currentRoom.id)}
+          >
+            <Icon icon="lucide:hash" className="mr-1 flex-shrink-0" width={14} />
+            <Tooltip content={t("clickToCopyRoomId")}>
+              <span className="truncate">
+                {currentRoom.id.length > 10 ? `${currentRoom.id.substring(0, 8)}...` : currentRoom.id}
+              </span>
             </Tooltip>
-          )}
-          <span className="text-[#c2c0b6]">|</span>
-          <div className="flex flex-wrap items-center gap-2 text-xs text-[#5e5d59] dark:text-[#b0aea5]">
-            <div className="flex items-center" data-testid="room-member-count">
-              <Icon icon="lucide:users" className="mr-1" width={14} />
-              {memberCount}
-              {memberEvent && (
-                <span className="ml-1 inline-flex items-center gap-1 text-tiny animate-fade-in">
-                  <Icon icon={memberEvent.type === "join" ? "lucide:user-plus" : "lucide:user-minus"} width={12} />
-                  {memberEvent.userId.substring(0, 4)}...
-                </span>
-              )}
-            </div>
-            <div
-              className="flex cursor-pointer items-center rounded-md px-1 transition-colors hover:bg-[#e8e6dc] dark:hover:bg-[#30302e]"
-              onClick={() => handleCopyToClipboard(currentRoom.id)}
-            >
-              <Icon icon="lucide:hash" className="mr-1" width={14} />
-              <Tooltip content={t("clickToCopyRoomId")}>
-                <span>
-                  {currentRoom.id.length > 10 ? `${currentRoom.id.substring(0, 8)}...` : currentRoom.id}
-                </span>
-              </Tooltip>
-              <Icon icon="lucide:copy" className="ml-1 text-[#87867f] dark:text-[#b0aea5]" width={12} />
-            </div>
+            <Icon icon="lucide:copy" className="ml-1 flex-shrink-0 text-[#87867f] dark:text-[#b0aea5]" width={12} />
           </div>
         </div>
       </div>

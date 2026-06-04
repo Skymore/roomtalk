@@ -62,7 +62,6 @@ describe("roomState", () => {
     expect(getRoomMemberUpdate(room("room-2"), event)).toBeNull();
     expect(getRoomMemberUpdate(room("room-1"), event)).toEqual({
       count: 3,
-      event: { type: "join", userId: "user-1" },
     });
   });
 

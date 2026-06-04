@@ -64,8 +64,6 @@ export const MessagePage: React.FC = () => {
   const [roomToJoin, setRoomToJoin] = useState<Room | null>(null);
   // 添加房间成员数量状态
   const [memberCount, setMemberCount] = useState<number>(0);
-  // 添加最近加入/离开消息状态
-  const [memberEvent, setMemberEvent] = useState<{ type: "join" | "leave"; userId: string } | null>(null);
   // 添加用户名状态
   const [username, setUsername] = useState<string>("");
   // 是否显示修改用户名弹窗
@@ -263,7 +261,6 @@ export const MessagePage: React.FC = () => {
       setCurrentRoom((current) => current?.id === room.id ? { ...current, ...room } : current);
       setSavedRooms((prev) => prev.map((savedRoom) => savedRoom.id === room.id ? { ...savedRoom, ...room } : savedRoom));
     };
-    let clearMemberEventTimer: ReturnType<typeof setTimeout> | undefined;
 
     socket.on("room_list", handleRoomList);
     socket.emit("get_rooms");
@@ -279,22 +276,10 @@ export const MessagePage: React.FC = () => {
       const memberUpdate = getRoomMemberUpdate(currentRoom, event);
       if (memberUpdate) {
         setMemberCount(memberUpdate.count);
-        setMemberEvent(memberUpdate.event);
-
-        // 5秒后清除成员事件显示
-        if (clearMemberEventTimer) {
-          clearTimeout(clearMemberEventTimer);
-        }
-        clearMemberEventTimer = setTimeout(() => {
-          setMemberEvent(null);
-        }, 5000);
       }
     });
 
     return () => {
-      if (clearMemberEventTimer) {
-        clearTimeout(clearMemberEventTimer);
-      }
       socket.off("room_list", handleRoomList);
       socket.off("saved_room_list", handleSavedRoomList);
       socket.off("new_room", handleRoomUpdate);
@@ -557,7 +542,6 @@ export const MessagePage: React.FC = () => {
           <ChatRoomView
             currentRoom={currentRoom}
             memberCount={memberCount}
-            memberEvent={memberEvent}
             username={username}
             clientId={clientId}
             handleCopyToClipboard={handleCopyToClipboard}
