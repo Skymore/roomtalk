@@ -14,6 +14,16 @@ export interface CachedRoomMessageWindow {
   cachedAt: number;
 }
 
+// Synchronous, session-lived mirror of the latest window per room. IndexedDB is
+// always async, so a fresh read always paints one loading frame first; this map
+// lets a re-opened room render instantly while IndexedDB stays the cross-session
+// backup.
+const memoryCache = new Map<string, CachedRoomMessageWindow>();
+
+export const readMemoryRoomMessageWindow = (roomId: string): CachedRoomMessageWindow | null => {
+  return memoryCache.get(roomId) ?? null;
+};
+
 const isIndexedDBAvailable = () => typeof indexedDB !== 'undefined';
 
 const openCacheDb = (): Promise<IDBDatabase> => {
@@ -55,26 +65,32 @@ const withStore = async <T>(
 
 export const readCachedRoomMessageWindow = async (roomId: string): Promise<CachedRoomMessageWindow | null> => {
   try {
-    return await withStore<CachedRoomMessageWindow | undefined>('readonly', store => store.get(roomId)) || null;
+    const stored = await withStore<CachedRoomMessageWindow | undefined>('readonly', store => store.get(roomId)) || null;
+    if (stored) {
+      memoryCache.set(roomId, stored);
+    }
+    return stored;
   } catch {
     return null;
   }
 };
 
 export const writeCachedRoomMessageWindow = async (window: CachedRoomMessageWindow): Promise<void> => {
+  const trimmed: CachedRoomMessageWindow = {
+    ...window,
+    messages: window.messages.slice(-MAX_CACHED_MESSAGES),
+    cachedAt: Date.now(),
+  };
+  memoryCache.set(trimmed.roomId, trimmed);
   try {
-    const messages = window.messages.slice(-MAX_CACHED_MESSAGES);
-    await withStore('readwrite', store => store.put({
-      ...window,
-      messages,
-      cachedAt: Date.now(),
-    }));
+    await withStore('readwrite', store => store.put(trimmed));
   } catch {
     // Local cache is best-effort only.
   }
 };
 
 export const deleteCachedRoomMessageWindow = async (roomId: string): Promise<void> => {
+  memoryCache.delete(roomId);
   try {
     await withStore('readwrite', store => store.delete(roomId));
   } catch {

@@ -598,8 +598,20 @@ export class PostgresStore implements DurableRoomStore {
 
   async clearRoomMessages(roomId: string): Promise<number> {
     try {
-      const result = await this.pool.query('DELETE FROM room_messages WHERE room_id = $1', [roomId]);
-      return result.rowCount || 0;
+      return await this.transaction(async client => {
+        const result = await client.query('DELETE FROM room_messages WHERE room_id = $1', [roomId]);
+        const deleted = result.rowCount || 0;
+        if (deleted > 0) {
+          await client.query(
+            `UPDATE rooms
+            SET message_version = message_version + 1,
+              last_activity_at = created_at
+            WHERE id = $1`,
+            [roomId]
+          );
+        }
+        return deleted;
+      });
     } catch (error) {
       this.logger.error('Error clearing PostgreSQL room messages', { error, roomId });
       return 0;

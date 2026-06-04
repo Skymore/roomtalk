@@ -597,6 +597,10 @@ describe('PostgresStore', () => {
       },
       { rows: [roomRow({ last_activity_at: '2026-05-04T00:00:00.000Z' })] },
       { rowCount: 0 },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
+      { rowCount: 2, assertCall: call => assert.match(call.sql, /DELETE FROM room_messages/) },
+      { rowCount: 1, assertCall: call => assert.match(call.sql, /message_version = message_version \+ 1/) },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'COMMIT') },
     ]);
     const pool = new ScriptedPool([
       {
@@ -617,7 +621,6 @@ describe('PostgresStore', () => {
           reply_to: aiMessage.replyTo,
         }],
       },
-      { rowCount: 2 },
     ], client);
     const store = new PostgresStore(pool, logger as any);
 

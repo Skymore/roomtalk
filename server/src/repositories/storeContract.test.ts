@@ -584,6 +584,19 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       return { rows: [updated] as T[], rowCount: 1 };
     }
 
+    if (/UPDATE rooms SET message_version = message_version \+ 1, last_activity_at = created_at WHERE id = \$1/.test(compactSql)) {
+      const roomId = String(params[0]);
+      const room = this.rooms.get(roomId);
+      if (!room) return { rows: [], rowCount: 0 };
+      const updated = {
+        ...room,
+        last_activity_at: room.created_at,
+        message_version: (room.message_version || 0) + 1,
+      };
+      this.rooms.set(roomId, updated);
+      return { rows: [updated] as T[], rowCount: 1 };
+    }
+
     if (/UPDATE rooms SET name = \$3 WHERE id = \$1 AND creator_id = \$2 RETURNING/.test(compactSql)) {
       const [roomId, creatorId, name] = params.map(String);
       const room = this.rooms.get(roomId);
@@ -926,8 +939,11 @@ for (const [storeName, createFixture] of storeFactories) {
       assert.equal(savedHistoryRoom?.id, initialRoom.id);
       assert.equal(savedHistoryRoom?.lastActivityAt, replacement.timestamp);
       assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), [replacement]);
+      const versionBeforeClear = (await store.readMessagePageByRoom(initialRoom.id)).historyVersion;
       assert.equal(await store.clearRoomMessages(initialRoom.id), 1);
       assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), []);
+      const versionAfterClear = (await store.readMessagePageByRoom(initialRoom.id)).historyVersion;
+      assert.equal(versionAfterClear, versionBeforeClear + 1);
     });
 
     it('reads latest message windows and older pages in durable order', async () => {
