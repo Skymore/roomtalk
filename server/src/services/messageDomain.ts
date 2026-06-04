@@ -119,7 +119,7 @@ export function createAIPlaceholderMessage(input: {
   };
 }
 
-export function applyMessageEdit(messages: Message[], messageId: string, newContent: string, now = new Date()) {
+export function applyMessageEdit(messages: Message[], messageId: string, newContent: string, updatedAt = new Date()) {
   const messageIndex = messages.findIndex(message => message.id === messageId);
 
   if (messageIndex === -1) {
@@ -129,7 +129,7 @@ export function applyMessageEdit(messages: Message[], messageId: string, newCont
   const updatedMessage: Message = {
     ...messages[messageIndex],
     content: newContent,
-    timestamp: now.toISOString(),
+    updatedAt: updatedAt.toISOString(),
   };
 
   const updatedMessages = [...messages];

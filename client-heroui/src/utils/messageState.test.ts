@@ -37,6 +37,22 @@ describe("messageState", () => {
     expect(sorted.map(item => item.id)).toEqual(["a", "ai", "z"]);
   });
 
+  it("keeps updated messages ordered by their original timestamp", () => {
+    const sorted = sortMessages([
+      message({
+        id: "edited",
+        timestamp: "2026-05-03T10:00:00.000Z",
+        updatedAt: "2026-05-03T10:05:00.000Z",
+      }),
+      message({
+        id: "later",
+        timestamp: "2026-05-03T10:01:00.000Z",
+      }),
+    ]);
+
+    expect(sorted.map(item => item.id)).toEqual(["edited", "later"]);
+  });
+
   it("upserts without duplicating existing messages", () => {
     const first = message({ id: "m1" });
     const duplicate = message({ id: "m1", content: "duplicate" });

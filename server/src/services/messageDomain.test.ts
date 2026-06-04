@@ -91,14 +91,15 @@ describe('message domain', () => {
 
   it('edits one message while preserving the rest of history', () => {
     const editedAt = new Date('2026-05-03T10:01:00.000Z');
-    const first = createMessage({ id: 'm1', content: 'before' });
+    const first = createMessage({ id: 'm1', content: 'before', timestamp: '2026-05-03T10:00:00.000Z' });
     const second = createMessage({ id: 'm2', content: 'untouched' });
 
     const result = applyMessageEdit([first, second], 'm1', 'after', editedAt);
 
     assert.equal(result.found, true);
     assert.equal(result.updatedMessage?.content, 'after');
-    assert.equal(result.updatedMessage?.timestamp, editedAt.toISOString());
+    assert.equal(result.updatedMessage?.timestamp, first.timestamp);
+    assert.equal(result.updatedMessage?.updatedAt, editedAt.toISOString());
     assert.equal(result.messages[1], second);
   });
 

@@ -173,7 +173,7 @@ const createHarness = (options: { rejectSaves?: boolean; rejectSaveNumbers?: num
       this.messages = this.messages.filter(item => item.roomId !== roomId).concat(remainingMessages);
       return { room: roomActivityForMessages(remainingMessages), messages: remainingMessages, targetFound: true };
     },
-    async updateMessageAndTruncateAfter(roomId: string, messageId: string, newContent: string) {
+    async updateMessageAndTruncateAfter(roomId: string, messageId: string, newContent: string, updatedAt = '2026-05-03T00:00:10.000Z') {
       this.editAndTruncateCalls.push({ roomId, messageId, newContent });
       const roomMessages = this.messages.filter(item => item.roomId === roomId);
       const targetIndex = roomMessages.findIndex(item => item.id === messageId);
@@ -184,7 +184,7 @@ const createHarness = (options: { rejectSaves?: boolean; rejectSaveNumbers?: num
       const updatedMessage = {
         ...roomMessages[targetIndex],
         content: newContent,
-        timestamp: '2026-05-03T00:00:10.000Z',
+        updatedAt,
       };
       const remainingMessages = [...roomMessages.slice(0, targetIndex), updatedMessage];
       this.messages = this.messages.filter(item => item.roomId !== roomId).concat(remainingMessages);

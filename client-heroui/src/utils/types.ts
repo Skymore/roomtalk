@@ -18,6 +18,7 @@ export interface Message {
   clientId: string;
   content: string;
   timestamp: string;
+  updatedAt?: string;
   roomId: string;
   messageType: 'text' | 'image' | 'ai' | 'voice';
   username?: string;

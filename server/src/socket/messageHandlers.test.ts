@@ -152,7 +152,7 @@ const createHarness = (clientId: string | null = 'client-1') => {
       const updatedMessage = {
         ...this.messages[messageIndex],
         content: newContent,
-        timestamp: '2026-05-03T00:00:10.000Z',
+        updatedAt: '2026-05-03T00:00:10.000Z',
       };
       this.messages = this.messages.map(item => item.id === messageId ? updatedMessage : item);
       return { room: roomActivityForMessages(this.messages), found: true, updatedMessage };
@@ -351,6 +351,8 @@ describe('message socket handlers', () => {
 
     assert.equal(response?.success, true);
     assert.equal(response?.updatedMessage?.content, 'edited');
+    assert.equal(response?.updatedMessage?.timestamp, '2026-05-03T00:00:00.000Z');
+    assert.equal(response?.updatedMessage?.updatedAt, '2026-05-03T00:00:10.000Z');
     assert.deepEqual(valid.store.editedMessages, [{ roomId: 'room-1', messageId: 'message-1', newContent: 'edited' }]);
     assert.equal(valid.store.savedHistory.length, 0);
     assert.deepEqual(valid.io.roomEmits, [
