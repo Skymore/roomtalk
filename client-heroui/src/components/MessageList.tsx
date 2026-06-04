@@ -98,7 +98,22 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     });
   }, []);
 
+  const getCurrentMessages = useCallback(() => messagesRef.current, []);
+
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    const container = containerRef.current;
+    if (container) {
+      if (typeof container.scrollTo === 'function') {
+        container.scrollTo({
+          top: container.scrollHeight,
+          behavior,
+        });
+      } else {
+        container.scrollTop = container.scrollHeight;
+      }
+      return;
+    }
+
     messagesEndRef.current?.scrollIntoView({ behavior });
   }, []);
 
@@ -344,6 +359,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   useRoomMessageEvents({
     roomId,
     containerRef,
+    getCurrentMessages,
     updateMessages,
     setIsLoading,
     setIsLoadingMore,

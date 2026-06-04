@@ -9,6 +9,7 @@ const ROOM_MESSAGE_PAGE_LIMIT = 80;
 interface UseRoomMessageEventsArgs {
   roomId: string;
   containerRef: RefObject<HTMLDivElement>;
+  getCurrentMessages: () => Message[];
   updateMessages: (updater: SetStateAction<Message[]>) => void;
   setIsLoading: Dispatch<SetStateAction<boolean>>;
   setIsLoadingMore: Dispatch<SetStateAction<boolean>>;
@@ -28,6 +29,7 @@ interface UseRoomMessageEventsArgs {
 export const useRoomMessageEvents = ({
   roomId,
   containerRef,
+  getCurrentMessages,
   updateMessages,
   setIsLoading,
   setIsLoadingMore,
@@ -112,6 +114,14 @@ export const useRoomMessageEvents = ({
       });
     };
 
+    const isSameMessageWindow = (left: Message[], right: Message[]) => (
+      left.length === right.length &&
+      left.every((message, index) => {
+        const other = right[index];
+        return other && message.id === other.id && message.updatedAt === other.updatedAt && message.status === other.status;
+      })
+    );
+
     const scheduleScroll = (behavior: ScrollBehavior, delayMs: number) => {
       if (scrollTimer) {
         clearTimeout(scrollTimer);
@@ -160,9 +170,14 @@ export const useRoomMessageEvents = ({
           return sortMessages([...roomMessages.filter(message => !existingIds.has(message.id)), ...prev]);
         });
       } else {
-        updateMessages(roomMessages);
-        setShowScrollButton(false);
-        scheduleScroll('auto', 100);
+        const currentMessages = sortMessages(getCurrentMessages().filter(message => message.roomId === roomId));
+        const windowChanged = !isSameMessageWindow(currentMessages, roomMessages);
+
+        if (windowChanged) {
+          updateMessages(roomMessages);
+          setShowScrollButton(false);
+          scheduleScroll('auto', 100);
+        }
         cacheCurrentWindow(roomMessages, historyPayload.historyVersion, historyPayload.hasMore, historyPayload.oldestMessageId);
       }
 
@@ -339,6 +354,7 @@ export const useRoomMessageEvents = ({
   }, [
     roomId,
     containerRef,
+    getCurrentMessages,
     updateMessages,
     setIsLoading,
     setIsLoadingMore,

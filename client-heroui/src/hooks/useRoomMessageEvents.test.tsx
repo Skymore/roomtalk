@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { Dispatch, SetStateAction, useRef } from 'react';
+import { Dispatch, SetStateAction, useCallback, useRef } from 'react';
 import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { Message } from '../utils/types';
@@ -60,11 +60,13 @@ type SetNumber = Dispatch<SetStateAction<number>>;
 type ScrollToBottom = (behavior?: ScrollBehavior) => void;
 type CloseModal = () => void;
 type MockedFunction<T extends (...args: any[]) => any> = T & Mock<T>;
+const EMPTY_MESSAGES: Message[] = [];
 
 type HarnessProps = {
   roomId?: string;
   messageToDeleteId?: string;
   messageToEditId?: string;
+  currentMessages?: Message[];
   updateMessages: UpdateMessages;
   setIsLoading: SetBoolean;
   setIsLoadingMore: SetBoolean;
@@ -96,6 +98,7 @@ const Harness = ({
   roomId = 'room-1',
   messageToDeleteId,
   messageToEditId,
+  currentMessages = EMPTY_MESSAGES,
   updateMessages,
   setIsLoading,
   setIsLoadingMore,
@@ -109,10 +112,12 @@ const Harness = ({
   closeEditModal,
 }: HarnessProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const getCurrentMessages = useCallback(() => currentMessages, [currentMessages]);
 
   useRoomMessageEvents({
     roomId,
     containerRef,
+    getCurrentMessages,
     updateMessages,
     setIsLoading,
     setIsLoadingMore,
@@ -209,6 +214,44 @@ describe('useRoomMessageEvents', () => {
     expect(props.setHistoryVersion).toHaveBeenCalledWith(7);
     expect(cacheMock.readCachedRoomMessageWindow).not.toHaveBeenCalled();
     expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', { roomId: 'room-1', limit: 80 });
+  });
+
+  it('does not replace or scroll again when server history matches the displayed cached window', () => {
+    vi.useFakeTimers();
+    const cachedMessage = message({ id: 'cached-1', content: 'cached' });
+    cacheMock.readMemoryRoomMessageWindow.mockReturnValue({
+      roomId: 'room-1',
+      messages: [cachedMessage],
+      historyVersion: 7,
+      hasMore: true,
+      oldestMessageId: cachedMessage.id,
+      cachedAt: 1,
+    });
+    const props = createHarnessProps();
+    render(<Harness {...props} currentMessages={[cachedMessage]} />);
+
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+    props.updateMessages.mockClear();
+    props.scrollToBottom.mockClear();
+
+    socketMock.trigger('message_history', {
+      roomId: 'room-1',
+      messages: [cachedMessage],
+      historyVersion: 7,
+      hasMore: true,
+      oldestMessageId: cachedMessage.id,
+      mode: 'replace',
+    });
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+
+    expect(props.updateMessages).not.toHaveBeenCalled();
+    expect(props.scrollToBottom).not.toHaveBeenCalled();
+    expect(props.setIsLoading).toHaveBeenCalledWith(false);
+    expect(props.setIsLoadingMore).toHaveBeenCalledWith(false);
   });
 
   it('sorts loaded room history before setting messages', () => {
