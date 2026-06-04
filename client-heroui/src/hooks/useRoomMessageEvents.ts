@@ -2,7 +2,7 @@ import { Dispatch, RefObject, SetStateAction, useEffect, useRef } from 'react';
 import { clientId, socket } from '../utils/socket';
 import { AICostTotalEvent, AIChunkEvent, AIStreamEndEvent, AIStreamErrorEvent, Message, RoomMessageHistoryPayload } from '../utils/types';
 import { appendAIChunk, completeAIMessage, sortMessages, upsertMessage } from '../utils/messageState';
-import { deleteCachedRoomMessageWindow, readCachedRoomMessageWindow, writeCachedRoomMessageWindow } from '../utils/messageHistoryCache';
+import { deleteCachedRoomMessageWindow, readCachedRoomMessageWindow, readMemoryRoomMessageWindow, writeCachedRoomMessageWindow } from '../utils/messageHistoryCache';
 
 const ROOM_MESSAGE_PAGE_LIMIT = 80;
 
@@ -58,8 +58,6 @@ export const useRoomMessageEvents = ({
   }, [messageToEditId]);
 
   useEffect(() => {
-    updateMessages([]);
-    setIsLoading(true);
     setSessionCostUsd(0);
     setShowScrollButton(false);
     closeDeleteModal();
@@ -68,9 +66,14 @@ export const useRoomMessageEvents = ({
     let cancelled = false;
     let serverHistoryLoaded = false;
 
-    historyVersionRef.current = 0;
-    hasMoreMessagesRef.current = false;
-    oldestMessageIdRef.current = undefined;
+    const memoryWindow = readMemoryRoomMessageWindow(roomId);
+    const memoryMessages = memoryWindow
+      ? sortMessages(memoryWindow.messages.filter(message => message.roomId === roomId))
+      : [];
+
+    historyVersionRef.current = memoryWindow?.historyVersion ?? 0;
+    hasMoreMessagesRef.current = memoryWindow?.hasMore ?? false;
+    oldestMessageIdRef.current = memoryWindow?.oldestMessageId;
 
     const setHistoryVersionState = (historyVersion: number) => {
       historyVersionRef.current = historyVersion;
@@ -109,18 +112,6 @@ export const useRoomMessageEvents = ({
       });
     };
 
-    readCachedRoomMessageWindow(roomId).then(cachedWindow => {
-      if (!cachedWindow || cancelled || serverHistoryLoaded) {
-        return;
-      }
-
-      updateMessages(sortMessages(cachedWindow.messages.filter(message => message.roomId === roomId)));
-      setHistoryVersionState(cachedWindow.historyVersion);
-      setHasMoreMessagesState(cachedWindow.hasMore);
-      setOldestMessageIdState(cachedWindow.oldestMessageId);
-      setIsLoading(false);
-    });
-
     const scheduleScroll = (behavior: ScrollBehavior, delayMs: number) => {
       if (scrollTimer) {
         clearTimeout(scrollTimer);
@@ -131,6 +122,32 @@ export const useRoomMessageEvents = ({
         scrollToBottom(behavior);
       }, delayMs);
     };
+
+    if (memoryWindow) {
+      // Synchronous in-memory hit: render instantly, no blank/loading flash.
+      updateMessages(memoryMessages);
+      setHistoryVersionState(memoryWindow.historyVersion);
+      setHasMoreMessagesState(memoryWindow.hasMore);
+      setOldestMessageIdState(memoryWindow.oldestMessageId);
+      setIsLoading(false);
+      scheduleScroll('auto', 0);
+    } else {
+      updateMessages([]);
+      setIsLoading(true);
+      // Fall back to the async IndexedDB cache (cold start / new tab).
+      readCachedRoomMessageWindow(roomId).then(cachedWindow => {
+        if (!cachedWindow || cancelled || serverHistoryLoaded) {
+          return;
+        }
+
+        updateMessages(sortMessages(cachedWindow.messages.filter(message => message.roomId === roomId)));
+        setHistoryVersionState(cachedWindow.historyVersion);
+        setHasMoreMessagesState(cachedWindow.hasMore);
+        setOldestMessageIdState(cachedWindow.oldestMessageId);
+        setIsLoading(false);
+        scheduleScroll('auto', 0);
+      });
+    }
 
     const handleMessageHistory = (historyPayload: RoomMessageHistoryPayload) => {
       serverHistoryLoaded = true;

@@ -31,6 +31,7 @@ const socketMock = vi.hoisted(() => {
 });
 
 const cacheMock = vi.hoisted(() => ({
+  readMemoryRoomMessageWindow: vi.fn(),
   readCachedRoomMessageWindow: vi.fn(),
   writeCachedRoomMessageWindow: vi.fn(),
   deleteCachedRoomMessageWindow: vi.fn(),
@@ -151,6 +152,7 @@ describe('useRoomMessageEvents', () => {
   beforeEach(() => {
     socketMock.reset();
     vi.clearAllMocks();
+    cacheMock.readMemoryRoomMessageWindow.mockReturnValue(null);
     cacheMock.readCachedRoomMessageWindow.mockResolvedValue(null);
   });
 
@@ -186,6 +188,27 @@ describe('useRoomMessageEvents', () => {
     expect(socketMock.emit).not.toHaveBeenCalledWith('get_room_messages', { roomId: 'room-1', limit: 80 });
     expect(socketMock.on).not.toHaveBeenCalled();
     expect(socketMock.off).not.toHaveBeenCalled();
+  });
+
+  it('renders instantly from the in-memory cache without a loading flash', () => {
+    cacheMock.readMemoryRoomMessageWindow.mockReturnValue({
+      roomId: 'room-1',
+      messages: [message({ id: 'cached-1', content: 'cached' })],
+      historyVersion: 7,
+      hasMore: true,
+      oldestMessageId: 'cached-1',
+      cachedAt: 1,
+    });
+    const props = createHarnessProps();
+    render(<Harness {...props} />);
+
+    expect(props.updateMessages).toHaveBeenCalledWith([message({ id: 'cached-1', content: 'cached' })]);
+    expect(props.setIsLoading).toHaveBeenCalledWith(false);
+    expect(props.setIsLoading).not.toHaveBeenCalledWith(true);
+    expect(props.setHasMoreMessages).toHaveBeenCalledWith(true);
+    expect(props.setHistoryVersion).toHaveBeenCalledWith(7);
+    expect(cacheMock.readCachedRoomMessageWindow).not.toHaveBeenCalled();
+    expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', { roomId: 'room-1', limit: 80 });
   });
 
   it('sorts loaded room history before setting messages', () => {
