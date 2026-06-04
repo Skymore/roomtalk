@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useRef, useCallback, useImperativeHandle } from 'react';
 import { Icon } from '@iconify/react';
 import { requestAIResponse, requestEditMessageAndAIResponse, socket } from '../utils/socket';
-import { MessageItem } from './MessageItem';
+import { MessageItem, preloadMarkdownContent } from './MessageItem';
 import { Message } from '../utils/types';
+import { readMemoryRoomMessageWindow } from '../utils/messageHistoryCache';
 import { useTranslation } from 'react-i18next';
 import { getStoredAIModel } from '../utils/aiModels';
 import { formatUsdCost } from '../utils/formatters';
@@ -15,6 +16,7 @@ import {
   markOptimisticMessageFailed,
   replaceMessage,
   replaceOptimisticMessage,
+  sortMessages,
   truncateBeforeMessage,
 } from '../utils/messageState';
 import { useRoomMessageEvents } from '../hooks/useRoomMessageEvents';
@@ -52,12 +54,21 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const { t } = useTranslation();
   // generate a stable ID for the scroll container
   const scrollContainerId = `message-list-scroll-${roomId}`;
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  // Lazy initializers read the synchronous in-memory cache so the first paint
+  // already shows the cached window (requires the `key={roomId}` remount in the
+  // parent so these run per room).
+  const [messages, setMessages] = useState<Message[]>(() => {
+    const cached = readMemoryRoomMessageWindow(roomId);
+    return cached ? sortMessages(cached.messages.filter(msg => msg.roomId === roomId)) : [];
+  });
+  const [isLoading, setIsLoading] = useState(() => !readMemoryRoomMessageWindow(roomId));
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [hasMoreMessages, setHasMoreMessages] = useState(false);
-  const [, setHistoryVersion] = useState(0);
-  const [oldestMessageId, setOldestMessageId] = useState<string | undefined>();
+  const [hasMoreMessages, setHasMoreMessages] = useState(() => readMemoryRoomMessageWindow(roomId)?.hasMore ?? false);
+  const [, setHistoryVersion] = useState(() => readMemoryRoomMessageWindow(roomId)?.historyVersion ?? 0);
+  const [oldestMessageId, setOldestMessageId] = useState<string | undefined>(() => readMemoryRoomMessageWindow(roomId)?.oldestMessageId);
+  // Always points at the latest messages so item handlers can stay reference-stable.
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const retryScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -157,12 +168,13 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     };
   }, []);
 
+  // Warm the lazily-loaded markdown chunk on mount so the first message renders
+  // as markdown immediately instead of flashing plain text. The component
+  // remounts per room (key={roomId}), so per-room state already resets via the
+  // lazy useState initializers above — no manual roomId reset needed here.
   useEffect(() => {
-    isNearBottomRef.current = true;
-    setHasMoreMessages(false);
-    setHistoryVersion(0);
-    setOldestMessageId(undefined);
-  }, [roomId]);
+    preloadMarkdownContent();
+  }, []);
 
   React.useLayoutEffect(() => {
     const preserveScroll = preserveScrollRef.current;
@@ -196,23 +208,23 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
 
   // --- Modal Handlers (Keep dependencies as they are or simplify if possible) ---
   const handleOpenDeleteModal = useCallback((messageId: string) => {
-    const msg = getMessageById(messages, messageId);
+    const msg = getMessageById(messagesRef.current, messageId);
     if (msg) {
       setMessageToDelete(msg);
       setIsDeleteModalOpen(true);
     }
-   }, [messages]);
+   }, []);
   const handleCloseDeleteModal = useCallback(() => {
       setIsDeleteModalOpen(false);
     setMessageToDelete(null);
    }, []);
   const handleOpenEditModal = useCallback((messageId: string) => {
-      const msg = getMessageById(messages, messageId);
+      const msg = getMessageById(messagesRef.current, messageId);
     if (msg) {
       setMessageToEdit(msg);
       setIsEditModalOpen(true);
     }
-  }, [messages]);
+  }, []);
   const handleCloseEditModal = useCallback(() => {
       setIsEditModalOpen(false);
     setMessageToEdit(null);
@@ -294,7 +306,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     console.log('Retrying AI response for message ID:', messageId);
 
     // 找到消息的索引位置
-    const retryResult = truncateBeforeMessage(messages, messageId);
+    const retryResult = truncateBeforeMessage(messagesRef.current, messageId);
     if (!retryResult.found) {
       console.error("Cannot retry AI response: Message ID not found in current list.");
       return;
@@ -315,7 +327,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       // TODO: Consider sending current role/system prompt if needed
     }).catch((error) => {
       console.error('Failed to retry AI response:', error);
-      socket.emit('get_room_messages', roomId);
+      socket.emit('get_room_messages', { roomId });
     });
     console.log('Emitted ask_ai for retry with retryForMessageId:', messageId);
 
@@ -327,7 +339,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       scrollToBottom('smooth');
       retryScrollTimerRef.current = null;
     }, 100);
-  }, [roomId, messages, updateMessages, scrollToBottom]);
+  }, [roomId, updateMessages, scrollToBottom]);
 
   useRoomMessageEvents({
     roomId,

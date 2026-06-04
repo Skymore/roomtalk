@@ -95,6 +95,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
 
       <div className="relative min-h-0 w-full flex-1 overflow-hidden">
         <MessageList
+          key={currentRoom.id}
           ref={messageListRef}
           roomId={currentRoom.id}
           onReply={setReplyToMessage}

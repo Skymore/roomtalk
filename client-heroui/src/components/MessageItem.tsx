@@ -27,9 +27,17 @@ const tooltipClassNames = {
   content: "border border-[#dedbd0] bg-[#faf9f5] px-2 py-1 text-xs font-medium text-[#141413] shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5]",
 };
 
+const importMarkdownContent = () => import("./MarkdownContent");
+
 const MarkdownContent = React.lazy(() =>
-  import("./MarkdownContent").then(module => ({ default: module.MarkdownContent }))
+  importMarkdownContent().then(module => ({ default: module.MarkdownContent }))
 );
+
+// Eagerly warm the lazily-loaded markdown chunk so the first rendered message
+// doesn't flash plain text before upgrading to rendered markdown.
+export const preloadMarkdownContent = () => {
+  void importMarkdownContent();
+};
 
 // Helper to copy image to clipboard
 async function copyImageToClipboard(imageSource: string): Promise<boolean> {
@@ -57,7 +65,7 @@ async function copyImageToClipboard(imageSource: string): Promise<boolean> {
   }
 }
 
-export const MessageItem: React.FC<MessageItemProps> = ({
+const MessageItemComponent: React.FC<MessageItemProps> = ({
   message,
   onStartEdit,
   onDeleteMessage,
@@ -462,3 +470,8 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     </div>
   );
 };
+
+// Memoized: switching rooms, scrolling, cost/modal state changes etc. must not
+// re-render every message. Handlers passed in are kept reference-stable by the
+// parent, so an item only re-renders when its own `message` actually changes.
+export const MessageItem = React.memo(MessageItemComponent);
