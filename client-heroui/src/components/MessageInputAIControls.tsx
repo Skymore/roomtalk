@@ -73,7 +73,7 @@ export const MessageInputAISettingsButton: React.FC<MessageInputAISettingsButton
       size="sm"
       variant="light"
       aria-label={t('aiSettings')}
-      className="h-8 w-8 min-w-8 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
+      className="h-7 w-7 min-w-7 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
       onPress={onOpen}
       isDisabled={isDisabled}
     >
@@ -302,7 +302,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               isLoading={isAiProcessing}
               isDisabled={isSending}
               aria-label={t('askAI')}
-              className="h-8 w-8 min-w-8 rounded-full bg-[#30302e] px-0 text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413] sm:h-9 sm:w-auto sm:min-w-9 sm:px-3"
+              className="!h-7 !w-7 !min-w-7 rounded-full bg-[#30302e] px-0 text-[#faf9f5] shadow-[0_0_0_1px_rgba(48,48,46,0.7)] dark:bg-[#faf9f5] dark:text-[#141413] dark:shadow-[0_0_0_1px_rgba(250,249,245,0.7)] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"
             >
               <Icon icon={selectedRole.icon} className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
               <span className="hidden sm:inline">{t('askAI')}</span>
@@ -318,7 +318,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               isLoading={isSending}
               isDisabled={isSending || isAiProcessing || (!currentInputText.trim() && imageCount === 0)}
               aria-label={t('send')}
-              className="h-8 w-8 min-w-8 rounded-full bg-[#c96442] px-0 text-[#faf9f5] shadow-[0_0_0_1px_#c96442] sm:h-9 sm:w-auto sm:min-w-9 sm:px-3"
+              className="!h-7 !w-7 !min-w-7 rounded-full bg-[#c96442] px-0 text-[#faf9f5] shadow-[0_0_0_1px_rgba(201,100,66,0.7)] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"
             >
               <Icon icon="lucide:arrow-up" className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
               <span className="hidden sm:inline">{t('send')}</span>

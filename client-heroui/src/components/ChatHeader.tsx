@@ -49,7 +49,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
 
   return (
     <>
-    <div className="safe-top flex items-center justify-between border-b border-[#dedbd0] bg-[#faf9f5]/90 px-2 py-1 backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/90 md:min-h-16 md:px-4">
+    <div className="safe-top flex min-h-10 items-center justify-between border-b border-[#dedbd0] bg-[#faf9f5]/90 px-2 py-0.5 backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/90 md:min-h-16 md:px-4 md:py-1">
       <div className="flex min-w-0 flex-1 items-center pr-1">
         <Button
           isIconOnly
@@ -59,9 +59,9 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             setView("rooms");
             clearRoomUrlParam();
           }}
-          className="mr-1 h-8 w-8 min-w-8 rounded-lg text-[#c96442] dark:text-[#d97757] md:hidden"
+          className="mr-1 h-7 w-7 min-w-7 rounded-lg text-[#c96442] dark:text-[#d97757] md:hidden"
         >
-          <Icon icon="lucide:chevron-left" className="h-5 w-5" />
+          <Icon icon="lucide:chevron-left" className="h-4 w-4" />
         </Button>
         <div className="flex min-w-0 flex-1 items-center gap-2 whitespace-nowrap">
           <h2 data-testid="chat-room-title" className="w-[38vw] max-w-[148px] flex-shrink-0 truncate font-serif text-base font-medium leading-tight text-[#141413] dark:text-[#faf9f5] md:w-[360px] md:max-w-[360px] md:text-lg">{currentRoom.name}</h2>
@@ -102,8 +102,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
         </Tooltip>
         <Dropdown placement="top-end">
           <DropdownTrigger>
-            <Button isIconOnly variant="light" aria-label={t('ariaLabelRoomActions')} className="rounded-lg text-[#5e5d59] dark:text-[#b0aea5]">
-              <Icon icon="lucide:more-vertical" width={20} className="md:w-5 w-4" />
+            <Button isIconOnly variant="light" aria-label={t('ariaLabelRoomActions')} className="h-7 w-7 min-w-7 rounded-lg text-[#5e5d59] dark:text-[#b0aea5] md:h-9 md:w-9 md:min-w-9">
+              <Icon icon="lucide:more-vertical" className="h-4 w-4 md:h-5 md:w-5" />
             </Button>
           </DropdownTrigger>
           <DropdownMenu aria-label={t('ariaLabelRoomActions')}>

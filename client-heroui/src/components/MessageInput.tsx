@@ -1041,7 +1041,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       : replyToMessage?.content.replace(/\s+/g, ' ').trim().slice(0, 120);
 
   return (
-    <div className="relative">
+    <div className="relative w-full">
       {/* 错误消息显示 */}
       {errorMessage && (
         <div className="absolute -top-10 left-0 right-0 flex justify-center">
@@ -1051,8 +1051,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         </div>
       )}
 
-      <div className="w-full pb-0.5">
-        <div className="flex flex-wrap items-center gap-1.5 overflow-hidden rounded-[1.45rem] border border-[#dedbd0] bg-[#faf9f5] px-1.5 py-1.5 shadow-[0_0_0_1px_rgba(194,192,182,0.35)] dark:border-[#30302e] dark:bg-[#2a2a28] sm:block sm:rounded-[1.65rem] sm:px-0 sm:py-0">
+      <div className="w-full">
+        <div className="flex flex-wrap items-center gap-1.5 overflow-hidden rounded-[1.45rem] border border-[#dedbd0] bg-[#faf9f5] px-1.5 py-1 shadow-[0_0_0_1px_rgba(194,192,182,0.35)] dark:border-[#30302e] dark:bg-[#2a2a28] sm:block sm:rounded-[1.65rem] sm:px-0 sm:py-0">
           {replyToMessage && (
             <div className="mx-0 flex basis-full items-start gap-2 rounded-md border-l-2 border-[#c96442] bg-[#f0eee6] px-2.5 py-2 text-xs text-[#5e5d59] dark:bg-[#242421] dark:text-[#b0aea5] sm:mx-3 sm:mt-3">
               <div className="min-w-0 flex-1">
@@ -1073,7 +1073,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           )}
 
           {isVoiceMode ? (
-            <div className="flex min-h-9 min-w-0 flex-1 px-2.5 py-1.5 sm:min-h-16 sm:px-4 sm:pb-2 sm:pt-4">
+            <div className="flex min-h-7 min-w-0 flex-1 px-2 py-0.5 sm:min-h-16 sm:px-4 sm:pb-2 sm:pt-4">
               <div className="w-full min-w-0">
                 {voiceWorkflow === 'choice' && (
                   <div className="grid w-full grid-cols-2 gap-2">
@@ -1178,7 +1178,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           ) : (
             /* ===== Text mode: normal editor ===== */
             <div
-              className="min-h-9 max-h-28 min-w-0 flex-1 overflow-y-auto px-2.5 py-1.5 text-base leading-6 text-[#141413] dark:text-[#faf9f5] sm:min-h-16 sm:max-h-36 sm:w-full sm:flex-none sm:px-4 sm:pb-2 sm:pt-4 sm:text-sm"
+              className="min-h-7 max-h-28 min-w-0 flex-1 overflow-y-auto px-2 py-0.5 text-base leading-5 text-[#141413] dark:text-[#faf9f5] sm:min-h-16 sm:max-h-36 sm:w-full sm:flex-none sm:px-4 sm:pb-2 sm:pt-4 sm:text-sm"
               contentEditable={!isSending && !isAiProcessing}
               onInput={parseEditorContent}
               onPaste={handlePaste}
@@ -1187,7 +1187,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               onCompositionEnd={handleCompositionEnd}
               ref={editorRef}
               data-placeholder={isAiProcessing ? t('aiProcessing') : ''}
-              style={{ lineHeight: '1.5', whiteSpace: 'pre-wrap' }}
+              style={{ lineHeight: '1.35', whiteSpace: 'pre-wrap' }}
               role="textbox"
               data-testid="message-editor"
               aria-label={t('messageInput')}
@@ -1196,18 +1196,18 @@ export const MessageInput: React.FC<MessageInputProps> = ({
             ></div>
           )}
 
-          <div className="flex min-h-9 flex-shrink-0 items-center gap-1 px-0 pb-0 sm:min-h-12 sm:gap-2 sm:px-3 sm:pb-2">
+          <div className="flex min-h-7 flex-shrink-0 items-center gap-1 px-0 pb-0 sm:min-h-12 sm:gap-2 sm:px-3 sm:pb-2">
             {/* 语音/键盘切换按钮 */}
             <Button
               isIconOnly
               size="sm"
               variant="light"
               aria-label={isVoiceMode ? t('keyboardInput') : t('voiceInput')}
-              className="h-8 w-8 min-w-8 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
+              className="h-7 w-7 min-w-7 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
               onPress={handleToggleVoiceMode}
               isDisabled={isSending || isAiProcessing}
             >
-              <Icon icon={isVoiceMode ? 'lucide:keyboard' : 'lucide:mic'} className="h-4 w-4 sm:h-5 sm:w-5" />
+              <Icon icon={isVoiceMode ? 'lucide:keyboard' : 'lucide:mic'} className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
             </Button>
 
             {!isVoiceMode && (
@@ -1218,11 +1218,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                   size="sm"
                   variant="light"
                   aria-label={t('uploadImage')}
-                  className="h-8 w-8 min-w-8 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
+                  className="h-7 w-7 min-w-7 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
                   onPress={() => fileInputRef.current?.click()}
                   isDisabled={imageCount >= MAX_MESSAGE_IMAGES || isSending || isAiProcessing}
                 >
-                  <Icon icon="lucide:plus" className="h-4 w-4 sm:h-5 sm:w-5" />
+                  <Icon icon="lucide:plus" className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
                 </Button>
 
                 {/* AI设置按钮 */}

@@ -18,16 +18,16 @@ export const BottomNav: React.FC<BottomNavProps> = ({ view, setView, currentRoom
   return (
     <div
       data-testid="bottom-nav"
-      className="safe-bottom z-10 flex-shrink-0 border-t border-[#dedbd0] bg-[#faf9f5]/95 backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/95 md:hidden"
+      className="z-10 flex-shrink-0 border-t border-[#dedbd0] bg-[#faf9f5]/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/95 md:hidden"
     >
       <div className="flex justify-center">
-        <div className="flex w-full max-w-md items-center justify-between px-4 pt-1">
+        <div className="flex h-10 w-full max-w-md items-center justify-between px-4">
           <Button
             isIconOnly
             variant={view === "rooms" ? "solid" : "light"}
             color="default"
             onPress={() => setView("rooms")}
-            className={`h-8 w-8 min-w-0 rounded-xl ${view === "rooms" ? activeClass : inactiveClass}`}
+            className={`h-7 w-7 min-w-0 rounded-xl ${view === "rooms" ? activeClass : inactiveClass}`}
             aria-label={t("home")}
           >
             <Icon icon="lucide:home" className="text-base" />
@@ -38,7 +38,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({ view, setView, currentRoom
             variant={view === "saved" ? "solid" : "light"}
             color="default"
             onPress={() => setView("saved")}
-            className={`h-8 w-8 min-w-0 rounded-xl ${view === "saved" ? activeClass : inactiveClass}`}
+            className={`h-7 w-7 min-w-0 rounded-xl ${view === "saved" ? activeClass : inactiveClass}`}
             aria-label={t("savedRooms")}
           >
             <Icon icon="lucide:bookmark" className="text-base" />
@@ -51,10 +51,10 @@ export const BottomNav: React.FC<BottomNavProps> = ({ view, setView, currentRoom
             color="default"
             onPress={() => currentRoom ? setView("chat") : null}
             isDisabled={!currentRoom}
-            className={`h-9 w-9 min-w-0 rounded-2xl ${view === "chat" ? "bg-[#c96442] text-[#faf9f5] shadow-[0_0_0_1px_#c96442]" : inactiveClass}`}
+            className={`h-7 w-7 min-w-0 rounded-xl ${view === "chat" ? "bg-[#c96442] text-[#faf9f5] shadow-[0_0_0_1px_#c96442]" : inactiveClass}`}
             aria-label={currentRoom ? currentRoom.name : t("chatRooms")}
           >
-            <Icon icon="lucide:message-circle" className="text-lg" />
+            <Icon icon="lucide:message-circle" className="text-sm" />
           </Button>
 
           <Button
@@ -62,7 +62,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({ view, setView, currentRoom
             variant={view === "settings" ? "solid" : "light"}
             color="default"
             onPress={() => setView("settings")}
-            className={`h-8 w-8 min-w-0 rounded-xl ${view === "settings" ? activeClass : inactiveClass}`}
+            className={`h-7 w-7 min-w-0 rounded-xl ${view === "settings" ? activeClass : inactiveClass}`}
             aria-label={t("settings")}
           >
             <Icon icon="lucide:settings" className="text-base" />
