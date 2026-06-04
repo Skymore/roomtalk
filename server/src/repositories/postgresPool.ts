@@ -2,7 +2,7 @@ import { Logger } from '../logger';
 import { PostgresPool } from './postgresStore';
 
 type PgModule = {
-  Pool: new (config: { connectionString: string; ssl?: { rejectUnauthorized: boolean } | boolean }) => PostgresPool;
+  Pool: new (config: { connectionString: string; ssl?: { rejectUnauthorized: boolean; ca?: string } | boolean }) => PostgresPool;
 };
 
 export function resolvePostgresSslConfig(env: NodeJS.ProcessEnv = process.env) {
@@ -10,9 +10,17 @@ export function resolvePostgresSslConfig(env: NodeJS.ProcessEnv = process.env) {
     return undefined;
   }
 
-  return {
+  const sslConfig: { rejectUnauthorized: boolean; ca?: string } = {
     rejectUnauthorized: env.POSTGRES_SSL_REJECT_UNAUTHORIZED !== 'false',
   };
+
+  if (env.POSTGRES_SSL_CA_BASE64) {
+    sslConfig.ca = Buffer.from(env.POSTGRES_SSL_CA_BASE64, 'base64').toString('utf8');
+  } else if (env.POSTGRES_SSL_CA) {
+    sslConfig.ca = env.POSTGRES_SSL_CA;
+  }
+
+  return sslConfig;
 }
 
 export function createPostgresPool(connectionString: string, logger: Logger): PostgresPool {

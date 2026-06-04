@@ -14,6 +14,28 @@ describe('resolvePostgresSslConfig', () => {
     }), { rejectUnauthorized: false });
   });
 
+  it('uses a PEM CA certificate when provided', () => {
+    assert.deepEqual(resolvePostgresSslConfig({
+      POSTGRES_SSL: 'true',
+      POSTGRES_SSL_CA: '-----BEGIN CERTIFICATE-----\nexample\n-----END CERTIFICATE-----',
+    }), {
+      rejectUnauthorized: true,
+      ca: '-----BEGIN CERTIFICATE-----\nexample\n-----END CERTIFICATE-----',
+    });
+  });
+
+  it('decodes a base64 PEM CA certificate when provided', () => {
+    const ca = '-----BEGIN CERTIFICATE-----\nexample\n-----END CERTIFICATE-----';
+
+    assert.deepEqual(resolvePostgresSslConfig({
+      POSTGRES_SSL: 'true',
+      POSTGRES_SSL_CA_BASE64: Buffer.from(ca, 'utf8').toString('base64'),
+    }), {
+      rejectUnauthorized: true,
+      ca,
+    });
+  });
+
   it('does not configure SSL unless requested', () => {
     assert.equal(resolvePostgresSslConfig({}), undefined);
   });
