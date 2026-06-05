@@ -320,30 +320,15 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       createdAt: message.timestamp,
     };
 
-    const savedAsset = await store.saveMediaAsset(asset);
-    if (!savedAsset) {
-      return res.status(500).json({ error: 'Failed to save media asset' });
-    }
-    message.mediaAsset = {
-      id: savedAsset.id,
-      kind: savedAsset.kind,
-      mimeType: savedAsset.mimeType,
-      byteSize: savedAsset.byteSize,
-      width: savedAsset.width,
-      height: savedAsset.height,
-      durationMs: savedAsset.durationMs,
-    };
-
-    const updatedRoom = await store.appendMessage(message);
-    if (!updatedRoom) {
-      await store.deleteMediaAsset(assetId);
+    const appendResult = await store.appendMediaMessageWithAsset(message, asset);
+    if (!appendResult) {
       await mediaObjectStorage.deleteMediaObject?.(objectKey);
       return res.status(500).json({ error: 'Failed to create media message' });
     }
 
-    io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
-    io.to(roomId).emit('new_message', message);
-    return res.status(201).json(message);
+    io.to(appendResult.room.creatorId).emit('room_updated', appendResult.room);
+    io.to(roomId).emit('new_message', appendResult.message);
+    return res.status(201).json(appendResult.message);
   });
 
   app.get('/api/media/:assetId/download-url', async (req: Request, res: Response) => {

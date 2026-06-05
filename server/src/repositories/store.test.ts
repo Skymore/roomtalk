@@ -84,6 +84,24 @@ const mediaAsset = (overrides: Partial<MediaAsset> = {}): MediaAsset => ({
 });
 
 const durableMediaAssetStubs = () => ({
+  async appendMediaMessageWithAsset(newMessage: Message, asset: MediaAsset) {
+    return {
+      room: room(),
+      message: {
+        ...newMessage,
+        content: newMessage.content || '',
+        messageType: 'media' as const,
+        mimeType: asset.mimeType as Message['mimeType'],
+        mediaAsset: {
+          id: asset.id,
+          kind: asset.kind,
+          mimeType: asset.mimeType,
+          byteSize: asset.byteSize,
+        },
+      },
+      asset,
+    };
+  },
   async saveMediaAsset(asset: MediaAsset) {
     return asset;
   },
@@ -124,6 +142,25 @@ describe('CompositeRoomStore', () => {
     const durable: DurableRoomStore = {
       async generateUniqueRoomId() { calls.push('durable.generateUniqueRoomId'); return 'room-1'; },
       async appendMessage(_message: Message) { calls.push('durable.appendMessage'); return room(); },
+      async appendMediaMessageWithAsset(newMessage: Message, asset: MediaAsset) {
+        calls.push('durable.appendMediaMessageWithAsset');
+        return {
+          room: room(),
+          message: {
+            ...newMessage,
+            content: newMessage.content || '',
+            messageType: 'media',
+            mimeType: asset.mimeType as Message['mimeType'],
+            mediaAsset: {
+              id: asset.id,
+              kind: asset.kind,
+              mimeType: asset.mimeType,
+              byteSize: asset.byteSize,
+            },
+          },
+          asset,
+        };
+      },
       async upsertMessage(_message: Message) { calls.push('durable.upsertMessage'); return room(); },
       async updateMessageContent() { calls.push('durable.updateMessageContent'); return { room: room(), found: true, updatedMessage: message() }; },
       async deleteMessageById() { calls.push('durable.deleteMessageById'); return { room: room(), deleted: true }; },
@@ -196,6 +233,21 @@ describe('CompositeRoomStore', () => {
 
     assert.equal(await store.generateUniqueRoomId(), 'room-1');
     assert.deepEqual(await store.appendMessage(message()), room());
+    assert.deepEqual(await store.appendMediaMessageWithAsset(message({ content: '', messageType: 'media' }), mediaAsset()), {
+      room: room(),
+      message: message({
+        content: '',
+        messageType: 'media',
+        mimeType: 'image/webp',
+        mediaAsset: {
+          id: 'asset-1',
+          kind: 'image',
+          mimeType: 'image/webp',
+          byteSize: 123,
+        },
+      }),
+      asset: mediaAsset(),
+    });
     assert.deepEqual(await store.upsertMessage(message()), room());
     assert.deepEqual(await store.updateMessageContent('room-1', 'message-1', 'edited'), { room: room(), found: true, updatedMessage: message() });
     assert.deepEqual(await store.deleteMessageById('room-1', 'message-1'), { room: room(), deleted: true });
@@ -260,6 +312,7 @@ describe('CompositeRoomStore', () => {
     assert.deepEqual(calls, [
       'durable.generateUniqueRoomId',
       'durable.appendMessage',
+      'durable.appendMediaMessageWithAsset',
       'durable.upsertMessage',
       'durable.updateMessageContent',
       'durable.deleteMessageById',
@@ -378,6 +431,10 @@ describe('CompositeRoomStore', () => {
       async readMessagesByRoom() { return []; },
       async readMessagePageByRoom() { return { roomId: 'room-1', messages: [], historyVersion: 0, hasMore: false }; },
       ...durableMediaAssetStubs(),
+      async appendMediaMessageWithAsset(newMessage: Message, asset: MediaAsset) {
+        calls.push(`durable.appendMedia:${newMessage.id}`);
+        return newMessage.id === 'fail-media' ? null : { room: room(), message: newMessage, asset };
+      },
       async readRoomAICost(roomId: string) { return { roomId, currency: 'USD', totalUsd: 0 }; },
       async incrementRoomAICost(roomId: string) { return { roomId, currency: 'USD', totalUsd: 0 }; },
       async saveRoom(newRoom: Room) { return newRoom; },
@@ -410,6 +467,8 @@ describe('CompositeRoomStore', () => {
 
     assert.deepEqual(await store.appendMessage(message({ id: 'ok' })), room());
     assert.equal(await store.appendMessage(message({ id: 'fail' })), null);
+    assert.deepEqual(await store.appendMediaMessageWithAsset(message({ id: 'media-ok', messageType: 'media' }), mediaAsset()), { room: room(), message: message({ id: 'media-ok', messageType: 'media' }), asset: mediaAsset() });
+    assert.equal(await store.appendMediaMessageWithAsset(message({ id: 'fail-media', messageType: 'media' }), mediaAsset()), null);
     assert.deepEqual(await store.upsertMessage(message({ id: 'upsert' })), room());
     assert.deepEqual(await store.updateMessageContent('room-1', 'message-1', 'edited'), { room: room(), found: true, updatedMessage: message() });
     assert.deepEqual(await store.deleteMessageById('room-1', 'message-1'), { room: room(), deleted: true });
@@ -425,6 +484,9 @@ describe('CompositeRoomStore', () => {
       'durable.append:ok',
       'cache.invalidate:room-1',
       'durable.append:fail',
+      'durable.appendMedia:media-ok',
+      'cache.invalidate:room-1',
+      'durable.appendMedia:fail-media',
       'durable.upsert:upsert',
       'cache.invalidate:room-1',
       'durable.updateMessageContent',

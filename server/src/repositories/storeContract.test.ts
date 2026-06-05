@@ -121,6 +121,19 @@ class MemoryRedis {
   }
 
   async eval(script: string, options: { keys: string[]; arguments: string[] }) {
+    if (script.includes("redis.call('HSET', KEYS[3]")) {
+      const [, messageKey, mediaAssetsKey, roomMediaAssetsKey] = options.keys;
+      const [roomId, messagePayload, lastActivityAt, assetId, assetPayload] = options.arguments;
+      const updatedRoom = this.updateRoomActivity(roomId, lastActivityAt, true);
+      if (!updatedRoom) return [0, ''];
+      const list = this.lists.get(messageKey) || [];
+      list.push(messagePayload);
+      this.lists.set(messageKey, list);
+      this.hash(mediaAssetsKey).set(assetId, assetPayload);
+      this.set(roomMediaAssetsKey).add(assetId);
+      return [1, JSON.stringify(updatedRoom)];
+    }
+
     if (script.includes('local mediaMessageId')) {
       const [, messageKey] = options.keys;
       const [roomId, messageId, mimeType] = options.arguments;
@@ -1370,8 +1383,10 @@ describe('PostgresStore media object cleanup', () => {
       byteSize: 1,
       createdAt: '2026-05-03T00:00:00.000Z',
     };
-    await store.saveMediaAsset(asset);
-    await store.appendMessage(message({ id: messageId, content: '', messageType: 'media', mimeType: 'image/webp' }));
+    await store.appendMediaMessageWithAsset(
+      message({ id: messageId, content: '', messageType: 'media', mimeType: 'image/webp' }),
+      asset
+    );
     return asset.objectKey;
   };
 

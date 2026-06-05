@@ -25,6 +25,7 @@ type TestServer = {
     members: Set<string>;
     savedRooms: Room[];
     appendedMessages: Message[];
+    appendedMediaAssets: MediaAsset[];
     mediaAssets: Map<string, MediaAsset>;
     readMessagesByRoom: (roomId: string) => Promise<Message[]>;
     addRoomMember: (roomId: string, clientId: string, role: 'owner' | 'member', joinedAt?: string) => Promise<{ roomId: string; clientId: string; role: 'owner' | 'member'; joinedAt: string } | null>;
@@ -35,6 +36,7 @@ type TestServer = {
     generateUniqueRoomId: () => Promise<string>;
     saveRoom: (room: Room) => Promise<Room | null>;
     appendMessage: (message: Message) => Promise<Room | null>;
+    appendMediaMessageWithAsset: (message: Message, asset: MediaAsset) => Promise<{ room: Room; message: Message; asset: MediaAsset } | null>;
     saveMediaAsset: (asset: MediaAsset) => Promise<MediaAsset | null>;
     getMediaAsset: (assetId: string) => Promise<MediaAsset | null>;
     deleteMediaAsset: (assetId: string) => Promise<void>;
@@ -45,6 +47,7 @@ type TestServer = {
   redisClient: {
     isOpen: boolean;
   };
+  deletedMediaObjects: string[];
 };
 
 const sampleRoom = (overrides: Partial<Room> = {}): Room => ({
@@ -114,6 +117,7 @@ async function createTestServer(): Promise<TestServer> {
     members: new Set(['room-1:client-1']),
     savedRooms: [] as Room[],
     appendedMessages: [] as Message[],
+    appendedMediaAssets: [] as MediaAsset[],
     mediaAssets: new Map<string, MediaAsset>(),
     async readMessagesByRoom(roomId: string) {
       return this.messages.filter(message => message.roomId === roomId);
@@ -151,6 +155,32 @@ async function createTestServer(): Promise<TestServer> {
       this.appendedMessages.push(message);
       this.messages.push(message);
       return sampleRoom({ lastActivityAt: message.timestamp });
+    },
+    async appendMediaMessageWithAsset(message: Message, asset: MediaAsset) {
+      const savedAsset = {
+        ...asset,
+        roomId: message.roomId,
+        messageId: message.id,
+      };
+      const savedMessage = {
+        ...message,
+        content: message.content || '',
+        mimeType: savedAsset.mimeType as Message['mimeType'],
+        mediaAsset: {
+          id: savedAsset.id,
+          kind: savedAsset.kind,
+          mimeType: savedAsset.mimeType,
+          byteSize: savedAsset.byteSize,
+          width: savedAsset.width,
+          height: savedAsset.height,
+          durationMs: savedAsset.durationMs,
+        },
+      };
+      this.appendedMessages.push(savedMessage);
+      this.appendedMediaAssets.push(savedAsset);
+      this.messages.push(savedMessage);
+      this.mediaAssets.set(savedAsset.id, savedAsset);
+      return { room: sampleRoom({ lastActivityAt: message.timestamp }), message: savedMessage, asset: savedAsset };
     },
     async saveMediaAsset(asset: MediaAsset) {
       this.mediaAssets.set(asset.id, asset);
@@ -190,6 +220,7 @@ async function createTestServer(): Promise<TestServer> {
     isOpen: true,
   };
 
+  const deletedMediaObjects: string[] = [];
   const mediaObjectStorage = {
     isConfigured: () => true,
     async putMediaObject() {},
@@ -202,7 +233,9 @@ async function createTestServer(): Promise<TestServer> {
     async headObject() {
       return { exists: true };
     },
-    async deleteMediaObject() {},
+    async deleteMediaObject(objectKey: string) {
+      deletedMediaObjects.push(objectKey);
+    },
   };
 
   const routeLogger = {
@@ -248,6 +281,7 @@ async function createTestServer(): Promise<TestServer> {
     generatedRoleIdeas,
     store,
     redisClient,
+    deletedMediaObjects,
   };
 }
 
@@ -433,6 +467,122 @@ describe('API routes', () => {
     assert.equal(response.status, 500);
     assert.deepEqual(await response.json(), { error: 'Failed to create message' });
     assert.deepEqual(server.emitted, []);
+  });
+
+  it('creates media messages through the atomic media append path and broadcasts the saved message', async () => {
+    server.store.members.add('room-1:client-2');
+
+    const uploadResponse = await fetch(`${server.baseUrl}/api/media/uploads`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientId: 'client-2',
+        roomId: 'room-1',
+        kind: 'image',
+        mimeType: 'image/webp',
+        byteSize: 123,
+      }),
+    });
+    assert.equal(uploadResponse.status, 201);
+    const upload = await uploadResponse.json() as { assetId: string; objectKey: string; uploadUrl: string };
+    assert.ok(upload.assetId);
+    assert.equal(upload.objectKey, `rooms/room-1/media/image/${upload.assetId}`);
+    assert.equal(upload.uploadUrl, `https://upload.example/${encodeURIComponent(upload.objectKey)}`);
+
+    const completeResponse = await fetch(`${server.baseUrl}/api/media/uploads/${upload.assetId}/complete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientId: 'client-2',
+        roomId: 'room-1',
+        kind: 'image',
+        mimeType: 'image/webp',
+        byteSize: 123,
+        objectKey: upload.objectKey,
+        username: 'Alice',
+        width: 40,
+        height: 30,
+      }),
+    });
+
+    assert.equal(completeResponse.status, 201);
+    const message = await completeResponse.json() as Message;
+    assert.equal(message.clientId, 'client-2');
+    assert.equal(message.roomId, 'room-1');
+    assert.equal(message.messageType, 'media');
+    assert.equal(message.mimeType, 'image/webp');
+    assert.deepEqual(message.mediaAsset, {
+      id: upload.assetId,
+      kind: 'image',
+      mimeType: 'image/webp',
+      byteSize: 123,
+      width: 40,
+      height: 30,
+    });
+    assert.equal(server.store.appendedMessages[0].id, message.id);
+    assert.equal(server.store.appendedMediaAssets[0].messageId, message.id);
+    const broadcastMessage = server.store.appendedMessages[0];
+    assert.deepEqual(server.emitted, [
+      { target: 'client-1', event: 'room_updated', payload: sampleRoom({ lastActivityAt: message.timestamp }) },
+      { target: 'room-1', event: 'new_message', payload: broadcastMessage },
+    ]);
+  });
+
+  it('does not use separate media asset and message writes when completing media uploads', async () => {
+    server.store.members.add('room-1:client-2');
+    server.store.saveMediaAsset = async () => {
+      throw new Error('saveMediaAsset must not be used by media complete');
+    };
+    server.store.appendMessage = async () => {
+      throw new Error('appendMessage must not be used by media complete');
+    };
+
+    const assetId = 'asset-atomic-only';
+    const objectKey = `rooms/room-1/media/audio/${assetId}`;
+    const response = await fetch(`${server.baseUrl}/api/media/uploads/${assetId}/complete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientId: 'client-2',
+        roomId: 'room-1',
+        kind: 'audio',
+        mimeType: 'audio/webm',
+        byteSize: 456,
+        objectKey,
+      }),
+    });
+
+    assert.equal(response.status, 201);
+    const message = await response.json() as Message;
+    assert.equal(message.messageType, 'media');
+    assert.equal(message.mediaAsset?.id, assetId);
+    assert.equal(server.store.appendedMessages.length, 1);
+    assert.equal(server.store.appendedMediaAssets.length, 1);
+  });
+
+  it('does not emit ghost media messages and deletes uploaded objects when atomic persistence fails', async () => {
+    server.store.members.add('room-1:client-2');
+    server.store.appendMediaMessageWithAsset = async () => null;
+    const assetId = 'asset-fail';
+    const objectKey = `rooms/room-1/media/audio/${assetId}`;
+
+    const response = await fetch(`${server.baseUrl}/api/media/uploads/${assetId}/complete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientId: 'client-2',
+        roomId: 'room-1',
+        kind: 'audio',
+        mimeType: 'audio/webm',
+        byteSize: 456,
+        objectKey,
+      }),
+    });
+
+    assert.equal(response.status, 500);
+    assert.deepEqual(await response.json(), { error: 'Failed to create media message' });
+    assert.deepEqual(server.emitted, []);
+    assert.deepEqual(server.deletedMediaObjects, [objectKey]);
   });
 
   it('returns client rooms and protects owner-only room detail lookup', async () => {

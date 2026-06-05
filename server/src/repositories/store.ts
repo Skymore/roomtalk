@@ -31,9 +31,16 @@ export interface MessageUpdateAndTruncateResult {
   updatedMessage?: Message;
 }
 
+export interface MediaMessageAppendResult {
+  room: Room;
+  message: Message;
+  asset: MediaAsset;
+}
+
 export interface DurableRoomStore {
   generateUniqueRoomId(): Promise<string>;
   appendMessage(message: Message): Promise<Room | null>;
+  appendMediaMessageWithAsset(message: Message, asset: MediaAsset): Promise<MediaMessageAppendResult | null>;
   upsertMessage(message: Message): Promise<Room | null>;
   updateMessageContent(roomId: string, messageId: string, updatedContent: string, updatedAt?: string): Promise<MessageUpdateResult | null>;
   deleteMessageById(roomId: string, messageId: string): Promise<MessageDeleteResult | null>;
@@ -134,6 +141,14 @@ export class CompositeRoomStore implements RoomStore {
       await this.invalidateRoomMessagesCache(message.roomId);
     }
     return updatedRoom;
+  }
+
+  async appendMediaMessageWithAsset(message: Message, asset: MediaAsset) {
+    const result = await this.durableStore.appendMediaMessageWithAsset(message, asset);
+    if (result) {
+      await this.invalidateRoomMessagesCache(message.roomId);
+    }
+    return result;
   }
 
   async upsertMessage(message: Message) {
