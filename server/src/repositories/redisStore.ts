@@ -178,7 +178,7 @@ local found = 0
 
 for i = 1, #existing do
   local ok, decoded = pcall(cjson.decode, existing[i])
-  if ok and decoded['id'] == mediaMessageId and (decoded['messageType'] == 'image' or decoded['messageType'] == 'voice' or decoded['messageType'] == 'media') then
+  if ok and decoded['id'] == mediaMessageId and decoded['messageType'] == 'media' then
     decoded['content'] = ''
     decoded['messageType'] = 'media'
     decoded['mimeType'] = mediaMimeType

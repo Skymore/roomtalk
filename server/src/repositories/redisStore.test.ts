@@ -137,7 +137,7 @@ class MemoryRedis {
       const index = list.findIndex(item => {
         try {
           const parsed = JSON.parse(item);
-          return parsed.id === messageId && ['image', 'voice', 'media'].includes(parsed.messageType);
+          return parsed.id === messageId && parsed.messageType === 'media';
         } catch {
           return false;
         }
@@ -494,8 +494,8 @@ describe('RedisStore', () => {
     const baseRoom = room({ lastActivityAt: '2026-05-03T00:00:10.000Z' });
     const legacyImage = message({
       id: 'legacy-image',
-      content: 'data:image/png;base64,AAAA',
-      messageType: 'image',
+      content: '',
+      messageType: 'media',
       mimeType: 'image/png',
       timestamp: '2026-05-03T00:00:01.000Z',
     });
