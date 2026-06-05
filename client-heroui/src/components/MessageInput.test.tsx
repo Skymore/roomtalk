@@ -10,6 +10,7 @@ const socketMocks = vi.hoisted(() => ({
   requestAIResponse: vi.fn(),
   sendMessage: vi.fn(),
   sendMessageAndAskAI: vi.fn(),
+  uploadMediaMessage: vi.fn(),
 }));
 
 vi.mock('../utils/socket', () => socketMocks);
@@ -159,18 +160,7 @@ const installVoiceRecordingMocks = () => {
     }
   }
 
-  class FakeFileReader {
-    result: string | ArrayBuffer | null = 'data:audio/webm;base64,dGVzdA==';
-    onload: ((event: ProgressEvent<FileReader>) => void) | null = null;
-    onerror: ((event: ProgressEvent<FileReader>) => void) | null = null;
-
-    readAsDataURL() {
-      this.onload?.({} as ProgressEvent<FileReader>);
-    }
-  }
-
   vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
-  vi.stubGlobal('FileReader', FakeFileReader);
   Object.defineProperty(navigator, 'mediaDevices', {
     configurable: true,
     value: {
@@ -196,6 +186,17 @@ describe('MessageInput optimistic send flow', () => {
       userMessage: message(),
       aiMessageId: 'ai-message-1',
     });
+    socketMocks.uploadMediaMessage.mockResolvedValue(message({
+      id: 'audio-message',
+      content: '',
+      messageType: 'media',
+      mediaAsset: {
+        id: 'asset-audio',
+        kind: 'audio',
+        mimeType: 'audio/webm',
+        byteSize: 2048,
+      },
+    }));
   });
 
   afterEach(() => {
@@ -338,14 +339,16 @@ describe('MessageInput optimistic send flow', () => {
     fireEvent.click(screen.getByText('send'));
 
     await waitFor(() => {
-      expect(socketMocks.sendMessage).toHaveBeenCalledWith(
-        'data:audio/webm;base64,dGVzdA==',
-        'room-1',
-        'voice',
-        'Ada',
-        { text: 'A', color: '#123456' },
-        undefined
-      );
+      expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1);
     });
+    expect(socketMocks.uploadMediaMessage.mock.calls[0][0]).toMatchObject({
+      roomId: 'room-1',
+      kind: 'audio',
+      mimeType: 'audio/webm;codecs=opus',
+      username: 'Ada',
+      avatar: { text: 'A', color: '#123456' },
+      replyToMessageId: undefined,
+    });
+    expect(socketMocks.uploadMediaMessage.mock.calls[0][0].file).toBeInstanceOf(Blob);
   });
 });

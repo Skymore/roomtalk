@@ -54,6 +54,7 @@ const socketMock = vi.hoisted(() => {
 
   return socket;
 });
+const fetchMock = vi.hoisted(() => vi.fn());
 
 vi.mock('socket.io-client', () => ({
   default: vi.fn(() => socketMock),
@@ -65,11 +66,13 @@ vi.mock('uuid', () => ({
 }));
 
 const {
-  getImageDownloadUrl,
+  getMediaDownloadUrl,
+  getRoomMembers,
   getSavedRoomsFromServer,
   saveRoomToServer,
   sendMessage,
   sendMessageAndAskAI,
+  setUsername,
   unsaveRoomFromServer,
 } = await import('./socket');
 
@@ -95,6 +98,8 @@ const room = (overrides: Partial<Room> = {}): Room => ({
 describe('socket message acknowledgement helpers', () => {
   beforeEach(() => {
     socketMock.reset();
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
     vi.clearAllMocks();
     localStorage.setItem('clientId', 'client-uuid');
   });
@@ -175,26 +180,21 @@ describe('socket message acknowledgement helpers', () => {
     );
   });
 
-  it('returns signed image download URLs from get_image_download_url acknowledgements', async () => {
-    socketMock.ackResponses.set('get_image_download_url', {
-      success: true,
-      url: 'https://signed.example/image.webp',
+  it('returns signed media download URLs from the media API', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      url: 'https://signed.example/media.webp',
+      expiresAt: '2026-05-03T00:15:00.000Z',
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+
+    await expect(getMediaDownloadUrl({ roomId: 'room-1', assetId: 'asset-1' })).resolves.toEqual({
+      url: 'https://signed.example/media.webp',
       expiresAt: '2026-05-03T00:15:00.000Z',
     });
 
-    await expect(getImageDownloadUrl({ roomId: 'room-1', assetId: 'asset-1' })).resolves.toEqual({
-      url: 'https://signed.example/image.webp',
-      expiresAt: '2026-05-03T00:15:00.000Z',
-    });
-
-    expect(socketMock.emit).toHaveBeenCalledWith(
-      'get_image_download_url',
-      {
-        roomId: 'room-1',
-        assetId: 'asset-1',
-      },
-      expect.any(Function)
-    );
+    expect(fetchMock).toHaveBeenCalledWith('/api/media/asset-1/download-url?roomId=room-1&clientId=client-uuid');
   });
 
   it('returns saved rooms from get_saved_rooms acknowledgements', async () => {
@@ -243,5 +243,30 @@ describe('socket message acknowledgement helpers', () => {
       { roomId: 'room-2' },
       expect.any(Function)
     );
+  });
+
+  it('returns online members from get_room_members acknowledgements', async () => {
+    const members = [
+      { clientId: 'client-uuid', nickname: 'Ada' },
+      { clientId: 'client-2', nickname: 'Grace' },
+    ];
+    socketMock.ackResponses.set('get_room_members', {
+      success: true,
+      members,
+    });
+
+    await expect(getRoomMembers('room-1')).resolves.toEqual(members);
+
+    expect(socketMock.emit).toHaveBeenCalledWith(
+      'get_room_members',
+      { roomId: 'room-1' },
+      expect.any(Function)
+    );
+  });
+
+  it('emits set_username when a username is set while connected', () => {
+    setUsername('Ada');
+
+    expect(socketMock.emit).toHaveBeenCalledWith('set_username', 'Ada');
   });
 });

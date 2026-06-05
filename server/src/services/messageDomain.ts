@@ -1,4 +1,4 @@
-import { AIModelOption, Message, MessageReplyReference, Room, RoomMemberEvent } from '../types';
+import { AIModelOption, MediaKind, Message, MessageReplyReference, Room, RoomMemberEvent } from '../types';
 import { getMessageAIModel } from './aiModels';
 
 const MAX_DISPLAY_NAME_LENGTH = 48;
@@ -21,19 +21,26 @@ export function normalizeDisplayName(username?: string): string | undefined {
 }
 
 export function createReplyReference(message: Message): MessageReplyReference {
-  const textualPreview = message.messageType === 'image'
-    ? '[Image attachment]'
-    : message.messageType === 'voice'
-      ? '[Voice message]'
-      : collapseInlineText(message.content);
+  const mediaKind = message.mediaAsset?.kind
+    || (message.messageType === 'voice' ? 'audio' : message.messageType === 'image' ? 'image' : undefined);
+  const normalizedMessageType = message.messageType === 'image' || message.messageType === 'voice'
+    ? 'media'
+    : message.messageType;
+  const textualPreview = normalizedMessageType === 'media'
+    ? getMediaAttachmentLabel(mediaKind)
+    : collapseInlineText(message.content);
   const preview = textualPreview.slice(0, MAX_REPLY_PREVIEW_LENGTH).trim() || '[Empty message]';
 
-  return {
+  const reference: MessageReplyReference = {
     messageId: message.id,
     username: normalizeDisplayName(message.username),
-    messageType: message.messageType,
+    messageType: normalizedMessageType,
     preview,
   };
+  if (mediaKind) {
+    reference.mediaKind = mediaKind;
+  }
+  return reference;
 }
 
 export function createRoomRecord(input: {
@@ -75,10 +82,8 @@ export function createUserMessage(input: {
   clientId: string;
   roomId: string;
   content: string;
-  messageType?: 'text' | 'image' | 'voice';
   username?: string;
   avatar?: AvatarPayload;
-  mimeType?: string;
   replyTo?: MessageReplyReference;
   clientMessageId?: string;
   now?: Date;
@@ -89,12 +94,55 @@ export function createUserMessage(input: {
     content: input.content,
     roomId: input.roomId,
     timestamp: (input.now || new Date()).toISOString(),
-    messageType: input.messageType || 'text',
+    messageType: 'text',
+    username: normalizeDisplayName(input.username),
+    avatar: input.avatar,
+    replyTo: input.replyTo,
+    clientMessageId: input.clientMessageId,
+  };
+}
+
+export function createMediaMessage(input: {
+  id: string;
+  clientId: string;
+  roomId: string;
+  content?: string;
+  kind: MediaKind;
+  assetId: string;
+  mimeType: string;
+  byteSize: number;
+  width?: number;
+  height?: number;
+  durationMs?: number;
+  username?: string;
+  avatar?: AvatarPayload;
+  replyTo?: MessageReplyReference;
+  clientMessageId?: string;
+  now?: Date;
+}): Message {
+  const mediaAsset: Message['mediaAsset'] = {
+    id: input.assetId,
+    kind: input.kind,
+    mimeType: input.mimeType,
+    byteSize: input.byteSize,
+    width: input.width,
+    height: input.height,
+    durationMs: input.durationMs,
+  };
+
+  return {
+    id: input.id,
+    clientId: input.clientId,
+    content: input.content || '',
+    roomId: input.roomId,
+    timestamp: (input.now || new Date()).toISOString(),
+    messageType: 'media',
     username: normalizeDisplayName(input.username),
     avatar: input.avatar,
     mimeType: input.mimeType,
     replyTo: input.replyTo,
     clientMessageId: input.clientMessageId,
+    mediaAsset,
   };
 }
 
@@ -152,8 +200,7 @@ export function deleteMessageFromHistory(messages: Message[], messageId: string)
 }
 
 type AnthropicContentBlock =
-  | { type: 'text'; text: string }
-  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
+  | { type: 'text'; text: string };
 
 type AnthropicMessage = {
   role: 'user' | 'assistant';
@@ -180,38 +227,27 @@ const formatHumanContextForAI = (message: Message, content: string) => {
   return lines.join('\n');
 };
 
+const getMediaAttachmentLabel = (kind?: MediaKind) => {
+  if (kind === 'audio') return '[Audio attachment]';
+  if (kind === 'video') return '[Video attachment]';
+  return '[Image attachment]';
+};
+
+const getMessageMediaKind = (message: Message): MediaKind | undefined => (
+  message.mediaAsset?.kind
+  || (message.messageType === 'voice' ? 'audio' : message.messageType === 'image' ? 'image' : undefined)
+);
+
 export function buildAnthropicMessages(contextMessages: Message[]): AnthropicMessage[] {
   return contextMessages
     .map((message): AnthropicMessage | null => {
       const role = message.clientId === 'ai_assistant' ? 'assistant' as const : 'user' as const;
 
-      if (message.messageType === 'image') {
-        if (message.imageAsset) {
-          return role === 'user'
-            ? { role, content: formatHumanContextForAI(message, '[Image attachment]') }
-            : null;
-        }
-
-        const dataUrl = message.content.startsWith('data:')
-          ? message.content
-          : `data:${message.mimeType || 'image/png'};base64,${message.content}`;
-        const commaIdx = dataUrl.indexOf(',');
-        const header = dataUrl.slice(0, commaIdx);
-        const data = dataUrl.slice(commaIdx + 1);
-        const mediaType = header.match(/data:([^;]+)/)?.[1] || 'image/png';
-        if (!data) return null;
-        const blocks: AnthropicContentBlock[] = [];
-        if (role === 'user') {
-          blocks.push({ type: 'text', text: formatHumanContextForAI(message, '[Image attachment]') });
-        }
-        blocks.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data } });
-        return { role, content: blocks };
-      }
-
-      if (message.messageType === 'voice') {
+      if (message.messageType === 'media' || message.messageType === 'image' || message.messageType === 'voice') {
+        const attachmentLabel = getMediaAttachmentLabel(getMessageMediaKind(message));
         return role === 'user'
-          ? { role, content: formatHumanContextForAI(message, '[Voice message]') }
-          : null;
+          ? { role, content: formatHumanContextForAI(message, attachmentLabel) }
+          : { role, content: attachmentLabel };
       }
 
       if (typeof message.content !== 'string' || !message.content.trim()) return null;
@@ -228,12 +264,6 @@ type AIProviderMessage = {
   content: string | Array<{
     type: 'text';
     text: string;
-  } | {
-    type: 'image_url';
-    image_url: {
-      url: string;
-      detail: 'auto';
-    };
   }>;
 };
 
@@ -243,39 +273,11 @@ export function buildAIProviderMessages(systemPrompt: string, contextMessages: M
     ...contextMessages.map(message => {
       const role: AIProviderMessage['role'] = message.clientId === 'ai_assistant' ? 'assistant' : 'user';
 
-      if (message.messageType === 'image') {
-        if (message.imageAsset) {
-          return {
-            role,
-            content: role === 'user' ? formatHumanContextForAI(message, '[Image attachment]') : '[Image attachment]',
-          };
-        }
-
-        const imageUrl = message.content.startsWith('data:')
-          ? message.content
-          : `data:${message.mimeType || 'image/png'};base64,${message.content}`;
-
+      if (message.messageType === 'media' || message.messageType === 'image' || message.messageType === 'voice') {
+        const attachmentLabel = getMediaAttachmentLabel(getMessageMediaKind(message));
         return {
           role,
-          content: [
-            ...(role === 'user'
-              ? [{ type: 'text' as const, text: formatHumanContextForAI(message, '[Image attachment]') }]
-              : []),
-            {
-              type: 'image_url' as const,
-              image_url: {
-                url: imageUrl,
-                detail: 'auto' as const,
-              },
-            },
-          ],
-        };
-      }
-
-      if (message.messageType === 'voice') {
-        return {
-          role,
-          content: role === 'user' ? formatHumanContextForAI(message, '[Voice message]') : '[Voice message]',
+          content: role === 'user' ? formatHumanContextForAI(message, attachmentLabel) : attachmentLabel,
         };
       }
 
@@ -292,7 +294,7 @@ export function buildAIProviderMessages(systemPrompt: string, contextMessages: M
 
   return messagesForAPI.filter(message => {
     if (Array.isArray(message.content)) {
-      return message.content.some(item => item.type === 'image_url' && item.image_url?.url);
+      return message.content.some(item => item.type === 'text' && item.text.trim());
     }
 
     return typeof message.content === 'string' && message.content.trim() !== '';

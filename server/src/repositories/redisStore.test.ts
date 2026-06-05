@@ -126,9 +126,9 @@ class MemoryRedis {
   }
 
   async eval(script: string, options: { keys: string[]; arguments: string[] }) {
-    if (script.includes('local imageAssetId')) {
+    if (script.includes('local mediaMessageId')) {
       const [, messageKey] = options.keys;
-      const [roomId, messageId, assetId, mimeType] = options.arguments;
+      const [roomId, messageId, mimeType] = options.arguments;
       const roomJson = this.hash('rooms').get(roomId);
       if (!roomJson) {
         return [0, 0, '', ''];
@@ -137,7 +137,7 @@ class MemoryRedis {
       const index = list.findIndex(item => {
         try {
           const parsed = JSON.parse(item);
-          return parsed.id === messageId && parsed.messageType === 'image';
+          return parsed.id === messageId && ['image', 'voice', 'media'].includes(parsed.messageType);
         } catch {
           return false;
         }
@@ -146,8 +146,8 @@ class MemoryRedis {
         return [1, 0, roomJson, ''];
       }
 
-      const updatedMessage = { ...JSON.parse(list[index]), content: assetId, mimeType };
-      delete updatedMessage.imageAsset;
+      const updatedMessage = { ...JSON.parse(list[index]), content: '', messageType: 'media', mimeType };
+      delete updatedMessage.mediaAsset;
       list[index] = JSON.stringify(updatedMessage);
       this.lists.set(messageKey, list);
       return [1, 1, roomJson, list[index]];
@@ -438,14 +438,15 @@ describe('RedisStore', () => {
     assert.deepEqual(await store.readMessagesByRoom('room-1'), []);
   });
 
-  it('stores image assets and attaches metadata to image messages', async () => {
+  it('stores media assets and attaches metadata to media messages', async () => {
     const { store } = createStore();
     const baseRoom = room();
     const asset = {
       id: 'asset-1',
       roomId: 'room-1',
-      messageId: 'image-message',
-      objectKey: 'rooms/room-1/asset-1.webp',
+      messageId: 'media-message',
+      objectKey: 'rooms/room-1/media/image/asset-1',
+      kind: 'image' as const,
       mimeType: 'image/webp',
       byteSize: 123,
       width: 10,
@@ -454,26 +455,27 @@ describe('RedisStore', () => {
     };
 
     await store.saveRoom(baseRoom);
-    assert.deepEqual(await store.saveImageAsset(asset), asset);
-    assert.deepEqual(await store.getImageAsset('asset-1'), asset);
-    assert.deepEqual(await store.getImageAssetByMessageId('image-message'), asset);
-    assert.deepEqual(await store.readImageAssetsByRoom('room-1'), [asset]);
+    assert.deepEqual(await store.saveMediaAsset(asset), asset);
+    assert.deepEqual(await store.getMediaAsset('asset-1'), asset);
+    assert.deepEqual(await store.getMediaAssetByMessageId('media-message'), asset);
+    assert.deepEqual(await store.readMediaAssetsByRoom('room-1'), [asset]);
 
     await store.appendMessage(message({
-      id: 'image-message',
-      content: 'asset-1',
-      messageType: 'image',
+      id: 'media-message',
+      content: '',
+      messageType: 'media',
       mimeType: 'image/webp',
     }));
 
     assert.deepEqual(await store.readMessagesByRoom('room-1'), [
       message({
-        id: 'image-message',
-        content: 'asset-1',
-        messageType: 'image',
+        id: 'media-message',
+        content: '',
+        messageType: 'media',
         mimeType: 'image/webp',
-        imageAsset: {
+        mediaAsset: {
           id: 'asset-1',
+          kind: 'image',
           mimeType: 'image/webp',
           byteSize: 123,
           width: 10,
@@ -482,12 +484,12 @@ describe('RedisStore', () => {
       }),
     ]);
 
-    await store.deleteImageAsset('asset-1');
-    assert.equal(await store.getImageAsset('asset-1'), null);
-    assert.deepEqual(await store.readImageAssetsByRoom('room-1'), []);
+    await store.deleteMediaAsset('asset-1');
+    assert.equal(await store.getMediaAsset('asset-1'), null);
+    assert.deepEqual(await store.readMediaAssetsByRoom('room-1'), []);
   });
 
-  it('replaces legacy base64 image messages with image asset metadata', async () => {
+  it('replaces legacy base64 image messages with media asset metadata', async () => {
     const { store } = createStore();
     const baseRoom = room({ lastActivityAt: '2026-05-03T00:00:10.000Z' });
     const legacyImage = message({
@@ -501,7 +503,8 @@ describe('RedisStore', () => {
       id: 'asset-legacy',
       roomId: 'room-1',
       messageId: 'legacy-image',
-      objectKey: 'rooms/room-1/asset-legacy.webp',
+      objectKey: 'rooms/room-1/media/image/asset-legacy',
+      kind: 'image' as const,
       mimeType: 'image/webp',
       byteSize: 456,
       width: 12,
@@ -512,16 +515,18 @@ describe('RedisStore', () => {
     await store.saveRoom(baseRoom);
     await store.appendMessage(legacyImage);
 
-    const result = await store.replaceMessageImageAsset('room-1', 'legacy-image', asset);
+    const result = await store.replaceMessageMediaAsset('room-1', 'legacy-image', asset);
 
     assert.equal(result?.found, true);
     assert.deepEqual(result?.room, baseRoom);
     assert.deepEqual(result?.updatedMessage, {
       ...legacyImage,
-      content: 'asset-legacy',
+      content: '',
+      messageType: 'media',
       mimeType: 'image/webp',
-      imageAsset: {
+      mediaAsset: {
         id: 'asset-legacy',
+        kind: 'image',
         mimeType: 'image/webp',
         byteSize: 456,
         width: 12,
@@ -531,13 +536,13 @@ describe('RedisStore', () => {
     assert.deepEqual(await store.getRoomById('room-1'), baseRoom);
     assert.deepEqual(await store.readMessagesByRoom('room-1'), [result?.updatedMessage]);
 
-    const missingResult = await store.replaceMessageImageAsset('room-1', 'missing', {
+    const missingResult = await store.replaceMessageMediaAsset('room-1', 'missing', {
       ...asset,
       id: 'missing-asset',
-      objectKey: 'rooms/room-1/missing-asset.webp',
+      objectKey: 'rooms/room-1/media/image/missing-asset',
     });
     assert.equal(missingResult?.found, false);
-    assert.equal(await store.getImageAsset('missing-asset'), null);
+    assert.equal(await store.getMediaAsset('missing-asset'), null);
   });
 
   it('does not create orphan message lists for missing rooms', async () => {
@@ -644,6 +649,35 @@ describe('RedisStore', () => {
       (await store.readRoomMembers('room-1')).map(member => member.clientId),
       ['client-1', 'client-2']
     );
+  });
+
+  it('returns online room members resolved to their stored nicknames', async () => {
+    const { store } = createStore();
+
+    await store.saveRoom(room());
+    await store.addRoomMember('room-1', 'client-2', 'member', '2026-05-03T00:01:00.000Z');
+    await store.setClientNickname('client-1', 'Ada');
+    await store.setClientNickname('client-2', 'Grace');
+    await store.updateRoomMemberCount('room-1', 'client-1', 'socket-1', true);
+    await store.updateRoomMemberCount('room-1', 'client-2', 'socket-2', true);
+
+    const members = await store.getRoomOnlineMembers('room-1');
+    const byClient = new Map(members.map(member => [member.clientId, member.nickname]));
+
+    assert.equal(members.length, 2);
+    assert.equal(byClient.get('client-1'), 'Ada');
+    assert.equal(byClient.get('client-2'), 'Grace');
+  });
+
+  it('returns online members without nicknames when none were stored', async () => {
+    const { store } = createStore();
+
+    await store.saveRoom(room());
+    await store.updateRoomMemberCount('room-1', 'client-1', 'socket-1', true);
+
+    assert.deepEqual(await store.getRoomOnlineMembers('room-1'), [
+      { clientId: 'client-1', nickname: undefined },
+    ]);
   });
 
   it('resets all Redis test data through the store abstraction', async () => {

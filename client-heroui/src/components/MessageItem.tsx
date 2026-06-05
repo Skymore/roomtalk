@@ -10,7 +10,7 @@ import {
   DropdownItem,
 } from "@heroui/react";
 import { Icon } from "@iconify/react";
-import { clientId, getImageDownloadUrl } from "../utils/socket";
+import { clientId, getMediaDownloadUrl } from "../utils/socket";
 import { formatPercentage, formatTime, formatUsdCost } from "../utils/formatters";
 import { Message } from "../utils/types";
 import { useTranslation } from "react-i18next";
@@ -51,7 +51,7 @@ async function copyImageToClipboard(imageSource: string): Promise<boolean> {
     // ClipboardItem requires a secure context (HTTPS or localhost)
     if (typeof ClipboardItem === "undefined") {
         console.warn("ClipboardItem API is not available in this context (non-secure?). Falling back to text copy.");
-        // Fallback: Copy the base64 string as text
+        // Fallback: copy the signed image URL as text.
         await navigator.clipboard.writeText(imageSource);
         return true; // Indicate success for text copy
     }
@@ -73,17 +73,20 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   onReply,
 }) => {
   const isMine = message.clientId === clientId;
-  const [imageError, setImageError] = React.useState(false);
-  const [signedImageUrl, setSignedImageUrl] = React.useState<string | null>(null);
-  const imageRetryCountRef = React.useRef(0);
-  const isImage = message.messageType === "image";
-  const isVoice = message.messageType === "voice";
+  const [mediaError, setMediaError] = React.useState(false);
+  const [signedMediaUrl, setSignedMediaUrl] = React.useState<string | null>(null);
+  const mediaRetryCountRef = React.useRef(0);
+  const isMedia = message.messageType === "media";
+  const mediaKind = message.mediaAsset?.kind;
+  const isImage = isMedia && mediaKind === "image";
+  const isAudio = isMedia && mediaKind === "audio";
+  const isVideo = isMedia && mediaKind === "video";
   const isText = message.messageType === "text";
   const isAI = message.clientId === 'ai_assistant';
   const isStreaming = isAI && message.status === 'streaming';
   const isPending = message.deliveryStatus === 'pending';
   const isFailed = message.deliveryStatus === 'failed';
-  const canBeEdited = (isText || (message.messageType === 'ai' && message.status !== 'streaming')) && !isVoice;
+  const canBeEdited = isText || (message.messageType === 'ai' && message.status !== 'streaming');
   const { t, i18n } = useTranslation();
   const aiMetadataParts = isAI
     ? [
@@ -98,11 +101,13 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const aiCostLabel = aiMetadataParts.join(' · ');
   const replySenderName = message.replyTo?.username
     || (message.replyTo?.messageType === 'ai' ? t('aiAssistantName') : t('participant'));
-  const replyPreview = message.replyTo?.messageType === 'image'
-    ? t('sharedImage')
-    : message.replyTo?.messageType === 'voice'
+  const replyPreview = message.replyTo?.messageType === 'media'
+    ? (message.replyTo.mediaKind === 'audio'
       ? t('voiceMessage')
-      : message.replyTo?.preview;
+      : message.replyTo.mediaKind === 'video'
+        ? t('videoMessage')
+        : t('sharedImage'))
+    : message.replyTo?.preview;
   const replyReference = message.replyTo ? (
     <div className="mb-2 max-w-full border-l-2 border-[#c96442] pl-2 text-xs text-[#5e5d59] dark:text-[#b0aea5]">
       <div className="truncate font-medium">{t('replyingTo', { name: replySenderName })}</div>
@@ -123,81 +128,90 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     };
   }, []);
 
-  const loadSignedImageUrl = React.useCallback(() => {
-    if (!isImage || !message.imageAsset?.id) {
-      setSignedImageUrl(null);
-      setImageError(false);
+  const loadSignedMediaUrl = React.useCallback(() => {
+    if (!isMedia || !message.mediaAsset?.id) {
+      setSignedMediaUrl(null);
+      setMediaError(false);
       return () => {};
     }
 
     let cancelled = false;
-    setSignedImageUrl(null);
-    setImageError(false);
+    setSignedMediaUrl(null);
+    setMediaError(false);
 
-    getImageDownloadUrl({ roomId: message.roomId, assetId: message.imageAsset.id })
+    getMediaDownloadUrl({ roomId: message.roomId, assetId: message.mediaAsset.id })
       .then(({ url }) => {
         if (!cancelled) {
-          setSignedImageUrl(url);
+          setSignedMediaUrl(url);
         }
       })
       .catch((error) => {
-        console.error("Failed to get image URL:", error);
+        console.error("Failed to get media URL:", error);
         if (!cancelled) {
-          setImageError(true);
+          setMediaError(true);
         }
       });
 
     return () => {
       cancelled = true;
     };
-  }, [isImage, message.imageAsset?.id, message.roomId]);
+  }, [isMedia, message.mediaAsset?.id, message.roomId]);
 
   React.useEffect(() => {
-    imageRetryCountRef.current = 0;
-    return loadSignedImageUrl();
-  }, [loadSignedImageUrl]);
+    mediaRetryCountRef.current = 0;
+    return loadSignedMediaUrl();
+  }, [loadSignedMediaUrl]);
 
-  const legacyImageSrc = isImage && !message.imageAsset
-    ? (message.content.startsWith('data:')
-      ? message.content
-      : `data:${message.mimeType || 'image/png'};base64,${message.content}`)
-    : null;
-  const imageSrc = isImage
-    ? (message.imageAsset ? signedImageUrl : legacyImageSrc)
-    : null;
-
-  const handleImageError = () => {
-    if (message.imageAsset?.id && imageRetryCountRef.current < 1) {
-      imageRetryCountRef.current += 1;
-      loadSignedImageUrl();
+  const handleMediaError = () => {
+    if (message.mediaAsset?.id && mediaRetryCountRef.current < 1) {
+      mediaRetryCountRef.current += 1;
+      loadSignedMediaUrl();
       return;
     }
 
-    setImageError(true);
+    setMediaError(true);
   };
 
-  let imageMedia: React.ReactNode = null;
-  if (isImage) {
-    if (imageError) {
-      imageMedia = (
+  let mediaContent: React.ReactNode = null;
+  if (isMedia) {
+    if (mediaError) {
+      mediaContent = (
         <div className="w-fit rounded-lg bg-[#e8e6dc] px-3 py-2 text-sm text-danger shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e]">
           <Icon icon="lucide:alert-triangle" className="inline mr-1" />
-          {t('imageLoadFailed')}
+          {t('mediaLoadFailed')}
         </div>
       );
-    } else if (imageSrc) {
-      imageMedia = (
+    } else if (signedMediaUrl && isImage) {
+      mediaContent = (
         <img
-          src={imageSrc}
+          src={signedMediaUrl}
           alt={t('sharedImage')}
           className="block max-h-[300px] max-w-full rounded-xl object-contain"
-          onError={handleImageError}
+          onError={handleMediaError}
+        />
+      );
+    } else if (signedMediaUrl && isAudio) {
+      mediaContent = (
+        <audio
+          controls
+          src={signedMediaUrl}
+          className="roomtalk-audio-player block h-9 min-w-[180px] max-w-[240px]"
+          onError={handleMediaError}
+        />
+      );
+    } else if (signedMediaUrl && isVideo) {
+      mediaContent = (
+        <video
+          controls
+          src={signedMediaUrl}
+          className="block max-h-[360px] max-w-full rounded-xl bg-black"
+          onError={handleMediaError}
         />
       );
     } else {
-      imageMedia = (
+      mediaContent = (
         <div className="flex h-24 w-36 items-center justify-center rounded-xl bg-[#e8e6dc] text-[#87867f] shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e] dark:text-[#b0aea5] dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)]">
-          <Icon icon="lucide:image" className="h-5 w-5" />
+          <Icon icon={isAudio ? "lucide:audio-lines" : isVideo ? "lucide:video" : "lucide:image"} className="h-5 w-5" />
         </div>
       );
     }
@@ -205,8 +219,8 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
 
   const handleCopyMessage = async () => {
     const success = isImage
-      ? imageSrc
-        ? await copyImageToClipboard(imageSrc)
+      ? signedMediaUrl
+        ? await copyImageToClipboard(signedMediaUrl)
         : false
       : await navigator.clipboard.writeText(message.content).then(() => true).catch((error) => {
         console.error("Failed to copy message:", error);
@@ -280,20 +294,10 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
 
         {/* Container for bubble/image */}
         <div className="relative inline-block w-fit max-w-full min-w-0">
-          {isImage ? (
+          {isMedia ? (
             <div className="w-fit max-w-full">
               {replyReference}
-              {imageMedia}
-            </div>
-          ) : isVoice ? (
-            // ========== Voice Message ==========
-            <div className="w-fit max-w-full">
-              {replyReference}
-              <audio
-                controls
-                src={message.content}
-                className="roomtalk-audio-player block h-9 min-w-[180px] max-w-[240px]"
-              />
+              {mediaContent}
             </div>
           ) : (
             // ========== Text Message (Display Mode) ==========
@@ -359,7 +363,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                   aria-label={isImage ? t('copyImage') : t('copy')}
                   className={`h-5 w-5 min-w-0 ${copyStatus === 'success' ? 'text-[#c96442] dark:text-[#d97757]' : 'text-[#5e5d59] dark:text-[#b0aea5]'}`}
                   onPress={handleCopyMessage}
-                  isDisabled={isImage && (!imageSrc || imageError)}
+                  isDisabled={isMedia && (!isImage || !signedMediaUrl || mediaError)}
                 >
                   <Icon icon={copyStatus === 'success' ? "lucide:check" : "lucide:copy"} width={12} height={12}/>
                 </Button>

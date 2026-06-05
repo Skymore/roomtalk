@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { Server as HttpServer } from 'http';
 import path from 'path';
 import { registerApiRoutes } from './apiRoutes';
-import { Message, Room } from '../types';
+import { MediaAsset, Message, Room } from '../types';
 
 type EmittedEvent = {
   target: string;
@@ -25,6 +25,7 @@ type TestServer = {
     members: Set<string>;
     savedRooms: Room[];
     appendedMessages: Message[];
+    mediaAssets: Map<string, MediaAsset>;
     readMessagesByRoom: (roomId: string) => Promise<Message[]>;
     addRoomMember: (roomId: string, clientId: string, role: 'owner' | 'member', joinedAt?: string) => Promise<{ roomId: string; clientId: string; role: 'owner' | 'member'; joinedAt: string } | null>;
     getRoomMember: (roomId: string, clientId: string) => Promise<{ roomId: string; clientId: string; role: 'owner' | 'member'; joinedAt: string } | null>;
@@ -34,6 +35,9 @@ type TestServer = {
     generateUniqueRoomId: () => Promise<string>;
     saveRoom: (room: Room) => Promise<Room | null>;
     appendMessage: (message: Message) => Promise<Room | null>;
+    saveMediaAsset: (asset: MediaAsset) => Promise<MediaAsset | null>;
+    getMediaAsset: (assetId: string) => Promise<MediaAsset | null>;
+    deleteMediaAsset: (assetId: string) => Promise<void>;
     readRoomAICost: (roomId: string) => Promise<{ roomId: string; currency: 'USD'; totalUsd: number }>;
     getRoomById: (roomId: string) => Promise<Room | null>;
     countRooms: () => Promise<number>;
@@ -110,6 +114,7 @@ async function createTestServer(): Promise<TestServer> {
     members: new Set(['room-1:client-1']),
     savedRooms: [] as Room[],
     appendedMessages: [] as Message[],
+    mediaAssets: new Map<string, MediaAsset>(),
     async readMessagesByRoom(roomId: string) {
       return this.messages.filter(message => message.roomId === roomId);
     },
@@ -147,6 +152,16 @@ async function createTestServer(): Promise<TestServer> {
       this.messages.push(message);
       return sampleRoom({ lastActivityAt: message.timestamp });
     },
+    async saveMediaAsset(asset: MediaAsset) {
+      this.mediaAssets.set(asset.id, asset);
+      return asset;
+    },
+    async getMediaAsset(assetId: string) {
+      return this.mediaAssets.get(assetId) || null;
+    },
+    async deleteMediaAsset(assetId: string) {
+      this.mediaAssets.delete(assetId);
+    },
     async readRoomAICost(roomId: string) {
       return { roomId, currency: 'USD' as const, totalUsd: 1.25 };
     },
@@ -175,6 +190,21 @@ async function createTestServer(): Promise<TestServer> {
     isOpen: true,
   };
 
+  const mediaObjectStorage = {
+    isConfigured: () => true,
+    async putMediaObject() {},
+    async createWriteUrl({ objectKey }: { objectKey: string }) {
+      return { url: `https://upload.example/${encodeURIComponent(objectKey)}`, expiresAt: '2026-05-03T00:15:00.000Z' };
+    },
+    async createReadUrl({ objectKey }: { objectKey: string }) {
+      return { url: `https://download.example/${encodeURIComponent(objectKey)}`, expiresAt: '2026-05-03T00:15:00.000Z' };
+    },
+    async headObject() {
+      return { exists: true };
+    },
+    async deleteMediaObject() {},
+  };
+
   const routeLogger = {
     debug() {},
     error() {},
@@ -201,6 +231,7 @@ async function createTestServer(): Promise<TestServer> {
       }
       return { name: 'Review Expert', systemPrompt: 'Review implementation decisions carefully.' };
     },
+    mediaObjectStorage: mediaObjectStorage as any,
   });
 
   const server = await new Promise<HttpServer>(resolve => {

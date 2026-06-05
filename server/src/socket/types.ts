@@ -3,7 +3,6 @@ import type { Logger } from '../logger';
 import type { RoomStore } from '../repositories/store';
 import type { AIModelOption } from '../types';
 import type { AIClientWrapper } from '../services/aiClients';
-import type { ImageObjectStorage } from '../services/imageObjectStorage';
 
 export interface SocketHandlerDeps {
   io: Server;
@@ -12,7 +11,6 @@ export interface SocketHandlerDeps {
   openaiLogger: Logger;
   normalizeAIModel: (requestedModel?: string) => AIModelOption;
   getAIClientForModel: (model: AIModelOption) => AIClientWrapper;
-  imageObjectStorage: ImageObjectStorage;
   assemblyAIApiKey?: string;
 }
 

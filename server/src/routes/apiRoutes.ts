@@ -4,9 +4,11 @@ import { RedisClientType } from 'redis';
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../logger';
 import { RoomStore } from '../repositories/store';
-import { Message, Room } from '../types';
+import { MediaAsset, MediaKind, Message, Room } from '../types';
 import { AIRoleDraft, MAX_AI_ROLE_IDEA_LENGTH } from '../services/aiRoleGenerator';
 import { hasRoomAccess } from '../socket/roomAccess';
+import { createMediaMessage, createReplyReference } from '../services/messageDomain';
+import { MediaObjectStorage } from '../services/mediaObjectStorage';
 
 interface ApiRouteOptions {
   store: RoomStore;
@@ -16,13 +18,56 @@ interface ApiRouteOptions {
   getAIModelResponse: () => unknown;
   generateAIRoleDraft: (idea: string) => Promise<AIRoleDraft>;
   persistenceStore?: string;
+  mediaObjectStorage: MediaObjectStorage;
 }
 
+const MEDIA_UPLOAD_LIMIT_BYTES: Record<MediaKind, number> = {
+  image: 10 * 1024 * 1024,
+  audio: 25 * 1024 * 1024,
+  video: 100 * 1024 * 1024,
+};
+
+const isMediaKind = (kind: unknown): kind is MediaKind => (
+  kind === 'image' || kind === 'audio' || kind === 'video'
+);
+
+const isAllowedMediaMimeType = (kind: MediaKind, mimeType: string) => {
+  if (!mimeType || mimeType.includes('\n') || mimeType.includes('\r')) {
+    return false;
+  }
+  if (kind === 'image') {
+    return mimeType.startsWith('image/') && mimeType !== 'image/svg+xml';
+  }
+  return mimeType.startsWith(`${kind}/`);
+};
+
+const parseByteSize = (value: unknown) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
+};
+
+const parseOptionalInteger = (value: unknown) => {
+  if (value === null || value === undefined || value === '') {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : undefined;
+};
+
+const buildMediaObjectKey = (roomId: string, kind: MediaKind, assetId: string) => (
+  `rooms/${roomId}/media/${kind}/${assetId}`
+);
+
 export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
-  const { store, io, redisClient, routeLogger, getAIModelResponse, generateAIRoleDraft, persistenceStore = 'redis' } = options;
+  const { store, io, redisClient, routeLogger, getAIModelResponse, generateAIRoleDraft, persistenceStore = 'redis', mediaObjectStorage } = options;
 
   const getQueryClientId = (req: Request): string | null => {
     const clientId = req.query.clientId;
+    return typeof clientId === 'string' && clientId.trim() ? clientId : null;
+  };
+
+  const getBodyClientId = (req: Request): string | null => {
+    const clientId = req.body?.clientId;
     return typeof clientId === 'string' && clientId.trim() ? clientId : null;
   };
 
@@ -106,13 +151,18 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       return res.status(403).json({ error: 'Not authorized to access this room' });
     }
 
+    if (messageType && messageType !== 'text') {
+      routeLogger.warn('Rejected media creation through text API', { endpoint: 'POST /api/rooms/:roomId/messages', clientId, roomId, messageType, ip: req.ip });
+      return res.status(400).json({ error: 'Media messages must use the media upload API' });
+    }
+
     const message: Message = {
       id: uuidv4(),
       clientId,
       content,
       roomId,
       timestamp: new Date().toISOString(),
-      messageType: messageType || 'text',
+      messageType: 'text',
     };
 
     const loggableMessage = routeLogger.formatMessageForLog(message);
@@ -127,6 +177,203 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
     io.to(roomId).emit('new_message', message);
     return res.status(201).json(message);
+  });
+
+  app.post('/api/media/uploads', async (req: Request, res: Response) => {
+    if (!mediaObjectStorage.isConfigured()) {
+      return res.status(503).json({ error: 'Media object storage is not configured' });
+    }
+
+    const clientId = getBodyClientId(req);
+    const roomId = typeof req.body?.roomId === 'string' ? req.body.roomId : '';
+    const kind = req.body?.kind;
+    const mimeType = typeof req.body?.mimeType === 'string' ? req.body.mimeType.trim().toLowerCase() : '';
+    const byteSize = parseByteSize(req.body?.byteSize);
+
+    if (!clientId || !roomId || !isMediaKind(kind) || !mimeType || !byteSize) {
+      return res.status(400).json({ error: 'clientId, roomId, kind, mimeType, and byteSize are required' });
+    }
+
+    if (!(await hasRoomAccess(store, roomId, clientId))) {
+      routeLogger.warn('Unauthorized media upload URL request', { endpoint: 'POST /api/media/uploads', clientId, roomId, kind, ip: req.ip });
+      return res.status(403).json({ error: 'Not authorized to access this room' });
+    }
+
+    if (!isAllowedMediaMimeType(kind, mimeType)) {
+      return res.status(400).json({ error: 'Unsupported media MIME type' });
+    }
+
+    if (byteSize > MEDIA_UPLOAD_LIMIT_BYTES[kind]) {
+      return res.status(413).json({ error: 'Media file is too large' });
+    }
+
+    const assetId = uuidv4();
+    const objectKey = buildMediaObjectKey(roomId, kind, assetId);
+    const signedUpload = await mediaObjectStorage.createWriteUrl({
+      objectKey,
+      mimeType,
+      byteSize,
+      expiresInSeconds: 15 * 60,
+    });
+
+    return res.status(201).json({
+      assetId,
+      uploadUrl: signedUpload.url,
+      objectKey,
+      expiresAt: signedUpload.expiresAt,
+    });
+  });
+
+  app.post('/api/media/uploads/:assetId/complete', async (req: Request, res: Response) => {
+    if (!mediaObjectStorage.isConfigured()) {
+      return res.status(503).json({ error: 'Media object storage is not configured' });
+    }
+
+    const { assetId } = req.params;
+    const clientId = getBodyClientId(req);
+    const roomId = typeof req.body?.roomId === 'string' ? req.body.roomId : '';
+    const kind = req.body?.kind;
+    const mimeType = typeof req.body?.mimeType === 'string' ? req.body.mimeType.trim().toLowerCase() : '';
+    const byteSize = parseByteSize(req.body?.byteSize);
+    const objectKey = typeof req.body?.objectKey === 'string' ? req.body.objectKey : '';
+    const content = typeof req.body?.caption === 'string' ? req.body.caption : '';
+    const width = parseOptionalInteger(req.body?.width);
+    const height = parseOptionalInteger(req.body?.height);
+    const durationMs = parseOptionalInteger(req.body?.durationMs);
+
+    if (!assetId || !clientId || !roomId || !isMediaKind(kind) || !mimeType || !byteSize || !objectKey) {
+      return res.status(400).json({ error: 'assetId, clientId, roomId, kind, mimeType, byteSize, and objectKey are required' });
+    }
+
+    if (objectKey !== buildMediaObjectKey(roomId, kind, assetId)) {
+      return res.status(400).json({ error: 'Invalid media object key' });
+    }
+
+    if (!(await hasRoomAccess(store, roomId, clientId))) {
+      routeLogger.warn('Unauthorized media upload completion', { endpoint: 'POST /api/media/uploads/:assetId/complete', clientId, roomId, assetId, kind, ip: req.ip });
+      return res.status(403).json({ error: 'Not authorized to access this room' });
+    }
+
+    if (!isAllowedMediaMimeType(kind, mimeType)) {
+      return res.status(400).json({ error: 'Unsupported media MIME type' });
+    }
+
+    if (byteSize > MEDIA_UPLOAD_LIMIT_BYTES[kind]) {
+      return res.status(413).json({ error: 'Media file is too large' });
+    }
+
+    if (await store.getMediaAsset(assetId)) {
+      return res.status(409).json({ error: 'Media upload has already been completed' });
+    }
+
+    const objectHead = await mediaObjectStorage.headObject({ objectKey });
+    if (!objectHead.exists) {
+      return res.status(409).json({ error: 'Uploaded media object was not found' });
+    }
+    if (objectHead.byteSize !== undefined && objectHead.byteSize !== byteSize) {
+      return res.status(409).json({ error: 'Uploaded media object size does not match' });
+    }
+    if (objectHead.mimeType && objectHead.mimeType.toLowerCase() !== mimeType) {
+      return res.status(409).json({ error: 'Uploaded media object MIME type does not match' });
+    }
+
+    let replyTo;
+    if (typeof req.body?.replyToMessageId === 'string' && req.body.replyToMessageId) {
+      const roomMessages = await store.readMessagesByRoom(roomId);
+      const quotedMessage = roomMessages.find(message => message.id === req.body.replyToMessageId);
+      if (!quotedMessage) {
+        return res.status(400).json({ error: 'Quoted message not found' });
+      }
+      replyTo = createReplyReference(quotedMessage);
+    }
+
+    const message = createMediaMessage({
+      id: uuidv4(),
+      clientId,
+      roomId,
+      content,
+      kind,
+      assetId,
+      mimeType,
+      byteSize,
+      width,
+      height,
+      durationMs,
+      username: typeof req.body?.username === 'string' ? req.body.username : undefined,
+      avatar: req.body?.avatar,
+      replyTo,
+      clientMessageId: typeof req.body?.clientMessageId === 'string' ? req.body.clientMessageId : undefined,
+    });
+
+    const asset: MediaAsset = {
+      id: assetId,
+      roomId,
+      messageId: message.id,
+      objectKey,
+      kind,
+      mimeType,
+      byteSize,
+      width,
+      height,
+      durationMs,
+      uploadedByClientId: clientId,
+      createdAt: message.timestamp,
+    };
+
+    const savedAsset = await store.saveMediaAsset(asset);
+    if (!savedAsset) {
+      return res.status(500).json({ error: 'Failed to save media asset' });
+    }
+    message.mediaAsset = {
+      id: savedAsset.id,
+      kind: savedAsset.kind,
+      mimeType: savedAsset.mimeType,
+      byteSize: savedAsset.byteSize,
+      width: savedAsset.width,
+      height: savedAsset.height,
+      durationMs: savedAsset.durationMs,
+    };
+
+    const updatedRoom = await store.appendMessage(message);
+    if (!updatedRoom) {
+      await store.deleteMediaAsset(assetId);
+      await mediaObjectStorage.deleteMediaObject?.(objectKey);
+      return res.status(500).json({ error: 'Failed to create media message' });
+    }
+
+    io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+    io.to(roomId).emit('new_message', message);
+    return res.status(201).json(message);
+  });
+
+  app.get('/api/media/:assetId/download-url', async (req: Request, res: Response) => {
+    if (!mediaObjectStorage.isConfigured()) {
+      return res.status(503).json({ error: 'Media object storage is not configured' });
+    }
+
+    const { assetId } = req.params;
+    const roomId = typeof req.query.roomId === 'string' ? req.query.roomId : '';
+    const clientId = getQueryClientId(req);
+
+    if (!assetId || !roomId || !clientId) {
+      return res.status(400).json({ error: 'assetId, roomId, and clientId are required' });
+    }
+
+    if (!(await hasRoomAccess(store, roomId, clientId))) {
+      routeLogger.warn('Unauthorized media download URL request', { endpoint: 'GET /api/media/:assetId/download-url', clientId, roomId, assetId, ip: req.ip });
+      return res.status(403).json({ error: 'Not authorized to access this room' });
+    }
+
+    const asset = await store.getMediaAsset(assetId);
+    if (!asset || asset.roomId !== roomId) {
+      return res.status(404).json({ error: 'Media asset not found' });
+    }
+
+    const signedDownload = await mediaObjectStorage.createReadUrl({
+      objectKey: asset.objectKey,
+      expiresInSeconds: 15 * 60,
+    });
+    return res.json(signedDownload);
   });
 
   app.get('/api/ai-models', (_req: Request, res: Response) => {

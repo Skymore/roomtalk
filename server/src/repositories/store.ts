@@ -1,4 +1,4 @@
-import { AICost, ImageAsset, Message, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomMessagePage } from '../types';
+import { AICost, MediaAsset, Message, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember } from '../types';
 
 export const DEFAULT_ROOM_MESSAGE_PAGE_LIMIT = 80;
 
@@ -44,12 +44,12 @@ export interface DurableRoomStore {
   clearRoomMessages(roomId: string): Promise<number>;
   readMessagesByRoom(roomId: string): Promise<Message[]>;
   readMessagePageByRoom(roomId: string, options?: RoomMessagePageOptions): Promise<RoomMessagePage>;
-  saveImageAsset(asset: ImageAsset): Promise<ImageAsset | null>;
-  replaceMessageImageAsset(roomId: string, messageId: string, asset: ImageAsset): Promise<MessageUpdateResult | null>;
-  getImageAsset(assetId: string): Promise<ImageAsset | null>;
-  getImageAssetByMessageId(messageId: string): Promise<ImageAsset | null>;
-  readImageAssetsByRoom(roomId: string): Promise<ImageAsset[]>;
-  deleteImageAsset(assetId: string): Promise<void>;
+  saveMediaAsset(asset: MediaAsset): Promise<MediaAsset | null>;
+  replaceMessageMediaAsset(roomId: string, messageId: string, asset: MediaAsset): Promise<MessageUpdateResult | null>;
+  getMediaAsset(assetId: string): Promise<MediaAsset | null>;
+  getMediaAssetByMessageId(messageId: string): Promise<MediaAsset | null>;
+  readMediaAssetsByRoom(roomId: string): Promise<MediaAsset[]>;
+  deleteMediaAsset(assetId: string): Promise<void>;
   readRoomAICost(roomId: string): Promise<RoomAICostTotal>;
   incrementRoomAICost(roomId: string, cost: AICost | null): Promise<RoomAICostTotal>;
   saveRoom(room: Room): Promise<Room | null>;
@@ -66,6 +66,10 @@ export interface DurableRoomStore {
   updateRoomName(roomId: string, creatorId: string, name: string): Promise<Room | null>;
   deleteRoom(roomId: string, creatorId: string): Promise<void>;
   countRooms(): Promise<number>;
+  // Durable client profile data. Nicknames live in the durable store so they
+  // survive Redis flushes; presence (who is online) stays in the realtime store.
+  setClientNickname(clientId: string, nickname: string): Promise<void>;
+  getClientNicknames(clientIds: string[]): Promise<Record<string, string>>;
   resetAllDataForTests?(): Promise<void>;
   failInterruptedStreamingMessages?(content: string): Promise<number>;
 }
@@ -73,6 +77,7 @@ export interface DurableRoomStore {
 export interface RealtimeRoomStore {
   updateRoomMemberCount(roomId: string, clientId: string, socketId: string, isJoining: boolean): Promise<number>;
   getRoomMemberCount(roomId: string): Promise<number>;
+  getRoomOnlineMemberIds(roomId: string): Promise<string[]>;
   clearRealtimeRoomMembers?(): Promise<void>;
   storeClientSession(socketId: string, userId: string): Promise<void>;
   getClientId(socketId: string): Promise<string | null>;
@@ -82,6 +87,11 @@ export interface RealtimeRoomStore {
   resetAllDataForTests?(): Promise<void>;
 }
 
+// Joins realtime presence (online member ids) with durable nicknames.
+export interface RoomPresenceStore {
+  getRoomOnlineMembers(roomId: string): Promise<RoomOnlineMember[]>;
+}
+
 export interface RoomMessageCacheStore {
   readCachedRoomMessages(roomId: string): Promise<Message[] | null>;
   writeRoomMessagesCache(roomId: string, messages: Message[]): Promise<void>;
@@ -89,7 +99,7 @@ export interface RoomMessageCacheStore {
   invalidateAllRoomMessagesCaches(): Promise<void>;
 }
 
-export type RoomStore = DurableRoomStore & RealtimeRoomStore;
+export type RoomStore = DurableRoomStore & RealtimeRoomStore & RoomPresenceStore;
 
 export class CompositeRoomStore implements RoomStore {
   constructor(
@@ -211,32 +221,32 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.readMessagePageByRoom(roomId, options);
   }
 
-  saveImageAsset(asset: ImageAsset) {
-    return this.durableStore.saveImageAsset(asset);
+  saveMediaAsset(asset: MediaAsset) {
+    return this.durableStore.saveMediaAsset(asset);
   }
 
-  async replaceMessageImageAsset(roomId: string, messageId: string, asset: ImageAsset) {
-    const result = await this.durableStore.replaceMessageImageAsset(roomId, messageId, asset);
+  async replaceMessageMediaAsset(roomId: string, messageId: string, asset: MediaAsset) {
+    const result = await this.durableStore.replaceMessageMediaAsset(roomId, messageId, asset);
     if (result?.found) {
       await this.invalidateRoomMessagesCache(roomId);
     }
     return result;
   }
 
-  getImageAsset(assetId: string) {
-    return this.durableStore.getImageAsset(assetId);
+  getMediaAsset(assetId: string) {
+    return this.durableStore.getMediaAsset(assetId);
   }
 
-  getImageAssetByMessageId(messageId: string) {
-    return this.durableStore.getImageAssetByMessageId(messageId);
+  getMediaAssetByMessageId(messageId: string) {
+    return this.durableStore.getMediaAssetByMessageId(messageId);
   }
 
-  readImageAssetsByRoom(roomId: string) {
-    return this.durableStore.readImageAssetsByRoom(roomId);
+  readMediaAssetsByRoom(roomId: string) {
+    return this.durableStore.readMediaAssetsByRoom(roomId);
   }
 
-  deleteImageAsset(assetId: string) {
-    return this.durableStore.deleteImageAsset(assetId);
+  deleteMediaAsset(assetId: string) {
+    return this.durableStore.deleteMediaAsset(assetId);
   }
 
   readRoomAICost(roomId: string) {
@@ -337,6 +347,24 @@ export class CompositeRoomStore implements RoomStore {
 
   getRoomMemberCount(roomId: string) {
     return this.realtimeStore.getRoomMemberCount(roomId);
+  }
+
+  async getRoomOnlineMembers(roomId: string): Promise<RoomOnlineMember[]> {
+    const clientIds = await this.realtimeStore.getRoomOnlineMemberIds(roomId);
+    const nicknames = await this.durableStore.getClientNicknames(clientIds);
+    return clientIds.map((clientId) => ({ clientId, nickname: nicknames[clientId] }));
+  }
+
+  getRoomOnlineMemberIds(roomId: string) {
+    return this.realtimeStore.getRoomOnlineMemberIds(roomId);
+  }
+
+  setClientNickname(clientId: string, nickname: string) {
+    return this.durableStore.setClientNickname(clientId, nickname);
+  }
+
+  getClientNicknames(clientIds: string[]) {
+    return this.durableStore.getClientNicknames(clientIds);
   }
 
   clearRealtimeRoomMembers() {

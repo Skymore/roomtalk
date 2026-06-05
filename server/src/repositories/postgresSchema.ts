@@ -34,7 +34,7 @@ export const POSTGRES_SCHEMA_SQL = [
     client_id TEXT NOT NULL,
     content TEXT NOT NULL,
     timestamp TIMESTAMPTZ NOT NULL,
-    message_type TEXT NOT NULL CHECK (message_type IN ('text', 'image', 'ai', 'voice')),
+    message_type TEXT NOT NULL CHECK (message_type IN ('text', 'image', 'ai', 'voice', 'media')),
     username TEXT,
     avatar JSONB,
     mime_type TEXT,
@@ -48,11 +48,11 @@ export const POSTGRES_SCHEMA_SQL = [
   )`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS reply_to JSONB`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`,
-  // Widen the message_type check to allow 'voice' on tables created before voice
-  // messages existed. Drop-then-add keeps this idempotent across restarts.
+  // Widen the message_type check to allow the unified 'media' value while keeping
+  // legacy image/voice rows readable until the one-time migration completes.
   `ALTER TABLE room_messages DROP CONSTRAINT IF EXISTS room_messages_message_type_check`,
   `ALTER TABLE room_messages ADD CONSTRAINT room_messages_message_type_check
-    CHECK (message_type IN ('text', 'image', 'ai', 'voice'))`,
+    CHECK (message_type IN ('text', 'image', 'ai', 'voice', 'media'))`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_room_messages_room_position
     ON room_messages (room_id, position)`,
   `CREATE INDEX IF NOT EXISTS idx_room_messages_room_timestamp
@@ -70,9 +70,34 @@ export const POSTGRES_SCHEMA_SQL = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_image_assets_room
     ON image_assets (room_id, created_at ASC)`,
+  `CREATE TABLE IF NOT EXISTS media_assets (
+    id TEXT PRIMARY KEY,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    message_id TEXT UNIQUE REFERENCES room_messages(id) ON DELETE SET NULL,
+    object_key TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL CHECK (kind IN ('image', 'video', 'audio')),
+    mime_type TEXT NOT NULL,
+    byte_size INTEGER NOT NULL,
+    width INTEGER,
+    height INTEGER,
+    duration_ms INTEGER,
+    uploaded_by_client_id TEXT,
+    created_at TIMESTAMPTZ NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_media_assets_room
+    ON media_assets (room_id, created_at ASC)`,
+  `CREATE INDEX IF NOT EXISTS idx_media_assets_message
+    ON media_assets (message_id)`,
   `CREATE TABLE IF NOT EXISTS room_ai_cost_totals (
     room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
     total_usd NUMERIC(18, 9) NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  // Global per-client profile data (currently just the display nickname),
+  // keyed by the persistent clientId rather than a room.
+  `CREATE TABLE IF NOT EXISTS client_profiles (
+    client_id TEXT PRIMARY KEY,
+    nickname TEXT NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
 ];

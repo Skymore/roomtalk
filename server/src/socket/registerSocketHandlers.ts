@@ -1,6 +1,5 @@
 import { Socket } from 'socket.io';
 import { registerAIHandlers } from './aiHandlers';
-import { registerMediaHandlers } from './mediaHandlers';
 import { registerMessageHandlers } from './messageHandlers';
 import { registerRoomHandlers } from './roomHandlers';
 import { registerTranscriptionHandlers } from './transcriptionHandlers';
@@ -13,7 +12,6 @@ export function registerSocketHandlers(deps: SocketHandlerDeps) {
     const context = { ...deps, socket };
     registerRoomHandlers(context);
     registerMessageHandlers(context);
-    registerMediaHandlers(context);
     registerAIHandlers(context);
     registerTranscriptionHandlers(context);
   });

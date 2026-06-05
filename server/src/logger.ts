@@ -139,11 +139,17 @@ export class Logger {
     // 创建消息对象的副本，避免修改原始数据
     const logMessage = { ...message };
     
-    // 处理图片消息，截断内容
-    if (logMessage.messageType === 'image' && logMessage.content) {
-      // 只保留前30个字符，后面用...代替
-      const contentStart = logMessage.content.substring(0, 30);
-      logMessage.content = `${contentStart}... [BASE64_IMAGE_DATA_TRUNCATED]`;
+    // Media payloads live in object storage; logs keep only metadata.
+    if (logMessage.messageType === 'media') {
+      logMessage.content = logMessage.content ? '[MEDIA_CAPTION]' : '';
+      if (logMessage.mediaAsset) {
+        logMessage.mediaAsset = {
+          id: logMessage.mediaAsset.id,
+          kind: logMessage.mediaAsset.kind,
+          mimeType: logMessage.mediaAsset.mimeType,
+          byteSize: logMessage.mediaAsset.byteSize,
+        };
+      }
     }
     
     return logMessage;

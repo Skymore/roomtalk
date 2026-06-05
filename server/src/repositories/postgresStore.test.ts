@@ -332,25 +332,28 @@ describe('PostgresStore', () => {
     assert.equal(await store.removeSavedRoomForUser('room-1', 'client-2'), true);
   });
 
-  it('persists image assets and attaches public metadata to image messages', async () => {
-    const imageAssetRow = {
+  it('persists media assets and attaches public metadata to media messages', async () => {
+    const mediaAssetRow = {
       id: 'asset-1',
       room_id: 'room-1',
-      message_id: 'image-message',
-      object_key: 'rooms/room-1/asset-1.webp',
+      message_id: 'media-message',
+      object_key: 'rooms/room-1/media/image/asset-1',
+      kind: 'image',
       mime_type: 'image/webp',
       byte_size: 123,
       width: 10,
       height: 20,
+      duration_ms: null,
+      uploaded_by_client_id: 'client-1',
       created_at: '2026-05-03T00:00:00.000Z',
     };
-    const imageMessageRow = {
-      id: 'image-message',
+    const mediaMessageRow = {
+      id: 'media-message',
       room_id: 'room-1',
       client_id: 'client-1',
-      content: 'asset-1',
+      content: '',
       timestamp: '2026-05-03T00:00:01.000Z',
-      message_type: 'image',
+      message_type: 'media',
       username: null,
       avatar: null,
       mime_type: 'image/webp',
@@ -362,62 +365,67 @@ describe('PostgresStore', () => {
     };
     const pool = new ScriptedPool([
       {
-        rows: [imageAssetRow],
+        rows: [mediaAssetRow],
         assertCall(call) {
-          assert.match(call.sql, /INSERT INTO image_assets/);
+          assert.match(call.sql, /INSERT INTO media_assets/);
           assert.equal(call.params?.[0], 'asset-1');
-          assert.equal(call.params?.[3], 'rooms/room-1/asset-1.webp');
+          assert.equal(call.params?.[3], 'rooms/room-1/media/image/asset-1');
+          assert.equal(call.params?.[4], 'image');
         },
       },
-      { rows: [imageAssetRow], assertCall: call => assert.match(call.sql, /WHERE id = \$1/) },
-      { rows: [imageAssetRow], assertCall: call => assert.match(call.sql, /WHERE message_id = \$1/) },
-      { rows: [imageAssetRow], assertCall: call => assert.match(call.sql, /WHERE room_id = \$1/) },
-      { rows: [imageMessageRow] },
-      { rows: [imageAssetRow] },
-      { rowCount: 1, assertCall: call => assert.match(call.sql, /DELETE FROM image_assets WHERE id = \$1/) },
+      { rows: [mediaAssetRow], assertCall: call => assert.match(call.sql, /WHERE id = \$1/) },
+      { rows: [mediaAssetRow], assertCall: call => assert.match(call.sql, /WHERE message_id = \$1/) },
+      { rows: [mediaAssetRow], assertCall: call => assert.match(call.sql, /WHERE room_id = \$1/) },
+      { rows: [mediaMessageRow] },
+      { rows: [mediaAssetRow] },
+      { rowCount: 1, assertCall: call => assert.match(call.sql, /DELETE FROM media_assets WHERE id = \$1/) },
     ]);
     const store = new PostgresStore(pool, logger as any);
     const asset = {
       id: 'asset-1',
       roomId: 'room-1',
-      messageId: 'image-message',
-      objectKey: 'rooms/room-1/asset-1.webp',
+      messageId: 'media-message',
+      objectKey: 'rooms/room-1/media/image/asset-1',
+      kind: 'image' as const,
       mimeType: 'image/webp',
       byteSize: 123,
       width: 10,
       height: 20,
+      uploadedByClientId: 'client-1',
       createdAt: '2026-05-03T00:00:00.000Z',
     };
 
-    assert.deepEqual(await store.saveImageAsset(asset), asset);
-    assert.deepEqual(await store.getImageAsset('asset-1'), asset);
-    assert.deepEqual(await store.getImageAssetByMessageId('image-message'), asset);
-    assert.deepEqual(await store.readImageAssetsByRoom('room-1'), [asset]);
+    assert.deepEqual(await store.saveMediaAsset(asset), asset);
+    assert.deepEqual(await store.getMediaAsset('asset-1'), asset);
+    assert.deepEqual(await store.getMediaAssetByMessageId('media-message'), asset);
+    assert.deepEqual(await store.readMediaAssetsByRoom('room-1'), [asset]);
     assert.deepEqual(await store.readMessagesByRoom('room-1'), [{
-      id: 'image-message',
+      id: 'media-message',
       clientId: 'client-1',
-      content: 'asset-1',
+      content: '',
       roomId: 'room-1',
       timestamp: '2026-05-03T00:00:01.000Z',
-      messageType: 'image',
+      messageType: 'media',
       mimeType: 'image/webp',
-      imageAsset: {
+      mediaAsset: {
         id: 'asset-1',
+        kind: 'image',
         mimeType: 'image/webp',
         byteSize: 123,
         width: 10,
         height: 20,
       },
     }]);
-    await store.deleteImageAsset('asset-1');
+    await store.deleteMediaAsset('asset-1');
   });
 
-  it('replaces legacy image message payloads with image asset metadata without changing room activity', async () => {
+  it('replaces legacy image message payloads with media asset metadata without changing room activity', async () => {
     const asset = {
       id: 'asset-legacy',
       roomId: 'room-1',
       messageId: 'legacy-image',
-      objectKey: 'rooms/room-1/asset-legacy.webp',
+      objectKey: 'rooms/room-1/media/image/asset-legacy',
+      kind: 'image' as const,
       mimeType: 'image/webp',
       byteSize: 456,
       width: 12,
@@ -428,9 +436,9 @@ describe('PostgresStore', () => {
       id: 'legacy-image',
       room_id: 'room-1',
       client_id: 'client-1',
-      content: 'asset-legacy',
+      content: '',
       timestamp: '2026-05-03T00:00:01.000Z',
-      message_type: 'image',
+      message_type: 'media',
       username: null,
       avatar: null,
       mime_type: 'image/webp',
@@ -440,15 +448,18 @@ describe('PostgresStore', () => {
       cost: null,
       reply_to: null,
     };
-    const imageAssetRow = {
+    const mediaAssetRow = {
       id: 'asset-legacy',
       room_id: 'room-1',
       message_id: 'legacy-image',
-      object_key: 'rooms/room-1/asset-legacy.webp',
+      object_key: 'rooms/room-1/media/image/asset-legacy',
+      kind: 'image',
       mime_type: 'image/webp',
       byte_size: 456,
       width: 12,
       height: 14,
+      duration_ms: null,
+      uploaded_by_client_id: null,
       created_at: '2026-05-03T00:00:11.000Z',
     };
     const client = new ScriptedClient([
@@ -458,23 +469,26 @@ describe('PostgresStore', () => {
         rows: [imageMessageRow],
         assertCall(call) {
           assert.match(call.sql, /UPDATE room_messages/);
-          assert.match(call.sql, /message_type = 'image'/);
-          assert.deepEqual(call.params, ['room-1', 'legacy-image', 'asset-legacy', 'image/webp']);
+          assert.match(call.sql, /message_type = 'media'/);
+          assert.deepEqual(call.params, ['room-1', 'legacy-image', '', 'image/webp']);
         },
       },
       {
-        rows: [imageAssetRow],
+        rows: [mediaAssetRow],
         assertCall(call) {
-          assert.match(call.sql, /INSERT INTO image_assets/);
+          assert.match(call.sql, /INSERT INTO media_assets/);
           assert.deepEqual(call.params, [
             'asset-legacy',
             'room-1',
             'legacy-image',
-            'rooms/room-1/asset-legacy.webp',
+            'rooms/room-1/media/image/asset-legacy',
+            'image',
             'image/webp',
             456,
             12,
             14,
+            null,
+            null,
             '2026-05-03T00:00:11.000Z',
           ]);
         },
@@ -484,19 +498,20 @@ describe('PostgresStore', () => {
     const pool = new ScriptedPool([], client);
     const store = new PostgresStore(pool, logger as any);
 
-    assert.deepEqual(await store.replaceMessageImageAsset('room-1', 'legacy-image', asset), {
+    assert.deepEqual(await store.replaceMessageMediaAsset('room-1', 'legacy-image', asset), {
       room: room({ lastActivityAt: '2026-05-03T00:00:10.000Z' }),
       found: true,
       updatedMessage: {
         id: 'legacy-image',
         clientId: 'client-1',
-        content: 'asset-legacy',
+        content: '',
         roomId: 'room-1',
         timestamp: '2026-05-03T00:00:01.000Z',
-        messageType: 'image',
+        messageType: 'media',
         mimeType: 'image/webp',
-        imageAsset: {
+        mediaAsset: {
           id: 'asset-legacy',
+          kind: 'image',
           mimeType: 'image/webp',
           byteSize: 456,
           width: 12,
@@ -633,6 +648,7 @@ describe('PostgresStore', () => {
       { rows: [roomRow({ last_activity_at: '2026-05-04T00:00:00.000Z' })] },
       { rowCount: 0 },
       { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
+      { rows: [], assertCall: call => assert.match(call.sql, /DELETE FROM media_assets WHERE room_id = \$1 RETURNING object_key/) },
       { rowCount: 2, assertCall: call => assert.match(call.sql, /DELETE FROM room_messages/) },
       { rowCount: 1, assertCall: call => assert.match(call.sql, /message_version = message_version \+ 1/) },
       { rowCount: 0, assertCall: call => assert.equal(call.sql, 'COMMIT') },

@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { createRoomMemberEvent, createRoomRecord } from '../services/messageDomain';
-import { Room } from '../types';
+import { Room, RoomOnlineMember } from '../types';
 import { SocketConnectionContext } from './types';
 
 const MAX_ROOM_NAME_LENGTH = 20;
@@ -52,10 +52,41 @@ const getRoomIdFromPayload = (payload: unknown): string | null => {
   return null;
 };
 
+const MAX_NICKNAME_LENGTH = 40;
+
+const normalizeNickname = (value: unknown): string | null => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return trimmed.slice(0, MAX_NICKNAME_LENGTH);
+};
+
+const parseRegisterPayload = (payload: unknown): { clientId?: string; username: string | null } => {
+  if (typeof payload === 'string') {
+    return { clientId: payload, username: null };
+  }
+  if (payload && typeof payload === 'object') {
+    const data = payload as { clientId?: unknown; username?: unknown };
+    return {
+      clientId: typeof data.clientId === 'string' ? data.clientId : undefined,
+      username: normalizeNickname(data.username),
+    };
+  }
+  return { clientId: undefined, username: null };
+};
+
 export function registerRoomHandlers({ io, socket, store, socketLogger }: SocketConnectionContext) {
-  socket.on('register', async (clientId: string) => {
+  socket.on('register', async (payload: unknown) => {
+    const { clientId, username } = parseRegisterPayload(payload);
     const userId = clientId || uuidv4();
     await store.storeClientSession(socket.id, userId);
+    if (username) {
+      await store.setClientNickname(userId, username);
+    }
     socketLogger.info('Client registered', { socketId: socket.id, clientId: userId });
 
     socket.join(userId);
@@ -63,6 +94,34 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
     const savedRooms = await store.readSavedRoomsByUser(userId);
     socket.emit('room_list', myRooms);
     socket.emit('saved_room_list', savedRooms);
+  });
+
+  socket.on('set_username', async (rawUsername: unknown) => {
+    const nickname = normalizeNickname(rawUsername);
+    if (!nickname) {
+      return;
+    }
+    const userId = await store.getClientId(socket.id);
+    if (!userId) {
+      socketLogger.warn('Unregistered client tried to set username', { socketId: socket.id });
+      return;
+    }
+    await store.setClientNickname(userId, nickname);
+    socketLogger.debug('Client nickname updated', { socketId: socket.id, clientId: userId });
+  });
+
+  socket.on('get_room_members', async (
+    payload: unknown,
+    callback?: (result: { success: boolean; members?: RoomOnlineMember[]; error?: string }) => void
+  ) => {
+    const roomId = getRoomIdFromPayload(payload);
+    if (!roomId) {
+      callback?.({ success: false, error: 'Room ID is required' });
+      return;
+    }
+
+    const members = await store.getRoomOnlineMembers(roomId);
+    callback?.({ success: true, members });
   });
 
   socket.on('get_rooms', async () => {

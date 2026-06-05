@@ -120,8 +120,20 @@ const createHarness = (clientId: string | null = 'client-1') => {
     userSavedRooms: new Map<string, Set<string>>(),
     deletedRooms: [] as Array<{ roomId: string; creatorId: string }>,
     removedSessions: [] as string[],
+    nicknames: new Map<string, string>(),
     async storeClientSession(_socketId: string, userId: string) {
       this.clientId = userId;
+    },
+    async setClientNickname(clientId: string, nickname: string) {
+      this.nicknames.set(clientId, nickname);
+    },
+    async getRoomOnlineMembers(roomId: string) {
+      return [...this.members]
+        .filter(key => key.startsWith(`${roomId}:`))
+        .map(key => {
+          const memberClientId = key.split(':')[1];
+          return { clientId: memberClientId, nickname: this.nicknames.get(memberClientId) };
+        });
     },
     async getClientId() {
       return this.clientId;
@@ -246,6 +258,56 @@ describe('room socket handlers', () => {
       { event: 'room_list', args: [[room()]] },
       { event: 'saved_room_list', args: [[]] },
     ]);
+  });
+
+  it('stores the nickname when registering with a username payload', async () => {
+    const { socket, store } = createHarness(null);
+
+    await socket.invoke('register', { clientId: 'client-9', username: '  Ada  ' });
+
+    assert.equal(store.clientId, 'client-9');
+    assert.equal(store.nicknames.get('client-9'), 'Ada');
+  });
+
+  it('stores the nickname for a registered client via set_username', async () => {
+    const { socket, store } = createHarness('client-1');
+
+    await socket.invoke('set_username', 'Grace');
+    assert.equal(store.nicknames.get('client-1'), 'Grace');
+
+    // Blank names are ignored
+    await socket.invoke('set_username', '   ');
+    assert.equal(store.nicknames.get('client-1'), 'Grace');
+  });
+
+  it('ignores set_username from unregistered clients', async () => {
+    const { socket, store } = createHarness(null);
+
+    await socket.invoke('set_username', 'Nobody');
+    assert.equal(store.nicknames.size, 0);
+  });
+
+  it('returns online room members with their nicknames', async () => {
+    const { socket, store } = createHarness('client-1');
+    await store.setClientNickname('client-1', 'Ada');
+
+    let response: { success: boolean; members?: Array<{ clientId: string; nickname?: string }> } | undefined;
+    await socket.invoke('get_room_members', { roomId: 'room-1' }, (result: typeof response) => {
+      response = result;
+    });
+
+    assert.deepEqual(response, { success: true, members: [{ clientId: 'client-1', nickname: 'Ada' }] });
+  });
+
+  it('rejects get_room_members without a room id', async () => {
+    const { socket } = createHarness('client-1');
+
+    let response: unknown;
+    await socket.invoke('get_room_members', {}, (result: unknown) => {
+      response = result;
+    });
+
+    assert.deepEqual(response, { success: false, error: 'Room ID is required' });
   });
 
   it('returns rooms only for registered clients', async () => {

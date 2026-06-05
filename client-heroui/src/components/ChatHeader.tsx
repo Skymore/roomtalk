@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { Button, Dropdown, DropdownTrigger, DropdownMenu, DropdownItem, Popover, PopoverTrigger, PopoverContent, Tooltip } from '@heroui/react';
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
-import { Room, RoomRenameHandler } from "../utils/types";
+import { Room, RoomOnlineMember, RoomRenameHandler } from "../utils/types";
+import { getRoomMembers } from "../utils/socket";
 import { RoomRenameModal } from './RoomRenameModal';
 
 interface ChatHeaderProps {
@@ -41,7 +42,20 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   const { t } = useTranslation();
   const isSaved = isRoomSaved(currentRoom.id);
   const [isRenameOpen, setIsRenameOpen] = useState(false);
+  const [onlineMembers, setOnlineMembers] = useState<RoomOnlineMember[]>([]);
+  const [isLoadingMembers, setIsLoadingMembers] = useState(false);
   const canRename = currentRoom.creatorId === clientId;
+
+  const handleMembersOpenChange = (isOpen: boolean) => {
+    if (!isOpen) {
+      return;
+    }
+    setIsLoadingMembers(true);
+    getRoomMembers(currentRoom.id)
+      .then(setOnlineMembers)
+      .catch(() => setOnlineMembers([]))
+      .finally(() => setIsLoadingMembers(false));
+  };
 
   const onConfirmLeave = () => {
     handleLeaveRoom();
@@ -70,10 +84,46 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             <Icon icon="lucide:loader-circle" className="h-4 w-4 flex-shrink-0 animate-spin text-[#c96442] dark:text-[#d97757]" />
           ) : null}
           <h2 data-testid="chat-room-title" className="w-[38vw] max-w-[148px] flex-shrink-0 truncate font-serif text-base font-medium leading-tight text-[#141413] dark:text-[#faf9f5] md:w-[360px] md:max-w-[360px] md:text-lg">{currentRoom.name}</h2>
-          <div className="flex flex-shrink-0 items-center text-xs text-[#5e5d59] dark:text-[#b0aea5]" data-testid="room-member-count">
-            <Icon icon="lucide:users" className="mr-1" width={14} />
-            {memberCount ?? "..."}
-          </div>
+          <Popover placement="bottom-start" onOpenChange={handleMembersOpenChange}>
+            <PopoverTrigger>
+              <button
+                type="button"
+                data-testid="room-member-count"
+                aria-label={t('onlineMembers')}
+                className="flex flex-shrink-0 items-center rounded-md px-1 text-xs text-[#5e5d59] transition-colors hover:bg-[#e8e6dc] dark:text-[#b0aea5] dark:hover:bg-[#30302e]"
+              >
+                <Icon icon="lucide:users" className="mr-1" width={14} />
+                {memberCount ?? "..."}
+              </button>
+            </PopoverTrigger>
+            <PopoverContent className="max-h-64 w-52 items-stretch overflow-y-auto p-2">
+              <div className="mb-1 px-1 text-xs font-medium text-[#5e5d59] dark:text-[#b0aea5]">
+                {t('onlineMembers')}{memberCount != null ? ` (${memberCount})` : ''}
+              </div>
+              {isLoadingMembers ? (
+                <div className="flex items-center justify-center py-3">
+                  <Icon icon="lucide:loader-circle" className="h-4 w-4 animate-spin text-[#c96442] dark:text-[#d97757]" />
+                </div>
+              ) : onlineMembers.length === 0 ? (
+                <div className="px-1 py-2 text-xs text-[#87867f] dark:text-[#b0aea5]">{t('noOnlineMembers')}</div>
+              ) : (
+                <ul className="flex flex-col gap-0.5">
+                  {onlineMembers.map((member) => (
+                    <li
+                      key={member.clientId}
+                      className="flex items-center gap-2 rounded-md px-1 py-1 text-sm text-[#141413] dark:text-[#faf9f5]"
+                    >
+                      <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-[#3aa76d]" />
+                      <span className="truncate">
+                        {member.nickname || t('anonymousUser')}
+                        {member.clientId === clientId ? ` (${t('you')})` : ''}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </PopoverContent>
+          </Popover>
           <div
             className="flex min-w-0 cursor-pointer items-center rounded-md px-1 text-xs text-[#5e5d59] transition-colors hover:bg-[#e8e6dc] dark:text-[#b0aea5] dark:hover:bg-[#30302e]"
             onClick={() => handleCopyToClipboard(currentRoom.id)}
