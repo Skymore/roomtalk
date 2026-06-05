@@ -490,8 +490,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               URL.revokeObjectURL(item.previewUrl);
             }
           } catch (error) {
-            console.error('Error compressing image:', error);
-            setErrorMessage(t('errorCompressingImage'));
+            console.error('Error sending image:', error);
+            throw error;
           }
         }
       }
@@ -916,8 +916,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     // 获取当前选中区域并插入图片
     const selection = window.getSelection();
     const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+    const shouldInsertAtSelection = range && editor.contains(range.commonAncestorContainer);
 
-    if (range) {
+    if (shouldInsertAtSelection) {
       // 插入图片到选中位置
       range.insertNode(img);
 
