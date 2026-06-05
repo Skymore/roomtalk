@@ -24,6 +24,7 @@ const roomMemberChangeCallbacks: ((event: RoomMemberEvent) => void)[] = [];
 let activeRoomId: string | null = null;
 const SEND_MESSAGE_ACK_TIMEOUT_MS = 15000;
 const SEND_MESSAGE_CONNECT_TIMEOUT_MS = 15000;
+const ROOM_LOOKUP_TIMEOUT_MS = 30000;
 
 type SocketAckResponse = {
   success: boolean;
@@ -54,8 +55,8 @@ type RoomListAckResponse = SocketAckResponse & {
 };
 
 // Get current member count for a room
-export const getRoomMemberCount = (roomId: string): number => {
-  return roomMemberCounts.get(roomId) || 0;
+export const getRoomMemberCount = (roomId: string): number | null => {
+  return roomMemberCounts.get(roomId) ?? null;
 };
 
 // Create and configure Socket connection
@@ -123,7 +124,7 @@ const createSocketConnection = (): typeof Socket => {
   return socket;
 };
 
-const waitForConnectedSocket = () => new Promise<void>((resolve, reject) => {
+const waitForConnectedSocket = (timeoutMs = SEND_MESSAGE_CONNECT_TIMEOUT_MS) => new Promise<void>((resolve, reject) => {
   if (socket.connected) {
     resolve();
     return;
@@ -159,7 +160,7 @@ const waitForConnectedSocket = () => new Promise<void>((resolve, reject) => {
 
   timeoutId = window.setTimeout(() => {
     settle(() => reject(new Error('Timed out while reconnecting socket')));
-  }, SEND_MESSAGE_CONNECT_TIMEOUT_MS);
+  }, timeoutMs);
 
   socket.once('connect', handleConnect);
   socket.once('disconnect', handleDisconnect);
@@ -398,7 +399,7 @@ export const createTranscriptionToken = (): Promise<{ token: string }> => {
 
 // Get a room by ID (for joining rooms by ID)
 export const getRoomById = (roomId: string): Promise<Room | null> => {
-  return waitForConnectedSocket().then(() => new Promise<Room | null>((resolve, reject) => {
+  return waitForConnectedSocket(ROOM_LOOKUP_TIMEOUT_MS).then(() => new Promise<Room | null>((resolve, reject) => {
     if (!socket.connected) {
       reject(new Error('Socket disconnected before getting room'));
       return;
@@ -427,16 +428,13 @@ export const getRoomById = (roomId: string): Promise<Room | null> => {
 
     timeoutId = window.setTimeout(() => {
       settle(() => reject(new Error('Timed out while getting room')));
-    }, SEND_MESSAGE_ACK_TIMEOUT_MS);
+    }, ROOM_LOOKUP_TIMEOUT_MS);
 
     socket.once('disconnect', handleDisconnect);
     socket.emit('get_room_by_id', roomId, (room: Room | null) => {
       settle(() => resolve(room));
     });
-  })).catch((error) => {
-    console.error('Failed to get room by ID:', error);
-    return null;
-  });
+  }));
 };
 
 // Register a callback for room member changes
