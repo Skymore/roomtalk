@@ -7,7 +7,8 @@ import { RoomRenameModal } from './RoomRenameModal';
 
 interface ChatHeaderProps {
   currentRoom: Room;
-  memberCount: number;
+  memberCount: number | null;
+  isRestoringRoom: boolean;
   handleCopyToClipboard: (text: string) => void;
   handleShareRoom: () => void;
   handleToggleSave: () => void;
@@ -24,6 +25,7 @@ interface ChatHeaderProps {
 export const ChatHeader: React.FC<ChatHeaderProps> = ({
   currentRoom,
   memberCount,
+  isRestoringRoom,
   handleCopyToClipboard,
   handleShareRoom,
   handleToggleSave,
@@ -64,10 +66,13 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           <Icon icon="lucide:chevron-left" className="h-4 w-4" />
         </Button>
         <div className="flex min-w-0 flex-1 items-center gap-2 whitespace-nowrap">
+          {isRestoringRoom ? (
+            <Icon icon="lucide:loader-circle" className="h-4 w-4 flex-shrink-0 animate-spin text-[#c96442] dark:text-[#d97757]" />
+          ) : null}
           <h2 data-testid="chat-room-title" className="w-[38vw] max-w-[148px] flex-shrink-0 truncate font-serif text-base font-medium leading-tight text-[#141413] dark:text-[#faf9f5] md:w-[360px] md:max-w-[360px] md:text-lg">{currentRoom.name}</h2>
           <div className="flex flex-shrink-0 items-center text-xs text-[#5e5d59] dark:text-[#b0aea5]" data-testid="room-member-count">
             <Icon icon="lucide:users" className="mr-1" width={14} />
-            {memberCount}
+            {memberCount ?? "..."}
           </div>
           <div
             className="flex min-w-0 cursor-pointer items-center rounded-md px-1 text-xs text-[#5e5d59] transition-colors hover:bg-[#e8e6dc] dark:text-[#b0aea5] dark:hover:bg-[#30302e]"

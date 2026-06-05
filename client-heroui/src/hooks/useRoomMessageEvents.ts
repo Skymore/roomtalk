@@ -16,7 +16,7 @@ interface UseRoomMessageEventsArgs {
   setHasMoreMessages: Dispatch<SetStateAction<boolean>>;
   setHistoryVersion: Dispatch<SetStateAction<number>>;
   setOldestMessageId: Dispatch<SetStateAction<string | undefined>>;
-  setSessionCostUsd: Dispatch<SetStateAction<number>>;
+  setSessionCostUsd: Dispatch<SetStateAction<number | null>>;
   setShowScrollButton: Dispatch<SetStateAction<boolean>>;
   scrollToBottom: (behavior?: ScrollBehavior) => void;
   closeDeleteModal: () => void;
@@ -60,7 +60,7 @@ export const useRoomMessageEvents = ({
   }, [messageToEditId]);
 
   useEffect(() => {
-    setSessionCostUsd(0);
+    setSessionCostUsd(null);
     setShowScrollButton(false);
     closeDeleteModal();
     closeEditModal();

@@ -81,7 +81,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const [messageToDelete, setMessageToDelete] = useState<Message | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [messageToEdit, setMessageToEdit] = useState<Message | null>(null);
-  const [sessionCostUsd, setSessionCostUsd] = useState(0);
+  const [sessionCostUsd, setSessionCostUsd] = useState<number | null>(null);
 
   const updateMessages = useCallback((updater: React.SetStateAction<Message[]>) => {
     setMessages(prev => {
@@ -309,7 +309,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       if (!response.success) {
         console.error('Failed to delete message on server:', response.error);
         // Refetch history on error to ensure consistency
-        socket.emit('get_room_messages', roomId);
+        socket.emit('get_room_messages', { roomId });
          // Use translation key for alert
         alert(t('errorDeletingMessage', { error: response.error || t('unknownError') }));
       }
@@ -402,7 +402,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
         <div className="sticky top-0 z-20 mb-2 flex justify-end">
           <div className="flex items-center gap-1 rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-2.5 py-1 text-tiny font-medium text-[#4d4c48] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc]">
             <Icon icon="lucide:coins" className="h-3.5 w-3.5" />
-            <span>{t('sessionCost')}: {formatUsdCost(sessionCostUsd)}</span>
+            <span>{t('sessionCost')}: {sessionCostUsd === null ? '...' : formatUsdCost(sessionCostUsd)}</span>
           </div>
         </div>
         {hasMoreMessages && (
@@ -417,7 +417,18 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
             </button>
           </div>
         )}
-        {/* ... Loading/Empty/List rendering ... */}
+        {isLoading && messages.length === 0 && (
+          <div className="flex min-h-[220px] flex-1 items-center justify-center">
+            <Icon icon="lucide:loader-circle" className="h-6 w-6 animate-spin text-[#c96442] dark:text-[#d97757]" />
+          </div>
+        )}
+        {!isLoading && messages.length === 0 && (
+          <div className="flex min-h-[220px] flex-1 flex-col items-center justify-center text-center">
+            <Icon icon="lucide:message-circle" className="mb-3 h-8 w-8 text-[#87867f] dark:text-[#8f8d86]" />
+            <p className="font-serif text-lg font-medium text-[#141413] dark:text-[#faf9f5]">{t('noMessages')}</p>
+            <p className="mt-1 text-sm text-[#5e5d59] dark:text-[#b0aea5]">{t('beFirstToMessage')}</p>
+          </div>
+        )}
          {!isLoading && messages.length > 0 && (
             <div className="flex flex-col space-y-2 pb-4">
                 {messages

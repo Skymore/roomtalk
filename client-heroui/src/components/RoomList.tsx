@@ -20,6 +20,7 @@ import { RoomRenameModal } from './RoomRenameModal';
 
 interface RoomListProps {
   rooms: Room[];
+  isLoading?: boolean;
   onRoomSelect: (room: Room) => void;
   onRoomSelectById: (roomId: string) => void;
   handleDeleteRoom: (roomId: string) => void;
@@ -28,7 +29,7 @@ interface RoomListProps {
   username: string;
 }
 
-export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, onRoomSelectById, handleDeleteRoom, handleRenameRoom, clientId, username }) => {
+export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, onRoomSelect, onRoomSelectById, handleDeleteRoom, handleRenameRoom, clientId, username }) => {
   const { t } = useTranslation();
   const { isOpen, onOpen, onClose } = useDisclosure();
   const [newRoomName, setNewRoomName] = useState('');
@@ -163,6 +164,26 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, onRoomSelect, onRoomS
       onCreate={handleCreateRoom}
     />
   );
+
+  if (isLoading && rooms.length === 0) {
+    return (
+      <div className="flex h-full flex-col p-4 md:p-6">
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
+          <h2 className="font-serif text-2xl font-medium text-[#141413] dark:text-[#faf9f5]">{t('chatRooms')}</h2>
+          <Icon icon="lucide:loader-circle" className="h-5 w-5 animate-spin text-[#c96442] dark:text-[#d97757]" />
+        </div>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, index) => (
+            <div
+              key={index}
+              className="h-32 animate-pulse rounded-lg border border-[#dedbd0] bg-[#faf9f5] shadow-[0_0_0_1px_rgba(194,192,182,0.35)] dark:border-[#30302e] dark:bg-[#1d1d1b]"
+            />
+          ))}
+        </div>
+        {createModal}
+      </div>
+    );
+  }
 
   if (rooms.length === 0) {
     return (

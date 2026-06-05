@@ -57,6 +57,7 @@ const message = (overrides: Partial<Message> = {}): Message => ({
 type UpdateMessages = (updater: SetStateAction<Message[]>) => void;
 type SetBoolean = Dispatch<SetStateAction<boolean>>;
 type SetNumber = Dispatch<SetStateAction<number>>;
+type SetNullableNumber = Dispatch<SetStateAction<number | null>>;
 type ScrollToBottom = (behavior?: ScrollBehavior) => void;
 type CloseModal = () => void;
 type MockedFunction<T extends (...args: any[]) => any> = T & Mock<T>;
@@ -73,7 +74,7 @@ type HarnessProps = {
   setHasMoreMessages: SetBoolean;
   setHistoryVersion: SetNumber;
   setOldestMessageId: Dispatch<SetStateAction<string | undefined>>;
-  setSessionCostUsd: SetNumber;
+  setSessionCostUsd: SetNullableNumber;
   setShowScrollButton: SetBoolean;
   scrollToBottom: ScrollToBottom;
   closeDeleteModal: CloseModal;
@@ -87,7 +88,7 @@ type HarnessTestProps = Omit<HarnessProps, 'roomId' | 'messageToDeleteId' | 'mes
   setHasMoreMessages: MockedFunction<SetBoolean>;
   setHistoryVersion: MockedFunction<SetNumber>;
   setOldestMessageId: MockedFunction<Dispatch<SetStateAction<string | undefined>>>;
-  setSessionCostUsd: MockedFunction<SetNumber>;
+  setSessionCostUsd: MockedFunction<SetNullableNumber>;
   setShowScrollButton: MockedFunction<SetBoolean>;
   scrollToBottom: MockedFunction<ScrollToBottom>;
   closeDeleteModal: MockedFunction<CloseModal>;
@@ -146,7 +147,7 @@ const createHarnessProps = (): HarnessTestProps => ({
   setHasMoreMessages: mockFunction<SetBoolean>(),
   setHistoryVersion: mockFunction<SetNumber>(),
   setOldestMessageId: mockFunction<Dispatch<SetStateAction<string | undefined>>>(),
-  setSessionCostUsd: mockFunction<SetNumber>(),
+  setSessionCostUsd: mockFunction<SetNullableNumber>(),
   setShowScrollButton: mockFunction<SetBoolean>(),
   scrollToBottom: mockFunction<ScrollToBottom>(),
   closeDeleteModal: mockFunction<CloseModal>(),

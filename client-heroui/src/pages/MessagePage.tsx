@@ -49,6 +49,8 @@ export const MessagePage: React.FC = () => {
   // 状态简化：不再单独存储 roomId 和 joined 状态
   const [rooms, setRooms] = useState<Room[]>([]);
   const [savedRooms, setSavedRooms] = useState<Room[]>([]);
+  const [isLoadingRooms, setIsLoadingRooms] = useState(true);
+  const [isLoadingSavedRooms, setIsLoadingSavedRooms] = useState(true);
   const [currentRoom, setCurrentRoom] = useState<Room | null>(null);
   // 初始化视图状态，默认从localStorage读取
   const [view, setView] = useState<AppView>(() => {
@@ -60,10 +62,11 @@ export const MessagePage: React.FC = () => {
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [isLoadingRoom, setIsLoadingRoom] = useState(false);
+  const [isRestoringRoom, setIsRestoringRoom] = useState(false);
   // 当 URL 参数包含房间时，先保存待确认的房间信息
   const [roomToJoin, setRoomToJoin] = useState<Room | null>(null);
   // 添加房间成员数量状态
-  const [memberCount, setMemberCount] = useState<number>(0);
+  const [memberCount, setMemberCount] = useState<number | null>(null);
   // 添加用户名状态
   const [username, setUsername] = useState<string>("");
   // 是否显示修改用户名弹窗
@@ -182,7 +185,10 @@ export const MessagePage: React.FC = () => {
       if (storedRoom) {
         console.log("Found stored room, attempting to restore:", storedRoom.id);
         pendingRestoreRoomIdRef.current = storedRoom.id;
+        setIsRestoringRoom(true);
         setCurrentRoom(storedRoom);
+        setMemberCount(getRoomMemberCount(storedRoom.id));
+        joinRoom(storedRoom.id);
 
         const savedView = getStoredView();
         console.log("Restored stored room shell with saved view:", savedView);
@@ -199,14 +205,15 @@ export const MessagePage: React.FC = () => {
             }
 
             pendingRestoreRoomIdRef.current = null;
+            setIsRestoringRoom(false);
             if (roomInfo) {
               console.log("Successfully restored room:", roomInfo.name);
               setCurrentRoom(roomInfo);
-              joinRoom(roomInfo.id);
               setMemberCount(getRoomMemberCount(roomInfo.id));
             } else {
               console.log("Stored room no longer exists");
               // 房间不存在，清除存储
+              leaveRoom(storedRoom.id);
               setCurrentRoom(null);
               saveCurrentRoom(null);
               setError(t("errorRoomNoLongerExists"));
@@ -218,9 +225,8 @@ export const MessagePage: React.FC = () => {
             }
 
             pendingRestoreRoomIdRef.current = null;
+            setIsRestoringRoom(false);
             console.error("Error restoring room:", err);
-            setCurrentRoom(null);
-            saveCurrentRoom(null);
             setError(t("errorRestoringRoom"));
           });
       } else {
@@ -254,10 +260,17 @@ export const MessagePage: React.FC = () => {
 
   // 监听服务器返回的房间列表和新增房间
   useEffect(() => {
-    const handleRoomList = (roomList: Room[]) => setRooms(sortRoomsByLastActivityDesc(roomList));
-    const handleSavedRoomList = (roomList: Room[]) => setSavedRooms(roomList);
+    const handleRoomList = (roomList: Room[]) => {
+      setRooms(sortRoomsByLastActivityDesc(roomList));
+      setIsLoadingRooms(false);
+    };
+    const handleSavedRoomList = (roomList: Room[]) => {
+      setSavedRooms(roomList);
+      setIsLoadingSavedRooms(false);
+    };
     const handleRoomUpdate = (room: Room) => {
       setRooms((prev) => sortRoomsByLastActivityDesc(upsertRoom(prev, room)));
+      setIsLoadingRooms(false);
       setCurrentRoom((current) => current?.id === room.id ? { ...current, ...room } : current);
       setSavedRooms((prev) => prev.map((savedRoom) => savedRoom.id === room.id ? { ...savedRoom, ...room } : savedRoom));
     };
@@ -267,7 +280,10 @@ export const MessagePage: React.FC = () => {
     socket.on("saved_room_list", handleSavedRoomList);
     getSavedRoomsFromServer()
       .then(handleSavedRoomList)
-      .catch((error) => console.error("Failed to load saved rooms:", error));
+      .catch((error) => {
+        console.error("Failed to load saved rooms:", error);
+        setIsLoadingSavedRooms(false);
+      });
     socket.on("new_room", handleRoomUpdate);
     socket.on("room_updated", handleRoomUpdate);
 
@@ -276,6 +292,7 @@ export const MessagePage: React.FC = () => {
       const memberUpdate = getRoomMemberUpdate(currentRoom, event);
       if (memberUpdate) {
         setMemberCount(memberUpdate.count);
+        setIsRestoringRoom(false);
       }
     });
 
@@ -300,7 +317,7 @@ export const MessagePage: React.FC = () => {
         // 如果在房间中，刷新消息
         if (currentRoom) {
           console.log("Refreshing messages for current room:", currentRoom.id);
-          socket.emit("get_room_messages", currentRoom.id);
+          socket.emit("get_room_messages", { roomId: currentRoom.id });
         }
       }
     };
@@ -326,6 +343,7 @@ export const MessagePage: React.FC = () => {
   // 直接加入房间：点击房间卡片或确认弹窗后调用
   const handleRoomSelect = (room: Room) => {
     pendingRestoreRoomIdRef.current = null;
+    setIsRestoringRoom(false);
 
     // 如果已经在其他房间，则先离开
     if (currentRoom && currentRoom.id !== room.id) {
@@ -343,14 +361,20 @@ export const MessagePage: React.FC = () => {
 
   const handleRoomSelectById = async (roomId: string) => {
     pendingRestoreRoomIdRef.current = null;
+    setIsRestoringRoom(false);
 
-    const roomInfo = await getRoomById(roomId);
-    if (!roomInfo) {
-      setError(t("errorRoomNotFound", { roomId }));
-      return;
+    try {
+      const roomInfo = await getRoomById(roomId);
+      if (!roomInfo) {
+        setError(t("errorRoomNotFound", { roomId }));
+        return;
+      }
+
+      handleRoomSelect(roomInfo);
+    } catch (error) {
+      console.error("Error loading room by ID:", error);
+      setError(t("errorLoading"));
     }
-
-    handleRoomSelect(roomInfo);
   };
 
   // URL 加载的房间确认操作
@@ -367,10 +391,12 @@ export const MessagePage: React.FC = () => {
   // 离开当前房间
   const handleLeaveRoom = () => {
     pendingRestoreRoomIdRef.current = null;
+    setIsRestoringRoom(false);
 
     if (currentRoom) {
       leaveRoom(currentRoom.id);
       setCurrentRoom(null);
+      setMemberCount(null);
       // 修复BUG：离开房间时清除 URL 中的 room 参数，防止重复弹出加入房间确认弹窗
       clearRoomUrlParam();
       // 明确清除localStorage中的房间信息
@@ -460,6 +486,8 @@ export const MessagePage: React.FC = () => {
         if (currentRoom && currentRoom.id === roomId) {
           setCurrentRoom(null);
           setView('rooms');
+          setIsRestoringRoom(false);
+          setMemberCount(null);
           saveCurrentRoom(null);
           clearRoomUrlParam();
         }
@@ -502,6 +530,7 @@ export const MessagePage: React.FC = () => {
           <div className="h-full w-full overflow-y-auto"> {/* 占据全部可用空间 */}
             <RoomList
               rooms={rooms}
+              isLoading={isLoadingRooms}
               onRoomSelect={handleRoomSelect}
               onRoomSelectById={handleRoomSelectById}
               handleDeleteRoom={handleDeleteRoom}
@@ -516,6 +545,7 @@ export const MessagePage: React.FC = () => {
           <div className="h-full w-full overflow-y-auto"> {/* 占据全部可用空间 */}
             <SavedRoomList
               rooms={savedRooms}
+              isLoading={isLoadingSavedRooms}
               onRoomSelect={handleRoomSelect}
               onUnsaveRoom={handleUnsaveRoom}
             />
@@ -542,6 +572,7 @@ export const MessagePage: React.FC = () => {
           <ChatRoomView
             currentRoom={currentRoom}
             memberCount={memberCount}
+            isRestoringRoom={isRestoringRoom}
             username={username}
             clientId={clientId}
             handleCopyToClipboard={handleCopyToClipboard}
@@ -573,6 +604,8 @@ export const MessagePage: React.FC = () => {
           setView={setView}
           rooms={rooms}
           savedRooms={savedRooms}
+          isLoadingRooms={isLoadingRooms}
+          isLoadingSavedRooms={isLoadingSavedRooms}
           currentRoom={currentRoom}
           i18n={i18n}
           changeLanguage={changeLanguage}

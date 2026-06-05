@@ -33,6 +33,8 @@ interface DesktopSidebarProps {
   setView: (view: AppView) => void;
   rooms: Room[];
   savedRooms: Room[];
+  isLoadingRooms?: boolean;
+  isLoadingSavedRooms?: boolean;
   currentRoom: Room | null;
   i18n: any;
   changeLanguage: (lang: string) => void;
@@ -263,6 +265,8 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
   setView,
   rooms,
   savedRooms,
+  isLoadingRooms = false,
+  isLoadingSavedRooms = false,
   currentRoom,
   i18n,
   changeLanguage,
@@ -466,7 +470,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
                 <h2 className="text-xs font-semibold uppercase text-[#87867f] dark:text-[#8f8d86]">
                   {t('chatRooms')}
                 </h2>
-                <span className="text-xs text-[#87867f] dark:text-[#8f8d86]">{rooms.length}</span>
+                <span className="text-xs text-[#87867f] dark:text-[#8f8d86]">{isLoadingRooms ? '...' : rooms.length}</span>
               </div>
             )}
             <div className={isCollapsed ? 'flex flex-col items-center gap-1' : 'space-y-1'}>
@@ -486,10 +490,15 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
                     onDeleteRoom={setRoomToDelete}
                   />
                 ))
-              ) : !isCollapsed ? (
-                <p className="rounded-lg px-2.5 py-2 text-xs leading-5 text-[#87867f] dark:text-[#8f8d86]">
-                  {t('noRoomsAvailable')}
-                </p>
+              ) : isLoadingRooms && isCollapsed ? (
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg text-[#87867f] dark:text-[#8f8d86]">
+                  <Icon icon="lucide:loader-circle" className="h-4 w-4 animate-spin" />
+                </div>
+              ) : isLoadingRooms && !isCollapsed ? (
+                <div className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs text-[#87867f] dark:text-[#8f8d86]">
+                  <Icon icon="lucide:loader-circle" className="h-3.5 w-3.5 animate-spin" />
+                  <span>...</span>
+                </div>
               ) : null}
             </div>
           </section>
@@ -500,7 +509,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
                 <h2 className="text-xs font-semibold uppercase text-[#87867f] dark:text-[#8f8d86]">
                   {t('savedRooms')}
                 </h2>
-                <span className="text-xs text-[#87867f] dark:text-[#8f8d86]">{savedRooms.length}</span>
+                <span className="text-xs text-[#87867f] dark:text-[#8f8d86]">{isLoadingSavedRooms ? '...' : savedRooms.length}</span>
               </div>
             )}
             <div className={isCollapsed ? 'flex flex-col items-center gap-1' : 'space-y-1'}>
@@ -519,10 +528,15 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
                     onUnsaveRoom={(savedRoom) => onUnsaveRoom(savedRoom.id)}
                   />
                 ))
-              ) : !isCollapsed ? (
-                <p className="rounded-lg px-2.5 py-2 text-xs leading-5 text-[#87867f] dark:text-[#8f8d86]">
-                  {t('noSavedRooms')}
-                </p>
+              ) : isLoadingSavedRooms && isCollapsed ? (
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg text-[#87867f] dark:text-[#8f8d86]">
+                  <Icon icon="lucide:loader-circle" className="h-4 w-4 animate-spin" />
+                </div>
+              ) : isLoadingSavedRooms && !isCollapsed ? (
+                <div className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs text-[#87867f] dark:text-[#8f8d86]">
+                  <Icon icon="lucide:loader-circle" className="h-3.5 w-3.5 animate-spin" />
+                  <span>...</span>
+                </div>
               ) : null}
             </div>
           </section>
