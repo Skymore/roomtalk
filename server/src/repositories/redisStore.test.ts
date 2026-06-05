@@ -1,7 +1,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { RedisStore } from './redisStore';
-import { AICost, Message, Room } from '../types';
+import { AICost, MediaAsset, Message, Room } from '../types';
 
 const toTime = (value?: string) => Date.parse(value || '') || 0;
 const latest = (first?: string, second?: string) => toTime(first) >= toTime(second) ? first : second;
@@ -126,6 +126,21 @@ class MemoryRedis {
   }
 
   async eval(script: string, options: { keys: string[]; arguments: string[] }) {
+    if (script.includes("redis.call('HSET', KEYS[3]")) {
+      const [, messageKey, mediaAssetsKey, roomMediaAssetsKey] = options.keys;
+      const [roomId, messagePayload, lastActivityAt, assetId, assetPayload] = options.arguments;
+      const updatedRoom = this.updateRoomActivity(roomId, lastActivityAt);
+      if (!updatedRoom) {
+        return [0, ''];
+      }
+      const list = this.lists.get(messageKey) || [];
+      list.push(messagePayload);
+      this.lists.set(messageKey, list);
+      this.hash(mediaAssetsKey).set(assetId, assetPayload);
+      this.set(roomMediaAssetsKey).add(assetId);
+      return [1, JSON.stringify(updatedRoom)];
+    }
+
     if (script.includes('local mediaMessageId')) {
       const [, messageKey] = options.keys;
       const [roomId, messageId, mimeType] = options.arguments;
@@ -293,6 +308,18 @@ const message = (overrides: Partial<Message> = {}): Message => ({
   ...overrides,
 });
 
+const mediaAsset = (overrides: Partial<MediaAsset> = {}): MediaAsset => ({
+  id: 'asset-1',
+  roomId: 'room-1',
+  messageId: 'message-1',
+  objectKey: 'rooms/room-1/media/image/asset-1',
+  kind: 'image',
+  mimeType: 'image/webp',
+  byteSize: 123,
+  createdAt: '2026-05-04T00:00:00.000Z',
+  ...overrides,
+});
+
 const cost = (totalUsd: number): AICost => ({
   currency: 'USD',
   inputUsd: totalUsd,
@@ -385,6 +412,36 @@ describe('RedisStore', () => {
     await store.saveRoom(newerRoom);
 
     assert.deepEqual((await store.readRoomsByUser('client-1')).map(item => item.id), ['newer-room', 'older-room']);
+  });
+
+  it('appends media messages and assets together', async () => {
+    const { store } = createStore();
+    await store.saveRoom(room());
+
+    const result = await store.appendMediaMessageWithAsset(
+      message({ content: '', messageType: 'media', mimeType: 'image/webp', timestamp: '2026-05-04T00:00:00.000Z' }),
+      mediaAsset({ width: 20, height: 10, uploadedByClientId: 'client-1' })
+    );
+
+    assert.equal(result?.room.lastActivityAt, '2026-05-04T00:00:00.000Z');
+    assert.deepEqual(result?.message.mediaAsset, {
+      id: 'asset-1',
+      kind: 'image',
+      mimeType: 'image/webp',
+      byteSize: 123,
+      width: 20,
+      height: 10,
+    });
+    assert.deepEqual(await store.getMediaAsset('asset-1'), mediaAsset({ width: 20, height: 10, uploadedByClientId: 'client-1' }));
+    assert.deepEqual(await store.readMediaAssetsByRoom('room-1'), [mediaAsset({ width: 20, height: 10, uploadedByClientId: 'client-1' })]);
+    assert.deepEqual((await store.readMessagesByRoom('room-1'))[0]?.mediaAsset, {
+      id: 'asset-1',
+      kind: 'image',
+      mimeType: 'image/webp',
+      byteSize: 123,
+      width: 20,
+      height: 10,
+    });
   });
 
 

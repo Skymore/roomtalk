@@ -1,6 +1,6 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
-import { AICost, Message, Room } from '../types';
+import { AICost, MediaAsset, Message, Room } from '../types';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { PostgresClient, PostgresPool, PostgresQueryResult, PostgresStore } from './postgresStore';
 
@@ -95,6 +95,18 @@ const message = (overrides: Partial<Message> = {}): Message => ({
   roomId: 'room-1',
   timestamp: '2026-05-04T00:00:00.000Z',
   messageType: 'text',
+  ...overrides,
+});
+
+const mediaAsset = (overrides: Partial<MediaAsset> = {}): MediaAsset => ({
+  id: 'asset-1',
+  roomId: 'room-1',
+  messageId: 'message-1',
+  objectKey: 'rooms/room-1/media/image/asset-1',
+  kind: 'image',
+  mimeType: 'image/webp',
+  byteSize: 123,
+  createdAt: '2026-05-04T00:00:00.000Z',
   ...overrides,
 });
 
@@ -546,6 +558,120 @@ describe('PostgresStore', () => {
     assert.deepEqual(await store.appendMessage(message()), room({ lastActivityAt: '2026-05-04T00:00:00.000Z' }));
     assert.equal(pool.connectCalls, 1);
     assert.equal(client.released, true);
+  });
+
+  it('appends media messages and assets in one transaction with the message inserted first', async () => {
+    const client = new ScriptedClient([
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
+      { rows: [roomRow()] },
+      { rows: [{ position: '4' }] },
+      {
+        rowCount: 1,
+        assertCall(call) {
+          assert.match(call.sql, /INSERT INTO room_messages/);
+          assert.equal(call.params?.[0], 'message-1');
+          assert.equal(call.params?.[6], 'media');
+          assert.equal(call.params?.[9], 'image/webp');
+          assert.equal(call.params?.[15], 4);
+        },
+      },
+      {
+        rows: [{
+          id: 'asset-1',
+          room_id: 'room-1',
+          message_id: 'message-1',
+          object_key: 'rooms/room-1/media/image/asset-1',
+          kind: 'image',
+          mime_type: 'image/webp',
+          byte_size: 123,
+          width: 20,
+          height: 10,
+          duration_ms: null,
+          uploaded_by_client_id: 'client-1',
+          created_at: '2026-05-04T00:00:00.000Z',
+        }],
+        assertCall(call) {
+          assert.match(call.sql, /INSERT INTO media_assets/);
+          assert.equal(call.params?.[0], 'asset-1');
+          assert.equal(call.params?.[2], 'message-1');
+        },
+      },
+      { rows: [roomRow({ last_activity_at: '2026-05-04T00:00:00.000Z' })] },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'COMMIT') },
+    ]);
+    const pool = new ScriptedPool([], client);
+    const store = new PostgresStore(pool, logger as any);
+
+    const result = await store.appendMediaMessageWithAsset(
+      message({ content: '', messageType: 'media', mimeType: 'image/webp' }),
+      mediaAsset({ width: 20, height: 10, uploadedByClientId: 'client-1' })
+    );
+
+    assert.deepEqual(result, {
+      room: room({ lastActivityAt: '2026-05-04T00:00:00.000Z' }),
+      message: message({
+        content: '',
+        messageType: 'media',
+        mimeType: 'image/webp',
+        mediaAsset: {
+          id: 'asset-1',
+          kind: 'image',
+          mimeType: 'image/webp',
+          byteSize: 123,
+          width: 20,
+          height: 10,
+        },
+      }),
+      asset: mediaAsset({ width: 20, height: 10, uploadedByClientId: 'client-1' }),
+    });
+    const messageInsertIndex = client.calls.findIndex(call => /INSERT INTO room_messages/.test(call.sql));
+    const assetInsertIndex = client.calls.findIndex(call => /INSERT INTO media_assets/.test(call.sql));
+    assert.ok(messageInsertIndex >= 0);
+    assert.ok(assetInsertIndex > messageInsertIndex);
+    assert.equal(pool.connectCalls, 1);
+    assert.equal(client.released, true);
+  });
+
+  it('rolls back the media message transaction when media asset insertion fails', async () => {
+    const errors: any[] = [];
+    const testLogger = {
+      ...logger,
+      error(message: string, payload: any) {
+        errors.push({ message, payload });
+      },
+    };
+    const client = new ScriptedClient([
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
+      { rows: [roomRow()] },
+      { rows: [{ position: '0' }] },
+      {
+        rowCount: 1,
+        assertCall(call) {
+          assert.match(call.sql, /INSERT INTO room_messages/);
+        },
+      },
+      {
+        error: new Error('foreign key or asset insert failed'),
+        assertCall(call) {
+          assert.match(call.sql, /INSERT INTO media_assets/);
+        },
+      },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'ROLLBACK') },
+    ]);
+    const pool = new ScriptedPool([], client);
+    const store = new PostgresStore(pool, testLogger as any);
+
+    assert.equal(
+      await store.appendMediaMessageWithAsset(
+        message({ content: '', messageType: 'media', mimeType: 'image/webp' }),
+        mediaAsset()
+      ),
+      null
+    );
+    assert.equal(client.calls[client.calls.length - 1]?.sql, 'ROLLBACK');
+    assert.equal(client.calls.some(call => /UPDATE rooms/.test(call.sql)), false);
+    assert.equal(client.released, true);
+    assert.equal(errors[0].message, 'Error appending PostgreSQL media message and asset');
   });
 
   it('upserts messages without rewriting room history', async () => {

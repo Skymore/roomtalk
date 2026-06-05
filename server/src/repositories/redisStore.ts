@@ -2,7 +2,7 @@ import { customAlphabet } from 'nanoid';
 import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
 import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember } from '../types';
-import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, RoomMessageCacheStore, RoomMessagePageOptions, RoomStore } from './store';
+import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, MediaMessageAppendResult, RoomMessageCacheStore, RoomMessagePageOptions, RoomStore } from './store';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 const DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS = 30;
@@ -56,6 +56,29 @@ room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
 local messagePayload = ARGV[2]
 redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
 redis.call('RPUSH', KEYS[2], messagePayload)
+return { 1, cjson.encode(room) }
+`;
+
+const APPEND_MEDIA_MESSAGE_WITH_ASSET_SCRIPT = `
+local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
+if not roomJson then
+  return { 0, '' }
+end
+
+local ok, room = pcall(cjson.decode, roomJson)
+if not ok then
+  return { 0, '' }
+end
+
+local currentLastActivityAt = room['lastActivityAt'] or room['createdAt'] or ''
+if ARGV[3] > currentLastActivityAt then
+  room['lastActivityAt'] = ARGV[3]
+end
+room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
+redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
+redis.call('RPUSH', KEYS[2], ARGV[2])
+redis.call('HSET', KEYS[3], ARGV[4], ARGV[5])
+redis.call('SADD', KEYS[4], ARGV[4])
 return { 1, cjson.encode(room) }
 `;
 
@@ -562,6 +585,48 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       return updatedRoom;
     } catch (error) {
       this.logger.error('Error appending message to Redis', { error, messageId: message.id, roomId: message.roomId });
+      return null;
+    }
+  }
+
+  async appendMediaMessageWithAsset(message: Message, asset: MediaAsset): Promise<MediaMessageAppendResult | null> {
+    const mediaMessage: Message = {
+      ...message,
+      messageType: 'media',
+    };
+    const mediaAsset: MediaAsset = {
+      ...asset,
+      roomId: mediaMessage.roomId,
+      messageId: mediaMessage.id,
+    };
+    const savedMessage: Message = {
+      ...mediaMessage,
+      content: mediaMessage.content || '',
+      mimeType: mediaAsset.mimeType as Message['mimeType'],
+      mediaAsset: toMessageMediaAsset(mediaAsset),
+    };
+
+    try {
+      const result = await (this.redisClient as any).eval(APPEND_MEDIA_MESSAGE_WITH_ASSET_SCRIPT, {
+        keys: ['rooms', `room:${mediaMessage.roomId}:messages`, 'media_assets', getRoomMediaAssetsKey(mediaMessage.roomId)],
+        arguments: [
+          mediaMessage.roomId,
+          JSON.stringify(savedMessage),
+          mediaMessage.timestamp,
+          mediaAsset.id,
+          JSON.stringify(mediaAsset),
+        ],
+      });
+      const updatedRoom = parseScriptRoom(result, 1);
+      if (!updatedRoom) {
+        this.logger.warn('Cannot append media message for missing or invalid Redis room', { messageId: mediaMessage.id, roomId: mediaMessage.roomId, assetId: mediaAsset.id });
+        return null;
+      }
+      await this.invalidateRoomMessagesCache(mediaMessage.roomId);
+      this.logger.debug('Media message and asset appended to Redis list', { messageId: mediaMessage.id, roomId: mediaMessage.roomId, assetId: mediaAsset.id, kind: mediaAsset.kind });
+      return { room: updatedRoom, message: savedMessage, asset: mediaAsset };
+    } catch (error) {
+      this.logger.error('Error appending media message and asset to Redis', { error, messageId: mediaMessage.id, roomId: mediaMessage.roomId, assetId: mediaAsset.id });
       return null;
     }
   }

@@ -1,7 +1,7 @@
 import { customAlphabet } from 'nanoid';
 import { Logger } from '../logger';
 import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole } from '../types';
-import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, RoomMessagePageOptions } from './store';
+import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, MediaMessageAppendResult, RoomMessagePageOptions } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 
@@ -400,6 +400,63 @@ export class PostgresStore implements DurableRoomStore {
       });
     } catch (error) {
       this.logger.error('Error appending message to PostgreSQL', { error, roomId: message.roomId, messageId: message.id });
+      return null;
+    }
+  }
+
+  async appendMediaMessageWithAsset(message: Message, asset: MediaAsset): Promise<MediaMessageAppendResult | null> {
+    const mediaMessage: Message = {
+      ...message,
+      messageType: 'media',
+    };
+    const mediaAsset: MediaAsset = {
+      ...asset,
+      roomId: mediaMessage.roomId,
+      messageId: mediaMessage.id,
+    };
+
+    try {
+      return await this.transaction(async client => {
+        const room = await client.query<RoomRow>(
+          `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
+          [mediaMessage.roomId]
+        );
+        if (room.rows.length === 0) {
+          this.logger.warn('Cannot append media message to missing PostgreSQL room', { roomId: mediaMessage.roomId, messageId: mediaMessage.id, assetId: mediaAsset.id });
+          return null;
+        }
+
+        const nextPosition = await client.query<{ position: number | string }>(
+          'SELECT COALESCE(MAX(position), -1) + 1 AS position FROM room_messages WHERE room_id = $1',
+          [mediaMessage.roomId]
+        );
+        const position = Number(nextPosition.rows[0]?.position || 0);
+        await client.query(INSERT_MESSAGE_SQL, messageParams(mediaMessage, position));
+
+        const savedAsset = await this.saveMediaAssetWithClient(client, mediaAsset);
+        if (!savedAsset) {
+          throw new Error('Failed to save media asset');
+        }
+
+        const updatedRoom = await client.query<RoomRow>(
+          `UPDATE rooms
+          SET last_activity_at = GREATEST(last_activity_at, $2::timestamptz),
+            message_version = message_version + 1
+          WHERE id = $1
+          RETURNING ${ROOM_COLUMNS}`,
+          [mediaMessage.roomId, mediaMessage.timestamp]
+        );
+        const roomResult = updatedRoom.rows[0] ? mapRoom(updatedRoom.rows[0]) : null;
+        if (!roomResult) {
+          throw new Error('Failed to update room after media message append');
+        }
+
+        const savedMessage = this.attachMediaAssetsFromAssets([mediaMessage], [savedAsset])[0];
+        this.logger.debug('Media message and asset appended to PostgreSQL', { roomId: mediaMessage.roomId, messageId: mediaMessage.id, assetId: savedAsset.id, kind: savedAsset.kind });
+        return { room: roomResult, message: savedMessage, asset: savedAsset };
+      });
+    } catch (error) {
+      this.logger.error('Error appending PostgreSQL media message and asset', { error, roomId: mediaMessage.roomId, messageId: mediaMessage.id, assetId: mediaAsset.id });
       return null;
     }
   }
