@@ -139,16 +139,7 @@ describe('AI provider messages', () => {
     assert.deepEqual(result[2], { role: 'assistant', content: 'assistant text' });
     assert.deepEqual(result[3], {
       role: 'user',
-      content: [
-        { type: 'text', text: '[Sender: Alice]\n[Image attachment]' },
-        {
-          type: 'image_url',
-          image_url: {
-            url: 'data:image/webp;base64,abc123',
-            detail: 'auto',
-          },
-        },
-      ],
+      content: '[Sender: Alice]\n[Image attachment]',
     });
     assert.equal(JSON.stringify(result).includes('private-client-id'), false);
   });
@@ -163,10 +154,7 @@ describe('AI provider messages', () => {
     assert.deepEqual(result[0], { role: 'user', content: '[Sender: Alice]\nhello' });
     assert.deepEqual(result[1], {
       role: 'user',
-      content: [
-        { type: 'text', text: '[Sender: Alice]\n[Image attachment]' },
-        { type: 'image', source: { type: 'base64', media_type: 'image/webp', data: 'abc123' } },
-      ],
+      content: '[Sender: Alice]\n[Image attachment]',
     });
     assert.deepEqual(result[2], { role: 'assistant', content: 'answer' });
   });

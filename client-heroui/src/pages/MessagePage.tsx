@@ -11,6 +11,7 @@ import {
   clientId,
   getRoomMemberCount,
   onRoomMemberChange,
+  setUsername as emitUsername,
   reconnectSocket,
   renameRoom,
   saveRoomToServer,
@@ -129,7 +130,7 @@ export const MessagePage: React.FC = () => {
   // 用户名变更时通知socket服务
   useEffect(() => {
     if (username) {
-      socket.emit("set_username", username);
+      emitUsername(username);
     }
   }, [username]);
 

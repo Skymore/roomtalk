@@ -527,7 +527,6 @@ export function registerAIHandlers({
       clientId,
       content: data.content,
       roomId: data.roomId,
-      messageType: 'text',
       username: data.username,
       avatar: data.avatar,
       replyTo,

@@ -19,7 +19,7 @@ import { registerApiRoutes } from './routes/apiRoutes';
 import { registerSocketHandlers } from './socket/registerSocketHandlers';
 import { createAIClients } from './services/aiClients';
 import { createAIRoleDraftGenerator } from './services/aiRoleGenerator';
-import { createImageObjectStorageFromEnv } from './services/imageObjectStorage';
+import { createMediaObjectStorageFromEnv } from './services/mediaObjectStorage';
 
 dotenv.config();
 
@@ -30,8 +30,8 @@ const postgresLogger = new Logger('PostgreSQL');
 const socketLogger = new Logger('SocketIO');
 const routeLogger = new Logger('Routes');
 const openaiLogger = new Logger('OpenAI');
-const imageStorageLogger = new Logger('ImageStorage');
-const imageObjectStorage = createImageObjectStorageFromEnv(imageStorageLogger);
+const mediaStorageLogger = new Logger('MediaStorage');
+const mediaObjectStorage = createMediaObjectStorageFromEnv(mediaStorageLogger);
 
 const aiModelRegistry = createAIModelRegistry({
   defaultModelId: process.env.AI_MODEL || process.env.OPENROUTER_MODEL || DEFAULT_AI_MODEL_ID,
@@ -94,7 +94,7 @@ if (PERSISTENCE_STORE === 'postgres') {
     throw new Error('PERSISTENCE_STORE=postgres requires DATABASE_URL');
   }
 
-  postgresStore = new PostgresStore(createPostgresPool(databaseUrl, postgresLogger), postgresLogger);
+  postgresStore = new PostgresStore(createPostgresPool(databaseUrl, postgresLogger), postgresLogger, mediaObjectStorage);
   store = new CompositeRoomStore(postgresStore, redisStore, redisStore);
   activePersistenceStore = 'postgres';
 } else if (PERSISTENCE_STORE !== 'redis') {
@@ -169,7 +169,6 @@ registerSocketHandlers({
   openaiLogger,
   normalizeAIModel,
   getAIClientForModel,
-  imageObjectStorage,
   assemblyAIApiKey: process.env.ASSEMBLYAI_API_KEY,
 });
 
@@ -181,6 +180,7 @@ registerApiRoutes(app, {
   getAIModelResponse,
   generateAIRoleDraft,
   persistenceStore: activePersistenceStore,
+  mediaObjectStorage,
 });
 
 // Catch-all 路由，返回前端应用的入口 HTML 文件（支持前端路由）

@@ -1,16 +1,21 @@
 export interface MessageReplyReference {
   messageId: string;
   username?: string;
-  messageType: 'text' | 'image' | 'ai' | 'voice';
+  messageType: 'text' | 'ai' | 'media';
+  mediaKind?: MediaKind;
   preview: string;
 }
 
-export interface MessageImageAsset {
+export type MediaKind = 'image' | 'video' | 'audio';
+
+export interface MessageMediaAsset {
   id: string;
+  kind: MediaKind;
   mimeType: string;
   byteSize: number;
   width?: number;
   height?: number;
+  durationMs?: number;
 }
 
 export interface Message {
@@ -20,13 +25,13 @@ export interface Message {
   timestamp: string;
   updatedAt?: string;
   roomId: string;
-  messageType: 'text' | 'image' | 'ai' | 'voice';
+  messageType: 'text' | 'ai' | 'media';
   username?: string;
   avatar?: {
     text: string;
     color: string;
   };
-  mimeType?: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' | 'image/jpg' | 'audio/webm' | 'audio/webm;codecs=opus' | 'audio/mp4';
+  mimeType?: string;
   status?: 'streaming' | 'complete' | 'error';
   clientMessageId?: string;
   deliveryStatus?: 'pending' | 'sent' | 'failed';
@@ -41,7 +46,7 @@ export interface Message {
   usage?: AIUsage;
   cost?: AICost;
   replyTo?: MessageReplyReference;
-  imageAsset?: MessageImageAsset;
+  mediaAsset?: MessageMediaAsset;
 }
 
 export interface Room {
@@ -81,6 +86,11 @@ export interface RoomMemberEvent {
 export interface RoomMemberCount {
   roomId: string;
   count: number;
+}
+
+export interface RoomOnlineMember {
+  clientId: string;
+  nickname?: string;
 }
 export interface AIChunkEvent {
   messageId: string;

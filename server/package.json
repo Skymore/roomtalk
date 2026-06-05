@@ -7,7 +7,7 @@
     "dev": "ts-node-dev --respawn src/server.ts",
     "start:e2e": "ts-node src/server.ts",
     "migrate:redis-to-postgres": "ts-node src/scripts/migrateRedisToPostgres.ts",
-    "migrate:images-to-object-storage": "ts-node src/scripts/migrateImageMessagesToObjectStorage.ts",
+    "migrate:media-to-object-storage": "ts-node src/scripts/migrateLegacyMediaMessagesToObjectStorage.ts",
     "smoke:persistence": "ts-node src/scripts/persistenceSmoke.ts",
     "build": "tsc",
     "test": "node -r ts-node/register --test \"src/**/*.test.ts\""

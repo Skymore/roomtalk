@@ -37,7 +37,7 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
     messageData: {
       roomId: string;
       content: string;
-      messageType?: 'text' | 'image' | 'voice';
+      messageType?: 'text' | 'media' | 'image' | 'voice';
       username?: string;
       avatar?: {
         text: string;
@@ -70,6 +70,17 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       return;
     }
 
+    if (messageData.messageType && messageData.messageType !== 'text') {
+      socketLogger.warn('Client tried to send media through text message socket path', { socketId: socket.id, clientId, roomId: messageData.roomId, messageType: messageData.messageType });
+      callback?.({ success: false, error: 'Media messages must use the media upload API' });
+      return;
+    }
+
+    if (typeof messageData.content !== 'string' || !messageData.content.trim()) {
+      callback?.({ success: false, error: 'Message content is required' });
+      return;
+    }
+
     let replyTo;
     if (messageData.replyToMessageId) {
       const roomMessages = await store.readMessagesByRoom(messageData.roomId);
@@ -86,7 +97,6 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       clientId,
       content: messageData.content,
       roomId: messageData.roomId,
-      messageType: messageData.messageType || 'text',
       username: messageData.username,
       avatar: messageData.avatar,
       replyTo,

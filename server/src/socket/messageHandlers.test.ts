@@ -222,16 +222,17 @@ describe('message socket handlers', () => {
     ]);
   });
 
-  it('returns slim asset-backed image history without exposing object storage keys', async () => {
+  it('returns slim asset-backed media history without exposing object storage keys', async () => {
     const { socket, store } = createHarness();
     store.messages = [
       message({
         id: 'image-message',
-        content: 'asset-1',
-        messageType: 'image',
+        content: '',
+        messageType: 'media',
         mimeType: 'image/webp',
-        imageAsset: {
+        mediaAsset: {
           id: 'asset-1',
+          kind: 'image',
           mimeType: 'image/webp',
           byteSize: 123,
           width: 10,
@@ -245,8 +246,8 @@ describe('message socket handlers', () => {
     const historyPayload = socket.emitted[0].args[0] as { messages: Message[] };
     const history = historyPayload.messages;
     assert.deepEqual(history, [store.messages[0]]);
-    assert.equal(history[0].content, 'asset-1');
-    assert.equal('objectKey' in history[0].imageAsset!, false);
+    assert.equal(history[0].content, '');
+    assert.equal('objectKey' in history[0].mediaAsset!, false);
     assert.equal(JSON.stringify(history).includes('data:image'), false);
   });
 
@@ -275,6 +276,18 @@ describe('message socket handlers', () => {
     });
     assert.deepEqual(invalid.socket.emitted, [{ event: 'error', args: [{ message: 'Room ID is required' }] }]);
     assert.deepEqual(invalidResponse, { success: false, error: 'Room ID is required' });
+
+    const mediaSend = createHarness('client-2');
+    let mediaResponse: unknown;
+    await mediaSend.socket.invoke('send_message', {
+      roomId: 'room-1',
+      content: 'data:image/png;base64,AAAA',
+      messageType: 'image',
+    }, (response: unknown) => {
+      mediaResponse = response;
+    });
+    assert.deepEqual(mediaResponse, { success: false, error: 'Media messages must use the media upload API' });
+    assert.equal(mediaSend.store.appendedMessages.length, 0);
 
     const valid = createHarness('client-2');
     let validResponse: { success: boolean; message?: Message } | undefined;

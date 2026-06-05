@@ -1,7 +1,7 @@
 import { customAlphabet } from 'nanoid';
 import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
-import { AICost, ImageAsset, Message, MessageImageAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole } from '../types';
+import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember } from '../types';
 import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, RoomMessageCacheStore, RoomMessagePageOptions, RoomStore } from './store';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
@@ -9,18 +9,21 @@ const DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS = 30;
 const ROOM_MESSAGES_CACHE_KEY_PREFIX = 'cache:room:';
 const ROOM_MESSAGES_CACHE_KEY_SUFFIX = ':messages';
 const getPersistentRoomMembersKey = (roomId: string) => `room:${roomId}:room_members`;
-const getRoomImageAssetsKey = (roomId: string) => `room:${roomId}:image_assets`;
+const CLIENT_NICKNAMES_KEY = 'client:nicknames';
+const getRoomMediaAssetsKey = (roomId: string) => `room:${roomId}:media_assets`;
 const getSavedRoomsKey = (clientId: string) => `user:${clientId}:saved_rooms`;
 const getRoomSavedByKey = (roomId: string) => `room:${roomId}:saved_by`;
 
-const toMessageImageAsset = (asset: ImageAsset): MessageImageAsset => {
-  const messageAsset: MessageImageAsset = {
+const toMessageMediaAsset = (asset: MediaAsset): MessageMediaAsset => {
+  const messageAsset: MessageMediaAsset = {
     id: asset.id,
+    kind: asset.kind,
     mimeType: asset.mimeType,
     byteSize: asset.byteSize,
   };
   if (asset.width !== undefined) messageAsset.width = asset.width;
   if (asset.height !== undefined) messageAsset.height = asset.height;
+  if (asset.durationMs !== undefined) messageAsset.durationMs = asset.durationMs;
   return messageAsset;
 };
 
@@ -156,7 +159,7 @@ end
 return { 1, found, cjson.encode(room), updatedPayload }
 `;
 
-const REPLACE_IMAGE_MESSAGE_ASSET_SCRIPT = `
+const REPLACE_MEDIA_MESSAGE_ASSET_SCRIPT = `
 local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
 if not roomJson then
   return { 0, 0, '', '' }
@@ -168,18 +171,18 @@ if not roomOk then
 end
 
 local existing = redis.call('LRANGE', KEYS[2], 0, -1)
-local imageMessageId = ARGV[2]
-local imageAssetId = ARGV[3]
-local imageMimeType = ARGV[4]
+local mediaMessageId = ARGV[2]
+local mediaMimeType = ARGV[3]
 local updatedPayload = ''
 local found = 0
 
 for i = 1, #existing do
   local ok, decoded = pcall(cjson.decode, existing[i])
-  if ok and decoded['id'] == imageMessageId and decoded['messageType'] == 'image' then
-    decoded['content'] = imageAssetId
-    decoded['mimeType'] = imageMimeType
-    decoded['imageAsset'] = nil
+  if ok and decoded['id'] == mediaMessageId and (decoded['messageType'] == 'image' or decoded['messageType'] == 'voice' or decoded['messageType'] == 'media') then
+    decoded['content'] = ''
+    decoded['messageType'] = 'media'
+    decoded['mimeType'] = mediaMimeType
+    decoded['mediaAsset'] = nil
     updatedPayload = cjson.encode(decoded)
     redis.call('LSET', KEYS[2], i - 1, updatedPayload)
     found = 1
@@ -743,7 +746,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     try {
       const messages = await this.redisClient.lRange(`room:${roomId}:messages`, 0, -1);
       this.logger.debug('Messages read from Redis', { roomId, count: messages.length });
-      return this.attachImageAssets(roomId, messages.map((message: string) => JSON.parse(message)));
+      return this.attachMediaAssets(roomId, messages.map((message: string) => JSON.parse(message)));
     } catch (error) {
       this.logger.error('Error reading messages from Redis', { error, roomId });
       return [];
@@ -785,32 +788,32 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
-  async saveImageAsset(asset: ImageAsset): Promise<ImageAsset | null> {
+  async saveMediaAsset(asset: MediaAsset): Promise<MediaAsset | null> {
     try {
-      await this.redisClient.hSet('image_assets', asset.id, JSON.stringify(asset));
-      await this.redisClient.sAdd(getRoomImageAssetsKey(asset.roomId), asset.id);
+      await this.redisClient.hSet('media_assets', asset.id, JSON.stringify(asset));
+      await this.redisClient.sAdd(getRoomMediaAssetsKey(asset.roomId), asset.id);
       return asset;
     } catch (error) {
-      this.logger.error('Error saving Redis image asset', { error, assetId: asset.id, roomId: asset.roomId });
+      this.logger.error('Error saving Redis media asset', { error, assetId: asset.id, roomId: asset.roomId, kind: asset.kind });
       return null;
     }
   }
 
-  async replaceMessageImageAsset(roomId: string, messageId: string, asset: ImageAsset) {
-    const imageAsset: ImageAsset = {
+  async replaceMessageMediaAsset(roomId: string, messageId: string, asset: MediaAsset) {
+    const mediaAsset: MediaAsset = {
       ...asset,
       roomId,
       messageId,
     };
 
     try {
-      const result = await (this.redisClient as any).eval(REPLACE_IMAGE_MESSAGE_ASSET_SCRIPT, {
+      const result = await (this.redisClient as any).eval(REPLACE_MEDIA_MESSAGE_ASSET_SCRIPT, {
         keys: ['rooms', `room:${roomId}:messages`],
-        arguments: [roomId, messageId, imageAsset.id, imageAsset.mimeType],
+        arguments: [roomId, messageId, mediaAsset.mimeType],
       });
       const updatedRoom = parseScriptRoom(result, 2);
       if (!updatedRoom) {
-        this.logger.warn('Cannot replace image asset for missing or invalid Redis room', { messageId, roomId, assetId: imageAsset.id });
+        this.logger.warn('Cannot replace media asset for missing or invalid Redis room', { messageId, roomId, assetId: mediaAsset.id });
         return null;
       }
 
@@ -821,81 +824,81 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
 
       const updatedMessage = parseScriptMessage(Array.isArray(result) ? result[3] : undefined);
       if (!updatedMessage) {
-        this.logger.warn('Redis image asset replacement succeeded without returning an updated message', { messageId, roomId, assetId: imageAsset.id });
+        this.logger.warn('Redis media asset replacement succeeded without returning an updated message', { messageId, roomId, assetId: mediaAsset.id });
         return null;
       }
 
-      const savedAsset = await this.saveImageAsset(imageAsset);
+      const savedAsset = await this.saveMediaAsset(mediaAsset);
       if (!savedAsset) {
         return null;
       }
 
       await this.invalidateRoomMessagesCache(roomId);
-      this.logger.debug('Image message asset replaced in Redis list', { messageId, roomId, assetId: imageAsset.id });
+      this.logger.debug('Media message asset replaced in Redis list', { messageId, roomId, assetId: mediaAsset.id, kind: mediaAsset.kind });
       return {
         room: updatedRoom,
         found: true,
         updatedMessage: {
           ...updatedMessage,
-          content: savedAsset.id,
+          content: updatedMessage.content || '',
           mimeType: savedAsset.mimeType as Message['mimeType'],
-          imageAsset: toMessageImageAsset(savedAsset),
+          mediaAsset: toMessageMediaAsset(savedAsset),
         },
       };
     } catch (error) {
-      this.logger.error('Error replacing Redis image message asset', { error, messageId, roomId, assetId: asset.id });
+      this.logger.error('Error replacing Redis media message asset', { error, messageId, roomId, assetId: asset.id });
       return null;
     }
   }
 
-  async getImageAsset(assetId: string): Promise<ImageAsset | null> {
+  async getMediaAsset(assetId: string): Promise<MediaAsset | null> {
     try {
-      const rawAsset = await this.redisClient.hGet('image_assets', assetId);
+      const rawAsset = await this.redisClient.hGet('media_assets', assetId);
       return rawAsset ? JSON.parse(rawAsset) : null;
     } catch (error) {
-      this.logger.error('Error reading Redis image asset', { error, assetId });
+      this.logger.error('Error reading Redis media asset', { error, assetId });
       return null;
     }
   }
 
-  async getImageAssetByMessageId(messageId: string): Promise<ImageAsset | null> {
+  async getMediaAssetByMessageId(messageId: string): Promise<MediaAsset | null> {
     try {
-      const assetIds = await this.redisClient.hKeys('image_assets');
+      const assetIds = await this.redisClient.hKeys('media_assets');
       for (const assetId of assetIds) {
-        const asset = await this.getImageAsset(assetId);
+        const asset = await this.getMediaAsset(assetId);
         if (asset?.messageId === messageId) {
           return asset;
         }
       }
       return null;
     } catch (error) {
-      this.logger.error('Error reading Redis image asset by message id', { error, messageId });
+      this.logger.error('Error reading Redis media asset by message id', { error, messageId });
       return null;
     }
   }
 
-  async readImageAssetsByRoom(roomId: string): Promise<ImageAsset[]> {
+  async readMediaAssetsByRoom(roomId: string): Promise<MediaAsset[]> {
     try {
-      const assetIds = await this.redisClient.sMembers(getRoomImageAssetsKey(roomId));
-      const assets = await Promise.all(assetIds.map(assetId => this.getImageAsset(assetId)));
+      const assetIds = await this.redisClient.sMembers(getRoomMediaAssetsKey(roomId));
+      const assets = await Promise.all(assetIds.map(assetId => this.getMediaAsset(assetId)));
       return assets
-        .filter((asset): asset is ImageAsset => !!asset)
+        .filter((asset): asset is MediaAsset => !!asset)
         .sort((first, second) => Date.parse(first.createdAt) - Date.parse(second.createdAt));
     } catch (error) {
-      this.logger.error('Error reading Redis image assets by room', { error, roomId });
+      this.logger.error('Error reading Redis media assets by room', { error, roomId });
       return [];
     }
   }
 
-  async deleteImageAsset(assetId: string): Promise<void> {
+  async deleteMediaAsset(assetId: string): Promise<void> {
     try {
-      const asset = await this.getImageAsset(assetId);
-      await this.redisClient.hDel('image_assets', assetId);
+      const asset = await this.getMediaAsset(assetId);
+      await this.redisClient.hDel('media_assets', assetId);
       if (asset) {
-        await this.redisClient.sRem(getRoomImageAssetsKey(asset.roomId), assetId);
+        await this.redisClient.sRem(getRoomMediaAssetsKey(asset.roomId), assetId);
       }
     } catch (error) {
-      this.logger.error('Error deleting Redis image asset', { error, assetId });
+      this.logger.error('Error deleting Redis media asset', { error, assetId });
     }
   }
 
@@ -1173,6 +1176,49 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
+  async getRoomOnlineMemberIds(roomId: string): Promise<string[]> {
+    try {
+      return await this.redisClient.sMembers(`room:${roomId}:members`);
+    } catch (error) {
+      this.logger.error('Error getting room online member ids', { error, roomId });
+      return [];
+    }
+  }
+
+  // Self-joined presence + nicknames, used when Redis is the only store.
+  async getRoomOnlineMembers(roomId: string): Promise<RoomOnlineMember[]> {
+    const clientIds = await this.getRoomOnlineMemberIds(roomId);
+    const nicknames = await this.getClientNicknames(clientIds);
+    return clientIds.map((clientId) => ({ clientId, nickname: nicknames[clientId] }));
+  }
+
+  async setClientNickname(clientId: string, nickname: string): Promise<void> {
+    try {
+      await this.redisClient.hSet(CLIENT_NICKNAMES_KEY, clientId, nickname);
+    } catch (error) {
+      this.logger.error('Error setting client nickname', { error, clientId });
+    }
+  }
+
+  async getClientNicknames(clientIds: string[]): Promise<Record<string, string>> {
+    if (clientIds.length === 0) {
+      return {};
+    }
+    try {
+      const nicknames: Record<string, string> = {};
+      await Promise.all(clientIds.map(async (clientId) => {
+        const nickname = await this.redisClient.hGet(CLIENT_NICKNAMES_KEY, clientId);
+        if (nickname) {
+          nicknames[clientId] = nickname;
+        }
+      }));
+      return nicknames;
+    } catch (error) {
+      this.logger.error('Error getting client nicknames', { error });
+      return {};
+    }
+  }
+
   async clearRealtimeRoomMembers(): Promise<void> {
     try {
       const patterns = ['room:*:members', 'room:*:member_sockets:*'];
@@ -1273,7 +1319,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
   async deleteRoom(roomId: string, creatorId: string): Promise<void> {
     try {
       const members = await this.readRoomMembers(roomId);
-      const imageAssets = await this.readImageAssetsByRoom(roomId);
+      const mediaAssets = await this.readMediaAssetsByRoom(roomId);
       const savedByClientIds = await this.redisClient.sMembers(getRoomSavedByKey(roomId));
       await Promise.all([
         this.redisClient.hDel('rooms', roomId),
@@ -1282,9 +1328,9 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         this.redisClient.del(this.getRoomAICostKey(roomId)),
         this.redisClient.del(`room:${roomId}:members`),
         this.redisClient.del(getPersistentRoomMembersKey(roomId)),
-        this.redisClient.del(getRoomImageAssetsKey(roomId)),
+        this.redisClient.del(getRoomMediaAssetsKey(roomId)),
         ...members.map(member => this.redisClient.del(`room:${roomId}:member_sockets:${member.clientId}`)),
-        ...imageAssets.map(asset => this.redisClient.hDel('image_assets', asset.id)),
+        ...mediaAssets.map(asset => this.redisClient.hDel('media_assets', asset.id)),
         ...members.map(member => this.redisClient.sRem(`user:${member.clientId}:rooms`, roomId)),
         ...savedByClientIds.map(clientId => this.redisClient.hDel(getSavedRoomsKey(clientId), roomId)),
         this.redisClient.del(getRoomSavedByKey(roomId)),
@@ -1355,12 +1401,12 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
-  private async attachImageAssets(roomId: string, messages: Message[]): Promise<Message[]> {
-    if (!messages.some(message => message.messageType === 'image')) {
+  private async attachMediaAssets(roomId: string, messages: Message[]): Promise<Message[]> {
+    if (!messages.some(message => message.messageType === 'media')) {
       return messages;
     }
 
-    const assets = await this.readImageAssetsByRoom(roomId);
+    const assets = await this.readMediaAssetsByRoom(roomId);
     if (assets.length === 0) {
       return messages;
     }
@@ -1369,7 +1415,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     const assetsById = new Map(assets.map(asset => [asset.id, asset]));
 
     return messages.map(message => {
-      if (message.messageType !== 'image') {
+      if (message.messageType !== 'media') {
         return message;
       }
 
@@ -1380,9 +1426,9 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
 
       return {
         ...message,
-        content: asset.id,
+        content: message.content || '',
         mimeType: asset.mimeType as Message['mimeType'],
-        imageAsset: toMessageImageAsset(asset),
+        mediaAsset: toMessageMediaAsset(asset),
       };
     });
   }

@@ -5,11 +5,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Message } from '../utils/types';
 import { MessageItem } from './MessageItem';
 
-const getImageDownloadUrlMock = vi.hoisted(() => vi.fn());
+const getMediaDownloadUrlMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../utils/socket', () => ({
   clientId: 'viewer',
-  getImageDownloadUrl: getImageDownloadUrlMock,
+  getMediaDownloadUrl: getMediaDownloadUrlMock,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -42,7 +42,7 @@ const message = {
 describe('MessageItem replies', () => {
   afterEach(() => {
     cleanup();
-    getImageDownloadUrlMock.mockReset();
+    getMediaDownloadUrlMock.mockReset();
   });
 
   it('shows reply context and exposes a touch-accessible reply action', () => {
@@ -93,7 +93,7 @@ describe('MessageItem replies', () => {
   });
 
   it('loads signed URLs for asset-backed images without using legacy base64 content', async () => {
-    getImageDownloadUrlMock.mockResolvedValue({
+    getMediaDownloadUrlMock.mockResolvedValue({
       url: 'https://signed.example/rooms/room-1/asset-1.webp',
       expiresAt: '2026-05-03T10:15:00.000Z',
     });
@@ -103,11 +103,12 @@ describe('MessageItem replies', () => {
         message={{
           ...message,
           id: 'image-message',
-          content: 'asset-1',
-          messageType: 'image',
+          content: '',
+          messageType: 'media',
           mimeType: 'image/webp',
-          imageAsset: {
+          mediaAsset: {
             id: 'asset-1',
+            kind: 'image',
             mimeType: 'image/webp',
             byteSize: 123,
             width: 10,
@@ -121,7 +122,7 @@ describe('MessageItem replies', () => {
     );
 
     await waitFor(() => {
-      expect(getImageDownloadUrlMock).toHaveBeenCalledWith({ roomId: 'room-1', assetId: 'asset-1' });
+      expect(getMediaDownloadUrlMock).toHaveBeenCalledWith({ roomId: 'room-1', assetId: 'asset-1' });
     });
     await waitFor(() => {
       const primaryImage = screen.getAllByAltText('sharedImage')
@@ -130,36 +131,26 @@ describe('MessageItem replies', () => {
     });
   });
 
-  it('keeps rendering legacy base64 image messages without requesting signed URLs', () => {
-    render(
-      <MessageItem
-        message={{
-          ...message,
-          id: 'legacy-image',
-          content: 'AAAA',
-          messageType: 'image',
-          mimeType: 'image/png',
-        }}
-        onStartEdit={vi.fn()}
-        onDeleteMessage={vi.fn()}
-        onReply={vi.fn()}
-      />
-    );
+  it('renders audio media messages through signed URLs', async () => {
+    getMediaDownloadUrlMock.mockResolvedValue({
+      url: 'https://signed.example/rooms/room-1/audio-1.webm',
+      expiresAt: '2026-05-03T10:15:00.000Z',
+    });
 
-    expect(getImageDownloadUrlMock).not.toHaveBeenCalled();
-    const primaryImage = screen.getAllByAltText('sharedImage')
-      .find(element => element.getAttribute('aria-hidden') !== 'true');
-    expect(primaryImage?.getAttribute('src')).toBe('data:image/png;base64,AAAA');
-  });
-
-  it('renders voice messages as a themed audio player without a media bubble wrapper', () => {
     const { container } = render(
       <MessageItem
         message={{
           ...message,
-          id: 'voice-message',
-          content: 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=',
-          messageType: 'voice',
+          id: 'audio-message',
+          content: '',
+          messageType: 'media',
+          mediaAsset: {
+            id: 'audio-1',
+            kind: 'audio',
+            mimeType: 'audio/webm',
+            byteSize: 456,
+            durationMs: 1200,
+          },
         }}
         onStartEdit={vi.fn()}
         onDeleteMessage={vi.fn()}
@@ -167,9 +158,14 @@ describe('MessageItem replies', () => {
       />
     );
 
+    await waitFor(() => {
+      expect(getMediaDownloadUrlMock).toHaveBeenCalledWith({ roomId: 'room-1', assetId: 'audio-1' });
+    });
     const audio = container.querySelector('audio.roomtalk-audio-player');
     expect(audio).toBeTruthy();
-    expect(audio?.getAttribute('src')).toContain('data:audio/wav;base64');
+    await waitFor(() => {
+      expect(audio?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/audio-1.webm');
+    });
     expect(audio?.parentElement?.className).toBe('w-fit max-w-full');
   });
 });

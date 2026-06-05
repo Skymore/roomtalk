@@ -232,11 +232,6 @@ const createHarness = (options: { rejectSaves?: boolean; rejectSaveNumbers?: num
     getAIClientForModel: () => {
       throw new Error('E2E fake AI should not request a real client');
     },
-    imageObjectStorage: {
-      isConfigured: () => true,
-      putImageObject: async () => {},
-      createReadUrl: async () => ({ url: 'https://signed.example/image.webp', expiresAt: '2026-05-03T00:15:00.000Z' }),
-    },
   });
 
   return { io, socket, store };

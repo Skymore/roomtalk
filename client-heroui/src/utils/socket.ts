@@ -1,6 +1,6 @@
 import { default as io } from 'socket.io-client';
 import { v4 as uuidv4 } from 'uuid';
-import { Message, Room, RoomMemberEvent } from './types';
+import { MediaKind, Message, Room, RoomMemberEvent, RoomOnlineMember } from './types';
 import { Socket } from 'socket.io-client';
 
 // Get client ID from local storage or create a new one
@@ -22,9 +22,12 @@ const roomMemberChangeCallbacks: ((event: RoomMemberEvent) => void)[] = [];
 
 // Store current active room to rejoin after reconnection
 let activeRoomId: string | null = null;
+// Store the latest username so it can be re-sent on every (re)connection
+let currentUsername = '';
 const SEND_MESSAGE_ACK_TIMEOUT_MS = 15000;
 const SEND_MESSAGE_CONNECT_TIMEOUT_MS = 15000;
 const ROOM_LOOKUP_TIMEOUT_MS = 30000;
+const API_BASE_URL = (import.meta.env.VITE_SOCKET_URL || '').replace(/\/$/, '');
 
 type SocketAckResponse = {
   success: boolean;
@@ -41,11 +44,6 @@ type SendMessageAndAskAIAckResponse = SocketAckResponse & {
   aiMessageId?: string;
 };
 
-type ImageDownloadUrlAckResponse = SocketAckResponse & {
-  url?: string;
-  expiresAt?: string;
-};
-
 type RoomAckResponse = SocketAckResponse & {
   room?: Room;
 };
@@ -57,6 +55,25 @@ type RoomListAckResponse = SocketAckResponse & {
 // Get current member count for a room
 export const getRoomMemberCount = (roomId: string): number | null => {
   return roomMemberCounts.get(roomId) ?? null;
+};
+
+// Update the username and notify the server. The value is cached so it can be
+// re-sent automatically on reconnection (see the 'connect' handler).
+export const setUsername = (username: string): void => {
+  currentUsername = username;
+  if (username && socket.connected) {
+    socket.emit('set_username', username);
+  }
+};
+
+// Fetch the list of online members (with nicknames) for a room
+export const getRoomMembers = (roomId: string): Promise<RoomOnlineMember[]> => {
+  return emitWithAck<SocketAckResponse & { members?: RoomOnlineMember[] }>(
+    'get_room_members',
+    { roomId },
+    'Timed out while getting room members',
+    'Failed to get room members',
+  ).then((response) => response.members || []);
 };
 
 // Create and configure Socket connection
@@ -78,8 +95,10 @@ const createSocketConnection = (): typeof Socket => {
   // This associates the persistent clientId with the temporary socket.id
   socket.on('connect', () => {
     console.log('Connected to WebSocket server, socket ID:', socket.id);
-    socket.emit('register', getClientId());
-    
+    // Register with the username so the server can show it in the online list.
+    // Sending it together with register avoids a race with a separate set_username event.
+    socket.emit('register', { clientId: getClientId(), username: currentUsername || undefined });
+
     // 重新加入之前的活动房间
     if (activeRoomId) {
       console.log('Rejoining active room after reconnection:', activeRoomId);
@@ -289,7 +308,7 @@ export const getSavedRoomsFromServer = (): Promise<Room[]> => {
 export const sendMessage = (
   content: string,
   roomId: string,
-  messageType: 'text' | 'image' | 'voice' = 'text',
+  messageType: 'text' = 'text',
   username?: string,
   avatar?: { text: string; color: string },
   replyToMessageId?: string,
@@ -306,6 +325,94 @@ export const sendMessage = (
     }
 
     return response.message;
+  });
+};
+
+type CreateMediaUploadResponse = {
+  assetId: string;
+  uploadUrl: string;
+  objectKey: string;
+  expiresAt: string;
+};
+
+const apiPath = (path: string) => `${API_BASE_URL}${path}`;
+
+const parseApiError = async (response: Response, fallback: string) => {
+  try {
+    const payload = await response.json();
+    if (typeof payload?.error === 'string') {
+      return payload.error;
+    }
+  } catch {
+    // Ignore non-JSON error bodies.
+  }
+  return fallback;
+};
+
+const postJson = async <T>(path: string, body: unknown): Promise<T> => {
+  const response = await fetch(apiPath(path), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, 'Request failed'));
+  }
+  return response.json() as Promise<T>;
+};
+
+const putMediaObject = async (uploadUrl: string, file: Blob, mimeType: string) => {
+  const response = await fetch(uploadUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': mimeType },
+    body: file,
+  });
+  if (!response.ok) {
+    throw new Error('Failed to upload media object');
+  }
+};
+
+export const uploadMediaMessage = async (params: {
+  file: Blob;
+  roomId: string;
+  kind: MediaKind;
+  mimeType?: string;
+  username?: string;
+  avatar?: { text: string; color: string };
+  replyToMessageId?: string;
+  clientMessageId?: string;
+  caption?: string;
+  width?: number;
+  height?: number;
+  durationMs?: number;
+}): Promise<Message> => {
+  const mimeType = (params.mimeType || params.file.type || `${params.kind}/octet-stream`).toLowerCase();
+  const byteSize = params.file.size;
+  const upload = await postJson<CreateMediaUploadResponse>('/api/media/uploads', {
+    clientId,
+    roomId: params.roomId,
+    kind: params.kind,
+    mimeType,
+    byteSize,
+  });
+
+  await putMediaObject(upload.uploadUrl, params.file, mimeType);
+
+  return postJson<Message>(`/api/media/uploads/${encodeURIComponent(upload.assetId)}/complete`, {
+    clientId,
+    roomId: params.roomId,
+    kind: params.kind,
+    mimeType,
+    byteSize,
+    objectKey: upload.objectKey,
+    username: params.username,
+    avatar: params.avatar,
+    replyToMessageId: params.replyToMessageId,
+    clientMessageId: params.clientMessageId,
+    caption: params.caption,
+    width: params.width,
+    height: params.height,
+    durationMs: params.durationMs,
   });
 };
 
@@ -361,25 +468,26 @@ export const requestEditMessageAndAIResponse = (data: {
     .then(() => undefined);
 };
 
-export const getImageDownloadUrl = (params: {
+export const getMediaDownloadUrl = async (params: {
   roomId: string;
   assetId: string;
 }): Promise<{ url: string; expiresAt?: string }> => {
-  return emitWithAck<ImageDownloadUrlAckResponse>(
-    'get_image_download_url',
-    params,
-    'Timed out while getting image URL',
-    'Failed to get image URL',
-  ).then((response) => {
-    if (!response.url) {
-      throw new Error('Server did not return image URL');
-    }
-
-    return {
-      url: response.url,
-      expiresAt: response.expiresAt,
-    };
+  const query = new URLSearchParams({
+    roomId: params.roomId,
+    clientId,
   });
+  const response = await fetch(apiPath(`/api/media/${encodeURIComponent(params.assetId)}/download-url?${query.toString()}`));
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, 'Failed to get media URL'));
+  }
+  const payload = await response.json();
+  if (!payload?.url) {
+    throw new Error('Server did not return media URL');
+  }
+  return {
+    url: payload.url,
+    expiresAt: payload.expiresAt,
+  };
 };
 
 // Mint a short-lived AssemblyAI streaming token (server keeps the API key)

@@ -5,7 +5,7 @@ import {
   useDisclosure,
 } from "@heroui/react";
 import { Icon } from '@iconify/react';
-import { requestAIResponse, sendMessage, sendMessageAndAskAI } from '../utils/socket';
+import { requestAIResponse, sendMessage, sendMessageAndAskAI, uploadMediaMessage } from '../utils/socket';
 import { useTranslation } from 'react-i18next';
 import imageCompression from 'browser-image-compression';
 import {
@@ -183,16 +183,19 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   const buildReplyReference = useCallback((message: Message | null): Message['replyTo'] => {
     if (!message) return undefined;
 
-    const preview = message.messageType === 'image'
-      ? t('sharedImage')
-      : message.messageType === 'voice'
+    const preview = message.messageType === 'media'
+      ? (message.mediaAsset?.kind === 'audio'
         ? t('voiceMessage')
-        : message.content.replace(/\s+/g, ' ').trim().slice(0, 120) || '[Empty message]';
+        : message.mediaAsset?.kind === 'video'
+          ? t('videoMessage')
+          : t('sharedImage'))
+      : message.content.replace(/\s+/g, ' ').trim().slice(0, 120) || '[Empty message]';
 
     return {
       messageId: message.id,
       username: message.username,
       messageType: message.messageType,
+      mediaKind: message.messageType === 'media' ? message.mediaAsset?.kind : undefined,
       preview,
     };
   }, [t]);
@@ -468,18 +471,15 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
             const compressedFile = await imageCompression(item.file, options);
 
-            // 将压缩后的文件转换为Base64
-            const reader = new FileReader();
-            const base64Promise = new Promise<string>((resolve, reject) => {
-              reader.onload = () => resolve(reader.result as string);
-              reader.onerror = reject;
-              reader.readAsDataURL(compressedFile);
+            await uploadMediaMessage({
+              file: compressedFile,
+              roomId,
+              kind: 'image',
+              mimeType: compressedFile.type || item.file.type || 'image/webp',
+              username,
+              avatar,
+              replyToMessageId,
             });
-
-            const base64String = await base64Promise;
-
-            // 发送压缩后的图片
-            await sendMessage(base64String, roomId, 'image', username, avatar, replyToMessageId);
             if (replyToMessageId) {
               replyToMessageId = undefined;
               onCancelReply();
@@ -754,14 +754,17 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
     setIsSending(true);
     try {
-      const reader = new FileReader();
-      const base64 = await new Promise<string>((resolve, reject) => {
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(recordedVoiceBlob);
-      });
       const avatar = { text: avatarText, color: avatarColor };
-      await sendMessage(base64, roomId, 'voice', username, avatar, replyToMessage?.id);
+      await uploadMediaMessage({
+        file: recordedVoiceBlob,
+        roomId,
+        kind: 'audio',
+        mimeType: recordedVoiceBlob.type || recordingMimeTypeRef.current || 'audio/webm',
+        username,
+        avatar,
+        replyToMessageId: replyToMessage?.id,
+        durationMs: Math.round(recordedVoiceDuration * 1000),
+      });
       resetVoiceDraft();
       setVoiceWorkflow('choice');
       setIsVoiceMode(false);
@@ -772,7 +775,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     } finally {
       setIsSending(false);
     }
-  }, [avatarColor, avatarText, isSending, onCancelReply, recordedVoiceBlob, replyToMessage?.id, resetVoiceDraft, restoreEditorSnapshot, roomId, t, username]);
+  }, [avatarColor, avatarText, isSending, onCancelReply, recordedVoiceBlob, recordedVoiceDuration, replyToMessage?.id, resetVoiceDraft, restoreEditorSnapshot, roomId, t, username]);
 
   // Release the mic stream / transcription session if unmounted mid-recording.
   useEffect(() => {
@@ -807,25 +810,64 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     });
   }, [currentInputText, isRecording, resetVoiceDraft, restoreEditorSnapshot, stopVoiceRecording]);
 
-  // 处理图片上传
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const sendVideoFile = async (file: File) => {
+    if (isSending || isAiProcessing) return;
+
+    setIsSending(true);
+    try {
+      const avatar = { text: avatarText, color: avatarColor };
+      await uploadMediaMessage({
+        file,
+        roomId,
+        kind: 'video',
+        mimeType: file.type || 'video/mp4',
+        username,
+        avatar,
+        replyToMessageId: replyToMessage?.id,
+      });
+      onCancelReply();
+      setErrorMessage(null);
+    } catch (error) {
+      console.error('Error sending video:', error);
+      setErrorMessage(t('errorSendingMessage'));
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  // 处理媒体上传
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
+
+    const fileList = Array.from(files);
+    const imageFiles = fileList.filter(file => file.type.startsWith('image/'));
+    const videoFiles = fileList.filter(file => file.type.startsWith('video/'));
+    const unsupportedFiles = fileList.length - imageFiles.length - videoFiles.length;
+    if (unsupportedFiles > 0) {
+      setErrorMessage(t('unsupportedMediaType'));
+    }
 
     // 使用ref获取当前实际图片数量
     const currentImageCount = imageCountRef.current;
     // 检查图片数量限制
     const availableSlots = getAvailableImageSlots(currentImageCount);
 
-    if (availableSlots <= 0) {
+    if (imageFiles.length > 0 && availableSlots <= 0) {
       setImageInputError({ errorKey: 'maxImagesReached', max: MAX_MESSAGE_IMAGES });
-      return;
+    } else {
+      imageFiles.slice(0, availableSlots).forEach(file => {
+        processImageFile(file);
+      });
     }
 
-    // 处理多个文件，最多处理剩余可用槽位数量的图片
-    Array.from(files).slice(0, availableSlots).forEach(file => {
-      processImageFile(file);
-    });
+    for (const file of videoFiles) {
+      await sendVideoFile(file);
+    }
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
   };
 
   // 处理图片文件 - 优化性能
@@ -1034,11 +1076,13 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
   const replySenderName = replyToMessage?.username
     || (replyToMessage?.messageType === 'ai' ? t('aiAssistantName') : t('participant'));
-  const replyPreview = replyToMessage?.messageType === 'image'
-    ? t('sharedImage')
-    : replyToMessage?.messageType === 'voice'
+  const replyPreview = replyToMessage?.messageType === 'media'
+    ? (replyToMessage.mediaAsset?.kind === 'audio'
       ? t('voiceMessage')
-      : replyToMessage?.content.replace(/\s+/g, ' ').trim().slice(0, 120);
+      : replyToMessage.mediaAsset?.kind === 'video'
+        ? t('videoMessage')
+        : t('sharedImage'))
+    : replyToMessage?.content.replace(/\s+/g, ' ').trim().slice(0, 120);
 
   return (
     <div className="relative w-full">
@@ -1212,15 +1256,15 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
             {!isVoiceMode && (
               <>
-                {/* 图片上传按钮 */}
+                {/* 媒体上传按钮 */}
                 <Button
                   isIconOnly
                   size="sm"
                   variant="light"
-                  aria-label={t('uploadImage')}
+                  aria-label={t('uploadMedia')}
                   className="h-7 w-7 min-w-7 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
                   onPress={() => fileInputRef.current?.click()}
-                  isDisabled={imageCount >= MAX_MESSAGE_IMAGES || isSending || isAiProcessing}
+                  isDisabled={isSending || isAiProcessing}
                 >
                   <Icon icon="lucide:plus" className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
                 </Button>
@@ -1239,7 +1283,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               data-testid="image-upload-input"
               ref={fileInputRef}
               className="hidden"
-              accept="image/*"
+              accept="image/*,video/*"
               multiple={true}
               onChange={handleImageUpload}
               disabled={isSending || isAiProcessing}

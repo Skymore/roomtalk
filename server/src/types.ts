@@ -47,22 +47,30 @@ export interface RoomAICostTotal {
 export interface MessageReplyReference {
   messageId: string;
   username?: string;
-  messageType: 'text' | 'image' | 'ai' | 'voice';
+  messageType: 'text' | 'ai' | 'media';
+  mediaKind?: MediaKind;
   preview: string;
 }
 
-export interface MessageImageAsset {
+export type MediaKind = 'image' | 'video' | 'audio';
+export type MessageType = 'text' | 'ai' | 'media';
+export type LegacyMessageType = MessageType | 'image' | 'voice';
+
+export interface MessageMediaAsset {
   id: string;
+  kind: MediaKind;
   mimeType: string;
   byteSize: number;
   width?: number;
   height?: number;
+  durationMs?: number;
 }
 
-export interface ImageAsset extends MessageImageAsset {
+export interface MediaAsset extends MessageMediaAsset {
   roomId: string;
   messageId?: string;
   objectKey: string;
+  uploadedByClientId?: string;
   createdAt: string;
 }
 
@@ -73,7 +81,7 @@ export interface Message {
   roomId: string;
   timestamp: string;
   updatedAt?: string;
-  messageType: 'text' | 'image' | 'ai' | 'voice';
+  messageType: LegacyMessageType;
   username?: string;
   avatar?: {
     text: string;
@@ -92,7 +100,7 @@ export interface Message {
   usage?: AIUsage;
   cost?: AICost;
   replyTo?: MessageReplyReference;
-  imageAsset?: MessageImageAsset;
+  mediaAsset?: MessageMediaAsset;
 }
 
 export interface Room {
@@ -124,6 +132,11 @@ export interface RoomMember {
 
 export interface UserInfo {
   id: string;
+}
+
+export interface RoomOnlineMember {
+  clientId: string;
+  nickname?: string;
 }
 
 export interface RoomMemberEvent {

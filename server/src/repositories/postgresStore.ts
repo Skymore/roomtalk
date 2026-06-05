@@ -1,8 +1,9 @@
 import { customAlphabet } from 'nanoid';
 import { Logger } from '../logger';
-import { AICost, ImageAsset, Message, MessageImageAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole } from '../types';
+import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole } from '../types';
 import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, RoomMessagePageOptions } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
+import { MediaObjectStorage } from '../services/mediaObjectStorage';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 
@@ -58,22 +59,25 @@ type RoomMemberRow = {
   joined_at: string | Date;
 };
 
-type ImageAssetRow = {
+type MediaAssetRow = {
   id: string;
   room_id: string;
   message_id: string | null;
   object_key: string;
+  kind: MediaAsset['kind'];
   mime_type: string;
   byte_size: number | string;
   width: number | string | null;
   height: number | string | null;
+  duration_ms: number | string | null;
+  uploaded_by_client_id: string | null;
   created_at: string | Date;
 };
 
 const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version';
 const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, ai_model, usage, cost, reply_to';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
-const IMAGE_ASSET_COLUMNS = 'id, room_id, message_id, object_key, mime_type, byte_size, width, height, created_at';
+const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, width, height, duration_ms, uploaded_by_client_id, created_at';
 
 const parseTime = (timestamp?: string): number => {
   const time = Date.parse(timestamp || '');
@@ -155,32 +159,38 @@ const toOptionalNumber = (value: number | string | null): number | undefined => 
   return Number.isFinite(parsed) ? parsed : undefined;
 };
 
-const mapImageAsset = (row: ImageAssetRow): ImageAsset => {
-  const asset: ImageAsset = {
+const mapMediaAsset = (row: MediaAssetRow): MediaAsset => {
+  const asset: MediaAsset = {
     id: row.id,
     roomId: row.room_id,
     objectKey: row.object_key,
+    kind: row.kind,
     mimeType: row.mime_type,
     byteSize: Number(row.byte_size) || 0,
     createdAt: toIsoString(row.created_at),
   };
 
   if (row.message_id) asset.messageId = row.message_id;
+  if (row.uploaded_by_client_id) asset.uploadedByClientId = row.uploaded_by_client_id;
   const width = toOptionalNumber(row.width);
   const height = toOptionalNumber(row.height);
+  const durationMs = toOptionalNumber(row.duration_ms);
   if (width !== undefined) asset.width = width;
   if (height !== undefined) asset.height = height;
+  if (durationMs !== undefined) asset.durationMs = durationMs;
   return asset;
 };
 
-const toMessageImageAsset = (asset: ImageAsset): MessageImageAsset => {
-  const messageAsset: MessageImageAsset = {
+const toMessageMediaAsset = (asset: MediaAsset): MessageMediaAsset => {
+  const messageAsset: MessageMediaAsset = {
     id: asset.id,
+    kind: asset.kind,
     mimeType: asset.mimeType,
     byteSize: asset.byteSize,
   };
   if (asset.width !== undefined) messageAsset.width = asset.width;
   if (asset.height !== undefined) messageAsset.height = asset.height;
+  if (asset.durationMs !== undefined) messageAsset.durationMs = asset.durationMs;
   return messageAsset;
 };
 
@@ -271,8 +281,26 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
 export class PostgresStore implements DurableRoomStore {
   constructor(
     private readonly pool: PostgresPool,
-    private readonly logger: Logger
+    private readonly logger: Logger,
+    private readonly mediaObjectStorage?: MediaObjectStorage
   ) {}
+
+  // Best-effort removal of S3 objects whose media_assets rows were already
+  // deleted in a committed transaction. Runs AFTER commit so a storage failure
+  // never rolls back the durable delete; orphaned objects are logged, not fatal.
+  private async deleteOrphanedMediaObjects(objectKeys: string[]): Promise<void> {
+    if (objectKeys.length === 0 || !this.mediaObjectStorage?.deleteMediaObject) {
+      return;
+    }
+
+    for (const objectKey of objectKeys) {
+      try {
+        await this.mediaObjectStorage.deleteMediaObject(objectKey);
+      } catch (error) {
+        this.logger.error('Failed to delete orphaned media object', { error, objectKey });
+      }
+    }
+  }
 
   async initializeSchema(): Promise<void> {
     for (const sql of POSTGRES_SCHEMA_SQL) {
@@ -451,8 +479,9 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async deleteMessageById(roomId: string, messageId: string) {
+    let orphanedObjectKeys: string[] = [];
     try {
-      return await this.transaction(async client => {
+      const result = await this.transaction(async client => {
         const room = await client.query<RoomRow>(
           `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
           [roomId]
@@ -462,6 +491,14 @@ export class PostgresStore implements DurableRoomStore {
           return null;
         }
 
+        // Remove the asset row first, while message_id still links it; the
+        // room_messages FK would otherwise SET NULL and strand both the row and
+        // its S3 object.
+        const orphaned = await client.query<{ object_key: string }>(
+          'DELETE FROM media_assets WHERE room_id = $1 AND message_id = $2 RETURNING object_key',
+          [roomId, messageId]
+        );
+
         const deleted = await client.query<{ id: string }>(
           'DELETE FROM room_messages WHERE room_id = $1 AND id = $2 RETURNING id',
           [roomId, messageId]
@@ -469,6 +506,8 @@ export class PostgresStore implements DurableRoomStore {
         if (deleted.rows.length === 0) {
           return { room: mapRoom(room.rows[0]), deleted: false };
         }
+
+        orphanedObjectKeys = orphaned.rows.map(row => row.object_key);
 
         const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at), true);
         if (!updatedRoom) {
@@ -478,6 +517,9 @@ export class PostgresStore implements DurableRoomStore {
         this.logger.debug('Message deleted from PostgreSQL', { roomId, messageId });
         return { room: updatedRoom, deleted: true };
       });
+
+      await this.deleteOrphanedMediaObjects(orphanedObjectKeys);
+      return result;
     } catch (error) {
       this.logger.error('Error deleting message from PostgreSQL', { error, roomId, messageId });
       return null;
@@ -485,8 +527,9 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   private async truncateMessages(roomId: string, messageId: string, mode: 'before' | 'after') {
+    let orphanedObjectKeys: string[] = [];
     try {
-      return await this.transaction(async client => {
+      const result = await this.transaction(async client => {
         const room = await client.query<RoomRow>(
           `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
           [roomId]
@@ -506,6 +549,18 @@ export class PostgresStore implements DurableRoomStore {
         }
 
         const operator = mode === 'before' ? '>=' : '>';
+        // Strand-free order: drop the asset rows for the doomed messages before
+        // the messages themselves are removed.
+        const orphaned = await client.query<{ object_key: string }>(
+          `DELETE FROM media_assets
+          WHERE room_id = $1 AND message_id IN (
+            SELECT id FROM room_messages WHERE room_id = $1 AND position ${operator} $2
+          )
+          RETURNING object_key`,
+          [roomId, Number(target.rows[0].position)]
+        );
+        orphanedObjectKeys = orphaned.rows.map(row => row.object_key);
+
         await client.query(
           `DELETE FROM room_messages WHERE room_id = $1 AND position ${operator} $2`,
           [roomId, Number(target.rows[0].position)]
@@ -520,6 +575,9 @@ export class PostgresStore implements DurableRoomStore {
         this.logger.debug('Messages truncated in PostgreSQL', { roomId, messageId, mode, count: messages.length });
         return { room: updatedRoom, messages, targetFound: true };
       });
+
+      await this.deleteOrphanedMediaObjects(orphanedObjectKeys);
+      return result;
     } catch (error) {
       this.logger.error('Error truncating messages in PostgreSQL', { error, roomId, messageId, mode });
       return null;
@@ -535,8 +593,9 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async updateMessageAndTruncateAfter(roomId: string, messageId: string, updatedContent: string, updatedAt = new Date().toISOString()) {
+    let orphanedObjectKeys: string[] = [];
     try {
-      return await this.transaction(async client => {
+      const result = await this.transaction(async client => {
         const room = await client.query<RoomRow>(
           `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
           [roomId]
@@ -567,6 +626,17 @@ export class PostgresStore implements DurableRoomStore {
           return null;
         }
 
+        // Drop asset rows for the truncated tail before deleting those messages.
+        const orphaned = await client.query<{ object_key: string }>(
+          `DELETE FROM media_assets
+          WHERE room_id = $1 AND message_id IN (
+            SELECT id FROM room_messages WHERE room_id = $1 AND position > $2
+          )
+          RETURNING object_key`,
+          [roomId, Number(target.rows[0].position)]
+        );
+        orphanedObjectKeys = orphaned.rows.map(row => row.object_key);
+
         await client.query(
           'DELETE FROM room_messages WHERE room_id = $1 AND position > $2',
           [roomId, Number(target.rows[0].position)]
@@ -586,6 +656,9 @@ export class PostgresStore implements DurableRoomStore {
           updatedMessage: mapMessage(updated.rows[0]),
         };
       });
+
+      await this.deleteOrphanedMediaObjects(orphanedObjectKeys);
+      return result;
     } catch (error) {
       this.logger.error('Error updating and truncating message in PostgreSQL', { error, roomId, messageId });
       return null;
@@ -628,11 +701,19 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async clearRoomMessages(roomId: string): Promise<number> {
+    let orphanedObjectKeys: string[] = [];
     try {
-      return await this.transaction(async client => {
+      const deleted = await this.transaction(async client => {
+        // Clearing removes every message, so every asset in the room is orphaned.
+        const orphaned = await client.query<{ object_key: string }>(
+          'DELETE FROM media_assets WHERE room_id = $1 RETURNING object_key',
+          [roomId]
+        );
+        orphanedObjectKeys = orphaned.rows.map(row => row.object_key);
+
         const result = await client.query('DELETE FROM room_messages WHERE room_id = $1', [roomId]);
-        const deleted = result.rowCount || 0;
-        if (deleted > 0) {
+        const removed = result.rowCount || 0;
+        if (removed > 0) {
           await client.query(
             `UPDATE rooms
             SET message_version = message_version + 1,
@@ -641,8 +722,11 @@ export class PostgresStore implements DurableRoomStore {
             [roomId]
           );
         }
-        return deleted;
+        return removed;
       });
+
+      await this.deleteOrphanedMediaObjects(orphanedObjectKeys);
+      return deleted;
     } catch (error) {
       this.logger.error('Error clearing PostgreSQL room messages', { error, roomId });
       return 0;
@@ -658,7 +742,7 @@ export class PostgresStore implements DurableRoomStore {
         ORDER BY position ASC, timestamp ASC`,
         [roomId]
       );
-      return this.attachImageAssets(roomId, result.rows.map(mapMessage));
+      return this.attachMediaAssets(roomId, result.rows.map(mapMessage));
     } catch (error) {
       this.logger.error('Error reading PostgreSQL room messages', { error, roomId });
       return [];
@@ -710,7 +794,7 @@ export class PostgresStore implements DurableRoomStore {
       }
 
       const hasMore = rows.length > limit;
-      const messages = await this.attachImageAssets(roomId, rows.slice(0, limit).reverse().map(mapMessage));
+      const messages = await this.attachMediaAssets(roomId, rows.slice(0, limit).reverse().map(mapMessage));
       return {
         roomId,
         messages,
@@ -724,17 +808,17 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
-  async saveImageAsset(asset: ImageAsset): Promise<ImageAsset | null> {
+  async saveMediaAsset(asset: MediaAsset): Promise<MediaAsset | null> {
     try {
-      return await this.saveImageAssetWithClient(this.pool, asset);
+      return await this.saveMediaAssetWithClient(this.pool, asset);
     } catch (error) {
-      this.logger.error('Error saving PostgreSQL image asset', { error, assetId: asset.id, roomId: asset.roomId });
+      this.logger.error('Error saving PostgreSQL media asset', { error, assetId: asset.id, roomId: asset.roomId, kind: asset.kind });
       return null;
     }
   }
 
-  async replaceMessageImageAsset(roomId: string, messageId: string, asset: ImageAsset) {
-    const imageAsset: ImageAsset = {
+  async replaceMessageMediaAsset(roomId: string, messageId: string, asset: MediaAsset) {
+    const mediaAsset: MediaAsset = {
       ...asset,
       roomId,
       messageId,
@@ -747,88 +831,90 @@ export class PostgresStore implements DurableRoomStore {
           [roomId]
         );
         if (room.rows.length === 0) {
-          this.logger.warn('Cannot replace image asset for missing PostgreSQL room', { roomId, messageId, assetId: asset.id });
+          this.logger.warn('Cannot replace media asset for missing PostgreSQL room', { roomId, messageId, assetId: asset.id });
           return null;
         }
 
         const updated = await client.query<MessageRow>(
           `UPDATE room_messages
           SET content = $3,
+            message_type = 'media',
             mime_type = $4
-          WHERE room_id = $1 AND id = $2 AND message_type = 'image'
+          WHERE room_id = $1 AND id = $2
+            AND message_type IN ('image', 'voice', 'media')
           RETURNING ${MESSAGE_COLUMNS}`,
-          [roomId, messageId, imageAsset.id, imageAsset.mimeType]
+          [roomId, messageId, '', mediaAsset.mimeType]
         );
         if (updated.rows.length === 0) {
           return { room: mapRoom(room.rows[0]), found: false };
         }
 
-        const savedAsset = await this.saveImageAssetWithClient(client, imageAsset);
+        const savedAsset = await this.saveMediaAssetWithClient(client, mediaAsset);
         if (!savedAsset) {
           return null;
         }
 
-        const updatedMessage = this.attachImageAssetsFromAssets([mapMessage(updated.rows[0])], [savedAsset])[0];
-        this.logger.debug('Image message asset replaced in PostgreSQL', { roomId, messageId, assetId: imageAsset.id });
+        const updatedMessage = this.attachMediaAssetsFromAssets([mapMessage(updated.rows[0])], [savedAsset])[0];
+        this.logger.debug('Media message asset replaced in PostgreSQL', { roomId, messageId, assetId: mediaAsset.id, kind: mediaAsset.kind });
         return { room: mapRoom(room.rows[0]), found: true, updatedMessage };
       });
     } catch (error) {
-      this.logger.error('Error replacing PostgreSQL image message asset', { error, roomId, messageId, assetId: asset.id });
+      this.logger.error('Error replacing PostgreSQL media message asset', { error, roomId, messageId, assetId: asset.id });
       return null;
     }
   }
 
-  async getImageAsset(assetId: string): Promise<ImageAsset | null> {
+  async getMediaAsset(assetId: string): Promise<MediaAsset | null> {
     try {
-      const result = await this.pool.query<ImageAssetRow>(
-        `SELECT ${IMAGE_ASSET_COLUMNS}
-        FROM image_assets
+      const result = await this.pool.query<MediaAssetRow>(
+        `SELECT ${MEDIA_ASSET_COLUMNS}
+        FROM media_assets
         WHERE id = $1`,
         [assetId]
       );
-      return result.rows[0] ? mapImageAsset(result.rows[0]) : null;
+      return result.rows[0] ? mapMediaAsset(result.rows[0]) : null;
     } catch (error) {
-      this.logger.error('Error reading PostgreSQL image asset', { error, assetId });
+      this.logger.error('Error reading PostgreSQL media asset', { error, assetId });
       return null;
     }
   }
 
-  async getImageAssetByMessageId(messageId: string): Promise<ImageAsset | null> {
+  async getMediaAssetByMessageId(messageId: string): Promise<MediaAsset | null> {
     try {
-      const result = await this.pool.query<ImageAssetRow>(
-        `SELECT ${IMAGE_ASSET_COLUMNS}
-        FROM image_assets
+      const result = await this.pool.query<MediaAssetRow>(
+        `SELECT ${MEDIA_ASSET_COLUMNS}
+        FROM media_assets
         WHERE message_id = $1`,
         [messageId]
       );
-      return result.rows[0] ? mapImageAsset(result.rows[0]) : null;
+      return result.rows[0] ? mapMediaAsset(result.rows[0]) : null;
     } catch (error) {
-      this.logger.error('Error reading PostgreSQL image asset by message id', { error, messageId });
+      this.logger.error('Error reading PostgreSQL media asset by message id', { error, messageId });
       return null;
     }
   }
 
-  async readImageAssetsByRoom(roomId: string): Promise<ImageAsset[]> {
+  async readMediaAssetsByRoom(roomId: string): Promise<MediaAsset[]> {
     try {
-      const result = await this.pool.query<ImageAssetRow>(
-        `SELECT ${IMAGE_ASSET_COLUMNS}
-        FROM image_assets
+      const result = await this.pool.query<MediaAssetRow>(
+        `SELECT ${MEDIA_ASSET_COLUMNS}
+        FROM media_assets
         WHERE room_id = $1
         ORDER BY created_at ASC`,
         [roomId]
       );
-      return result.rows.map(mapImageAsset);
+      return result.rows.map(mapMediaAsset);
     } catch (error) {
-      this.logger.error('Error reading PostgreSQL image assets by room', { error, roomId });
+      this.logger.error('Error reading PostgreSQL media assets by room', { error, roomId });
       return [];
     }
   }
 
-  async deleteImageAsset(assetId: string): Promise<void> {
+  async deleteMediaAsset(assetId: string): Promise<void> {
     try {
-      await this.pool.query('DELETE FROM image_assets WHERE id = $1', [assetId]);
+      await this.pool.query('DELETE FROM media_assets WHERE id = $1', [assetId]);
     } catch (error) {
-      this.logger.error('Error deleting PostgreSQL image asset', { error, assetId });
+      this.logger.error('Error deleting PostgreSQL media asset', { error, assetId });
     }
   }
 
@@ -1028,6 +1114,41 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
+  async setClientNickname(clientId: string, nickname: string): Promise<void> {
+    try {
+      await this.pool.query(
+        `INSERT INTO client_profiles (client_id, nickname, updated_at)
+        VALUES ($1, $2, NOW())
+        ON CONFLICT (client_id) DO UPDATE SET
+          nickname = EXCLUDED.nickname,
+          updated_at = EXCLUDED.updated_at`,
+        [clientId, nickname]
+      );
+    } catch (error) {
+      this.logger.error('Error setting PostgreSQL client nickname', { error, clientId });
+    }
+  }
+
+  async getClientNicknames(clientIds: string[]): Promise<Record<string, string>> {
+    if (clientIds.length === 0) {
+      return {};
+    }
+    try {
+      const result = await this.pool.query<{ client_id: string; nickname: string }>(
+        'SELECT client_id, nickname FROM client_profiles WHERE client_id = ANY($1)',
+        [clientIds]
+      );
+      const nicknames: Record<string, string> = {};
+      for (const row of result.rows) {
+        nicknames[row.client_id] = row.nickname;
+      }
+      return nicknames;
+    } catch (error) {
+      this.logger.error('Error reading PostgreSQL client nicknames', { error });
+      return {};
+    }
+  }
+
   async readRoomsByUser(clientId: string): Promise<Room[]> {
     try {
       const result = await this.pool.query<RoomRow>(
@@ -1133,8 +1254,31 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async deleteRoom(roomId: string, creatorId: string): Promise<void> {
+    let orphanedObjectKeys: string[] = [];
     try {
-      await this.pool.query('DELETE FROM rooms WHERE id = $1 AND creator_id = $2', [roomId, creatorId]);
+      await this.transaction(async client => {
+        // Only the owner may delete; gate the media cleanup on the same check so
+        // we never strand objects for a room that wasn't actually removed.
+        const owned = await client.query(
+          'SELECT 1 FROM rooms WHERE id = $1 AND creator_id = $2',
+          [roomId, creatorId]
+        );
+        if (owned.rows.length === 0) {
+          return;
+        }
+
+        // Capture keys before deleting the room: the media_assets rows cascade
+        // away with it, so we cannot read them afterward.
+        const orphaned = await client.query<{ object_key: string }>(
+          'DELETE FROM media_assets WHERE room_id = $1 RETURNING object_key',
+          [roomId]
+        );
+        orphanedObjectKeys = orphaned.rows.map(row => row.object_key);
+
+        await client.query('DELETE FROM rooms WHERE id = $1 AND creator_id = $2', [roomId, creatorId]);
+      });
+
+      await this.deleteOrphanedMediaObjects(orphanedObjectKeys);
       this.logger.debug('Room deleted from PostgreSQL', { roomId, creatorId });
     } catch (error) {
       this.logger.error('Error deleting PostgreSQL room', { error, roomId, creatorId });
@@ -1153,7 +1297,7 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async resetAllDataForTests(): Promise<void> {
-    await this.pool.query('TRUNCATE room_ai_cost_totals, image_assets, room_messages, room_saves, room_members, rooms RESTART IDENTITY CASCADE');
+    await this.pool.query('TRUNCATE room_ai_cost_totals, media_assets, image_assets, room_messages, room_saves, room_members, rooms, client_profiles RESTART IDENTITY CASCADE');
   }
 
   async failInterruptedStreamingMessages(content: string): Promise<number> {
@@ -1212,61 +1356,70 @@ export class PostgresStore implements DurableRoomStore {
     return updatedRoom.rows[0] ? mapRoom(updatedRoom.rows[0]) : null;
   }
 
-  private async saveImageAssetWithClient(client: Pick<PostgresPool, 'query'>, asset: ImageAsset): Promise<ImageAsset | null> {
-    const result = await client.query<ImageAssetRow>(
-      `INSERT INTO image_assets (
+  private async saveMediaAssetWithClient(client: Pick<PostgresPool, 'query'>, asset: MediaAsset): Promise<MediaAsset | null> {
+    const result = await client.query<MediaAssetRow>(
+      `INSERT INTO media_assets (
         id,
         room_id,
         message_id,
         object_key,
+        kind,
         mime_type,
         byte_size,
         width,
         height,
+        duration_ms,
+        uploaded_by_client_id,
         created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       ON CONFLICT (id) DO UPDATE SET
         message_id = EXCLUDED.message_id,
         object_key = EXCLUDED.object_key,
+        kind = EXCLUDED.kind,
         mime_type = EXCLUDED.mime_type,
         byte_size = EXCLUDED.byte_size,
         width = EXCLUDED.width,
-        height = EXCLUDED.height
-      RETURNING ${IMAGE_ASSET_COLUMNS}`,
+        height = EXCLUDED.height,
+        duration_ms = EXCLUDED.duration_ms,
+        uploaded_by_client_id = EXCLUDED.uploaded_by_client_id
+      RETURNING ${MEDIA_ASSET_COLUMNS}`,
       [
         asset.id,
         asset.roomId,
         asset.messageId || null,
         asset.objectKey,
+        asset.kind,
         asset.mimeType,
         asset.byteSize,
         asset.width ?? null,
         asset.height ?? null,
+        asset.durationMs ?? null,
+        asset.uploadedByClientId || null,
         asset.createdAt,
       ]
     );
-    return result.rows[0] ? mapImageAsset(result.rows[0]) : null;
+    return result.rows[0] ? mapMediaAsset(result.rows[0]) : null;
   }
 
-  private async attachImageAssets(roomId: string, messages: Message[]): Promise<Message[]> {
-    if (!messages.some(message => message.messageType === 'image')) {
+  private async attachMediaAssets(roomId: string, messages: Message[]): Promise<Message[]> {
+    if (!messages.some(message => message.messageType === 'media')) {
       return messages;
     }
 
-    const assets = await this.readImageAssetsByRoom(roomId);
+    const assets = await this.readMediaAssetsByRoom(roomId);
     if (assets.length === 0) {
       return messages;
     }
 
-    return this.attachImageAssetsFromAssets(messages, assets);
+    return this.attachMediaAssetsFromAssets(messages, assets);
   }
 
-  private attachImageAssetsFromAssets(messages: Message[], assets: ImageAsset[]): Message[] {
+  private attachMediaAssetsFromAssets(messages: Message[], assets: MediaAsset[]): Message[] {
     const assetsByMessageId = new Map(assets.filter(asset => asset.messageId).map(asset => [asset.messageId!, asset]));
     const assetsById = new Map(assets.map(asset => [asset.id, asset]));
 
     return messages.map(message => {
-      if (message.messageType !== 'image') {
+      if (message.messageType !== 'media') {
         return message;
       }
 
@@ -1277,9 +1430,9 @@ export class PostgresStore implements DurableRoomStore {
 
       return {
         ...message,
-        content: asset.id,
+        content: message.content || '',
         mimeType: asset.mimeType,
-        imageAsset: toMessageImageAsset(asset),
+        mediaAsset: toMessageMediaAsset(asset),
       };
     });
   }
@@ -1293,17 +1446,17 @@ export class PostgresStore implements DurableRoomStore {
       [roomId]
     );
     const messages = result.rows.map(mapMessage);
-    if (!messages.some(message => message.messageType === 'image')) {
+    if (!messages.some(message => message.messageType === 'media')) {
       return messages;
     }
 
-    const assets = await client.query<ImageAssetRow>(
-      `SELECT ${IMAGE_ASSET_COLUMNS}
-      FROM image_assets
+    const assets = await client.query<MediaAssetRow>(
+      `SELECT ${MEDIA_ASSET_COLUMNS}
+      FROM media_assets
       WHERE room_id = $1
       ORDER BY created_at ASC`,
       [roomId]
     );
-    return this.attachImageAssetsFromAssets(messages, assets.rows.map(mapImageAsset));
+    return this.attachMediaAssetsFromAssets(messages, assets.rows.map(mapMediaAsset));
   }
 }
