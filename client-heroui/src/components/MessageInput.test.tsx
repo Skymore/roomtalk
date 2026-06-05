@@ -15,6 +15,10 @@ const socketMocks = vi.hoisted(() => ({
 
 vi.mock('../utils/socket', () => socketMocks);
 
+vi.mock('browser-image-compression', () => ({
+  default: vi.fn(async (file: File) => file),
+}));
+
 vi.mock('@iconify/react', () => ({
   Icon: ({ icon }: { icon: string }) => <span data-icon={icon} />,
 }));
@@ -350,5 +354,40 @@ describe('MessageInput optimistic send flow', () => {
       replyToMessageId: undefined,
     });
     expect(socketMocks.uploadMediaMessage.mock.calls[0][0].file).toBeInstanceOf(Blob);
+  });
+
+  it('keeps image drafts visible when media upload fails', async () => {
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: vi.fn(() => 'blob:image-preview'),
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    socketMocks.uploadMediaMessage.mockRejectedValue(new Error('upload failed'));
+
+    const { editor } = renderMessageInput();
+    const file = new File([new Uint8Array([1, 2, 3])], 'image.png', { type: 'image/png' });
+
+    fireEvent.change(screen.getByTestId('image-upload-input'), {
+      target: { files: [file] },
+    });
+
+    await waitFor(() => {
+      expect(editor.querySelectorAll('img')).toHaveLength(1);
+    });
+
+    fireEvent.click(screen.getByText('send-message'));
+
+    await waitFor(() => {
+      expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/errorSendingMessage/)).toBeTruthy();
+    });
+
+    expect(editor.querySelectorAll('img')).toHaveLength(1);
+    expect(URL.revokeObjectURL).not.toHaveBeenCalledWith('blob:image-preview');
   });
 });
