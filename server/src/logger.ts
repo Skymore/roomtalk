@@ -69,9 +69,11 @@ const consoleFormat = winston.format.combine(
 
 // 创建日志传输
 const transports = [
-  // 控制台输出 (这行将被移除)
-  // new winston.transports.Console({ format: consoleFormat }), 
-  
+  // 控制台输出 —— 生产环境用纯文本（便于 fly logs / 日志聚合解析），开发用彩色
+  new winston.transports.Console({
+    format: (process.env.NODE_ENV || 'development') === 'development' ? consoleFormat : format,
+  }),
+
   // 旋转错误日志文件 - 按天存储，最多保留30天
   new winston.transports.DailyRotateFile({
     filename: path.join(logDir, 'error-%DATE%.log'),
