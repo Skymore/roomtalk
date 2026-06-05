@@ -50,3 +50,8 @@ yarn-error.log*
 # Ignore all files in the logs directory
 logs/*
 */logs/*
+
+# Supabase CLI local state (config.toml / migrations stay tracked if added)
+supabase/.temp/
+supabase/.branches/
+supabase/.env
