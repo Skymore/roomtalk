@@ -66,6 +66,7 @@ export class S3MediaObjectStorage implements MediaObjectStorage {
       region: config.region,
       endpoint: config.endpoint,
       forcePathStyle: config.forcePathStyle,
+      requestChecksumCalculation: 'WHEN_REQUIRED',
     });
   }
 
@@ -103,8 +104,6 @@ export class S3MediaObjectStorage implements MediaObjectStorage {
         Bucket: this.config.bucket,
         Key: input.objectKey,
         ContentType: input.mimeType,
-        ContentLength: input.byteSize,
-        CacheControl: 'private, max-age=31536000, immutable',
       }),
       { expiresIn: expiresInSeconds }
     );
