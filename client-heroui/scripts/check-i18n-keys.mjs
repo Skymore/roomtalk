@@ -144,8 +144,11 @@ const hasLocalizedScript = (value) => /[\u0900-\u097F\u3040-\u30FF\u3400-\u9FFF\
 const cleanLiteral = (value) => value.replace(/\s+/g, " ").trim();
 const isExpressionFragment = (value) =>
   value.startsWith(":") ||
+  value.startsWith(")") ||
+  value.endsWith("(") ||
   value.includes("?.") ||
   value.includes("=>") ||
+  value.includes("&&") ||
   /^[A-Za-z_$][\w$]*\s*[?:]/.test(value);
 
 const findHardcodedUiStrings = () => {
