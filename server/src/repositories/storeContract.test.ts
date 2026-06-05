@@ -130,7 +130,7 @@ class MemoryRedis {
       const index = list.findIndex(item => {
         try {
           const parsed = JSON.parse(item);
-          return parsed.id === messageId && ['image', 'voice', 'media'].includes(parsed.messageType);
+          return parsed.id === messageId && parsed.messageType === 'media';
         } catch {
           return false;
         }
@@ -656,10 +656,10 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       return { rows: [updated] as T[], rowCount: 1 };
     }
 
-    if (/UPDATE room_messages SET content = \$3, message_type = 'media', mime_type = \$4 WHERE room_id = \$1 AND id = \$2 AND message_type IN \('image', 'voice', 'media'\) RETURNING/.test(compactSql)) {
+    if (/UPDATE room_messages SET content = \$3, message_type = 'media', mime_type = \$4 WHERE room_id = \$1 AND id = \$2 AND message_type = 'media' RETURNING/.test(compactSql)) {
       const [roomId, messageId, content, mimeType] = params.map(String);
       const rows = this.messages.get(roomId) || [];
-      const index = rows.findIndex(row => row.id === messageId && ['image', 'voice', 'media'].includes(row.message_type));
+      const index = rows.findIndex(row => row.id === messageId && row.message_type === 'media');
       if (index === -1) return { rows: [], rowCount: 0 };
       const updated = { ...rows[index], content, message_type: 'media' as const, mime_type: mimeType };
       rows[index] = updated;
@@ -1135,8 +1135,8 @@ for (const [storeName, createFixture] of storeFactories) {
       const initialRoom = room({ lastActivityAt: '2026-05-03T00:00:10.000Z' });
       const legacyImage = message({
         id: 'legacy-image',
-        content: 'data:image/png;base64,AAAA',
-        messageType: 'image',
+        content: '',
+        messageType: 'media',
         mimeType: 'image/png',
         timestamp: '2026-05-03T00:00:02.000Z',
       });

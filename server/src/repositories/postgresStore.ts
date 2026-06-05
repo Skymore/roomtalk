@@ -841,7 +841,7 @@ export class PostgresStore implements DurableRoomStore {
             message_type = 'media',
             mime_type = $4
           WHERE room_id = $1 AND id = $2
-            AND message_type IN ('image', 'voice', 'media')
+            AND message_type = 'media'
           RETURNING ${MESSAGE_COLUMNS}`,
           [roomId, messageId, '', mediaAsset.mimeType]
         );

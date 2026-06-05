@@ -282,7 +282,7 @@ describe('message socket handlers', () => {
     await mediaSend.socket.invoke('send_message', {
       roomId: 'room-1',
       content: 'data:image/png;base64,AAAA',
-      messageType: 'image',
+      messageType: 'media',
     }, (response: unknown) => {
       mediaResponse = response;
     });

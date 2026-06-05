@@ -126,7 +126,7 @@ describe('AI provider messages', () => {
     const result = buildAIProviderMessages('system prompt', [
       createMessage({ id: 'm1', clientId: 'private-client-id', username: 'Alice', content: 'user text', replyTo }),
       createMessage({ id: 'ai1', clientId: 'ai_assistant', content: 'assistant text', messageType: 'ai' }),
-      createMessage({ id: 'img1', clientId: 'client-1', username: 'Alice', content: 'abc123', messageType: 'image', mimeType: 'image/webp' }),
+      createMessage({ id: 'img1', clientId: 'client-1', username: 'Alice', content: '', messageType: 'media', mimeType: 'image/webp', mediaAsset: { id: 'a1', kind: 'image', mimeType: 'image/webp', byteSize: 1 } }),
       createMessage({ id: 'empty', content: '' }),
     ]);
 
@@ -147,7 +147,7 @@ describe('AI provider messages', () => {
   it('includes the same human speaker context for Anthropic messages', () => {
     const result = buildAnthropicMessages([
       createMessage({ username: 'Alice', content: 'hello' }),
-      createMessage({ username: 'Alice', content: 'abc123', messageType: 'image', mimeType: 'image/webp' }),
+      createMessage({ username: 'Alice', content: '', messageType: 'media', mimeType: 'image/webp', mediaAsset: { id: 'a2', kind: 'image', mimeType: 'image/webp', byteSize: 1 } }),
       createMessage({ clientId: 'ai_assistant', content: 'answer', messageType: 'ai' }),
     ]);
 

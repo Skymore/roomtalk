@@ -54,7 +54,6 @@ export interface MessageReplyReference {
 
 export type MediaKind = 'image' | 'video' | 'audio';
 export type MessageType = 'text' | 'ai' | 'media';
-export type LegacyMessageType = MessageType | 'image' | 'voice';
 
 export interface MessageMediaAsset {
   id: string;
@@ -81,7 +80,7 @@ export interface Message {
   roomId: string;
   timestamp: string;
   updatedAt?: string;
-  messageType: LegacyMessageType;
+  messageType: MessageType;
   username?: string;
   avatar?: {
     text: string;

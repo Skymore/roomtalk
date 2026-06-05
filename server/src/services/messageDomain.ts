@@ -21,12 +21,8 @@ export function normalizeDisplayName(username?: string): string | undefined {
 }
 
 export function createReplyReference(message: Message): MessageReplyReference {
-  const mediaKind = message.mediaAsset?.kind
-    || (message.messageType === 'voice' ? 'audio' : message.messageType === 'image' ? 'image' : undefined);
-  const normalizedMessageType = message.messageType === 'image' || message.messageType === 'voice'
-    ? 'media'
-    : message.messageType;
-  const textualPreview = normalizedMessageType === 'media'
+  const mediaKind = message.mediaAsset?.kind;
+  const textualPreview = message.messageType === 'media'
     ? getMediaAttachmentLabel(mediaKind)
     : collapseInlineText(message.content);
   const preview = textualPreview.slice(0, MAX_REPLY_PREVIEW_LENGTH).trim() || '[Empty message]';
@@ -34,7 +30,7 @@ export function createReplyReference(message: Message): MessageReplyReference {
   const reference: MessageReplyReference = {
     messageId: message.id,
     username: normalizeDisplayName(message.username),
-    messageType: normalizedMessageType,
+    messageType: message.messageType,
     preview,
   };
   if (mediaKind) {
@@ -233,17 +229,14 @@ const getMediaAttachmentLabel = (kind?: MediaKind) => {
   return '[Image attachment]';
 };
 
-const getMessageMediaKind = (message: Message): MediaKind | undefined => (
-  message.mediaAsset?.kind
-  || (message.messageType === 'voice' ? 'audio' : message.messageType === 'image' ? 'image' : undefined)
-);
+const getMessageMediaKind = (message: Message): MediaKind | undefined => message.mediaAsset?.kind;
 
 export function buildAnthropicMessages(contextMessages: Message[]): AnthropicMessage[] {
   return contextMessages
     .map((message): AnthropicMessage | null => {
       const role = message.clientId === 'ai_assistant' ? 'assistant' as const : 'user' as const;
 
-      if (message.messageType === 'media' || message.messageType === 'image' || message.messageType === 'voice') {
+      if (message.messageType === 'media') {
         const attachmentLabel = getMediaAttachmentLabel(getMessageMediaKind(message));
         return role === 'user'
           ? { role, content: formatHumanContextForAI(message, attachmentLabel) }
@@ -273,7 +266,7 @@ export function buildAIProviderMessages(systemPrompt: string, contextMessages: M
     ...contextMessages.map(message => {
       const role: AIProviderMessage['role'] = message.clientId === 'ai_assistant' ? 'assistant' : 'user';
 
-      if (message.messageType === 'media' || message.messageType === 'image' || message.messageType === 'voice') {
+      if (message.messageType === 'media') {
         const attachmentLabel = getMediaAttachmentLabel(getMessageMediaKind(message));
         return {
           role,
