@@ -82,6 +82,11 @@ body {
   padding-top: max(env(safe-area-inset-top), 0rem);
 }
 
+.roomtalk-keyboard-open .mobile-bottom-nav {
+  display: none;
+  padding-bottom: 0;
+}
+
 .roomtalk-ring {
   box-shadow: 0 0 0 1px rgba(194, 192, 182, 0.82), 0 10px 24px rgba(20, 20, 19, 0.05);
 }

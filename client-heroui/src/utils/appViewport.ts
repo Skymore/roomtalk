@@ -1,5 +1,7 @@
 const APP_HEIGHT_CSS_VAR = '--app-height';
 const APP_VIEWPORT_TOP_CSS_VAR = '--app-viewport-top';
+const KEYBOARD_OPEN_CLASS = 'roomtalk-keyboard-open';
+const KEYBOARD_HEIGHT_THRESHOLD_PX = 120;
 
 const getViewportHeight = (win: Window) => {
   const visualHeight = win.visualViewport?.height;
@@ -20,6 +22,31 @@ const getViewportTop = (win: Window) => {
   );
 };
 
+const isEditableElement = (element: Element | null) => {
+  if (!element) return false;
+
+  const tagName = element.tagName.toLowerCase();
+
+  if (tagName === 'input' || tagName === 'textarea') {
+    const input = element as HTMLInputElement | HTMLTextAreaElement;
+    return !input.readOnly && !input.disabled;
+  }
+
+  return element.hasAttribute('contenteditable') && element.getAttribute('contenteditable') !== 'false';
+};
+
+const isKeyboardLikelyOpen = (win: Window) => {
+  const visualHeight = win.visualViewport?.height;
+  if (typeof visualHeight !== 'number' || !Number.isFinite(visualHeight) || visualHeight <= 0) {
+    return false;
+  }
+
+  return (
+    isEditableElement(win.document.activeElement) &&
+    win.innerHeight - visualHeight > KEYBOARD_HEIGHT_THRESHOLD_PX
+  );
+};
+
 export const installAppViewportSizing = (win: Window = window) => {
   const root = win.document.documentElement;
   const viewport = win.visualViewport;
@@ -37,6 +64,7 @@ export const installAppViewportSizing = (win: Window = window) => {
     }
 
     root.style.setProperty(APP_VIEWPORT_TOP_CSS_VAR, `${getViewportTop(win)}px`);
+    root.classList.toggle(KEYBOARD_OPEN_CLASS, isKeyboardLikelyOpen(win));
   };
 
   const scheduleViewportUpdate = (updateKind: 'all' | 'top') => {
@@ -71,5 +99,7 @@ export const installAppViewportSizing = (win: Window = window) => {
     if (hasPendingFrame && frameId !== null) {
       win.cancelAnimationFrame(frameId);
     }
+
+    root.classList.remove(KEYBOARD_OPEN_CLASS);
   };
 };
