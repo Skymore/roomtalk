@@ -1,7 +1,6 @@
 import React from 'react';
-import { Button, Select, SelectItem, Switch, TimeInput } from '@heroui/react';
+import { Button, Select, SelectItem, Switch } from '@heroui/react';
 import { Icon } from '@iconify/react';
-import { parseTime } from '@internationalized/date';
 import { useTranslation } from 'react-i18next';
 
 const DAY_OPTIONS = [
@@ -14,7 +13,6 @@ const DAY_OPTIONS = [
   { value: 6, labelKey: 'daySat' },
 ];
 
-const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const MAJOR_TIMEZONES = [
   { value: 'UTC', label: 'UTC' },
   { value: 'America/Los_Angeles', label: 'Los Angeles' },
@@ -69,17 +67,70 @@ const getTimezoneOptions = (timezone: string) => {
   return [buildTimezoneOption(timezone, timezone), ...options];
 };
 
-const safeTimeValue = (value: string, fallback: string) => {
-  try {
-    return parseTime(TIME_PATTERN.test(value) ? value : fallback);
-  } catch {
-    return parseTime(fallback);
-  }
+const selectClassNames = {
+  trigger: 'min-h-11 h-11 rounded-lg border border-[#dedbd0] bg-[#faf9f5] shadow-none dark:border-[#30302e] dark:bg-[#1d1d1b]',
+  value: 'text-sm font-semibold text-[#141413] dark:text-[#faf9f5]',
+  popoverContent: 'border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]',
+  listboxWrapper: 'max-h-56 overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]',
+} as const;
+
+const HOUR_OPTIONS = Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, '0'));
+const MINUTE_OPTIONS = Array.from({ length: 12 }, (_, step) => String(step * 5).padStart(2, '0'));
+
+const splitTime = (value: string): [string, string] => {
+  const [hour = '09', minute = '00'] = value.split(':');
+  return [hour.padStart(2, '0'), minute.padStart(2, '0')];
 };
 
-const formatTimeValue = (value: { hour: number; minute: number }) => (
-  `${String(value.hour).padStart(2, '0')}:${String(value.minute).padStart(2, '0')}`
-);
+interface TimeFieldProps {
+  label: string;
+  value: string;
+  onChange: (time: string) => void;
+}
+
+const TimeField: React.FC<TimeFieldProps> = ({ label, value, onChange }) => {
+  const [hour, minute] = splitTime(value);
+  const minuteOptions = MINUTE_OPTIONS.includes(minute)
+    ? MINUTE_OPTIONS
+    : [...MINUTE_OPTIONS, minute].sort();
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-xs font-medium text-[#5e5d59] dark:text-[#b0aea5]">{label}</span>
+      <div className="flex items-center gap-1.5">
+        <Select
+          aria-label={`${label} (hour)`}
+          selectedKeys={[hour]}
+          disallowEmptySelection
+          classNames={selectClassNames}
+          onSelectionChange={(keys) => {
+            const next = Array.from(keys)[0]?.toString();
+            if (next) onChange(`${next}:${minute}`);
+          }}
+        >
+          {HOUR_OPTIONS.map((item) => (
+            <SelectItem key={item} textValue={item}>{item}</SelectItem>
+          ))}
+        </Select>
+        <span className="text-sm font-semibold text-[#87867f] dark:text-[#8f8d86]">:</span>
+        <Select
+          aria-label={`${label} (minute)`}
+          selectedKeys={[minute]}
+          disallowEmptySelection
+          classNames={selectClassNames}
+          onSelectionChange={(keys) => {
+            const next = Array.from(keys)[0]?.toString();
+            if (next) onChange(`${hour}:${next}`);
+          }}
+        >
+          {minuteOptions.map((item) => (
+            <SelectItem key={item} textValue={item}>{item}</SelectItem>
+          ))}
+        </Select>
+      </div>
+    </div>
+  );
+};
 
 interface PostingScheduleEditorProps {
   enabled: boolean;
@@ -142,37 +193,11 @@ export const PostingScheduleEditor: React.FC<PostingScheduleEditorProps> = ({
       {enabled && (
         <div className="space-y-3">
           <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,1fr)_2rem_minmax(0,1fr)]">
-            <TimeInput
-              label={t('startTime')}
-              value={safeTimeValue(startTime, '09:00')}
-              onChange={(value) => {
-                if (value) onStartTimeChange(formatTimeValue(value));
-              }}
-              hourCycle={24}
-              granularity="minute"
-              shouldForceLeadingZeros
-              classNames={{
-                inputWrapper: 'rounded-lg border border-[#dedbd0] bg-[#faf9f5] shadow-none dark:border-[#30302e] dark:bg-[#1d1d1b]',
-                segment: 'text-sm font-semibold text-[#141413] data-[editable=true]:focus:bg-[#e8e6dc] dark:text-[#faf9f5] dark:data-[editable=true]:focus:bg-[#30302e]',
-              }}
-            />
-            <div className="hidden h-10 items-center justify-center text-[#87867f] dark:text-[#8f8d86] sm:flex">
+            <TimeField label={t('startTime')} value={startTime} onChange={onStartTimeChange} />
+            <div className="hidden h-11 items-center justify-center text-[#87867f] dark:text-[#8f8d86] sm:flex">
               <Icon icon="lucide:arrow-right" className="h-4 w-4" />
             </div>
-            <TimeInput
-              label={t('endTime')}
-              value={safeTimeValue(endTime, '17:00')}
-              onChange={(value) => {
-                if (value) onEndTimeChange(formatTimeValue(value));
-              }}
-              hourCycle={24}
-              granularity="minute"
-              shouldForceLeadingZeros
-              classNames={{
-                inputWrapper: 'rounded-lg border border-[#dedbd0] bg-[#faf9f5] shadow-none dark:border-[#30302e] dark:bg-[#1d1d1b]',
-                segment: 'text-sm font-semibold text-[#141413] data-[editable=true]:focus:bg-[#e8e6dc] dark:text-[#faf9f5] dark:data-[editable=true]:focus:bg-[#30302e]',
-              }}
-            />
+            <TimeField label={t('endTime')} value={endTime} onChange={onEndTimeChange} />
           </div>
 
           <Select

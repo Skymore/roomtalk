@@ -82,7 +82,7 @@ export const RoomCreateModal: React.FC<RoomCreateModalProps> = ({
   const scheduleReady = !scheduleEnabled || (selectedDays.length > 0 && startTime !== endTime);
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} scrollBehavior="inside">
+    <Modal isOpen={isOpen} onClose={onClose} scrollBehavior="inside" classNames={{ wrapper: 'roomtalk-modal-viewport' }}>
       <ModalContent>
         <ModalHeader className="flex flex-col gap-1">{t('createNewRoom')}</ModalHeader>
         <ModalBody>
