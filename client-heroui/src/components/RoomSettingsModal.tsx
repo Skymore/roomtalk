@@ -7,10 +7,10 @@ import {
   ModalContent,
   ModalFooter,
   ModalHeader,
-  Tooltip,
 } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
+import { HoverTooltip } from './HoverTooltip';
 import {
   getRoomRoleMembers,
   lookupRoomClient,
@@ -422,7 +422,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                   onChange={(event) => setRoomName(event.target.value)}
                   classNames={{ inputWrapper: 'h-12' }}
                 />
-                <Tooltip content={t('save')}>
+                <HoverTooltip content={t('save')}>
                   <Button
                     isIconOnly
                     aria-label={t('save')}
@@ -433,7 +433,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                   >
                     <Icon icon="lucide:check" className="h-5 w-5" />
                   </Button>
-                </Tooltip>
+                </HoverTooltip>
               </div>
             </div>
           )}
@@ -567,7 +567,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                 onChange={(event) => setAdminClientId(event.target.value)}
                 classNames={{ inputWrapper: 'h-12' }}
               />
-              <Tooltip content={t('addAdmin')}>
+              <HoverTooltip content={t('addAdmin')}>
                 <Button
                   isIconOnly
                   aria-label={t('addAdmin')}
@@ -578,7 +578,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                 >
                   <Icon icon="lucide:user-plus" className="h-5 w-5" />
                 </Button>
-              </Tooltip>
+              </HoverTooltip>
             </div>
           </div>
 
@@ -622,7 +622,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                 onChange={(event) => setTransferClientId(event.target.value)}
                 classNames={{ inputWrapper: 'h-12' }}
               />
-              <Tooltip content={t('reviewTransfer')}>
+              <HoverTooltip content={t('reviewTransfer')}>
                 <Button
                   isIconOnly
                   aria-label={t('reviewTransfer')}
@@ -634,7 +634,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                 >
                   <Icon icon="lucide:arrow-right" className="h-5 w-5" />
                 </Button>
-              </Tooltip>
+              </HoverTooltip>
             </div>
           </div>
           {renderStatusBanner()}

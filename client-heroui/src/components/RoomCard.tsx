@@ -1,6 +1,7 @@
 import React from 'react';
-import { Button, Card, Tooltip } from '@heroui/react';
+import { Button, Card } from '@heroui/react';
 import { Icon } from '@iconify/react';
+import { HoverTooltip } from './HoverTooltip';
 import { useTranslation } from 'react-i18next';
 import { Room } from '../utils/types';
 import { formatDate } from '../utils/formatters';
@@ -84,7 +85,7 @@ export const RoomCard: React.FC<RoomCardProps> = ({
           </div>
         </button>
         <div className="ml-2 flex flex-shrink-0 items-center gap-0.5">
-              <Tooltip content={copiedRoomId === room.id ? t('copyRoomIdSuccess') : t('copyRoomId')}>
+              <HoverTooltip content={copiedRoomId === room.id ? t('copyRoomIdSuccess') : t('copyRoomId')}>
                 <Button
                   isIconOnly
                   size="sm"
@@ -95,8 +96,8 @@ export const RoomCard: React.FC<RoomCardProps> = ({
                 >
                   <Icon icon={copiedRoomId === room.id ? 'lucide:check' : 'lucide:copy'} className="h-3.5 w-3.5" />
                 </Button>
-              </Tooltip>
-              <Tooltip content={copiedLinkId === room.id ? t('shareSuccess') : t('share')}>
+              </HoverTooltip>
+              <HoverTooltip content={copiedLinkId === room.id ? t('shareSuccess') : t('share')}>
                 <Button
                   isIconOnly
                   size="sm"
@@ -107,10 +108,10 @@ export const RoomCard: React.FC<RoomCardProps> = ({
                 >
                   <Icon icon={copiedLinkId === room.id ? 'lucide:check' : 'lucide:share-2'} className="h-3.5 w-3.5" />
                 </Button>
-              </Tooltip>
+              </HoverTooltip>
               {room.creatorId === clientId && (
                 <>
-                  <Tooltip content={t('editRoomName')}>
+                  <HoverTooltip content={t('editRoomName')}>
                     <Button
                       isIconOnly
                       size="sm"
@@ -121,8 +122,8 @@ export const RoomCard: React.FC<RoomCardProps> = ({
                     >
                       <Icon icon="lucide:pencil" className="h-3.5 w-3.5" />
                     </Button>
-                  </Tooltip>
-                  <Tooltip content={t('deleteRoom')}>
+                  </HoverTooltip>
+                  <HoverTooltip content={t('deleteRoom')}>
                     <Button
                       isIconOnly
                       size="sm"
@@ -134,7 +135,7 @@ export const RoomCard: React.FC<RoomCardProps> = ({
                     >
                       <Icon icon="lucide:trash-2" className="h-3.5 w-3.5" />
                     </Button>
-                  </Tooltip>
+                  </HoverTooltip>
                 </>
               )}
             </div>
