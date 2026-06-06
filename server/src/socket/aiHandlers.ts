@@ -13,7 +13,13 @@ import { hasRoomAccess } from './roomAccess';
 import { authorizeRoomAction, getRoomMessage } from './roomAuthorization';
 import { SocketConnectionContext } from './types';
 
-export const DEFAULT_ANTHROPIC_MAX_TOKENS = 8096;
+// Upper bound on the AI response length (Anthropic). Raised from 8096 to reduce
+// mid-response truncation; only billed for tokens actually generated. Override
+// with ANTHROPIC_MAX_TOKENS in prod without a code change.
+export const DEFAULT_ANTHROPIC_MAX_TOKENS = (() => {
+  const parsed = Number.parseInt(process.env.ANTHROPIC_MAX_TOKENS ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 32000;
+})();
 const ERROR_STATE_SAVE_ATTEMPTS = 3;
 const ERROR_STATE_SAVE_RETRY_DELAY_MS = 25;
 

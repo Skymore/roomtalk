@@ -1,6 +1,13 @@
 import { Message } from '../types';
 
-export const MAX_CONTEXT_MESSAGES = 40;
+const parsePositiveInt = (value: string | undefined, fallback: number): number => {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+// How many of the most recent messages are sent to the model as context.
+// Override in prod with AI_MAX_CONTEXT_MESSAGES without a code change.
+export const MAX_CONTEXT_MESSAGES = parsePositiveInt(process.env.AI_MAX_CONTEXT_MESSAGES, 1000);
 
 export interface AIHistorySelectionOptions {
   editedMessageId?: string;
