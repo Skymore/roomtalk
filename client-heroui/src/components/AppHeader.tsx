@@ -4,7 +4,6 @@ import {
   NavbarBrand,
   NavbarContent,
   Button,
-  Tooltip,
   Chip,
   Avatar,
   Dropdown,
@@ -13,6 +12,7 @@ import {
   DropdownItem,
 } from "@heroui/react";
 import { Icon } from "@iconify/react";
+import { HoverTooltip } from "./HoverTooltip";
 import { useTranslation } from "react-i18next";
 import { Room } from "../utils/types";
 import { getAvatarText, getAvatarColor } from "../utils/userProfile";
@@ -62,7 +62,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
 
         {/* 桌面导航按钮 (仅图标) - 移动到 Brand 右侧 */}
         <div className="hidden md:flex items-center gap-1 pl-4">
-          <Tooltip content={t('home')}>
+          <HoverTooltip content={t('home')}>
             <Button
               isIconOnly
               size="sm"
@@ -74,9 +74,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             >
               <Icon icon="lucide:home" width={18}/>
             </Button>
-          </Tooltip>
+          </HoverTooltip>
           {/* 使用 t('savedRooms') 作为 tooltip 内容 */}
-          <Tooltip content={t('savedRooms')}>
+          <HoverTooltip content={t('savedRooms')}>
             <Button
               isIconOnly
               size="sm"
@@ -88,8 +88,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             >
               <Icon icon="lucide:bookmark" width={18}/>
             </Button>
-          </Tooltip>
-           <Tooltip content={t('settings')}>
+          </HoverTooltip>
+           <HoverTooltip content={t('settings')}>
             <Button
               isIconOnly
               size="sm"
@@ -101,13 +101,13 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             >
               <Icon icon="lucide:settings" width={18}/>
             </Button>
-          </Tooltip>
+          </HoverTooltip>
         </div>
 
         <NavbarContent justify="end">
           <div className="flex items-center gap-2">
             {/* 始终显示的用户ID */}
-            <Tooltip content={t("yourUserId")}>
+            <HoverTooltip content={t("yourUserId")}>
               <Chip
                 variant="flat"
                 color="secondary"
@@ -117,7 +117,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               >
                 ID: {clientId.slice(0, 8)}...
               </Chip>
-            </Tooltip>
+            </HoverTooltip>
 
             {/* 桌面版：用户头像、语言切换和主题切换 */}
             <div className="hidden md:flex items-center gap-2">
@@ -149,7 +149,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
                 </DropdownMenu>
               </Dropdown>
 
-              <Tooltip content={isDark ? t("lightMode") : t("darkMode")}>
+              <HoverTooltip content={isDark ? t("lightMode") : t("darkMode")}>
                 <Button
                   isIconOnly
                   variant="light"
@@ -159,7 +159,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
                 >
                   <Icon icon={isDark ? "lucide:sun" : "lucide:moon"} width={20} />
                 </Button>
-              </Tooltip>
+              </HoverTooltip>
             </div>
 
             {/* 移动版：显示头像但使用三点菜单作为下拉触发器，现在已经完全隐藏 */}

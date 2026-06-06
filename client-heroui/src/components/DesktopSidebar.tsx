@@ -12,9 +12,9 @@ import {
   ModalContent,
   ModalFooter,
   ModalHeader,
-  Tooltip,
 } from '@heroui/react';
 import { Icon } from '@iconify/react';
+import { HoverTooltip } from './HoverTooltip';
 import { useTranslation } from 'react-i18next';
 import { AppView } from '../utils/appPersistence';
 import { formatDate } from '../utils/formatters';
@@ -86,9 +86,9 @@ const SidebarNavItem: React.FC<SidebarNavItemProps> = ({
   );
 
   return isCollapsed ? (
-    <Tooltip content={label} placement="right">
+    <HoverTooltip content={label} placement="right">
       {button}
-    </Tooltip>
+    </HoverTooltip>
   ) : button;
 };
 
@@ -125,7 +125,7 @@ const SidebarRoomRow: React.FC<SidebarRoomRowProps> = ({
 
   if (isCollapsed) {
     return (
-      <Tooltip content={room.name} placement="right">
+      <HoverTooltip content={room.name} placement="right">
         <button
           type="button"
           onClick={onPress}
@@ -138,7 +138,7 @@ const SidebarRoomRow: React.FC<SidebarRoomRowProps> = ({
         >
           <Icon icon={icon} className="h-4 w-4" />
         </button>
-      </Tooltip>
+      </HoverTooltip>
     );
   }
 
@@ -186,7 +186,7 @@ const SidebarRoomRow: React.FC<SidebarRoomRowProps> = ({
       </button>
 
       <span className="mt-1.5 flex flex-shrink-0 items-center gap-0.5 opacity-80 transition-opacity group-hover:opacity-100">
-        <Tooltip content={t('copyRoomId')}>
+        <HoverTooltip content={t('copyRoomId')}>
           <Button
             isIconOnly
             size="sm"
@@ -197,8 +197,8 @@ const SidebarRoomRow: React.FC<SidebarRoomRowProps> = ({
           >
             <Icon icon="lucide:copy" className="h-3.5 w-3.5" />
           </Button>
-        </Tooltip>
-        <Tooltip content={t('share')}>
+        </HoverTooltip>
+        <HoverTooltip content={t('share')}>
           <Button
             isIconOnly
             size="sm"
@@ -209,9 +209,9 @@ const SidebarRoomRow: React.FC<SidebarRoomRowProps> = ({
           >
             <Icon icon="lucide:share-2" className="h-3.5 w-3.5" />
           </Button>
-        </Tooltip>
+        </HoverTooltip>
         {onUnsaveRoom && (
-          <Tooltip content={t('unsave')}>
+          <HoverTooltip content={t('unsave')}>
             <Button
               isIconOnly
               size="sm"
@@ -222,11 +222,11 @@ const SidebarRoomRow: React.FC<SidebarRoomRowProps> = ({
             >
               <Icon icon="lucide:bookmark-minus" className="h-3.5 w-3.5" />
             </Button>
-          </Tooltip>
+          </HoverTooltip>
         )}
         {canManageRoom && !onUnsaveRoom && onRenameRoom && onDeleteRoom && (
           <>
-            <Tooltip content={t('editRoomName')}>
+            <HoverTooltip content={t('editRoomName')}>
               <Button
                 isIconOnly
                 size="sm"
@@ -237,8 +237,8 @@ const SidebarRoomRow: React.FC<SidebarRoomRowProps> = ({
               >
                 <Icon icon="lucide:pencil" className="h-3.5 w-3.5" />
               </Button>
-            </Tooltip>
-            <Tooltip content={t('deleteRoom')}>
+            </HoverTooltip>
+            <HoverTooltip content={t('deleteRoom')}>
               <Button
                 isIconOnly
                 size="sm"
@@ -250,7 +250,7 @@ const SidebarRoomRow: React.FC<SidebarRoomRowProps> = ({
               >
                 <Icon icon="lucide:trash-2" className="h-3.5 w-3.5" />
               </Button>
-            </Tooltip>
+            </HoverTooltip>
           </>
         )}
       </span>
@@ -375,7 +375,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
             )}
           </button>
 
-          <Tooltip content={isCollapsed ? t('expandSidebar') : t('collapseSidebar')} placement="right">
+          <HoverTooltip content={isCollapsed ? t('expandSidebar') : t('collapseSidebar')} placement="right">
             <Button
               isIconOnly
               size="sm"
@@ -386,7 +386,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
             >
               <Icon icon={isCollapsed ? 'lucide:panel-left-open' : 'lucide:panel-left-close'} className="h-4 w-4" />
             </Button>
-          </Tooltip>
+          </HoverTooltip>
         </div>
 
         <div
@@ -396,7 +396,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
         >
           {isCollapsed ? (
             <>
-              <Tooltip content={t('create')} placement="right">
+              <HoverTooltip content={t('create')} placement="right">
                 <Button
                   isIconOnly
                   size="sm"
@@ -407,8 +407,8 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
                 >
                   <Icon icon="lucide:plus" className="h-4 w-4" />
                 </Button>
-              </Tooltip>
-              <Tooltip content={t('joinButton')} placement="right">
+              </HoverTooltip>
+              <HoverTooltip content={t('joinButton')} placement="right">
                 <Button
                   isIconOnly
                   size="sm"
@@ -419,7 +419,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
                 >
                   <Icon icon="lucide:log-in" className="h-4 w-4" />
                 </Button>
-              </Tooltip>
+              </HoverTooltip>
             </>
           ) : (
             <>
@@ -549,10 +549,10 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
         >
           {isCollapsed ? (
             <>
-              <Tooltip content={username} placement="right">
+              <HoverTooltip content={username} placement="right">
                 <Avatar name={getAvatarText(username)} color={getAvatarColor(username) as any} size="sm" />
-              </Tooltip>
-              <Tooltip content={t('copyUserId')} placement="right">
+              </HoverTooltip>
+              <HoverTooltip content={t('copyUserId')} placement="right">
                 <Button
                   isIconOnly
                   size="sm"
@@ -563,7 +563,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
                 >
                   <Icon icon="lucide:fingerprint" className="h-4 w-4" />
                 </Button>
-              </Tooltip>
+              </HoverTooltip>
               <SidebarNavItem
                 icon="lucide:settings"
                 label={t('settings')}
@@ -571,7 +571,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
                 onPress={() => setView('settings')}
                 isCollapsed={isCollapsed}
               />
-              <Tooltip content={isDark ? t('lightMode') : t('darkMode')} placement="right">
+              <HoverTooltip content={isDark ? t('lightMode') : t('darkMode')} placement="right">
                 <Button
                   isIconOnly
                   size="sm"
@@ -582,7 +582,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
                 >
                   <Icon icon={isDark ? 'lucide:sun' : 'lucide:moon'} className="h-4 w-4" />
                 </Button>
-              </Tooltip>
+              </HoverTooltip>
             </>
           ) : (
             <>
@@ -592,7 +592,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
                   <p className="truncate text-sm font-medium text-[#141413] dark:text-[#faf9f5]">{username}</p>
                   <p className="truncate text-xs text-[#87867f] dark:text-[#8f8d86]">{t('profile')}</p>
                 </div>
-                <Tooltip
+                <HoverTooltip
                   content={
                     <div className="max-w-[240px]">
                       <p className="text-xs font-medium">{t('userId')}</p>
@@ -610,7 +610,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
                   >
                     <Icon icon="lucide:fingerprint" className="h-3.5 w-3.5" />
                   </Button>
-                </Tooltip>
+                </HoverTooltip>
               </div>
 
               <div className="flex items-center gap-2">
@@ -640,7 +640,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
                   </DropdownMenu>
                 </Dropdown>
 
-                <Tooltip content={t('settings')}>
+                <HoverTooltip content={t('settings')}>
                   <Button
                     isIconOnly
                     size="sm"
@@ -655,9 +655,9 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
                   >
                     <Icon icon="lucide:settings" className="h-4 w-4" />
                   </Button>
-                </Tooltip>
+                </HoverTooltip>
 
-                <Tooltip content={isDark ? t('lightMode') : t('darkMode')}>
+                <HoverTooltip content={isDark ? t('lightMode') : t('darkMode')}>
                   <Button
                     isIconOnly
                     size="sm"
@@ -668,7 +668,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
                   >
                     <Icon icon={isDark ? 'lucide:sun' : 'lucide:moon'} className="h-4 w-4" />
                   </Button>
-                </Tooltip>
+                </HoverTooltip>
               </div>
             </>
           )}

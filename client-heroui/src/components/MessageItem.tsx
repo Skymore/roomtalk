@@ -14,6 +14,7 @@ import { clientId, getMediaDownloadUrl } from "../utils/socket";
 import { formatPercentage, formatTime, formatUsdCost } from "../utils/formatters";
 import { Message, RoomPermissions } from "../utils/types";
 import { useTranslation } from "react-i18next";
+import { useIsTouchDevice } from "../hooks/useIsTouchDevice";
 
 interface MessageItemProps {
   message: Message;
@@ -75,6 +76,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   onReply,
 }) => {
   const isMine = message.clientId === clientId;
+  const isTouchDevice = useIsTouchDevice();
   const [mediaError, setMediaError] = React.useState(false);
   const [signedMediaUrl, setSignedMediaUrl] = React.useState<string | null>(null);
   const mediaRetryCountRef = React.useRef(0);
@@ -359,6 +361,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                 size="sm"
                 delay={500}
                 classNames={tooltipClassNames}
+                isDisabled={isTouchDevice}
               >
                 <Button
                   isIconOnly
@@ -372,7 +375,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                   <Icon icon={copyStatus === 'success' ? "lucide:check" : "lucide:copy"} width={12} height={12}/>
                 </Button>
               </Tooltip>
-              <Tooltip content={t('replyToMessage')} placement="top" size="sm" delay={500} classNames={tooltipClassNames}>
+              <Tooltip content={t('replyToMessage')} placement="top" size="sm" delay={500} classNames={tooltipClassNames} isDisabled={isTouchDevice}>
                 <Button
                   isIconOnly
                   size="sm"
@@ -386,7 +389,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                 </Button>
               </Tooltip>
               {canEditMessage && (
-                <Tooltip content={t('editMessage')} placement="top" size="sm" delay={500} classNames={tooltipClassNames}>
+                <Tooltip content={t('editMessage')} placement="top" size="sm" delay={500} classNames={tooltipClassNames} isDisabled={isTouchDevice}>
                   <Button
                     isIconOnly
                     size="sm"
@@ -400,7 +403,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                 </Tooltip>
               )}
               {canDeleteMessage && (
-                <Tooltip content={t('deleteMessage')} placement="top" size="sm" delay={500} classNames={tooltipClassNames}>
+                <Tooltip content={t('deleteMessage')} placement="top" size="sm" delay={500} classNames={tooltipClassNames} isDisabled={isTouchDevice}>
                   <Button
                     isIconOnly
                     size="sm"
@@ -415,7 +418,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
               )}
               {/* 刷新按钮 - 仅对AI消息显示 */}
               {isAI && !isStreaming && onRefreshAI && (
-                <Tooltip content={t('retry')} placement="top" size="sm" delay={500} classNames={tooltipClassNames}>
+                <Tooltip content={t('retry')} placement="top" size="sm" delay={500} classNames={tooltipClassNames} isDisabled={isTouchDevice}>
                   <Button
                     isIconOnly
                     size="sm"

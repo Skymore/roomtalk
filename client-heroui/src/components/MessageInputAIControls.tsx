@@ -10,11 +10,11 @@ import {
   SelectItem,
   Tab,
   Tabs,
-  Tooltip,
 } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 import { AIRoleManager } from './AIRoleManager';
+import { HoverTooltip } from './HoverTooltip';
 import { AIModelOption, formatModelPrice, getProviderLabel, isPremiumAIModel } from '../utils/aiModels';
 import { AIRole, getAIRoleDisplayName } from '../utils/aiRoles';
 
@@ -296,7 +296,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
         </div>
 
         <div className="flex flex-shrink-0 justify-end gap-1 sm:gap-2">
-          <Tooltip content={`${t('askAI')} (${isMacOS ? 'Command' : 'Ctrl'}+Enter)`} placement="top">
+          <HoverTooltip content={`${t('askAI')} (${isMacOS ? 'Command' : 'Ctrl'}+Enter)`} placement="top">
             <Button
               color={selectedRole.color}
               size="sm"
@@ -316,9 +316,9 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                 />
               )}
             </Button>
-          </Tooltip>
+          </HoverTooltip>
 
-          <Tooltip content={`${t('send')} (Enter)`} placement="top">
+          <HoverTooltip content={`${t('send')} (Enter)`} placement="top">
             <Button
               type="button"
               onClick={onSend}
@@ -339,7 +339,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                 />
               )}
             </Button>
-          </Tooltip>
+          </HoverTooltip>
         </div>
       </div>
 

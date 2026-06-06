@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Modal, ModalContent, ModalBody, ModalFooter, Button, Card, Tooltip } from '@heroui/react';
+import { Modal, ModalContent, ModalBody, ModalFooter, Button, Card } from '@heroui/react';
 import { Icon } from '@iconify/react';
+import { HoverTooltip } from './HoverTooltip';
 import { Room } from '../utils/types';
 import { useTranslation } from 'react-i18next';
 import { formatDate } from '../utils/formatters';
@@ -113,7 +114,7 @@ export const SavedRoomList: React.FC<SavedRoomListProps> = ({
                 </div>
               </button>
               <div className="ml-2 flex flex-shrink-0 items-center gap-1">
-                    <Tooltip content={t('unsave')}>
+                    <HoverTooltip content={t('unsave')}>
                       <Button
                         size="sm"
                         variant="light"
@@ -125,7 +126,7 @@ export const SavedRoomList: React.FC<SavedRoomListProps> = ({
                       >
                         {t('unsave')}
                       </Button>
-                    </Tooltip>
+                    </HoverTooltip>
               </div>
             </div>
           </Card>

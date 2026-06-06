@@ -15,6 +15,7 @@ import { useTranslation } from "react-i18next";
 import { Room, RoomOnlineMember, RoomPermissions, RoomRenameHandler } from "../utils/types";
 import { getRoomMembers } from "../utils/socket";
 import { RoomSettingsModal } from './RoomSettingsModal';
+import { useIsTouchDevice } from "../hooks/useIsTouchDevice";
 
 interface ChatHeaderProps {
   currentRoom: Room;
@@ -52,6 +53,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   clientId
 }) => {
   const { t } = useTranslation();
+  const isTouchDevice = useIsTouchDevice();
   const isSaved = isRoomSaved(currentRoom.id);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [onlineMembers, setOnlineMembers] = useState<RoomOnlineMember[]>([]);
@@ -149,7 +151,11 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               )}
             </PopoverContent>
           </Popover>
-          <Tooltip content={copiedRoomId ? t('copied') : t('clickToCopyRoomId')} isOpen={copiedRoomId ? true : undefined}>
+          <Tooltip
+            content={copiedRoomId ? t('copied') : t('clickToCopyRoomId')}
+            isOpen={copiedRoomId ? true : undefined}
+            isDisabled={isTouchDevice && !copiedRoomId}
+          >
             <div
               role="button"
               tabIndex={0}
