@@ -653,8 +653,9 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
         size="lg"
         scrollBehavior="inside"
         placement="auto"
+        classNames={{ wrapper: 'roomtalk-modal-viewport' }}
       >
-        <ModalContent className="m-0 h-[88dvh] max-h-[88dvh] w-full max-w-full rounded-b-none sm:mx-6 sm:my-16 sm:h-[560px] sm:max-h-[85dvh] sm:max-w-lg sm:rounded-large">
+        <ModalContent className="m-0 h-[88dvh] max-h-full w-full max-w-full rounded-b-none sm:mx-6 sm:my-16 sm:h-[560px] sm:max-h-[85dvh] sm:max-w-lg sm:rounded-large">
           <ModalHeader className="flex items-center gap-3">
             <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-[#c96442]/12 text-[#c96442] dark:bg-[#c96442]/20 dark:text-[#e08a6a]">
               <Icon icon="lucide:settings-2" className="h-5 w-5" aria-hidden="true" />
@@ -708,6 +709,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
           if (!isSaving) setIsClearConfirmOpen(false);
         }}
         size="sm"
+        classNames={{ wrapper: 'roomtalk-modal-viewport' }}
       >
         <ModalContent>
           <ModalHeader className="flex items-center gap-2 text-danger-600 dark:text-danger-400">
@@ -748,6 +750,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
           if (!isSaving) setIsDeleteConfirmOpen(false);
         }}
         size="sm"
+        classNames={{ wrapper: 'roomtalk-modal-viewport' }}
       >
         <ModalContent>
           <ModalHeader className="flex items-center gap-2 text-danger-600 dark:text-danger-400">
@@ -787,6 +790,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
           if (!isSaving) setPendingTransfer(null);
         }}
         size="sm"
+        classNames={{ wrapper: 'roomtalk-modal-viewport' }}
       >
         <ModalContent>
           <ModalHeader className="flex items-center gap-2 text-danger-600 dark:text-danger-400">

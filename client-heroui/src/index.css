@@ -87,6 +87,16 @@ body {
   padding-bottom: 0;
 }
 
+/* Pin the modal/bottom-sheet wrapper to the visible viewport so the on-screen
+   keyboard shrinks the sheet (engaging its internal scroll) instead of pushing
+   it off the top of the page. Tracks visualViewport via JS-managed CSS vars. */
+.roomtalk-modal-viewport {
+  top: var(--app-viewport-top, 0px) !important;
+  bottom: auto !important;
+  height: var(--app-height, 100dvh) !important;
+  max-height: var(--app-height, 100dvh) !important;
+}
+
 .roomtalk-ring {
   box-shadow: 0 0 0 1px rgba(194, 192, 182, 0.82), 0 10px 24px rgba(20, 20, 19, 0.05);
 }
