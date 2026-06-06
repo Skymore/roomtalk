@@ -50,6 +50,7 @@ describe('MessageItem replies', () => {
     render(
       <MessageItem
         message={message}
+        roomPermissions={null}
         onStartEdit={vi.fn()}
         onDeleteMessage={vi.fn()}
         onReply={onReply}
@@ -63,10 +64,50 @@ describe('MessageItem replies', () => {
     expect(onReply).toHaveBeenCalledWith(message);
   });
 
+  it('hides edit and delete actions unless the viewer owns the message or can manage all messages', () => {
+    const { rerender } = render(
+      <MessageItem
+        message={message}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByLabelText('editMessage')).toBeNull();
+    expect(screen.queryByLabelText('deleteMessage')).toBeNull();
+
+    rerender(
+      <MessageItem
+        message={message}
+        roomPermissions={{
+          roomId: 'room-1',
+          clientId: 'viewer',
+          role: 'owner',
+          canPost: true,
+          canEditAnyMessage: true,
+          canDeleteAnyMessage: true,
+          canClearHistory: true,
+          canManageRoom: true,
+          canManageAdmins: true,
+          canTransferOwnership: true,
+        }}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    expect(screen.getByLabelText('editMessage')).toBeTruthy();
+    expect(screen.getByLabelText('deleteMessage')).toBeTruthy();
+  });
+
   it('shows optimistic pending and failed delivery states', () => {
     const { rerender } = render(
       <MessageItem
         message={{ ...message, clientId: 'viewer', deliveryStatus: 'pending' }}
+        roomPermissions={null}
         onStartEdit={vi.fn()}
         onDeleteMessage={vi.fn()}
         onReply={vi.fn()}
@@ -83,6 +124,7 @@ describe('MessageItem replies', () => {
           deliveryStatus: 'failed',
           deliveryError: 'network down',
         }}
+        roomPermissions={null}
         onStartEdit={vi.fn()}
         onDeleteMessage={vi.fn()}
         onReply={vi.fn()}
@@ -115,6 +157,7 @@ describe('MessageItem replies', () => {
             height: 20,
           },
         }}
+        roomPermissions={null}
         onStartEdit={vi.fn()}
         onDeleteMessage={vi.fn()}
         onReply={vi.fn()}
@@ -152,6 +195,7 @@ describe('MessageItem replies', () => {
             durationMs: 1200,
           },
         }}
+        roomPermissions={null}
         onStartEdit={vi.fn()}
         onDeleteMessage={vi.fn()}
         onReply={vi.fn()}

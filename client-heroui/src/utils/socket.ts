@@ -1,6 +1,16 @@
 import { default as io } from 'socket.io-client';
 import { v4 as uuidv4 } from 'uuid';
-import { MediaKind, Message, Room, RoomMemberEvent, RoomOnlineMember } from './types';
+import {
+  MediaKind,
+  Message,
+  Room,
+  RoomClientLookup,
+  RoomMemberEvent,
+  RoomOnlineMember,
+  RoomPermissions,
+  RoomPostingSchedule,
+  RoomRoleMember,
+} from './types';
 import { Socket } from 'socket.io-client';
 
 // Get client ID from local storage or create a new one
@@ -22,6 +32,7 @@ const roomMemberChangeCallbacks: ((event: RoomMemberEvent) => void)[] = [];
 
 // Store current active room to rejoin after reconnection
 let activeRoomId: string | null = null;
+let activeRoomPassword: string | null = null;
 // Store the latest username so it can be re-sent on every (re)connection
 let currentUsername = '';
 const SEND_MESSAGE_ACK_TIMEOUT_MS = 15000;
@@ -52,6 +63,22 @@ type RoomListAckResponse = SocketAckResponse & {
   rooms?: Room[];
 };
 
+type JoinRoomAckResponse = RoomAckResponse & {
+  permissions?: RoomPermissions;
+};
+
+type RoomPermissionsAckResponse = SocketAckResponse & {
+  permissions?: RoomPermissions;
+};
+
+type RoomRoleMembersAckResponse = SocketAckResponse & {
+  members?: RoomRoleMember[];
+};
+
+type RoomClientLookupAckResponse = SocketAckResponse & {
+  client?: RoomClientLookup;
+};
+
 // Get current member count for a room
 export const getRoomMemberCount = (roomId: string): number | null => {
   return roomMemberCounts.get(roomId) ?? null;
@@ -74,6 +101,29 @@ export const getRoomMembers = (roomId: string): Promise<RoomOnlineMember[]> => {
     'Timed out while getting room members',
     'Failed to get room members',
   ).then((response) => response.members || []);
+};
+
+export const getRoomRoleMembers = (roomId: string): Promise<RoomRoleMember[]> => {
+  return emitWithAck<RoomRoleMembersAckResponse>(
+    'get_room_role_members',
+    { roomId },
+    'Timed out while getting room administrators',
+    'Failed to get room administrators',
+  ).then((response) => response.members || []);
+};
+
+export const lookupRoomClient = (roomId: string, targetClientId: string): Promise<RoomClientLookup> => {
+  return emitWithAck<RoomClientLookupAckResponse>(
+    'lookup_room_client',
+    { roomId, targetClientId },
+    'Timed out while checking user',
+    'Failed to check user',
+  ).then((response) => {
+    if (!response.client) {
+      throw new Error('Server did not return user details');
+    }
+    return response.client;
+  });
 };
 
 // Create and configure Socket connection
@@ -102,7 +152,7 @@ const createSocketConnection = (): typeof Socket => {
     // 重新加入之前的活动房间
     if (activeRoomId) {
       console.log('Rejoining active room after reconnection:', activeRoomId);
-      socket.emit('join_room', activeRoomId);
+      socket.emit('join_room', { roomId: activeRoomId, password: activeRoomPassword || undefined });
     }
   });
   
@@ -236,23 +286,41 @@ const emitWithAck = <TResponse extends SocketAckResponse>(
 }));
 
 // Join a chat room
-export const joinRoom = (roomId: string) => {
-  activeRoomId = roomId; // 记录当前活动房间ID，用于重连后重新加入
-  socket.emit('join_room', roomId);
+export const joinRoom = (roomId: string, password?: string): Promise<{ room?: Room; permissions?: RoomPermissions }> => {
+  const previousRoomId = activeRoomId;
+  const previousRoomPassword = activeRoomPassword;
+  return emitWithAck<JoinRoomAckResponse>(
+    'join_room',
+    { roomId, password },
+    'Timed out while joining room',
+    'Failed to join room',
+  ).then((response) => ({
+    room: response.room,
+    permissions: response.permissions,
+  })).then((result) => {
+    activeRoomId = roomId; // 记录当前活动房间ID，用于重连后重新加入
+    activeRoomPassword = password || null;
+    return result;
+  }).catch((error) => {
+    activeRoomId = previousRoomId;
+    activeRoomPassword = previousRoomPassword;
+    throw error;
+  });
 };
 
 // Leave a chat room
 export const leaveRoom = (roomId: string) => {
   if (activeRoomId === roomId) {
     activeRoomId = null; // 清除活动房间ID
+    activeRoomPassword = null;
   }
   socket.emit('leave_room', roomId);
 };
 
 // Create a new room
-export const createRoom = (roomName: string, description?: string) => {
+export const createRoom = (roomName: string, description?: string, password?: string, postingSchedule?: RoomPostingSchedule | null) => {
   return new Promise((resolve) => {
-    socket.emit('create_room', { name: roomName, description }, (roomId: string) => {
+    socket.emit('create_room', { name: roomName, description, password, postingSchedule }, (roomId: string) => {
       resolve(roomId);
     });
   });
@@ -302,6 +370,80 @@ export const getSavedRoomsFromServer = (): Promise<Room[]> => {
     'Timed out while getting saved rooms',
     'Failed to get saved rooms',
   ).then((response) => response.rooms || []);
+};
+
+export const getRoomPermissions = (roomId: string): Promise<RoomPermissions> => {
+  return emitWithAck<RoomPermissionsAckResponse>(
+    'get_room_permissions',
+    { roomId },
+    'Timed out while getting room permissions',
+    'Failed to get room permissions',
+  ).then((response) => {
+    if (!response.permissions) {
+      throw new Error('Server did not return room permissions');
+    }
+    return response.permissions;
+  });
+};
+
+export const clearRoomMessages = (roomId: string, confirmation: string): Promise<void> => {
+  return emitWithAck<SocketAckResponse>(
+    'clear_room_messages',
+    { roomId, confirmation },
+    'Timed out while clearing room history',
+    'Failed to clear room history',
+  ).then(() => undefined);
+};
+
+export const updateRoomSettings = (params: {
+  roomId: string;
+  password?: string;
+  clearPassword?: boolean;
+  postingSchedule?: RoomPostingSchedule | null;
+}): Promise<Room> => {
+  return emitWithAck<RoomAckResponse>(
+    'update_room_settings',
+    params,
+    'Timed out while updating room settings',
+    'Failed to update room settings',
+  ).then((response) => {
+    if (!response.room) {
+      throw new Error('Server did not return updated room');
+    }
+    return response.room;
+  });
+};
+
+export const setRoomAdmin = (roomId: string, targetClientId: string): Promise<void> => {
+  return emitWithAck<SocketAckResponse>(
+    'set_room_admin',
+    { roomId, targetClientId },
+    'Timed out while adding administrator',
+    'Failed to add administrator',
+  ).then(() => undefined);
+};
+
+export const removeRoomAdmin = (roomId: string, targetClientId: string): Promise<void> => {
+  return emitWithAck<SocketAckResponse>(
+    'remove_room_admin',
+    { roomId, targetClientId },
+    'Timed out while removing administrator',
+    'Failed to remove administrator',
+  ).then(() => undefined);
+};
+
+export const transferRoomOwnership = (roomId: string, targetClientId: string): Promise<Room> => {
+  return emitWithAck<RoomAckResponse>(
+    'transfer_room_ownership',
+    { roomId, targetClientId },
+    'Timed out while transferring ownership',
+    'Failed to transfer ownership',
+  ).then((response) => {
+    if (!response.room) {
+      throw new Error('Server did not return updated room');
+    }
+    return response.room;
+  });
 };
 
 // Send message to a specific room

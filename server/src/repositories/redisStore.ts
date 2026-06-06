@@ -2,7 +2,7 @@ import { customAlphabet } from 'nanoid';
 import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
 import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember } from '../types';
-import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, MediaMessageAppendResult, RoomMessageCacheStore, RoomMessagePageOptions, RoomStore } from './store';
+import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, MediaMessageAppendResult, RoomMessageCacheStore, RoomMessagePageOptions, RoomSettingsUpdate, RoomStore } from './store';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 const DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS = 30;
@@ -13,6 +13,7 @@ const CLIENT_NICKNAMES_KEY = 'client:nicknames';
 const getRoomMediaAssetsKey = (roomId: string) => `room:${roomId}:media_assets`;
 const getSavedRoomsKey = (clientId: string) => `user:${clientId}:saved_rooms`;
 const getRoomSavedByKey = (roomId: string) => `room:${roomId}:saved_by`;
+const getRoomPasswordHashKey = (roomId: string) => `room:${roomId}:password_hash`;
 
 const toMessageMediaAsset = (asset: MediaAsset): MessageMediaAsset => {
   const messageAsset: MessageMediaAsset = {
@@ -1079,6 +1080,108 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
+  async readRoomPasswordHash(roomId: string): Promise<string | null> {
+    try {
+      return await this.redisClient.get(getRoomPasswordHashKey(roomId));
+    } catch (error) {
+      this.logger.error('Error reading Redis room password hash', { error, roomId });
+      return null;
+    }
+  }
+
+  async updateRoomSettings(roomId: string, updates: RoomSettingsUpdate): Promise<Room | null> {
+    try {
+      const room = await this.getRoomById(roomId);
+      if (!room) {
+        return null;
+      }
+
+      const updatedRoom: Room = { ...room };
+      if (Object.prototype.hasOwnProperty.call(updates, 'passwordHash')) {
+        if (updates.passwordHash) {
+          await this.redisClient.set(getRoomPasswordHashKey(roomId), updates.passwordHash);
+          updatedRoom.hasPassword = true;
+        } else {
+          await this.redisClient.del(getRoomPasswordHashKey(roomId));
+          delete updatedRoom.hasPassword;
+        }
+      }
+
+      if (Object.prototype.hasOwnProperty.call(updates, 'postingSchedule')) {
+        if (updates.postingSchedule) {
+          updatedRoom.postingSchedule = updates.postingSchedule;
+        } else {
+          delete updatedRoom.postingSchedule;
+        }
+      }
+
+      await this.redisClient.hSet('rooms', roomId, JSON.stringify(updatedRoom));
+      return updatedRoom;
+    } catch (error) {
+      this.logger.error('Error updating Redis room settings', { error, roomId });
+      return null;
+    }
+  }
+
+  async updateRoomMemberRole(roomId: string, clientId: string, role: RoomMemberRole, joinedAt = new Date().toISOString()): Promise<RoomMember | null> {
+    try {
+      const room = await this.getRoomById(roomId);
+      if (!room) {
+        return null;
+      }
+
+      const existing = await this.getRoomMember(roomId, clientId);
+      const member: RoomMember = {
+        roomId,
+        clientId,
+        role,
+        joinedAt: existing?.joinedAt || joinedAt,
+      };
+      await this.redisClient.hSet(getPersistentRoomMembersKey(roomId), clientId, JSON.stringify(member));
+      return member;
+    } catch (error) {
+      this.logger.error('Error updating Redis room member role', { error, roomId, clientId, role });
+      return null;
+    }
+  }
+
+  async transferRoomOwnership(
+    roomId: string,
+    newOwnerClientId: string,
+    previousOwnerRole: Exclude<RoomMemberRole, 'owner'> = 'admin',
+  ): Promise<Room | null> {
+    try {
+      const room = await this.getRoomById(roomId);
+      if (!room) {
+        return null;
+      }
+
+      const previousOwnerId = room.creatorId;
+      const members = await this.readRoomMembers(roomId);
+      await Promise.all(members.map(member => {
+        if (member.role !== 'owner' || member.clientId === newOwnerClientId) {
+          return Promise.resolve();
+        }
+        return this.updateRoomMemberRole(roomId, member.clientId, previousOwnerRole, member.joinedAt);
+      }));
+      await this.updateRoomMemberRole(roomId, newOwnerClientId, 'owner');
+
+      const updatedRoom: Room = {
+        ...room,
+        creatorId: newOwnerClientId,
+      };
+      await Promise.all([
+        this.redisClient.hSet('rooms', roomId, JSON.stringify(updatedRoom)),
+        this.redisClient.sRem(`user:${previousOwnerId}:rooms`, roomId),
+        this.redisClient.sAdd(`user:${newOwnerClientId}:rooms`, roomId),
+      ]);
+      return updatedRoom;
+    } catch (error) {
+      this.logger.error('Error transferring Redis room ownership', { error, roomId, newOwnerClientId });
+      return null;
+    }
+  }
+
   async readRoomsByUser(clientId: string): Promise<Room[]> {
     try {
       const roomIds = await this.redisClient.hKeys('rooms');
@@ -1391,6 +1494,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         this.redisClient.del(`room:${roomId}:messages`),
         this.redisClient.del(this.getRoomMessagesCacheKey(roomId)),
         this.redisClient.del(this.getRoomAICostKey(roomId)),
+        this.redisClient.del(getRoomPasswordHashKey(roomId)),
         this.redisClient.del(`room:${roomId}:members`),
         this.redisClient.del(getPersistentRoomMembersKey(roomId)),
         this.redisClient.del(getRoomMediaAssetsKey(roomId)),

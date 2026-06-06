@@ -5,7 +5,24 @@ import {
 } from '../services/messageDomain';
 import { Message } from '../types';
 import { hasRoomAccess } from './roomAccess';
+import { authorizeRoomAction, getRoomMessage } from './roomAuthorization';
 import { SocketConnectionContext } from './types';
+
+const parseClearRoomPayload = (payload: unknown): { roomId: string | null; confirmation?: string } => {
+  if (typeof payload === 'string') {
+    return { roomId: payload };
+  }
+
+  if (payload && typeof payload === 'object') {
+    const data = payload as { roomId?: unknown; confirmation?: unknown };
+    return {
+      roomId: typeof data.roomId === 'string' ? data.roomId : null,
+      confirmation: typeof data.confirmation === 'string' ? data.confirmation : undefined,
+    };
+  }
+
+  return { roomId: null };
+};
 
 export function registerMessageHandlers({ io, socket, store, socketLogger }: SocketConnectionContext) {
   socket.on('get_room_messages', async (request: { roomId: string; beforeMessageId?: string; limit?: number }) => {
@@ -67,6 +84,17 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       socketLogger.warn('Client tried to send message without room access', { socketId: socket.id, clientId, roomId: messageData.roomId });
       socket.emit('error', { message: 'You are not authorized to access this room' });
       callback?.({ success: false, error: 'You are not authorized to access this room' });
+      return;
+    }
+
+    const postAuth = await authorizeRoomAction({
+      store,
+      roomId: messageData.roomId,
+      clientId,
+      action: { type: 'message.post' },
+    });
+    if (!postAuth.ok) {
+      callback?.({ success: false, error: postAuth.message });
       return;
     }
 
@@ -133,6 +161,21 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       return callback?.({ success: false, error: 'You are not authorized to access this room' });
     }
 
+    const targetMessage = await getRoomMessage(store, data.roomId, data.messageId);
+    if (!targetMessage) {
+      return callback?.({ success: false, error: 'Message not found' });
+    }
+
+    const auth = await authorizeRoomAction({
+      store,
+      roomId: data.roomId,
+      clientId,
+      action: { type: 'message.edit', message: targetMessage },
+    });
+    if (!auth.ok) {
+      return callback?.({ success: false, error: auth.message });
+    }
+
     socketLogger.info('Received edit message request', { ...data, editorClientId: clientId });
 
     try {
@@ -171,6 +214,22 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       return callback?.({ success: false, error: 'You are not authorized to access this room' });
     }
 
+    const targetMessage = await getRoomMessage(store, data.roomId, data.messageId);
+    if (!targetMessage) {
+      socketLogger.warn('Attempted to delete message not found', { ...data, deleterClientId: clientId });
+      return callback?.({ success: true });
+    }
+
+    const auth = await authorizeRoomAction({
+      store,
+      roomId: data.roomId,
+      clientId,
+      action: { type: 'message.delete', message: targetMessage },
+    });
+    if (!auth.ok) {
+      return callback?.({ success: false, error: auth.message });
+    }
+
     socketLogger.info('Received delete message request', { ...data, deleterClientId: clientId });
 
     try {
@@ -196,23 +255,33 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
     }
   });
 
-  socket.on('clear_room_messages', async (roomId: string) => {
+  socket.on('clear_room_messages', async (payload: unknown, callback?: (response: { success: boolean; error?: string }) => void) => {
+    const { roomId, confirmation } = parseClearRoomPayload(payload);
     const clientId = await store.getClientId(socket.id);
     if (!clientId) {
       socketLogger.warn('Unregistered client tried to clear messages', { socketId: socket.id, roomId });
       socket.emit('error', { message: 'You are not registered' });
+      callback?.({ success: false, error: 'You are not registered' });
       return;
     }
 
     if (!roomId) {
       socketLogger.warn('Client tried to clear messages without room ID', { socketId: socket.id, clientId });
       socket.emit('error', { message: 'Room ID is required' });
+      callback?.({ success: false, error: 'Room ID is required' });
       return;
     }
 
-    if (!(await hasRoomAccess(store, roomId, clientId))) {
-      socketLogger.warn('Client tried to clear messages without room access', { socketId: socket.id, clientId, roomId });
-      socket.emit('error', { message: 'You are not authorized to access this room' });
+    const auth = await authorizeRoomAction({
+      store,
+      roomId,
+      clientId,
+      action: { type: 'room.clearHistory', confirmation },
+    });
+    if (!auth.ok) {
+      socketLogger.warn('Client tried to clear messages without owner permission or confirmation', { socketId: socket.id, clientId, roomId, code: auth.code });
+      socket.emit('error', { message: auth.message });
+      callback?.({ success: false, error: auth.message });
       return;
     }
 
@@ -226,9 +295,11 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
 
       io.to(roomId).emit('messages_cleared', roomId);
       io.to(roomId).emit('ai_cost_total', await store.readRoomAICost(roomId));
+      callback?.({ success: true });
     } catch (error) {
       socketLogger.error('Error clearing room messages from store', { error, socketId: socket.id, clientId, roomId });
       socket.emit('error', { message: 'Failed to clear room messages' });
+      callback?.({ success: false, error: 'Failed to clear room messages' });
     }
   });
 }

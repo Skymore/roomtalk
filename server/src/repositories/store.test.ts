@@ -56,6 +56,18 @@ const durableRoomAccessStubs = () => ({
   async readRoomMembers(roomId: string) {
     return [{ roomId, clientId: 'client-1', role: 'owner' as const, joinedAt: '2026-05-03T00:00:00.000Z' }];
   },
+  async readRoomPasswordHash() {
+    return null;
+  },
+  async updateRoomSettings() {
+    return room();
+  },
+  async updateRoomMemberRole(roomId: string, clientId: string, role: RoomMemberRole, joinedAt = '2026-05-03T00:00:00.000Z') {
+    return { roomId, clientId, role, joinedAt };
+  },
+  async transferRoomOwnership(_roomId: string, newOwnerClientId: string) {
+    return room({ creatorId: newOwnerClientId });
+  },
   async saveRoomForUser() {
     return room();
   },
@@ -204,6 +216,10 @@ describe('CompositeRoomStore', () => {
       async getRoomMember(roomId: string, clientId: string) { calls.push('durable.getRoomMember'); return { roomId, clientId, role: 'member' as const, joinedAt: '2026-05-03T00:00:00.000Z' }; },
       async isRoomMember(_roomId: string, _clientId: string) { calls.push('durable.isRoomMember'); return true; },
       async readRoomMembers(roomId: string) { calls.push('durable.readRoomMembers'); return [{ roomId, clientId: 'client-1', role: 'owner' as const, joinedAt: '2026-05-03T00:00:00.000Z' }]; },
+      async readRoomPasswordHash(_roomId: string) { calls.push('durable.readRoomPasswordHash'); return 'hash'; },
+      async updateRoomSettings(_roomId: string) { calls.push('durable.updateRoomSettings'); return room({ hasPassword: true }); },
+      async updateRoomMemberRole(roomId: string, clientId: string, role: RoomMemberRole, joinedAt = '2026-05-03T00:00:00.000Z') { calls.push('durable.updateRoomMemberRole'); return { roomId, clientId, role, joinedAt }; },
+      async transferRoomOwnership(_roomId: string, newOwnerClientId: string) { calls.push('durable.transferRoomOwnership'); return room({ creatorId: newOwnerClientId }); },
       async readRoomsByUser(_clientId: string) { calls.push('durable.readRoomsByUser'); return [room()]; },
       async saveRoomForUser(_roomId: string, _clientId: string) { calls.push('durable.saveRoomForUser'); return room(); },
       async removeSavedRoomForUser(_roomId: string, _clientId: string) { calls.push('durable.removeSavedRoomForUser'); return true; },
@@ -286,6 +302,10 @@ describe('CompositeRoomStore', () => {
     assert.deepEqual(await store.getRoomMember('room-1', 'client-2'), { roomId: 'room-1', clientId: 'client-2', role: 'member', joinedAt: '2026-05-03T00:00:00.000Z' });
     assert.equal(await store.isRoomMember('room-1', 'client-2'), true);
     assert.deepEqual(await store.readRoomMembers('room-1'), [{ roomId: 'room-1', clientId: 'client-1', role: 'owner', joinedAt: '2026-05-03T00:00:00.000Z' }]);
+    assert.equal(await store.readRoomPasswordHash('room-1'), 'hash');
+    assert.deepEqual(await store.updateRoomSettings('room-1', { passwordHash: 'hash' }), room({ hasPassword: true }));
+    assert.deepEqual(await store.updateRoomMemberRole('room-1', 'client-2', 'admin'), { roomId: 'room-1', clientId: 'client-2', role: 'admin', joinedAt: '2026-05-03T00:00:00.000Z' });
+    assert.deepEqual(await store.transferRoomOwnership('room-1', 'client-2'), room({ creatorId: 'client-2' }));
     assert.deepEqual(await store.readRoomsByUser('client-1'), [room()]);
     assert.deepEqual(await store.saveRoomForUser('room-1', 'client-2'), room());
     assert.equal(await store.removeSavedRoomForUser('room-1', 'client-2'), true);
@@ -337,6 +357,10 @@ describe('CompositeRoomStore', () => {
       'durable.getRoomMember',
       'durable.isRoomMember',
       'durable.readRoomMembers',
+      'durable.readRoomPasswordHash',
+      'durable.updateRoomSettings',
+      'durable.updateRoomMemberRole',
+      'durable.transferRoomOwnership',
       'durable.readRoomsByUser',
       'durable.saveRoomForUser',
       'durable.removeSavedRoomForUser',

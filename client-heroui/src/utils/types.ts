@@ -57,6 +57,36 @@ export interface Room {
   lastActivityAt?: string;
   creatorId: string;
   messageVersion?: number;
+  hasPassword?: boolean;
+  postingSchedule?: RoomPostingSchedule;
+}
+
+export type RoomMemberRole = 'owner' | 'admin' | 'member';
+
+export interface RoomPostingWindow {
+  days: number[];
+  start: string;
+  end: string;
+}
+
+export interface RoomPostingSchedule {
+  enabled: boolean;
+  timezone: string;
+  windows: RoomPostingWindow[];
+}
+
+export interface RoomPermissions {
+  roomId: string;
+  clientId: string;
+  role: RoomMemberRole | null;
+  canPost: boolean;
+  canEditAnyMessage: boolean;
+  canDeleteAnyMessage: boolean;
+  canClearHistory: boolean;
+  canManageRoom: boolean;
+  canManageAdmins: boolean;
+  canTransferOwnership: boolean;
+  postingRestrictionReason?: string;
 }
 
 export interface RoomMessageHistoryPayload {
@@ -91,6 +121,21 @@ export interface RoomMemberCount {
 export interface RoomOnlineMember {
   clientId: string;
   nickname?: string;
+}
+
+export interface RoomRoleMember {
+  roomId: string;
+  clientId: string;
+  role: RoomMemberRole;
+  joinedAt: string;
+  nickname?: string;
+}
+
+export interface RoomClientLookup {
+  clientId: string;
+  exists: boolean;
+  nickname?: string;
+  memberRole?: RoomMemberRole | null;
 }
 export interface AIChunkEvent {
   messageId: string;

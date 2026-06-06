@@ -7,6 +7,7 @@ import { RoomStore } from '../repositories/store';
 import { MediaAsset, MediaKind, Message, Room } from '../types';
 import { AIRoleDraft, MAX_AI_ROLE_IDEA_LENGTH } from '../services/aiRoleGenerator';
 import { hasRoomAccess } from '../socket/roomAccess';
+import { authorizeRoomAction } from '../socket/roomAuthorization';
 import { createMediaMessage, createReplyReference } from '../services/messageDomain';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 
@@ -151,6 +152,16 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       return res.status(403).json({ error: 'Not authorized to access this room' });
     }
 
+    const postAuth = await authorizeRoomAction({
+      store,
+      roomId,
+      clientId,
+      action: { type: 'message.post' },
+    });
+    if (!postAuth.ok) {
+      return res.status(postAuth.code === 'posting_closed' ? 403 : 403).json({ error: postAuth.message });
+    }
+
     if (messageType && messageType !== 'text') {
       routeLogger.warn('Rejected media creation through text API', { endpoint: 'POST /api/rooms/:roomId/messages', clientId, roomId, messageType, ip: req.ip });
       return res.status(400).json({ error: 'Media messages must use the media upload API' });
@@ -197,6 +208,16 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     if (!(await hasRoomAccess(store, roomId, clientId))) {
       routeLogger.warn('Unauthorized media upload URL request', { endpoint: 'POST /api/media/uploads', clientId, roomId, kind, ip: req.ip });
       return res.status(403).json({ error: 'Not authorized to access this room' });
+    }
+
+    const postAuth = await authorizeRoomAction({
+      store,
+      roomId,
+      clientId,
+      action: { type: 'message.post' },
+    });
+    if (!postAuth.ok) {
+      return res.status(403).json({ error: postAuth.message });
     }
 
     if (!isAllowedMediaMimeType(kind, mimeType)) {
@@ -252,6 +273,16 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     if (!(await hasRoomAccess(store, roomId, clientId))) {
       routeLogger.warn('Unauthorized media upload completion', { endpoint: 'POST /api/media/uploads/:assetId/complete', clientId, roomId, assetId, kind, ip: req.ip });
       return res.status(403).json({ error: 'Not authorized to access this room' });
+    }
+
+    const postAuth = await authorizeRoomAction({
+      store,
+      roomId,
+      clientId,
+      action: { type: 'message.post' },
+    });
+    if (!postAuth.ok) {
+      return res.status(403).json({ error: postAuth.message });
     }
 
     if (!isAllowedMediaMimeType(kind, mimeType)) {

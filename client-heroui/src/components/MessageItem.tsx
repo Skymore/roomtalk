@@ -12,11 +12,12 @@ import {
 import { Icon } from "@iconify/react";
 import { clientId, getMediaDownloadUrl } from "../utils/socket";
 import { formatPercentage, formatTime, formatUsdCost } from "../utils/formatters";
-import { Message } from "../utils/types";
+import { Message, RoomPermissions } from "../utils/types";
 import { useTranslation } from "react-i18next";
 
 interface MessageItemProps {
   message: Message;
+  roomPermissions: RoomPermissions | null;
   onStartEdit: (messageId: string) => void;
   onDeleteMessage: (messageId: string) => void;
   onRefreshAI?: (messageId: string, content: string) => void;
@@ -67,6 +68,7 @@ async function copyImageToClipboard(imageSource: string): Promise<boolean> {
 
 const MessageItemComponent: React.FC<MessageItemProps> = ({
   message,
+  roomPermissions,
   onStartEdit,
   onDeleteMessage,
   onRefreshAI,
@@ -87,6 +89,8 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const isPending = message.deliveryStatus === 'pending';
   const isFailed = message.deliveryStatus === 'failed';
   const canBeEdited = isText || (message.messageType === 'ai' && message.status !== 'streaming');
+  const canEditMessage = canBeEdited && (isMine || Boolean(roomPermissions?.canEditAnyMessage));
+  const canDeleteMessage = isMine || Boolean(roomPermissions?.canDeleteAnyMessage);
   const { t, i18n } = useTranslation();
   const aiMetadataParts = isAI
     ? [
@@ -381,7 +385,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                   <Icon icon="lucide:reply" width={12} height={12}/>
                 </Button>
               </Tooltip>
-              {canBeEdited && (
+              {canEditMessage && (
                 <Tooltip content={t('editMessage')} placement="top" size="sm" delay={500} classNames={tooltipClassNames}>
                   <Button
                     isIconOnly
@@ -395,18 +399,20 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                   </Button>
                 </Tooltip>
               )}
-              <Tooltip content={t('deleteMessage')} placement="top" size="sm" delay={500} classNames={tooltipClassNames}>
-                <Button
-                  isIconOnly
-                  size="sm"
-                  variant="light"
-                  aria-label={t('deleteMessage')}
-                  className="h-5 w-5 min-w-0 text-danger-500"
-                  onPress={() => onDeleteMessage(message.id)}
-                >
-                  <Icon icon="lucide:trash-2" width={12} height={12}/>
-                </Button>
-              </Tooltip>
+              {canDeleteMessage && (
+                <Tooltip content={t('deleteMessage')} placement="top" size="sm" delay={500} classNames={tooltipClassNames}>
+                  <Button
+                    isIconOnly
+                    size="sm"
+                    variant="light"
+                    aria-label={t('deleteMessage')}
+                    className="h-5 w-5 min-w-0 text-danger-500"
+                    onPress={() => onDeleteMessage(message.id)}
+                  >
+                    <Icon icon="lucide:trash-2" width={12} height={12}/>
+                  </Button>
+                </Tooltip>
+              )}
               {/* 刷新按钮 - 仅对AI消息显示 */}
               {isAI && !isStreaming && onRefreshAI && (
                 <Tooltip content={t('retry')} placement="top" size="sm" delay={500} classNames={tooltipClassNames}>

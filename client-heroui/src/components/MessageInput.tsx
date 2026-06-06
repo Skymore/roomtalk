@@ -2,6 +2,9 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Button,
   Card,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
   useDisclosure,
 } from "@heroui/react";
 import { Icon } from '@iconify/react';
@@ -34,7 +37,7 @@ import {
   getKeyboardCompositionSnapshot,
   isConfirmingIMEComposition,
 } from '../utils/keyboardComposition';
-import { Message } from '../utils/types';
+import { Message, RoomPostingSchedule } from '../utils/types';
 
 interface MessageInputProps {
   roomId: string;
@@ -47,7 +50,12 @@ interface MessageInputProps {
   onOptimisticMessage?: (message: Message) => void;
   onOptimisticMessageSaved?: (clientMessageId: string, message: Message) => void;
   onOptimisticMessageFailed?: (clientMessageId: string, error?: string) => void;
+  canPost?: boolean;
+  postingRestrictionReason?: string;
+  postingSchedule?: RoomPostingSchedule;
 }
+
+const DAY_LABEL_KEYS = ['daySun', 'dayMon', 'dayTue', 'dayWed', 'dayThu', 'dayFri', 'daySat'];
 
 // 使用WeakMap存储图片元素和对应的File对象
 const imageFileMap = new WeakMap<HTMLImageElement, File>();
@@ -97,6 +105,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   onOptimisticMessage,
   onOptimisticMessageSaved,
   onOptimisticMessageFailed,
+  canPost = true,
+  postingSchedule,
 }) => {
   const { t } = useTranslation();
   const [_contentItems, setContentItems] = useState<MessageContentItem[]>(emptyMessageContent());
@@ -179,6 +189,21 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
   // 新增角色设置模态框的状态
   const { isOpen: isAISettingsOpen, onOpen: onAISettingsOpen, onClose: onAISettingsClose } = useDisclosure();
+  const postingClosedMessage = t('postingClosed');
+  const postingWindowRows = React.useMemo(() => (
+    postingSchedule?.enabled
+      ? postingSchedule.windows.map((window) => {
+          const days = window.days
+            .filter(day => day >= 0 && day < DAY_LABEL_KEYS.length)
+            .map(day => t(DAY_LABEL_KEYS[day]))
+            .join(', ');
+          return {
+            days,
+            time: `${window.start} - ${window.end}`,
+          };
+        })
+      : []
+  ), [postingSchedule, t]);
 
   const buildReplyReference = useCallback((message: Message | null): Message['replyTo'] => {
     if (!message) return undefined;
@@ -353,6 +378,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
   // 发送AI消息的新方法
   const handleAskAI = async () => {
+    if (!canPost) {
+      setErrorMessage(postingClosedMessage);
+      return;
+    }
+
     const latestContentItems = parseEditorContent();
 
     if (isSending || isAiProcessing) return;
@@ -410,6 +440,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
   // Handle regular message submission
   const handleSubmit = async () => {
+    if (!canPost) {
+      setErrorMessage(postingClosedMessage);
+      return;
+    }
+
     // Parse latest content (might be redundant if useEffect handles it well)
     const latestContentItems = parseEditorContent();
 
@@ -595,6 +630,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   }, [insertTranscriptIntoEditor]);
 
   const startVoiceRecording = useCallback(async (intent: VoiceRecordingIntent) => {
+    if (!canPost) {
+      setErrorMessage(postingClosedMessage);
+      return;
+    }
+
     if (isRecording || isSending) return;
 
     const sessionId = recordingSessionRef.current + 1;
@@ -732,7 +772,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       setVoiceWorkflow('choice');
       setErrorMessage(t('errorMicPermission'));
     }
-  }, [insertTranscriptIntoEditor, isRecording, isSending, resetVoiceDraft, stopVoiceRecording, t]);
+  }, [canPost, insertTranscriptIntoEditor, isRecording, isSending, postingClosedMessage, resetVoiceDraft, stopVoiceRecording, t]);
 
   const handleStopVoiceRecording = useCallback(() => {
     stopVoiceRecording(recordingIntentRef.current === 'voice' ? 'preview' : 'insert');
@@ -750,6 +790,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   }, [resetVoiceDraft, restoreEditorSnapshot]);
 
   const handleSendVoiceDraft = useCallback(async () => {
+    if (!canPost) {
+      setErrorMessage(postingClosedMessage);
+      return;
+    }
+
     if (!recordedVoiceBlob || isSending) return;
 
     setIsSending(true);
@@ -775,7 +820,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     } finally {
       setIsSending(false);
     }
-  }, [avatarColor, avatarText, isSending, onCancelReply, recordedVoiceBlob, recordedVoiceDuration, replyToMessage?.id, resetVoiceDraft, restoreEditorSnapshot, roomId, t, username]);
+  }, [avatarColor, avatarText, canPost, isSending, onCancelReply, postingClosedMessage, recordedVoiceBlob, recordedVoiceDuration, replyToMessage?.id, resetVoiceDraft, restoreEditorSnapshot, roomId, t, username]);
 
   // Release the mic stream / transcription session if unmounted mid-recording.
   useEffect(() => {
@@ -811,6 +856,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   }, [currentInputText, isRecording, resetVoiceDraft, restoreEditorSnapshot, stopVoiceRecording]);
 
   const sendVideoFile = async (file: File) => {
+    if (!canPost) {
+      setErrorMessage(postingClosedMessage);
+      return;
+    }
+
     if (isSending || isAiProcessing) return;
 
     setIsSending(true);
@@ -837,6 +887,14 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
   // 处理媒体上传
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!canPost) {
+      setErrorMessage(postingClosedMessage);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+      return;
+    }
+
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
@@ -1098,6 +1156,46 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
       <div className="w-full">
         <div className="flex flex-wrap items-center gap-1.5 overflow-hidden rounded-[1.45rem] border border-[#dedbd0] bg-[#faf9f5] px-1.5 py-1 shadow-[0_0_0_1px_rgba(194,192,182,0.35)] dark:border-[#30302e] dark:bg-[#2a2a28] sm:block sm:rounded-[1.65rem] sm:px-0 sm:py-0">
+          {!canPost && (
+            <Popover placement="top-start" showArrow>
+              <PopoverTrigger>
+                <button
+                  type="button"
+                  className="mx-1 flex basis-full items-center gap-1.5 rounded-full bg-[#e8e6dc] px-2.5 py-1 text-xs font-semibold text-[#5e5d59] outline-none transition-colors hover:bg-[#dedbd0] focus-visible:ring-2 focus-visible:ring-[#c96442] dark:bg-[#30302e] dark:text-[#d7d5cd] dark:hover:bg-[#3a3a37] sm:mx-3 sm:mt-2 sm:inline-flex"
+                >
+                  <Icon icon="lucide:clock-3" className="h-3.5 w-3.5 text-[#c96442]" />
+                  <span>{postingClosedMessage}</span>
+                  <Icon icon="lucide:chevron-up" className="h-3 w-3 opacity-70" />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className="max-w-[min(20rem,calc(100vw-2rem))] border border-[#dedbd0] bg-[#faf9f5] text-[#141413] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5]">
+                <div className="space-y-2 p-2 text-xs">
+                  <div className="flex items-center gap-1.5 font-semibold">
+                    <Icon icon="lucide:calendar-clock" className="h-3.5 w-3.5 text-[#c96442]" />
+                    {t('postingScheduleDetails')}
+                  </div>
+                  {postingWindowRows.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {postingWindowRows.map((window, index) => (
+                        <div key={`${window.days}-${window.time}-${index}`} className="rounded-md bg-[#f0eee6] px-2 py-1.5 dark:bg-[#2a2a28]">
+                          <div className="font-medium">{window.days}</div>
+                          <div className="text-[#5e5d59] dark:text-[#b0aea5]">{window.time}</div>
+                        </div>
+                      ))}
+                      {postingSchedule?.timezone && (
+                        <div className="text-[11px] text-[#87867f] dark:text-[#b0aea5]">
+                          {postingSchedule.timezone}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-[#87867f] dark:text-[#b0aea5]">{t('noPostingWindows')}</div>
+                  )}
+                </div>
+              </PopoverContent>
+            </Popover>
+          )}
+
           {replyToMessage && (
             <div className="mx-0 flex basis-full items-start gap-2 rounded-md border-l-2 border-[#c96442] bg-[#f0eee6] px-2.5 py-2 text-xs text-[#5e5d59] dark:bg-[#242421] dark:text-[#b0aea5] sm:mx-3 sm:mt-3">
               <div className="min-w-0 flex-1">
@@ -1126,7 +1224,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                       type="button"
                       className="h-11 rounded-xl bg-[#e8e6dc] px-2 text-sm font-medium text-[#4d4c48] shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e] dark:text-[#faf9f5]"
                       onPress={() => startVoiceRecording('voice')}
-                      isDisabled={isSending}
+                      isDisabled={isSending || !canPost}
                     >
                       <Icon icon="lucide:mic" className="mr-1 h-4 w-4" />
                       {t('recordVoice')}
@@ -1135,7 +1233,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                       type="button"
                       className="h-11 rounded-xl bg-[#30302e] px-2 text-sm font-medium text-[#faf9f5] shadow-[0_0_0_1px_rgba(48,48,46,0.85)] dark:bg-[#faf9f5] dark:text-[#141413]"
                       onPress={() => startVoiceRecording('transcript')}
-                      isDisabled={isSending}
+                      isDisabled={isSending || !canPost}
                     >
                       <Icon icon="lucide:captions" className="mr-1 h-4 w-4" />
                       {t('voiceToText')}
@@ -1201,7 +1299,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                         type="button"
                         className="h-10 rounded-xl bg-[#c96442] text-sm font-medium text-[#faf9f5] shadow-[0_0_0_1px_rgba(201,100,66,0.9)]"
                         onPress={handleSendVoiceDraft}
-                        isDisabled={isSending || !recordedVoiceBlob}
+                        isDisabled={isSending || !recordedVoiceBlob || !canPost}
                       >
                         <Icon icon="lucide:send" className="mr-1 h-4 w-4" />
                         {t('send')}
@@ -1224,7 +1322,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
             /* ===== Text mode: normal editor ===== */
             <div
               className="min-h-7 max-h-28 min-w-0 flex-1 overflow-y-auto px-2 py-0.5 text-base leading-5 text-[#141413] dark:text-[#faf9f5] sm:min-h-16 sm:max-h-36 sm:w-full sm:flex-none sm:px-4 sm:pb-2 sm:pt-4 sm:text-sm"
-              contentEditable={!isSending && !isAiProcessing}
+              contentEditable={!isSending && !isAiProcessing && canPost}
               onInput={parseEditorContent}
               onPaste={handlePaste}
               onKeyDown={handleKeyDown}
@@ -1250,7 +1348,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               aria-label={isVoiceMode ? t('keyboardInput') : t('voiceInput')}
               className="h-7 w-7 min-w-7 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
               onPress={handleToggleVoiceMode}
-              isDisabled={isSending || isAiProcessing}
+              isDisabled={isSending || isAiProcessing || !canPost}
             >
               <Icon icon={isVoiceMode ? 'lucide:keyboard' : 'lucide:mic'} className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
             </Button>
@@ -1265,7 +1363,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                   aria-label={t('uploadMedia')}
                   className="h-7 w-7 min-w-7 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
                   onPress={() => fileInputRef.current?.click()}
-                  isDisabled={isSending || isAiProcessing}
+                  isDisabled={isSending || isAiProcessing || !canPost}
                 >
                   <Icon icon="lucide:plus" className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
                 </Button>
@@ -1287,7 +1385,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               accept="image/*,video/*"
               multiple={true}
               onChange={handleImageUpload}
-              disabled={isSending || isAiProcessing}
+              disabled={isSending || isAiProcessing || !canPost}
             />
 
             {/* AI角色选择和发送按钮区 (text mode only) */}
@@ -1301,6 +1399,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                 defaultAIModel={defaultAIModel}
                 isSending={isSending}
                 isAiProcessing={isAiProcessing}
+                canPost={canPost}
                 isMacOS={isMacOS}
                 currentInputText={currentInputText}
                 imageCount={imageCount}
