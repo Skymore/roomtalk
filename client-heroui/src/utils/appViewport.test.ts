@@ -38,6 +38,7 @@ describe('installAppViewportSizing', () => {
   beforeEach(() => {
     document.documentElement.style.removeProperty('--app-height');
     document.documentElement.style.removeProperty('--app-viewport-top');
+    document.documentElement.classList.remove('roomtalk-keyboard-open');
 
     Object.defineProperty(window, 'innerHeight', {
       configurable: true,
@@ -54,6 +55,7 @@ describe('installAppViewportSizing', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     setVisualViewport(undefined);
+    document.body.replaceChildren();
   });
 
   it('uses visualViewport height and updates it on visual viewport resize', () => {
@@ -64,6 +66,7 @@ describe('installAppViewportSizing', () => {
 
     expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('640px');
     expect(document.documentElement.style.getPropertyValue('--app-viewport-top')).toBe('0px');
+    expect(document.documentElement.classList.contains('roomtalk-keyboard-open')).toBe(false);
 
     viewport.height = 420;
     viewport.offsetTop = 24;
@@ -71,6 +74,7 @@ describe('installAppViewportSizing', () => {
 
     expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('420px');
     expect(document.documentElement.style.getPropertyValue('--app-viewport-top')).toBe('24px');
+    expect(document.documentElement.classList.contains('roomtalk-keyboard-open')).toBe(false);
 
     cleanup();
 
@@ -80,6 +84,39 @@ describe('installAppViewportSizing', () => {
 
     expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('420px');
     expect(document.documentElement.style.getPropertyValue('--app-viewport-top')).toBe('24px');
+    expect(document.documentElement.classList.contains('roomtalk-keyboard-open')).toBe(false);
+  });
+
+  it('does not mark keyboard open for small browser chrome viewport changes', () => {
+    const viewport = createVisualViewport(720);
+    setVisualViewport(viewport);
+
+    const cleanup = installAppViewportSizing();
+
+    expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('720px');
+    expect(document.documentElement.classList.contains('roomtalk-keyboard-open')).toBe(false);
+
+    cleanup();
+  });
+
+  it('marks keyboard open only when an editable element is focused', () => {
+    const viewport = createVisualViewport(640);
+    setVisualViewport(viewport);
+    const input = document.createElement('input');
+    document.body.append(input);
+
+    const cleanup = installAppViewportSizing();
+
+    input.focus();
+    viewport.height = 420;
+    viewport.dispatch('resize');
+
+    expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('420px');
+    expect(document.documentElement.classList.contains('roomtalk-keyboard-open')).toBe(true);
+
+    cleanup();
+
+    expect(document.documentElement.classList.contains('roomtalk-keyboard-open')).toBe(false);
   });
 
   it('updates visualViewport top offset on mobile keyboard panning without changing height', () => {

@@ -18,7 +18,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({ view, setView, currentRoom
   return (
     <div
       data-testid="bottom-nav"
-      className="z-10 flex-shrink-0 border-t border-[#dedbd0] bg-[#faf9f5]/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/95 md:hidden"
+      className="mobile-bottom-nav z-10 flex-shrink-0 border-t border-[#dedbd0] bg-[#faf9f5]/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/95 md:hidden"
     >
       <div className="flex justify-center">
         <div className="flex h-10 w-full max-w-md items-center justify-between px-4">
