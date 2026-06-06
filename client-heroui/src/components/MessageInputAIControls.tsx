@@ -91,6 +91,7 @@ interface MessageInputAIControlsProps {
   defaultAIModel: string;
   isSending: boolean;
   isAiProcessing: boolean;
+  canPost: boolean;
   isMacOS: boolean;
   currentInputText: string;
   imageCount: number;
@@ -114,6 +115,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   defaultAIModel,
   isSending,
   isAiProcessing,
+  canPost,
   isMacOS,
   currentInputText,
   imageCount,
@@ -207,7 +209,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               offset: 8,
               containerPadding: 12,
             }}
-            isDisabled={isSending || isAiProcessing}
+            isDisabled={isSending || isAiProcessing || !canPost}
           >
             {roles.map((role) => (
               <SelectItem
@@ -242,7 +244,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               offset: 8,
               containerPadding: 12,
             }}
-            isDisabled={isSending || isAiProcessing}
+            isDisabled={isSending || isAiProcessing || !canPost}
             startContent={<Icon icon="lucide:brain-circuit" className="h-3.5 w-3.5 sm:h-4 sm:w-4" />}
             renderValue={() => (
               <span className="flex min-w-0 items-center gap-1.5">
@@ -299,13 +301,20 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               color={selectedRole.color}
               size="sm"
               onPress={onAskAI}
-              isLoading={isAiProcessing}
-              isDisabled={isSending}
+              isDisabled={isSending || isAiProcessing || !canPost}
               aria-label={t('askAI')}
-              className="!h-7 !w-7 !min-w-7 rounded-full bg-[#30302e] px-0 text-[#faf9f5] shadow-[0_0_0_1px_rgba(48,48,46,0.7)] dark:bg-[#faf9f5] dark:text-[#141413] dark:shadow-[0_0_0_1px_rgba(250,249,245,0.7)] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"
+              className="relative !h-7 !w-7 !min-w-7 overflow-hidden rounded-full bg-[#30302e] px-0 text-[#faf9f5] shadow-[0_0_0_1px_rgba(48,48,46,0.7)] dark:bg-[#faf9f5] dark:text-[#141413] dark:shadow-[0_0_0_1px_rgba(250,249,245,0.7)] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"
             >
-              <Icon icon={selectedRole.icon} className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-              <span className="hidden sm:inline">{t('askAI')}</span>
+              <span className={`flex items-center justify-center gap-1.5 ${isAiProcessing ? 'opacity-0' : 'opacity-100'}`}>
+                <Icon icon={selectedRole.icon} className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                <span className="hidden sm:inline">{t('askAI')}</span>
+              </span>
+              {isAiProcessing && (
+                <Icon
+                  icon="lucide:loader-circle"
+                  className="pointer-events-none absolute left-1/2 top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 animate-spin sm:h-4 sm:w-4"
+                />
+              )}
             </Button>
           </Tooltip>
 
@@ -315,13 +324,20 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               onClick={onSend}
               color="primary"
               size="sm"
-              isLoading={isSending}
-              isDisabled={isSending || isAiProcessing || (!currentInputText.trim() && imageCount === 0)}
+              isDisabled={isSending || isAiProcessing || !canPost || (!currentInputText.trim() && imageCount === 0)}
               aria-label={t('send')}
-              className="!h-7 !w-7 !min-w-7 rounded-full bg-[#c96442] px-0 text-[#faf9f5] shadow-[0_0_0_1px_rgba(201,100,66,0.7)] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"
+              className="relative !h-7 !w-7 !min-w-7 overflow-hidden rounded-full bg-[#c96442] px-0 text-[#faf9f5] shadow-[0_0_0_1px_rgba(201,100,66,0.7)] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"
             >
-              <Icon icon="lucide:arrow-up" className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-              <span className="hidden sm:inline">{t('send')}</span>
+              <span className={`flex items-center justify-center gap-1.5 ${isSending ? 'opacity-0' : 'opacity-100'}`}>
+                <Icon icon="lucide:arrow-up" className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                <span className="hidden sm:inline">{t('send')}</span>
+              </span>
+              {isSending && (
+                <Icon
+                  icon="lucide:loader-circle"
+                  className="pointer-events-none absolute left-1/2 top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 animate-spin sm:h-4 sm:w-4"
+                />
+              )}
             </Button>
           </Tooltip>
         </div>

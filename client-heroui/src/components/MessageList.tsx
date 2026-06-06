@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef, useCallback, useImperativeHandle } 
 import { Icon } from '@iconify/react';
 import { requestAIResponse, requestEditMessageAndAIResponse, socket } from '../utils/socket';
 import { MessageItem, preloadMarkdownContent } from './MessageItem';
-import { Message } from '../utils/types';
+import { Message, RoomPermissions } from '../utils/types';
 import { readMemoryRoomMessageWindow } from '../utils/messageHistoryCache';
 import { useTranslation } from 'react-i18next';
 import { getStoredAIModel } from '../utils/aiModels';
@@ -34,6 +34,7 @@ const LOAD_MORE_MESSAGE_COUNT = 80;
 interface MessageListProps {
   roomId: string;
   onReply: (message: Message) => void;
+  roomPermissions: RoomPermissions | null;
   bottomPaddingPx?: number;
   onScrollButtonVisibilityChange?: (isVisible: boolean) => void;
 }
@@ -48,6 +49,7 @@ export interface MessageListHandle {
 export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
   roomId,
   onReply,
+  roomPermissions,
   bottomPaddingPx = 16,
   onScrollButtonVisibilityChange,
 }, ref) => {
@@ -436,6 +438,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                     <MessageItem
                     key={message.id}
                     message={message}
+                    roomPermissions={roomPermissions}
                     onStartEdit={handleOpenEditModal}
                     onDeleteMessage={handleOpenDeleteModal}
                     onRefreshAI={handleRefreshAI}

@@ -23,7 +23,7 @@ import { buildRoomShareUrl, getRoomActivityAt, validateRoomName } from '../utils
 import { createRoom } from '../utils/socket';
 import { Room, RoomRenameHandler } from '../utils/types';
 import { getAvatarColor, getAvatarText } from '../utils/userProfile';
-import { RoomCreateModal } from './RoomCreateModal';
+import { RoomCreateModal, RoomCreateOptions } from './RoomCreateModal';
 import { RoomRenameModal } from './RoomRenameModal';
 
 interface DesktopSidebarProps {
@@ -315,7 +315,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
     setNameError(null);
   };
 
-  const handleCreateRoom = async () => {
+  const handleCreateRoom = async (options: RoomCreateOptions) => {
     const validation = validateRoomName(newRoomName);
 
     if (!validation.ok) {
@@ -326,7 +326,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
     setNameError(null);
     setIsCreating(true);
     try {
-      const roomId = await createRoom(validation.name, newRoomDescription);
+      const roomId = await createRoom(validation.name, newRoomDescription, options.password, options.postingSchedule);
       setNewRoomName('');
       setNewRoomDescription('');
       setIsCreateOpen(false);

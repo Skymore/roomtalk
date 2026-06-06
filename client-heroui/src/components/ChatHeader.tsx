@@ -1,10 +1,20 @@
-import React, { useState } from 'react';
-import { Button, Dropdown, DropdownTrigger, DropdownMenu, DropdownItem, Popover, PopoverTrigger, PopoverContent, Tooltip } from '@heroui/react';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  Button,
+  Dropdown,
+  DropdownTrigger,
+  DropdownMenu,
+  DropdownItem,
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+  Tooltip,
+} from '@heroui/react';
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
-import { Room, RoomOnlineMember, RoomRenameHandler } from "../utils/types";
+import { Room, RoomOnlineMember, RoomPermissions, RoomRenameHandler } from "../utils/types";
 import { getRoomMembers } from "../utils/socket";
-import { RoomRenameModal } from './RoomRenameModal';
+import { RoomSettingsModal } from './RoomSettingsModal';
 
 interface ChatHeaderProps {
   currentRoom: Room;
@@ -17,9 +27,10 @@ interface ChatHeaderProps {
   isRoomSaved: (roomId: string) => boolean;
   setView: (view: "chat" | "rooms" | "saved" | "settings") => void;
   clearRoomUrlParam: () => void;
-  handleClearChatMessages: () => void;
+  handleClearChatMessages: (confirmation: string) => unknown;
   handleDeleteRoom: (roomId: string) => void;
   handleRenameRoom: RoomRenameHandler;
+  roomPermissions: RoomPermissions | null;
   clientId: string;
 }
 
@@ -37,14 +48,28 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   handleClearChatMessages,
   handleDeleteRoom,
   handleRenameRoom,
+  roomPermissions,
   clientId
 }) => {
   const { t } = useTranslation();
   const isSaved = isRoomSaved(currentRoom.id);
-  const [isRenameOpen, setIsRenameOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [onlineMembers, setOnlineMembers] = useState<RoomOnlineMember[]>([]);
   const [isLoadingMembers, setIsLoadingMembers] = useState(false);
-  const canRename = currentRoom.creatorId === clientId;
+  const [copiedRoomId, setCopiedRoomId] = useState(false);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const canManageRoom = Boolean(roomPermissions?.canManageRoom);
+
+  useEffect(() => () => {
+    if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+  }, []);
+
+  const handleCopyRoomId = () => {
+    handleCopyToClipboard(currentRoom.id);
+    setCopiedRoomId(true);
+    if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    copyTimeoutRef.current = setTimeout(() => setCopiedRoomId(false), 2000);
+  };
 
   const handleMembersOpenChange = (isOpen: boolean) => {
     if (!isOpen) {
@@ -124,18 +149,31 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               )}
             </PopoverContent>
           </Popover>
-          <div
-            className="flex min-w-0 cursor-pointer items-center rounded-md px-1 text-xs text-[#5e5d59] transition-colors hover:bg-[#e8e6dc] dark:text-[#b0aea5] dark:hover:bg-[#30302e]"
-            onClick={() => handleCopyToClipboard(currentRoom.id)}
-          >
-            <Icon icon="lucide:hash" className="mr-1 flex-shrink-0" width={14} />
-            <Tooltip content={t("clickToCopyRoomId")}>
+          <Tooltip content={copiedRoomId ? t('copied') : t('clickToCopyRoomId')} isOpen={copiedRoomId ? true : undefined}>
+            <div
+              role="button"
+              tabIndex={0}
+              aria-label={t('clickToCopyRoomId')}
+              className="flex min-w-0 cursor-pointer items-center rounded-md px-1 text-xs text-[#5e5d59] transition-colors hover:bg-[#e8e6dc] dark:text-[#b0aea5] dark:hover:bg-[#30302e]"
+              onClick={handleCopyRoomId}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  handleCopyRoomId();
+                }
+              }}
+            >
+              <Icon icon="lucide:hash" className="mr-1 flex-shrink-0" width={14} />
               <span className="truncate">
                 {currentRoom.id.length > 10 ? `${currentRoom.id.substring(0, 8)}...` : currentRoom.id}
               </span>
-            </Tooltip>
-            <Icon icon="lucide:copy" className="ml-1 flex-shrink-0 text-[#87867f] dark:text-[#b0aea5]" width={12} />
-          </div>
+              <Icon
+                icon={copiedRoomId ? 'lucide:check' : 'lucide:copy'}
+                className={`ml-1 flex-shrink-0 transition-colors ${copiedRoomId ? 'text-[#3aa76d]' : 'text-[#87867f] dark:text-[#b0aea5]'}`}
+                width={12}
+              />
+            </div>
+          </Tooltip>
         </div>
       </div>
       <div className="flex flex-shrink-0 items-center gap-2">
@@ -162,15 +200,12 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             </Button>
           </DropdownTrigger>
           <DropdownMenu aria-label={t('ariaLabelRoomActions')}>
-            <DropdownItem key="copyId" startContent={<Icon icon="lucide:copy" />} onPress={() => handleCopyToClipboard(currentRoom.id)}>
-              {t('copyRoomIdAction')}
-            </DropdownItem>
             <DropdownItem key="share" startContent={<Icon icon="lucide:share-2" />} onPress={handleShareRoom}>
               {t('share')}
             </DropdownItem>
-            {canRename ? (
-              <DropdownItem key="renameRoom" startContent={<Icon icon="lucide:pencil" />} onPress={() => setIsRenameOpen(true)}>
-                {t('renameRoom')}
+            {canManageRoom ? (
+              <DropdownItem key="roomSettings" startContent={<Icon icon="lucide:settings-2" />} onPress={() => setIsSettingsOpen(true)}>
+                {t('settings')}
               </DropdownItem>
             ) : null}
             <DropdownItem
@@ -182,15 +217,6 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               {isSaved ? t('unsave') : t('saveAction')}
             </DropdownItem>
             <DropdownItem
-              key="clearChat"
-              className="text-danger"
-              color="danger"
-              startContent={<Icon icon="lucide:eraser" />}
-              onPress={handleClearChatMessages}
-            >
-              {t('clearChatHistory')}
-            </DropdownItem>
-            <DropdownItem
               key="leave"
               className="text-danger"
               color="danger"
@@ -199,32 +225,19 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             >
               {t('leave')}
             </DropdownItem>
-
-            {currentRoom.creatorId === clientId ? (
-              <DropdownItem key="deleteRoom" className="text-danger" color="danger" startContent={<Icon icon="lucide:trash-2" />} closeOnSelect={false}>
-                <Popover placement="left">
-                  <PopoverTrigger>
-                    <span>{t('deleteRoom')}</span>
-                  </PopoverTrigger>
-                  <PopoverContent className="p-2">
-                    <div className="text-sm font-medium mb-2">{t('confirmDeleteRoomTitle')}</div>
-                    <p className="mb-3 text-xs text-[#5e5d59] dark:text-[#b0aea5]">{t('confirmDeleteRoomDescription', { roomName: currentRoom.name })}</p>
-                    <Button size="sm" color="danger" onPress={() => handleDeleteRoom(currentRoom.id)} className="w-full">
-                      {t('delete')}
-                    </Button>
-                  </PopoverContent>
-                </Popover>
-              </DropdownItem>
-            ) : null}
           </DropdownMenu>
         </Dropdown>
       </div>
     </div>
-    <RoomRenameModal
-      isOpen={isRenameOpen}
+    <RoomSettingsModal
+      isOpen={isSettingsOpen}
       room={currentRoom}
-      onClose={() => setIsRenameOpen(false)}
-      onRename={handleRenameRoom}
+      roomPermissions={roomPermissions}
+      clientId={clientId}
+      onClose={() => setIsSettingsOpen(false)}
+      onRenameRoom={handleRenameRoom}
+      onClearHistory={handleClearChatMessages}
+      onDeleteRoom={handleDeleteRoom}
     />
     </>
   );

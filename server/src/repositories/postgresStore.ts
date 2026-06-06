@@ -1,7 +1,7 @@
 import { customAlphabet } from 'nanoid';
 import { Logger } from '../logger';
-import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole } from '../types';
-import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, MediaMessageAppendResult, RoomMessagePageOptions } from './store';
+import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomPostingSchedule } from '../types';
+import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, MediaMessageAppendResult, RoomMessagePageOptions, RoomSettingsUpdate } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 
@@ -31,6 +31,8 @@ type RoomRow = {
   last_activity_at: string | Date;
   creator_id: string;
   message_version?: number | string | null;
+  password_hash?: string | null;
+  posting_schedule?: unknown;
 };
 
 type MessageRow = {
@@ -74,7 +76,7 @@ type MediaAssetRow = {
   created_at: string | Date;
 };
 
-const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version';
+const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule';
 const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, ai_model, usage, cost, reply_to';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, width, height, duration_ms, uploaded_by_client_id, created_at';
@@ -140,6 +142,9 @@ const mapRoom = (row: RoomRow): Room => {
   };
   const messageVersion = Number(row.message_version || 0);
   if (messageVersion > 0) room.messageVersion = messageVersion;
+  if (row.password_hash) room.hasPassword = true;
+  const postingSchedule = parseJsonValue<RoomPostingSchedule>(row.posting_schedule);
+  if (postingSchedule) room.postingSchedule = postingSchedule;
   return room;
 };
 
@@ -1168,6 +1173,111 @@ export class PostgresStore implements DurableRoomStore {
     } catch (error) {
       this.logger.error('Error reading PostgreSQL room members', { error, roomId });
       return [];
+    }
+  }
+
+  async readRoomPasswordHash(roomId: string): Promise<string | null> {
+    try {
+      const result = await this.pool.query<{ password_hash: string | null }>(
+        'SELECT password_hash FROM rooms WHERE id = $1',
+        [roomId]
+      );
+      return result.rows[0]?.password_hash || null;
+    } catch (error) {
+      this.logger.error('Error reading PostgreSQL room password hash', { error, roomId });
+      return null;
+    }
+  }
+
+  async updateRoomSettings(roomId: string, updates: RoomSettingsUpdate): Promise<Room | null> {
+    const hasPasswordHashUpdate = Object.prototype.hasOwnProperty.call(updates, 'passwordHash');
+    const hasPostingScheduleUpdate = Object.prototype.hasOwnProperty.call(updates, 'postingSchedule');
+
+    try {
+      const result = await this.pool.query<RoomRow>(
+        `UPDATE rooms
+        SET password_hash = CASE WHEN $2::boolean THEN $3 ELSE password_hash END,
+          posting_schedule = CASE WHEN $4::boolean THEN $5::jsonb ELSE posting_schedule END
+        WHERE id = $1
+        RETURNING ${ROOM_COLUMNS}`,
+        [
+          roomId,
+          hasPasswordHashUpdate,
+          updates.passwordHash ?? null,
+          hasPostingScheduleUpdate,
+          toJsonb(updates.postingSchedule ?? null),
+        ]
+      );
+      return result.rows[0] ? mapRoom(result.rows[0]) : null;
+    } catch (error) {
+      this.logger.error('Error updating PostgreSQL room settings', { error, roomId });
+      return null;
+    }
+  }
+
+  async updateRoomMemberRole(roomId: string, clientId: string, role: RoomMemberRole, joinedAt = new Date().toISOString()): Promise<RoomMember | null> {
+    try {
+      const result = await this.pool.query<RoomMemberRow>(
+        `INSERT INTO room_members (room_id, client_id, role, joined_at)
+        SELECT id, $2, $3, $4
+        FROM rooms
+        WHERE id = $1
+        ON CONFLICT (room_id, client_id) DO UPDATE SET
+          role = EXCLUDED.role
+        RETURNING ${ROOM_MEMBER_COLUMNS}`,
+        [roomId, clientId, role, joinedAt]
+      );
+      return result.rows[0] ? mapRoomMember(result.rows[0]) : null;
+    } catch (error) {
+      this.logger.error('Error updating PostgreSQL room member role', { error, roomId, clientId, role });
+      return null;
+    }
+  }
+
+  async transferRoomOwnership(
+    roomId: string,
+    newOwnerClientId: string,
+    previousOwnerRole: Exclude<RoomMemberRole, 'owner'> = 'admin',
+  ): Promise<Room | null> {
+    try {
+      return await this.transaction(async client => {
+        const roomResult = await client.query<RoomRow>(
+          `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
+          [roomId]
+        );
+        if (roomResult.rows.length === 0) {
+          return null;
+        }
+
+        const previousOwnerId = roomResult.rows[0].creator_id;
+
+        await client.query(
+          `UPDATE room_members
+          SET role = $3
+          WHERE room_id = $1 AND client_id = $2`,
+          [roomId, previousOwnerId, previousOwnerRole]
+        );
+
+        await client.query(
+          `INSERT INTO room_members (room_id, client_id, role, joined_at)
+          VALUES ($1, $2, 'owner', NOW())
+          ON CONFLICT (room_id, client_id) DO UPDATE SET
+            role = 'owner'`,
+          [roomId, newOwnerClientId]
+        );
+
+        const updated = await client.query<RoomRow>(
+          `UPDATE rooms
+          SET creator_id = $2
+          WHERE id = $1
+          RETURNING ${ROOM_COLUMNS}`,
+          [roomId, newOwnerClientId]
+        );
+        return updated.rows[0] ? mapRoom(updated.rows[0]) : null;
+      });
+    } catch (error) {
+      this.logger.error('Error transferring PostgreSQL room ownership', { error, roomId, newOwnerClientId });
+      return null;
     }
   }
 

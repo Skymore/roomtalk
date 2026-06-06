@@ -7,7 +7,7 @@ import { MessageInput } from './MessageInput';
 import { MessageList, MessageListHandle } from './MessageList';
 import { AppView } from '../utils/appPersistence';
 import { getAvatarColor, getAvatarText } from '../utils/userProfile';
-import { Message, Room, RoomRenameHandler } from '../utils/types';
+import { Message, Room, RoomPermissions, RoomRenameHandler } from '../utils/types';
 
 interface ChatRoomViewProps {
   currentRoom: Room;
@@ -22,9 +22,10 @@ interface ChatRoomViewProps {
   isRoomSaved: (roomId: string) => boolean;
   setView: (view: AppView) => void;
   clearRoomUrlParam: () => void;
-  handleClearChatMessages: () => void;
+  handleClearChatMessages: (confirmation: string) => unknown;
   handleDeleteRoom: (roomId: string) => void;
   handleRenameRoom: RoomRenameHandler;
+  roomPermissions: RoomPermissions | null;
 }
 
 export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
@@ -43,6 +44,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
   handleClearChatMessages,
   handleDeleteRoom,
   handleRenameRoom,
+  roomPermissions,
 }) => {
   const { t } = useTranslation();
   const [replyToMessage, setReplyToMessage] = React.useState<Message | null>(null);
@@ -94,6 +96,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
         handleDeleteRoom={handleDeleteRoom}
         handleRenameRoom={handleRenameRoom}
         clientId={clientId}
+        roomPermissions={roomPermissions}
       />
 
       <div className="relative min-h-0 w-full flex-1 overflow-hidden">
@@ -102,6 +105,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
           ref={messageListRef}
           roomId={currentRoom.id}
           onReply={setReplyToMessage}
+          roomPermissions={roomPermissions}
           bottomPaddingPx={composerHeight + 12}
           onScrollButtonVisibilityChange={setShowScrollButton}
         />
@@ -142,6 +146,9 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
             onOptimisticMessageFailed={(clientMessageId, error) =>
               messageListRef.current?.markOptimisticMessageFailed(clientMessageId, error)
             }
+            canPost={roomPermissions?.canPost ?? true}
+            postingRestrictionReason={roomPermissions?.postingRestrictionReason}
+            postingSchedule={currentRoom.postingSchedule}
           />
         </div>
       </div>

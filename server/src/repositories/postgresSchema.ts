@@ -6,18 +6,25 @@ export const POSTGRES_SCHEMA_SQL = [
     created_at TIMESTAMPTZ NOT NULL,
     last_activity_at TIMESTAMPTZ NOT NULL,
     creator_id TEXT NOT NULL,
-    message_version BIGINT NOT NULL DEFAULT 0
+    message_version BIGINT NOT NULL DEFAULT 0,
+    password_hash TEXT,
+    posting_schedule JSONB
   )`,
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS message_version BIGINT NOT NULL DEFAULT 0`,
+  `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS password_hash TEXT`,
+  `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS posting_schedule JSONB`,
   `CREATE INDEX IF NOT EXISTS idx_rooms_creator_activity
     ON rooms (creator_id, last_activity_at DESC)`,
   `CREATE TABLE IF NOT EXISTS room_members (
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     client_id TEXT NOT NULL,
-    role TEXT NOT NULL CHECK (role IN ('owner', 'member')),
+    role TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'member')),
     joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (room_id, client_id)
   )`,
+  `ALTER TABLE room_members DROP CONSTRAINT IF EXISTS room_members_role_check`,
+  `ALTER TABLE room_members ADD CONSTRAINT room_members_role_check
+    CHECK (role IN ('owner', 'admin', 'member'))`,
   `CREATE INDEX IF NOT EXISTS idx_room_members_client_joined
     ON room_members (client_id, joined_at DESC)`,
   `CREATE TABLE IF NOT EXISTS room_saves (

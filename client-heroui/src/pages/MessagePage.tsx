@@ -17,9 +17,11 @@ import {
   saveRoomToServer,
   unsaveRoomFromServer,
   getSavedRoomsFromServer,
+  getRoomPermissions,
+  clearRoomMessages as clearRoomMessagesFromServer,
 } from "../utils/socket";
 import {
-  Room, RoomMemberEvent,
+  Room, RoomMemberEvent, RoomPermissions,
 } from "../utils/types";
 import { generateRandomName } from "../utils/userProfile";
 import { getStoredRoom, getStoredUsername, getStoredView, saveCurrentRoom, saveCurrentView, saveUsername, AppView } from "../utils/appPersistence";
@@ -53,6 +55,7 @@ export const MessagePage: React.FC = () => {
   const [isLoadingRooms, setIsLoadingRooms] = useState(true);
   const [isLoadingSavedRooms, setIsLoadingSavedRooms] = useState(true);
   const [currentRoom, setCurrentRoom] = useState<Room | null>(null);
+  const [roomPermissions, setRoomPermissions] = useState<RoomPermissions | null>(null);
   // 初始化视图状态，默认从localStorage读取
   const [view, setView] = useState<AppView>(() => {
     const storedView = getStoredView();
@@ -96,6 +99,15 @@ export const MessagePage: React.FC = () => {
         clearTimeout(successTimerRef.current);
       }
     };
+  }, []);
+
+  const refreshRoomPermissions = useCallback((roomId: string) => {
+    getRoomPermissions(roomId)
+      .then(setRoomPermissions)
+      .catch((error) => {
+        console.error("Failed to load room permissions:", error);
+        setRoomPermissions(null);
+      });
   }, []);
 
   // 切换语言方法修改为支持多语言
@@ -189,7 +201,18 @@ export const MessagePage: React.FC = () => {
         setIsRestoringRoom(true);
         setCurrentRoom(storedRoom);
         setMemberCount(getRoomMemberCount(storedRoom.id));
-        joinRoom(storedRoom.id);
+        joinRoom(storedRoom.id)
+          .then((result) => {
+            if (result.permissions) {
+              setRoomPermissions(result.permissions);
+            } else {
+              refreshRoomPermissions(storedRoom.id);
+            }
+          })
+          .catch((error) => {
+            console.error("Failed to rejoin stored room:", error);
+            setRoomPermissions(null);
+          });
 
         const savedView = getStoredView();
         console.log("Restored stored room shell with saved view:", savedView);
@@ -211,6 +234,7 @@ export const MessagePage: React.FC = () => {
               console.log("Successfully restored room:", roomInfo.name);
               setCurrentRoom(roomInfo);
               setMemberCount(getRoomMemberCount(roomInfo.id));
+              refreshRoomPermissions(roomInfo.id);
             } else {
               console.log("Stored room no longer exists");
               // 房间不存在，清除存储
@@ -275,6 +299,16 @@ export const MessagePage: React.FC = () => {
       setCurrentRoom((current) => current?.id === room.id ? { ...current, ...room } : current);
       setSavedRooms((prev) => prev.map((savedRoom) => savedRoom.id === room.id ? { ...savedRoom, ...room } : savedRoom));
     };
+    const handleRoomPermissions = (permissions: RoomPermissions) => {
+      setRoomPermissions((current) => (
+        !current || current.roomId === permissions.roomId ? permissions : current
+      ));
+    };
+    const handleRoomPermissionsInvalidated = (roomId: string) => {
+      if (currentRoom?.id === roomId) {
+        refreshRoomPermissions(roomId);
+      }
+    };
 
     socket.on("room_list", handleRoomList);
     socket.emit("get_rooms");
@@ -287,6 +321,8 @@ export const MessagePage: React.FC = () => {
       });
     socket.on("new_room", handleRoomUpdate);
     socket.on("room_updated", handleRoomUpdate);
+    socket.on("room_permissions", handleRoomPermissions);
+    socket.on("room_permissions_invalidated", handleRoomPermissionsInvalidated);
 
     // 取消注册回调的清理函数
     const unsubscribe = onRoomMemberChange((event: RoomMemberEvent) => {
@@ -302,9 +338,11 @@ export const MessagePage: React.FC = () => {
       socket.off("saved_room_list", handleSavedRoomList);
       socket.off("new_room", handleRoomUpdate);
       socket.off("room_updated", handleRoomUpdate);
+      socket.off("room_permissions", handleRoomPermissions);
+      socket.off("room_permissions_invalidated", handleRoomPermissionsInvalidated);
       unsubscribe();
     };
-  }, [currentRoom]);
+  }, [currentRoom, refreshRoomPermissions]);
 
   // 添加页面可见性变化处理
   useEffect(() => {
@@ -332,32 +370,45 @@ export const MessagePage: React.FC = () => {
   }, [currentRoom]);
 
   // --- 添加清空聊天记录的处理函数 (Stays the same) ---
-  const handleClearChatMessages = useCallback(() => {
+  const handleClearChatMessages = useCallback(async (confirmation: string) => {
     if (currentRoom) {
       console.log(`Emitting clear_room_messages for room ${currentRoom.id}`);
-      socket.emit('clear_room_messages', currentRoom.id);
+      try {
+        await clearRoomMessagesFromServer(currentRoom.id, confirmation);
+        showSuccess(t('chatHistoryCleared'));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : t('errorClearingChatHistory');
+        setError(message);
+        throw new Error(message);
+      }
     } else {
       console.warn("Attempted to clear messages but no current room.");
+      throw new Error(t('errorClearingChatHistory'));
     }
-  }, [currentRoom]);
+  }, [currentRoom, showSuccess, t]);
 
   // 直接加入房间：点击房间卡片或确认弹窗后调用
-  const handleRoomSelect = (room: Room) => {
+  const handleRoomSelect = async (room: Room, password?: string) => {
     pendingRestoreRoomIdRef.current = null;
     setIsRestoringRoom(false);
 
-    // 如果已经在其他房间，则先离开
-    if (currentRoom && currentRoom.id !== room.id) {
-      leaveRoom(currentRoom.id);
+    try {
+      const result = await joinRoom(room.id, password);
+      const joinedRoom = result.room || room;
+      setCurrentRoom(joinedRoom);
+      setRoomPermissions(result.permissions || null);
+      if (!result.permissions) {
+        refreshRoomPermissions(joinedRoom.id);
+      }
+      // 更新成员数量
+      setMemberCount(getRoomMemberCount(joinedRoom.id));
+      // 进入房间时切换到聊天视图
+      setView("chat");
+      clearRoomUrlParam();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t("errorLoading");
+      setError(message);
     }
-
-    joinRoom(room.id);
-    setCurrentRoom(room);
-    // 更新成员数量
-    setMemberCount(getRoomMemberCount(room.id));
-    // 进入房间时切换到聊天视图
-    setView("chat");
-    clearRoomUrlParam();
   };
 
   const handleRoomSelectById = async (roomId: string) => {
@@ -371,7 +422,12 @@ export const MessagePage: React.FC = () => {
         return;
       }
 
-      handleRoomSelect(roomInfo);
+      if (roomInfo.hasPassword) {
+        setRoomToJoin(roomInfo);
+        return;
+      }
+
+      void handleRoomSelect(roomInfo);
     } catch (error) {
       console.error("Error loading room by ID:", error);
       setError(t("errorLoading"));
@@ -379,13 +435,13 @@ export const MessagePage: React.FC = () => {
   };
 
   // URL 加载的房间确认操作
-  const handleConfirmJoin = (confirmed: boolean) => {
+  const handleConfirmJoin = (confirmed: boolean, password?: string) => {
     if (!confirmed || !roomToJoin) {
       setRoomToJoin(null);
       clearRoomUrlParam();
       return;
     }
-    handleRoomSelect(roomToJoin);
+    void handleRoomSelect(roomToJoin, password);
     setRoomToJoin(null);
   };
 
@@ -397,6 +453,7 @@ export const MessagePage: React.FC = () => {
     if (currentRoom) {
       leaveRoom(currentRoom.id);
       setCurrentRoom(null);
+      setRoomPermissions(null);
       setMemberCount(null);
       // 修复BUG：离开房间时清除 URL 中的 room 参数，防止重复弹出加入房间确认弹窗
       clearRoomUrlParam();
@@ -586,6 +643,7 @@ export const MessagePage: React.FC = () => {
             handleClearChatMessages={handleClearChatMessages}
             handleDeleteRoom={handleDeleteRoom}
             handleRenameRoom={handleRenameRoom}
+            roomPermissions={roomPermissions}
           />
         ) : (
           <WelcomeView onEnterRooms={() => setView("rooms")} />

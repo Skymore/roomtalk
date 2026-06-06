@@ -1,9 +1,13 @@
 import { v4 as uuidv4 } from 'uuid';
+import { hashRoomPassword, verifyRoomPassword } from '../services/roomSecurity';
 import { createRoomMemberEvent, createRoomRecord } from '../services/messageDomain';
-import { Room, RoomOnlineMember } from '../types';
+import { Room, RoomClientLookup, RoomOnlineMember, RoomPermissions, RoomPostingSchedule, RoomRoleMember } from '../types';
+import { authorizeRoomAction, buildRoomPermissions, getRoomActor, normalizePostingSchedule } from './roomAuthorization';
 import { SocketConnectionContext } from './types';
 
 const MAX_ROOM_NAME_LENGTH = 20;
+const MAX_CLIENT_ID_LENGTH = 128;
+const CLIENT_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
 
 type RenameRoomAck = {
   success: boolean;
@@ -20,6 +24,30 @@ type RoomSaveAck = {
 type RoomListAck = {
   success: boolean;
   rooms?: Room[];
+  error?: string;
+};
+
+type RoomPermissionsAck = {
+  success: boolean;
+  permissions?: RoomPermissions;
+  error?: string;
+};
+
+type RoomRoleMembersAck = {
+  success: boolean;
+  members?: RoomRoleMember[];
+  error?: string;
+};
+
+type RoomClientLookupAck = {
+  success: boolean;
+  client?: RoomClientLookup;
+  error?: string;
+};
+
+type BasicRoomAck = {
+  success: boolean;
+  room?: Room;
   error?: string;
 };
 
@@ -50,6 +78,74 @@ const getRoomIdFromPayload = (payload: unknown): string | null => {
   }
 
   return null;
+};
+
+const parseTargetClientId = (value: unknown): { ok: true; clientId: string } | { ok: false; error: string } => {
+  if (typeof value !== 'string') {
+    return { ok: false, error: 'Target user ID is required' };
+  }
+
+  const clientId = value.trim();
+  if (!clientId) {
+    return { ok: false, error: 'Target user ID is required' };
+  }
+
+  if (clientId.length > MAX_CLIENT_ID_LENGTH || !CLIENT_ID_PATTERN.test(clientId)) {
+    return { ok: false, error: 'Invalid user ID' };
+  }
+
+  return { ok: true, clientId };
+};
+
+const lookupKnownRoomClient = async (
+  store: SocketConnectionContext['store'],
+  roomId: string,
+  targetClientId: string,
+): Promise<RoomClientLookup> => {
+  const [member, nicknames] = await Promise.all([
+    store.getRoomMember(roomId, targetClientId),
+    store.getClientNicknames([targetClientId]),
+  ]);
+  const nickname = nicknames[targetClientId];
+
+  return {
+    clientId: targetClientId,
+    exists: Boolean(nickname),
+    nickname,
+    memberRole: member?.role ?? null,
+  };
+};
+
+const readRoomRoleMembers = async (
+  store: SocketConnectionContext['store'],
+  roomId: string,
+): Promise<RoomRoleMember[]> => {
+  const members = await store.readRoomMembers(roomId);
+  const nicknames = await store.getClientNicknames(members.map(member => member.clientId));
+  const roleRank: Record<RoomRoleMember['role'], number> = { owner: 0, admin: 1, member: 2 };
+
+  return members
+    .map(member => ({
+      ...member,
+      nickname: nicknames[member.clientId],
+    }))
+    .sort((a, b) => roleRank[a.role] - roleRank[b.role] || a.joinedAt.localeCompare(b.joinedAt));
+};
+
+const parseJoinRoomPayload = (payload: unknown): { roomId: string | null; password?: string } => {
+  if (typeof payload === 'string') {
+    return { roomId: payload };
+  }
+
+  if (payload && typeof payload === 'object') {
+    const data = payload as { roomId?: unknown; password?: unknown };
+    return {
+      roomId: typeof data.roomId === 'string' ? data.roomId : null,
+      password: typeof data.password === 'string' ? data.password : undefined,
+    };
+  }
+
+  return { roomId: null };
 };
 
 const MAX_NICKNAME_LENGTH = 40;
@@ -158,7 +254,7 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
     callback?.({ success: true, rooms: savedRooms });
   });
 
-  socket.on('create_room', async (roomData: { name: string; description?: string }, callback?: (roomId: string) => void) => {
+  socket.on('create_room', async (roomData: { name: string; description?: string; password?: string; postingSchedule?: RoomPostingSchedule }, callback?: (roomId: string) => void) => {
     const clientId = await store.getClientId(socket.id);
     if (!clientId || !roomData?.name) {
       socketLogger.warn('Invalid room creation attempt', {
@@ -185,7 +281,20 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
       roomName: roomData.name,
     });
 
-    const savedRoom = await store.saveRoom(room);
+    let savedRoom = await store.saveRoom(room);
+    if (savedRoom && typeof roomData.password === 'string' && roomData.password.trim()) {
+      const passwordHash = await hashRoomPassword(roomData.password.trim());
+      savedRoom = await store.updateRoomSettings(savedRoom.id, { passwordHash }) || savedRoom;
+    }
+    if (savedRoom && roomData.postingSchedule) {
+      try {
+        const postingSchedule = normalizePostingSchedule(roomData.postingSchedule);
+        savedRoom = await store.updateRoomSettings(savedRoom.id, { postingSchedule }) || savedRoom;
+      } catch {
+        // Invalid optional settings should not fail room creation; users can
+        // correct them later from room settings.
+      }
+    }
     if (savedRoom) {
       io.to(clientId).emit('new_room', savedRoom);
       socketLogger.info('Room created successfully', { roomId, clientId });
@@ -193,11 +302,20 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
     }
   });
 
-  socket.on('join_room', async (roomId: string) => {
+  socket.on('join_room', async (payload: unknown, callback?: (result: BasicRoomAck & { permissions?: RoomPermissions }) => void) => {
+    const { roomId, password } = parseJoinRoomPayload(payload);
     const userId = await store.getClientId(socket.id);
     if (!userId) {
       socketLogger.warn('Unregistered client tried to join room', { socketId: socket.id, roomId });
       socket.emit('error', { message: 'You are not registered' });
+      callback?.({ success: false, error: 'You are not registered' });
+      return;
+    }
+
+    if (!roomId) {
+      socketLogger.warn('Client tried to join room without room ID', { socketId: socket.id, userId });
+      socket.emit('error', { message: 'Room ID is required' });
+      callback?.({ success: false, error: 'Room ID is required' });
       return;
     }
 
@@ -226,13 +344,28 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
     if (!room) {
       socketLogger.warn('Client tried to join non-existent room', { socketId: socket.id, userId, roomId });
       socket.emit('error', { message: 'Room not found' });
+      callback?.({ success: false, error: 'Room not found' });
       return;
     }
 
-    const persistentMember = await store.addRoomMember(roomId, userId, room.creatorId === userId ? 'owner' : 'member');
+    const existingMember = await store.getRoomMember(roomId, userId);
+    const isCreator = room.creatorId === userId;
+    if (room.hasPassword && !existingMember && !isCreator) {
+      const passwordHash = await store.readRoomPasswordHash(roomId);
+      const passwordOk = await verifyRoomPassword(password || '', passwordHash);
+      if (!passwordOk) {
+        socketLogger.warn('Client tried to join password-protected room with invalid password', { socketId: socket.id, userId, roomId });
+        socket.emit('error', { message: 'Room password is required or incorrect' });
+        callback?.({ success: false, error: 'Room password is required or incorrect' });
+        return;
+      }
+    }
+
+    const persistentMember = existingMember || await store.addRoomMember(roomId, userId, isCreator ? 'owner' : 'member');
     if (!persistentMember) {
       socketLogger.error('Failed to persist room membership while joining room', { socketId: socket.id, userId, roomId });
       socket.emit('error', { message: 'Failed to join room' });
+      callback?.({ success: false, error: 'Failed to join room' });
       return;
     }
 
@@ -248,6 +381,9 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
     });
 
     io.to(roomId).emit('room_member_change', joinEvent);
+    const actor = await getRoomActor(store, roomId, userId);
+    const permissions = buildRoomPermissions(actor, roomId, userId, room);
+    socket.emit('room_permissions', permissions);
 
     socketLogger.info('User joined room', {
       socketId: socket.id,
@@ -256,6 +392,8 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
       roomName: room.name,
       memberCount,
     });
+
+    callback?.({ success: true, room, permissions });
 
   });
 
@@ -281,10 +419,8 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
     const updatedRooms = userRooms.filter(id => id !== roomId);
     await store.storeUserRooms(socket.id, updatedRooms);
 
-    const room = await store.getRoomById(roomId);
-    if (room && room.creatorId !== userId) {
-      await store.removeRoomMember(roomId, userId);
-    }
+    // Leaving a room only changes realtime presence. Durable membership is the
+    // access grant for password-protected rooms and administrator roles.
   });
 
   socket.on('save_room', async (payload: unknown, callback?: (result: RoomSaveAck) => void) => {
@@ -450,6 +586,318 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
       });
       callback?.({ success: false, error: 'Failed to rename room due to server error' });
     }
+  });
+
+  socket.on('get_room_permissions', async (
+    payload: unknown,
+    callback?: (result: RoomPermissionsAck) => void
+  ) => {
+    const clientId = await store.getClientId(socket.id);
+    if (!clientId) {
+      callback?.({ success: false, error: 'You are not registered' });
+      return;
+    }
+
+    const roomId = getRoomIdFromPayload(payload);
+    if (!roomId) {
+      callback?.({ success: false, error: 'Room ID is required' });
+      return;
+    }
+
+    const room = await store.getRoomById(roomId);
+    const actor = await getRoomActor(store, roomId, clientId);
+    if (!room || !actor) {
+      callback?.({ success: false, error: 'You are not authorized to access this room' });
+      return;
+    }
+
+    const permissions = buildRoomPermissions(actor, roomId, clientId, room);
+    callback?.({ success: true, permissions });
+  });
+
+  socket.on('get_room_role_members', async (
+    payload: unknown,
+    callback?: (result: RoomRoleMembersAck) => void,
+  ) => {
+    const clientId = await store.getClientId(socket.id);
+    if (!clientId) {
+      callback?.({ success: false, error: 'You are not registered' });
+      return;
+    }
+
+    const roomId = getRoomIdFromPayload(payload);
+    if (!roomId) {
+      callback?.({ success: false, error: 'Room ID is required' });
+      return;
+    }
+
+    const auth = await authorizeRoomAction({
+      store,
+      roomId,
+      clientId,
+      action: { type: 'room.manageAdmins' },
+    });
+    if (!auth.ok) {
+      callback?.({ success: false, error: auth.message });
+      return;
+    }
+
+    const members = await readRoomRoleMembers(store, roomId);
+    callback?.({ success: true, members });
+  });
+
+  socket.on('lookup_room_client', async (
+    data: { roomId?: string; targetClientId?: unknown },
+    callback?: (result: RoomClientLookupAck) => void,
+  ) => {
+    const clientId = await store.getClientId(socket.id);
+    const roomId = data?.roomId;
+    const target = parseTargetClientId(data?.targetClientId);
+    if (!clientId) {
+      callback?.({ success: false, error: 'You are not registered' });
+      return;
+    }
+    if (!roomId) {
+      callback?.({ success: false, error: 'Room ID is required' });
+      return;
+    }
+    if (!target.ok) {
+      callback?.({ success: false, error: target.error });
+      return;
+    }
+
+    const auth = await authorizeRoomAction({
+      store,
+      roomId,
+      clientId,
+      action: { type: 'room.manageAdmins' },
+    });
+    if (!auth.ok) {
+      callback?.({ success: false, error: auth.message });
+      return;
+    }
+
+    const lookup = await lookupKnownRoomClient(store, roomId, target.clientId);
+    callback?.({ success: true, client: lookup });
+  });
+
+  socket.on('update_room_settings', async (
+    data: { roomId?: string; password?: string; clearPassword?: boolean; postingSchedule?: unknown },
+    callback?: (result: BasicRoomAck) => void,
+  ) => {
+    const clientId = await store.getClientId(socket.id);
+    if (!clientId) {
+      callback?.({ success: false, error: 'You are not registered' });
+      return;
+    }
+
+    const roomId = data?.roomId;
+    if (!roomId) {
+      callback?.({ success: false, error: 'Room ID is required' });
+      return;
+    }
+
+    const auth = await authorizeRoomAction({
+      store,
+      roomId,
+      clientId,
+      action: { type: 'room.manageSettings' },
+    });
+    if (!auth.ok) {
+      callback?.({ success: false, error: auth.message });
+      return;
+    }
+
+    try {
+      const updates: Parameters<typeof store.updateRoomSettings>[1] = {};
+      if (typeof data.password === 'string' && data.password.trim()) {
+        updates.passwordHash = await hashRoomPassword(data.password.trim());
+      } else if (data.clearPassword) {
+        updates.passwordHash = null;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(data || {}, 'postingSchedule')) {
+        updates.postingSchedule = normalizePostingSchedule(data.postingSchedule);
+      }
+
+      const updatedRoom = await store.updateRoomSettings(roomId, updates);
+      if (!updatedRoom) {
+        callback?.({ success: false, error: 'Failed to update room settings' });
+        return;
+      }
+
+      io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+      io.to(roomId).emit('room_updated', updatedRoom);
+      io.to(roomId).emit('room_permissions_invalidated', roomId);
+      callback?.({ success: true, room: updatedRoom });
+    } catch (error) {
+      socketLogger.error('Error updating room settings', { error, socketId: socket.id, clientId, roomId });
+      callback?.({ success: false, error: error instanceof Error ? error.message : 'Failed to update room settings' });
+    }
+  });
+
+  socket.on('set_room_admin', async (
+    data: { roomId?: string; targetClientId?: unknown },
+    callback?: (result: { success: boolean; error?: string }) => void,
+  ) => {
+    const clientId = await store.getClientId(socket.id);
+    const roomId = data?.roomId;
+    const target = parseTargetClientId(data?.targetClientId);
+    if (!clientId) {
+      callback?.({ success: false, error: 'You are not registered' });
+      return;
+    }
+    if (!roomId) {
+      callback?.({ success: false, error: 'Room ID is required' });
+      return;
+    }
+    if (!target.ok) {
+      callback?.({ success: false, error: target.error });
+      return;
+    }
+
+    const auth = await authorizeRoomAction({
+      store,
+      roomId,
+      clientId,
+      action: { type: 'room.manageAdmins' },
+    });
+    if (!auth.ok) {
+      callback?.({ success: false, error: auth.message });
+      return;
+    }
+
+    const lookup = await lookupKnownRoomClient(store, roomId, target.clientId);
+    if (!lookup.exists) {
+      callback?.({ success: false, error: 'Target user was not found' });
+      return;
+    }
+
+    if (target.clientId === auth.actor.room.creatorId) {
+      callback?.({ success: false, error: 'The room owner is already the owner' });
+      return;
+    }
+
+    const member = await store.updateRoomMemberRole(roomId, target.clientId, 'admin');
+    if (!member) {
+      callback?.({ success: false, error: 'Failed to add administrator' });
+      return;
+    }
+
+    io.to(roomId).emit('room_permissions_invalidated', roomId);
+    io.to(roomId).emit('room_role_members_updated', roomId);
+    callback?.({ success: true });
+  });
+
+  socket.on('remove_room_admin', async (
+    data: { roomId?: string; targetClientId?: unknown },
+    callback?: (result: { success: boolean; error?: string }) => void,
+  ) => {
+    const clientId = await store.getClientId(socket.id);
+    const roomId = data?.roomId;
+    const target = parseTargetClientId(data?.targetClientId);
+    if (!clientId) {
+      callback?.({ success: false, error: 'You are not registered' });
+      return;
+    }
+    if (!roomId) {
+      callback?.({ success: false, error: 'Room ID is required' });
+      return;
+    }
+    if (!target.ok) {
+      callback?.({ success: false, error: target.error });
+      return;
+    }
+
+    const auth = await authorizeRoomAction({
+      store,
+      roomId,
+      clientId,
+      action: { type: 'room.manageAdmins' },
+    });
+    if (!auth.ok) {
+      callback?.({ success: false, error: auth.message });
+      return;
+    }
+
+    if (target.clientId === auth.actor.room.creatorId) {
+      callback?.({ success: false, error: 'The room owner cannot be removed as administrator' });
+      return;
+    }
+
+    const existingMember = await store.getRoomMember(roomId, target.clientId);
+    if (existingMember?.role !== 'admin') {
+      callback?.({ success: false, error: 'Target user is not an administrator' });
+      return;
+    }
+
+    const member = await store.updateRoomMemberRole(roomId, target.clientId, 'member');
+    if (!member) {
+      callback?.({ success: false, error: 'Failed to remove administrator' });
+      return;
+    }
+
+    io.to(roomId).emit('room_permissions_invalidated', roomId);
+    io.to(roomId).emit('room_role_members_updated', roomId);
+    callback?.({ success: true });
+  });
+
+  socket.on('transfer_room_ownership', async (
+    data: { roomId?: string; targetClientId?: unknown },
+    callback?: (result: BasicRoomAck) => void,
+  ) => {
+    const clientId = await store.getClientId(socket.id);
+    const roomId = data?.roomId;
+    const target = parseTargetClientId(data?.targetClientId);
+    if (!clientId) {
+      callback?.({ success: false, error: 'You are not registered' });
+      return;
+    }
+    if (!roomId) {
+      callback?.({ success: false, error: 'Room ID is required' });
+      return;
+    }
+    if (!target.ok) {
+      callback?.({ success: false, error: target.error });
+      return;
+    }
+
+    const auth = await authorizeRoomAction({
+      store,
+      roomId,
+      clientId,
+      action: { type: 'room.transferOwnership', targetClientId: target.clientId },
+    });
+    if (!auth.ok) {
+      callback?.({ success: false, error: auth.message });
+      return;
+    }
+
+    if (target.clientId === clientId) {
+      callback?.({ success: false, error: 'You already own this room' });
+      return;
+    }
+
+    const lookup = await lookupKnownRoomClient(store, roomId, target.clientId);
+    if (!lookup.exists) {
+      callback?.({ success: false, error: 'Target user was not found' });
+      return;
+    }
+
+    const updatedRoom = await store.transferRoomOwnership(roomId, target.clientId, 'admin');
+    if (!updatedRoom) {
+      callback?.({ success: false, error: 'Failed to transfer room ownership' });
+      return;
+    }
+
+    const oldOwnerRooms = await store.readRoomsByUser(clientId);
+    const newOwnerRooms = await store.readRoomsByUser(target.clientId);
+    io.to(clientId).emit('room_list', oldOwnerRooms);
+    io.to(target.clientId).emit('room_list', newOwnerRooms);
+    io.to(roomId).emit('room_updated', updatedRoom);
+    io.to(roomId).emit('room_permissions_invalidated', roomId);
+    io.to(roomId).emit('room_role_members_updated', roomId);
+    callback?.({ success: true, room: updatedRoom });
   });
 
   socket.on('disconnect', async (reason: string) => {

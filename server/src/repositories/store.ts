@@ -1,4 +1,4 @@
-import { AICost, MediaAsset, Message, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember } from '../types';
+import { AICost, MediaAsset, Message, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule } from '../types';
 
 export const DEFAULT_ROOM_MESSAGE_PAGE_LIMIT = 80;
 
@@ -37,6 +37,11 @@ export interface MediaMessageAppendResult {
   asset: MediaAsset;
 }
 
+export interface RoomSettingsUpdate {
+  passwordHash?: string | null;
+  postingSchedule?: RoomPostingSchedule | null;
+}
+
 export interface DurableRoomStore {
   generateUniqueRoomId(): Promise<string>;
   appendMessage(message: Message): Promise<Room | null>;
@@ -65,6 +70,10 @@ export interface DurableRoomStore {
   getRoomMember(roomId: string, clientId: string): Promise<RoomMember | null>;
   isRoomMember(roomId: string, clientId: string): Promise<boolean>;
   readRoomMembers(roomId: string): Promise<RoomMember[]>;
+  readRoomPasswordHash(roomId: string): Promise<string | null>;
+  updateRoomSettings(roomId: string, updates: RoomSettingsUpdate): Promise<Room | null>;
+  updateRoomMemberRole(roomId: string, clientId: string, role: RoomMemberRole, joinedAt?: string): Promise<RoomMember | null>;
+  transferRoomOwnership(roomId: string, newOwnerClientId: string, previousOwnerRole?: Exclude<RoomMemberRole, 'owner'>): Promise<Room | null>;
   readRoomsByUser(clientId: string): Promise<Room[]>;
   saveRoomForUser(roomId: string, clientId: string, savedAt?: string): Promise<Room | null>;
   removeSavedRoomForUser(roomId: string, clientId: string): Promise<boolean>;
@@ -294,6 +303,22 @@ export class CompositeRoomStore implements RoomStore {
 
   readRoomMembers(roomId: string) {
     return this.durableStore.readRoomMembers(roomId);
+  }
+
+  readRoomPasswordHash(roomId: string) {
+    return this.durableStore.readRoomPasswordHash(roomId);
+  }
+
+  updateRoomSettings(roomId: string, updates: RoomSettingsUpdate) {
+    return this.durableStore.updateRoomSettings(roomId, updates);
+  }
+
+  updateRoomMemberRole(roomId: string, clientId: string, role: RoomMemberRole, joinedAt?: string) {
+    return this.durableStore.updateRoomMemberRole(roomId, clientId, role, joinedAt);
+  }
+
+  transferRoomOwnership(roomId: string, newOwnerClientId: string, previousOwnerRole?: Exclude<RoomMemberRole, 'owner'>) {
+    return this.durableStore.transferRoomOwnership(roomId, newOwnerClientId, previousOwnerRole);
   }
 
   readRoomsByUser(clientId: string) {

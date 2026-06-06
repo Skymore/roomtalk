@@ -315,6 +315,28 @@ describe('message socket handlers', () => {
     assert.deepEqual(validResponse, { success: true, message: created });
   });
 
+  it('rejects new messages when the room posting schedule is closed', async () => {
+    const closed = createHarness('client-2');
+    closed.store.rooms = [
+      room({
+        postingSchedule: {
+          enabled: true,
+          timezone: 'UTC',
+          windows: [],
+        },
+      }),
+    ];
+
+    let response: unknown;
+    await closed.socket.invoke('send_message', { roomId: 'room-1', content: 'blocked' }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.deepEqual(response, { success: false, error: 'Posting closed' });
+    assert.deepEqual(closed.store.appendedMessages, []);
+    assert.deepEqual(closed.io.roomEmits, []);
+  });
+
   it('does not broadcast WebSocket messages when persistence fails', async () => {
     const failing = createHarness('client-2');
     failing.store.appendMessage = async (newMessage: Message) => {
@@ -383,6 +405,15 @@ describe('message socket handlers', () => {
     });
     assert.deepEqual(missingResponse, { success: false, error: 'Message not found' });
 
+    const unauthorized = createHarness('client-2');
+    let unauthorizedResponse: unknown;
+    await unauthorized.socket.invoke('edit_message', { roomId: 'room-1', messageId: 'message-1', newContent: 'edited' }, (response: unknown) => {
+      unauthorizedResponse = response;
+    });
+    assert.deepEqual(unauthorizedResponse, { success: false, error: 'You are not authorized to modify this message' });
+    assert.deepEqual(unauthorized.store.editedMessages, []);
+    assert.deepEqual(unauthorized.io.roomEmits, []);
+
     const valid = createHarness();
     let response: { success: boolean; updatedMessage?: Message } | undefined;
     await valid.socket.invoke('edit_message', { roomId: 'room-1', messageId: 'message-1', newContent: 'edited' }, (result: typeof response) => {
@@ -399,6 +430,17 @@ describe('message socket handlers', () => {
       { roomId: 'client-1', event: 'room_updated', args: [roomActivityForMessages(valid.store.messages)] },
       { roomId: 'room-1', event: 'message_edited', args: [response!.updatedMessage] },
     ]);
+
+    const ownerEditingOtherUser = createHarness('client-1');
+    ownerEditingOtherUser.store.messages = [message({ clientId: 'client-2' })];
+    let ownerResponse: { success: boolean; updatedMessage?: Message } | undefined;
+    await ownerEditingOtherUser.socket.invoke('edit_message', { roomId: 'room-1', messageId: 'message-1', newContent: 'owner edit' }, (result: typeof ownerResponse) => {
+      ownerResponse = result;
+    });
+
+    assert.equal(ownerResponse?.success, true);
+    assert.equal(ownerResponse?.updatedMessage?.content, 'owner edit');
+    assert.deepEqual(ownerEditingOtherUser.store.editedMessages, [{ roomId: 'room-1', messageId: 'message-1', newContent: 'owner edit' }]);
   });
 
   it('does not broadcast edited messages when message mutation fails', async () => {
@@ -435,6 +477,15 @@ describe('message socket handlers', () => {
     assert.deepEqual(missingResponse, { success: true });
     assert.deepEqual(missing.io.roomEmits, []);
 
+    const unauthorized = createHarness('client-2');
+    let unauthorizedResponse: unknown;
+    await unauthorized.socket.invoke('delete_message', { roomId: 'room-1', messageId: 'message-1' }, (response: unknown) => {
+      unauthorizedResponse = response;
+    });
+    assert.deepEqual(unauthorizedResponse, { success: false, error: 'You are not authorized to modify this message' });
+    assert.deepEqual(unauthorized.store.deletedMessages, []);
+    assert.deepEqual(unauthorized.io.roomEmits, []);
+
     const valid = createHarness();
     let response: unknown;
     await valid.socket.invoke('delete_message', { roomId: 'room-1', messageId: 'message-1' }, (result: unknown) => {
@@ -447,6 +498,15 @@ describe('message socket handlers', () => {
       { roomId: 'client-1', event: 'room_updated', args: [roomActivityForMessages(valid.store.messages)] },
       { roomId: 'room-1', event: 'message_deleted', args: ['message-1', 'room-1'] },
     ]);
+
+    const ownerDeletingOtherUser = createHarness('client-1');
+    ownerDeletingOtherUser.store.messages = [message({ clientId: 'client-2' })];
+    let ownerResponse: unknown;
+    await ownerDeletingOtherUser.socket.invoke('delete_message', { roomId: 'room-1', messageId: 'message-1' }, (result: unknown) => {
+      ownerResponse = result;
+    });
+    assert.deepEqual(ownerResponse, { success: true });
+    assert.deepEqual(ownerDeletingOtherUser.store.deletedMessages, [{ roomId: 'room-1', messageId: 'message-1' }]);
   });
 
   it('does not broadcast deleted messages when message mutation fails', async () => {
@@ -476,8 +536,24 @@ describe('message socket handlers', () => {
     await missingRoom.socket.invoke('clear_room_messages', '');
     assert.deepEqual(missingRoom.socket.emitted, [{ event: 'error', args: [{ message: 'Room ID is required' }] }]);
 
+    const nonOwner = createHarness('client-2');
+    let nonOwnerResponse: unknown;
+    await nonOwner.socket.invoke('clear_room_messages', { roomId: 'room-1', confirmation: 'Room 1' }, (response: unknown) => {
+      nonOwnerResponse = response;
+    });
+    assert.deepEqual(nonOwnerResponse, { success: false, error: 'Only the room owner can clear history' });
+    assert.deepEqual(nonOwner.store.clearedRooms, []);
+
+    const wrongConfirmation = createHarness();
+    let wrongConfirmationResponse: unknown;
+    await wrongConfirmation.socket.invoke('clear_room_messages', { roomId: 'room-1', confirmation: 'wrong room' }, (response: unknown) => {
+      wrongConfirmationResponse = response;
+    });
+    assert.deepEqual(wrongConfirmationResponse, { success: false, error: 'Room name confirmation is required' });
+    assert.deepEqual(wrongConfirmation.store.clearedRooms, []);
+
     const valid = createHarness();
-    await valid.socket.invoke('clear_room_messages', 'room-1');
+    await valid.socket.invoke('clear_room_messages', { roomId: 'room-1', confirmation: 'Room 1' });
 
     assert.deepEqual(valid.store.clearedRooms, ['room-1']);
     assert.deepEqual(valid.io.roomEmits, [
@@ -493,7 +569,7 @@ describe('message socket handlers', () => {
       throw new Error('clear failed');
     };
 
-    await failing.socket.invoke('clear_room_messages', 'room-1');
+    await failing.socket.invoke('clear_room_messages', { roomId: 'room-1', confirmation: 'Room 1' });
 
     assert.deepEqual(failing.store.clearedRooms, ['room-1']);
     assert.deepEqual(failing.io.roomEmits, []);

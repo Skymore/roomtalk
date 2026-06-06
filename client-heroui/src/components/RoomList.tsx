@@ -14,7 +14,7 @@ import { Room, RoomRenameHandler } from '../utils/types';
 import { createRoom } from '../utils/socket';
 import { buildRoomShareUrl, validateRoomName } from '../utils/roomState';
 import { RoomCard } from './RoomCard';
-import { RoomCreateModal } from './RoomCreateModal';
+import { RoomCreateModal, RoomCreateOptions } from './RoomCreateModal';
 import { RoomJoinControl } from './RoomJoinControl';
 import { RoomRenameModal } from './RoomRenameModal';
 
@@ -79,7 +79,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
     }, 2000);
   };
 
-  const handleCreateRoom = async () => {
+  const handleCreateRoom = async (options: RoomCreateOptions) => {
     const validation = validateRoomName(newRoomName);
 
     if (!validation.ok) {
@@ -90,7 +90,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
     setNameError(null);
     setIsCreating(true);
     try {
-      const roomId = await createRoom(validation.name, newRoomDescription);
+      const roomId = await createRoom(validation.name, newRoomDescription, options.password, options.postingSchedule);
       setNewRoomName('');
       setNewRoomDescription('');
       onClose();

@@ -93,7 +93,7 @@ describe('MessageList optimistic messages', () => {
 
   it('shows pending messages and replaces matching server messages without duplicates', async () => {
     const ref = createRef<MessageListHandle>();
-    render(<MessageList ref={ref} roomId="room-1" onReply={vi.fn()} />);
+    render(<MessageList ref={ref} roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
 
     act(() => {
       socketMock.trigger('message_history', { roomId: 'room-1', messages: [], historyVersion: 0, hasMore: false, mode: 'replace' });
@@ -137,7 +137,7 @@ describe('MessageList optimistic messages', () => {
 
   it('can mark pending messages as failed', async () => {
     const ref = createRef<MessageListHandle>();
-    render(<MessageList ref={ref} roomId="room-1" onReply={vi.fn()} />);
+    render(<MessageList ref={ref} roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
 
     act(() => {
       socketMock.trigger('message_history', { roomId: 'room-1', messages: [], historyVersion: 0, hasMore: false, mode: 'replace' });
@@ -159,7 +159,7 @@ describe('MessageList optimistic messages', () => {
   });
 
   it('renders a recent message window and can load older messages', async () => {
-    render(<MessageList roomId="room-1" onReply={vi.fn()} />);
+    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
 
     const history = Array.from({ length: 85 }, (_, index) => {
       const messageNumber = index + 1;
@@ -213,7 +213,7 @@ describe('MessageList optimistic messages', () => {
   });
 
   it('uses the server pagination cursor instead of the timestamp-sorted first message', async () => {
-    render(<MessageList roomId="room-1" onReply={vi.fn()} />);
+    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
 
     act(() => {
       socketMock.trigger('message_history', {

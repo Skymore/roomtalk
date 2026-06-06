@@ -10,6 +10,7 @@ import {
 } from '../services/messageDomain';
 import { Message } from '../types';
 import { hasRoomAccess } from './roomAccess';
+import { authorizeRoomAction, getRoomMessage } from './roomAuthorization';
 import { SocketConnectionContext } from './types';
 
 export const DEFAULT_ANTHROPIC_MAX_TOKENS = 8096;
@@ -96,6 +97,53 @@ export function registerAIHandlers({
       apiModel: selectedModel.apiModel,
       provider: selectedModel.provider,
     });
+
+    const postAuth = await authorizeRoomAction({
+      store,
+      roomId,
+      clientId,
+      action: { type: 'message.post' },
+    });
+    if (!postAuth.ok) {
+      callback?.({ success: false, error: postAuth.message });
+      return;
+    }
+
+    if (retryForMessageId) {
+      const retryTarget = await getRoomMessage(store, roomId, retryForMessageId);
+      if (!retryTarget) {
+        callback?.({ success: false, error: 'Message not found' });
+        return;
+      }
+      const retryAuth = await authorizeRoomAction({
+        store,
+        roomId,
+        clientId,
+        action: { type: 'message.delete', message: retryTarget },
+      });
+      if (!retryAuth.ok) {
+        callback?.({ success: false, error: retryAuth.message });
+        return;
+      }
+    }
+
+    if (editedMessageId) {
+      const editTarget = await getRoomMessage(store, roomId, editedMessageId);
+      if (!editTarget) {
+        callback?.({ success: false, error: 'Message not found' });
+        return;
+      }
+      const editAuth = await authorizeRoomAction({
+        store,
+        roomId,
+        clientId,
+        action: { type: 'message.edit', message: editTarget },
+      });
+      if (!editAuth.ok) {
+        callback?.({ success: false, error: editAuth.message });
+        return;
+      }
+    }
 
     let contextMessages: Message[] = [];
     let historyUsedForContext: Message[] = [];
@@ -479,6 +527,17 @@ export function registerAIHandlers({
       return;
     }
 
+    const postAuth = await authorizeRoomAction({
+      store,
+      roomId: data.roomId,
+      clientId,
+      action: { type: 'message.post' },
+    });
+    if (!postAuth.ok) {
+      callback?.({ success: false, error: postAuth.message });
+      return;
+    }
+
     await startAIResponse(data, clientId, callback);
   });
 
@@ -593,6 +652,23 @@ export function registerAIHandlers({
     if (!(await hasRoomAccess(store, data.roomId, clientId))) {
       socket.emit('error', { message: 'You are not authorized to access this room' });
       callback?.({ success: false, error: 'You are not authorized to access this room' });
+      return;
+    }
+
+    const targetMessage = await getRoomMessage(store, data.roomId, data.messageId);
+    if (!targetMessage) {
+      callback?.({ success: false, error: 'Message not found' });
+      return;
+    }
+
+    const editAuth = await authorizeRoomAction({
+      store,
+      roomId: data.roomId,
+      clientId,
+      action: { type: 'message.edit', message: targetMessage },
+    });
+    if (!editAuth.ok) {
+      callback?.({ success: false, error: editAuth.message });
       return;
     }
 

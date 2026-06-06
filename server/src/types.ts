@@ -110,6 +110,8 @@ export interface Room {
   lastActivityAt?: string;
   creatorId: string;
   messageVersion?: number;
+  hasPassword?: boolean;
+  postingSchedule?: RoomPostingSchedule;
 }
 
 export interface RoomMessagePage {
@@ -120,13 +122,50 @@ export interface RoomMessagePage {
   oldestMessageId?: string;
 }
 
-export type RoomMemberRole = 'owner' | 'member';
+export type RoomMemberRole = 'owner' | 'admin' | 'member';
+
+export interface RoomPostingWindow {
+  days: number[];
+  start: string;
+  end: string;
+}
+
+export interface RoomPostingSchedule {
+  enabled: boolean;
+  timezone: string;
+  windows: RoomPostingWindow[];
+}
+
+export interface RoomPermissions {
+  roomId: string;
+  clientId: string;
+  role: RoomMemberRole | null;
+  canPost: boolean;
+  canEditAnyMessage: boolean;
+  canDeleteAnyMessage: boolean;
+  canClearHistory: boolean;
+  canManageRoom: boolean;
+  canManageAdmins: boolean;
+  canTransferOwnership: boolean;
+  postingRestrictionReason?: string;
+}
 
 export interface RoomMember {
   roomId: string;
   clientId: string;
   role: RoomMemberRole;
   joinedAt: string;
+}
+
+export interface RoomRoleMember extends RoomMember {
+  nickname?: string;
+}
+
+export interface RoomClientLookup {
+  clientId: string;
+  exists: boolean;
+  nickname?: string;
+  memberRole?: RoomMemberRole | null;
 }
 
 export interface UserInfo {
