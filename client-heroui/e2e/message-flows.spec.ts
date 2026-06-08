@@ -56,10 +56,10 @@ test('clears chat messages from the room action menu', async ({ page, context, r
 });
 
 test('refreshes messages when the page becomes visible again', async ({ page, context, request }) => {
-  const { room } = await openOwnedRoom(page, context, request);
+  const { clientId, room } = await openOwnedRoom(page, context, request);
   const externalMessage = uniqueName('visibility-message');
 
-  await postMessageViaApi(request, room.id, uniqueName('external-client'), externalMessage);
+  await postMessageViaApi(request, room.id, clientId, externalMessage);
   await page.evaluate(() => {
     Object.defineProperty(document, 'visibilityState', {
       configurable: true,
