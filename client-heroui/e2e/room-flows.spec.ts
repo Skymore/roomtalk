@@ -3,7 +3,6 @@ import {
   createRoomViaApi,
   expectChatRoom,
   getClientRoomsViaApi,
-  joinRoomById,
   openRoomFromCard,
   openRoomsPage,
   resetE2EData,
@@ -53,10 +52,14 @@ test('renames an owned room from the room card and current room header', async (
   await expect(page.getByTestId('room-card').filter({ hasText: cardRename })).toBeVisible();
 
   await openRoomFromCard(page, { id: room.id, name: cardRename });
-  await page.getByRole('button', { name: 'Edit Room Name', exact: true }).click();
-  await expect(page.getByText('Rename Room')).toBeVisible();
-  await page.getByRole('dialog').getByLabel('Room Name').fill(headerRename);
-  await page.getByRole('dialog').getByRole('button', { name: 'Save' }).click();
+  await page.getByLabel('Room Actions').click();
+  await page.getByRole('menuitem', { name: 'Settings' }).click();
+  const settingsDialog = page.getByRole('dialog', { name: 'Settings' });
+  await expect(settingsDialog).toBeVisible();
+  await settingsDialog.getByLabel('Room Name').fill(headerRename);
+  await settingsDialog.getByRole('button', { name: 'Save' }).click();
+  await settingsDialog.getByRole('button', { name: 'Close' }).click();
+  await expect(settingsDialog).toBeHidden();
 
   await expectChatRoom(page, headerRename);
   const rooms = await getClientRoomsViaApi(request, clientId);
@@ -64,14 +67,13 @@ test('renames an owned room from the room card and current room header', async (
 });
 
 test('uses the desktop saved list without a separate saved navigation card', async ({ page, context, request }) => {
-  await seedClient(context);
-  const room = await createRoomViaApi(request, uniqueName('saved-owner'), uniqueName('saved-room'));
-  await context.addInitScript(({ savedRoom }) => {
-    window.localStorage.setItem('saved_rooms', JSON.stringify([savedRoom]));
-    window.localStorage.setItem('roomtalk_current_view', 'saved');
-  }, { savedRoom: room });
+  const clientId = await seedClient(context);
+  const room = await createRoomViaApi(request, clientId, uniqueName('saved-room'));
 
   await openRoomsPage(page);
+  await openRoomFromCard(page, room);
+  await page.getByRole('button', { name: 'Save Room' }).click();
+  await expect(page.getByRole('button', { name: 'Unsave Room' })).toBeVisible();
 
   await expect(page.getByRole('button', { name: 'Saved', exact: true })).toHaveCount(0);
   const savedSection = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Saved' }) });
@@ -79,8 +81,8 @@ test('uses the desktop saved list without a separate saved navigation card', asy
 
   await savedSection.getByRole('button', { name: `Unsave ${room.id}` }).click();
   await expect(savedSection.getByRole('button', { name: new RegExp(room.name) })).toHaveCount(0);
-
-  await joinRoomById(page, room);
+  const rooms = await getClientRoomsViaApi(request, clientId);
+  expect(rooms.find(item => item.id === room.id)?.name).toBe(room.name);
 });
 
 test('joins a room by ID from a separate client', async ({ page, context, request }) => {

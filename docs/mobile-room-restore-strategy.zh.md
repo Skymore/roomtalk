@@ -379,6 +379,32 @@ async function ensureRegisteredSocket(): Promise<void>
 - 两个浏览器上下文同时进房间，断开一个后人数正确。
 - 服务端重启或 socket 断连后，客户端能重新注册并重新 join。
 
+### 已落地 E2E 覆盖
+
+当前 Playwright 覆盖集中在默认 Redis E2E 环境，不依赖真实对象存储或外部 Postgres：
+
+- `client-heroui/e2e/room-restore.spec.ts`
+  - 硬刷新后从本地 session 恢复当前房间。
+  - 同一浏览器存储的新标签页恢复当前房间。
+  - 离线再在线后刷新 room session、消息和成员数。
+  - 浏览器返回导航后恢复房间状态。
+  - 同一 `clientId` 多标签页在线人数按 1 人统计。
+  - 前台页恢复时补齐后台期间产生的新消息。
+- `client-heroui/e2e/mobile-core.mobile.spec.ts`
+  - 移动视口硬刷新后仍恢复当前房间和历史消息。
+- `client-heroui/e2e/message-flows.spec.ts`
+  - `visibilitychange` 回到 visible 后能拉到期间新增消息。
+- `client-heroui/e2e/multi-client-realtime.spec.ts`
+  - 多客户端消息、编辑、删除、清空历史和 AI streaming 仍实时同步。
+
+默认命令：
+
+```bash
+cd client-heroui
+npx playwright test --project=chromium
+npx playwright test e2e/mobile-core.mobile.spec.ts --project=mobile-chromium
+```
+
 ## 分阶段实现建议
 
 ### 第一阶段：客户端统一恢复

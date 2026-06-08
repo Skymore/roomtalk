@@ -2,8 +2,10 @@ import { expect, test } from '@playwright/test';
 import {
   createRoomViaApi,
   expectChatRoom,
+  expectMessage,
   openRoomFromCard,
   openRoomsPage,
+  postMessageViaApi,
   resetE2EData,
   seedClient,
   sendTextMessage,
@@ -67,4 +69,20 @@ test('keeps the chat scroller expanded behind the mobile input overlay', async (
   expect(layout.inputPanel.top).toBeLessThan(layout.messageList.bottom);
   expect(layout.inputPanel.bottom).toBeCloseTo(layout.messageList.bottom, 1);
   expect(layout.bottomNav.top - layout.inputPanel.bottom).toBeLessThanOrEqual(4);
+});
+
+test('restores the active room after a mobile browser reload', async ({ page, context, request }) => {
+  const clientId = await seedClient(context, shortName('mobile-restore-client'));
+  const room = await createRoomViaApi(request, clientId, shortName('mobile-restore'));
+  const message = shortName('mobile-restore-msg');
+
+  await postMessageViaApi(request, room.id, clientId, message);
+  await openRoomsPage(page);
+  await openRoomFromCard(page, room);
+  await expectMessage(page, message).toBeVisible();
+
+  await page.reload();
+
+  await expectChatRoom(page, room.name);
+  await expectMessage(page, message).toBeVisible();
 });

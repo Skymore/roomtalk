@@ -15,6 +15,14 @@ import {
   uniqueName,
 } from './helpers';
 
+const hasMediaStorageConfig = () =>
+  Boolean(
+    process.env.MEDIA_BUCKET_NAME ||
+      process.env.S3_BUCKET ||
+      process.env.AWS_BUCKET_NAME ||
+      process.env.BUCKET_NAME,
+  );
+
 test.beforeEach(async ({ request }) => {
   await resetE2EData(request);
 });
@@ -93,13 +101,17 @@ test('edits a user message and asks AI against the updated text', async ({ page,
 });
 
 test('uploads and sends an image message', async ({ page, context, request }) => {
+  test.skip(!hasMediaStorageConfig(), 'Media object storage is not configured for the default E2E server.');
   await openOwnedRoom(page, context, request);
 
   await page.getByTestId('message-editor').click();
   await page.getByTestId('image-upload-input').setInputFiles(tinyPng);
   await expect(page.getByTestId('message-editor').locator('img')).toHaveCount(1);
-  await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled();
-  await page.getByRole('button', { name: 'Send' }).click();
+  const sendButton = page.getByRole('button', { name: 'Send' });
+  await expect(sendButton).toBeEnabled();
+  await sendButton.click();
+  await expect(sendButton).not.toHaveAttribute('data-loading', 'true', { timeout: 20000 });
+  await expect(page.getByTestId('message-editor').locator('img')).toHaveCount(0, { timeout: 20000 });
 
   await expect(page.getByRole('img', { name: 'Shared image' }).first()).toBeVisible();
 });

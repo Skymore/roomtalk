@@ -133,14 +133,31 @@ export async function deleteMessage(page: Page, text: string) {
   const item = messageItem(page, text);
   await item.hover();
   await item.getByLabel('Delete Message').click();
-  await expect(page.getByRole('dialog', { name: 'Confirm Deletion' })).toBeVisible();
-  await page.getByRole('button', { name: 'Delete' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Confirm Deletion' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Delete', exact: true }).click();
   await expectMessage(page, text).toHaveCount(0);
 }
 
-export async function clearChat(page: Page) {
+export async function clearChat(page: Page, roomName?: string) {
+  const confirmationText = roomName ?? (await page.getByTestId('chat-room-title').textContent())?.trim();
+  expect(confirmationText, 'room name is required to confirm clearing chat history').toBeTruthy();
+
   await page.getByLabel('Room Actions').click();
-  await page.getByRole('menuitem', { name: 'Clear Chat History' }).click();
+  await page.getByRole('menuitem', { name: 'Settings' }).click();
+
+  const settingsDialog = page.getByRole('dialog', { name: 'Settings' });
+  await expect(settingsDialog).toBeVisible();
+  await settingsDialog.getByRole('button', { name: 'Clear Chat History' }).click();
+
+  const confirmDialog = page.getByRole('dialog', { name: 'Clear chat history' });
+  await expect(confirmDialog).toBeVisible();
+  await confirmDialog.getByLabel('Confirm room name').fill(confirmationText!);
+  await confirmDialog.getByRole('button', { name: 'Clear Chat History' }).click();
+  await expect(confirmDialog).toBeHidden();
+
+  await settingsDialog.getByRole('button', { name: 'Close' }).click();
+  await expect(settingsDialog).toBeHidden();
 }
 
 export const tinyPng = {
