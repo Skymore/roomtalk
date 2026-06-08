@@ -35,10 +35,19 @@ let activeRoomId: string | null = null;
 let activeRoomPassword: string | null = null;
 // Store the latest username so it can be re-sent on every (re)connection
 let currentUsername = '';
+let registeredSocketId: string | null = null;
+let pendingRegistration: Promise<void> | null = null;
+let pendingRegistrationSocketId: string | null = null;
 const SEND_MESSAGE_ACK_TIMEOUT_MS = 15000;
 const SEND_MESSAGE_CONNECT_TIMEOUT_MS = 15000;
 const ROOM_LOOKUP_TIMEOUT_MS = 30000;
 const API_BASE_URL = (import.meta.env.VITE_SOCKET_URL || '').replace(/\/$/, '');
+
+export type RoomJoinResult = {
+  room?: Room;
+  permissions?: RoomPermissions;
+  memberCount?: number;
+};
 
 type SocketAckResponse = {
   success: boolean;
@@ -65,6 +74,11 @@ type RoomListAckResponse = SocketAckResponse & {
 
 type JoinRoomAckResponse = RoomAckResponse & {
   permissions?: RoomPermissions;
+  memberCount?: number;
+};
+
+type RegisterAckResponse = SocketAckResponse & {
+  clientId?: string;
 };
 
 type RoomPermissionsAckResponse = SocketAckResponse & {
@@ -89,7 +103,11 @@ export const getRoomMemberCount = (roomId: string): number | null => {
 export const setUsername = (username: string): void => {
   currentUsername = username;
   if (username && socket.connected) {
-    socket.emit('set_username', username);
+    ensureRegisteredSocket()
+      .then(() => socket.emit('set_username', username))
+      .catch((error) => {
+        console.error('Failed to register socket before updating username:', error);
+      });
   }
 };
 
@@ -145,15 +163,14 @@ const createSocketConnection = (): typeof Socket => {
   // This associates the persistent clientId with the temporary socket.id
   socket.on('connect', () => {
     console.log('Connected to WebSocket server, socket ID:', socket.id);
-    // Register with the username so the server can show it in the online list.
-    // Sending it together with register avoids a race with a separate set_username event.
-    socket.emit('register', { clientId: getClientId(), username: currentUsername || undefined });
+    registeredSocketId = null;
+    pendingRegistration = null;
+    pendingRegistrationSocketId = null;
 
-    // 重新加入之前的活动房间
-    if (activeRoomId) {
-      console.log('Rejoining active room after reconnection:', activeRoomId);
-      socket.emit('join_room', { roomId: activeRoomId, password: activeRoomPassword || undefined });
-    }
+    ensureRegisteredSocket()
+      .catch((error) => {
+        console.error('Failed to register socket session after connection:', error);
+      });
   });
   
   // Handle connection errors
@@ -164,6 +181,9 @@ const createSocketConnection = (): typeof Socket => {
   // Handle disconnection
   socket.on('disconnect', (reason: string) => {
     console.log('Socket disconnected:', reason);
+    registeredSocketId = null;
+    pendingRegistration = null;
+    pendingRegistrationSocketId = null;
   });
 
   // Handle reconnection events
@@ -236,12 +256,78 @@ const waitForConnectedSocket = (timeoutMs = SEND_MESSAGE_CONNECT_TIMEOUT_MS) => 
   socket.connect();
 });
 
+export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS): Promise<void> => (
+  waitForConnectedSocket(timeoutMs).then(() => new Promise<void>((resolve, reject) => {
+    const socketId = socket.id || '';
+
+    if (socketId && registeredSocketId === socketId) {
+      resolve();
+      return;
+    }
+
+    if (pendingRegistration && pendingRegistrationSocketId === socketId) {
+      pendingRegistration.then(resolve).catch(reject);
+      return;
+    }
+
+    let settled = false;
+    let timeoutId: number;
+    let rejectPendingRegistration: ((error: Error) => void) | null = null;
+
+    function cleanup() {
+      window.clearTimeout(timeoutId);
+      socket.off('disconnect', handleDisconnect);
+    }
+
+    function settle(fn: () => void) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      pendingRegistration = null;
+      pendingRegistrationSocketId = null;
+      fn();
+    }
+
+    function handleDisconnect() {
+      settle(() => {
+        rejectPendingRegistration?.(new Error('Socket disconnected while registering client'));
+      });
+    }
+
+    pendingRegistrationSocketId = socketId;
+    pendingRegistration = new Promise<void>((pendingResolve, pendingReject) => {
+      rejectPendingRegistration = pendingReject;
+      timeoutId = window.setTimeout(() => {
+        settle(() => pendingReject(new Error('Timed out while registering client')));
+      }, timeoutMs);
+
+      socket.once('disconnect', handleDisconnect);
+      socket.emit('register', { clientId: getClientId(), username: currentUsername || undefined }, (response: RegisterAckResponse) => {
+        settle(() => {
+          if (response?.success) {
+            registeredSocketId = socketId || socket.id || null;
+            pendingResolve();
+            return;
+          }
+
+          const message = typeof response?.message === 'string' ? response.message : undefined;
+          pendingReject(new Error(response?.error || message || 'Failed to register client'));
+        });
+      });
+    });
+
+    pendingRegistration.then(resolve).catch(reject);
+  }))
+);
+
 const emitWithAck = <TResponse extends SocketAckResponse>(
   event: string,
   payload: unknown,
   timeoutMessage: string,
   fallbackError: string,
-): Promise<TResponse> => waitForConnectedSocket().then(() => new Promise<TResponse>((resolve, reject) => {
+): Promise<TResponse> => ensureRegisteredSocket().then(() => new Promise<TResponse>((resolve, reject) => {
   if (!socket.connected) {
     reject(new Error('Socket disconnected before sending message'));
     return;
@@ -286,7 +372,7 @@ const emitWithAck = <TResponse extends SocketAckResponse>(
 }));
 
 // Join a chat room
-export const joinRoom = (roomId: string, password?: string): Promise<{ room?: Room; permissions?: RoomPermissions }> => {
+export const joinRoom = (roomId: string, password?: string): Promise<RoomJoinResult> => {
   const previousRoomId = activeRoomId;
   const previousRoomPassword = activeRoomPassword;
   return emitWithAck<JoinRoomAckResponse>(
@@ -297,7 +383,11 @@ export const joinRoom = (roomId: string, password?: string): Promise<{ room?: Ro
   ).then((response) => ({
     room: response.room,
     permissions: response.permissions,
+    memberCount: response.memberCount,
   })).then((result) => {
+    if (typeof result.memberCount === 'number') {
+      roomMemberCounts.set(roomId, result.memberCount);
+    }
     activeRoomId = roomId; // 记录当前活动房间ID，用于重连后重新加入
     activeRoomPassword = password || null;
     return result;
@@ -306,6 +396,11 @@ export const joinRoom = (roomId: string, password?: string): Promise<{ room?: Ro
     activeRoomPassword = previousRoomPassword;
     throw error;
   });
+};
+
+export const ensureRoomJoined = (roomId: string): Promise<RoomJoinResult> => {
+  const password = activeRoomId === roomId ? activeRoomPassword || undefined : undefined;
+  return joinRoom(roomId, password);
 };
 
 // Leave a chat room
@@ -318,12 +413,12 @@ export const leaveRoom = (roomId: string) => {
 };
 
 // Create a new room
-export const createRoom = (roomName: string, description?: string, password?: string, postingSchedule?: RoomPostingSchedule | null) => {
-  return new Promise((resolve) => {
+export const createRoom = (roomName: string, description?: string, password?: string, postingSchedule?: RoomPostingSchedule | null): Promise<string> => {
+  return ensureRegisteredSocket().then(() => new Promise<string>((resolve) => {
     socket.emit('create_room', { name: roomName, description, password, postingSchedule }, (roomId: string) => {
       resolve(roomId);
     });
-  });
+  }));
 };
 
 export const renameRoom = (roomId: string, name: string): Promise<Room> => {
@@ -649,7 +744,7 @@ export const createTranscriptionToken = (): Promise<{ token: string }> => {
 
 // Get a room by ID (for joining rooms by ID)
 export const getRoomById = (roomId: string): Promise<Room | null> => {
-  return waitForConnectedSocket(ROOM_LOOKUP_TIMEOUT_MS).then(() => new Promise<Room | null>((resolve, reject) => {
+  return ensureRegisteredSocket(ROOM_LOOKUP_TIMEOUT_MS).then(() => new Promise<Room | null>((resolve, reject) => {
     if (!socket.connected) {
       reject(new Error('Socket disconnected before getting room'));
       return;

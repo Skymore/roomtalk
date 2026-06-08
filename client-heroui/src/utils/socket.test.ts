@@ -8,6 +8,7 @@ type AckResponse = Record<string, unknown>;
 const socketMock = vi.hoisted(() => {
   const handlers = new Map<string, Set<(...args: any[]) => void>>();
   const ackResponses = new Map<string, AckResponse>();
+  let nextSocketId = 1;
 
   const socket = {
     id: 'socket-1',
@@ -48,6 +49,8 @@ const socketMock = vi.hoisted(() => {
     reset: () => {
       handlers.clear();
       ackResponses.clear();
+      nextSocketId += 1;
+      socket.id = `socket-${nextSocketId}`;
       socket.connected = true;
     },
   };
@@ -66,7 +69,9 @@ vi.mock('uuid', () => ({
 }));
 
 const {
+  ensureRoomJoined,
   getMediaDownloadUrl,
+  getRoomMemberCount,
   getRoomMembers,
   getSavedRoomsFromServer,
   saveRoomToServer,
@@ -136,6 +141,92 @@ describe('socket message acknowledgement helpers', () => {
       },
       expect.any(Function)
     );
+  });
+
+  it('registers the socket before emitting acknowledged room operations', async () => {
+    const savedMessage = message({ id: 'registered-message' });
+    socketMock.ackResponses.set('send_message', {
+      success: true,
+      message: savedMessage,
+    });
+
+    await expect(sendMessage('hello', 'room-1')).resolves.toEqual(savedMessage);
+
+    expect(socketMock.emit.mock.calls[0]).toEqual([
+      'register',
+      { clientId: 'client-uuid', username: undefined },
+      expect.any(Function),
+    ]);
+    expect(socketMock.emit.mock.calls[1]).toEqual([
+      'send_message',
+      {
+        content: 'hello',
+        roomId: 'room-1',
+        messageType: 'text',
+        username: undefined,
+        avatar: undefined,
+        replyToMessageId: undefined,
+        clientMessageId: undefined,
+      },
+      expect.any(Function),
+    ]);
+  });
+
+  it('does not emit the room operation when registration fails', async () => {
+    socketMock.ackResponses.set('register', {
+      success: false,
+      error: 'register failed',
+    });
+
+    await expect(sendMessage('hello', 'room-1')).rejects.toThrow('register failed');
+
+    expect(socketMock.emit).toHaveBeenCalledTimes(1);
+    expect(socketMock.emit).toHaveBeenCalledWith(
+      'register',
+      { clientId: 'client-uuid', username: undefined },
+      expect.any(Function),
+    );
+    expect(socketMock.emit).not.toHaveBeenCalledWith(
+      'send_message',
+      expect.anything(),
+      expect.any(Function),
+    );
+  });
+
+  it('connects before registering when the socket is disconnected', async () => {
+    socketMock.connected = false;
+    const savedMessage = message({ id: 'after-reconnect' });
+    socketMock.ackResponses.set('send_message', {
+      success: true,
+      message: savedMessage,
+    });
+
+    await expect(sendMessage('hello', 'room-1')).resolves.toEqual(savedMessage);
+
+    expect(socketMock.connect).toHaveBeenCalledTimes(1);
+    expect(socketMock.emit.mock.calls[0]).toEqual([
+      'register',
+      { clientId: 'client-uuid', username: undefined },
+      expect.any(Function),
+    ]);
+  });
+
+  it('reuses registration for later operations on the same socket', async () => {
+    const savedMessage = message({ id: 'first-operation' });
+    socketMock.ackResponses.set('send_message', {
+      success: true,
+      message: savedMessage,
+    });
+    socketMock.ackResponses.set('get_saved_rooms', {
+      success: true,
+      rooms: [],
+    });
+
+    await sendMessage('hello', 'room-1');
+    await getSavedRoomsFromServer();
+
+    const registerCalls = socketMock.emit.mock.calls.filter(([event]) => event === 'register');
+    expect(registerCalls).toHaveLength(1);
   });
 
   it('returns the saved user message and AI message id from send_message_and_ask_ai', async () => {
@@ -264,9 +355,33 @@ describe('socket message acknowledgement helpers', () => {
     );
   });
 
-  it('emits set_username when a username is set while connected', () => {
+  it('emits set_username when a username is set while connected', async () => {
     setUsername('Ada');
 
-    expect(socketMock.emit).toHaveBeenCalledWith('set_username', 'Ada');
+    await vi.waitFor(() => {
+      expect(socketMock.emit).toHaveBeenCalledWith('set_username', 'Ada');
+    });
+  });
+
+  it('rejoins the active room through ensureRoomJoined', async () => {
+    const joinedRoom = room();
+    socketMock.ackResponses.set('join_room', {
+      success: true,
+      room: joinedRoom,
+      memberCount: 3,
+    });
+
+    await expect(ensureRoomJoined(joinedRoom.id)).resolves.toEqual({
+      room: joinedRoom,
+      permissions: undefined,
+      memberCount: 3,
+    });
+    expect(getRoomMemberCount(joinedRoom.id)).toBe(3);
+
+    expect(socketMock.emit).toHaveBeenCalledWith(
+      'join_room',
+      { roomId: joinedRoom.id, password: undefined },
+      expect.any(Function)
+    );
   });
 });

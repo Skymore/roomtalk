@@ -310,10 +310,9 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                 <span className="hidden sm:inline">{t('askAI')}</span>
               </span>
               {isAiProcessing && (
-                <Icon
-                  icon="lucide:loader-circle"
-                  className="pointer-events-none absolute left-1/2 top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 animate-spin sm:h-4 sm:w-4"
-                />
+                <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                  <Icon icon="lucide:loader-circle" className="h-3.5 w-3.5 animate-spin sm:h-4 sm:w-4" />
+                </span>
               )}
             </Button>
           </HoverTooltip>
@@ -333,10 +332,9 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                 <span className="hidden sm:inline">{t('send')}</span>
               </span>
               {isSending && (
-                <Icon
-                  icon="lucide:loader-circle"
-                  className="pointer-events-none absolute left-1/2 top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 animate-spin sm:h-4 sm:w-4"
-                />
+                <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                  <Icon icon="lucide:loader-circle" className="h-3.5 w-3.5 animate-spin sm:h-4 sm:w-4" />
+                </span>
               )}
             </Button>
           </HoverTooltip>

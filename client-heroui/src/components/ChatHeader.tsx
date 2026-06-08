@@ -5,6 +5,10 @@ import {
   DropdownTrigger,
   DropdownMenu,
   DropdownItem,
+  Modal,
+  ModalBody,
+  ModalContent,
+  ModalHeader,
   Popover,
   PopoverTrigger,
   PopoverContent,
@@ -16,6 +20,7 @@ import { Room, RoomOnlineMember, RoomPermissions, RoomRenameHandler } from "../u
 import { getRoomMembers } from "../utils/socket";
 import { RoomSettingsModal } from './RoomSettingsModal';
 import { useIsTouchDevice } from "../hooks/useIsTouchDevice";
+import { PostingScheduleDetails } from './PostingScheduleDetails';
 
 interface ChatHeaderProps {
   currentRoom: Room;
@@ -56,11 +61,13 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   const isTouchDevice = useIsTouchDevice();
   const isSaved = isRoomSaved(currentRoom.id);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isScheduleOpen, setIsScheduleOpen] = useState(false);
   const [onlineMembers, setOnlineMembers] = useState<RoomOnlineMember[]>([]);
   const [isLoadingMembers, setIsLoadingMembers] = useState(false);
   const [copiedRoomId, setCopiedRoomId] = useState(false);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const canManageRoom = Boolean(roomPermissions?.canManageRoom);
+  const hasPostingSchedule = Boolean(currentRoom.postingSchedule?.enabled);
 
   useEffect(() => () => {
     if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
@@ -209,6 +216,11 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             <DropdownItem key="share" startContent={<Icon icon="lucide:share-2" />} onPress={handleShareRoom}>
               {t('share')}
             </DropdownItem>
+            {hasPostingSchedule ? (
+              <DropdownItem key="postingSchedule" startContent={<Icon icon="lucide:calendar-clock" />} onPress={() => setIsScheduleOpen(true)}>
+                {t('postingScheduleDetails')}
+              </DropdownItem>
+            ) : null}
             {canManageRoom ? (
               <DropdownItem key="roomSettings" startContent={<Icon icon="lucide:settings-2" />} onPress={() => setIsSettingsOpen(true)}>
                 {t('settings')}
@@ -245,6 +257,17 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
       onClearHistory={handleClearChatMessages}
       onDeleteRoom={handleDeleteRoom}
     />
+    <Modal isOpen={isScheduleOpen} onClose={() => setIsScheduleOpen(false)} size="sm">
+      <ModalContent>
+        <ModalHeader className="flex flex-col gap-1">
+          {t('postingScheduleDetails')}
+          <span className="text-xs font-normal text-[#87867f] dark:text-[#b0aea5]">{currentRoom.name}</span>
+        </ModalHeader>
+        <ModalBody className="pb-5 pt-0">
+          <PostingScheduleDetails postingSchedule={currentRoom.postingSchedule} showTitle={false} />
+        </ModalBody>
+      </ModalContent>
+    </Modal>
     </>
   );
 };

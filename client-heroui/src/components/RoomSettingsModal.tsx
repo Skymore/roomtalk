@@ -252,7 +252,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
         roomId: room.id,
         postingSchedule: scheduleEnabled ? buildSchedule() : null,
       });
-    }, t('roomSettingsSaved'));
+    }, t('postingScheduleUpdated'));
   };
 
   const handleAddAdmin = () => {
@@ -559,6 +559,9 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
         <section className="space-y-5">
           <div className="space-y-2">
             {renderSectionLabel('lucide:shield-check', t('adminManagement'), 'text-[#c96442] dark:text-[#e08a6a]')}
+            <p className="text-xs leading-relaxed text-[#87867f] dark:text-[#b0aea5]">
+              {t('adminPermissionsHint')}
+            </p>
             <div className="grid grid-cols-[minmax(0,1fr)_3rem] items-center gap-2">
               <Input
                 aria-label={t('targetClientId')}
@@ -611,9 +614,6 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
         <section className="space-y-5">
           <div className="space-y-2">
             {renderSectionLabel('lucide:crown', t('transferOwnership'), 'text-danger-600 dark:text-danger-400')}
-            <p className="text-xs leading-relaxed text-[#87867f] dark:text-[#b0aea5]">
-              {t('transferOwnershipHint')}
-            </p>
             <div className="grid grid-cols-[minmax(0,1fr)_3rem] items-center gap-2">
               <Input
                 aria-label={t('targetClientId')}

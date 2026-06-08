@@ -280,10 +280,14 @@ const createHarness = (clientId: string | null = 'client-1') => {
 describe('room socket handlers', () => {
   it('registers clients, joins their private socket room, and returns owned rooms', async () => {
     const { socket, store } = createHarness(null);
+    let response: unknown;
 
-    await socket.invoke('register', 'client-1');
+    await socket.invoke('register', 'client-1', (result: unknown) => {
+      response = result;
+    });
 
     assert.equal(store.clientId, 'client-1');
+    assert.deepEqual(response, { success: true, clientId: 'client-1' });
     assert.deepEqual(socket.joined, ['client-1']);
     assert.deepEqual(socket.emitted, [
       { event: 'room_list', args: [[room()]] },
@@ -468,17 +472,28 @@ describe('room socket handlers', () => {
 
   it('joins existing rooms and leaves previous rooms without sending message history', async () => {
     const unregistered = createHarness(null);
-    await unregistered.socket.invoke('join_room', 'room-1');
+    let unregisteredJoinResponse: unknown;
+    await unregistered.socket.invoke('join_room', 'room-1', (result: unknown) => {
+      unregisteredJoinResponse = result;
+    });
     assert.deepEqual(unregistered.socket.emitted, [{ event: 'error', args: [{ message: 'You are not registered' }] }]);
+    assert.deepEqual(unregisteredJoinResponse, { success: false, error: 'You are not registered' });
 
     const missing = createHarness('client-1');
-    await missing.socket.invoke('join_room', 'missing');
+    let missingJoinResponse: unknown;
+    await missing.socket.invoke('join_room', 'missing', (result: unknown) => {
+      missingJoinResponse = result;
+    });
     assert.deepEqual(missing.socket.emitted, [{ event: 'error', args: [{ message: 'Room not found' }] }]);
+    assert.deepEqual(missingJoinResponse, { success: false, error: 'Room not found' });
 
     const valid = createHarness('client-1');
     valid.store.socketRooms = ['old-room'];
     valid.store.rooms.push(room({ id: 'old-room', name: 'Old Room' }));
-    await valid.socket.invoke('join_room', 'room-1');
+    let joinResponse: unknown;
+    await valid.socket.invoke('join_room', 'room-1', (result: unknown) => {
+      joinResponse = result;
+    });
 
     assert.deepEqual(valid.socket.left, ['old-room']);
     assert.deepEqual(valid.socket.joined, ['room-1']);
@@ -490,6 +505,41 @@ describe('room socket handlers', () => {
     assert.equal(valid.io.roomEmits[0].event, 'room_member_change');
     assert.equal(valid.io.roomEmits.length, 1);
     assert.equal(valid.socket.emitted[0].event, 'room_permissions');
+    assert.deepEqual(joinResponse, {
+      success: true,
+      room: room(),
+      permissions: {
+        roomId: 'room-1',
+        clientId: 'client-1',
+        role: 'owner',
+        canPost: true,
+        canEditAnyMessage: true,
+        canDeleteAnyMessage: true,
+        canClearHistory: true,
+        canManageRoom: true,
+        canManageAdmins: true,
+        canTransferOwnership: true,
+        postingRestrictionReason: undefined,
+      },
+      memberCount: 2,
+    });
+  });
+
+  it('rejoining the current room is idempotent and returns the member count', async () => {
+    const valid = createHarness('client-1');
+    valid.store.socketRooms = ['room-1'];
+    let joinResponse: unknown;
+
+    await valid.socket.invoke('join_room', { roomId: 'room-1' }, (result: unknown) => {
+      joinResponse = result;
+    });
+
+    assert.deepEqual(valid.socket.left, []);
+    assert.deepEqual(valid.socket.joined, ['room-1']);
+    assert.deepEqual(valid.store.socketRooms, ['room-1']);
+    assert.equal(valid.io.roomEmits[0].roomId, 'room-1');
+    assert.equal(valid.io.roomEmits[0].event, 'room_member_change');
+    assert.deepEqual((joinResponse as { memberCount?: number }).memberCount, 2);
   });
 
   it('leaves rooms and updates stored socket memberships', async () => {

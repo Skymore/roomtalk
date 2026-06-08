@@ -19,6 +19,7 @@ import {
   getSavedRoomsFromServer,
   getRoomPermissions,
   clearRoomMessages as clearRoomMessagesFromServer,
+  type RoomJoinResult,
 } from "../utils/socket";
 import {
   Room, RoomMemberEvent, RoomPermissions,
@@ -39,6 +40,8 @@ const isDesktopLayout = () => (
   typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches
 );
 
+type RoomRestoreSource = "storage" | "manual" | "url" | "visibility" | "pageshow" | "online" | "socket-connect";
+
 export const MessagePage: React.FC = () => {
   // 不操作 html/body 滚动，页面固定高度由容器本身管理
   // 添加初始化标志，防止初始渲染时清除存储的房间
@@ -55,6 +58,8 @@ export const MessagePage: React.FC = () => {
   const [isLoadingRooms, setIsLoadingRooms] = useState(true);
   const [isLoadingSavedRooms, setIsLoadingSavedRooms] = useState(true);
   const [currentRoom, setCurrentRoom] = useState<Room | null>(null);
+  const currentRoomRef = useRef<Room | null>(null);
+  const roomSessionGenerationRef = useRef(0);
   const [roomPermissions, setRoomPermissions] = useState<RoomPermissions | null>(null);
   // 初始化视图状态，默认从localStorage读取
   const [view, setView] = useState<AppView>(() => {
@@ -103,12 +108,22 @@ export const MessagePage: React.FC = () => {
 
   const refreshRoomPermissions = useCallback((roomId: string) => {
     getRoomPermissions(roomId)
-      .then(setRoomPermissions)
+      .then((permissions) => {
+        if (currentRoomRef.current?.id === roomId) {
+          setRoomPermissions(permissions);
+        }
+      })
       .catch((error) => {
         console.error("Failed to load room permissions:", error);
-        setRoomPermissions(null);
+        if (currentRoomRef.current?.id === roomId) {
+          setRoomPermissions(null);
+        }
       });
   }, []);
+
+  useEffect(() => {
+    currentRoomRef.current = currentRoom;
+  }, [currentRoom]);
 
   // 切换语言方法修改为支持多语言
   const changeLanguage = (language: string) => {
@@ -127,6 +142,94 @@ export const MessagePage: React.FC = () => {
     newParams.delete("room");
     setSearchParams(newParams);
   }, [searchParams, setSearchParams]);
+
+  const applyRoomSessionResult = useCallback((
+    roomId: string,
+    result: RoomJoinResult,
+    fallbackRoom?: Room | null,
+  ) => {
+    const joinedRoom = result.room || fallbackRoom || currentRoomRef.current;
+    if (!joinedRoom || joinedRoom.id !== roomId) {
+      return null;
+    }
+
+    currentRoomRef.current = joinedRoom;
+    setCurrentRoom((current) => current?.id === roomId ? { ...current, ...joinedRoom } : joinedRoom);
+
+    if (result.permissions) {
+      setRoomPermissions(result.permissions);
+    } else {
+      setRoomPermissions(null);
+      refreshRoomPermissions(roomId);
+    }
+
+    const resolvedMemberCount = typeof result.memberCount === "number"
+      ? result.memberCount
+      : getRoomMemberCount(roomId);
+    setMemberCount(resolvedMemberCount);
+    socket.emit("get_room_messages", { roomId });
+    return joinedRoom;
+  }, [refreshRoomPermissions]);
+
+  const ensureActiveRoomSession = useCallback(async (options: {
+    roomId: string;
+    password?: string;
+    fallbackRoom?: Room | null;
+    source: RoomRestoreSource;
+  }) => {
+    const { roomId, password, fallbackRoom, source } = options;
+    const generation = roomSessionGenerationRef.current + 1;
+    roomSessionGenerationRef.current = generation;
+    pendingRestoreRoomIdRef.current = roomId;
+    setIsRestoringRoom(true);
+
+    if (fallbackRoom) {
+      currentRoomRef.current = fallbackRoom;
+      setCurrentRoom(fallbackRoom);
+    }
+
+    setMemberCount(getRoomMemberCount(roomId));
+
+    try {
+      const result = await joinRoom(roomId, password);
+      if (roomSessionGenerationRef.current !== generation) {
+        return null;
+      }
+
+      const joinedRoom = applyRoomSessionResult(roomId, result, fallbackRoom);
+      pendingRestoreRoomIdRef.current = null;
+      return joinedRoom;
+    } catch (error) {
+      if (roomSessionGenerationRef.current !== generation) {
+        return null;
+      }
+
+      const message = error instanceof Error ? error.message : t("errorLoading");
+      console.error(`Failed to ensure active room session from ${source}:`, error);
+      setRoomPermissions(null);
+
+      if (/room not found/i.test(message)) {
+        leaveRoom(roomId);
+        if (currentRoomRef.current?.id === roomId || fallbackRoom?.id === roomId) {
+          currentRoomRef.current = null;
+          setCurrentRoom(null);
+        }
+        setMemberCount(null);
+        saveCurrentRoom(null);
+        clearRoomUrlParam();
+        setError(t("errorRoomNoLongerExists"));
+      } else {
+        setError(source === "storage" ? t("errorRestoringRoom") : message);
+      }
+
+      return null;
+    } finally {
+      if (roomSessionGenerationRef.current === generation) {
+        pendingRestoreRoomIdRef.current = null;
+        setIsRestoringRoom(false);
+      }
+    }
+  }, [applyRoomSessionResult, clearRoomUrlParam, t]);
 
   // 初次加载时加载已保存房间和用户名
   useEffect(() => {
@@ -197,23 +300,6 @@ export const MessagePage: React.FC = () => {
 
       if (storedRoom) {
         console.log("Found stored room, attempting to restore:", storedRoom.id);
-        pendingRestoreRoomIdRef.current = storedRoom.id;
-        setIsRestoringRoom(true);
-        setCurrentRoom(storedRoom);
-        setMemberCount(getRoomMemberCount(storedRoom.id));
-        joinRoom(storedRoom.id)
-          .then((result) => {
-            if (result.permissions) {
-              setRoomPermissions(result.permissions);
-            } else {
-              refreshRoomPermissions(storedRoom.id);
-            }
-          })
-          .catch((error) => {
-            console.error("Failed to rejoin stored room:", error);
-            setRoomPermissions(null);
-          });
-
         const savedView = getStoredView();
         console.log("Restored stored room shell with saved view:", savedView);
 
@@ -221,39 +307,15 @@ export const MessagePage: React.FC = () => {
           setView("chat");
         }
 
-        // 验证房间是否仍然存在
-        getRoomById(storedRoom.id)
-          .then((roomInfo) => {
-            if (pendingRestoreRoomIdRef.current !== storedRoom.id) {
-              return;
-            }
-
-            pendingRestoreRoomIdRef.current = null;
-            setIsRestoringRoom(false);
-            if (roomInfo) {
-              console.log("Successfully restored room:", roomInfo.name);
-              setCurrentRoom(roomInfo);
-              setMemberCount(getRoomMemberCount(roomInfo.id));
-              refreshRoomPermissions(roomInfo.id);
-            } else {
-              console.log("Stored room no longer exists");
-              // 房间不存在，清除存储
-              leaveRoom(storedRoom.id);
-              setCurrentRoom(null);
-              saveCurrentRoom(null);
-              setError(t("errorRoomNoLongerExists"));
-            }
-          })
-          .catch((err) => {
-            if (pendingRestoreRoomIdRef.current !== storedRoom.id) {
-              return;
-            }
-
-            pendingRestoreRoomIdRef.current = null;
-            setIsRestoringRoom(false);
-            console.error("Error restoring room:", err);
-            setError(t("errorRestoringRoom"));
-          });
+        void ensureActiveRoomSession({
+          roomId: storedRoom.id,
+          fallbackRoom: storedRoom,
+          source: "storage",
+        }).then((roomInfo) => {
+          if (roomInfo) {
+            console.log("Successfully restored room:", roomInfo.name);
+          }
+        });
       } else {
         console.log("No stored room found");
       }
@@ -344,30 +406,49 @@ export const MessagePage: React.FC = () => {
     };
   }, [currentRoom, refreshRoomPermissions]);
 
-  // 添加页面可见性变化处理
+  // 添加页面可见性、BFCache 和网络恢复处理
   useEffect(() => {
-    // 处理页面可见性变化
+    const restoreCurrentRoom = (source: RoomRestoreSource) => {
+      const activeRoom = currentRoomRef.current;
+      if (!activeRoom) {
+        return;
+      }
+
+      reconnectSocket();
+      void ensureActiveRoomSession({
+        roomId: activeRoom.id,
+        fallbackRoom: activeRoom,
+        source,
+      });
+    };
+
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
         console.log("Page is visible, checking connection status...");
-        // 尝试重新连接socket
-        reconnectSocket();
-
-        // 如果在房间中，刷新消息
-        if (currentRoom) {
-          console.log("Refreshing messages for current room:", currentRoom.id);
-          socket.emit("get_room_messages", { roomId: currentRoom.id });
-        }
+        restoreCurrentRoom("visibility");
       }
     };
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) {
+        console.log("Page restored from BFCache, refreshing active room session...");
+      }
+      restoreCurrentRoom("pageshow");
+    };
+    const handleOnline = () => restoreCurrentRoom("online");
+    const handleSocketConnect = () => restoreCurrentRoom("socket-connect");
 
-    // 注册页面可见性变化事件
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pageshow", handlePageShow);
+    window.addEventListener("online", handleOnline);
+    socket.on("connect", handleSocketConnect);
 
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pageshow", handlePageShow);
+      window.removeEventListener("online", handleOnline);
+      socket.off("connect", handleSocketConnect);
     };
-  }, [currentRoom]);
+  }, [ensureActiveRoomSession]);
 
   // --- 添加清空聊天记录的处理函数 (Stays the same) ---
   const handleClearChatMessages = useCallback(async (confirmation: string) => {
@@ -389,22 +470,17 @@ export const MessagePage: React.FC = () => {
 
   // 直接加入房间：点击房间卡片或确认弹窗后调用
   const handleRoomSelect = async (room: Room, password?: string) => {
-    pendingRestoreRoomIdRef.current = null;
-    setIsRestoringRoom(false);
-
     try {
-      const result = await joinRoom(room.id, password);
-      const joinedRoom = result.room || room;
-      setCurrentRoom(joinedRoom);
-      setRoomPermissions(result.permissions || null);
-      if (!result.permissions) {
-        refreshRoomPermissions(joinedRoom.id);
+      const joinedRoom = await ensureActiveRoomSession({
+        roomId: room.id,
+        password,
+        fallbackRoom: room,
+        source: searchParams.get("room") === room.id ? "url" : "manual",
+      });
+      if (joinedRoom) {
+        setView("chat");
+        clearRoomUrlParam();
       }
-      // 更新成员数量
-      setMemberCount(getRoomMemberCount(joinedRoom.id));
-      // 进入房间时切换到聊天视图
-      setView("chat");
-      clearRoomUrlParam();
     } catch (error) {
       const message = error instanceof Error ? error.message : t("errorLoading");
       setError(message);
@@ -412,6 +488,7 @@ export const MessagePage: React.FC = () => {
   };
 
   const handleRoomSelectById = async (roomId: string) => {
+    roomSessionGenerationRef.current += 1;
     pendingRestoreRoomIdRef.current = null;
     setIsRestoringRoom(false);
 
@@ -447,12 +524,14 @@ export const MessagePage: React.FC = () => {
 
   // 离开当前房间
   const handleLeaveRoom = () => {
+    roomSessionGenerationRef.current += 1;
     pendingRestoreRoomIdRef.current = null;
     setIsRestoringRoom(false);
 
     if (currentRoom) {
       leaveRoom(currentRoom.id);
       setCurrentRoom(null);
+      currentRoomRef.current = null;
       setRoomPermissions(null);
       setMemberCount(null);
       // 修复BUG：离开房间时清除 URL 中的 room 参数，防止重复弹出加入房间确认弹窗
@@ -542,7 +621,9 @@ export const MessagePage: React.FC = () => {
 
         // If currently in the deleted room, navigate away
         if (currentRoom && currentRoom.id === roomId) {
+          roomSessionGenerationRef.current += 1;
           setCurrentRoom(null);
+          currentRoomRef.current = null;
           setView('rooms');
           setIsRestoringRoom(false);
           setMemberCount(null);
