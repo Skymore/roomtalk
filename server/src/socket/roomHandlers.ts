@@ -51,6 +51,17 @@ type BasicRoomAck = {
   error?: string;
 };
 
+type RegisterAck = {
+  success: boolean;
+  clientId?: string;
+  error?: string;
+};
+
+type JoinRoomAck = BasicRoomAck & {
+  permissions?: RoomPermissions;
+  memberCount?: number;
+};
+
 const validateRoomName = (name: unknown): { ok: true; name: string } | { ok: false; error: string } => {
   if (typeof name !== 'string') {
     return { ok: false, error: 'Room name is required' };
@@ -176,20 +187,26 @@ const parseRegisterPayload = (payload: unknown): { clientId?: string; username: 
 };
 
 export function registerRoomHandlers({ io, socket, store, socketLogger }: SocketConnectionContext) {
-  socket.on('register', async (payload: unknown) => {
+  socket.on('register', async (payload: unknown, callback?: (result: RegisterAck) => void) => {
     const { clientId, username } = parseRegisterPayload(payload);
     const userId = clientId || uuidv4();
-    await store.storeClientSession(socket.id, userId);
-    if (username) {
-      await store.setClientNickname(userId, username);
-    }
-    socketLogger.info('Client registered', { socketId: socket.id, clientId: userId });
+    try {
+      await store.storeClientSession(socket.id, userId);
+      if (username) {
+        await store.setClientNickname(userId, username);
+      }
+      socketLogger.info('Client registered', { socketId: socket.id, clientId: userId });
 
-    socket.join(userId);
-    const myRooms = await store.readRoomsByUser(userId);
-    const savedRooms = await store.readSavedRoomsByUser(userId);
-    socket.emit('room_list', myRooms);
-    socket.emit('saved_room_list', savedRooms);
+      socket.join(userId);
+      const myRooms = await store.readRoomsByUser(userId);
+      const savedRooms = await store.readSavedRoomsByUser(userId);
+      socket.emit('room_list', myRooms);
+      socket.emit('saved_room_list', savedRooms);
+      callback?.({ success: true, clientId: userId });
+    } catch (error) {
+      socketLogger.error('Failed to register client', { socketId: socket.id, clientId: userId, error });
+      callback?.({ success: false, error: 'Failed to register client' });
+    }
   });
 
   socket.on('set_username', async (rawUsername: unknown) => {
@@ -302,7 +319,7 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
     }
   });
 
-  socket.on('join_room', async (payload: unknown, callback?: (result: BasicRoomAck & { permissions?: RoomPermissions }) => void) => {
+  socket.on('join_room', async (payload: unknown, callback?: (result: JoinRoomAck) => void) => {
     const { roomId, password } = parseJoinRoomPayload(payload);
     const userId = await store.getClientId(socket.id);
     if (!userId) {
@@ -320,7 +337,7 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
     }
 
     const prevRooms = await store.getUserRooms(socket.id);
-    for (const r of prevRooms) {
+    for (const r of prevRooms.filter((previousRoomId) => previousRoomId !== roomId)) {
       const memberCount = await store.updateRoomMemberCount(r, userId, socket.id, false);
       const leaveEvent = createRoomMemberEvent({
         roomId: r,
@@ -393,7 +410,7 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
       memberCount,
     });
 
-    callback?.({ success: true, room, permissions });
+    callback?.({ success: true, room, permissions, memberCount });
 
   });
 

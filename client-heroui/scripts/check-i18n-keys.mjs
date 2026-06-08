@@ -271,6 +271,17 @@ const sourceBlock = extractLocaleBlock(i18nContent, SOURCE_LOCALE);
 const sourceKeys = extractTranslationKeys(sourceBlock);
 const usedKeys = extractUsedKeys();
 const missingSourceKeys = [...usedKeys].filter((key) => !sourceKeys.has(key)).sort();
+const localeKeyIssues = LOCALES
+  .filter((locale) => locale !== SOURCE_LOCALE)
+  .map((locale) => {
+    const localeKeys = extractTranslationKeys(extractLocaleBlock(i18nContent, locale));
+    return {
+      locale,
+      missing: [...sourceKeys].filter((key) => !localeKeys.has(key)).sort(),
+      extra: [...localeKeys].filter((key) => !sourceKeys.has(key)).sort(),
+    };
+  })
+  .filter((issue) => issue.missing.length > 0 || issue.extra.length > 0);
 const hardcodedUiStrings = findHardcodedUiStrings();
 const localizedSourceLiterals = findLocalizedSourceLiterals();
 const hardcodedLocaleFormatting = findHardcodedLocaleFormatting();
@@ -279,6 +290,19 @@ if (missingSourceKeys.length > 0) {
   console.error("Missing source translation keys:");
   for (const key of missingSourceKeys) {
     console.error(`  - ${key}`);
+  }
+  process.exit(1);
+}
+
+if (localeKeyIssues.length > 0) {
+  console.error("Locale translation key mismatch:");
+  for (const issue of localeKeyIssues) {
+    if (issue.missing.length > 0) {
+      console.error(`  - ${issue.locale} missing ${issue.missing.length}: ${issue.missing.join(", ")}`);
+    }
+    if (issue.extra.length > 0) {
+      console.error(`  - ${issue.locale} extra ${issue.extra.length}: ${issue.extra.join(", ")}`);
+    }
   }
   process.exit(1);
 }
