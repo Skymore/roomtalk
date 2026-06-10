@@ -33,6 +33,7 @@ type RoomRow = {
   message_version?: number | string | null;
   password_hash?: string | null;
   posting_schedule?: unknown;
+  room_version?: number | string | null;
   updated_at?: string | Date | null;
 };
 
@@ -77,7 +78,7 @@ type MediaAssetRow = {
   created_at: string | Date;
 };
 
-const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, updated_at';
+const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, room_version, updated_at';
 const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, ai_model, usage, cost, reply_to';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, width, height, duration_ms, uploaded_by_client_id, created_at';
@@ -146,6 +147,8 @@ const mapRoom = (row: RoomRow): Room => {
   if (row.password_hash) room.hasPassword = true;
   const postingSchedule = parseJsonValue<RoomPostingSchedule>(row.posting_schedule);
   if (postingSchedule) room.postingSchedule = postingSchedule;
+  const roomVersion = Number(row.room_version || 0);
+  if (roomVersion > 0) room.roomVersion = roomVersion;
   if (row.updated_at) room.updatedAt = toIsoString(row.updated_at);
   return room;
 };
@@ -398,7 +401,7 @@ export class PostgresStore implements DurableRoomStore {
           `UPDATE rooms
           SET last_activity_at = GREATEST(last_activity_at, $2::timestamptz),
             message_version = message_version + 1,
-            updated_at = NOW()
+            room_version = room_version + 1, updated_at = NOW()
           WHERE id = $1
           RETURNING ${ROOM_COLUMNS}`,
           [message.roomId, message.timestamp]
@@ -450,7 +453,7 @@ export class PostgresStore implements DurableRoomStore {
           `UPDATE rooms
           SET last_activity_at = GREATEST(last_activity_at, $2::timestamptz),
             message_version = message_version + 1,
-            updated_at = NOW()
+            room_version = room_version + 1, updated_at = NOW()
           WHERE id = $1
           RETURNING ${ROOM_COLUMNS}`,
           [mediaMessage.roomId, mediaMessage.timestamp]
@@ -493,7 +496,7 @@ export class PostgresStore implements DurableRoomStore {
           `UPDATE rooms
           SET last_activity_at = GREATEST(last_activity_at, $2::timestamptz),
             message_version = message_version + 1,
-            updated_at = NOW()
+            room_version = room_version + 1, updated_at = NOW()
           WHERE id = $1
           RETURNING ${ROOM_COLUMNS}`,
           [message.roomId, message.timestamp]
@@ -754,7 +757,7 @@ export class PostgresStore implements DurableRoomStore {
           `UPDATE rooms
           SET last_activity_at = $2,
             message_version = message_version + 1,
-            updated_at = NOW()
+            room_version = room_version + 1, updated_at = NOW()
           WHERE id = $1
           RETURNING ${ROOM_COLUMNS}`,
           [roomId, lastActivityAt]
@@ -786,7 +789,7 @@ export class PostgresStore implements DurableRoomStore {
             `UPDATE rooms
             SET message_version = message_version + 1,
               last_activity_at = created_at,
-              updated_at = NOW()
+              room_version = room_version + 1, updated_at = NOW()
             WHERE id = $1`,
             [roomId]
           );
@@ -1068,13 +1071,13 @@ export class PostgresStore implements DurableRoomStore {
     try {
       return await this.transaction(async client => {
         const result = await client.query<RoomRow>(
-          `INSERT INTO rooms (id, name, description, created_at, last_activity_at, creator_id, updated_at)
-          VALUES ($1, $2, $3, $4, $5, $6, NOW())
+          `INSERT INTO rooms (id, name, description, created_at, last_activity_at, creator_id, room_version, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, 1, NOW())
           ON CONFLICT (id) DO UPDATE SET
             name = EXCLUDED.name,
             description = EXCLUDED.description,
             last_activity_at = GREATEST(rooms.last_activity_at, EXCLUDED.last_activity_at),
-            updated_at = NOW()
+            room_version = room_version + 1, updated_at = NOW()
           RETURNING ${ROOM_COLUMNS}`,
           [
             room.id,
@@ -1206,7 +1209,7 @@ export class PostgresStore implements DurableRoomStore {
         `UPDATE rooms
         SET password_hash = CASE WHEN $2::boolean THEN $3 ELSE password_hash END,
           posting_schedule = CASE WHEN $4::boolean THEN $5::jsonb ELSE posting_schedule END,
-          updated_at = NOW()
+          room_version = room_version + 1, updated_at = NOW()
         WHERE id = $1
         RETURNING ${ROOM_COLUMNS}`,
         [
@@ -1277,7 +1280,7 @@ export class PostgresStore implements DurableRoomStore {
 
         const updated = await client.query<RoomRow>(
           `UPDATE rooms
-          SET creator_id = $2, updated_at = NOW()
+          SET creator_id = $2, room_version = room_version + 1, updated_at = NOW()
           WHERE id = $1
           RETURNING ${ROOM_COLUMNS}`,
           [roomId, newOwnerClientId]
@@ -1413,7 +1416,7 @@ export class PostgresStore implements DurableRoomStore {
     try {
       const result = await this.pool.query<RoomRow>(
         `UPDATE rooms
-        SET name = $3, updated_at = NOW()
+        SET name = $3, room_version = room_version + 1, updated_at = NOW()
         WHERE id = $1 AND creator_id = $2
         RETURNING ${ROOM_COLUMNS}`,
         [roomId, creatorId, name]
@@ -1525,7 +1528,7 @@ export class PostgresStore implements DurableRoomStore {
       `UPDATE rooms
       SET last_activity_at = $2,
         message_version = message_version + $3,
-        updated_at = NOW()
+        room_version = room_version + 1, updated_at = NOW()
       WHERE id = $1
       RETURNING ${ROOM_COLUMNS}`,
       [roomId, lastActivityAt, incrementMessageVersion ? 1 : 0]

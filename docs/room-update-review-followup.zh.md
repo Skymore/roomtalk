@@ -63,17 +63,52 @@ payload 只有 `{roomId}`(无 password/postingSchedule 键)时,handler 仍执行
 | F6 | `armNextBoundary` 区分"到达真实边界"与"命中 12h 上限":后者只重新计时不发权限请求 | ✅ 已完成 |
 | F7 | `update_room_settings` 空 updates 直接读回房间返回 success,不写库不广播;补 2 条 handler 测试(正向广播 + 空更新无副作用) | ✅ 已完成 |
 
-### F1 的一个已知例外(刻意保留)
+### F1 的一个已知例外(~~刻意保留~~ → 已在第三轮跟进中关闭)
 
-Redis 的消息追加路径经由 Lua 脚本直接改房间 JSON(`APPEND_MESSAGE_LIST_SCRIPT` 等,其中 `REPLACE_MESSAGE_LIST_SCRIPT` 使用变长 ARGV),在 Lua 内盖 ISO stamp 需要改动全部脚本及其调用方,风险大于收益:
+第一版用 ISO 时间戳时,Redis 的 Lua 消息路径无法低风险盖 stamp,曾作为例外保留。**第三轮跟进改用整数版本号后,该例外已不存在**(整数自增不需要时间戳格式化,Lua 一行即可),详见下文「第三轮跟进」。
 
-- prod 持久层是 Postgres,其**全部**写路径已盖 stamp,LWW 在 prod 是精确全序;
-- Redis(dev)的 Lua 追加路径继承现有 stamp,客户端对等值 stamp 放行,行为与修复前一致、无回归;残余影响仅为 dev 环境下消息活动更新与设置变更并发时的瞬时竞争,可自愈。
-
-`redisStore.ts` 的 `stampRoomRecord` 注释中同样记录了该例外。
+> 历史背景:当时的理由是 `REPLACE_MESSAGE_LIST_SCRIPT` 使用变长 ARGV,在 Lua 内传入并格式化 ISO 时间需改动全部脚本及调用方,风险大于收益;prod 的 Postgres 已全覆盖,Redis(dev)等值放行无回归。
 
 ## 验收结果(2026-06-10)
 
 - 客户端:**134 用例全绿**(新增:roomState LWW ×4、对拍向量 ×2),`tsc` / `lint` / `check:i18n` 干净;
 - 服务端:**176 用例全绿**(新增:getPostingAvailability ×5、update_room_settings ×2;契约测试升级为"saveRoom/rename 必须盖 stamp"的正式断言,fake pool 同步),`tsc` 干净;
 - 现有 LWW/边界/disable 复现回归测试无回退。
+
+---
+
+## 第三轮跟进:`room_version` 行级单调版本号(2026-06-10)
+
+### 触发:外部 review 的 P2 finding(判定:成立)
+
+> `updated_at = NOW()` 还不是严格全序。`NOW()` 是 transaction timestamp(冻结在 `BEGIN` 时刻),显式事务下先 BEGIN、后拿锁提交的事务会写出比已提交新状态更早的 stamp;且 JS `Date.parse` 只有毫秒精度,无法区分"同一次写入"和"同毫秒两次写入"。
+
+复核结论:**两点都成立**,且前两轮文档中"LWW 在 prod 是精确全序"的表述过强,予以更正。精确化补充:
+
+- `updateRoomSettings`/`updateRoomName` 是单语句(隐式事务),`NOW()` ≈ 语句执行时刻——**settings 类竞争(原始 bug 类)本来就是安全的**;
+- 暴露面在事务包裹的写路径(`appendMessage`/`saveMessageHistory`/`transferRoomOwnership` 等):低概率、可被任何后续写入自愈,但语义上确实不是全序。
+
+### 修复:`room_version`(reviewer 建议的方案 B,弃用方案 A 的 `clock_timestamp()`)
+
+选择理由:`SET room_version = room_version + 1` 在**持有行锁时读改写**,每行严格单调、与时钟无关;codebase 已有同型先例(`message_version`);并使"等值放行"从妥协变成定义正确——**版本相等 ⟺ 同一次写入**(ack 与广播双路径幂等),毫秒平局问题一并消失。
+
+落地清单(全部完成,服务端 178 / 客户端 138 测试全绿):
+
+| 层 | 改动 |
+|---|---|
+| schema | `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS room_version BIGINT NOT NULL DEFAULT 0`(幂等,启动自动迁移) |
+| Postgres | 全部 9 条 `UPDATE rooms` 加 `room_version = room_version + 1`;`saveRoom` INSERT 起始版本 1、冲突分支 +1;`ROOM_COLUMNS`/`mapRoom`/`RoomRow` 透出(注意:误伤 `room_ai_cost_totals` 两处后已精确还原,自增恰好且仅 10 处全在 rooms 表) |
+| Redis Lua | 8 个写房间的脚本各加一行 `room['roomVersion'] = (tonumber(...) or 0) + 1`(紧邻既有 `messageVersion` 自增;`REPLACE_MEDIA_MESSAGE_ASSET_SCRIPT` 不写房间,不加) |
+| Redis TS | **同时关闭 read-modify-write 例外**:新增 `WRITE_ROOM_RECORD_SCRIPT`,版本号以"写入时刻存储中的值"为准在 Redis 内原子自增;6 个 TS 写入点全部收口到 `writeRoomRecord()`,不再有 `hSet('rooms', ...)` 直写 |
+| 客户端 | `isNewerRoom` 改为**版本号优先**:两侧都带 `roomVersion` 时按版本比较(等值放行=幂等);任一侧缺失回落 `updatedAt`;时间戳缺失/损坏放行。`updatedAt` 退为展示/兼容回落 |
+| 测试 | 新契约测试「混合写路径(创建→改名→消息)版本严格单调」双 fixture 通过;客户端 roomState 增"版本号优先于时间戳(含事务时间戳偏差场景)""缺版本号回落时间戳"两组;三个测试 fake(contract 双份 MemoryRedis、StatefulPostgresPool)同步模拟 |
+
+### 残余语义(如实记录)
+
+- Redis(dev)的 Lua 消息脚本 bump `roomVersion` 但不盖 `updatedAt`(Lua 内无 ISO 时钟)——客户端按版本号比较,不受影响;
+- 存量房间 `room_version = 0`,`mapRoom` 不透出(>0 才设),客户端按"缺版本号"回落时间戳,首次任何写入后进入版本号轨道,平滑过渡;
+- 跨房间不存在版本可比性(版本是行级的),`isNewerRoom` 对不同 roomId 恒放行,语义不变。
+
+### 面试口径(更新)
+
+> 排序真值是行级逻辑版本号 `room_version`(同 `message_version` 先例):每次房间写入持锁自增,严格单调、与时钟无关;版本相等即同一次写入,ack 与广播双路径天然幂等。`updatedAt` 退为展示和旧数据兼容回落。这是从"timestamp-based LWW(近似全序)"到"版本号 LWW(精确全序)"的升级,消除了事务时间戳偏差和毫秒平局两类乱序源。

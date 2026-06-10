@@ -107,6 +107,26 @@ describe("roomState", () => {
     expect(isNewerRoom(corrupted, stamped)).toBe(true);
   });
 
+  it("prefers roomVersion over updatedAt when both sides carry it", () => {
+    // 版本号说新的就是新的——即使时间戳更旧(事务时间戳偏差场景)
+    const newerVersionOlderStamp = { ...room("room-1"), roomVersion: 5, updatedAt: "2026-06-08T09:00:00.000Z" };
+    const olderVersionNewerStamp = { ...room("room-1"), roomVersion: 4, updatedAt: "2026-06-08T10:00:00.000Z" };
+
+    expect(isNewerRoom(newerVersionOlderStamp, olderVersionNewerStamp)).toBe(true);
+    expect(isNewerRoom(olderVersionNewerStamp, newerVersionOlderStamp)).toBe(false);
+    // 版本相等 ⟺ 同一次写入:ack 与广播双路径到达必须幂等
+    expect(isNewerRoom(newerVersionOlderStamp, { ...newerVersionOlderStamp })).toBe(true);
+  });
+
+  it("falls back to updatedAt when either side lacks a roomVersion", () => {
+    const versioned = { ...room("room-1"), roomVersion: 3, updatedAt: "2026-06-08T10:00:00.000Z" };
+    const legacyNewer = { ...room("room-1"), updatedAt: "2026-06-08T10:05:00.000Z" };
+    const legacyOlder = { ...room("room-1"), updatedAt: "2026-06-08T09:55:00.000Z" };
+
+    expect(isNewerRoom(legacyNewer, versioned)).toBe(true);
+    expect(isNewerRoom(legacyOlder, versioned)).toBe(false);
+  });
+
   it("always accepts payloads for a different room id", () => {
     const current = { ...room("room-1"), updatedAt: "2026-06-08T10:05:00.000Z" };
     const other = { ...room("room-2"), updatedAt: "2026-06-08T09:00:00.000Z" };

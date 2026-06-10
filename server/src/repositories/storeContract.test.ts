@@ -29,6 +29,8 @@ class MemoryRedis {
     const updatedRoom = {
       ...parsedRoom,
       lastActivityAt: useGreatest ? latest(parsedRoom.lastActivityAt || parsedRoom.createdAt, lastActivityAt) : lastActivityAt,
+      // 镜像 Lua 脚本:每次房间写入自增 roomVersion
+      roomVersion: (Number(parsedRoom.roomVersion) || 0) + 1,
     };
     this.hash('rooms').set(roomId, JSON.stringify(updatedRoom));
     return updatedRoom;
@@ -121,6 +123,24 @@ class MemoryRedis {
   }
 
   async eval(script: string, options: { keys: string[]; arguments: string[] }) {
+    // WRITE_ROOM_RECORD_SCRIPT:原子写房间 + roomVersion 以存储值为准自增
+    if (script.includes('local incomingJson')) {
+      const [roomId, incomingJson] = options.arguments;
+      const storedJson = this.hash('rooms').get(roomId);
+      let storedVersion = 0;
+      if (storedJson) {
+        try {
+          storedVersion = Number(JSON.parse(storedJson).roomVersion) || 0;
+        } catch {
+          storedVersion = 0;
+        }
+      }
+      const room = { ...JSON.parse(incomingJson), roomVersion: storedVersion + 1 };
+      const encoded = JSON.stringify(room);
+      this.hash('rooms').set(roomId, encoded);
+      return encoded;
+    }
+
     if (script.includes("redis.call('HSET', KEYS[3]")) {
       const [, messageKey, mediaAssetsKey, roomMediaAssetsKey] = options.keys;
       const [roomId, messagePayload, lastActivityAt, assetId, assetPayload] = options.arguments;
@@ -305,6 +325,7 @@ type RoomRow = {
   last_activity_at: string;
   creator_id: string;
   message_version?: number;
+  room_version?: number;
   updated_at?: string;
 };
 
@@ -412,6 +433,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
           name,
           description,
           last_activity_at: latest(existing.last_activity_at, lastActivityAt),
+          room_version: (existing.room_version || 0) + 1,
           updated_at: new Date().toISOString(),
         }
         : {
@@ -422,6 +444,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
           last_activity_at: lastActivityAt,
           creator_id: creatorId,
           message_version: 0,
+          room_version: 1,
           updated_at: new Date().toISOString(),
         };
       this.rooms.set(id, saved);
@@ -616,13 +639,14 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         ...room,
         last_activity_at: latest(room.last_activity_at, timestamp),
         message_version: (room.message_version || 0) + messageVersionIncrement,
+        room_version: (room.room_version || 0) + 1,
         updated_at: new Date().toISOString(),
       };
       this.rooms.set(roomId, updated);
       return { rows: [updated] as T[], rowCount: 1 };
     }
 
-    if (/UPDATE rooms SET last_activity_at = \$2, message_version = message_version \+ \$3, updated_at = NOW\(\) WHERE id = \$1 RETURNING/.test(compactSql)) {
+    if (/UPDATE rooms SET last_activity_at = \$2, message_version = message_version \+ \$3, room_version = room_version \+ 1, updated_at = NOW\(\) WHERE id = \$1 RETURNING/.test(compactSql)) {
       const roomId = String(params[0]);
       const timestamp = String(params[1]);
       const messageVersionIncrement = Number(params[2] || 0);
@@ -632,13 +656,14 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         ...room,
         last_activity_at: timestamp,
         message_version: (room.message_version || 0) + messageVersionIncrement,
+        room_version: (room.room_version || 0) + 1,
         updated_at: new Date().toISOString(),
       };
       this.rooms.set(roomId, updated);
       return { rows: [updated] as T[], rowCount: 1 };
     }
 
-    if (/UPDATE rooms SET last_activity_at = \$2, message_version = message_version \+ 1, updated_at = NOW\(\) WHERE id = \$1 RETURNING/.test(compactSql)) {
+    if (/UPDATE rooms SET last_activity_at = \$2, message_version = message_version \+ 1, room_version = room_version \+ 1, updated_at = NOW\(\) WHERE id = \$1 RETURNING/.test(compactSql)) {
       const roomId = String(params[0]);
       const timestamp = String(params[1]);
       const room = this.rooms.get(roomId);
@@ -647,13 +672,14 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         ...room,
         last_activity_at: timestamp,
         message_version: (room.message_version || 0) + 1,
+        room_version: (room.room_version || 0) + 1,
         updated_at: new Date().toISOString(),
       };
       this.rooms.set(roomId, updated);
       return { rows: [updated] as T[], rowCount: 1 };
     }
 
-    if (/UPDATE rooms SET message_version = message_version \+ 1, last_activity_at = created_at, updated_at = NOW\(\) WHERE id = \$1/.test(compactSql)) {
+    if (/UPDATE rooms SET message_version = message_version \+ 1, last_activity_at = created_at, room_version = room_version \+ 1, updated_at = NOW\(\) WHERE id = \$1/.test(compactSql)) {
       const roomId = String(params[0]);
       const room = this.rooms.get(roomId);
       if (!room) return { rows: [], rowCount: 0 };
@@ -661,17 +687,18 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         ...room,
         last_activity_at: room.created_at,
         message_version: (room.message_version || 0) + 1,
+        room_version: (room.room_version || 0) + 1,
         updated_at: new Date().toISOString(),
       };
       this.rooms.set(roomId, updated);
       return { rows: [updated] as T[], rowCount: 1 };
     }
 
-    if (/UPDATE rooms SET name = \$3, updated_at = NOW\(\) WHERE id = \$1 AND creator_id = \$2 RETURNING/.test(compactSql)) {
+    if (/UPDATE rooms SET name = \$3, room_version = room_version \+ 1, updated_at = NOW\(\) WHERE id = \$1 AND creator_id = \$2 RETURNING/.test(compactSql)) {
       const [roomId, creatorId, name] = params.map(String);
       const room = this.rooms.get(roomId);
       if (!room || room.creator_id !== creatorId) return { rows: [], rowCount: 0 };
-      const updated = { ...room, name, updated_at: new Date().toISOString() };
+      const updated = { ...room, name, room_version: (room.room_version || 0) + 1, updated_at: new Date().toISOString() };
       this.rooms.set(roomId, updated);
       return { rows: [updated] as T[], rowCount: 1 };
     }
@@ -934,11 +961,11 @@ const message = (overrides: Partial<Message> = {}): Message => ({
 });
 
 // 房间写入路径统一盖 updatedAt;形状断言剥离它,另以 typeof 断言其存在
-const stripRoomStamp = <T extends { updatedAt?: string }>(value: T | null | undefined) => {
+const stripRoomStamp = <T extends { roomVersion?: number; updatedAt?: string }>(value: T | null | undefined) => {
   if (!value) {
     return value;
   }
-  const { updatedAt: _updatedAt, ...rest } = value;
+  const { roomVersion: _roomVersion, updatedAt: _updatedAt, ...rest } = value;
   return rest;
 };
 
@@ -1235,8 +1262,9 @@ for (const [storeName, createFixture] of storeFactories) {
       // rename 必须 bump updatedAt(客户端用它做 last-write-wins),其余字段保持不变
       const expectRenamed = (actual: Awaited<ReturnType<typeof store.getRoomById>>) => {
         assert.ok(actual);
-        const { updatedAt, ...rest } = actual;
+        const { roomVersion, updatedAt, ...rest } = actual;
         assert.equal(typeof updatedAt, 'string');
+        assert.equal(typeof roomVersion, 'number');
         assert.deepEqual(rest, { ...initialRoom, name: 'Renamed Room' });
       };
       expectRenamed(renamedRoom);
@@ -1244,6 +1272,24 @@ for (const [storeName, createFixture] of storeFactories) {
       const ownedRooms = await store.readRoomsByUser(initialRoom.creatorId);
       assert.equal(ownedRooms.length, 1);
       expectRenamed(ownedRooms[0]);
+    });
+
+    it('increments roomVersion monotonically across mixed room writes', async () => {
+      const { store } = createFixture();
+      const initialRoom = room();
+
+      // 客户端 last-write-wins 依赖 roomVersion 是行级严格单调:
+      // 创建、改名、消息活动等所有房间写入都必须 +1,且读回与写入返回一致
+      const saved = await store.saveRoom(initialRoom);
+      assert.equal(saved?.roomVersion, 1);
+
+      const renamed = await store.updateRoomName(initialRoom.id, initialRoom.creatorId, 'Renamed Room');
+      assert.equal(renamed?.roomVersion, 2);
+
+      const afterAppend = await store.appendMessage(message({ timestamp: '2026-05-03T00:00:01.000Z' }));
+      assert.equal(afterAppend?.roomVersion, 3);
+
+      assert.equal((await store.getRoomById(initialRoom.id))?.roomVersion, 3);
     });
 
     it('keeps retry and edit-and-ask truncation semantics consistent', async () => {

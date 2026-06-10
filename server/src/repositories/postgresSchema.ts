@@ -14,6 +14,7 @@ export const POSTGRES_SCHEMA_SQL = [
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS password_hash TEXT`,
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS posting_schedule JSONB`,
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`,
+  `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS room_version BIGINT NOT NULL DEFAULT 0`,
   `CREATE INDEX IF NOT EXISTS idx_rooms_creator_activity
     ON rooms (creator_id, last_activity_at DESC)`,
   `CREATE TABLE IF NOT EXISTS room_members (

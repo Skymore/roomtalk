@@ -38,6 +38,30 @@ export const resolveRoomMessagesCacheTtlSeconds = (env: NodeJS.ProcessEnv = proc
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 };
 
+// 原子房间写入:roomVersion 以"写入时刻存储中的值"为准自增,
+// 避免 TS 层 read-modify-write 在并发 handler 下产出重复版本号。
+const WRITE_ROOM_RECORD_SCRIPT = `
+local incomingJson = ARGV[2]
+local ok, room = pcall(cjson.decode, incomingJson)
+if not ok then
+  return ''
+end
+
+local storedVersion = 0
+local storedJson = redis.call('HGET', KEYS[1], ARGV[1])
+if storedJson then
+  local okStored, stored = pcall(cjson.decode, storedJson)
+  if okStored and stored['roomVersion'] then
+    storedVersion = tonumber(stored['roomVersion']) or 0
+  end
+end
+
+room['roomVersion'] = storedVersion + 1
+local encoded = cjson.encode(room)
+redis.call('HSET', KEYS[1], ARGV[1], encoded)
+return encoded
+`;
+
 const APPEND_MESSAGE_LIST_SCRIPT = `
 local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
 if not roomJson then
@@ -54,6 +78,7 @@ if ARGV[3] > currentLastActivityAt then
   room['lastActivityAt'] = ARGV[3]
 end
 room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
+room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
 local messagePayload = ARGV[2]
 redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
 redis.call('RPUSH', KEYS[2], messagePayload)
@@ -76,6 +101,7 @@ if ARGV[3] > currentLastActivityAt then
   room['lastActivityAt'] = ARGV[3]
 end
 room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
+room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
 redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
 redis.call('RPUSH', KEYS[2], ARGV[2])
 redis.call('HSET', KEYS[3], ARGV[4], ARGV[5])
@@ -96,6 +122,7 @@ end
 
 room['lastActivityAt'] = ARGV[2]
 room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
+room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
 redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
 redis.call('DEL', KEYS[2])
 for i = 3, #ARGV do
@@ -138,6 +165,7 @@ if ARGV[4] > currentLastActivityAt then
   room['lastActivityAt'] = ARGV[4]
 end
 room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
+room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
 redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
 redis.call('DEL', KEYS[2])
 for i = 1, #existing do
@@ -177,6 +205,7 @@ end
 
 if found == 1 then
   room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
+  room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
   redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
 end
 
@@ -249,6 +278,7 @@ end
 if found == 1 then
   room['lastActivityAt'] = latestTimestamp ~= '' and latestTimestamp or room['createdAt']
   room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
+  room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
   redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
   redis.call('DEL', KEYS[2])
   for i = 1, #remaining do
@@ -299,6 +329,7 @@ if found == 1 then
 
   room['lastActivityAt'] = latestTimestamp ~= '' and latestTimestamp or room['createdAt']
   room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
+  room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
   redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
   redis.call('DEL', KEYS[2])
   for i = 1, #remaining do
@@ -358,6 +389,7 @@ if found == 1 then
 
   room['lastActivityAt'] = latestTimestamp ~= '' and latestTimestamp or room['createdAt']
   room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
+  room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
   redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
   redis.call('DEL', KEYS[2])
   for i = 1, #remaining do
@@ -404,9 +436,9 @@ const bumpRoomMessageVersion = (room: Room): Room => ({
   messageVersion: (room.messageVersion || 0) + 1,
 });
 
-// 所有 rooms 哈希写入统一盖 updatedAt(客户端按它做 last-write-wins)。
-// 例外:消息追加类 Lua 脚本(变长 ARGV,改动风险大)继承现有 stamp,
-// 客户端对等值 stamp 放行,行为不回退;prod 的 Postgres 写路径已全覆盖。
+// updatedAt 仅作展示/兼容回落;排序真值是 roomVersion——
+// TS 写入经 WRITE_ROOM_RECORD_SCRIPT 原子自增,消息类 Lua 脚本各自 +1,
+// 两类路径共同保证行级严格单调(Lua 路径不盖 updatedAt,客户端按版本号比较)。
 const stampRoomRecord = (room: Room): Room => ({
   ...room,
   updatedAt: new Date().toISOString(),
@@ -807,10 +839,10 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     if (count > 0) {
       const room = await this.getRoomById(roomId);
       if (room) {
-        await this.redisClient.hSet('rooms', roomId, JSON.stringify(stampRoomRecord({
+        await this.writeRoomRecord(roomId, {
           ...bumpRoomMessageVersion(room),
           lastActivityAt: room.createdAt,
-        })));
+        });
       }
     }
     return count;
@@ -1017,12 +1049,11 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
 
   async saveRoom(room: Room): Promise<Room | null> {
     try {
-      const stampedRoom = stampRoomRecord(room);
-      await this.redisClient.hSet('rooms', room.id, JSON.stringify(stampedRoom));
+      const storedRoom = await this.writeRoomRecord(room.id, room);
       await this.redisClient.sAdd(`user:${room.creatorId}:rooms`, room.id);
       await this.addRoomMember(room.id, room.creatorId, 'owner', room.createdAt);
       this.logger.debug('Room saved to Redis', { roomId: room.id, creatorId: room.creatorId });
-      return stampedRoom;
+      return storedRoom;
     } catch (error) {
       this.logger.error('Error saving room to Redis', { error, roomId: room.id });
       return null;
@@ -1124,9 +1155,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         }
       }
 
-      const stampedRoom = stampRoomRecord(updatedRoom);
-      await this.redisClient.hSet('rooms', roomId, JSON.stringify(stampedRoom));
-      return stampedRoom;
+      return await this.writeRoomRecord(roomId, updatedRoom);
     } catch (error) {
       this.logger.error('Error updating Redis room settings', { error, roomId });
       return null;
@@ -1176,16 +1205,12 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       }));
       await this.updateRoomMemberRole(roomId, newOwnerClientId, 'owner');
 
-      const updatedRoom: Room = stampRoomRecord({
-        ...room,
-        creatorId: newOwnerClientId,
-      });
-      await Promise.all([
-        this.redisClient.hSet('rooms', roomId, JSON.stringify(updatedRoom)),
+      const [storedRoom] = await Promise.all([
+        this.writeRoomRecord(roomId, { ...room, creatorId: newOwnerClientId }),
         this.redisClient.sRem(`user:${previousOwnerId}:rooms`, roomId),
         this.redisClient.sAdd(`user:${newOwnerClientId}:rooms`, roomId),
       ]);
-      return updatedRoom;
+      return storedRoom;
     } catch (error) {
       this.logger.error('Error transferring Redis room ownership', { error, roomId, newOwnerClientId });
       return null;
@@ -1264,6 +1289,19 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
+  // 所有 TS 层房间写入统一走这里:盖 updatedAt + Lua 原子自增 roomVersion
+  private async writeRoomRecord(roomId: string, room: Room): Promise<Room> {
+    const stamped = stampRoomRecord(room);
+    const result = await (this.redisClient as any).eval(WRITE_ROOM_RECORD_SCRIPT, {
+      keys: ['rooms'],
+      arguments: [roomId, JSON.stringify(stamped)],
+    });
+    if (typeof result === 'string' && result) {
+      return JSON.parse(result) as Room;
+    }
+    return stamped;
+  }
+
   async getRoomById(roomId: string): Promise<Room | null> {
     try {
       const roomStr = await this.redisClient.hGet('rooms', roomId);
@@ -1288,11 +1326,10 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         return null;
       }
 
-      const updatedRoom = stampRoomRecord({
+      const updatedRoom = await this.writeRoomRecord(roomId, {
         ...room,
         name,
       });
-      await this.redisClient.hSet('rooms', roomId, JSON.stringify(updatedRoom));
       this.logger.debug('Room renamed in Redis', { roomId, creatorId });
       return updatedRoom;
     } catch (error) {
@@ -1309,12 +1346,10 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         return null;
       }
 
-      const updatedRoom = stampRoomRecord({
+      return await this.writeRoomRecord(roomId, {
         ...room,
         lastActivityAt: lastActivityAt || room.createdAt,
       });
-      await this.redisClient.hSet('rooms', roomId, JSON.stringify(updatedRoom));
-      return updatedRoom;
     } catch (error) {
       this.logger.error('Error updating room last activity', { error, roomId, lastActivityAt });
       return null;
