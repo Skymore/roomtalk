@@ -328,6 +328,7 @@ if (typeof cachedCount === "number") {
 - 对 spinner 分层：
   - 初次 storage restore、manual join、url join：可以显示 spinner。
   - 后台 visibility/online/socket-connect 轻量恢复：默认不显示，或延迟 300ms 后仍未完成才显示。
+    - **2026-06-10 更新**:延迟方案已实现(`RECONNECT_INDICATOR_DELAY_MS = 400`)——后台 rejoin 超过 400ms 宽限期仍未完成才显示"重连中"转圈,完成即消失;健康连接下切前台零闪烁,真断网重连时用户可见反馈。
 - `isRestoringRoom` 可以拆成：
   - `isJoiningRoom`：用户主动进入/首次恢复。
   - `isRefreshingRoomSession`：后台恢复，不一定显示在 header。
