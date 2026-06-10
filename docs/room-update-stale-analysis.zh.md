@@ -196,6 +196,8 @@ usePostingWindowBoundary(postingSchedule):
 
 ### Fix 4(P1,服务端):启用 `updatedAt`,客户端做 LWW 守卫
 
+> **2026-06-10 更新**:本方案已落地后又升级——外部 review 指出 `NOW()` 是事务时间戳,非严格全序。排序键已替换为行级单调版本号 `room_version`(每次房间写入持锁自增,版本相等 ⟺ 同一次写入),`updatedAt` 退为展示/兼容回落。详见 `room-update-review-followup.zh.md` 第三轮跟进。
+
 - Postgres:`UPDATE rooms SET ..., updated_at = now()`;`ROOM_COLUMNS` 加 `updated_at`;`mapRoom` 映射;
 - Redis:`updateRoomSettings`/`updateRoomName` 等写路径 bump `updatedAt`;
 - 客户端替换函数加守卫:`incoming.updatedAt < current.updatedAt` 时忽略(两者都有值时才比较,向后兼容)。
