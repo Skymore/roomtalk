@@ -1,5 +1,29 @@
 import { Room, RoomMemberEvent } from "./types";
 
+// last-write-wins:两边都带可解析的 updatedAt 时,旧数据不得覆盖新数据
+// (防御乱序到达的 join ack 回踩刚收到的 room_updated 广播)。
+// 任一侧缺 stamp 或 stamp 不可解析(localStorage 污染、旧版本数据)时放行,
+// 避免一条损坏数据永久卡死后续全部有效更新。
+export const isNewerRoom = (incoming: Room, existing: Room | null | undefined): boolean => {
+  if (!existing || existing.id !== incoming.id) {
+    return true;
+  }
+  if (!existing.updatedAt || !incoming.updatedAt) {
+    return true;
+  }
+
+  const incomingTime = Date.parse(incoming.updatedAt);
+  const existingTime = Date.parse(existing.updatedAt);
+  if (Number.isNaN(incomingTime) || Number.isNaN(existingTime)) {
+    return true;
+  }
+  return incomingTime >= existingTime;
+};
+
+export const pickNewerRoom = (incoming: Room, existing: Room | null | undefined): Room => {
+  return isNewerRoom(incoming, existing) ? incoming : existing as Room;
+};
+
 export const upsertRoom = (rooms: Room[], room: Room): Room[] => {
   const existingIndex = rooms.findIndex(existing => existing.id === room.id);
   if (existingIndex === -1) {

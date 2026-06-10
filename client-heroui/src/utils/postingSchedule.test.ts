@@ -1,3 +1,6 @@
+// 对拍向量:与 server/src/socket/roomAuthorization.test.ts 使用同一组场景
+// (同一时刻、同一窗口)。服务端断言"此刻是否开放",客户端断言"距下一边界的时长",
+// 两侧互相印证。任何一侧修改窗口/时区语义,必须同步另一侧的向量。
 import { describe, expect, it } from 'vitest';
 import { getNextPostingBoundaryDelayMs } from './postingSchedule';
 import { RoomPostingSchedule } from './types';
@@ -25,6 +28,18 @@ describe('getNextPostingBoundaryDelayMs', () => {
   it('targets the window opening when now is before the window', () => {
     const delay = getNextPostingBoundaryDelayMs(schedule(), mondayUtc('08:00:00'));
     expect(delay).toBe(60 * 60_000 + 1000);
+  });
+
+  it('targets the closing boundary when invoked exactly at the opening instant', () => {
+    // 服务端向量:09:00 整开门(start 含),此刻下一边界是 17:00 关门
+    const delay = getNextPostingBoundaryDelayMs(schedule(), mondayUtc('09:00:00'));
+    expect(delay).toBe(8 * 60 * 60_000 + 1000);
+  });
+
+  it('wraps to next week when invoked exactly at the closing instant', () => {
+    // 服务端向量:17:00 整已关门(end 不含),下一边界是下周一 09:00 开门
+    const delay = getNextPostingBoundaryDelayMs(schedule(), mondayUtc('17:00:00'));
+    expect(delay).toBe((6 * 24 * 60 + 16 * 60) * 60_000 + 1000);
   });
 
   it('targets the window closing when now is inside the window', () => {

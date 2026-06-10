@@ -305,6 +305,7 @@ type RoomRow = {
   last_activity_at: string;
   creator_id: string;
   message_version?: number;
+  updated_at?: string;
 };
 
 type MessageRow = {
@@ -411,6 +412,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
           name,
           description,
           last_activity_at: latest(existing.last_activity_at, lastActivityAt),
+          updated_at: new Date().toISOString(),
         }
         : {
           id,
@@ -420,6 +422,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
           last_activity_at: lastActivityAt,
           creator_id: creatorId,
           message_version: 0,
+          updated_at: new Date().toISOString(),
         };
       this.rooms.set(id, saved);
       return { rows: [saved] as T[], rowCount: 1 };
@@ -613,12 +616,13 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         ...room,
         last_activity_at: latest(room.last_activity_at, timestamp),
         message_version: (room.message_version || 0) + messageVersionIncrement,
+        updated_at: new Date().toISOString(),
       };
       this.rooms.set(roomId, updated);
       return { rows: [updated] as T[], rowCount: 1 };
     }
 
-    if (/UPDATE rooms SET last_activity_at = \$2, message_version = message_version \+ \$3 WHERE id = \$1 RETURNING/.test(compactSql)) {
+    if (/UPDATE rooms SET last_activity_at = \$2, message_version = message_version \+ \$3, updated_at = NOW\(\) WHERE id = \$1 RETURNING/.test(compactSql)) {
       const roomId = String(params[0]);
       const timestamp = String(params[1]);
       const messageVersionIncrement = Number(params[2] || 0);
@@ -628,12 +632,13 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         ...room,
         last_activity_at: timestamp,
         message_version: (room.message_version || 0) + messageVersionIncrement,
+        updated_at: new Date().toISOString(),
       };
       this.rooms.set(roomId, updated);
       return { rows: [updated] as T[], rowCount: 1 };
     }
 
-    if (/UPDATE rooms SET last_activity_at = \$2, message_version = message_version \+ 1 WHERE id = \$1 RETURNING/.test(compactSql)) {
+    if (/UPDATE rooms SET last_activity_at = \$2, message_version = message_version \+ 1, updated_at = NOW\(\) WHERE id = \$1 RETURNING/.test(compactSql)) {
       const roomId = String(params[0]);
       const timestamp = String(params[1]);
       const room = this.rooms.get(roomId);
@@ -642,12 +647,13 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         ...room,
         last_activity_at: timestamp,
         message_version: (room.message_version || 0) + 1,
+        updated_at: new Date().toISOString(),
       };
       this.rooms.set(roomId, updated);
       return { rows: [updated] as T[], rowCount: 1 };
     }
 
-    if (/UPDATE rooms SET message_version = message_version \+ 1, last_activity_at = created_at WHERE id = \$1/.test(compactSql)) {
+    if (/UPDATE rooms SET message_version = message_version \+ 1, last_activity_at = created_at, updated_at = NOW\(\) WHERE id = \$1/.test(compactSql)) {
       const roomId = String(params[0]);
       const room = this.rooms.get(roomId);
       if (!room) return { rows: [], rowCount: 0 };
@@ -655,6 +661,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         ...room,
         last_activity_at: room.created_at,
         message_version: (room.message_version || 0) + 1,
+        updated_at: new Date().toISOString(),
       };
       this.rooms.set(roomId, updated);
       return { rows: [updated] as T[], rowCount: 1 };
@@ -926,6 +933,15 @@ const message = (overrides: Partial<Message> = {}): Message => ({
   ...overrides,
 });
 
+// 房间写入路径统一盖 updatedAt;形状断言剥离它,另以 typeof 断言其存在
+const stripRoomStamp = <T extends { updatedAt?: string }>(value: T | null | undefined) => {
+  if (!value) {
+    return value;
+  }
+  const { updatedAt: _updatedAt, ...rest } = value;
+  return rest;
+};
+
 const cost = (totalUsd: number): AICost => ({
   currency: 'USD',
   inputUsd: totalUsd,
@@ -1009,9 +1025,9 @@ for (const [storeName, createFixture] of storeFactories) {
         timestamp: '2026-05-03T00:00:05.000Z',
       });
 
-      assert.deepEqual(await store.saveRoom(initialRoom), initialRoom);
+      assert.deepEqual(stripRoomStamp(await store.saveRoom(initialRoom)), initialRoom);
       assert.equal(await store.countRooms(), 1);
-      assert.deepEqual(await store.getRoomById(initialRoom.id), initialRoom);
+      assert.deepEqual(stripRoomStamp(await store.getRoomById(initialRoom.id)), initialRoom);
 
       await store.appendMessage(first);
       await store.appendMessage(second);
@@ -1067,7 +1083,7 @@ for (const [storeName, createFixture] of storeFactories) {
       const { store } = createFixture();
       const initialRoom = room();
 
-      assert.deepEqual(await store.saveRoom(initialRoom), initialRoom);
+      assert.deepEqual(stripRoomStamp(await store.saveRoom(initialRoom)), initialRoom);
       assert.deepEqual(await store.getRoomMember(initialRoom.id, initialRoom.creatorId), {
         roomId: initialRoom.id,
         clientId: initialRoom.creatorId,
@@ -1090,7 +1106,7 @@ for (const [storeName, createFixture] of storeFactories) {
       assert.equal(await store.removeRoomMember(initialRoom.id, 'client-2'), true);
       assert.equal(await store.isRoomMember(initialRoom.id, 'client-2'), false);
 
-      assert.deepEqual(await store.saveRoomForUser(initialRoom.id, 'client-2', '2026-05-03T00:02:00.000Z'), initialRoom);
+      assert.deepEqual(stripRoomStamp(await store.saveRoomForUser(initialRoom.id, 'client-2', '2026-05-03T00:02:00.000Z')), initialRoom);
       assert.deepEqual((await store.readSavedRoomsByUser('client-2')).map(item => item.id), [initialRoom.id]);
       assert.deepEqual((await store.readRoomsByUser('client-2')).map(item => item.id), []);
       assert.equal(await store.removeSavedRoomForUser(initialRoom.id, 'client-2'), true);
@@ -1172,7 +1188,7 @@ for (const [storeName, createFixture] of storeFactories) {
       const result = await store.replaceMessageMediaAsset(initialRoom.id, legacyImage.id, asset);
 
       assert.equal(result?.found, true);
-      assert.deepEqual(result?.room, initialRoom);
+      assert.deepEqual(stripRoomStamp(result?.room), initialRoom);
       assert.deepEqual(result?.updatedMessage, {
         ...legacyImage,
         content: '',
@@ -1188,7 +1204,7 @@ for (const [storeName, createFixture] of storeFactories) {
         },
       });
       assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), [result?.updatedMessage]);
-      assert.deepEqual(await store.getRoomById(initialRoom.id), initialRoom);
+      assert.deepEqual(stripRoomStamp(await store.getRoomById(initialRoom.id)), initialRoom);
       assert.deepEqual(await store.getMediaAsset(asset.id), asset);
 
       const missingResult = await store.replaceMessageMediaAsset(initialRoom.id, 'missing-image', {
@@ -1212,7 +1228,7 @@ for (const [storeName, createFixture] of storeFactories) {
       await store.saveRoom(initialRoom);
 
       assert.equal(await store.updateRoomName(initialRoom.id, 'client-2', 'Unauthorized Rename'), null);
-      assert.deepEqual(await store.getRoomById(initialRoom.id), initialRoom);
+      assert.deepEqual(stripRoomStamp(await store.getRoomById(initialRoom.id)), initialRoom);
 
       const renamedRoom = await store.updateRoomName(initialRoom.id, initialRoom.creatorId, 'Renamed Room');
 
@@ -1336,9 +1352,9 @@ for (const [storeName, createFixture] of storeFactories) {
 
       await store.saveRoom(activeRoom);
 
-      assert.deepEqual(await store.appendMessage(olderAppend), activeRoom);
-      assert.deepEqual(await store.upsertMessage(olderUpsert), activeRoom);
-      assert.deepEqual(await store.getRoomById(activeRoom.id), activeRoom);
+      assert.deepEqual(stripRoomStamp(await store.appendMessage(olderAppend)), activeRoom);
+      assert.deepEqual(stripRoomStamp(await store.upsertMessage(olderUpsert)), activeRoom);
+      assert.deepEqual(stripRoomStamp(await store.getRoomById(activeRoom.id)), activeRoom);
       assert.deepEqual((await store.readMessagesByRoom(activeRoom.id)).map(item => item.id), ['old-append', 'old-upsert']);
     });
 

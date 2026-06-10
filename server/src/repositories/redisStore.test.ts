@@ -350,10 +350,14 @@ describe('RedisStore', () => {
     const { redis, store } = createStore();
     const savedRoom = room();
 
-    assert.deepEqual(await store.saveRoom(savedRoom), savedRoom);
+    const storedRoom = await store.saveRoom(savedRoom);
+    assert.ok(storedRoom);
+    // 每次房间写入都盖 updatedAt(客户端 last-write-wins 依赖它)
+    assert.equal(typeof storedRoom.updatedAt, 'string');
+    assert.deepEqual(storedRoom, { ...savedRoom, updatedAt: storedRoom.updatedAt });
     assert.equal(await store.countRooms(), 1);
-    assert.deepEqual(await store.getRoomById('room-1'), savedRoom);
-    assert.deepEqual(await store.readRoomsByUser('client-1'), [savedRoom]);
+    assert.deepEqual(await store.getRoomById('room-1'), storedRoom);
+    assert.deepEqual(await store.readRoomsByUser('client-1'), [storedRoom]);
     assert.deepEqual(await store.getRoomMember('room-1', 'client-1'), {
       roomId: 'room-1',
       clientId: 'client-1',
@@ -378,8 +382,8 @@ describe('RedisStore', () => {
       role: 'member',
       joinedAt: '2026-05-03T00:01:00.000Z',
     });
-    assert.deepEqual(await store.saveRoomForUser('room-1', 'client-2', '2026-05-03T00:02:00.000Z'), savedRoom);
-    assert.deepEqual(await store.readSavedRoomsByUser('client-2'), [savedRoom]);
+    assert.deepEqual(await store.saveRoomForUser('room-1', 'client-2', '2026-05-03T00:02:00.000Z'), storedRoom);
+    assert.deepEqual(await store.readSavedRoomsByUser('client-2'), [storedRoom]);
 
     const updatedRoom = await store.appendMessage(message({ timestamp: '2026-05-04T00:00:00.000Z' }));
     assert.equal(updatedRoom?.lastActivityAt, '2026-05-04T00:00:00.000Z');
@@ -575,7 +579,10 @@ describe('RedisStore', () => {
     const result = await store.replaceMessageMediaAsset('room-1', 'legacy-image', asset);
 
     assert.equal(result?.found, true);
-    assert.deepEqual(result?.room, baseRoom);
+    assert.ok(result?.room);
+    const { updatedAt: roomUpdatedAt, ...roomRest } = result.room;
+    assert.equal(typeof roomUpdatedAt, 'string');
+    assert.deepEqual(roomRest, baseRoom);
     assert.deepEqual(result?.updatedMessage, {
       ...legacyImage,
       content: '',
@@ -590,7 +597,11 @@ describe('RedisStore', () => {
         height: 14,
       },
     });
-    assert.deepEqual(await store.getRoomById('room-1'), baseRoom);
+    const roomAfterReplace = await store.getRoomById('room-1');
+    assert.ok(roomAfterReplace);
+    const { updatedAt: replaceRoomUpdatedAt, ...roomAfterReplaceRest } = roomAfterReplace;
+    assert.equal(typeof replaceRoomUpdatedAt, 'string');
+    assert.deepEqual(roomAfterReplaceRest, baseRoom);
     assert.deepEqual(await store.readMessagesByRoom('room-1'), [result?.updatedMessage]);
 
     const missingResult = await store.replaceMessageMediaAsset('room-1', 'missing', {
