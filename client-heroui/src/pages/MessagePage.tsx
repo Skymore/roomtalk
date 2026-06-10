@@ -27,7 +27,7 @@ import {
 } from "../utils/types";
 import { generateRandomName } from "../utils/userProfile";
 import { getStoredRoom, getStoredUsername, getStoredView, saveCurrentRoom, saveCurrentView, saveUsername, AppView } from "../utils/appPersistence";
-import { buildRoomShareUrl, getRoomMemberUpdate, sortRoomsByLastActivityDesc, upsertRoom } from "../utils/roomState";
+import { buildRoomShareUrl, getRoomMemberUpdate, isNewerRoom, pickNewerRoom, sortRoomsByLastActivityDesc, upsertRoom } from "../utils/roomState";
 import { getNextPostingBoundaryDelayMs } from "../utils/postingSchedule";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -52,17 +52,6 @@ type InFlightBackgroundRestore = {
   promise: Promise<Room | null>;
 };
 
-// last-write-wins:两边都带 updatedAt 时,旧数据不得覆盖新数据
-// (防御乱序到达的 join ack 回踩刚收到的 room_updated 广播)。
-const isNewerRoom = (incoming: Room, existing: Room | null | undefined): boolean => {
-  if (!existing || existing.id !== incoming.id) {
-    return true;
-  }
-  if (!existing.updatedAt || !incoming.updatedAt) {
-    return true;
-  }
-  return Date.parse(incoming.updatedAt) >= Date.parse(existing.updatedAt);
-};
 
 export const MessagePage: React.FC = () => {
   // 不操作 html/body 滚动，页面固定高度由容器本身管理
@@ -210,10 +199,7 @@ export const MessagePage: React.FC = () => {
       return null;
     }
 
-    const baseline = currentRoomRef.current;
-    const roomToApply = baseline?.id === roomId && !isNewerRoom(joinedRoom, baseline)
-      ? baseline
-      : joinedRoom;
+    const roomToApply = pickNewerRoom(joinedRoom, currentRoomRef.current);
     currentRoomRef.current = roomToApply;
     setCurrentRoom(roomToApply);
 
@@ -585,15 +571,20 @@ export const MessagePage: React.FC = () => {
     }
 
     let timeoutId: number | undefined;
+    const MAX_BOUNDARY_TIMER_MS = 12 * 60 * 60 * 1000;
     const armNextBoundary = () => {
       const delay = getNextPostingBoundaryDelayMs(currentRoomRef.current?.postingSchedule);
       if (delay === null) {
         return;
       }
+      // 边界太远时只分段计时;不到真实边界不发权限请求
+      const reachesBoundary = delay <= MAX_BOUNDARY_TIMER_MS;
       timeoutId = window.setTimeout(() => {
-        refreshRoomPermissions(roomId);
+        if (reachesBoundary) {
+          refreshRoomPermissions(roomId);
+        }
         armNextBoundary();
-      }, Math.min(delay, 12 * 60 * 60 * 1000));
+      }, Math.min(delay, MAX_BOUNDARY_TIMER_MS));
     };
     armNextBoundary();
 

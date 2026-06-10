@@ -240,6 +240,21 @@ const createHarness = (clientId: string | null = 'client-1') => {
     async updateRoomMemberCount(roomId: string, _userId: string, _socketId: string, isJoining: boolean) {
       return isJoining ? 2 : 1;
     },
+    async updateRoomSettings(roomId: string, updates: { passwordHash?: string | null; postingSchedule?: Room['postingSchedule'] | null }) {
+      const target = this.rooms.find(item => item.id === roomId);
+      if (!target) {
+        return null;
+      }
+      if (Object.prototype.hasOwnProperty.call(updates, 'postingSchedule')) {
+        if (updates.postingSchedule) {
+          target.postingSchedule = updates.postingSchedule;
+        } else {
+          delete target.postingSchedule;
+        }
+      }
+      target.updatedAt = new Date().toISOString();
+      return { ...target };
+    },
     async getRoomById(roomId: string) {
       return this.rooms.find(item => item.id === roomId) || null;
     },
@@ -596,6 +611,42 @@ describe('room socket handlers', () => {
       { roomId: 'socket-2', event: 'room_list', args: [[]] },
       { roomId: 'socket-2', event: 'saved_room_list', args: [[]] },
     ]);
+  });
+
+  it('updates posting schedules, stamps updatedAt, and broadcasts room_updated', async () => {
+    const { io, socket } = createHarness('client-1');
+    let response: unknown;
+
+    await socket.invoke('update_room_settings', {
+      roomId: 'room-1',
+      postingSchedule: { enabled: true, timezone: 'UTC', windows: [{ days: [1], start: '09:00', end: '17:00' }] },
+    }, (result: unknown) => {
+      response = result;
+    });
+
+    const ack = response as { success: boolean; room?: Room };
+    assert.equal(ack.success, true);
+    assert.equal(typeof ack.room?.updatedAt, 'string');
+    assert.equal(ack.room?.postingSchedule?.enabled, true);
+    const updateEmits = io.roomEmits.filter(item => item.event === 'room_updated');
+    assert.deepEqual(updateEmits.map(item => item.roomId), ['client-1', 'room-1']);
+    assert.equal(io.roomEmits.some(item => item.event === 'room_permissions_invalidated'), true);
+  });
+
+  it('returns the room without writing or broadcasting for empty settings updates', async () => {
+    const { io, socket } = createHarness('client-1');
+    let response: unknown;
+
+    await socket.invoke('update_room_settings', { roomId: 'room-1' }, (result: unknown) => {
+      response = result;
+    });
+
+    const ack = response as { success: boolean; room?: Room };
+    assert.equal(ack.success, true);
+    assert.equal(ack.room?.id, 'room-1');
+    // 空更新不得 bump updatedAt,也不得广播
+    assert.equal(ack.room?.updatedAt, undefined);
+    assert.deepEqual(io.roomEmits, []);
   });
 
   it('renames owned rooms and broadcasts updated room state', async () => {

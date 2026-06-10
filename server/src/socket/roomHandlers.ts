@@ -737,6 +737,17 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
         updates.postingSchedule = normalizePostingSchedule(data.postingSchedule);
       }
 
+      // 空更新不写库不广播:写库会无意义地 bump updated_at 并触发全房 room_updated
+      if (Object.keys(updates).length === 0) {
+        const room = await store.getRoomById(roomId);
+        if (!room) {
+          callback?.({ success: false, error: 'Room not found' });
+          return;
+        }
+        callback?.({ success: true, room });
+        return;
+      }
+
       const updatedRoom = await store.updateRoomSettings(roomId, updates);
       if (!updatedRoom) {
         callback?.({ success: false, error: 'Failed to update room settings' });

@@ -404,6 +404,14 @@ const bumpRoomMessageVersion = (room: Room): Room => ({
   messageVersion: (room.messageVersion || 0) + 1,
 });
 
+// 所有 rooms 哈希写入统一盖 updatedAt(客户端按它做 last-write-wins)。
+// 例外:消息追加类 Lua 脚本(变长 ARGV,改动风险大)继承现有 stamp,
+// 客户端对等值 stamp 放行,行为不回退;prod 的 Postgres 写路径已全覆盖。
+const stampRoomRecord = (room: Room): Room => ({
+  ...room,
+  updatedAt: new Date().toISOString(),
+});
+
 const parseScriptRoom = (result: unknown, index: number): Room | null => {
   if (!Array.isArray(result) || Number(result[0]) !== 1 || typeof result[index] !== 'string' || !result[index]) {
     return null;
@@ -799,10 +807,10 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     if (count > 0) {
       const room = await this.getRoomById(roomId);
       if (room) {
-        await this.redisClient.hSet('rooms', roomId, JSON.stringify({
+        await this.redisClient.hSet('rooms', roomId, JSON.stringify(stampRoomRecord({
           ...bumpRoomMessageVersion(room),
           lastActivityAt: room.createdAt,
-        }));
+        })));
       }
     }
     return count;
@@ -1009,11 +1017,12 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
 
   async saveRoom(room: Room): Promise<Room | null> {
     try {
-      await this.redisClient.hSet('rooms', room.id, JSON.stringify(room));
+      const stampedRoom = stampRoomRecord(room);
+      await this.redisClient.hSet('rooms', room.id, JSON.stringify(stampedRoom));
       await this.redisClient.sAdd(`user:${room.creatorId}:rooms`, room.id);
       await this.addRoomMember(room.id, room.creatorId, 'owner', room.createdAt);
       this.logger.debug('Room saved to Redis', { roomId: room.id, creatorId: room.creatorId });
-      return room;
+      return stampedRoom;
     } catch (error) {
       this.logger.error('Error saving room to Redis', { error, roomId: room.id });
       return null;
@@ -1115,9 +1124,9 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         }
       }
 
-      updatedRoom.updatedAt = new Date().toISOString();
-      await this.redisClient.hSet('rooms', roomId, JSON.stringify(updatedRoom));
-      return updatedRoom;
+      const stampedRoom = stampRoomRecord(updatedRoom);
+      await this.redisClient.hSet('rooms', roomId, JSON.stringify(stampedRoom));
+      return stampedRoom;
     } catch (error) {
       this.logger.error('Error updating Redis room settings', { error, roomId });
       return null;
@@ -1167,10 +1176,10 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       }));
       await this.updateRoomMemberRole(roomId, newOwnerClientId, 'owner');
 
-      const updatedRoom: Room = {
+      const updatedRoom: Room = stampRoomRecord({
         ...room,
         creatorId: newOwnerClientId,
-      };
+      });
       await Promise.all([
         this.redisClient.hSet('rooms', roomId, JSON.stringify(updatedRoom)),
         this.redisClient.sRem(`user:${previousOwnerId}:rooms`, roomId),
@@ -1279,11 +1288,10 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         return null;
       }
 
-      const updatedRoom = {
+      const updatedRoom = stampRoomRecord({
         ...room,
         name,
-        updatedAt: new Date().toISOString(),
-      };
+      });
       await this.redisClient.hSet('rooms', roomId, JSON.stringify(updatedRoom));
       this.logger.debug('Room renamed in Redis', { roomId, creatorId });
       return updatedRoom;
@@ -1301,10 +1309,10 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         return null;
       }
 
-      const updatedRoom = {
+      const updatedRoom = stampRoomRecord({
         ...room,
         lastActivityAt: lastActivityAt || room.createdAt,
-      };
+      });
       await this.redisClient.hSet('rooms', roomId, JSON.stringify(updatedRoom));
       return updatedRoom;
     } catch (error) {

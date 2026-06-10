@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   buildRoomShareUrl,
+  isNewerRoom,
+  pickNewerRoom,
   getRoomActivityAt,
   getRoomMemberUpdate,
   isJoinedRoomForClient,
@@ -79,5 +81,36 @@ describe("roomState", () => {
   it("detects saved rooms joined from another creator", () => {
     expect(isJoinedRoomForClient(room("room-1"), "creator-1")).toBe(false);
     expect(isJoinedRoomForClient(room("room-1"), "other-client")).toBe(true);
+  });
+
+  it("orders room payloads by updatedAt with last-write-wins", () => {
+    const older = { ...room("room-1"), updatedAt: "2026-06-08T10:00:00.000Z" };
+    const newer = { ...room("room-1"), updatedAt: "2026-06-08T10:05:00.000Z" };
+
+    expect(isNewerRoom(newer, older)).toBe(true);
+    expect(isNewerRoom(older, newer)).toBe(false);
+    // 等值放行:同一写入经 ack 与广播两条路径到达必须幂等
+    expect(isNewerRoom(newer, { ...newer })).toBe(true);
+    expect(pickNewerRoom(older, newer)).toBe(newer);
+    expect(pickNewerRoom(newer, older)).toBe(newer);
+  });
+
+  it("accepts payloads when either side lacks a usable updatedAt", () => {
+    const stamped = { ...room("room-1"), updatedAt: "2026-06-08T10:05:00.000Z" };
+    const unstamped = room("room-1");
+    const corrupted = { ...room("room-1"), updatedAt: "not-a-date" };
+
+    expect(isNewerRoom(unstamped, stamped)).toBe(true);
+    expect(isNewerRoom(stamped, unstamped)).toBe(true);
+    // 损坏的本地 stamp 不得永久卡死后续有效更新
+    expect(isNewerRoom(stamped, corrupted)).toBe(true);
+    expect(isNewerRoom(corrupted, stamped)).toBe(true);
+  });
+
+  it("always accepts payloads for a different room id", () => {
+    const current = { ...room("room-1"), updatedAt: "2026-06-08T10:05:00.000Z" };
+    const other = { ...room("room-2"), updatedAt: "2026-06-08T09:00:00.000Z" };
+
+    expect(isNewerRoom(other, current)).toBe(true);
   });
 });
