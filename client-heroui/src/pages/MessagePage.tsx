@@ -46,6 +46,9 @@ const isDesktopLayout = () => (
 type RoomRestoreSource = "storage" | "manual" | "url" | "visibility" | "pageshow" | "online" | "socket-connect";
 const VISIBLE_RESTORE_SOURCES = new Set<RoomRestoreSource>(["storage", "manual", "url"]);
 const BACKGROUND_RESTORE_SUPPRESSION_MS = 250;
+// 后台 rejoin 超过这个时长仍未完成才显示"重连中"转圈:
+// 健康连接下的 rejoin 是毫秒级的,立即显示会在每次切前台时闪一下(回归 #6)
+const RECONNECT_INDICATOR_DELAY_MS = 400;
 
 type InFlightBackgroundRestore = {
   roomId: string;
@@ -81,6 +84,8 @@ export const MessagePage: React.FC = () => {
   const [success, setSuccess] = useState<string | null>(null);
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const visibleRestoreGenerationRef = useRef<number | null>(null);
+  const [isReconnecting, setIsReconnecting] = useState(false);
+  const reconnectIndicatorTimerRef = useRef<number | null>(null);
   const inFlightBackgroundRestoreRef = useRef<InFlightBackgroundRestore | null>(null);
   const backgroundRestoreSuppressUntilByRoomRef = useRef(new Map<string, number>());
 
@@ -116,6 +121,9 @@ export const MessagePage: React.FC = () => {
     return () => {
       if (successTimerRef.current) {
         clearTimeout(successTimerRef.current);
+      }
+      if (reconnectIndicatorTimerRef.current !== null) {
+        window.clearTimeout(reconnectIndicatorTimerRef.current);
       }
     };
   }, []);
@@ -324,6 +332,15 @@ export const MessagePage: React.FC = () => {
     );
     reconnectSocket();
 
+    // 延迟指示器:rejoin 超过宽限期仍未完成才显示,健康场景零闪烁
+    if (reconnectIndicatorTimerRef.current !== null) {
+      window.clearTimeout(reconnectIndicatorTimerRef.current);
+    }
+    reconnectIndicatorTimerRef.current = window.setTimeout(() => {
+      reconnectIndicatorTimerRef.current = null;
+      setIsReconnecting(true);
+    }, RECONNECT_INDICATOR_DELAY_MS);
+
     const promise = ensureActiveRoomSession({
       roomId: activeRoom.id,
       fallbackRoom: activeRoom,
@@ -338,6 +355,11 @@ export const MessagePage: React.FC = () => {
       console.error(`Scheduled room restore failed from ${source}:`, error);
       return null;
     }).finally(() => {
+      if (reconnectIndicatorTimerRef.current !== null) {
+        window.clearTimeout(reconnectIndicatorTimerRef.current);
+        reconnectIndicatorTimerRef.current = null;
+      }
+      setIsReconnecting(false);
       if (inFlightBackgroundRestoreRef.current?.promise === promise) {
         inFlightBackgroundRestoreRef.current = null;
       }
@@ -859,7 +881,7 @@ export const MessagePage: React.FC = () => {
           <ChatRoomView
             currentRoom={currentRoom}
             memberCount={memberCount}
-            isRestoringRoom={isRestoringRoom}
+            isRestoringRoom={isRestoringRoom || isReconnecting}
             onRoomUpdated={applyServerRoom}
             username={username}
             clientId={clientId}
