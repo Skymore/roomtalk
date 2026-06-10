@@ -112,6 +112,9 @@ export interface Room {
   messageVersion?: number;
   hasPassword?: boolean;
   postingSchedule?: RoomPostingSchedule;
+  // 行级单调版本号:每次房间写入 +1,客户端 last-write-wins 的主比较键
+  // (updatedAt 退为展示/兼容用途)。版本相等 ⟺ 同一次写入。
+  roomVersion?: number;
   updatedAt?: string;
 }
 
