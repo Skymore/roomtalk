@@ -790,6 +790,72 @@ describe('MessagePage room session restore', () => {
     });
   });
 
+  it('keeps the header spinner hidden for fast background rejoins', async () => {
+    localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
+    localStorage.setItem('roomtalk_current_view', 'chat');
+    renderPage();
+    await waitFor(() => expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-restoring')).toBe('false');
+    });
+
+    vi.useFakeTimers();
+    try {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+      await act(async () => {
+        document.dispatchEvent(new Event('visibilitychange'));
+        // 健康场景:rejoin 在宽限期内完成
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-restoring')).toBe('false');
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-restoring')).toBe('false');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows a reconnecting spinner when a background rejoin stays pending past the grace period', async () => {
+    localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
+    localStorage.setItem('roomtalk_current_view', 'chat');
+    renderPage();
+    await waitFor(() => expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-restoring')).toBe('false');
+    });
+
+    let resolveSlowJoin: (value: unknown) => void = () => {};
+    socketApiMock.joinRoom.mockImplementation(() => new Promise((resolve) => {
+      resolveSlowJoin = resolve;
+    }));
+
+    vi.useFakeTimers();
+    try {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+      await act(async () => {
+        document.dispatchEvent(new Event('visibilitychange'));
+        await vi.advanceTimersByTimeAsync(399);
+      });
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-restoring')).toBe('false');
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2);
+      });
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-restoring')).toBe('true');
+
+      await act(async () => {
+        resolveSlowJoin({ room: room(), permissions: permissions(), memberCount: 2 });
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-restoring')).toBe('false');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('applies the settings ack room without waiting for the broadcast', async () => {
     socketApiMock.joinRoom.mockResolvedValue({
       room: room({ postingSchedule: enabledSchedule() }),
