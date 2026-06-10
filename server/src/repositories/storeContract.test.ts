@@ -660,11 +660,11 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       return { rows: [updated] as T[], rowCount: 1 };
     }
 
-    if (/UPDATE rooms SET name = \$3 WHERE id = \$1 AND creator_id = \$2 RETURNING/.test(compactSql)) {
+    if (/UPDATE rooms SET name = \$3, updated_at = NOW\(\) WHERE id = \$1 AND creator_id = \$2 RETURNING/.test(compactSql)) {
       const [roomId, creatorId, name] = params.map(String);
       const room = this.rooms.get(roomId);
       if (!room || room.creator_id !== creatorId) return { rows: [], rowCount: 0 };
-      const updated = { ...room, name };
+      const updated = { ...room, name, updated_at: new Date().toISOString() };
       this.rooms.set(roomId, updated);
       return { rows: [updated] as T[], rowCount: 1 };
     }
@@ -1216,9 +1216,18 @@ for (const [storeName, createFixture] of storeFactories) {
 
       const renamedRoom = await store.updateRoomName(initialRoom.id, initialRoom.creatorId, 'Renamed Room');
 
-      assert.deepEqual(renamedRoom, { ...initialRoom, name: 'Renamed Room' });
-      assert.deepEqual(await store.getRoomById(initialRoom.id), { ...initialRoom, name: 'Renamed Room' });
-      assert.deepEqual(await store.readRoomsByUser(initialRoom.creatorId), [{ ...initialRoom, name: 'Renamed Room' }]);
+      // rename 必须 bump updatedAt(客户端用它做 last-write-wins),其余字段保持不变
+      const expectRenamed = (actual: Awaited<ReturnType<typeof store.getRoomById>>) => {
+        assert.ok(actual);
+        const { updatedAt, ...rest } = actual;
+        assert.equal(typeof updatedAt, 'string');
+        assert.deepEqual(rest, { ...initialRoom, name: 'Renamed Room' });
+      };
+      expectRenamed(renamedRoom);
+      expectRenamed(await store.getRoomById(initialRoom.id));
+      const ownedRooms = await store.readRoomsByUser(initialRoom.creatorId);
+      assert.equal(ownedRooms.length, 1);
+      expectRenamed(ownedRooms[0]);
     });
 
     it('keeps retry and edit-and-ask truncation semantics consistent', async () => {

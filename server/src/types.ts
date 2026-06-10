@@ -112,6 +112,7 @@ export interface Room {
   messageVersion?: number;
   hasPassword?: boolean;
   postingSchedule?: RoomPostingSchedule;
+  updatedAt?: string;
 }
 
 export interface RoomMessagePage {

@@ -1115,6 +1115,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         }
       }
 
+      updatedRoom.updatedAt = new Date().toISOString();
       await this.redisClient.hSet('rooms', roomId, JSON.stringify(updatedRoom));
       return updatedRoom;
     } catch (error) {
@@ -1281,6 +1282,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       const updatedRoom = {
         ...room,
         name,
+        updatedAt: new Date().toISOString(),
       };
       await this.redisClient.hSet('rooms', roomId, JSON.stringify(updatedRoom));
       this.logger.debug('Room renamed in Redis', { roomId, creatorId });

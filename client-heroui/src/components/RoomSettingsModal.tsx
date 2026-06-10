@@ -67,6 +67,7 @@ interface RoomSettingsModalProps {
   onRenameRoom: RoomRenameHandler;
   onClearHistory: (confirmation: string) => unknown;
   onDeleteRoom: (roomId: string) => void;
+  onRoomUpdated?: (room: Room) => void;
 }
 
 export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
@@ -78,6 +79,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   onRenameRoom,
   onClearHistory,
   onDeleteRoom,
+  onRoomUpdated,
 }) => {
   const { t } = useTranslation();
   const canManageSettings = Boolean(roomPermissions?.canManageRoom);
@@ -136,8 +138,16 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     }
   }, [canManageAdmins, room.id, t]);
 
+  const hasSeededOpenFormRef = React.useRef(false);
+
   React.useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      hasSeededOpenFormRef.current = false;
+      return;
+    }
+    // 只在打开瞬间播种一次;打开期间收到 room_updated 不应重置正在编辑的表单
+    if (hasSeededOpenFormRef.current) return;
+    hasSeededOpenFormRef.current = true;
 
     setRoomName(room.name);
     setPassword('');
@@ -193,7 +203,8 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     if (!nextPassword) return;
 
     void runAction(async () => {
-      await updateRoomSettings({ roomId: room.id, password: nextPassword });
+      const updatedRoom = await updateRoomSettings({ roomId: room.id, password: nextPassword });
+      onRoomUpdated?.(updatedRoom);
       setPassword('');
       setHasPassword(true);
     }, t('passwordUpdated'));
@@ -201,7 +212,8 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
 
   const handleClearPassword = () => {
     void runAction(async () => {
-      await updateRoomSettings({ roomId: room.id, clearPassword: true });
+      const updatedRoom = await updateRoomSettings({ roomId: room.id, clearPassword: true });
+      onRoomUpdated?.(updatedRoom);
       setPassword('');
       setHasPassword(false);
     }, t('passwordCleared'));
@@ -248,10 +260,11 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
 
   const handleApplySchedule = () => {
     void runAction(async () => {
-      await updateRoomSettings({
+      const updatedRoom = await updateRoomSettings({
         roomId: room.id,
         postingSchedule: scheduleEnabled ? buildSchedule() : null,
       });
+      onRoomUpdated?.(updatedRoom);
     }, t('postingScheduleUpdated'));
   };
 

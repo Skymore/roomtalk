@@ -26,6 +26,7 @@ interface ChatRoomViewProps {
   handleDeleteRoom: (roomId: string) => void;
   handleRenameRoom: RoomRenameHandler;
   roomPermissions: RoomPermissions | null;
+  onRoomUpdated: (room: Room) => void;
 }
 
 export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
@@ -45,6 +46,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
   handleDeleteRoom,
   handleRenameRoom,
   roomPermissions,
+  onRoomUpdated,
 }) => {
   const { t } = useTranslation();
   const [replyToMessage, setReplyToMessage] = React.useState<Message | null>(null);
@@ -97,6 +99,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
         handleRenameRoom={handleRenameRoom}
         clientId={clientId}
         roomPermissions={roomPermissions}
+        onRoomUpdated={onRoomUpdated}
       />
 
       <div className="relative min-h-0 w-full flex-1 overflow-hidden">

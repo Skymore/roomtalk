@@ -28,6 +28,7 @@ import {
 import { generateRandomName } from "../utils/userProfile";
 import { getStoredRoom, getStoredUsername, getStoredView, saveCurrentRoom, saveCurrentView, saveUsername, AppView } from "../utils/appPersistence";
 import { buildRoomShareUrl, getRoomMemberUpdate, sortRoomsByLastActivityDesc, upsertRoom } from "../utils/roomState";
+import { getNextPostingBoundaryDelayMs } from "../utils/postingSchedule";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { SettingsView } from "../components/SettingsView";
@@ -49,6 +50,18 @@ const BACKGROUND_RESTORE_SUPPRESSION_MS = 250;
 type InFlightBackgroundRestore = {
   roomId: string;
   promise: Promise<Room | null>;
+};
+
+// last-write-wins:两边都带 updatedAt 时,旧数据不得覆盖新数据
+// (防御乱序到达的 join ack 回踩刚收到的 room_updated 广播)。
+const isNewerRoom = (incoming: Room, existing: Room | null | undefined): boolean => {
+  if (!existing || existing.id !== incoming.id) {
+    return true;
+  }
+  if (!existing.updatedAt || !incoming.updatedAt) {
+    return true;
+  }
+  return Date.parse(incoming.updatedAt) >= Date.parse(existing.updatedAt);
 };
 
 export const MessagePage: React.FC = () => {
@@ -130,6 +143,25 @@ export const MessagePage: React.FC = () => {
     }
   }, []);
 
+  // 服务端返回的房间对象是完整真值(room_updated 广播、join/settings/rename ack)。
+  // 必须整体替换而不能 spread 合并:被清除的字段(关闭排期后的 postingSchedule、
+  // 清除密码后的 hasPassword)在新对象里是"键不存在",spread 永远删不掉它们。
+  const applyServerRoom = useCallback((updatedRoom: Room) => {
+    setRooms((prev) => {
+      const existing = prev.find((room) => room.id === updatedRoom.id);
+      if (existing && !isNewerRoom(updatedRoom, existing)) {
+        return prev;
+      }
+      return sortRoomsByLastActivityDesc(upsertRoom(prev, updatedRoom));
+    });
+    setCurrentRoom((current) => (
+      current?.id === updatedRoom.id && isNewerRoom(updatedRoom, current) ? updatedRoom : current
+    ));
+    setSavedRooms((prev) => prev.map((savedRoom) => (
+      savedRoom.id === updatedRoom.id && isNewerRoom(updatedRoom, savedRoom) ? updatedRoom : savedRoom
+    )));
+  }, []);
+
   const refreshRoomPermissions = useCallback((roomId: string) => {
     getRoomPermissions(roomId)
       .then((permissions) => {
@@ -178,8 +210,12 @@ export const MessagePage: React.FC = () => {
       return null;
     }
 
-    currentRoomRef.current = joinedRoom;
-    setCurrentRoom((current) => current?.id === roomId ? { ...current, ...joinedRoom } : joinedRoom);
+    const baseline = currentRoomRef.current;
+    const roomToApply = baseline?.id === roomId && !isNewerRoom(joinedRoom, baseline)
+      ? baseline
+      : joinedRoom;
+    currentRoomRef.current = roomToApply;
+    setCurrentRoom(roomToApply);
 
     if (result.permissions) {
       setRoomPermissions(result.permissions);
@@ -453,10 +489,8 @@ export const MessagePage: React.FC = () => {
       setIsLoadingSavedRooms(false);
     };
     const handleRoomUpdate = (room: Room) => {
-      setRooms((prev) => sortRoomsByLastActivityDesc(upsertRoom(prev, room)));
+      applyServerRoom(room);
       setIsLoadingRooms(false);
-      setCurrentRoom((current) => current?.id === room.id ? { ...current, ...room } : current);
-      setSavedRooms((prev) => prev.map((savedRoom) => savedRoom.id === room.id ? { ...savedRoom, ...room } : savedRoom));
     };
     const handleRoomPermissions = (permissions: RoomPermissions) => {
       setRoomPermissions((current) => (
@@ -501,7 +535,7 @@ export const MessagePage: React.FC = () => {
       socket.off("room_permissions_invalidated", handleRoomPermissionsInvalidated);
       unsubscribe();
     };
-  }, [currentRoom, refreshRoomPermissions]);
+  }, [applyServerRoom, currentRoom, refreshRoomPermissions]);
 
   // 添加页面可见性、BFCache 和网络恢复处理
   useEffect(() => {
@@ -541,6 +575,30 @@ export const MessagePage: React.FC = () => {
       socket.off("disconnect", handleSocketDisconnect);
     };
   }, [clearBackgroundRestoreState, scheduleRoomRestore]);
+
+  // posting 窗口跨越边界时,本地排期数据足以算出边界时刻;到点后向服务端
+  // 重新拉取权限快照,让输入框的 canPost 状态自动翻转(真值仍由服务端判定)。
+  useEffect(() => {
+    const roomId = currentRoom?.id;
+    if (!roomId) {
+      return;
+    }
+
+    let timeoutId: number | undefined;
+    const armNextBoundary = () => {
+      const delay = getNextPostingBoundaryDelayMs(currentRoomRef.current?.postingSchedule);
+      if (delay === null) {
+        return;
+      }
+      timeoutId = window.setTimeout(() => {
+        refreshRoomPermissions(roomId);
+        armNextBoundary();
+      }, Math.min(delay, 12 * 60 * 60 * 1000));
+    };
+    armNextBoundary();
+
+    return () => window.clearTimeout(timeoutId);
+  }, [currentRoom, refreshRoomPermissions]);
 
   // --- 添加清空聊天记录的处理函数 (Stays the same) ---
   const handleClearChatMessages = useCallback(async (confirmation: string) => {
@@ -742,15 +800,13 @@ export const MessagePage: React.FC = () => {
   const handleRenameRoom = useCallback(async (roomId: string, name: string) => {
     try {
       const updatedRoom = await renameRoom(roomId, name);
-      setRooms((prev) => sortRoomsByLastActivityDesc(upsertRoom(prev, updatedRoom)));
-      setCurrentRoom((current) => current?.id === updatedRoom.id ? { ...current, ...updatedRoom } : current);
-      setSavedRooms((prev) => prev.map((savedRoom) => savedRoom.id === updatedRoom.id ? { ...savedRoom, ...updatedRoom } : savedRoom));
+      applyServerRoom(updatedRoom);
       showSuccess(t('roomRenamedSuccess'));
     } catch (error) {
       const message = error instanceof Error ? error.message : t('errorRenamingRoom');
       throw new Error(message);
     }
-  }, [showSuccess, t]);
+  }, [applyServerRoom, showSuccess, t]);
 
   // Render content based on current view
   const renderContent = () => {
@@ -813,6 +869,7 @@ export const MessagePage: React.FC = () => {
             currentRoom={currentRoom}
             memberCount={memberCount}
             isRestoringRoom={isRestoringRoom}
+            onRoomUpdated={applyServerRoom}
             username={username}
             clientId={clientId}
             handleCopyToClipboard={handleCopyToClipboard}
