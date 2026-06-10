@@ -6,6 +6,7 @@ import { SavedRoomList } from "../components/SavedRoomList";
 import {
   socket,
   joinRoom,
+  ensureRoomJoined,
   leaveRoom,
   getRoomById,
   clientId,
@@ -35,12 +36,20 @@ import { BottomNav } from "../components/BottomNav";
 import { DesktopSidebar } from "../components/DesktopSidebar";
 import { WelcomeView } from "../components/WelcomeView";
 import { ChatRoomView } from "../components/ChatRoomView";
+import { StatusMessage } from "../components/StatusMessage";
 
 const isDesktopLayout = () => (
   typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches
 );
 
 type RoomRestoreSource = "storage" | "manual" | "url" | "visibility" | "pageshow" | "online" | "socket-connect";
+const VISIBLE_RESTORE_SOURCES = new Set<RoomRestoreSource>(["storage", "manual", "url"]);
+const BACKGROUND_RESTORE_SUPPRESSION_MS = 250;
+
+type InFlightBackgroundRestore = {
+  roomId: string;
+  promise: Promise<Room | null>;
+};
 
 export const MessagePage: React.FC = () => {
   // 不操作 html/body 滚动，页面固定高度由容器本身管理
@@ -66,9 +75,12 @@ export const MessagePage: React.FC = () => {
     const storedView = getStoredView();
     return storedView === "saved" && isDesktopLayout() ? "rooms" : storedView;
   });
-  const [_error, setError] = useState<string | null>(null);
-  const [_success, setSuccess] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const visibleRestoreGenerationRef = useRef<number | null>(null);
+  const inFlightBackgroundRestoreRef = useRef<InFlightBackgroundRestore | null>(null);
+  const backgroundRestoreSuppressUntilByRoomRef = useRef(new Map<string, number>());
 
   const [isLoadingRoom, setIsLoadingRoom] = useState(false);
   const [isRestoringRoom, setIsRestoringRoom] = useState(false);
@@ -104,6 +116,18 @@ export const MessagePage: React.FC = () => {
         clearTimeout(successTimerRef.current);
       }
     };
+  }, []);
+
+  const clearBackgroundRestoreState = useCallback((roomId?: string | null) => {
+    if (roomId) {
+      backgroundRestoreSuppressUntilByRoomRef.current.delete(roomId);
+    } else {
+      backgroundRestoreSuppressUntilByRoomRef.current.clear();
+    }
+
+    if (!roomId || inFlightBackgroundRestoreRef.current?.roomId === roomId) {
+      inFlightBackgroundRestoreRef.current = null;
+    }
   }, []);
 
   const refreshRoomPermissions = useCallback((roomId: string) => {
@@ -148,6 +172,7 @@ export const MessagePage: React.FC = () => {
     result: RoomJoinResult,
     fallbackRoom?: Room | null,
   ) => {
+    const previousRoomId = currentRoomRef.current?.id ?? null;
     const joinedRoom = result.room || fallbackRoom || currentRoomRef.current;
     if (!joinedRoom || joinedRoom.id !== roomId) {
       return null;
@@ -166,7 +191,11 @@ export const MessagePage: React.FC = () => {
     const resolvedMemberCount = typeof result.memberCount === "number"
       ? result.memberCount
       : getRoomMemberCount(roomId);
-    setMemberCount(resolvedMemberCount);
+    if (typeof resolvedMemberCount === "number") {
+      setMemberCount(resolvedMemberCount);
+    } else if (previousRoomId !== roomId) {
+      setMemberCount(null);
+    }
     socket.emit("get_room_messages", { roomId });
     return joinedRoom;
   }, [refreshRoomPermissions]);
@@ -179,25 +208,41 @@ export const MessagePage: React.FC = () => {
   }) => {
     const { roomId, password, fallbackRoom, source } = options;
     const generation = roomSessionGenerationRef.current + 1;
+    const previousRoomId = currentRoomRef.current?.id ?? null;
+    const showRestoreIndicator = VISIBLE_RESTORE_SOURCES.has(source);
     roomSessionGenerationRef.current = generation;
     pendingRestoreRoomIdRef.current = roomId;
-    setIsRestoringRoom(true);
+    if (showRestoreIndicator) {
+      visibleRestoreGenerationRef.current = generation;
+      setIsRestoringRoom(true);
+      setError(null);
+    }
 
     if (fallbackRoom) {
       currentRoomRef.current = fallbackRoom;
       setCurrentRoom(fallbackRoom);
     }
 
-    setMemberCount(getRoomMemberCount(roomId));
+    const cachedMemberCount = getRoomMemberCount(roomId);
+    if (typeof cachedMemberCount === "number") {
+      setMemberCount(cachedMemberCount);
+    } else if (previousRoomId !== roomId) {
+      setMemberCount(null);
+    }
 
     try {
-      const result = await joinRoom(roomId, password);
+      const result = typeof password === "undefined"
+        ? await ensureRoomJoined(roomId)
+        : await joinRoom(roomId, password);
       if (roomSessionGenerationRef.current !== generation) {
         return null;
       }
 
       const joinedRoom = applyRoomSessionResult(roomId, result, fallbackRoom);
       pendingRestoreRoomIdRef.current = null;
+      if (joinedRoom) {
+        setError(null);
+      }
       return joinedRoom;
     } catch (error) {
       if (roomSessionGenerationRef.current !== generation) {
@@ -218,7 +263,7 @@ export const MessagePage: React.FC = () => {
         saveCurrentRoom(null);
         clearRoomUrlParam();
         setError(t("errorRoomNoLongerExists"));
-      } else {
+      } else if (showRestoreIndicator) {
         setError(source === "storage" ? t("errorRestoringRoom") : message);
       }
 
@@ -226,10 +271,62 @@ export const MessagePage: React.FC = () => {
     } finally {
       if (roomSessionGenerationRef.current === generation) {
         pendingRestoreRoomIdRef.current = null;
+      }
+      if (visibleRestoreGenerationRef.current === generation) {
+        visibleRestoreGenerationRef.current = null;
         setIsRestoringRoom(false);
       }
     }
   }, [applyRoomSessionResult, clearRoomUrlParam, t]);
+
+  const scheduleRoomRestore = useCallback((source: RoomRestoreSource) => {
+    const activeRoom = currentRoomRef.current;
+    if (!activeRoom) {
+      return null;
+    }
+
+    const inFlightRestore = inFlightBackgroundRestoreRef.current;
+    if (inFlightRestore?.roomId === activeRoom.id) {
+      return inFlightRestore.promise;
+    }
+
+    const now = Date.now();
+    const suppressedUntil = backgroundRestoreSuppressUntilByRoomRef.current.get(activeRoom.id) ?? 0;
+    if (now < suppressedUntil) {
+      return null;
+    }
+
+    backgroundRestoreSuppressUntilByRoomRef.current.set(
+      activeRoom.id,
+      now + BACKGROUND_RESTORE_SUPPRESSION_MS,
+    );
+    reconnectSocket();
+
+    const promise = ensureActiveRoomSession({
+      roomId: activeRoom.id,
+      fallbackRoom: activeRoom,
+      source,
+    }).then((joinedRoom) => {
+      if (!joinedRoom) {
+        backgroundRestoreSuppressUntilByRoomRef.current.delete(activeRoom.id);
+      }
+      return joinedRoom;
+    }).catch((error) => {
+      backgroundRestoreSuppressUntilByRoomRef.current.delete(activeRoom.id);
+      console.error(`Scheduled room restore failed from ${source}:`, error);
+      return null;
+    }).finally(() => {
+      if (inFlightBackgroundRestoreRef.current?.promise === promise) {
+        inFlightBackgroundRestoreRef.current = null;
+      }
+    });
+
+    inFlightBackgroundRestoreRef.current = {
+      roomId: activeRoom.id,
+      promise,
+    };
+    return promise;
+  }, [ensureActiveRoomSession]);
 
   // 初次加载时加载已保存房间和用户名
   useEffect(() => {
@@ -409,17 +506,7 @@ export const MessagePage: React.FC = () => {
   // 添加页面可见性、BFCache 和网络恢复处理
   useEffect(() => {
     const restoreCurrentRoom = (source: RoomRestoreSource) => {
-      const activeRoom = currentRoomRef.current;
-      if (!activeRoom) {
-        return;
-      }
-
-      reconnectSocket();
-      void ensureActiveRoomSession({
-        roomId: activeRoom.id,
-        fallbackRoom: activeRoom,
-        source,
-      });
+      void scheduleRoomRestore(source);
     };
 
     const handleVisibilityChange = () => {
@@ -436,19 +523,24 @@ export const MessagePage: React.FC = () => {
     };
     const handleOnline = () => restoreCurrentRoom("online");
     const handleSocketConnect = () => restoreCurrentRoom("socket-connect");
+    const handleSocketDisconnect = () => {
+      clearBackgroundRestoreState(currentRoomRef.current?.id ?? null);
+    };
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("pageshow", handlePageShow);
     window.addEventListener("online", handleOnline);
     socket.on("connect", handleSocketConnect);
+    socket.on("disconnect", handleSocketDisconnect);
 
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("pageshow", handlePageShow);
       window.removeEventListener("online", handleOnline);
       socket.off("connect", handleSocketConnect);
+      socket.off("disconnect", handleSocketDisconnect);
     };
-  }, [ensureActiveRoomSession]);
+  }, [clearBackgroundRestoreState, scheduleRoomRestore]);
 
   // --- 添加清空聊天记录的处理函数 (Stays the same) ---
   const handleClearChatMessages = useCallback(async (confirmation: string) => {
@@ -470,6 +562,8 @@ export const MessagePage: React.FC = () => {
 
   // 直接加入房间：点击房间卡片或确认弹窗后调用
   const handleRoomSelect = async (room: Room, password?: string) => {
+    clearBackgroundRestoreState(room.id);
+    setError(null);
     try {
       const joinedRoom = await ensureActiveRoomSession({
         roomId: room.id,
@@ -488,9 +582,12 @@ export const MessagePage: React.FC = () => {
   };
 
   const handleRoomSelectById = async (roomId: string) => {
+    clearBackgroundRestoreState();
     roomSessionGenerationRef.current += 1;
     pendingRestoreRoomIdRef.current = null;
+    visibleRestoreGenerationRef.current = null;
     setIsRestoringRoom(false);
+    setError(null);
 
     try {
       const roomInfo = await getRoomById(roomId);
@@ -524,9 +621,12 @@ export const MessagePage: React.FC = () => {
 
   // 离开当前房间
   const handleLeaveRoom = () => {
+    clearBackgroundRestoreState(currentRoom?.id ?? currentRoomRef.current?.id ?? null);
     roomSessionGenerationRef.current += 1;
     pendingRestoreRoomIdRef.current = null;
+    visibleRestoreGenerationRef.current = null;
     setIsRestoringRoom(false);
+    setError(null);
 
     if (currentRoom) {
       leaveRoom(currentRoom.id);
@@ -621,6 +721,7 @@ export const MessagePage: React.FC = () => {
 
         // If currently in the deleted room, navigate away
         if (currentRoom && currentRoom.id === roomId) {
+          clearBackgroundRestoreState(roomId);
           roomSessionGenerationRef.current += 1;
           setCurrentRoom(null);
           currentRoomRef.current = null;
@@ -636,7 +737,7 @@ export const MessagePage: React.FC = () => {
         setError(response.message || t('errorDeletingRoom')); // Use a new key? e.g., errorDeletingRoomPermanently
       }
     });
-  }, [currentRoom, setView, clearRoomUrlParam, showSuccess, t]); // Dependencies
+  }, [clearBackgroundRestoreState, currentRoom, setView, clearRoomUrlParam, showSuccess, t]); // Dependencies
 
   const handleRenameRoom = useCallback(async (roomId: string, name: string) => {
     try {
@@ -764,6 +865,8 @@ export const MessagePage: React.FC = () => {
           {renderContent()} {/* 渲染当前视图 */}
         </main>
       </div>
+
+      <StatusMessage error={error} success={success} setError={setError} />
 
       {/* 底部导航栏 - 移除 view !== "settings" 条件 */}
       <BottomNav view={view} setView={setView} currentRoom={currentRoom} />

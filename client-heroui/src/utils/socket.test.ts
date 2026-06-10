@@ -74,6 +74,7 @@ const {
   getRoomMemberCount,
   getRoomMembers,
   getSavedRoomsFromServer,
+  joinRoom,
   saveRoomToServer,
   sendMessage,
   sendMessageAndAskAI,
@@ -381,6 +382,30 @@ describe('socket message acknowledgement helpers', () => {
     expect(socketMock.emit).toHaveBeenCalledWith(
       'join_room',
       { roomId: joinedRoom.id, password: undefined },
+      expect.any(Function)
+    );
+  });
+
+  it('reuses the active room password through ensureRoomJoined', async () => {
+    const joinedRoom = room();
+    socketMock.ackResponses.set('join_room', {
+      success: true,
+      room: joinedRoom,
+      memberCount: 3,
+    });
+
+    await joinRoom(joinedRoom.id, 'secret');
+    socketMock.emit.mockClear();
+
+    await expect(ensureRoomJoined(joinedRoom.id)).resolves.toEqual({
+      room: joinedRoom,
+      permissions: undefined,
+      memberCount: 3,
+    });
+
+    expect(socketMock.emit).toHaveBeenCalledWith(
+      'join_room',
+      { roomId: joinedRoom.id, password: 'secret' },
       expect.any(Function)
     );
   });

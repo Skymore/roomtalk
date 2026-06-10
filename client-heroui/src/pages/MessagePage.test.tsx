@@ -37,6 +37,7 @@ const socketMock = vi.hoisted(() => {
 
 const socketApiMock = vi.hoisted(() => ({
   joinRoom: vi.fn(),
+  ensureRoomJoined: vi.fn(),
   leaveRoom: vi.fn(),
   getRoomById: vi.fn(),
   getRoomMemberCount: vi.fn(),
@@ -136,7 +137,22 @@ vi.mock('../components/BottomNav', async () => {
 
 vi.mock('../components/DesktopSidebar', async () => {
   const React = await vi.importActual<typeof import('react')>('react');
-  return { DesktopSidebar: () => React.createElement('aside', { 'data-testid': 'desktop-sidebar' }) };
+  return {
+    DesktopSidebar: ({ onRoomSelect }: { onRoomSelect?: (room: Room) => void }) => React.createElement(
+      'aside',
+      { 'data-testid': 'desktop-sidebar' },
+      React.createElement('button', {
+        'data-testid': 'sidebar-select-room-2',
+        onClick: () => onRoomSelect?.({
+          id: 'room-2',
+          name: 'Room 2',
+          description: '',
+          createdAt: '2026-05-03T00:00:00.000Z',
+          creatorId: 'client-1',
+        }),
+      }),
+    ),
+  };
 });
 
 vi.mock('../components/WelcomeView', async () => {
@@ -147,10 +163,11 @@ vi.mock('../components/WelcomeView', async () => {
 vi.mock('../components/ChatRoomView', async () => {
   const React = await vi.importActual<typeof import('react')>('react');
   return {
-    ChatRoomView: ({ currentRoom, memberCount, isRestoringRoom }: {
+    ChatRoomView: ({ currentRoom, memberCount, isRestoringRoom, handleShareRoom }: {
       currentRoom: Room;
       memberCount: number | null;
       isRestoringRoom: boolean;
+      handleShareRoom?: () => void;
     }) => React.createElement(
       'div',
       {
@@ -160,6 +177,10 @@ vi.mock('../components/ChatRoomView', async () => {
         'data-restoring': String(isRestoringRoom),
       },
       currentRoom.name,
+      React.createElement('button', {
+        'data-testid': 'share-room',
+        onClick: handleShareRoom,
+      }),
     ),
   };
 });
@@ -212,11 +233,20 @@ describe('MessagePage room session restore', () => {
         removeEventListener: vi.fn(),
       })),
     });
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: vi.fn().mockResolvedValue(undefined),
+      },
+    });
     socketApiMock.joinRoom.mockResolvedValue({
       room: room(),
       permissions: permissions(),
       memberCount: 5,
     });
+    socketApiMock.ensureRoomJoined.mockImplementation((roomId: string) => (
+      socketApiMock.joinRoom(roomId, undefined)
+    ));
     socketApiMock.getRoomById.mockResolvedValue(room());
     socketApiMock.getRoomMemberCount.mockReturnValue(null);
     socketApiMock.onRoomMemberChange.mockReturnValue(vi.fn());
@@ -262,16 +292,23 @@ describe('MessagePage room session restore', () => {
     await waitFor(() => {
       expect(socketApiMock.joinRoom).toHaveBeenCalledWith('shared-room', 'secret');
     });
+    expect(socketApiMock.ensureRoomJoined).not.toHaveBeenCalledWith('shared-room');
     expect((await screen.findByTestId('chat-room-view')).getAttribute('data-room-id')).toBe('shared-room');
   });
 
-  it('rejoins the current room on mobile restore, BFCache restore, and online events', async () => {
+  it('coalesces mobile restore, BFCache restore, and online events into one background rejoin', async () => {
     localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
     localStorage.setItem('roomtalk_current_view', 'chat');
     renderPage();
     await waitFor(() => expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1));
 
     socketApiMock.joinRoom.mockClear();
+    socketApiMock.ensureRoomJoined.mockClear();
+    let resolveBackgroundRestore: (value: unknown) => void = () => {};
+    const backgroundRestore = new Promise((resolve) => {
+      resolveBackgroundRestore = resolve;
+    });
+    socketApiMock.joinRoom.mockImplementation(() => backgroundRestore);
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
 
     document.dispatchEvent(new Event('visibilitychange'));
@@ -279,9 +316,137 @@ describe('MessagePage room session restore', () => {
     window.dispatchEvent(new Event('online'));
 
     await waitFor(() => {
-      expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(3);
+      expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1);
     });
+    expect(socketApiMock.ensureRoomJoined).toHaveBeenCalledTimes(1);
+    expect(socketApiMock.ensureRoomJoined).toHaveBeenCalledWith('room-1');
     expect(socketApiMock.joinRoom).toHaveBeenCalledWith('room-1', undefined);
+    expect(socketApiMock.reconnectSocket).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveBackgroundRestore({
+        room: room(),
+        permissions: permissions(),
+        memberCount: 6,
+      });
+      await backgroundRestore;
+    });
+  });
+
+  it('suppresses successful background restore repeats until the suppression window expires', async () => {
+    const dateNowSpy = vi.spyOn(Date, 'now').mockReturnValue(1000);
+    try {
+      localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
+      localStorage.setItem('roomtalk_current_view', 'chat');
+
+      renderPage();
+
+      await waitFor(() => expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1));
+      socketApiMock.joinRoom.mockClear();
+      socketApiMock.ensureRoomJoined.mockClear();
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+
+      dateNowSpy.mockReturnValue(2000);
+      document.dispatchEvent(new Event('visibilitychange'));
+
+      await waitFor(() => {
+        expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1);
+      });
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      dateNowSpy.mockReturnValue(2100);
+      window.dispatchEvent(new Event('online'));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1);
+
+      dateNowSpy.mockReturnValue(2251);
+      dispatchPageShow();
+
+      await waitFor(() => {
+        expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(2);
+      });
+      expect(socketApiMock.ensureRoomJoined).toHaveBeenCalledTimes(2);
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
+  it('clears background suppression after a failed restore so the next signal can retry', async () => {
+    localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
+    localStorage.setItem('roomtalk_current_view', 'chat');
+
+    renderPage();
+
+    await waitFor(() => expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1));
+    socketApiMock.joinRoom.mockClear();
+    socketApiMock.ensureRoomJoined.mockClear();
+    socketApiMock.joinRoom
+      .mockRejectedValueOnce(new Error('Timed out while joining room'))
+      .mockResolvedValueOnce({
+        room: room(),
+        permissions: permissions(),
+        memberCount: 6,
+      });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    await waitFor(() => {
+      expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    window.dispatchEvent(new Event('online'));
+
+    await waitFor(() => {
+      expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(2);
+    });
+    expect(socketApiMock.ensureRoomJoined).toHaveBeenCalledTimes(2);
+  });
+
+  it('allows socket reconnect to rejoin during a recent successful restore suppression window', async () => {
+    const dateNowSpy = vi.spyOn(Date, 'now').mockReturnValue(1000);
+    try {
+      localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
+      localStorage.setItem('roomtalk_current_view', 'chat');
+
+      renderPage();
+
+      await waitFor(() => expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1));
+      socketApiMock.joinRoom.mockClear();
+      socketApiMock.ensureRoomJoined.mockClear();
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+
+      dateNowSpy.mockReturnValue(2000);
+      document.dispatchEvent(new Event('visibilitychange'));
+
+      await waitFor(() => {
+        expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1);
+      });
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      dateNowSpy.mockReturnValue(2100);
+      socketMock.trigger('disconnect', 'transport close');
+      socketMock.trigger('connect');
+
+      await waitFor(() => {
+        expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(2);
+      });
+      expect(socketApiMock.ensureRoomJoined).toHaveBeenCalledTimes(2);
+    } finally {
+      dateNowSpy.mockRestore();
+    }
   });
 
   it('rejoins the current room on socket connect after transport recovery', async () => {
@@ -291,11 +456,13 @@ describe('MessagePage room session restore', () => {
     await waitFor(() => expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1));
 
     socketApiMock.joinRoom.mockClear();
+    socketApiMock.ensureRoomJoined.mockClear();
     socketMock.trigger('connect');
 
     await waitFor(() => {
       expect(socketApiMock.joinRoom).toHaveBeenCalledWith('room-1', undefined);
     });
+    expect(socketApiMock.ensureRoomJoined).toHaveBeenCalledWith('room-1');
   });
 
   it('clears the stored room when restore reports the room no longer exists', async () => {
@@ -311,6 +478,7 @@ describe('MessagePage room session restore', () => {
     expect(socketApiMock.leaveRoom).toHaveBeenCalledWith('room-1');
     expect(screen.queryByTestId('chat-room-view')).toBeNull();
     expect(screen.getByTestId('welcome-view')).toBeTruthy();
+    expect(await screen.findByText('errorRoomNoLongerExists')).toBeTruthy();
   });
 
   it('keeps the room shell when restore fails due to a transient network error', async () => {
@@ -325,6 +493,136 @@ describe('MessagePage room session restore', () => {
       expect(socketApiMock.joinRoom).toHaveBeenCalledWith('room-1', undefined);
     });
     expect(localStorage.getItem('roomtalk_current_room')).not.toBeNull();
+    expect(await screen.findByText('errorRestoringRoom')).toBeTruthy();
+  });
+
+  it('shows success messages from page actions', async () => {
+    localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
+    localStorage.setItem('roomtalk_current_view', 'chat');
+
+    renderPage();
+
+    await screen.findByTestId('chat-room-view');
+    fireEvent.click(screen.getByTestId('share-room'));
+
+    await waitFor(() => {
+      expect(navigator.clipboard.writeText).toHaveBeenCalled();
+    });
+    expect(await screen.findByText('shareSuccess')).toBeTruthy();
+  });
+
+  it('keeps member count stable and hides the header spinner during background restores', async () => {
+    localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
+    localStorage.setItem('roomtalk_current_view', 'chat');
+
+    renderPage();
+
+    await waitFor(() => expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-member-count')).toBe('5');
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-restoring')).toBe('false');
+
+    let resolveBackgroundRestore: (value: unknown) => void = () => {};
+    const backgroundRestore = new Promise((resolve) => {
+      resolveBackgroundRestore = resolve;
+    });
+    socketApiMock.joinRoom.mockClear();
+    socketApiMock.joinRoom.mockImplementation(() => backgroundRestore);
+    socketApiMock.getRoomMemberCount.mockReturnValue(null);
+
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    await waitFor(() => {
+      expect(socketApiMock.joinRoom).toHaveBeenCalledWith('room-1', undefined);
+    });
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-member-count')).toBe('5');
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-restoring')).toBe('false');
+
+    await act(async () => {
+      resolveBackgroundRestore({
+        room: room(),
+        permissions: permissions(),
+        memberCount: 6,
+      });
+      await backgroundRestore;
+    });
+
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-member-count')).toBe('6');
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-restoring')).toBe('false');
+  });
+
+  it('keeps the current member count when a background restore ack omits member count', async () => {
+    localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
+    localStorage.setItem('roomtalk_current_view', 'chat');
+
+    renderPage();
+
+    await waitFor(() => expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-member-count')).toBe('5');
+
+    let resolveBackgroundRestore: (value: unknown) => void = () => {};
+    const backgroundRestore = new Promise((resolve) => {
+      resolveBackgroundRestore = resolve;
+    });
+    socketApiMock.joinRoom.mockClear();
+    socketApiMock.joinRoom.mockImplementation(() => backgroundRestore);
+    socketApiMock.getRoomMemberCount.mockReturnValue(null);
+
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    await waitFor(() => {
+      expect(socketApiMock.joinRoom).toHaveBeenCalledWith('room-1', undefined);
+    });
+
+    await act(async () => {
+      resolveBackgroundRestore({
+        room: room(),
+        permissions: permissions(),
+      });
+      await backgroundRestore;
+    });
+
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-member-count')).toBe('5');
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-restoring')).toBe('false');
+  });
+
+  it('clears stale member count while manually switching to an uncached room', async () => {
+    localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
+    localStorage.setItem('roomtalk_current_view', 'chat');
+
+    renderPage();
+
+    await waitFor(() => expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-member-count')).toBe('5');
+
+    let resolveManualSwitch: (value: unknown) => void = () => {};
+    const manualSwitch = new Promise((resolve) => {
+      resolveManualSwitch = resolve;
+    });
+    socketApiMock.joinRoom.mockClear();
+    socketApiMock.joinRoom.mockImplementation(() => manualSwitch);
+    socketApiMock.getRoomMemberCount.mockReturnValue(null);
+
+    fireEvent.click(screen.getByTestId('sidebar-select-room-2'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-room-id')).toBe('room-2');
+    });
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-member-count')).toBe('unknown');
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-restoring')).toBe('true');
+
+    await act(async () => {
+      resolveManualSwitch({
+        room: room({ id: 'room-2', name: 'Room 2' }),
+        permissions: permissions({ roomId: 'room-2' }),
+        memberCount: 8,
+      });
+      await manualSwitch;
+    });
+
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-member-count')).toBe('8');
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-restoring')).toBe('false');
   });
 
   it('ignores stale restore results after the user switches to another room', async () => {
