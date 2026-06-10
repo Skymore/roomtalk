@@ -33,6 +33,7 @@ type RoomRow = {
   message_version?: number | string | null;
   password_hash?: string | null;
   posting_schedule?: unknown;
+  updated_at?: string | Date | null;
 };
 
 type MessageRow = {
@@ -76,7 +77,7 @@ type MediaAssetRow = {
   created_at: string | Date;
 };
 
-const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule';
+const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, updated_at';
 const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, ai_model, usage, cost, reply_to';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, width, height, duration_ms, uploaded_by_client_id, created_at';
@@ -145,6 +146,7 @@ const mapRoom = (row: RoomRow): Room => {
   if (row.password_hash) room.hasPassword = true;
   const postingSchedule = parseJsonValue<RoomPostingSchedule>(row.posting_schedule);
   if (postingSchedule) room.postingSchedule = postingSchedule;
+  if (row.updated_at) room.updatedAt = toIsoString(row.updated_at);
   return room;
 };
 
@@ -1197,7 +1199,8 @@ export class PostgresStore implements DurableRoomStore {
       const result = await this.pool.query<RoomRow>(
         `UPDATE rooms
         SET password_hash = CASE WHEN $2::boolean THEN $3 ELSE password_hash END,
-          posting_schedule = CASE WHEN $4::boolean THEN $5::jsonb ELSE posting_schedule END
+          posting_schedule = CASE WHEN $4::boolean THEN $5::jsonb ELSE posting_schedule END,
+          updated_at = NOW()
         WHERE id = $1
         RETURNING ${ROOM_COLUMNS}`,
         [
@@ -1404,7 +1407,7 @@ export class PostgresStore implements DurableRoomStore {
     try {
       const result = await this.pool.query<RoomRow>(
         `UPDATE rooms
-        SET name = $3
+        SET name = $3, updated_at = NOW()
         WHERE id = $1 AND creator_id = $2
         RETURNING ${ROOM_COLUMNS}`,
         [roomId, creatorId, name]

@@ -59,6 +59,7 @@ export interface Room {
   messageVersion?: number;
   hasPassword?: boolean;
   postingSchedule?: RoomPostingSchedule;
+  updatedAt?: string;
 }
 
 export type RoomMemberRole = 'owner' | 'admin' | 'member';

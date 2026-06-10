@@ -38,6 +38,7 @@ interface ChatHeaderProps {
   handleRenameRoom: RoomRenameHandler;
   roomPermissions: RoomPermissions | null;
   clientId: string;
+  onRoomUpdated: (room: Room) => void;
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({
@@ -55,7 +56,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   handleDeleteRoom,
   handleRenameRoom,
   roomPermissions,
-  clientId
+  clientId,
+  onRoomUpdated,
 }) => {
   const { t } = useTranslation();
   const isTouchDevice = useIsTouchDevice();
@@ -256,6 +258,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
       onRenameRoom={handleRenameRoom}
       onClearHistory={handleClearChatMessages}
       onDeleteRoom={handleDeleteRoom}
+      onRoomUpdated={onRoomUpdated}
     />
     <Modal isOpen={isScheduleOpen} onClose={() => setIsScheduleOpen(false)} size="sm">
       <ModalContent>

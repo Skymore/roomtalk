@@ -163,11 +163,12 @@ vi.mock('../components/WelcomeView', async () => {
 vi.mock('../components/ChatRoomView', async () => {
   const React = await vi.importActual<typeof import('react')>('react');
   return {
-    ChatRoomView: ({ currentRoom, memberCount, isRestoringRoom, handleShareRoom }: {
+    ChatRoomView: ({ currentRoom, memberCount, isRestoringRoom, handleShareRoom, onRoomUpdated }: {
       currentRoom: Room;
       memberCount: number | null;
       isRestoringRoom: boolean;
       handleShareRoom?: () => void;
+      onRoomUpdated?: (room: Room) => void;
     }) => React.createElement(
       'div',
       {
@@ -175,11 +176,22 @@ vi.mock('../components/ChatRoomView', async () => {
         'data-room-id': currentRoom.id,
         'data-member-count': memberCount == null ? 'unknown' : String(memberCount),
         'data-restoring': String(isRestoringRoom),
+        'data-posting-enabled': String(Boolean(currentRoom.postingSchedule?.enabled)),
       },
       currentRoom.name,
       React.createElement('button', {
         'data-testid': 'share-room',
         onClick: handleShareRoom,
+      }),
+      React.createElement('button', {
+        'data-testid': 'apply-settings-ack',
+        onClick: () => onRoomUpdated?.({
+          id: currentRoom.id,
+          name: currentRoom.name,
+          description: '',
+          createdAt: '2026-05-03T00:00:00.000Z',
+          creatorId: 'client-1',
+        }),
       }),
     ),
   };
@@ -660,5 +672,143 @@ describe('MessagePage room session restore', () => {
 
     expect(screen.getByTestId('chat-room-view').getAttribute('data-room-id')).toBe('room-2');
     expect(screen.getByTestId('chat-room-view').getAttribute('data-member-count')).toBe('8');
+  });
+
+  const enabledSchedule = () => ({
+    enabled: true,
+    timezone: 'UTC',
+    windows: [{ days: [1, 2, 3], start: '09:00', end: '17:00' }],
+  });
+
+  it('removes the posting schedule when room_updated arrives without one', async () => {
+    socketApiMock.joinRoom.mockResolvedValue({
+      room: room({ postingSchedule: enabledSchedule() }),
+      permissions: permissions(),
+      memberCount: 2,
+    });
+
+    renderPage();
+    fireEvent.click(screen.getByTestId('select-room-1'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-posting-enabled')).toBe('true');
+    });
+
+    // 服务端关闭排期后,广播的房间对象不携带 postingSchedule 键
+    act(() => {
+      socketMock.trigger('room_updated', room());
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-posting-enabled')).toBe('false');
+    });
+  });
+
+  it('drops a stale stored posting schedule when the rejoin ack omits it', async () => {
+    localStorage.setItem('roomtalk_current_room', JSON.stringify(room({ postingSchedule: enabledSchedule() })));
+    localStorage.setItem('roomtalk_current_view', 'chat');
+    socketApiMock.joinRoom.mockResolvedValue({
+      room: room(),
+      permissions: permissions(),
+      memberCount: 1,
+    });
+
+    renderPage();
+
+    await waitFor(() => expect(socketApiMock.joinRoom).toHaveBeenCalled());
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-posting-enabled')).toBe('false');
+    });
+  });
+
+  it('ignores a stale room_updated broadcast that arrives after a newer update', async () => {
+    socketApiMock.joinRoom.mockResolvedValue({
+      room: room({ postingSchedule: enabledSchedule(), updatedAt: '2026-06-08T10:00:00.000Z' }),
+      permissions: permissions(),
+      memberCount: 2,
+    });
+
+    renderPage();
+    fireEvent.click(screen.getByTestId('select-room-1'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-posting-enabled')).toBe('true');
+    });
+
+    // 较新的更新:排期已被关闭
+    act(() => {
+      socketMock.trigger('room_updated', room({ updatedAt: '2026-06-08T10:05:00.000Z' }));
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-posting-enabled')).toBe('false');
+    });
+
+    // 乱序到达的旧广播不得回踩
+    act(() => {
+      socketMock.trigger('room_updated', room({ postingSchedule: enabledSchedule(), updatedAt: '2026-06-08T10:01:00.000Z' }));
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-posting-enabled')).toBe('false');
+    });
+  });
+
+  it('keeps the newer room when a stale rejoin ack resolves after a broadcast', async () => {
+    socketApiMock.joinRoom.mockResolvedValue({
+      room: room({ postingSchedule: enabledSchedule(), updatedAt: '2026-06-08T10:00:00.000Z' }),
+      permissions: permissions(),
+      memberCount: 2,
+    });
+
+    renderPage();
+    fireEvent.click(screen.getByTestId('select-room-1'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-posting-enabled')).toBe('true');
+    });
+
+    act(() => {
+      socketMock.trigger('room_updated', room({ updatedAt: '2026-06-08T10:05:00.000Z' }));
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-posting-enabled')).toBe('false');
+    });
+
+    // 后台恢复的 join ack 携带的是更新前读出的旧房间
+    socketApiMock.joinRoom.mockResolvedValue({
+      room: room({ postingSchedule: enabledSchedule(), updatedAt: '2026-06-08T10:02:00.000Z' }),
+      permissions: permissions(),
+      memberCount: 2,
+    });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    await waitFor(() => expect(socketApiMock.joinRoom.mock.calls.length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-posting-enabled')).toBe('false');
+    });
+  });
+
+  it('applies the settings ack room without waiting for the broadcast', async () => {
+    socketApiMock.joinRoom.mockResolvedValue({
+      room: room({ postingSchedule: enabledSchedule() }),
+      permissions: permissions(),
+      memberCount: 2,
+    });
+
+    renderPage();
+    fireEvent.click(screen.getByTestId('select-room-1'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-posting-enabled')).toBe('true');
+    });
+
+    // RoomSettingsModal 保存成功后用 ack 房间直接更新本地状态(read-your-write)
+    fireEvent.click(screen.getByTestId('apply-settings-ack'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-posting-enabled')).toBe('false');
+    });
   });
 });
