@@ -204,7 +204,11 @@ class MemoryRedis {
       const updatedMessage = { ...JSON.parse(list[index]), content: newContent, updatedAt };
       list[index] = JSON.stringify(updatedMessage);
       this.lists.set(messageKey, list);
-      return [1, 1, roomJson, list[index]];
+      // 镜像真实脚本:命中时 bump roomVersion 并回写房间
+      const room = JSON.parse(roomJson);
+      const updatedRoom = { ...room, roomVersion: (Number(room.roomVersion) || 0) + 1 };
+      this.hash('rooms').set(roomId, JSON.stringify(updatedRoom));
+      return [1, 1, JSON.stringify(updatedRoom), list[index]];
     }
 
     if (script.includes('return { 1, found, #remaining, cjson.encode(room) }')) {
@@ -224,7 +228,11 @@ class MemoryRedis {
       if (!found) return [1, 0, list.length, roomJson];
       const latestTimestamp = getLatestMessageTimestamp(remaining.map(item => JSON.parse(item)));
       const room = JSON.parse(roomJson);
-      const updatedRoom = { ...room, lastActivityAt: latestTimestamp || room.createdAt };
+      const updatedRoom = {
+        ...room,
+        lastActivityAt: latestTimestamp || room.createdAt,
+        roomVersion: (Number(room.roomVersion) || 0) + 1,
+      };
       this.hash('rooms').set(roomId, JSON.stringify(updatedRoom));
       this.lists.set(messageKey, remaining);
       return [1, 1, remaining.length, JSON.stringify(updatedRoom)];
@@ -248,7 +256,11 @@ class MemoryRedis {
       const remaining = list.slice(0, keepCount);
       const latestTimestamp = getLatestMessageTimestamp(remaining.map(item => JSON.parse(item)));
       const room = JSON.parse(roomJson);
-      const updatedRoom = { ...room, lastActivityAt: latestTimestamp || room.createdAt };
+      const updatedRoom = {
+        ...room,
+        lastActivityAt: latestTimestamp || room.createdAt,
+        roomVersion: (Number(room.roomVersion) || 0) + 1,
+      };
       this.hash('rooms').set(roomId, JSON.stringify(updatedRoom));
       this.lists.set(messageKey, remaining);
       return [1, 1, remaining.length, JSON.stringify(updatedRoom), ...remaining];
@@ -272,7 +284,11 @@ class MemoryRedis {
       const remaining = [...list.slice(0, targetIndex), JSON.stringify(updatedMessage)];
       const latestTimestamp = getLatestMessageTimestamp(remaining.map(item => JSON.parse(item)));
       const room = JSON.parse(roomJson);
-      const updatedRoom = { ...room, lastActivityAt: latestTimestamp || room.createdAt };
+      const updatedRoom = {
+        ...room,
+        lastActivityAt: latestTimestamp || room.createdAt,
+        roomVersion: (Number(room.roomVersion) || 0) + 1,
+      };
       this.hash('rooms').set(roomId, JSON.stringify(updatedRoom));
       this.lists.set(messageKey, remaining);
       return [1, 1, remaining.length, JSON.stringify(updatedRoom), JSON.stringify(updatedMessage), ...remaining];
@@ -1286,10 +1302,17 @@ for (const [storeName, createFixture] of storeFactories) {
       const renamed = await store.updateRoomName(initialRoom.id, initialRoom.creatorId, 'Renamed Room');
       assert.equal(renamed?.roomVersion, 2);
 
-      const afterAppend = await store.appendMessage(message({ timestamp: '2026-05-03T00:00:01.000Z' }));
+      const afterAppend = await store.appendMessage(message({ id: 'mv-1', timestamp: '2026-05-03T00:00:01.000Z' }));
       assert.equal(afterAppend?.roomVersion, 3);
 
-      assert.equal((await store.getRoomById(initialRoom.id))?.roomVersion, 3);
+      const mutableStore = store as DurableRoomStoreWithMessageMutations;
+      const afterEdit = await mutableStore.updateMessageContent(initialRoom.id, 'mv-1', 'edited');
+      assert.equal(afterEdit?.room?.roomVersion, 4);
+
+      const afterDelete = await mutableStore.deleteMessageById(initialRoom.id, 'mv-1');
+      assert.equal(afterDelete?.room?.roomVersion, 5);
+
+      assert.equal((await store.getRoomById(initialRoom.id))?.roomVersion, 5);
     });
 
     it('keeps retry and edit-and-ask truncation semantics consistent', async () => {

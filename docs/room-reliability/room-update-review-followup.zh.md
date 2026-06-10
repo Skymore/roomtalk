@@ -112,3 +112,19 @@ payload 只有 `{roomId}`(无 password/postingSchedule 键)时,handler 仍执行
 ### 面试口径(更新)
 
 > 排序真值是行级逻辑版本号 `room_version`(同 `message_version` 先例):每次房间写入持锁自增,严格单调、与时钟无关;版本相等即同一次写入,ack 与广播双路径天然幂等。`updatedAt` 退为展示和旧数据兼容回落。这是从"timestamp-based LWW(近似全序)"到"版本号 LWW(精确全序)"的升级,消除了事务时间戳偏差和毫秒平局两类乱序源。
+
+---
+
+## 第四轮跟进:`room_version` 实现的二次 review(2026-06-10)
+
+外部 review 对第三轮实现提出 3 项 finding,**全部成立**,已修复:
+
+| # | Finding | 修复 |
+|---|---|---|
+| P1 | `applyServerRoom` 只入队 React state、不同步推进 `currentRoomRef`;`room_updated(v2)` 到达后、commit 前 resolve 的旧 rejoin ack(v1) 经 ref 看到的还是 v1,其**值更新**会把队列里的 v2 覆盖掉 | 新增 `commitNewerCurrentRoom`:`currentRoom` 的唯一提交入口——先同步推进 ref(两条路径互相可见),再做带守卫的 functional update(入队顺序不影响收敛结果);`applyRoomSessionResult` 的值更新同步改为收敛式。根因是上一轮只给一条路径加了 ref 同步,**不对称**;本轮把对称性收进单一函数,结构上不可再分叉 |
+| P2 | 重连指示器的 timer 无 owner:断连清 in-flight 后新恢复 B 启动,旧恢复 A 迟到的 `finally` 会无条件清掉 B 的 timer/spinner | `Symbol` owner token:只有最近一次启动的恢复能撤销指示器;`clearBackgroundRestoreState`(手动切房/离开/断连)强制清除 |
+| P3 | contract fake 的 4 个消息变更分支(update-content/delete/truncate/update-and-truncate)不镜像真实 Lua 的 `roomVersion` bump(update-content 甚至不回写房间),契约测试无法证明这些路径严格递增 | 4 个分支补齐真实语义;单调性契约测试扩展为**创建→改名→消息→编辑→删除 = 1→2→3→4→5**,双 fixture 通过 |
+
+P1/P2 均按"red 验证"流程:先写 reviewer 给定场景的测试,stash 修复确认对旧代码**精确变红**,还原后转绿。验收:服务端 178 / 客户端 140 全绿,双侧 tsc/lint/i18n 干净。
+
+已知未对齐(刻意,记录):fake 的 eval 分支不镜像真实脚本的 `messageVersion` bump——这是本系列之前就存在的偏差,与 `roomVersion` 正交,现有测试不依赖该行为;如未来要对齐,应连同 `historyVersion` 断言一起做。

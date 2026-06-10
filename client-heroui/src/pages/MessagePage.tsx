@@ -86,6 +86,7 @@ export const MessagePage: React.FC = () => {
   const visibleRestoreGenerationRef = useRef<number | null>(null);
   const [isReconnecting, setIsReconnecting] = useState(false);
   const reconnectIndicatorTimerRef = useRef<number | null>(null);
+  const reconnectIndicatorOwnerRef = useRef<symbol | null>(null);
   const inFlightBackgroundRestoreRef = useRef<InFlightBackgroundRestore | null>(null);
   const backgroundRestoreSuppressUntilByRoomRef = useRef(new Map<string, number>());
 
@@ -128,6 +129,20 @@ export const MessagePage: React.FC = () => {
     };
   }, []);
 
+  // 重连指示器有 owner:只有当前 owner(最近一次启动的恢复)能撤销它,
+  // 旧恢复迟到的 finally 不得清掉新恢复刚 arm 的计时器/已显示的 spinner。
+  const clearReconnectIndicator = useCallback((owner?: symbol) => {
+    if (owner !== undefined && reconnectIndicatorOwnerRef.current !== owner) {
+      return;
+    }
+    reconnectIndicatorOwnerRef.current = null;
+    if (reconnectIndicatorTimerRef.current !== null) {
+      window.clearTimeout(reconnectIndicatorTimerRef.current);
+      reconnectIndicatorTimerRef.current = null;
+    }
+    setIsReconnecting(false);
+  }, []);
+
   const clearBackgroundRestoreState = useCallback((roomId?: string | null) => {
     if (roomId) {
       backgroundRestoreSuppressUntilByRoomRef.current.delete(roomId);
@@ -138,11 +153,25 @@ export const MessagePage: React.FC = () => {
     if (!roomId || inFlightBackgroundRestoreRef.current?.roomId === roomId) {
       inFlightBackgroundRestoreRef.current = null;
     }
-  }, []);
+    // 手动切房/离开/断连时,后台恢复的指示器一并让位
+    clearReconnectIndicator();
+  }, [clearReconnectIndicator]);
 
   // 服务端返回的房间对象是完整真值(room_updated 广播、join/settings/rename ack)。
   // 必须整体替换而不能 spread 合并:被清除的字段(关闭排期后的 postingSchedule、
   // 清除密码后的 hasPassword)在新对象里是"键不存在",spread 永远删不掉它们。
+  // currentRoom 的唯一提交入口:先同步推进 currentRoomRef(broadcast 与 ack 两条
+  // 路径靠它互相看见,React commit 前的同批次旧载荷才不会回踩),再做收敛式入队
+  // (functional update 带守卫,入队顺序不影响最终结果)。
+  const commitNewerCurrentRoom = useCallback((incomingRoom: Room) => {
+    if (currentRoomRef.current?.id === incomingRoom.id && isNewerRoom(incomingRoom, currentRoomRef.current)) {
+      currentRoomRef.current = incomingRoom;
+    }
+    setCurrentRoom((current) => (
+      current?.id === incomingRoom.id && isNewerRoom(incomingRoom, current) ? incomingRoom : current
+    ));
+  }, []);
+
   const applyServerRoom = useCallback((updatedRoom: Room) => {
     setRooms((prev) => {
       const existing = prev.find((room) => room.id === updatedRoom.id);
@@ -151,13 +180,11 @@ export const MessagePage: React.FC = () => {
       }
       return sortRoomsByLastActivityDesc(upsertRoom(prev, updatedRoom));
     });
-    setCurrentRoom((current) => (
-      current?.id === updatedRoom.id && isNewerRoom(updatedRoom, current) ? updatedRoom : current
-    ));
+    commitNewerCurrentRoom(updatedRoom);
     setSavedRooms((prev) => prev.map((savedRoom) => (
       savedRoom.id === updatedRoom.id && isNewerRoom(updatedRoom, savedRoom) ? updatedRoom : savedRoom
     )));
-  }, []);
+  }, [commitNewerCurrentRoom]);
 
   const refreshRoomPermissions = useCallback((roomId: string) => {
     getRoomPermissions(roomId)
@@ -207,9 +234,12 @@ export const MessagePage: React.FC = () => {
       return null;
     }
 
-    const roomToApply = pickNewerRoom(joinedRoom, currentRoomRef.current);
+    const baseline = currentRoomRef.current?.id === roomId ? currentRoomRef.current : null;
+    const roomToApply = pickNewerRoom(joinedRoom, baseline);
     currentRoomRef.current = roomToApply;
-    setCurrentRoom(roomToApply);
+    setCurrentRoom((current) => (
+      current?.id === roomId ? pickNewerRoom(roomToApply, current) : roomToApply
+    ));
 
     if (result.permissions) {
       setRoomPermissions(result.permissions);
@@ -333,12 +363,16 @@ export const MessagePage: React.FC = () => {
     reconnectSocket();
 
     // 延迟指示器:rejoin 超过宽限期仍未完成才显示,健康场景零闪烁
+    const indicatorOwner = Symbol('reconnect-indicator');
+    reconnectIndicatorOwnerRef.current = indicatorOwner;
     if (reconnectIndicatorTimerRef.current !== null) {
       window.clearTimeout(reconnectIndicatorTimerRef.current);
     }
     reconnectIndicatorTimerRef.current = window.setTimeout(() => {
       reconnectIndicatorTimerRef.current = null;
-      setIsReconnecting(true);
+      if (reconnectIndicatorOwnerRef.current === indicatorOwner) {
+        setIsReconnecting(true);
+      }
     }, RECONNECT_INDICATOR_DELAY_MS);
 
     const promise = ensureActiveRoomSession({
@@ -355,11 +389,7 @@ export const MessagePage: React.FC = () => {
       console.error(`Scheduled room restore failed from ${source}:`, error);
       return null;
     }).finally(() => {
-      if (reconnectIndicatorTimerRef.current !== null) {
-        window.clearTimeout(reconnectIndicatorTimerRef.current);
-        reconnectIndicatorTimerRef.current = null;
-      }
-      setIsReconnecting(false);
+      clearReconnectIndicator(indicatorOwner);
       if (inFlightBackgroundRestoreRef.current?.promise === promise) {
         inFlightBackgroundRestoreRef.current = null;
       }
@@ -370,7 +400,7 @@ export const MessagePage: React.FC = () => {
       promise,
     };
     return promise;
-  }, [ensureActiveRoomSession]);
+  }, [clearReconnectIndicator, ensureActiveRoomSession]);
 
   // 初次加载时加载已保存房间和用户名
   useEffect(() => {

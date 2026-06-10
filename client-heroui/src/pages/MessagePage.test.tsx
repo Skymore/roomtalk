@@ -856,6 +856,99 @@ describe('MessagePage room session restore', () => {
     }
   });
 
+  it('keeps the newer broadcast when a stale rejoin ack resolves before React commits', async () => {
+    socketApiMock.joinRoom.mockResolvedValue({
+      room: room({ postingSchedule: enabledSchedule(), roomVersion: 1 }),
+      permissions: permissions(),
+      memberCount: 2,
+    });
+
+    renderPage();
+    fireEvent.click(screen.getByTestId('select-room-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-posting-enabled')).toBe('true');
+    });
+
+    // 启动一个后台恢复,ack 挂起
+    let resolveStaleRejoin: (value: unknown) => void = () => {};
+    socketApiMock.joinRoom.mockImplementation(() => new Promise((resolve) => {
+      resolveStaleRejoin = resolve;
+    }));
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    // 同一批次(React commit 之前):先到 room_updated(v3, 排期已关),
+    // 再 resolve 携带 v2 旧状态的 rejoin ack —— v3 不得被回踩
+    await act(async () => {
+      socketMock.trigger('room_updated', room({ roomVersion: 3 }));
+      resolveStaleRejoin({
+        room: room({ postingSchedule: enabledSchedule(), roomVersion: 2 }),
+        permissions: permissions(),
+        memberCount: 2,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(screen.getByTestId('chat-room-view').getAttribute('data-posting-enabled')).toBe('false');
+  });
+
+  it('keeps the reconnect indicator owned by the latest restore across disconnects', async () => {
+    localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
+    localStorage.setItem('roomtalk_current_view', 'chat');
+    renderPage();
+    await waitFor(() => expect(socketApiMock.joinRoom).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-restoring')).toBe('false');
+    });
+
+    const pendingJoins: Array<(value: unknown) => void> = [];
+    socketApiMock.joinRoom.mockImplementation(() => new Promise((resolve) => {
+      pendingJoins.push(resolve);
+    }));
+
+    vi.useFakeTimers();
+    try {
+      // 恢复 A(慢)
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+      await act(async () => {
+        document.dispatchEvent(new Event('visibilitychange'));
+        await vi.advanceTimersByTimeAsync(100);
+      });
+      expect(pendingJoins.length).toBe(1);
+
+      // 断连(清 in-flight/抑制窗)→ 重连触发恢复 B
+      await act(async () => {
+        socketMock.trigger('disconnect', 'transport close');
+        socketMock.trigger('connect');
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(pendingJoins.length).toBe(2);
+
+      // 旧恢复 A 此刻才 resolve:它的 finally 不得清掉 B 的指示器
+      await act(async () => {
+        pendingJoins[0]({ room: room(), permissions: permissions(), memberCount: 1 });
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      // B 仍未完成,越过宽限期后必须显示"重连中"
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-restoring')).toBe('true');
+
+      // B 完成,指示器消失
+      await act(async () => {
+        pendingJoins[1]({ room: room(), permissions: permissions(), memberCount: 1 });
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(screen.getByTestId('chat-room-view').getAttribute('data-restoring')).toBe('false');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('applies the settings ack room without waiting for the broadcast', async () => {
     socketApiMock.joinRoom.mockResolvedValue({
       room: room({ postingSchedule: enabledSchedule() }),
