@@ -3,7 +3,7 @@ import { Server } from 'socket.io';
 import { RedisClientType } from 'redis';
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../logger';
-import { RoomStore } from '../repositories/store';
+import { MediaHistoryPageCursor, RoomStore } from '../repositories/store';
 import { MediaAsset, MediaKind, Message, Room } from '../types';
 import { AIRoleDraft, MAX_AI_ROLE_IDEA_LENGTH } from '../services/aiRoleGenerator';
 import { hasRoomAccess } from '../socket/roomAccess';
@@ -31,6 +31,7 @@ const MEDIA_UPLOAD_LIMIT_BYTES: Record<MediaKind, number> = {
 const MEDIA_HISTORY_DEFAULT_LIMIT = 40;
 const MEDIA_HISTORY_MAX_LIMIT = 80;
 const MEDIA_HISTORY_MONTH_WINDOW = 6;
+const MEDIA_HISTORY_KINDS: MediaKind[] = ['image', 'video'];
 
 const isMediaKind = (kind: unknown): kind is MediaKind => (
   kind === 'image' || kind === 'audio' || kind === 'video'
@@ -63,13 +64,11 @@ const buildMediaObjectKey = (roomId: string, kind: MediaKind, assetId: string) =
   `rooms/${roomId}/media/${kind}/${assetId}`
 );
 
-const isHistoryMediaKind = (kind: MediaKind) => kind === 'image' || kind === 'video';
-
 const encodeMediaHistoryCursor = (createdAt: string, assetId: string) => (
   Buffer.from(JSON.stringify({ createdAt, assetId }), 'utf8').toString('base64url')
 );
 
-const decodeMediaHistoryCursor = (cursor: unknown): { createdAt: string; assetId: string } | null => {
+const decodeMediaHistoryCursor = (cursor: unknown): MediaHistoryPageCursor | null => {
   if (typeof cursor !== 'string' || !cursor) {
     return null;
   }
@@ -86,20 +85,10 @@ const decodeMediaHistoryCursor = (cursor: unknown): { createdAt: string; assetId
   return null;
 };
 
-const isBeforeMediaHistoryCursor = (asset: MediaAsset, cursor: { createdAt: string; assetId: string }) => {
-  const assetTime = Date.parse(asset.createdAt);
-  const cursorTime = Date.parse(cursor.createdAt);
-  if (!Number.isFinite(assetTime) || !Number.isFinite(cursorTime)) {
-    return false;
-  }
-
-  return assetTime < cursorTime || (assetTime === cursorTime && asset.id < cursor.assetId);
-};
-
 const resolveMediaHistoryCutoff = () => {
   const cutoff = new Date();
   cutoff.setMonth(cutoff.getMonth() - MEDIA_HISTORY_MONTH_WINDOW);
-  return cutoff.getTime();
+  return cutoff.toISOString();
 };
 
 const parseMediaHistoryLimit = (value: unknown) => {
@@ -115,35 +104,50 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
 
   if (mediaObjectStorage.getMediaObject) {
     app.put('/api/media/local-objects/:encodedObjectKey', express.raw({ type: '*/*', limit: MEDIA_UPLOAD_LIMIT_BYTES.video }), async (req: Request, res: Response) => {
-      const objectKey = decodeLocalMediaObjectKey(req.params.encodedObjectKey);
-      const body = Buffer.isBuffer(req.body) ? req.body : null;
-      const mimeType = typeof req.header('content-type') === 'string' ? req.header('content-type')!.split(';')[0].trim().toLowerCase() : 'application/octet-stream';
+      try {
+        const objectKey = decodeLocalMediaObjectKey(req.params.encodedObjectKey);
+        const body = Buffer.isBuffer(req.body) ? req.body : null;
+        const mimeType = typeof req.header('content-type') === 'string' ? req.header('content-type')!.split(';')[0].trim().toLowerCase() : 'application/octet-stream';
 
-      if (!objectKey || !body || body.length === 0) {
-        return res.status(400).json({ error: 'Valid media object key and body are required' });
+        if (!objectKey || !body || body.length === 0) {
+          return res.status(400).json({ error: 'Valid media object key and body are required' });
+        }
+
+        await mediaObjectStorage.putMediaObject({
+          objectKey,
+          body,
+          mimeType,
+          byteSize: body.length,
+        });
+
+        return res.status(204).send();
+      } catch (error) {
+        routeLogger.error('Failed to store local media object', { error, endpoint: 'PUT /api/media/local-objects/:encodedObjectKey', ip: req.ip });
+        return res.status(500).json({ error: 'Failed to store media object' });
       }
-
-      await mediaObjectStorage.putMediaObject({
-        objectKey,
-        body,
-        mimeType,
-        byteSize: body.length,
-      });
-
-      return res.status(204).send();
     });
 
     app.get('/api/media/local-objects/:encodedObjectKey', async (req: Request, res: Response) => {
-      const objectKey = decodeLocalMediaObjectKey(req.params.encodedObjectKey);
-      if (!objectKey || !mediaObjectStorage.getMediaObject) {
-        return res.status(404).json({ error: 'Media object not found' });
-      }
+      try {
+        const objectKey = decodeLocalMediaObjectKey(req.params.encodedObjectKey);
+        if (!objectKey || !mediaObjectStorage.getMediaObject) {
+          return res.status(404).json({ error: 'Media object not found' });
+        }
 
-      const object = await mediaObjectStorage.getMediaObject(objectKey);
-      res.type(object.mimeType || 'application/octet-stream');
-      res.setHeader('Content-Length', object.byteSize);
-      res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
-      return res.send(object.body);
+        const head = await mediaObjectStorage.headObject({ objectKey });
+        if (!head.exists) {
+          return res.status(404).json({ error: 'Media object not found' });
+        }
+
+        const object = await mediaObjectStorage.getMediaObject(objectKey);
+        res.type(object.mimeType || head.mimeType || 'application/octet-stream');
+        res.setHeader('Content-Length', object.byteSize);
+        res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+        return res.send(object.body);
+      } catch (error) {
+        routeLogger.error('Failed to read local media object', { error, endpoint: 'GET /api/media/local-objects/:encodedObjectKey', ip: req.ip });
+        return res.status(500).json({ error: 'Failed to read media object' });
+      }
     });
   }
 
@@ -158,67 +162,62 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   };
 
   app.get('/api/rooms/:roomId/media-history', async (req: Request, res: Response) => {
-    if (!mediaObjectStorage.isConfigured()) {
-      return res.status(503).json({ error: 'Media object storage is not configured' });
-    }
+    try {
+      if (!mediaObjectStorage.isConfigured()) {
+        return res.status(503).json({ error: 'Media object storage is not configured' });
+      }
 
-    const { roomId } = req.params;
-    const clientId = getQueryClientId(req);
-    if (!roomId || !clientId) {
-      return res.status(400).json({ error: 'roomId and clientId are required' });
-    }
+      const { roomId } = req.params;
+      const clientId = getQueryClientId(req);
+      if (!roomId || !clientId) {
+        return res.status(400).json({ error: 'roomId and clientId are required' });
+      }
 
-    if (!(await hasRoomAccess(store, roomId, clientId))) {
-      routeLogger.warn('Unauthorized media history request', { endpoint: 'GET /api/rooms/:roomId/media-history', clientId, roomId, ip: req.ip });
-      return res.status(403).json({ error: 'Not authorized to access this room' });
-    }
+      if (!(await hasRoomAccess(store, roomId, clientId))) {
+        routeLogger.warn('Unauthorized media history request', { endpoint: 'GET /api/rooms/:roomId/media-history', clientId, roomId, ip: req.ip });
+        return res.status(403).json({ error: 'Not authorized to access this room' });
+      }
 
-    const limit = parseMediaHistoryLimit(req.query.limit);
-    const cursor = decodeMediaHistoryCursor(req.query.before);
-    const cutoffTime = resolveMediaHistoryCutoff();
-    const assets = (await store.readMediaAssetsByRoom(roomId))
-      .filter(asset => isHistoryMediaKind(asset.kind))
-      .filter(asset => {
-        const createdAt = Date.parse(asset.createdAt);
-        return Number.isFinite(createdAt) && createdAt >= cutoffTime;
-      })
-      .filter(asset => cursor ? isBeforeMediaHistoryCursor(asset, cursor) : true)
-      .sort((first, second) => {
-        const timeDelta = Date.parse(second.createdAt) - Date.parse(first.createdAt);
-        return timeDelta || second.id.localeCompare(first.id);
+      const limit = parseMediaHistoryLimit(req.query.limit);
+      const page = await store.readMediaHistoryPageByRoom(roomId, {
+        limit,
+        before: decodeMediaHistoryCursor(req.query.before),
+        since: resolveMediaHistoryCutoff(),
+        kinds: MEDIA_HISTORY_KINDS,
       });
+      const items = await Promise.all(page.assets.map(async (asset) => {
+        const signedDownload = await mediaObjectStorage.createReadUrl({
+          objectKey: asset.objectKey,
+          expiresInSeconds: 15 * 60,
+        });
 
-    const pageAssets = assets.slice(0, limit);
-    const hasMore = assets.length > limit;
-    const items = await Promise.all(pageAssets.map(async (asset) => {
-      const signedDownload = await mediaObjectStorage.createReadUrl({
-        objectKey: asset.objectKey,
-        expiresInSeconds: 15 * 60,
+        return {
+          assetId: asset.id,
+          messageId: asset.messageId,
+          kind: asset.kind,
+          mimeType: asset.mimeType,
+          byteSize: asset.byteSize,
+          width: asset.width,
+          height: asset.height,
+          durationMs: asset.durationMs,
+          createdAt: asset.createdAt,
+          url: signedDownload.url,
+          expiresAt: signedDownload.expiresAt,
+        };
+      }));
+      const lastAsset = page.assets[page.assets.length - 1];
+
+      return res.json({
+        roomId,
+        items,
+        hasMore: page.hasMore,
+        nextCursor: page.hasMore && lastAsset ? encodeMediaHistoryCursor(lastAsset.createdAt, lastAsset.id) : null,
+        windowMonths: MEDIA_HISTORY_MONTH_WINDOW,
       });
-
-      return {
-        assetId: asset.id,
-        messageId: asset.messageId,
-        kind: asset.kind,
-        mimeType: asset.mimeType,
-        byteSize: asset.byteSize,
-        width: asset.width,
-        height: asset.height,
-        durationMs: asset.durationMs,
-        createdAt: asset.createdAt,
-        url: signedDownload.url,
-        expiresAt: signedDownload.expiresAt,
-      };
-    }));
-    const lastAsset = pageAssets[pageAssets.length - 1];
-
-    return res.json({
-      roomId,
-      items,
-      hasMore,
-      nextCursor: hasMore && lastAsset ? encodeMediaHistoryCursor(lastAsset.createdAt, lastAsset.id) : null,
-      windowMonths: MEDIA_HISTORY_MONTH_WINDOW,
-    });
+    } catch (error) {
+      routeLogger.error('Failed to read media history', { error, endpoint: 'GET /api/rooms/:roomId/media-history', roomId: req.params.roomId, ip: req.ip });
+      return res.status(500).json({ error: 'Failed to load media history' });
+    }
   });
 
   app.get('/api/rooms/:roomId/messages', async (req: Request, res: Response) => {

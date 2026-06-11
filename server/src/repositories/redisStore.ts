@@ -2,7 +2,7 @@ import { customAlphabet } from 'nanoid';
 import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
 import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember } from '../types';
-import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, MediaMessageAppendResult, RoomMessageCacheStore, RoomMessagePageOptions, RoomSettingsUpdate, RoomStore } from './store';
+import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, RoomMessageCacheStore, RoomMessagePageOptions, RoomSettingsUpdate, RoomStore } from './store';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 const DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS = 30;
@@ -11,9 +11,33 @@ const ROOM_MESSAGES_CACHE_KEY_SUFFIX = ':messages';
 const getPersistentRoomMembersKey = (roomId: string) => `room:${roomId}:room_members`;
 const CLIENT_NICKNAMES_KEY = 'client:nicknames';
 const getRoomMediaAssetsKey = (roomId: string) => `room:${roomId}:media_assets`;
+const getRoomMediaAssetsTimelineKey = (roomId: string) => `room:${roomId}:media_assets_by_time`;
 const getSavedRoomsKey = (clientId: string) => `user:${clientId}:saved_rooms`;
 const getRoomSavedByKey = (roomId: string) => `room:${roomId}:saved_by`;
 const getRoomPasswordHashKey = (roomId: string) => `room:${roomId}:password_hash`;
+
+const normalizeMediaHistoryPageLimit = (limit?: number): number => {
+  if (!Number.isFinite(limit)) {
+    return 40;
+  }
+
+  return Math.min(200, Math.max(1, Math.floor(limit || 40)));
+};
+
+const getMediaAssetTimelineScore = (asset: MediaAsset): number => {
+  const parsed = Date.parse(asset.createdAt);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const isBeforeMediaHistoryCursor = (asset: MediaAsset, cursor: MediaHistoryPageCursor): boolean => {
+  const assetTime = Date.parse(asset.createdAt);
+  const cursorTime = Date.parse(cursor.createdAt);
+  if (!Number.isFinite(assetTime) || !Number.isFinite(cursorTime)) {
+    return false;
+  }
+
+  return assetTime < cursorTime || (assetTime === cursorTime && asset.id < cursor.assetId);
+};
 
 const toMessageMediaAsset = (asset: MediaAsset): MessageMediaAsset => {
   const messageAsset: MessageMediaAsset = {
@@ -106,6 +130,7 @@ redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
 redis.call('RPUSH', KEYS[2], ARGV[2])
 redis.call('HSET', KEYS[3], ARGV[4], ARGV[5])
 redis.call('SADD', KEYS[4], ARGV[4])
+redis.call('ZADD', KEYS[5], ARGV[6], ARGV[4])
 return { 1, cjson.encode(room) }
 `;
 
@@ -649,13 +674,14 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
 
     try {
       const result = await (this.redisClient as any).eval(APPEND_MEDIA_MESSAGE_WITH_ASSET_SCRIPT, {
-        keys: ['rooms', `room:${mediaMessage.roomId}:messages`, 'media_assets', getRoomMediaAssetsKey(mediaMessage.roomId)],
+        keys: ['rooms', `room:${mediaMessage.roomId}:messages`, 'media_assets', getRoomMediaAssetsKey(mediaMessage.roomId), getRoomMediaAssetsTimelineKey(mediaMessage.roomId)],
         arguments: [
           mediaMessage.roomId,
           JSON.stringify(savedMessage),
           mediaMessage.timestamp,
           mediaAsset.id,
           JSON.stringify(mediaAsset),
+          String(getMediaAssetTimelineScore(mediaAsset)),
         ],
       });
       const updatedRoom = parseScriptRoom(result, 1);
@@ -894,10 +920,45 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
+  private async indexMediaAsset(asset: MediaAsset): Promise<void> {
+    await (this.redisClient as any).zAdd(getRoomMediaAssetsTimelineKey(asset.roomId), {
+      score: getMediaAssetTimelineScore(asset),
+      value: asset.id,
+    });
+  }
+
+  private async ensureRoomMediaAssetTimeline(roomId: string): Promise<void> {
+    const timelineKey = getRoomMediaAssetsTimelineKey(roomId);
+    const [timelineCount, assetCount] = await Promise.all([
+      (this.redisClient as any).zCard(timelineKey),
+      this.redisClient.sCard(getRoomMediaAssetsKey(roomId)),
+    ]);
+    if (timelineCount >= assetCount) {
+      return;
+    }
+
+    const assetIds = await this.redisClient.sMembers(getRoomMediaAssetsKey(roomId));
+    if (assetIds.length === 0) {
+      return;
+    }
+
+    const assets = await Promise.all(assetIds.map(assetId => this.getMediaAsset(assetId)));
+    const members = assets
+      .filter((asset): asset is MediaAsset => !!asset)
+      .map(asset => ({
+        score: getMediaAssetTimelineScore(asset),
+        value: asset.id,
+      }));
+    if (members.length > 0) {
+      await (this.redisClient as any).zAdd(timelineKey, members);
+    }
+  }
+
   async saveMediaAsset(asset: MediaAsset): Promise<MediaAsset | null> {
     try {
       await this.redisClient.hSet('media_assets', asset.id, JSON.stringify(asset));
       await this.redisClient.sAdd(getRoomMediaAssetsKey(asset.roomId), asset.id);
+      await this.indexMediaAsset(asset);
       return asset;
     } catch (error) {
       this.logger.error('Error saving Redis media asset', { error, assetId: asset.id, roomId: asset.roomId, kind: asset.kind });
@@ -996,12 +1057,80 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
+  async readMediaHistoryPageByRoom(roomId: string, options: MediaHistoryPageOptions = {}): Promise<MediaHistoryPage> {
+    const limit = normalizeMediaHistoryPageLimit(options.limit);
+    const kinds = new Set(options.kinds?.length ? options.kinds : ['image', 'video', 'audio']);
+    const sinceTime = Date.parse(options.since || '');
+    const cursorTime = Date.parse(options.before?.createdAt || '');
+    const minScore = Number.isFinite(sinceTime) ? sinceTime : '-inf';
+    const maxScore = Number.isFinite(cursorTime) ? cursorTime : '+inf';
+    const batchSize = Math.max(limit + 1, 40);
+    const pageAssets: MediaAsset[] = [];
+    let offset = 0;
+    let hasMore = false;
+
+    try {
+      await this.ensureRoomMediaAssetTimeline(roomId);
+
+      while (pageAssets.length <= limit) {
+        const assetIds = await (this.redisClient as any).zRange(
+          getRoomMediaAssetsTimelineKey(roomId),
+          maxScore,
+          minScore,
+          {
+            BY: 'SCORE',
+            REV: true,
+            LIMIT: { offset, count: batchSize },
+          }
+        ) as Array<string | Buffer>;
+        if (assetIds.length === 0) {
+          break;
+        }
+
+        offset += assetIds.length;
+        const assets = await Promise.all(assetIds.map(assetId => this.getMediaAsset(assetId.toString())));
+        for (const asset of assets) {
+          if (!asset || asset.roomId !== roomId || !kinds.has(asset.kind)) {
+            continue;
+          }
+
+          if (Number.isFinite(sinceTime) && getMediaAssetTimelineScore(asset) < sinceTime) {
+            continue;
+          }
+
+          if (options.before && Number.isFinite(cursorTime) && !isBeforeMediaHistoryCursor(asset, options.before)) {
+            continue;
+          }
+
+          pageAssets.push(asset);
+          if (pageAssets.length > limit) {
+            hasMore = true;
+            break;
+          }
+        }
+
+        if (assetIds.length < batchSize || hasMore) {
+          break;
+        }
+      }
+
+      return {
+        assets: pageAssets.slice(0, limit),
+        hasMore,
+      };
+    } catch (error) {
+      this.logger.error('Error reading Redis media history page by room', { error, roomId, options });
+      return { assets: [], hasMore: false };
+    }
+  }
+
   async deleteMediaAsset(assetId: string): Promise<void> {
     try {
       const asset = await this.getMediaAsset(assetId);
       await this.redisClient.hDel('media_assets', assetId);
       if (asset) {
         await this.redisClient.sRem(getRoomMediaAssetsKey(asset.roomId), assetId);
+        await (this.redisClient as any).zRem(getRoomMediaAssetsTimelineKey(asset.roomId), assetId);
       }
     } catch (error) {
       this.logger.error('Error deleting Redis media asset', { error, assetId });
@@ -1543,6 +1672,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         this.redisClient.del(`room:${roomId}:members`),
         this.redisClient.del(getPersistentRoomMembersKey(roomId)),
         this.redisClient.del(getRoomMediaAssetsKey(roomId)),
+        this.redisClient.del(getRoomMediaAssetsTimelineKey(roomId)),
         ...members.map(member => this.redisClient.del(`room:${roomId}:member_sockets:${member.clientId}`)),
         ...mediaAssets.map(asset => this.redisClient.hDel('media_assets', asset.id)),
         ...members.map(member => this.redisClient.sRem(`user:${member.clientId}:rooms`, roomId)),

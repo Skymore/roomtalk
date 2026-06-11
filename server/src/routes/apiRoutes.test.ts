@@ -17,6 +17,13 @@ type EmittedEvent = {
   payload: unknown;
 };
 
+type TestMediaHistoryOptions = {
+  limit?: number;
+  before?: { createdAt: string; assetId: string } | null;
+  since?: string;
+  kinds?: Array<MediaAsset['kind']>;
+};
+
 type TestServer = {
   baseUrl: string;
   close: () => Promise<void>;
@@ -43,6 +50,7 @@ type TestServer = {
     saveMediaAsset: (asset: MediaAsset) => Promise<MediaAsset | null>;
     getMediaAsset: (assetId: string) => Promise<MediaAsset | null>;
     readMediaAssetsByRoom: (roomId: string) => Promise<MediaAsset[]>;
+    readMediaHistoryPageByRoom: (roomId: string, options?: TestMediaHistoryOptions) => Promise<{ assets: MediaAsset[]; hasMore: boolean }>;
     deleteMediaAsset: (assetId: string) => Promise<void>;
     readRoomAICost: (roomId: string) => Promise<{ roomId: string; currency: 'USD'; totalUsd: number }>;
     getRoomById: (roomId: string) => Promise<Room | null>;
@@ -195,6 +203,31 @@ async function createTestServer(overrides: { mediaObjectStorage?: unknown } = {}
     },
     async readMediaAssetsByRoom(roomId: string) {
       return [...this.mediaAssets.values()].filter(asset => asset.roomId === roomId);
+    },
+    async readMediaHistoryPageByRoom(roomId: string, options: TestMediaHistoryOptions = {}) {
+      const limit = Math.min(200, Math.max(1, Math.floor(options.limit || 40)));
+      const kinds = new Set(options.kinds?.length ? options.kinds : ['image', 'video', 'audio']);
+      const sinceTime = Date.parse(options.since || '');
+      const cursorTime = Date.parse(options.before?.createdAt || '');
+      const assets = [...this.mediaAssets.values()]
+        .filter(asset => asset.roomId === roomId)
+        .filter(asset => kinds.has(asset.kind))
+        .filter(asset => {
+          const createdAt = Date.parse(asset.createdAt);
+          return Number.isFinite(createdAt) && (!Number.isFinite(sinceTime) || createdAt >= sinceTime);
+        })
+        .filter(asset => {
+          if (!options.before || !Number.isFinite(cursorTime)) {
+            return true;
+          }
+          const createdAt = Date.parse(asset.createdAt);
+          return createdAt < cursorTime || (createdAt === cursorTime && asset.id < options.before.assetId);
+        })
+        .sort((first, second) => Date.parse(second.createdAt) - Date.parse(first.createdAt) || second.id.localeCompare(first.id));
+      return {
+        assets: assets.slice(0, limit),
+        hasMore: assets.length > limit,
+      };
     },
     async deleteMediaAsset(assetId: string) {
       this.mediaAssets.delete(assetId);
@@ -562,6 +595,10 @@ describe('API routes', () => {
       const upload = await uploadResponse.json() as { assetId: string; objectKey: string; uploadUrl: string };
       assert.match(upload.uploadUrl, /^\/api\/media\/local-objects\//);
 
+      const missingDownloadResponse = await fetch(`${server.baseUrl}${upload.uploadUrl}`);
+      assert.equal(missingDownloadResponse.status, 404);
+      assert.deepEqual(await missingDownloadResponse.json(), { error: 'Media object not found' });
+
       const putResponse = await fetch(`${server.baseUrl}${upload.uploadUrl}`, {
         method: 'PUT',
         headers: { 'content-type': 'image/webp' },
@@ -599,6 +636,9 @@ describe('API routes', () => {
 
   it('returns paginated recent image and video history for a room', async () => {
     server.store.members.add('room-1:client-2');
+    server.store.readMediaAssetsByRoom = async () => {
+      throw new Error('media history route must use readMediaHistoryPageByRoom');
+    };
     server.store.mediaAssets.set('image-new', {
       id: 'image-new',
       roomId: 'room-1',

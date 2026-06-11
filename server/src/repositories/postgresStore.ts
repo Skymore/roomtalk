@@ -1,7 +1,7 @@
 import { customAlphabet } from 'nanoid';
 import { Logger } from '../logger';
 import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomPostingSchedule } from '../types';
-import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, MediaMessageAppendResult, RoomMessagePageOptions, RoomSettingsUpdate } from './store';
+import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, RoomMessagePageOptions, RoomSettingsUpdate } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 
@@ -113,6 +113,14 @@ const normalizeMessagePageLimit = (limit?: number): number => {
   }
 
   return Math.min(200, Math.max(1, Math.floor(limit || DEFAULT_ROOM_MESSAGE_PAGE_LIMIT)));
+};
+
+const normalizeMediaHistoryPageLimit = (limit?: number): number => {
+  if (!Number.isFinite(limit)) {
+    return 40;
+  }
+
+  return Math.min(200, Math.max(1, Math.floor(limit || 40)));
 };
 
 const parseJsonValue = <T>(value: unknown): T | undefined => {
@@ -979,6 +987,47 @@ export class PostgresStore implements DurableRoomStore {
     } catch (error) {
       this.logger.error('Error reading PostgreSQL media assets by room', { error, roomId });
       return [];
+    }
+  }
+
+  async readMediaHistoryPageByRoom(roomId: string, options: MediaHistoryPageOptions = {}): Promise<MediaHistoryPage> {
+    const limit = normalizeMediaHistoryPageLimit(options.limit);
+    const kinds = options.kinds?.length ? options.kinds : ['image', 'video', 'audio'];
+    const params: unknown[] = [roomId, kinds];
+    const conditions = ['room_id = $1', 'kind = ANY($2::text[])'];
+    const sinceTime = Date.parse(options.since || '');
+    const beforeTime = Date.parse(options.before?.createdAt || '');
+
+    if (Number.isFinite(sinceTime)) {
+      params.push(options.since);
+      conditions.push(`created_at >= $${params.length}`);
+    }
+
+    if (options.before && Number.isFinite(beforeTime)) {
+      params.push(options.before.createdAt, options.before.assetId);
+      const createdAtParam = params.length - 1;
+      const assetIdParam = params.length;
+      conditions.push(`(created_at < $${createdAtParam} OR (created_at = $${createdAtParam} AND id < $${assetIdParam}))`);
+    }
+
+    params.push(limit + 1);
+
+    try {
+      const result = await this.pool.query<MediaAssetRow>(
+        `SELECT ${MEDIA_ASSET_COLUMNS}
+        FROM media_assets
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY created_at DESC, id DESC
+        LIMIT $${params.length}`,
+        params
+      );
+      return {
+        assets: result.rows.slice(0, limit).map(mapMediaAsset),
+        hasMore: result.rows.length > limit,
+      };
+    } catch (error) {
+      this.logger.error('Error reading PostgreSQL media history page by room', { error, roomId, options });
+      return { assets: [], hasMore: false };
     }
   }
 

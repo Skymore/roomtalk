@@ -469,8 +469,16 @@ describe('MessageItem replies', () => {
     });
 
     const stage = screen.getByTestId('media-viewer-stage');
+    const track = screen.getByTestId('media-carousel-track');
+    Object.defineProperty(stage, 'clientWidth', { configurable: true, value: 300 });
+    Object.defineProperty(track, 'clientWidth', { configurable: true, value: 300 });
+
     fireEvent.mouseDown(stage, { clientX: 320, clientY: 220 });
-    fireEvent.mouseUp(stage, { clientX: 120, clientY: 224 });
+    fireEvent.mouseMove(stage, { clientX: 20, clientY: 224 });
+    await waitFor(() => {
+      expect(track.getAttribute('style')).toContain('translate3d(-600px, 0, 0)');
+    });
+    fireEvent.mouseUp(stage, { clientX: 20, clientY: 224 });
     await waitFor(() => {
       const activeImage = document.body.querySelector('[data-testid="media-viewer-stage"] [data-active-media="true"] img');
       expect(activeImage?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/asset-3.webp');

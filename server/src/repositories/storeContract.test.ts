@@ -9,6 +9,7 @@ class MemoryRedis {
   hashes = new Map<string, Map<string, string>>();
   lists = new Map<string, string[]>();
   sets = new Map<string, Set<string>>();
+  zsets = new Map<string, Map<string, number>>();
   strings = new Map<string, string>();
 
   private hash(key: string) {
@@ -19,6 +20,11 @@ class MemoryRedis {
   private set(key: string) {
     if (!this.sets.has(key)) this.sets.set(key, new Set());
     return this.sets.get(key)!;
+  }
+
+  private zset(key: string) {
+    if (!this.zsets.has(key)) this.zsets.set(key, new Map());
+    return this.zsets.get(key)!;
   }
 
   private updateRoomActivity(roomId: string, lastActivityAt: string, useGreatest: boolean) {
@@ -84,6 +90,7 @@ class MemoryRedis {
         this.hashes.delete(item),
         this.lists.delete(item),
         this.sets.delete(item),
+        this.zsets.delete(item),
         this.strings.delete(item),
       ].some(Boolean);
       if (deleted) deletedCount++;
@@ -105,6 +112,44 @@ class MemoryRedis {
 
   async sCard(key: string) {
     return this.set(key).size;
+  }
+
+  async zAdd(key: string, memberOrMembers: { score: number; value: string } | Array<{ score: number; value: string }>) {
+    const members = Array.isArray(memberOrMembers) ? memberOrMembers : [memberOrMembers];
+    const zset = this.zset(key);
+    for (const member of members) {
+      zset.set(member.value, member.score);
+    }
+    return members.length;
+  }
+
+  async zCard(key: string) {
+    return this.zset(key).size;
+  }
+
+  async zRange(key: string, start: number | string, stop: number | string, options?: { REV?: true; LIMIT?: { offset: number; count: number } }) {
+    const toScore = (value: number | string) => {
+      if (value === '+inf') return Number.POSITIVE_INFINITY;
+      if (value === '-inf') return Number.NEGATIVE_INFINITY;
+      return Number(value);
+    };
+    const startScore = toScore(start);
+    const stopScore = toScore(stop);
+    const minScore = Math.min(startScore, stopScore);
+    const maxScore = Math.max(startScore, stopScore);
+    const sorted = Array.from(this.zset(key).entries())
+      .filter(([, score]) => score >= minScore && score <= maxScore)
+      .sort((first, second) => options?.REV
+        ? second[1] - first[1] || second[0].localeCompare(first[0])
+        : first[1] - second[1] || first[0].localeCompare(second[0]))
+      .map(([value]) => value);
+    const offset = options?.LIMIT?.offset ?? 0;
+    const count = options?.LIMIT?.count ?? sorted.length;
+    return sorted.slice(offset, offset + count);
+  }
+
+  async zRem(key: string, value: string) {
+    return this.zset(key).delete(value) ? 1 : 0;
   }
 
   async get(key: string) {
@@ -142,8 +187,8 @@ class MemoryRedis {
     }
 
     if (script.includes("redis.call('HSET', KEYS[3]")) {
-      const [, messageKey, mediaAssetsKey, roomMediaAssetsKey] = options.keys;
-      const [roomId, messagePayload, lastActivityAt, assetId, assetPayload] = options.arguments;
+      const [, messageKey, mediaAssetsKey, roomMediaAssetsKey, roomMediaAssetsTimelineKey] = options.keys;
+      const [roomId, messagePayload, lastActivityAt, assetId, assetPayload, assetScore] = options.arguments;
       const updatedRoom = this.updateRoomActivity(roomId, lastActivityAt, true);
       if (!updatedRoom) return [0, ''];
       const list = this.lists.get(messageKey) || [];
@@ -151,6 +196,7 @@ class MemoryRedis {
       this.lists.set(messageKey, list);
       this.hash(mediaAssetsKey).set(assetId, assetPayload);
       this.set(roomMediaAssetsKey).add(assetId);
+      this.zset(roomMediaAssetsTimelineKey).set(assetId, Number(assetScore));
       return [1, JSON.stringify(updatedRoom)];
     }
 
@@ -329,6 +375,7 @@ class MemoryRedis {
     this.hashes.clear();
     this.lists.clear();
     this.sets.clear();
+    this.zsets.clear();
     this.strings.clear();
   }
 }
@@ -601,6 +648,30 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
     if (/^SELECT .* FROM media_assets WHERE message_id = \$1/.test(compactSql)) {
       const row = [...this.mediaAssets.values()].find(asset => asset.message_id === params[0]);
       return { rows: (row ? [row] : []) as T[], rowCount: row ? 1 : 0 };
+    }
+
+    if (/^SELECT .* FROM media_assets WHERE room_id = \$1 AND kind = ANY\(\$2::text\[\]\)/.test(compactSql)) {
+      const roomId = String(params[0]);
+      const kinds = new Set((params[1] as string[]) || []);
+      const sinceIndex = /created_at >= \$3/.test(compactSql) ? 2 : -1;
+      const beforeIndex = /created_at < \$\d+ OR \(created_at = \$\d+ AND id < \$\d+\)/.test(compactSql)
+        ? (sinceIndex === -1 ? 2 : 3)
+        : -1;
+      const sinceTime = sinceIndex === -1 ? Number.NEGATIVE_INFINITY : toTime(String(params[sinceIndex]));
+      const beforeTime = beforeIndex === -1 ? Number.POSITIVE_INFINITY : toTime(String(params[beforeIndex]));
+      const beforeId = beforeIndex === -1 ? null : String(params[beforeIndex + 1]);
+      const limit = Number(params[params.length - 1]) || 40;
+      const rows = [...this.mediaAssets.values()]
+        .filter(asset => asset.room_id === roomId)
+        .filter(asset => kinds.has(asset.kind))
+        .filter(asset => toTime(asset.created_at) >= sinceTime)
+        .filter(asset => {
+          const createdAt = toTime(asset.created_at);
+          return beforeIndex === -1 || createdAt < beforeTime || (createdAt === beforeTime && asset.id < beforeId!);
+        })
+        .sort((first, second) => toTime(second.created_at) - toTime(first.created_at) || second.id.localeCompare(first.id))
+        .slice(0, limit);
+      return { rows: rows as T[], rowCount: rows.length };
     }
 
     if (/^SELECT .* FROM media_assets WHERE room_id = \$1 ORDER BY created_at ASC/.test(compactSql)) {
@@ -1183,6 +1254,11 @@ for (const [storeName, createFixture] of storeFactories) {
       assert.deepEqual(await store.getMediaAsset(asset.id), asset);
       assert.deepEqual(await store.getMediaAssetByMessageId(imageMessage.id), asset);
       assert.deepEqual(await store.readMediaAssetsByRoom(initialRoom.id), [asset]);
+      assert.deepEqual(await store.readMediaHistoryPageByRoom(initialRoom.id, {
+        limit: 1,
+        since: '2026-01-01T00:00:00.000Z',
+        kinds: ['image', 'video'],
+      }), { assets: [asset], hasMore: false });
 
       await store.appendMessage(imageMessage);
 
