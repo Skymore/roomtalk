@@ -80,6 +80,7 @@ export const MessagePage: React.FC = () => {
     const storedView = getStoredView();
     return storedView === "saved" && isDesktopLayout() ? "rooms" : storedView;
   });
+  const viewRef = useRef<AppView>(view);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -422,10 +423,22 @@ export const MessagePage: React.FC = () => {
 
   // 视图变化时保存到localStorage
   useEffect(() => {
+    viewRef.current = view;
     if (view) {
       saveCurrentView(view);
     }
   }, [view]);
+
+  useEffect(() => {
+    const handleHistoryBack = () => {
+      if (viewRef.current === "chat" && currentRoomRef.current) {
+        setView("rooms");
+      }
+    };
+
+    window.addEventListener("popstate", handleHistoryBack);
+    return () => window.removeEventListener("popstate", handleHistoryBack);
+  }, []);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(min-width: 768px)');
