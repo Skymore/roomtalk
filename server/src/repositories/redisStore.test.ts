@@ -191,6 +191,56 @@ class MemoryRedis {
       return encoded;
     }
 
+    if (script.includes('local passwordMode = ARGV[3]')) {
+      const [roomId, updatedAt, passwordMode, passwordHash, postingScheduleMode, postingScheduleJson] = options.arguments;
+      const roomJson = this.hash('rooms').get(roomId);
+      if (!roomJson) {
+        return '';
+      }
+      const room = JSON.parse(roomJson);
+      if (passwordMode === 'set') {
+        this.strings.set(options.keys[1], passwordHash);
+        room.hasPassword = true;
+      } else if (passwordMode === 'clear') {
+        this.strings.delete(options.keys[1]);
+        delete room.hasPassword;
+      }
+      if (postingScheduleMode === 'set') {
+        room.postingSchedule = JSON.parse(postingScheduleJson);
+      } else if (postingScheduleMode === 'clear') {
+        delete room.postingSchedule;
+      }
+      const updatedRoom = {
+        ...room,
+        updatedAt,
+        roomVersion: (Number(room.roomVersion) || 0) + 1,
+      };
+      const encoded = JSON.stringify(updatedRoom);
+      this.hash('rooms').set(roomId, encoded);
+      return encoded;
+    }
+
+    if (script.includes('local expectedCreatorId = ARGV[2]')) {
+      const [roomId, creatorId, name, updatedAt] = options.arguments;
+      const roomJson = this.hash('rooms').get(roomId);
+      if (!roomJson) {
+        return [0, ''];
+      }
+      const room = JSON.parse(roomJson);
+      if (room.creatorId !== creatorId) {
+        return [2, room.creatorId || ''];
+      }
+      const updatedRoom = {
+        ...room,
+        name,
+        updatedAt,
+        roomVersion: (Number(room.roomVersion) || 0) + 1,
+      };
+      const encoded = JSON.stringify(updatedRoom);
+      this.hash('rooms').set(roomId, encoded);
+      return [1, encoded];
+    }
+
     if (script.includes("redis.call('HSET', KEYS[3]")) {
       const [, messageKey, mediaAssetsKey, roomMediaAssetsKey, roomMediaAssetsTimelineKey] = options.keys;
       const [roomId, messagePayload, lastActivityAt, assetId, assetPayload, assetScore] = options.arguments;
@@ -351,6 +401,28 @@ class FailingReplaceRedis extends MemoryRedis {
   }
 }
 
+class ConcurrentRoomMutationRedis extends MemoryRedis {
+  private nextMutation: { roomId: string; mutate: (room: Room) => Room } | null = null;
+
+  mutateBeforeNextRoomEval(roomId: string, mutate: (room: Room) => Room) {
+    this.nextMutation = { roomId, mutate };
+  }
+
+  async eval(script: string, options: { keys: string[]; arguments: string[] }) {
+    const roomId = options.keys[0] === 'rooms' ? options.arguments[0] : '';
+    if (this.nextMutation && roomId === this.nextMutation.roomId) {
+      const rooms = this.hashes.get('rooms');
+      const roomJson = rooms?.get(roomId);
+      if (roomJson) {
+        rooms!.set(roomId, JSON.stringify(this.nextMutation.mutate(JSON.parse(roomJson) as Room)));
+      }
+      this.nextMutation = null;
+    }
+
+    return super.eval(script, options);
+  }
+}
+
 const logger = {
   debug() {},
   error() {},
@@ -475,6 +547,47 @@ describe('RedisStore', () => {
     assert.equal(await store.getRoomMemberCount('room-1'), 0);
     assert.equal(redis.sets.has('room:room-1:member_sockets:client-1'), false);
     assert.equal(await redis.get(store.getRoomAICostKey('room-1')), undefined);
+  });
+
+  it('merges Redis room name and settings updates atomically against concurrent room field changes', async () => {
+    const schedule = {
+      enabled: true,
+      timezone: 'America/Los_Angeles',
+      windows: [{ days: [1, 2, 3], start: '09:00', end: '17:00' }],
+    };
+
+    const renameRedis = new ConcurrentRoomMutationRedis();
+    const renameStore = new RedisStore(renameRedis as any, logger as any);
+    await renameStore.saveRoom(room({ name: 'Original Room' }));
+    renameRedis.mutateBeforeNextRoomEval('room-1', current => ({
+      ...current,
+      postingSchedule: schedule,
+      hasPassword: true,
+    }));
+
+    const renamed = await renameStore.updateRoomName('room-1', 'client-1', 'Renamed Room');
+
+    assert.equal(renamed?.name, 'Renamed Room');
+    assert.deepEqual(renamed?.postingSchedule, schedule);
+    assert.equal(renamed?.hasPassword, true);
+
+    const settingsRedis = new ConcurrentRoomMutationRedis();
+    const settingsStore = new RedisStore(settingsRedis as any, logger as any);
+    await settingsStore.saveRoom(room({ name: 'Original Room' }));
+    settingsRedis.mutateBeforeNextRoomEval('room-1', current => ({
+      ...current,
+      name: 'Concurrent Rename',
+    }));
+
+    const settingsUpdated = await settingsStore.updateRoomSettings('room-1', {
+      passwordHash: 'secret-hash',
+      postingSchedule: schedule,
+    });
+
+    assert.equal(settingsUpdated?.name, 'Concurrent Rename');
+    assert.deepEqual(settingsUpdated?.postingSchedule, schedule);
+    assert.equal(settingsUpdated?.hasPassword, true);
+    assert.equal(await settingsStore.readRoomPasswordHash('room-1'), 'secret-hash');
   });
 
   it('lists user rooms by most recent activity first', async () => {

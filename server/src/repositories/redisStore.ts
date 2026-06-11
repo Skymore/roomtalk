@@ -88,6 +88,68 @@ redis.call('HSET', KEYS[1], ARGV[1], encoded)
 return encoded
 `;
 
+const UPDATE_ROOM_SETTINGS_SCRIPT = `
+local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
+if not roomJson then
+  return ''
+end
+
+local ok, room = pcall(cjson.decode, roomJson)
+if not ok then
+  return ''
+end
+
+local passwordMode = ARGV[3]
+if passwordMode == 'set' then
+  redis.call('SET', KEYS[2], ARGV[4])
+  room['hasPassword'] = true
+elseif passwordMode == 'clear' then
+  redis.call('DEL', KEYS[2])
+  room['hasPassword'] = nil
+end
+
+local postingScheduleMode = ARGV[5]
+if postingScheduleMode == 'set' then
+  local okSchedule, postingSchedule = pcall(cjson.decode, ARGV[6])
+  if not okSchedule then
+    return ''
+  end
+  room['postingSchedule'] = postingSchedule
+elseif postingScheduleMode == 'clear' then
+  room['postingSchedule'] = nil
+end
+
+room['updatedAt'] = ARGV[2]
+room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
+local encoded = cjson.encode(room)
+redis.call('HSET', KEYS[1], ARGV[1], encoded)
+return encoded
+`;
+
+const UPDATE_ROOM_NAME_SCRIPT = `
+local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
+if not roomJson then
+  return { 0, '' }
+end
+
+local ok, room = pcall(cjson.decode, roomJson)
+if not ok then
+  return { 0, '' }
+end
+
+local expectedCreatorId = ARGV[2]
+if room['creatorId'] ~= expectedCreatorId then
+  return { 2, room['creatorId'] or '' }
+end
+
+room['name'] = ARGV[3]
+room['updatedAt'] = ARGV[4]
+room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
+local encoded = cjson.encode(room)
+redis.call('HSET', KEYS[1], ARGV[1], encoded)
+return { 1, encoded }
+`;
+
 const APPEND_MESSAGE_LIST_SCRIPT = `
 local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
 if not roomJson then
@@ -1326,31 +1388,33 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
 
   async updateRoomSettings(roomId: string, updates: RoomSettingsUpdate): Promise<Room | null> {
     try {
-      const room = await this.getRoomById(roomId);
-      if (!room) {
+      const passwordMode = Object.prototype.hasOwnProperty.call(updates, 'passwordHash')
+        ? updates.passwordHash
+          ? 'set'
+          : 'clear'
+        : 'keep';
+      const postingScheduleMode = Object.prototype.hasOwnProperty.call(updates, 'postingSchedule')
+        ? updates.postingSchedule
+          ? 'set'
+          : 'clear'
+        : 'keep';
+      const result = await (this.redisClient as any).eval(UPDATE_ROOM_SETTINGS_SCRIPT, {
+        keys: ['rooms', getRoomPasswordHashKey(roomId)],
+        arguments: [
+          roomId,
+          new Date().toISOString(),
+          passwordMode,
+          updates.passwordHash || '',
+          postingScheduleMode,
+          updates.postingSchedule ? JSON.stringify(updates.postingSchedule) : '',
+        ],
+      });
+
+      if (typeof result !== 'string' || !result) {
         return null;
       }
 
-      const updatedRoom: Room = { ...room };
-      if (Object.prototype.hasOwnProperty.call(updates, 'passwordHash')) {
-        if (updates.passwordHash) {
-          await this.redisClient.set(getRoomPasswordHashKey(roomId), updates.passwordHash);
-          updatedRoom.hasPassword = true;
-        } else {
-          await this.redisClient.del(getRoomPasswordHashKey(roomId));
-          delete updatedRoom.hasPassword;
-        }
-      }
-
-      if (Object.prototype.hasOwnProperty.call(updates, 'postingSchedule')) {
-        if (updates.postingSchedule) {
-          updatedRoom.postingSchedule = updates.postingSchedule;
-        } else {
-          delete updatedRoom.postingSchedule;
-        }
-      }
-
-      return await this.writeRoomRecord(roomId, updatedRoom);
+      return JSON.parse(result) as Room;
     } catch (error) {
       this.logger.error('Error updating Redis room settings', { error, roomId });
       return null;
@@ -1510,21 +1574,24 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
 
   async updateRoomName(roomId: string, creatorId: string, name: string): Promise<Room | null> {
     try {
-      const room = await this.getRoomById(roomId);
-      if (!room) {
+      const result = await (this.redisClient as any).eval(UPDATE_ROOM_NAME_SCRIPT, {
+        keys: ['rooms'],
+        arguments: [roomId, creatorId, name, new Date().toISOString()],
+      });
+      if (!Array.isArray(result) || Number(result[0]) === 0) {
         this.logger.warn('Cannot rename missing Redis room', { roomId, creatorId });
         return null;
       }
 
-      if (room.creatorId !== creatorId) {
-        this.logger.warn('Cannot rename Redis room for non-creator', { roomId, creatorId, roomCreatorId: room.creatorId });
+      if (Number(result[0]) === 2) {
+        this.logger.warn('Cannot rename Redis room for non-creator', { roomId, creatorId, roomCreatorId: result[1] });
         return null;
       }
 
-      const updatedRoom = await this.writeRoomRecord(roomId, {
-        ...room,
-        name,
-      });
+      const updatedRoom = parseScriptRoom(result, 1);
+      if (!updatedRoom) {
+        return null;
+      }
       this.logger.debug('Room renamed in Redis', { roomId, creatorId });
       return updatedRoom;
     } catch (error) {
