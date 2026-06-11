@@ -5,6 +5,7 @@ import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { getRoomMediaHistory } from "../utils/socket";
 import { RoomMediaHistoryItem } from "../utils/types";
+import { getVideoPreviewUrl } from "../utils/videoPreview";
 
 type ViewerMediaKind = "image" | "video";
 type MediaStageVariant = "viewer" | "historyPreview";
@@ -450,7 +451,7 @@ const MediaStage: React.FC<MediaStageProps> = ({
               ) : (
                 <video
                   key={item.src}
-                  src={item.src}
+                  src={getVideoPreviewUrl(item.src)}
                   className="max-h-full w-full max-w-5xl bg-black object-contain sm:rounded-lg"
                   controls={isActive}
                   autoPlay={isActive}
@@ -924,7 +925,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
                             <img src={item.url} alt={t("sharedImage")} className="h-full w-full object-cover" loading="lazy" />
                           ) : (
                             <>
-                              <video src={item.url} className="h-full w-full object-cover" preload="metadata" muted playsInline />
+                              <video src={getVideoPreviewUrl(item.url)} className="h-full w-full object-cover" preload="metadata" muted playsInline />
                               <span className="absolute inset-0 flex items-center justify-center bg-black/20">
                                 <span className="flex h-8 w-8 items-center justify-center rounded-full bg-black/45 text-white">
                                   <Icon icon="lucide:play" className="ml-0.5 h-4 w-4" />
