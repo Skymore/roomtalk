@@ -150,6 +150,26 @@ redis.call('HSET', KEYS[1], ARGV[1], encoded)
 return { 1, encoded }
 `;
 
+const UPDATE_ROOM_MEMBER_COUNT_SCRIPT = `
+local clientId = ARGV[1]
+local socketId = ARGV[2]
+local isJoining = ARGV[3]
+
+if isJoining == '1' then
+  redis.call('SADD', KEYS[2], socketId)
+  redis.call('SADD', KEYS[1], clientId)
+else
+  redis.call('SREM', KEYS[2], socketId)
+  local remainingSockets = redis.call('SCARD', KEYS[2])
+  if remainingSockets == 0 then
+    redis.call('DEL', KEYS[2])
+    redis.call('SREM', KEYS[1], clientId)
+  end
+end
+
+return redis.call('SCARD', KEYS[1])
+`;
+
 const APPEND_MESSAGE_LIST_SCRIPT = `
 local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
 if not roomJson then
@@ -1622,20 +1642,11 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     try {
       const roomMembersKey = `room:${roomId}:members`;
       const clientSocketsKey = `room:${roomId}:member_sockets:${clientId}`;
-
-      if (isJoining) {
-        await this.redisClient.sAdd(clientSocketsKey, socketId);
-        await this.redisClient.sAdd(roomMembersKey, clientId);
-      } else {
-        await this.redisClient.sRem(clientSocketsKey, socketId);
-        const remainingSockets = await this.redisClient.sCard(clientSocketsKey);
-        if (remainingSockets === 0) {
-          await this.redisClient.del(clientSocketsKey);
-          await this.redisClient.sRem(roomMembersKey, clientId);
-        }
-      }
-
-      return await this.redisClient.sCard(roomMembersKey);
+      const result = await (this.redisClient as any).eval(UPDATE_ROOM_MEMBER_COUNT_SCRIPT, {
+        keys: [roomMembersKey, clientSocketsKey],
+        arguments: [clientId, socketId, isJoining ? '1' : '0'],
+      });
+      return Number(result) || 0;
     } catch (error) {
       this.logger.error('Error updating room member count', { error, roomId, clientId, socketId, isJoining });
       return 0;

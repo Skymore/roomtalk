@@ -232,6 +232,22 @@ class MemoryRedis {
       return [1, encoded];
     }
 
+    if (script.includes('local clientId = ARGV[1]')) {
+      const [roomMembersKey, clientSocketsKey] = options.keys;
+      const [clientId, socketId, isJoining] = options.arguments;
+      if (isJoining === '1') {
+        this.set(clientSocketsKey).add(socketId);
+        this.set(roomMembersKey).add(clientId);
+      } else {
+        this.set(clientSocketsKey).delete(socketId);
+        if (this.set(clientSocketsKey).size === 0) {
+          await this.del(clientSocketsKey);
+          this.set(roomMembersKey).delete(clientId);
+        }
+      }
+      return this.set(roomMembersKey).size;
+    }
+
     if (script.includes("redis.call('HSET', KEYS[3]")) {
       const [, messageKey, mediaAssetsKey, roomMediaAssetsKey, roomMediaAssetsTimelineKey] = options.keys;
       const [roomId, messagePayload, lastActivityAt, assetId, assetPayload, assetScore] = options.arguments;
