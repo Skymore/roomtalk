@@ -19,18 +19,21 @@ describe('AI model registry', () => {
     assert.equal(registry.normalizeAIModel('not-allowed').id, 'gpt-5.5');
   });
 
-  it('uses DeepSeek V4 Pro as the built-in default and flags only high output prices as premium', () => {
+  it('uses DeepSeek V4 Pro as the built-in default and flags high or unknown output prices as premium', () => {
     const registry = createAIModelRegistry();
+    const customModels = parseAIModelOptions('custom/model');
 
     assert.equal(DEFAULT_AI_MODEL_ID, 'deepseek-v4-pro');
     assert.equal(registry.defaultModel.id, 'deepseek-v4-pro');
     assert.equal(registry.getAIModelResponse().defaultModel, 'deepseek-v4-pro');
+    assert.equal(customModels.find(model => model.id === 'custom/model')?.isPremium, true);
     assert.equal(registry.modelOptions.find(model => model.id === 'gpt-5.5')?.isPremium, true);
     assert.equal(registry.modelOptions.find(model => model.id === 'claude-opus-4.7')?.isPremium, true);
     assert.equal(registry.modelOptions.find(model => model.id === '~google/gemini-pro-latest')?.isPremium, true);
     assert.equal(registry.modelOptions.find(model => model.id === 'google/gemini-3.5-flash')?.isPremium, false);
     assert.equal(registry.modelOptions.find(model => model.id === 'tencent/hy3-preview')?.pricing?.outputPerMillion, 0.26);
     assert.equal(registry.modelOptions.find(model => model.id === 'deepseek-v4-pro')?.isPremium, false);
+    assert.equal(isPremiumAIModel({}), true);
     assert.equal(isPremiumAIModel({ pricing: { currency: 'USD', inputPerMillion: 1, outputPerMillion: 10 } }), false);
     assert.equal(isPremiumAIModel({ pricing: { currency: 'USD', inputPerMillion: 1, outputPerMillion: 10.01 } }), true);
   });

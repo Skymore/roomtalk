@@ -1010,7 +1010,7 @@
 | 1 | KaTeX `trust: true` XSS | ✅ 已修复 | `client-heroui/src/components/MarkdownContent.tsx` 改为 `trust: false`，并新增 `MarkdownContent.test.tsx` 防回归 |
 | 2 | `/api/ai-role-draft` 无鉴权无限流 | ✅ 已修复 | 端点现要求 `clientId`、校验该 client 可访问至少一个房间，并按 clientId/IP 做滑窗限流 |
 | 3 | `get_room_members` 不做 hasRoomAccess | ✅ 已修复 | `get_room_members` 现要求 socket 已注册，并通过 `hasRoomAccess` 后才返回在线成员 |
-| 4 | 未知定价模型绕过 premium 二次确认 | ✅ 仍在 | `server/src/services/aiModels.ts:136` `(model.pricing?.outputPerMillion ?? 0) > 阈值`，缺价默认 false |
+| 4 | 未知定价模型绕过 premium 二次确认 | ✅ 已修复 | 服务端和客户端现将缺失/非有限输出价格视为 premium，只有明确已知且不超过阈值的模型免二次确认 |
 | 5 | AI 上下文 1000 条无 token 预算 | ✅ 仍在 | `server/src/services/aiHistory.ts:10` 默认 1000，仅按条数截断 |
 | 6 | 媒体 presign PUT 无频控、未 complete 对象无 GC | ✅ 仍在 | `mediaObjectStorage.ts` 有 `createWriteUrl`，无 `sweepOrphan`/`cleanupOrphan` 类回收逻辑 |
 | 7 | Redis 路径房间字段合并非原子 | ✅ 仍在 | `redisStore.ts:1445` `updateRoomName` 仍是 `getRoomById` → `writeRoomRecord` 两步；Lua（`WRITE_ROOM_RECORD_SCRIPT`）只原子化版本号，字段合并仍在 TS 层 |
@@ -1030,6 +1030,7 @@
 - 2026-06-11：已将 KaTeX 渲染配置从 `trust: true` 改为 `trust: false`，阻断用户公式里的受信命令生成 `javascript:` 等危险链接；新增 `MarkdownContent.test.tsx` 锁定该配置，避免后续回归。
 - 2026-06-11：已为 `/api/ai-role-draft` 增加 `clientId` 必填、房间访问关系校验和每 clientId/IP 10 分钟 5 次的服务端限流；客户端生成 AI 角色草稿时会带上本地持久化 clientId，服务端测试覆盖缺失 client、无房间访问权和触发限流三种拒绝路径。
 - 2026-06-11：已为 socket `get_room_members` 补上注册校验和 `hasRoomAccess` 房间访问校验，避免任意已连接客户端枚举其它房间在线成员；新增 `roomHandlers.test.ts` 用例覆盖未注册和非成员访问拒绝路径。
+- 2026-06-11：已调整服务端与客户端 premium 模型判定：缺失 pricing 或输出单价不是有限数值时默认需要 premium 二次确认，防止自定义/未知价格模型绕过确认；两端测试均覆盖缺价模型仍被标记为 premium，且 `$10/M out` 明确边界仍不触发。
 
 ---
 
