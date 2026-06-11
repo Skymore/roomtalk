@@ -1,12 +1,14 @@
 import React, { useEffect, useState, useRef, useCallback, useImperativeHandle } from 'react';
 import { Icon } from '@iconify/react';
-import { requestAIResponse, requestEditMessageAndAIResponse, socket } from '../utils/socket';
+import { getMediaDownloadUrl, getRoomMessagesForExport, requestAIResponse, requestEditMessageAndAIResponse, socket } from '../utils/socket';
 import { MessageItem, preloadMarkdownContent } from './MessageItem';
-import { Message, RoomPermissions } from '../utils/types';
+import { Message, Room, RoomPermissions } from '../utils/types';
 import { readMemoryRoomMessageWindow } from '../utils/messageHistoryCache';
 import { useTranslation } from 'react-i18next';
 import { getStoredAIModel } from '../utils/aiModels';
 import { formatUsdCost } from '../utils/formatters';
+import { Button, Dropdown, DropdownItem, DropdownMenu, DropdownTrigger } from '@heroui/react';
+import { downloadTranscriptHtml, downloadTranscriptZip, type ExportMediaResolver } from '../utils/chatExport';
 import {
   addOptimisticMessage,
   deleteMessageById,
@@ -33,6 +35,7 @@ const LOAD_MORE_MESSAGE_COUNT = 80;
 
 interface MessageListProps {
   roomId: string;
+  room?: Pick<Room, 'id' | 'name'>;
   onReply: (message: Message) => void;
   roomPermissions: RoomPermissions | null;
   bottomPaddingPx?: number;
@@ -48,6 +51,7 @@ export interface MessageListHandle {
 
 export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
   roomId,
+  room,
   onReply,
   roomPermissions,
   bottomPaddingPx = 16,
@@ -388,6 +392,44 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     }
   };
 
+  const [isExporting, setIsExporting] = useState(false);
+
+  // Fall back to roomId when tests or older call sites do not provide room metadata.
+  const loadMessagesForExport = useCallback(async () => {
+    setIsExporting(true);
+    try {
+      return sortMessages(await getRoomMessagesForExport(roomId));
+    } finally {
+      setIsExporting(false);
+    }
+  }, [roomId]);
+
+  const resolveExportMediaUrl = useCallback<ExportMediaResolver>(async (message) => {
+    if (!message.mediaAsset?.id) {
+      return null;
+    }
+    const { url } = await getMediaDownloadUrl({ roomId: message.roomId, assetId: message.mediaAsset.id });
+    return url;
+  }, []);
+
+  const handleExportHtml = useCallback(async () => {
+    try {
+      await downloadTranscriptHtml(room || { id: roomId, name: roomId }, await loadMessagesForExport(), resolveExportMediaUrl);
+    } catch (error) {
+      console.error('Failed to export HTML transcript:', error);
+      alert(t('exportFailed'));
+    }
+  }, [loadMessagesForExport, resolveExportMediaUrl, room, roomId, t]);
+
+  const handleExportZip = useCallback(async () => {
+    try {
+      await downloadTranscriptZip(room || { id: roomId, name: roomId }, await loadMessagesForExport(), resolveExportMediaUrl);
+    } catch (error) {
+      console.error('Failed to export ZIP transcript:', error);
+      alert(t('exportFailed'));
+    }
+  }, [loadMessagesForExport, resolveExportMediaUrl, room, roomId, t]);
+
   // ... loading/empty states ...
   // ... return statement with JSX ...
 
@@ -402,9 +444,33 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
         onScroll={handleScroll}
       >
         <div className="sticky top-0 z-20 mb-2 flex justify-end">
-          <div className="flex items-center gap-1 rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-2.5 py-1 text-tiny font-medium text-[#4d4c48] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc]">
-            <Icon icon="lucide:coins" className="h-3.5 w-3.5" />
-            <span>{t('sessionCost')}: {sessionCostUsd === null ? '...' : formatUsdCost(sessionCostUsd)}</span>
+          <div className="flex items-center gap-1.5">
+            <Dropdown placement="bottom-end">
+              <DropdownTrigger>
+                <Button
+                  size="sm"
+                  variant="flat"
+                  radius="full"
+                  isDisabled={isExporting}
+                  className="h-7 min-w-0 border border-[#dedbd0] bg-[#faf9f5]/95 px-2 text-tiny font-medium text-[#4d4c48] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc]"
+                  startContent={<Icon icon={isExporting ? 'lucide:loader-circle' : 'lucide:download'} className={`h-3.5 w-3.5 ${isExporting ? 'animate-spin' : ''}`} />}
+                >
+                  {t('exportChat')}
+                </Button>
+              </DropdownTrigger>
+              <DropdownMenu aria-label={t('exportChat')}>
+                <DropdownItem key="html" startContent={<Icon icon="lucide:file-code-2" />} onPress={handleExportHtml}>
+                  {t('exportHtml')}
+                </DropdownItem>
+                <DropdownItem key="zip" startContent={<Icon icon="lucide:archive" />} onPress={handleExportZip}>
+                  {t('exportZip')}
+                </DropdownItem>
+              </DropdownMenu>
+            </Dropdown>
+            <div className="flex items-center gap-1 rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-2.5 py-1 text-tiny font-medium text-[#4d4c48] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc]">
+              <Icon icon="lucide:coins" className="h-3.5 w-3.5" />
+              <span>{t('sessionCost')}: {sessionCostUsd === null ? '...' : formatUsdCost(sessionCostUsd)}</span>
+            </div>
           </div>
         </div>
         {hasMoreMessages && (

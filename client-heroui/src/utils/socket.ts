@@ -746,6 +746,20 @@ export const getMediaDownloadUrl = async (params: {
   };
 };
 
+export const getRoomMessagesForExport = async (roomId: string): Promise<Message[]> => {
+  const query = new URLSearchParams({ clientId });
+  const response = await fetch(apiPath(`/api/rooms/${encodeURIComponent(roomId)}/messages?${query.toString()}`), {
+    cache: 'no-store',
+    headers: {
+      'cache-control': 'no-cache',
+    },
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, 'Failed to export room messages'));
+  }
+  return response.json() as Promise<Message[]>;
+};
+
 export const getRoomMediaHistory = async (params: {
   roomId: string;
   before?: string | null;
