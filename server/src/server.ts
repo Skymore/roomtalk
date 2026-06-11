@@ -19,6 +19,7 @@ import { registerApiRoutes } from './routes/apiRoutes';
 import { registerSocketHandlers } from './socket/registerSocketHandlers';
 import { createAIClients } from './services/aiClients';
 import { createAIRoleDraftGenerator } from './services/aiRoleGenerator';
+import { resolveAIStreamOwnerId } from './services/aiStreamRecovery';
 import { createMediaObjectStorageFromEnv } from './services/mediaObjectStorage';
 
 dotenv.config();
@@ -32,6 +33,7 @@ const routeLogger = new Logger('Routes');
 const openaiLogger = new Logger('OpenAI');
 const mediaStorageLogger = new Logger('MediaStorage');
 const mediaObjectStorage = createMediaObjectStorageFromEnv(mediaStorageLogger);
+const aiStreamOwnerId = resolveAIStreamOwnerId();
 
 const aiModelRegistry = createAIModelRegistry({
   defaultModelId: process.env.AI_MODEL || process.env.OPENROUTER_MODEL || DEFAULT_AI_MODEL_ID,
@@ -150,7 +152,7 @@ const infrastructureReady = (async () => {
       serverLogger.warn('E2E data reset on startup', { persistenceStore: activePersistenceStore });
     }
     await store.clearRealtimeRoomMembers?.();
-    await store.failInterruptedStreamingMessages?.('Response interrupted.');
+    await store.failInterruptedStreamingMessages?.('Response interrupted.', { aiStreamOwnerId });
     
     redisLogger.info('Connected to Redis and Socket.IO adapter initialized', { persistenceStore: activePersistenceStore });
   } catch (err) {
@@ -169,6 +171,7 @@ registerSocketHandlers({
   openaiLogger,
   normalizeAIModel,
   getAIClientForModel,
+  aiStreamOwnerId,
   assemblyAIApiKey: process.env.ASSEMBLYAI_API_KEY,
 });
 

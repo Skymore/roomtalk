@@ -52,11 +52,13 @@ export const POSTGRES_SCHEMA_SQL = [
     usage JSONB,
     cost JSONB,
     reply_to JSONB,
+    ai_stream_owner_id TEXT,
     updated_at TIMESTAMPTZ,
     position INTEGER NOT NULL
   )`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS reply_to JSONB`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`,
+  `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS ai_stream_owner_id TEXT`,
   // Legacy 'image'/'voice' rows were migrated to the unified 'media' type; the
   // constraint now only allows the current set. Drop-then-add keeps it idempotent.
   `ALTER TABLE room_messages DROP CONSTRAINT IF EXISTS room_messages_message_type_check`,

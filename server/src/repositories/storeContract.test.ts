@@ -470,6 +470,7 @@ type MessageRow = {
   usage: unknown;
   cost: unknown;
   reply_to: unknown;
+  ai_stream_owner_id: string | null;
   position: number;
 };
 
@@ -650,6 +651,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         usage,
         cost,
         replyTo,
+        aiStreamOwnerId,
         position,
       ] = params;
       const roomMessages = this.messages.get(String(roomId)) || [];
@@ -671,6 +673,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         usage: jsonValue(usage),
         cost: jsonValue(cost),
         reply_to: jsonValue(replyTo),
+        ai_stream_owner_id: aiStreamOwnerId === null || aiStreamOwnerId === undefined ? null : String(aiStreamOwnerId),
         position: existingPosition,
       };
       if (existingIndex === -1) {
@@ -1061,9 +1064,13 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
     if (/UPDATE room_messages SET status = 'error'/.test(compactSql)) {
       let updatedCount = 0;
       const timestamp = new Date().toISOString();
+      const aiStreamOwnerId = params[1] === null || params[1] === undefined ? null : String(params[1]);
       for (const [roomId, messages] of this.messages.entries()) {
         this.messages.set(roomId, messages.map(message => {
           if (message.status !== 'streaming') {
+            return message;
+          }
+          if (aiStreamOwnerId && message.ai_stream_owner_id !== aiStreamOwnerId) {
             return message;
           }
           updatedCount++;

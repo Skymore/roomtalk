@@ -8,6 +8,7 @@ import {
   createReplyReference,
   createUserMessage,
 } from '../services/messageDomain';
+import { withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 import { Message } from '../types';
 import { hasRoomAccess } from './roomAccess';
 import { authorizeRoomAction, getRoomMessage } from './roomAuthorization';
@@ -75,6 +76,7 @@ export function registerAIHandlers({
   openaiLogger,
   normalizeAIModel,
   getAIClientForModel,
+  aiStreamOwnerId,
 }: SocketConnectionContext) {
   const emitLatestHistoryPage = async (roomId: string) => {
     const page = await store.readMessagePageByRoom(roomId);
@@ -243,6 +245,7 @@ export function registerAIHandlers({
       roleName,
       model: selectedModel,
     });
+    const persistedInitialAiMessage = withAIStreamRecoveryMetadata(initialAiMessage, aiStreamOwnerId);
 
     const saveAIMessage = async (message: Message, logLabel: string): Promise<boolean> => {
       try {
@@ -290,7 +293,7 @@ export function registerAIHandlers({
       return false;
     };
 
-    const placeholderSaved = await saveAIMessage(initialAiMessage, 'streaming placeholder');
+    const placeholderSaved = await saveAIMessage(persistedInitialAiMessage, 'streaming placeholder');
     if (!placeholderSaved) {
       io.to(roomId).emit('ai_stream_error', {
         messageId: aiMessageId,
