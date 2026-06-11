@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { MAX_CONTEXT_MESSAGES, selectAIHistory } from '../services/aiHistory';
+import { MAX_CONTEXT_MESSAGES, MAX_CONTEXT_TOKENS, selectAIHistory } from '../services/aiHistory';
 import { calculateAICost, DEFAULT_SYSTEM_MESSAGE, getMessageAIModel, normalizeUsage } from '../services/aiModels';
 import {
   buildAIProviderMessages,
@@ -213,6 +213,7 @@ export function registerAIHandlers({
 
       const selection = selectAIHistory(historyUsedForContext, {
         maxContextMessages: MAX_CONTEXT_MESSAGES,
+        maxContextTokens: MAX_CONTEXT_TOKENS,
       });
       contextMessages = selection.contextMessages;
 
@@ -225,6 +226,8 @@ export function registerAIHandlers({
           roomId,
           originalCount: historyUsedForContext.length,
           limitedCount: contextMessages.length,
+          contextTokenEstimate: selection.contextTokenEstimate,
+          maxContextTokens: MAX_CONTEXT_TOKENS,
         });
       }
     } catch (error) {
