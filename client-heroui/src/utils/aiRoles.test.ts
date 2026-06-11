@@ -95,6 +95,7 @@ describe("aiRoles", () => {
   });
 
   it("requests and validates AI generated role drafts", async () => {
+    localStorage.setItem("clientId", "client-1");
     const draft = { name: "Reviewer", systemPrompt: "Review code carefully." };
     vi.stubGlobal("fetch", vi.fn(async () => ({
       ok: true,
@@ -105,7 +106,7 @@ describe("aiRoles", () => {
     expect(fetch).toHaveBeenCalledWith("/api/ai-role-draft", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ idea: "Create a reviewer" }),
+      body: JSON.stringify({ idea: "Create a reviewer", clientId: "client-1" }),
     });
 
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 502 })));

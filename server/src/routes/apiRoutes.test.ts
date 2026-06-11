@@ -395,7 +395,7 @@ describe('API routes', () => {
     const response = await fetch(`${server.baseUrl}/api/ai-role-draft`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ idea: '  Create a strict reviewer  ' }),
+      body: JSON.stringify({ clientId: 'client-1', idea: '  Create a strict reviewer  ' }),
     });
 
     assert.equal(response.status, 200);
@@ -408,17 +408,50 @@ describe('API routes', () => {
     const invalidResponse = await fetch(`${server.baseUrl}/api/ai-role-draft`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ idea: ' ' }),
+      body: JSON.stringify({ clientId: 'client-1', idea: ' ' }),
     });
     assert.equal(invalidResponse.status, 400);
 
     const failedResponse = await fetch(`${server.baseUrl}/api/ai-role-draft`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ idea: 'fail generation' }),
+      body: JSON.stringify({ clientId: 'client-1', idea: 'fail generation' }),
     });
     assert.equal(failedResponse.status, 502);
     assert.deepEqual(await failedResponse.json(), { error: 'Failed to generate AI role draft' });
+  });
+
+  it('requires an authorized client and rate limits AI role draft generation', async () => {
+    const missingClientResponse = await fetch(`${server.baseUrl}/api/ai-role-draft`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ idea: 'Create a strict reviewer' }),
+    });
+    assert.equal(missingClientResponse.status, 400);
+
+    const unauthorizedResponse = await fetch(`${server.baseUrl}/api/ai-role-draft`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-without-rooms', idea: 'Create a strict reviewer' }),
+    });
+    assert.equal(unauthorizedResponse.status, 403);
+
+    server.store.members.add('room-1:client-rate-limited');
+    for (let index = 0; index < 5; index += 1) {
+      const rateAllowedResponse = await fetch(`${server.baseUrl}/api/ai-role-draft`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ clientId: 'client-rate-limited', idea: `Create role ${index}` }),
+      });
+      assert.equal(rateAllowedResponse.status, 200);
+    }
+
+    const rateLimitedResponse = await fetch(`${server.baseUrl}/api/ai-role-draft`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-rate-limited', idea: 'Create one more role' }),
+    });
+    assert.equal(rateLimitedResponse.status, 429);
   });
 
   it('creates rooms and broadcasts the new room to the creator', async () => {

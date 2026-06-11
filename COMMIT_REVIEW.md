@@ -1008,7 +1008,7 @@
 | # | 遗留问题 | 状态 | 现场证据（HEAD `7214df1`） |
 |---|---|---|---|
 | 1 | KaTeX `trust: true` XSS | ✅ 已修复 | `client-heroui/src/components/MarkdownContent.tsx` 改为 `trust: false`，并新增 `MarkdownContent.test.tsx` 防回归 |
-| 2 | `/api/ai-role-draft` 无鉴权无限流 | ✅ 仍在 | `server/src/routes/apiRoutes.ts:646` 仅校验 idea 长度，无 clientId/限流 |
+| 2 | `/api/ai-role-draft` 无鉴权无限流 | ✅ 已修复 | 端点现要求 `clientId`、校验该 client 可访问至少一个房间，并按 clientId/IP 做滑窗限流 |
 | 3 | `get_room_members` 不做 hasRoomAccess | ✅ 仍在 | `server/src/socket/roomHandlers.ts:226` 取到 roomId 后直接 `getRoomOnlineMembers`，无访问校验 |
 | 4 | 未知定价模型绕过 premium 二次确认 | ✅ 仍在 | `server/src/services/aiModels.ts:136` `(model.pricing?.outputPerMillion ?? 0) > 阈值`，缺价默认 false |
 | 5 | AI 上下文 1000 条无 token 预算 | ✅ 仍在 | `server/src/services/aiHistory.ts:10` 默认 1000，仅按条数截断 |
@@ -1028,6 +1028,7 @@
 
 - 2026-06-11：已将 `/api/media/local-objects/:encodedObjectKey` 限制为仅在非 production 且存储实例为 `LocalMediaObjectStorage` 时注册，并新增回归测试覆盖“有 `getMediaObject` 的非本地存储实现不得暴露该路由”。该修复保留本地开发上传/下载能力，同时移除宽泛能力判断带来的未来生产暴露面。
 - 2026-06-11：已将 KaTeX 渲染配置从 `trust: true` 改为 `trust: false`，阻断用户公式里的受信命令生成 `javascript:` 等危险链接；新增 `MarkdownContent.test.tsx` 锁定该配置，避免后续回归。
+- 2026-06-11：已为 `/api/ai-role-draft` 增加 `clientId` 必填、房间访问关系校验和每 clientId/IP 10 分钟 5 次的服务端限流；客户端生成 AI 角色草稿时会带上本地持久化 clientId，服务端测试覆盖缺失 client、无房间访问权和触发限流三种拒绝路径。
 
 ---
 
