@@ -4,11 +4,12 @@ import { Button } from "@heroui/react";
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { getRoomMediaHistory } from "../utils/socket";
-import { RoomMediaHistoryItem } from "../utils/types";
+import { RoomMediaHistoryItem, RoomMediaHistoryKindFilter } from "../utils/types";
 import { getVideoPreviewUrl } from "../utils/videoPreview";
 
 type ViewerMediaKind = "image" | "video";
 type MediaStageVariant = "viewer" | "historyPreview";
+type MediaHistoryFilter = "all" | RoomMediaHistoryKindFilter;
 
 interface MediaViewerModalProps {
   isOpen: boolean;
@@ -59,6 +60,7 @@ const HISTORY_PAGE_SIZE = 36;
 const SWIPE_THRESHOLD = 48;
 const SWIPE_DOWN_THRESHOLD = 64;
 const TAP_THRESHOLD = 8;
+const MEDIA_HISTORY_FILTERS: MediaHistoryFilter[] = ["all", "image", "video"];
 
 const mediaFileExtensions: Record<string, string> = {
   "image/jpeg": "jpg",
@@ -505,6 +507,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
   const dialogRef = React.useRef<HTMLDivElement | null>(null);
   const statusResetTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialHistoryRequestKeyRef = React.useRef<string | null>(null);
+  const historyRequestSequenceRef = React.useRef(0);
   const [activeMedia, setActiveMedia] = React.useState<ActiveMedia | null>(null);
   const [downloadStatus, setDownloadStatus] = React.useState<"idle" | "done">("idle");
   const [shareStatus, setShareStatus] = React.useState<"idle" | "done" | "error">("idle");
@@ -516,18 +519,30 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
   const [hasMoreHistory, setHasMoreHistory] = React.useState(false);
   const [isHistoryLoading, setIsHistoryLoading] = React.useState(false);
   const [historyError, setHistoryError] = React.useState(false);
+  const [historyFilter, setHistoryFilter] = React.useState<MediaHistoryFilter>("all");
 
-  const loadHistory = React.useCallback(async (mode: "reset" | "more") => {
-    if (isHistoryLoading) return null;
+  const loadHistory = React.useCallback(async (
+    mode: "reset" | "more",
+    filterOverride?: MediaHistoryFilter,
+    beforeOverride?: string | null,
+  ) => {
+    if (isHistoryLoading && mode === "more") return null;
 
+    const requestSequence = historyRequestSequenceRef.current + 1;
+    historyRequestSequenceRef.current = requestSequence;
+    const nextFilter = filterOverride ?? historyFilter;
     setIsHistoryLoading(true);
     setHistoryError(false);
     try {
       const page = await getRoomMediaHistory({
         roomId,
-        before: mode === "more" ? historyCursor : null,
+        before: beforeOverride ?? (mode === "more" ? historyCursor : null),
         limit: HISTORY_PAGE_SIZE,
+        ...(nextFilter === "all" ? {} : { kind: nextFilter }),
       });
+      if (historyRequestSequenceRef.current !== requestSequence) {
+        return null;
+      }
       setHistoryCursor(page.nextCursor || null);
       setHasMoreHistory(page.hasMore);
       setHistoryItems(prev => {
@@ -541,13 +556,18 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
       });
       return page.items;
     } catch (error) {
+      if (historyRequestSequenceRef.current !== requestSequence) {
+        return null;
+      }
       console.error("Failed to load media history:", error);
       setHistoryError(true);
       return null;
     } finally {
-      setIsHistoryLoading(false);
+      if (historyRequestSequenceRef.current === requestSequence) {
+        setIsHistoryLoading(false);
+      }
     }
-  }, [historyCursor, isHistoryLoading, roomId]);
+  }, [historyCursor, historyFilter, isHistoryLoading, roomId]);
 
   React.useEffect(() => {
     if (!src) {
@@ -566,6 +586,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
 
   React.useEffect(() => {
     initialHistoryRequestKeyRef.current = null;
+    historyRequestSequenceRef.current += 1;
     setIsHistoryOpen(false);
     setIsHistoryPreviewOpen(false);
     setHasViewedHistoryItem(false);
@@ -573,6 +594,8 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
     setHistoryCursor(null);
     setHasMoreHistory(false);
     setHistoryError(false);
+    setHistoryFilter("all");
+    setIsHistoryLoading(false);
   }, [roomId]);
 
   React.useEffect(() => {
@@ -627,13 +650,14 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
   }, [isHistoryOpen]);
 
   React.useEffect(() => {
-    if (!isOpen || !activeMedia || initialHistoryRequestKeyRef.current === roomId) {
+    const requestKey = `${roomId}:${historyFilter}`;
+    if (!isOpen || !activeMedia || initialHistoryRequestKeyRef.current === requestKey) {
       return;
     }
 
-    initialHistoryRequestKeyRef.current = roomId;
+    initialHistoryRequestKeyRef.current = requestKey;
     void loadHistory("reset");
-  }, [activeMedia, isOpen, loadHistory, roomId]);
+  }, [activeMedia, historyFilter, isOpen, loadHistory, roomId]);
 
   React.useEffect(() => {
     return () => {
@@ -741,6 +765,20 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
     setHasViewedHistoryItem(false);
     if ((historyItems.length === 0 || historyError) && !isHistoryLoading) {
       void loadHistory("reset");
+    }
+  };
+
+  const handleHistoryFilterChange = (nextFilter: MediaHistoryFilter) => {
+    if (nextFilter === historyFilter) return;
+    setHistoryFilter(nextFilter);
+    setHistoryItems([]);
+    setHistoryCursor(null);
+    setHasMoreHistory(false);
+    setHistoryError(false);
+    setIsHistoryPreviewOpen(false);
+    initialHistoryRequestKeyRef.current = `${roomId}:${nextFilter}`;
+    if (isHistoryOpen) {
+      void loadHistory("reset", nextFilter, null);
     }
   };
 
@@ -894,6 +932,31 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
                   <p className="truncate text-xs text-white/55">{t("mediaHistoryRecentMonths")}</p>
                 </div>
               </header>
+
+              <div className="flex flex-shrink-0 gap-1 border-b border-white/10 px-3 py-2">
+                {MEDIA_HISTORY_FILTERS.map(filter => {
+                  const isActive = historyFilter === filter;
+                  const labelKey = filter === "all"
+                    ? "mediaHistoryFilterAll"
+                    : filter === "image"
+                      ? "mediaHistoryFilterImages"
+                      : "mediaHistoryFilterVideos";
+                  return (
+                    <Button
+                      key={filter}
+                      size="sm"
+                      radius="full"
+                      variant={isActive ? "solid" : "light"}
+                      className={isActive
+                        ? "h-8 bg-white text-[#111110]"
+                        : "h-8 text-white/75 hover:bg-white/10 hover:text-white"}
+                      onPress={() => handleHistoryFilterChange(filter)}
+                    >
+                      {t(labelKey)}
+                    </Button>
+                  );
+                })}
+              </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-5 pt-4">
                 {(hasMoreHistory || isHistoryLoading) && (

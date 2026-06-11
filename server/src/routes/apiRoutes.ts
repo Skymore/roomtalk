@@ -121,6 +121,13 @@ const parseMediaHistoryLimit = (value: unknown) => {
   return Math.min(Math.floor(parsed), MEDIA_HISTORY_MAX_LIMIT);
 };
 
+const parseMediaHistoryKinds = (value: unknown): MediaKind[] => {
+  if (value === 'image' || value === 'video') {
+    return [value];
+  }
+  return MEDIA_HISTORY_KINDS;
+};
+
 const consumeAIRoleDraftRateLimit = (clientId: string, ip: string | undefined, nowMs = Date.now()) => {
   const key = `${clientId}:${ip || 'unknown'}`;
   const current = aiRoleDraftRateLimits.get(key);
@@ -284,7 +291,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
         limit,
         before: decodeMediaHistoryCursor(req.query.before),
         since: resolveMediaHistoryCutoff(),
-        kinds: MEDIA_HISTORY_KINDS,
+        kinds: parseMediaHistoryKinds(req.query.kind),
       });
       const items = await Promise.all(page.assets.map(async (asset) => {
         const signedDownload = await mediaObjectStorage.createReadUrl({

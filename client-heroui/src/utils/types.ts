@@ -40,6 +40,8 @@ export interface RoomMediaHistoryPage {
   windowMonths: number;
 }
 
+export type RoomMediaHistoryKindFilter = 'image' | 'video';
+
 export interface Message {
   id: string;
   clientId: string;

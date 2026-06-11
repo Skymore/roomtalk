@@ -379,7 +379,7 @@ describe('socket message acknowledgement helpers', () => {
       headers: { 'Content-Type': 'application/json' },
     }));
 
-    await expect(getRoomMediaHistory({ roomId: 'room-1', before: 'cursor-0', limit: 24 })).resolves.toEqual({
+    await expect(getRoomMediaHistory({ roomId: 'room-1', before: 'cursor-0', limit: 24, kind: 'video' })).resolves.toEqual({
       roomId: 'room-1',
       items: [{
         assetId: 'asset-1',
@@ -395,7 +395,7 @@ describe('socket message acknowledgement helpers', () => {
       windowMonths: 6,
     });
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/rooms/room-1/media-history?clientId=client-uuid&before=cursor-0&limit=24');
+    expect(fetchMock).toHaveBeenCalledWith('/api/rooms/room-1/media-history?clientId=client-uuid&before=cursor-0&limit=24&kind=video');
   });
 
   it('returns saved rooms from get_saved_rooms acknowledgements', async () => {

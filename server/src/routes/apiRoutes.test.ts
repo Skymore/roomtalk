@@ -1002,6 +1002,14 @@ describe('API routes', () => {
 
     assert.equal(secondPage.hasMore, false);
     assert.deepEqual(secondPage.items.map(item => item.assetId), ['video-new']);
+
+    const videoOnlyResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/media-history?clientId=client-2&limit=10&kind=video`);
+    assert.equal(videoOnlyResponse.status, 200);
+    const videoOnlyPage = await videoOnlyResponse.json() as { items: Array<{ assetId: string; kind: string }>; hasMore: boolean };
+
+    assert.equal(videoOnlyPage.hasMore, false);
+    assert.deepEqual(videoOnlyPage.items.map(item => item.assetId), ['video-new']);
+    assert.deepEqual(videoOnlyPage.items.map(item => item.kind), ['video']);
   });
 
   it('rejects media history requests without room access', async () => {

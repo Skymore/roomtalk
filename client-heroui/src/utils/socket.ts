@@ -5,6 +5,7 @@ import {
   Message,
   Room,
   RoomClientLookup,
+  RoomMediaHistoryKindFilter,
   RoomMediaHistoryPage,
   RoomMemberEvent,
   RoomOnlineMember,
@@ -768,6 +769,7 @@ export const getRoomMediaHistory = async (params: {
   roomId: string;
   before?: string | null;
   limit?: number;
+  kind?: RoomMediaHistoryKindFilter;
 }): Promise<RoomMediaHistoryPage> => {
   const query = new URLSearchParams({
     clientId,
@@ -777,6 +779,9 @@ export const getRoomMediaHistory = async (params: {
   }
   if (params.limit) {
     query.set('limit', String(params.limit));
+  }
+  if (params.kind) {
+    query.set('kind', params.kind);
   }
 
   const response = await fetch(apiPath(`/api/rooms/${encodeURIComponent(params.roomId)}/media-history?${query.toString()}`));
