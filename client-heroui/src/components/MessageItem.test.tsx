@@ -574,7 +574,7 @@ describe('MessageItem replies', () => {
       expect(video).toBeTruthy();
       return video;
     });
-    expect(viewerVideo?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/video-1.mp4?X-Amz-Signature=abc123');
+    expect(viewerVideo?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/video-1.mp4?X-Amz-Signature=abc123#t=0.001');
     expect(viewerVideo?.hasAttribute('controls')).toBe(true);
   });
 });

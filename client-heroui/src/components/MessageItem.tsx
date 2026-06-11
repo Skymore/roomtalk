@@ -16,6 +16,7 @@ import { Message, RoomPermissions } from "../utils/types";
 import { useTranslation } from "react-i18next";
 import { useIsTouchDevice } from "../hooks/useIsTouchDevice";
 import { MediaViewerModal } from "./MediaViewerModal";
+import { getVideoPreviewUrl } from "../utils/videoPreview";
 
 interface MessageItemProps {
   message: Message;
@@ -40,23 +41,6 @@ const MarkdownContent = React.lazy(() =>
 // doesn't flash plain text before upgrading to rendered markdown.
 export const preloadMarkdownContent = () => {
   void importMarkdownContent();
-};
-
-const VIDEO_PREVIEW_TIME_FRAGMENT = "t=0.001";
-
-const getVideoPreviewUrl = (url: string): string => {
-  const hashIndex = url.indexOf("#");
-  if (hashIndex === -1) {
-    return `${url}#${VIDEO_PREVIEW_TIME_FRAGMENT}`;
-  }
-
-  const baseUrl = url.slice(0, hashIndex);
-  const hash = url.slice(hashIndex + 1);
-  if (!hash || hash.includes("t=")) {
-    return url;
-  }
-
-  return `${baseUrl}#${hash}&${VIDEO_PREVIEW_TIME_FRAGMENT}`;
 };
 
 // Helper to copy image to clipboard
