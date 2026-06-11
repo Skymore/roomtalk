@@ -1014,7 +1014,7 @@
 | 5 | AI 上下文 1000 条无 token 预算 | ✅ 已修复 | `selectAIHistory` 现先按消息数再按 `AI_MAX_CONTEXT_TOKENS` 估算预算裁剪，默认 32000 token，并保留最新消息 |
 | 6 | 媒体 presign PUT 无频控、未 complete 对象无 GC | ✅ 已修复 | 创建上传 URL 现按 clientId/IP 限流，并把 pending upload 写入 durable store；complete 必须匹配 pending 元数据，过期 pending 会被后台 claim 后 best-effort 删除对象 |
 | 7 | Redis 路径房间字段合并非原子 | ✅ 已修复 | `updateRoomName`/`updateRoomSettings` 现分别走 Lua 原子读-校验-字段合并-写回脚本，不再用 TS 层 `getRoomById` → 整房间覆盖 |
-| 8 | 其余中等遗留（`bf9ada3`/`42e65e4`/`a0b8679`/`48dafbf`/`02cd7cf`/`9d30c79`） | 部分修复 | `bf9ada3` 已修复；其余 5 项仍需逐条复核 |
+| 8 | 其余中等遗留（`bf9ada3`/`42e65e4`/`a0b8679`/`48dafbf`/`02cd7cf`/`9d30c79`） | 部分修复 | `bf9ada3`、`42e65e4` 已修复；其余 4 项仍需逐条复核 |
 
 第 1–7 条已在本轮跟进中修复并补充回归测试；第 8 条已开始逐项复核并修复，剩余项继续跟进。
 
@@ -1035,6 +1035,7 @@
 - 2026-06-11：已为媒体上传初始化增加每 clientId/IP 10 分钟 20 次限流，并把每个 presign upload 记录为 durable `pending_media_uploads`；complete 阶段必须命中并匹配 pending 元数据，成功或持久化失败都会删除 pending，过期 pending 会由后台 sweeper claim 后 best-effort 删除对象，避免未 complete 对象长期泄漏。
 - 2026-06-11：已将 Redis `updateRoomName` 和 `updateRoomSettings` 改为专用 Lua 脚本，在 Redis 内部完成当前房间读取、权限/字段校验、局部字段合并、`roomVersion` 自增和写回；新增 race stub 测试覆盖 rename 与 settings 并发时不再互相覆盖字段。
 - 2026-06-11：已将 Redis `updateRoomMemberCount` 改为单个 Lua 脚本，join/leave、`member_sockets` 计数、空 socket set 删除和在线成员集合更新在 Redis 内部原子完成；新增测试确保离开路径不再对 `member_sockets` 做 TS 层非原子 `sCard`。
+- 2026-06-11：已将 Redis `readRoomsByUser` 从 `hKeys('rooms')` 全量扫描改为读取 `user:{clientId}:rooms` owner 索引，再按 id 批量读取房间；读到不存在、JSON 损坏或 creator 不匹配的 stale 索引会自动 `SREM` 清理，并新增测试禁止回退到全量 `rooms` hash 扫描。
 
 ---
 

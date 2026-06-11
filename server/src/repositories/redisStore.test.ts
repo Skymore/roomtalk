@@ -448,6 +448,15 @@ class FailingMemberSocketCountRedis extends MemoryRedis {
   }
 }
 
+class FailingRoomScanRedis extends MemoryRedis {
+  async hKeys(key: string) {
+    if (key === 'rooms') {
+      throw new Error('readRoomsByUser must use the per-user owner index');
+    }
+    return super.hKeys(key);
+  }
+}
+
 const logger = {
   debug() {},
   error() {},
@@ -624,6 +633,23 @@ describe('RedisStore', () => {
     await store.saveRoom(newerRoom);
 
     assert.deepEqual((await store.readRoomsByUser('client-1')).map(item => item.id), ['newer-room', 'older-room']);
+  });
+
+  it('reads user rooms from the owner index and prunes stale entries', async () => {
+    const redis = new FailingRoomScanRedis();
+    const store = new RedisStore(redis as any, logger as any);
+    const olderRoom = room({ id: 'older-room', lastActivityAt: '2026-05-03T00:00:00.000Z' });
+    const newerRoom = room({ id: 'newer-room', lastActivityAt: '2026-05-05T00:00:00.000Z' });
+    const foreignRoom = room({ id: 'foreign-room', creatorId: 'client-2' });
+
+    await store.saveRoom(olderRoom);
+    await store.saveRoom(newerRoom);
+    await redis.hSet('rooms', foreignRoom.id, JSON.stringify(foreignRoom));
+    await redis.sAdd('user:client-1:rooms', foreignRoom.id);
+    await redis.sAdd('user:client-1:rooms', 'missing-room');
+
+    assert.deepEqual((await store.readRoomsByUser('client-1')).map(item => item.id), ['newer-room', 'older-room']);
+    assert.deepEqual(await redis.sMembers('user:client-1:rooms'), ['older-room', 'newer-room']);
   });
 
   it('appends media messages and assets together', async () => {
