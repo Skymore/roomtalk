@@ -1498,15 +1498,40 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
 
   async readRoomsByUser(clientId: string): Promise<Room[]> {
     try {
-      const roomIds = await this.redisClient.hKeys('rooms');
-      const rooms = await Promise.all(
-        roomIds.map((id: string) => this.redisClient.hGet('rooms', id))
+      const userRoomsKey = `user:${clientId}:rooms`;
+      const roomIds = await this.redisClient.sMembers(userRoomsKey);
+      if (roomIds.length === 0) {
+        this.logger.debug('Rooms read by user from Redis', { clientId, count: 0 });
+        return [];
+      }
+
+      const roomEntries = await Promise.all(
+        roomIds.map(async roomId => ({ roomId, roomJson: await this.redisClient.hGet('rooms', roomId) }))
       );
-      this.logger.debug('Rooms read by user from Redis', { clientId, count: roomIds.length });
+      const staleRoomIds: string[] = [];
+      const rooms: Room[] = [];
+
+      for (const { roomId, roomJson } of roomEntries) {
+        if (!roomJson) {
+          staleRoomIds.push(roomId);
+          continue;
+        }
+
+        try {
+          const room = JSON.parse(roomJson) as Room;
+          if (room.creatorId === clientId) {
+            rooms.push(room);
+          } else {
+            staleRoomIds.push(roomId);
+          }
+        } catch {
+          staleRoomIds.push(roomId);
+        }
+      }
+
+      await Promise.all(staleRoomIds.map(roomId => this.redisClient.sRem(userRoomsKey, roomId)));
+      this.logger.debug('Rooms read by user from Redis', { clientId, count: rooms.length, staleCount: staleRoomIds.length });
       return rooms
-        .filter(room => room)
-        .map((room: string | undefined) => JSON.parse(room!))
-        .filter((room: Room) => room.creatorId === clientId)
         .sort((first: Room, second: Room) => getRoomActivityTime(second) - getRoomActivityTime(first));
     } catch (error) {
       this.logger.error('Error reading rooms for user from Redis', { error, clientId });
