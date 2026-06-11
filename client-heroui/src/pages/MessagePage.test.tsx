@@ -477,6 +477,26 @@ describe('MessagePage room session restore', () => {
     expect(socketApiMock.ensureRoomJoined).toHaveBeenCalledWith('room-1');
   });
 
+  it('returns to the room list on native history back without leaving the room', async () => {
+    localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
+    localStorage.setItem('roomtalk_current_view', 'chat');
+
+    renderPage();
+
+    await screen.findByTestId('chat-room-view');
+
+    act(() => {
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('room-list')).toBeTruthy();
+    });
+    expect(screen.queryByTestId('chat-room-view')).toBeNull();
+    expect(socketApiMock.leaveRoom).not.toHaveBeenCalled();
+    expect(localStorage.getItem('roomtalk_current_room')).not.toBeNull();
+  });
+
   it('clears the stored room when restore reports the room no longer exists', async () => {
     localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
     localStorage.setItem('roomtalk_current_view', 'chat');
