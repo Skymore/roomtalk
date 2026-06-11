@@ -533,7 +533,7 @@ describe('MessageItem replies', () => {
 
   it('renders videos as tap-to-open previews and plays them inside the media viewer', async () => {
     getMediaDownloadUrlMock.mockResolvedValue({
-      url: 'https://signed.example/rooms/room-1/video-1.mp4',
+      url: 'https://signed.example/rooms/room-1/video-1.mp4?X-Amz-Signature=abc123',
       expiresAt: '2026-05-03T10:15:00.000Z',
     });
 
@@ -564,7 +564,7 @@ describe('MessageItem replies', () => {
     });
 
     const inlineVideo = container.querySelector('video');
-    expect(inlineVideo?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/video-1.mp4');
+    expect(inlineVideo?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/video-1.mp4?X-Amz-Signature=abc123#t=0.001');
     expect(inlineVideo?.hasAttribute('controls')).toBe(false);
 
     fireEvent.click(screen.getAllByLabelText('openMediaViewer')[0]);
@@ -574,7 +574,7 @@ describe('MessageItem replies', () => {
       expect(video).toBeTruthy();
       return video;
     });
-    expect(viewerVideo?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/video-1.mp4');
+    expect(viewerVideo?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/video-1.mp4?X-Amz-Signature=abc123');
     expect(viewerVideo?.hasAttribute('controls')).toBe(true);
   });
 });
