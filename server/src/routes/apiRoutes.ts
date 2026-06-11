@@ -9,7 +9,7 @@ import { AIRoleDraft, MAX_AI_ROLE_IDEA_LENGTH } from '../services/aiRoleGenerato
 import { hasRoomAccess } from '../socket/roomAccess';
 import { authorizeRoomAction } from '../socket/roomAuthorization';
 import { createMediaMessage, createReplyReference } from '../services/messageDomain';
-import { decodeLocalMediaObjectKey, MediaObjectStorage } from '../services/mediaObjectStorage';
+import { decodeLocalMediaObjectKey, LocalMediaObjectStorage, MediaObjectStorage } from '../services/mediaObjectStorage';
 
 interface ApiRouteOptions {
   store: RoomStore;
@@ -102,7 +102,11 @@ const parseMediaHistoryLimit = (value: unknown) => {
 export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   const { store, io, redisClient, routeLogger, getAIModelResponse, generateAIRoleDraft, persistenceStore = 'redis', mediaObjectStorage } = options;
 
-  if (mediaObjectStorage.getMediaObject) {
+  const shouldRegisterLocalMediaRoutes =
+    mediaObjectStorage instanceof LocalMediaObjectStorage &&
+    (process.env.NODE_ENV || 'development') !== 'production';
+
+  if (shouldRegisterLocalMediaRoutes) {
     app.put('/api/media/local-objects/:encodedObjectKey', express.raw({ type: '*/*', limit: MEDIA_UPLOAD_LIMIT_BYTES.video }), async (req: Request, res: Response) => {
       try {
         const objectKey = decodeLocalMediaObjectKey(req.params.encodedObjectKey);

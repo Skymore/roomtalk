@@ -634,6 +634,43 @@ describe('API routes', () => {
     }
   });
 
+  it('does not expose local media object routes for non-local storage implementations', async () => {
+    await server.close();
+    let putCalled = false;
+    server = await createTestServer({
+      mediaObjectStorage: {
+        isConfigured: () => true,
+        async putMediaObject() {
+          putCalled = true;
+        },
+        async createWriteUrl({ objectKey }: { objectKey: string }) {
+          return { url: `https://upload.example/${encodeURIComponent(objectKey)}`, expiresAt: '2026-05-03T00:15:00.000Z' };
+        },
+        async createReadUrl({ objectKey }: { objectKey: string }) {
+          return { url: `https://download.example/${encodeURIComponent(objectKey)}`, expiresAt: '2026-05-03T00:15:00.000Z' };
+        },
+        async headObject() {
+          return { exists: true };
+        },
+        async getMediaObject() {
+          return { body: Buffer.from('stored'), mimeType: 'text/html', byteSize: 6 };
+        },
+      },
+    });
+
+    const encodedObjectKey = Buffer.from('rooms/room-1/media/image/asset-1', 'utf8').toString('base64url');
+    const putResponse = await fetch(`${server.baseUrl}/api/media/local-objects/${encodedObjectKey}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'text/html' },
+      body: '<script>alert(1)</script>',
+    });
+    assert.equal(putResponse.status, 404);
+    assert.equal(putCalled, false);
+
+    const getResponse = await fetch(`${server.baseUrl}/api/media/local-objects/${encodedObjectKey}`);
+    assert.equal(getResponse.status, 404);
+  });
+
   it('returns paginated recent image and video history for a room', async () => {
     server.store.members.add('room-1:client-2');
     server.store.readMediaAssetsByRoom = async () => {
