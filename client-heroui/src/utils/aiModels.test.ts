@@ -43,12 +43,13 @@ describe("aiModels", () => {
     expect(getStoredAIModel()).toBe("gpt-5.5");
   });
 
-  it("uses DeepSeek as the fallback default and flags only high output prices as premium", () => {
+  it("uses DeepSeek as the fallback default and flags high or unknown output prices as premium", () => {
     expect(FALLBACK_AI_MODEL).toBe("deepseek-v4-pro");
     expect(isPremiumAIModel(FALLBACK_AI_MODELS.find(model => model.id === "gpt-5.5")!)).toBe(true);
     expect(isPremiumAIModel(FALLBACK_AI_MODELS.find(model => model.id === "~google/gemini-pro-latest")!)).toBe(true);
     expect(isPremiumAIModel(FALLBACK_AI_MODELS.find(model => model.id === "google/gemini-3.5-flash")!)).toBe(false);
     expect(FALLBACK_AI_MODELS.find(model => model.id === "tencent/hy3-preview")?.pricing?.outputPerMillion).toBe(0.26);
+    expect(isPremiumAIModel({})).toBe(true);
     expect(isPremiumAIModel({ pricing: { currency: "USD", inputPerMillion: 1, outputPerMillion: 10 } })).toBe(false);
     expect(isPremiumAIModel({ pricing: { currency: "USD", inputPerMillion: 1, outputPerMillion: 10.01 } })).toBe(true);
   });

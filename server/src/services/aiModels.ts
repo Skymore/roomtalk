@@ -132,8 +132,13 @@ const AI_MODEL_CATALOG = [...REQUESTED_AI_MODEL_CATALOG, ...LEGACY_AI_MODEL_CATA
 const normalizeModelLookupKey = (value: string) => value.trim().toLowerCase();
 
 export const isPremiumAIModel = (model: Pick<AIModelOption, 'pricing'>): boolean => {
-  // Only models above $10 per million output tokens require premium confirmation.
-  return (model.pricing?.outputPerMillion ?? 0) > PREMIUM_OUTPUT_PRICE_THRESHOLD;
+  // Unknown prices require confirmation because configured models can point to
+  // expensive provider models outside the built-in catalog.
+  if (!model.pricing || !Number.isFinite(model.pricing.outputPerMillion)) {
+    return true;
+  }
+
+  return model.pricing.outputPerMillion > PREMIUM_OUTPUT_PRICE_THRESHOLD;
 };
 
 const createConfiguredOpenRouterModel = (model: string): AIModelOption => ({

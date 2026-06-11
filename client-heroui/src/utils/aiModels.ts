@@ -154,7 +154,11 @@ export const isPremiumAIModel = (model: Pick<AIModelOption, 'pricing' | 'isPremi
   }
 
   // Mirror the server rule while using fallback models before the API responds.
-  return (model.pricing?.outputPerMillion ?? 0) > PREMIUM_OUTPUT_PRICE_THRESHOLD;
+  if (!model.pricing || !Number.isFinite(model.pricing.outputPerMillion)) {
+    return true;
+  }
+
+  return model.pricing.outputPerMillion > PREMIUM_OUTPUT_PRICE_THRESHOLD;
 };
 
 export const fetchAIModels = async (): Promise<AIModelResponse> => {
