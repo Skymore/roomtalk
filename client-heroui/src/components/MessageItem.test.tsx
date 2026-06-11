@@ -43,6 +43,13 @@ const message = {
 
 describe('MessageItem replies', () => {
   beforeEach(() => {
+    Object.defineProperty(window, 'CSS', {
+      configurable: true,
+      value: {
+        ...(window.CSS || {}),
+        escape: window.CSS?.escape || ((value: string) => value.replace(/[^a-zA-Z0-9_-]/g, '\\$&')),
+      },
+    });
     getRoomMediaHistoryMock.mockResolvedValue({
       roomId: 'room-1',
       items: [],
@@ -288,7 +295,7 @@ describe('MessageItem replies', () => {
     await waitFor(() => {
       expect(getRoomMediaHistoryMock).toHaveBeenCalledWith({ roomId: 'room-1', before: null, limit: 36 });
     });
-    expect(screen.getByText('mediaHistoryRecentMonths')).toBeTruthy();
+    expect(screen.getByText(/mediaHistoryRecentMonths/)).toBeTruthy();
     expect(screen.getByLabelText('openMediaItem')).toBeTruthy();
     expect(screen.getByLabelText('closeMediaHistory')).toBeTruthy();
 
@@ -305,7 +312,7 @@ describe('MessageItem replies', () => {
     await waitFor(() => {
       expect(screen.queryByLabelText('backToMediaHistory')).toBeNull();
     });
-    expect(screen.getByText('mediaHistoryRecentMonths')).toBeTruthy();
+    expect(screen.getByText(/mediaHistoryRecentMonths/)).toBeTruthy();
 
     expect(screen.queryByLabelText('closeMediaHistory')).toBeNull();
     const historySection = screen.getByRole('region', { name: 'mediaHistory' });
@@ -463,7 +470,8 @@ describe('MessageItem replies', () => {
       expect(getRoomMediaHistoryMock).toHaveBeenCalledWith({ roomId: 'room-1', before: null, limit: 36 });
     });
 
-    fireEvent.click(screen.getByText('mediaHistoryFilterVideos'));
+    fireEvent.click(screen.getByLabelText('mediaHistory mediaHistoryFilterAll'));
+    fireEvent.click(await screen.findByText('mediaHistoryFilterVideos'));
 
     await waitFor(() => {
       expect(getRoomMediaHistoryMock).toHaveBeenCalledWith({ roomId: 'room-1', before: null, limit: 36, kind: 'video' });
