@@ -1077,7 +1077,7 @@ export class PostgresStore implements DurableRoomStore {
             name = EXCLUDED.name,
             description = EXCLUDED.description,
             last_activity_at = GREATEST(rooms.last_activity_at, EXCLUDED.last_activity_at),
-            room_version = room_version + 1, updated_at = NOW()
+            room_version = rooms.room_version + 1, updated_at = NOW()
           RETURNING ${ROOM_COLUMNS}`,
           [
             room.id,

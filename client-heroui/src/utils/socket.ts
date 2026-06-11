@@ -414,9 +414,26 @@ export const leaveRoom = (roomId: string) => {
 
 // Create a new room
 export const createRoom = (roomName: string, description?: string, password?: string, postingSchedule?: RoomPostingSchedule | null): Promise<string> => {
-  return ensureRegisteredSocket().then(() => new Promise<string>((resolve) => {
-    socket.emit('create_room', { name: roomName, description, password, postingSchedule }, (roomId: string) => {
-      resolve(roomId);
+  return ensureRegisteredSocket().then(() => new Promise<string>((resolve, reject) => {
+    let settled = false;
+    const timeoutId = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error('Timed out while creating room'));
+    }, SEND_MESSAGE_ACK_TIMEOUT_MS);
+
+    socket.emit('create_room', { name: roomName, description, password, postingSchedule }, (response: string | SocketAckResponse) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeoutId);
+
+      if (typeof response === 'string' && response) {
+        resolve(response);
+        return;
+      }
+
+      const error = typeof response === 'object' && response ? response.error : undefined;
+      reject(new Error(error || 'Failed to create room'));
     });
   }));
 };

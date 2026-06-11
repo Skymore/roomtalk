@@ -271,7 +271,10 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
     callback?.({ success: true, rooms: savedRooms });
   });
 
-  socket.on('create_room', async (roomData: { name: string; description?: string; password?: string; postingSchedule?: RoomPostingSchedule }, callback?: (roomId: string) => void) => {
+  socket.on('create_room', async (
+    roomData: { name: string; description?: string; password?: string; postingSchedule?: RoomPostingSchedule },
+    callback?: (response: string | { success: false; error: string }) => void,
+  ) => {
     const clientId = await store.getClientId(socket.id);
     if (!clientId || !roomData?.name) {
       socketLogger.warn('Invalid room creation attempt', {
@@ -280,6 +283,7 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
         roomDataValid: !!roomData?.name,
       });
       socket.emit('error', { message: 'You are not registered or room name is required' });
+      callback?.({ success: false, error: 'You are not registered or room name is required' });
       return;
     }
 
@@ -316,6 +320,8 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
       io.to(clientId).emit('new_room', savedRoom);
       socketLogger.info('Room created successfully', { roomId, clientId });
       callback?.(room.id);
+    } else {
+      callback?.({ success: false, error: 'Failed to create room' });
     }
   });
 
