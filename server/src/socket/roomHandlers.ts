@@ -3,6 +3,7 @@ import { hashRoomPassword, verifyRoomPassword } from '../services/roomSecurity';
 import { createRoomMemberEvent, createRoomRecord } from '../services/messageDomain';
 import { Room, RoomClientLookup, RoomOnlineMember, RoomPermissions, RoomPostingSchedule, RoomRoleMember } from '../types';
 import { authorizeRoomAction, buildRoomPermissions, getRoomActor, normalizePostingSchedule } from './roomAuthorization';
+import { hasRoomAccess } from './roomAccess';
 import { SocketConnectionContext } from './types';
 
 const MAX_ROOM_NAME_LENGTH = 20;
@@ -227,9 +228,20 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
     payload: unknown,
     callback?: (result: { success: boolean; members?: RoomOnlineMember[]; error?: string }) => void
   ) => {
+    const clientId = await store.getClientId(socket.id);
+    if (!clientId) {
+      callback?.({ success: false, error: 'You are not registered' });
+      return;
+    }
+
     const roomId = getRoomIdFromPayload(payload);
     if (!roomId) {
       callback?.({ success: false, error: 'Room ID is required' });
+      return;
+    }
+
+    if (!(await hasRoomAccess(store, roomId, clientId))) {
+      callback?.({ success: false, error: 'You are not authorized to access this room' });
       return;
     }
 
