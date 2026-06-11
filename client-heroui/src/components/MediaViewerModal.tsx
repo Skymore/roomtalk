@@ -1,6 +1,6 @@
 import React from "react";
 import { createPortal } from "react-dom";
-import { Button } from "@heroui/react";
+import { Button, Dropdown, DropdownItem, DropdownMenu, DropdownTrigger } from "@heroui/react";
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { getRoomMediaHistory } from "../utils/socket";
@@ -61,6 +61,14 @@ const SWIPE_THRESHOLD = 48;
 const SWIPE_DOWN_THRESHOLD = 64;
 const TAP_THRESHOLD = 8;
 const MEDIA_HISTORY_FILTERS: MediaHistoryFilter[] = ["all", "image", "video"];
+
+const getMediaHistoryFilterLabelKey = (filter: MediaHistoryFilter) => (
+  filter === "all"
+    ? "mediaHistoryFilterAll"
+    : filter === "image"
+      ? "mediaHistoryFilterImages"
+      : "mediaHistoryFilterVideos"
+);
 
 const mediaFileExtensions: Record<string, string> = {
   "image/jpeg": "jpg",
@@ -928,35 +936,37 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
                   <ViewerButton label={t("closeMediaHistory")} icon="lucide:chevron-left" onPress={() => setIsHistoryOpen(false)} className="h-10 w-10" />
                 )}
                 <div className="min-w-0 flex-1">
-                  <h2 className="truncate text-base font-semibold">{t("mediaHistory")}</h2>
-                  <p className="truncate text-xs text-white/55">{t("mediaHistoryRecentMonths")}</p>
+                  <Dropdown placement="bottom-start">
+                    <DropdownTrigger>
+                      <Button
+                        variant="light"
+                        className="-ml-2 h-auto min-w-0 justify-start gap-1 rounded-lg px-2 py-1 text-left text-white hover:bg-white/10"
+                        aria-label={`${t("mediaHistory")} ${t(getMediaHistoryFilterLabelKey(historyFilter))}`}
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate text-base font-semibold leading-tight">{t("mediaHistory")}</span>
+                          <span className="block truncate text-xs font-normal text-white/55">
+                            {t("mediaHistoryRecentMonths")} · {t(getMediaHistoryFilterLabelKey(historyFilter))}
+                          </span>
+                        </span>
+                        <Icon icon="lucide:chevron-down" className="h-4 w-4 flex-shrink-0 text-white/65" />
+                      </Button>
+                    </DropdownTrigger>
+                    <DropdownMenu
+                      aria-label={t("mediaHistory")}
+                      selectedKeys={[historyFilter]}
+                      selectionMode="single"
+                      onAction={(key) => handleHistoryFilterChange(key as MediaHistoryFilter)}
+                    >
+                      {MEDIA_HISTORY_FILTERS.map(filter => (
+                        <DropdownItem key={filter}>
+                          {t(getMediaHistoryFilterLabelKey(filter))}
+                        </DropdownItem>
+                      ))}
+                    </DropdownMenu>
+                  </Dropdown>
                 </div>
               </header>
-
-              <div className="flex flex-shrink-0 gap-1 border-b border-white/10 px-3 py-2">
-                {MEDIA_HISTORY_FILTERS.map(filter => {
-                  const isActive = historyFilter === filter;
-                  const labelKey = filter === "all"
-                    ? "mediaHistoryFilterAll"
-                    : filter === "image"
-                      ? "mediaHistoryFilterImages"
-                      : "mediaHistoryFilterVideos";
-                  return (
-                    <Button
-                      key={filter}
-                      size="sm"
-                      radius="full"
-                      variant={isActive ? "solid" : "light"}
-                      className={isActive
-                        ? "h-8 bg-white text-[#111110]"
-                        : "h-8 text-white/75 hover:bg-white/10 hover:text-white"}
-                      onPress={() => handleHistoryFilterChange(filter)}
-                    >
-                      {t(labelKey)}
-                    </Button>
-                  );
-                })}
-              </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-5 pt-4">
                 {(hasMoreHistory || isHistoryLoading) && (
