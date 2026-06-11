@@ -24,6 +24,30 @@ describe('selectAIHistory', () => {
     assert.deepEqual(finalHistory.map(message => message.id), ['m1', 'm2', 'm3', 'm4', 'm5', 'ai6']);
   });
 
+  it('limits model context by an approximate token budget', () => {
+    const fullHistory = ['m1', 'm2', 'm3', 'm4', 'm5'].map(createMessage);
+
+    const selection = selectAIHistory(fullHistory, { maxContextMessages: 10, maxContextTokens: 40 });
+
+    assert.equal(selection.truncationReason, 'max-context');
+    assert.deepEqual(selection.contextMessages.map(message => message.id), ['m4', 'm5']);
+    assert.ok(selection.contextTokenEstimate <= 40);
+    assert.deepEqual(selection.historyUsedForContext.map(message => message.id), ['m1', 'm2', 'm3', 'm4', 'm5']);
+  });
+
+  it('keeps the newest message when it exceeds the approximate token budget by itself', () => {
+    const fullHistory = [
+      createMessage('m1'),
+      { ...createMessage('m2'), content: 'x'.repeat(200) },
+    ];
+
+    const selection = selectAIHistory(fullHistory, { maxContextMessages: 10, maxContextTokens: 10 });
+
+    assert.equal(selection.truncationReason, 'max-context');
+    assert.deepEqual(selection.contextMessages.map(message => message.id), ['m2']);
+    assert.ok(selection.contextTokenEstimate > 10);
+  });
+
   it('truncates retry context before the retried message', () => {
     const fullHistory = ['m1', 'ai2', 'm3', 'ai4'].map(createMessage);
 
