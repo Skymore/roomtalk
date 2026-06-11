@@ -97,7 +97,7 @@ const roomActivityForMessages = (messages: Message[]) => room({
   lastActivityAt: messages[messages.length - 1]?.timestamp || room().createdAt,
 });
 
-const createHarness = (options: { rejectSaves?: boolean; rejectSaveNumbers?: number[]; rejectAppend?: boolean; clientId?: string | null } = {}) => {
+const createHarness = (options: { rejectSaves?: boolean; rejectSaveNumbers?: number[]; rejectAppend?: boolean; clientId?: string | null; aiStreamOwnerId?: string } = {}) => {
   const socket = new FakeSocket();
   const io = new FakeIo();
   const store = {
@@ -232,6 +232,7 @@ const createHarness = (options: { rejectSaves?: boolean; rejectSaveNumbers?: num
     getAIClientForModel: () => {
       throw new Error('E2E fake AI should not request a real client');
     },
+    aiStreamOwnerId: options.aiStreamOwnerId || 'test-stream-owner',
   });
 
   return { io, socket, store };
@@ -275,16 +276,20 @@ describe('AI socket handlers', () => {
     assert.equal(streamingMessage.clientId, 'ai_assistant');
     assert.equal(streamingMessage.status, 'streaming');
     assert.equal(streamingMessage.content, '');
+    assert.equal((streamingMessage as any).aiStreamOwnerId, 'test-stream-owner');
 
     const finalMessage = store.upsertedMessages[1];
     assert.equal(finalMessage.id, streamingMessage.id);
     assert.equal(finalMessage.status, 'complete');
     assert.equal(finalMessage.content, 'E2E AI response to: hello');
+    assert.equal((finalMessage as any).aiStreamOwnerId, undefined);
     assert.equal(finalMessage.usage?.cacheHitRate, 0.25);
     assert.deepEqual(store.messages.map(item => item.id), ['message-1', streamingMessage.id]);
     assert.equal(store.messages[1].status, 'complete');
 
-    assert.equal(io.roomEmits.some(event => event.event === 'new_message'), true);
+    const newMessageEvent = io.roomEmits.find(event => event.event === 'new_message');
+    assert.ok(newMessageEvent);
+    assert.equal(((newMessageEvent.args[0] as Message) as any).aiStreamOwnerId, undefined);
     assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_end'), true);
     assert.deepEqual(response, { success: true, messageId: streamingMessage.id });
     const aiChunkEvents = io.roomEmits.filter(event => event.event === 'ai_chunk');

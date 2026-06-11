@@ -1137,6 +1137,37 @@ describe('RedisStore', () => {
     ]);
   });
 
+  it('only recovers interrupted streaming messages for the requested owner', async () => {
+    const { store } = createStore();
+    const ownedStreamingMessage = {
+      ...message({ id: 'm1', status: 'streaming', content: '' }),
+      aiStreamOwnerId: 'owner-1',
+    } as Message;
+    const otherStreamingMessage = {
+      ...message({ id: 'm2', status: 'streaming', content: 'still running' }),
+      aiStreamOwnerId: 'owner-2',
+    } as Message;
+    const unownedStreamingMessage = message({ id: 'm3', status: 'streaming', content: 'legacy running' });
+    await store.saveRoom(room());
+    await store.saveMessageHistory('room-1', [
+      ownedStreamingMessage,
+      otherStreamingMessage,
+      unownedStreamingMessage,
+    ]);
+
+    assert.equal(await store.failInterruptedStreamingMessages('Response interrupted.', { aiStreamOwnerId: 'owner-1' }), 1);
+
+    const recoveredMessages = await store.readMessagesByRoom('room-1');
+    assert.equal(recoveredMessages[0].status, 'error');
+    assert.equal(recoveredMessages[0].content, 'Response interrupted.');
+    assert.equal((recoveredMessages[0] as any).aiStreamOwnerId, undefined);
+    assert.equal(recoveredMessages[1].status, 'streaming');
+    assert.equal(recoveredMessages[1].content, 'still running');
+    assert.equal((recoveredMessages[1] as any).aiStreamOwnerId, undefined);
+    assert.equal(recoveredMessages[2].status, 'streaming');
+    assert.equal(recoveredMessages[2].content, 'legacy running');
+  });
+
   it('does not count interrupted streaming messages when recovery persistence fails', async () => {
     const redis = new FailingReplaceRedis();
     const store = new RedisStore(redis as any, logger as any);

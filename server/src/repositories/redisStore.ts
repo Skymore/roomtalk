@@ -2,6 +2,7 @@ import { customAlphabet } from 'nanoid';
 import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
 import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember } from '../types';
+import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, stripAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, PendingMediaUpload, RoomMessageCacheStore, RoomMessagePageOptions, RoomSettingsUpdate, RoomStore } from './store';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
@@ -576,7 +577,7 @@ const parseScriptMessage = (value: unknown): Message | undefined => {
   }
 
   try {
-    return JSON.parse(value) as Message;
+    return stripAIStreamRecoveryMetadata(JSON.parse(value) as Message);
   } catch {
     return undefined;
   }
@@ -648,7 +649,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       }
 
       this.logger.debug('Room message cache hit', { roomId, count: messages.length, messageVersion: cachedMessageVersion });
-      return messages;
+      return messages.map(stripAIStreamRecoveryMetadata);
     } catch (error) {
       this.logger.error('Error reading room message cache', { error, roomId });
       return null;
@@ -997,7 +998,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     try {
       const messages = await this.redisClient.lRange(`room:${roomId}:messages`, 0, -1);
       this.logger.debug('Messages read from Redis', { roomId, count: messages.length });
-      return this.attachMediaAssets(roomId, messages.map((message: string) => JSON.parse(message)));
+      return this.attachMediaAssets(roomId, messages.map((message: string) => stripAIStreamRecoveryMetadata(JSON.parse(message))));
     } catch (error) {
       this.logger.error('Error reading messages from Redis', { error, roomId });
       return [];
@@ -1907,17 +1908,21 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
-  async failInterruptedStreamingMessages(content: string): Promise<number> {
+  async failInterruptedStreamingMessages(content: string, options: InterruptedStreamingMessageRecoveryOptions = {}): Promise<number> {
     try {
       const roomIds = await this.redisClient.hKeys('rooms');
       let updatedCount = 0;
 
       for (const roomId of roomIds) {
-        const messages = await this.readMessagesByRoom(roomId);
+        const rawMessages = await this.redisClient.lRange(`room:${roomId}:messages`, 0, -1);
+        const messages = rawMessages.map(rawMessage => JSON.parse(rawMessage) as Message);
         let changed = false;
         let changedCount = 0;
         const updatedMessages = messages.map(message => {
           if (message.status !== 'streaming') {
+            return message;
+          }
+          if (options.aiStreamOwnerId && getAIStreamOwnerId(message) !== options.aiStreamOwnerId) {
             return message;
           }
           changed = true;
@@ -1940,7 +1945,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       }
 
       if (updatedCount > 0) {
-        this.logger.warn('Marked interrupted Redis streaming messages as error', { count: updatedCount });
+        this.logger.warn('Marked interrupted Redis streaming messages as error', { count: updatedCount, aiStreamOwnerId: options.aiStreamOwnerId });
       }
       return updatedCount;
     } catch (error) {

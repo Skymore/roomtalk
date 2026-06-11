@@ -1,6 +1,7 @@
 import { customAlphabet } from 'nanoid';
 import { Logger } from '../logger';
 import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomPostingSchedule } from '../types';
+import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
 import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, PendingMediaUpload, RoomMessagePageOptions, RoomSettingsUpdate } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
@@ -53,6 +54,7 @@ type MessageRow = {
   usage: unknown;
   cost: unknown;
   reply_to: unknown;
+  ai_stream_owner_id?: string | null;
   position?: number | string;
 };
 
@@ -91,7 +93,7 @@ type PendingMediaUploadRow = {
 };
 
 const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, room_version, updated_at';
-const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, ai_model, usage, cost, reply_to';
+const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, ai_model, usage, cost, reply_to, ai_stream_owner_id';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, width, height, duration_ms, uploaded_by_client_id, created_at';
 const PENDING_MEDIA_UPLOAD_COLUMNS = 'id, room_id, object_key, kind, mime_type, byte_size, uploaded_by_client_id, expires_at, created_at';
@@ -282,6 +284,7 @@ const messageParams = (message: Message, position: number): unknown[] => [
   toJsonb(message.usage),
   toJsonb(message.cost),
   toJsonb(message.replyTo),
+  getAIStreamOwnerId(message) || null,
   position,
 ];
 
@@ -301,9 +304,10 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   usage,
   cost,
   reply_to,
+  ai_stream_owner_id,
   position
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16
+  $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16, $17
 ) ON CONFLICT (id) DO UPDATE SET
   room_id = EXCLUDED.room_id,
   client_id = EXCLUDED.client_id,
@@ -319,6 +323,7 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   usage = EXCLUDED.usage,
   cost = EXCLUDED.cost,
   reply_to = EXCLUDED.reply_to,
+  ai_stream_owner_id = EXCLUDED.ai_stream_owner_id,
   position = room_messages.position`;
 
 export class PostgresStore implements DurableRoomStore {
@@ -1638,19 +1643,20 @@ export class PostgresStore implements DurableRoomStore {
     await this.pool.query('TRUNCATE room_ai_cost_totals, pending_media_uploads, media_assets, image_assets, room_messages, room_saves, room_members, rooms, client_profiles RESTART IDENTITY CASCADE');
   }
 
-  async failInterruptedStreamingMessages(content: string): Promise<number> {
+  async failInterruptedStreamingMessages(content: string, options: InterruptedStreamingMessageRecoveryOptions = {}): Promise<number> {
     try {
       const result = await this.pool.query(
         `UPDATE room_messages
         SET status = 'error',
           content = $1,
           timestamp = NOW()
-        WHERE status = 'streaming'`,
-        [content]
+        WHERE status = 'streaming'
+          AND ($2::text IS NULL OR ai_stream_owner_id = $2)`,
+        [content, options.aiStreamOwnerId || null]
       );
       const updatedCount = result.rowCount || 0;
       if (updatedCount > 0) {
-        this.logger.warn('Marked interrupted PostgreSQL streaming messages as error', { count: updatedCount });
+        this.logger.warn('Marked interrupted PostgreSQL streaming messages as error', { count: updatedCount, aiStreamOwnerId: options.aiStreamOwnerId });
       }
       return updatedCount;
     } catch (error) {

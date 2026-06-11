@@ -1,4 +1,5 @@
 import { AICost, MediaAsset, Message, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule } from '../types';
+import { InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
 
 export const DEFAULT_ROOM_MESSAGE_PAGE_LIMIT = 80;
 
@@ -121,7 +122,7 @@ export interface DurableRoomStore {
   setClientNickname(clientId: string, nickname: string): Promise<void>;
   getClientNicknames(clientIds: string[]): Promise<Record<string, string>>;
   resetAllDataForTests?(): Promise<void>;
-  failInterruptedStreamingMessages?(content: string): Promise<number>;
+  failInterruptedStreamingMessages?(content: string, options?: InterruptedStreamingMessageRecoveryOptions): Promise<number>;
 }
 
 export interface RealtimeRoomStore {
@@ -438,8 +439,8 @@ export class CompositeRoomStore implements RoomStore {
     }
   }
 
-  async failInterruptedStreamingMessages(content: string) {
-    const updatedCount = await (this.durableStore.failInterruptedStreamingMessages?.(content) || Promise.resolve(0));
+  async failInterruptedStreamingMessages(content: string, options?: InterruptedStreamingMessageRecoveryOptions) {
+    const updatedCount = await (this.durableStore.failInterruptedStreamingMessages?.(content, options) || Promise.resolve(0));
     if (updatedCount > 0 && this.messageCacheStore) {
       await this.ignoreCacheFailure(() => this.messageCacheStore!.invalidateAllRoomMessagesCaches());
     }

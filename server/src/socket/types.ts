@@ -11,6 +11,7 @@ export interface SocketHandlerDeps {
   openaiLogger: Logger;
   normalizeAIModel: (requestedModel?: string) => AIModelOption;
   getAIClientForModel: (model: AIModelOption) => AIClientWrapper;
+  aiStreamOwnerId?: string;
   assemblyAIApiKey?: string;
 }
 

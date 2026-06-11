@@ -621,7 +621,8 @@ describe('PostgresStore', () => {
           assert.match(call.sql, /INSERT INTO room_messages/);
           assert.equal(call.params?.[0], 'message-1');
           assert.equal(call.params?.[5], null);
-          assert.equal(call.params?.[15], 2);
+          assert.equal(call.params?.[15], null);
+          assert.equal(call.params?.[16], 2);
         },
       },
       { rows: [roomRow({ last_activity_at: '2026-05-04T00:00:00.000Z' })] },
@@ -647,7 +648,8 @@ describe('PostgresStore', () => {
           assert.equal(call.params?.[0], 'message-1');
           assert.equal(call.params?.[6], 'media');
           assert.equal(call.params?.[9], 'image/webp');
-          assert.equal(call.params?.[15], 4);
+          assert.equal(call.params?.[15], null);
+          assert.equal(call.params?.[16], 4);
         },
       },
       {
@@ -761,7 +763,8 @@ describe('PostgresStore', () => {
           assert.match(call.sql, /position = room_messages.position/);
           assert.equal(call.params?.[0], 'message-1');
           assert.equal(call.params?.[5], null);
-          assert.equal(call.params?.[15], 3);
+          assert.equal(call.params?.[15], null);
+          assert.equal(call.params?.[16], 3);
         },
       },
       {
@@ -843,7 +846,8 @@ describe('PostgresStore', () => {
         rowCount: 1,
         assertCall(call) {
           assert.equal(call.params?.[14], JSON.stringify(aiMessage.replyTo));
-          assert.equal(call.params?.[15], 0);
+          assert.equal(call.params?.[15], null);
+          assert.equal(call.params?.[16], 0);
         },
       },
       { rows: [roomRow({ last_activity_at: '2026-05-04T00:00:00.000Z' })] },
@@ -906,7 +910,21 @@ describe('PostgresStore', () => {
         },
       },
       { rowCount: 0, assertCall: call => assert.match(call.sql, /TRUNCATE room_ai_cost_totals/) },
-      { rowCount: 2, assertCall: call => assert.match(call.sql, /WHERE status = 'streaming'/) },
+      {
+        rowCount: 2,
+        assertCall(call) {
+          assert.match(call.sql, /WHERE status = 'streaming'/);
+          assert.match(call.sql, /ai_stream_owner_id = \$2/);
+          assert.deepEqual(call.params, ['Response interrupted.', null]);
+        },
+      },
+      {
+        rowCount: 1,
+        assertCall(call) {
+          assert.match(call.sql, /ai_stream_owner_id = \$2/);
+          assert.deepEqual(call.params, ['Response interrupted.', 'owner-1']);
+        },
+      },
     ]);
     const store = new PostgresStore(pool, logger as any);
 
@@ -916,5 +934,6 @@ describe('PostgresStore', () => {
     assert.deepEqual(await store.setRoomAICostTotal('room-1', 0), { roomId: 'room-1', currency: 'USD', totalUsd: 0 });
     await store.resetAllDataForTests();
     assert.equal(await store.failInterruptedStreamingMessages('Response interrupted.'), 2);
+    assert.equal(await store.failInterruptedStreamingMessages('Response interrupted.', { aiStreamOwnerId: 'owner-1' }), 1);
   });
 });
