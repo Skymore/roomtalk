@@ -1,7 +1,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { AICost, MediaAsset, Message, Room, RoomMemberRole } from '../types';
-import { CompositeRoomStore, DurableRoomStore, RealtimeRoomStore, RoomMessageCacheStore } from './store';
+import { CompositeRoomStore, DurableRoomStore, PendingMediaUpload, RealtimeRoomStore, RoomMessageCacheStore } from './store';
 
 const room = (overrides: Partial<Room> = {}): Room => ({
   id: 'room-1',
@@ -95,6 +95,18 @@ const mediaAsset = (overrides: Partial<MediaAsset> = {}): MediaAsset => ({
   ...overrides,
 });
 
+const pendingUpload = (overrides: Partial<PendingMediaUpload> = {}): PendingMediaUpload => ({
+  assetId: overrides.assetId || 'pending-1',
+  roomId: overrides.roomId || 'room-1',
+  objectKey: overrides.objectKey || 'rooms/room-1/media/image/pending-1',
+  kind: overrides.kind || 'image',
+  mimeType: overrides.mimeType || 'image/webp',
+  byteSize: overrides.byteSize || 123,
+  uploadedByClientId: overrides.uploadedByClientId || 'client-1',
+  createdAt: overrides.createdAt || '2026-05-03T00:00:00.000Z',
+  expiresAt: overrides.expiresAt || '2026-05-03T00:30:00.000Z',
+});
+
 const durableMediaAssetStubs = () => ({
   async appendMediaMessageWithAsset(newMessage: Message, asset: MediaAsset) {
     return {
@@ -149,6 +161,14 @@ const durableMediaAssetStubs = () => ({
     return { assets: [mediaAsset({ roomId })], hasMore: false };
   },
   async deleteMediaAsset() {},
+  async savePendingMediaUpload() {},
+  async getPendingMediaUpload(assetId: string) {
+    return pendingUpload({ assetId });
+  },
+  async deletePendingMediaUpload() {},
+  async claimExpiredPendingMediaUploads() {
+    return [pendingUpload()];
+  },
 });
 
 describe('CompositeRoomStore', () => {
@@ -212,6 +232,10 @@ describe('CompositeRoomStore', () => {
       async readMediaAssetsByRoom(roomId: string) { calls.push('durable.readMediaAssetsByRoom'); return [mediaAsset({ roomId })]; },
       async readMediaHistoryPageByRoom(roomId: string) { calls.push('durable.readMediaHistoryPageByRoom'); return { assets: [mediaAsset({ roomId })], hasMore: false }; },
       async deleteMediaAsset(_assetId: string) { calls.push('durable.deleteMediaAsset'); },
+      async savePendingMediaUpload(_upload: PendingMediaUpload) { calls.push('durable.savePendingMediaUpload'); },
+      async getPendingMediaUpload(assetId: string) { calls.push('durable.getPendingMediaUpload'); return pendingUpload({ assetId }); },
+      async deletePendingMediaUpload(_assetId: string) { calls.push('durable.deletePendingMediaUpload'); },
+      async claimExpiredPendingMediaUploads(_now: string) { calls.push('durable.claimExpiredPendingMediaUploads'); return [pendingUpload()]; },
       async readRoomAICost(roomId: string) { calls.push('durable.readRoomAICost'); return { roomId, currency: 'USD', totalUsd: 1 }; },
       async incrementRoomAICost(roomId: string, _cost: AICost | null) { calls.push('durable.incrementRoomAICost'); return { roomId, currency: 'USD', totalUsd: 2 }; },
       async saveRoom(newRoom: Room) { calls.push('durable.saveRoom'); return newRoom; },
@@ -299,6 +323,10 @@ describe('CompositeRoomStore', () => {
     assert.deepEqual(await store.readMediaAssetsByRoom('room-1'), [mediaAsset()]);
     assert.deepEqual(await store.readMediaHistoryPageByRoom('room-1'), { assets: [mediaAsset()], hasMore: false });
     await store.deleteMediaAsset('asset-1');
+    await store.savePendingMediaUpload(pendingUpload());
+    assert.deepEqual(await store.getPendingMediaUpload('pending-1'), pendingUpload());
+    await store.deletePendingMediaUpload('pending-1');
+    assert.deepEqual(await store.claimExpiredPendingMediaUploads('2026-05-03T00:30:00.000Z'), [pendingUpload()]);
     assert.deepEqual(await store.readRoomAICost('room-1'), { roomId: 'room-1', currency: 'USD', totalUsd: 1 });
     assert.deepEqual(await store.incrementRoomAICost('room-1', cost()), { roomId: 'room-1', currency: 'USD', totalUsd: 2 });
     assert.deepEqual(await store.saveRoom(room()), room());
@@ -355,6 +383,10 @@ describe('CompositeRoomStore', () => {
       'durable.readMediaAssetsByRoom',
       'durable.readMediaHistoryPageByRoom',
       'durable.deleteMediaAsset',
+      'durable.savePendingMediaUpload',
+      'durable.getPendingMediaUpload',
+      'durable.deletePendingMediaUpload',
+      'durable.claimExpiredPendingMediaUploads',
       'durable.readRoomAICost',
       'durable.incrementRoomAICost',
       'durable.saveRoom',

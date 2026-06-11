@@ -469,6 +469,43 @@ describe('PostgresStore', () => {
     await store.deleteMediaAsset('asset-1');
   });
 
+  it('persists and claims pending media uploads', async () => {
+    const upload = {
+      assetId: 'pending-1',
+      roomId: 'room-1',
+      objectKey: 'rooms/room-1/media/image/pending-1',
+      kind: 'image' as const,
+      mimeType: 'image/webp',
+      byteSize: 123,
+      uploadedByClientId: 'client-1',
+      createdAt: '2026-05-03T00:00:00.000Z',
+      expiresAt: '2026-05-03T00:30:00.000Z',
+    };
+    const uploadRow = {
+      id: upload.assetId,
+      room_id: upload.roomId,
+      object_key: upload.objectKey,
+      kind: upload.kind,
+      mime_type: upload.mimeType,
+      byte_size: upload.byteSize,
+      uploaded_by_client_id: upload.uploadedByClientId,
+      created_at: upload.createdAt,
+      expires_at: upload.expiresAt,
+    };
+    const pool = new ScriptedPool([
+      { rowCount: 1, assertCall: call => assert.match(call.sql, /INSERT INTO pending_media_uploads/) },
+      { rows: [uploadRow], assertCall: call => assert.match(call.sql, /FROM pending_media_uploads\s+WHERE id = \$1/) },
+      { rowCount: 1, assertCall: call => assert.match(call.sql, /DELETE FROM pending_media_uploads WHERE id = \$1/) },
+      { rows: [uploadRow], assertCall: call => assert.match(call.sql, /DELETE FROM pending_media_uploads\s+WHERE id IN/) },
+    ]);
+    const store = new PostgresStore(pool, logger as any);
+
+    await store.savePendingMediaUpload(upload);
+    assert.deepEqual(await store.getPendingMediaUpload(upload.assetId), upload);
+    await store.deletePendingMediaUpload(upload.assetId);
+    assert.deepEqual(await store.claimExpiredPendingMediaUploads('2026-05-03T00:30:00.000Z'), [upload]);
+  });
+
   it('replaces legacy image message payloads with media asset metadata without changing room activity', async () => {
     const asset = {
       id: 'asset-legacy',

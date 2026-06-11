@@ -879,6 +879,28 @@ describe('RedisStore', () => {
     ]);
   });
 
+  it('tracks and claims expired pending media uploads', async () => {
+    const { store } = createStore();
+    const upload = {
+      assetId: 'pending-1',
+      roomId: 'room-1',
+      objectKey: 'rooms/room-1/media/image/pending-1',
+      kind: 'image' as const,
+      mimeType: 'image/webp',
+      byteSize: 123,
+      uploadedByClientId: 'client-1',
+      createdAt: '2026-05-03T00:00:00.000Z',
+      expiresAt: '2026-05-03T00:30:00.000Z',
+    };
+
+    await store.savePendingMediaUpload(upload);
+
+    assert.deepEqual(await store.getPendingMediaUpload(upload.assetId), upload);
+    assert.deepEqual(await store.claimExpiredPendingMediaUploads('2026-05-03T00:29:59.000Z'), []);
+    assert.deepEqual(await store.claimExpiredPendingMediaUploads('2026-05-03T00:30:00.000Z'), [upload]);
+    assert.equal(await store.getPendingMediaUpload(upload.assetId), null);
+  });
+
   it('resets all Redis test data through the store abstraction', async () => {
     const { store } = createStore();
 
