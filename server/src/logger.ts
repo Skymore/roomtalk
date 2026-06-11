@@ -39,6 +39,13 @@ const colors = {
 winston.addColors(colors);
 
 // 定义日志格式
+// JSON.stringify 默认把 Error 实例序列化成 {}（message/stack 是非枚举属性），
+// 导致 logger.error(msg, { error }) 在日志里只剩 {"error":{}}。展开 Error 以保留真因。
+const errorAwareReplacer = (_key: string, value: unknown) =>
+  value instanceof Error
+    ? { name: value.name, message: value.message, stack: value.stack }
+    : value;
+
 const format = winston.format.combine(
   // 添加时间戳
   winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss:ms' }),
@@ -49,8 +56,8 @@ const format = winston.format.combine(
     // 如果有元数据，转换为字符串
     let meta = '';
     if (info.meta) {
-      meta = typeof info.meta === 'object' 
-        ? JSON.stringify(info.meta) 
+      meta = typeof info.meta === 'object'
+        ? JSON.stringify(info.meta, errorAwareReplacer)
         : info.meta.toString();
     }
     
