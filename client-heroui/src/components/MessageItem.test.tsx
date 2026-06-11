@@ -394,6 +394,84 @@ describe('MessageItem replies', () => {
     });
   });
 
+  it('filters media history by video in the viewer', async () => {
+    getMediaDownloadUrlMock.mockResolvedValue({
+      url: 'https://signed.example/rooms/room-1/asset-current.webp',
+      expiresAt: '2026-05-03T10:15:00.000Z',
+    });
+    getRoomMediaHistoryMock
+      .mockResolvedValueOnce({
+        roomId: 'room-1',
+        items: [{
+          assetId: 'asset-image',
+          messageId: 'media-message-image',
+          kind: 'image',
+          mimeType: 'image/webp',
+          byteSize: 456,
+          createdAt: '2026-06-01T10:00:00.000Z',
+          url: 'https://signed.example/rooms/room-1/asset-image.webp',
+        }],
+        hasMore: false,
+        nextCursor: null,
+        windowMonths: 6,
+      })
+      .mockResolvedValueOnce({
+        roomId: 'room-1',
+        items: [{
+          assetId: 'asset-video',
+          messageId: 'media-message-video',
+          kind: 'video',
+          mimeType: 'video/mp4',
+          byteSize: 789,
+          createdAt: '2026-06-02T10:00:00.000Z',
+          url: 'https://signed.example/rooms/room-1/asset-video.mp4?token=abc',
+        }],
+        hasMore: false,
+        nextCursor: null,
+        windowMonths: 6,
+      });
+
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'image-history-filter-message',
+          content: '',
+          messageType: 'media',
+          mimeType: 'image/webp',
+          mediaAsset: {
+            id: 'asset-current',
+            kind: 'image',
+            mimeType: 'image/webp',
+            byteSize: 123,
+          },
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByLabelText('openMediaViewer').length).toBeGreaterThan(0);
+    });
+    fireEvent.click(screen.getAllByLabelText('openMediaViewer')[0]);
+    fireEvent.click(screen.getByLabelText('openMediaHistory'));
+
+    await waitFor(() => {
+      expect(getRoomMediaHistoryMock).toHaveBeenCalledWith({ roomId: 'room-1', before: null, limit: 36 });
+    });
+
+    fireEvent.click(screen.getByText('mediaHistoryFilterVideos'));
+
+    await waitFor(() => {
+      expect(getRoomMediaHistoryMock).toHaveBeenCalledWith({ roomId: 'room-1', before: null, limit: 36, kind: 'video' });
+    });
+    const historyVideo = document.body.querySelector('[aria-label="openMediaItem"] video');
+    expect(historyVideo?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/asset-video.mp4?token=abc#t=0.001');
+  });
+
   it('swipes between room media from a single expanded image', async () => {
     getMediaDownloadUrlMock.mockResolvedValue({
       url: 'https://signed.example/rooms/room-1/asset-1.webp',
