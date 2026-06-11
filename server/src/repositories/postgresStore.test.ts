@@ -173,6 +173,7 @@ describe('PostgresStore', () => {
         rows: [roomRow({ name: 'Saved Room', description: 'desc' })],
         assertCall(call) {
           assert.match(call.sql, /INSERT INTO rooms/);
+          assert.match(call.sql, /room_version = rooms\.room_version \+ 1/);
           assert.doesNotMatch(call.sql, /creator_id = EXCLUDED\.creator_id/);
           assert.equal(call.params?.[1], 'Saved Room');
         },
