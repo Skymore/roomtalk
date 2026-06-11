@@ -63,6 +63,8 @@ type SendMessageAckResponse = SocketAckResponse & {
 type SendMessageAndAskAIAckResponse = SocketAckResponse & {
   userMessage?: Message;
   aiMessageId?: string;
+  aiStarted?: boolean;
+  aiError?: string;
 };
 
 type RoomAckResponse = SocketAckResponse & {
@@ -693,20 +695,22 @@ export const sendMessageAndAskAI = (params: {
   systemPrompt?: string;
   roleName?: string;
   model?: string;
-}): Promise<{ userMessage: Message; aiMessageId: string }> => {
+}): Promise<{ userMessage: Message; aiMessageId?: string; aiStarted: boolean; aiError?: string }> => {
   return emitWithAck<SendMessageAndAskAIAckResponse>(
     'send_message_and_ask_ai',
     params,
     'Timed out while saving message and starting AI',
     'Failed to save message and start AI',
   ).then((response) => {
-    if (!response.userMessage || !response.aiMessageId) {
-      throw new Error('Server did not return userMessage or aiMessageId');
+    if (!response.userMessage) {
+      throw new Error('Server did not return userMessage');
     }
 
     return {
       userMessage: response.userMessage,
       aiMessageId: response.aiMessageId,
+      aiStarted: response.aiStarted !== false && !!response.aiMessageId,
+      aiError: response.aiError,
     };
   });
 };

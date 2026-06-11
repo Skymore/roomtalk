@@ -396,7 +396,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       onOptimisticMessage?.(optimisticMessage);
       clearEditorImmediately({ blur: true });
 
-      const { userMessage } = await sendMessageAndAskAI({
+      const { userMessage, aiError } = await sendMessageAndAskAI({
         roomId,
         content: prompt,
         username,
@@ -409,6 +409,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       });
 
       onOptimisticMessageSaved?.(clientMessageId, userMessage);
+      if (aiError) {
+        setErrorMessage(aiError);
+      }
       onCancelReply();
       console.log('Sent AI request (without prompt) with role and model:', selectedRole.name, selectedAIModel || defaultAIModel);
 

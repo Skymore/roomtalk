@@ -65,6 +65,8 @@ type SendMessageAndAskAIAckCallback = (response: {
   success: boolean;
   userMessage?: Message;
   aiMessageId?: string;
+  aiStarted?: boolean;
+  aiError?: string;
   error?: string;
 }) => void;
 
@@ -638,11 +640,17 @@ export function registerAIHandlers({
             success: true,
             userMessage,
             aiMessageId: response.messageId,
+            aiStarted: true,
           });
           return;
         }
 
-        callback?.({ success: false, error: response.error || 'Failed to start AI response' });
+        callback?.({
+          success: true,
+          userMessage,
+          aiStarted: false,
+          aiError: response.error || 'Failed to start AI response',
+        });
       },
       preparedHistory,
     );
