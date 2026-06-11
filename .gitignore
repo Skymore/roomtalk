@@ -9,6 +9,8 @@ client-heroui/test-results/
 client-heroui/playwright-report/
 client-heroui/blob-report/
 server/test-results/
+server/.local-media/
+.local-media/
 
 # Production
 client-heroui/dist/

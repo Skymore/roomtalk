@@ -1,12 +1,15 @@
 import assert from 'assert/strict';
 import express from 'express';
-import { mkdir, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { AddressInfo } from 'net';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { Server as HttpServer } from 'http';
+import os from 'os';
 import path from 'path';
 import { registerApiRoutes } from './apiRoutes';
 import { MediaAsset, Message, Room } from '../types';
+import { LocalMediaObjectStorage } from '../services/mediaObjectStorage';
+import { Logger } from '../logger';
 
 type EmittedEvent = {
   target: string;
@@ -39,6 +42,7 @@ type TestServer = {
     appendMediaMessageWithAsset: (message: Message, asset: MediaAsset) => Promise<{ room: Room; message: Message; asset: MediaAsset } | null>;
     saveMediaAsset: (asset: MediaAsset) => Promise<MediaAsset | null>;
     getMediaAsset: (assetId: string) => Promise<MediaAsset | null>;
+    readMediaAssetsByRoom: (roomId: string) => Promise<MediaAsset[]>;
     deleteMediaAsset: (assetId: string) => Promise<void>;
     readRoomAICost: (roomId: string) => Promise<{ roomId: string; currency: 'USD'; totalUsd: number }>;
     getRoomById: (roomId: string) => Promise<Room | null>;
@@ -105,7 +109,7 @@ const writeLargeHistoryBaseline = async (payload: {
   }
 };
 
-async function createTestServer(): Promise<TestServer> {
+async function createTestServer(overrides: { mediaObjectStorage?: unknown } = {}): Promise<TestServer> {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
 
@@ -189,6 +193,9 @@ async function createTestServer(): Promise<TestServer> {
     async getMediaAsset(assetId: string) {
       return this.mediaAssets.get(assetId) || null;
     },
+    async readMediaAssetsByRoom(roomId: string) {
+      return [...this.mediaAssets.values()].filter(asset => asset.roomId === roomId);
+    },
     async deleteMediaAsset(assetId: string) {
       this.mediaAssets.delete(assetId);
     },
@@ -221,7 +228,7 @@ async function createTestServer(): Promise<TestServer> {
   };
 
   const deletedMediaObjects: string[] = [];
-  const mediaObjectStorage = {
+  const mediaObjectStorage = overrides.mediaObjectStorage || {
     isConfigured: () => true,
     async putMediaObject() {},
     async createWriteUrl({ objectKey }: { objectKey: string }) {
@@ -526,6 +533,141 @@ describe('API routes', () => {
       { target: 'client-1', event: 'room_updated', payload: sampleRoom({ lastActivityAt: message.timestamp }) },
       { target: 'room-1', event: 'new_message', payload: broadcastMessage },
     ]);
+  });
+
+  it('supports local development media upload and download routes', async () => {
+    await server.close();
+    const rootDir = await mkdtemp(path.join(os.tmpdir(), 'roomtalk-route-media-'));
+    server = await createTestServer({
+      mediaObjectStorage: new LocalMediaObjectStorage(rootDir, new Logger('LocalMediaRouteTest')),
+    });
+
+    try {
+      server.store.members.add('room-1:client-2');
+      const bytes = Buffer.from('image-bytes');
+
+      const uploadResponse = await fetch(`${server.baseUrl}/api/media/uploads`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          clientId: 'client-2',
+          roomId: 'room-1',
+          kind: 'image',
+          mimeType: 'image/webp',
+          byteSize: bytes.length,
+        }),
+      });
+
+      assert.equal(uploadResponse.status, 201);
+      const upload = await uploadResponse.json() as { assetId: string; objectKey: string; uploadUrl: string };
+      assert.match(upload.uploadUrl, /^\/api\/media\/local-objects\//);
+
+      const putResponse = await fetch(`${server.baseUrl}${upload.uploadUrl}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'image/webp' },
+        body: bytes,
+      });
+      assert.equal(putResponse.status, 204);
+
+      const completeResponse = await fetch(`${server.baseUrl}/api/media/uploads/${upload.assetId}/complete`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          clientId: 'client-2',
+          roomId: 'room-1',
+          kind: 'image',
+          mimeType: 'image/webp',
+          byteSize: bytes.length,
+          objectKey: upload.objectKey,
+        }),
+      });
+      assert.equal(completeResponse.status, 201);
+
+      const downloadUrlResponse = await fetch(`${server.baseUrl}/api/media/${upload.assetId}/download-url?roomId=room-1&clientId=client-2`);
+      assert.equal(downloadUrlResponse.status, 200);
+      const download = await downloadUrlResponse.json() as { url: string };
+      assert.match(download.url, /^\/api\/media\/local-objects\//);
+
+      const downloadResponse = await fetch(`${server.baseUrl}${download.url}`);
+      assert.equal(downloadResponse.status, 200);
+      assert.equal(downloadResponse.headers.get('content-type'), 'image/webp');
+      assert.equal(Buffer.from(await downloadResponse.arrayBuffer()).toString('utf8'), 'image-bytes');
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns paginated recent image and video history for a room', async () => {
+    server.store.members.add('room-1:client-2');
+    server.store.mediaAssets.set('image-new', {
+      id: 'image-new',
+      roomId: 'room-1',
+      messageId: 'message-image-new',
+      objectKey: 'rooms/room-1/media/image/image-new',
+      kind: 'image',
+      mimeType: 'image/webp',
+      byteSize: 123,
+      width: 40,
+      height: 30,
+      createdAt: '2026-06-01T00:00:00.000Z',
+    });
+    server.store.mediaAssets.set('video-new', {
+      id: 'video-new',
+      roomId: 'room-1',
+      messageId: 'message-video-new',
+      objectKey: 'rooms/room-1/media/video/video-new',
+      kind: 'video',
+      mimeType: 'video/mp4',
+      byteSize: 456,
+      durationMs: 1200,
+      createdAt: '2026-05-01T00:00:00.000Z',
+    });
+    server.store.mediaAssets.set('audio-hidden', {
+      id: 'audio-hidden',
+      roomId: 'room-1',
+      messageId: 'message-audio',
+      objectKey: 'rooms/room-1/media/audio/audio-hidden',
+      kind: 'audio',
+      mimeType: 'audio/webm',
+      byteSize: 456,
+      createdAt: '2026-05-02T00:00:00.000Z',
+    });
+    server.store.mediaAssets.set('old-hidden', {
+      id: 'old-hidden',
+      roomId: 'room-1',
+      messageId: 'message-old',
+      objectKey: 'rooms/room-1/media/image/old-hidden',
+      kind: 'image',
+      mimeType: 'image/webp',
+      byteSize: 123,
+      createdAt: '2025-01-01T00:00:00.000Z',
+    });
+
+    const firstResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/media-history?clientId=client-2&limit=1`);
+    assert.equal(firstResponse.status, 200);
+    const firstPage = await firstResponse.json() as { items: Array<{ assetId: string; kind: string; url: string }>; hasMore: boolean; nextCursor: string | null; windowMonths: number };
+
+    assert.equal(firstPage.windowMonths, 6);
+    assert.equal(firstPage.hasMore, true);
+    assert.equal(firstPage.items.length, 1);
+    assert.equal(firstPage.items[0].assetId, 'image-new');
+    assert.equal(firstPage.items[0].kind, 'image');
+    assert.equal(firstPage.items[0].url, 'https://download.example/rooms%2Froom-1%2Fmedia%2Fimage%2Fimage-new');
+    assert.ok(firstPage.nextCursor);
+
+    const secondResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/media-history?clientId=client-2&limit=10&before=${encodeURIComponent(firstPage.nextCursor!)}`);
+    assert.equal(secondResponse.status, 200);
+    const secondPage = await secondResponse.json() as { items: Array<{ assetId: string }>; hasMore: boolean };
+
+    assert.equal(secondPage.hasMore, false);
+    assert.deepEqual(secondPage.items.map(item => item.assetId), ['video-new']);
+  });
+
+  it('rejects media history requests without room access', async () => {
+    const response = await fetch(`${server.baseUrl}/api/rooms/room-1/media-history?clientId=client-2`);
+
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), { error: 'Not authorized to access this room' });
   });
 
   it('does not use separate media asset and message writes when completing media uploads', async () => {

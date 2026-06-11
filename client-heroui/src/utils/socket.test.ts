@@ -71,6 +71,7 @@ vi.mock('uuid', () => ({
 const {
   ensureRoomJoined,
   getMediaDownloadUrl,
+  getRoomMediaHistory,
   getRoomMemberCount,
   getRoomMembers,
   getSavedRoomsFromServer,
@@ -80,6 +81,7 @@ const {
   sendMessageAndAskAI,
   setUsername,
   unsaveRoomFromServer,
+  uploadMediaMessage,
 } = await import('./socket');
 
 const message = (overrides: Partial<Message> = {}): Message => ({
@@ -287,6 +289,88 @@ describe('socket message acknowledgement helpers', () => {
     });
 
     expect(fetchMock).toHaveBeenCalledWith('/api/media/asset-1/download-url?roomId=room-1&clientId=client-uuid');
+  });
+
+  it('uploads media objects through relative local media URLs', async () => {
+    const savedMessage = message({
+      id: 'media-message-1',
+      content: '',
+      messageType: 'media',
+      mediaAsset: {
+        id: 'asset-1',
+        kind: 'image',
+        mimeType: 'image/webp',
+        byteSize: 11,
+      },
+    });
+
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        assetId: 'asset-1',
+        uploadUrl: '/api/media/local-objects/local-key',
+        objectKey: 'rooms/room-1/media/image/asset-1',
+        expiresAt: '2026-05-03T00:15:00.000Z',
+      }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(savedMessage), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+
+    await expect(uploadMediaMessage({
+      file: new Blob(['image-bytes'], { type: 'image/webp' }),
+      roomId: 'room-1',
+      kind: 'image',
+      mimeType: 'image/webp',
+    })).resolves.toEqual(savedMessage);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/media/local-objects/local-key', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'image/webp' },
+      body: expect.any(Blob),
+    });
+  });
+
+  it('returns room media history and normalizes local media URLs', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      roomId: 'room-1',
+      items: [{
+        assetId: 'asset-1',
+        messageId: 'message-1',
+        kind: 'image',
+        mimeType: 'image/webp',
+        byteSize: 123,
+        createdAt: '2026-06-01T00:00:00.000Z',
+        url: '/api/media/local-objects/local-key',
+      }],
+      hasMore: true,
+      nextCursor: 'cursor-1',
+      windowMonths: 6,
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+
+    await expect(getRoomMediaHistory({ roomId: 'room-1', before: 'cursor-0', limit: 24 })).resolves.toEqual({
+      roomId: 'room-1',
+      items: [{
+        assetId: 'asset-1',
+        messageId: 'message-1',
+        kind: 'image',
+        mimeType: 'image/webp',
+        byteSize: 123,
+        createdAt: '2026-06-01T00:00:00.000Z',
+        url: '/api/media/local-objects/local-key',
+      }],
+      hasMore: true,
+      nextCursor: 'cursor-1',
+      windowMonths: 6,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/rooms/room-1/media-history?clientId=client-uuid&before=cursor-0&limit=24');
   });
 
   it('returns saved rooms from get_saved_rooms acknowledgements', async () => {

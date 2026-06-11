@@ -1,7 +1,10 @@
 import assert from 'assert/strict';
+import { mkdtemp, rm } from 'fs/promises';
 import { describe, it } from 'node:test';
+import os from 'os';
+import path from 'path';
 import { Logger } from '../logger';
-import { S3MediaObjectStorage } from './mediaObjectStorage';
+import { createMediaObjectStorageFromEnv, LocalMediaObjectStorage, MissingMediaObjectStorage, S3MediaObjectStorage } from './mediaObjectStorage';
 
 const withTestAwsCredentials = async (callback: () => Promise<void>) => {
   const previousAccessKey = process.env.AWS_ACCESS_KEY_ID;
@@ -48,5 +51,60 @@ describe('S3MediaObjectStorage', () => {
       assert.equal(params.has('x-amz-sdk-checksum-algorithm'), false);
       assert.equal(params.has('x-amz-checksum-crc32'), false);
     });
+  });
+});
+
+describe('LocalMediaObjectStorage', () => {
+  it('stores and reads media objects from the local filesystem', async () => {
+    const rootDir = await mkdtemp(path.join(os.tmpdir(), 'roomtalk-media-'));
+
+    try {
+      const storage = new LocalMediaObjectStorage(rootDir, new Logger('LocalMediaObjectStorageTest'));
+      await storage.putMediaObject({
+        objectKey: 'rooms/room-1/media/image/asset-1',
+        body: Buffer.from('image-bytes'),
+        mimeType: 'image/webp',
+        byteSize: Buffer.byteLength('image-bytes'),
+      });
+
+      assert.deepEqual(await storage.headObject({ objectKey: 'rooms/room-1/media/image/asset-1' }), {
+        exists: true,
+        mimeType: 'image/webp',
+        byteSize: Buffer.byteLength('image-bytes'),
+      });
+
+      const object = await storage.getMediaObject('rooms/room-1/media/image/asset-1');
+      assert.equal(object.body.toString('utf8'), 'image-bytes');
+      assert.equal(object.mimeType, 'image/webp');
+      assert.equal(object.byteSize, Buffer.byteLength('image-bytes'));
+
+      const writeUrl = await storage.createWriteUrl({
+        objectKey: 'rooms/room-1/media/image/asset-1',
+        mimeType: 'image/webp',
+        byteSize: Buffer.byteLength('image-bytes'),
+      });
+      assert.match(writeUrl.url, /^\/api\/media\/local-objects\//);
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('createMediaObjectStorageFromEnv', () => {
+  it('uses local media storage by default outside production when no bucket is configured', () => {
+    const storage = createMediaObjectStorageFromEnv(new Logger('MediaObjectStorageFactoryTest'), {
+      NODE_ENV: 'development',
+      LOCAL_MEDIA_DIR: path.join(os.tmpdir(), 'roomtalk-local-media'),
+    } as NodeJS.ProcessEnv);
+
+    assert.ok(storage instanceof LocalMediaObjectStorage);
+  });
+
+  it('keeps production media uploads disabled when no bucket is configured', () => {
+    const storage = createMediaObjectStorageFromEnv(new Logger('MediaObjectStorageFactoryTest'), {
+      NODE_ENV: 'production',
+    } as NodeJS.ProcessEnv);
+
+    assert.ok(storage instanceof MissingMediaObjectStorage);
   });
 });

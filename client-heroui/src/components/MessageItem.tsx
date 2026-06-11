@@ -15,6 +15,7 @@ import { formatPercentage, formatTime, formatUsdCost } from "../utils/formatters
 import { Message, RoomPermissions } from "../utils/types";
 import { useTranslation } from "react-i18next";
 import { useIsTouchDevice } from "../hooks/useIsTouchDevice";
+import { MediaViewerModal } from "./MediaViewerModal";
 
 interface MessageItemProps {
   message: Message;
@@ -43,7 +44,7 @@ export const preloadMarkdownContent = () => {
 
 // Helper to copy image to clipboard
 async function copyImageToClipboard(imageSource: string): Promise<boolean> {
-  if (!imageSource.startsWith('data:image') && !imageSource.startsWith('http')) {
+  if (!imageSource.startsWith('data:image') && !imageSource.startsWith('http') && !imageSource.startsWith('/')) {
     console.error("Invalid image data for clipboard");
     return false;
   }
@@ -79,6 +80,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const isTouchDevice = useIsTouchDevice();
   const [mediaError, setMediaError] = React.useState(false);
   const [signedMediaUrl, setSignedMediaUrl] = React.useState<string | null>(null);
+  const [isMediaViewerOpen, setIsMediaViewerOpen] = React.useState(false);
   const mediaRetryCountRef = React.useRef(0);
   const isMedia = message.messageType === "media";
   const mediaKind = message.mediaAsset?.kind;
@@ -134,6 +136,12 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     };
   }, []);
 
+  React.useEffect(() => {
+    if (!signedMediaUrl || mediaError || (!isImage && !isVideo)) {
+      setIsMediaViewerOpen(false);
+    }
+  }, [isImage, isVideo, mediaError, signedMediaUrl]);
+
   const loadSignedMediaUrl = React.useCallback(() => {
     if (!isMedia || !message.mediaAsset?.id) {
       setSignedMediaUrl(null);
@@ -178,6 +186,14 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     setMediaError(true);
   };
 
+  const canOpenMediaViewer = Boolean(signedMediaUrl && !mediaError && (isImage || isVideo));
+
+  const handleOpenMediaViewer = () => {
+    if (canOpenMediaViewer) {
+      setIsMediaViewerOpen(true);
+    }
+  };
+
   let mediaContent: React.ReactNode = null;
   if (isMedia) {
     if (mediaError) {
@@ -189,12 +205,21 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       );
     } else if (signedMediaUrl && isImage) {
       mediaContent = (
-        <img
-          src={signedMediaUrl}
-          alt={t('sharedImage')}
-          className="block max-h-[300px] max-w-full rounded-xl object-contain"
-          onError={handleMediaError}
-        />
+        <div className="relative inline-block max-w-full overflow-hidden rounded-xl bg-black/5 shadow-[0_0_0_1px_rgba(194,192,182,0.45)] dark:bg-white/5 dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)]">
+          <button
+            type="button"
+            aria-label={t('openMediaViewer')}
+            className="block max-w-full cursor-zoom-in rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#c96442] dark:focus-visible:ring-[#d97757]"
+            onClick={handleOpenMediaViewer}
+          >
+            <img
+              src={signedMediaUrl}
+              alt={t('sharedImage')}
+              className="block max-h-[300px] max-w-full object-contain"
+              onError={handleMediaError}
+            />
+          </button>
+        </div>
       );
     } else if (signedMediaUrl && isAudio) {
       mediaContent = (
@@ -207,12 +232,28 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       );
     } else if (signedMediaUrl && isVideo) {
       mediaContent = (
-        <video
-          controls
-          src={signedMediaUrl}
-          className="block max-h-[360px] max-w-full rounded-xl bg-black"
-          onError={handleMediaError}
-        />
+        <div className="relative inline-block max-w-full overflow-hidden rounded-xl bg-black shadow-[0_0_0_1px_rgba(20,20,19,0.35)]">
+          <button
+            type="button"
+            aria-label={t('openMediaViewer')}
+            className="group/video relative flex max-w-full cursor-zoom-in items-center justify-center rounded-xl bg-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#c96442] dark:focus-visible:ring-[#d97757]"
+            onClick={handleOpenMediaViewer}
+          >
+            <video
+              src={signedMediaUrl}
+              className="pointer-events-none block max-h-[360px] max-w-full object-contain"
+              preload="metadata"
+              muted
+              playsInline
+              onError={handleMediaError}
+            />
+            <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/10 transition group-hover/video:bg-black/20">
+              <span className="flex h-14 w-14 items-center justify-center rounded-full bg-black/45 text-white shadow-lg backdrop-blur">
+                <Icon icon="lucide:play" className="ml-0.5 h-6 w-6" />
+              </span>
+            </span>
+          </button>
+        </div>
       );
     } else {
       mediaContent = (
@@ -480,6 +521,18 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
           }}
         />
       )}
+      <MediaViewerModal
+        isOpen={isMediaViewerOpen && canOpenMediaViewer}
+        src={signedMediaUrl}
+        kind={isVideo ? "video" : "image"}
+        title={t('mediaViewer')}
+        alt={isVideo ? t('videoMessage') : t('sharedImage')}
+        roomId={message.roomId}
+        assetId={message.mediaAsset?.id}
+        mimeType={message.mediaAsset?.mimeType}
+        createdAt={message.timestamp}
+        onClose={() => setIsMediaViewerOpen(false)}
+      />
     </div>
   );
 };

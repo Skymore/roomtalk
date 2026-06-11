@@ -5,6 +5,7 @@ import {
   Message,
   Room,
   RoomClientLookup,
+  RoomMediaHistoryPage,
   RoomMemberEvent,
   RoomOnlineMember,
   RoomPermissions,
@@ -589,7 +590,7 @@ type CreateMediaUploadResponse = {
   expiresAt: string;
 };
 
-const apiPath = (path: string) => `${API_BASE_URL}${path}`;
+const apiPath = (path: string) => (/^[a-z][a-z\d+\-.]*:\/\//i.test(path) ? path : `${API_BASE_URL}${path}`);
 
 const parseApiError = async (response: Response, fallback: string) => {
   try {
@@ -616,7 +617,7 @@ const postJson = async <T>(path: string, body: unknown): Promise<T> => {
 };
 
 const putMediaObject = async (uploadUrl: string, file: Blob, mimeType: string) => {
-  const response = await fetch(uploadUrl, {
+  const response = await fetch(apiPath(uploadUrl), {
     method: 'PUT',
     headers: { 'Content-Type': mimeType },
     body: file,
@@ -738,9 +739,40 @@ export const getMediaDownloadUrl = async (params: {
   if (!payload?.url) {
     throw new Error('Server did not return media URL');
   }
+  const url = typeof payload.url === 'string' ? apiPath(payload.url) : payload.url;
   return {
-    url: payload.url,
+    url,
     expiresAt: payload.expiresAt,
+  };
+};
+
+export const getRoomMediaHistory = async (params: {
+  roomId: string;
+  before?: string | null;
+  limit?: number;
+}): Promise<RoomMediaHistoryPage> => {
+  const query = new URLSearchParams({
+    clientId,
+  });
+  if (params.before) {
+    query.set('before', params.before);
+  }
+  if (params.limit) {
+    query.set('limit', String(params.limit));
+  }
+
+  const response = await fetch(apiPath(`/api/rooms/${encodeURIComponent(params.roomId)}/media-history?${query.toString()}`));
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, 'Failed to get media history'));
+  }
+
+  const payload = await response.json() as RoomMediaHistoryPage;
+  return {
+    ...payload,
+    items: (payload.items || []).map(item => ({
+      ...item,
+      url: apiPath(item.url),
+    })),
   };
 };
 

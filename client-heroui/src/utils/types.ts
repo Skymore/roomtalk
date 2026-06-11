@@ -18,6 +18,28 @@ export interface MessageMediaAsset {
   durationMs?: number;
 }
 
+export interface RoomMediaHistoryItem {
+  assetId: string;
+  messageId?: string;
+  kind: 'image' | 'video';
+  mimeType: string;
+  byteSize: number;
+  width?: number;
+  height?: number;
+  durationMs?: number;
+  createdAt: string;
+  url: string;
+  expiresAt?: string;
+}
+
+export interface RoomMediaHistoryPage {
+  roomId: string;
+  items: RoomMediaHistoryItem[];
+  hasMore: boolean;
+  nextCursor?: string | null;
+  windowMonths: number;
+}
+
 export interface Message {
   id: string;
   clientId: string;
