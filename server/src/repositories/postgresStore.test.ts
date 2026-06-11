@@ -141,6 +141,17 @@ describe('PostgresStore', () => {
     assert.ok(POSTGRES_SCHEMA_SQL.every(sql => !/INSERT INTO room_members/.test(sql)));
   });
 
+  it('normalizes legacy media message types before narrowing the message type check', () => {
+    const dropIndex = POSTGRES_SCHEMA_SQL.findIndex(sql => /DROP CONSTRAINT IF EXISTS room_messages_message_type_check/.test(sql));
+    const normalizeIndex = POSTGRES_SCHEMA_SQL.findIndex(sql => /SET message_type = 'media'/.test(sql));
+    const addIndex = POSTGRES_SCHEMA_SQL.findIndex(sql => /ADD CONSTRAINT room_messages_message_type_check/.test(sql));
+
+    assert.ok(dropIndex >= 0);
+    assert.ok(normalizeIndex > dropIndex);
+    assert.ok(addIndex > normalizeIndex);
+    assert.match(POSTGRES_SCHEMA_SQL[normalizeIndex], /message_type IN \('image', 'voice', 'audio', 'video'\)/);
+  });
+
   it('applies pending migrations exactly once and records each in a transaction', async () => {
     const migrationCount = POSTGRES_MIGRATIONS.length;
     const clientResults: ScriptedResult[] = [];

@@ -59,9 +59,12 @@ export const POSTGRES_SCHEMA_SQL = [
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS reply_to JSONB`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS ai_stream_owner_id TEXT`,
-  // Legacy 'image'/'voice' rows were migrated to the unified 'media' type; the
-  // constraint now only allows the current set. Drop-then-add keeps it idempotent.
+  // Legacy media rows can predate the unified 'media' message type. Normalize
+  // them after dropping older checks so the narrower constraint is startup-safe.
   `ALTER TABLE room_messages DROP CONSTRAINT IF EXISTS room_messages_message_type_check`,
+  `UPDATE room_messages
+    SET message_type = 'media'
+    WHERE message_type IN ('image', 'voice', 'audio', 'video')`,
   `ALTER TABLE room_messages ADD CONSTRAINT room_messages_message_type_check
     CHECK (message_type IN ('text', 'ai', 'media'))`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_room_messages_room_position
