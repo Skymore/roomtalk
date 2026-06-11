@@ -20,7 +20,7 @@ interface CodeBlockProps {
   children: ReactNode;
 }
 interface MathProps {
-  children: string;
+  children: ReactNode;
   inline?: boolean;
 }
 
@@ -80,23 +80,24 @@ const Math: React.FC<MathProps> = ({ children, inline = false }) => {
   const { t } = useTranslation();
   const ref = useRef<HTMLSpanElement>(null);
   const [error, setError] = useState<string | null>(null);
+  const mathSource = React.useMemo(() => React.Children.toArray(children).join(''), [children]);
   useEffect(() => {
     if (!ref.current) return;
     try {
-      katex.render(children.trim(), ref.current, {
+      katex.render(mathSource.trim(), ref.current, {
         displayMode: !inline,
         throwOnError: false,
         strict: false,
-        trust: true,
+        trust: false,
         macros: { "\\RR": "\\mathbb{R}" },
         errorColor: "#EF4444",
       });
       setError(null);
     } catch (e) {
       setError(String(e));
-      ref.current.textContent = children;
+      ref.current.textContent = mathSource;
     }
-  }, [children, inline]);
+  }, [mathSource, inline]);
   return error ? (
     <span className="rounded bg-danger-50 p-1 text-danger-700">{t('formulaRenderError')}</span>
   ) : (
