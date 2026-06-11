@@ -1020,9 +1020,13 @@
 
 ### 核验中发现的、本仓库特有的新增隐患（不属于原清单）
 
-复核中发现本仓库存在一个无鉴权的本地媒体端点，**且暴露面延伸到了生产环境**，需单列记录：
+复核中发现本仓库存在一个无鉴权的本地媒体端点，需单列记录；后续复查修正了原判断中的一处过度推断：
 
-- **`/api/media/local-objects/:encodedObjectKey` PUT/GET 在生产也会注册，且无鉴权。** 路由注册条件仅为 `if (mediaObjectStorage.getMediaObject)`（`server/src/routes/apiRoutes.ts:114`），无任何 `NODE_ENV` 判断。本仓库为支持服务端长图导出，`S3MediaObjectStorage` 现已实现 `getMediaObject`（`server/src/services/mediaObjectStorage.ts:217`），导致该条件在配置了 S3/Tigris 的**生产环境同样为真**。其 PUT 以任意 `content-type` 写入真实 bucket 且可覆盖既有对象（`apiRoutes.ts:115-132`），GET 按存储的 mimeType 同源返回（`apiRoutes.ts:152`）——构成生产可达的存储型 XSS 与任意对象覆盖面，严重度为高。建议给该路由加 `NODE_ENV`/能力开关守卫与鉴权，或在生产下完全不注册。
+- **`/api/media/local-objects/:encodedObjectKey` PUT/GET 的注册条件过宽。** 原核验称配置 S3/Tigris 时也会注册该端点；重新对照当前代码后，这一点不准确：当前 `S3MediaObjectStorage` 未实现 `getMediaObject`，因此常规生产 S3 配置不会注册该路由。真正成立的问题是路由仅以 `if (mediaObjectStorage.getMediaObject)` 判断能力，无 `NODE_ENV` 或具体存储类型限制；一旦后续非本地存储实现 `getMediaObject`，或生产误注入 `LocalMediaObjectStorage`，该无鉴权 PUT/GET 就会暴露对象写入与同源返回风险。
+
+### 修复记录
+
+- 2026-06-11：已将 `/api/media/local-objects/:encodedObjectKey` 限制为仅在非 production 且存储实例为 `LocalMediaObjectStorage` 时注册，并新增回归测试覆盖“有 `getMediaObject` 的非本地存储实现不得暴露该路由”。该修复保留本地开发上传/下载能力，同时移除宽泛能力判断带来的未来生产暴露面。
 
 ---
 
