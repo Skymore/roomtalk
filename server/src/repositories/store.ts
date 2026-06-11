@@ -143,8 +143,8 @@ export interface RoomPresenceStore {
 }
 
 export interface RoomMessageCacheStore {
-  readCachedRoomMessages(roomId: string): Promise<Message[] | null>;
-  writeRoomMessagesCache(roomId: string, messages: Message[]): Promise<void>;
+  readCachedRoomMessages(roomId: string, messageVersion?: number): Promise<Message[] | null>;
+  writeRoomMessagesCache(roomId: string, messages: Message[], messageVersion?: number): Promise<void>;
   invalidateRoomMessagesCache(roomId: string): Promise<void>;
   invalidateAllRoomMessagesCaches(): Promise<void>;
 }
@@ -257,11 +257,17 @@ export class CompositeRoomStore implements RoomStore {
   }
 
   async readMessagesByRoom(roomId: string) {
+    let cacheMessageVersion: number | undefined;
+
     if (this.messageCacheStore) {
       try {
-        const cachedMessages = await this.messageCacheStore.readCachedRoomMessages(roomId);
-        if (cachedMessages) {
-          return cachedMessages;
+        const room = await this.durableStore.getRoomById(roomId);
+        if (typeof room?.messageVersion === 'number' && Number.isFinite(room.messageVersion)) {
+          cacheMessageVersion = room.messageVersion;
+          const cachedMessages = await this.messageCacheStore.readCachedRoomMessages(roomId, cacheMessageVersion);
+          if (cachedMessages) {
+            return cachedMessages;
+          }
         }
       } catch {
         // Cache failures must fall through to durable reads.
@@ -269,8 +275,13 @@ export class CompositeRoomStore implements RoomStore {
     }
 
     const messages = await this.durableStore.readMessagesByRoom(roomId);
-    if (this.messageCacheStore) {
-      await this.ignoreCacheFailure(() => this.messageCacheStore!.writeRoomMessagesCache(roomId, messages));
+    if (this.messageCacheStore && cacheMessageVersion !== undefined) {
+      await this.ignoreCacheFailure(async () => {
+        const room = await this.durableStore.getRoomById(roomId);
+        if (room?.messageVersion === cacheMessageVersion) {
+          await this.messageCacheStore!.writeRoomMessagesCache(roomId, messages, cacheMessageVersion);
+        }
+      });
     }
     return messages;
   }
