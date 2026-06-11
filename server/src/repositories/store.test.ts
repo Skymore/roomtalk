@@ -145,6 +145,9 @@ const durableMediaAssetStubs = () => ({
   async readMediaAssetsByRoom(roomId: string) {
     return [mediaAsset({ roomId })];
   },
+  async readMediaHistoryPageByRoom(roomId: string) {
+    return { assets: [mediaAsset({ roomId })], hasMore: false };
+  },
   async deleteMediaAsset() {},
 });
 
@@ -207,6 +210,7 @@ describe('CompositeRoomStore', () => {
       async getMediaAsset(assetId: string) { calls.push('durable.getMediaAsset'); return mediaAsset({ id: assetId }); },
       async getMediaAssetByMessageId(messageId: string) { calls.push('durable.getMediaAssetByMessageId'); return mediaAsset({ messageId }); },
       async readMediaAssetsByRoom(roomId: string) { calls.push('durable.readMediaAssetsByRoom'); return [mediaAsset({ roomId })]; },
+      async readMediaHistoryPageByRoom(roomId: string) { calls.push('durable.readMediaHistoryPageByRoom'); return { assets: [mediaAsset({ roomId })], hasMore: false }; },
       async deleteMediaAsset(_assetId: string) { calls.push('durable.deleteMediaAsset'); },
       async readRoomAICost(roomId: string) { calls.push('durable.readRoomAICost'); return { roomId, currency: 'USD', totalUsd: 1 }; },
       async incrementRoomAICost(roomId: string, _cost: AICost | null) { calls.push('durable.incrementRoomAICost'); return { roomId, currency: 'USD', totalUsd: 2 }; },
@@ -293,6 +297,7 @@ describe('CompositeRoomStore', () => {
     assert.deepEqual(await store.getMediaAsset('asset-1'), mediaAsset());
     assert.deepEqual(await store.getMediaAssetByMessageId('message-1'), mediaAsset());
     assert.deepEqual(await store.readMediaAssetsByRoom('room-1'), [mediaAsset()]);
+    assert.deepEqual(await store.readMediaHistoryPageByRoom('room-1'), { assets: [mediaAsset()], hasMore: false });
     await store.deleteMediaAsset('asset-1');
     assert.deepEqual(await store.readRoomAICost('room-1'), { roomId: 'room-1', currency: 'USD', totalUsd: 1 });
     assert.deepEqual(await store.incrementRoomAICost('room-1', cost()), { roomId: 'room-1', currency: 'USD', totalUsd: 2 });
@@ -348,6 +353,7 @@ describe('CompositeRoomStore', () => {
       'durable.getMediaAsset',
       'durable.getMediaAssetByMessageId',
       'durable.readMediaAssetsByRoom',
+      'durable.readMediaHistoryPageByRoom',
       'durable.deleteMediaAsset',
       'durable.readRoomAICost',
       'durable.incrementRoomAICost',

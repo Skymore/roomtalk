@@ -95,6 +95,8 @@ export const POSTGRES_SCHEMA_SQL = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_media_assets_room
     ON media_assets (room_id, created_at ASC)`,
+  `CREATE INDEX IF NOT EXISTS idx_media_assets_history
+    ON media_assets (room_id, kind, created_at DESC, id DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_media_assets_message
     ON media_assets (message_id)`,
   `CREATE TABLE IF NOT EXISTS room_ai_cost_totals (

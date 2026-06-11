@@ -37,6 +37,23 @@ export interface MediaMessageAppendResult {
   asset: MediaAsset;
 }
 
+export interface MediaHistoryPageCursor {
+  createdAt: string;
+  assetId: string;
+}
+
+export interface MediaHistoryPageOptions {
+  limit?: number;
+  before?: MediaHistoryPageCursor | null;
+  since?: string;
+  kinds?: Array<MediaAsset['kind']>;
+}
+
+export interface MediaHistoryPage {
+  assets: MediaAsset[];
+  hasMore: boolean;
+}
+
 export interface RoomSettingsUpdate {
   passwordHash?: string | null;
   postingSchedule?: RoomPostingSchedule | null;
@@ -61,6 +78,7 @@ export interface DurableRoomStore {
   getMediaAsset(assetId: string): Promise<MediaAsset | null>;
   getMediaAssetByMessageId(messageId: string): Promise<MediaAsset | null>;
   readMediaAssetsByRoom(roomId: string): Promise<MediaAsset[]>;
+  readMediaHistoryPageByRoom(roomId: string, options?: MediaHistoryPageOptions): Promise<MediaHistoryPage>;
   deleteMediaAsset(assetId: string): Promise<void>;
   readRoomAICost(roomId: string): Promise<RoomAICostTotal>;
   incrementRoomAICost(roomId: string, cost: AICost | null): Promise<RoomAICostTotal>;
@@ -267,6 +285,10 @@ export class CompositeRoomStore implements RoomStore {
 
   readMediaAssetsByRoom(roomId: string) {
     return this.durableStore.readMediaAssetsByRoom(roomId);
+  }
+
+  readMediaHistoryPageByRoom(roomId: string, options?: MediaHistoryPageOptions) {
+    return this.durableStore.readMediaHistoryPageByRoom(roomId, options);
   }
 
   deleteMediaAsset(assetId: string) {

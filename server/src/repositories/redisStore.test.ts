@@ -10,6 +10,7 @@ class MemoryRedis {
   hashes = new Map<string, Map<string, string>>();
   lists = new Map<string, string[]>();
   sets = new Map<string, Set<string>>();
+  zsets = new Map<string, Map<string, number>>();
   strings = new Map<string, string>();
 
   private hash(key: string) {
@@ -20,6 +21,11 @@ class MemoryRedis {
   private set(key: string) {
     if (!this.sets.has(key)) this.sets.set(key, new Set());
     return this.sets.get(key)!;
+  }
+
+  private zset(key: string) {
+    if (!this.zsets.has(key)) this.zsets.set(key, new Map());
+    return this.zsets.get(key)!;
   }
 
   private updateRoomActivity(roomId: string, lastActivityAt: string) {
@@ -87,6 +93,7 @@ class MemoryRedis {
         this.hashes.delete(item),
         this.lists.delete(item),
         this.sets.delete(item),
+        this.zsets.delete(item),
         this.strings.delete(item),
       ].some(Boolean);
       if (deleted) {
@@ -110,6 +117,44 @@ class MemoryRedis {
 
   async sCard(key: string) {
     return this.set(key).size;
+  }
+
+  async zAdd(key: string, memberOrMembers: { score: number; value: string } | Array<{ score: number; value: string }>) {
+    const members = Array.isArray(memberOrMembers) ? memberOrMembers : [memberOrMembers];
+    const zset = this.zset(key);
+    for (const member of members) {
+      zset.set(member.value, member.score);
+    }
+    return members.length;
+  }
+
+  async zCard(key: string) {
+    return this.zset(key).size;
+  }
+
+  async zRange(key: string, start: number | string, stop: number | string, options?: { REV?: true; LIMIT?: { offset: number; count: number } }) {
+    const toScore = (value: number | string) => {
+      if (value === '+inf') return Number.POSITIVE_INFINITY;
+      if (value === '-inf') return Number.NEGATIVE_INFINITY;
+      return Number(value);
+    };
+    const startScore = toScore(start);
+    const stopScore = toScore(stop);
+    const minScore = Math.min(startScore, stopScore);
+    const maxScore = Math.max(startScore, stopScore);
+    const sorted = Array.from(this.zset(key).entries())
+      .filter(([, score]) => score >= minScore && score <= maxScore)
+      .sort((first, second) => options?.REV
+        ? second[1] - first[1] || second[0].localeCompare(first[0])
+        : first[1] - second[1] || first[0].localeCompare(second[0]))
+      .map(([value]) => value);
+    const offset = options?.LIMIT?.offset ?? 0;
+    const count = options?.LIMIT?.count ?? sorted.length;
+    return sorted.slice(offset, offset + count);
+  }
+
+  async zRem(key: string, value: string) {
+    return this.zset(key).delete(value) ? 1 : 0;
   }
 
   async get(key: string) {
@@ -147,8 +192,8 @@ class MemoryRedis {
     }
 
     if (script.includes("redis.call('HSET', KEYS[3]")) {
-      const [, messageKey, mediaAssetsKey, roomMediaAssetsKey] = options.keys;
-      const [roomId, messagePayload, lastActivityAt, assetId, assetPayload] = options.arguments;
+      const [, messageKey, mediaAssetsKey, roomMediaAssetsKey, roomMediaAssetsTimelineKey] = options.keys;
+      const [roomId, messagePayload, lastActivityAt, assetId, assetPayload, assetScore] = options.arguments;
       const updatedRoom = this.updateRoomActivity(roomId, lastActivityAt);
       if (!updatedRoom) {
         return [0, ''];
@@ -158,6 +203,7 @@ class MemoryRedis {
       this.lists.set(messageKey, list);
       this.hash(mediaAssetsKey).set(assetId, assetPayload);
       this.set(roomMediaAssetsKey).add(assetId);
+      this.zset(roomMediaAssetsTimelineKey).set(assetId, Number(assetScore));
       return [1, JSON.stringify(updatedRoom)];
     }
 
@@ -240,6 +286,7 @@ class MemoryRedis {
     this.hashes.clear();
     this.lists.clear();
     this.sets.clear();
+    this.zsets.clear();
     this.strings.clear();
   }
 
@@ -251,6 +298,7 @@ class MemoryRedis {
       ...this.hashes.keys(),
       ...this.lists.keys(),
       ...this.sets.keys(),
+      ...this.zsets.keys(),
       ...this.strings.keys(),
     ]) {
       if (matcher.test(key)) {
@@ -266,6 +314,7 @@ class MemoryRedis {
       ...this.hashes.keys(),
       ...this.lists.keys(),
       ...this.sets.keys(),
+      ...this.zsets.keys(),
       ...this.strings.keys(),
     ].filter(key => matcher.test(key));
   }
@@ -569,6 +618,65 @@ describe('RedisStore', () => {
     await store.deleteMediaAsset('asset-1');
     assert.equal(await store.getMediaAsset('asset-1'), null);
     assert.deepEqual(await store.readMediaAssetsByRoom('room-1'), []);
+  });
+
+  it('reads media history pages from the room media timeline', async () => {
+    const { store } = createStore();
+    const imageNew = mediaAsset({ id: 'image-new', createdAt: '2026-06-03T00:00:00.000Z' });
+    const videoNew = mediaAsset({
+      id: 'video-new',
+      kind: 'video',
+      mimeType: 'video/mp4',
+      objectKey: 'rooms/room-1/media/video/video-new',
+      createdAt: '2026-06-02T00:00:00.000Z',
+    });
+    const audioHidden = mediaAsset({
+      id: 'audio-hidden',
+      kind: 'audio',
+      mimeType: 'audio/webm',
+      objectKey: 'rooms/room-1/media/audio/audio-hidden',
+      createdAt: '2026-06-04T00:00:00.000Z',
+    });
+    const oldHidden = mediaAsset({ id: 'old-hidden', createdAt: '2025-01-01T00:00:00.000Z' });
+
+    await store.saveMediaAsset(imageNew);
+    await store.saveMediaAsset(videoNew);
+    await store.saveMediaAsset(audioHidden);
+    await store.saveMediaAsset(oldHidden);
+
+    const firstPage = await store.readMediaHistoryPageByRoom('room-1', {
+      limit: 1,
+      since: '2026-01-01T00:00:00.000Z',
+      kinds: ['image', 'video'],
+    });
+    assert.deepEqual(firstPage.assets.map(asset => asset.id), ['image-new']);
+    assert.equal(firstPage.hasMore, true);
+
+    const secondPage = await store.readMediaHistoryPageByRoom('room-1', {
+      limit: 10,
+      since: '2026-01-01T00:00:00.000Z',
+      before: { createdAt: imageNew.createdAt, assetId: imageNew.id },
+      kinds: ['image', 'video'],
+    });
+    assert.deepEqual(secondPage.assets.map(asset => asset.id), ['video-new']);
+    assert.equal(secondPage.hasMore, false);
+  });
+
+  it('backfills missing Redis media timeline entries from legacy room asset sets', async () => {
+    const { redis, store } = createStore();
+    const legacyAsset = mediaAsset({ id: 'legacy-image', createdAt: '2026-06-03T00:00:00.000Z' });
+
+    await redis.hSet('media_assets', legacyAsset.id, JSON.stringify(legacyAsset));
+    await redis.sAdd('room:room-1:media_assets', legacyAsset.id);
+
+    const page = await store.readMediaHistoryPageByRoom('room-1', {
+      limit: 10,
+      since: '2026-01-01T00:00:00.000Z',
+      kinds: ['image', 'video'],
+    });
+
+    assert.deepEqual(page.assets, [legacyAsset]);
+    assert.equal(page.hasMore, false);
   });
 
   it('replaces legacy base64 image messages with media asset metadata', async () => {

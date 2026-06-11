@@ -389,6 +389,34 @@ describe('PostgresStore', () => {
       { rows: [mediaAssetRow], assertCall: call => assert.match(call.sql, /WHERE id = \$1/) },
       { rows: [mediaAssetRow], assertCall: call => assert.match(call.sql, /WHERE message_id = \$1/) },
       { rows: [mediaAssetRow], assertCall: call => assert.match(call.sql, /WHERE room_id = \$1/) },
+      {
+        rows: [
+          mediaAssetRow,
+          {
+            ...mediaAssetRow,
+            id: 'asset-older',
+            object_key: 'rooms/room-1/media/video/asset-older',
+            kind: 'video',
+            mime_type: 'video/mp4',
+            created_at: '2026-05-02T00:00:00.000Z',
+          },
+        ],
+        assertCall(call) {
+          assert.match(call.sql, /kind = ANY\(\$2::text\[\]\)/);
+          assert.match(call.sql, /created_at >= \$3/);
+          assert.match(call.sql, /created_at < \$4 OR \(created_at = \$4 AND id < \$5\)/);
+          assert.match(call.sql, /ORDER BY created_at DESC, id DESC/);
+          assert.match(call.sql, /LIMIT \$6/);
+          assert.deepEqual(call.params, [
+            'room-1',
+            ['image', 'video'],
+            '2026-01-01T00:00:00.000Z',
+            '2026-06-01T00:00:00.000Z',
+            'asset-z',
+            2,
+          ]);
+        },
+      },
       { rows: [mediaMessageRow] },
       { rows: [mediaAssetRow] },
       { rowCount: 1, assertCall: call => assert.match(call.sql, /DELETE FROM media_assets WHERE id = \$1/) },
@@ -412,6 +440,15 @@ describe('PostgresStore', () => {
     assert.deepEqual(await store.getMediaAsset('asset-1'), asset);
     assert.deepEqual(await store.getMediaAssetByMessageId('media-message'), asset);
     assert.deepEqual(await store.readMediaAssetsByRoom('room-1'), [asset]);
+    assert.deepEqual(await store.readMediaHistoryPageByRoom('room-1', {
+      limit: 1,
+      since: '2026-01-01T00:00:00.000Z',
+      before: { createdAt: '2026-06-01T00:00:00.000Z', assetId: 'asset-z' },
+      kinds: ['image', 'video'],
+    }), {
+      assets: [asset],
+      hasMore: true,
+    });
     assert.deepEqual(await store.readMessagesByRoom('room-1'), [{
       id: 'media-message',
       clientId: 'client-1',

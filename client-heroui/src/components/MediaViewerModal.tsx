@@ -58,7 +58,6 @@ const HISTORY_PAGE_SIZE = 36;
 const SWIPE_THRESHOLD = 48;
 const SWIPE_DOWN_THRESHOLD = 64;
 const TAP_THRESHOLD = 8;
-const MAX_DRAG_OFFSET_RATIO = 0.42;
 
 const mediaFileExtensions: Record<string, string> = {
   "image/jpeg": "jpg",
@@ -216,9 +215,12 @@ const MediaStage: React.FC<MediaStageProps> = ({
   className = "",
 }) => {
   const pointerStartRef = React.useRef<{ x: number; y: number } | null>(null);
+  const activePointerIdRef = React.useRef<number | null>(null);
   const pointerSequenceRef = React.useRef(false);
   const suppressClickRef = React.useRef(false);
   const stageRef = React.useRef<HTMLElement | null>(null);
+  const trackRef = React.useRef<HTMLDivElement | null>(null);
+  const [trackWidth, setTrackWidth] = React.useState(0);
   const [dragOffset, setDragOffset] = React.useState(0);
   const [isDragging, setIsDragging] = React.useState(false);
   const isHistoryPreview = variant === "historyPreview";
@@ -230,22 +232,55 @@ const MediaStage: React.FC<MediaStageProps> = ({
     target instanceof Element && Boolean(target.closest("button,a,input,textarea,select,[role='button']"))
   );
 
-  const clampDragOffset = (offset: number) => {
-    const stageWidth = stageRef.current?.clientWidth || window.innerWidth || 1;
-    const maxOffset = stageWidth * MAX_DRAG_OFFSET_RATIO;
-    return Math.max(-maxOffset, Math.min(maxOffset, offset));
+  const getCurrentTrackWidth = () => (
+    trackRef.current?.clientWidth ||
+    stageRef.current?.clientWidth ||
+    (typeof window !== "undefined" ? window.innerWidth : 1) ||
+    1
+  );
+
+  React.useLayoutEffect(() => {
+    const updateTrackWidth = () => {
+      setTrackWidth(getCurrentTrackWidth());
+    };
+
+    updateTrackWidth();
+    const observedElement = trackRef.current || stageRef.current;
+    if (!observedElement || typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateTrackWidth);
+      return () => window.removeEventListener("resize", updateTrackWidth);
+    }
+
+    const observer = new ResizeObserver(updateTrackWidth);
+    observer.observe(observedElement);
+    return () => observer.disconnect();
+  }, []);
+
+  const getBoundaryResistedOffset = (offset: number) => {
+    const isPastPreviousEdge = offset > 0 && !canGoPrevious;
+    const isPastNextEdge = offset < 0 && !canGoNext;
+    if (!isPastPreviousEdge && !isPastNextEdge) {
+      return offset;
+    }
+
+    const width = getCurrentTrackWidth();
+    const distance = Math.abs(offset);
+    const resisted = width * (1 - (1 / ((distance / width) * 0.55 + 1)));
+    return Math.sign(offset) * Math.min(resisted, width * 0.45);
   };
 
   const beginGesture = (x: number, y: number, target: EventTarget) => {
     if (isInteractiveTarget(target)) {
       pointerStartRef.current = null;
-      return;
+      return false;
     }
 
     suppressClickRef.current = false;
     pointerStartRef.current = { x, y };
+    setTrackWidth(getCurrentTrackWidth());
     setIsDragging(true);
     setDragOffset(0);
+    return true;
   };
 
   const updateGesture = (x: number, y: number) => {
@@ -256,14 +291,17 @@ const MediaStage: React.FC<MediaStageProps> = ({
     const deltaY = y - start.y;
     const absX = Math.abs(deltaX);
     const absY = Math.abs(deltaY);
-    if (absX <= TAP_THRESHOLD || absX < absY) {
+    if (absX <= TAP_THRESHOLD && absY <= TAP_THRESHOLD) {
       setDragOffset(0);
       return;
     }
 
-    const shouldResist = (deltaX > 0 && !canGoPrevious) || (deltaX < 0 && !canGoNext);
-    const offset = shouldResist ? deltaX * 0.28 : deltaX;
-    setDragOffset(clampDragOffset(offset));
+    if (absY > absX * 1.25) {
+      setDragOffset(0);
+      return;
+    }
+
+    setDragOffset(getBoundaryResistedOffset(deltaX));
   };
 
   const finishGesture = (x: number, y: number) => {
@@ -277,8 +315,9 @@ const MediaStage: React.FC<MediaStageProps> = ({
     const deltaY = y - start.y;
     const absX = Math.abs(deltaX);
     const absY = Math.abs(deltaY);
+    const swipeThreshold = Math.min(96, Math.max(SWIPE_THRESHOLD, getCurrentTrackWidth() * 0.18));
 
-    if (absX > SWIPE_THRESHOLD && absX > absY * 1.2) {
+    if (absX > swipeThreshold && absX > absY * 1.2) {
       suppressClickRef.current = true;
       if (deltaX < 0 && canGoNext) {
         onNext();
@@ -307,7 +346,10 @@ const MediaStage: React.FC<MediaStageProps> = ({
     }
 
     pointerSequenceRef.current = true;
-    beginGesture(event.clientX, event.clientY, target);
+    if (beginGesture(event.clientX, event.clientY, target)) {
+      activePointerIdRef.current = event.pointerId;
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    }
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLElement>) => {
@@ -316,13 +358,21 @@ const MediaStage: React.FC<MediaStageProps> = ({
 
   const handlePointerUp = (event: React.PointerEvent<HTMLElement>) => {
     finishGesture(event.clientX, event.clientY);
+    if (activePointerIdRef.current !== null) {
+      event.currentTarget.releasePointerCapture?.(activePointerIdRef.current);
+      activePointerIdRef.current = null;
+    }
     window.setTimeout(() => {
       pointerSequenceRef.current = false;
     }, 350);
   };
 
-  const handlePointerCancel = () => {
+  const handlePointerCancel = (event: React.PointerEvent<HTMLElement>) => {
     pointerStartRef.current = null;
+    if (activePointerIdRef.current !== null) {
+      event.currentTarget.releasePointerCapture?.(activePointerIdRef.current);
+      activePointerIdRef.current = null;
+    }
     setIsDragging(false);
     setDragOffset(0);
     window.setTimeout(() => {
@@ -357,6 +407,9 @@ const MediaStage: React.FC<MediaStageProps> = ({
     onTapMedia();
   };
 
+  const slideWidth = isDragging ? getCurrentTrackWidth() : (trackWidth || getCurrentTrackWidth());
+  const trackTranslateX = (-safeActiveIndex * slideWidth) + dragOffset;
+
   return (
     <main
       ref={stageRef}
@@ -372,9 +425,10 @@ const MediaStage: React.FC<MediaStageProps> = ({
       onMouseUp={handleMouseUp}
     >
       <div
+        ref={trackRef}
         data-testid="media-carousel-track"
         className={`flex h-full w-full will-change-transform ${isDragging ? "" : "transition-transform duration-300 ease-out"}`}
-        style={{ transform: `translate3d(calc(${-safeActiveIndex * 100}% + ${dragOffset}px), 0, 0)` }}
+        style={{ transform: `translate3d(${trackTranslateX}px, 0, 0)` }}
       >
         {trackItems.map((item, index) => {
           const isActive = index === safeActiveIndex;
