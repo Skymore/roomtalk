@@ -1014,9 +1014,9 @@
 | 5 | AI 上下文 1000 条无 token 预算 | ✅ 已修复 | `selectAIHistory` 现先按消息数再按 `AI_MAX_CONTEXT_TOKENS` 估算预算裁剪，默认 32000 token，并保留最新消息 |
 | 6 | 媒体 presign PUT 无频控、未 complete 对象无 GC | ✅ 已修复 | 创建上传 URL 现按 clientId/IP 限流，并把 pending upload 写入 durable store；complete 必须匹配 pending 元数据，过期 pending 会被后台 claim 后 best-effort 删除对象 |
 | 7 | Redis 路径房间字段合并非原子 | ✅ 已修复 | `updateRoomName`/`updateRoomSettings` 现分别走 Lua 原子读-校验-字段合并-写回脚本，不再用 TS 层 `getRoomById` → 整房间覆盖 |
-| 8 | 其余中等遗留（`bf9ada3`/`42e65e4`/`a0b8679`/`48dafbf`/`02cd7cf`/`9d30c79`） | 部分修复 | `bf9ada3`、`42e65e4`、`a0b8679`、`48dafbf`、`02cd7cf` 已修复；其余 1 项仍需逐条复核 |
+| 8 | 其余中等遗留（`bf9ada3`/`42e65e4`/`a0b8679`/`48dafbf`/`02cd7cf`/`9d30c79`） | ✅ 已修复 | `bf9ada3`、`42e65e4`、`a0b8679`、`48dafbf`、`02cd7cf`、`9d30c79` 均已修复并补回归测试 |
 
-第 1–7 条已在本轮跟进中修复并补充回归测试；第 8 条已开始逐项复核并修复，剩余 1 项继续跟进。
+第 1–8 条已在本轮跟进中修复并补充回归测试。
 
 ### 核验中发现的、本仓库特有的新增隐患（不属于原清单）
 
@@ -1039,6 +1039,7 @@
 - 2026-06-11：已将房间消息 Redis 缓存改为随 `messageVersion` 写入和读取校验：版本不匹配或旧版数组 payload 会被丢弃，`CompositeRoomStore` 仅在 durable 读取前后的房间消息版本一致时回填缓存，避免并发写入后旧快照晚到覆盖缓存达 TTL 窗口；新增 Redis payload 校验与读中版本变化不回填的回归测试。
 - 2026-06-11：已为 AI streaming placeholder 增加服务端内部 `aiStreamOwnerId` 恢复标记；启动恢复现在只处理当前实例 owner 遗留的 streaming 消息，不再全局把其它实例正在生成的 AI 流标为 error。Postgres 使用专用 `ai_stream_owner_id` 列且不映射到公开 Message，Redis 读取历史/缓存时会剥离内部字段；新增测试覆盖 owner 过滤恢复与 socket 广播不泄露内部 owner。
 - 2026-06-11：已拆分 `send_message_and_ask_ai` ack 语义：用户消息 append 成功后，即使 AI placeholder 启动失败也返回 `success: true`、`userMessage`、`aiStarted: false` 和 `aiError`，前端 socket wrapper 不再因缺少 `aiMessageId` reject，MessageInput 会确认已保存的乐观消息而不是标记 failed；新增服务端、socket wrapper 和组件回归测试覆盖该部分成功场景。
+- 2026-06-11：已在 PostgreSQL 启动 DDL 收窄 `room_messages.message_type` CHECK 前，先将旧版 `image`/`voice`/`audio`/`video` 行归一为 `media`；新增 DDL 顺序测试确保先 drop 旧约束、再归一化遗留行、最后 add 新约束，避免含遗留媒体行的环境启动失败。
 
 ---
 
