@@ -32,6 +32,15 @@ const MEDIA_HISTORY_DEFAULT_LIMIT = 40;
 const MEDIA_HISTORY_MAX_LIMIT = 80;
 const MEDIA_HISTORY_MONTH_WINDOW = 6;
 const MEDIA_HISTORY_KINDS: MediaKind[] = ['image', 'video'];
+const AI_ROLE_DRAFT_RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
+const AI_ROLE_DRAFT_RATE_LIMIT_MAX_REQUESTS = 5;
+
+type RateLimitEntry = {
+  windowStartMs: number;
+  count: number;
+};
+
+const aiRoleDraftRateLimits = new Map<string, RateLimitEntry>();
 
 const isMediaKind = (kind: unknown): kind is MediaKind => (
   kind === 'image' || kind === 'audio' || kind === 'video'
@@ -97,6 +106,22 @@ const parseMediaHistoryLimit = (value: unknown) => {
     return MEDIA_HISTORY_DEFAULT_LIMIT;
   }
   return Math.min(Math.floor(parsed), MEDIA_HISTORY_MAX_LIMIT);
+};
+
+const consumeAIRoleDraftRateLimit = (clientId: string, ip: string | undefined, nowMs = Date.now()) => {
+  const key = `${clientId}:${ip || 'unknown'}`;
+  const current = aiRoleDraftRateLimits.get(key);
+  if (!current || nowMs - current.windowStartMs >= AI_ROLE_DRAFT_RATE_LIMIT_WINDOW_MS) {
+    aiRoleDraftRateLimits.set(key, { windowStartMs: nowMs, count: 1 });
+    return true;
+  }
+
+  if (current.count >= AI_ROLE_DRAFT_RATE_LIMIT_MAX_REQUESTS) {
+    return false;
+  }
+
+  current.count += 1;
+  return true;
 };
 
 export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
@@ -550,8 +575,23 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
 
   app.post('/api/ai-role-draft', async (req: Request, res: Response) => {
     const idea = typeof req.body?.idea === 'string' ? req.body.idea.trim() : '';
+    const clientId = getBodyClientId(req);
     if (!idea || idea.length > MAX_AI_ROLE_IDEA_LENGTH) {
       return res.status(400).json({ error: 'Role idea is required and must be 2000 characters or fewer' });
+    }
+    if (!clientId) {
+      return res.status(400).json({ error: 'clientId is required' });
+    }
+
+    const rooms = await store.readRoomsByUser(clientId);
+    if (rooms.length === 0) {
+      routeLogger.warn('Unauthorized AI role draft request', { endpoint: 'POST /api/ai-role-draft', clientId, ip: req.ip });
+      return res.status(403).json({ error: 'Not authorized to generate AI role drafts' });
+    }
+
+    if (!consumeAIRoleDraftRateLimit(clientId, req.ip)) {
+      routeLogger.warn('Rate limited AI role draft request', { endpoint: 'POST /api/ai-role-draft', clientId, ip: req.ip });
+      return res.status(429).json({ error: 'Too many AI role draft requests. Please try again later.' });
     }
 
     try {

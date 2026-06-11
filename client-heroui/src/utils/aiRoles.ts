@@ -44,6 +44,17 @@ const getApiBaseUrl = () => {
   return !socketUrl || socketUrl === "/" ? "" : socketUrl.replace(/\/$/, "");
 };
 
+const getClientIdForApi = () => {
+  const existing = localStorage.getItem('clientId');
+  if (existing) {
+    return existing;
+  }
+
+  const generated = globalThis.crypto?.randomUUID?.() || `client-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  localStorage.setItem('clientId', generated);
+  return generated;
+};
+
 const defaultRoleKeys: Record<string, { nameKey: string; promptKey: string }> = {
   default: { nameKey: "roleAssistantName", promptKey: "roleAssistantPrompt" },
   coder: { nameKey: "roleCodeExpertName", promptKey: "roleCodeExpertPrompt" },
@@ -108,7 +119,7 @@ export const generateAIRoleDraft = async (idea: string): Promise<AIRoleDraft> =>
   const response = await fetch(`${getApiBaseUrl()}/api/ai-role-draft`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ idea }),
+    body: JSON.stringify({ idea, clientId: getClientIdForApi() }),
   });
 
   if (!response.ok) {
