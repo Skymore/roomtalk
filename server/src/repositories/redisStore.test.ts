@@ -241,6 +241,22 @@ class MemoryRedis {
       return [1, encoded];
     }
 
+    if (script.includes('local clientId = ARGV[1]')) {
+      const [roomMembersKey, clientSocketsKey] = options.keys;
+      const [clientId, socketId, isJoining] = options.arguments;
+      if (isJoining === '1') {
+        this.set(clientSocketsKey).add(socketId);
+        this.set(roomMembersKey).add(clientId);
+      } else {
+        this.set(clientSocketsKey).delete(socketId);
+        if (this.set(clientSocketsKey).size === 0) {
+          await this.del(clientSocketsKey);
+          this.set(roomMembersKey).delete(clientId);
+        }
+      }
+      return this.set(roomMembersKey).size;
+    }
+
     if (script.includes("redis.call('HSET', KEYS[3]")) {
       const [, messageKey, mediaAssetsKey, roomMediaAssetsKey, roomMediaAssetsTimelineKey] = options.keys;
       const [roomId, messagePayload, lastActivityAt, assetId, assetPayload, assetScore] = options.arguments;
@@ -420,6 +436,15 @@ class ConcurrentRoomMutationRedis extends MemoryRedis {
     }
 
     return super.eval(script, options);
+  }
+}
+
+class FailingMemberSocketCountRedis extends MemoryRedis {
+  async sCard(key: string) {
+    if (key.includes(':member_sockets:')) {
+      throw new Error('member socket counts must be updated atomically');
+    }
+    return super.sCard(key);
   }
 }
 
@@ -939,6 +964,17 @@ describe('RedisStore', () => {
     assert.deepEqual(await store.getUserRooms('socket-1'), ['room-1', 'room-2']);
     await store.storeUserRooms('socket-1', []);
     assert.deepEqual(await store.getUserRooms('socket-1'), []);
+  });
+
+  it('updates per-socket room membership without non-atomic socket count reads', async () => {
+    const redis = new FailingMemberSocketCountRedis();
+    const store = new RedisStore(redis as any, logger as any);
+
+    assert.equal(await store.updateRoomMemberCount('room-1', 'client-1', 'socket-1', true), 1);
+    assert.equal(await store.updateRoomMemberCount('room-1', 'client-1', 'socket-2', true), 1);
+    assert.equal(await store.updateRoomMemberCount('room-1', 'client-1', 'socket-1', false), 1);
+    assert.deepEqual(await redis.sMembers('room:room-1:member_sockets:client-1'), ['socket-2']);
+    assert.equal(await store.getRoomMemberCount('room-1'), 1);
   });
 
   it('clears realtime room member state without deleting persistent room members', async () => {
