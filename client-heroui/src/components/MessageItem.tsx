@@ -42,6 +42,23 @@ export const preloadMarkdownContent = () => {
   void importMarkdownContent();
 };
 
+const VIDEO_PREVIEW_TIME_FRAGMENT = "t=0.001";
+
+const getVideoPreviewUrl = (url: string): string => {
+  const hashIndex = url.indexOf("#");
+  if (hashIndex === -1) {
+    return `${url}#${VIDEO_PREVIEW_TIME_FRAGMENT}`;
+  }
+
+  const baseUrl = url.slice(0, hashIndex);
+  const hash = url.slice(hashIndex + 1);
+  if (!hash || hash.includes("t=")) {
+    return url;
+  }
+
+  return `${baseUrl}#${hash}&${VIDEO_PREVIEW_TIME_FRAGMENT}`;
+};
+
 // Helper to copy image to clipboard
 async function copyImageToClipboard(imageSource: string): Promise<boolean> {
   if (!imageSource.startsWith('data:image') && !imageSource.startsWith('http') && !imageSource.startsWith('/')) {
@@ -187,6 +204,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   };
 
   const canOpenMediaViewer = Boolean(signedMediaUrl && !mediaError && (isImage || isVideo));
+  const videoPreviewUrl = signedMediaUrl && isVideo ? getVideoPreviewUrl(signedMediaUrl) : null;
 
   const handleOpenMediaViewer = () => {
     if (canOpenMediaViewer) {
@@ -240,7 +258,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
             onClick={handleOpenMediaViewer}
           >
             <video
-              src={signedMediaUrl}
+              src={videoPreviewUrl || signedMediaUrl}
               className="pointer-events-none block max-h-[360px] max-w-full object-contain"
               preload="metadata"
               muted
