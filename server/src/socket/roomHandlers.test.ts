@@ -360,6 +360,22 @@ describe('room socket handlers', () => {
     assert.deepEqual(response, { success: false, error: 'Room ID is required' });
   });
 
+  it('rejects get_room_members without room access', async () => {
+    const unregistered = createHarness(null);
+    let unregisteredResponse: unknown;
+    await unregistered.socket.invoke('get_room_members', { roomId: 'room-1' }, (result: unknown) => {
+      unregisteredResponse = result;
+    });
+    assert.deepEqual(unregisteredResponse, { success: false, error: 'You are not registered' });
+
+    const unauthorized = createHarness('client-2');
+    let unauthorizedResponse: unknown;
+    await unauthorized.socket.invoke('get_room_members', { roomId: 'room-1' }, (result: unknown) => {
+      unauthorizedResponse = result;
+    });
+    assert.deepEqual(unauthorizedResponse, { success: false, error: 'You are not authorized to access this room' });
+  });
+
   it('returns room role members with nicknames for owners', async () => {
     const { socket, store } = createHarness('client-1');
     store.members.add('room-1:client-2');
