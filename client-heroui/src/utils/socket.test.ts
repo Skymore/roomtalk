@@ -255,6 +255,8 @@ describe('socket message acknowledgement helpers', () => {
     ).resolves.toEqual({
       userMessage: savedMessage,
       aiMessageId: 'ai-message-1',
+      aiStarted: true,
+      aiError: undefined,
     });
 
     expect(socketMock.emit).toHaveBeenCalledWith(
@@ -272,6 +274,29 @@ describe('socket message acknowledgement helpers', () => {
       },
       expect.any(Function)
     );
+  });
+
+  it('resolves with the saved user message when AI startup fails after saving', async () => {
+    const savedMessage = message({ id: 'server-message-2', clientMessageId: 'client-message-2' });
+    socketMock.ackResponses.set('send_message_and_ask_ai', {
+      success: true,
+      userMessage: savedMessage,
+      aiStarted: false,
+      aiError: 'Unable to start a durable AI response',
+    });
+
+    await expect(
+      sendMessageAndAskAI({
+        roomId: 'room-1',
+        content: 'ask this',
+        clientMessageId: 'client-message-2',
+      })
+    ).resolves.toEqual({
+      userMessage: savedMessage,
+      aiMessageId: undefined,
+      aiStarted: false,
+      aiError: 'Unable to start a durable AI response',
+    });
   });
 
   it('returns signed media download URLs from the media API', async () => {

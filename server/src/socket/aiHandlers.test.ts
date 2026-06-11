@@ -444,7 +444,7 @@ describe('AI socket handlers', () => {
   it('saves a user message before starting AI with prepared history', async () => {
     const { io, socket, store } = createHarness();
 
-    let response: { success: boolean; userMessage?: Message; aiMessageId?: string } | undefined;
+    let response: { success: boolean; userMessage?: Message; aiMessageId?: string; aiStarted?: boolean; aiError?: string } | undefined;
     await socket.invoke('send_message_and_ask_ai', {
       roomId: 'room-1',
       content: 'fresh prompt',
@@ -452,7 +452,7 @@ describe('AI socket handlers', () => {
       avatar: { text: 'A', color: 'primary' },
       clientMessageId: 'client-message-1',
       model: selectedModel.id,
-    }, (ack: { success: boolean; userMessage?: Message; aiMessageId?: string }) => {
+    }, (ack: { success: boolean; userMessage?: Message; aiMessageId?: string; aiStarted?: boolean; aiError?: string }) => {
       response = ack;
     });
 
@@ -463,6 +463,7 @@ describe('AI socket handlers', () => {
     assert.equal(userMessage.clientMessageId, 'client-message-1');
     assert.equal(response?.userMessage, userMessage);
     assert.equal(response?.aiMessageId, store.upsertedMessages[0].id);
+    assert.equal(response?.aiStarted, true);
 
     const userMessageEventIndex = io.roomEmits.findIndex(event =>
       event.event === 'new_message' && (event.args[0] as Message).id === userMessage.id
@@ -474,6 +475,32 @@ describe('AI socket handlers', () => {
     assert.ok(aiPlaceholderEventIndex !== -1);
     assert.ok(userMessageEventIndex < aiPlaceholderEventIndex);
     assert.equal(store.upsertedMessages[1].content, 'E2E AI response to: fresh prompt');
+  });
+
+  it('acknowledges the saved user message when AI startup fails afterward', async () => {
+    const { io, socket, store } = createHarness({ rejectSaveNumbers: [1] });
+
+    let response: { success: boolean; userMessage?: Message; aiMessageId?: string; aiStarted?: boolean; aiError?: string } | undefined;
+    await socket.invoke('send_message_and_ask_ai', {
+      roomId: 'room-1',
+      content: 'fresh prompt',
+      clientMessageId: 'client-message-1',
+      model: selectedModel.id,
+    }, (ack: { success: boolean; userMessage?: Message; aiMessageId?: string; aiStarted?: boolean; aiError?: string }) => {
+      response = ack;
+    });
+
+    assert.equal(store.appendedMessages.length, 1);
+    assert.equal(store.upsertedMessages.length, 1);
+    assert.equal(response?.success, true);
+    assert.equal(response?.userMessage, store.appendedMessages[0]);
+    assert.equal(response?.aiStarted, false);
+    assert.equal(response?.aiMessageId, undefined);
+    assert.equal(response?.aiError, 'Unable to start a durable AI response');
+    assert.equal(io.roomEmits.some(event =>
+      event.event === 'new_message' && (event.args[0] as Message).id === store.appendedMessages[0].id
+    ), true);
+    assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_error'), true);
   });
 
   it('does not start AI when saving the user message fails', async () => {

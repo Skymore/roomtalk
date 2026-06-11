@@ -189,6 +189,7 @@ describe('MessageInput optimistic send flow', () => {
     socketMocks.sendMessageAndAskAI.mockResolvedValue({
       userMessage: message(),
       aiMessageId: 'ai-message-1',
+      aiStarted: true,
     });
     socketMocks.uploadMediaMessage.mockResolvedValue(message({
       id: 'audio-message',
@@ -263,6 +264,7 @@ describe('MessageInput optimistic send flow', () => {
     socketMocks.sendMessageAndAskAI.mockResolvedValue({
       userMessage: savedMessage,
       aiMessageId: 'ai-message-1',
+      aiStarted: true,
     });
 
     const { editor, props } = renderMessageInput();
@@ -298,6 +300,31 @@ describe('MessageInput optimistic send flow', () => {
         savedMessage
       );
     });
+  });
+
+  it('confirms the optimistic message when only the AI startup fails', async () => {
+    const savedMessage = message({ id: 'server-message-4', content: 'ask this' });
+    socketMocks.sendMessageAndAskAI.mockResolvedValue({
+      userMessage: savedMessage,
+      aiStarted: false,
+      aiError: 'Unable to start a durable AI response',
+    });
+
+    const { editor, props } = renderMessageInput();
+    setEditorText(editor, 'ask this');
+
+    fireEvent.click(screen.getByText('ask-ai'));
+
+    await waitFor(() => expect(socketMocks.sendMessageAndAskAI).toHaveBeenCalledTimes(1));
+    const optimisticMessage = (props.onOptimisticMessage as ReturnType<typeof vi.fn>).mock.calls[0][0] as Message;
+
+    await waitFor(() => {
+      expect(props.onOptimisticMessageSaved).toHaveBeenCalledWith(
+        optimisticMessage.clientMessageId,
+        savedMessage
+      );
+    });
+    expect(props.onOptimisticMessageFailed).not.toHaveBeenCalled();
   });
 
   it('keeps empty Ask AI requests on the existing ask_ai event', async () => {
