@@ -186,6 +186,52 @@ class MemoryRedis {
       return encoded;
     }
 
+    if (script.includes('local passwordMode = ARGV[3]')) {
+      const [roomId, updatedAt, passwordMode, passwordHash, postingScheduleMode, postingScheduleJson] = options.arguments;
+      const roomJson = this.hash('rooms').get(roomId);
+      if (!roomJson) return '';
+      const room = JSON.parse(roomJson);
+      if (passwordMode === 'set') {
+        this.strings.set(options.keys[1], passwordHash);
+        room.hasPassword = true;
+      } else if (passwordMode === 'clear') {
+        this.strings.delete(options.keys[1]);
+        delete room.hasPassword;
+      }
+      if (postingScheduleMode === 'set') {
+        room.postingSchedule = JSON.parse(postingScheduleJson);
+      } else if (postingScheduleMode === 'clear') {
+        delete room.postingSchedule;
+      }
+      const updatedRoom = {
+        ...room,
+        updatedAt,
+        roomVersion: (Number(room.roomVersion) || 0) + 1,
+      };
+      const encoded = JSON.stringify(updatedRoom);
+      this.hash('rooms').set(roomId, encoded);
+      return encoded;
+    }
+
+    if (script.includes('local expectedCreatorId = ARGV[2]')) {
+      const [roomId, creatorId, name, updatedAt] = options.arguments;
+      const roomJson = this.hash('rooms').get(roomId);
+      if (!roomJson) return [0, ''];
+      const room = JSON.parse(roomJson);
+      if (room.creatorId !== creatorId) {
+        return [2, room.creatorId || ''];
+      }
+      const updatedRoom = {
+        ...room,
+        name,
+        updatedAt,
+        roomVersion: (Number(room.roomVersion) || 0) + 1,
+      };
+      const encoded = JSON.stringify(updatedRoom);
+      this.hash('rooms').set(roomId, encoded);
+      return [1, encoded];
+    }
+
     if (script.includes("redis.call('HSET', KEYS[3]")) {
       const [, messageKey, mediaAssetsKey, roomMediaAssetsKey, roomMediaAssetsTimelineKey] = options.keys;
       const [roomId, messagePayload, lastActivityAt, assetId, assetPayload, assetScore] = options.arguments;
