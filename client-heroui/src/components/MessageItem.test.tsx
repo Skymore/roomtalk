@@ -299,7 +299,7 @@ describe('MessageItem replies', () => {
     const viewerImages = screen.getAllByAltText('sharedImage');
     expect(viewerImages.some(element => element.getAttribute('src') === 'https://signed.example/rooms/room-1/asset-2.webp')).toBe(true);
 
-    const historyPreviewImage = document.body.querySelector('[data-testid="history-media-stage"] img');
+    const historyPreviewImage = document.body.querySelector('[data-testid="history-media-stage"] [data-active-media="true"] img');
     expect(historyPreviewImage).toBeTruthy();
     fireEvent.click(historyPreviewImage as Element);
     await waitFor(() => {
@@ -312,6 +312,85 @@ describe('MessageItem replies', () => {
     fireEvent.click(within(historySection).getByLabelText('close'));
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: 'mediaViewer' })).toBeNull();
+    });
+  });
+
+  it('orders media history from oldest to newest so latest appears last', async () => {
+    getMediaDownloadUrlMock.mockResolvedValue({
+      url: 'https://signed.example/rooms/room-1/asset-current.webp',
+      expiresAt: '2026-05-03T10:15:00.000Z',
+    });
+    getRoomMediaHistoryMock.mockResolvedValue({
+      roomId: 'room-1',
+      items: [
+        {
+          assetId: 'asset-new',
+          messageId: 'media-message-new',
+          kind: 'image',
+          mimeType: 'image/webp',
+          byteSize: 456,
+          createdAt: '2026-06-01T10:00:00.000Z',
+          url: 'https://signed.example/rooms/room-1/asset-new.webp',
+        },
+        {
+          assetId: 'asset-middle',
+          messageId: 'media-message-middle',
+          kind: 'image',
+          mimeType: 'image/webp',
+          byteSize: 456,
+          createdAt: '2026-05-03T10:00:00.000Z',
+          url: 'https://signed.example/rooms/room-1/asset-middle.webp',
+        },
+        {
+          assetId: 'asset-old',
+          messageId: 'media-message-old',
+          kind: 'image',
+          mimeType: 'image/webp',
+          byteSize: 456,
+          createdAt: '2026-05-01T10:00:00.000Z',
+          url: 'https://signed.example/rooms/room-1/asset-old.webp',
+        },
+      ],
+      hasMore: false,
+      nextCursor: null,
+      windowMonths: 6,
+    });
+
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'image-history-order-message',
+          content: '',
+          messageType: 'media',
+          mimeType: 'image/webp',
+          mediaAsset: {
+            id: 'asset-current',
+            kind: 'image',
+            mimeType: 'image/webp',
+            byteSize: 123,
+          },
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByLabelText('openMediaViewer').length).toBeGreaterThan(0);
+    });
+    fireEvent.click(screen.getAllByLabelText('openMediaViewer')[0]);
+    fireEvent.click(screen.getByLabelText('openMediaHistory'));
+
+    await waitFor(() => {
+      const images = Array.from(document.body.querySelectorAll('[aria-label="openMediaItem"] img'));
+      expect(images.map(image => image.getAttribute('src'))).toEqual([
+        'https://signed.example/rooms/room-1/asset-old.webp',
+        'https://signed.example/rooms/room-1/asset-middle.webp',
+        'https://signed.example/rooms/room-1/asset-new.webp',
+      ]);
     });
   });
 
@@ -393,14 +472,14 @@ describe('MessageItem replies', () => {
     fireEvent.mouseDown(stage, { clientX: 320, clientY: 220 });
     fireEvent.mouseUp(stage, { clientX: 120, clientY: 224 });
     await waitFor(() => {
-      const activeImage = document.body.querySelector('[data-testid="media-viewer-stage"] img');
-      expect(activeImage?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/asset-2.webp');
+      const activeImage = document.body.querySelector('[data-testid="media-viewer-stage"] [data-active-media="true"] img');
+      expect(activeImage?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/asset-3.webp');
     });
 
     fireEvent.mouseDown(stage, { clientX: 120, clientY: 220 });
     fireEvent.mouseUp(stage, { clientX: 320, clientY: 224 });
     await waitFor(() => {
-      const activeImage = document.body.querySelector('[data-testid="media-viewer-stage"] img');
+      const activeImage = document.body.querySelector('[data-testid="media-viewer-stage"] [data-active-media="true"] img');
       expect(activeImage?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/asset-1.webp');
     });
   });

@@ -39,6 +39,8 @@ type ActiveMedia = {
 
 interface MediaStageProps {
   media: ActiveMedia;
+  mediaItems: ActiveMedia[];
+  activeIndex: number;
   alt: string;
   variant: MediaStageVariant;
   canGoPrevious: boolean;
@@ -56,6 +58,7 @@ const HISTORY_PAGE_SIZE = 36;
 const SWIPE_THRESHOLD = 48;
 const SWIPE_DOWN_THRESHOLD = 64;
 const TAP_THRESHOLD = 8;
+const MAX_DRAG_OFFSET_RATIO = 0.42;
 
 const mediaFileExtensions: Record<string, string> = {
   "image/jpeg": "jpg",
@@ -96,6 +99,21 @@ const getMediaTime = (media: ActiveMedia) => {
   if (!media.createdAt) return Number.POSITIVE_INFINITY;
   const time = new Date(media.createdAt).getTime();
   return Number.isFinite(time) ? time : Number.POSITIVE_INFINITY;
+};
+
+const getHistoryItemTime = (item: RoomMediaHistoryItem) => {
+  const time = new Date(item.createdAt).getTime();
+  return Number.isFinite(time) ? time : Number.POSITIVE_INFINITY;
+};
+
+const compareMediaAscending = (first: ActiveMedia, second: ActiveMedia) => {
+  const timeDelta = getMediaTime(first) - getMediaTime(second);
+  return timeDelta || getMediaKey(first).localeCompare(getMediaKey(second));
+};
+
+const compareHistoryItemAscending = (first: RoomMediaHistoryItem, second: RoomMediaHistoryItem) => {
+  const timeDelta = getHistoryItemTime(first) - getHistoryItemTime(second);
+  return timeDelta || first.assetId.localeCompare(second.assetId);
 };
 
 const historyItemToActiveMedia = (item: RoomMediaHistoryItem): ActiveMedia => ({
@@ -183,6 +201,8 @@ const groupHistoryByMonth = (items: RoomMediaHistoryItem[], language?: string) =
 
 const MediaStage: React.FC<MediaStageProps> = ({
   media,
+  mediaItems,
+  activeIndex,
   alt,
   variant,
   canGoPrevious,
@@ -198,11 +218,23 @@ const MediaStage: React.FC<MediaStageProps> = ({
   const pointerStartRef = React.useRef<{ x: number; y: number } | null>(null);
   const pointerSequenceRef = React.useRef(false);
   const suppressClickRef = React.useRef(false);
+  const stageRef = React.useRef<HTMLElement | null>(null);
+  const [dragOffset, setDragOffset] = React.useState(0);
+  const [isDragging, setIsDragging] = React.useState(false);
   const isHistoryPreview = variant === "historyPreview";
+  const trackItems = mediaItems.length > 0 ? mediaItems : [media];
+  const safeActiveIndex = activeIndex >= 0 && activeIndex < trackItems.length ? activeIndex : 0;
+  const activeStageMedia = trackItems[safeActiveIndex] || media;
 
   const isInteractiveTarget = (target: EventTarget) => (
     target instanceof Element && Boolean(target.closest("button,a,input,textarea,select,[role='button']"))
   );
+
+  const clampDragOffset = (offset: number) => {
+    const stageWidth = stageRef.current?.clientWidth || window.innerWidth || 1;
+    const maxOffset = stageWidth * MAX_DRAG_OFFSET_RATIO;
+    return Math.max(-maxOffset, Math.min(maxOffset, offset));
+  };
 
   const beginGesture = (x: number, y: number, target: EventTarget) => {
     if (isInteractiveTarget(target)) {
@@ -212,11 +244,33 @@ const MediaStage: React.FC<MediaStageProps> = ({
 
     suppressClickRef.current = false;
     pointerStartRef.current = { x, y };
+    setIsDragging(true);
+    setDragOffset(0);
+  };
+
+  const updateGesture = (x: number, y: number) => {
+    const start = pointerStartRef.current;
+    if (!start) return;
+
+    const deltaX = x - start.x;
+    const deltaY = y - start.y;
+    const absX = Math.abs(deltaX);
+    const absY = Math.abs(deltaY);
+    if (absX <= TAP_THRESHOLD || absX < absY) {
+      setDragOffset(0);
+      return;
+    }
+
+    const shouldResist = (deltaX > 0 && !canGoPrevious) || (deltaX < 0 && !canGoNext);
+    const offset = shouldResist ? deltaX * 0.28 : deltaX;
+    setDragOffset(clampDragOffset(offset));
   };
 
   const finishGesture = (x: number, y: number) => {
     const start = pointerStartRef.current;
     pointerStartRef.current = null;
+    setIsDragging(false);
+    setDragOffset(0);
     if (!start) return;
 
     const deltaX = x - start.x;
@@ -256,6 +310,10 @@ const MediaStage: React.FC<MediaStageProps> = ({
     beginGesture(event.clientX, event.clientY, target);
   };
 
+  const handlePointerMove = (event: React.PointerEvent<HTMLElement>) => {
+    updateGesture(event.clientX, event.clientY);
+  };
+
   const handlePointerUp = (event: React.PointerEvent<HTMLElement>) => {
     finishGesture(event.clientX, event.clientY);
     window.setTimeout(() => {
@@ -265,6 +323,8 @@ const MediaStage: React.FC<MediaStageProps> = ({
 
   const handlePointerCancel = () => {
     pointerStartRef.current = null;
+    setIsDragging(false);
+    setDragOffset(0);
     window.setTimeout(() => {
       pointerSequenceRef.current = false;
     }, 350);
@@ -273,6 +333,11 @@ const MediaStage: React.FC<MediaStageProps> = ({
   const handleMouseDown = (event: React.MouseEvent<HTMLElement>) => {
     if (pointerSequenceRef.current) return;
     beginGesture(event.clientX, event.clientY, event.target);
+  };
+
+  const handleMouseMove = (event: React.MouseEvent<HTMLElement>) => {
+    if (pointerSequenceRef.current) return;
+    updateGesture(event.clientX, event.clientY);
   };
 
   const handleMouseUp = (event: React.MouseEvent<HTMLElement>) => {
@@ -294,34 +359,56 @@ const MediaStage: React.FC<MediaStageProps> = ({
 
   return (
     <main
+      ref={stageRef}
       data-testid={isHistoryPreview ? "history-media-stage" : "media-viewer-stage"}
       className={`relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-0 py-20 sm:px-8 ${className}`}
-      style={{ touchAction: media.kind === "image" ? "none" : "pan-y" }}
+      style={{ touchAction: activeStageMedia.kind === "image" ? "none" : "pan-y" }}
       onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerCancel}
       onMouseDown={handleMouseDown}
+      onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
     >
-      {media.kind === "image" ? (
-        <img
-          key={media.src}
-          src={media.src}
-          alt={alt}
-          className={`max-h-full max-w-full select-none object-contain ${onTapMedia ? "cursor-zoom-out" : ""}`}
-          draggable={false}
-          onClick={handleImageClick}
-        />
-      ) : (
-        <video
-          key={media.src}
-          src={media.src}
-          className="max-h-full w-full max-w-5xl bg-black object-contain sm:rounded-lg"
-          controls
-          autoPlay
-          playsInline
-        />
-      )}
+      <div
+        data-testid="media-carousel-track"
+        className={`flex h-full w-full will-change-transform ${isDragging ? "" : "transition-transform duration-300 ease-out"}`}
+        style={{ transform: `translate3d(calc(${-safeActiveIndex * 100}% + ${dragOffset}px), 0, 0)` }}
+      >
+        {trackItems.map((item, index) => {
+          const isActive = index === safeActiveIndex;
+          return (
+            <div
+              key={getMediaKey(item)}
+              data-active-media={isActive ? "true" : undefined}
+              className="flex h-full min-w-full items-center justify-center px-1.5 sm:px-2"
+              aria-hidden={!isActive}
+            >
+              {item.kind === "image" ? (
+                <img
+                  src={item.src}
+                  alt={alt}
+                  className={`max-h-full max-w-full select-none object-contain ${onTapMedia && isActive ? "cursor-zoom-out" : ""}`}
+                  draggable={false}
+                  onClick={isActive ? handleImageClick : undefined}
+                />
+              ) : (
+                <video
+                  key={item.src}
+                  src={item.src}
+                  className="max-h-full w-full max-w-5xl bg-black object-contain sm:rounded-lg"
+                  controls={isActive}
+                  autoPlay={isActive}
+                  playsInline
+                  preload="metadata"
+                  muted={!isActive}
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
 
       {canGoPrevious && (
         <div className="pointer-events-none absolute left-3 top-1/2 hidden -translate-y-1/2 sm:block">
@@ -509,7 +596,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
 
     const seen = new Set<string>();
     return nextItems
-      .sort((first, second) => getMediaTime(second) - getMediaTime(first))
+      .sort(compareMediaAscending)
       .filter(item => {
         const key = getMediaKey(item);
         if (seen.has(key)) return false;
@@ -517,6 +604,10 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
         return true;
       });
   }, [activeMedia, historyItems]);
+
+  const historyItemsOldestFirst = React.useMemo(() => (
+    [...historyItems].sort(compareHistoryItemAscending)
+  ), [historyItems]);
 
   const activeMediaIndex = React.useMemo(() => {
     if (!activeMedia) return -1;
@@ -535,7 +626,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
       return;
     }
 
-    if (offset > 0 && hasMoreHistory && !isHistoryLoading) {
+    if (offset < 0 && hasMoreHistory && !isHistoryLoading) {
       const loadedItems = await loadHistory("more");
       const firstLoadedItem = loadedItems?.[0];
       if (firstLoadedItem) {
@@ -654,9 +745,9 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
     : shareStatus === "error"
       ? "lucide:alert-circle"
       : "lucide:share-2";
-  const historyGroups = groupHistoryByMonth(historyItems, i18n.language);
-  const canGoPrevious = activeMediaIndex > 0;
-  const canGoNext = activeMediaIndex >= 0 && (activeMediaIndex < carouselItems.length - 1 || hasMoreHistory);
+  const historyGroups = groupHistoryByMonth(historyItemsOldestFirst, i18n.language);
+  const canGoPrevious = activeMediaIndex > 0 || hasMoreHistory;
+  const canGoNext = activeMediaIndex >= 0 && activeMediaIndex < carouselItems.length - 1;
   const activePosition = activeMediaIndex >= 0 ? `${activeMediaIndex + 1} / ${Math.max(carouselItems.length, activeMediaIndex + 1)}` : "";
 
   return createPortal(
@@ -681,6 +772,8 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
 
       <MediaStage
         media={activeMedia}
+        mediaItems={carouselItems}
+        activeIndex={activeMediaIndex}
         alt={alt}
         variant="viewer"
         canGoPrevious={canGoPrevious}
@@ -719,6 +812,8 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
               </header>
               <MediaStage
                 media={activeMedia}
+                mediaItems={carouselItems}
+                activeIndex={activeMediaIndex}
                 alt={alt}
                 variant="historyPreview"
                 canGoPrevious={canGoPrevious}
@@ -746,6 +841,19 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
               </header>
 
               <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-5 pt-4">
+                {(hasMoreHistory || isHistoryLoading) && (
+                  <div className="flex justify-center pb-4">
+                    <Button
+                      size="sm"
+                      className="rounded-full bg-white/10 px-4 text-white hover:bg-white/20"
+                      isLoading={isHistoryLoading}
+                      onPress={() => { void loadHistory(historyItems.length === 0 ? "reset" : "more"); }}
+                    >
+                      {isHistoryLoading ? t("loadingMore") : t("loadMoreMedia")}
+                    </Button>
+                  </div>
+                )}
+
                 {historyGroups.map(group => (
                   <section key={group.key} className="mb-6">
                     <h3 className="mb-3 text-sm font-semibold text-white/90">{group.label}</h3>
@@ -790,18 +898,6 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
                   </div>
                 )}
 
-                {(hasMoreHistory || isHistoryLoading) && (
-                  <div className="flex justify-center py-3">
-                    <Button
-                      size="sm"
-                      className="rounded-full bg-white/10 px-4 text-white hover:bg-white/20"
-                      isLoading={isHistoryLoading}
-                      onPress={() => { void loadHistory(historyItems.length === 0 ? "reset" : "more"); }}
-                    >
-                      {isHistoryLoading ? t("loadingMore") : t("loadMoreMedia")}
-                    </Button>
-                  </div>
-                )}
               </div>
             </>
           )}
