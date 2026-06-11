@@ -107,6 +107,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
           key={currentRoom.id}
           ref={messageListRef}
           roomId={currentRoom.id}
+          room={currentRoom}
           onReply={setReplyToMessage}
           roomPermissions={roomPermissions}
           bottomPaddingPx={composerHeight + 12}
