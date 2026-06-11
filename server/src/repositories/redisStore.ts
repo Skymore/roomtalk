@@ -18,6 +18,11 @@ const getSavedRoomsKey = (clientId: string) => `user:${clientId}:saved_rooms`;
 const getRoomSavedByKey = (roomId: string) => `room:${roomId}:saved_by`;
 const getRoomPasswordHashKey = (roomId: string) => `room:${roomId}:password_hash`;
 
+interface RoomMessagesCachePayload {
+  messageVersion: number;
+  messages: Message[];
+}
+
 const normalizeMediaHistoryPageLimit = (limit?: number): number => {
   if (!Number.isFinite(limit)) {
     return 40;
@@ -599,42 +604,72 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     return `${ROOM_MESSAGES_CACHE_KEY_PREFIX}${roomId}${ROOM_MESSAGES_CACHE_KEY_SUFFIX}`;
   }
 
-  async readCachedRoomMessages(roomId: string): Promise<Message[] | null> {
+  async readCachedRoomMessages(roomId: string, messageVersion?: number): Promise<Message[] | null> {
     const cacheKey = this.getRoomMessagesCacheKey(roomId);
+    const requiresVersion = typeof messageVersion === 'number' && Number.isFinite(messageVersion);
+
     try {
       const cached = await this.redisClient.get(cacheKey);
       if (!cached) {
-        this.logger.debug('Room message cache miss', { roomId });
+        this.logger.debug('Room message cache miss', { roomId, messageVersion });
         return null;
       }
 
-      const parsed = JSON.parse(cached);
-      if (!Array.isArray(parsed)) {
+      const parsed = JSON.parse(cached) as unknown;
+      let cachedMessageVersion: number | undefined;
+      let messages: Message[] | null = null;
+
+      if (Array.isArray(parsed)) {
+        if (requiresVersion) {
+          await this.redisClient.del(cacheKey);
+          this.logger.debug('Legacy room message cache payload discarded', { roomId, expectedMessageVersion: messageVersion });
+          return null;
+        }
+        messages = parsed as Message[];
+      } else if (parsed && typeof parsed === 'object' && Array.isArray((parsed as Partial<RoomMessagesCachePayload>).messages)) {
+        const payload = parsed as Partial<RoomMessagesCachePayload>;
+        cachedMessageVersion = payload.messageVersion;
+        if (requiresVersion && cachedMessageVersion !== messageVersion) {
+          await this.redisClient.del(cacheKey);
+          this.logger.debug('Stale room message cache payload discarded', {
+            roomId,
+            cachedMessageVersion,
+            expectedMessageVersion: messageVersion,
+          });
+          return null;
+        }
+        messages = payload.messages as Message[];
+      }
+
+      if (!messages) {
         await this.redisClient.del(cacheKey);
         this.logger.warn('Invalid room message cache payload discarded', { roomId });
         return null;
       }
 
-      this.logger.debug('Room message cache hit', { roomId, count: parsed.length });
-      return parsed as Message[];
+      this.logger.debug('Room message cache hit', { roomId, count: messages.length, messageVersion: cachedMessageVersion });
+      return messages;
     } catch (error) {
       this.logger.error('Error reading room message cache', { error, roomId });
       return null;
     }
   }
 
-  async writeRoomMessagesCache(roomId: string, messages: Message[]): Promise<void> {
+  async writeRoomMessagesCache(roomId: string, messages: Message[], messageVersion?: number): Promise<void> {
     if (this.roomMessagesCacheTtlSeconds <= 0) {
       return;
     }
 
     try {
+      const versionedPayload = typeof messageVersion === 'number' && Number.isFinite(messageVersion)
+        ? { messageVersion, messages }
+        : messages;
       await this.redisClient.setEx(
         this.getRoomMessagesCacheKey(roomId),
         this.roomMessagesCacheTtlSeconds,
-        JSON.stringify(messages)
+        JSON.stringify(versionedPayload)
       );
-      this.logger.debug('Room message cache written', { roomId, count: messages.length, ttlSeconds: this.roomMessagesCacheTtlSeconds });
+      this.logger.debug('Room message cache written', { roomId, count: messages.length, messageVersion, ttlSeconds: this.roomMessagesCacheTtlSeconds });
     } catch (error) {
       this.logger.error('Error writing room message cache', { error, roomId });
     }

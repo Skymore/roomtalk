@@ -442,7 +442,7 @@ describe('CompositeRoomStore', () => {
       async saveRoom(newRoom: Room) { return newRoom; },
       ...durableRoomAccessStubs(),
       async readRoomsByUser() { return []; },
-      async getRoomById() { return null; },
+      async getRoomById() { return room({ messageVersion: 1 }); },
       async updateRoomName() { return null; },
       async deleteRoom() {},
       async countRooms() { return 0; },
@@ -460,21 +460,67 @@ describe('CompositeRoomStore', () => {
     };
     const cache: RoomMessageCacheStore = {
       cached: [message({ id: 'cached-message' })] as Message[] | null,
-      async readCachedRoomMessages() { calls.push('cache.read'); return this.cached; },
-      async writeRoomMessagesCache(_roomId: string, messages: Message[]) { calls.push(`cache.write:${messages[0]?.id || 'empty'}`); this.cached = messages; },
+      async readCachedRoomMessages(_roomId: string, messageVersion?: number) { calls.push(`cache.read:${messageVersion ?? 'none'}`); return this.cached; },
+      async writeRoomMessagesCache(_roomId: string, messages: Message[], messageVersion?: number) { calls.push(`cache.write:${messageVersion ?? 'none'}:${messages[0]?.id || 'empty'}`); this.cached = messages; },
       async invalidateRoomMessagesCache() { calls.push('cache.invalidate'); this.cached = null; },
       async invalidateAllRoomMessagesCaches() { calls.push('cache.invalidateAll'); this.cached = null; },
     } as RoomMessageCacheStore & { cached: Message[] | null };
     const store = new CompositeRoomStore(durable, realtime, cache);
 
     assert.deepEqual(await store.readMessagesByRoom('room-1'), [message({ id: 'cached-message' })]);
-    assert.deepEqual(calls, ['cache.read']);
+    assert.deepEqual(calls, ['cache.read:1']);
 
     await cache.invalidateRoomMessagesCache('room-1');
     calls.length = 0;
 
     assert.deepEqual(await store.readMessagesByRoom('room-1'), [message({ id: 'durable-message' })]);
-    assert.deepEqual(calls, ['cache.read', 'durable.readMessagesByRoom', 'cache.write:durable-message']);
+    assert.deepEqual(calls, ['cache.read:1', 'durable.readMessagesByRoom', 'cache.write:1:durable-message']);
+  });
+
+  it('skips writing room message caches when the message version changes during a read', async () => {
+    const calls: string[] = [];
+    const versions = [1, 2];
+    const durable: DurableRoomStore = {
+      async generateUniqueRoomId() { return 'room-1'; },
+      async appendMessage() { return room(); },
+      async upsertMessage() { return room(); },
+      ...durableMutationStubs(),
+      async saveMessageHistory() { return room(); },
+      async clearRoomMessages() { return 0; },
+      async readMessagesByRoom() { calls.push('durable.readMessagesByRoom'); return [message({ id: 'durable-message' })]; },
+      async readMessagePageByRoom() { return { roomId: 'room-1', messages: [message({ id: 'durable-message' })], historyVersion: 1, hasMore: false }; },
+      ...durableMediaAssetStubs(),
+      async readRoomAICost(roomId: string) { return { roomId, currency: 'USD', totalUsd: 0 }; },
+      async incrementRoomAICost(roomId: string) { return { roomId, currency: 'USD', totalUsd: 0 }; },
+      async saveRoom(newRoom: Room) { return newRoom; },
+      ...durableRoomAccessStubs(),
+      async readRoomsByUser() { return []; },
+      async getRoomById() { return room({ messageVersion: versions.shift() ?? 2 }); },
+      async updateRoomName() { return null; },
+      async deleteRoom() {},
+      async countRooms() { return 0; },
+    };
+    const realtime: RealtimeRoomStore = {
+      async updateRoomMemberCount() { return 0; },
+      async getRoomMemberCount() { return 0; },
+      async clearRealtimeRoomMembers() {},
+      async storeClientSession() {},
+      async getClientId() { return null; },
+      async removeClientSession() {},
+      async storeUserRooms() {},
+      async getUserRooms() { return []; },
+      async getRoomOnlineMemberIds() { return []; },
+    };
+    const cache: RoomMessageCacheStore = {
+      async readCachedRoomMessages(_roomId: string, messageVersion?: number) { calls.push(`cache.read:${messageVersion ?? 'none'}`); return null; },
+      async writeRoomMessagesCache(_roomId: string, _messages: Message[], messageVersion?: number) { calls.push(`cache.write:${messageVersion ?? 'none'}`); },
+      async invalidateRoomMessagesCache() {},
+      async invalidateAllRoomMessagesCaches() {},
+    };
+    const store = new CompositeRoomStore(durable, realtime, cache);
+
+    assert.deepEqual(await store.readMessagesByRoom('room-1'), [message({ id: 'durable-message' })]);
+    assert.deepEqual(calls, ['cache.read:1', 'durable.readMessagesByRoom']);
   });
 
   it('invalidates message cache after durable message mutations only when writes succeed', async () => {

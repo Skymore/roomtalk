@@ -958,6 +958,26 @@ describe('RedisStore', () => {
     assert.equal(await store.readCachedRoomMessages('room-2'), null);
   });
 
+  it('validates room message caches by message version', async () => {
+    const { redis, store } = createStore();
+    const cachedMessages = [message({ id: 'cached-message' })];
+    const cacheKey = store.getRoomMessagesCacheKey('room-1');
+
+    await store.writeRoomMessagesCache('room-1', cachedMessages, 2);
+
+    const raw = await redis.get(cacheKey);
+    assert.equal(typeof raw, 'string');
+    assert.deepEqual(JSON.parse(raw as string), { messageVersion: 2, messages: cachedMessages });
+    assert.deepEqual(await store.readCachedRoomMessages('room-1', 2), cachedMessages);
+
+    assert.equal(await store.readCachedRoomMessages('room-1', 3), null);
+    assert.equal(await redis.get(cacheKey), undefined);
+
+    redis.strings.set(cacheKey, JSON.stringify(cachedMessages));
+    assert.equal(await store.readCachedRoomMessages('room-1', 2), null);
+    assert.equal(await redis.get(cacheKey), undefined);
+  });
+
   it('falls back to KEYS when scanIterator is unavailable during full cache invalidation', async () => {
     const redis = new KeysOnlyRedis();
     const store = new RedisStore(redis as any, logger as any);
