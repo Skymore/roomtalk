@@ -2,7 +2,7 @@ import { customAlphabet } from 'nanoid';
 import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
 import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember } from '../types';
-import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, RoomMessageCacheStore, RoomMessagePageOptions, RoomSettingsUpdate, RoomStore } from './store';
+import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, PendingMediaUpload, RoomMessageCacheStore, RoomMessagePageOptions, RoomSettingsUpdate, RoomStore } from './store';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 const DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS = 30;
@@ -12,6 +12,8 @@ const getPersistentRoomMembersKey = (roomId: string) => `room:${roomId}:room_mem
 const CLIENT_NICKNAMES_KEY = 'client:nicknames';
 const getRoomMediaAssetsKey = (roomId: string) => `room:${roomId}:media_assets`;
 const getRoomMediaAssetsTimelineKey = (roomId: string) => `room:${roomId}:media_assets_by_time`;
+const PENDING_MEDIA_UPLOADS_KEY = 'pending_media_uploads';
+const PENDING_MEDIA_UPLOADS_BY_EXPIRY_KEY = 'pending_media_uploads_by_expiry';
 const getSavedRoomsKey = (clientId: string) => `user:${clientId}:saved_rooms`;
 const getRoomSavedByKey = (roomId: string) => `room:${roomId}:saved_by`;
 const getRoomPasswordHashKey = (roomId: string) => `room:${roomId}:password_hash`;
@@ -1134,6 +1136,70 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       }
     } catch (error) {
       this.logger.error('Error deleting Redis media asset', { error, assetId });
+    }
+  }
+
+  async savePendingMediaUpload(upload: PendingMediaUpload): Promise<void> {
+    try {
+      await this.redisClient.hSet(PENDING_MEDIA_UPLOADS_KEY, upload.assetId, JSON.stringify(upload));
+      await (this.redisClient as any).zAdd(PENDING_MEDIA_UPLOADS_BY_EXPIRY_KEY, {
+        score: Date.parse(upload.expiresAt),
+        value: upload.assetId,
+      });
+    } catch (error) {
+      this.logger.error('Error saving Redis pending media upload', { error, assetId: upload.assetId, roomId: upload.roomId });
+      throw error;
+    }
+  }
+
+  async getPendingMediaUpload(assetId: string): Promise<PendingMediaUpload | null> {
+    try {
+      const rawUpload = await this.redisClient.hGet(PENDING_MEDIA_UPLOADS_KEY, assetId);
+      return rawUpload ? JSON.parse(rawUpload) as PendingMediaUpload : null;
+    } catch (error) {
+      this.logger.error('Error reading Redis pending media upload', { error, assetId });
+      return null;
+    }
+  }
+
+  async deletePendingMediaUpload(assetId: string): Promise<void> {
+    try {
+      await this.redisClient.hDel(PENDING_MEDIA_UPLOADS_KEY, assetId);
+      await (this.redisClient as any).zRem(PENDING_MEDIA_UPLOADS_BY_EXPIRY_KEY, assetId);
+    } catch (error) {
+      this.logger.error('Error deleting Redis pending media upload', { error, assetId });
+    }
+  }
+
+  async claimExpiredPendingMediaUploads(now: string, limit = 50): Promise<PendingMediaUpload[]> {
+    const safeLimit = Math.min(200, Math.max(1, Math.floor(limit)));
+    const nowScore = Date.parse(now);
+    if (!Number.isFinite(nowScore)) {
+      return [];
+    }
+
+    try {
+      const assetIds = await (this.redisClient as any).zRange(
+        PENDING_MEDIA_UPLOADS_BY_EXPIRY_KEY,
+        '-inf',
+        nowScore,
+        {
+          BY: 'SCORE',
+          LIMIT: { offset: 0, count: safeLimit },
+        }
+      ) as Array<string | Buffer>;
+      const ids = assetIds.map(assetId => assetId.toString());
+      if (ids.length === 0) {
+        return [];
+      }
+
+      const uploads = (await Promise.all(ids.map(assetId => this.getPendingMediaUpload(assetId))))
+        .filter((upload): upload is PendingMediaUpload => !!upload);
+      await Promise.all(ids.map(assetId => this.deletePendingMediaUpload(assetId)));
+      return uploads;
+    } catch (error) {
+      this.logger.error('Error claiming expired Redis pending media uploads', { error, now, limit: safeLimit });
+      return [];
     }
   }
 

@@ -999,9 +999,9 @@
 
 ---
 
-## 现行代码核验（HEAD `7214df1`，2026-06-11）
+## 现行代码核验与修复跟进（起始 HEAD `7214df1`，2026-06-11）
 
-> 本节为对上文"疑似仍在现行代码中的问题"清单的逐条复核，核验对象是本仓库当前 HEAD（`7214df1`）。评审基数为 163 个 commit（`5a991ae → 7238ebe`）。
+> 本节为对上文"疑似仍在现行代码中的问题"清单的逐条复核，起始核验对象是本仓库当时 HEAD（`7214df1`）。评审基数为 163 个 commit（`5a991ae → 7238ebe`）。
 
 ### 清单逐条核验
 
@@ -1012,11 +1012,11 @@
 | 3 | `get_room_members` 不做 hasRoomAccess | ✅ 已修复 | `get_room_members` 现要求 socket 已注册，并通过 `hasRoomAccess` 后才返回在线成员 |
 | 4 | 未知定价模型绕过 premium 二次确认 | ✅ 已修复 | 服务端和客户端现将缺失/非有限输出价格视为 premium，只有明确已知且不超过阈值的模型免二次确认 |
 | 5 | AI 上下文 1000 条无 token 预算 | ✅ 已修复 | `selectAIHistory` 现先按消息数再按 `AI_MAX_CONTEXT_TOKENS` 估算预算裁剪，默认 32000 token，并保留最新消息 |
-| 6 | 媒体 presign PUT 无频控、未 complete 对象无 GC | ✅ 仍在 | `mediaObjectStorage.ts` 有 `createWriteUrl`，无 `sweepOrphan`/`cleanupOrphan` 类回收逻辑 |
+| 6 | 媒体 presign PUT 无频控、未 complete 对象无 GC | ✅ 已修复 | 创建上传 URL 现按 clientId/IP 限流，并把 pending upload 写入 durable store；complete 必须匹配 pending 元数据，过期 pending 会被后台 claim 后 best-effort 删除对象 |
 | 7 | Redis 路径房间字段合并非原子 | ✅ 仍在 | `redisStore.ts:1445` `updateRoomName` 仍是 `getRoomById` → `writeRoomRecord` 两步；Lua（`WRITE_ROOM_RECORD_SCRIPT`）只原子化版本号，字段合并仍在 TS 层 |
 | 8 | 其余中等遗留（`bf9ada3`/`42e65e4`/`a0b8679`/`48dafbf`/`02cd7cf`/`9d30c79`） | 未逐条复核 | 均落在共同祖先之前的共享历史，代码与原评审一致，结论默认沿用 |
 
-第 1–7 条均已对照具体文件行确认仍存在于现行代码。第 1 条（KaTeX `trust: true`）与本仓库的媒体/导出改动无关，是最该优先封堵的一项。
+第 1–6 条已在本轮跟进中修复并补充回归测试；第 7 条仍在，待继续处理。
 
 ### 核验中发现的、本仓库特有的新增隐患（不属于原清单）
 
@@ -1032,6 +1032,7 @@
 - 2026-06-11：已为 socket `get_room_members` 补上注册校验和 `hasRoomAccess` 房间访问校验，避免任意已连接客户端枚举其它房间在线成员；新增 `roomHandlers.test.ts` 用例覆盖未注册和非成员访问拒绝路径。
 - 2026-06-11：已调整服务端与客户端 premium 模型判定：缺失 pricing 或输出单价不是有限数值时默认需要 premium 二次确认，防止自定义/未知价格模型绕过确认；两端测试均覆盖缺价模型仍被标记为 premium，且 `$10/M out` 明确边界仍不触发。
 - 2026-06-11：已为 AI 历史上下文增加近似 token 预算 `AI_MAX_CONTEXT_TOKENS`（默认 32000）：`selectAIHistory` 在保留 retry/edit 语义和消息数上限后，从最新消息向前收敛到预算内，并保证至少保留最新消息；handler 日志会记录上下文估算 token 和预算，单元测试覆盖预算截断与单条超预算场景。
+- 2026-06-11：已为媒体上传初始化增加每 clientId/IP 10 分钟 20 次限流，并把每个 presign upload 记录为 durable `pending_media_uploads`；complete 阶段必须命中并匹配 pending 元数据，成功或持久化失败都会删除 pending，过期 pending 会由后台 sweeper claim 后 best-effort 删除对象，避免未 complete 对象长期泄漏。
 
 ---
 

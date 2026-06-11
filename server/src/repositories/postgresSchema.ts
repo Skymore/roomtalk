@@ -99,6 +99,19 @@ export const POSTGRES_SCHEMA_SQL = [
     ON media_assets (room_id, kind, created_at DESC, id DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_media_assets_message
     ON media_assets (message_id)`,
+  `CREATE TABLE IF NOT EXISTS pending_media_uploads (
+    id TEXT PRIMARY KEY,
+    room_id TEXT NOT NULL,
+    object_key TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL CHECK (kind IN ('image', 'video', 'audio')),
+    mime_type TEXT NOT NULL,
+    byte_size INTEGER NOT NULL,
+    uploaded_by_client_id TEXT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_pending_media_uploads_expires
+    ON pending_media_uploads (expires_at ASC)`,
   `CREATE TABLE IF NOT EXISTS room_ai_cost_totals (
     room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
     total_usd NUMERIC(18, 9) NOT NULL DEFAULT 0,

@@ -10,6 +10,7 @@ import { registerApiRoutes } from './apiRoutes';
 import { MediaAsset, Message, Room } from '../types';
 import { LocalMediaObjectStorage } from '../services/mediaObjectStorage';
 import { Logger } from '../logger';
+import { PendingMediaUpload } from '../repositories/store';
 
 type EmittedEvent = {
   target: string;
@@ -37,6 +38,7 @@ type TestServer = {
     appendedMessages: Message[];
     appendedMediaAssets: MediaAsset[];
     mediaAssets: Map<string, MediaAsset>;
+    pendingMediaUploads: Map<string, PendingMediaUpload>;
     readMessagesByRoom: (roomId: string) => Promise<Message[]>;
     addRoomMember: (roomId: string, clientId: string, role: 'owner' | 'member', joinedAt?: string) => Promise<{ roomId: string; clientId: string; role: 'owner' | 'member'; joinedAt: string } | null>;
     getRoomMember: (roomId: string, clientId: string) => Promise<{ roomId: string; clientId: string; role: 'owner' | 'member'; joinedAt: string } | null>;
@@ -52,6 +54,10 @@ type TestServer = {
     readMediaAssetsByRoom: (roomId: string) => Promise<MediaAsset[]>;
     readMediaHistoryPageByRoom: (roomId: string, options?: TestMediaHistoryOptions) => Promise<{ assets: MediaAsset[]; hasMore: boolean }>;
     deleteMediaAsset: (assetId: string) => Promise<void>;
+    savePendingMediaUpload: (upload: PendingMediaUpload) => Promise<void>;
+    getPendingMediaUpload: (assetId: string) => Promise<PendingMediaUpload | null>;
+    deletePendingMediaUpload: (assetId: string) => Promise<void>;
+    claimExpiredPendingMediaUploads: (now: string, limit?: number) => Promise<PendingMediaUpload[]>;
     readRoomAICost: (roomId: string) => Promise<{ roomId: string; currency: 'USD'; totalUsd: number }>;
     getRoomById: (roomId: string) => Promise<Room | null>;
     countRooms: () => Promise<number>;
@@ -80,6 +86,24 @@ const sampleMessage = (overrides: Partial<Message> = {}): Message => ({
   messageType: 'text',
   ...overrides,
 });
+
+const pendingUpload = (overrides: Partial<PendingMediaUpload> = {}): PendingMediaUpload => {
+  const assetId = overrides.assetId || 'asset-1';
+  const roomId = overrides.roomId || 'room-1';
+  const kind = overrides.kind || 'audio';
+
+  return {
+    assetId,
+    roomId,
+    objectKey: overrides.objectKey || `rooms/${roomId}/media/${kind}/${assetId}`,
+    kind,
+    mimeType: overrides.mimeType || `${kind}/webm`,
+    byteSize: overrides.byteSize || 456,
+    uploadedByClientId: overrides.uploadedByClientId || 'client-2',
+    createdAt: overrides.createdAt || '2026-05-03T00:00:00.000Z',
+    expiresAt: overrides.expiresAt || '2999-01-01T00:00:00.000Z',
+  };
+};
 
 const largeMessage = (index: number): Message => sampleMessage({
   id: `large-message-${index.toString().padStart(3, '0')}`,
@@ -117,7 +141,7 @@ const writeLargeHistoryBaseline = async (payload: {
   }
 };
 
-async function createTestServer(overrides: { mediaObjectStorage?: unknown } = {}): Promise<TestServer> {
+async function createTestServer(overrides: { mediaObjectStorage?: unknown; mediaUploadCleanup?: Parameters<typeof registerApiRoutes>[1]['mediaUploadCleanup'] } = {}): Promise<TestServer> {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
 
@@ -131,6 +155,7 @@ async function createTestServer(overrides: { mediaObjectStorage?: unknown } = {}
     appendedMessages: [] as Message[],
     appendedMediaAssets: [] as MediaAsset[],
     mediaAssets: new Map<string, MediaAsset>(),
+    pendingMediaUploads: new Map<string, PendingMediaUpload>(),
     async readMessagesByRoom(roomId: string) {
       return this.messages.filter(message => message.roomId === roomId);
     },
@@ -232,6 +257,24 @@ async function createTestServer(overrides: { mediaObjectStorage?: unknown } = {}
     async deleteMediaAsset(assetId: string) {
       this.mediaAssets.delete(assetId);
     },
+    async savePendingMediaUpload(upload: PendingMediaUpload) {
+      this.pendingMediaUploads.set(upload.assetId, upload);
+    },
+    async getPendingMediaUpload(assetId: string) {
+      return this.pendingMediaUploads.get(assetId) || null;
+    },
+    async deletePendingMediaUpload(assetId: string) {
+      this.pendingMediaUploads.delete(assetId);
+    },
+    async claimExpiredPendingMediaUploads(now: string, limit = 50) {
+      const nowMs = Date.parse(now);
+      const expired = [...this.pendingMediaUploads.values()]
+        .filter(upload => Date.parse(upload.expiresAt) <= nowMs)
+        .sort((first, second) => Date.parse(first.expiresAt) - Date.parse(second.expiresAt))
+        .slice(0, limit);
+      expired.forEach(upload => this.pendingMediaUploads.delete(upload.assetId));
+      return expired;
+    },
     async readRoomAICost(roomId: string) {
       return { roomId, currency: 'USD' as const, totalUsd: 1.25 };
     },
@@ -305,6 +348,7 @@ async function createTestServer(overrides: { mediaObjectStorage?: unknown } = {}
       return { name: 'Review Expert', systemPrompt: 'Review implementation decisions carefully.' };
     },
     mediaObjectStorage: mediaObjectStorage as any,
+    mediaUploadCleanup: overrides.mediaUploadCleanup,
   });
 
   const server = await new Promise<HttpServer>(resolve => {
@@ -561,6 +605,17 @@ describe('API routes', () => {
     assert.ok(upload.assetId);
     assert.equal(upload.objectKey, `rooms/room-1/media/image/${upload.assetId}`);
     assert.equal(upload.uploadUrl, `https://upload.example/${encodeURIComponent(upload.objectKey)}`);
+    assert.deepEqual(server.store.pendingMediaUploads.get(upload.assetId), {
+      assetId: upload.assetId,
+      roomId: 'room-1',
+      objectKey: upload.objectKey,
+      kind: 'image',
+      mimeType: 'image/webp',
+      byteSize: 123,
+      uploadedByClientId: 'client-2',
+      createdAt: server.store.pendingMediaUploads.get(upload.assetId)?.createdAt,
+      expiresAt: server.store.pendingMediaUploads.get(upload.assetId)?.expiresAt,
+    });
 
     const completeResponse = await fetch(`${server.baseUrl}/api/media/uploads/${upload.assetId}/complete`, {
       method: 'POST',
@@ -594,11 +649,187 @@ describe('API routes', () => {
     });
     assert.equal(server.store.appendedMessages[0].id, message.id);
     assert.equal(server.store.appendedMediaAssets[0].messageId, message.id);
+    assert.equal(server.store.pendingMediaUploads.has(upload.assetId), false);
     const broadcastMessage = server.store.appendedMessages[0];
     assert.deepEqual(server.emitted, [
       { target: 'client-1', event: 'room_updated', payload: sampleRoom({ lastActivityAt: message.timestamp }) },
       { target: 'room-1', event: 'new_message', payload: broadcastMessage },
     ]);
+  });
+
+  it('requires initialized pending media uploads before completion', async () => {
+    server.store.members.add('room-1:client-2');
+    const assetId = 'asset-without-pending';
+    const objectKey = `rooms/room-1/media/image/${assetId}`;
+
+    const response = await fetch(`${server.baseUrl}/api/media/uploads/${assetId}/complete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientId: 'client-2',
+        roomId: 'room-1',
+        kind: 'image',
+        mimeType: 'image/webp',
+        byteSize: 123,
+        objectKey,
+      }),
+    });
+
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), { error: 'Media upload was not initialized or has expired' });
+    assert.equal(server.store.appendedMediaAssets.length, 0);
+  });
+
+  it('deletes pending uploads and objects when completed media object metadata mismatches', async () => {
+    await server.close();
+    const deletedObjects: string[] = [];
+    let objectHead: { exists: boolean; byteSize?: number; mimeType?: string } = {
+      exists: true,
+      byteSize: 999,
+      mimeType: 'image/webp',
+    };
+    server = await createTestServer({
+      mediaObjectStorage: {
+        isConfigured: () => true,
+        async createWriteUrl({ objectKey }: { objectKey: string }) {
+          return { url: `https://upload.example/${encodeURIComponent(objectKey)}`, expiresAt: '2026-05-03T00:15:00.000Z' };
+        },
+        async createReadUrl({ objectKey }: { objectKey: string }) {
+          return { url: `https://download.example/${encodeURIComponent(objectKey)}`, expiresAt: '2026-05-03T00:15:00.000Z' };
+        },
+        async headObject() {
+          return objectHead;
+        },
+        async deleteMediaObject(objectKey: string) {
+          deletedObjects.push(objectKey);
+        },
+      },
+    });
+    server.store.members.add('room-1:client-2');
+
+    const sizeAssetId = 'asset-size-mismatch';
+    const sizeObjectKey = `rooms/room-1/media/image/${sizeAssetId}`;
+    server.store.pendingMediaUploads.set(sizeAssetId, pendingUpload({
+      assetId: sizeAssetId,
+      objectKey: sizeObjectKey,
+      kind: 'image',
+      mimeType: 'image/webp',
+      byteSize: 123,
+    }));
+
+    const sizeResponse = await fetch(`${server.baseUrl}/api/media/uploads/${sizeAssetId}/complete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientId: 'client-2',
+        roomId: 'room-1',
+        kind: 'image',
+        mimeType: 'image/webp',
+        byteSize: 123,
+        objectKey: sizeObjectKey,
+      }),
+    });
+
+    assert.equal(sizeResponse.status, 409);
+    assert.deepEqual(await sizeResponse.json(), { error: 'Uploaded media object size does not match' });
+    assert.equal(server.store.pendingMediaUploads.has(sizeAssetId), false);
+
+    objectHead = { exists: true, byteSize: 123, mimeType: 'image/png' };
+    const mimeAssetId = 'asset-mime-mismatch';
+    const mimeObjectKey = `rooms/room-1/media/image/${mimeAssetId}`;
+    server.store.pendingMediaUploads.set(mimeAssetId, pendingUpload({
+      assetId: mimeAssetId,
+      objectKey: mimeObjectKey,
+      kind: 'image',
+      mimeType: 'image/webp',
+      byteSize: 123,
+    }));
+
+    const mimeResponse = await fetch(`${server.baseUrl}/api/media/uploads/${mimeAssetId}/complete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientId: 'client-2',
+        roomId: 'room-1',
+        kind: 'image',
+        mimeType: 'image/webp',
+        byteSize: 123,
+        objectKey: mimeObjectKey,
+      }),
+    });
+
+    assert.equal(mimeResponse.status, 409);
+    assert.deepEqual(await mimeResponse.json(), { error: 'Uploaded media object MIME type does not match' });
+    assert.equal(server.store.pendingMediaUploads.has(mimeAssetId), false);
+    assert.deepEqual(deletedObjects, [sizeObjectKey, mimeObjectKey]);
+    assert.equal(server.store.appendedMediaAssets.length, 0);
+  });
+
+  it('rate limits media upload URL creation', async () => {
+    server.store.members.add('room-1:client-upload-rate');
+
+    for (let index = 0; index < 20; index += 1) {
+      const response = await fetch(`${server.baseUrl}/api/media/uploads`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          clientId: 'client-upload-rate',
+          roomId: 'room-1',
+          kind: 'image',
+          mimeType: 'image/webp',
+          byteSize: 123,
+        }),
+      });
+      assert.equal(response.status, 201);
+    }
+
+    const rateLimitedResponse = await fetch(`${server.baseUrl}/api/media/uploads`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientId: 'client-upload-rate',
+        roomId: 'room-1',
+        kind: 'image',
+        mimeType: 'image/webp',
+        byteSize: 123,
+      }),
+    });
+
+    assert.equal(rateLimitedResponse.status, 429);
+  });
+
+  it('sweeps expired pending media uploads and deletes their objects', async () => {
+    await server.close();
+    let nowMs = Date.parse('2026-05-03T00:00:00.000Z');
+    server = await createTestServer({
+      mediaUploadCleanup: {
+        pendingUploadTtlMs: 5,
+        sweepIntervalMs: 10,
+        nowMs: () => nowMs,
+      },
+    });
+    server.store.members.add('room-1:client-2');
+
+    const uploadResponse = await fetch(`${server.baseUrl}/api/media/uploads`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientId: 'client-2',
+        roomId: 'room-1',
+        kind: 'image',
+        mimeType: 'image/webp',
+        byteSize: 123,
+      }),
+    });
+    assert.equal(uploadResponse.status, 201);
+    const upload = await uploadResponse.json() as { assetId: string; objectKey: string };
+    assert.equal(server.store.pendingMediaUploads.has(upload.assetId), true);
+
+    nowMs += 6;
+    await new Promise(resolve => setTimeout(resolve, 30));
+
+    assert.equal(server.store.pendingMediaUploads.has(upload.assetId), false);
+    assert.deepEqual(server.deletedMediaObjects, [upload.objectKey]);
   });
 
   it('supports local development media upload and download routes', async () => {
@@ -791,6 +1022,7 @@ describe('API routes', () => {
 
     const assetId = 'asset-atomic-only';
     const objectKey = `rooms/room-1/media/audio/${assetId}`;
+    server.store.pendingMediaUploads.set(assetId, pendingUpload({ assetId, objectKey }));
     const response = await fetch(`${server.baseUrl}/api/media/uploads/${assetId}/complete`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -810,6 +1042,7 @@ describe('API routes', () => {
     assert.equal(message.mediaAsset?.id, assetId);
     assert.equal(server.store.appendedMessages.length, 1);
     assert.equal(server.store.appendedMediaAssets.length, 1);
+    assert.equal(server.store.pendingMediaUploads.has(assetId), false);
   });
 
   it('does not emit ghost media messages and deletes uploaded objects when atomic persistence fails', async () => {
@@ -817,6 +1050,7 @@ describe('API routes', () => {
     server.store.appendMediaMessageWithAsset = async () => null;
     const assetId = 'asset-fail';
     const objectKey = `rooms/room-1/media/audio/${assetId}`;
+    server.store.pendingMediaUploads.set(assetId, pendingUpload({ assetId, objectKey }));
 
     const response = await fetch(`${server.baseUrl}/api/media/uploads/${assetId}/complete`, {
       method: 'POST',
@@ -835,6 +1069,7 @@ describe('API routes', () => {
     assert.deepEqual(await response.json(), { error: 'Failed to create media message' });
     assert.deepEqual(server.emitted, []);
     assert.deepEqual(server.deletedMediaObjects, [objectKey]);
+    assert.equal(server.store.pendingMediaUploads.has(assetId), false);
   });
 
   it('returns client rooms and protects owner-only room detail lookup', async () => {

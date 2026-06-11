@@ -985,7 +985,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       return { rows: [{ count: String(this.rooms.size) }] as T[], rowCount: 1 };
     }
 
-    if (/TRUNCATE room_ai_cost_totals, media_assets, image_assets, room_messages, room_saves, room_members, rooms/.test(compactSql)) {
+    if (/TRUNCATE room_ai_cost_totals, pending_media_uploads, media_assets, image_assets, room_messages, room_saves, room_members, rooms/.test(compactSql)) {
       this.rooms.clear();
       this.messages.clear();
       this.roomMembers.clear();

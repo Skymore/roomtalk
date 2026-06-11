@@ -54,6 +54,18 @@ export interface MediaHistoryPage {
   hasMore: boolean;
 }
 
+export interface PendingMediaUpload {
+  assetId: string;
+  roomId: string;
+  objectKey: string;
+  kind: MediaAsset['kind'];
+  mimeType: string;
+  byteSize: number;
+  uploadedByClientId: string;
+  expiresAt: string;
+  createdAt: string;
+}
+
 export interface RoomSettingsUpdate {
   passwordHash?: string | null;
   postingSchedule?: RoomPostingSchedule | null;
@@ -80,6 +92,10 @@ export interface DurableRoomStore {
   readMediaAssetsByRoom(roomId: string): Promise<MediaAsset[]>;
   readMediaHistoryPageByRoom(roomId: string, options?: MediaHistoryPageOptions): Promise<MediaHistoryPage>;
   deleteMediaAsset(assetId: string): Promise<void>;
+  savePendingMediaUpload(upload: PendingMediaUpload): Promise<void>;
+  getPendingMediaUpload(assetId: string): Promise<PendingMediaUpload | null>;
+  deletePendingMediaUpload(assetId: string): Promise<void>;
+  claimExpiredPendingMediaUploads(now: string, limit?: number): Promise<PendingMediaUpload[]>;
   readRoomAICost(roomId: string): Promise<RoomAICostTotal>;
   incrementRoomAICost(roomId: string, cost: AICost | null): Promise<RoomAICostTotal>;
   saveRoom(room: Room): Promise<Room | null>;
@@ -293,6 +309,22 @@ export class CompositeRoomStore implements RoomStore {
 
   deleteMediaAsset(assetId: string) {
     return this.durableStore.deleteMediaAsset(assetId);
+  }
+
+  savePendingMediaUpload(upload: PendingMediaUpload) {
+    return this.durableStore.savePendingMediaUpload(upload);
+  }
+
+  getPendingMediaUpload(assetId: string) {
+    return this.durableStore.getPendingMediaUpload(assetId);
+  }
+
+  deletePendingMediaUpload(assetId: string) {
+    return this.durableStore.deletePendingMediaUpload(assetId);
+  }
+
+  claimExpiredPendingMediaUploads(now: string, limit?: number) {
+    return this.durableStore.claimExpiredPendingMediaUploads(now, limit);
   }
 
   readRoomAICost(roomId: string) {

@@ -1,7 +1,7 @@
 import { customAlphabet } from 'nanoid';
 import { Logger } from '../logger';
 import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomPostingSchedule } from '../types';
-import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, RoomMessagePageOptions, RoomSettingsUpdate } from './store';
+import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, PendingMediaUpload, RoomMessagePageOptions, RoomSettingsUpdate } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 
@@ -78,10 +78,23 @@ type MediaAssetRow = {
   created_at: string | Date;
 };
 
+type PendingMediaUploadRow = {
+  id: string;
+  room_id: string;
+  object_key: string;
+  kind: MediaAsset['kind'];
+  mime_type: string;
+  byte_size: number | string;
+  uploaded_by_client_id: string;
+  expires_at: string | Date;
+  created_at: string | Date;
+};
+
 const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, room_version, updated_at';
 const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, ai_model, usage, cost, reply_to';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, width, height, duration_ms, uploaded_by_client_id, created_at';
+const PENDING_MEDIA_UPLOAD_COLUMNS = 'id, room_id, object_key, kind, mime_type, byte_size, uploaded_by_client_id, expires_at, created_at';
 
 const parseTime = (timestamp?: string): number => {
   const time = Date.parse(timestamp || '');
@@ -198,6 +211,18 @@ const mapMediaAsset = (row: MediaAssetRow): MediaAsset => {
   if (durationMs !== undefined) asset.durationMs = durationMs;
   return asset;
 };
+
+const mapPendingMediaUpload = (row: PendingMediaUploadRow): PendingMediaUpload => ({
+  assetId: row.id,
+  roomId: row.room_id,
+  objectKey: row.object_key,
+  kind: row.kind,
+  mimeType: row.mime_type,
+  byteSize: Number(row.byte_size) || 0,
+  uploadedByClientId: row.uploaded_by_client_id,
+  expiresAt: toIsoString(row.expires_at),
+  createdAt: toIsoString(row.created_at),
+});
 
 const toMessageMediaAsset = (asset: MediaAsset): MessageMediaAsset => {
   const messageAsset: MessageMediaAsset = {
@@ -1039,6 +1064,91 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
+  async savePendingMediaUpload(upload: PendingMediaUpload): Promise<void> {
+    try {
+      await this.pool.query(
+        `INSERT INTO pending_media_uploads (
+          id,
+          room_id,
+          object_key,
+          kind,
+          mime_type,
+          byte_size,
+          uploaded_by_client_id,
+          expires_at,
+          created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT (id) DO UPDATE SET
+          room_id = EXCLUDED.room_id,
+          object_key = EXCLUDED.object_key,
+          kind = EXCLUDED.kind,
+          mime_type = EXCLUDED.mime_type,
+          byte_size = EXCLUDED.byte_size,
+          uploaded_by_client_id = EXCLUDED.uploaded_by_client_id,
+          expires_at = EXCLUDED.expires_at`,
+        [
+          upload.assetId,
+          upload.roomId,
+          upload.objectKey,
+          upload.kind,
+          upload.mimeType,
+          upload.byteSize,
+          upload.uploadedByClientId,
+          upload.expiresAt,
+          upload.createdAt,
+        ]
+      );
+    } catch (error) {
+      this.logger.error('Error saving PostgreSQL pending media upload', { error, assetId: upload.assetId, roomId: upload.roomId });
+      throw error;
+    }
+  }
+
+  async getPendingMediaUpload(assetId: string): Promise<PendingMediaUpload | null> {
+    try {
+      const result = await this.pool.query<PendingMediaUploadRow>(
+        `SELECT ${PENDING_MEDIA_UPLOAD_COLUMNS}
+        FROM pending_media_uploads
+        WHERE id = $1`,
+        [assetId]
+      );
+      return result.rows[0] ? mapPendingMediaUpload(result.rows[0]) : null;
+    } catch (error) {
+      this.logger.error('Error reading PostgreSQL pending media upload', { error, assetId });
+      return null;
+    }
+  }
+
+  async deletePendingMediaUpload(assetId: string): Promise<void> {
+    try {
+      await this.pool.query('DELETE FROM pending_media_uploads WHERE id = $1', [assetId]);
+    } catch (error) {
+      this.logger.error('Error deleting PostgreSQL pending media upload', { error, assetId });
+    }
+  }
+
+  async claimExpiredPendingMediaUploads(now: string, limit = 50): Promise<PendingMediaUpload[]> {
+    const safeLimit = Math.min(200, Math.max(1, Math.floor(limit)));
+    try {
+      const result = await this.pool.query<PendingMediaUploadRow>(
+        `DELETE FROM pending_media_uploads
+        WHERE id IN (
+          SELECT id
+          FROM pending_media_uploads
+          WHERE expires_at <= $1
+          ORDER BY expires_at ASC
+          LIMIT $2
+        )
+        RETURNING ${PENDING_MEDIA_UPLOAD_COLUMNS}`,
+        [now, safeLimit]
+      );
+      return result.rows.map(mapPendingMediaUpload);
+    } catch (error) {
+      this.logger.error('Error claiming expired PostgreSQL pending media uploads', { error, now, limit: safeLimit });
+      return [];
+    }
+  }
+
   async readRoomAICost(roomId: string): Promise<RoomAICostTotal> {
     try {
       const result = await this.pool.query<{ total_usd: string | number }>(
@@ -1525,7 +1635,7 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async resetAllDataForTests(): Promise<void> {
-    await this.pool.query('TRUNCATE room_ai_cost_totals, media_assets, image_assets, room_messages, room_saves, room_members, rooms, client_profiles RESTART IDENTITY CASCADE');
+    await this.pool.query('TRUNCATE room_ai_cost_totals, pending_media_uploads, media_assets, image_assets, room_messages, room_saves, room_members, rooms, client_profiles RESTART IDENTITY CASCADE');
   }
 
   async failInterruptedStreamingMessages(content: string): Promise<number> {

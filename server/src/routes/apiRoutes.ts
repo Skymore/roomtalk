@@ -20,6 +20,13 @@ interface ApiRouteOptions {
   generateAIRoleDraft: (idea: string) => Promise<AIRoleDraft>;
   persistenceStore?: string;
   mediaObjectStorage: MediaObjectStorage;
+  mediaUploadCleanup?: {
+    disabled?: boolean;
+    pendingUploadTtlMs?: number;
+    sweepIntervalMs?: number;
+    sweepBatchSize?: number;
+    nowMs?: () => number;
+  };
 }
 
 const MEDIA_UPLOAD_LIMIT_BYTES: Record<MediaKind, number> = {
@@ -34,6 +41,11 @@ const MEDIA_HISTORY_MONTH_WINDOW = 6;
 const MEDIA_HISTORY_KINDS: MediaKind[] = ['image', 'video'];
 const AI_ROLE_DRAFT_RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 const AI_ROLE_DRAFT_RATE_LIMIT_MAX_REQUESTS = 5;
+const MEDIA_UPLOAD_RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
+const MEDIA_UPLOAD_RATE_LIMIT_MAX_REQUESTS = 20;
+const MEDIA_PENDING_UPLOAD_TTL_MS = 30 * 60 * 1000;
+const MEDIA_PENDING_UPLOAD_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
+const MEDIA_PENDING_UPLOAD_SWEEP_BATCH_SIZE = 50;
 
 type RateLimitEntry = {
   windowStartMs: number;
@@ -41,6 +53,7 @@ type RateLimitEntry = {
 };
 
 const aiRoleDraftRateLimits = new Map<string, RateLimitEntry>();
+const mediaUploadRateLimits = new Map<string, RateLimitEntry>();
 
 const isMediaKind = (kind: unknown): kind is MediaKind => (
   kind === 'image' || kind === 'audio' || kind === 'video'
@@ -124,8 +137,67 @@ const consumeAIRoleDraftRateLimit = (clientId: string, ip: string | undefined, n
   return true;
 };
 
+const consumeMediaUploadRateLimit = (clientId: string, ip: string | undefined, nowMs = Date.now()) => {
+  const key = `${clientId}:${ip || 'unknown'}`;
+  const current = mediaUploadRateLimits.get(key);
+  if (!current || nowMs - current.windowStartMs >= MEDIA_UPLOAD_RATE_LIMIT_WINDOW_MS) {
+    mediaUploadRateLimits.set(key, { windowStartMs: nowMs, count: 1 });
+    return true;
+  }
+
+  if (current.count >= MEDIA_UPLOAD_RATE_LIMIT_MAX_REQUESTS) {
+    return false;
+  }
+
+  current.count += 1;
+  return true;
+};
+
 export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   const { store, io, redisClient, routeLogger, getAIModelResponse, generateAIRoleDraft, persistenceStore = 'redis', mediaObjectStorage } = options;
+  const mediaUploadCleanup = options.mediaUploadCleanup || {};
+  const getNowMs = mediaUploadCleanup.nowMs || (() => Date.now());
+  const pendingUploadTtlMs = mediaUploadCleanup.pendingUploadTtlMs ?? MEDIA_PENDING_UPLOAD_TTL_MS;
+  const sweepIntervalMs = mediaUploadCleanup.sweepIntervalMs ?? MEDIA_PENDING_UPLOAD_SWEEP_INTERVAL_MS;
+  const sweepBatchSize = mediaUploadCleanup.sweepBatchSize ?? MEDIA_PENDING_UPLOAD_SWEEP_BATCH_SIZE;
+
+  const deleteMediaObjectBestEffort = async (objectKey: string, reason: string) => {
+    if (!mediaObjectStorage.deleteMediaObject) {
+      return;
+    }
+
+    try {
+      await mediaObjectStorage.deleteMediaObject(objectKey);
+    } catch (error) {
+      routeLogger.error('Failed to delete media object', { error, objectKey, reason });
+    }
+  };
+
+  const sweepExpiredPendingMediaUploads = async () => {
+    if (!mediaObjectStorage.deleteMediaObject) {
+      return;
+    }
+
+    try {
+      const now = new Date(getNowMs()).toISOString();
+      const expiredUploads = await store.claimExpiredPendingMediaUploads(now, sweepBatchSize);
+      for (const upload of expiredUploads) {
+        await deleteMediaObjectBestEffort(upload.objectKey, 'pending-media-upload-expired');
+      }
+      if (expiredUploads.length > 0) {
+        routeLogger.info('Swept expired pending media uploads', { count: expiredUploads.length });
+      }
+    } catch (error) {
+      routeLogger.error('Failed to sweep expired pending media uploads', { error });
+    }
+  };
+
+  if (!mediaUploadCleanup.disabled && sweepIntervalMs > 0 && mediaObjectStorage.deleteMediaObject) {
+    const sweepTimer = setInterval(() => {
+      void sweepExpiredPendingMediaUploads();
+    }, sweepIntervalMs);
+    sweepTimer.unref?.();
+  }
 
   const shouldRegisterLocalMediaRoutes =
     mediaObjectStorage instanceof LocalMediaObjectStorage &&
@@ -405,6 +477,11 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       return res.status(413).json({ error: 'Media file is too large' });
     }
 
+    if (!consumeMediaUploadRateLimit(clientId, req.ip, getNowMs())) {
+      routeLogger.warn('Rate limited media upload URL request', { endpoint: 'POST /api/media/uploads', clientId, roomId, kind, ip: req.ip });
+      return res.status(429).json({ error: 'Too many media upload requests. Please try again later.' });
+    }
+
     const assetId = uuidv4();
     const objectKey = buildMediaObjectKey(roomId, kind, assetId);
     const signedUpload = await mediaObjectStorage.createWriteUrl({
@@ -412,6 +489,18 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       mimeType,
       byteSize,
       expiresInSeconds: 15 * 60,
+    });
+    const nowMs = getNowMs();
+    await store.savePendingMediaUpload({
+      assetId,
+      roomId,
+      objectKey,
+      kind,
+      mimeType,
+      byteSize,
+      uploadedByClientId: clientId,
+      createdAt: new Date(nowMs).toISOString(),
+      expiresAt: new Date(nowMs + pendingUploadTtlMs).toISOString(),
     });
 
     return res.status(201).json({
@@ -474,14 +563,38 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       return res.status(409).json({ error: 'Media upload has already been completed' });
     }
 
+    const pendingUpload = await store.getPendingMediaUpload(assetId);
+    if (!pendingUpload) {
+      return res.status(409).json({ error: 'Media upload was not initialized or has expired' });
+    }
+    if (
+      pendingUpload.roomId !== roomId ||
+      pendingUpload.objectKey !== objectKey ||
+      pendingUpload.kind !== kind ||
+      pendingUpload.mimeType !== mimeType ||
+      pendingUpload.byteSize !== byteSize ||
+      pendingUpload.uploadedByClientId !== clientId
+    ) {
+      return res.status(409).json({ error: 'Media upload metadata does not match the initialized upload' });
+    }
+    if (Date.parse(pendingUpload.expiresAt) <= getNowMs()) {
+      await store.deletePendingMediaUpload(assetId);
+      await deleteMediaObjectBestEffort(objectKey, 'pending-media-upload-expired-on-complete');
+      return res.status(410).json({ error: 'Media upload has expired' });
+    }
+
     const objectHead = await mediaObjectStorage.headObject({ objectKey });
     if (!objectHead.exists) {
       return res.status(409).json({ error: 'Uploaded media object was not found' });
     }
     if (objectHead.byteSize !== undefined && objectHead.byteSize !== byteSize) {
+      await store.deletePendingMediaUpload(assetId);
+      await deleteMediaObjectBestEffort(objectKey, 'media-complete-size-mismatch');
       return res.status(409).json({ error: 'Uploaded media object size does not match' });
     }
     if (objectHead.mimeType && objectHead.mimeType.toLowerCase() !== mimeType) {
+      await store.deletePendingMediaUpload(assetId);
+      await deleteMediaObjectBestEffort(objectKey, 'media-complete-mime-mismatch');
       return res.status(409).json({ error: 'Uploaded media object MIME type does not match' });
     }
 
@@ -530,10 +643,12 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
 
     const appendResult = await store.appendMediaMessageWithAsset(message, asset);
     if (!appendResult) {
-      await mediaObjectStorage.deleteMediaObject?.(objectKey);
+      await store.deletePendingMediaUpload(assetId);
+      await deleteMediaObjectBestEffort(objectKey, 'media-complete-persistence-failed');
       return res.status(500).json({ error: 'Failed to create media message' });
     }
 
+    await store.deletePendingMediaUpload(assetId);
     io.to(appendResult.room.creatorId).emit('room_updated', appendResult.room);
     io.to(roomId).emit('new_message', appendResult.message);
     return res.status(201).json(appendResult.message);
