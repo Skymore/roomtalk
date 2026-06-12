@@ -100,6 +100,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const isMine = message.clientId === clientId;
   const isTouchDevice = useIsTouchDevice();
   const [mediaError, setMediaError] = React.useState(false);
+  const [videoPreviewError, setVideoPreviewError] = React.useState(false);
   const [signedMediaUrl, setSignedMediaUrl] = React.useState<string | null>(null);
   const [isMediaViewerOpen, setIsMediaViewerOpen] = React.useState(false);
   const [audioTranscription, setAudioTranscription] = React.useState<AudioTranscription | null>(null);
@@ -179,6 +180,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     let cancelled = false;
     setSignedMediaUrl(null);
     setMediaError(false);
+    setVideoPreviewError(false);
 
     getMediaDownloadUrl({ roomId: message.roomId, assetId: message.mediaAsset.id })
       .then(({ url }) => {
@@ -263,6 +265,16 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     }
 
     setMediaError(true);
+  };
+
+  const handleVideoPreviewError = () => {
+    if (message.mediaAsset?.id && mediaRetryCountRef.current < 1) {
+      mediaRetryCountRef.current += 1;
+      loadSignedMediaUrl();
+      return;
+    }
+
+    setVideoPreviewError(true);
   };
 
   const handleRequestAudioTranscription = async () => {
@@ -435,7 +447,44 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
         </div>
       );
     } else if (displayMediaUrl && isVideo) {
-      mediaContent = (
+      const fileName = message.mediaAsset?.filename || buildMediaFilename(message);
+      const fileSize = formatByteSize(message.mediaAsset?.byteSize, i18n.language);
+      mediaContent = videoPreviewError ? (
+        <div className="flex w-[min(20rem,100%)] items-center gap-3 rounded-lg bg-[#f0eee6] px-3 py-2 text-[#141413] shadow-[0_0_0_1px_rgba(222,219,208,0.95)] dark:bg-[#242421] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(61,61,58,0.9)]">
+          <button
+            type="button"
+            aria-label={t('openMediaViewer')}
+            className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-md bg-[#e8e6dc] text-[#5e5d59] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#c96442] dark:bg-[#30302e] dark:text-[#b0aea5] dark:focus-visible:ring-[#d97757]"
+            onClick={handleOpenMediaViewer}
+          >
+            <Icon icon="lucide:video-off" className="h-5 w-5" />
+          </button>
+          <button
+            type="button"
+            aria-label={t('openMediaViewer')}
+            className="min-w-0 flex-1 text-left focus-visible:outline-none"
+            onClick={handleOpenMediaViewer}
+          >
+            <div className="truncate text-sm font-medium">{fileName}</div>
+            <div className="text-xs text-[#5e5d59] dark:text-[#b0aea5]">
+              {fileSize ? `${t('videoPreviewUnsupported')} · ${fileSize}` : t('videoPreviewUnsupported')}
+            </div>
+          </button>
+          <Tooltip content={t('downloadMedia')} placement="top" size="sm" delay={500} classNames={tooltipClassNames} isDisabled={isTouchDevice}>
+            <Button
+              isIconOnly
+              size="sm"
+              variant="light"
+              aria-label={t('downloadMedia')}
+              className="h-8 w-8 min-w-8 flex-shrink-0 text-[#c96442] dark:text-[#d97757]"
+              onPress={handleDownloadFile}
+              isDisabled={!signedMediaUrl}
+            >
+              <Icon icon="lucide:download" className="h-4 w-4" />
+            </Button>
+          </Tooltip>
+        </div>
+      ) : (
         <div className="relative inline-block max-w-full overflow-hidden rounded-xl bg-black shadow-[0_0_0_1px_rgba(20,20,19,0.35)]">
           <button
             type="button"
@@ -450,7 +499,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
               preload="metadata"
               muted
               playsInline
-              onError={handleMediaError}
+              onError={handleVideoPreviewError}
             />
             <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/10 transition group-hover/video:bg-black/20">
               <span className="flex h-14 w-14 items-center justify-center rounded-full bg-black/45 text-white shadow-lg backdrop-blur">
