@@ -89,6 +89,31 @@ describe('message domain', () => {
     assert.ok((message.replyTo?.preview.length || 0) <= 120);
   });
 
+  it('labels file attachments distinctly in reply references and AI context', () => {
+    const fileMessage = createMessage({
+      id: 'file-message',
+      content: '',
+      messageType: 'media',
+      mediaAsset: {
+        id: 'file-asset',
+        kind: 'file',
+        mimeType: 'text/markdown',
+        byteSize: 42,
+        filename: 'notes.md',
+      },
+    });
+
+    const replyReference = createReplyReference(fileMessage);
+    assert.equal(replyReference.messageId, 'file-message');
+    assert.equal(replyReference.messageType, 'media');
+    assert.equal(replyReference.mediaKind, 'file');
+    assert.equal(replyReference.preview, '[File attachment]');
+    assert.deepEqual(buildAIProviderMessages('system prompt', [fileMessage])[1], {
+      role: 'user',
+      content: '[Sender: Participant]\n[File attachment]',
+    });
+  });
+
   it('edits one message while preserving the rest of history', () => {
     const editedAt = new Date('2026-05-03T10:01:00.000Z');
     const first = createMessage({ id: 'm1', content: 'before', timestamp: '2026-05-03T10:00:00.000Z' });

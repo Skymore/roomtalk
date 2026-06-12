@@ -42,6 +42,7 @@ const socketApiMock = vi.hoisted(() => ({
   getRoomById: vi.fn(),
   getRoomMemberCount: vi.fn(),
   onRoomMemberChange: vi.fn(),
+  onUsernameAdopted: vi.fn(),
   setUsername: vi.fn(),
   reconnectSocket: vi.fn(),
   renameRoom: vi.fn(),
@@ -216,6 +217,7 @@ const permissions = (overrides: Partial<RoomPermissions> = {}): RoomPermissions 
   canClearHistory: true,
   canManageRoom: true,
   canManageAdmins: true,
+  canManageMembers: true,
   canTransferOwnership: true,
   ...overrides,
 });
@@ -262,6 +264,7 @@ describe('MessagePage room session restore', () => {
     socketApiMock.getRoomById.mockResolvedValue(room());
     socketApiMock.getRoomMemberCount.mockReturnValue(null);
     socketApiMock.onRoomMemberChange.mockReturnValue(vi.fn());
+    socketApiMock.onUsernameAdopted.mockReturnValue(vi.fn());
     socketApiMock.getSavedRoomsFromServer.mockResolvedValue([]);
     socketApiMock.getRoomPermissions.mockResolvedValue(permissions());
   });
@@ -511,6 +514,25 @@ describe('MessagePage room session restore', () => {
     expect(screen.queryByTestId('chat-room-view')).toBeNull();
     expect(screen.getByTestId('welcome-view')).toBeTruthy();
     expect(await screen.findByText('errorRoomNoLongerExists')).toBeTruthy();
+  });
+
+  it('clears the active room when the server removes this client from the room', async () => {
+    localStorage.setItem('roomtalk_current_room', JSON.stringify(room()));
+    localStorage.setItem('roomtalk_current_view', 'chat');
+
+    renderPage();
+    await screen.findByTestId('chat-room-view');
+
+    act(() => {
+      socketMock.trigger('room_removed', 'room-1');
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('chat-room-view')).toBeNull();
+    });
+    expect(localStorage.getItem('roomtalk_current_room')).toBeNull();
+    expect(screen.getByTestId('room-list')).toBeTruthy();
+    expect(await screen.findByText('roomAccessRemoved')).toBeTruthy();
   });
 
   it('keeps the room shell when restore fails due to a transient network error', async () => {

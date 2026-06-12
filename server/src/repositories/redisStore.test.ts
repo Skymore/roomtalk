@@ -1001,10 +1001,21 @@ describe('RedisStore', () => {
     assert.equal(await store.updateRoomMemberCount('room-1', 'client-1', 'socket-1', false), 2);
     assert.equal(await store.updateRoomMemberCount('room-1', 'client-1', 'socket-2', false), 1);
 
-    await store.storeClientSession('socket-1', 'client-1');
+    await store.storeClientSession('socket-1', 'client-1', 'browser-1');
     assert.equal(await store.getClientId('socket-1'), 'client-1');
+    assert.equal(await store.getBrowserInstanceId('socket-1'), 'browser-1');
     await store.removeClientSession('socket-1');
     assert.equal(await store.getClientId('socket-1'), null);
+    assert.equal(await store.getBrowserInstanceId('socket-1'), null);
+
+    await store.updateRoomBrowserPresence('room-1', 'browser-1', 'socket-1', true);
+    await store.updateRoomBrowserPresence('room-1', 'browser-1', 'socket-2', true);
+    await store.updateRoomBrowserPresence('room-1', 'browser-2', 'socket-3', true);
+    assert.deepEqual((await store.getRoomActiveBrowserInstanceIds('room-1')).sort(), ['browser-1', 'browser-2']);
+    await store.updateRoomBrowserPresence('room-1', 'browser-1', 'socket-1', false);
+    assert.deepEqual((await store.getRoomActiveBrowserInstanceIds('room-1')).sort(), ['browser-1', 'browser-2']);
+    await store.updateRoomBrowserPresence('room-1', 'browser-1', 'socket-2', false);
+    assert.deepEqual(await store.getRoomActiveBrowserInstanceIds('room-1'), ['browser-2']);
 
     await store.storeUserRooms('socket-1', ['room-1', 'room-2']);
     assert.deepEqual(await store.getUserRooms('socket-1'), ['room-1', 'room-2']);
@@ -1031,6 +1042,7 @@ describe('RedisStore', () => {
     await store.updateRoomMemberCount('room-1', 'client-1', 'socket-1', true);
     await store.updateRoomMemberCount('room-1', 'client-1', 'socket-2', true);
     await store.updateRoomMemberCount('room-1', 'client-2', 'socket-3', true);
+    await store.updateRoomBrowserPresence('room-1', 'browser-1', 'socket-1', true);
 
     assert.equal(await store.getRoomMemberCount('room-1'), 2);
     assert.deepEqual(await redis.sMembers('room:room-1:member_sockets:client-1'), ['socket-1', 'socket-2']);
@@ -1039,6 +1051,8 @@ describe('RedisStore', () => {
 
     assert.equal(await store.getRoomMemberCount('room-1'), 0);
     assert.deepEqual(await redis.sMembers('room:room-1:member_sockets:client-1'), []);
+    assert.deepEqual(await store.getRoomActiveBrowserInstanceIds('room-1'), []);
+    assert.deepEqual(await redis.sMembers('room:room-1:browser_instance_sockets:browser-1'), []);
     assert.deepEqual(
       (await store.readRoomMembers('room-1')).map(member => member.clientId),
       ['client-1', 'client-2']
@@ -1101,13 +1115,14 @@ describe('RedisStore', () => {
 
     await store.saveRoom(room());
     await store.appendMessage(message());
-    await store.storeClientSession('socket-1', 'client-1');
+    await store.storeClientSession('socket-1', 'client-1', 'browser-1');
 
     await store.resetAllDataForTests();
 
     assert.equal(await store.countRooms(), 0);
     assert.deepEqual(await store.readMessagesByRoom('room-1'), []);
     assert.equal(await store.getClientId('socket-1'), null);
+    assert.equal(await store.getBrowserInstanceId('socket-1'), null);
   });
 
   it('marks interrupted streaming messages as errors on startup recovery', async () => {

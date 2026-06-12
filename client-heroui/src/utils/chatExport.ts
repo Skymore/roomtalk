@@ -23,6 +23,7 @@ const textEncoder = new TextEncoder();
 const sanitizeFilenamePart = (value: string) => (
   value
     .trim()
+    .replace(/[\r\n]+/g, '')
     .replace(/[\\/:*?"<>|]+/g, '-')
     .replace(/\s+/g, '-')
     .slice(0, 80) || 'room'
@@ -47,6 +48,7 @@ const describeMedia = (message: Message) => {
   }
   const details = [
     asset.kind,
+    asset.filename,
     asset.mimeType,
     `${asset.byteSize} bytes`,
     asset.width && asset.height ? `${asset.width}x${asset.height}` : null,
@@ -175,6 +177,15 @@ const renderMediaHtml = (message: Message, media?: HtmlMediaReference) => {
       <figure class="media">
         <audio controls src="${escapeHtml(media.src)}"></audio>
         <a class="attachment-link" href="${escapeHtml(media.src)}">${escapeHtml(media.filename || 'Audio attachment')}</a>
+        ${caption}
+      </figure>
+    `;
+  }
+
+  if (media?.src && media.kind === 'file') {
+    return `
+      <figure class="media">
+        <a class="attachment-link" href="${escapeHtml(media.src)}" download>${escapeHtml(media.filename || 'File attachment')}</a>
         ${caption}
       </figure>
     `;

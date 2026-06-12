@@ -71,6 +71,8 @@ const getErrorMessage = (error: unknown, fallback: string) => (
   error instanceof Error ? error.message : fallback
 );
 
+const MAX_FILE_UPLOAD_BYTES = 50 * 1024 * 1024;
+
 const getTranscriptionErrorKey = (error: unknown) => {
   const message = getErrorMessage(error, '').toLowerCase();
 
@@ -112,6 +114,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   const [isSending, setIsSending] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const arbitraryFileInputRef = useRef<HTMLInputElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
   const [imageCount, setImageCount] = useState(0);
   const [currentInputText, setCurrentInputText] = useState('');
@@ -198,7 +201,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         ? t('voiceMessage')
         : message.mediaAsset?.kind === 'video'
           ? t('videoMessage')
-          : t('sharedImage'))
+          : message.mediaAsset?.kind === 'file'
+            ? t('fileAttachment')
+            : t('sharedImage'))
       : message.content.replace(/\s+/g, ' ').trim().slice(0, 120) || '[Empty message]';
 
     return {
@@ -873,6 +878,61 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     }
   };
 
+  const sendArbitraryFile = async (file: File) => {
+    if (!canPost) {
+      setErrorMessage(postingClosedMessage);
+      return;
+    }
+
+    if (isSending || isAiProcessing) return;
+
+    if (file.size > MAX_FILE_UPLOAD_BYTES) {
+      setErrorMessage(t('fileTooLarge'));
+      return;
+    }
+
+    setIsSending(true);
+    try {
+      const avatar = { text: avatarText, color: avatarColor };
+      await uploadMediaMessage({
+        file,
+        roomId,
+        kind: 'file',
+        mimeType: file.type || 'application/octet-stream',
+        filename: file.name,
+        username,
+        avatar,
+        replyToMessageId: replyToMessage?.id,
+      });
+      onCancelReply();
+      setErrorMessage(null);
+    } catch (error) {
+      console.error('Error sending file:', error);
+      setErrorMessage(t('errorSendingMessage'));
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  const handleArbitraryFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!canPost) {
+      setErrorMessage(postingClosedMessage);
+      if (arbitraryFileInputRef.current) {
+        arbitraryFileInputRef.current.value = '';
+      }
+      return;
+    }
+
+    const file = e.target.files?.[0];
+    if (file) {
+      await sendArbitraryFile(file);
+    }
+
+    if (arbitraryFileInputRef.current) {
+      arbitraryFileInputRef.current.value = '';
+    }
+  };
+
   // 处理媒体上传
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!canPost) {
@@ -1334,6 +1394,18 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                   <Icon icon="lucide:plus" className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
                 </Button>
 
+                <Button
+                  isIconOnly
+                  size="sm"
+                  variant="light"
+                  aria-label={t('attachFile')}
+                  className="h-7 w-7 min-w-7 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
+                  onPress={() => arbitraryFileInputRef.current?.click()}
+                  isDisabled={isSending || isAiProcessing || !canPost}
+                >
+                  <Icon icon="lucide:paperclip" className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
+                </Button>
+
                 {/* AI设置按钮 */}
                 <MessageInputAISettingsButton
                   onOpen={onAISettingsOpen}
@@ -1351,6 +1423,15 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               accept="image/*,video/*"
               multiple={true}
               onChange={handleImageUpload}
+              disabled={isSending || isAiProcessing || !canPost}
+            />
+
+            <input
+              type="file"
+              data-testid="file-upload-input"
+              ref={arbitraryFileInputRef}
+              className="hidden"
+              onChange={handleArbitraryFileUpload}
               disabled={isSending || isAiProcessing || !canPost}
             />
 

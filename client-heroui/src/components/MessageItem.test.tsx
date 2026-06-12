@@ -9,6 +9,7 @@ const getMediaDownloadUrlMock = vi.hoisted(() => vi.fn());
 const getRoomMediaHistoryMock = vi.hoisted(() => vi.fn());
 const getAudioTranscriptionMock = vi.hoisted(() => vi.fn());
 const requestAudioTranscriptionMock = vi.hoisted(() => vi.fn());
+const saveUrlAsFileMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../utils/socket', () => ({
   clientId: 'viewer',
@@ -16,6 +17,11 @@ vi.mock('../utils/socket', () => ({
   getMediaDownloadUrl: getMediaDownloadUrlMock,
   getRoomMediaHistory: getRoomMediaHistoryMock,
   requestAudioTranscription: requestAudioTranscriptionMock,
+}));
+
+vi.mock('../utils/mediaDownload', () => ({
+  buildMediaFilename: (message: Message) => message.mediaAsset?.filename || 'download.bin',
+  saveUrlAsFile: saveUrlAsFileMock,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -75,6 +81,7 @@ describe('MessageItem replies', () => {
     getRoomMediaHistoryMock.mockReset();
     getAudioTranscriptionMock.mockReset();
     requestAudioTranscriptionMock.mockReset();
+    saveUrlAsFileMock.mockReset();
   });
 
   it('shows reply context and exposes a touch-accessible reply action', () => {
@@ -123,6 +130,7 @@ describe('MessageItem replies', () => {
           canClearHistory: true,
           canManageRoom: true,
           canManageAdmins: true,
+          canManageMembers: true,
           canTransferOwnership: true,
         }}
         onStartEdit={vi.fn()}
@@ -204,6 +212,48 @@ describe('MessageItem replies', () => {
         .find(element => element.getAttribute('aria-hidden') !== 'true');
       expect(primaryImage?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/asset-1.webp');
     });
+  });
+
+  it('renders file attachments as a download card', async () => {
+    getMediaDownloadUrlMock.mockResolvedValue({
+      url: 'https://signed.example/rooms/room-1/file-1?token=abc',
+      expiresAt: '2026-05-03T10:15:00.000Z',
+    });
+
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'file-message',
+          content: '',
+          messageType: 'media',
+          mimeType: 'text/markdown',
+          mediaAsset: {
+            id: 'file-1',
+            kind: 'file',
+            mimeType: 'text/markdown',
+            byteSize: 2048,
+            filename: 'notes.md',
+          },
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('notes.md')).toBeTruthy();
+    expect(screen.getByText('2 KB')).toBeTruthy();
+    await waitFor(() => {
+      expect(getMediaDownloadUrlMock).toHaveBeenCalledWith({ roomId: 'room-1', assetId: 'file-1' });
+    });
+
+    fireEvent.click(screen.getByLabelText('downloadFile'));
+    await waitFor(() => {
+      expect(saveUrlAsFileMock).toHaveBeenCalledWith('https://signed.example/rooms/room-1/file-1?token=abc', 'notes.md');
+    });
+    expect(screen.queryByRole('dialog', { name: 'mediaViewer' })).toBeNull();
   });
 
   it('opens asset-backed images in the full-screen media viewer', async () => {

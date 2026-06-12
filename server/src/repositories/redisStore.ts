@@ -61,6 +61,7 @@ const toMessageMediaAsset = (asset: MediaAsset): MessageMediaAsset => {
     mimeType: asset.mimeType,
     byteSize: asset.byteSize,
   };
+  if (asset.filename !== undefined) messageAsset.filename = asset.filename;
   if (asset.width !== undefined) messageAsset.width = asset.width;
   if (asset.height !== undefined) messageAsset.height = asset.height;
   if (asset.durationMs !== undefined) messageAsset.durationMs = asset.durationMs;

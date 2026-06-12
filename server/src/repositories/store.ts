@@ -62,6 +62,7 @@ export interface PendingMediaUpload {
   kind: MediaAsset['kind'];
   mimeType: string;
   byteSize: number;
+  filename?: string;
   uploadedByClientId: string;
   expiresAt: string;
   createdAt: string;

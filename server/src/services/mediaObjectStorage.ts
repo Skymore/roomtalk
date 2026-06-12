@@ -21,6 +21,7 @@ export interface MediaObjectStorage {
   createReadUrl(input: {
     objectKey: string;
     expiresInSeconds?: number;
+    responseContentDisposition?: string;
   }): Promise<{ url: string; expiresAt: string }>;
   headObject(input: {
     objectKey: string;
@@ -142,6 +143,7 @@ export class LocalMediaObjectStorage implements MediaObjectStorage {
   async createReadUrl(input: {
     objectKey: string;
     expiresInSeconds?: number;
+    responseContentDisposition?: string;
   }): Promise<{ url: string; expiresAt: string }> {
     const expiresInSeconds = input.expiresInSeconds || 15 * 60;
     return {
@@ -263,6 +265,7 @@ export class S3MediaObjectStorage implements MediaObjectStorage {
   async createReadUrl(input: {
     objectKey: string;
     expiresInSeconds?: number;
+    responseContentDisposition?: string;
   }): Promise<{ url: string; expiresAt: string }> {
     const expiresInSeconds = input.expiresInSeconds || 15 * 60;
     const url = await getSignedUrl(
@@ -270,6 +273,7 @@ export class S3MediaObjectStorage implements MediaObjectStorage {
       new GetObjectCommand({
         Bucket: this.config.bucket,
         Key: input.objectKey,
+        ResponseContentDisposition: input.responseContentDisposition,
       }),
       { expiresIn: expiresInSeconds }
     );

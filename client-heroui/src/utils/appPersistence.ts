@@ -15,6 +15,10 @@ export const getStoredUsername = (): string => {
   return localStorage.getItem(USERNAME_KEY) || "";
 };
 
+export const clearStoredUsername = () => {
+  localStorage.removeItem(USERNAME_KEY);
+};
+
 export const saveCurrentView = (view: string) => {
   localStorage.setItem(CURRENT_VIEW_KEY, view);
 };

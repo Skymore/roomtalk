@@ -18,6 +18,7 @@ import { useIsTouchDevice } from "../hooks/useIsTouchDevice";
 import { useCachedMedia } from "../hooks/useCachedMedia";
 import { MediaViewerModal } from "./MediaViewerModal";
 import { getVideoPreviewUrl } from "../utils/videoPreview";
+import { buildMediaFilename, saveUrlAsFile } from "../utils/mediaDownload";
 
 interface MessageItemProps {
   message: Message;
@@ -30,6 +31,24 @@ interface MessageItemProps {
 
 const tooltipClassNames = {
   content: "border border-[#dedbd0] bg-[#faf9f5] px-2 py-1 text-xs font-medium text-[#141413] shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5]",
+};
+
+const formatByteSize = (byteSize?: number, language?: string) => {
+  if (typeof byteSize !== 'number' || !Number.isFinite(byteSize) || byteSize <= 0) {
+    return '';
+  }
+
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = byteSize;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${new Intl.NumberFormat(language || 'en', {
+    maximumFractionDigits: value < 10 && unitIndex > 0 ? 1 : 0,
+  }).format(value)} ${units[unitIndex]}`;
 };
 
 const importMarkdownContent = () => import("./MarkdownContent");
@@ -92,6 +111,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const isImage = isMedia && mediaKind === "image";
   const isAudio = isMedia && mediaKind === "audio";
   const isVideo = isMedia && mediaKind === "video";
+  const isFile = isMedia && mediaKind === "file";
   const isText = message.messageType === "text";
   const isAI = message.clientId === 'ai_assistant';
   const isStreaming = isAI && message.status === 'streaming';
@@ -119,7 +139,9 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       ? t('voiceMessage')
       : message.replyTo.mediaKind === 'video'
         ? t('videoMessage')
-        : t('sharedImage'))
+        : message.replyTo.mediaKind === 'file'
+          ? t('fileAttachment')
+          : t('sharedImage'))
     : message.replyTo?.preview;
   const replyReference = message.replyTo ? (
     <div className="mb-2 max-w-full border-l-2 border-[#c96442] pl-2 text-xs text-[#5e5d59] dark:text-[#b0aea5]">
@@ -267,6 +289,13 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     }
   };
 
+  const handleDownloadFile = async () => {
+    if (!signedMediaUrl) {
+      return;
+    }
+    await saveUrlAsFile(signedMediaUrl, buildMediaFilename(message));
+  };
+
   const canOpenMediaViewer = Boolean(signedMediaUrl && !mediaError && (isImage || isVideo));
   const { mediaUrl: displayMediaUrl, posterUrl: videoPosterUrl } = useCachedMedia({
     assetId: message.mediaAsset?.id,
@@ -348,6 +377,33 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
           {t('mediaLoadFailed')}
         </div>
       );
+    } else if (isFile) {
+      const fileName = message.mediaAsset?.filename || buildMediaFilename(message);
+      const fileSize = formatByteSize(message.mediaAsset?.byteSize, i18n.language);
+      mediaContent = (
+        <div className="flex w-[min(20rem,100%)] items-center gap-3 rounded-lg bg-[#f0eee6] px-3 py-2 text-[#141413] shadow-[0_0_0_1px_rgba(222,219,208,0.95)] dark:bg-[#242421] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(61,61,58,0.9)]">
+          <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-md bg-[#e8e6dc] text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]">
+            <Icon icon="lucide:file" className="h-5 w-5" />
+          </div>
+          <div className="min-w-0 flex-1 text-left">
+            <div className="truncate text-sm font-medium">{fileName}</div>
+            {fileSize && <div className="text-xs text-[#5e5d59] dark:text-[#b0aea5]">{fileSize}</div>}
+          </div>
+          <Tooltip content={t('downloadFile')} placement="top" size="sm" delay={500} classNames={tooltipClassNames} isDisabled={isTouchDevice}>
+            <Button
+              isIconOnly
+              size="sm"
+              variant="light"
+              aria-label={t('downloadFile')}
+              className="h-8 w-8 min-w-8 flex-shrink-0 text-[#c96442] dark:text-[#d97757]"
+              onPress={handleDownloadFile}
+              isDisabled={!signedMediaUrl}
+            >
+              <Icon icon="lucide:download" className="h-4 w-4" />
+            </Button>
+          </Tooltip>
+        </div>
+      );
     } else if (displayMediaUrl && isImage) {
       mediaContent = (
         <div className="relative inline-block max-w-full overflow-hidden rounded-xl bg-black/5 shadow-[0_0_0_1px_rgba(194,192,182,0.45)] dark:bg-white/5 dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)]">
@@ -407,7 +463,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     } else {
       mediaContent = (
         <div className="flex h-24 w-36 items-center justify-center rounded-xl bg-[#e8e6dc] text-[#87867f] shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e] dark:text-[#b0aea5] dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)]">
-          <Icon icon={isAudio ? "lucide:audio-lines" : isVideo ? "lucide:video" : "lucide:image"} className="h-5 w-5" />
+          <Icon icon={isAudio ? "lucide:audio-lines" : isVideo ? "lucide:video" : isFile ? "lucide:file" : "lucide:image"} className="h-5 w-5" />
         </div>
       );
     }

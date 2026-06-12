@@ -41,23 +41,26 @@ type TestServer = {
     mediaAssets: Map<string, MediaAsset>;
     pendingMediaUploads: Map<string, PendingMediaUpload>;
     audioTranscriptions: Map<string, AudioTranscriptionRecord>;
-    pushSubscriptions: Map<string, { clientId: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }>;
+    pushSubscriptions: Map<string, { clientId: string; browserInstanceId?: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }>;
     clientPasswords: Map<string, string>;
     clientAuthTokens: Map<string, { clientId: string; tokenHash: string; createdAt: string }>;
+    nicknames: Map<string, string>;
     readMessagesByRoom: (roomId: string) => Promise<Message[]>;
     addRoomMember: (roomId: string, clientId: string, role: 'owner' | 'member', joinedAt?: string) => Promise<{ roomId: string; clientId: string; role: 'owner' | 'member'; joinedAt: string } | null>;
     getRoomMember: (roomId: string, clientId: string) => Promise<{ roomId: string; clientId: string; role: 'owner' | 'member'; joinedAt: string } | null>;
     isRoomMember: (roomId: string, clientId: string) => Promise<boolean>;
     readRoomMembers: (roomId: string) => Promise<Array<{ roomId: string; clientId: string; role: 'owner' | 'member'; joinedAt: string }>>;
-    savePushSubscription: (subscription: { clientId: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }) => Promise<void>;
+    savePushSubscription: (subscription: { clientId: string; browserInstanceId?: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }) => Promise<void>;
     deletePushSubscription: (clientId: string, endpoint: string) => Promise<boolean>;
-    readPushSubscriptionsByRoom: (roomId: string) => Promise<Array<{ clientId: string; endpoint: string; p256dh: string; auth: string; createdAt: string; updatedAt: string; userAgent?: string }>>;
+    readPushSubscriptionsByRoom: (roomId: string) => Promise<Array<{ clientId: string; browserInstanceId?: string; endpoint: string; p256dh: string; auth: string; createdAt: string; updatedAt: string; userAgent?: string }>>;
     setClientPasswordHash: (clientId: string, passwordHash: string) => Promise<void>;
     getClientPasswordHash: (clientId: string) => Promise<string | null>;
     saveClientAuthToken: (token: { clientId: string; tokenHash: string; createdAt: string }) => Promise<void>;
     isClientAuthTokenValid: (clientId: string, tokenHash: string) => Promise<boolean>;
     deleteClientAuthToken: (clientId: string, tokenHash: string) => Promise<boolean>;
     deleteClientAuthTokens: (clientId: string) => Promise<void>;
+    setClientNickname: (clientId: string, nickname: string) => Promise<void>;
+    getClientNicknames: (clientIds: string[]) => Promise<Record<string, string>>;
     readRoomsByUser: (clientId: string) => Promise<Room[]>;
     generateUniqueRoomId: () => Promise<string>;
     saveRoom: (room: Room) => Promise<Room | null>;
@@ -179,9 +182,10 @@ async function createTestServer(overrides: {
     mediaAssets: new Map<string, MediaAsset>(),
     pendingMediaUploads: new Map<string, PendingMediaUpload>(),
     audioTranscriptions: new Map<string, AudioTranscriptionRecord>(),
-    pushSubscriptions: new Map<string, { clientId: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }>(),
+    pushSubscriptions: new Map<string, { clientId: string; browserInstanceId?: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }>(),
     clientPasswords: new Map<string, string>(),
     clientAuthTokens: new Map<string, { clientId: string; tokenHash: string; createdAt: string }>(),
+    nicknames: new Map<string, string>(),
     async readMessagesByRoom(roomId: string) {
       return this.messages.filter(message => message.roomId === roomId);
     },
@@ -202,7 +206,7 @@ async function createTestServer(overrides: {
         .filter(key => key.startsWith(`${roomId}:`))
         .map(key => ({ roomId, clientId: key.split(':')[1], role: 'member' as const, joinedAt: '2026-05-03T00:00:00.000Z' }));
     },
-    async savePushSubscription(subscription: { clientId: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }) {
+    async savePushSubscription(subscription: { clientId: string; browserInstanceId?: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }) {
       this.pushSubscriptions.set(subscription.endpoint, subscription);
     },
     async deletePushSubscription(clientId: string, endpoint: string) {
@@ -251,6 +255,16 @@ async function createTestServer(overrides: {
         }
       }
     },
+    async setClientNickname(clientId: string, nickname: string) {
+      this.nicknames.set(clientId, nickname);
+    },
+    async getClientNicknames(clientIds: string[]) {
+      return Object.fromEntries(
+        clientIds
+          .map(clientId => [clientId, this.nicknames.get(clientId)])
+          .filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+      );
+    },
     async readRoomsByUser(clientId: string) {
       return this.rooms.filter(room => room.creatorId === clientId || this.members.has(`${room.id}:${clientId}`));
     },
@@ -274,19 +288,21 @@ async function createTestServer(overrides: {
         roomId: message.roomId,
         messageId: message.id,
       };
+      const mediaAsset: Message['mediaAsset'] = {
+        id: savedAsset.id,
+        kind: savedAsset.kind,
+        mimeType: savedAsset.mimeType,
+        byteSize: savedAsset.byteSize,
+      };
+      if (savedAsset.filename !== undefined) mediaAsset.filename = savedAsset.filename;
+      if (savedAsset.width !== undefined) mediaAsset.width = savedAsset.width;
+      if (savedAsset.height !== undefined) mediaAsset.height = savedAsset.height;
+      if (savedAsset.durationMs !== undefined) mediaAsset.durationMs = savedAsset.durationMs;
       const savedMessage = {
         ...message,
         content: message.content || '',
         mimeType: savedAsset.mimeType as Message['mimeType'],
-        mediaAsset: {
-          id: savedAsset.id,
-          kind: savedAsset.kind,
-          mimeType: savedAsset.mimeType,
-          byteSize: savedAsset.byteSize,
-          width: savedAsset.width,
-          height: savedAsset.height,
-          durationMs: savedAsset.durationMs,
-        },
+        mediaAsset,
       };
       this.appendedMessages.push(savedMessage);
       this.appendedMediaAssets.push(savedAsset);
@@ -557,6 +573,7 @@ describe('API routes', () => {
   it('saves and deletes push notification subscriptions', async () => {
     const body = {
       clientId: 'client-1',
+      browserInstanceId: 'browser-1',
       subscription: {
         endpoint: 'https://push.example/subscription-1',
         keys: {
@@ -575,6 +592,7 @@ describe('API routes', () => {
     assert.equal(saveResponse.status, 204);
     assert.deepEqual(server.store.pushSubscriptions.get(body.subscription.endpoint), {
       clientId: 'client-1',
+      browserInstanceId: 'browser-1',
       endpoint: body.subscription.endpoint,
       p256dh: 'p256dh-key',
       auth: 'auth-key',
@@ -625,10 +643,21 @@ describe('API routes', () => {
       body: JSON.stringify({ clientId: 'client-1', password: 'password-1' }),
     });
     assert.equal(loginResponse.status, 200);
-    const loginPayload = await loginResponse.json() as { clientId: string; clientAuthToken: string; hasPassword: boolean };
+    const loginPayload = await loginResponse.json() as { clientId: string; clientAuthToken: string; hasPassword: boolean; nickname: string | null };
     assert.equal(loginPayload.clientId, 'client-1');
     assert.equal(loginPayload.hasPassword, true);
+    assert.equal(loginPayload.nickname, null);
     assert.ok(loginPayload.clientAuthToken.length > 20);
+
+    await server.store.setClientNickname('client-1', 'Ada');
+    const loginWithNicknameResponse = await fetch(`${server.baseUrl}/api/client-auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1', password: 'password-1' }),
+    });
+    assert.equal(loginWithNicknameResponse.status, 200);
+    const loginWithNicknamePayload = await loginWithNicknameResponse.json() as { nickname: string | null };
+    assert.equal(loginWithNicknamePayload.nickname, 'Ada');
   });
 
   it('requires valid client auth tokens after a User ID password is set', async () => {
@@ -1019,6 +1048,118 @@ describe('API routes', () => {
     ]);
   });
 
+  it('creates file media messages with arbitrary MIME types and sanitized filenames', async () => {
+    server.store.members.add('room-1:client-file');
+
+    const uploadResponse = await fetch(`${server.baseUrl}/api/media/uploads`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientId: 'client-file',
+        roomId: 'room-1',
+        kind: 'file',
+        mimeType: 'text/html',
+        byteSize: 321,
+        filename: '../docs/report.html',
+      }),
+    });
+    assert.equal(uploadResponse.status, 201);
+    const upload = await uploadResponse.json() as { assetId: string; objectKey: string; uploadUrl: string };
+    assert.equal(upload.objectKey, `rooms/room-1/media/file/${upload.assetId}`);
+    assert.equal(server.store.pendingMediaUploads.get(upload.assetId)?.filename, 'report.html');
+
+    const completeResponse = await fetch(`${server.baseUrl}/api/media/uploads/${upload.assetId}/complete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientId: 'client-file',
+        roomId: 'room-1',
+        kind: 'file',
+        mimeType: 'text/html',
+        byteSize: 321,
+        objectKey: upload.objectKey,
+        filename: 'ignored.html',
+      }),
+    });
+
+    assert.equal(completeResponse.status, 201);
+    const message = await completeResponse.json() as Message;
+    assert.deepEqual(message.mediaAsset, {
+      id: upload.assetId,
+      kind: 'file',
+      mimeType: 'text/html',
+      byteSize: 321,
+      filename: 'report.html',
+    });
+    assert.equal(server.store.appendedMediaAssets[0].filename, 'report.html');
+  });
+
+  it('rejects media filenames containing line breaks', async () => {
+    server.store.members.add('room-1:client-crlf');
+
+    const uploadResponse = await fetch(`${server.baseUrl}/api/media/uploads`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientId: 'client-crlf',
+        roomId: 'room-1',
+        kind: 'file',
+        mimeType: 'text/plain',
+        byteSize: 12,
+        filename: 'safe.txt\r\nContent-Disposition: inline',
+      }),
+    });
+    assert.equal(uploadResponse.status, 400);
+    assert.deepEqual(await uploadResponse.json(), { error: 'Filename must not contain line breaks' });
+
+    const assetId = 'asset-crlf-complete';
+    const objectKey = `rooms/room-1/media/file/${assetId}`;
+    server.store.pendingMediaUploads.set(assetId, pendingUpload({
+      assetId,
+      objectKey,
+      kind: 'file',
+      mimeType: 'text/plain',
+      byteSize: 12,
+      uploadedByClientId: 'client-crlf',
+    }));
+
+    const completeResponse = await fetch(`${server.baseUrl}/api/media/uploads/${assetId}/complete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientId: 'client-crlf',
+        roomId: 'room-1',
+        kind: 'file',
+        mimeType: 'text/plain',
+        byteSize: 12,
+        objectKey,
+        filename: 'safe.txt\nx',
+      }),
+    });
+    assert.equal(completeResponse.status, 400);
+    assert.deepEqual(await completeResponse.json(), { error: 'Filename must not contain line breaks' });
+  });
+
+  it('limits generic file uploads to 50 MB', async () => {
+    server.store.members.add('room-1:client-file-large');
+
+    const response = await fetch(`${server.baseUrl}/api/media/uploads`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientId: 'client-file-large',
+        roomId: 'room-1',
+        kind: 'file',
+        mimeType: 'application/zip',
+        byteSize: 50 * 1024 * 1024 + 1,
+        filename: 'archive.zip',
+      }),
+    });
+
+    assert.equal(response.status, 413);
+    assert.deepEqual(await response.json(), { error: 'Media file is too large' });
+  });
+
   it('requires initialized pending media uploads before completion', async () => {
     server.store.members.add('room-1:client-2');
     const assetId = 'asset-without-pending';
@@ -1202,14 +1343,14 @@ describe('API routes', () => {
     });
 
     try {
-      server.store.members.add('room-1:client-2');
+      server.store.members.add('room-1:client-local-file');
       const bytes = Buffer.from('image-bytes');
 
       const uploadResponse = await fetch(`${server.baseUrl}/api/media/uploads`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          clientId: 'client-2',
+          clientId: 'client-local-file',
           roomId: 'room-1',
           kind: 'image',
           mimeType: 'image/webp',
@@ -1236,7 +1377,7 @@ describe('API routes', () => {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          clientId: 'client-2',
+          clientId: 'client-local-file',
           roomId: 'room-1',
           kind: 'image',
           mimeType: 'image/webp',
@@ -1246,7 +1387,7 @@ describe('API routes', () => {
       });
       assert.equal(completeResponse.status, 201);
 
-      const downloadUrlResponse = await fetch(`${server.baseUrl}/api/media/${upload.assetId}/download-url?roomId=room-1&clientId=client-2`);
+      const downloadUrlResponse = await fetch(`${server.baseUrl}/api/media/${upload.assetId}/download-url?roomId=room-1&clientId=client-local-file`);
       assert.equal(downloadUrlResponse.status, 200);
       const download = await downloadUrlResponse.json() as { url: string };
       assert.match(download.url, /^\/api\/media\/local-objects\//);
@@ -1255,6 +1396,106 @@ describe('API routes', () => {
       assert.equal(downloadResponse.status, 200);
       assert.equal(downloadResponse.headers.get('content-type'), 'image/webp');
       assert.equal(Buffer.from(await downloadResponse.arrayBuffer()).toString('utf8'), 'image-bytes');
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it('passes attachment content disposition when creating file download URLs', async () => {
+    await server.close();
+    const readInputs: Array<{ objectKey: string; expiresInSeconds?: number; responseContentDisposition?: string }> = [];
+    server = await createTestServer({
+      mediaObjectStorage: {
+        isConfigured: () => true,
+        async putMediaObject() {},
+        async createWriteUrl({ objectKey }: { objectKey: string }) {
+          return { url: `https://upload.example/${encodeURIComponent(objectKey)}`, expiresAt: '2026-05-03T00:15:00.000Z' };
+        },
+        async createReadUrl(input: { objectKey: string; expiresInSeconds?: number; responseContentDisposition?: string }) {
+          readInputs.push(input);
+          return { url: `https://download.example/${encodeURIComponent(input.objectKey)}`, expiresAt: '2026-05-03T00:15:00.000Z' };
+        },
+        async headObject() {
+          return { exists: true };
+        },
+      },
+    });
+    server.store.members.add('room-1:client-2');
+    server.store.mediaAssets.set('file-asset-1', {
+      id: 'file-asset-1',
+      roomId: 'room-1',
+      messageId: 'file-message-1',
+      objectKey: 'rooms/room-1/media/file/file-asset-1',
+      kind: 'file',
+      mimeType: 'text/html',
+      byteSize: 12,
+      filename: 'report final.html',
+      uploadedByClientId: 'client-2',
+      createdAt: '2026-05-03T00:00:00.000Z',
+    });
+
+    const response = await fetch(`${server.baseUrl}/api/media/file-asset-1/download-url?roomId=room-1&clientId=client-2`);
+
+    assert.equal(response.status, 200);
+    assert.equal(readInputs[0]?.responseContentDisposition, "attachment; filename*=UTF-8''report%20final.html");
+  });
+
+  it('forces attachment disposition for local file object downloads', async () => {
+    await server.close();
+    const rootDir = await mkdtemp(path.join(os.tmpdir(), 'roomtalk-route-file-media-'));
+    server = await createTestServer({
+      mediaObjectStorage: new LocalMediaObjectStorage(rootDir, new Logger('LocalFileMediaRouteTest')),
+    });
+
+    try {
+      server.store.members.add('room-1:client-local-html');
+      const bytes = Buffer.from('<script>alert(1)</script>');
+
+      const uploadResponse = await fetch(`${server.baseUrl}/api/media/uploads`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          clientId: 'client-local-html',
+          roomId: 'room-1',
+          kind: 'file',
+          mimeType: 'text/html',
+          byteSize: bytes.length,
+          filename: 'index.html',
+        }),
+      });
+      assert.equal(uploadResponse.status, 201);
+      const upload = await uploadResponse.json() as { assetId: string; objectKey: string; uploadUrl: string };
+
+      const putResponse = await fetch(`${server.baseUrl}${upload.uploadUrl}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'text/html' },
+        body: bytes,
+      });
+      assert.equal(putResponse.status, 204);
+
+      const completeResponse = await fetch(`${server.baseUrl}/api/media/uploads/${upload.assetId}/complete`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          clientId: 'client-local-html',
+          roomId: 'room-1',
+          kind: 'file',
+          mimeType: 'text/html',
+          byteSize: bytes.length,
+          objectKey: upload.objectKey,
+        }),
+      });
+      assert.equal(completeResponse.status, 201);
+
+      const downloadUrlResponse = await fetch(`${server.baseUrl}/api/media/${upload.assetId}/download-url?roomId=room-1&clientId=client-local-html`);
+      assert.equal(downloadUrlResponse.status, 200);
+      const download = await downloadUrlResponse.json() as { url: string };
+
+      const downloadResponse = await fetch(`${server.baseUrl}${download.url}`);
+      assert.equal(downloadResponse.status, 200);
+      assert.match(downloadResponse.headers.get('content-disposition') || '', /^attachment;/);
+      assert.equal(downloadResponse.headers.get('content-disposition'), "attachment; filename*=UTF-8''index.html");
+      assert.equal(Buffer.from(await downloadResponse.arrayBuffer()).toString('utf8'), '<script>alert(1)</script>');
     } finally {
       await rm(rootDir, { recursive: true, force: true });
     }

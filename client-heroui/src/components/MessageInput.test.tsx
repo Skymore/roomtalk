@@ -383,6 +383,47 @@ describe('MessageInput optimistic send flow', () => {
     expect(socketMocks.uploadMediaMessage.mock.calls[0][0].file).toBeInstanceOf(Blob);
   });
 
+  it('uploads arbitrary files from the file picker', async () => {
+    renderMessageInput();
+    const file = new File(['# notes'], 'notes.md', { type: 'text/markdown' });
+
+    fireEvent.change(screen.getByTestId('file-upload-input'), {
+      target: { files: [file] },
+    });
+
+    await waitFor(() => {
+      expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1);
+    });
+    expect(socketMocks.uploadMediaMessage.mock.calls[0][0]).toMatchObject({
+      file,
+      roomId: 'room-1',
+      kind: 'file',
+      mimeType: 'text/markdown',
+      filename: 'notes.md',
+      username: 'Ada',
+      avatar: { text: 'A', color: '#123456' },
+      replyToMessageId: undefined,
+    });
+  });
+
+  it('rejects arbitrary files larger than 50 MB before upload', async () => {
+    renderMessageInput();
+    const file = new File(['x'], 'archive.zip', { type: 'application/zip' });
+    Object.defineProperty(file, 'size', {
+      configurable: true,
+      value: 50 * 1024 * 1024 + 1,
+    });
+
+    fireEvent.change(screen.getByTestId('file-upload-input'), {
+      target: { files: [file] },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('fileTooLarge')).toBeTruthy();
+    });
+    expect(socketMocks.uploadMediaMessage).not.toHaveBeenCalled();
+  });
+
   it('keeps image drafts visible when media upload fails', async () => {
     Object.defineProperty(URL, 'createObjectURL', {
       configurable: true,

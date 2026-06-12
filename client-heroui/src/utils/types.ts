@@ -6,13 +6,14 @@ export interface MessageReplyReference {
   preview: string;
 }
 
-export type MediaKind = 'image' | 'video' | 'audio';
+export type MediaKind = 'image' | 'video' | 'audio' | 'file';
 
 export interface MessageMediaAsset {
   id: string;
   kind: MediaKind;
   mimeType: string;
   byteSize: number;
+  filename?: string;
   width?: number;
   height?: number;
   durationMs?: number;
@@ -127,6 +128,7 @@ export interface RoomPermissions {
   canClearHistory: boolean;
   canManageRoom: boolean;
   canManageAdmins: boolean;
+  canManageMembers: boolean;
   canTransferOwnership: boolean;
   postingRestrictionReason?: string;
 }

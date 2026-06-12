@@ -15,6 +15,7 @@ export type RoomAuthorizationAction =
   | { type: 'room.clearHistory'; confirmation?: string }
   | { type: 'room.manageSettings' }
   | { type: 'room.manageAdmins' }
+  | { type: 'room.manageMembers' }
   | { type: 'room.transferOwnership'; targetClientId: string };
 
 export type RoomAuthorizationResult =
@@ -192,6 +193,7 @@ export function buildRoomPermissions(actor: RoomActor | null, roomId: string, cl
     canClearHistory: Boolean(isOwner),
     canManageRoom: Boolean(isOwner || isAdmin),
     canManageAdmins: Boolean(isOwner),
+    canManageMembers: Boolean(isOwner || isAdmin),
     canTransferOwnership: Boolean(isOwner),
     postingRestrictionReason: posting.allowed ? undefined : posting.reason,
   };
@@ -250,6 +252,10 @@ export async function authorizeRoomAction(input: {
       return isOwner
         ? { ok: true, actor }
         : { ok: false, code: 'forbidden', message: 'Only the room owner can manage administrators', actor };
+    case 'room.manageMembers':
+      return isOwner || isAdmin
+        ? { ok: true, actor }
+        : { ok: false, code: 'forbidden', message: 'Only room owners and administrators can manage members', actor };
     case 'room.transferOwnership':
       return isOwner
         ? { ok: true, actor }

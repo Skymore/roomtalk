@@ -489,6 +489,7 @@ type MediaAssetRow = {
   kind: MediaAsset['kind'];
   mime_type: string;
   byte_size: number;
+  filename: string | null;
   width: number | null;
   height: number | null;
   duration_ms: number | null;
@@ -686,7 +687,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
     }
 
     if (/INSERT INTO media_assets/.test(compactSql)) {
-      const [id, roomId, messageId, objectKey, kind, mimeType, byteSize, width, height, durationMs, uploadedByClientId, createdAt] = params;
+      const [id, roomId, messageId, objectKey, kind, mimeType, byteSize, filename, width, height, durationMs, uploadedByClientId, createdAt] = params;
       const row: MediaAssetRow = {
         id: String(id),
         room_id: String(roomId),
@@ -695,6 +696,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         kind: kind as MediaAsset['kind'],
         mime_type: String(mimeType),
         byte_size: Number(byteSize),
+        filename: filename === null || filename === undefined ? null : String(filename),
         width: width === null || width === undefined ? null : Number(width),
         height: height === null || height === undefined ? null : Number(height),
         duration_ms: durationMs === null || durationMs === undefined ? null : Number(durationMs),
@@ -1307,6 +1309,7 @@ for (const [storeName, createFixture] of storeFactories) {
         kind: 'image',
         mimeType: 'image/webp',
         byteSize: 123,
+        filename: 'photo.webp',
         width: 10,
         height: 20,
         createdAt: '2026-05-03T00:00:00.000Z',
@@ -1338,6 +1341,7 @@ for (const [storeName, createFixture] of storeFactories) {
           kind: asset.kind,
           mimeType: asset.mimeType,
           byteSize: asset.byteSize,
+          filename: asset.filename,
           width: asset.width,
           height: asset.height,
         },
