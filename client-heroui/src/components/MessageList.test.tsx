@@ -312,6 +312,25 @@ describe('MessageList optimistic messages', () => {
     expect(scrollTop).toBe(1500);
   });
 
+  it('renders composer clearance as an in-flow bottom spacer', async () => {
+    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} bottomPaddingPx={124} />);
+
+    act(() => {
+      socketMock.trigger('message_history', {
+        roomId: 'room-1',
+        messages: [message({ id: 'last-message', content: 'last visible message' })],
+        historyVersion: 1,
+        hasMore: false,
+        mode: 'replace',
+      });
+    });
+    await screen.findByText('last visible message');
+
+    const spacer = screen.getByTestId('message-list-bottom-spacer');
+    expect(spacer.getAttribute('style')).toContain('height: 124px');
+    expect(screen.getByTestId('message-list-scroll').getAttribute('style') || '').not.toContain('padding-bottom');
+  });
+
   it('does not force the room back to the bottom after the user scrolls away', () => {
     const resizeCallbacks: ResizeObserverCallback[] = [];
     class ResizeObserverMock {
