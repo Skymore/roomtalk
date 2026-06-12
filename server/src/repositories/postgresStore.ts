@@ -2,7 +2,7 @@ import { customAlphabet } from 'nanoid';
 import { Logger } from '../logger';
 import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomPostingSchedule } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
-import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, PendingMediaUpload, PushSubscriptionRecord, RoomMessagePageOptions, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
+import { ClientAuthTokenRecord, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, PendingMediaUpload, PushSubscriptionRecord, RoomMessagePageOptions, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 
@@ -1423,6 +1423,85 @@ export class PostgresStore implements DurableRoomStore {
     } catch (error) {
       this.logger.error('Error reading PostgreSQL room push subscriptions', { error, roomId });
       return [];
+    }
+  }
+
+  async setClientPasswordHash(clientId: string, passwordHash: string): Promise<void> {
+    try {
+      await this.pool.query(
+        `INSERT INTO client_passwords (client_id, password_hash, created_at, updated_at)
+        VALUES ($1, $2, NOW(), NOW())
+        ON CONFLICT (client_id) DO UPDATE SET
+          password_hash = EXCLUDED.password_hash,
+          updated_at = EXCLUDED.updated_at`,
+        [clientId, passwordHash]
+      );
+    } catch (error) {
+      this.logger.error('Error setting PostgreSQL client password hash', { error, clientId });
+    }
+  }
+
+  async getClientPasswordHash(clientId: string): Promise<string | null> {
+    try {
+      const result = await this.pool.query<{ password_hash: string }>(
+        'SELECT password_hash FROM client_passwords WHERE client_id = $1',
+        [clientId]
+      );
+      return result.rows[0]?.password_hash || null;
+    } catch (error) {
+      this.logger.error('Error reading PostgreSQL client password hash', { error, clientId });
+      return null;
+    }
+  }
+
+  async saveClientAuthToken(token: ClientAuthTokenRecord): Promise<void> {
+    try {
+      await this.pool.query(
+        `INSERT INTO client_auth_tokens (token_hash, client_id, created_at, last_used_at)
+        VALUES ($1, $2, $3, $3)
+        ON CONFLICT (token_hash) DO UPDATE SET
+          client_id = EXCLUDED.client_id,
+          last_used_at = EXCLUDED.last_used_at`,
+        [token.tokenHash, token.clientId, token.createdAt]
+      );
+    } catch (error) {
+      this.logger.error('Error saving PostgreSQL client auth token', { error, clientId: token.clientId });
+    }
+  }
+
+  async isClientAuthTokenValid(clientId: string, tokenHash: string): Promise<boolean> {
+    try {
+      const result = await this.pool.query(
+        `UPDATE client_auth_tokens
+        SET last_used_at = NOW()
+        WHERE client_id = $1 AND token_hash = $2`,
+        [clientId, tokenHash]
+      );
+      return (result.rowCount || 0) > 0;
+    } catch (error) {
+      this.logger.error('Error checking PostgreSQL client auth token', { error, clientId });
+      return false;
+    }
+  }
+
+  async deleteClientAuthToken(clientId: string, tokenHash: string): Promise<boolean> {
+    try {
+      const result = await this.pool.query(
+        'DELETE FROM client_auth_tokens WHERE client_id = $1 AND token_hash = $2',
+        [clientId, tokenHash]
+      );
+      return (result.rowCount || 0) > 0;
+    } catch (error) {
+      this.logger.error('Error deleting PostgreSQL client auth token', { error, clientId });
+      return false;
+    }
+  }
+
+  async deleteClientAuthTokens(clientId: string): Promise<void> {
+    try {
+      await this.pool.query('DELETE FROM client_auth_tokens WHERE client_id = $1', [clientId]);
+    } catch (error) {
+      this.logger.error('Error deleting PostgreSQL client auth tokens', { error, clientId });
     }
   }
 

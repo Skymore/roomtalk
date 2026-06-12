@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { hashRoomPassword, verifyRoomPassword } from '../services/roomSecurity';
 import { createRoomMemberEvent, createRoomRecord } from '../services/messageDomain';
+import { isClientRequestAuthorized } from '../services/clientAuth';
 import { Room, RoomClientLookup, RoomOnlineMember, RoomPermissions, RoomPostingSchedule, RoomRoleMember } from '../types';
 import { authorizeRoomAction, buildRoomPermissions, getRoomActor, normalizePostingSchedule } from './roomAuthorization';
 import { hasRoomAccess } from './roomAccess';
@@ -173,25 +174,34 @@ const normalizeNickname = (value: unknown): string | null => {
   return trimmed.slice(0, MAX_NICKNAME_LENGTH);
 };
 
-const parseRegisterPayload = (payload: unknown): { clientId?: string; username: string | null } => {
+const parseRegisterPayload = (payload: unknown): { clientId?: string; username: string | null; clientAuthToken?: string } => {
   if (typeof payload === 'string') {
     return { clientId: payload, username: null };
   }
   if (payload && typeof payload === 'object') {
-    const data = payload as { clientId?: unknown; username?: unknown };
+    const data = payload as { clientId?: unknown; username?: unknown; clientAuthToken?: unknown };
     return {
       clientId: typeof data.clientId === 'string' ? data.clientId : undefined,
       username: normalizeNickname(data.username),
+      clientAuthToken: typeof data.clientAuthToken === 'string' && data.clientAuthToken.trim()
+        ? data.clientAuthToken.trim()
+        : undefined,
     };
   }
-  return { clientId: undefined, username: null };
+  return { clientId: undefined, username: null, clientAuthToken: undefined };
 };
 
 export function registerRoomHandlers({ io, socket, store, socketLogger }: SocketConnectionContext) {
   socket.on('register', async (payload: unknown, callback?: (result: RegisterAck) => void) => {
-    const { clientId, username } = parseRegisterPayload(payload);
+    const { clientId, username, clientAuthToken } = parseRegisterPayload(payload);
     const userId = clientId || uuidv4();
     try {
+      if (!(await isClientRequestAuthorized(store, userId, clientAuthToken))) {
+        socketLogger.warn('Rejected socket registration with invalid client auth token', { socketId: socket.id, clientId: userId });
+        callback?.({ success: false, error: 'User ID password login is required' });
+        return;
+      }
+
       await store.storeClientSession(socket.id, userId);
       if (username) {
         await store.setClientNickname(userId, username);

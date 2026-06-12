@@ -40,6 +40,8 @@ type TestServer = {
     mediaAssets: Map<string, MediaAsset>;
     pendingMediaUploads: Map<string, PendingMediaUpload>;
     pushSubscriptions: Map<string, { clientId: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }>;
+    clientPasswords: Map<string, string>;
+    clientAuthTokens: Map<string, { clientId: string; tokenHash: string; createdAt: string }>;
     readMessagesByRoom: (roomId: string) => Promise<Message[]>;
     addRoomMember: (roomId: string, clientId: string, role: 'owner' | 'member', joinedAt?: string) => Promise<{ roomId: string; clientId: string; role: 'owner' | 'member'; joinedAt: string } | null>;
     getRoomMember: (roomId: string, clientId: string) => Promise<{ roomId: string; clientId: string; role: 'owner' | 'member'; joinedAt: string } | null>;
@@ -48,6 +50,12 @@ type TestServer = {
     savePushSubscription: (subscription: { clientId: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }) => Promise<void>;
     deletePushSubscription: (clientId: string, endpoint: string) => Promise<boolean>;
     readPushSubscriptionsByRoom: (roomId: string) => Promise<Array<{ clientId: string; endpoint: string; p256dh: string; auth: string; createdAt: string; updatedAt: string; userAgent?: string }>>;
+    setClientPasswordHash: (clientId: string, passwordHash: string) => Promise<void>;
+    getClientPasswordHash: (clientId: string) => Promise<string | null>;
+    saveClientAuthToken: (token: { clientId: string; tokenHash: string; createdAt: string }) => Promise<void>;
+    isClientAuthTokenValid: (clientId: string, tokenHash: string) => Promise<boolean>;
+    deleteClientAuthToken: (clientId: string, tokenHash: string) => Promise<boolean>;
+    deleteClientAuthTokens: (clientId: string) => Promise<void>;
     readRoomsByUser: (clientId: string) => Promise<Room[]>;
     generateUniqueRoomId: () => Promise<string>;
     saveRoom: (room: Room) => Promise<Room | null>;
@@ -161,6 +169,8 @@ async function createTestServer(overrides: { mediaObjectStorage?: unknown; media
     mediaAssets: new Map<string, MediaAsset>(),
     pendingMediaUploads: new Map<string, PendingMediaUpload>(),
     pushSubscriptions: new Map<string, { clientId: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }>(),
+    clientPasswords: new Map<string, string>(),
+    clientAuthTokens: new Map<string, { clientId: string; tokenHash: string; createdAt: string }>(),
     async readMessagesByRoom(roomId: string) {
       return this.messages.filter(message => message.roomId === roomId);
     },
@@ -202,6 +212,33 @@ async function createTestServer(overrides: { mediaObjectStorage?: unknown; media
           createdAt: '2026-05-03T00:00:00.000Z',
           updatedAt: '2026-05-03T00:00:00.000Z',
         }));
+    },
+    async setClientPasswordHash(clientId: string, passwordHash: string) {
+      this.clientPasswords.set(clientId, passwordHash);
+    },
+    async getClientPasswordHash(clientId: string) {
+      return this.clientPasswords.get(clientId) || null;
+    },
+    async saveClientAuthToken(token: { clientId: string; tokenHash: string; createdAt: string }) {
+      this.clientAuthTokens.set(token.tokenHash, token);
+    },
+    async isClientAuthTokenValid(clientId: string, tokenHash: string) {
+      return this.clientAuthTokens.get(tokenHash)?.clientId === clientId;
+    },
+    async deleteClientAuthToken(clientId: string, tokenHash: string) {
+      const token = this.clientAuthTokens.get(tokenHash);
+      if (!token || token.clientId !== clientId) {
+        return false;
+      }
+      this.clientAuthTokens.delete(tokenHash);
+      return true;
+    },
+    async deleteClientAuthTokens(clientId: string) {
+      for (const [tokenHash, token] of this.clientAuthTokens.entries()) {
+        if (token.clientId === clientId) {
+          this.clientAuthTokens.delete(tokenHash);
+        }
+      }
     },
     async readRoomsByUser(clientId: string) {
       return this.rooms.filter(room => room.creatorId === clientId || this.members.has(`${room.id}:${clientId}`));
@@ -490,6 +527,78 @@ describe('API routes', () => {
     });
     assert.equal(deleteResponse.status, 204);
     assert.equal(server.store.pushSubscriptions.has(body.subscription.endpoint), false);
+  });
+
+  it('sets client ID passwords and issues login tokens', async () => {
+    const initialStatusResponse = await fetch(`${server.baseUrl}/api/client-auth/client-1/status`);
+    assert.equal(initialStatusResponse.status, 200);
+    assert.deepEqual(await initialStatusResponse.json(), { clientId: 'client-1', hasPassword: false });
+
+    const setPasswordResponse = await fetch(`${server.baseUrl}/api/client-auth/password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1', password: 'password-1' }),
+    });
+    assert.equal(setPasswordResponse.status, 200);
+    const setPasswordPayload = await setPasswordResponse.json() as { clientId: string; clientAuthToken: string; hasPassword: boolean };
+    assert.equal(setPasswordPayload.clientId, 'client-1');
+    assert.equal(setPasswordPayload.hasPassword, true);
+    assert.equal(typeof setPasswordPayload.clientAuthToken, 'string');
+    assert.ok(setPasswordPayload.clientAuthToken.length > 20);
+    assert.equal(server.store.clientPasswords.has('client-1'), true);
+
+    const updatedStatusResponse = await fetch(`${server.baseUrl}/api/client-auth/client-1/status`);
+    assert.equal(updatedStatusResponse.status, 200);
+    assert.deepEqual(await updatedStatusResponse.json(), { clientId: 'client-1', hasPassword: true });
+
+    const badLoginResponse = await fetch(`${server.baseUrl}/api/client-auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1', password: 'wrong-password' }),
+    });
+    assert.equal(badLoginResponse.status, 401);
+
+    const loginResponse = await fetch(`${server.baseUrl}/api/client-auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1', password: 'password-1' }),
+    });
+    assert.equal(loginResponse.status, 200);
+    const loginPayload = await loginResponse.json() as { clientId: string; clientAuthToken: string; hasPassword: boolean };
+    assert.equal(loginPayload.clientId, 'client-1');
+    assert.equal(loginPayload.hasPassword, true);
+    assert.ok(loginPayload.clientAuthToken.length > 20);
+  });
+
+  it('requires valid client auth tokens after a User ID password is set', async () => {
+    const setPasswordResponse = await fetch(`${server.baseUrl}/api/client-auth/password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1', password: 'password-1' }),
+    });
+    assert.equal(setPasswordResponse.status, 200);
+    const { clientAuthToken } = await setPasswordResponse.json() as { clientAuthToken: string };
+
+    const missingTokenResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/messages?clientId=client-1`);
+    assert.equal(missingTokenResponse.status, 401);
+    assert.deepEqual(await missingTokenResponse.json(), { error: 'User ID password login is required' });
+
+    const invalidTokenResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/messages?clientId=client-1&clientAuthToken=bad-token`);
+    assert.equal(invalidTokenResponse.status, 401);
+
+    const authorizedResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/messages?clientId=client-1&clientAuthToken=${encodeURIComponent(clientAuthToken)}`);
+    assert.equal(authorizedResponse.status, 200);
+    assert.deepEqual(await authorizedResponse.json(), [sampleMessage()]);
+
+    const logoutResponse = await fetch(`${server.baseUrl}/api/client-auth/logout`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1', clientAuthToken }),
+    });
+    assert.equal(logoutResponse.status, 204);
+
+    const afterLogoutResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/messages?clientId=client-1&clientAuthToken=${encodeURIComponent(clientAuthToken)}`);
+    assert.equal(afterLogoutResponse.status, 401);
   });
 
   it('rejects room message API reads without membership', async () => {

@@ -3,7 +3,7 @@ import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
 import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, stripAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
-import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput } from './store';
+import { ClientAuthTokenRecord, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput } from './store';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 const DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS = 30;
@@ -19,6 +19,9 @@ const getSavedRoomsKey = (clientId: string) => `user:${clientId}:saved_rooms`;
 const getRoomSavedByKey = (roomId: string) => `room:${roomId}:saved_by`;
 const getRoomPasswordHashKey = (roomId: string) => `room:${roomId}:password_hash`;
 const PUSH_SUBSCRIPTIONS_KEY = 'push_subscriptions';
+const CLIENT_PASSWORDS_KEY = 'client:passwords';
+const CLIENT_AUTH_TOKENS_KEY = 'client:auth_tokens';
+const getClientAuthTokensKey = (clientId: string) => `client:${clientId}:auth_tokens`;
 
 interface RoomMessagesCachePayload {
   messageVersion: number;
@@ -1498,6 +1501,99 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     } catch (error) {
       this.logger.error('Error reading Redis room push subscriptions', { error, roomId });
       return [];
+    }
+  }
+
+  async setClientPasswordHash(clientId: string, passwordHash: string): Promise<void> {
+    try {
+      await this.redisClient.hSet(CLIENT_PASSWORDS_KEY, clientId, passwordHash);
+    } catch (error) {
+      this.logger.error('Error setting Redis client password hash', { error, clientId });
+    }
+  }
+
+  async getClientPasswordHash(clientId: string): Promise<string | null> {
+    try {
+      return await this.redisClient.hGet(CLIENT_PASSWORDS_KEY, clientId) || null;
+    } catch (error) {
+      this.logger.error('Error reading Redis client password hash', { error, clientId });
+      return null;
+    }
+  }
+
+  async saveClientAuthToken(token: ClientAuthTokenRecord): Promise<void> {
+    try {
+      const record = JSON.stringify({
+        clientId: token.clientId,
+        tokenHash: token.tokenHash,
+        createdAt: token.createdAt,
+        lastUsedAt: token.createdAt,
+      });
+      await Promise.all([
+        this.redisClient.hSet(CLIENT_AUTH_TOKENS_KEY, token.tokenHash, record),
+        this.redisClient.sAdd(getClientAuthTokensKey(token.clientId), token.tokenHash),
+      ]);
+    } catch (error) {
+      this.logger.error('Error saving Redis client auth token', { error, clientId: token.clientId });
+    }
+  }
+
+  async isClientAuthTokenValid(clientId: string, tokenHash: string): Promise<boolean> {
+    try {
+      const rawToken = await this.redisClient.hGet(CLIENT_AUTH_TOKENS_KEY, tokenHash);
+      if (!rawToken) {
+        return false;
+      }
+
+      const token = JSON.parse(rawToken) as { clientId?: string; createdAt?: string };
+      if (token.clientId !== clientId) {
+        return false;
+      }
+
+      await this.redisClient.hSet(CLIENT_AUTH_TOKENS_KEY, tokenHash, JSON.stringify({
+        ...token,
+        tokenHash,
+        lastUsedAt: new Date().toISOString(),
+      }));
+      return true;
+    } catch (error) {
+      this.logger.error('Error checking Redis client auth token', { error, clientId });
+      return false;
+    }
+  }
+
+  async deleteClientAuthToken(clientId: string, tokenHash: string): Promise<boolean> {
+    try {
+      const rawToken = await this.redisClient.hGet(CLIENT_AUTH_TOKENS_KEY, tokenHash);
+      if (!rawToken) {
+        return false;
+      }
+
+      const token = JSON.parse(rawToken) as { clientId?: string };
+      if (token.clientId !== clientId) {
+        return false;
+      }
+
+      const [removed] = await Promise.all([
+        this.redisClient.hDel(CLIENT_AUTH_TOKENS_KEY, tokenHash),
+        this.redisClient.sRem(getClientAuthTokensKey(clientId), tokenHash),
+      ]);
+      return removed > 0;
+    } catch (error) {
+      this.logger.error('Error deleting Redis client auth token', { error, clientId });
+      return false;
+    }
+  }
+
+  async deleteClientAuthTokens(clientId: string): Promise<void> {
+    try {
+      const tokenHashes = await this.redisClient.sMembers(getClientAuthTokensKey(clientId));
+      if (tokenHashes.length > 0) {
+        await this.redisClient.hDel(CLIENT_AUTH_TOKENS_KEY, tokenHashes);
+      }
+      await this.redisClient.del(getClientAuthTokensKey(clientId));
+    } catch (error) {
+      this.logger.error('Error deleting Redis client auth tokens', { error, clientId });
     }
   }
 

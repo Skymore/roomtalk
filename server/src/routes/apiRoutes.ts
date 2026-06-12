@@ -11,6 +11,14 @@ import { authorizeRoomAction } from '../socket/roomAuthorization';
 import { createMediaMessage, createReplyReference } from '../services/messageDomain';
 import { decodeLocalMediaObjectKey, LocalMediaObjectStorage, MediaObjectStorage } from '../services/mediaObjectStorage';
 import { getPushPublicConfig, notifyRoomMessageBestEffort } from '../services/pushNotifications';
+import {
+  hashClientAuthToken,
+  hashClientPassword,
+  isClientRequestAuthorized,
+  issueClientAuthToken,
+  validateClientPassword,
+  verifyClientPassword,
+} from '../services/clientAuth';
 
 interface ApiRouteOptions {
   store: RoomStore;
@@ -291,6 +299,32 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     return typeof clientId === 'string' && clientId.trim() ? clientId : null;
   };
 
+  const getClientAuthToken = (req: Request): string | null => {
+    const headerToken = req.header('x-client-auth-token');
+    if (typeof headerToken === 'string' && headerToken.trim()) {
+      return headerToken.trim();
+    }
+    const bodyToken = req.body?.clientAuthToken;
+    if (typeof bodyToken === 'string' && bodyToken.trim()) {
+      return bodyToken.trim();
+    }
+    const queryToken = req.query.clientAuthToken;
+    if (typeof queryToken === 'string' && queryToken.trim()) {
+      return queryToken.trim();
+    }
+    return null;
+  };
+
+  const authorizeClientRequest = async (req: Request, res: Response, clientId: string, endpoint: string) => {
+    if (await isClientRequestAuthorized(store, clientId, getClientAuthToken(req))) {
+      return true;
+    }
+
+    routeLogger.warn('Rejected request with invalid client auth token', { endpoint, clientId, ip: req.ip });
+    res.status(401).json({ error: 'User ID password login is required' });
+    return false;
+  };
+
   app.get('/api/push/vapid-public-key', (_req: Request, res: Response) => {
     return res.json(getPushPublicConfig());
   });
@@ -299,6 +333,9 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     const subscription = parsePushSubscriptionBody(req.body);
     if (!subscription) {
       return res.status(400).json({ error: 'clientId and a valid push subscription are required' });
+    }
+    if (!(await authorizeClientRequest(req, res, subscription.clientId, 'POST /api/push/subscriptions'))) {
+      return;
     }
 
     await store.savePushSubscription(subscription);
@@ -311,8 +348,73 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     if (!clientId || !endpoint) {
       return res.status(400).json({ error: 'clientId and endpoint are required' });
     }
+    if (!(await authorizeClientRequest(req, res, clientId, 'DELETE /api/push/subscriptions'))) {
+      return;
+    }
 
     await store.deletePushSubscription(clientId, endpoint);
+    return res.status(204).send();
+  });
+
+  app.get('/api/client-auth/:clientId/status', async (req: Request, res: Response) => {
+    const clientId = req.params.clientId;
+    if (!clientId) {
+      return res.status(400).json({ error: 'clientId is required' });
+    }
+
+    const passwordHash = await store.getClientPasswordHash(clientId);
+    return res.json({ clientId, hasPassword: Boolean(passwordHash) });
+  });
+
+  app.post('/api/client-auth/password', async (req: Request, res: Response) => {
+    const clientId = getBodyClientId(req);
+    const password = req.body?.password;
+    if (!clientId || !validateClientPassword(password)) {
+      return res.status(400).json({ error: 'clientId and a password of 8 to 128 characters are required' });
+    }
+
+    const existingPasswordHash = await store.getClientPasswordHash(clientId);
+    if (existingPasswordHash) {
+      const currentPassword = req.body?.currentPassword;
+      const hasValidCurrentPassword = typeof currentPassword === 'string'
+        ? await verifyClientPassword(currentPassword, existingPasswordHash)
+        : false;
+      const hasValidToken = await isClientRequestAuthorized(store, clientId, getClientAuthToken(req));
+      if (!hasValidCurrentPassword && !hasValidToken) {
+        return res.status(401).json({ error: 'Current password or valid login token is required' });
+      }
+    }
+
+    await store.setClientPasswordHash(clientId, await hashClientPassword(password));
+    await store.deleteClientAuthTokens(clientId);
+    const clientAuthToken = await issueClientAuthToken(store, clientId);
+    return res.json({ clientId, clientAuthToken, hasPassword: true });
+  });
+
+  app.post('/api/client-auth/login', async (req: Request, res: Response) => {
+    const clientId = getBodyClientId(req);
+    const password = req.body?.password;
+    if (!clientId || typeof password !== 'string') {
+      return res.status(400).json({ error: 'clientId and password are required' });
+    }
+
+    const passwordHash = await store.getClientPasswordHash(clientId);
+    if (!passwordHash || !(await verifyClientPassword(password, passwordHash))) {
+      return res.status(401).json({ error: 'Invalid user ID or password' });
+    }
+
+    const clientAuthToken = await issueClientAuthToken(store, clientId);
+    return res.json({ clientId, clientAuthToken, hasPassword: true });
+  });
+
+  app.post('/api/client-auth/logout', async (req: Request, res: Response) => {
+    const clientId = getBodyClientId(req);
+    const token = getClientAuthToken(req);
+    if (!clientId || !token) {
+      return res.status(400).json({ error: 'clientId and clientAuthToken are required' });
+    }
+
+    await store.deleteClientAuthToken(clientId, hashClientAuthToken(token));
     return res.status(204).send();
   });
 
@@ -326,6 +428,9 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       const clientId = getQueryClientId(req);
       if (!roomId || !clientId) {
         return res.status(400).json({ error: 'roomId and clientId are required' });
+      }
+      if (!(await authorizeClientRequest(req, res, clientId, 'GET /api/rooms/:roomId/media-history'))) {
+        return;
       }
 
       if (!(await hasRoomAccess(store, roomId, clientId))) {
@@ -383,7 +488,14 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     }
 
     const clientId = getQueryClientId(req);
-    if (!clientId || !(await hasRoomAccess(store, roomId, clientId))) {
+    if (!clientId) {
+      routeLogger.warn('Unauthorized API request for room messages', { endpoint: '/api/rooms/:roomId/messages', roomId, hasClientId: !!clientId, ip: req.ip });
+      return res.status(403).json({ error: 'Not authorized to access this room' });
+    }
+    if (!(await authorizeClientRequest(req, res, clientId, 'GET /api/rooms/:roomId/messages'))) {
+      return;
+    }
+    if (!(await hasRoomAccess(store, roomId, clientId))) {
       routeLogger.warn('Unauthorized API request for room messages', { endpoint: '/api/rooms/:roomId/messages', roomId, hasClientId: !!clientId, ip: req.ip });
       return res.status(403).json({ error: 'Not authorized to access this room' });
     }
@@ -398,6 +510,9 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     if (!clientId) {
       routeLogger.warn('API request missing client ID', { endpoint: '/api/clients/:clientId/rooms', ip: req.ip });
       return res.status(400).json({ error: 'Client ID is required' });
+    }
+    if (!(await authorizeClientRequest(req, res, clientId, 'GET /api/clients/:clientId/rooms'))) {
+      return;
     }
 
     routeLogger.info('API request for client rooms', { endpoint: '/api/clients/:clientId/rooms', clientId, ip: req.ip });
@@ -416,6 +531,9 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     if (!roomData?.name || !clientId) {
       routeLogger.warn('Invalid room creation via API', { endpoint: 'POST /api/clients/:clientId/rooms', clientId, hasRoomName: !!roomData?.name, ip: req.ip });
       return res.status(400).json({ error: 'Room name and client ID are required' });
+    }
+    if (!(await authorizeClientRequest(req, res, clientId, 'POST /api/clients/:clientId/rooms'))) {
+      return;
     }
 
     const roomId = await store.generateUniqueRoomId();
@@ -448,6 +566,9 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     if (!clientId || !content || !roomId) {
       routeLogger.warn('Invalid message creation via API', { endpoint: 'POST /api/rooms/:roomId/messages', hasClientId: !!clientId, hasContent: !!content, hasRoomId: !!roomId, ip: req.ip });
       return res.status(400).json({ error: 'Client ID, room ID, and message content are required' });
+    }
+    if (!(await authorizeClientRequest(req, res, clientId, 'POST /api/rooms/:roomId/messages'))) {
+      return;
     }
 
     if (!(await hasRoomAccess(store, roomId, clientId))) {
@@ -507,6 +628,9 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
 
     if (!clientId || !roomId || !isMediaKind(kind) || !mimeType || !byteSize) {
       return res.status(400).json({ error: 'clientId, roomId, kind, mimeType, and byteSize are required' });
+    }
+    if (!(await authorizeClientRequest(req, res, clientId, 'POST /api/media/uploads'))) {
+      return;
     }
 
     if (!(await hasRoomAccess(store, roomId, clientId))) {
@@ -585,6 +709,9 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
 
     if (!assetId || !clientId || !roomId || !isMediaKind(kind) || !mimeType || !byteSize || !objectKey) {
       return res.status(400).json({ error: 'assetId, clientId, roomId, kind, mimeType, byteSize, and objectKey are required' });
+    }
+    if (!(await authorizeClientRequest(req, res, clientId, 'POST /api/media/uploads/:assetId/complete'))) {
+      return;
     }
 
     if (objectKey !== buildMediaObjectKey(roomId, kind, assetId)) {
@@ -722,6 +849,9 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     if (!assetId || !roomId || !clientId) {
       return res.status(400).json({ error: 'assetId, roomId, and clientId are required' });
     }
+    if (!(await authorizeClientRequest(req, res, clientId, 'GET /api/media/:assetId/download-url'))) {
+      return;
+    }
 
     if (!(await hasRoomAccess(store, roomId, clientId))) {
       routeLogger.warn('Unauthorized media download URL request', { endpoint: 'GET /api/media/:assetId/download-url', clientId, roomId, assetId, ip: req.ip });
@@ -752,6 +882,9 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     }
     if (!clientId) {
       return res.status(400).json({ error: 'clientId is required' });
+    }
+    if (!(await authorizeClientRequest(req, res, clientId, 'POST /api/ai-role-draft'))) {
+      return;
     }
 
     const rooms = await store.readRoomsByUser(clientId);
@@ -784,7 +917,14 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     }
 
     const clientId = getQueryClientId(req);
-    if (!clientId || !(await hasRoomAccess(store, roomId, clientId))) {
+    if (!clientId) {
+      routeLogger.warn('Unauthorized API request for room AI cost', { endpoint: '/api/rooms/:roomId/ai-cost', roomId, hasClientId: !!clientId, ip: req.ip });
+      return res.status(403).json({ error: 'Not authorized to access this room' });
+    }
+    if (!(await authorizeClientRequest(req, res, clientId, 'GET /api/rooms/:roomId/ai-cost'))) {
+      return;
+    }
+    if (!(await hasRoomAccess(store, roomId, clientId))) {
       routeLogger.warn('Unauthorized API request for room AI cost', { endpoint: '/api/rooms/:roomId/ai-cost', roomId, hasClientId: !!clientId, ip: req.ip });
       return res.status(403).json({ error: 'Not authorized to access this room' });
     }
@@ -798,6 +938,9 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     if (!clientId) {
       routeLogger.warn('API request missing client ID', { endpoint: '/api/clients/:clientId/rooms/:roomId', roomId, ip: req.ip });
       return res.status(400).json({ error: 'Client ID is required' });
+    }
+    if (!(await authorizeClientRequest(req, res, clientId, 'GET /api/clients/:clientId/rooms/:roomId'))) {
+      return;
     }
 
     const room = await store.getRoomById(roomId);

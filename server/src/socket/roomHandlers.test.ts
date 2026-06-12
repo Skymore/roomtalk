@@ -2,6 +2,7 @@ import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { registerRoomHandlers } from './roomHandlers';
 import { Message, Room, RoomAICostTotal, RoomMemberRole } from '../types';
+import { hashClientAuthToken } from '../services/clientAuth';
 
 type SocketEmit = {
   event: string;
@@ -121,8 +122,37 @@ const createHarness = (clientId: string | null = 'client-1') => {
     deletedRooms: [] as Array<{ roomId: string; creatorId: string }>,
     removedSessions: [] as string[],
     nicknames: new Map<string, string>(),
+    clientPasswords: new Map<string, string>(),
+    clientAuthTokens: new Map<string, { clientId: string; tokenHash: string; createdAt: string }>(),
     async storeClientSession(_socketId: string, userId: string) {
       this.clientId = userId;
+    },
+    async setClientPasswordHash(clientId: string, passwordHash: string) {
+      this.clientPasswords.set(clientId, passwordHash);
+    },
+    async getClientPasswordHash(clientId: string) {
+      return this.clientPasswords.get(clientId) || null;
+    },
+    async saveClientAuthToken(token: { clientId: string; tokenHash: string; createdAt: string }) {
+      this.clientAuthTokens.set(token.tokenHash, token);
+    },
+    async isClientAuthTokenValid(clientId: string, tokenHash: string) {
+      return this.clientAuthTokens.get(tokenHash)?.clientId === clientId;
+    },
+    async deleteClientAuthToken(clientId: string, tokenHash: string) {
+      const token = this.clientAuthTokens.get(tokenHash);
+      if (!token || token.clientId !== clientId) {
+        return false;
+      }
+      this.clientAuthTokens.delete(tokenHash);
+      return true;
+    },
+    async deleteClientAuthTokens(clientId: string) {
+      for (const [tokenHash, token] of this.clientAuthTokens.entries()) {
+        if (token.clientId === clientId) {
+          this.clientAuthTokens.delete(tokenHash);
+        }
+      }
     },
     async setClientNickname(clientId: string, nickname: string) {
       this.nicknames.set(clientId, nickname);
@@ -317,6 +347,40 @@ describe('room socket handlers', () => {
 
     assert.equal(store.clientId, 'client-9');
     assert.equal(store.nicknames.get('client-9'), 'Ada');
+  });
+
+  it('rejects socket registration for password-protected User IDs without a valid token', async () => {
+    const { socket, store } = createHarness(null);
+    await store.setClientPasswordHash('client-locked', 'stored-password-hash');
+    let response: unknown;
+
+    await socket.invoke('register', { clientId: 'client-locked' }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.equal(store.clientId, null);
+    assert.deepEqual(response, { success: false, error: 'User ID password login is required' });
+    assert.deepEqual(socket.joined, []);
+    assert.deepEqual(socket.emitted, []);
+  });
+
+  it('allows socket registration for password-protected User IDs with a valid token', async () => {
+    const { socket, store } = createHarness(null);
+    await store.setClientPasswordHash('client-locked', 'stored-password-hash');
+    await store.saveClientAuthToken({
+      clientId: 'client-locked',
+      tokenHash: hashClientAuthToken('valid-token'),
+      createdAt: '2026-05-03T00:00:00.000Z',
+    });
+    let response: unknown;
+
+    await socket.invoke('register', { clientId: 'client-locked', clientAuthToken: 'valid-token' }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.equal(store.clientId, 'client-locked');
+    assert.deepEqual(response, { success: true, clientId: 'client-locked' });
+    assert.deepEqual(socket.joined, ['client-locked']);
   });
 
   it('stores the nickname for a registered client via set_username', async () => {
