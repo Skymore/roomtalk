@@ -284,7 +284,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
 
-          <div className="flex min-h-[72px] flex-col gap-3 border-b border-[#dedbd0] py-4 dark:border-[#30302e] sm:flex-row">
+          <div className="flex min-h-[72px] flex-col gap-3 py-4 sm:flex-row">
             <div className="w-full pt-1 text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5] sm:w-32">
               {t("userIdLogin")}
             </div>
