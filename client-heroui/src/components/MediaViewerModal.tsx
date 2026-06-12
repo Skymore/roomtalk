@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Button, Dropdown, DropdownItem, DropdownMenu, DropdownTrigger } from "@heroui/react";
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
+import { useCachedMedia } from "../hooks/useCachedMedia";
 import { getRoomMediaHistory } from "../utils/socket";
 import { RoomMediaHistoryItem, RoomMediaHistoryKindFilter } from "../utils/types";
 import { getVideoPreviewUrl } from "../utils/videoPreview";
@@ -20,6 +21,7 @@ interface MediaViewerModalProps {
   roomId: string;
   assetId?: string;
   mimeType?: string;
+  byteSize?: number;
   createdAt?: string;
   onClose: () => void;
 }
@@ -36,6 +38,7 @@ type ActiveMedia = {
   src: string;
   kind: ViewerMediaKind;
   mimeType?: string;
+  byteSize?: number;
   createdAt?: string;
 };
 
@@ -54,6 +57,21 @@ interface MediaStageProps {
   onSwipeDown?: () => void;
   onTapMedia?: () => void;
   className?: string;
+}
+
+interface MediaStageItemProps {
+  item: ActiveMedia;
+  alt: string;
+  isActive: boolean;
+  onTapImage?: () => void;
+}
+
+interface MediaHistoryGridItemProps {
+  item: RoomMediaHistoryItem;
+  isActive: boolean;
+  sharedImageLabel: string;
+  openMediaLabel: string;
+  onSelect: (item: RoomMediaHistoryItem) => void;
 }
 
 const HISTORY_PAGE_SIZE = 36;
@@ -96,6 +114,89 @@ const ViewerButton: React.FC<ViewerButtonProps> = ({ label, icon, onPress, class
   </Button>
 );
 
+const MediaStageItem: React.FC<MediaStageItemProps> = ({ item, alt, isActive, onTapImage }) => {
+  const { mediaUrl, posterUrl } = useCachedMedia({
+    assetId: item.assetId,
+    url: item.src,
+    kind: item.kind,
+    mimeType: item.mimeType,
+    byteSize: item.byteSize,
+  });
+  const displayUrl = mediaUrl || item.src;
+
+  if (item.kind === "image") {
+    return (
+      <img
+        src={displayUrl}
+        alt={alt}
+        className={`max-h-full max-w-full select-none object-contain ${onTapImage && isActive ? "cursor-zoom-out" : ""}`}
+        draggable={false}
+        onClick={isActive ? onTapImage : undefined}
+      />
+    );
+  }
+
+  return (
+    <video
+      key={displayUrl}
+      src={getVideoPreviewUrl(displayUrl)}
+      poster={posterUrl || undefined}
+      className="max-h-full w-full max-w-5xl bg-black object-contain sm:rounded-lg"
+      controls={isActive}
+      autoPlay={isActive}
+      playsInline
+      preload="metadata"
+      muted={!isActive}
+    />
+  );
+};
+
+const MediaHistoryGridItem: React.FC<MediaHistoryGridItemProps> = ({
+  item,
+  isActive,
+  sharedImageLabel,
+  openMediaLabel,
+  onSelect,
+}) => {
+  const { mediaUrl, posterUrl } = useCachedMedia({
+    assetId: item.assetId,
+    url: item.url,
+    kind: item.kind,
+    mimeType: item.mimeType,
+    byteSize: item.byteSize,
+  });
+  const displayUrl = mediaUrl || item.url;
+
+  return (
+    <button
+      type="button"
+      aria-label={openMediaLabel}
+      className={`relative aspect-square cursor-pointer overflow-hidden bg-black/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 ${isActive ? "ring-2 ring-[#d97757]" : ""}`}
+      onClick={() => onSelect(item)}
+    >
+      {item.kind === "image" ? (
+        <img src={displayUrl} alt={sharedImageLabel} className="h-full w-full object-cover" loading="lazy" />
+      ) : (
+        <>
+          <video
+            src={getVideoPreviewUrl(displayUrl)}
+            poster={posterUrl || undefined}
+            className="h-full w-full object-cover"
+            preload="metadata"
+            muted
+            playsInline
+          />
+          <span className="absolute inset-0 flex items-center justify-center bg-black/20">
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-black/45 text-white">
+              <Icon icon="lucide:play" className="ml-0.5 h-4 w-4" />
+            </span>
+          </span>
+        </>
+      )}
+    </button>
+  );
+};
+
 const getMediaKey = (media: ActiveMedia) => media.assetId || media.src;
 
 const isSameMedia = (first: ActiveMedia, second: ActiveMedia) => {
@@ -131,6 +232,7 @@ const historyItemToActiveMedia = (item: RoomMediaHistoryItem): ActiveMedia => ({
   src: item.url,
   kind: item.kind,
   mimeType: item.mimeType,
+  byteSize: item.byteSize,
   createdAt: item.createdAt,
 });
 
@@ -450,26 +552,12 @@ const MediaStage: React.FC<MediaStageProps> = ({
               className="flex h-full min-w-full items-center justify-center px-1.5 sm:px-2"
               aria-hidden={!isActive}
             >
-              {item.kind === "image" ? (
-                <img
-                  src={item.src}
-                  alt={alt}
-                  className={`max-h-full max-w-full select-none object-contain ${onTapMedia && isActive ? "cursor-zoom-out" : ""}`}
-                  draggable={false}
-                  onClick={isActive ? handleImageClick : undefined}
-                />
-              ) : (
-                <video
-                  key={item.src}
-                  src={getVideoPreviewUrl(item.src)}
-                  className="max-h-full w-full max-w-5xl bg-black object-contain sm:rounded-lg"
-                  controls={isActive}
-                  autoPlay={isActive}
-                  playsInline
-                  preload="metadata"
-                  muted={!isActive}
-                />
-              )}
+              <MediaStageItem
+                item={item}
+                alt={alt}
+                isActive={isActive}
+                onTapImage={onTapMedia ? handleImageClick : undefined}
+              />
             </div>
           );
         })}
@@ -508,6 +596,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
   roomId,
   assetId,
   mimeType,
+  byteSize,
   createdAt,
   onClose,
 }) => {
@@ -588,9 +677,10 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
       src,
       kind,
       mimeType,
+      byteSize,
       createdAt,
     });
-  }, [assetId, createdAt, kind, mimeType, src]);
+  }, [assetId, byteSize, createdAt, kind, mimeType, src]);
 
   React.useEffect(() => {
     initialHistoryRequestKeyRef.current = null;
@@ -987,26 +1077,14 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
                     <h3 className="mb-3 text-sm font-semibold text-white/90">{group.label}</h3>
                     <div className="grid grid-cols-4 gap-1 sm:grid-cols-6 md:grid-cols-8">
                       {group.items.map(item => (
-                        <button
+                        <MediaHistoryGridItem
                           key={item.assetId}
-                          type="button"
-                          aria-label={t("openMediaItem")}
-                          className={`relative aspect-square cursor-pointer overflow-hidden bg-black/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 ${item.assetId === activeMedia.assetId ? "ring-2 ring-[#d97757]" : ""}`}
-                          onClick={() => handleSelectHistoryItem(item)}
-                        >
-                          {item.kind === "image" ? (
-                            <img src={item.url} alt={t("sharedImage")} className="h-full w-full object-cover" loading="lazy" />
-                          ) : (
-                            <>
-                              <video src={getVideoPreviewUrl(item.url)} className="h-full w-full object-cover" preload="metadata" muted playsInline />
-                              <span className="absolute inset-0 flex items-center justify-center bg-black/20">
-                                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-black/45 text-white">
-                                  <Icon icon="lucide:play" className="ml-0.5 h-4 w-4" />
-                                </span>
-                              </span>
-                            </>
-                          )}
-                        </button>
+                          item={item}
+                          isActive={item.assetId === activeMedia.assetId}
+                          sharedImageLabel={t("sharedImage")}
+                          openMediaLabel={t("openMediaItem")}
+                          onSelect={handleSelectHistoryItem}
+                        />
                       ))}
                     </div>
                   </section>
