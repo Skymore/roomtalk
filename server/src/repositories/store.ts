@@ -67,6 +67,24 @@ export interface PendingMediaUpload {
   createdAt: string;
 }
 
+export interface PushSubscriptionRecord {
+  clientId: string;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  userAgent?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SavePushSubscriptionInput {
+  clientId: string;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  userAgent?: string;
+}
+
 export interface RoomSettingsUpdate {
   passwordHash?: string | null;
   postingSchedule?: RoomPostingSchedule | null;
@@ -105,6 +123,9 @@ export interface DurableRoomStore {
   getRoomMember(roomId: string, clientId: string): Promise<RoomMember | null>;
   isRoomMember(roomId: string, clientId: string): Promise<boolean>;
   readRoomMembers(roomId: string): Promise<RoomMember[]>;
+  savePushSubscription(subscription: SavePushSubscriptionInput): Promise<void>;
+  deletePushSubscription(clientId: string, endpoint: string): Promise<boolean>;
+  readPushSubscriptionsByRoom(roomId: string): Promise<PushSubscriptionRecord[]>;
   readRoomPasswordHash(roomId: string): Promise<string | null>;
   updateRoomSettings(roomId: string, updates: RoomSettingsUpdate): Promise<Room | null>;
   updateRoomMemberRole(roomId: string, clientId: string, role: RoomMemberRole, joinedAt?: string): Promise<RoomMember | null>;
@@ -369,6 +390,18 @@ export class CompositeRoomStore implements RoomStore {
 
   readRoomMembers(roomId: string) {
     return this.durableStore.readRoomMembers(roomId);
+  }
+
+  savePushSubscription(subscription: SavePushSubscriptionInput) {
+    return this.durableStore.savePushSubscription(subscription);
+  }
+
+  deletePushSubscription(clientId: string, endpoint: string) {
+    return this.durableStore.deletePushSubscription(clientId, endpoint);
+  }
+
+  readPushSubscriptionsByRoom(roomId: string) {
+    return this.durableStore.readPushSubscriptionsByRoom(roomId);
   }
 
   readRoomPasswordHash(roomId: string) {

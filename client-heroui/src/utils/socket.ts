@@ -593,7 +593,7 @@ type CreateMediaUploadResponse = {
   expiresAt: string;
 };
 
-const apiPath = (path: string) => (/^[a-z][a-z\d+\-.]*:\/\//i.test(path) ? path : `${API_BASE_URL}${path}`);
+export const apiPath = (path: string) => (/^[a-z][a-z\d+\-.]*:\/\//i.test(path) ? path : `${API_BASE_URL}${path}`);
 
 const parseApiError = async (response: Response, fallback: string) => {
   try {

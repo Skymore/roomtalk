@@ -56,6 +56,13 @@ const durableRoomAccessStubs = () => ({
   async readRoomMembers(roomId: string) {
     return [{ roomId, clientId: 'client-1', role: 'owner' as const, joinedAt: '2026-05-03T00:00:00.000Z' }];
   },
+  async savePushSubscription() {},
+  async deletePushSubscription() {
+    return true;
+  },
+  async readPushSubscriptionsByRoom() {
+    return [];
+  },
   async readRoomPasswordHash() {
     return null;
   },
@@ -244,6 +251,9 @@ describe('CompositeRoomStore', () => {
       async getRoomMember(roomId: string, clientId: string) { calls.push('durable.getRoomMember'); return { roomId, clientId, role: 'member' as const, joinedAt: '2026-05-03T00:00:00.000Z' }; },
       async isRoomMember(_roomId: string, _clientId: string) { calls.push('durable.isRoomMember'); return true; },
       async readRoomMembers(roomId: string) { calls.push('durable.readRoomMembers'); return [{ roomId, clientId: 'client-1', role: 'owner' as const, joinedAt: '2026-05-03T00:00:00.000Z' }]; },
+      async savePushSubscription() { calls.push('durable.savePushSubscription'); },
+      async deletePushSubscription() { calls.push('durable.deletePushSubscription'); return true; },
+      async readPushSubscriptionsByRoom() { calls.push('durable.readPushSubscriptionsByRoom'); return []; },
       async readRoomPasswordHash(_roomId: string) { calls.push('durable.readRoomPasswordHash'); return 'hash'; },
       async updateRoomSettings(_roomId: string) { calls.push('durable.updateRoomSettings'); return room({ hasPassword: true }); },
       async updateRoomMemberRole(roomId: string, clientId: string, role: RoomMemberRole, joinedAt = '2026-05-03T00:00:00.000Z') { calls.push('durable.updateRoomMemberRole'); return { roomId, clientId, role, joinedAt }; },
@@ -335,6 +345,9 @@ describe('CompositeRoomStore', () => {
     assert.deepEqual(await store.getRoomMember('room-1', 'client-2'), { roomId: 'room-1', clientId: 'client-2', role: 'member', joinedAt: '2026-05-03T00:00:00.000Z' });
     assert.equal(await store.isRoomMember('room-1', 'client-2'), true);
     assert.deepEqual(await store.readRoomMembers('room-1'), [{ roomId: 'room-1', clientId: 'client-1', role: 'owner', joinedAt: '2026-05-03T00:00:00.000Z' }]);
+    await store.savePushSubscription({ clientId: 'client-2', endpoint: 'https://push.example/1', p256dh: 'p256dh', auth: 'auth' });
+    assert.equal(await store.deletePushSubscription('client-2', 'https://push.example/1'), true);
+    assert.deepEqual(await store.readPushSubscriptionsByRoom('room-1'), []);
     assert.equal(await store.readRoomPasswordHash('room-1'), 'hash');
     assert.deepEqual(await store.updateRoomSettings('room-1', { passwordHash: 'hash' }), room({ hasPassword: true }));
     assert.deepEqual(await store.updateRoomMemberRole('room-1', 'client-2', 'admin'), { roomId: 'room-1', clientId: 'client-2', role: 'admin', joinedAt: '2026-05-03T00:00:00.000Z' });
@@ -395,6 +408,9 @@ describe('CompositeRoomStore', () => {
       'durable.getRoomMember',
       'durable.isRoomMember',
       'durable.readRoomMembers',
+      'durable.savePushSubscription',
+      'durable.deletePushSubscription',
+      'durable.readPushSubscriptionsByRoom',
       'durable.readRoomPasswordHash',
       'durable.updateRoomSettings',
       'durable.updateRoomMemberRole',

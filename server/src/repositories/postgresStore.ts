@@ -2,7 +2,7 @@ import { customAlphabet } from 'nanoid';
 import { Logger } from '../logger';
 import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomPostingSchedule } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
-import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, PendingMediaUpload, RoomMessagePageOptions, RoomSettingsUpdate } from './store';
+import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, PendingMediaUpload, PushSubscriptionRecord, RoomMessagePageOptions, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 
@@ -92,11 +92,22 @@ type PendingMediaUploadRow = {
   created_at: string | Date;
 };
 
+type PushSubscriptionRow = {
+  endpoint: string;
+  client_id: string;
+  p256dh: string;
+  auth: string;
+  user_agent: string | null;
+  created_at: string | Date;
+  updated_at: string | Date;
+};
+
 const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, room_version, updated_at';
 const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, ai_model, usage, cost, reply_to, ai_stream_owner_id';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, width, height, duration_ms, uploaded_by_client_id, created_at';
 const PENDING_MEDIA_UPLOAD_COLUMNS = 'id, room_id, object_key, kind, mime_type, byte_size, uploaded_by_client_id, expires_at, created_at';
+const PUSH_SUBSCRIPTION_COLUMNS = 'endpoint, client_id, p256dh, auth, user_agent, created_at, updated_at';
 
 const parseTime = (timestamp?: string): number => {
   const time = Date.parse(timestamp || '');
@@ -224,6 +235,16 @@ const mapPendingMediaUpload = (row: PendingMediaUploadRow): PendingMediaUpload =
   uploadedByClientId: row.uploaded_by_client_id,
   expiresAt: toIsoString(row.expires_at),
   createdAt: toIsoString(row.created_at),
+});
+
+const mapPushSubscription = (row: PushSubscriptionRow): PushSubscriptionRecord => ({
+  clientId: row.client_id,
+  endpoint: row.endpoint,
+  p256dh: row.p256dh,
+  auth: row.auth,
+  userAgent: row.user_agent || undefined,
+  createdAt: toIsoString(row.created_at),
+  updatedAt: toIsoString(row.updated_at),
 });
 
 const toMessageMediaAsset = (asset: MediaAsset): MessageMediaAsset => {
@@ -1347,6 +1368,60 @@ export class PostgresStore implements DurableRoomStore {
       return result.rows.map(mapRoomMember);
     } catch (error) {
       this.logger.error('Error reading PostgreSQL room members', { error, roomId });
+      return [];
+    }
+  }
+
+  async savePushSubscription(subscription: SavePushSubscriptionInput): Promise<void> {
+    try {
+      await this.pool.query(
+        `INSERT INTO push_subscriptions (endpoint, client_id, p256dh, auth, user_agent, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+        ON CONFLICT (endpoint) DO UPDATE SET
+          client_id = EXCLUDED.client_id,
+          p256dh = EXCLUDED.p256dh,
+          auth = EXCLUDED.auth,
+          user_agent = EXCLUDED.user_agent,
+          updated_at = EXCLUDED.updated_at`,
+        [
+          subscription.endpoint,
+          subscription.clientId,
+          subscription.p256dh,
+          subscription.auth,
+          subscription.userAgent || null,
+        ]
+      );
+    } catch (error) {
+      this.logger.error('Error saving PostgreSQL push subscription', { error, clientId: subscription.clientId });
+    }
+  }
+
+  async deletePushSubscription(clientId: string, endpoint: string): Promise<boolean> {
+    try {
+      const result = await this.pool.query(
+        'DELETE FROM push_subscriptions WHERE client_id = $1 AND endpoint = $2',
+        [clientId, endpoint]
+      );
+      return (result.rowCount || 0) > 0;
+    } catch (error) {
+      this.logger.error('Error deleting PostgreSQL push subscription', { error, clientId });
+      return false;
+    }
+  }
+
+  async readPushSubscriptionsByRoom(roomId: string): Promise<PushSubscriptionRecord[]> {
+    try {
+      const result = await this.pool.query<PushSubscriptionRow>(
+        `SELECT ps.${PUSH_SUBSCRIPTION_COLUMNS.replace(/, /g, ', ps.')}
+        FROM push_subscriptions ps
+        INNER JOIN room_members rm ON rm.client_id = ps.client_id
+        WHERE rm.room_id = $1
+        ORDER BY ps.updated_at DESC`,
+        [roomId]
+      );
+      return result.rows.map(mapPushSubscription);
+    } catch (error) {
+      this.logger.error('Error reading PostgreSQL room push subscriptions', { error, roomId });
       return [];
     }
   }

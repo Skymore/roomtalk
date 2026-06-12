@@ -8,6 +8,7 @@ import {
   createReplyReference,
   createUserMessage,
 } from '../services/messageDomain';
+import { notifyRoomMessageBestEffort } from '../services/pushNotifications';
 import { withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 import { Message } from '../types';
 import { hasRoomAccess } from './roomAccess';
@@ -620,6 +621,7 @@ export function registerAIHandlers({
 
     io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
     io.to(data.roomId).emit('new_message', userMessage);
+    notifyRoomMessageBestEffort({ store, room: updatedRoom, message: userMessage, logger: socketLogger });
 
     const latestHistory = await store.readMessagesByRoom(data.roomId);
     const preparedHistory = latestHistory.some(message => message.id === userMessage.id)

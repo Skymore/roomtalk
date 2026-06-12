@@ -1,9 +1,15 @@
 import React from 'react';
-import { Avatar, Button, Input, Dropdown, DropdownTrigger, DropdownMenu, DropdownItem } from "@heroui/react";
+import { Avatar, Button, Input, Dropdown, DropdownTrigger, DropdownMenu, DropdownItem, Chip } from "@heroui/react";
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { getAvatarText, getAvatarColor } from "../utils/userProfile";
 import { getLanguageOption, languageOptions } from "../utils/languages";
+import {
+  disablePushNotifications,
+  enablePushNotifications,
+  getPushNotificationStatus,
+  PushNotificationStatus,
+} from "../utils/pushNotifications";
 
 interface SettingsViewProps {
   clientId: string;
@@ -34,6 +40,58 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 }) => {
   const { t } = useTranslation();
   const currentLanguage = getLanguageOption(i18n.language);
+  const [pushStatus, setPushStatus] = React.useState<PushNotificationStatus>('unsupported');
+  const [pushError, setPushError] = React.useState('');
+  const [isUpdatingPush, setIsUpdatingPush] = React.useState(false);
+
+  const refreshPushStatus = React.useCallback(async () => {
+    try {
+      setPushStatus(await getPushNotificationStatus());
+      setPushError('');
+    } catch (error) {
+      setPushStatus('server-disabled');
+      setPushError(error instanceof Error ? error.message : t('notificationUnknownError'));
+    }
+  }, [t]);
+
+  React.useEffect(() => {
+    void refreshPushStatus();
+  }, [refreshPushStatus]);
+
+  const handleEnablePush = async () => {
+    setIsUpdatingPush(true);
+    setPushError('');
+    try {
+      await enablePushNotifications();
+      await refreshPushStatus();
+    } catch (error) {
+      setPushError(error instanceof Error ? error.message : t('notificationUnknownError'));
+      await refreshPushStatus();
+    } finally {
+      setIsUpdatingPush(false);
+    }
+  };
+
+  const handleDisablePush = async () => {
+    setIsUpdatingPush(true);
+    setPushError('');
+    try {
+      await disablePushNotifications();
+      await refreshPushStatus();
+    } catch (error) {
+      setPushError(error instanceof Error ? error.message : t('notificationUnknownError'));
+    } finally {
+      setIsUpdatingPush(false);
+    }
+  };
+
+  const pushStatusLabel = React.useMemo(() => {
+    if (pushStatus === 'subscribed') return t('notificationStatusOn');
+    if (pushStatus === 'denied') return t('notificationStatusDenied');
+    if (pushStatus === 'unsupported') return t('notificationStatusUnsupported');
+    if (pushStatus === 'server-disabled') return t('notificationStatusServerDisabled');
+    return t('notificationStatusOff');
+  }, [pushStatus, t]);
 
   return (
     <div className="h-full w-full overflow-y-auto p-4 md:p-8">
@@ -120,6 +178,52 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </section>
 
         <section className="mt-8 border-t border-[#dedbd0] dark:border-[#30302e]">
+          <div className="flex min-h-[72px] flex-col gap-3 border-b border-[#dedbd0] py-4 dark:border-[#30302e] sm:flex-row sm:items-center">
+            <div className="w-full text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5] sm:w-32">
+              {t("notifications")}
+            </div>
+            <div className="flex min-w-0 flex-1 flex-col gap-2 sm:max-w-sm">
+              <div className="flex flex-wrap items-center gap-2">
+                <Chip
+                  size="sm"
+                  variant="flat"
+                  color={pushStatus === 'subscribed' ? 'success' : pushStatus === 'denied' ? 'danger' : 'default'}
+                >
+                  {pushStatusLabel}
+                </Chip>
+                {pushStatus === 'subscribed' ? (
+                  <Button
+                    size="sm"
+                    variant="flat"
+                    isLoading={isUpdatingPush}
+                    startContent={!isUpdatingPush ? <Icon icon="lucide:bell-off" /> : undefined}
+                    onPress={handleDisablePush}
+                  >
+                    {t("disableNotifications")}
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    color="secondary"
+                    className="bg-[#c96442] text-[#faf9f5]"
+                    isDisabled={pushStatus === 'unsupported' || pushStatus === 'server-disabled' || pushStatus === 'denied'}
+                    isLoading={isUpdatingPush}
+                    startContent={!isUpdatingPush ? <Icon icon="lucide:bell" /> : undefined}
+                    onPress={handleEnablePush}
+                  >
+                    {t("enableNotifications")}
+                  </Button>
+                )}
+              </div>
+              <p className="text-xs leading-5 text-[#77756f] dark:text-[#b0aea5]">
+                {pushStatus === 'denied' ? t("notificationDeniedHelp") : t("notificationHelp")}
+              </p>
+              {pushError && (
+                <p className="text-xs leading-5 text-[#b54832] dark:text-[#ff8b6e]">{pushError}</p>
+              )}
+            </div>
+          </div>
+
           <div className="flex min-h-[72px] flex-col gap-3 border-b border-[#dedbd0] py-4 dark:border-[#30302e] sm:flex-row sm:items-center">
             <div className="w-full text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5] sm:w-32">
               {t("language")}
