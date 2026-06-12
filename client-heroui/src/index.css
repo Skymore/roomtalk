@@ -82,7 +82,7 @@ body {
   padding-top: max(env(safe-area-inset-top), 0rem);
 }
 
-.roomtalk-keyboard-open .mobile-bottom-nav {
+.roomtalk-editing .mobile-bottom-nav {
   display: none;
   padding-bottom: 0;
 }

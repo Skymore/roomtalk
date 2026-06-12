@@ -3,6 +3,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installAppViewportSizing } from './appViewport';
 
+const EDITING_CLASS = 'roomtalk-editing';
+
 const createVisualViewport = (initialHeight: number, initialOffsetTop = 0) => {
   const target = new EventTarget();
 
@@ -38,7 +40,7 @@ describe('installAppViewportSizing', () => {
   beforeEach(() => {
     document.documentElement.style.removeProperty('--app-height');
     document.documentElement.style.removeProperty('--app-viewport-top');
-    document.documentElement.classList.remove('roomtalk-keyboard-open');
+    document.documentElement.classList.remove(EDITING_CLASS);
 
     Object.defineProperty(window, 'innerHeight', {
       configurable: true,
@@ -66,7 +68,7 @@ describe('installAppViewportSizing', () => {
 
     expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('640px');
     expect(document.documentElement.style.getPropertyValue('--app-viewport-top')).toBe('0px');
-    expect(document.documentElement.classList.contains('roomtalk-keyboard-open')).toBe(false);
+    expect(document.documentElement.classList.contains(EDITING_CLASS)).toBe(false);
 
     viewport.height = 420;
     viewport.offsetTop = 24;
@@ -74,7 +76,7 @@ describe('installAppViewportSizing', () => {
 
     expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('420px');
     expect(document.documentElement.style.getPropertyValue('--app-viewport-top')).toBe('24px');
-    expect(document.documentElement.classList.contains('roomtalk-keyboard-open')).toBe(false);
+    expect(document.documentElement.classList.contains(EDITING_CLASS)).toBe(false);
 
     cleanup();
 
@@ -84,22 +86,44 @@ describe('installAppViewportSizing', () => {
 
     expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('420px');
     expect(document.documentElement.style.getPropertyValue('--app-viewport-top')).toBe('24px');
-    expect(document.documentElement.classList.contains('roomtalk-keyboard-open')).toBe(false);
+    expect(document.documentElement.classList.contains(EDITING_CLASS)).toBe(false);
   });
 
-  it('does not mark keyboard open for small browser chrome viewport changes', () => {
+  it('does not mark editing for viewport changes when no editable element is focused', () => {
     const viewport = createVisualViewport(720);
     setVisualViewport(viewport);
 
     const cleanup = installAppViewportSizing();
 
     expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('720px');
-    expect(document.documentElement.classList.contains('roomtalk-keyboard-open')).toBe(false);
+    expect(document.documentElement.classList.contains(EDITING_CLASS)).toBe(false);
 
     cleanup();
   });
 
-  it('marks keyboard open only when an editable element is focused', () => {
+  it('marks editing when an editable element is focused', () => {
+    const viewport = createVisualViewport(640);
+    setVisualViewport(viewport);
+    Object.defineProperty(window, 'innerHeight', {
+      configurable: true,
+      value: 640,
+    });
+    const input = document.createElement('input');
+    document.body.append(input);
+
+    const cleanup = installAppViewportSizing();
+
+    input.focus();
+
+    expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('640px');
+    expect(document.documentElement.classList.contains(EDITING_CLASS)).toBe(true);
+
+    cleanup();
+
+    expect(document.documentElement.classList.contains(EDITING_CLASS)).toBe(false);
+  });
+
+  it('removes editing when the focused editable element blurs', () => {
     const viewport = createVisualViewport(640);
     setVisualViewport(viewport);
     const input = document.createElement('input');
@@ -108,15 +132,48 @@ describe('installAppViewportSizing', () => {
     const cleanup = installAppViewportSizing();
 
     input.focus();
-    viewport.height = 420;
-    viewport.dispatch('resize');
+    expect(document.documentElement.classList.contains(EDITING_CLASS)).toBe(true);
 
-    expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('420px');
-    expect(document.documentElement.classList.contains('roomtalk-keyboard-open')).toBe(true);
+    input.blur();
+
+    expect(document.documentElement.classList.contains(EDITING_CLASS)).toBe(false);
+
+    cleanup();
+  });
+
+  it('does not mark editing for read-only inputs', () => {
+    const viewport = createVisualViewport(640);
+    setVisualViewport(viewport);
+    const input = document.createElement('input');
+    input.readOnly = true;
+    document.body.append(input);
+
+    const cleanup = installAppViewportSizing();
+
+    input.focus();
+
+    expect(document.documentElement.classList.contains(EDITING_CLASS)).toBe(false);
+
+    cleanup();
+  });
+
+  it('marks editing when a contenteditable element is focused', () => {
+    const viewport = createVisualViewport(640);
+    setVisualViewport(viewport);
+    const editable = document.createElement('div');
+    editable.setAttribute('contenteditable', 'true');
+    editable.tabIndex = -1;
+    document.body.append(editable);
+
+    const cleanup = installAppViewportSizing();
+
+    editable.focus();
+
+    expect(document.documentElement.classList.contains(EDITING_CLASS)).toBe(true);
 
     cleanup();
 
-    expect(document.documentElement.classList.contains('roomtalk-keyboard-open')).toBe(false);
+    expect(document.documentElement.classList.contains(EDITING_CLASS)).toBe(false);
   });
 
   it('updates visualViewport top offset on mobile keyboard panning without changing height', () => {

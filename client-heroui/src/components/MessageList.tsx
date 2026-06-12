@@ -450,6 +450,36 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
 
   return (
     <>
+      <div className="absolute right-3 top-3 z-20">
+        <div className="flex items-center gap-1.5">
+          <Dropdown placement="bottom-end">
+            <DropdownTrigger>
+              <Button
+                size="sm"
+                variant="flat"
+                radius="full"
+                isDisabled={isExporting}
+                className="h-7 min-w-0 border border-[#dedbd0] bg-[#faf9f5]/95 px-2 text-tiny font-medium text-[#4d4c48] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc]"
+                startContent={<Icon icon={isExporting ? 'lucide:loader-circle' : 'lucide:download'} className={`h-3.5 w-3.5 ${isExporting ? 'animate-spin' : ''}`} />}
+              >
+                {t('exportChat')}
+              </Button>
+            </DropdownTrigger>
+            <DropdownMenu aria-label={t('exportChat')}>
+              <DropdownItem key="html" startContent={<Icon icon="lucide:file-code-2" />} onPress={handleExportHtml}>
+                {t('exportHtml')}
+              </DropdownItem>
+              <DropdownItem key="zip" startContent={<Icon icon="lucide:archive" />} onPress={handleExportZip}>
+                {t('exportZip')}
+              </DropdownItem>
+            </DropdownMenu>
+          </Dropdown>
+          <div className="flex items-center gap-1 rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-2.5 py-1 text-tiny font-medium text-[#4d4c48] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc]">
+            <Icon icon="lucide:coins" className="h-3.5 w-3.5" />
+            <span>{t('sessionCost')}: {sessionCostUsd === null ? '...' : formatUsdCost(sessionCostUsd)}</span>
+          </div>
+        </div>
+      </div>
       <div
         id={scrollContainerId}
         data-testid="message-list-scroll"
@@ -458,36 +488,6 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
         onScroll={handleScroll}
       >
         <div ref={contentRef} data-testid="message-list-content" className="flex min-h-full flex-col">
-          <div className="sticky top-0 z-20 mb-2 flex justify-end">
-            <div className="flex items-center gap-1.5">
-              <Dropdown placement="bottom-end">
-                <DropdownTrigger>
-                  <Button
-                    size="sm"
-                    variant="flat"
-                    radius="full"
-                    isDisabled={isExporting}
-                    className="h-7 min-w-0 border border-[#dedbd0] bg-[#faf9f5]/95 px-2 text-tiny font-medium text-[#4d4c48] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc]"
-                    startContent={<Icon icon={isExporting ? 'lucide:loader-circle' : 'lucide:download'} className={`h-3.5 w-3.5 ${isExporting ? 'animate-spin' : ''}`} />}
-                  >
-                    {t('exportChat')}
-                  </Button>
-                </DropdownTrigger>
-                <DropdownMenu aria-label={t('exportChat')}>
-                  <DropdownItem key="html" startContent={<Icon icon="lucide:file-code-2" />} onPress={handleExportHtml}>
-                    {t('exportHtml')}
-                  </DropdownItem>
-                  <DropdownItem key="zip" startContent={<Icon icon="lucide:archive" />} onPress={handleExportZip}>
-                    {t('exportZip')}
-                  </DropdownItem>
-                </DropdownMenu>
-              </Dropdown>
-              <div className="flex items-center gap-1 rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-2.5 py-1 text-tiny font-medium text-[#4d4c48] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc]">
-                <Icon icon="lucide:coins" className="h-3.5 w-3.5" />
-                <span>{t('sessionCost')}: {sessionCostUsd === null ? '...' : formatUsdCost(sessionCostUsd)}</span>
-              </div>
-            </div>
-          </div>
           {hasMoreMessages && (
             <div className="mb-3 flex justify-center">
               <button
