@@ -1,6 +1,7 @@
 import { default as io } from 'socket.io-client';
 import { v4 as uuidv4 } from 'uuid';
 import {
+  AudioTranscription,
   MediaKind,
   Message,
   Room,
@@ -883,6 +884,31 @@ export const getRoomMediaHistory = async (params: {
     })),
   };
 };
+
+export const getAudioTranscription = async (params: {
+  roomId: string;
+  messageId: string;
+}): Promise<AudioTranscription> => {
+  const query = new URLSearchParams({ clientId });
+  appendClientAuthQuery(query);
+  const response = await fetch(apiPath(`/api/rooms/${encodeURIComponent(params.roomId)}/messages/${encodeURIComponent(params.messageId)}/audio-transcription?${query.toString()}`), {
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, 'Failed to load audio transcription'));
+  }
+  return response.json() as Promise<AudioTranscription>;
+};
+
+export const requestAudioTranscription = async (params: {
+  roomId: string;
+  messageId: string;
+}): Promise<AudioTranscription> => (
+  postJson<AudioTranscription>(
+    `/api/rooms/${encodeURIComponent(params.roomId)}/messages/${encodeURIComponent(params.messageId)}/audio-transcription`,
+    withClientAuthBody({ clientId })
+  )
+);
 
 // Mint a short-lived AssemblyAI streaming token (server keeps the API key)
 export const createTranscriptionToken = (): Promise<{ token: string }> => {

@@ -10,7 +10,8 @@ import { registerApiRoutes } from './apiRoutes';
 import { MediaAsset, Message, Room } from '../types';
 import { LocalMediaObjectStorage } from '../services/mediaObjectStorage';
 import { Logger } from '../logger';
-import { PendingMediaUpload } from '../repositories/store';
+import { AudioTranscriptionRecord, AudioTranscriptionUpdate, PendingMediaUpload } from '../repositories/store';
+import { AudioTranscriptionJob } from '../services/audioTranscription';
 
 type EmittedEvent = {
   target: string;
@@ -39,6 +40,7 @@ type TestServer = {
     appendedMediaAssets: MediaAsset[];
     mediaAssets: Map<string, MediaAsset>;
     pendingMediaUploads: Map<string, PendingMediaUpload>;
+    audioTranscriptions: Map<string, AudioTranscriptionRecord>;
     pushSubscriptions: Map<string, { clientId: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }>;
     clientPasswords: Map<string, string>;
     clientAuthTokens: Map<string, { clientId: string; tokenHash: string; createdAt: string }>;
@@ -70,6 +72,9 @@ type TestServer = {
     getPendingMediaUpload: (assetId: string) => Promise<PendingMediaUpload | null>;
     deletePendingMediaUpload: (assetId: string) => Promise<void>;
     claimExpiredPendingMediaUploads: (now: string, limit?: number) => Promise<PendingMediaUpload[]>;
+    getAudioTranscription: (assetId: string) => Promise<AudioTranscriptionRecord | null>;
+    createAudioTranscription: (record: AudioTranscriptionRecord) => Promise<AudioTranscriptionRecord>;
+    updateAudioTranscription: (assetId: string, updates: AudioTranscriptionUpdate) => Promise<AudioTranscriptionRecord | null>;
     readRoomAICost: (roomId: string) => Promise<{ roomId: string; currency: 'USD'; totalUsd: number }>;
     getRoomById: (roomId: string) => Promise<Room | null>;
     countRooms: () => Promise<number>;
@@ -78,6 +83,7 @@ type TestServer = {
     isOpen: boolean;
   };
   deletedMediaObjects: string[];
+  audioTranscriptionJobs: AudioTranscriptionJob[];
 };
 
 const sampleRoom = (overrides: Partial<Room> = {}): Room => ({
@@ -153,7 +159,11 @@ const writeLargeHistoryBaseline = async (payload: {
   }
 };
 
-async function createTestServer(overrides: { mediaObjectStorage?: unknown; mediaUploadCleanup?: Parameters<typeof registerApiRoutes>[1]['mediaUploadCleanup'] } = {}): Promise<TestServer> {
+async function createTestServer(overrides: {
+  mediaObjectStorage?: unknown;
+  mediaUploadCleanup?: Parameters<typeof registerApiRoutes>[1]['mediaUploadCleanup'];
+  audioTranscriptionRunner?: Parameters<typeof registerApiRoutes>[1]['audioTranscriptionRunner'];
+} = {}): Promise<TestServer> {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
 
@@ -168,6 +178,7 @@ async function createTestServer(overrides: { mediaObjectStorage?: unknown; media
     appendedMediaAssets: [] as MediaAsset[],
     mediaAssets: new Map<string, MediaAsset>(),
     pendingMediaUploads: new Map<string, PendingMediaUpload>(),
+    audioTranscriptions: new Map<string, AudioTranscriptionRecord>(),
     pushSubscriptions: new Map<string, { clientId: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }>(),
     clientPasswords: new Map<string, string>(),
     clientAuthTokens: new Map<string, { clientId: string; tokenHash: string; createdAt: string }>(),
@@ -339,6 +350,50 @@ async function createTestServer(overrides: { mediaObjectStorage?: unknown; media
       expired.forEach(upload => this.pendingMediaUploads.delete(upload.assetId));
       return expired;
     },
+    async getAudioTranscription(assetId: string) {
+      return this.audioTranscriptions.get(assetId) || null;
+    },
+    async createAudioTranscription(record: AudioTranscriptionRecord) {
+      const existing = this.audioTranscriptions.get(record.assetId);
+      if (existing) {
+        return existing;
+      }
+      this.audioTranscriptions.set(record.assetId, record);
+      return record;
+    },
+    async updateAudioTranscription(assetId: string, updates: AudioTranscriptionUpdate) {
+      const existing = this.audioTranscriptions.get(assetId);
+      if (!existing) {
+        return null;
+      }
+      const nextRecord: AudioTranscriptionRecord = {
+        ...existing,
+        updatedAt: updates.updatedAt || existing.updatedAt,
+      };
+      if (updates.status !== undefined) nextRecord.status = updates.status;
+      if (updates.transcript !== undefined) {
+        if (updates.transcript === null) delete nextRecord.transcript;
+        else nextRecord.transcript = updates.transcript;
+      }
+      if (updates.languageCode !== undefined) {
+        if (updates.languageCode === null) delete nextRecord.languageCode;
+        else nextRecord.languageCode = updates.languageCode;
+      }
+      if (updates.providerTranscriptId !== undefined) {
+        if (updates.providerTranscriptId === null) delete nextRecord.providerTranscriptId;
+        else nextRecord.providerTranscriptId = updates.providerTranscriptId;
+      }
+      if (updates.error !== undefined) {
+        if (updates.error === null) delete nextRecord.error;
+        else nextRecord.error = updates.error;
+      }
+      if (updates.completedAt !== undefined) {
+        if (updates.completedAt === null) delete nextRecord.completedAt;
+        else nextRecord.completedAt = updates.completedAt;
+      }
+      this.audioTranscriptions.set(assetId, nextRecord);
+      return nextRecord;
+    },
     async readRoomAICost(roomId: string) {
       return { roomId, currency: 'USD' as const, totalUsd: 1.25 };
     },
@@ -394,6 +449,10 @@ async function createTestServer(overrides: { mediaObjectStorage?: unknown; media
       return message;
     },
   };
+  const audioTranscriptionJobs: AudioTranscriptionJob[] = [];
+  const audioTranscriptionRunner = overrides.audioTranscriptionRunner || (async (job: AudioTranscriptionJob) => {
+    audioTranscriptionJobs.push(job);
+  });
 
   registerApiRoutes(app, {
     store: store as any,
@@ -412,6 +471,7 @@ async function createTestServer(overrides: { mediaObjectStorage?: unknown; media
       return { name: 'Review Expert', systemPrompt: 'Review implementation decisions carefully.' };
     },
     mediaObjectStorage: mediaObjectStorage as any,
+    audioTranscriptionRunner,
     mediaUploadCleanup: overrides.mediaUploadCleanup,
   });
 
@@ -430,6 +490,7 @@ async function createTestServer(overrides: { mediaObjectStorage?: unknown; media
     store,
     redisClient,
     deletedMediaObjects,
+    audioTranscriptionJobs,
   };
 }
 
@@ -606,6 +667,111 @@ describe('API routes', () => {
 
     assert.equal(response.status, 403);
     assert.deepEqual(await response.json(), { error: 'Not authorized to access this room' });
+  });
+
+  it('creates one persisted audio transcription record per audio asset and reuses an in-flight job', async () => {
+    await server.close();
+    const audioTranscriptionJobs: AudioTranscriptionJob[] = [];
+    let resolveAudioTranscriptionJob: () => void = () => {};
+    server = await createTestServer({
+      audioTranscriptionRunner: async (job) => {
+        audioTranscriptionJobs.push(job);
+        await new Promise<void>(resolve => {
+          resolveAudioTranscriptionJob = resolve;
+        });
+      },
+    });
+
+    const audioMessage = sampleMessage({
+      id: 'audio-message-1',
+      content: '',
+      messageType: 'media',
+      mediaAsset: {
+        id: 'audio-asset-1',
+        kind: 'audio',
+        mimeType: 'audio/webm',
+        byteSize: 456,
+        durationMs: 1200,
+      },
+    });
+    const audioAsset: MediaAsset = {
+      id: 'audio-asset-1',
+      roomId: 'room-1',
+      messageId: 'audio-message-1',
+      objectKey: 'rooms/room-1/media/audio/audio-asset-1',
+      kind: 'audio',
+      mimeType: 'audio/webm',
+      byteSize: 456,
+      durationMs: 1200,
+      createdAt: audioMessage.timestamp,
+    };
+    server.store.messages = [audioMessage];
+    server.store.mediaAssets.set(audioAsset.id, audioAsset);
+
+    const initialResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/messages/audio-message-1/audio-transcription?clientId=client-1`);
+    assert.equal(initialResponse.status, 200);
+    assert.deepEqual(await initialResponse.json(), {
+      assetId: 'audio-asset-1',
+      roomId: 'room-1',
+      messageId: 'audio-message-1',
+      status: 'not_requested',
+    });
+
+    const firstStartResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/messages/audio-message-1/audio-transcription`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1' }),
+    });
+    assert.equal(firstStartResponse.status, 202);
+    const firstStartPayload = await firstStartResponse.json() as { assetId: string; status: string };
+    assert.equal(firstStartPayload.assetId, 'audio-asset-1');
+    assert.equal(firstStartPayload.status, 'pending');
+    assert.equal(server.store.audioTranscriptions.get('audio-asset-1')?.messageId, 'audio-message-1');
+
+    const secondStartResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/messages/audio-message-1/audio-transcription`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1' }),
+    });
+    assert.equal(secondStartResponse.status, 202);
+    assert.equal(audioTranscriptionJobs.length, 1);
+    assert.equal(audioTranscriptionJobs[0].record.assetId, 'audio-asset-1');
+    assert.equal(audioTranscriptionJobs[0].asset.objectKey, audioAsset.objectKey);
+
+    resolveAudioTranscriptionJob();
+  });
+
+  it('checks room membership and audio message type before exposing audio transcription state', async () => {
+    const textResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/messages/message-1/audio-transcription?clientId=client-1`);
+    assert.equal(textResponse.status, 400);
+    assert.deepEqual(await textResponse.json(), { error: 'Message is not an audio message' });
+
+    const audioMessage = sampleMessage({
+      id: 'audio-message-2',
+      content: '',
+      messageType: 'media',
+      mediaAsset: {
+        id: 'audio-asset-2',
+        kind: 'audio',
+        mimeType: 'audio/webm',
+        byteSize: 456,
+      },
+    });
+    server.store.messages = [audioMessage];
+    server.store.mediaAssets.set('audio-asset-2', {
+      id: 'audio-asset-2',
+      roomId: 'room-1',
+      messageId: 'audio-message-2',
+      objectKey: 'rooms/room-1/media/audio/audio-asset-2',
+      kind: 'audio',
+      mimeType: 'audio/webm',
+      byteSize: 456,
+      createdAt: audioMessage.timestamp,
+    });
+
+    const unauthorizedResponse = await fetch(`${server.baseUrl}/api/rooms/room-1/messages/audio-message-2/audio-transcription?clientId=client-2`);
+    assert.equal(unauthorizedResponse.status, 403);
+    assert.deepEqual(await unauthorizedResponse.json(), { error: 'Not authorized to access this room' });
   });
 
   it('returns large room message histories as complete ordered JSON and writes a response-size baseline', async () => {

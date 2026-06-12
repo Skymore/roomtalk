@@ -2,7 +2,7 @@ import { customAlphabet } from 'nanoid';
 import { Logger } from '../logger';
 import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomPostingSchedule } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
-import { ClientAuthTokenRecord, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, PendingMediaUpload, PushSubscriptionRecord, RoomMessagePageOptions, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
+import { AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAuthTokenRecord, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, PendingMediaUpload, PushSubscriptionRecord, RoomMessagePageOptions, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 
@@ -92,6 +92,22 @@ type PendingMediaUploadRow = {
   created_at: string | Date;
 };
 
+type AudioTranscriptionRow = {
+  asset_id: string;
+  room_id: string;
+  message_id: string;
+  requested_by_client_id: string;
+  status: AudioTranscriptionRecord['status'];
+  transcript: string | null;
+  language_code: string | null;
+  provider: AudioTranscriptionRecord['provider'];
+  provider_transcript_id: string | null;
+  error: string | null;
+  created_at: string | Date;
+  updated_at: string | Date;
+  completed_at: string | Date | null;
+};
+
 type PushSubscriptionRow = {
   endpoint: string;
   client_id: string;
@@ -107,6 +123,7 @@ const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at,
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, width, height, duration_ms, uploaded_by_client_id, created_at';
 const PENDING_MEDIA_UPLOAD_COLUMNS = 'id, room_id, object_key, kind, mime_type, byte_size, uploaded_by_client_id, expires_at, created_at';
+const AUDIO_TRANSCRIPTION_COLUMNS = 'asset_id, room_id, message_id, requested_by_client_id, status, transcript, language_code, provider, provider_transcript_id, error, created_at, updated_at, completed_at';
 const PUSH_SUBSCRIPTION_COLUMNS = 'endpoint, client_id, p256dh, auth, user_agent, created_at, updated_at';
 
 const parseTime = (timestamp?: string): number => {
@@ -236,6 +253,25 @@ const mapPendingMediaUpload = (row: PendingMediaUploadRow): PendingMediaUpload =
   expiresAt: toIsoString(row.expires_at),
   createdAt: toIsoString(row.created_at),
 });
+
+const mapAudioTranscription = (row: AudioTranscriptionRow): AudioTranscriptionRecord => {
+  const record: AudioTranscriptionRecord = {
+    assetId: row.asset_id,
+    roomId: row.room_id,
+    messageId: row.message_id,
+    requestedByClientId: row.requested_by_client_id,
+    status: row.status,
+    provider: row.provider,
+    createdAt: toIsoString(row.created_at),
+    updatedAt: toIsoString(row.updated_at),
+  };
+  if (row.transcript) record.transcript = row.transcript;
+  if (row.language_code) record.languageCode = row.language_code;
+  if (row.provider_transcript_id) record.providerTranscriptId = row.provider_transcript_id;
+  if (row.error) record.error = row.error;
+  if (row.completed_at) record.completedAt = toIsoString(row.completed_at);
+  return record;
+};
 
 const mapPushSubscription = (row: PushSubscriptionRow): PushSubscriptionRecord => ({
   clientId: row.client_id,
@@ -1175,6 +1211,103 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
+  async getAudioTranscription(assetId: string): Promise<AudioTranscriptionRecord | null> {
+    try {
+      const result = await this.pool.query<AudioTranscriptionRow>(
+        `SELECT ${AUDIO_TRANSCRIPTION_COLUMNS}
+        FROM audio_transcriptions
+        WHERE asset_id = $1`,
+        [assetId]
+      );
+      return result.rows[0] ? mapAudioTranscription(result.rows[0]) : null;
+    } catch (error) {
+      this.logger.error('Error reading PostgreSQL audio transcription', { error, assetId });
+      return null;
+    }
+  }
+
+  async createAudioTranscription(record: AudioTranscriptionRecord): Promise<AudioTranscriptionRecord> {
+    try {
+      const result = await this.pool.query<AudioTranscriptionRow>(
+        `INSERT INTO audio_transcriptions (
+          asset_id,
+          room_id,
+          message_id,
+          requested_by_client_id,
+          status,
+          transcript,
+          language_code,
+          provider,
+          provider_transcript_id,
+          error,
+          created_at,
+          updated_at,
+          completed_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        ON CONFLICT (asset_id) DO NOTHING
+        RETURNING ${AUDIO_TRANSCRIPTION_COLUMNS}`,
+        [
+          record.assetId,
+          record.roomId,
+          record.messageId,
+          record.requestedByClientId,
+          record.status,
+          record.transcript ?? null,
+          record.languageCode ?? null,
+          record.provider,
+          record.providerTranscriptId ?? null,
+          record.error ?? null,
+          record.createdAt,
+          record.updatedAt,
+          record.completedAt ?? null,
+        ]
+      );
+      if (result.rows[0]) {
+        return mapAudioTranscription(result.rows[0]);
+      }
+
+      const existing = await this.getAudioTranscription(record.assetId);
+      if (existing) {
+        return existing;
+      }
+      throw new Error('Audio transcription insert conflicted but no existing row was found');
+    } catch (error) {
+      this.logger.error('Error creating PostgreSQL audio transcription', { error, assetId: record.assetId, roomId: record.roomId, messageId: record.messageId });
+      throw error;
+    }
+  }
+
+  async updateAudioTranscription(assetId: string, updates: AudioTranscriptionUpdate): Promise<AudioTranscriptionRecord | null> {
+    const assignments: string[] = [];
+    const values: unknown[] = [assetId];
+    const addAssignment = (column: string, value: unknown) => {
+      values.push(value);
+      assignments.push(`${column} = $${values.length}`);
+    };
+
+    if (updates.status !== undefined) addAssignment('status', updates.status);
+    if (updates.transcript !== undefined) addAssignment('transcript', updates.transcript);
+    if (updates.languageCode !== undefined) addAssignment('language_code', updates.languageCode);
+    if (updates.providerTranscriptId !== undefined) addAssignment('provider_transcript_id', updates.providerTranscriptId);
+    if (updates.error !== undefined) addAssignment('error', updates.error);
+    if (updates.completedAt !== undefined) addAssignment('completed_at', updates.completedAt);
+    addAssignment('updated_at', updates.updatedAt || new Date().toISOString());
+
+    try {
+      const result = await this.pool.query<AudioTranscriptionRow>(
+        `UPDATE audio_transcriptions
+        SET ${assignments.join(', ')}
+        WHERE asset_id = $1
+        RETURNING ${AUDIO_TRANSCRIPTION_COLUMNS}`,
+        values
+      );
+      return result.rows[0] ? mapAudioTranscription(result.rows[0]) : null;
+    } catch (error) {
+      this.logger.error('Error updating PostgreSQL audio transcription', { error, assetId, updates });
+      throw error;
+    }
+  }
+
   async readRoomAICost(roomId: string): Promise<RoomAICostTotal> {
     try {
       const result = await this.pool.query<{ total_usd: string | number }>(
@@ -1794,7 +1927,7 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async resetAllDataForTests(): Promise<void> {
-    await this.pool.query('TRUNCATE room_ai_cost_totals, pending_media_uploads, media_assets, image_assets, room_messages, room_saves, room_members, rooms, client_profiles RESTART IDENTITY CASCADE');
+    await this.pool.query('TRUNCATE room_ai_cost_totals, audio_transcriptions, pending_media_uploads, media_assets, image_assets, room_messages, room_saves, room_members, rooms, client_profiles RESTART IDENTITY CASCADE');
   }
 
   async failInterruptedStreamingMessages(content: string, options: InterruptedStreamingMessageRecoveryOptions = {}): Promise<number> {

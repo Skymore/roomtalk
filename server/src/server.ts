@@ -21,6 +21,7 @@ import { createAIClients } from './services/aiClients';
 import { createAIRoleDraftGenerator } from './services/aiRoleGenerator';
 import { resolveAIStreamOwnerId } from './services/aiStreamRecovery';
 import { createMediaObjectStorageFromEnv } from './services/mediaObjectStorage';
+import { createAssemblyAIAudioTranscriptionRunner } from './services/audioTranscription';
 
 dotenv.config();
 
@@ -164,6 +165,14 @@ const infrastructureReady = (async () => {
   }
 })();
 
+const assemblyAIApiKey = process.env.ASSEMBLYAI_API_KEY;
+const audioTranscriptionRunner = createAssemblyAIAudioTranscriptionRunner({
+  store,
+  mediaObjectStorage,
+  apiKey: assemblyAIApiKey,
+  logger: routeLogger,
+});
+
 registerSocketHandlers({
   io,
   store,
@@ -172,7 +181,7 @@ registerSocketHandlers({
   normalizeAIModel,
   getAIClientForModel,
   aiStreamOwnerId,
-  assemblyAIApiKey: process.env.ASSEMBLYAI_API_KEY,
+  assemblyAIApiKey,
 });
 
 registerApiRoutes(app, {
@@ -184,6 +193,7 @@ registerApiRoutes(app, {
   generateAIRoleDraft,
   persistenceStore: activePersistenceStore,
   mediaObjectStorage,
+  audioTranscriptionRunner,
 });
 
 // Catch-all 路由，返回前端应用的入口 HTML 文件（支持前端路由）

@@ -10,9 +10,9 @@ import {
   DropdownItem,
 } from "@heroui/react";
 import { Icon } from "@iconify/react";
-import { clientId, getMediaDownloadUrl } from "../utils/socket";
+import { clientId, getAudioTranscription, getMediaDownloadUrl, requestAudioTranscription } from "../utils/socket";
 import { formatPercentage, formatTime, formatUsdCost } from "../utils/formatters";
-import { Message, RoomPermissions } from "../utils/types";
+import { AudioTranscription, Message, RoomPermissions } from "../utils/types";
 import { useTranslation } from "react-i18next";
 import { useIsTouchDevice } from "../hooks/useIsTouchDevice";
 import { useCachedMedia } from "../hooks/useCachedMedia";
@@ -83,6 +83,9 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const [mediaError, setMediaError] = React.useState(false);
   const [signedMediaUrl, setSignedMediaUrl] = React.useState<string | null>(null);
   const [isMediaViewerOpen, setIsMediaViewerOpen] = React.useState(false);
+  const [audioTranscription, setAudioTranscription] = React.useState<AudioTranscription | null>(null);
+  const [isAudioTranscriptionLoading, setIsAudioTranscriptionLoading] = React.useState(false);
+  const [isAudioTranscriptHidden, setIsAudioTranscriptHidden] = React.useState(false);
   const mediaRetryCountRef = React.useRef(0);
   const isMedia = message.messageType === "media";
   const mediaKind = message.mediaAsset?.kind;
@@ -178,6 +181,58 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     return loadSignedMediaUrl();
   }, [loadSignedMediaUrl]);
 
+  React.useEffect(() => {
+    if (!isAudio) {
+      setAudioTranscription(null);
+      setIsAudioTranscriptionLoading(false);
+      setIsAudioTranscriptHidden(false);
+      return () => {};
+    }
+
+    let cancelled = false;
+    setAudioTranscription(null);
+    setIsAudioTranscriptionLoading(false);
+    setIsAudioTranscriptHidden(false);
+
+    getAudioTranscription({ roomId: message.roomId, messageId: message.id })
+      .then((record) => {
+        if (!cancelled) {
+          setAudioTranscription(record);
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to load audio transcription:", error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAudio, message.id, message.roomId]);
+
+  React.useEffect(() => {
+    if (!isAudio || (audioTranscription?.status !== 'pending' && audioTranscription?.status !== 'processing')) {
+      return () => {};
+    }
+
+    let cancelled = false;
+    const poll = () => {
+      getAudioTranscription({ roomId: message.roomId, messageId: message.id })
+        .then((record) => {
+          if (!cancelled) {
+            setAudioTranscription(record);
+          }
+        })
+        .catch((error) => {
+          console.error("Failed to refresh audio transcription:", error);
+        });
+    };
+    const timer = window.setInterval(poll, 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [audioTranscription?.status, isAudio, message.id, message.roomId]);
+
   const handleMediaError = () => {
     if (message.mediaAsset?.id && mediaRetryCountRef.current < 1) {
       mediaRetryCountRef.current += 1;
@@ -186,6 +241,30 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     }
 
     setMediaError(true);
+  };
+
+  const handleRequestAudioTranscription = async () => {
+    if (!isAudio || isAudioTranscriptionLoading) {
+      return;
+    }
+
+    setIsAudioTranscriptionLoading(true);
+    try {
+      const record = await requestAudioTranscription({ roomId: message.roomId, messageId: message.id });
+      setAudioTranscription(record);
+      setIsAudioTranscriptHidden(false);
+    } catch (error) {
+      console.error("Failed to request audio transcription:", error);
+      setAudioTranscription({
+        assetId: message.mediaAsset?.id || '',
+        roomId: message.roomId,
+        messageId: message.id,
+        status: 'failed',
+        error: error instanceof Error ? error.message : t('audioTranscriptionFailed'),
+      });
+    } finally {
+      setIsAudioTranscriptionLoading(false);
+    }
   };
 
   const canOpenMediaViewer = Boolean(signedMediaUrl && !mediaError && (isImage || isVideo));
@@ -197,6 +276,62 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     byteSize: message.mediaAsset?.byteSize,
   });
   const videoPreviewUrl = displayMediaUrl && isVideo ? getVideoPreviewUrl(displayMediaUrl) : null;
+
+  const audioTranscriptionStatus = audioTranscription?.status || 'not_requested';
+  const isAudioTranscriptionRunning = audioTranscriptionStatus === 'pending' || audioTranscriptionStatus === 'processing';
+  const audioTranscriptText = audioTranscription?.transcript?.trim() || '';
+  const shouldShowAudioTranscript = audioTranscriptionStatus === 'completed' && !isAudioTranscriptHidden;
+  const shouldShowAudioTranscriptionButton = isAudio && (
+    audioTranscriptionStatus === 'not_requested' ||
+    audioTranscriptionStatus === 'failed' ||
+    (audioTranscriptionStatus === 'completed' && isAudioTranscriptHidden)
+  );
+
+  const audioTranscriptionContent = isAudio ? (
+    <div className={`mt-1 flex max-w-[260px] flex-col gap-1 ${isMine ? 'items-end' : 'items-start'}`}>
+      {shouldShowAudioTranscriptionButton && (
+        <Button
+          size="sm"
+          variant="flat"
+          className="h-7 min-w-0 rounded-md bg-[#e8e6dc] px-2 text-xs font-medium text-[#4d4c48] dark:bg-[#30302e] dark:text-[#faf9f5]"
+          startContent={<Icon icon={audioTranscriptionStatus === 'failed' ? "lucide:refresh-cw" : "lucide:captions"} className="h-3.5 w-3.5" />}
+          onPress={audioTranscriptionStatus === 'completed' ? () => setIsAudioTranscriptHidden(false) : handleRequestAudioTranscription}
+          isLoading={isAudioTranscriptionLoading}
+          isDisabled={isAudioTranscriptionLoading}
+        >
+          {audioTranscriptionStatus === 'completed' ? t('showAudioTranscript') : audioTranscriptionStatus === 'failed' ? t('retryAudioTranscription') : t('transcribeAudio')}
+        </Button>
+      )}
+      {isAudioTranscriptionRunning && (
+        <div className="flex items-center gap-1 rounded-md bg-[#e8e6dc] px-2 py-1 text-xs text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]">
+          <Icon icon="lucide:loader-2" className="h-3.5 w-3.5 animate-spin" />
+          {t('audioTranscribing')}
+        </div>
+      )}
+      {audioTranscriptionStatus === 'failed' && audioTranscription?.error && (
+        <div className="max-w-full rounded-md bg-danger-500/10 px-2 py-1 text-xs text-danger-600 dark:text-danger-300">
+          {audioTranscription.error}
+        </div>
+      )}
+      {shouldShowAudioTranscript && (
+        <div className="relative max-w-full rounded-lg bg-[#1d1d1b]/90 px-3 py-2 pr-8 text-left text-sm leading-6 text-[#faf9f5] shadow-[0_0_0_1px_rgba(20,20,19,0.18)] dark:bg-[#242421] dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)]">
+          <div className="whitespace-pre-wrap break-words">{audioTranscriptText || t('audioTranscriptionEmpty')}</div>
+          <Tooltip content={t('hideAudioTranscript')} placement="top" size="sm" delay={500} classNames={tooltipClassNames} isDisabled={isTouchDevice}>
+            <Button
+              isIconOnly
+              size="sm"
+              variant="light"
+              aria-label={t('hideAudioTranscript')}
+              className="absolute right-1 top-1 h-6 w-6 min-w-0 text-[#faf9f5]/75"
+              onPress={() => setIsAudioTranscriptHidden(true)}
+            >
+              <Icon icon="lucide:eye-off" className="h-3.5 w-3.5" />
+            </Button>
+          </Tooltip>
+        </div>
+      )}
+    </div>
+  ) : null;
 
   const handleOpenMediaViewer = () => {
     if (canOpenMediaViewer) {
@@ -233,12 +368,15 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       );
     } else if (displayMediaUrl && isAudio) {
       mediaContent = (
-        <audio
-          controls
-          src={displayMediaUrl}
-          className="roomtalk-audio-player block h-9 min-w-[180px] max-w-[240px]"
-          onError={handleMediaError}
-        />
+        <div className={`flex w-fit max-w-full flex-col ${isMine ? 'items-end' : 'items-start'}`}>
+          <audio
+            controls
+            src={displayMediaUrl}
+            className="roomtalk-audio-player block h-9 min-w-[180px] max-w-[240px]"
+            onError={handleMediaError}
+          />
+          {audioTranscriptionContent}
+        </div>
       );
     } else if (displayMediaUrl && isVideo) {
       mediaContent = (
