@@ -190,6 +190,26 @@ export const getCachedMediaObjectUrl = async (input: {
   return request;
 };
 
+export const getCachedMediaBlob = async (assetId?: string): Promise<Blob | null> => {
+  if (!assetId || !canUseBrowserCache()) {
+    return null;
+  }
+
+  try {
+    const cache = await caches.open(MEDIA_BODY_CACHE_NAME);
+    const cachedResponse = await cache.match(bodyCacheKey(assetId));
+    if (!cachedResponse) {
+      return null;
+    }
+
+    const blob = await cachedResponse.blob();
+    return blob.size > 0 ? blob : null;
+  } catch (error) {
+    console.warn("Cached media blob unavailable:", error);
+    return null;
+  }
+};
+
 const waitForVideoEvent = (video: HTMLVideoElement, eventName: "loadeddata" | "seeked") => (
   new Promise<void>((resolve, reject) => {
     let timeoutId: number | undefined;

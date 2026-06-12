@@ -5,6 +5,7 @@ import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { useCachedMedia } from "../hooks/useCachedMedia";
 import { getRoomMediaHistory } from "../utils/socket";
+import { getCachedMediaBlob } from "../utils/mediaCache";
 import { RoomMediaHistoryItem, RoomMediaHistoryKindFilter } from "../utils/types";
 import { getVideoPreviewUrl } from "../utils/videoPreview";
 
@@ -99,7 +100,8 @@ const mediaFileExtensions: Record<string, string> = {
 };
 
 type NavigatorWithMediaShare = Navigator & {
-  share?: (data: { title?: string; text?: string; url?: string }) => unknown;
+  canShare?: (data: { files?: File[] }) => boolean;
+  share?: (data: { title?: string; text?: string; url?: string; files?: File[] }) => unknown;
 };
 
 const ViewerButton: React.FC<ViewerButtonProps> = ({ label, icon, onPress, className = "" }) => (
@@ -274,6 +276,14 @@ const downloadMediaUrl = async (url: string, fileName: string) => {
     console.warn("Falling back to direct media download:", error);
     triggerBrowserDownload(url, fileName, true);
   }
+};
+
+const downloadMediaBlob = (blob: Blob, fileName: string) => {
+  if (typeof document === "undefined") return;
+
+  const objectUrl = URL.createObjectURL(blob);
+  triggerBrowserDownload(objectUrl, fileName);
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 };
 
 const getMonthKey = (timestamp: string) => {
@@ -888,7 +898,13 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
 
   const handleDownload = async () => {
     if (!activeMedia) return;
-    await downloadMediaUrl(activeMedia.src, getMediaFileName(activeMedia));
+    const fileName = getMediaFileName(activeMedia);
+    const cachedBlob = await getCachedMediaBlob(activeMedia.assetId);
+    if (cachedBlob) {
+      downloadMediaBlob(cachedBlob, fileName);
+    } else {
+      await downloadMediaUrl(activeMedia.src, fileName);
+    }
     showTemporaryStatus("download", "done");
   };
 
@@ -899,6 +915,26 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
     const shareTitle = activeMedia.kind === "video" ? t("videoMessage") : t("sharedImage");
 
     try {
+      const cachedBlob = await getCachedMediaBlob(activeMedia.assetId);
+      if (cachedBlob && typeof File !== "undefined") {
+        const file = new File([cachedBlob], getMediaFileName(activeMedia), {
+          type: cachedBlob.type || activeMedia.mimeType || "application/octet-stream",
+        });
+        if (
+          typeof navigatorWithShare.share === "function"
+          && typeof navigatorWithShare.canShare === "function"
+          && navigatorWithShare.canShare({ files: [file] })
+        ) {
+          await navigatorWithShare.share({
+            title: shareTitle,
+            text: shareTitle,
+            files: [file],
+          });
+          showTemporaryStatus("share", "done");
+          return;
+        }
+      }
+
       if (typeof navigatorWithShare.share === "function") {
         await navigatorWithShare.share({
           title: shareTitle,

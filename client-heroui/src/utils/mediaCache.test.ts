@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getCachedMediaBlob,
   getCachedMediaObjectUrl,
   getCachedVideoPosterUrl,
   shouldCacheMediaBody,
@@ -68,6 +69,26 @@ describe("mediaCache", () => {
     })).resolves.toBe("blob:cached-0");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns cached media blobs for local download and share", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("audio", {
+      status: 200,
+      headers: { "Content-Type": "audio/webm" },
+    }));
+
+    await getCachedMediaObjectUrl({
+      assetId: "audio-asset",
+      url: "https://signed.example/audio.webm",
+      kind: "audio",
+      mimeType: "audio/webm",
+      byteSize: 5,
+    });
+
+    const cachedBlob = await getCachedMediaBlob("audio-asset");
+
+    expect(cachedBlob?.type).toBe("audio/webm");
+    await expect(cachedBlob?.text()).resolves.toBe("audio");
   });
 
   it("caches audio bodies but skips oversized video bodies", async () => {
