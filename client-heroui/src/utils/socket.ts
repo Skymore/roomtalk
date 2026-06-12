@@ -28,6 +28,8 @@ const getClientId = (): string => {
   return clientId;
 };
 
+export const getCurrentClientId = (): string => getClientId();
+
 const getBrowserInstanceId = (): string => {
   let id = localStorage.getItem('browserInstanceId');
   if (!id) {
@@ -102,11 +104,34 @@ type RegisterAckResponse = SocketAckResponse & {
 export type ClientAuthStatus = {
   clientId: string;
   hasPassword: boolean;
+  hasAccount?: boolean;
 };
 
 type ClientAuthResponse = ClientAuthStatus & {
   clientAuthToken: string;
   nickname?: string | null;
+};
+
+export type ClientAccountInfo = {
+  accountId: string;
+  primaryClientId: string;
+  provider: 'google';
+  email?: string;
+  emailVerified?: boolean;
+  displayName?: string;
+  avatarUrl?: string;
+  lastLoginAt?: string;
+};
+
+export type ClientAccountStatus = {
+  clientId: string;
+  hasPassword: boolean;
+  googleConfigured: boolean;
+  account: ClientAccountInfo | null;
+};
+
+type GoogleAuthResponse = ClientAuthResponse & {
+  account: ClientAccountInfo;
 };
 
 type RoomPermissionsAckResponse = SocketAckResponse & {
@@ -688,7 +713,7 @@ const postJson = async <T>(path: string, body: unknown): Promise<T> => {
   return response.json() as Promise<T>;
 };
 
-export const getClientAuthStatus = async (targetClientId = clientId): Promise<ClientAuthStatus> => {
+export const getClientAuthStatus = async (targetClientId = getClientId()): Promise<ClientAuthStatus> => {
   const response = await fetch(apiPath(`/api/client-auth/${encodeURIComponent(targetClientId)}/status`), {
     cache: 'no-store',
   });
@@ -698,9 +723,43 @@ export const getClientAuthStatus = async (targetClientId = clientId): Promise<Cl
   return response.json() as Promise<ClientAuthStatus>;
 };
 
+export const getClientAccountStatus = async (targetClientId = getClientId()): Promise<ClientAccountStatus> => {
+  const query = new URLSearchParams({ clientId: targetClientId });
+  appendClientAuthQuery(query);
+  const response = await fetch(apiPath(`/api/auth/account?${query.toString()}`), {
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, 'Failed to load account status'));
+  }
+  return response.json() as Promise<ClientAccountStatus>;
+};
+
+const adoptAuthenticatedClient = (response: ClientAuthResponse) => {
+  localStorage.setItem('clientId', response.clientId);
+  const nickname = typeof response.nickname === 'string' ? response.nickname.trim() : '';
+  if (nickname) {
+    currentUsername = nickname;
+    saveUsername(nickname);
+    usernameAdoptedCallbacks.forEach(callback => callback(nickname));
+  } else {
+    currentUsername = '';
+    clearStoredUsername();
+  }
+  setClientAuthToken(response.clientAuthToken);
+  registeredSocketId = null;
+  pendingRegistration = null;
+  pendingRegistrationSocketId = null;
+  if (socket.connected) {
+    void ensureRegisteredSocket().catch((error) => {
+      console.error('Failed to register socket after switching User ID:', error);
+    });
+  }
+};
+
 export const setClientPassword = async (password: string, currentPassword?: string): Promise<ClientAuthStatus> => {
   const response = await postJson<ClientAuthResponse>('/api/client-auth/password', withClientAuthBody({
-    clientId,
+    clientId: getClientId(),
     password,
     currentPassword: currentPassword || undefined,
   }));
@@ -713,25 +772,24 @@ export const loginWithClientPassword = async (targetClientId: string, password: 
     clientId: targetClientId,
     password,
   });
-  localStorage.setItem('clientId', response.clientId);
-  const nickname = typeof response.nickname === 'string' ? response.nickname.trim() : '';
-  if (nickname) {
-    currentUsername = nickname;
-    saveUsername(nickname);
-    usernameAdoptedCallbacks.forEach(callback => callback(nickname));
-  } else {
-    currentUsername = '';
-    clearStoredUsername();
-  }
-  setClientAuthToken(response.clientAuthToken);
+  adoptAuthenticatedClient(response);
   return { clientId: response.clientId, hasPassword: response.hasPassword };
+};
+
+export const loginWithGoogleCredential = async (credential: string): Promise<GoogleAuthResponse> => {
+  const response = await postJson<GoogleAuthResponse>('/api/auth/google', withClientAuthBody({
+    clientId: getClientId(),
+    credential,
+  }));
+  adoptAuthenticatedClient(response);
+  return response;
 };
 
 export const logoutClientPasswordSession = async (): Promise<void> => {
   const token = getClientAuthToken();
   if (token) {
     await postJson('/api/client-auth/logout', {
-      clientId,
+      clientId: getClientId(),
       clientAuthToken: token,
     }).catch(() => undefined);
   }

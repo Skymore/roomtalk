@@ -71,6 +71,7 @@ vi.mock('uuid', () => ({
 const {
   ensureRoomJoined,
   getAudioTranscription,
+  getClientAccountStatus,
   getClientAuthStatus,
   getMediaDownloadUrl,
   getRoomMediaHistory,
@@ -80,6 +81,7 @@ const {
   getSavedRoomsFromServer,
   joinRoom,
   loginWithClientPassword,
+  loginWithGoogleCredential,
   onUsernameAdopted,
   removeRoomMember,
   saveRoomToServer,
@@ -447,6 +449,67 @@ describe('socket message acknowledgement helpers', () => {
     expect(localStorage.getItem('clientId')).toBe('client-other');
     expect(localStorage.getItem('clientAuthToken')).toBe('login-token');
     expect(localStorage.getItem('roomtalk_username')).toBeNull();
+  });
+
+  it('loads account status and adopts Google login responses', async () => {
+    setClientAuthToken('old-token');
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        clientId: 'client-uuid',
+        hasPassword: false,
+        googleConfigured: true,
+        account: null,
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        clientId: 'client-google',
+        hasPassword: false,
+        clientAuthToken: 'google-token',
+        nickname: 'Ada',
+        account: {
+          accountId: 'account-1',
+          primaryClientId: 'client-google',
+          provider: 'google',
+          email: 'ada@example.com',
+          emailVerified: true,
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+
+    await expect(getClientAccountStatus()).resolves.toEqual({
+      clientId: 'client-uuid',
+      hasPassword: false,
+      googleConfigured: true,
+      account: null,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/auth/account?clientId=client-uuid&clientAuthToken=old-token', { cache: 'no-store' });
+
+    await expect(loginWithGoogleCredential('google-credential')).resolves.toEqual({
+      clientId: 'client-google',
+      hasPassword: false,
+      clientAuthToken: 'google-token',
+      nickname: 'Ada',
+      account: {
+        accountId: 'account-1',
+        primaryClientId: 'client-google',
+        provider: 'google',
+        email: 'ada@example.com',
+        emailVerified: true,
+      },
+    });
+    const googleRequest = fetchMock.mock.calls[1][1] as RequestInit;
+    expect(JSON.parse(googleRequest.body as string)).toEqual({
+      clientId: 'client-uuid',
+      credential: 'google-credential',
+      clientAuthToken: 'old-token',
+    });
+    expect(localStorage.getItem('clientId')).toBe('client-google');
+    expect(localStorage.getItem('clientAuthToken')).toBe('google-token');
+    expect(localStorage.getItem('roomtalk_username')).toBe('Ada');
   });
 
   it('uploads media objects through relative local media URLs', async () => {

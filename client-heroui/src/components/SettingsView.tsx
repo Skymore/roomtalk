@@ -6,9 +6,12 @@ import { getAvatarText, getAvatarColor } from "../utils/userProfile";
 import { getLanguageOption, languageOptions } from "../utils/languages";
 import { FeatureIntro } from "./FeatureIntro";
 import {
+  ClientAccountStatus,
   ClientAuthStatus,
+  getClientAccountStatus,
   getClientAuthStatus,
   loginWithClientPassword,
+  loginWithGoogleCredential,
   setClientPassword,
 } from "../utils/socket";
 import {
@@ -17,6 +20,62 @@ import {
   getPushNotificationStatus,
   PushNotificationStatus,
 } from "../utils/pushNotifications";
+
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim();
+
+type GoogleCredentialResponse = {
+  credential?: string;
+};
+
+declare global {
+  interface Window {
+    google?: {
+      accounts?: {
+        id?: {
+          initialize: (options: {
+            client_id: string;
+            callback: (response: GoogleCredentialResponse) => void;
+            auto_select?: boolean;
+            cancel_on_tap_outside?: boolean;
+          }) => void;
+          renderButton: (parent: HTMLElement, options: Record<string, unknown>) => void;
+        };
+      };
+    };
+  }
+}
+
+let googleIdentityScriptPromise: Promise<void> | null = null;
+
+const loadGoogleIdentityScript = () => {
+  if (googleIdentityScriptPromise) {
+    return googleIdentityScriptPromise;
+  }
+
+  googleIdentityScriptPromise = new Promise<void>((resolve, reject) => {
+    if (window.google?.accounts?.id) {
+      resolve();
+      return;
+    }
+
+    const existingScript = document.querySelector<HTMLScriptElement>('script[src="https://accounts.google.com/gsi/client"]');
+    if (existingScript) {
+      existingScript.addEventListener('load', () => resolve(), { once: true });
+      existingScript.addEventListener('error', () => reject(new Error('Failed to load Google sign-in')), { once: true });
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('Failed to load Google sign-in'));
+    document.head.appendChild(script);
+  });
+
+  return googleIdentityScriptPromise;
+};
 
 interface SettingsViewProps {
   clientId: string;
@@ -58,6 +117,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [newClientPassword, setNewClientPassword] = React.useState('');
   const [loginClientId, setLoginClientId] = React.useState('');
   const [loginPassword, setLoginPassword] = React.useState('');
+  const [accountStatus, setAccountStatus] = React.useState<ClientAccountStatus | null>(null);
+  const [isUpdatingGoogleAuth, setIsUpdatingGoogleAuth] = React.useState(false);
+  const [googleAuthError, setGoogleAuthError] = React.useState('');
+  const [googleAuthMessage, setGoogleAuthMessage] = React.useState('');
+  const googleButtonRef = React.useRef<HTMLDivElement | null>(null);
 
   const refreshPushStatus = React.useCallback(async () => {
     try {
@@ -85,6 +149,20 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   React.useEffect(() => {
     void refreshClientAuthStatus();
   }, [refreshClientAuthStatus]);
+
+  const refreshAccountStatus = React.useCallback(async () => {
+    try {
+      const status = await getClientAccountStatus(clientId);
+      setAccountStatus(status);
+      setGoogleAuthError('');
+    } catch (error) {
+      setGoogleAuthError(error instanceof Error ? error.message : t('googleSignInUnknownError'));
+    }
+  }, [clientId, t]);
+
+  React.useEffect(() => {
+    void refreshAccountStatus();
+  }, [refreshAccountStatus]);
 
   const handleEnablePush = async () => {
     setIsUpdatingPush(true);
@@ -154,6 +232,90 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       setIsUpdatingClientAuth(false);
     }
   };
+
+  const handleGoogleCredential = React.useCallback(async (response: GoogleCredentialResponse) => {
+    setGoogleAuthError('');
+    setGoogleAuthMessage('');
+    const credential = typeof response.credential === 'string' ? response.credential : '';
+    if (!credential) {
+      setGoogleAuthError(t('googleSignInUnknownError'));
+      return;
+    }
+
+    const shouldRefreshPush = pushStatus === 'subscribed';
+    setIsUpdatingGoogleAuth(true);
+    try {
+      const result = await loginWithGoogleCredential(credential);
+      setAccountStatus({
+        clientId: result.clientId,
+        hasPassword: result.hasPassword,
+        googleConfigured: true,
+        account: result.account,
+      });
+      setClientAuthStatus({
+        clientId: result.clientId,
+        hasPassword: result.hasPassword,
+        hasAccount: true,
+      });
+      setGoogleAuthMessage(t('googleSignInSuccess'));
+      if (shouldRefreshPush) {
+        await enablePushNotifications().catch((error) => {
+          console.warn('Failed to refresh push subscription after Google sign-in:', error);
+        });
+      }
+      window.setTimeout(() => window.location.reload(), 150);
+    } catch (error) {
+      setGoogleAuthError(error instanceof Error ? error.message : t('googleSignInUnknownError'));
+    } finally {
+      setIsUpdatingGoogleAuth(false);
+    }
+  }, [pushStatus, t]);
+
+  const isGoogleLoginAvailable = Boolean(GOOGLE_CLIENT_ID) && Boolean(accountStatus?.googleConfigured);
+  const shouldRenderGoogleButton = isGoogleLoginAvailable && !accountStatus?.account;
+
+  React.useEffect(() => {
+    const buttonContainer = googleButtonRef.current;
+    if (!shouldRenderGoogleButton || !buttonContainer || !GOOGLE_CLIENT_ID) {
+      buttonContainer?.replaceChildren();
+      return;
+    }
+
+    let cancelled = false;
+    buttonContainer.replaceChildren();
+    loadGoogleIdentityScript()
+      .then(() => {
+        if (cancelled || !window.google?.accounts?.id || !googleButtonRef.current) {
+          return;
+        }
+        window.google.accounts.id.initialize({
+          client_id: GOOGLE_CLIENT_ID,
+          callback: handleGoogleCredential,
+          auto_select: false,
+          cancel_on_tap_outside: true,
+        });
+        googleButtonRef.current.replaceChildren();
+        window.google.accounts.id.renderButton(googleButtonRef.current, {
+          type: 'standard',
+          theme: isDark ? 'filled_black' : 'outline',
+          size: 'large',
+          shape: 'rectangular',
+          text: 'signin_with',
+          logo_alignment: 'left',
+          width: 320,
+        });
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setGoogleAuthError(error instanceof Error ? error.message : t('googleSignInUnknownError'));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      buttonContainer.replaceChildren();
+    };
+  }, [handleGoogleCredential, isDark, shouldRenderGoogleButton, t]);
 
   const pushStatusLabel = React.useMemo(() => {
     if (pushStatus === 'subscribed') return t('notificationStatusOn');
@@ -267,6 +429,73 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               >
                 <Icon icon="lucide:copy" className="text-sm" />
               </Button>
+            </div>
+          </div>
+
+          <div className="flex min-h-[72px] flex-col gap-3 border-b border-[#dedbd0] py-4 dark:border-[#30302e] sm:flex-row">
+            <div className="w-full pt-1 text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5] sm:w-32">
+              {t("googleAccount")}
+            </div>
+            <div className="flex min-w-0 flex-1 flex-col gap-3 sm:max-w-sm">
+              <FeatureIntro
+                featureKey="google-account-login"
+                title={t("googleAccountIntroTitle")}
+                description={t("googleAccountIntroDescription")}
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <Chip
+                  size="sm"
+                  variant="flat"
+                  color={accountStatus?.account ? 'success' : 'default'}
+                >
+                  {accountStatus?.account ? t("googleAccountLinked") : t("googleAccountNotLinked")}
+                </Chip>
+                {accountStatus?.account && (
+                  <Chip
+                    size="sm"
+                    variant="flat"
+                    color={accountStatus.account.emailVerified ? 'success' : 'warning'}
+                  >
+                    {accountStatus.account.emailVerified ? t("googleEmailVerified") : t("googleEmailUnverified")}
+                  </Chip>
+                )}
+              </div>
+              {accountStatus?.account && (
+                <div className="flex min-w-0 items-center gap-3 rounded-lg bg-[#e8e6dc] p-3 dark:bg-[#242423]">
+                  <Avatar
+                    size="sm"
+                    src={accountStatus.account.avatarUrl}
+                    name={accountStatus.account.displayName || accountStatus.account.email || "G"}
+                    className="flex-shrink-0"
+                  />
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-[#141413] dark:text-[#faf9f5]">
+                      {accountStatus.account.displayName || accountStatus.account.email || "Google"}
+                    </p>
+                    {accountStatus.account.email && (
+                      <p className="truncate text-xs text-[#77756f] dark:text-[#b0aea5]">{accountStatus.account.email}</p>
+                    )}
+                  </div>
+                </div>
+              )}
+              {shouldRenderGoogleButton && (
+                <div
+                  ref={googleButtonRef}
+                  className={`min-h-10 ${isUpdatingGoogleAuth ? 'pointer-events-none opacity-60' : ''}`}
+                />
+              )}
+              {accountStatus && !isGoogleLoginAvailable && !accountStatus.account && (
+                <p className="text-xs leading-5 text-[#77756f] dark:text-[#b0aea5]">{t("googleAccountUnavailable")}</p>
+              )}
+              {isUpdatingGoogleAuth && (
+                <p className="text-xs leading-5 text-[#77756f] dark:text-[#b0aea5]">{t("googleSignInInProgress")}</p>
+              )}
+              {googleAuthMessage && (
+                <p className="text-xs leading-5 text-[#2f7d4f] dark:text-[#7ed9a3]">{googleAuthMessage}</p>
+              )}
+              {googleAuthError && (
+                <p className="text-xs leading-5 text-[#b54832] dark:text-[#ff8b6e]">{googleAuthError}</p>
+              )}
             </div>
           </div>
 
