@@ -3,7 +3,7 @@ import { Server } from 'socket.io';
 import { RedisClientType } from 'redis';
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../logger';
-import { AudioTranscriptionRecord, MediaHistoryPageCursor, PendingMediaUpload, RoomStore } from '../repositories/store';
+import { AudioTranscriptionRecord, ClientAccount, MediaHistoryPageCursor, PendingMediaUpload, RoomStore } from '../repositories/store';
 import { MediaAsset, MediaKind, Message, Room } from '../types';
 import { AIRoleDraft, MAX_AI_ROLE_IDEA_LENGTH } from '../services/aiRoleGenerator';
 import { hasRoomAccess } from '../socket/roomAccess';
@@ -20,6 +20,7 @@ import {
   validateClientPassword,
   verifyClientPassword,
 } from '../services/clientAuth';
+import { VerifyGoogleCredentialResult, resolveGoogleClientIds, verifyGoogleCredential } from '../services/googleAuth';
 
 interface ApiRouteOptions {
   store: RoomStore;
@@ -31,6 +32,8 @@ interface ApiRouteOptions {
   persistenceStore?: string;
   mediaObjectStorage: MediaObjectStorage;
   audioTranscriptionRunner?: AudioTranscriptionRunner;
+  googleClientIds?: string[];
+  verifyGoogleCredential?: (credential: string, clientIds: string[]) => Promise<VerifyGoogleCredentialResult>;
   mediaUploadCleanup?: {
     disabled?: boolean;
     pendingUploadTtlMs?: number;
@@ -227,6 +230,19 @@ const parsePushSubscriptionBody = (body: unknown) => {
   return { clientId, browserInstanceId, endpoint, p256dh, auth, userAgent };
 };
 
+const serializeClientAccount = (account: ClientAccount | null) => account
+  ? {
+      accountId: account.accountId,
+      primaryClientId: account.primaryClientId,
+      provider: account.provider,
+      email: account.email,
+      emailVerified: account.emailVerified,
+      displayName: account.displayName,
+      avatarUrl: account.avatarUrl,
+      lastLoginAt: account.lastLoginAt,
+    }
+  : null;
+
 const consumeAIRoleDraftRateLimit = (clientId: string, ip: string | undefined, nowMs = Date.now()) => {
   const key = `${clientId}:${ip || 'unknown'}`;
   const current = aiRoleDraftRateLimits.get(key);
@@ -266,6 +282,8 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   const pendingUploadTtlMs = mediaUploadCleanup.pendingUploadTtlMs ?? MEDIA_PENDING_UPLOAD_TTL_MS;
   const sweepIntervalMs = mediaUploadCleanup.sweepIntervalMs ?? MEDIA_PENDING_UPLOAD_SWEEP_INTERVAL_MS;
   const sweepBatchSize = mediaUploadCleanup.sweepBatchSize ?? MEDIA_PENDING_UPLOAD_SWEEP_BATCH_SIZE;
+  const googleClientIds = options.googleClientIds ?? resolveGoogleClientIds();
+  const verifyGoogleCredentialFn = options.verifyGoogleCredential ?? verifyGoogleCredential;
 
   const deleteMediaObjectBestEffort = async (objectKey: string, reason: string) => {
     if (!mediaObjectStorage.deleteMediaObject) {
@@ -505,14 +523,96 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     return res.status(204).send();
   });
 
+  app.get('/api/auth/account', async (req: Request, res: Response) => {
+    const clientId = getQueryClientId(req);
+    if (!clientId) {
+      return res.status(400).json({ error: 'clientId is required' });
+    }
+    if (!(await authorizeClientRequest(req, res, clientId, 'GET /api/auth/account'))) {
+      return;
+    }
+
+    const [account, passwordHash] = await Promise.all([
+      store.getAccountByClientId(clientId),
+      store.getClientPasswordHash(clientId),
+    ]);
+    return res.json({
+      clientId,
+      hasPassword: Boolean(passwordHash),
+      googleConfigured: googleClientIds.length > 0,
+      account: serializeClientAccount(account),
+    });
+  });
+
+  app.post('/api/auth/google', async (req: Request, res: Response) => {
+    const credential = typeof req.body?.credential === 'string' ? req.body.credential : '';
+    const requestedClientId = getBodyClientId(req);
+    const verified = await verifyGoogleCredentialFn(credential, googleClientIds);
+    if (!verified.ok) {
+      return res.status(verified.status).json({ error: verified.error });
+    }
+
+    const profile = verified.profile;
+    let account = await store.getAccountByGoogleSubject(profile.providerSubject);
+    if (account) {
+      account = await store.updateGoogleAccountLogin(account.accountId, profile) || account;
+    } else {
+      if (!requestedClientId) {
+        return res.status(400).json({ error: 'clientId is required' });
+      }
+
+      const existingClientAccount = await store.getAccountByClientId(requestedClientId);
+      if (existingClientAccount) {
+        return res.status(409).json({ error: 'This User ID is already linked to another Google account' });
+      }
+
+      if (!(await authorizeClientRequest(req, res, requestedClientId, 'POST /api/auth/google'))) {
+        return;
+      }
+
+      account = await store.createGoogleAccountForClient({
+        ...profile,
+        accountId: uuidv4(),
+        clientId: requestedClientId,
+      });
+      if (!account) {
+        return res.status(409).json({ error: 'Failed to link Google account to this User ID' });
+      }
+    }
+
+    const clientAuthToken = await issueClientAuthToken(store, account.primaryClientId, {
+      accountId: account.accountId,
+      authMethod: 'google',
+    });
+    const [passwordHash, nicknames] = await Promise.all([
+      store.getClientPasswordHash(account.primaryClientId),
+      store.getClientNicknames([account.primaryClientId]),
+    ]);
+    const nickname = nicknames[account.primaryClientId] || profile.displayName || null;
+    if (!nicknames[account.primaryClientId] && profile.displayName) {
+      await store.setClientNickname(account.primaryClientId, profile.displayName);
+    }
+
+    return res.json({
+      clientId: account.primaryClientId,
+      clientAuthToken,
+      hasPassword: Boolean(passwordHash),
+      nickname,
+      account: serializeClientAccount(account),
+    });
+  });
+
   app.get('/api/client-auth/:clientId/status', async (req: Request, res: Response) => {
     const clientId = req.params.clientId;
     if (!clientId) {
       return res.status(400).json({ error: 'clientId is required' });
     }
 
-    const passwordHash = await store.getClientPasswordHash(clientId);
-    return res.json({ clientId, hasPassword: Boolean(passwordHash) });
+    const [passwordHash, account] = await Promise.all([
+      store.getClientPasswordHash(clientId),
+      store.getAccountByClientId(clientId),
+    ]);
+    return res.json({ clientId, hasPassword: Boolean(passwordHash), hasAccount: Boolean(account) });
   });
 
   app.post('/api/client-auth/password', async (req: Request, res: Response) => {

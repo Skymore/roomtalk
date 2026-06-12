@@ -2,7 +2,7 @@ import { customAlphabet } from 'nanoid';
 import { Logger } from '../logger';
 import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomPostingSchedule } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
-import { AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAuthTokenRecord, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, PendingMediaUpload, PushSubscriptionRecord, RoomMessagePageOptions, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
+import { AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, PendingMediaUpload, PushSubscriptionRecord, RoomMessagePageOptions, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 
@@ -121,6 +121,20 @@ type PushSubscriptionRow = {
   updated_at: string | Date;
 };
 
+type ClientAccountRow = {
+  account_id: string;
+  primary_client_id: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  account_created_at: string | Date;
+  account_updated_at: string | Date;
+  last_login_at: string | Date | null;
+  provider: 'google';
+  provider_subject: string;
+  email: string | null;
+  email_verified: boolean | null;
+};
+
 const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, room_version, updated_at';
 const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, ai_model, usage, cost, reply_to, ai_stream_owner_id';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
@@ -128,6 +142,18 @@ const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_typ
 const PENDING_MEDIA_UPLOAD_COLUMNS = 'id, room_id, object_key, kind, mime_type, byte_size, filename, uploaded_by_client_id, expires_at, created_at';
 const AUDIO_TRANSCRIPTION_COLUMNS = 'asset_id, room_id, message_id, requested_by_client_id, status, transcript, language_code, provider, provider_transcript_id, error, created_at, updated_at, completed_at';
 const PUSH_SUBSCRIPTION_COLUMNS = 'endpoint, client_id, browser_instance_id, p256dh, auth, user_agent, created_at, updated_at';
+const ACCOUNT_SELECT_COLUMNS = `
+  a.id AS account_id,
+  a.primary_client_id,
+  a.display_name,
+  a.avatar_url,
+  a.created_at AS account_created_at,
+  a.updated_at AS account_updated_at,
+  a.last_login_at,
+  ai.provider,
+  ai.provider_subject,
+  ai.email,
+  ai.email_verified`;
 
 const parseTime = (timestamp?: string): number => {
   const time = Date.parse(timestamp || '');
@@ -291,6 +317,23 @@ const mapPushSubscription = (row: PushSubscriptionRow): PushSubscriptionRecord =
   createdAt: toIsoString(row.created_at),
   updatedAt: toIsoString(row.updated_at),
 });
+
+const mapClientAccount = (row: ClientAccountRow): ClientAccount => {
+  const account: ClientAccount = {
+    accountId: row.account_id,
+    primaryClientId: row.primary_client_id,
+    provider: row.provider,
+    providerSubject: row.provider_subject,
+    emailVerified: Boolean(row.email_verified),
+    createdAt: toIsoString(row.account_created_at),
+    updatedAt: toIsoString(row.account_updated_at),
+  };
+  if (row.email) account.email = row.email;
+  if (row.display_name) account.displayName = row.display_name;
+  if (row.avatar_url) account.avatarUrl = row.avatar_url;
+  if (row.last_login_at) account.lastLoginAt = toIsoString(row.last_login_at);
+  return account;
+};
 
 const toMessageMediaAsset = (asset: MediaAsset): MessageMediaAsset => {
   const messageAsset: MessageMediaAsset = {
@@ -1574,6 +1617,124 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
+  async getAccountByClientId(clientId: string): Promise<ClientAccount | null> {
+    try {
+      const result = await this.pool.query<ClientAccountRow>(
+        `SELECT ${ACCOUNT_SELECT_COLUMNS}
+        FROM client_account_links cal
+        INNER JOIN accounts a ON a.id = cal.account_id
+        INNER JOIN account_identities ai ON ai.account_id = a.id AND ai.provider = 'google'
+        WHERE cal.client_id = $1
+        LIMIT 1`,
+        [clientId]
+      );
+      return result.rows[0] ? mapClientAccount(result.rows[0]) : null;
+    } catch (error) {
+      this.logger.error('Error reading PostgreSQL account by client ID', { error, clientId });
+      return null;
+    }
+  }
+
+  async getAccountByGoogleSubject(providerSubject: string): Promise<ClientAccount | null> {
+    try {
+      const result = await this.pool.query<ClientAccountRow>(
+        `SELECT ${ACCOUNT_SELECT_COLUMNS}
+        FROM account_identities ai
+        INNER JOIN accounts a ON a.id = ai.account_id
+        WHERE ai.provider = 'google' AND ai.provider_subject = $1
+        LIMIT 1`,
+        [providerSubject]
+      );
+      return result.rows[0] ? mapClientAccount(result.rows[0]) : null;
+    } catch (error) {
+      this.logger.error('Error reading PostgreSQL account by Google subject', { error });
+      return null;
+    }
+  }
+
+  async createGoogleAccountForClient(input: CreateGoogleAccountInput): Promise<ClientAccount | null> {
+    const now = input.now || new Date().toISOString();
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `INSERT INTO accounts (id, primary_client_id, display_name, avatar_url, created_at, updated_at, last_login_at)
+        VALUES ($1, $2, $3, $4, $5, $5, $5)`,
+        [
+          input.accountId,
+          input.clientId,
+          input.displayName || null,
+          input.avatarUrl || null,
+          now,
+        ]
+      );
+      await client.query(
+        `INSERT INTO account_identities (account_id, provider, provider_subject, email, email_verified, created_at, updated_at)
+        VALUES ($1, 'google', $2, $3, $4, $5, $5)`,
+        [
+          input.accountId,
+          input.providerSubject,
+          input.email || null,
+          Boolean(input.emailVerified),
+          now,
+        ]
+      );
+      await client.query(
+        `INSERT INTO client_account_links (client_id, account_id, linked_at)
+        VALUES ($1, $2, $3)`,
+        [input.clientId, input.accountId, now]
+      );
+      await client.query('COMMIT');
+      return this.getAccountByClientId(input.clientId);
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      this.logger.error('Error creating PostgreSQL Google account', { error, clientId: input.clientId });
+      return null;
+    } finally {
+      client.release();
+    }
+  }
+
+  async updateGoogleAccountLogin(accountId: string, profile: GoogleAccountProfile, now = new Date().toISOString()): Promise<ClientAccount | null> {
+    try {
+      await this.pool.query(
+        `UPDATE accounts
+        SET display_name = COALESCE($2, display_name),
+            avatar_url = COALESCE($3, avatar_url),
+            updated_at = $4,
+            last_login_at = $4
+        WHERE id = $1`,
+        [accountId, profile.displayName || null, profile.avatarUrl || null, now]
+      );
+      await this.pool.query(
+        `UPDATE account_identities
+        SET email = COALESCE($2, email),
+            email_verified = $3,
+            updated_at = $4
+        WHERE account_id = $1 AND provider = 'google' AND provider_subject = $5`,
+        [
+          accountId,
+          profile.email || null,
+          Boolean(profile.emailVerified),
+          now,
+          profile.providerSubject,
+        ]
+      );
+      const result = await this.pool.query<ClientAccountRow>(
+        `SELECT ${ACCOUNT_SELECT_COLUMNS}
+        FROM accounts a
+        INNER JOIN account_identities ai ON ai.account_id = a.id AND ai.provider = 'google'
+        WHERE a.id = $1
+        LIMIT 1`,
+        [accountId]
+      );
+      return result.rows[0] ? mapClientAccount(result.rows[0]) : null;
+    } catch (error) {
+      this.logger.error('Error updating PostgreSQL Google account login', { error, accountId });
+      return null;
+    }
+  }
+
   async setClientPasswordHash(clientId: string, passwordHash: string): Promise<void> {
     try {
       await this.pool.query(
@@ -1605,12 +1766,22 @@ export class PostgresStore implements DurableRoomStore {
   async saveClientAuthToken(token: ClientAuthTokenRecord): Promise<void> {
     try {
       await this.pool.query(
-        `INSERT INTO client_auth_tokens (token_hash, client_id, created_at, last_used_at)
-        VALUES ($1, $2, $3, $3)
+        `INSERT INTO client_auth_tokens (token_hash, client_id, account_id, auth_method, created_at, last_used_at, expires_at)
+        VALUES ($1, $2, $3, $4, $5, $5, $6)
         ON CONFLICT (token_hash) DO UPDATE SET
           client_id = EXCLUDED.client_id,
-          last_used_at = EXCLUDED.last_used_at`,
-        [token.tokenHash, token.clientId, token.createdAt]
+          account_id = EXCLUDED.account_id,
+          auth_method = EXCLUDED.auth_method,
+          last_used_at = EXCLUDED.last_used_at,
+          expires_at = EXCLUDED.expires_at`,
+        [
+          token.tokenHash,
+          token.clientId,
+          token.accountId || null,
+          token.authMethod || null,
+          token.createdAt,
+          token.expiresAt || null,
+        ]
       );
     } catch (error) {
       this.logger.error('Error saving PostgreSQL client auth token', { error, clientId: token.clientId });
@@ -1622,7 +1793,9 @@ export class PostgresStore implements DurableRoomStore {
       const result = await this.pool.query(
         `UPDATE client_auth_tokens
         SET last_used_at = NOW()
-        WHERE client_id = $1 AND token_hash = $2`,
+        WHERE client_id = $1
+          AND token_hash = $2
+          AND (expires_at IS NULL OR expires_at > NOW())`,
         [clientId, tokenHash]
       );
       return (result.rowCount || 0) > 0;
@@ -1942,7 +2115,7 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async resetAllDataForTests(): Promise<void> {
-    await this.pool.query('TRUNCATE room_ai_cost_totals, audio_transcriptions, pending_media_uploads, media_assets, image_assets, room_messages, room_saves, room_members, rooms, client_profiles RESTART IDENTITY CASCADE');
+    await this.pool.query('TRUNCATE room_ai_cost_totals, audio_transcriptions, pending_media_uploads, media_assets, image_assets, room_messages, room_saves, room_members, rooms, client_auth_tokens, client_passwords, client_account_links, account_identities, accounts, client_profiles RESTART IDENTITY CASCADE');
   }
 
   async failInterruptedStreamingMessages(content: string, options: InterruptedStreamingMessageRecoveryOptions = {}): Promise<number> {

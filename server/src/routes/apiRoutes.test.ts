@@ -10,7 +10,7 @@ import { registerApiRoutes } from './apiRoutes';
 import { MediaAsset, Message, Room } from '../types';
 import { LocalMediaObjectStorage } from '../services/mediaObjectStorage';
 import { Logger } from '../logger';
-import { AudioTranscriptionRecord, AudioTranscriptionUpdate, PendingMediaUpload } from '../repositories/store';
+import { AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CreateGoogleAccountInput, GoogleAccountProfile, PendingMediaUpload } from '../repositories/store';
 import { AudioTranscriptionJob } from '../services/audioTranscription';
 
 type EmittedEvent = {
@@ -42,8 +42,11 @@ type TestServer = {
     pendingMediaUploads: Map<string, PendingMediaUpload>;
     audioTranscriptions: Map<string, AudioTranscriptionRecord>;
     pushSubscriptions: Map<string, { clientId: string; browserInstanceId?: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }>;
+    accounts: Map<string, ClientAccount>;
+    googleSubjectAccountIds: Map<string, string>;
+    clientAccountLinks: Map<string, string>;
     clientPasswords: Map<string, string>;
-    clientAuthTokens: Map<string, { clientId: string; tokenHash: string; createdAt: string }>;
+    clientAuthTokens: Map<string, ClientAuthTokenRecord>;
     nicknames: Map<string, string>;
     readMessagesByRoom: (roomId: string) => Promise<Message[]>;
     addRoomMember: (roomId: string, clientId: string, role: 'owner' | 'member', joinedAt?: string) => Promise<{ roomId: string; clientId: string; role: 'owner' | 'member'; joinedAt: string } | null>;
@@ -53,9 +56,13 @@ type TestServer = {
     savePushSubscription: (subscription: { clientId: string; browserInstanceId?: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }) => Promise<void>;
     deletePushSubscription: (clientId: string, endpoint: string) => Promise<boolean>;
     readPushSubscriptionsByRoom: (roomId: string) => Promise<Array<{ clientId: string; browserInstanceId?: string; endpoint: string; p256dh: string; auth: string; createdAt: string; updatedAt: string; userAgent?: string }>>;
+    getAccountByClientId: (clientId: string) => Promise<ClientAccount | null>;
+    getAccountByGoogleSubject: (providerSubject: string) => Promise<ClientAccount | null>;
+    createGoogleAccountForClient: (input: CreateGoogleAccountInput) => Promise<ClientAccount | null>;
+    updateGoogleAccountLogin: (accountId: string, profile: GoogleAccountProfile, now?: string) => Promise<ClientAccount | null>;
     setClientPasswordHash: (clientId: string, passwordHash: string) => Promise<void>;
     getClientPasswordHash: (clientId: string) => Promise<string | null>;
-    saveClientAuthToken: (token: { clientId: string; tokenHash: string; createdAt: string }) => Promise<void>;
+    saveClientAuthToken: (token: ClientAuthTokenRecord) => Promise<void>;
     isClientAuthTokenValid: (clientId: string, tokenHash: string) => Promise<boolean>;
     deleteClientAuthToken: (clientId: string, tokenHash: string) => Promise<boolean>;
     deleteClientAuthTokens: (clientId: string) => Promise<void>;
@@ -105,6 +112,21 @@ const sampleMessage = (overrides: Partial<Message> = {}): Message => ({
   roomId: 'room-1',
   timestamp: '2026-05-03T00:00:00.000Z',
   messageType: 'text',
+  ...overrides,
+});
+
+const sampleClientAccount = (overrides: Partial<ClientAccount> = {}): ClientAccount => ({
+  accountId: 'account-1',
+  primaryClientId: 'client-1',
+  provider: 'google',
+  providerSubject: 'google-subject-1',
+  email: 'ada@example.com',
+  emailVerified: true,
+  displayName: 'Ada Lovelace',
+  avatarUrl: 'https://example.com/avatar.png',
+  createdAt: '2026-05-03T00:00:00.000Z',
+  updatedAt: '2026-05-03T00:00:00.000Z',
+  lastLoginAt: '2026-05-03T00:00:00.000Z',
   ...overrides,
 });
 
@@ -166,6 +188,8 @@ async function createTestServer(overrides: {
   mediaObjectStorage?: unknown;
   mediaUploadCleanup?: Parameters<typeof registerApiRoutes>[1]['mediaUploadCleanup'];
   audioTranscriptionRunner?: Parameters<typeof registerApiRoutes>[1]['audioTranscriptionRunner'];
+  googleClientIds?: Parameters<typeof registerApiRoutes>[1]['googleClientIds'];
+  verifyGoogleCredential?: Parameters<typeof registerApiRoutes>[1]['verifyGoogleCredential'];
 } = {}): Promise<TestServer> {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
@@ -183,8 +207,11 @@ async function createTestServer(overrides: {
     pendingMediaUploads: new Map<string, PendingMediaUpload>(),
     audioTranscriptions: new Map<string, AudioTranscriptionRecord>(),
     pushSubscriptions: new Map<string, { clientId: string; browserInstanceId?: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }>(),
+    accounts: new Map<string, ClientAccount>(),
+    googleSubjectAccountIds: new Map<string, string>(),
+    clientAccountLinks: new Map<string, string>(),
     clientPasswords: new Map<string, string>(),
-    clientAuthTokens: new Map<string, { clientId: string; tokenHash: string; createdAt: string }>(),
+    clientAuthTokens: new Map<string, ClientAuthTokenRecord>(),
     nicknames: new Map<string, string>(),
     async readMessagesByRoom(roomId: string) {
       return this.messages.filter(message => message.roomId === roomId);
@@ -228,13 +255,66 @@ async function createTestServer(overrides: {
           updatedAt: '2026-05-03T00:00:00.000Z',
         }));
     },
+    async getAccountByClientId(clientId: string) {
+      const accountId = this.clientAccountLinks.get(clientId);
+      return accountId ? this.accounts.get(accountId) || null : null;
+    },
+    async getAccountByGoogleSubject(providerSubject: string) {
+      const accountId = this.googleSubjectAccountIds.get(providerSubject);
+      return accountId ? this.accounts.get(accountId) || null : null;
+    },
+    async createGoogleAccountForClient(input: CreateGoogleAccountInput) {
+      if (this.clientAccountLinks.has(input.clientId) || this.googleSubjectAccountIds.has(input.providerSubject)) {
+        return null;
+      }
+      const now = input.now || '2026-05-03T00:00:00.000Z';
+      const account: ClientAccount = {
+        accountId: input.accountId,
+        primaryClientId: input.clientId,
+        provider: 'google',
+        providerSubject: input.providerSubject,
+        email: input.email,
+        emailVerified: input.emailVerified,
+        displayName: input.displayName,
+        avatarUrl: input.avatarUrl,
+        createdAt: now,
+        updatedAt: now,
+        lastLoginAt: now,
+      };
+      this.accounts.set(account.accountId, account);
+      this.googleSubjectAccountIds.set(account.providerSubject, account.accountId);
+      this.clientAccountLinks.set(account.primaryClientId, account.accountId);
+      return account;
+    },
+    async updateGoogleAccountLogin(accountId: string, profile: GoogleAccountProfile, now = '2026-05-03T00:00:00.000Z') {
+      const existing = this.accounts.get(accountId);
+      if (!existing) {
+        return null;
+      }
+      if (profile.providerSubject !== existing.providerSubject) {
+        this.googleSubjectAccountIds.delete(existing.providerSubject);
+        this.googleSubjectAccountIds.set(profile.providerSubject, accountId);
+      }
+      const updated: ClientAccount = {
+        ...existing,
+        providerSubject: profile.providerSubject,
+        email: profile.email ?? existing.email,
+        emailVerified: profile.emailVerified ?? existing.emailVerified,
+        displayName: profile.displayName ?? existing.displayName,
+        avatarUrl: profile.avatarUrl ?? existing.avatarUrl,
+        updatedAt: now,
+        lastLoginAt: now,
+      };
+      this.accounts.set(accountId, updated);
+      return updated;
+    },
     async setClientPasswordHash(clientId: string, passwordHash: string) {
       this.clientPasswords.set(clientId, passwordHash);
     },
     async getClientPasswordHash(clientId: string) {
       return this.clientPasswords.get(clientId) || null;
     },
-    async saveClientAuthToken(token: { clientId: string; tokenHash: string; createdAt: string }) {
+    async saveClientAuthToken(token: ClientAuthTokenRecord) {
       this.clientAuthTokens.set(token.tokenHash, token);
     },
     async isClientAuthTokenValid(clientId: string, tokenHash: string) {
@@ -488,6 +568,8 @@ async function createTestServer(overrides: {
     },
     mediaObjectStorage: mediaObjectStorage as any,
     audioTranscriptionRunner,
+    googleClientIds: overrides.googleClientIds,
+    verifyGoogleCredential: overrides.verifyGoogleCredential,
     mediaUploadCleanup: overrides.mediaUploadCleanup,
   });
 
@@ -608,10 +690,126 @@ describe('API routes', () => {
     assert.equal(server.store.pushSubscriptions.has(body.subscription.endpoint), false);
   });
 
+  it('returns account auth status for the current User ID', async () => {
+    const response = await fetch(`${server.baseUrl}/api/auth/account?clientId=client-1`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      clientId: 'client-1',
+      hasPassword: false,
+      googleConfigured: false,
+      account: null,
+    });
+  });
+
+  it('links a Google account to the current User ID and reuses it on later Google login', async () => {
+    await server.close();
+    server = await createTestServer({
+      googleClientIds: ['google-client-id'],
+      verifyGoogleCredential: async (credential, clientIds) => {
+        assert.equal(credential, 'google-id-token');
+        assert.deepEqual(clientIds, ['google-client-id']);
+        return {
+          ok: true,
+          profile: {
+            providerSubject: 'google-subject-1',
+            email: 'ada@example.com',
+            emailVerified: true,
+            displayName: 'Ada Lovelace',
+            avatarUrl: 'https://example.com/ada.png',
+          },
+        };
+      },
+    });
+
+    const linkResponse = await fetch(`${server.baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1', credential: 'google-id-token' }),
+    });
+    assert.equal(linkResponse.status, 200);
+    const linkPayload = await linkResponse.json() as {
+      clientId: string;
+      clientAuthToken: string;
+      hasPassword: boolean;
+      nickname: string | null;
+      account: ClientAccount;
+    };
+    assert.equal(linkPayload.clientId, 'client-1');
+    assert.equal(linkPayload.hasPassword, false);
+    assert.equal(linkPayload.nickname, 'Ada Lovelace');
+    assert.equal(linkPayload.account.primaryClientId, 'client-1');
+    assert.equal(linkPayload.account.email, 'ada@example.com');
+    assert.ok(linkPayload.clientAuthToken.length > 20);
+    assert.equal(server.store.nicknames.get('client-1'), 'Ada Lovelace');
+    const savedToken = [...server.store.clientAuthTokens.values()][0];
+    assert.equal(savedToken.clientId, 'client-1');
+    assert.equal(savedToken.accountId, linkPayload.account.accountId);
+    assert.equal(savedToken.authMethod, 'google');
+
+    const statusResponse = await fetch(`${server.baseUrl}/api/auth/account?clientId=client-1&clientAuthToken=${encodeURIComponent(linkPayload.clientAuthToken)}`);
+    assert.equal(statusResponse.status, 200);
+    const statusPayload = await statusResponse.json() as { account: ClientAccount | null; googleConfigured: boolean };
+    assert.equal(statusPayload.googleConfigured, true);
+    assert.equal(statusPayload.account?.email, 'ada@example.com');
+
+    const reuseResponse = await fetch(`${server.baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-new', credential: 'google-id-token' }),
+    });
+    assert.equal(reuseResponse.status, 200);
+    const reusePayload = await reuseResponse.json() as { clientId: string; account: ClientAccount };
+    assert.equal(reusePayload.clientId, 'client-1');
+    assert.equal(reusePayload.account.accountId, linkPayload.account.accountId);
+    assert.equal(await server.store.getAccountByClientId('client-new'), null);
+  });
+
+  it('requires an existing auth token before linking Google to a protected User ID', async () => {
+    await server.close();
+    server = await createTestServer({
+      googleClientIds: ['google-client-id'],
+      verifyGoogleCredential: async () => ({
+        ok: true,
+        profile: {
+          providerSubject: 'google-subject-2',
+          email: 'grace@example.com',
+          emailVerified: true,
+          displayName: 'Grace Hopper',
+        },
+      }),
+    });
+
+    const setPasswordResponse = await fetch(`${server.baseUrl}/api/client-auth/password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1', password: 'password-1' }),
+    });
+    assert.equal(setPasswordResponse.status, 200);
+    const { clientAuthToken } = await setPasswordResponse.json() as { clientAuthToken: string };
+
+    const missingTokenResponse = await fetch(`${server.baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1', credential: 'google-id-token' }),
+    });
+    assert.equal(missingTokenResponse.status, 401);
+
+    const authorizedResponse = await fetch(`${server.baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1', credential: 'google-id-token', clientAuthToken }),
+    });
+    assert.equal(authorizedResponse.status, 200);
+    const payload = await authorizedResponse.json() as { clientId: string; hasPassword: boolean; account: ClientAccount };
+    assert.equal(payload.clientId, 'client-1');
+    assert.equal(payload.hasPassword, true);
+    assert.equal(payload.account.email, 'grace@example.com');
+  });
+
   it('sets client ID passwords and issues login tokens', async () => {
     const initialStatusResponse = await fetch(`${server.baseUrl}/api/client-auth/client-1/status`);
     assert.equal(initialStatusResponse.status, 200);
-    assert.deepEqual(await initialStatusResponse.json(), { clientId: 'client-1', hasPassword: false });
+    assert.deepEqual(await initialStatusResponse.json(), { clientId: 'client-1', hasPassword: false, hasAccount: false });
 
     const setPasswordResponse = await fetch(`${server.baseUrl}/api/client-auth/password`, {
       method: 'POST',
@@ -628,7 +826,7 @@ describe('API routes', () => {
 
     const updatedStatusResponse = await fetch(`${server.baseUrl}/api/client-auth/client-1/status`);
     assert.equal(updatedStatusResponse.status, 200);
-    assert.deepEqual(await updatedStatusResponse.json(), { clientId: 'client-1', hasPassword: true });
+    assert.deepEqual(await updatedStatusResponse.json(), { clientId: 'client-1', hasPassword: true, hasAccount: false });
 
     const badLoginResponse = await fetch(`${server.baseUrl}/api/client-auth/login`, {
       method: 'POST',

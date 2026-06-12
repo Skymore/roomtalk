@@ -116,10 +116,43 @@ export interface SavePushSubscriptionInput {
   userAgent?: string;
 }
 
+export type ClientAuthMethod = 'password' | 'google';
+
 export interface ClientAuthTokenRecord {
   clientId: string;
   tokenHash: string;
   createdAt: string;
+  accountId?: string;
+  authMethod?: ClientAuthMethod;
+  expiresAt?: string;
+}
+
+export interface GoogleAccountProfile {
+  providerSubject: string;
+  email?: string;
+  emailVerified?: boolean;
+  displayName?: string;
+  avatarUrl?: string;
+}
+
+export interface ClientAccount {
+  accountId: string;
+  primaryClientId: string;
+  provider: 'google';
+  providerSubject: string;
+  email?: string;
+  emailVerified?: boolean;
+  displayName?: string;
+  avatarUrl?: string;
+  createdAt: string;
+  updatedAt: string;
+  lastLoginAt?: string;
+}
+
+export interface CreateGoogleAccountInput extends GoogleAccountProfile {
+  accountId: string;
+  clientId: string;
+  now?: string;
 }
 
 export interface RoomSettingsUpdate {
@@ -166,6 +199,10 @@ export interface DurableRoomStore {
   savePushSubscription(subscription: SavePushSubscriptionInput): Promise<void>;
   deletePushSubscription(clientId: string, endpoint: string): Promise<boolean>;
   readPushSubscriptionsByRoom(roomId: string): Promise<PushSubscriptionRecord[]>;
+  getAccountByClientId(clientId: string): Promise<ClientAccount | null>;
+  getAccountByGoogleSubject(providerSubject: string): Promise<ClientAccount | null>;
+  createGoogleAccountForClient(input: CreateGoogleAccountInput): Promise<ClientAccount | null>;
+  updateGoogleAccountLogin(accountId: string, profile: GoogleAccountProfile, now?: string): Promise<ClientAccount | null>;
   setClientPasswordHash(clientId: string, passwordHash: string): Promise<void>;
   getClientPasswordHash(clientId: string): Promise<string | null>;
   saveClientAuthToken(token: ClientAuthTokenRecord): Promise<void>;
@@ -463,6 +500,22 @@ export class CompositeRoomStore implements RoomStore {
 
   readPushSubscriptionsByRoom(roomId: string) {
     return this.durableStore.readPushSubscriptionsByRoom(roomId);
+  }
+
+  getAccountByClientId(clientId: string) {
+    return this.durableStore.getAccountByClientId(clientId);
+  }
+
+  getAccountByGoogleSubject(providerSubject: string) {
+    return this.durableStore.getAccountByGoogleSubject(providerSubject);
+  }
+
+  createGoogleAccountForClient(input: CreateGoogleAccountInput) {
+    return this.durableStore.createGoogleAccountForClient(input);
+  }
+
+  updateGoogleAccountLogin(accountId: string, profile: GoogleAccountProfile, now?: string) {
+    return this.durableStore.updateGoogleAccountLogin(accountId, profile, now);
   }
 
   setClientPasswordHash(clientId: string, passwordHash: string) {

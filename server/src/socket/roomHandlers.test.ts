@@ -130,6 +130,7 @@ const createHarness = (clientId: string | null = 'client-1') => {
     nicknames: new Map<string, string>(),
     nicknameWrites: [] as Array<{ clientId: string; nickname: string }>,
     clientPasswords: new Map<string, string>(),
+    clientAccounts: new Set<string>(),
     clientAuthTokens: new Map<string, { clientId: string; tokenHash: string; createdAt: string }>(),
     async storeClientSession(_socketId: string, userId: string, browserInstanceId?: string) {
       this.clientId = userId;
@@ -143,6 +144,18 @@ const createHarness = (clientId: string | null = 'client-1') => {
     },
     async getClientPasswordHash(clientId: string) {
       return this.clientPasswords.get(clientId) || null;
+    },
+    async getAccountByClientId(clientId: string) {
+      return this.clientAccounts.has(clientId)
+        ? {
+            accountId: 'account-1',
+            primaryClientId: clientId,
+            provider: 'google' as const,
+            providerSubject: 'google-subject-1',
+            createdAt: '2026-05-03T00:00:00.000Z',
+            updatedAt: '2026-05-03T00:00:00.000Z',
+          }
+        : null;
     },
     async saveClientAuthToken(token: { clientId: string; tokenHash: string; createdAt: string }) {
       this.clientAuthTokens.set(token.tokenHash, token);
@@ -418,6 +431,32 @@ describe('room socket handlers', () => {
     assert.equal(store.clientId, 'client-locked');
     assert.deepEqual(response, { success: true, clientId: 'client-locked' });
     assert.deepEqual(socket.joined, ['client-locked']);
+  });
+
+  it('requires valid socket registration tokens for Google-linked User IDs', async () => {
+    const { socket, store } = createHarness(null);
+    store.clientAccounts.add('client-google');
+    let response: unknown;
+
+    await socket.invoke('register', { clientId: 'client-google' }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.equal(store.clientId, null);
+    assert.deepEqual(response, { success: false, error: 'User ID password login is required' });
+
+    await store.saveClientAuthToken({
+      clientId: 'client-google',
+      tokenHash: hashClientAuthToken('valid-google-token'),
+      createdAt: '2026-05-03T00:00:00.000Z',
+    });
+    await socket.invoke('register', { clientId: 'client-google', clientAuthToken: 'valid-google-token' }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.equal(store.clientId, 'client-google');
+    assert.deepEqual(response, { success: true, clientId: 'client-google' });
+    assert.deepEqual(socket.joined, ['client-google']);
   });
 
   it('stores the nickname for a registered client via set_username', async () => {

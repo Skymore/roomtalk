@@ -1,7 +1,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { AICost, MediaAsset, Message, Room, RoomMemberRole } from '../types';
-import { AudioTranscriptionRecord, AudioTranscriptionUpdate, CompositeRoomStore, DurableRoomStore, PendingMediaUpload, RealtimeRoomStore, RoomMessageCacheStore } from './store';
+import { AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, CompositeRoomStore, CreateGoogleAccountInput, DurableRoomStore, GoogleAccountProfile, PendingMediaUpload, RealtimeRoomStore, RoomMessageCacheStore } from './store';
 
 const room = (overrides: Partial<Room> = {}): Room => ({
   id: 'room-1',
@@ -30,6 +30,56 @@ const cost = (): AICost => ({
   inputPerMillion: 1,
   outputPerMillion: 1,
   estimated: false,
+});
+
+const clientAccount = (overrides: Partial<ClientAccount> = {}): ClientAccount => ({
+  accountId: 'account-1',
+  primaryClientId: 'client-1',
+  provider: 'google',
+  providerSubject: 'google-subject-1',
+  email: 'ada@example.com',
+  emailVerified: true,
+  displayName: 'Ada',
+  avatarUrl: 'https://example.com/avatar.png',
+  createdAt: '2026-05-03T00:00:00.000Z',
+  updatedAt: '2026-05-03T00:00:00.000Z',
+  lastLoginAt: '2026-05-03T00:00:00.000Z',
+  ...overrides,
+});
+
+const durableClientAccountStubs = () => ({
+  async getAccountByClientId() {
+    return null;
+  },
+  async getAccountByGoogleSubject() {
+    return null;
+  },
+  async createGoogleAccountForClient(input: CreateGoogleAccountInput) {
+    return clientAccount({
+      accountId: input.accountId,
+      primaryClientId: input.clientId,
+      providerSubject: input.providerSubject,
+      email: input.email,
+      emailVerified: input.emailVerified,
+      displayName: input.displayName,
+      avatarUrl: input.avatarUrl,
+      createdAt: input.now || '2026-05-03T00:00:00.000Z',
+      updatedAt: input.now || '2026-05-03T00:00:00.000Z',
+      lastLoginAt: input.now || '2026-05-03T00:00:00.000Z',
+    });
+  },
+  async updateGoogleAccountLogin(accountId: string, profile: GoogleAccountProfile, now = '2026-05-03T00:00:00.000Z') {
+    return clientAccount({
+      accountId,
+      providerSubject: profile.providerSubject,
+      email: profile.email,
+      emailVerified: profile.emailVerified,
+      displayName: profile.displayName,
+      avatarUrl: profile.avatarUrl,
+      updatedAt: now,
+      lastLoginAt: now,
+    });
+  },
 });
 
 const durableMutationStubs = () => ({
@@ -63,6 +113,7 @@ const durableRoomAccessStubs = () => ({
   async readPushSubscriptionsByRoom() {
     return [];
   },
+  ...durableClientAccountStubs(),
   async setClientPasswordHash() {},
   async getClientPasswordHash() {
     return null;
@@ -302,6 +353,13 @@ describe('CompositeRoomStore', () => {
       async savePushSubscription() { calls.push('durable.savePushSubscription'); },
       async deletePushSubscription() { calls.push('durable.deletePushSubscription'); return true; },
       async readPushSubscriptionsByRoom() { calls.push('durable.readPushSubscriptionsByRoom'); return []; },
+      async getAccountByClientId(_clientId: string) { calls.push('durable.getAccountByClientId'); return clientAccount(); },
+      async getAccountByGoogleSubject(_providerSubject: string) { calls.push('durable.getAccountByGoogleSubject'); return clientAccount(); },
+      async createGoogleAccountForClient(input: CreateGoogleAccountInput) {
+        calls.push('durable.createGoogleAccountForClient');
+        return clientAccount({ accountId: input.accountId, primaryClientId: input.clientId, providerSubject: input.providerSubject });
+      },
+      async updateGoogleAccountLogin(accountId: string) { calls.push('durable.updateGoogleAccountLogin'); return clientAccount({ accountId }); },
       async setClientPasswordHash() { calls.push('durable.setClientPasswordHash'); },
       async getClientPasswordHash() { calls.push('durable.getClientPasswordHash'); return 'password-hash'; },
       async saveClientAuthToken() { calls.push('durable.saveClientAuthToken'); },
@@ -408,6 +466,17 @@ describe('CompositeRoomStore', () => {
     await store.savePushSubscription({ clientId: 'client-2', endpoint: 'https://push.example/1', p256dh: 'p256dh', auth: 'auth' });
     assert.equal(await store.deletePushSubscription('client-2', 'https://push.example/1'), true);
     assert.deepEqual(await store.readPushSubscriptionsByRoom('room-1'), []);
+    assert.deepEqual(await store.getAccountByClientId('client-1'), clientAccount());
+    assert.deepEqual(await store.getAccountByGoogleSubject('google-subject-1'), clientAccount());
+    assert.deepEqual(
+      await store.createGoogleAccountForClient({
+        accountId: 'account-2',
+        clientId: 'client-2',
+        providerSubject: 'google-subject-2',
+      }),
+      clientAccount({ accountId: 'account-2', primaryClientId: 'client-2', providerSubject: 'google-subject-2' }),
+    );
+    assert.deepEqual(await store.updateGoogleAccountLogin('account-1', { providerSubject: 'google-subject-1' }), clientAccount());
     await store.setClientPasswordHash('client-2', 'password-hash');
     assert.equal(await store.getClientPasswordHash('client-2'), 'password-hash');
     await store.saveClientAuthToken({ clientId: 'client-2', tokenHash: 'token-hash', createdAt: '2026-05-03T00:00:00.000Z' });
@@ -483,6 +552,10 @@ describe('CompositeRoomStore', () => {
       'durable.savePushSubscription',
       'durable.deletePushSubscription',
       'durable.readPushSubscriptionsByRoom',
+      'durable.getAccountByClientId',
+      'durable.getAccountByGoogleSubject',
+      'durable.createGoogleAccountForClient',
+      'durable.updateGoogleAccountLogin',
       'durable.setClientPasswordHash',
       'durable.getClientPasswordHash',
       'durable.saveClientAuthToken',
