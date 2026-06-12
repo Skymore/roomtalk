@@ -110,7 +110,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
           room={currentRoom}
           onReply={setReplyToMessage}
           roomPermissions={roomPermissions}
-          bottomPaddingPx={composerHeight + 12}
+          bottomInsetPx={composerHeight + 12}
           onScrollButtonVisibilityChange={setShowScrollButton}
         />
 

@@ -38,7 +38,7 @@ interface MessageListProps {
   room?: Pick<Room, 'id' | 'name'>;
   onReply: (message: Message) => void;
   roomPermissions: RoomPermissions | null;
-  bottomPaddingPx?: number;
+  bottomInsetPx?: number;
   onScrollButtonVisibilityChange?: (isVisible: boolean) => void;
 }
 
@@ -54,7 +54,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   room,
   onReply,
   roomPermissions,
-  bottomPaddingPx = 16,
+  bottomInsetPx = 16,
   onScrollButtonVisibilityChange,
 }, ref) => {
   const { t } = useTranslation();
@@ -213,7 +213,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     if (isNearBottomRef.current) {
       scheduleScrollToBottom('auto');
     }
-  }, [bottomPaddingPx, scheduleScrollToBottom]);
+  }, [bottomInsetPx, scheduleScrollToBottom]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -454,7 +454,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
         id={scrollContainerId}
         data-testid="message-list-scroll"
         ref={containerRef}
-        className="relative flex h-full w-full flex-col overflow-y-auto bg-[#f5f4ed] p-3 dark:bg-[#141413]"
+        className="relative flex h-full w-full flex-col overflow-y-auto bg-[#f5f4ed] px-3 pt-3 dark:bg-[#141413]"
         onScroll={handleScroll}
       >
         <div ref={contentRef} data-testid="message-list-content" className="flex min-h-full flex-col">
@@ -513,7 +513,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
             </div>
           )}
           {!isLoading && messages.length > 0 && (
-            <div className="flex flex-col space-y-2 pb-4">
+            <div className="flex flex-col space-y-2">
               {messages.map((message) => (
                 <MessageItem
                   key={message.id}
@@ -529,9 +529,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
           )}
           <div
             aria-hidden="true"
-            data-testid="message-list-bottom-spacer"
+            data-testid="message-list-scroll-end-inset"
             className="flex-shrink-0"
-            style={{ height: bottomPaddingPx }}
+            style={{ height: bottomInsetPx }}
           />
           <div ref={messagesEndRef} />
         </div>
