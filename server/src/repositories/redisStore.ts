@@ -19,6 +19,8 @@ const AUDIO_TRANSCRIPTIONS_KEY = 'audio_transcriptions';
 const getSavedRoomsKey = (clientId: string) => `user:${clientId}:saved_rooms`;
 const getRoomSavedByKey = (roomId: string) => `room:${roomId}:saved_by`;
 const getRoomPasswordHashKey = (roomId: string) => `room:${roomId}:password_hash`;
+const getRoomActiveBrowserInstancesKey = (roomId: string) => `room:${roomId}:active_browser_instances`;
+const getRoomBrowserInstanceSocketsKey = (roomId: string, browserInstanceId: string) => `room:${roomId}:browser_instance_sockets:${browserInstanceId}`;
 const PUSH_SUBSCRIPTIONS_KEY = 'push_subscriptions';
 const CLIENT_PASSWORDS_KEY = 'client:passwords';
 const CLIENT_AUTH_TOKENS_KEY = 'client:auth_tokens';
@@ -1512,6 +1514,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       const existing = existingRaw ? JSON.parse(existingRaw) as PushSubscriptionRecord : null;
       const record: PushSubscriptionRecord = {
         clientId: subscription.clientId,
+        browserInstanceId: subscription.browserInstanceId,
         endpoint: subscription.endpoint,
         p256dh: subscription.p256dh,
         auth: subscription.auth,
@@ -1964,6 +1967,26 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
+  async updateRoomBrowserPresence(roomId: string, browserInstanceId: string, socketId: string, isJoining: boolean): Promise<void> {
+    try {
+      await (this.redisClient as any).eval(UPDATE_ROOM_MEMBER_COUNT_SCRIPT, {
+        keys: [getRoomActiveBrowserInstancesKey(roomId), getRoomBrowserInstanceSocketsKey(roomId, browserInstanceId)],
+        arguments: [browserInstanceId, socketId, isJoining ? '1' : '0'],
+      });
+    } catch (error) {
+      this.logger.error('Error updating room browser presence', { error, roomId, browserInstanceId, socketId, isJoining });
+    }
+  }
+
+  async getRoomActiveBrowserInstanceIds(roomId: string): Promise<string[]> {
+    try {
+      return await this.redisClient.sMembers(getRoomActiveBrowserInstancesKey(roomId));
+    } catch (error) {
+      this.logger.error('Error getting room active browser instance ids', { error, roomId });
+      return [];
+    }
+  }
+
   // Self-joined presence + nicknames, used when Redis is the only store.
   async getRoomOnlineMembers(roomId: string): Promise<RoomOnlineMember[]> {
     const clientIds = await this.getRoomOnlineMemberIds(roomId);
@@ -2000,7 +2023,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
 
   async clearRealtimeRoomMembers(): Promise<void> {
     try {
-      const patterns = ['room:*:members', 'room:*:member_sockets:*'];
+      const patterns = ['room:*:members', 'room:*:member_sockets:*', 'room:*:active_browser_instances', 'room:*:browser_instance_sockets:*'];
       const pendingKeys: string[] = [];
       let deletedKeyCount = 0;
       const scanIterator = (this.redisClient as any).scanIterator;
@@ -2047,11 +2070,16 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
-  async storeClientSession(socketId: string, userId: string): Promise<void> {
+  async storeClientSession(socketId: string, userId: string, browserInstanceId?: string): Promise<void> {
     try {
       await this.redisClient.hSet('socket:clients', socketId, userId);
+      if (browserInstanceId) {
+        await this.redisClient.hSet('socket:browser_instances', socketId, browserInstanceId);
+      } else {
+        await this.redisClient.hDel('socket:browser_instances', socketId);
+      }
     } catch (error) {
-      this.logger.error('Error storing client session', { error, socketId, userId });
+      this.logger.error('Error storing client session', { error, socketId, userId, browserInstanceId });
     }
   }
 
@@ -2065,9 +2093,22 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
+  async getBrowserInstanceId(socketId: string): Promise<string | null> {
+    try {
+      const browserInstanceId = await this.redisClient.hGet('socket:browser_instances', socketId);
+      return browserInstanceId || null;
+    } catch (error) {
+      this.logger.error('Error getting browser instance ID', { error, socketId });
+      return null;
+    }
+  }
+
   async removeClientSession(socketId: string): Promise<void> {
     try {
-      await this.redisClient.hDel('socket:clients', socketId);
+      await Promise.all([
+        this.redisClient.hDel('socket:clients', socketId),
+        this.redisClient.hDel('socket:browser_instances', socketId),
+      ]);
     } catch (error) {
       this.logger.error('Error removing client session', { error, socketId });
     }
@@ -2098,6 +2139,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
   async deleteRoom(roomId: string, creatorId: string): Promise<void> {
     try {
       const members = await this.readRoomMembers(roomId);
+      const activeBrowserInstanceIds = await this.getRoomActiveBrowserInstanceIds(roomId);
       const mediaAssets = await this.readMediaAssetsByRoom(roomId);
       const savedByClientIds = await this.redisClient.sMembers(getRoomSavedByKey(roomId));
       await Promise.all([
@@ -2107,10 +2149,12 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         this.redisClient.del(this.getRoomAICostKey(roomId)),
         this.redisClient.del(getRoomPasswordHashKey(roomId)),
         this.redisClient.del(`room:${roomId}:members`),
+        this.redisClient.del(getRoomActiveBrowserInstancesKey(roomId)),
         this.redisClient.del(getPersistentRoomMembersKey(roomId)),
         this.redisClient.del(getRoomMediaAssetsKey(roomId)),
         this.redisClient.del(getRoomMediaAssetsTimelineKey(roomId)),
         ...members.map(member => this.redisClient.del(`room:${roomId}:member_sockets:${member.clientId}`)),
+        ...activeBrowserInstanceIds.map(browserInstanceId => this.redisClient.del(getRoomBrowserInstanceSocketsKey(roomId, browserInstanceId))),
         ...mediaAssets.map(asset => this.redisClient.hDel('media_assets', asset.id)),
         ...mediaAssets.map(asset => this.redisClient.hDel(AUDIO_TRANSCRIPTIONS_KEY, asset.id)),
         ...members.map(member => this.redisClient.sRem(`user:${member.clientId}:rooms`, roomId)),

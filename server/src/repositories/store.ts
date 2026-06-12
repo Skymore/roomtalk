@@ -97,6 +97,7 @@ export interface AudioTranscriptionUpdate {
 
 export interface PushSubscriptionRecord {
   clientId: string;
+  browserInstanceId?: string;
   endpoint: string;
   p256dh: string;
   auth: string;
@@ -107,6 +108,7 @@ export interface PushSubscriptionRecord {
 
 export interface SavePushSubscriptionInput {
   clientId: string;
+  browserInstanceId?: string;
   endpoint: string;
   p256dh: string;
   auth: string;
@@ -191,11 +193,14 @@ export interface DurableRoomStore {
 
 export interface RealtimeRoomStore {
   updateRoomMemberCount(roomId: string, clientId: string, socketId: string, isJoining: boolean): Promise<number>;
+  updateRoomBrowserPresence(roomId: string, browserInstanceId: string, socketId: string, isJoining: boolean): Promise<void>;
   getRoomMemberCount(roomId: string): Promise<number>;
   getRoomOnlineMemberIds(roomId: string): Promise<string[]>;
+  getRoomActiveBrowserInstanceIds(roomId: string): Promise<string[]>;
   clearRealtimeRoomMembers?(): Promise<void>;
-  storeClientSession(socketId: string, userId: string): Promise<void>;
+  storeClientSession(socketId: string, userId: string, browserInstanceId?: string): Promise<void>;
   getClientId(socketId: string): Promise<string | null>;
+  getBrowserInstanceId(socketId: string): Promise<string | null>;
   removeClientSession(socketId: string): Promise<void>;
   storeUserRooms(socketId: string, roomIds: string[]): Promise<void>;
   getUserRooms(socketId: string): Promise<string[]>;
@@ -563,6 +568,10 @@ export class CompositeRoomStore implements RoomStore {
     return this.realtimeStore.updateRoomMemberCount(roomId, clientId, socketId, isJoining);
   }
 
+  updateRoomBrowserPresence(roomId: string, browserInstanceId: string, socketId: string, isJoining: boolean) {
+    return this.realtimeStore.updateRoomBrowserPresence(roomId, browserInstanceId, socketId, isJoining);
+  }
+
   getRoomMemberCount(roomId: string) {
     return this.realtimeStore.getRoomMemberCount(roomId);
   }
@@ -577,6 +586,10 @@ export class CompositeRoomStore implements RoomStore {
     return this.realtimeStore.getRoomOnlineMemberIds(roomId);
   }
 
+  getRoomActiveBrowserInstanceIds(roomId: string) {
+    return this.realtimeStore.getRoomActiveBrowserInstanceIds(roomId);
+  }
+
   setClientNickname(clientId: string, nickname: string) {
     return this.durableStore.setClientNickname(clientId, nickname);
   }
@@ -589,12 +602,16 @@ export class CompositeRoomStore implements RoomStore {
     return this.realtimeStore.clearRealtimeRoomMembers?.() || Promise.resolve();
   }
 
-  storeClientSession(socketId: string, userId: string) {
-    return this.realtimeStore.storeClientSession(socketId, userId);
+  storeClientSession(socketId: string, userId: string, browserInstanceId?: string) {
+    return this.realtimeStore.storeClientSession(socketId, userId, browserInstanceId);
   }
 
   getClientId(socketId: string) {
     return this.realtimeStore.getClientId(socketId);
+  }
+
+  getBrowserInstanceId(socketId: string) {
+    return this.realtimeStore.getBrowserInstanceId(socketId);
   }
 
   removeClientSession(socketId: string) {

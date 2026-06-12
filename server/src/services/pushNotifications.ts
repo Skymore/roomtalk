@@ -1,6 +1,6 @@
 import webPush from 'web-push';
 import { Logger } from '../logger';
-import { RoomStore } from '../repositories/store';
+import { PushSubscriptionRecord, RoomStore } from '../repositories/store';
 import { Message, Room } from '../types';
 
 type PushConfig = {
@@ -57,6 +57,24 @@ const shouldNotifyForMessage = (message: Message) => (
   (message.messageType === 'text' || message.messageType === 'media')
 );
 
+export const selectPushRecipients = (
+  subscriptions: PushSubscriptionRecord[],
+  activeBrowserInstanceIds: Set<string>,
+  senderClientId: string,
+): Map<string, PushSubscriptionRecord> => new Map(
+  subscriptions
+    .filter(subscription => {
+      if (subscription.clientId === senderClientId) {
+        return false;
+      }
+      if (subscription.browserInstanceId && activeBrowserInstanceIds.has(subscription.browserInstanceId)) {
+        return false;
+      }
+      return true;
+    })
+    .map(subscription => [subscription.endpoint, subscription]),
+);
+
 export const notifyRoomMessage = async (params: {
   store: RoomStore;
   room: Room;
@@ -71,12 +89,11 @@ export const notifyRoomMessage = async (params: {
 
   webPush.setVapidDetails(config.subject, config.publicKey, config.privateKey);
 
-  const subscriptions = await store.readPushSubscriptionsByRoom(message.roomId);
-  const recipients = new Map(
-    subscriptions
-      .filter(subscription => subscription.clientId !== message.clientId)
-      .map(subscription => [subscription.endpoint, subscription])
-  );
+  const [subscriptions, activeBrowserInstanceIds] = await Promise.all([
+    store.readPushSubscriptionsByRoom(message.roomId),
+    store.getRoomActiveBrowserInstanceIds(message.roomId),
+  ]);
+  const recipients = selectPushRecipients(subscriptions, new Set(activeBrowserInstanceIds), message.clientId);
 
   if (recipients.size === 0) {
     return;
@@ -103,6 +120,11 @@ export const notifyRoomMessage = async (params: {
     } catch (error) {
       const sendError = error as WebPushSendError;
       if (sendError.statusCode === 404 || sendError.statusCode === 410) {
+        logger.info('Removing expired push subscription', {
+          statusCode: sendError.statusCode,
+          recipientClientId: subscription.clientId,
+          endpoint: subscription.endpoint.slice(0, 64),
+        });
         await store.deletePushSubscription(subscription.clientId, subscription.endpoint);
         return;
       }

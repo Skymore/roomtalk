@@ -27,6 +27,15 @@ const getClientId = (): string => {
   return clientId;
 };
 
+const getBrowserInstanceId = (): string => {
+  let id = localStorage.getItem('browserInstanceId');
+  if (!id) {
+    id = uuidv4();
+    localStorage.setItem('browserInstanceId', id);
+  }
+  return id;
+};
+
 // Store room member counts
 const roomMemberCounts = new Map<string, number>();
 
@@ -346,6 +355,7 @@ export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS):
       socket.once('disconnect', handleDisconnect);
       socket.emit('register', {
         clientId: getClientId(),
+        browserInstanceId: getBrowserInstanceId(),
         username: currentUsername || undefined,
         clientAuthToken: getClientAuthToken() || undefined,
       }, (response: RegisterAckResponse) => {
@@ -986,4 +996,5 @@ export const reconnectSocket = (): void => {
 
 // Export Socket instance and client ID
 export const socket = createSocketConnection();
-export const clientId = getClientId(); 
+export const clientId = getClientId();
+export const browserInstanceId = getBrowserInstanceId();

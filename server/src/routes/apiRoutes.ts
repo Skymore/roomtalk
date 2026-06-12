@@ -151,6 +151,14 @@ const serializeAudioTranscription = (record: AudioTranscriptionRecord) => ({
   completedAt: record.completedAt,
 });
 
+const BROWSER_INSTANCE_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
+
+const normalizeBrowserInstanceId = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return BROWSER_INSTANCE_ID_PATTERN.test(trimmed) ? trimmed : undefined;
+};
+
 const parsePushSubscriptionBody = (body: unknown) => {
   const payload = body && typeof body === 'object' ? body as Record<string, any> : {};
   const subscription = payload.subscription && typeof payload.subscription === 'object'
@@ -160,6 +168,7 @@ const parsePushSubscriptionBody = (body: unknown) => {
     ? subscription.keys as Record<string, any>
     : {};
   const clientId = typeof payload.clientId === 'string' ? payload.clientId.trim() : '';
+  const browserInstanceId = normalizeBrowserInstanceId(payload.browserInstanceId);
   const endpoint = typeof subscription.endpoint === 'string' ? subscription.endpoint.trim() : '';
   const p256dh = typeof keys.p256dh === 'string' ? keys.p256dh.trim() : '';
   const auth = typeof keys.auth === 'string' ? keys.auth.trim() : '';
@@ -169,7 +178,7 @@ const parsePushSubscriptionBody = (body: unknown) => {
     return null;
   }
 
-  return { clientId, endpoint, p256dh, auth, userAgent };
+  return { clientId, browserInstanceId, endpoint, p256dh, auth, userAgent };
 };
 
 const consumeAIRoleDraftRateLimit = (clientId: string, ip: string | undefined, nowMs = Date.now()) => {

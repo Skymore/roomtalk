@@ -111,6 +111,7 @@ type AudioTranscriptionRow = {
 type PushSubscriptionRow = {
   endpoint: string;
   client_id: string;
+  browser_instance_id: string | null;
   p256dh: string;
   auth: string;
   user_agent: string | null;
@@ -124,7 +125,7 @@ const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, width, height, duration_ms, uploaded_by_client_id, created_at';
 const PENDING_MEDIA_UPLOAD_COLUMNS = 'id, room_id, object_key, kind, mime_type, byte_size, uploaded_by_client_id, expires_at, created_at';
 const AUDIO_TRANSCRIPTION_COLUMNS = 'asset_id, room_id, message_id, requested_by_client_id, status, transcript, language_code, provider, provider_transcript_id, error, created_at, updated_at, completed_at';
-const PUSH_SUBSCRIPTION_COLUMNS = 'endpoint, client_id, p256dh, auth, user_agent, created_at, updated_at';
+const PUSH_SUBSCRIPTION_COLUMNS = 'endpoint, client_id, browser_instance_id, p256dh, auth, user_agent, created_at, updated_at';
 
 const parseTime = (timestamp?: string): number => {
   const time = Date.parse(timestamp || '');
@@ -275,6 +276,7 @@ const mapAudioTranscription = (row: AudioTranscriptionRow): AudioTranscriptionRe
 
 const mapPushSubscription = (row: PushSubscriptionRow): PushSubscriptionRecord => ({
   clientId: row.client_id,
+  browserInstanceId: row.browser_instance_id || undefined,
   endpoint: row.endpoint,
   p256dh: row.p256dh,
   auth: row.auth,
@@ -1508,10 +1510,11 @@ export class PostgresStore implements DurableRoomStore {
   async savePushSubscription(subscription: SavePushSubscriptionInput): Promise<void> {
     try {
       await this.pool.query(
-        `INSERT INTO push_subscriptions (endpoint, client_id, p256dh, auth, user_agent, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+        `INSERT INTO push_subscriptions (endpoint, client_id, browser_instance_id, p256dh, auth, user_agent, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
         ON CONFLICT (endpoint) DO UPDATE SET
           client_id = EXCLUDED.client_id,
+          browser_instance_id = EXCLUDED.browser_instance_id,
           p256dh = EXCLUDED.p256dh,
           auth = EXCLUDED.auth,
           user_agent = EXCLUDED.user_agent,
@@ -1519,6 +1522,7 @@ export class PostgresStore implements DurableRoomStore {
         [
           subscription.endpoint,
           subscription.clientId,
+          subscription.browserInstanceId || null,
           subscription.p256dh,
           subscription.auth,
           subscription.userAgent || null,
