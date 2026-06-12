@@ -1,4 +1,4 @@
-import { apiPath, browserInstanceId, clientId, withClientAuthBody } from './socket';
+import { apiPath, browserInstanceId, getCurrentClientId, withClientAuthBody } from './socket';
 
 export type PushNotificationStatus =
   | 'unsupported'
@@ -115,7 +115,7 @@ export const enablePushNotifications = async () => {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(withClientAuthBody({
-      clientId,
+      clientId: getCurrentClientId(),
       browserInstanceId,
       subscription,
       userAgent: navigator.userAgent,
@@ -142,7 +142,7 @@ export const disablePushNotifications = async () => {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(withClientAuthBody({
-      clientId,
+      clientId: getCurrentClientId(),
       endpoint: subscription.endpoint,
     })),
   }).catch(() => undefined);
