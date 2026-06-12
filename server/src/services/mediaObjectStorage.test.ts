@@ -52,6 +52,26 @@ describe('S3MediaObjectStorage', () => {
       assert.equal(params.has('x-amz-checksum-crc32'), false);
     });
   });
+
+  it('adds response content disposition to signed read URLs when requested', async () => {
+    await withTestAwsCredentials(async () => {
+      const storage = new S3MediaObjectStorage({
+        bucket: 'media-bucket',
+        region: 'auto',
+        endpoint: 'https://example.invalid',
+        forcePathStyle: true,
+      }, new Logger('S3MediaObjectStorageTest'));
+
+      const { url } = await storage.createReadUrl({
+        objectKey: 'rooms/room-1/media/file/asset-1',
+        expiresInSeconds: 900,
+        responseContentDisposition: "attachment; filename*=UTF-8''notes.md",
+      });
+
+      const params = new URL(url).searchParams;
+      assert.equal(params.get('response-content-disposition'), "attachment; filename*=UTF-8''notes.md");
+    });
+  });
 });
 
 describe('LocalMediaObjectStorage', () => {

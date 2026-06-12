@@ -17,8 +17,9 @@ const extensionByMimeType: Record<string, string> = {
 const sanitizeFilenamePart = (value: string) => (
   value
     .trim()
+    .replace(/[\r\n]+/g, '')
     .replace(/[\\/:*?"<>|]+/g, '-')
-    .replace(/\s+/g, '-')
+    .replace(/\s+/g, ' ')
     .slice(0, 80) || 'media'
 );
 
@@ -28,6 +29,9 @@ const getExtension = (mimeType?: string) => (
 
 export const buildMediaFilename = (message: Message) => {
   const asset = message.mediaAsset;
+  if (asset?.filename) {
+    return sanitizeFilenamePart(asset.filename);
+  }
   const kind = asset?.kind || 'media';
   const timestamp = Number.isNaN(Date.parse(message.timestamp))
     ? 'download'

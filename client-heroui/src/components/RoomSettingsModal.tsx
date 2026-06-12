@@ -15,7 +15,9 @@ import {
   getRoomRoleMembers,
   lookupRoomClient,
   removeRoomAdmin,
+  removeRoomMember,
   setRoomAdmin,
+  socket,
   transferRoomOwnership,
   updateRoomSettings,
 } from '../utils/socket';
@@ -56,7 +58,7 @@ const roleClassName: Record<RoomMemberRole, string> = {
   member: 'bg-[#e8e6dc] text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]',
 };
 
-type SettingsTabKey = 'general' | 'schedule' | 'admins' | 'transfer';
+type SettingsTabKey = 'general' | 'schedule' | 'members' | 'transfer';
 
 interface RoomSettingsModalProps {
   isOpen: boolean;
@@ -84,6 +86,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   const { t } = useTranslation();
   const canManageSettings = Boolean(roomPermissions?.canManageRoom);
   const canManageAdmins = Boolean(roomPermissions?.canManageAdmins);
+  const canManageMembers = Boolean(roomPermissions?.canManageMembers);
   const canTransferOwnership = Boolean(roomPermissions?.canTransferOwnership);
   const isOwner = Boolean(roomPermissions?.canTransferOwnership || room.creatorId === clientId);
   const canClearHistory = Boolean(roomPermissions?.canClearHistory);
@@ -120,7 +123,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   }, [room.postingSchedule]);
 
   const loadRoleMembers = React.useCallback(async () => {
-    if (!canManageAdmins) {
+    if (!canManageMembers) {
       setRoleMembers([]);
       return;
     }
@@ -136,7 +139,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     } finally {
       setIsLoadingMembers(false);
     }
-  }, [canManageAdmins, room.id, t]);
+  }, [canManageMembers, room.id, t]);
 
   const hasSeededOpenFormRef = React.useRef(false);
 
@@ -161,14 +164,31 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     setIsDeleteConfirmOpen(false);
     setPendingTransfer(null);
     setStatus(null);
-    setActiveTab(canManageGeneral ? 'general' : canManageAdmins ? 'admins' : 'transfer');
-  }, [canManageAdmins, canManageGeneral, canManageSettings, isOpen, resetSchedule, room.name, room.hasPassword]);
+    setActiveTab(canManageGeneral ? 'general' : canManageMembers ? 'members' : 'transfer');
+  }, [canManageGeneral, canManageMembers, canManageSettings, isOpen, resetSchedule, room.name, room.hasPassword]);
 
   React.useEffect(() => {
-    if (isOpen && canManageAdmins) {
+    if (isOpen && canManageMembers) {
       void loadRoleMembers();
     }
-  }, [canManageAdmins, isOpen, loadRoleMembers]);
+  }, [canManageMembers, isOpen, loadRoleMembers]);
+
+  React.useEffect(() => {
+    if (!isOpen || !canManageMembers) {
+      return;
+    }
+
+    const handleRoleMembersUpdated = (updatedRoomId: string) => {
+      if (updatedRoomId === room.id) {
+        void loadRoleMembers();
+      }
+    };
+
+    socket.on('room_role_members_updated', handleRoleMembersUpdated);
+    return () => {
+      socket.off('room_role_members_updated', handleRoleMembersUpdated);
+    };
+  }, [canManageMembers, isOpen, loadRoleMembers, room.id]);
 
   const runAction = async (action: () => unknown, successMessage: string) => {
     setIsSaving(true);
@@ -303,6 +323,16 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     }, t('adminUpdated'));
   };
 
+  const handleRemoveMember = (targetClientId: string) => {
+    const target = targetClientId.trim();
+    if (!target) return;
+
+    void runAction(async () => {
+      await removeRoomMember(room.id, target);
+      await loadRoleMembers();
+    }, t('memberRemoved'));
+  };
+
   const handleReviewTransferOwnership = async () => {
     const target = transferClientId.trim();
     if (!target) return;
@@ -342,6 +372,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   const ownerMember = roleMembers.find(member => member.role === 'owner')
     || { roomId: room.id, clientId: room.creatorId, role: 'owner' as const, joinedAt: room.createdAt };
   const adminMembers = roleMembers.filter(member => member.role === 'admin');
+  const regularMembers = roleMembers.filter(member => member.role === 'member');
 
   const availableTabs = React.useMemo<Array<{ key: SettingsTabKey; icon: string; label: string }>>(() => [
     ...(canManageGeneral ? [
@@ -350,13 +381,13 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     ...(canManageSettings ? [
       { key: 'schedule' as const, icon: 'lucide:clock-3', label: t('scheduleTab') },
     ] : []),
-    ...(canManageAdmins ? [
-      { key: 'admins' as const, icon: 'lucide:shield-check', label: t('adminsTab') },
+    ...(canManageMembers ? [
+      { key: 'members' as const, icon: 'lucide:users', label: t('membersTab') },
     ] : []),
     ...(canTransferOwnership ? [
       { key: 'transfer' as const, icon: 'lucide:crown', label: t('transferTab') },
     ] : []),
-  ], [canManageAdmins, canManageGeneral, canManageSettings, canTransferOwnership, t]);
+  ], [canManageGeneral, canManageMembers, canManageSettings, canTransferOwnership, t]);
 
   const renderSectionLabel = (icon: string, label: string, className?: string) => (
     <div className={`flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide ${className || 'text-[#87867f] dark:text-[#b0aea5]'}`}>
@@ -379,6 +410,13 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     ) : null
   );
 
+  const canRemoveMember = (member: RoomRoleMember) => (
+    canManageMembers &&
+    member.role !== 'owner' &&
+    member.clientId !== clientId &&
+    (isOwner || member.role === 'member')
+  );
+
   const renderMemberRow = (member: RoomRoleMember) => (
     <div
       key={`${member.role}-${member.clientId}`}
@@ -399,17 +437,30 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
         <span className={`rounded-full px-2 py-1 text-[11px] font-semibold ${roleClassName[member.role]}`}>
           {t(roleLabelKey[member.role])}
         </span>
-        {member.role === 'admin' && (
+        {member.role === 'admin' && canManageAdmins && (
+          <Button
+            isIconOnly
+            size="sm"
+            variant="light"
+            color="warning"
+            aria-label={t('removeAdmin')}
+            isDisabled={isSaving}
+            onPress={() => handleRemoveAdmin(member.clientId)}
+          >
+            <Icon icon="lucide:shield-minus" className="h-4 w-4" />
+          </Button>
+        )}
+        {canRemoveMember(member) && (
           <Button
             isIconOnly
             size="sm"
             variant="light"
             color="danger"
-            aria-label={t('removeAdmin')}
+            aria-label={t('removeMember')}
             isDisabled={isSaving}
-            onPress={() => handleRemoveAdmin(member.clientId)}
+            onPress={() => handleRemoveMember(member.clientId)}
           >
-            <Icon icon="lucide:user-minus" className="h-4 w-4" />
+            <Icon icon="lucide:user-x" className="h-4 w-4" />
           </Button>
         )}
       </div>
@@ -567,39 +618,41 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
       );
     }
 
-    if (tabKey === 'admins' && canManageAdmins) {
+    if (tabKey === 'members' && canManageMembers) {
       return (
         <section className="space-y-5">
           <div className="space-y-2">
-            {renderSectionLabel('lucide:shield-check', t('adminManagement'), 'text-[#c96442] dark:text-[#e08a6a]')}
+            {renderSectionLabel('lucide:users', t('memberManagement'), 'text-[#c96442] dark:text-[#e08a6a]')}
             <p className="text-xs leading-relaxed text-[#87867f] dark:text-[#b0aea5]">
-              {t('adminPermissionsHint')}
+              {canManageAdmins ? t('adminPermissionsHint') : t('memberPermissionsHint')}
             </p>
-            <div className="grid grid-cols-[minmax(0,1fr)_3rem] items-center gap-2">
-              <Input
-                aria-label={t('targetClientId')}
-                placeholder={t('targetClientId')}
-                value={adminClientId}
-                onChange={(event) => setAdminClientId(event.target.value)}
-                classNames={{ inputWrapper: 'h-12' }}
-              />
-              <HoverTooltip content={t('addAdmin')}>
-                <Button
-                  isIconOnly
-                  aria-label={t('addAdmin')}
-                  className="h-12 w-12 min-w-12 rounded-lg bg-[#c96442] text-[#faf9f5]"
-                  isDisabled={!adminClientId.trim() || isSaving}
-                  isLoading={isSaving}
-                  onPress={handleAddAdmin}
-                >
-                  <Icon icon="lucide:user-plus" className="h-5 w-5" />
-                </Button>
-              </HoverTooltip>
-            </div>
+            {canManageAdmins && (
+              <div className="grid grid-cols-[minmax(0,1fr)_3rem] items-center gap-2">
+                <Input
+                  aria-label={t('targetClientId')}
+                  placeholder={t('targetClientId')}
+                  value={adminClientId}
+                  onChange={(event) => setAdminClientId(event.target.value)}
+                  classNames={{ inputWrapper: 'h-12' }}
+                />
+                <HoverTooltip content={t('addAdmin')}>
+                  <Button
+                    isIconOnly
+                    aria-label={t('addAdmin')}
+                    className="h-12 w-12 min-w-12 rounded-lg bg-[#c96442] text-[#faf9f5]"
+                    isDisabled={!adminClientId.trim() || isSaving}
+                    isLoading={isSaving}
+                    onPress={handleAddAdmin}
+                  >
+                    <Icon icon="lucide:user-plus" className="h-5 w-5" />
+                  </Button>
+                </HoverTooltip>
+              </div>
+            )}
           </div>
 
           <div className="space-y-2">
-            {renderSectionLabel('lucide:users', t('currentAdmins'))}
+            {renderSectionLabel('lucide:users', t('persistentMembers'))}
             {isLoadingMembers ? (
               <div className="flex items-center gap-2 text-sm text-[#87867f] dark:text-[#b0aea5]">
                 <Icon icon="lucide:loader-circle" className="h-4 w-4 animate-spin" />
@@ -609,9 +662,10 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
               <>
                 {renderMemberRow(ownerMember)}
                 {adminMembers.map(renderMemberRow)}
-                {adminMembers.length === 0 && (
+                {regularMembers.map(renderMemberRow)}
+                {roleMembers.length === 0 && (
                   <div className="rounded-lg border border-dashed border-[#dedbd0] px-3 py-2 text-sm text-[#87867f] dark:border-[#30302e] dark:text-[#b0aea5]">
-                    {t('noAdmins')}
+                    {t('noMembers')}
                   </div>
                 )}
               </>

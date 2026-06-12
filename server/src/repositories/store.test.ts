@@ -327,14 +327,17 @@ describe('CompositeRoomStore', () => {
     };
     const realtime: RealtimeRoomStore = {
       async updateRoomMemberCount(_roomId: string, _clientId: string, _socketId: string, _isJoining: boolean) { calls.push('realtime.updateRoomMemberCount'); return 1; },
+      async updateRoomBrowserPresence(_roomId: string, _browserInstanceId: string, _socketId: string, _isJoining: boolean) { calls.push('realtime.updateRoomBrowserPresence'); },
       async getRoomMemberCount(_roomId: string) { calls.push('realtime.getRoomMemberCount'); return 1; },
       async clearRealtimeRoomMembers() { calls.push('realtime.clearRealtimeRoomMembers'); },
-      async storeClientSession(_socketId: string, _userId: string) { calls.push('realtime.storeClientSession'); },
+      async storeClientSession(_socketId: string, _userId: string, _browserInstanceId?: string) { calls.push('realtime.storeClientSession'); },
       async getClientId(_socketId: string) { calls.push('realtime.getClientId'); return 'client-1'; },
+      async getBrowserInstanceId(_socketId: string) { calls.push('realtime.getBrowserInstanceId'); return 'browser-1'; },
       async removeClientSession(_socketId: string) { calls.push('realtime.removeClientSession'); },
       async storeUserRooms(_socketId: string, _roomIds: string[]) { calls.push('realtime.storeUserRooms'); },
       async getUserRooms(_socketId: string) { calls.push('realtime.getUserRooms'); return ['room-1']; },
       async getRoomOnlineMemberIds(_roomId: string) { calls.push('realtime.getRoomOnlineMemberIds'); return ['client-1']; },
+      async getRoomActiveBrowserInstanceIds(_roomId: string) { calls.push('realtime.getRoomActiveBrowserInstanceIds'); return ['browser-1']; },
       async resetAllDataForTests() { calls.push('realtime.resetAllDataForTests'); },
     };
     const store = new CompositeRoomStore(durable, realtime);
@@ -424,10 +427,13 @@ describe('CompositeRoomStore', () => {
     await store.deleteRoom('room-1', 'client-1');
     assert.equal(await store.countRooms(), 1);
     assert.equal(await store.updateRoomMemberCount('room-1', 'client-1', 'socket-1', true), 1);
+    await store.updateRoomBrowserPresence('room-1', 'browser-1', 'socket-1', true);
     assert.equal(await store.getRoomMemberCount('room-1'), 1);
+    assert.deepEqual(await store.getRoomActiveBrowserInstanceIds('room-1'), ['browser-1']);
     await store.clearRealtimeRoomMembers();
-    await store.storeClientSession('socket-1', 'client-1');
+    await store.storeClientSession('socket-1', 'client-1', 'browser-1');
     assert.equal(await store.getClientId('socket-1'), 'client-1');
+    assert.equal(await store.getBrowserInstanceId('socket-1'), 'browser-1');
     await store.removeClientSession('socket-1');
     await store.storeUserRooms('socket-1', ['room-1']);
     assert.deepEqual(await store.getUserRooms('socket-1'), ['room-1']);
@@ -496,10 +502,13 @@ describe('CompositeRoomStore', () => {
       'durable.deleteRoom',
       'durable.countRooms',
       'realtime.updateRoomMemberCount',
+      'realtime.updateRoomBrowserPresence',
       'realtime.getRoomMemberCount',
+      'realtime.getRoomActiveBrowserInstanceIds',
       'realtime.clearRealtimeRoomMembers',
       'realtime.storeClientSession',
       'realtime.getClientId',
+      'realtime.getBrowserInstanceId',
       'realtime.removeClientSession',
       'realtime.storeUserRooms',
       'realtime.getUserRooms',
@@ -537,10 +546,13 @@ describe('CompositeRoomStore', () => {
     };
     const realtime: RealtimeRoomStore = {
       async updateRoomMemberCount() { return 0; },
+      async updateRoomBrowserPresence() {},
       async getRoomMemberCount() { return 0; },
+      async getRoomActiveBrowserInstanceIds() { return []; },
       async clearRealtimeRoomMembers() {},
       async storeClientSession() {},
       async getClientId() { return null; },
+      async getBrowserInstanceId() { return null; },
       async removeClientSession() {},
       async storeUserRooms() {},
       async getUserRooms() { return []; },
@@ -590,10 +602,13 @@ describe('CompositeRoomStore', () => {
     };
     const realtime: RealtimeRoomStore = {
       async updateRoomMemberCount() { return 0; },
+      async updateRoomBrowserPresence() {},
       async getRoomMemberCount() { return 0; },
+      async getRoomActiveBrowserInstanceIds() { return []; },
       async clearRealtimeRoomMembers() {},
       async storeClientSession() {},
       async getClientId() { return null; },
+      async getBrowserInstanceId() { return null; },
       async removeClientSession() {},
       async storeUserRooms() {},
       async getUserRooms() { return []; },
@@ -644,10 +659,13 @@ describe('CompositeRoomStore', () => {
     };
     const realtime: RealtimeRoomStore = {
       async updateRoomMemberCount() { return 0; },
+      async updateRoomBrowserPresence() {},
       async getRoomMemberCount() { return 0; },
+      async getRoomActiveBrowserInstanceIds() { return []; },
       async clearRealtimeRoomMembers() {},
       async storeClientSession() {},
       async getClientId() { return null; },
+      async getBrowserInstanceId() { return null; },
       async removeClientSession() {},
       async storeUserRooms() {},
       async getUserRooms() { return []; },
@@ -729,10 +747,13 @@ describe('CompositeRoomStore', () => {
     };
     const realtime: RealtimeRoomStore = {
       async updateRoomMemberCount() { return 0; },
+      async updateRoomBrowserPresence() {},
       async getRoomMemberCount() { return 0; },
+      async getRoomActiveBrowserInstanceIds() { return []; },
       async clearRealtimeRoomMembers() {},
       async storeClientSession() {},
       async getClientId() { return null; },
+      async getBrowserInstanceId() { return null; },
       async removeClientSession() {},
       async storeUserRooms() {},
       async getUserRooms() { return []; },
@@ -781,10 +802,13 @@ describe('CompositeRoomStore', () => {
     };
     const realtime: RealtimeRoomStore = {
       async updateRoomMemberCount() { return 0; },
+      async updateRoomBrowserPresence() {},
       async getRoomMemberCount() { return 0; },
+      async getRoomActiveBrowserInstanceIds() { return []; },
       async clearRealtimeRoomMembers() {},
       async storeClientSession() {},
       async getClientId() { return null; },
+      async getBrowserInstanceId() { return null; },
       async removeClientSession() {},
       async storeUserRooms() {},
       async getUserRooms() { return []; },

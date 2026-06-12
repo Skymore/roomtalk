@@ -12,6 +12,7 @@ import {
   clientId,
   getRoomMemberCount,
   onRoomMemberChange,
+  onUsernameAdopted,
   setUsername as emitUsername,
   reconnectSocket,
   renameRoom,
@@ -63,7 +64,9 @@ export const MessagePage: React.FC = () => {
   const pendingRestoreRoomIdRef = useRef<string | null>(null);
   // 页面高度由 App shell 的 visual viewport 变量控制
   const { t, i18n } = useTranslation();
-  const { theme, setTheme } = useTheme();
+  const { theme, setTheme } = useTheme(
+    window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
+  );
   const isDark = theme === "dark";
 
   // 状态简化：不再单独存储 roomId 和 joined 状态
@@ -421,6 +424,8 @@ export const MessagePage: React.FC = () => {
     }
   }, [username]);
 
+  useEffect(() => onUsernameAdopted((adopted) => setUsername(adopted)), []);
+
   // 视图变化时保存到localStorage
   useEffect(() => {
     viewRef.current = view;
@@ -553,6 +558,25 @@ export const MessagePage: React.FC = () => {
         refreshRoomPermissions(roomId);
       }
     };
+    const handleRoomRemoved = (roomId: string) => {
+      if (currentRoom?.id !== roomId) {
+        return;
+      }
+
+      clearBackgroundRestoreState(roomId);
+      roomSessionGenerationRef.current += 1;
+      pendingRestoreRoomIdRef.current = null;
+      visibleRestoreGenerationRef.current = null;
+      currentRoomRef.current = null;
+      setCurrentRoom(null);
+      setRoomPermissions(null);
+      setMemberCount(null);
+      setIsRestoringRoom(false);
+      setView("rooms");
+      saveCurrentRoom(null);
+      clearRoomUrlParam();
+      setError(t("roomAccessRemoved"));
+    };
 
     socket.on("room_list", handleRoomList);
     socket.emit("get_rooms");
@@ -567,6 +591,7 @@ export const MessagePage: React.FC = () => {
     socket.on("room_updated", handleRoomUpdate);
     socket.on("room_permissions", handleRoomPermissions);
     socket.on("room_permissions_invalidated", handleRoomPermissionsInvalidated);
+    socket.on("room_removed", handleRoomRemoved);
 
     // 取消注册回调的清理函数
     const unsubscribe = onRoomMemberChange((event: RoomMemberEvent) => {
@@ -584,9 +609,10 @@ export const MessagePage: React.FC = () => {
       socket.off("room_updated", handleRoomUpdate);
       socket.off("room_permissions", handleRoomPermissions);
       socket.off("room_permissions_invalidated", handleRoomPermissionsInvalidated);
+      socket.off("room_removed", handleRoomRemoved);
       unsubscribe();
     };
-  }, [applyServerRoom, currentRoom, refreshRoomPermissions]);
+  }, [applyServerRoom, clearBackgroundRestoreState, clearRoomUrlParam, currentRoom, refreshRoomPermissions, t]);
 
   // 添加页面可见性、BFCache 和网络恢复处理
   useEffect(() => {

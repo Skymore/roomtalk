@@ -3,7 +3,7 @@ import { Server } from 'socket.io';
 import { RedisClientType } from 'redis';
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../logger';
-import { AudioTranscriptionRecord, MediaHistoryPageCursor, RoomStore } from '../repositories/store';
+import { AudioTranscriptionRecord, MediaHistoryPageCursor, PendingMediaUpload, RoomStore } from '../repositories/store';
 import { MediaAsset, MediaKind, Message, Room } from '../types';
 import { AIRoleDraft, MAX_AI_ROLE_IDEA_LENGTH } from '../services/aiRoleGenerator';
 import { hasRoomAccess } from '../socket/roomAccess';
@@ -44,6 +44,7 @@ const MEDIA_UPLOAD_LIMIT_BYTES: Record<MediaKind, number> = {
   image: 10 * 1024 * 1024,
   audio: 25 * 1024 * 1024,
   video: 100 * 1024 * 1024,
+  file: 50 * 1024 * 1024,
 };
 
 const MEDIA_HISTORY_DEFAULT_LIMIT = 40;
@@ -67,18 +68,63 @@ const aiRoleDraftRateLimits = new Map<string, RateLimitEntry>();
 const mediaUploadRateLimits = new Map<string, RateLimitEntry>();
 
 const isMediaKind = (kind: unknown): kind is MediaKind => (
-  kind === 'image' || kind === 'audio' || kind === 'video'
+  kind === 'image' || kind === 'audio' || kind === 'video' || kind === 'file'
 );
 
 const isAllowedMediaMimeType = (kind: MediaKind, mimeType: string) => {
   if (!mimeType || mimeType.includes('\n') || mimeType.includes('\r')) {
     return false;
   }
+  if (kind === 'file') {
+    return true;
+  }
   if (kind === 'image') {
     return mimeType.startsWith('image/') && mimeType !== 'image/svg+xml';
   }
   return mimeType.startsWith(`${kind}/`);
 };
+
+type UploadFilenameParseResult =
+  | { ok: true; filename?: string }
+  | { ok: false; error: string };
+
+const sanitizeUploadFilename = (value: unknown): UploadFilenameParseResult => {
+  if (value === null || value === undefined || value === '') {
+    return { ok: true };
+  }
+  if (typeof value !== 'string') {
+    return { ok: true };
+  }
+  if (value.includes('\r') || value.includes('\n')) {
+    return { ok: false, error: 'Filename must not contain line breaks' };
+  }
+
+  const cleaned = value.split(/[\\/]/).pop()?.trim().slice(0, 200);
+  return { ok: true, filename: cleaned || undefined };
+};
+
+const sanitizeContentDispositionFilename = (value: string) => (
+  value
+    .replace(/[\r\n]/g, '')
+    .split(/[\\/]/)
+    .pop()
+    ?.trim()
+    .slice(0, 200) || 'download'
+);
+
+const buildAttachmentContentDisposition = (filename: string) => (
+  `attachment; filename*=UTF-8''${encodeURIComponent(sanitizeContentDispositionFilename(filename))}`
+);
+
+const isPreviewMediaMimeType = (mimeType: string) => (
+  mimeType.startsWith('image/') || mimeType.startsWith('video/') || mimeType.startsWith('audio/')
+);
+
+const getAssetIdFromMediaObjectKey = (objectKey: string) => objectKey.split('/').pop() || '';
+
+const shouldForceLocalMediaAttachment = (objectKey: string, mimeType: string) => (
+  objectKey.includes('/media/file/') || !isPreviewMediaMimeType(mimeType)
+);
 
 const parseByteSize = (value: unknown) => {
   const parsed = Number(value);
@@ -301,7 +347,13 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
         }
 
         const object = await mediaObjectStorage.getMediaObject(objectKey);
-        res.type(object.mimeType || head.mimeType || 'application/octet-stream');
+        const mimeType = object.mimeType || head.mimeType || 'application/octet-stream';
+        res.type(mimeType);
+        if (shouldForceLocalMediaAttachment(objectKey, mimeType)) {
+          const assetId = getAssetIdFromMediaObjectKey(objectKey);
+          const asset = assetId ? await store.getMediaAsset(assetId) : null;
+          res.setHeader('Content-Disposition', buildAttachmentContentDisposition(asset?.filename || assetId || 'download'));
+        }
         res.setHeader('Content-Length', object.byteSize);
         res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
         return res.send(object.body);
@@ -501,7 +553,8 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     }
 
     const clientAuthToken = await issueClientAuthToken(store, clientId);
-    return res.json({ clientId, clientAuthToken, hasPassword: true });
+    const nicknames = await store.getClientNicknames([clientId]);
+    return res.json({ clientId, clientAuthToken, hasPassword: true, nickname: nicknames[clientId] ?? null });
   });
 
   app.post('/api/client-auth/logout', async (req: Request, res: Response) => {
@@ -805,9 +858,13 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     const kind = req.body?.kind;
     const mimeType = typeof req.body?.mimeType === 'string' ? req.body.mimeType.trim().toLowerCase() : '';
     const byteSize = parseByteSize(req.body?.byteSize);
+    const filenameResult = sanitizeUploadFilename(req.body?.filename);
 
     if (!clientId || !roomId || !isMediaKind(kind) || !mimeType || !byteSize) {
       return res.status(400).json({ error: 'clientId, roomId, kind, mimeType, and byteSize are required' });
+    }
+    if (!filenameResult.ok) {
+      return res.status(400).json({ error: filenameResult.error });
     }
     if (!(await authorizeClientRequest(req, res, clientId, 'POST /api/media/uploads'))) {
       return;
@@ -850,7 +907,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       expiresInSeconds: 15 * 60,
     });
     const nowMs = getNowMs();
-    await store.savePendingMediaUpload({
+    const pendingUpload: PendingMediaUpload = {
       assetId,
       roomId,
       objectKey,
@@ -860,7 +917,11 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       uploadedByClientId: clientId,
       createdAt: new Date(nowMs).toISOString(),
       expiresAt: new Date(nowMs + pendingUploadTtlMs).toISOString(),
-    });
+    };
+    if (filenameResult.filename !== undefined) {
+      pendingUpload.filename = filenameResult.filename;
+    }
+    await store.savePendingMediaUpload(pendingUpload);
 
     return res.status(201).json({
       assetId,
@@ -886,9 +947,13 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     const width = parseOptionalInteger(req.body?.width);
     const height = parseOptionalInteger(req.body?.height);
     const durationMs = parseOptionalInteger(req.body?.durationMs);
+    const filenameResult = sanitizeUploadFilename(req.body?.filename);
 
     if (!assetId || !clientId || !roomId || !isMediaKind(kind) || !mimeType || !byteSize || !objectKey) {
       return res.status(400).json({ error: 'assetId, clientId, roomId, kind, mimeType, byteSize, and objectKey are required' });
+    }
+    if (!filenameResult.ok) {
+      return res.status(400).json({ error: filenameResult.error });
     }
     if (!(await authorizeClientRequest(req, res, clientId, 'POST /api/media/uploads/:assetId/complete'))) {
       return;
@@ -944,6 +1009,11 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       await deleteMediaObjectBestEffort(objectKey, 'pending-media-upload-expired-on-complete');
       return res.status(410).json({ error: 'Media upload has expired' });
     }
+    const pendingFilenameResult = sanitizeUploadFilename(pendingUpload.filename);
+    if (!pendingFilenameResult.ok) {
+      return res.status(400).json({ error: pendingFilenameResult.error });
+    }
+    const filename = pendingFilenameResult.filename || filenameResult.filename;
 
     const objectHead = await mediaObjectStorage.headObject({ objectKey });
     if (!objectHead.exists) {
@@ -979,6 +1049,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       assetId,
       mimeType,
       byteSize,
+      filename,
       width,
       height,
       durationMs,
@@ -1002,6 +1073,9 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       uploadedByClientId: clientId,
       createdAt: message.timestamp,
     };
+    if (filename !== undefined) {
+      asset.filename = filename;
+    }
 
     const appendResult = await store.appendMediaMessageWithAsset(message, asset);
     if (!appendResult) {
@@ -1046,6 +1120,9 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     const signedDownload = await mediaObjectStorage.createReadUrl({
       objectKey: asset.objectKey,
       expiresInSeconds: 15 * 60,
+      responseContentDisposition: asset.kind === 'file'
+        ? buildAttachmentContentDisposition(asset.filename || asset.id)
+        : undefined,
     });
     return res.json(signedDownload);
   });

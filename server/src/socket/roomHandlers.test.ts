@@ -57,6 +57,7 @@ class FakeSocket {
 class FakeIo {
   roomEmits: RoomEmit[] = [];
   socketsByRoom = new Map<string, Set<string>>();
+  socketsLeaveCalls: Array<{ socketId: string; roomId: string }> = [];
 
   to(roomId: string) {
     return {
@@ -69,6 +70,9 @@ class FakeIo {
   in(roomId: string) {
     return {
       allSockets: async () => this.socketsByRoom.get(roomId) || new Set<string>(),
+      socketsLeave: (targetRoomId: string) => {
+        this.socketsLeaveCalls.push({ socketId: roomId, roomId: targetRoomId });
+      },
     };
   }
 }
@@ -114,6 +118,8 @@ const createHarness = (clientId: string | null = 'client-1') => {
     rooms: [room()],
     messages: [message()],
     socketRooms: [] as string[],
+    browserInstanceId: null as string | null,
+    browserPresenceUpdates: [] as Array<{ roomId: string; browserInstanceId: string; socketId: string; isJoining: boolean }>,
     members: new Set([memberKey('room-1', 'client-1')]),
     memberRoles: new Map<string, RoomMemberRole>([[memberKey('room-1', 'client-1'), 'owner']]),
     addedMembers: [] as Array<{ roomId: string; clientId: string; role: RoomMemberRole }>,
@@ -122,10 +128,15 @@ const createHarness = (clientId: string | null = 'client-1') => {
     deletedRooms: [] as Array<{ roomId: string; creatorId: string }>,
     removedSessions: [] as string[],
     nicknames: new Map<string, string>(),
+    nicknameWrites: [] as Array<{ clientId: string; nickname: string }>,
     clientPasswords: new Map<string, string>(),
     clientAuthTokens: new Map<string, { clientId: string; tokenHash: string; createdAt: string }>(),
-    async storeClientSession(_socketId: string, userId: string) {
+    async storeClientSession(_socketId: string, userId: string, browserInstanceId?: string) {
       this.clientId = userId;
+      this.browserInstanceId = browserInstanceId || null;
+    },
+    async getBrowserInstanceId() {
+      return this.browserInstanceId;
     },
     async setClientPasswordHash(clientId: string, passwordHash: string) {
       this.clientPasswords.set(clientId, passwordHash);
@@ -155,6 +166,7 @@ const createHarness = (clientId: string | null = 'client-1') => {
       }
     },
     async setClientNickname(clientId: string, nickname: string) {
+      this.nicknameWrites.push({ clientId, nickname });
       this.nicknames.set(clientId, nickname);
     },
     async getClientNicknames(clientIds: string[]) {
@@ -270,6 +282,9 @@ const createHarness = (clientId: string | null = 'client-1') => {
     async updateRoomMemberCount(roomId: string, _userId: string, _socketId: string, isJoining: boolean) {
       return isJoining ? 2 : 1;
     },
+    async updateRoomBrowserPresence(roomId: string, browserInstanceId: string, socketId: string, isJoining: boolean) {
+      this.browserPresenceUpdates.push({ roomId, browserInstanceId, socketId, isJoining });
+    },
     async updateRoomSettings(roomId: string, updates: { passwordHash?: string | null; postingSchedule?: Room['postingSchedule'] | null }) {
       const target = this.rooms.find(item => item.id === roomId);
       if (!target) {
@@ -340,13 +355,35 @@ describe('room socket handlers', () => {
     ]);
   });
 
-  it('stores the nickname when registering with a username payload', async () => {
+  it('seeds the nickname when registering with a username payload for a new client', async () => {
     const { socket, store } = createHarness(null);
+    let response: unknown;
 
-    await socket.invoke('register', { clientId: 'client-9', username: '  Ada  ' });
+    await socket.invoke('register', { clientId: 'client-9', username: '  Ada  ', browserInstanceId: 'browser-1' }, (result: unknown) => {
+      response = result;
+    });
 
     assert.equal(store.clientId, 'client-9');
+    assert.equal(store.browserInstanceId, 'browser-1');
     assert.equal(store.nicknames.get('client-9'), 'Ada');
+    assert.deepEqual(store.nicknameWrites, [{ clientId: 'client-9', nickname: 'Ada' }]);
+    assert.deepEqual(response, { success: true, clientId: 'client-9', nickname: 'Ada' });
+  });
+
+  it('keeps the server nickname when registering with a stale local username', async () => {
+    const { socket, store } = createHarness(null);
+    await store.setClientNickname('client-9', 'Server Ada');
+    store.nicknameWrites = [];
+    let response: unknown;
+
+    await socket.invoke('register', { clientId: 'client-9', username: 'Stale Bob' }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.equal(store.clientId, 'client-9');
+    assert.equal(store.nicknames.get('client-9'), 'Server Ada');
+    assert.deepEqual(store.nicknameWrites, []);
+    assert.deepEqual(response, { success: true, clientId: 'client-9', nickname: 'Server Ada' });
   });
 
   it('rejects socket registration for password-protected User IDs without a valid token', async () => {
@@ -444,8 +481,11 @@ describe('room socket handlers', () => {
     const { socket, store } = createHarness('client-1');
     store.members.add('room-1:client-2');
     store.memberRoles.set('room-1:client-2', 'admin');
+    store.members.add('room-1:client-3');
+    store.memberRoles.set('room-1:client-3', 'member');
     await store.setClientNickname('client-1', 'Owner');
     await store.setClientNickname('client-2', 'Ada');
+    await store.setClientNickname('client-3', 'Grace');
 
     let response: unknown;
     await socket.invoke('get_room_role_members', { roomId: 'room-1' }, (result: unknown) => {
@@ -457,8 +497,97 @@ describe('room socket handlers', () => {
       members: [
         { roomId: 'room-1', clientId: 'client-1', role: 'owner', joinedAt: '2026-05-03T00:00:00.000Z', nickname: 'Owner' },
         { roomId: 'room-1', clientId: 'client-2', role: 'admin', joinedAt: '2026-05-03T00:00:00.000Z', nickname: 'Ada' },
+        { roomId: 'room-1', clientId: 'client-3', role: 'member', joinedAt: '2026-05-03T00:00:00.000Z', nickname: 'Grace' },
       ],
     });
+  });
+
+  it('allows administrators to view persistent room members', async () => {
+    const { socket, store } = createHarness('client-2');
+    store.members.add('room-1:client-2');
+    store.memberRoles.set('room-1:client-2', 'admin');
+    store.members.add('room-1:client-3');
+    store.memberRoles.set('room-1:client-3', 'member');
+
+    let response: { success: boolean; members?: Array<{ clientId: string; role: RoomMemberRole }> } | undefined;
+    await socket.invoke('get_room_role_members', { roomId: 'room-1' }, (result: typeof response) => {
+      response = result;
+    });
+
+    assert.equal(response?.success, true);
+    assert.deepEqual(response?.members?.map(member => [member.clientId, member.role]), [
+      ['client-1', 'owner'],
+      ['client-2', 'admin'],
+      ['client-3', 'member'],
+    ]);
+  });
+
+  it('rejects persistent member listing for regular members', async () => {
+    const { socket, store } = createHarness('client-2');
+    store.members.add('room-1:client-2');
+    store.memberRoles.set('room-1:client-2', 'member');
+
+    let response: unknown;
+    await socket.invoke('get_room_role_members', { roomId: 'room-1' }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.deepEqual(response, { success: false, error: 'Only room owners and administrators can manage members' });
+  });
+
+  it('removes persistent members according to owner and administrator roles', async () => {
+    const admin = createHarness('client-2');
+    admin.store.members.add('room-1:client-2');
+    admin.store.memberRoles.set('room-1:client-2', 'admin');
+    admin.store.members.add('room-1:client-3');
+    admin.store.memberRoles.set('room-1:client-3', 'member');
+    admin.io.socketsByRoom.set('client-3', new Set(['socket-target']));
+    admin.store.socketRooms = ['room-1'];
+
+    let adminResponse: unknown;
+    await admin.socket.invoke('remove_room_member', { roomId: 'room-1', targetClientId: 'client-3' }, (result: unknown) => {
+      adminResponse = result;
+    });
+
+    assert.deepEqual(adminResponse, { success: true });
+    assert.equal(await admin.store.isRoomMember('room-1', 'client-3'), false);
+    assert.deepEqual(admin.io.socketsLeaveCalls, [{ socketId: 'socket-target', roomId: 'room-1' }]);
+    assert.deepEqual(admin.io.roomEmits.map(item => item.event), [
+      'room_removed',
+      'room_permissions_invalidated',
+      'room_member_change',
+      'room_permissions_invalidated',
+      'room_role_members_updated',
+      'room_list',
+    ]);
+
+    const adminCannotRemoveAdmin = createHarness('client-2');
+    adminCannotRemoveAdmin.store.members.add('room-1:client-2');
+    adminCannotRemoveAdmin.store.memberRoles.set('room-1:client-2', 'admin');
+    adminCannotRemoveAdmin.store.members.add('room-1:client-3');
+    adminCannotRemoveAdmin.store.memberRoles.set('room-1:client-3', 'admin');
+    let adminBlockedResponse: unknown;
+    await adminCannotRemoveAdmin.socket.invoke('remove_room_member', { roomId: 'room-1', targetClientId: 'client-3' }, (result: unknown) => {
+      adminBlockedResponse = result;
+    });
+    assert.deepEqual(adminBlockedResponse, { success: false, error: 'Administrators can only remove members' });
+
+    const owner = createHarness('client-1');
+    owner.store.members.add('room-1:client-2');
+    owner.store.memberRoles.set('room-1:client-2', 'admin');
+    let ownerResponse: unknown;
+    await owner.socket.invoke('remove_room_member', { roomId: 'room-1', targetClientId: 'client-2' }, (result: unknown) => {
+      ownerResponse = result;
+    });
+    assert.deepEqual(ownerResponse, { success: true });
+    assert.equal(await owner.store.isRoomMember('room-1', 'client-2'), false);
+
+    const ownerCannotRemoveOwner = createHarness('client-1');
+    let ownerBlockedResponse: unknown;
+    await ownerCannotRemoveOwner.socket.invoke('remove_room_member', { roomId: 'room-1', targetClientId: 'client-1' }, (result: unknown) => {
+      ownerBlockedResponse = result;
+    });
+    assert.deepEqual(ownerBlockedResponse, { success: false, error: 'The room owner cannot be removed' });
   });
 
   it('checks target users before adding administrators', async () => {
@@ -613,6 +742,7 @@ describe('room socket handlers', () => {
         canClearHistory: true,
         canManageRoom: true,
         canManageAdmins: true,
+        canManageMembers: true,
         canTransferOwnership: true,
         postingRestrictionReason: undefined,
       },

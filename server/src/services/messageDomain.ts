@@ -107,6 +107,7 @@ export function createMediaMessage(input: {
   assetId: string;
   mimeType: string;
   byteSize: number;
+  filename?: string;
   width?: number;
   height?: number;
   durationMs?: number;
@@ -121,10 +122,11 @@ export function createMediaMessage(input: {
     kind: input.kind,
     mimeType: input.mimeType,
     byteSize: input.byteSize,
-    width: input.width,
-    height: input.height,
-    durationMs: input.durationMs,
   };
+  if (input.filename !== undefined) mediaAsset.filename = input.filename;
+  if (input.width !== undefined) mediaAsset.width = input.width;
+  if (input.height !== undefined) mediaAsset.height = input.height;
+  if (input.durationMs !== undefined) mediaAsset.durationMs = input.durationMs;
 
   return {
     id: input.id,
@@ -226,6 +228,8 @@ const formatHumanContextForAI = (message: Message, content: string) => {
 const getMediaAttachmentLabel = (kind?: MediaKind) => {
   if (kind === 'audio') return '[Audio attachment]';
   if (kind === 'video') return '[Video attachment]';
+  if (kind === 'file') return '[File attachment]';
+  if (kind === 'image') return '[Image attachment]';
   return '[Image attachment]';
 };
 

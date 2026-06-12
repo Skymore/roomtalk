@@ -76,9 +76,12 @@ const {
   getRoomMediaHistory,
   getRoomMemberCount,
   getRoomMembers,
+  getRoomRoleMembers,
   getSavedRoomsFromServer,
   joinRoom,
   loginWithClientPassword,
+  onUsernameAdopted,
+  removeRoomMember,
   saveRoomToServer,
   sendMessage,
   sendMessageAndAskAI,
@@ -117,6 +120,7 @@ describe('socket message acknowledgement helpers', () => {
     vi.clearAllMocks();
     localStorage.setItem('clientId', 'client-uuid');
     localStorage.removeItem('clientAuthToken');
+    localStorage.removeItem('roomtalk_username');
   });
 
   it('returns the saved message from send_message acknowledgements', async () => {
@@ -164,7 +168,7 @@ describe('socket message acknowledgement helpers', () => {
 
     expect(socketMock.emit.mock.calls[0]).toEqual([
       'register',
-      { clientId: 'client-uuid', username: undefined, clientAuthToken: undefined },
+      { clientId: 'client-uuid', browserInstanceId: 'client-uuid', username: undefined, clientAuthToken: undefined },
       expect.any(Function),
     ]);
     expect(socketMock.emit.mock.calls[1]).toEqual([
@@ -193,7 +197,7 @@ describe('socket message acknowledgement helpers', () => {
     expect(socketMock.emit).toHaveBeenCalledTimes(1);
     expect(socketMock.emit).toHaveBeenCalledWith(
       'register',
-      { clientId: 'client-uuid', username: undefined, clientAuthToken: undefined },
+      { clientId: 'client-uuid', browserInstanceId: 'client-uuid', username: undefined, clientAuthToken: undefined },
       expect.any(Function),
     );
     expect(socketMock.emit).not.toHaveBeenCalledWith(
@@ -216,7 +220,7 @@ describe('socket message acknowledgement helpers', () => {
     expect(socketMock.connect).toHaveBeenCalledTimes(1);
     expect(socketMock.emit.mock.calls[0]).toEqual([
       'register',
-      { clientId: 'client-uuid', username: undefined, clientAuthToken: undefined },
+      { clientId: 'client-uuid', browserInstanceId: 'client-uuid', username: undefined, clientAuthToken: undefined },
       expect.any(Function),
     ]);
   });
@@ -233,7 +237,7 @@ describe('socket message acknowledgement helpers', () => {
 
     expect(socketMock.emit.mock.calls[0]).toEqual([
       'register',
-      { clientId: 'client-uuid', username: undefined, clientAuthToken: 'auth-token-1' },
+      { clientId: 'client-uuid', browserInstanceId: 'client-uuid', username: undefined, clientAuthToken: 'auth-token-1' },
       expect.any(Function),
     ]);
   });
@@ -254,6 +258,28 @@ describe('socket message acknowledgement helpers', () => {
 
     const registerCalls = socketMock.emit.mock.calls.filter(([event]) => event === 'register');
     expect(registerCalls).toHaveLength(1);
+  });
+
+  it('adopts the server nickname returned by register acknowledgements', async () => {
+    const adopted = vi.fn();
+    const unsubscribe = onUsernameAdopted(adopted);
+    socketMock.ackResponses.set('register', {
+      success: true,
+      nickname: 'Server Ada',
+    });
+    socketMock.ackResponses.set('get_saved_rooms', {
+      success: true,
+      rooms: [],
+    });
+
+    try {
+      await getSavedRoomsFromServer();
+    } finally {
+      unsubscribe();
+    }
+
+    expect(localStorage.getItem('roomtalk_username')).toBe('Server Ada');
+    expect(adopted).toHaveBeenCalledWith('Server Ada');
   });
 
   it('returns the saved user message and AI message id from send_message_and_ask_ai', async () => {
@@ -367,7 +393,7 @@ describe('socket message acknowledgement helpers', () => {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ clientId: 'client-other', hasPassword: true, clientAuthToken: 'login-token' }), {
+      .mockResolvedValueOnce(new Response(JSON.stringify({ clientId: 'client-other', hasPassword: true, clientAuthToken: 'login-token', nickname: 'Alice' }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       }));
@@ -386,14 +412,41 @@ describe('socket message acknowledgement helpers', () => {
       clientAuthToken: 'old-token',
     });
 
-    await expect(loginWithClientPassword('client-other', 'password-2')).resolves.toEqual({ clientId: 'client-other', hasPassword: true });
+    const adopted = vi.fn();
+    const unsubscribe = onUsernameAdopted(adopted);
+    try {
+      await expect(loginWithClientPassword('client-other', 'password-2')).resolves.toEqual({ clientId: 'client-other', hasPassword: true });
+    } finally {
+      unsubscribe();
+    }
     expect(localStorage.getItem('clientId')).toBe('client-other');
     expect(localStorage.getItem('clientAuthToken')).toBe('login-token');
+    expect(localStorage.getItem('roomtalk_username')).toBe('Alice');
+    expect(adopted).toHaveBeenCalledWith('Alice');
     const loginRequest = fetchMock.mock.calls[2][1] as RequestInit;
     expect(JSON.parse(loginRequest.body as string)).toEqual({
       clientId: 'client-other',
       password: 'password-2',
     });
+  });
+
+  it('clears the cached username when User ID password login has no server nickname', async () => {
+    localStorage.setItem('roomtalk_username', 'Stale Bob');
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      clientId: 'client-other',
+      hasPassword: true,
+      clientAuthToken: 'login-token',
+      nickname: null,
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+
+    await expect(loginWithClientPassword('client-other', 'password-2')).resolves.toEqual({ clientId: 'client-other', hasPassword: true });
+
+    expect(localStorage.getItem('clientId')).toBe('client-other');
+    expect(localStorage.getItem('clientAuthToken')).toBe('login-token');
+    expect(localStorage.getItem('roomtalk_username')).toBeNull();
   });
 
   it('uploads media objects through relative local media URLs', async () => {
@@ -490,6 +543,66 @@ describe('socket message acknowledgement helpers', () => {
       clientId: 'client-uuid',
       roomId: 'room-1',
       clientAuthToken: 'auth-token-1',
+    });
+  });
+
+  it('sends filenames when uploading generic file messages', async () => {
+    const savedMessage = message({
+      id: 'file-message-1',
+      content: '',
+      messageType: 'media',
+      mediaAsset: {
+        id: 'asset-file-1',
+        kind: 'file',
+        mimeType: 'text/markdown',
+        byteSize: 7,
+        filename: 'notes.md',
+      },
+    });
+
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        assetId: 'asset-file-1',
+        uploadUrl: '/api/media/local-objects/file-key',
+        objectKey: 'rooms/room-1/media/file/asset-file-1',
+        expiresAt: '2026-05-03T00:15:00.000Z',
+      }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(savedMessage), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+
+    const file = new Blob(['# notes'], { type: 'text/markdown' });
+    await expect(uploadMediaMessage({
+      file,
+      roomId: 'room-1',
+      kind: 'file',
+      mimeType: 'text/markdown',
+      filename: 'notes.md',
+    })).resolves.toEqual(savedMessage);
+
+    const createRequest = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(createRequest.body as string)).toMatchObject({
+      clientId: 'client-uuid',
+      roomId: 'room-1',
+      kind: 'file',
+      mimeType: 'text/markdown',
+      byteSize: 7,
+      filename: 'notes.md',
+    });
+    const completeRequest = fetchMock.mock.calls[2][1] as RequestInit;
+    expect(JSON.parse(completeRequest.body as string)).toMatchObject({
+      clientId: 'client-uuid',
+      roomId: 'room-1',
+      kind: 'file',
+      mimeType: 'text/markdown',
+      byteSize: 7,
+      objectKey: 'rooms/room-1/media/file/asset-file-1',
+      filename: 'notes.md',
     });
   });
 
@@ -661,6 +774,39 @@ describe('socket message acknowledgement helpers', () => {
     expect(socketMock.emit).toHaveBeenCalledWith(
       'get_room_members',
       { roomId: 'room-1' },
+      expect.any(Function)
+    );
+  });
+
+  it('returns persistent role members from get_room_role_members acknowledgements', async () => {
+    const members = [
+      { roomId: 'room-1', clientId: 'client-uuid', role: 'owner', joinedAt: '2026-05-03T10:00:00.000Z', nickname: 'Ada' },
+      { roomId: 'room-1', clientId: 'client-2', role: 'member', joinedAt: '2026-05-03T10:01:00.000Z', nickname: 'Grace' },
+    ];
+    socketMock.ackResponses.set('get_room_role_members', {
+      success: true,
+      members,
+    });
+
+    await expect(getRoomRoleMembers('room-1')).resolves.toEqual(members);
+
+    expect(socketMock.emit).toHaveBeenCalledWith(
+      'get_room_role_members',
+      { roomId: 'room-1' },
+      expect.any(Function)
+    );
+  });
+
+  it('removes persistent room members through remove_room_member acknowledgements', async () => {
+    socketMock.ackResponses.set('remove_room_member', {
+      success: true,
+    });
+
+    await expect(removeRoomMember('room-1', 'client-2')).resolves.toBeUndefined();
+
+    expect(socketMock.emit).toHaveBeenCalledWith(
+      'remove_room_member',
+      { roomId: 'room-1', targetClientId: 'client-2' },
       expect.any(Function)
     );
   });

@@ -707,7 +707,7 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
       store,
       roomId,
       clientId,
-      action: { type: 'room.manageAdmins' },
+      action: { type: 'room.manageMembers' },
     });
     if (!auth.ok) {
       callback?.({ success: false, error: auth.message });
@@ -716,6 +716,91 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
 
     const members = await readRoomRoleMembers(store, roomId);
     callback?.({ success: true, members });
+  });
+
+  socket.on('remove_room_member', async (
+    data: { roomId?: string; targetClientId?: unknown },
+    callback?: (result: { success: boolean; error?: string }) => void,
+  ) => {
+    const clientId = await store.getClientId(socket.id);
+    const roomId = data?.roomId;
+    const target = parseTargetClientId(data?.targetClientId);
+    if (!clientId) {
+      callback?.({ success: false, error: 'You are not registered' });
+      return;
+    }
+    if (!roomId) {
+      callback?.({ success: false, error: 'Room ID is required' });
+      return;
+    }
+    if (!target.ok) {
+      callback?.({ success: false, error: target.error });
+      return;
+    }
+
+    const auth = await authorizeRoomAction({
+      store,
+      roomId,
+      clientId,
+      action: { type: 'room.manageMembers' },
+    });
+    if (!auth.ok) {
+      callback?.({ success: false, error: auth.message });
+      return;
+    }
+
+    const targetMember = await store.getRoomMember(roomId, target.clientId);
+    if (!targetMember) {
+      callback?.({ success: false, error: 'Target user is not a room member' });
+      return;
+    }
+
+    if (targetMember.role === 'owner') {
+      callback?.({ success: false, error: 'The room owner cannot be removed' });
+      return;
+    }
+
+    if (auth.actor.role === 'admin' && targetMember.role !== 'member') {
+      callback?.({ success: false, error: 'Administrators can only remove members' });
+      return;
+    }
+
+    const removed = await store.removeRoomMember(roomId, target.clientId);
+    if (!removed) {
+      callback?.({ success: false, error: 'Failed to remove room member' });
+      return;
+    }
+
+    const targetSockets = await io.in(target.clientId).allSockets();
+    for (const targetSocketId of targetSockets) {
+      const targetRooms = await store.getUserRooms(targetSocketId);
+      if (!targetRooms.includes(roomId)) {
+        continue;
+      }
+
+      const memberCount = await store.updateRoomMemberCount(roomId, target.clientId, targetSocketId, false);
+      const targetBrowserInstanceId = await store.getBrowserInstanceId(targetSocketId);
+      if (targetBrowserInstanceId) {
+        await store.updateRoomBrowserPresence(roomId, targetBrowserInstanceId, targetSocketId, false);
+      }
+      const leaveEvent = createRoomMemberEvent({
+        roomId,
+        userId: target.clientId,
+        count: memberCount,
+        action: 'leave',
+      });
+
+      io.to(targetSocketId).emit('room_removed', roomId);
+      io.to(targetSocketId).emit('room_permissions_invalidated', roomId);
+      io.to(roomId).emit('room_member_change', leaveEvent);
+      io.in(targetSocketId).socketsLeave(roomId);
+      await store.storeUserRooms(targetSocketId, targetRooms.filter(id => id !== roomId));
+    }
+
+    io.to(roomId).emit('room_permissions_invalidated', roomId);
+    io.to(roomId).emit('room_role_members_updated', roomId);
+    io.to(target.clientId).emit('room_list', await store.readRoomsByUser(target.clientId));
+    callback?.({ success: true });
   });
 
   socket.on('lookup_room_client', async (

@@ -89,15 +89,20 @@ export const POSTGRES_SCHEMA_SQL = [
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     message_id TEXT UNIQUE REFERENCES room_messages(id) ON DELETE SET NULL,
     object_key TEXT NOT NULL UNIQUE,
-    kind TEXT NOT NULL CHECK (kind IN ('image', 'video', 'audio')),
+    kind TEXT NOT NULL CHECK (kind IN ('image', 'video', 'audio', 'file')),
     mime_type TEXT NOT NULL,
     byte_size INTEGER NOT NULL,
+    filename TEXT,
     width INTEGER,
     height INTEGER,
     duration_ms INTEGER,
     uploaded_by_client_id TEXT,
     created_at TIMESTAMPTZ NOT NULL
   )`,
+  `ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS filename TEXT`,
+  `ALTER TABLE media_assets DROP CONSTRAINT IF EXISTS media_assets_kind_check`,
+  `ALTER TABLE media_assets ADD CONSTRAINT media_assets_kind_check
+    CHECK (kind IN ('image', 'video', 'audio', 'file'))`,
   `CREATE INDEX IF NOT EXISTS idx_media_assets_room
     ON media_assets (room_id, created_at ASC)`,
   `CREATE INDEX IF NOT EXISTS idx_media_assets_history
@@ -108,13 +113,18 @@ export const POSTGRES_SCHEMA_SQL = [
     id TEXT PRIMARY KEY,
     room_id TEXT NOT NULL,
     object_key TEXT NOT NULL UNIQUE,
-    kind TEXT NOT NULL CHECK (kind IN ('image', 'video', 'audio')),
+    kind TEXT NOT NULL CHECK (kind IN ('image', 'video', 'audio', 'file')),
     mime_type TEXT NOT NULL,
     byte_size INTEGER NOT NULL,
+    filename TEXT,
     uploaded_by_client_id TEXT NOT NULL,
     expires_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL
   )`,
+  `ALTER TABLE pending_media_uploads ADD COLUMN IF NOT EXISTS filename TEXT`,
+  `ALTER TABLE pending_media_uploads DROP CONSTRAINT IF EXISTS pending_media_uploads_kind_check`,
+  `ALTER TABLE pending_media_uploads ADD CONSTRAINT pending_media_uploads_kind_check
+    CHECK (kind IN ('image', 'video', 'audio', 'file'))`,
   `CREATE INDEX IF NOT EXISTS idx_pending_media_uploads_expires
     ON pending_media_uploads (expires_at ASC)`,
   `CREATE TABLE IF NOT EXISTS audio_transcriptions (

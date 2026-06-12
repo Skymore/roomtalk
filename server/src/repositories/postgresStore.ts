@@ -73,6 +73,7 @@ type MediaAssetRow = {
   kind: MediaAsset['kind'];
   mime_type: string;
   byte_size: number | string;
+  filename: string | null;
   width: number | string | null;
   height: number | string | null;
   duration_ms: number | string | null;
@@ -87,6 +88,7 @@ type PendingMediaUploadRow = {
   kind: MediaAsset['kind'];
   mime_type: string;
   byte_size: number | string;
+  filename: string | null;
   uploaded_by_client_id: string;
   expires_at: string | Date;
   created_at: string | Date;
@@ -122,8 +124,8 @@ type PushSubscriptionRow = {
 const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, room_version, updated_at';
 const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, ai_model, usage, cost, reply_to, ai_stream_owner_id';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
-const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, width, height, duration_ms, uploaded_by_client_id, created_at';
-const PENDING_MEDIA_UPLOAD_COLUMNS = 'id, room_id, object_key, kind, mime_type, byte_size, uploaded_by_client_id, expires_at, created_at';
+const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, filename, width, height, duration_ms, uploaded_by_client_id, created_at';
+const PENDING_MEDIA_UPLOAD_COLUMNS = 'id, room_id, object_key, kind, mime_type, byte_size, filename, uploaded_by_client_id, expires_at, created_at';
 const AUDIO_TRANSCRIPTION_COLUMNS = 'asset_id, room_id, message_id, requested_by_client_id, status, transcript, language_code, provider, provider_transcript_id, error, created_at, updated_at, completed_at';
 const PUSH_SUBSCRIPTION_COLUMNS = 'endpoint, client_id, browser_instance_id, p256dh, auth, user_agent, created_at, updated_at';
 
@@ -233,6 +235,7 @@ const mapMediaAsset = (row: MediaAssetRow): MediaAsset => {
   };
 
   if (row.message_id) asset.messageId = row.message_id;
+  if (row.filename) asset.filename = row.filename;
   if (row.uploaded_by_client_id) asset.uploadedByClientId = row.uploaded_by_client_id;
   const width = toOptionalNumber(row.width);
   const height = toOptionalNumber(row.height);
@@ -243,17 +246,21 @@ const mapMediaAsset = (row: MediaAssetRow): MediaAsset => {
   return asset;
 };
 
-const mapPendingMediaUpload = (row: PendingMediaUploadRow): PendingMediaUpload => ({
-  assetId: row.id,
-  roomId: row.room_id,
-  objectKey: row.object_key,
-  kind: row.kind,
-  mimeType: row.mime_type,
-  byteSize: Number(row.byte_size) || 0,
-  uploadedByClientId: row.uploaded_by_client_id,
-  expiresAt: toIsoString(row.expires_at),
-  createdAt: toIsoString(row.created_at),
-});
+const mapPendingMediaUpload = (row: PendingMediaUploadRow): PendingMediaUpload => {
+  const upload: PendingMediaUpload = {
+    assetId: row.id,
+    roomId: row.room_id,
+    objectKey: row.object_key,
+    kind: row.kind,
+    mimeType: row.mime_type,
+    byteSize: Number(row.byte_size) || 0,
+    uploadedByClientId: row.uploaded_by_client_id,
+    expiresAt: toIsoString(row.expires_at),
+    createdAt: toIsoString(row.created_at),
+  };
+  if (row.filename) upload.filename = row.filename;
+  return upload;
+};
 
 const mapAudioTranscription = (row: AudioTranscriptionRow): AudioTranscriptionRecord => {
   const record: AudioTranscriptionRecord = {
@@ -292,6 +299,7 @@ const toMessageMediaAsset = (asset: MediaAsset): MessageMediaAsset => {
     mimeType: asset.mimeType,
     byteSize: asset.byteSize,
   };
+  if (asset.filename !== undefined) messageAsset.filename = asset.filename;
   if (asset.width !== undefined) messageAsset.width = asset.width;
   if (asset.height !== undefined) messageAsset.height = asset.height;
   if (asset.durationMs !== undefined) messageAsset.durationMs = asset.durationMs;
@@ -1138,16 +1146,18 @@ export class PostgresStore implements DurableRoomStore {
           kind,
           mime_type,
           byte_size,
+          filename,
           uploaded_by_client_id,
           expires_at,
           created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         ON CONFLICT (id) DO UPDATE SET
           room_id = EXCLUDED.room_id,
           object_key = EXCLUDED.object_key,
           kind = EXCLUDED.kind,
           mime_type = EXCLUDED.mime_type,
           byte_size = EXCLUDED.byte_size,
+          filename = EXCLUDED.filename,
           uploaded_by_client_id = EXCLUDED.uploaded_by_client_id,
           expires_at = EXCLUDED.expires_at`,
         [
@@ -1157,6 +1167,7 @@ export class PostgresStore implements DurableRoomStore {
           upload.kind,
           upload.mimeType,
           upload.byteSize,
+          upload.filename || null,
           upload.uploadedByClientId,
           upload.expiresAt,
           upload.createdAt,
@@ -2002,18 +2013,20 @@ export class PostgresStore implements DurableRoomStore {
         kind,
         mime_type,
         byte_size,
+        filename,
         width,
         height,
         duration_ms,
         uploaded_by_client_id,
         created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       ON CONFLICT (id) DO UPDATE SET
         message_id = EXCLUDED.message_id,
         object_key = EXCLUDED.object_key,
         kind = EXCLUDED.kind,
         mime_type = EXCLUDED.mime_type,
         byte_size = EXCLUDED.byte_size,
+        filename = EXCLUDED.filename,
         width = EXCLUDED.width,
         height = EXCLUDED.height,
         duration_ms = EXCLUDED.duration_ms,
@@ -2027,6 +2040,7 @@ export class PostgresStore implements DurableRoomStore {
         asset.kind,
         asset.mimeType,
         asset.byteSize,
+        asset.filename || null,
         asset.width ?? null,
         asset.height ?? null,
         asset.durationMs ?? null,

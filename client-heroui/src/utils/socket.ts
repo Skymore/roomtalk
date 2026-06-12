@@ -1,5 +1,6 @@
 import { default as io } from 'socket.io-client';
 import { v4 as uuidv4 } from 'uuid';
+import { clearStoredUsername, saveUsername } from './appPersistence';
 import {
   AudioTranscription,
   MediaKind,
@@ -41,6 +42,7 @@ const roomMemberCounts = new Map<string, number>();
 
 // Store callbacks for room member change events
 const roomMemberChangeCallbacks: ((event: RoomMemberEvent) => void)[] = [];
+const usernameAdoptedCallbacks: ((username: string) => void)[] = [];
 
 // Store current active room to rejoin after reconnection
 let activeRoomId: string | null = null;
@@ -94,6 +96,7 @@ type JoinRoomAckResponse = RoomAckResponse & {
 
 type RegisterAckResponse = SocketAckResponse & {
   clientId?: string;
+  nickname?: string;
 };
 
 export type ClientAuthStatus = {
@@ -103,6 +106,7 @@ export type ClientAuthStatus = {
 
 type ClientAuthResponse = ClientAuthStatus & {
   clientAuthToken: string;
+  nickname?: string | null;
 };
 
 type RoomPermissionsAckResponse = SocketAckResponse & {
@@ -362,6 +366,12 @@ export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS):
         settle(() => {
           if (response?.success) {
             registeredSocketId = socketId || socket.id || null;
+            const adopted = typeof response.nickname === 'string' ? response.nickname.trim() : '';
+            if (adopted && adopted !== currentUsername) {
+              currentUsername = adopted;
+              saveUsername(adopted);
+              usernameAdoptedCallbacks.forEach(callback => callback(adopted));
+            }
             pendingResolve();
             return;
           }
@@ -598,6 +608,15 @@ export const removeRoomAdmin = (roomId: string, targetClientId: string): Promise
   ).then(() => undefined);
 };
 
+export const removeRoomMember = (roomId: string, targetClientId: string): Promise<void> => {
+  return emitWithAck<SocketAckResponse>(
+    'remove_room_member',
+    { roomId, targetClientId },
+    'Timed out while removing room member',
+    'Failed to remove room member',
+  ).then(() => undefined);
+};
+
 export const transferRoomOwnership = (roomId: string, targetClientId: string): Promise<Room> => {
   return emitWithAck<RoomAckResponse>(
     'transfer_room_ownership',
@@ -695,6 +714,15 @@ export const loginWithClientPassword = async (targetClientId: string, password: 
     password,
   });
   localStorage.setItem('clientId', response.clientId);
+  const nickname = typeof response.nickname === 'string' ? response.nickname.trim() : '';
+  if (nickname) {
+    currentUsername = nickname;
+    saveUsername(nickname);
+    usernameAdoptedCallbacks.forEach(callback => callback(nickname));
+  } else {
+    currentUsername = '';
+    clearStoredUsername();
+  }
   setClientAuthToken(response.clientAuthToken);
   return { clientId: response.clientId, hasPassword: response.hasPassword };
 };
@@ -731,21 +759,21 @@ export const uploadMediaMessage = async (params: {
   replyToMessageId?: string;
   clientMessageId?: string;
   caption?: string;
+  filename?: string;
   width?: number;
   height?: number;
   durationMs?: number;
 }): Promise<Message> => {
   const mimeType = (params.mimeType || params.file.type || `${params.kind}/octet-stream`).toLowerCase();
   const byteSize = params.file.size;
-  const upload = await postJson<CreateMediaUploadResponse>('/api/media/uploads', {
-    ...withClientAuthBody({
+  const upload = await postJson<CreateMediaUploadResponse>('/api/media/uploads', withClientAuthBody({
     clientId,
     roomId: params.roomId,
     kind: params.kind,
     mimeType,
     byteSize,
-    }),
-  });
+    filename: params.filename,
+  }));
 
   await putMediaObject(upload.uploadUrl, params.file, mimeType);
 
@@ -761,6 +789,7 @@ export const uploadMediaMessage = async (params: {
     replyToMessageId: params.replyToMessageId,
     clientMessageId: params.clientMessageId,
     caption: params.caption,
+    filename: params.filename,
     width: params.width,
     height: params.height,
     durationMs: params.durationMs,
@@ -982,6 +1011,16 @@ export const onRoomMemberChange = (callback: (event: RoomMemberEvent) => void) =
     const index = roomMemberChangeCallbacks.indexOf(callback);
     if (index !== -1) {
       roomMemberChangeCallbacks.splice(index, 1);
+    }
+  };
+};
+
+export const onUsernameAdopted = (callback: (username: string) => void) => {
+  usernameAdoptedCallbacks.push(callback);
+  return () => {
+    const index = usernameAdoptedCallbacks.indexOf(callback);
+    if (index !== -1) {
+      usernameAdoptedCallbacks.splice(index, 1);
     }
   };
 };
