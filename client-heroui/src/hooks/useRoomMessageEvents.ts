@@ -176,7 +176,7 @@ export const useRoomMessageEvents = ({
         if (windowChanged) {
           updateMessages(roomMessages);
           setShowScrollButton(false);
-          scheduleScroll('auto', 100);
+          scheduleScroll('auto', 0);
         }
         cacheCurrentWindow(roomMessages, historyPayload.historyVersion, historyPayload.hasMore, historyPayload.oldestMessageId);
       }
