@@ -4,10 +4,13 @@ import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { getAvatarText, getAvatarColor } from "../utils/userProfile";
 import { getLanguageOption, languageOptions } from "../utils/languages";
+import { FeatureIntro } from "./FeatureIntro";
 import {
+  canUseShareSheet,
   disablePushNotifications,
   enablePushNotifications,
   getPushNotificationStatus,
+  openInstallShareSheet,
   PushNotificationStatus,
 } from "../utils/pushNotifications";
 
@@ -85,12 +88,48 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
+  const handleOpenInstallShareSheet = async () => {
+    setPushError('');
+    try {
+      await openInstallShareSheet();
+    } catch (error) {
+      setPushError(error instanceof Error ? error.message : t('notificationShareSheetError'));
+    }
+  };
+
   const pushStatusLabel = React.useMemo(() => {
     if (pushStatus === 'subscribed') return t('notificationStatusOn');
+    if (pushStatus === 'ios-install-required') return t('notificationStatusInstallRequired');
     if (pushStatus === 'denied') return t('notificationStatusDenied');
     if (pushStatus === 'unsupported') return t('notificationStatusUnsupported');
     if (pushStatus === 'server-disabled') return t('notificationStatusServerDisabled');
     return t('notificationStatusOff');
+  }, [pushStatus, t]);
+
+  const notificationIntro = React.useMemo(() => {
+    if (pushStatus === 'ios-install-required') {
+      return {
+        featureKey: 'push-notifications-ios-install',
+        title: t('notificationInstallIntroTitle'),
+        description: t('notificationInstallIntroDescription'),
+        actionLabel: canUseShareSheet() ? t('openShareSheet') : undefined,
+        onAction: canUseShareSheet() ? handleOpenInstallShareSheet : undefined,
+        actionIcon: 'lucide:share',
+      };
+    }
+
+    if (pushStatus === 'default' || pushStatus === 'unsubscribed') {
+      return {
+        featureKey: 'push-notifications',
+        title: t('notificationIntroTitle'),
+        description: t('notificationIntroDescription'),
+        actionLabel: t('enableNotifications'),
+        onAction: handleEnablePush,
+        actionIcon: 'lucide:bell',
+      };
+    }
+
+    return null;
   }, [pushStatus, t]);
 
   return (
@@ -183,6 +222,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               {t("notifications")}
             </div>
             <div className="flex min-w-0 flex-1 flex-col gap-2 sm:max-w-sm">
+              {notificationIntro && (
+                <FeatureIntro
+                  featureKey={notificationIntro.featureKey}
+                  title={notificationIntro.title}
+                  description={notificationIntro.description}
+                  actionLabel={notificationIntro.actionLabel}
+                  onAction={notificationIntro.onAction}
+                  actionIcon={notificationIntro.actionIcon}
+                />
+              )}
               <div className="flex flex-wrap items-center gap-2">
                 <Chip
                   size="sm"
@@ -206,7 +255,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     size="sm"
                     color="secondary"
                     className="bg-[#c96442] text-[#faf9f5]"
-                    isDisabled={pushStatus === 'unsupported' || pushStatus === 'server-disabled' || pushStatus === 'denied'}
+                    isDisabled={pushStatus === 'unsupported' || pushStatus === 'ios-install-required' || pushStatus === 'server-disabled' || pushStatus === 'denied'}
                     isLoading={isUpdatingPush}
                     startContent={!isUpdatingPush ? <Icon icon="lucide:bell" /> : undefined}
                     onPress={handleEnablePush}
@@ -216,7 +265,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 )}
               </div>
               <p className="text-xs leading-5 text-[#77756f] dark:text-[#b0aea5]">
-                {pushStatus === 'denied' ? t("notificationDeniedHelp") : t("notificationHelp")}
+                {pushStatus === 'denied'
+                  ? t("notificationDeniedHelp")
+                  : pushStatus === 'ios-install-required'
+                    ? t("notificationIOSInstallHelp")
+                    : t("notificationHelp")}
               </p>
               {pushError && (
                 <p className="text-xs leading-5 text-[#b54832] dark:text-[#ff8b6e]">{pushError}</p>
