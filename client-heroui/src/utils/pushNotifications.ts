@@ -1,4 +1,4 @@
-import { apiPath, clientId } from './socket';
+import { apiPath, clientId, withClientAuthBody } from './socket';
 
 export type PushNotificationStatus =
   | 'unsupported'
@@ -130,11 +130,11 @@ export const enablePushNotifications = async () => {
   const response = await fetch(apiPath('/api/push/subscriptions'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+    body: JSON.stringify(withClientAuthBody({
       clientId,
       subscription,
       userAgent: navigator.userAgent,
-    }),
+    })),
   });
   if (!response.ok) {
     await subscription.unsubscribe().catch(() => undefined);
@@ -156,10 +156,10 @@ export const disablePushNotifications = async () => {
   await fetch(apiPath('/api/push/subscriptions'), {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+    body: JSON.stringify(withClientAuthBody({
       clientId,
       endpoint: subscription.endpoint,
-    }),
+    })),
   }).catch(() => undefined);
   await subscription.unsubscribe();
 };
