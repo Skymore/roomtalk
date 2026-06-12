@@ -12,11 +12,9 @@ import {
   setClientPassword,
 } from "../utils/socket";
 import {
-  canUseShareSheet,
   disablePushNotifications,
   enablePushNotifications,
   getPushNotificationStatus,
-  openInstallShareSheet,
   PushNotificationStatus,
 } from "../utils/pushNotifications";
 
@@ -115,15 +113,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
-  const handleOpenInstallShareSheet = async () => {
-    setPushError('');
-    try {
-      await openInstallShareSheet();
-    } catch (error) {
-      setPushError(error instanceof Error ? error.message : t('notificationShareSheetError'));
-    }
-  };
-
   const handleSetClientPassword = async () => {
     setClientAuthError('');
     setClientAuthMessage('');
@@ -181,9 +170,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         featureKey: 'push-notifications-ios-install',
         title: t('notificationInstallIntroTitle'),
         description: t('notificationInstallIntroDescription'),
-        actionLabel: canUseShareSheet() ? t('openShareSheet') : undefined,
-        onAction: canUseShareSheet() ? handleOpenInstallShareSheet : undefined,
-        actionIcon: 'lucide:share',
       };
     }
 
