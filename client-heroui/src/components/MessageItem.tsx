@@ -15,6 +15,7 @@ import { formatPercentage, formatTime, formatUsdCost } from "../utils/formatters
 import { Message, RoomPermissions } from "../utils/types";
 import { useTranslation } from "react-i18next";
 import { useIsTouchDevice } from "../hooks/useIsTouchDevice";
+import { useCachedMedia } from "../hooks/useCachedMedia";
 import { MediaViewerModal } from "./MediaViewerModal";
 import { getVideoPreviewUrl } from "../utils/videoPreview";
 
@@ -188,7 +189,14 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   };
 
   const canOpenMediaViewer = Boolean(signedMediaUrl && !mediaError && (isImage || isVideo));
-  const videoPreviewUrl = signedMediaUrl && isVideo ? getVideoPreviewUrl(signedMediaUrl) : null;
+  const { mediaUrl: displayMediaUrl, posterUrl: videoPosterUrl } = useCachedMedia({
+    assetId: message.mediaAsset?.id,
+    url: signedMediaUrl,
+    kind: isImage ? "image" : isAudio ? "audio" : isVideo ? "video" : undefined,
+    mimeType: message.mediaAsset?.mimeType,
+    byteSize: message.mediaAsset?.byteSize,
+  });
+  const videoPreviewUrl = displayMediaUrl && isVideo ? getVideoPreviewUrl(displayMediaUrl) : null;
 
   const handleOpenMediaViewer = () => {
     if (canOpenMediaViewer) {
@@ -205,7 +213,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
           {t('mediaLoadFailed')}
         </div>
       );
-    } else if (signedMediaUrl && isImage) {
+    } else if (displayMediaUrl && isImage) {
       mediaContent = (
         <div className="relative inline-block max-w-full overflow-hidden rounded-xl bg-black/5 shadow-[0_0_0_1px_rgba(194,192,182,0.45)] dark:bg-white/5 dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)]">
           <button
@@ -215,7 +223,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
             onClick={handleOpenMediaViewer}
           >
             <img
-              src={signedMediaUrl}
+              src={displayMediaUrl}
               alt={t('sharedImage')}
               className="block max-h-[300px] max-w-full object-contain"
               onError={handleMediaError}
@@ -223,16 +231,16 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
           </button>
         </div>
       );
-    } else if (signedMediaUrl && isAudio) {
+    } else if (displayMediaUrl && isAudio) {
       mediaContent = (
         <audio
           controls
-          src={signedMediaUrl}
+          src={displayMediaUrl}
           className="roomtalk-audio-player block h-9 min-w-[180px] max-w-[240px]"
           onError={handleMediaError}
         />
       );
-    } else if (signedMediaUrl && isVideo) {
+    } else if (displayMediaUrl && isVideo) {
       mediaContent = (
         <div className="relative inline-block max-w-full overflow-hidden rounded-xl bg-black shadow-[0_0_0_1px_rgba(20,20,19,0.35)]">
           <button
@@ -242,7 +250,8 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
             onClick={handleOpenMediaViewer}
           >
             <video
-              src={videoPreviewUrl || signedMediaUrl}
+              src={videoPreviewUrl || displayMediaUrl}
+              poster={videoPosterUrl || undefined}
               className="pointer-events-none block max-h-[360px] max-w-full object-contain"
               preload="metadata"
               muted
@@ -532,6 +541,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
         roomId={message.roomId}
         assetId={message.mediaAsset?.id}
         mimeType={message.mediaAsset?.mimeType}
+        byteSize={message.mediaAsset?.byteSize}
         createdAt={message.timestamp}
         onClose={() => setIsMediaViewerOpen(false)}
       />
