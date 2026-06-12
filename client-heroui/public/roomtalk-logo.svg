@@ -1,15 +1,14 @@
 <svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="RoomTalk">
-  <circle cx="60" cy="60" r="54" fill="#30302e"/>
-  <circle cx="60" cy="60" r="54" fill="none" stroke="#dedbd0" stroke-width="4"/>
-  <path
-    d="M35 47c0-9.4 7.6-17 17-17h26c9.4 0 17 7.6 17 17v19c0 9.4-7.6 17-17 17H64.5L49.5 95V83H52c-9.4 0-17-7.6-17-17V47Z"
-    fill="#faf9f5"
-  />
-  <path
-    d="M43 47c0-5 4-9 9-9h26c5 0 9 4 9 9v19c0 5-4 9-9 9H61.5L55 80.5V75h-3c-5 0-9-4-9-9V47Z"
-    fill="#c96442"
-  />
-  <circle cx="57" cy="57" r="4" fill="#faf9f5"/>
-  <circle cx="67" cy="57" r="4" fill="#faf9f5"/>
-  <path d="M45 31c4.5-6 12.6-9 22-7" fill="none" stroke="#d97757" stroke-width="4" stroke-linecap="round"/>
+  <rect width="120" height="120" fill="#30302e"/>
+  <g transform="translate(-5 -2.5)">
+    <path
+      d="M35 47c0-9.4 7.6-17 17-17h26c9.4 0 17 7.6 17 17v19c0 9.4-7.6 17-17 17H64.5L49.5 95V83H52c-9.4 0-17-7.6-17-17V47Z"
+      fill="#fff8ee"
+    />
+    <path
+      d="M43 47c0-5 4-9 9-9h26c5 0 9 4 9 9v19c0 5-4 9-9 9H61.5L55 80.5V75h-3c-5 0-9-4-9-9V47Z"
+      fill="#f0911e"
+    />
+    <path transform="translate(65 57)" d="M0 -7.5 Q 1.4 -1.4 7.5 0 Q 1.4 1.4 0 7.5 Q -1.4 1.4 -7.5 0 Q -1.4 -1.4 0 -7.5 Z" fill="#52301a"/>
+  </g>
 </svg>
