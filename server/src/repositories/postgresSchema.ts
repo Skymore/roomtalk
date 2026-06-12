@@ -140,6 +140,20 @@ export const POSTGRES_SCHEMA_SQL = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_push_subscriptions_client_id
     ON push_subscriptions (client_id)`,
+  `CREATE TABLE IF NOT EXISTS client_passwords (
+    client_id TEXT PRIMARY KEY,
+    password_hash TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE TABLE IF NOT EXISTS client_auth_tokens (
+    token_hash TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    last_used_at TIMESTAMPTZ NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_client_auth_tokens_client_id
+    ON client_auth_tokens (client_id)`,
 ];
 
 // One-time data migrations, applied at most once and recorded in the

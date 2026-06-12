@@ -63,6 +63,18 @@ const durableRoomAccessStubs = () => ({
   async readPushSubscriptionsByRoom() {
     return [];
   },
+  async setClientPasswordHash() {},
+  async getClientPasswordHash() {
+    return null;
+  },
+  async saveClientAuthToken() {},
+  async isClientAuthTokenValid() {
+    return true;
+  },
+  async deleteClientAuthToken() {
+    return true;
+  },
+  async deleteClientAuthTokens() {},
   async readRoomPasswordHash() {
     return null;
   },
@@ -254,6 +266,12 @@ describe('CompositeRoomStore', () => {
       async savePushSubscription() { calls.push('durable.savePushSubscription'); },
       async deletePushSubscription() { calls.push('durable.deletePushSubscription'); return true; },
       async readPushSubscriptionsByRoom() { calls.push('durable.readPushSubscriptionsByRoom'); return []; },
+      async setClientPasswordHash() { calls.push('durable.setClientPasswordHash'); },
+      async getClientPasswordHash() { calls.push('durable.getClientPasswordHash'); return 'password-hash'; },
+      async saveClientAuthToken() { calls.push('durable.saveClientAuthToken'); },
+      async isClientAuthTokenValid() { calls.push('durable.isClientAuthTokenValid'); return true; },
+      async deleteClientAuthToken() { calls.push('durable.deleteClientAuthToken'); return true; },
+      async deleteClientAuthTokens() { calls.push('durable.deleteClientAuthTokens'); },
       async readRoomPasswordHash(_roomId: string) { calls.push('durable.readRoomPasswordHash'); return 'hash'; },
       async updateRoomSettings(_roomId: string) { calls.push('durable.updateRoomSettings'); return room({ hasPassword: true }); },
       async updateRoomMemberRole(roomId: string, clientId: string, role: RoomMemberRole, joinedAt = '2026-05-03T00:00:00.000Z') { calls.push('durable.updateRoomMemberRole'); return { roomId, clientId, role, joinedAt }; },
@@ -348,6 +366,12 @@ describe('CompositeRoomStore', () => {
     await store.savePushSubscription({ clientId: 'client-2', endpoint: 'https://push.example/1', p256dh: 'p256dh', auth: 'auth' });
     assert.equal(await store.deletePushSubscription('client-2', 'https://push.example/1'), true);
     assert.deepEqual(await store.readPushSubscriptionsByRoom('room-1'), []);
+    await store.setClientPasswordHash('client-2', 'password-hash');
+    assert.equal(await store.getClientPasswordHash('client-2'), 'password-hash');
+    await store.saveClientAuthToken({ clientId: 'client-2', tokenHash: 'token-hash', createdAt: '2026-05-03T00:00:00.000Z' });
+    assert.equal(await store.isClientAuthTokenValid('client-2', 'token-hash'), true);
+    assert.equal(await store.deleteClientAuthToken('client-2', 'token-hash'), true);
+    await store.deleteClientAuthTokens('client-2');
     assert.equal(await store.readRoomPasswordHash('room-1'), 'hash');
     assert.deepEqual(await store.updateRoomSettings('room-1', { passwordHash: 'hash' }), room({ hasPassword: true }));
     assert.deepEqual(await store.updateRoomMemberRole('room-1', 'client-2', 'admin'), { roomId: 'room-1', clientId: 'client-2', role: 'admin', joinedAt: '2026-05-03T00:00:00.000Z' });
@@ -411,6 +435,12 @@ describe('CompositeRoomStore', () => {
       'durable.savePushSubscription',
       'durable.deletePushSubscription',
       'durable.readPushSubscriptionsByRoom',
+      'durable.setClientPasswordHash',
+      'durable.getClientPasswordHash',
+      'durable.saveClientAuthToken',
+      'durable.isClientAuthTokenValid',
+      'durable.deleteClientAuthToken',
+      'durable.deleteClientAuthTokens',
       'durable.readRoomPasswordHash',
       'durable.updateRoomSettings',
       'durable.updateRoomMemberRole',

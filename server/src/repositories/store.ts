@@ -85,6 +85,12 @@ export interface SavePushSubscriptionInput {
   userAgent?: string;
 }
 
+export interface ClientAuthTokenRecord {
+  clientId: string;
+  tokenHash: string;
+  createdAt: string;
+}
+
 export interface RoomSettingsUpdate {
   passwordHash?: string | null;
   postingSchedule?: RoomPostingSchedule | null;
@@ -126,6 +132,12 @@ export interface DurableRoomStore {
   savePushSubscription(subscription: SavePushSubscriptionInput): Promise<void>;
   deletePushSubscription(clientId: string, endpoint: string): Promise<boolean>;
   readPushSubscriptionsByRoom(roomId: string): Promise<PushSubscriptionRecord[]>;
+  setClientPasswordHash(clientId: string, passwordHash: string): Promise<void>;
+  getClientPasswordHash(clientId: string): Promise<string | null>;
+  saveClientAuthToken(token: ClientAuthTokenRecord): Promise<void>;
+  isClientAuthTokenValid(clientId: string, tokenHash: string): Promise<boolean>;
+  deleteClientAuthToken(clientId: string, tokenHash: string): Promise<boolean>;
+  deleteClientAuthTokens(clientId: string): Promise<void>;
   readRoomPasswordHash(roomId: string): Promise<string | null>;
   updateRoomSettings(roomId: string, updates: RoomSettingsUpdate): Promise<Room | null>;
   updateRoomMemberRole(roomId: string, clientId: string, role: RoomMemberRole, joinedAt?: string): Promise<RoomMember | null>;
@@ -402,6 +414,30 @@ export class CompositeRoomStore implements RoomStore {
 
   readPushSubscriptionsByRoom(roomId: string) {
     return this.durableStore.readPushSubscriptionsByRoom(roomId);
+  }
+
+  setClientPasswordHash(clientId: string, passwordHash: string) {
+    return this.durableStore.setClientPasswordHash(clientId, passwordHash);
+  }
+
+  getClientPasswordHash(clientId: string) {
+    return this.durableStore.getClientPasswordHash(clientId);
+  }
+
+  saveClientAuthToken(token: ClientAuthTokenRecord) {
+    return this.durableStore.saveClientAuthToken(token);
+  }
+
+  isClientAuthTokenValid(clientId: string, tokenHash: string) {
+    return this.durableStore.isClientAuthTokenValid(clientId, tokenHash);
+  }
+
+  deleteClientAuthToken(clientId: string, tokenHash: string) {
+    return this.durableStore.deleteClientAuthToken(clientId, tokenHash);
+  }
+
+  deleteClientAuthTokens(clientId: string) {
+    return this.durableStore.deleteClientAuthTokens(clientId);
   }
 
   readRoomPasswordHash(roomId: string) {
