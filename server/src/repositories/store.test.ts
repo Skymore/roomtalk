@@ -1,7 +1,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { AICost, MediaAsset, Message, Room, RoomMemberRole } from '../types';
-import { CompositeRoomStore, DurableRoomStore, PendingMediaUpload, RealtimeRoomStore, RoomMessageCacheStore } from './store';
+import { AudioTranscriptionRecord, AudioTranscriptionUpdate, CompositeRoomStore, DurableRoomStore, PendingMediaUpload, RealtimeRoomStore, RoomMessageCacheStore } from './store';
 
 const room = (overrides: Partial<Room> = {}): Room => ({
   id: 'room-1',
@@ -126,6 +126,21 @@ const pendingUpload = (overrides: Partial<PendingMediaUpload> = {}): PendingMedi
   expiresAt: overrides.expiresAt || '2026-05-03T00:30:00.000Z',
 });
 
+const audioTranscription = (overrides: Partial<AudioTranscriptionRecord> = {}): AudioTranscriptionRecord => ({
+  assetId: overrides.assetId || 'asset-1',
+  roomId: overrides.roomId || 'room-1',
+  messageId: overrides.messageId || 'message-1',
+  requestedByClientId: overrides.requestedByClientId || 'client-1',
+  status: overrides.status || 'completed',
+  transcript: overrides.transcript || 'hello',
+  languageCode: overrides.languageCode || 'en',
+  provider: 'assemblyai',
+  providerTranscriptId: overrides.providerTranscriptId || 'provider-1',
+  createdAt: overrides.createdAt || '2026-05-03T00:00:00.000Z',
+  updatedAt: overrides.updatedAt || '2026-05-03T00:01:00.000Z',
+  completedAt: overrides.completedAt || '2026-05-03T00:01:00.000Z',
+});
+
 const durableMediaAssetStubs = () => ({
   async appendMediaMessageWithAsset(newMessage: Message, asset: MediaAsset) {
     return {
@@ -187,6 +202,24 @@ const durableMediaAssetStubs = () => ({
   async deletePendingMediaUpload() {},
   async claimExpiredPendingMediaUploads() {
     return [pendingUpload()];
+  },
+  async getAudioTranscription(assetId: string) {
+    return audioTranscription({ assetId });
+  },
+  async createAudioTranscription(record: AudioTranscriptionRecord) {
+    return record;
+  },
+  async updateAudioTranscription(assetId: string, updates: AudioTranscriptionUpdate) {
+    return audioTranscription({
+      assetId,
+      status: updates.status,
+      transcript: updates.transcript ?? undefined,
+      languageCode: updates.languageCode ?? undefined,
+      providerTranscriptId: updates.providerTranscriptId ?? undefined,
+      error: updates.error ?? undefined,
+      updatedAt: updates.updatedAt,
+      completedAt: updates.completedAt ?? undefined,
+    });
   },
 });
 
@@ -255,6 +288,9 @@ describe('CompositeRoomStore', () => {
       async getPendingMediaUpload(assetId: string) { calls.push('durable.getPendingMediaUpload'); return pendingUpload({ assetId }); },
       async deletePendingMediaUpload(_assetId: string) { calls.push('durable.deletePendingMediaUpload'); },
       async claimExpiredPendingMediaUploads(_now: string) { calls.push('durable.claimExpiredPendingMediaUploads'); return [pendingUpload()]; },
+      async getAudioTranscription(assetId: string) { calls.push('durable.getAudioTranscription'); return audioTranscription({ assetId }); },
+      async createAudioTranscription(record: AudioTranscriptionRecord) { calls.push('durable.createAudioTranscription'); return record; },
+      async updateAudioTranscription(assetId: string, updates: AudioTranscriptionUpdate) { calls.push('durable.updateAudioTranscription'); return audioTranscription({ assetId, status: updates.status || 'completed' }); },
       async readRoomAICost(roomId: string) { calls.push('durable.readRoomAICost'); return { roomId, currency: 'USD', totalUsd: 1 }; },
       async incrementRoomAICost(roomId: string, _cost: AICost | null) { calls.push('durable.incrementRoomAICost'); return { roomId, currency: 'USD', totalUsd: 2 }; },
       async saveRoom(newRoom: Room) { calls.push('durable.saveRoom'); return newRoom; },
@@ -355,6 +391,9 @@ describe('CompositeRoomStore', () => {
     assert.deepEqual(await store.getPendingMediaUpload('pending-1'), pendingUpload());
     await store.deletePendingMediaUpload('pending-1');
     assert.deepEqual(await store.claimExpiredPendingMediaUploads('2026-05-03T00:30:00.000Z'), [pendingUpload()]);
+    assert.deepEqual(await store.getAudioTranscription('asset-1'), audioTranscription({ assetId: 'asset-1' }));
+    assert.deepEqual(await store.createAudioTranscription(audioTranscription({ status: 'pending' })), audioTranscription({ status: 'pending' }));
+    assert.deepEqual(await store.updateAudioTranscription('asset-1', { status: 'processing' }), audioTranscription({ assetId: 'asset-1', status: 'processing' }));
     assert.deepEqual(await store.readRoomAICost('room-1'), { roomId: 'room-1', currency: 'USD', totalUsd: 1 });
     assert.deepEqual(await store.incrementRoomAICost('room-1', cost()), { roomId: 'room-1', currency: 'USD', totalUsd: 2 });
     assert.deepEqual(await store.saveRoom(room()), room());
@@ -424,6 +463,9 @@ describe('CompositeRoomStore', () => {
       'durable.getPendingMediaUpload',
       'durable.deletePendingMediaUpload',
       'durable.claimExpiredPendingMediaUploads',
+      'durable.getAudioTranscription',
+      'durable.createAudioTranscription',
+      'durable.updateAudioTranscription',
       'durable.readRoomAICost',
       'durable.incrementRoomAICost',
       'durable.saveRoom',

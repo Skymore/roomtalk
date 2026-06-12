@@ -117,6 +117,23 @@ export const POSTGRES_SCHEMA_SQL = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_pending_media_uploads_expires
     ON pending_media_uploads (expires_at ASC)`,
+  `CREATE TABLE IF NOT EXISTS audio_transcriptions (
+    asset_id TEXT PRIMARY KEY REFERENCES media_assets(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    requested_by_client_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+    transcript TEXT,
+    language_code TEXT,
+    provider TEXT NOT NULL CHECK (provider IN ('assemblyai')),
+    provider_transcript_id TEXT,
+    error TEXT,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    completed_at TIMESTAMPTZ
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_audio_transcriptions_room_message
+    ON audio_transcriptions (room_id, message_id)`,
   `CREATE TABLE IF NOT EXISTS room_ai_cost_totals (
     room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
     total_usd NUMERIC(18, 9) NOT NULL DEFAULT 0,

@@ -3,7 +3,7 @@ import { Server } from 'socket.io';
 import { RedisClientType } from 'redis';
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../logger';
-import { MediaHistoryPageCursor, RoomStore } from '../repositories/store';
+import { AudioTranscriptionRecord, MediaHistoryPageCursor, RoomStore } from '../repositories/store';
 import { MediaAsset, MediaKind, Message, Room } from '../types';
 import { AIRoleDraft, MAX_AI_ROLE_IDEA_LENGTH } from '../services/aiRoleGenerator';
 import { hasRoomAccess } from '../socket/roomAccess';
@@ -11,6 +11,7 @@ import { authorizeRoomAction } from '../socket/roomAuthorization';
 import { createMediaMessage, createReplyReference } from '../services/messageDomain';
 import { decodeLocalMediaObjectKey, LocalMediaObjectStorage, MediaObjectStorage } from '../services/mediaObjectStorage';
 import { getPushPublicConfig, notifyRoomMessageBestEffort } from '../services/pushNotifications';
+import { AudioTranscriptionRunner } from '../services/audioTranscription';
 import {
   hashClientAuthToken,
   hashClientPassword,
@@ -29,6 +30,7 @@ interface ApiRouteOptions {
   generateAIRoleDraft: (idea: string) => Promise<AIRoleDraft>;
   persistenceStore?: string;
   mediaObjectStorage: MediaObjectStorage;
+  audioTranscriptionRunner?: AudioTranscriptionRunner;
   mediaUploadCleanup?: {
     disabled?: boolean;
     pendingUploadTtlMs?: number;
@@ -137,6 +139,18 @@ const parseMediaHistoryKinds = (value: unknown): MediaKind[] => {
   return MEDIA_HISTORY_KINDS;
 };
 
+const serializeAudioTranscription = (record: AudioTranscriptionRecord) => ({
+  assetId: record.assetId,
+  roomId: record.roomId,
+  messageId: record.messageId,
+  status: record.status,
+  transcript: record.transcript,
+  languageCode: record.languageCode,
+  error: record.error,
+  updatedAt: record.updatedAt,
+  completedAt: record.completedAt,
+});
+
 const parsePushSubscriptionBody = (body: unknown) => {
   const payload = body && typeof body === 'object' ? body as Record<string, any> : {};
   const subscription = payload.subscription && typeof payload.subscription === 'object'
@@ -191,7 +205,7 @@ const consumeMediaUploadRateLimit = (clientId: string, ip: string | undefined, n
 };
 
 export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
-  const { store, io, redisClient, routeLogger, getAIModelResponse, generateAIRoleDraft, persistenceStore = 'redis', mediaObjectStorage } = options;
+  const { store, io, redisClient, routeLogger, getAIModelResponse, generateAIRoleDraft, persistenceStore = 'redis', mediaObjectStorage, audioTranscriptionRunner } = options;
   const mediaUploadCleanup = options.mediaUploadCleanup || {};
   const getNowMs = mediaUploadCleanup.nowMs || (() => Date.now());
   const pendingUploadTtlMs = mediaUploadCleanup.pendingUploadTtlMs ?? MEDIA_PENDING_UPLOAD_TTL_MS;
@@ -323,6 +337,80 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     routeLogger.warn('Rejected request with invalid client auth token', { endpoint, clientId, ip: req.ip });
     res.status(401).json({ error: 'User ID password login is required' });
     return false;
+  };
+
+  const runningAudioTranscriptionJobs = new Set<string>();
+  const scheduleAudioTranscriptionJob = (record: AudioTranscriptionRecord, asset: MediaAsset) => {
+    if (record.status === 'completed' || runningAudioTranscriptionJobs.has(record.assetId)) {
+      return;
+    }
+
+    runningAudioTranscriptionJobs.add(record.assetId);
+    if (!audioTranscriptionRunner) {
+      void store.updateAudioTranscription(record.assetId, {
+        status: 'failed',
+        error: 'Audio transcription is not configured',
+        completedAt: null,
+      }).finally(() => {
+        runningAudioTranscriptionJobs.delete(record.assetId);
+      });
+      return;
+    }
+
+    void audioTranscriptionRunner({ record, asset })
+      .catch((error) => {
+        routeLogger.error('Audio transcription runner rejected', {
+          error: error instanceof Error ? error.message : error,
+          assetId: record.assetId,
+          roomId: record.roomId,
+          messageId: record.messageId,
+        });
+      })
+      .finally(() => {
+        runningAudioTranscriptionJobs.delete(record.assetId);
+      });
+  };
+
+  const resolveAudioMessageForTranscription = async (req: Request, res: Response, input: {
+    roomId: string;
+    messageId: string;
+    clientId: string | null;
+    endpoint: string;
+  }): Promise<{ message: Message; asset: MediaAsset } | null> => {
+    const { roomId, messageId, clientId, endpoint } = input;
+    if (!roomId || !messageId || !clientId) {
+      res.status(400).json({ error: 'roomId, messageId, and clientId are required' });
+      return null;
+    }
+    if (!(await authorizeClientRequest(req, res, clientId, endpoint))) {
+      return null;
+    }
+    if (!(await hasRoomAccess(store, roomId, clientId))) {
+      routeLogger.warn('Unauthorized audio transcription request', { endpoint, clientId, roomId, messageId, ip: req.ip });
+      res.status(403).json({ error: 'Not authorized to access this room' });
+      return null;
+    }
+
+    const messages = await store.readMessagesByRoom(roomId);
+    const message = messages.find(item => item.id === messageId);
+    if (!message) {
+      res.status(404).json({ error: 'Message not found' });
+      return null;
+    }
+    if (message.messageType !== 'media' || message.mediaAsset?.kind !== 'audio') {
+      res.status(400).json({ error: 'Message is not an audio message' });
+      return null;
+    }
+
+    const asset = message.mediaAsset?.id
+      ? await store.getMediaAsset(message.mediaAsset.id)
+      : await store.getMediaAssetByMessageId(messageId);
+    if (!asset || asset.roomId !== roomId || asset.kind !== 'audio' || asset.messageId !== messageId) {
+      res.status(404).json({ error: 'Audio media asset not found' });
+      return null;
+    }
+
+    return { message, asset };
   };
 
   app.get('/api/push/vapid-public-key', (_req: Request, res: Response) => {
@@ -503,6 +591,89 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     routeLogger.info('API request for room messages', { endpoint: '/api/rooms/:roomId/messages', roomId, clientId, ip: req.ip });
     const filteredMessages = await store.readMessagesByRoom(roomId);
     return res.json(filteredMessages);
+  });
+
+  app.get('/api/rooms/:roomId/messages/:messageId/audio-transcription', async (req: Request, res: Response) => {
+    try {
+      const { roomId, messageId } = req.params;
+      const resolved = await resolveAudioMessageForTranscription(req, res, {
+        roomId,
+        messageId,
+        clientId: getQueryClientId(req),
+        endpoint: 'GET /api/rooms/:roomId/messages/:messageId/audio-transcription',
+      });
+      if (!resolved) {
+        return;
+      }
+
+      const record = await store.getAudioTranscription(resolved.asset.id);
+      if (!record) {
+        return res.json({
+          assetId: resolved.asset.id,
+          roomId,
+          messageId,
+          status: 'not_requested',
+        });
+      }
+
+      if (record.status === 'pending' || record.status === 'processing') {
+        scheduleAudioTranscriptionJob(record, resolved.asset);
+      }
+      return res.json(serializeAudioTranscription(record));
+    } catch (error) {
+      routeLogger.error('Failed to read audio transcription', { error, endpoint: 'GET /api/rooms/:roomId/messages/:messageId/audio-transcription', roomId: req.params.roomId, messageId: req.params.messageId, ip: req.ip });
+      return res.status(500).json({ error: 'Failed to load audio transcription' });
+    }
+  });
+
+  app.post('/api/rooms/:roomId/messages/:messageId/audio-transcription', async (req: Request, res: Response) => {
+    try {
+      const { roomId, messageId } = req.params;
+      const clientId = getBodyClientId(req);
+      const resolved = await resolveAudioMessageForTranscription(req, res, {
+        roomId,
+        messageId,
+        clientId,
+        endpoint: 'POST /api/rooms/:roomId/messages/:messageId/audio-transcription',
+      });
+      if (!resolved || !clientId) {
+        return;
+      }
+
+      const now = new Date().toISOString();
+      let record = await store.getAudioTranscription(resolved.asset.id);
+      if (!record) {
+        record = await store.createAudioTranscription({
+          assetId: resolved.asset.id,
+          roomId,
+          messageId,
+          requestedByClientId: clientId,
+          status: 'pending',
+          provider: 'assemblyai',
+          createdAt: now,
+          updatedAt: now,
+        });
+      } else if (record.status === 'failed') {
+        record = await store.updateAudioTranscription(record.assetId, {
+          status: 'pending',
+          transcript: null,
+          languageCode: null,
+          providerTranscriptId: null,
+          error: null,
+          completedAt: null,
+          updatedAt: now,
+        }) || record;
+      }
+
+      if (record.status !== 'completed') {
+        scheduleAudioTranscriptionJob(record, resolved.asset);
+      }
+
+      return res.status(record.status === 'completed' ? 200 : 202).json(serializeAudioTranscription(record));
+    } catch (error) {
+      routeLogger.error('Failed to start audio transcription', { error, endpoint: 'POST /api/rooms/:roomId/messages/:messageId/audio-transcription', roomId: req.params.roomId, messageId: req.params.messageId, ip: req.ip });
+      return res.status(500).json({ error: 'Failed to start audio transcription' });
+    }
   });
 
   app.get('/api/clients/:clientId/rooms', async (req: Request, res: Response) => {

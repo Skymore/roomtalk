@@ -42,6 +42,20 @@ export interface RoomMediaHistoryPage {
 
 export type RoomMediaHistoryKindFilter = 'image' | 'video';
 
+export type AudioTranscriptionStatus = 'not_requested' | 'pending' | 'processing' | 'completed' | 'failed';
+
+export interface AudioTranscription {
+  assetId: string;
+  roomId: string;
+  messageId: string;
+  status: AudioTranscriptionStatus;
+  transcript?: string;
+  languageCode?: string;
+  error?: string;
+  updatedAt?: string;
+  completedAt?: string;
+}
+
 export interface Message {
   id: string;
   clientId: string;

@@ -7,11 +7,15 @@ import { MessageItem } from './MessageItem';
 
 const getMediaDownloadUrlMock = vi.hoisted(() => vi.fn());
 const getRoomMediaHistoryMock = vi.hoisted(() => vi.fn());
+const getAudioTranscriptionMock = vi.hoisted(() => vi.fn());
+const requestAudioTranscriptionMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../utils/socket', () => ({
   clientId: 'viewer',
+  getAudioTranscription: getAudioTranscriptionMock,
   getMediaDownloadUrl: getMediaDownloadUrlMock,
   getRoomMediaHistory: getRoomMediaHistoryMock,
+  requestAudioTranscription: requestAudioTranscriptionMock,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -57,12 +61,20 @@ describe('MessageItem replies', () => {
       nextCursor: null,
       windowMonths: 6,
     });
+    getAudioTranscriptionMock.mockResolvedValue({
+      assetId: 'audio-1',
+      roomId: 'room-1',
+      messageId: 'audio-message',
+      status: 'not_requested',
+    });
   });
 
   afterEach(() => {
     cleanup();
     getMediaDownloadUrlMock.mockReset();
     getRoomMediaHistoryMock.mockReset();
+    getAudioTranscriptionMock.mockReset();
+    requestAudioTranscriptionMock.mockReset();
   });
 
   it('shows reply context and exposes a touch-accessible reply action', () => {
@@ -614,7 +626,70 @@ describe('MessageItem replies', () => {
     await waitFor(() => {
       expect(audio?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/audio-1.webm');
     });
-    expect(audio?.parentElement?.className).toBe('w-fit max-w-full');
+    expect(audio?.parentElement?.className).toContain('w-fit max-w-full');
+    await waitFor(() => {
+      expect(getAudioTranscriptionMock).toHaveBeenCalledWith({ roomId: 'room-1', messageId: 'audio-message' });
+    });
+    expect(screen.getByText('transcribeAudio')).toBeTruthy();
+  });
+
+  it('requests and displays persisted audio transcriptions with hide and show controls', async () => {
+    getMediaDownloadUrlMock.mockResolvedValue({
+      url: 'https://signed.example/rooms/room-1/audio-1.webm',
+      expiresAt: '2026-05-03T10:15:00.000Z',
+    });
+    getAudioTranscriptionMock.mockResolvedValue({
+      assetId: 'audio-1',
+      roomId: 'room-1',
+      messageId: 'audio-message',
+      status: 'not_requested',
+    });
+    requestAudioTranscriptionMock.mockResolvedValue({
+      assetId: 'audio-1',
+      roomId: 'room-1',
+      messageId: 'audio-message',
+      status: 'completed',
+      transcript: '你好 hello',
+      languageCode: 'zh',
+      updatedAt: '2026-05-03T10:16:00.000Z',
+      completedAt: '2026-05-03T10:16:00.000Z',
+    });
+
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'audio-message',
+          content: '',
+          messageType: 'media',
+          mediaAsset: {
+            id: 'audio-1',
+            kind: 'audio',
+            mimeType: 'audio/webm',
+            byteSize: 456,
+            durationMs: 1200,
+          },
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    fireEvent.click(await screen.findByText('transcribeAudio'));
+    await waitFor(() => {
+      expect(requestAudioTranscriptionMock).toHaveBeenCalledWith({ roomId: 'room-1', messageId: 'audio-message' });
+    });
+    expect(await screen.findByText('你好 hello')).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText('hideAudioTranscript'));
+    await waitFor(() => {
+      expect(screen.queryByText('你好 hello')).toBeNull();
+    });
+
+    fireEvent.click(screen.getByText('showAudioTranscript'));
+    expect(await screen.findByText('你好 hello')).toBeTruthy();
   });
 
   it('renders videos as tap-to-open previews and plays them inside the media viewer', async () => {

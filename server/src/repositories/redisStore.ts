@@ -3,7 +3,7 @@ import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
 import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, stripAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
-import { ClientAuthTokenRecord, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput } from './store';
+import { AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAuthTokenRecord, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput } from './store';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 const DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS = 30;
@@ -15,6 +15,7 @@ const getRoomMediaAssetsKey = (roomId: string) => `room:${roomId}:media_assets`;
 const getRoomMediaAssetsTimelineKey = (roomId: string) => `room:${roomId}:media_assets_by_time`;
 const PENDING_MEDIA_UPLOADS_KEY = 'pending_media_uploads';
 const PENDING_MEDIA_UPLOADS_BY_EXPIRY_KEY = 'pending_media_uploads_by_expiry';
+const AUDIO_TRANSCRIPTIONS_KEY = 'audio_transcriptions';
 const getSavedRoomsKey = (clientId: string) => `user:${clientId}:saved_rooms`;
 const getRoomSavedByKey = (roomId: string) => `room:${roomId}:saved_by`;
 const getRoomPasswordHashKey = (roomId: string) => `room:${roomId}:password_hash`;
@@ -1252,6 +1253,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     try {
       const asset = await this.getMediaAsset(assetId);
       await this.redisClient.hDel('media_assets', assetId);
+      await this.redisClient.hDel(AUDIO_TRANSCRIPTIONS_KEY, assetId);
       if (asset) {
         await this.redisClient.sRem(getRoomMediaAssetsKey(asset.roomId), assetId);
         await (this.redisClient as any).zRem(getRoomMediaAssetsTimelineKey(asset.roomId), assetId);
@@ -1322,6 +1324,72 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     } catch (error) {
       this.logger.error('Error claiming expired Redis pending media uploads', { error, now, limit: safeLimit });
       return [];
+    }
+  }
+
+  async getAudioTranscription(assetId: string): Promise<AudioTranscriptionRecord | null> {
+    try {
+      const rawRecord = await this.redisClient.hGet(AUDIO_TRANSCRIPTIONS_KEY, assetId);
+      return rawRecord ? JSON.parse(rawRecord) as AudioTranscriptionRecord : null;
+    } catch (error) {
+      this.logger.error('Error reading Redis audio transcription', { error, assetId });
+      return null;
+    }
+  }
+
+  async createAudioTranscription(record: AudioTranscriptionRecord): Promise<AudioTranscriptionRecord> {
+    try {
+      const existing = await this.getAudioTranscription(record.assetId);
+      if (existing) {
+        return existing;
+      }
+
+      await this.redisClient.hSet(AUDIO_TRANSCRIPTIONS_KEY, record.assetId, JSON.stringify(record));
+      return record;
+    } catch (error) {
+      this.logger.error('Error creating Redis audio transcription', { error, assetId: record.assetId, roomId: record.roomId, messageId: record.messageId });
+      throw error;
+    }
+  }
+
+  async updateAudioTranscription(assetId: string, updates: AudioTranscriptionUpdate): Promise<AudioTranscriptionRecord | null> {
+    try {
+      const existing = await this.getAudioTranscription(assetId);
+      if (!existing) {
+        return null;
+      }
+
+      const nextRecord: AudioTranscriptionRecord = {
+        ...existing,
+        updatedAt: updates.updatedAt || new Date().toISOString(),
+      };
+      if (updates.status !== undefined) nextRecord.status = updates.status;
+      if (updates.transcript !== undefined) {
+        if (updates.transcript === null) delete nextRecord.transcript;
+        else nextRecord.transcript = updates.transcript;
+      }
+      if (updates.languageCode !== undefined) {
+        if (updates.languageCode === null) delete nextRecord.languageCode;
+        else nextRecord.languageCode = updates.languageCode;
+      }
+      if (updates.providerTranscriptId !== undefined) {
+        if (updates.providerTranscriptId === null) delete nextRecord.providerTranscriptId;
+        else nextRecord.providerTranscriptId = updates.providerTranscriptId;
+      }
+      if (updates.error !== undefined) {
+        if (updates.error === null) delete nextRecord.error;
+        else nextRecord.error = updates.error;
+      }
+      if (updates.completedAt !== undefined) {
+        if (updates.completedAt === null) delete nextRecord.completedAt;
+        else nextRecord.completedAt = updates.completedAt;
+      }
+
+      await this.redisClient.hSet(AUDIO_TRANSCRIPTIONS_KEY, assetId, JSON.stringify(nextRecord));
+      return nextRecord;
+    } catch (error) {
+      this.logger.error('Error updating Redis audio transcription', { error, assetId, updates });
+      throw error;
     }
   }
 
@@ -2044,6 +2112,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         this.redisClient.del(getRoomMediaAssetsTimelineKey(roomId)),
         ...members.map(member => this.redisClient.del(`room:${roomId}:member_sockets:${member.clientId}`)),
         ...mediaAssets.map(asset => this.redisClient.hDel('media_assets', asset.id)),
+        ...mediaAssets.map(asset => this.redisClient.hDel(AUDIO_TRANSCRIPTIONS_KEY, asset.id)),
         ...members.map(member => this.redisClient.sRem(`user:${member.clientId}:rooms`, roomId)),
         ...savedByClientIds.map(clientId => this.redisClient.hDel(getSavedRoomsKey(clientId), roomId)),
         this.redisClient.del(getRoomSavedByKey(roomId)),

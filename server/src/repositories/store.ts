@@ -67,6 +67,34 @@ export interface PendingMediaUpload {
   createdAt: string;
 }
 
+export type AudioTranscriptionStatus = 'pending' | 'processing' | 'completed' | 'failed';
+
+export interface AudioTranscriptionRecord {
+  assetId: string;
+  roomId: string;
+  messageId: string;
+  requestedByClientId: string;
+  status: AudioTranscriptionStatus;
+  transcript?: string;
+  languageCode?: string;
+  provider: 'assemblyai';
+  providerTranscriptId?: string;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export interface AudioTranscriptionUpdate {
+  status?: AudioTranscriptionStatus;
+  transcript?: string | null;
+  languageCode?: string | null;
+  providerTranscriptId?: string | null;
+  error?: string | null;
+  updatedAt?: string;
+  completedAt?: string | null;
+}
+
 export interface PushSubscriptionRecord {
   clientId: string;
   endpoint: string;
@@ -121,6 +149,9 @@ export interface DurableRoomStore {
   getPendingMediaUpload(assetId: string): Promise<PendingMediaUpload | null>;
   deletePendingMediaUpload(assetId: string): Promise<void>;
   claimExpiredPendingMediaUploads(now: string, limit?: number): Promise<PendingMediaUpload[]>;
+  getAudioTranscription(assetId: string): Promise<AudioTranscriptionRecord | null>;
+  createAudioTranscription(record: AudioTranscriptionRecord): Promise<AudioTranscriptionRecord>;
+  updateAudioTranscription(assetId: string, updates: AudioTranscriptionUpdate): Promise<AudioTranscriptionRecord | null>;
   readRoomAICost(roomId: string): Promise<RoomAICostTotal>;
   incrementRoomAICost(roomId: string, cost: AICost | null): Promise<RoomAICostTotal>;
   saveRoom(room: Room): Promise<Room | null>;
@@ -370,6 +401,18 @@ export class CompositeRoomStore implements RoomStore {
 
   claimExpiredPendingMediaUploads(now: string, limit?: number) {
     return this.durableStore.claimExpiredPendingMediaUploads(now, limit);
+  }
+
+  getAudioTranscription(assetId: string) {
+    return this.durableStore.getAudioTranscription(assetId);
+  }
+
+  createAudioTranscription(record: AudioTranscriptionRecord) {
+    return this.durableStore.createAudioTranscription(record);
+  }
+
+  updateAudioTranscription(assetId: string, updates: AudioTranscriptionUpdate) {
+    return this.durableStore.updateAudioTranscription(assetId, updates);
   }
 
   readRoomAICost(roomId: string) {

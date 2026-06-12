@@ -70,6 +70,7 @@ vi.mock('uuid', () => ({
 
 const {
   ensureRoomJoined,
+  getAudioTranscription,
   getClientAuthStatus,
   getMediaDownloadUrl,
   getRoomMediaHistory,
@@ -81,6 +82,7 @@ const {
   saveRoomToServer,
   sendMessage,
   sendMessageAndAskAI,
+  requestAudioTranscription,
   setClientPassword,
   setClientAuthToken,
   setUsername,
@@ -552,6 +554,48 @@ describe('socket message acknowledgement helpers', () => {
     });
 
     expect(fetchMock).toHaveBeenCalledWith('/api/rooms/room-1/media-history?clientId=client-uuid&clientAuthToken=auth-token-1');
+  });
+
+  it('loads and requests audio transcriptions with client auth', async () => {
+    setClientAuthToken('auth-token-1');
+    const transcription = {
+      assetId: 'audio-asset-1',
+      roomId: 'room-1',
+      messageId: 'message-1',
+      status: 'completed',
+      transcript: 'hello',
+      languageCode: 'en',
+      updatedAt: '2026-05-03T10:16:00.000Z',
+      completedAt: '2026-05-03T10:16:00.000Z',
+    };
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify(transcription), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...transcription, status: 'processing', transcript: undefined }), {
+        status: 202,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+
+    await expect(getAudioTranscription({ roomId: 'room-1', messageId: 'message-1' })).resolves.toEqual(transcription);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/rooms/room-1/messages/message-1/audio-transcription?clientId=client-uuid&clientAuthToken=auth-token-1',
+      { cache: 'no-store' },
+    );
+
+    await expect(requestAudioTranscription({ roomId: 'room-1', messageId: 'message-1' })).resolves.toMatchObject({
+      assetId: 'audio-asset-1',
+      status: 'processing',
+    });
+    const request = fetchMock.mock.calls[1][1] as RequestInit;
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/rooms/room-1/messages/message-1/audio-transcription');
+    expect(request.method).toBe('POST');
+    expect(JSON.parse(request.body as string)).toEqual({
+      clientId: 'client-uuid',
+      clientAuthToken: 'auth-token-1',
+    });
   });
 
   it('returns saved rooms from get_saved_rooms acknowledgements', async () => {
