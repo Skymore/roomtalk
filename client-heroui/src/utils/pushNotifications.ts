@@ -2,6 +2,7 @@ import { apiPath, clientId } from './socket';
 
 export type PushNotificationStatus =
   | 'unsupported'
+  | 'ios-install-required'
   | 'server-disabled'
   | 'default'
   | 'denied'
@@ -14,6 +15,7 @@ type PushPublicKeyResponse = {
 };
 
 const serviceWorkerPath = '/sw.js';
+const IOS_DEVICE_PATTERN = /iPad|iPhone|iPod/;
 
 const urlBase64ToUint8Array = (base64String: string) => {
   const padding = '='.repeat((4 - base64String.length % 4) % 4);
@@ -35,6 +37,22 @@ export const isPushNotificationSupported = () => (
   'Notification' in window
 );
 
+export const isIOSDevice = () => (
+  typeof navigator !== 'undefined' &&
+  (IOS_DEVICE_PATTERN.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1))
+);
+
+export const isStandaloneWebApp = () => (
+  typeof window !== 'undefined' &&
+  (window.matchMedia('(display-mode: standalone)').matches ||
+    Boolean((navigator as Navigator & { standalone?: boolean }).standalone))
+);
+
+export const canUseShareSheet = () => (
+  typeof navigator !== 'undefined' && typeof navigator.share === 'function'
+);
+
 export const getPushPublicKey = async (): Promise<PushPublicKeyResponse> => {
   const response = await fetch(apiPath('/api/push/vapid-public-key'), { cache: 'no-store' });
   if (!response.ok) {
@@ -49,6 +67,10 @@ const getServiceWorkerRegistration = async () => {
 };
 
 export const getPushNotificationStatus = async (): Promise<PushNotificationStatus> => {
+  if (isIOSDevice() && !isStandaloneWebApp()) {
+    return 'ios-install-required';
+  }
+
   if (!isPushNotificationSupported()) {
     return 'unsupported';
   }
@@ -69,6 +91,18 @@ export const getPushNotificationStatus = async (): Promise<PushNotificationStatu
   }
 
   return Notification.permission === 'default' ? 'default' : 'unsubscribed';
+};
+
+export const openInstallShareSheet = async () => {
+  if (!canUseShareSheet()) {
+    throw new Error('Share sheet is not available in this browser');
+  }
+
+  await navigator.share({
+    title: 'RoomTalk',
+    text: 'Add RoomTalk to your Home Screen, then open it from there to enable notifications.',
+    url: window.location.origin,
+  });
 };
 
 export const enablePushNotifications = async () => {
