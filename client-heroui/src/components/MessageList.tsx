@@ -455,7 +455,6 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
         data-testid="message-list-scroll"
         ref={containerRef}
         className="relative flex h-full w-full flex-col overflow-y-auto bg-[#f5f4ed] p-3 dark:bg-[#141413]"
-        style={{ paddingBottom: bottomPaddingPx }}
         onScroll={handleScroll}
       >
         <div ref={contentRef} data-testid="message-list-content" className="flex min-h-full flex-col">
@@ -528,6 +527,12 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
               ))}
             </div>
           )}
+          <div
+            aria-hidden="true"
+            data-testid="message-list-bottom-spacer"
+            className="flex-shrink-0"
+            style={{ height: bottomPaddingPx }}
+          />
           <div ref={messagesEndRef} />
         </div>
       </div>
