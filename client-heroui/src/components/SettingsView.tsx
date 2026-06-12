@@ -6,6 +6,12 @@ import { getAvatarText, getAvatarColor } from "../utils/userProfile";
 import { getLanguageOption, languageOptions } from "../utils/languages";
 import { FeatureIntro } from "./FeatureIntro";
 import {
+  ClientAuthStatus,
+  getClientAuthStatus,
+  loginWithClientPassword,
+  setClientPassword,
+} from "../utils/socket";
+import {
   canUseShareSheet,
   disablePushNotifications,
   enablePushNotifications,
@@ -46,6 +52,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [pushStatus, setPushStatus] = React.useState<PushNotificationStatus>('unsupported');
   const [pushError, setPushError] = React.useState('');
   const [isUpdatingPush, setIsUpdatingPush] = React.useState(false);
+  const [clientAuthStatus, setClientAuthStatus] = React.useState<ClientAuthStatus | null>(null);
+  const [isUpdatingClientAuth, setIsUpdatingClientAuth] = React.useState(false);
+  const [clientAuthError, setClientAuthError] = React.useState('');
+  const [clientAuthMessage, setClientAuthMessage] = React.useState('');
+  const [currentClientPassword, setCurrentClientPassword] = React.useState('');
+  const [newClientPassword, setNewClientPassword] = React.useState('');
+  const [loginClientId, setLoginClientId] = React.useState('');
+  const [loginPassword, setLoginPassword] = React.useState('');
 
   const refreshPushStatus = React.useCallback(async () => {
     try {
@@ -60,6 +74,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   React.useEffect(() => {
     void refreshPushStatus();
   }, [refreshPushStatus]);
+
+  const refreshClientAuthStatus = React.useCallback(async () => {
+    try {
+      setClientAuthStatus(await getClientAuthStatus(clientId));
+      setClientAuthError('');
+    } catch (error) {
+      setClientAuthError(error instanceof Error ? error.message : t('userIdLoginUnknownError'));
+    }
+  }, [clientId, t]);
+
+  React.useEffect(() => {
+    void refreshClientAuthStatus();
+  }, [refreshClientAuthStatus]);
 
   const handleEnablePush = async () => {
     setIsUpdatingPush(true);
@@ -94,6 +121,48 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       await openInstallShareSheet();
     } catch (error) {
       setPushError(error instanceof Error ? error.message : t('notificationShareSheetError'));
+    }
+  };
+
+  const handleSetClientPassword = async () => {
+    setClientAuthError('');
+    setClientAuthMessage('');
+    if (newClientPassword.length < 8 || newClientPassword.length > 128) {
+      setClientAuthError(t('userIdPasswordLengthError'));
+      return;
+    }
+
+    setIsUpdatingClientAuth(true);
+    try {
+      const status = await setClientPassword(newClientPassword, currentClientPassword || undefined);
+      setClientAuthStatus(status);
+      setCurrentClientPassword('');
+      setNewClientPassword('');
+      setClientAuthMessage(t('userIdPasswordSaved'));
+    } catch (error) {
+      setClientAuthError(error instanceof Error ? error.message : t('userIdLoginUnknownError'));
+    } finally {
+      setIsUpdatingClientAuth(false);
+    }
+  };
+
+  const handleLoginExistingClientId = async () => {
+    setClientAuthError('');
+    setClientAuthMessage('');
+    if (!loginClientId.trim() || !loginPassword) {
+      setClientAuthError(t('userIdLoginRequiredError'));
+      return;
+    }
+
+    setIsUpdatingClientAuth(true);
+    try {
+      await loginWithClientPassword(loginClientId.trim(), loginPassword);
+      setClientAuthMessage(t('userIdLoginSuccess'));
+      window.setTimeout(() => window.location.reload(), 100);
+    } catch (error) {
+      setClientAuthError(error instanceof Error ? error.message : t('userIdLoginUnknownError'));
+    } finally {
+      setIsUpdatingClientAuth(false);
     }
   };
 
@@ -212,6 +281,94 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               >
                 <Icon icon="lucide:copy" className="text-sm" />
               </Button>
+            </div>
+          </div>
+
+          <div className="flex min-h-[72px] flex-col gap-3 border-b border-[#dedbd0] py-4 dark:border-[#30302e] sm:flex-row">
+            <div className="w-full pt-1 text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5] sm:w-32">
+              {t("userIdLogin")}
+            </div>
+            <div className="flex min-w-0 flex-1 flex-col gap-3 sm:max-w-sm">
+              <FeatureIntro
+                featureKey="user-id-password-login"
+                title={t("userIdLoginIntroTitle")}
+                description={t("userIdLoginIntroDescription")}
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <Chip
+                  size="sm"
+                  variant="flat"
+                  color={clientAuthStatus?.hasPassword ? 'success' : 'default'}
+                >
+                  {clientAuthStatus?.hasPassword ? t("userIdPasswordEnabled") : t("userIdPasswordNotSet")}
+                </Chip>
+              </div>
+              <div className="grid gap-2">
+                {clientAuthStatus?.hasPassword && (
+                  <Input
+                    size="sm"
+                    type="password"
+                    label={t("currentUserIdPassword")}
+                    value={currentClientPassword}
+                    onChange={(event) => setCurrentClientPassword(event.target.value)}
+                    autoComplete="current-password"
+                  />
+                )}
+                <Input
+                  size="sm"
+                  type="password"
+                  label={clientAuthStatus?.hasPassword ? t("newUserIdPassword") : t("userIdPassword")}
+                  value={newClientPassword}
+                  onChange={(event) => setNewClientPassword(event.target.value)}
+                  autoComplete="new-password"
+                />
+                <Button
+                  size="sm"
+                  color="secondary"
+                  className="justify-self-start bg-[#c96442] text-[#faf9f5]"
+                  isLoading={isUpdatingClientAuth}
+                  startContent={!isUpdatingClientAuth ? <Icon icon="lucide:key-round" /> : undefined}
+                  onPress={handleSetClientPassword}
+                >
+                  {clientAuthStatus?.hasPassword ? t("changeUserIdPassword") : t("setUserIdPassword")}
+                </Button>
+              </div>
+              <div className="grid gap-2 border-t border-[#dedbd0] pt-3 dark:border-[#30302e]">
+                <p className="text-xs leading-5 text-[#77756f] dark:text-[#b0aea5]">
+                  {t("userIdLoginHelp")}
+                </p>
+                <Input
+                  size="sm"
+                  label={t("existingUserId")}
+                  value={loginClientId}
+                  onChange={(event) => setLoginClientId(event.target.value)}
+                  autoComplete="username"
+                />
+                <Input
+                  size="sm"
+                  type="password"
+                  label={t("userIdPassword")}
+                  value={loginPassword}
+                  onChange={(event) => setLoginPassword(event.target.value)}
+                  autoComplete="current-password"
+                />
+                <Button
+                  size="sm"
+                  variant="flat"
+                  className="justify-self-start"
+                  isLoading={isUpdatingClientAuth}
+                  startContent={!isUpdatingClientAuth ? <Icon icon="lucide:log-in" /> : undefined}
+                  onPress={handleLoginExistingClientId}
+                >
+                  {t("useExistingUserId")}
+                </Button>
+              </div>
+              {clientAuthMessage && (
+                <p className="text-xs leading-5 text-[#2f7d4f] dark:text-[#7ed9a3]">{clientAuthMessage}</p>
+              )}
+              {clientAuthError && (
+                <p className="text-xs leading-5 text-[#b54832] dark:text-[#ff8b6e]">{clientAuthError}</p>
+              )}
             </div>
           </div>
         </section>

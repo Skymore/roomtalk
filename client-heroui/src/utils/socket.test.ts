@@ -70,15 +70,19 @@ vi.mock('uuid', () => ({
 
 const {
   ensureRoomJoined,
+  getClientAuthStatus,
   getMediaDownloadUrl,
   getRoomMediaHistory,
   getRoomMemberCount,
   getRoomMembers,
   getSavedRoomsFromServer,
   joinRoom,
+  loginWithClientPassword,
   saveRoomToServer,
   sendMessage,
   sendMessageAndAskAI,
+  setClientPassword,
+  setClientAuthToken,
   setUsername,
   unsaveRoomFromServer,
   uploadMediaMessage,
@@ -110,6 +114,7 @@ describe('socket message acknowledgement helpers', () => {
     vi.stubGlobal('fetch', fetchMock);
     vi.clearAllMocks();
     localStorage.setItem('clientId', 'client-uuid');
+    localStorage.removeItem('clientAuthToken');
   });
 
   it('returns the saved message from send_message acknowledgements', async () => {
@@ -157,7 +162,7 @@ describe('socket message acknowledgement helpers', () => {
 
     expect(socketMock.emit.mock.calls[0]).toEqual([
       'register',
-      { clientId: 'client-uuid', username: undefined },
+      { clientId: 'client-uuid', username: undefined, clientAuthToken: undefined },
       expect.any(Function),
     ]);
     expect(socketMock.emit.mock.calls[1]).toEqual([
@@ -186,7 +191,7 @@ describe('socket message acknowledgement helpers', () => {
     expect(socketMock.emit).toHaveBeenCalledTimes(1);
     expect(socketMock.emit).toHaveBeenCalledWith(
       'register',
-      { clientId: 'client-uuid', username: undefined },
+      { clientId: 'client-uuid', username: undefined, clientAuthToken: undefined },
       expect.any(Function),
     );
     expect(socketMock.emit).not.toHaveBeenCalledWith(
@@ -209,7 +214,24 @@ describe('socket message acknowledgement helpers', () => {
     expect(socketMock.connect).toHaveBeenCalledTimes(1);
     expect(socketMock.emit.mock.calls[0]).toEqual([
       'register',
-      { clientId: 'client-uuid', username: undefined },
+      { clientId: 'client-uuid', username: undefined, clientAuthToken: undefined },
+      expect.any(Function),
+    ]);
+  });
+
+  it('includes the stored client auth token when registering the socket', async () => {
+    localStorage.setItem('clientAuthToken', 'auth-token-1');
+    const savedMessage = message({ id: 'registered-message' });
+    socketMock.ackResponses.set('send_message', {
+      success: true,
+      message: savedMessage,
+    });
+
+    await expect(sendMessage('hello', 'room-1')).resolves.toEqual(savedMessage);
+
+    expect(socketMock.emit.mock.calls[0]).toEqual([
+      'register',
+      { clientId: 'client-uuid', username: undefined, clientAuthToken: 'auth-token-1' },
       expect.any(Function),
     ]);
   });
@@ -316,6 +338,62 @@ describe('socket message acknowledgement helpers', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/media/asset-1/download-url?roomId=room-1&clientId=client-uuid');
   });
 
+  it('appends the client auth token to signed media URL requests', async () => {
+    setClientAuthToken('auth-token-1');
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      url: 'https://signed.example/media.webp',
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+
+    await expect(getMediaDownloadUrl({ roomId: 'room-1', assetId: 'asset-1' })).resolves.toEqual({
+      url: 'https://signed.example/media.webp',
+      expiresAt: undefined,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/media/asset-1/download-url?roomId=room-1&clientId=client-uuid&clientAuthToken=auth-token-1');
+  });
+
+  it('loads, sets, and logs in with User ID password auth', async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ clientId: 'client-uuid', hasPassword: false }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ clientId: 'client-uuid', hasPassword: true, clientAuthToken: 'new-token' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ clientId: 'client-other', hasPassword: true, clientAuthToken: 'login-token' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+
+    await expect(getClientAuthStatus()).resolves.toEqual({ clientId: 'client-uuid', hasPassword: false });
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/client-auth/client-uuid/status', { cache: 'no-store' });
+
+    setClientAuthToken('old-token');
+    await expect(setClientPassword('password-1', 'current-password')).resolves.toEqual({ clientId: 'client-uuid', hasPassword: true });
+    expect(localStorage.getItem('clientAuthToken')).toBe('new-token');
+    const setPasswordRequest = fetchMock.mock.calls[1][1] as RequestInit;
+    expect(JSON.parse(setPasswordRequest.body as string)).toEqual({
+      clientId: 'client-uuid',
+      password: 'password-1',
+      currentPassword: 'current-password',
+      clientAuthToken: 'old-token',
+    });
+
+    await expect(loginWithClientPassword('client-other', 'password-2')).resolves.toEqual({ clientId: 'client-other', hasPassword: true });
+    expect(localStorage.getItem('clientId')).toBe('client-other');
+    expect(localStorage.getItem('clientAuthToken')).toBe('login-token');
+    const loginRequest = fetchMock.mock.calls[2][1] as RequestInit;
+    expect(JSON.parse(loginRequest.body as string)).toEqual({
+      clientId: 'client-other',
+      password: 'password-2',
+    });
+  });
+
   it('uploads media objects through relative local media URLs', async () => {
     const savedMessage = message({
       id: 'media-message-1',
@@ -359,6 +437,60 @@ describe('socket message acknowledgement helpers', () => {
     });
   });
 
+  it('includes the client auth token when creating and completing media uploads', async () => {
+    setClientAuthToken('auth-token-1');
+    const savedMessage = message({
+      id: 'media-message-1',
+      content: '',
+      messageType: 'media',
+      mediaAsset: {
+        id: 'asset-1',
+        kind: 'image',
+        mimeType: 'image/webp',
+        byteSize: 11,
+      },
+    });
+
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        assetId: 'asset-1',
+        uploadUrl: '/api/media/local-objects/local-key',
+        objectKey: 'rooms/room-1/media/image/asset-1',
+        expiresAt: '2026-05-03T00:15:00.000Z',
+      }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(savedMessage), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+
+    await expect(uploadMediaMessage({
+      file: new Blob(['image-bytes'], { type: 'image/webp' }),
+      roomId: 'room-1',
+      kind: 'image',
+      mimeType: 'image/webp',
+    })).resolves.toEqual(savedMessage);
+
+    const createRequest = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(createRequest.body as string)).toEqual({
+      clientId: 'client-uuid',
+      roomId: 'room-1',
+      kind: 'image',
+      mimeType: 'image/webp',
+      byteSize: 11,
+      clientAuthToken: 'auth-token-1',
+    });
+    const completeRequest = fetchMock.mock.calls[2][1] as RequestInit;
+    expect(JSON.parse(completeRequest.body as string)).toMatchObject({
+      clientId: 'client-uuid',
+      roomId: 'room-1',
+      clientAuthToken: 'auth-token-1',
+    });
+  });
+
   it('returns room media history and normalizes local media URLs', async () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
       roomId: 'room-1',
@@ -396,6 +528,30 @@ describe('socket message acknowledgement helpers', () => {
     });
 
     expect(fetchMock).toHaveBeenCalledWith('/api/rooms/room-1/media-history?clientId=client-uuid&before=cursor-0&limit=24&kind=video');
+  });
+
+  it('appends the client auth token to media history requests', async () => {
+    setClientAuthToken('auth-token-1');
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      roomId: 'room-1',
+      items: [],
+      hasMore: false,
+      nextCursor: null,
+      windowMonths: 6,
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+
+    await expect(getRoomMediaHistory({ roomId: 'room-1' })).resolves.toEqual({
+      roomId: 'room-1',
+      items: [],
+      hasMore: false,
+      nextCursor: null,
+      windowMonths: 6,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/rooms/room-1/media-history?clientId=client-uuid&clientAuthToken=auth-token-1');
   });
 
   it('returns saved rooms from get_saved_rooms acknowledgements', async () => {

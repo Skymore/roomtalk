@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('./socket', () => ({
   apiPath: (path: string) => path,
   clientId: 'client-1',
+  withClientAuthBody: (body: Record<string, unknown>) => body,
 }));
 
 const setNavigatorValue = (key: keyof Navigator, value: unknown) => {

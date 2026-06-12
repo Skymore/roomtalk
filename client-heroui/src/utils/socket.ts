@@ -44,6 +44,7 @@ const SEND_MESSAGE_ACK_TIMEOUT_MS = 15000;
 const SEND_MESSAGE_CONNECT_TIMEOUT_MS = 15000;
 const ROOM_LOOKUP_TIMEOUT_MS = 30000;
 const API_BASE_URL = (import.meta.env.VITE_SOCKET_URL || '').replace(/\/$/, '');
+const CLIENT_AUTH_TOKEN_KEY = 'clientAuthToken';
 
 export type RoomJoinResult = {
   room?: Room;
@@ -83,6 +84,15 @@ type JoinRoomAckResponse = RoomAckResponse & {
 
 type RegisterAckResponse = SocketAckResponse & {
   clientId?: string;
+};
+
+export type ClientAuthStatus = {
+  clientId: string;
+  hasPassword: boolean;
+};
+
+type ClientAuthResponse = ClientAuthStatus & {
+  clientAuthToken: string;
 };
 
 type RoomPermissionsAckResponse = SocketAckResponse & {
@@ -146,6 +156,31 @@ export const lookupRoomClient = (roomId: string, targetClientId: string): Promis
     }
     return response.client;
   });
+};
+
+export const getClientAuthToken = (): string | null => {
+  const token = localStorage.getItem(CLIENT_AUTH_TOKEN_KEY)?.trim();
+  return token || null;
+};
+
+export const setClientAuthToken = (token: string): void => {
+  localStorage.setItem(CLIENT_AUTH_TOKEN_KEY, token);
+};
+
+export const clearClientAuthToken = (): void => {
+  localStorage.removeItem(CLIENT_AUTH_TOKEN_KEY);
+};
+
+export const withClientAuthBody = <TBody extends Record<string, unknown>>(body: TBody): TBody & { clientAuthToken?: string } => {
+  const token = getClientAuthToken();
+  return token ? { ...body, clientAuthToken: token } : body;
+};
+
+const appendClientAuthQuery = (query: URLSearchParams) => {
+  const token = getClientAuthToken();
+  if (token) {
+    query.set('clientAuthToken', token);
+  }
 };
 
 // Create and configure Socket connection
@@ -308,7 +343,11 @@ export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS):
       }, timeoutMs);
 
       socket.once('disconnect', handleDisconnect);
-      socket.emit('register', { clientId: getClientId(), username: currentUsername || undefined }, (response: RegisterAckResponse) => {
+      socket.emit('register', {
+        clientId: getClientId(),
+        username: currentUsername || undefined,
+        clientAuthToken: getClientAuthToken() || undefined,
+      }, (response: RegisterAckResponse) => {
         settle(() => {
           if (response?.success) {
             registeredSocketId = socketId || socket.id || null;
@@ -619,6 +658,47 @@ const postJson = async <T>(path: string, body: unknown): Promise<T> => {
   return response.json() as Promise<T>;
 };
 
+export const getClientAuthStatus = async (targetClientId = clientId): Promise<ClientAuthStatus> => {
+  const response = await fetch(apiPath(`/api/client-auth/${encodeURIComponent(targetClientId)}/status`), {
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, 'Failed to load User ID login status'));
+  }
+  return response.json() as Promise<ClientAuthStatus>;
+};
+
+export const setClientPassword = async (password: string, currentPassword?: string): Promise<ClientAuthStatus> => {
+  const response = await postJson<ClientAuthResponse>('/api/client-auth/password', withClientAuthBody({
+    clientId,
+    password,
+    currentPassword: currentPassword || undefined,
+  }));
+  setClientAuthToken(response.clientAuthToken);
+  return { clientId: response.clientId, hasPassword: response.hasPassword };
+};
+
+export const loginWithClientPassword = async (targetClientId: string, password: string): Promise<ClientAuthStatus> => {
+  const response = await postJson<ClientAuthResponse>('/api/client-auth/login', {
+    clientId: targetClientId,
+    password,
+  });
+  localStorage.setItem('clientId', response.clientId);
+  setClientAuthToken(response.clientAuthToken);
+  return { clientId: response.clientId, hasPassword: response.hasPassword };
+};
+
+export const logoutClientPasswordSession = async (): Promise<void> => {
+  const token = getClientAuthToken();
+  if (token) {
+    await postJson('/api/client-auth/logout', {
+      clientId,
+      clientAuthToken: token,
+    }).catch(() => undefined);
+  }
+  clearClientAuthToken();
+};
+
 const putMediaObject = async (uploadUrl: string, file: Blob, mimeType: string) => {
   const response = await fetch(apiPath(uploadUrl), {
     method: 'PUT',
@@ -647,16 +727,18 @@ export const uploadMediaMessage = async (params: {
   const mimeType = (params.mimeType || params.file.type || `${params.kind}/octet-stream`).toLowerCase();
   const byteSize = params.file.size;
   const upload = await postJson<CreateMediaUploadResponse>('/api/media/uploads', {
+    ...withClientAuthBody({
     clientId,
     roomId: params.roomId,
     kind: params.kind,
     mimeType,
     byteSize,
+    }),
   });
 
   await putMediaObject(upload.uploadUrl, params.file, mimeType);
 
-  return postJson<Message>(`/api/media/uploads/${encodeURIComponent(upload.assetId)}/complete`, {
+  return postJson<Message>(`/api/media/uploads/${encodeURIComponent(upload.assetId)}/complete`, withClientAuthBody({
     clientId,
     roomId: params.roomId,
     kind: params.kind,
@@ -671,7 +753,7 @@ export const uploadMediaMessage = async (params: {
     width: params.width,
     height: params.height,
     durationMs: params.durationMs,
-  });
+  }));
 };
 
 export const requestAIResponse = (data: {
@@ -736,6 +818,7 @@ export const getMediaDownloadUrl = async (params: {
     roomId: params.roomId,
     clientId,
   });
+  appendClientAuthQuery(query);
   const response = await fetch(apiPath(`/api/media/${encodeURIComponent(params.assetId)}/download-url?${query.toString()}`));
   if (!response.ok) {
     throw new Error(await parseApiError(response, 'Failed to get media URL'));
@@ -753,6 +836,7 @@ export const getMediaDownloadUrl = async (params: {
 
 export const getRoomMessagesForExport = async (roomId: string): Promise<Message[]> => {
   const query = new URLSearchParams({ clientId });
+  appendClientAuthQuery(query);
   const response = await fetch(apiPath(`/api/rooms/${encodeURIComponent(roomId)}/messages?${query.toString()}`), {
     cache: 'no-store',
     headers: {
@@ -774,6 +858,7 @@ export const getRoomMediaHistory = async (params: {
   const query = new URLSearchParams({
     clientId,
   });
+  appendClientAuthQuery(query);
   if (params.before) {
     query.set('before', params.before);
   }

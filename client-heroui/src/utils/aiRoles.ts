@@ -55,6 +55,11 @@ const getClientIdForApi = () => {
   return generated;
 };
 
+const getClientAuthTokenForApi = () => {
+  const token = localStorage.getItem('clientAuthToken')?.trim();
+  return token || undefined;
+};
+
 const defaultRoleKeys: Record<string, { nameKey: string; promptKey: string }> = {
   default: { nameKey: "roleAssistantName", promptKey: "roleAssistantPrompt" },
   coder: { nameKey: "roleCodeExpertName", promptKey: "roleCodeExpertPrompt" },
@@ -116,10 +121,15 @@ export const deleteAIRole = (
 };
 
 export const generateAIRoleDraft = async (idea: string): Promise<AIRoleDraft> => {
+  const clientAuthToken = getClientAuthTokenForApi();
   const response = await fetch(`${getApiBaseUrl()}/api/ai-role-draft`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ idea, clientId: getClientIdForApi() }),
+    body: JSON.stringify({
+      idea,
+      clientId: getClientIdForApi(),
+      clientAuthToken,
+    }),
   });
 
   if (!response.ok) {
