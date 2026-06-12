@@ -1,4 +1,4 @@
-import { apiPath, clientId, withClientAuthBody } from './socket';
+import { apiPath, browserInstanceId, clientId, withClientAuthBody } from './socket';
 
 export type PushNotificationStatus =
   | 'unsupported'
@@ -116,6 +116,7 @@ export const enablePushNotifications = async () => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(withClientAuthBody({
       clientId,
+      browserInstanceId,
       subscription,
       userAgent: navigator.userAgent,
     })),

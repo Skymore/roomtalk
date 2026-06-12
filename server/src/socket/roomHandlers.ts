@@ -56,6 +56,7 @@ type BasicRoomAck = {
 type RegisterAck = {
   success: boolean;
   clientId?: string;
+  nickname?: string;
   error?: string;
 };
 
@@ -162,6 +163,7 @@ const parseJoinRoomPayload = (payload: unknown): { roomId: string | null; passwo
 };
 
 const MAX_NICKNAME_LENGTH = 40;
+const BROWSER_INSTANCE_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 
 const normalizeNickname = (value: unknown): string | null => {
   if (typeof value !== 'string') {
@@ -174,15 +176,24 @@ const normalizeNickname = (value: unknown): string | null => {
   return trimmed.slice(0, MAX_NICKNAME_LENGTH);
 };
 
-const parseRegisterPayload = (payload: unknown): { clientId?: string; username: string | null; clientAuthToken?: string } => {
+const normalizeBrowserInstanceId = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return BROWSER_INSTANCE_ID_PATTERN.test(trimmed) ? trimmed : undefined;
+};
+
+const parseRegisterPayload = (payload: unknown): { clientId?: string; username: string | null; clientAuthToken?: string; browserInstanceId?: string } => {
   if (typeof payload === 'string') {
     return { clientId: payload, username: null };
   }
   if (payload && typeof payload === 'object') {
-    const data = payload as { clientId?: unknown; username?: unknown; clientAuthToken?: unknown };
+    const data = payload as { clientId?: unknown; username?: unknown; clientAuthToken?: unknown; browserInstanceId?: unknown };
     return {
       clientId: typeof data.clientId === 'string' ? data.clientId : undefined,
       username: normalizeNickname(data.username),
+      browserInstanceId: normalizeBrowserInstanceId(data.browserInstanceId),
       clientAuthToken: typeof data.clientAuthToken === 'string' && data.clientAuthToken.trim()
         ? data.clientAuthToken.trim()
         : undefined,
@@ -193,7 +204,7 @@ const parseRegisterPayload = (payload: unknown): { clientId?: string; username: 
 
 export function registerRoomHandlers({ io, socket, store, socketLogger }: SocketConnectionContext) {
   socket.on('register', async (payload: unknown, callback?: (result: RegisterAck) => void) => {
-    const { clientId, username, clientAuthToken } = parseRegisterPayload(payload);
+    const { clientId, username, clientAuthToken, browserInstanceId } = parseRegisterPayload(payload);
     const userId = clientId || uuidv4();
     try {
       if (!(await isClientRequestAuthorized(store, userId, clientAuthToken))) {
@@ -202,18 +213,23 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
         return;
       }
 
-      await store.storeClientSession(socket.id, userId);
-      if (username) {
+      await store.storeClientSession(socket.id, userId, browserInstanceId);
+      const existingNicknames = await store.getClientNicknames([userId]);
+      const existingNickname = existingNicknames[userId] || null;
+      if (!existingNickname && username) {
         await store.setClientNickname(userId, username);
       }
-      socketLogger.info('Client registered', { socketId: socket.id, clientId: userId });
+      socketLogger.info('Client registered', { socketId: socket.id, clientId: userId, browserInstanceId });
 
       socket.join(userId);
       const myRooms = await store.readRoomsByUser(userId);
       const savedRooms = await store.readSavedRoomsByUser(userId);
       socket.emit('room_list', myRooms);
       socket.emit('saved_room_list', savedRooms);
-      callback?.({ success: true, clientId: userId });
+      const nickname = existingNickname || username || undefined;
+      callback?.(nickname
+        ? { success: true, clientId: userId, nickname }
+        : { success: true, clientId: userId });
     } catch (error) {
       socketLogger.error('Failed to register client', { socketId: socket.id, clientId: userId, error });
       callback?.({ success: false, error: 'Failed to register client' });
@@ -365,8 +381,12 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
     }
 
     const prevRooms = await store.getUserRooms(socket.id);
+    const browserInstanceId = await store.getBrowserInstanceId(socket.id);
     for (const r of prevRooms.filter((previousRoomId) => previousRoomId !== roomId)) {
       const memberCount = await store.updateRoomMemberCount(r, userId, socket.id, false);
+      if (browserInstanceId) {
+        await store.updateRoomBrowserPresence(r, browserInstanceId, socket.id, false);
+      }
       const leaveEvent = createRoomMemberEvent({
         roomId: r,
         userId,
@@ -418,6 +438,9 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
     await store.storeUserRooms(socket.id, [roomId]);
 
     const memberCount = await store.updateRoomMemberCount(roomId, userId, socket.id, true);
+    if (browserInstanceId) {
+      await store.updateRoomBrowserPresence(roomId, browserInstanceId, socket.id, true);
+    }
     const joinEvent = createRoomMemberEvent({
       roomId,
       userId,
@@ -449,6 +472,10 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
     socket.leave(roomId);
 
     const memberCount = await store.updateRoomMemberCount(roomId, userId, socket.id, false);
+    const browserInstanceId = await store.getBrowserInstanceId(socket.id);
+    if (browserInstanceId) {
+      await store.updateRoomBrowserPresence(roomId, browserInstanceId, socket.id, false);
+    }
     const leaveEvent = createRoomMemberEvent({
       roomId,
       userId,
@@ -961,8 +988,12 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
     if (userId) {
       socketLogger.info('Client disconnected', { socketId: socket.id, userId, reason });
       const rooms = await store.getUserRooms(socket.id);
+      const browserInstanceId = await store.getBrowserInstanceId(socket.id);
       for (const roomId of rooms) {
         const memberCount = await store.updateRoomMemberCount(roomId, userId, socket.id, false);
+        if (browserInstanceId) {
+          await store.updateRoomBrowserPresence(roomId, browserInstanceId, socket.id, false);
+        }
         const leaveEvent = createRoomMemberEvent({
           roomId,
           userId,

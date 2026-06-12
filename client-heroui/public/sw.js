@@ -15,15 +15,6 @@ self.addEventListener('push', (event) => {
       payload = {};
     }
 
-    const windowClients = await self.clients.matchAll({
-      type: 'window',
-      includeUncontrolled: true,
-    });
-
-    if (windowClients.some((client) => client.focused)) {
-      return;
-    }
-
     const title = typeof payload.title === 'string' && payload.title
       ? payload.title
       : 'RoomTalk';

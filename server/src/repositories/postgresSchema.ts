@@ -149,14 +149,18 @@ export const POSTGRES_SCHEMA_SQL = [
   `CREATE TABLE IF NOT EXISTS push_subscriptions (
     endpoint TEXT PRIMARY KEY,
     client_id TEXT NOT NULL,
+    browser_instance_id TEXT,
     p256dh TEXT NOT NULL,
     auth TEXT NOT NULL,
     user_agent TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
+  `ALTER TABLE push_subscriptions ADD COLUMN IF NOT EXISTS browser_instance_id TEXT`,
   `CREATE INDEX IF NOT EXISTS idx_push_subscriptions_client_id
     ON push_subscriptions (client_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_push_subscriptions_browser_instance_id
+    ON push_subscriptions (browser_instance_id)`,
   `CREATE TABLE IF NOT EXISTS client_passwords (
     client_id TEXT PRIMARY KEY,
     password_hash TEXT NOT NULL,

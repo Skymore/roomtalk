@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./socket', () => ({
   apiPath: (path: string) => path,
+  browserInstanceId: 'browser-1',
   clientId: 'client-1',
   withClientAuthBody: (body: Record<string, unknown>) => body,
 }));
