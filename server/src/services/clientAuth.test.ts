@@ -28,6 +28,9 @@ describe('client auth service', () => {
       async getClientPasswordHash() {
         return passwordHash;
       },
+      async getAccountByClientId() {
+        return null;
+      },
       async saveClientAuthToken(token: ClientAuthTokenRecord) {
         savedTokens.set(token.tokenHash, token);
       },
@@ -46,5 +49,42 @@ describe('client auth service', () => {
     assert.equal(savedTokens.has(hashClientAuthToken(rawToken)), true);
     assert.equal(await isClientRequestAuthorized(store, 'client-1', rawToken), true);
     assert.equal(await isClientRequestAuthorized(store, 'client-2', rawToken), false);
+  });
+
+  it('requires a valid token for clients linked to an account even without a password', async () => {
+    const savedTokens = new Map<string, ClientAuthTokenRecord>();
+    const store = {
+      async getClientPasswordHash() {
+        return null;
+      },
+      async getAccountByClientId(clientId: string) {
+        return clientId === 'client-1'
+          ? {
+              accountId: 'account-1',
+              primaryClientId: 'client-1',
+              provider: 'google' as const,
+              providerSubject: 'google-subject-1',
+              createdAt: '2026-05-03T00:00:00.000Z',
+              updatedAt: '2026-05-03T00:00:00.000Z',
+            }
+          : null;
+      },
+      async saveClientAuthToken(token: ClientAuthTokenRecord) {
+        savedTokens.set(token.tokenHash, token);
+      },
+      async isClientAuthTokenValid(clientId: string, tokenHash: string) {
+        return savedTokens.get(tokenHash)?.clientId === clientId;
+      },
+    };
+
+    assert.equal(await isClientRequestAuthorized(store, 'client-2'), true);
+    assert.equal(await isClientRequestAuthorized(store, 'client-1'), false);
+
+    const rawToken = await issueClientAuthToken(store, 'client-1', {
+      accountId: 'account-1',
+      authMethod: 'google',
+    });
+    assert.equal(savedTokens.get(hashClientAuthToken(rawToken))?.authMethod, 'google');
+    assert.equal(await isClientRequestAuthorized(store, 'client-1', rawToken), true);
   });
 });

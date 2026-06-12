@@ -3,7 +3,7 @@ import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
 import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, stripAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
-import { AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAuthTokenRecord, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput } from './store';
+import { AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput } from './store';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 const DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS = 30;
@@ -25,6 +25,9 @@ const PUSH_SUBSCRIPTIONS_KEY = 'push_subscriptions';
 const CLIENT_PASSWORDS_KEY = 'client:passwords';
 const CLIENT_AUTH_TOKENS_KEY = 'client:auth_tokens';
 const getClientAuthTokensKey = (clientId: string) => `client:${clientId}:auth_tokens`;
+const CLIENT_ACCOUNTS_KEY = 'client:accounts';
+const CLIENT_ACCOUNT_LINKS_KEY = 'client:account_links';
+const GOOGLE_ACCOUNT_SUBJECTS_KEY = 'account:google_subjects';
 
 interface RoomMessagesCachePayload {
   messageVersion: number;
@@ -1576,6 +1579,101 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
+  async getAccountByClientId(clientId: string): Promise<ClientAccount | null> {
+    try {
+      const accountId = await this.redisClient.hGet(CLIENT_ACCOUNT_LINKS_KEY, clientId);
+      if (!accountId) {
+        return null;
+      }
+      const rawAccount = await this.redisClient.hGet(CLIENT_ACCOUNTS_KEY, accountId);
+      return rawAccount ? JSON.parse(rawAccount) as ClientAccount : null;
+    } catch (error) {
+      this.logger.error('Error reading Redis account by client ID', { error, clientId });
+      return null;
+    }
+  }
+
+  async getAccountByGoogleSubject(providerSubject: string): Promise<ClientAccount | null> {
+    try {
+      const accountId = await this.redisClient.hGet(GOOGLE_ACCOUNT_SUBJECTS_KEY, providerSubject);
+      if (!accountId) {
+        return null;
+      }
+      const rawAccount = await this.redisClient.hGet(CLIENT_ACCOUNTS_KEY, accountId);
+      return rawAccount ? JSON.parse(rawAccount) as ClientAccount : null;
+    } catch (error) {
+      this.logger.error('Error reading Redis account by Google subject', { error });
+      return null;
+    }
+  }
+
+  async createGoogleAccountForClient(input: CreateGoogleAccountInput): Promise<ClientAccount | null> {
+    const now = input.now || new Date().toISOString();
+    const account: ClientAccount = {
+      accountId: input.accountId,
+      primaryClientId: input.clientId,
+      provider: 'google',
+      providerSubject: input.providerSubject,
+      emailVerified: Boolean(input.emailVerified),
+      createdAt: now,
+      updatedAt: now,
+      lastLoginAt: now,
+    };
+    if (input.email) account.email = input.email;
+    if (input.displayName) account.displayName = input.displayName;
+    if (input.avatarUrl) account.avatarUrl = input.avatarUrl;
+
+    try {
+      const [existingClientAccountId, existingGoogleAccountId] = await Promise.all([
+        this.redisClient.hGet(CLIENT_ACCOUNT_LINKS_KEY, input.clientId),
+        this.redisClient.hGet(GOOGLE_ACCOUNT_SUBJECTS_KEY, input.providerSubject),
+      ]);
+      if (existingClientAccountId || existingGoogleAccountId) {
+        return existingClientAccountId
+          ? this.getAccountByClientId(input.clientId)
+          : this.getAccountByGoogleSubject(input.providerSubject);
+      }
+
+      await Promise.all([
+        this.redisClient.hSet(CLIENT_ACCOUNTS_KEY, input.accountId, JSON.stringify(account)),
+        this.redisClient.hSet(CLIENT_ACCOUNT_LINKS_KEY, input.clientId, input.accountId),
+        this.redisClient.hSet(GOOGLE_ACCOUNT_SUBJECTS_KEY, input.providerSubject, input.accountId),
+      ]);
+      return account;
+    } catch (error) {
+      this.logger.error('Error creating Redis Google account', { error, clientId: input.clientId });
+      return null;
+    }
+  }
+
+  async updateGoogleAccountLogin(accountId: string, profile: GoogleAccountProfile, now = new Date().toISOString()): Promise<ClientAccount | null> {
+    try {
+      const rawAccount = await this.redisClient.hGet(CLIENT_ACCOUNTS_KEY, accountId);
+      if (!rawAccount) {
+        return null;
+      }
+      const account = JSON.parse(rawAccount) as ClientAccount;
+      const nextAccount: ClientAccount = {
+        ...account,
+        providerSubject: profile.providerSubject || account.providerSubject,
+        email: profile.email || account.email,
+        emailVerified: profile.emailVerified === undefined ? account.emailVerified : Boolean(profile.emailVerified),
+        displayName: profile.displayName || account.displayName,
+        avatarUrl: profile.avatarUrl || account.avatarUrl,
+        updatedAt: now,
+        lastLoginAt: now,
+      };
+      await Promise.all([
+        this.redisClient.hSet(CLIENT_ACCOUNTS_KEY, accountId, JSON.stringify(nextAccount)),
+        this.redisClient.hSet(GOOGLE_ACCOUNT_SUBJECTS_KEY, nextAccount.providerSubject, accountId),
+      ]);
+      return nextAccount;
+    } catch (error) {
+      this.logger.error('Error updating Redis Google account login', { error, accountId });
+      return null;
+    }
+  }
+
   async setClientPasswordHash(clientId: string, passwordHash: string): Promise<void> {
     try {
       await this.redisClient.hSet(CLIENT_PASSWORDS_KEY, clientId, passwordHash);
@@ -1598,7 +1696,10 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       const record = JSON.stringify({
         clientId: token.clientId,
         tokenHash: token.tokenHash,
+        accountId: token.accountId,
+        authMethod: token.authMethod,
         createdAt: token.createdAt,
+        expiresAt: token.expiresAt,
         lastUsedAt: token.createdAt,
       });
       await Promise.all([
@@ -1617,8 +1718,13 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         return false;
       }
 
-      const token = JSON.parse(rawToken) as { clientId?: string; createdAt?: string };
+      const token = JSON.parse(rawToken) as { clientId?: string; createdAt?: string; expiresAt?: string };
       if (token.clientId !== clientId) {
+        return false;
+      }
+      if (token.expiresAt && Date.parse(token.expiresAt) <= Date.now()) {
+        await this.redisClient.hDel(CLIENT_AUTH_TOKENS_KEY, tokenHash);
+        await this.redisClient.sRem(getClientAuthTokensKey(clientId), tokenHash);
         return false;
       }
 

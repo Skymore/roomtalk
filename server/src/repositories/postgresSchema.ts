@@ -156,6 +156,34 @@ export const POSTGRES_SCHEMA_SQL = [
     nickname TEXT NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
+  `CREATE TABLE IF NOT EXISTS accounts (
+    id TEXT PRIMARY KEY,
+    primary_client_id TEXT NOT NULL UNIQUE,
+    display_name TEXT,
+    avatar_url TEXT,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    last_login_at TIMESTAMPTZ
+  )`,
+  `CREATE TABLE IF NOT EXISTS account_identities (
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL CHECK (provider IN ('google')),
+    provider_subject TEXT NOT NULL,
+    email TEXT,
+    email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (provider, provider_subject)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_account_identities_account_id
+    ON account_identities (account_id)`,
+  `CREATE TABLE IF NOT EXISTS client_account_links (
+    client_id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL UNIQUE REFERENCES accounts(id) ON DELETE CASCADE,
+    linked_at TIMESTAMPTZ NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_client_account_links_account_id
+    ON client_account_links (account_id)`,
   `CREATE TABLE IF NOT EXISTS push_subscriptions (
     endpoint TEXT PRIMARY KEY,
     client_id TEXT NOT NULL,
@@ -180,11 +208,22 @@ export const POSTGRES_SCHEMA_SQL = [
   `CREATE TABLE IF NOT EXISTS client_auth_tokens (
     token_hash TEXT PRIMARY KEY,
     client_id TEXT NOT NULL,
+    account_id TEXT,
+    auth_method TEXT CHECK (auth_method IS NULL OR auth_method IN ('password', 'google')),
     created_at TIMESTAMPTZ NOT NULL,
-    last_used_at TIMESTAMPTZ NOT NULL
+    last_used_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMPTZ
   )`,
+  `ALTER TABLE client_auth_tokens ADD COLUMN IF NOT EXISTS account_id TEXT`,
+  `ALTER TABLE client_auth_tokens ADD COLUMN IF NOT EXISTS auth_method TEXT`,
+  `ALTER TABLE client_auth_tokens DROP CONSTRAINT IF EXISTS client_auth_tokens_auth_method_check`,
+  `ALTER TABLE client_auth_tokens ADD CONSTRAINT client_auth_tokens_auth_method_check
+    CHECK (auth_method IS NULL OR auth_method IN ('password', 'google'))`,
+  `ALTER TABLE client_auth_tokens ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ`,
   `CREATE INDEX IF NOT EXISTS idx_client_auth_tokens_client_id
     ON client_auth_tokens (client_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_client_auth_tokens_account_id
+    ON client_auth_tokens (account_id)`,
 ];
 
 // One-time data migrations, applied at most once and recorded in the

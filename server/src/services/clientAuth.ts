@@ -39,12 +39,15 @@ export const hashClientAuthToken = (token: string) => (
 );
 
 export const isClientRequestAuthorized = async (
-  store: Pick<RoomStore, 'getClientPasswordHash' | 'isClientAuthTokenValid'>,
+  store: Pick<RoomStore, 'getClientPasswordHash' | 'getAccountByClientId' | 'isClientAuthTokenValid'>,
   clientId: string,
   token?: string | null,
 ) => {
-  const passwordHash = await store.getClientPasswordHash(clientId);
-  if (!passwordHash) {
+  const [passwordHash, account] = await Promise.all([
+    store.getClientPasswordHash(clientId),
+    store.getAccountByClientId(clientId),
+  ]);
+  if (!passwordHash && !account) {
     return true;
   }
 
@@ -58,11 +61,19 @@ export const isClientRequestAuthorized = async (
 export const issueClientAuthToken = async (
   store: Pick<RoomStore, 'saveClientAuthToken'>,
   clientId: string,
+  options: {
+    accountId?: string;
+    authMethod?: 'password' | 'google';
+    expiresAt?: string;
+  } = {},
 ) => {
   const token = createClientAuthToken();
   await store.saveClientAuthToken({
     clientId,
     tokenHash: hashClientAuthToken(token),
+    accountId: options.accountId,
+    authMethod: options.authMethod,
+    expiresAt: options.expiresAt,
     createdAt: new Date().toISOString(),
   });
   return token;
