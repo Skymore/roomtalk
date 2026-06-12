@@ -312,8 +312,8 @@ describe('MessageList optimistic messages', () => {
     expect(scrollTop).toBe(1500);
   });
 
-  it('renders composer clearance as an in-flow bottom spacer', async () => {
-    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} bottomPaddingPx={124} />);
+  it('renders composer clearance as a single in-flow bottom inset', async () => {
+    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} bottomInsetPx={124} />);
 
     act(() => {
       socketMock.trigger('message_history', {
@@ -326,9 +326,11 @@ describe('MessageList optimistic messages', () => {
     });
     await screen.findByText('last visible message');
 
-    const spacer = screen.getByTestId('message-list-bottom-spacer');
-    expect(spacer.getAttribute('style')).toContain('height: 124px');
-    expect(screen.getByTestId('message-list-scroll').getAttribute('style') || '').not.toContain('padding-bottom');
+    const inset = screen.getByTestId('message-list-scroll-end-inset');
+    expect(inset.getAttribute('style')).toContain('height: 124px');
+    expect(screen.getByTestId('message-list-scroll').className).toContain('pt-3');
+    expect(screen.getByTestId('message-list-scroll').className).not.toContain('p-3');
+    expect(screen.getByText('last visible message').parentElement?.className).not.toContain('pb-4');
   });
 
   it('does not force the room back to the bottom after the user scrolls away', () => {
