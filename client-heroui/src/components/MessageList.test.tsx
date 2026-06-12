@@ -89,6 +89,7 @@ describe('MessageList optimistic messages', () => {
 
   afterEach(() => {
     cleanup();
+    vi.unstubAllGlobals();
   });
 
   it('shows pending messages and replaces matching server messages without duplicates', async () => {
@@ -245,5 +246,116 @@ describe('MessageList optimistic messages', () => {
       beforeMessageId: 'position-oldest',
       limit: 80,
     });
+  });
+
+  it('keeps the room entry view pinned to the bottom when message content grows', async () => {
+    const resizeCallbacks: ResizeObserverCallback[] = [];
+    const observedElements: Element[] = [];
+    class ResizeObserverMock {
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallbacks.push(callback);
+      }
+
+      observe(element: Element) {
+        observedElements.push(element);
+      }
+
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverMock);
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+
+    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
+    act(() => {
+      socketMock.trigger('message_history', {
+        roomId: 'room-1',
+        messages: [message({ id: 'image-message', content: 'image loaded later' })],
+        historyVersion: 1,
+        hasMore: false,
+        mode: 'replace',
+      });
+    });
+    await screen.findByText('image loaded later');
+
+    const container = screen.getByTestId('message-list-scroll') as HTMLDivElement;
+    const content = screen.getByTestId('message-list-content');
+    let scrollHeight = 1000;
+    let scrollTop = 900;
+    Object.defineProperty(container, 'scrollHeight', { configurable: true, get: () => scrollHeight });
+    Object.defineProperty(container, 'clientHeight', { configurable: true, value: 400 });
+    Object.defineProperty(container, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = value;
+      },
+    });
+    Object.defineProperty(container, 'scrollTo', {
+      configurable: true,
+      value: vi.fn((options: ScrollToOptions) => {
+        scrollTop = Number(options.top || 0);
+      }),
+    });
+
+    expect(observedElements).toContain(content);
+
+    act(() => {
+      scrollHeight = 1500;
+      resizeCallbacks.forEach(callback => callback([], {} as ResizeObserver));
+    });
+
+    expect(scrollTop).toBe(1500);
+  });
+
+  it('does not force the room back to the bottom after the user scrolls away', () => {
+    const resizeCallbacks: ResizeObserverCallback[] = [];
+    class ResizeObserverMock {
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallbacks.push(callback);
+      }
+
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverMock);
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+
+    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
+
+    const container = screen.getByTestId('message-list-scroll') as HTMLDivElement;
+    let scrollHeight = 1500;
+    let scrollTop = 0;
+    const scrollTo = vi.fn((options: ScrollToOptions) => {
+      scrollTop = Number(options.top || 0);
+    });
+    Object.defineProperty(container, 'scrollHeight', { configurable: true, get: () => scrollHeight });
+    Object.defineProperty(container, 'clientHeight', { configurable: true, value: 400 });
+    Object.defineProperty(container, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = value;
+      },
+    });
+    Object.defineProperty(container, 'scrollTo', { configurable: true, value: scrollTo });
+
+    fireEvent.scroll(container);
+    act(() => {
+      scrollHeight = 1800;
+      resizeCallbacks.forEach(callback => callback([], {} as ResizeObserver));
+    });
+
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(scrollTop).toBe(0);
   });
 });

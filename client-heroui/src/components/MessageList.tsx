@@ -77,6 +77,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   messagesRef.current = messages;
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const retryScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isNearBottomRef = useRef(true);
   const preserveScrollRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
@@ -109,6 +110,8 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
     const container = containerRef.current;
     if (container) {
+      isNearBottomRef.current = true;
+      setShowScrollButton(false);
       if (typeof container.scrollTo === 'function') {
         container.scrollTo({
           top: container.scrollHeight,
@@ -214,17 +217,29 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
 
   useEffect(() => {
     const container = containerRef.current;
-    if (!container || typeof ResizeObserver === 'undefined') return;
+    if (!container) return;
 
-    const observer = new ResizeObserver(() => {
+    const stickToBottomIfNeeded = () => {
+      if (preserveScrollRef.current) {
+        return;
+      }
       if (isNearBottomRef.current) {
         scheduleScrollToBottom('auto');
       }
-    });
+    };
 
-    observer.observe(container);
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(stickToBottomIfNeeded);
+      observer.observe(contentRef.current || container);
+    }
 
-    return () => observer.disconnect();
+    container.addEventListener('load', stickToBottomIfNeeded, true);
+
+    return () => {
+      observer?.disconnect();
+      container.removeEventListener('load', stickToBottomIfNeeded, true);
+    };
   }, [scheduleScrollToBottom]);
 
   // --- Modal Handlers (Keep dependencies as they are or simplify if possible) ---
@@ -443,77 +458,78 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
         style={{ paddingBottom: bottomPaddingPx }}
         onScroll={handleScroll}
       >
-        <div className="sticky top-0 z-20 mb-2 flex justify-end">
-          <div className="flex items-center gap-1.5">
-            <Dropdown placement="bottom-end">
-              <DropdownTrigger>
-                <Button
-                  size="sm"
-                  variant="flat"
-                  radius="full"
-                  isDisabled={isExporting}
-                  className="h-7 min-w-0 border border-[#dedbd0] bg-[#faf9f5]/95 px-2 text-tiny font-medium text-[#4d4c48] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc]"
-                  startContent={<Icon icon={isExporting ? 'lucide:loader-circle' : 'lucide:download'} className={`h-3.5 w-3.5 ${isExporting ? 'animate-spin' : ''}`} />}
-                >
-                  {t('exportChat')}
-                </Button>
-              </DropdownTrigger>
-              <DropdownMenu aria-label={t('exportChat')}>
-                <DropdownItem key="html" startContent={<Icon icon="lucide:file-code-2" />} onPress={handleExportHtml}>
-                  {t('exportHtml')}
-                </DropdownItem>
-                <DropdownItem key="zip" startContent={<Icon icon="lucide:archive" />} onPress={handleExportZip}>
-                  {t('exportZip')}
-                </DropdownItem>
-              </DropdownMenu>
-            </Dropdown>
-            <div className="flex items-center gap-1 rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-2.5 py-1 text-tiny font-medium text-[#4d4c48] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc]">
-              <Icon icon="lucide:coins" className="h-3.5 w-3.5" />
-              <span>{t('sessionCost')}: {sessionCostUsd === null ? '...' : formatUsdCost(sessionCostUsd)}</span>
+        <div ref={contentRef} data-testid="message-list-content" className="flex min-h-full flex-col">
+          <div className="sticky top-0 z-20 mb-2 flex justify-end">
+            <div className="flex items-center gap-1.5">
+              <Dropdown placement="bottom-end">
+                <DropdownTrigger>
+                  <Button
+                    size="sm"
+                    variant="flat"
+                    radius="full"
+                    isDisabled={isExporting}
+                    className="h-7 min-w-0 border border-[#dedbd0] bg-[#faf9f5]/95 px-2 text-tiny font-medium text-[#4d4c48] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc]"
+                    startContent={<Icon icon={isExporting ? 'lucide:loader-circle' : 'lucide:download'} className={`h-3.5 w-3.5 ${isExporting ? 'animate-spin' : ''}`} />}
+                  >
+                    {t('exportChat')}
+                  </Button>
+                </DropdownTrigger>
+                <DropdownMenu aria-label={t('exportChat')}>
+                  <DropdownItem key="html" startContent={<Icon icon="lucide:file-code-2" />} onPress={handleExportHtml}>
+                    {t('exportHtml')}
+                  </DropdownItem>
+                  <DropdownItem key="zip" startContent={<Icon icon="lucide:archive" />} onPress={handleExportZip}>
+                    {t('exportZip')}
+                  </DropdownItem>
+                </DropdownMenu>
+              </Dropdown>
+              <div className="flex items-center gap-1 rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-2.5 py-1 text-tiny font-medium text-[#4d4c48] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc]">
+                <Icon icon="lucide:coins" className="h-3.5 w-3.5" />
+                <span>{t('sessionCost')}: {sessionCostUsd === null ? '...' : formatUsdCost(sessionCostUsd)}</span>
+              </div>
             </div>
           </div>
-        </div>
-        {hasMoreMessages && (
-          <div className="mb-3 flex justify-center">
-            <button
-              type="button"
-              onClick={handleLoadMore}
-              disabled={isLoadingMore}
-              className="rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-3 py-1.5 text-xs font-medium text-[#4d4c48] shadow-sm backdrop-blur transition hover:border-[#c2c0b6] hover:text-[#141413] dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc] dark:hover:text-[#faf9f5]"
-            >
-              {isLoadingMore ? t('loadingMore') : t('loadMoreMessages', { count: LOAD_MORE_MESSAGE_COUNT })}
-            </button>
-          </div>
-        )}
-        {isLoading && messages.length === 0 && (
-          <div className="flex min-h-[220px] flex-1 items-center justify-center">
-            <Icon icon="lucide:loader-circle" className="h-6 w-6 animate-spin text-[#c96442] dark:text-[#d97757]" />
-          </div>
-        )}
-        {!isLoading && messages.length === 0 && (
-          <div className="flex min-h-[220px] flex-1 flex-col items-center justify-center text-center">
-            <Icon icon="lucide:message-circle" className="mb-3 h-8 w-8 text-[#87867f] dark:text-[#8f8d86]" />
-            <p className="font-serif text-lg font-medium text-[#141413] dark:text-[#faf9f5]">{t('noMessages')}</p>
-            <p className="mt-1 text-sm text-[#5e5d59] dark:text-[#b0aea5]">{t('beFirstToMessage')}</p>
-          </div>
-        )}
-         {!isLoading && messages.length > 0 && (
+          {hasMoreMessages && (
+            <div className="mb-3 flex justify-center">
+              <button
+                type="button"
+                onClick={handleLoadMore}
+                disabled={isLoadingMore}
+                className="rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-3 py-1.5 text-xs font-medium text-[#4d4c48] shadow-sm backdrop-blur transition hover:border-[#c2c0b6] hover:text-[#141413] dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc] dark:hover:text-[#faf9f5]"
+              >
+                {isLoadingMore ? t('loadingMore') : t('loadMoreMessages', { count: LOAD_MORE_MESSAGE_COUNT })}
+              </button>
+            </div>
+          )}
+          {isLoading && messages.length === 0 && (
+            <div className="flex min-h-[220px] flex-1 items-center justify-center">
+              <Icon icon="lucide:loader-circle" className="h-6 w-6 animate-spin text-[#c96442] dark:text-[#d97757]" />
+            </div>
+          )}
+          {!isLoading && messages.length === 0 && (
+            <div className="flex min-h-[220px] flex-1 flex-col items-center justify-center text-center">
+              <Icon icon="lucide:message-circle" className="mb-3 h-8 w-8 text-[#87867f] dark:text-[#8f8d86]" />
+              <p className="font-serif text-lg font-medium text-[#141413] dark:text-[#faf9f5]">{t('noMessages')}</p>
+              <p className="mt-1 text-sm text-[#5e5d59] dark:text-[#b0aea5]">{t('beFirstToMessage')}</p>
+            </div>
+          )}
+          {!isLoading && messages.length > 0 && (
             <div className="flex flex-col space-y-2 pb-4">
-                {messages
-                .map((message) => (
-                    <MessageItem
-                    key={message.id}
-                    message={message}
-                    roomPermissions={roomPermissions}
-                    onStartEdit={handleOpenEditModal}
-                    onDeleteMessage={handleOpenDeleteModal}
-                    onRefreshAI={handleRefreshAI}
-                    onReply={onReply}
-                    />
-                ))}
+              {messages.map((message) => (
+                <MessageItem
+                  key={message.id}
+                  message={message}
+                  roomPermissions={roomPermissions}
+                  onStartEdit={handleOpenEditModal}
+                  onDeleteMessage={handleOpenDeleteModal}
+                  onRefreshAI={handleRefreshAI}
+                  onReply={onReply}
+                />
+              ))}
             </div>
-        )}
-        <div ref={messagesEndRef} />
+          )}
+          <div ref={messagesEndRef} />
+        </div>
       </div>
 
       {/* Render Modals */}
