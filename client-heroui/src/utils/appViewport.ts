@@ -1,7 +1,6 @@
 const APP_HEIGHT_CSS_VAR = '--app-height';
 const APP_VIEWPORT_TOP_CSS_VAR = '--app-viewport-top';
-const KEYBOARD_OPEN_CLASS = 'roomtalk-keyboard-open';
-const KEYBOARD_HEIGHT_THRESHOLD_PX = 120;
+const EDITING_CLASS = 'roomtalk-editing';
 
 const getViewportHeight = (win: Window) => {
   const visualHeight = win.visualViewport?.height;
@@ -35,18 +34,6 @@ const isEditableElement = (element: Element | null) => {
   return element.hasAttribute('contenteditable') && element.getAttribute('contenteditable') !== 'false';
 };
 
-const isKeyboardLikelyOpen = (win: Window) => {
-  const visualHeight = win.visualViewport?.height;
-  if (typeof visualHeight !== 'number' || !Number.isFinite(visualHeight) || visualHeight <= 0) {
-    return false;
-  }
-
-  return (
-    isEditableElement(win.document.activeElement) &&
-    win.innerHeight - visualHeight > KEYBOARD_HEIGHT_THRESHOLD_PX
-  );
-};
-
 export const installAppViewportSizing = (win: Window = window) => {
   const root = win.document.documentElement;
   const viewport = win.visualViewport;
@@ -64,7 +51,7 @@ export const installAppViewportSizing = (win: Window = window) => {
     }
 
     root.style.setProperty(APP_VIEWPORT_TOP_CSS_VAR, `${getViewportTop(win)}px`);
-    root.classList.toggle(KEYBOARD_OPEN_CLASS, isKeyboardLikelyOpen(win));
+    root.classList.toggle(EDITING_CLASS, isEditableElement(win.document.activeElement));
   };
 
   const scheduleViewportUpdate = (updateKind: 'all' | 'top') => {
@@ -87,12 +74,16 @@ export const installAppViewportSizing = (win: Window = window) => {
 
   win.addEventListener('resize', scheduleFullViewportUpdate);
   win.addEventListener('orientationchange', scheduleFullViewportUpdate);
+  win.document.addEventListener('focusin', scheduleFullViewportUpdate);
+  win.document.addEventListener('focusout', scheduleFullViewportUpdate);
   viewport?.addEventListener('resize', scheduleFullViewportUpdate);
   viewport?.addEventListener('scroll', scheduleViewportTopUpdate);
 
   return () => {
     win.removeEventListener('resize', scheduleFullViewportUpdate);
     win.removeEventListener('orientationchange', scheduleFullViewportUpdate);
+    win.document.removeEventListener('focusin', scheduleFullViewportUpdate);
+    win.document.removeEventListener('focusout', scheduleFullViewportUpdate);
     viewport?.removeEventListener('resize', scheduleFullViewportUpdate);
     viewport?.removeEventListener('scroll', scheduleViewportTopUpdate);
 
@@ -100,6 +91,6 @@ export const installAppViewportSizing = (win: Window = window) => {
       win.cancelAnimationFrame(frameId);
     }
 
-    root.classList.remove(KEYBOARD_OPEN_CLASS);
+    root.classList.remove(EDITING_CLASS);
   };
 };

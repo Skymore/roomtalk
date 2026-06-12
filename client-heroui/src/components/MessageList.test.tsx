@@ -333,6 +333,12 @@ describe('MessageList optimistic messages', () => {
     expect(screen.getByText('last visible message').parentElement?.className).not.toContain('pb-4');
   });
 
+  it('keeps export controls outside the message scroll container', () => {
+    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
+
+    expect(screen.getByText('exportChat').closest('[data-testid="message-list-scroll"]')).toBeNull();
+  });
+
   it('does not force the room back to the bottom after the user scrolls away', () => {
     const resizeCallbacks: ResizeObserverCallback[] = [];
     class ResizeObserverMock {
