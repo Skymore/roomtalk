@@ -39,11 +39,15 @@ type TestServer = {
     appendedMediaAssets: MediaAsset[];
     mediaAssets: Map<string, MediaAsset>;
     pendingMediaUploads: Map<string, PendingMediaUpload>;
+    pushSubscriptions: Map<string, { clientId: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }>;
     readMessagesByRoom: (roomId: string) => Promise<Message[]>;
     addRoomMember: (roomId: string, clientId: string, role: 'owner' | 'member', joinedAt?: string) => Promise<{ roomId: string; clientId: string; role: 'owner' | 'member'; joinedAt: string } | null>;
     getRoomMember: (roomId: string, clientId: string) => Promise<{ roomId: string; clientId: string; role: 'owner' | 'member'; joinedAt: string } | null>;
     isRoomMember: (roomId: string, clientId: string) => Promise<boolean>;
     readRoomMembers: (roomId: string) => Promise<Array<{ roomId: string; clientId: string; role: 'owner' | 'member'; joinedAt: string }>>;
+    savePushSubscription: (subscription: { clientId: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }) => Promise<void>;
+    deletePushSubscription: (clientId: string, endpoint: string) => Promise<boolean>;
+    readPushSubscriptionsByRoom: (roomId: string) => Promise<Array<{ clientId: string; endpoint: string; p256dh: string; auth: string; createdAt: string; updatedAt: string; userAgent?: string }>>;
     readRoomsByUser: (clientId: string) => Promise<Room[]>;
     generateUniqueRoomId: () => Promise<string>;
     saveRoom: (room: Room) => Promise<Room | null>;
@@ -156,6 +160,7 @@ async function createTestServer(overrides: { mediaObjectStorage?: unknown; media
     appendedMediaAssets: [] as MediaAsset[],
     mediaAssets: new Map<string, MediaAsset>(),
     pendingMediaUploads: new Map<string, PendingMediaUpload>(),
+    pushSubscriptions: new Map<string, { clientId: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }>(),
     async readMessagesByRoom(roomId: string) {
       return this.messages.filter(message => message.roomId === roomId);
     },
@@ -175,6 +180,28 @@ async function createTestServer(overrides: { mediaObjectStorage?: unknown; media
       return [...this.members]
         .filter(key => key.startsWith(`${roomId}:`))
         .map(key => ({ roomId, clientId: key.split(':')[1], role: 'member' as const, joinedAt: '2026-05-03T00:00:00.000Z' }));
+    },
+    async savePushSubscription(subscription: { clientId: string; endpoint: string; p256dh: string; auth: string; userAgent?: string }) {
+      this.pushSubscriptions.set(subscription.endpoint, subscription);
+    },
+    async deletePushSubscription(clientId: string, endpoint: string) {
+      const existing = this.pushSubscriptions.get(endpoint);
+      if (!existing || existing.clientId !== clientId) {
+        return false;
+      }
+      this.pushSubscriptions.delete(endpoint);
+      return true;
+    },
+    async readPushSubscriptionsByRoom(roomId: string) {
+      const members = await this.readRoomMembers(roomId);
+      const memberIds = new Set(members.map(member => member.clientId));
+      return [...this.pushSubscriptions.values()]
+        .filter(subscription => memberIds.has(subscription.clientId))
+        .map(subscription => ({
+          ...subscription,
+          createdAt: '2026-05-03T00:00:00.000Z',
+          updatedAt: '2026-05-03T00:00:00.000Z',
+        }));
     },
     async readRoomsByUser(clientId: string) {
       return this.rooms.filter(room => room.creatorId === clientId || this.members.has(`${room.id}:${clientId}`));
@@ -403,6 +430,66 @@ describe('API routes', () => {
     assert.equal(status.persistenceStore, 'redis');
     assert.equal(status.redis, 'connected');
     assert.equal(status.rooms, 1);
+  });
+
+  it('returns push notification public configuration', async () => {
+    const previousPublicKey = process.env.WEB_PUSH_VAPID_PUBLIC_KEY;
+    const previousPrivateKey = process.env.WEB_PUSH_VAPID_PRIVATE_KEY;
+    delete process.env.WEB_PUSH_VAPID_PUBLIC_KEY;
+    delete process.env.WEB_PUSH_VAPID_PRIVATE_KEY;
+
+    try {
+      const disabledResponse = await fetch(`${server.baseUrl}/api/push/vapid-public-key`);
+      assert.equal(disabledResponse.status, 200);
+      assert.deepEqual(await disabledResponse.json(), { enabled: false, publicKey: '' });
+
+      process.env.WEB_PUSH_VAPID_PUBLIC_KEY = 'public-key';
+      process.env.WEB_PUSH_VAPID_PRIVATE_KEY = 'private-key';
+      const enabledResponse = await fetch(`${server.baseUrl}/api/push/vapid-public-key`);
+      assert.equal(enabledResponse.status, 200);
+      assert.deepEqual(await enabledResponse.json(), { enabled: true, publicKey: 'public-key' });
+    } finally {
+      if (previousPublicKey === undefined) delete process.env.WEB_PUSH_VAPID_PUBLIC_KEY;
+      else process.env.WEB_PUSH_VAPID_PUBLIC_KEY = previousPublicKey;
+      if (previousPrivateKey === undefined) delete process.env.WEB_PUSH_VAPID_PRIVATE_KEY;
+      else process.env.WEB_PUSH_VAPID_PRIVATE_KEY = previousPrivateKey;
+    }
+  });
+
+  it('saves and deletes push notification subscriptions', async () => {
+    const body = {
+      clientId: 'client-1',
+      subscription: {
+        endpoint: 'https://push.example/subscription-1',
+        keys: {
+          p256dh: 'p256dh-key',
+          auth: 'auth-key',
+        },
+      },
+      userAgent: 'test-agent',
+    };
+
+    const saveResponse = await fetch(`${server.baseUrl}/api/push/subscriptions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    assert.equal(saveResponse.status, 204);
+    assert.deepEqual(server.store.pushSubscriptions.get(body.subscription.endpoint), {
+      clientId: 'client-1',
+      endpoint: body.subscription.endpoint,
+      p256dh: 'p256dh-key',
+      auth: 'auth-key',
+      userAgent: 'test-agent',
+    });
+
+    const deleteResponse = await fetch(`${server.baseUrl}/api/push/subscriptions`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1', endpoint: body.subscription.endpoint }),
+    });
+    assert.equal(deleteResponse.status, 204);
+    assert.equal(server.store.pushSubscriptions.has(body.subscription.endpoint), false);
   });
 
   it('rejects room message API reads without membership', async () => {

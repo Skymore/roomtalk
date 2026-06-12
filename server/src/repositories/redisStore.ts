@@ -3,7 +3,7 @@ import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
 import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, stripAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
-import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, PendingMediaUpload, RoomMessageCacheStore, RoomMessagePageOptions, RoomSettingsUpdate, RoomStore } from './store';
+import { DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput } from './store';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 const DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS = 30;
@@ -18,6 +18,7 @@ const PENDING_MEDIA_UPLOADS_BY_EXPIRY_KEY = 'pending_media_uploads_by_expiry';
 const getSavedRoomsKey = (clientId: string) => `user:${clientId}:saved_rooms`;
 const getRoomSavedByKey = (roomId: string) => `room:${roomId}:saved_by`;
 const getRoomPasswordHashKey = (roomId: string) => `room:${roomId}:password_hash`;
+const PUSH_SUBSCRIPTIONS_KEY = 'push_subscriptions';
 
 interface RoomMessagesCachePayload {
   messageVersion: number;
@@ -1429,6 +1430,73 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         .sort((first, second) => Date.parse(first.joinedAt) - Date.parse(second.joinedAt));
     } catch (error) {
       this.logger.error('Error reading Redis room members', { error, roomId });
+      return [];
+    }
+  }
+
+  async savePushSubscription(subscription: SavePushSubscriptionInput): Promise<void> {
+    const now = new Date().toISOString();
+    try {
+      const existingRaw = await this.redisClient.hGet(PUSH_SUBSCRIPTIONS_KEY, subscription.endpoint);
+      const existing = existingRaw ? JSON.parse(existingRaw) as PushSubscriptionRecord : null;
+      const record: PushSubscriptionRecord = {
+        clientId: subscription.clientId,
+        endpoint: subscription.endpoint,
+        p256dh: subscription.p256dh,
+        auth: subscription.auth,
+        userAgent: subscription.userAgent,
+        createdAt: existing?.createdAt || now,
+        updatedAt: now,
+      };
+      await this.redisClient.hSet(PUSH_SUBSCRIPTIONS_KEY, subscription.endpoint, JSON.stringify(record));
+    } catch (error) {
+      this.logger.error('Error saving Redis push subscription', { error, clientId: subscription.clientId });
+    }
+  }
+
+  async deletePushSubscription(clientId: string, endpoint: string): Promise<boolean> {
+    try {
+      const existingRaw = await this.redisClient.hGet(PUSH_SUBSCRIPTIONS_KEY, endpoint);
+      if (!existingRaw) {
+        return false;
+      }
+
+      const existing = JSON.parse(existingRaw) as PushSubscriptionRecord;
+      if (existing.clientId !== clientId) {
+        return false;
+      }
+
+      const removed = await this.redisClient.hDel(PUSH_SUBSCRIPTIONS_KEY, endpoint);
+      return removed > 0;
+    } catch (error) {
+      this.logger.error('Error deleting Redis push subscription', { error, clientId });
+      return false;
+    }
+  }
+
+  async readPushSubscriptionsByRoom(roomId: string): Promise<PushSubscriptionRecord[]> {
+    try {
+      const members = await this.readRoomMembers(roomId);
+      if (members.length === 0) {
+        return [];
+      }
+
+      const memberIds = new Set(members.map(member => member.clientId));
+      const rawSubscriptions = await this.redisClient.hVals(PUSH_SUBSCRIPTIONS_KEY);
+      const subscriptions: PushSubscriptionRecord[] = [];
+      for (const raw of rawSubscriptions) {
+        try {
+          const subscription = JSON.parse(raw) as PushSubscriptionRecord;
+          if (memberIds.has(subscription.clientId)) {
+            subscriptions.push(subscription);
+          }
+        } catch {
+          // Ignore corrupted subscription records.
+        }
+      }
+      return subscriptions.sort((first, second) => Date.parse(second.updatedAt) - Date.parse(first.updatedAt));
+    } catch (error) {
+      this.logger.error('Error reading Redis room push subscriptions', { error, roomId });
       return [];
     }
   }

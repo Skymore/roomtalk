@@ -10,6 +10,7 @@ import { hasRoomAccess } from '../socket/roomAccess';
 import { authorizeRoomAction } from '../socket/roomAuthorization';
 import { createMediaMessage, createReplyReference } from '../services/messageDomain';
 import { decodeLocalMediaObjectKey, LocalMediaObjectStorage, MediaObjectStorage } from '../services/mediaObjectStorage';
+import { getPushPublicConfig, notifyRoomMessageBestEffort } from '../services/pushNotifications';
 
 interface ApiRouteOptions {
   store: RoomStore;
@@ -126,6 +127,27 @@ const parseMediaHistoryKinds = (value: unknown): MediaKind[] => {
     return [value];
   }
   return MEDIA_HISTORY_KINDS;
+};
+
+const parsePushSubscriptionBody = (body: unknown) => {
+  const payload = body && typeof body === 'object' ? body as Record<string, any> : {};
+  const subscription = payload.subscription && typeof payload.subscription === 'object'
+    ? payload.subscription as Record<string, any>
+    : {};
+  const keys = subscription.keys && typeof subscription.keys === 'object'
+    ? subscription.keys as Record<string, any>
+    : {};
+  const clientId = typeof payload.clientId === 'string' ? payload.clientId.trim() : '';
+  const endpoint = typeof subscription.endpoint === 'string' ? subscription.endpoint.trim() : '';
+  const p256dh = typeof keys.p256dh === 'string' ? keys.p256dh.trim() : '';
+  const auth = typeof keys.auth === 'string' ? keys.auth.trim() : '';
+  const userAgent = typeof payload.userAgent === 'string' ? payload.userAgent.slice(0, 500) : undefined;
+
+  if (!clientId || !endpoint || !p256dh || !auth) {
+    return null;
+  }
+
+  return { clientId, endpoint, p256dh, auth, userAgent };
 };
 
 const consumeAIRoleDraftRateLimit = (clientId: string, ip: string | undefined, nowMs = Date.now()) => {
@@ -268,6 +290,31 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     const clientId = req.body?.clientId;
     return typeof clientId === 'string' && clientId.trim() ? clientId : null;
   };
+
+  app.get('/api/push/vapid-public-key', (_req: Request, res: Response) => {
+    return res.json(getPushPublicConfig());
+  });
+
+  app.post('/api/push/subscriptions', async (req: Request, res: Response) => {
+    const subscription = parsePushSubscriptionBody(req.body);
+    if (!subscription) {
+      return res.status(400).json({ error: 'clientId and a valid push subscription are required' });
+    }
+
+    await store.savePushSubscription(subscription);
+    return res.status(204).send();
+  });
+
+  app.delete('/api/push/subscriptions', async (req: Request, res: Response) => {
+    const clientId = getBodyClientId(req);
+    const endpoint = typeof req.body?.endpoint === 'string' ? req.body.endpoint.trim() : '';
+    if (!clientId || !endpoint) {
+      return res.status(400).json({ error: 'clientId and endpoint are required' });
+    }
+
+    await store.deletePushSubscription(clientId, endpoint);
+    return res.status(204).send();
+  });
 
   app.get('/api/rooms/:roomId/media-history', async (req: Request, res: Response) => {
     try {
@@ -443,6 +490,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
 
     io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
     io.to(roomId).emit('new_message', message);
+    notifyRoomMessageBestEffort({ store, room: updatedRoom, message, logger: routeLogger });
     return res.status(201).json(message);
   });
 
@@ -658,6 +706,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     await store.deletePendingMediaUpload(assetId);
     io.to(appendResult.room.creatorId).emit('room_updated', appendResult.room);
     io.to(roomId).emit('new_message', appendResult.message);
+    notifyRoomMessageBestEffort({ store, room: appendResult.room, message: appendResult.message, logger: routeLogger });
     return res.status(201).json(appendResult.message);
   });
 

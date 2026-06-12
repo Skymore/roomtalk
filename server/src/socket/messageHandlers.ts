@@ -3,6 +3,7 @@ import {
   createReplyReference,
   createUserMessage,
 } from '../services/messageDomain';
+import { notifyRoomMessageBestEffort } from '../services/pushNotifications';
 import { Message } from '../types';
 import { hasRoomAccess } from './roomAccess';
 import { authorizeRoomAction, getRoomMessage } from './roomAuthorization';
@@ -144,6 +145,7 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
 
     io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
     io.to(messageData.roomId).emit('new_message', message);
+    notifyRoomMessageBestEffort({ store, room: updatedRoom, message, logger: socketLogger });
     callback?.({ success: true, message });
   });
 
