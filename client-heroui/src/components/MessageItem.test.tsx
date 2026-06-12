@@ -785,7 +785,60 @@ describe('MessageItem replies', () => {
       expect(video).toBeTruthy();
       return video;
     });
-    expect(viewerVideo?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/video-1.mp4?X-Amz-Signature=abc123#t=0.001');
+    expect(viewerVideo?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/video-1.mp4?X-Amz-Signature=abc123');
     expect(viewerVideo?.hasAttribute('controls')).toBe(true);
+
+    fireEvent.error(viewerVideo as HTMLVideoElement);
+    expect(await screen.findByText('videoPreviewUnsupported')).toBeTruthy();
+  });
+
+  it('shows a download fallback when the browser cannot preview a video', async () => {
+    getMediaDownloadUrlMock.mockResolvedValue({
+      url: 'https://signed.example/rooms/room-1/video-1.mov?X-Amz-Signature=abc123',
+      expiresAt: '2026-05-03T10:15:00.000Z',
+    });
+
+    const { container } = render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'mov-message',
+          content: '',
+          messageType: 'media',
+          mediaAsset: {
+            id: 'video-1',
+            kind: 'video',
+            mimeType: 'video/quicktime',
+            byteSize: 789,
+            filename: 'clip.mov',
+          },
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    const firstVideo = await waitFor(() => {
+      const video = container.querySelector('video');
+      expect(video).toBeTruthy();
+      return video as HTMLVideoElement;
+    });
+    fireEvent.error(firstVideo);
+
+    await waitFor(() => {
+      expect(getMediaDownloadUrlMock).toHaveBeenCalledTimes(2);
+    });
+    const retriedVideo = await waitFor(() => {
+      const video = container.querySelector('video');
+      expect(video).toBeTruthy();
+      return video as HTMLVideoElement;
+    });
+    fireEvent.error(retriedVideo);
+
+    expect(await screen.findByText(/videoPreviewUnsupported/)).toBeTruthy();
+    expect(screen.getByLabelText('downloadMedia')).toBeTruthy();
+    expect(screen.getAllByLabelText('openMediaViewer').length).toBeGreaterThan(0);
   });
 });

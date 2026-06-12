@@ -117,6 +117,8 @@ const ViewerButton: React.FC<ViewerButtonProps> = ({ label, icon, onPress, class
 );
 
 const MediaStageItem: React.FC<MediaStageItemProps> = ({ item, alt, isActive, onTapImage }) => {
+  const { t } = useTranslation();
+  const [videoPreviewError, setVideoPreviewError] = React.useState(false);
   const { mediaUrl, posterUrl } = useCachedMedia({
     assetId: item.assetId,
     url: item.src,
@@ -125,6 +127,10 @@ const MediaStageItem: React.FC<MediaStageItemProps> = ({ item, alt, isActive, on
     byteSize: item.byteSize,
   });
   const displayUrl = mediaUrl || item.src;
+
+  React.useEffect(() => {
+    setVideoPreviewError(false);
+  }, [displayUrl, item.kind]);
 
   if (item.kind === "image") {
     return (
@@ -138,10 +144,34 @@ const MediaStageItem: React.FC<MediaStageItemProps> = ({ item, alt, isActive, on
     );
   }
 
+  if (videoPreviewError) {
+    return (
+      <div className="flex max-w-md flex-col items-center gap-4 rounded-xl border border-white/10 bg-white/[0.06] px-6 py-8 text-center text-white shadow-2xl">
+        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-white/10 text-white">
+          <Icon icon="lucide:video-off" className="h-7 w-7" />
+        </div>
+        <div className="space-y-1">
+          <p className="text-sm font-semibold text-white">{t("videoPreviewUnsupported")}</p>
+          <p className="text-xs text-white/60">{item.mimeType || t("videoMessage")}</p>
+        </div>
+        <a
+          href={displayUrl}
+          download={getMediaFileName(item)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex h-10 items-center gap-2 rounded-full bg-white px-4 text-sm font-semibold text-[#141413] transition hover:bg-white/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
+        >
+          <Icon icon="lucide:download" className="h-4 w-4" />
+          {t("downloadMedia")}
+        </a>
+      </div>
+    );
+  }
+
   return (
     <video
       key={displayUrl}
-      src={getVideoPreviewUrl(displayUrl)}
+      src={displayUrl}
       poster={posterUrl || undefined}
       className="max-h-full w-full max-w-5xl bg-black object-contain sm:rounded-lg"
       controls={isActive}
@@ -149,6 +179,7 @@ const MediaStageItem: React.FC<MediaStageItemProps> = ({ item, alt, isActive, on
       playsInline
       preload="metadata"
       muted={!isActive}
+      onError={() => setVideoPreviewError(true)}
     />
   );
 };
@@ -160,6 +191,7 @@ const MediaHistoryGridItem: React.FC<MediaHistoryGridItemProps> = ({
   openMediaLabel,
   onSelect,
 }) => {
+  const [videoPreviewError, setVideoPreviewError] = React.useState(false);
   const { mediaUrl, posterUrl } = useCachedMedia({
     assetId: item.assetId,
     url: item.url,
@@ -168,6 +200,10 @@ const MediaHistoryGridItem: React.FC<MediaHistoryGridItemProps> = ({
     byteSize: item.byteSize,
   });
   const displayUrl = mediaUrl || item.url;
+
+  React.useEffect(() => {
+    setVideoPreviewError(false);
+  }, [displayUrl, item.kind]);
 
   return (
     <button
@@ -178,6 +214,10 @@ const MediaHistoryGridItem: React.FC<MediaHistoryGridItemProps> = ({
     >
       {item.kind === "image" ? (
         <img src={displayUrl} alt={sharedImageLabel} className="h-full w-full object-cover" loading="lazy" />
+      ) : videoPreviewError ? (
+        <div className="flex h-full w-full items-center justify-center bg-black/50 text-white/80">
+          <Icon icon="lucide:video-off" className="h-7 w-7" />
+        </div>
       ) : (
         <>
           <video
@@ -187,6 +227,7 @@ const MediaHistoryGridItem: React.FC<MediaHistoryGridItemProps> = ({
             preload="metadata"
             muted
             playsInline
+            onError={() => setVideoPreviewError(true)}
           />
           <span className="absolute inset-0 flex items-center justify-center bg-black/20">
             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-black/45 text-white">
