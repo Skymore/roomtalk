@@ -49,10 +49,6 @@ export const isStandaloneWebApp = () => (
     Boolean((navigator as Navigator & { standalone?: boolean }).standalone))
 );
 
-export const canUseShareSheet = () => (
-  typeof navigator !== 'undefined' && typeof navigator.share === 'function'
-);
-
 export const getPushPublicKey = async (): Promise<PushPublicKeyResponse> => {
   const response = await fetch(apiPath('/api/push/vapid-public-key'), { cache: 'no-store' });
   if (!response.ok) {
@@ -91,18 +87,6 @@ export const getPushNotificationStatus = async (): Promise<PushNotificationStatu
   }
 
   return Notification.permission === 'default' ? 'default' : 'unsubscribed';
-};
-
-export const openInstallShareSheet = async () => {
-  if (!canUseShareSheet()) {
-    throw new Error('Share sheet is not available in this browser');
-  }
-
-  await navigator.share({
-    title: 'RoomTalk',
-    text: 'Add RoomTalk to your Home Screen, then open it from there to enable notifications.',
-    url: window.location.origin,
-  });
 };
 
 export const enablePushNotifications = async () => {

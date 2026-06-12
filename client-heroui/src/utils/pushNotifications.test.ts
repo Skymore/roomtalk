@@ -58,17 +58,4 @@ describe('push notification platform detection', () => {
     await expect(getPushNotificationStatus()).resolves.toBe('unsupported');
   });
 
-  it('opens the share sheet with Home Screen install guidance', async () => {
-    const share = vi.fn(async () => undefined);
-    setNavigatorValue('share' as keyof Navigator, share);
-
-    const { openInstallShareSheet } = await import('./pushNotifications');
-    await openInstallShareSheet();
-
-    expect(share).toHaveBeenCalledWith(expect.objectContaining({
-      title: 'RoomTalk',
-      text: expect.stringContaining('Home Screen'),
-      url: window.location.origin,
-    }));
-  });
 });
