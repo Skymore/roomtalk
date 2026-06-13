@@ -112,14 +112,63 @@ const resolveMessageMedia = async (message: Message, resolveMediaUrl: ExportMedi
   };
 };
 
-const collectEmbeddedImages = async (
+const isEmbeddableHtmlMediaKind = (kind?: string) => (
+  kind === 'image' || kind === 'video' || kind === 'audio'
+);
+
+const createReplyMediaMessage = (message: Message): Message | null => {
+  const replyTo = message.replyTo;
+  const mediaAsset = replyTo?.mediaAsset;
+  if (!replyTo || replyTo.messageType !== 'media' || !mediaAsset?.id) {
+    return null;
+  }
+
+  return {
+    id: replyTo.messageId,
+    clientId: '',
+    content: '',
+    roomId: message.roomId,
+    timestamp: message.timestamp,
+    messageType: 'media',
+    username: replyTo.username,
+    mimeType: mediaAsset.mimeType,
+    mediaAsset: { ...mediaAsset },
+  };
+};
+
+const collectTranscriptMediaMessages = (messages: Message[]) => {
+  const mediaMessages: Message[] = [];
+  const seenAssetIds = new Set<string>();
+  const addMediaMessage = (mediaMessage: Message | null) => {
+    const assetId = mediaMessage?.mediaAsset?.id;
+    if (!mediaMessage || !assetId || seenAssetIds.has(assetId)) {
+      return;
+    }
+    seenAssetIds.add(assetId);
+    mediaMessages.push(mediaMessage);
+  };
+
+  for (const message of messages) {
+    addMediaMessage(message.messageType === 'media' ? message : null);
+    addMediaMessage(createReplyMediaMessage(message));
+  }
+
+  return mediaMessages;
+};
+
+const getMediaReference = (message: Message, mediaByAssetId: Map<string, HtmlMediaReference>) => (
+  message.mediaAsset?.id ? mediaByAssetId.get(message.mediaAsset.id) : undefined
+);
+
+const collectEmbeddedMedia = async (
   messages: Message[],
   resolveMediaUrl: ExportMediaResolver,
 ) => {
-  const mediaByMessageId = new Map<string, HtmlMediaReference>();
+  const mediaByAssetId = new Map<string, HtmlMediaReference>();
 
-  for (const message of messages) {
-    if (message.mediaAsset?.kind !== 'image') {
+  for (const message of collectTranscriptMediaMessages(messages)) {
+    const asset = message.mediaAsset;
+    if (!asset?.id || !isEmbeddableHtmlMediaKind(asset.kind)) {
       continue;
     }
 
@@ -129,23 +178,23 @@ const collectEmbeddedImages = async (
         continue;
       }
       const blob = await fetchMediaBlob(resolved.url);
-      mediaByMessageId.set(message.id, {
-        kind: 'image',
+      mediaByAssetId.set(asset.id, {
+        kind: resolved.asset.kind,
         src: await blobToDataUrl(blob),
         filename: buildMediaFilename(message),
         mimeType: resolved.asset.mimeType,
         byteSize: resolved.asset.byteSize,
       });
     } catch (error) {
-      console.warn('Failed to embed image in transcript export:', error);
-      mediaByMessageId.set(message.id, {
-        kind: 'image',
-        error: 'Image could not be embedded.',
+      console.warn('Failed to embed media in transcript export:', error);
+      mediaByAssetId.set(asset.id, {
+        kind: asset.kind,
+        error: 'Media could not be embedded.',
       });
     }
   }
 
-  return mediaByMessageId;
+  return mediaByAssetId;
 };
 
 const renderMediaHtml = (message: Message, media?: HtmlMediaReference) => {
@@ -200,9 +249,36 @@ const renderMediaHtml = (message: Message, media?: HtmlMediaReference) => {
   `;
 };
 
-const messageToHtml = (message: Message, mediaByMessageId: Map<string, HtmlMediaReference>) => {
+const renderReplyHtml = (message: Message, mediaByAssetId: Map<string, HtmlMediaReference>) => {
+  const replyTo = message.replyTo;
+  if (!replyTo) {
+    return '';
+  }
+
+  const senderName = replyTo.username || 'Participant';
+  const title = `Replying to ${senderName}`;
+  const replyMediaMessage = createReplyMediaMessage(message);
+
+  if (replyMediaMessage) {
+    return `
+      <div class="reply">
+        <div class="reply-title">${escapeHtml(title)}</div>
+        <div class="reply-body">${renderMediaHtml(replyMediaMessage, getMediaReference(replyMediaMessage, mediaByAssetId))}</div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="reply">
+      <div class="reply-title">${escapeHtml(title)}</div>
+      <div>${escapeHtml(replyTo.preview)}</div>
+    </div>
+  `;
+};
+
+const messageToHtml = (message: Message, mediaByAssetId: Map<string, HtmlMediaReference>) => {
   const body = message.messageType === 'media'
-    ? renderMediaHtml(message, mediaByMessageId.get(message.id))
+    ? renderMediaHtml(message, getMediaReference(message, mediaByAssetId))
     : escapeHtml(message.content || '').replace(/\n/g, '<br>');
 
   const aiMeta = [
@@ -213,7 +289,7 @@ const messageToHtml = (message: Message, mediaByMessageId: Map<string, HtmlMedia
   return `
     <article class="message ${message.clientId === 'ai_assistant' ? 'message-ai' : ''}">
       <div class="meta">${escapeHtml(formatTimestamp(message.timestamp))} &middot; ${escapeHtml(getSenderName(message))}${aiMeta ? ` &middot; ${escapeHtml(aiMeta)}` : ''}</div>
-      ${message.replyTo ? `<div class="reply">Replying to ${escapeHtml(message.replyTo.username || 'Participant')}: ${escapeHtml(message.replyTo.preview)}</div>` : ''}
+      ${renderReplyHtml(message, mediaByAssetId)}
       <div class="body">${body}</div>
     </article>
   `;
@@ -222,7 +298,7 @@ const messageToHtml = (message: Message, mediaByMessageId: Map<string, HtmlMedia
 export const buildTranscriptHtml = (
   room: TranscriptRoom,
   messages: Message[],
-  mediaByMessageId: Map<string, HtmlMediaReference> = new Map(),
+  mediaByAssetId: Map<string, HtmlMediaReference> = new Map(),
 ) => `
 <!doctype html>
 <html>
@@ -240,6 +316,10 @@ export const buildTranscriptHtml = (
       .message-ai .body { background: #faf9f5; border-color: #dedbd0; }
       .meta { color: #5e5d59; font-size: 12px; margin-bottom: 7px; }
       .reply { border-left: 2px solid #c96442; color: #5e5d59; font-size: 12px; margin-bottom: 8px; padding-left: 8px; }
+      .reply-title { font-weight: 600; margin-bottom: 4px; }
+      .reply .media-image { max-height: 180px; }
+      .reply .media-video { max-height: 220px; }
+      .reply audio { max-width: 100%; }
       .body { background: #fffdf8; border: 1px solid #e8e6dc; border-radius: 8px; display: inline-block; font-size: 14px; line-height: 1.55; max-width: 100%; padding: 10px 12px; white-space: normal; }
       .media { margin: 0; }
       .media-image { border-radius: 8px; display: block; max-height: 520px; max-width: 100%; object-fit: contain; }
@@ -253,7 +333,7 @@ export const buildTranscriptHtml = (
     <main>
       <h1>${escapeHtml(room.name)}</h1>
       <div class="summary">Room ID: ${escapeHtml(room.id)} &middot; Exported: ${escapeHtml(new Date().toLocaleString())} &middot; Messages: ${messages.length}</div>
-      ${messages.map(message => messageToHtml(message, mediaByMessageId)).join('')}
+      ${messages.map(message => messageToHtml(message, mediaByAssetId)).join('')}
     </main>
   </body>
 </html>
@@ -264,9 +344,9 @@ export const downloadTranscriptHtml = async (
   messages: Message[],
   resolveMediaUrl: ExportMediaResolver,
 ) => {
-  const embeddedImages = await collectEmbeddedImages(messages, resolveMediaUrl);
+  const embeddedMedia = await collectEmbeddedMedia(messages, resolveMediaUrl);
   triggerDownload(
-    new Blob([buildTranscriptHtml(room, messages, embeddedImages)], { type: 'text/html;charset=utf-8' }),
+    new Blob([buildTranscriptHtml(room, messages, embeddedMedia)], { type: 'text/html;charset=utf-8' }),
     buildTranscriptFilename(room, 'html'),
   );
 };
@@ -378,9 +458,10 @@ export const downloadTranscriptZip = async (
   resolveMediaUrl: ExportMediaResolver,
 ) => {
   const files: ZipFile[] = [];
-  const mediaByMessageId = new Map<string, HtmlMediaReference>();
+  const mediaByAssetId = new Map<string, HtmlMediaReference>();
   const mediaManifest: Array<{
     messageId: string;
+    assetId?: string;
     kind?: string;
     filename?: string;
     path?: string;
@@ -390,8 +471,8 @@ export const downloadTranscriptZip = async (
   }> = [];
 
   let mediaIndex = 1;
-  for (const message of messages) {
-    if (message.messageType !== 'media' || !message.mediaAsset?.id) {
+  for (const message of collectTranscriptMediaMessages(messages)) {
+    if (!message.mediaAsset?.id) {
       continue;
     }
 
@@ -406,7 +487,7 @@ export const downloadTranscriptZip = async (
       mediaIndex += 1;
 
       files.push({ name: mediaPath, data: await blobToBytes(blob) });
-      mediaByMessageId.set(message.id, {
+      mediaByAssetId.set(resolved.asset.id, {
         kind: resolved.asset.kind,
         src: mediaPath,
         filename,
@@ -415,6 +496,7 @@ export const downloadTranscriptZip = async (
       });
       mediaManifest.push({
         messageId: message.id,
+        assetId: resolved.asset.id,
         kind: resolved.asset.kind,
         filename,
         path: mediaPath,
@@ -425,6 +507,7 @@ export const downloadTranscriptZip = async (
       console.warn('Failed to include media in ZIP transcript export:', error);
       mediaManifest.push({
         messageId: message.id,
+        assetId: message.mediaAsset?.id,
         kind: message.mediaAsset?.kind,
         mimeType: message.mediaAsset?.mimeType,
         byteSize: message.mediaAsset?.byteSize,
@@ -434,7 +517,7 @@ export const downloadTranscriptZip = async (
   }
 
   files.unshift(
-    { name: 'transcript.html', data: buildTranscriptHtml(room, messages, mediaByMessageId) },
+    { name: 'transcript.html', data: buildTranscriptHtml(room, messages, mediaByAssetId) },
     {
       name: 'manifest.json',
       data: JSON.stringify({

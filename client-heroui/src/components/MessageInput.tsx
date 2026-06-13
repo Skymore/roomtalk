@@ -234,6 +234,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       username: message.username,
       messageType: message.messageType,
       mediaKind: message.messageType === 'media' ? message.mediaAsset?.kind : undefined,
+      mediaAsset: message.messageType === 'media' && message.mediaAsset ? { ...message.mediaAsset } : undefined,
       preview,
     };
   }, [t]);
@@ -1216,7 +1217,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       ? t('voiceMessage')
       : replyToMessage.mediaAsset?.kind === 'video'
         ? t('videoMessage')
-        : t('sharedImage'))
+        : replyToMessage.mediaAsset?.kind === 'file'
+          ? t('fileAttachment')
+          : t('sharedImage'))
     : replyToMessage?.content.replace(/\s+/g, ' ').trim().slice(0, 120);
 
   return (

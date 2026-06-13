@@ -107,6 +107,7 @@ describe('message domain', () => {
     assert.equal(replyReference.messageId, 'file-message');
     assert.equal(replyReference.messageType, 'media');
     assert.equal(replyReference.mediaKind, 'file');
+    assert.deepEqual(replyReference.mediaAsset, fileMessage.mediaAsset);
     assert.equal(replyReference.preview, '[File attachment]');
     assert.deepEqual(buildAIProviderMessages('system prompt', [fileMessage])[1], {
       role: 'user',

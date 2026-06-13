@@ -12,7 +12,7 @@ import {
 import { Icon } from "@iconify/react";
 import { clientId, getAudioTranscription, getMediaDownloadUrl, requestAudioTranscription } from "../utils/socket";
 import { formatPercentage, formatTime, formatUsdCost } from "../utils/formatters";
-import { AudioTranscription, Message, RoomPermissions } from "../utils/types";
+import { AudioTranscription, Message, MessageMediaAsset, RoomPermissions } from "../utils/types";
 import { useTranslation } from "react-i18next";
 import { useIsTouchDevice } from "../hooks/useIsTouchDevice";
 import { useCachedMedia } from "../hooks/useCachedMedia";
@@ -28,6 +28,9 @@ interface MessageItemProps {
   onRefreshAI?: (messageId: string, content: string) => void;
   onReply: (message: Message) => void;
 }
+
+type ReplyReferenceValue = NonNullable<Message['replyTo']>;
+type Translate = (key: string, values?: { name?: string }) => string;
 
 const tooltipClassNames = {
   content: "border border-[#dedbd0] bg-[#faf9f5] px-2 py-1 text-xs font-medium text-[#141413] shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5]",
@@ -89,6 +92,120 @@ async function copyImageToClipboard(imageSource: string): Promise<boolean> {
   }
 }
 
+const getReplyMediaLabel = (replyTo: ReplyReferenceValue, t: Translate) => {
+  if (replyTo.messageType !== "media") {
+    return replyTo.preview;
+  }
+
+  const mediaKind = replyTo.mediaAsset?.kind || replyTo.mediaKind;
+  if (mediaKind === "audio") return t("voiceMessage");
+  if (mediaKind === "video") return t("videoMessage");
+  if (mediaKind === "file") return t("fileAttachment");
+  return t("sharedImage");
+};
+
+const getPlayableMediaKind = (mediaAsset?: MessageMediaAsset) => {
+  if (!mediaAsset) {
+    return undefined;
+  }
+  return mediaAsset.kind === "image" || mediaAsset.kind === "audio" || mediaAsset.kind === "video"
+    ? mediaAsset.kind
+    : undefined;
+};
+
+const ReplyReference: React.FC<{
+  replyTo: ReplyReferenceValue;
+  roomId: string;
+}> = ({ replyTo, roomId }) => {
+  const { t } = useTranslation();
+  const [signedUrl, setSignedUrl] = React.useState<string | null>(null);
+  const [mediaError, setMediaError] = React.useState(false);
+  const mediaAsset = replyTo.mediaAsset;
+  const playableMediaKind = getPlayableMediaKind(mediaAsset);
+  const canRenderMedia = replyTo.messageType === "media" && Boolean(mediaAsset?.id && playableMediaKind);
+  const replySenderName = replyTo.username
+    || (replyTo.messageType === "ai" ? t("aiAssistantName") : t("participant"));
+  const fallbackPreview = getReplyMediaLabel(replyTo, t);
+  const { mediaUrl: displayMediaUrl, posterUrl } = useCachedMedia({
+    assetId: mediaAsset?.id,
+    url: signedUrl,
+    kind: playableMediaKind,
+    mimeType: mediaAsset?.mimeType,
+    byteSize: mediaAsset?.byteSize,
+  });
+
+  React.useEffect(() => {
+    if (!canRenderMedia || !mediaAsset?.id) {
+      setSignedUrl(null);
+      setMediaError(false);
+      return () => {};
+    }
+
+    let cancelled = false;
+    setSignedUrl(null);
+    setMediaError(false);
+
+    getMediaDownloadUrl({ roomId, assetId: mediaAsset.id })
+      .then(({ url }) => {
+        if (!cancelled) {
+          setSignedUrl(url);
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to get quoted media URL:", error);
+        if (!cancelled) {
+          setMediaError(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canRenderMedia, mediaAsset?.id, roomId]);
+
+  let content: React.ReactNode = <div className="truncate">{fallbackPreview}</div>;
+  if (canRenderMedia && displayMediaUrl && !mediaError) {
+    if (playableMediaKind === "image") {
+      content = (
+        <img
+          src={displayMediaUrl}
+          alt={t("sharedImage")}
+          className="mt-1 block max-h-32 max-w-full rounded-md bg-black/5 object-contain dark:bg-white/5"
+          onError={() => setMediaError(true)}
+        />
+      );
+    } else if (playableMediaKind === "video") {
+      content = (
+        <video
+          controls
+          src={displayMediaUrl}
+          poster={posterUrl || undefined}
+          className="mt-1 block max-h-44 max-w-full rounded-md bg-black"
+          preload="metadata"
+          playsInline
+          onError={() => setMediaError(true)}
+        />
+      );
+    } else if (playableMediaKind === "audio") {
+      content = (
+        <audio
+          controls
+          src={displayMediaUrl}
+          className="roomtalk-audio-player mt-1 block h-8 min-w-[160px] max-w-full"
+          onError={() => setMediaError(true)}
+        />
+      );
+    }
+  }
+
+  return (
+    <div className="mb-2 max-w-full overflow-hidden border-l-2 border-[#c96442] pl-2 text-xs text-[#5e5d59] dark:text-[#b0aea5]">
+      <div className="truncate font-medium">{t("replyingTo", { name: replySenderName })}</div>
+      {content}
+    </div>
+  );
+};
+
 const MessageItemComponent: React.FC<MessageItemProps> = ({
   message,
   roomPermissions,
@@ -133,22 +250,8 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       ].filter(Boolean)
     : [];
   const aiCostLabel = aiMetadataParts.join(' · ');
-  const replySenderName = message.replyTo?.username
-    || (message.replyTo?.messageType === 'ai' ? t('aiAssistantName') : t('participant'));
-  const replyPreview = message.replyTo?.messageType === 'media'
-    ? (message.replyTo.mediaKind === 'audio'
-      ? t('voiceMessage')
-      : message.replyTo.mediaKind === 'video'
-        ? t('videoMessage')
-        : message.replyTo.mediaKind === 'file'
-          ? t('fileAttachment')
-          : t('sharedImage'))
-    : message.replyTo?.preview;
   const replyReference = message.replyTo ? (
-    <div className="mb-2 max-w-full border-l-2 border-[#c96442] pl-2 text-xs text-[#5e5d59] dark:text-[#b0aea5]">
-      <div className="truncate font-medium">{t('replyingTo', { name: replySenderName })}</div>
-      <div className="truncate">{replyPreview}</div>
-    </div>
+    <ReplyReference replyTo={message.replyTo} roomId={message.roomId} />
   ) : null;
 
   const [copyStatus, setCopyStatus] = useState<'idle' | 'success' | 'error'>('idle');

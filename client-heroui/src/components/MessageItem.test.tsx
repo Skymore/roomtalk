@@ -107,6 +107,98 @@ describe('MessageItem replies', () => {
     expect(onReply).toHaveBeenCalledWith(message);
   });
 
+  it('renders quoted image, video, and audio media references', async () => {
+    getMediaDownloadUrlMock.mockImplementation(({ assetId }: { assetId: string }) => Promise.resolve({
+      url: `https://signed.example/${assetId}`,
+      expiresAt: '2026-05-03T10:15:00.000Z',
+    }));
+
+    const imageReply = {
+      ...message,
+      id: 'reply-to-image',
+      replyTo: {
+        messageId: 'quoted-image',
+        username: 'Ada',
+        messageType: 'media',
+        mediaKind: 'image',
+        preview: '[Image attachment]',
+        mediaAsset: {
+          id: 'asset-image',
+          kind: 'image',
+          mimeType: 'image/webp',
+          byteSize: 123,
+          width: 12,
+          height: 12,
+        },
+      },
+    } as Message;
+    const videoReply = {
+      ...message,
+      id: 'reply-to-video',
+      replyTo: {
+        messageId: 'quoted-video',
+        username: 'Ada',
+        messageType: 'media',
+        mediaKind: 'video',
+        preview: '[Video attachment]',
+        mediaAsset: {
+          id: 'asset-video',
+          kind: 'video',
+          mimeType: 'video/mp4',
+          byteSize: 456,
+          filename: 'clip.mp4',
+        },
+      },
+    } as Message;
+    const audioReply = {
+      ...message,
+      id: 'reply-to-audio',
+      replyTo: {
+        messageId: 'quoted-audio',
+        username: 'Ada',
+        messageType: 'media',
+        mediaKind: 'audio',
+        preview: '[Audio attachment]',
+        mediaAsset: {
+          id: 'asset-audio',
+          kind: 'audio',
+          mimeType: 'audio/webm',
+          byteSize: 789,
+          durationMs: 1200,
+        },
+      },
+    } as Message;
+
+    render(
+      <>
+        {[imageReply, videoReply, audioReply].map(item => (
+          <MessageItem
+            key={item.id}
+            message={item}
+            roomPermissions={null}
+            onStartEdit={vi.fn()}
+            onDeleteMessage={vi.fn()}
+            onReply={vi.fn()}
+          />
+        ))}
+      </>
+    );
+
+    await waitFor(() => {
+      expect(getMediaDownloadUrlMock).toHaveBeenCalledWith({ roomId: 'room-1', assetId: 'asset-image' });
+      expect(getMediaDownloadUrlMock).toHaveBeenCalledWith({ roomId: 'room-1', assetId: 'asset-video' });
+      expect(getMediaDownloadUrlMock).toHaveBeenCalledWith({ roomId: 'room-1', assetId: 'asset-audio' });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByAltText('sharedImage').getAttribute('src')).toBe('https://signed.example/asset-image');
+      const video = document.querySelector('video[src="https://signed.example/asset-video"]') as HTMLVideoElement | null;
+      const audio = document.querySelector('audio[src="https://signed.example/asset-audio"]') as HTMLAudioElement | null;
+      expect(video?.controls).toBe(true);
+      expect(audio?.controls).toBe(true);
+    });
+  });
+
   it('hides edit and delete actions unless the viewer owns the message or can manage all messages', () => {
     const { rerender } = render(
       <MessageItem
