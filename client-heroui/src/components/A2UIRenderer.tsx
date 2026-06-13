@@ -25,6 +25,7 @@ const surfaceList = (processor: MessageProcessor<ReactComponentImplementation>) 
 export const A2UIRenderer: React.FC<A2UIRendererProps> = ({ payload, roomId, messageId, onAction }) => {
   const onActionRef = React.useRef(onAction);
   const processedCountRef = React.useRef(0);
+  const processorRef = React.useRef<MessageProcessor<ReactComponentImplementation> | null>(null);
   const [processingError, setProcessingError] = React.useState<unknown>(null);
   const [surfaces, setSurfaces] = React.useState<Array<SurfaceModel<ReactComponentImplementation>>>([]);
 
@@ -32,18 +33,31 @@ export const A2UIRenderer: React.FC<A2UIRendererProps> = ({ payload, roomId, mes
     onActionRef.current = onAction;
   }, [onAction]);
 
-  const processor = React.useMemo(() => (
-    new MessageProcessor([basicCatalog], (action: A2uiClientAction) => {
+  const processor = React.useMemo(() => {
+    const created = new MessageProcessor([basicCatalog], (action: A2uiClientAction) => {
+      // Capture the surface data model so a follow-up turn knows what the user
+      // actually entered/selected — input components (ChoicePicker, TextField, ...)
+      // write to the data model, not to the action context.
+      let dataModel: unknown;
+      try {
+        dataModel = processorRef.current?.model.surfacesMap.get(action.surfaceId)?.dataModel.get("/");
+      } catch {
+        dataModel = undefined;
+      }
+
       onActionRef.current?.({
         ...action,
         context: {
           ...action.context,
           roomId,
           messageId,
+          ...(dataModel !== undefined ? { dataModel } : {}),
         },
       });
-    })
-  ), [messageId, roomId]);
+    });
+    processorRef.current = created;
+    return created;
+  }, [messageId, roomId]);
 
   const syncSurfaces = React.useCallback(() => {
     setSurfaces(surfaceList(processor));

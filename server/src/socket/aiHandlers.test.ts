@@ -796,4 +796,77 @@ describe('AI socket handlers', () => {
     assert.equal(missing.store.upsertedMessages.length, 0);
     assert.deepEqual(missingResponse, { success: false, error: 'Quoted message not found' });
   });
+
+  const a2uiOwningMessage = (overrides: Partial<Message> = {}) => message({
+    id: 'ai-msg-1',
+    content: 'previous answer',
+    uiPayload: {
+      format: 'a2ui',
+      version: 'v0.9',
+      messages: [
+        { version: 'v0.9', createSurface: { surfaceId: 's', catalogId: 'https://a2ui.org/specification/v0_9/basic_catalog.json' } },
+      ],
+    },
+    ...overrides,
+  });
+
+  it('starts a new AI turn when a wired A2UI action (context.followUp) is clicked', async () => {
+    const { io, socket, store } = createHarness({ messages: [message(), a2uiOwningMessage()] });
+
+    await socket.invoke('a2ui_action', {
+      roomId: 'room-1',
+      messageId: 'ai-msg-1',
+      action: {
+        name: 'submit_choice',
+        surfaceId: 's',
+        sourceComponentId: 'cta',
+        timestamp: '2026-05-03T00:01:00.000Z',
+        context: { followUp: true, roomId: 'room-1', messageId: 'ai-msg-1', dataModel: { selectedNextStep: ['export'] } },
+      },
+    });
+
+    const followUp = store.appendedMessages.find(item => /interacted with the streamed A2UI surface/.test(item.content));
+    assert.ok(followUp, 'expected a follow-up user message to be appended');
+    assert.match(followUp!.content, /selectedNextStep/);
+    assert.doesNotMatch(followUp!.content, /followUp/);
+    assert.ok(io.roomEmits.some(event => event.event === 'new_message'));
+    assert.ok(io.roomEmits.some(event => event.event === 'ai_stream_end'), 'expected a new AI turn to complete');
+  });
+
+  it('ignores A2UI actions that are not wired for follow-up', async () => {
+    const { io, socket, store } = createHarness({ messages: [message(), a2uiOwningMessage()] });
+
+    await socket.invoke('a2ui_action', {
+      roomId: 'room-1',
+      messageId: 'ai-msg-1',
+      action: {
+        name: 'cosmetic',
+        surfaceId: 's',
+        sourceComponentId: 'cta',
+        timestamp: '2026-05-03T00:01:00.000Z',
+        context: { other: 1 },
+      },
+    });
+
+    assert.equal(store.appendedMessages.length, 0);
+    assert.ok(!io.roomEmits.some(event => event.event === 'ai_stream_end'));
+  });
+
+  it('ignores follow-up actions when the owning message has no A2UI payload', async () => {
+    const { socket, store } = createHarness({ messages: [message({ id: 'plain-msg' })] });
+
+    await socket.invoke('a2ui_action', {
+      roomId: 'room-1',
+      messageId: 'plain-msg',
+      action: {
+        name: 'submit_choice',
+        surfaceId: 's',
+        sourceComponentId: 'cta',
+        timestamp: '2026-05-03T00:01:00.000Z',
+        context: { followUp: true },
+      },
+    });
+
+    assert.equal(store.appendedMessages.length, 0);
+  });
 });

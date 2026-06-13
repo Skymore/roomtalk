@@ -917,6 +917,45 @@ describe('PostgresStore', () => {
     assert.equal(await store.clearRoomMessages('room-1'), 2);
   });
 
+  it('selects ui_payload when reading messages so A2UI surfaces survive a reload', async () => {
+    // Regression: ui_payload was written but omitted from the read column list, so
+    // closing and reopening a room dropped the streamed A2UI surface in production.
+    const uiPayload = {
+      format: 'a2ui' as const,
+      version: 'v0.9' as const,
+      messages: [{ version: 'v0.9', createSurface: { surfaceId: 's', catalogId: 'c' } }],
+    };
+    const pool = new ScriptedPool([
+      {
+        rows: [{
+          id: 'ai-1',
+          room_id: 'room-1',
+          client_id: 'ai_assistant',
+          content: 'answer',
+          timestamp: '2026-05-04T00:00:00.000Z',
+          message_type: 'ai',
+          username: null,
+          avatar: null,
+          mime_type: null,
+          status: 'complete',
+          ai_model: null,
+          usage: null,
+          cost: null,
+          reply_to: null,
+          ui_payload: uiPayload,
+        }],
+      },
+    ]);
+    const store = new PostgresStore(pool, logger as any);
+
+    const messages = await store.readMessagesByRoom('room-1');
+
+    const readCall = pool.calls.find(call => /FROM room_messages/.test(call.sql));
+    assert.ok(readCall, 'expected a room_messages read query');
+    assert.match(readCall!.sql, /ui_payload/);
+    assert.deepEqual(messages[0]?.uiPayload, uiPayload);
+  });
+
   it('tracks AI cost totals and resets test data', async () => {
     const pool = new ScriptedPool([
       { rows: [{ total_usd: '0' }] },

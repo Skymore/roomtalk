@@ -14,6 +14,25 @@
 - fake E2E AI 在流式文本过程中发送多次 `a2ui_update`，用于本地稳定演示。
 - 新增默认 AI Role：`A2UI Demo`。真实 provider 下用户发送 `HI` 时会被 system prompt 明确要求触发 A2UI demo。
 
+## 设计取舍（Why）
+
+这几条是回头看代码时最容易忘记动机的地方，单独记录：
+
+- **为什么用 prompt-first，而不是严格 structured output / strict function schema。**
+  A2UI 协议本身在 v0.9 从 “Structured Output First” 改成了 “Prompt First”：schema 直接嵌进 system prompt 让模型自然生成，而不是靠 strict JSON 模式强约束。v0.8 那种深层嵌套 wrapper “proved confusing for an LLM to generate”。所以我们的 tool schema 是**描述性引导**（`additionalProperties: true`、18 个组件共用一个组件 schema），真正的强制发生在服务端校验，而不是 API 层 strict。参考 A2UI evolution guide v0.8→v0.9。
+
+- **为什么需要 normalizer（`a2uiPayload.ts` 的 `normalizeA2UIAliases`）。**
+  官方 `@a2ui/web_core` 只提供 “校验即拒绝” 的 Zod schema，没有任何容错/归一化 API。但我们的消息是 LLM 生成的，常见错误（`type`→`component`、`content`→`text`、`MultipleChoice`→`ChoicePicker`、moustache `{{x}}`→`{path}`、内联子对象→id 引用、`data`→`value`）如果直接进严格校验会被大量拒绝。normalizer 是 “LLM 输出 → 严格协议” 之间的适配层，这正是官方推荐的 “生成后修复 + 校验” 模式的增强版。
+
+- **为什么 prompt 里的组件清单/示例由 `A2UI_COMPONENT_CATALOG` 生成（`a2uiTools.ts`）。**
+  对应官方 Python SDK 的 `A2uiSchemaManager.generate_system_prompt()`（从 catalog 抽取每个组件示例注入 prompt）。JS 版 `web_core` 没有这个 API，所以用 TS 在本地维护一份单一来源的目录，由 `buildA2UIComponentGuide()` 生成 prompt，避免 few-shot 与实际校验的 v0.9 catalog 漂移。`a2uiTools.test.ts` 断言每个 `A2UI_BASIC_COMPONENT_NAMES` 都有目录条目。
+
+- **为什么交互回灌由模型自己决定（follow-up 接线）。**
+  组件的 `action` 点击会上报，但不是每个点击都该触发下一轮对话。我们让模型在它想要 “点击→继续对话” 的那些 action 上显式写 `context.followUp = true`（见 `A2UI_FOLLOW_UP_CONTEXT_KEY`）。服务端只有看到该标记才会起新的一轮 AI（`aiHandlers.ts` 的第二个 `a2ui_action` 监听器）。输入类组件（ChoicePicker/TextField/Slider…）本身不发事件、只写 data model，所以客户端在上报 follow-up 时会带上该 surface 的 data model 快照，否则模型不知道用户选了/填了什么。
+
+- **为什么 `ui_payload` 要显式列进 `MESSAGE_COLUMNS`（`postgresStore.ts`）。**
+  曾经写入了但读取的 `SELECT` 列清单漏了它，导致流式时能看到 UI（来自 `ai_stream_end` 内存事件），但关闭房间重进、走 `get_room_messages` 从 Postgres 读时 `ui_payload` 永远 undefined，UI 丢失。Redis 路径整条 `JSON.stringify` 不受影响，所以只在生产（Supabase/Postgres）复现。
+
 ## 事件流
 
 ```mermaid
