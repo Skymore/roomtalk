@@ -22,6 +22,9 @@ import {
 } from "../utils/pushNotifications";
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim();
+const GOOGLE_BUTTON_MAX_WIDTH = 320;
+const GOOGLE_BUTTON_DARK_FRAME_GUTTER = 10;
+const GOOGLE_BUTTON_DARK_FRAME_HEIGHT = 44;
 
 type GoogleCredentialResponse = {
   credential?: string;
@@ -35,6 +38,7 @@ declare global {
           initialize: (options: {
             client_id: string;
             callback: (response: GoogleCredentialResponse) => void;
+            color_scheme?: 'default' | 'light' | 'dark';
             auto_select?: boolean;
             cancel_on_tap_outside?: boolean;
           }) => void;
@@ -75,6 +79,25 @@ const loadGoogleIdentityScript = () => {
   });
 
   return googleIdentityScriptPromise;
+};
+
+const getGoogleButtonWidth = (buttonContainer: HTMLElement) => {
+  const containerWidth = Math.floor(buttonContainer.getBoundingClientRect().width);
+  return Math.min(GOOGLE_BUTTON_MAX_WIDTH, containerWidth || GOOGLE_BUTTON_MAX_WIDTH);
+};
+
+const tightenGoogleButtonDarkFrame = (buttonContainer: HTMLElement, buttonWidth: number) => {
+  const iframe = buttonContainer.querySelector<HTMLIFrameElement>('iframe');
+  if (!iframe) {
+    return false;
+  }
+
+  iframe.style.height = `${GOOGLE_BUTTON_DARK_FRAME_HEIGHT}px`;
+  iframe.style.margin = '-2px 0 0 -10px';
+  iframe.style.maxWidth = 'none';
+  iframe.style.width = `${buttonWidth + GOOGLE_BUTTON_DARK_FRAME_GUTTER * 2}px`;
+
+  return true;
 };
 
 interface SettingsViewProps {
@@ -282,6 +305,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
 
     let cancelled = false;
+    let buttonFrameObserver: MutationObserver | null = null;
+    let animationFrame = 0;
     buttonContainer.replaceChildren();
     loadGoogleIdentityScript()
       .then(() => {
@@ -291,10 +316,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         window.google.accounts.id.initialize({
           client_id: GOOGLE_CLIENT_ID,
           callback: handleGoogleCredential,
+          color_scheme: isDark ? 'dark' : 'light',
           auto_select: false,
           cancel_on_tap_outside: true,
         });
         googleButtonRef.current.replaceChildren();
+        const buttonWidth = getGoogleButtonWidth(googleButtonRef.current);
         window.google.accounts.id.renderButton(googleButtonRef.current, {
           type: 'standard',
           theme: isDark ? 'filled_black' : 'outline',
@@ -302,8 +329,25 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           shape: 'rectangular',
           text: 'signin_with',
           logo_alignment: 'left',
-          width: 320,
+          width: buttonWidth,
         });
+        if (isDark) {
+          const tightenFrame = () => {
+            if (googleButtonRef.current) {
+              const didTightenFrame = tightenGoogleButtonDarkFrame(googleButtonRef.current, buttonWidth);
+              if (didTightenFrame) {
+                buttonFrameObserver?.disconnect();
+              }
+            }
+          };
+
+          if (typeof MutationObserver !== 'undefined') {
+            buttonFrameObserver = new MutationObserver(tightenFrame);
+            buttonFrameObserver.observe(googleButtonRef.current, { childList: true, subtree: true });
+          }
+
+          animationFrame = window.requestAnimationFrame(tightenFrame);
+        }
       })
       .catch((error) => {
         if (!cancelled) {
@@ -313,6 +357,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
     return () => {
       cancelled = true;
+      buttonFrameObserver?.disconnect();
+      if (animationFrame) {
+        window.cancelAnimationFrame(animationFrame);
+      }
       buttonContainer.replaceChildren();
     };
   }, [handleGoogleCredential, isDark, shouldRenderGoogleButton, t]);
@@ -481,7 +529,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               {shouldRenderGoogleButton && (
                 <div
                   ref={googleButtonRef}
-                  className={`min-h-10 ${isUpdatingGoogleAuth ? 'pointer-events-none opacity-60' : ''}`}
+                  className={[
+                    'w-full max-w-[320px]',
+                    isDark ? 'h-10 overflow-hidden rounded-md bg-[#1d1d1b]' : 'min-h-10',
+                    isUpdatingGoogleAuth ? 'pointer-events-none opacity-60' : '',
+                  ].join(' ')}
                 />
               )}
               {accountStatus && !isGoogleLoginAvailable && !accountStatus.account && (
