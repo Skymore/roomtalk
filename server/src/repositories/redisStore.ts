@@ -322,6 +322,7 @@ for i = 1, #existing do
   if ok and decoded['id'] == targetId then
     decoded['content'] = ARGV[3]
     decoded['updatedAt'] = ARGV[4]
+    decoded['uiPayload'] = nil
     updatedPayload = cjson.encode(decoded)
     redis.call('LSET', KEYS[2], i - 1, updatedPayload)
     found = 1
@@ -493,6 +494,7 @@ for i = 1, #existing do
   if ok and decoded['id'] == targetId then
     decoded['content'] = ARGV[3]
     decoded['updatedAt'] = ARGV[4]
+    decoded['uiPayload'] = nil
     updatedPayload = cjson.encode(decoded)
     existing[i] = updatedPayload
     targetIndex = i

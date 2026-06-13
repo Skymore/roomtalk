@@ -1,4 +1,4 @@
-import { Message } from "./types";
+import { A2UIPayload, Message } from "./types";
 
 export const sortMessages = (messages: Message[]) => {
   return [...messages].sort((a, b) => {
@@ -94,9 +94,14 @@ export const getMessageById = (messages: Message[], messageId: string) => {
 };
 
 export const editMessageContent = (messages: Message[], messageId: string, newContent: string) => {
-  return messages.map(message =>
-    message.id === messageId ? { ...message, content: newContent } : message
-  );
+  return messages.map(message => {
+    if (message.id !== messageId) {
+      return message;
+    }
+
+    const { uiPayload: _uiPayload, ...rest } = message;
+    return { ...rest, content: newContent };
+  });
 };
 
 export const replaceMessage = (messages: Message[], updatedMessage: Message) => {
@@ -119,11 +124,12 @@ export const editMessageAndTruncateAfter = (
     return { found: false, messages };
   }
 
+  const { uiPayload: _uiPayload, ...editedMessage } = messages[messageIndex];
   return {
     found: true,
     messages: [
       ...messages.slice(0, messageIndex),
-      { ...messages[messageIndex], content: newContent },
+      { ...editedMessage, content: newContent },
     ],
   };
 };
@@ -148,10 +154,34 @@ export const appendAIChunk = (messages: Message[], messageId: string, chunk: str
   );
 };
 
+const mergeA2UIPayloads = (current: A2UIPayload | undefined, incoming: A2UIPayload): A2UIPayload => {
+  if (!current || current.format !== incoming.format || current.version !== incoming.version) {
+    return incoming;
+  }
+
+  return {
+    ...current,
+    messages: [...current.messages, ...incoming.messages],
+  };
+};
+
+export const appendA2UIPayload = (messages: Message[], messageId: string, uiPayload?: A2UIPayload) => {
+  if (!uiPayload) return messages;
+
+  return messages.map(message =>
+    message.id === messageId
+      ? {
+          ...message,
+          uiPayload: mergeA2UIPayloads(message.uiPayload, uiPayload),
+        }
+      : message
+  );
+};
+
 export const completeAIMessage = (
   messages: Message[],
   messageId: string,
-  updates: Pick<Message, "aiModel" | "usage" | "cost"> & { content?: string }
+  updates: Pick<Message, "aiModel" | "usage" | "cost" | "uiPayload"> & { content?: string }
 ) => {
   return messages.map(message =>
     message.id === messageId
@@ -162,6 +192,7 @@ export const completeAIMessage = (
           aiModel: updates.aiModel ?? message.aiModel,
           usage: updates.usage ?? message.usage,
           cost: updates.cost ?? message.cost,
+          uiPayload: updates.uiPayload ?? message.uiPayload,
         }
       : message
   );

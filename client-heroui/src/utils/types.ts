@@ -20,6 +20,22 @@ export interface MessageMediaAsset {
   durationMs?: number;
 }
 
+export type A2UIVersion = 'v0.9';
+
+export interface A2UIActionEvent {
+  name: string;
+  surfaceId: string;
+  sourceComponentId: string;
+  timestamp: string;
+  context?: Record<string, unknown>;
+}
+
+export interface A2UIPayload {
+  format: 'a2ui';
+  version: A2UIVersion;
+  messages: unknown[];
+}
+
 export interface RoomMediaHistoryItem {
   assetId: string;
   messageId?: string;
@@ -87,6 +103,7 @@ export interface Message {
   cost?: AICost;
   replyTo?: MessageReplyReference;
   mediaAsset?: MessageMediaAsset;
+  uiPayload?: A2UIPayload;
 }
 
 export interface Room {
@@ -192,10 +209,17 @@ export interface AIStreamEndEvent {
   messageId: string;
   roomId: string;
   content: string;
+  uiPayload?: Message['uiPayload'];
   aiModel?: Message['aiModel'];
   usage?: AIUsage;
   cost?: AICost;
   sessionCost?: AICostTotalEvent;
+}
+
+export interface A2UIUpdateEvent {
+  messageId: string;
+  roomId: string;
+  uiPayload: Message['uiPayload'];
 }
 
 export interface AIStreamErrorEvent {

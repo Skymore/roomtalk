@@ -1,6 +1,15 @@
 import { v4 as uuidv4 } from 'uuid';
 import { MAX_CONTEXT_MESSAGES, MAX_CONTEXT_TOKENS, selectAIHistory } from '../services/aiHistory';
 import { calculateAICost, DEFAULT_SYSTEM_MESSAGE, getMessageAIModel, normalizeUsage } from '../services/aiModels';
+import { A2UI_BASIC_CATALOG_ID, mergeA2UIPayloads, normalizeA2UIPayload } from '../services/a2uiPayload';
+import {
+  A2UI_TOOL_NAME,
+  MAX_A2UI_TOOL_ROUNDS,
+  anthropicA2UITool,
+  buildA2UIToolSystemPrompt,
+  normalizeA2UIToolArguments,
+  openAIA2UITool,
+} from '../services/a2uiTools';
 import {
   buildAIProviderMessages,
   buildAnthropicMessages,
@@ -34,6 +43,246 @@ const getE2EFakeAIChunkDelayMs = () => {
 };
 
 const wait = (delayMs: number) => new Promise(resolve => setTimeout(resolve, delayMs));
+
+type ReportedUsage = Record<string, any> | null;
+type EmitA2UIUpdate = (messages: unknown[]) => Promise<boolean>;
+
+type StreamAIResult = {
+  fullContent: string;
+  reportedUsage: ReportedUsage;
+  usageMessages: Array<{ content: any }>;
+};
+
+const addReportedUsage = (current: ReportedUsage, next: any): ReportedUsage => {
+  if (!next || typeof next !== 'object') return current;
+  if (!current) return { ...next };
+
+  const summed = { ...current };
+  [
+    'prompt_tokens',
+    'completion_tokens',
+    'total_tokens',
+    'prompt_cache_hit_tokens',
+    'prompt_cache_miss_tokens',
+    'input_tokens',
+    'output_tokens',
+    'cache_read_input_tokens',
+    'cache_creation_input_tokens',
+  ].forEach((key) => {
+    if (typeof next[key] === 'number') {
+      summed[key] = (typeof summed[key] === 'number' ? summed[key] : 0) + next[key];
+    }
+  });
+
+  const cachedTokens = next.prompt_tokens_details?.cached_tokens;
+  if (typeof cachedTokens === 'number') {
+    summed.prompt_tokens_details = {
+      ...(summed.prompt_tokens_details || {}),
+      cached_tokens: (summed.prompt_tokens_details?.cached_tokens || 0) + cachedTokens,
+    };
+  }
+
+  return summed;
+};
+
+const streamOpenAICompatibleWithA2UI = async (params: {
+  client: any;
+  model: string;
+  messages: any[];
+  emitA2UIUpdate: EmitA2UIUpdate;
+  emitTextChunk: (chunk: string) => void;
+  logger: { warn(message: string, meta?: unknown): void; debug(message: string, meta?: unknown): void };
+  messageId: string;
+}): Promise<StreamAIResult> => {
+  const providerMessages = [...params.messages];
+  let fullContent = '';
+  let reportedUsage: ReportedUsage = null;
+
+  for (let round = 0; round < MAX_A2UI_TOOL_ROUNDS; round++) {
+    let roundContent = '';
+    const toolCalls = new Map<number, { id: string; type: string; function: { name: string; arguments: string } }>();
+    const stream = await params.client.chat.completions.create({
+      model: params.model,
+      messages: providerMessages,
+      stream: true,
+      temperature: 1,
+      tools: [openAIA2UITool],
+      tool_choice: 'auto',
+      stream_options: { include_usage: true },
+    } as any);
+
+    for await (const chunk of stream as any) {
+      if (chunk.usage) {
+        reportedUsage = addReportedUsage(reportedUsage, chunk.usage);
+      }
+
+      const choice = chunk.choices?.[0];
+      const contentChunk = choice?.delta?.content;
+      if (typeof contentChunk === 'string' && contentChunk.length > 0) {
+        fullContent += contentChunk;
+        roundContent += contentChunk;
+        params.emitTextChunk(contentChunk);
+        if (fullContent.length % 100 === 0) {
+          params.logger.debug('Streaming AI chunk', { messageId: params.messageId, contentLength: fullContent.length });
+        }
+      }
+
+      for (const delta of choice?.delta?.tool_calls || []) {
+        const index = typeof delta.index === 'number' ? delta.index : toolCalls.size;
+        const current = toolCalls.get(index) || {
+          id: delta.id || `a2ui_tool_${round}_${index}`,
+          type: delta.type || 'function',
+          function: { name: '', arguments: '' },
+        };
+        if (delta.id) current.id = delta.id;
+        if (delta.type) current.type = delta.type;
+        if (delta.function?.name) current.function.name += delta.function.name;
+        if (delta.function?.arguments) current.function.arguments += delta.function.arguments;
+        toolCalls.set(index, current);
+      }
+    }
+
+    if (toolCalls.size === 0) {
+      break;
+    }
+
+    const assistantToolCalls = [...toolCalls.entries()]
+      .sort(([left], [right]) => left - right)
+      .map(([, toolCall]) => toolCall);
+    const toolMessages: any[] = [];
+
+    for (const toolCall of assistantToolCalls) {
+      if (toolCall.function.name !== A2UI_TOOL_NAME) {
+        toolMessages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: JSON.stringify({ ok: false, error: 'Unsupported tool' }),
+        });
+        continue;
+      }
+
+      const uiPayload = await normalizeA2UIToolArguments(toolCall.function.arguments);
+      const rendered = uiPayload ? await params.emitA2UIUpdate(uiPayload.messages) : false;
+      if (!rendered) {
+        params.logger.warn('AI provider emitted invalid A2UI tool arguments', {
+          messageId: params.messageId,
+          toolCallId: toolCall.id,
+        });
+      }
+      toolMessages.push({
+        role: 'tool',
+        tool_call_id: toolCall.id,
+        content: JSON.stringify({ ok: rendered }),
+      });
+    }
+
+    providerMessages.push({
+      role: 'assistant',
+      content: roundContent || null,
+      tool_calls: assistantToolCalls,
+    });
+    providerMessages.push(...toolMessages);
+
+    if (round === MAX_A2UI_TOOL_ROUNDS - 1) {
+      params.logger.warn('Reached maximum A2UI tool rounds for OpenAI-compatible stream', {
+        messageId: params.messageId,
+        maxRounds: MAX_A2UI_TOOL_ROUNDS,
+      });
+      break;
+    }
+  }
+
+  return {
+    fullContent,
+    reportedUsage,
+    usageMessages: providerMessages,
+  };
+};
+
+const streamAnthropicWithA2UI = async (params: {
+  client: any;
+  model: string;
+  systemPrompt: string;
+  messages: any[];
+  emitA2UIUpdate: EmitA2UIUpdate;
+  emitTextChunk: (chunk: string) => void;
+  logger: { warn(message: string, meta?: unknown): void };
+  messageId: string;
+}): Promise<StreamAIResult> => {
+  const providerMessages = [...params.messages];
+  let fullContent = '';
+  let reportedUsage: ReportedUsage = null;
+
+  for (let round = 0; round < MAX_A2UI_TOOL_ROUNDS; round++) {
+    const stream = params.client.messages.stream({
+      model: params.model,
+      max_tokens: DEFAULT_ANTHROPIC_MAX_TOKENS,
+      system: [{ type: 'text', text: params.systemPrompt, cache_control: { type: 'ephemeral' } }],
+      messages: providerMessages,
+      tools: [anthropicA2UITool],
+    } as any);
+
+    for await (const event of stream as any) {
+      if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+        const contentChunk: string = event.delta.text;
+        fullContent += contentChunk;
+        params.emitTextChunk(contentChunk);
+      }
+    }
+
+    const finalMsg = await stream.finalMessage();
+    reportedUsage = addReportedUsage(reportedUsage, finalMsg.usage);
+    const assistantContent = Array.isArray(finalMsg.content) ? finalMsg.content : [];
+    const toolUses = assistantContent.filter((block: any) => block?.type === 'tool_use');
+
+    if (toolUses.length === 0) {
+      break;
+    }
+
+    const toolResults: any[] = [];
+    for (const toolUse of toolUses) {
+      if (toolUse.name !== A2UI_TOOL_NAME) {
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: toolUse.id,
+          content: JSON.stringify({ ok: false, error: 'Unsupported tool' }),
+        });
+        continue;
+      }
+
+      const uiPayload = await normalizeA2UIToolArguments(toolUse.input);
+      const rendered = uiPayload ? await params.emitA2UIUpdate(uiPayload.messages) : false;
+      if (!rendered) {
+        params.logger.warn('Anthropic emitted invalid A2UI tool arguments', {
+          messageId: params.messageId,
+          toolUseId: toolUse.id,
+        });
+      }
+      toolResults.push({
+        type: 'tool_result',
+        tool_use_id: toolUse.id,
+        content: JSON.stringify({ ok: rendered }),
+      });
+    }
+
+    providerMessages.push({ role: 'assistant', content: assistantContent });
+    providerMessages.push({ role: 'user', content: toolResults });
+
+    if (round === MAX_A2UI_TOOL_ROUNDS - 1) {
+      params.logger.warn('Reached maximum A2UI tool rounds for Anthropic stream', {
+        messageId: params.messageId,
+        maxRounds: MAX_A2UI_TOOL_ROUNDS,
+      });
+      break;
+    }
+  }
+
+  return {
+    fullContent,
+    reportedUsage,
+    usageMessages: providerMessages,
+  };
+};
 
 type AIRequestData = {
   roomId: string;
@@ -309,20 +558,169 @@ export function registerAIHandlers({
     io.to(roomId).emit('new_message', initialAiMessage);
     callback?.({ success: true, messageId: aiMessageId });
 
+    let streamedA2UIPayload: Message['uiPayload'];
+    const emitA2UIUpdate = async (messages: unknown[]): Promise<boolean> => {
+      const uiPayload = await normalizeA2UIPayload(messages);
+      if (!uiPayload) {
+        openaiLogger.warn('Ignoring invalid A2UI stream update', { messageId: aiMessageId, roomId });
+        return false;
+      }
+
+      streamedA2UIPayload = mergeA2UIPayloads(streamedA2UIPayload, uiPayload);
+      io.to(roomId).emit('a2ui_update', {
+        messageId: aiMessageId,
+        roomId,
+        uiPayload,
+      });
+      return true;
+    };
+
     if (isE2EFakeAIEnabled()) {
       const lastUserMessage = [...historyUsedForContext].reverse().find(message => message.clientId !== 'ai_assistant');
       const targetContent = lastUserMessage?.content?.trim() || 'empty prompt';
+      const surfaceId = `summary-${aiMessageId}`;
       const chunks = [
-        'E2E AI response ',
-        `to: ${targetContent}`,
+        'E2E AI response: ',
+        `I received "${targetContent}". `,
+        'The text stream is still moving while the UI surface updates. ',
+        'The card below includes live status, checklist items, and an action.',
       ];
       let fullContent = '';
       const chunkDelayMs = getE2EFakeAIChunkDelayMs();
 
-      for (const chunk of chunks) {
+      await emitA2UIUpdate([{
+        version: 'v0.9',
+        createSurface: {
+          surfaceId,
+          catalogId: A2UI_BASIC_CATALOG_ID,
+        },
+      }]);
+
+      for (const [index, chunk] of chunks.entries()) {
         await wait(chunkDelayMs);
         fullContent += chunk;
         io.to(roomId).emit('ai_chunk', { messageId: aiMessageId, chunk, roomId });
+
+        if (index === 0) {
+          await emitA2UIUpdate([{
+            version: 'v0.9',
+            updateComponents: {
+              surfaceId,
+              components: [
+                { id: 'root', component: 'Card', child: 'body' },
+                { id: 'body', component: 'Column', children: ['header', 'summary', 'divider', 'status_row', 'checklist_title', 'checklist', 'actions'], alignment: 'stretch' },
+                { id: 'header', component: 'Row', children: ['title', 'phase'], alignment: 'center', distribution: 'spaceBetween' },
+                { id: 'title', component: 'Text', text: { path: '/title' }, variant: 'h3' },
+                { id: 'phase', component: 'Text', text: { path: '/phase' }, variant: 'caption' },
+                { id: 'summary', component: 'Text', text: { path: '/body' }, variant: 'body' },
+                { id: 'divider', component: 'Divider' },
+                { id: 'status_row', component: 'Row', children: ['status_label', 'status_value'], alignment: 'center' },
+                { id: 'status_label', component: 'Text', text: 'Status', variant: 'caption' },
+                { id: 'status_value', component: 'Text', text: { path: '/status' }, variant: 'body' },
+                { id: 'checklist_title', component: 'Text', text: 'Streaming checkpoints', variant: 'h5' },
+                { id: 'checklist', component: 'List', children: ['item_1', 'item_2', 'item_3'], direction: 'vertical' },
+                { id: 'item_1', component: 'Row', children: ['item_1_state', 'item_1_text'], alignment: 'center' },
+                { id: 'item_1_state', component: 'Text', text: { path: '/item1State' }, variant: 'caption' },
+                { id: 'item_1_text', component: 'Text', text: { path: '/item1Text' }, variant: 'body' },
+                { id: 'item_2', component: 'Row', children: ['item_2_state', 'item_2_text'], alignment: 'center' },
+                { id: 'item_2_state', component: 'Text', text: { path: '/item2State' }, variant: 'caption' },
+                { id: 'item_2_text', component: 'Text', text: { path: '/item2Text' }, variant: 'body' },
+                { id: 'item_3', component: 'Row', children: ['item_3_state', 'item_3_text'], alignment: 'center' },
+                { id: 'item_3_state', component: 'Text', text: { path: '/item3State' }, variant: 'caption' },
+                { id: 'item_3_text', component: 'Text', text: { path: '/item3Text' }, variant: 'body' },
+                { id: 'actions', component: 'Row', children: ['acknowledge'], alignment: 'center' },
+                {
+                  id: 'acknowledge',
+                  component: 'Button',
+                  child: 'acknowledge_text',
+                  variant: 'primary',
+                  action: {
+                    event: {
+                      name: 'a2ui_demo_acknowledge',
+                      context: {
+                        prompt: { path: '/prompt' },
+                        source: 'e2e_fake_ai',
+                      },
+                    },
+                  },
+                },
+                { id: 'acknowledge_text', component: 'Text', text: { path: '/ctaLabel' } },
+              ],
+            },
+          }]);
+        }
+
+        if (index === 1) {
+          await emitA2UIUpdate([{
+            version: 'v0.9',
+            updateDataModel: {
+              surfaceId,
+              path: '/',
+              value: {
+                title: 'Streaming A2UI',
+                phase: '2/4 chunks',
+                body: 'This surface is already visible while the assistant text stream continues.',
+                status: 'Creating the component tree and binding live data.',
+                ctaLabel: 'Send UI action',
+                prompt: targetContent,
+                item1State: 'Done',
+                item1Text: 'createSurface emitted before the first text chunk settles.',
+                item2State: 'Live',
+                item2Text: 'updateComponents is rendering Card, Row, Column, List, Divider, Text, and Button.',
+                item3State: 'Next',
+                item3Text: 'updateDataModel will replace these values before ai_stream_end.',
+              },
+            },
+          }]);
+        }
+
+        if (index === 2) {
+          await emitA2UIUpdate([{
+            version: 'v0.9',
+            updateDataModel: {
+              surfaceId,
+              path: '/',
+              value: {
+                title: 'Streaming A2UI',
+                phase: '3/4 chunks',
+                body: 'The UI model is updating from a later server event, independently of markdown text.',
+                status: 'Data model update received while the final text chunk is still pending.',
+                ctaLabel: 'Send UI action',
+                prompt: targetContent,
+                item1State: 'Done',
+                item1Text: 'createSurface opened a stable surface for this AI message.',
+                item2State: 'Done',
+                item2Text: 'updateComponents installed the reusable UI structure.',
+                item3State: 'Live',
+                item3Text: 'updateDataModel is streaming new values into the same surface.',
+              },
+            },
+          }]);
+        }
+
+        if (index === 3) {
+          await emitA2UIUpdate([{
+            version: 'v0.9',
+            updateDataModel: {
+              surfaceId,
+              path: '/',
+              value: {
+                title: 'Streaming A2UI',
+                phase: 'Complete',
+                body: 'The surface finished updating before ai_stream_end, then the final AI message persisted the cumulative A2UI payload.',
+                status: 'Ready for client actions.',
+                ctaLabel: 'Send UI action',
+                prompt: targetContent,
+                item1State: 'Done',
+                item1Text: 'Server emitted validated A2UI v0.9 messages incrementally.',
+                item2State: 'Done',
+                item2Text: 'Client appended updates and rendered via @a2ui/react.',
+                item3State: 'Done',
+                item3Text: 'The final message now stores the same cumulative UI payload.',
+              },
+            },
+          }]);
+        }
       }
 
       const usage = {
@@ -346,6 +744,9 @@ export function registerAIHandlers({
         usage,
         cost,
       };
+      if (streamedA2UIPayload) {
+        finalAiMessage.uiPayload = streamedA2UIPayload;
+      }
 
       const finalSaved = await saveAIMessage(finalAiMessage, 'E2E fake complete');
       if (!finalSaved) {
@@ -367,6 +768,7 @@ export function registerAIHandlers({
         messageId: aiMessageId,
         roomId,
         content: finalAiMessage.content,
+        uiPayload: finalAiMessage.uiPayload,
         aiModel,
         usage,
         cost,
@@ -377,7 +779,8 @@ export function registerAIHandlers({
     }
 
     try {
-      const validMessagesForAPI = buildAIProviderMessages(systemPrompt, contextMessages);
+      const systemPromptWithA2UI = buildA2UIToolSystemPrompt(systemPrompt);
+      const validMessagesForAPI = buildAIProviderMessages(systemPromptWithA2UI, contextMessages);
       const hasUserOrAssistantMessage = validMessagesForAPI.some(msg => msg.role === 'user' || msg.role === 'assistant');
       if (!hasUserOrAssistantMessage && validMessagesForAPI.length <= 1) {
         openaiLogger.error('Cannot call OpenAI API without user or assistant messages in context.', { roomId });
@@ -408,51 +811,39 @@ export function registerAIHandlers({
 
       let fullContent = '';
       let reportedUsage: any = null;
+      let usageMessages: Array<{ content: any }> = validMessagesForAPI;
 
       if (aiClientWrapper.provider === 'anthropic') {
         const anthropicMessages = buildAnthropicMessages(contextMessages);
-        const stream = aiClientWrapper.client.messages.stream({
+        const streamResult = await streamAnthropicWithA2UI({
+          client: aiClientWrapper.client,
           model: selectedModel.apiModel,
-          max_tokens: DEFAULT_ANTHROPIC_MAX_TOKENS,
-          system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }] as any,
-          messages: anthropicMessages as any,
+          systemPrompt: systemPromptWithA2UI,
+          messages: anthropicMessages as any[],
+          emitA2UIUpdate,
+          emitTextChunk: (chunk) => io.to(roomId).emit('ai_chunk', { messageId: aiMessageId, chunk, roomId }),
+          logger: openaiLogger,
+          messageId: aiMessageId,
         });
-
-        for await (const event of stream as any) {
-          if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
-            const contentChunk: string = event.delta.text;
-            fullContent += contentChunk;
-            io.to(roomId).emit('ai_chunk', { messageId: aiMessageId, chunk: contentChunk, roomId });
-          }
-        }
-
-        const finalMsg = await stream.finalMessage();
-        reportedUsage = finalMsg.usage;
+        fullContent = streamResult.fullContent;
+        reportedUsage = streamResult.reportedUsage;
+        usageMessages = streamResult.usageMessages;
       } else {
-        const stream = await aiClientWrapper.client.chat.completions.create({
+        const streamResult = await streamOpenAICompatibleWithA2UI({
+          client: aiClientWrapper.client,
           model: selectedModel.apiModel,
-          messages: validMessagesForAPI as any,
-          stream: true,
-          temperature: 1,
-          stream_options: { include_usage: true },
-        } as any);
-
-        for await (const chunk of stream as any) {
-          if (chunk.usage) {
-            reportedUsage = chunk.usage;
-          }
-          if (chunk.choices[0]?.delta?.content) {
-            const contentChunk = chunk.choices[0].delta.content;
-            fullContent += contentChunk;
-            io.to(roomId).emit('ai_chunk', { messageId: aiMessageId, chunk: contentChunk, roomId });
-            if (fullContent.length % 100 === 0) {
-              openaiLogger.debug('Streaming AI chunk', { messageId: aiMessageId, contentLength: fullContent.length });
-            }
-          }
-        }
+          messages: validMessagesForAPI as any[],
+          emitA2UIUpdate,
+          emitTextChunk: (chunk) => io.to(roomId).emit('ai_chunk', { messageId: aiMessageId, chunk, roomId }),
+          logger: openaiLogger,
+          messageId: aiMessageId,
+        });
+        fullContent = streamResult.fullContent;
+        reportedUsage = streamResult.reportedUsage;
+        usageMessages = streamResult.usageMessages;
       }
 
-      const usage = normalizeUsage(reportedUsage, validMessagesForAPI, fullContent);
+      const usage = normalizeUsage(reportedUsage, usageMessages, fullContent);
       const cost = calculateAICost(selectedModel, usage);
       const roomCostTotal = await store.incrementRoomAICost(roomId, cost || null);
       const aiModel = getMessageAIModel(selectedModel);
@@ -466,6 +857,9 @@ export function registerAIHandlers({
         usage,
         cost,
       };
+      if (streamedA2UIPayload) {
+        finalAiMessage.uiPayload = streamedA2UIPayload;
+      }
       const finalSaved = await saveAIMessage(finalAiMessage, 'complete');
       if (!finalSaved) {
         await saveAIErrorMessage({
@@ -486,6 +880,7 @@ export function registerAIHandlers({
         messageId: aiMessageId,
         roomId,
         content: finalAiMessage.content,
+        uiPayload: finalAiMessage.uiPayload,
         aiModel,
         usage,
         cost,

@@ -10,6 +10,7 @@ const getRoomMediaHistoryMock = vi.hoisted(() => vi.fn());
 const getAudioTranscriptionMock = vi.hoisted(() => vi.fn());
 const requestAudioTranscriptionMock = vi.hoisted(() => vi.fn());
 const saveUrlAsFileMock = vi.hoisted(() => vi.fn());
+const sendA2UIActionMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../utils/socket', () => ({
   clientId: 'viewer',
@@ -17,6 +18,7 @@ vi.mock('../utils/socket', () => ({
   getMediaDownloadUrl: getMediaDownloadUrlMock,
   getRoomMediaHistory: getRoomMediaHistoryMock,
   requestAudioTranscription: requestAudioTranscriptionMock,
+  sendA2UIAction: sendA2UIActionMock,
 }));
 
 vi.mock('../utils/mediaDownload', () => ({
@@ -86,6 +88,7 @@ describe('MessageItem replies', () => {
     getAudioTranscriptionMock.mockReset();
     requestAudioTranscriptionMock.mockReset();
     saveUrlAsFileMock.mockReset();
+    sendA2UIActionMock.mockReset();
   });
 
   it('shows reply context and exposes a touch-accessible reply action', () => {

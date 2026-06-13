@@ -17,6 +17,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@a2ui/markdown-it": "^0.0.4",
+    "@a2ui/react": "^0.10.0",
+    "@a2ui/web_core": "^0.10.0",
     "@heroicons/react": "^2.2.0",
     "@heroui/react": "2.7.5",
     "@heroui/use-theme": "2.1.6",
@@ -57,6 +60,7 @@
     "@playwright/test": "^1.59.1",
     "@tailwindcss/aspect-ratio": "^0.4.2",
     "@tailwindcss/forms": "^0.5.10",
+    "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",

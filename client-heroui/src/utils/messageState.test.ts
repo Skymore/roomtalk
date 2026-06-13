@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   appendAIChunk,
+  appendA2UIPayload,
   addOptimisticMessage,
   completeAIMessage,
   deleteMessageById,
@@ -143,17 +144,49 @@ describe("messageState", () => {
 
   it("finds, edits, replaces, and deletes messages by id", () => {
     const first = message({ id: "m1", content: "first" });
-    const second = message({ id: "m2", content: "second" });
+    const second = message({
+      id: "m2",
+      content: "second",
+      uiPayload: {
+        format: "a2ui",
+        version: "v0.9",
+        messages: [{ version: "v0.9", createSurface: { surfaceId: "surface-1", catalogId: "catalog-1" } }],
+      },
+    });
+    const { uiPayload: _uiPayload, ...secondWithoutUiPayload } = second;
     const updatedSecond = message({ id: "m2", content: "server second", timestamp: "2026-05-03T10:00:02.000Z" });
 
     expect(getMessageById([first, second], "m2")).toBe(second);
     expect(getMessageById([first], "missing")).toBeNull();
     expect(editMessageContent([first, second], "m2", "local second")).toEqual([
       first,
-      { ...second, content: "local second" },
+      { ...secondWithoutUiPayload, content: "local second" },
     ]);
     expect(replaceMessage([first, second], updatedSecond)).toEqual([first, updatedSecond]);
     expect(deleteMessageById([first, second], "m1")).toEqual([second]);
+  });
+
+  it("appends streaming A2UI payloads to AI messages", () => {
+    const ai = message({
+      id: "ai1",
+      clientId: "ai_assistant",
+      messageType: "ai",
+      status: "streaming",
+      uiPayload: {
+        format: "a2ui",
+        version: "v0.9",
+        messages: [{ version: "v0.9", createSurface: { surfaceId: "surface-1", catalogId: "catalog-1" } }],
+      },
+    });
+
+    const updated = appendA2UIPayload([ai], "ai1", {
+      format: "a2ui",
+      version: "v0.9",
+      messages: [{ version: "v0.9", updateDataModel: { surfaceId: "surface-1", path: "/", value: { title: "Ready" } } }],
+    });
+
+    expect(updated[0].uiPayload?.messages).toHaveLength(2);
+    expect(updated[0].status).toBe("streaming");
   });
 
   it("truncates message history for edit-and-ask and AI retry flows", () => {

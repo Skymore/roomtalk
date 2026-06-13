@@ -2,6 +2,7 @@ import { default as io } from 'socket.io-client';
 import { v4 as uuidv4 } from 'uuid';
 import { clearStoredUsername, saveUsername } from './appPersistence';
 import {
+  A2UIActionEvent,
   AudioTranscription,
   MediaKind,
   Message,
@@ -145,6 +146,19 @@ type RoomRoleMembersAckResponse = SocketAckResponse & {
 type RoomClientLookupAckResponse = SocketAckResponse & {
   client?: RoomClientLookup;
 };
+
+export const sendA2UIAction = (payload: {
+  roomId: string;
+  messageId: string;
+  action: A2UIActionEvent;
+}): Promise<void> => (
+  emitWithAck<SocketAckResponse>(
+    'a2ui_action',
+    payload,
+    'Timed out while sending UI action',
+    'Failed to send UI action',
+  ).then(() => undefined)
+);
 
 // Get current member count for a room
 export const getRoomMemberCount = (roomId: string): number | null => {

@@ -1,0 +1,147 @@
+.a2ui-renderer {
+  --a2ui-color-surface: #fbfaf6;
+  --a2ui-color-on-surface: #141413;
+  --a2ui-color-background: #fbfaf6;
+  --a2ui-color-on-background: #141413;
+  --a2ui-color-primary: #c96442;
+  --a2ui-color-primary-hover: #b55335;
+  --a2ui-color-on-primary: #faf9f5;
+  --a2ui-color-secondary: #e8e6dc;
+  --a2ui-color-on-secondary: #141413;
+  --a2ui-color-border: #dedbd0;
+  --a2ui-border: 1px solid var(--a2ui-color-border);
+  --a2ui-border-radius: 8px;
+  --a2ui-spacing-xs: 0.25rem;
+  --a2ui-spacing-s: 0.375rem;
+  --a2ui-spacing-m: 0.5rem;
+  --a2ui-spacing-l: 0.75rem;
+  --a2ui-card-background: var(--a2ui-color-surface);
+  --a2ui-card-border: var(--a2ui-border);
+  --a2ui-card-border-radius: 8px;
+  --a2ui-card-margin: 0;
+  --a2ui-card-padding: 0.75rem;
+  --a2ui-card-box-shadow: 0 0 0 1px rgba(194, 192, 182, 0.18);
+  --a2ui-button-margin: 0;
+  --a2ui-button-padding: 0.375rem 0.625rem;
+  --a2ui-button-border-radius: 6px;
+  --a2ui-button-font-weight: 600;
+  --a2ui-font-size-2xl: 1.125rem;
+  --a2ui-font-size-xl: 1.0625rem;
+  --a2ui-font-size-l: 1rem;
+  --a2ui-font-size-m: 0.875rem;
+  --a2ui-font-size-s: 0.75rem;
+  --a2ui-line-height-headings: 1.35;
+  --a2ui-line-height-body: 1.55;
+  --a2ui-text-color-text: var(--a2ui-color-on-surface);
+  --a2ui-text-caption-color: #5e5d59;
+  color: var(--a2ui-color-on-surface);
+}
+
+.dark .a2ui-renderer {
+  --a2ui-color-surface: #1d1d1b;
+  --a2ui-color-on-surface: #faf9f5;
+  --a2ui-color-background: #1d1d1b;
+  --a2ui-color-on-background: #faf9f5;
+  --a2ui-color-primary: #c96442;
+  --a2ui-color-primary-hover: #df7653;
+  --a2ui-color-on-primary: #faf9f5;
+  --a2ui-color-secondary: #30302e;
+  --a2ui-color-on-secondary: #faf9f5;
+  --a2ui-color-border: #3d3d3a;
+  --a2ui-card-box-shadow: 0 0 0 1px rgba(48, 48, 46, 0.95);
+  --a2ui-text-caption-color: #b0aea5;
+}
+
+.a2ui-renderer [data-testid="a2ui-surface"] {
+  width: min(100%, 48rem);
+}
+
+.a2ui-renderer [data-testid="a2ui-surface"] > div {
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.a2ui-renderer .a2ui-surface {
+  max-width: 100%;
+  color: var(--a2ui-color-on-surface);
+}
+
+.a2ui-renderer .a2ui-card > section {
+  background: var(--a2ui-card-background) !important;
+  border: var(--a2ui-card-border) !important;
+  border-radius: var(--a2ui-card-border-radius) !important;
+  box-shadow: var(--a2ui-card-box-shadow) !important;
+  color: var(--a2ui-color-on-surface) !important;
+  padding: var(--a2ui-card-padding) !important;
+}
+
+.a2ui-renderer .a2ui-column > section,
+.a2ui-renderer .a2ui-row > section,
+.a2ui-renderer .a2ui-list > section {
+  gap: var(--a2ui-spacing-l);
+}
+
+.a2ui-renderer .a2ui-row > section {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.a2ui-renderer .a2ui-divider hr {
+  background: var(--a2ui-color-border);
+}
+
+.a2ui-renderer :where(h1, h2, h3, h4, h5, h6, p) {
+  margin: 0;
+  color: inherit;
+}
+
+.a2ui-renderer :where(h1, h2, h3, h4, h5, h6) {
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.a2ui-renderer :where(h1) {
+  font-size: 1.125rem;
+}
+
+.a2ui-renderer :where(h2, h3) {
+  font-size: 1rem;
+}
+
+.a2ui-renderer :where(p) {
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+
+.a2ui-renderer button {
+  appearance: none;
+  border: 0;
+  border-radius: var(--a2ui-button-border-radius);
+  background: var(--a2ui-color-primary);
+  color: var(--a2ui-color-on-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: var(--a2ui-button-font-weight);
+  line-height: 1.25rem;
+  margin: var(--a2ui-button-margin);
+  min-height: 1.875rem;
+  padding: var(--a2ui-button-padding);
+  transition: background-color 160ms ease, opacity 160ms ease;
+}
+
+.a2ui-renderer button:hover:not(:disabled) {
+  background: var(--a2ui-color-primary-hover);
+}
+
+.a2ui-renderer button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.a2ui-renderer button :where(div, p, span) {
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+}

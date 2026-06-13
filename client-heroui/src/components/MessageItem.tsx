@@ -10,15 +10,16 @@ import {
   DropdownItem,
 } from "@heroui/react";
 import { Icon } from "@iconify/react";
-import { clientId, getAudioTranscription, getMediaDownloadUrl, requestAudioTranscription } from "../utils/socket";
+import { clientId, getAudioTranscription, getMediaDownloadUrl, requestAudioTranscription, sendA2UIAction } from "../utils/socket";
 import { formatPercentage, formatTime, formatUsdCost } from "../utils/formatters";
-import { AudioTranscription, Message, MessageMediaAsset, RoomPermissions } from "../utils/types";
+import { A2UIActionEvent, AudioTranscription, Message, MessageMediaAsset, RoomPermissions } from "../utils/types";
 import { useTranslation } from "react-i18next";
 import { useIsTouchDevice } from "../hooks/useIsTouchDevice";
 import { useCachedMedia } from "../hooks/useCachedMedia";
 import { MediaViewerModal } from "./MediaViewerModal";
 import { getVideoPreviewUrl } from "../utils/videoPreview";
 import { buildMediaFilename, saveUrlAsFile } from "../utils/mediaDownload";
+import { A2UIRenderer } from "./A2UIRenderer";
 
 interface MessageItemProps {
   message: Message;
@@ -253,6 +254,15 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const replyReference = message.replyTo ? (
     <ReplyReference replyTo={message.replyTo} roomId={message.roomId} />
   ) : null;
+  const handleA2UIAction = React.useCallback((action: A2UIActionEvent) => {
+    sendA2UIAction({
+      roomId: message.roomId,
+      messageId: message.id,
+      action,
+    }).catch((error) => {
+      console.error("Failed to send A2UI action:", error);
+    });
+  }, [message.id, message.roomId]);
 
   const [copyStatus, setCopyStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [liked, setLiked] = useState(false);
@@ -705,38 +715,47 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
             </div>
           ) : (
             // ========== Text Message (Display Mode) ==========
-            <Card
-              className={`
-                w-fit max-w-full overflow-hidden rounded-xl
-                ${isPending ? "opacity-70" : ""}
-                ${isMine
-                  ? "bg-[#e8e6dc] text-[#141413] shadow-[0_0_0_1px_rgba(194,192,182,0.85)] dark:bg-[#30302e] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)]"
-                  : message.messageType === 'ai'
-                    ? "bg-[#faf9f5] text-[#141413] shadow-[0_0_0_1px_rgba(222,219,208,0.95)] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(48,48,46,0.95)]"
-                    : "bg-[#f0eee6] text-[#141413] shadow-[0_0_0_1px_rgba(222,219,208,0.95)] dark:bg-[#242421] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(61,61,58,0.9)]"
-                }
-                ${isFailed ? "ring-1 ring-danger-500/75" : ""}
-              `}
-            >
-              <div className="max-w-full px-2 py-1.5">
-                {replyReference}
-                <div className="max-w-full overflow-hidden whitespace-pre-wrap break-words text-sm leading-6">
-                  <div className="max-w-full overflow-x-auto" style={{ wordBreak: 'break-word', overflowWrap: 'break-word' }}>
-                    <React.Suspense fallback={
-                      <div className="whitespace-pre-wrap break-words">
-                        {message.content}
-                        {isStreaming && (
-                          <span className="inline-block w-1.5 h-3 bg-current animate-pulse ml-0.5 align-baseline"></span>
-                        )}
-                      </div>
-                    }>
-                      <MarkdownContent content={message.content} isStreaming={isStreaming} />
-                    </React.Suspense>
+            <>
+              <Card
+                className={`
+                  w-fit max-w-full overflow-hidden rounded-xl
+                  ${isPending ? "opacity-70" : ""}
+                  ${isMine
+                    ? "bg-[#e8e6dc] text-[#141413] shadow-[0_0_0_1px_rgba(194,192,182,0.85)] dark:bg-[#30302e] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)]"
+                    : message.messageType === 'ai'
+                      ? "bg-[#faf9f5] text-[#141413] shadow-[0_0_0_1px_rgba(222,219,208,0.95)] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(48,48,46,0.95)]"
+                      : "bg-[#f0eee6] text-[#141413] shadow-[0_0_0_1px_rgba(222,219,208,0.95)] dark:bg-[#242421] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(61,61,58,0.9)]"
+                  }
+                  ${isFailed ? "ring-1 ring-danger-500/75" : ""}
+                `}
+              >
+                <div className="max-w-full px-2 py-1.5">
+                  {replyReference}
+                  <div className="max-w-full overflow-hidden whitespace-pre-wrap break-words text-sm leading-6">
+                    <div className="max-w-full overflow-x-auto" style={{ wordBreak: 'break-word', overflowWrap: 'break-word' }}>
+                      <React.Suspense fallback={
+                        <div className="whitespace-pre-wrap break-words">
+                          {message.content}
+                          {isStreaming && (
+                            <span className="inline-block w-1.5 h-3 bg-current animate-pulse ml-0.5 align-baseline"></span>
+                          )}
+                        </div>
+                      }>
+                        <MarkdownContent content={message.content} isStreaming={isStreaming} />
+                      </React.Suspense>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </Card>
-            // ========== END MODIFIED ==========
+              </Card>
+              {message.uiPayload && (
+                <A2UIRenderer
+                  payload={message.uiPayload}
+                  roomId={message.roomId}
+                  messageId={message.id}
+                  onAction={handleA2UIAction}
+                />
+              )}
+            </>
           )}
         </div>
         {/* Timestamp and Actions Area - Below the bubble/image */}

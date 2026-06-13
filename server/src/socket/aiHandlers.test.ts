@@ -67,6 +67,54 @@ const selectedModel: AIModelOption = {
   },
 };
 
+const anthropicModel: AIModelOption = {
+  id: 'claude-sonnet-4.6',
+  apiModel: 'claude-sonnet-4-6',
+  provider: 'anthropic',
+  label: 'Claude Sonnet 4.6',
+  description: 'Anthropic test model',
+  pricing: {
+    currency: 'USD',
+    inputPerMillion: 3,
+    outputPerMillion: 15,
+  },
+};
+
+const a2uiToolArgs = JSON.stringify({
+  messages: [
+    {
+      version: 'v0.9',
+      createSurface: {
+        surfaceId: 'tool-surface',
+        catalogId: 'https://a2ui.org/specification/v0_9/basic_catalog.json',
+      },
+    },
+    {
+      version: 'v0.9',
+      updateComponents: {
+        surfaceId: 'tool-surface',
+        components: [
+          { id: 'root', component: 'Card', child: 'body' },
+          { id: 'body', component: 'Column', children: ['title'] },
+          { id: 'title', component: 'Text', text: 'Tool UI', variant: 'h3' },
+        ],
+      },
+    },
+  ],
+});
+
+const asyncIterable = (items: any[]) => ({
+  async *[Symbol.asyncIterator]() {
+    for (const item of items) {
+      yield item;
+    }
+  },
+});
+
+const expectedE2EFakeContent = (prompt: string) => (
+  `E2E AI response: I received "${prompt}". The text stream is still moving while the UI surface updates. The card below includes live status, checklist items, and an action.`
+);
+
 const room = (overrides: Partial<Room> = {}): Room => ({
   id: 'room-1',
   name: 'Room 1',
@@ -97,7 +145,15 @@ const roomActivityForMessages = (messages: Message[]) => room({
   lastActivityAt: messages[messages.length - 1]?.timestamp || room().createdAt,
 });
 
-const createHarness = (options: { rejectSaves?: boolean; rejectSaveNumbers?: number[]; rejectAppend?: boolean; clientId?: string | null; aiStreamOwnerId?: string } = {}) => {
+const createHarness = (options: {
+  rejectSaves?: boolean;
+  rejectSaveNumbers?: number[];
+  rejectAppend?: boolean;
+  clientId?: string | null;
+  aiStreamOwnerId?: string;
+  model?: AIModelOption;
+  aiClientWrapper?: any;
+} = {}) => {
   const socket = new FakeSocket();
   const io = new FakeIo();
   const store = {
@@ -228,8 +284,11 @@ const createHarness = (options: { rejectSaves?: boolean; rejectSaveNumbers?: num
     store: store as any,
     socketLogger: logger as any,
     openaiLogger: logger as any,
-    normalizeAIModel: () => selectedModel,
+    normalizeAIModel: () => options.model || selectedModel,
     getAIClientForModel: () => {
+      if (options.aiClientWrapper) {
+        return options.aiClientWrapper;
+      }
       throw new Error('E2E fake AI should not request a real client');
     },
     aiStreamOwnerId: options.aiStreamOwnerId || 'test-stream-owner',
@@ -281,7 +340,7 @@ describe('AI socket handlers', () => {
     const finalMessage = store.upsertedMessages[1];
     assert.equal(finalMessage.id, streamingMessage.id);
     assert.equal(finalMessage.status, 'complete');
-    assert.equal(finalMessage.content, 'E2E AI response to: hello');
+    assert.equal(finalMessage.content, expectedE2EFakeContent('hello'));
     assert.equal((finalMessage as any).aiStreamOwnerId, undefined);
     assert.equal(finalMessage.usage?.cacheHitRate, 0.25);
     assert.deepEqual(store.messages.map(item => item.id), ['message-1', streamingMessage.id]);
@@ -294,9 +353,130 @@ describe('AI socket handlers', () => {
     assert.deepEqual(response, { success: true, messageId: streamingMessage.id });
     const aiChunkEvents = io.roomEmits.filter(event => event.event === 'ai_chunk');
     assert.deepEqual(aiChunkEvents.map(event => (event.args[0] as { chunk: string }).chunk), [
-      'E2E AI response ',
-      'to: hello',
+      'E2E AI response: ',
+      'I received "hello". ',
+      'The text stream is still moving while the UI surface updates. ',
+      'The card below includes live status, checklist items, and an action.',
     ]);
+    const a2uiUpdateEvents = io.roomEmits.filter(event => event.event === 'a2ui_update');
+    const streamEndIndex = io.roomEmits.findIndex(event => event.event === 'ai_stream_end');
+    const lastA2UIUpdateIndex = io.roomEmits.map(event => event.event).lastIndexOf('a2ui_update');
+    assert.equal(a2uiUpdateEvents.length, 5);
+    assert.ok(lastA2UIUpdateIndex !== -1 && streamEndIndex !== -1 && lastA2UIUpdateIndex < streamEndIndex);
+    assert.equal(finalMessage.uiPayload?.version, 'v0.9');
+    assert.equal(finalMessage.uiPayload?.messages.length, 5);
+    assert.equal((a2uiUpdateEvents[0].args[0] as any).uiPayload.messages[0].createSurface.catalogId, 'https://a2ui.org/specification/v0_9/basic_catalog.json');
+  });
+
+  it('streams A2UI updates from OpenAI-compatible tool calls before stream end', async () => {
+    process.env.E2E_FAKE_AI = 'false';
+    const createCalls: any[] = [];
+    const openAIClient = {
+      chat: {
+        completions: {
+          create: async (request: any) => {
+            createCalls.push(request);
+            if (createCalls.length === 1) {
+              return asyncIterable([
+                { choices: [{ delta: { content: 'Preparing a UI. ' } }] },
+                {
+                  choices: [{
+                    delta: {
+                      tool_calls: [{
+                        index: 0,
+                        id: 'call_a2ui_1',
+                        type: 'function',
+                        function: {
+                          name: 'a2ui_update',
+                          arguments: a2uiToolArgs,
+                        },
+                      }],
+                    },
+                  }],
+                },
+                { choices: [{ finish_reason: 'tool_calls', delta: {} }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } },
+              ]);
+            }
+
+            return asyncIterable([
+              { choices: [{ delta: { content: 'The UI is live.' } }] },
+              { choices: [{ finish_reason: 'stop', delta: {} }], usage: { prompt_tokens: 6, completion_tokens: 4, total_tokens: 10 } },
+            ]);
+          },
+        },
+      },
+    };
+    const { io, socket, store } = createHarness({
+      aiClientWrapper: { provider: 'deepseek', client: openAIClient },
+    });
+
+    await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id });
+
+    assert.equal(createCalls.length, 2);
+    assert.equal(createCalls[0].tools?.[0]?.function?.name, 'a2ui_update');
+    assert.equal(createCalls[1].messages.some((message: any) => message.role === 'tool'), true);
+    const a2uiUpdateIndex = io.roomEmits.findIndex(event => event.event === 'a2ui_update');
+    const streamEndIndex = io.roomEmits.findIndex(event => event.event === 'ai_stream_end');
+    assert.ok(a2uiUpdateIndex !== -1 && streamEndIndex !== -1 && a2uiUpdateIndex < streamEndIndex);
+    assert.equal(store.upsertedMessages[1].content, 'Preparing a UI. The UI is live.');
+    assert.equal(store.upsertedMessages[1].uiPayload?.messages.length, 2);
+    assert.equal(store.upsertedMessages[1].usage?.promptTokens, 16);
+    assert.equal(store.upsertedMessages[1].usage?.completionTokens, 9);
+  });
+
+  it('streams A2UI updates from Anthropic tool_use blocks before stream end', async () => {
+    process.env.E2E_FAKE_AI = 'false';
+    const streamCalls: any[] = [];
+    const anthropicClient = {
+      messages: {
+        stream: (request: any) => {
+          streamCalls.push(request);
+          if (streamCalls.length === 1) {
+            return {
+              ...asyncIterable([
+                { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Building the surface. ' } },
+              ]),
+              finalMessage: async () => ({
+                content: [
+                  { type: 'text', text: 'Building the surface. ' },
+                  { type: 'tool_use', id: 'toolu_a2ui_1', name: 'a2ui_update', input: JSON.parse(a2uiToolArgs) },
+                ],
+                usage: { input_tokens: 12, output_tokens: 7 },
+              }),
+            };
+          }
+
+          return {
+            ...asyncIterable([
+              { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Done.' } },
+            ]),
+            finalMessage: async () => ({
+              content: [{ type: 'text', text: 'Done.' }],
+              usage: { input_tokens: 8, output_tokens: 3 },
+            }),
+          };
+        },
+      },
+    };
+    const { io, socket, store } = createHarness({
+      model: anthropicModel,
+      aiClientWrapper: { provider: 'anthropic', client: anthropicClient },
+    });
+
+    await socket.invoke('ask_ai', { roomId: 'room-1', model: anthropicModel.id });
+
+    assert.equal(streamCalls.length, 2);
+    assert.equal(streamCalls[0].tools?.[0]?.name, 'a2ui_update');
+    assert.equal(streamCalls[1].messages.some((message: any) =>
+      message.role === 'user' && Array.isArray(message.content) && message.content.some((block: any) => block.type === 'tool_result')
+    ), true);
+    const a2uiUpdateIndex = io.roomEmits.findIndex(event => event.event === 'a2ui_update');
+    const streamEndIndex = io.roomEmits.findIndex(event => event.event === 'ai_stream_end');
+    assert.ok(a2uiUpdateIndex !== -1 && streamEndIndex !== -1 && a2uiUpdateIndex < streamEndIndex);
+    assert.equal(store.upsertedMessages[1].content, 'Building the surface. Done.');
+    assert.equal(store.upsertedMessages[1].uiPayload?.messages.length, 2);
+    assert.equal(store.upsertedMessages[1].usage?.promptTokens, 20);
+    assert.equal(store.upsertedMessages[1].usage?.completionTokens, 10);
   });
 
   it('rejects AI requests from clients without room access', async () => {
@@ -404,7 +584,7 @@ describe('AI socket handlers', () => {
     assert.deepEqual(store.truncateAfterCalls, [{ roomId: 'room-1', messageId: 'message-edited' }]);
     assert.equal(store.savedHistories.length, 0);
     assert.equal(store.messages[2].status, 'complete');
-    assert.equal(store.messages[2].content, 'E2E AI response to: edited prompt');
+    assert.equal(store.messages[2].content, expectedE2EFakeContent('edited prompt'));
   });
 
   it('edits, truncates, and starts AI generation in one event', async () => {
@@ -437,7 +617,7 @@ describe('AI socket handlers', () => {
     const historyPayload = historyEvent?.args[0] as { messages: Message[] };
     assert.deepEqual(historyPayload.messages.map(item => item.id), ['message-1', 'message-edited']);
     assert.equal(store.messages[2].status, 'complete');
-    assert.equal(store.messages[2].content, 'E2E AI response to: edited prompt');
+    assert.equal(store.messages[2].content, expectedE2EFakeContent('edited prompt'));
     assert.deepEqual(response, { success: true, messageId: store.upsertedMessages[0].id });
   });
 
@@ -474,7 +654,7 @@ describe('AI socket handlers', () => {
     assert.ok(userMessageEventIndex !== -1);
     assert.ok(aiPlaceholderEventIndex !== -1);
     assert.ok(userMessageEventIndex < aiPlaceholderEventIndex);
-    assert.equal(store.upsertedMessages[1].content, 'E2E AI response to: fresh prompt');
+    assert.equal(store.upsertedMessages[1].content, expectedE2EFakeContent('fresh prompt'));
   });
 
   it('acknowledges the saved user message when AI startup fails afterward', async () => {
@@ -558,7 +738,7 @@ describe('AI socket handlers', () => {
       messageType: 'text',
       preview: 'original prompt',
     });
-    assert.equal(valid.store.upsertedMessages[1].content, 'E2E AI response to: reply prompt');
+    assert.equal(valid.store.upsertedMessages[1].content, expectedE2EFakeContent('reply prompt'));
 
     const missing = createHarness();
     let missingResponse: unknown;

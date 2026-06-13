@@ -117,7 +117,22 @@ describe('message domain', () => {
 
   it('edits one message while preserving the rest of history', () => {
     const editedAt = new Date('2026-05-03T10:01:00.000Z');
-    const first = createMessage({ id: 'm1', content: 'before', timestamp: '2026-05-03T10:00:00.000Z' });
+    const first = createMessage({
+      id: 'm1',
+      content: 'before',
+      timestamp: '2026-05-03T10:00:00.000Z',
+      uiPayload: {
+        format: 'a2ui',
+        version: 'v0.9',
+        messages: [{
+          version: 'v0.9',
+          createSurface: {
+            surfaceId: 'surface-1',
+            catalogId: 'https://a2ui.org/specification/v0_9/basic_catalog.json',
+          },
+        }],
+      },
+    });
     const second = createMessage({ id: 'm2', content: 'untouched' });
 
     const result = applyMessageEdit([first, second], 'm1', 'after', editedAt);
@@ -126,6 +141,7 @@ describe('message domain', () => {
     assert.equal(result.updatedMessage?.content, 'after');
     assert.equal(result.updatedMessage?.timestamp, first.timestamp);
     assert.equal(result.updatedMessage?.updatedAt, editedAt.toISOString());
+    assert.equal(result.updatedMessage?.uiPayload, undefined);
     assert.equal(result.messages[1], second);
   });
 

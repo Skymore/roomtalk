@@ -22,6 +22,13 @@ export const defaultAIRoles: AIRole[] = [
     icon: "lucide:bot",
   },
   {
+    id: "a2ui-demo",
+    name: "A2UI Demo",
+    systemPrompt: "You are an A2UI streaming demo assistant. If the latest user message is exactly HI, hi, or Hi, call the A2UI UI tool immediately to create a compact demo surface with a title, live status, three checklist/detail lines, and one primary action button. Continue with a short text answer while the UI updates stream. Do not print raw UI JSON.",
+    color: "warning",
+    icon: "lucide:layout-dashboard",
+  },
+  {
     id: "coder",
     name: "Code Expert",
     systemPrompt: "You are a programming expert who provides detailed technical solutions and code examples. Focus on best practices and performance.",
@@ -38,6 +45,8 @@ export const defaultAIRoles: AIRole[] = [
 ];
 
 const AI_ROLES_KEY = "aiRoles";
+const AI_ROLES_DEFAULT_VERSION_KEY = "aiRolesDefaultVersion";
+const CURRENT_DEFAULT_ROLE_VERSION = "2026-06-a2ui-demo";
 
 const getApiBaseUrl = () => {
   const socketUrl = import.meta.env.VITE_SOCKET_URL;
@@ -62,6 +71,7 @@ const getClientAuthTokenForApi = () => {
 
 const defaultRoleKeys: Record<string, { nameKey: string; promptKey: string }> = {
   default: { nameKey: "roleAssistantName", promptKey: "roleAssistantPrompt" },
+  "a2ui-demo": { nameKey: "roleA2UIDemoName", promptKey: "roleA2UIDemoPrompt" },
   coder: { nameKey: "roleCodeExpertName", promptKey: "roleCodeExpertPrompt" },
   creative: { nameKey: "roleCreativeWriterName", promptKey: "roleCreativeWriterPrompt" },
 };
@@ -79,7 +89,28 @@ export const getAIRoleDisplayPrompt = (role: AIRole, t: (key: string) => string)
 export const getSavedAIRoles = (): AIRole[] => {
   try {
     const saved = localStorage.getItem(AI_ROLES_KEY);
-    return saved ? JSON.parse(saved) : defaultAIRoles;
+    if (!saved) {
+      return defaultAIRoles;
+    }
+
+    const roles = JSON.parse(saved);
+    if (!Array.isArray(roles)) {
+      return defaultAIRoles;
+    }
+
+    const defaultVersion = localStorage.getItem(AI_ROLES_DEFAULT_VERSION_KEY);
+    if (defaultVersion === CURRENT_DEFAULT_ROLE_VERSION) {
+      return roles;
+    }
+
+    const roleIds = new Set(roles.map(role => role?.id));
+    const migratedRoles = [
+      ...roles,
+      ...defaultAIRoles.filter(role => !roleIds.has(role.id)),
+    ];
+    localStorage.setItem(AI_ROLES_KEY, JSON.stringify(migratedRoles));
+    localStorage.setItem(AI_ROLES_DEFAULT_VERSION_KEY, CURRENT_DEFAULT_ROLE_VERSION);
+    return migratedRoles;
   } catch (e) {
     console.error("Error loading AI roles:", e);
     return defaultAIRoles;
@@ -89,6 +120,7 @@ export const getSavedAIRoles = (): AIRole[] => {
 export const saveAIRoles = (roles: AIRole[]) => {
   try {
     localStorage.setItem(AI_ROLES_KEY, JSON.stringify(roles));
+    localStorage.setItem(AI_ROLES_DEFAULT_VERSION_KEY, CURRENT_DEFAULT_ROLE_VERSION);
   } catch (e) {
     console.error("Error saving AI roles:", e);
   }
