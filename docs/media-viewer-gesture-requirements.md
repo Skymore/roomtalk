@@ -31,7 +31,7 @@ The image and video viewer should feel closer to a native photo viewer than a we
   - If the image is at 1x, zoom to 2x.
   - If the image is above 1x, return to 1x.
   - The second tap position is the zoom anchor, so the tapped point stays as close as possible to the same screen location.
-- Tap and double tap do not apply to videos; video taps are left to native controls.
+- Tap and double tap do not apply to videos; video taps are left to native controls, while drag gestures on the video surface may still navigate or dismiss.
 
 ### Pinch zoom
 
@@ -39,7 +39,7 @@ The image and video viewer should feel closer to a native photo viewer than a we
 - Pinch scale is continuous and calculated from pointer distance.
 - The pinch center is the anchor, so the content under the midpoint remains stable as much as possible.
 - Pinch disables horizontal navigation and vertical return until all but one pointer has ended.
-- Zoom is clamped to 1x through 4x.
+- Zoom is clamped to 1x through 6x.
 - If pinch ends close to 1x, snap back to exactly 1x and recenter.
 
 ### Image pan
@@ -50,7 +50,7 @@ The image and video viewer should feel closer to a native photo viewer than a we
 
 ### Horizontal navigation
 
-- Horizontal swiping is active only at 1x.
+- Horizontal swiping is active only at 1x for images, and remains active on video surfaces.
 - Movement locks to horizontal once horizontal displacement exceeds the gesture threshold and dominates vertical movement.
 - While dragging, the carousel follows the finger using direct DOM transforms instead of React state updates, with transform writes batched through `requestAnimationFrame`.
 - React state should update only after pointer up selects a new item or resets the current one.
@@ -85,6 +85,7 @@ The image and video viewer should feel closer to a native photo viewer than a we
 
 - Full-viewer videos must not autoplay when opened or when swiped into view.
 - Full-viewer videos must show native controls when active.
+- Full-viewer videos must allow horizontal swipe navigation when dragging on the video surface.
 - Leaving a video slide should not attempt to keep it playing.
 
 ## Performance Requirements
@@ -106,10 +107,11 @@ The image and video viewer should feel closer to a native photo viewer than a we
 ## Acceptance Criteria
 
 - Double-tapping an image zooms around the tap position; double-tapping again resets to 1x.
-- Pinching an image changes zoom continuously and clamps between 1x and 4x.
+- Pinching an image changes zoom continuously and clamps between 1x and 6x.
 - Single tapping an image closes the main viewer or returns from history preview, including when zoomed.
 - Down swiping previews the return during movement and commits only after release.
 - Horizontal swiping feels smooth and follows the finger at 1x.
 - Horizontal swiping does not trigger while an image is zoomed.
+- Closing after swiping to another item and reopening the original chat media starts from the clicked media, not the previous internal carousel position.
 - Video slides do not autoplay and require explicit user play.
 - Existing history preview action buttons remain available.
