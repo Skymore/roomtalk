@@ -173,6 +173,15 @@ describe('A2UIRenderer', () => {
         title: 'Implement A2UI',
         roomId: 'room-1',
         messageId: 'message-1',
+        // The surface data model snapshot rides along so a follow-up turn knows
+        // what the user actually entered/selected in the inputs above.
+        dataModel: {
+          title: 'A2UI summary',
+          name: 'RoomTalk',
+          ready: true,
+          channels: ['chat'],
+          confidence: 88,
+        },
       },
     });
   });

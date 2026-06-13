@@ -6,7 +6,9 @@ import {
   A2UI_TOOL_NAME,
   MAX_A2UI_TOOL_ROUNDS,
   anthropicA2UITool,
+  buildA2UIFollowUpMessageContent,
   buildA2UIToolSystemPrompt,
+  isA2UIFollowUpAction,
   normalizeA2UIToolArguments,
   openAIA2UITool,
 } from '../services/a2uiTools';
@@ -19,7 +21,7 @@ import {
 } from '../services/messageDomain';
 import { notifyRoomMessageBestEffort } from '../services/pushNotifications';
 import { withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
-import { Message } from '../types';
+import { A2UIActionEvent, Message } from '../types';
 import { hasRoomAccess } from './roomAccess';
 import { authorizeRoomAction, getRoomMessage } from './roomAuthorization';
 import { SocketConnectionContext } from './types';
@@ -1198,5 +1200,76 @@ export function registerAIHandlers({
       roleName: data.roleName,
       model: data.model,
     }, clientId, callback, editResult.messages);
+  });
+
+  // A2UI follow-up wiring: when the user interacts with a component whose action the
+  // model deliberately wired for follow-up (event context.followUp === true), start a
+  // new assistant turn carrying the interaction so the model can respond / update the UI.
+  // messageHandlers also listens on 'a2ui_action' to validate + broadcast it; both
+  // listeners fire independently, so this one only adds the AI turn and never replies to
+  // the client's ack callback.
+  socket.on('a2ui_action', async (payload: unknown) => {
+    if (
+      typeof payload !== 'object' || payload === null ||
+      typeof (payload as { roomId?: unknown }).roomId !== 'string' ||
+      typeof (payload as { messageId?: unknown }).messageId !== 'string' ||
+      typeof (payload as { action?: unknown }).action !== 'object' ||
+      (payload as { action?: unknown }).action === null
+    ) {
+      return;
+    }
+
+    const { roomId, messageId } = payload as { roomId: string; messageId: string };
+    const action = (payload as { action: A2UIActionEvent }).action;
+
+    // The model decides per component which clicks deserve a follow-up turn.
+    if (!isA2UIFollowUpAction(action)) {
+      return;
+    }
+
+    const clientId = await store.getClientId(socket.id);
+    if (!clientId || !(await hasRoomAccess(store, roomId, clientId))) {
+      return;
+    }
+
+    const owningMessage = await getRoomMessage(store, roomId, messageId);
+    if (!owningMessage || owningMessage.uiPayload?.format !== 'a2ui') {
+      return;
+    }
+
+    const followUpMessage = createUserMessage({
+      id: uuidv4(),
+      clientId,
+      roomId,
+      content: buildA2UIFollowUpMessageContent(action),
+    });
+
+    const updatedRoom = await store.appendMessage(followUpMessage);
+    if (!updatedRoom) {
+      socketLogger.error('Failed to append A2UI follow-up message', { roomId, messageId, clientId });
+      return;
+    }
+
+    io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+    io.to(roomId).emit('new_message', followUpMessage);
+    notifyRoomMessageBestEffort({ store, room: updatedRoom, message: followUpMessage, logger: socketLogger });
+
+    const latestHistory = await store.readMessagesByRoom(roomId);
+    const preparedHistory = latestHistory.some(message => message.id === followUpMessage.id)
+      ? latestHistory
+      : [...latestHistory, followUpMessage];
+
+    const followUpRequest = payload as { systemPrompt?: unknown; roleName?: unknown; model?: unknown };
+    await startAIResponse(
+      {
+        roomId,
+        systemPrompt: typeof followUpRequest.systemPrompt === 'string' ? followUpRequest.systemPrompt : undefined,
+        roleName: typeof followUpRequest.roleName === 'string' ? followUpRequest.roleName : undefined,
+        model: typeof followUpRequest.model === 'string' ? followUpRequest.model : owningMessage.aiModel?.id,
+      },
+      clientId,
+      undefined,
+      preparedHistory,
+    );
   });
 }
