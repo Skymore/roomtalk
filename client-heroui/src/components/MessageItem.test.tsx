@@ -660,6 +660,163 @@ describe('MessageItem replies', () => {
     });
   });
 
+  it('reopens a media viewer on the clicked image after swiping away', async () => {
+    getMediaDownloadUrlMock.mockResolvedValue({
+      url: 'https://signed.example/rooms/room-1/asset-1.webp',
+      expiresAt: '2026-05-03T10:15:00.000Z',
+    });
+    getRoomMediaHistoryMock.mockResolvedValue({
+      roomId: 'room-1',
+      items: [
+        {
+          assetId: 'asset-3',
+          messageId: 'media-message-3',
+          kind: 'image',
+          mimeType: 'image/webp',
+          byteSize: 456,
+          createdAt: '2026-06-01T10:00:00.000Z',
+          url: 'https://signed.example/rooms/room-1/asset-3.webp',
+        },
+        {
+          assetId: 'asset-1',
+          messageId: 'media-message-1',
+          kind: 'image',
+          mimeType: 'image/webp',
+          byteSize: 123,
+          createdAt: '2026-05-03T10:00:00.000Z',
+          url: 'https://signed.example/rooms/room-1/asset-1.webp',
+        },
+      ],
+      hasMore: false,
+      nextCursor: null,
+      windowMonths: 6,
+    });
+
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'image-reopen-message',
+          content: '',
+          messageType: 'media',
+          mimeType: 'image/webp',
+          mediaAsset: {
+            id: 'asset-1',
+            kind: 'image',
+            mimeType: 'image/webp',
+            byteSize: 123,
+          },
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByLabelText('openMediaViewer').length).toBeGreaterThan(0);
+    });
+    fireEvent.click(screen.getAllByLabelText('openMediaViewer')[0]);
+    await waitFor(() => {
+      expect(screen.getByLabelText('nextMedia')).toBeTruthy();
+    });
+
+    const stage = screen.getByTestId('media-viewer-stage');
+    const track = screen.getByTestId('media-carousel-track');
+    Object.defineProperty(stage, 'clientWidth', { configurable: true, value: 300 });
+    Object.defineProperty(track, 'clientWidth', { configurable: true, value: 300 });
+
+    fireEvent.mouseDown(stage, { clientX: 280, clientY: 220 });
+    fireEvent.mouseMove(stage, { clientX: 20, clientY: 224 });
+    fireEvent.mouseUp(stage, { clientX: 20, clientY: 224 });
+
+    await waitFor(() => {
+      const activeImage = document.body.querySelector('[data-testid="media-viewer-stage"] [data-active-media="true"] img');
+      expect(activeImage?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/asset-3.webp');
+    });
+
+    fireEvent.click(screen.getByLabelText('close'));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'mediaViewer' })).toBeNull();
+    });
+
+    fireEvent.click(screen.getAllByLabelText('openMediaViewer')[0]);
+    await waitFor(() => {
+      const activeImage = document.body.querySelector('[data-testid="media-viewer-stage"] [data-active-media="true"] img');
+      expect(activeImage?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/asset-1.webp');
+    });
+  });
+
+  it('swipes between room media while a full-screen video is active', async () => {
+    getMediaDownloadUrlMock.mockResolvedValue({
+      url: 'https://signed.example/rooms/room-1/video-1.mp4?X-Amz-Signature=abc123',
+      expiresAt: '2026-05-03T10:15:00.000Z',
+    });
+    getRoomMediaHistoryMock.mockResolvedValue({
+      roomId: 'room-1',
+      items: [{
+        assetId: 'video-2',
+        messageId: 'media-message-video-2',
+        kind: 'video',
+        mimeType: 'video/mp4',
+        byteSize: 456,
+        createdAt: '2026-06-01T10:00:00.000Z',
+        url: 'https://signed.example/rooms/room-1/video-2.mp4',
+      }],
+      hasMore: false,
+      nextCursor: null,
+      windowMonths: 6,
+    });
+
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'video-swipe-message',
+          content: '',
+          messageType: 'media',
+          mediaAsset: {
+            id: 'video-1',
+            kind: 'video',
+            mimeType: 'video/mp4',
+            byteSize: 789,
+            durationMs: 2400,
+          },
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByLabelText('openMediaViewer').length).toBeGreaterThan(0);
+    });
+    fireEvent.click(screen.getAllByLabelText('openMediaViewer')[0]);
+    await waitFor(() => {
+      expect(screen.getByLabelText('nextMedia')).toBeTruthy();
+    });
+
+    const stage = screen.getByTestId('media-viewer-stage');
+    const track = screen.getByTestId('media-carousel-track');
+    Object.defineProperty(stage, 'clientWidth', { configurable: true, value: 300 });
+    Object.defineProperty(track, 'clientWidth', { configurable: true, value: 300 });
+
+    const activeVideo = document.body.querySelector('[data-testid="media-viewer-stage"] [data-active-media="true"] video');
+    expect(activeVideo?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/video-1.mp4?X-Amz-Signature=abc123');
+
+    fireEvent.mouseDown(stage, { clientX: 280, clientY: 220 });
+    fireEvent.mouseMove(stage, { clientX: 20, clientY: 222 });
+    fireEvent.mouseUp(stage, { clientX: 20, clientY: 222 });
+
+    await waitFor(() => {
+      const nextVideo = document.body.querySelector('[data-testid="media-viewer-stage"] [data-active-media="true"] video');
+      expect(nextVideo?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/video-2.mp4');
+    });
+  });
+
   it('renders audio media messages through signed URLs', async () => {
     getMediaDownloadUrlMock.mockResolvedValue({
       url: 'https://signed.example/rooms/room-1/audio-1.webm',

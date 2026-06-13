@@ -74,6 +74,12 @@ interface MediaStageItemProps {
   isActive: boolean;
   imageZoom: number;
   imagePan: ImagePan;
+  videoGestureHandlers?: {
+    onPointerDown: React.PointerEventHandler<HTMLVideoElement>;
+    onPointerMove: React.PointerEventHandler<HTMLVideoElement>;
+    onPointerUp: React.PointerEventHandler<HTMLVideoElement>;
+    onPointerCancel: React.PointerEventHandler<HTMLVideoElement>;
+  };
 }
 
 interface MediaHistoryGridItemProps {
@@ -89,11 +95,12 @@ const SWIPE_THRESHOLD = 48;
 const SWIPE_DOWN_THRESHOLD = 64;
 const TAP_THRESHOLD = 8;
 const MIN_IMAGE_ZOOM = 1;
-const MAX_IMAGE_ZOOM = 4;
+const MAX_IMAGE_ZOOM = 6;
 const DOUBLE_TAP_DELAY_MS = 220;
 const DOUBLE_TAP_DISTANCE = 34;
 const HORIZONTAL_VELOCITY_THRESHOLD = 0.45;
 const VERTICAL_VELOCITY_THRESHOLD = 0.55;
+const HORIZONTAL_TRACK_TRANSITION_MS = 360;
 const WHEEL_ZOOM_STEP = 0.28;
 const DEFAULT_ZOOMED_IMAGE_SCALE = 2;
 const ZERO_IMAGE_PAN: ImagePan = { x: 0, y: 0 };
@@ -135,7 +142,7 @@ const ViewerButton: React.FC<ViewerButtonProps> = ({ label, icon, onPress, class
   </Button>
 );
 
-const MediaStageItem: React.FC<MediaStageItemProps> = ({ item, alt, isActive, imageZoom, imagePan }) => {
+const MediaStageItem: React.FC<MediaStageItemProps> = ({ item, alt, isActive, imageZoom, imagePan, videoGestureHandlers }) => {
   const { t } = useTranslation();
   const videoRef = React.useRef<HTMLVideoElement | null>(null);
   const [videoPreviewError, setVideoPreviewError] = React.useState(false);
@@ -212,6 +219,7 @@ const MediaStageItem: React.FC<MediaStageItemProps> = ({ item, alt, isActive, im
       playsInline
       preload="metadata"
       onError={() => setVideoPreviewError(true)}
+      {...(isActive ? videoGestureHandlers : undefined)}
     />
   );
 };
@@ -432,6 +440,7 @@ const MediaStage: React.FC<MediaStageProps> = ({
     pinchDistance?: number;
     pinchCenter?: GesturePoint;
     metrics: GestureMetrics;
+    allowTapDismiss: boolean;
   };
   type PendingDomTransforms = {
     image?: { zoom: number; pan: ImagePan; transition: boolean };
@@ -450,6 +459,7 @@ const MediaStage: React.FC<MediaStageProps> = ({
   const pendingDomTransformsRef = React.useRef<PendingDomTransforms>({});
   const transformFrameRef = React.useRef<number | null>(null);
   const tapTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const capturedPointerIdsRef = React.useRef<Set<number>>(new Set());
   const [trackWidth, setTrackWidth] = React.useState(0);
   const isHistoryPreview = variant === "historyPreview";
   const trackItems = mediaItems.length > 0 ? mediaItems : [media];
@@ -469,7 +479,11 @@ const MediaStage: React.FC<MediaStageProps> = ({
   }, []);
 
   const isInteractiveTarget = (target: EventTarget) => (
-    target instanceof Element && Boolean(target.closest("button,a,input,textarea,select,video,[role='button']"))
+    target instanceof Element && Boolean(target.closest("button,a,input,textarea,select,[role='button']"))
+  );
+
+  const isVideoTarget = (target: EventTarget) => (
+    target instanceof Element && Boolean(target.closest("video"))
   );
 
   const flushDomTransforms = React.useCallback(() => {
@@ -480,7 +494,7 @@ const MediaStage: React.FC<MediaStageProps> = ({
     if (pending.track) {
       const trackElement = trackRef.current;
       if (trackElement) {
-        trackElement.style.transition = pending.track.transition ? "transform 220ms ease-out" : "none";
+        trackElement.style.transition = pending.track.transition ? `transform ${HORIZONTAL_TRACK_TRANSITION_MS}ms ease-out` : "none";
         trackElement.style.transform = `translate3d(${pending.track.translateX}px, 0, 0)`;
       }
     }
@@ -707,6 +721,7 @@ const MediaStage: React.FC<MediaStageProps> = ({
       currentZoom: currentTransform.zoom,
       currentPan: currentTransform.pan,
       metrics,
+      allowTapDismiss: !isVideoTarget(target),
     };
     return true;
   }, [activeStageMedia.kind, clearTapTimer, getStageMetrics]);
@@ -741,6 +756,7 @@ const MediaStage: React.FC<MediaStageProps> = ({
       pinchDistance: Math.max(1, getDistance(points[0], points[1])),
       pinchCenter: getStagePoint(center.x, center.y, metrics),
       metrics,
+      allowTapDismiss: true,
     };
   }, [activeStageMedia.kind, applyTrackOffset, applyVerticalOffset, clearTapTimer, getStageMetrics, getStagePoint]);
 
@@ -863,7 +879,9 @@ const MediaStage: React.FC<MediaStageProps> = ({
 
     if (finalState.mode === "pan") {
       if (absX <= TAP_THRESHOLD && absY <= TAP_THRESHOLD) {
-        scheduleTapDismiss(clientX, clientY);
+        if (finalState.allowTapDismiss) {
+          scheduleTapDismiss(clientX, clientY);
+        }
         return;
       }
       commitImageTransform(finalState.currentZoom, finalState.currentPan, true, finalState.metrics);
@@ -871,7 +889,9 @@ const MediaStage: React.FC<MediaStageProps> = ({
     }
 
     if (finalState.mode === "tap") {
-      scheduleTapDismiss(clientX, clientY);
+      if (finalState.allowTapDismiss) {
+        scheduleTapDismiss(clientX, clientY);
+      }
       return;
     }
 
@@ -919,6 +939,7 @@ const MediaStage: React.FC<MediaStageProps> = ({
 
   React.useEffect(() => () => {
     clearTapTimer();
+    capturedPointerIdsRef.current.clear();
     if (transformFrameRef.current !== null && typeof window !== "undefined" && typeof window.cancelAnimationFrame === "function") {
       window.cancelAnimationFrame(transformFrameRef.current);
       transformFrameRef.current = null;
@@ -933,7 +954,10 @@ const MediaStage: React.FC<MediaStageProps> = ({
     }
 
     pointerPositionsRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    event.currentTarget.setPointerCapture?.(event.pointerId);
+    if (!isVideoTarget(event.target) && typeof event.currentTarget.setPointerCapture === "function") {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      capturedPointerIdsRef.current.add(event.pointerId);
+    }
 
     if (pointerPositionsRef.current.size >= 2) {
       beginPinchGesture();
@@ -966,7 +990,10 @@ const MediaStage: React.FC<MediaStageProps> = ({
     }
 
     pointerPositionsRef.current.delete(event.pointerId);
-    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    if (capturedPointerIdsRef.current.has(event.pointerId)) {
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+      capturedPointerIdsRef.current.delete(event.pointerId);
+    }
     if (pointerPositionsRef.current.size === 0) {
       gestureRef.current = null;
       window.setTimeout(() => {
@@ -978,7 +1005,10 @@ const MediaStage: React.FC<MediaStageProps> = ({
   const handlePointerCancel = (event: React.PointerEvent<HTMLElement>) => {
     const cancelledState = gestureRef.current;
     pointerPositionsRef.current.delete(event.pointerId);
-    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    if (capturedPointerIdsRef.current.has(event.pointerId)) {
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+      capturedPointerIdsRef.current.delete(event.pointerId);
+    }
     if (cancelledState?.mode === "pinch" || cancelledState?.mode === "pan") {
       commitImageTransform(imageTransformRef.current.zoom, imageTransformRef.current.pan, true, cancelledState.metrics);
     }
@@ -989,6 +1019,25 @@ const MediaStage: React.FC<MediaStageProps> = ({
     window.setTimeout(() => {
       pointerSequenceRef.current = false;
     }, 350);
+  };
+
+  const videoGestureHandlers = {
+    onPointerDown: (event: React.PointerEvent<HTMLVideoElement>) => {
+      handlePointerDown(event);
+      event.stopPropagation();
+    },
+    onPointerMove: (event: React.PointerEvent<HTMLVideoElement>) => {
+      handlePointerMove(event);
+      event.stopPropagation();
+    },
+    onPointerUp: (event: React.PointerEvent<HTMLVideoElement>) => {
+      handlePointerUp(event);
+      event.stopPropagation();
+    },
+    onPointerCancel: (event: React.PointerEvent<HTMLVideoElement>) => {
+      handlePointerCancel(event);
+      event.stopPropagation();
+    },
   };
 
   const handleMouseDown = (event: React.MouseEvent<HTMLElement>) => {
@@ -1012,7 +1061,7 @@ const MediaStage: React.FC<MediaStageProps> = ({
   };
 
   const handleDoubleClick = (event: React.MouseEvent<HTMLElement>) => {
-    if (isInteractiveTarget(event.target)) return;
+    if (isInteractiveTarget(event.target) || isVideoTarget(event.target)) return;
     event.preventDefault();
     clearTapTimer();
     lastTapRef.current = null;
@@ -1074,6 +1123,7 @@ const MediaStage: React.FC<MediaStageProps> = ({
                 isActive={isActive}
                 imageZoom={isActive ? imageZoom : MIN_IMAGE_ZOOM}
                 imagePan={isActive ? imagePan : ZERO_IMAGE_PAN}
+                videoGestureHandlers={isActive ? videoGestureHandlers : undefined}
               />
             </div>
           );
@@ -1210,7 +1260,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
       byteSize,
       createdAt,
     });
-  }, [assetId, byteSize, createdAt, kind, mimeType, src]);
+  }, [assetId, byteSize, createdAt, isOpen, kind, mimeType, src]);
 
   React.useEffect(() => {
     initialHistoryRequestKeyRef.current = null;
