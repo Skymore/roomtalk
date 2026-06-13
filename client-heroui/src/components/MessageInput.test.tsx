@@ -184,6 +184,7 @@ const installVoiceRecordingMocks = () => {
 describe('MessageInput optimistic send flow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.removeItem('roomtalk:ai-context-message-limit');
     socketMocks.requestAIResponse.mockResolvedValue(undefined);
     socketMocks.sendMessage.mockResolvedValue(message());
     socketMocks.sendMessageAndAskAI.mockResolvedValue({
@@ -288,6 +289,7 @@ describe('MessageInput optimistic send flow', () => {
       systemPrompt: 'You are helpful',
       roleName: 'Assistant',
       model: 'model-a',
+      maxContextMessages: 100,
     });
     expect(optimisticMessage).toMatchObject({
       content: 'ask this',
@@ -338,6 +340,7 @@ describe('MessageInput optimistic send flow', () => {
       systemPrompt: 'You are helpful',
       roleName: 'Assistant',
       model: 'model-a',
+      maxContextMessages: 100,
     });
     expect(socketMocks.sendMessageAndAskAI).not.toHaveBeenCalled();
     expect(socketMocks.sendMessage).not.toHaveBeenCalled();

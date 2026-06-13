@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { buildFinalAIHistory, selectAIHistory } from './aiHistory';
+import { MAX_CONTEXT_MESSAGES, buildFinalAIHistory, selectAIHistory } from './aiHistory';
 import { Message } from '../types';
 
 const createMessage = (id: string): Message => ({
@@ -13,6 +13,10 @@ const createMessage = (id: string): Message => ({
 });
 
 describe('selectAIHistory', () => {
+  it('defaults model context to 100 messages', () => {
+    assert.equal(MAX_CONTEXT_MESSAGES, 100);
+  });
+
   it('limits model context without discarding persistent history', () => {
     const fullHistory = ['m1', 'm2', 'm3', 'm4', 'm5'].map(createMessage);
 
@@ -46,6 +50,15 @@ describe('selectAIHistory', () => {
     assert.equal(selection.truncationReason, 'max-context');
     assert.deepEqual(selection.contextMessages.map(message => message.id), ['m2']);
     assert.ok(selection.contextTokenEstimate > 10);
+  });
+
+  it('treats a zero message limit as current message only', () => {
+    const fullHistory = ['m1', 'm2', 'm3'].map(createMessage);
+
+    const selection = selectAIHistory(fullHistory, { maxContextMessages: 0 });
+
+    assert.equal(selection.truncationReason, 'max-context');
+    assert.deepEqual(selection.contextMessages.map(message => message.id), ['m3']);
   });
 
   it('truncates retry context before the retried message', () => {

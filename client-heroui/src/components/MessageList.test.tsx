@@ -84,6 +84,7 @@ describe('MessageList optimistic messages', () => {
   beforeEach(() => {
     socketMock.reset();
     vi.clearAllMocks();
+    localStorage.removeItem('roomtalk:ai-context-message-limit');
     Element.prototype.scrollIntoView = vi.fn();
   });
 

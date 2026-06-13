@@ -875,6 +875,7 @@ export const requestAIResponse = (data: {
   model?: string;
   editedMessageId?: string;
   retryForMessageId?: string;
+  maxContextMessages?: number;
 }) => {
   return emitWithAck('ask_ai', data, 'Timed out while starting AI response', 'Failed to start AI response')
     .then(() => undefined);
@@ -890,6 +891,7 @@ export const sendMessageAndAskAI = (params: {
   systemPrompt?: string;
   roleName?: string;
   model?: string;
+  maxContextMessages?: number;
 }): Promise<{ userMessage: Message; aiMessageId?: string; aiStarted: boolean; aiError?: string }> => {
   return emitWithAck<SendMessageAndAskAIAckResponse>(
     'send_message_and_ask_ai',
@@ -917,6 +919,7 @@ export const requestEditMessageAndAIResponse = (data: {
   systemPrompt?: string;
   roleName?: string;
   model?: string;
+  maxContextMessages?: number;
 }) => {
   return emitWithAck('edit_message_and_ask_ai', data, 'Timed out while starting AI response', 'Failed to start AI response')
     .then(() => undefined);

@@ -303,6 +303,7 @@ describe('socket message acknowledgement helpers', () => {
         systemPrompt: 'be concise',
         roleName: 'Assistant',
         model: 'model-a',
+        maxContextMessages: 25,
       })
     ).resolves.toEqual({
       userMessage: savedMessage,
@@ -323,6 +324,7 @@ describe('socket message acknowledgement helpers', () => {
         systemPrompt: 'be concise',
         roleName: 'Assistant',
         model: 'model-a',
+        maxContextMessages: 25,
       },
       expect.any(Function)
     );

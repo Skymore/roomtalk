@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   Button,
+  Input,
   Modal,
   ModalBody,
   ModalContent,
@@ -17,6 +18,11 @@ import { AIRoleManager } from './AIRoleManager';
 import { HoverTooltip } from './HoverTooltip';
 import { AIModelOption, formatModelPrice, getProviderLabel, isPremiumAIModel } from '../utils/aiModels';
 import { AIRole, getAIRoleDisplayName } from '../utils/aiRoles';
+import {
+  MAX_AI_CONTEXT_MESSAGE_LIMIT,
+  MIN_AI_CONTEXT_MESSAGE_LIMIT,
+  normalizeAIContextMessageLimit,
+} from '../utils/aiContext';
 
 const formatPriceRate = (value: number | undefined) => {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
@@ -95,10 +101,12 @@ interface MessageInputAIControlsProps {
   isMacOS: boolean;
   currentInputText: string;
   imageCount: number;
+  aiContextMessageLimit: number;
   isSettingsOpen: boolean;
   onSettingsClose: () => void;
   onRoleChange: (roleId: string) => void;
   onModelChange: (model: string) => void;
+  onAIContextMessageLimitChange: (limit: number) => void;
   onAddRole: (role: AIRole) => void;
   onUpdateRole: (role: AIRole) => void;
   onDeleteRole: (roleId: string) => void;
@@ -119,10 +127,12 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   isMacOS,
   currentInputText,
   imageCount,
+  aiContextMessageLimit,
   isSettingsOpen,
   onSettingsClose,
   onRoleChange,
   onModelChange,
+  onAIContextMessageLimitChange,
   onAddRole,
   onUpdateRole,
   onDeleteRole,
@@ -131,6 +141,9 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
 }) => {
   const { t } = useTranslation();
   const [isMobileViewport, setIsMobileViewport] = React.useState(false);
+  const [aiContextMessageLimitDraft, setAIContextMessageLimitDraft] = React.useState(() => (
+    normalizeAIContextMessageLimit(aiContextMessageLimit)
+  ));
   const [pendingPremiumModelId, setPendingPremiumModelId] = React.useState<string | null>(null);
   const [premiumConfirmationStep, setPremiumConfirmationStep] = React.useState<1 | 2>(1);
   const pendingPremiumModel = aiModels.find(model => model.id === pendingPremiumModelId);
@@ -150,6 +163,11 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
 
     return () => query.removeEventListener('change', updateViewport);
   }, []);
+
+  React.useEffect(() => {
+    if (!isSettingsOpen) return;
+    setAIContextMessageLimitDraft(normalizeAIContextMessageLimit(aiContextMessageLimit));
+  }, [aiContextMessageLimit, isSettingsOpen]);
 
   const closePremiumConfirmation = () => {
     setPendingPremiumModelId(null);
@@ -183,6 +201,18 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
     onModelChange(pendingPremiumModel.id);
     closePremiumConfirmation();
   };
+
+  const handleAIContextMessageLimitInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setAIContextMessageLimitDraft(normalizeAIContextMessageLimit(event.target.value, MIN_AI_CONTEXT_MESSAGE_LIMIT));
+  };
+
+  const handleAIContextMessageLimitApply = () => {
+    const normalizedLimit = normalizeAIContextMessageLimit(aiContextMessageLimitDraft);
+    setAIContextMessageLimitDraft(normalizedLimit);
+    onAIContextMessageLimitChange(normalizedLimit);
+  };
+
+  const aiContextLimitChanged = aiContextMessageLimitDraft !== normalizeAIContextMessageLimit(aiContextMessageLimit);
 
   return (
     <>
@@ -359,6 +389,36 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
         <ModalContent>
           <ModalHeader>{t('aiSettings')}</ModalHeader>
           <ModalBody>
+            <div className="space-y-2 rounded-lg border border-[#dedbd0] bg-[#f0eee6] p-3 dark:border-[#30302e] dark:bg-[#242421]">
+              <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[#87867f] dark:text-[#b0aea5]">
+                <Icon icon="lucide:brain-circuit" className="h-3.5 w-3.5" aria-hidden="true" />
+                {t('aiContextLimit')}
+              </div>
+              <div className="grid grid-cols-[minmax(0,1fr)_3rem] items-start gap-2">
+                <Input
+                  type="number"
+                  aria-label={t('aiContextLimit')}
+                  description={t('aiContextLimitDescription')}
+                  min={MIN_AI_CONTEXT_MESSAGE_LIMIT}
+                  max={MAX_AI_CONTEXT_MESSAGE_LIMIT}
+                  step={1}
+                  value={String(aiContextMessageLimitDraft)}
+                  onChange={handleAIContextMessageLimitInputChange}
+                  classNames={{ inputWrapper: 'h-11' }}
+                />
+                <HoverTooltip content={t('save')}>
+                  <Button
+                    isIconOnly
+                    aria-label={t('save')}
+                    className="h-11 w-11 min-w-11 rounded-lg bg-[#c96442] text-[#faf9f5]"
+                    isDisabled={!aiContextLimitChanged}
+                    onPress={handleAIContextMessageLimitApply}
+                  >
+                    <Icon icon="lucide:check" className="h-5 w-5" />
+                  </Button>
+                </HoverTooltip>
+              </div>
+            </div>
             <div className="sm:hidden">
               <Select
                 size="sm"

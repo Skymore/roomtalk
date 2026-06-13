@@ -6,6 +6,7 @@ import { Message, Room, RoomPermissions } from '../utils/types';
 import { readMemoryRoomMessageWindow } from '../utils/messageHistoryCache';
 import { useTranslation } from 'react-i18next';
 import { getStoredAIModel } from '../utils/aiModels';
+import { getStoredAIContextMessageLimit } from '../utils/aiContext';
 import { formatUsdCost } from '../utils/formatters';
 import { Button, Dropdown, DropdownItem, DropdownMenu, DropdownTrigger } from '@heroui/react';
 import { downloadTranscriptHtml, downloadTranscriptZip, type ExportMediaResolver } from '../utils/chatExport';
@@ -307,6 +308,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       messageId,
       newContent,
       model: getStoredAIModel() || undefined,
+      maxContextMessages: getStoredAIContextMessageLimit(),
     }).catch((error) => {
       console.error('Failed to save edit before asking AI:', error);
       updateMessages(originalMessages);
@@ -359,7 +361,8 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       roomId,
       // prompt: '', // Prompt is now determined by the server based on truncated history
       retryForMessageId: messageId, // 新增：告知服务器这是针对哪条消息的重试
-      model: getStoredAIModel() || undefined
+      model: getStoredAIModel() || undefined,
+      maxContextMessages: getStoredAIContextMessageLimit(),
       // TODO: Consider sending current role/system prompt if needed
     }).catch((error) => {
       console.error('Failed to retry AI response:', error);
