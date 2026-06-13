@@ -61,12 +61,10 @@ interface MediaStageProps {
   nextLabel: string;
   onPrevious: () => void;
   onNext: () => void;
-  onSwipeDown?: () => void;
-  onTapMedia?: () => void;
+  onDismiss: () => void;
   imageZoom: number;
   imagePan: ImagePan;
-  onImagePanChange: (pan: ImagePan) => void;
-  onImageZoomChange: (delta: number) => void;
+  onImageTransformChange: (zoom: number, pan: ImagePan) => void;
   className?: string;
 }
 
@@ -74,7 +72,6 @@ interface MediaStageItemProps {
   item: ActiveMedia;
   alt: string;
   isActive: boolean;
-  onTapImage?: () => void;
   imageZoom: number;
   imagePan: ImagePan;
 }
@@ -93,7 +90,11 @@ const SWIPE_DOWN_THRESHOLD = 64;
 const TAP_THRESHOLD = 8;
 const MIN_IMAGE_ZOOM = 1;
 const MAX_IMAGE_ZOOM = 4;
-const IMAGE_ZOOM_STEP = 0.5;
+const DOUBLE_TAP_DELAY_MS = 220;
+const DOUBLE_TAP_DISTANCE = 34;
+const HORIZONTAL_VELOCITY_THRESHOLD = 0.45;
+const VERTICAL_VELOCITY_THRESHOLD = 0.55;
+const WHEEL_ZOOM_STEP = 0.28;
 const DEFAULT_ZOOMED_IMAGE_SCALE = 2;
 const ZERO_IMAGE_PAN: ImagePan = { x: 0, y: 0 };
 const MEDIA_HISTORY_FILTERS: MediaHistoryFilter[] = ["all", "image", "video"];
@@ -134,53 +135,9 @@ const ViewerButton: React.FC<ViewerButtonProps> = ({ label, icon, onPress, class
   </Button>
 );
 
-interface ImageZoomControlsProps {
-  zoom: number;
-  onZoomIn: () => void;
-  onZoomOut: () => void;
-  onResetZoom: () => void;
-  zoomInLabel: string;
-  zoomOutLabel: string;
-  resetZoomLabel: string;
-}
-
-const ImageZoomControls: React.FC<ImageZoomControlsProps> = ({
-  zoom,
-  onZoomIn,
-  onZoomOut,
-  onResetZoom,
-  zoomInLabel,
-  zoomOutLabel,
-  resetZoomLabel,
-}) => (
-  <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-white/10 bg-white/10 px-2 py-1.5 shadow-2xl backdrop-blur-xl">
-    <ViewerButton
-      label={zoomOutLabel}
-      icon="lucide:minus"
-      onPress={onZoomOut}
-      isDisabled={zoom <= MIN_IMAGE_ZOOM}
-      className="h-9 w-9 bg-black/20"
-    />
-    <Button
-      aria-label={resetZoomLabel}
-      title={resetZoomLabel}
-      className="h-9 min-w-[4.25rem] rounded-full bg-black/20 px-3 text-xs font-semibold text-white shadow-lg backdrop-blur-md transition hover:bg-white/20 focus-visible:ring-2 focus-visible:ring-white/80"
-      onPress={onResetZoom}
-    >
-      {Math.round(zoom * 100)}%
-    </Button>
-    <ViewerButton
-      label={zoomInLabel}
-      icon="lucide:plus"
-      onPress={onZoomIn}
-      isDisabled={zoom >= MAX_IMAGE_ZOOM}
-      className="h-9 w-9 bg-black/20"
-    />
-  </div>
-);
-
-const MediaStageItem: React.FC<MediaStageItemProps> = ({ item, alt, isActive, onTapImage, imageZoom, imagePan }) => {
+const MediaStageItem: React.FC<MediaStageItemProps> = ({ item, alt, isActive, imageZoom, imagePan }) => {
   const { t } = useTranslation();
+  const videoRef = React.useRef<HTMLVideoElement | null>(null);
   const [videoPreviewError, setVideoPreviewError] = React.useState(false);
   const { mediaUrl, posterUrl } = useCachedMedia({
     assetId: item.assetId,
@@ -195,19 +152,27 @@ const MediaStageItem: React.FC<MediaStageItemProps> = ({ item, alt, isActive, on
     setVideoPreviewError(false);
   }, [displayUrl, item.kind]);
 
+  React.useEffect(() => {
+    if (item.kind !== "video" || isActive) return;
+    try {
+      videoRef.current?.pause();
+    } catch {
+      // Some test and embedded browser environments expose video elements without media controls.
+    }
+  }, [isActive, item.kind]);
+
   if (item.kind === "image") {
     const isZoomed = isActive && imageZoom > MIN_IMAGE_ZOOM;
     return (
       <img
         src={displayUrl}
         alt={alt}
-        className={`max-h-full max-w-full select-none object-contain will-change-transform ${isZoomed ? "cursor-grab active:cursor-grabbing" : onTapImage && isActive ? "cursor-zoom-in" : ""}`}
+        className={`max-h-full max-w-full select-none object-contain will-change-transform ${isZoomed ? "cursor-grab active:cursor-grabbing" : isActive ? "cursor-zoom-in" : ""}`}
         style={isActive ? {
           transform: `translate3d(${imagePan.x}px, ${imagePan.y}px, 0) scale(${imageZoom})`,
           transition: "transform 160ms ease-out",
         } : undefined}
         draggable={false}
-        onClick={isActive ? onTapImage : undefined}
       />
     );
   }
@@ -238,15 +203,14 @@ const MediaStageItem: React.FC<MediaStageItemProps> = ({ item, alt, isActive, on
 
   return (
     <video
+      ref={videoRef}
       key={displayUrl}
       src={displayUrl}
       poster={posterUrl || undefined}
       className="max-h-full w-full max-w-5xl bg-black object-contain sm:rounded-lg"
       controls={isActive}
-      autoPlay={isActive}
       playsInline
       preload="metadata"
-      muted={!isActive}
       onError={() => setVideoPreviewError(true)}
     />
   );
@@ -442,40 +406,486 @@ const MediaStage: React.FC<MediaStageProps> = ({
   nextLabel,
   onPrevious,
   onNext,
-  onSwipeDown,
-  onTapMedia,
+  onDismiss,
   imageZoom,
   imagePan,
-  onImagePanChange,
-  onImageZoomChange,
+  onImageTransformChange,
   className = "",
 }) => {
-  const pointerStartRef = React.useRef<{ x: number; y: number } | null>(null);
-  const imagePanStartRef = React.useRef<{ x: number; y: number; pan: ImagePan } | null>(null);
-  const activePointerIdRef = React.useRef<number | null>(null);
-  const pointerSequenceRef = React.useRef(false);
-  const suppressClickRef = React.useRef(false);
+  type GestureMode = "idle" | "tap" | "horizontal" | "vertical" | "pan" | "pinch" | "ignored";
+  type GesturePoint = { x: number; y: number };
+  type GestureMetrics = { width: number; height: number; left: number; top: number };
+  type GestureState = {
+    mode: GestureMode;
+    pointerId: number | null;
+    startX: number;
+    startY: number;
+    lastX: number;
+    lastY: number;
+    startTime: number;
+    width: number;
+    height: number;
+    startZoom: number;
+    startPan: ImagePan;
+    currentZoom: number;
+    currentPan: ImagePan;
+    pinchDistance?: number;
+    pinchCenter?: GesturePoint;
+    metrics: GestureMetrics;
+  };
+  type PendingDomTransforms = {
+    image?: { zoom: number; pan: ImagePan; transition: boolean };
+    stage?: { offset: number; height: number; transition: boolean };
+    track?: { translateX: number; transition: boolean };
+  };
+
   const stageRef = React.useRef<HTMLElement | null>(null);
   const trackRef = React.useRef<HTMLDivElement | null>(null);
+  const pointerPositionsRef = React.useRef<Map<number, GesturePoint>>(new Map());
+  const pointerSequenceRef = React.useRef(false);
+  const mouseGestureActiveRef = React.useRef(false);
+  const gestureRef = React.useRef<GestureState | null>(null);
+  const imageTransformRef = React.useRef({ zoom: imageZoom, pan: imagePan });
+  const lastTapRef = React.useRef<{ x: number; y: number; time: number } | null>(null);
+  const pendingDomTransformsRef = React.useRef<PendingDomTransforms>({});
+  const transformFrameRef = React.useRef<number | null>(null);
+  const tapTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const [trackWidth, setTrackWidth] = React.useState(0);
-  const [dragOffset, setDragOffset] = React.useState(0);
-  const [isDragging, setIsDragging] = React.useState(false);
   const isHistoryPreview = variant === "historyPreview";
   const trackItems = mediaItems.length > 0 ? mediaItems : [media];
   const safeActiveIndex = activeIndex >= 0 && activeIndex < trackItems.length ? activeIndex : 0;
   const activeStageMedia = trackItems[safeActiveIndex] || media;
-  const isZoomedImage = activeStageMedia.kind === "image" && imageZoom > MIN_IMAGE_ZOOM;
+  const activeStageMediaKey = getMediaKey(activeStageMedia);
+
+  const now = () => (
+    typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now()
+  );
+
+  const clearTapTimer = React.useCallback(() => {
+    if (tapTimerRef.current) {
+      clearTimeout(tapTimerRef.current);
+      tapTimerRef.current = null;
+    }
+  }, []);
 
   const isInteractiveTarget = (target: EventTarget) => (
-    target instanceof Element && Boolean(target.closest("button,a,input,textarea,select,[role='button']"))
+    target instanceof Element && Boolean(target.closest("button,a,input,textarea,select,video,[role='button']"))
   );
 
-  const getCurrentTrackWidth = () => (
-    trackRef.current?.clientWidth ||
-    stageRef.current?.clientWidth ||
-    (typeof window !== "undefined" ? window.innerWidth : 1) ||
-    1
+  const flushDomTransforms = React.useCallback(() => {
+    transformFrameRef.current = null;
+    const pending = pendingDomTransformsRef.current;
+    pendingDomTransformsRef.current = {};
+
+    if (pending.track) {
+      const trackElement = trackRef.current;
+      if (trackElement) {
+        trackElement.style.transition = pending.track.transition ? "transform 220ms ease-out" : "none";
+        trackElement.style.transform = `translate3d(${pending.track.translateX}px, 0, 0)`;
+      }
+    }
+
+    if (pending.stage) {
+      const stageElement = stageRef.current;
+      if (stageElement) {
+        const normalizedOffset = Math.max(0, pending.stage.offset);
+        const scale = Math.max(0.92, 1 - (normalizedOffset / pending.stage.height) * 0.08);
+        const opacity = Math.max(0.38, 1 - (normalizedOffset / pending.stage.height) * 0.9);
+        stageElement.style.transition = pending.stage.transition
+          ? "transform 200ms ease-out, opacity 200ms ease-out"
+          : "none";
+        stageElement.style.transform = normalizedOffset === 0
+          ? "translate3d(0, 0, 0) scale(1)"
+          : `translate3d(0, ${normalizedOffset}px, 0) scale(${scale})`;
+        stageElement.style.opacity = String(opacity);
+      }
+    }
+
+    if (pending.image) {
+      const imageElement = stageRef.current?.querySelector('[data-active-media="true"] img') as HTMLImageElement | null;
+      if (imageElement) {
+        imageElement.style.transition = pending.image.transition ? "transform 180ms ease-out" : "none";
+        imageElement.style.transform = `translate3d(${pending.image.pan.x}px, ${pending.image.pan.y}px, 0) scale(${pending.image.zoom})`;
+      }
+    }
+  }, []);
+
+  const scheduleDomTransformFlush = React.useCallback(() => {
+    if (transformFrameRef.current !== null) {
+      return;
+    }
+
+    if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") {
+      flushDomTransforms();
+      return;
+    }
+
+    transformFrameRef.current = window.requestAnimationFrame(flushDomTransforms);
+  }, [flushDomTransforms]);
+
+  const getStageMetrics = React.useCallback((): GestureMetrics => {
+    const stage = stageRef.current;
+    const rect = stage?.getBoundingClientRect();
+    const width = trackRef.current?.clientWidth
+      || stage?.clientWidth
+      || rect?.width
+      || (typeof window !== "undefined" ? window.innerWidth : 1)
+      || 1;
+    const height = stage?.clientHeight
+      || rect?.height
+      || (typeof window !== "undefined" ? window.innerHeight : 1)
+      || 1;
+    return {
+      width,
+      height,
+      left: rect && rect.width > 0 ? rect.left : 0,
+      top: rect && rect.height > 0 ? rect.top : 0,
+    };
+  }, []);
+
+  const getCurrentTrackWidth = React.useCallback(() => getStageMetrics().width, [getStageMetrics]);
+
+  const getStagePoint = React.useCallback((clientX: number, clientY: number, metrics = getStageMetrics()): GesturePoint => {
+    return {
+      x: clientX - metrics.left - (metrics.width / 2),
+      y: clientY - metrics.top - (metrics.height / 2),
+    };
+  }, [getStageMetrics]);
+
+  const clampZoom = (zoom: number) => Math.max(MIN_IMAGE_ZOOM, Math.min(MAX_IMAGE_ZOOM, zoom));
+
+  const clampImagePan = React.useCallback((pan: ImagePan, zoom: number, metrics = getStageMetrics()): ImagePan => {
+    if (zoom <= MIN_IMAGE_ZOOM) {
+      return ZERO_IMAGE_PAN;
+    }
+
+    const maxX = Math.max(0, (metrics.width * (zoom - 1)) / 2);
+    const maxY = Math.max(0, (metrics.height * (zoom - 1)) / 2);
+    return {
+      x: Math.max(-maxX, Math.min(maxX, pan.x)),
+      y: Math.max(-maxY, Math.min(maxY, pan.y)),
+    };
+  }, [getStageMetrics]);
+
+  const applyActiveImageTransform = React.useCallback((zoom: number, pan: ImagePan, transition = false) => {
+    imageTransformRef.current = { zoom, pan };
+    pendingDomTransformsRef.current.image = { zoom, pan, transition };
+    scheduleDomTransformFlush();
+  }, [scheduleDomTransformFlush]);
+
+  const commitImageTransform = React.useCallback((nextZoom: number, nextPan: ImagePan, transition = true, metrics?: GestureMetrics) => {
+    const clampedZoom = clampZoom(nextZoom);
+    const normalizedZoom = clampedZoom <= MIN_IMAGE_ZOOM + 0.01 ? MIN_IMAGE_ZOOM : clampedZoom;
+    const normalizedPan = normalizedZoom <= MIN_IMAGE_ZOOM ? ZERO_IMAGE_PAN : clampImagePan(nextPan, normalizedZoom, metrics);
+    applyActiveImageTransform(normalizedZoom, normalizedPan, transition);
+    onImageTransformChange(normalizedZoom, normalizedPan);
+  }, [applyActiveImageTransform, clampImagePan, onImageTransformChange]);
+
+  const getBoundaryResistedOffset = React.useCallback((offset: number, metrics = getStageMetrics()) => {
+    const isPastPreviousEdge = offset > 0 && !canGoPrevious;
+    const isPastNextEdge = offset < 0 && !canGoNext;
+    if (!isPastPreviousEdge && !isPastNextEdge) {
+      return offset;
+    }
+
+    const width = metrics.width;
+    const distance = Math.abs(offset);
+    const resisted = width * (1 - (1 / ((distance / width) * 0.55 + 1)));
+    return Math.sign(offset) * Math.min(resisted, width * 0.45);
+  }, [canGoNext, canGoPrevious, getStageMetrics]);
+
+  const applyTrackOffset = React.useCallback((offset: number, transition = false, metrics = getStageMetrics()) => {
+    pendingDomTransformsRef.current.track = {
+      translateX: (-safeActiveIndex * metrics.width) + offset,
+      transition,
+    };
+    scheduleDomTransformFlush();
+  }, [getStageMetrics, safeActiveIndex, scheduleDomTransformFlush]);
+
+  const applyVerticalOffset = React.useCallback((offset: number, transition = false, metrics = getStageMetrics()) => {
+    pendingDomTransformsRef.current.stage = {
+      offset,
+      height: Math.max(1, metrics.height),
+      transition,
+    };
+    scheduleDomTransformFlush();
+  }, [getStageMetrics, scheduleDomTransformFlush]);
+
+  const getDistance = (first: GesturePoint, second: GesturePoint) => (
+    Math.hypot(second.x - first.x, second.y - first.y)
   );
+
+  const getCenter = (first: GesturePoint, second: GesturePoint): GesturePoint => ({
+    x: (first.x + second.x) / 2,
+    y: (first.y + second.y) / 2,
+  });
+
+  const zoomAtPoint = React.useCallback((clientX: number, clientY: number, nextZoom: number) => {
+    const currentTransform = imageTransformRef.current;
+    const metrics = getStageMetrics();
+    const targetZoom = clampZoom(nextZoom);
+    if (targetZoom <= MIN_IMAGE_ZOOM) {
+      commitImageTransform(MIN_IMAGE_ZOOM, ZERO_IMAGE_PAN, true, metrics);
+      return;
+    }
+
+    const point = getStagePoint(clientX, clientY, metrics);
+    const ratio = targetZoom / Math.max(MIN_IMAGE_ZOOM, currentTransform.zoom);
+    const nextPan = clampImagePan({
+      x: point.x - ((point.x - currentTransform.pan.x) * ratio),
+      y: point.y - ((point.y - currentTransform.pan.y) * ratio),
+    }, targetZoom, metrics);
+    commitImageTransform(targetZoom, nextPan, true, metrics);
+  }, [clampImagePan, commitImageTransform, getStageMetrics, getStagePoint]);
+
+  const handleDoubleTap = React.useCallback((clientX: number, clientY: number) => {
+    if (activeStageMedia.kind !== "image") {
+      onDismiss();
+      return;
+    }
+
+    const currentTransform = imageTransformRef.current;
+    const targetZoom = currentTransform.zoom > MIN_IMAGE_ZOOM ? MIN_IMAGE_ZOOM : DEFAULT_ZOOMED_IMAGE_SCALE;
+    zoomAtPoint(clientX, clientY, targetZoom);
+  }, [activeStageMedia.kind, onDismiss, zoomAtPoint]);
+
+  const scheduleTapDismiss = React.useCallback((clientX: number, clientY: number) => {
+    const currentTime = now();
+    const lastTap = lastTapRef.current;
+    const isImageDoubleTap = activeStageMedia.kind === "image"
+      && lastTap
+      && currentTime - lastTap.time <= DOUBLE_TAP_DELAY_MS
+      && Math.hypot(clientX - lastTap.x, clientY - lastTap.y) <= DOUBLE_TAP_DISTANCE;
+
+    if (isImageDoubleTap) {
+      clearTapTimer();
+      lastTapRef.current = null;
+      handleDoubleTap(clientX, clientY);
+      return;
+    }
+
+    clearTapTimer();
+    lastTapRef.current = { x: clientX, y: clientY, time: currentTime };
+    tapTimerRef.current = setTimeout(() => {
+      lastTapRef.current = null;
+      tapTimerRef.current = null;
+      onDismiss();
+    }, activeStageMedia.kind === "image" ? DOUBLE_TAP_DELAY_MS : 0);
+  }, [activeStageMedia.kind, clearTapTimer, handleDoubleTap, onDismiss]);
+
+  const beginSinglePointGesture = React.useCallback((clientX: number, clientY: number, pointerId: number | null, target: EventTarget) => {
+    if (isInteractiveTarget(target)) {
+      gestureRef.current = null;
+      return false;
+    }
+
+    const currentTime = now();
+    const lastTap = lastTapRef.current;
+    if (
+      activeStageMedia.kind === "image"
+      && lastTap
+      && currentTime - lastTap.time <= DOUBLE_TAP_DELAY_MS
+      && Math.hypot(clientX - lastTap.x, clientY - lastTap.y) <= DOUBLE_TAP_DISTANCE
+    ) {
+      clearTapTimer();
+    }
+
+    const metrics = getStageMetrics();
+    const currentTransform = imageTransformRef.current;
+    gestureRef.current = {
+      mode: "tap",
+      pointerId,
+      startX: clientX,
+      startY: clientY,
+      lastX: clientX,
+      lastY: clientY,
+      startTime: currentTime,
+      width: metrics.width,
+      height: metrics.height,
+      startZoom: currentTransform.zoom,
+      startPan: currentTransform.pan,
+      currentZoom: currentTransform.zoom,
+      currentPan: currentTransform.pan,
+      metrics,
+    };
+    return true;
+  }, [activeStageMedia.kind, clearTapTimer, getStageMetrics]);
+
+  const beginPinchGesture = React.useCallback(() => {
+    const points = Array.from(pointerPositionsRef.current.values()).slice(0, 2);
+    if (points.length < 2 || activeStageMedia.kind !== "image") {
+      gestureRef.current = null;
+      return;
+    }
+
+    clearTapTimer();
+    const metrics = getStageMetrics();
+    applyTrackOffset(0, true, metrics);
+    applyVerticalOffset(0, true, metrics);
+    const center = getCenter(points[0], points[1]);
+    const currentTransform = imageTransformRef.current;
+    gestureRef.current = {
+      mode: "pinch",
+      pointerId: null,
+      startX: center.x,
+      startY: center.y,
+      lastX: center.x,
+      lastY: center.y,
+      startTime: now(),
+      width: metrics.width,
+      height: metrics.height,
+      startZoom: currentTransform.zoom,
+      startPan: currentTransform.pan,
+      currentZoom: currentTransform.zoom,
+      currentPan: currentTransform.pan,
+      pinchDistance: Math.max(1, getDistance(points[0], points[1])),
+      pinchCenter: getStagePoint(center.x, center.y, metrics),
+      metrics,
+    };
+  }, [activeStageMedia.kind, applyTrackOffset, applyVerticalOffset, clearTapTimer, getStageMetrics, getStagePoint]);
+
+  const updatePinchGesture = React.useCallback(() => {
+    const state = gestureRef.current;
+    if (!state || state.mode !== "pinch" || !state.pinchDistance || !state.pinchCenter) return;
+
+    const points = Array.from(pointerPositionsRef.current.values()).slice(0, 2);
+    if (points.length < 2) return;
+
+    const center = getCenter(points[0], points[1]);
+    const stageCenter = getStagePoint(center.x, center.y, state.metrics);
+    const distance = Math.max(1, getDistance(points[0], points[1]));
+    const nextZoom = clampZoom(state.startZoom * (distance / state.pinchDistance));
+    const ratio = nextZoom / Math.max(MIN_IMAGE_ZOOM, state.startZoom);
+    const nextPan = nextZoom <= MIN_IMAGE_ZOOM
+      ? ZERO_IMAGE_PAN
+      : clampImagePan({
+        x: stageCenter.x - ((state.pinchCenter.x - state.startPan.x) * ratio),
+        y: stageCenter.y - ((state.pinchCenter.y - state.startPan.y) * ratio),
+      }, nextZoom, state.metrics);
+
+    state.currentZoom = nextZoom;
+    state.currentPan = nextPan;
+    applyActiveImageTransform(nextZoom, nextPan, false);
+  }, [applyActiveImageTransform, clampImagePan, getStagePoint]);
+
+  const updateSinglePointGesture = React.useCallback((clientX: number, clientY: number) => {
+    const state = gestureRef.current;
+    if (!state || state.mode === "pinch") return;
+
+    state.lastX = clientX;
+    state.lastY = clientY;
+    const deltaX = clientX - state.startX;
+    const deltaY = clientY - state.startY;
+    const absX = Math.abs(deltaX);
+    const absY = Math.abs(deltaY);
+    const isZoomedImage = activeStageMedia.kind === "image" && state.startZoom > MIN_IMAGE_ZOOM;
+
+    if (state.mode === "tap" && (absX > TAP_THRESHOLD || absY > TAP_THRESHOLD)) {
+      clearTapTimer();
+      if (deltaY > 0 && absY > absX * 1.15) {
+        state.mode = "vertical";
+      } else if (isZoomedImage) {
+        state.mode = "pan";
+      } else if (absX > absY * 1.1) {
+        state.mode = "horizontal";
+      } else {
+        state.mode = "ignored";
+      }
+    }
+
+    if (state.mode === "horizontal") {
+      applyTrackOffset(getBoundaryResistedOffset(deltaX, state.metrics), false, state.metrics);
+      return;
+    }
+
+    if (state.mode === "vertical") {
+      applyVerticalOffset(deltaY, false, state.metrics);
+      return;
+    }
+
+    if (state.mode === "pan") {
+      const nextPan = clampImagePan({
+        x: state.startPan.x + deltaX,
+        y: state.startPan.y + deltaY,
+      }, state.startZoom, state.metrics);
+      state.currentPan = nextPan;
+      applyActiveImageTransform(state.startZoom, nextPan, false);
+    }
+  }, [activeStageMedia.kind, applyActiveImageTransform, applyTrackOffset, applyVerticalOffset, clampImagePan, clearTapTimer, getBoundaryResistedOffset]);
+
+  const finishSinglePointGesture = React.useCallback((clientX: number, clientY: number) => {
+    const state = gestureRef.current;
+    if (!state || state.mode === "pinch") return;
+
+    updateSinglePointGesture(clientX, clientY);
+    const finalState = gestureRef.current;
+    if (!finalState || finalState.mode === "pinch") return;
+
+    const deltaX = clientX - finalState.startX;
+    const deltaY = clientY - finalState.startY;
+    const absX = Math.abs(deltaX);
+    const absY = Math.abs(deltaY);
+    const elapsed = Math.max(1, now() - finalState.startTime);
+    const velocityX = deltaX / elapsed;
+    const velocityY = deltaY / elapsed;
+    const swipeThreshold = Math.min(96, Math.max(SWIPE_THRESHOLD, finalState.width * 0.18));
+
+    gestureRef.current = null;
+    mouseGestureActiveRef.current = false;
+
+    if (finalState.mode === "horizontal") {
+      const shouldNavigate = absX > swipeThreshold
+        || (Math.abs(velocityX) > HORIZONTAL_VELOCITY_THRESHOLD && absX > TAP_THRESHOLD * 2 && absX > absY * 1.1);
+      if (shouldNavigate && deltaX < 0 && canGoNext) {
+        applyTrackOffset(-finalState.width, true, finalState.metrics);
+        onNext();
+        return;
+      }
+      if (shouldNavigate && deltaX > 0 && canGoPrevious) {
+        applyTrackOffset(finalState.width, true, finalState.metrics);
+        onPrevious();
+        return;
+      }
+      applyTrackOffset(0, true, finalState.metrics);
+      return;
+    }
+
+    if (finalState.mode === "vertical") {
+      const shouldDismiss = deltaY > SWIPE_DOWN_THRESHOLD
+        || (velocityY > VERTICAL_VELOCITY_THRESHOLD && deltaY > TAP_THRESHOLD * 2 && absY > absX * 1.1);
+      if (shouldDismiss) {
+        onDismiss();
+        return;
+      }
+      applyVerticalOffset(0, true, finalState.metrics);
+      return;
+    }
+
+    if (finalState.mode === "pan") {
+      if (absX <= TAP_THRESHOLD && absY <= TAP_THRESHOLD) {
+        scheduleTapDismiss(clientX, clientY);
+        return;
+      }
+      commitImageTransform(finalState.currentZoom, finalState.currentPan, true, finalState.metrics);
+      return;
+    }
+
+    if (finalState.mode === "tap") {
+      scheduleTapDismiss(clientX, clientY);
+      return;
+    }
+
+    applyTrackOffset(0, true, finalState.metrics);
+    applyVerticalOffset(0, true, finalState.metrics);
+  }, [applyTrackOffset, applyVerticalOffset, canGoNext, canGoPrevious, commitImageTransform, onDismiss, onNext, onPrevious, scheduleTapDismiss, updateSinglePointGesture]);
+
+  const finishPinchGesture = React.useCallback(() => {
+    const state = gestureRef.current;
+    if (!state || state.mode !== "pinch") return;
+
+    gestureRef.current = null;
+    commitImageTransform(state.currentZoom, state.currentPan, true, state.metrics);
+  }, [commitImageTransform]);
 
   React.useLayoutEffect(() => {
     const updateTrackWidth = () => {
@@ -492,230 +902,146 @@ const MediaStage: React.FC<MediaStageProps> = ({
     const observer = new ResizeObserver(updateTrackWidth);
     observer.observe(observedElement);
     return () => observer.disconnect();
-  }, []);
+  }, [getCurrentTrackWidth]);
 
-  const getBoundaryResistedOffset = (offset: number) => {
-    const isPastPreviousEdge = offset > 0 && !canGoPrevious;
-    const isPastNextEdge = offset < 0 && !canGoNext;
-    if (!isPastPreviousEdge && !isPastNextEdge) {
-      return offset;
-    }
+  React.useLayoutEffect(() => {
+    applyTrackOffset(0, false);
+  }, [activeStageMediaKey, applyTrackOffset, trackWidth]);
 
-    const width = getCurrentTrackWidth();
-    const distance = Math.abs(offset);
-    const resisted = width * (1 - (1 / ((distance / width) * 0.55 + 1)));
-    return Math.sign(offset) * Math.min(resisted, width * 0.45);
-  };
-
-  const clampImagePan = React.useCallback((pan: ImagePan, zoom = imageZoom): ImagePan => {
-    if (zoom <= MIN_IMAGE_ZOOM) {
-      return ZERO_IMAGE_PAN;
-    }
-
-    const width = stageRef.current?.clientWidth || (typeof window !== "undefined" ? window.innerWidth : 0);
-    const height = stageRef.current?.clientHeight || (typeof window !== "undefined" ? window.innerHeight : 0);
-    const maxX = Math.max(0, (width * (zoom - 1)) / 2);
-    const maxY = Math.max(0, (height * (zoom - 1)) / 2);
-    return {
-      x: Math.max(-maxX, Math.min(maxX, pan.x)),
-      y: Math.max(-maxY, Math.min(maxY, pan.y)),
-    };
-  }, [imageZoom]);
-
-  React.useEffect(() => {
-    const nextPan = clampImagePan(imagePan);
+  React.useLayoutEffect(() => {
+    const nextPan = imageZoom <= MIN_IMAGE_ZOOM ? ZERO_IMAGE_PAN : clampImagePan(imagePan, imageZoom);
+    imageTransformRef.current = { zoom: imageZoom, pan: nextPan };
+    applyActiveImageTransform(imageZoom, nextPan, true);
     if (nextPan.x !== imagePan.x || nextPan.y !== imagePan.y) {
-      onImagePanChange(nextPan);
+      onImageTransformChange(imageZoom, nextPan);
     }
-  }, [clampImagePan, imagePan, onImagePanChange, trackWidth]);
+  }, [activeStageMediaKey, applyActiveImageTransform, clampImagePan, imagePan, imageZoom, onImageTransformChange, trackWidth]);
 
-  const beginGesture = (x: number, y: number, target: EventTarget) => {
-    if (isInteractiveTarget(target)) {
-      pointerStartRef.current = null;
-      imagePanStartRef.current = null;
-      return false;
+  React.useEffect(() => () => {
+    clearTapTimer();
+    if (transformFrameRef.current !== null && typeof window !== "undefined" && typeof window.cancelAnimationFrame === "function") {
+      window.cancelAnimationFrame(transformFrameRef.current);
+      transformFrameRef.current = null;
     }
-
-    suppressClickRef.current = false;
-    pointerStartRef.current = { x, y };
-    setTrackWidth(getCurrentTrackWidth());
-    setIsDragging(true);
-    setDragOffset(0);
-
-    if (isZoomedImage) {
-      imagePanStartRef.current = { x, y, pan: imagePan };
-    } else {
-      imagePanStartRef.current = null;
-    }
-
-    return true;
-  };
-
-  const updateGesture = (x: number, y: number) => {
-    const panStart = imagePanStartRef.current;
-    if (panStart) {
-      onImagePanChange(clampImagePan({
-        x: panStart.pan.x + x - panStart.x,
-        y: panStart.pan.y + y - panStart.y,
-      }));
-      return;
-    }
-
-    const start = pointerStartRef.current;
-    if (!start) return;
-
-    const deltaX = x - start.x;
-    const deltaY = y - start.y;
-    const absX = Math.abs(deltaX);
-    const absY = Math.abs(deltaY);
-    if (absX <= TAP_THRESHOLD && absY <= TAP_THRESHOLD) {
-      setDragOffset(0);
-      return;
-    }
-
-    if (absY > absX * 1.25) {
-      setDragOffset(0);
-      return;
-    }
-
-    setDragOffset(getBoundaryResistedOffset(deltaX));
-  };
-
-  const finishGesture = (x: number, y: number) => {
-    const start = pointerStartRef.current;
-    const panStart = imagePanStartRef.current;
-    pointerStartRef.current = null;
-    imagePanStartRef.current = null;
-    setIsDragging(false);
-    setDragOffset(0);
-    if (!start) return;
-
-    const deltaX = x - start.x;
-    const deltaY = y - start.y;
-    const absX = Math.abs(deltaX);
-    const absY = Math.abs(deltaY);
-
-    if (panStart) {
-      if (absX <= TAP_THRESHOLD && absY <= TAP_THRESHOLD && onTapMedia && media.kind === "image") {
-        suppressClickRef.current = true;
-        onTapMedia();
-      } else if (absX > TAP_THRESHOLD || absY > TAP_THRESHOLD) {
-        suppressClickRef.current = true;
-      }
-      return;
-    }
-
-    const swipeThreshold = Math.min(96, Math.max(SWIPE_THRESHOLD, getCurrentTrackWidth() * 0.18));
-
-    if (absX > swipeThreshold && absX > absY * 1.2) {
-      suppressClickRef.current = true;
-      if (deltaX < 0 && canGoNext) {
-        onNext();
-      } else if (deltaX > 0 && canGoPrevious) {
-        onPrevious();
-      }
-      return;
-    }
-
-    if (onSwipeDown && deltaY > SWIPE_DOWN_THRESHOLD && absY > absX * 1.15) {
-      suppressClickRef.current = true;
-      onSwipeDown();
-      return;
-    }
-
-    if (onTapMedia && media.kind === "image" && absX <= TAP_THRESHOLD && absY <= TAP_THRESHOLD) {
-      suppressClickRef.current = true;
-      onTapMedia();
-    }
-  };
+    pendingDomTransformsRef.current = {};
+  }, [clearTapTimer]);
 
   const handlePointerDown = (event: React.PointerEvent<HTMLElement>) => {
-    const target = event.target;
-    if (event.pointerType && event.isPrimary === false) {
+    pointerSequenceRef.current = true;
+    if (isInteractiveTarget(event.target)) {
       return;
     }
 
-    pointerSequenceRef.current = true;
-    if (beginGesture(event.clientX, event.clientY, target)) {
-      activePointerIdRef.current = event.pointerId;
-      event.currentTarget.setPointerCapture?.(event.pointerId);
+    pointerPositionsRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+
+    if (pointerPositionsRef.current.size >= 2) {
+      beginPinchGesture();
+      return;
     }
+
+    beginSinglePointGesture(event.clientX, event.clientY, event.pointerId, event.target);
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLElement>) => {
-    updateGesture(event.clientX, event.clientY);
+    if (!pointerPositionsRef.current.has(event.pointerId)) return;
+
+    pointerPositionsRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    const state = gestureRef.current;
+    if (state?.mode === "pinch") {
+      updatePinchGesture();
+      return;
+    }
+    if (state?.pointerId === event.pointerId) {
+      updateSinglePointGesture(event.clientX, event.clientY);
+    }
   };
 
   const handlePointerUp = (event: React.PointerEvent<HTMLElement>) => {
-    finishGesture(event.clientX, event.clientY);
-    if (activePointerIdRef.current !== null) {
-      event.currentTarget.releasePointerCapture?.(activePointerIdRef.current);
-      activePointerIdRef.current = null;
+    const state = gestureRef.current;
+    if (state?.mode === "pinch") {
+      finishPinchGesture();
+    } else if (state?.pointerId === event.pointerId) {
+      finishSinglePointGesture(event.clientX, event.clientY);
     }
-    window.setTimeout(() => {
-      pointerSequenceRef.current = false;
-    }, 350);
+
+    pointerPositionsRef.current.delete(event.pointerId);
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    if (pointerPositionsRef.current.size === 0) {
+      gestureRef.current = null;
+      window.setTimeout(() => {
+        pointerSequenceRef.current = false;
+      }, 350);
+    }
   };
 
   const handlePointerCancel = (event: React.PointerEvent<HTMLElement>) => {
-    pointerStartRef.current = null;
-    imagePanStartRef.current = null;
-    if (activePointerIdRef.current !== null) {
-      event.currentTarget.releasePointerCapture?.(activePointerIdRef.current);
-      activePointerIdRef.current = null;
+    const cancelledState = gestureRef.current;
+    pointerPositionsRef.current.delete(event.pointerId);
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    if (cancelledState?.mode === "pinch" || cancelledState?.mode === "pan") {
+      commitImageTransform(imageTransformRef.current.zoom, imageTransformRef.current.pan, true, cancelledState.metrics);
     }
-    setIsDragging(false);
-    setDragOffset(0);
+    gestureRef.current = null;
+    mouseGestureActiveRef.current = false;
+    applyTrackOffset(0, true, cancelledState?.metrics);
+    applyVerticalOffset(0, true, cancelledState?.metrics);
     window.setTimeout(() => {
       pointerSequenceRef.current = false;
     }, 350);
   };
 
   const handleMouseDown = (event: React.MouseEvent<HTMLElement>) => {
-    if (pointerSequenceRef.current) return;
-    beginGesture(event.clientX, event.clientY, event.target);
+    if (pointerSequenceRef.current || event.button !== 0) return;
+    mouseGestureActiveRef.current = beginSinglePointGesture(event.clientX, event.clientY, null, event.target);
   };
 
   const handleMouseMove = (event: React.MouseEvent<HTMLElement>) => {
-    if (pointerSequenceRef.current) return;
-    updateGesture(event.clientX, event.clientY);
+    if (pointerSequenceRef.current || !mouseGestureActiveRef.current) return;
+    updateSinglePointGesture(event.clientX, event.clientY);
   };
 
   const handleMouseUp = (event: React.MouseEvent<HTMLElement>) => {
-    if (pointerSequenceRef.current) {
-      pointerSequenceRef.current = false;
-      return;
-    }
-    finishGesture(event.clientX, event.clientY);
+    if (pointerSequenceRef.current || !mouseGestureActiveRef.current) return;
+    finishSinglePointGesture(event.clientX, event.clientY);
   };
 
-  const handleImageClick = () => {
-    if (!onTapMedia) return;
-    if (suppressClickRef.current) {
-      suppressClickRef.current = false;
-      return;
-    }
-    onTapMedia();
+  const handleMouseLeave = (event: React.MouseEvent<HTMLElement>) => {
+    if (pointerSequenceRef.current || !mouseGestureActiveRef.current) return;
+    finishSinglePointGesture(event.clientX, event.clientY);
+  };
+
+  const handleDoubleClick = (event: React.MouseEvent<HTMLElement>) => {
+    if (isInteractiveTarget(event.target)) return;
+    event.preventDefault();
+    clearTapTimer();
+    lastTapRef.current = null;
+    handleDoubleTap(event.clientX, event.clientY);
   };
 
   const handleWheel = (event: React.WheelEvent<HTMLElement>) => {
-    if (activeStageMedia.kind !== "image") {
+    if (activeStageMedia.kind !== "image" || isInteractiveTarget(event.target)) {
       return;
     }
 
     event.preventDefault();
-    onImageZoomChange(event.deltaY < 0 ? IMAGE_ZOOM_STEP : -IMAGE_ZOOM_STEP);
+    const currentTransform = imageTransformRef.current;
+    zoomAtPoint(
+      event.clientX,
+      event.clientY,
+      currentTransform.zoom + (event.deltaY < 0 ? WHEEL_ZOOM_STEP : -WHEEL_ZOOM_STEP),
+    );
   };
 
-  const slideWidth = isDragging ? getCurrentTrackWidth() : (trackWidth || getCurrentTrackWidth());
-  const trackTranslateX = (-safeActiveIndex * slideWidth) + dragOffset;
+  const slideWidth = trackWidth || getCurrentTrackWidth();
+  const trackTranslateX = -safeActiveIndex * slideWidth;
 
   return (
     <main
       ref={stageRef}
       data-testid={isHistoryPreview ? "history-media-stage" : "media-viewer-stage"}
       className={`relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-0 py-20 sm:px-8 ${className}`}
-      style={{ touchAction: activeStageMedia.kind === "image" ? "none" : "pan-y" }}
+      style={{ touchAction: "none" }}
       onWheel={handleWheel}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -724,11 +1050,13 @@ const MediaStage: React.FC<MediaStageProps> = ({
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseLeave}
+      onDoubleClick={handleDoubleClick}
     >
       <div
         ref={trackRef}
         data-testid="media-carousel-track"
-        className={`flex h-full w-full will-change-transform ${isDragging ? "" : "transition-transform duration-300 ease-out"}`}
+        className="flex h-full w-full will-change-transform"
         style={{ transform: `translate3d(${trackTranslateX}px, 0, 0)` }}
       >
         {trackItems.map((item, index) => {
@@ -744,7 +1072,6 @@ const MediaStage: React.FC<MediaStageProps> = ({
                 item={item}
                 alt={alt}
                 isActive={isActive}
-                onTapImage={onTapMedia ? handleImageClick : undefined}
                 imageZoom={isActive ? imageZoom : MIN_IMAGE_ZOOM}
                 imagePan={isActive ? imagePan : ZERO_IMAGE_PAN}
               />
@@ -815,36 +1142,11 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
     setImagePan(ZERO_IMAGE_PAN);
   }, []);
 
-  const setClampedImageZoom = React.useCallback((nextZoom: number) => {
+  const handleImageTransformChange = React.useCallback((nextZoom: number, nextPan: ImagePan) => {
     const clampedZoom = Math.max(MIN_IMAGE_ZOOM, Math.min(MAX_IMAGE_ZOOM, nextZoom));
     setImageZoom(clampedZoom);
-    if (clampedZoom <= MIN_IMAGE_ZOOM) {
-      setImagePan(ZERO_IMAGE_PAN);
-    }
+    setImagePan(clampedZoom <= MIN_IMAGE_ZOOM ? ZERO_IMAGE_PAN : nextPan);
   }, []);
-
-  const handleImageZoomChange = React.useCallback((delta: number) => {
-    setImageZoom(prevZoom => {
-      const nextZoom = Math.max(MIN_IMAGE_ZOOM, Math.min(MAX_IMAGE_ZOOM, prevZoom + delta));
-      if (nextZoom <= MIN_IMAGE_ZOOM) {
-        setImagePan(ZERO_IMAGE_PAN);
-      }
-      return nextZoom;
-    });
-  }, []);
-
-  const handleZoomIn = React.useCallback(() => {
-    handleImageZoomChange(IMAGE_ZOOM_STEP);
-  }, [handleImageZoomChange]);
-
-  const handleZoomOut = React.useCallback(() => {
-    handleImageZoomChange(-IMAGE_ZOOM_STEP);
-  }, [handleImageZoomChange]);
-
-  const handleToggleImageZoom = React.useCallback(() => {
-    if (!activeMedia || activeMedia.kind !== "image") return;
-    setClampedImageZoom(imageZoom > MIN_IMAGE_ZOOM ? MIN_IMAGE_ZOOM : DEFAULT_ZOOMED_IMAGE_SCALE);
-  }, [activeMedia, imageZoom, setClampedImageZoom]);
 
   const loadHistory = React.useCallback(async (
     mode: "reset" | "more",
@@ -1063,16 +1365,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
       if (target instanceof Element && target.closest("input,textarea,select")) {
         return;
       }
-      if (activeMedia?.kind === "image" && (event.key === "+" || event.key === "=")) {
-        event.preventDefault();
-        handleZoomIn();
-      } else if (activeMedia?.kind === "image" && event.key === "-") {
-        event.preventDefault();
-        handleZoomOut();
-      } else if (activeMedia?.kind === "image" && event.key === "0") {
-        event.preventDefault();
-        resetImageZoom();
-      } else if (event.key === "ArrowLeft") {
+      if (event.key === "ArrowLeft") {
         event.preventDefault();
         handlePreviousMedia();
       } else if (event.key === "ArrowRight") {
@@ -1083,7 +1376,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
 
     window.addEventListener("keydown", handleArrowKey);
     return () => window.removeEventListener("keydown", handleArrowKey);
-  }, [activeMedia?.kind, handleNextMedia, handlePreviousMedia, handleZoomIn, handleZoomOut, isOpen, resetImageZoom]);
+  }, [handleNextMedia, handlePreviousMedia, isOpen]);
 
   const showTemporaryStatus = (type: "download" | "share", value: "done" | "error") => {
     if (type === "download") {
@@ -1210,17 +1503,6 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
   const canGoPrevious = activeMediaIndex > 0 || hasMoreHistory;
   const canGoNext = activeMediaIndex >= 0 && activeMediaIndex < carouselItems.length - 1;
   const activePosition = activeMediaIndex >= 0 ? `${activeMediaIndex + 1} / ${Math.max(carouselItems.length, activeMediaIndex + 1)}` : "";
-  const renderZoomControls = () => activeMedia.kind === "image" ? (
-    <ImageZoomControls
-      zoom={imageZoom}
-      onZoomIn={handleZoomIn}
-      onZoomOut={handleZoomOut}
-      onResetZoom={resetImageZoom}
-      zoomInLabel={t("zoomIn")}
-      zoomOutLabel={t("zoomOut")}
-      resetZoomLabel={t("resetZoom")}
-    />
-  ) : null;
   const renderActionToolbar = (centerAction: { label: string; icon: string; onPress: () => void }) => (
     <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-white/10 bg-white/10 px-3 py-2 shadow-2xl backdrop-blur-xl">
       <ViewerButton label={t("downloadMedia")} icon={downloadIcon} onPress={() => { void handleDownload(); }} />
@@ -1261,15 +1543,13 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
         nextLabel={t("nextMedia")}
         onPrevious={handlePreviousMedia}
         onNext={handleNextMedia}
-        onTapMedia={handleToggleImageZoom}
+        onDismiss={onClose}
         imageZoom={imageZoom}
         imagePan={imagePan}
-        onImagePanChange={setImagePan}
-        onImageZoomChange={handleImageZoomChange}
+        onImageTransformChange={handleImageTransformChange}
       />
 
       <footer className="safe-bottom pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col items-center gap-2 bg-gradient-to-t from-black/80 to-transparent px-4 pt-8">
-        {renderZoomControls()}
         <div className="mb-3">
           {renderActionToolbar({ label: t("openMediaHistory"), icon: "lucide:grid-3x3", onPress: handleOpenHistory })}
         </div>
@@ -1305,15 +1585,12 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
                 nextLabel={t("nextMedia")}
                 onPrevious={handlePreviousMedia}
                 onNext={handleNextMedia}
-                onSwipeDown={() => setIsHistoryPreviewOpen(false)}
-                onTapMedia={() => setIsHistoryPreviewOpen(false)}
+                onDismiss={() => setIsHistoryPreviewOpen(false)}
                 imageZoom={imageZoom}
                 imagePan={imagePan}
-                onImagePanChange={setImagePan}
-                onImageZoomChange={handleImageZoomChange}
+                onImageTransformChange={handleImageTransformChange}
               />
               <footer className="safe-bottom pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col items-center gap-2 bg-gradient-to-t from-black/80 to-transparent px-4 pt-8">
-                {renderZoomControls()}
                 <div className="mb-3">
                   {renderActionToolbar({ label: t("backToMediaHistory"), icon: "lucide:grid-3x3", onPress: () => setIsHistoryPreviewOpen(false) })}
                 </div>

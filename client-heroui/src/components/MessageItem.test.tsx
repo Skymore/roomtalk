@@ -60,6 +60,10 @@ describe('MessageItem replies', () => {
         escape: window.CSS?.escape || ((value: string) => value.replace(/[^a-zA-Z0-9_-]/g, '\\$&')),
       },
     });
+    Object.defineProperty(window.HTMLMediaElement.prototype, 'pause', {
+      configurable: true,
+      value: vi.fn(),
+    });
     getRoomMediaHistoryMock.mockResolvedValue({
       roomId: 'room-1',
       items: [],
@@ -298,23 +302,18 @@ describe('MessageItem replies', () => {
     expect(screen.getAllByLabelText('downloadMedia').length).toBeGreaterThan(0);
     expect(screen.getAllByLabelText('openMediaHistory').length).toBeGreaterThan(0);
     expect(screen.getAllByLabelText('shareMedia').length).toBeGreaterThan(0);
-    expect(screen.getByLabelText('zoomIn')).toBeTruthy();
-    expect(screen.getByLabelText('zoomOut')).toBeTruthy();
-    expect(screen.getByLabelText('resetZoom').textContent).toBe('100%');
 
+    const stage = screen.getByTestId('media-viewer-stage');
+    Object.defineProperty(stage, 'clientWidth', { configurable: true, value: 300 });
+    Object.defineProperty(stage, 'clientHeight', { configurable: true, value: 500 });
     const activeViewerImage = document.body.querySelector('[data-testid="media-viewer-stage"] [data-active-media="true"] img');
     expect(activeViewerImage).toBeTruthy();
-    fireEvent.click(screen.getByLabelText('zoomIn'));
+    fireEvent.doubleClick(stage, { clientX: 200, clientY: 220 });
     await waitFor(() => {
-      expect((activeViewerImage as HTMLElement).style.transform).toContain('scale(1.5)');
+      expect((activeViewerImage as HTMLElement).style.transform).toContain('scale(2)');
     });
-    expect(screen.getByLabelText('resetZoom').textContent).toBe('150%');
-    fireEvent.click(screen.getByLabelText('resetZoom'));
-    await waitFor(() => {
-      expect((activeViewerImage as HTMLElement).style.transform).toContain('scale(1)');
-    });
-
-    fireEvent.click(screen.getByLabelText('close'));
+    fireEvent.mouseDown(stage, { button: 0, clientX: 200, clientY: 220 });
+    fireEvent.mouseUp(stage, { button: 0, clientX: 200, clientY: 220 });
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: 'mediaViewer' })).toBeNull();
     });
@@ -383,14 +382,16 @@ describe('MessageItem replies', () => {
     });
     expect(within(historySection).getAllByLabelText('downloadMedia').length).toBeGreaterThan(0);
     expect(within(historySection).getAllByLabelText('shareMedia').length).toBeGreaterThan(0);
-    expect(within(historySection).getByLabelText('zoomIn')).toBeTruthy();
-    expect(within(historySection).getByLabelText('resetZoom').textContent).toBe('100%');
     const viewerImages = screen.getAllByAltText('sharedImage');
     expect(viewerImages.some(element => element.getAttribute('src') === 'https://signed.example/rooms/room-1/asset-2.webp')).toBe(true);
 
-    const historyPreviewImage = document.body.querySelector('[data-testid="history-media-stage"] [data-active-media="true"] img');
-    expect(historyPreviewImage).toBeTruthy();
-    fireEvent.click(historyPreviewImage as Element);
+    const historyStage = screen.getByTestId('history-media-stage');
+    Object.defineProperty(historyStage, 'clientWidth', { configurable: true, value: 300 });
+    Object.defineProperty(historyStage, 'clientHeight', { configurable: true, value: 500 });
+    fireEvent.pointerDown(historyStage, { pointerId: 1, pointerType: 'touch', clientX: 160, clientY: 160 });
+    fireEvent.pointerMove(historyStage, { pointerId: 1, pointerType: 'touch', clientX: 164, clientY: 250 });
+    expect(within(historySection).getAllByLabelText('backToMediaHistory').length).toBeGreaterThan(0);
+    fireEvent.pointerUp(historyStage, { pointerId: 1, pointerType: 'touch', clientX: 164, clientY: 250 });
     await waitFor(() => {
       expect(within(historySection).queryAllByLabelText('backToMediaHistory')).toHaveLength(0);
     });
@@ -806,6 +807,8 @@ describe('MessageItem replies', () => {
     });
     expect(viewerVideo?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/video-1.mp4?X-Amz-Signature=abc123');
     expect(viewerVideo?.hasAttribute('controls')).toBe(true);
+    expect(viewerVideo?.hasAttribute('autoplay')).toBe(false);
+    expect(viewerVideo?.hasAttribute('muted')).toBe(false);
 
     fireEvent.error(viewerVideo as HTMLVideoElement);
     expect(await screen.findByText('videoPreviewUnsupported')).toBeTruthy();
