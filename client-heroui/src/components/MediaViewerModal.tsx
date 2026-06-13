@@ -101,10 +101,9 @@ const DOUBLE_TAP_DELAY_MS = 220;
 const DOUBLE_TAP_DISTANCE = 34;
 const HORIZONTAL_VELOCITY_THRESHOLD = 0.45;
 const VERTICAL_VELOCITY_THRESHOLD = 0.55;
-const HORIZONTAL_TRACK_MIN_TRANSITION_MS = 380;
-const HORIZONTAL_TRACK_MAX_TRANSITION_MS = 640;
+const HORIZONTAL_TRACK_MIN_TRANSITION_MS = 500;
+const HORIZONTAL_TRACK_MAX_TRANSITION_MS = 800;
 const VERTICAL_STAGE_SNAP_TRANSITION_MS = 220;
-const VERTICAL_STAGE_DISMISS_TRANSITION_MS = 150;
 const WHEEL_ZOOM_STEP = 0.28;
 const DEFAULT_ZOOMED_IMAGE_SCALE = 2;
 const ZERO_IMAGE_PAN: ImagePan = { x: 0, y: 0 };
@@ -116,7 +115,7 @@ const getHorizontalTrackTransitionMs = (remainingDistance: number, velocity: num
   const safeWidth = Math.max(1, width);
   const distanceRatio = clampNumber(remainingDistance / safeWidth, 0.12, 1);
   const velocityRatio = clampNumber(Math.abs(velocity) / 1.2, 0, 1);
-  const duration = 360 + distanceRatio * 300 - velocityRatio * 160;
+  const duration = 520 + distanceRatio * 420 - velocityRatio * 120;
   return Math.round(clampNumber(duration, HORIZONTAL_TRACK_MIN_TRANSITION_MS, HORIZONTAL_TRACK_MAX_TRANSITION_MS));
 };
 
@@ -474,7 +473,6 @@ const MediaStage: React.FC<MediaStageProps> = ({
   const pendingDomTransformsRef = React.useRef<PendingDomTransforms>({});
   const transformFrameRef = React.useRef<number | null>(null);
   const tapTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const dismissTimerRef = React.useRef<number | null>(null);
   const capturedPointerIdsRef = React.useRef<Set<number>>(new Set());
   const [trackWidth, setTrackWidth] = React.useState(0);
   const isHistoryPreview = variant === "historyPreview";
@@ -688,22 +686,6 @@ const MediaStage: React.FC<MediaStageProps> = ({
       stageElement.style.opacity = "1";
     }
   }, [visualRootRef]);
-
-  const dismissWithVerticalAnimation = React.useCallback((offset: number, metrics: GestureMetrics) => {
-    if (dismissTimerRef.current) return;
-
-    const exitOffset = Math.max(offset, metrics.height * 0.42);
-    applyVerticalOffset(exitOffset, true, metrics, VERTICAL_STAGE_DISMISS_TRANSITION_MS);
-    dismissTimerRef.current = window.setTimeout(() => {
-      dismissTimerRef.current = null;
-      onDismiss();
-      if (typeof window.requestAnimationFrame === "function") {
-        window.requestAnimationFrame(resetVerticalVisuals);
-      } else {
-        resetVerticalVisuals();
-      }
-    }, VERTICAL_STAGE_DISMISS_TRANSITION_MS);
-  }, [applyVerticalOffset, onDismiss, resetVerticalVisuals]);
 
   const getDistance = (first: GesturePoint, second: GesturePoint) => (
     Math.hypot(second.x - first.x, second.y - first.y)
@@ -967,7 +949,8 @@ const MediaStage: React.FC<MediaStageProps> = ({
       const shouldDismiss = deltaY > SWIPE_DOWN_THRESHOLD
         || (velocityY > VERTICAL_VELOCITY_THRESHOLD && deltaY > TAP_THRESHOLD * 2 && absY > absX * 1.1);
       if (shouldDismiss) {
-        dismissWithVerticalAnimation(deltaY, finalState.metrics);
+        resetVerticalVisuals();
+        onDismiss();
         return;
       }
       applyVerticalOffset(0, true, finalState.metrics);
@@ -994,7 +977,7 @@ const MediaStage: React.FC<MediaStageProps> = ({
 
     applyTrackOffset(0, true, finalState.metrics);
     applyVerticalOffset(0, true, finalState.metrics);
-  }, [applyTrackOffset, applyVerticalOffset, canGoNext, canGoPrevious, commitImageTransform, dismissWithVerticalAnimation, onNext, onPrevious, scheduleTapDismiss, updateSinglePointGesture]);
+  }, [applyTrackOffset, applyVerticalOffset, canGoNext, canGoPrevious, commitImageTransform, onDismiss, onNext, onPrevious, resetVerticalVisuals, scheduleTapDismiss, updateSinglePointGesture]);
 
   const finishPinchGesture = React.useCallback(() => {
     const state = gestureRef.current;
@@ -1036,10 +1019,6 @@ const MediaStage: React.FC<MediaStageProps> = ({
 
   React.useEffect(() => () => {
     clearTapTimer();
-    if (dismissTimerRef.current) {
-      window.clearTimeout(dismissTimerRef.current);
-      dismissTimerRef.current = null;
-    }
     capturedPointerIdsRef.current.clear();
     if (transformFrameRef.current !== null && typeof window !== "undefined" && typeof window.cancelAnimationFrame === "function") {
       window.cancelAnimationFrame(transformFrameRef.current);
