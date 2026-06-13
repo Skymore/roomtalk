@@ -54,6 +54,7 @@ The image and video viewer should feel closer to a native photo viewer than a we
 - Movement locks to horizontal once horizontal displacement exceeds the gesture threshold and dominates vertical movement.
 - While dragging, the carousel follows the finger using direct DOM transforms instead of React state updates, with transform writes batched through `requestAnimationFrame`.
 - React state should update only after pointer up selects a new item or resets the current one.
+- Release animation duration should be calculated from remaining travel distance and release velocity, then clamped to a bounded native-feeling range.
 - Commit criteria:
   - Swipe distance exceeds the distance threshold, or
   - Swipe velocity exceeds the velocity threshold.
@@ -64,8 +65,8 @@ The image and video viewer should feel closer to a native photo viewer than a we
 
 - Downward return is active at both 1x and zoomed states.
 - It locks when downward displacement exceeds the gesture threshold and dominates horizontal movement.
-- During move, the viewer follows the finger downward and the backdrop opacity decreases.
-- It returns only on pointer up if distance or velocity threshold is met.
+- During move, the active media follows the finger downward, scales down, and the backdrop plus viewer chrome fade with the gesture.
+- It returns only on pointer up if distance or velocity threshold is met, after a short completion animation.
 - If the threshold is not met, the viewer springs back to normal.
 
 ### Gesture priority

@@ -55,6 +55,7 @@ interface MediaStageProps {
   activeIndex: number;
   alt: string;
   variant: MediaStageVariant;
+  visualRootRef?: React.RefObject<HTMLElement | null>;
   canGoPrevious: boolean;
   canGoNext: boolean;
   previousLabel: string;
@@ -100,11 +101,24 @@ const DOUBLE_TAP_DELAY_MS = 220;
 const DOUBLE_TAP_DISTANCE = 34;
 const HORIZONTAL_VELOCITY_THRESHOLD = 0.45;
 const VERTICAL_VELOCITY_THRESHOLD = 0.55;
-const HORIZONTAL_TRACK_TRANSITION_MS = 360;
+const HORIZONTAL_TRACK_MIN_TRANSITION_MS = 380;
+const HORIZONTAL_TRACK_MAX_TRANSITION_MS = 640;
+const VERTICAL_STAGE_SNAP_TRANSITION_MS = 220;
+const VERTICAL_STAGE_DISMISS_TRANSITION_MS = 150;
 const WHEEL_ZOOM_STEP = 0.28;
 const DEFAULT_ZOOMED_IMAGE_SCALE = 2;
 const ZERO_IMAGE_PAN: ImagePan = { x: 0, y: 0 };
 const MEDIA_HISTORY_FILTERS: MediaHistoryFilter[] = ["all", "image", "video"];
+
+const clampNumber = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+const getHorizontalTrackTransitionMs = (remainingDistance: number, velocity: number, width: number) => {
+  const safeWidth = Math.max(1, width);
+  const distanceRatio = clampNumber(remainingDistance / safeWidth, 0.12, 1);
+  const velocityRatio = clampNumber(Math.abs(velocity) / 1.2, 0, 1);
+  const duration = 360 + distanceRatio * 300 - velocityRatio * 160;
+  return Math.round(clampNumber(duration, HORIZONTAL_TRACK_MIN_TRANSITION_MS, HORIZONTAL_TRACK_MAX_TRANSITION_MS));
+};
 
 const getMediaHistoryFilterLabelKey = (filter: MediaHistoryFilter) => (
   filter === "all"
@@ -408,6 +422,7 @@ const MediaStage: React.FC<MediaStageProps> = ({
   activeIndex,
   alt,
   variant,
+  visualRootRef,
   canGoPrevious,
   canGoNext,
   previousLabel,
@@ -444,8 +459,8 @@ const MediaStage: React.FC<MediaStageProps> = ({
   };
   type PendingDomTransforms = {
     image?: { zoom: number; pan: ImagePan; transition: boolean };
-    stage?: { offset: number; height: number; transition: boolean };
-    track?: { translateX: number; transition: boolean };
+    stage?: { offset: number; height: number; transition: boolean; durationMs: number };
+    track?: { translateX: number; transition: boolean; durationMs: number };
   };
 
   const stageRef = React.useRef<HTMLElement | null>(null);
@@ -459,6 +474,7 @@ const MediaStage: React.FC<MediaStageProps> = ({
   const pendingDomTransformsRef = React.useRef<PendingDomTransforms>({});
   const transformFrameRef = React.useRef<number | null>(null);
   const tapTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dismissTimerRef = React.useRef<number | null>(null);
   const capturedPointerIdsRef = React.useRef<Set<number>>(new Set());
   const [trackWidth, setTrackWidth] = React.useState(0);
   const isHistoryPreview = variant === "historyPreview";
@@ -494,7 +510,9 @@ const MediaStage: React.FC<MediaStageProps> = ({
     if (pending.track) {
       const trackElement = trackRef.current;
       if (trackElement) {
-        trackElement.style.transition = pending.track.transition ? `transform ${HORIZONTAL_TRACK_TRANSITION_MS}ms ease-out` : "none";
+        trackElement.style.transition = pending.track.transition
+          ? `transform ${pending.track.durationMs}ms cubic-bezier(0.2, 0, 0, 1)`
+          : "none";
         trackElement.style.transform = `translate3d(${pending.track.translateX}px, 0, 0)`;
       }
     }
@@ -503,15 +521,33 @@ const MediaStage: React.FC<MediaStageProps> = ({
       const stageElement = stageRef.current;
       if (stageElement) {
         const normalizedOffset = Math.max(0, pending.stage.offset);
-        const scale = Math.max(0.92, 1 - (normalizedOffset / pending.stage.height) * 0.08);
-        const opacity = Math.max(0.38, 1 - (normalizedOffset / pending.stage.height) * 0.9);
+        const rawProgress = Math.min(1, normalizedOffset / Math.max(1, pending.stage.height * 0.55));
+        const easedProgress = 1 - Math.pow(1 - rawProgress, 1.45);
+        const scale = Math.max(0.78, 1 - easedProgress * 0.22);
+        const backdropOpacity = Math.max(0.28, 1 - easedProgress * 0.72);
+        const chromeOpacity = Math.max(0, 1 - rawProgress * 2.25);
+        const transition = pending.stage.transition
+          ? `transform ${pending.stage.durationMs}ms cubic-bezier(0.2, 0, 0, 1), opacity ${pending.stage.durationMs}ms cubic-bezier(0.2, 0, 0, 1)`
+          : "none";
+        const rootElement = visualRootRef?.current;
         stageElement.style.transition = pending.stage.transition
-          ? "transform 200ms ease-out, opacity 200ms ease-out"
+          ? transition
           : "none";
         stageElement.style.transform = normalizedOffset === 0
           ? "translate3d(0, 0, 0) scale(1)"
           : `translate3d(0, ${normalizedOffset}px, 0) scale(${scale})`;
-        stageElement.style.opacity = String(opacity);
+        stageElement.style.opacity = "1";
+        if (rootElement) {
+          rootElement.style.transition = pending.stage.transition
+            ? `background-color ${pending.stage.durationMs}ms cubic-bezier(0.2, 0, 0, 1)`
+            : "none";
+          rootElement.style.backgroundColor = `rgba(8, 8, 7, ${backdropOpacity})`;
+          rootElement.style.setProperty("--media-viewer-chrome-opacity", String(chromeOpacity));
+          rootElement.style.setProperty(
+            "--media-viewer-chrome-transition",
+            pending.stage.transition ? `opacity ${pending.stage.durationMs}ms cubic-bezier(0.2, 0, 0, 1)` : "none",
+          );
+        }
       }
     }
 
@@ -522,7 +558,7 @@ const MediaStage: React.FC<MediaStageProps> = ({
         imageElement.style.transform = `translate3d(${pending.image.pan.x}px, ${pending.image.pan.y}px, 0) scale(${pending.image.zoom})`;
       }
     }
-  }, []);
+  }, [visualRootRef]);
 
   const scheduleDomTransformFlush = React.useCallback(() => {
     if (transformFrameRef.current !== null) {
@@ -608,22 +644,66 @@ const MediaStage: React.FC<MediaStageProps> = ({
     return Math.sign(offset) * Math.min(resisted, width * 0.45);
   }, [canGoNext, canGoPrevious, getStageMetrics]);
 
-  const applyTrackOffset = React.useCallback((offset: number, transition = false, metrics = getStageMetrics()) => {
+  const applyTrackOffset = React.useCallback((
+    offset: number,
+    transition = false,
+    metrics = getStageMetrics(),
+    durationMs = HORIZONTAL_TRACK_MIN_TRANSITION_MS,
+  ) => {
     pendingDomTransformsRef.current.track = {
       translateX: (-safeActiveIndex * metrics.width) + offset,
       transition,
+      durationMs,
     };
     scheduleDomTransformFlush();
   }, [getStageMetrics, safeActiveIndex, scheduleDomTransformFlush]);
 
-  const applyVerticalOffset = React.useCallback((offset: number, transition = false, metrics = getStageMetrics()) => {
+  const applyVerticalOffset = React.useCallback((
+    offset: number,
+    transition = false,
+    metrics = getStageMetrics(),
+    durationMs = VERTICAL_STAGE_SNAP_TRANSITION_MS,
+  ) => {
     pendingDomTransformsRef.current.stage = {
       offset,
       height: Math.max(1, metrics.height),
       transition,
+      durationMs,
     };
     scheduleDomTransformFlush();
   }, [getStageMetrics, scheduleDomTransformFlush]);
+
+  const resetVerticalVisuals = React.useCallback(() => {
+    const rootElement = visualRootRef?.current;
+    if (rootElement) {
+      rootElement.style.transition = "none";
+      rootElement.style.backgroundColor = "";
+      rootElement.style.setProperty("--media-viewer-chrome-opacity", "1");
+      rootElement.style.setProperty("--media-viewer-chrome-transition", "none");
+    }
+    const stageElement = stageRef.current;
+    if (stageElement) {
+      stageElement.style.transition = "none";
+      stageElement.style.transform = "translate3d(0, 0, 0) scale(1)";
+      stageElement.style.opacity = "1";
+    }
+  }, [visualRootRef]);
+
+  const dismissWithVerticalAnimation = React.useCallback((offset: number, metrics: GestureMetrics) => {
+    if (dismissTimerRef.current) return;
+
+    const exitOffset = Math.max(offset, metrics.height * 0.42);
+    applyVerticalOffset(exitOffset, true, metrics, VERTICAL_STAGE_DISMISS_TRANSITION_MS);
+    dismissTimerRef.current = window.setTimeout(() => {
+      dismissTimerRef.current = null;
+      onDismiss();
+      if (typeof window.requestAnimationFrame === "function") {
+        window.requestAnimationFrame(resetVerticalVisuals);
+      } else {
+        resetVerticalVisuals();
+      }
+    }, VERTICAL_STAGE_DISMISS_TRANSITION_MS);
+  }, [applyVerticalOffset, onDismiss, resetVerticalVisuals]);
 
   const getDistance = (first: GesturePoint, second: GesturePoint) => (
     Math.hypot(second.x - first.x, second.y - first.y)
@@ -853,16 +933,33 @@ const MediaStage: React.FC<MediaStageProps> = ({
       const shouldNavigate = absX > swipeThreshold
         || (Math.abs(velocityX) > HORIZONTAL_VELOCITY_THRESHOLD && absX > TAP_THRESHOLD * 2 && absX > absY * 1.1);
       if (shouldNavigate && deltaX < 0 && canGoNext) {
-        applyTrackOffset(-finalState.width, true, finalState.metrics);
+        const remainingDistance = Math.max(0, finalState.width - Math.min(absX, finalState.width));
+        applyTrackOffset(
+          -finalState.width,
+          true,
+          finalState.metrics,
+          getHorizontalTrackTransitionMs(remainingDistance, velocityX, finalState.width),
+        );
         onNext();
         return;
       }
       if (shouldNavigate && deltaX > 0 && canGoPrevious) {
-        applyTrackOffset(finalState.width, true, finalState.metrics);
+        const remainingDistance = Math.max(0, finalState.width - Math.min(absX, finalState.width));
+        applyTrackOffset(
+          finalState.width,
+          true,
+          finalState.metrics,
+          getHorizontalTrackTransitionMs(remainingDistance, velocityX, finalState.width),
+        );
         onPrevious();
         return;
       }
-      applyTrackOffset(0, true, finalState.metrics);
+      applyTrackOffset(
+        0,
+        true,
+        finalState.metrics,
+        getHorizontalTrackTransitionMs(Math.min(absX, finalState.width), velocityX, finalState.width),
+      );
       return;
     }
 
@@ -870,7 +967,7 @@ const MediaStage: React.FC<MediaStageProps> = ({
       const shouldDismiss = deltaY > SWIPE_DOWN_THRESHOLD
         || (velocityY > VERTICAL_VELOCITY_THRESHOLD && deltaY > TAP_THRESHOLD * 2 && absY > absX * 1.1);
       if (shouldDismiss) {
-        onDismiss();
+        dismissWithVerticalAnimation(deltaY, finalState.metrics);
         return;
       }
       applyVerticalOffset(0, true, finalState.metrics);
@@ -897,7 +994,7 @@ const MediaStage: React.FC<MediaStageProps> = ({
 
     applyTrackOffset(0, true, finalState.metrics);
     applyVerticalOffset(0, true, finalState.metrics);
-  }, [applyTrackOffset, applyVerticalOffset, canGoNext, canGoPrevious, commitImageTransform, onDismiss, onNext, onPrevious, scheduleTapDismiss, updateSinglePointGesture]);
+  }, [applyTrackOffset, applyVerticalOffset, canGoNext, canGoPrevious, commitImageTransform, dismissWithVerticalAnimation, onNext, onPrevious, scheduleTapDismiss, updateSinglePointGesture]);
 
   const finishPinchGesture = React.useCallback(() => {
     const state = gestureRef.current;
@@ -939,13 +1036,18 @@ const MediaStage: React.FC<MediaStageProps> = ({
 
   React.useEffect(() => () => {
     clearTapTimer();
+    if (dismissTimerRef.current) {
+      window.clearTimeout(dismissTimerRef.current);
+      dismissTimerRef.current = null;
+    }
     capturedPointerIdsRef.current.clear();
     if (transformFrameRef.current !== null && typeof window !== "undefined" && typeof window.cancelAnimationFrame === "function") {
       window.cancelAnimationFrame(transformFrameRef.current);
       transformFrameRef.current = null;
     }
     pendingDomTransformsRef.current = {};
-  }, [clearTapTimer]);
+    resetVerticalVisuals();
+  }, [clearTapTimer, resetVerticalVisuals]);
 
   const handlePointerDown = (event: React.PointerEvent<HTMLElement>) => {
     pointerSequenceRef.current = true;
@@ -1089,8 +1191,8 @@ const MediaStage: React.FC<MediaStageProps> = ({
     <main
       ref={stageRef}
       data-testid={isHistoryPreview ? "history-media-stage" : "media-viewer-stage"}
-      className={`relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-0 py-20 sm:px-8 ${className}`}
-      style={{ touchAction: "none" }}
+      className={`relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-0 py-20 will-change-[transform,opacity] sm:px-8 ${className}`}
+      style={{ touchAction: "none", transformOrigin: "center center" }}
       onWheel={handleWheel}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -1571,7 +1673,13 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
       className="fixed inset-0 z-[1000] flex h-[var(--app-height,100dvh)] w-screen flex-col overflow-hidden bg-[#080807] text-white outline-none"
       onMouseDown={handleBackdropMouseDown}
     >
-      <header className="safe-top pointer-events-none absolute inset-x-0 top-0 z-20 bg-gradient-to-b from-black/80 to-transparent px-3 pb-8">
+      <header
+        className="safe-top pointer-events-none absolute inset-x-0 top-0 z-20 bg-gradient-to-b from-black/80 to-transparent px-3 pb-8"
+        style={{
+          opacity: "var(--media-viewer-chrome-opacity, 1)",
+          transition: "var(--media-viewer-chrome-transition, none)",
+        }}
+      >
         <div className="pointer-events-auto flex h-14 items-center gap-2">
           <ViewerButton label={t("close")} icon="lucide:x" onPress={onClose} className="bg-white/10" />
           <div className="min-w-0 flex-1 text-center text-sm font-semibold text-white/95 sm:text-base">
@@ -1587,6 +1695,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
         activeIndex={activeMediaIndex}
         alt={alt}
         variant="viewer"
+        visualRootRef={dialogRef}
         canGoPrevious={canGoPrevious}
         canGoNext={canGoNext}
         previousLabel={t("previousMedia")}
@@ -1599,7 +1708,13 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
         onImageTransformChange={handleImageTransformChange}
       />
 
-      <footer className="safe-bottom pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col items-center gap-2 bg-gradient-to-t from-black/80 to-transparent px-4 pt-8">
+      <footer
+        className="safe-bottom pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col items-center gap-2 bg-gradient-to-t from-black/80 to-transparent px-4 pt-8"
+        style={{
+          opacity: "var(--media-viewer-chrome-opacity, 1)",
+          transition: "var(--media-viewer-chrome-transition, none)",
+        }}
+      >
         <div className="mb-3">
           {renderActionToolbar({ label: t("openMediaHistory"), icon: "lucide:grid-3x3", onPress: handleOpenHistory })}
         </div>
@@ -1614,7 +1729,13 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
         >
           {isHistoryPreviewOpen ? (
             <>
-              <header className="pointer-events-none absolute inset-x-0 top-0 z-20 bg-gradient-to-b from-black/80 to-transparent px-3 pb-8">
+              <header
+                className="pointer-events-none absolute inset-x-0 top-0 z-20 bg-gradient-to-b from-black/80 to-transparent px-3 pb-8"
+                style={{
+                  opacity: "var(--media-viewer-chrome-opacity, 1)",
+                  transition: "var(--media-viewer-chrome-transition, none)",
+                }}
+              >
                 <div className="pointer-events-auto flex h-14 items-center gap-2">
                   <ViewerButton label={t("backToMediaHistory")} icon="lucide:chevron-left" onPress={() => setIsHistoryPreviewOpen(false)} className="h-10 w-10 bg-white/10" />
                   <div className="min-w-0 flex-1 text-center text-sm font-semibold text-white/95">
@@ -1629,6 +1750,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
                 activeIndex={activeMediaIndex}
                 alt={alt}
                 variant="historyPreview"
+                visualRootRef={dialogRef}
                 canGoPrevious={canGoPrevious}
                 canGoNext={canGoNext}
                 previousLabel={t("previousMedia")}
@@ -1640,7 +1762,13 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
                 imagePan={imagePan}
                 onImageTransformChange={handleImageTransformChange}
               />
-              <footer className="safe-bottom pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col items-center gap-2 bg-gradient-to-t from-black/80 to-transparent px-4 pt-8">
+              <footer
+                className="safe-bottom pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col items-center gap-2 bg-gradient-to-t from-black/80 to-transparent px-4 pt-8"
+                style={{
+                  opacity: "var(--media-viewer-chrome-opacity, 1)",
+                  transition: "var(--media-viewer-chrome-transition, none)",
+                }}
+              >
                 <div className="mb-3">
                   {renderActionToolbar({ label: t("backToMediaHistory"), icon: "lucide:grid-3x3", onPress: () => setIsHistoryPreviewOpen(false) })}
                 </div>
