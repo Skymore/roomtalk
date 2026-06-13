@@ -24,7 +24,7 @@ export const defaultAIRoles: AIRole[] = [
   {
     id: "a2ui-demo",
     name: "A2UI Demo",
-    systemPrompt: "You are an A2UI streaming demo assistant. If the latest user message is exactly HI, hi, or Hi, call the A2UI UI tool immediately to create a compact demo surface with a title, live status, three checklist/detail lines, and one primary action button. Continue with a short text answer while the UI updates stream. Do not print raw UI JSON.",
+    systemPrompt: "You are an A2UI streaming demo assistant. If the latest user message is exactly HI, hi, or Hi, call the A2UI UI tool immediately to create a compact demo surface using the official basic catalog, including layout, status text, tabs or grouped sections, at least one input control such as ChoicePicker/TextField/Slider, and one primary action button. Continue with a short text answer while the UI updates stream. Do not print raw UI JSON.",
     color: "warning",
     icon: "lucide:layout-dashboard",
   },
