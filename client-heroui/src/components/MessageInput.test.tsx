@@ -406,6 +406,56 @@ describe('MessageInput optimistic send flow', () => {
     });
   });
 
+  it('uploads multiple arbitrary picker files as file attachments', async () => {
+    renderMessageInput();
+    const textFile = new File(['# notes'], 'notes.md', { type: 'text/markdown' });
+    const movFile = new File(['mov'], 'IMG_0135.mov', { type: 'video/quicktime' });
+
+    fireEvent.change(screen.getByTestId('file-upload-input'), {
+      target: { files: [textFile, movFile] },
+    });
+
+    await waitFor(() => {
+      expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(2);
+    });
+    expect(socketMocks.uploadMediaMessage.mock.calls[0][0]).toMatchObject({
+      file: textFile,
+      roomId: 'room-1',
+      kind: 'file',
+      mimeType: 'text/markdown',
+      filename: 'notes.md',
+    });
+    expect(socketMocks.uploadMediaMessage.mock.calls[1][0]).toMatchObject({
+      file: movFile,
+      roomId: 'room-1',
+      kind: 'file',
+      mimeType: 'video/quicktime',
+      filename: 'IMG_0135.mov',
+    });
+    expect((screen.getByTestId('file-upload-input') as HTMLInputElement).multiple).toBe(true);
+  });
+
+  it('uploads extension-only MOV selections from the media picker as videos', async () => {
+    renderMessageInput();
+    const file = new File(['mov'], 'IMG_0135.mov');
+
+    fireEvent.change(screen.getByTestId('image-upload-input'), {
+      target: { files: [file] },
+    });
+
+    await waitFor(() => {
+      expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1);
+    });
+    expect(socketMocks.uploadMediaMessage.mock.calls[0][0]).toMatchObject({
+      file,
+      roomId: 'room-1',
+      kind: 'video',
+      mimeType: 'video/quicktime',
+      filename: 'IMG_0135.mov',
+    });
+    expect(document.querySelector('[data-icon="lucide:image-plus"]')).toBeTruthy();
+  });
+
   it('rejects arbitrary files larger than 50 MB before upload', async () => {
     renderMessageInput();
     const file = new File(['x'], 'archive.zip', { type: 'application/zip' });

@@ -72,6 +72,29 @@ const getErrorMessage = (error: unknown, fallback: string) => (
 );
 
 const MAX_FILE_UPLOAD_BYTES = 50 * 1024 * 1024;
+const VIDEO_MIME_TYPE_BY_EXTENSION: Record<string, string> = {
+  m4v: 'video/x-m4v',
+  mov: 'video/quicktime',
+  mp4: 'video/mp4',
+  qt: 'video/quicktime',
+  webm: 'video/webm',
+};
+
+const getFileExtension = (file: File) => {
+  const match = file.name.toLowerCase().match(/\.([a-z0-9]+)$/);
+  return match?.[1] || '';
+};
+
+const getVideoMimeType = (file: File) => {
+  const mimeType = file.type.toLowerCase();
+  if (mimeType.startsWith('video/')) {
+    return mimeType;
+  }
+
+  return VIDEO_MIME_TYPE_BY_EXTENSION[getFileExtension(file)];
+};
+
+const isVideoFile = (file: File) => Boolean(getVideoMimeType(file));
 
 const getTranscriptionErrorKey = (error: unknown) => {
   const message = getErrorMessage(error, '').toLowerCase();
@@ -863,7 +886,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         file,
         roomId,
         kind: 'video',
-        mimeType: file.type || 'video/mp4',
+        mimeType: getVideoMimeType(file) || 'video/mp4',
+        filename: file.name,
         username,
         avatar,
         replyToMessageId: replyToMessage?.id,
@@ -923,9 +947,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       return;
     }
 
-    const file = e.target.files?.[0];
-    if (file) {
-      await sendArbitraryFile(file);
+    const files = e.target.files;
+    if (files) {
+      for (const file of Array.from(files)) {
+        await sendArbitraryFile(file);
+      }
     }
 
     if (arbitraryFileInputRef.current) {
@@ -947,9 +973,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     if (!files || files.length === 0) return;
 
     const fileList = Array.from(files);
-    const imageFiles = fileList.filter(file => file.type.startsWith('image/'));
-    const videoFiles = fileList.filter(file => file.type.startsWith('video/'));
-    const unsupportedFiles = fileList.length - imageFiles.length - videoFiles.length;
+    const videoFiles = fileList.filter(isVideoFile);
+    const videoFileSet = new Set(videoFiles);
+    const imageFiles = fileList.filter(file => !videoFileSet.has(file) && file.type.startsWith('image/'));
+    const supportedFileSet = new Set([...imageFiles, ...videoFiles]);
+    const unsupportedFiles = fileList.filter(file => !supportedFileSet.has(file)).length;
     if (unsupportedFiles > 0) {
       setErrorMessage(t('unsupportedMediaType'));
     }
@@ -1391,7 +1419,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                   onPress={() => fileInputRef.current?.click()}
                   isDisabled={isSending || isAiProcessing || !canPost}
                 >
-                  <Icon icon="lucide:plus" className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
+                  <Icon icon="lucide:image-plus" className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
                 </Button>
 
                 <Button
@@ -1420,7 +1448,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               data-testid="image-upload-input"
               ref={fileInputRef}
               className="hidden"
-              accept="image/*,video/*"
+              accept="image/*,video/*,.m4v,.mov,.mp4,.qt,.webm"
               multiple={true}
               onChange={handleImageUpload}
               disabled={isSending || isAiProcessing || !canPost}
@@ -1431,6 +1459,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               data-testid="file-upload-input"
               ref={arbitraryFileInputRef}
               className="hidden"
+              multiple={true}
               onChange={handleArbitraryFileUpload}
               disabled={isSending || isAiProcessing || !canPost}
             />
