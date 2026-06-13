@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { MAX_CONTEXT_MESSAGES, MAX_CONTEXT_TOKENS, selectAIHistory } from '../services/aiHistory';
+import { MAX_CONTEXT_MESSAGES, MAX_CONTEXT_TOKENS, normalizeAIContextMessageLimit, selectAIHistory } from '../services/aiHistory';
 import { calculateAICost, DEFAULT_SYSTEM_MESSAGE, getMessageAIModel, normalizeUsage } from '../services/aiModels';
 import { A2UI_BASIC_CATALOG_ID, mergeA2UIPayloads, normalizeA2UIPayload } from '../services/a2uiPayload';
 import {
@@ -291,6 +291,7 @@ type AIRequestData = {
   model?: string;
   editedMessageId?: string;
   retryForMessageId?: string;
+  maxContextMessages?: number;
 };
 
 type EditMessageAndAskAIData = AIRequestData & {
@@ -368,6 +369,7 @@ export function registerAIHandlers({
       callback?.({ success: false, error: postAuth.message });
       return;
     }
+    const maxContextMessages = normalizeAIContextMessageLimit(data.maxContextMessages, MAX_CONTEXT_MESSAGES);
 
     if (retryForMessageId) {
       const retryTarget = await getRoomMessage(store, roomId, retryForMessageId);
@@ -466,7 +468,7 @@ export function registerAIHandlers({
       }
 
       const selection = selectAIHistory(historyUsedForContext, {
-        maxContextMessages: MAX_CONTEXT_MESSAGES,
+        maxContextMessages,
         maxContextTokens: MAX_CONTEXT_TOKENS,
       });
       contextMessages = selection.contextMessages;
@@ -481,6 +483,7 @@ export function registerAIHandlers({
           originalCount: historyUsedForContext.length,
           limitedCount: contextMessages.length,
           contextTokenEstimate: selection.contextTokenEstimate,
+          maxContextMessages,
           maxContextTokens: MAX_CONTEXT_TOKENS,
         });
       }

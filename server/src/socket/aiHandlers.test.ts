@@ -153,13 +153,14 @@ const createHarness = (options: {
   aiStreamOwnerId?: string;
   model?: AIModelOption;
   aiClientWrapper?: any;
+  messages?: Message[];
 } = {}) => {
   const socket = new FakeSocket();
   const io = new FakeIo();
   const store = {
     rooms: [room()],
     members: new Set(['room-1:client-1']),
-    messages: [message()],
+    messages: options.messages || [message()],
     appendedMessages: [] as Message[],
     upsertedMessages: [] as Message[],
     savedHistories: [] as Message[][],
@@ -366,6 +367,46 @@ describe('AI socket handlers', () => {
     assert.equal(finalMessage.uiPayload?.version, 'v0.9');
     assert.equal(finalMessage.uiPayload?.messages.length, 5);
     assert.equal((a2uiUpdateEvents[0].args[0] as any).uiPayload.messages[0].createSurface.catalogId, 'https://a2ui.org/specification/v0_9/basic_catalog.json');
+  });
+
+  it('uses only the current message when the room AI context limit is zero', async () => {
+    process.env.E2E_FAKE_AI = 'false';
+    const createCalls: any[] = [];
+    const openAIClient = {
+      chat: {
+        completions: {
+          create: async (request: any) => {
+            createCalls.push(request);
+            return asyncIterable([
+              { choices: [{ delta: { content: 'limited response' } }] },
+              { choices: [{ finish_reason: 'stop', delta: {} }], usage: { prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 } },
+            ]);
+          },
+        },
+      },
+    };
+    const previousMessage = message({
+      id: 'old-message',
+      content: 'old prompt',
+      timestamp: '2026-05-03T00:00:00.000Z',
+    });
+    const currentMessage = message({
+      id: 'current-message',
+      content: 'current prompt',
+      timestamp: '2026-05-03T00:01:00.000Z',
+    });
+    const { socket } = createHarness({
+      messages: [previousMessage, currentMessage],
+      aiClientWrapper: { provider: 'deepseek', client: openAIClient },
+    });
+
+    await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id, maxContextMessages: 0 });
+
+    const providerMessages = createCalls[0].messages as Array<{ role: string; content: string }>;
+    const userMessages = providerMessages.filter(item => item.role === 'user');
+    assert.equal(userMessages.length, 1);
+    assert.match(String(userMessages[0].content), /current prompt/);
+    assert.doesNotMatch(String(userMessages[0].content), /old prompt/);
   });
 
   it('streams A2UI updates from OpenAI-compatible tool calls before stream end', async () => {

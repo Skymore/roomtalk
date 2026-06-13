@@ -1,5 +1,27 @@
 import { Message } from '../types';
 
+export const DEFAULT_AI_CONTEXT_MESSAGE_LIMIT = 100;
+export const MIN_AI_CONTEXT_MESSAGE_LIMIT = 0;
+export const MAX_AI_CONTEXT_MESSAGE_LIMIT = 1000;
+
+export const normalizeAIContextMessageLimit = (
+  value: unknown,
+  fallback = DEFAULT_AI_CONTEXT_MESSAGE_LIMIT,
+): number => {
+  const parsed = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && value.trim()
+      ? Number.parseInt(value, 10)
+      : NaN;
+  const normalizedFallback = Number.isFinite(fallback)
+    ? Math.min(MAX_AI_CONTEXT_MESSAGE_LIMIT, Math.max(MIN_AI_CONTEXT_MESSAGE_LIMIT, Math.floor(fallback)))
+    : DEFAULT_AI_CONTEXT_MESSAGE_LIMIT;
+
+  return Number.isFinite(parsed)
+    ? Math.min(MAX_AI_CONTEXT_MESSAGE_LIMIT, Math.max(MIN_AI_CONTEXT_MESSAGE_LIMIT, Math.floor(parsed)))
+    : normalizedFallback;
+};
+
 const parsePositiveInt = (value: string | undefined, fallback: number): number => {
   const parsed = Number.parseInt(value ?? '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -7,7 +29,7 @@ const parsePositiveInt = (value: string | undefined, fallback: number): number =
 
 // How many of the most recent messages are sent to the model as context.
 // Override in prod with AI_MAX_CONTEXT_MESSAGES without a code change.
-export const MAX_CONTEXT_MESSAGES = parsePositiveInt(process.env.AI_MAX_CONTEXT_MESSAGES, 1000);
+export const MAX_CONTEXT_MESSAGES = normalizeAIContextMessageLimit(process.env.AI_MAX_CONTEXT_MESSAGES);
 export const MAX_CONTEXT_TOKENS = parsePositiveInt(process.env.AI_MAX_CONTEXT_TOKENS, 32000);
 
 const MESSAGE_CONTEXT_OVERHEAD_TOKENS = 16;
@@ -88,6 +110,8 @@ export function selectAIHistory(
     maxContextMessages = MAX_CONTEXT_MESSAGES,
     maxContextTokens = MAX_CONTEXT_TOKENS,
   } = options;
+  const normalizedMaxContextMessages = normalizeAIContextMessageLimit(maxContextMessages, MAX_CONTEXT_MESSAGES);
+  const effectiveMaxContextMessages = normalizedMaxContextMessages === 0 ? 1 : normalizedMaxContextMessages;
   let historyUsedForContext = fullHistory;
   let truncationReason: AIHistorySelection['truncationReason'];
 
@@ -105,8 +129,8 @@ export function selectAIHistory(
     }
   }
 
-  const messageLimitedContext = historyUsedForContext.length > maxContextMessages
-    ? historyUsedForContext.slice(-maxContextMessages)
+  const messageLimitedContext = historyUsedForContext.length > effectiveMaxContextMessages
+    ? historyUsedForContext.slice(-effectiveMaxContextMessages)
     : historyUsedForContext;
   const { contextMessages, contextTokenEstimate } = fitMessagesWithinTokenBudget(messageLimitedContext, maxContextTokens);
 

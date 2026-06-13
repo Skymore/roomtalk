@@ -35,6 +35,11 @@ import { startStreamingTranscription, StreamingTranscriber } from '../utils/stre
 import { MessageInputAIControls, MessageInputAISettingsButton } from './MessageInputAIControls';
 import { PostingScheduleDetails } from './PostingScheduleDetails';
 import {
+  getStoredAIContextMessageLimit,
+  normalizeAIContextMessageLimit,
+  saveStoredAIContextMessageLimit,
+} from '../utils/aiContext';
+import {
   getKeyboardCompositionSnapshot,
   isConfirmingIMEComposition,
 } from '../utils/keyboardComposition';
@@ -211,10 +216,17 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     selectedAIModel,
     handleModelChange,
   } = useAIModelSelection();
+  const [aiContextMessageLimit, setAIContextMessageLimit] = useState(() => getStoredAIContextMessageLimit());
 
   // 新增角色设置模态框的状态
   const { isOpen: isAISettingsOpen, onOpen: onAISettingsOpen, onClose: onAISettingsClose } = useDisclosure();
   const postingClosedMessage = t('postingClosed');
+
+  const handleAIContextMessageLimitChange = useCallback((limit: number) => {
+    const normalizedLimit = normalizeAIContextMessageLimit(limit);
+    setAIContextMessageLimit(normalizedLimit);
+    saveStoredAIContextMessageLimit(normalizedLimit);
+  }, []);
 
   const buildReplyReference = useCallback((message: Message | null): Message['replyTo'] => {
     if (!message) return undefined;
@@ -414,7 +426,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           roomId,
           systemPrompt: selectedRole.systemPrompt,
           roleName: selectedRole.name,
-          model: selectedAIModel || defaultAIModel
+          model: selectedAIModel || defaultAIModel,
+          maxContextMessages: aiContextMessageLimit,
         });
         return;
       }
@@ -435,6 +448,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         systemPrompt: selectedRole.systemPrompt,
         roleName: selectedRole.name,
         model: selectedAIModel || defaultAIModel,
+        maxContextMessages: aiContextMessageLimit,
       });
 
       onOptimisticMessageSaved?.(clientMessageId, userMessage);
@@ -1482,10 +1496,12 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                 isMacOS={isMacOS}
                 currentInputText={currentInputText}
                 imageCount={imageCount}
+                aiContextMessageLimit={aiContextMessageLimit}
                 isSettingsOpen={isAISettingsOpen}
                 onSettingsClose={onAISettingsClose}
                 onRoleChange={handleRoleChange}
                 onModelChange={handleModelChange}
+                onAIContextMessageLimitChange={handleAIContextMessageLimitChange}
                 onAddRole={handleAddRole}
                 onUpdateRole={handleUpdateRole}
                 onDeleteRole={handleDeleteRole}
