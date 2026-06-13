@@ -575,4 +575,54 @@ describe('message socket handlers', () => {
     assert.deepEqual(failing.io.roomEmits, []);
     assert.deepEqual(failing.socket.emitted, [{ event: 'error', args: [{ message: 'Failed to clear room messages' }] }]);
   });
+
+  it('accepts A2UI actions for hydrated messages and broadcasts them to the room', async () => {
+    const { socket, store, io } = createHarness();
+    store.messages = [
+      message({
+        id: 'ai-1',
+        clientId: 'ai_assistant',
+        messageType: 'ai',
+        uiPayload: {
+          format: 'a2ui',
+          version: 'v0.9',
+          messages: [{
+            version: 'v0.9',
+            createSurface: {
+              surfaceId: 'task-1',
+              catalogId: 'https://a2ui.org/specification/v0_9/basic_catalog.json',
+            },
+          }],
+        },
+      }),
+    ];
+    let response: unknown;
+    const action = {
+      name: 'create_task',
+      surfaceId: 'task-1',
+      sourceComponentId: 'confirm',
+      timestamp: '2026-05-03T00:00:10.000Z',
+      context: { title: 'Implement A2UI' },
+    };
+
+    await socket.invoke('a2ui_action', {
+      roomId: 'room-1',
+      messageId: 'ai-1',
+      action,
+    }, (ack: unknown) => {
+      response = ack;
+    });
+
+    assert.deepEqual(response, { success: true });
+    assert.deepEqual(io.roomEmits.at(-1), {
+      roomId: 'room-1',
+      event: 'a2ui_action',
+      args: [{
+        roomId: 'room-1',
+        messageId: 'ai-1',
+        clientId: 'client-1',
+        action,
+      }],
+    });
+  });
 });

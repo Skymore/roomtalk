@@ -23,6 +23,10 @@ class MemoryStorage {
   setItem(key: string, value: string) {
     this.data.set(key, value);
   }
+
+  removeItem(key: string) {
+    this.data.delete(key);
+  }
 }
 
 const customRole: AIRole = {
@@ -52,11 +56,25 @@ describe("aiRoles", () => {
     expect(getSavedAIRoles()).toEqual([customRole]);
   });
 
+  it("migrates saved roles once when built-in defaults change", () => {
+    localStorage.setItem("aiRoles", JSON.stringify([customRole]));
+
+    expect(getSavedAIRoles()).toEqual([
+      customRole,
+      ...defaultAIRoles,
+    ]);
+
+    saveAIRoles([customRole]);
+    expect(getSavedAIRoles()).toEqual([customRole]);
+  });
+
   it("translates built-in role names and prompts while keeping custom roles literal", () => {
     const t = (key: string) => `translated:${key}`;
 
     expect(getAIRoleDisplayName(defaultAIRoles[0], t)).toBe("translated:roleAssistantName");
     expect(getAIRoleDisplayPrompt(defaultAIRoles[0], t)).toBe("translated:roleAssistantPrompt");
+    expect(getAIRoleDisplayName(defaultAIRoles[1], t)).toBe("translated:roleA2UIDemoName");
+    expect(getAIRoleDisplayPrompt(defaultAIRoles[1], t)).toBe("translated:roleA2UIDemoPrompt");
     expect(getAIRoleDisplayName(customRole, t)).toBe("Custom");
     expect(getAIRoleDisplayPrompt(customRole, t)).toBe("Custom prompt");
   });

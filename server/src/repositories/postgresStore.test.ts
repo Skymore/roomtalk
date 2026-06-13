@@ -637,7 +637,8 @@ describe('PostgresStore', () => {
           assert.equal(call.params?.[0], 'message-1');
           assert.equal(call.params?.[5], null);
           assert.equal(call.params?.[15], null);
-          assert.equal(call.params?.[16], 2);
+          assert.equal(call.params?.[16], null);
+          assert.equal(call.params?.[17], 2);
         },
       },
       { rows: [roomRow({ last_activity_at: '2026-05-04T00:00:00.000Z' })] },
@@ -664,7 +665,8 @@ describe('PostgresStore', () => {
           assert.equal(call.params?.[6], 'media');
           assert.equal(call.params?.[9], 'image/webp');
           assert.equal(call.params?.[15], null);
-          assert.equal(call.params?.[16], 4);
+          assert.equal(call.params?.[16], null);
+          assert.equal(call.params?.[17], 4);
         },
       },
       {
@@ -780,7 +782,8 @@ describe('PostgresStore', () => {
           assert.equal(call.params?.[0], 'message-1');
           assert.equal(call.params?.[5], null);
           assert.equal(call.params?.[15], null);
-          assert.equal(call.params?.[16], 3);
+          assert.equal(call.params?.[16], null);
+          assert.equal(call.params?.[17], 3);
         },
       },
       {
@@ -853,6 +856,17 @@ describe('PostgresStore', () => {
         messageType: 'text',
         preview: 'question',
       },
+      uiPayload: {
+        format: 'a2ui',
+        version: 'v0.9',
+        messages: [{
+          version: 'v0.9',
+          createSurface: {
+            surfaceId: 'summary-1',
+            catalogId: 'https://a2ui.org/specification/v0_9/basic_catalog.json',
+          },
+        }],
+      },
     });
     const client = new ScriptedClient([
       { rowCount: 0 },
@@ -862,8 +876,9 @@ describe('PostgresStore', () => {
         rowCount: 1,
         assertCall(call) {
           assert.equal(call.params?.[14], JSON.stringify(aiMessage.replyTo));
-          assert.equal(call.params?.[15], null);
-          assert.equal(call.params?.[16], 0);
+          assert.equal(call.params?.[15], JSON.stringify(aiMessage.uiPayload));
+          assert.equal(call.params?.[16], null);
+          assert.equal(call.params?.[17], 0);
         },
       },
       { rows: [roomRow({ last_activity_at: '2026-05-04T00:00:00.000Z' })] },
@@ -891,6 +906,7 @@ describe('PostgresStore', () => {
           usage: aiMessage.usage,
           cost: aiMessage.cost,
           reply_to: aiMessage.replyTo,
+          ui_payload: aiMessage.uiPayload,
         }],
       },
     ], client);

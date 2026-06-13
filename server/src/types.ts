@@ -67,6 +67,22 @@ export interface MessageMediaAsset {
   durationMs?: number;
 }
 
+export type A2UIVersion = 'v0.9';
+
+export interface A2UIActionEvent {
+  name: string;
+  surfaceId: string;
+  sourceComponentId: string;
+  timestamp: string;
+  context?: Record<string, unknown>;
+}
+
+export interface A2UIPayload {
+  format: 'a2ui';
+  version: A2UIVersion;
+  messages: unknown[];
+}
+
 export interface MediaAsset extends MessageMediaAsset {
   roomId: string;
   messageId?: string;
@@ -102,6 +118,7 @@ export interface Message {
   cost?: AICost;
   replyTo?: MessageReplyReference;
   mediaAsset?: MessageMediaAsset;
+  uiPayload?: A2UIPayload;
 }
 
 export interface Room {

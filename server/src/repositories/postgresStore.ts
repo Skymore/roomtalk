@@ -54,6 +54,7 @@ type MessageRow = {
   usage: unknown;
   cost: unknown;
   reply_to: unknown;
+  ui_payload?: unknown;
   ai_stream_owner_id?: string | null;
   position?: number | string;
 };
@@ -355,6 +356,7 @@ const mapMessage = (row: MessageRow): Message => {
   const usage = parseJsonValue<Message['usage']>(row.usage);
   const cost = parseJsonValue<Message['cost']>(row.cost);
   const replyTo = parseJsonValue<Message['replyTo']>(row.reply_to);
+  const uiPayload = parseJsonValue<Message['uiPayload']>(row.ui_payload);
 
   const message: Message = {
     id: row.id,
@@ -374,6 +376,7 @@ const mapMessage = (row: MessageRow): Message => {
   if (usage) message.usage = usage;
   if (cost) message.cost = cost;
   if (replyTo) message.replyTo = replyTo;
+  if (uiPayload) message.uiPayload = uiPayload;
 
   return message;
 };
@@ -394,6 +397,7 @@ const messageParams = (message: Message, position: number): unknown[] => [
   toJsonb(message.usage),
   toJsonb(message.cost),
   toJsonb(message.replyTo),
+  toJsonb(message.uiPayload),
   getAIStreamOwnerId(message) || null,
   position,
 ];
@@ -414,10 +418,11 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   usage,
   cost,
   reply_to,
+  ui_payload,
   ai_stream_owner_id,
   position
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16, $17
+  $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18
 ) ON CONFLICT (id) DO UPDATE SET
   room_id = EXCLUDED.room_id,
   client_id = EXCLUDED.client_id,
@@ -433,6 +438,7 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   usage = EXCLUDED.usage,
   cost = EXCLUDED.cost,
   reply_to = EXCLUDED.reply_to,
+  ui_payload = EXCLUDED.ui_payload,
   ai_stream_owner_id = EXCLUDED.ai_stream_owner_id,
   position = room_messages.position`;
 
@@ -673,7 +679,8 @@ export class PostgresStore implements DurableRoomStore {
         const updated = await client.query<MessageRow>(
           `UPDATE room_messages
           SET content = $3,
-            updated_at = $4
+            updated_at = $4,
+            ui_payload = NULL
           WHERE room_id = $1 AND id = $2
           RETURNING ${MESSAGE_COLUMNS}`,
           [roomId, messageId, updatedContent, updatedAt]
@@ -835,7 +842,8 @@ export class PostgresStore implements DurableRoomStore {
         const updated = await client.query<MessageRow>(
           `UPDATE room_messages
           SET content = $3,
-            updated_at = $4
+            updated_at = $4,
+            ui_payload = NULL
           WHERE room_id = $1 AND id = $2
           RETURNING ${MESSAGE_COLUMNS}`,
           [roomId, messageId, updatedContent, updatedAt]

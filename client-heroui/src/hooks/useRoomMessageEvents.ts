@@ -1,7 +1,7 @@
 import { Dispatch, RefObject, SetStateAction, useEffect, useRef } from 'react';
 import { clientId, socket } from '../utils/socket';
-import { AICostTotalEvent, AIChunkEvent, AIStreamEndEvent, AIStreamErrorEvent, Message, RoomMessageHistoryPayload } from '../utils/types';
-import { appendAIChunk, completeAIMessage, sortMessages, upsertMessage } from '../utils/messageState';
+import { A2UIUpdateEvent, AICostTotalEvent, AIChunkEvent, AIStreamEndEvent, AIStreamErrorEvent, Message, RoomMessageHistoryPayload } from '../utils/types';
+import { appendA2UIPayload, appendAIChunk, completeAIMessage, sortMessages, upsertMessage } from '../utils/messageState';
 import { deleteCachedRoomMessageWindow, readCachedRoomMessageWindow, readMemoryRoomMessageWindow, writeCachedRoomMessageWindow } from '../utils/messageHistoryCache';
 
 const ROOM_MESSAGE_PAGE_LIMIT = 80;
@@ -223,12 +223,26 @@ export const useRoomMessageEvents = ({
       }
     };
 
+    const handleA2UIUpdate = (data: A2UIUpdateEvent) => {
+      if (data.roomId !== roomId) return;
+      updateMessages(prev => appendA2UIPayload(prev, data.messageId, data.uiPayload));
+
+      const container = containerRef.current;
+      if (container) {
+        const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
+        if (isAtBottom) {
+          scheduleScroll('smooth', 50);
+        }
+      }
+    };
+
     const handleAIStreamEnd = (data: AIStreamEndEvent) => {
       if (data.roomId !== roomId) return;
       const nextHistoryVersion = bumpLocalHistoryVersion();
       updateMessages(prev => {
         const next = completeAIMessage(prev, data.messageId, {
           content: data.content,
+          uiPayload: data.uiPayload,
           aiModel: data.aiModel,
           usage: data.usage,
           cost: data.cost,
@@ -322,6 +336,7 @@ export const useRoomMessageEvents = ({
     socket.on('message_history', handleMessageHistory);
     socket.on('new_message', handleNewMessage);
     socket.on('ai_chunk', handleAIChunk);
+    socket.on('a2ui_update', handleA2UIUpdate);
     socket.on('ai_stream_end', handleAIStreamEnd);
     socket.on('ai_cost_total', handleAICostTotal);
     socket.on('ai_stream_error', handleAIStreamError);
@@ -344,6 +359,7 @@ export const useRoomMessageEvents = ({
       socket.off('message_history', handleMessageHistory);
       socket.off('new_message', handleNewMessage);
       socket.off('ai_chunk', handleAIChunk);
+      socket.off('a2ui_update', handleA2UIUpdate);
       socket.off('ai_stream_end', handleAIStreamEnd);
       socket.off('ai_cost_total', handleAICostTotal);
       socket.off('ai_stream_error', handleAIStreamError);

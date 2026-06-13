@@ -4,7 +4,7 @@ import {
   createUserMessage,
 } from '../services/messageDomain';
 import { notifyRoomMessageBestEffort } from '../services/pushNotifications';
-import { Message } from '../types';
+import { A2UIActionEvent, Message } from '../types';
 import { hasRoomAccess } from './roomAccess';
 import { authorizeRoomAction, getRoomMessage } from './roomAuthorization';
 import { SocketConnectionContext } from './types';
@@ -24,6 +24,22 @@ const parseClearRoomPayload = (payload: unknown): { roomId: string | null; confi
 
   return { roomId: null };
 };
+
+const isRecord = (value: unknown): value is Record<string, unknown> => (
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+);
+
+const isA2UIActionEvent = (value: unknown): value is A2UIActionEvent => (
+  isRecord(value) &&
+  typeof value.name === 'string' &&
+  value.name.trim().length > 0 &&
+  typeof value.surfaceId === 'string' &&
+  value.surfaceId.trim().length > 0 &&
+  typeof value.sourceComponentId === 'string' &&
+  value.sourceComponentId.trim().length > 0 &&
+  typeof value.timestamp === 'string' &&
+  (!('context' in value) || value.context === undefined || isRecord(value.context))
+);
 
 export function registerMessageHandlers({ io, socket, store, socketLogger }: SocketConnectionContext) {
   socket.on('get_room_messages', async (request: { roomId: string; beforeMessageId?: string; limit?: number }) => {
@@ -303,5 +319,50 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       socket.emit('error', { message: 'Failed to clear room messages' });
       callback?.({ success: false, error: 'Failed to clear room messages' });
     }
+  });
+
+  socket.on('a2ui_action', async (
+    payload: unknown,
+    callback?: (response: { success: boolean; error?: string }) => void,
+  ) => {
+    const clientId = await store.getClientId(socket.id);
+    if (!clientId) {
+      callback?.({ success: false, error: 'You are not registered' });
+      return;
+    }
+
+    if (!isRecord(payload) || typeof payload.roomId !== 'string' || typeof payload.messageId !== 'string' || !isA2UIActionEvent(payload.action)) {
+      callback?.({ success: false, error: 'Invalid A2UI action payload' });
+      return;
+    }
+
+    const { roomId, messageId, action } = payload;
+    if (!(await hasRoomAccess(store, roomId, clientId))) {
+      callback?.({ success: false, error: 'You are not authorized to access this room' });
+      return;
+    }
+
+    const message = await getRoomMessage(store, roomId, messageId);
+    if (!message || message.uiPayload?.format !== 'a2ui') {
+      callback?.({ success: false, error: 'A2UI message not found' });
+      return;
+    }
+
+    socketLogger.info('Received A2UI action', {
+      roomId,
+      messageId,
+      clientId,
+      actionName: action.name,
+      surfaceId: action.surfaceId,
+      sourceComponentId: action.sourceComponentId,
+    });
+
+    io.to(roomId).emit('a2ui_action', {
+      roomId,
+      messageId,
+      clientId,
+      action,
+    });
+    callback?.({ success: true });
   });
 }

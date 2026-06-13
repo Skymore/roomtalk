@@ -52,11 +52,13 @@ export const POSTGRES_SCHEMA_SQL = [
     usage JSONB,
     cost JSONB,
     reply_to JSONB,
+    ui_payload JSONB,
     ai_stream_owner_id TEXT,
     updated_at TIMESTAMPTZ,
     position INTEGER NOT NULL
   )`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS reply_to JSONB`,
+  `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS ui_payload JSONB`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS ai_stream_owner_id TEXT`,
   // Legacy media rows can predate the unified 'media' message type. Normalize

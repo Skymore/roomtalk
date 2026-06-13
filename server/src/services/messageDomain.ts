@@ -176,8 +176,9 @@ export function applyMessageEdit(messages: Message[], messageId: string, newCont
     return { found: false as const, messages, updatedMessage: undefined };
   }
 
+  const { uiPayload: _uiPayload, ...messageWithoutUiPayload } = messages[messageIndex];
   const updatedMessage: Message = {
-    ...messages[messageIndex],
+    ...messageWithoutUiPayload,
     content: newContent,
     updatedAt: updatedAt.toISOString(),
   };

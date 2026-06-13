@@ -470,6 +470,7 @@ type MessageRow = {
   usage: unknown;
   cost: unknown;
   reply_to: unknown;
+  ui_payload: unknown;
   ai_stream_owner_id: string | null;
   position: number;
 };
@@ -652,6 +653,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         usage,
         cost,
         replyTo,
+        uiPayload,
         aiStreamOwnerId,
         position,
       ] = params;
@@ -674,6 +676,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         usage: jsonValue(usage),
         cost: jsonValue(cost),
         reply_to: jsonValue(replyTo),
+        ui_payload: jsonValue(uiPayload),
         ai_stream_owner_id: aiStreamOwnerId === null || aiStreamOwnerId === undefined ? null : String(aiStreamOwnerId),
         position: existingPosition,
       };
@@ -868,12 +871,12 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       return { rows: [updated] as T[], rowCount: 1 };
     }
 
-    if (/UPDATE room_messages SET content = \$3, updated_at = \$4 WHERE room_id = \$1 AND id = \$2 RETURNING/.test(compactSql)) {
+    if (/UPDATE room_messages SET content = \$3, updated_at = \$4, ui_payload = NULL WHERE room_id = \$1 AND id = \$2 RETURNING/.test(compactSql)) {
       const [roomId, messageId, content, updatedAt] = params.map(String);
       const rows = this.messages.get(roomId) || [];
       const index = rows.findIndex(row => row.id === messageId);
       if (index === -1) return { rows: [], rowCount: 0 };
-      const updated = { ...rows[index], content, updated_at: updatedAt };
+      const updated = { ...rows[index], content, updated_at: updatedAt, ui_payload: null };
       rows[index] = updated;
       this.messages.set(roomId, rows);
       return { rows: [updated] as T[], rowCount: 1 };
