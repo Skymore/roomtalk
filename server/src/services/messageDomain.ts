@@ -21,7 +21,8 @@ export function normalizeDisplayName(username?: string): string | undefined {
 }
 
 export function createReplyReference(message: Message): MessageReplyReference {
-  const mediaKind = message.mediaAsset?.kind;
+  const mediaAsset = message.mediaAsset;
+  const mediaKind = mediaAsset?.kind;
   const textualPreview = message.messageType === 'media'
     ? getMediaAttachmentLabel(mediaKind)
     : collapseInlineText(message.content);
@@ -35,6 +36,9 @@ export function createReplyReference(message: Message): MessageReplyReference {
   };
   if (mediaKind) {
     reference.mediaKind = mediaKind;
+  }
+  if (message.messageType === 'media' && mediaAsset) {
+    reference.mediaAsset = { ...mediaAsset };
   }
   return reference;
 }

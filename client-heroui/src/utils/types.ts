@@ -3,6 +3,7 @@ export interface MessageReplyReference {
   username?: string;
   messageType: 'text' | 'ai' | 'media';
   mediaKind?: MediaKind;
+  mediaAsset?: MessageMediaAsset;
   preview: string;
 }
 
