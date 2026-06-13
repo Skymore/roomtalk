@@ -213,6 +213,40 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
         return;
       }
 
+      const previousUserId = await store.getClientId(socket.id);
+      const isSwitchingUser = Boolean(previousUserId && previousUserId !== userId);
+      if (isSwitchingUser && previousUserId) {
+        const [previousRooms, previousBrowserInstanceId] = await Promise.all([
+          store.getUserRooms(socket.id),
+          store.getBrowserInstanceId(socket.id),
+        ]);
+
+        for (const roomId of previousRooms) {
+          const memberCount = await store.updateRoomMemberCount(roomId, previousUserId, socket.id, false);
+          if (previousBrowserInstanceId) {
+            await store.updateRoomBrowserPresence(roomId, previousBrowserInstanceId, socket.id, false);
+          }
+
+          io.to(roomId).emit('room_member_change', createRoomMemberEvent({
+            roomId,
+            userId: previousUserId,
+            count: memberCount,
+            action: 'leave',
+          }));
+          socket.leave(roomId);
+          socketLogger.debug('Cleared previous client presence before socket re-registration', {
+            socketId: socket.id,
+            previousUserId,
+            userId,
+            roomId,
+            memberCount,
+          });
+        }
+
+        socket.leave(previousUserId);
+        await store.storeUserRooms(socket.id, []);
+      }
+
       await store.storeClientSession(socket.id, userId, browserInstanceId);
       const existingNicknames = await store.getClientNicknames([userId]);
       const existingNickname = existingNicknames[userId] || null;

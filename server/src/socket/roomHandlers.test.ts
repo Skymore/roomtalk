@@ -129,6 +129,7 @@ const createHarness = (clientId: string | null = 'client-1') => {
     removedSessions: [] as string[],
     nicknames: new Map<string, string>(),
     nicknameWrites: [] as Array<{ clientId: string; nickname: string }>,
+    memberCountUpdates: [] as Array<{ roomId: string; userId: string; socketId: string; isJoining: boolean }>,
     clientPasswords: new Map<string, string>(),
     clientAccounts: new Set<string>(),
     clientAuthTokens: new Map<string, { clientId: string; tokenHash: string; createdAt: string }>(),
@@ -292,7 +293,8 @@ const createHarness = (clientId: string | null = 'client-1') => {
     async storeUserRooms(_socketId: string, roomIds: string[]) {
       this.socketRooms = roomIds;
     },
-    async updateRoomMemberCount(roomId: string, _userId: string, _socketId: string, isJoining: boolean) {
+    async updateRoomMemberCount(roomId: string, userId: string, socketId: string, isJoining: boolean) {
+      this.memberCountUpdates.push({ roomId, userId, socketId, isJoining });
       return isJoining ? 2 : 1;
     },
     async updateRoomBrowserPresence(roomId: string, browserInstanceId: string, socketId: string, isJoining: boolean) {
@@ -397,6 +399,43 @@ describe('room socket handlers', () => {
     assert.equal(store.nicknames.get('client-9'), 'Server Ada');
     assert.deepEqual(store.nicknameWrites, []);
     assert.deepEqual(response, { success: true, clientId: 'client-9', nickname: 'Server Ada' });
+  });
+
+  it('clears previous room presence when a registered socket switches client IDs', async () => {
+    const { io, socket, store } = createHarness('client-old');
+    store.socketRooms = ['room-1'];
+    store.browserInstanceId = 'browser-1';
+    let response: unknown;
+
+    await socket.invoke('register', { clientId: 'client-new', browserInstanceId: 'browser-1' }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.equal(store.clientId, 'client-new');
+    assert.deepEqual(store.socketRooms, []);
+    assert.deepEqual(store.memberCountUpdates, [
+      { roomId: 'room-1', userId: 'client-old', socketId: 'socket-1', isJoining: false },
+    ]);
+    assert.deepEqual(store.browserPresenceUpdates, [
+      { roomId: 'room-1', browserInstanceId: 'browser-1', socketId: 'socket-1', isJoining: false },
+    ]);
+    assert.deepEqual(socket.left, ['room-1', 'client-old']);
+    assert.deepEqual(socket.joined, ['client-new']);
+    assert.equal(io.roomEmits[0].roomId, 'room-1');
+    assert.equal(io.roomEmits[0].event, 'room_member_change');
+    const leaveEvent = io.roomEmits[0].args[0] as {
+      roomId: string;
+      user: { id: string };
+      count: number;
+      action: string;
+      timestamp: string;
+    };
+    assert.equal(leaveEvent.roomId, 'room-1');
+    assert.deepEqual(leaveEvent.user, { id: 'client-old' });
+    assert.equal(leaveEvent.count, 1);
+    assert.equal(leaveEvent.action, 'leave');
+    assert.match(leaveEvent.timestamp, /^\d{4}-\d{2}-\d{2}T/);
+    assert.deepEqual(response, { success: true, clientId: 'client-new' });
   });
 
   it('rejects socket registration for password-protected User IDs without a valid token', async () => {
