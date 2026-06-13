@@ -8,6 +8,7 @@
 
 - 服务端使用官方 `@a2ui/web_core` v0.9 schema 校验 A2UI 消息。
 - 客户端使用官方 `@a2ui/react` v0.9 renderer 渲染 surface。
+- 当前开放官方 v0.9 basic catalog 全量组件：`Text`、`Image`、`Icon`、`Video`、`AudioPlayer`、`Row`、`Column`、`List`、`Card`、`Tabs`、`Modal`、`Divider`、`Button`、`TextField`、`CheckBox`、`ChoicePicker`、`Slider`、`DateTimeInput`。
 - OpenAI-compatible provider 通过 `tool_calls` 流式收集 `a2ui_update`。
 - Anthropic provider 通过 `tool_use` 收集 `a2ui_update`。
 - fake E2E AI 在流式文本过程中发送多次 `a2ui_update`，用于本地稳定演示。
@@ -47,6 +48,7 @@ sequenceDiagram
   - 为 OpenAI-compatible Chat Completions 提供 function tool schema。
   - 为 Anthropic Messages 提供 `input_schema` tool。
   - 将 A2UI 使用规则注入 system prompt，包括 demo Role 的 `HI` 触发规则。
+  - prompt 明确只允许官方 basic catalog 全量组件，并使用当前 v0.9 的 `ChoicePicker` 名称，避免模型生成旧的 `MultipleChoice`。
 
 - `server/src/socket/aiHandlers.ts`
   - fake AI：4 个 text chunk 期间发送 5 个 A2UI message batch。
@@ -58,6 +60,7 @@ sequenceDiagram
   - 使用 `MessageProcessor([basicCatalog])` 处理增量 message。
   - 使用 `A2uiSurface` 渲染官方 basic catalog。
   - 使用 `@a2ui/markdown-it` 渲染 A2UI Text 内部 markdown，并保留 DOMPurify 清洗。
+  - 前端不手写每个组件；官方 `basicCatalog` 已包含 basic catalog 的原生 React 实现。
 
 - `client-heroui/src/components/A2UIRenderer.css`
   - 覆盖 A2UI CSS variables，使官方组件适配当前浅色/暗色主题。

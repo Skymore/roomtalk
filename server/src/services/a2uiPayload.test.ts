@@ -15,8 +15,19 @@ const validMessages = [
     updateComponents: {
       surfaceId: 'summary-1',
       components: [
-        { id: 'root', component: 'Card', child: 'title' },
+        { id: 'root', component: 'Card', child: 'body' },
+        { id: 'body', component: 'Column', children: ['title', 'choice'] },
         { id: 'title', component: 'Text', text: 'Summary' },
+        {
+          id: 'choice',
+          component: 'ChoicePicker',
+          label: 'Next step',
+          options: [
+            { label: 'Continue', value: 'continue' },
+            { label: 'Export', value: 'export' },
+          ],
+          value: ['continue'],
+        },
       ],
     },
   },
@@ -47,5 +58,60 @@ describe('A2UI payload normalization', () => {
     ]);
 
     assert.equal(payload, null);
+  });
+
+  it('repairs common model-generated A2UI aliases before validation', async () => {
+    const payload = await normalizeA2UIPayload([
+      {
+        version: 'v0.9',
+        createSurface: {
+          surfaceId: 'summary-1',
+          catalogId: A2UI_BASIC_CATALOG_ID,
+        },
+      },
+      {
+        version: 'v0.9',
+        updateComponents: {
+          surfaceId: 'summary-1',
+          components: [
+            { id: 'root', type: 'Card', children: [{ id: 'body' }] },
+            { id: 'body', type: 'Column', children: [{ id: 'title' }, { id: 'choice' }, { id: 'button' }] },
+            { id: 'title', type: 'Text', content: '{{demo.title}}' },
+            { id: 'choice', type: 'MultipleChoice', options: [{ label: 'Continue', value: 'continue' }], value: ['continue'] },
+            { id: 'button', type: 'Button', label: 'Continue' },
+          ],
+        },
+      },
+      {
+        version: 'v0.9',
+        updateDataModel: {
+          surfaceId: 'summary-1',
+          data: {
+            demo: {
+              title: 'Demo',
+            },
+          },
+        },
+      },
+    ]);
+
+    assert.equal(payload?.messages.length, 3);
+    const updateComponents = payload?.messages[1] as any;
+    assert.deepEqual(updateComponents.updateComponents.components[0], {
+      id: 'root',
+      component: 'Card',
+      child: 'body',
+    });
+    assert.deepEqual(updateComponents.updateComponents.components[2], {
+      id: 'title',
+      component: 'Text',
+      text: { path: '/demo/title' },
+    });
+    assert.equal(updateComponents.updateComponents.components[3].component, 'ChoicePicker');
+    assert.equal(updateComponents.updateComponents.components[4].component, 'Button');
+    assert.equal(updateComponents.updateComponents.components[5].id, 'button_label');
+    const updateDataModel = payload?.messages[2] as any;
+    assert.equal(updateDataModel.updateDataModel.path, '/');
+    assert.equal(updateDataModel.updateDataModel.value.demo.title, 'Demo');
   });
 });
