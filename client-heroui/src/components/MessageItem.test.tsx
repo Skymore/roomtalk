@@ -411,6 +411,62 @@ describe('MessageItem replies', () => {
     });
   });
 
+  it('shrinks the media and fades viewer chrome while dragging down to dismiss', async () => {
+    getMediaDownloadUrlMock.mockResolvedValue({
+      url: 'https://signed.example/rooms/room-1/asset-1.webp',
+      expiresAt: '2026-05-03T10:15:00.000Z',
+    });
+
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'image-drag-dismiss-message',
+          content: '',
+          messageType: 'media',
+          mimeType: 'image/webp',
+          mediaAsset: {
+            id: 'asset-1',
+            kind: 'image',
+            mimeType: 'image/webp',
+            byteSize: 123,
+            width: 10,
+            height: 20,
+          },
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByLabelText('openMediaViewer').length).toBeGreaterThan(0);
+    });
+    fireEvent.click(screen.getAllByLabelText('openMediaViewer')[0]);
+
+    const dialog = screen.getByRole('dialog', { name: 'mediaViewer' });
+    const stage = screen.getByTestId('media-viewer-stage');
+    Object.defineProperty(stage, 'clientWidth', { configurable: true, value: 300 });
+    Object.defineProperty(stage, 'clientHeight', { configurable: true, value: 500 });
+
+    fireEvent.mouseDown(stage, { button: 0, clientX: 200, clientY: 220 });
+    fireEvent.mouseMove(stage, { buttons: 1, clientX: 202, clientY: 340 });
+
+    await waitFor(() => {
+      expect(stage.style.transform).toContain('translate3d(0, 120px, 0) scale(');
+      expect(stage.style.transform).not.toBe('translate3d(0, 0, 0) scale(1)');
+      expect(dialog.style.backgroundColor).toContain('rgba(8, 8, 7');
+      expect(dialog.style.getPropertyValue('--media-viewer-chrome-opacity')).not.toBe('1');
+    });
+
+    fireEvent.mouseUp(stage, { button: 0, clientX: 202, clientY: 340 });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'mediaViewer' })).toBeNull();
+    });
+  });
+
   it('opens recent room media history and returns from preview to the grid', async () => {
     getMediaDownloadUrlMock.mockResolvedValue({
       url: 'https://signed.example/rooms/room-1/asset-1.webp',
