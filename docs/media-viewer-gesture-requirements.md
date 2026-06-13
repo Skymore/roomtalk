@@ -1,0 +1,115 @@
+# Media Viewer Gesture Requirements
+
+## Goal
+
+The image and video viewer should feel closer to a native photo viewer than a web carousel. Gesture decisions must be predictable, reversible while the finger is still down, and committed only when the gesture ends.
+
+## Scope
+
+- Full-screen media viewer opened from a chat message.
+- Single media preview opened from the image/video history grid.
+- Image gestures: double-tap zoom, pinch zoom, pan, tap return, swipe down return, horizontal media navigation.
+- Video behavior: no autoplay; playback starts only from explicit user action.
+
+## Interaction Rules
+
+### Gesture commit timing
+
+- No navigation, close, or return action may execute on pointer down or pointer move.
+- Pointer move may only update visual preview state, such as carousel offset, vertical dismiss offset, image pan, or pinch scale.
+- Navigation, close, and return are committed only on pointer up or pointer cancel.
+- If a gesture does not pass the commit threshold, the viewer returns to its prior visual state.
+
+### Tap and double tap
+
+- A tap is a pointer sequence with movement no greater than 8 px.
+- Single tap returns from the current preview:
+  - In the main viewer, single tap closes the viewer.
+  - In history single-preview mode, single tap returns to the history grid.
+- Single tap must be delayed briefly so a second tap can convert it into a double tap.
+- Double tap on an image toggles zoom:
+  - If the image is at 1x, zoom to 2x.
+  - If the image is above 1x, return to 1x.
+  - The second tap position is the zoom anchor, so the tapped point stays as close as possible to the same screen location.
+- Tap and double tap do not apply to videos; video taps are left to native controls.
+
+### Pinch zoom
+
+- Two active pointers on an image enter pinch mode.
+- Pinch scale is continuous and calculated from pointer distance.
+- The pinch center is the anchor, so the content under the midpoint remains stable as much as possible.
+- Pinch disables horizontal navigation and vertical return until all but one pointer has ended.
+- Zoom is clamped to 1x through 4x.
+- If pinch ends close to 1x, snap back to exactly 1x and recenter.
+
+### Image pan
+
+- At zoom greater than 1x, one-finger movement pans the image unless the gesture direction locks as a downward return.
+- Pan is clamped so the image cannot drift indefinitely away from the viewport.
+- Pan is committed visually during move, but no navigation or return is committed until pointer up.
+
+### Horizontal navigation
+
+- Horizontal swiping is active only at 1x.
+- Movement locks to horizontal once horizontal displacement exceeds the gesture threshold and dominates vertical movement.
+- While dragging, the carousel follows the finger using direct DOM transforms instead of React state updates, with transform writes batched through `requestAnimationFrame`.
+- React state should update only after pointer up selects a new item or resets the current one.
+- Commit criteria:
+  - Swipe distance exceeds the distance threshold, or
+  - Swipe velocity exceeds the velocity threshold.
+- If neither threshold is met, the carousel snaps back.
+- At first/last media, horizontal drag applies edge resistance instead of hard-stopping.
+
+### Downward return
+
+- Downward return is active at both 1x and zoomed states.
+- It locks when downward displacement exceeds the gesture threshold and dominates horizontal movement.
+- During move, the viewer follows the finger downward and the backdrop opacity decreases.
+- It returns only on pointer up if distance or velocity threshold is met.
+- If the threshold is not met, the viewer springs back to normal.
+
+### Gesture priority
+
+1. Interactive controls: buttons, links, and video controls keep their native behavior.
+2. Two active pointers: pinch.
+3. Single pointer on image:
+   - If zoomed and downward movement dominates, vertical return.
+   - If zoomed and not downward return, image pan.
+   - If 1x and horizontal movement dominates, horizontal navigation.
+   - If 1x and downward movement dominates, vertical return.
+4. Tap candidate:
+   - Single tap returns after the double-tap delay.
+   - Double tap toggles image zoom at the tapped position.
+
+## Video Requirements
+
+- Full-viewer videos must not autoplay when opened or when swiped into view.
+- Full-viewer videos must show native controls when active.
+- Leaving a video slide should not attempt to keep it playing.
+
+## Performance Requirements
+
+- Pointer move must not call React state setters for every frame of horizontal drag or vertical dismiss preview.
+- Pointer move should avoid repeated expensive layout work; dimensions used for commit thresholds should be captured at gesture start.
+- Gesture transforms should be applied outside React render during active movement and flushed once per animation frame, with CSS transitions disabled while following the finger.
+- React state is updated after gesture completion for active media index, zoom, and pan.
+- CSS transitions are disabled during direct finger tracking and enabled only for snap-back or commit animations.
+
+## Accessibility Requirements
+
+- Existing close, download, history, share, previous, and next buttons remain accessible by label.
+- Keyboard left/right navigation remains available.
+- Escape continues to close or return according to current mode.
+- Images keep alt text.
+- Motion is short and functional, not decorative.
+
+## Acceptance Criteria
+
+- Double-tapping an image zooms around the tap position; double-tapping again resets to 1x.
+- Pinching an image changes zoom continuously and clamps between 1x and 4x.
+- Single tapping an image closes the main viewer or returns from history preview, including when zoomed.
+- Down swiping previews the return during movement and commits only after release.
+- Horizontal swiping feels smooth and follows the finger at 1x.
+- Horizontal swiping does not trigger while an image is zoomed.
+- Video slides do not autoplay and require explicit user play.
+- Existing history preview action buttons remain available.
