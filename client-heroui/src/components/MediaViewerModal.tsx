@@ -32,6 +32,7 @@ interface ViewerButtonProps {
   icon: string;
   onPress: () => void;
   className?: string;
+  isDisabled?: boolean;
 }
 
 type ActiveMedia = {
@@ -41,6 +42,11 @@ type ActiveMedia = {
   mimeType?: string;
   byteSize?: number;
   createdAt?: string;
+};
+
+type ImagePan = {
+  x: number;
+  y: number;
 };
 
 interface MediaStageProps {
@@ -57,6 +63,10 @@ interface MediaStageProps {
   onNext: () => void;
   onSwipeDown?: () => void;
   onTapMedia?: () => void;
+  imageZoom: number;
+  imagePan: ImagePan;
+  onImagePanChange: (pan: ImagePan) => void;
+  onImageZoomChange: (delta: number) => void;
   className?: string;
 }
 
@@ -65,6 +75,8 @@ interface MediaStageItemProps {
   alt: string;
   isActive: boolean;
   onTapImage?: () => void;
+  imageZoom: number;
+  imagePan: ImagePan;
 }
 
 interface MediaHistoryGridItemProps {
@@ -79,6 +91,11 @@ const HISTORY_PAGE_SIZE = 36;
 const SWIPE_THRESHOLD = 48;
 const SWIPE_DOWN_THRESHOLD = 64;
 const TAP_THRESHOLD = 8;
+const MIN_IMAGE_ZOOM = 1;
+const MAX_IMAGE_ZOOM = 4;
+const IMAGE_ZOOM_STEP = 0.5;
+const DEFAULT_ZOOMED_IMAGE_SCALE = 2;
+const ZERO_IMAGE_PAN: ImagePan = { x: 0, y: 0 };
 const MEDIA_HISTORY_FILTERS: MediaHistoryFilter[] = ["all", "image", "video"];
 
 const getMediaHistoryFilterLabelKey = (filter: MediaHistoryFilter) => (
@@ -104,19 +121,65 @@ type NavigatorWithMediaShare = Navigator & {
   share?: (data: { title?: string; text?: string; url?: string; files?: File[] }) => unknown;
 };
 
-const ViewerButton: React.FC<ViewerButtonProps> = ({ label, icon, onPress, className = "" }) => (
+const ViewerButton: React.FC<ViewerButtonProps> = ({ label, icon, onPress, className = "", isDisabled = false }) => (
   <Button
     isIconOnly
     aria-label={label}
     title={label}
-    className={`h-11 w-11 min-w-0 rounded-full bg-white/10 text-white shadow-lg backdrop-blur-md transition hover:bg-white/20 focus-visible:ring-2 focus-visible:ring-white/80 ${className}`}
+    isDisabled={isDisabled}
+    className={`h-11 w-11 min-w-0 rounded-full bg-white/10 text-white shadow-lg backdrop-blur-md transition hover:bg-white/20 focus-visible:ring-2 focus-visible:ring-white/80 disabled:cursor-not-allowed disabled:opacity-45 ${className}`}
     onPress={onPress}
   >
     <Icon icon={icon} className="h-5 w-5" />
   </Button>
 );
 
-const MediaStageItem: React.FC<MediaStageItemProps> = ({ item, alt, isActive, onTapImage }) => {
+interface ImageZoomControlsProps {
+  zoom: number;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onResetZoom: () => void;
+  zoomInLabel: string;
+  zoomOutLabel: string;
+  resetZoomLabel: string;
+}
+
+const ImageZoomControls: React.FC<ImageZoomControlsProps> = ({
+  zoom,
+  onZoomIn,
+  onZoomOut,
+  onResetZoom,
+  zoomInLabel,
+  zoomOutLabel,
+  resetZoomLabel,
+}) => (
+  <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-white/10 bg-white/10 px-2 py-1.5 shadow-2xl backdrop-blur-xl">
+    <ViewerButton
+      label={zoomOutLabel}
+      icon="lucide:minus"
+      onPress={onZoomOut}
+      isDisabled={zoom <= MIN_IMAGE_ZOOM}
+      className="h-9 w-9 bg-black/20"
+    />
+    <Button
+      aria-label={resetZoomLabel}
+      title={resetZoomLabel}
+      className="h-9 min-w-[4.25rem] rounded-full bg-black/20 px-3 text-xs font-semibold text-white shadow-lg backdrop-blur-md transition hover:bg-white/20 focus-visible:ring-2 focus-visible:ring-white/80"
+      onPress={onResetZoom}
+    >
+      {Math.round(zoom * 100)}%
+    </Button>
+    <ViewerButton
+      label={zoomInLabel}
+      icon="lucide:plus"
+      onPress={onZoomIn}
+      isDisabled={zoom >= MAX_IMAGE_ZOOM}
+      className="h-9 w-9 bg-black/20"
+    />
+  </div>
+);
+
+const MediaStageItem: React.FC<MediaStageItemProps> = ({ item, alt, isActive, onTapImage, imageZoom, imagePan }) => {
   const { t } = useTranslation();
   const [videoPreviewError, setVideoPreviewError] = React.useState(false);
   const { mediaUrl, posterUrl } = useCachedMedia({
@@ -133,11 +196,16 @@ const MediaStageItem: React.FC<MediaStageItemProps> = ({ item, alt, isActive, on
   }, [displayUrl, item.kind]);
 
   if (item.kind === "image") {
+    const isZoomed = isActive && imageZoom > MIN_IMAGE_ZOOM;
     return (
       <img
         src={displayUrl}
         alt={alt}
-        className={`max-h-full max-w-full select-none object-contain ${onTapImage && isActive ? "cursor-zoom-out" : ""}`}
+        className={`max-h-full max-w-full select-none object-contain will-change-transform ${isZoomed ? "cursor-grab active:cursor-grabbing" : onTapImage && isActive ? "cursor-zoom-in" : ""}`}
+        style={isActive ? {
+          transform: `translate3d(${imagePan.x}px, ${imagePan.y}px, 0) scale(${imageZoom})`,
+          transition: "transform 160ms ease-out",
+        } : undefined}
         draggable={false}
         onClick={isActive ? onTapImage : undefined}
       />
@@ -376,9 +444,14 @@ const MediaStage: React.FC<MediaStageProps> = ({
   onNext,
   onSwipeDown,
   onTapMedia,
+  imageZoom,
+  imagePan,
+  onImagePanChange,
+  onImageZoomChange,
   className = "",
 }) => {
   const pointerStartRef = React.useRef<{ x: number; y: number } | null>(null);
+  const imagePanStartRef = React.useRef<{ x: number; y: number; pan: ImagePan } | null>(null);
   const activePointerIdRef = React.useRef<number | null>(null);
   const pointerSequenceRef = React.useRef(false);
   const suppressClickRef = React.useRef(false);
@@ -391,6 +464,7 @@ const MediaStage: React.FC<MediaStageProps> = ({
   const trackItems = mediaItems.length > 0 ? mediaItems : [media];
   const safeActiveIndex = activeIndex >= 0 && activeIndex < trackItems.length ? activeIndex : 0;
   const activeStageMedia = trackItems[safeActiveIndex] || media;
+  const isZoomedImage = activeStageMedia.kind === "image" && imageZoom > MIN_IMAGE_ZOOM;
 
   const isInteractiveTarget = (target: EventTarget) => (
     target instanceof Element && Boolean(target.closest("button,a,input,textarea,select,[role='button']"))
@@ -433,9 +507,32 @@ const MediaStage: React.FC<MediaStageProps> = ({
     return Math.sign(offset) * Math.min(resisted, width * 0.45);
   };
 
+  const clampImagePan = React.useCallback((pan: ImagePan, zoom = imageZoom): ImagePan => {
+    if (zoom <= MIN_IMAGE_ZOOM) {
+      return ZERO_IMAGE_PAN;
+    }
+
+    const width = stageRef.current?.clientWidth || (typeof window !== "undefined" ? window.innerWidth : 0);
+    const height = stageRef.current?.clientHeight || (typeof window !== "undefined" ? window.innerHeight : 0);
+    const maxX = Math.max(0, (width * (zoom - 1)) / 2);
+    const maxY = Math.max(0, (height * (zoom - 1)) / 2);
+    return {
+      x: Math.max(-maxX, Math.min(maxX, pan.x)),
+      y: Math.max(-maxY, Math.min(maxY, pan.y)),
+    };
+  }, [imageZoom]);
+
+  React.useEffect(() => {
+    const nextPan = clampImagePan(imagePan);
+    if (nextPan.x !== imagePan.x || nextPan.y !== imagePan.y) {
+      onImagePanChange(nextPan);
+    }
+  }, [clampImagePan, imagePan, onImagePanChange, trackWidth]);
+
   const beginGesture = (x: number, y: number, target: EventTarget) => {
     if (isInteractiveTarget(target)) {
       pointerStartRef.current = null;
+      imagePanStartRef.current = null;
       return false;
     }
 
@@ -444,10 +541,26 @@ const MediaStage: React.FC<MediaStageProps> = ({
     setTrackWidth(getCurrentTrackWidth());
     setIsDragging(true);
     setDragOffset(0);
+
+    if (isZoomedImage) {
+      imagePanStartRef.current = { x, y, pan: imagePan };
+    } else {
+      imagePanStartRef.current = null;
+    }
+
     return true;
   };
 
   const updateGesture = (x: number, y: number) => {
+    const panStart = imagePanStartRef.current;
+    if (panStart) {
+      onImagePanChange(clampImagePan({
+        x: panStart.pan.x + x - panStart.x,
+        y: panStart.pan.y + y - panStart.y,
+      }));
+      return;
+    }
+
     const start = pointerStartRef.current;
     if (!start) return;
 
@@ -470,7 +583,9 @@ const MediaStage: React.FC<MediaStageProps> = ({
 
   const finishGesture = (x: number, y: number) => {
     const start = pointerStartRef.current;
+    const panStart = imagePanStartRef.current;
     pointerStartRef.current = null;
+    imagePanStartRef.current = null;
     setIsDragging(false);
     setDragOffset(0);
     if (!start) return;
@@ -479,6 +594,17 @@ const MediaStage: React.FC<MediaStageProps> = ({
     const deltaY = y - start.y;
     const absX = Math.abs(deltaX);
     const absY = Math.abs(deltaY);
+
+    if (panStart) {
+      if (absX <= TAP_THRESHOLD && absY <= TAP_THRESHOLD && onTapMedia && media.kind === "image") {
+        suppressClickRef.current = true;
+        onTapMedia();
+      } else if (absX > TAP_THRESHOLD || absY > TAP_THRESHOLD) {
+        suppressClickRef.current = true;
+      }
+      return;
+    }
+
     const swipeThreshold = Math.min(96, Math.max(SWIPE_THRESHOLD, getCurrentTrackWidth() * 0.18));
 
     if (absX > swipeThreshold && absX > absY * 1.2) {
@@ -533,6 +659,7 @@ const MediaStage: React.FC<MediaStageProps> = ({
 
   const handlePointerCancel = (event: React.PointerEvent<HTMLElement>) => {
     pointerStartRef.current = null;
+    imagePanStartRef.current = null;
     if (activePointerIdRef.current !== null) {
       event.currentTarget.releasePointerCapture?.(activePointerIdRef.current);
       activePointerIdRef.current = null;
@@ -571,6 +698,15 @@ const MediaStage: React.FC<MediaStageProps> = ({
     onTapMedia();
   };
 
+  const handleWheel = (event: React.WheelEvent<HTMLElement>) => {
+    if (activeStageMedia.kind !== "image") {
+      return;
+    }
+
+    event.preventDefault();
+    onImageZoomChange(event.deltaY < 0 ? IMAGE_ZOOM_STEP : -IMAGE_ZOOM_STEP);
+  };
+
   const slideWidth = isDragging ? getCurrentTrackWidth() : (trackWidth || getCurrentTrackWidth());
   const trackTranslateX = (-safeActiveIndex * slideWidth) + dragOffset;
 
@@ -580,6 +716,7 @@ const MediaStage: React.FC<MediaStageProps> = ({
       data-testid={isHistoryPreview ? "history-media-stage" : "media-viewer-stage"}
       className={`relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-0 py-20 sm:px-8 ${className}`}
       style={{ touchAction: activeStageMedia.kind === "image" ? "none" : "pan-y" }}
+      onWheel={handleWheel}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -608,6 +745,8 @@ const MediaStage: React.FC<MediaStageProps> = ({
                 alt={alt}
                 isActive={isActive}
                 onTapImage={onTapMedia ? handleImageClick : undefined}
+                imageZoom={isActive ? imageZoom : MIN_IMAGE_ZOOM}
+                imagePan={isActive ? imagePan : ZERO_IMAGE_PAN}
               />
             </div>
           );
@@ -668,6 +807,44 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
   const [isHistoryLoading, setIsHistoryLoading] = React.useState(false);
   const [historyError, setHistoryError] = React.useState(false);
   const [historyFilter, setHistoryFilter] = React.useState<MediaHistoryFilter>("all");
+  const [imageZoom, setImageZoom] = React.useState(MIN_IMAGE_ZOOM);
+  const [imagePan, setImagePan] = React.useState<ImagePan>(ZERO_IMAGE_PAN);
+
+  const resetImageZoom = React.useCallback(() => {
+    setImageZoom(MIN_IMAGE_ZOOM);
+    setImagePan(ZERO_IMAGE_PAN);
+  }, []);
+
+  const setClampedImageZoom = React.useCallback((nextZoom: number) => {
+    const clampedZoom = Math.max(MIN_IMAGE_ZOOM, Math.min(MAX_IMAGE_ZOOM, nextZoom));
+    setImageZoom(clampedZoom);
+    if (clampedZoom <= MIN_IMAGE_ZOOM) {
+      setImagePan(ZERO_IMAGE_PAN);
+    }
+  }, []);
+
+  const handleImageZoomChange = React.useCallback((delta: number) => {
+    setImageZoom(prevZoom => {
+      const nextZoom = Math.max(MIN_IMAGE_ZOOM, Math.min(MAX_IMAGE_ZOOM, prevZoom + delta));
+      if (nextZoom <= MIN_IMAGE_ZOOM) {
+        setImagePan(ZERO_IMAGE_PAN);
+      }
+      return nextZoom;
+    });
+  }, []);
+
+  const handleZoomIn = React.useCallback(() => {
+    handleImageZoomChange(IMAGE_ZOOM_STEP);
+  }, [handleImageZoomChange]);
+
+  const handleZoomOut = React.useCallback(() => {
+    handleImageZoomChange(-IMAGE_ZOOM_STEP);
+  }, [handleImageZoomChange]);
+
+  const handleToggleImageZoom = React.useCallback(() => {
+    if (!activeMedia || activeMedia.kind !== "image") return;
+    setClampedImageZoom(imageZoom > MIN_IMAGE_ZOOM ? MIN_IMAGE_ZOOM : DEFAULT_ZOOMED_IMAGE_SCALE);
+  }, [activeMedia, imageZoom, setClampedImageZoom]);
 
   const loadHistory = React.useCallback(async (
     mode: "reset" | "more",
@@ -751,6 +928,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
     if (!isOpen) {
       setIsHistoryOpen(false);
       setIsHistoryPreviewOpen(false);
+      resetImageZoom();
       return undefined;
     }
 
@@ -790,7 +968,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [hasViewedHistoryItem, isHistoryOpen, isHistoryPreviewOpen, isOpen, onClose]);
+  }, [hasViewedHistoryItem, isHistoryOpen, isHistoryPreviewOpen, isOpen, onClose, resetImageZoom]);
 
   React.useEffect(() => {
     if (!isHistoryOpen) {
@@ -842,6 +1020,12 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
     return carouselItems.findIndex(item => isSameMedia(item, activeMedia));
   }, [activeMedia, carouselItems]);
 
+  const activeMediaKey = activeMedia ? getMediaKey(activeMedia) : "";
+
+  React.useEffect(() => {
+    resetImageZoom();
+  }, [activeMediaKey, resetImageZoom]);
+
   const goToMedia = React.useCallback(async (offset: -1 | 1) => {
     if (!activeMedia) return;
 
@@ -879,7 +1063,16 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
       if (target instanceof Element && target.closest("input,textarea,select")) {
         return;
       }
-      if (event.key === "ArrowLeft") {
+      if (activeMedia?.kind === "image" && (event.key === "+" || event.key === "=")) {
+        event.preventDefault();
+        handleZoomIn();
+      } else if (activeMedia?.kind === "image" && event.key === "-") {
+        event.preventDefault();
+        handleZoomOut();
+      } else if (activeMedia?.kind === "image" && event.key === "0") {
+        event.preventDefault();
+        resetImageZoom();
+      } else if (event.key === "ArrowLeft") {
         event.preventDefault();
         handlePreviousMedia();
       } else if (event.key === "ArrowRight") {
@@ -890,7 +1083,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
 
     window.addEventListener("keydown", handleArrowKey);
     return () => window.removeEventListener("keydown", handleArrowKey);
-  }, [handleNextMedia, handlePreviousMedia, isOpen]);
+  }, [activeMedia?.kind, handleNextMedia, handlePreviousMedia, handleZoomIn, handleZoomOut, isOpen, resetImageZoom]);
 
   const showTemporaryStatus = (type: "download" | "share", value: "done" | "error") => {
     if (type === "download") {
@@ -1017,6 +1210,24 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
   const canGoPrevious = activeMediaIndex > 0 || hasMoreHistory;
   const canGoNext = activeMediaIndex >= 0 && activeMediaIndex < carouselItems.length - 1;
   const activePosition = activeMediaIndex >= 0 ? `${activeMediaIndex + 1} / ${Math.max(carouselItems.length, activeMediaIndex + 1)}` : "";
+  const renderZoomControls = () => activeMedia.kind === "image" ? (
+    <ImageZoomControls
+      zoom={imageZoom}
+      onZoomIn={handleZoomIn}
+      onZoomOut={handleZoomOut}
+      onResetZoom={resetImageZoom}
+      zoomInLabel={t("zoomIn")}
+      zoomOutLabel={t("zoomOut")}
+      resetZoomLabel={t("resetZoom")}
+    />
+  ) : null;
+  const renderActionToolbar = (centerAction: { label: string; icon: string; onPress: () => void }) => (
+    <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-white/10 bg-white/10 px-3 py-2 shadow-2xl backdrop-blur-xl">
+      <ViewerButton label={t("downloadMedia")} icon={downloadIcon} onPress={() => { void handleDownload(); }} />
+      <ViewerButton label={centerAction.label} icon={centerAction.icon} onPress={centerAction.onPress} />
+      <ViewerButton label={t("shareMedia")} icon={shareIcon} onPress={() => { void handleShare(); }} />
+    </div>
+  );
 
   return createPortal(
     <div
@@ -1050,13 +1261,17 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
         nextLabel={t("nextMedia")}
         onPrevious={handlePreviousMedia}
         onNext={handleNextMedia}
+        onTapMedia={handleToggleImageZoom}
+        imageZoom={imageZoom}
+        imagePan={imagePan}
+        onImagePanChange={setImagePan}
+        onImageZoomChange={handleImageZoomChange}
       />
 
-      <footer className="safe-bottom pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center bg-gradient-to-t from-black/80 to-transparent px-4 pt-8">
-        <div className="pointer-events-auto mb-3 flex items-center gap-3 rounded-full border border-white/10 bg-white/10 px-3 py-2 shadow-2xl backdrop-blur-xl">
-          <ViewerButton label={t("downloadMedia")} icon={downloadIcon} onPress={() => { void handleDownload(); }} />
-          <ViewerButton label={t("openMediaHistory")} icon="lucide:grid-3x3" onPress={handleOpenHistory} />
-          <ViewerButton label={t("shareMedia")} icon={shareIcon} onPress={() => { void handleShare(); }} />
+      <footer className="safe-bottom pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col items-center gap-2 bg-gradient-to-t from-black/80 to-transparent px-4 pt-8">
+        {renderZoomControls()}
+        <div className="mb-3">
+          {renderActionToolbar({ label: t("openMediaHistory"), icon: "lucide:grid-3x3", onPress: handleOpenHistory })}
         </div>
       </footer>
 
@@ -1092,7 +1307,17 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
                 onNext={handleNextMedia}
                 onSwipeDown={() => setIsHistoryPreviewOpen(false)}
                 onTapMedia={() => setIsHistoryPreviewOpen(false)}
+                imageZoom={imageZoom}
+                imagePan={imagePan}
+                onImagePanChange={setImagePan}
+                onImageZoomChange={handleImageZoomChange}
               />
+              <footer className="safe-bottom pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col items-center gap-2 bg-gradient-to-t from-black/80 to-transparent px-4 pt-8">
+                {renderZoomControls()}
+                <div className="mb-3">
+                  {renderActionToolbar({ label: t("backToMediaHistory"), icon: "lucide:grid-3x3", onPress: () => setIsHistoryPreviewOpen(false) })}
+                </div>
+              </footer>
             </>
           ) : (
             <>

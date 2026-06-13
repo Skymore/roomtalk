@@ -298,6 +298,21 @@ describe('MessageItem replies', () => {
     expect(screen.getAllByLabelText('downloadMedia').length).toBeGreaterThan(0);
     expect(screen.getAllByLabelText('openMediaHistory').length).toBeGreaterThan(0);
     expect(screen.getAllByLabelText('shareMedia').length).toBeGreaterThan(0);
+    expect(screen.getByLabelText('zoomIn')).toBeTruthy();
+    expect(screen.getByLabelText('zoomOut')).toBeTruthy();
+    expect(screen.getByLabelText('resetZoom').textContent).toBe('100%');
+
+    const activeViewerImage = document.body.querySelector('[data-testid="media-viewer-stage"] [data-active-media="true"] img');
+    expect(activeViewerImage).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('zoomIn'));
+    await waitFor(() => {
+      expect((activeViewerImage as HTMLElement).style.transform).toContain('scale(1.5)');
+    });
+    expect(screen.getByLabelText('resetZoom').textContent).toBe('150%');
+    fireEvent.click(screen.getByLabelText('resetZoom'));
+    await waitFor(() => {
+      expect((activeViewerImage as HTMLElement).style.transform).toContain('scale(1)');
+    });
 
     fireEvent.click(screen.getByLabelText('close'));
     await waitFor(() => {
@@ -362,9 +377,14 @@ describe('MessageItem replies', () => {
     expect(screen.getByLabelText('closeMediaHistory')).toBeTruthy();
 
     fireEvent.click(screen.getByLabelText('openMediaItem'));
+    const historySection = screen.getByRole('region', { name: 'mediaHistory' });
     await waitFor(() => {
-      expect(screen.getByLabelText('backToMediaHistory')).toBeTruthy();
+      expect(within(historySection).getAllByLabelText('backToMediaHistory').length).toBeGreaterThan(0);
     });
+    expect(within(historySection).getAllByLabelText('downloadMedia').length).toBeGreaterThan(0);
+    expect(within(historySection).getAllByLabelText('shareMedia').length).toBeGreaterThan(0);
+    expect(within(historySection).getByLabelText('zoomIn')).toBeTruthy();
+    expect(within(historySection).getByLabelText('resetZoom').textContent).toBe('100%');
     const viewerImages = screen.getAllByAltText('sharedImage');
     expect(viewerImages.some(element => element.getAttribute('src') === 'https://signed.example/rooms/room-1/asset-2.webp')).toBe(true);
 
@@ -372,12 +392,11 @@ describe('MessageItem replies', () => {
     expect(historyPreviewImage).toBeTruthy();
     fireEvent.click(historyPreviewImage as Element);
     await waitFor(() => {
-      expect(screen.queryByLabelText('backToMediaHistory')).toBeNull();
+      expect(within(historySection).queryAllByLabelText('backToMediaHistory')).toHaveLength(0);
     });
     expect(screen.getByText(/mediaHistoryRecentMonths/)).toBeTruthy();
 
     expect(screen.queryByLabelText('closeMediaHistory')).toBeNull();
-    const historySection = screen.getByRole('region', { name: 'mediaHistory' });
     fireEvent.click(within(historySection).getByLabelText('close'));
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: 'mediaViewer' })).toBeNull();
