@@ -34,6 +34,21 @@ describe('A2UI tool prompt', () => {
   it('documents the opt-in follow-up wiring convention', () => {
     const prompt = buildA2UIToolSystemPrompt('Base prompt.');
     assert.match(prompt, new RegExp(`context.*${A2UI_FOLLOW_UP_CONTEXT_KEY}`));
+    assert.match(prompt, /If .+ and only if .+ clicking it should continue the conversation/);
+    assert.match(prompt, /purely cosmetic or client-only actions/);
+  });
+
+  it('constrains A2UI generation to data-first templates and honest actions', () => {
+    const prompt = buildA2UIToolSystemPrompt('Base prompt.');
+
+    assert.match(prompt, /template-first, data-first/);
+    assert.match(prompt, /source of truth/);
+    assert.match(prompt, /derived display values/);
+    assert.match(prompt, /recompute them from the source of truth/);
+    assert.match(prompt, /do not expose a Slider bound to `progress`/);
+    assert.match(prompt, /Do not claim that a button completed real payment, submission, deletion, booking/);
+    assert.match(prompt, /backend reducer/);
+    assert.match(prompt, /at most one assistant follow-up Button/);
   });
 });
 

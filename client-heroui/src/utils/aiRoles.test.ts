@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addAIRole,
   AIRole,
+  a2UIDemoSystemPrompt,
   defaultAIRoles,
   deleteAIRole,
   generateAIRoleDraft,
@@ -9,6 +10,7 @@ import {
   getAIRoleDisplayPrompt,
   getSavedAIRoles,
   getSelectedAIRole,
+  previousA2UIDemoSystemPrompt,
   saveAIRoles,
   updateAIRole,
 } from "./aiRoles";
@@ -66,6 +68,34 @@ describe("aiRoles", () => {
 
     saveAIRoles([customRole]);
     expect(getSavedAIRoles()).toEqual([customRole]);
+  });
+
+  it("refreshes only the old built-in A2UI demo prompt during default migration", () => {
+    const oldDemoRole = {
+      ...defaultAIRoles[1],
+      systemPrompt: previousA2UIDemoSystemPrompt,
+    };
+    const customizedDemoRole = {
+      ...defaultAIRoles[1],
+      systemPrompt: "My own A2UI behavior.",
+    };
+
+    localStorage.setItem("aiRoles", JSON.stringify([oldDemoRole]));
+    expect(getSavedAIRoles()[0].systemPrompt).toBe(a2UIDemoSystemPrompt);
+
+    localStorage.removeItem("aiRolesDefaultVersion");
+    localStorage.setItem("aiRoles", JSON.stringify([customizedDemoRole]));
+    expect(getSavedAIRoles()[0].systemPrompt).toBe(customizedDemoRole.systemPrompt);
+  });
+
+  it("keeps the built-in A2UI demo role data-first and follow-up constrained", () => {
+    const prompt = defaultAIRoles[1].systemPrompt;
+
+    expect(prompt).toContain("template-first, data-first");
+    expect(prompt).toContain("source of truth");
+    expect(prompt).toContain("Derived fields");
+    expect(prompt).toContain("Use follow-up actions only");
+    expect(prompt).toContain("Do not promise real payment");
   });
 
   it("translates built-in role names and prompts while keeping custom roles literal", () => {
