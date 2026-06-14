@@ -35,10 +35,9 @@ import { startStreamingTranscription, StreamingTranscriber } from '../utils/stre
 import { MessageInputAIControls, MessageInputAISettingsButton } from './MessageInputAIControls';
 import { PostingScheduleDetails } from './PostingScheduleDetails';
 import {
-  getStoredAIContextMessageLimit,
   normalizeAIContextMessageLimit,
-  saveStoredAIContextMessageLimit,
 } from '../utils/aiContext';
+import { defaultRoomAISettings, getStoredRoomAISettings, updateStoredRoomAISettings } from '../utils/aiSettings';
 import {
   getKeyboardCompositionSnapshot,
   isConfirmingIMEComposition,
@@ -209,14 +208,16 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     handleAddRole,
     handleUpdateRole,
     handleDeleteRole,
-  } = useAIRoles();
+  } = useAIRoles(roomId);
   const {
     aiModels,
     defaultAIModel,
     selectedAIModel,
     handleModelChange,
-  } = useAIModelSelection();
-  const [aiContextMessageLimit, setAIContextMessageLimit] = useState(() => getStoredAIContextMessageLimit());
+  } = useAIModelSelection(roomId);
+  const [aiContextMessageLimit, setAIContextMessageLimit] = useState(() => (
+    getStoredRoomAISettings(roomId, defaultRoomAISettings(defaultAIModel)).maxContextMessages
+  ));
 
   // 新增角色设置模态框的状态
   const { isOpen: isAISettingsOpen, onOpen: onAISettingsOpen, onClose: onAISettingsClose } = useDisclosure();
@@ -225,8 +226,12 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   const handleAIContextMessageLimitChange = useCallback((limit: number) => {
     const normalizedLimit = normalizeAIContextMessageLimit(limit);
     setAIContextMessageLimit(normalizedLimit);
-    saveStoredAIContextMessageLimit(normalizedLimit);
-  }, []);
+    updateStoredRoomAISettings(roomId, { maxContextMessages: normalizedLimit }, defaultRoomAISettings(defaultAIModel));
+  }, [defaultAIModel, roomId]);
+
+  useEffect(() => {
+    setAIContextMessageLimit(getStoredRoomAISettings(roomId, defaultRoomAISettings(defaultAIModel)).maxContextMessages);
+  }, [defaultAIModel, roomId]);
 
   const buildReplyReference = useCallback((message: Message | null): Message['replyTo'] => {
     if (!message) return undefined;

@@ -133,7 +133,9 @@ export const updateAIRole = (roles: AIRole[], updatedRole: AIRole) => {
 };
 
 export const getSelectedAIRole = (roles: AIRole[], selectedRoleId: string) => {
-  return roles.find(role => role.id === selectedRoleId) || roles[0] || defaultAIRoles[0];
+  return roles.find(role => role.id === selectedRoleId)
+    || roles.find(role => role.id === defaultAIRoles[0].id)
+    || defaultAIRoles[0];
 };
 
 export const deleteAIRole = (
