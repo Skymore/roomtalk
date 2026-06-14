@@ -43,7 +43,7 @@ export const POSTGRES_SCHEMA_SQL = [
     client_id TEXT NOT NULL,
     content TEXT NOT NULL,
     timestamp TIMESTAMPTZ NOT NULL,
-    message_type TEXT NOT NULL CHECK (message_type IN ('text', 'ai', 'media')),
+    message_type TEXT NOT NULL CHECK (message_type IN ('text', 'ai', 'media', 'sticker')),
     username TEXT,
     avatar JSONB,
     mime_type TEXT,
@@ -68,7 +68,7 @@ export const POSTGRES_SCHEMA_SQL = [
     SET message_type = 'media'
     WHERE message_type IN ('image', 'voice', 'audio', 'video')`,
   `ALTER TABLE room_messages ADD CONSTRAINT room_messages_message_type_check
-    CHECK (message_type IN ('text', 'ai', 'media'))`,
+    CHECK (message_type IN ('text', 'ai', 'media', 'sticker'))`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_room_messages_room_position
     ON room_messages (room_id, position)`,
   `CREATE INDEX IF NOT EXISTS idx_room_messages_room_timestamp
