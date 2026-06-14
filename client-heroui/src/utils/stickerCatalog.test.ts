@@ -62,6 +62,17 @@ describe('sticker catalog (client)', () => {
     expect(mod.searchStickers('', 1)).toEqual([]);
   });
 
+  it('inlineStickerQuery fires only for 1-2 CJK characters', async () => {
+    const { inlineStickerQuery } = await importFresh();
+    expect(inlineStickerQuery('哭')).toBe('哭');
+    expect(inlineStickerQuery(' 打工 ')).toBe('打工');
+    expect(inlineStickerQuery('打工人')).toBe('');   // 3 chars
+    expect(inlineStickerQuery('hi')).toBe('');        // not CJK
+    expect(inlineStickerQuery('哭 ')).toBe('哭');
+    expect(inlineStickerQuery('')).toBe('');
+    expect(inlineStickerQuery('哭啊!')).toBe('');     // trailing punctuation
+  });
+
   it('degrades to an empty catalog when the request fails', async () => {
     mockFetch(null, false);
     const mod = await importFresh();

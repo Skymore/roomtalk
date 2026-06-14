@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   Button,
   Card,
@@ -9,7 +9,8 @@ import {
 } from "@heroui/react";
 import { Icon } from '@iconify/react';
 import { requestAIResponse, sendMessage, sendMessageAndAskAI, sendSticker, uploadMediaMessage } from '../utils/socket';
-import { useRecentStickers } from '../hooks/useStickers';
+import { useRecentStickers, useStickerSearch } from '../hooks/useStickers';
+import { inlineStickerQuery } from '../utils/stickerCatalog';
 import { StickerPicker } from './StickerPicker';
 import { useTranslation } from 'react-i18next';
 import imageCompression from 'browser-image-compression';
@@ -335,6 +336,16 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     setCurrentInputText('');
     setErrorMessage(null);
   }, []);
+
+  // Inline sticker hint: when the editor holds just a short keyword (1-2 CJK
+  // chars), surface matching stickers above the input for one-tap sending.
+  const stickerQuery = useMemo(() => inlineStickerQuery(currentInputText), [currentInputText]);
+  const inlineStickerSuggestions = useStickerSearch(stickerQuery, 8);
+
+  const handleInlineStickerSelect = useCallback((stickerId: string) => {
+    clearEditorImmediately();
+    void handleSelectSticker(stickerId);
+  }, [clearEditorImmediately, handleSelectSticker]);
 
   // 将编辑器内容解析为ContentItem数组
   const parseEditorContent = useCallback((): MessageContentItem[] => {
@@ -1328,6 +1339,27 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               >
                 <Icon icon="lucide:x" className="h-3.5 w-3.5" />
               </Button>
+            </div>
+          )}
+
+          {!isVoiceMode && inlineStickerSuggestions.length > 0 && (
+            <div
+              role="listbox"
+              aria-label={t('stickers')}
+              className="mx-0 flex basis-full items-center gap-1 overflow-x-auto rounded-md bg-[#f0eee6] px-2 py-1.5 dark:bg-[#242421] sm:mx-3 sm:mt-2"
+            >
+              {inlineStickerSuggestions.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  aria-label={s.keywords[0] || t('sticker')}
+                  title={s.keywords[0] || ''}
+                  onClick={() => handleInlineStickerSelect(s.id)}
+                  className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg p-1 transition-colors hover:bg-[#e8e6dc] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#c96442] dark:hover:bg-[#30302e] dark:focus-visible:ring-[#d97757]"
+                >
+                  <img src={s.url} alt="" loading="lazy" draggable={false} className="max-h-full max-w-full object-contain" />
+                </button>
+              ))}
             </div>
           )}
 

@@ -53,6 +53,15 @@ export const loadStickerCatalog = (): Promise<StickerCatalog> => {
 
 export const getStickerCatalogSync = (): StickerCatalog | null => cache;
 
+/**
+ * The inline-hint trigger: returns the keyword to search when the composer holds
+ * just a short keyword (1-2 CJK characters), else an empty string (no hint).
+ */
+export const inlineStickerQuery = (text: string): string => {
+  const trimmed = text.trim();
+  return /^[一-鿿]{1,2}$/.test(trimmed) ? trimmed : '';
+};
+
 export const getStickerById = (id: string): StickerDef | undefined => cache?.stickers[id];
 
 export const getStickerUrl = (id: string): string | undefined => cache?.stickers[id]?.url;
