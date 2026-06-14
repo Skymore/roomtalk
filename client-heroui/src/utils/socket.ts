@@ -1,6 +1,7 @@
 import { default as io } from 'socket.io-client';
 import { v4 as uuidv4 } from 'uuid';
 import { clearStoredUsername, saveUsername } from './appPersistence';
+import { apiPath } from './apiBase';
 import {
   A2UIActionEvent,
   AudioTranscription,
@@ -58,7 +59,6 @@ let pendingRegistrationSocketId: string | null = null;
 const SEND_MESSAGE_ACK_TIMEOUT_MS = 15000;
 const SEND_MESSAGE_CONNECT_TIMEOUT_MS = 15000;
 const ROOM_LOOKUP_TIMEOUT_MS = 30000;
-const API_BASE_URL = (import.meta.env.VITE_SOCKET_URL || '').replace(/\/$/, '');
 const CLIENT_AUTH_TOKEN_KEY = 'clientAuthToken';
 
 export type RoomJoinResult = {
@@ -728,7 +728,7 @@ type CreateMediaUploadResponse = {
   expiresAt: string;
 };
 
-export const apiPath = (path: string) => (/^[a-z][a-z\d+\-.]*:\/\//i.test(path) ? path : `${API_BASE_URL}${path}`);
+export { apiPath };
 
 const parseApiError = async (response: Response, fallback: string) => {
   try {

@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('./socket', () => ({ apiPath: (p: string) => `http://test${p}` }));
+vi.mock('./apiBase', () => ({ apiPath: (p: string) => `http://test${p}` }));
 
 const CATALOG = {
   version: 1,
