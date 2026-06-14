@@ -698,6 +698,29 @@ export const sendMessage = (
   });
 };
 
+// Send a sticker as a message. Unlike media, this never uploads bytes: it sends a
+// stable catalog reference (stickerId) over the same send_message channel.
+export const sendSticker = (
+  stickerId: string,
+  roomId: string,
+  username?: string,
+  avatar?: { text: string; color: string },
+  replyToMessageId?: string,
+  clientMessageId?: string,
+): Promise<Message> => {
+  return emitWithAck<SendMessageAckResponse>(
+    'send_message',
+    { content: stickerId, roomId, messageType: 'sticker', username, avatar, replyToMessageId, clientMessageId },
+    'Timed out while sending sticker',
+    'Failed to send sticker',
+  ).then((response) => {
+    if (!response.message) {
+      throw new Error('Server did not return saved sticker message');
+    }
+    return response.message;
+  });
+};
+
 type CreateMediaUploadResponse = {
   assetId: string;
   uploadUrl: string;

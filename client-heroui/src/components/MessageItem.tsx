@@ -16,6 +16,7 @@ import { A2UIActionEvent, AudioTranscription, Message, MessageMediaAsset, RoomPe
 import { useTranslation } from "react-i18next";
 import { useIsTouchDevice } from "../hooks/useIsTouchDevice";
 import { useCachedMedia } from "../hooks/useCachedMedia";
+import { useStickerUrl } from "../hooks/useStickers";
 import { MediaViewerModal } from "./MediaViewerModal";
 import { getVideoPreviewUrl } from "../utils/videoPreview";
 import { buildMediaFilename, saveUrlAsFile } from "../utils/mediaDownload";
@@ -95,6 +96,9 @@ async function copyImageToClipboard(imageSource: string): Promise<boolean> {
 }
 
 const getReplyMediaLabel = (replyTo: ReplyReferenceValue, t: Translate) => {
+  if (replyTo.messageType === "sticker") {
+    return t("sticker");
+  }
   if (replyTo.messageType !== "media") {
     return replyTo.preview;
   }
@@ -232,6 +236,8 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const isAudio = isMedia && mediaKind === "audio";
   const isVideo = isMedia && mediaKind === "video";
   const isFile = isMedia && mediaKind === "file";
+  const isSticker = message.messageType === "sticker";
+  const stickerUrl = useStickerUrl(isSticker ? message.content : undefined);
   const isText = message.messageType === "text";
   const isAI = message.clientId === 'ai_assistant';
   const isStreaming = isAI && message.status === 'streaming';
@@ -714,6 +720,24 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
             <div className="w-fit max-w-full">
               {replyReference}
               {mediaContent}
+            </div>
+          ) : isSticker ? (
+            // ========== Sticker Message ==========
+            <div className="w-fit max-w-full">
+              {replyReference}
+              {stickerUrl ? (
+                <img
+                  src={stickerUrl}
+                  alt={t('sticker')}
+                  className="block h-auto w-[120px] max-w-full select-none sm:w-[140px]"
+                  draggable={false}
+                  loading="lazy"
+                />
+              ) : (
+                <div className="flex h-[120px] w-[120px] items-center justify-center rounded-xl bg-[#e8e6dc] text-[#8a8a85] dark:bg-[#30302e] sm:h-[140px] sm:w-[140px]">
+                  <Icon icon="lucide:sticker" className="h-6 w-6" />
+                </div>
+              )}
             </div>
           ) : (
             // ========== Text Message (Display Mode) ==========
