@@ -1,9 +1,11 @@
 import { v4 as uuidv4 } from 'uuid';
 import {
   createReplyReference,
+  createStickerMessage,
   createUserMessage,
 } from '../services/messageDomain';
 import { notifyRoomMessageBestEffort } from '../services/pushNotifications';
+import { isValidStickerId } from '../stickers/catalog';
 import { A2UIActionEvent, Message } from '../types';
 import { hasRoomAccess } from './roomAccess';
 import { authorizeRoomAction, getRoomMessage } from './roomAuthorization';
@@ -71,7 +73,7 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
     messageData: {
       roomId: string;
       content: string;
-      messageType?: 'text' | 'media' | 'image' | 'voice';
+      messageType?: 'text' | 'media' | 'image' | 'voice' | 'sticker';
       username?: string;
       avatar?: {
         text: string;
@@ -115,13 +117,21 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       return;
     }
 
-    if (messageData.messageType && messageData.messageType !== 'text') {
+    const messageType = messageData.messageType ?? 'text';
+    if (messageType !== 'text' && messageType !== 'sticker') {
       socketLogger.warn('Client tried to send media through text message socket path', { socketId: socket.id, clientId, roomId: messageData.roomId, messageType: messageData.messageType });
       callback?.({ success: false, error: 'Media messages must use the media upload API' });
       return;
     }
 
-    if (typeof messageData.content !== 'string' || !messageData.content.trim()) {
+    if (messageType === 'sticker') {
+      // Stickers carry only a stable catalog reference; reject anything not in the catalog.
+      if (!isValidStickerId(messageData.content)) {
+        socketLogger.warn('Client tried to send an unknown sticker', { socketId: socket.id, clientId, roomId: messageData.roomId, stickerId: messageData.content });
+        callback?.({ success: false, error: 'Unknown sticker' });
+        return;
+      }
+    } else if (typeof messageData.content !== 'string' || !messageData.content.trim()) {
       callback?.({ success: false, error: 'Message content is required' });
       return;
     }
@@ -137,16 +147,27 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       replyTo = createReplyReference(quotedMessage);
     }
 
-    const message = createUserMessage({
-      id: uuidv4(),
-      clientId,
-      content: messageData.content,
-      roomId: messageData.roomId,
-      username: messageData.username,
-      avatar: messageData.avatar,
-      replyTo,
-      clientMessageId: messageData.clientMessageId,
-    });
+    const message = messageType === 'sticker'
+      ? createStickerMessage({
+          id: uuidv4(),
+          clientId,
+          stickerId: messageData.content,
+          roomId: messageData.roomId,
+          username: messageData.username,
+          avatar: messageData.avatar,
+          replyTo,
+          clientMessageId: messageData.clientMessageId,
+        })
+      : createUserMessage({
+          id: uuidv4(),
+          clientId,
+          content: messageData.content,
+          roomId: messageData.roomId,
+          username: messageData.username,
+          avatar: messageData.avatar,
+          replyTo,
+          clientMessageId: messageData.clientMessageId,
+        });
 
     const loggableMessage = socketLogger.formatMessageForLog(message);
     socketLogger.info('Received WebSocket message', loggableMessage);

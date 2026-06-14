@@ -25,7 +25,9 @@ export function createReplyReference(message: Message): MessageReplyReference {
   const mediaKind = mediaAsset?.kind;
   const textualPreview = message.messageType === 'media'
     ? getMediaAttachmentLabel(mediaKind)
-    : collapseInlineText(message.content);
+    : message.messageType === 'sticker'
+      ? '[Sticker]'
+      : collapseInlineText(message.content);
   const preview = textualPreview.slice(0, MAX_REPLY_PREVIEW_LENGTH).trim() || '[Empty message]';
 
   const reference: MessageReplyReference = {
@@ -39,6 +41,9 @@ export function createReplyReference(message: Message): MessageReplyReference {
   }
   if (message.messageType === 'media' && mediaAsset) {
     reference.mediaAsset = { ...mediaAsset };
+  }
+  if (message.messageType === 'sticker') {
+    reference.stickerId = message.content;
   }
   return reference;
 }
@@ -145,6 +150,33 @@ export function createMediaMessage(input: {
     replyTo: input.replyTo,
     clientMessageId: input.clientMessageId,
     mediaAsset,
+  };
+}
+
+export function createStickerMessage(input: {
+  id: string;
+  clientId: string;
+  roomId: string;
+  stickerId: string;
+  username?: string;
+  avatar?: AvatarPayload;
+  replyTo?: MessageReplyReference;
+  clientMessageId?: string;
+  now?: Date;
+}): Message {
+  return {
+    id: input.id,
+    clientId: input.clientId,
+    // A sticker message stores only the stable stickerId reference, never image
+    // bytes — the image lives once in the shared catalog.
+    content: input.stickerId,
+    roomId: input.roomId,
+    timestamp: (input.now || new Date()).toISOString(),
+    messageType: 'sticker',
+    username: normalizeDisplayName(input.username),
+    avatar: input.avatar,
+    replyTo: input.replyTo,
+    clientMessageId: input.clientMessageId,
   };
 }
 
