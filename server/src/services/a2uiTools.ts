@@ -277,7 +277,7 @@ export const buildA2UIToolSystemPrompt = (systemPrompt: string) => `${systemProm
 
 A2UI streaming UI capability:
 - You may call the \`${A2UI_TOOL_NAME}\` tool to stream rich UI updates while answering.
-- Use this tool for dashboards, task cards, comparisons, forms, checklists, or when explicitly asked for an A2UI demo.
+- Use this tool for dashboards, task cards, comparisons, forms, checklists, or when explicitly asked for an A2UI demo. Treat A2UI as a template-first, data-first visual enhancement to the answer, not as an unrestricted application runtime.
 - Do not print A2UI JSON in markdown. Use the tool only.
 - All messages must use \`version: "v0.9"\`.
 - To create a surface, first send:
@@ -292,9 +292,12 @@ A2UI streaming UI capability:
 - Component reference (use these exact shapes; define each child as its own component with an id, never inline child objects):
 ${buildA2UIComponentGuide()}
 - Use ChoicePicker for single or multiple choice inputs, Tabs for compact multi-section content, Modal for details opened from a trigger component, and Image/Video/AudioPlayer only when you have a concrete URL to render.
+- Keep the data model source-first. Pick one source of truth for mutable state, such as \`tasks[].done\`, \`selectedOption\`, or \`quantity\`. Fields like status text, counts, totals, percentages, and progress are derived display values; recompute them from the source of truth before every \`updateDataModel\`.
+- Do not bind user controls to derived fields when another control edits the underlying source. For example, if CheckBox controls edit \`tasks[].done\`, do not expose a Slider bound to \`progress\`; compute progress from the tasks instead.
+- Do not claim that a button completed real payment, submission, deletion, booking, external API work, or other business side effects unless the product has a real backend reducer for that action. Without such a reducer, label it as a draft, preview, local selection, explanation, or assistant follow-up.
 - Prefer incremental updates: create the surface early, then update components/data as the answer becomes clearer.
 - Interactive follow-ups: a component's \`action\` reports a click back to you. If — and only if — clicking it should continue the conversation (you produce a new answer / new UI), set \`"context": { "${A2UI_FOLLOW_UP_CONTEXT_KEY}": true }\` inside that action's event. The server will then start a new assistant turn carrying the click. Decide per component which clicks deserve a follow-up; leave the flag off for purely cosmetic or client-only actions.
-- For the A2UI demo role, if the latest user message is exactly "hi" or "HI", always trigger a compact but non-trivial A2UI demo surface with at least a title, status text, several checklist/detail lines, and one Button action whose event sets \`context.${A2UI_FOLLOW_UP_CONTEXT_KEY}=true\`.`;
+- For the A2UI demo role, if the latest user message is exactly "hi" or "HI", always trigger a compact but non-trivial A2UI demo surface with at least a title, status text, several checklist/detail lines, and one or more data-bound controls. Include at most one assistant follow-up Button whose event sets \`context.${A2UI_FOLLOW_UP_CONTEXT_KEY}=true\`; leave local-only controls without the follow-up flag.`;
 
 // An action is "wired" to the agent only when the model explicitly opted in by
 // setting context.followUp === true on the event (see buildA2UIToolSystemPrompt).

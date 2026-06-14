@@ -13,6 +13,20 @@ export interface AIRoleDraft {
   systemPrompt: string;
 }
 
+export const previousA2UIDemoSystemPrompt = "You are an A2UI streaming demo assistant. If the latest user message is exactly HI, hi, or Hi, call the A2UI UI tool immediately to create a compact demo surface using the official basic catalog, including layout, status text, tabs or grouped sections, at least one input control such as ChoicePicker/TextField/Slider, and one primary action button. Continue with a short text answer while the UI updates stream. Do not print raw UI JSON.";
+
+export const a2UIDemoSystemPrompt = [
+  "You are an A2UI streaming demo assistant.",
+  "Use A2UI as a template-first, data-first visual enhancement for the answer, not as a fake app backend.",
+  "If the latest user message is exactly HI, hi, or Hi, call the A2UI UI tool immediately to create a compact demo surface using the official basic catalog.",
+  "The demo should show a data-bound card with layout, status text, tabs or grouped sections, and at least one input control such as ChoicePicker, TextField, CheckBox, or Slider.",
+  "Keep source data as the source of truth. Derived fields such as status text, counts, and progress must be recomputed from that source data before each update.",
+  "Do not bind controls to derived progress/count fields when another control edits the source data.",
+  "Use follow-up actions only when a click should ask the assistant to produce a new answer or replace the surface; leave purely local controls without followUp.",
+  "Do not promise real payment, submission, deletion, booking, or business completion unless the product has a backend reducer for that action.",
+  "Continue with a short text answer while the UI updates stream. Do not print raw UI JSON.",
+].join(" ");
+
 export const defaultAIRoles: AIRole[] = [
   {
     id: "default",
@@ -24,7 +38,7 @@ export const defaultAIRoles: AIRole[] = [
   {
     id: "a2ui-demo",
     name: "A2UI Demo",
-    systemPrompt: "You are an A2UI streaming demo assistant. If the latest user message is exactly HI, hi, or Hi, call the A2UI UI tool immediately to create a compact demo surface using the official basic catalog, including layout, status text, tabs or grouped sections, at least one input control such as ChoicePicker/TextField/Slider, and one primary action button. Continue with a short text answer while the UI updates stream. Do not print raw UI JSON.",
+    systemPrompt: a2UIDemoSystemPrompt,
     color: "warning",
     icon: "lucide:layout-dashboard",
   },
@@ -46,7 +60,7 @@ export const defaultAIRoles: AIRole[] = [
 
 const AI_ROLES_KEY = "aiRoles";
 const AI_ROLES_DEFAULT_VERSION_KEY = "aiRolesDefaultVersion";
-const CURRENT_DEFAULT_ROLE_VERSION = "2026-06-a2ui-demo";
+const CURRENT_DEFAULT_ROLE_VERSION = "2026-06-a2ui-demo-data-first";
 
 const getApiBaseUrl = () => {
   const socketUrl = import.meta.env.VITE_SOCKET_URL;
@@ -104,8 +118,18 @@ export const getSavedAIRoles = (): AIRole[] => {
     }
 
     const roleIds = new Set(roles.map(role => role?.id));
+    const migratedExistingRoles = roles.map(role => {
+      if (role?.id !== "a2ui-demo" || role.systemPrompt !== previousA2UIDemoSystemPrompt) {
+        return role;
+      }
+
+      return {
+        ...role,
+        systemPrompt: a2UIDemoSystemPrompt,
+      };
+    });
     const migratedRoles = [
-      ...roles,
+      ...migratedExistingRoles,
       ...defaultAIRoles.filter(role => !roleIds.has(role.id)),
     ];
     localStorage.setItem(AI_ROLES_KEY, JSON.stringify(migratedRoles));
