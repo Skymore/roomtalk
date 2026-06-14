@@ -47,14 +47,16 @@ export interface RoomAICostTotal {
 export interface MessageReplyReference {
   messageId: string;
   username?: string;
-  messageType: 'text' | 'ai' | 'media';
+  messageType: MessageType;
   mediaKind?: MediaKind;
+  /** For sticker replies: the referenced stickerId (message.content). */
+  stickerId?: string;
   mediaAsset?: MessageMediaAsset;
   preview: string;
 }
 
 export type MediaKind = 'image' | 'video' | 'audio' | 'file';
-export type MessageType = 'text' | 'ai' | 'media';
+export type MessageType = 'text' | 'ai' | 'media' | 'sticker';
 
 export interface MessageMediaAsset {
   id: string;
