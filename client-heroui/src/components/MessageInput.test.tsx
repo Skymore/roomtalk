@@ -30,11 +30,21 @@ vi.mock('@heroui/react', () => ({
     </button>
   ),
   Card: ({ children, ...props }: any) => <div {...props}>{children}</div>,
+  Popover: ({ children }: any) => <div>{children}</div>,
+  PopoverTrigger: ({ children }: any) => <>{children}</>,
+  PopoverContent: ({ children }: any) => <div>{children}</div>,
   useDisclosure: () => ({
     isOpen: false,
     onOpen: vi.fn(),
     onClose: vi.fn(),
   }),
+}));
+
+vi.mock('../hooks/useStickers', () => ({
+  useStickerCatalog: () => null,
+  useStickerUrl: () => undefined,
+  useStickerSearch: () => [],
+  useRecentStickers: () => ({ recentIds: [], pushRecent: vi.fn() }),
 }));
 
 vi.mock('react-i18next', () => ({

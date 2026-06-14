@@ -1,4 +1,4 @@
-import { apiPath } from './socket';
+import { apiPath } from './apiBase';
 
 /**
  * Client-side sticker catalog: a fixed, shared library fetched once from the
