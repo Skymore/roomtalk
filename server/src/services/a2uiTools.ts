@@ -307,19 +307,173 @@ export const isA2UIFollowUpAction = (action: { context?: Record<string, unknown>
 
 // Keys that are plumbing, not user intent, and should not be echoed back to the model.
 const A2UI_FOLLOW_UP_INTERNAL_CONTEXT_KEYS = new Set([A2UI_FOLLOW_UP_CONTEXT_KEY, 'roomId', 'messageId']);
+const A2UI_FOLLOW_UP_MAX_STRING_LENGTH = 500;
+const A2UI_FOLLOW_UP_MAX_ARRAY_ITEMS = 20;
+const A2UI_FOLLOW_UP_MAX_OBJECT_KEYS = 40;
+const A2UI_FOLLOW_UP_MAX_DEPTH = 5;
+const A2UI_FOLLOW_UP_MAX_CONTEXT_JSON_LENGTH = 6000;
+const TASK_DERIVED_DATA_MODEL_KEYS = new Set(['status', 'progress', 'note', 'subtitle', 'taskSummary']);
+
+const isRecord = (value: unknown): value is Record<string, unknown> => (
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+);
+
+const truncateString = (value: string): string => {
+  if (value.length <= A2UI_FOLLOW_UP_MAX_STRING_LENGTH) {
+    return value;
+  }
+
+  return `${value.slice(0, A2UI_FOLLOW_UP_MAX_STRING_LENGTH)}...[truncated ${value.length - A2UI_FOLLOW_UP_MAX_STRING_LENGTH} chars]`;
+};
+
+const sanitizeContextValue = (
+  value: unknown,
+  depth = 0,
+  seen = new WeakSet<object>(),
+): unknown => {
+  if (typeof value === 'string') {
+    return truncateString(value);
+  }
+
+  if (value === null || typeof value === 'number' || typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value === 'undefined' || typeof value === 'function' || typeof value === 'symbol') {
+    return undefined;
+  }
+
+  if (depth >= A2UI_FOLLOW_UP_MAX_DEPTH) {
+    return '[truncated: depth limit]';
+  }
+
+  if (Array.isArray(value)) {
+    const items = value.slice(0, A2UI_FOLLOW_UP_MAX_ARRAY_ITEMS)
+      .map(item => sanitizeContextValue(item, depth + 1, seen))
+      .filter(item => typeof item !== 'undefined');
+
+    if (value.length > A2UI_FOLLOW_UP_MAX_ARRAY_ITEMS) {
+      items.push({ _truncatedItems: value.length - A2UI_FOLLOW_UP_MAX_ARRAY_ITEMS });
+    }
+
+    return items;
+  }
+
+  if (!isRecord(value)) {
+    return String(value);
+  }
+
+  if (seen.has(value)) {
+    return '[truncated: circular reference]';
+  }
+  seen.add(value);
+
+  const entries = Object.entries(value);
+  const sanitizedEntries = entries.slice(0, A2UI_FOLLOW_UP_MAX_OBJECT_KEYS)
+    .map(([key, entryValue]) => [key, sanitizeContextValue(entryValue, depth + 1, seen)] as const)
+    .filter(([, entryValue]) => typeof entryValue !== 'undefined');
+  const sanitized = Object.fromEntries(sanitizedEntries);
+
+  if (entries.length > A2UI_FOLLOW_UP_MAX_OBJECT_KEYS) {
+    sanitized._truncatedKeys = entries.length - A2UI_FOLLOW_UP_MAX_OBJECT_KEYS;
+  }
+
+  return sanitized;
+};
+
+const sanitizeTaskItem = (task: Record<string, unknown>): Record<string, unknown> => {
+  const sanitized: Record<string, unknown> = {};
+  for (const key of ['id', 'label', 'title', 'text', 'done']) {
+    const value = sanitizeContextValue(task[key]);
+    if (typeof value !== 'undefined') {
+      sanitized[key] = value;
+    }
+  }
+  return sanitized;
+};
+
+const sanitizeTaskDataModel = (dataModel: Record<string, unknown>): Record<string, unknown> | null => {
+  if (!Array.isArray(dataModel.tasks)) {
+    return null;
+  }
+
+  const taskRecords = dataModel.tasks.filter(isRecord);
+  if (taskRecords.length !== dataModel.tasks.length || !taskRecords.every(task => typeof task.done === 'boolean')) {
+    return null;
+  }
+
+  const total = taskRecords.length;
+  const doneCount = taskRecords.filter(task => task.done === true).length;
+  const progressPercent = total > 0 ? Math.round((doneCount / total) * 100) : 0;
+  const sanitized: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(dataModel)) {
+    if (key === 'tasks' || TASK_DERIVED_DATA_MODEL_KEYS.has(key)) {
+      continue;
+    }
+
+    const sanitizedValue = sanitizeContextValue(value);
+    if (typeof sanitizedValue !== 'undefined') {
+      sanitized[key] = sanitizedValue;
+    }
+  }
+
+  sanitized.tasks = taskRecords.slice(0, A2UI_FOLLOW_UP_MAX_ARRAY_ITEMS).map(sanitizeTaskItem);
+  sanitized.taskSummary = {
+    doneCount,
+    total,
+    progressPercent,
+  };
+
+  if (taskRecords.length > A2UI_FOLLOW_UP_MAX_ARRAY_ITEMS) {
+    sanitized.taskSummary = {
+      ...(sanitized.taskSummary as Record<string, unknown>),
+      shownTasks: A2UI_FOLLOW_UP_MAX_ARRAY_ITEMS,
+    };
+  }
+
+  return sanitized;
+};
+
+const sanitizeDataModel = (dataModel: unknown): unknown => {
+  if (!isRecord(dataModel)) {
+    return sanitizeContextValue(dataModel);
+  }
+
+  return sanitizeTaskDataModel(dataModel) ?? sanitizeContextValue(dataModel);
+};
+
+export const sanitizeA2UIFollowUpContext = (context?: Record<string, unknown>): Record<string, unknown> => (
+  Object.fromEntries(
+    Object.entries(context ?? {})
+      .filter(([key]) => !A2UI_FOLLOW_UP_INTERNAL_CONTEXT_KEYS.has(key))
+      .map(([key, value]) => [key, key === 'dataModel' ? sanitizeDataModel(value) : sanitizeContextValue(value)] as const)
+      .filter(([, value]) => typeof value !== 'undefined'),
+  )
+);
+
+const stringifyA2UIFollowUpContext = (context: Record<string, unknown>): string => {
+  const json = JSON.stringify(context);
+  if (json.length <= A2UI_FOLLOW_UP_MAX_CONTEXT_JSON_LENGTH) {
+    return json;
+  }
+
+  return JSON.stringify({
+    summary: 'Context truncated because the A2UI action payload was too large.',
+    preview: `${json.slice(0, A2UI_FOLLOW_UP_MAX_CONTEXT_JSON_LENGTH)}...[truncated ${json.length - A2UI_FOLLOW_UP_MAX_CONTEXT_JSON_LENGTH} chars]`,
+  });
+};
 
 export const buildA2UIFollowUpMessageContent = (action: {
   name: string;
   sourceComponentId: string;
   context?: Record<string, unknown>;
 }): string => {
-  const meaningfulContext = Object.fromEntries(
-    Object.entries(action.context ?? {}).filter(([key]) => !A2UI_FOLLOW_UP_INTERNAL_CONTEXT_KEYS.has(key)),
-  );
+  const meaningfulContext = sanitizeA2UIFollowUpContext(action.context);
   const hasContext = Object.keys(meaningfulContext).length > 0;
   return [
     `The user interacted with the streamed A2UI surface: action "${action.name}" on component "${action.sourceComponentId}".`,
-    hasContext ? `Selection/context: ${JSON.stringify(meaningfulContext)}.` : '',
+    hasContext ? `Selection/context (sanitized, source-focused): ${stringifyA2UIFollowUpContext(meaningfulContext)}.` : '',
     'Continue the conversation based on this interaction, updating or replacing the A2UI surface as needed.',
   ].filter(Boolean).join(' ');
 };

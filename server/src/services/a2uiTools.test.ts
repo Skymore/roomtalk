@@ -7,6 +7,7 @@ import {
   buildA2UIFollowUpMessageContent,
   buildA2UIToolSystemPrompt,
   isA2UIFollowUpAction,
+  sanitizeA2UIFollowUpContext,
 } from './a2uiTools';
 
 describe('A2UI tool prompt', () => {
@@ -61,7 +62,7 @@ describe('A2UI follow-up actions', () => {
     assert.equal(isA2UIFollowUpAction(null), false);
   });
 
-  it('echoes user selection but drops plumbing keys from the follow-up message', () => {
+  it('echoes sanitized user selection but drops plumbing keys from the follow-up message', () => {
     const content = buildA2UIFollowUpMessageContent({
       name: 'submit_choice',
       sourceComponentId: 'cta',
@@ -74,6 +75,7 @@ describe('A2UI follow-up actions', () => {
     });
 
     assert.match(content, /action "submit_choice" on component "cta"/);
+    assert.match(content, /sanitized, source-focused/);
     assert.match(content, /selectedNextStep/);
     assert.doesNotMatch(content, new RegExp(A2UI_FOLLOW_UP_CONTEXT_KEY));
     assert.doesNotMatch(content, /room-1/);
@@ -89,5 +91,75 @@ describe('A2UI follow-up actions', () => {
 
     assert.doesNotMatch(content, /Selection\/context/);
     assert.match(content, /Continue the conversation/);
+  });
+
+  it('recomputes task summary from tasks and removes stale derived display fields', () => {
+    const sanitized = sanitizeA2UIFollowUpContext({
+      [A2UI_FOLLOW_UP_CONTEXT_KEY]: true,
+      dataModel: {
+        title: 'Daily tasks',
+        subtitle: 'stale subtitle',
+        status: '2 / 5 completed',
+        progress: 40,
+        note: 'old note',
+        taskSummary: { doneCount: 2, total: 5, progressPercent: 40 },
+        tasks: [
+          { label: 'Email', done: false },
+          { label: 'Report', done: true },
+          { label: 'Run', done: true },
+          { label: 'Read', done: true },
+          { label: 'Groceries', done: true },
+        ],
+      },
+    });
+
+    assert.deepEqual(sanitized, {
+      dataModel: {
+        title: 'Daily tasks',
+        tasks: [
+          { label: 'Email', done: false },
+          { label: 'Report', done: true },
+          { label: 'Run', done: true },
+          { label: 'Read', done: true },
+          { label: 'Groceries', done: true },
+        ],
+        taskSummary: {
+          doneCount: 4,
+          total: 5,
+          progressPercent: 80,
+        },
+      },
+    });
+
+    const content = buildA2UIFollowUpMessageContent({
+      name: 'task_mark_one_done',
+      sourceComponentId: 'done_btn',
+      context: sanitized,
+    });
+    assert.match(content, /"progressPercent":80/);
+    assert.doesNotMatch(content, /2 \/ 5 completed/);
+    assert.doesNotMatch(content, /"progress":40/);
+  });
+
+  it('bounds large follow-up context before sending it back to the model', () => {
+    const sanitized = sanitizeA2UIFollowUpContext({
+      dataModel: {
+        title: 'Large payload',
+        notes: 'x'.repeat(700),
+        items: Array.from({ length: 30 }, (_, index) => ({ index, label: `Item ${index}` })),
+      },
+    });
+
+    assert.equal((sanitized.dataModel as { notes: string }).notes.length < 700, true);
+    assert.equal((sanitized.dataModel as { items: unknown[] }).items.length, 21);
+    assert.deepEqual((sanitized.dataModel as { items: unknown[] }).items.at(-1), { _truncatedItems: 10 });
+
+    const content = buildA2UIFollowUpMessageContent({
+      name: 'large',
+      sourceComponentId: 'btn',
+      context: { dataModel: sanitized.dataModel },
+    });
+    assert.equal(content.length < 7000, true);
+    assert.match(content, /truncated/);
   });
 });
