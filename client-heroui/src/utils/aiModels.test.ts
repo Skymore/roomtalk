@@ -5,10 +5,8 @@ import {
   FALLBACK_AI_MODEL,
   FALLBACK_AI_MODELS,
   formatModelPrice,
-  getStoredAIModel,
   isPremiumAIModel,
   resolveSelectedAIModel,
-  saveStoredAIModel,
 } from "./aiModels";
 
 class MemoryStorage {
@@ -33,14 +31,6 @@ describe("aiModels", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
     vi.stubGlobal("localStorage", new MemoryStorage());
-  });
-
-  it("stores and reads the selected model id", () => {
-    expect(getStoredAIModel()).toBe("");
-
-    saveStoredAIModel("gpt-5.5");
-
-    expect(getStoredAIModel()).toBe("gpt-5.5");
   });
 
   it("uses DeepSeek as the fallback default and flags high or unknown output prices as premium", () => {

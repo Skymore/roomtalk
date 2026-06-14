@@ -19,7 +19,6 @@ interface AIModelResponse {
   models: AIModelOption[];
 }
 
-const SELECTED_AI_MODEL_KEY = 'roomtalk:selected-ai-model';
 const PREMIUM_OUTPUT_PRICE_THRESHOLD = 10;
 
 export const FALLBACK_AI_MODELS: AIModelOption[] = [
@@ -120,22 +119,6 @@ const getApiBaseUrl = () => {
   }
 
   return socketUrl.replace(/\/$/, '');
-};
-
-export const getStoredAIModel = () => {
-  try {
-    return localStorage.getItem(SELECTED_AI_MODEL_KEY) || '';
-  } catch {
-    return '';
-  }
-};
-
-export const saveStoredAIModel = (model: string) => {
-  try {
-    localStorage.setItem(SELECTED_AI_MODEL_KEY, model);
-  } catch {
-    // Storage can fail in private browsing or restricted contexts.
-  }
 };
 
 export const resolveSelectedAIModel = (

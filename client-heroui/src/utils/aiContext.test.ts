@@ -3,10 +3,8 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import {
   DEFAULT_AI_CONTEXT_MESSAGE_LIMIT,
-  getStoredAIContextMessageLimit,
   MAX_AI_CONTEXT_MESSAGE_LIMIT,
   normalizeAIContextMessageLimit,
-  saveStoredAIContextMessageLimit,
 } from './aiContext';
 
 describe('aiContext settings', () => {
@@ -21,11 +19,9 @@ describe('aiContext settings', () => {
     expect(normalizeAIContextMessageLimit(1001)).toBe(MAX_AI_CONTEXT_MESSAGE_LIMIT);
   });
 
-  it('persists the local AI context message limit', () => {
-    saveStoredAIContextMessageLimit(0);
-    expect(getStoredAIContextMessageLimit()).toBe(0);
-
-    saveStoredAIContextMessageLimit(2500);
-    expect(getStoredAIContextMessageLimit()).toBe(MAX_AI_CONTEXT_MESSAGE_LIMIT);
+  it('falls back for invalid values', () => {
+    expect(normalizeAIContextMessageLimit('')).toBe(DEFAULT_AI_CONTEXT_MESSAGE_LIMIT);
+    expect(normalizeAIContextMessageLimit('12')).toBe(12);
+    expect(normalizeAIContextMessageLimit('12.9')).toBe(12);
   });
 });

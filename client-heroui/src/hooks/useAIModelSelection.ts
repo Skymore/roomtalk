@@ -4,29 +4,35 @@ import {
   FALLBACK_AI_MODEL,
   FALLBACK_AI_MODELS,
   fetchAIModels,
-  getStoredAIModel,
   resolveSelectedAIModel,
-  saveStoredAIModel,
 } from '../utils/aiModels';
+import { defaultRoomAISettings, getStoredRoomAISettings, updateStoredRoomAISettings } from '../utils/aiSettings';
 
-export const useAIModelSelection = () => {
+export const useAIModelSelection = (roomId: string) => {
   const [aiModels, setAiModels] = useState<AIModelOption[]>(FALLBACK_AI_MODELS);
   const [defaultAIModel, setDefaultAIModel] = useState<string>(FALLBACK_AI_MODEL);
-  const [selectedAIModel, setSelectedAIModel] = useState<string>(() => getStoredAIModel() || FALLBACK_AI_MODEL);
+  const [selectedAIModel, setSelectedAIModel] = useState<string>(() => {
+    const settings = getStoredRoomAISettings(roomId, defaultRoomAISettings(FALLBACK_AI_MODEL));
+    return settings.selectedModel || FALLBACK_AI_MODEL;
+  });
 
   useEffect(() => {
     let isMounted = true;
+
+    const storedSettings = getStoredRoomAISettings(roomId, defaultRoomAISettings(FALLBACK_AI_MODEL));
+    setSelectedAIModel(resolveSelectedAIModel(storedSettings.selectedModel, FALLBACK_AI_MODEL, FALLBACK_AI_MODELS));
 
     fetchAIModels()
       .then(({ defaultModel, models }) => {
         if (!isMounted) return;
 
-        const nextModel = resolveSelectedAIModel(getStoredAIModel(), defaultModel, models);
+        const latestSettings = getStoredRoomAISettings(roomId, defaultRoomAISettings(defaultModel));
+        const nextModel = resolveSelectedAIModel(latestSettings.selectedModel, defaultModel, models);
 
         setDefaultAIModel(defaultModel);
         setAiModels(models);
         setSelectedAIModel(nextModel);
-        saveStoredAIModel(nextModel);
+        updateStoredRoomAISettings(roomId, { selectedModel: nextModel }, defaultRoomAISettings(defaultModel));
       })
       .catch(error => {
         console.warn('Failed to load AI models, using fallback models.', error);
@@ -35,11 +41,11 @@ export const useAIModelSelection = () => {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [roomId]);
 
   const handleModelChange = (model: string) => {
     setSelectedAIModel(model);
-    saveStoredAIModel(model);
+    updateStoredRoomAISettings(roomId, { selectedModel: model }, defaultRoomAISettings(defaultAIModel));
   };
 
   return {

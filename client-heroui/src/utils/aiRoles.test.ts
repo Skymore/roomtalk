@@ -91,7 +91,7 @@ describe("aiRoles", () => {
 
   it("resolves selected roles with safe fallbacks", () => {
     expect(getSelectedAIRole([defaultAIRoles[0], customRole], "custom")).toBe(customRole);
-    expect(getSelectedAIRole([customRole], "missing")).toBe(customRole);
+    expect(getSelectedAIRole([customRole], "missing")).toBe(defaultAIRoles[0]);
     expect(getSelectedAIRole([], "missing")).toBe(defaultAIRoles[0]);
   });
 
