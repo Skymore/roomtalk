@@ -21,6 +21,7 @@ import {
   verifyClientPassword,
 } from '../services/clientAuth';
 import { VerifyGoogleCredentialResult, resolveGoogleClientIds, verifyGoogleCredential } from '../services/googleAuth';
+import { getStickerCatalog } from '../stickers/catalog';
 
 interface ApiRouteOptions {
   store: RoomStore;
@@ -1229,6 +1230,13 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
 
   app.get('/api/ai-models', (_req: Request, res: Response) => {
     res.json(getAIModelResponse());
+  });
+
+  // Public sticker catalog: a fixed, shared library clients load once. Stickers are
+  // referenced by id in sticker messages, never re-uploaded per room.
+  app.get('/api/stickers/catalog', (_req: Request, res: Response) => {
+    res.set('Cache-Control', 'public, max-age=300');
+    res.json(getStickerCatalog());
   });
 
   app.post('/api/ai-role-draft', async (req: Request, res: Response) => {

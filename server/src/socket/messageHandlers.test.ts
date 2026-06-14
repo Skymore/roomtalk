@@ -1,6 +1,10 @@
 import assert from 'assert/strict';
-import { describe, it } from 'node:test';
+import { describe, it, before } from 'node:test';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { registerMessageHandlers } from './messageHandlers';
+import { loadStickerCatalog } from '../stickers/catalog';
 import { Message, Room, RoomAICostTotal } from '../types';
 
 type SocketEmit = {
@@ -624,5 +628,76 @@ describe('message socket handlers', () => {
         action,
       }],
     });
+  });
+});
+
+describe('sticker messages over send_message', () => {
+  before(() => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sticker-handler-'));
+    const file = path.join(dir, 'catalog.json');
+    fs.writeFileSync(file, JSON.stringify({
+      version: 1,
+      packs: [{ id: 'xiaokumao', name: '小哭猫', cover: 'xiaokumao/001/01', stickerIds: ['xiaokumao/001/01'] }],
+      stickers: {
+        'xiaokumao/001/01': { id: 'xiaokumao/001/01', url: 'https://cdn.test/x/001/01.jpg', pack: 'xiaokumao', keywords: ['哭'] },
+      },
+    }));
+    process.env.STICKER_CATALOG_PATH = file;
+    loadStickerCatalog();
+  });
+
+  it('rejects a sticker message with an unknown stickerId', async () => {
+    const h = createHarness('client-2');
+    let response: unknown;
+    await h.socket.invoke('send_message', {
+      roomId: 'room-1',
+      content: 'xiaokumao/999/99',
+      messageType: 'sticker',
+    }, (r: unknown) => { response = r; });
+
+    assert.deepEqual(response, { success: false, error: 'Unknown sticker' });
+    assert.equal(h.store.appendedMessages.length, 0);
+    assert.deepEqual(h.io.roomEmits, []);
+  });
+
+  it('accepts a valid sticker and broadcasts a sticker message storing only the id', async () => {
+    const h = createHarness('client-2');
+    let response: { success: boolean; message?: Message } | undefined;
+    await h.socket.invoke('send_message', {
+      roomId: 'room-1',
+      content: 'xiaokumao/001/01',
+      messageType: 'sticker',
+      username: 'Ada',
+      clientMessageId: 'cm-sticker-1',
+    }, (r: { success: boolean; message?: Message }) => { response = r; });
+
+    assert.equal(h.store.appendedMessages.length, 1);
+    const created = h.store.appendedMessages[0];
+    assert.equal(created.messageType, 'sticker');
+    assert.equal(created.content, 'xiaokumao/001/01');
+    assert.equal(created.mediaAsset, undefined);
+    assert.equal(created.clientMessageId, 'cm-sticker-1');
+    assert.deepEqual(h.io.roomEmits, [
+      { roomId: 'client-1', event: 'room_updated', args: [room({ lastActivityAt: created.timestamp })] },
+      { roomId: 'room-1', event: 'new_message', args: [created] },
+    ]);
+    assert.deepEqual(response, { success: true, message: created });
+  });
+
+  it('lets a text message reply to a sticker with a sticker reply reference', async () => {
+    const h = createHarness('client-2');
+    await h.socket.invoke('send_message', {
+      roomId: 'room-1', content: 'xiaokumao/001/01', messageType: 'sticker',
+    }, () => {});
+    const stickerMsg = h.store.appendedMessages[0];
+
+    let response: { success: boolean; message?: Message } | undefined;
+    await h.socket.invoke('send_message', {
+      roomId: 'room-1', content: 'haha', replyToMessageId: stickerMsg.id,
+    }, (r: { success: boolean; message?: Message }) => { response = r; });
+
+    const reply = response?.message?.replyTo;
+    assert.equal(reply?.messageType, 'sticker');
+    assert.equal(reply?.stickerId, 'xiaokumao/001/01');
   });
 });

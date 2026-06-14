@@ -16,6 +16,7 @@ import { PostgresStore } from './repositories/postgresStore';
 import { CompositeRoomStore, RoomStore } from './repositories/store';
 import { AI_ROLE_GENERATOR_MODEL_ID, createAIModelRegistry, DEFAULT_AI_MODEL_ID } from './services/aiModels';
 import { registerApiRoutes } from './routes/apiRoutes';
+import { loadStickerCatalog } from './stickers/catalog';
 import { registerSocketHandlers } from './socket/registerSocketHandlers';
 import { createAIClients } from './services/aiClients';
 import { createAIRoleDraftGenerator } from './services/aiRoleGenerator';
@@ -183,6 +184,8 @@ registerSocketHandlers({
   aiStreamOwnerId,
   assemblyAIApiKey,
 });
+
+loadStickerCatalog();
 
 registerApiRoutes(app, {
   store,
