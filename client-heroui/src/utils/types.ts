@@ -1,13 +1,16 @@
 export interface MessageReplyReference {
   messageId: string;
   username?: string;
-  messageType: 'text' | 'ai' | 'media';
+  messageType: MessageType;
   mediaKind?: MediaKind;
   mediaAsset?: MessageMediaAsset;
+  /** For sticker replies: the referenced stickerId (message.content). */
+  stickerId?: string;
   preview: string;
 }
 
 export type MediaKind = 'image' | 'video' | 'audio' | 'file';
+export type MessageType = 'text' | 'ai' | 'media' | 'sticker';
 
 export interface MessageMediaAsset {
   id: string;
@@ -81,7 +84,7 @@ export interface Message {
   timestamp: string;
   updatedAt?: string;
   roomId: string;
-  messageType: 'text' | 'ai' | 'media';
+  messageType: MessageType;
   username?: string;
   avatar?: {
     text: string;
