@@ -1259,13 +1259,14 @@ export function registerAIHandlers({
       ? latestHistory
       : [...latestHistory, followUpMessage];
 
-    const followUpRequest = payload as { systemPrompt?: unknown; roleName?: unknown; model?: unknown };
+    const followUpRequest = payload as { systemPrompt?: unknown; roleName?: unknown; model?: unknown; maxContextMessages?: unknown };
     await startAIResponse(
       {
         roomId,
         systemPrompt: typeof followUpRequest.systemPrompt === 'string' ? followUpRequest.systemPrompt : undefined,
         roleName: typeof followUpRequest.roleName === 'string' ? followUpRequest.roleName : undefined,
         model: typeof followUpRequest.model === 'string' ? followUpRequest.model : owningMessage.aiModel?.id,
+        maxContextMessages: typeof followUpRequest.maxContextMessages === 'number' ? followUpRequest.maxContextMessages : undefined,
       },
       clientId,
       undefined,

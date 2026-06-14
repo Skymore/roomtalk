@@ -151,6 +151,10 @@ export const sendA2UIAction = (payload: {
   roomId: string;
   messageId: string;
   action: A2UIActionEvent;
+  systemPrompt?: string;
+  roleName?: string;
+  model?: string;
+  maxContextMessages?: number;
 }): Promise<void> => (
   emitWithAck<SocketAckResponse>(
     'a2ui_action',

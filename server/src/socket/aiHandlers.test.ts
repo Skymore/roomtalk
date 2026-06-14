@@ -164,6 +164,7 @@ const createHarness = (options: {
     appendedMessages: [] as Message[],
     upsertedMessages: [] as Message[],
     savedHistories: [] as Message[][],
+    normalizeAIModelCalls: [] as unknown[],
     truncateBeforeCalls: [] as Array<{ roomId: string; messageId: string }>,
     truncateAfterCalls: [] as Array<{ roomId: string; messageId: string }>,
     editAndTruncateCalls: [] as Array<{ roomId: string; messageId: string; newContent: string }>,
@@ -285,7 +286,10 @@ const createHarness = (options: {
     store: store as any,
     socketLogger: logger as any,
     openaiLogger: logger as any,
-    normalizeAIModel: () => options.model || selectedModel,
+    normalizeAIModel: (modelId?: unknown) => {
+      store.normalizeAIModelCalls.push(modelId);
+      return options.model || selectedModel;
+    },
     getAIClientForModel: () => {
       if (options.aiClientWrapper) {
         return options.aiClientWrapper;
@@ -831,6 +835,56 @@ describe('AI socket handlers', () => {
     assert.doesNotMatch(followUp!.content, /followUp/);
     assert.ok(io.roomEmits.some(event => event.event === 'new_message'));
     assert.ok(io.roomEmits.some(event => event.event === 'ai_stream_end'), 'expected a new AI turn to complete');
+  });
+
+  it('uses client-provided role, model, and context settings for A2UI follow-up turns', async () => {
+    process.env.E2E_FAKE_AI = 'false';
+    const createCalls: any[] = [];
+    const openAIClient = {
+      chat: {
+        completions: {
+          create: (request: any) => {
+            createCalls.push(request);
+            return asyncIterable([
+              { choices: [{ delta: { content: 'follow-up response' } }] },
+              { choices: [{ finish_reason: 'stop', delta: {} }], usage: { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15 } },
+            ]);
+          },
+        },
+      },
+    };
+    const olderMessage = message({ id: 'old-msg', content: 'old context' });
+    const owningMessage = a2uiOwningMessage({ id: 'ai-msg-1', content: 'previous A2UI answer' });
+    const { socket, store } = createHarness({
+      messages: [olderMessage, owningMessage],
+      aiClientWrapper: { provider: 'deepseek', client: openAIClient },
+    });
+
+    await socket.invoke('a2ui_action', {
+      roomId: 'room-1',
+      messageId: 'ai-msg-1',
+      systemPrompt: 'Use the selected room role.',
+      roleName: 'A2UI Demo',
+      model: selectedModel.id,
+      maxContextMessages: 1,
+      action: {
+        name: 'submit_choice',
+        surfaceId: 's',
+        sourceComponentId: 'cta',
+        timestamp: '2026-05-03T00:01:00.000Z',
+        context: { followUp: true, dataModel: { selectedNextStep: ['export'] } },
+      },
+    });
+
+    assert.deepEqual(store.normalizeAIModelCalls.at(-1), selectedModel.id);
+    const providerMessages = createCalls[0].messages as Array<{ role: string; content: string }>;
+    assert.match(String(providerMessages[0].content), /Use the selected room role/);
+    const userMessages = providerMessages.filter(item => item.role === 'user');
+    assert.equal(userMessages.length, 1);
+    assert.match(String(userMessages[0].content), /submit_choice/);
+    assert.doesNotMatch(String(userMessages[0].content), /old context/);
+    assert.doesNotMatch(String(userMessages[0].content), /previous A2UI answer/);
+    assert.equal(store.upsertedMessages.at(-1)?.username, 'A2UI Demo');
   });
 
   it('ignores A2UI actions that are not wired for follow-up', async () => {
