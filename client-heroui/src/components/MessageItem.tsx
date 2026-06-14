@@ -20,6 +20,7 @@ import { MediaViewerModal } from "./MediaViewerModal";
 import { getVideoPreviewUrl } from "../utils/videoPreview";
 import { buildMediaFilename, saveUrlAsFile } from "../utils/mediaDownload";
 import { A2UIRenderer } from "./A2UIRenderer";
+import { getRoomAIRequestSettings } from "../utils/aiRequestSettings";
 
 interface MessageItemProps {
   message: Message;
@@ -259,6 +260,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       roomId: message.roomId,
       messageId: message.id,
       action,
+      ...getRoomAIRequestSettings(message.roomId),
     }).catch((error) => {
       console.error("Failed to send A2UI action:", error);
     });

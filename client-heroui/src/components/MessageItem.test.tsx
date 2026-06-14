@@ -37,6 +37,23 @@ vi.mock('./MarkdownContent', () => ({
   MarkdownContent: ({ content }: { content: string }) => <span>{content}</span>,
 }));
 
+vi.mock('./A2UIRenderer', () => ({
+  A2UIRenderer: ({ onAction }: any) => (
+    <button
+      type="button"
+      onClick={() => onAction?.({
+        name: 'refresh',
+        surfaceId: 'surface-1',
+        sourceComponentId: 'refresh_btn',
+        timestamp: '2026-05-03T10:00:00.000Z',
+        context: { followUp: true },
+      })}
+    >
+      a2ui-action
+    </button>
+  ),
+}));
+
 const message = {
   id: 'reply',
   clientId: 'sender',
@@ -55,6 +72,7 @@ const message = {
 
 describe('MessageItem replies', () => {
   beforeEach(() => {
+    localStorage.clear();
     Object.defineProperty(window, 'CSS', {
       configurable: true,
       value: {
@@ -271,6 +289,70 @@ describe('MessageItem replies', () => {
     );
 
     expect(screen.getByText(/network down/)).toBeTruthy();
+  });
+
+  it('sends current room AI settings with A2UI actions', async () => {
+    localStorage.setItem('aiRoles', JSON.stringify([
+      {
+        id: 'default',
+        name: 'Assistant',
+        systemPrompt: 'You are helpful',
+        color: 'secondary',
+        icon: 'lucide:bot',
+      },
+      {
+        id: 'a2ui-demo',
+        name: 'A2UI Demo',
+        systemPrompt: 'Use A2UI',
+        color: 'warning',
+        icon: 'lucide:layout-dashboard',
+      },
+    ]));
+    localStorage.setItem('roomtalk:ai-settings:room-1', JSON.stringify({
+      selectedRoleId: 'a2ui-demo',
+      selectedModel: 'deepseek-v4-pro',
+      maxContextMessages: 1,
+    }));
+    sendA2UIActionMock.mockResolvedValue(undefined);
+
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'ai-message',
+          messageType: 'ai',
+          uiPayload: {
+            format: 'a2ui',
+            version: 'v0.9',
+            messages: [],
+          },
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByText('a2ui-action'));
+
+    await waitFor(() => {
+      expect(sendA2UIActionMock).toHaveBeenCalledWith({
+        roomId: 'room-1',
+        messageId: 'ai-message',
+        action: {
+          name: 'refresh',
+          surfaceId: 'surface-1',
+          sourceComponentId: 'refresh_btn',
+          timestamp: '2026-05-03T10:00:00.000Z',
+          context: { followUp: true },
+        },
+        systemPrompt: 'Use A2UI',
+        roleName: 'A2UI Demo',
+        model: 'deepseek-v4-pro',
+        maxContextMessages: 1,
+      });
+    });
   });
 
   it('loads signed URLs for asset-backed images without using legacy base64 content', async () => {

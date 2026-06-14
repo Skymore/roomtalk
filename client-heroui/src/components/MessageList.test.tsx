@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Message } from '../utils/types';
 import { MessageList, MessageListHandle } from './MessageList';
 
+const requestAIResponseMock = vi.hoisted(() => vi.fn());
+const requestEditMessageAndAIResponseMock = vi.hoisted(() => vi.fn());
 const socketMock = vi.hoisted(() => {
   const handlers = new Map<string, Set<(...args: any[]) => void>>();
 
@@ -33,8 +35,8 @@ const socketMock = vi.hoisted(() => {
 vi.mock('../utils/socket', () => ({
   socket: socketMock,
   clientId: 'client-1',
-  requestAIResponse: vi.fn(),
-  requestEditMessageAndAIResponse: vi.fn(),
+  requestAIResponse: requestAIResponseMock,
+  requestEditMessageAndAIResponse: requestEditMessageAndAIResponseMock,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -48,7 +50,7 @@ vi.mock('@iconify/react', () => ({
 }));
 
 vi.mock('./MessageItem', () => ({
-  MessageItem: ({ message }: { message: Message }) => (
+  MessageItem: ({ message, onRefreshAI, onStartEdit }: { message: Message; onRefreshAI?: (messageId: string) => void; onStartEdit?: (messageId: string) => void }) => (
     <div
       data-testid="message-item"
       data-message-id={message.id}
@@ -57,6 +59,8 @@ vi.mock('./MessageItem', () => ({
       data-delivery-error={message.deliveryError || ''}
     >
       {message.content}
+      <button type="button" onClick={() => onRefreshAI?.(message.id)}>retry-{message.id}</button>
+      <button type="button" onClick={() => onStartEdit?.(message.id)}>edit-{message.id}</button>
     </div>
   ),
   preloadMarkdownContent: () => {},
@@ -67,7 +71,9 @@ vi.mock('./DeleteConfirmationModal', () => ({
 }));
 
 vi.mock('./EditMessageModal', () => ({
-  EditMessageModal: () => null,
+  EditMessageModal: ({ message, onSaveAndAskAI }: { message?: Message | null; onSaveAndAskAI?: (messageId: string, content: string) => void }) => (
+    message ? <button type="button" onClick={() => onSaveAndAskAI?.(message.id, 'edited content')}>edit-and-ask</button> : null
+  ),
 }));
 
 const message = (overrides: Partial<Message> = {}): Message => ({
@@ -84,7 +90,9 @@ describe('MessageList optimistic messages', () => {
   beforeEach(() => {
     socketMock.reset();
     vi.clearAllMocks();
-    localStorage.removeItem('roomtalk:ai-context-message-limit');
+    localStorage.clear();
+    requestAIResponseMock.mockResolvedValue(undefined);
+    requestEditMessageAndAIResponseMock.mockResolvedValue(undefined);
     Element.prototype.scrollIntoView = vi.fn();
   });
 
@@ -338,6 +346,80 @@ describe('MessageList optimistic messages', () => {
     render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
 
     expect(screen.getByText('exportChat').closest('[data-testid="message-list-scroll"]')).toBeNull();
+  });
+
+  it('uses current room AI settings when retrying an AI message', async () => {
+    localStorage.setItem('aiRoles', JSON.stringify([
+      { id: 'default', name: 'Assistant', systemPrompt: 'You are helpful', color: 'secondary', icon: 'lucide:bot' },
+      { id: 'coder', name: 'Code Expert', systemPrompt: 'Review code', color: 'primary', icon: 'lucide:code' },
+    ]));
+    localStorage.setItem('roomtalk:ai-settings:room-1', JSON.stringify({
+      selectedRoleId: 'coder',
+      selectedModel: 'deepseek-v4-pro',
+      maxContextMessages: 1,
+    }));
+    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
+
+    act(() => {
+      socketMock.trigger('message_history', {
+        roomId: 'room-1',
+        messages: [message({ id: 'ai-1', messageType: 'ai', content: 'old answer' })],
+        historyVersion: 1,
+        hasMore: false,
+        mode: 'replace',
+      });
+    });
+
+    fireEvent.click(await screen.findByText('retry-ai-1'));
+
+    await waitFor(() => {
+      expect(requestAIResponseMock).toHaveBeenCalledWith({
+        roomId: 'room-1',
+        retryForMessageId: 'ai-1',
+        systemPrompt: 'Review code',
+        roleName: 'Code Expert',
+        model: 'deepseek-v4-pro',
+        maxContextMessages: 1,
+      });
+    });
+  });
+
+  it('uses current room AI settings when editing and asking AI', async () => {
+    localStorage.setItem('aiRoles', JSON.stringify([
+      { id: 'default', name: 'Assistant', systemPrompt: 'You are helpful', color: 'secondary', icon: 'lucide:bot' },
+      { id: 'a2ui-demo', name: 'A2UI Demo', systemPrompt: 'Use A2UI', color: 'warning', icon: 'lucide:layout-dashboard' },
+    ]));
+    localStorage.setItem('roomtalk:ai-settings:room-1', JSON.stringify({
+      selectedRoleId: 'a2ui-demo',
+      selectedModel: 'deepseek-v4-pro',
+      maxContextMessages: 2,
+    }));
+    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
+
+    act(() => {
+      socketMock.trigger('message_history', {
+        roomId: 'room-1',
+        messages: [message({ id: 'm-edit', content: 'original' })],
+        historyVersion: 1,
+        hasMore: false,
+        mode: 'replace',
+      });
+    });
+
+    fireEvent.click(await screen.findByText('edit-m-edit'));
+    fireEvent.click(screen.getByText('edit-and-ask'));
+
+    await waitFor(() => {
+      expect(requestEditMessageAndAIResponseMock).toHaveBeenCalledWith({
+        roomId: 'room-1',
+        messageId: 'm-edit',
+        newContent: 'edited content',
+        systemPrompt: 'Use A2UI',
+        roleName: 'A2UI Demo',
+        model: 'deepseek-v4-pro',
+        maxContextMessages: 2,
+      });
+    });
   });
 
   it('does not force the room back to the bottom after the user scrolls away', () => {
