@@ -36,3 +36,29 @@ export const useStickerSearch = (query: string, limit = 40): StickerDef[] => {
     [catalog, query, limit],
   );
 };
+
+const RECENTS_KEY = 'roomtalk.stickers.recent';
+const RECENTS_MAX = 24;
+
+const readRecents = (): string[] => {
+  try {
+    const raw = localStorage.getItem(RECENTS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+};
+
+/** Recently-used sticker ids (most recent first), persisted to localStorage. */
+export const useRecentStickers = (): { recentIds: string[]; pushRecent: (id: string) => void } => {
+  const [recentIds, setRecentIds] = useState<string[]>(readRecents);
+  const pushRecent = (id: string) => {
+    setRecentIds((prev) => {
+      const next = [id, ...prev.filter((x) => x !== id)].slice(0, RECENTS_MAX);
+      try { localStorage.setItem(RECENTS_KEY, JSON.stringify(next)); } catch { /* ignore quota */ }
+      return next;
+    });
+  };
+  return { recentIds, pushRecent };
+};

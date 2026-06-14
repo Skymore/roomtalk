@@ -8,7 +8,9 @@ import {
   useDisclosure,
 } from "@heroui/react";
 import { Icon } from '@iconify/react';
-import { requestAIResponse, sendMessage, sendMessageAndAskAI, uploadMediaMessage } from '../utils/socket';
+import { requestAIResponse, sendMessage, sendMessageAndAskAI, sendSticker, uploadMediaMessage } from '../utils/socket';
+import { useRecentStickers } from '../hooks/useStickers';
+import { StickerPicker } from './StickerPicker';
 import { useTranslation } from 'react-i18next';
 import imageCompression from 'browser-image-compression';
 import {
@@ -274,6 +276,44 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     replyTo: buildReplyReference(replyTo),
     deliveryStatus: 'pending',
   }), [buildReplyReference, clientId, roomId, username]);
+
+  const [isStickerPickerOpen, setIsStickerPickerOpen] = useState(false);
+  const { pushRecent } = useRecentStickers();
+
+  const buildOptimisticStickerMessage = useCallback((
+    stickerId: string,
+    clientMessageId: string,
+    avatar: { text: string; color: string },
+    replyTo: Message | null,
+  ): Message => ({
+    id: `temp-${clientMessageId}`,
+    clientMessageId,
+    clientId,
+    roomId,
+    content: stickerId,
+    timestamp: new Date().toISOString(),
+    messageType: 'sticker',
+    username,
+    avatar,
+    replyTo: buildReplyReference(replyTo),
+    deliveryStatus: 'pending',
+  }), [buildReplyReference, clientId, roomId, username]);
+
+  const handleSelectSticker = useCallback(async (stickerId: string) => {
+    setIsStickerPickerOpen(false);
+    pushRecent(stickerId);
+    const avatar = { text: avatarText, color: avatarColor };
+    const clientMessageId = createClientMessageId();
+    const optimistic = buildOptimisticStickerMessage(stickerId, clientMessageId, avatar, replyToMessage);
+    onOptimisticMessage?.(optimistic);
+    try {
+      const saved = await sendSticker(stickerId, roomId, username, avatar, replyToMessage?.id, clientMessageId);
+      onOptimisticMessageSaved?.(clientMessageId, saved);
+      onCancelReply();
+    } catch (error) {
+      onOptimisticMessageFailed?.(clientMessageId, getErrorMessage(error, t('failedToSendSticker')));
+    }
+  }, [avatarColor, avatarText, buildOptimisticStickerMessage, onCancelReply, onOptimisticMessage, onOptimisticMessageFailed, onOptimisticMessageSaved, pushRecent, replyToMessage, roomId, t, username]);
 
   const clearEditorImmediately = useCallback((options: { blur?: boolean } = {}) => {
     if (editorRef.current) {
@@ -1443,6 +1483,30 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                 >
                   <Icon icon="lucide:image-plus" className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
                 </Button>
+
+                {/* 表情包按钮 */}
+                <Popover
+                  isOpen={isStickerPickerOpen}
+                  onOpenChange={setIsStickerPickerOpen}
+                  placement="top-start"
+                  offset={10}
+                >
+                  <PopoverTrigger>
+                    <Button
+                      isIconOnly
+                      size="sm"
+                      variant="light"
+                      aria-label={t('stickers')}
+                      className="h-7 w-7 min-w-7 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
+                      isDisabled={isSending || isAiProcessing || !canPost}
+                    >
+                      <Icon icon="lucide:sticker" className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="p-0">
+                    <StickerPicker onSelect={handleSelectSticker} />
+                  </PopoverContent>
+                </Popover>
 
                 <Button
                   isIconOnly
