@@ -30,6 +30,13 @@ export const useStickerUrl = (id?: string): string | undefined => {
   return url ? apiPath(url) : undefined;
 };
 
+/** A sticker's display name: its primary keyword (OCR caption or note title). */
+export const useStickerName = (id?: string): string | undefined => {
+  const catalog = useStickerCatalog();
+  if (!id) return undefined;
+  return catalog?.stickers[id]?.keywords?.[0];
+};
+
 /** Live keyword search results (empty until the catalog is loaded). */
 export const useStickerSearch = (query: string, limit = 40): StickerDef[] => {
   const catalog = useStickerCatalog();
