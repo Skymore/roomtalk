@@ -11,6 +11,7 @@ import { Icon } from '@iconify/react';
 import { requestAIResponse, sendMessage, sendMessageAndAskAI, sendSticker, uploadMediaMessage } from '../utils/socket';
 import { useRecentStickers, useStickerSearch } from '../hooks/useStickers';
 import { inlineStickerQuery } from '../utils/stickerCatalog';
+import { apiPath } from '../utils/apiBase';
 import { StickerPicker } from './StickerPicker';
 import { useTranslation } from 'react-i18next';
 import imageCompression from 'browser-image-compression';
@@ -1357,7 +1358,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                   onClick={() => handleInlineStickerSelect(s.id)}
                   className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg p-1 transition-colors hover:bg-[#e8e6dc] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#c96442] dark:hover:bg-[#30302e] dark:focus-visible:ring-[#d97757]"
                 >
-                  <img src={s.url} alt="" loading="lazy" draggable={false} className="max-h-full max-w-full object-contain" />
+                  <img src={apiPath(s.url)} alt="" loading="lazy" draggable={false} className="max-h-full max-w-full object-contain" />
                 </button>
               ))}
             </div>

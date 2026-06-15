@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { apiPath } from '../utils/apiBase';
 import {
   getStickerCatalogSync,
   loadStickerCatalog,
@@ -25,7 +26,8 @@ export const useStickerCatalog = (): StickerCatalog | null => {
 export const useStickerUrl = (id?: string): string | undefined => {
   const catalog = useStickerCatalog();
   if (!id) return undefined;
-  return catalog?.stickers[id]?.url;
+  const url = catalog?.stickers[id]?.url;
+  return url ? apiPath(url) : undefined;
 };
 
 /** Live keyword search results (empty until the catalog is loaded). */

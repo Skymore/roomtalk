@@ -1,4 +1,6 @@
 import express, { Express, Request, Response } from 'express';
+import fs from 'fs';
+import path from 'path';
 import { Server } from 'socket.io';
 import { RedisClientType } from 'redis';
 import { v4 as uuidv4 } from 'uuid';
@@ -1238,6 +1240,19 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     res.set('Cache-Control', 'public, max-age=300');
     res.json(getStickerCatalog());
   });
+
+  // Sticker image bytes. In dev (or wherever STICKER_LOCAL_DIR points), serve the
+  // immutable files straight from disk. Catalog urls are /api/stickers/asset/<id>.jpg
+  // so the same path can later stream from object storage in production.
+  const stickerLocalDir = process.env.STICKER_LOCAL_DIR
+    || path.resolve(process.cwd(), '.local-stickers');
+  if (fs.existsSync(stickerLocalDir)) {
+    app.use('/api/stickers/asset', express.static(stickerLocalDir, {
+      immutable: true,
+      maxAge: '7d',
+      fallthrough: false,
+    }));
+  }
 
   app.post('/api/ai-role-draft', async (req: Request, res: Response) => {
     const idea = typeof req.body?.idea === 'string' ? req.body.idea.trim() : '';
