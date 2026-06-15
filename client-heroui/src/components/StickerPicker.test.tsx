@@ -93,6 +93,15 @@ describe('StickerPicker (grouped, one note per page)', () => {
     expect(onSelect).toHaveBeenCalledWith('b1');
   });
 
+  it('keeps page padding inside slides so swipe distance matches page width', () => {
+    const onSelect = vi.fn();
+    render(<StickerPicker onSelect={onSelect} />);
+
+    const pager = screen.getByTestId('sticker-group-pager');
+    expect(pager.className).not.toContain('px-3');
+    expect(pager.querySelector('[aria-hidden="false"]')?.className).toContain('px-3');
+  });
+
   it('jumps to a note via its tab', () => {
     const onSelect = vi.fn();
     render(<StickerPicker onSelect={onSelect} />);
