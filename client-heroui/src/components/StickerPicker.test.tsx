@@ -11,13 +11,21 @@ vi.mock('react-i18next', () => ({
 const CATALOG = {
   version: 1,
   packs: [
-    { id: 'packA', name: 'PackA', cover: 'a1', stickerIds: ['a1', 'a2'] },
-    { id: 'packB', name: 'PackB', cover: 'b1', stickerIds: ['b1'] },
+    {
+      id: 'xiaokumao',
+      name: '小哭猫',
+      cover: 'a1',
+      stickerIds: ['a1', 'a2', 'b1'],
+      groups: [
+        { title: 'NoteA', stickerIds: ['a1', 'a2'] },
+        { title: 'NoteB', stickerIds: ['b1'] },
+      ],
+    },
   ],
   stickers: {
-    a1: { id: 'a1', url: 'https://cdn/a1.jpg', pack: 'packA', keywords: ['打工'] },
-    a2: { id: 'a2', url: 'https://cdn/a2.jpg', pack: 'packA', keywords: ['开心'] },
-    b1: { id: 'b1', url: 'https://cdn/b1.jpg', pack: 'packB', keywords: ['哭'] },
+    a1: { id: 'a1', url: 'https://cdn/a1.jpg', pack: 'xiaokumao', keywords: ['打工'] },
+    a2: { id: 'a2', url: 'https://cdn/a2.jpg', pack: 'xiaokumao', keywords: ['开心'] },
+    b1: { id: 'b1', url: 'https://cdn/b1.jpg', pack: 'xiaokumao', keywords: ['哭'] },
   },
 };
 
@@ -33,40 +41,55 @@ vi.mock('../hooks/useStickers', () => ({
 
 afterEach(() => cleanup());
 
-describe('StickerPicker', () => {
-  it('renders the active pack and selects a sticker on click', () => {
+describe('StickerPicker (grouped, one note per page)', () => {
+  it('shows the first note group and selects a sticker', () => {
     const onSelect = vi.fn();
     render(<StickerPicker onSelect={onSelect} />);
 
-    // Active pack A stickers are shown
+    // First page = NoteA (a1, a2). b1 (NoteB) is not on this page.
+    expect(screen.getByLabelText('打工')).toBeTruthy();
+    expect(screen.queryByLabelText('哭')).toBeNull();
+
     fireEvent.click(screen.getByLabelText('打工'));
     expect(onSelect).toHaveBeenCalledWith('a1');
   });
 
-  it('shows a recently-used row', () => {
-    render(<StickerPicker onSelect={vi.fn()} />);
-    expect(screen.getByText('recentlyUsed')).toBeTruthy();
+  it('pages to the next note with the next arrow', () => {
+    const onSelect = vi.fn();
+    render(<StickerPicker onSelect={onSelect} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'next' }));
+    expect(screen.getByLabelText('哭')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('哭'));
+    expect(onSelect).toHaveBeenCalledWith('b1');
   });
 
-  it('filters by search query', () => {
+  it('jumps to a note via its tab', () => {
+    const onSelect = vi.fn();
+    render(<StickerPicker onSelect={onSelect} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'NoteB' }));
+    fireEvent.click(screen.getByLabelText('哭'));
+    expect(onSelect).toHaveBeenCalledWith('b1');
+  });
+
+  it('searches across all groups', () => {
     const onSelect = vi.fn();
     render(<StickerPicker onSelect={onSelect} />);
 
     fireEvent.change(screen.getByLabelText('searchStickers'), { target: { value: '哭' } });
     expect(screen.getByLabelText('哭')).toBeTruthy();
     expect(screen.queryByLabelText('打工')).toBeNull();
-
     fireEvent.click(screen.getByLabelText('哭'));
     expect(onSelect).toHaveBeenCalledWith('b1');
   });
 
-  it('switches packs via the pack tab', () => {
+  it('shows recently-used stickers via the recents tab', () => {
     const onSelect = vi.fn();
     render(<StickerPicker onSelect={onSelect} />);
 
-    // PackB tab is a button labelled with the pack name
-    fireEvent.click(screen.getByRole('button', { name: 'PackB' }));
-    fireEvent.click(screen.getByLabelText('哭'));
-    expect(onSelect).toHaveBeenCalledWith('b1');
+    fireEvent.click(screen.getByRole('button', { name: 'recentlyUsed' }));
+    // recents = [a2] -> 开心
+    expect(screen.getByLabelText('开心')).toBeTruthy();
   });
 });

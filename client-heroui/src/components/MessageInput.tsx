@@ -1304,6 +1304,28 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         </div>
       )}
 
+      {/* 表情候选:悬浮在输入框上方,不挤压聊天布局 */}
+      {!isVoiceMode && inlineStickerSuggestions.length > 0 && (
+        <div
+          role="listbox"
+          aria-label={t('stickers')}
+          className="absolute bottom-full left-0 right-0 z-30 mb-2 flex items-center gap-1.5 overflow-x-auto rounded-2xl border border-[#dedbd0] bg-[#faf9f5] px-2.5 py-2 shadow-lg dark:border-[#30302e] dark:bg-[#2a2a28]"
+        >
+          {inlineStickerSuggestions.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              aria-label={s.keywords[0] || t('sticker')}
+              title={s.keywords[0] || ''}
+              onClick={() => handleInlineStickerSelect(s.id)}
+              className="flex h-[72px] w-[72px] flex-shrink-0 items-center justify-center rounded-xl p-1.5 transition-colors hover:bg-[#e8e6dc] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#c96442] dark:hover:bg-[#30302e] dark:focus-visible:ring-[#d97757]"
+            >
+              <img src={apiPath(s.url)} alt="" loading="lazy" draggable={false} className="max-h-full max-w-full object-contain" />
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="w-full">
         <div className="flex flex-wrap items-center gap-1.5 overflow-hidden rounded-[1.45rem] border border-[#dedbd0] bg-[#faf9f5] px-1.5 py-1 shadow-[0_0_0_1px_rgba(194,192,182,0.35)] dark:border-[#30302e] dark:bg-[#2a2a28] sm:block sm:rounded-[1.65rem] sm:px-0 sm:py-0">
           {!canPost && (
@@ -1340,27 +1362,6 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               >
                 <Icon icon="lucide:x" className="h-3.5 w-3.5" />
               </Button>
-            </div>
-          )}
-
-          {!isVoiceMode && inlineStickerSuggestions.length > 0 && (
-            <div
-              role="listbox"
-              aria-label={t('stickers')}
-              className="mx-0 flex basis-full items-center gap-1 overflow-x-auto rounded-md bg-[#f0eee6] px-2 py-1.5 dark:bg-[#242421] sm:mx-3 sm:mt-2"
-            >
-              {inlineStickerSuggestions.map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  aria-label={s.keywords[0] || t('sticker')}
-                  title={s.keywords[0] || ''}
-                  onClick={() => handleInlineStickerSelect(s.id)}
-                  className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg p-1 transition-colors hover:bg-[#e8e6dc] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#c96442] dark:hover:bg-[#30302e] dark:focus-visible:ring-[#d97757]"
-                >
-                  <img src={apiPath(s.url)} alt="" loading="lazy" draggable={false} className="max-h-full max-w-full object-contain" />
-                </button>
-              ))}
             </div>
           )}
 
@@ -1533,7 +1534,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                       className="h-7 w-7 min-w-7 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
                       isDisabled={isSending || isAiProcessing || !canPost}
                     >
-                      <Icon icon="lucide:sticker" className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
+                      <Icon icon="lucide:smile" className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="p-0">

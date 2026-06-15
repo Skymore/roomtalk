@@ -16,7 +16,7 @@ import { A2UIActionEvent, AudioTranscription, Message, MessageMediaAsset, RoomPe
 import { useTranslation } from "react-i18next";
 import { useIsTouchDevice } from "../hooks/useIsTouchDevice";
 import { useCachedMedia } from "../hooks/useCachedMedia";
-import { useStickerUrl } from "../hooks/useStickers";
+import { useStickerUrl, useStickerName } from "../hooks/useStickers";
 import { MediaViewerModal } from "./MediaViewerModal";
 import { getVideoPreviewUrl } from "../utils/videoPreview";
 import { buildMediaFilename, saveUrlAsFile } from "../utils/mediaDownload";
@@ -238,6 +238,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const isFile = isMedia && mediaKind === "file";
   const isSticker = message.messageType === "sticker";
   const stickerUrl = useStickerUrl(isSticker ? message.content : undefined);
+  const stickerName = useStickerName(isSticker ? message.content : undefined);
   const isText = message.messageType === "text";
   const isAI = message.clientId === 'ai_assistant';
   const isStreaming = isAI && message.status === 'streaming';
@@ -726,13 +727,15 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
             <div className="w-fit max-w-full">
               {replyReference}
               {stickerUrl ? (
-                <img
-                  src={stickerUrl}
-                  alt={t('sticker')}
-                  className="block h-auto w-[120px] max-w-full select-none sm:w-[140px]"
-                  draggable={false}
-                  loading="lazy"
-                />
+                <Tooltip content={stickerName} placement="top" size="sm" delay={400} classNames={tooltipClassNames} isDisabled={isTouchDevice || !stickerName}>
+                  <img
+                    src={stickerUrl}
+                    alt={stickerName || t('sticker')}
+                    className="block h-auto w-[120px] max-w-full select-none sm:w-[140px]"
+                    draggable={false}
+                    loading="lazy"
+                  />
+                </Tooltip>
               ) : (
                 <div className="flex h-[120px] w-[120px] items-center justify-center rounded-xl bg-[#e8e6dc] text-[#8a8a85] dark:bg-[#30302e] sm:h-[140px] sm:w-[140px]">
                   <Icon icon="lucide:sticker" className="h-6 w-6" />

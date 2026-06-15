@@ -15,11 +15,19 @@ export interface StickerDef {
   height?: number;
 }
 
+export interface StickerGroup {
+  /** Source 小红书 note title, used as the section header. */
+  title: string;
+  stickerIds: string[];
+}
+
 export interface StickerPack {
   id: string;
   name: string;
   cover: string;
   stickerIds: string[];
+  /** Stickers grouped by their source note (title sections in the picker). */
+  groups?: StickerGroup[];
 }
 
 export interface StickerCatalog {
