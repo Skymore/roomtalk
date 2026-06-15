@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installAppViewportSizing } from './appViewport';
 
-const EDITING_CLASS = 'roomtalk-editing';
+const KEYBOARD_OPEN_CLASS = 'roomtalk-keyboard-open';
 
 const createVisualViewport = (initialHeight: number, initialOffsetTop = 0) => {
   const target = new EventTarget();
@@ -40,7 +40,7 @@ describe('installAppViewportSizing', () => {
   beforeEach(() => {
     document.documentElement.style.removeProperty('--app-height');
     document.documentElement.style.removeProperty('--app-viewport-top');
-    document.documentElement.classList.remove(EDITING_CLASS);
+    document.documentElement.classList.remove(KEYBOARD_OPEN_CLASS);
 
     Object.defineProperty(window, 'innerHeight', {
       configurable: true,
@@ -68,7 +68,7 @@ describe('installAppViewportSizing', () => {
 
     expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('640px');
     expect(document.documentElement.style.getPropertyValue('--app-viewport-top')).toBe('0px');
-    expect(document.documentElement.classList.contains(EDITING_CLASS)).toBe(false);
+    expect(document.documentElement.classList.contains(KEYBOARD_OPEN_CLASS)).toBe(false);
 
     viewport.height = 420;
     viewport.offsetTop = 24;
@@ -76,7 +76,7 @@ describe('installAppViewportSizing', () => {
 
     expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('420px');
     expect(document.documentElement.style.getPropertyValue('--app-viewport-top')).toBe('24px');
-    expect(document.documentElement.classList.contains(EDITING_CLASS)).toBe(false);
+    expect(document.documentElement.classList.contains(KEYBOARD_OPEN_CLASS)).toBe(false);
 
     cleanup();
 
@@ -86,22 +86,22 @@ describe('installAppViewportSizing', () => {
 
     expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('420px');
     expect(document.documentElement.style.getPropertyValue('--app-viewport-top')).toBe('24px');
-    expect(document.documentElement.classList.contains(EDITING_CLASS)).toBe(false);
+    expect(document.documentElement.classList.contains(KEYBOARD_OPEN_CLASS)).toBe(false);
   });
 
-  it('does not mark editing for viewport changes when no editable element is focused', () => {
+  it('does not mark keyboard open for viewport changes when no editable element is focused', () => {
     const viewport = createVisualViewport(720);
     setVisualViewport(viewport);
 
     const cleanup = installAppViewportSizing();
 
     expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('720px');
-    expect(document.documentElement.classList.contains(EDITING_CLASS)).toBe(false);
+    expect(document.documentElement.classList.contains(KEYBOARD_OPEN_CLASS)).toBe(false);
 
     cleanup();
   });
 
-  it('marks editing when an editable element is focused', () => {
+  it('marks keyboard open when an editable element is focused and the viewport shrinks', () => {
     const viewport = createVisualViewport(640);
     setVisualViewport(viewport);
     Object.defineProperty(window, 'innerHeight', {
@@ -116,32 +116,51 @@ describe('installAppViewportSizing', () => {
     input.focus();
 
     expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('640px');
-    expect(document.documentElement.classList.contains(EDITING_CLASS)).toBe(true);
+    expect(document.documentElement.classList.contains(KEYBOARD_OPEN_CLASS)).toBe(false);
+
+    viewport.height = 420;
+    viewport.dispatch('resize');
+
+    expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('420px');
+    expect(document.documentElement.classList.contains(KEYBOARD_OPEN_CLASS)).toBe(true);
+
+    viewport.height = 640;
+    viewport.dispatch('resize');
+
+    expect(document.activeElement).toBe(input);
+    expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('640px');
+    expect(document.documentElement.classList.contains(KEYBOARD_OPEN_CLASS)).toBe(false);
 
     cleanup();
 
-    expect(document.documentElement.classList.contains(EDITING_CLASS)).toBe(false);
+    expect(document.documentElement.classList.contains(KEYBOARD_OPEN_CLASS)).toBe(false);
   });
 
-  it('removes editing when the focused editable element blurs', () => {
+  it('removes keyboard open when the focused editable element blurs', () => {
     const viewport = createVisualViewport(640);
     setVisualViewport(viewport);
+    Object.defineProperty(window, 'innerHeight', {
+      configurable: true,
+      value: 640,
+    });
     const input = document.createElement('input');
     document.body.append(input);
 
     const cleanup = installAppViewportSizing();
 
     input.focus();
-    expect(document.documentElement.classList.contains(EDITING_CLASS)).toBe(true);
+    viewport.height = 420;
+    viewport.dispatch('resize');
+    expect(document.documentElement.classList.contains(KEYBOARD_OPEN_CLASS)).toBe(true);
 
     input.blur();
 
-    expect(document.documentElement.classList.contains(EDITING_CLASS)).toBe(false);
+    expect(document.documentElement.classList.contains(KEYBOARD_OPEN_CLASS)).toBe(false);
 
     cleanup();
   });
 
-  it('does not mark editing for read-only inputs', () => {
+  it('does not mark keyboard open for read-only inputs', () => {
     const viewport = createVisualViewport(640);
     setVisualViewport(viewport);
     const input = document.createElement('input');
@@ -152,14 +171,21 @@ describe('installAppViewportSizing', () => {
 
     input.focus();
 
-    expect(document.documentElement.classList.contains(EDITING_CLASS)).toBe(false);
+    viewport.height = 420;
+    viewport.dispatch('resize');
+
+    expect(document.documentElement.classList.contains(KEYBOARD_OPEN_CLASS)).toBe(false);
 
     cleanup();
   });
 
-  it('marks editing when a contenteditable element is focused', () => {
+  it('marks keyboard open when a contenteditable element is focused and the viewport shrinks', () => {
     const viewport = createVisualViewport(640);
     setVisualViewport(viewport);
+    Object.defineProperty(window, 'innerHeight', {
+      configurable: true,
+      value: 640,
+    });
     const editable = document.createElement('div');
     editable.setAttribute('contenteditable', 'true');
     editable.tabIndex = -1;
@@ -169,11 +195,16 @@ describe('installAppViewportSizing', () => {
 
     editable.focus();
 
-    expect(document.documentElement.classList.contains(EDITING_CLASS)).toBe(true);
+    expect(document.documentElement.classList.contains(KEYBOARD_OPEN_CLASS)).toBe(false);
+
+    viewport.height = 420;
+    viewport.dispatch('resize');
+
+    expect(document.documentElement.classList.contains(KEYBOARD_OPEN_CLASS)).toBe(true);
 
     cleanup();
 
-    expect(document.documentElement.classList.contains(EDITING_CLASS)).toBe(false);
+    expect(document.documentElement.classList.contains(KEYBOARD_OPEN_CLASS)).toBe(false);
   });
 
   it('updates visualViewport top offset on mobile keyboard panning without changing height', () => {
@@ -199,6 +230,34 @@ describe('installAppViewportSizing', () => {
 
     expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('800px');
     expect(document.documentElement.style.getPropertyValue('--app-viewport-top')).toBe('0px');
+
+    cleanup();
+  });
+
+  it('uses window height changes to restore the bottom nav when visualViewport is unavailable', () => {
+    setVisualViewport(undefined);
+    const input = document.createElement('input');
+    document.body.append(input);
+
+    const cleanup = installAppViewportSizing();
+
+    input.focus();
+    expect(document.documentElement.classList.contains(KEYBOARD_OPEN_CLASS)).toBe(false);
+
+    Object.defineProperty(window, 'innerHeight', {
+      configurable: true,
+      value: 520,
+    });
+    window.dispatchEvent(new Event('resize'));
+    expect(document.documentElement.classList.contains(KEYBOARD_OPEN_CLASS)).toBe(true);
+
+    Object.defineProperty(window, 'innerHeight', {
+      configurable: true,
+      value: 800,
+    });
+    window.dispatchEvent(new Event('resize'));
+    expect(document.activeElement).toBe(input);
+    expect(document.documentElement.classList.contains(KEYBOARD_OPEN_CLASS)).toBe(false);
 
     cleanup();
   });

@@ -11,7 +11,7 @@ export const WelcomeView: React.FC<WelcomeViewProps> = ({ onEnterRooms }) => {
   const { t } = useTranslation();
 
   return (
-    <div className="flex h-full flex-col items-center justify-center overflow-y-auto p-6 text-center">
+    <div className="flex h-full w-full flex-col items-center justify-center overflow-y-auto p-6 text-center">
       <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-[#e8e6dc] text-[#c96442] shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e] dark:text-[#d97757]">
         <Icon icon="lucide:message-circle" className="h-8 w-8" />
       </div>

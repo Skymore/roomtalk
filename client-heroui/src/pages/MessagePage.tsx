@@ -894,7 +894,7 @@ export const MessagePage: React.FC = () => {
   const renderContent = () => {
     if (isLoadingRoom) {
       return (
-        <div className="flex flex-col items-center justify-center h-full p-4"> {/* 保持全屏居中 */}
+        <div className="flex h-full w-full flex-col items-center justify-center p-4"> {/* 保持全屏居中 */}
           <Icon icon="lucide:loader" className="mb-4 h-16 w-16 animate-spin text-[#c96442]" />
           <h2 className="mb-2 font-serif text-xl font-medium text-[#141413] dark:text-[#faf9f5]">{t("loading")}</h2>
           <p className="text-center text-[#5e5d59] dark:text-[#b0aea5]">{t("loadingDescription")}</p>
