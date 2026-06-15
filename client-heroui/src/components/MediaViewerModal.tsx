@@ -8,6 +8,12 @@ import { getRoomMediaHistory } from "../utils/socket";
 import { getCachedMediaBlob } from "../utils/mediaCache";
 import { RoomMediaHistoryItem, RoomMediaHistoryKindFilter } from "../utils/types";
 import { getVideoPreviewUrl } from "../utils/videoPreview";
+import {
+  HORIZONTAL_TRACK_MIN_TRANSITION_MS,
+  getHorizontalBoundaryResistedOffset,
+  getHorizontalPageTarget,
+  getHorizontalSettleTransitionMs,
+} from "../hooks/useSwipePager";
 
 type ViewerMediaKind = "image" | "video";
 type MediaStageVariant = "viewer" | "historyPreview";
@@ -92,32 +98,18 @@ interface MediaHistoryGridItemProps {
 }
 
 const HISTORY_PAGE_SIZE = 36;
-const SWIPE_THRESHOLD = 48;
 const SWIPE_DOWN_THRESHOLD = 64;
 const TAP_THRESHOLD = 8;
 const MIN_IMAGE_ZOOM = 1;
 const MAX_IMAGE_ZOOM = 6;
 const DOUBLE_TAP_DELAY_MS = 220;
 const DOUBLE_TAP_DISTANCE = 34;
-const HORIZONTAL_VELOCITY_THRESHOLD = 0.45;
 const VERTICAL_VELOCITY_THRESHOLD = 0.55;
-const HORIZONTAL_TRACK_MIN_TRANSITION_MS = 500;
-const HORIZONTAL_TRACK_MAX_TRANSITION_MS = 800;
 const VERTICAL_STAGE_SNAP_TRANSITION_MS = 220;
 const WHEEL_ZOOM_STEP = 0.28;
 const DEFAULT_ZOOMED_IMAGE_SCALE = 2;
 const ZERO_IMAGE_PAN: ImagePan = { x: 0, y: 0 };
 const MEDIA_HISTORY_FILTERS: MediaHistoryFilter[] = ["all", "image", "video"];
-
-const clampNumber = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
-
-const getHorizontalTrackTransitionMs = (remainingDistance: number, velocity: number, width: number) => {
-  const safeWidth = Math.max(1, width);
-  const distanceRatio = clampNumber(remainingDistance / safeWidth, 0.12, 1);
-  const velocityRatio = clampNumber(Math.abs(velocity) / 1.2, 0, 1);
-  const duration = 520 + distanceRatio * 420 - velocityRatio * 120;
-  return Math.round(clampNumber(duration, HORIZONTAL_TRACK_MIN_TRANSITION_MS, HORIZONTAL_TRACK_MAX_TRANSITION_MS));
-};
 
 const getMediaHistoryFilterLabelKey = (filter: MediaHistoryFilter) => (
   filter === "all"
@@ -630,16 +622,7 @@ const MediaStage: React.FC<MediaStageProps> = ({
   }, [applyActiveImageTransform, clampImagePan, onImageTransformChange]);
 
   const getBoundaryResistedOffset = React.useCallback((offset: number, metrics = getStageMetrics()) => {
-    const isPastPreviousEdge = offset > 0 && !canGoPrevious;
-    const isPastNextEdge = offset < 0 && !canGoNext;
-    if (!isPastPreviousEdge && !isPastNextEdge) {
-      return offset;
-    }
-
-    const width = metrics.width;
-    const distance = Math.abs(offset);
-    const resisted = width * (1 - (1 / ((distance / width) * 0.55 + 1)));
-    return Math.sign(offset) * Math.min(resisted, width * 0.45);
+    return getHorizontalBoundaryResistedOffset(offset, metrics.width, canGoPrevious, canGoNext);
   }, [canGoNext, canGoPrevious, getStageMetrics]);
 
   const applyTrackOffset = React.useCallback((
@@ -904,43 +887,38 @@ const MediaStage: React.FC<MediaStageProps> = ({
     const absX = Math.abs(deltaX);
     const absY = Math.abs(deltaY);
     const elapsed = Math.max(1, now() - finalState.startTime);
-    const velocityX = deltaX / elapsed;
     const velocityY = deltaY / elapsed;
-    const swipeThreshold = Math.min(96, Math.max(SWIPE_THRESHOLD, finalState.width * 0.18));
 
     gestureRef.current = null;
     mouseGestureActiveRef.current = false;
 
     if (finalState.mode === "horizontal") {
-      const shouldNavigate = absX > swipeThreshold
-        || (Math.abs(velocityX) > HORIZONTAL_VELOCITY_THRESHOLD && absX > TAP_THRESHOLD * 2 && absX > absY * 1.1);
-      if (shouldNavigate && deltaX < 0 && canGoNext) {
-        const remainingDistance = Math.max(0, finalState.width - Math.min(absX, finalState.width));
-        applyTrackOffset(
-          -finalState.width,
-          true,
-          finalState.metrics,
-          getHorizontalTrackTransitionMs(remainingDistance, velocityX, finalState.width),
-        );
+      const pageTarget = getHorizontalPageTarget({
+        deltaX,
+        deltaY,
+        elapsedMs: elapsed,
+        width: finalState.width,
+        canGoPrevious,
+        canGoNext,
+      });
+
+      if (pageTarget?.direction === "next") {
+        applyTrackOffset(pageTarget.settleOffset, true, finalState.metrics, pageTarget.durationMs);
         onNext();
         return;
       }
-      if (shouldNavigate && deltaX > 0 && canGoPrevious) {
-        const remainingDistance = Math.max(0, finalState.width - Math.min(absX, finalState.width));
-        applyTrackOffset(
-          finalState.width,
-          true,
-          finalState.metrics,
-          getHorizontalTrackTransitionMs(remainingDistance, velocityX, finalState.width),
-        );
+
+      if (pageTarget?.direction === "previous") {
+        applyTrackOffset(pageTarget.settleOffset, true, finalState.metrics, pageTarget.durationMs);
         onPrevious();
         return;
       }
+
       applyTrackOffset(
         0,
         true,
         finalState.metrics,
-        getHorizontalTrackTransitionMs(Math.min(absX, finalState.width), velocityX, finalState.width),
+        getHorizontalSettleTransitionMs(deltaX, elapsed, finalState.width),
       );
       return;
     }
