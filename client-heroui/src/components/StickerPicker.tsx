@@ -3,6 +3,7 @@ import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 import { useStickerCatalog, useStickerSearch, useRecentStickers } from '../hooks/useStickers';
 import { StickerDef } from '../utils/stickerCatalog';
+import { apiPath } from '../utils/apiBase';
 
 interface StickerPickerProps {
   /** Called with the chosen stickerId. The parent is responsible for sending. */
@@ -25,7 +26,7 @@ const StickerGrid: React.FC<{ stickers: StickerDef[]; onSelect: (id: string) => 
           onClick={() => onSelect(s.id)}
           className="flex aspect-square items-center justify-center rounded-lg p-1 transition-colors hover:bg-[#e8e6dc] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#c96442] dark:hover:bg-[#30302e] dark:focus-visible:ring-[#d97757]"
         >
-          <img src={s.url} alt={s.keywords[0] || ''} loading="lazy" draggable={false} className="max-h-full max-w-full object-contain" />
+          <img src={apiPath(s.url)} alt={s.keywords[0] || ''} loading="lazy" draggable={false} className="max-h-full max-w-full object-contain" />
         </button>
       ))}
     </div>
@@ -107,7 +108,7 @@ export const StickerPicker: React.FC<StickerPickerProps> = ({ onSelect }) => {
                 onClick={() => setActivePackId(pack.id)}
                 className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg p-1 ${active ? 'bg-[#e8e6dc] dark:bg-[#30302e]' : 'hover:bg-[#efede5] dark:hover:bg-[#262625]'}`}
               >
-                {cover ? <img src={cover.url} alt="" className="max-h-full max-w-full object-contain" /> : <Icon icon="lucide:sticker" className="h-4 w-4" />}
+                {cover ? <img src={apiPath(cover.url)} alt="" className="max-h-full max-w-full object-contain" /> : <Icon icon="lucide:sticker" className="h-4 w-4" />}
               </button>
             );
           })}

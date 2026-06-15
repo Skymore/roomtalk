@@ -57,3 +57,7 @@ logs/*
 supabase/.temp/
 supabase/.branches/
 supabase/.env
+
+# Local sticker assets (dev acceptance, not committed)
+server/.local-stickers/
+.local-stickers/
