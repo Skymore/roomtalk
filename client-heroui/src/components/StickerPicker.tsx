@@ -211,7 +211,7 @@ export const StickerPicker: React.FC<StickerPickerProps> = ({ onSelect }) => {
         <div
           {...groupPager.viewportProps}
           data-testid="sticker-group-pager"
-          className="overflow-hidden px-3 py-1"
+          className="overflow-hidden py-1"
           style={{ touchAction: 'pan-y' }}
         >
           <div {...groupPager.trackProps} className="flex will-change-transform">
@@ -221,7 +221,7 @@ export const StickerPicker: React.FC<StickerPickerProps> = ({ onSelect }) => {
                 <div
                   key={`${group.title}-${index}`}
                   aria-hidden={!isActive}
-                  className="max-h-[15rem] min-w-full overflow-y-auto"
+                  className="max-h-[15rem] min-w-full overflow-y-auto px-3"
                 >
                   <StickerGrid
                     stickers={resolve(group.stickerIds)}
