@@ -168,7 +168,9 @@ export function useSwipePager({
   const trackRef = React.useRef<HTMLDivElement | null>(null);
   const dragRef = React.useRef<DragState | null>(null);
   const didSwipeRef = React.useRef(false);
+  const clickSuppressTimerRef = React.useRef<number | null>(null);
   const pointerSequenceRef = React.useRef(false);
+  const pointerSequenceTimerRef = React.useRef<number | null>(null);
   const mouseGestureActiveRef = React.useRef(false);
   const indexRef = React.useRef(index);
   const pageCountRef = React.useRef(pageCount);
@@ -205,6 +207,33 @@ export function useSwipePager({
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, [snapTo]);
+
+  React.useEffect(() => () => {
+    if (clickSuppressTimerRef.current !== null) {
+      window.clearTimeout(clickSuppressTimerRef.current);
+    }
+    if (pointerSequenceTimerRef.current !== null) {
+      window.clearTimeout(pointerSequenceTimerRef.current);
+    }
+  }, []);
+
+  const clearClickSuppression = React.useCallback(() => {
+    if (clickSuppressTimerRef.current !== null) {
+      window.clearTimeout(clickSuppressTimerRef.current);
+      clickSuppressTimerRef.current = null;
+    }
+    didSwipeRef.current = false;
+  }, []);
+
+  const scheduleClickSuppressionReset = React.useCallback(() => {
+    if (clickSuppressTimerRef.current !== null) {
+      window.clearTimeout(clickSuppressTimerRef.current);
+    }
+    clickSuppressTimerRef.current = window.setTimeout(() => {
+      clickSuppressTimerRef.current = null;
+      didSwipeRef.current = false;
+    }, 350);
+  }, []);
 
   const beginDrag = React.useCallback((pointerId: number | null, clientX: number, clientY: number) => {
     if (!enabled || pageCount <= 1) {
@@ -269,6 +298,7 @@ export function useSwipePager({
     if (drag.mode !== 'horizontal') {
       return;
     }
+    scheduleClickSuppressionReset();
 
     const activeIndex = indexRef.current;
     const elapsedMs = now() - drag.startTime;
@@ -288,7 +318,7 @@ export function useSwipePager({
     }
 
     snapTo(activeIndex, true, getHorizontalSettleTransitionMs(drag.dx, elapsedMs, drag.width));
-  }, [applyTransform, clampIndex, onIndexChange, pageCount, snapTo]);
+  }, [applyTransform, clampIndex, onIndexChange, pageCount, scheduleClickSuppressionReset, snapTo]);
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     pointerSequenceRef.current = true;
@@ -309,7 +339,11 @@ export function useSwipePager({
   const finishPointerDrag = (event: React.PointerEvent<HTMLDivElement>) => {
     finishDragAt(event.pointerId);
     try { viewportRef.current?.releasePointerCapture(event.pointerId); } catch { /* ignored */ }
-    window.setTimeout(() => {
+    if (pointerSequenceTimerRef.current !== null) {
+      window.clearTimeout(pointerSequenceTimerRef.current);
+    }
+    pointerSequenceTimerRef.current = window.setTimeout(() => {
+      pointerSequenceTimerRef.current = null;
       pointerSequenceRef.current = false;
     }, 350);
   };
@@ -338,7 +372,7 @@ export function useSwipePager({
 
     event.stopPropagation();
     event.preventDefault();
-    didSwipeRef.current = false;
+    clearClickSuppression();
   };
 
   return {
