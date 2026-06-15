@@ -2,6 +2,7 @@ import React from 'react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 import { useStickerCatalog, useStickerSearch, useRecentStickers } from '../hooks/useStickers';
+import { useSwipePager } from '../hooks/useSwipePager';
 import { StickerDef } from '../utils/stickerCatalog';
 import { apiPath } from '../utils/apiBase';
 
@@ -19,7 +20,8 @@ const StickerCell: React.FC<{
   sticker: StickerDef;
   onSelect: (id: string) => void;
   onPreview: (id: string | null) => void;
-}> = ({ sticker, onSelect, onPreview }) => {
+  isInteractive?: boolean;
+}> = ({ sticker, onSelect, onPreview, isInteractive = true }) => {
   const { t } = useTranslation();
   const timer = React.useRef<number | undefined>(undefined);
   const longPressed = React.useRef(false);
@@ -38,6 +40,7 @@ const StickerCell: React.FC<{
     if (longPressed.current) onPreview(null);
   };
   const handleClick = () => {
+    if (!isInteractive) return;
     if (longPressed.current) { longPressed.current = false; return; }
     onSelect(sticker.id);
   };
@@ -46,10 +49,11 @@ const StickerCell: React.FC<{
     <button
       type="button"
       aria-label={name || t('sticker')}
+      tabIndex={isInteractive ? undefined : -1}
       onClick={handleClick}
-      onMouseEnter={() => onPreview(sticker.id)}
+      onMouseEnter={() => isInteractive && onPreview(sticker.id)}
       onMouseLeave={() => onPreview(null)}
-      onTouchStart={startPress}
+      onTouchStart={() => isInteractive && startPress()}
       onTouchMove={cancelTimer}
       onTouchEnd={endPress}
       onContextMenu={(e) => e.preventDefault()}
@@ -66,7 +70,8 @@ const StickerGrid: React.FC<{
   onSelect: (id: string) => void;
   onPreview: (id: string | null) => void;
   label: string;
-}> = ({ stickers, onSelect, onPreview, label }) => {
+  isInteractive?: boolean;
+}> = ({ stickers, onSelect, onPreview, label, isInteractive = true }) => {
   const { t } = useTranslation();
   if (stickers.length === 0) {
     return <div className="py-8 text-center text-sm text-[#8a8a85]">{t('noStickersFound')}</div>;
@@ -74,7 +79,7 @@ const StickerGrid: React.FC<{
   return (
     <div role="group" aria-label={label} className="grid grid-cols-4 gap-1">
       {stickers.map((s) => (
-        <StickerCell key={s.id} sticker={s} onSelect={onSelect} onPreview={onPreview} />
+        <StickerCell key={s.id} sticker={s} onSelect={onSelect} onPreview={onPreview} isInteractive={isInteractive} />
       ))}
     </div>
   );
@@ -91,38 +96,51 @@ export const StickerPicker: React.FC<StickerPickerProps> = ({ onSelect }) => {
   const [page, setPage] = React.useState<Page>(0);
   const [previewId, setPreviewId] = React.useState<string | null>(null);
   const searchResults = useStickerSearch(query);
-
-  if (!catalog || catalog.packs.length === 0) {
-    return (
-      <div className="flex h-40 w-[18rem] items-center justify-center text-sm text-[#8a8a85] sm:w-[22rem]">
-        {catalog ? t('noStickersFound') : <Icon icon="lucide:loader-2" className="h-5 w-5 animate-spin" />}
-      </div>
-    );
-  }
-
-  const resolve = (ids: string[]) => ids.map((id) => catalog.stickers[id]).filter(Boolean) as StickerDef[];
-  const packs = catalog.packs;
-  const currentPackId = activePackId ?? packs[0].id;
+  const resolve = React.useCallback((ids: string[]) => (
+    catalog ? ids.map((id) => catalog.stickers[id]).filter(Boolean) as StickerDef[] : []
+  ), [catalog]);
+  const packs = catalog?.packs ?? [];
+  const currentPackId = activePackId ?? packs[0]?.id ?? null;
   const currentPack = packs.find((p) => p.id === currentPackId) ?? packs[0];
-  const groups = currentPack.groups ?? [];
+  const groups = currentPack?.groups ?? [];
   const hasGroups = groups.length > 0;
   const recents = resolve(recentIds);
   const isSearching = query.trim().length > 0;
-  const previewDef = previewId ? catalog.stickers[previewId] : null;
+  const previewDef = previewId && catalog ? catalog.stickers[previewId] : null;
 
   // One group (or the recents row) per page.
-  const groupIndex = typeof page === 'number' ? Math.min(page, groups.length - 1) : 0;
+  const groupIndex = typeof page === 'number' ? Math.max(0, Math.min(page, groups.length - 1)) : 0;
   const onRecentPage = page === 'recent' && recents.length > 0;
-  const pageTitle = isSearching ? '' : onRecentPage ? t('recentlyUsed') : (groups[groupIndex]?.title ?? currentPack.name);
+  const pageTitle = isSearching ? '' : onRecentPage ? t('recentlyUsed') : (groups[groupIndex]?.title ?? currentPack?.name ?? t('stickers'));
   const pageStickers = isSearching
     ? searchResults
     : onRecentPage
       ? recents
       : hasGroups
         ? resolve(groups[groupIndex].stickerIds)
-        : resolve(currentPack.stickerIds);
+        : resolve(currentPack?.stickerIds ?? []);
 
-  const gotoGroup = (i: number) => setPage(Math.max(0, Math.min(i, groups.length - 1)));
+  const gotoGroup = React.useCallback((i: number) => {
+    setPage(Math.max(0, Math.min(i, groups.length - 1)));
+  }, [groups.length]);
+  const groupPager = useSwipePager({
+    pageCount: groups.length,
+    index: groupIndex,
+    onIndexChange: gotoGroup,
+    enabled: !isSearching && hasGroups && !onRecentPage,
+  });
+
+  React.useEffect(() => {
+    setPreviewId(null);
+  }, [page, query, activePackId]);
+
+  if (!catalog || packs.length === 0) {
+    return (
+      <div className="flex h-40 w-[18rem] items-center justify-center text-sm text-[#8a8a85] sm:w-[22rem]">
+        {catalog ? t('noStickersFound') : <Icon icon="lucide:loader-2" className="h-5 w-5 animate-spin" />}
+      </div>
+    );
+  }
 
   return (
     <div className="relative flex w-[18rem] flex-col sm:w-[22rem]">
@@ -150,7 +168,7 @@ export const StickerPicker: React.FC<StickerPickerProps> = ({ onSelect }) => {
           className="w-full bg-transparent text-sm outline-none placeholder:text-[#8a8a85]"
         />
         {query && (
-          <button type="button" aria-label="clear" onClick={() => setQuery('')} className="text-[#8a8a85] hover:text-[#141413] dark:hover:text-[#faf9f5]">
+          <button type="button" aria-label={t('clearStickerSearch')} onClick={() => setQuery('')} className="text-[#8a8a85] hover:text-[#141413] dark:hover:text-[#faf9f5]">
             <Icon icon="lucide:x" className="h-4 w-4" />
           </button>
         )}
@@ -161,7 +179,7 @@ export const StickerPicker: React.FC<StickerPickerProps> = ({ onSelect }) => {
         <div className="flex items-center gap-1 px-2 py-1.5">
           <button
             type="button"
-            aria-label="previous"
+            aria-label={t('previousStickerGroup')}
             onClick={() => gotoGroup(groupIndex - 1)}
             className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-[#5e5d59] enabled:hover:bg-[#e8e6dc] disabled:opacity-30 dark:text-[#b0aea5] dark:enabled:hover:bg-[#30302e]"
             disabled={groupIndex <= 0}
@@ -174,7 +192,7 @@ export const StickerPicker: React.FC<StickerPickerProps> = ({ onSelect }) => {
           </div>
           <button
             type="button"
-            aria-label="next"
+            aria-label={t('nextStickerGroup')}
             onClick={() => gotoGroup(groupIndex + 1)}
             className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-[#5e5d59] enabled:hover:bg-[#e8e6dc] disabled:opacity-30 dark:text-[#b0aea5] dark:enabled:hover:bg-[#30302e]"
             disabled={groupIndex >= groups.length - 1}
@@ -188,9 +206,39 @@ export const StickerPicker: React.FC<StickerPickerProps> = ({ onSelect }) => {
       )}
 
       {/* Body: a single page of stickers */}
-      <div className="max-h-[15rem] overflow-y-auto px-3 py-1">
-        <StickerGrid stickers={pageStickers} onSelect={onSelect} onPreview={setPreviewId} label={pageTitle || t('stickers')} />
-      </div>
+      {!isSearching && hasGroups && !onRecentPage ? (
+        <div
+          {...groupPager.viewportProps}
+          data-testid="sticker-group-pager"
+          className="overflow-hidden px-3 py-1"
+          style={{ touchAction: 'pan-y' }}
+        >
+          <div {...groupPager.trackProps} className="flex will-change-transform">
+            {groups.map((group, index) => {
+              const isActive = index === groupIndex;
+              return (
+                <div
+                  key={`${group.title}-${index}`}
+                  aria-hidden={!isActive}
+                  className="max-h-[15rem] min-w-full overflow-y-auto"
+                >
+                  <StickerGrid
+                    stickers={resolve(group.stickerIds)}
+                    onSelect={onSelect}
+                    onPreview={setPreviewId}
+                    label={group.title}
+                    isInteractive={isActive}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        <div className="max-h-[15rem] overflow-y-auto px-3 py-1">
+          <StickerGrid stickers={pageStickers} onSelect={onSelect} onPreview={setPreviewId} label={pageTitle || t('stickers')} />
+        </div>
+      )}
 
       {/* Tab strip: recents + one cover per note group (or packs when ungrouped) */}
       {!isSearching && hasGroups && (

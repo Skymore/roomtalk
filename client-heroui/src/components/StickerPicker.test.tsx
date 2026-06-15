@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { StickerPicker } from './StickerPicker';
 
@@ -46,9 +46,10 @@ describe('StickerPicker (grouped, one note per page)', () => {
     const onSelect = vi.fn();
     render(<StickerPicker onSelect={onSelect} />);
 
-    // First page = NoteA (a1, a2). b1 (NoteB) is not on this page.
-    expect(screen.getByLabelText('打工')).toBeTruthy();
-    expect(screen.queryByLabelText('哭')).toBeNull();
+    // First page = NoteA (a1, a2). NoteB is offscreen and hidden from the active accessibility tree.
+    const activeGroup = screen.getByRole('group', { name: 'NoteA' });
+    expect(within(activeGroup).getByLabelText('打工')).toBeTruthy();
+    expect(screen.queryByRole('group', { name: 'NoteB' })).toBeNull();
 
     fireEvent.click(screen.getByLabelText('打工'));
     expect(onSelect).toHaveBeenCalledWith('a1');
@@ -58,10 +59,26 @@ describe('StickerPicker (grouped, one note per page)', () => {
     const onSelect = vi.fn();
     render(<StickerPicker onSelect={onSelect} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'next' }));
-    expect(screen.getByLabelText('哭')).toBeTruthy();
-    fireEvent.click(screen.getByLabelText('哭'));
-    expect(onSelect).toHaveBeenCalledWith('b1');
+    fireEvent.click(screen.getByRole('button', { name: 'nextStickerGroup' }));
+    expect(screen.getByRole('group', { name: 'NoteB' })).toBeTruthy();
+  });
+
+  it('swipes horizontally to the next note', () => {
+    const onSelect = vi.fn();
+    render(<StickerPicker onSelect={onSelect} />);
+
+    const pager = screen.getByTestId('sticker-group-pager');
+    Object.defineProperty(pager, 'clientWidth', {
+      configurable: true,
+      value: 288,
+    });
+
+    fireEvent.mouseDown(pager, { button: 0, clientX: 250, clientY: 90 });
+    fireEvent.mouseMove(pager, { buttons: 1, clientX: 90, clientY: 94 });
+    fireEvent.mouseUp(pager, { button: 0, clientX: 90, clientY: 94 });
+
+    expect(screen.getByRole('group', { name: 'NoteB' })).toBeTruthy();
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it('jumps to a note via its tab', () => {
