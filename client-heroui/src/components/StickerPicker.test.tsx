@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { StickerPicker } from './StickerPicker';
 
@@ -39,7 +39,10 @@ vi.mock('../hooks/useStickers', () => ({
   },
 }));
 
-afterEach(() => cleanup());
+afterEach(() => {
+  vi.useRealTimers();
+  cleanup();
+});
 
 describe('StickerPicker (grouped, one note per page)', () => {
   it('shows the first note group and selects a sticker', () => {
@@ -64,6 +67,7 @@ describe('StickerPicker (grouped, one note per page)', () => {
   });
 
   it('swipes horizontally to the next note', () => {
+    vi.useFakeTimers();
     const onSelect = vi.fn();
     render(<StickerPicker onSelect={onSelect} />);
 
@@ -78,7 +82,15 @@ describe('StickerPicker (grouped, one note per page)', () => {
     fireEvent.mouseUp(pager, { button: 0, clientX: 90, clientY: 94 });
 
     expect(screen.getByRole('group', { name: 'NoteB' })).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText('哭'));
     expect(onSelect).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(350);
+    });
+    fireEvent.click(screen.getByLabelText('哭'));
+    expect(onSelect).toHaveBeenCalledWith('b1');
   });
 
   it('jumps to a note via its tab', () => {

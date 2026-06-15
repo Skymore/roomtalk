@@ -44,6 +44,7 @@ const StickerCell: React.FC<{
     if (longPressed.current) { longPressed.current = false; return; }
     onSelect(sticker.id);
   };
+  React.useEffect(() => () => window.clearTimeout(timer.current), []);
 
   return (
     <button
