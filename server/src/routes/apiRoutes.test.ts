@@ -628,6 +628,61 @@ describe('API routes', () => {
     assert.equal(status.rooms, 1);
   });
 
+  it('redirects sticker asset requests to object storage signed URLs', async () => {
+    await server.close();
+    const readRequests: Array<{ objectKey: string; expiresInSeconds?: number }> = [];
+    server = await createTestServer({
+      mediaObjectStorage: {
+        isConfigured: () => true,
+        async putMediaObject() {},
+        async createWriteUrl() {
+          return { url: 'https://upload.example/unused', expiresAt: '2026-05-03T00:15:00.000Z' };
+        },
+        async createReadUrl(input: { objectKey: string; expiresInSeconds?: number }) {
+          readRequests.push(input);
+          return { url: `https://download.example/${encodeURIComponent(input.objectKey)}`, expiresAt: '2026-05-10T00:00:00.000Z' };
+        },
+        async headObject(input: { objectKey: string }) {
+          return { exists: input.objectKey === 'stickers/remote-only/001/01.jpg', mimeType: 'image/jpeg', byteSize: 123 };
+        },
+        async deleteMediaObject() {},
+      },
+    });
+
+    const response = await fetch(`${server.baseUrl}/api/stickers/asset/remote-only/001/01.jpg`, { redirect: 'manual' });
+
+    assert.equal(response.status, 302);
+    assert.equal(response.headers.get('location'), 'https://download.example/stickers%2Fremote-only%2F001%2F01.jpg');
+    assert.deepEqual(readRequests, [
+      { objectKey: 'stickers/remote-only/001/01.jpg', expiresInSeconds: 604800 },
+    ]);
+  });
+
+  it('rejects invalid or missing sticker asset objects', async () => {
+    const invalidResponse = await fetch(`${server.baseUrl}/api/stickers/asset/remote-only/001/01.svg`, { redirect: 'manual' });
+    assert.equal(invalidResponse.status, 400);
+
+    await server.close();
+    server = await createTestServer({
+      mediaObjectStorage: {
+        isConfigured: () => true,
+        async putMediaObject() {},
+        async createWriteUrl() {
+          return { url: 'https://upload.example/unused', expiresAt: '2026-05-03T00:15:00.000Z' };
+        },
+        async createReadUrl() {
+          return { url: 'https://download.example/unused', expiresAt: '2026-05-10T00:00:00.000Z' };
+        },
+        async headObject() {
+          return { exists: false };
+        },
+        async deleteMediaObject() {},
+      },
+    });
+    const missingResponse = await fetch(`${server.baseUrl}/api/stickers/asset/missing/001/01.jpg`, { redirect: 'manual' });
+    assert.equal(missingResponse.status, 404);
+  });
+
   it('returns push notification public configuration', async () => {
     const previousPublicKey = process.env.WEB_PUSH_VAPID_PUBLIC_KEY;
     const previousPrivateKey = process.env.WEB_PUSH_VAPID_PRIVATE_KEY;

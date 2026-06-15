@@ -64,6 +64,8 @@ const MEDIA_UPLOAD_RATE_LIMIT_MAX_REQUESTS = 20;
 const MEDIA_PENDING_UPLOAD_TTL_MS = 30 * 60 * 1000;
 const MEDIA_PENDING_UPLOAD_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
 const MEDIA_PENDING_UPLOAD_SWEEP_BATCH_SIZE = 50;
+const STICKER_OBJECT_PREFIX = 'stickers/';
+const STICKER_ASSET_SIGNED_URL_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 type RateLimitEntry = {
   windowStartMs: number;
@@ -88,6 +90,16 @@ const isAllowedMediaMimeType = (kind: MediaKind, mimeType: string) => {
     return mimeType.startsWith('image/') && mimeType !== 'image/svg+xml';
   }
   return mimeType.startsWith(`${kind}/`);
+};
+
+const parseStickerAssetPath = (assetPath: unknown): string | null => {
+  if (typeof assetPath !== 'string') {
+    return null;
+  }
+  const normalized = assetPath.replace(/^\/+/, '');
+  return /^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*\.(?:jpe?g|png|webp)$/i.test(normalized)
+    ? normalized
+    : null;
 };
 
 type UploadFilenameParseResult =
@@ -1250,9 +1262,37 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     app.use('/api/stickers/asset', express.static(stickerLocalDir, {
       immutable: true,
       maxAge: '7d',
-      fallthrough: false,
+      fallthrough: true,
     }));
   }
+  app.get('/api/stickers/asset/*', async (req: Request, res: Response) => {
+    if (!mediaObjectStorage.isConfigured()) {
+      return res.status(404).json({ error: 'Sticker asset not found' });
+    }
+
+    const assetPath = parseStickerAssetPath(req.params[0]);
+    if (!assetPath) {
+      return res.status(400).json({ error: 'Invalid sticker asset path' });
+    }
+
+    const objectKey = `${STICKER_OBJECT_PREFIX}${assetPath}`;
+    try {
+      const head = await mediaObjectStorage.headObject({ objectKey });
+      if (!head.exists) {
+        return res.status(404).json({ error: 'Sticker asset not found' });
+      }
+
+      const signedDownload = await mediaObjectStorage.createReadUrl({
+        objectKey,
+        expiresInSeconds: STICKER_ASSET_SIGNED_URL_TTL_SECONDS,
+      });
+      res.set('Cache-Control', 'private, max-age=300');
+      return res.redirect(302, signedDownload.url);
+    } catch (error) {
+      routeLogger.error('Failed to create sticker asset download URL', { error, endpoint: 'GET /api/stickers/asset/*', objectKey, ip: req.ip });
+      return res.status(500).json({ error: 'Failed to read sticker asset' });
+    }
+  });
 
   app.post('/api/ai-role-draft', async (req: Request, res: Response) => {
     const idea = typeof req.body?.idea === 'string' ? req.body.idea.trim() : '';

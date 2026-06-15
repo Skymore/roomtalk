@@ -6,7 +6,7 @@ import path from 'path';
  *
  * Unlike user-uploaded media, stickers are NOT stored per message/room. A sticker
  * message stores only a stable `stickerId` in its `content`; the bytes live once in
- * the catalog (public objects in the media bucket). This module is the server-side
+ * object storage and are served through stable catalog URLs. This module is the server-side
  * source of truth: it loads the catalog and validates that an incoming stickerId is
  * a real, known sticker before a sticker message is accepted.
  */
@@ -14,7 +14,7 @@ import path from 'path';
 export interface StickerDef {
   /** Stable id, e.g. "xiaokumao/008/03" (pack/note/index). Stored in message.content. */
   id: string;
-  /** Public, stable URL to the image (no signing, immutable content). */
+  /** Stable URL to the image, usually /api/stickers/asset/<id>.jpg. */
   url: string;
   /** Owning pack id. */
   pack: string;
@@ -51,8 +51,17 @@ const EMPTY_CATALOG: StickerCatalog = { version: 0, packs: [], stickers: {} };
 let cachedCatalog: StickerCatalog = EMPTY_CATALOG;
 let validIds: Set<string> = new Set();
 
-const catalogPath = () =>
-  process.env.STICKER_CATALOG_PATH || path.resolve(__dirname, 'data', 'catalog.json');
+const catalogPath = () => {
+  if (process.env.STICKER_CATALOG_PATH) {
+    return process.env.STICKER_CATALOG_PATH;
+  }
+
+  const candidates = [
+    path.resolve(__dirname, 'data', 'catalog.json'),
+    path.resolve(process.cwd(), 'src', 'stickers', 'data', 'catalog.json'),
+  ];
+  return candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0];
+};
 
 /** Load (or reload) the catalog from disk. Safe to call at startup; never throws. */
 export const loadStickerCatalog = (): StickerCatalog => {
