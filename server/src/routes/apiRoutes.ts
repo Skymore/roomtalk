@@ -400,6 +400,14 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   }
 
   const getQueryClientId = (req: Request): string | null => {
+    // Prefer the X-Client-Id header so the clientId (which acts as a bearer
+    // secret) stays out of the URL/query string — query strings leak into
+    // browser history, proxy/CDN access logs, and the Referer header. Fall back
+    // to the legacy ?clientId= param so older clients keep working during rollout.
+    const headerId = req.header('x-client-id');
+    if (typeof headerId === 'string' && headerId.trim()) {
+      return headerId.trim();
+    }
     const clientId = req.query.clientId;
     return typeof clientId === 'string' && clientId.trim() ? clientId : null;
   };
