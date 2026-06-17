@@ -72,7 +72,6 @@ type RateLimitEntry = {
   count: number;
 };
 
-const aiRoleDraftRateLimits = new Map<string, RateLimitEntry>();
 const mediaUploadRateLimits = new Map<string, RateLimitEntry>();
 
 const isMediaKind = (kind: unknown): kind is MediaKind => (
@@ -258,22 +257,6 @@ const serializeClientAccount = (account: ClientAccount | null) => account
     }
   : null;
 
-const consumeAIRoleDraftRateLimit = (clientId: string, ip: string | undefined, nowMs = Date.now()) => {
-  const key = `${clientId}:${ip || 'unknown'}`;
-  const current = aiRoleDraftRateLimits.get(key);
-  if (!current || nowMs - current.windowStartMs >= AI_ROLE_DRAFT_RATE_LIMIT_WINDOW_MS) {
-    aiRoleDraftRateLimits.set(key, { windowStartMs: nowMs, count: 1 });
-    return true;
-  }
-
-  if (current.count >= AI_ROLE_DRAFT_RATE_LIMIT_MAX_REQUESTS) {
-    return false;
-  }
-
-  current.count += 1;
-  return true;
-};
-
 const consumeMediaUploadRateLimit = (clientId: string, ip: string | undefined, nowMs = Date.now()) => {
   const key = `${clientId}:${ip || 'unknown'}`;
   const current = mediaUploadRateLimits.get(key);
@@ -299,6 +282,25 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   const sweepBatchSize = mediaUploadCleanup.sweepBatchSize ?? MEDIA_PENDING_UPLOAD_SWEEP_BATCH_SIZE;
   const googleClientIds = options.googleClientIds ?? resolveGoogleClientIds();
   const verifyGoogleCredentialFn = options.verifyGoogleCredential ?? verifyGoogleCredential;
+
+  // AI role drafts are a global per-client feature, not room-gated. Abuse (burning
+  // OpenRouter credits) is bounded purely by source IP — keyed by IP so rotating the
+  // (free-to-mint) clientId can't multiply the quota. Scoped to this app instance so
+  // each test server starts clean and the map can't grow unbounded across the process.
+  const aiRoleDraftRateLimits = new Map<string, RateLimitEntry>();
+  const consumeAIRoleDraftRateLimit = (ip: string | undefined, nowMs = Date.now()) => {
+    const key = ip || 'unknown';
+    const current = aiRoleDraftRateLimits.get(key);
+    if (!current || nowMs - current.windowStartMs >= AI_ROLE_DRAFT_RATE_LIMIT_WINDOW_MS) {
+      aiRoleDraftRateLimits.set(key, { windowStartMs: nowMs, count: 1 });
+      return true;
+    }
+    if (current.count >= AI_ROLE_DRAFT_RATE_LIMIT_MAX_REQUESTS) {
+      return false;
+    }
+    current.count += 1;
+    return true;
+  };
 
   const deleteMediaObjectBestEffort = async (objectKey: string, reason: string) => {
     if (!mediaObjectStorage.deleteMediaObject) {
@@ -1307,13 +1309,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       return;
     }
 
-    const rooms = await store.readRoomsByUser(clientId);
-    if (rooms.length === 0) {
-      routeLogger.warn('Unauthorized AI role draft request', { endpoint: 'POST /api/ai-role-draft', clientId, ip: req.ip });
-      return res.status(403).json({ error: 'Not authorized to generate AI role drafts' });
-    }
-
-    if (!consumeAIRoleDraftRateLimit(clientId, req.ip)) {
+    if (!consumeAIRoleDraftRateLimit(req.ip)) {
       routeLogger.warn('Rate limited AI role draft request', { endpoint: 'POST /api/ai-role-draft', clientId, ip: req.ip });
       return res.status(429).json({ error: 'Too many AI role draft requests. Please try again later.' });
     }

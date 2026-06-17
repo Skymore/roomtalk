@@ -1109,7 +1109,7 @@ describe('API routes', () => {
     assert.deepEqual(await failedResponse.json(), { error: 'Failed to generate AI role draft' });
   });
 
-  it('requires an authorized client and rate limits AI role draft generation', async () => {
+  it('requires a client id and rate limits AI role draft generation by IP', async () => {
     const missingClientResponse = await fetch(`${server.baseUrl}/api/ai-role-draft`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -1117,19 +1117,13 @@ describe('API routes', () => {
     });
     assert.equal(missingClientResponse.status, 400);
 
-    const unauthorizedResponse = await fetch(`${server.baseUrl}/api/ai-role-draft`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ clientId: 'client-without-rooms', idea: 'Create a strict reviewer' }),
-    });
-    assert.equal(unauthorizedResponse.status, 403);
-
-    server.store.members.add('room-1:client-rate-limited');
+    // Any member (including users who only ever joined rooms) can generate; the
+    // limit is by source IP, so distinct clientIds from one IP share the quota.
     for (let index = 0; index < 5; index += 1) {
       const rateAllowedResponse = await fetch(`${server.baseUrl}/api/ai-role-draft`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ clientId: 'client-rate-limited', idea: `Create role ${index}` }),
+        body: JSON.stringify({ clientId: `client-rate-limited-${index}`, idea: `Create role ${index}` }),
       });
       assert.equal(rateAllowedResponse.status, 200);
     }
