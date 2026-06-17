@@ -367,7 +367,7 @@ describe('socket message acknowledgement helpers', () => {
       expiresAt: '2026-05-03T00:15:00.000Z',
     });
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/media/asset-1/download-url?roomId=room-1&clientId=client-uuid');
+    expect(fetchMock).toHaveBeenCalledWith('/api/media/asset-1/download-url?roomId=room-1', { headers: { 'X-Client-Id': 'client-uuid' } });
   });
 
   it('appends the client auth token to signed media URL requests', async () => {
@@ -384,7 +384,7 @@ describe('socket message acknowledgement helpers', () => {
       expiresAt: undefined,
     });
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/media/asset-1/download-url?roomId=room-1&clientId=client-uuid&clientAuthToken=auth-token-1');
+    expect(fetchMock).toHaveBeenCalledWith('/api/media/asset-1/download-url?roomId=room-1', { headers: { 'X-Client-Id': 'client-uuid', 'X-Client-Auth-Token': 'auth-token-1' } });
   });
 
   it('loads, sets, and logs in with User ID password auth', async () => {
@@ -488,7 +488,7 @@ describe('socket message acknowledgement helpers', () => {
       googleConfigured: true,
       account: null,
     });
-    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/auth/account?clientId=client-uuid&clientAuthToken=old-token', { cache: 'no-store' });
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/auth/account', { cache: 'no-store', headers: { 'X-Client-Id': 'client-uuid', 'X-Client-Auth-Token': 'old-token' } });
 
     await expect(loginWithGoogleCredential('google-credential')).resolves.toEqual({
       clientId: 'client-google',
@@ -707,7 +707,7 @@ describe('socket message acknowledgement helpers', () => {
       windowMonths: 6,
     });
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/rooms/room-1/media-history?clientId=client-uuid&before=cursor-0&limit=24&kind=video');
+    expect(fetchMock).toHaveBeenCalledWith('/api/rooms/room-1/media-history?before=cursor-0&limit=24&kind=video', { headers: { 'X-Client-Id': 'client-uuid' } });
   });
 
   it('appends the client auth token to media history requests', async () => {
@@ -731,7 +731,7 @@ describe('socket message acknowledgement helpers', () => {
       windowMonths: 6,
     });
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/rooms/room-1/media-history?clientId=client-uuid&clientAuthToken=auth-token-1');
+    expect(fetchMock).toHaveBeenCalledWith('/api/rooms/room-1/media-history', { headers: { 'X-Client-Id': 'client-uuid', 'X-Client-Auth-Token': 'auth-token-1' } });
   });
 
   it('loads and requests audio transcriptions with client auth', async () => {
@@ -759,8 +759,8 @@ describe('socket message acknowledgement helpers', () => {
     await expect(getAudioTranscription({ roomId: 'room-1', messageId: 'message-1' })).resolves.toEqual(transcription);
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      '/api/rooms/room-1/messages/message-1/audio-transcription?clientId=client-uuid&clientAuthToken=auth-token-1',
-      { cache: 'no-store' },
+      '/api/rooms/room-1/messages/message-1/audio-transcription',
+      { cache: 'no-store', headers: { 'X-Client-Id': 'client-uuid', 'X-Client-Auth-Token': 'auth-token-1' } },
     );
 
     await expect(requestAudioTranscription({ roomId: 'room-1', messageId: 'message-1' })).resolves.toMatchObject({

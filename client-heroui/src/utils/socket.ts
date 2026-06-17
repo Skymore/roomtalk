@@ -233,11 +233,17 @@ export const withClientAuthBody = <TBody extends Record<string, unknown>>(body: 
   return token ? { ...body, clientAuthToken: token } : body;
 };
 
-const appendClientAuthQuery = (query: URLSearchParams) => {
+// clientId acts as a bearer secret, so send it (and the auth token) as request
+// headers instead of query params — query strings leak into browser history,
+// proxy/CDN access logs, and the Referer header. The server reads X-Client-Id
+// (falling back to ?clientId= for older clients) and X-Client-Auth-Token.
+const clientAuthHeaders = (id: string = getClientId()): Record<string, string> => {
+  const headers: Record<string, string> = { 'X-Client-Id': id };
   const token = getClientAuthToken();
   if (token) {
-    query.set('clientAuthToken', token);
+    headers['X-Client-Auth-Token'] = token;
   }
+  return headers;
 };
 
 // Create and configure Socket connection
@@ -765,10 +771,9 @@ export const getClientAuthStatus = async (targetClientId = getClientId()): Promi
 };
 
 export const getClientAccountStatus = async (targetClientId = getClientId()): Promise<ClientAccountStatus> => {
-  const query = new URLSearchParams({ clientId: targetClientId });
-  appendClientAuthQuery(query);
-  const response = await fetch(apiPath(`/api/auth/account?${query.toString()}`), {
+  const response = await fetch(apiPath('/api/auth/account'), {
     cache: 'no-store',
+    headers: clientAuthHeaders(targetClientId),
   });
   if (!response.ok) {
     throw new Error(await parseApiError(response, 'Failed to load account status'));
@@ -956,12 +961,10 @@ export const getMediaDownloadUrl = async (params: {
   roomId: string;
   assetId: string;
 }): Promise<{ url: string; expiresAt?: string }> => {
-  const query = new URLSearchParams({
-    roomId: params.roomId,
-    clientId,
+  const query = new URLSearchParams({ roomId: params.roomId });
+  const response = await fetch(apiPath(`/api/media/${encodeURIComponent(params.assetId)}/download-url?${query.toString()}`), {
+    headers: clientAuthHeaders(),
   });
-  appendClientAuthQuery(query);
-  const response = await fetch(apiPath(`/api/media/${encodeURIComponent(params.assetId)}/download-url?${query.toString()}`));
   if (!response.ok) {
     throw new Error(await parseApiError(response, 'Failed to get media URL'));
   }
@@ -977,12 +980,11 @@ export const getMediaDownloadUrl = async (params: {
 };
 
 export const getRoomMessagesForExport = async (roomId: string): Promise<Message[]> => {
-  const query = new URLSearchParams({ clientId });
-  appendClientAuthQuery(query);
-  const response = await fetch(apiPath(`/api/rooms/${encodeURIComponent(roomId)}/messages?${query.toString()}`), {
+  const response = await fetch(apiPath(`/api/rooms/${encodeURIComponent(roomId)}/messages`), {
     cache: 'no-store',
     headers: {
       'cache-control': 'no-cache',
+      ...clientAuthHeaders(),
     },
   });
   if (!response.ok) {
@@ -997,10 +999,7 @@ export const getRoomMediaHistory = async (params: {
   limit?: number;
   kind?: RoomMediaHistoryKindFilter;
 }): Promise<RoomMediaHistoryPage> => {
-  const query = new URLSearchParams({
-    clientId,
-  });
-  appendClientAuthQuery(query);
+  const query = new URLSearchParams();
   if (params.before) {
     query.set('before', params.before);
   }
@@ -1011,7 +1010,11 @@ export const getRoomMediaHistory = async (params: {
     query.set('kind', params.kind);
   }
 
-  const response = await fetch(apiPath(`/api/rooms/${encodeURIComponent(params.roomId)}/media-history?${query.toString()}`));
+  const suffix = query.toString();
+  const response = await fetch(
+    apiPath(`/api/rooms/${encodeURIComponent(params.roomId)}/media-history${suffix ? `?${suffix}` : ''}`),
+    { headers: clientAuthHeaders() },
+  );
   if (!response.ok) {
     throw new Error(await parseApiError(response, 'Failed to get media history'));
   }
@@ -1030,10 +1033,9 @@ export const getAudioTranscription = async (params: {
   roomId: string;
   messageId: string;
 }): Promise<AudioTranscription> => {
-  const query = new URLSearchParams({ clientId });
-  appendClientAuthQuery(query);
-  const response = await fetch(apiPath(`/api/rooms/${encodeURIComponent(params.roomId)}/messages/${encodeURIComponent(params.messageId)}/audio-transcription?${query.toString()}`), {
+  const response = await fetch(apiPath(`/api/rooms/${encodeURIComponent(params.roomId)}/messages/${encodeURIComponent(params.messageId)}/audio-transcription`), {
     cache: 'no-store',
+    headers: clientAuthHeaders(),
   });
   if (!response.ok) {
     throw new Error(await parseApiError(response, 'Failed to load audio transcription'));
