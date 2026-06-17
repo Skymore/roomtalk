@@ -111,6 +111,41 @@ describe('StickerPicker (grouped, one note per page)', () => {
     expect(onSelect).toHaveBeenCalledWith('b1');
   });
 
+  it('centers the selected note tab when the active group changes', () => {
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    const scrollCalls: Array<{ label: string | null; options?: boolean | ScrollIntoViewOptions }> = [];
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value(this: HTMLElement, options?: boolean | ScrollIntoViewOptions) {
+        scrollCalls.push({ label: this.getAttribute('aria-label'), options });
+      },
+    });
+
+    try {
+      const onSelect = vi.fn();
+      render(<StickerPicker onSelect={onSelect} />);
+
+      scrollCalls.length = 0;
+      fireEvent.click(screen.getByRole('button', { name: 'NoteB' }));
+
+      expect(scrollCalls).toEqual([
+        {
+          label: 'NoteB',
+          options: { behavior: 'smooth', block: 'nearest', inline: 'center' },
+        },
+      ]);
+    } finally {
+      if (originalScrollIntoView) {
+        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+          configurable: true,
+          value: originalScrollIntoView,
+        });
+      } else {
+        Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView');
+      }
+    }
+  });
+
   it('searches across all groups', () => {
     const onSelect = vi.fn();
     render(<StickerPicker onSelect={onSelect} />);

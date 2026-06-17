@@ -96,6 +96,8 @@ export const StickerPicker: React.FC<StickerPickerProps> = ({ onSelect }) => {
   const [activePackId, setActivePackId] = React.useState<string | null>(null);
   const [page, setPage] = React.useState<Page>(0);
   const [previewId, setPreviewId] = React.useState<string | null>(null);
+  const recentTabRef = React.useRef<HTMLButtonElement | null>(null);
+  const groupTabRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
   const searchResults = useStickerSearch(query);
   const resolve = React.useCallback((ids: string[]) => (
     catalog ? ids.map((id) => catalog.stickers[id]).filter(Boolean) as StickerDef[] : []
@@ -134,6 +136,12 @@ export const StickerPicker: React.FC<StickerPickerProps> = ({ onSelect }) => {
   React.useEffect(() => {
     setPreviewId(null);
   }, [page, query, activePackId]);
+
+  React.useLayoutEffect(() => {
+    if (isSearching || !hasGroups) return;
+    const selectedTab = onRecentPage ? recentTabRef.current : groupTabRefs.current[groupIndex];
+    selectedTab?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+  }, [groupIndex, hasGroups, isSearching, onRecentPage]);
 
   if (!catalog || packs.length === 0) {
     return (
@@ -246,6 +254,7 @@ export const StickerPicker: React.FC<StickerPickerProps> = ({ onSelect }) => {
         <div className="flex items-center gap-1 overflow-x-auto border-t border-[#e3e1d8] px-2 py-1.5 dark:border-[#30302e]">
           {recents.length > 0 && (
             <button
+              ref={recentTabRef}
               type="button"
               aria-label={t('recentlyUsed')}
               aria-pressed={onRecentPage}
@@ -260,6 +269,7 @@ export const StickerPicker: React.FC<StickerPickerProps> = ({ onSelect }) => {
             const active = !onRecentPage && i === groupIndex;
             return (
               <button
+                ref={(node) => { groupTabRefs.current[i] = node; }}
                 key={`${group.title}-${i}`}
                 type="button"
                 aria-label={group.title}
