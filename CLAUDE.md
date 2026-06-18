@@ -1,0 +1,108 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What This Is
+
+RoomTalk — a real-time chat application with AI assistants, media sharing, stickers, and room management. Two packages in one repo: a React client (`client-heroui/`) and a Node.js server (`server/`).
+
+## Development Commands
+
+```bash
+# Start everything (builds server, then launches both)
+./start.sh
+
+# Server (Express + Socket.IO, port 3012)
+cd server && npm run dev          # ts-node-dev hot reload
+cd server && npm run build        # tsc → dist/
+cd server && npm start            # run compiled dist/src/server.js
+cd server && npm test             # Node built-in test runner (src/**/*.test.ts)
+
+# Client (React + Vite, port 3011)
+cd client-heroui && npm run dev   # Vite dev server
+cd client-heroui && npm run build # i18n check + tsc + vite build
+cd client-heroui && npm run lint  # ESLint
+cd client-heroui && npm test      # Vitest
+
+# E2E (Playwright)
+cd client-heroui && npm run test:e2e
+cd client-heroui && npm run test:e2e:postgres   # against PostgreSQL store
+
+# i18n
+cd client-heroui && npm run check:i18n          # verify all keys present
+cd client-heroui && npm run translate:i18n:dry   # preview auto-translations
+cd client-heroui && npm run translate:i18n       # apply auto-translations
+
+# Persistence smoke test (uses local Redis DB 15, never prod)
+cd server && npm run smoke:persistence
+cd server && TEST_DATABASE_URL="postgres://localhost/message_system_test" npm run smoke:persistence
+```
+
+## Architecture
+
+### Persistence: Dual-Store Pattern
+
+The server uses a `CompositeRoomStore` (`server/src/repositories/store.ts`) that combines:
+
+- **DurableRoomStore** — either `RedisStore` or `PostgresStore`, selected by `PERSISTENCE_STORE` env var (`redis` default, or `postgres`). Owns rooms, messages, members, media assets, auth, push subscriptions.
+- **RealtimeRoomStore** — always Redis. Manages online presence, socket sessions, ephemeral member counts.
+- **RoomMessageCacheStore** (optional) — Redis TTL cache in front of PostgreSQL reads, invalidated on writes.
+
+The `CompositeRoomStore` delegates every method to the right sub-store and handles cache invalidation automatically. When adding new store operations, add the method to the `DurableRoomStore` interface, implement in both `RedisStore` and `PostgresStore`, then proxy through `CompositeRoomStore`.
+
+### Socket Event Handlers
+
+Socket handlers are split by domain in `server/src/socket/`:
+- `roomHandlers.ts` — create/join/leave rooms, member management, room settings
+- `messageHandlers.ts` — send/edit/delete messages, message history, reactions
+- `aiHandlers.ts` — AI streaming (`ask_ai`), model selection, role drafts
+- `transcriptionHandlers.ts` — audio transcription via AssemblyAI
+
+All registered in `registerSocketHandlers.ts`, sharing a `SocketHandlerDeps` context.
+
+### Server Services
+
+- `aiModels.ts` — model registry, normalization, model options from env
+- `aiClients.ts` — OpenRouter/direct API client factory
+- `aiStreamRecovery.ts` — marks interrupted streaming messages as failed on startup
+- `mediaObjectStorage.ts` — S3-compatible object storage (Tigris in prod), presigned URLs
+- `clientAuth.ts` — password hashing, token-based auth
+- `googleAuth.ts` — Google OAuth credential verification
+- `pushNotifications.ts` — web-push notifications
+- `messageDomain.ts` — message construction helpers, reply references
+
+### Client Structure
+
+Single-page app with one route (`/`). `MessagePage` is the main orchestrator handling room state, socket events, and view switching. Key layers:
+
+- **Views**: `WelcomeView` (room list), `ChatRoomView` (chat), `SettingsView`, `SavedRoomList`
+- **Socket**: `utils/socket.ts` — singleton connection, all emit/on wrappers
+- **State**: `utils/roomState.ts`, `utils/messageState.ts`, `utils/appPersistence.ts` — localStorage-backed state
+- **Hooks**: `useRoomMessageEvents` (message sync), `useAIRoles`, `useStickers`, `useCachedMedia`
+- **i18n**: `utils/i18n.ts` — en/zh/hi translations inline, browser language detection
+
+Desktop uses a sidebar layout (`DesktopSidebar`); mobile uses bottom navigation (`BottomNav`). Breakpoint at 768px.
+
+### Media Pipeline
+
+Upload: client requests presigned URL → uploads to S3/Tigris → confirms to server → server creates `MediaAsset` record. Download: server generates presigned GET URLs on demand. Legacy base64 images can be migrated via `npm run migrate:media-to-object-storage`.
+
+### AI Streaming
+
+Client sends `ask_ai` socket event with role/model/context. Server streams OpenRouter completions as `ai_chunk` events, ends with `ai_stream_end`. Messages have `status: 'streaming' | 'complete' | 'error'`. On server restart, `aiStreamRecovery` marks orphaned streaming messages as failed.
+
+## Deployment
+
+Push to `master` triggers CI (`.github/workflows/fly-deploy.yml`): builds server + client, checks translations, verifies Fly secrets, deploys to Fly.io. Never run `fly deploy` manually.
+
+Production: Fly.io app `message-system` in `dfw` region, Node 22 Alpine, 512MB VM. PostgreSQL on Supabase, Redis on Upstash, media on Tigris (S3-compatible).
+
+## Coding Conventions
+
+- TypeScript, two-space indent, no semicolons in some newer files (inconsistent — match the file you're editing)
+- React components: PascalCase files (`MessageInput.tsx`), functional components, HeroUI + Tailwind
+- Hooks: `useThing.ts`
+- Tests colocated: `Thing.test.tsx` / `thing.test.ts`
+- Client ESLint enforces React hook rules; prefix unused params with `_`
+- Commits: short present-tense subjects, prefixed (`fix:`, `stickers:`, etc.)
+- Codebase has Chinese comments throughout — this is intentional, keep the language of existing comments when editing nearby code
