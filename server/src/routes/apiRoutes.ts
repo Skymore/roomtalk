@@ -66,6 +66,8 @@ const MEDIA_PENDING_UPLOAD_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
 const MEDIA_PENDING_UPLOAD_SWEEP_BATCH_SIZE = 50;
 const STICKER_OBJECT_PREFIX = 'stickers/';
 const STICKER_ASSET_SIGNED_URL_TTL_SECONDS = 7 * 24 * 60 * 60;
+const STICKER_ASSET_REDIRECT_CACHE_SECONDS = 6 * 24 * 60 * 60;
+const STICKER_ASSET_RESPONSE_CACHE_CONTROL = 'public, max-age=31536000, immutable';
 
 type RateLimitEntry = {
   windowStartMs: number;
@@ -1295,8 +1297,9 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       const signedDownload = await mediaObjectStorage.createReadUrl({
         objectKey,
         expiresInSeconds: STICKER_ASSET_SIGNED_URL_TTL_SECONDS,
+        responseCacheControl: STICKER_ASSET_RESPONSE_CACHE_CONTROL,
       });
-      res.set('Cache-Control', 'private, max-age=300');
+      res.set('Cache-Control', `public, max-age=${STICKER_ASSET_REDIRECT_CACHE_SECONDS}, immutable`);
       return res.redirect(302, signedDownload.url);
     } catch (error) {
       routeLogger.error('Failed to create sticker asset download URL', { error, endpoint: 'GET /api/stickers/asset/*', objectKey, ip: req.ip });

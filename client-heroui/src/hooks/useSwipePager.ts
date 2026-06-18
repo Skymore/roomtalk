@@ -41,6 +41,7 @@ export interface SwipePagerOptions {
   index: number;
   onIndexChange: (index: number) => void;
   enabled?: boolean;
+  animationDurationMs?: number;
 }
 
 export interface SwipePager {
@@ -163,6 +164,7 @@ export function useSwipePager({
   index,
   onIndexChange,
   enabled = true,
+  animationDurationMs,
 }: SwipePagerOptions): SwipePager {
   const viewportRef = React.useRef<HTMLDivElement | null>(null);
   const trackRef = React.useRef<HTMLDivElement | null>(null);
@@ -179,17 +181,19 @@ export function useSwipePager({
     Math.max(0, Math.min(value, Math.max(0, pageCountRef.current - 1)))
   ), []);
 
-  const applyTransform = React.useCallback((translateX: number, animate: boolean, durationMs = HORIZONTAL_TRACK_MIN_TRANSITION_MS) => {
+  const defaultAnimationDurationMs = animationDurationMs ?? HORIZONTAL_TRACK_MIN_TRANSITION_MS;
+
+  const applyTransform = React.useCallback((translateX: number, animate: boolean, durationMs = defaultAnimationDurationMs) => {
     const track = trackRef.current;
     if (!track) return;
     track.style.transition = animate ? `transform ${durationMs}ms ${HORIZONTAL_TRACK_EASING}` : 'none';
     track.style.transform = `translate3d(${translateX}px, 0, 0)`;
-  }, []);
+  }, [defaultAnimationDurationMs]);
 
-  const snapTo = React.useCallback((targetIndex: number, animate: boolean, durationMs = HORIZONTAL_TRACK_MIN_TRANSITION_MS) => {
+  const snapTo = React.useCallback((targetIndex: number, animate: boolean, durationMs = defaultAnimationDurationMs) => {
     const width = viewportRef.current?.clientWidth ?? 0;
     applyTransform(-targetIndex * width, animate, durationMs);
-  }, [applyTransform]);
+  }, [applyTransform, defaultAnimationDurationMs]);
 
   React.useEffect(() => {
     pageCountRef.current = pageCount;
@@ -215,6 +219,22 @@ export function useSwipePager({
     if (pointerSequenceTimerRef.current !== null) {
       window.clearTimeout(pointerSequenceTimerRef.current);
     }
+  }, []);
+
+  React.useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+
+    const preventVerticalScrollAfterHorizontalLock = (event: TouchEvent) => {
+      if (dragRef.current?.mode === 'horizontal' && event.cancelable) {
+        event.preventDefault();
+      }
+    };
+
+    viewport.addEventListener('touchmove', preventVerticalScrollAfterHorizontalLock, { passive: false });
+    return () => {
+      viewport.removeEventListener('touchmove', preventVerticalScrollAfterHorizontalLock);
+    };
   }, []);
 
   const clearClickSuppression = React.useCallback(() => {
@@ -312,13 +332,13 @@ export function useSwipePager({
     });
 
     if (target) {
-      applyTransform((-activeIndex * drag.width) + target.settleOffset, true, target.durationMs);
+      applyTransform((-activeIndex * drag.width) + target.settleOffset, true, animationDurationMs ?? target.durationMs);
       onIndexChange(clampIndex(activeIndex + target.indexDelta));
       return;
     }
 
-    snapTo(activeIndex, true, getHorizontalSettleTransitionMs(drag.dx, elapsedMs, drag.width));
-  }, [applyTransform, clampIndex, onIndexChange, pageCount, scheduleClickSuppressionReset, snapTo]);
+    snapTo(activeIndex, true, animationDurationMs ?? getHorizontalSettleTransitionMs(drag.dx, elapsedMs, drag.width));
+  }, [animationDurationMs, applyTransform, clampIndex, onIndexChange, pageCount, scheduleClickSuppressionReset, snapTo]);
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     pointerSequenceRef.current = true;

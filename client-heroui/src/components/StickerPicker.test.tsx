@@ -15,10 +15,11 @@ const CATALOG = {
       id: 'xiaokumao',
       name: '小哭猫',
       cover: 'a1',
-      stickerIds: ['a1', 'a2', 'b1'],
+      stickerIds: ['a1', 'a2', 'b1', 'c1'],
       groups: [
         { title: 'NoteA', stickerIds: ['a1', 'a2'] },
         { title: 'NoteB', stickerIds: ['b1'] },
+        { title: 'NoteC', stickerIds: ['c1'] },
       ],
     },
   ],
@@ -26,6 +27,7 @@ const CATALOG = {
     a1: { id: 'a1', url: 'https://cdn/a1.jpg', pack: 'xiaokumao', keywords: ['打工'] },
     a2: { id: 'a2', url: 'https://cdn/a2.jpg', pack: 'xiaokumao', keywords: ['开心'] },
     b1: { id: 'b1', url: 'https://cdn/b1.jpg', pack: 'xiaokumao', keywords: ['哭'] },
+    c1: { id: 'c1', url: 'https://cdn/c1.jpg', pack: 'xiaokumao', keywords: ['惊讶'] },
   },
 };
 
@@ -81,6 +83,7 @@ describe('StickerPicker (grouped, one note per page)', () => {
     fireEvent.mouseMove(pager, { buttons: 1, clientX: 90, clientY: 94 });
     fireEvent.mouseUp(pager, { button: 0, clientX: 90, clientY: 94 });
 
+    expect((pager.firstElementChild as HTMLElement).style.transition).toContain('220ms');
     expect(screen.getByRole('group', { name: 'NoteB' })).toBeTruthy();
 
     fireEvent.click(screen.getByLabelText('哭'));
@@ -100,6 +103,42 @@ describe('StickerPicker (grouped, one note per page)', () => {
     const pager = screen.getByTestId('sticker-group-pager');
     expect(pager.className).not.toContain('px-3');
     expect(pager.querySelector('[aria-hidden="false"]')?.className).toContain('px-3');
+  });
+
+  it('does not mount far-away group stickers until they are near the active group', () => {
+    const onSelect = vi.fn();
+    render(<StickerPicker onSelect={onSelect} />);
+
+    expect(document.querySelector('button[aria-label="惊讶"]')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'nextStickerGroup' }));
+    expect(document.querySelector('button[aria-label="惊讶"]')).toBeTruthy();
+  });
+
+  it('prevents native touch scrolling after a horizontal swipe locks', () => {
+    const onSelect = vi.fn();
+    render(<StickerPicker onSelect={onSelect} />);
+
+    const pager = screen.getByTestId('sticker-group-pager');
+    fireEvent.mouseDown(pager, { button: 0, clientX: 250, clientY: 90 });
+    fireEvent.mouseMove(pager, { buttons: 1, clientX: 170, clientY: 94 });
+
+    const touchMove = new Event('touchmove', { bubbles: true, cancelable: true });
+    pager.dispatchEvent(touchMove);
+    expect(touchMove.defaultPrevented).toBe(true);
+  });
+
+  it('allows native touch scrolling after a vertical swipe locks', () => {
+    const onSelect = vi.fn();
+    render(<StickerPicker onSelect={onSelect} />);
+
+    const pager = screen.getByTestId('sticker-group-pager');
+    fireEvent.mouseDown(pager, { button: 0, clientX: 120, clientY: 90 });
+    fireEvent.mouseMove(pager, { buttons: 1, clientX: 124, clientY: 170 });
+
+    const touchMove = new Event('touchmove', { bubbles: true, cancelable: true });
+    pager.dispatchEvent(touchMove);
+    expect(touchMove.defaultPrevented).toBe(false);
   });
 
   it('jumps to a note via its tab', () => {

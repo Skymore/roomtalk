@@ -22,6 +22,7 @@ export interface MediaObjectStorage {
     objectKey: string;
     expiresInSeconds?: number;
     responseContentDisposition?: string;
+    responseCacheControl?: string;
   }): Promise<{ url: string; expiresAt: string }>;
   headObject(input: {
     objectKey: string;
@@ -144,6 +145,7 @@ export class LocalMediaObjectStorage implements MediaObjectStorage {
     objectKey: string;
     expiresInSeconds?: number;
     responseContentDisposition?: string;
+    responseCacheControl?: string;
   }): Promise<{ url: string; expiresAt: string }> {
     const expiresInSeconds = input.expiresInSeconds || 15 * 60;
     return {
@@ -266,6 +268,7 @@ export class S3MediaObjectStorage implements MediaObjectStorage {
     objectKey: string;
     expiresInSeconds?: number;
     responseContentDisposition?: string;
+    responseCacheControl?: string;
   }): Promise<{ url: string; expiresAt: string }> {
     const expiresInSeconds = input.expiresInSeconds || 15 * 60;
     const url = await getSignedUrl(
@@ -274,6 +277,7 @@ export class S3MediaObjectStorage implements MediaObjectStorage {
         Bucket: this.config.bucket,
         Key: input.objectKey,
         ResponseContentDisposition: input.responseContentDisposition,
+        ResponseCacheControl: input.responseCacheControl,
       }),
       { expiresIn: expiresInSeconds }
     );
