@@ -73,19 +73,6 @@ export const POSTGRES_SCHEMA_SQL = [
     ON room_messages (room_id, position)`,
   `CREATE INDEX IF NOT EXISTS idx_room_messages_room_timestamp
     ON room_messages (room_id, timestamp)`,
-  `CREATE TABLE IF NOT EXISTS image_assets (
-    id TEXT PRIMARY KEY,
-    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-    message_id TEXT UNIQUE REFERENCES room_messages(id) ON DELETE SET NULL,
-    object_key TEXT NOT NULL UNIQUE,
-    mime_type TEXT NOT NULL,
-    byte_size INTEGER NOT NULL,
-    width INTEGER,
-    height INTEGER,
-    created_at TIMESTAMPTZ NOT NULL
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_image_assets_room
-    ON image_assets (room_id, created_at ASC)`,
   `CREATE TABLE IF NOT EXISTS media_assets (
     id TEXT PRIMARY KEY,
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,

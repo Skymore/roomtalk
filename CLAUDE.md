@@ -79,17 +79,17 @@ Single-page app with one route (`/`). `MessagePage` is the main orchestrator han
 - **Socket**: `utils/socket.ts` — singleton connection, all emit/on wrappers
 - **State**: `utils/roomState.ts`, `utils/messageState.ts`, `utils/appPersistence.ts` — localStorage-backed state
 - **Hooks**: `useRoomMessageEvents` (message sync), `useAIRoles`, `useStickers`, `useCachedMedia`
-- **i18n**: `utils/i18n.ts` — en/zh/hi translations inline, browser language detection
+- **i18n**: `utils/i18n.ts` + `utils/languages.ts` — en/zh/hi/ja/ko translations, browser language detection
 
 Desktop uses a sidebar layout (`DesktopSidebar`); mobile uses bottom navigation (`BottomNav`). Breakpoint at 768px.
 
 ### Media Pipeline
 
-Upload: client requests presigned URL → uploads to S3/Tigris → confirms to server → server creates `MediaAsset` record. Download: server generates presigned GET URLs on demand. Legacy base64 images can be migrated via `npm run migrate:media-to-object-storage`.
+Upload: client requests presigned URL → uploads to S3/Tigris or local media storage → confirms to server → server creates a `MediaAsset` record. Download: server generates signed read URLs on demand. Historical docs mention `npm run migrate:media-to-object-storage`, but the referenced migration source is currently absent; restore or reimplement `server/src/scripts/migrateLegacyMediaMessagesToObjectStorage.ts` before attempting a legacy base64 migration.
 
 ### AI Streaming
 
-Client sends `ask_ai` socket event with role/model/context. Server streams OpenRouter completions as `ai_chunk` events, ends with `ai_stream_end`. Messages have `status: 'streaming' | 'complete' | 'error'`. On server restart, `aiStreamRecovery` marks orphaned streaming messages as failed.
+Client sends `ask_ai` socket event with role/model/context. Server selects the configured provider client (DeepSeek, Anthropic, OpenAI, or OpenRouter), streams chunks as `ai_chunk`, and ends with `ai_stream_end`. Messages have `status: 'streaming' | 'complete' | 'error'`. On server restart, `aiStreamRecovery` marks orphaned streaming messages as failed.
 
 ## Deployment
 

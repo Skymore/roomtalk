@@ -7,7 +7,7 @@
     "dev": "ts-node-dev --respawn src/server.ts",
     "start:e2e": "ts-node src/server.ts",
     "migrate:redis-to-postgres": "ts-node src/scripts/migrateRedisToPostgres.ts",
-    "migrate:media-to-object-storage": "ts-node src/scripts/migrateLegacyMediaMessagesToObjectStorage.ts",
+    "migrate:media-to-object-storage": "node -e \"console.error('Legacy media object-storage migration is not implemented in this checkout. Restore server/src/scripts/migrateLegacyMediaMessagesToObjectStorage.ts before running this command.'); process.exit(1)\"",
     "smoke:persistence": "ts-node src/scripts/persistenceSmoke.ts",
     "build": "tsc",
     "test": "node -r ts-node/register --test \"src/**/*.test.ts\""

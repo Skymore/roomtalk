@@ -2,6 +2,11 @@
 
 日期：2026-06-08
 
+> 状态：历史修复计划 + 评审记录。PR1-PR4 的恢复调度、in-flight 复用、
+> active password 复用、错误/恢复状态可见化等主线已落地。仍然有效的
+> 未完成项是 Phase 5：服务端返回稳定错误码，客户端移除 `/room not found/i`
+> 字符串匹配。
+
 审查范围：
 
 - `fdfaa12 fix: harden room session restore`

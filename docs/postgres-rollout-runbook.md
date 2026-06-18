@@ -12,6 +12,7 @@ Redis-only mode remains the rollback path. Do not delete Redis room/message data
 - `DATABASE_URL`: PostgreSQL database URL.
 - `POSTGRES_SSL=true` for managed PostgreSQL providers that require TLS.
 - `POSTGRES_SSL_REJECT_UNAUTHORIZED=true` by default. Set `false` only for intentionally self-signed TLS.
+- Optional managed-provider CA: `POSTGRES_SSL_CA_BASE64` preferred, or `POSTGRES_SSL_CA`.
 
 ## Preflight
 
@@ -47,6 +48,19 @@ Expected checks:
 
 ## Migration
 
+The final migration must run during a write freeze or maintenance window. The
+script replaces each room's message history in PostgreSQL from the Redis source
+of truth; writes accepted after migration but before cutover can be missing from
+PostgreSQL. For a no-downtime migration, add a dual-write/outbox path first.
+
+Recommended final-sync sequence for Fly:
+
+1. Announce a maintenance window.
+2. Cordon or stop serving machines so users cannot create new Redis writes.
+3. Run the migration command below from a trusted migration host.
+4. Set `PERSISTENCE_STORE=postgres` and related secrets.
+5. Restart/uncordon serving machines and verify.
+
 The migration is idempotent:
 
 - Rooms are upserted.
@@ -73,6 +87,7 @@ Set production secrets and restart/redeploy:
 fly secrets set PERSISTENCE_STORE="postgres"
 fly secrets set DATABASE_URL="postgres://..."
 fly secrets set POSTGRES_SSL="true"
+fly secrets set POSTGRES_SSL_CA_BASE64="..."
 fly secrets set ROOM_MESSAGES_CACHE_TTL_SECONDS="30"
 ```
 

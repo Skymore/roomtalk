@@ -74,11 +74,12 @@ jobs:
           }
 
           require_secret OPENROUTER_API_KEY
+          require_secret DEEPSEEK_API_KEY
           require_secret AWS_ACCESS_KEY_ID
           require_secret AWS_SECRET_ACCESS_KEY
           require_secret GOOGLE_CLIENT_ID
-          require_any_secret image-bucket IMAGE_BUCKET_NAME BUCKET_NAME S3_BUCKET AWS_BUCKET_NAME
-          require_any_secret image-storage-endpoint IMAGE_STORAGE_ENDPOINT AWS_ENDPOINT_URL_S3 S3_ENDPOINT
+          require_any_secret media-bucket MEDIA_BUCKET_NAME BUCKET_NAME S3_BUCKET AWS_BUCKET_NAME
+          require_any_secret media-storage-endpoint MEDIA_STORAGE_ENDPOINT AWS_ENDPOINT_URL_S3 S3_ENDPOINT
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 

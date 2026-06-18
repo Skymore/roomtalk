@@ -116,3 +116,23 @@ The image and video viewer should feel closer to a native photo viewer than a we
 - Closing after swiping to another item and reopening the original chat media starts from the clicked media, not the previous internal carousel position.
 - Video slides do not autoplay and require explicit user play.
 - Existing history preview action buttons remain available.
+
+## Implementation Status
+
+Current implementation lives in `client-heroui/src/components/MediaViewerModal.tsx`.
+It covers direct DOM transforms, double-tap image zoom, pinch/pan/down-dismiss,
+horizontal paging, video controls with no autoplay, inactive-video pause,
+keyboard navigation, and Escape handling.
+
+Automated coverage currently includes double-click zoom, tap close, downward
+dismiss, horizontal image/video swipes, reopen behavior, and video no-autoplay
+through `MessageItem.test.tsx`.
+
+Known test gaps:
+
+- Direct multi-pointer pinch simulation.
+- Suppression of horizontal navigation while a zoomed image is panned.
+- Edge resistance at the first/last media item.
+- Velocity-only commits independent of distance.
+- Keyboard arrow and Escape behavior.
+- Single-tap delay before double-tap disambiguation.

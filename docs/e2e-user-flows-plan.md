@@ -1,5 +1,9 @@
 # E2E User Flows Plan
 
+> Status: implemented plan. This document records the original rollout plan and
+> the current local execution paths. Active scripts are in
+> `client-heroui/package.json`.
+
 ## Goal
 
 Build browser-level regression coverage for the user flows that must not break in production. The E2E suite complements the existing unit, component, API, and socket tests; it is not a replacement for them.
@@ -11,6 +15,7 @@ The E2E suite must catch failures where the UI looks correct but a real user can
 - Use Playwright for real browser tests.
 - Start a real backend and real frontend for E2E runs.
 - Use an isolated Redis database for E2E data.
+- Use a guarded PostgreSQL E2E config for persistence-mode coverage.
 - Generate unique room names and client IDs per test to keep tests independent.
 - Add a guarded E2E AI test provider so AI flows do not call real external APIs.
 - Keep E2E tests focused on user-observable outcomes instead of implementation details.
@@ -160,11 +165,21 @@ Optional overrides:
 E2E_CLIENT_PORT=3311 E2E_SERVER_PORT=3312 npm run test:e2e
 ```
 
+PostgreSQL mode:
+
+```bash
+E2E_DATABASE_URL="postgres://localhost/message_system_e2e" npm run test:e2e:postgres
+```
+
+`E2E_DATABASE_URL` must point to a disposable PostgreSQL database whose name
+includes `test` or `e2e` as a separated token. The Postgres config still uses
+Redis DB 15 for realtime state and Socket.IO adapter behavior.
+
 ### Acceptance Criteria
 
 - `npm run test:e2e` is documented.
 - All existing checks still pass.
-- E2E suite passes locally before merge to deployment branch.
+- E2E suite passes locally before merging to `master` or manually triggering deployment.
 
 ## Commit Plan
 
@@ -185,6 +200,6 @@ E2E_CLIENT_PORT=3311 E2E_SERVER_PORT=3312 npm run test:e2e
 - Server tests pass.
 - Server build passes.
 - E2E tests pass.
-- Changes are committed in logical batches on `dev`.
-- `dev` is pushed.
-- Deployment branch is fast-forwarded and pushed after validation.
+- Changes are committed in logical batches.
+- `master` is updated only after validation because current CI deploys from `master`.
+- PostgreSQL E2E is run when touching persistence, room/message history, media assets, or realtime sync.

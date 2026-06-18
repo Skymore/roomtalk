@@ -1,6 +1,13 @@
-# Image Object Storage Migration Runbook
+# Legacy Image Media Object Storage Migration Runbook
 
-This runbook covers the one-time migration from legacy base64 image messages in PostgreSQL to private Tigris/S3 object storage.
+> Status: archival / blocked. The current checkout does not contain the legacy
+> migration source file referenced by older docs (`server/src/scripts/migrateLegacyMediaMessagesToObjectStorage.ts`).
+> Do not run stale `dist/...migrateImageMessagesToObjectStorage.js` commands
+> unless that script is restored or reimplemented and reviewed.
+> The current `npm run migrate:media-to-object-storage` entrypoint exits with
+> an explanatory error instead of a missing-file stack trace.
+
+This runbook covers the one-time migration from legacy base64 image messages in PostgreSQL to private S3/Tigris media object storage. PostgreSQL now uses the unified `media_assets` table; the old `image_assets` table has been removed.
 
 ## Decision
 
@@ -10,7 +17,7 @@ The serving Fly VM is sized for the web process. A migration process that reads 
 
 If a dedicated non-serving Fly migration machine is intentionally provisioned, set `ALLOW_FLY_APP_VM_IMAGE_MIGRATION=true` for that machine only. Do not set it on the serving app VM.
 
-The migration still converts legacy images to lossless WebP with `sharp`. The objective is:
+The intended migration converts legacy images to lossless WebP with `sharp`. The objective is:
 
 - remove large base64 payloads from `room_messages.content`;
 - store image bytes in private object storage;
@@ -21,17 +28,18 @@ The migration still converts legacy images to lossless WebP with `sharp`. The ob
 
 - A verified PostgreSQL backup exists before execute mode.
 - Local environment can reach the production PostgreSQL database.
-- Local environment has Tigris/S3 credentials for the private image bucket.
+- Local environment has Tigris/S3 credentials for the private media bucket.
 - The deployed server already supports asset-backed image messages and signed read URLs.
+- The migration script has been restored or reimplemented and its npm entrypoint works.
 
 Required environment variables:
 
 ```bash
 DATABASE_URL="postgres://..."
 POSTGRES_SSL="true"
-IMAGE_BUCKET_NAME="message-system-images"
-IMAGE_STORAGE_REGION="auto"
-IMAGE_STORAGE_ENDPOINT="https://fly.storage.tigris.dev"
+MEDIA_BUCKET_NAME="message-system-media"
+MEDIA_STORAGE_REGION="auto"
+MEDIA_STORAGE_ENDPOINT="https://fly.storage.tigris.dev"
 AWS_ACCESS_KEY_ID="..."
 AWS_SECRET_ACCESS_KEY="..."
 ROOMTALK_DB_BACKUP_FILE="/absolute/path/to/verified-backup.dump"
@@ -41,12 +49,12 @@ Do not commit these values.
 
 ## Dry Run
 
-Run from the local `server` directory:
+After restoring the migration script, run from the local `server` directory:
 
 ```bash
 cd server
 npm run build
-node dist/src/scripts/migrateImageMessagesToObjectStorage.js --room-id=<ROOM_ID>
+npm run migrate:media-to-object-storage -- --room-id=<ROOM_ID>
 ```
 
 Dry-run reads the selected room, decodes legacy image payloads, converts them to WebP in memory, and reports stats. It does not upload objects or update PostgreSQL.
@@ -59,7 +67,7 @@ Start with the room that has known legacy image payloads:
 
 ```bash
 cd server
-node dist/src/scripts/migrateImageMessagesToObjectStorage.js \
+npm run migrate:media-to-object-storage -- \
   --execute \
   --room-id=<ROOM_ID> \
   --backup-file="$ROOMTALK_DB_BACKUP_FILE"
@@ -77,21 +85,32 @@ Before migration, the target room should show legacy image payloads:
 
 ```sql
 SELECT
-  COUNT(*) FILTER (WHERE m.message_type = 'image') AS image_messages,
-  COUNT(*) FILTER (WHERE m.message_type = 'image' AND a.id IS NULL) AS legacy_images,
-  COUNT(*) FILTER (WHERE m.message_type = 'image' AND a.id IS NOT NULL) AS asset_images,
-  COALESCE(SUM(length(m.content)) FILTER (WHERE m.message_type = 'image' AND a.id IS NULL), 0) AS legacy_content_bytes
+  COUNT(*) FILTER (WHERE m.message_type = 'media') AS media_messages,
+  COUNT(*) FILTER (
+    WHERE m.message_type = 'media'
+      AND (a.id IS NULL OR a.kind IS DISTINCT FROM 'image')
+      AND m.content LIKE 'data:image/%'
+  ) AS legacy_base64_images,
+  COUNT(*) FILTER (
+    WHERE m.message_type = 'media'
+      AND a.kind = 'image'
+  ) AS asset_images,
+  COALESCE(SUM(length(m.content)) FILTER (
+    WHERE m.message_type = 'media'
+      AND (a.id IS NULL OR a.kind IS DISTINCT FROM 'image')
+      AND m.content LIKE 'data:image/%'
+  ), 0) AS legacy_content_bytes
 FROM room_messages m
-LEFT JOIN image_assets a ON a.message_id = m.id
+LEFT JOIN media_assets a ON a.message_id = m.id
 WHERE m.room_id = '<ROOM_ID>';
 ```
 
 After migration:
 
-- `legacy_images` should be `0`;
+- `legacy_base64_images` should be `0`;
 - `asset_images` should match the previous image count;
 - `legacy_content_bytes` should be near `0`;
-- `image_assets` should contain one row per migrated image message;
+- `media_assets` should contain one `kind = 'image'` row per migrated image message;
 - room history loading should no longer transfer base64 image payloads.
 
 ## Rollback
