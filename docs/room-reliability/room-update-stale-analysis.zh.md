@@ -2,6 +2,10 @@
 
 日期:2026-06-09
 
+> 状态：已完成的历史根因分析。文中“现存 bug/设计缺口”描述的是修复前状态；
+> 后续已通过整体替换房间对象、ack read-your-write、`room_version` 单调版本、
+> posting 边界刷新和 modal 表单保护收敛。当前入口状态见本目录 README。
+
 症状:**更新 posting time 之后,页面没有跟着更新;可能要刷新好几次页面才会更新。**
 
 本文档基于对全链路代码的完整阅读(客户端 socket 层、MessagePage、RoomSettingsModal、ChatHeader、ChatRoomView、MessageInput;服务端 roomHandlers、roomAuthorization、messageHandlers、CompositeRoomStore、redisStore、postgresStore),给出经核实的数据流、根因排序和修复计划。所有断言均附 `file:line` 证据。

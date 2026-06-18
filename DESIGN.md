@@ -1,5 +1,10 @@
 # Design System Inspired by Claude (Anthropic)
 
+> Status: visual reference, not the current RoomTalk design source of truth.
+> Use this as inspiration for tone, color, and spacing only. Current app UI is
+> implemented with HeroUI, Tailwind, and the components under
+> `client-heroui/src/components`.
+
 ## 1. Visual Theme & Atmosphere
 
 Claude's interface is a literary salon reimagined as a product page — warm, unhurried, and quietly intellectual. The entire experience is built on a parchment-toned canvas (`#f5f4ed`) that deliberately evokes the feeling of high-quality paper rather than a digital surface. Where most AI product pages lean into cold, futuristic aesthetics, Claude's design radiates human warmth, as if the AI itself has good taste in interior design.

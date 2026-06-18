@@ -2,463 +2,220 @@
 
 [中文版](./README.zh.md)
 
-A modern, feature-rich real-time messaging system built with WebSocket and Redis. Supports Markdown formatting, image sharing, user avatars, and multi-instance deployment. Perfect for building chat applications, team collaboration tools, or any real-time communication platform.
+RoomTalk is a real-time room chat system with AI assistants, private media, stickers, room management, saved rooms, mobile recovery, and optional PostgreSQL durable storage. The repository contains a React/Vite client and a Node/Express/Socket.IO server.
 
-**Current Version: 1.0** (AI assistant & experience refresh)
+## Current Capabilities
 
----
+- Room creation, joining by ID/link, saved rooms, room rename/delete, member roles, admin controls, ownership transfer, password rooms, and posting schedules.
+- Text, AI, media, sticker, reply, edit, delete, and clear-history message flows.
+- AI streaming with provider-aware clients for DeepSeek, Anthropic, OpenAI, and OpenRouter-routed models.
+- AI role presets, model selection, premium model confirmation, usage/cost metadata, retry/edit-and-ask flows, and A2UI streaming surfaces.
+- Private media upload/download via S3-compatible storage, local media fallback in development, media history, image/video/audio handling, and mobile media-viewer gestures.
+- Voice transcription via AssemblyAI when configured.
+- Google sign-in linking, client password protection, token-based socket registration, and optional web-push notifications.
+- i18n for English, Chinese, Hindi, Japanese, and Korean.
+- Mobile-focused reliability: active-room restore, reconnect handling, member-count recovery, keyboard viewport fixes, and mobile E2E coverage.
 
-## 🚀 Tech Stack
+## Repository Layout
 
-### Client
+```text
+client-heroui/     React + TypeScript + Vite frontend
+server/            Express + Socket.IO TypeScript backend
+docs/              Runbooks, design records, migration notes, reliability writeups
+Dockerfile         Production image build used by Fly.io
+fly.toml           Fly.io app configuration
+start.sh           Local convenience launcher: server on 3012, client on 3011
+CLAUDE.md          Agent/developer guide; AGENTS.md symlinks to it
+```
 
-- React + TypeScript + Vite
-- Tailwind CSS + HeroUI Components
-- React Router v6
-- Socket.io Client
-- i18next (Internationalization)
-- Markdown-to-JSX (Rich Text Rendering)
-- KaTeX (Math Formula Support)
-
-### Server
-
-- Node.js + Express
-- Socket.io with Redis Adapter
-- Redis (for persistence and pub/sub)
-- OpenAI SDK (for AI streaming responses)
-- UUID-based identity system
-- Multi-instance support
-- Docker containerization
-
-### DevOps & Deployment
-
-- Fly.io cloud platform
-- Docker multi-stage builds
-- Redis clustering
-- Environment-based configuration
-- Health monitoring endpoints
-
----
-
-## 📐 System Architecture
+## Architecture
 
 ```mermaid
-sequenceDiagram
-    participant User
-    participant Client
-    participant Server
-    participant Redis
-    participant OpenAI
-
-    User->>Client: Type message / paste media / invoke AI role
-    Client->>Server: send_message / ask_ai (Socket.IO)
-    Server->>Redis: Append message history / store sessions
-    Server->>OpenAI: Stream completions with context (ask_ai)
-    OpenAI-->>Server: Streaming tokens (ai_chunk)
-    Server-->>Client: new_message / ai_chunk / ai_stream_end
-    Client-->>User: Live UI updates (MessageList, AI streaming)
+flowchart LR
+  Client["React client"] <--> Socket["Socket.IO server"]
+  Client --> HTTP["Express API"]
+  Socket --> Store["CompositeRoomStore"]
+  HTTP --> Store
+  Store --> Durable["Redis or PostgreSQL durable store"]
+  Store --> Redis["Redis realtime state + Socket.IO adapter + cache"]
+  Socket --> AI["AI providers"]
+  HTTP --> Media["S3/Tigris or local media storage"]
 ```
 
-## ✨ Highlights since v0.5
+The server uses a `CompositeRoomStore`:
 
-- Intelligent multi-language UI (English/中文/हिन्दी) with localized random usernames
-- Desktop navbar + mobile bottom navigation for room, saved, chat, settings views
-- In-room presence indicators, join confirmations, and toast-style status messages
-- AI role manager with persistent custom roles, system prompts, icon/color badges
-- Streaming AI responses rendered incrementally with retry awareness
-- Sticky room history (localStorage) and shareable deep links (`/?room=ID`)
+- Durable store: Redis by default, or PostgreSQL with `PERSISTENCE_STORE=postgres`.
+- Realtime store: Redis for socket sessions, online membership, and Socket.IO adapter state.
+- Message cache: Redis TTL cache in front of PostgreSQL message reads.
 
----
+Client state is centered in `MessagePage`, with reusable UI in `src/components`, socket/API wrappers in `src/utils`, and room/message sync logic in `src/hooks`.
 
-## 🌟 Features
+## Quick Start
 
-### v1.0 - Streaming AI & Experience Refresh
-- ✅ **AI assistant**: Streaming responses via OpenAI, customizable roles with saved system prompts
-- ✅ **Message input**: Mixed media editor with improved clipboard + image handling  
-- ✅ **Presence & storage**: Room member counts, join/leave events, persistent room/username/saved lists
-- ✅ **UI refresh**: New desktop navbar, mobile bottom nav, status banners, shareable room links
-- ✅ **Internationalization**: Added Hindi, localized random usernames, expanded translation keys
+Requirements:
 
-### v0.4 - Fly.io Deployment & Markdown Support
-- ✅ **Fly.io deployment**: Multi-instance capabilities with environment variable management
-- ✅ **Markdown rendering**: Rich text message support with integrated parsing and KaTeX math formulas
+- Node.js 22 recommended.
+- Redis running locally at `localhost:6379`.
+- Optional: PostgreSQL test database for PostgreSQL-mode smoke/E2E.
 
-### v0.3 - User Identity System  
-- ✅ **Personalized avatars**: Username-based generation with intelligent text extraction and hash-based color mapping
-- ✅ **Enhanced chat**: Username display, message ownership indication, and Redis persistence for consistency
-- ✅ **Localized names**: Cute random name generation in English and Chinese with localStorage persistence
-
-### v0.2 - Enhanced Messaging with Image Support
-- ✅ **Comprehensive image system**: Base64 encoding, up to 9 images per message
-- ✅ **Advanced content editor**: Mixed-content editing with clipboard operations
-- ✅ **Performance optimization**: Throttling and async processing for large images
-
-### v0.1 - Core Foundation
-- ✅ **Real-time messaging**: Socket.IO with Redis persistence and pub/sub for multi-instance scaling
-- ✅ **Room management**: Comprehensive creation, joining, and access control systems  
-- ✅ **Foundation features**: Multi-language support, theme toggling, and responsive design principles
-
----
-
-## 🧪 Quick Start
-
-### Requirements
-
-- Node.js installed
-- Redis installed and running locally (default on `localhost:6379`)
-
-### Install Dependencies
+Install dependencies:
 
 ```bash
-# Server
-cd server
-npm install
-
-# Client
-cd ../client-heroui
-npm install
+cd server && npm install
+cd ../client-heroui && npm install
 ```
 
-### Build (optional, required for production)
+Create local server config:
 
 ```bash
-cd client-heroui
-npm run build
-cd ../server
-npm run build
+cp server/.env.example server/.env
 ```
 
-### Start the System
+For AI with the default model, set `DEEPSEEK_API_KEY`. For OpenRouter-routed models and AI role draft generation, set `OPENROUTER_API_KEY`.
 
-Use the provided script:
+Start both apps:
 
 ```bash
 ./start.sh
 ```
 
-Or start manually:
+Manual development mode:
 
 ```bash
-# Start the server (development mode)
 cd server
 npm run dev
 
-# Start the client
 cd ../client-heroui
 npm run dev
 ```
 
-To run the server in production mode, first execute `npm run build` inside the `server` directory, then run `npm start` to launch the compiled code from `dist/`.
+Open [http://localhost:3011](http://localhost:3011).
 
----
+## Commands
 
-## 🧭 Usage
-
-1. Visit [http://localhost:3011](http://localhost:3011) after starting both client and server
-2. A persistent `clientId` is generated and stored locally (also displayed in header/settings)
-3. Create or join rooms from the home view, or paste a shared link like `/?room=ID`
-4. Customize AI roles via the message input settings cog, then trigger with `Ctrl/⌘ + Enter`
-5. Manage saved rooms, change language/theme, and edit username in the Settings tab
-
----
-
-## 🔧 Technical Challenges
-
-### WebSocket Reliability on Mobile Devices
-
-One of the most significant challenges we faced was maintaining reliable WebSocket connections on mobile devices, particularly when apps transition between foreground and background states.
-
-#### Problem
-- When a mobile app moves to the background, browsers may suspend WebSocket connections
-- Even when connections appear active, event listeners often become unresponsive
-- Users can send messages (via HTTP fallback) but not receive them without refreshing
-- Different browsers and mobile platforms handle background connections inconsistently
-
-#### Our Solution
-We implemented a multi-layered approach to ensure connection reliability:
-
-1. **Enhanced Socket.io Configuration**
-   - Configured automatic reconnection with optimized timeouts and delays
-   - Implemented connection state tracking to detect "zombie" connections
-   - Added transport fallback mechanisms (WebSocket → HTTP polling)
-
-2. **Event Listener Management**
-   - Created a system to detect and rebind event listeners when they become unresponsive
-   - Implemented event reference tracking to prevent duplicate event bindings
-   - Added message deduplication to prevent repeated messages after reconnection
-
-3. **Visibility-Based Recovery**
-   - Utilized the Page Visibility API to detect when apps return to the foreground
-   - Implemented connection health checks when visibility changes
-   - Automatically refresh message data when returning from background state
-
-4. **Active Room Tracking**
-   - Maintained client-side records of active room participation
-   - Automatically rejoined rooms after connection reestablishment
-   - Implemented server-side session recovery mechanisms
-
-This comprehensive approach ensures message delivery reliability across different devices and network conditions, maintaining a seamless user experience even in challenging mobile environments.
-
----
-
-## 🔧 Technical Highlights
-
-- **Durable persistence options**: Redis-only by default, or PostgreSQL as the durable source of truth with Redis for Socket.IO scaling, realtime state, and short TTL message cache
-- **AI streaming pipeline**: Context-aware prompts, `ask_ai` Socket.IO event, OpenAI streaming, client-side chunk rendering, and retry/edit workflows
-- **Rich message editor**: Mixed text/image contentEditable with throttled paste, compression
-- **Responsive shell**: HeroUI-based header, status banners, room list grids, and mobile bottom navigation with saved-room management
-- **Internationalization**: i18next resources for English/中文/हिन्दी including localized prompts, button labels, and random usernames
-- **Deployment**: Fly.io app (`fly.toml`) targeting Node 22 runtime with Redis secrets; Docker-based multi-stage build included
-
----
-
-## 🔌 API Overview
-
-### HTTP Endpoints
-
-| Path                                        | Method | Description                                                       |
-|---------------------------------------------|--------|-------------------------------------------------------------------|
-| `/api/rooms/:roomId/messages`               | `GET`  | Get messages for the specified room                               |
-| `/api/clients/:clientId/rooms`              | `GET`  | Get rooms created by the specified client                         |
-| `/api/clients/:clientId/rooms`              | `POST` | Create a new room for the specified client                        |
-| `/api/clients/:clientId/rooms/:roomId`        | `GET`  | Get specific room details (only if owned by the client)             |
-| `/api/rooms/:roomId/messages`               | `POST` | Send a message to the specified room                              |
-
-### WebSocket Events
-
-| Event             | Direction       | Description                                               |
-|-------------------|-----------------|-----------------------------------------------------------|
-| `register`        | Client → Server | Register user with clientId                               |
-| `get_rooms`       | Client → Server | Request rooms created by the user                         |
-| `create_room`     | Client → Server | Create a new room                                         |
-| `join_room`       | Client → Server | Join an existing room                                     |
-| `leave_room`      | Client → Server | Leave a room                                              |
-| `send_message`    | Client → Server | Send a message to a room                                  |
-| `get_room_by_id`  | Client → Server | Request room details via room ID                          |
-| `message_history` | Server → Client | Deliver room message history                              |
-| `new_room`        | Server → Client | Notify user of a new room created (scoped to client)      |
-| `new_message`     | Server → Client | Broadcast new message to room participants                |
-
----
-
-## ⚙️ Configuration
-
-### Server Environment Variables
-
-| Variable         | Default                   | Description                     |
-|------------------|---------------------------|---------------------------------|
-| `PORT`           | 3012                      | Server port                     |
-| `CLIENT_URL`     | http://localhost:3011     | CORS origin                     |
-| `REDIS_URL`      | redis://localhost:6379    | Redis connection URL            |
-| `PERSISTENCE_STORE` | redis                  | `redis` or `postgres` durable storage mode |
-| `DATABASE_URL`   | —                         | PostgreSQL connection URL, required when `PERSISTENCE_STORE=postgres` |
-| `POSTGRES_SSL`   | false                     | Set `true` to enable PostgreSQL TLS |
-| `POSTGRES_SSL_REJECT_UNAUTHORIZED` | true     | Set `false` only for intentionally self-signed PostgreSQL TLS |
-| `ROOM_MESSAGES_CACHE_TTL_SECONDS` | 30        | Redis room message cache TTL in PostgreSQL mode; `0` disables cache writes |
-| `OPENROUTER_API_KEY` | —                     | OpenRouter API key (required for AI) |
-| `AI_MODEL`       | deepseek-v4-pro           | Default AI model id             |
-| `AI_MODEL_OPTIONS` | deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7,tencent/hy3-preview,google/gemini-3.5-flash | Comma-separated model ids users can select |
-| `OPENROUTER_HTTP_REFERER` | `CLIENT_URL`      | Optional OpenRouter referer header |
-| `OPENROUTER_APP_NAME` | RoomTalk              | Optional OpenRouter app title header |
-
-### Client Environment Variables
-
-**.env.development:**
-
-| Variable         | Default              | Description                  |
-|------------------|----------------------|------------------------------|
-| `VITE_SOCKET_URL`| http://localhost:3012| WebSocket base URL           |
-
-**.env.production:**
-
-| Variable         | Default | Description                                        |
-|------------------|---------|----------------------------------------------------|
-| `VITE_SOCKET_URL`| `/`     | Use relative path for same-origin deployment      |
-
-### Setup Instructions
-
-**Local Development:**
-
-Create `server/.env` file:
-
-```env
-PORT=3012
-CLIENT_URL=http://localhost:3011
-REDIS_URL=redis://localhost:6379
-PERSISTENCE_STORE=redis
-OPENROUTER_API_KEY=sk-or-...
-AI_MODEL=deepseek-v4-pro
-AI_MODEL_OPTIONS=deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7,tencent/hy3-preview,google/gemini-3.5-flash
-OPENROUTER_HTTP_REFERER=http://localhost:5173
-OPENROUTER_APP_NAME=RoomTalk
-```
-
-Client uses mode-specific files:
-- `client-heroui/.env.development` for `npm run dev`
-- `client-heroui/.env.production` for builds
-
-**Production (Fly.io):**
+Server:
 
 ```bash
-fly secrets set OPENROUTER_API_KEY="sk-or-..."
-fly secrets set REDIS_URL="redis://..."
-# optional
-fly secrets set AI_MODEL="deepseek-v4-pro"
-fly secrets set AI_MODEL_OPTIONS="deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7,tencent/hy3-preview,google/gemini-3.5-flash"
+cd server
+npm run dev                         # ts-node-dev server
+npm run build                       # TypeScript build
+npm start                           # run dist/src/server.js
+npm test                            # Node test runner over src/**/*.test.ts
+npm run migrate:redis-to-postgres   # Redis -> PostgreSQL durable migration
+npm run smoke:persistence           # safe local persistence smoke test
 ```
 
-## 📦 Persistence
+Client:
 
-Redis remains the default durable store for local development and existing deployments. PostgreSQL can be enabled as the durable source of truth while Redis continues to handle Socket.IO scaling, realtime session state, online member sets, and short TTL message cache.
+```bash
+cd client-heroui
+npm run dev                 # Vite dev server
+npm test                    # Vitest unit/component tests
+npm run lint                # ESLint
+npm run check:i18n          # verify translation keys
+npm run build               # i18n check + TypeScript + Vite build
+npm run test:e2e            # Playwright E2E against Redis mode
+npm run test:e2e:postgres   # Playwright E2E against PostgreSQL mode
+```
 
-### PostgreSQL Cutover
+## Configuration
 
-1. Run a read-only migration preview:
-   ```bash
-   cd server
-   REDIS_URL="redis://..." npm run migrate:redis-to-postgres -- --dry-run
-   ```
-2. Run the idempotent migration:
-   ```bash
-   REDIS_URL="redis://..." DATABASE_URL="postgres://..." npm run migrate:redis-to-postgres
-   ```
-3. Switch durable storage:
-   ```bash
-   fly secrets set PERSISTENCE_STORE="postgres"
-   fly secrets set DATABASE_URL="postgres://..."
-   fly secrets set POSTGRES_SSL="true"
-   ```
-4. Verify `/api/status` reports `persistenceStore: "postgres"` and expected room count.
+Use `server/.env.example` as the backend source of truth. Important groups:
 
-Rollback is configuration-only: set `PERSISTENCE_STORE` back to `redis` and redeploy/restart:
+| Area | Variables |
+| --- | --- |
+| HTTP/CORS | `PORT`, `CLIENT_URL`, `NODE_ENV` |
+| Redis | `REDIS_URL` |
+| PostgreSQL mode | `PERSISTENCE_STORE`, `DATABASE_URL`, `POSTGRES_SSL`, `POSTGRES_SSL_REJECT_UNAUTHORIZED`, `POSTGRES_SSL_CA_BASE64`, `POSTGRES_SSL_CA`, `ROOM_MESSAGES_CACHE_TTL_SECONDS` |
+| AI | `AI_MODEL`, `AI_MODEL_OPTIONS`, `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`, `OPENROUTER_HTTP_REFERER`, `OPENROUTER_APP_NAME` |
+| Media storage | `MEDIA_BUCKET_NAME`, `MEDIA_STORAGE_REGION`, `MEDIA_STORAGE_ENDPOINT`, `MEDIA_STORAGE_FORCE_PATH_STYLE`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` |
+| Optional services | `ASSEMBLYAI_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_IDS`, `WEB_PUSH_VAPID_PUBLIC_KEY`, `WEB_PUSH_VAPID_PRIVATE_KEY`, `WEB_PUSH_SUBJECT` |
+
+Client configuration:
+
+- `client-heroui/.env.development`: local `VITE_SOCKET_URL` and public Google client ID.
+- `client-heroui/.env.production`: same-origin `VITE_SOCKET_URL=/` for Fly deployment.
+
+Only put browser-safe values in `VITE_*` variables.
+
+## Persistence And Migrations
+
+Redis remains the default local durable store. PostgreSQL mode makes PostgreSQL the durable source of truth while Redis still handles realtime state, Socket.IO scaling, and short TTL message cache.
+
+Redis to PostgreSQL cutover:
+
+```bash
+cd server
+REDIS_URL="redis://..." npm run migrate:redis-to-postgres -- --dry-run
+REDIS_URL="redis://..." DATABASE_URL="postgres://..." npm run migrate:redis-to-postgres
+```
+
+Run the final migration during a write freeze or maintenance window, then set:
+
+```bash
+fly secrets set PERSISTENCE_STORE="postgres"
+fly secrets set DATABASE_URL="postgres://..."
+fly secrets set POSTGRES_SSL="true"
+```
+
+Rollback is configuration-only while Redis durable data is retained:
 
 ```bash
 fly secrets set PERSISTENCE_STORE="redis"
 ```
 
-Keep Redis data intact until the PostgreSQL cutover has been verified.
+Full checklist: [docs/postgres-rollout-runbook.md](docs/postgres-rollout-runbook.md).
 
-Full rollout checklist: [docs/postgres-rollout-runbook.md](docs/postgres-rollout-runbook.md).
-
-### Image Object Storage Migration
-
-Legacy image messages may still store large base64 payloads in PostgreSQL. New image uploads use private object storage, and old image messages can be migrated with:
-
-```bash
-cd server
-npm run build
-node dist/src/scripts/migrateImageMessagesToObjectStorage.js --room-id=<ROOM_ID>
-node dist/src/scripts/migrateImageMessagesToObjectStorage.js --execute --room-id=<ROOM_ID> --backup-file="$ROOMTALK_DB_BACKUP_FILE"
-```
-
-Run this migration from a local workstation or a dedicated migration host, not from the serving Fly app VM. See [docs/image-object-storage-migration-runbook.md](docs/image-object-storage-migration-runbook.md).
-
-### Persistence Smoke Tests
-
-Run a local smoke check before and after persistence-mode changes:
+Persistence smoke tests are intentionally guarded:
 
 ```bash
 cd server
 npm run smoke:persistence
-```
-
-By default, the smoke runner only uses local Redis at `redis://127.0.0.1:6379/15`; it does not inherit `REDIS_URL`, which avoids accidentally targeting production Redis. To test PostgreSQL mode, point it at a disposable database whose name includes `test` or `e2e` as a separated token:
-
-```bash
-cd server
 TEST_DATABASE_URL="postgres://localhost/message_system_test" npm run smoke:persistence
 ```
 
-The script verifies Redis mode `/api/status`, basic room/message API writes, PostgreSQL mode when a safe test database is configured, Redis mode after switching back, and PostgreSQL fail-closed startup behavior when the database is unreachable.
+The PostgreSQL smoke database name must include `test` or `e2e` as a separated token.
 
-### Redis Persistence
+## Media Storage
 
-The system supports two Redis deployment options:
+New media uploads use private S3-compatible object storage via `MEDIA_*` and AWS credential variables. Development can use local object routes when storage is not configured.
 
-### Local Development
-Uses standard Redis with **RDB snapshot** persistence by default. You may enable **AOF** or adjust save policies via `redis.conf`.
+Known maintenance note: older docs referenced a legacy base64-to-object-storage migration script, but the current checkout does not contain `server/src/scripts/migrateLegacyMediaMessagesToObjectStorage.ts`. Do not run old `dist/...migrateImageMessagesToObjectStorage.js` commands unless the script is restored or reimplemented. See [docs/image-object-storage-migration-runbook.md](docs/image-object-storage-migration-runbook.md).
 
-### Production (Upstash Redis)
-For production environments, we recommend using Upstash Redis, which offers:
+## Deployment
 
-- **Instant Persistence**: Data is immediately saved to block storage alongside memory, making it reliable as a primary database
-- **Multi-Region Replication**: Automatic data replication across regions for better availability
-- **Serverless Architecture**: No Redis instance management needed, scales automatically
-- **REST API Access**: Supports both Redis protocol and HTTP/REST API access
+Production deployment is CI-first:
 
-Configuration example:
-```env
-REDIS_URL=your-upstash-redis-url
-REDIS_TOKEN=your-upstash-token
-```
+- Pushes to `master` trigger `.github/workflows/fly-deploy.yml`.
+- CI installs dependencies, builds server/client, checks translations, verifies required Fly secrets, then deploys with `flyctl deploy --remote-only`.
+- The Fly app is `message-system` in `dfw`, with a Node 22 Alpine Docker image and a 512 MB VM.
 
----
+Required production services normally include Redis, PostgreSQL, S3/Tigris-compatible media storage, AI provider keys, and Google OAuth. Optional services include AssemblyAI and web-push VAPID keys.
 
-## 📄 License
+Deployment guide: [DeploymentGuide.md](DeploymentGuide.md). Chinese guide: [部署指南.md](部署指南.md).
 
-MIT License
+## Testing Coverage
 
-Copyright (c) 2024 RoomTalk
+The test suite includes:
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+- Server unit/socket/repository/API tests with Node's built-in runner.
+- Client component and utility tests with Vitest and Testing Library.
+- Playwright E2E for room flows, message flows, AI/media/sharing, mobile core paths, room restore, multi-client realtime, and PostgreSQL persistence.
+- i18n key checks in the client build.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+Use focused tests next to changed code. Use Playwright for browser-visible behavior and PostgreSQL E2E for persistence-mode regressions.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+## Documentation Map
 
-## 📝 Version History
+- [CLAUDE.md](CLAUDE.md): concise contributor/agent operating guide.
+- [docs/postgres-rollout-runbook.md](docs/postgres-rollout-runbook.md): production PostgreSQL cutover checklist.
+- [docs/postgres-migration-development-summary.zh.md](docs/postgres-migration-development-summary.zh.md): historical PostgreSQL migration review.
+- [docs/room-reliability/README.zh.md](docs/room-reliability/README.zh.md): room restore and room-update reliability series.
+- [docs/media-viewer-gesture-requirements.md](docs/media-viewer-gesture-requirements.md): active media-viewer gesture requirements.
+- [docs/mobile-keyboard-viewport-fix.zh.md](docs/mobile-keyboard-viewport-fix.zh.md): iOS keyboard viewport fix record.
 
-### v1.0 - Streaming AI & Experience Refresh
-- **AI assistant**: Streaming responses via OpenAI, customizable roles with saved system prompts
-- **Message input**: Mixed media editor with improved clipboard + image handling
-- **Presence & storage**: Room member counts, join/leave events, persistent room/username/saved lists
-- **UI refresh**: New desktop navbar, mobile bottom nav, status banners, shareable room links
-- **Internationalization**: Added Hindi, localized random usernames, expanded translation keys
+Some files in `docs/` are historical plans or postmortems. Treat runbooks and this README as the active operational entry points.
 
-### v0.4 - Fly.io Deployment & Markdown Message Display
-- **Fly.io Deployment**: Added support for deploying the application on Fly.io with multi-instance capabilities
-  - Updated deployment scripts and documentation for Fly.io
-  - Implemented environment variable management for Fly.io
-- **Markdown Message Display**: Enhanced message rendering to support Markdown formatting
-  - Integrated Markdown parsing and rendering in the chat interface
-  - Improved user experience with rich text message support
+## License
 
-### v0.3 - User Identity System
-- **Personalized Avatars**: Implemented username-based avatar generation with consistent colors
-  - Developed intelligent avatar text extraction algorithm that handles both English initials and Chinese characters
-  - Created hash-based color mapping for consistent user identification
-  - Implemented fallback icon system for missing avatar information
-- **Enhanced Chat Experience**: Added username display for each message to improve conversation clarity
-  - Extended Message data structure with username and avatar fields
-  - Modified socket communication to transmit user identity with each message
-  - Persisted user identity data in Redis for message history consistency
-- **Improved UI**: Redesigned chat interface with better indication of message ownership and streamlined room information display
-  - Applied conditional styling based on message ownership
-  - Optimized avatar display for various screen sizes
-  - Implemented proper type validation for component properties
-- **Localized Random Names**: Added cute random name generation in both English and Chinese based on language settings
-  - Created separate adjective and noun libraries for English and Chinese
-  - Implemented automatic language detection and name generation based on i18n settings
-  - Used localStorage for username persistence across sessions
-
-### v0.2 - Enhanced Messaging with Image Support
-- **Comprehensive Image System**: Implemented a robust message type framework with Base64 encoding, supporting up to 9 images per message with optimized aspect ratio display and seamless viewing across devices
-- **Advanced Content Editor**: Developed a sophisticated mixed-content editor with intuitive clipboard operations, intelligent cursor positioning, and natural editing experience similar to modern messaging platforms
-- **Performance & Experience Enhancements**: Engineered throttling mechanisms and asynchronous processing to ensure smooth operation with large images, while maintaining responsive UI across all device types
-
-### v0.1 - Initial Release
-- **Core Messaging System**: Implemented real-time messaging with Socket.IO and Redis persistence
-- **Room Management**: Created comprehensive room creation, joining, and access control systems
-- **Foundation Features**: Established multi-language support, theme toggling, and responsive design principles
+MIT.

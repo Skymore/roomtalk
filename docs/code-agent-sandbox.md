@@ -1,8 +1,14 @@
 # Code Agent Sandbox — 需求与实现方案
 
-> 状态：草稿  
+> 状态：未实现的历史草案
 > 日期：2026-05-08  
 > 作者：Sky
+
+当前代码没有 `Room.type` / `sandboxId` 数据模型，也没有
+`tool_call` / `tool_result` message type 或 E2B 依赖。现行消息类型为
+`text | ai | media | sticker`；AI 工具型 UI 主要通过 A2UI payload 和现有
+消息模型表达。若重新推进本方案，需要先按当前 `RoomStore`、
+PostgreSQL schema、A2UI 流程和权限模型重新设计。
 
 ---
 

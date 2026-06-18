@@ -1,5 +1,11 @@
 # Redis/PostgreSQL 持久化重构计划
 
+> 状态：已完成的历史计划。本文保留迁移设计和阶段验收记录；当前可操作步骤以
+> [postgres-rollout-runbook.md](./postgres-rollout-runbook.md)、`server/.env.example`
+> 和 `server/src/repositories/postgresSchema.ts` 为准。当前 PostgreSQL schema
+> 已扩展到 room members/saves、auth/account、push subscriptions、`media_assets`、
+> `pending_media_uploads` 和 audio transcriptions 等表。
+
 ## 目标
 
 把当前单 Redis 存储拆成两个明确职责：
@@ -43,7 +49,7 @@
 
 第一版判定规则：
 
-- 消息级进行中：PostgreSQL 中存在 `room_messages.status = 'streaming'` 或 `status = 'pending'` 的 AI 消息。
+- 消息级进行中：PostgreSQL 中存在 `room_messages.status = 'streaming'` 的 AI 消息。
 - 房间级进行中：该房间存在上述未完成 AI 消息。
 - 实时活跃：Redis 中存在在线成员或 socket 房间关系。
 

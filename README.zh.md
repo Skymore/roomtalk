@@ -2,382 +2,220 @@
 
 [English Version](./README.md)
 
-一个现代化、功能丰富的实时消息系统，基于 WebSocket 和 Redis 构建。支持 Markdown 格式化、图片分享、用户头像和多实例部署。完美适用于构建聊天应用、团队协作工具或任何实时通信平台。
+RoomTalk 是一个实时房间聊天系统，包含 AI 助手、私有媒体、贴纸、房间管理、已保存房间、移动端恢复，以及可选 PostgreSQL 持久化。仓库由 React/Vite 客户端和 Node/Express/Socket.IO 服务端组成。
 
-**当前版本: 1.0**（AI 助手与体验全面升级）
+## 当前能力
 
----
+- 创建房间、按 ID/链接加入、保存房间、重命名/删除房间、成员角色、管理员、所有权转移、密码房和发言时间段。
+- 文本、AI、媒体、贴纸、引用回复、编辑、删除和清空历史消息。
+- AI 流式回复，按模型提供方接入 DeepSeek、Anthropic、OpenAI 和 OpenRouter 路由模型。
+- AI 角色预设、模型选择、高价模型二次确认、usage/cost 元数据、重试、编辑后追问，以及 A2UI 流式界面。
+- 通过 S3 兼容存储私有上传/下载媒体；开发环境支持本地媒体兜底；支持媒体历史、图片/视频/音频和移动端媒体查看手势。
+- 配置 AssemblyAI 后支持语音转写。
+- Google 登录关联、client 密码保护、token 化 socket 注册，以及可选 Web Push 通知。
+- English、中文、हिन्दी、日本語、한국어 多语言。
+- 移动端可靠性：当前房间恢复、重连处理、成员数恢复、键盘视口修复和移动端 E2E。
 
-## 🚀 技术栈
+## 仓库结构
 
-### 客户端（Client）
+```text
+client-heroui/     React + TypeScript + Vite 前端
+server/            Express + Socket.IO TypeScript 后端
+docs/              Runbook、设计记录、迁移记录、可靠性复盘
+Dockerfile         Fly.io 使用的生产镜像构建
+fly.toml           Fly.io 应用配置
+start.sh           本地启动脚本：服务端 3012，客户端 3011
+CLAUDE.md          Agent/开发指南；AGENTS.md 是它的符号链接
+```
 
-- React + TypeScript + Vite
-- Tailwind CSS + HeroUI 组件库
-- React Router v6
-- Socket.io Client
-- i18next 多语言支持
-- Markdown-to-JSX（富文本渲染）
-- KaTeX（数学公式支持）
-
-### 服务端（Server）
-
-- Node.js + Express.js
-- Socket.io（配备 Redis 适配器）
-- Redis（用于持久化和发布/订阅）
-- OpenAI SDK（AI 流式响应集成）
-- UUID 用户身份系统
-- 多实例部署支持
-- Docker 容器化
-
-### 运维与部署
-
-- Fly.io 云平台
-- Docker 多阶段构建
-- Redis 集群
-- 基于环境的配置
-- 健康监控端点
-
----
-
-## 📐 系统架构 & AI 流程
+## 架构
 
 ```mermaid
-sequenceDiagram
-    participant 用户
-    participant 客户端
-    participant 服务端
-    participant Redis
-    participant OpenAI
-
-    用户->>客户端: 输入消息 / 粘贴图片 / 选择 AI 角色
-    客户端->>服务端: send_message / ask_ai
-    服务端->>Redis: 写入房间消息 / 会话状态
-    服务端->>OpenAI: 携带上下文发起流式补全
-    OpenAI-->>服务端: 返回流式 token (ai_chunk)
-    服务端-->>客户端: new_message / ai_chunk / ai_stream_end
-    客户端-->>用户: 消息列表实时更新，AI 实时补全
+flowchart LR
+  Client["React client"] <--> Socket["Socket.IO server"]
+  Client --> HTTP["Express API"]
+  Socket --> Store["CompositeRoomStore"]
+  HTTP --> Store
+  Store --> Durable["Redis or PostgreSQL durable store"]
+  Store --> Redis["Redis realtime state + Socket.IO adapter + cache"]
+  Socket --> AI["AI providers"]
+  HTTP --> Media["S3/Tigris or local media storage"]
 ```
 
-## ✨ v0.5 新增要点
+服务端使用 `CompositeRoomStore`：
 
-- 桌面端顶部导航 + 移动端底部导航，房间/保存/聊天/设置四大视图
-- 房间成员实时提醒、加入确认对话框、顶部状态条
-- AI 角色管理器：多角色、颜色/图标、系统提示词本地持久化
-- OpenAI 流式回复，支持重试/编辑后的上下文重算
-- URL 房间分享（`/?room=ID`）+ 本地恢复上次房间
+- Durable store：默认 Redis，也可用 `PERSISTENCE_STORE=postgres` 切到 PostgreSQL。
+- Realtime store：Redis 保存 socket session、在线成员和 Socket.IO adapter 状态。
+- Message cache：PostgreSQL 模式下用 Redis 短 TTL 缓存消息读取。
 
----
+客户端以 `MessagePage` 为状态编排中心，`src/components` 放 UI，`src/utils` 放 socket/API/i18n/localStorage/domain helper，`src/hooks` 放房间与消息同步逻辑。
 
-## 🌟 功能亮点
+## 快速开始
 
-### v1.0 - 流式 AI 与体验升级
-- ✅ **AI 助手**：接入 OpenAI 流式回复，自定义角色/系统提示词并本地保存
-- ✅ **消息输入**：混合内容编辑器，粘贴/图片交互优化
-- ✅ **房间体验**：成员数量、加入/离开提示、用户名/房间信息持久化
-- ✅ **界面焕新**：桌面导航、移动底部栏、状态提示、分享链接
-- ✅ **多语言**：新增印地语翻译，随机用户名根据语言自动生成
+环境要求：
 
-### v0.4 - Fly.io 部署与 Markdown 支持
-- ✅ **Fly.io 部署**：支持多实例能力，环境变量管理
-- ✅ **Markdown 渲染**：增强消息渲染，支持富文本消息和KaTeX数学公式
+- 推荐 Node.js 22。
+- 本地 Redis 运行在 `localhost:6379`。
+- 可选：用于 PostgreSQL smoke/E2E 的测试数据库。
 
-### v0.3 - 用户身份系统
-- ✅ **个性化头像**：智能文本提取算法，哈希颜色映射确保用户标识一致性
-- ✅ **增强聊天体验**：用户名显示，消息所有权指示，Redis持久化保证一致性
-- ✅ **本地化名称**：中英文双语可爱随机名称生成，localStorage跨会话保存
-
-### v0.2 - 增强型消息与图片支持
-- ✅ **全面的图片系统**：Base64编码传输，每条消息最多9张图片
-- ✅ **高级内容编辑器**：混合内容编辑，直观的剪贴板操作
-- ✅ **性能优化**：节流机制和异步处理，处理大图片时保持流畅
-
-### v0.1 - 核心基础
-- ✅ **实时消息系统**：Socket.IO配合Redis持久化和发布/订阅，支持多实例扩展
-- ✅ **房间管理功能**：完整的房间创建、加入和访问控制系统
-- ✅ **基础功能支持**：多语言支持、主题切换和响应式设计原则
-
----
-
-## 🧪 快速开始
-
-### 环境准备
-
-- 安装 Node.js
-- 安装并启动 Redis（默认 `localhost:6379`）
-
-### 安装依赖
+安装依赖：
 
 ```bash
-# 安装服务端依赖
-cd server
-npm install
-
-# 安装客户端依赖
-cd ../client-heroui
-npm install
+cd server && npm install
+cd ../client-heroui && npm install
 ```
 
-### 构建（生产模式需要）
+创建本地服务端配置：
 
 ```bash
-cd client-heroui
-npm run build
-cd ../server
-npm run build
+cp server/.env.example server/.env
 ```
 
-### 启动系统
+默认 AI 模型需要 `DEEPSEEK_API_KEY`。OpenRouter 路由模型和 AI 角色草稿生成需要 `OPENROUTER_API_KEY`。
 
-可以使用脚本一键启动：
+一键启动：
 
 ```bash
 ./start.sh
 ```
 
-或者分开启动：
+手动开发模式：
 
 ```bash
-# 启动服务端（开发模式）
 cd server
 npm run dev
 
-# 启动客户端
 cd ../client-heroui
 npm run dev
 ```
 
-生产模式需先在 `server` 目录执行 `npm run build`，再运行 `npm start` 使用编译后的 `dist/` 代码。
+访问 [http://localhost:3011](http://localhost:3011)。
 
----
+## 常用命令
 
-## 🧭 使用指南
-
-1. 启动前后端后访问 [http://localhost:3011](http://localhost:3011)
-2. 系统会生成并保存唯一的 `clientId`（导航/设置中可查看并复制）
-3. 在主页创建、加入或保存房间，亦可通过分享链接 `/?room=ID` 直接进入
-4. 在消息输入框点击齿轮配置 AI 角色，`Ctrl/⌘ + Enter` 触发 AI 回复
-5. 在设置页修改用户名、主题、语言并管理保存房间
-
----
-
-## 🔧 技术亮点
-
-- **Redis & Socket.IO 扩展**：`rooms` 哈希、`room:{id}:messages` 列表、成员集合，配合 Redis 适配器支持 Fly.io 多实例
-- **AI 流水线**：`ask_ai` 事件整合上下文、OpenAI 流式响应、前端分块渲染与重试逻辑
-- **富文本编辑器**：文本/图片混排，粘贴节流，图片压缩
-- **自适应外壳**：HeroUI 布局、房间宫格、状态条、移动底部导航、保存房间管理
-- **多语言**：i18next 支持 English/中文/हिन्दी，随机用户名根据语言生成
-- **部署**：`fly.toml` 指向 Node 22，Redis URL 通过 Secrets 下发，提供 Docker 多阶段构建
-
----
-
-## 🔌 API 接口概览
-
-### HTTP 接口
-
-| 路径 | 方法 | 描述 |
-|-----------------------------------------------|--------|------------------------------------------------|
-| `/api/rooms/:roomId/messages`                 | `GET`  | 获取指定房间的消息                             |
-| `/api/clients/:clientId/rooms`                | `GET`  | 获取指定用户创建的房间列表                     |
-| `/api/clients/:clientId/rooms`                | `POST` | 为指定用户创建新房间                           |
-| `/api/clients/:clientId/rooms/:roomId`          | `GET`  | 获取指定房间的详细信息（仅限房间创建者）         |
-| `/api/rooms/:roomId/messages`                 | `POST` | 向指定房间发送消息                             |
-
-### WebSocket 事件
-
-| 事件名            | 方向         | 描述                                          |
-|-------------------|--------------|-----------------------------------------------|
-| `register`        | 客户端 → 服务端 | 注册用户，并加入以 clientId 命名的分组            |
-| `get_rooms`       | 客户端 → 服务端 | 请求获取当前用户创建的房间                      |
-| `create_room`     | 客户端 → 服务端 | 创建房间                                      |
-| `join_room`       | 客户端 → 服务端 | 加入房间                                      |
-| `leave_room`      | 客户端 → 服务端 | 离开房间                                      |
-| `send_message`    | 客户端 → 服务端 | 发送消息到指定房间                            |
-| `get_room_by_id`  | 客户端 → 服务端 | 根据房间 ID 请求房间详情                        |
-| `message_history` | 服务端 → 客户端 | 返回房间消息历史                              |
-| `new_room`        | 服务端 → 客户端 | 推送新房间信息（仅发送给房间创建者）             |
-| `new_message`     | 服务端 → 客户端 | 向房间广播新消息                              |
-
----
-
-## ⚙️ 配置
-
-### 服务端环境变量
-
-| 变量名           | 默认值                    | 说明                      |
-|------------------|---------------------------|---------------------------|
-| `PORT`           | 3012                      | 服务端端口                |
-| `CLIENT_URL`     | http://localhost:3011     | CORS 配置                 |
-| `REDIS_URL`      | redis://localhost:6379    | Redis 连接地址            |
-| `PERSISTENCE_STORE` | redis                  | 持久化模式：`redis` 或 `postgres` |
-| `DATABASE_URL`   | —                         | PostgreSQL 连接地址，`PERSISTENCE_STORE=postgres` 时必填 |
-| `POSTGRES_SSL`   | false                     | 是否启用 PostgreSQL TLS |
-| `POSTGRES_SSL_REJECT_UNAUTHORIZED` | true     | 仅在明确使用自签名 PostgreSQL TLS 时设为 `false` |
-| `ROOM_MESSAGES_CACHE_TTL_SECONDS` | 30        | PostgreSQL 模式下 Redis 房间消息缓存 TTL；`0` 禁用缓存写入 |
-| `OPENROUTER_API_KEY` | —                     | OpenRouter API 密钥（启用 AI 必填） |
-| `AI_MODEL`       | deepseek-v4-pro           | 默认 AI 模型 ID          |
-| `AI_MODEL_OPTIONS` | deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7,tencent/hy3-preview,google/gemini-3.5-flash | 用户可选择的模型 ID，逗号分隔 |
-| `OPENROUTER_HTTP_REFERER` | `CLIENT_URL`      | 可选 OpenRouter Referer 请求头 |
-| `OPENROUTER_APP_NAME` | RoomTalk              | 可选 OpenRouter 应用名称请求头 |
-
-### 客户端环境变量
-
-**.env.development:**
-
-| 变量名            | 默认值                  | 说明              |
-|-------------------|-------------------------|-------------------|
-| `VITE_SOCKET_URL` | http://localhost:3012    | WebSocket 地址    |
-
-**.env.production:**
-
-| 变量名            | 默认值 | 说明                                  |
-|-------------------|--------|---------------------------------------|
-| `VITE_SOCKET_URL` | `/`    | 同域部署时使用相对路径                 |
-
-### 配置说明
-
-**本地开发：**
-
-创建 `server/.env` 文件：
-
-```env
-PORT=3012
-CLIENT_URL=http://localhost:3011
-REDIS_URL=redis://localhost:6379
-PERSISTENCE_STORE=redis
-OPENROUTER_API_KEY=sk-or-...
-AI_MODEL=deepseek-v4-pro
-AI_MODEL_OPTIONS=deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7,tencent/hy3-preview,google/gemini-3.5-flash
-OPENROUTER_HTTP_REFERER=http://localhost:5173
-OPENROUTER_APP_NAME=RoomTalk
-```
-
-客户端（Vite）按模式读取：
-- `client-heroui/.env.development` 用于 `npm run dev`
-- `client-heroui/.env.production` 用于打包
-
-**生产环境（Fly.io）：**
+服务端：
 
 ```bash
-fly secrets set OPENROUTER_API_KEY="sk-or-..."
-fly secrets set REDIS_URL="redis://..."
-# 可选
-fly secrets set AI_MODEL="deepseek-v4-pro"
-fly secrets set AI_MODEL_OPTIONS="deepseek-v4-pro,gpt-5.5,claude-sonnet-4.6,claude-opus-4.7,kimi-k2.6,glm-5.1,minimax-m2.7,tencent/hy3-preview,google/gemini-3.5-flash"
+cd server
+npm run dev                         # ts-node-dev 开发服务
+npm run build                       # TypeScript 构建
+npm start                           # 运行 dist/src/server.js
+npm test                            # Node test runner 跑 src/**/*.test.ts
+npm run migrate:redis-to-postgres   # Redis -> PostgreSQL 持久化迁移
+npm run smoke:persistence           # 安全的本地持久化 smoke
 ```
 
-## 📦 持久化
+客户端：
 
-Redis 仍是本地开发和现有部署的默认持久化路径。也可以启用 PostgreSQL 作为持久事实来源，此时 Redis 继续负责 Socket.IO 多实例同步、实时会话状态、在线成员集合和短 TTL 消息缓存。
+```bash
+cd client-heroui
+npm run dev                 # Vite 开发服务
+npm test                    # Vitest 单元/组件测试
+npm run lint                # ESLint
+npm run check:i18n          # 检查翻译 key
+npm run build               # i18n + TypeScript + Vite build
+npm run test:e2e            # Redis 模式 Playwright E2E
+npm run test:e2e:postgres   # PostgreSQL 模式 Playwright E2E
+```
 
-### PostgreSQL 切换流程
+## 配置
 
-1. 先执行只读 dry-run：
-   ```bash
-   cd server
-   REDIS_URL="redis://..." npm run migrate:redis-to-postgres -- --dry-run
-   ```
-2. 执行幂等迁移：
-   ```bash
-   REDIS_URL="redis://..." DATABASE_URL="postgres://..." npm run migrate:redis-to-postgres
-   ```
-3. 切换持久化模式：
-   ```bash
-   fly secrets set PERSISTENCE_STORE="postgres"
-   fly secrets set DATABASE_URL="postgres://..."
-   fly secrets set POSTGRES_SSL="true"
-   ```
-4. 检查 `/api/status` 返回 `persistenceStore: "postgres"`，并确认房间数量符合预期。
+后端配置以 `server/.env.example` 为准。重要分组：
 
-回滚只需要将 `PERSISTENCE_STORE` 设回 `redis` 并重启/重新部署：
+| 范围 | 变量 |
+| --- | --- |
+| HTTP/CORS | `PORT`, `CLIENT_URL`, `NODE_ENV` |
+| Redis | `REDIS_URL` |
+| PostgreSQL 模式 | `PERSISTENCE_STORE`, `DATABASE_URL`, `POSTGRES_SSL`, `POSTGRES_SSL_REJECT_UNAUTHORIZED`, `POSTGRES_SSL_CA_BASE64`, `POSTGRES_SSL_CA`, `ROOM_MESSAGES_CACHE_TTL_SECONDS` |
+| AI | `AI_MODEL`, `AI_MODEL_OPTIONS`, `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`, `OPENROUTER_HTTP_REFERER`, `OPENROUTER_APP_NAME` |
+| 媒体存储 | `MEDIA_BUCKET_NAME`, `MEDIA_STORAGE_REGION`, `MEDIA_STORAGE_ENDPOINT`, `MEDIA_STORAGE_FORCE_PATH_STYLE`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` |
+| 可选服务 | `ASSEMBLYAI_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_IDS`, `WEB_PUSH_VAPID_PUBLIC_KEY`, `WEB_PUSH_VAPID_PRIVATE_KEY`, `WEB_PUSH_SUBJECT` |
+
+前端配置：
+
+- `client-heroui/.env.development`：本地 `VITE_SOCKET_URL` 和公开 Google Client ID。
+- `client-heroui/.env.production`：Fly 同域部署使用 `VITE_SOCKET_URL=/`。
+
+只有浏览器可公开的值才应放入 `VITE_*`。
+
+## 持久化与迁移
+
+Redis 是默认本地 durable store。PostgreSQL 模式下，PostgreSQL 是持久事实来源，Redis 继续负责实时状态、Socket.IO 扩展和短 TTL 消息缓存。
+
+Redis 到 PostgreSQL 切换：
+
+```bash
+cd server
+REDIS_URL="redis://..." npm run migrate:redis-to-postgres -- --dry-run
+REDIS_URL="redis://..." DATABASE_URL="postgres://..." npm run migrate:redis-to-postgres
+```
+
+最终迁移应在写入冻结或维护窗口内执行，然后设置：
+
+```bash
+fly secrets set PERSISTENCE_STORE="postgres"
+fly secrets set DATABASE_URL="postgres://..."
+fly secrets set POSTGRES_SSL="true"
+```
+
+只要保留 Redis durable 数据，回滚就是配置切换：
 
 ```bash
 fly secrets set PERSISTENCE_STORE="redis"
 ```
 
-PostgreSQL 切换验证完成前，不要清理 Redis 里的原始数据。
+完整清单见 [docs/postgres-rollout-runbook.md](docs/postgres-rollout-runbook.md)。
 
-完整上线检查清单见：[docs/postgres-rollout-runbook.md](docs/postgres-rollout-runbook.md)。
+持久化 smoke 有安全保护：
 
-### Redis 持久化
-
-系统支持两种Redis部署方案：
-
-### 本地开发环境
-默认使用标准Redis，采用 **RDB 快照** 方式持久化。你可以通过修改 `redis.conf` 来启用 **AOF** 或调整保存策略。
-
-### 生产环境 (Upstash Redis)
-在生产环境中，我们推荐使用 Upstash Redis，它提供以下优势：
-
-- **即时持久化**：除了内存存储外，数据会立即保存到块存储中，可以安全地用作主数据库
-- **多区域复制**：自动跨区域数据复制，提供更好的可用性
-- **无服务器架构**：无需管理Redis实例，自动扩展
-- **REST API支持**：除了Redis协议外，还支持HTTP/REST API访问
-
-配置示例：
-```env
-REDIS_URL=your-upstash-redis-url
-REDIS_TOKEN=your-upstash-token
+```bash
+cd server
+npm run smoke:persistence
+TEST_DATABASE_URL="postgres://localhost/message_system_test" npm run smoke:persistence
 ```
 
----
+PostgreSQL smoke 数据库名必须包含独立的 `test` 或 `e2e` token。
 
-## 📄 许可证
+## 媒体存储
 
-MIT License
+新媒体上传通过 `MEDIA_*` 和 AWS 凭据变量写入私有 S3 兼容对象存储。未配置对象存储时，开发环境可以使用本地对象路由兜底。
 
-版权所有 (c) 2024 RoomTalk
+维护说明：旧文档曾引用 legacy Base64 到对象存储的迁移脚本，但当前 checkout 中没有 `server/src/scripts/migrateLegacyMediaMessagesToObjectStorage.ts`。不要运行旧的 `dist/...migrateImageMessagesToObjectStorage.js` 命令，除非先恢复或重写脚本。详见 [docs/image-object-storage-migration-runbook.md](docs/image-object-storage-migration-runbook.md)。
 
-特此免费授予任何获得本软件及相关文档文件（以下简称"软件"）副本的人，不受限制地处理本软件的权利，包括但不限于使用、复制、修改、合并、出版、分发、再许可及/或销售软件的副本，并允许其受让人如此做，但须符合以下条件：
+## 部署
 
-上述版权声明及本许可声明应包含在本软件的所有副本或主要部分中。
+生产部署以 CI 为主：
 
-本软件按"原样"提供，不附带任何明示或暗示的保证，包括但不限于对适销性、特定用途适用性及非侵权性的保证。在任何情况下，作者或版权持有人均不对因软件或软件的使用或其他交易产生的任何索赔、损害或其他责任承担责任，无论是在合同、侵权或其他方面。
+- 推送到 `master` 会触发 `.github/workflows/fly-deploy.yml`。
+- CI 安装依赖、构建服务端/客户端、检查翻译、校验 Fly secrets，然后执行 `flyctl deploy --remote-only`。
+- Fly 应用名为 `message-system`，区域 `dfw`，Node 22 Alpine Docker 镜像，512 MB VM。
 
-## 📝 版本历史
+生产通常需要 Redis、PostgreSQL、S3/Tigris 兼容媒体存储、AI provider key 和 Google OAuth。AssemblyAI 与 Web Push VAPID key 是可选服务。
 
--### v1.0 - 流式 AI 与体验升级
-- **AI 助手**：接入 OpenAI 流式回复，自定义角色/系统提示词并本地保存
-- **消息输入**：混合内容编辑器，粘贴/图片交互优化
-- **房间体验**：成员数量、加入/离开提示、用户名/房间信息持久化
-- **界面焕新**：桌面导航、移动底部栏、状态提示、分享链接
-- **多语言**：新增印地语翻译，随机用户名根据语言自动生成
+英文部署指南：[DeploymentGuide.md](DeploymentGuide.md)。中文部署指南：[部署指南.md](部署指南.md)。
 
-### v0.4 - Fly.io 部署 & Markdown 消息显示
-- **Fly.io 部署**：支持在 Fly.io 上部署应用，具备多实例能力
-  - 更新了 Fly.io 的部署脚本和文档
-  - 实现了 Fly.io 的环境变量管理
-- **Markdown 消息显示**：增强了消息渲染，支持 Markdown 格式
-  - 在聊天界面中集成了 Markdown 解析和渲染
-  - 提升了用户体验，支持富文本消息
+## 测试覆盖
 
-### v0.3 - 用户身份系统
-- **个性化头像**：实现基于用户名的头像生成，带有一致性颜色标识
-  - 开发了智能头像文本提取算法，同时支持英文首字母和中文汉字处理
-  - 创建了基于哈希算法的颜色映射，确保用户标识的一致性
-  - 实现了缺失头像信息时的图标回退系统
-- **增强聊天体验**：为每条消息添加用户名显示，提高对话清晰度
-  - 扩展了Message数据结构，添加了username和avatar字段
-  - 修改了socket通信机制，使每条消息都携带用户身份信息
-  - 在Redis中持久化用户身份数据，确保消息历史记录的一致性
-- **界面优化**：重新设计聊天界面，更好地指示消息所有权，简化房间信息显示
-  - 根据消息所有权应用条件样式
-  - 为各种屏幕尺寸优化头像显示
-  - 实现了组件属性的正确类型验证
-- **本地化随机名称**：添加中英文双语可爱随机名称生成，根据语言设置自动选择
-  - 为英文和中文分别创建了形容词和名词库
-  - 基于i18n设置实现了自动语言检测和名称生成
-  - 使用localStorage跨会话保存用户名
+测试体系包括：
 
-### v0.2 - 增强型消息系统与图片支持
-- **全面的图片系统**：实现了强大的消息类型框架和Base64编码传输，支持每条消息最多9张图片，优化了宽高比显示，确保在各种设备上无缝浏览
-- **高级内容编辑器**：开发了支持混合内容的复杂编辑器，提供直观的剪贴板操作、智能光标定位和类似现代消息平台的自然编辑体验
-- **性能与体验优化**：设计了节流机制和异步处理流程，确保处理大图片时的流畅操作，同时在所有设备类型上保持响应式用户界面
+- 服务端 Node test runner：单元、socket、repository、API 测试。
+- 客户端 Vitest + Testing Library：组件和工具函数测试。
+- Playwright E2E：房间、消息、AI/媒体/分享、移动端核心链路、房间恢复、多客户端实时同步和 PostgreSQL 持久化。
+- 客户端 build 中的 i18n key 检查。
 
-### v0.1 - 初始版本
-- **核心消息系统**：基于Socket.IO实现实时消息传递，使用Redis进行数据持久化
-- **房间管理功能**：创建了完整的房间创建、加入和访问控制系统
-- **基础功能支持**：建立了多语言支持、主题切换和响应式设计原则
+窄改动优先在改动代码旁边加 focused test。用户可见行为用 Playwright，持久化模式回归用 PostgreSQL E2E。
 
----
+## 文档地图
+
+- [CLAUDE.md](CLAUDE.md)：精简的 contributor/agent 操作指南。
+- [docs/postgres-rollout-runbook.md](docs/postgres-rollout-runbook.md)：生产 PostgreSQL 切换清单。
+- [docs/postgres-migration-development-summary.zh.md](docs/postgres-migration-development-summary.zh.md)：PostgreSQL 迁移历史复盘。
+- [docs/room-reliability/README.zh.md](docs/room-reliability/README.zh.md)：房间恢复和房间更新可靠性系列入口。
+- [docs/media-viewer-gesture-requirements.md](docs/media-viewer-gesture-requirements.md)：当前媒体查看器手势需求。
+- [docs/mobile-keyboard-viewport-fix.zh.md](docs/mobile-keyboard-viewport-fix.zh.md)：iOS 键盘视口修复记录。
+
+`docs/` 中部分文件是历史计划或复盘。日常操作以 runbook 和本 README 为入口。
+
+## 许可证
+
+MIT。

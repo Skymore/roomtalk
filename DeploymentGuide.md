@@ -31,9 +31,9 @@ This guide provides simplified instructions for deploying your chat application 
    npm run build
    ```
 
-### Creating Dockerfile
+### Current Dockerfile
 
-Create a `Dockerfile` in the project root:
+The repository already includes the production `Dockerfile`. Keep deployment changes in that file rather than creating a second Dockerfile:
 
 ```dockerfile
 FROM node:22-alpine
@@ -68,6 +68,13 @@ CMD ["npm", "start"]
 ```
 
 ## Deploying to Fly.io
+
+Current production deployment is CI-first. Pushes to `master` and manual
+`workflow_dispatch` runs use `.github/workflows/fly-deploy.yml` to build,
+verify required Fly secrets, and deploy `message-system` with `flyctl deploy
+--remote-only`. Use `fly launch` only when bootstrapping a new Fly app, and do
+not run ad hoc `fly deploy` for the existing production app unless CI is
+unavailable and the incident owner explicitly chooses a manual deploy.
 
 ### 1. Install and Configure Fly CLI
 
@@ -220,9 +227,20 @@ The application requires these environment variables:
 | DATABASE_URL | PostgreSQL connection URL, required for `PERSISTENCE_STORE=postgres` | postgres://user:pass@host:5432/db |
 | POSTGRES_SSL | Enable PostgreSQL TLS | true |
 | POSTGRES_SSL_REJECT_UNAUTHORIZED | Validate PostgreSQL TLS certificate | true |
+| POSTGRES_SSL_CA_BASE64 / POSTGRES_SSL_CA | Optional managed PostgreSQL root CA | ... |
 | ROOM_MESSAGES_CACHE_TTL_SECONDS | Redis message cache TTL in PostgreSQL mode; `0` disables cache writes | 30 |
 | NODE_ENV | Running environment | production |
 | CLIENT_URL | Client address (optional) | https://example.com |
+| DEEPSEEK_API_KEY | DeepSeek official API key for the default model | sk-... |
+| OPENROUTER_API_KEY | OpenRouter key for routed models and AI role drafts | sk-or-... |
+| ANTHROPIC_API_KEY | Optional Anthropic official API key | sk-ant-... |
+| OPENAI_API_KEY | Optional direct OpenAI API key | sk-... |
+| MEDIA_BUCKET_NAME | Private media bucket name | message-system-media |
+| MEDIA_STORAGE_ENDPOINT | S3/Tigris-compatible endpoint | https://fly.storage.tigris.dev |
+| AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY | Private media storage credentials | ... |
+| GOOGLE_CLIENT_ID | Google OAuth Web Client ID accepted by the server | ...apps.googleusercontent.com |
+| ASSEMBLYAI_API_KEY | Optional voice transcription key | ... |
+| WEB_PUSH_VAPID_PUBLIC_KEY / WEB_PUSH_VAPID_PRIVATE_KEY | Optional web-push keys | ... |
 
 ## PostgreSQL Rollout
 
@@ -285,7 +303,7 @@ Access the `/api/status` endpoint to view system status, example response:
   "socketAdapterReady": true,
   "persistenceStore": "postgres",
   "rooms": 5,
-  "timestamp": "2023-03-30T12:00:00Z"
+  "timestamp": "2026-06-18T12:00:00Z"
 }
 ```
 
@@ -367,32 +385,15 @@ If messages aren't syncing between instances:
 
 ## Fly.io Pricing Information
 
-> **Note**: As of July 2024, Fly.io has discontinued their free tier for new users, switching to a "Pay As You Go" model.
+Pricing changes over time and depends on region, VM size, storage, traffic, and
+attached services. Check the official [Fly.io pricing page](https://fly.io/docs/about/pricing/)
+before estimating production cost. The current `fly.toml` uses a shared CPU VM
+with 512 MB memory; Redis, PostgreSQL, Tigris/S3 storage, and AI providers are
+billed separately by their providers.
 
-### Minimum Cost Estimate
+Cost reduction strategies:
 
-For basic configuration, monthly costs are approximately:
-
-1. **Compute Resources**:
-   - Smallest size (shared-cpu-1x, 256MB RAM): ~$2.43/month
-   - Only storage costs when machines are stopped: ~$0.15/GB/month
-
-2. **Redis Service**:
-   - Upstash Redis charges per command: $0.20/100k commands
-   - Estimated $1-5/month for light usage
-
-3. **Data Transfer**:
-   - North America & Europe: $0.02/GB
-   - Asia Pacific & South America: $0.04/GB
-   - Africa & India: $0.12/GB
-
-4. **Total**:
-   - Minimum configuration running continuously: ~$3-8/month
-   - Running only when needed: depends on usage duration and storage size
-
-### Cost Reduction Strategies
-
-1. Stop machines when not needed (use `fly machine stop` command)
-2. Monitor Redis command usage, avoid unnecessary polling operations
-3. Optimize data transfer, reduce cross-region traffic
-4. Consider compute reservations for 40% discount (for long-term usage) 
+1. Stop or auto-stop machines when traffic allows.
+2. Monitor Redis command volume and avoid unnecessary polling.
+3. Keep media/object storage lifecycle policies explicit.
+4. Review AI model pricing before exposing premium models broadly.

@@ -2,6 +2,10 @@
 
 日期:2026-06-10
 
+> 状态：已完成的历史跟进记录。前半部分的 `updatedAt` LWW 修复后来被
+> 第三轮 `room_version` 行级单调版本号方案取代；以本文“第三轮跟进”和
+> 本目录 README 中的不变量为当前口径。
+
 对 `6782f7c fix: keep room settings updates from going stale on clients` 做了 7 路独立 finder 的对抗 review(约 30 个候选,逐一回源码裁决:7 项成立、其余证伪)。本文档记录成立的 7 项发现与修复方案,全部(含低优先清理)在本次跟进中修复。
 
 ## 发现与修复方案
