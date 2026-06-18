@@ -11,6 +11,15 @@ interface StickerPickerProps {
   onSelect: (stickerId: string) => void;
 }
 
+const STICKER_PAGE_RENDER_RADIUS = 1;
+const STICKER_PAGE_PRELOAD_RADIUS = 1;
+const STICKER_PAGE_ANIMATION_MS = 220;
+const MAX_PRELOAD_STICKERS = 48;
+
+const isNearActiveStickerPage = (index: number, activeIndex: number, radius: number) => (
+  Math.abs(index - activeIndex) <= radius
+);
+
 /**
  * A single sticker cell: image + always-visible name caption. Hover (desktop) or
  * long-press (mobile) raises a one-up enlarged preview via onPreview; a plain
@@ -21,7 +30,8 @@ const StickerCell: React.FC<{
   onSelect: (id: string) => void;
   onPreview: (id: string | null) => void;
   isInteractive?: boolean;
-}> = ({ sticker, onSelect, onPreview, isInteractive = true }) => {
+  imageLoading?: 'eager' | 'lazy';
+}> = ({ sticker, onSelect, onPreview, isInteractive = true, imageLoading = 'lazy' }) => {
   const { t } = useTranslation();
   const timer = React.useRef<number | undefined>(undefined);
   const longPressed = React.useRef(false);
@@ -60,7 +70,7 @@ const StickerCell: React.FC<{
       onContextMenu={(e) => e.preventDefault()}
       className="flex select-none flex-col items-center gap-0.5 rounded-lg p-1 transition-colors hover:bg-[#e8e6dc] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#c96442] dark:hover:bg-[#30302e] dark:focus-visible:ring-[#d97757]"
     >
-      <img src={apiPath(sticker.url)} alt={name} loading="lazy" draggable={false} className="aspect-square w-full object-contain" />
+      <img src={apiPath(sticker.url)} alt={name} loading={imageLoading} decoding="async" draggable={false} className="aspect-square w-full object-contain" />
       <span className="w-full truncate text-center text-[10px] leading-tight text-[#8a8a85]">{name}</span>
     </button>
   );
@@ -72,7 +82,8 @@ const StickerGrid: React.FC<{
   onPreview: (id: string | null) => void;
   label: string;
   isInteractive?: boolean;
-}> = ({ stickers, onSelect, onPreview, label, isInteractive = true }) => {
+  imageLoading?: 'eager' | 'lazy';
+}> = ({ stickers, onSelect, onPreview, label, isInteractive = true, imageLoading = 'lazy' }) => {
   const { t } = useTranslation();
   if (stickers.length === 0) {
     return <div className="py-8 text-center text-sm text-[#8a8a85]">{t('noStickersFound')}</div>;
@@ -80,7 +91,7 @@ const StickerGrid: React.FC<{
   return (
     <div role="group" aria-label={label} className="grid grid-cols-4 gap-1">
       {stickers.map((s) => (
-        <StickerCell key={s.id} sticker={s} onSelect={onSelect} onPreview={onPreview} isInteractive={isInteractive} />
+        <StickerCell key={s.id} sticker={s} onSelect={onSelect} onPreview={onPreview} isInteractive={isInteractive} imageLoading={imageLoading} />
       ))}
     </div>
   );
@@ -122,6 +133,27 @@ export const StickerPicker: React.FC<StickerPickerProps> = ({ onSelect }) => {
       : hasGroups
         ? resolve(groups[groupIndex].stickerIds)
         : resolve(currentPack?.stickerIds ?? []);
+  const preloadStickerUrlKey = React.useMemo(() => {
+    if (!catalog || isSearching || !hasGroups || onRecentPage) {
+      return '';
+    }
+
+    const urls: string[] = [];
+    const seen = new Set<string>();
+    for (let index = Math.max(0, groupIndex - STICKER_PAGE_PRELOAD_RADIUS); index <= Math.min(groups.length - 1, groupIndex + STICKER_PAGE_PRELOAD_RADIUS); index += 1) {
+      for (const stickerId of groups[index].stickerIds) {
+        const url = catalog.stickers[stickerId]?.url;
+        if (!url || seen.has(url)) continue;
+        seen.add(url);
+        urls.push(apiPath(url));
+        if (urls.length >= MAX_PRELOAD_STICKERS) {
+          return urls.join('\n');
+        }
+      }
+    }
+
+    return urls.join('\n');
+  }, [catalog, groupIndex, groups, hasGroups, isSearching, onRecentPage]);
 
   const gotoGroup = React.useCallback((i: number) => {
     setPage(Math.max(0, Math.min(i, groups.length - 1)));
@@ -131,6 +163,7 @@ export const StickerPicker: React.FC<StickerPickerProps> = ({ onSelect }) => {
     index: groupIndex,
     onIndexChange: gotoGroup,
     enabled: !isSearching && hasGroups && !onRecentPage,
+    animationDurationMs: STICKER_PAGE_ANIMATION_MS,
   });
 
   React.useEffect(() => {
@@ -142,6 +175,23 @@ export const StickerPicker: React.FC<StickerPickerProps> = ({ onSelect }) => {
     const selectedTab = onRecentPage ? recentTabRef.current : groupTabRefs.current[groupIndex];
     selectedTab?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest', inline: 'center' });
   }, [groupIndex, hasGroups, isSearching, onRecentPage]);
+
+  React.useEffect(() => {
+    if (!preloadStickerUrlKey || typeof Image === 'undefined') return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      for (const url of preloadStickerUrlKey.split('\n')) {
+        const image = new Image();
+        image.decoding = 'async';
+        image.src = url;
+      }
+    }, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [preloadStickerUrlKey]);
 
   if (!catalog || packs.length === 0) {
     return (
@@ -225,19 +275,23 @@ export const StickerPicker: React.FC<StickerPickerProps> = ({ onSelect }) => {
           <div {...groupPager.trackProps} className="flex will-change-transform">
             {groups.map((group, index) => {
               const isActive = index === groupIndex;
+              const shouldRender = isNearActiveStickerPage(index, groupIndex, STICKER_PAGE_RENDER_RADIUS);
               return (
                 <div
                   key={`${group.title}-${index}`}
                   aria-hidden={!isActive}
                   className="max-h-[15rem] min-w-full overflow-y-auto px-3"
                 >
-                  <StickerGrid
-                    stickers={resolve(group.stickerIds)}
-                    onSelect={onSelect}
-                    onPreview={setPreviewId}
-                    label={group.title}
-                    isInteractive={isActive}
-                  />
+                  {shouldRender && (
+                    <StickerGrid
+                      stickers={resolve(group.stickerIds)}
+                      onSelect={onSelect}
+                      onPreview={setPreviewId}
+                      label={group.title}
+                      isInteractive={isActive}
+                      imageLoading={isNearActiveStickerPage(index, groupIndex, STICKER_PAGE_PRELOAD_RADIUS) ? 'eager' : 'lazy'}
+                    />
+                  )}
                 </div>
               );
             })}

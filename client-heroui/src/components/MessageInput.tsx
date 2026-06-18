@@ -10,7 +10,7 @@ import {
 import { Icon } from '@iconify/react';
 import { requestAIResponse, sendMessage, sendMessageAndAskAI, sendSticker, uploadMediaMessage } from '../utils/socket';
 import { useRecentStickers, useStickerSearch } from '../hooks/useStickers';
-import { inlineStickerQuery } from '../utils/stickerCatalog';
+import { inlineStickerQuery, loadStickerCatalog } from '../utils/stickerCatalog';
 import { apiPath } from '../utils/apiBase';
 import { StickerPicker } from './StickerPicker';
 import { useTranslation } from 'react-i18next';
@@ -281,6 +281,14 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
   const [isStickerPickerOpen, setIsStickerPickerOpen] = useState(false);
   const { pushRecent } = useRecentStickers();
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const timer = window.setTimeout(() => {
+      void loadStickerCatalog();
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const buildOptimisticStickerMessage = useCallback((
     stickerId: string,

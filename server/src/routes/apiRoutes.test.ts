@@ -630,7 +630,7 @@ describe('API routes', () => {
 
   it('redirects sticker asset requests to object storage signed URLs', async () => {
     await server.close();
-    const readRequests: Array<{ objectKey: string; expiresInSeconds?: number }> = [];
+    const readRequests: Array<{ objectKey: string; expiresInSeconds?: number; responseCacheControl?: string }> = [];
     server = await createTestServer({
       mediaObjectStorage: {
         isConfigured: () => true,
@@ -638,7 +638,7 @@ describe('API routes', () => {
         async createWriteUrl() {
           return { url: 'https://upload.example/unused', expiresAt: '2026-05-03T00:15:00.000Z' };
         },
-        async createReadUrl(input: { objectKey: string; expiresInSeconds?: number }) {
+        async createReadUrl(input: { objectKey: string; expiresInSeconds?: number; responseCacheControl?: string }) {
           readRequests.push(input);
           return { url: `https://download.example/${encodeURIComponent(input.objectKey)}`, expiresAt: '2026-05-10T00:00:00.000Z' };
         },
@@ -653,8 +653,13 @@ describe('API routes', () => {
 
     assert.equal(response.status, 302);
     assert.equal(response.headers.get('location'), 'https://download.example/stickers%2Fremote-only%2F001%2F01.jpg');
+    assert.equal(response.headers.get('cache-control'), 'public, max-age=518400, immutable');
     assert.deepEqual(readRequests, [
-      { objectKey: 'stickers/remote-only/001/01.jpg', expiresInSeconds: 604800 },
+      {
+        objectKey: 'stickers/remote-only/001/01.jpg',
+        expiresInSeconds: 604800,
+        responseCacheControl: 'public, max-age=31536000, immutable',
+      },
     ]);
   });
 

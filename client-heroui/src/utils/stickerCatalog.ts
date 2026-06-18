@@ -45,7 +45,7 @@ let inflight: Promise<StickerCatalog> | null = null;
 export const loadStickerCatalog = (): Promise<StickerCatalog> => {
   if (cache) return Promise.resolve(cache);
   if (inflight) return inflight;
-  inflight = fetch(apiPath('/api/stickers/catalog'), { cache: 'no-store' })
+  inflight = fetch(apiPath('/api/stickers/catalog'))
     .then((res) => {
       if (!res.ok) throw new Error('Failed to load sticker catalog');
       return res.json() as Promise<StickerCatalog>;
