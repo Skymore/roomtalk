@@ -652,6 +652,239 @@ aiHandlers.ts — streaming logic: provider-agnostic chunk forwarding
 面试时这样讲：
 > 我们用了一个 model registry + client factory 模式。添加新的 AI 提供方只需要在 registry 注册模型、在 factory 加一个 case。流式处理是 provider-agnostic 的，不同 SDK 的 chunk 格式在服务端统一转换。客户端完全不知道后端用的是哪个 provider。
 
+### 难点 10：Redis Lua 原子操作（解决 8 个并发 bug）
+
+**问题**：多个客户端同时操作同一个房间——同时发消息、进出房间、删消息——Redis 的普通命令不是原子的。比如：
+- 两个客户端同时读到 `roomVersion=5`，各自写回 `roomVersion=6`，丢失一次递增
+- 用户有两个浏览器标签，关闭一个标签时移除了成员身份，但另一个标签还在
+- 删除最新消息后，房间的 `lastActivityAt` 应该回退到上一条消息的时间，但并发删除会算错
+
+**解决方案** — 9 个 Lua 脚本，每个解决一个具体的竞态条件：
+
+**脚本 1：Room 写入 + 版本号原子递增**
+
+```lua
+-- redisStore.ts — WRITE_ROOM_RECORD_SCRIPT
+local storedJson = redis.call('HGET', KEYS[1], ARGV[1])  -- 读当前版本
+local storedVersion = 0
+if storedJson then
+  local ok, stored = pcall(cjson.decode, storedJson)
+  if ok and stored['roomVersion'] then
+    storedVersion = tonumber(stored['roomVersion']) or 0
+  end
+end
+
+room['roomVersion'] = storedVersion + 1  -- 在 Redis 内部原子递增
+redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
+return encoded
+```
+
+不是 read → modify → write 三步，而是一个 Lua 脚本内完成，Redis 单线程保证串行。
+
+**脚本 2：成员计数 — 按 clientId 去重 socket**
+
+```lua
+-- redisStore.ts — UPDATE_ROOM_MEMBER_COUNT_SCRIPT
+if isJoining == '1' then
+  redis.call('SADD', KEYS[2], socketId)     -- socket 集合（一个 client 可能有多个）
+  redis.call('SADD', KEYS[1], clientId)     -- 成员集合
+else
+  redis.call('SREM', KEYS[2], socketId)     -- 移除这个 socket
+  local remaining = redis.call('SCARD', KEYS[2])  -- 还剩几个 socket？
+  if remaining == 0 then
+    redis.call('SREM', KEYS[1], clientId)   -- 全没了才移除成员
+  end
+end
+return redis.call('SCARD', KEYS[1])  -- 返回成员数
+```
+
+这就是之前"成员数翻倍"bug 的修复——一个用户可能有多个 socket（多标签页、断线重连），只有所有 socket 都离开才真正移除成员。
+
+**脚本 3：删消息 + 重算 lastActivityAt**
+
+```lua
+-- redisStore.ts — DELETE_MESSAGE_BY_ID_SCRIPT
+for i = 1, #existing do
+  local decoded = cjson.decode(existing[i])
+  if decoded['id'] == targetId then
+    found = 1
+  else
+    table.insert(remaining, existing[i])
+    if decoded['timestamp'] > latestTimestamp then
+      latestTimestamp = decoded['timestamp']  -- 追踪剩余消息的最新时间
+    end
+  end
+end
+
+if found == 1 then
+  room['lastActivityAt'] = latestTimestamp ~= '' and latestTimestamp or room['createdAt']
+  room['roomVersion'] = storedVersion + 1
+  -- 原子重写消息列表 + 更新房间
+end
+```
+
+面试时这样讲：
+> Redis 不支持事务级隔离，所以我们用 Lua 脚本实现原子操作。一共写了 9 个脚本，每个解决一个具体的并发 bug。最典型的是成员计数——一个用户可能有多个 socket 连接（多标签页），Lua 脚本用两层集合（socket 集合 + clientId 集合）做引用计数，只有所有 socket 都断开才移除成员。这和 PostgreSQL 的 `SELECT ... FOR UPDATE` 行锁是等价的——Store Contract 测试保证两种实现行为一致。
+
+### 难点 11：Store Contract 双实现一致性测试（1693 行）
+
+**问题**：Redis 和 PostgreSQL 是两种完全不同的数据模型（KV vs 关系型），同一个接口的两种实现可能在边界情况下行为不同。比如消息排序、版本号递增、空值处理、列表截断语义。
+
+**解决方案** — 同一套测试同时跑两个实现：
+
+```typescript
+// storeContract.test.ts — 双实现工厂
+const storeFactories: Array<[string, () => StoreFixture]> = [
+  ['RedisStore', () => ({ store: new RedisStore(new MemoryRedis(), logger) })],
+  ['PostgresStore', () => ({ store: new PostgresStore(new StatefulPostgresPool(), logger) })],
+];
+
+for (const [storeName, createFixture] of storeFactories) {
+  describe(`${storeName} durable contract`, () => {
+    // 所有测试用例对两个实现各跑一遍
+  });
+}
+```
+
+关键是两个 mock 的实现深度：
+
+- **MemoryRedis**：不是简单的 KV mock，而是完整实现了 Lua 脚本求值器。用 `script.includes()` 匹配到对应的 Lua 脚本后，在内存里模拟 Redis 的 HGET/HSET/SADD/LRANGE 等操作。
+- **StatefulPostgresPool**：用正则匹配 SQL 语句（`INSERT INTO room_messages`、`UPDATE rooms SET`），在内存数据结构上执行等效操作。
+
+**版本号一致性断言**（最核心的一致性保证）：
+
+```typescript
+// 两种实现必须产生相同的 roomVersion 递增序列
+it('increments roomVersion monotonically across mixed writes', async () => {
+  const saved = await store.saveRoom(room);
+  assert.equal(saved?.roomVersion, 1);        // 创建房间 → version 1
+
+  const renamed = await store.updateRoomName(room.id, creatorId, 'New Name');
+  assert.equal(renamed?.roomVersion, 2);      // 改名 → version 2
+
+  const afterMsg = await store.appendMessage(message({ id: 'msg-1' }));
+  assert.equal(afterMsg?.roomVersion, 3);     // 发消息 → version 3
+  // Redis 用 Lua 脚本递增，PG 用 SQL roomVersion + 1，结果必须一致
+});
+```
+
+面试时这样讲：
+> 我们的测试不是分别测 Redis 和 PostgreSQL，而是同一套 1693 行的测试用例同时跑两个实现。每个用例断言的是接口行为而不是内部实现。为了让测试能跑，我们写了完整的 MemoryRedis mock，包括 Lua 脚本的内存求值器。这样迁移数据库时，任何行为差异都会被测试捕获。
+
+### 难点 12：消息缓存版本一致性
+
+**问题**：PostgreSQL 模式下每次读消息历史都要查数据库，频繁的消息加载（用户反复切换房间）造成不必要的数据库压力。但加缓存又面临一致性问题——消息被编辑、删除、AI 流追加后，缓存必须同步失效。
+
+**解决方案** — 版本号感知的 read-through 缓存：
+
+```typescript
+// CompositeRoomStore — 读取时的版本校验
+async readMessagesByRoom(roomId) {
+  if (this.messageCacheStore) {
+    // 1. 先拿 room 的 messageVersion（每次消息变更时递增）
+    const room = await this.durableStore.getRoomById(roomId);
+    const cacheVersion = room?.messageVersion;
+
+    // 2. 用 version 做缓存 key 的一部分查缓存
+    const cached = await this.messageCacheStore.readCachedRoomMessages(roomId, cacheVersion);
+    if (cached) return cached;  // 命中！
+  }
+
+  // 3. 缓存未命中 → 查 PostgreSQL
+  const messages = await this.durableStore.readMessagesByRoom(roomId);
+
+  // 4. 写回缓存前再检查一次版本（防止读取期间有写入）
+  if (this.messageCacheStore && cacheVersion !== undefined) {
+    const currentRoom = await this.durableStore.getRoomById(roomId);
+    if (currentRoom?.messageVersion === cacheVersion) {  // double-check
+      await this.messageCacheStore.writeRoomMessagesCache(roomId, messages, cacheVersion);
+    }
+    // 版本变了 → 说明刚才有写入，不写缓存，下次会拿到新版本
+  }
+
+  return messages;
+}
+```
+
+**自动失效 — 每个写操作后条件性清除**：
+
+```typescript
+// CompositeRoomStore — 写操作后失效缓存
+async appendMessage(message) {
+  const result = await this.durableStore.appendMessage(message);
+  if (result) await this.invalidateRoomMessagesCache(message.roomId);  // 成功才失效
+  return result;
+}
+
+async deleteMessageById(roomId, messageId) {
+  const result = await this.durableStore.deleteMessageById(roomId, messageId);
+  if (result?.deleted) await this.invalidateRoomMessagesCache(roomId);  // 实际删了才失效
+  return result;
+}
+
+// 缓存失败不影响主流程
+private async invalidateRoomMessagesCache(roomId) {
+  try { await this.messageCacheStore?.invalidateRoomMessagesCache(roomId); }
+  catch { /* 缓存挂了不影响写入 */ }
+}
+```
+
+面试时这样讲：
+> 我们用 `messageVersion`（每次消息变更自增的单调计数器）做缓存版本号。读缓存时带上版本号，版本不匹配就是 miss。写回缓存前 double-check 版本号，防止读取过程中有并发写入。所有写操作后条件性失效——只在真正修改了数据时才清缓存，删除失败不清。缓存层的任何异常都不影响主流程，降级为直接读 PostgreSQL。
+
+### 难点 13：AI 上下文预算管理（CJK 感知）
+
+**问题**：AI 请求需要附带聊天历史作为上下文，但上下文太长会超过模型的 token 限制，而且成本和 token 数成正比。难点在于准确估算 token 数——中文 1 字 ≈ 1 token，英文 1 词 ≈ 1 token，混合内容需要分别计算。
+
+**解决方案** — 三层上下文筛选 + CJK 感知 token 估算：
+
+```typescript
+// aiHistory.ts — CJK 感知的 token 估算
+const estimateTextTokens = (text: string): number => {
+  const cjkCount = text.match(CJK_CHARACTER_PATTERN)?.length ?? 0;  // 中日韩字符
+  const nonCjkText = text.replace(CJK_CHARACTER_PATTERN, '');
+  return Math.max(1, cjkCount + Math.ceil(nonCjkText.length / 4));
+  // CJK: 1 字符 ≈ 1 token；拉丁: 4 字符 ≈ 1 token（保守估计）
+};
+```
+
+**三层筛选（从粗到细）：**
+
+```typescript
+// aiHistory.ts — selectAIHistory
+export function selectAIHistory(fullHistory, options) {
+  let history = fullHistory;
+
+  // 第 1 层：语义截断（重试/编辑时只取该消息之前的历史）
+  if (retryForMessageId) {
+    const idx = history.findIndex(m => m.id === retryForMessageId);
+    if (idx !== -1) history = history.slice(0, idx);
+  } else if (editedMessageId) {
+    const idx = history.findIndex(m => m.id === editedMessageId);
+    if (idx !== -1) history = history.slice(0, idx + 1);  // 包含编辑的消息
+  }
+
+  // 第 2 层：消息条数限制（取最近 N 条）
+  if (history.length > maxContextMessages) {
+    history = history.slice(-maxContextMessages);
+  }
+
+  // 第 3 层：token 预算（从最新消息往前贪心累加）
+  const selected = [];
+  let tokenCount = 0;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const msgTokens = estimateMessageTokens(history[i]);
+    if (selected.length > 0 && tokenCount + msgTokens > maxContextTokens) break;
+    selected.push(history[i]);
+    tokenCount += msgTokens;
+  }
+  return { contextMessages: selected.reverse(), contextTokenEstimate: tokenCount };
+}
+```
+
+面试时这样讲：
+> AI 上下文管理分三层筛选。第一层是语义截断——用户重试或编辑消息时，只取该消息之前的历史，不会把重试后的回复再喂回去。第二层是条数限制。第三层是 token 预算，从最新消息往前贪心累加，超过预算就停。token 估算对 CJK 和拉丁字符分别计算：中文 1 字约 1 token，英文约 4 字符 1 token。这个估算偏保守，宁可少发一条也不超限。
+
 ---
 
 ## 四、扩展性讨论
