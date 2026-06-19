@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RoomTalk 面试准备资料</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --accent-dim: #1f6feb;
+    --green: #3fb950;
+    --orange: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --cyan: #39d2c0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    font-size: 15px;
+  }
+  /* ---- layout ---- */
+  .wrapper {
+    display: flex;
+    min-height: 100vh;
+  }
+  nav.sidebar {
+    position: fixed;
+    top: 0; left: 0;
+    width: 280px;
+    height: 100vh;
+    overflow-y: auto;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 24px 16px;
+    z-index: 100;
+  }
+  nav.sidebar h2 {
+    font-size: 14px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    margin-bottom: 12px;
+  }
+  nav.sidebar a {
+    display: block;
+    color: var(--text-muted);
+    text-decoration: none;
+    padding: 5px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    transition: .15s;
+  }
+  nav.sidebar a:hover, nav.sidebar a.active {
+    color: var(--accent);
+    background: rgba(88,166,255,.08);
+  }
+  nav.sidebar a.sub {
+    padding-left: 22px;
+    font-size: 12.5px;
+  }
+  main {
+    margin-left: 280px;
+    max-width: 900px;
+    padding: 48px 48px 120px;
+  }
+  /* ---- typography ---- */
+  h1 { font-size: 32px; margin-bottom: 8px; color: var(--text); }
+  h1 + .subtitle { color: var(--text-muted); font-size: 15px; margin-bottom: 40px; }
+  h2 {
+    font-size: 22px;
+    margin-top: 56px;
+    margin-bottom: 20px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+  }
+  h3 { font-size: 17px; margin-top: 32px; margin-bottom: 12px; color: var(--accent); }
+  h4 { font-size: 15px; margin-top: 20px; margin-bottom: 8px; color: var(--purple); }
+  p { margin-bottom: 14px; }
+  strong { color: var(--text); }
+  ul, ol { margin: 10px 0 14px 24px; }
+  li { margin-bottom: 6px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 48px 0; }
+  /* ---- blockquote = 话术 ---- */
+  blockquote {
+    background: rgba(88,166,255,.06);
+    border-left: 3px solid var(--accent-dim);
+    padding: 14px 18px;
+    margin: 12px 0 18px;
+    border-radius: 0 8px 8px 0;
+    color: var(--text);
+    font-size: 14px;
+  }
+  blockquote::before {
+    content: '💬 话术参考';
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    margin-bottom: 6px;
+  }
+  /* ---- code ---- */
+  code {
+    background: rgba(110,118,129,.25);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  }
+  pre {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px;
+    overflow-x: auto;
+    margin: 14px 0 18px;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  pre code { background: none; padding: 0; }
+  /* ---- tables ---- */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 14px 0 20px;
+    font-size: 13.5px;
+  }
+  th {
+    background: var(--surface);
+    text-align: left;
+    padding: 10px 14px;
+    font-weight: 600;
+    border-bottom: 2px solid var(--border);
+    color: var(--text);
+    white-space: nowrap;
+  }
+  td {
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tr:hover td { background: rgba(88,166,255,.03); }
+  /* ---- cards ---- */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin: 16px 0;
+  }
+  .card h4 { margin-top: 0; color: var(--green); }
+  .card.warn h4 { color: var(--orange); }
+  .card.danger h4 { color: var(--red); }
+  /* ---- tags ---- */
+  .tag {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 12px;
+    margin-right: 4px;
+  }
+  .tag.green { background: rgba(63,185,80,.15); color: var(--green); }
+  .tag.blue { background: rgba(88,166,255,.15); color: var(--accent); }
+  .tag.purple { background: rgba(188,140,255,.15); color: var(--purple); }
+  .tag.orange { background: rgba(210,153,34,.15); color: var(--orange); }
+  /* ---- STAR ---- */
+  .star-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 10px 0; }
+  .star-label {
+    font-weight: 700;
+    font-size: 12px;
+    padding: 3px 0;
+    text-align: right;
+  }
+  .star-label.s { color: var(--cyan); }
+  .star-label.t { color: var(--orange); }
+  .star-label.a { color: var(--accent); }
+  .star-label.r { color: var(--green); }
+  .star-val { padding: 3px 0; }
+  /* ---- QA ---- */
+  details {
+    margin: 8px 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  summary {
+    cursor: pointer;
+    padding: 12px 16px;
+    background: var(--surface);
+    font-weight: 600;
+    font-size: 14px;
+    list-style: none;
+  }
+  summary::before { content: 'Q: '; color: var(--orange); }
+  summary::-webkit-details-marker { display: none; }
+  details[open] summary { border-bottom: 1px solid var(--border); }
+  details .answer { padding: 14px 16px; font-size: 14px; }
+  details .answer::before { content: 'A: '; font-weight: 700; color: var(--green); }
+  /* ---- diagram ---- */
+  .diagram {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    margin: 16px 0;
+    overflow-x: auto;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 12.5px;
+    line-height: 1.4;
+    white-space: pre;
+    color: var(--text-muted);
+  }
+  /* ---- pill stats ---- */
+  .stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 16px 0;
+  }
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 20px;
+    text-align: center;
+    min-width: 140px;
+    flex: 1;
+  }
+  .stat .num { font-size: 28px; font-weight: 700; color: var(--accent); }
+  .stat .label { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+  /* ---- responsive ---- */
+  @media (max-width: 960px) {
+    nav.sidebar { display: none; }
+    main { margin-left: 0; padding: 24px 20px 80px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrapper">
+
+<!-- ======== SIDEBAR ======== -->
+<nav class="sidebar">
+  <h2>目录</h2>
+  <a href="#intro">一、30 秒项目介绍</a>
+  <a href="#arch">二、系统架构</a>
+  <a href="#arch-composite" class="sub">CompositeRoomStore</a>
+  <a href="#arch-socketio" class="sub">Socket.IO 多实例</a>
+  <a href="#arch-ai" class="sub">AI 流式响应</a>
+  <a href="#arch-media" class="sub">Presigned URL 上传</a>
+  <a href="#challenges">三、技术难点</a>
+  <a href="#ch-mobile" class="sub">移动端断连恢复</a>
+  <a href="#ch-migration" class="sub">Redis → PostgreSQL</a>
+  <a href="#ch-sync" class="sub">房间状态同步</a>
+  <a href="#ch-ai" class="sub">AI 多 Provider</a>
+  <a href="#scale">四、扩展性讨论</a>
+  <a href="#security">五、安全设计</a>
+  <a href="#testing">六、测试策略</a>
+  <a href="#star">七、STAR 故事</a>
+  <a href="#qa">八、常见追问</a>
+  <a href="#compare">九、技术选型对比</a>
+  <a href="#numbers">十、项目数据</a>
+  <a href="#bonus">十一、加分项</a>
+</nav>
+
+<!-- ======== MAIN ======== -->
+<main>
+
+<h1>RoomTalk 面试准备资料</h1>
+<p class="subtitle">覆盖系统设计、技术决策、踩过的坑、扩展方案和常见面试追问</p>
+
+<!-- ==================== 一、30秒 ==================== -->
+<hr>
+<h2 id="intro">一、30 秒项目介绍</h2>
+
+<blockquote>
+RoomTalk 是一个实时聊天系统，支持多人房间聊天、AI 流式助手、私有媒体上传、贴纸、语音转写和移动端优化。前端是 React + TypeScript + Vite，后端是 Node.js + Express + Socket.IO，持久化支持 Redis 和 PostgreSQL 双模式，媒体存储用 S3 兼容对象存储。部署在 Fly.io，CI/CD 通过 GitHub Actions 自动化。
+</blockquote>
+
+<p>面试官听完会根据兴趣追问，你控制节奏，引导到你最熟的方向。</p>
+
+<!-- ==================== 二、架构 ==================== -->
+<hr>
+<h2 id="arch">二、系统架构</h2>
+
+<h3>画架构图时这样画</h3>
+
+<div class="diagram">                    ┌──────────────┐
+                    │   Client     │
+                    │  React/Vite  │
+                    └──────┬───────┘
+                           │ HTTPS / WSS
+                    ┌──────▼───────┐
+                    │ Load Balancer│ ← TLS termination, sticky session
+                    └──────┬───────┘
+                           │
+              ┌────────────▼────────────┐
+              │    Node.js Server       │
+              │  Express + Socket.IO    │
+              │                         │
+              │  ┌─────────────────┐    │
+              │  │ CompositeRoom   │    │
+              │  │ Store           │    │
+              │  └──┬──────────┬───┘    │
+              └─────┤          ├────────┘
+                    │          │
+         ┌──────────▼──┐  ┌───▼──────────┐
+         │ PostgreSQL   │  │    Redis      │
+         │ (durable)    │  │ (realtime +   │
+         │ rooms,       │  │  sessions,    │
+         │ messages,    │  │  presence,    │
+         │ members,     │  │  Socket.IO    │
+         │ media assets │  │  adapter,     │
+         │ auth, ...    │  │  msg cache)   │
+         └──────────────┘  └──────────────┘
+
+              ┌──────────┐    ┌───────────┐
+              │ S3/Tigris│    │ AI APIs   │
+              │ (media)  │    │ DeepSeek  │
+              └──────────┘    │ Anthropic │
+                              │ OpenAI    │
+                              │ OpenRouter│
+                              └───────────┘</div>
+
+<h3 id="arch-composite">1. CompositeRoomStore — 双存储分层</h3>
+
+<p>这是整个后端最核心的抽象。一个 <code>CompositeRoomStore</code> 组合了三个子存储：</p>
+<ul>
+  <li><code>DurableRoomStore</code>：持久数据（房间、消息、成员、媒体资产、认证）。可以是 Redis 或 PostgreSQL，运行时通过环境变量切换。</li>
+  <li><code>RealtimeRoomStore</code>：始终是 Redis。管理 socket session、在线成员、临时状态。服务重启后自动重建。</li>
+  <li><code>RoomMessageCacheStore</code>：可选的 Redis TTL 缓存，在 PostgreSQL 模式下减少数据库读压力。</li>
+</ul>
+
+<blockquote>
+我们把存储拆成"持久"和"实时"两层。持久层可以在 Redis 和 PostgreSQL 之间切换——开发用 Redis 快速迭代，生产切到 PostgreSQL 保证数据安全。实时层始终用 Redis 因为它本来就是内存存储，做 session 和 presence 正好。中间加了一层消息缓存，cache miss 才查 PostgreSQL，命中率在 90%+ 因为聊天场景下用户大概率读最近的消息。
+</blockquote>
+
+<h3 id="arch-socketio">2. Socket.IO 多实例扩展</h3>
+
+<div class="diagram">Client A ──WSS──▶ Instance 1 ──Redis pub/sub──▶ Instance 2 ──push──▶ Client B</div>
+
+<p>用 <code>@socket.io/redis-adapter</code>，所有 Socket.IO 事件通过 Redis pub/sub 同步到所有实例。客户端不感知自己连的是哪个实例。</p>
+
+<div class="card warn">
+  <h4>追问：sticky session 为什么必须？</h4>
+  <p>Socket.IO 握手分两步：先发几个 HTTP long-polling 请求，再升级到 WebSocket。如果这几个 HTTP 请求被负载均衡分到不同实例，握手就断了。所以 ALB 必须开 stickiness，保证同一个客户端的请求始终到同一台机器。握手完成后 WebSocket 是长连接，自然不会飘。</p>
+</div>
+
+<h3 id="arch-ai">3. AI 流式响应</h3>
+
+<div class="diagram">Client → ask_ai event → Server → AI Provider (streaming) → ai_chunk events → Client</div>
+
+<ul>
+  <li>服务端用 OpenAI SDK 的 stream API，逐 chunk 读取，通过 Socket.IO 实时推给客户端。</li>
+  <li>消息创建时 <code>status: 'streaming'</code>，完成后改为 <code>'complete'</code>，出错改为 <code>'error'</code>。</li>
+  <li>服务器重启时，<code>aiStreamRecovery</code> 扫描所有 <code>status = 'streaming'</code> 的消息，标记为 <code>'error'</code>，避免僵尸流。</li>
+</ul>
+
+<div class="card">
+  <h4>追问：为什么不用 SSE？</h4>
+  <p>已经有 Socket.IO 长连接了，再开 SSE 是多余的连接。Socket.IO 事件模型可以区分不同房间、不同用户的 AI 流，比 SSE 灵活。而且 AI 流需要和消息历史、状态同步走同一个通道，不适合单独开一个 HTTP 流。</p>
+</div>
+
+<h3 id="arch-media">4. 媒体上传流程 — Presigned URL</h3>
+
+<div class="diagram">Client                    Server                     S3
+  │                         │                         │
+  │── request upload URL ──▶│                         │
+  │                         │── generate presigned ──▶│
+  │◀── presigned PUT URL ──│                         │
+  │                         │                         │
+  │──── PUT file directly ─────────────────────────▶ │
+  │                         │                         │
+  │── confirm upload ──────▶│                         │
+  │                         │── create MediaAsset ──▶ │
+  │◀── message with asset ─│                         │</div>
+
+<blockquote>
+文件不经过我们的服务器。客户端先向服务器请求一个临时上传 URL（presigned URL，有效期 15 分钟），然后直接上传到 S3。上传完成后通知服务器，服务器创建 metadata 记录。下载也是类似的，服务器生成临时读取 URL 返回给客户端。这样服务器不处理大文件流量，带宽和 CPU 都省了。
+</blockquote>
+
+<div class="card">
+  <h4>追问：presigned URL 安全吗？</h4>
+  <p>URL 本身包含签名，只对特定 bucket/key 有效，有过期时间。泄露了也只能上传到这一个位置，不能读其他文件。而且我们的 bucket 设置了 block all public access，没有 presigned URL 什么都看不到。</p>
+</div>
+
+<!-- ==================== 三、技术难点 ==================== -->
+<hr>
+<h2 id="challenges">三、技术难点与解决方案</h2>
+
+<h3 id="ch-mobile">难点 1：移动浏览器 WebSocket 断连恢复</h3>
+
+<p><strong>问题</strong>：手机切后台、锁屏、切网络后，WebSocket 连接可能被浏览器挂起甚至断开。用户切回来后：</p>
+<ul>
+  <li>消息停止接收（连接已死但没有触发 disconnect 事件）</li>
+  <li>在线成员数不准确</li>
+  <li>房间状态过时</li>
+</ul>
+
+<p><strong>解决方案</strong> — 多层恢复机制：</p>
+<ol>
+  <li><span class="tag green">Page Visibility API</span> 监听 <code>visibilitychange</code>，页面恢复前台时检查连接健康度。</li>
+  <li><span class="tag blue">幂等 rejoin</span> 不是无脑重连。用 <code>ensureRoomJoined</code> 先检查当前房间是否仍然 joined，避免重复 join 导致成员数翻倍。</li>
+  <li><span class="tag purple">in-flight 去重</span> 短时间内多次恢复（快速切换前后台）复用同一个恢复请求，不重复发。</li>
+  <li><span class="tag orange">延迟指示器</span> 健康连接下的 rejoin 是毫秒级的，只有超过 400ms 未完成才显示"重连中"，避免每次切前台闪一下转圈。</li>
+  <li><span class="tag green">密码房复用</span> 会话内记住已验证的密码，恢复时自动带上，不让用户重新输入。</li>
+</ol>
+
+<blockquote>
+移动端 WebSocket 恢复是我们踩坑最多的地方。核心思路是"不信任连接状态"——页面回到前台就检查，但不无脑重连。我们有一个 <code>ensureRoomJoined</code> 做幂等 rejoin，加上 in-flight 去重和延迟转圈，用户基本感知不到断连过程。
+</blockquote>
+
+<h3 id="ch-migration">难点 2：Redis → PostgreSQL 持久化迁移</h3>
+
+<p><strong>问题</strong>：系统最初用 Redis 做全量持久化。Redis 虽然快，但：</p>
+<ul>
+  <li>数据全在内存，成本随数据量线性增长</li>
+  <li>没有关系约束，数据一致性靠应用层保证</li>
+  <li>备份和恢复不如关系型数据库成熟</li>
+</ul>
+
+<p><strong>解决方案</strong> — 渐进式迁移，不停服：</p>
+<ol>
+  <li>抽象出 <code>DurableRoomStore</code> 接口，<code>RedisStore</code> 和 <code>PostgresStore</code> 各自实现。</li>
+  <li><code>CompositeRoomStore</code> 组合 durable + realtime，切换 durable 实现只需要改环境变量。</li>
+  <li>写了幂等迁移脚本 <code>migrate:redis-to-postgres</code>，支持 dry-run。</li>
+  <li>加了 <code>smoke:persistence</code> 安全测试，保护不会误连生产 Redis。</li>
+  <li>回滚是纯配置切换：<code>PERSISTENCE_STORE=redis</code>，因为迁移期间不删 Redis 数据。</li>
+</ol>
+
+<blockquote>
+我们做了一个 Store 接口抽象层，Redis 和 PostgreSQL 各自实现相同接口。上层代码完全不知道底下是哪个数据库。切换只需要改一个环境变量，回滚也是。迁移脚本是幂等的，可以反复跑。这样我们在生产环境做了零停机迁移。
+</blockquote>
+
+<h3 id="ch-sync">难点 3：房间状态同步与一致性</h3>
+
+<p><strong>问题</strong>：多个客户端同时操作房间设置（改名、设密码、改发言时间段），客户端的房间对象可能过时。</p>
+
+<p><strong>解决方案</strong>：</p>
+<ol>
+  <li><strong>整体替换而非合并</strong>：服务端返回完整的 room 对象，客户端收到后整体替换本地状态，不做字段级 merge。</li>
+  <li><strong><code>room_version</code> 单调版本号</strong>：PostgreSQL 行级自增，客户端按 version 比较新旧，不依赖时间戳（时钟漂移不可靠）。</li>
+  <li><strong>ack read-your-write</strong>：客户端修改设置后，ack 返回最新的 room 对象，立即更新本地，不等广播。</li>
+</ol>
+
+<div class="card">
+  <h4>追问：为什么不用 CRDT？</h4>
+  <p>房间设置是低频操作，last-write-wins 够用。CRDT 适合高频并发编辑（协同文档），引入复杂度不值得。我们的 version 号保证了排序，整体替换保证了最终一致。</p>
+</div>
+
+<h3 id="ch-ai">难点 4：AI 多 Provider 抽象</h3>
+
+<p><strong>问题</strong>：接入了 DeepSeek、Anthropic、OpenAI、OpenRouter 四个 AI 提供方，每个的 SDK、定价、限流策略不同。</p>
+
+<pre><code>aiModels.ts   — model registry: model ID → { provider, apiModel, pricing, ... }
+aiClients.ts  — client factory: provider → SDK client instance
+aiHandlers.ts — streaming logic: provider-agnostic chunk forwarding</code></pre>
+
+<ul>
+  <li><code>aiModels.ts</code> 维护一个 model registry，把用户可见的 model ID 映射到具体的 provider 和 API model name。</li>
+  <li><code>aiClients.ts</code> 按 provider 类型创建对应的 SDK 客户端（OpenAI SDK 兼容 DeepSeek 和 OpenRouter，Anthropic 用官方 SDK）。</li>
+  <li>流式处理层统一把不同 SDK 的 chunk 格式转成统一的 <code>ai_chunk</code> 事件推给客户端。</li>
+</ul>
+
+<blockquote>
+我们用了一个 model registry + client factory 模式。添加新的 AI 提供方只需要在 registry 注册模型、在 factory 加一个 case。流式处理是 provider-agnostic 的，不同 SDK 的 chunk 格式在服务端统一转换。客户端完全不知道后端用的是哪个 provider。
+</blockquote>
+
+<!-- ==================== 四、扩展性 ==================== -->
+<hr>
+<h2 id="scale">四、扩展性讨论</h2>
+
+<p>面试官喜欢追问"如果用户量增长 100 倍怎么办"，按这个思路答：</p>
+
+<h3>当前瓶颈在哪</h3>
+<table>
+  <thead>
+    <tr><th>组件</th><th>瓶颈</th><th>扩展方案</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>单实例 Node.js</td><td>CPU 和并发连接数</td><td>ECS auto scaling，水平扩多个 task</td></tr>
+    <tr><td>PostgreSQL 读</td><td>消息历史查询</td><td>读副本 + Redis 缓存（已有 <code>RoomMessageCacheStore</code>）</td></tr>
+    <tr><td>PostgreSQL 写</td><td>高频消息写入</td><td>写入批量化 / 异步队列 / 分表</td></tr>
+    <tr><td>Redis</td><td>内存上限</td><td>ElastiCache 升级 / cluster mode</td></tr>
+    <tr><td>S3</td><td>基本无瓶颈</td><td>S3 自动扩展，无需操心</td></tr>
+  </tbody>
+</table>
+
+<h3>水平扩展方案</h3>
+<div class="diagram">现在:  1 个 ECS task
+10x:   2-4 个 task, Redis adapter 广播, ALB sticky
+100x:  按房间做一致性哈希路由, 每个 task 负责一组房间
+       PostgreSQL 读副本 + 消息分表
+       独立的 AI 请求队列 (SQS + worker)</div>
+
+<h3>如果要支持 10 万并发连接</h3>
+<ol>
+  <li>每个 Node.js 进程约能处理 5-10K WebSocket 连接</li>
+  <li>10 万需要 10-20 个 ECS task</li>
+  <li>Redis adapter pub/sub 在这个规模开始有压力，可以切到 Redis Streams 或 Kafka</li>
+  <li>消息持久化改成异步写入（先 ack 客户端，后台批量写 PostgreSQL）</li>
+</ol>
+
+<div class="card warn">
+  <h4>策略提醒</h4>
+  <p>面试时<strong>不要主动讲到 Kafka 级别</strong>，除非面试官追问。先讲简单方案，被追才讲复杂方案，展示你知道什么时候该用什么。</p>
+</div>
+
+<!-- ==================== 五、安全 ==================== -->
+<hr>
+<h2 id="security">五、安全设计</h2>
+
+<table>
+  <thead>
+    <tr><th>安全点</th><th>实现</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>传输加密</td><td>HTTPS/WSS，PostgreSQL TLS，Redis TLS</td></tr>
+    <tr><td>认证</td><td>UUID clientId + token hash，可选 Google OAuth</td></tr>
+    <tr><td>授权</td><td>房间成员角色（owner/admin/member），<code>hasRoomAccess</code> 检查</td></tr>
+    <tr><td>密码房</td><td>bcrypt 哈希存储，验证后 ack 返回 token</td></tr>
+    <tr><td>媒体隔离</td><td>S3 bucket block all public access，presigned URL 有过期时间</td></tr>
+    <tr><td>API 限流</td><td>AI 角色草稿按 IP 限速 10 分钟窗口</td></tr>
+    <tr><td>Socket 注册</td><td>客户端必须先 <code>register</code> 发送 clientId + auth token 才能操作</td></tr>
+    <tr><td>环境变量</td><td>secrets 在 SSM Parameter Store / Fly secrets，不进代码</td></tr>
+  </tbody>
+</table>
+
+<div class="card">
+  <h4>追问：clientId 是 UUID，不是登录系统，怎么防冒充？</h4>
+  <p>clientId 绑定了 auth token（SHA-256 hash 存储）。注册 socket 时必须同时提供 clientId 和 token，token 不匹配就拒绝。可选地可以绑定 Google 账号做强身份认证。纯 UUID 模式下安全等级类似于 session token——只要不泄露就安全。</p>
+</div>
+
+<!-- ==================== 六、测试 ==================== -->
+<hr>
+<h2 id="testing">六、测试策略</h2>
+
+<table>
+  <thead>
+    <tr><th>层级</th><th>工具</th><th>覆盖内容</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>单元测试 (server)</td><td>Node test runner</td><td>store contract, message domain, AI models, auth, media storage</td></tr>
+    <tr><td>单元测试 (client)</td><td>Vitest + RTL</td><td>component rendering, hooks, state management, i18n</td></tr>
+    <tr><td>E2E (Redis mode)</td><td>Playwright</td><td>room flows, message flows, AI/media/sharing, mobile core, multi-client</td></tr>
+    <tr><td>E2E (Postgres mode)</td><td>Playwright</td><td>persistence-mode regression</td></tr>
+    <tr><td>i18n 完整性</td><td>check:i18n</td><td>build 时校验所有翻译 key</td></tr>
+  </tbody>
+</table>
+
+<blockquote>
+我们用了四层测试。单元测试覆盖核心业务逻辑，E2E 用 Playwright 跑真实浏览器测试用户可见行为。因为有 Redis 和 PostgreSQL 两种持久化模式，E2E 分别跑两套。CI 里还有一个 i18n key 完整性检查，防止加了新 UI 文案忘记翻译。
+</blockquote>
+
+<!-- ==================== 七、STAR ==================== -->
+<hr>
+<h2 id="star">七、你做了什么（STAR 法）</h2>
+
+<p>面试官会问"你在这个项目里具体做了什么"。准备 2-3 个 STAR 故事：</p>
+
+<div class="card">
+  <h4>故事 1：PostgreSQL 持久化迁移</h4>
+  <div class="star-grid">
+    <div class="star-label s">Situation</div><div class="star-val">项目最初用 Redis 做全量持久化，数据增长后内存成本上升，且缺少关系约束。</div>
+    <div class="star-label t">Task</div><div class="star-val">在不停服的情况下迁移到 PostgreSQL。</div>
+    <div class="star-label a">Action</div><div class="star-val">设计了 Store 接口抽象层，实现 Redis 和 PostgreSQL 双实现，写了幂等迁移脚本和安全 smoke 测试，通过环境变量切换实现零停机迁移。</div>
+    <div class="star-label r">Result</div><div class="star-val">成功迁移，回滚方案验证通过，数据一致性 100%，PostgreSQL 模式上线后内存成本降低（Redis 只存实时状态）。</div>
+  </div>
+</div>
+
+<div class="card">
+  <h4>故事 2：移动端 WebSocket 可靠性</h4>
+  <div class="star-grid">
+    <div class="star-label s">Situation</div><div class="star-val">用户反馈手机切后台回来后消息丢失、需要刷新。</div>
+    <div class="star-label t">Task</div><div class="star-val">在不改变 Socket.IO 架构的前提下，解决移动浏览器的连接恢复问题。</div>
+    <div class="star-label a">Action</div><div class="star-val">基于 Page Visibility API 实现多层恢复机制：幂等 rejoin、in-flight 去重、延迟指示器、密码房自动复用。每个机制都有对应的 E2E 测试覆盖。</div>
+    <div class="star-label r">Result</div><div class="star-val">移动端用户不再需要手动刷新，恢复过程对用户透明，相关 bug 报告归零。</div>
+  </div>
+</div>
+
+<div class="card">
+  <h4>故事 3：AI 多 Provider 集成</h4>
+  <div class="star-grid">
+    <div class="star-label s">Situation</div><div class="star-val">最初只接了 OpenRouter 做中转，但部分模型需要直连官方 API 才能使用 prompt caching 等特性。</div>
+    <div class="star-label t">Task</div><div class="star-val">支持 DeepSeek、Anthropic、OpenAI 直连 + OpenRouter 路由，同时保持用户侧的简单体验。</div>
+    <div class="star-label a">Action</div><div class="star-val">设计 model registry + client factory 模式，流式处理层 provider-agnostic，支持运行时动态切换模型和 provider。前端展示 usage/cost 元数据，高价模型需要二次确认。</div>
+    <div class="star-label r">Result</div><div class="star-val">支持 10+ 模型，添加新 provider 只需改配置文件。DeepSeek 直连后 prompt caching 命中率 60%+，AI 调用成本降低约 40%。</div>
+  </div>
+</div>
+
+<!-- ==================== 八、追问 ==================== -->
+<hr>
+<h2 id="qa">八、常见追问与参考回答</h2>
+
+<p>点击展开查看参考回答：</p>
+
+<details>
+  <summary>为什么用 Socket.IO 而不是原生 WebSocket？</summary>
+  <div class="answer">Socket.IO 提供了开箱即用的自动重连、房间/命名空间、ack 回调、Redis adapter 多实例广播。原生 WebSocket 这些都要自己实现。对于聊天场景，Socket.IO 省了大量样板代码。</div>
+</details>
+
+<details>
+  <summary>为什么不用微服务架构？</summary>
+  <div class="answer">当前规模不需要。单体的开发、部署、调试效率远高于微服务。如果将来 AI 处理成为瓶颈，可以把 AI worker 拆出来用队列解耦，但现在拆了是过度设计。</div>
+</details>
+
+<details>
+  <summary>Redis 挂了怎么办？</summary>
+  <div class="answer">实时状态（在线成员、session）丢失，用户需要重连，服务端重建。持久数据在 PostgreSQL，不受影响。消息缓存丢失只是多查一次 PostgreSQL，有性能影响但不丢数据。</div>
+</details>
+
+<details>
+  <summary>数据库死锁怎么处理？</summary>
+  <div class="answer">当前消息写入是 append-only（INSERT），不存在行锁竞争。房间设置更新用 <code>room_version</code> 行级版本号 + <code>UPDATE ... RETURNING</code> 原子操作，失败重试。PostgreSQL 的 MVCC 天然避免了读写阻塞。</div>
+</details>
+
+<details>
+  <summary>如何保证消息顺序？</summary>
+  <div class="answer">每条消息有 server-side timestamp 和 position（单调递增）。客户端按 position 排序显示。不依赖客户端时间戳，因为多设备间的时钟可能不同步。</div>
+</details>
+
+<details>
+  <summary>如果让你重新设计，会改什么？</summary>
+  <div class="answer">三件事：1) 一开始就用 PostgreSQL 而不是 Redis 做持久化，省去后来的迁移工作。2) Socket 事件的错误返回用结构化错误码，而不是字符串匹配（目前还有少量 regex 匹配遗留）。3) 前端状态管理用 Zustand 或类似库，MessagePage 承担了太多状态编排，组件间共享状态靠 props 传递层级太深。</div>
+</details>
+
+<details>
+  <summary>怎么处理大量消息的性能？</summary>
+  <div class="answer">三个层面：1) 存储层：消息分页加载（<code>readMessagePageByRoom</code>，默认 80 条一页），不一次性加载全部历史。2) 渲染层：React 列表虚拟化可以进一步优化（当前未做，是已知改进点）。3) 缓存层：Redis <code>RoomMessageCacheStore</code> 缓存最近消息，cache hit 避免查 PostgreSQL。</div>
+</details>
+
+<details>
+  <summary>项目里遇到最难的 bug 是什么？</summary>
+  <div class="answer">移动端切后台回来后成员数翻倍。原因是 visibility change 触发重连，重连后 re-join 房间，但旧的 socket 还没断开，服务端认为是两个不同的连接。修复方法是在 <code>updateRoomMemberCount</code> 里按 clientId 去重，同一个 clientId 的多个 socket 只算一个成员。</div>
+</details>
+
+<!-- ==================== 九、技术选型对比 ==================== -->
+<hr>
+<h2 id="compare">九、技术选型对比</h2>
+
+<h3>实时通信方案对比</h3>
+<table>
+  <thead>
+    <tr><th>方案</th><th>延迟</th><th>双向</th><th>断线重连</th><th>多实例</th><th>适合场景</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>HTTP Polling</td><td>高 (秒级)</td><td>否</td><td>N/A</td><td>天然</td><td>仪表盘刷新</td></tr>
+    <tr><td>SSE</td><td>低</td><td>单向</td><td>自动</td><td>需要消息总线</td><td>通知推送</td></tr>
+    <tr><td>WebSocket</td><td>极低</td><td>双向</td><td>需实现</td><td>需要 adapter</td><td>聊天、游戏</td></tr>
+    <tr><td><strong>Socket.IO</strong></td><td>极低</td><td>双向</td><td>内置</td><td>Redis adapter</td><td>聊天 ✅</td></tr>
+  </tbody>
+</table>
+
+<h3>数据库选型</h3>
+<table>
+  <thead>
+    <tr><th></th><th>Redis</th><th>PostgreSQL</th><th>MongoDB</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>数据模型</strong></td><td>KV / Hash / List</td><td>关系型</td><td>文档型</td></tr>
+    <tr><td><strong>一致性</strong></td><td>最终一致</td><td>强一致 (ACID)</td><td>可调一致性</td></tr>
+    <tr><td><strong>查询能力</strong></td><td>基础</td><td>SQL 完整</td><td>灵活查询</td></tr>
+    <tr><td><strong>适合</strong></td><td>缓存、session、实时状态</td><td>持久化、关系数据</td><td>非结构化数据</td></tr>
+    <tr><td><strong>我们的用法</strong></td><td>实时层 ✅</td><td>持久层 ✅</td><td>未使用</td></tr>
+  </tbody>
+</table>
+
+<h3>部署方案对比</h3>
+<table>
+  <thead>
+    <tr><th></th><th>Fly.io</th><th>AWS ECS Fargate</th><th>AWS EKS</th><th>Vercel</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>运维复杂度</strong></td><td>低</td><td>中</td><td>高</td><td>极低</td></tr>
+    <tr><td><strong>WebSocket</strong></td><td>原生</td><td>ALB sticky</td><td>Ingress 配置</td><td>不支持长连接</td></tr>
+    <tr><td><strong>成本 (低流量)</strong></td><td>~$5-30/月</td><td>~$50-60/月</td><td>~$80+/月</td><td>不适用</td></tr>
+    <tr><td><strong>扩展上限</strong></td><td>中</td><td>高</td><td>极高</td><td>N/A</td></tr>
+    <tr><td><strong>适合阶段</strong></td><td>MVP ✅</td><td>生产化</td><td>大规模微服务</td><td>纯前端</td></tr>
+  </tbody>
+</table>
+
+<!-- ==================== 十、数字 ==================== -->
+<hr>
+<h2 id="numbers">十、项目数据与指标</h2>
+
+<p>面试里有具体数字会更有说服力：</p>
+
+<div class="stats">
+  <div class="stat"><div class="num">~110</div><div class="label">TypeScript 源文件</div></div>
+  <div class="stat"><div class="num">276+</div><div class="label">服务端测试</div></div>
+  <div class="stat"><div class="num">5</div><div class="label">支持语言</div></div>
+  <div class="stat"><div class="num">10+</div><div class="label">AI 模型</div></div>
+</div>
+<div class="stats">
+  <div class="stat"><div class="num">4</div><div class="label">AI Provider 直连</div></div>
+  <div class="stat"><div class="num">2</div><div class="label">持久化模式</div></div>
+  <div class="stat"><div class="num">4</div><div class="label">消息类型</div></div>
+  <div class="stat"><div class="num">~3 min</div><div class="label">CI/CD 部署时间</div></div>
+</div>
+
+<!-- ==================== 十一、加分项 ==================== -->
+<hr>
+<h2 id="bonus">十一、加分项 — 展示工程素养</h2>
+
+<p>面试不只看技术实现，也看工程习惯。可以主动提这些：</p>
+
+<div class="card">
+  <h4>1. 渐进式迁移</h4>
+  <p>Redis → PostgreSQL 不是一刀切，而是接口抽象 + 环境变量切换 + 回滚方案。</p>
+</div>
+
+<div class="card">
+  <h4>2. 防误操作</h4>
+  <p>persistence smoke test 只允许连名字含 <code>test</code> 或 <code>e2e</code> 的数据库，不可能误连生产。</p>
+</div>
+
+<div class="card">
+  <h4>3. 文档即代码</h4>
+  <p><code>.env.example</code> 是配置的 single source of truth，README 引用它而不是重复列表。</p>
+</div>
+
+<div class="card">
+  <h4>4. CI 守门</h4>
+  <p>部署前校验必需的 Fly secrets，缺了就阻断，不是靠运行时 crash 发现。</p>
+</div>
+
+<div class="card">
+  <h4>5. 幂等设计</h4>
+  <p>迁移脚本可以反复跑，room upsert + message 按 ID 去重。</p>
+</div>
+
+</main>
+</div>
+</body>
+</html>
