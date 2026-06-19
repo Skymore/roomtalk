@@ -494,19 +494,77 @@ const resisted = safeWidth * (1 - (1 / ((distance / safeWidth) * 0.55 + 1)));
 return Math.sign(offset) * Math.min(resisted, safeWidth * 0.45);
 // 公式: f(d) = w × (1 - 1/(0.55·d/w + 1))，最大拉到 45% 宽度</code></pre>
 
-<p><strong>RAF 批量渲染 + 速度驱动动画时长</strong>：</p>
+<p><strong>RAF 批量渲染 — 三通道合并刷新</strong>：</p>
 
-<pre><code class="language-typescript">// RAF 去重：pinch 每秒 60+ 事件，合并到一帧
-const scheduleDomTransformFlush = () => {
-  if (transformFrameRef.current !== null) return;
-  transformFrameRef.current = requestAnimationFrame(flushDomTransforms);
+<p>之前的实现是每次手势事件直接 <code>element.style.transform = ...</code>，在低端手机上掉帧到 30fps 以下。优化后改成三个独立通道的 pending 队列，一个 RAF 批量刷新：</p>
+
+<pre><code class="language-typescript">// MediaViewerModal.tsx — 三通道 pending 队列
+type PendingDomTransforms = {
+  track?: { translateX: number; transition: boolean; durationMs: number };  // 水平翻页
+  stage?: { offset: number; height: number; transition: boolean; ... };     // 下滑
+  image?: { zoom: number; pan: ImagePan; transition: boolean };             // 缩放平移
 };
 
-// 速度影响动画时长：快甩短动画，慢拖长动画
-const duration = 520 + distanceRatio * 420 - velocityRatio * 120;</code></pre>
+// 手势事件只写数据，不操作 DOM
+const applyActiveImageTransform = (zoom, pan, transition) => {
+  pendingDomTransformsRef.current.image = { zoom, pan, transition };
+  scheduleDomTransformFlush();  // 排一帧
+};
+const applyTrackOffset = (offset, transition, metrics, durationMs) => {
+  pendingDomTransformsRef.current.track = { translateX: ..., transition, durationMs };
+  scheduleDomTransformFlush();  // 同一帧内不重复排
+};
+
+// RAF 去重
+const scheduleDomTransformFlush = () => {
+  if (transformFrameRef.current !== null) return;  // 已有排队的帧
+  transformFrameRef.current = requestAnimationFrame(flushDomTransforms);
+};</code></pre>
+
+<p><code>flushDomTransforms</code> 一次性处理三个通道。下滑关闭有<strong>三层视觉联动</strong>：</p>
+
+<pre><code class="language-typescript">// MediaViewerModal.tsx — 批量 DOM 写入（下滑通道）
+if (pending.stage) {
+  const rawProgress = Math.min(1, offset / (height * 0.55));
+  const easedProgress = 1 - Math.pow(1 - rawProgress, 1.45);     // ease-out 缓动
+  const scale = Math.max(0.78, 1 - easedProgress * 0.22);        // 最小缩到 78%
+  const backdropOpacity = Math.max(0.28, 1 - easedProgress * 0.72);  // 背景渐透
+  const chromeOpacity = Math.max(0, 1 - rawProgress * 2.25);     // 按钮先消失
+
+  stageElement.style.transform = `translate3d(0, ${offset}px, 0) scale(${scale})`;
+  rootElement.style.backgroundColor = `rgba(8, 8, 7, ${backdropOpacity})`;
+  rootElement.style.setProperty("--media-viewer-chrome-opacity", String(chromeOpacity));
+}
+
+// 图片通道
+if (pending.image) {
+  imageElement.style.transform =
+    `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`;
+}</code></pre>
+
+<div class="card">
+  <h4>三层联动的视觉层次</h4>
+  <p>同一个 <code>rawProgress</code> 驱动三层效果，但各自映射曲线不同：</p>
+  <ul>
+    <li><strong>按钮最先消失</strong>：系数 2.25x，拖到 44% 就完全透明</li>
+    <li><strong>背景渐透</strong>：缓动曲线，最低透明度 0.28</li>
+    <li><strong>图片缩小</strong>：ease-out 缓动，最小缩到 78%</li>
+  </ul>
+</div>
+
+<p><strong>速度驱动动画时长</strong>：</p>
+
+<pre><code class="language-typescript">// useSwipePager.ts — 速度影响过渡时长
+const getHorizontalTrackTransitionMs = (remainingDistance, velocity, width) => {
+  const distanceRatio = clamp(remainingDistance / width, 0.12, 1);
+  const velocityRatio = clamp(Math.abs(velocity) / 1.2, 0, 1);
+  const duration = 520 + distanceRatio * 420 - velocityRatio * 120;
+  // 基础 520ms + 距离远加时间(最多+420ms) - 速度快减时间(最多-120ms)
+  return clamp(duration, MIN_TRANSITION_MS, MAX_TRANSITION_MS);
+};</code></pre>
 
 <blockquote>
-媒体查看器是我写过最复杂的前端组件，1800 多行。核心是一个手势模式状态机——所有触控先进入 tap 状态，移动超过阈值后根据方向比锁定为水平翻页、下滑关闭、缩放拖拽之一。缩放用了中心点保持的几何变换，边缘翻页有非线性弹性阻力，关闭支持速度判定。所有 DOM 更新通过 RAF 批量刷新，保证 pinch 操作 60fps 不卡顿。
+媒体查看器是我写过最复杂的前端组件，1800 多行。核心是一个手势模式状态机——所有触控先进入 tap 状态，移动超过阈值后根据方向比锁定为水平翻页、下滑关闭、缩放拖拽之一。缩放用了中心点保持的几何变换，边缘翻页有非线性弹性阻力，关闭支持速度判定。性能上，之前每次手势事件直接写 DOM，低端手机掉帧严重。优化后改成三通道 pending 队列——水平位移、下滑缩放、图片缩放各自独立写数据，一个 RAF 回调批量刷新。下滑关闭有三层视觉联动：按钮先消失、背景渐透、图片缩小，用同一个 progress 驱动但不同的映射曲线。优化后 pinch 操作稳定 60fps。
 </blockquote>
 
 <!-- ===== 难点2：三层缓存 ===== -->

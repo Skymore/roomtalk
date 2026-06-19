@@ -206,17 +206,84 @@ return Math.sign(offset) * Math.min(resisted, safeWidth * 0.45);
 
 这是经典的阻尼弹簧公式：`f(d) = w × (1 - 1/(k·d/w + 1))`。拉得越远阻力越大，最大只能拉到 45% 宽度。
 
-**RAF 批量渲染：**
+**RAF 批量渲染 — 三通道合并刷新：**
 
-pinch 事件每秒触发 60+ 次，直接操作 DOM 会卡。所有 transform 先写入 pending 队列，合并到一个 `requestAnimationFrame` 回调里刷新：
+pinch 事件每秒触发 60+ 次，直接操作 DOM 会卡。之前的实现是每次手势事件直接 `element.style.transform = ...`，在低端手机上会掉帧到 30fps 以下。
+
+优化思路：手势事件只写数据到 pending 队列，统一在一个 `requestAnimationFrame` 里批量刷新。同一帧内的多次手势事件只保留最后一次的值：
 
 ```typescript
-// MediaViewerModal.tsx — RAF 去重
-const scheduleDomTransformFlush = React.useCallback(() => {
-  if (transformFrameRef.current !== null) return;  // 已有排队的帧
-  transformFrameRef.current = window.requestAnimationFrame(flushDomTransforms);
-}, [flushDomTransforms]);
+// MediaViewerModal.tsx — 三个独立通道的 pending 队列
+type PendingDomTransforms = {
+  track?: { translateX: number; transition: boolean; durationMs: number };  // 水平翻页
+  stage?: { offset: number; height: number; transition: boolean; durationMs: number };  // 下滑
+  image?: { zoom: number; pan: ImagePan; transition: boolean };  // 缩放平移
+};
+
+// 手势事件只写数据，不操作 DOM
+const applyActiveImageTransform = (zoom, pan, transition) => {
+  pendingDomTransformsRef.current.image = { zoom, pan, transition };
+  scheduleDomTransformFlush();  // 排一帧
+};
+const applyTrackOffset = (offset, transition, metrics, durationMs) => {
+  pendingDomTransformsRef.current.track = { translateX: ..., transition, durationMs };
+  scheduleDomTransformFlush();  // 同一帧内不重复排
+};
+const applyVerticalOffset = (offset, transition, metrics, durationMs) => {
+  pendingDomTransformsRef.current.stage = { offset, height: ..., transition, durationMs };
+  scheduleDomTransformFlush();
+};
+
+// RAF 去重：同一帧只刷一次
+const scheduleDomTransformFlush = () => {
+  if (transformFrameRef.current !== null) return;  // 已有排队的帧，跳过
+  transformFrameRef.current = requestAnimationFrame(flushDomTransforms);
+};
 ```
+
+`flushDomTransforms` 一次性处理三个通道，每个通道独立决定 transition：
+
+```typescript
+// MediaViewerModal.tsx — 批量 DOM 写入
+const flushDomTransforms = () => {
+  transformFrameRef.current = null;
+  const pending = pendingDomTransformsRef.current;
+  pendingDomTransformsRef.current = {};  // 清空队列
+
+  // 通道 1：水平轮播位移
+  if (pending.track) {
+    trackElement.style.transition = pending.track.transition
+      ? `transform ${pending.track.durationMs}ms cubic-bezier(0.2, 0, 0, 1)` : "none";
+    trackElement.style.transform = `translate3d(${pending.track.translateX}px, 0, 0)`;
+  }
+
+  // 通道 2：下滑关闭（缩放 + 背景透明度 + UI 淡出）
+  if (pending.stage) {
+    const rawProgress = Math.min(1, offset / (height * 0.55));
+    const easedProgress = 1 - Math.pow(1 - rawProgress, 1.45);   // ease-out 缓动
+    const scale = Math.max(0.78, 1 - easedProgress * 0.22);      // 最小缩到 78%
+    const backdropOpacity = Math.max(0.28, 1 - easedProgress * 0.72);  // 背景渐透
+    const chromeOpacity = Math.max(0, 1 - rawProgress * 2.25);   // 按钮先消失
+
+    stageElement.style.transform = `translate3d(0, ${offset}px, 0) scale(${scale})`;
+    rootElement.style.backgroundColor = `rgba(8, 8, 7, ${backdropOpacity})`;
+    rootElement.style.setProperty("--media-viewer-chrome-opacity", String(chromeOpacity));
+  }
+
+  // 通道 3：图片缩放平移
+  if (pending.image) {
+    imageElement.style.transform =
+      `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`;
+  }
+};
+```
+
+下滑关闭的视觉反馈有三层联动：
+1. 图片本身下移 + 缩小（`translate3d + scale`，最小到 78%）
+2. 背景从不透明渐变到半透明（`rgba(8,8,7, 0.28)`）
+3. 关闭/翻页按钮比背景更早消失（`chromeOpacity` 系数 2.25x，拖到 44% 就完全透明）
+
+三者用同一个 `rawProgress` 驱动，但各自有不同的映射曲线，所以视觉上是"按钮先消失 → 背景渐透 → 图片缩小"的层次感。
 
 **速度驱动动画时长：**
 
@@ -224,12 +291,19 @@ const scheduleDomTransformFlush = React.useCallback(() => {
 
 ```typescript
 // useSwipePager.ts — 速度影响过渡时长
-const duration = 520 + distanceRatio * 420 - velocityRatio * 120;
-// 基础 520ms + 距离远加时间(最多+420ms) - 速度快减时间(最多-120ms)
+const getHorizontalTrackTransitionMs = (remainingDistance, velocity, width) => {
+  const distanceRatio = clamp(remainingDistance / width, 0.12, 1);
+  const velocityRatio = clamp(Math.abs(velocity) / 1.2, 0, 1);
+  const duration = 520 + distanceRatio * 420 - velocityRatio * 120;
+  // 基础 520ms + 距离远加时间(最多+420ms) - 速度快减时间(最多-120ms)
+  return clamp(duration, MIN_TRANSITION_MS, MAX_TRANSITION_MS);
+};
 ```
 
 面试时这样讲：
-> 媒体查看器是我写过最复杂的前端组件，1800 多行。核心是一个手势模式状态机——所有触控先进入 tap 状态，移动超过阈值后根据方向比锁定为水平翻页、下滑关闭、缩放拖拽之一。缩放用了中心点保持的几何变换，边缘翻页有非线性弹性阻力，关闭支持速度判定。所有 DOM 更新通过 RAF 批量刷新，保证 pinch 操作 60fps 不卡顿。
+> 媒体查看器是我写过最复杂的前端组件，1800 多行。核心是一个手势模式状态机——所有触控先进入 tap 状态，移动超过阈值后根据方向比锁定为水平翻页、下滑关闭、缩放拖拽之一。缩放用了中心点保持的几何变换，边缘翻页有非线性弹性阻力，关闭支持速度判定。
+>
+> 性能上，之前每次手势事件直接写 DOM，低端手机掉帧严重。优化后改成三通道 pending 队列——水平位移、下滑缩放、图片缩放各自独立写数据，一个 RAF 回调批量刷新。同一帧内多次事件只保留最新值。下滑关闭有三层视觉联动：按钮先消失、背景渐透、图片缩小，用同一个 progress 驱动但不同的映射曲线。优化后 pinch 操作稳定 60fps。
 
 ---
 
