@@ -357,7 +357,6 @@ describe('socket message acknowledgement helpers', () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
       url: 'https://signed.example/media.webp',
       expiresAt: '2026-05-03T00:15:00.000Z',
-      proxyUrl: '/api/media/asset-1/download?roomId=room-1',
     }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -366,8 +365,6 @@ describe('socket message acknowledgement helpers', () => {
     await expect(getMediaDownloadUrl({ roomId: 'room-1', assetId: 'asset-1' })).resolves.toEqual({
       url: 'https://signed.example/media.webp',
       expiresAt: '2026-05-03T00:15:00.000Z',
-      proxyUrl: '/api/media/asset-1/download?roomId=room-1',
-      proxyHeaders: { 'X-Client-Id': 'client-uuid' },
     });
 
     expect(fetchMock).toHaveBeenCalledWith('/api/media/asset-1/download-url?roomId=room-1', { headers: { 'X-Client-Id': 'client-uuid' } });
@@ -377,7 +374,6 @@ describe('socket message acknowledgement helpers', () => {
     setClientAuthToken('auth-token-1');
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
       url: 'https://signed.example/media.webp',
-      proxyUrl: '/api/media/asset-1/download?roomId=room-1',
     }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -386,8 +382,6 @@ describe('socket message acknowledgement helpers', () => {
     await expect(getMediaDownloadUrl({ roomId: 'room-1', assetId: 'asset-1' })).resolves.toEqual({
       url: 'https://signed.example/media.webp',
       expiresAt: undefined,
-      proxyUrl: '/api/media/asset-1/download?roomId=room-1',
-      proxyHeaders: { 'X-Client-Id': 'client-uuid', 'X-Client-Auth-Token': 'auth-token-1' },
     });
 
     expect(fetchMock).toHaveBeenCalledWith('/api/media/asset-1/download-url?roomId=room-1', { headers: { 'X-Client-Id': 'client-uuid', 'X-Client-Auth-Token': 'auth-token-1' } });
