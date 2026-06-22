@@ -291,6 +291,7 @@ type AIRequestData = {
   systemPrompt?: string;
   roleName?: string;
   model?: string;
+  userMessageId?: string;
   editedMessageId?: string;
   retryForMessageId?: string;
   maxContextMessages?: number;
@@ -350,6 +351,8 @@ export function registerAIHandlers({
     const { roomId, systemPrompt = DEFAULT_SYSTEM_MESSAGE, roleName = 'AI Assistant', editedMessageId, retryForMessageId } = data;
     const selectedModel = normalizeAIModel(data.model);
     const aiMessageId = uuidv4();
+    const aiRunId = uuidv4();
+    let assistantRunRecorded = false;
 
     socketLogger.info(`Received AI request (history-based)${editedMessageId ? ' after edit ' + editedMessageId : ''}${retryForMessageId ? ' as retry for ' + retryForMessageId : ''}`, {
       socketId: socket.id,
@@ -372,6 +375,84 @@ export function registerAIHandlers({
       return;
     }
     const maxContextMessages = normalizeAIContextMessageLimit(data.maxContextMessages, MAX_CONTEXT_MESSAGES);
+
+    const recordAssistantRunStart = async () => {
+      const now = new Date().toISOString();
+      const run = {
+        id: aiRunId,
+        roomId,
+        requestedByClientId: clientId,
+        userMessageId: data.userMessageId,
+        aiMessageId,
+        status: 'running' as const,
+        modelId: selectedModel.id,
+        apiModel: selectedModel.apiModel,
+        provider: selectedModel.provider,
+        roleName,
+        systemPrompt,
+        maxContextMessages,
+        retryForMessageId,
+        editedMessageId,
+        createdAt: now,
+        queuedAt: now,
+        startedAt: now,
+        updatedAt: now,
+        metadata: {
+          runnerMode: 'inline',
+        },
+      };
+      const event = {
+        id: uuidv4(),
+        eventType: 'ai.run.inline_started',
+        aggregateType: 'assistant_run',
+        aggregateId: aiRunId,
+        roomId,
+        payload: {
+          runId: aiRunId,
+          roomId,
+          aiMessageId,
+          userMessageId: data.userMessageId,
+          model: selectedModel.id,
+          runnerMode: 'inline',
+        },
+        status: 'processed' as const,
+        attempts: 1,
+        availableAt: now,
+        processedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      };
+      if (!store.createAssistantRunWithOutbox) {
+        openaiLogger.debug('Assistant run recording unavailable on store; continuing inline stream', { runId: aiRunId, messageId: aiMessageId, roomId });
+        return;
+      }
+      const recorded = await store.createAssistantRunWithOutbox(run, event);
+      assistantRunRecorded = Boolean(recorded);
+      if (!recorded) {
+        openaiLogger.warn('Failed to record assistant run start; continuing inline stream', { runId: aiRunId, messageId: aiMessageId, roomId });
+      }
+    };
+
+    const updateAssistantRun = async (updates: {
+      status: 'complete' | 'error' | 'cancelled';
+      error?: string;
+      metadata?: Record<string, unknown>;
+    }) => {
+      if (!assistantRunRecorded) {
+        return;
+      }
+      const now = new Date().toISOString();
+      const updated = await store.updateAssistantRun?.(aiRunId, {
+        status: updates.status,
+        error: updates.error ?? null,
+        completedAt: now,
+        updatedAt: now,
+        metadata: updates.metadata,
+      });
+      if (!updated) {
+        openaiLogger.warn('Failed to update assistant run status', { runId: aiRunId, status: updates.status, roomId, messageId: aiMessageId });
+      }
+    };
 
     if (retryForMessageId) {
       const retryTarget = await getRoomMessage(store, roomId, retryForMessageId);
@@ -560,6 +641,7 @@ export function registerAIHandlers({
       callback?.({ success: false, error: 'Unable to start a durable AI response' });
       return;
     }
+    await recordAssistantRunStart();
     io.to(roomId).emit('new_message', initialAiMessage);
     callback?.({ success: true, messageId: aiMessageId });
 
@@ -851,8 +933,18 @@ export function registerAIHandlers({
           error: 'Sorry, unable to save the AI response.',
           roomId,
         });
+        await updateAssistantRun({ status: 'error', error: 'Failed to save final AI response' });
         return;
       }
+
+      await updateAssistantRun({
+        status: 'complete',
+        metadata: {
+          contentLength: fullContent.length,
+          usage,
+          cost,
+        },
+      });
 
       io.to(roomId).emit('ai_stream_end', {
         messageId: aiMessageId,
@@ -886,6 +978,7 @@ export function registerAIHandlers({
           error: 'Sorry, cannot generate a response without any context or question.',
           roomId,
         });
+        await updateAssistantRun({ status: 'error', error: 'Cannot generate a response without context' });
         return;
       }
 
@@ -963,8 +1056,18 @@ export function registerAIHandlers({
           error: 'Sorry, unable to save the AI response.',
           roomId,
         });
+        await updateAssistantRun({ status: 'error', error: 'Failed to save final AI response' });
         return;
       }
+
+      await updateAssistantRun({
+        status: 'complete',
+        metadata: {
+          contentLength: fullContent.length,
+          usage,
+          cost,
+        },
+      });
 
       io.to(roomId).emit('ai_stream_end', {
         messageId: aiMessageId,
@@ -1003,6 +1106,10 @@ export function registerAIHandlers({
         messageId: aiMessageId,
         error: 'Sorry, an error occurred while generating the AI response.',
         roomId,
+      });
+      await updateAssistantRun({
+        status: 'error',
+        error: error instanceof Error ? error.message : 'Error generating response',
       });
     }
   };
@@ -1119,6 +1226,7 @@ export function registerAIHandlers({
         systemPrompt: data.systemPrompt,
         roleName: data.roleName,
         model: data.model,
+        userMessageId: userMessage.id,
       },
       clientId,
       (response) => {
@@ -1266,6 +1374,7 @@ export function registerAIHandlers({
         systemPrompt: typeof followUpRequest.systemPrompt === 'string' ? followUpRequest.systemPrompt : undefined,
         roleName: typeof followUpRequest.roleName === 'string' ? followUpRequest.roleName : undefined,
         model: typeof followUpRequest.model === 'string' ? followUpRequest.model : owningMessage.aiModel?.id,
+        userMessageId: followUpMessage.id,
         maxContextMessages: typeof followUpRequest.maxContextMessages === 'number' ? followUpRequest.maxContextMessages : undefined,
       },
       clientId,
