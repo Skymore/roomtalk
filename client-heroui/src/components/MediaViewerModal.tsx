@@ -119,6 +119,20 @@ const getMediaHistoryFilterLabelKey = (filter: MediaHistoryFilter) => (
       : "mediaHistoryFilterVideos"
 );
 
+const useDeferredMediaCacheFetchKey = (resetKey: string | null) => {
+  const [cacheBodyFetchKey, setCacheBodyFetchKey] = React.useState<number | null>(null);
+
+  React.useEffect(() => {
+    setCacheBodyFetchKey(null);
+  }, [resetKey]);
+
+  const markMediaLoadedForCache = React.useCallback(() => {
+    setCacheBodyFetchKey(value => (value ?? 0) + 1);
+  }, []);
+
+  return { cacheBodyFetchKey, markMediaLoadedForCache };
+};
+
 const mediaFileExtensions: Record<string, string> = {
   "image/jpeg": "jpg",
   "image/png": "png",
@@ -151,12 +165,14 @@ const MediaStageItem: React.FC<MediaStageItemProps> = ({ item, alt, isActive, im
   const { t } = useTranslation();
   const videoRef = React.useRef<HTMLVideoElement | null>(null);
   const [videoPreviewError, setVideoPreviewError] = React.useState(false);
+  const { cacheBodyFetchKey, markMediaLoadedForCache } = useDeferredMediaCacheFetchKey(item.src);
   const { mediaUrl, posterUrl } = useCachedMedia({
     assetId: item.assetId,
     url: item.src,
     kind: item.kind,
     mimeType: item.mimeType,
     byteSize: item.byteSize,
+    cacheBodyFetchKey,
   });
   const displayUrl = mediaUrl || item.src;
 
@@ -179,11 +195,13 @@ const MediaStageItem: React.FC<MediaStageItemProps> = ({ item, alt, isActive, im
       <img
         src={displayUrl}
         alt={alt}
+        crossOrigin="anonymous"
         className={`max-h-full max-w-full select-none object-contain will-change-transform ${isZoomed ? "cursor-grab active:cursor-grabbing" : isActive ? "cursor-zoom-in" : ""}`}
         style={isActive ? {
           transform: `translate3d(${imagePan.x}px, ${imagePan.y}px, 0) scale(${imageZoom})`,
           transition: "transform 160ms ease-out",
         } : undefined}
+        onLoad={markMediaLoadedForCache}
         draggable={false}
       />
     );
@@ -219,10 +237,12 @@ const MediaStageItem: React.FC<MediaStageItemProps> = ({ item, alt, isActive, im
       key={displayUrl}
       src={displayUrl}
       poster={posterUrl || undefined}
+      crossOrigin="anonymous"
       className="max-h-full w-full max-w-5xl bg-black object-contain sm:rounded-lg"
       controls={isActive}
       playsInline
       preload="metadata"
+      onLoadedData={markMediaLoadedForCache}
       onError={() => setVideoPreviewError(true)}
       {...(isActive ? videoGestureHandlers : undefined)}
     />
@@ -237,12 +257,14 @@ const MediaHistoryGridItem: React.FC<MediaHistoryGridItemProps> = ({
   onSelect,
 }) => {
   const [videoPreviewError, setVideoPreviewError] = React.useState(false);
+  const { cacheBodyFetchKey, markMediaLoadedForCache } = useDeferredMediaCacheFetchKey(item.url);
   const { mediaUrl, posterUrl } = useCachedMedia({
     assetId: item.assetId,
     url: item.url,
     kind: item.kind,
     mimeType: item.mimeType,
     byteSize: item.byteSize,
+    cacheBodyFetchKey,
   });
   const displayUrl = mediaUrl || item.url;
 
@@ -258,7 +280,14 @@ const MediaHistoryGridItem: React.FC<MediaHistoryGridItemProps> = ({
       onClick={() => onSelect(item)}
     >
       {item.kind === "image" ? (
-        <img src={displayUrl} alt={sharedImageLabel} className="h-full w-full object-cover" loading="lazy" />
+        <img
+          src={displayUrl}
+          alt={sharedImageLabel}
+          crossOrigin="anonymous"
+          className="h-full w-full object-cover"
+          loading="lazy"
+          onLoad={markMediaLoadedForCache}
+        />
       ) : videoPreviewError ? (
         <div className="flex h-full w-full items-center justify-center bg-black/50 text-white/80">
           <Icon icon="lucide:video-off" className="h-7 w-7" />
@@ -268,10 +297,12 @@ const MediaHistoryGridItem: React.FC<MediaHistoryGridItemProps> = ({
           <video
             src={getVideoPreviewUrl(displayUrl)}
             poster={posterUrl || undefined}
+            crossOrigin="anonymous"
             className="h-full w-full object-cover"
             preload="metadata"
             muted
             playsInline
+            onLoadedData={markMediaLoadedForCache}
             onError={() => setVideoPreviewError(true)}
           />
           <span className="absolute inset-0 flex items-center justify-center bg-black/20">

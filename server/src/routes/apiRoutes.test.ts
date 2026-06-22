@@ -1655,7 +1655,7 @@ describe('API routes', () => {
 
   it('passes attachment content disposition when creating file download URLs', async () => {
     await server.close();
-    const readInputs: Array<{ objectKey: string; expiresInSeconds?: number; responseContentDisposition?: string }> = [];
+    const readInputs: Array<{ objectKey: string; expiresInSeconds?: number; responseContentDisposition?: string; responseCacheControl?: string }> = [];
     server = await createTestServer({
       mediaObjectStorage: {
         isConfigured: () => true,
@@ -1663,7 +1663,7 @@ describe('API routes', () => {
         async createWriteUrl({ objectKey }: { objectKey: string }) {
           return { url: `https://upload.example/${encodeURIComponent(objectKey)}`, expiresAt: '2026-05-03T00:15:00.000Z' };
         },
-        async createReadUrl(input: { objectKey: string; expiresInSeconds?: number; responseContentDisposition?: string }) {
+        async createReadUrl(input: { objectKey: string; expiresInSeconds?: number; responseContentDisposition?: string; responseCacheControl?: string }) {
           readInputs.push(input);
           return { url: `https://download.example/${encodeURIComponent(input.objectKey)}`, expiresAt: '2026-05-03T00:15:00.000Z' };
         },
@@ -1689,52 +1689,10 @@ describe('API routes', () => {
     const response = await fetch(`${server.baseUrl}/api/media/file-asset-1/download-url?roomId=room-1&clientId=client-2`);
 
     assert.equal(response.status, 200);
-    const payload = await response.json() as { proxyUrl: string };
-    assert.equal(payload.proxyUrl, '/api/media/file-asset-1/download?roomId=room-1');
+    const payload = await response.json() as { url: string };
+    assert.equal(payload.url, 'https://download.example/rooms%2Froom-1%2Fmedia%2Ffile%2Ffile-asset-1');
     assert.equal(readInputs[0]?.responseContentDisposition, "attachment; filename*=UTF-8''report%20final.html");
-  });
-
-  it('proxies authorized media downloads through the app origin', async () => {
-    await server.close();
-    server = await createTestServer({
-      mediaObjectStorage: {
-        isConfigured: () => true,
-        async putMediaObject() {},
-        async createWriteUrl({ objectKey }: { objectKey: string }) {
-          return { url: `https://upload.example/${encodeURIComponent(objectKey)}`, expiresAt: '2026-05-03T00:15:00.000Z' };
-        },
-        async createReadUrl({ objectKey }: { objectKey: string }) {
-          return { url: `https://download.example/${encodeURIComponent(objectKey)}`, expiresAt: '2026-05-03T00:15:00.000Z' };
-        },
-        async headObject() {
-          return { exists: true };
-        },
-        async getMediaObject(objectKey: string) {
-          assert.equal(objectKey, 'rooms/room-1/media/file/file-asset-1');
-          return { body: Buffer.from('file-bytes'), mimeType: 'text/html', byteSize: 10 };
-        },
-      },
-    });
-    server.store.members.add('room-1:client-2');
-    server.store.mediaAssets.set('file-asset-1', {
-      id: 'file-asset-1',
-      roomId: 'room-1',
-      messageId: 'file-message-1',
-      objectKey: 'rooms/room-1/media/file/file-asset-1',
-      kind: 'file',
-      mimeType: 'text/html',
-      byteSize: 10,
-      filename: 'report final.html',
-      uploadedByClientId: 'client-2',
-      createdAt: '2026-05-03T00:00:00.000Z',
-    });
-
-    const response = await fetch(`${server.baseUrl}/api/media/file-asset-1/download?roomId=room-1&clientId=client-2`);
-
-    assert.equal(response.status, 200);
-    assert.equal(response.headers.get('content-type'), 'text/html; charset=utf-8');
-    assert.equal(response.headers.get('content-disposition'), "attachment; filename*=UTF-8''report%20final.html");
-    assert.equal(await response.text(), 'file-bytes');
+    assert.equal(readInputs[0]?.responseCacheControl, 'private, max-age=900');
   });
 
   it('forces attachment disposition for local file object downloads', async () => {
@@ -1815,9 +1773,6 @@ describe('API routes', () => {
         },
         async headObject() {
           return { exists: true };
-        },
-        async getMediaObject() {
-          return { body: Buffer.from('stored'), mimeType: 'text/html', byteSize: 6 };
         },
       },
     });

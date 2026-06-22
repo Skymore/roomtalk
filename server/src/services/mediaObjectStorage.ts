@@ -65,27 +65,6 @@ type LocalMediaMetadata = {
   byteSize: number;
 };
 
-const s3BodyToBuffer = async (body: any): Promise<Buffer> => {
-  if (!body) {
-    return Buffer.alloc(0);
-  }
-  if (Buffer.isBuffer(body)) {
-    return body;
-  }
-  if (body instanceof Uint8Array) {
-    return Buffer.from(body);
-  }
-  if (typeof body.transformToByteArray === 'function') {
-    return Buffer.from(await body.transformToByteArray());
-  }
-
-  const chunks: Buffer[] = [];
-  for await (const chunk of body) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks);
-};
-
 const encodeLocalMediaObjectKey = (objectKey: string) => (
   Buffer.from(objectKey, 'utf8')
     .toString('base64')
@@ -336,20 +315,6 @@ export class S3MediaObjectStorage implements MediaObjectStorage {
       Bucket: this.config.bucket,
       Key: objectKey,
     }));
-  }
-
-  async getMediaObject(objectKey: string): Promise<{ body: Buffer; mimeType?: string; byteSize: number }> {
-    const result = await this.client.send(new GetObjectCommand({
-      Bucket: this.config.bucket,
-      Key: objectKey,
-    }));
-    const body = await s3BodyToBuffer(result.Body);
-
-    return {
-      body,
-      mimeType: result.ContentType,
-      byteSize: typeof result.ContentLength === 'number' ? result.ContentLength : body.length,
-    };
   }
 }
 

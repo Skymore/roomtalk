@@ -92,6 +92,24 @@ const getBlobObjectUrlFromCache = async (cacheName: string, key: string) => {
   return rememberObjectUrl(objectUrlKey, URL.createObjectURL(blob));
 };
 
+export const getCachedMediaObjectUrlFromCache = async (input: {
+  assetId?: string;
+  kind: CacheableMediaKind;
+  byteSize?: number;
+}): Promise<string | null> => {
+  const { assetId, kind, byteSize } = input;
+  if (!assetId || !canUseBrowserCache() || !shouldCacheMediaBody(kind, byteSize)) {
+    return null;
+  }
+
+  try {
+    return await getBlobObjectUrlFromCache(MEDIA_BODY_CACHE_NAME, bodyCacheKey(assetId));
+  } catch (error) {
+    console.warn("Cached media object URL unavailable:", error);
+    return null;
+  }
+};
+
 const trimCache = async (cacheName: string, maxBytes: number) => {
   const cache = await caches.open(cacheName);
   const requests = await cache.keys();
@@ -144,13 +162,11 @@ const putBlobInCache = async (
 export const getCachedMediaObjectUrl = async (input: {
   assetId?: string;
   url: string;
-  fallbackUrl?: string;
-  fallbackHeaders?: Record<string, string>;
   kind: CacheableMediaKind;
   mimeType?: string;
   byteSize?: number;
 }): Promise<string | null> => {
-  const { assetId, url, fallbackUrl, fallbackHeaders, kind, mimeType, byteSize } = input;
+  const { assetId, url, kind, mimeType, byteSize } = input;
   if (!assetId || !canUseBrowserCache() || !shouldCacheMediaBody(kind, byteSize)) {
     return null;
   }
@@ -168,24 +184,7 @@ export const getCachedMediaObjectUrl = async (input: {
         return cachedUrl;
       }
 
-      let response: Response | null = null;
-      try {
-        response = await fetch(url, { cache: "force-cache" });
-      } catch (error) {
-        if (!fallbackUrl) {
-          throw error;
-        }
-        console.warn("Media body direct cache fetch failed; retrying through same-origin proxy:", error);
-      }
-      if ((!response || !response.ok) && fallbackUrl) {
-        response = await fetch(fallbackUrl, {
-          cache: "force-cache",
-          headers: fallbackHeaders,
-        });
-      }
-      if (!response) {
-        return null;
-      }
+      const response = await fetch(url, { cache: "force-cache" });
       if (!response.ok) {
         return null;
       }

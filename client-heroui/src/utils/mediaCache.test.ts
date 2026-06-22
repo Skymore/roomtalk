@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getCachedMediaBlob,
   getCachedMediaObjectUrl,
+  getCachedMediaObjectUrlFromCache,
   getCachedVideoPosterUrl,
   shouldCacheMediaBody,
   SMALL_VIDEO_CACHE_MAX_BYTES,
@@ -91,28 +92,21 @@ describe("mediaCache", () => {
     await expect(cachedBlob?.text()).resolves.toBe("audio");
   });
 
-  it("falls back to a same-origin proxy when direct media fetch fails", async () => {
-    fetchMock
-      .mockRejectedValueOnce(new TypeError("CORS blocked"))
-      .mockResolvedValueOnce(new Response(new Blob(["image"], { type: "image/webp" }), {
-        status: 200,
-      }));
+  it("returns cached media object URLs without fetching", async () => {
+    const bodyCache = new Map<string, Response>();
+    bodyCache.set(
+      "/roomtalk-media-cache/body/cached-image-asset",
+      new Response(new Blob(["image"], { type: "image/webp" }), { status: 200 }),
+    );
+    cachesByName.set("roomtalk-media-body-v1", bodyCache);
 
-    await expect(getCachedMediaObjectUrl({
-      assetId: "fallback-image-asset",
-      url: "https://signed.example/fallback-image.webp",
-      fallbackUrl: "/api/media/fallback-image-asset/download?roomId=room-1",
-      fallbackHeaders: { "X-Client-Id": "client-1" },
+    await expect(getCachedMediaObjectUrlFromCache({
+      assetId: "cached-image-asset",
       kind: "image",
-      mimeType: "image/webp",
       byteSize: 5,
     })).resolves.toBe("blob:cached-0");
 
-    expect(fetchMock).toHaveBeenNthCalledWith(1, "https://signed.example/fallback-image.webp", { cache: "force-cache" });
-    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/media/fallback-image-asset/download?roomId=room-1", {
-      cache: "force-cache",
-      headers: { "X-Client-Id": "client-1" },
-    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("caches audio bodies but skips oversized video bodies", async () => {
