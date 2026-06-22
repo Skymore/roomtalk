@@ -76,7 +76,7 @@ Acceptance:
 
 ## Phase 3: Worker Execution Behind Flag
 
-Introduce a worker loop that claims `ai.run_requested` events and executes the existing AI stream logic. Keep the production default on inline execution until staging proves parity.
+Introduce a worker loop that claims `ai.run_requested` events and executes the existing AI stream logic. This is now implemented behind flags; keep the production default on inline execution until the worker path is observed.
 
 Runtime flags:
 
@@ -86,7 +86,7 @@ Runtime flags:
 
 Acceptance:
 
-- staging worker mode handles `ask_ai`, `send_message_and_ask_ai`, edit retry, and A2UI follow-up;
+- worker mode queues `ask_ai`, `send_message_and_ask_ai`, edit retry, and A2UI follow-up through `ai.run_requested`;
 - chunks still stream live;
 - final content still overwrites local client content;
 - failed runs are visible and retryable;
@@ -96,9 +96,9 @@ Acceptance:
 
 1. Deploy code with `AI_RUNNER_MODE=inline`.
 2. Verify new tables populate in production.
-3. Enable worker mode in staging and run E2E.
-4. In production, enable `OUTBOX_WORKER_ENABLED=true` while still inline, verifying no pending-event drift.
-5. Switch `AI_RUNNER_MODE=worker`.
+3. Enable `OUTBOX_WORKER_ENABLED=true` while still inline, verifying no pending-event drift.
+4. Switch `AI_RUNNER_MODE=worker` for the in-process worker.
+5. Exercise `ask_ai`, `send_message_and_ask_ai`, edit retry, and A2UI follow-up.
 6. Observe:
    - run error rate;
    - outbox pending/failed counts;
