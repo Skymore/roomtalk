@@ -18,12 +18,14 @@ import { AI_ROLE_GENERATOR_MODEL_ID, createAIModelRegistry, DEFAULT_AI_MODEL_ID 
 import { registerApiRoutes } from './routes/apiRoutes';
 import { loadStickerCatalog } from './stickers/catalog';
 import { registerSocketHandlers } from './socket/registerSocketHandlers';
+import { executeQueuedAssistantRun } from './socket/aiHandlers';
 import { createAIClients } from './services/aiClients';
 import { createAIRoleDraftGenerator } from './services/aiRoleGenerator';
 import { resolveAIStreamOwnerId } from './services/aiStreamRecovery';
 import { createMediaObjectStorageFromEnv } from './services/mediaObjectStorage';
 import { createAssemblyAIAudioTranscriptionRunner } from './services/audioTranscription';
 import { resolveCorsOrigin } from './services/corsConfig';
+import { createOutboxWorkerFromEnv, OutboxWorker } from './services/outboxWorker';
 
 dotenv.config();
 
@@ -34,6 +36,7 @@ const postgresLogger = new Logger('PostgreSQL');
 const socketLogger = new Logger('SocketIO');
 const routeLogger = new Logger('Routes');
 const openaiLogger = new Logger('OpenAI');
+const outboxLogger = new Logger('OutboxWorker');
 const mediaStorageLogger = new Logger('MediaStorage');
 const mediaObjectStorage = createMediaObjectStorageFromEnv(mediaStorageLogger);
 const aiStreamOwnerId = resolveAIStreamOwnerId();
@@ -188,6 +191,35 @@ registerSocketHandlers({
   assemblyAIApiKey,
 });
 
+let outboxWorker: OutboxWorker | null = null;
+if (process.env.OUTBOX_WORKER_ENABLED === 'true') {
+  outboxWorker = createOutboxWorkerFromEnv({
+    store,
+    logger: outboxLogger,
+    workerId: `server-${process.pid}-${aiStreamOwnerId || 'default'}`,
+    eventTypes: ['ai.run_requested'],
+    handlers: {
+      'ai.run_requested': event => executeQueuedAssistantRun(event.payload, {
+        io,
+        store,
+        socketLogger,
+        openaiLogger,
+        normalizeAIModel,
+        getAIClientForModel,
+        aiStreamOwnerId,
+        assemblyAIApiKey,
+      }),
+    },
+  });
+  infrastructureReady
+    .then(() => outboxWorker?.start())
+    .catch(error => {
+      outboxLogger.error('Outbox worker did not start because infrastructure initialization failed', { error });
+    });
+} else {
+  outboxLogger.info('Outbox worker disabled', { enabled: false });
+}
+
 loadStickerCatalog();
 
 registerApiRoutes(app, {
@@ -234,6 +266,14 @@ process.on('unhandledRejection', (reason, promise) => {
     reason: reason instanceof Error ? reason.message : reason,
     stack: reason instanceof Error ? reason.stack : 'No stack trace available'
   });
+});
+
+process.on('SIGTERM', () => {
+  outboxWorker?.stop();
+});
+
+process.on('SIGINT', () => {
+  outboxWorker?.stop();
 });
 
 // ---------------------- 启动服务器 ----------------------

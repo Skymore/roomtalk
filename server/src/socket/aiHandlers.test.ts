@@ -1,6 +1,6 @@
 import assert from 'assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { registerAIHandlers } from './aiHandlers';
+import { executeQueuedAssistantRun, registerAIHandlers } from './aiHandlers';
 import { AIModelOption, Message, Room, RoomAICostTotal } from '../types';
 
 type SocketEmit = {
@@ -164,6 +164,8 @@ const createHarness = (options: {
     appendedMessages: [] as Message[],
     upsertedMessages: [] as Message[],
     savedHistories: [] as Message[][],
+    assistantRuns: [] as any[],
+    outboxEvents: [] as any[],
     normalizeAIModelCalls: [] as unknown[],
     truncateBeforeCalls: [] as Array<{ roomId: string; messageId: string }>,
     truncateAfterCalls: [] as Array<{ roomId: string; messageId: string }>,
@@ -278,6 +280,22 @@ const createHarness = (options: {
     async incrementRoomAICost(roomId: string) {
       return roomCost(roomId);
     },
+    async createAssistantRunWithOutbox(run: any, event: any) {
+      this.assistantRuns.push(run);
+      this.outboxEvents.push(event);
+      return { run, event };
+    },
+    async updateAssistantRun(runId: string, updates: any) {
+      const runIndex = this.assistantRuns.findIndex(run => run.id === runId);
+      if (runIndex === -1) {
+        return null;
+      }
+      this.assistantRuns[runIndex] = {
+        ...this.assistantRuns[runIndex],
+        ...updates,
+      };
+      return this.assistantRuns[runIndex];
+    },
   };
 
   registerAIHandlers({
@@ -306,6 +324,7 @@ describe('AI socket handlers', () => {
   const previousEnv = {
     e2eMode: process.env.E2E_TEST_MODE,
     fakeAI: process.env.E2E_FAKE_AI,
+    aiRunnerMode: process.env.AI_RUNNER_MODE,
   };
 
   beforeEach(() => {
@@ -324,6 +343,12 @@ describe('AI socket handlers', () => {
       delete process.env.E2E_FAKE_AI;
     } else {
       process.env.E2E_FAKE_AI = previousEnv.fakeAI;
+    }
+
+    if (previousEnv.aiRunnerMode === undefined) {
+      delete process.env.AI_RUNNER_MODE;
+    } else {
+      process.env.AI_RUNNER_MODE = previousEnv.aiRunnerMode;
     }
   });
 
@@ -371,6 +396,87 @@ describe('AI socket handlers', () => {
     assert.equal(finalMessage.uiPayload?.version, 'v0.9');
     assert.equal(finalMessage.uiPayload?.messages.length, 5);
     assert.equal((a2uiUpdateEvents[0].args[0] as any).uiPayload.messages[0].createSurface.catalogId, 'https://a2ui.org/specification/v0_9/basic_catalog.json');
+  });
+
+  it('queues AI runs for the outbox worker without calling the provider in worker mode', async () => {
+    process.env.AI_RUNNER_MODE = 'worker';
+    process.env.E2E_FAKE_AI = 'false';
+    const openAIClient = {
+      chat: {
+        completions: {
+          create: () => {
+            throw new Error('provider should not be called while queueing');
+          },
+        },
+      },
+    };
+    const { io, socket, store } = createHarness({
+      aiClientWrapper: { provider: 'deepseek', client: openAIClient },
+    });
+
+    let response: unknown;
+    await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id }, (ack: unknown) => {
+      response = ack;
+    });
+
+    assert.equal(store.upsertedMessages.length, 1);
+    assert.equal(store.upsertedMessages[0].status, 'streaming');
+    assert.equal(store.assistantRuns.length, 1);
+    assert.equal(store.assistantRuns[0].status, 'queued');
+    assert.equal(store.assistantRuns[0].metadata.runnerMode, 'worker');
+    assert.equal(store.outboxEvents.length, 1);
+    assert.equal(store.outboxEvents[0].eventType, 'ai.run_requested');
+    assert.equal(store.outboxEvents[0].status, 'pending');
+    assert.equal(store.outboxEvents[0].attempts, 0);
+    assert.equal(store.outboxEvents[0].payload.runId, store.assistantRuns[0].id);
+    assert.equal(store.outboxEvents[0].payload.aiMessageId, store.upsertedMessages[0].id);
+    assert.equal(io.roomEmits.some(event => event.event === 'new_message'), true);
+    assert.equal(io.roomEmits.some(event => event.event === 'ai_chunk'), false);
+    assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_end'), false);
+    assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_error'), false);
+    assert.deepEqual(response, { success: true, messageId: store.upsertedMessages[0].id });
+  });
+
+  it('executes a queued AI run from the outbox worker path', async () => {
+    const { io, store } = createHarness();
+    store.assistantRuns.push({
+      id: 'run-1',
+      status: 'queued',
+      metadata: { runnerMode: 'worker' },
+    });
+
+    await executeQueuedAssistantRun(
+      {
+        runId: 'run-1',
+        roomId: 'room-1',
+        requestedByClientId: 'client-1',
+        aiMessageId: 'queued-ai-message',
+        roleName: 'Assistant',
+        systemPrompt: 'You are helpful.',
+        model: selectedModel.id,
+        maxContextMessages: 100,
+        contextMessages: [message()],
+        historyUsedForContext: [message()],
+      },
+      {
+        io: io as any,
+        store: store as any,
+        socketLogger: logger as any,
+        openaiLogger: logger as any,
+        normalizeAIModel: () => selectedModel,
+        getAIClientForModel: () => {
+          throw new Error('E2E fake worker should not request a real client');
+        },
+      },
+    );
+
+    assert.equal(store.upsertedMessages.at(-1)?.id, 'queued-ai-message');
+    assert.equal(store.upsertedMessages.at(-1)?.status, 'complete');
+    assert.equal(store.assistantRuns[0].status, 'complete');
+    assert.equal(store.assistantRuns[0].metadata.runnerMode, 'worker');
+    assert.equal(io.roomEmits.some(event => event.event === 'ai_chunk'), true);
+    assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_end'), true);
+    assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_error'), false);
   });
 
   it('uses only the current message when the room AI context limit is zero', async () => {
