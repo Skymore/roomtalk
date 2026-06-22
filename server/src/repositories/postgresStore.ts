@@ -186,6 +186,7 @@ const PENDING_MEDIA_UPLOAD_COLUMNS = 'id, room_id, object_key, kind, mime_type, 
 const AUDIO_TRANSCRIPTION_COLUMNS = 'asset_id, room_id, message_id, requested_by_client_id, status, transcript, language_code, provider, provider_transcript_id, error, created_at, updated_at, completed_at';
 const ASSISTANT_RUN_COLUMNS = 'id, room_id, requested_by_client_id, user_message_id, ai_message_id, status, model_id, api_model, provider, role_name, system_prompt, max_context_messages, retry_for_message_id, edited_message_id, error, metadata, created_at, queued_at, started_at, completed_at, updated_at';
 const OUTBOX_EVENT_COLUMNS = 'id, event_type, aggregate_type, aggregate_id, room_id, payload, status, attempts, available_at, locked_at, locked_by, processed_at, last_error, created_at, updated_at';
+const CLAIMED_OUTBOX_EVENT_COLUMNS = 'e.id, e.event_type, e.aggregate_type, e.aggregate_id, e.room_id, e.payload, e.status, e.attempts, e.available_at, e.locked_at, e.locked_by, e.processed_at, e.last_error, e.created_at, e.updated_at';
 const PUSH_SUBSCRIPTION_COLUMNS = 'endpoint, client_id, browser_instance_id, p256dh, auth, user_agent, created_at, updated_at';
 const ACCOUNT_SELECT_COLUMNS = `
   a.id AS account_id,
@@ -1777,7 +1778,7 @@ export class PostgresStore implements DurableRoomStore {
             updated_at = $1::timestamptz
           FROM candidates
           WHERE e.id = candidates.id
-          RETURNING ${OUTBOX_EVENT_COLUMNS}`,
+          RETURNING ${CLAIMED_OUTBOX_EVENT_COLUMNS}`,
           params
         );
       });
