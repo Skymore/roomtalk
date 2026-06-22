@@ -23,6 +23,7 @@ import { createAIRoleDraftGenerator } from './services/aiRoleGenerator';
 import { resolveAIStreamOwnerId } from './services/aiStreamRecovery';
 import { createMediaObjectStorageFromEnv } from './services/mediaObjectStorage';
 import { createAssemblyAIAudioTranscriptionRunner } from './services/audioTranscription';
+import { resolveCorsOrigin } from './services/corsConfig';
 
 dotenv.config();
 
@@ -58,11 +59,12 @@ const resolveClientDistPath = () => {
   return candidates.find(candidate => fs.existsSync(candidate)) || candidates[0];
 };
 const clientDistPath = resolveClientDistPath();
+const corsOrigin = resolveCorsOrigin();
 
 // 初始化 Express 应用
 const app = express();
 app.use(cors({
-  origin: process.env.CLIENT_URL || '*',
+  origin: corsOrigin,
   methods: ['GET', 'POST', 'PUT'],
   credentials: true,
 }));
@@ -125,8 +127,9 @@ subClient.on('error', (err: Error) => {
 // 初始化 Socket.IO 服务器（暂不设置适配器，等待 Redis 连接后再设置）
 const io = new Server(server, {
   cors: {
-    origin: '*',
-    methods: ['GET', 'POST']
+    origin: corsOrigin,
+    methods: ['GET', 'POST'],
+    credentials: true,
   },
   maxHttpBufferSize: 5 * 1024 * 1024, // 设置最大消息大小为 5MB
   pingTimeout: 60000, // 60秒超时
