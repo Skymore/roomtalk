@@ -91,6 +91,30 @@ describe("mediaCache", () => {
     await expect(cachedBlob?.text()).resolves.toBe("audio");
   });
 
+  it("falls back to a same-origin proxy when direct media fetch fails", async () => {
+    fetchMock
+      .mockRejectedValueOnce(new TypeError("CORS blocked"))
+      .mockResolvedValueOnce(new Response(new Blob(["image"], { type: "image/webp" }), {
+        status: 200,
+      }));
+
+    await expect(getCachedMediaObjectUrl({
+      assetId: "fallback-image-asset",
+      url: "https://signed.example/fallback-image.webp",
+      fallbackUrl: "/api/media/fallback-image-asset/download?roomId=room-1",
+      fallbackHeaders: { "X-Client-Id": "client-1" },
+      kind: "image",
+      mimeType: "image/webp",
+      byteSize: 5,
+    })).resolves.toBe("blob:cached-0");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "https://signed.example/fallback-image.webp", { cache: "force-cache" });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/media/fallback-image-asset/download?roomId=room-1", {
+      cache: "force-cache",
+      headers: { "X-Client-Id": "client-1" },
+    });
+  });
+
   it("caches audio bodies but skips oversized video bodies", async () => {
     expect(shouldCacheMediaBody("audio", 25 * 1024 * 1024)).toBe(true);
     expect(shouldCacheMediaBody("video", SMALL_VIDEO_CACHE_MAX_BYTES)).toBe(true);

@@ -960,10 +960,11 @@ export const requestEditMessageAndAIResponse = (data: {
 export const getMediaDownloadUrl = async (params: {
   roomId: string;
   assetId: string;
-}): Promise<{ url: string; expiresAt?: string }> => {
+}): Promise<{ url: string; expiresAt?: string; proxyUrl?: string; proxyHeaders?: Record<string, string> }> => {
   const query = new URLSearchParams({ roomId: params.roomId });
+  const headers = clientAuthHeaders();
   const response = await fetch(apiPath(`/api/media/${encodeURIComponent(params.assetId)}/download-url?${query.toString()}`), {
-    headers: clientAuthHeaders(),
+    headers,
   });
   if (!response.ok) {
     throw new Error(await parseApiError(response, 'Failed to get media URL'));
@@ -973,9 +974,12 @@ export const getMediaDownloadUrl = async (params: {
     throw new Error('Server did not return media URL');
   }
   const url = typeof payload.url === 'string' ? apiPath(payload.url) : payload.url;
+  const proxyUrl = typeof payload.proxyUrl === 'string' ? apiPath(payload.proxyUrl) : undefined;
   return {
     url,
     expiresAt: payload.expiresAt,
+    proxyUrl,
+    proxyHeaders: proxyUrl ? headers : undefined,
   };
 };
 

@@ -4,11 +4,13 @@ import { CacheableMediaKind, getCachedMediaObjectUrl, getCachedVideoPosterUrl } 
 export const useCachedMedia = (input: {
   assetId?: string;
   url: string | null;
+  fallbackUrl?: string | null;
+  fallbackHeaders?: Record<string, string>;
   kind?: CacheableMediaKind;
   mimeType?: string;
   byteSize?: number;
 }) => {
-  const { assetId, url, kind, mimeType, byteSize } = input;
+  const { assetId, url, fallbackUrl, fallbackHeaders, kind, mimeType, byteSize } = input;
   const [cachedUrl, setCachedUrl] = React.useState<string | null>(null);
   const [posterUrl, setPosterUrl] = React.useState<string | null>(null);
 
@@ -27,6 +29,8 @@ export const useCachedMedia = (input: {
       const mediaObjectUrl = await getCachedMediaObjectUrl({
         assetId,
         url,
+        fallbackUrl: fallbackUrl || undefined,
+        fallbackHeaders,
         kind,
         mimeType,
         byteSize,
@@ -51,7 +55,7 @@ export const useCachedMedia = (input: {
     return () => {
       cancelled = true;
     };
-  }, [assetId, byteSize, kind, mimeType, url]);
+  }, [assetId, byteSize, fallbackHeaders, fallbackUrl, kind, mimeType, url]);
 
   return {
     mediaUrl: cachedUrl || url,
