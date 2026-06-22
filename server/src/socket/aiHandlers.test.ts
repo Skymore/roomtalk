@@ -524,6 +524,38 @@ describe('AI socket handlers', () => {
     assert.equal(store.upsertedMessages[1].usage?.completionTokens, 10);
   });
 
+  it('treats premature provider close after streamed content as a completed AI response', async () => {
+    process.env.E2E_FAKE_AI = 'false';
+    const openAIClient = {
+      chat: {
+        completions: {
+          create: () => ({
+            async *[Symbol.asyncIterator]() {
+              yield { choices: [{ delta: { content: 'complete-looking response' } }] };
+              throw new Error('Premature close');
+            },
+          }),
+        },
+      },
+    };
+    const { io, socket, store } = createHarness({
+      aiClientWrapper: { provider: 'deepseek', client: openAIClient },
+    });
+
+    await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id });
+
+    assert.equal(store.upsertedMessages.length, 2);
+    assert.equal(store.upsertedMessages[0].status, 'streaming');
+    assert.equal(store.upsertedMessages[1].status, 'complete');
+    assert.equal(store.upsertedMessages[1].content, 'complete-looking response');
+    assert.equal(store.upsertedMessages[1].usage?.source, 'estimated');
+    assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_error'), false);
+    const streamEnd = io.roomEmits.find(event => event.event === 'ai_stream_end');
+    assert.ok(streamEnd);
+    assert.equal((streamEnd.args[0] as any).content, 'complete-looking response');
+    assert.equal((streamEnd.args[0] as any).completedAfterPrematureClose, true);
+  });
+
   it('rejects AI requests from clients without room access', async () => {
     const { io, socket, store } = createHarness({ clientId: 'client-2' });
     store.members.clear();
