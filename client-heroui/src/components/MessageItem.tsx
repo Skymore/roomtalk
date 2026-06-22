@@ -125,6 +125,8 @@ const ReplyReference: React.FC<{
 }> = ({ replyTo, roomId }) => {
   const { t } = useTranslation();
   const [signedUrl, setSignedUrl] = React.useState<string | null>(null);
+  const [proxyUrl, setProxyUrl] = React.useState<string | null>(null);
+  const [proxyHeaders, setProxyHeaders] = React.useState<Record<string, string> | undefined>(undefined);
   const [mediaError, setMediaError] = React.useState(false);
   const mediaAsset = replyTo.mediaAsset;
   const playableMediaKind = getPlayableMediaKind(mediaAsset);
@@ -135,6 +137,8 @@ const ReplyReference: React.FC<{
   const { mediaUrl: displayMediaUrl, posterUrl } = useCachedMedia({
     assetId: mediaAsset?.id,
     url: signedUrl,
+    fallbackUrl: proxyUrl,
+    fallbackHeaders: proxyHeaders,
     kind: playableMediaKind,
     mimeType: mediaAsset?.mimeType,
     byteSize: mediaAsset?.byteSize,
@@ -143,18 +147,24 @@ const ReplyReference: React.FC<{
   React.useEffect(() => {
     if (!canRenderMedia || !mediaAsset?.id) {
       setSignedUrl(null);
+      setProxyUrl(null);
+      setProxyHeaders(undefined);
       setMediaError(false);
       return () => {};
     }
 
     let cancelled = false;
     setSignedUrl(null);
+    setProxyUrl(null);
+    setProxyHeaders(undefined);
     setMediaError(false);
 
     getMediaDownloadUrl({ roomId, assetId: mediaAsset.id })
-      .then(({ url }) => {
+      .then(({ url, proxyUrl, proxyHeaders }) => {
         if (!cancelled) {
           setSignedUrl(url);
+          setProxyUrl(proxyUrl || null);
+          setProxyHeaders(proxyHeaders);
         }
       })
       .catch((error) => {
@@ -225,6 +235,8 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const [mediaError, setMediaError] = React.useState(false);
   const [videoPreviewError, setVideoPreviewError] = React.useState(false);
   const [signedMediaUrl, setSignedMediaUrl] = React.useState<string | null>(null);
+  const [mediaProxyUrl, setMediaProxyUrl] = React.useState<string | null>(null);
+  const [mediaProxyHeaders, setMediaProxyHeaders] = React.useState<Record<string, string> | undefined>(undefined);
   const [isMediaViewerOpen, setIsMediaViewerOpen] = React.useState(false);
   const [audioTranscription, setAudioTranscription] = React.useState<AudioTranscription | null>(null);
   const [isAudioTranscriptionLoading, setIsAudioTranscriptionLoading] = React.useState(false);
@@ -295,19 +307,25 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const loadSignedMediaUrl = React.useCallback(() => {
     if (!isMedia || !message.mediaAsset?.id) {
       setSignedMediaUrl(null);
+      setMediaProxyUrl(null);
+      setMediaProxyHeaders(undefined);
       setMediaError(false);
       return () => {};
     }
 
     let cancelled = false;
     setSignedMediaUrl(null);
+    setMediaProxyUrl(null);
+    setMediaProxyHeaders(undefined);
     setMediaError(false);
     setVideoPreviewError(false);
 
     getMediaDownloadUrl({ roomId: message.roomId, assetId: message.mediaAsset.id })
-      .then(({ url }) => {
+      .then(({ url, proxyUrl, proxyHeaders }) => {
         if (!cancelled) {
           setSignedMediaUrl(url);
+          setMediaProxyUrl(proxyUrl || null);
+          setMediaProxyHeaders(proxyHeaders);
         }
       })
       .catch((error) => {
@@ -434,6 +452,8 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const { mediaUrl: displayMediaUrl, posterUrl: videoPosterUrl } = useCachedMedia({
     assetId: message.mediaAsset?.id,
     url: signedMediaUrl,
+    fallbackUrl: mediaProxyUrl,
+    fallbackHeaders: mediaProxyHeaders,
     kind: isImage ? "image" : isAudio ? "audio" : isVideo ? "video" : undefined,
     mimeType: message.mediaAsset?.mimeType,
     byteSize: message.mediaAsset?.byteSize,

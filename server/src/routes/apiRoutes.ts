@@ -1251,7 +1251,55 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
         ? buildAttachmentContentDisposition(asset.filename || asset.id)
         : undefined,
     });
-    return res.json(signedDownload);
+    return res.json({
+      ...signedDownload,
+      proxyUrl: `/api/media/${encodeURIComponent(asset.id)}/download?roomId=${encodeURIComponent(roomId)}`,
+    });
+  });
+
+  app.get('/api/media/:assetId/download', async (req: Request, res: Response) => {
+    if (!mediaObjectStorage.isConfigured()) {
+      return res.status(503).json({ error: 'Media object storage is not configured' });
+    }
+    if (!mediaObjectStorage.getMediaObject) {
+      return res.status(503).json({ error: 'Media object download proxy is not configured' });
+    }
+
+    const { assetId } = req.params;
+    const roomId = typeof req.query.roomId === 'string' ? req.query.roomId : '';
+    const clientId = getQueryClientId(req);
+
+    if (!assetId || !roomId || !clientId) {
+      return res.status(400).json({ error: 'assetId, roomId, and clientId are required' });
+    }
+    if (!(await authorizeClientRequest(req, res, clientId, 'GET /api/media/:assetId/download'))) {
+      return;
+    }
+
+    if (!(await hasRoomAccess(store, roomId, clientId))) {
+      routeLogger.warn('Unauthorized media download proxy request', { endpoint: 'GET /api/media/:assetId/download', clientId, roomId, assetId, ip: req.ip });
+      return res.status(403).json({ error: 'Not authorized to access this room' });
+    }
+
+    const asset = await store.getMediaAsset(assetId);
+    if (!asset || asset.roomId !== roomId) {
+      return res.status(404).json({ error: 'Media asset not found' });
+    }
+
+    try {
+      const object = await mediaObjectStorage.getMediaObject(asset.objectKey);
+      const mimeType = object.mimeType || asset.mimeType || 'application/octet-stream';
+      res.type(mimeType);
+      if (asset.kind === 'file') {
+        res.setHeader('Content-Disposition', buildAttachmentContentDisposition(asset.filename || asset.id));
+      }
+      res.setHeader('Content-Length', object.byteSize);
+      res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+      return res.send(object.body);
+    } catch (error) {
+      routeLogger.error('Failed to proxy media object download', { error, endpoint: 'GET /api/media/:assetId/download', assetId, roomId, ip: req.ip });
+      return res.status(502).json({ error: 'Failed to download media object' });
+    }
   });
 
   app.get('/api/ai-models', (_req: Request, res: Response) => {
