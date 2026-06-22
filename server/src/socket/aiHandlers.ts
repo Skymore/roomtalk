@@ -60,6 +60,21 @@ type StreamAIResult = {
   usageMessages: Array<{ content: any }>;
 };
 
+class PartialAIStreamError extends Error {
+  result: StreamAIResult;
+
+  constructor(error: unknown, result: StreamAIResult) {
+    super(error instanceof Error ? error.message : String(error));
+    this.name = 'PartialAIStreamError';
+    this.result = result;
+    (this as any).cause = error;
+  }
+}
+
+const getPartialAIStreamResult = (error: unknown): StreamAIResult | null => (
+  error instanceof PartialAIStreamError ? error.result : null
+);
+
 const addReportedUsage = (current: ReportedUsage, next: any): ReportedUsage => {
   if (!next || typeof next !== 'object') return current;
   if (!current) return { ...next };
@@ -105,98 +120,110 @@ const streamOpenAICompatibleWithA2UI = async (params: {
   let fullContent = '';
   let reportedUsage: ReportedUsage = null;
 
-  for (let round = 0; round < MAX_A2UI_TOOL_ROUNDS; round++) {
-    let roundContent = '';
-    const toolCalls = new Map<number, { id: string; type: string; function: { name: string; arguments: string } }>();
-    const stream = await params.client.chat.completions.create({
-      model: params.model,
-      messages: providerMessages,
-      stream: true,
-      temperature: 1,
-      tools: [openAIA2UITool],
-      tool_choice: 'auto',
-      stream_options: { include_usage: true },
-    } as any);
+  try {
+    for (let round = 0; round < MAX_A2UI_TOOL_ROUNDS; round++) {
+      let roundContent = '';
+      const toolCalls = new Map<number, { id: string; type: string; function: { name: string; arguments: string } }>();
+      const stream = await params.client.chat.completions.create({
+        model: params.model,
+        messages: providerMessages,
+        stream: true,
+        temperature: 1,
+        tools: [openAIA2UITool],
+        tool_choice: 'auto',
+        stream_options: { include_usage: true },
+      } as any);
 
-    for await (const chunk of stream as any) {
-      if (chunk.usage) {
-        reportedUsage = addReportedUsage(reportedUsage, chunk.usage);
-      }
+      for await (const chunk of stream as any) {
+        if (chunk.usage) {
+          reportedUsage = addReportedUsage(reportedUsage, chunk.usage);
+        }
 
-      const choice = chunk.choices?.[0];
-      const contentChunk = choice?.delta?.content;
-      if (typeof contentChunk === 'string' && contentChunk.length > 0) {
-        fullContent += contentChunk;
-        roundContent += contentChunk;
-        params.emitTextChunk(contentChunk);
-        if (fullContent.length % 100 === 0) {
-          params.logger.debug('Streaming AI chunk', { messageId: params.messageId, contentLength: fullContent.length });
+        const choice = chunk.choices?.[0];
+        const contentChunk = choice?.delta?.content;
+        if (typeof contentChunk === 'string' && contentChunk.length > 0) {
+          fullContent += contentChunk;
+          roundContent += contentChunk;
+          params.emitTextChunk(contentChunk);
+          if (fullContent.length % 100 === 0) {
+            params.logger.debug('Streaming AI chunk', { messageId: params.messageId, contentLength: fullContent.length });
+          }
+        }
+
+        for (const delta of choice?.delta?.tool_calls || []) {
+          const index = typeof delta.index === 'number' ? delta.index : toolCalls.size;
+          const current = toolCalls.get(index) || {
+            id: delta.id || `a2ui_tool_${round}_${index}`,
+            type: delta.type || 'function',
+            function: { name: '', arguments: '' },
+          };
+          if (delta.id) current.id = delta.id;
+          if (delta.type) current.type = delta.type;
+          if (delta.function?.name) current.function.name += delta.function.name;
+          if (delta.function?.arguments) current.function.arguments += delta.function.arguments;
+          toolCalls.set(index, current);
         }
       }
 
-      for (const delta of choice?.delta?.tool_calls || []) {
-        const index = typeof delta.index === 'number' ? delta.index : toolCalls.size;
-        const current = toolCalls.get(index) || {
-          id: delta.id || `a2ui_tool_${round}_${index}`,
-          type: delta.type || 'function',
-          function: { name: '', arguments: '' },
-        };
-        if (delta.id) current.id = delta.id;
-        if (delta.type) current.type = delta.type;
-        if (delta.function?.name) current.function.name += delta.function.name;
-        if (delta.function?.arguments) current.function.arguments += delta.function.arguments;
-        toolCalls.set(index, current);
+      if (toolCalls.size === 0) {
+        break;
       }
-    }
 
-    if (toolCalls.size === 0) {
-      break;
-    }
+      const assistantToolCalls = [...toolCalls.entries()]
+        .sort(([left], [right]) => left - right)
+        .map(([, toolCall]) => toolCall);
+      const toolMessages: any[] = [];
 
-    const assistantToolCalls = [...toolCalls.entries()]
-      .sort(([left], [right]) => left - right)
-      .map(([, toolCall]) => toolCall);
-    const toolMessages: any[] = [];
+      for (const toolCall of assistantToolCalls) {
+        if (toolCall.function.name !== A2UI_TOOL_NAME) {
+          toolMessages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: JSON.stringify({ ok: false, error: 'Unsupported tool' }),
+          });
+          continue;
+        }
 
-    for (const toolCall of assistantToolCalls) {
-      if (toolCall.function.name !== A2UI_TOOL_NAME) {
+        const uiPayload = await normalizeA2UIToolArguments(toolCall.function.arguments);
+        const rendered = uiPayload ? await params.emitA2UIUpdate(uiPayload.messages) : false;
+        if (!rendered) {
+          params.logger.warn('AI provider emitted invalid A2UI tool arguments', {
+            messageId: params.messageId,
+            toolCallId: toolCall.id,
+          });
+        }
         toolMessages.push({
           role: 'tool',
           tool_call_id: toolCall.id,
-          content: JSON.stringify({ ok: false, error: 'Unsupported tool' }),
+          content: JSON.stringify({ ok: rendered }),
         });
-        continue;
       }
 
-      const uiPayload = await normalizeA2UIToolArguments(toolCall.function.arguments);
-      const rendered = uiPayload ? await params.emitA2UIUpdate(uiPayload.messages) : false;
-      if (!rendered) {
-        params.logger.warn('AI provider emitted invalid A2UI tool arguments', {
+      providerMessages.push({
+        role: 'assistant',
+        content: roundContent || null,
+        tool_calls: assistantToolCalls,
+      });
+      providerMessages.push(...toolMessages);
+
+      if (round === MAX_A2UI_TOOL_ROUNDS - 1) {
+        params.logger.warn('Reached maximum A2UI tool rounds for OpenAI-compatible stream', {
           messageId: params.messageId,
-          toolCallId: toolCall.id,
+          maxRounds: MAX_A2UI_TOOL_ROUNDS,
         });
+        break;
       }
-      toolMessages.push({
-        role: 'tool',
-        tool_call_id: toolCall.id,
-        content: JSON.stringify({ ok: rendered }),
+    }
+  } catch (error) {
+    if (isPrematureCloseError(error) && fullContent.trim().length > 0) {
+      throw new PartialAIStreamError(error, {
+        fullContent,
+        reportedUsage,
+        usageMessages: providerMessages,
       });
     }
 
-    providerMessages.push({
-      role: 'assistant',
-      content: roundContent || null,
-      tool_calls: assistantToolCalls,
-    });
-    providerMessages.push(...toolMessages);
-
-    if (round === MAX_A2UI_TOOL_ROUNDS - 1) {
-      params.logger.warn('Reached maximum A2UI tool rounds for OpenAI-compatible stream', {
-        messageId: params.messageId,
-        maxRounds: MAX_A2UI_TOOL_ROUNDS,
-      });
-      break;
-    }
+    throw error;
   }
 
   return {
@@ -686,15 +713,21 @@ export const executeQueuedAssistantRun = async (
       runId,
     });
 
-    const hasPartialContent = streamedTextContent.trim().length > 0;
+    const partialStreamResult = getPartialAIStreamResult(error);
+    const partialContent = partialStreamResult?.fullContent || streamedTextContent;
+    const hasPartialContent = partialContent.trim().length > 0;
     if (hasPartialContent && isPrematureCloseError(error)) {
-      const usage = normalizeUsage(null, fallbackUsageMessages, streamedTextContent);
+      const usage = normalizeUsage(
+        partialStreamResult?.reportedUsage ?? null,
+        partialStreamResult?.usageMessages ?? fallbackUsageMessages,
+        partialContent,
+      );
       const cost = calculateAICost(selectedModel, usage);
       const roomCostTotal = await store.incrementRoomAICost(roomId, cost || null);
       const aiModel = getMessageAIModel(selectedModel);
       const finalAiMessage: Message = {
         ...initialAiMessage,
-        content: streamedTextContent,
+        content: partialContent,
         status: 'complete',
         timestamp: new Date().toISOString(),
         aiModel,
@@ -711,7 +744,7 @@ export const executeQueuedAssistantRun = async (
       await updateAssistantRun({
         status: 'complete',
         completedAt: new Date().toISOString(),
-        metadata: { runnerMode: 'worker', contentLength: streamedTextContent.length, usage, cost, completedAfterPrematureClose: true },
+        metadata: { runnerMode: 'worker', contentLength: partialContent.length, usage, cost, completedAfterPrematureClose: true },
       });
       io.to(roomId).emit('ai_stream_end', {
         messageId: aiMessageId,
@@ -729,8 +762,9 @@ export const executeQueuedAssistantRun = async (
         runId,
         messageId: aiMessageId,
         roomId,
-        contentLength: streamedTextContent.length,
+        contentLength: partialContent.length,
         model: selectedModel.id,
+        usageSource: usage.source,
       });
       return;
     }
@@ -1584,15 +1618,21 @@ export function registerAIHandlers({
         roomId,
       });
 
-      const hasPartialContent = streamedTextContent.trim().length > 0;
+      const partialStreamResult = getPartialAIStreamResult(error);
+      const partialContent = partialStreamResult?.fullContent || streamedTextContent;
+      const hasPartialContent = partialContent.trim().length > 0;
       if (hasPartialContent && isPrematureCloseError(error)) {
-        const usage = normalizeUsage(null, fallbackUsageMessages, streamedTextContent);
+        const usage = normalizeUsage(
+          partialStreamResult?.reportedUsage ?? null,
+          partialStreamResult?.usageMessages ?? fallbackUsageMessages,
+          partialContent,
+        );
         const cost = calculateAICost(selectedModel, usage);
         const roomCostTotal = await store.incrementRoomAICost(roomId, cost || null);
         const aiModel = getMessageAIModel(selectedModel);
         const finalAiMessage: Message = {
           ...initialAiMessage,
-          content: streamedTextContent,
+          content: partialContent,
           status: 'complete',
           timestamp: new Date().toISOString(),
           aiModel,
@@ -1624,7 +1664,7 @@ export function registerAIHandlers({
         await updateAssistantRun({
           status: 'complete',
           metadata: {
-            contentLength: streamedTextContent.length,
+            contentLength: partialContent.length,
             usage,
             cost,
             completedAfterPrematureClose: true,
@@ -1646,8 +1686,9 @@ export function registerAIHandlers({
         openaiLogger.warn('AI stream closed prematurely after content; treating response as complete', {
           messageId: aiMessageId,
           roomId,
-          contentLength: streamedTextContent.length,
+          contentLength: partialContent.length,
           model: selectedModel.id,
+          usageSource: usage.source,
         });
         return;
       }

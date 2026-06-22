@@ -662,6 +662,114 @@ describe('AI socket handlers', () => {
     assert.equal((streamEnd.args[0] as any).completedAfterPrematureClose, true);
   });
 
+  it('preserves reported usage when a stream closes prematurely after the usage chunk', async () => {
+    process.env.E2E_FAKE_AI = 'false';
+    const openAIClient = {
+      chat: {
+        completions: {
+          create: () => ({
+            async *[Symbol.asyncIterator]() {
+              yield { choices: [{ delta: { content: 'complete-looking response' } }] };
+              yield {
+                choices: [],
+                usage: {
+                  prompt_tokens: 100,
+                  completion_tokens: 10,
+                  total_tokens: 110,
+                  prompt_cache_hit_tokens: 86,
+                  prompt_cache_miss_tokens: 14,
+                },
+              };
+              throw new Error('Premature close');
+            },
+          }),
+        },
+      },
+    };
+    const { io, socket, store } = createHarness({
+      aiClientWrapper: { provider: 'deepseek', client: openAIClient },
+    });
+
+    await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id });
+
+    const finalMessage = store.upsertedMessages[1];
+    assert.equal(finalMessage.status, 'complete');
+    assert.equal(finalMessage.usage?.source, 'reported');
+    assert.equal(finalMessage.usage?.cacheHitRate, 0.86);
+    assert.equal(finalMessage.cost?.estimated, false);
+    const streamEnd = io.roomEmits.find(event => event.event === 'ai_stream_end');
+    assert.ok(streamEnd);
+    assert.equal((streamEnd.args[0] as any).usage.source, 'reported');
+    assert.equal((streamEnd.args[0] as any).completedAfterPrematureClose, true);
+  });
+
+  it('preserves reported usage in the outbox worker when a stream closes prematurely after the usage chunk', async () => {
+    process.env.E2E_FAKE_AI = 'false';
+    const openAIClient = {
+      chat: {
+        completions: {
+          create: () => ({
+            async *[Symbol.asyncIterator]() {
+              yield { choices: [{ delta: { content: 'worker response' } }] };
+              yield {
+                choices: [],
+                usage: {
+                  prompt_tokens: 50,
+                  completion_tokens: 5,
+                  total_tokens: 55,
+                  prompt_cache_hit_tokens: 40,
+                  prompt_cache_miss_tokens: 10,
+                },
+              };
+              throw new Error('Premature close');
+            },
+          }),
+        },
+      },
+    };
+    const { io, store } = createHarness();
+    store.assistantRuns.push({
+      id: 'run-reported-usage',
+      status: 'queued',
+      metadata: { runnerMode: 'worker' },
+    });
+
+    await executeQueuedAssistantRun(
+      {
+        runId: 'run-reported-usage',
+        roomId: 'room-1',
+        requestedByClientId: 'client-1',
+        aiMessageId: 'queued-ai-message',
+        roleName: 'Assistant',
+        systemPrompt: 'You are helpful.',
+        model: selectedModel.id,
+        maxContextMessages: 100,
+        contextMessages: [message()],
+        historyUsedForContext: [message()],
+      },
+      {
+        io: io as any,
+        store: store as any,
+        socketLogger: logger as any,
+        openaiLogger: logger as any,
+        normalizeAIModel: () => selectedModel,
+        getAIClientForModel: () => ({ provider: 'deepseek', client: openAIClient as any }),
+      },
+    );
+
+    const finalMessage = store.upsertedMessages.at(-1);
+    assert.equal(finalMessage?.status, 'complete');
+    assert.equal(finalMessage?.usage?.source, 'reported');
+    assert.equal(finalMessage?.usage?.cacheHitRate, 0.8);
+    assert.equal(finalMessage?.cost?.estimated, false);
+    assert.equal(store.assistantRuns[0].status, 'complete');
+    assert.equal(store.assistantRuns[0].metadata.usage.source, 'reported');
+    const streamEnd = io.roomEmits.find(event => event.event === 'ai_stream_end');
+    assert.ok(streamEnd);
+    assert.equal((streamEnd.args[0] as any).usage.source, 'reported');
+    assert.equal((streamEnd.args[0] as any).completedAfterPrematureClose, true);
+  });
+
   it('rejects AI requests from clients without room access', async () => {
     const { io, socket, store } = createHarness({ clientId: 'client-2' });
     store.members.clear();
