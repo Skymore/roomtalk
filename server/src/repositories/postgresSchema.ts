@@ -138,6 +138,56 @@ export const POSTGRES_SCHEMA_SQL = [
     total_usd NUMERIC(18, 9) NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
+  `CREATE TABLE IF NOT EXISTS assistant_runs (
+    id TEXT PRIMARY KEY,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    requested_by_client_id TEXT NOT NULL,
+    user_message_id TEXT,
+    ai_message_id TEXT NOT NULL REFERENCES room_messages(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'complete', 'error', 'cancelled')),
+    model_id TEXT NOT NULL,
+    api_model TEXT NOT NULL,
+    provider TEXT NOT NULL CHECK (provider IN ('openai', 'openrouter', 'deepseek', 'anthropic')),
+    role_name TEXT,
+    system_prompt TEXT,
+    max_context_messages INTEGER,
+    retry_for_message_id TEXT,
+    edited_message_id TEXT,
+    error TEXT,
+    metadata JSONB,
+    created_at TIMESTAMPTZ NOT NULL,
+    queued_at TIMESTAMPTZ NOT NULL,
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_assistant_runs_room_created
+    ON assistant_runs (room_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_assistant_runs_status_updated
+    ON assistant_runs (status, updated_at)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_assistant_runs_ai_message
+    ON assistant_runs (ai_message_id)`,
+  `CREATE TABLE IF NOT EXISTS outbox_events (
+    id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    aggregate_type TEXT NOT NULL,
+    aggregate_id TEXT NOT NULL,
+    room_id TEXT,
+    payload JSONB NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'processed', 'failed')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    available_at TIMESTAMPTZ NOT NULL,
+    locked_at TIMESTAMPTZ,
+    locked_by TEXT,
+    processed_at TIMESTAMPTZ,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_outbox_events_claim
+    ON outbox_events (status, available_at, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_outbox_events_aggregate
+    ON outbox_events (aggregate_type, aggregate_id, created_at)`,
   // Global per-client profile data (currently just the display nickname),
   // keyed by the persistent clientId rather than a room.
   `CREATE TABLE IF NOT EXISTS client_profiles (

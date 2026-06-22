@@ -2,6 +2,7 @@ import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { RedisStore } from './redisStore';
 import { AICost, MediaAsset, Message, Room } from '../types';
+import { OutboxEventRecord } from './store';
 
 const toTime = (value?: string) => Date.parse(value || '') || 0;
 const latest = (first?: string, second?: string) => toTime(first) >= toTime(second) ? first : second;
@@ -151,6 +152,10 @@ class MemoryRedis {
     const offset = options?.LIMIT?.offset ?? 0;
     const count = options?.LIMIT?.count ?? sorted.length;
     return sorted.slice(offset, offset + count);
+  }
+
+  async zRangeByScore(key: string, min: number | string, max: number | string, options?: { LIMIT?: { offset: number; count: number } }) {
+    return this.zRange(key, min, max, options);
   }
 
   async zRem(key: string, value: string) {
@@ -503,6 +508,20 @@ const cost = (totalUsd: number): AICost => ({
   inputPerMillion: 1,
   outputPerMillion: 1,
   estimated: false,
+});
+
+const outboxEvent = (overrides: Partial<OutboxEventRecord> = {}): OutboxEventRecord => ({
+  id: 'event-1',
+  eventType: 'test.event',
+  aggregateType: 'test',
+  aggregateId: 'aggregate-1',
+  payload: {},
+  status: 'pending',
+  attempts: 0,
+  availableAt: '2026-06-22T00:00:00.000Z',
+  createdAt: '2026-06-22T00:00:00.000Z',
+  updatedAt: '2026-06-22T00:00:00.000Z',
+  ...overrides,
 });
 
 const createStore = () => {
@@ -934,6 +953,34 @@ describe('RedisStore', () => {
 
     redis.strings.set(store.getRoomAICostKey('room-bad'), 'not-a-number');
     assert.deepEqual(await store.readRoomAICost('room-bad'), { roomId: 'room-bad', currency: 'USD', totalUsd: 0 });
+  });
+
+  it('does not reclaim terminally failed outbox events', async () => {
+    const { store } = createStore();
+    const saved = await store.createOutboxEvent(outboxEvent());
+    assert.ok(saved);
+
+    const claimed = await store.claimOutboxEvents({
+      workerId: 'worker-1',
+      now: '2026-06-22T00:00:01.000Z',
+      lockMs: 60_000,
+    });
+    assert.equal(claimed.length, 1);
+    assert.equal(claimed[0].status, 'processing');
+    assert.equal(claimed[0].attempts, 1);
+
+    const failed = await store.markOutboxEventFailed('event-1', 'boom', {
+      maxAttempts: 1,
+      now: '2026-06-22T00:00:02.000Z',
+    });
+    assert.equal(failed?.status, 'failed');
+
+    const reclaimed = await store.claimOutboxEvents({
+      workerId: 'worker-2',
+      now: '2026-06-22T00:00:03.000Z',
+      lockMs: 60_000,
+    });
+    assert.deepEqual(reclaimed, []);
   });
 
   it('reads, writes, and invalidates room message caches', async () => {

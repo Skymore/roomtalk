@@ -980,7 +980,7 @@ describe('PostgresStore', () => {
           assert.deepEqual(call.params, ['room-1']);
         },
       },
-      { rowCount: 0, assertCall: call => assert.match(call.sql, /TRUNCATE room_ai_cost_totals/) },
+      { rowCount: 0, assertCall: call => assert.match(call.sql, /TRUNCATE .*room_ai_cost_totals/) },
       {
         rowCount: 2,
         assertCall(call) {
