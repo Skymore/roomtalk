@@ -46,6 +46,11 @@ const getE2EFakeAIChunkDelayMs = () => {
 
 const wait = (delayMs: number) => new Promise(resolve => setTimeout(resolve, delayMs));
 
+const isPrematureCloseError = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message : String(error);
+  return /premature close/i.test(message);
+};
+
 type ReportedUsage = Record<string, any> | null;
 type EmitA2UIUpdate = (messages: unknown[]) => Promise<boolean>;
 
@@ -645,7 +650,9 @@ export function registerAIHandlers({
     io.to(roomId).emit('new_message', initialAiMessage);
     callback?.({ success: true, messageId: aiMessageId });
 
+    let streamedTextContent = '';
     let streamedA2UIPayload: Message['uiPayload'];
+    let fallbackUsageMessages: Array<{ content: any }> = [];
     const emitA2UIUpdate = async (messages: unknown[]): Promise<boolean> => {
       const uiPayload = await normalizeA2UIPayload(messages);
       if (!uiPayload) {
@@ -963,6 +970,7 @@ export function registerAIHandlers({
     try {
       const systemPromptWithA2UI = buildA2UIToolSystemPrompt(systemPrompt);
       const validMessagesForAPI = buildAIProviderMessages(systemPromptWithA2UI, contextMessages);
+      fallbackUsageMessages = validMessagesForAPI;
       const hasUserOrAssistantMessage = validMessagesForAPI.some(msg => msg.role === 'user' || msg.role === 'assistant');
       if (!hasUserOrAssistantMessage && validMessagesForAPI.length <= 1) {
         openaiLogger.error('Cannot call OpenAI API without user or assistant messages in context.', { roomId });
@@ -1004,11 +1012,15 @@ export function registerAIHandlers({
           systemPrompt: systemPromptWithA2UI,
           messages: anthropicMessages as any[],
           emitA2UIUpdate,
-          emitTextChunk: (chunk) => io.to(roomId).emit('ai_chunk', { messageId: aiMessageId, chunk, roomId }),
+          emitTextChunk: (chunk) => {
+            streamedTextContent += chunk;
+            io.to(roomId).emit('ai_chunk', { messageId: aiMessageId, chunk, roomId });
+          },
           logger: openaiLogger,
           messageId: aiMessageId,
         });
         fullContent = streamResult.fullContent;
+        streamedTextContent = fullContent;
         reportedUsage = streamResult.reportedUsage;
         usageMessages = streamResult.usageMessages;
       } else {
@@ -1017,11 +1029,15 @@ export function registerAIHandlers({
           model: selectedModel.apiModel,
           messages: validMessagesForAPI as any[],
           emitA2UIUpdate,
-          emitTextChunk: (chunk) => io.to(roomId).emit('ai_chunk', { messageId: aiMessageId, chunk, roomId }),
+          emitTextChunk: (chunk) => {
+            streamedTextContent += chunk;
+            io.to(roomId).emit('ai_chunk', { messageId: aiMessageId, chunk, roomId });
+          },
           logger: openaiLogger,
           messageId: aiMessageId,
         });
         fullContent = streamResult.fullContent;
+        streamedTextContent = fullContent;
         reportedUsage = streamResult.reportedUsage;
         usageMessages = streamResult.usageMessages;
       }
@@ -1095,21 +1111,97 @@ export function registerAIHandlers({
         clientId,
         roomId,
       });
+
+      const hasPartialContent = streamedTextContent.trim().length > 0;
+      if (hasPartialContent && isPrematureCloseError(error)) {
+        const usage = normalizeUsage(null, fallbackUsageMessages, streamedTextContent);
+        const cost = calculateAICost(selectedModel, usage);
+        const roomCostTotal = await store.incrementRoomAICost(roomId, cost || null);
+        const aiModel = getMessageAIModel(selectedModel);
+        const finalAiMessage: Message = {
+          ...initialAiMessage,
+          content: streamedTextContent,
+          status: 'complete',
+          timestamp: new Date().toISOString(),
+          aiModel,
+          usage,
+          cost,
+        };
+        if (streamedA2UIPayload) {
+          finalAiMessage.uiPayload = streamedA2UIPayload;
+        }
+
+        const finalSaved = await saveAIMessage(finalAiMessage, 'premature-close complete');
+        if (!finalSaved) {
+          await saveAIErrorMessage({
+            ...initialAiMessage,
+            status: 'error',
+            content: streamedTextContent,
+            timestamp: new Date().toISOString(),
+          }, 'premature-close final-save error');
+          io.to(roomId).emit('ai_stream_error', {
+            messageId: aiMessageId,
+            error: 'The AI response was generated, but could not be saved.',
+            roomId,
+            partial: true,
+          });
+          await updateAssistantRun({ status: 'error', error: 'Failed to save premature-close AI response' });
+          return;
+        }
+
+        await updateAssistantRun({
+          status: 'complete',
+          metadata: {
+            contentLength: streamedTextContent.length,
+            usage,
+            cost,
+            completedAfterPrematureClose: true,
+          },
+        });
+
+        io.to(roomId).emit('ai_stream_end', {
+          messageId: aiMessageId,
+          roomId,
+          content: finalAiMessage.content,
+          uiPayload: finalAiMessage.uiPayload,
+          aiModel,
+          usage,
+          cost,
+          sessionCost: roomCostTotal,
+          completedAfterPrematureClose: true,
+        });
+        io.to(roomId).emit('ai_cost_total', roomCostTotal);
+        openaiLogger.warn('AI stream closed prematurely after content; treating response as complete', {
+          messageId: aiMessageId,
+          roomId,
+          contentLength: streamedTextContent.length,
+          model: selectedModel.id,
+        });
+        return;
+      }
+
       const errorAiMessage: Message = {
         ...initialAiMessage,
         status: 'error',
-        content: 'Error generating response.',
+        content: streamedTextContent || 'Error generating response.',
         timestamp: new Date().toISOString(),
       };
+      if (streamedA2UIPayload) {
+        errorAiMessage.uiPayload = streamedA2UIPayload;
+      }
       await saveAIErrorMessage(errorAiMessage, 'stream error');
       io.to(roomId).emit('ai_stream_error', {
         messageId: aiMessageId,
-        error: 'Sorry, an error occurred while generating the AI response.',
+        error: hasPartialContent
+          ? 'The AI provider connection closed before a normal finish. The partial response above was saved.'
+          : 'Sorry, an error occurred while generating the AI response.',
         roomId,
+        partial: hasPartialContent,
       });
       await updateAssistantRun({
         status: 'error',
         error: error instanceof Error ? error.message : 'Error generating response',
+        metadata: hasPartialContent ? { partial: true, contentLength: streamedTextContent.length } : undefined,
       });
     }
   };
