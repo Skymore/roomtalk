@@ -18,7 +18,7 @@ export const uniqueName = (prefix: string) =>
   `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 export const shortName = (prefix: string) =>
-  `${prefix}-${Math.random().toString(36).slice(2, 8)}`;
+  `${prefix}-${Math.random().toString(36).slice(2, 8)}`.slice(0, 20);
 
 export const fakeAIResponseText = (prompt: string) =>
   `E2E AI response: I received "${prompt}"`;
@@ -65,7 +65,7 @@ export async function createRoomViaApi(
     data: { name, description, type },
   });
 
-  expect(response.ok()).toBeTruthy();
+  expect(response.ok(), `create room failed: HTTP ${response.status()} ${await response.text()}`).toBeTruthy();
   return await response.json() as TestRoom;
 }
 

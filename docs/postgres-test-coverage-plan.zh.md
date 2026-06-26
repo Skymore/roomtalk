@@ -329,6 +329,20 @@ cd client-heroui
 E2E_DATABASE_URL="postgres://..." npm run test:e2e:postgres
 ```
 
+2026-06-26 merge 后复验记录：
+
+- `server/src/scripts/persistenceSmoke.ts` 已按当前授权模型补齐 `clientId`，避免 smoke 读取 `/api/rooms/:roomId/messages` 时被 403 拒绝。
+- `client-heroui/playwright.postgres.config.ts` 在 PostgreSQL E2E 后端显式使用 `NODE_ENV=test` 和本地媒体存储目录，使图片上传/持久化链路可在一次性测试库中覆盖。
+- PostgreSQL E2E 的媒体发送步骤现在等待 composer scoped `Send` 按钮完成，避免被 A2UI 内部同名按钮误匹配。
+- 当前复验结果：
+  - `cd server && npm run build`
+  - `cd server && npm test`：382/382 passed
+  - `cd server && TEST_DATABASE_URL="postgres://roomtalk@127.0.0.1:55432/message_system_e2e" npm run smoke:persistence`
+  - `cd client-heroui && npm run lint`
+  - `cd client-heroui && npm test -- --run`：253/253 passed
+  - `cd client-heroui && npm run build`
+  - `cd client-heroui && E2E_DATABASE_URL="postgres://roomtalk@127.0.0.1:55432/message_system_e2e" ./node_modules/.bin/playwright test --config=playwright.postgres.config.ts`：3/3 passed
+
 ## Claude Code review 规则
 
 每阶段实现后调用 Claude Code Opus 4.7，只读 review：
