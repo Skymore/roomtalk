@@ -1,9 +1,12 @@
+import path from 'path';
+import { tmpdir } from 'os';
 import { defineConfig, devices } from '@playwright/test';
 
 const clientPort = Number(process.env.E2E_CLIENT_PORT || 3321);
 const serverPort = Number(process.env.E2E_SERVER_PORT || 3322);
 const clientURL = `http://127.0.0.1:${clientPort}`;
 const serverURL = `http://127.0.0.1:${serverPort}`;
+const localMediaDir = path.join(tmpdir(), `roomtalk-postgres-e2e-media-${serverPort}`);
 
 const shellQuote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
 
@@ -63,10 +66,13 @@ export default defineConfig({
     {
       command: [
         `PORT=${serverPort}`,
+        'NODE_ENV=test',
         `CLIENT_URL=${clientURL}`,
         'REDIS_URL=redis://127.0.0.1:6379/15',
         'PERSISTENCE_STORE=postgres',
         `DATABASE_URL=${shellQuote(databaseUrl)}`,
+        `LOCAL_MEDIA_DIR=${shellQuote(localMediaDir)}`,
+        'DISABLE_LOCAL_MEDIA_STORAGE=false',
         'E2E_TEST_MODE=true',
         'E2E_RESET_ON_START=true',
         'E2E_FAKE_AI=true',

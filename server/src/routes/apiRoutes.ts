@@ -10,7 +10,7 @@ import { MediaAsset, MediaKind, Message, Room } from '../types';
 import { AIRoleDraft, MAX_AI_ROLE_IDEA_LENGTH } from '../services/aiRoleGenerator';
 import { hasRoomAccess } from '../socket/roomAccess';
 import { authorizeRoomAction } from '../socket/roomAuthorization';
-import { createMediaMessage, createReplyReference } from '../services/messageDomain';
+import { createMediaMessage, createReplyReference, createRoomRecord, validateRoomNameInput } from '../services/messageDomain';
 import { decodeLocalMediaObjectKey, LocalMediaObjectStorage, MediaObjectStorage } from '../services/mediaObjectStorage';
 import { getPushPublicConfig, notifyRoomMessageBestEffort } from '../services/pushNotifications';
 import { AudioTranscriptionRunner } from '../services/audioTranscription';
@@ -903,18 +903,44 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       return;
     }
 
-    const roomId = await store.generateUniqueRoomId();
-    const timestamp = new Date().toISOString();
-    const room: Room = {
-      id: roomId,
-      name: roomData.name,
-      description: roomData.description || '',
-      createdAt: timestamp,
-      lastActivityAt: timestamp,
-      creatorId: clientId,
-    };
+    const roomName = validateRoomNameInput(roomData.name);
+    if (!roomName.ok) {
+      return res.status(400).json({ error: roomName.error });
+    }
 
-    routeLogger.info('Room creation via API', { endpoint: 'POST /api/clients/:clientId/rooms', clientId, roomId, roomName: roomData.name, ip: req.ip });
+    if (roomData.type !== undefined && roomData.type !== 'chat' && roomData.type !== 'coco') {
+      routeLogger.warn('Unknown room type ignored during API room creation', {
+        endpoint: 'POST /api/clients/:clientId/rooms',
+        clientId,
+        roomType: roomData.type,
+        ip: req.ip,
+      });
+    }
+
+    const roomType = roomData.type === 'coco' ? 'coco' : undefined;
+    if (roomType === 'coco') {
+      const access = cocoAccess.canUse(clientId);
+      if (!access.allowed) {
+        routeLogger.warn('Coco room creation rejected by rollout controls', {
+          endpoint: 'POST /api/clients/:clientId/rooms',
+          clientId,
+          reason: access.reason,
+          ip: req.ip,
+        });
+        return res.status(403).json({ error: access.message || 'Coco is unavailable' });
+      }
+    }
+
+    const roomId = await store.generateUniqueRoomId();
+    const room = createRoomRecord({
+      roomId,
+      name: roomName.name,
+      description: roomData.description,
+      creatorId: clientId,
+      type: roomType,
+    });
+
+    routeLogger.info('Room creation via API', { endpoint: 'POST /api/clients/:clientId/rooms', clientId, roomId, roomName: room.name, roomType: room.type || 'chat', ip: req.ip });
 
     const savedRoom = await store.saveRoom(room);
     if (!savedRoom) {

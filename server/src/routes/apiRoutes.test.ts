@@ -1232,6 +1232,43 @@ describe('API routes', () => {
     assert.deepEqual(server.emitted, [{ target: 'client-2', event: 'new_room', payload: room }]);
   });
 
+  it('creates Coco rooms through the API only when rollout controls allow it', async () => {
+    const response = await fetch(`${server.baseUrl}/api/clients/client-2/rooms`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'API Coco', description: 'Code work', type: 'coco' }),
+    });
+
+    assert.equal(response.status, 201);
+    const room = await response.json() as Room;
+    assert.equal(room.id, 'generated-room');
+    assert.equal(room.name, 'API Coco');
+    assert.equal(room.description, 'Code work');
+    assert.equal(room.type, 'coco');
+    assert.equal(room.sandboxStatus, 'none');
+    assert.equal(room.cocoStatus, 'idle');
+    assert.ok(room.sandboxUpdatedAt);
+    assert.deepEqual(server.emitted, [{ target: 'client-2', event: 'new_room', payload: room }]);
+
+    const deniedServer = await createTestServer({
+      cocoAccess: createCocoAccessControl({ enabled: false }),
+    });
+    try {
+      const deniedResponse = await fetch(`${deniedServer.baseUrl}/api/clients/client-2/rooms`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'API Coco', type: 'coco' }),
+      });
+
+      assert.equal(deniedResponse.status, 403);
+      assert.deepEqual(await deniedResponse.json(), { error: 'Coco is disabled' });
+      assert.equal(deniedServer.store.savedRooms.length, 0);
+      assert.deepEqual(deniedServer.emitted, []);
+    } finally {
+      await deniedServer.close();
+    }
+  });
+
   it('does not emit API rooms when room persistence fails', async () => {
     server.store.saveRoom = async (room: Room) => {
       server.store.savedRooms.push(room);
