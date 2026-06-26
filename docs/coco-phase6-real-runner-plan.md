@@ -242,7 +242,12 @@ cd server && npm run smoke:coco:e2b
 cd client-heroui && npx playwright test --list e2e/coco-flows.spec.ts
 ```
 
-Actual browser E2E and real E2B smoke may require system environment access to local Redis/localhost and external credentials. `npm run smoke:coco:e2b` skips cleanly unless `RUN_COCO_E2B_SMOKE=true`, `COCO_E2B_TEMPLATE_ID`, E2B credentials, and model access are configured. If the Codex sandbox blocks those, the command, reason, and exact gap must be recorded before moving on.
+Actual browser E2E and real E2B smoke may require system environment access to local Redis/localhost and external credentials. `npm run smoke:coco:e2b` loads `server/.env` when run from `server/` and skips cleanly unless `RUN_COCO_E2B_SMOKE=true`, `COCO_E2B_TEMPLATE_ID`, E2B credentials, and model access are configured. To force the real sandbox smoke with credentials already stored in `server/.env`, run `RUN_COCO_E2B_SMOKE=true npm run smoke:coco:e2b`. If the Codex sandbox blocks those, the command, reason, and exact gap must be recorded before moving on.
+
+2026-06-26 merge validation result:
+
+- `cd server && npm run smoke:coco:e2b` skipped safely when `RUN_COCO_E2B_SMOKE` was not set.
+- `cd server && RUN_COCO_E2B_SMOKE=true npm run smoke:coco:e2b` created a real E2B sandbox, streamed JSONL runner events, completed with a `final` event, and destroyed the sandbox; selected model: `deepseek-v4-pro`.
 
 Phase 7 rollout-control follow-up:
 

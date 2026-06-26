@@ -110,4 +110,6 @@ This is intentionally not accepted as production config.
 - Production E2B JSONL startup requires pinned artifact metadata.
 - E2B JSONL startup requires either `E2B_API_KEY` or `E2B_ACCESS_TOKEN`.
 - Development mode is the only mode allowed to use the local Coco source path.
-- Real sandbox smoke is available through `cd server && npm run smoke:coco:e2b`; it skips unless `RUN_COCO_E2B_SMOKE=true` and the E2B/model credentials are configured.
+- Real sandbox smoke is available through `cd server && npm run smoke:coco:e2b`; the script loads `server/.env`, skips unless `RUN_COCO_E2B_SMOKE=true`, and then requires E2B/model credentials.
+- To run the real smoke with credentials already stored in `server/.env`, use `cd server && RUN_COCO_E2B_SMOKE=true npm run smoke:coco:e2b`.
+- 2026-06-26 validation confirmed the real E2B smoke creates a sandbox, streams JSONL runner events, completes with `deepseek-v4-pro`, and cleans up the sandbox.
