@@ -38,6 +38,7 @@ python3 -m venv /tmp/roomtalk-coco-pytest-venv
 /tmp/roomtalk-coco-pytest-venv/bin/python -m pip install --upgrade pip pytest
 /tmp/roomtalk-coco-pytest-venv/bin/python -m pytest server/roomtalk_coco_runner/tests
 cd client-heroui && CI=1 E2E_CLIENT_PORT=3611 E2E_SERVER_PORT=3612 ./node_modules/.bin/playwright test e2e/coco-flows.spec.ts e2e/coco-mobile.mobile.spec.ts
+embedded-postgres execute smoke for migrate:media-to-object-storage
 ```
 
 Observed results:
@@ -52,36 +53,19 @@ Observed results:
 - Coco component tests passed 8/8.
 - Python JSONL runner tests passed 16/16 in a temporary pytest environment.
 - Playwright Coco E2E passed 3/3, including fake-runner tool history restore, running-turn locks, and mobile workspace/composer layout.
+- Embedded PostgreSQL execute smoke for `migrate:media-to-object-storage` passed:
+  - started a disposable PostgreSQL server from the `embedded-postgres` npm package;
+  - seeded a room with one legacy `data:image/png;base64,...` media message;
+  - ran `npm run migrate:media-to-object-storage -- --execute --room-id=<seeded-room-id>` against local media storage;
+  - verified the message content was cleared, message and asset MIME types became `image/webp`, one `media_assets` row was created, and the local object plus metadata file existed;
+  - reran execute mode and verified it skipped the already asset-backed message without creating duplicate assets.
 - GitHub Actions `CI/CD` completed successfully for the pushed migration audit commits through `5eb3f26e`.
 
 ## Remaining External Gates
 
-These are not code gaps in the current repository, but they are still not locally verifiable from this machine:
+This is not a code gap in the current repository, but it is still not locally verifiable from this machine:
 
 1. **Claude Code review gate**
    - Required by the earlier workflow rule.
    - Current CLI state: `claude -p ...` returns `401 Invalid authentication credentials`.
    - `claude auth status` previously reported a logged-in Claude Max account, so this is an external Claude CLI auth/session problem rather than a repository test failure.
-
-2. **Live PostgreSQL execute smoke for `migrate:media-to-object-storage`**
-   - Unit tests cover execute-mode upload, replacement, idempotent skip, and cleanup behavior.
-   - Store contract tests cover Redis/PostgreSQL `replaceMessageMediaAsset`.
-   - Browser E2E covers asset-backed image send/render.
-   - This machine currently lacks a safe disposable PostgreSQL target:
-     - no `TEST_DATABASE_URL`, `E2E_DATABASE_URL`, or `DATABASE_URL` in the process environment;
-     - no `DATABASE_URL` in `server/.env`;
-     - no Docker/Podman/Postgres/psql/brew binaries available;
-     - `127.0.0.1:55432` is not listening.
-   - Execute smoke should be run on a workstation or migration host with a disposable database and local media storage:
-
-```bash
-cd server
-npm run build
-DATABASE_URL="postgres://.../message_system_e2e" \
-LOCAL_MEDIA_DIR="/tmp/roomtalk-media-migration-smoke" \
-DISABLE_LOCAL_MEDIA_STORAGE=false \
-ROOMTALK_DB_BACKUP_FILE="/absolute/path/to/disposable-backup.dump" \
-npm run migrate:media-to-object-storage -- --execute --room-id=<seeded-room-id>
-```
-
-The database name should clearly identify a disposable test/e2e database. Do not run execute mode against production until the runbook's backup and verification steps are complete.
