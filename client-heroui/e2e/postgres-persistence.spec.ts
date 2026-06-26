@@ -6,6 +6,7 @@ import {
   editMessage,
   expectChatRoom,
   expectMessage,
+  fakeAIResponseText,
   getClientRoomsViaApi,
   joinRoomById,
   openRoomFromCard,
@@ -57,7 +58,7 @@ async function askAI(page: Parameters<typeof openRoomsPage>[0], prompt: string) 
   await page.keyboard.insertText(prompt);
   await page.getByRole('button', { name: 'Ask AI' }).click();
   await expectMessage(page, prompt).toBeVisible();
-  await expectMessage(page, `E2E AI response to: ${prompt}`).toBeVisible();
+  await expectMessage(page, fakeAIResponseText(prompt)).toBeVisible();
 }
 
 test('persists room and message operations across reloads and fresh contexts', async ({ page, context, request, browser }) => {
@@ -109,7 +110,7 @@ test('persists fake AI, image messages, and shared room joins in PostgreSQL mode
   await openRoomFromCard(page, room);
 
   const prompt = uniqueName('pg-ai-prompt');
-  const responseText = `E2E AI response to: ${prompt}`;
+  const responseText = fakeAIResponseText(prompt);
   await askAI(page, prompt);
   await page.reload();
   await expectChatRoom(page, room.name);

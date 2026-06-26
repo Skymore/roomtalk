@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Button,
+  Chip,
   Dropdown,
   DropdownTrigger,
   DropdownMenu,
@@ -21,6 +22,8 @@ import { getRoomMembers } from "../utils/socket";
 import { RoomSettingsModal } from './RoomSettingsModal';
 import { useIsTouchDevice } from "../hooks/useIsTouchDevice";
 import { PostingScheduleDetails } from './PostingScheduleDetails';
+import { getCodeAgentBackend, getCodeAgentStatus, isSupportedCodeAgentBackend } from '../utils/codeAgent';
+import { getCocoAgentStatusClassName, getCocoStatusLabelKey, getSandboxStatusClassName, getSandboxStatusLabelKey } from '../utils/cocoRoom';
 
 interface ChatHeaderProps {
   currentRoom: Room;
@@ -70,6 +73,10 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const canManageRoom = Boolean(roomPermissions?.canManageRoom);
   const hasPostingSchedule = Boolean(currentRoom.postingSchedule?.enabled);
+  const codeAgentBackend = getCodeAgentBackend(currentRoom);
+  const isCodeAgent = codeAgentBackend !== null;
+  const isSupportedCodeAgent = isSupportedCodeAgentBackend(codeAgentBackend);
+  const agentStatus = getCodeAgentStatus(currentRoom);
 
   useEffect(() => () => {
     if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
@@ -120,6 +127,19 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             <Icon icon="lucide:loader-circle" className="h-4 w-4 flex-shrink-0 animate-spin text-[#c96442] dark:text-[#d97757]" />
           ) : null}
           <h2 data-testid="chat-room-title" className="w-[38vw] max-w-[148px] flex-shrink-0 truncate font-serif text-base font-medium leading-tight text-[#141413] dark:text-[#faf9f5] md:w-[360px] md:max-w-[360px] md:text-lg">{currentRoom.name}</h2>
+          {isCodeAgent && (
+            <Chip
+              size="sm"
+              variant="flat"
+              startContent={<Icon icon="lucide:terminal" className="h-3 w-3" />}
+              classNames={{
+                base: 'hidden h-6 flex-shrink-0 border border-[#c96442]/40 bg-[#c96442]/10 px-1.5 text-[#a34d32] dark:text-[#f0a487] sm:inline-flex',
+                content: 'px-0 text-[11px] font-semibold',
+              }}
+            >
+              {t('codeAgentRoomType')}
+            </Chip>
+          )}
           <Popover placement="bottom-start" onOpenChange={handleMembersOpenChange}>
             <PopoverTrigger>
               <button
@@ -189,6 +209,18 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               />
             </div>
           </Tooltip>
+          {isSupportedCodeAgent && (
+            <div className="hidden min-w-0 flex-wrap items-center gap-1 md:flex">
+              <span className={`inline-flex max-w-[120px] items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${getSandboxStatusClassName(currentRoom.sandboxStatus)}`}>
+                <Icon icon="lucide:box" className="h-3 w-3 flex-shrink-0" />
+                <span className="truncate">{t(getSandboxStatusLabelKey(currentRoom.sandboxStatus))}</span>
+              </span>
+              <span className={`inline-flex max-w-[120px] items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${getCocoAgentStatusClassName(agentStatus)}`}>
+                <Icon icon="lucide:bot" className="h-3 w-3 flex-shrink-0" />
+                <span className="truncate">{t(getCocoStatusLabelKey(agentStatus))}</span>
+              </span>
+            </div>
+          )}
         </div>
       </div>
       <div className="flex flex-shrink-0 items-center gap-2">

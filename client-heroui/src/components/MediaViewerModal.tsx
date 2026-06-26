@@ -701,14 +701,14 @@ const MediaStage: React.FC<MediaStageProps> = ({
     }
   }, [visualRootRef]);
 
-  const getDistance = (first: GesturePoint, second: GesturePoint) => (
+  const getDistance = React.useCallback((first: GesturePoint, second: GesturePoint) => (
     Math.hypot(second.x - first.x, second.y - first.y)
-  );
+  ), []);
 
-  const getCenter = (first: GesturePoint, second: GesturePoint): GesturePoint => ({
+  const getCenter = React.useCallback((first: GesturePoint, second: GesturePoint): GesturePoint => ({
     x: (first.x + second.x) / 2,
     y: (first.y + second.y) / 2,
-  });
+  }), []);
 
   const zoomAtPoint = React.useCallback((clientX: number, clientY: number, nextZoom: number) => {
     const currentTransform = imageTransformRef.current;
@@ -834,7 +834,7 @@ const MediaStage: React.FC<MediaStageProps> = ({
       metrics,
       allowTapDismiss: true,
     };
-  }, [activeStageMedia.kind, applyTrackOffset, applyVerticalOffset, clearTapTimer, getStageMetrics, getStagePoint]);
+  }, [activeStageMedia.kind, applyTrackOffset, applyVerticalOffset, clearTapTimer, getCenter, getDistance, getStageMetrics, getStagePoint]);
 
   const updatePinchGesture = React.useCallback(() => {
     const state = gestureRef.current;
@@ -858,7 +858,7 @@ const MediaStage: React.FC<MediaStageProps> = ({
     state.currentZoom = nextZoom;
     state.currentPan = nextPan;
     applyActiveImageTransform(nextZoom, nextPan, false);
-  }, [applyActiveImageTransform, clampImagePan, getStagePoint]);
+  }, [applyActiveImageTransform, clampImagePan, getCenter, getDistance, getStagePoint]);
 
   const updateSinglePointGesture = React.useCallback((clientX: number, clientY: number) => {
     const state = gestureRef.current;

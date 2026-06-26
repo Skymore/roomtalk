@@ -16,6 +16,7 @@ import {
   RoomPermissions,
   RoomPostingSchedule,
   RoomRoleMember,
+  RoomType,
 } from './types';
 import { Socket } from 'socket.io-client';
 
@@ -71,6 +72,16 @@ type SocketAckResponse = {
   success: boolean;
   error?: string;
   message?: unknown;
+};
+
+type CreateRoomAckResponse = SocketAckResponse & {
+  roomId?: string;
+};
+
+export type CreateRoomOptions = {
+  password?: string;
+  postingSchedule?: RoomPostingSchedule | null;
+  type?: RoomType;
 };
 
 type SendMessageAckResponse = SocketAckResponse & {
@@ -526,7 +537,16 @@ export const leaveRoom = (roomId: string) => {
 };
 
 // Create a new room
-export const createRoom = (roomName: string, description?: string, password?: string, postingSchedule?: RoomPostingSchedule | null): Promise<string> => {
+export const createRoom = (
+  roomName: string,
+  description?: string,
+  optionsOrPassword?: CreateRoomOptions | string,
+  legacyPostingSchedule?: RoomPostingSchedule | null,
+): Promise<string> => {
+  const options: CreateRoomOptions = typeof optionsOrPassword === 'string'
+    ? { password: optionsOrPassword, postingSchedule: legacyPostingSchedule }
+    : (optionsOrPassword || {});
+
   return ensureRegisteredSocket().then(() => new Promise<string>((resolve, reject) => {
     let settled = false;
     const timeoutId = window.setTimeout(() => {
@@ -535,13 +555,24 @@ export const createRoom = (roomName: string, description?: string, password?: st
       reject(new Error('Timed out while creating room'));
     }, SEND_MESSAGE_ACK_TIMEOUT_MS);
 
-    socket.emit('create_room', { name: roomName, description, password, postingSchedule }, (response: string | SocketAckResponse) => {
+    socket.emit('create_room', {
+      name: roomName,
+      description,
+      password: options.password,
+      postingSchedule: options.postingSchedule,
+      type: options.type || 'chat',
+    }, (response: string | CreateRoomAckResponse) => {
       if (settled) return;
       settled = true;
       window.clearTimeout(timeoutId);
 
       if (typeof response === 'string' && response) {
         resolve(response);
+        return;
+      }
+
+      if (typeof response === 'object' && response?.success && response.roomId) {
+        resolve(response.roomId);
         return;
       }
 

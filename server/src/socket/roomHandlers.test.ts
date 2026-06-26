@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import { registerRoomHandlers } from './roomHandlers';
 import { Message, Room, RoomAICostTotal, RoomMemberRole } from '../types';
 import { hashClientAuthToken } from '../services/clientAuth';
+import { createCocoAccessControl } from '../services/cocoAccessControl';
 
 type SocketEmit = {
   event: string;
@@ -109,7 +110,10 @@ const roomCost = (roomId = 'room-1'): RoomAICostTotal => ({
   totalUsd: 0.5,
 });
 
-const createHarness = (clientId: string | null = 'client-1') => {
+const createHarness = (
+  clientId: string | null = 'client-1',
+  cocoAccess = createCocoAccessControl({ enabled: true }),
+) => {
   const socket = new FakeSocket();
   const io = new FakeIo();
   const memberKey = (roomId: string, memberClientId: string) => `${roomId}:${memberClientId}`;
@@ -347,6 +351,7 @@ const createHarness = (clientId: string | null = 'client-1') => {
     socket: socket as any,
     store: store as any,
     socketLogger: logger as any,
+    cocoAccess,
   } as any);
 
   return { io, socket, store };
@@ -763,13 +768,47 @@ describe('room socket handlers', () => {
 
     const valid = createHarness('client-1');
     let createdRoomId: string | undefined;
-    await valid.socket.invoke('create_room', { name: 'Created', description: 'Room' }, (roomId: string) => {
-      createdRoomId = roomId;
+    await valid.socket.invoke('create_room', { name: 'Created', description: 'Room' }, (result: { success: boolean; roomId?: string }) => {
+      assert.equal(result.success, true);
+      createdRoomId = result.roomId;
     });
 
     assert.equal(createdRoomId, 'generated-room');
     assert.equal(valid.store.savedRooms[0].name, 'Created');
     assert.deepEqual(valid.io.roomEmits, [{ roomId: 'client-1', event: 'new_room', args: [valid.store.savedRooms[0]] }]);
+  });
+
+  it('creates Coco rooms with initial sandbox state and rejects rollout-denied users', async () => {
+    const valid = createHarness('client-1');
+
+    let createdResult: { success: boolean; roomId?: string } | undefined;
+    await valid.socket.invoke('create_room', { name: 'Coco', description: 'Code work', type: 'coco' }, (result: { success: boolean; roomId?: string }) => {
+      createdResult = result;
+    });
+
+    const savedRoom = valid.store.savedRooms[0];
+    assert.deepEqual(createdResult, { success: true, roomId: 'generated-room' });
+    assert.equal(savedRoom.type, 'coco');
+    assert.equal(savedRoom.sandboxStatus, 'none');
+    assert.equal(savedRoom.cocoStatus, 'idle');
+    assert.ok(savedRoom.sandboxUpdatedAt);
+    assert.deepEqual(valid.io.roomEmits, [{ roomId: 'client-1', event: 'new_room', args: [savedRoom] }]);
+
+    const disabled = createHarness('client-1', createCocoAccessControl({ enabled: false }));
+    let disabledResult: { success: boolean; error?: string } | undefined;
+    await disabled.socket.invoke('create_room', { name: 'Coco', type: 'coco' }, (result: { success: boolean; error?: string }) => {
+      disabledResult = result;
+    });
+    assert.deepEqual(disabledResult, { success: false, error: 'Coco is disabled' });
+    assert.equal(disabled.store.savedRooms.length, 0);
+
+    const notAllowed = createHarness('client-2', createCocoAccessControl({ enabled: true, allowedClientIds: ['client-1'] }));
+    let notAllowedResult: { success: boolean; error?: string } | undefined;
+    await notAllowed.socket.invoke('create_room', { name: 'Coco', type: 'coco' }, (result: { success: boolean; error?: string }) => {
+      notAllowedResult = result;
+    });
+    assert.deepEqual(notAllowedResult, { success: false, error: 'Coco is not enabled for this user' });
+    assert.equal(notAllowed.store.savedRooms.length, 0);
   });
 
   it('joins existing rooms and leaves previous rooms without sending message history', async () => {
@@ -843,6 +882,24 @@ describe('room socket handlers', () => {
     assert.equal(valid.io.roomEmits[0].roomId, 'room-1');
     assert.equal(valid.io.roomEmits[0].event, 'room_member_change');
     assert.deepEqual((joinResponse as { memberCount?: number }).memberCount, 2);
+  });
+
+  it('rejects joining Coco rooms when rollout controls deny access before leaving the current room', async () => {
+    const denied = createHarness('client-2', createCocoAccessControl({ enabled: true, allowedClientIds: ['client-1'] }));
+    denied.store.rooms.push(room({ id: 'coco-room', name: 'Coco Room', type: 'coco' }));
+    denied.store.socketRooms = ['room-1'];
+
+    let joinResponse: unknown;
+    await denied.socket.invoke('join_room', 'coco-room', (result: unknown) => {
+      joinResponse = result;
+    });
+
+    assert.deepEqual(joinResponse, { success: false, error: 'Coco is not enabled for this user' });
+    assert.deepEqual(denied.socket.emitted, [{ event: 'error', args: [{ message: 'Coco is not enabled for this user' }] }]);
+    assert.deepEqual(denied.socket.joined, []);
+    assert.deepEqual(denied.socket.left, []);
+    assert.deepEqual(denied.store.socketRooms, ['room-1']);
+    assert.deepEqual(denied.io.roomEmits, []);
   });
 
   it('leaves rooms and updates stored socket memberships', async () => {
@@ -1011,5 +1068,13 @@ describe('room socket handlers', () => {
       missingRoom = result;
     });
     assert.equal(missingRoom, null);
+
+    const denied = createHarness('client-2', createCocoAccessControl({ enabled: true, allowedClientIds: ['client-1'] }));
+    denied.store.rooms.push(room({ id: 'coco-room', name: 'Coco Room', type: 'coco' }));
+    let deniedRoom: Room | null | undefined;
+    await denied.socket.invoke('get_room_by_id', 'coco-room', (result: Room | null) => {
+      deniedRoom = result;
+    });
+    assert.equal(deniedRoom, null);
   });
 });

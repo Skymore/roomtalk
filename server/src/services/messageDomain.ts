@@ -1,8 +1,9 @@
-import { AIModelOption, MediaKind, Message, MessageReplyReference, Room, RoomMemberEvent } from '../types';
+import { AIModelOption, MediaKind, Message, MessageReplyReference, Room, RoomMemberEvent, RoomType } from '../types';
 import { getMessageAIModel } from './aiModels';
 
 const MAX_DISPLAY_NAME_LENGTH = 48;
 const MAX_REPLY_PREVIEW_LENGTH = 120;
+const MAX_ROOM_NAME_LENGTH = 20;
 
 export interface AvatarPayload {
   text: string;
@@ -18,6 +19,23 @@ export function normalizeDisplayName(username?: string): string | undefined {
   if (typeof username !== 'string') return undefined;
   const normalized = collapseInlineText(username).slice(0, MAX_DISPLAY_NAME_LENGTH).trim();
   return normalized || undefined;
+}
+
+export function validateRoomNameInput(value: unknown): { ok: true; name: string } | { ok: false; error: string } {
+  if (typeof value !== 'string') {
+    return { ok: false, error: 'Room name is required' };
+  }
+
+  const name = value.trim();
+  if (!name) {
+    return { ok: false, error: 'Room name is required' };
+  }
+
+  if (name.length > MAX_ROOM_NAME_LENGTH) {
+    return { ok: false, error: `Room name cannot exceed ${MAX_ROOM_NAME_LENGTH} characters` };
+  }
+
+  return { ok: true, name };
 }
 
 export function createReplyReference(message: Message): MessageReplyReference {
@@ -53,10 +71,11 @@ export function createRoomRecord(input: {
   name: string;
   description?: string;
   creatorId: string;
+  type?: RoomType;
   now?: Date;
 }): Room {
   const timestamp = (input.now || new Date()).toISOString();
-  return {
+  const room: Room = {
     id: input.roomId,
     name: input.name,
     description: input.description || '',
@@ -64,6 +83,13 @@ export function createRoomRecord(input: {
     lastActivityAt: timestamp,
     creatorId: input.creatorId,
   };
+  if (input.type === 'coco') {
+    room.type = 'coco';
+    room.sandboxStatus = 'none';
+    room.sandboxUpdatedAt = timestamp;
+    room.cocoStatus = 'idle';
+  }
+  return room;
 }
 
 export function createRoomMemberEvent(input: {

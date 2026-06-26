@@ -10,6 +10,7 @@
     "migrate:media-to-object-storage": "node -e \"console.error('Legacy media object-storage migration is not implemented in this checkout. Restore server/src/scripts/migrateLegacyMediaMessagesToObjectStorage.ts before running this command.'); process.exit(1)\"",
     "provision:postgres-app-user": "ts-node src/scripts/provisionPostgresAppUser.ts",
     "smoke:persistence": "ts-node src/scripts/persistenceSmoke.ts",
+    "smoke:coco:e2b": "ts-node src/scripts/cocoE2BSmoke.ts",
     "build": "tsc",
     "test": "node -r ts-node/register --test \"src/**/*.test.ts\""
   },
@@ -26,6 +27,7 @@
     "@upstash/redis": "^1.34.8",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
+    "e2b": "^2.24.0",
     "express": "^4.18.2",
     "google-auth-library": "^10.7.0",
     "nanoid": "^5.1.5",

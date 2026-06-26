@@ -6,12 +6,14 @@ import {
   editMessage,
   expectMemberCount,
   expectMessage,
+  fakeAIResponseText,
   joinRoomById,
   openRoomFromCard,
   openRoomsPage,
   resetE2EData,
   seedClient,
   sendTextMessage,
+  shortName,
   uniqueName,
 } from './helpers';
 
@@ -25,12 +27,12 @@ async function askAI(page: Parameters<typeof openRoomsPage>[0], prompt: string) 
   await page.keyboard.insertText(prompt);
   await page.getByRole('button', { name: 'Ask AI' }).click();
   await expectMessage(page, prompt).toBeVisible();
-  await expectMessage(page, `E2E AI response to: ${prompt}`).toBeVisible();
+  await expectMessage(page, fakeAIResponseText(prompt)).toBeVisible();
 }
 
 test('syncs room operations between two active clients without refresh', async ({ page, context, request, browser }) => {
   const ownerId = await seedClient(context, uniqueName('multi-owner'));
-  const room = await createRoomViaApi(request, ownerId, uniqueName('multi-room'));
+  const room = await createRoomViaApi(request, ownerId, shortName('multi-room'));
 
   await openRoomsPage(page);
   await openRoomFromCard(page, room);
@@ -72,7 +74,7 @@ test('syncs room operations between two active clients without refresh', async (
     const prompt = uniqueName('multi-ai');
     await askAI(page, prompt);
     await expectMessage(peerPage, prompt).toBeVisible();
-    await expectMessage(peerPage, `E2E AI response to: ${prompt}`).toBeVisible();
+    await expectMessage(peerPage, fakeAIResponseText(prompt)).toBeVisible();
   } finally {
     await peerContext.close();
   }
@@ -80,7 +82,7 @@ test('syncs room operations between two active clients without refresh', async (
 
 test('shows an in-flight AI response to a client that joins after streaming starts', async ({ page, context, request, browser }) => {
   const ownerId = await seedClient(context, uniqueName('late-owner'));
-  const room = await createRoomViaApi(request, ownerId, uniqueName('late-ai-room'));
+  const room = await createRoomViaApi(request, ownerId, shortName('late-ai-room'));
 
   await openRoomsPage(page);
   await openRoomFromCard(page, room);
@@ -102,7 +104,7 @@ test('shows an in-flight AI response to a client that joins after streaming star
     await expectMessage(page, prompt).toBeVisible();
     await expectMessage(peerPage, prompt).toBeVisible();
     await expect(peerPage.getByText('Typing...').first()).toBeVisible();
-    await expectMessage(peerPage, `E2E AI response to: ${prompt}`).toBeVisible();
+    await expectMessage(peerPage, fakeAIResponseText(prompt)).toBeVisible();
   } finally {
     await peerContext.close();
   }

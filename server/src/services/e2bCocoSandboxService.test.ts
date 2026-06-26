@@ -1,0 +1,131 @@
+import assert from 'assert/strict';
+import { describe, it } from 'node:test';
+import { PassThrough } from 'stream';
+import { E2BCocoSandboxService, E2BSandboxDriver, E2BSandboxDriverHandle } from './e2bCocoSandboxService';
+
+class FakeE2BDriver implements E2BSandboxDriver {
+  readonly handles = new Map<string, E2BSandboxDriverHandle>();
+  readonly metadata = new Map<string, Record<string, string>>();
+  readonly killed: string[] = [];
+  readonly commands: string[] = [];
+  readonly commandOptions: Record<string, unknown>[] = [];
+  readonly createInputs: unknown[] = [];
+  failList = false;
+
+  async create(input: { templateId: string; timeoutMs: number; metadata: Record<string, string> }): Promise<E2BSandboxDriverHandle> {
+    this.createInputs.push(input);
+    const handle = this.createHandle(`e2b-${this.handles.size + 1}`);
+    this.handles.set(handle.id, handle);
+    this.metadata.set(handle.id, input.metadata);
+    return handle;
+  }
+
+  async connect(sandboxId: string): Promise<E2BSandboxDriverHandle> {
+    const handle = this.handles.get(sandboxId);
+    if (!handle) {
+      throw new Error(`Missing sandbox: ${sandboxId}`);
+    }
+    return handle;
+  }
+
+  async list(input: { metadata?: Record<string, string> } = {}) {
+    if (this.failList) {
+      throw new Error('E2B list unavailable');
+    }
+    return [...this.handles.keys()]
+      .map(id => ({ id, metadata: this.metadata.get(id) || {} }))
+      .filter(item => Object.entries(input.metadata || {}).every(([key, value]) => item.metadata[key] === value));
+  }
+
+  createHandle(id: string): E2BSandboxDriverHandle {
+    return {
+      id,
+      commands: {
+        run: async (command, options) => {
+          this.commands.push(command);
+          this.commandOptions.push(options || {});
+          return {
+            pid: 42,
+            stdin: new PassThrough(),
+            stdout: new PassThrough(),
+            stderr: new PassThrough(),
+            completed: Promise.resolve({ exitCode: 0, signal: null }),
+          };
+        },
+      },
+      kill: async () => {
+        this.killed.push(id);
+        this.handles.delete(id);
+        this.metadata.delete(id);
+      },
+    };
+  }
+}
+
+describe('E2BCocoSandboxService', () => {
+  it('creates, starts commands, and destroys E2B sandboxes through the driver', async () => {
+    const driver = new FakeE2BDriver();
+    const service = new E2BCocoSandboxService(driver, {
+      templateId: 'roomtalk-coco',
+      artifactVersion: 'roomtalk-coco-2026-05-22-4f4ecc9',
+      cocoSourceRef: '4f4ecc99589c68cffcb150b6a2df9f55144cc2d1',
+    }, () => new Date('2026-05-03T00:00:00.000Z'));
+
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+    assert.equal(handle.id, 'e2b-1');
+    assert.equal(handle.provider, 'e2b');
+    assert.equal(handle.workspace, '/workspace');
+    assert.equal(handle.createdAt, '2026-05-03T00:00:00.000Z');
+    assert.equal(handle.expiresAt, '2026-05-03T00:01:00.000Z');
+    assert.deepEqual(driver.createInputs[0], {
+      templateId: 'roomtalk-coco',
+      timeoutMs: 60_000,
+      metadata: {
+        roomId: 'room-1',
+        creatorId: 'client-1',
+        artifactVersion: 'roomtalk-coco-2026-05-22-4f4ecc9',
+        cocoSourceRef: '4f4ecc99589c68cffcb150b6a2df9f55144cc2d1',
+      },
+    });
+
+    const runner = await service.startRunner({
+      handle,
+      command: 'python -m roomtalk_coco_runner',
+      env: { PYTHONUNBUFFERED: '1' },
+      timeoutMs: 300_000,
+    });
+    assert.equal(runner.pid, 42);
+    assert.ok(runner.stdin);
+    assert.ok(runner.stdout);
+    assert.ok(runner.stderr);
+    assert.deepEqual(await runner.completed, { exitCode: 0, signal: null });
+    assert.deepEqual(driver.commands, ['python -m roomtalk_coco_runner']);
+    assert.deepEqual(driver.commandOptions, [{ env: { PYTHONUNBUFFERED: '1' }, timeoutMs: 300_000 }]);
+    assert.equal(await service.countActiveSandboxes(), 1);
+    assert.equal(await service.countActiveSandboxesForUser('client-1'), 1);
+    assert.equal(await service.countActiveSandboxesForUser('client-2'), 0);
+
+    const warnings: unknown[] = [];
+    const serviceWithLogger = new E2BCocoSandboxService(driver, {
+      templateId: 'roomtalk-coco',
+      logger: { warn: (_message, meta) => warnings.push(meta) },
+    });
+    driver.failList = true;
+    assert.equal(await serviceWithLogger.countActiveSandboxes(), undefined);
+    assert.equal(await serviceWithLogger.countActiveSandboxesForUser('client-1'), undefined);
+    assert.equal(warnings.length, 2);
+
+    await service.destroy(handle.id);
+    assert.deepEqual(driver.killed, [handle.id]);
+  });
+
+  it('fails loudly when the driver cannot execute commands or kill sandboxes', async () => {
+    const driver = new FakeE2BDriver();
+    const service = new E2BCocoSandboxService(driver, { templateId: 'roomtalk-coco' });
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+    driver.handles.set(handle.id, { id: handle.id });
+
+    await assert.rejects(() => service.startRunner({ handle, command: 'python -m roomtalk_coco_runner' }), /command execution/);
+    await assert.rejects(() => service.destroy(handle.id), /kill/);
+  });
+});

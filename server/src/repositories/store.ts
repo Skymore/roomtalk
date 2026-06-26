@@ -1,4 +1,4 @@
-import { AICost, AIModelProvider, MediaAsset, Message, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule } from '../types';
+import { AICost, AIModelProvider, MediaAsset, Message, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus } from '../types';
 import { InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
 
 export const DEFAULT_ROOM_MESSAGE_PAGE_LIMIT = 80;
@@ -232,6 +232,7 @@ export interface RoomSettingsUpdate {
 export interface DurableRoomStore {
   generateUniqueRoomId(): Promise<string>;
   appendMessage(message: Message): Promise<Room | null>;
+  appendMessageWithAtomicPosition(message: Message): Promise<Room | null>;
   appendMediaMessageWithAsset(message: Message, asset: MediaAsset): Promise<MediaMessageAppendResult | null>;
   upsertMessage(message: Message): Promise<Room | null>;
   updateMessageContent(roomId: string, messageId: string, updatedContent: string, updatedAt?: string): Promise<MessageUpdateResult | null>;
@@ -298,6 +299,9 @@ export interface DurableRoomStore {
   updateRoomName(roomId: string, creatorId: string, name: string): Promise<Room | null>;
   deleteRoom(roomId: string, creatorId: string): Promise<void>;
   countRooms(): Promise<number>;
+  compareAndSetRoomSandboxStatus(roomId: string, expectedStatuses: RoomSandboxStatus[], nextStatus: RoomSandboxStatus, updatedAt?: string): Promise<Room | null>;
+  findInterruptedCocoRooms(): Promise<Room[]>;
+  findDanglingToolCalls(): Promise<Message[]>;
   // Durable client profile data. Nicknames live in the durable store so they
   // survive Redis flushes; presence (who is online) stays in the realtime store.
   setClientNickname(clientId: string, nickname: string): Promise<void>;
@@ -365,6 +369,14 @@ export class CompositeRoomStore implements RoomStore {
 
   async appendMessage(message: Message) {
     const updatedRoom = await this.durableStore.appendMessage(message);
+    if (updatedRoom) {
+      await this.invalidateRoomMessagesCache(message.roomId);
+    }
+    return updatedRoom;
+  }
+
+  async appendMessageWithAtomicPosition(message: Message) {
+    const updatedRoom = await this.durableStore.appendMessageWithAtomicPosition(message);
     if (updatedRoom) {
       await this.invalidateRoomMessagesCache(message.roomId);
     }
@@ -698,6 +710,18 @@ export class CompositeRoomStore implements RoomStore {
 
   countRooms() {
     return this.durableStore.countRooms();
+  }
+
+  compareAndSetRoomSandboxStatus(roomId: string, expectedStatuses: RoomSandboxStatus[], nextStatus: RoomSandboxStatus, updatedAt?: string) {
+    return this.durableStore.compareAndSetRoomSandboxStatus(roomId, expectedStatuses, nextStatus, updatedAt);
+  }
+
+  findInterruptedCocoRooms() {
+    return this.durableStore.findInterruptedCocoRooms();
+  }
+
+  findDanglingToolCalls() {
+    return this.durableStore.findDanglingToolCalls();
   }
 
   async resetAllDataForTests() {

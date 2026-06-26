@@ -1,8 +1,9 @@
 import { v4 as uuidv4 } from 'uuid';
+import { createCocoAccessControl } from '../services/cocoAccessControl';
 import { hashRoomPassword, verifyRoomPassword } from '../services/roomSecurity';
 import { createRoomMemberEvent, createRoomRecord } from '../services/messageDomain';
 import { isClientRequestAuthorized } from '../services/clientAuth';
-import { Room, RoomClientLookup, RoomOnlineMember, RoomPermissions, RoomPostingSchedule, RoomRoleMember } from '../types';
+import { Room, RoomClientLookup, RoomOnlineMember, RoomPermissions, RoomPostingSchedule, RoomRoleMember, RoomType } from '../types';
 import { authorizeRoomAction, buildRoomPermissions, getRoomActor, normalizePostingSchedule } from './roomAuthorization';
 import { hasRoomAccess } from './roomAccess';
 import { SocketConnectionContext } from './types';
@@ -65,6 +66,14 @@ type JoinRoomAck = BasicRoomAck & {
   memberCount?: number;
 };
 
+type CreateRoomPayload = {
+  name: string;
+  description?: string;
+  password?: string;
+  postingSchedule?: RoomPostingSchedule;
+  type?: unknown;
+};
+
 const validateRoomName = (name: unknown): { ok: true; name: string } | { ok: false; error: string } => {
   if (typeof name !== 'string') {
     return { ok: false, error: 'Room name is required' };
@@ -81,6 +90,10 @@ const validateRoomName = (name: unknown): { ok: true; name: string } | { ok: fal
 
   return { ok: true, name: trimmedName };
 };
+
+const normalizeRoomType = (type: unknown): RoomType | undefined => (
+  type === 'coco' ? 'coco' : undefined
+);
 
 const getRoomIdFromPayload = (payload: unknown): string | null => {
   if (typeof payload === 'string') {
@@ -202,7 +215,13 @@ const parseRegisterPayload = (payload: unknown): { clientId?: string; username: 
   return { clientId: undefined, username: null, clientAuthToken: undefined };
 };
 
-export function registerRoomHandlers({ io, socket, store, socketLogger }: SocketConnectionContext) {
+export function registerRoomHandlers({
+  io,
+  socket,
+  store,
+  socketLogger,
+  cocoAccess = createCocoAccessControl({ enabled: false }),
+}: SocketConnectionContext) {
   socket.on('register', async (payload: unknown, callback?: (result: RegisterAck) => void) => {
     const { clientId, username, clientAuthToken, browserInstanceId } = parseRegisterPayload(payload);
     const userId = clientId || uuidv4();
@@ -344,14 +363,14 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
   });
 
   socket.on('create_room', async (
-    roomData: { name: string; description?: string; password?: string; postingSchedule?: RoomPostingSchedule },
-    callback?: (response: string | { success: false; error: string }) => void,
+    roomData: CreateRoomPayload,
+    callback?: (response: string | { success: false; error: string } | { success: true; roomId: string }) => void,
   ) => {
     const clientId = await store.getClientId(socket.id);
-    if (!clientId || !roomData?.name) {
+    if (!clientId) {
       socketLogger.warn('Invalid room creation attempt', {
         socketId: socket.id,
-        clientRegistered: !!clientId,
+        clientRegistered: false,
         roomDataValid: !!roomData?.name,
       });
       socket.emit('error', { message: 'You are not registered or room name is required' });
@@ -359,19 +378,53 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
       return;
     }
 
+    const roomName = validateRoomName(roomData?.name);
+    if (!roomName.ok) {
+      socketLogger.warn('Invalid room creation attempt', {
+        socketId: socket.id,
+        clientRegistered: true,
+        roomDataValid: false,
+      });
+      callback?.({ success: false, error: roomName.error });
+      return;
+    }
+
+    if (roomData?.type !== undefined && roomData.type !== 'chat' && roomData.type !== 'coco') {
+      socketLogger.warn('Unknown room type ignored during room creation', {
+        socketId: socket.id,
+        clientId,
+        roomType: roomData.type,
+      });
+    }
+
+    if (roomData?.type === 'coco') {
+      const access = cocoAccess.canUse(clientId);
+      if (!access.allowed) {
+        socketLogger.warn('Coco room creation rejected by rollout controls', {
+          socketId: socket.id,
+          clientId,
+          reason: access.reason,
+        });
+        callback?.({ success: false, error: access.message || 'Coco is unavailable' });
+        return;
+      }
+    }
+
     const roomId = await store.generateUniqueRoomId();
     const room = createRoomRecord({
       roomId,
-      name: roomData.name,
+      name: roomName.name,
       description: roomData.description,
       creatorId: clientId,
+      type: normalizeRoomType(roomData.type),
     });
 
     socketLogger.info('Room creation requested', {
       socketId: socket.id,
       clientId,
       roomId,
-      roomName: roomData.name,
+      roomName: roomName.name,
+      roomType: room.type || 'chat',
     });
 
     let savedRoom = await store.saveRoom(room);
@@ -391,7 +444,7 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
     if (savedRoom) {
       io.to(clientId).emit('new_room', savedRoom);
       socketLogger.info('Room created successfully', { roomId, clientId });
-      callback?.(room.id);
+      callback?.({ success: true, roomId: room.id });
     } else {
       callback?.({ success: false, error: 'Failed to create room' });
     }
@@ -412,6 +465,29 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
       socket.emit('error', { message: 'Room ID is required' });
       callback?.({ success: false, error: 'Room ID is required' });
       return;
+    }
+
+    const room = await store.getRoomById(roomId);
+    if (!room) {
+      socketLogger.warn('Client tried to join non-existent room', { socketId: socket.id, userId, roomId });
+      socket.emit('error', { message: 'Room not found' });
+      callback?.({ success: false, error: 'Room not found' });
+      return;
+    }
+
+    if (room.type === 'coco') {
+      const access = cocoAccess.canUse(userId);
+      if (!access.allowed) {
+        socketLogger.warn('Coco room join rejected by rollout controls', {
+          socketId: socket.id,
+          userId,
+          roomId,
+          reason: access.reason,
+        });
+        socket.emit('error', { message: access.message || 'Coco is unavailable' });
+        callback?.({ success: false, error: access.message || 'Coco is unavailable' });
+        return;
+      }
     }
 
     const prevRooms = await store.getUserRooms(socket.id);
@@ -437,14 +513,6 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
 
       socket.to(r).emit('room_member_change', leaveEvent);
       socket.leave(r);
-    }
-
-    const room = await store.getRoomById(roomId);
-    if (!room) {
-      socketLogger.warn('Client tried to join non-existent room', { socketId: socket.id, userId, roomId });
-      socket.emit('error', { message: 'Room not found' });
-      callback?.({ success: false, error: 'Room not found' });
-      return;
     }
 
     const existingMember = await store.getRoomMember(roomId, userId);
@@ -1134,6 +1202,19 @@ export function registerRoomHandlers({ io, socket, store, socketLogger }: Socket
     const userId = await store.getClientId(socket.id);
 
     if (room) {
+      if (room.type === 'coco') {
+        const access = cocoAccess.canUse(userId);
+        if (!access.allowed) {
+          socketLogger.warn('Coco room info lookup rejected by rollout controls', {
+            socketId: socket.id,
+            userId,
+            roomId,
+            reason: access.reason,
+          });
+          callback(null);
+          return;
+        }
+      }
       socketLogger.debug('Room info requested', { socketId: socket.id, userId, roomId, roomName: room.name });
       callback(room);
     } else {

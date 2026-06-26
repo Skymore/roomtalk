@@ -185,8 +185,10 @@ describe('PostgresStore', () => {
         assertCall(call) {
           assert.match(call.sql, /INSERT INTO rooms/);
           assert.match(call.sql, /room_version = rooms\.room_version \+ 1/);
+          assert.match(call.sql, /type = CASE WHEN \$13::boolean THEN EXCLUDED\.type ELSE rooms\.type END/);
           assert.doesNotMatch(call.sql, /creator_id = EXCLUDED\.creator_id/);
           assert.equal(call.params?.[1], 'Saved Room');
+          assert.equal(call.params?.[12], false);
         },
       },
       {
@@ -224,6 +226,64 @@ describe('PostgresStore', () => {
     assert.deepEqual(await store.getRoomById('room-1'), room({ name: 'Saved Room', description: 'desc' }));
     assert.equal(await store.countRooms(), 1);
     await store.deleteRoom('room-1', 'client-1');
+  });
+
+  it('saves Coco room fields without letting legacy room saves clear them', async () => {
+    const cocoRoom = room({
+      type: 'coco',
+      sandboxId: 'sandbox-1',
+      sandboxStatus: 'ready',
+      sandboxUpdatedAt: '2026-05-03T00:01:00.000Z',
+      cocoSessionId: 'coco-session-1',
+      cocoStatus: 'idle',
+    });
+    const legacyRoom = room({ id: cocoRoom.id, name: 'Legacy save' });
+    const preservedLegacyRoom = { ...cocoRoom, name: 'Legacy save' };
+    const client = new ScriptedClient([
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
+      {
+        rows: [roomRow({
+          type: 'coco',
+          sandbox_id: 'sandbox-1',
+          sandbox_status: 'ready',
+          sandbox_updated_at: '2026-05-03T00:01:00.000Z',
+          coco_session_id: 'coco-session-1',
+          coco_status: 'idle',
+        })],
+        assertCall(call) {
+          assert.match(call.sql, /type = CASE WHEN \$13::boolean THEN EXCLUDED\.type ELSE rooms\.type END/);
+          assert.match(call.sql, /sandbox_id = COALESCE\(EXCLUDED\.sandbox_id, rooms\.sandbox_id\)/);
+          assert.equal(call.params?.[6], 'coco');
+          assert.equal(call.params?.[7], 'sandbox-1');
+          assert.equal(call.params?.[12], true);
+        },
+      },
+      { rowCount: 1 },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'COMMIT') },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
+      {
+        rows: [roomRow({
+          name: 'Legacy save',
+          type: 'coco',
+          sandbox_id: 'sandbox-1',
+          sandbox_status: 'ready',
+          sandbox_updated_at: '2026-05-03T00:01:00.000Z',
+          coco_session_id: 'coco-session-1',
+          coco_status: 'idle',
+        })],
+        assertCall(call) {
+          assert.equal(call.params?.[1], 'Legacy save');
+          assert.equal(call.params?.[6], 'chat');
+          assert.equal(call.params?.[12], false);
+        },
+      },
+      { rowCount: 1 },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'COMMIT') },
+    ]);
+    const store = new PostgresStore(new ScriptedPool([], client), logger as any);
+
+    assert.deepEqual(await store.saveRoom(cocoRoom), cocoRoom);
+    assert.deepEqual(await store.saveRoom(legacyRoom), preservedLegacyRoom);
   });
 
   it('persists and reads room memberships', async () => {
@@ -329,7 +389,7 @@ describe('PostgresStore', () => {
       {
         rows: [roomRow()],
         assertCall(call) {
-          assert.match(call.sql, /SELECT id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, room_version, updated_at FROM rooms WHERE id = \$1/);
+          assert.match(call.sql, /SELECT id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, coco_session_id, coco_status, room_version, updated_at FROM rooms WHERE id = \$1/);
           assert.deepEqual(call.params, ['room-1']);
         },
       },
@@ -638,7 +698,8 @@ describe('PostgresStore', () => {
           assert.equal(call.params?.[5], null);
           assert.equal(call.params?.[15], null);
           assert.equal(call.params?.[16], null);
-          assert.equal(call.params?.[17], 2);
+          assert.equal(call.params?.[17], null);
+          assert.equal(call.params?.[24], 2);
         },
       },
       { rows: [roomRow({ last_activity_at: '2026-05-04T00:00:00.000Z' })] },
@@ -666,7 +727,8 @@ describe('PostgresStore', () => {
           assert.equal(call.params?.[9], 'image/webp');
           assert.equal(call.params?.[15], null);
           assert.equal(call.params?.[16], null);
-          assert.equal(call.params?.[17], 4);
+          assert.equal(call.params?.[17], null);
+          assert.equal(call.params?.[24], 4);
         },
       },
       {
@@ -783,7 +845,8 @@ describe('PostgresStore', () => {
           assert.equal(call.params?.[5], null);
           assert.equal(call.params?.[15], null);
           assert.equal(call.params?.[16], null);
-          assert.equal(call.params?.[17], 3);
+          assert.equal(call.params?.[17], null);
+          assert.equal(call.params?.[24], 3);
         },
       },
       {
@@ -814,6 +877,79 @@ describe('PostgresStore', () => {
     assert.equal(await store.upsertMessage(message()), null);
     assert.equal(client.calls.some(call => /INSERT INTO room_messages/.test(call.sql)), false);
     assert.equal(client.released, true);
+  });
+
+  it('supports Coco recovery queries and sandbox status CAS', async () => {
+    const statusChangedAt = '2026-05-03T00:02:00.000Z';
+    const danglingToolCall = message({
+      id: 'tool-call-1',
+      messageType: 'tool_call',
+      toolCallId: 'tool-1',
+      toolName: 'Shell',
+      toolArgs: { command: 'npm test' },
+      content: 'Shell npm test',
+    });
+    const pool = new ScriptedPool([
+      {
+        rows: [roomRow({ type: 'coco', sandbox_status: 'creating', sandbox_updated_at: statusChangedAt })],
+        assertCall(call) {
+          assert.match(call.sql, /UPDATE rooms/);
+          assert.match(call.sql, /COALESCE\(sandbox_status, 'none'\) = ANY/);
+          assert.deepEqual(call.params, ['room-1', ['none'], 'creating', statusChangedAt]);
+        },
+      },
+      {
+        rows: [
+          roomRow({ id: 'coco-creating', type: 'coco', sandbox_status: 'creating' }),
+          roomRow({ id: 'coco-running', type: 'coco', coco_status: 'running' }),
+        ],
+        assertCall(call) {
+          assert.match(call.sql, /WHERE type = 'coco'/);
+          assert.match(call.sql, /coco_status = 'running'/);
+        },
+      },
+      {
+        rows: [{
+          id: 'tool-call-1',
+          room_id: 'room-1',
+          client_id: 'client-1',
+          content: 'Shell npm test',
+          timestamp: '2026-05-04T00:00:00.000Z',
+          updated_at: null,
+          message_type: 'tool_call',
+          username: null,
+          avatar: null,
+          mime_type: null,
+          status: null,
+          turn_id: null,
+          tool_call_id: 'tool-1',
+          tool_name: 'Shell',
+          tool_args: danglingToolCall.toolArgs,
+          tool_output_preview: null,
+          exit_code: null,
+          is_error: null,
+          ai_model: null,
+          usage: null,
+          cost: null,
+          reply_to: null,
+          ai_stream_owner_id: null,
+          ui_payload: null,
+        }],
+        assertCall(call) {
+          assert.match(call.sql, /call\.message_type = 'tool_call'/);
+          assert.match(call.sql, /result\.message_type = 'tool_result'/);
+        },
+      },
+    ]);
+    const store = new PostgresStore(pool, logger as any);
+
+    assert.deepEqual(await store.compareAndSetRoomSandboxStatus('room-1', ['none'], 'creating', statusChangedAt), room({
+      type: 'coco',
+      sandboxStatus: 'creating',
+      sandboxUpdatedAt: statusChangedAt,
+    }));
+    assert.deepEqual((await store.findInterruptedCocoRooms()).map(item => item.id), ['coco-creating', 'coco-running']);
+    assert.deepEqual(await store.findDanglingToolCalls(), [danglingToolCall]);
   });
 
   it('rolls back append transactions on PostgreSQL errors', async () => {
@@ -875,10 +1011,10 @@ describe('PostgresStore', () => {
       {
         rowCount: 1,
         assertCall(call) {
-          assert.equal(call.params?.[14], JSON.stringify(aiMessage.replyTo));
-          assert.equal(call.params?.[15], JSON.stringify(aiMessage.uiPayload));
-          assert.equal(call.params?.[16], null);
-          assert.equal(call.params?.[17], 0);
+          assert.equal(call.params?.[21], JSON.stringify(aiMessage.replyTo));
+          assert.equal(call.params?.[22], JSON.stringify(aiMessage.uiPayload));
+          assert.equal(call.params?.[23], null);
+          assert.equal(call.params?.[24], 0);
         },
       },
       { rows: [roomRow({ last_activity_at: '2026-05-04T00:00:00.000Z' })] },

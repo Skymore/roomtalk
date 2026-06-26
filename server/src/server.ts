@@ -26,6 +26,17 @@ import { createMediaObjectStorageFromEnv } from './services/mediaObjectStorage';
 import { createAssemblyAIAudioTranscriptionRunner } from './services/audioTranscription';
 import { resolveCorsOrigin } from './services/corsConfig';
 import { createOutboxWorkerFromEnv, OutboxWorker } from './services/outboxWorker';
+import { createCocoAccessControl } from './services/cocoAccessControl';
+import { createCodeAgentRunner } from './services/codeAgentRunner';
+import { CocoSandboxLifecycleService } from './services/cocoSandboxLifecycle';
+import { CocoSessionService } from './services/cocoSessionService';
+import { E2BCocoSandboxService, E2BSandboxDriver } from './services/e2bCocoSandboxService';
+import { createE2BSdkDriver } from './services/e2bSdkDriver';
+import { COCO_RUNNER_SCHEMA_VERSION } from './services/cocoRunnerProtocol';
+import { resolveCocoRuntimeConfig } from './services/cocoRuntimeConfig';
+import { FakeCocoRunnerClient } from './services/fakeCocoRunner';
+import { FakeCocoSandboxService } from './services/fakeCocoSandboxService';
+import { JsonlCocoRunnerClient } from './services/jsonlCocoRunner';
 
 dotenv.config();
 
@@ -37,6 +48,7 @@ const socketLogger = new Logger('SocketIO');
 const routeLogger = new Logger('Routes');
 const openaiLogger = new Logger('OpenAI');
 const outboxLogger = new Logger('OutboxWorker');
+const cocoLogger = new Logger('Coco');
 const mediaStorageLogger = new Logger('MediaStorage');
 const mediaObjectStorage = createMediaObjectStorageFromEnv(mediaStorageLogger);
 const aiStreamOwnerId = resolveAIStreamOwnerId();
@@ -110,6 +122,17 @@ if (PERSISTENCE_STORE === 'postgres') {
   serverLogger.warn('Unknown PERSISTENCE_STORE value, falling back to Redis', { persistenceStore: PERSISTENCE_STORE });
 }
 
+const parsePositiveIntegerEnv = (name: string, fallback: number) => {
+  const value = Number.parseInt(process.env[name] || '', 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+};
+
+const cocoRuntimeConfig = resolveCocoRuntimeConfig(process.env);
+const cocoAccess = createCocoAccessControl({
+  enabled: cocoRuntimeConfig.enabled,
+  allowedClientIds: cocoRuntimeConfig.allowedClientIds,
+});
+
 redisClient.on('error', (err: Error) => {
   redisLogger.error('Redis connection error', { error: err.message, stack: err.stack });
 });
@@ -139,6 +162,68 @@ const io = new Server(server, {
   pingInterval: 25000 // 25秒ping一次
 });
 
+const createE2BDriver = (): E2BSandboxDriver => createE2BSdkDriver({
+  apiKey: process.env.E2B_API_KEY,
+  accessToken: process.env.E2B_ACCESS_TOKEN,
+  domain: process.env.E2B_DOMAIN,
+  apiUrl: process.env.E2B_API_URL,
+  sandboxUrl: process.env.E2B_SANDBOX_URL,
+  requestTimeoutMs: parsePositiveIntegerEnv('E2B_REQUEST_TIMEOUT_MS', 60_000),
+});
+
+if (cocoRuntimeConfig.enabled && cocoRuntimeConfig.sandboxProvider === 'e2b') {
+  cocoLogger.info('E2B sandbox provider selected', { artifactMode: cocoRuntimeConfig.artifactMode });
+}
+
+const cocoSandboxService = cocoRuntimeConfig.enabled && cocoRuntimeConfig.sandboxProvider === 'e2b'
+  ? new E2BCocoSandboxService(createE2BDriver(), {
+    templateId: cocoRuntimeConfig.e2bTemplateId || '',
+    workspace: cocoRuntimeConfig.e2bWorkspace,
+    artifactVersion: cocoRuntimeConfig.artifactVersion,
+    cocoSourceRef: cocoRuntimeConfig.cocoSourceRef,
+    logger: cocoLogger,
+  })
+  : new FakeCocoSandboxService();
+const cocoTurnTimeoutMs = parsePositiveIntegerEnv('COCO_TURN_TIMEOUT_MS', 5 * 60 * 1000);
+const cocoSandboxLifecycle = new CocoSandboxLifecycleService(store, cocoSandboxService, cocoLogger, {
+  sandboxTtlMs: parsePositiveIntegerEnv('COCO_SANDBOX_TTL_MS', 60 * 60 * 1000),
+  turnTimeoutMs: cocoTurnTimeoutMs,
+  creatingStaleMs: parsePositiveIntegerEnv('COCO_CREATING_STALE_MS', 2 * 60 * 1000),
+  maxActiveSandboxes: parsePositiveIntegerEnv('COCO_MAX_ACTIVE_SANDBOXES', Number.POSITIVE_INFINITY),
+  maxActiveSandboxesPerUser: parsePositiveIntegerEnv('COCO_MAX_ACTIVE_SANDBOXES_PER_USER', Number.POSITIVE_INFINITY),
+});
+const fakeCocoToolOutput = [
+  'stdout: hello from Coco fake runner',
+  'stderr: simulated warning for UI coverage',
+  'line '.repeat(260).trim(),
+].join('\n');
+const cocoRunnerClient = cocoRuntimeConfig.runnerClient === 'jsonl' ? new JsonlCocoRunnerClient() : new FakeCocoRunnerClient([
+  { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'status', turnId: 'fake', status: 'starting', message: 'Coco fake runner starting' },
+  { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'fake-ai', delta: 'Coco fake runner received the task.' },
+  { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'fake-tool-1', name: 'Shell', args: { command: 'printf "hello from Coco fake runner\\n"' } },
+  { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'fake-tool-1', name: 'Shell', success: false, output: fakeCocoToolOutput, exitCode: 2, truncated: true },
+  { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'fake-ai', answer: 'Coco fake runner received the task.', sessionId: 'fake-coco-session' },
+], { eventDelayMs: parsePositiveIntegerEnv('COCO_FAKE_RUNNER_EVENT_DELAY_MS', 0) });
+const codeAgentRunner = createCodeAgentRunner(cocoRuntimeConfig.backend, cocoRunnerClient);
+const cocoSessionService = new CocoSessionService(
+  store,
+  io,
+  cocoSandboxLifecycle,
+  cocoSandboxService,
+  codeAgentRunner,
+  cocoLogger,
+  {
+    enabled: cocoRuntimeConfig.enabled,
+    allowedClientIds: cocoRuntimeConfig.allowedClientIds,
+    mode: cocoRuntimeConfig.mode,
+    runnerCommand: cocoRuntimeConfig.runnerCommand,
+    turnTimeoutMs: cocoTurnTimeoutMs,
+    allowedPaths: cocoRuntimeConfig.allowedPaths,
+    runnerEnv: cocoRuntimeConfig.runnerEnv,
+    runnerProviderEnvByProvider: cocoRuntimeConfig.runnerProviderEnvByProvider,
+  }
+);
+
 // 初始化 Redis、PostgreSQL schema 和 Socket.IO 适配器
 const infrastructureReady = (async () => {
   try {
@@ -161,6 +246,7 @@ const infrastructureReady = (async () => {
     }
     await store.clearRealtimeRoomMembers?.();
     await store.failInterruptedStreamingMessages?.('Response interrupted.', { aiStreamOwnerId });
+    await cocoSandboxLifecycle.recoverInterruptedSandboxes();
     
     redisLogger.info('Connected to Redis and Socket.IO adapter initialized', { persistenceStore: activePersistenceStore });
   } catch (err) {
@@ -189,6 +275,8 @@ registerSocketHandlers({
   getAIClientForModel,
   aiStreamOwnerId,
   assemblyAIApiKey,
+  cocoSessionService,
+  cocoAccess,
 });
 
 let outboxWorker: OutboxWorker | null = null;
@@ -208,6 +296,8 @@ if (process.env.OUTBOX_WORKER_ENABLED === 'true') {
         getAIClientForModel,
         aiStreamOwnerId,
         assemblyAIApiKey,
+        cocoSessionService,
+        cocoAccess,
       }),
     },
   });
@@ -232,6 +322,8 @@ registerApiRoutes(app, {
   persistenceStore: activePersistenceStore,
   mediaObjectStorage,
   audioTranscriptionRunner,
+  cocoAccess,
+  cocoMode: cocoRuntimeConfig.mode,
 });
 
 // Catch-all 路由，返回前端应用的入口 HTML 文件（支持前端路由）

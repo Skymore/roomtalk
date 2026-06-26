@@ -116,7 +116,7 @@ export const StickerPicker: React.FC<StickerPickerProps> = ({ onSelect }) => {
   const packs = catalog?.packs ?? [];
   const currentPackId = activePackId ?? packs[0]?.id ?? null;
   const currentPack = packs.find((p) => p.id === currentPackId) ?? packs[0];
-  const groups = currentPack?.groups ?? [];
+  const groups = React.useMemo(() => currentPack?.groups ?? [], [currentPack?.groups]);
   const hasGroups = groups.length > 0;
   const recents = resolve(recentIds);
   const isSearching = query.trim().length > 0;

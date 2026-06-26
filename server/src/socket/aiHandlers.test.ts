@@ -154,11 +154,15 @@ const createHarness = (options: {
   model?: AIModelOption;
   aiClientWrapper?: any;
   messages?: Message[];
+  currentRoom?: Room | null;
+  cocoSessionService?: { startTurn: (...args: any[]) => Promise<unknown> };
 } = {}) => {
   const socket = new FakeSocket();
   const io = new FakeIo();
   const store = {
-    rooms: [room()],
+    rooms: options.currentRoom === undefined
+      ? [room()]
+      : (options.currentRoom ? [options.currentRoom] : []),
     members: new Set(['room-1:client-1']),
     messages: options.messages || [message()],
     appendedMessages: [] as Message[],
@@ -315,6 +319,7 @@ const createHarness = (options: {
       throw new Error('E2E fake AI should not request a real client');
     },
     aiStreamOwnerId: options.aiStreamOwnerId || 'test-stream-owner',
+    cocoSessionService: options.cocoSessionService as any,
   });
 
   return { io, socket, store };
@@ -435,6 +440,52 @@ describe('AI socket handlers', () => {
     assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_end'), false);
     assert.equal(io.roomEmits.some(event => event.event === 'ai_stream_error'), false);
     assert.deepEqual(response, { success: true, messageId: store.upsertedMessages[0].id });
+  });
+
+  it('routes Coco room AI requests to the Coco session service', async () => {
+    const calls: unknown[][] = [];
+    const cocoSessionService = {
+      async startTurn(...args: unknown[]) {
+        calls.push(args);
+        const callback = args[1] as ((response: { success: boolean; messageId?: string }) => void) | undefined;
+        callback?.({ success: true, messageId: 'coco-ai-1' });
+        return { success: true, messageId: 'coco-ai-1' };
+      },
+    };
+    const { socket, store } = createHarness({
+      currentRoom: room({ type: 'coco' }),
+      cocoSessionService,
+    });
+
+    let response: unknown;
+    await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id }, (ack: unknown) => {
+      response = ack;
+    });
+
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0][0], {
+      roomId: 'room-1',
+      clientId: 'client-1',
+      selectedModel,
+      roleName: undefined,
+    });
+    assert.deepEqual(response, { success: true, messageId: 'coco-ai-1' });
+    assert.equal(store.upsertedMessages.length, 0);
+    assert.equal(store.assistantRuns.length, 0);
+    assert.equal(store.outboxEvents.length, 0);
+  });
+
+  it('reports Coco unavailability without falling back to ordinary chat AI', async () => {
+    const { socket, store } = createHarness({ currentRoom: room({ type: 'coco' }) });
+
+    let response: unknown;
+    await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id }, (ack: unknown) => {
+      response = ack;
+    });
+
+    assert.deepEqual(response, { success: false, error: 'Coco is unavailable' });
+    assert.equal(store.upsertedMessages.length, 0);
+    assert.equal(store.assistantRuns.length, 0);
   });
 
   it('executes a queued AI run from the outbox worker path', async () => {
@@ -912,6 +963,24 @@ describe('AI socket handlers', () => {
     assert.deepEqual(response, { success: true, messageId: store.upsertedMessages[0].id });
   });
 
+  it('does not route Coco edit-and-ask through the ordinary chat AI path', async () => {
+    const { socket, store } = createHarness({ currentRoom: room({ type: 'coco' }) });
+
+    let response: unknown;
+    await socket.invoke('edit_message_and_ask_ai', {
+      roomId: 'room-1',
+      messageId: 'message-1',
+      newContent: 'edited prompt',
+      model: selectedModel.id,
+    }, (ack: unknown) => {
+      response = ack;
+    });
+
+    assert.deepEqual(response, { success: false, error: 'Coco edit-and-ask is not supported' });
+    assert.deepEqual(store.editAndTruncateCalls, []);
+    assert.equal(store.upsertedMessages.length, 0);
+  });
+
   it('saves a user message before starting AI with prepared history', async () => {
     const { io, socket, store } = createHarness();
 
@@ -946,6 +1015,49 @@ describe('AI socket handlers', () => {
     assert.ok(aiPlaceholderEventIndex !== -1);
     assert.ok(userMessageEventIndex < aiPlaceholderEventIndex);
     assert.equal(store.upsertedMessages[1].content, expectedE2EFakeContent('fresh prompt'));
+  });
+
+  it('saves a user message before routing Coco ask requests to the Coco session service', async () => {
+    const calls: unknown[][] = [];
+    const cocoSessionService = {
+      async startTurn(...args: unknown[]) {
+        calls.push(args);
+        const callback = args[1] as ((response: { success: boolean; messageId?: string }) => void) | undefined;
+        callback?.({ success: true, messageId: 'coco-ai-2' });
+        return { success: true, messageId: 'coco-ai-2' };
+      },
+    };
+    const { io, socket, store } = createHarness({
+      currentRoom: room({ type: 'coco' }),
+      cocoSessionService,
+    });
+
+    let response: { success: boolean; userMessage?: Message; aiMessageId?: string; aiStarted?: boolean; aiError?: string } | undefined;
+    await socket.invoke('send_message_and_ask_ai', {
+      roomId: 'room-1',
+      content: 'fresh prompt',
+      clientMessageId: 'client-message-1',
+      model: selectedModel.id,
+    }, (ack: { success: boolean; userMessage?: Message; aiMessageId?: string; aiStarted?: boolean; aiError?: string }) => {
+      response = ack;
+    });
+
+    assert.equal(store.appendedMessages.length, 1);
+    assert.equal(store.upsertedMessages.length, 0);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0][0], {
+      roomId: 'room-1',
+      clientId: 'client-1',
+      selectedModel,
+      roleName: undefined,
+    });
+    assert.equal(response?.success, true);
+    assert.equal(response?.userMessage, store.appendedMessages[0]);
+    assert.equal(response?.aiMessageId, 'coco-ai-2');
+    assert.equal(response?.aiStarted, true);
+    assert.equal(io.roomEmits.some(event =>
+      event.event === 'new_message' && (event.args[0] as Message).id === store.appendedMessages[0].id
+    ), true);
   });
 
   it('acknowledges the saved user message when AI startup fails afterward', async () => {

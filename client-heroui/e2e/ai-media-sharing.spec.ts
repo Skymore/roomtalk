@@ -4,6 +4,7 @@ import {
   editMessage,
   expectChatRoom,
   expectMessage,
+  fakeAIResponseText,
   messageItem,
   openRoomFromCard,
   openRoomsPage,
@@ -29,7 +30,7 @@ test.beforeEach(async ({ request }) => {
 
 async function openOwnedRoom(page: Parameters<typeof openRoomsPage>[0], context: Parameters<typeof seedClient>[0], request: Parameters<typeof createRoomViaApi>[0]) {
   const clientId = await seedClient(context);
-  const room = await createRoomViaApi(request, clientId, uniqueName('ai-room'));
+  const room = await createRoomViaApi(request, clientId, shortName('ai-room'));
   await openRoomsPage(page);
   await openRoomFromCard(page, room);
   return room;
@@ -41,7 +42,7 @@ async function askAI(page: Parameters<typeof openRoomsPage>[0], prompt: string) 
   await page.keyboard.insertText(prompt);
   await page.getByRole('button', { name: 'Ask AI' }).click();
   await expectMessage(page, prompt).toBeVisible();
-  await expectMessage(page, `E2E AI response to: ${prompt}`).toBeVisible();
+  await expectMessage(page, fakeAIResponseText(prompt)).toBeVisible();
 }
 
 test('requires both confirmations before switching to a premium model', async ({ page, context, request }) => {
@@ -68,7 +69,7 @@ test('streams a fake AI response and shows cost and cache metadata', async ({ pa
 
   await askAI(page, prompt);
 
-  const aiMessage = messageItem(page, `E2E AI response to: ${prompt}`);
+  const aiMessage = messageItem(page, fakeAIResponseText(prompt));
   await expect(aiMessage).toContainText('DeepSeek V4 Pro');
   await expect(aiMessage).toContainText(/\$0\.000/);
   await expect(aiMessage).toContainText('cache hit 25%');
@@ -77,7 +78,7 @@ test('streams a fake AI response and shows cost and cache metadata', async ({ pa
 test('retries a completed AI response without duplicating the old answer', async ({ page, context, request }) => {
   await openOwnedRoom(page, context, request);
   const prompt = uniqueName('retry-prompt');
-  const responseText = `E2E AI response to: ${prompt}`;
+  const responseText = fakeAIResponseText(prompt);
 
   await askAI(page, prompt);
   const aiMessage = messageItem(page, responseText);
@@ -97,7 +98,7 @@ test('edits a user message and asks AI against the updated text', async ({ page,
   await editMessage(page, originalText, updatedText, true);
 
   await expectMessage(page, originalText).toHaveCount(0);
-  await expectMessage(page, `E2E AI response to: ${updatedText}`).toBeVisible();
+  await expectMessage(page, fakeAIResponseText(updatedText)).toBeVisible();
 });
 
 test('uploads and sends an image message', async ({ page, context, request }) => {
