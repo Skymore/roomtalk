@@ -662,6 +662,8 @@ E2E 默认使用 fake runner：
 - Local validation after the merge:
   - `cd server && npm run build`
   - `cd server && npm test`：382/382 passed
+  - `cd server && npm run smoke:coco:e2b`：未设置 `RUN_COCO_E2B_SMOKE=true` 时按预期跳过
+  - `cd server && RUN_COCO_E2B_SMOKE=true npm run smoke:coco:e2b`：真实 E2B sandbox 创建、JSONL runner、DeepSeek V4 Pro 响应和 sandbox 清理链路通过
   - `cd server && TEST_DATABASE_URL="postgres://roomtalk@127.0.0.1:55432/message_system_e2e" npm run smoke:persistence`
   - `cd client-heroui && npm run lint`
   - `cd client-heroui && npm test -- --run`：253/253 passed
@@ -669,8 +671,8 @@ E2E 默认使用 fake runner：
   - `python -m pytest server/roomtalk_coco_runner/tests`：16/16 passed
   - `cd client-heroui && CI=1 NODE_ENV=test E2E_CLIENT_PORT=3461 E2E_SERVER_PORT=3462 ./node_modules/.bin/playwright test`：28 passed, 1 media-storage-dependent test skipped
   - `cd client-heroui && E2E_DATABASE_URL="postgres://roomtalk@127.0.0.1:55432/message_system_e2e" ./node_modules/.bin/playwright test --config=playwright.postgres.config.ts`：3/3 passed
-- Manual smoke after the merge: an E2E-mode server with Coco enabled successfully exposed `features.coco.mode = "plan"`, created a Coco room through `POST /api/clients/:clientId/rooms`, and returned a Coco workspace snapshot through `GET /api/clients/:clientId/rooms/:roomId/workspace`.
-- Claude Code review could not be completed in this checkpoint because `claude -p` returned `401 Invalid authentication credentials` even though `claude auth status` reported a logged-in Claude Max account.
+- Manual smoke after the merge: an E2E-mode server with Coco enabled successfully exposed `features.coco.mode = "plan"`, created a Coco room through `POST /api/clients/:clientId/rooms`, and returned a Coco workspace snapshot through `GET /api/clients/:clientId/rooms/:roomId/workspace`; the real E2B smoke also created a remote sandbox, streamed runner `status` / `text_delta` / `final` events, and completed with `deepseek-v4-pro`.
+- Claude Code review could not be completed in this checkpoint because `claude -p` returned `401 Invalid authentication credentials` even though `claude auth status` reported a logged-in Claude Max account. The follow-up review attempt after the E2B smoke dotenv entrypoint fix hit the same 401, so this remains an external CLI authentication gap rather than a completed review gate.
 
 后续执行规则：
 
@@ -988,7 +990,7 @@ COCO_MODEL_PROXY_TOKEN=
 - 有真实 sandbox/key 时 real smoke 通过。
 - 无真实 sandbox/key 时测试稳定跳过，UI 入口按 feature flag 禁用。
 - E2B JSONL 启动配置缺少 `E2B_API_KEY` / `E2B_ACCESS_TOKEN` 时服务直接拒绝启动。
-- `cd server && npm run smoke:coco:e2b` 作为真实 E2B/Coco smoke 入口；默认跳过，只有显式 `RUN_COCO_E2B_SMOKE=true` 且凭据齐全才创建真实 sandbox。
+- `cd server && npm run smoke:coco:e2b` 作为真实 E2B/Coco smoke 入口；脚本会读取 `server/.env`，默认跳过，只有显式 `RUN_COCO_E2B_SMOKE=true` 且凭据齐全才创建真实 sandbox。
 - 沙盒内 Coco 不能访问 allowed paths 之外文件。
 - Claude Code Opus 4.7 review 无 blocking/high findings。
 
@@ -1018,5 +1020,5 @@ COCO_MODEL_PROXY_TOKEN=
 - 新增 `GET /api/features?clientId=...`，前端启动后读取 feature flag；读取失败时按 Coco disabled 处理。
 - 创建房间弹窗在 Coco disabled 时隐藏 Coco 类型；Coco running 时锁定同房间输入面板，避免重复提交同一工作区 turn。
 - 回归命令：`cd server && npm test && npm run build`、`cd client-heroui && npm test && npm run lint && npm run check:i18n && npm run build`、`pytest server/roomtalk_coco_runner`、`cd server && npm run smoke:coco:e2b`、`cd client-heroui && npm run test:e2e`。
-- 验收结果：服务端单测 195/195、前端单测 62/62、Python runner 12/12、Playwright E2E 21/21 均通过；`smoke:coco:e2b` 在未设置 `RUN_COCO_E2B_SMOKE=true` 时按预期跳过。
+- 验收结果：服务端单测 195/195、前端单测 62/62、Python runner 12/12、Playwright E2E 21/21 均通过；`smoke:coco:e2b` 在未设置 `RUN_COCO_E2B_SMOKE=true` 时按预期跳过。2026-06-26 merge validation 又补跑了真实 E2B smoke：`RUN_COCO_E2B_SMOKE=true npm run smoke:coco:e2b` 通过，sandbox 使用 `deepseek-v4-pro` 完成 final event。
 - Claude Code Opus 4.7 终审结果：无 blocking/high/medium findings。

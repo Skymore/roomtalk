@@ -1,4 +1,5 @@
 import { Logger } from '../logger';
+import dotenv from 'dotenv';
 import { AIModelOption } from '../types';
 import { DEFAULT_AI_MODEL_ID, createAIModelRegistry } from '../services/aiModels';
 import { COCO_RUNNER_SCHEMA_VERSION } from '../services/cocoRunnerProtocol';
@@ -215,6 +216,7 @@ const parsePositiveMs = (value: string | undefined, fallback: number) => {
 };
 
 if (require.main === module) {
+  dotenv.config();
   const logger = new Logger('CocoE2BSmoke');
   let plan: CocoE2BSmokePlan;
   try {
