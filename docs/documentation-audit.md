@@ -17,6 +17,7 @@ excluded.
 | `DeploymentGuide.md` | Active runbook | Updated to CI-first deployment, existing Dockerfile, current secrets, and non-static pricing guidance. |
 | `部署指南.md` | Active runbook | Chinese deployment guide with the same current constraints. |
 | `docs/postgres-rollout-runbook.md` | Active runbook | Updated with final-sync/write-freeze requirements and PostgreSQL CA options. |
+| `docs/migration-completion-audit.md` | Active audit | Current migration completion evidence and remaining external validation gates. |
 | `docs/media-viewer-gesture-requirements.md` | Active requirements | Added implementation/test status and known coverage gaps. |
 
 ## Historical Or Archival Docs

@@ -210,6 +210,7 @@ Legacy Base64 图片清理可通过 `cd server && npm run migrate:media-to-objec
 - [CLAUDE.md](CLAUDE.md)：精简的 contributor/agent 操作指南。
 - [docs/postgres-rollout-runbook.md](docs/postgres-rollout-runbook.md)：生产 PostgreSQL 切换清单。
 - [docs/postgres-migration-development-summary.zh.md](docs/postgres-migration-development-summary.zh.md)：PostgreSQL 迁移历史复盘。
+- [docs/migration-completion-audit.md](docs/migration-completion-audit.md)：当前迁移完成证据和剩余外部 gate。
 - [docs/room-reliability/README.zh.md](docs/room-reliability/README.zh.md)：房间恢复和房间更新可靠性系列入口。
 - [docs/media-viewer-gesture-requirements.md](docs/media-viewer-gesture-requirements.md)：当前媒体查看器手势需求。
 - [docs/mobile-keyboard-viewport-fix.zh.md](docs/mobile-keyboard-viewport-fix.zh.md)：iOS 键盘视口修复记录。
