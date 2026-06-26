@@ -647,7 +647,7 @@ E2E 默认使用 fake runner：
 | Phase 2：类型、迁移和持久化 | 完成 | `275c2f3 feat: add coco persistence primitives` | 新字段、migration、store 原语和 recovery 基础已完成 |
 | Phase 3：沙盒生命周期 | 完成 | `fdf906c feat: add coco sandbox lifecycle` | fake/E2B sandbox lifecycle、CAS、recovery、destroy 路径已完成 |
 | Phase 4：Coco ask_ai 主链路 | 完成 | `cbce88c feat: route coco ask ai turns` | Coco 房间 ask_ai 主链路、运行锁、事件持久化和广播已完成 |
-| Phase 5：前端 Coco UI | 完成 | `f4ea991 feat: add coco room ui` | 创建入口、状态展示、工具消息组件、fake runner E2E spec 和移动端适配已完成；完整浏览器 E2E 运行受当前 Codex 沙箱本机网络限制阻塞 |
+| Phase 5：前端 Coco UI | 完成 | `f4ea991 feat: add coco room ui` | 创建入口、状态展示、工具消息组件、fake runner E2E spec 和移动端适配已完成；2026-06-26 merge validation 已补跑完整浏览器 E2E |
 | Phase 6：真实 Coco runner 和沙盒镜像 | 完成 | `f34f0df`、`e02efd6`、`daf6bee`、`dcc6621`、`d4cdc2d`、`01771bf`、`94550bf`、`e2c5398` | runner adapter、JSONL client、runtime guardrails、artifact、model access contract、E2B SDK driver 和 smoke 入口已完成 |
 | Phase 7：灰度上线和回滚 | 完成 | `3a5cc32 feat: add coco rollout controls` | feature flag、allowlist、前后端创建/加入/详情查询入口阻断、Coco 运行中输入锁定、回归测试和 Claude review |
 
@@ -921,14 +921,16 @@ COCO_MODEL_PROXY_TOKEN=
 4. `acceptEdits` 不等于无限制宿主执行；真实 Shell 只能在沙盒内运行，且不能注入 RoomTalk 服务端 secrets。
 5. 真实沙盒前必须固定 Coco 版本来源，不能生产依赖开发机路径。
 
-### 16.2 仍需在 Phase 6 前关闭的问题
+### 16.2 Phase 6 前置问题关闭记录
 
-1. `roomtalk_coco_runner` 的代码最终放在 RoomTalk repo 还是 Coco repo：Phase 6 实现前必须确定。
-2. Coco 是否直接增加 `on_tool_result` callback，还是 runner 从现有 `tool_log` 衍生工具结果事件：Phase 6 实现前必须确定。
-3. 第一个真实沙盒模板预装范围：Node、Python、Git 是最小集，是否还要预装常见包管理器缓存需要按 smoke 结果决定。
-4. 文件上传到 Coco workspace 是否进入 MVP：Phase 5/6 不默认做，除非另开独立验收。
-5. 沙盒过期后默认自动重建，还是要求用户手动 Reset：Phase 6 按 TTL smoke 和成本策略定。
-6. Shell 是否需要 RoomTalk command approval：真实生产打开前必须决策；本地/测试沙盒可以先用 allowlist 和 scoped key 限制。
+这些问题曾经是 Phase 6 前的开放项；当前 Phase 6 已完成，处理结果如下：
+
+1. `roomtalk_coco_runner` 放在 RoomTalk repo 内维护，用 JSONL adapter 包装现有 Coco 能力。
+2. Phase 6 MVP 通过 runner adapter 从现有 Coco 结果衍生工具事件；实时 `on_tool_result` 仍可作为 Coco 侧增强，不阻塞当前协议。
+3. 真实沙盒模板以固定 artifact 为准，生产 E2B JSONL 模式要求 `COCO_ARTIFACT_VERSION` 和 `COCO_SOURCE_REF`。
+4. 文件上传到 Coco workspace 未进入当前 MVP，后续如需要应另开独立验收。
+5. 沙盒生命周期使用 TTL、reconnect/recreate 和 startup recovery；销毁/重建行为由 RoomTalk sandbox lifecycle service 管理。
+6. Shell/write 能力不能注入长效 RoomTalk/provider secrets；生产写能力要求 model proxy 或 scoped-key 策略，Coco rollout 继续由 flag/allowlist 控制。
 
 ---
 
@@ -967,7 +969,7 @@ COCO_MODEL_PROXY_TOKEN=
 - 已通过：`server npm test`（158 tests）、`server npm run build`。
 - 已通过：`client-heroui npm test`（57 tests）、`npm run lint`、`npm run check:i18n`、`npm run build`。
 - 已通过：`npx playwright test --list e2e/coco-flows.spec.ts`，确认新增 fake Coco E2E spec 可发现，共 2 条链路。
-- 未在当前 Codex 沙箱内完成实际浏览器 E2E 执行：沙箱无法连接本机 Redis/localhost，系统环境提升权限又被平台额度限制拒绝。代码层已保留可运行命令：`E2E_CLIENT_PORT=3421 E2E_SERVER_PORT=3422 npm run test:e2e -- e2e/coco-flows.spec.ts`。
+- 当时未在 Codex 沙箱内完成实际浏览器 E2E 执行：沙箱无法连接本机 Redis/localhost，系统环境提升权限又被平台额度限制拒绝。该缺口已在 2026-06-26 merge validation 中补跑完整默认 E2E 和 Coco desktop/mobile E2E。
 - Claude Code Opus 4.7 review 已完成三轮：第一轮指出图标、ack、错误提示和 E2E 断言问题；修复后复审无 blocking/high；最终窄复审无剩余 findings。
 
 ### Step 3：Phase 6 真实 Coco runner 和沙盒镜像
