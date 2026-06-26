@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "artifactName": "roomtalk-coco",
+  "artifactVersion": "roomtalk-coco-2026-05-22-4f4ecc9",
+  "pythonVersion": "3.12",
+  "baseImage": {
+    "name": "python",
+    "tag": "3.12-slim-bookworm",
+    "digest": "sha256:42ada43c4265e1ed6db62ad8df62af99a4abb9a9d49622032522ac76efb0bcef"
+  },
+  "coco": {
+    "packageName": "coco",
+    "packageVersion": "0.1.3a0",
+    "sourceRef": "4f4ecc99589c68cffcb150b6a2df9f55144cc2d1",
+    "developmentLocalPath": "/Users/sky/projects/coco"
+  },
+  "runner": {
+    "packageName": "roomtalk-coco-runner",
+    "packageVersion": "0.1.0",
+    "sourcePath": "server/roomtalk_coco_runner",
+    "command": "python -m roomtalk_coco_runner"
+  },
+  "image": {
+    "dockerfile": "ops/coco-sandbox/Dockerfile",
+    "requirementsLock": "ops/coco-sandbox/requirements.lock",
+    "workspace": "/workspace",
+    "cocoInstallPath": "/opt/coco",
+    "runnerInstallPath": "/opt/roomtalk_coco_runner"
+  }
+}

@@ -97,6 +97,7 @@ interface MessageInputAIControlsProps {
   defaultAIModel: string;
   isSending: boolean;
   isAiProcessing: boolean;
+  isInputLocked?: boolean;
   canPost: boolean;
   isMacOS: boolean;
   currentInputText: string;
@@ -112,6 +113,7 @@ interface MessageInputAIControlsProps {
   onDeleteRole: (roleId: string) => void;
   onAskAI: () => void;
   onSend: () => void;
+  isCodeAgentRoom?: boolean;
 }
 
 export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
@@ -123,6 +125,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   defaultAIModel,
   isSending,
   isAiProcessing,
+  isInputLocked = false,
   canPost,
   isMacOS,
   currentInputText,
@@ -138,6 +141,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   onDeleteRole,
   onAskAI,
   onSend,
+  isCodeAgentRoom = false,
 }) => {
   const { t } = useTranslation();
   const [isMobileViewport, setIsMobileViewport] = React.useState(false);
@@ -148,6 +152,9 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   const [premiumConfirmationStep, setPremiumConfirmationStep] = React.useState<1 | 2>(1);
   const pendingPremiumModel = aiModels.find(model => model.id === pendingPremiumModelId);
   const selectedModel = aiModels.find(model => model.id === (selectedAIModel || defaultAIModel));
+  const hasInputContent = currentInputText.trim().length > 0 || imageCount > 0;
+  const isControlLocked = isSending || isAiProcessing || isInputLocked || !canPost;
+  const askActionLabel = isCodeAgentRoom ? t('runAgent') : t('askAI');
   const compactItemClassNames = {
     base: "w-full px-2 py-2",
     title: "text-xs font-medium leading-4 text-[#141413] dark:text-[#faf9f5]",
@@ -239,7 +246,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               offset: 8,
               containerPadding: 12,
             }}
-            isDisabled={isSending || isAiProcessing || !canPost}
+            isDisabled={isControlLocked}
           >
             {roles.map((role) => (
               <SelectItem
@@ -274,7 +281,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               offset: 8,
               containerPadding: 12,
             }}
-            isDisabled={isSending || isAiProcessing || !canPost}
+            isDisabled={isControlLocked}
             startContent={<Icon icon="lucide:brain-circuit" className="h-3.5 w-3.5 sm:h-4 sm:w-4" />}
             renderValue={() => (
               <span className="flex min-w-0 items-center gap-1.5">
@@ -326,18 +333,18 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
         </div>
 
         <div className="flex flex-shrink-0 justify-end gap-1 sm:gap-2">
-          <HoverTooltip content={`${t('askAI')} (${isMacOS ? 'Command' : 'Ctrl'}+Enter)`} placement="top">
+          <HoverTooltip content={`${askActionLabel} (${isMacOS ? 'Command' : 'Ctrl'}+Enter)`} placement="top">
             <Button
               color={selectedRole.color}
               size="sm"
               onPress={onAskAI}
-              isDisabled={isSending || isAiProcessing || !canPost}
-              aria-label={t('askAI')}
+              isDisabled={isControlLocked}
+              aria-label={askActionLabel}
               className="relative !h-7 !w-7 !min-w-7 overflow-hidden rounded-full bg-[#30302e] px-0 text-[#faf9f5] shadow-[0_0_0_1px_rgba(48,48,46,0.7)] dark:bg-[#faf9f5] dark:text-[#141413] dark:shadow-[0_0_0_1px_rgba(250,249,245,0.7)] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"
             >
               <span className={`flex items-center justify-center gap-1.5 ${isAiProcessing ? 'opacity-0' : 'opacity-100'}`}>
                 <Icon icon={selectedRole.icon} className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                <span className="hidden sm:inline">{t('askAI')}</span>
+                <span className="hidden sm:inline">{askActionLabel}</span>
               </span>
               {isAiProcessing && (
                 <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
@@ -353,7 +360,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               onClick={onSend}
               color="primary"
               size="sm"
-              isDisabled={isSending || isAiProcessing || !canPost || (!currentInputText.trim() && imageCount === 0)}
+              isDisabled={isControlLocked || !hasInputContent}
               aria-label={t('send')}
               className="relative !h-7 !w-7 !min-w-7 overflow-hidden rounded-full bg-[#c96442] px-0 text-[#faf9f5] shadow-[0_0_0_1px_rgba(201,100,66,0.7)] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"
             >

@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback, useImperativeHandle } from 'react';
 import { Icon } from '@iconify/react';
-import { getMediaDownloadUrl, getRoomMessagesForExport, requestAIResponse, requestEditMessageAndAIResponse, socket } from '../utils/socket';
+import { clientId, getMediaDownloadUrl, getRoomMessagesForExport, requestAIResponse, requestEditMessageAndAIResponse, socket } from '../utils/socket';
 import { MessageItem, preloadMarkdownContent } from './MessageItem';
 import { Message, Room, RoomPermissions } from '../utils/types';
 import { readMemoryRoomMessageWindow } from '../utils/messageHistoryCache';
@@ -22,10 +22,13 @@ import {
   truncateBeforeMessage,
 } from '../utils/messageState';
 import { useRoomMessageEvents } from '../hooks/useRoomMessageEvents';
+import { CodeAgentMode } from '../utils/codeAgent';
+import { CodeAgentWorkspaceSnapshot, fetchCodeAgentWorkspaceSnapshot } from '../utils/cocoWorkspace';
 
 // Import your new modals
 import { DeleteConfirmationModal } from './DeleteConfirmationModal';
 import { EditMessageModal } from './EditMessageModal';
+import { CodeAgentWorkspacePanel } from './CodeAgentWorkspacePanel';
 
 const LOAD_MORE_MESSAGE_COUNT = 80;
 
@@ -35,11 +38,14 @@ const LOAD_MORE_MESSAGE_COUNT = 80;
 
 interface MessageListProps {
   roomId: string;
-  room?: Pick<Room, 'id' | 'name'>;
-  onReply: (message: Message) => void;
-  roomPermissions: RoomPermissions | null;
+  room?: Room;
+  onReply?: (message: Message) => void;
+  roomPermissions?: RoomPermissions | null;
   bottomInsetPx?: number;
   onScrollButtonVisibilityChange?: (isVisible: boolean) => void;
+  presentation?: 'chat' | 'code-agent';
+  currentRoom?: Room;
+  codeAgentMode?: CodeAgentMode;
 }
 
 export interface MessageListHandle {
@@ -52,10 +58,13 @@ export interface MessageListHandle {
 export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
   roomId,
   room,
-  onReply,
-  roomPermissions,
+  onReply = () => {},
+  roomPermissions = null,
   bottomInsetPx = 16,
   onScrollButtonVisibilityChange,
+  presentation = 'chat',
+  currentRoom,
+  codeAgentMode = 'plan',
 }, ref) => {
   const { t } = useTranslation();
   // generate a stable ID for the scroll container
@@ -82,6 +91,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const isNearBottomRef = useRef(true);
   const preserveScrollRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
   const pendingScrollFrameRef = useRef<number | null>(null);
+  const workspaceFetchAbortRef = useRef<AbortController | null>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
   // State for modals
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -89,6 +99,11 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [messageToEdit, setMessageToEdit] = useState<Message | null>(null);
   const [sessionCostUsd, setSessionCostUsd] = useState<number | null>(null);
+  const [workspaceSnapshot, setWorkspaceSnapshot] = useState<CodeAgentWorkspaceSnapshot | null>(null);
+  const [isWorkspaceRefreshing, setIsWorkspaceRefreshing] = useState(false);
+  const [workspaceRefreshError, setWorkspaceRefreshError] = useState<string | null>(null);
+  const codeAgentRoom = currentRoom || (presentation === 'code-agent' ? room : undefined);
+  const currentRoomId = codeAgentRoom?.id;
 
   const updateMessages = useCallback((updater: React.SetStateAction<Message[]>) => {
     setMessages(prev => {
@@ -189,8 +204,52 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       if (pendingScrollFrameRef.current !== null && typeof cancelAnimationFrame === 'function') {
         cancelAnimationFrame(pendingScrollFrameRef.current);
       }
+      workspaceFetchAbortRef.current?.abort();
     };
   }, []);
+
+  const refreshWorkspaceSnapshot = useCallback(async () => {
+    if (presentation !== 'code-agent' || !currentRoomId) {
+      return;
+    }
+
+    workspaceFetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    workspaceFetchAbortRef.current = controller;
+    setIsWorkspaceRefreshing(true);
+    setWorkspaceRefreshError(null);
+
+    try {
+      const snapshot = await fetchCodeAgentWorkspaceSnapshot(clientId, currentRoomId, { signal: controller.signal });
+      if (!controller.signal.aborted) {
+        setWorkspaceSnapshot(snapshot);
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        console.error('Failed to refresh code-agent workspace snapshot:', error);
+        setWorkspaceRefreshError(error instanceof Error ? error.message : 'Failed to load workspace snapshot');
+      }
+    } finally {
+      if (workspaceFetchAbortRef.current === controller) {
+        workspaceFetchAbortRef.current = null;
+        setIsWorkspaceRefreshing(false);
+      }
+    }
+  }, [currentRoomId, presentation]);
+
+  useEffect(() => {
+    if (presentation !== 'code-agent' || !currentRoomId) {
+      setWorkspaceSnapshot(null);
+      setWorkspaceRefreshError(null);
+      return;
+    }
+
+    void refreshWorkspaceSnapshot();
+
+    return () => {
+      workspaceFetchAbortRef.current?.abort();
+    };
+  }, [currentRoomId, presentation, refreshWorkspaceSnapshot]);
 
   // Warm the lazily-loaded markdown chunk on mount so the first message renders
   // as markdown immediately instead of flashing plain text. The component
@@ -449,6 +508,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
 
   return (
     <>
+      {presentation !== 'code-agent' && (
       <div className="absolute right-3 top-3 z-20">
         <div className="flex items-center gap-1.5">
           <Dropdown placement="bottom-end">
@@ -479,6 +539,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
           </div>
         </div>
       </div>
+      )}
       <div
         id={scrollContainerId}
         data-testid="message-list-scroll"
@@ -487,6 +548,18 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
         onScroll={handleScroll}
       >
         <div ref={contentRef} data-testid="message-list-content" className="flex min-h-full flex-col">
+          {presentation === 'code-agent' && codeAgentRoom && (
+            <CodeAgentWorkspacePanel
+              room={codeAgentRoom}
+              messages={messages}
+              mode={codeAgentMode}
+              sessionCostUsd={sessionCostUsd ?? 0}
+              workspaceSnapshot={workspaceSnapshot}
+              isRefreshingWorkspace={isWorkspaceRefreshing}
+              workspaceRefreshError={workspaceRefreshError}
+              onRefreshWorkspace={refreshWorkspaceSnapshot}
+            />
+          )}
           {hasMoreMessages && (
             <div className="mb-3 flex justify-center">
               <button

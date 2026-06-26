@@ -22,6 +22,7 @@ import { getVideoPreviewUrl } from "../utils/videoPreview";
 import { buildMediaFilename, saveUrlAsFile } from "../utils/mediaDownload";
 import { A2UIRenderer } from "./A2UIRenderer";
 import { getRoomAIRequestSettings } from "../utils/aiRequestSettings";
+import { CocoToolMessage } from './CocoToolMessage';
 
 interface MessageItemProps {
   message: Message;
@@ -259,6 +260,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const isVideo = isMedia && mediaKind === "video";
   const isFile = isMedia && mediaKind === "file";
   const isSticker = message.messageType === "sticker";
+  const isCocoEvent = message.messageType === 'tool_call' || message.messageType === 'tool_result' || message.messageType === 'sandbox_status';
   const stickerUrl = useStickerUrl(isSticker ? message.content : undefined);
   const stickerName = useStickerName(isSticker ? message.content : undefined);
   const isText = message.messageType === "text";
@@ -716,6 +718,16 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     }
     return "default";
   };
+
+  if (isCocoEvent) {
+    return (
+      <div className="flex w-full justify-center px-1 py-1">
+        <div className="w-full max-w-4xl">
+          <CocoToolMessage message={message} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

@@ -30,6 +30,8 @@ import { generateRandomName } from "../utils/userProfile";
 import { getStoredRoom, getStoredUsername, getStoredView, saveCurrentRoom, saveCurrentView, saveUsername, AppView } from "../utils/appPersistence";
 import { buildRoomShareUrl, getRoomMemberUpdate, isNewerRoom, pickNewerRoom, sortRoomsByLastActivityDesc, upsertRoom } from "../utils/roomState";
 import { getNextPostingBoundaryDelayMs } from "../utils/postingSchedule";
+import { FALLBACK_FEATURE_FLAGS, fetchFeatureFlags, FeatureFlags } from "../utils/features";
+import { getCodeAgentBackend, getCodeAgentMode } from "../utils/codeAgent";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { SettingsView } from "../components/SettingsView";
@@ -38,6 +40,7 @@ import { BottomNav } from "../components/BottomNav";
 import { DesktopSidebar } from "../components/DesktopSidebar";
 import { WelcomeView } from "../components/WelcomeView";
 import { ChatRoomView } from "../components/ChatRoomView";
+import { CodeAgentRoomView } from "../components/CodeAgentRoomView";
 import { StatusMessage } from "../components/StatusMessage";
 
 const isDesktopLayout = () => (
@@ -102,6 +105,7 @@ export const MessagePage: React.FC = () => {
   const [memberCount, setMemberCount] = useState<number | null>(null);
   // 添加用户名状态
   const [username, setUsername] = useState<string>("");
+  const [featureFlags, setFeatureFlags] = useState<FeatureFlags>(FALLBACK_FEATURE_FLAGS);
   // 是否显示修改用户名弹窗
   const [showEditUsername, setShowEditUsername] = useState<boolean>(false);
 
@@ -129,6 +133,41 @@ export const MessagePage: React.FC = () => {
       }
       if (reconnectIndicatorTimerRef.current !== null) {
         window.clearTimeout(reconnectIndicatorTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const retryDelaysMs = [0, 1000, 3000];
+
+    const loadFeatureFlags = (attempt = 0) => {
+      fetchFeatureFlags(clientId)
+        .then((flags) => {
+          if (!cancelled) {
+            setFeatureFlags(flags);
+          }
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          const nextDelay = retryDelaysMs[attempt + 1];
+          if (nextDelay !== undefined) {
+            retryTimer = setTimeout(() => loadFeatureFlags(attempt + 1), nextDelay);
+            return;
+          }
+
+          console.error("Failed to load feature flags:", error);
+          setFeatureFlags(FALLBACK_FEATURE_FLAGS);
+        });
+    };
+
+    loadFeatureFlags();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
       }
     };
   }, []);
@@ -915,6 +954,7 @@ export const MessagePage: React.FC = () => {
               handleRenameRoom={handleRenameRoom}
               clientId={clientId}
               username={username}
+              isCocoEnabled={featureFlags.coco.enabled}
             />
           </div>
         );
@@ -945,8 +985,39 @@ export const MessagePage: React.FC = () => {
             changeLanguage={changeLanguage}
           />
         );
-      case "chat":
-        return currentRoom ? (
+      case "chat": {
+        if (!currentRoom) {
+          return <WelcomeView onEnterRooms={() => setView("rooms")} />;
+        }
+
+        const codeAgentBackend = getCodeAgentBackend(currentRoom);
+        if (codeAgentBackend) {
+          return (
+            <CodeAgentRoomView
+              currentRoom={currentRoom}
+              memberCount={memberCount}
+              isRestoringRoom={isRestoringRoom || isReconnecting}
+              onRoomUpdated={applyServerRoom}
+              username={username}
+              clientId={clientId}
+              backend={codeAgentBackend}
+              mode={getCodeAgentMode(featureFlags)}
+              handleCopyToClipboard={handleCopyToClipboard}
+              handleShareRoom={handleShareRoom}
+              handleToggleSave={handleToggleSave}
+              handleLeaveRoom={handleLeaveRoom}
+              isRoomSaved={isRoomSavedById}
+              setView={setView}
+              clearRoomUrlParam={clearRoomUrlParam}
+              handleClearChatMessages={handleClearChatMessages}
+              handleDeleteRoom={handleDeleteRoom}
+              handleRenameRoom={handleRenameRoom}
+              roomPermissions={roomPermissions}
+            />
+          );
+        }
+
+        return (
           <ChatRoomView
             currentRoom={currentRoom}
             memberCount={memberCount}
@@ -966,9 +1037,8 @@ export const MessagePage: React.FC = () => {
             handleRenameRoom={handleRenameRoom}
             roomPermissions={roomPermissions}
           />
-        ) : (
-          <WelcomeView onEnterRooms={() => setView("rooms")} />
         );
+      }
       default:
         return <WelcomeView onEnterRooms={() => setView("rooms")} />;
     }
@@ -997,6 +1067,7 @@ export const MessagePage: React.FC = () => {
           onDeleteRoom={handleDeleteRoom}
           onUnsaveRoom={handleUnsaveRoom}
           onRenameRoom={handleRenameRoom}
+          isCocoEnabled={featureFlags.coco.enabled}
         />
 
         {/* 主内容区域， flex-1 使其填充剩余空间，overflow-hidden 避免双重滚动条 */}

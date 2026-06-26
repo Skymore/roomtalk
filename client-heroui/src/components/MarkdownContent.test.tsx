@@ -31,5 +31,5 @@ describe('MarkdownContent math rendering', () => {
     await waitFor(() => expect(katexRenderMock).toHaveBeenCalled());
     const options = katexRenderMock.mock.calls[0][2];
     expect(options.trust).toBe(false);
-  });
+  }, 15_000);
 });

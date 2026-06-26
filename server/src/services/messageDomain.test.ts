@@ -9,6 +9,7 @@ import {
   createRoomRecord,
   createUserMessage,
   deleteMessageFromHistory,
+  validateRoomNameInput,
 } from './messageDomain';
 import { Message } from '../types';
 
@@ -36,6 +37,27 @@ describe('message domain', () => {
       lastActivityAt: at.toISOString(),
       creatorId: 'client-1',
     });
+  });
+
+  it('initializes Coco room lifecycle fields when requested', () => {
+    const room = createRoomRecord({
+      roomId: 'coco-1',
+      name: 'Coco',
+      creatorId: 'client-1',
+      type: 'coco',
+      now: at,
+    });
+
+    assert.equal(room.type, 'coco');
+    assert.equal(room.sandboxStatus, 'none');
+    assert.equal(room.sandboxUpdatedAt, at.toISOString());
+    assert.equal(room.cocoStatus, 'idle');
+  });
+
+  it('validates room names consistently for create and rename flows', () => {
+    assert.deepEqual(validateRoomNameInput('  General  '), { ok: true, name: 'General' });
+    assert.deepEqual(validateRoomNameInput(''), { ok: false, error: 'Room name is required' });
+    assert.deepEqual(validateRoomNameInput('x'.repeat(21)), { ok: false, error: 'Room name cannot exceed 20 characters' });
   });
 
   it('creates consistent room member events', () => {

@@ -10,7 +10,7 @@ import {
 } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
-import { Room, RoomRenameHandler } from '../utils/types';
+import { Room, RoomRenameHandler, RoomType } from '../utils/types';
 import { createRoom } from '../utils/socket';
 import { buildRoomShareUrl, validateRoomName } from '../utils/roomState';
 import { RoomCard } from './RoomCard';
@@ -27,13 +27,15 @@ interface RoomListProps {
   handleRenameRoom: RoomRenameHandler;
   clientId: string;
   username: string;
+  isCocoEnabled: boolean;
 }
 
-export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, onRoomSelect, onRoomSelectById, handleDeleteRoom, handleRenameRoom, clientId, username }) => {
+export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, onRoomSelect, onRoomSelectById, handleDeleteRoom, handleRenameRoom, clientId, username, isCocoEnabled }) => {
   const { t } = useTranslation();
   const { isOpen, onOpen, onClose } = useDisclosure();
   const [newRoomName, setNewRoomName] = useState('');
   const [newRoomDescription, setNewRoomDescription] = useState('');
+  const [newRoomType, setNewRoomType] = useState<RoomType>('chat');
   const [isCreating, setIsCreating] = useState(false);
   const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null);
   const [copiedRoomId, setCopiedRoomId] = useState<string | null>(null);
@@ -41,6 +43,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
   const [roomToDelete, setRoomToDelete] = useState<Room | null>(null);
   const [roomToRename, setRoomToRename] = useState<Room | null>(null);
   const [nameError, setNameError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
   const copyFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const {
     isOpen: isDeleteConfirmOpen,
@@ -88,15 +91,22 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
     }
 
     setNameError(null);
+    setCreateError(null);
     setIsCreating(true);
     try {
-      const roomId = await createRoom(validation.name, newRoomDescription, options.password, options.postingSchedule);
+      const roomId = await createRoom(validation.name, newRoomDescription, {
+        password: options.password,
+        postingSchedule: options.postingSchedule,
+        type: isCocoEnabled ? (options.type || newRoomType) : 'chat',
+      });
       setNewRoomName('');
       setNewRoomDescription('');
+      setNewRoomType('chat');
       onClose();
       onRoomSelectById(roomId as string);
     } catch (error) {
       console.error('Error creating room:', error);
+      setCreateError(error instanceof Error ? error.message : t('createRoomFailed'));
     } finally {
       setIsCreating(false);
     }
@@ -112,7 +122,9 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
   const handleOpenCreateModal = () => {
     setNewRoomName(`${username}'s Room`);
     setNewRoomDescription('');
+    setNewRoomType('chat');
     setNameError(null);
+    setCreateError(null);
     onOpen();
   };
 
@@ -149,6 +161,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
   const handleRoomNameChange = (value: string) => {
     setNewRoomName(value);
     setNameError(null);
+    setCreateError(null);
   };
 
   const createModal = (
@@ -157,10 +170,14 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
       onClose={onClose}
       roomName={newRoomName}
       roomDescription={newRoomDescription}
+      roomType={newRoomType}
       nameError={nameError}
+      createError={createError}
       isCreating={isCreating}
+      isCocoEnabled={isCocoEnabled}
       onRoomNameChange={handleRoomNameChange}
       onRoomDescriptionChange={setNewRoomDescription}
+      onRoomTypeChange={setNewRoomType}
       onCreate={handleCreateRoom}
     />
   );

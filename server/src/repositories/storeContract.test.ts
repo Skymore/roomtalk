@@ -66,6 +66,10 @@ class MemoryRedis {
     return Array.from(this.hash(key).keys());
   }
 
+  async hVals(key: string) {
+    return Array.from(this.hash(key).values());
+  }
+
   async rPush(key: string, value: string | string[]) {
     const list = this.lists.get(key) || [];
     if (Array.isArray(value)) {
@@ -425,6 +429,14 @@ class MemoryRedis {
       return [1, 1, list.length, JSON.stringify(updatedRoom)];
     }
 
+    if (script.includes('return { 1, #ARGV - 1 }')) {
+      const [, messageKey] = options.keys;
+      const [roomId, ...messages] = options.arguments;
+      if (!this.hash('rooms').has(roomId)) return [0, 0];
+      this.lists.set(messageKey, messages);
+      return [1, messages.length];
+    }
+
     const [, messageKey] = options.keys;
     const [roomId, lastActivityAt, ...messages] = options.arguments;
     const updatedRoom = this.updateRoomActivity(roomId, lastActivityAt, false);
@@ -452,6 +464,12 @@ type RoomRow = {
   message_version?: number;
   room_version?: number;
   updated_at?: string;
+  type?: Room['type'] | null;
+  sandbox_id?: string | null;
+  sandbox_status?: Room['sandboxStatus'] | null;
+  sandbox_updated_at?: string | null;
+  coco_session_id?: string | null;
+  coco_status?: Room['cocoStatus'] | null;
 };
 
 type MessageRow = {
@@ -466,6 +484,13 @@ type MessageRow = {
   avatar: unknown;
   mime_type: string | null;
   status: Message['status'] | null;
+  turn_id?: string | null;
+  tool_call_id?: string | null;
+  tool_name?: string | null;
+  tool_args?: unknown;
+  tool_output_preview?: string | null;
+  exit_code?: number | null;
+  is_error?: boolean | null;
   ai_model: unknown;
   usage: unknown;
   cost: unknown;
@@ -553,29 +578,56 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
     }
 
     if (/INSERT INTO rooms/.test(compactSql)) {
-      const [id, name, description, createdAt, lastActivityAt, creatorId] = params.map(String);
-      const existing = this.rooms.get(id);
+      const [
+        id,
+        name,
+        description,
+        createdAt,
+        lastActivityAt,
+        creatorId,
+        roomType,
+        sandboxId,
+        sandboxStatus,
+        sandboxUpdatedAt,
+        cocoSessionId,
+        cocoStatus,
+        shouldUpdateType,
+      ] = params;
+      const roomId = String(id);
+      const existing = this.rooms.get(roomId);
       const saved: RoomRow = existing
         ? {
           ...existing,
-          name,
-          description,
-          last_activity_at: latest(existing.last_activity_at, lastActivityAt),
+          name: String(name),
+          description: description === null || description === undefined ? null : String(description),
+          last_activity_at: latest(existing.last_activity_at, String(lastActivityAt)),
+          type: shouldUpdateType ? roomType as Room['type'] : existing.type,
+          sandbox_id: sandboxId === null || sandboxId === undefined ? existing.sandbox_id : String(sandboxId),
+          sandbox_status: sandboxStatus === null || sandboxStatus === undefined ? existing.sandbox_status : sandboxStatus as Room['sandboxStatus'],
+          sandbox_updated_at: sandboxUpdatedAt === null || sandboxUpdatedAt === undefined ? existing.sandbox_updated_at : String(sandboxUpdatedAt),
+          coco_session_id: cocoSessionId === null || cocoSessionId === undefined ? existing.coco_session_id : String(cocoSessionId),
+          coco_status: cocoStatus === null || cocoStatus === undefined ? existing.coco_status : cocoStatus as Room['cocoStatus'],
           room_version: (existing.room_version || 0) + 1,
           updated_at: new Date().toISOString(),
         }
         : {
-          id,
-          name,
-          description,
-          created_at: createdAt,
-          last_activity_at: lastActivityAt,
-          creator_id: creatorId,
+          id: roomId,
+          name: String(name),
+          description: description === null || description === undefined ? null : String(description),
+          created_at: String(createdAt),
+          last_activity_at: String(lastActivityAt),
+          creator_id: String(creatorId),
           message_version: 0,
+          type: roomType as Room['type'],
+          sandbox_id: sandboxId === null || sandboxId === undefined ? null : String(sandboxId),
+          sandbox_status: sandboxStatus === null || sandboxStatus === undefined ? null : sandboxStatus as Room['sandboxStatus'],
+          sandbox_updated_at: sandboxUpdatedAt === null || sandboxUpdatedAt === undefined ? null : String(sandboxUpdatedAt),
+          coco_session_id: cocoSessionId === null || cocoSessionId === undefined ? null : String(cocoSessionId),
+          coco_status: cocoStatus === null || cocoStatus === undefined ? null : cocoStatus as Room['cocoStatus'],
           room_version: 1,
           updated_at: new Date().toISOString(),
         };
-      this.rooms.set(id, saved);
+      this.rooms.set(roomId, saved);
       return { rows: [saved] as T[], rowCount: 1 };
     }
 
@@ -649,6 +701,13 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         avatar,
         mimeType,
         status,
+        turnId,
+        toolCallId,
+        toolName,
+        toolArgs,
+        toolOutputPreview,
+        exitCode,
+        isError,
         aiModel,
         usage,
         cost,
@@ -672,6 +731,13 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         avatar: jsonValue(avatar),
         mime_type: mimeType === null || mimeType === undefined ? null : String(mimeType),
         status: status === null || status === undefined ? null : status as Message['status'],
+        turn_id: turnId === null || turnId === undefined ? null : String(turnId),
+        tool_call_id: toolCallId === null || toolCallId === undefined ? null : String(toolCallId),
+        tool_name: toolName === null || toolName === undefined ? null : String(toolName),
+        tool_args: jsonValue(toolArgs),
+        tool_output_preview: toolOutputPreview === null || toolOutputPreview === undefined ? null : String(toolOutputPreview),
+        exit_code: exitCode === null || exitCode === undefined ? null : Number(exitCode),
+        is_error: isError === null || isError === undefined ? null : Boolean(isError),
         ai_model: jsonValue(aiModel),
         usage: jsonValue(usage),
         cost: jsonValue(cost),
@@ -860,6 +926,26 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       return { rows: [updated] as T[], rowCount: 1 };
     }
 
+    if (/UPDATE rooms SET sandbox_status = \$3/.test(compactSql)) {
+      const roomId = String(params[0]);
+      const expectedStatuses = params[1] as string[];
+      const nextStatus = params[2] as Room['sandboxStatus'];
+      const updatedAt = String(params[3]);
+      const room = this.rooms.get(roomId);
+      if (!room) return { rows: [], rowCount: 0 };
+      const currentStatus = room.sandbox_status || 'none';
+      if (!expectedStatuses.includes(currentStatus)) return { rows: [], rowCount: 0 };
+      const updated = {
+        ...room,
+        sandbox_status: nextStatus,
+        sandbox_updated_at: updatedAt,
+        room_version: (room.room_version || 0) + 1,
+        updated_at: new Date().toISOString(),
+      };
+      this.rooms.set(roomId, updated);
+      return { rows: [updated] as T[], rowCount: 1 };
+    }
+
     if (/UPDATE room_messages SET content = \$3, message_type = 'media', mime_type = \$4 WHERE room_id = \$1 AND id = \$2 AND message_type = 'media' RETURNING/.test(compactSql)) {
       const [roomId, messageId, content, mimeType] = params.map(String);
       const rows = this.messages.get(roomId) || [];
@@ -1004,6 +1090,12 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       return { rows: rows as T[], rowCount: rows.length };
     }
 
+    if (/FROM rooms WHERE type = 'coco'/.test(compactSql)) {
+      const rows = [...this.rooms.values()]
+        .filter(room => room.type === 'coco' && (room.sandbox_status === 'creating' || room.coco_status === 'running'));
+      return { rows: rows as T[], rowCount: rows.length };
+    }
+
     if (/FROM rooms r INNER JOIN room_saves rs ON rs.room_id = r.id WHERE rs.client_id = \$1/.test(compactSql)) {
       const clientId = String(params[0]);
       const saves = this.roomSaves.get(clientId) || new Map<string, string>();
@@ -1028,6 +1120,18 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
     if (/SELECT .* FROM rooms WHERE id = \$1/.test(compactSql)) {
       const row = this.rooms.get(String(params[0]));
       return { rows: (row ? [row] : []) as T[], rowCount: row ? 1 : 0 };
+    }
+
+    if (/FROM room_messages call WHERE call\.message_type = 'tool_call'/.test(compactSql)) {
+      const rows = [...this.messages.values()]
+        .flat()
+        .filter(row => {
+          if (row.message_type !== 'tool_call' || !row.tool_call_id) return false;
+          const roomRows = this.messages.get(row.room_id) || [];
+          return !roomRows.some(candidate => candidate.message_type === 'tool_result' && candidate.tool_call_id === row.tool_call_id);
+        })
+        .sort((first, second) => toTime(first.timestamp) - toTime(second.timestamp));
+      return { rows: rows as T[], rowCount: rows.length };
     }
 
     if (/DELETE FROM rooms WHERE id = \$1 AND creator_id = \$2/.test(compactSql)) {
@@ -1560,9 +1664,130 @@ for (const [storeName, createFixture] of storeFactories) {
       const missingRoomMessage = message({ roomId: 'missing-room' });
 
       assert.equal(await store.appendMessage(missingRoomMessage), null);
+      assert.equal(await store.appendMessageWithAtomicPosition(missingRoomMessage), null);
       assert.equal(await store.upsertMessage(missingRoomMessage), null);
       assert.equal(await store.saveMessageHistory('missing-room', [missingRoomMessage]), null);
       assert.deepEqual(await store.readMessagesByRoom('missing-room'), []);
+    });
+
+    it('preserves Coco room fields and tool message metadata', async () => {
+      const { store } = createFixture();
+      const cocoRoom = room({
+        type: 'coco',
+        sandboxId: 'sandbox-1',
+        sandboxStatus: 'ready',
+        sandboxUpdatedAt: '2026-05-03T00:01:00.000Z',
+        cocoSessionId: 'coco-session-1',
+        cocoStatus: 'idle',
+      });
+      const toolCall = message({
+        id: 'tool-call-1',
+        messageType: 'tool_call',
+        turnId: 'turn-1',
+        toolCallId: 'tool-1',
+        toolName: 'Shell',
+        toolArgs: { command: 'npm test' },
+        content: 'Shell npm test',
+      });
+      const toolResult = message({
+        id: 'tool-result-1',
+        messageType: 'tool_result',
+        turnId: 'turn-1',
+        toolCallId: 'tool-1',
+        toolName: 'Shell',
+        toolOutputPreview: '122 tests passed',
+        exitCode: 0,
+        isError: false,
+        content: '122 tests passed',
+        timestamp: '2026-05-03T00:00:01.000Z',
+      });
+      const sandboxStatus = message({
+        id: 'sandbox-status-1',
+        messageType: 'sandbox_status',
+        content: 'Sandbox ready',
+        timestamp: '2026-05-03T00:00:02.000Z',
+      });
+
+      assert.deepEqual(stripRoomStamp(await store.saveRoom(cocoRoom)), cocoRoom);
+      assert.deepEqual(stripRoomStamp(await store.getRoomById(cocoRoom.id)), cocoRoom);
+
+      const legacyRoomSave = room({ id: cocoRoom.id, name: 'Legacy save' });
+      const preservedCocoRoom = { ...cocoRoom, name: 'Legacy save' };
+      assert.deepEqual(stripRoomStamp(await store.saveRoom(legacyRoomSave)), preservedCocoRoom);
+      assert.deepEqual(stripRoomStamp(await store.getRoomById(cocoRoom.id)), preservedCocoRoom);
+
+      await store.appendMessageWithAtomicPosition(toolCall);
+      await store.appendMessageWithAtomicPosition(toolResult);
+      await store.upsertMessage(sandboxStatus);
+
+      assert.deepEqual(await store.readMessagesByRoom(cocoRoom.id), [toolCall, toolResult, sandboxStatus]);
+    });
+
+    it('compares sandbox status and finds Coco recovery work', async () => {
+      const { store } = createFixture();
+      const readyRoom = room({ id: 'ready-room', type: 'coco', sandboxStatus: 'ready', sandboxUpdatedAt: '2026-05-03T00:00:00.000Z' });
+      const creatingRoom = room({ id: 'creating-room', type: 'coco', sandboxStatus: 'creating' });
+      const runningRoom = room({ id: 'running-room', type: 'coco', sandboxStatus: 'ready', cocoStatus: 'running' });
+      const legacyNoneRoom = room({ id: 'legacy-none-room', type: 'coco' });
+      const chatRoom = room({ id: 'chat-room', type: 'chat' });
+      const statusChangedAt = '2026-05-03T00:02:00.000Z';
+      const danglingCall = message({
+        id: 'dangling-call',
+        roomId: readyRoom.id,
+        messageType: 'tool_call',
+        toolCallId: 'dangling-tool',
+        timestamp: '2026-05-03T00:00:01.000Z',
+      });
+      const fulfilledCall = message({
+        id: 'fulfilled-call',
+        roomId: readyRoom.id,
+        messageType: 'tool_call',
+        toolCallId: 'fulfilled-tool',
+        timestamp: '2026-05-03T00:00:02.000Z',
+      });
+      const fulfilledResult = message({
+        id: 'fulfilled-result',
+        roomId: readyRoom.id,
+        messageType: 'tool_result',
+        toolCallId: 'fulfilled-tool',
+        timestamp: '2026-05-03T00:00:03.000Z',
+      });
+
+      await store.saveRoom(readyRoom);
+      await store.saveRoom(creatingRoom);
+      await store.saveRoom(runningRoom);
+      await store.saveRoom(legacyNoneRoom);
+      await store.saveRoom(chatRoom);
+      await store.appendMessageWithAtomicPosition(danglingCall);
+      await store.appendMessageWithAtomicPosition(fulfilledCall);
+      await store.appendMessageWithAtomicPosition(fulfilledResult);
+
+      assert.equal(await store.compareAndSetRoomSandboxStatus(readyRoom.id, [], 'error', statusChangedAt), null);
+      assert.equal(await store.compareAndSetRoomSandboxStatus('missing-room', ['none'], 'creating', statusChangedAt), null);
+      assert.deepEqual(stripRoomStamp(await store.compareAndSetRoomSandboxStatus(legacyNoneRoom.id, ['none'], 'creating', statusChangedAt)), {
+        ...legacyNoneRoom,
+        sandboxStatus: 'creating',
+        sandboxUpdatedAt: statusChangedAt,
+      });
+      assert.deepEqual(stripRoomStamp(await store.compareAndSetRoomSandboxStatus(legacyNoneRoom.id, ['creating'], 'ready', statusChangedAt)), {
+        ...legacyNoneRoom,
+        sandboxStatus: 'ready',
+        sandboxUpdatedAt: statusChangedAt,
+      });
+      assert.deepEqual(stripRoomStamp(await store.compareAndSetRoomSandboxStatus(readyRoom.id, ['ready'], 'expired', statusChangedAt)), {
+        ...readyRoom,
+        lastActivityAt: fulfilledResult.timestamp,
+        sandboxStatus: 'expired',
+        sandboxUpdatedAt: statusChangedAt,
+      });
+      assert.equal(await store.compareAndSetRoomSandboxStatus(readyRoom.id, ['ready'], 'error', statusChangedAt), null);
+
+      const interruptedIds = (await store.findInterruptedCocoRooms()).map(item => item.id).sort();
+      assert.deepEqual(interruptedIds, ['creating-room', 'running-room']);
+      assert.ok(await store.compareAndSetRoomSandboxStatus(creatingRoom.id, ['creating'], 'error', statusChangedAt));
+      assert.deepEqual((await store.findInterruptedCocoRooms()).map(item => item.id), ['running-room']);
+
+      assert.deepEqual((await store.findDanglingToolCalls()).map(item => item.id), ['dangling-call']);
     });
 
     it('does not roll back room activity when append or upsert receives older message timestamps', async () => {

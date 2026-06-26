@@ -12,6 +12,7 @@ import { LocalMediaObjectStorage } from '../services/mediaObjectStorage';
 import { Logger } from '../logger';
 import { AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CreateGoogleAccountInput, GoogleAccountProfile, PendingMediaUpload } from '../repositories/store';
 import { AudioTranscriptionJob } from '../services/audioTranscription';
+import { createCocoAccessControl } from '../services/cocoAccessControl';
 
 type EmittedEvent = {
   target: string;
@@ -190,6 +191,7 @@ async function createTestServer(overrides: {
   audioTranscriptionRunner?: Parameters<typeof registerApiRoutes>[1]['audioTranscriptionRunner'];
   googleClientIds?: Parameters<typeof registerApiRoutes>[1]['googleClientIds'];
   verifyGoogleCredential?: Parameters<typeof registerApiRoutes>[1]['verifyGoogleCredential'];
+  cocoAccess?: Parameters<typeof registerApiRoutes>[1]['cocoAccess'];
 } = {}): Promise<TestServer> {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
@@ -570,6 +572,8 @@ async function createTestServer(overrides: {
     audioTranscriptionRunner,
     googleClientIds: overrides.googleClientIds,
     verifyGoogleCredential: overrides.verifyGoogleCredential,
+    cocoAccess: overrides.cocoAccess ?? createCocoAccessControl({ enabled: true }),
+    cocoMode: 'acceptEdits',
     mediaUploadCleanup: overrides.mediaUploadCleanup,
   });
 
@@ -621,11 +625,82 @@ describe('API routes', () => {
 
     const statusResponse = await fetch(`${server.baseUrl}/api/status`);
     assert.equal(statusResponse.status, 200);
-    const status = await statusResponse.json() as { status: string; persistenceStore: string; redis: string; rooms: number };
+    const status = await statusResponse.json() as { status: string; persistenceStore: string; redis: string; rooms: number; features: { coco: { enabled: boolean; rollout: string; mode: string } } };
     assert.equal(status.status, 'online');
     assert.equal(status.persistenceStore, 'redis');
     assert.equal(status.redis, 'connected');
     assert.equal(status.rooms, 1);
+    assert.deepEqual(status.features.coco, { enabled: true, rollout: 'all', mode: 'acceptEdits' });
+
+    const featuresResponse = await fetch(`${server.baseUrl}/api/features?clientId=client-1`);
+    assert.equal(featuresResponse.status, 200);
+    assert.deepEqual(await featuresResponse.json(), {
+      coco: {
+        enabled: true,
+        rollout: 'all',
+        mode: 'acceptEdits',
+      },
+    });
+  });
+
+  it('returns Coco workspace snapshots only for authorized Coco rooms', async () => {
+    server.store.rooms.push(sampleRoom({
+      id: 'coco-room',
+      name: 'Coco',
+      type: 'coco',
+      sandboxStatus: 'ready',
+      cocoStatus: 'idle',
+      cocoSessionId: 'session-1',
+    }));
+    await server.store.addRoomMember('coco-room', 'client-1', 'owner');
+    server.store.messages.push(
+      sampleMessage({
+        id: 'tool-call-1',
+        clientId: 'coco_runner',
+        roomId: 'coco-room',
+        content: '',
+        messageType: 'tool_call',
+        toolCallId: 'tool-1',
+        toolName: 'Read',
+        toolArgs: { file_path: '/workspace/src/App.tsx' },
+      }),
+      sampleMessage({
+        id: 'tool-result-1',
+        clientId: 'coco_runner',
+        roomId: 'coco-room',
+        content: '',
+        messageType: 'tool_result',
+        toolCallId: 'tool-1',
+        toolName: 'Read',
+        toolOutputPreview: 'ok',
+      }),
+    );
+
+    const response = await fetch(`${server.baseUrl}/api/clients/client-1/rooms/coco-room/workspace`);
+    assert.equal(response.status, 200);
+    const snapshot = await response.json() as { roomId: string; backend: string; status: { sandboxStatus: string; agentStatus: string; hasSession: boolean }; summary: { toolCalls: number; toolResults: number; touchedFiles: string[] }; commands: Array<{ id: string; name: string; status: string; preview?: string }> };
+    assert.equal(snapshot.roomId, 'coco-room');
+    assert.equal(snapshot.backend, 'coco');
+    assert.deepEqual(snapshot.status, { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: true });
+    assert.deepEqual(snapshot.summary.touchedFiles, ['src/App.tsx']);
+    assert.equal(snapshot.summary.toolCalls, 1);
+    assert.equal(snapshot.summary.toolResults, 1);
+    assert.deepEqual(snapshot.commands, [{ id: 'tool-1', name: 'Read', status: 'succeeded', preview: 'ok' }]);
+
+    const nonCocoResponse = await fetch(`${server.baseUrl}/api/clients/client-1/rooms/room-1/workspace`);
+    assert.equal(nonCocoResponse.status, 400);
+    assert.deepEqual(await nonCocoResponse.json(), { error: 'Workspace snapshots are only available for Coco rooms' });
+
+    await server.close();
+    server = await createTestServer({
+      cocoAccess: createCocoAccessControl({ enabled: true, allowedClientIds: ['client-2'] }),
+    });
+    server.store.rooms.push(sampleRoom({ id: 'coco-room', name: 'Coco', type: 'coco' }));
+    await server.store.addRoomMember('coco-room', 'client-1', 'owner');
+
+    const deniedResponse = await fetch(`${server.baseUrl}/api/clients/client-1/rooms/coco-room/workspace`);
+    assert.equal(deniedResponse.status, 403);
+    assert.deepEqual(await deniedResponse.json(), { error: 'Coco is not enabled for this user' });
   });
 
   it('redirects sticker asset requests to object storage signed URLs', async () => {

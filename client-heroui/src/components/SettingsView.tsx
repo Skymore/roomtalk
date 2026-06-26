@@ -187,7 +187,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     void refreshAccountStatus();
   }, [refreshAccountStatus]);
 
-  const handleEnablePush = async () => {
+  const handleEnablePush = React.useCallback(async () => {
     setIsUpdatingPush(true);
     setPushError('');
     try {
@@ -199,7 +199,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     } finally {
       setIsUpdatingPush(false);
     }
-  };
+  }, [refreshPushStatus, t]);
 
   const handleDisablePush = async () => {
     setIsUpdatingPush(true);
@@ -395,7 +395,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
 
     return null;
-  }, [pushStatus, t]);
+  }, [handleEnablePush, pushStatus, t]);
 
   return (
     <div className="h-full w-full overflow-y-auto p-4 md:p-8">

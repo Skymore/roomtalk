@@ -5,6 +5,8 @@ node_modules/
 
 # Testing
 coverage/
+__pycache__/
+*.py[cod]
 client-heroui/test-results/
 client-heroui/playwright-report/
 client-heroui/blob-report/

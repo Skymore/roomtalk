@@ -17,7 +17,7 @@ test.beforeEach(async ({ request }) => {
 
 test('opens an existing room from a room card', async ({ page, context, request }) => {
   const clientId = await seedClient(context);
-  const room = await createRoomViaApi(request, clientId, uniqueName('card-room'));
+  const room = await createRoomViaApi(request, clientId, shortName('card-room'));
 
   await openRoomsPage(page);
   await openRoomFromCard(page, room);
@@ -38,7 +38,7 @@ test('creates a room through the UI and enters chat', async ({ page, context }) 
 
 test('renames an owned room from the room card and current room header', async ({ page, context, request }) => {
   const clientId = await seedClient(context);
-  const room = await createRoomViaApi(request, clientId, uniqueName('rename-room'));
+  const room = await createRoomViaApi(request, clientId, shortName('rename-room'));
   const cardRename = shortName('card');
   const headerRename = shortName('header');
 
@@ -89,7 +89,7 @@ test('joins a room by ID from a separate client', async ({ page, context, reques
   const ownerId = uniqueName('owner');
   const joinerId = await seedClient(context, uniqueName('joiner'));
   expect(joinerId).not.toBe(ownerId);
-  const room = await createRoomViaApi(request, ownerId, uniqueName('join-room'));
+  const room = await createRoomViaApi(request, ownerId, shortName('join-room'));
 
   await openRoomsPage(page);
   await page.getByRole('textbox', { name: 'Enter Room ID' }).first().fill(room.id);

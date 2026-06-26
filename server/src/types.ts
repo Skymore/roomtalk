@@ -56,7 +56,10 @@ export interface MessageReplyReference {
 }
 
 export type MediaKind = 'image' | 'video' | 'audio' | 'file';
-export type MessageType = 'text' | 'ai' | 'media' | 'sticker';
+export type RoomType = 'chat' | 'coco';
+export type RoomSandboxStatus = 'none' | 'creating' | 'ready' | 'expired' | 'error';
+export type RoomCocoStatus = 'idle' | 'running' | 'error';
+export type MessageType = 'text' | 'ai' | 'media' | 'sticker' | 'tool_call' | 'tool_result' | 'sandbox_status';
 
 export interface MessageMediaAsset {
   id: string;
@@ -109,6 +112,13 @@ export interface Message {
   mimeType?: string;
   status?: 'streaming' | 'complete' | 'error';
   clientMessageId?: string;
+  turnId?: string;
+  toolCallId?: string;
+  toolName?: string;
+  toolArgs?: Record<string, unknown>;
+  toolOutputPreview?: string;
+  exitCode?: number;
+  isError?: boolean;
   aiModel?: {
     id: string;
     apiModel: string;
@@ -133,6 +143,12 @@ export interface Room {
   messageVersion?: number;
   hasPassword?: boolean;
   postingSchedule?: RoomPostingSchedule;
+  type?: RoomType;
+  sandboxId?: string;
+  sandboxStatus?: RoomSandboxStatus;
+  sandboxUpdatedAt?: string;
+  cocoSessionId?: string;
+  cocoStatus?: RoomCocoStatus;
   // 行级单调版本号:每次房间写入 +1,客户端 last-write-wins 的主比较键
   // (updatedAt 退为展示/兼容用途)。版本相等 ⟺ 同一次写入。
   roomVersion?: number;

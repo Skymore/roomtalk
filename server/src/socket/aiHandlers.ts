@@ -805,6 +805,7 @@ export function registerAIHandlers({
   normalizeAIModel,
   getAIClientForModel,
   aiStreamOwnerId,
+  cocoSessionService,
 }: SocketConnectionContext) {
   const emitLatestHistoryPage = async (roomId: string) => {
     const page = await store.readMessagePageByRoom(roomId);
@@ -1739,6 +1740,23 @@ export function registerAIHandlers({
       return;
     }
 
+    const room = await store.getRoomById(data.roomId);
+    if (room?.type === 'coco') {
+      if (!cocoSessionService) {
+        socket.emit('error', { message: 'Coco is unavailable' });
+        callback?.({ success: false, error: 'Coco is unavailable' });
+        return;
+      }
+
+      await cocoSessionService.startTurn({
+        roomId: data.roomId,
+        clientId,
+        selectedModel: normalizeAIModel(data.model),
+        roleName: data.roleName,
+      }, callback);
+      return;
+    }
+
     const postAuth = await authorizeRoomAction({
       store,
       roomId: data.roomId,
@@ -1781,6 +1799,7 @@ export function registerAIHandlers({
       return;
     }
 
+    const roomForAIRequest = await store.getRoomById(data.roomId);
     let roomMessages: Message[] = [];
     let replyTo;
     if (data.replyToMessageId) {
@@ -1819,6 +1838,43 @@ export function registerAIHandlers({
     io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
     io.to(data.roomId).emit('new_message', userMessage);
     notifyRoomMessageBestEffort({ store, room: updatedRoom, message: userMessage, logger: socketLogger });
+
+    if (roomForAIRequest?.type === 'coco') {
+      if (!cocoSessionService) {
+        callback?.({
+          success: true,
+          userMessage,
+          aiStarted: false,
+          aiError: 'Coco is unavailable',
+        });
+        return;
+      }
+
+      await cocoSessionService.startTurn({
+        roomId: data.roomId,
+        clientId,
+        selectedModel: normalizeAIModel(data.model),
+        roleName: data.roleName,
+      }, (response) => {
+        if (response.success && response.messageId) {
+          callback?.({
+            success: true,
+            userMessage,
+            aiMessageId: response.messageId,
+            aiStarted: true,
+          });
+          return;
+        }
+
+        callback?.({
+          success: true,
+          userMessage,
+          aiStarted: false,
+          aiError: response.error || 'Failed to start Coco response',
+        });
+      });
+      return;
+    }
 
     const latestHistory = await store.readMessagesByRoom(data.roomId);
     const preparedHistory = latestHistory.some(message => message.id === userMessage.id)
@@ -1872,6 +1928,12 @@ export function registerAIHandlers({
     if (!(await hasRoomAccess(store, data.roomId, clientId))) {
       socket.emit('error', { message: 'You are not authorized to access this room' });
       callback?.({ success: false, error: 'You are not authorized to access this room' });
+      return;
+    }
+
+    const room = await store.getRoomById(data.roomId);
+    if (room?.type === 'coco') {
+      callback?.({ success: false, error: 'Coco edit-and-ask is not supported' });
       return;
     }
 

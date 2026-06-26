@@ -10,7 +10,11 @@ export interface MessageReplyReference {
 }
 
 export type MediaKind = 'image' | 'video' | 'audio' | 'file';
-export type MessageType = 'text' | 'ai' | 'media' | 'sticker';
+export type RoomType = 'chat' | 'coco';
+export type RoomSandboxStatus = 'none' | 'creating' | 'ready' | 'expired' | 'error';
+export type RoomCocoStatus = 'idle' | 'running' | 'error';
+export type MessageType = 'text' | 'ai' | 'media' | 'sticker' | 'tool_call' | 'tool_result' | 'sandbox_status';
+export type AIModelProvider = 'openai' | 'openrouter' | 'deepseek' | 'anthropic';
 
 export interface MessageMediaAsset {
   id: string;
@@ -92,13 +96,20 @@ export interface Message {
   };
   mimeType?: string;
   status?: 'streaming' | 'complete' | 'error';
+  turnId?: string;
+  toolCallId?: string;
+  toolName?: string;
+  toolArgs?: Record<string, unknown>;
+  toolOutputPreview?: string;
+  exitCode?: number;
+  isError?: boolean;
   clientMessageId?: string;
   deliveryStatus?: 'pending' | 'sent' | 'failed';
   deliveryError?: string;
   aiModel?: {
     id: string;
     apiModel: string;
-    provider: 'openai' | 'openrouter';
+    provider: AIModelProvider;
     label: string;
     isPremium?: boolean;
   };
@@ -116,6 +127,12 @@ export interface Room {
   createdAt: string;
   lastActivityAt?: string;
   creatorId: string;
+  type?: RoomType;
+  sandboxId?: string;
+  sandboxStatus?: RoomSandboxStatus;
+  sandboxUpdatedAt?: string;
+  cocoSessionId?: string;
+  cocoStatus?: RoomCocoStatus;
   messageVersion?: number;
   hasPassword?: boolean;
   postingSchedule?: RoomPostingSchedule;

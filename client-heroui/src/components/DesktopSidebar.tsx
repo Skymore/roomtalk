@@ -21,7 +21,7 @@ import { formatDate } from '../utils/formatters';
 import { getLanguageOption, languageOptions } from '../utils/languages';
 import { buildRoomShareUrl, getRoomActivityAt, validateRoomName } from '../utils/roomState';
 import { createRoom } from '../utils/socket';
-import { Room, RoomRenameHandler } from '../utils/types';
+import { Room, RoomRenameHandler, RoomType } from '../utils/types';
 import { getAvatarColor, getAvatarText } from '../utils/userProfile';
 import { RoomCreateModal, RoomCreateOptions } from './RoomCreateModal';
 import { RoomRenameModal } from './RoomRenameModal';
@@ -46,6 +46,7 @@ interface DesktopSidebarProps {
   onDeleteRoom: (roomId: string) => void;
   onUnsaveRoom: (roomId: string) => void;
   onRenameRoom: RoomRenameHandler;
+  isCocoEnabled: boolean;
 }
 
 interface SidebarNavItemProps {
@@ -278,6 +279,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
   onDeleteRoom,
   onUnsaveRoom,
   onRenameRoom,
+  isCocoEnabled,
 }) => {
   const { t } = useTranslation();
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -285,7 +287,9 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [newRoomName, setNewRoomName] = useState('');
   const [newRoomDescription, setNewRoomDescription] = useState('');
+  const [newRoomType, setNewRoomType] = useState<RoomType>('chat');
   const [nameError, setNameError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [roomToDelete, setRoomToDelete] = useState<Room | null>(null);
   const [roomToRename, setRoomToRename] = useState<Room | null>(null);
@@ -301,7 +305,9 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
   const openCreateModal = () => {
     setNewRoomName(`${username}'s Room`);
     setNewRoomDescription('');
+    setNewRoomType('chat');
     setNameError(null);
+    setCreateError(null);
     setIsCreateOpen(true);
   };
 
@@ -313,6 +319,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
   const handleRoomNameChange = (value: string) => {
     setNewRoomName(value);
     setNameError(null);
+    setCreateError(null);
   };
 
   const handleCreateRoom = async (options: RoomCreateOptions) => {
@@ -324,15 +331,22 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
     }
 
     setNameError(null);
+    setCreateError(null);
     setIsCreating(true);
     try {
-      const roomId = await createRoom(validation.name, newRoomDescription, options.password, options.postingSchedule);
+      const roomId = await createRoom(validation.name, newRoomDescription, {
+        password: options.password,
+        postingSchedule: options.postingSchedule,
+        type: isCocoEnabled ? (options.type || newRoomType) : 'chat',
+      });
       setNewRoomName('');
       setNewRoomDescription('');
+      setNewRoomType('chat');
       setIsCreateOpen(false);
       onRoomSelectById(roomId as string);
     } catch (error) {
       console.error('Error creating room from sidebar:', error);
+      setCreateError(error instanceof Error ? error.message : t('createRoomFailed'));
     } finally {
       setIsCreating(false);
     }
@@ -680,10 +694,14 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
         onClose={closeCreateModal}
         roomName={newRoomName}
         roomDescription={newRoomDescription}
+        roomType={newRoomType}
         nameError={nameError}
+        createError={createError}
         isCreating={isCreating}
+        isCocoEnabled={isCocoEnabled}
         onRoomNameChange={handleRoomNameChange}
         onRoomDescriptionChange={setNewRoomDescription}
+        onRoomTypeChange={setNewRoomType}
         onCreate={handleCreateRoom}
       />
 
