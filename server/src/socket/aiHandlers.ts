@@ -1932,8 +1932,9 @@ export function registerAIHandlers({
     }
 
     const room = await store.getRoomById(data.roomId);
-    if (room?.type === 'coco') {
-      callback?.({ success: false, error: 'Coco edit-and-ask is not supported' });
+    const isCocoRoom = room?.type === 'coco';
+    if (isCocoRoom && !cocoSessionService) {
+      callback?.({ success: false, error: 'Coco is unavailable' });
       return;
     }
 
@@ -1968,6 +1969,16 @@ export function registerAIHandlers({
     io.to(editResult.room.creatorId).emit('room_updated', editResult.room);
     io.to(data.roomId).emit('message_edited', editResult.updatedMessage);
     await emitLatestHistoryPage(data.roomId);
+
+    if (isCocoRoom) {
+      await cocoSessionService!.startTurn({
+        roomId: data.roomId,
+        clientId,
+        selectedModel: normalizeAIModel(data.model),
+        roleName: data.roleName,
+      }, callback);
+      return;
+    }
 
     await startAIResponse({
       roomId: data.roomId,
