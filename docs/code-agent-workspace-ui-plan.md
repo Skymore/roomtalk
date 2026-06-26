@@ -191,6 +191,18 @@ Phase 6 completion record (2026-05-30):
 - Verified server unit tests and server build.
 - Claude Code review completed with no required code changes for this docs-only phase.
 
+Current master compatibility record (2026-06-26):
+
+- Confirmed `codex/coco-code-agent-legacy` is already an ancestor of `origin/master`; there are no remaining legacy Coco commits to merge.
+- Rechecked Coco against the newer master architecture after the AI outbox, A2UI, media storage, room reliability, authentication, and mobile composer changes.
+- Verified server tests (`392/392`) including Coco access control, session lifecycle, runner protocol, workspace snapshot, room creation/join guards, and AI routing into Coco rooms.
+- Verified frontend Coco component tests (`8/8`) for `CodeAgentRoomView`, `CocoToolMessage`, and code-agent helpers.
+- Verified Python JSONL runner tests (`16/16`) in an isolated temporary pytest environment.
+- Verified Playwright Coco E2E (`3/3`) covering fake Coco turns, refresh restore of tool history, running-turn input locks, and mobile workspace/composer layout.
+- Verified `npm run smoke:coco:e2b` skips safely without `RUN_COCO_E2B_SMOKE=true`.
+- Verified `RUN_COCO_E2B_SMOKE=true npm run smoke:coco:e2b` creates a real E2B sandbox, streams JSONL runner events, completes with a `final` event using `deepseek-v4-pro`, and destroys the sandbox.
+- No implementation changes were required by this compatibility pass.
+
 ### Phase 0: Source Audit And Plan Review
 
 Scope:
