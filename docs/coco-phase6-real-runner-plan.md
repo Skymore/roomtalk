@@ -168,7 +168,7 @@ Acceptance:
 
 - No E2B key/template: real smoke tests skip cleanly.
 - E2B configured before Phase 6.5: only `plan`-mode smoke is allowed. It creates sandbox, runs runner, returns final response, and destroys sandbox without Shell/write tools or long-lived provider keys.
-- E2B `acceptEdits` smoke is blocked until Phase 6.5 is complete.
+- E2B `acceptEdits` smoke is allowed only with the Phase 6.5 model proxy or scoped-key configuration; otherwise startup rejects write/Shell-capable mode.
 - Sandbox TTL and active sandbox limits remain enforced.
 - `COCO_ENABLED=false` blocks backend turns and hides/blocks frontend entry.
 
