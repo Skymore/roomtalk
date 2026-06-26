@@ -23,6 +23,7 @@ import {
   MIN_AI_CONTEXT_MESSAGE_LIMIT,
   normalizeAIContextMessageLimit,
 } from '../utils/aiContext';
+import { CodeAgentMode } from '../utils/codeAgent';
 
 const formatPriceRate = (value: number | undefined) => {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
@@ -114,6 +115,9 @@ interface MessageInputAIControlsProps {
   onAskAI: () => void;
   onSend: () => void;
   isCodeAgentRoom?: boolean;
+  codeAgentMode?: CodeAgentMode;
+  codeAgentMaxMode?: CodeAgentMode;
+  onCodeAgentModeChange?: (mode: CodeAgentMode) => void;
 }
 
 export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
@@ -142,6 +146,9 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   onAskAI,
   onSend,
   isCodeAgentRoom = false,
+  codeAgentMode = 'plan',
+  codeAgentMaxMode = 'plan',
+  onCodeAgentModeChange,
 }) => {
   const { t } = useTranslation();
   const [isMobileViewport, setIsMobileViewport] = React.useState(false);
@@ -155,6 +162,15 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   const hasInputContent = currentInputText.trim().length > 0 || imageCount > 0;
   const isControlLocked = isSending || isAiProcessing || isInputLocked || !canPost;
   const askActionLabel = isCodeAgentRoom ? t('runAgent') : t('askAI');
+  const askActionIcon = isCodeAgentRoom ? 'lucide:bot' : selectedRole.icon;
+  const effectiveCodeAgentMode = codeAgentMaxMode === 'acceptEdits' ? codeAgentMode : 'plan';
+  const canSwitchCodeAgentMode = isCodeAgentRoom && codeAgentMaxMode === 'acceptEdits';
+  const codeAgentModeOptions: Array<{ id: CodeAgentMode; label: string; icon: string }> = [
+    { id: 'plan', label: t('codeAgentReadOnlyMode'), icon: 'lucide:eye' },
+    ...(codeAgentMaxMode === 'acceptEdits'
+      ? [{ id: 'acceptEdits' as const, label: t('codeAgentEditMode'), icon: 'lucide:pencil-ruler' }]
+      : []),
+  ];
   const compactItemClassNames = {
     base: "w-full px-2 py-2",
     title: "text-xs font-medium leading-4 text-[#141413] dark:text-[#faf9f5]",
@@ -220,44 +236,86 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   };
 
   const aiContextLimitChanged = aiContextMessageLimitDraft !== normalizeAIContextMessageLimit(aiContextMessageLimit);
+  const handleCodeAgentModeSelection = (keys: 'all' | Set<React.Key>) => {
+    if (keys === 'all') return;
+    const selectedKey = Array.from(keys)[0]?.toString();
+    if (selectedKey === 'plan' || selectedKey === 'acceptEdits') {
+      onCodeAgentModeChange?.(selectedKey);
+    }
+  };
 
   return (
     <>
       <div className="flex flex-shrink-0 items-center gap-1 sm:min-w-0 sm:flex-1 sm:gap-2">
-        <div className="hidden min-w-0 flex-1 items-center gap-1 sm:flex sm:gap-2">
-          <Select
-            size="sm"
-            aria-label={t('selectAIRole')}
-            selectedKeys={[selectedRoleId]}
-            onSelectionChange={(keys) => {
-              const selectedKey = Array.from(keys)[0]?.toString();
-              if (selectedKey) onRoleChange(selectedKey);
-            }}
-            className="min-w-0 flex-[0.68] sm:flex-[0.9]"
-            classNames={{
-              trigger: "h-8 min-h-8 rounded-full bg-transparent px-1.5 text-[#4d4c48] data-[hover=true]:bg-[#e8e6dc] dark:text-[#faf9f5] dark:data-[hover=true]:bg-[#3a3a38] sm:h-9 sm:min-h-9 sm:px-2",
-              value: "truncate text-[10px] font-semibold sm:text-xs",
-              selectorIcon: "h-3 w-3 text-[#87867f] dark:text-[#b0aea5] sm:h-4 sm:w-4",
-              popoverContent: "w-52 border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b] sm:w-auto",
-              listboxWrapper: "relative max-h-[14rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]",
-            }}
-            popoverProps={{
-              placement: isMobileViewport ? 'top-start' : 'top',
-              offset: 8,
-              containerPadding: 12,
-            }}
-            isDisabled={isControlLocked}
-          >
-            {roles.map((role) => (
-              <SelectItem
-                key={role.id}
-                classNames={compactItemClassNames}
-                startContent={<Icon icon={role.icon} className="h-3.5 w-3.5" />}
-              >
-                {getAIRoleDisplayName(role, t)}
-              </SelectItem>
-            ))}
-          </Select>
+        <div className={`${isCodeAgentRoom ? 'flex' : 'hidden sm:flex'} min-w-0 flex-1 items-center gap-1 sm:gap-2`}>
+          {isCodeAgentRoom ? (
+            <Select
+              size="sm"
+              aria-label={t('selectCodeAgentMode')}
+              data-testid="code-agent-mode-select"
+              selectedKeys={[effectiveCodeAgentMode]}
+              onSelectionChange={handleCodeAgentModeSelection}
+              className="min-w-0 flex-[0.92] sm:flex-[0.9]"
+              classNames={{
+                trigger: "h-8 min-h-8 rounded-full bg-transparent px-1.5 text-[#4d4c48] data-[hover=true]:bg-[#e8e6dc] dark:text-[#faf9f5] dark:data-[hover=true]:bg-[#3a3a38] sm:h-9 sm:min-h-9 sm:px-2",
+                value: "truncate text-[10px] font-semibold sm:text-xs",
+                selectorIcon: "h-3 w-3 text-[#87867f] dark:text-[#b0aea5] sm:h-4 sm:w-4",
+                popoverContent: "w-48 border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
+                listboxWrapper: "relative max-h-[12rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]",
+              }}
+              popoverProps={{
+                placement: isMobileViewport ? 'top-start' : 'top',
+                offset: 8,
+                containerPadding: 12,
+              }}
+              isDisabled={isControlLocked || !canSwitchCodeAgentMode}
+              startContent={<Icon icon={effectiveCodeAgentMode === 'plan' ? 'lucide:eye' : 'lucide:pencil-ruler'} className="h-3.5 w-3.5 sm:h-4 sm:w-4" />}
+            >
+              {codeAgentModeOptions.map((option) => (
+                <SelectItem
+                  key={option.id}
+                  classNames={compactItemClassNames}
+                  startContent={<Icon icon={option.icon} className="h-3.5 w-3.5" />}
+                >
+                  {option.label}
+                </SelectItem>
+              ))}
+            </Select>
+          ) : (
+            <Select
+              size="sm"
+              aria-label={t('selectAIRole')}
+              selectedKeys={[selectedRoleId]}
+              onSelectionChange={(keys) => {
+                const selectedKey = Array.from(keys)[0]?.toString();
+                if (selectedKey) onRoleChange(selectedKey);
+              }}
+              className="min-w-0 flex-[0.68] sm:flex-[0.9]"
+              classNames={{
+                trigger: "h-8 min-h-8 rounded-full bg-transparent px-1.5 text-[#4d4c48] data-[hover=true]:bg-[#e8e6dc] dark:text-[#faf9f5] dark:data-[hover=true]:bg-[#3a3a38] sm:h-9 sm:min-h-9 sm:px-2",
+                value: "truncate text-[10px] font-semibold sm:text-xs",
+                selectorIcon: "h-3 w-3 text-[#87867f] dark:text-[#b0aea5] sm:h-4 sm:w-4",
+                popoverContent: "w-52 border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b] sm:w-auto",
+                listboxWrapper: "relative max-h-[14rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]",
+              }}
+              popoverProps={{
+                placement: isMobileViewport ? 'top-start' : 'top',
+                offset: 8,
+                containerPadding: 12,
+              }}
+              isDisabled={isControlLocked}
+            >
+              {roles.map((role) => (
+                <SelectItem
+                  key={role.id}
+                  classNames={compactItemClassNames}
+                  startContent={<Icon icon={role.icon} className="h-3.5 w-3.5" />}
+                >
+                  {getAIRoleDisplayName(role, t)}
+                </SelectItem>
+              ))}
+            </Select>
+          )}
           <Select
             size="sm"
             aria-label={t('selectAIModel')}
@@ -335,7 +393,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
         <div className="flex flex-shrink-0 justify-end gap-1 sm:gap-2">
           <HoverTooltip content={`${askActionLabel} (${isMacOS ? 'Command' : 'Ctrl'}+Enter)`} placement="top">
             <Button
-              color={selectedRole.color}
+              color={isCodeAgentRoom ? 'default' : selectedRole.color}
               size="sm"
               onPress={onAskAI}
               isDisabled={isControlLocked}
@@ -343,7 +401,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               className="relative !h-7 !w-7 !min-w-7 overflow-hidden rounded-full bg-[#30302e] px-0 text-[#faf9f5] shadow-[0_0_0_1px_rgba(48,48,46,0.7)] dark:bg-[#faf9f5] dark:text-[#141413] dark:shadow-[0_0_0_1px_rgba(250,249,245,0.7)] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"
             >
               <span className={`flex items-center justify-center gap-1.5 ${isAiProcessing ? 'opacity-0' : 'opacity-100'}`}>
-                <Icon icon={selectedRole.icon} className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                <Icon icon={askActionIcon} className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                 <span className="hidden sm:inline">{askActionLabel}</span>
               </span>
               {isAiProcessing && (
@@ -396,6 +454,41 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
         <ModalContent>
           <ModalHeader>{t('aiSettings')}</ModalHeader>
           <ModalBody>
+            {isCodeAgentRoom && (
+              <div className="space-y-2 rounded-lg border border-[#dedbd0] bg-[#f0eee6] p-3 dark:border-[#30302e] dark:bg-[#242421]">
+                <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[#87867f] dark:text-[#b0aea5]">
+                  <Icon icon={effectiveCodeAgentMode === 'plan' ? 'lucide:eye' : 'lucide:pencil-ruler'} className="h-3.5 w-3.5" aria-hidden="true" />
+                  {t('selectCodeAgentMode')}
+                </div>
+                <Select
+                  size="sm"
+                  aria-label={t('selectCodeAgentMode')}
+                  selectedKeys={[effectiveCodeAgentMode]}
+                  onSelectionChange={handleCodeAgentModeSelection}
+                  isDisabled={!canSwitchCodeAgentMode}
+                  classNames={{
+                    trigger: "min-h-11 rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-[#4d4c48] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5]",
+                    value: "text-sm font-semibold",
+                    popoverContent: "border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
+                  }}
+                >
+                  {codeAgentModeOptions.map((option) => (
+                    <SelectItem
+                      key={option.id}
+                      classNames={compactItemClassNames}
+                      startContent={<Icon icon={option.icon} className="h-3.5 w-3.5" />}
+                    >
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </Select>
+                <p className="text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">
+                  {canSwitchCodeAgentMode
+                    ? (effectiveCodeAgentMode === 'plan' ? t('codeAgentReadOnlyDescription') : t('codeAgentEditDescription'))
+                    : t('codeAgentModeLockedDescription')}
+                </p>
+              </div>
+            )}
             <div className="space-y-2 rounded-lg border border-[#dedbd0] bg-[#f0eee6] p-3 dark:border-[#30302e] dark:bg-[#242421]">
               <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[#87867f] dark:text-[#b0aea5]">
                 <Icon icon="lucide:brain-circuit" className="h-3.5 w-3.5" aria-hidden="true" />
@@ -475,20 +568,22 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                 ))}
               </Select>
             </div>
-            <Tabs aria-label={t('aiSettings')}>
-              <Tab key="roles" title={t('aiRoles')}>
-                <div className="mt-2">
-                  <AIRoleManager
-                    roles={roles}
-                    selectedRoleId={selectedRoleId}
-                    onSelectRole={onRoleChange}
-                    onAddRole={onAddRole}
-                    onUpdateRole={onUpdateRole}
-                    onDeleteRole={onDeleteRole}
-                  />
-                </div>
-              </Tab>
-            </Tabs>
+            {!isCodeAgentRoom && (
+              <Tabs aria-label={t('aiSettings')}>
+                <Tab key="roles" title={t('aiRoles')}>
+                  <div className="mt-2">
+                    <AIRoleManager
+                      roles={roles}
+                      selectedRoleId={selectedRoleId}
+                      onSelectRole={onRoleChange}
+                      onAddRole={onAddRole}
+                      onUpdateRole={onUpdateRole}
+                      onDeleteRole={onDeleteRole}
+                    />
+                  </div>
+                </Tab>
+              </Tabs>
+            )}
           </ModalBody>
           <ModalFooter>
             <Button variant="light" onPress={onSettingsClose}>{t('close')}</Button>

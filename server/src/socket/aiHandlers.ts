@@ -21,6 +21,7 @@ import {
 } from '../services/messageDomain';
 import { notifyRoomMessageBestEffort } from '../services/pushNotifications';
 import { withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
+import { CocoRunnerMode } from '../services/cocoRunnerProtocol';
 import { A2UIActionEvent, Message } from '../types';
 import { hasRoomAccess } from './roomAccess';
 import { authorizeRoomAction, getRoomMessage } from './roomAuthorization';
@@ -327,6 +328,7 @@ type AIRequestData = {
   editedMessageId?: string;
   retryForMessageId?: string;
   maxContextMessages?: number;
+  codeAgentMode?: CocoRunnerMode;
 };
 
 type AIRunnerMode = 'inline' | 'worker';
@@ -1753,6 +1755,7 @@ export function registerAIHandlers({
         clientId,
         selectedModel: normalizeAIModel(data.model),
         roleName: data.roleName,
+        ...(data.codeAgentMode ? { mode: data.codeAgentMode } : {}),
       }, callback);
       return;
     }
@@ -1855,6 +1858,7 @@ export function registerAIHandlers({
         clientId,
         selectedModel: normalizeAIModel(data.model),
         roleName: data.roleName,
+        ...(data.codeAgentMode ? { mode: data.codeAgentMode } : {}),
       }, (response) => {
         if (response.success && response.messageId) {
           callback?.({
@@ -1976,6 +1980,7 @@ export function registerAIHandlers({
         clientId,
         selectedModel: normalizeAIModel(data.model),
         roleName: data.roleName,
+        ...(data.codeAgentMode ? { mode: data.codeAgentMode } : {}),
       }, callback);
       return;
     }

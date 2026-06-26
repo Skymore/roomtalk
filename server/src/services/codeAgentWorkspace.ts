@@ -140,7 +140,9 @@ const buildCommandHistory = (messages: Message[]): CodeAgentWorkspaceCommand[] =
 };
 
 export const summarizeWorkspaceMessages = (messages: Message[]): CodeAgentWorkspaceSummary => {
-  const touchedFiles = new Set<string>();
+  const touchedFilesByToolCallId = new Map<string, string>();
+  const unpairedTouchedFiles = new Set<string>();
+  const failedToolCallIds = new Set<string>();
   let toolCalls = 0;
   let toolResults = 0;
   let toolErrors = 0;
@@ -153,7 +155,11 @@ export const summarizeWorkspaceMessages = (messages: Message[]): CodeAgentWorksp
 
       const fileRef = readFileRef(message.toolArgs);
       if (fileRef) {
-        touchedFiles.add(fileRef);
+        if (message.toolCallId) {
+          touchedFilesByToolCallId.set(message.toolCallId, fileRef);
+        } else {
+          unpairedTouchedFiles.add(fileRef);
+        }
       }
     }
 
@@ -162,7 +168,17 @@ export const summarizeWorkspaceMessages = (messages: Message[]): CodeAgentWorksp
       lastToolName = message.toolName || lastToolName;
       if (message.isError) {
         toolErrors += 1;
+        if (message.toolCallId) {
+          failedToolCallIds.add(message.toolCallId);
+        }
       }
+    }
+  }
+
+  const touchedFiles = new Set(unpairedTouchedFiles);
+  for (const [toolCallId, fileRef] of touchedFilesByToolCallId.entries()) {
+    if (!failedToolCallIds.has(toolCallId)) {
+      touchedFiles.add(fileRef);
     }
   }
 

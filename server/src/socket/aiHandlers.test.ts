@@ -420,7 +420,7 @@ describe('AI socket handlers', () => {
     });
 
     let response: unknown;
-    await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id }, (ack: unknown) => {
+    await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id, codeAgentMode: 'plan' }, (ack: unknown) => {
       response = ack;
     });
 
@@ -458,7 +458,7 @@ describe('AI socket handlers', () => {
     });
 
     let response: unknown;
-    await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id }, (ack: unknown) => {
+    await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id, codeAgentMode: 'plan' }, (ack: unknown) => {
       response = ack;
     });
 
@@ -468,6 +468,7 @@ describe('AI socket handlers', () => {
       clientId: 'client-1',
       selectedModel,
       roleName: undefined,
+      mode: 'plan',
     });
     assert.deepEqual(response, { success: true, messageId: 'coco-ai-1' });
     assert.equal(store.upsertedMessages.length, 0);
@@ -992,6 +993,7 @@ describe('AI socket handlers', () => {
       messageId: 'message-edited',
       newContent: 'edited prompt',
       model: selectedModel.id,
+      codeAgentMode: 'acceptEdits',
     }, (ack: unknown) => {
       response = ack;
     });
@@ -1004,6 +1006,7 @@ describe('AI socket handlers', () => {
       clientId: 'client-1',
       selectedModel,
       roleName: undefined,
+      mode: 'acceptEdits',
     });
     const editedEvent = io.roomEmits.find(event => event.event === 'message_edited');
     assert.equal((editedEvent?.args[0] as Message).content, 'edited prompt');
@@ -1087,6 +1090,7 @@ describe('AI socket handlers', () => {
       content: 'fresh prompt',
       clientMessageId: 'client-message-1',
       model: selectedModel.id,
+      codeAgentMode: 'acceptEdits',
     }, (ack: { success: boolean; userMessage?: Message; aiMessageId?: string; aiStarted?: boolean; aiError?: string }) => {
       response = ack;
     });
@@ -1099,6 +1103,7 @@ describe('AI socket handlers', () => {
       clientId: 'client-1',
       selectedModel,
       roleName: undefined,
+      mode: 'acceptEdits',
     });
     assert.equal(response?.success, true);
     assert.equal(response?.userMessage, store.appendedMessages[0]);

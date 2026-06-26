@@ -35,6 +35,7 @@ export interface CocoTurnInput {
   clientId: string;
   selectedModel: AIModelOption;
   roleName?: string;
+  mode?: CocoRunnerMode;
 }
 
 export type CocoTurnAck = { success: boolean; messageId?: string; error?: string };
@@ -83,6 +84,11 @@ export class CocoSessionService {
 
     if (this.activeTurns.has(input.roomId)) {
       return ack({ success: false, error: 'A Coco task is already running in this room' });
+    }
+
+    const turnMode = this.resolveTurnMode(input.mode);
+    if (!turnMode.ok) {
+      return ack({ success: false, error: turnMode.error });
     }
 
     let aiMessageId = '';
@@ -152,7 +158,7 @@ export class CocoSessionService {
         turnId,
         sessionId: room!.cocoSessionId || null,
         prompt,
-        mode: this.options.mode || 'plan',
+        mode: turnMode.mode,
         provider: input.selectedModel.provider,
         modelId: input.selectedModel.id,
         apiModel: input.selectedModel.apiModel,
@@ -243,6 +249,20 @@ export class CocoSessionService {
       return { success: false, error: 'You do not have access to this Coco room' };
     }
     return { success: true };
+  }
+
+  private resolveTurnMode(requestedMode?: CocoRunnerMode): { ok: true; mode: CocoRunnerMode } | { ok: false; error: string } {
+    const configuredMode = this.options.mode || 'plan';
+    if (!requestedMode || requestedMode === configuredMode) {
+      return { ok: true, mode: configuredMode };
+    }
+    if (requestedMode === 'plan') {
+      return { ok: true, mode: 'plan' };
+    }
+    if (requestedMode === 'acceptEdits' && configuredMode !== 'acceptEdits') {
+      return { ok: false, error: 'Coco edit mode is not enabled' };
+    }
+    return { ok: true, mode: requestedMode };
   }
 
   private async readLatestPrompt(roomId: string, clientId: string) {

@@ -36,18 +36,21 @@ describe('summarizeCocoMessages', () => {
       message({
         id: 'call-1',
         messageType: 'tool_call',
+        toolCallId: 'read-1',
         toolName: 'Read',
         toolArgs: { file_path: 'src/App.tsx' },
       }),
       message({
         id: 'call-2',
         messageType: 'tool_call',
+        toolCallId: 'edit-1',
         toolName: 'Edit',
         toolArgs: { path: 'src/App.tsx' },
       }),
       message({
         id: 'result-1',
         messageType: 'tool_result',
+        toolCallId: 'edit-1',
         toolName: 'Edit',
         isError: true,
       }),
@@ -77,6 +80,42 @@ describe('summarizeCocoMessages', () => {
     expect(summary.touchedFiles).toEqual([]);
     expect(summary.toolCalls).toBe(2);
     expect(summary.lastToolName).toBe('Read');
+  });
+
+  it('does not show files from failed file tool calls', () => {
+    const summary = summarizeCocoMessages([
+      message({
+        id: 'write-call',
+        messageType: 'tool_call',
+        toolCallId: 'write-1',
+        toolName: 'Write',
+        toolArgs: { file_path: 'hello.py', content: 'print(1 + 1)' },
+      }),
+      message({
+        id: 'write-result',
+        messageType: 'tool_result',
+        toolCallId: 'write-1',
+        toolName: 'Write',
+        isError: true,
+      }),
+      message({
+        id: 'read-call',
+        messageType: 'tool_call',
+        toolCallId: 'read-1',
+        toolName: 'Read',
+        toolArgs: { file_path: '.' },
+      }),
+      message({
+        id: 'read-result',
+        messageType: 'tool_result',
+        toolCallId: 'read-1',
+        toolName: 'Read',
+        isError: true,
+      }),
+    ]);
+
+    expect(summary.touchedFiles).toEqual([]);
+    expect(summary.toolErrors).toBe(2);
   });
 
   it('normalizes sandbox and absolute file paths for display', () => {

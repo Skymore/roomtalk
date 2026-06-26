@@ -180,6 +180,7 @@ const createService = (options: {
   ids?: string[];
   runnerEnv?: Record<string, string>;
   runnerProviderEnvByProvider?: Partial<Record<AIModelOption['provider'], Record<string, string>>>;
+  mode?: 'plan' | 'acceptEdits';
 } = {}) => {
   const store = options.store || new MemoryCocoStore(room(), [userMessage()]);
   const emitter = new FakeEmitter();
@@ -202,6 +203,7 @@ const createService = (options: {
     {
       enabled: options.enabled ?? true,
       allowedClientIds: options.allowedClientIds,
+      mode: options.mode,
       runnerEnv: options.runnerEnv,
       runnerProviderEnvByProvider: options.runnerProviderEnvByProvider,
       now: () => new Date('2026-05-03T00:00:00.000Z'),
@@ -304,6 +306,39 @@ describe('CocoSessionService', () => {
       PYTHONUNBUFFERED: '1',
       DEEPSEEK_API_KEY: 'deepseek-key',
     });
+  });
+
+  it('allows each Coco turn to choose plan mode within an edit-capable server configuration', async () => {
+    const runner = new FakeCocoRunnerClient([
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    ]);
+    const { service } = createService({ runner, mode: 'acceptEdits' });
+
+    await service.startTurn({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      selectedModel,
+      mode: 'plan',
+    });
+
+    assert.equal(runner.requests[0].mode, 'plan');
+  });
+
+  it('rejects edit mode requests when the server is configured for plan mode only', async () => {
+    const runner = new FakeCocoRunnerClient([
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    ]);
+    const { service } = createService({ runner, mode: 'plan' });
+
+    const result = await service.startTurn({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      selectedModel,
+      mode: 'acceptEdits',
+    });
+
+    assert.deepEqual(result, { success: false, error: 'Coco edit mode is not enabled' });
+    assert.equal(runner.requests.length, 0);
   });
 
   it('keeps host provider keys out of proxied runner environments', async () => {
