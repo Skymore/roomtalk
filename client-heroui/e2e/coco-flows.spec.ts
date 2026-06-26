@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import {
+  editMessage,
   expectCocoFeatureEnabled,
   expectChatRoom,
   expectMessage,
@@ -92,4 +93,25 @@ test('locks Coco ask controls while the room turn is running', async ({ page, co
   await editor.click();
   await page.keyboard.insertText(uniqueName('coco-next'));
   await expect(askButton).toBeEnabled();
+});
+
+test('edits a Coco prompt and starts a new Coco turn', async ({ page, context, request }) => {
+  await createCocoRoom(page, context, request);
+  const originalPrompt = uniqueName('coco-edit-original');
+  const editedPrompt = uniqueName('coco-edit-updated');
+  const dialogs: string[] = [];
+  page.on('dialog', async dialog => {
+    dialogs.push(dialog.message());
+    await dialog.dismiss();
+  });
+
+  await askCoco(page, originalPrompt);
+  await expect(messageItem(page, 'Coco fake runner received the task.')).toBeVisible();
+  await editMessage(page, originalPrompt, editedPrompt, true);
+
+  await expectMessage(page, editedPrompt).toBeVisible();
+  await expect(messageItem(page, originalPrompt)).toHaveCount(0);
+  await expect(messageItem(page, 'Coco fake runner received the task.')).toBeVisible();
+  await expect(page.getByText('Tool call')).toBeVisible();
+  expect(dialogs).toEqual([]);
 });

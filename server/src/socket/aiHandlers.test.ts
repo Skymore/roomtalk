@@ -963,7 +963,57 @@ describe('AI socket handlers', () => {
     assert.deepEqual(response, { success: true, messageId: store.upsertedMessages[0].id });
   });
 
-  it('does not route Coco edit-and-ask through the ordinary chat AI path', async () => {
+  it('edits, truncates, and routes Coco edit-and-ask to the Coco session service', async () => {
+    const calls: unknown[][] = [];
+    const cocoSessionService = {
+      async startTurn(...args: unknown[]) {
+        calls.push(args);
+        const callback = args[1] as ((response: { success: boolean; messageId?: string }) => void) | undefined;
+        callback?.({ success: true, messageId: 'coco-ai-edit-1' });
+        return { success: true, messageId: 'coco-ai-edit-1' };
+      },
+    };
+    const { io, socket, store } = createHarness({
+      currentRoom: room({ type: 'coco' }),
+      cocoSessionService,
+    });
+    const editedUser = message({ id: 'message-edited', content: 'original prompt' });
+    const staleTool = message({
+      id: 'tool-stale',
+      clientId: 'coco',
+      content: 'stale tool result',
+      messageType: 'tool_result',
+    });
+    store.messages = [message(), editedUser, staleTool];
+
+    let response: unknown;
+    await socket.invoke('edit_message_and_ask_ai', {
+      roomId: 'room-1',
+      messageId: 'message-edited',
+      newContent: 'edited prompt',
+      model: selectedModel.id,
+    }, (ack: unknown) => {
+      response = ack;
+    });
+
+    assert.deepEqual(store.editAndTruncateCalls, [{ roomId: 'room-1', messageId: 'message-edited', newContent: 'edited prompt' }]);
+    assert.equal(store.upsertedMessages.length, 0);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0][0], {
+      roomId: 'room-1',
+      clientId: 'client-1',
+      selectedModel,
+      roleName: undefined,
+    });
+    const editedEvent = io.roomEmits.find(event => event.event === 'message_edited');
+    assert.equal((editedEvent?.args[0] as Message).content, 'edited prompt');
+    const historyEvent = io.roomEmits.find(event => event.event === 'message_history');
+    const historyPayload = historyEvent?.args[0] as { messages: Message[] };
+    assert.deepEqual(historyPayload.messages.map(item => item.id), ['message-1', 'message-edited']);
+    assert.deepEqual(response, { success: true, messageId: 'coco-ai-edit-1' });
+  });
+
+  it('does not edit Coco messages when the Coco session service is unavailable', async () => {
     const { socket, store } = createHarness({ currentRoom: room({ type: 'coco' }) });
 
     let response: unknown;
@@ -976,9 +1026,8 @@ describe('AI socket handlers', () => {
       response = ack;
     });
 
-    assert.deepEqual(response, { success: false, error: 'Coco edit-and-ask is not supported' });
+    assert.deepEqual(response, { success: false, error: 'Coco is unavailable' });
     assert.deepEqual(store.editAndTruncateCalls, []);
-    assert.equal(store.upsertedMessages.length, 0);
   });
 
   it('saves a user message before starting AI with prepared history', async () => {
