@@ -651,6 +651,27 @@ E2E 默认使用 fake runner：
 | Phase 6：真实 Coco runner 和沙盒镜像 | 完成 | `f34f0df`、`e02efd6`、`daf6bee`、`dcc6621`、`d4cdc2d`、`01771bf`、`94550bf`、`e2c5398` | runner adapter、JSONL client、runtime guardrails、artifact、model access contract、E2B SDK driver 和 smoke 入口已完成 |
 | Phase 7：灰度上线和回滚 | 完成 | `3a5cc32 feat: add coco rollout controls` | feature flag、allowlist、前后端创建/加入/详情查询入口阻断、Coco 运行中输入锁定、回归测试和 Claude review |
 
+2026-06-26 merge validation:
+
+- `63a75222 coco: merge code-agent room support` merged the completed Coco/code-agent work onto current `master`.
+- `58666f84 test: harden coco merge validation` fixed merge-time validation gaps:
+  - PostgreSQL E2E now runs the server with `NODE_ENV=test` and local media storage so image-message persistence is covered.
+  - persistence smoke reads room messages with the authorized `clientId`.
+  - HTTP room creation now supports `type: "coco"` and uses the same rollout controls as the Socket.IO `create_room` path.
+  - E2E room-name helpers now stay within the server's 20-character room-name contract.
+- Local validation after the merge:
+  - `cd server && npm run build`
+  - `cd server && npm test`：382/382 passed
+  - `cd server && TEST_DATABASE_URL="postgres://roomtalk@127.0.0.1:55432/message_system_e2e" npm run smoke:persistence`
+  - `cd client-heroui && npm run lint`
+  - `cd client-heroui && npm test -- --run`：253/253 passed
+  - `cd client-heroui && npm run build`
+  - `python -m pytest server/roomtalk_coco_runner/tests`：16/16 passed
+  - `cd client-heroui && CI=1 NODE_ENV=test E2E_CLIENT_PORT=3461 E2E_SERVER_PORT=3462 ./node_modules/.bin/playwright test`：28 passed, 1 media-storage-dependent test skipped
+  - `cd client-heroui && E2E_DATABASE_URL="postgres://roomtalk@127.0.0.1:55432/message_system_e2e" ./node_modules/.bin/playwright test --config=playwright.postgres.config.ts`：3/3 passed
+- Manual smoke after the merge: an E2E-mode server with Coco enabled successfully exposed `features.coco.mode = "plan"`, created a Coco room through `POST /api/clients/:clientId/rooms`, and returned a Coco workspace snapshot through `GET /api/clients/:clientId/rooms/:roomId/workspace`.
+- Claude Code review could not be completed in this checkpoint because `claude -p` returned `401 Invalid authentication credentials` even though `claude auth status` reported a logged-in Claude Max account.
+
 后续执行规则：
 
 1. 每个 Phase 单独实现、测试、Claude Code Opus 4.7 只读 review、修复高优先级问题、提交。

@@ -68,7 +68,7 @@ test('renames an owned room from the room card and current room header', async (
 
 test('uses the desktop saved list without a separate saved navigation card', async ({ page, context, request }) => {
   const clientId = await seedClient(context);
-  const room = await createRoomViaApi(request, clientId, uniqueName('saved-room'));
+  const room = await createRoomViaApi(request, clientId, shortName('saved-room'));
 
   await openRoomsPage(page);
   await openRoomFromCard(page, room);

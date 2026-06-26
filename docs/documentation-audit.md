@@ -28,7 +28,7 @@ excluded.
 | `docs/postgres-persistence-plan.md` | Completed plan | Marked as historical; current schema has expanded beyond the original plan. |
 | `docs/postgres-test-coverage-plan.zh.md` | Completed plan | Early “gaps” are pre-implementation state; execution status is later in the doc. |
 | `docs/postgres-migration-development-summary.zh.md` | Historical summary | Still useful as migration/postmortem context. |
-| `docs/code-agent-sandbox.md` | Unimplemented draft | Marked as historical; proposed data model/message types are not in current code. |
+| `docs/code-agent-sandbox.md` | Completed historical plan | Coco sandbox/runner phases are implemented; current validation status is recorded in the document. |
 | `docs/image-object-storage-migration-runbook.md` | Archival/blocked | Updated variable names and schema references; migration is blocked until the missing script is restored or reimplemented. |
 | `docs/a2ui-streaming-implementation.zh.md` | Implementation record | Appears current against A2UI v0.9 integration; no action taken. |
 | `docs/mobile-keyboard-viewport-fix.zh.md` | Fix record | Added current viewport/keyboard behavior notes. |

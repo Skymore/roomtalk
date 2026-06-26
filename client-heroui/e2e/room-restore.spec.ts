@@ -9,6 +9,7 @@ import {
   postMessageViaApi,
   resetE2EData,
   seedClient,
+  shortName,
   uniqueName,
 } from './helpers';
 
@@ -20,7 +21,7 @@ async function openOwnedRoom(
   page: Parameters<typeof openRoomsPage>[0],
   context: Parameters<typeof seedClient>[0],
   request: Parameters<typeof createRoomViaApi>[0],
-  roomName = uniqueName('restore-room'),
+  roomName = shortName('restore-room'),
 ) {
   const clientId = await seedClient(context, uniqueName('restore-client'));
   const room = await createRoomViaApi(request, clientId, roomName);
