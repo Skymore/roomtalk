@@ -7,8 +7,8 @@ This audit records the current migration completion evidence after the Coco/code
 ## Current Git State
 
 - `origin/master` and `origin/codex/coco-merge-master` were both advanced past the Coco/code-agent merge and legacy media migration restoration.
-- `ecede309 docs: close media migration execute smoke gap` is the latest audited shared remote commit.
-- GitHub Actions `CI/CD` completed successfully for the pushed migration audit commits through `ecede309`.
+- The implementation and verification evidence has been committed and pushed to both `origin/master` and `origin/codex/coco-merge-master`.
+- GitHub Actions `CI/CD` completed successfully for the pushed migration audit commits.
 - `.claude/settings.local.json` remains a local-only uncommitted file and is intentionally excluded from migration commits.
 
 ## Migration Lines
@@ -59,7 +59,7 @@ Observed results:
   - ran `npm run migrate:media-to-object-storage -- --execute --room-id=<seeded-room-id>` against local media storage;
   - verified the message content was cleared, message and asset MIME types became `image/webp`, one `media_assets` row was created, and the local object plus metadata file existed;
   - reran execute mode and verified it skipped the already asset-backed message without creating duplicate assets.
-- GitHub Actions `CI/CD` completed successfully for the pushed migration audit commits through `ecede309`.
+- GitHub Actions `CI/CD` completed successfully for the pushed migration audit commits.
 
 ## External Review Gate
 
