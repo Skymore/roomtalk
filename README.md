@@ -180,7 +180,7 @@ The PostgreSQL smoke database name must include `test` or `e2e` as a separated t
 
 New media uploads use private S3-compatible object storage via `MEDIA_*` and AWS credential variables. Development can use local object routes when storage is not configured.
 
-Known maintenance note: older docs referenced a legacy base64-to-object-storage migration script, but the current checkout does not contain `server/src/scripts/migrateLegacyMediaMessagesToObjectStorage.ts`. Do not run old `dist/...migrateImageMessagesToObjectStorage.js` commands unless the script is restored or reimplemented. See [docs/image-object-storage-migration-runbook.md](docs/image-object-storage-migration-runbook.md).
+Legacy base64 image cleanup is available through `cd server && npm run migrate:media-to-object-storage`. It defaults to dry-run, converts candidate images to lossless WebP in memory, and requires `--execute` plus a verified backup file before uploading objects or updating PostgreSQL. See [docs/image-object-storage-migration-runbook.md](docs/image-object-storage-migration-runbook.md).
 
 ## Deployment
 

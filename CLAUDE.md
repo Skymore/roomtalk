@@ -85,7 +85,7 @@ Desktop uses a sidebar layout (`DesktopSidebar`); mobile uses bottom navigation 
 
 ### Media Pipeline
 
-Upload: client requests presigned URL → uploads to S3/Tigris or local media storage → confirms to server → server creates a `MediaAsset` record. Download: server generates signed read URLs on demand. Historical docs mention `npm run migrate:media-to-object-storage`, but the referenced migration source is currently absent; restore or reimplement `server/src/scripts/migrateLegacyMediaMessagesToObjectStorage.ts` before attempting a legacy base64 migration.
+Upload: client requests presigned URL → uploads to S3/Tigris or local media storage → confirms to server → server creates a `MediaAsset` record. Download: server generates signed read URLs on demand. Legacy base64 image cleanup is available through `npm run migrate:media-to-object-storage`; it defaults to dry-run and requires `--execute` plus a verified backup file before uploading objects or updating PostgreSQL.
 
 ### AI Streaming
 

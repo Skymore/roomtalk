@@ -1,11 +1,9 @@
 # Legacy Image Media Object Storage Migration Runbook
 
-> Status: archival / blocked. The current checkout does not contain the legacy
-> migration source file referenced by older docs (`server/src/scripts/migrateLegacyMediaMessagesToObjectStorage.ts`).
+> Status: active runbook. The current migration entrypoint is
+> `cd server && npm run migrate:media-to-object-storage`.
 > Do not run stale `dist/...migrateImageMessagesToObjectStorage.js` commands
-> unless that script is restored or reimplemented and reviewed.
-> The current `npm run migrate:media-to-object-storage` entrypoint exits with
-> an explanatory error instead of a missing-file stack trace.
+> from older docs.
 
 This runbook covers the one-time migration from legacy base64 image messages in PostgreSQL to private S3/Tigris media object storage. PostgreSQL now uses the unified `media_assets` table; the old `image_assets` table has been removed.
 
@@ -30,7 +28,7 @@ The intended migration converts legacy images to lossless WebP with `sharp`. The
 - Local environment can reach the production PostgreSQL database.
 - Local environment has Tigris/S3 credentials for the private media bucket.
 - The deployed server already supports asset-backed image messages and signed read URLs.
-- The migration script has been restored or reimplemented and its npm entrypoint works.
+- The migration script is present at `server/src/scripts/migrateLegacyMediaMessagesToObjectStorage.ts` and its npm entrypoint works.
 
 Required environment variables:
 
@@ -49,7 +47,7 @@ Do not commit these values.
 
 ## Dry Run
 
-After restoring the migration script, run from the local `server` directory:
+Run from the local `server` directory:
 
 ```bash
 cd server
@@ -78,6 +76,14 @@ The script is idempotent:
 - messages that already have an image asset are skipped;
 - uploaded objects are deleted best-effort if PostgreSQL replacement fails;
 - repeated runs should not duplicate message rows or image assets.
+
+Execute mode safety checks:
+
+- `DATABASE_URL` is required.
+- `--backup-file` or `ROOMTALK_DB_BACKUP_FILE` is required.
+- The backup file path must be absolute and must point to an existing file.
+- The script refuses to run on a Fly app VM unless `ALLOW_FLY_APP_VM_IMAGE_MIGRATION=true` is set for a dedicated migration machine.
+- Media object storage must be configured; development-only local media storage is acceptable only for local smoke tests against disposable databases.
 
 ## Verification
 
@@ -116,3 +122,9 @@ After migration:
 ## Rollback
 
 The database backup is the rollback source of truth. If execute mode partially fails, rerun after fixing the issue; the script skips already asset-backed messages. If a completed migration must be undone, restore the verified backup and delete orphaned objects from the bucket.
+
+## Test Coverage
+
+- `server/src/scripts/migrateLegacyMediaMessagesToObjectStorage.test.ts` covers data URL parsing, dry-run behavior, execute-mode upload/replacement, idempotent asset-backed skips, failed replacement object cleanup, and CLI safety guards.
+- Store contract tests cover `replaceMessageMediaAsset` behavior for Redis and PostgreSQL durable stores.
+- `client-heroui/e2e/ai-media-sharing.spec.ts` covers the browser image upload/send/render path with local media storage, so asset-backed image messages remain end-to-end visible after the migration.

@@ -29,14 +29,13 @@ excluded.
 | `docs/postgres-test-coverage-plan.zh.md` | Completed plan | Early “gaps” are pre-implementation state; execution status is later in the doc. |
 | `docs/postgres-migration-development-summary.zh.md` | Historical summary | Still useful as migration/postmortem context. |
 | `docs/code-agent-sandbox.md` | Completed historical plan | Coco sandbox/runner phases are implemented; current validation status is recorded in the document. |
-| `docs/image-object-storage-migration-runbook.md` | Archival/blocked | Updated variable names and schema references; migration is blocked until the missing script is restored or reimplemented. |
+| `docs/image-object-storage-migration-runbook.md` | Active runbook | Legacy base64 media migration script is restored; runbook documents dry-run, execute-mode safety checks, verification, rollback, and tests. |
 | `docs/a2ui-streaming-implementation.zh.md` | Implementation record | Appears current against A2UI v0.9 integration; no action taken. |
 | `docs/mobile-keyboard-viewport-fix.zh.md` | Fix record | Added current viewport/keyboard behavior notes. |
 | `docs/room-reliability/*.zh.md` | Historical reliability series | Added status banners where needed; current index records the remaining stable-error-code cleanup item. |
 
 ## Known Follow-Ups
 
-- Restore or reimplement `server/src/scripts/migrateLegacyMediaMessagesToObjectStorage.ts`; until then `npm run migrate:media-to-object-storage` exits with an explanatory message.
 - Replace string/regex socket error handling with stable error codes, especially `ROOM_NOT_FOUND`.
 - Add missing automated coverage for media-viewer pinch, zoomed-image swipe suppression, edge resistance, velocity-only commits, keyboard controls, and single-tap delay.
 
@@ -53,7 +52,7 @@ excluded.
 | 1 | CI 缺 `DEEPSEEK_API_KEY` 校验：默认模型需要该 key，但 `fly-deploy.yml` 未检查 | **已修**，CI 加了 `require_secret DEEPSEEK_API_KEY` |
 | 2 | PostgreSQL `image_assets` / `media_assets` 双表并存 | **已修**，生产 180 行全冗余，已 DROP 表 + 清理代码 |
 | 3 | `AGENTS.md` 未被 Git 跟踪 | **已不成立**，已作为 symlink 提交 |
-| 4 | `package.json` 里 `migrate:media-to-object-storage` 指向不存在的文件 | **已修**，改为打印提示并退出 |
+| 4 | `package.json` 里 `migrate:media-to-object-storage` 指向不存在的文件 | **已修**，当前指向 `server/src/scripts/migrateLegacyMediaMessagesToObjectStorage.ts` 并有单元测试覆盖 |
 | 5 | `.claude/settings.local.json` 含个人路径 | 提交时排除，不纳入 |
 
 ### 已验证正确
