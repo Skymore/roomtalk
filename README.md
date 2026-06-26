@@ -210,6 +210,7 @@ Use focused tests next to changed code. Use Playwright for browser-visible behav
 - [CLAUDE.md](CLAUDE.md): concise contributor/agent operating guide.
 - [docs/postgres-rollout-runbook.md](docs/postgres-rollout-runbook.md): production PostgreSQL cutover checklist.
 - [docs/postgres-migration-development-summary.zh.md](docs/postgres-migration-development-summary.zh.md): historical PostgreSQL migration review.
+- [docs/migration-completion-audit.md](docs/migration-completion-audit.md): current migration completion evidence and remaining external gates.
 - [docs/room-reliability/README.zh.md](docs/room-reliability/README.zh.md): room restore and room-update reliability series.
 - [docs/media-viewer-gesture-requirements.md](docs/media-viewer-gesture-requirements.md): active media-viewer gesture requirements.
 - [docs/mobile-keyboard-viewport-fix.zh.md](docs/mobile-keyboard-viewport-fix.zh.md): iOS keyboard viewport fix record.
