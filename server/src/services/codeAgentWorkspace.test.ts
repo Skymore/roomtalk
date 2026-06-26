@@ -68,10 +68,10 @@ describe('code-agent workspace snapshots', () => {
       toolCalls: 1,
       toolResults: 1,
       toolErrors: 1,
-      touchedFiles: ['project/src/App.tsx'],
+      touchedFiles: [],
       lastToolName: 'Read',
     });
-    assert.deepEqual(snapshot.files, { touched: ['project/src/App.tsx'], hiddenCount: 0 });
+    assert.deepEqual(snapshot.files, { touched: [], hiddenCount: 0 });
     assert.deepEqual(snapshot.changes, { available: false, changedFiles: [], diffSummary: null });
     assert.deepEqual(snapshot.commands, [{
       id: 'tool-1',
@@ -80,6 +80,41 @@ describe('code-agent workspace snapshots', () => {
       exitCode: 2,
       preview: 'failed with details',
     }]);
+  });
+
+  it('does not show failed file tool calls as touched files', () => {
+    const snapshot = buildCodeAgentWorkspaceSnapshot(room, [
+      toolCall({
+        id: 'write-call',
+        toolCallId: 'write-1',
+        toolName: 'Write',
+        toolArgs: { file_path: 'hello.py', content: 'print(1 + 1)' },
+      }),
+      toolResult({
+        id: 'write-result',
+        toolCallId: 'write-1',
+        toolName: 'Write',
+        isError: true,
+        toolOutputPreview: "Error: unknown tool 'Write'",
+      }),
+      toolCall({
+        id: 'read-call',
+        toolCallId: 'read-1',
+        toolName: 'Read',
+        toolArgs: { file_path: '.' },
+      }),
+      toolResult({
+        id: 'read-result',
+        toolCallId: 'read-1',
+        toolName: 'Read',
+        isError: true,
+        toolOutputPreview: 'Error: Not a file: .',
+      }),
+    ]);
+
+    assert.deepEqual(snapshot.summary.touchedFiles, []);
+    assert.deepEqual(snapshot.files, { touched: [], hiddenCount: 0 });
+    assert.equal(snapshot.summary.toolErrors, 2);
   });
 
   it('limits file refs and command history for browser payloads', () => {

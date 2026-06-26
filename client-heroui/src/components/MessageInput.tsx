@@ -47,6 +47,7 @@ import {
   isConfirmingIMEComposition,
 } from '../utils/keyboardComposition';
 import { Message, RoomPostingSchedule } from '../utils/types';
+import { CodeAgentMode } from '../utils/codeAgent';
 
 interface MessageInputProps {
   roomId: string;
@@ -64,6 +65,9 @@ interface MessageInputProps {
   postingSchedule?: RoomPostingSchedule;
   isRoomAIProcessing?: boolean;
   isCodeAgentRoom?: boolean;
+  codeAgentMode?: CodeAgentMode;
+  codeAgentMaxMode?: CodeAgentMode;
+  onCodeAgentModeChange?: (mode: CodeAgentMode) => void;
 }
 
 // 使用WeakMap存储图片元素和对应的File对象
@@ -143,6 +147,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   postingSchedule,
   isRoomAIProcessing = false,
   isCodeAgentRoom = false,
+  codeAgentMode = 'plan',
+  codeAgentMaxMode = 'plan',
+  onCodeAgentModeChange,
 }) => {
   const { t } = useTranslation();
   const [_contentItems, setContentItems] = useState<MessageContentItem[]>(emptyMessageContent());
@@ -231,6 +238,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   // 新增角色设置模态框的状态
   const { isOpen: isAISettingsOpen, onOpen: onAISettingsOpen, onClose: onAISettingsClose } = useDisclosure();
   const postingClosedMessage = t('postingClosed');
+  const selectedCodeAgentMode = codeAgentMaxMode === 'acceptEdits' ? codeAgentMode : 'plan';
 
   const handleAIContextMessageLimitChange = useCallback((limit: number) => {
     const normalizedLimit = normalizeAIContextMessageLimit(limit);
@@ -494,8 +502,12 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       if (!prompt) {
         await requestAIResponse({
           roomId,
-          systemPrompt: selectedRole.systemPrompt,
-          roleName: selectedRole.name,
+          ...(!isCodeAgentRoom ? {
+            systemPrompt: selectedRole.systemPrompt,
+            roleName: selectedRole.name,
+          } : {
+            codeAgentMode: selectedCodeAgentMode,
+          }),
           model: selectedAIModel || defaultAIModel,
           maxContextMessages: aiContextMessageLimit,
         });
@@ -515,8 +527,12 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         avatar,
         replyToMessageId: replyToMessage?.id,
         clientMessageId,
-        systemPrompt: selectedRole.systemPrompt,
-        roleName: selectedRole.name,
+        ...(!isCodeAgentRoom ? {
+          systemPrompt: selectedRole.systemPrompt,
+          roleName: selectedRole.name,
+        } : {
+          codeAgentMode: selectedCodeAgentMode,
+        }),
         model: selectedAIModel || defaultAIModel,
         maxContextMessages: aiContextMessageLimit,
       });
@@ -1625,6 +1641,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                 onAskAI={handleAskAI}
                 onSend={handleSubmit}
                 isCodeAgentRoom={isCodeAgentRoom}
+                codeAgentMode={selectedCodeAgentMode}
+                codeAgentMaxMode={codeAgentMaxMode}
+                onCodeAgentModeChange={onCodeAgentModeChange}
               />
             )}
           </div>

@@ -95,6 +95,8 @@ type SendMessageAndAskAIAckResponse = SocketAckResponse & {
   aiError?: string;
 };
 
+type CodeAgentMode = 'plan' | 'acceptEdits';
+
 type RoomAckResponse = SocketAckResponse & {
   room?: Room;
 };
@@ -939,6 +941,7 @@ export const requestAIResponse = (data: {
   editedMessageId?: string;
   retryForMessageId?: string;
   maxContextMessages?: number;
+  codeAgentMode?: CodeAgentMode;
 }) => {
   return emitWithAck('ask_ai', data, 'Timed out while starting AI response', 'Failed to start AI response')
     .then(() => undefined);
@@ -955,6 +958,7 @@ export const sendMessageAndAskAI = (params: {
   roleName?: string;
   model?: string;
   maxContextMessages?: number;
+  codeAgentMode?: CodeAgentMode;
 }): Promise<{ userMessage: Message; aiMessageId?: string; aiStarted: boolean; aiError?: string }> => {
   return emitWithAck<SendMessageAndAskAIAckResponse>(
     'send_message_and_ask_ai',
@@ -983,6 +987,7 @@ export const requestEditMessageAndAIResponse = (data: {
   roleName?: string;
   model?: string;
   maxContextMessages?: number;
+  codeAgentMode?: CodeAgentMode;
 }) => {
   return emitWithAck('edit_message_and_ask_ai', data, 'Timed out while starting AI response', 'Failed to start AI response')
     .then(() => undefined);

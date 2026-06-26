@@ -59,11 +59,28 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   const messageListRef = React.useRef<MessageListHandle>(null);
   const [composerHeight, setComposerHeight] = React.useState(96);
   const [showScrollButton, setShowScrollButton] = React.useState(false);
+  const [selectedMode, setSelectedMode] = React.useState<CodeAgentMode>('plan');
 
   React.useEffect(() => {
     setReplyToMessage(null);
     setShowScrollButton(false);
   }, [currentRoom.id]);
+
+  React.useEffect(() => {
+    if (mode !== 'acceptEdits') {
+      setSelectedMode('plan');
+      return;
+    }
+
+    const stored = localStorage.getItem(`roomtalk_code_agent_mode_${currentRoom.id}`);
+    setSelectedMode(stored === 'acceptEdits' ? 'acceptEdits' : 'plan');
+  }, [currentRoom.id, mode]);
+
+  const handleCodeAgentModeChange = React.useCallback((nextMode: CodeAgentMode) => {
+    const constrainedMode = mode === 'acceptEdits' ? nextMode : 'plan';
+    setSelectedMode(constrainedMode);
+    localStorage.setItem(`roomtalk_code_agent_mode_${currentRoom.id}`, constrainedMode);
+  }, [currentRoom.id, mode]);
 
   React.useLayoutEffect(() => {
     const el = composerRef.current;
@@ -132,7 +149,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
           room={currentRoom}
           presentation="code-agent"
           currentRoom={currentRoom}
-          codeAgentMode={mode}
+          codeAgentMode={selectedMode}
           onReply={setReplyToMessage}
           roomPermissions={roomPermissions}
           bottomInsetPx={composerHeight + 12}
@@ -180,6 +197,9 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
             postingSchedule={currentRoom.postingSchedule}
             isRoomAIProcessing={getCodeAgentStatus(currentRoom) === 'running'}
             isCodeAgentRoom
+            codeAgentMode={selectedMode}
+            codeAgentMaxMode={mode}
+            onCodeAgentModeChange={handleCodeAgentModeChange}
           />
         </div>
       </div>

@@ -23,6 +23,7 @@ from roomtalk_coco_runner.runner import (
     resolve_allowed_roots,
     run_request,
     scoped_workspace_cwd,
+    system_prompt_for_tools,
     tool_names_for_mode,
     validate_workspace_path,
 )
@@ -122,6 +123,20 @@ def test_tool_policy_treats_empty_env_as_an_isolated_environment(monkeypatch):
     monkeypatch.setenv("ROOMTALK_COCO_ALLOW_SHELL", "true")
 
     assert tool_names_for_mode("acceptEdits", {}) == ("Read", "Glob", "Grep")
+
+
+def test_system_prompt_matches_the_actual_tool_set():
+    plan_prompt = system_prompt_for_tools(("Read", "Glob", "Grep"), "plan")
+    assert "- Read:" in plan_prompt
+    assert "- Write:" not in plan_prompt
+    assert "Unavailable tools for this run: Write, Edit, Shell" in plan_prompt
+    assert "read-only" in plan_prompt
+
+    edit_prompt = system_prompt_for_tools(("Read", "Glob", "Grep", "Write", "Edit"), "acceptEdits")
+    assert "- Write:" in edit_prompt
+    assert "- Edit:" in edit_prompt
+    assert "- Shell:" not in edit_prompt
+    assert "Unavailable tools for this run: Shell" in edit_prompt
 
 
 def test_replay_tool_events_preserves_pairing_and_result_metadata():

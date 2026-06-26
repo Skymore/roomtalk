@@ -171,6 +171,41 @@ def tool_names_for_mode(mode: str, env: dict[str, str] | None = None) -> tuple[s
     return tuple(tools)
 
 
+def system_prompt_for_tools(tool_names: Iterable[str], mode: str) -> str:
+    available = tuple(tool_names)
+    unavailable = tuple(
+        tool for tool in (*READ_ONLY_TOOLS, *WRITE_TOOLS, SHELL_TOOL)
+        if tool not in available
+    )
+    descriptions = {
+        "Read": "Read files",
+        "Glob": "Find files with glob patterns; use **/* to list a project recursively",
+        "Grep": "Search file contents",
+        "Write": "Create or overwrite a complete file",
+        "Edit": "Replace an exact unique string in an existing file",
+        "Shell": "Run allowlisted shell commands",
+    }
+    available_lines = "\n".join(f"- {tool}: {descriptions[tool]}" for tool in available)
+    unavailable_line = ", ".join(unavailable) if unavailable else "none"
+    mode_guidance = (
+        "This run is read-only. Do not call unavailable write or shell tools. "
+        "If the user asks you to create, edit, or run code, explain that this room is currently in plan mode and provide the code or commands inline."
+        if mode == "plan"
+        else "This run may use only the available tools listed below. Do not call any unavailable tools."
+    )
+    return f"""You are Coco, a terminal coding assistant.
+
+Available tools for this run:
+{available_lines}
+
+Unavailable tools for this run: {unavailable_line}.
+{mode_guidance}
+
+Use Read / Glob / Grep to verify the workspace before editing. Edit requires old_string to match exactly once.
+When exploring a project structure, use Glob with pattern "**/*" to find files recursively.
+After tools return, answer clearly. Avoid redundant calls and endless loops."""
+
+
 def _provider_for_coco(provider: str):
     from core.models import Provider
 
@@ -313,6 +348,7 @@ def create_coco_engine(request: RunnerRequest, env: dict[str, str] | None = None
     return Engine(
         llm,
         tools,
+        system=system_prompt_for_tools(tool_names, request.mode),
         permissions=permissions,
         allowed_tools=allowed_tools,
         workspace=workspace,

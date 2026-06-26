@@ -90,7 +90,9 @@ const readFileRef = (args: Record<string, unknown> | undefined): string | null =
 };
 
 export const summarizeCocoMessages = (messages: Message[]): CocoWorkspaceSummary => {
-  const touchedFiles = new Set<string>();
+  const touchedFilesByToolCallId = new Map<string, string>();
+  const unpairedTouchedFiles = new Set<string>();
+  const failedToolCallIds = new Set<string>();
   let toolCalls = 0;
   let toolResults = 0;
   let toolErrors = 0;
@@ -103,7 +105,11 @@ export const summarizeCocoMessages = (messages: Message[]): CocoWorkspaceSummary
 
       const fileRef = readFileRef(message.toolArgs);
       if (fileRef) {
-        touchedFiles.add(fileRef);
+        if (message.toolCallId) {
+          touchedFilesByToolCallId.set(message.toolCallId, fileRef);
+        } else {
+          unpairedTouchedFiles.add(fileRef);
+        }
       }
     }
 
@@ -112,7 +118,17 @@ export const summarizeCocoMessages = (messages: Message[]): CocoWorkspaceSummary
       lastToolName = message.toolName || lastToolName;
       if (message.isError) {
         toolErrors += 1;
+        if (message.toolCallId) {
+          failedToolCallIds.add(message.toolCallId);
+        }
       }
+    }
+  }
+
+  const touchedFiles = new Set(unpairedTouchedFiles);
+  for (const [toolCallId, fileRef] of touchedFilesByToolCallId.entries()) {
+    if (!failedToolCallIds.has(toolCallId)) {
+      touchedFiles.add(fileRef);
     }
   }
 

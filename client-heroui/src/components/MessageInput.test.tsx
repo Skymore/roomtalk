@@ -97,8 +97,13 @@ vi.mock('./MessageInputAIControls', () => ({
       settings
     </button>
   ),
-  MessageInputAIControls: ({ onAskAI, onSend }: any) => (
-    <div>
+  MessageInputAIControls: ({ onAskAI, onSend, isCodeAgentRoom, codeAgentMode, codeAgentMaxMode }: any) => (
+    <div
+      data-testid="message-input-ai-controls"
+      data-code-agent-room={String(Boolean(isCodeAgentRoom))}
+      data-code-agent-mode={codeAgentMode || ''}
+      data-code-agent-max-mode={codeAgentMaxMode || ''}
+    >
       <button type="button" onClick={onAskAI}>ask-ai</button>
       <button type="button" onClick={onSend}>send-message</button>
     </div>
@@ -312,6 +317,38 @@ describe('MessageInput optimistic send flow', () => {
         savedMessage
       );
     });
+  });
+
+  it('uses code-agent mode without ordinary role prompts for Coco Ask AI', async () => {
+    const savedMessage = message({ id: 'server-message-coco', content: 'write python' });
+    socketMocks.sendMessageAndAskAI.mockResolvedValue({
+      userMessage: savedMessage,
+      aiMessageId: 'coco-ai-message-1',
+      aiStarted: true,
+    });
+
+    const { editor } = renderMessageInput({
+      isCodeAgentRoom: true,
+      codeAgentMode: 'plan',
+      codeAgentMaxMode: 'acceptEdits',
+    });
+    setEditorText(editor, 'write python');
+
+    fireEvent.click(screen.getByText('ask-ai'));
+
+    await waitFor(() => expect(socketMocks.sendMessageAndAskAI).toHaveBeenCalledTimes(1));
+    const payload = socketMocks.sendMessageAndAskAI.mock.calls[0][0];
+
+    expect(screen.getByTestId('message-input-ai-controls').dataset.codeAgentRoom).toBe('true');
+    expect(screen.getByTestId('message-input-ai-controls').dataset.codeAgentMode).toBe('plan');
+    expect(payload).toMatchObject({
+      roomId: 'room-1',
+      content: 'write python',
+      codeAgentMode: 'plan',
+      model: 'model-a',
+    });
+    expect(payload).not.toHaveProperty('systemPrompt');
+    expect(payload).not.toHaveProperty('roleName');
   });
 
   it('confirms the optimistic message when only the AI startup fails', async () => {
