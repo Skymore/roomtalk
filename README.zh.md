@@ -180,7 +180,7 @@ PostgreSQL smoke 数据库名必须包含独立的 `test` 或 `e2e` token。
 
 新媒体上传通过 `MEDIA_*` 和 AWS 凭据变量写入私有 S3 兼容对象存储。未配置对象存储时，开发环境可以使用本地对象路由兜底。
 
-维护说明：旧文档曾引用 legacy Base64 到对象存储的迁移脚本，但当前 checkout 中没有 `server/src/scripts/migrateLegacyMediaMessagesToObjectStorage.ts`。不要运行旧的 `dist/...migrateImageMessagesToObjectStorage.js` 命令，除非先恢复或重写脚本。详见 [docs/image-object-storage-migration-runbook.md](docs/image-object-storage-migration-runbook.md)。
+Legacy Base64 图片清理可通过 `cd server && npm run migrate:media-to-object-storage` 执行。默认是 dry-run，会在内存中把候选图片转为 lossless WebP；只有显式 `--execute` 并提供已验证备份文件后，才会上传对象并更新 PostgreSQL。详见 [docs/image-object-storage-migration-runbook.md](docs/image-object-storage-migration-runbook.md)。
 
 ## 部署
 

@@ -21,7 +21,8 @@ const hasMediaStorageConfig = () =>
     process.env.MEDIA_BUCKET_NAME ||
       process.env.S3_BUCKET ||
       process.env.AWS_BUCKET_NAME ||
-      process.env.BUCKET_NAME,
+      process.env.BUCKET_NAME ||
+      ((process.env.NODE_ENV || 'development') !== 'production' && process.env.DISABLE_LOCAL_MEDIA_STORAGE !== 'true'),
   );
 
 test.beforeEach(async ({ request }) => {
