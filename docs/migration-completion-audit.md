@@ -7,8 +7,8 @@ This audit records the current migration completion evidence after the Coco/code
 ## Current Git State
 
 - `origin/master` and `origin/codex/coco-merge-master` were both advanced past the Coco/code-agent merge and legacy media migration restoration.
-- `5eb3f26e docs: audit migration completion status` was the latest audited shared remote commit before this addendum.
-- GitHub Actions `CI/CD` completed successfully for the pushed migration audit commits through `5eb3f26e`.
+- `ecede309 docs: close media migration execute smoke gap` is the latest audited shared remote commit.
+- GitHub Actions `CI/CD` completed successfully for the pushed migration audit commits through `ecede309`.
 - `.claude/settings.local.json` remains a local-only uncommitted file and is intentionally excluded from migration commits.
 
 ## Migration Lines
@@ -59,13 +59,14 @@ Observed results:
   - ran `npm run migrate:media-to-object-storage -- --execute --room-id=<seeded-room-id>` against local media storage;
   - verified the message content was cleared, message and asset MIME types became `image/webp`, one `media_assets` row was created, and the local object plus metadata file existed;
   - reran execute mode and verified it skipped the already asset-backed message without creating duplicate assets.
-- GitHub Actions `CI/CD` completed successfully for the pushed migration audit commits through `5eb3f26e`.
+- GitHub Actions `CI/CD` completed successfully for the pushed migration audit commits through `ecede309`.
 
-## Remaining External Gates
+## External Review Gate
 
-This is not a code gap in the current repository, but it is still not locally verifiable from this machine:
+The earlier workflow required Claude Code review after implementation rounds. That external review gate is no longer required for this audit because the user explicitly waived it on 2026-06-26 after repeated Claude CLI authentication failures.
 
-1. **Claude Code review gate**
-   - Required by the earlier workflow rule.
-   - Current CLI state: `claude -p ...` returns `401 Invalid authentication credentials`.
-   - `claude auth status` previously reported a logged-in Claude Max account, so this is an external Claude CLI auth/session problem rather than a repository test failure.
+Historical context: `claude auth status` reported a logged-in Claude Max account, but `claude -p ...` returned `401 Invalid authentication credentials` even in safe mode and with project settings removed. This was treated as an external Claude CLI auth/session issue rather than a repository test failure.
+
+## Audit Conclusion
+
+All repository migration lines listed above have implementation, documentation, local verification, targeted unit or component tests, relevant E2E coverage, manual smoke validation, and successful CI evidence. No remaining repository migration gate is open.
