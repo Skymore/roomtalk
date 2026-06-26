@@ -96,6 +96,12 @@ async function readJson<T>(response: Response): Promise<T> {
   throw new Error('unreachable');
 }
 
+export function buildRoomMessagesSmokeUrl(baseUrl: string, roomId: string, clientId: string) {
+  const url = new URL(`/api/rooms/${encodeURIComponent(roomId)}/messages`, baseUrl);
+  url.searchParams.set('clientId', clientId);
+  return url.toString();
+}
+
 async function postJson<T>(url: string, body?: unknown): Promise<{ response: Response; json: T }> {
   const response = await fetch(url, {
     method: 'POST',
@@ -215,7 +221,7 @@ async function exerciseBasicApi(server: SmokeServer, label: string) {
     fail(`${server.name} failed to create a message: HTTP ${messageResult.response.status} ${JSON.stringify(messageResult.json)}`);
   }
 
-  const messagesResponse = await fetch(`${server.baseUrl}/api/rooms/${roomResult.json.id}/messages`);
+  const messagesResponse = await fetch(buildRoomMessagesSmokeUrl(server.baseUrl, roomResult.json.id, clientId));
   if (!messagesResponse.ok) {
     fail(`${server.name} failed to read messages: HTTP ${messagesResponse.status}`);
   }
@@ -313,7 +319,9 @@ async function main() {
   log(`Persistence smoke complete${skipped.length ? `; skipped: ${skipped.join(', ')}` : ''}.`);
 }
 
-main().catch(error => {
-  process.stderr.write(`Persistence smoke failed: ${error instanceof Error ? error.message : String(error)}\n`);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(error => {
+    process.stderr.write(`Persistence smoke failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  });
+}
