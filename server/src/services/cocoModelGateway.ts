@@ -119,6 +119,11 @@ const normalizeBaseUrl = (value: string) => value.replace(/\/+$/, '');
 
 const joinUrlPath = (baseUrl: string, path: string) => `${normalizeBaseUrl(baseUrl)}/${path.replace(/^\/+/, '')}`;
 
+const normalizeRoutePath = (value: string) => {
+  const path = value.replace(/^\/+/, '');
+  return path.startsWith('v1/') ? path.slice(3) : path;
+};
+
 const readBearerToken = (req: Request) => {
   const authorization = req.header('authorization') || '';
   const match = authorization.match(/^Bearer\s+(.+)$/i);
@@ -304,7 +309,7 @@ export class CocoModelGateway {
     }
 
     const claims = verification.claims;
-    const routePath = String(req.params[0] || '').replace(/^\/+/, '');
+    const routePath = normalizeRoutePath(String(req.params[0] || ''));
     const route = this.resolveRoute(routePath, req.method, claims);
     if (!route.ok) {
       return res.status(route.status).json({ error: route.error });

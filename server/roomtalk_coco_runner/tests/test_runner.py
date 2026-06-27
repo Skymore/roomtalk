@@ -246,6 +246,18 @@ def test_model_proxy_env_overrides_direct_provider_credentials():
         })
 
 
+def test_model_proxy_base_url_matches_provider_sdk_path_contracts():
+    env = {
+        "COCO_MODEL_PROXY_URL": "https://room.example/api/coco/model-gateway/v1/",
+        "COCO_MODEL_PROXY_TOKEN": "short-lived-proxy-token",
+    }
+
+    assert _base_url_for("anthropic", env) == "https://room.example/api/coco/model-gateway"
+    assert _base_url_for("deepseek", env) == "https://room.example/api/coco/model-gateway/v1"
+    assert _base_url_for("openrouter", env) == "https://room.example/api/coco/model-gateway/v1"
+    assert _base_url_for("openai", env) == "https://room.example/api/coco/model-gateway/v1"
+
+
 @dataclass
 class Usage:
     input_tokens: int = 10

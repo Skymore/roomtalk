@@ -228,4 +228,43 @@ describe('CocoModelGateway', () => {
     assert.equal((calls[0].init.headers as Record<string, string>)['x-api-key'], 'anthropic-provider-key');
     assert.equal((calls[0].init.headers as Record<string, string>)['anthropic-version'], '2023-06-01');
   });
+
+  it('accepts Anthropic SDK paths when the sandbox proxy base URL already includes v1', async () => {
+    const calls: FetchCall[] = [];
+    const gateway = new CocoModelGateway({
+      publicBaseUrl: 'https://room.example/api/coco/model-gateway',
+      tokenSecret: 'test-secret',
+      providerApiKeys: { anthropic: 'anthropic-provider-key' },
+      nowMs: () => 1_800_000_000_000,
+      fetchFn: async (url, init) => {
+        calls.push({ url: String(url), init: init || {} });
+        return new Response(JSON.stringify({ id: 'message-1' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+    const token = gateway.issueTurnToken({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-1',
+      mode: 'plan',
+      model: anthropicModel,
+    });
+    server = await createTestServer(gateway);
+
+    const response = await fetch(`${server.baseUrl}/api/coco/model-gateway/v1/v1/messages`, {
+      method: 'POST',
+      headers: {
+        'x-api-key': token,
+        'content-type': 'application/json',
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({ model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'hello' }], max_tokens: 64 }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, 'https://api.anthropic.com/v1/messages');
+  });
 });

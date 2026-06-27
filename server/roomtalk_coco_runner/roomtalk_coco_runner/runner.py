@@ -256,6 +256,10 @@ def _api_key_for(provider: str, env: dict[str, str]) -> str | None:
 def _base_url_for(provider: str, env: dict[str, str]) -> str | None:
     proxy_url = _model_proxy_url(env)
     if proxy_url:
+        if provider == "anthropic" and proxy_url.endswith("/v1"):
+            # Anthropic's SDK appends /v1/messages itself. OpenAI-compatible
+            # SDKs expect base_url to include /v1, so only strip it here.
+            return proxy_url[:-3]
         return proxy_url
     if provider == "anthropic":
         return env.get("ANTHROPIC_BASE_URL")
