@@ -173,6 +173,15 @@ const getApiBaseUrl = () => {
   return socketUrl.replace(/\/$/, '');
 };
 
+const getWorkspaceAuthHeaders = (clientId: string): Record<string, string> => {
+  const headers: Record<string, string> = { 'X-Client-Id': clientId };
+  const token = localStorage.getItem('clientAuthToken')?.trim();
+  if (token) {
+    headers['X-Client-Auth-Token'] = token;
+  }
+  return headers;
+};
+
 export const fetchCodeAgentWorkspaceSnapshot = async (
   clientId: string,
   roomId: string,
@@ -180,7 +189,10 @@ export const fetchCodeAgentWorkspaceSnapshot = async (
 ): Promise<CodeAgentWorkspaceSnapshot> => {
   const response = await fetch(
     `${getApiBaseUrl()}/api/clients/${encodeURIComponent(clientId)}/rooms/${encodeURIComponent(roomId)}/workspace`,
-    { signal: options.signal }
+    {
+      signal: options.signal,
+      headers: getWorkspaceAuthHeaders(clientId),
+    }
   );
 
   if (!response.ok) {

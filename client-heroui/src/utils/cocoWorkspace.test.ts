@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Message } from './types';
 import {
@@ -19,6 +21,7 @@ const message = (overrides: Partial<Message>): Message => ({
 describe('summarizeCocoMessages', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    localStorage.clear();
   });
 
   it('returns an empty summary when there is no tool activity', () => {
@@ -189,6 +192,7 @@ describe('summarizeCocoMessages', () => {
   });
 
   it('fetches and validates a RoomTalk-mediated workspace snapshot', async () => {
+    localStorage.setItem('clientAuthToken', 'token-1');
     const snapshot = {
       roomId: 'room-1',
       backend: 'coco',
@@ -206,7 +210,13 @@ describe('summarizeCocoMessages', () => {
     } as Response);
 
     await expect(fetchCodeAgentWorkspaceSnapshot('client/1', 'room 1')).resolves.toEqual(snapshot);
-    expect(fetchMock).toHaveBeenCalledWith('/api/clients/client%2F1/rooms/room%201/workspace', { signal: undefined });
+    expect(fetchMock).toHaveBeenCalledWith('/api/clients/client%2F1/rooms/room%201/workspace', {
+      signal: undefined,
+      headers: {
+        'X-Client-Id': 'client/1',
+        'X-Client-Auth-Token': 'token-1',
+      },
+    });
   });
 
   it('rejects invalid workspace snapshot responses', async () => {
