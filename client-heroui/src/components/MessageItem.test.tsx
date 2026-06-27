@@ -128,6 +128,60 @@ describe('MessageItem replies', () => {
     expect(onReply).toHaveBeenCalledWith(message);
   });
 
+  it('treats messageType ai as an assistant message even when clientId differs', () => {
+    const onRefreshAI = vi.fn();
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'ai-message',
+          clientId: 'provider-worker',
+          username: 'Coco',
+          content: 'assistant response',
+          messageType: 'ai',
+          status: 'complete',
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onRefreshAI={onRefreshAI}
+        onReply={vi.fn()}
+      />
+    );
+
+    const item = screen.getByTestId('message-item');
+    expect(item.getAttribute('data-message-id')).toBe('ai-message');
+    expect(screen.getByText('Coco')).toBeTruthy();
+    expect(screen.getByText('assistant response')).toBeTruthy();
+    expect(screen.getByLabelText('retry')).toBeTruthy();
+  });
+
+  it('keeps Coco tool events addressable as normal message items', () => {
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'tool-call-message',
+          clientId: 'coco_runner',
+          content: '',
+          messageType: 'tool_call',
+          toolName: 'Read',
+          toolArgs: { file_path: 'README.md' },
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    const item = screen.getByTestId('message-item');
+    expect(item.getAttribute('data-message-id')).toBe('tool-call-message');
+    expect(within(item).getByText('toolCall')).toBeTruthy();
+    expect(within(item).getByText('Read')).toBeTruthy();
+    expect(within(item).getByText(/README\.md/)).toBeTruthy();
+  });
+
   it('renders quoted image, video, and audio media references', async () => {
     getMediaDownloadUrlMock.mockImplementation(({ assetId }: { assetId: string }) => Promise.resolve({
       url: `https://signed.example/${assetId}`,

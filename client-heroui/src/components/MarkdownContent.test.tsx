@@ -32,4 +32,12 @@ describe('MarkdownContent math rendering', () => {
     const options = katexRenderMock.mock.calls[0][2];
     expect(options.trust).toBe(false);
   }, 15_000);
+
+  it('renders raw HTML as text instead of creating DOM elements', async () => {
+    const { MarkdownContent } = await import('./MarkdownContent');
+    const { container } = render(<MarkdownContent content={'hello <img src=x onerror=alert(1)> world'} />);
+
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.textContent).toContain('<img src=x onerror=alert(1)>');
+  }, 15_000);
 });
