@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import re
@@ -16,11 +17,6 @@ WRITE_TOOLS = ("Write", "Edit")
 SHELL_TOOL = "Shell"
 MAX_TOOL_OUTPUT_CHARS = 20_000
 DEFAULT_WORKSPACE_ROOT = "/workspace"
-ERROR_OUTPUT_RE = re.compile(
-    r"(^|\n)\s*(error|fatal|exception|traceback\b|permission denied\b|file not found\b|"
-    r"[A-Za-z_][A-Za-z0-9_]*(Error|Exception):)",
-    re.IGNORECASE,
-)
 
 
 class RunnerError(Exception):
@@ -405,12 +401,58 @@ def _tool_content_to_text(content: Any) -> str:
     return str(content or "")
 
 
-def _tool_result_success(block: dict[str, Any], output: str, exit_code: int | None) -> bool:
+def _tool_result_success(block: dict[str, Any], exit_code: int | None) -> bool:
     if block.get("is_error") is True:
         return False
     if exit_code is not None:
         return exit_code == 0
-    return ERROR_OUTPUT_RE.search(output) is None
+    return True
+
+
+def _engine_supports_tool_events(engine: Any) -> bool:
+    try:
+        parameters = inspect.signature(engine.run).parameters
+    except (TypeError, ValueError):
+        return False
+    return "on_tool_event" in parameters
+
+
+def _live_tool_event_to_runner_event(event: dict[str, Any], turn_id: str) -> dict[str, Any]:
+    if not isinstance(event, dict):
+        raise RunnerError("Coco tool event must be a JSON object", code="invalid_tool_event", turn_id=turn_id)
+    event_type = event.get("type")
+    if event_type == "tool_call":
+        raw_input = event.get("input")
+        return {
+            "type": "tool_call",
+            "id": str(event.get("id") or ""),
+            "name": str(event.get("name") or "unknown"),
+            "args": raw_input if isinstance(raw_input, dict) else {},
+            "turnId": turn_id,
+        }
+    if event_type == "tool_result":
+        output = event.get("output")
+        output_text = output if isinstance(output, str) else str(output or "")
+        output_text, truncated = _truncate_output(output_text)
+        success = event.get("success")
+        mapped: dict[str, Any] = {
+            "type": "tool_result",
+            "id": str(event.get("id") or ""),
+            "name": str(event.get("name") or "unknown"),
+            "success": success if isinstance(success, bool) else False,
+            "output": output_text,
+            "turnId": turn_id,
+        }
+        elapsed_ms = event.get("elapsed_ms")
+        if isinstance(elapsed_ms, (int, float)):
+            mapped["elapsedMs"] = elapsed_ms
+        exit_code = event.get("exit_code")
+        if isinstance(exit_code, int):
+            mapped["exitCode"] = exit_code
+        if truncated:
+            mapped["truncated"] = True
+        return mapped
+    raise RunnerError(f"Unsupported Coco tool event type: {event_type!r}", code="invalid_tool_event", turn_id=turn_id)
 
 
 def replay_tool_events(messages: list[dict[str, Any]], turn_id: str | None = None) -> list[dict[str, Any]]:
@@ -444,7 +486,7 @@ def replay_tool_events(messages: list[dict[str, Any]], turn_id: str | None = Non
                 output = _tool_content_to_text(block.get("content"))
                 output, truncated = _truncate_output(output)
                 exit_code = _parse_exit_code(output)
-                success = _tool_result_success(block, output, exit_code)
+                success = _tool_result_success(block, exit_code)
                 event: dict[str, Any] = {
                     "type": "tool_result",
                     "id": tool_id,
@@ -505,9 +547,18 @@ def run_request(
         def on_text_chunk(delta: str) -> None:
             emitter.emit({"type": "text_delta", "messageId": message_id, "turnId": request.turn_id, "delta": delta})
 
-        result = engine.run(request.prompt, on_text_chunk=on_text_chunk)
-        for event in replay_tool_events(getattr(result, "messages", []) or [], turn_id=request.turn_id):
-            emitter.emit(event)
+        def on_tool_event(event: dict[str, Any]) -> None:
+            emitter.emit(_live_tool_event_to_runner_event(event, request.turn_id))
+
+        live_tool_events_enabled = _engine_supports_tool_events(engine)
+        run_kwargs: dict[str, Any] = {"on_text_chunk": on_text_chunk}
+        if live_tool_events_enabled:
+            run_kwargs["on_tool_event"] = on_tool_event
+
+        result = engine.run(request.prompt, **run_kwargs)
+        if not live_tool_events_enabled:
+            for event in replay_tool_events(getattr(result, "messages", []) or [], turn_id=request.turn_id):
+                emitter.emit(event)
 
         usage = _usage_to_event_usage(getattr(result, "usage", None))
         final_event: dict[str, Any] = {

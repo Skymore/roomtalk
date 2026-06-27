@@ -176,13 +176,14 @@ def test_replay_tool_events_preserves_pairing_and_result_metadata():
     ]
 
 
-def test_replay_tool_events_marks_common_error_outputs_and_non_text_content():
+def test_replay_tool_events_uses_structured_errors_and_non_text_content():
     messages = [
         {
             "role": "assistant",
             "content": [
                 {"type": "tool_use", "id": "tool-1", "name": "Read", "input": {"file_path": "missing.txt"}},
                 {"type": "tool_use", "id": "tool-2", "name": "Screenshot", "input": {}},
+                {"type": "tool_use", "id": "tool-3", "name": "Read", "input": {"file_path": "plain.txt"}},
             ],
         },
         {
@@ -192,11 +193,17 @@ def test_replay_tool_events_marks_common_error_outputs_and_non_text_content():
                     "type": "tool_result",
                     "tool_use_id": "tool-1",
                     "content": "FileNotFoundError: missing.txt",
+                    "is_error": True,
                 },
                 {
                     "type": "tool_result",
                     "tool_use_id": "tool-2",
                     "content": [{"type": "image", "source": {"type": "base64", "data": "abc"}}],
+                },
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "tool-3",
+                    "content": "FileNotFoundError: plain text without structured error marker",
                 },
             ],
         },
@@ -204,11 +211,12 @@ def test_replay_tool_events_marks_common_error_outputs_and_non_text_content():
 
     events = replay_tool_events(messages)
 
-    assert events[3]["type"] == "tool_result"
-    assert events[2]["type"] == "tool_result"
-    assert events[2]["success"] is False
-    assert events[3]["success"] is True
-    assert events[3]["output"] == "[non-text content omitted]"
+    results = [event for event in events if event["type"] == "tool_result"]
+    assert [event["id"] for event in results] == ["tool-1", "tool-2", "tool-3"]
+    assert results[0]["success"] is False
+    assert results[1]["success"] is True
+    assert results[1]["output"] == "[non-text content omitted]"
+    assert results[2]["success"] is True
 
 
 def test_add_coco_source_to_path_validates_configured_directory(tmp_path: Path):
@@ -295,6 +303,109 @@ class FakeEngine:
                 },
             ],
         )
+
+
+class KwargsOnlyEngine(FakeEngine):
+    def run(self, prompt, on_text_chunk=None, **kwargs):
+        assert "on_tool_event" not in kwargs
+        return super().run(prompt, on_text_chunk=on_text_chunk)
+
+
+class LiveToolEventEngine:
+    def run(self, prompt, on_text_chunk=None, on_tool_event=None):
+        assert prompt == "inspect the project"
+        on_text_chunk("before ")
+        on_tool_event({
+            "type": "tool_call",
+            "id": "tool-1",
+            "name": "Read",
+            "input": {"file_path": "README.md"},
+        })
+        on_tool_event({
+            "type": "tool_result",
+            "id": "tool-1",
+            "name": "Read",
+            "input": {"file_path": "README.md"},
+            "success": True,
+            "output": "# Project",
+            "elapsed_ms": 12.5,
+        })
+        on_text_chunk("after")
+        return EngineResult(
+            answer="after",
+            usage=Usage(),
+            messages=[
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "tool-1", "name": "Read", "input": {"file_path": "README.md"}},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "tool-1", "content": "# Project"},
+                    ],
+                },
+            ],
+        )
+
+
+def test_run_request_falls_back_to_replay_for_kwargs_only_engine(monkeypatch):
+    output = io.StringIO()
+    parsed = parse_request(json.dumps(request()))
+    monkeypatch.setenv("COCO_WORKSPACE_ROOT", "/tmp")
+
+    run_request(parsed, emitter=EventEmitter(output), engine_factory=lambda _request: KwargsOnlyEngine())
+
+    events = event_lines(output)
+    assert [event["type"] for event in events] == [
+        "status",
+        "status",
+        "text_delta",
+        "text_delta",
+        "tool_call",
+        "tool_result",
+        "final",
+    ]
+    assert events[4]["id"] == "tool-1"
+    assert events[5]["id"] == "tool-1"
+    assert events[5]["output"] == "# Project"
+
+
+def test_run_request_uses_live_tool_events_without_replay(monkeypatch):
+    output = io.StringIO()
+    parsed = parse_request(json.dumps(request()))
+    monkeypatch.setenv("COCO_WORKSPACE_ROOT", "/tmp")
+
+    run_request(parsed, emitter=EventEmitter(output), engine_factory=lambda _request: LiveToolEventEngine())
+
+    events = event_lines(output)
+    assert [event["type"] for event in events] == [
+        "status",
+        "status",
+        "text_delta",
+        "tool_call",
+        "tool_result",
+        "text_delta",
+        "final",
+    ]
+    assert events[2]["delta"] == "before "
+    assert events[3] == {
+        "schemaVersion": 1,
+        "type": "tool_call",
+        "id": "tool-1",
+        "name": "Read",
+        "args": {"file_path": "README.md"},
+        "turnId": "turn-1",
+    }
+    assert events[4]["id"] == "tool-1"
+    assert events[4]["output"] == "# Project"
+    assert events[4]["success"] is True
+    assert events[4]["elapsedMs"] == 12.5
+    assert events[5]["delta"] == "after"
+    assert len([event for event in events if event["type"] == "tool_call"]) == 1
+    assert len([event for event in events if event["type"] == "tool_result"]) == 1
 
 
 def test_run_request_emits_tool_events_before_terminal_final(monkeypatch):

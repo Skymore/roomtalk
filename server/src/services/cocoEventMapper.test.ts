@@ -64,7 +64,7 @@ describe('Coco runner event mapper', () => {
     assert.equal(mapped.message.content.length < 5000, true);
   });
 
-  it('maps status events', () => {
+  it('ignores non-error status events and maps error status messages', () => {
     const starting = mapCocoRunnerEvent({
       schemaVersion: 1,
       type: 'status',
@@ -72,11 +72,7 @@ describe('Coco runner event mapper', () => {
       status: 'starting',
       message: 'starting sandbox',
     }, context);
-    assert.equal(starting.kind, 'message');
-    if (starting.kind !== 'message') return;
-    assert.equal(starting.message.messageType, 'sandbox_status');
-    assert.equal(starting.message.status, 'complete');
-    assert.equal(starting.message.content, 'starting sandbox');
+    assert.deepEqual(starting, { kind: 'ignored' });
 
     const running = mapCocoRunnerEvent({
       schemaVersion: 1,
@@ -108,9 +104,7 @@ describe('Coco runner event mapper', () => {
       turnId: 'turn-1',
       status: 'starting',
     }, context);
-    assert.equal(startingWithoutMessage.kind, 'message');
-    if (startingWithoutMessage.kind !== 'message') return;
-    assert.equal(startingWithoutMessage.message.content, 'starting');
+    assert.deepEqual(startingWithoutMessage, { kind: 'ignored' });
 
     const error = mapCocoRunnerEvent({
       schemaVersion: 1,

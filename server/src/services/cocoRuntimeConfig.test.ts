@@ -8,8 +8,8 @@ import {
 } from './cocoRuntimeConfig';
 
 const pinnedArtifactEnv = {
-  COCO_ARTIFACT_VERSION: 'roomtalk-coco-2026-05-22-4f4ecc9',
-  COCO_SOURCE_REF: '4f4ecc99589c68cffcb150b6a2df9f55144cc2d1',
+  COCO_ARTIFACT_VERSION: 'roomtalk-coco-2026-06-27-7ac42db',
+  COCO_SOURCE_REF: '7ac42db5b270168366cd836b2b14ec7eb4604cdf',
 };
 
 const e2bCredentialEnv = {
