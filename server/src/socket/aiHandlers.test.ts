@@ -571,6 +571,71 @@ describe('AI socket handlers', () => {
     assert.doesNotMatch(String(userMessages[0].content), /old prompt/);
   });
 
+  it('does not include the automatic A2UI hi demo trigger for the default assistant role', async () => {
+    process.env.E2E_FAKE_AI = 'false';
+    const createCalls: any[] = [];
+    const openAIClient = {
+      chat: {
+        completions: {
+          create: (request: any) => {
+            createCalls.push(request);
+            return asyncIterable([
+              { choices: [{ delta: { content: 'hello' } }] },
+              { choices: [{ finish_reason: 'stop', delta: {} }], usage: { prompt_tokens: 5, completion_tokens: 1, total_tokens: 6 } },
+            ]);
+          },
+        },
+      },
+    };
+    const { socket } = createHarness({
+      messages: [message({ content: 'hi' })],
+      aiClientWrapper: { provider: 'deepseek', client: openAIClient },
+    });
+
+    await socket.invoke('ask_ai', {
+      roomId: 'room-1',
+      model: selectedModel.id,
+      roleName: 'Assistant',
+      systemPrompt: 'You are a helpful, creative, friendly assistant. Respond concisely and clearly.',
+    });
+
+    const providerMessages = createCalls[0].messages as Array<{ role: string; content: string }>;
+    assert.match(String(providerMessages[0].content), /A2UI streaming UI capability/);
+    assert.doesNotMatch(String(providerMessages[0].content), /latest user message is exactly "hi"/);
+  });
+
+  it('includes the automatic A2UI hi demo trigger for the A2UI demo role', async () => {
+    process.env.E2E_FAKE_AI = 'false';
+    const createCalls: any[] = [];
+    const openAIClient = {
+      chat: {
+        completions: {
+          create: (request: any) => {
+            createCalls.push(request);
+            return asyncIterable([
+              { choices: [{ delta: { content: 'demo' } }] },
+              { choices: [{ finish_reason: 'stop', delta: {} }], usage: { prompt_tokens: 5, completion_tokens: 1, total_tokens: 6 } },
+            ]);
+          },
+        },
+      },
+    };
+    const { socket } = createHarness({
+      messages: [message({ content: 'hi' })],
+      aiClientWrapper: { provider: 'deepseek', client: openAIClient },
+    });
+
+    await socket.invoke('ask_ai', {
+      roomId: 'room-1',
+      model: selectedModel.id,
+      roleName: 'A2UI Demo',
+      systemPrompt: 'You are an A2UI streaming demo assistant.',
+    });
+
+    const providerMessages = createCalls[0].messages as Array<{ role: string; content: string }>;
+    assert.match(String(providerMessages[0].content), /latest user message is exactly "hi"/);
+  });
+
   it('streams A2UI updates from OpenAI-compatible tool calls before stream end', async () => {
     process.env.E2E_FAKE_AI = 'false';
     const createCalls: any[] = [];

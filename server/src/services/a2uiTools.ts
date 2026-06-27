@@ -273,7 +273,16 @@ export const buildA2UIComponentGuide = (): string =>
     .map(component => `  - ${component.name}: ${component.summary}\n    example: ${component.example}`)
     .join('\n');
 
-export const buildA2UIToolSystemPrompt = (systemPrompt: string) => `${systemPrompt}
+type BuildA2UIToolSystemPromptOptions = {
+  includeDemoTrigger?: boolean;
+};
+
+const A2UI_DEMO_TRIGGER_INSTRUCTION = `- For the A2UI demo role, if the latest user message is exactly "hi" or "HI", always trigger a compact but non-trivial A2UI demo surface with at least a title, status text, several checklist/detail lines, and one or more data-bound controls. Include at most one assistant follow-up Button whose event sets \`context.${A2UI_FOLLOW_UP_CONTEXT_KEY}=true\`; leave local-only controls without the follow-up flag.`;
+
+export const buildA2UIToolSystemPrompt = (
+  systemPrompt: string,
+  options: BuildA2UIToolSystemPromptOptions = {},
+) => `${systemPrompt}
 
 A2UI streaming UI capability:
 - You may call the \`${A2UI_TOOL_NAME}\` tool to stream rich UI updates while answering.
@@ -297,7 +306,7 @@ ${buildA2UIComponentGuide()}
 - Do not claim that a button completed real payment, submission, deletion, booking, external API work, or other business side effects unless the product has a real backend reducer for that action. Without such a reducer, label it as a draft, preview, local selection, explanation, or assistant follow-up.
 - Prefer incremental updates: create the surface early, then update components/data as the answer becomes clearer.
 - Interactive follow-ups: a component's \`action\` reports a click back to you. If — and only if — clicking it should continue the conversation (you produce a new answer / new UI), set \`"context": { "${A2UI_FOLLOW_UP_CONTEXT_KEY}": true }\` inside that action's event. The server will then start a new assistant turn carrying the click. Decide per component which clicks deserve a follow-up; leave the flag off for purely cosmetic or client-only actions.
-- For the A2UI demo role, if the latest user message is exactly "hi" or "HI", always trigger a compact but non-trivial A2UI demo surface with at least a title, status text, several checklist/detail lines, and one or more data-bound controls. Include at most one assistant follow-up Button whose event sets \`context.${A2UI_FOLLOW_UP_CONTEXT_KEY}=true\`; leave local-only controls without the follow-up flag.`;
+${options.includeDemoTrigger ? A2UI_DEMO_TRIGGER_INSTRUCTION : ''}`.trimEnd();
 
 // An action is "wired" to the agent only when the model explicitly opted in by
 // setting context.followUp === true on the event (see buildA2UIToolSystemPrompt).

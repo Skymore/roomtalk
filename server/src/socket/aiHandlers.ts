@@ -380,6 +380,17 @@ const resolveAIRunnerMode = (): AIRunnerMode => (
   process.env.AI_RUNNER_MODE === 'worker' ? 'worker' : 'inline'
 );
 
+const shouldIncludeA2UIDemoTrigger = (roleName: string, systemPrompt: string): boolean => (
+  roleName.trim().toLowerCase() === 'a2ui demo'
+  || /A2UI streaming demo assistant/i.test(systemPrompt)
+);
+
+const buildSystemPromptWithA2UI = (systemPrompt: string, roleName: string) => (
+  buildA2UIToolSystemPrompt(systemPrompt, {
+    includeDemoTrigger: shouldIncludeA2UIDemoTrigger(roleName, systemPrompt),
+  })
+);
+
 const isQueuedAssistantRunPayload = (payload: unknown): payload is QueuedAssistantRunPayload => (
   typeof payload === 'object' &&
   payload !== null &&
@@ -575,7 +586,7 @@ export const executeQueuedAssistantRun = async (
       return;
     }
 
-    const systemPromptWithA2UI = buildA2UIToolSystemPrompt(systemPrompt);
+    const systemPromptWithA2UI = buildSystemPromptWithA2UI(systemPrompt, roleName);
     const validMessagesForAPI = buildAIProviderMessages(systemPromptWithA2UI, contextMessages);
     fallbackUsageMessages = validMessagesForAPI;
     const hasUserOrAssistantMessage = validMessagesForAPI.some(msg => msg.role === 'user' || msg.role === 'assistant');
@@ -1477,7 +1488,7 @@ export function registerAIHandlers({
     }
 
     try {
-      const systemPromptWithA2UI = buildA2UIToolSystemPrompt(systemPrompt);
+      const systemPromptWithA2UI = buildSystemPromptWithA2UI(systemPrompt, roleName);
       const validMessagesForAPI = buildAIProviderMessages(systemPromptWithA2UI, contextMessages);
       fallbackUsageMessages = validMessagesForAPI;
       const hasUserOrAssistantMessage = validMessagesForAPI.some(msg => msg.role === 'user' || msg.role === 'assistant');
