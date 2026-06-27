@@ -149,6 +149,26 @@ const setEditorText = (editor: HTMLElement, text: string) => {
   fireEvent.input(editor);
 };
 
+const setNavigatorPlatform = (platform: string) => {
+  Object.defineProperty(navigator, 'platform', {
+    configurable: true,
+    value: platform,
+  });
+};
+
+const expectAskAIShortcut = async (content: string) => {
+  await waitFor(() => expect(socketMocks.sendMessageAndAskAI).toHaveBeenCalledTimes(1));
+  expect(socketMocks.sendMessageAndAskAI.mock.calls[0][0]).toMatchObject({
+    roomId: 'room-1',
+    content,
+    systemPrompt: 'You are helpful',
+    roleName: 'Assistant',
+    model: 'model-a',
+  });
+  expect(socketMocks.sendMessage).not.toHaveBeenCalled();
+  expect(socketMocks.requestAIResponse).not.toHaveBeenCalled();
+};
+
 const installVoiceRecordingMocks = () => {
   const trackStop = vi.fn();
   const stream = {
@@ -199,6 +219,7 @@ const installVoiceRecordingMocks = () => {
 describe('MessageInput optimistic send flow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setNavigatorPlatform('Win32');
     localStorage.removeItem('roomtalk:ai-context-message-limit');
     socketMocks.requestAIResponse.mockResolvedValue(undefined);
     socketMocks.sendMessage.mockResolvedValue(message());
@@ -320,71 +341,45 @@ describe('MessageInput optimistic send flow', () => {
   });
 
   it('uses Ask AI for Ctrl+Enter on non-macOS platforms', async () => {
-    Object.defineProperty(navigator, 'platform', {
-      configurable: true,
-      value: 'Win32',
-    });
+    setNavigatorPlatform('Win32');
 
     const { editor } = renderMessageInput();
     setEditorText(editor, 'ask with ctrl shortcut');
 
     fireEvent.keyDown(editor, { key: 'Enter', ctrlKey: true });
 
-    await waitFor(() => expect(socketMocks.sendMessageAndAskAI).toHaveBeenCalledTimes(1));
-    expect(socketMocks.sendMessageAndAskAI.mock.calls[0][0]).toMatchObject({
-      roomId: 'room-1',
-      content: 'ask with ctrl shortcut',
-      systemPrompt: 'You are helpful',
-      roleName: 'Assistant',
-      model: 'model-a',
-    });
+    await expectAskAIShortcut('ask with ctrl shortcut');
+  });
+
+  it.each([
+    ['Command+Enter on non-macOS', 'Win32', { metaKey: true }],
+    ['Alt+Enter', 'MacIntel', { altKey: true }],
+  ])('ignores %s instead of falling back to normal send', (_label, platform, modifiers) => {
+    setNavigatorPlatform(platform);
+
+    const { editor } = renderMessageInput();
+    setEditorText(editor, 'do not send');
+
+    fireEvent.keyDown(editor, { key: 'Enter', ...modifiers });
+
     expect(socketMocks.sendMessage).not.toHaveBeenCalled();
+    expect(socketMocks.sendMessageAndAskAI).not.toHaveBeenCalled();
     expect(socketMocks.requestAIResponse).not.toHaveBeenCalled();
   });
 
-  it('does not treat Command+Enter as the AI shortcut on non-macOS platforms', async () => {
-    Object.defineProperty(navigator, 'platform', {
-      configurable: true,
-      value: 'Win32',
-    });
-
-    const { editor } = renderMessageInput();
-    setEditorText(editor, 'send normally');
-
-    fireEvent.keyDown(editor, { key: 'Enter', metaKey: true });
-
-    await waitFor(() => expect(socketMocks.sendMessage).toHaveBeenCalledTimes(1));
-    expect(socketMocks.sendMessageAndAskAI).not.toHaveBeenCalled();
-  });
-
   it('uses Ask AI for Command+Enter on macOS', async () => {
-    Object.defineProperty(navigator, 'platform', {
-      configurable: true,
-      value: 'MacIntel',
-    });
+    setNavigatorPlatform('MacIntel');
 
     const { editor } = renderMessageInput();
     setEditorText(editor, 'ask with command shortcut');
 
     fireEvent.keyDown(editor, { key: 'Enter', metaKey: true });
 
-    await waitFor(() => expect(socketMocks.sendMessageAndAskAI).toHaveBeenCalledTimes(1));
-    expect(socketMocks.sendMessageAndAskAI.mock.calls[0][0]).toMatchObject({
-      roomId: 'room-1',
-      content: 'ask with command shortcut',
-      systemPrompt: 'You are helpful',
-      roleName: 'Assistant',
-      model: 'model-a',
-    });
-    expect(socketMocks.sendMessage).not.toHaveBeenCalled();
-    expect(socketMocks.requestAIResponse).not.toHaveBeenCalled();
+    await expectAskAIShortcut('ask with command shortcut');
   });
 
   it('uses Ask AI for Command+Enter immediately after IME composition ends', async () => {
-    Object.defineProperty(navigator, 'platform', {
-      configurable: true,
-      value: 'MacIntel',
-    });
+    setNavigatorPlatform('MacIntel');
 
     const { editor } = renderMessageInput();
     setEditorText(editor, '中文问题');
@@ -393,16 +388,7 @@ describe('MessageInput optimistic send flow', () => {
     fireEvent.compositionEnd(editor);
     fireEvent.keyDown(editor, { key: 'Enter', metaKey: true });
 
-    await waitFor(() => expect(socketMocks.sendMessageAndAskAI).toHaveBeenCalledTimes(1));
-    expect(socketMocks.sendMessageAndAskAI.mock.calls[0][0]).toMatchObject({
-      roomId: 'room-1',
-      content: '中文问题',
-      systemPrompt: 'You are helpful',
-      roleName: 'Assistant',
-      model: 'model-a',
-    });
-    expect(socketMocks.sendMessage).not.toHaveBeenCalled();
-    expect(socketMocks.requestAIResponse).not.toHaveBeenCalled();
+    await expectAskAIShortcut('中文问题');
   });
 
   it('uses code-agent mode without ordinary role prompts for Coco Ask AI', async () => {

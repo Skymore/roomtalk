@@ -81,16 +81,13 @@ const createClientMessageId = () => {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 };
 
-const detectMacOS = () => {
-  if (typeof navigator === 'undefined') {
-    return false;
-  }
-  const userAgentDataPlatform = (navigator as Navigator & {
-    userAgentData?: { platform?: string };
-  }).userAgentData?.platform;
-  const platform = userAgentDataPlatform || navigator.platform;
-  return platform.toLowerCase().includes('mac');
-};
+const isMacPlatform = (platform: string) => (
+  platform.startsWith('Mac') || platform === 'iPhone' || platform === 'iPad' || platform === 'iPod'
+);
+
+const detectMacOS = () => (
+  typeof navigator !== 'undefined' && isMacPlatform(navigator.platform || '')
+);
 
 const getErrorMessage = (error: unknown, fallback: string) => (
   error instanceof Error ? error.message : fallback
@@ -1294,6 +1291,10 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       }
 
       if (isConfirmingIMEComposition(compositionSnapshot)) {
+        return;
+      }
+
+      if (e.altKey || e.metaKey || e.ctrlKey) {
         return;
       }
 
