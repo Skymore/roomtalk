@@ -49,7 +49,15 @@ describe('A2UI tool prompt', () => {
     assert.match(prompt, /do not expose a Slider bound to `progress`/);
     assert.match(prompt, /Do not claim that a button completed real payment, submission, deletion, booking/);
     assert.match(prompt, /backend reducer/);
-    assert.match(prompt, /at most one assistant follow-up Button/);
+  });
+
+  it('keeps the automatic hi demo trigger opt-in to the demo role', () => {
+    const defaultPrompt = buildA2UIToolSystemPrompt('Base prompt.');
+    const demoPrompt = buildA2UIToolSystemPrompt('Base prompt.', { includeDemoTrigger: true });
+
+    assert.doesNotMatch(defaultPrompt, /latest user message is exactly "hi"/);
+    assert.match(demoPrompt, /latest user message is exactly "hi"/);
+    assert.match(demoPrompt, /at most one assistant follow-up Button/);
   });
 });
 
