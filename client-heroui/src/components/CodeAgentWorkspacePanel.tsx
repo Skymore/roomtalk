@@ -70,6 +70,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   onRefreshWorkspace,
 }) => {
   const { t } = useTranslation();
+  const [isCollapsed, setIsCollapsed] = React.useState(false);
   const messageSummary = React.useMemo(() => summarizeCocoMessages(messages), [messages]);
   const summary = React.useMemo(
     () => mergeCocoWorkspaceSummaries(messageSummary, workspaceSnapshot?.summary),
@@ -83,6 +84,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   const agentStatus = getCodeAgentStatus(room);
   const visibleFiles = summary.touchedFiles.slice(0, 10);
   const hiddenFileCount = Math.max(0, summary.touchedFiles.length - visibleFiles.length);
+  const detailsId = 'code-agent-workspace-details';
 
   const stats = [
     { label: t('codeAgentTools'), value: summary.toolCalls, icon: 'lucide:wrench' },
@@ -91,8 +93,12 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   ];
 
   return (
-    <section data-testid="code-agent-workspace" className="mb-3 border-b border-[#dedbd0] pb-3 dark:border-[#30302e]" aria-label={t('codeAgentWorkspace')}>
-      <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+    <section
+      data-testid="code-agent-workspace"
+      className="sticky top-0 z-20 -mx-3 mb-3 border-b border-[#dedbd0] bg-[#f5f4ed]/95 px-3 pb-3 pt-3 shadow-[0_1px_0_rgba(20,20,19,0.04)] backdrop-blur dark:border-[#30302e] dark:bg-[#141413]/95 dark:shadow-[0_1px_0_rgba(250,249,245,0.04)]"
+      aria-label={t('codeAgentWorkspace')}
+    >
+      <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <h3 className="truncate text-sm font-semibold uppercase tracking-normal text-[#5e5d59] dark:text-[#b0aea5]">
@@ -124,12 +130,31 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                 <Icon icon="lucide:refresh-cw" className="h-3.5 w-3.5" />
               </Button>
             )}
+            <Button
+              isIconOnly
+              size="sm"
+              variant="flat"
+              radius="full"
+              aria-controls={detailsId}
+              aria-expanded={!isCollapsed}
+              aria-label={isCollapsed ? t('showMore') : t('showLess')}
+              data-testid="code-agent-workspace-toggle"
+              className="h-6 w-6 min-w-6 cursor-pointer border border-[#dedbd0] bg-[#faf9f5] text-[#4d4c48] transition-colors dark:border-[#30302e] dark:bg-[#242421] dark:text-[#faf9f5]"
+              onPress={() => setIsCollapsed((collapsed) => !collapsed)}
+            >
+              <Icon icon={isCollapsed ? 'lucide:chevron-down' : 'lucide:chevron-up'} className="h-3.5 w-3.5" />
+            </Button>
           </div>
-          <p className="mt-1 max-w-3xl text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">
-            {isPlanMode ? t('codeAgentReadOnlyDescription') : t('codeAgentEditDescription')}
-          </p>
+          {!isCollapsed && (
+            <p className="mt-1 max-w-3xl text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">
+              {isPlanMode ? t('codeAgentReadOnlyDescription') : t('codeAgentEditDescription')}
+            </p>
+          )}
           {workspaceRefreshError && (
-            <p role="alert" className="mt-1 text-xs font-medium text-[#9f462c] dark:text-[#ff9b78]">
+            <p
+              role="alert"
+              className={`${isCollapsed ? 'mt-0.5' : 'mt-1'} text-xs font-medium text-[#9f462c] dark:text-[#ff9b78]`}
+            >
               {t('codeAgentWorkspaceRefreshFailed')}
             </p>
           )}
@@ -151,7 +176,12 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
         </div>
       </div>
 
-      <div className={`mt-3 ${workspaceSurfaceClassName}`}>
+      <div
+        id={detailsId}
+        data-testid="code-agent-workspace-details"
+        hidden={isCollapsed}
+        className={`mt-3 ${workspaceSurfaceClassName}`}
+      >
         <Tabs
           aria-label={t('codeAgentWorkspace')}
           size="sm"
