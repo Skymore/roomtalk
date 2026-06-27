@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "artifactName": "roomtalk-coco",
-  "artifactVersion": "roomtalk-coco-2026-05-22-4f4ecc9",
+  "artifactVersion": "roomtalk-coco-2026-06-27-7ac42db",
   "pythonVersion": "3.12",
   "baseImage": {
     "name": "python",
@@ -11,7 +11,7 @@
   "coco": {
     "packageName": "coco",
     "packageVersion": "0.1.3a0",
-    "sourceRef": "4f4ecc99589c68cffcb150b6a2df9f55144cc2d1",
+    "sourceRef": "7ac42db5b270168366cd836b2b14ec7eb4604cdf",
     "developmentLocalPath": "/Users/sky/projects/coco"
   },
   "runner": {

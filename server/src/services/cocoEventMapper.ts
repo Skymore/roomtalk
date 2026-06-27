@@ -150,7 +150,7 @@ export const mapCocoRunnerEvent = (
       };
     }
     case 'status': {
-      if (event.status === 'running' || event.status === 'ready' || event.status === 'complete') {
+      if (event.status === 'starting' || event.status === 'running' || event.status === 'ready' || event.status === 'complete') {
         return { kind: 'ignored' };
       }
       const createMessageId = context.createMessageId || defaultCreateMessageId;

@@ -22,8 +22,8 @@ ops/coco-sandbox/artifact.lock.json
 Pinned values:
 
 ```text
-artifactVersion: roomtalk-coco-2026-05-22-4f4ecc9
-cocoSourceRef: 4f4ecc99589c68cffcb150b6a2df9f55144cc2d1
+artifactVersion: roomtalk-coco-2026-06-27-7ac42db
+cocoSourceRef: 7ac42db5b270168366cd836b2b14ec7eb4604cdf
 cocoPackageVersion: 0.1.3a0
 runnerPackageVersion: 0.1.0
 pythonVersion: 3.12
@@ -57,7 +57,7 @@ roomtalk_coco_runner/
 Build the container image from that context:
 
 ```bash
-docker build -t roomtalk-coco:roomtalk-coco-2026-05-22-4f4ecc9 /tmp/roomtalk-coco-sandbox-context
+docker build -t roomtalk-coco:roomtalk-coco-2026-06-27-7ac42db /tmp/roomtalk-coco-sandbox-context
 ```
 
 Publish that image as the E2B template named by `COCO_E2B_TEMPLATE_ID`.
@@ -73,11 +73,11 @@ COCO_ENABLED=true
 COCO_SANDBOX_PROVIDER=e2b
 COCO_RUNNER_CLIENT=jsonl
 COCO_MODE=plan
-COCO_E2B_TEMPLATE_ID=roomtalk-coco-2026-05-22-4f4ecc9
+COCO_E2B_TEMPLATE_ID=roomtalk-coco-2026-06-27-7ac42db
 E2B_API_KEY=...
 COCO_ARTIFACT_MODE=production
-COCO_ARTIFACT_VERSION=roomtalk-coco-2026-05-22-4f4ecc9
-COCO_SOURCE_REF=4f4ecc99589c68cffcb150b6a2df9f55144cc2d1
+COCO_ARTIFACT_VERSION=roomtalk-coco-2026-06-27-7ac42db
+COCO_SOURCE_REF=7ac42db5b270168366cd836b2b14ec7eb4604cdf
 # Optional, only for custom image layouts:
 # COCO_RUNNER_PYTHONPATH=/opt/coco/src:/opt/roomtalk_coco_runner
 ```

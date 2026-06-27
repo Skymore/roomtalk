@@ -268,18 +268,53 @@ describe('CocoSessionService', () => {
     assert.equal(runner.requests[0].mode, 'plan');
     assert.equal(runner.requests[0].workspace, '/workspace/room-1');
     const messages = store.messages.get('room-1') || [];
-    assert.deepEqual(messages.map(message => message.messageType), ['text', 'ai', 'sandbox_status', 'tool_call', 'tool_result', 'ai']);
+    assert.deepEqual(messages.map(message => message.messageType), ['text', 'ai', 'tool_call', 'tool_result', 'ai']);
     assert.equal(messages[1].status, 'complete');
     assert.equal(messages[1].content, 'Working...');
-    assert.equal(messages[3].toolCallId, 'tool-1');
-    assert.equal(messages[4].toolOutputPreview, '# RoomTalk');
-    assert.equal(messages[5].status, 'complete');
-    assert.equal(messages[5].content, 'Done');
+    assert.equal(messages[2].toolCallId, 'tool-1');
+    assert.equal(messages[3].toolOutputPreview, '# RoomTalk');
+    assert.equal(messages[4].status, 'complete');
+    assert.equal(messages[4].content, 'Done');
     assert.equal((await store.getRoomById('room-1'))?.cocoStatus, 'idle');
     assert.equal((await store.getRoomById('room-1'))?.cocoSessionId, 'session-1');
     assert.equal(emitter.roomEmits.some(event => event.event === 'ai_chunk'), true);
     assert.equal(emitter.roomEmits.some(event => event.event === 'ai_stream_end'), true);
     assert.equal(sandboxService.stoppedRunnerCommands.length, 1);
+  });
+
+  it('persists interleaved AI text and tool events in runner order', async () => {
+    const runner = new FakeCocoRunnerClient([
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'I will inspect.' },
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Glob', args: { pattern: '**/*' } },
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-1', name: 'Glob', success: true, output: 'No files found matching the pattern.' },
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'The current directory is empty.' },
+      {
+        schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+        type: 'final',
+        messageId: 'ai-1',
+        answer: 'The current directory is empty.',
+        sessionId: 'session-1',
+      },
+    ]);
+    const { service, store } = createService({ runner });
+
+    const result = await service.startTurn({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      selectedModel,
+    });
+
+    assert.deepEqual(result, { success: true, messageId: 'ai-1' });
+    const messages = store.messages.get('room-1') || [];
+    assert.deepEqual(messages.map(message => message.messageType), ['text', 'ai', 'tool_call', 'tool_result', 'ai']);
+    assert.equal(messages[1].content, 'I will inspect.');
+    assert.equal(messages[1].status, 'complete');
+    assert.equal(messages[2].toolName, 'Glob');
+    assert.deepEqual(messages[2].toolArgs, { pattern: '**/*' });
+    assert.equal(messages[3].toolOutputPreview, 'No files found matching the pattern.');
+    assert.equal(messages[4].content, 'The current directory is empty.');
+    assert.equal(messages[4].status, 'complete');
+    assert.equal(messages[4].turnId, messages[1].turnId);
   });
 
   it('stops the runner before broadcasting the final stream end', async () => {
