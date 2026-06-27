@@ -192,6 +192,7 @@ async function createTestServer(overrides: {
   googleClientIds?: Parameters<typeof registerApiRoutes>[1]['googleClientIds'];
   verifyGoogleCredential?: Parameters<typeof registerApiRoutes>[1]['verifyGoogleCredential'];
   cocoAccess?: Parameters<typeof registerApiRoutes>[1]['cocoAccess'];
+  cocoSandboxService?: Parameters<typeof registerApiRoutes>[1]['cocoSandboxService'];
 } = {}): Promise<TestServer> {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
@@ -576,6 +577,7 @@ async function createTestServer(overrides: {
     cocoMode: 'acceptEdits',
     cocoAvailableModes: ['plan', 'acceptEdits'],
     cocoDefaultMode: 'plan',
+    cocoSandboxService: overrides.cocoSandboxService,
     mediaUploadCleanup: overrides.mediaUploadCleanup,
   });
 
@@ -648,11 +650,26 @@ describe('API routes', () => {
   });
 
   it('returns Coco workspace snapshots only for authorized Coco rooms', async () => {
+    await server.close();
+    server = await createTestServer({
+      cocoSandboxService: {
+        connect: async (sandboxId: string) => ({
+          id: sandboxId,
+          provider: 'e2b',
+          roomId: 'coco-room',
+          creatorId: 'client-1',
+          workspace: '/workspace',
+          createdAt: '2026-05-03T00:00:00.000Z',
+        }),
+        listWorkspaceFiles: async () => ['plot_output.png', 'output/report.html'],
+      } as any,
+    });
     server.store.rooms.push(sampleRoom({
       id: 'coco-room',
       name: 'Coco',
       type: 'coco',
       sandboxStatus: 'ready',
+      sandboxId: 'sandbox-1',
       cocoStatus: 'idle',
       cocoSessionId: 'session-1',
     }));
@@ -686,7 +703,7 @@ describe('API routes', () => {
     assert.equal(snapshot.roomId, 'coco-room');
     assert.equal(snapshot.backend, 'coco');
     assert.deepEqual(snapshot.status, { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: true });
-    assert.deepEqual(snapshot.summary.touchedFiles, ['src/App.tsx']);
+    assert.deepEqual(snapshot.summary.touchedFiles, ['output/report.html', 'plot_output.png']);
     assert.equal(snapshot.summary.toolCalls, 1);
     assert.equal(snapshot.summary.toolResults, 1);
     assert.deepEqual(snapshot.commands, [{ id: 'tool-1', name: 'Read', status: 'succeeded', preview: 'ok' }]);

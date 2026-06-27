@@ -72,8 +72,7 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(screen.getByText('codeAgentEditDescription')).toBeTruthy();
 
     fireEvent.click(screen.getByText('codeAgentFiles'));
-    expect(screen.getByText('App.tsx')).toBeTruthy();
-    expect(screen.getByText('src')).toBeTruthy();
+    expect(screen.getByText('codeAgentNoFiles')).toBeTruthy();
 
     fireEvent.click(screen.getByText('codeAgentActivity'));
     expect(screen.getByText('Read')).toBeTruthy();
@@ -144,7 +143,7 @@ describe('CodeAgentWorkspacePanel', () => {
         workspaceSnapshot={{
           roomId: 'room-1',
           backend: 'coco',
-          source: 'messages',
+          source: 'sandbox',
           generatedAt: '2026-05-29T00:00:00.000Z',
           status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: false },
           summary: {
@@ -188,17 +187,24 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(screen.getByText('permission denied')).toBeTruthy();
   });
 
-  it('renders root-level touched files with a repo-root directory marker', () => {
+  it('renders root-level workspace files with a repo-root directory marker', () => {
     render(
       <CodeAgentWorkspacePanel
         room={room}
-        messages={[{
-          ...toolCall,
-          id: 'root-tool',
-          toolArgs: { file_path: '/workspace/README.md' },
-        }]}
+        messages={[]}
         mode="plan"
         sessionCostUsd={0}
+        workspaceSnapshot={{
+          roomId: 'room-1',
+          backend: 'coco',
+          source: 'sandbox',
+          generatedAt: '2026-05-29T00:00:00.000Z',
+          status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: true },
+          summary: { toolCalls: 0, toolResults: 0, toolErrors: 0, touchedFiles: ['README.md'] },
+          files: { touched: ['README.md'], hiddenCount: 0 },
+          changes: { available: false, changedFiles: [], diffSummary: null },
+          commands: [],
+        }}
       />
     );
 
@@ -208,18 +214,25 @@ describe('CodeAgentWorkspacePanel', () => {
   });
 
   it('indicates when the touched file list is truncated', () => {
-    const messages = Array.from({ length: 12 }, (_, index): Message => ({
-      ...toolCall,
-      id: `tool-${index}`,
-      toolArgs: { file_path: `/workspace/src/file-${String(index).padStart(2, '0')}.ts` },
-    }));
+    const workspaceFiles = Array.from({ length: 12 }, (_, index) => `src/file-${String(index).padStart(2, '0')}.ts`);
 
     render(
       <CodeAgentWorkspacePanel
         room={room}
-        messages={messages}
+        messages={[]}
         mode="plan"
         sessionCostUsd={0}
+        workspaceSnapshot={{
+          roomId: 'room-1',
+          backend: 'coco',
+          source: 'sandbox',
+          generatedAt: '2026-05-29T00:00:00.000Z',
+          status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: true },
+          summary: { toolCalls: 0, toolResults: 0, toolErrors: 0, touchedFiles: workspaceFiles },
+          files: { touched: workspaceFiles.slice(0, 10), hiddenCount: 2 },
+          changes: { available: false, changedFiles: [], diffSummary: null },
+          commands: [],
+        }}
       />
     );
 

@@ -16,6 +16,7 @@ export class FakeCocoSandboxService implements CocoSandboxService {
   readonly startedRunnerCommands: string[] = [];
   readonly startedRunnerEnvs: Record<string, string>[] = [];
   readonly stoppedRunnerCommands: string[] = [];
+  private readonly workspaceFilesBySandboxId = new Map<string, string[]>();
 
   constructor(private readonly now: () => Date = () => new Date()) {}
 
@@ -44,6 +45,7 @@ export class FakeCocoSandboxService implements CocoSandboxService {
       expiresAt: new Date(this.now().getTime() + input.ttlMs).toISOString(),
     };
     this.sandboxes.set(handle.id, handle);
+    this.workspaceFilesBySandboxId.set(handle.id, []);
     return handle;
   }
 
@@ -68,10 +70,23 @@ export class FakeCocoSandboxService implements CocoSandboxService {
     };
   }
 
+  setWorkspaceFiles(sandboxId: string, files: string[]) {
+    this.workspaceFilesBySandboxId.set(sandboxId, files);
+  }
+
+  async listWorkspaceFiles(handle: CocoSandboxHandle): Promise<string[]> {
+    this.consumeFailure('connect');
+    if (!this.sandboxes.has(handle.id)) {
+      throw new Error(`Fake Coco sandbox not found: ${handle.id}`);
+    }
+    return [...(this.workspaceFilesBySandboxId.get(handle.id) || [])].sort((a, b) => a.localeCompare(b));
+  }
+
   async destroy(sandboxId: string): Promise<void> {
     this.consumeFailure('destroy');
     this.destroyedSandboxIds.push(sandboxId);
     this.sandboxes.delete(sandboxId);
+    this.workspaceFilesBySandboxId.delete(sandboxId);
   }
 
   async countActiveSandboxes(): Promise<number> {

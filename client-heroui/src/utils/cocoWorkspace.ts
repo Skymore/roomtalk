@@ -19,7 +19,7 @@ export interface CodeAgentWorkspaceCommand {
 export interface CodeAgentWorkspaceSnapshot {
   roomId: string;
   backend: 'coco';
-  source: 'messages';
+  source: 'sandbox';
   generatedAt: string;
   status: {
     sandboxStatus: string;
@@ -146,19 +146,14 @@ export const mergeCocoWorkspaceSummaries = (
   snapshotSummary?: CocoWorkspaceSummary | null
 ): CocoWorkspaceSummary => {
   if (!snapshotSummary) {
-    return messageSummary;
+    return { ...messageSummary, touchedFiles: [] };
   }
-
-  const touchedFiles = new Set([
-    ...snapshotSummary.touchedFiles,
-    ...messageSummary.touchedFiles,
-  ]);
 
   return {
     toolCalls: Math.max(messageSummary.toolCalls, snapshotSummary.toolCalls),
     toolResults: Math.max(messageSummary.toolResults, snapshotSummary.toolResults),
     toolErrors: Math.max(messageSummary.toolErrors, snapshotSummary.toolErrors),
-    touchedFiles: Array.from(touchedFiles).sort((a, b) => a.localeCompare(b)),
+    touchedFiles: [...snapshotSummary.touchedFiles].sort((a, b) => a.localeCompare(b)),
     lastToolName: messageSummary.lastToolName || snapshotSummary.lastToolName,
   };
 };
@@ -202,7 +197,7 @@ export const fetchCodeAgentWorkspaceSnapshot = async (
   const data = await response.json();
   if (
     data?.backend !== 'coco' ||
-    data?.source !== 'messages' ||
+    data?.source !== 'sandbox' ||
     !data?.summary ||
     typeof data?.status?.hasSession !== 'boolean' ||
     !Array.isArray(data.summary.touchedFiles)

@@ -105,7 +105,7 @@ describe('MessageList optimistic messages', () => {
     fetchCodeAgentWorkspaceSnapshotMock.mockResolvedValue({
       roomId: 'room-1',
       backend: 'coco',
-      source: 'messages',
+      source: 'sandbox',
       generatedAt: '2026-05-29T00:00:00.000Z',
       status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: false },
       summary: {
