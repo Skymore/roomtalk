@@ -1265,22 +1265,34 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   // 处理回车事件
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
-      if (isConfirmingIMEComposition(getKeyboardCompositionSnapshot(
+      const compositionSnapshot = getKeyboardCompositionSnapshot(
         e,
         isComposingRef.current,
         lastCompositionEndAtRef.current
-      ))) {
+      );
+      const isAIShortcut = !e.shiftKey && (e.metaKey || e.ctrlKey);
+
+      if (isAIShortcut) {
+        if (
+          compositionSnapshot.isComposing ||
+          compositionSnapshot.nativeIsComposing ||
+          compositionSnapshot.keyCode === 229
+        ) {
+          return;
+        }
+
+        e.preventDefault();
+        handleAskAI();
+        return;
+      }
+
+      if (isConfirmingIMEComposition(compositionSnapshot)) {
         return;
       }
 
       // Shift+Enter: 默认行为（换行）
       if (e.shiftKey) {
         return; // 允许默认的换行行为
-      }
-      // Mac用Command+Enter, Windows用Ctrl+Enter: 询问AI
-      else if ((isMacOS && e.metaKey) || (!isMacOS && e.ctrlKey)) {
-        e.preventDefault();
-        handleAskAI();
       }
       // 单独Enter: 发送消息
       else {
