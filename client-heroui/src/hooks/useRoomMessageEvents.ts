@@ -1,7 +1,7 @@
 import { Dispatch, RefObject, SetStateAction, useEffect, useRef } from 'react';
 import { clientId, socket } from '../utils/socket';
 import { A2UIUpdateEvent, AICostTotalEvent, AIChunkEvent, AIStreamEndEvent, AIStreamErrorEvent, Message, RoomMessageHistoryPayload } from '../utils/types';
-import { appendA2UIPayload, appendAIChunk, completeAIMessage, sortMessages, upsertMessage } from '../utils/messageState';
+import { appendA2UIPayload, appendAIChunk, completeAIMessage, upsertMessage } from '../utils/messageState';
 import { deleteCachedRoomMessageWindow, readCachedRoomMessageWindow, readMemoryRoomMessageWindow, writeCachedRoomMessageWindow } from '../utils/messageHistoryCache';
 
 const ROOM_MESSAGE_PAGE_LIMIT = 80;
@@ -69,9 +69,8 @@ export const useRoomMessageEvents = ({
     let serverHistoryLoaded = false;
 
     const memoryWindow = readMemoryRoomMessageWindow(roomId);
-    const memoryMessages = memoryWindow
-      ? sortMessages(memoryWindow.messages.filter(message => message.roomId === roomId))
-      : [];
+    const filterRoomMessages = (messages: Message[]) => messages.filter(message => message.roomId === roomId);
+    const memoryMessages = memoryWindow ? filterRoomMessages(memoryWindow.messages) : [];
 
     historyVersionRef.current = memoryWindow?.historyVersion ?? 0;
     hasMoreMessagesRef.current = memoryWindow?.hasMore ?? false;
@@ -106,7 +105,7 @@ export const useRoomMessageEvents = ({
     ) => {
       writeCachedRoomMessageWindow({
         roomId,
-        messages: sortMessages(messages.filter(message => message.roomId === roomId)),
+        messages: filterRoomMessages(messages),
         historyVersion,
         hasMore,
         oldestMessageId,
@@ -150,7 +149,7 @@ export const useRoomMessageEvents = ({
           return;
         }
 
-        updateMessages(sortMessages(cachedWindow.messages.filter(message => message.roomId === roomId)));
+        updateMessages(filterRoomMessages(cachedWindow.messages));
         setHistoryVersionState(cachedWindow.historyVersion);
         setHasMoreMessagesState(cachedWindow.hasMore);
         setOldestMessageIdState(cachedWindow.oldestMessageId);
@@ -162,15 +161,15 @@ export const useRoomMessageEvents = ({
     const handleMessageHistory = (historyPayload: RoomMessageHistoryPayload) => {
       serverHistoryLoaded = true;
       const mode = historyPayload.mode || 'replace';
-      const roomMessages = sortMessages(historyPayload.messages.filter(message => message.roomId === roomId));
+      const roomMessages = filterRoomMessages(historyPayload.messages);
 
       if (mode === 'prepend') {
         updateMessages(prev => {
           const existingIds = new Set(prev.map(message => message.id));
-          return sortMessages([...roomMessages.filter(message => !existingIds.has(message.id)), ...prev]);
+          return [...roomMessages.filter(message => !existingIds.has(message.id)), ...prev];
         });
       } else {
-        const currentMessages = sortMessages(getCurrentMessages().filter(message => message.roomId === roomId));
+        const currentMessages = filterRoomMessages(getCurrentMessages());
         const windowChanged = !isSameMessageWindow(currentMessages, roomMessages);
 
         if (windowChanged) {
