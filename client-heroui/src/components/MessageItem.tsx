@@ -243,7 +243,8 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   onRefreshAI,
   onReply,
 }) => {
-  const isMine = message.clientId === clientId;
+  const isAI = message.messageType === 'ai' || message.clientId === 'ai_assistant';
+  const isMine = !isAI && message.clientId === clientId;
   const isTouchDevice = useIsTouchDevice();
   const [mediaError, setMediaError] = React.useState(false);
   const [videoPreviewError, setVideoPreviewError] = React.useState(false);
@@ -264,7 +265,6 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const stickerUrl = useStickerUrl(isSticker ? message.content : undefined);
   const stickerName = useStickerName(isSticker ? message.content : undefined);
   const isText = message.messageType === "text";
-  const isAI = message.clientId === 'ai_assistant';
   const isStreaming = isAI && message.status === 'streaming';
   const isPending = message.deliveryStatus === 'pending';
   const isFailed = message.deliveryStatus === 'failed';
@@ -721,7 +721,11 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
 
   if (isCocoEvent) {
     return (
-      <div className="flex w-full justify-center px-1 py-1">
+      <div
+        data-testid="message-item"
+        data-message-id={message.id}
+        className="flex w-full justify-center px-1 py-1"
+      >
         <div className="w-full max-w-4xl">
           <CocoToolMessage message={message} />
         </div>
