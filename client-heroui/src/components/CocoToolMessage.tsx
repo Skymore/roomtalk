@@ -1,18 +1,50 @@
 import React from 'react';
-import { Button, Card, Chip } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 import { Message } from '../utils/types';
 
 interface CocoToolMessageProps {
   message: Message;
+  pairedResult?: Message;
 }
 
-const COLLAPSE_LIMIT = 900;
+const OUTPUT_COLLAPSE_LIMIT = 1200;
+
+const getToolSummary = (message: Message): string => {
+  const args = message.toolArgs;
+  if (!args) return '';
+  const filePath = args.file_path || args.path || args.filename;
+  if (typeof filePath === 'string') {
+    const segments = filePath.split('/');
+    return segments.length > 2
+      ? `…/${segments.slice(-2).join('/')}`
+      : filePath;
+  }
+  const command = args.command;
+  if (typeof command === 'string') {
+    return command.length > 60 ? `${command.slice(0, 57)}…` : command;
+  }
+  const query = args.query || args.url || args.pattern;
+  if (typeof query === 'string') {
+    return query.length > 60 ? `${query.slice(0, 57)}…` : query;
+  }
+  return '';
+};
+
+const getToolIcon = (toolName: string): string => {
+  const lower = toolName.toLowerCase();
+  if (lower === 'read') return 'lucide:file-text';
+  if (lower === 'edit') return 'lucide:pencil';
+  if (lower === 'write') return 'lucide:file-plus';
+  if (lower === 'bash') return 'lucide:terminal';
+  if (lower.includes('search') || lower.includes('grep')) return 'lucide:search';
+  if (lower.includes('web') || lower.includes('fetch')) return 'lucide:globe';
+  if (lower.includes('list') || lower.includes('glob')) return 'lucide:folder-open';
+  return 'lucide:wrench';
+};
 
 const formatToolArgs = (args: Record<string, unknown> | undefined): string => {
   if (!args || Object.keys(args).length === 0) return '';
-
   try {
     return JSON.stringify(args, null, 2);
   } catch {
@@ -20,89 +52,129 @@ const formatToolArgs = (args: Record<string, unknown> | undefined): string => {
   }
 };
 
-export const CocoToolMessage: React.FC<CocoToolMessageProps> = ({ message }) => {
+export const CocoToolMessage: React.FC<CocoToolMessageProps> = ({ message, pairedResult }) => {
   const { t } = useTranslation();
   const [isExpanded, setIsExpanded] = React.useState(false);
+  const [isOutputExpanded, setIsOutputExpanded] = React.useState(false);
+
   const isToolCall = message.messageType === 'tool_call';
-  const isToolResult = message.messageType === 'tool_result';
   const isSandboxStatus = message.messageType === 'sandbox_status';
-  const title = isToolCall
-    ? t('toolCall')
-    : isToolResult
-      ? t(message.isError ? 'toolResultFailed' : 'toolResultSucceeded')
-      : t('sandboxStatusEvent');
+
+  if (isSandboxStatus) {
+    return (
+      <div className="flex items-center gap-1.5 px-1 py-0.5">
+        <Icon icon="lucide:box" className="h-3 w-3 flex-shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+        <span className="text-xs text-[#87867f] dark:text-[#8f8d86]">
+          {message.content || t('sandboxStatusEvent')}
+        </span>
+      </div>
+    );
+  }
+
+  const isToolResult = message.messageType === 'tool_result';
   const toolName = message.toolName || t('unknownTool');
-  const body = isToolCall
-    ? formatToolArgs(message.toolArgs) || message.content
-    : message.toolOutputPreview || message.content;
-  const shouldCollapse = body.length > COLLAPSE_LIMIT;
-  const visibleBody = shouldCollapse && !isExpanded ? `${body.slice(0, COLLAPSE_LIMIT)}...` : body;
-  const icon = isToolCall ? 'lucide:wrench' : isToolResult ? (message.isError ? 'lucide:circle-alert' : 'lucide:check-circle') : 'lucide:box';
-  const toneClassName = message.isError || message.status === 'error'
-    ? 'border-danger-400/50 bg-danger-500/10 text-danger-700 dark:text-danger-300'
-    : isSandboxStatus
-      ? 'border-warning-400/50 bg-warning-500/10 text-warning-700 dark:text-warning-300'
-      : 'border-[#c96442]/40 bg-[#c96442]/10 text-[#8c422b] dark:text-[#f0a487]';
+  const summary = isToolCall ? getToolSummary(message) : '';
+  const icon = getToolIcon(toolName);
+
+  const result = isToolResult ? message : pairedResult;
+  const hasResult = !!result;
+  const isError = result?.isError || result?.status === 'error';
+  const isSuccess = hasResult && !isError;
+  const isPending = isToolCall && !hasResult;
+
+  const output = result?.toolOutputPreview || result?.content || '';
+  const shouldCollapseOutput = output.length > OUTPUT_COLLAPSE_LIMIT;
+  const visibleOutput = shouldCollapseOutput && !isOutputExpanded
+    ? `${output.slice(0, OUTPUT_COLLAPSE_LIMIT)}…`
+    : output;
+
+  const argsBody = isToolCall ? formatToolArgs(message.toolArgs) : '';
 
   return (
-    <Card className="w-full max-w-full overflow-hidden rounded-xl bg-[#faf9f5] text-[#141413] shadow-[0_0_0_1px_rgba(222,219,208,0.95)] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(48,48,46,0.95)]">
-      <div className="flex min-w-0 items-start gap-2 border-b border-[#dedbd0] px-3 py-2 dark:border-[#30302e]">
-        <span className={`mt-0.5 inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md border ${toneClassName}`}>
-          <Icon icon={icon} className="h-3.5 w-3.5" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            <span className="truncate text-xs font-semibold uppercase text-[#5e5d59] dark:text-[#b0aea5]">
-              {title}
-            </span>
-            {!isSandboxStatus && (
-              <Chip
-                size="sm"
-                variant="flat"
-                classNames={{
-                  base: 'h-5 max-w-full bg-[#e8e6dc] px-1.5 text-[#4d4c48] dark:bg-[#30302e] dark:text-[#faf9f5]',
-                  content: 'truncate px-0 text-[11px] font-semibold',
-                }}
-              >
-                {toolName}
-              </Chip>
-            )}
-            {typeof message.exitCode === 'number' && (
-              <Chip
-                size="sm"
-                variant="flat"
-                classNames={{
-                  base: 'h-5 bg-[#e8e6dc] px-1.5 text-[#4d4c48] dark:bg-[#30302e] dark:text-[#faf9f5]',
-                  content: 'px-0 text-[11px] font-semibold',
-                }}
-              >
-                {t('exitCode')} {message.exitCode}
-              </Chip>
-            )}
-          </div>
-          {message.content && isSandboxStatus && (
-            <p className="mt-1 break-words text-xs text-[#5e5d59] dark:text-[#b0aea5]">{message.content}</p>
+    <div className="my-0.5 max-w-full">
+      <button
+        type="button"
+        className={`
+          group/tool flex w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-lg
+          border px-2.5 py-1.5 text-left transition-colors
+          ${isError
+            ? 'border-danger-300/50 bg-danger-50/50 hover:bg-danger-50 dark:border-danger-500/30 dark:bg-danger-500/5 dark:hover:bg-danger-500/10'
+            : 'border-[#dedbd0]/80 bg-[#f5f4ef]/60 hover:bg-[#efede5] dark:border-[#3a3a37]/80 dark:bg-[#242421]/60 dark:hover:bg-[#2a2a27]'
+          }
+        `}
+        onClick={() => setIsExpanded(v => !v)}
+      >
+        <Icon
+          icon={icon}
+          className={`h-3.5 w-3.5 flex-shrink-0 ${isError ? 'text-danger-500 dark:text-danger-400' : 'text-[#87867f] dark:text-[#8f8d86]'}`}
+        />
+        <span className="min-w-0 flex-1 truncate text-xs font-medium text-[#4d4c48] dark:text-[#c8c6be]">
+          {toolName}
+          {summary && (
+            <span className="ml-1 font-normal text-[#87867f] dark:text-[#8f8d86]">{summary}</span>
           )}
-        </div>
-      </div>
+        </span>
 
-      {!isSandboxStatus && (
-        <div className="max-w-full px-3 py-2">
-          <pre className="max-h-[360px] max-w-full overflow-auto whitespace-pre-wrap break-words rounded-lg bg-[#f0eee6] p-2 font-mono text-xs leading-5 text-[#272724] dark:bg-[#242421] dark:text-[#e8e6dc]">
-            {visibleBody || t('emptyToolOutput')}
-          </pre>
-          {shouldCollapse && (
-            <Button
-              size="sm"
-              variant="light"
-              className="mt-2 h-7 px-2 text-xs text-[#c96442] dark:text-[#d97757]"
-              onPress={() => setIsExpanded(value => !value)}
-            >
-              {isExpanded ? t('showLess') : t('showMore')}
-            </Button>
+        {isPending && (
+          <span className="ml-auto inline-block h-3 w-3 flex-shrink-0 animate-spin rounded-full border-[1.5px] border-[#87867f] border-t-transparent dark:border-[#8f8d86] dark:border-t-transparent" />
+        )}
+        {isSuccess && (
+          <Icon icon="lucide:check" className="ml-auto h-3.5 w-3.5 flex-shrink-0 text-emerald-500 dark:text-emerald-400" />
+        )}
+        {isError && (
+          <Icon icon="lucide:x" className="ml-auto h-3.5 w-3.5 flex-shrink-0 text-danger-500 dark:text-danger-400" />
+        )}
+        {typeof result?.exitCode === 'number' && result.exitCode !== 0 && (
+          <span className="ml-0.5 text-[10px] font-mono text-danger-500 dark:text-danger-400">
+            E{result.exitCode}
+          </span>
+        )}
+        <Icon
+          icon="lucide:chevron-right"
+          className={`h-3 w-3 flex-shrink-0 text-[#b0aea5] transition-transform dark:text-[#6b6a65] ${isExpanded ? 'rotate-90' : ''}`}
+        />
+      </button>
+
+      {isExpanded && (
+        <div className="mt-1 max-w-full overflow-hidden rounded-lg border border-[#dedbd0]/60 bg-[#f9f8f4] dark:border-[#3a3a37]/60 dark:bg-[#1d1d1b]">
+          {argsBody && (
+            <div className="border-b border-[#dedbd0]/60 px-3 py-2 dark:border-[#3a3a37]/60">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[#87867f] dark:text-[#8f8d86]">
+                {t('toolCall')}
+              </div>
+              <pre className="max-h-[200px] max-w-full overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 text-[#4d4c48] dark:text-[#c8c6be]">
+                {argsBody}
+              </pre>
+            </div>
+          )}
+          {hasResult && (
+            <div className="px-3 py-2">
+              <div className="mb-1 flex items-center gap-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-[#87867f] dark:text-[#8f8d86]">
+                  {t(isError ? 'toolResultFailed' : 'toolResultSucceeded')}
+                </span>
+                {typeof result.exitCode === 'number' && (
+                  <span className="text-[10px] font-mono text-[#87867f] dark:text-[#8f8d86]">
+                    {t('exitCode')} {result.exitCode}
+                  </span>
+                )}
+              </div>
+              <pre className={`max-w-full overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 ${isError ? 'text-danger-600 dark:text-danger-300' : 'text-[#4d4c48] dark:text-[#c8c6be]'} ${shouldCollapseOutput && !isOutputExpanded ? '' : 'max-h-[400px]'}`}>
+                {visibleOutput || t('emptyToolOutput')}
+              </pre>
+              {shouldCollapseOutput && (
+                <button
+                  type="button"
+                  className="mt-1.5 text-xs font-medium text-[#87867f] hover:text-[#4d4c48] dark:text-[#8f8d86] dark:hover:text-[#c8c6be]"
+                  onClick={(e) => { e.stopPropagation(); setIsOutputExpanded(v => !v); }}
+                >
+                  {isOutputExpanded ? t('showLess') : t('showMore')}
+                </button>
+              )}
+            </div>
           )}
         </div>
       )}
-    </Card>
+    </div>
   );
 };
