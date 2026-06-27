@@ -34,6 +34,10 @@ Behavior:
 - RoomTalk forwards only `COCO_MODEL_PROXY_URL` and `COCO_MODEL_PROXY_TOKEN` to the runner.
 - RoomTalk does not forward `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, or `DEEPSEEK_API_KEY`.
 - The Python runner uses the proxy URL as Coco's provider `base_url`.
+- Provider SDKs do not all use the same base URL convention. OpenAI-compatible
+  SDKs expect a `/v1` base URL and call `chat/completions`; Anthropic's SDK
+  appends `/v1/messages` itself. The RoomTalk runner strips a trailing `/v1`
+  only for Anthropic so both SDK families can share one proxy contract.
 - The Python runner uses the short-lived proxy token as Coco's provider `api_key`.
 - The proxy service owns provider keys, room/turn authorization, budget checks, redaction, and audit logging.
 
