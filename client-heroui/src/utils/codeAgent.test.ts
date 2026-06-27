@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { FALLBACK_FEATURE_FLAGS } from './features';
+import { FALLBACK_FEATURE_FLAGS, FeatureFlags } from './features';
 import {
   getCodeAgentBackend,
+  getCodeAgentAvailableModes,
+  getCodeAgentDefaultMode,
   getCodeAgentMode,
   getCodeAgentStatus,
   isCodeAgentRoom,
@@ -41,7 +43,17 @@ describe('codeAgent room adapters', () => {
 
   it('reads code-agent mode from feature/config state', () => {
     expect(getCodeAgentMode(FALLBACK_FEATURE_FLAGS)).toBe('plan');
-    expect(getCodeAgentMode({ coco: { enabled: true, mode: 'acceptEdits' } })).toBe('acceptEdits');
+    const editCapableFlags: FeatureFlags = {
+      coco: {
+        enabled: true,
+        mode: 'acceptEdits',
+        availableModes: ['plan', 'acceptEdits'],
+        defaultMode: 'plan',
+      },
+    };
+    expect(getCodeAgentMode(editCapableFlags)).toBe('acceptEdits');
+    expect(getCodeAgentAvailableModes(editCapableFlags)).toEqual(['plan', 'acceptEdits']);
+    expect(getCodeAgentDefaultMode(editCapableFlags)).toBe('plan');
   });
 
   it('recognizes Codex rooms but marks their backend unavailable for now', () => {

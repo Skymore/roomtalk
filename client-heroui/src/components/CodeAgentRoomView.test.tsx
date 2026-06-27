@@ -54,7 +54,12 @@ const cocoRoom: Room = {
   cocoStatus: 'idle',
 };
 
-const renderCodeAgentRoom = (room: Room, mode: 'plan' | 'acceptEdits') => render(
+const renderCodeAgentRoom = (
+  room: Room,
+  mode: 'plan' | 'acceptEdits',
+  availableModes: Array<'plan' | 'acceptEdits'> = mode === 'acceptEdits' ? ['plan', 'acceptEdits'] : ['plan'],
+  defaultMode: 'plan' | 'acceptEdits' = 'plan'
+) => render(
   <CodeAgentRoomView
     currentRoom={room}
     memberCount={1}
@@ -63,6 +68,8 @@ const renderCodeAgentRoom = (room: Room, mode: 'plan' | 'acceptEdits') => render
     clientId="client-1"
     backend={room.type === 'coco' ? 'coco' : 'codex'}
     mode={mode}
+    availableModes={availableModes}
+    defaultMode={defaultMode}
     handleCopyToClipboard={vi.fn()}
     handleShareRoom={vi.fn()}
     handleToggleSave={vi.fn()}
@@ -81,6 +88,7 @@ const renderCodeAgentRoom = (room: Room, mode: 'plan' | 'acceptEdits') => render
 describe('CodeAgentRoomView', () => {
   afterEach(() => {
     cleanup();
+    localStorage.clear();
   });
 
   it('shows a controlled unavailable state for a backend that is not wired yet', () => {
@@ -99,5 +107,14 @@ describe('CodeAgentRoomView', () => {
     expect(screen.getByTestId('message-input').dataset.codeAgentRoom).toBe('true');
     expect(screen.getByTestId('message-input').dataset.codeAgentMode).toBe('plan');
     expect(screen.getByTestId('message-input').dataset.codeAgentMaxMode).toBe('acceptEdits');
+  });
+
+  it('constrains stored edit preference when the server only allows plan mode', () => {
+    localStorage.setItem('roomtalk_code_agent_mode_coco-room', 'acceptEdits');
+
+    renderCodeAgentRoom(cocoRoom, 'plan', ['plan']);
+
+    expect(screen.getByTestId('message-list').dataset.codeAgentMode).toBe('plan');
+    expect(screen.getByTestId('message-input').dataset.codeAgentMaxMode).toBe('plan');
   });
 });

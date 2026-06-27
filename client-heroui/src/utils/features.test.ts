@@ -8,18 +8,33 @@ describe('feature flags', () => {
 
   it('defaults Coco to disabled for fail-closed UI behavior', () => {
     expect(FALLBACK_FEATURE_FLAGS).toEqual({
-      coco: { enabled: false, mode: 'plan', rollout: 'disabled' },
+      coco: { enabled: false, mode: 'plan', availableModes: ['plan'], defaultMode: 'plan', rollout: 'disabled' },
     });
   });
 
   it('fetches per-client feature flags', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: true,
-      json: async () => ({ coco: { enabled: true, mode: 'acceptEdits', rollout: 'allowlist' } }),
+      json: async () => ({
+        coco: {
+          enabled: true,
+          mode: 'acceptEdits',
+          availableModes: ['plan', 'acceptEdits'],
+          defaultMode: 'plan',
+          rollout: 'allowlist',
+        },
+      }),
     })));
 
     await expect(fetchFeatureFlags('client-1')).resolves.toEqual({
-      coco: { enabled: true, mode: 'acceptEdits', rollout: 'allowlist', reason: undefined },
+      coco: {
+        enabled: true,
+        mode: 'acceptEdits',
+        availableModes: ['plan', 'acceptEdits'],
+        defaultMode: 'plan',
+        rollout: 'allowlist',
+        reason: undefined,
+      },
     });
     expect(fetch).toHaveBeenCalledWith('/api/features?clientId=client-1');
   });
@@ -31,7 +46,22 @@ describe('feature flags', () => {
     })));
 
     await expect(fetchFeatureFlags('client-1')).resolves.toMatchObject({
-      coco: { enabled: true, mode: 'plan' },
+      coco: { enabled: true, mode: 'plan', availableModes: ['plan'], defaultMode: 'plan' },
+    });
+  });
+
+  it('derives available modes from the legacy max mode payload', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ coco: { enabled: true, mode: 'acceptEdits', rollout: 'all' } }),
+    })));
+
+    await expect(fetchFeatureFlags('client-1')).resolves.toMatchObject({
+      coco: {
+        mode: 'acceptEdits',
+        availableModes: ['plan', 'acceptEdits'],
+        defaultMode: 'plan',
+      },
     });
   });
 

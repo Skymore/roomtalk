@@ -16,6 +16,15 @@ export interface CocoRuntimeConfig {
   cocoSourceRef?: string;
   allowedClientIds: string[];
   mode: CocoRunnerMode;
+  availableModes: CocoRunnerMode[];
+  defaultMode: CocoRunnerMode;
+  modelGateway?: {
+    publicBaseUrl: string;
+    tokenSecret: string;
+    tokenTtlSeconds: number;
+    maxRequestsPerTurn: number;
+    turnBudgetUsd: number;
+  };
   runnerCommand: string;
   allowedPaths: string[];
   runnerEnv: Record<string, string>;
@@ -84,6 +93,49 @@ const readMode = (env: NodeJS.ProcessEnv): CocoRunnerMode => {
   return 'plan';
 };
 
+const isCocoRunnerMode = (value: string): value is CocoRunnerMode => (
+  value === 'plan' || value === 'acceptEdits'
+);
+
+const normalizeModeSet = (modes: CocoRunnerMode[]) => {
+  const unique = Array.from(new Set(modes));
+  return unique.includes('acceptEdits') && !unique.includes('plan')
+    ? ['plan', ...unique] as CocoRunnerMode[]
+    : unique;
+};
+
+const readAvailableModes = (env: NodeJS.ProcessEnv): CocoRunnerMode[] => {
+  const configured = parseCsvEnv(env.COCO_ALLOWED_RUN_MODES);
+  if (configured.length > 0) {
+    const invalid = configured.find(mode => !isCocoRunnerMode(mode));
+    if (invalid) {
+      throw new Error(`Unsupported COCO_ALLOWED_RUN_MODES entry: ${invalid}`);
+    }
+    return normalizeModeSet(configured as CocoRunnerMode[]);
+  }
+
+  const legacyMode = readMode(env);
+  return legacyMode === 'acceptEdits' ? ['plan', 'acceptEdits'] : ['plan'];
+};
+
+const readDefaultMode = (env: NodeJS.ProcessEnv, availableModes: CocoRunnerMode[]): CocoRunnerMode => {
+  const configured = env.COCO_DEFAULT_MODE?.trim();
+  if (!configured) {
+    return 'plan';
+  }
+  if (!isCocoRunnerMode(configured)) {
+    throw new Error(`Unsupported COCO_DEFAULT_MODE: ${configured}`);
+  }
+  if (!availableModes.includes(configured)) {
+    throw new Error(`COCO_DEFAULT_MODE=${configured} must be included in COCO_ALLOWED_RUN_MODES`);
+  }
+  return configured;
+};
+
+const highestAvailableMode = (availableModes: CocoRunnerMode[]): CocoRunnerMode => (
+  availableModes.includes('acceptEdits') ? 'acceptEdits' : 'plan'
+);
+
 const hasPositiveNumber = (value?: string) => {
   if (typeof value !== 'string' || !value.trim()) {
     return false;
@@ -107,6 +159,12 @@ const hasModelProxySettings = (env: NodeJS.ProcessEnv) => (
   Boolean(env.COCO_MODEL_PROXY_URL) || Boolean(env.COCO_MODEL_PROXY_TOKEN)
 );
 
+const hasRoomTalkModelGatewaySettings = (env: NodeJS.ProcessEnv) => (
+  env.COCO_MODEL_ACCESS_STRATEGY === 'roomtalk_gateway' ||
+  Boolean(env.COCO_MODEL_GATEWAY_SECRET) ||
+  Boolean(env.COCO_MODEL_GATEWAY_PUBLIC_URL)
+);
+
 const hasModelProxyContract = (env: NodeJS.ProcessEnv) => (
   env.COCO_MODEL_ACCESS_STRATEGY === 'proxy' &&
   isHttpsUrl(env.COCO_MODEL_PROXY_URL) &&
@@ -124,11 +182,16 @@ const hasScopedProviderKeyContract = (env: NodeJS.ProcessEnv) => (
 
 const usesOutOfBandModelAccess = (env: NodeJS.ProcessEnv) => (
   env.COCO_MODEL_ACCESS_STRATEGY === 'proxy' ||
+  env.COCO_MODEL_ACCESS_STRATEGY === 'roomtalk_gateway' ||
+  hasRoomTalkModelGatewaySettings(env) ||
   hasModelProxySettings(env) ||
   env.COCO_SCOPED_PROVIDER_KEY === 'true'
 );
 
-const hasApprovedModelAccess = (env: NodeJS.ProcessEnv) => {
+const hasApprovedModelAccess = (config: CocoRuntimeConfig, env: NodeJS.ProcessEnv) => {
+  if (config.modelGateway) {
+    return true;
+  }
   if (hasModelProxyContract(env)) {
     return true;
   }
@@ -170,11 +233,50 @@ const providerEnv = (env: NodeJS.ProcessEnv): Partial<Record<AIModelProvider, Re
   openrouter: pickEnv(env, ['OPENROUTER_API_KEY', 'OPENROUTER_BASE_URL']),
 });
 
-const shouldForwardProviderEnv = (env: NodeJS.ProcessEnv, runnerClient: CocoRunnerClientKind, mode: CocoRunnerMode) => (
+const shouldForwardProviderEnv = (env: NodeJS.ProcessEnv, runnerClient: CocoRunnerClientKind, availableModes: CocoRunnerMode[]) => (
   runnerClient === 'jsonl' &&
-  mode === 'plan' &&
+  !availableModes.includes('acceptEdits') &&
   !usesOutOfBandModelAccess(env)
 );
+
+const parsePositiveIntegerEnv = (env: NodeJS.ProcessEnv, name: string, fallback: number) => {
+  const parsed = Number.parseInt(env[name] || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const parsePositiveNumberEnv = (env: NodeJS.ProcessEnv, name: string, fallback: number) => {
+  const parsed = Number(env[name] || '');
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const readModelGatewayConfig = (env: NodeJS.ProcessEnv): CocoRuntimeConfig['modelGateway'] | undefined => {
+  if (!hasRoomTalkModelGatewaySettings(env)) {
+    return undefined;
+  }
+  if (env.COCO_MODEL_ACCESS_STRATEGY && env.COCO_MODEL_ACCESS_STRATEGY !== 'roomtalk_gateway') {
+    return undefined;
+  }
+
+  const tokenSecret = env.COCO_MODEL_GATEWAY_SECRET?.trim();
+  if (!tokenSecret) {
+    throw new Error('RoomTalk Coco model gateway requires COCO_MODEL_GATEWAY_SECRET');
+  }
+  const baseUrl = (env.COCO_MODEL_GATEWAY_PUBLIC_URL || (env.CLIENT_URL ? `${env.CLIENT_URL.replace(/\/+$/, '')}/api/coco/model-gateway` : '')).trim();
+  if (!baseUrl) {
+    throw new Error('RoomTalk Coco model gateway requires COCO_MODEL_GATEWAY_PUBLIC_URL or CLIENT_URL');
+  }
+  if (!isHttpsUrl(baseUrl) && env.E2E_TEST_MODE !== 'true') {
+    throw new Error('RoomTalk Coco model gateway public URL must be HTTPS');
+  }
+
+  return {
+    publicBaseUrl: baseUrl.replace(/\/+$/, ''),
+    tokenSecret,
+    tokenTtlSeconds: parsePositiveIntegerEnv(env, 'COCO_MODEL_GATEWAY_TOKEN_TTL_SECONDS', 15 * 60),
+    maxRequestsPerTurn: parsePositiveIntegerEnv(env, 'COCO_MODEL_GATEWAY_MAX_REQUESTS_PER_TURN', 20),
+    turnBudgetUsd: parsePositiveNumberEnv(env, 'COCO_MODEL_GATEWAY_TURN_BUDGET_USD', 2),
+  };
+};
 
 const validateEnabledConfig = (config: CocoRuntimeConfig, env: NodeJS.ProcessEnv) => {
   if (config.runnerClient === 'jsonl' && config.sandboxProvider === 'fake') {
@@ -200,8 +302,15 @@ const validateEnabledConfig = (config: CocoRuntimeConfig, env: NodeJS.ProcessEnv
   }
 
   const shellEnabled = config.runnerEnv.ROOMTALK_COCO_ALLOW_SHELL === 'true';
-  const writeToolsEnabled = config.runnerEnv.ROOMTALK_COCO_ALLOW_WRITE_TOOLS === 'true' || config.mode === 'acceptEdits';
+  const writeToolsEnabled = config.runnerEnv.ROOMTALK_COCO_ALLOW_WRITE_TOOLS === 'true' || config.availableModes.includes('acceptEdits');
   const requiresModelAccessContract = shellEnabled || writeToolsEnabled;
+  if (
+    hasRoomTalkModelGatewaySettings(env) &&
+    env.COCO_MODEL_ACCESS_STRATEGY &&
+    env.COCO_MODEL_ACCESS_STRATEGY !== 'roomtalk_gateway'
+  ) {
+    throw new Error('RoomTalk Coco model gateway settings require COCO_MODEL_ACCESS_STRATEGY=roomtalk_gateway');
+  }
   if (
     hasModelProxySettings(env) &&
     env.COCO_MODEL_ACCESS_STRATEGY !== 'proxy'
@@ -214,8 +323,8 @@ const validateEnabledConfig = (config: CocoRuntimeConfig, env: NodeJS.ProcessEnv
   if (config.runnerClient === 'jsonl' && env.COCO_SCOPED_PROVIDER_KEY === 'true' && !hasScopedProviderKeyContract(env)) {
     throw new Error('JSONL Coco scoped provider key mode requires TTL, budget, and audit id');
   }
-  if (config.runnerClient === 'jsonl' && requiresModelAccessContract && !hasApprovedModelAccess(env)) {
-    throw new Error('JSONL Coco acceptEdits/write/Shell mode requires model proxy with token or scoped provider key contract');
+  if (config.runnerClient === 'jsonl' && requiresModelAccessContract && !hasApprovedModelAccess(config, env)) {
+    throw new Error('JSONL Coco acceptEdits/write/Shell mode requires RoomTalk model gateway, model proxy with token, or scoped provider key contract');
   }
 
   if (config.sandboxProvider === 'e2b' && config.runnerClient === 'jsonl') {
@@ -234,11 +343,14 @@ const validateEnabledConfig = (config: CocoRuntimeConfig, env: NodeJS.ProcessEnv
 };
 
 export const resolveCocoRuntimeConfig = (env: NodeJS.ProcessEnv): CocoRuntimeConfig => {
-  const mode = readMode(env);
+  const availableModes = readAvailableModes(env);
+  const defaultMode = readDefaultMode(env, availableModes);
+  const mode = highestAvailableMode(availableModes);
   const backend = readCodeAgentBackend(env);
   const runnerClient = readRunnerClient(env);
   const sandboxProvider = readSandboxProvider(env);
   const artifactMode = readArtifactMode(env);
+  const modelGateway = readModelGatewayConfig(env);
   const config: CocoRuntimeConfig = {
     enabled: env.COCO_ENABLED === 'true',
     backend,
@@ -249,13 +361,16 @@ export const resolveCocoRuntimeConfig = (env: NodeJS.ProcessEnv): CocoRuntimeCon
     cocoSourceRef: env.COCO_SOURCE_REF,
     allowedClientIds: parseCsvEnv(env.COCO_ALLOWED_USER_IDS),
     mode,
+    availableModes,
+    defaultMode,
+    modelGateway,
     runnerCommand: env.COCO_RUNNER_COMMAND || DEFAULT_COCO_RUNNER_COMMAND,
     allowedPaths: parseCsvEnv(env.COCO_ALLOWED_PATHS || '.'),
     runnerEnv: {
       ...baseRunnerEnv(env, sandboxProvider, runnerClient),
       ...pickRunnerEnv(env),
     },
-    runnerProviderEnvByProvider: shouldForwardProviderEnv(env, runnerClient, mode) ? providerEnv(env) : {},
+    runnerProviderEnvByProvider: shouldForwardProviderEnv(env, runnerClient, availableModes) ? providerEnv(env) : {},
     e2bTemplateId: env.COCO_E2B_TEMPLATE_ID,
     e2bWorkspace: env.COCO_E2B_WORKSPACE,
   };

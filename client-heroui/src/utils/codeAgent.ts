@@ -2,7 +2,7 @@ import { FeatureFlags } from './features';
 import { Room, RoomCocoStatus } from './types';
 
 export type CodeAgentBackend = 'coco' | 'codex';
-export type CodeAgentMode = FeatureFlags['coco']['mode'];
+export type CodeAgentMode = 'plan' | 'acceptEdits';
 
 const runtimeRoomType = (room: Room | null | undefined): string | undefined => (
   room?.type as string | undefined
@@ -25,6 +25,16 @@ export const isCodeAgentRoom = (room: Room | null | undefined): boolean => (
 
 export const getCodeAgentMode = (featureFlags: FeatureFlags): CodeAgentMode => (
   featureFlags.coco.mode
+);
+
+export const getCodeAgentAvailableModes = (featureFlags: FeatureFlags): CodeAgentMode[] => (
+  featureFlags.coco.availableModes?.length ? featureFlags.coco.availableModes : ['plan']
+);
+
+export const getCodeAgentDefaultMode = (featureFlags: FeatureFlags): CodeAgentMode => (
+  featureFlags.coco.availableModes.includes(featureFlags.coco.defaultMode)
+    ? featureFlags.coco.defaultMode
+    : 'plan'
 );
 
 export const isSupportedCodeAgentBackend = (backend: CodeAgentBackend | null): boolean => (

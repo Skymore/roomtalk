@@ -35,6 +35,8 @@ export default defineConfig({
     {
       command: [
         `PORT=${serverPort}`,
+        'NODE_ENV=development',
+        'DISABLE_LOCAL_MEDIA_STORAGE=false',
         `CLIENT_URL=${clientURL}`,
         'REDIS_URL=redis://127.0.0.1:6379/15',
         'E2E_TEST_MODE=true',

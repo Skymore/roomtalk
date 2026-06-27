@@ -10,6 +10,7 @@ import { CodeAgentRunner } from './codeAgentRunner';
 import { COCO_RUNNER_SCHEMA_VERSION, CocoRunnerEvent, CocoRunnerMode } from './cocoRunnerProtocol';
 import { DEFAULT_COCO_RUNNER_COMMAND } from './cocoRuntimeConfig';
 import { createAIPlaceholderMessage } from './messageDomain';
+import { CocoModelGateway } from './cocoModelGateway';
 
 export interface CocoRoomEmitter {
   to(roomId: string): {
@@ -21,6 +22,9 @@ export interface CocoSessionServiceOptions {
   enabled: boolean;
   allowedClientIds?: string[];
   mode?: CocoRunnerMode;
+  availableModes?: CocoRunnerMode[];
+  defaultMode?: CocoRunnerMode;
+  modelGateway?: CocoModelGateway;
   runnerCommand?: string;
   turnTimeoutMs?: number;
   allowedPaths?: string[];
@@ -40,6 +44,14 @@ export interface CocoTurnInput {
 
 export type CocoTurnAck = { success: boolean; messageId?: string; error?: string };
 export type CocoTurnAckCallback = (response: CocoTurnAck) => void;
+
+interface CocoTurnStreamState {
+  activeMessageId: string;
+  segmentContent: string;
+  fullContent: string;
+  needsNewSegment: boolean;
+  segmentIds: string[];
+}
 
 export class CocoSessionService {
   private readonly activeTurns = new Set<string>();
@@ -97,6 +109,7 @@ export class CocoSessionService {
     let runnerProcess: CocoRunnerProcess | null = null;
     let placeholderAnnounced = false;
     let roomMarkedRunning = false;
+    let streamState: CocoTurnStreamState | null = null;
 
     try {
       this.activeTurns.add(input.roomId);
@@ -146,11 +159,22 @@ export class CocoSessionService {
       runnerProcess = await this.sandboxService.startRunner({
         handle: sandbox.handle,
         command: this.options.runnerCommand || DEFAULT_COCO_RUNNER_COMMAND,
-        env: this.buildRunnerEnv(input.selectedModel),
+        env: this.buildRunnerEnv(input.selectedModel, {
+          roomId: input.roomId,
+          clientId: input.clientId,
+          turnId,
+          mode: turnMode.mode,
+        }),
         timeoutMs: this.options.turnTimeoutMs,
       });
 
-      let fullContent = '';
+      streamState = {
+        activeMessageId: aiMessageId,
+        segmentContent: '',
+        fullContent: '',
+        needsNewSegment: false,
+        segmentIds: [aiMessageId],
+      };
       const runResult = await this.runner.run({
         schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
         type: 'run',
@@ -166,7 +190,7 @@ export class CocoSessionService {
         allowedPaths: this.options.allowedPaths || ['.'],
       }, {
         onEvent: async event => {
-          fullContent = await this.handleRunnerEvent(event, input.roomId, turnId, aiMessageId, fullContent);
+          await this.handleRunnerEvent(event, input.roomId, turnId, aiMessage!, input.selectedModel, streamState!);
         },
       }, {
         process: runnerProcess,
@@ -180,12 +204,41 @@ export class CocoSessionService {
         throw new Error('Coco runner exited without a final event');
       }
 
-      const answer = runResult.finalEvent.answer || fullContent;
+      // Seal the current segment and create a new one for the final answer
+      // if tool calls occurred after the last text
+      if (streamState.needsNewSegment) {
+        await this.sealCurrentSegment(input.roomId, aiMessage, streamState);
+        const finalAnswer = runResult.finalEvent.answer;
+        if (finalAnswer) {
+          const newId = this.createId();
+          const segmentMessage: Message = {
+            ...aiMessage,
+            id: newId,
+            content: '',
+            status: 'streaming',
+            timestamp: this.now().toISOString(),
+            aiModel: getMessageAIModel(input.selectedModel),
+          };
+          const segmentRoom = await this.store.appendMessageWithAtomicPosition(segmentMessage);
+          if (segmentRoom) {
+            this.emitter.to(segmentRoom.creatorId).emit('room_updated', segmentRoom);
+            this.emitter.to(input.roomId).emit('new_message', segmentMessage);
+          }
+          streamState.activeMessageId = newId;
+          streamState.segmentContent = finalAnswer;
+          streamState.segmentIds.push(newId);
+        }
+      }
+
+      const answer = runResult.finalEvent.answer || streamState.segmentContent || streamState.fullContent;
       const usage = runResult.finalEvent.usage;
       const cost = usage ? calculateAICost(input.selectedModel, usage) : undefined;
       const roomCostTotal = await this.store.incrementRoomAICost(input.roomId, cost || null);
+
+      const finalActiveId = streamState.activeMessageId;
       const finalMessage: Message = {
         ...aiMessage,
+        id: finalActiveId,
         content: answer,
         status: 'complete',
         timestamp: this.now().toISOString(),
@@ -198,12 +251,30 @@ export class CocoSessionService {
         throw new Error('Unable to save the completed Coco response');
       }
 
+      // Clean up unused initial placeholder if streaming moved to a new segment
+      if (finalActiveId !== aiMessageId) {
+        const firstSegmentUsed = streamState.segmentIds.indexOf(aiMessageId) >= 0
+          && streamState.segmentIds.length > 1
+          && streamState.segmentIds[0] === aiMessageId;
+        if (!firstSegmentUsed) {
+          await this.store.deleteMessageById(input.roomId, aiMessageId).catch(err => {
+            this.logger.warn('Failed to clean up unused Coco placeholder', { error: err, roomId: input.roomId, messageId: aiMessageId });
+          });
+          this.emitter.to(input.roomId).emit('message_deleted', { roomId: input.roomId, messageId: aiMessageId });
+        }
+      }
+
       const idleRoom = await this.patchRoom(input.roomId, {
         cocoStatus: 'idle',
         cocoSessionId: runResult.finalEvent.sessionId,
       });
+      if (runnerProcess) {
+        await this.stopRunnerProcess(runnerProcess, input.roomId);
+        runnerProcess = null;
+      }
+      this.activeTurns.delete(input.roomId);
       this.emitter.to(input.roomId).emit('ai_stream_end', {
-        messageId: aiMessageId,
+        messageId: finalActiveId,
         roomId: input.roomId,
         content: finalMessage.content,
         aiModel: finalMessage.aiModel,
@@ -215,9 +286,11 @@ export class CocoSessionService {
       this.emitter.to((idleRoom || finalRoom).creatorId).emit('room_updated', idleRoom || finalRoom);
       return { success: true, messageId: aiMessageId };
     } catch (error) {
-      this.logger.error('Coco turn failed', { error, roomId: input.roomId, messageId: aiMessageId });
+      const errorTargetId = streamState?.activeMessageId || aiMessageId;
+      this.logger.error('Coco turn failed', { error, roomId: input.roomId, messageId: errorTargetId });
       if (placeholderAnnounced && aiMessage) {
-        await this.saveCocoError(input.roomId, aiMessage, error);
+        const errorTargetMessage: Message = { ...aiMessage, id: errorTargetId };
+        await this.saveCocoError(input.roomId, errorTargetMessage, error);
       } else if (roomMarkedRunning) {
         const errorRoom = await this.patchRoom(input.roomId, { cocoStatus: 'error' });
         if (errorRoom) {
@@ -230,12 +303,16 @@ export class CocoSessionService {
       return { success: false, messageId: aiMessageId || undefined, error: 'Coco task failed' };
     } finally {
       if (runnerProcess) {
-        await runnerProcess.stop().catch(error => {
-          this.logger.warn('Failed to stop Coco runner process', { error, roomId: input.roomId });
-        });
+        await this.stopRunnerProcess(runnerProcess, input.roomId);
       }
       this.activeTurns.delete(input.roomId);
     }
+  }
+
+  private async stopRunnerProcess(runnerProcess: CocoRunnerProcess, roomId: string) {
+    await runnerProcess.stop().catch(error => {
+      this.logger.warn('Failed to stop Coco runner process', { error, roomId });
+    });
   }
 
   private validateRoom(room: Room | null, clientId: string): CocoTurnAck {
@@ -252,17 +329,38 @@ export class CocoSessionService {
   }
 
   private resolveTurnMode(requestedMode?: CocoRunnerMode): { ok: true; mode: CocoRunnerMode } | { ok: false; error: string } {
-    const configuredMode = this.options.mode || 'plan';
-    if (!requestedMode || requestedMode === configuredMode) {
-      return { ok: true, mode: configuredMode };
+    const availableModes = this.availableModes();
+    const defaultMode = this.defaultMode(availableModes);
+    if (!requestedMode) {
+      return { ok: true, mode: defaultMode };
     }
-    if (requestedMode === 'plan') {
-      return { ok: true, mode: 'plan' };
+    if (availableModes.includes(requestedMode)) {
+      return { ok: true, mode: requestedMode };
     }
-    if (requestedMode === 'acceptEdits' && configuredMode !== 'acceptEdits') {
+    if (requestedMode === 'acceptEdits') {
       return { ok: false, error: 'Coco edit mode is not enabled' };
     }
-    return { ok: true, mode: requestedMode };
+    return { ok: false, error: `Coco mode is not enabled: ${requestedMode}` };
+  }
+
+  private availableModes(): CocoRunnerMode[] {
+    if (this.options.availableModes?.length) {
+      return Array.from(new Set(this.options.availableModes));
+    }
+    if (this.options.mode === 'acceptEdits') {
+      return ['plan', 'acceptEdits'];
+    }
+    return ['plan'];
+  }
+
+  private defaultMode(availableModes: CocoRunnerMode[]): CocoRunnerMode {
+    if (this.options.defaultMode && availableModes.includes(this.options.defaultMode)) {
+      return this.options.defaultMode;
+    }
+    if (this.options.mode && availableModes.includes(this.options.mode)) {
+      return this.options.mode;
+    }
+    return 'plan';
   }
 
   private async readLatestPrompt(roomId: string, clientId: string) {
@@ -304,8 +402,9 @@ export class CocoSessionService {
     event: CocoRunnerEvent,
     roomId: string,
     turnId: string,
-    aiMessageId: string,
-    fullContent: string
+    baseAIMessage: Message,
+    selectedModel: AIModelOption,
+    state: CocoTurnStreamState
   ) {
     const mapped = mapCocoRunnerEvent(event, {
       roomId,
@@ -315,12 +414,39 @@ export class CocoSessionService {
     });
 
     if (mapped.kind === 'ai_delta') {
-      const nextContent = `${fullContent}${mapped.delta}`;
-      this.emitter.to(roomId).emit('ai_chunk', { messageId: aiMessageId, chunk: mapped.delta, roomId });
-      return nextContent;
+      if (state.needsNewSegment) {
+        await this.sealCurrentSegment(roomId, baseAIMessage, state);
+        const newId = this.createId();
+        const segmentMessage: Message = {
+          ...baseAIMessage,
+          id: newId,
+          content: '',
+          status: 'streaming',
+          timestamp: this.now().toISOString(),
+          aiModel: getMessageAIModel(selectedModel),
+        };
+        const segmentRoom = await this.store.appendMessageWithAtomicPosition(segmentMessage);
+        if (!segmentRoom) {
+          throw new Error('Unable to create new AI segment message');
+        }
+        this.emitter.to(segmentRoom.creatorId).emit('room_updated', segmentRoom);
+        this.emitter.to(roomId).emit('new_message', segmentMessage);
+        state.activeMessageId = newId;
+        state.segmentContent = '';
+        state.needsNewSegment = false;
+        state.segmentIds.push(newId);
+      }
+      state.segmentContent += mapped.delta;
+      state.fullContent += mapped.delta;
+      this.emitter.to(roomId).emit('ai_chunk', { messageId: state.activeMessageId, chunk: mapped.delta, roomId });
+      return;
     }
 
     if (mapped.kind === 'message') {
+      if (mapped.message.messageType === 'tool_call') {
+        state.needsNewSegment = true;
+      }
+
       const updatedRoom = await this.store.appendMessageWithAtomicPosition(mapped.message);
       if (!updatedRoom) {
         throw new Error(`Unable to persist Coco ${mapped.message.messageType} event`);
@@ -328,8 +454,27 @@ export class CocoSessionService {
       this.emitter.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
       this.emitter.to(roomId).emit('new_message', mapped.message);
     }
+  }
 
-    return fullContent;
+  private async sealCurrentSegment(roomId: string, baseAIMessage: Message, state: CocoTurnStreamState) {
+    if (!state.segmentContent.trim()) return;
+
+    this.emitter.to(roomId).emit('ai_stream_end', {
+      messageId: state.activeMessageId,
+      roomId,
+      content: state.segmentContent,
+    });
+
+    const sealedMessage: Message = {
+      ...baseAIMessage,
+      id: state.activeMessageId,
+      content: state.segmentContent,
+      status: 'complete',
+      timestamp: this.now().toISOString(),
+    };
+    await this.store.upsertMessage(sealedMessage).catch(err => {
+      this.logger.warn('Failed to seal AI segment', { error: err, roomId, messageId: state.activeMessageId });
+    });
   }
 
   private async saveCocoError(roomId: string, aiMessage: Message, error: unknown) {
@@ -363,13 +508,37 @@ export class CocoSessionService {
     return this.store.saveRoom({ ...currentRoom, ...patch });
   }
 
-  private buildRunnerEnv(selectedModel: AIModelOption) {
+  private buildRunnerEnv(selectedModel: AIModelOption, context: {
+    roomId: string;
+    clientId: string;
+    turnId: string;
+    mode: CocoRunnerMode;
+  }) {
     // This is the complete runner environment. Do not merge process.env here:
     // Coco subprocesses must only receive explicit sandbox/model credentials.
-    return {
+    const env: Record<string, string> = {
       PYTHONUNBUFFERED: '1',
       ...(this.options.runnerEnv || {}),
-      ...(this.options.runnerProviderEnvByProvider?.[selectedModel.provider] || {}),
     };
+    if (this.options.modelGateway) {
+      env.COCO_MODEL_PROXY_URL = `${this.options.modelGateway.publicBaseUrl}/v1`;
+      env.COCO_MODEL_PROXY_TOKEN = this.options.modelGateway.issueTurnToken({
+        roomId: context.roomId,
+        clientId: context.clientId,
+        turnId: context.turnId,
+        mode: context.mode,
+        model: selectedModel,
+      });
+    } else {
+      Object.assign(env, this.options.runnerProviderEnvByProvider?.[selectedModel.provider] || {});
+    }
+
+    if (context.mode === 'acceptEdits') {
+      env.ROOMTALK_COCO_ALLOW_WRITE_TOOLS = 'true';
+    } else if (env.ROOMTALK_COCO_ALLOW_WRITE_TOOLS === 'true') {
+      delete env.ROOMTALK_COCO_ALLOW_WRITE_TOOLS;
+    }
+
+    return env;
   }
 }

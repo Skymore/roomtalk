@@ -39,6 +39,9 @@ describe('resolveCocoRuntimeConfig', () => {
     assert.equal(config.runnerClient, 'fake');
     assert.equal(config.artifactMode, 'production');
     assert.equal(config.mode, 'plan');
+    assert.deepEqual(config.availableModes, ['plan']);
+    assert.equal(config.defaultMode, 'plan');
+    assert.equal(config.modelGateway, undefined);
     assert.equal(config.runnerCommand, DEFAULT_COCO_RUNNER_COMMAND);
     assert.deepEqual(config.allowedPaths, ['.']);
     assert.deepEqual(config.runnerEnv, {});
@@ -61,11 +64,36 @@ describe('resolveCocoRuntimeConfig', () => {
       const config = resolveCocoRuntimeConfig({ COCO_MODE: 'accept_edits' });
 
       assert.equal(config.mode, 'plan');
+      assert.deepEqual(config.availableModes, ['plan']);
       assert.equal(warnings.length, 1);
       assert.match(warnings[0], /Unsupported COCO_MODE: accept_edits/);
     } finally {
       console.warn = originalWarn;
     }
+  });
+
+  it('supports explicit per-turn mode availability with plan as the default', () => {
+    const config = resolveCocoRuntimeConfig({
+      COCO_ALLOWED_RUN_MODES: 'acceptEdits',
+    });
+
+    assert.equal(config.mode, 'acceptEdits');
+    assert.deepEqual(config.availableModes, ['plan', 'acceptEdits']);
+    assert.equal(config.defaultMode, 'plan');
+
+    const editDefault = resolveCocoRuntimeConfig({
+      COCO_ALLOWED_RUN_MODES: 'plan,acceptEdits',
+      COCO_DEFAULT_MODE: 'acceptEdits',
+    });
+    assert.equal(editDefault.defaultMode, 'acceptEdits');
+
+    assert.throws(() => resolveCocoRuntimeConfig({
+      COCO_ALLOWED_RUN_MODES: 'plan,writeEverything',
+    }), /Unsupported COCO_ALLOWED_RUN_MODES entry/);
+    assert.throws(() => resolveCocoRuntimeConfig({
+      COCO_ALLOWED_RUN_MODES: 'plan',
+      COCO_DEFAULT_MODE: 'acceptEdits',
+    }), /must be included in COCO_ALLOWED_RUN_MODES/);
   });
 
   it('rejects jsonl runner with fake sandbox when Coco is enabled', () => {
@@ -207,7 +235,7 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
       ...e2bCredentialEnv,
       ...pinnedArtifactEnv,
-    }), /requires model proxy with token or scoped provider key contract/);
+    }), /requires RoomTalk model gateway, model proxy with token, or scoped provider key contract/);
 
     assert.throws(() => resolveCocoRuntimeConfig({
       COCO_ENABLED: 'true',
@@ -218,7 +246,7 @@ describe('resolveCocoRuntimeConfig', () => {
       ROOMTALK_COCO_ALLOW_SHELL: 'true',
       ...e2bCredentialEnv,
       ...pinnedArtifactEnv,
-    }), /requires model proxy with token or scoped provider key contract/);
+    }), /requires RoomTalk model gateway, model proxy with token, or scoped provider key contract/);
 
     assert.throws(() => resolveCocoRuntimeConfig({
       COCO_ENABLED: 'true',
@@ -304,7 +332,37 @@ describe('resolveCocoRuntimeConfig', () => {
       ...pinnedArtifactEnv,
     });
     assert.equal(scoped.mode, 'acceptEdits');
+    assert.deepEqual(scoped.availableModes, ['plan', 'acceptEdits']);
     assert.deepEqual(scoped.runnerProviderEnvByProvider, {});
+  });
+
+  it('allows JSONL acceptEdits through the built-in RoomTalk model gateway', () => {
+    const config = resolveCocoRuntimeConfig({
+      COCO_ENABLED: 'true',
+      COCO_SANDBOX_PROVIDER: 'e2b',
+      COCO_RUNNER_CLIENT: 'jsonl',
+      COCO_ALLOWED_RUN_MODES: 'plan,acceptEdits',
+      COCO_DEFAULT_MODE: 'plan',
+      COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
+      COCO_MODEL_ACCESS_STRATEGY: 'roomtalk_gateway',
+      COCO_MODEL_GATEWAY_PUBLIC_URL: 'https://room.example/api/coco/model-gateway',
+      COCO_MODEL_GATEWAY_SECRET: 'gateway-secret',
+      COCO_MODEL_GATEWAY_MAX_REQUESTS_PER_TURN: '8',
+      COCO_MODEL_GATEWAY_TURN_BUDGET_USD: '0.75',
+      DEEPSEEK_API_KEY: 'must-not-forward',
+      ...e2bCredentialEnv,
+      ...pinnedArtifactEnv,
+    });
+
+    assert.equal(config.mode, 'acceptEdits');
+    assert.deepEqual(config.availableModes, ['plan', 'acceptEdits']);
+    assert.equal(config.defaultMode, 'plan');
+    assert.deepEqual(config.runnerProviderEnvByProvider, {});
+    assert.equal(config.modelGateway?.publicBaseUrl, 'https://room.example/api/coco/model-gateway');
+    assert.equal(config.modelGateway?.maxRequestsPerTurn, 8);
+    assert.equal(config.modelGateway?.turnBudgetUsd, 0.75);
+    assert.equal('COCO_MODEL_GATEWAY_SECRET' in config.runnerEnv, false);
+    assert.equal('DEEPSEEK_API_KEY' in config.runnerEnv, false);
   });
 
   it('does not forward provider keys in plan mode when a scoped key or proxy is configured', () => {
@@ -354,6 +412,7 @@ describe('resolveCocoRuntimeConfig', () => {
     });
 
     assert.equal(proxy.mode, 'acceptEdits');
+    assert.deepEqual(proxy.availableModes, ['plan', 'acceptEdits']);
     assert.equal(proxy.runnerEnv.PYTHONPATH, DEFAULT_COCO_RUNNER_PYTHONPATH);
     assert.equal(proxy.runnerEnv.COCO_WORKSPACE_ROOT, DEFAULT_COCO_WORKSPACE_ROOT);
     assert.equal(proxy.runnerEnv.COCO_MODEL_PROXY_URL, 'https://model-proxy.internal');
