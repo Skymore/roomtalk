@@ -42,6 +42,8 @@ interface ApiRouteOptions {
   verifyGoogleCredential?: (credential: string, clientIds: string[]) => Promise<VerifyGoogleCredentialResult>;
   cocoAccess?: CocoAccessControl;
   cocoMode?: CocoRunnerMode;
+  cocoAvailableModes?: CocoRunnerMode[];
+  cocoDefaultMode?: CocoRunnerMode;
   mediaUploadCleanup?: {
     disabled?: boolean;
     pendingUploadTtlMs?: number;
@@ -284,6 +286,12 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   const { store, io, redisClient, routeLogger, getAIModelResponse, generateAIRoleDraft, persistenceStore = 'redis', mediaObjectStorage, audioTranscriptionRunner } = options;
   const cocoAccess = options.cocoAccess ?? createCocoAccessControl({ enabled: false });
   const cocoMode = options.cocoMode ?? 'plan';
+  const cocoAvailableModes = options.cocoAvailableModes?.length
+    ? options.cocoAvailableModes
+    : (cocoMode === 'acceptEdits' ? ['plan', 'acceptEdits'] : ['plan']);
+  const cocoDefaultMode = options.cocoDefaultMode && cocoAvailableModes.includes(options.cocoDefaultMode)
+    ? options.cocoDefaultMode
+    : 'plan';
   const mediaUploadCleanup = options.mediaUploadCleanup || {};
   const getNowMs = mediaUploadCleanup.nowMs || (() => Date.now());
   const pendingUploadTtlMs = mediaUploadCleanup.pendingUploadTtlMs ?? MEDIA_PENDING_UPLOAD_TTL_MS;
@@ -1298,6 +1306,8 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       coco: {
         ...cocoAccess.toFeaturePayload(clientId),
         mode: cocoMode,
+        availableModes: cocoAvailableModes,
+        defaultMode: cocoDefaultMode,
       },
     });
   });
@@ -1494,6 +1504,8 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
             enabled: cocoAccess.enabled,
             rollout: !cocoAccess.enabled ? 'disabled' : cocoAccess.hasAllowlist ? 'allowlist' : 'all',
             mode: cocoMode,
+            availableModes: cocoAvailableModes,
+            defaultMode: cocoDefaultMode,
           },
         },
         rooms: roomCount,

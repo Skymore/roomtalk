@@ -251,7 +251,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
           {isCodeAgentRoom ? (
             <Select
               size="sm"
-              aria-label={t('selectCodeAgentMode')}
+              aria-label={t('codeAgentModeControl')}
               data-testid="code-agent-mode-select"
               selectedKeys={[effectiveCodeAgentMode]}
               onSelectionChange={handleCodeAgentModeSelection}
@@ -462,7 +462,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                 </div>
                 <Select
                   size="sm"
-                  aria-label={t('selectCodeAgentMode')}
+                  aria-label={t('codeAgentModeControl')}
                   selectedKeys={[effectiveCodeAgentMode]}
                   onSelectionChange={handleCodeAgentModeSelection}
                   isDisabled={!canSwitchCodeAgentMode}

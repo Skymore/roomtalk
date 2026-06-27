@@ -34,6 +34,7 @@ import { E2BCocoSandboxService, E2BSandboxDriver } from './services/e2bCocoSandb
 import { createE2BSdkDriver } from './services/e2bSdkDriver';
 import { COCO_RUNNER_SCHEMA_VERSION } from './services/cocoRunnerProtocol';
 import { resolveCocoRuntimeConfig } from './services/cocoRuntimeConfig';
+import { CocoModelGateway, RedisCocoModelGatewayTokenStateStore, registerCocoModelGatewayRoutes } from './services/cocoModelGateway';
 import { FakeCocoRunnerClient } from './services/fakeCocoRunner';
 import { FakeCocoSandboxService } from './services/fakeCocoSandboxService';
 import { JsonlCocoRunnerClient } from './services/jsonlCocoRunner';
@@ -132,6 +133,29 @@ const cocoAccess = createCocoAccessControl({
   enabled: cocoRuntimeConfig.enabled,
   allowedClientIds: cocoRuntimeConfig.allowedClientIds,
 });
+const cocoModelGateway = cocoRuntimeConfig.modelGateway
+  ? new CocoModelGateway({
+    publicBaseUrl: cocoRuntimeConfig.modelGateway.publicBaseUrl,
+    tokenSecret: cocoRuntimeConfig.modelGateway.tokenSecret,
+    tokenTtlSeconds: cocoRuntimeConfig.modelGateway.tokenTtlSeconds,
+    maxRequestsPerTurn: cocoRuntimeConfig.modelGateway.maxRequestsPerTurn,
+    turnBudgetUsd: cocoRuntimeConfig.modelGateway.turnBudgetUsd,
+    providerApiKeys: {
+      anthropic: process.env.ANTHROPIC_API_KEY,
+      deepseek: process.env.DEEPSEEK_API_KEY,
+      openai: process.env.OPENAI_API_KEY,
+      openrouter: process.env.OPENROUTER_API_KEY,
+    },
+    providerBaseUrls: {
+      anthropic: process.env.ANTHROPIC_BASE_URL,
+      deepseek: process.env.DEEPSEEK_BASE_URL,
+      openai: process.env.OPENAI_BASE_URL,
+      openrouter: process.env.OPENROUTER_BASE_URL,
+    },
+    stateStore: new RedisCocoModelGatewayTokenStateStore(redisClient),
+    logger: cocoLogger,
+  })
+  : undefined;
 
 redisClient.on('error', (err: Error) => {
   redisLogger.error('Redis connection error', { error: err.message, stack: err.stack });
@@ -216,6 +240,9 @@ const cocoSessionService = new CocoSessionService(
     enabled: cocoRuntimeConfig.enabled,
     allowedClientIds: cocoRuntimeConfig.allowedClientIds,
     mode: cocoRuntimeConfig.mode,
+    availableModes: cocoRuntimeConfig.availableModes,
+    defaultMode: cocoRuntimeConfig.defaultMode,
+    modelGateway: cocoModelGateway,
     runnerCommand: cocoRuntimeConfig.runnerCommand,
     turnTimeoutMs: cocoTurnTimeoutMs,
     allowedPaths: cocoRuntimeConfig.allowedPaths,
@@ -312,6 +339,10 @@ if (process.env.OUTBOX_WORKER_ENABLED === 'true') {
 
 loadStickerCatalog();
 
+if (cocoModelGateway) {
+  registerCocoModelGatewayRoutes(app, cocoModelGateway);
+}
+
 registerApiRoutes(app, {
   store,
   io,
@@ -324,6 +355,8 @@ registerApiRoutes(app, {
   audioTranscriptionRunner,
   cocoAccess,
   cocoMode: cocoRuntimeConfig.mode,
+  cocoAvailableModes: cocoRuntimeConfig.availableModes,
+  cocoDefaultMode: cocoRuntimeConfig.defaultMode,
 });
 
 // Catch-all 路由，返回前端应用的入口 HTML 文件（支持前端路由）

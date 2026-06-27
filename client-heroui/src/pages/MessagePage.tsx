@@ -31,7 +31,7 @@ import { getStoredRoom, getStoredUsername, getStoredView, saveCurrentRoom, saveC
 import { buildRoomShareUrl, getRoomMemberUpdate, isNewerRoom, pickNewerRoom, sortRoomsByLastActivityDesc, upsertRoom } from "../utils/roomState";
 import { getNextPostingBoundaryDelayMs } from "../utils/postingSchedule";
 import { FALLBACK_FEATURE_FLAGS, fetchFeatureFlags, FeatureFlags } from "../utils/features";
-import { getCodeAgentBackend, getCodeAgentMode } from "../utils/codeAgent";
+import { getCodeAgentAvailableModes, getCodeAgentBackend, getCodeAgentDefaultMode, getCodeAgentMode } from "../utils/codeAgent";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { SettingsView } from "../components/SettingsView";
@@ -1002,6 +1002,8 @@ export const MessagePage: React.FC = () => {
               clientId={clientId}
               backend={codeAgentBackend}
               mode={getCodeAgentMode(featureFlags)}
+              availableModes={getCodeAgentAvailableModes(featureFlags)}
+              defaultMode={getCodeAgentDefaultMode(featureFlags)}
               handleCopyToClipboard={handleCopyToClipboard}
               handleShareRoom={handleShareRoom}
               handleToggleSave={handleToggleSave}

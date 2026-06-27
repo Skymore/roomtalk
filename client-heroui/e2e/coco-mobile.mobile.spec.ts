@@ -25,8 +25,8 @@ test('keeps Coco workspace and composer usable on mobile', async ({ page, contex
 
   await expectChatRoom(page, roomName);
   await expect(page.getByTestId('code-agent-workspace')).toBeVisible();
-  await expect(page.getByText('Plan mode')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Run' })).toBeVisible();
+  await expect(page.getByTestId('code-agent-workspace').getByText('Plan mode')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Run', exact: true })).toBeVisible();
 
   const layout = await page.evaluate(() => {
     const html = document.documentElement;

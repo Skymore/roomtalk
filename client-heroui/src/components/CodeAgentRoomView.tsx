@@ -18,6 +18,8 @@ interface CodeAgentRoomViewProps {
   clientId: string;
   backend: CodeAgentBackend;
   mode: CodeAgentMode;
+  availableModes: CodeAgentMode[];
+  defaultMode: CodeAgentMode;
   handleCopyToClipboard: (text: string) => void;
   handleShareRoom: () => void;
   handleToggleSave: () => void;
@@ -40,6 +42,8 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   clientId,
   backend,
   mode,
+  availableModes,
+  defaultMode,
   handleCopyToClipboard,
   handleShareRoom,
   handleToggleSave,
@@ -60,6 +64,12 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   const [composerHeight, setComposerHeight] = React.useState(96);
   const [showScrollButton, setShowScrollButton] = React.useState(false);
   const [selectedMode, setSelectedMode] = React.useState<CodeAgentMode>('plan');
+  const normalizedAvailableModes = React.useMemo(
+    () => (availableModes.length ? availableModes : [mode]),
+    [availableModes, mode]
+  );
+  const maxMode: CodeAgentMode = normalizedAvailableModes.includes('acceptEdits') ? 'acceptEdits' : 'plan';
+  const effectiveDefaultMode = normalizedAvailableModes.includes(defaultMode) ? defaultMode : 'plan';
 
   React.useEffect(() => {
     setReplyToMessage(null);
@@ -67,20 +77,18 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   }, [currentRoom.id]);
 
   React.useEffect(() => {
-    if (mode !== 'acceptEdits') {
-      setSelectedMode('plan');
-      return;
-    }
-
     const stored = localStorage.getItem(`roomtalk_code_agent_mode_${currentRoom.id}`);
-    setSelectedMode(stored === 'acceptEdits' ? 'acceptEdits' : 'plan');
-  }, [currentRoom.id, mode]);
+    const nextMode = stored === 'acceptEdits' || stored === 'plan'
+      ? stored
+      : effectiveDefaultMode;
+    setSelectedMode(normalizedAvailableModes.includes(nextMode) ? nextMode : effectiveDefaultMode);
+  }, [currentRoom.id, effectiveDefaultMode, normalizedAvailableModes]);
 
   const handleCodeAgentModeChange = React.useCallback((nextMode: CodeAgentMode) => {
-    const constrainedMode = mode === 'acceptEdits' ? nextMode : 'plan';
+    const constrainedMode = normalizedAvailableModes.includes(nextMode) ? nextMode : effectiveDefaultMode;
     setSelectedMode(constrainedMode);
     localStorage.setItem(`roomtalk_code_agent_mode_${currentRoom.id}`, constrainedMode);
-  }, [currentRoom.id, mode]);
+  }, [currentRoom.id, effectiveDefaultMode, normalizedAvailableModes]);
 
   React.useLayoutEffect(() => {
     const el = composerRef.current;
@@ -198,7 +206,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
             isRoomAIProcessing={getCodeAgentStatus(currentRoom) === 'running'}
             isCodeAgentRoom
             codeAgentMode={selectedMode}
-            codeAgentMaxMode={mode}
+            codeAgentMaxMode={maxMode}
             onCodeAgentModeChange={handleCodeAgentModeChange}
           />
         </div>

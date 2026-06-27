@@ -10,6 +10,7 @@ import { CocoRunnerClient, CocoRunnerRunResult } from './fakeCocoRunner';
 import { FakeCocoRunnerClient } from './fakeCocoRunner';
 import { FakeCocoSandboxService } from './fakeCocoSandboxService';
 import { DEFAULT_COCO_RUNNER_COMMAND } from './cocoRuntimeConfig';
+import { CocoModelGateway, InMemoryCocoModelGatewayTokenStateStore } from './cocoModelGateway';
 
 type RoomEmit = {
   roomId: string;
@@ -19,11 +20,14 @@ type RoomEmit = {
 
 class FakeEmitter {
   roomEmits: RoomEmit[] = [];
+  onEmit?: (event: RoomEmit) => void;
 
   to(roomId: string) {
     return {
       emit: (event: string, ...args: unknown[]) => {
-        this.roomEmits.push({ roomId, event, args });
+        const roomEmit = { roomId, event, args };
+        this.roomEmits.push(roomEmit);
+        this.onEmit?.(roomEmit);
       },
     };
   }
@@ -84,6 +88,15 @@ class MemoryCocoStore {
     if (!room) return null;
     this.messages.set(message.roomId, [...(this.messages.get(message.roomId) || []), message]);
     return { ...room, lastActivityAt: message.timestamp };
+  }
+
+  async deleteMessageById(roomId: string, messageId: string) {
+    const messages = this.messages.get(roomId);
+    if (!messages) return null;
+    const index = messages.findIndex(m => m.id === messageId);
+    if (index === -1) return null;
+    messages.splice(index, 1);
+    return { roomId, messageId };
   }
 
   async incrementRoomAICost(roomId: string, cost: any) {
@@ -181,6 +194,9 @@ const createService = (options: {
   runnerEnv?: Record<string, string>;
   runnerProviderEnvByProvider?: Partial<Record<AIModelOption['provider'], Record<string, string>>>;
   mode?: 'plan' | 'acceptEdits';
+  availableModes?: Array<'plan' | 'acceptEdits'>;
+  defaultMode?: 'plan' | 'acceptEdits';
+  modelGateway?: CocoModelGateway;
 } = {}) => {
   const store = options.store || new MemoryCocoStore(room(), [userMessage()]);
   const emitter = new FakeEmitter();
@@ -204,6 +220,9 @@ const createService = (options: {
       enabled: options.enabled ?? true,
       allowedClientIds: options.allowedClientIds,
       mode: options.mode,
+      availableModes: options.availableModes,
+      defaultMode: options.defaultMode,
+      modelGateway: options.modelGateway,
       runnerEnv: options.runnerEnv,
       runnerProviderEnvByProvider: options.runnerProviderEnvByProvider,
       now: () => new Date('2026-05-03T00:00:00.000Z'),
@@ -249,15 +268,35 @@ describe('CocoSessionService', () => {
     assert.equal(runner.requests[0].mode, 'plan');
     assert.equal(runner.requests[0].workspace, '/workspace/room-1');
     const messages = store.messages.get('room-1') || [];
-    assert.deepEqual(messages.map(message => message.messageType), ['text', 'ai', 'sandbox_status', 'tool_call', 'tool_result']);
+    assert.deepEqual(messages.map(message => message.messageType), ['text', 'ai', 'sandbox_status', 'tool_call', 'tool_result', 'ai']);
     assert.equal(messages[1].status, 'complete');
-    assert.equal(messages[1].content, 'Done');
+    assert.equal(messages[1].content, 'Working...');
     assert.equal(messages[3].toolCallId, 'tool-1');
     assert.equal(messages[4].toolOutputPreview, '# RoomTalk');
+    assert.equal(messages[5].status, 'complete');
+    assert.equal(messages[5].content, 'Done');
     assert.equal((await store.getRoomById('room-1'))?.cocoStatus, 'idle');
     assert.equal((await store.getRoomById('room-1'))?.cocoSessionId, 'session-1');
     assert.equal(emitter.roomEmits.some(event => event.event === 'ai_chunk'), true);
     assert.equal(emitter.roomEmits.some(event => event.event === 'ai_stream_end'), true);
+    assert.equal(sandboxService.stoppedRunnerCommands.length, 1);
+  });
+
+  it('stops the runner before broadcasting the final stream end', async () => {
+    const runner = new FakeCocoRunnerClient([
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    ]);
+    const { emitter, sandboxService, service } = createService({ runner });
+    const stopCountsAtStreamEnd: number[] = [];
+    emitter.onEmit = event => {
+      if (event.event === 'ai_stream_end') {
+        stopCountsAtStreamEnd.push(sandboxService.stoppedRunnerCommands.length);
+      }
+    };
+
+    await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.deepEqual(stopCountsAtStreamEnd, [1]);
   });
 
   it('passes only explicit minimal environment to runner processes', async () => {
@@ -379,6 +418,60 @@ describe('CocoSessionService', () => {
         process.env.ANTHROPIC_API_KEY = previousAnthropicKey;
       }
     }
+  });
+
+  it('injects a per-turn model gateway token and write tools only for edit turns', async () => {
+    const runner = new FakeCocoRunnerClient([
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    ]);
+    const gateway = new CocoModelGateway({
+      publicBaseUrl: 'https://room.example/api/coco/model-gateway',
+      tokenSecret: 'gateway-secret',
+      providerApiKeys: { deepseek: 'deepseek-provider-key' },
+      nowMs: () => 1_800_000_000_000,
+      stateStore: new InMemoryCocoModelGatewayTokenStateStore(() => 1_800_000_000_000),
+    });
+    const { sandboxService, service } = createService({
+      runner,
+      availableModes: ['plan', 'acceptEdits'],
+      defaultMode: 'plan',
+      modelGateway: gateway,
+      runnerProviderEnvByProvider: {
+        deepseek: { DEEPSEEK_API_KEY: 'must-not-leak' },
+      },
+    });
+
+    await service.startTurn({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      selectedModel,
+      mode: 'acceptEdits',
+    });
+
+    const env = sandboxService.startedRunnerEnvs[0];
+    assert.equal(env.COCO_MODEL_PROXY_URL, 'https://room.example/api/coco/model-gateway/v1');
+    assert.equal(typeof env.COCO_MODEL_PROXY_TOKEN, 'string');
+    assert.notEqual(env.COCO_MODEL_PROXY_TOKEN, 'deepseek-provider-key');
+    assert.equal(env.ROOMTALK_COCO_ALLOW_WRITE_TOOLS, 'true');
+    assert.equal('DEEPSEEK_API_KEY' in env, false);
+    assert.equal(runner.requests[0].mode, 'acceptEdits');
+  });
+
+  it('defaults Coco turns to plan even when edit mode is available', async () => {
+    const runner = new FakeCocoRunnerClient([
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    ]);
+    const { sandboxService, service } = createService({
+      runner,
+      availableModes: ['plan', 'acceptEdits'],
+      defaultMode: 'plan',
+      runnerEnv: { ROOMTALK_COCO_ALLOW_WRITE_TOOLS: 'true' },
+    });
+
+    await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.equal(runner.requests[0].mode, 'plan');
+    assert.equal('ROOMTALK_COCO_ALLOW_WRITE_TOOLS' in sandboxService.startedRunnerEnvs[0], false);
   });
 
   it('rejects concurrent turns in the same Coco room', async () => {

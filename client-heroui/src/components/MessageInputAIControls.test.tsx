@@ -133,7 +133,7 @@ describe('MessageInputAIControls', () => {
     expect(screen.queryByLabelText('selectAIRole')).toBeNull();
     expect(screen.queryByText('Assistant')).toBeNull();
 
-    fireEvent.click(screen.getByTestId('change-selectCodeAgentMode'));
+    fireEvent.click(screen.getByTestId('change-codeAgentModeControl'));
     expect(onCodeAgentModeChange).toHaveBeenCalledWith('acceptEdits');
   });
 

@@ -15,6 +15,7 @@ export class FakeCocoSandboxService implements CocoSandboxService {
   readonly destroyedSandboxIds: string[] = [];
   readonly startedRunnerCommands: string[] = [];
   readonly startedRunnerEnvs: Record<string, string>[] = [];
+  readonly stoppedRunnerCommands: string[] = [];
 
   constructor(private readonly now: () => Date = () => new Date()) {}
 
@@ -61,7 +62,9 @@ export class FakeCocoSandboxService implements CocoSandboxService {
     this.startedRunnerEnvs.push({ ...(input.env || {}) });
     return {
       command: input.command,
-      async stop() {},
+      stop: async () => {
+        this.stoppedRunnerCommands.push(input.command);
+      },
     };
   }
 
