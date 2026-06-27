@@ -474,9 +474,8 @@ def _usage_to_event_usage(usage: Any) -> dict[str, Any] | None:
         "source": "reported",
     }
     cached = int(getattr(usage, "cache_read", 0) or 0)
-    if cached:
-        result["cachedPromptTokens"] = cached
-        result["cacheHitRate"] = cached / prompt_tokens if prompt_tokens > 0 else 0
+    result["cachedPromptTokens"] = cached
+    result["cacheHitRate"] = cached / prompt_tokens if prompt_tokens > 0 else 0
     return result
 
 

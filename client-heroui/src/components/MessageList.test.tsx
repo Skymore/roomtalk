@@ -393,7 +393,11 @@ describe('MessageList optimistic messages', () => {
       />
     );
 
+    expect(screen.getByTestId('message-list-shell').className).toContain('min-h-0');
+    expect(screen.getByTestId('message-list-shell').className).toContain('overflow-hidden');
     expect(screen.getByTestId('code-agent-workspace').closest('[data-testid="message-list-scroll"]')).toBeNull();
+    expect(screen.getByTestId('code-agent-workspace').className).toContain('sticky');
+    expect(screen.getByTestId('code-agent-workspace').className).toContain('top-0');
   });
 
   it('uses current room AI settings when retrying an AI message', async () => {

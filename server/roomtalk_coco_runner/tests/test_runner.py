@@ -318,6 +318,24 @@ def test_run_request_emits_tool_events_before_terminal_final(monkeypatch):
     assert events[-1]["sessionId"] == "turn-1"
     assert events[-1]["usage"]["promptTokens"] == 10
     assert events[-1]["usage"]["cachedPromptTokens"] == 4
+    assert events[-1]["usage"]["cacheHitRate"] == 0.4
+
+
+def test_run_request_reports_zero_cache_hit_rate(monkeypatch):
+    output = io.StringIO()
+    parsed = parse_request(json.dumps(request()))
+    monkeypatch.setenv("COCO_WORKSPACE_ROOT", "/tmp")
+
+    class UncachedEngine:
+        def run(self, prompt, on_text_chunk=None):
+            return EngineResult(answer="ok", messages=[], usage=Usage(cache_read=0))
+
+    run_request(parsed, emitter=EventEmitter(output), engine_factory=lambda _request: UncachedEngine())
+
+    events = event_lines(output)
+    assert events[-1]["type"] == "final"
+    assert events[-1]["usage"]["cachedPromptTokens"] == 0
+    assert events[-1]["usage"]["cacheHitRate"] == 0
 
 
 def test_run_request_scopes_and_restores_cwd(tmp_path: Path, monkeypatch):
