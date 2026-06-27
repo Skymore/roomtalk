@@ -41,6 +41,13 @@ async function askCoco(page: Parameters<typeof openRoomsPage>[0], prompt: string
   await expectMessage(page, prompt).toBeVisible();
 }
 
+async function expectCocoToolCall(page: Parameters<typeof openRoomsPage>[0]) {
+  const toolCall = page.getByTestId('coco-tool-call').filter({ hasText: 'Shell' }).first();
+  await expect(toolCall).toBeVisible();
+  await expect(toolCall).toContainText('printf');
+  return toolCall;
+}
+
 test('runs a fake Coco turn and restores tool history after refresh', async ({ page, context, request }) => {
   const roomName = await createCocoRoom(page, context, request);
   const prompt = uniqueName('coco-task');
@@ -55,9 +62,9 @@ test('runs a fake Coco turn and restores tool history after refresh', async ({ p
   await expect(page.getByTestId('code-agent-workspace').getByText('Plan mode')).toBeVisible();
   await expect(page.getByText('Agent activity')).toBeVisible();
   await expectMessage(page, 'Coco fake runner received the task.').toBeVisible();
+  const toolCall = await expectCocoToolCall(page);
+  await toolCall.click();
   await expect(page.getByText('Tool call')).toBeVisible();
-  await expect(page.getByText('Shell').first()).toBeVisible();
-  await expect(page.getByText(/printf/)).toBeVisible();
   await expect(page.getByText('Tool failed')).toBeVisible();
   await expect(page.getByText('Exit 2')).toBeVisible();
   await expect(page.getByText(/stdout: hello from Coco fake runner/)).toBeVisible();
@@ -69,6 +76,7 @@ test('runs a fake Coco turn and restores tool history after refresh', async ({ p
   await page.reload();
   await expectChatRoom(page, roomName);
   await expect(messageItem(page, 'Coco fake runner received the task.')).toBeVisible();
+  await (await expectCocoToolCall(page)).click();
   await expect(page.getByText('Tool failed')).toBeVisible();
 });
 
@@ -86,7 +94,7 @@ test('locks Coco ask controls while the room turn is running', async ({ page, co
   await expect(askButton).toBeDisabled();
   await expect(editor).toHaveAttribute('contenteditable', 'false');
 
-  await expect(page.getByText('Tool call')).toBeVisible();
+  await expectCocoToolCall(page);
   await expect(messageItem(page, 'Coco fake runner received the task.')).toBeVisible();
   await expect(page.getByText('Coco fake runner received the task.')).toHaveCount(1);
   await expect(editor).toHaveAttribute('contenteditable', 'true');
@@ -113,6 +121,6 @@ test('edits a Coco prompt and starts a new Coco turn', async ({ page, context, r
   await expectMessage(page, editedPrompt).toBeVisible();
   await expect(messageItem(page, originalPrompt)).toHaveCount(0);
   await expect(messageItem(page, 'Coco fake runner received the task.')).toBeVisible();
-  await expect(page.getByText('Tool call')).toBeVisible();
+  await expectCocoToolCall(page);
   expect(dialogs).toEqual([]);
 });

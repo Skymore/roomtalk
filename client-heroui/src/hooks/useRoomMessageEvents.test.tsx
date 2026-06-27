@@ -255,7 +255,7 @@ describe('useRoomMessageEvents', () => {
     expect(props.setIsLoadingMore).toHaveBeenCalledWith(false);
   });
 
-  it('sorts loaded room history before setting messages', () => {
+  it('keeps loaded room history in server position order', () => {
     const props = createHarnessProps();
     render(<Harness {...props} />);
     props.updateMessages.mockClear();
@@ -273,8 +273,59 @@ describe('useRoomMessageEvents', () => {
     });
 
     expect(props.updateMessages).toHaveBeenCalledWith([
-      message({ id: 'first', timestamp: '2026-05-03T10:00:00.000Z' }),
       message({ id: 'later', timestamp: '2026-05-03T10:00:02.000Z' }),
+      message({ id: 'first', timestamp: '2026-05-03T10:00:00.000Z' }),
+    ]);
+  });
+
+  it('preserves interleaved Coco text and tool history after refresh', () => {
+    const props = createHarnessProps();
+    render(<Harness {...props} />);
+    props.updateMessages.mockClear();
+
+    const sameTimestamp = '2026-05-03T10:00:00.000Z';
+    const firstAi = message({
+      id: 'z-ai-first',
+      clientId: 'ai_assistant',
+      messageType: 'ai',
+      content: 'First text',
+      timestamp: sameTimestamp,
+    });
+    const toolCall = message({
+      id: 'a-tool-call',
+      clientId: 'coco_runner',
+      messageType: 'tool_call',
+      content: 'Read README.md',
+      timestamp: sameTimestamp,
+    });
+    const toolResult = message({
+      id: 'b-tool-result',
+      clientId: 'coco_runner',
+      messageType: 'tool_result',
+      content: '# RoomTalk',
+      timestamp: sameTimestamp,
+    });
+    const secondAi = message({
+      id: 'c-ai-second',
+      clientId: 'ai_assistant',
+      messageType: 'ai',
+      content: 'Second text',
+      timestamp: sameTimestamp,
+    });
+
+    socketMock.trigger('message_history', {
+      roomId: 'room-1',
+      messages: [firstAi, toolCall, toolResult, secondAi],
+      historyVersion: 1,
+      hasMore: false,
+      mode: 'replace',
+    });
+
+    expect(props.updateMessages).toHaveBeenCalledWith([
+      firstAi,
+      toolCall,
+      toolResult,
+      secondAi,
     ]);
   });
 

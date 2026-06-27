@@ -94,6 +94,7 @@ export const CocoToolMessage: React.FC<CocoToolMessageProps> = ({ message, paire
     <div className="my-0.5 max-w-full">
       <button
         type="button"
+        data-testid={isToolCall ? 'coco-tool-call' : 'coco-tool-result'}
         className={`
           group/tool flex w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-lg
           border px-2.5 py-1.5 text-left transition-colors

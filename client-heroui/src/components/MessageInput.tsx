@@ -81,6 +81,17 @@ const createClientMessageId = () => {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 };
 
+const detectMacOS = () => {
+  if (typeof navigator === 'undefined') {
+    return false;
+  }
+  const userAgentDataPlatform = (navigator as Navigator & {
+    userAgentData?: { platform?: string };
+  }).userAgentData?.platform;
+  const platform = userAgentDataPlatform || navigator.platform;
+  return platform.toLowerCase().includes('mac');
+};
+
 const getErrorMessage = (error: unknown, fallback: string) => (
   error instanceof Error ? error.message : fallback
 );
@@ -197,7 +208,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   // 检测是否为移动设备
   const [_isMobile, setIsMobile] = useState(false);
   // 检测操作系统类型
-  const [isMacOS, setIsMacOS] = useState(false);
+  const [isMacOS, setIsMacOS] = useState(() => detectMacOS());
 
   // 检测设备和操作系统类型
   useEffect(() => {
@@ -207,13 +218,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       return /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(userAgent.toLowerCase());
     };
 
-    // 检测 macOS
-    const checkMacOS = () => {
-      return navigator.platform.toLowerCase().includes('mac');
-    };
-
     setIsMobile(checkMobile());
-    setIsMacOS(checkMacOS());
+    setIsMacOS(detectMacOS());
   }, []);
 
   const {
@@ -1264,13 +1270,14 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
   // 处理回车事件
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
+    const isEnterKey = e.key === 'Enter' || e.code === 'NumpadEnter';
+    if (isEnterKey) {
       const compositionSnapshot = getKeyboardCompositionSnapshot(
         e,
         isComposingRef.current,
         lastCompositionEndAtRef.current
       );
-      const isAIShortcut = !e.shiftKey && (e.metaKey || e.ctrlKey);
+      const isAIShortcut = !e.shiftKey && (isMacOS ? e.metaKey : e.ctrlKey);
 
       if (isAIShortcut) {
         if (
