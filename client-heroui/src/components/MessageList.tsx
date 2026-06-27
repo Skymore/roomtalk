@@ -105,6 +105,24 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const codeAgentRoom = currentRoom || (presentation === 'code-agent' ? room : undefined);
   const currentRoomId = codeAgentRoom?.id;
 
+  const toolResultPairing = React.useMemo(() => {
+    const resultByCallId = new Map<string, Message>();
+    const consumed = new Set<string>();
+    const callIds = new Set<string>();
+    for (const msg of messages) {
+      if (msg.messageType === 'tool_call' && msg.toolCallId) {
+        callIds.add(msg.toolCallId);
+      }
+    }
+    for (const msg of messages) {
+      if (msg.messageType === 'tool_result' && msg.toolCallId && callIds.has(msg.toolCallId)) {
+        resultByCallId.set(msg.toolCallId, msg);
+        consumed.add(msg.id);
+      }
+    }
+    return { resultByCallId, consumed };
+  }, [messages]);
+
   const updateMessages = useCallback((updater: React.SetStateAction<Message[]>) => {
     setMessages(prev => {
       const next =
@@ -586,17 +604,25 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
           )}
           {!isLoading && messages.length > 0 && (
             <div className="flex flex-col space-y-2">
-              {messages.map((message) => (
-                <MessageItem
-                  key={message.id}
-                  message={message}
-                  roomPermissions={roomPermissions}
-                  onStartEdit={handleOpenEditModal}
-                  onDeleteMessage={handleOpenDeleteModal}
-                  onRefreshAI={handleRefreshAI}
-                  onReply={onReply}
-                />
-              ))}
+              {messages.map((message) => {
+                if (message.messageType === 'tool_result' && toolResultPairing.consumed.has(message.id)) {
+                  return null;
+                }
+                return (
+                  <MessageItem
+                    key={message.id}
+                    message={message}
+                    pairedToolResult={message.messageType === 'tool_call' && message.toolCallId
+                      ? toolResultPairing.resultByCallId.get(message.toolCallId)
+                      : undefined}
+                    roomPermissions={roomPermissions}
+                    onStartEdit={handleOpenEditModal}
+                    onDeleteMessage={handleOpenDeleteModal}
+                    onRefreshAI={handleRefreshAI}
+                    onReply={onReply}
+                  />
+                );
+              })}
             </div>
           )}
           <div

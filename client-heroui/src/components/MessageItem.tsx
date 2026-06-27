@@ -26,6 +26,7 @@ import { CocoToolMessage } from './CocoToolMessage';
 
 interface MessageItemProps {
   message: Message;
+  pairedToolResult?: Message;
   roomPermissions: RoomPermissions | null;
   onStartEdit: (messageId: string) => void;
   onDeleteMessage: (messageId: string) => void;
@@ -237,6 +238,7 @@ const ReplyReference: React.FC<{
 
 const MessageItemComponent: React.FC<MessageItemProps> = ({
   message,
+  pairedToolResult,
   roomPermissions,
   onStartEdit,
   onDeleteMessage,
@@ -724,10 +726,18 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       <div
         data-testid="message-item"
         data-message-id={message.id}
-        className="flex w-full justify-center px-1 py-1"
+        className="group mb-1 flex w-full items-start justify-start"
       >
-        <div className="w-full max-w-4xl">
-          <CocoToolMessage message={message} />
+        <Avatar
+          icon={<Icon icon="lucide:bot" />}
+          color="secondary"
+          size="sm"
+          classNames={{
+            base: "mr-2 flex-shrink-0 bg-[#e8e6dc] text-[#4d4c48] dark:bg-[#30302e] dark:text-[#faf9f5] invisible",
+          }}
+        />
+        <div className="flex max-w-[82%] flex-col min-w-0 sm:max-w-[70%] items-start">
+          <CocoToolMessage message={message} pairedResult={pairedToolResult} />
         </div>
       </div>
     );
