@@ -40,10 +40,16 @@ export interface StartCocoRunnerInput {
   timeoutMs?: number;
 }
 
+export interface ListCocoWorkspaceFilesOptions {
+  maxDepth?: number;
+  maxFiles?: number;
+}
+
 export interface CocoSandboxService {
   create(input: CreateCocoSandboxInput): Promise<CocoSandboxHandle>;
   connect(sandboxId: string): Promise<CocoSandboxHandle>;
   startRunner(input: StartCocoRunnerInput): Promise<CocoRunnerProcess>;
+  listWorkspaceFiles?(handle: CocoSandboxHandle, options?: ListCocoWorkspaceFilesOptions): Promise<string[]>;
   destroy(sandboxId: string): Promise<void>;
   countActiveSandboxes?(): Promise<number | undefined>;
   countActiveSandboxesForUser?(creatorId: string): Promise<number | undefined>;

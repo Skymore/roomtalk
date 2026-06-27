@@ -10,6 +10,7 @@ class FakeE2BDriver implements E2BSandboxDriver {
   readonly commands: string[] = [];
   readonly commandOptions: Record<string, unknown>[] = [];
   readonly createInputs: unknown[] = [];
+  readonly fileListRequests: Array<{ path: string; options?: { depth?: number } }> = [];
   failList = false;
 
   async create(input: { templateId: string; timeoutMs: number; metadata: Record<string, string> }): Promise<E2BSandboxDriverHandle> {
@@ -51,6 +52,16 @@ class FakeE2BDriver implements E2BSandboxDriver {
             stderr: new PassThrough(),
             completed: Promise.resolve({ exitCode: 0, signal: null }),
           };
+        },
+      },
+      files: {
+        list: async (path, options) => {
+          this.fileListRequests.push({ path, options });
+          return [
+            { path: '/workspace/plot_output.png', type: 'file' },
+            { path: '/workspace/output', type: 'dir' },
+            { path: '/workspace/output/report.html', type: 'file' },
+          ];
         },
       },
       kill: async () => {
@@ -101,6 +112,8 @@ describe('E2BCocoSandboxService', () => {
     assert.deepEqual(await runner.completed, { exitCode: 0, signal: null });
     assert.deepEqual(driver.commands, ['python -m roomtalk_coco_runner']);
     assert.deepEqual(driver.commandOptions, [{ env: { PYTHONUNBUFFERED: '1' }, timeoutMs: 300_000 }]);
+    assert.deepEqual(await service.listWorkspaceFiles(handle, { maxDepth: 3 }), ['output/report.html', 'plot_output.png']);
+    assert.deepEqual(driver.fileListRequests, [{ path: '/workspace', options: { depth: 3 } }]);
     assert.equal(await service.countActiveSandboxes(), 1);
     assert.equal(await service.countActiveSandboxesForUser('client-1'), 1);
     assert.equal(await service.countActiveSandboxesForUser('client-2'), 0);

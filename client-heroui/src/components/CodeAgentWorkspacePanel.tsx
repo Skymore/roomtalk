@@ -82,8 +82,9 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   );
   const isPlanMode = mode === 'plan';
   const agentStatus = getCodeAgentStatus(room);
-  const visibleFiles = summary.touchedFiles.slice(0, 10);
-  const hiddenFileCount = Math.max(0, summary.touchedFiles.length - visibleFiles.length);
+  const workspaceFiles = workspaceSnapshot?.summary.touchedFiles || workspaceSnapshot?.files.touched || [];
+  const visibleFiles = workspaceFiles.slice(0, 10);
+  const hiddenFileCount = Math.max(0, workspaceFiles.length - visibleFiles.length);
   const detailsId = 'code-agent-workspace-details';
 
   const stats = [
@@ -277,7 +278,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
             }
           >
             <div className="max-h-44 overflow-y-auto px-2 py-2">
-              {summary.touchedFiles.length > 0 ? (
+              {visibleFiles.length > 0 ? (
                 <div className="space-y-1">
                   {visibleFiles.map(file => (
                     <div
@@ -300,7 +301,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                   {hiddenFileCount > 0 && (
                     <div
                       className="px-2 py-1 text-xs font-semibold text-[#5e5d59] dark:text-[#b0aea5]"
-                      title={summary.touchedFiles.slice(10).join('\n')}
+                      title={workspaceFiles.slice(10).join('\n')}
                     >
                       +{hiddenFileCount}
                     </div>

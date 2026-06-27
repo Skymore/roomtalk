@@ -19,7 +19,7 @@ export interface CodeAgentWorkspaceSummary {
 export interface CodeAgentWorkspaceSnapshot {
   roomId: string;
   backend: 'coco';
-  source: 'messages';
+  source: 'sandbox';
   generatedAt: string;
   status: {
     sandboxStatus: RoomSandboxStatus;
@@ -194,15 +194,21 @@ export const summarizeWorkspaceMessages = (messages: Message[]): CodeAgentWorksp
 export const buildCodeAgentWorkspaceSnapshot = (
   room: Room,
   messages: Message[],
-  now = new Date()
+  now = new Date(),
+  workspaceFiles: string[] = []
 ): CodeAgentWorkspaceSnapshot => {
-  const summary = summarizeWorkspaceMessages(messages);
-  const visibleFiles = summary.touchedFiles.slice(0, MAX_VISIBLE_FILES);
+  const messageSummary = summarizeWorkspaceMessages(messages);
+  const normalizedFiles = normalizeWorkspaceFiles(workspaceFiles);
+  const visibleFiles = normalizedFiles.slice(0, MAX_VISIBLE_FILES);
+  const summary: CodeAgentWorkspaceSummary = {
+    ...messageSummary,
+    touchedFiles: normalizedFiles,
+  };
 
   return {
     roomId: room.id,
     backend: 'coco',
-    source: 'messages',
+    source: 'sandbox',
     generatedAt: now.toISOString(),
     status: {
       sandboxStatus: room.sandboxStatus || 'none',
@@ -212,7 +218,7 @@ export const buildCodeAgentWorkspaceSnapshot = (
     summary,
     files: {
       touched: visibleFiles,
-      hiddenCount: Math.max(0, summary.touchedFiles.length - visibleFiles.length),
+      hiddenCount: Math.max(0, normalizedFiles.length - visibleFiles.length),
     },
     changes: {
       available: false,
@@ -222,3 +228,11 @@ export const buildCodeAgentWorkspaceSnapshot = (
     commands: buildCommandHistory(messages),
   };
 };
+
+export const normalizeWorkspaceFiles = (files: string[]): string[] => (
+  Array.from(new Set(files
+    .map(file => sanitizeWorkspaceFileRef(file))
+    .filter(Boolean)
+    .filter(file => file !== '.')))
+    .sort((a, b) => a.localeCompare(b))
+);

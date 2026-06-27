@@ -1,6 +1,7 @@
 import { PassThrough, Writable } from 'stream';
 import {
   E2BCommandResult,
+  E2BFileEntry,
   E2BListedSandbox,
   E2BSandboxDriver,
   E2BSandboxDriverHandle,
@@ -41,6 +42,9 @@ interface E2BSdkCommands {
 interface E2BSdkSandbox {
   sandboxId: string;
   commands: E2BSdkCommands;
+  files?: {
+    list(path: string, opts?: { depth?: number }): Promise<E2BFileEntry[]>;
+  };
   kill(): Promise<void>;
 }
 
@@ -150,6 +154,11 @@ class E2BSdkDriver implements E2BSandboxDriver {
       commands: {
         run: (command, options) => startE2BCommand(sandbox, command, options?.env || {}, options?.timeoutMs),
       },
+      files: sandbox.files
+        ? {
+            list: (path, options) => sandbox.files!.list(path, { depth: options?.depth }),
+          }
+        : undefined,
       kill: () => sandbox.kill(),
     };
   }

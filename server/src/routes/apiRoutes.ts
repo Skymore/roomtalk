@@ -27,6 +27,7 @@ import { getStickerCatalog } from '../stickers/catalog';
 import { CocoAccessControl, createCocoAccessControl } from '../services/cocoAccessControl';
 import { CocoRunnerMode } from '../services/cocoRunnerProtocol';
 import { buildCodeAgentWorkspaceSnapshot } from '../services/codeAgentWorkspace';
+import { CocoSandboxService } from '../services/cocoSandboxService';
 
 interface ApiRouteOptions {
   store: RoomStore;
@@ -44,6 +45,7 @@ interface ApiRouteOptions {
   cocoMode?: CocoRunnerMode;
   cocoAvailableModes?: CocoRunnerMode[];
   cocoDefaultMode?: CocoRunnerMode;
+  cocoSandboxService?: CocoSandboxService;
   mediaUploadCleanup?: {
     disabled?: boolean;
     pendingUploadTtlMs?: number;
@@ -1459,7 +1461,19 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       }
 
       const messages = await store.readMessagesByRoom(roomId);
-      return res.json(buildCodeAgentWorkspaceSnapshot(room, messages));
+      let workspaceFiles: string[] = [];
+      if (room.sandboxId && room.sandboxStatus === 'ready') {
+        if (!options.cocoSandboxService?.listWorkspaceFiles) {
+          return res.status(503).json({ error: 'Workspace file listing is unavailable' });
+        }
+        const handle = await options.cocoSandboxService.connect(room.sandboxId);
+        workspaceFiles = await options.cocoSandboxService.listWorkspaceFiles(handle, {
+          maxDepth: 6,
+          maxFiles: 200,
+        });
+      }
+
+      return res.json(buildCodeAgentWorkspaceSnapshot(room, messages, new Date(), workspaceFiles));
     } catch (error) {
       routeLogger.error('Failed to build workspace snapshot', { error, clientId, roomId, ip: req.ip });
       return res.status(500).json({ error: 'Failed to load workspace snapshot' });

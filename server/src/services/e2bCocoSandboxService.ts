@@ -4,6 +4,7 @@ import {
   CocoSandboxHandle,
   CocoSandboxService,
   CreateCocoSandboxInput,
+  ListCocoWorkspaceFilesOptions,
   StartCocoRunnerInput,
 } from './cocoSandboxService';
 import { Readable, Writable } from 'stream';
@@ -13,7 +14,16 @@ export interface E2BSandboxDriverHandle {
   commands?: {
     run(command: string, options?: { env?: Record<string, string>; timeoutMs?: number }): Promise<E2BCommandResult>;
   };
+  files?: {
+    list(path: string, options?: { depth?: number }): Promise<E2BFileEntry[]>;
+  };
   kill?(): Promise<void>;
+}
+
+export interface E2BFileEntry {
+  name?: string;
+  path: string;
+  type?: string;
 }
 
 export interface E2BListedSandbox {
@@ -115,6 +125,27 @@ export class E2BCocoSandboxService implements CocoSandboxService {
     };
   }
 
+  async listWorkspaceFiles(handle: CocoSandboxHandle, options: ListCocoWorkspaceFilesOptions = {}): Promise<string[]> {
+    const connected = await this.driver.connect(handle.id);
+    if (!connected.files?.list) {
+      throw new Error('E2B sandbox driver handle does not support filesystem listing');
+    }
+
+    const entries = await connected.files.list(handle.workspace, {
+      depth: options.maxDepth ?? 5,
+    });
+    const workspacePrefix = handle.workspace.replace(/\/+$/, '');
+    const maxFiles = options.maxFiles ?? 200;
+    const files = entries
+      .filter(entry => !entry.type || entry.type === 'file')
+      .map(entry => normalizeWorkspaceEntryPath(entry.path, workspacePrefix))
+      .filter((value): value is string => Boolean(value));
+
+    return Array.from(new Set(files))
+      .sort((a, b) => a.localeCompare(b))
+      .slice(0, maxFiles);
+  }
+
   async destroy(sandboxId: string): Promise<void> {
     const handle = await this.driver.connect(sandboxId);
     if (!handle.kill) {
@@ -145,3 +176,15 @@ export class E2BCocoSandboxService implements CocoSandboxService {
     }
   }
 }
+
+const normalizeWorkspaceEntryPath = (entryPath: string, workspacePrefix: string): string | null => {
+  const normalized = entryPath.trim().replace(/\\/g, '/');
+  if (!normalized || normalized === workspacePrefix) {
+    return null;
+  }
+  const relative = normalized.startsWith(`${workspacePrefix}/`)
+    ? normalized.slice(workspacePrefix.length + 1)
+    : normalized.replace(/^\/+/, '');
+  const parts = relative.split('/').filter(part => part && part !== '.' && part !== '..');
+  return parts.length > 0 ? parts.join('/') : null;
+};

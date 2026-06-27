@@ -23,6 +23,7 @@ const createFakeSandboxClass = () => {
     create: [] as Array<{ template: string; options: Record<string, unknown> }>,
     connect: [] as Array<{ sandboxId: string; options: Record<string, unknown> }>,
     run: [] as Array<{ command: string; options: Record<string, unknown> }>,
+    filesList: [] as Array<{ path: string; options?: { depth?: number } }>,
     sentStdin: [] as Array<{ pid: number; data: string }>,
     closedStdin: [] as number[],
     killed: [] as string[],
@@ -51,6 +52,12 @@ const createFakeSandboxClass = () => {
         },
         closeStdin: async (pid: number) => {
           calls.closedStdin.push(pid);
+        },
+      },
+      files: {
+        list: async (path: string, options?: { depth?: number }) => {
+          calls.filesList.push({ path, options });
+          return [{ path: '/workspace/plot_output.png', type: 'file' }];
         },
       },
       kill: async () => {
@@ -153,6 +160,10 @@ describe('E2B SDK driver', () => {
     assert.deepEqual(stderrChunks, ['runner warning\n']);
     assert.deepEqual(fake.calls.sentStdin, [{ pid: 77, data: '{"schemaVersion":1}\n' }]);
     assert.deepEqual(fake.calls.closedStdin, [77]);
+    assert.deepEqual(await connected.files!.list('/workspace', { depth: 2 }), [
+      { path: '/workspace/plot_output.png', type: 'file' },
+    ]);
+    assert.deepEqual(fake.calls.filesList, [{ path: '/workspace', options: { depth: 2 } }]);
 
     await command.stop!();
     assert.equal(fake.commandHandles[0].killed, true);
