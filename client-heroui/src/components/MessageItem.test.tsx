@@ -177,7 +177,6 @@ describe('MessageItem replies', () => {
 
     const item = screen.getByTestId('message-item');
     expect(item.getAttribute('data-message-id')).toBe('tool-call-message');
-    expect(within(item).getByText('toolCall')).toBeTruthy();
     expect(within(item).getByText('Read')).toBeTruthy();
     expect(within(item).getByText(/README\.md/)).toBeTruthy();
   });

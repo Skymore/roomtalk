@@ -37,13 +37,17 @@ describe('CocoToolMessage', () => {
       />
     );
 
-    expect(screen.getByText('toolCall')).toBeTruthy();
     expect(screen.getByText('Read')).toBeTruthy();
     expect(screen.getByText(/README\.md/)).toBeTruthy();
+
+    fireEvent.click(screen.getByText('Read'));
+
+    expect(screen.getByText('toolCall')).toBeTruthy();
+    expect(screen.getByText(/"file_path": "README\.md"/)).toBeTruthy();
   });
 
   it('collapses long tool output and expands on demand', () => {
-    const output = 'x'.repeat(1200);
+    const output = 'x'.repeat(1201);
     render(
       <CocoToolMessage
         message={{
@@ -56,9 +60,14 @@ describe('CocoToolMessage', () => {
       />
     );
 
+    expect(screen.getByText('Shell')).toBeTruthy();
+    expect(screen.queryByText('toolResultFailed')).toBeNull();
+
+    fireEvent.click(screen.getByText('Shell'));
+
     expect(screen.getByText('toolResultFailed')).toBeTruthy();
     expect(screen.getByText('showMore')).toBeTruthy();
-    expect(screen.getByText(/xxx\.\.\./)).toBeTruthy();
+    expect(screen.getByText((content) => content.startsWith('xxx') && content.endsWith('…'))).toBeTruthy();
 
     fireEvent.click(screen.getByText('showMore'));
 
@@ -77,8 +86,8 @@ describe('CocoToolMessage', () => {
       />
     );
 
-    expect(screen.getByText('sandboxStatusEvent')).toBeTruthy();
     expect(screen.getByText('sandbox ready')).toBeTruthy();
+    expect(screen.queryByText('sandboxStatusEvent')).toBeNull();
     expect(screen.queryByText('emptyToolOutput')).toBeNull();
   });
 });

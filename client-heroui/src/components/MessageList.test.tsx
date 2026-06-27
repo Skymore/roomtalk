@@ -8,6 +8,7 @@ import { MessageList, MessageListHandle } from './MessageList';
 
 const requestAIResponseMock = vi.hoisted(() => vi.fn());
 const requestEditMessageAndAIResponseMock = vi.hoisted(() => vi.fn());
+const fetchCodeAgentWorkspaceSnapshotMock = vi.hoisted(() => vi.fn());
 const socketMock = vi.hoisted(() => {
   const handlers = new Map<string, Set<(...args: any[]) => void>>();
 
@@ -38,6 +39,14 @@ vi.mock('../utils/socket', () => ({
   requestAIResponse: requestAIResponseMock,
   requestEditMessageAndAIResponse: requestEditMessageAndAIResponseMock,
 }));
+
+vi.mock('../utils/cocoWorkspace', async () => {
+  const actual = await vi.importActual<typeof import('../utils/cocoWorkspace')>('../utils/cocoWorkspace');
+  return {
+    ...actual,
+    fetchCodeAgentWorkspaceSnapshot: fetchCodeAgentWorkspaceSnapshotMock,
+  };
+});
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -93,6 +102,23 @@ describe('MessageList optimistic messages', () => {
     localStorage.clear();
     requestAIResponseMock.mockResolvedValue(undefined);
     requestEditMessageAndAIResponseMock.mockResolvedValue(undefined);
+    fetchCodeAgentWorkspaceSnapshotMock.mockResolvedValue({
+      roomId: 'room-1',
+      backend: 'coco',
+      source: 'messages',
+      generatedAt: '2026-05-29T00:00:00.000Z',
+      status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: false },
+      summary: {
+        toolCalls: 0,
+        toolResults: 0,
+        toolErrors: 0,
+        touchedFiles: [],
+        lastToolName: null,
+      },
+      files: { touched: [], hiddenCount: 0 },
+      changes: { available: false, changedFiles: [], diffSummary: null },
+      commands: [],
+    });
     Element.prototype.scrollIntoView = vi.fn();
   });
 
@@ -346,6 +372,28 @@ describe('MessageList optimistic messages', () => {
     render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
 
     expect(screen.getByText('exportChat').closest('[data-testid="message-list-scroll"]')).toBeNull();
+  });
+
+  it('keeps the code workspace panel outside the message scroll container', () => {
+    render(
+      <MessageList
+        roomId="room-1"
+        onReply={vi.fn()}
+        roomPermissions={null}
+        presentation="code-agent"
+        currentRoom={{
+          id: 'room-1',
+          name: 'Coco',
+          createdAt: '2026-05-26T00:00:00.000Z',
+          creatorId: 'client-1',
+          type: 'coco',
+          sandboxStatus: 'ready',
+          cocoStatus: 'idle',
+        }}
+      />
+    );
+
+    expect(screen.getByTestId('code-agent-workspace').closest('[data-testid="message-list-scroll"]')).toBeNull();
   });
 
   it('uses current room AI settings when retrying an AI message', async () => {

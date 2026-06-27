@@ -558,80 +558,82 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
         </div>
       </div>
       )}
-      <div
-        id={scrollContainerId}
-        data-testid="message-list-scroll"
-        ref={containerRef}
-        className="relative flex h-full w-full flex-col overflow-y-auto bg-[#f5f4ed] px-3 pt-3 dark:bg-[#141413]"
-        onScroll={handleScroll}
-      >
-        <div ref={contentRef} data-testid="message-list-content" className="flex min-h-full flex-col">
-          {presentation === 'code-agent' && codeAgentRoom && (
-            <CodeAgentWorkspacePanel
-              room={codeAgentRoom}
-              messages={messages}
-              mode={codeAgentMode}
-              sessionCostUsd={sessionCostUsd ?? 0}
-              workspaceSnapshot={workspaceSnapshot}
-              isRefreshingWorkspace={isWorkspaceRefreshing}
-              workspaceRefreshError={workspaceRefreshError}
-              onRefreshWorkspace={refreshWorkspaceSnapshot}
-            />
-          )}
-          {hasMoreMessages && (
-            <div className="mb-3 flex justify-center">
-              <button
-                type="button"
-                onClick={handleLoadMore}
-                disabled={isLoadingMore}
-                className="rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-3 py-1.5 text-xs font-medium text-[#4d4c48] shadow-sm backdrop-blur transition hover:border-[#c2c0b6] hover:text-[#141413] dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc] dark:hover:text-[#faf9f5]"
-              >
-                {isLoadingMore ? t('loadingMore') : t('loadMoreMessages', { count: LOAD_MORE_MESSAGE_COUNT })}
-              </button>
-            </div>
-          )}
-          {isLoading && messages.length === 0 && (
-            <div className="flex min-h-[220px] flex-1 items-center justify-center">
-              <Icon icon="lucide:loader-circle" className="h-6 w-6 animate-spin text-[#c96442] dark:text-[#d97757]" />
-            </div>
-          )}
-          {!isLoading && messages.length === 0 && (
-            <div className="flex min-h-[220px] flex-1 flex-col items-center justify-center text-center">
-              <Icon icon="lucide:message-circle" className="mb-3 h-8 w-8 text-[#87867f] dark:text-[#8f8d86]" />
-              <p className="font-serif text-lg font-medium text-[#141413] dark:text-[#faf9f5]">{t('noMessages')}</p>
-              <p className="mt-1 text-sm text-[#5e5d59] dark:text-[#b0aea5]">{t('beFirstToMessage')}</p>
-            </div>
-          )}
-          {!isLoading && messages.length > 0 && (
-            <div className="flex flex-col space-y-2">
-              {messages.map((message) => {
-                if (message.messageType === 'tool_result' && toolResultPairing.consumed.has(message.id)) {
-                  return null;
-                }
-                return (
-                  <MessageItem
-                    key={message.id}
-                    message={message}
-                    pairedToolResult={message.messageType === 'tool_call' && message.toolCallId
-                      ? toolResultPairing.resultByCallId.get(message.toolCallId)
-                      : undefined}
-                    roomPermissions={roomPermissions}
-                    onStartEdit={handleOpenEditModal}
-                    onDeleteMessage={handleOpenDeleteModal}
-                    onRefreshAI={handleRefreshAI}
-                    onReply={onReply}
-                  />
-                );
-              })}
-            </div>
-          )}
-          <div
-            aria-hidden="true"
-            data-testid="message-list-scroll-end-inset"
-            className="flex-shrink-0"
-            style={{ height: bottomInsetPx }}
+      <div className="flex h-full w-full flex-col bg-[#f5f4ed] dark:bg-[#141413]">
+        {presentation === 'code-agent' && codeAgentRoom && (
+          <CodeAgentWorkspacePanel
+            room={codeAgentRoom}
+            messages={messages}
+            mode={codeAgentMode}
+            sessionCostUsd={sessionCostUsd ?? 0}
+            workspaceSnapshot={workspaceSnapshot}
+            isRefreshingWorkspace={isWorkspaceRefreshing}
+            workspaceRefreshError={workspaceRefreshError}
+            onRefreshWorkspace={refreshWorkspaceSnapshot}
           />
-          <div ref={messagesEndRef} />
+        )}
+        <div
+          id={scrollContainerId}
+          data-testid="message-list-scroll"
+          ref={containerRef}
+          className="relative flex min-h-0 w-full flex-1 flex-col overflow-y-auto px-3 pt-3"
+          onScroll={handleScroll}
+        >
+          <div ref={contentRef} data-testid="message-list-content" className="flex min-h-full flex-col">
+            {hasMoreMessages && (
+              <div className="mb-3 flex justify-center">
+                <button
+                  type="button"
+                  onClick={handleLoadMore}
+                  disabled={isLoadingMore}
+                  className="rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-3 py-1.5 text-xs font-medium text-[#4d4c48] shadow-sm backdrop-blur transition hover:border-[#c2c0b6] hover:text-[#141413] dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc] dark:hover:text-[#faf9f5]"
+                >
+                  {isLoadingMore ? t('loadingMore') : t('loadMoreMessages', { count: LOAD_MORE_MESSAGE_COUNT })}
+                </button>
+              </div>
+            )}
+            {isLoading && messages.length === 0 && (
+              <div className="flex min-h-[220px] flex-1 items-center justify-center">
+                <Icon icon="lucide:loader-circle" className="h-6 w-6 animate-spin text-[#c96442] dark:text-[#d97757]" />
+              </div>
+            )}
+            {!isLoading && messages.length === 0 && (
+              <div className="flex min-h-[220px] flex-1 flex-col items-center justify-center text-center">
+                <Icon icon="lucide:message-circle" className="mb-3 h-8 w-8 text-[#87867f] dark:text-[#8f8d86]" />
+                <p className="font-serif text-lg font-medium text-[#141413] dark:text-[#faf9f5]">{t('noMessages')}</p>
+                <p className="mt-1 text-sm text-[#5e5d59] dark:text-[#b0aea5]">{t('beFirstToMessage')}</p>
+              </div>
+            )}
+            {!isLoading && messages.length > 0 && (
+              <div className="flex flex-col space-y-2">
+                {messages.map((message) => {
+                  if (message.messageType === 'tool_result' && toolResultPairing.consumed.has(message.id)) {
+                    return null;
+                  }
+                  return (
+                    <MessageItem
+                      key={message.id}
+                      message={message}
+                      pairedToolResult={message.messageType === 'tool_call' && message.toolCallId
+                        ? toolResultPairing.resultByCallId.get(message.toolCallId)
+                        : undefined}
+                      roomPermissions={roomPermissions}
+                      onStartEdit={handleOpenEditModal}
+                      onDeleteMessage={handleOpenDeleteModal}
+                      onRefreshAI={handleRefreshAI}
+                      onReply={onReply}
+                    />
+                  );
+                })}
+              </div>
+            )}
+            <div
+              aria-hidden="true"
+              data-testid="message-list-scroll-end-inset"
+              className="flex-shrink-0"
+              style={{ height: bottomInsetPx }}
+            />
+            <div ref={messagesEndRef} />
+          </div>
         </div>
       </div>
 
