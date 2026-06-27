@@ -100,6 +100,40 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(screen.getByRole('alert').textContent).toBe('codeAgentWorkspaceRefreshFailed');
   });
 
+  it('collapses workspace details while keeping the sticky summary available', () => {
+    render(
+      <CodeAgentWorkspacePanel
+        room={room}
+        messages={[toolCall]}
+        mode="plan"
+        sessionCostUsd={0.1}
+      />
+    );
+
+    const toggle = screen.getByTestId('code-agent-workspace-toggle');
+    const details = screen.getByTestId('code-agent-workspace-details');
+
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(details.getAttribute('hidden')).toBeNull();
+    expect(screen.getByText('codeAgentOverview')).toBeTruthy();
+
+    fireEvent.click(toggle);
+
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(details.getAttribute('hidden')).toBe('');
+    expect(screen.getByText('codeAgentWorkspace')).toBeTruthy();
+    expect(screen.getByText('codeAgentReadOnlyMode')).toBeTruthy();
+    expect(screen.getByText('sandboxStatusReady')).toBeTruthy();
+    expect(screen.getByText('cocoStatusIdle')).toBeTruthy();
+    expect(screen.queryByText('codeAgentReadOnlyDescription')).toBeNull();
+
+    fireEvent.click(toggle);
+
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(details.getAttribute('hidden')).toBeNull();
+    expect(screen.getByText('codeAgentOverview')).toBeTruthy();
+  });
+
   it('renders command history from refreshed workspace snapshots', () => {
     render(
       <CodeAgentWorkspacePanel
