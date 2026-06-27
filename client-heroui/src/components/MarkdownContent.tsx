@@ -61,8 +61,9 @@ const fixQuoteBlocks = (content: string): string => {
   return result.join("\n");
 };
 
-const escapeRawHtmlTags = (content: string): string =>
-  content.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function escapeRawHtmlTags(content: string): string {
+  return content.split("<").join("&lt;").split(">").join("&gt;");
+}
 
 /** 数学公式解析 */
 const parseMath = (content: string): string => {
