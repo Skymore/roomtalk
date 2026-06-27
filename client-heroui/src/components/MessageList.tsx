@@ -156,7 +156,8 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       return;
     }
 
-    messagesEndRef.current?.scrollIntoView({ behavior });
+    // Intentionally avoid scrollIntoView here: it can scroll outer layout
+    // ancestors and push the code workspace summary out of view.
   }, []);
 
   const scheduleScrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
@@ -558,7 +559,10 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
         </div>
       </div>
       )}
-      <div className="flex h-full w-full flex-col bg-[#f5f4ed] dark:bg-[#141413]">
+      <div
+        data-testid="message-list-shell"
+        className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-[#f5f4ed] dark:bg-[#141413]"
+      >
         {presentation === 'code-agent' && codeAgentRoom && (
           <CodeAgentWorkspacePanel
             room={codeAgentRoom}
