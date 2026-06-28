@@ -317,6 +317,85 @@ describe('CocoSessionService', () => {
     assert.equal(messages[4].turnId, messages[1].turnId);
   });
 
+  it('removes the unused AI placeholder when tool events arrive before text', async () => {
+    const runner = new FakeCocoRunnerClient([
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Write', args: { file_path: 'hello.py' } },
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-1', name: 'Write', success: true, output: 'wrote hello.py' },
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-2', name: 'Shell', args: { command: 'python3 hello.py' } },
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-2', name: 'Shell', success: true, output: 'Hello, World!' },
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Done. The program prints Hello, World!' },
+      {
+        schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+        type: 'final',
+        messageId: 'ai-1',
+        answer: 'Done. The program prints Hello, World!',
+        sessionId: 'session-1',
+      },
+    ]);
+    const { emitter, service, store } = createService({
+      runner,
+      ids: ['ai-1', 'turn-1', 'tool-result-msg-1', 'tool-result-msg-2', 'ai-2'],
+    });
+
+    const result = await service.startTurn({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      selectedModel,
+    });
+
+    assert.deepEqual(result, { success: true, messageId: 'ai-1' });
+    const messages = store.messages.get('room-1') || [];
+    assert.deepEqual(messages.map(message => message.messageType), ['text', 'tool_call', 'tool_result', 'tool_call', 'tool_result', 'ai']);
+    assert.equal(messages.some(message => message.id === 'ai-1'), false);
+    assert.equal(messages[5].id, 'ai-2');
+    assert.equal(messages[5].status, 'complete');
+    assert.equal(messages[5].content, 'Done. The program prints Hello, World!');
+    assert.deepEqual(
+      emitter.roomEmits
+        .filter(event => event.event === 'message_deleted')
+        .map(event => (event.args[0] as { messageId: string }).messageId),
+      ['ai-1']
+    );
+  });
+
+  it('removes the unused AI placeholder when a tool-only turn completes with a final answer', async () => {
+    const runner = new FakeCocoRunnerClient([
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Shell', args: { command: 'python3 hello.py' } },
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-1', name: 'Shell', success: true, output: 'Hello, World!' },
+      {
+        schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+        type: 'final',
+        messageId: 'ai-1',
+        answer: 'The script printed Hello, World!',
+        sessionId: 'session-1',
+      },
+    ]);
+    const { emitter, service, store } = createService({
+      runner,
+      ids: ['ai-1', 'turn-1', 'tool-result-msg-1', 'ai-2'],
+    });
+
+    const result = await service.startTurn({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      selectedModel,
+    });
+
+    assert.deepEqual(result, { success: true, messageId: 'ai-1' });
+    const messages = store.messages.get('room-1') || [];
+    assert.deepEqual(messages.map(message => message.messageType), ['text', 'tool_call', 'tool_result', 'ai']);
+    assert.equal(messages.some(message => message.id === 'ai-1'), false);
+    assert.equal(messages[3].id, 'ai-2');
+    assert.equal(messages[3].status, 'complete');
+    assert.equal(messages[3].content, 'The script printed Hello, World!');
+    assert.deepEqual(
+      emitter.roomEmits
+        .filter(event => event.event === 'message_deleted')
+        .map(event => (event.args[0] as { messageId: string }).messageId),
+      ['ai-1']
+    );
+  });
+
   it('stops the runner before broadcasting the final stream end', async () => {
     const runner = new FakeCocoRunnerClient([
       { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },

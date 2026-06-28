@@ -51,6 +51,7 @@ interface CocoTurnStreamState {
   fullContent: string;
   needsNewSegment: boolean;
   segmentIds: string[];
+  nonEmptySegmentIds: Set<string>;
 }
 
 export class CocoSessionService {
@@ -174,6 +175,7 @@ export class CocoSessionService {
         fullContent: '',
         needsNewSegment: false,
         segmentIds: [aiMessageId],
+        nonEmptySegmentIds: new Set(),
       };
       const runResult = await this.runner.run({
         schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
@@ -227,6 +229,7 @@ export class CocoSessionService {
           streamState.activeMessageId = newId;
           streamState.segmentContent = finalAnswer;
           streamState.segmentIds.push(newId);
+          streamState.nonEmptySegmentIds.add(newId);
         }
       }
 
@@ -253,9 +256,7 @@ export class CocoSessionService {
 
       // Clean up unused initial placeholder if streaming moved to a new segment
       if (finalActiveId !== aiMessageId) {
-        const firstSegmentUsed = streamState.segmentIds.indexOf(aiMessageId) >= 0
-          && streamState.segmentIds.length > 1
-          && streamState.segmentIds[0] === aiMessageId;
+        const firstSegmentUsed = streamState.nonEmptySegmentIds.has(aiMessageId);
         if (!firstSegmentUsed) {
           await this.store.deleteMessageById(input.roomId, aiMessageId).catch(err => {
             this.logger.warn('Failed to clean up unused Coco placeholder', { error: err, roomId: input.roomId, messageId: aiMessageId });
@@ -438,6 +439,9 @@ export class CocoSessionService {
       }
       state.segmentContent += mapped.delta;
       state.fullContent += mapped.delta;
+      if (state.segmentContent.trim()) {
+        state.nonEmptySegmentIds.add(state.activeMessageId);
+      }
       this.emitter.to(roomId).emit('ai_chunk', { messageId: state.activeMessageId, chunk: mapped.delta, roomId });
       return;
     }
