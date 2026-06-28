@@ -72,6 +72,35 @@ describe('CocoToolMessage', () => {
     expect(document.body.textContent).not.toContain('"content"');
   });
 
+  it('renders BackgroundShell as a terminal tool with structured arguments', () => {
+    render(
+      <CocoToolMessage
+        message={{
+          ...baseMessage,
+          messageType: 'tool_call',
+          toolName: 'BackgroundShell',
+          toolArgs: {
+            action: 'start',
+            name: 'flask-app',
+            command: 'python3 app.py',
+            ports: [5000],
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByText('BackgroundShell')).toBeTruthy();
+    expect(screen.getByText(/python3 app\.py/)).toBeTruthy();
+
+    fireEvent.click(screen.getByText('BackgroundShell'));
+
+    expect(screen.getByText('toolCommand')).toBeTruthy();
+    expect(document.body.textContent).toContain('python3 app.py');
+    expect(document.body.textContent).toContain('Ports');
+    expect(document.body.textContent).toContain('- 5000');
+    expect(document.body.textContent).not.toContain('"command"');
+  });
+
   it('collapses long tool output and expands on demand', () => {
     const output = 'x'.repeat(1201);
     render(

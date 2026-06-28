@@ -15,6 +15,7 @@ SCHEMA_VERSION = 1
 READ_ONLY_TOOLS = ("Read", "Glob", "Grep")
 WRITE_TOOLS = ("Write", "Edit")
 SHELL_TOOL = "Shell"
+BACKGROUND_SHELL_TOOL = "BackgroundShell"
 MAX_TOOL_OUTPUT_CHARS = 20_000
 DEFAULT_WORKSPACE_ROOT = "/workspace"
 
@@ -164,13 +165,14 @@ def tool_names_for_mode(mode: str, env: dict[str, str] | None = None) -> tuple[s
         tools.extend(WRITE_TOOLS)
     if env.get("ROOMTALK_COCO_ALLOW_SHELL") == "true":
         tools.append(SHELL_TOOL)
+        tools.append(BACKGROUND_SHELL_TOOL)
     return tuple(tools)
 
 
 def system_prompt_for_tools(tool_names: Iterable[str], mode: str) -> str:
     available = tuple(tool_names)
     unavailable = tuple(
-        tool for tool in (*READ_ONLY_TOOLS, *WRITE_TOOLS, SHELL_TOOL)
+        tool for tool in (*READ_ONLY_TOOLS, *WRITE_TOOLS, SHELL_TOOL, BACKGROUND_SHELL_TOOL)
         if tool not in available
     )
     descriptions = {
@@ -179,7 +181,8 @@ def system_prompt_for_tools(tool_names: Iterable[str], mode: str) -> str:
         "Grep": "Search file contents",
         "Write": "Create or overwrite a complete file",
         "Edit": "Replace an exact unique string in an existing file",
-        "Shell": "Run allowlisted shell commands",
+        "Shell": "Run foreground shell commands",
+        "BackgroundShell": "Start or manage tracked long-running background commands and exposed port URLs",
     }
     available_lines = "\n".join(f"- {tool}: {descriptions[tool]}" for tool in available)
     unavailable_line = ", ".join(unavailable) if unavailable else "none"
@@ -198,6 +201,7 @@ Unavailable tools for this run: {unavailable_line}.
 {mode_guidance}
 
 Use Read / Glob / Grep to verify the workspace before editing. Edit requires old_string to match exactly once.
+Use Shell only for foreground commands that finish. Use BackgroundShell for servers, watchers, dev servers, slow async tasks, or anything that should keep running after the tool returns. Pass a foreground command to BackgroundShell; do not include nohup, disown, setsid, or '&'. Include expected ports when starting web apps so URLs can be returned.
 When exploring a project structure, use Glob with pattern "**/*" to find files recursively.
 After tools return, answer clearly. Avoid redundant calls and endless loops."""
 
@@ -311,11 +315,17 @@ def create_coco_engine(request: RunnerRequest, env: dict[str, str] | None = None
     from core.models import AppSettings
     from core.permissions import PermissionChecker
     from core.tools import FileEditTool, FileReadTool, FileWriteTool, GlobTool, GrepTool, ShellTool
+    try:
+        from core.tools import BackgroundShellTool
+    except ImportError:  # pragma: no cover - compatibility with older Coco artifacts
+        BackgroundShellTool = None
 
     workspace = request.workspace.resolve(strict=False)
     engine_allowed_paths = canonical_allowed_paths_for_engine(workspace, request.allowed_paths)
 
     tool_names = tool_names_for_mode(request.mode, env)
+    if BackgroundShellTool is None:
+        tool_names = tuple(tool for tool in tool_names if tool != BACKGROUND_SHELL_TOOL)
     tools = []
     if "Read" in tool_names:
         tools.append(FileReadTool())
@@ -332,6 +342,8 @@ def create_coco_engine(request: RunnerRequest, env: dict[str, str] | None = None
         # auto-approve below. The Node caller must only enable this for trusted
         # sandbox processes with scoped credentials.
         tools.append(ShellTool(workspace))
+    if "BackgroundShell" in tool_names and BackgroundShellTool is not None:
+        tools.append(BackgroundShellTool(workspace))
 
     settings = AppSettings(
         provider=_provider_for_coco(request.provider),
@@ -353,6 +365,25 @@ def create_coco_engine(request: RunnerRequest, env: dict[str, str] | None = None
         allowed_tools=allowed_tools,
         workspace=workspace,
         allowed_paths=list(engine_allowed_paths),
+    )
+
+
+def prompt_with_background_jobs(prompt: str) -> str:
+    try:
+        from core.tools.background_shell import summarize_background_jobs
+    except Exception:
+        return prompt
+    try:
+        summary = summarize_background_jobs()
+    except Exception:
+        return prompt
+    if not summary.strip():
+        return prompt
+    return (
+        "Context for this Coco turn. This is system-provided state from the same sandbox, not a new user request.\n"
+        f"{summary}\n\n"
+        "User request:\n"
+        f"{prompt}"
     )
 
 
@@ -555,7 +586,7 @@ def run_request(
         if live_tool_events_enabled:
             run_kwargs["on_tool_event"] = on_tool_event
 
-        result = engine.run(request.prompt, **run_kwargs)
+        result = engine.run(prompt_with_background_jobs(request.prompt), **run_kwargs)
         if not live_tool_events_enabled:
             for event in replay_tool_events(getattr(result, "messages", []) or [], turn_id=request.turn_id):
                 emitter.emit(event)

@@ -41,6 +41,7 @@ interface E2BSdkCommands {
 
 interface E2BSdkSandbox {
   sandboxId: string;
+  getHost?(port: number): string;
   commands: E2BSdkCommands;
   files?: {
     list(path: string, opts?: { depth?: number }): Promise<E2BFileEntry[]>;
@@ -151,6 +152,7 @@ class E2BSdkDriver implements E2BSandboxDriver {
   private wrapSandbox(sandbox: E2BSdkSandbox): E2BSandboxDriverHandle {
     return {
       id: sandbox.sandboxId,
+      getHost: sandbox.getHost ? (port: number) => sandbox.getHost!(port) : undefined,
       commands: {
         run: (command, options) => startE2BCommand(sandbox, command, options?.env || {}, options?.timeoutMs),
       },

@@ -11,6 +11,7 @@ import { Readable, Writable } from 'stream';
 
 export interface E2BSandboxDriverHandle {
   id: string;
+  getHost?(port: number): string;
   commands?: {
     run(command: string, options?: { env?: Record<string, string>; timeoutMs?: number }): Promise<E2BCommandResult>;
   };
@@ -109,7 +110,10 @@ export class E2BCocoSandboxService implements CocoSandboxService {
       throw new Error('E2B sandbox driver handle does not support command execution');
     }
     const commandResult = await handle.commands.run(input.command, {
-      env: input.env || {},
+      env: {
+        ...(input.env || {}),
+        ...portHostTemplateEnv(handle),
+      },
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
     });
     return {
@@ -176,6 +180,20 @@ export class E2BCocoSandboxService implements CocoSandboxService {
     }
   }
 }
+
+const portHostTemplateEnv = (handle: E2BSandboxDriverHandle): Record<string, string> => {
+  if (!handle.getHost) {
+    return {};
+  }
+  const placeholderPort = 45999;
+  const host = handle.getHost(placeholderPort);
+  if (!host || !host.includes(String(placeholderPort))) {
+    return {};
+  }
+  return {
+    ROOMTALK_E2B_PORT_HOST_TEMPLATE: host.replace(String(placeholderPort), '{port}'),
+  };
+};
 
 const normalizeWorkspaceEntryPath = (entryPath: string, workspacePrefix: string): string | null => {
   const normalized = entryPath.trim().replace(/\\/g, '/');

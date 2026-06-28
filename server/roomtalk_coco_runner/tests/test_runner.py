@@ -115,7 +115,7 @@ def test_tool_policy_keeps_plan_read_only_and_requires_explicit_write_or_shell_f
     assert tool_names_for_mode("acceptEdits", {
         "ROOMTALK_COCO_ALLOW_WRITE_TOOLS": "true",
         "ROOMTALK_COCO_ALLOW_SHELL": "true",
-    }) == ("Read", "Glob", "Grep", "Write", "Edit", "Shell")
+    }) == ("Read", "Glob", "Grep", "Write", "Edit", "Shell", "BackgroundShell")
 
 
 def test_tool_policy_treats_empty_env_as_an_isolated_environment(monkeypatch):
@@ -129,14 +129,17 @@ def test_system_prompt_matches_the_actual_tool_set():
     plan_prompt = system_prompt_for_tools(("Read", "Glob", "Grep"), "plan")
     assert "- Read:" in plan_prompt
     assert "- Write:" not in plan_prompt
-    assert "Unavailable tools for this run: Write, Edit, Shell" in plan_prompt
+    assert "Unavailable tools for this run: Write, Edit, Shell, BackgroundShell" in plan_prompt
     assert "read-only" in plan_prompt
 
     edit_prompt = system_prompt_for_tools(("Read", "Glob", "Grep", "Write", "Edit"), "acceptEdits")
     assert "- Write:" in edit_prompt
     assert "- Edit:" in edit_prompt
     assert "- Shell:" not in edit_prompt
-    assert "Unavailable tools for this run: Shell" in edit_prompt
+    assert "Unavailable tools for this run: Shell, BackgroundShell" in edit_prompt
+    shell_prompt = system_prompt_for_tools(("Read", "Glob", "Grep", "Write", "Edit", "Shell", "BackgroundShell"), "acceptEdits")
+    assert "- BackgroundShell:" in shell_prompt
+    assert "Use Shell only for foreground commands" in shell_prompt
 
 
 def test_replay_tool_events_preserves_pairing_and_result_metadata():

@@ -170,7 +170,7 @@ const inferLanguageFromContent = (content: string, path?: string) => {
 
 const isShellTool = (toolName: string) => {
   const lower = toolName.toLowerCase();
-  return lower === 'shell' || lower === 'bash' || lower.includes('terminal');
+  return lower === 'bash' || lower.includes('shell') || lower.includes('terminal');
 };
 
 const getToolSummary = (message: Message): string => {
@@ -199,7 +199,7 @@ const getToolIcon = (toolName: string): string => {
   if (lower === 'read') return 'lucide:file-text';
   if (lower === 'edit') return 'lucide:pencil';
   if (lower === 'write') return 'lucide:file-plus';
-  if (lower === 'bash' || lower === 'shell') return 'lucide:terminal';
+  if (lower === 'bash' || lower.includes('shell')) return 'lucide:terminal';
   if (lower.includes('search') || lower.includes('grep')) return 'lucide:search';
   if (lower.includes('web') || lower.includes('fetch')) return 'lucide:globe';
   if (lower.includes('list') || lower.includes('glob')) return 'lucide:folder-open';

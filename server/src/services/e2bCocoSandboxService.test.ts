@@ -41,6 +41,7 @@ class FakeE2BDriver implements E2BSandboxDriver {
   createHandle(id: string): E2BSandboxDriverHandle {
     return {
       id,
+      getHost: (port: number) => `${port}-${id}.sandbox.e2b.dev`,
       commands: {
         run: async (command, options) => {
           this.commands.push(command);
@@ -78,8 +79,8 @@ describe('E2BCocoSandboxService', () => {
     const driver = new FakeE2BDriver();
     const service = new E2BCocoSandboxService(driver, {
       templateId: 'roomtalk-coco',
-      artifactVersion: 'roomtalk-coco-2026-06-27-7ac42db',
-      cocoSourceRef: '7ac42db5b270168366cd836b2b14ec7eb4604cdf',
+      artifactVersion: 'roomtalk-coco-2026-06-28-a4e70e6',
+      cocoSourceRef: 'a4e70e674e46d59a63874371276f5fec0fcd3f41',
     }, () => new Date('2026-05-03T00:00:00.000Z'));
 
     const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
@@ -94,8 +95,8 @@ describe('E2BCocoSandboxService', () => {
       metadata: {
         roomId: 'room-1',
         creatorId: 'client-1',
-        artifactVersion: 'roomtalk-coco-2026-06-27-7ac42db',
-        cocoSourceRef: '7ac42db5b270168366cd836b2b14ec7eb4604cdf',
+        artifactVersion: 'roomtalk-coco-2026-06-28-a4e70e6',
+        cocoSourceRef: 'a4e70e674e46d59a63874371276f5fec0fcd3f41',
       },
     });
 
@@ -111,7 +112,13 @@ describe('E2BCocoSandboxService', () => {
     assert.ok(runner.stderr);
     assert.deepEqual(await runner.completed, { exitCode: 0, signal: null });
     assert.deepEqual(driver.commands, ['python -m roomtalk_coco_runner']);
-    assert.deepEqual(driver.commandOptions, [{ env: { PYTHONUNBUFFERED: '1' }, timeoutMs: 300_000 }]);
+    assert.deepEqual(driver.commandOptions, [{
+      env: {
+        PYTHONUNBUFFERED: '1',
+        ROOMTALK_E2B_PORT_HOST_TEMPLATE: '{port}-e2b-1.sandbox.e2b.dev',
+      },
+      timeoutMs: 300_000,
+    }]);
     assert.deepEqual(await service.listWorkspaceFiles(handle, { maxDepth: 3 }), ['output/report.html', 'plot_output.png']);
     assert.deepEqual(driver.fileListRequests, [{ path: '/workspace', options: { depth: 3 } }]);
     assert.equal(await service.countActiveSandboxes(), 1);

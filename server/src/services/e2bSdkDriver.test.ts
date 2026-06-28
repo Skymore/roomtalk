@@ -35,6 +35,7 @@ const createFakeSandboxClass = () => {
   const createSandbox = (sandboxId: string) => {
     const sandbox = {
       sandboxId,
+      getHost: (port: number) => `${port}-${sandboxId}.e2b.dev`,
       commands: {
         run: async (command: string, options: any) => {
           calls.run.push({ command, options });
@@ -115,6 +116,7 @@ describe('E2B SDK driver', () => {
       metadata: { roomId: 'room-1', creatorId: 'client-1' },
     });
     assert.equal(handle.id, 'sdk-created-1');
+    assert.equal(handle.getHost?.(5000), '5000-sdk-created-1.e2b.dev');
     assert.deepEqual(fake.calls.create[0], {
       template: 'roomtalk-coco',
       options: {
