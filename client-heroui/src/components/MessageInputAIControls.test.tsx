@@ -117,11 +117,12 @@ describe('MessageInputAIControls', () => {
     vi.clearAllMocks();
   });
 
-  it('replaces the ordinary role picker with a Coco run-mode picker', () => {
+  it('shows code agent mode picker in settings modal', () => {
     const onCodeAgentModeChange = vi.fn();
     render(
       <MessageInputAIControls
         {...baseProps}
+        isSettingsOpen
         isCodeAgentRoom
         codeAgentMode="plan"
         codeAgentMaxMode="acceptEdits"
@@ -131,14 +132,13 @@ describe('MessageInputAIControls', () => {
 
     expect(screen.getByTestId('code-agent-mode-select')).toBeTruthy();
     expect(screen.queryByLabelText('selectAIRole')).toBeNull();
-    expect(screen.queryByText('Assistant')).toBeNull();
 
     fireEvent.click(screen.getByTestId('change-codeAgentModeControl'));
     expect(onCodeAgentModeChange).toHaveBeenCalledWith('acceptEdits');
   });
 
-  it('keeps the ordinary role picker for chat rooms', () => {
-    render(<MessageInputAIControls {...baseProps} />);
+  it('shows role picker in settings modal for chat rooms', () => {
+    render(<MessageInputAIControls {...baseProps} isSettingsOpen />);
 
     expect(screen.getByLabelText('selectAIRole')).toBeTruthy();
     expect(screen.queryByTestId('code-agent-mode-select')).toBeNull();

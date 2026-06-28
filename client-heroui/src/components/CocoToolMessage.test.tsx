@@ -25,7 +25,7 @@ describe('CocoToolMessage', () => {
     cleanup();
   });
 
-  it('renders tool call arguments as formatted JSON', () => {
+  it('renders tool call arguments as structured fields instead of raw JSON', () => {
     render(
       <CocoToolMessage
         message={{
@@ -42,8 +42,34 @@ describe('CocoToolMessage', () => {
 
     fireEvent.click(screen.getByText('Read'));
 
-    expect(screen.getByText('toolCall')).toBeTruthy();
-    expect(screen.getByText(/"file_path": "README\.md"/)).toBeTruthy();
+    expect(screen.getByText('toolFile')).toBeTruthy();
+    expect(document.body.textContent).toContain('README.md');
+    expect(document.body.textContent).not.toContain('"file_path"');
+  });
+
+  it('renders writable file content as a highlighted code block', () => {
+    render(
+      <CocoToolMessage
+        message={{
+          ...baseMessage,
+          messageType: 'tool_call',
+          toolName: 'Write',
+          toolArgs: {
+            file_path: 'hello.py',
+            content: '#!/usr/bin/env python3\nprint("Hello, World!")',
+          },
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByText('Write'));
+
+    expect(screen.getByText('toolFile')).toBeTruthy();
+    expect(screen.getByText('toolContent')).toBeTruthy();
+    expect(document.body.textContent).toContain('hello.py');
+    expect(document.body.textContent).toContain('python');
+    expect(document.body.textContent).toContain('Hello, World!');
+    expect(document.body.textContent).not.toContain('"content"');
   });
 
   it('collapses long tool output and expands on demand', () => {
@@ -67,12 +93,12 @@ describe('CocoToolMessage', () => {
 
     expect(screen.getByText('toolResultFailed')).toBeTruthy();
     expect(screen.getByText('showMore')).toBeTruthy();
-    expect(screen.getByText((content) => content.startsWith('xxx') && content.endsWith('…'))).toBeTruthy();
+    expect(document.body.textContent).toContain(`${'x'.repeat(1200)}…`);
 
     fireEvent.click(screen.getByText('showMore'));
 
     expect(screen.getByText('showLess')).toBeTruthy();
-    expect(screen.getByText(output)).toBeTruthy();
+    expect(document.body.textContent).toContain(output);
   });
 
   it('renders sandbox status messages without output chrome', () => {

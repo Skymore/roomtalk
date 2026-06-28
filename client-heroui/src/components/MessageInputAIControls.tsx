@@ -9,8 +9,6 @@ import {
   ModalHeader,
   Select,
   SelectItem,
-  Tab,
-  Tabs,
 } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
@@ -158,7 +156,6 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   const [pendingPremiumModelId, setPendingPremiumModelId] = React.useState<string | null>(null);
   const [premiumConfirmationStep, setPremiumConfirmationStep] = React.useState<1 | 2>(1);
   const pendingPremiumModel = aiModels.find(model => model.id === pendingPremiumModelId);
-  const selectedModel = aiModels.find(model => model.id === (selectedAIModel || defaultAIModel));
   const hasInputContent = currentInputText.trim().length > 0 || imageCount > 0;
   const isControlLocked = isSending || isAiProcessing || isInputLocked || !canPost;
   const askActionLabel = isCodeAgentRoom ? t('runAgent') : t('askAI');
@@ -246,194 +243,49 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
 
   return (
     <>
-      <div className="flex flex-shrink-0 items-center gap-1 sm:min-w-0 sm:flex-1 sm:gap-2">
-        <div className={`${isCodeAgentRoom ? 'flex' : 'hidden sm:flex'} min-w-0 flex-1 items-center gap-1 sm:gap-2`}>
-          {isCodeAgentRoom ? (
-            <Select
-              size="sm"
-              aria-label={t('codeAgentModeControl')}
-              data-testid="code-agent-mode-select"
-              selectedKeys={[effectiveCodeAgentMode]}
-              onSelectionChange={handleCodeAgentModeSelection}
-              className="min-w-0 flex-[0.92] sm:flex-[0.9]"
-              classNames={{
-                trigger: "h-8 min-h-8 rounded-full bg-transparent px-1.5 text-[#4d4c48] data-[hover=true]:bg-[#e8e6dc] dark:text-[#faf9f5] dark:data-[hover=true]:bg-[#3a3a38] sm:h-9 sm:min-h-9 sm:px-2",
-                value: "truncate text-[10px] font-semibold sm:text-xs",
-                selectorIcon: "h-3 w-3 text-[#87867f] dark:text-[#b0aea5] sm:h-4 sm:w-4",
-                popoverContent: "w-48 border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
-                listboxWrapper: "relative max-h-[12rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]",
-              }}
-              popoverProps={{
-                placement: isMobileViewport ? 'top-start' : 'top',
-                offset: 8,
-                containerPadding: 12,
-              }}
-              isDisabled={isControlLocked || !canSwitchCodeAgentMode}
-              startContent={<Icon icon={effectiveCodeAgentMode === 'plan' ? 'lucide:eye' : 'lucide:pencil-ruler'} className="h-3.5 w-3.5 sm:h-4 sm:w-4" />}
-            >
-              {codeAgentModeOptions.map((option) => (
-                <SelectItem
-                  key={option.id}
-                  classNames={compactItemClassNames}
-                  startContent={<Icon icon={option.icon} className="h-3.5 w-3.5" />}
-                >
-                  {option.label}
-                </SelectItem>
-              ))}
-            </Select>
-          ) : (
-            <Select
-              size="sm"
-              aria-label={t('selectAIRole')}
-              selectedKeys={[selectedRoleId]}
-              onSelectionChange={(keys) => {
-                const selectedKey = Array.from(keys)[0]?.toString();
-                if (selectedKey) onRoleChange(selectedKey);
-              }}
-              className="min-w-0 flex-[0.68] sm:flex-[0.9]"
-              classNames={{
-                trigger: "h-8 min-h-8 rounded-full bg-transparent px-1.5 text-[#4d4c48] data-[hover=true]:bg-[#e8e6dc] dark:text-[#faf9f5] dark:data-[hover=true]:bg-[#3a3a38] sm:h-9 sm:min-h-9 sm:px-2",
-                value: "truncate text-[10px] font-semibold sm:text-xs",
-                selectorIcon: "h-3 w-3 text-[#87867f] dark:text-[#b0aea5] sm:h-4 sm:w-4",
-                popoverContent: "w-52 border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b] sm:w-auto",
-                listboxWrapper: "relative max-h-[14rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]",
-              }}
-              popoverProps={{
-                placement: isMobileViewport ? 'top-start' : 'top',
-                offset: 8,
-                containerPadding: 12,
-              }}
-              isDisabled={isControlLocked}
-            >
-              {roles.map((role) => (
-                <SelectItem
-                  key={role.id}
-                  classNames={compactItemClassNames}
-                  startContent={<Icon icon={role.icon} className="h-3.5 w-3.5" />}
-                >
-                  {getAIRoleDisplayName(role, t)}
-                </SelectItem>
-              ))}
-            </Select>
-          )}
-          <Select
+      <div className="flex flex-shrink-0 items-center justify-end gap-1 sm:min-w-0 sm:flex-1 sm:gap-2">
+        <HoverTooltip content={`${askActionLabel} (${isMacOS ? 'Command' : 'Ctrl'}+Enter)`} placement="top">
+          <Button
+            color={isCodeAgentRoom ? 'default' : selectedRole.color}
             size="sm"
-            aria-label={t('selectAIModel')}
-            data-testid="ai-model-select"
-            selectedKeys={[selectedAIModel || defaultAIModel]}
-            onSelectionChange={(keys) => {
-              const selectedKey = Array.from(keys)[0]?.toString();
-              if (selectedKey) requestModelChange(selectedKey);
-            }}
-            className="min-w-0 flex-[1.62] sm:flex-[1.25]"
-            classNames={{
-              trigger: "h-8 min-h-8 rounded-full bg-transparent px-1.5 text-[#4d4c48] data-[hover=true]:bg-[#e8e6dc] dark:text-[#faf9f5] dark:data-[hover=true]:bg-[#3a3a38] sm:h-9 sm:min-h-9 sm:px-2",
-              value: "truncate text-[10px] font-semibold sm:text-xs",
-              selectorIcon: "h-3 w-3 text-[#87867f] dark:text-[#b0aea5] sm:h-4 sm:w-4",
-              popoverContent: "w-52 border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b] sm:w-[min(22rem,calc(100vw-2rem))]",
-              listbox: "w-full",
-              listboxWrapper: "relative max-h-[16rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]",
-            }}
-            popoverProps={{
-              placement: isMobileViewport ? 'top-end' : 'top',
-              offset: 8,
-              containerPadding: 12,
-            }}
+            onPress={onAskAI}
             isDisabled={isControlLocked}
-            startContent={<Icon icon="lucide:brain-circuit" className="h-3.5 w-3.5 sm:h-4 sm:w-4" />}
-            renderValue={() => (
-              <span className="flex min-w-0 items-center gap-1.5">
-                <span className="min-w-0 truncate">{selectedModel?.label}</span>
-                {selectedModel?.isDefault && (
-                  <Icon
-                    icon="lucide:badge-check"
-                    aria-label={t('defaultModel')}
-                    className="flex-shrink-0 text-[#c96442] dark:text-[#ff9b76]"
-                    width={11}
-                    height={11}
-                  />
-                )}
+            aria-label={askActionLabel}
+            className="relative !h-7 !w-7 !min-w-7 overflow-hidden rounded-full bg-[#30302e] px-0 text-[#faf9f5] shadow-[0_0_0_1px_rgba(48,48,46,0.7)] dark:bg-[#faf9f5] dark:text-[#141413] dark:shadow-[0_0_0_1px_rgba(250,249,245,0.7)] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"
+          >
+            <span className={`flex items-center justify-center gap-1.5 ${isAiProcessing ? 'opacity-0' : 'opacity-100'}`}>
+              <Icon icon={askActionIcon} className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+              <span className="hidden sm:inline">{askActionLabel}</span>
+            </span>
+            {isAiProcessing && (
+              <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <Icon icon="lucide:loader-circle" className="h-3.5 w-3.5 animate-spin sm:h-4 sm:w-4" />
               </span>
             )}
+          </Button>
+        </HoverTooltip>
+
+        <HoverTooltip content={`${t('send')} (Enter)`} placement="top">
+          <Button
+            type="button"
+            onClick={onSend}
+            color="primary"
+            size="sm"
+            isDisabled={isControlLocked || !hasInputContent}
+            aria-label={t('send')}
+            className="relative !h-7 !w-7 !min-w-7 overflow-hidden rounded-full bg-[#c96442] px-0 text-[#faf9f5] shadow-[0_0_0_1px_rgba(201,100,66,0.7)] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"
           >
-            {aiModels.map((model) => (
-              <SelectItem
-                key={model.id}
-                classNames={compactItemClassNames}
-                textValue={model.label}
-              >
-                <span className="block w-full min-w-0">
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    <span className="min-w-0 truncate text-xs font-medium leading-4">
-                      {model.label}
-                    </span>
-                    {model.isDefault && (
-                      <Icon
-                        icon="lucide:badge-check"
-                        aria-label={t('defaultModel')}
-                        className="flex-shrink-0 text-[#c96442] dark:text-[#ff9b76]"
-                        width={11}
-                        height={11}
-                      />
-                    )}
-                    <span className="inline-flex flex-shrink-0 items-center rounded px-1 py-px text-[9px] font-semibold leading-none border border-[#c2c0b6]/60 bg-[#e8e6dc] text-[#4d4c48] dark:border-[#4d4c48]/60 dark:bg-[#30302e] dark:text-[#b0aea5] whitespace-nowrap">
-                      {getProviderLabel(model.provider)}
-                    </span>
-                    {isPremiumAIModel(model) && (
-                      <Icon icon="lucide:gem" className="flex-shrink-0 text-warning" width={10} height={10} />
-                    )}
-                  </span>
-                  <ModelPriceGrid model={model} />
-                </span>
-              </SelectItem>
-            ))}
-          </Select>
-        </div>
-
-        <div className="flex flex-shrink-0 justify-end gap-1 sm:gap-2">
-          <HoverTooltip content={`${askActionLabel} (${isMacOS ? 'Command' : 'Ctrl'}+Enter)`} placement="top">
-            <Button
-              color={isCodeAgentRoom ? 'default' : selectedRole.color}
-              size="sm"
-              onPress={onAskAI}
-              isDisabled={isControlLocked}
-              aria-label={askActionLabel}
-              className="relative !h-7 !w-7 !min-w-7 overflow-hidden rounded-full bg-[#30302e] px-0 text-[#faf9f5] shadow-[0_0_0_1px_rgba(48,48,46,0.7)] dark:bg-[#faf9f5] dark:text-[#141413] dark:shadow-[0_0_0_1px_rgba(250,249,245,0.7)] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"
-            >
-              <span className={`flex items-center justify-center gap-1.5 ${isAiProcessing ? 'opacity-0' : 'opacity-100'}`}>
-                <Icon icon={askActionIcon} className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                <span className="hidden sm:inline">{askActionLabel}</span>
+            <span className={`flex items-center justify-center gap-1.5 ${isSending ? 'opacity-0' : 'opacity-100'}`}>
+              <Icon icon="lucide:arrow-up" className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+              <span className="hidden sm:inline">{t('send')}</span>
+            </span>
+            {isSending && (
+              <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <Icon icon="lucide:loader-circle" className="h-3.5 w-3.5 animate-spin sm:h-4 sm:w-4" />
               </span>
-              {isAiProcessing && (
-                <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                  <Icon icon="lucide:loader-circle" className="h-3.5 w-3.5 animate-spin sm:h-4 sm:w-4" />
-                </span>
-              )}
-            </Button>
-          </HoverTooltip>
-
-          <HoverTooltip content={`${t('send')} (Enter)`} placement="top">
-            <Button
-              type="button"
-              onClick={onSend}
-              color="primary"
-              size="sm"
-              isDisabled={isControlLocked || !hasInputContent}
-              aria-label={t('send')}
-              className="relative !h-7 !w-7 !min-w-7 overflow-hidden rounded-full bg-[#c96442] px-0 text-[#faf9f5] shadow-[0_0_0_1px_rgba(201,100,66,0.7)] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"
-            >
-              <span className={`flex items-center justify-center gap-1.5 ${isSending ? 'opacity-0' : 'opacity-100'}`}>
-                <Icon icon="lucide:arrow-up" className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                <span className="hidden sm:inline">{t('send')}</span>
-              </span>
-              {isSending && (
-                <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                  <Icon icon="lucide:loader-circle" className="h-3.5 w-3.5 animate-spin sm:h-4 sm:w-4" />
-                </span>
-              )}
-            </Button>
-          </HoverTooltip>
-        </div>
+            )}
+          </Button>
+        </HoverTooltip>
       </div>
 
       <Modal
@@ -454,6 +306,57 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
         <ModalContent>
           <ModalHeader>{t('aiSettings')}</ModalHeader>
           <ModalBody>
+            <Select
+              size="sm"
+              label={t('selectAIModel')}
+              aria-label={t('selectAIModel')}
+              data-testid="ai-model-select"
+              selectedKeys={[selectedAIModel || defaultAIModel]}
+              onSelectionChange={(keys) => {
+                const selectedKey = Array.from(keys)[0]?.toString();
+                if (selectedKey) requestModelChange(selectedKey);
+              }}
+              classNames={{
+                trigger: "min-h-11 rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242421] dark:text-[#faf9f5]",
+                label: "text-[#5e5d59] dark:text-[#b0aea5]",
+                value: "text-sm font-semibold",
+                popoverContent: "w-[min(22rem,calc(100vw-2rem))] border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
+                listboxWrapper: "relative max-h-[16rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]",
+              }}
+              startContent={<Icon icon="lucide:brain-circuit" className="h-4 w-4" />}
+            >
+              {aiModels.map((model) => (
+                <SelectItem
+                  key={model.id}
+                  classNames={compactItemClassNames}
+                  textValue={model.label}
+                >
+                  <span className="block w-full min-w-0">
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span className="min-w-0 truncate text-xs font-medium leading-4">
+                        {model.label}
+                      </span>
+                      {model.isDefault && (
+                        <Icon
+                          icon="lucide:badge-check"
+                          aria-label={t('defaultModel')}
+                          className="flex-shrink-0 text-[#c96442] dark:text-[#ff9b76]"
+                          width={11}
+                          height={11}
+                        />
+                      )}
+                      <span className="inline-flex flex-shrink-0 items-center rounded px-1 py-px text-[9px] font-semibold leading-none border border-[#c2c0b6]/60 bg-[#e8e6dc] text-[#4d4c48] dark:border-[#4d4c48]/60 dark:bg-[#30302e] dark:text-[#b0aea5] whitespace-nowrap">
+                        {getProviderLabel(model.provider)}
+                      </span>
+                      {isPremiumAIModel(model) && (
+                        <Icon icon="lucide:gem" className="flex-shrink-0 text-warning" width={10} height={10} />
+                      )}
+                    </span>
+                    <ModelPriceGrid model={model} />
+                  </span>
+                </SelectItem>
+              ))}
+            </Select>
             {isCodeAgentRoom && (
               <div className="space-y-2 rounded-lg border border-[#dedbd0] bg-[#f0eee6] p-3 dark:border-[#30302e] dark:bg-[#242421]">
                 <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[#87867f] dark:text-[#b0aea5]">
@@ -463,6 +366,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                 <Select
                   size="sm"
                   aria-label={t('codeAgentModeControl')}
+                  data-testid="code-agent-mode-select"
                   selectedKeys={[effectiveCodeAgentMode]}
                   onSelectionChange={handleCodeAgentModeSelection}
                   isDisabled={!canSwitchCodeAgentMode}
@@ -488,6 +392,36 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                     : t('codeAgentModeLockedDescription')}
                 </p>
               </div>
+            )}
+            {!isCodeAgentRoom && (
+              <Select
+                size="sm"
+                label={t('selectAIRole')}
+                aria-label={t('selectAIRole')}
+                selectedKeys={[selectedRoleId]}
+                onSelectionChange={(keys) => {
+                  const selectedKey = Array.from(keys)[0]?.toString();
+                  if (selectedKey) onRoleChange(selectedKey);
+                }}
+                classNames={{
+                  trigger: "min-h-11 rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242421] dark:text-[#faf9f5]",
+                  label: "text-[#5e5d59] dark:text-[#b0aea5]",
+                  value: "text-sm font-semibold",
+                  popoverContent: "w-52 border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
+                  listboxWrapper: "relative max-h-[14rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]",
+                }}
+                startContent={<Icon icon={selectedRole.icon} className="h-4 w-4" />}
+              >
+                {roles.map((role) => (
+                  <SelectItem
+                    key={role.id}
+                    classNames={compactItemClassNames}
+                    startContent={<Icon icon={role.icon} className="h-3.5 w-3.5" />}
+                  >
+                    {getAIRoleDisplayName(role, t)}
+                  </SelectItem>
+                ))}
+              </Select>
             )}
             <div className="space-y-2 rounded-lg border border-[#dedbd0] bg-[#f0eee6] p-3 dark:border-[#30302e] dark:bg-[#242421]">
               <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[#87867f] dark:text-[#b0aea5]">
@@ -519,70 +453,15 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                 </HoverTooltip>
               </div>
             </div>
-            <div className="sm:hidden">
-              <Select
-                size="sm"
-                label={t('selectAIModel')}
-                aria-label={t('selectAIModel')}
-                selectedKeys={[selectedAIModel || defaultAIModel]}
-                onSelectionChange={(keys) => {
-                  const selectedKey = Array.from(keys)[0]?.toString();
-                  if (selectedKey) requestModelChange(selectedKey);
-                }}
-                classNames={{
-                  trigger: "min-h-11 rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242421] dark:text-[#faf9f5]",
-                  label: "text-[#5e5d59] dark:text-[#b0aea5]",
-                  value: "text-sm font-semibold",
-                  popoverContent: "w-[min(22rem,calc(100vw-2rem))] border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
-                  listboxWrapper: "relative max-h-[16rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]",
-                }}
-                startContent={<Icon icon="lucide:brain-circuit" className="h-4 w-4" />}
-              >
-                {aiModels.map((model) => (
-                  <SelectItem
-                    key={model.id}
-                    classNames={compactItemClassNames}
-                    textValue={model.label}
-                  >
-                    <span className="flex min-w-0 items-center gap-1.5">
-                      <span className="min-w-0 truncate text-xs font-medium leading-4">
-                        {model.label}
-                      </span>
-                      {model.isDefault && (
-                        <Icon
-                          icon="lucide:badge-check"
-                          aria-label={t('defaultModel')}
-                          className="flex-shrink-0 text-[#c96442] dark:text-[#ff9b76]"
-                          width={11}
-                          height={11}
-                        />
-                      )}
-                      <span className="inline-flex flex-shrink-0 items-center rounded px-1 py-px text-[9px] font-semibold leading-none border border-[#c2c0b6]/60 bg-[#e8e6dc] text-[#4d4c48] dark:border-[#4d4c48]/60 dark:bg-[#30302e] dark:text-[#b0aea5] whitespace-nowrap">
-                        {getProviderLabel(model.provider)}
-                      </span>
-                      {isPremiumAIModel(model) && (
-                        <Icon icon="lucide:gem" className="flex-shrink-0 text-warning" width={10} height={10} />
-                      )}
-                    </span>
-                  </SelectItem>
-                ))}
-              </Select>
-            </div>
             {!isCodeAgentRoom && (
-              <Tabs aria-label={t('aiSettings')}>
-                <Tab key="roles" title={t('aiRoles')}>
-                  <div className="mt-2">
-                    <AIRoleManager
-                      roles={roles}
-                      selectedRoleId={selectedRoleId}
-                      onSelectRole={onRoleChange}
-                      onAddRole={onAddRole}
-                      onUpdateRole={onUpdateRole}
-                      onDeleteRole={onDeleteRole}
-                    />
-                  </div>
-                </Tab>
-              </Tabs>
+              <AIRoleManager
+                roles={roles}
+                selectedRoleId={selectedRoleId}
+                onSelectRole={onRoleChange}
+                onAddRole={onAddRole}
+                onUpdateRole={onUpdateRole}
+                onDeleteRole={onDeleteRole}
+              />
             )}
           </ModalBody>
           <ModalFooter>
