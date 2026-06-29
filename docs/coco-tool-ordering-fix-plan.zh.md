@@ -594,14 +594,13 @@ supports_tool_event = "on_tool_event" in inspect.signature(engine.run).parameter
 
 ```bash
 node scripts/coco/prepare-sandbox-context.mjs \
-  --output /tmp/roomtalk-coco-sandbox-context \
-  --coco-repo /Users/sky/projects/coco
+  --output /tmp/roomtalk-coco-sandbox-context
 ```
 
 4. 重建并发布新的 E2B template。
 5. 更新生产 env 的 `COCO_E2B_TEMPLATE_ID` / `COCO_ARTIFACT_VERSION` / `COCO_SOURCE_REF`。
 
-不要用生产机器上的可变本地源覆盖 pinned artifact。
+默认从 `artifact.lock.json` 的远端 `sourceRepo` 拉取 pinned commit。只有本地开发验证时才使用 `--coco-repo` 或 `COCO_LOCAL_PATH` 覆盖；不要用生产机器上的可变本地源覆盖 pinned artifact。
 
 ## 验证矩阵
 

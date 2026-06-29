@@ -22,8 +22,9 @@ ops/coco-sandbox/artifact.lock.json
 Pinned values:
 
 ```text
-artifactVersion: roomtalk-coco-2026-06-27-7ac42db
-cocoSourceRef: 7ac42db5b270168366cd836b2b14ec7eb4604cdf
+artifactVersion: roomtalk-coco-2026-06-28-a4e70e6
+cocoSourceRepo: https://github.com/Venti0325/Coco.git
+cocoSourceRef: a4e70e674e46d59a63874371276f5fec0fcd3f41
 cocoPackageVersion: 0.1.3a0
 runnerPackageVersion: 0.1.0
 pythonVersion: 3.12
@@ -33,13 +34,15 @@ requirementsLock: ops/coco-sandbox/requirements.lock
 
 ## Build Context
 
-Prepare a clean Docker/E2B build context from the pinned local Coco checkout:
+Prepare a clean Docker/E2B build context from the pinned remote Coco commit:
 
 ```bash
 node scripts/coco/prepare-sandbox-context.mjs --output /tmp/roomtalk-coco-sandbox-context
 ```
 
-The script verifies that the Coco checkout is exactly at the pinned Coco commit before exporting it. By default it uses `/Users/sky/projects/coco`, but another checkout can be supplied with `--coco-repo <path>` or `COCO_LOCAL_PATH=<path>`.
+By default, the script fetches `cocoSourceRef` from `cocoSourceRepo`, verifies that the fetched commit exactly matches the pinned commit SHA, and exports that source tree into the build context. This keeps artifact builds independent of a developer workstation checkout.
+
+For development-only testing, a local checkout can still be supplied with `--coco-repo <path>` or `COCO_LOCAL_PATH=<path>`. In that override mode, the script verifies that the local checkout's `HEAD` exactly matches the pinned Coco commit before exporting it.
 
 The output directory is intentionally restricted to `/tmp` or `/private/tmp` unless `ROOMTALK_ALLOW_ARTIFACT_OUTPUT_OUTSIDE_TMP=true` is set. This prevents accidental recursive deletion of a project directory.
 
@@ -57,7 +60,7 @@ roomtalk_coco_runner/
 Build the container image from that context:
 
 ```bash
-docker build -t roomtalk-coco:roomtalk-coco-2026-06-27-7ac42db /tmp/roomtalk-coco-sandbox-context
+docker build -t roomtalk-coco:roomtalk-coco-2026-06-28-a4e70e6 /tmp/roomtalk-coco-sandbox-context
 ```
 
 Publish that image as the E2B template named by `COCO_E2B_TEMPLATE_ID`.
@@ -73,11 +76,11 @@ COCO_ENABLED=true
 COCO_SANDBOX_PROVIDER=e2b
 COCO_RUNNER_CLIENT=jsonl
 COCO_MODE=plan
-COCO_E2B_TEMPLATE_ID=roomtalk-coco-2026-06-27-7ac42db
+COCO_E2B_TEMPLATE_ID=roomtalk-coco-2026-06-28-a4e70e6
 E2B_API_KEY=...
 COCO_ARTIFACT_MODE=production
-COCO_ARTIFACT_VERSION=roomtalk-coco-2026-06-27-7ac42db
-COCO_SOURCE_REF=7ac42db5b270168366cd836b2b14ec7eb4604cdf
+COCO_ARTIFACT_VERSION=roomtalk-coco-2026-06-28-a4e70e6
+COCO_SOURCE_REF=a4e70e674e46d59a63874371276f5fec0fcd3f41
 # Optional, only for custom image layouts:
 # COCO_RUNNER_PYTHONPATH=/opt/coco/src:/opt/roomtalk_coco_runner
 ```
@@ -104,7 +107,7 @@ This is intentionally not accepted as production config.
 ## Acceptance
 
 - Artifact build instructions are documented here.
-- Artifact version and Coco source commit are pinned in `ops/coco-sandbox/artifact.lock.json`.
+- Artifact version, Coco source repository, and Coco source commit are pinned in `ops/coco-sandbox/artifact.lock.json`.
 - Python dependencies are pinned and hash-verified in `ops/coco-sandbox/requirements.lock`.
 - `server/roomtalk_coco_runner` has package metadata and is loaded from a fixed source tree in the artifact.
 - Production E2B JSONL startup requires pinned artifact metadata.

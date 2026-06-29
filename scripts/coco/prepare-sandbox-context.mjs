@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -12,15 +13,24 @@ const outputPath = outputFlagIndex === -1 ? '' : process.argv[outputFlagIndex + 
 const cocoRepoFlagIndex = process.argv.indexOf('--coco-repo');
 const cocoRepoPath = cocoRepoFlagIndex === -1 ? '' : process.argv[cocoRepoFlagIndex + 1];
 
-if (!outputPath) {
+if (!outputPath || outputPath.startsWith('--')) {
+  console.error('Usage: node scripts/coco/prepare-sandbox-context.mjs --output <context-dir> [--coco-repo <path>]');
+  process.exit(2);
+}
+if (cocoRepoFlagIndex !== -1 && (!cocoRepoPath || cocoRepoPath.startsWith('--'))) {
   console.error('Usage: node scripts/coco/prepare-sandbox-context.mjs --output <context-dir> [--coco-repo <path>]');
   process.exit(2);
 }
 
 const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
 const outputDir = resolve(outputPath);
-const cocoRepo = resolve(cocoRepoPath || process.env.COCO_LOCAL_PATH || lock.coco.developmentLocalPath);
+const localCocoRepo = cocoRepoPath || process.env.COCO_LOCAL_PATH || '';
 const cocoRef = lock.coco.sourceRef;
+const cocoSourceRepo = lock.coco.sourceRepo;
+
+if (!/^[0-9a-f]{40}$/i.test(cocoRef)) {
+  throw new Error(`Coco sourceRef must be a pinned 40-character commit SHA, got: ${cocoRef}`);
+}
 
 const isInside = (child, parent) => {
   const normalizedChild = resolve(child);
@@ -40,33 +50,65 @@ if (!allowOutsideTmp && !safeTmpRoots.some(root => isInside(outputDir, root))) {
   throw new Error('Refusing to remove output outside /tmp. Set ROOMTALK_ALLOW_ARTIFACT_OUTPUT_OUTSIDE_TMP=true to override.');
 }
 
-const currentCocoHead = execFileSync('git', ['-C', cocoRepo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-if (currentCocoHead !== cocoRef) {
-  throw new Error(`Coco local checkout is ${currentCocoHead}, expected pinned ref ${cocoRef}`);
+const createCocoArchive = archivePath => {
+  if (localCocoRepo) {
+    const cocoRepo = resolve(localCocoRepo);
+    const currentCocoHead = execFileSync('git', ['-C', cocoRepo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    if (currentCocoHead !== cocoRef) {
+      throw new Error(`Coco local checkout is ${currentCocoHead}, expected pinned ref ${cocoRef}`);
+    }
+    execFileSync('git', ['-C', cocoRepo, 'archive', '--format=tar', '--output', archivePath, cocoRef]);
+    return { sourceRepo: cocoRepo, sourceMode: 'local' };
+  }
+
+  if (!cocoSourceRepo) {
+    throw new Error('Coco sourceRepo is required when no local Coco checkout is supplied.');
+  }
+
+  const sourceCheckout = mkdtempSync(resolve(tmpdir(), 'roomtalk-coco-source-'));
+  try {
+    execFileSync('git', ['init', '--quiet', sourceCheckout]);
+    execFileSync('git', ['-C', sourceCheckout, 'fetch', '--quiet', '--depth=1', cocoSourceRepo, cocoRef]);
+    const fetchedRef = execFileSync('git', ['-C', sourceCheckout, 'rev-parse', 'FETCH_HEAD'], { encoding: 'utf8' }).trim();
+    if (fetchedRef !== cocoRef) {
+      throw new Error(`Fetched Coco ref ${fetchedRef}, expected pinned ref ${cocoRef}`);
+    }
+    execFileSync('git', ['-C', sourceCheckout, 'archive', '--format=tar', '--output', archivePath, 'FETCH_HEAD']);
+    return { sourceRepo: cocoSourceRepo, sourceMode: 'remote' };
+  } finally {
+    rmSync(sourceCheckout, { recursive: true, force: true });
+  }
+};
+
+const sourceArchiveDir = mkdtempSync(resolve(tmpdir(), 'roomtalk-coco-archive-'));
+const archivePath = resolve(sourceArchiveDir, 'coco-source.tar');
+try {
+  const cocoSource = createCocoArchive(archivePath);
+
+  rmSync(outputDir, { recursive: true, force: true });
+  mkdirSync(outputDir, { recursive: true });
+  mkdirSync(resolve(outputDir, 'coco'), { recursive: true });
+
+  execFileSync('tar', ['-xf', archivePath, '-C', resolve(outputDir, 'coco')]);
+
+  cpSync(resolve(repoRoot, lock.runner.sourcePath), resolve(outputDir, 'roomtalk_coco_runner'), {
+    recursive: true,
+    filter: source => !source.includes('__pycache__') && !source.endsWith('.pyc'),
+  });
+  cpSync(resolve(repoRoot, lock.image.dockerfile), resolve(outputDir, 'Dockerfile'));
+  cpSync(resolve(repoRoot, lock.image.requirementsLock), resolve(outputDir, 'requirements.lock'));
+  cpSync(lockPath, resolve(outputDir, 'artifact.lock.json'));
+
+  writeFileSync(resolve(outputDir, 'BUILD-METADATA.json'), JSON.stringify({
+    artifactName: lock.artifactName,
+    artifactVersion: lock.artifactVersion,
+    cocoSourceRef: cocoRef,
+    cocoSourceRepo: cocoSource.sourceRepo,
+    cocoSourceMode: cocoSource.sourceMode,
+    preparedAt: new Date().toISOString(),
+  }, null, 2) + '\n');
+} finally {
+  rmSync(sourceArchiveDir, { recursive: true, force: true });
 }
-
-rmSync(outputDir, { recursive: true, force: true });
-mkdirSync(outputDir, { recursive: true });
-mkdirSync(resolve(outputDir, 'coco'), { recursive: true });
-
-const archivePath = resolve(outputDir, 'coco-source.tar');
-execFileSync('git', ['-C', cocoRepo, 'archive', '--format=tar', '--output', archivePath, cocoRef]);
-execFileSync('tar', ['-xf', archivePath, '-C', resolve(outputDir, 'coco')]);
-rmSync(archivePath, { force: true });
-
-cpSync(resolve(repoRoot, lock.runner.sourcePath), resolve(outputDir, 'roomtalk_coco_runner'), {
-  recursive: true,
-  filter: source => !source.includes('__pycache__') && !source.endsWith('.pyc'),
-});
-cpSync(resolve(repoRoot, lock.image.dockerfile), resolve(outputDir, 'Dockerfile'));
-cpSync(resolve(repoRoot, lock.image.requirementsLock), resolve(outputDir, 'requirements.lock'));
-cpSync(lockPath, resolve(outputDir, 'artifact.lock.json'));
-
-writeFileSync(resolve(outputDir, 'BUILD-METADATA.json'), JSON.stringify({
-  artifactName: lock.artifactName,
-  artifactVersion: lock.artifactVersion,
-  cocoSourceRef: cocoRef,
-  preparedAt: new Date().toISOString(),
-}, null, 2) + '\n');
 
 console.log(`Prepared Coco sandbox build context at ${outputDir}`);
