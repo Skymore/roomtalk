@@ -4,6 +4,7 @@ import type { RoomStore } from '../repositories/store';
 import type { AIModelOption } from '../types';
 import type { AIClientWrapper } from '../services/aiClients';
 import type { CocoAccessControl } from '../services/cocoAccessControl';
+import type { CocoSandboxService } from '../services/cocoSandboxService';
 import type { CocoSessionService } from '../services/cocoSessionService';
 
 export interface SocketHandlerDeps {
@@ -17,6 +18,7 @@ export interface SocketHandlerDeps {
   assemblyAIApiKey?: string;
   cocoSessionService?: CocoSessionService;
   cocoAccess?: CocoAccessControl;
+  cocoSandboxService?: CocoSandboxService;
 }
 
 export interface SocketConnectionContext extends SocketHandlerDeps {

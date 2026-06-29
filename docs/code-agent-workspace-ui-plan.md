@@ -153,7 +153,7 @@ Phase 3 completion record (2026-05-29):
 
 Phase 4 completion record (2026-05-29):
 
-- Added a RoomTalk-mediated read-only workspace snapshot API at `/api/clients/:clientId/rooms/:roomId/workspace`.
+- Added a RoomTalk-mediated read-only workspace snapshot flow. It now uses the registered socket session via `get_code_workspace_snapshot`; the earlier REST snapshot endpoint was removed to avoid split auth paths.
 - Derived snapshot state from persisted Coco messages only; no direct browser access to Coco, E2B, sandbox files, or provider keys.
 - Added owner, rollout, and room-type checks plus error-path coverage for workspace snapshot failures.
 - Removed internal session identifiers from responses; snapshots expose only `hasSession`.

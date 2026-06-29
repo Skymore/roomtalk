@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback, useImperativeHandle } from 'react';
 import { Icon } from '@iconify/react';
-import { clientId, getMediaDownloadUrl, getRoomMessagesForExport, requestAIResponse, requestEditMessageAndAIResponse, socket } from '../utils/socket';
+import { getMediaDownloadUrl, getRoomMessagesForExport, requestAIResponse, requestEditMessageAndAIResponse, socket } from '../utils/socket';
 import { MessageItem, preloadMarkdownContent } from './MessageItem';
 import { Message, Room, RoomPermissions } from '../utils/types';
 import { readMemoryRoomMessageWindow } from '../utils/messageHistoryCache';
@@ -23,7 +23,7 @@ import {
 } from '../utils/messageState';
 import { useRoomMessageEvents } from '../hooks/useRoomMessageEvents';
 import { CodeAgentMode } from '../utils/codeAgent';
-import { CodeAgentWorkspaceSnapshot, fetchCodeAgentWorkspaceSnapshot } from '../utils/cocoWorkspace';
+import { CodeAgentWorkspaceSnapshot, loadCodeAgentWorkspaceSnapshot } from '../utils/cocoWorkspace';
 
 // Import your new modals
 import { DeleteConfirmationModal } from './DeleteConfirmationModal';
@@ -239,7 +239,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     setWorkspaceRefreshError(null);
 
     try {
-      const snapshot = await fetchCodeAgentWorkspaceSnapshot(clientId, currentRoomId, { signal: controller.signal });
+      const snapshot = await loadCodeAgentWorkspaceSnapshot(currentRoomId, { signal: controller.signal });
       if (!controller.signal.aborted) {
         setWorkspaceSnapshot(snapshot);
       }

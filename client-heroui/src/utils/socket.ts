@@ -95,6 +95,10 @@ type SendMessageAndAskAIAckResponse = SocketAckResponse & {
   aiError?: string;
 };
 
+type CodeAgentWorkspaceSnapshotAckResponse = SocketAckResponse & {
+  snapshot?: unknown;
+};
+
 type CodeAgentMode = 'plan' | 'acceptEdits';
 
 type RoomAckResponse = SocketAckResponse & {
@@ -946,6 +950,21 @@ export const requestAIResponse = (data: {
   return emitWithAck('ask_ai', data, 'Timed out while starting AI response', 'Failed to start AI response')
     .then(() => undefined);
 };
+
+export const requestCodeAgentWorkspaceSnapshot = (roomId: string): Promise<unknown> => (
+  emitWithAck<CodeAgentWorkspaceSnapshotAckResponse>(
+    'get_code_workspace_snapshot',
+    { roomId },
+    'Timed out while refreshing workspace',
+    'Failed to refresh workspace',
+  ).then((response) => {
+    if (!response.snapshot) {
+      throw new Error('Server did not return workspace snapshot');
+    }
+
+    return response.snapshot;
+  })
+);
 
 export const sendMessageAndAskAI = (params: {
   roomId: string;

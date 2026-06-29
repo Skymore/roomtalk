@@ -1,4 +1,5 @@
 import { Message } from './types';
+import { requestCodeAgentWorkspaceSnapshot } from './socket';
 
 export interface CocoWorkspaceSummary {
   toolCalls: number;
@@ -158,52 +159,28 @@ export const mergeCocoWorkspaceSummaries = (
   };
 };
 
-const getApiBaseUrl = () => {
-  const socketUrl = import.meta.env.VITE_SOCKET_URL;
-
-  if (!socketUrl || socketUrl === '/') {
-    return '';
-  }
-
-  return socketUrl.replace(/\/$/, '');
-};
-
-const getWorkspaceAuthHeaders = (clientId: string): Record<string, string> => {
-  const headers: Record<string, string> = { 'X-Client-Id': clientId };
-  const token = localStorage.getItem('clientAuthToken')?.trim();
-  if (token) {
-    headers['X-Client-Auth-Token'] = token;
-  }
-  return headers;
-};
-
-export const fetchCodeAgentWorkspaceSnapshot = async (
-  clientId: string,
+export const loadCodeAgentWorkspaceSnapshot = async (
   roomId: string,
   options: { signal?: AbortSignal } = {}
 ): Promise<CodeAgentWorkspaceSnapshot> => {
-  const response = await fetch(
-    `${getApiBaseUrl()}/api/clients/${encodeURIComponent(clientId)}/rooms/${encodeURIComponent(roomId)}/workspace`,
-    {
-      signal: options.signal,
-      headers: getWorkspaceAuthHeaders(clientId),
-    }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to load workspace snapshot: ${response.status}`);
+  if (options.signal?.aborted) {
+    throw new Error('Workspace snapshot request aborted');
   }
 
-  const data = await response.json();
+  const data = await requestCodeAgentWorkspaceSnapshot(roomId);
+  if (options.signal?.aborted) {
+    throw new Error('Workspace snapshot request aborted');
+  }
+  const snapshot = data as Partial<CodeAgentWorkspaceSnapshot> | null | undefined;
   if (
-    data?.backend !== 'coco' ||
-    data?.source !== 'sandbox' ||
-    !data?.summary ||
-    typeof data?.status?.hasSession !== 'boolean' ||
-    !Array.isArray(data.summary.touchedFiles)
+    snapshot?.backend !== 'coco' ||
+    snapshot?.source !== 'sandbox' ||
+    !snapshot?.summary ||
+    typeof snapshot?.status?.hasSession !== 'boolean' ||
+    !Array.isArray(snapshot.summary.touchedFiles)
   ) {
     throw new Error('Workspace snapshot response is invalid');
   }
 
-  return data as CodeAgentWorkspaceSnapshot;
+  return snapshot as CodeAgentWorkspaceSnapshot;
 };

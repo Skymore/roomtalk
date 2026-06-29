@@ -8,7 +8,7 @@ import { MessageList, MessageListHandle } from './MessageList';
 
 const requestAIResponseMock = vi.hoisted(() => vi.fn());
 const requestEditMessageAndAIResponseMock = vi.hoisted(() => vi.fn());
-const fetchCodeAgentWorkspaceSnapshotMock = vi.hoisted(() => vi.fn());
+const loadCodeAgentWorkspaceSnapshotMock = vi.hoisted(() => vi.fn());
 const socketMock = vi.hoisted(() => {
   const handlers = new Map<string, Set<(...args: any[]) => void>>();
 
@@ -44,7 +44,7 @@ vi.mock('../utils/cocoWorkspace', async () => {
   const actual = await vi.importActual<typeof import('../utils/cocoWorkspace')>('../utils/cocoWorkspace');
   return {
     ...actual,
-    fetchCodeAgentWorkspaceSnapshot: fetchCodeAgentWorkspaceSnapshotMock,
+    loadCodeAgentWorkspaceSnapshot: loadCodeAgentWorkspaceSnapshotMock,
   };
 });
 
@@ -102,7 +102,7 @@ describe('MessageList optimistic messages', () => {
     localStorage.clear();
     requestAIResponseMock.mockResolvedValue(undefined);
     requestEditMessageAndAIResponseMock.mockResolvedValue(undefined);
-    fetchCodeAgentWorkspaceSnapshotMock.mockResolvedValue({
+    loadCodeAgentWorkspaceSnapshotMock.mockResolvedValue({
       roomId: 'room-1',
       backend: 'coco',
       source: 'sandbox',

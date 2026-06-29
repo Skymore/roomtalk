@@ -3,10 +3,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Message } from './types';
 import {
-  fetchCodeAgentWorkspaceSnapshot,
+  loadCodeAgentWorkspaceSnapshot,
   mergeCocoWorkspaceSummaries,
   summarizeCocoMessages,
 } from './cocoWorkspace';
+
+const requestCodeAgentWorkspaceSnapshotMock = vi.hoisted(() => vi.fn());
+
+vi.mock('./socket', () => ({
+  requestCodeAgentWorkspaceSnapshot: requestCodeAgentWorkspaceSnapshotMock,
+}));
 
 const message = (overrides: Partial<Message>): Message => ({
   id: overrides.id || 'message-1',
@@ -21,6 +27,7 @@ const message = (overrides: Partial<Message>): Message => ({
 describe('summarizeCocoMessages', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    requestCodeAgentWorkspaceSnapshotMock.mockReset();
     localStorage.clear();
   });
 
@@ -210,8 +217,7 @@ describe('summarizeCocoMessages', () => {
     });
   });
 
-  it('fetches and validates a RoomTalk-mediated workspace snapshot', async () => {
-    localStorage.setItem('clientAuthToken', 'token-1');
+  it('loads and validates a RoomTalk-mediated workspace snapshot over socket', async () => {
     const snapshot = {
       roomId: 'room-1',
       backend: 'coco',
@@ -223,27 +229,15 @@ describe('summarizeCocoMessages', () => {
       changes: { available: false, changedFiles: [], diffSummary: null },
       commands: [],
     };
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: true,
-      json: async () => snapshot,
-    } as Response);
+    requestCodeAgentWorkspaceSnapshotMock.mockResolvedValue(snapshot);
 
-    await expect(fetchCodeAgentWorkspaceSnapshot('client/1', 'room 1')).resolves.toEqual(snapshot);
-    expect(fetchMock).toHaveBeenCalledWith('/api/clients/client%2F1/rooms/room%201/workspace', {
-      signal: undefined,
-      headers: {
-        'X-Client-Id': 'client/1',
-        'X-Client-Auth-Token': 'token-1',
-      },
-    });
+    await expect(loadCodeAgentWorkspaceSnapshot('room 1')).resolves.toEqual(snapshot);
+    expect(requestCodeAgentWorkspaceSnapshotMock).toHaveBeenCalledWith('room 1');
   });
 
   it('rejects invalid workspace snapshot responses', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: true,
-      json: async () => ({ backend: 'coco', source: 'messages', summary: { touchedFiles: null } }),
-    } as Response);
+    requestCodeAgentWorkspaceSnapshotMock.mockResolvedValue({ backend: 'coco', source: 'messages', summary: { touchedFiles: null } });
 
-    await expect(fetchCodeAgentWorkspaceSnapshot('client-1', 'room-1')).rejects.toThrow('Workspace snapshot response is invalid');
+    await expect(loadCodeAgentWorkspaceSnapshot('room-1')).rejects.toThrow('Workspace snapshot response is invalid');
   });
 });
