@@ -33,10 +33,17 @@ const anthropicModel: AIModelOption = {
   pricing: { currency: 'USD', inputPerMillion: 3, cachedInputPerMillion: 0.3, outputPerMillion: 15 },
 };
 
-const createTestServer = async (gateway: CocoModelGateway) => {
+const createTestServer = async (gateway: CocoModelGateway, options: { bodyLimit?: string | number } = {}) => {
   const app = express();
-  app.use(express.json());
-  registerCocoModelGatewayRoutes(app, gateway);
+  const defaultJsonParser = express.json();
+  app.use((req, res, next) => {
+    if (req.path.startsWith('/api/coco/model-gateway')) {
+      next();
+      return;
+    }
+    defaultJsonParser(req, res, next);
+  });
+  registerCocoModelGatewayRoutes(app, gateway, undefined, options.bodyLimit);
   const server = await new Promise<HttpServer>(resolve => {
     const listener = app.listen(0, '127.0.0.1', () => resolve(listener));
   });
@@ -96,6 +103,48 @@ describe('CocoModelGateway', () => {
     assert.equal(calls[0].url, 'https://api.deepseek.com/chat/completions');
     assert.equal((calls[0].init.headers as Record<string, string>).authorization, 'Bearer deepseek-provider-key');
     assert.notEqual((calls[0].init.headers as Record<string, string>).authorization, `Bearer ${token}`);
+  });
+
+  it('accepts Coco gateway bodies larger than the default Express JSON limit', async () => {
+    const calls: FetchCall[] = [];
+    const gateway = new CocoModelGateway({
+      publicBaseUrl: 'https://room.example/api/coco/model-gateway',
+      tokenSecret: 'test-secret',
+      providerApiKeys: { deepseek: 'deepseek-provider-key' },
+      nowMs: () => 1_800_000_000_000,
+      fetchFn: async (url, init) => {
+        calls.push({ url: String(url), init: init || {} });
+        return new Response(JSON.stringify({ id: 'large-completion' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+    const token = gateway.issueTurnToken({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-large',
+      mode: 'plan',
+      model: deepseekModel,
+    });
+    server = await createTestServer(gateway, { bodyLimit: '1mb' });
+
+    const response = await fetch(`${server.baseUrl}/api/coco/model-gateway/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: [{ role: 'user', content: 'x'.repeat(150_000) }],
+        max_tokens: 64,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { id: 'large-completion' });
+    assert.equal(calls.length, 1);
   });
 
   it('rejects requests for a model outside the per-turn token scope', async () => {

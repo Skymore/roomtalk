@@ -38,7 +38,13 @@ import {
   DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS,
   resolveCocoRuntimeConfig,
 } from './services/cocoRuntimeConfig';
-import { CocoModelGateway, RedisCocoModelGatewayTokenStateStore, registerCocoModelGatewayRoutes } from './services/cocoModelGateway';
+import {
+  CocoModelGateway,
+  DEFAULT_COCO_MODEL_GATEWAY_BASE_PATH,
+  DEFAULT_COCO_MODEL_GATEWAY_BODY_LIMIT,
+  RedisCocoModelGatewayTokenStateStore,
+  registerCocoModelGatewayRoutes,
+} from './services/cocoModelGateway';
 import { FakeCocoRunnerClient } from './services/fakeCocoRunner';
 import { FakeCocoSandboxService } from './services/fakeCocoSandboxService';
 import { JsonlCocoRunnerClient } from './services/jsonlCocoRunner';
@@ -89,7 +95,14 @@ app.use(cors({
   credentials: true,
 }));
 console.log(`process.env.CLIENT_URL: ${process.env.CLIENT_URL}`);
-app.use(express.json());
+const defaultJsonParser = express.json();
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (req.path === DEFAULT_COCO_MODEL_GATEWAY_BASE_PATH || req.path.startsWith(`${DEFAULT_COCO_MODEL_GATEWAY_BASE_PATH}/`)) {
+    next();
+    return;
+  }
+  defaultJsonParser(req, res, next);
+});
 
 // 添加HTTP请求日志中间件
 app.use(httpLogger);
@@ -350,7 +363,12 @@ if (process.env.OUTBOX_WORKER_ENABLED === 'true') {
 loadStickerCatalog();
 
 if (cocoModelGateway) {
-  registerCocoModelGatewayRoutes(app, cocoModelGateway);
+  registerCocoModelGatewayRoutes(
+    app,
+    cocoModelGateway,
+    DEFAULT_COCO_MODEL_GATEWAY_BASE_PATH,
+    process.env.COCO_MODEL_GATEWAY_BODY_LIMIT || DEFAULT_COCO_MODEL_GATEWAY_BODY_LIMIT,
+  );
 }
 
 registerApiRoutes(app, {
@@ -376,13 +394,25 @@ app.get('*', (req: Request, res: Response) => {
 });
 
 // 全局错误处理中间件
-app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+type HttpError = Error & {
+  status?: number;
+  statusCode?: number;
+  type?: string;
+};
+
+app.use((err: HttpError, req: Request, res: Response, next: NextFunction) => {
   const errorLogger = new Logger('Error');
   errorLogger.error('Unhandled application error', { error: err.message, stack: err.stack, path: req.path, method: req.method, ip: req.ip });
-  
-  res.status(500).json({ 
-    error: 'Internal server error',
-    message: process.env.NODE_ENV === 'production' ? 'An unexpected error occurred' : err.message
+
+  const statusCode = Number.isInteger(err.status) ? err.status as number : err.statusCode || 500;
+  const safeStatusCode = statusCode >= 400 && statusCode < 600 ? statusCode : 500;
+  const isPayloadTooLarge = safeStatusCode === 413 || err.type === 'entity.too.large';
+
+  res.status(isPayloadTooLarge ? 413 : safeStatusCode).json({
+    error: isPayloadTooLarge ? 'Payload too large' : 'Internal server error',
+    message: process.env.NODE_ENV === 'production'
+      ? (isPayloadTooLarge ? 'Request payload is too large' : 'An unexpected error occurred')
+      : err.message
   });
 });
 

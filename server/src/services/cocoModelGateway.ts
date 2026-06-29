@@ -1,6 +1,6 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import { Readable } from 'stream';
-import { Express, Request, Response } from 'express';
+import express, { Express, Request, Response } from 'express';
 import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
 import { AIModelOption, AIModelPricing, AIModelProvider } from '../types';
@@ -64,6 +64,8 @@ export interface CocoModelGatewayOptions {
 const DEFAULT_TOKEN_TTL_SECONDS = 15 * 60;
 const DEFAULT_MAX_REQUESTS_PER_TURN = 20;
 const DEFAULT_TURN_BUDGET_USD = 2;
+export const DEFAULT_COCO_MODEL_GATEWAY_BASE_PATH = '/api/coco/model-gateway';
+export const DEFAULT_COCO_MODEL_GATEWAY_BODY_LIMIT = '2mb';
 
 const DEFAULT_PROVIDER_BASE_URLS: Record<AIModelProvider, string> = {
   anthropic: 'https://api.anthropic.com/v1',
@@ -493,8 +495,10 @@ export class CocoModelGateway {
 export const registerCocoModelGatewayRoutes = (
   app: Express,
   gateway: CocoModelGateway,
-  basePath = '/api/coco/model-gateway'
+  basePath = DEFAULT_COCO_MODEL_GATEWAY_BASE_PATH,
+  bodyLimit: string | number = DEFAULT_COCO_MODEL_GATEWAY_BODY_LIMIT
 ) => {
+  app.use(`${basePath}/v1`, express.json({ limit: bodyLimit }));
   app.all(`${basePath}/v1/*`, (req, res) => {
     void gateway.handle(req, res);
   });
