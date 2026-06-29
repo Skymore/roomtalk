@@ -104,6 +104,10 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const [workspaceRefreshError, setWorkspaceRefreshError] = useState<string | null>(null);
   const codeAgentRoom = currentRoom || (presentation === 'code-agent' ? room : undefined);
   const currentRoomId = codeAgentRoom?.id;
+  const getAIRequestSettingsForRoom = useCallback(() => ({
+    ...getRoomAIRequestSettings(roomId),
+    ...(presentation === 'code-agent' ? { codeAgentMode } : {}),
+  }), [roomId, presentation, codeAgentMode]);
 
   const toolResultPairing = React.useMemo(() => {
     const resultByCallId = new Map<string, Message>();
@@ -384,13 +388,13 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       roomId,
       messageId,
       newContent,
-      ...getRoomAIRequestSettings(roomId),
+      ...getAIRequestSettingsForRoom(),
     }).catch((error) => {
       console.error('Failed to save edit before asking AI:', error);
       updateMessages(originalMessages);
       alert(t('errorEditingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
     });
-  }, [roomId, messages, updateMessages, t]);
+  }, [roomId, messages, updateMessages, getAIRequestSettingsForRoom, t]);
 
   // Define handleConfirmDelete within useCallback, accessing messageToDelete state
   const handleConfirmDelete = useCallback(() => {
@@ -437,7 +441,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       roomId,
       // prompt: '', // Prompt is now determined by the server based on truncated history
       retryForMessageId: messageId, // 新增：告知服务器这是针对哪条消息的重试
-      ...getRoomAIRequestSettings(roomId),
+      ...getAIRequestSettingsForRoom(),
     }).catch((error) => {
       console.error('Failed to retry AI response:', error);
       socket.emit('get_room_messages', { roomId });
@@ -452,7 +456,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       scrollToBottom('smooth');
       retryScrollTimerRef.current = null;
     }, 100);
-  }, [roomId, updateMessages, scrollToBottom]);
+  }, [roomId, updateMessages, scrollToBottom, getAIRequestSettingsForRoom]);
 
   useRoomMessageEvents({
     roomId,
