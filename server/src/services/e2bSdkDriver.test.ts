@@ -127,6 +127,26 @@ describe('E2B SDK driver', () => {
       },
     });
 
+    await driver.create({
+      templateId: 'roomtalk-coco',
+      timeoutMs: 300_000,
+      metadata: { roomId: 'room-2', creatorId: 'client-1' },
+      lifecycle: { onTimeout: 'pause', autoResume: true, keepMemory: true },
+    });
+    assert.deepEqual(fake.calls.create[1], {
+      template: 'roomtalk-coco',
+      options: {
+        apiKey: 'e2b-test-key',
+        requestTimeoutMs: 12_000,
+        timeoutMs: 300_000,
+        metadata: { roomId: 'room-2', creatorId: 'client-1' },
+        lifecycle: {
+          onTimeout: { action: 'pause', keepMemory: true },
+          autoResume: true,
+        },
+      },
+    });
+
     const connected = await driver.connect(handle.id);
     assert.equal(connected.id, 'sdk-created-1');
     assert.deepEqual(fake.calls.connect[0], {

@@ -12,6 +12,7 @@ export interface CocoSandboxLifecycleOptions {
   creatingStaleMs: number;
   maxActiveSandboxes: number;
   maxActiveSandboxesPerUser: number;
+  reconnectTimedOutSandboxes: boolean;
 }
 
 export interface CocoSandboxLifecycleStore {
@@ -32,6 +33,7 @@ const defaultOptions: CocoSandboxLifecycleOptions = {
   creatingStaleMs: 2 * 60 * 1000,
   maxActiveSandboxes: Number.POSITIVE_INFINITY,
   maxActiveSandboxesPerUser: Number.POSITIVE_INFINITY,
+  reconnectTimedOutSandboxes: false,
 };
 
 export class CocoSandboxLifecycleService {
@@ -186,6 +188,9 @@ export class CocoSandboxLifecycleService {
   private isReadyAndUsable(room: Room): boolean {
     if (room.sandboxStatus !== 'ready' || !room.sandboxId || !room.sandboxUpdatedAt) {
       return false;
+    }
+    if (this.options.reconnectTimedOutSandboxes) {
+      return true;
     }
 
     const updatedAt = Date.parse(room.sandboxUpdatedAt);

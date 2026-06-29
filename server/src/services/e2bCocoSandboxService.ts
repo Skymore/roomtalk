@@ -32,6 +32,12 @@ export interface E2BListedSandbox {
   metadata: Record<string, string>;
 }
 
+export interface E2BSandboxLifecyclePolicy {
+  onTimeout: 'kill' | 'pause';
+  autoResume?: boolean;
+  keepMemory?: boolean;
+}
+
 export interface E2BCommandResult {
   pid?: number;
   stdin?: Writable;
@@ -42,8 +48,13 @@ export interface E2BCommandResult {
 }
 
 export interface E2BSandboxDriver {
-  create(input: { templateId: string; timeoutMs: number; metadata: Record<string, string> }): Promise<E2BSandboxDriverHandle>;
-  connect(sandboxId: string): Promise<E2BSandboxDriverHandle>;
+  create(input: {
+    templateId: string;
+    timeoutMs: number;
+    metadata: Record<string, string>;
+    lifecycle?: E2BSandboxLifecyclePolicy;
+  }): Promise<E2BSandboxDriverHandle>;
+  connect(sandboxId: string, input?: { timeoutMs?: number }): Promise<E2BSandboxDriverHandle>;
   list?(input?: { metadata?: Record<string, string> }): Promise<E2BListedSandbox[]>;
 }
 
@@ -52,6 +63,7 @@ export interface E2BCocoSandboxServiceOptions {
   workspace?: string;
   artifactVersion?: string;
   cocoSourceRef?: string;
+  lifecycle?: E2BSandboxLifecyclePolicy;
   logger?: {
     warn(message: string, meta?: unknown): void;
   };
@@ -78,6 +90,7 @@ export class E2BCocoSandboxService implements CocoSandboxService {
         ...(this.options.artifactVersion ? { artifactVersion: this.options.artifactVersion } : {}),
         ...(this.options.cocoSourceRef ? { cocoSourceRef: this.options.cocoSourceRef } : {}),
       },
+      ...(this.options.lifecycle ? { lifecycle: this.options.lifecycle } : {}),
     });
     const createdAt = this.now().toISOString();
     return {

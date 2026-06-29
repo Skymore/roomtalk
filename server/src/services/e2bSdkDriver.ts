@@ -3,6 +3,7 @@ import {
   E2BCommandResult,
   E2BFileEntry,
   E2BListedSandbox,
+  E2BSandboxLifecyclePolicy,
   E2BSandboxDriver,
   E2BSandboxDriverHandle,
 } from './e2bCocoSandboxService';
@@ -86,19 +87,28 @@ class E2BSdkDriver implements E2BSandboxDriver {
     this.sandboxClass = options.sandboxClass;
   }
 
-  async create(input: { templateId: string; timeoutMs: number; metadata: Record<string, string> }): Promise<E2BSandboxDriverHandle> {
+  async create(input: {
+    templateId: string;
+    timeoutMs: number;
+    metadata: Record<string, string>;
+    lifecycle?: E2BSandboxLifecyclePolicy;
+  }): Promise<E2BSandboxDriverHandle> {
     const Sandbox = await this.loadSandboxClass();
     const sandbox = await Sandbox.create(input.templateId, {
       ...this.connectionOptions(),
       timeoutMs: input.timeoutMs,
       metadata: input.metadata,
+      ...(input.lifecycle ? { lifecycle: sdkLifecycle(input.lifecycle) } : {}),
     });
     return this.wrapSandbox(sandbox);
   }
 
-  async connect(sandboxId: string): Promise<E2BSandboxDriverHandle> {
+  async connect(sandboxId: string, input: { timeoutMs?: number } = {}): Promise<E2BSandboxDriverHandle> {
     const Sandbox = await this.loadSandboxClass();
-    const sandbox = await Sandbox.connect(sandboxId, this.connectionOptions());
+    const sandbox = await Sandbox.connect(sandboxId, {
+      ...this.connectionOptions(),
+      ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+    });
     return this.wrapSandbox(sandbox);
   }
 
@@ -165,6 +175,17 @@ class E2BSdkDriver implements E2BSandboxDriver {
     };
   }
 }
+
+const sdkLifecycle = (policy: E2BSandboxLifecyclePolicy): Record<string, unknown> => {
+  if (policy.onTimeout === 'kill') {
+    return { onTimeout: 'kill' };
+  }
+
+  return {
+    onTimeout: { action: 'pause', keepMemory: policy.keepMemory ?? true },
+    ...(policy.autoResume !== undefined ? { autoResume: policy.autoResume } : {}),
+  };
+};
 
 const startE2BCommand = async (
   sandbox: E2BSdkSandbox,

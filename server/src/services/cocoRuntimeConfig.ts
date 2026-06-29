@@ -5,6 +5,7 @@ import { CocoRunnerMode } from './cocoRunnerProtocol';
 
 export type CocoRunnerClientKind = 'fake' | 'jsonl';
 export type CocoArtifactMode = 'production' | 'development';
+export type CocoE2BOnTimeout = 'kill' | 'pause';
 
 export interface CocoRuntimeConfig {
   enabled: boolean;
@@ -31,14 +32,35 @@ export interface CocoRuntimeConfig {
   runnerProviderEnvByProvider: Partial<Record<AIModelProvider, Record<string, string>>>;
   e2bTemplateId?: string;
   e2bWorkspace?: string;
+  e2bLifecycle: {
+    onTimeout: CocoE2BOnTimeout;
+    autoResume: boolean;
+    keepMemory: boolean;
+  };
 }
 
 export const DEFAULT_COCO_RUNNER_COMMAND = 'python -m roomtalk_coco_runner';
 export const DEFAULT_COCO_RUNNER_PYTHONPATH = '/opt/coco/src:/opt/roomtalk_coco_runner';
 export const DEFAULT_COCO_WORKSPACE_ROOT = '/workspace';
+export const DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS = 5 * 60 * 1000;
+export const DEFAULT_COCO_E2B_KILL_TIMEOUT_MS = 60 * 60 * 1000;
 
 const parseCsvEnv = (value?: string) =>
   value?.split(',').map(item => item.trim()).filter(Boolean) || [];
+
+const parseBooleanEnv = (value: string | undefined, fallback: boolean) => {
+  if (value === undefined || value.trim() === '') {
+    return fallback;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (['true', '1', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+  if (['false', '0', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+  throw new Error(`Expected boolean env value, got: ${value}`);
+};
 
 const pickEnv = (env: NodeJS.ProcessEnv, names: string[]) => Object.fromEntries(
   names
@@ -79,6 +101,29 @@ const readArtifactMode = (env: NodeJS.ProcessEnv): CocoArtifactMode => {
     return value;
   }
   throw new Error(`Unsupported COCO_ARTIFACT_MODE: ${value}`);
+};
+
+const readE2BOnTimeout = (env: NodeJS.ProcessEnv): CocoE2BOnTimeout => {
+  const value = (env.COCO_E2B_ON_TIMEOUT || 'pause').trim();
+  if (value === 'pause' || value === 'kill') {
+    return value;
+  }
+  throw new Error(`Unsupported COCO_E2B_ON_TIMEOUT: ${value}`);
+};
+
+const readE2BLifecycle = (env: NodeJS.ProcessEnv): CocoRuntimeConfig['e2bLifecycle'] => {
+  const onTimeout = readE2BOnTimeout(env);
+  const keepMemory = parseBooleanEnv(env.COCO_E2B_KEEP_MEMORY, true);
+  const autoResume = parseBooleanEnv(env.COCO_E2B_AUTO_RESUME, onTimeout === 'pause');
+
+  if (autoResume && onTimeout !== 'pause') {
+    throw new Error('COCO_E2B_AUTO_RESUME=true requires COCO_E2B_ON_TIMEOUT=pause');
+  }
+  if (autoResume && !keepMemory) {
+    throw new Error('COCO_E2B_AUTO_RESUME=true requires COCO_E2B_KEEP_MEMORY=true');
+  }
+
+  return { onTimeout, autoResume, keepMemory };
 };
 
 const readMode = (env: NodeJS.ProcessEnv): CocoRunnerMode => {
@@ -350,6 +395,7 @@ export const resolveCocoRuntimeConfig = (env: NodeJS.ProcessEnv): CocoRuntimeCon
   const runnerClient = readRunnerClient(env);
   const sandboxProvider = readSandboxProvider(env);
   const artifactMode = readArtifactMode(env);
+  const e2bLifecycle = readE2BLifecycle(env);
   const modelGateway = readModelGatewayConfig(env);
   const config: CocoRuntimeConfig = {
     enabled: env.COCO_ENABLED === 'true',
@@ -373,6 +419,7 @@ export const resolveCocoRuntimeConfig = (env: NodeJS.ProcessEnv): CocoRuntimeCon
     runnerProviderEnvByProvider: shouldForwardProviderEnv(env, runnerClient, availableModes) ? providerEnv(env) : {},
     e2bTemplateId: env.COCO_E2B_TEMPLATE_ID,
     e2bWorkspace: env.COCO_E2B_WORKSPACE,
+    e2bLifecycle,
   };
 
   if (config.enabled) {

@@ -197,6 +197,32 @@ describe('CocoSandboxLifecycleService', () => {
     assert.notEqual((await store.getRoomById('room-1'))?.sandboxId, firstNewSandboxId);
   });
 
+  it('reconnects timed-out sandboxes when the provider can resume them', async () => {
+    const store = new MemoryRoomStore([room()]);
+    const sandboxService = new FakeCocoSandboxService(() => new Date('2026-05-03T00:00:00.000Z'));
+    const existing = await sandboxService.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 5 * 60 * 1000 });
+    await store.saveRoom(room({
+      sandboxStatus: 'ready',
+      sandboxId: existing.id,
+      sandboxUpdatedAt: '2026-05-03T00:00:00.000Z',
+    }));
+    const lifecycle = new CocoSandboxLifecycleService(store, sandboxService, logger as any, {
+      sandboxTtlMs: 5 * 60 * 1000,
+      turnTimeoutMs: 5 * 60 * 1000,
+      creatingStaleMs: 1_000,
+      maxActiveSandboxes: 10,
+      maxActiveSandboxesPerUser: 10,
+      reconnectTimedOutSandboxes: true,
+    }, () => new Date('2026-05-03T00:20:00.000Z'));
+
+    const result = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.created, false);
+    assert.equal(result.ok && result.handle.id, existing.id);
+    assert.equal(await sandboxService.countActiveSandboxes(), 1);
+  });
+
   it('destroys a newly-created sandbox when persisting ready state fails', async () => {
     const store = new MemoryRoomStore([room()]);
     const { lifecycle, sandboxService } = createLifecycle(store);

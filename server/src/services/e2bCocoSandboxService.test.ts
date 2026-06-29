@@ -81,6 +81,7 @@ describe('E2BCocoSandboxService', () => {
       templateId: 'roomtalk-coco',
       artifactVersion: 'roomtalk-coco-2026-06-28-a4e70e6',
       cocoSourceRef: 'a4e70e674e46d59a63874371276f5fec0fcd3f41',
+      lifecycle: { onTimeout: 'pause', autoResume: true, keepMemory: true },
     }, () => new Date('2026-05-03T00:00:00.000Z'));
 
     const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
@@ -98,6 +99,7 @@ describe('E2BCocoSandboxService', () => {
         artifactVersion: 'roomtalk-coco-2026-06-28-a4e70e6',
         cocoSourceRef: 'a4e70e674e46d59a63874371276f5fec0fcd3f41',
       },
+      lifecycle: { onTimeout: 'pause', autoResume: true, keepMemory: true },
     });
 
     const runner = await service.startRunner({

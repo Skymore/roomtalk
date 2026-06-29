@@ -115,6 +115,7 @@ export const runCocoE2BSmoke = async (plan: Extract<CocoE2BSmokePlan, { run: tru
     workspace: plan.config.e2bWorkspace,
     artifactVersion: plan.config.artifactVersion,
     cocoSourceRef: plan.config.cocoSourceRef,
+    lifecycle: plan.config.e2bLifecycle,
     logger,
   });
   const runnerClient = new JsonlCocoRunnerClient();

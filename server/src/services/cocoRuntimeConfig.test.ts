@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  DEFAULT_COCO_E2B_KILL_TIMEOUT_MS,
+  DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS,
   DEFAULT_COCO_RUNNER_COMMAND,
   DEFAULT_COCO_RUNNER_PYTHONPATH,
   DEFAULT_COCO_WORKSPACE_ROOT,
@@ -45,6 +47,9 @@ describe('resolveCocoRuntimeConfig', () => {
     assert.equal(config.runnerCommand, DEFAULT_COCO_RUNNER_COMMAND);
     assert.deepEqual(config.allowedPaths, ['.']);
     assert.deepEqual(config.runnerEnv, {});
+    assert.deepEqual(config.e2bLifecycle, { onTimeout: 'pause', autoResume: true, keepMemory: true });
+    assert.equal(DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS, 5 * 60 * 1000);
+    assert.equal(DEFAULT_COCO_E2B_KILL_TIMEOUT_MS, 60 * 60 * 1000);
   });
 
   it('accepts only implemented code-agent backends', () => {
@@ -164,6 +169,39 @@ describe('resolveCocoRuntimeConfig', () => {
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
       ...pinnedArtifactEnv,
     }), /requires E2B_API_KEY or E2B_ACCESS_TOKEN/);
+  });
+
+  it('configures E2B pause and auto-resume lifecycle with safe validation', () => {
+    const paused = resolveCocoRuntimeConfig({
+      COCO_ENABLED: 'true',
+      COCO_SANDBOX_PROVIDER: 'e2b',
+      COCO_RUNNER_CLIENT: 'jsonl',
+      COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
+      ...e2bCredentialEnv,
+      ...pinnedArtifactEnv,
+    });
+    assert.deepEqual(paused.e2bLifecycle, { onTimeout: 'pause', autoResume: true, keepMemory: true });
+
+    const kill = resolveCocoRuntimeConfig({
+      COCO_E2B_ON_TIMEOUT: 'kill',
+      COCO_E2B_AUTO_RESUME: 'false',
+    });
+    assert.deepEqual(kill.e2bLifecycle, { onTimeout: 'kill', autoResume: false, keepMemory: true });
+
+    assert.throws(() => resolveCocoRuntimeConfig({
+      COCO_E2B_ON_TIMEOUT: 'kill',
+      COCO_E2B_AUTO_RESUME: 'true',
+    }), /requires COCO_E2B_ON_TIMEOUT=pause/);
+
+    assert.throws(() => resolveCocoRuntimeConfig({
+      COCO_E2B_ON_TIMEOUT: 'pause',
+      COCO_E2B_KEEP_MEMORY: 'false',
+      COCO_E2B_AUTO_RESUME: 'true',
+    }), /requires COCO_E2B_KEEP_MEMORY=true/);
+
+    assert.throws(() => resolveCocoRuntimeConfig({
+      COCO_E2B_ON_TIMEOUT: 'hibernate',
+    }), /Unsupported COCO_E2B_ON_TIMEOUT/);
   });
 
   it('allows local Coco source mounts only in development artifact mode', () => {

@@ -33,7 +33,11 @@ import { CocoSessionService } from './services/cocoSessionService';
 import { E2BCocoSandboxService, E2BSandboxDriver } from './services/e2bCocoSandboxService';
 import { createE2BSdkDriver } from './services/e2bSdkDriver';
 import { COCO_RUNNER_SCHEMA_VERSION } from './services/cocoRunnerProtocol';
-import { resolveCocoRuntimeConfig } from './services/cocoRuntimeConfig';
+import {
+  DEFAULT_COCO_E2B_KILL_TIMEOUT_MS,
+  DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS,
+  resolveCocoRuntimeConfig,
+} from './services/cocoRuntimeConfig';
 import { CocoModelGateway, RedisCocoModelGatewayTokenStateStore, registerCocoModelGatewayRoutes } from './services/cocoModelGateway';
 import { FakeCocoRunnerClient } from './services/fakeCocoRunner';
 import { FakeCocoSandboxService } from './services/fakeCocoSandboxService';
@@ -205,16 +209,21 @@ const cocoSandboxService = cocoRuntimeConfig.enabled && cocoRuntimeConfig.sandbo
     workspace: cocoRuntimeConfig.e2bWorkspace,
     artifactVersion: cocoRuntimeConfig.artifactVersion,
     cocoSourceRef: cocoRuntimeConfig.cocoSourceRef,
+    lifecycle: cocoRuntimeConfig.e2bLifecycle,
     logger: cocoLogger,
   })
   : new FakeCocoSandboxService();
 const cocoTurnTimeoutMs = parsePositiveIntegerEnv('COCO_TURN_TIMEOUT_MS', 5 * 60 * 1000);
+const defaultCocoSandboxTtlMs = cocoRuntimeConfig.e2bLifecycle.onTimeout === 'pause'
+  ? DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS
+  : DEFAULT_COCO_E2B_KILL_TIMEOUT_MS;
 const cocoSandboxLifecycle = new CocoSandboxLifecycleService(store, cocoSandboxService, cocoLogger, {
-  sandboxTtlMs: parsePositiveIntegerEnv('COCO_SANDBOX_TTL_MS', 60 * 60 * 1000),
+  sandboxTtlMs: parsePositiveIntegerEnv('COCO_SANDBOX_TTL_MS', defaultCocoSandboxTtlMs),
   turnTimeoutMs: cocoTurnTimeoutMs,
   creatingStaleMs: parsePositiveIntegerEnv('COCO_CREATING_STALE_MS', 2 * 60 * 1000),
   maxActiveSandboxes: parsePositiveIntegerEnv('COCO_MAX_ACTIVE_SANDBOXES', Number.POSITIVE_INFINITY),
   maxActiveSandboxesPerUser: parsePositiveIntegerEnv('COCO_MAX_ACTIVE_SANDBOXES_PER_USER', Number.POSITIVE_INFINITY),
+  reconnectTimedOutSandboxes: cocoRuntimeConfig.e2bLifecycle.onTimeout === 'pause',
 });
 const fakeCocoToolOutput = [
   'stdout: hello from Coco fake runner',
