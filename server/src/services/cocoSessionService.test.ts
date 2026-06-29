@@ -264,6 +264,7 @@ describe('CocoSessionService', () => {
     assert.equal(sandboxService.startedRunnerCommands[0], DEFAULT_COCO_RUNNER_COMMAND);
     assert.deepEqual(sandboxService.startedRunnerEnvs[0], { PYTHONUNBUFFERED: '1' });
     assert.equal(runner.requests[0].prompt, 'inspect the project');
+    assert.deepEqual(runner.requests[0].priorMessages, []);
     assert.equal(runner.requests[0].apiModel, 'deepseek-chat');
     assert.equal(runner.requests[0].mode, 'plan');
     assert.equal(runner.requests[0].workspace, '/workspace/room-1');
@@ -273,6 +274,7 @@ describe('CocoSessionService', () => {
     assert.equal(messages[1].content, 'Working...');
     assert.equal(messages[2].toolCallId, 'tool-1');
     assert.equal(messages[3].toolOutputPreview, '# RoomTalk');
+    assert.equal(messages[3].content, '# RoomTalk');
     assert.equal(messages[4].status, 'complete');
     assert.equal(messages[4].content, 'Done');
     assert.equal((await store.getRoomById('room-1'))?.cocoStatus, 'idle');
@@ -312,9 +314,101 @@ describe('CocoSessionService', () => {
     assert.equal(messages[2].toolName, 'Glob');
     assert.deepEqual(messages[2].toolArgs, { pattern: '**/*' });
     assert.equal(messages[3].toolOutputPreview, 'No files found matching the pattern.');
+    assert.equal(messages[3].content, 'No files found matching the pattern.');
     assert.equal(messages[4].content, 'The current directory is empty.');
     assert.equal(messages[4].status, 'complete');
     assert.equal(messages[4].turnId, messages[1].turnId);
+  });
+
+  it('passes prior RoomTalk Coco history to the runner and excludes the current prompt', async () => {
+    const initialMessages: Message[] = [
+      userMessage('list files'),
+      {
+        id: 'ai-prev-1',
+        clientId: 'ai_assistant',
+        content: 'I will inspect.',
+        roomId: 'room-1',
+        timestamp: '2026-05-03T00:00:01.000Z',
+        messageType: 'ai',
+        status: 'complete',
+        turnId: 'turn-prev',
+      },
+      {
+        id: 'tool-prev-1',
+        clientId: 'coco_runner',
+        content: 'Glob {"pattern":"**/*"}',
+        roomId: 'room-1',
+        timestamp: '2026-05-03T00:00:02.000Z',
+        messageType: 'tool_call',
+        username: 'Coco',
+        status: 'complete',
+        turnId: 'turn-prev',
+        toolCallId: 'tool-prev',
+        toolName: 'Glob',
+        toolArgs: { pattern: '**/*' },
+      },
+      {
+        id: 'tool-result-prev-1',
+        clientId: 'coco_runner',
+        content: 'No files found matching the pattern.',
+        roomId: 'room-1',
+        timestamp: '2026-05-03T00:00:03.000Z',
+        messageType: 'tool_result',
+        username: 'Coco',
+        status: 'complete',
+        turnId: 'turn-prev',
+        toolCallId: 'tool-prev',
+        toolName: 'Glob',
+        toolOutputPreview: 'No files found matching the pattern.',
+      },
+      {
+        id: 'ai-prev-2',
+        clientId: 'ai_assistant',
+        content: 'The directory is empty.',
+        roomId: 'room-1',
+        timestamp: '2026-05-03T00:00:04.000Z',
+        messageType: 'ai',
+        status: 'complete',
+        turnId: 'turn-prev',
+      },
+      {
+        ...userMessage('what did I ask before?'),
+        id: 'user-2',
+        timestamp: '2026-05-03T00:00:05.000Z',
+      },
+    ];
+    const store = new MemoryCocoStore(room({ cocoSessionId: 'session-prev' }), initialMessages);
+    const runner = new FakeCocoRunnerClient([
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'You asked me to list files.', sessionId: 'session-prev' },
+    ]);
+    const { service } = createService({ store, runner });
+
+    await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.equal(runner.requests[0].prompt, 'what did I ask before?');
+    assert.equal(runner.requests[0].sessionId, 'session-prev');
+    assert.deepEqual(runner.requests[0].priorMessages, [
+      { role: 'user', content: 'list files' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'I will inspect.' },
+          { type: 'tool_use', id: 'tool-prev', name: 'Glob', input: { pattern: '**/*' } },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'tool-prev', content: 'No files found matching the pattern.' },
+        ],
+      },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'The directory is empty.' },
+        ],
+      },
+    ]);
   });
 
   it('removes the unused AI placeholder when tool events arrive before text', async () => {

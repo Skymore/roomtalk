@@ -89,14 +89,12 @@ const mapToolCall = (event: CocoRunnerToolCallEvent, context: CocoEventMapperCon
 const mapToolResult = (event: CocoRunnerToolResultEvent, context: CocoEventMapperContext): CocoMappedRunnerEvent => {
   const createMessageId = context.createMessageId || defaultCreateMessageId;
   const preview = outputPreview(event.output, event.truncated);
-  // Phase 2 persistence should decide whether to store full output separately.
-  // Phase 1 keeps content and preview identical because this is only a UI/event draft.
   return {
     kind: 'message',
     message: {
       id: event.messageId || createMessageId(`tool_result_${event.id}`),
       clientId: 'coco_runner',
-      content: preview,
+      content: event.output,
       roomId: context.roomId,
       timestamp: timestampFor(context),
       messageType: 'tool_result',

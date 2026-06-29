@@ -33,6 +33,7 @@ class RunnerRequest:
     turn_id: str
     session_id: str | None
     prompt: str
+    prior_messages: list[dict[str, Any]]
     mode: str
     provider: str
     model_id: str
@@ -80,12 +81,14 @@ def parse_request(line: str) -> RunnerRequest:
 
     session_id_raw = raw.get("sessionId")
     session_id = session_id_raw if isinstance(session_id_raw, str) and session_id_raw else None
+    prior_messages = _parse_prior_messages(raw.get("priorMessages"), turn_id=raw.get("turnId"))
 
     return RunnerRequest(
         room_id=string_field("roomId"),
         turn_id=string_field("turnId"),
         session_id=session_id,
         prompt=string_field("prompt"),
+        prior_messages=prior_messages,
         mode=mode,
         provider=string_field("provider"),
         model_id=string_field("modelId"),
@@ -93,6 +96,82 @@ def parse_request(line: str) -> RunnerRequest:
         workspace=Path(string_field("workspace")),
         allowed_paths=tuple(allowed_paths_raw),
     )
+
+
+def _parse_prior_messages(value: Any, *, turn_id: str | None = None) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise RunnerError("Expected priorMessages to be an array", code="invalid_request", turn_id=turn_id)
+
+    messages: list[dict[str, Any]] = []
+    for index, message in enumerate(value):
+        if not isinstance(message, dict):
+            raise RunnerError(f"Expected priorMessages[{index}] to be an object", code="invalid_request", turn_id=turn_id)
+        role = message.get("role")
+        if role not in ("user", "assistant"):
+            raise RunnerError(f"Invalid priorMessages[{index}].role", code="invalid_request", turn_id=turn_id)
+        content = message.get("content")
+        if isinstance(content, str):
+            messages.append({"role": role, "content": content})
+            continue
+        if not isinstance(content, list):
+            raise RunnerError(f"Invalid priorMessages[{index}].content", code="invalid_request", turn_id=turn_id)
+
+        blocks: list[dict[str, Any]] = []
+        for block_index, block in enumerate(content):
+            if not isinstance(block, dict):
+                raise RunnerError(
+                    f"Expected priorMessages[{index}].content[{block_index}] to be an object",
+                    code="invalid_request",
+                    turn_id=turn_id,
+                )
+            block_type = block.get("type")
+            if block_type == "text":
+                text = block.get("text")
+                if not isinstance(text, str):
+                    raise RunnerError(
+                        f"Invalid text block in priorMessages[{index}].content[{block_index}]",
+                        code="invalid_request",
+                        turn_id=turn_id,
+                    )
+                blocks.append({"type": "text", "text": text})
+            elif block_type == "tool_use":
+                tool_id = block.get("id")
+                name = block.get("name")
+                tool_input = block.get("input")
+                if not isinstance(tool_id, str) or not tool_id or not isinstance(name, str) or not name or not isinstance(tool_input, dict):
+                    raise RunnerError(
+                        f"Invalid tool_use block in priorMessages[{index}].content[{block_index}]",
+                        code="invalid_request",
+                        turn_id=turn_id,
+                    )
+                blocks.append({"type": "tool_use", "id": tool_id, "name": name, "input": tool_input})
+            elif block_type == "tool_result":
+                tool_use_id = block.get("tool_use_id")
+                result_content = block.get("content")
+                if not isinstance(tool_use_id, str) or not tool_use_id or not isinstance(result_content, str):
+                    raise RunnerError(
+                        f"Invalid tool_result block in priorMessages[{index}].content[{block_index}]",
+                        code="invalid_request",
+                        turn_id=turn_id,
+                    )
+                result_block: dict[str, Any] = {
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": result_content,
+                }
+                if isinstance(block.get("is_error"), bool):
+                    result_block["is_error"] = block["is_error"]
+                blocks.append(result_block)
+            else:
+                raise RunnerError(
+                    f"Unsupported block type in priorMessages[{index}].content[{block_index}]: {block_type!r}",
+                    code="invalid_request",
+                    turn_id=turn_id,
+                )
+        messages.append({"role": role, "content": blocks})
+    return messages
 
 
 def resolve_allowed_roots(workspace: Path, allowed_paths: Iterable[str]) -> tuple[Path, ...]:
@@ -448,6 +527,14 @@ def _engine_supports_tool_events(engine: Any) -> bool:
     return "on_tool_event" in parameters
 
 
+def _engine_supports_prior_messages(engine: Any) -> bool:
+    try:
+        parameters = inspect.signature(engine.run).parameters
+    except (TypeError, ValueError):
+        return False
+    return "prior_messages" in parameters
+
+
 def _live_tool_event_to_runner_event(event: dict[str, Any], turn_id: str) -> dict[str, Any]:
     if not isinstance(event, dict):
         raise RunnerError("Coco tool event must be a JSON object", code="invalid_tool_event", turn_id=turn_id)
@@ -583,6 +670,8 @@ def run_request(
 
         live_tool_events_enabled = _engine_supports_tool_events(engine)
         run_kwargs: dict[str, Any] = {"on_text_chunk": on_text_chunk}
+        if _engine_supports_prior_messages(engine):
+            run_kwargs["prior_messages"] = request.prior_messages or None
         if live_tool_events_enabled:
             run_kwargs["on_tool_event"] = on_tool_event
 

@@ -31,6 +31,30 @@ describe('Coco runner protocol', () => {
     assert.deepEqual(JSON.parse(serialized), request);
   });
 
+  it('serializes Coco prior messages in run requests', () => {
+    const withPrior: CocoRunnerRunRequest = {
+      ...request,
+      priorMessages: [
+        { role: 'user', content: 'list files' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'I will inspect.' },
+            { type: 'tool_use', id: 'tool-1', name: 'Glob', input: { pattern: '**/*' } },
+          ],
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 'tool-1', content: 'No files found.' },
+          ],
+        },
+      ],
+    };
+
+    assert.deepEqual(JSON.parse(serializeCocoRunnerRequest(withPrior)), withPrior);
+  });
+
   it('parses all runner event shapes', () => {
     assert.deepEqual(parseCocoRunnerEventLine(JSON.stringify({
       schemaVersion: 1,

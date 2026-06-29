@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "roomtalk-coco-runner"
-version = "0.1.0"
+version = "0.1.1"
 description = "RoomTalk JSONL adapter for the Coco coding assistant"
 requires-python = ">=3.10"
 dependencies = []

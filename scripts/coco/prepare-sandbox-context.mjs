@@ -93,7 +93,16 @@ try {
 
   cpSync(resolve(repoRoot, lock.runner.sourcePath), resolve(outputDir, 'roomtalk_coco_runner'), {
     recursive: true,
-    filter: source => !source.includes('__pycache__') && !source.endsWith('.pyc'),
+    filter: source => {
+      const normalized = source.split('\\').join('/');
+      return !normalized.includes('/__pycache__') &&
+        !normalized.includes('/.pytest_cache') &&
+        !normalized.includes('/.venv') &&
+        !normalized.endsWith('.egg-info') &&
+        !normalized.includes('.egg-info/') &&
+        !normalized.endsWith('/uv.lock') &&
+        !normalized.endsWith('.pyc');
+    },
   });
   cpSync(resolve(repoRoot, lock.image.dockerfile), resolve(outputDir, 'Dockerfile'));
   cpSync(resolve(repoRoot, lock.image.requirementsLock), resolve(outputDir, 'requirements.lock'));

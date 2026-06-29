@@ -11,6 +11,7 @@ import { COCO_RUNNER_SCHEMA_VERSION, CocoRunnerEvent, CocoRunnerMode } from './c
 import { DEFAULT_COCO_RUNNER_COMMAND } from './cocoRuntimeConfig';
 import { createAIPlaceholderMessage } from './messageDomain';
 import { CocoModelGateway } from './cocoModelGateway';
+import { buildCocoPriorMessages } from './cocoTranscript';
 
 export interface CocoRoomEmitter {
   to(roomId: string): {
@@ -127,8 +128,8 @@ export class CocoSessionService {
         turnId,
       };
 
-      const prompt = await this.readLatestPrompt(input.roomId, input.clientId);
-      if (!prompt) {
+      const promptContext = await this.readLatestPromptContext(input.roomId, input.clientId);
+      if (!promptContext) {
         return ack({ success: false, error: 'Coco requires a text prompt in the room history' });
       }
 
@@ -183,7 +184,8 @@ export class CocoSessionService {
         roomId: input.roomId,
         turnId,
         sessionId: room!.cocoSessionId || null,
-        prompt,
+        prompt: promptContext.prompt,
+        priorMessages: promptContext.priorMessages,
         mode: turnMode.mode,
         provider: input.selectedModel.provider,
         modelId: input.selectedModel.id,
@@ -364,17 +366,23 @@ export class CocoSessionService {
     return 'plan';
   }
 
-  private async readLatestPrompt(roomId: string, clientId: string) {
+  private async readLatestPromptContext(roomId: string, clientId: string) {
     const messages = await this.store.readMessagesByRoom(roomId);
-    const promptMessage = [...messages]
-      .reverse()
-      .find(message =>
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (
         message.clientId === clientId &&
         message.messageType === 'text' &&
         typeof message.content === 'string' &&
         message.content.trim().length > 0
-      );
-    return promptMessage?.content.trim() || '';
+      ) {
+        return {
+          prompt: message.content.trim(),
+          priorMessages: buildCocoPriorMessages(messages.slice(0, index)),
+        };
+      }
+    }
+    return null;
   }
 
   private describeSandboxFailure(result: EnsureCocoSandboxResult) {

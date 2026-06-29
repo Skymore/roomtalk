@@ -4,6 +4,16 @@ export const COCO_RUNNER_SCHEMA_VERSION = 1 as const;
 
 export type CocoRunnerMode = 'plan' | 'acceptEdits';
 
+export type CocoRunnerPriorContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
+  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
+
+export interface CocoRunnerPriorMessage {
+  role: 'user' | 'assistant';
+  content: string | CocoRunnerPriorContentBlock[];
+}
+
 export interface CocoRunnerRunRequest {
   schemaVersion: typeof COCO_RUNNER_SCHEMA_VERSION;
   type: 'run';
@@ -17,6 +27,7 @@ export interface CocoRunnerRunRequest {
   apiModel: string;
   workspace: string;
   allowedPaths: string[];
+  priorMessages?: CocoRunnerPriorMessage[];
 }
 
 export interface CocoRunnerStatusEvent {

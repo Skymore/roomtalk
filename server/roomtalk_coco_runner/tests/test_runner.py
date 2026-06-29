@@ -59,12 +59,38 @@ def test_parse_request_validates_schema_and_required_fields():
     assert parsed.turn_id == "turn-1"
     assert parsed.mode == "plan"
     assert parsed.allowed_paths == (".",)
+    assert parsed.prior_messages == []
+
+    prior_messages = [
+        {"role": "user", "content": "list files"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "I will inspect."},
+                {"type": "tool_use", "id": "tool-1", "name": "Glob", "input": {"pattern": "**/*"}},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "tool-1", "content": "No files found."},
+            ],
+        },
+    ]
+    parsed_with_prior = parse_request(json.dumps(request(priorMessages=prior_messages)))
+    assert parsed_with_prior.prior_messages == prior_messages
 
     with pytest.raises(RunnerError, match="Unsupported schemaVersion"):
         parse_request(json.dumps(request(schemaVersion=2)))
 
     with pytest.raises(RunnerError, match="Expected non-empty string field 'prompt'"):
         parse_request(json.dumps(request(prompt="")))
+
+    with pytest.raises(RunnerError, match="Invalid tool_use block"):
+        parse_request(json.dumps(request(priorMessages=[{
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "tool-1", "name": "Glob", "input": "bad"}],
+        }])))
 
 
 def test_allowed_paths_are_workspace_relative_and_cannot_escape(tmp_path: Path):
@@ -354,6 +380,16 @@ class LiveToolEventEngine:
         )
 
 
+class PriorAwareEngine:
+    def __init__(self, expected_prior_messages):
+        self.expected_prior_messages = expected_prior_messages
+
+    def run(self, prompt, prior_messages=None, on_text_chunk=None):
+        assert prompt == "inspect the project"
+        assert prior_messages == self.expected_prior_messages
+        return EngineResult(answer="ok", messages=[], usage=None)
+
+
 def test_run_request_falls_back_to_replay_for_kwargs_only_engine(monkeypatch):
     output = io.StringIO()
     parsed = parse_request(json.dumps(request()))
@@ -409,6 +445,38 @@ def test_run_request_uses_live_tool_events_without_replay(monkeypatch):
     assert events[5]["delta"] == "after"
     assert len([event for event in events if event["type"] == "tool_call"]) == 1
     assert len([event for event in events if event["type"] == "tool_result"]) == 1
+
+
+def test_run_request_passes_prior_messages_to_coco_engine(monkeypatch):
+    prior_messages = [
+        {"role": "user", "content": "list files"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "I will inspect."},
+                {"type": "tool_use", "id": "tool-1", "name": "Glob", "input": {"pattern": "**/*"}},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "tool-1", "content": "No files found."},
+            ],
+        },
+    ]
+    output = io.StringIO()
+    parsed = parse_request(json.dumps(request(priorMessages=prior_messages)))
+    monkeypatch.setenv("COCO_WORKSPACE_ROOT", "/tmp")
+
+    run_request(
+        parsed,
+        emitter=EventEmitter(output),
+        engine_factory=lambda _request: PriorAwareEngine(prior_messages),
+    )
+
+    events = event_lines(output)
+    assert events[-1]["type"] == "final"
+    assert events[-1]["answer"] == "ok"
 
 
 def test_run_request_emits_tool_events_before_terminal_final(monkeypatch):

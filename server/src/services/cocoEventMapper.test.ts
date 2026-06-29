@@ -59,9 +59,10 @@ describe('Coco runner event mapper', () => {
     assert.equal(mapped.message.status, 'error');
     assert.equal(mapped.message.isError, true);
     assert.equal(mapped.message.exitCode, 1);
-    assert.equal(mapped.message.content.includes('[display truncated]'), true);
-    assert.equal(mapped.message.content.includes('[output truncated by runner]'), true);
-    assert.equal(mapped.message.content.length < 5000, true);
+    assert.equal(mapped.message.content, 'x'.repeat(5000));
+    assert.equal(mapped.message.toolOutputPreview?.includes('[display truncated]'), true);
+    assert.equal(mapped.message.toolOutputPreview?.includes('[output truncated by runner]'), true);
+    assert.equal((mapped.message.toolOutputPreview || '').length < 5000, true);
   });
 
   it('ignores non-error status events and maps error status messages', () => {

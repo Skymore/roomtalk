@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "artifactName": "roomtalk-coco",
-  "artifactVersion": "roomtalk-coco-2026-06-28-a4e70e6",
+  "artifactVersion": "roomtalk-coco-2026-06-29-prior-messages",
   "pythonVersion": "3.12",
   "baseImage": {
     "name": "python",
@@ -16,7 +16,7 @@
   },
   "runner": {
     "packageName": "roomtalk-coco-runner",
-    "packageVersion": "0.1.0",
+    "packageVersion": "0.1.1",
     "sourcePath": "server/roomtalk_coco_runner",
     "command": "python -m roomtalk_coco_runner"
   },
