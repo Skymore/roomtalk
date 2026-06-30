@@ -54,6 +54,8 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(screen.getByText('codeAgentErrors')).toBeTruthy();
     fireEvent.click(screen.getByText('codeAgentActivity'));
     expect(screen.getByText('codeAgentNoActivity')).toBeTruthy();
+    fireEvent.click(screen.getByText('codeAgentArtifacts'));
+    expect(screen.getByText('codeAgentNoArtifacts')).toBeTruthy();
   });
 
   it('renders acceptEdits mode and derived tool activity', () => {
@@ -149,6 +151,19 @@ describe('CodeAgentWorkspacePanel', () => {
             toolErrors: 0,
             lastToolName: 'Shell',
           },
+          artifacts: [
+            {
+              slug: 'roomtalk-demo',
+              title: 'RoomTalk Demo',
+              url: 'https://room.ruit.me/p/roomtalk-demo/',
+              entry: 'index.html',
+              versionId: '20260630T120000Z_aaaaaaaa',
+              fileCount: 1,
+              totalBytes: 128,
+              createdAt: '2026-06-30T12:00:00.000Z',
+              updatedAt: '2026-06-30T12:00:00.000Z',
+            },
+          ],
           changes: { available: false, changedFiles: [], diffSummary: null },
           commands: [
             {
@@ -180,5 +195,9 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(screen.getByText('codeAgentCommandSucceeded')).toBeTruthy();
     expect(screen.getByText('codeAgentCommandFailed')).toBeTruthy();
     expect(screen.getByText('permission denied')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('codeAgentArtifacts'));
+    const link = screen.getByText('RoomTalk Demo').closest('a');
+    expect(link?.getAttribute('href')).toBe('https://room.ruit.me/p/roomtalk-demo/');
   });
 });

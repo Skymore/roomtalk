@@ -84,6 +84,17 @@ describe('summarizeCocoMessages', () => {
       generatedAt: '2026-05-29T00:00:00.000Z',
       status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: false },
       summary: { toolCalls: 1, toolResults: 0, toolErrors: 0 },
+      artifacts: [{
+        slug: 'roomtalk-demo',
+        title: 'RoomTalk Demo',
+        url: 'https://room.ruit.me/p/roomtalk-demo/',
+        entry: 'index.html',
+        versionId: '20260630T120000Z_aaaaaaaa',
+        fileCount: 1,
+        totalBytes: 128,
+        createdAt: '2026-06-30T12:00:00.000Z',
+        updatedAt: '2026-06-30T12:00:00.000Z',
+      }],
       changes: { available: false, changedFiles: [], diffSummary: null },
       commands: [],
     };
@@ -91,6 +102,25 @@ describe('summarizeCocoMessages', () => {
 
     await expect(loadCodeAgentWorkspaceSnapshot('room 1')).resolves.toEqual(snapshot);
     expect(requestCodeAgentWorkspaceSnapshotMock).toHaveBeenCalledWith('room 1');
+  });
+
+  it('normalizes missing workspace artifacts to an empty list for older servers', async () => {
+    const snapshot = {
+      roomId: 'room-1',
+      backend: 'coco',
+      source: 'sandbox',
+      generatedAt: '2026-05-29T00:00:00.000Z',
+      status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: false },
+      summary: { toolCalls: 1, toolResults: 0, toolErrors: 0 },
+      changes: { available: false, changedFiles: [], diffSummary: null },
+      commands: [],
+    };
+    requestCodeAgentWorkspaceSnapshotMock.mockResolvedValue(snapshot);
+
+    await expect(loadCodeAgentWorkspaceSnapshot('room-1')).resolves.toEqual({
+      ...snapshot,
+      artifacts: [],
+    });
   });
 
   it('rejects invalid workspace snapshot responses', async () => {

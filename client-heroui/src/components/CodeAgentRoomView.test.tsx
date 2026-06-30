@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Room } from '../utils/types';
 import { CodeAgentRoomView } from './CodeAgentRoomView';
@@ -76,6 +76,21 @@ const cocoRoom: Room = {
   cocoStatus: 'idle',
 };
 
+const dispatchPointer = (
+  target: EventTarget,
+  type: string,
+  values: { pointerId: number; clientX: number; buttons: number; button?: number },
+) => {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperties(event, {
+    pointerId: { value: values.pointerId },
+    clientX: { value: values.clientX },
+    buttons: { value: values.buttons },
+    button: { value: values.button ?? 0 },
+  });
+  target.dispatchEvent(event);
+};
+
 const renderCodeAgentRoom = (
   room: Room,
   availableModes: Array<'plan' | 'acceptEdits'> = room.codeAgentMode === 'acceptEdits' ? ['plan', 'acceptEdits'] : ['plan'],
@@ -129,6 +144,52 @@ describe('CodeAgentRoomView', () => {
     expect(screen.getByTestId('message-input').dataset.codeAgentMaxMode).toBe('acceptEdits');
     expect(screen.getByTestId('file-browser').dataset.sandboxStatus).toBe('ready');
     expect(screen.getByTestId('file-browser').dataset.sandboxUpdatedAt).toBe('2026-06-30T10:00:00.000Z');
+    expect(screen.getByLabelText('codeAgentResizeWorkspaceFiles')).toBeTruthy();
+    expect(screen.getByLabelText('codeAgentCollapseWorkspaceFiles')).toBeTruthy();
+  });
+
+  it('gives desktop and mobile file managers a flex height context', () => {
+    renderCodeAgentRoom(cocoRoom);
+
+    const desktopFileBrowser = screen.getByTestId('file-browser');
+    expect(desktopFileBrowser.parentElement?.classList.contains('flex')).toBe(true);
+    expect(desktopFileBrowser.parentElement?.classList.contains('min-h-0')).toBe(true);
+    expect(screen.getByTestId('message-list').parentElement?.dataset.codeAgentChatPane).toBe('true');
+    expect(screen.getByTestId('message-list').parentElement?.classList.contains('min-w-80')).toBe(true);
+
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
+    const fileBrowsers = screen.getAllByTestId('file-browser');
+    expect(fileBrowsers).toHaveLength(2);
+    const mobileFileBrowser = fileBrowsers.find((element) => element !== desktopFileBrowser);
+    expect(mobileFileBrowser?.parentElement?.classList.contains('flex')).toBe(true);
+    expect(mobileFileBrowser?.parentElement?.classList.contains('min-h-0')).toBe(true);
+  });
+
+  it('resizes the workspace panel against the available layout width and releases drag state', () => {
+    renderCodeAgentRoom(cocoRoom);
+
+    const resizeHandle = screen.getByLabelText('codeAgentResizeWorkspaceFiles');
+    const layout = resizeHandle.closest('aside')?.parentElement as HTMLDivElement;
+    vi.spyOn(layout, 'getBoundingClientRect').mockReturnValue({
+      width: 1600,
+      height: 900,
+      top: 0,
+      right: 1600,
+      bottom: 900,
+      left: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+
+    dispatchPointer(resizeHandle, 'pointerdown', { pointerId: 4, clientX: 1200, buttons: 1 });
+    dispatchPointer(window, 'pointermove', { pointerId: 4, clientX: 0, buttons: 1 });
+    dispatchPointer(window, 'pointerup', { pointerId: 4, clientX: 0, buttons: 0 });
+
+    expect(layout.style.getPropertyValue('--code-agent-files-width')).toBe('1120px');
+    expect(localStorage.getItem('roomtalk.codeWorkspace.fileManagerWidth')).toBe('1120');
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.cursor).toBe('');
   });
 
   it('constrains room edit mode when the server only allows plan mode', () => {

@@ -68,6 +68,18 @@ export interface PublishedStaticSitePublishResult {
   totalBytes: number;
 }
 
+export interface PublishedStaticSiteArtifact {
+  slug: string;
+  url: string;
+  entry: string;
+  versionId: string;
+  fileCount: number;
+  totalBytes: number;
+  createdAt: string;
+  updatedAt: string;
+  title?: string;
+}
+
 export interface PublishedStaticSiteTokenClaims {
   v: 1;
   jti: string;
@@ -563,6 +575,29 @@ export class PublishedStaticSiteService {
       this.options.logger.warn('Failed to read published static site manifest', { error, slug });
       return null;
     }
+  }
+
+  async listSitesForRoom(roomId: string, requestBaseUrl?: string): Promise<PublishedStaticSiteArtifact[]> {
+    const index = await this.readRoomIndex(roomId);
+    if (!index) {
+      return [];
+    }
+
+    const manifests = await Promise.all(index.slugs.map(slug => this.readManifest(slug)));
+    return manifests
+      .filter((manifest): manifest is PublishedStaticSiteManifest => Boolean(manifest && manifest.roomId === roomId))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .map(manifest => ({
+        slug: manifest.slug,
+        url: this.publicUrlForSlug(manifest.slug, requestBaseUrl),
+        entry: manifest.entry,
+        versionId: manifest.versionId,
+        fileCount: manifest.fileCount,
+        totalBytes: manifest.totalBytes,
+        createdAt: manifest.createdAt,
+        updatedAt: manifest.updatedAt,
+        ...(manifest.title ? { title: manifest.title } : {}),
+      }));
   }
 
   async deleteSitesForRoom(roomId: string): Promise<{ slugCount: number; objectCount: number }> {

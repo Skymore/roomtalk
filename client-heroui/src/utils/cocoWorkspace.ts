@@ -21,6 +21,18 @@ export interface CodeAgentWorkspaceDiffSummary {
   deletions: number;
 }
 
+export interface CodeAgentWorkspaceArtifact {
+  slug: string;
+  url: string;
+  entry: string;
+  versionId: string;
+  fileCount: number;
+  totalBytes: number;
+  createdAt: string;
+  updatedAt: string;
+  title?: string;
+}
+
 export interface CodeAgentWorkspaceSnapshot {
   roomId: string;
   backend: 'coco';
@@ -32,6 +44,7 @@ export interface CodeAgentWorkspaceSnapshot {
     hasSession: boolean;
   };
   summary: CocoWorkspaceSummary;
+  artifacts: CodeAgentWorkspaceArtifact[];
   changes: {
     available: boolean;
     changedFiles: string[];
@@ -95,5 +108,8 @@ export const loadCodeAgentWorkspaceSnapshot = async (
     throw new Error('Workspace snapshot response is invalid');
   }
 
-  return snapshot as CodeAgentWorkspaceSnapshot;
+  return {
+    ...snapshot,
+    artifacts: Array.isArray(snapshot.artifacts) ? snapshot.artifacts : [],
+  } as CodeAgentWorkspaceSnapshot;
 };

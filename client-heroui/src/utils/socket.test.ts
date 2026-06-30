@@ -88,6 +88,7 @@ const {
   sendMessage,
   sendMessageAndAskAI,
   requestAudioTranscription,
+  requestCodeWorkspaceEntries,
   setClientPassword,
   setClientAuthToken,
   setUsername,
@@ -225,6 +226,75 @@ describe('socket message acknowledgement helpers', () => {
       { clientId: 'client-uuid', browserInstanceId: 'client-uuid', username: undefined, clientAuthToken: undefined },
       expect.any(Function),
     ]);
+  });
+
+  it('retries registration when the socket disconnects before the register acknowledgement', async () => {
+    const savedMessage = message({ id: 'after-register-retry' });
+    let registerAttempts = 0;
+
+    socketMock.emit
+      .mockImplementationOnce((event: string) => {
+        expect(event).toBe('register');
+        registerAttempts += 1;
+        socketMock.connected = false;
+        socketMock.id = 'socket-reconnected';
+        Array.from(socketMock.handlers.get('disconnect') || []).forEach(handler => handler('transport close'));
+        return socketMock;
+      })
+      .mockImplementationOnce((event: string, _payload?: unknown, callback?: (response: AckResponse) => void) => {
+        expect(event).toBe('register');
+        registerAttempts += 1;
+        callback?.({ success: true });
+        return socketMock;
+      })
+      .mockImplementationOnce((event: string, _payload?: unknown, callback?: (response: AckResponse) => void) => {
+        expect(event).toBe('send_message');
+        callback?.({ success: true, message: savedMessage });
+        return socketMock;
+      });
+
+    await expect(sendMessage('hello', 'room-1')).resolves.toEqual(savedMessage);
+
+    expect(registerAttempts).toBe(2);
+    expect(socketMock.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries read-only workspace requests after a socket disconnect while waiting for acknowledgement', async () => {
+    socketMock.emit
+      .mockImplementationOnce((event: string, _payload?: unknown, callback?: (response: AckResponse) => void) => {
+        expect(event).toBe('register');
+        callback?.({ success: true });
+        return socketMock;
+      })
+      .mockImplementationOnce((event: string) => {
+        expect(event).toBe('list_code_workspace_entries');
+        socketMock.connected = false;
+        socketMock.id = 'socket-reconnected';
+        Array.from(socketMock.handlers.get('disconnect') || []).forEach(handler => handler('transport close'));
+        return socketMock;
+      })
+      .mockImplementationOnce((event: string, _payload?: unknown, callback?: (response: AckResponse) => void) => {
+        expect(event).toBe('register');
+        callback?.({ success: true });
+        return socketMock;
+      })
+      .mockImplementationOnce((event: string, _payload?: unknown, callback?: (response: AckResponse) => void) => {
+        expect(event).toBe('list_code_workspace_entries');
+        callback?.({
+          success: true,
+          entries: [{ path: 'src/App.tsx', name: 'App.tsx', type: 'file' }],
+          truncated: false,
+        });
+        return socketMock;
+      });
+
+    await expect(requestCodeWorkspaceEntries('room-1')).resolves.toEqual({
+      entries: [{ path: 'src/App.tsx', name: 'App.tsx', type: 'file' }],
+      truncated: false,
+    });
+
+    const listCalls = socketMock.emit.mock.calls.filter(([event]) => event === 'list_code_workspace_entries');
+    expect(listCalls).toHaveLength(2);
   });
 
   it('includes the stored client auth token when registering the socket', async () => {

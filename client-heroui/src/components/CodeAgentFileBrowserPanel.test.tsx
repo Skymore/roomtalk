@@ -127,6 +127,11 @@ describe('CodeAgentFileBrowserPanel', () => {
     fireEvent.click(screen.getByLabelText('Coco files'));
     expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:export default function App() {}');
     expect(loadCodeWorkspaceFileMock).toHaveBeenCalledWith('room-1', 'src/App.tsx', expect.any(Object));
+    const explorerResizeHandle = screen.getByLabelText('codeAgentResizeFileExplorer');
+    const explorer = explorerResizeHandle.closest('aside') as HTMLElement;
+    expect(explorer.style.width).toBe('var(--workspace-file-explorer-width)');
+    expect(explorer.style.maxWidth).toBe('calc(100% - 180px)');
+    expect(explorer.className).not.toContain('50%');
     expect(open).not.toHaveBeenCalled();
   });
 

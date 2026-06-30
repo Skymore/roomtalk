@@ -79,6 +79,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
     () => (workspaceSnapshot?.commands || []).slice(-5).reverse(),
     [workspaceSnapshot?.commands]
   );
+  const publishedArtifacts = workspaceSnapshot?.artifacts || [];
   const workspaceChanges = workspaceSnapshot?.changes;
   const changedFiles = workspaceChanges?.changedFiles || [];
   const diffSummary = workspaceChanges?.diffSummary || null;
@@ -215,6 +216,47 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                   <span className="font-mono text-sm font-semibold tabular-nums text-[#141413] dark:text-[#faf9f5]">{item.value}</span>
                 </div>
               ))}
+            </div>
+          </Tab>
+
+          <Tab
+            key="artifacts"
+            title={
+              <span
+                className={`inline-flex items-center gap-1.5 ${publishedArtifacts.length > 0 ? 'text-[#c96442] dark:text-[#ff9b78]' : ''}`}
+              >
+                <Icon icon="lucide:package-open" className="h-3.5 w-3.5" />
+                {t('codeAgentArtifacts')}
+                {publishedArtifacts.length > 0 ? (
+                  <span className="rounded-full bg-[#d66a43] px-1.5 py-0.5 font-mono text-[10px] font-bold leading-none text-white">
+                    {publishedArtifacts.length}
+                  </span>
+                ) : null}
+              </span>
+            }
+          >
+            <div className="max-h-44 overflow-y-auto px-3 py-2">
+              {publishedArtifacts.length === 0 ? (
+                <p className="text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentNoArtifacts')}</p>
+              ) : (
+                <div className="space-y-1.5">
+                  {publishedArtifacts.map((artifact) => (
+                    <a
+                      key={artifact.slug}
+                      href={artifact.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-[#ead6cc] bg-[#fff7f2] px-2.5 py-2 text-xs text-[#4d4c48] transition-colors hover:border-[#d66a43] hover:text-[#9f462c] dark:border-[#4a3027] dark:bg-[#2a211d] dark:text-[#e8e6dc] dark:hover:border-[#ff9b78] dark:hover:text-[#ffb69e]"
+                    >
+                      <span className="flex min-w-0 items-center gap-2">
+                        <Icon icon="lucide:globe-2" className="h-3.5 w-3.5 flex-shrink-0 text-[#c96442] dark:text-[#ff9b78]" />
+                        <span className="truncate font-semibold">{artifact.title || artifact.slug}</span>
+                      </span>
+                      <Icon icon="lucide:external-link" className="h-3.5 w-3.5 flex-shrink-0" />
+                    </a>
+                  ))}
+                </div>
+              )}
             </div>
           </Tab>
 

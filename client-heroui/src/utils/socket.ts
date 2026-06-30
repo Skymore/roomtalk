@@ -56,7 +56,7 @@ let activeRoomPassword: string | null = null;
 let currentUsername = '';
 let registeredSocketId: string | null = null;
 let pendingRegistration: Promise<void> | null = null;
-let pendingRegistrationSocketId: string | null = null;
+let suppressNextConnectAutoRegistration = false;
 const SEND_MESSAGE_ACK_TIMEOUT_MS = 15000;
 const SEND_MESSAGE_CONNECT_TIMEOUT_MS = 15000;
 const ROOM_LOOKUP_TIMEOUT_MS = 30000;
@@ -300,8 +300,10 @@ const createSocketConnection = (): typeof Socket => {
   socket.on('connect', () => {
     console.log('Connected to WebSocket server, socket ID:', socket.id);
     registeredSocketId = null;
-    pendingRegistration = null;
-    pendingRegistrationSocketId = null;
+    if (suppressNextConnectAutoRegistration) {
+      suppressNextConnectAutoRegistration = false;
+      return;
+    }
 
     ensureRegisteredSocket()
       .catch((error) => {
@@ -318,8 +320,6 @@ const createSocketConnection = (): typeof Socket => {
   socket.on('disconnect', (reason: string) => {
     console.log('Socket disconnected:', reason);
     registeredSocketId = null;
-    pendingRegistration = null;
-    pendingRegistrationSocketId = null;
   });
 
   // Handle reconnection events
@@ -349,66 +349,163 @@ const createSocketConnection = (): typeof Socket => {
   return socket;
 };
 
-const waitForConnectedSocket = (timeoutMs = SEND_MESSAGE_CONNECT_TIMEOUT_MS) => new Promise<void>((resolve, reject) => {
+export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS): Promise<void> => {
+  if (pendingRegistration) {
+    return pendingRegistration;
+  }
+
   if (socket.connected) {
-    resolve();
-    return;
-  }
-
-  console.log('Socket disconnected, attempting to reconnect...');
-
-  let timeoutId: number;
-  let settled = false;
-
-  function cleanup() {
-    window.clearTimeout(timeoutId);
-    socket.off('connect', handleConnect);
-    socket.off('disconnect', handleDisconnect);
-  }
-
-  function settle(fn: () => void) {
-    if (settled) {
-      return;
-    }
-    settled = true;
-    cleanup();
-    fn();
-  }
-
-  function handleConnect() {
-    settle(resolve);
-  }
-
-  function handleDisconnect() {
-    settle(() => reject(new Error('Socket disconnected before sending message')));
-  }
-
-  timeoutId = window.setTimeout(() => {
-    settle(() => reject(new Error('Timed out while reconnecting socket')));
-  }, timeoutMs);
-
-  socket.once('connect', handleConnect);
-  socket.once('disconnect', handleDisconnect);
-  socket.connect();
-});
-
-export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS): Promise<void> => (
-  waitForConnectedSocket(timeoutMs).then(() => new Promise<void>((resolve, reject) => {
     const socketId = socket.id || '';
 
     if (socketId && registeredSocketId === socketId) {
-      resolve();
-      return;
+      return Promise.resolve();
+    }
+  }
+
+  let startRegistration: () => void = () => {};
+  const registrationPromise = new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let timeoutId: number;
+    let registerAttempt = 0;
+
+    function cleanup() {
+      window.clearTimeout(timeoutId);
+      socket.off('connect', handleConnect);
+      socket.off('disconnect', handleDisconnect);
     }
 
-    if (pendingRegistration && pendingRegistrationSocketId === socketId) {
-      pendingRegistration.then(resolve).catch(reject);
+    function settle(fn: () => void) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      pendingRegistration = null;
+      suppressNextConnectAutoRegistration = false;
+      fn();
+    }
+
+    function waitForReconnect() {
+      if (settled) {
+        return;
+      }
+      if (socket.connected) {
+        attemptRegister();
+        return;
+      }
+      socket.off('connect', handleConnect);
+      socket.on('connect', handleConnect);
+      suppressNextConnectAutoRegistration = true;
+      socket.connect();
+    }
+
+    function handleConnect() {
+      socket.off('connect', handleConnect);
+      attemptRegister();
+    }
+
+    function handleDisconnect() {
+      registeredSocketId = null;
+      registerAttempt += 1;
+      socket.off('disconnect', handleDisconnect);
+      waitForReconnect();
+    }
+
+    function attemptRegister() {
+      if (settled) {
+        return;
+      }
+      if (!socket.connected) {
+        waitForReconnect();
+        return;
+      }
+
+      const socketId = socket.id || '';
+      if (socketId && registeredSocketId === socketId) {
+        settle(resolve);
+        return;
+      }
+
+      const attemptId = registerAttempt + 1;
+      registerAttempt = attemptId;
+      socket.off('disconnect', handleDisconnect);
+      socket.on('disconnect', handleDisconnect);
+      socket.emit('register', {
+        clientId: getClientId(),
+        browserInstanceId: getBrowserInstanceId(),
+        username: currentUsername || undefined,
+        clientAuthToken: getClientAuthToken() || undefined,
+      }, (response: RegisterAckResponse) => {
+        if (settled || attemptId !== registerAttempt) {
+          return;
+        }
+        socket.off('disconnect', handleDisconnect);
+        if (!socket.connected) {
+          handleDisconnect();
+          return;
+        }
+        settle(() => {
+          if (response?.success) {
+            registeredSocketId = socketId || socket.id || null;
+            const adopted = typeof response.nickname === 'string' ? response.nickname.trim() : '';
+            if (adopted && adopted !== currentUsername) {
+              currentUsername = adopted;
+              saveUsername(adopted);
+              usernameAdoptedCallbacks.forEach(callback => callback(adopted));
+            }
+            resolve();
+            return;
+          }
+
+          const message = typeof response?.message === 'string' ? response.message : undefined;
+          reject(new Error(response?.error || message || 'Failed to register client'));
+        });
+      });
+    }
+
+    startRegistration = () => {
+      timeoutId = window.setTimeout(() => {
+        settle(() => reject(new Error('Timed out while registering client')));
+      }, timeoutMs || SEND_MESSAGE_CONNECT_TIMEOUT_MS);
+
+      attemptRegister();
+    };
+  });
+
+  pendingRegistration = registrationPromise;
+  startRegistration();
+  return registrationPromise;
+};
+
+type EmitWithAckOptions = {
+  retryOnSocketReconnect?: boolean;
+};
+
+const isRetryableSocketDisconnectError = (error: unknown): boolean => {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return (
+    error.message === 'Socket disconnected before sending message' ||
+    error.message === 'Socket disconnected while waiting for server acknowledgement'
+  );
+};
+
+const emitWithAck = <TResponse extends SocketAckResponse>(
+  event: string,
+  payload: unknown,
+  timeoutMessage: string,
+  fallbackError: string,
+  options: EmitWithAckOptions = {},
+): Promise<TResponse> => {
+  const emitOnce = (): Promise<TResponse> => ensureRegisteredSocket().then(() => new Promise<TResponse>((resolve, reject) => {
+    if (!socket.connected) {
+      reject(new Error('Socket disconnected before sending message'));
       return;
     }
 
     let settled = false;
     let timeoutId: number;
-    let rejectPendingRegistration: ((error: Error) => void) | null = null;
 
     function cleanup() {
       window.clearTimeout(timeoutId);
@@ -421,102 +518,37 @@ export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS):
       }
       settled = true;
       cleanup();
-      pendingRegistration = null;
-      pendingRegistrationSocketId = null;
       fn();
     }
 
     function handleDisconnect() {
+      settle(() => reject(new Error('Socket disconnected while waiting for server acknowledgement')));
+    }
+
+    timeoutId = window.setTimeout(() => {
+      settle(() => reject(new Error(timeoutMessage)));
+    }, SEND_MESSAGE_ACK_TIMEOUT_MS);
+
+    socket.once('disconnect', handleDisconnect);
+    socket.emit(event, payload, (response: TResponse) => {
       settle(() => {
-        rejectPendingRegistration?.(new Error('Socket disconnected while registering client'));
-      });
-    }
-
-    pendingRegistrationSocketId = socketId;
-    pendingRegistration = new Promise<void>((pendingResolve, pendingReject) => {
-      rejectPendingRegistration = pendingReject;
-      timeoutId = window.setTimeout(() => {
-        settle(() => pendingReject(new Error('Timed out while registering client')));
-      }, timeoutMs);
-
-      socket.once('disconnect', handleDisconnect);
-      socket.emit('register', {
-        clientId: getClientId(),
-        browserInstanceId: getBrowserInstanceId(),
-        username: currentUsername || undefined,
-        clientAuthToken: getClientAuthToken() || undefined,
-      }, (response: RegisterAckResponse) => {
-        settle(() => {
-          if (response?.success) {
-            registeredSocketId = socketId || socket.id || null;
-            const adopted = typeof response.nickname === 'string' ? response.nickname.trim() : '';
-            if (adopted && adopted !== currentUsername) {
-              currentUsername = adopted;
-              saveUsername(adopted);
-              usernameAdoptedCallbacks.forEach(callback => callback(adopted));
-            }
-            pendingResolve();
-            return;
-          }
-
-          const message = typeof response?.message === 'string' ? response.message : undefined;
-          pendingReject(new Error(response?.error || message || 'Failed to register client'));
-        });
+        if (response?.success) {
+          resolve(response);
+          return;
+        }
+        const message = typeof response?.message === 'string' ? response.message : undefined;
+        reject(new Error(response?.error || message || fallbackError));
       });
     });
+  }));
 
-    pendingRegistration.then(resolve).catch(reject);
-  }))
-);
-
-const emitWithAck = <TResponse extends SocketAckResponse>(
-  event: string,
-  payload: unknown,
-  timeoutMessage: string,
-  fallbackError: string,
-): Promise<TResponse> => ensureRegisteredSocket().then(() => new Promise<TResponse>((resolve, reject) => {
-  if (!socket.connected) {
-    reject(new Error('Socket disconnected before sending message'));
-    return;
-  }
-
-  let settled = false;
-  let timeoutId: number;
-
-  function cleanup() {
-    window.clearTimeout(timeoutId);
-    socket.off('disconnect', handleDisconnect);
-  }
-
-  function settle(fn: () => void) {
-    if (settled) {
-      return;
+  return emitOnce().catch((error) => {
+    if (options.retryOnSocketReconnect && isRetryableSocketDisconnectError(error)) {
+      return emitOnce();
     }
-    settled = true;
-    cleanup();
-    fn();
-  }
-
-  function handleDisconnect() {
-    settle(() => reject(new Error('Socket disconnected while waiting for server acknowledgement')));
-  }
-
-  timeoutId = window.setTimeout(() => {
-    settle(() => reject(new Error(timeoutMessage)));
-  }, SEND_MESSAGE_ACK_TIMEOUT_MS);
-
-  socket.once('disconnect', handleDisconnect);
-  socket.emit(event, payload, (response: TResponse) => {
-    settle(() => {
-      if (response?.success) {
-        resolve(response);
-        return;
-      }
-      const message = typeof response?.message === 'string' ? response.message : undefined;
-      reject(new Error(response?.error || message || fallbackError));
-    });
+    throw error;
   });
-}));
+};
 
 // Join a chat room
 export const joinRoom = (roomId: string, password?: string): Promise<RoomJoinResult> => {
@@ -851,7 +883,7 @@ const adoptAuthenticatedClient = (response: ClientAuthResponse) => {
   setClientAuthToken(response.clientAuthToken);
   registeredSocketId = null;
   pendingRegistration = null;
-  pendingRegistrationSocketId = null;
+  suppressNextConnectAutoRegistration = false;
   if (socket.connected) {
     void ensureRegisteredSocket().catch((error) => {
       console.error('Failed to register socket after switching User ID:', error);
@@ -976,6 +1008,7 @@ export const requestCodeAgentWorkspaceSnapshot = (roomId: string): Promise<unkno
     { roomId },
     'Timed out while refreshing workspace',
     'Failed to refresh workspace',
+    { retryOnSocketReconnect: true },
   ).then((response) => {
     if (!response.snapshot) {
       throw new Error('Server did not return workspace snapshot');
@@ -991,6 +1024,7 @@ export const requestCodeWorkspaceEntries = (roomId: string): Promise<{ entries: 
     { roomId },
     'Timed out while loading workspace files',
     'Failed to load workspace files',
+    { retryOnSocketReconnect: true },
   ).then((response) => ({
     entries: response.entries || [],
     truncated: Boolean(response.truncated),
@@ -1003,6 +1037,7 @@ export const requestCodeWorkspaceFile = (roomId: string, path: string): Promise<
     { roomId, path },
     'Timed out while reading workspace file',
     'Failed to read workspace file',
+    { retryOnSocketReconnect: true },
   ).then((response) => {
     if (!response.file) {
       throw new Error('Server did not return workspace file');
@@ -1018,6 +1053,7 @@ export const requestCodeWorkspaceAssetUrl = (roomId: string, path: string): Prom
     { roomId, path },
     'Timed out while preparing workspace file preview',
     'Failed to prepare workspace file preview',
+    { retryOnSocketReconnect: true },
   ).then((response) => {
     if (!response.asset) {
       throw new Error('Server did not return workspace asset URL');

@@ -25,6 +25,8 @@ import { Room, RoomRenameHandler, RoomType } from '../utils/types';
 import { getAvatarColor, getAvatarText } from '../utils/userProfile';
 import { RoomCreateModal, RoomCreateOptions } from './RoomCreateModal';
 import { RoomRenameModal } from './RoomRenameModal';
+import { beginHorizontalResize } from '../utils/horizontalResize';
+import { getCodeAgentPanelResizeBounds, getSidebarMaxWidthForChat } from '../utils/codeAgentPanelLayout';
 
 interface DesktopSidebarProps {
   clientId: string;
@@ -48,6 +50,49 @@ interface DesktopSidebarProps {
   onRenameRoom: RoomRenameHandler;
   isCocoEnabled: boolean;
 }
+
+const DESKTOP_SIDEBAR_COLLAPSED_WIDTH = 72;
+const DESKTOP_SIDEBAR_MIN_WIDTH = 240;
+const DESKTOP_MAIN_MIN_WIDTH = 480;
+const DESKTOP_SIDEBAR_WIDTH_STORAGE_KEY = 'roomtalk.desktopSidebar.width';
+
+const getSidebarResizeBounds = (sidebar?: HTMLElement) => {
+  let max = window.innerWidth - DESKTOP_MAIN_MIN_WIDTH;
+  const chatPane = document.querySelector<HTMLElement>('[data-code-agent-chat-pane="true"]');
+  const workspaceLayout = chatPane?.parentElement;
+  if (sidebar && chatPane && workspaceLayout && chatPane.getBoundingClientRect().width > 0) {
+    const { chatMin } = getCodeAgentPanelResizeBounds(workspaceLayout.getBoundingClientRect().width);
+    max = getSidebarMaxWidthForChat(
+      sidebar.getBoundingClientRect().width,
+      chatPane.getBoundingClientRect().width,
+      chatMin,
+    );
+  }
+  return {
+    min: DESKTOP_SIDEBAR_MIN_WIDTH,
+    max: Math.max(DESKTOP_SIDEBAR_MIN_WIDTH, Math.floor(max)),
+  };
+};
+
+const clampSidebarWidth = (value: number) => {
+  const bounds = getSidebarResizeBounds();
+  return Math.min(bounds.max, Math.max(bounds.min, Math.round(value)));
+};
+
+const defaultSidebarWidth = () => {
+  if (typeof window === 'undefined') {
+    return 320;
+  }
+  return typeof window.matchMedia === 'function' && window.matchMedia('(min-width: 1280px)').matches ? 348 : 320;
+};
+
+const readStoredSidebarWidth = () => {
+  if (typeof window === 'undefined') {
+    return defaultSidebarWidth();
+  }
+  const parsed = Number.parseInt(window.localStorage.getItem(DESKTOP_SIDEBAR_WIDTH_STORAGE_KEY) || '', 10);
+  return Number.isFinite(parsed) ? clampSidebarWidth(parsed) : defaultSidebarWidth();
+};
 
 interface SidebarNavItemProps {
   icon: string;
@@ -283,6 +328,10 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
 }) => {
   const { t } = useTranslation();
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(readStoredSidebarWidth);
+  const sidebarRef = React.useRef<HTMLElement | null>(null);
+  const sidebarWidthRef = React.useRef(sidebarWidth);
+  const sidebarResizeCleanupRef = React.useRef<(() => void) | null>(null);
   const [joinRoomId, setJoinRoomId] = useState('');
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [newRoomName, setNewRoomName] = useState('');
@@ -294,6 +343,64 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
   const [roomToDelete, setRoomToDelete] = useState<Room | null>(null);
   const [roomToRename, setRoomToRename] = useState<Room | null>(null);
   const currentLanguage = getLanguageOption(i18n.language);
+
+  React.useEffect(() => {
+    sidebarWidthRef.current = sidebarWidth;
+    sidebarRef.current?.style.setProperty('--desktop-sidebar-width', `${sidebarWidth}px`);
+  }, [sidebarWidth]);
+
+  React.useEffect(() => () => {
+    sidebarResizeCleanupRef.current?.();
+    sidebarResizeCleanupRef.current = null;
+  }, []);
+
+  const persistSidebarWidth = React.useCallback((width: number) => {
+    try {
+      window.localStorage.setItem(DESKTOP_SIDEBAR_WIDTH_STORAGE_KEY, String(width));
+    } catch {
+      // localStorage persistence is best-effort; the live resize still applies.
+    }
+  }, []);
+
+  const handleSidebarResizeStart = React.useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    const sidebar = sidebarRef.current;
+    if (!sidebar) {
+      return;
+    }
+
+    event.preventDefault();
+    const startWidth = isCollapsed ? DESKTOP_SIDEBAR_MIN_WIDTH : sidebarWidthRef.current;
+
+    setIsCollapsed(false);
+    sidebar.style.transition = 'none';
+    if (isCollapsed) {
+      sidebar.style.setProperty('--desktop-sidebar-width', `${startWidth}px`);
+      sidebar.style.width = `var(--desktop-sidebar-width, ${startWidth}px)`;
+    }
+    sidebarResizeCleanupRef.current?.();
+    sidebarResizeCleanupRef.current = beginHorizontalResize({
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      initialWidth: startWidth,
+      direction: 1,
+      captureTarget: event.currentTarget,
+      getBounds: () => getSidebarResizeBounds(sidebar),
+      onResize: (width) => {
+        sidebar.style.setProperty('--desktop-sidebar-width', `${width}px`);
+      },
+      onFinish: (width) => {
+        sidebar.style.transition = '';
+        sidebarWidthRef.current = width;
+        setSidebarWidth(width);
+        persistSidebarWidth(width);
+        sidebarResizeCleanupRef.current = null;
+      },
+    });
+  }, [isCollapsed, persistSidebarWidth]);
 
   const handleJoinRoom = () => {
     const trimmedRoomId = joinRoomId.trim();
@@ -367,10 +474,19 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
   return (
     <>
       <aside
-        className={`hidden h-full flex-shrink-0 flex-col border-r border-[#dedbd0] bg-[#faf9f5] transition-[width] duration-200 dark:border-[#30302e] dark:bg-[#1d1d1b] md:flex ${
-          isCollapsed ? 'w-[72px]' : 'w-[320px] xl:w-[348px]'
-        }`}
+        ref={sidebarRef}
+        className="relative hidden h-full flex-shrink-0 flex-col border-r border-[#dedbd0] bg-[#faf9f5] transition-[width] duration-200 dark:border-[#30302e] dark:bg-[#1d1d1b] md:flex"
+        style={{
+          width: isCollapsed ? DESKTOP_SIDEBAR_COLLAPSED_WIDTH : `var(--desktop-sidebar-width, ${sidebarWidth}px)`,
+          ['--desktop-sidebar-width' as string]: `${sidebarWidth}px`,
+        }}
       >
+        <button
+          type="button"
+          aria-label={t('resizeSidebar')}
+          className="absolute inset-y-0 -right-1 z-40 w-2 cursor-col-resize touch-none border-x border-transparent transition-colors hover:border-[#c96442]/30 hover:bg-[#c96442]/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442]"
+          onPointerDown={handleSidebarResizeStart}
+        />
         <div
           className={`flex h-16 flex-shrink-0 items-center border-b border-[#dedbd0] dark:border-[#30302e] ${
             isCollapsed ? 'justify-center gap-1 px-2' : 'justify-between px-4'

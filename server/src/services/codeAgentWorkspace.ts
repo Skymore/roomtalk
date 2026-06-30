@@ -16,6 +16,18 @@ export interface CodeAgentWorkspaceSummary {
   lastToolName?: string;
 }
 
+export interface CodeAgentWorkspaceArtifact {
+  slug: string;
+  url: string;
+  entry: string;
+  versionId: string;
+  fileCount: number;
+  totalBytes: number;
+  createdAt: string;
+  updatedAt: string;
+  title?: string;
+}
+
 export interface CodeAgentWorkspaceSnapshot {
   roomId: string;
   backend: 'coco';
@@ -27,6 +39,7 @@ export interface CodeAgentWorkspaceSnapshot {
     hasSession: boolean;
   };
   summary: CodeAgentWorkspaceSummary;
+  artifacts: CodeAgentWorkspaceArtifact[];
   changes: {
     available: boolean;
     changedFiles: string[];
@@ -129,7 +142,8 @@ export const buildCodeAgentWorkspaceSnapshot = (
     available: false,
     changedFiles: [],
     diffSummary: null,
-  }
+  },
+  artifacts: CodeAgentWorkspaceArtifact[] = []
 ): CodeAgentWorkspaceSnapshot => {
   return {
     roomId: room.id,
@@ -142,6 +156,7 @@ export const buildCodeAgentWorkspaceSnapshot = (
       hasSession: Boolean(room.cocoSessionId),
     },
     summary: summarizeWorkspaceMessages(messages),
+    artifacts,
     changes,
     commands: buildCommandHistory(messages),
   };

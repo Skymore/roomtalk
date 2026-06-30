@@ -63,6 +63,7 @@ describe('code-agent workspace snapshots', () => {
       toolErrors: 1,
       lastToolName: 'Read',
     });
+    assert.deepEqual(snapshot.artifacts, []);
     assert.deepEqual(snapshot.changes, { available: false, changedFiles: [], diffSummary: null });
     assert.deepEqual(snapshot.commands, [{
       id: 'tool-1',
@@ -131,5 +132,37 @@ describe('code-agent workspace snapshots', () => {
 
     assert.equal(snapshot.commands[0].preview, 'echo API_KEY=[redacted] token=[redacted]');
     assert.equal(snapshot.commands[1].preview, '{"secret":"[redacted]","path":"src/App.tsx"}');
+  });
+
+  it('includes published artifacts supplied by the backend', () => {
+    const snapshot = buildCodeAgentWorkspaceSnapshot(
+      room,
+      [],
+      new Date('2026-05-29T01:00:00.000Z'),
+      { available: false, changedFiles: [], diffSummary: null },
+      [{
+        slug: 'roomtalk-demo',
+        title: 'RoomTalk Demo',
+        url: 'https://room.ruit.me/p/roomtalk-demo/',
+        entry: 'index.html',
+        versionId: '20260630T120000Z_aaaaaaaa',
+        fileCount: 1,
+        totalBytes: 128,
+        createdAt: '2026-06-30T12:00:00.000Z',
+        updatedAt: '2026-06-30T12:00:00.000Z',
+      }]
+    );
+
+    assert.deepEqual(snapshot.artifacts, [{
+      slug: 'roomtalk-demo',
+      title: 'RoomTalk Demo',
+      url: 'https://room.ruit.me/p/roomtalk-demo/',
+      entry: 'index.html',
+      versionId: '20260630T120000Z_aaaaaaaa',
+      fileCount: 1,
+      totalBytes: 128,
+      createdAt: '2026-06-30T12:00:00.000Z',
+      updatedAt: '2026-06-30T12:00:00.000Z',
+    }]);
   });
 });

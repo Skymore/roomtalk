@@ -38,6 +38,7 @@ import {
   isWorkspacePreviewEntryPath,
 } from '../utils/codeWorkspaceFilePreview';
 import type { RoomSandboxStatus } from '../utils/types';
+import { beginHorizontalResize } from '../utils/horizontalResize';
 import { projectFileCacheKey } from './codeAgentFileContentRevision';
 import { FileSaveCoordinator } from './codeAgentFileSaveCoordinator';
 
@@ -92,6 +93,22 @@ const TREE_UNSAFE_CSS = `
 
 const FILE_SAVE_DEBOUNCE_MS = 500;
 const FILE_EXPLORER_STORAGE_KEY = 'roomtalk.codeWorkspace.fileExplorerOpen';
+const FILE_EXPLORER_WIDTH_STORAGE_KEY = 'roomtalk.codeWorkspace.fileExplorerWidth';
+const FILE_EXPLORER_MIN_WIDTH = 180;
+const FILE_PREVIEW_MIN_WIDTH = 180;
+const FILE_EXPLORER_DEFAULT_WIDTH = 352;
+
+function getFileExplorerResizeBounds(panelWidth: number) {
+  return {
+    min: FILE_EXPLORER_MIN_WIDTH,
+    max: Math.max(FILE_EXPLORER_MIN_WIDTH, Math.floor(panelWidth - FILE_PREVIEW_MIN_WIDTH)),
+  };
+}
+
+function clampFileExplorerWidth(value: number, panelWidth: number): number {
+  const bounds = getFileExplorerResizeBounds(panelWidth);
+  return Math.min(bounds.max, Math.max(bounds.min, Math.round(value)));
+}
 
 function treePath(entry: ProjectEntry): string {
   return entry.kind === 'directory' ? `${entry.path}/` : entry.path;
@@ -179,6 +196,18 @@ function initialExplorerOpen(): boolean {
     return stored === null ? true : stored === 'true';
   } catch {
     return true;
+  }
+}
+
+function initialExplorerWidth(): number {
+  try {
+    const stored = window.localStorage.getItem(FILE_EXPLORER_WIDTH_STORAGE_KEY);
+    const parsed = Number.parseInt(stored || '', 10);
+    return Number.isFinite(parsed)
+      ? clampFileExplorerWidth(parsed, window.innerWidth)
+      : FILE_EXPLORER_DEFAULT_WIDTH;
+  } catch {
+    return FILE_EXPLORER_DEFAULT_WIDTH;
   }
 }
 
@@ -736,11 +765,15 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const resolvedTheme = useResolvedTheme();
   const entriesQuery = useCodeWorkspaceEntriesQuery(roomId);
   const uploadInputRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>('idle');
   const [saveError, setSaveError] = useState<string | null>(null);
   const [explorerOpen, setExplorerOpen] = useState(initialExplorerOpen);
+  const [explorerWidth, setExplorerWidth] = useState(() => initialExplorerWidth());
+  const explorerWidthRef = useRef(explorerWidth);
+  const explorerResizeCleanupRef = useRef<(() => void) | null>(null);
   const [sourceView, setSourceView] = useState<{ path: string | null }>({ path: null });
   const workspaceReadyKey = `${sandboxStatus || 'none'}:${sandboxUpdatedAt || ''}`;
   const previousWorkspaceReadyKeyRef = useRef(workspaceReadyKey);
@@ -779,6 +812,16 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     [projectName, relativePath],
   );
   const refreshWorkspaceEntries = entriesQuery.refresh;
+
+  useEffect(() => {
+    explorerWidthRef.current = explorerWidth;
+    panelRef.current?.style.setProperty('--workspace-file-explorer-width', `${explorerWidth}px`);
+  }, [explorerWidth]);
+
+  useEffect(() => () => {
+    explorerResizeCleanupRef.current?.();
+    explorerResizeCleanupRef.current = null;
+  }, []);
 
   useEffect(() => {
     if (!entriesQuery.isPending && selectedPath && !entryKinds.has(selectedPath)) {
@@ -882,6 +925,42 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     });
   }, []);
 
+  const handleExplorerResizeStart = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    const panel = panelRef.current;
+    if (!panel) {
+      return;
+    }
+
+    event.preventDefault();
+    const startWidth = explorerWidthRef.current;
+    explorerResizeCleanupRef.current?.();
+    explorerResizeCleanupRef.current = beginHorizontalResize({
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      initialWidth: startWidth,
+      direction: -1,
+      captureTarget: event.currentTarget,
+      getBounds: () => getFileExplorerResizeBounds(panel.getBoundingClientRect().width),
+      onResize: (width) => {
+        panel.style.setProperty('--workspace-file-explorer-width', `${width}px`);
+      },
+      onFinish: (width) => {
+        explorerWidthRef.current = width;
+        setExplorerWidth(width);
+        try {
+          window.localStorage.setItem(FILE_EXPLORER_WIDTH_STORAGE_KEY, String(width));
+        } catch {
+          // localStorage persistence is best-effort; the live resize still applies.
+        }
+        explorerResizeCleanupRef.current = null;
+      },
+    });
+  }, []);
+
   const togglePreviewView = useCallback(() => {
     setSourceView((current) => ({
       path: current.path === relativePath ? null : relativePath,
@@ -894,7 +973,12 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   }, []);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#faf9f5] dark:bg-[#1d1d1b]" data-file-browser-panel={`${roomId}:workspace`}>
+    <div
+      ref={panelRef}
+      className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#faf9f5] dark:bg-[#1d1d1b]"
+      data-file-browser-panel={`${roomId}:workspace`}
+      style={{ ['--workspace-file-explorer-width' as string]: `${explorerWidth}px` }}
+    >
       {relativePath ? (
         <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[#dedbd0] px-3 dark:border-[#30302e]" data-surface-subheader>
           <div className="flex min-w-0 flex-1 items-center overflow-hidden text-xs">
@@ -945,7 +1029,21 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
           />
         </div>
         {explorerOpen || relativePath === null ? (
-          <aside className={`${relativePath ? 'w-[min(22rem,46%)] min-w-64 border-l border-[#dedbd0] dark:border-[#30302e]' : 'min-w-0 flex-1'} flex min-h-0 shrink-0 bg-[#faf9f5] dark:bg-[#1d1d1b]`}>
+          <aside
+            className={`${relativePath ? 'relative min-w-[180px] border-l border-[#dedbd0] dark:border-[#30302e]' : 'min-w-0 flex-1'} flex min-h-0 shrink-0 bg-[#faf9f5] dark:bg-[#1d1d1b]`}
+            style={relativePath ? {
+              width: 'var(--workspace-file-explorer-width)',
+              maxWidth: `calc(100% - ${FILE_PREVIEW_MIN_WIDTH}px)`,
+            } : undefined}
+          >
+            {relativePath ? (
+              <button
+                type="button"
+                aria-label={t('codeAgentResizeFileExplorer')}
+                className="absolute inset-y-0 -left-1 z-40 w-2 cursor-col-resize touch-none border-x border-transparent transition-colors hover:border-[#c96442]/30 hover:bg-[#c96442]/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442]"
+                onPointerDown={handleExplorerResizeStart}
+              />
+            ) : null}
             <FileBrowserPanel
               projectName={projectName}
               entries={entries}

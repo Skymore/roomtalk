@@ -135,6 +135,7 @@ describe('MessageList optimistic messages', () => {
         toolErrors: 0,
         lastToolName: null,
       },
+      artifacts: [],
       changes: { available: false, changedFiles: [], diffSummary: null },
       commands: [],
     });
@@ -417,6 +418,52 @@ describe('MessageList optimistic messages', () => {
     expect(screen.getByTestId('code-agent-workspace').closest('[data-testid="message-list-scroll"]')).toBeNull();
     expect(screen.getByTestId('code-agent-workspace').className).toContain('sticky');
     expect(screen.getByTestId('code-agent-workspace').className).toContain('top-0');
+  });
+
+  it('refreshes the code workspace snapshot when the sandbox becomes ready', async () => {
+    const baseRoom = {
+      id: 'room-1',
+      name: 'Coco',
+      createdAt: '2026-05-26T00:00:00.000Z',
+      creatorId: 'client-1',
+      type: 'coco' as const,
+      cocoStatus: 'idle' as const,
+    };
+
+    const { rerender } = render(
+      <MessageList
+        roomId="room-1"
+        onReply={vi.fn()}
+        roomPermissions={null}
+        presentation="code-agent"
+        currentRoom={{
+          ...baseRoom,
+          sandboxStatus: 'none',
+        }}
+      />
+    );
+
+    await waitFor(() => {
+      expect(loadCodeAgentWorkspaceSnapshotMock).toHaveBeenCalledTimes(1);
+    });
+
+    rerender(
+      <MessageList
+        roomId="room-1"
+        onReply={vi.fn()}
+        roomPermissions={null}
+        presentation="code-agent"
+        currentRoom={{
+          ...baseRoom,
+          sandboxStatus: 'ready',
+          sandboxUpdatedAt: '2026-06-30T10:00:00.000Z',
+        }}
+      />
+    );
+
+    await waitFor(() => {
+      expect(loadCodeAgentWorkspaceSnapshotMock).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('uses current room AI settings when retrying an AI message', async () => {

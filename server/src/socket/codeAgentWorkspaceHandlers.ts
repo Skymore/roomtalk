@@ -58,6 +58,14 @@ const unavailableWorkspaceChanges: CocoWorkspaceChanges = {
   diffSummary: null,
 };
 
+const firstHeaderValue = (value: string | string[] | undefined) => (
+  Array.isArray(value) ? value[0] : value
+);
+
+const getSocketOrigin = (socket: SocketConnectionContext['socket']) => (
+  firstHeaderValue(socket.handshake?.headers?.origin)
+);
+
 const parseRoomId = (payload: unknown): string | null => {
   if (typeof payload === 'string') {
     return payload.trim() || null;
@@ -102,6 +110,7 @@ export function registerCodeAgentWorkspaceHandlers({
   cocoAccess = createCocoAccessControl({ enabled: false }),
   cocoSandboxService,
   codeWorkspaceAssetAccess,
+  publishedStaticSiteService,
 }: SocketConnectionContext) {
   const loadAuthorizedCocoRoom = async (
     roomId: string | null,
@@ -174,6 +183,21 @@ export function registerCodeAgentWorkspaceHandlers({
     }
   };
 
+  const loadPublishedArtifacts = async (room: Room) => {
+    if (!publishedStaticSiteService?.listSitesForRoom) {
+      return [];
+    }
+    try {
+      return await publishedStaticSiteService.listSitesForRoom(
+        room.id,
+        publishedStaticSiteService.publicBaseUrlForRequest(getSocketOrigin(socket))
+      );
+    } catch (error) {
+      socketLogger.warn('Failed to load code workspace artifacts', { error, roomId: room.id, socketId: socket.id });
+      return [];
+    }
+  };
+
   socket.on('get_code_workspace_snapshot', async (payload: unknown, callback?: (response: WorkspaceSnapshotAck) => void) => {
     const roomId = parseRoomId(payload);
     let clientId: string | null = null;
@@ -187,10 +211,11 @@ export function registerCodeAgentWorkspaceHandlers({
       }
       const messages = await store.readMessagesByRoom(access.room.id);
       const changes = await loadWorkspaceChanges(access.room);
+      const artifacts = await loadPublishedArtifacts(access.room);
 
       callback?.({
         success: true,
-        snapshot: buildCodeAgentWorkspaceSnapshot(access.room, messages, new Date(), changes),
+        snapshot: buildCodeAgentWorkspaceSnapshot(access.room, messages, new Date(), changes, artifacts),
       });
     } catch (error) {
       socketLogger.error('Failed to build code workspace snapshot', { error, clientId, roomId, socketId: socket.id });

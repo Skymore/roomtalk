@@ -105,6 +105,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const [roleMembers, setRoleMembers] = useState<RoomRoleMember[]>([]);
   const codeAgentRoom = currentRoom || (presentation === 'code-agent' ? room : undefined);
   const currentRoomId = codeAgentRoom?.id;
+  const workspaceRefreshKey = `${currentRoomId || ''}:${codeAgentRoom?.sandboxStatus || 'none'}:${codeAgentRoom?.sandboxUpdatedAt || ''}`;
   const canManageSenderActions = Boolean(roomPermissions?.canManageMembers || roomPermissions?.canManageAdmins || roomPermissions?.canTransferOwnership);
   const getAIRequestSettingsForRoom = useCallback(() => (
     getRoomAIRequestSettings(roomId)
@@ -279,7 +280,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     return () => {
       workspaceFetchAbortRef.current?.abort();
     };
-  }, [currentRoomId, presentation, refreshWorkspaceSnapshot]);
+  }, [currentRoomId, presentation, refreshWorkspaceSnapshot, workspaceRefreshKey]);
 
   // Warm the lazily-loaded markdown chunk on mount so the first message renders
   // as markdown immediately instead of flashing plain text. The component

@@ -8,6 +8,11 @@ import { registerCodeAgentWorkspaceHandlers } from './codeAgentWorkspaceHandlers
 
 class FakeSocket {
   id = 'socket-1';
+  handshake = {
+    headers: {
+      origin: 'https://room.ruit.me',
+    },
+  };
   handlers = new Map<string, (...args: any[]) => unknown>();
 
   on(event: string, handler: (...args: any[]) => unknown) {
@@ -71,6 +76,7 @@ const createHarness = (options: {
   workspaceFileContent?: string;
   cocoAccess?: ReturnType<typeof createCocoAccessControl>;
   codeWorkspaceAssetAccess?: CodeWorkspaceAssetAccess;
+  publishedArtifacts?: any[];
 } = {}) => {
   const socket = new FakeSocket();
   const currentRoom = options.currentRoom || room();
@@ -83,6 +89,7 @@ const createHarness = (options: {
   const createWorkspaceDirectoryCalls: Array<{ sandboxId: string; path: string }> = [];
   const renameWorkspaceEntryCalls: Array<{ sandboxId: string; fromPath: string; toPath: string }> = [];
   const deleteWorkspaceEntryCalls: Array<{ sandboxId: string; path: string }> = [];
+  const listSitesForRoomCalls: Array<{ roomId: string; requestBaseUrl?: string }> = [];
   const store = {
     getClientId: async () => options.clientId === undefined ? 'client-1' : options.clientId,
     getRoomById: async (roomId: string) => roomId === currentRoom.id ? currentRoom : null,
@@ -102,6 +109,13 @@ const createHarness = (options: {
     getAIClientForModel: (() => ({})) as any,
     cocoAccess: options.cocoAccess ?? createCocoAccessControl({ enabled: true }),
     codeWorkspaceAssetAccess: options.codeWorkspaceAssetAccess,
+    publishedStaticSiteService: {
+      publicBaseUrlForRequest: (clientOrigin?: string) => clientOrigin,
+      listSitesForRoom: async (roomId: string, requestBaseUrl?: string) => {
+        listSitesForRoomCalls.push({ roomId, requestBaseUrl });
+        return options.publishedArtifacts || [];
+      },
+    } as any,
     cocoSandboxService: {
       create: async () => ({
         id: 'sandbox-1',
@@ -200,17 +214,31 @@ const createHarness = (options: {
     createWorkspaceDirectoryCalls,
     renameWorkspaceEntryCalls,
     deleteWorkspaceEntryCalls,
+    listSitesForRoomCalls,
   };
 };
 
 describe('code-agent workspace socket handlers', () => {
   it('returns Coco workspace snapshots through the registered socket session', async () => {
-    const { socket, getWorkspaceChangesCalls, listWorkspaceEntriesCalls } = createHarness({
+    const { socket, getWorkspaceChangesCalls, listWorkspaceEntriesCalls, listSitesForRoomCalls } = createHarness({
       workspaceChanges: {
         available: true,
         changedFiles: ['src/App.tsx', 'src/index.css'],
         diffSummary: { files: 2, additions: 12, deletions: 3 },
       },
+      publishedArtifacts: [
+        {
+          slug: 'roomtalk-demo',
+          title: 'RoomTalk Demo',
+          url: 'https://room.ruit.me/p/roomtalk-demo/',
+          entry: 'index.html',
+          versionId: '20260630T120000Z_aaaaaaaa',
+          fileCount: 1,
+          totalBytes: 128,
+          createdAt: '2026-06-30T12:00:00.000Z',
+          updatedAt: '2026-06-30T12:00:00.000Z',
+        },
+      ],
       messages: [
         message({
           id: 'tool-call-1',
@@ -241,8 +269,22 @@ describe('code-agent workspace socket handlers', () => {
       changedFiles: ['src/App.tsx', 'src/index.css'],
       diffSummary: { files: 2, additions: 12, deletions: 3 },
     });
+    assert.deepEqual(response.snapshot.artifacts, [
+      {
+        slug: 'roomtalk-demo',
+        title: 'RoomTalk Demo',
+        url: 'https://room.ruit.me/p/roomtalk-demo/',
+        entry: 'index.html',
+        versionId: '20260630T120000Z_aaaaaaaa',
+        fileCount: 1,
+        totalBytes: 128,
+        createdAt: '2026-06-30T12:00:00.000Z',
+        updatedAt: '2026-06-30T12:00:00.000Z',
+      },
+    ]);
     assert.deepEqual(response.snapshot.commands, [{ id: 'tool-1', name: 'Read', status: 'succeeded', exitCode: undefined, preview: 'ok' }]);
     assert.deepEqual(getWorkspaceChangesCalls, [{ sandboxId: 'sandbox-1' }]);
+    assert.deepEqual(listSitesForRoomCalls, [{ roomId: 'room-1', requestBaseUrl: 'https://room.ruit.me' }]);
     assert.deepEqual(listWorkspaceEntriesCalls, []);
   });
 
