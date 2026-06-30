@@ -71,9 +71,6 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(screen.getByText('codeAgentEditMode')).toBeTruthy();
     expect(screen.getByText('codeAgentEditDescription')).toBeTruthy();
 
-    fireEvent.click(screen.getByText('codeAgentFiles'));
-    expect(screen.getByText('codeAgentNoFiles')).toBeTruthy();
-
     fireEvent.click(screen.getByText('codeAgentActivity'));
     expect(screen.getByText('Read')).toBeTruthy();
     expect(screen.getByLabelText('codeAgentRefreshWorkspace')).toBeTruthy();
@@ -150,10 +147,8 @@ describe('CodeAgentWorkspacePanel', () => {
             toolCalls: 1,
             toolResults: 1,
             toolErrors: 0,
-            touchedFiles: ['src/App.tsx'],
             lastToolName: 'Shell',
           },
-          files: { touched: ['src/App.tsx'], hiddenCount: 0 },
           changes: { available: false, changedFiles: [], diffSummary: null },
           commands: [
             {
@@ -185,60 +180,5 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(screen.getByText('codeAgentCommandSucceeded')).toBeTruthy();
     expect(screen.getByText('codeAgentCommandFailed')).toBeTruthy();
     expect(screen.getByText('permission denied')).toBeTruthy();
-  });
-
-  it('renders root-level workspace files with a repo-root directory marker', () => {
-    render(
-      <CodeAgentWorkspacePanel
-        room={room}
-        messages={[]}
-        mode="plan"
-        sessionCostUsd={0}
-        workspaceSnapshot={{
-          roomId: 'room-1',
-          backend: 'coco',
-          source: 'sandbox',
-          generatedAt: '2026-05-29T00:00:00.000Z',
-          status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: true },
-          summary: { toolCalls: 0, toolResults: 0, toolErrors: 0, touchedFiles: ['README.md'] },
-          files: { touched: ['README.md'], hiddenCount: 0 },
-          changes: { available: false, changedFiles: [], diffSummary: null },
-          commands: [],
-        }}
-      />
-    );
-
-    fireEvent.click(screen.getByText('codeAgentFiles'));
-    expect(screen.getByText('README.md')).toBeTruthy();
-    expect(screen.getByText('.')).toBeTruthy();
-  });
-
-  it('indicates when the touched file list is truncated', () => {
-    const workspaceFiles = Array.from({ length: 12 }, (_, index) => `src/file-${String(index).padStart(2, '0')}.ts`);
-
-    render(
-      <CodeAgentWorkspacePanel
-        room={room}
-        messages={[]}
-        mode="plan"
-        sessionCostUsd={0}
-        workspaceSnapshot={{
-          roomId: 'room-1',
-          backend: 'coco',
-          source: 'sandbox',
-          generatedAt: '2026-05-29T00:00:00.000Z',
-          status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: true },
-          summary: { toolCalls: 0, toolResults: 0, toolErrors: 0, touchedFiles: workspaceFiles },
-          files: { touched: workspaceFiles.slice(0, 10), hiddenCount: 2 },
-          changes: { available: false, changedFiles: [], diffSummary: null },
-          commands: [],
-        }}
-      />
-    );
-
-    fireEvent.click(screen.getByText('codeAgentFiles'));
-    expect(screen.getByText('file-00.ts')).toBeTruthy();
-    expect(screen.queryByText('file-11.ts')).toBeNull();
-    expect(screen.getByText('+2')).toBeTruthy();
   });
 });

@@ -302,6 +302,7 @@ describe('MessageItem replies', () => {
           canManageAdmins: true,
           canManageMembers: true,
           canTransferOwnership: true,
+          canUseCoco: true,
         }}
         onStartEdit={vi.fn()}
         onDeleteMessage={vi.fn()}

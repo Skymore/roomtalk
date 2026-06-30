@@ -683,13 +683,13 @@ describe('CocoSessionService', () => {
     const runner = new FakeCocoRunnerClient([
       { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
     ]);
-    const { service } = createService({ runner, mode: 'acceptEdits' });
+    const store = new MemoryCocoStore(room({ codeAgentMode: 'plan' }), [userMessage()]);
+    const { service } = createService({ store, runner, mode: 'acceptEdits' });
 
     await service.startTurn({
       roomId: 'room-1',
       clientId: 'client-1',
       selectedModel,
-      mode: 'plan',
     });
 
     assert.equal(runner.requests[0].mode, 'plan');
@@ -699,13 +699,13 @@ describe('CocoSessionService', () => {
     const runner = new FakeCocoRunnerClient([
       { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
     ]);
-    const { service } = createService({ runner, mode: 'plan' });
+    const store = new MemoryCocoStore(room({ codeAgentMode: 'acceptEdits' }), [userMessage()]);
+    const { service } = createService({ store, runner, mode: 'plan' });
 
     const result = await service.startTurn({
       roomId: 'room-1',
       clientId: 'client-1',
       selectedModel,
-      mode: 'acceptEdits',
     });
 
     assert.deepEqual(result, { success: false, error: 'Coco edit mode is not enabled' });
@@ -764,6 +764,7 @@ describe('CocoSessionService', () => {
       stateStore: new InMemoryCocoModelGatewayTokenStateStore(() => 1_800_000_000_000),
     });
     const { sandboxService, service } = createService({
+      store: new MemoryCocoStore(room({ codeAgentMode: 'acceptEdits' }), [userMessage()]),
       runner,
       availableModes: ['plan', 'acceptEdits'],
       defaultMode: 'plan',
@@ -777,7 +778,6 @@ describe('CocoSessionService', () => {
       roomId: 'room-1',
       clientId: 'client-1',
       selectedModel,
-      mode: 'acceptEdits',
     });
 
     const env = sandboxService.startedRunnerEnvs[0];

@@ -99,6 +99,15 @@ type CodeAgentWorkspaceSnapshotAckResponse = SocketAckResponse & {
   snapshot?: unknown;
 };
 
+type CodeWorkspaceEntriesAckResponse = SocketAckResponse & {
+  entries?: unknown[];
+  truncated?: boolean;
+};
+
+type CodeWorkspaceFileAckResponse = SocketAckResponse & {
+  file?: unknown;
+};
+
 type CodeAgentMode = 'plan' | 'acceptEdits';
 
 type RoomAckResponse = SocketAckResponse & {
@@ -663,6 +672,7 @@ export const updateRoomSettings = (params: {
   clearPassword?: boolean;
   postingSchedule?: RoomPostingSchedule | null;
   cocoAccess?: Room['cocoAccess'] | null;
+  codeAgentMode?: Room['codeAgentMode'] | null;
 }): Promise<Room> => {
   return emitWithAck<RoomAckResponse>(
     'update_room_settings',
@@ -964,6 +974,33 @@ export const requestCodeAgentWorkspaceSnapshot = (roomId: string): Promise<unkno
     }
 
     return response.snapshot;
+  })
+);
+
+export const requestCodeWorkspaceEntries = (roomId: string): Promise<{ entries: unknown[]; truncated: boolean }> => (
+  emitWithAck<CodeWorkspaceEntriesAckResponse>(
+    'list_code_workspace_entries',
+    { roomId },
+    'Timed out while loading workspace files',
+    'Failed to load workspace files',
+  ).then((response) => ({
+    entries: response.entries || [],
+    truncated: Boolean(response.truncated),
+  }))
+);
+
+export const requestCodeWorkspaceFile = (roomId: string, path: string): Promise<unknown> => (
+  emitWithAck<CodeWorkspaceFileAckResponse>(
+    'read_code_workspace_file',
+    { roomId, path },
+    'Timed out while reading workspace file',
+    'Failed to read workspace file',
+  ).then((response) => {
+    if (!response.file) {
+      throw new Error('Server did not return workspace file');
+    }
+
+    return response.file;
   })
 );
 

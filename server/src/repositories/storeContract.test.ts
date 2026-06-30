@@ -470,6 +470,8 @@ type RoomRow = {
   sandbox_updated_at?: string | null;
   coco_session_id?: string | null;
   coco_status?: Room['cocoStatus'] | null;
+  coco_access?: Room['cocoAccess'] | null;
+  code_agent_mode?: Room['codeAgentMode'] | null;
 };
 
 type MessageRow = {
@@ -497,6 +499,7 @@ type MessageRow = {
   reply_to: unknown;
   ui_payload: unknown;
   ai_stream_owner_id: string | null;
+  code_agent_mode?: string | null;
   position: number;
 };
 
@@ -591,6 +594,8 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         sandboxUpdatedAt,
         cocoSessionId,
         cocoStatus,
+        cocoAccess,
+        codeAgentMode,
         shouldUpdateType,
       ] = params;
       const roomId = String(id);
@@ -607,6 +612,8 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
           sandbox_updated_at: sandboxUpdatedAt === null || sandboxUpdatedAt === undefined ? existing.sandbox_updated_at : String(sandboxUpdatedAt),
           coco_session_id: cocoSessionId === null || cocoSessionId === undefined ? existing.coco_session_id : String(cocoSessionId),
           coco_status: cocoStatus === null || cocoStatus === undefined ? existing.coco_status : cocoStatus as Room['cocoStatus'],
+          coco_access: cocoAccess === null || cocoAccess === undefined ? existing.coco_access : cocoAccess as Room['cocoAccess'],
+          code_agent_mode: codeAgentMode === null || codeAgentMode === undefined ? existing.code_agent_mode : codeAgentMode as Room['codeAgentMode'],
           room_version: (existing.room_version || 0) + 1,
           updated_at: new Date().toISOString(),
         }
@@ -624,6 +631,8 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
           sandbox_updated_at: sandboxUpdatedAt === null || sandboxUpdatedAt === undefined ? null : String(sandboxUpdatedAt),
           coco_session_id: cocoSessionId === null || cocoSessionId === undefined ? null : String(cocoSessionId),
           coco_status: cocoStatus === null || cocoStatus === undefined ? null : cocoStatus as Room['cocoStatus'],
+          coco_access: cocoAccess === null || cocoAccess === undefined ? null : cocoAccess as Room['cocoAccess'],
+          code_agent_mode: codeAgentMode === null || codeAgentMode === undefined ? null : codeAgentMode as Room['codeAgentMode'],
           room_version: 1,
           updated_at: new Date().toISOString(),
         };
@@ -714,6 +723,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         replyTo,
         uiPayload,
         aiStreamOwnerId,
+        codeAgentMode,
         position,
       ] = params;
       const roomMessages = this.messages.get(String(roomId)) || [];
@@ -744,6 +754,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         reply_to: jsonValue(replyTo),
         ui_payload: jsonValue(uiPayload),
         ai_stream_owner_id: aiStreamOwnerId === null || aiStreamOwnerId === undefined ? null : String(aiStreamOwnerId),
+        code_agent_mode: codeAgentMode === null || codeAgentMode === undefined ? null : String(codeAgentMode),
         position: existingPosition,
       };
       if (existingIndex === -1) {

@@ -95,6 +95,7 @@ app.use(cors({
   credentials: true,
 }));
 console.log(`process.env.CLIENT_URL: ${process.env.CLIENT_URL}`);
+console.log(`process.env.CLIENT_URLS: ${process.env.CLIENT_URLS}`);
 const defaultJsonParser = express.json();
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (req.path === DEFAULT_COCO_MODEL_GATEWAY_BASE_PATH || req.path.startsWith(`${DEFAULT_COCO_MODEL_GATEWAY_BASE_PATH}/`)) {

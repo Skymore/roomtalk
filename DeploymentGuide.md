@@ -162,7 +162,8 @@ After deployment, set environment variables:
 2. **Set environment variables via command line**:
    ```bash
    fly secrets set NODE_ENV="production"
-   fly secrets set CLIENT_URL="https://your-app-name.fly.dev"
+   fly secrets set CLIENT_URL="https://room.ruit.me"
+   fly secrets set CLIENT_URLS="https://room.ruit.me,https://room.ruit.me"
    fly secrets set REDIS_URL="redis://default:password@fly-message-system-redis.upstash.io:6379"
    ```
    When you use the `fly secrets set` command, Fly.io automatically restarts your application to apply the new environment variables.
@@ -230,7 +231,8 @@ The application requires these environment variables:
 | POSTGRES_SSL_CA_BASE64 / POSTGRES_SSL_CA | Optional managed PostgreSQL root CA | ... |
 | ROOM_MESSAGES_CACHE_TTL_SECONDS | Redis message cache TTL in PostgreSQL mode; `0` disables cache writes | 30 |
 | NODE_ENV | Running environment | production |
-| CLIENT_URL | Client address (optional) | https://example.com |
+| CLIENT_URL | Primary client address, also used by public callback defaults | https://room.ruit.me |
+| CLIENT_URLS | Comma-separated CORS origin allowlist for multiple production domains | https://room.ruit.me,https://room.ruit.me |
 | DEEPSEEK_API_KEY | DeepSeek official API key for the default model | sk-... |
 | OPENROUTER_API_KEY | OpenRouter key for routed models and AI role drafts | sk-or-... |
 | ANTHROPIC_API_KEY | Optional Anthropic official API key | sk-ant-... |

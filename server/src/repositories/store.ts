@@ -228,6 +228,7 @@ export interface RoomSettingsUpdate {
   passwordHash?: string | null;
   postingSchedule?: RoomPostingSchedule | null;
   cocoAccess?: Room['cocoAccess'] | null;
+  codeAgentMode?: Room['codeAgentMode'] | null;
 }
 
 export interface DurableRoomStore {

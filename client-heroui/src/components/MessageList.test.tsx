@@ -133,10 +133,8 @@ describe('MessageList optimistic messages', () => {
         toolCalls: 0,
         toolResults: 0,
         toolErrors: 0,
-        touchedFiles: [],
         lastToolName: null,
       },
-      files: { touched: [], hiddenCount: 0 },
       changes: { available: false, changedFiles: [], diffSummary: null },
       commands: [],
     });
@@ -497,7 +495,6 @@ describe('MessageList optimistic messages', () => {
         roleName: 'Code Expert',
         model: 'deepseek-v4-pro',
         maxContextMessages: 1,
-        codeAgentMode: 'acceptEdits',
       });
     });
   });
@@ -582,7 +579,6 @@ describe('MessageList optimistic messages', () => {
         roleName: 'A2UI Demo',
         model: 'deepseek-v4-pro',
         maxContextMessages: 2,
-        codeAgentMode: 'acceptEdits',
       });
     });
   });

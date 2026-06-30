@@ -31,6 +31,10 @@ export const POSTGRES_SCHEMA_SQL = [
   `ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_coco_access_check`,
   `ALTER TABLE rooms ADD CONSTRAINT rooms_coco_access_check
     CHECK (coco_access IS NULL OR coco_access IN ('owner', 'admin', 'member'))`,
+  `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS code_agent_mode TEXT`,
+  `ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_code_agent_mode_check`,
+  `ALTER TABLE rooms ADD CONSTRAINT rooms_code_agent_mode_check
+    CHECK (code_agent_mode IS NULL OR code_agent_mode IN ('plan', 'acceptEdits'))`,
   `ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_type_check`,
   `ALTER TABLE rooms ADD CONSTRAINT rooms_type_check
     CHECK (type IN ('chat', 'coco'))`,
@@ -102,6 +106,7 @@ export const POSTGRES_SCHEMA_SQL = [
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS tool_output_preview TEXT`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS exit_code INTEGER`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS is_error BOOLEAN`,
+  `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS code_agent_mode TEXT`,
   // Legacy media rows can predate the unified 'media' message type. Normalize
   // them after dropping older checks so the narrower constraint is startup-safe.
   `ALTER TABLE room_messages DROP CONSTRAINT IF EXISTS room_messages_message_type_check`,

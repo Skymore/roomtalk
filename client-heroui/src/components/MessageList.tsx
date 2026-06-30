@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useRef, useCallback, useImperativeHandle } from 'react';
 import { Icon } from '@iconify/react';
-import { getMediaDownloadUrl, getRoomMessagesForExport, requestAIResponse, requestEditMessageAndAIResponse, socket } from '../utils/socket';
-import { MessageItem, preloadMarkdownContent } from './MessageItem';
-import { Message, Room, RoomPermissions } from '../utils/types';
+import { getMediaDownloadUrl, getRoomMessagesForExport, getRoomRoleMembers, removeRoomAdmin, removeRoomMember, requestAIResponse, requestEditMessageAndAIResponse, setRoomAdmin, socket, transferRoomOwnership } from '../utils/socket';
+import { MessageItem, MessageUserAction, preloadMarkdownContent } from './MessageItem';
+import { Message, Room, RoomPermissions, RoomRoleMember } from '../utils/types';
 import { readMemoryRoomMessageWindow } from '../utils/messageHistoryCache';
 import { useTranslation } from 'react-i18next';
 import { getRoomAIRequestSettings } from '../utils/aiRequestSettings';
@@ -102,12 +102,19 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const [workspaceSnapshot, setWorkspaceSnapshot] = useState<CodeAgentWorkspaceSnapshot | null>(null);
   const [isWorkspaceRefreshing, setIsWorkspaceRefreshing] = useState(false);
   const [workspaceRefreshError, setWorkspaceRefreshError] = useState<string | null>(null);
+  const [roleMembers, setRoleMembers] = useState<RoomRoleMember[]>([]);
   const codeAgentRoom = currentRoom || (presentation === 'code-agent' ? room : undefined);
   const currentRoomId = codeAgentRoom?.id;
-  const getAIRequestSettingsForRoom = useCallback(() => ({
-    ...getRoomAIRequestSettings(roomId),
-    ...(presentation === 'code-agent' ? { codeAgentMode } : {}),
-  }), [roomId, presentation, codeAgentMode]);
+  const canManageSenderActions = Boolean(roomPermissions?.canManageMembers || roomPermissions?.canManageAdmins || roomPermissions?.canTransferOwnership);
+  const getAIRequestSettingsForRoom = useCallback(() => (
+    getRoomAIRequestSettings(roomId)
+  ), [roomId]);
+
+  const roleMemberByClientId = React.useMemo(() => {
+    const map = new Map<string, RoomRoleMember>();
+    roleMembers.forEach(member => map.set(member.clientId, member));
+    return map;
+  }, [roleMembers]);
 
   const toolResultPairing = React.useMemo(() => {
     const resultByCallId = new Map<string, Message>();
@@ -282,6 +289,40 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     preloadMarkdownContent();
   }, []);
 
+  const loadRoleMembers = useCallback(async () => {
+    if (!canManageSenderActions) {
+      setRoleMembers([]);
+      return;
+    }
+
+    try {
+      setRoleMembers(await getRoomRoleMembers(roomId));
+    } catch (error) {
+      console.error('Failed to load room role members:', error);
+    }
+  }, [canManageSenderActions, roomId]);
+
+  useEffect(() => {
+    void loadRoleMembers();
+  }, [loadRoleMembers]);
+
+  useEffect(() => {
+    if (!canManageSenderActions) {
+      return;
+    }
+
+    const handleRoleMembersUpdated = (updatedRoomId: string) => {
+      if (updatedRoomId === roomId) {
+        void loadRoleMembers();
+      }
+    };
+
+    socket.on('room_role_members_updated', handleRoleMembersUpdated);
+    return () => {
+      socket.off('room_role_members_updated', handleRoleMembersUpdated);
+    };
+  }, [canManageSenderActions, loadRoleMembers, roomId]);
+
   React.useLayoutEffect(() => {
     const preserveScroll = preserveScrollRef.current;
     const container = containerRef.current;
@@ -418,6 +459,30 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       }
     });
   }, [roomId, messageToDelete, handleCloseDeleteModal, updateMessages, t]);
+
+  const handleUserAction = useCallback(async (action: MessageUserAction, message: Message) => {
+    try {
+      if (action === 'setAdmin') {
+        await setRoomAdmin(roomId, message.clientId);
+      } else if (action === 'removeAdmin') {
+        await removeRoomAdmin(roomId, message.clientId);
+      } else if (action === 'removeMember') {
+        await removeRoomMember(roomId, message.clientId);
+      } else if (action === 'transferOwnership') {
+        const senderName = message.username?.trim() || message.clientId.slice(-4);
+        const confirmed = typeof window.confirm !== 'function'
+          || window.confirm(t('confirmTransferToUser', { name: senderName }));
+        if (!confirmed) {
+          return;
+        }
+        await transferRoomOwnership(roomId, message.clientId);
+      }
+      await loadRoleMembers();
+    } catch (error) {
+      console.error('Failed to perform member action:', error);
+      alert(error instanceof Error ? error.message : t('unknownError'));
+    }
+  }, [loadRoleMembers, roomId, t]);
 
   // 添加刷新AI的处理函数
   const handleRefreshAI = useCallback((messageId: string) => {
@@ -625,10 +690,15 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                         ? toolResultPairing.resultByCallId.get(message.toolCallId)
                         : undefined}
                       roomPermissions={roomPermissions}
+                      senderRole={message.clientId === (codeAgentRoom || room)?.creatorId
+                        ? 'owner'
+                        : roleMemberByClientId.get(message.clientId)?.role ?? null}
+                      senderDisplayId={roleMemberByClientId.get(message.clientId)?.displayId}
                       onStartEdit={handleOpenEditModal}
                       onDeleteMessage={handleOpenDeleteModal}
                       onRefreshAI={handleRefreshAI}
                       onReply={onReply}
+                      onUserAction={handleUserAction}
                     />
                   );
                 })}

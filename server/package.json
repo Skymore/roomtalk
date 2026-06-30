@@ -1,6 +1,9 @@
 {
   "name": "server",
   "version": "1.0.0",
+  "engines": {
+    "node": ">=24.18.0"
+  },
   "main": "dist/src/server.js",
   "scripts": {
     "start": "node dist/src/server.js",

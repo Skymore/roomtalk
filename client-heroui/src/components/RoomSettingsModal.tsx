@@ -89,6 +89,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   const canManageMembers = Boolean(roomPermissions?.canManageMembers);
   const canTransferOwnership = Boolean(roomPermissions?.canTransferOwnership);
   const isOwner = Boolean(roomPermissions?.canTransferOwnership || room.creatorId === clientId);
+  const isAdmin = roomPermissions?.role === 'admin';
   const canClearHistory = Boolean(roomPermissions?.canClearHistory);
   const canManageGeneral = Boolean(isOwner || canClearHistory || canManageSettings);
 
@@ -112,6 +113,9 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   const [status, setStatus] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [isSaving, setIsSaving] = React.useState(false);
   const [isLoadingMembers, setIsLoadingMembers] = React.useState(false);
+  const setStatusMessage = React.useCallback((message: string) => {
+    setStatus({ type: 'error', message });
+  }, []);
 
   const resetSchedule = React.useCallback(() => {
     const firstWindow = room.postingSchedule?.windows?.[0];
@@ -214,8 +218,12 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
       : [],
   });
 
-  const displayUser = (user: { clientId: string; nickname?: string }) => (
-    user.nickname?.trim() || user.clientId
+  const displayUser = (user: { clientId: string; nickname?: string; displayId?: string }) => (
+    user.nickname?.trim() || user.displayId || t('participant')
+  );
+
+  const displayUserId = (user: { clientId: string; nickname?: string; displayId?: string }) => (
+    user.displayId || `${displayUser(user)}#${user.clientId.slice(-4)}`
   );
 
   const handleSavePassword = () => {
@@ -333,6 +341,27 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     }, t('memberRemoved'));
   };
 
+  const handlePromoteMember = (member: RoomRoleMember) => {
+    if (member.role !== 'member') return;
+
+    void runAction(async () => {
+      await setRoomAdmin(room.id, member.clientId);
+      await loadRoleMembers();
+    }, t('adminUpdated'));
+  };
+
+  const handleReviewTransferMember = (member: RoomRoleMember) => {
+    if (member.role === 'owner' || member.clientId === clientId) return;
+    setStatus(null);
+    setPendingTransfer({
+      clientId: member.clientId,
+      exists: true,
+      nickname: member.nickname,
+      displayId: displayUserId(member),
+      memberRole: member.role,
+    });
+  };
+
   const handleReviewTransferOwnership = async () => {
     const target = transferClientId.trim();
     if (!target) return;
@@ -430,13 +459,26 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
           <div className="truncate text-sm font-semibold text-[#141413] dark:text-[#faf9f5]">
             {displayUser(member)}
           </div>
-          <div className="truncate text-[11px] text-[#87867f] dark:text-[#b0aea5]">{member.clientId}</div>
+          <div className="truncate text-[11px] text-[#87867f] dark:text-[#b0aea5]">{displayUserId(member)}</div>
         </div>
       </div>
       <div className="flex flex-shrink-0 items-center gap-1.5">
         <span className={`rounded-full px-2 py-1 text-[11px] font-semibold ${roleClassName[member.role]}`}>
           {t(roleLabelKey[member.role])}
         </span>
+        {member.role === 'member' && canManageAdmins && (
+          <Button
+            isIconOnly
+            size="sm"
+            variant="light"
+            color="primary"
+            aria-label={t('addAdmin')}
+            isDisabled={isSaving}
+            onPress={() => handlePromoteMember(member)}
+          >
+            <Icon icon="lucide:shield-plus" className="h-4 w-4" />
+          </Button>
+        )}
         {member.role === 'admin' && canManageAdmins && (
           <Button
             isIconOnly
@@ -448,6 +490,19 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
             onPress={() => handleRemoveAdmin(member.clientId)}
           >
             <Icon icon="lucide:shield-minus" className="h-4 w-4" />
+          </Button>
+        )}
+        {canTransferOwnership && member.role !== 'owner' && member.clientId !== clientId && (
+          <Button
+            isIconOnly
+            size="sm"
+            variant="light"
+            color="danger"
+            aria-label={t('transferOwnership')}
+            isDisabled={isSaving}
+            onPress={() => handleReviewTransferMember(member)}
+          >
+            <Icon icon="lucide:crown" className="h-4 w-4" />
           </Button>
         )}
         {canRemoveMember(member) && (
@@ -589,6 +644,47 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
               </div>
               <div className="text-xs text-[#87867f] dark:text-[#b0aea5]">
                 {t('cocoAccessDescription')}
+              </div>
+            </div>
+          )}
+
+          {(isOwner || isAdmin) && room.type === 'coco' && (
+            <div className="space-y-2">
+              {renderSectionLabel('lucide:settings-2', t('codeAgentMode'))}
+              <div className="flex gap-1.5">
+                {(['plan', 'acceptEdits'] as const).map(mode => {
+                  const current = room.codeAgentMode || 'plan';
+                  const selected = current === mode;
+                  return (
+                    <Button
+                      key={mode}
+                      size="sm"
+                      className={`h-8 rounded-lg px-3 text-xs font-semibold ${
+                        selected
+                          ? 'bg-[#c96442] text-[#faf9f5]'
+                          : 'bg-[#e8e6dc] text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]'
+                      }`}
+                      isDisabled={isSaving}
+                      onPress={async () => {
+                        if (selected) return;
+                        setIsSaving(true);
+                        try {
+                          const updated = await updateRoomSettings({ roomId: room.id, codeAgentMode: mode });
+                          onRoomUpdated?.(updated);
+                        } catch {
+                          setStatusMessage(t('settingsUpdateFailed'));
+                        } finally {
+                          setIsSaving(false);
+                        }
+                      }}
+                    >
+                      {mode === 'plan' ? 'Plan' : 'Edit'}
+                    </Button>
+                  );
+                })}
+              </div>
+              <div className="text-xs text-[#87867f] dark:text-[#b0aea5]">
+                {t('codeAgentModeDescription')}
               </div>
             </div>
           )}
@@ -915,8 +1011,8 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                   <div className="font-semibold text-[#141413] dark:text-[#faf9f5]">
                     {displayUser(pendingTransfer)}
                   </div>
-                  <div className="break-all text-[11px] text-[#87867f] dark:text-[#b0aea5]">
-                    {pendingTransfer.clientId}
+                  <div className="text-[11px] text-[#87867f] dark:text-[#b0aea5]">
+                    {displayUserId(pendingTransfer)}
                   </div>
                 </div>
               </div>

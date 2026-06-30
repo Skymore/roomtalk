@@ -11,6 +11,7 @@ class FakeE2BDriver implements E2BSandboxDriver {
   readonly commandOptions: Record<string, unknown>[] = [];
   readonly createInputs: unknown[] = [];
   readonly fileListRequests: Array<{ path: string; options?: { depth?: number } }> = [];
+  readonly fileReadRequests: Array<{ path: string; options?: { format?: 'text' | 'bytes' } }> = [];
   failList = false;
 
   async create(input: { templateId: string; timeoutMs: number; metadata: Record<string, string> }): Promise<E2BSandboxDriverHandle> {
@@ -59,10 +60,14 @@ class FakeE2BDriver implements E2BSandboxDriver {
         list: async (path, options) => {
           this.fileListRequests.push({ path, options });
           return [
-            { path: '/workspace/plot_output.png', type: 'file' },
+            { path: '/workspace/plot_output.png', type: 'file', size: 42, modifiedAt: '2026-05-03T00:00:02.000Z' },
             { path: '/workspace/output', type: 'dir' },
             { path: '/workspace/output/report.html', type: 'file' },
           ];
+        },
+        read: async (path, options) => {
+          this.fileReadRequests.push({ path, options });
+          return Buffer.from('<h1>Report</h1>', 'utf8');
         },
       },
       kill: async () => {
@@ -121,8 +126,28 @@ describe('E2BCocoSandboxService', () => {
       },
       timeoutMs: 300_000,
     }]);
-    assert.deepEqual(await service.listWorkspaceFiles(handle, { maxDepth: 3 }), ['output/report.html', 'plot_output.png']);
+    assert.deepEqual(await service.listWorkspaceEntries(handle, { maxDepth: 3 }), [
+      { path: 'output', name: 'output', type: 'directory' },
+      { path: 'output/report.html', name: 'report.html', type: 'file' },
+      {
+        path: 'plot_output.png',
+        name: 'plot_output.png',
+        type: 'file',
+        size: 42,
+        updatedAt: '2026-05-03T00:00:02.000Z',
+      },
+    ]);
     assert.deepEqual(driver.fileListRequests, [{ path: '/workspace', options: { depth: 3 } }]);
+    assert.deepEqual(await service.readWorkspaceFile(handle, 'output/report.html'), {
+      path: 'output/report.html',
+      content: '<h1>Report</h1>',
+      byteSize: 15,
+      truncated: false,
+      encoding: 'utf-8',
+    });
+    assert.deepEqual(driver.fileReadRequests, [{ path: '/workspace/output/report.html', options: { format: 'bytes' } }]);
+    assert.equal((await service.readWorkspaceFile(handle, '/workspace/plot_output.png')).path, 'plot_output.png');
+    assert.deepEqual(driver.fileReadRequests[1], { path: '/workspace/plot_output.png', options: { format: 'bytes' } });
     assert.equal(await service.countActiveSandboxes(), 1);
     assert.equal(await service.countActiveSandboxesForUser('client-1'), 1);
     assert.equal(await service.countActiveSandboxesForUser('client-2'), 0);

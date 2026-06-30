@@ -468,7 +468,6 @@ describe('AI socket handlers', () => {
       clientId: 'client-1',
       selectedModel,
       roleName: undefined,
-      mode: 'plan',
       maxContextMessages: undefined,
     });
     assert.deepEqual(response, { success: true, messageId: 'coco-ai-1' });
@@ -1072,7 +1071,6 @@ describe('AI socket handlers', () => {
       clientId: 'client-1',
       selectedModel,
       roleName: undefined,
-      mode: 'acceptEdits',
       maxContextMessages: undefined,
     });
     const editedEvent = io.roomEmits.find(event => event.event === 'message_edited');
@@ -1170,7 +1168,6 @@ describe('AI socket handlers', () => {
       clientId: 'client-1',
       selectedModel,
       roleName: undefined,
-      mode: 'acceptEdits',
       maxContextMessages: undefined,
     });
     assert.equal(response?.success, true);

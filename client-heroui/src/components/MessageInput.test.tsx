@@ -416,9 +416,9 @@ describe('MessageInput optimistic send flow', () => {
     expect(payload).toMatchObject({
       roomId: 'room-1',
       content: 'write python',
-      codeAgentMode: 'plan',
       model: 'model-a',
     });
+    expect(payload).not.toHaveProperty('codeAgentMode');
     expect(payload).not.toHaveProperty('systemPrompt');
     expect(payload).not.toHaveProperty('roleName');
   });

@@ -12,7 +12,7 @@ import {
 import { Icon } from "@iconify/react";
 import { clientId, getAudioTranscription, getMediaDownloadUrl, requestAudioTranscription, sendA2UIAction } from "../utils/socket";
 import { formatPercentage, formatTime, formatUsdCost } from "../utils/formatters";
-import { A2UIActionEvent, AudioTranscription, Message, MessageMediaAsset, RoomPermissions } from "../utils/types";
+import { A2UIActionEvent, AudioTranscription, Message, MessageMediaAsset, RoomMemberRole, RoomPermissions } from "../utils/types";
 import { useTranslation } from "react-i18next";
 import { useIsTouchDevice } from "../hooks/useIsTouchDevice";
 import { useCachedMedia } from "../hooks/useCachedMedia";
@@ -28,11 +28,16 @@ interface MessageItemProps {
   message: Message;
   pairedToolResult?: Message;
   roomPermissions: RoomPermissions | null;
+  senderRole?: RoomMemberRole | null;
+  senderDisplayId?: string;
   onStartEdit: (messageId: string) => void;
   onDeleteMessage: (messageId: string) => void;
   onRefreshAI?: (messageId: string, content: string) => void;
   onReply: (message: Message) => void;
+  onUserAction?: (action: MessageUserAction, message: Message) => void;
 }
+
+export type MessageUserAction = 'setAdmin' | 'removeAdmin' | 'removeMember' | 'transferOwnership';
 
 type ReplyReferenceValue = NonNullable<Message['replyTo']>;
 type Translate = (key: string, values?: { name?: string }) => string;
@@ -240,10 +245,13 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   message,
   pairedToolResult,
   roomPermissions,
+  senderRole,
+  senderDisplayId,
   onStartEdit,
   onDeleteMessage,
   onRefreshAI,
   onReply,
+  onUserAction,
 }) => {
   const isAI = message.messageType === 'ai' || message.clientId === 'ai_assistant';
   const isMine = !isAI && message.clientId === clientId;
@@ -274,8 +282,18 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const canEditMessage = canBeEdited && (isMine || Boolean(roomPermissions?.canEditAnyMessage));
   const canDeleteMessage = isMine || Boolean(roomPermissions?.canDeleteAnyMessage);
   const { t, i18n } = useTranslation();
+  const displayName = message.username?.trim() || t('participant');
+  const displayId = senderDisplayId || `${displayName}#${message.clientId.slice(-4)}`;
+  const canActOnSender = !isAI && !isMine && Boolean(onUserAction);
+  const canKickSender = canActOnSender && Boolean(roomPermissions?.canManageMembers) && senderRole !== 'owner' && (
+    roomPermissions?.role === 'owner' || senderRole === 'member'
+  );
+  const canPromoteSender = canActOnSender && Boolean(roomPermissions?.canManageAdmins) && senderRole === 'member';
+  const canDemoteSender = canActOnSender && Boolean(roomPermissions?.canManageAdmins) && senderRole === 'admin';
+  const canTransferToSender = canActOnSender && Boolean(roomPermissions?.canTransferOwnership) && senderRole !== 'owner';
   const aiMetadataParts = isAI
     ? [
+        message.codeAgentMode ? (message.codeAgentMode === 'acceptEdits' ? t('codeAgentEditMode') : t('codeAgentReadOnlyMode')) : null,
         message.aiModel?.label,
         message.cost ? formatUsdCost(message.cost.totalUsd) : null,
         message.cost?.estimated ? t('estimatedCost') : null,
@@ -721,6 +739,69 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     return "default";
   };
 
+  const userAvatar = (placement: 'left' | 'right') => {
+    const avatar = (
+      <Avatar
+        name={message.avatar?.text || undefined}
+        icon={!message.avatar?.text ? <Icon icon="lucide:user" /> : undefined}
+        color={getValidColor(message.avatar?.color) || (placement === 'right' ? "primary" : "default")}
+        size="sm"
+        classNames={{
+          base: "flex-shrink-0 bg-[#e8e6dc] text-[#4d4c48] dark:bg-[#30302e] dark:text-[#faf9f5]",
+        }}
+      />
+    );
+
+    if (!canActOnSender && !isMine) {
+      return avatar;
+    }
+    if (isMine) {
+      return avatar;
+    }
+
+    return (
+      <Dropdown placement={placement === 'left' ? 'bottom-start' : 'bottom-end'}>
+        <DropdownTrigger>
+          <button
+            type="button"
+            className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-[#c96442]"
+            aria-label={t('memberActions')}
+          >
+            {avatar}
+          </button>
+        </DropdownTrigger>
+        <DropdownMenu aria-label={t('memberActions')}>
+          <DropdownItem key="identity" isDisabled textValue={displayId}>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-[#141413] dark:text-[#faf9f5]">{displayName}</div>
+              <div className="truncate text-xs text-[#87867f] dark:text-[#b0aea5]">{displayId}</div>
+            </div>
+          </DropdownItem>
+          {canPromoteSender ? (
+            <DropdownItem key="setAdmin" startContent={<Icon icon="lucide:shield-plus" />} onPress={() => onUserAction?.('setAdmin', message)}>
+              {t('addAdmin')}
+            </DropdownItem>
+          ) : null}
+          {canDemoteSender ? (
+            <DropdownItem key="removeAdmin" startContent={<Icon icon="lucide:shield-minus" />} onPress={() => onUserAction?.('removeAdmin', message)}>
+              {t('removeAdmin')}
+            </DropdownItem>
+          ) : null}
+          {canTransferToSender ? (
+            <DropdownItem key="transferOwnership" className="text-danger" color="danger" startContent={<Icon icon="lucide:crown" />} onPress={() => onUserAction?.('transferOwnership', message)}>
+              {t('transferOwnership')}
+            </DropdownItem>
+          ) : null}
+          {canKickSender ? (
+            <DropdownItem key="removeMember" className="text-danger" color="danger" startContent={<Icon icon="lucide:user-x" />} onPress={() => onUserAction?.('removeMember', message)}>
+              {t('removeMember')}
+            </DropdownItem>
+          ) : null}
+        </DropdownMenu>
+      </Dropdown>
+    );
+  };
+
   if (isCocoEvent) {
     return (
       <div
@@ -751,15 +832,19 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     >
       {/* Opponent's avatar or AI avatar */}
       {(!isMine || isAI) && !isMine && (
-        <Avatar
-          name={message.avatar?.text || undefined}
-          icon={isAI ? <Icon icon="lucide:bot" /> : (!message.avatar?.text ? <Icon icon="lucide:user" /> : undefined)}
-          color={getValidColor(isAI ? "secondary" : message.avatar?.color)}
-          size="sm"
-          classNames={{
-            base: "mr-2 flex-shrink-0 bg-[#e8e6dc] text-[#4d4c48] dark:bg-[#30302e] dark:text-[#faf9f5]",
-          }}
-        />
+        isAI ? (
+          <Avatar
+            name={message.avatar?.text || undefined}
+            icon={<Icon icon="lucide:bot" />}
+            color={getValidColor("secondary")}
+            size="sm"
+            classNames={{
+              base: "mr-2 flex-shrink-0 bg-[#e8e6dc] text-[#4d4c48] dark:bg-[#30302e] dark:text-[#faf9f5]",
+            }}
+          />
+        ) : (
+          <div className="mr-2 flex-shrink-0">{userAvatar('left')}</div>
+        )
       )}
 
       {/* Message Content Area */}
@@ -972,15 +1057,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
 
       {/* Your avatar */}
       {isMine && !isAI && (
-        <Avatar
-          name={message.avatar?.text || undefined}
-          icon={!message.avatar?.text ? <Icon icon="lucide:user" /> : undefined}
-          color={getValidColor(message.avatar?.color) || "primary"}
-          size="sm"
-          classNames={{
-            base: "ml-2 flex-shrink-0 bg-[#30302e] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413]",
-          }}
-        />
+        <div className="ml-2 flex-shrink-0">{userAvatar('right')}</div>
       )}
       <MediaViewerModal
         isOpen={isMediaViewerOpen && canOpenMediaViewer}

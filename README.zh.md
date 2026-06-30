@@ -124,7 +124,7 @@ npm run test:e2e:postgres   # PostgreSQL 模式 Playwright E2E
 
 | 范围 | 变量 |
 | --- | --- |
-| HTTP/CORS | `PORT`, `CLIENT_URL`, `NODE_ENV` |
+| HTTP/CORS | `PORT`, `CLIENT_URL`, `CLIENT_URLS`, `NODE_ENV` |
 | Redis | `REDIS_URL` |
 | PostgreSQL 模式 | `PERSISTENCE_STORE`, `DATABASE_URL`, `POSTGRES_SSL`, `POSTGRES_SSL_REJECT_UNAUTHORIZED`, `POSTGRES_SSL_CA_BASE64`, `POSTGRES_SSL_CA`, `ROOM_MESSAGES_CACHE_TTL_SECONDS` |
 | AI | `AI_MODEL`, `AI_MODEL_OPTIONS`, `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`, `OPENROUTER_HTTP_REFERER`, `OPENROUTER_APP_NAME` |
@@ -135,6 +135,8 @@ npm run test:e2e:postgres   # PostgreSQL 模式 Playwright E2E
 
 - `client-heroui/.env.development`：本地 `VITE_SOCKET_URL` 和公开 Google Client ID。
 - `client-heroui/.env.production`：Fly 同域部署使用 `VITE_SOCKET_URL=/`。
+
+`CLIENT_URL` 用作主要公开客户端地址。生产环境需要多个域名同时可用时，用 `CLIENT_URLS` 配置逗号分隔的 origin 白名单，例如 `https://room.ruit.me,https://room.ruit.me`。
 
 只有浏览器可公开的值才应放入 `VITE_*`。
 

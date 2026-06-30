@@ -116,6 +116,7 @@ export interface Message {
   };
   usage?: AIUsage;
   cost?: AICost;
+  codeAgentMode?: 'plan' | 'acceptEdits';
   replyTo?: MessageReplyReference;
   mediaAsset?: MessageMediaAsset;
   uiPayload?: A2UIPayload;
@@ -135,6 +136,7 @@ export interface Room {
   cocoSessionId?: string;
   cocoStatus?: RoomCocoStatus;
   cocoAccess?: CocoAccessLevel;
+  codeAgentMode?: 'plan' | 'acceptEdits';
   messageVersion?: number;
   hasPassword?: boolean;
   postingSchedule?: RoomPostingSchedule;
@@ -206,6 +208,7 @@ export interface RoomMemberCount {
 export interface RoomOnlineMember {
   clientId: string;
   nickname?: string;
+  displayId?: string;
 }
 
 export interface RoomRoleMember {
@@ -214,12 +217,14 @@ export interface RoomRoleMember {
   role: RoomMemberRole;
   joinedAt: string;
   nickname?: string;
+  displayId?: string;
 }
 
 export interface RoomClientLookup {
   clientId: string;
   exists: boolean;
   nickname?: string;
+  displayId?: string;
   memberRole?: RoomMemberRole | null;
 }
 export interface AIChunkEvent {

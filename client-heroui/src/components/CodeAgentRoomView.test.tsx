@@ -36,6 +36,21 @@ vi.mock('./MessageInput', () => ({
   ),
 }));
 
+vi.mock('./CodeAgentFileBrowserPanel', () => ({
+  CodeAgentFileBrowserPanel: () => <div data-testid="file-browser" />,
+}));
+
+vi.mock('../utils/socket', () => ({
+  updateRoomSettings: vi.fn(async ({ roomId, codeAgentMode }: { roomId: string; codeAgentMode: 'plan' | 'acceptEdits' }) => ({
+    id: roomId,
+    name: 'Coco Room',
+    creatorId: 'client-1',
+    createdAt: '2026-05-26T00:00:00.000Z',
+    type: 'coco',
+    codeAgentMode,
+  })),
+}));
+
 const unsupportedRoom: Room = {
   id: 'room-1',
   name: 'Codex Room',
@@ -67,7 +82,6 @@ const renderCodeAgentRoom = (
     username="User"
     clientId="client-1"
     backend={room.type === 'coco' ? 'coco' : 'codex'}
-    mode={mode}
     availableModes={availableModes}
     defaultMode={defaultMode}
     handleCopyToClipboard={vi.fn()}
@@ -101,18 +115,18 @@ describe('CodeAgentRoomView', () => {
   });
 
   it('passes the selected Coco run mode to the workspace and composer', () => {
-    renderCodeAgentRoom(cocoRoom, 'acceptEdits');
+    renderCodeAgentRoom({ ...cocoRoom, codeAgentMode: 'acceptEdits' }, 'acceptEdits');
 
-    expect(screen.getByTestId('message-list').dataset.codeAgentMode).toBe('plan');
+    expect(screen.getByTestId('message-list').dataset.codeAgentMode).toBe('acceptEdits');
     expect(screen.getByTestId('message-input').dataset.codeAgentRoom).toBe('true');
-    expect(screen.getByTestId('message-input').dataset.codeAgentMode).toBe('plan');
+    expect(screen.getByTestId('message-input').dataset.codeAgentMode).toBe('acceptEdits');
     expect(screen.getByTestId('message-input').dataset.codeAgentMaxMode).toBe('acceptEdits');
   });
 
-  it('constrains stored edit preference when the server only allows plan mode', () => {
+  it('constrains room edit mode when the server only allows plan mode', () => {
     localStorage.setItem('roomtalk_code_agent_mode_coco-room', 'acceptEdits');
 
-    renderCodeAgentRoom(cocoRoom, 'plan', ['plan']);
+    renderCodeAgentRoom({ ...cocoRoom, codeAgentMode: 'acceptEdits' }, 'plan', ['plan']);
 
     expect(screen.getByTestId('message-list').dataset.codeAgentMode).toBe('plan');
     expect(screen.getByTestId('message-input').dataset.codeAgentMaxMode).toBe('plan');

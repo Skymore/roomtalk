@@ -508,9 +508,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           ...(!isCodeAgentRoom ? {
             systemPrompt: selectedRole.systemPrompt,
             roleName: selectedRole.name,
-          } : {
-            codeAgentMode: selectedCodeAgentMode,
-          }),
+          } : {}),
           model: selectedAIModel || defaultAIModel,
           maxContextMessages: aiContextMessageLimit,
         });
@@ -533,9 +531,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         ...(!isCodeAgentRoom ? {
           systemPrompt: selectedRole.systemPrompt,
           roleName: selectedRole.name,
-        } : {
-          codeAgentMode: selectedCodeAgentMode,
-        }),
+        } : {}),
         model: selectedAIModel || defaultAIModel,
         maxContextMessages: aiContextMessageLimit,
       });

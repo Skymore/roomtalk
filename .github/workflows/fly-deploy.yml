@@ -23,7 +23,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24.18.0
 
       - name: Install server dependencies
         working-directory: server
@@ -78,6 +78,7 @@ jobs:
           require_secret AWS_ACCESS_KEY_ID
           require_secret AWS_SECRET_ACCESS_KEY
           require_secret GOOGLE_CLIENT_ID
+          require_any_secret client-url CLIENT_URL CLIENT_URLS
           require_any_secret media-bucket MEDIA_BUCKET_NAME BUCKET_NAME S3_BUCKET AWS_BUCKET_NAME
           require_any_secret media-storage-endpoint MEDIA_STORAGE_ENDPOINT AWS_ENDPOINT_URL_S3 S3_ENDPOINT
         env:

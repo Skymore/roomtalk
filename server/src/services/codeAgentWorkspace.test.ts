@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { buildCodeAgentWorkspaceSnapshot, sanitizeWorkspaceFileRef } from './codeAgentWorkspace';
+import { buildCodeAgentWorkspaceSnapshot } from './codeAgentWorkspace';
 import { Message, Room } from '../types';
 
 const room: Room = {
@@ -42,13 +42,6 @@ const toolResult = (overrides: Partial<Message> = {}): Message => ({
 });
 
 describe('code-agent workspace snapshots', () => {
-  it('sanitizes workspace, relative, and absolute file references', () => {
-    assert.equal(sanitizeWorkspaceFileRef('/workspace/project/src/App.tsx'), 'project/src/App.tsx');
-    assert.equal(sanitizeWorkspaceFileRef('../src/../package.json'), 'src/package.json');
-    assert.equal(sanitizeWorkspaceFileRef('/private/var/folders/secret/workspace/file.ts'), '.../secret/workspace/file.ts');
-    assert.equal(sanitizeWorkspaceFileRef('/workspace'), '.');
-  });
-
   it('derives read-only workspace state from persisted Coco messages', () => {
     const snapshot = buildCodeAgentWorkspaceSnapshot(room, [
       toolCall(),
@@ -68,10 +61,8 @@ describe('code-agent workspace snapshots', () => {
       toolCalls: 1,
       toolResults: 1,
       toolErrors: 1,
-      touchedFiles: [],
       lastToolName: 'Read',
     });
-    assert.deepEqual(snapshot.files, { touched: [], hiddenCount: 0 });
     assert.deepEqual(snapshot.changes, { available: false, changedFiles: [], diffSummary: null });
     assert.deepEqual(snapshot.commands, [{
       id: 'tool-1',
@@ -82,7 +73,7 @@ describe('code-agent workspace snapshots', () => {
     }]);
   });
 
-  it('does not show failed file tool calls as touched files', () => {
+  it('counts failed tool calls without deriving file lists', () => {
     const snapshot = buildCodeAgentWorkspaceSnapshot(room, [
       toolCall({
         id: 'write-call',
@@ -112,52 +103,20 @@ describe('code-agent workspace snapshots', () => {
       }),
     ]);
 
-    assert.deepEqual(snapshot.summary.touchedFiles, []);
-    assert.deepEqual(snapshot.files, { touched: [], hiddenCount: 0 });
     assert.equal(snapshot.summary.toolErrors, 2);
   });
 
-  it('limits file refs and command history for browser payloads', () => {
+  it('limits command history for browser payloads', () => {
     const messages = Array.from({ length: 45 }, (_, index): Message => toolCall({
       id: `tool-call-${index}`,
       toolCallId: `tool-${index}`,
       toolArgs: { file_path: `/workspace/src/file-${index}.ts` },
     }));
 
-    const workspaceFiles = Array.from({ length: 45 }, (_, index) => `/workspace/output/file-${index}.txt`);
-    const snapshot = buildCodeAgentWorkspaceSnapshot(room, messages, new Date(), workspaceFiles);
+    const snapshot = buildCodeAgentWorkspaceSnapshot(room, messages, new Date());
 
-    assert.equal(snapshot.files.touched.length, 40);
-    assert.equal(snapshot.files.hiddenCount, 5);
     assert.equal(snapshot.commands.length, 20);
     assert.equal(snapshot.commands[0].id, 'tool-25');
-    assert.ok(snapshot.files.touched.includes('output/file-0.txt'));
-    assert.equal(snapshot.files.touched.includes('src/file-0.ts'), false);
-  });
-
-  it('uses real workspace files instead of inferring files from tool messages', () => {
-    const snapshot = buildCodeAgentWorkspaceSnapshot(room, [
-      toolCall({
-        toolName: 'Read',
-        toolArgs: { file_path: '/workspace/src/App.tsx' },
-      }),
-      toolResult({ toolName: 'Read', toolOutputPreview: 'ok' }),
-      toolCall({
-        id: 'shell-call',
-        toolCallId: 'shell-1',
-        toolName: 'Shell',
-        toolArgs: { command: 'python plot.py' },
-      }),
-      toolResult({
-        id: 'shell-result',
-        toolCallId: 'shell-1',
-        toolName: 'Shell',
-        toolOutputPreview: 'wrote /workspace/plot_output.png',
-      }),
-    ], new Date(), ['/workspace/plot_output.png', '/workspace/output/report.html']);
-
-    assert.deepEqual(snapshot.summary.touchedFiles, ['output/report.html', 'plot_output.png']);
-    assert.deepEqual(snapshot.files, { touched: ['output/report.html', 'plot_output.png'], hiddenCount: 0 });
   });
 
   it('redacts common secret-shaped values from command previews', () => {

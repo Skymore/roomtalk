@@ -6,7 +6,6 @@ import { formatUsdCost } from '../utils/formatters';
 import {
   CodeAgentWorkspaceCommand,
   CodeAgentWorkspaceSnapshot,
-  mergeCocoWorkspaceSummaries,
   summarizeCocoMessages,
 } from '../utils/cocoWorkspace';
 import { Message, Room } from '../utils/types';
@@ -49,16 +48,6 @@ const commandStatusLabelKey: Record<CodeAgentWorkspaceCommand['status'], string>
   failed: 'codeAgentCommandFailed',
 };
 
-const getFileName = (filePath: string) => filePath.split('/').filter(Boolean).pop() || filePath;
-
-const getDirectoryName = (filePath: string) => {
-  const parts = filePath.split('/').filter(Boolean);
-  if (parts.length <= 1) {
-    return '.';
-  }
-  return parts.slice(0, -1).join('/');
-};
-
 export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = ({
   room,
   messages,
@@ -73,7 +62,17 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   const [isCollapsed, setIsCollapsed] = React.useState(false);
   const messageSummary = React.useMemo(() => summarizeCocoMessages(messages), [messages]);
   const summary = React.useMemo(
-    () => mergeCocoWorkspaceSummaries(messageSummary, workspaceSnapshot?.summary),
+    () => {
+      if (!workspaceSnapshot?.summary) {
+        return messageSummary;
+      }
+      return {
+        toolCalls: Math.max(messageSummary.toolCalls, workspaceSnapshot.summary.toolCalls),
+        toolResults: Math.max(messageSummary.toolResults, workspaceSnapshot.summary.toolResults),
+        toolErrors: Math.max(messageSummary.toolErrors, workspaceSnapshot.summary.toolErrors),
+        lastToolName: messageSummary.lastToolName || workspaceSnapshot.summary.lastToolName,
+      };
+    },
     [messageSummary, workspaceSnapshot?.summary]
   );
   const recentCommands = React.useMemo(
@@ -82,9 +81,6 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   );
   const isPlanMode = mode === 'plan';
   const agentStatus = getCodeAgentStatus(room);
-  const workspaceFiles = workspaceSnapshot?.summary.touchedFiles || workspaceSnapshot?.files.touched || [];
-  const visibleFiles = workspaceFiles.slice(0, 10);
-  const hiddenFileCount = Math.max(0, workspaceFiles.length - visibleFiles.length);
   const detailsId = 'code-agent-workspace-details';
 
   const stats = [
@@ -264,51 +260,6 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                 </div>
               ) : (
                 <p className="px-1 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentNoActivity')}</p>
-              )}
-            </div>
-          </Tab>
-
-          <Tab
-            key="files"
-            title={
-              <span className="inline-flex items-center gap-1.5">
-                <Icon icon="lucide:file-code-2" className="h-3.5 w-3.5" />
-                {t('codeAgentFiles')}
-              </span>
-            }
-          >
-            <div className="max-h-44 overflow-y-auto px-2 py-2">
-              {visibleFiles.length > 0 ? (
-                <div className="space-y-1">
-                  {visibleFiles.map(file => (
-                    <div
-                      key={file}
-                      data-testid="code-agent-file-row"
-                      className="grid min-w-0 grid-cols-[1fr_auto] items-center gap-2 rounded-lg px-2 py-1.5 text-xs"
-                      title={file}
-                    >
-                      <div className="flex min-w-0 items-center gap-2">
-                        <Icon icon="lucide:file" className="h-3.5 w-3.5 flex-shrink-0 text-[#87867f] dark:text-[#b0aea5]" />
-                        <span className="truncate font-mono font-semibold text-[#4d4c48] dark:text-[#e8e6dc]">
-                          {getFileName(file)}
-                        </span>
-                      </div>
-                      <span className="min-w-0 truncate font-mono text-[10px] text-[#87867f] dark:text-[#8f8d86]">
-                        {getDirectoryName(file)}
-                      </span>
-                    </div>
-                  ))}
-                  {hiddenFileCount > 0 && (
-                    <div
-                      className="px-2 py-1 text-xs font-semibold text-[#5e5d59] dark:text-[#b0aea5]"
-                      title={workspaceFiles.slice(10).join('\n')}
-                    >
-                      +{hiddenFileCount}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <p className="px-1 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentNoFiles')}</p>
               )}
             </div>
           </Tab>

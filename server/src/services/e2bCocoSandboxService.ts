@@ -3,8 +3,11 @@ import {
   CocoRunnerProcessExit,
   CocoSandboxHandle,
   CocoSandboxService,
+  CocoWorkspaceEntry,
+  CocoWorkspaceFile,
   CreateCocoSandboxInput,
-  ListCocoWorkspaceFilesOptions,
+  ListCocoWorkspaceEntriesOptions,
+  ReadCocoWorkspaceFileOptions,
   StartCocoRunnerInput,
 } from './cocoSandboxService';
 import { Readable, Writable } from 'stream';
@@ -17,6 +20,7 @@ export interface E2BSandboxDriverHandle {
   };
   files?: {
     list(path: string, options?: { depth?: number }): Promise<E2BFileEntry[]>;
+    read?(path: string, options?: { format?: 'text' | 'bytes' }): Promise<string | Uint8Array>;
   };
   kill?(): Promise<void>;
 }
@@ -25,6 +29,9 @@ export interface E2BFileEntry {
   name?: string;
   path: string;
   type?: string;
+  size?: number;
+  modifiedAt?: string | Date;
+  updatedAt?: string | Date;
 }
 
 export interface E2BListedSandbox {
@@ -142,7 +149,7 @@ export class E2BCocoSandboxService implements CocoSandboxService {
     };
   }
 
-  async listWorkspaceFiles(handle: CocoSandboxHandle, options: ListCocoWorkspaceFilesOptions = {}): Promise<string[]> {
+  async listWorkspaceEntries(handle: CocoSandboxHandle, options: ListCocoWorkspaceEntriesOptions = {}): Promise<CocoWorkspaceEntry[]> {
     const connected = await this.driver.connect(handle.id);
     if (!connected.files?.list) {
       throw new Error('E2B sandbox driver handle does not support filesystem listing');
@@ -152,15 +159,47 @@ export class E2BCocoSandboxService implements CocoSandboxService {
       depth: options.maxDepth ?? 5,
     });
     const workspacePrefix = handle.workspace.replace(/\/+$/, '');
-    const maxFiles = options.maxFiles ?? 200;
-    const files = entries
-      .filter(entry => !entry.type || entry.type === 'file')
-      .map(entry => normalizeWorkspaceEntryPath(entry.path, workspacePrefix))
-      .filter((value): value is string => Boolean(value));
+    const maxEntries = options.maxEntries ?? 5000;
+    const normalizedEntries = entries
+      .map(entry => normalizeWorkspaceEntry(entry, workspacePrefix))
+      .filter((entry): entry is CocoWorkspaceEntry => Boolean(entry));
 
-    return Array.from(new Set(files))
-      .sort((a, b) => a.localeCompare(b))
-      .slice(0, maxFiles);
+    const uniqueEntries = new Map<string, CocoWorkspaceEntry>();
+    for (const entry of normalizedEntries) {
+      uniqueEntries.set(entry.path, entry);
+    }
+
+    return Array.from(uniqueEntries.values())
+      .sort(compareWorkspaceEntries)
+      .slice(0, maxEntries);
+  }
+
+  async readWorkspaceFile(
+    handle: CocoSandboxHandle,
+    workspacePath: string,
+    options: ReadCocoWorkspaceFileOptions = {}
+  ): Promise<CocoWorkspaceFile> {
+    const connected = await this.driver.connect(handle.id);
+    if (!connected.files?.read) {
+      throw new Error('E2B sandbox driver handle does not support filesystem reads');
+    }
+
+    const workspacePrefix = handle.workspace.replace(/\/+$/, '');
+    const relativePath = normalizeWorkspaceInputPath(workspacePath, workspacePrefix);
+    const absolutePath = `${workspacePrefix}/${relativePath}`;
+    const maxBytes = options.maxBytes ?? 1024 * 1024;
+    const raw = await connected.files.read(absolutePath, { format: 'bytes' });
+    const buffer = typeof raw === 'string' ? Buffer.from(raw, 'utf8') : Buffer.from(raw);
+    const truncated = buffer.byteLength > maxBytes;
+    const contentBuffer = truncated ? buffer.subarray(0, maxBytes) : buffer;
+    const isBinary = contentBuffer.includes(0);
+    return {
+      path: relativePath,
+      content: isBinary ? contentBuffer.toString('base64') : contentBuffer.toString('utf8'),
+      byteSize: buffer.byteLength,
+      truncated,
+      encoding: isBinary ? 'base64' : 'utf-8',
+    };
   }
 
   async destroy(sandboxId: string): Promise<void> {
@@ -208,6 +247,22 @@ const portHostTemplateEnv = (handle: E2BSandboxDriverHandle): Record<string, str
   };
 };
 
+const normalizeWorkspaceEntry = (entry: E2BFileEntry, workspacePrefix: string): CocoWorkspaceEntry | null => {
+  const entryPath = normalizeWorkspaceEntryPath(entry.path, workspacePrefix);
+  if (!entryPath) {
+    return null;
+  }
+
+  const entryType = normalizeEntryType(entry.type);
+  return {
+    path: entryPath,
+    name: entry.name || entryPath.split('/').pop() || entryPath,
+    type: entryType,
+    ...(typeof entry.size === 'number' && entryType === 'file' ? { size: entry.size } : {}),
+    ...(normalizeEntryDate(entry.updatedAt || entry.modifiedAt) ? { updatedAt: normalizeEntryDate(entry.updatedAt || entry.modifiedAt) } : {}),
+  };
+};
+
 const normalizeWorkspaceEntryPath = (entryPath: string, workspacePrefix: string): string | null => {
   const normalized = entryPath.trim().replace(/\\/g, '/');
   if (!normalized || normalized === workspacePrefix) {
@@ -218,4 +273,36 @@ const normalizeWorkspaceEntryPath = (entryPath: string, workspacePrefix: string)
     : normalized.replace(/^\/+/, '');
   const parts = relative.split('/').filter(part => part && part !== '.' && part !== '..');
   return parts.length > 0 ? parts.join('/') : null;
+};
+
+const normalizeEntryType = (type: string | undefined): CocoWorkspaceEntry['type'] => {
+  const normalized = (type || 'file').toLowerCase();
+  return normalized === 'dir' || normalized === 'directory' || normalized === 'folder' ? 'directory' : 'file';
+};
+
+const normalizeEntryDate = (value: string | Date | undefined): string | undefined => {
+  if (!value) {
+    return undefined;
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+};
+
+const normalizeWorkspaceInputPath = (value: string, workspacePrefix: string): string => {
+  const normalizedValue = value.trim().replace(/\\/g, '/');
+  const normalized = normalizedValue.startsWith(`${workspacePrefix}/`)
+    ? normalizedValue.slice(workspacePrefix.length + 1)
+    : normalizedValue.replace(/^\/+/, '');
+  const parts = normalized.split('/').filter(Boolean);
+  if (!normalized || parts.some(part => part === '.' || part === '..')) {
+    throw new Error('Workspace file path is invalid');
+  }
+  return parts.join('/');
+};
+
+const compareWorkspaceEntries = (a: CocoWorkspaceEntry, b: CocoWorkspaceEntry) => {
+  if (a.type !== b.type) {
+    return a.type === 'directory' ? -1 : 1;
+  }
+  return a.path.localeCompare(b.path);
 };

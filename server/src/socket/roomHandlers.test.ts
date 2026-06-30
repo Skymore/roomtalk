@@ -525,12 +525,12 @@ describe('room socket handlers', () => {
     const { socket, store } = createHarness('client-1');
     await store.setClientNickname('client-1', 'Ada');
 
-    let response: { success: boolean; members?: Array<{ clientId: string; nickname?: string }> } | undefined;
+    let response: { success: boolean; members?: Array<{ clientId: string; nickname?: string; displayId?: string }> } | undefined;
     await socket.invoke('get_room_members', { roomId: 'room-1' }, (result: typeof response) => {
       response = result;
     });
 
-    assert.deepEqual(response, { success: true, members: [{ clientId: 'client-1', nickname: 'Ada' }] });
+    assert.deepEqual(response, { success: true, members: [{ clientId: 'client-1', nickname: 'Ada', displayId: 'Ada#nt-1' }] });
   });
 
   it('rejects get_room_members without a room id', async () => {
@@ -578,9 +578,9 @@ describe('room socket handlers', () => {
     assert.deepEqual(response, {
       success: true,
       members: [
-        { roomId: 'room-1', clientId: 'client-1', role: 'owner', joinedAt: '2026-05-03T00:00:00.000Z', nickname: 'Owner' },
-        { roomId: 'room-1', clientId: 'client-2', role: 'admin', joinedAt: '2026-05-03T00:00:00.000Z', nickname: 'Ada' },
-        { roomId: 'room-1', clientId: 'client-3', role: 'member', joinedAt: '2026-05-03T00:00:00.000Z', nickname: 'Grace' },
+        { roomId: 'room-1', clientId: 'client-1', role: 'owner', joinedAt: '2026-05-03T00:00:00.000Z', nickname: 'Owner', displayId: 'Owner#nt-1' },
+        { roomId: 'room-1', clientId: 'client-2', role: 'admin', joinedAt: '2026-05-03T00:00:00.000Z', nickname: 'Ada', displayId: 'Ada#nt-2' },
+        { roomId: 'room-1', clientId: 'client-3', role: 'member', joinedAt: '2026-05-03T00:00:00.000Z', nickname: 'Grace', displayId: 'Grace#nt-3' },
       ],
     });
   });

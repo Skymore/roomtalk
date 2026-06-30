@@ -60,6 +60,7 @@ export type RoomType = 'chat' | 'coco';
 export type RoomSandboxStatus = 'none' | 'creating' | 'ready' | 'expired' | 'error';
 export type RoomCocoStatus = 'idle' | 'running' | 'error';
 export type CocoAccessLevel = 'owner' | 'admin' | 'member';
+export type CodeAgentMode = 'plan' | 'acceptEdits';
 export type MessageType = 'text' | 'ai' | 'media' | 'sticker' | 'tool_call' | 'tool_result' | 'sandbox_status';
 
 export interface MessageMediaAsset {
@@ -129,6 +130,7 @@ export interface Message {
   };
   usage?: AIUsage;
   cost?: AICost;
+  codeAgentMode?: CodeAgentMode;
   replyTo?: MessageReplyReference;
   mediaAsset?: MessageMediaAsset;
   uiPayload?: A2UIPayload;
@@ -151,6 +153,7 @@ export interface Room {
   cocoSessionId?: string;
   cocoStatus?: RoomCocoStatus;
   cocoAccess?: CocoAccessLevel;
+  codeAgentMode?: CodeAgentMode;
   // 行级单调版本号:每次房间写入 +1,客户端 last-write-wins 的主比较键
   // (updatedAt 退为展示/兼容用途)。版本相等 ⟺ 同一次写入。
   roomVersion?: number;
@@ -204,12 +207,14 @@ export interface RoomMember {
 
 export interface RoomRoleMember extends RoomMember {
   nickname?: string;
+  displayId?: string;
 }
 
 export interface RoomClientLookup {
   clientId: string;
   exists: boolean;
   nickname?: string;
+  displayId?: string;
   memberRole?: RoomMemberRole | null;
 }
 
@@ -220,6 +225,7 @@ export interface UserInfo {
 export interface RoomOnlineMember {
   clientId: string;
   nickname?: string;
+  displayId?: string;
 }
 
 export interface RoomMemberEvent {

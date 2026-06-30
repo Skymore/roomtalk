@@ -124,7 +124,7 @@ Use `server/.env.example` as the backend source of truth. Important groups:
 
 | Area | Variables |
 | --- | --- |
-| HTTP/CORS | `PORT`, `CLIENT_URL`, `NODE_ENV` |
+| HTTP/CORS | `PORT`, `CLIENT_URL`, `CLIENT_URLS`, `NODE_ENV` |
 | Redis | `REDIS_URL` |
 | PostgreSQL mode | `PERSISTENCE_STORE`, `DATABASE_URL`, `POSTGRES_SSL`, `POSTGRES_SSL_REJECT_UNAUTHORIZED`, `POSTGRES_SSL_CA_BASE64`, `POSTGRES_SSL_CA`, `ROOM_MESSAGES_CACHE_TTL_SECONDS` |
 | AI | `AI_MODEL`, `AI_MODEL_OPTIONS`, `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`, `OPENROUTER_HTTP_REFERER`, `OPENROUTER_APP_NAME` |
@@ -135,6 +135,8 @@ Client configuration:
 
 - `client-heroui/.env.development`: local `VITE_SOCKET_URL` and public Google client ID.
 - `client-heroui/.env.production`: same-origin `VITE_SOCKET_URL=/` for Fly deployment.
+
+Use `CLIENT_URL` for the primary public client URL. Set `CLIENT_URLS` to a comma-separated origin allowlist when multiple production domains should work, for example `https://room.ruit.me,https://room.ruit.me`.
 
 Only put browser-safe values in `VITE_*` variables.
 

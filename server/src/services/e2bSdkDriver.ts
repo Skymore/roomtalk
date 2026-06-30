@@ -46,6 +46,7 @@ interface E2BSdkSandbox {
   commands: E2BSdkCommands;
   files?: {
     list(path: string, opts?: { depth?: number }): Promise<E2BFileEntry[]>;
+    read?(path: string, opts?: { format?: 'text' | 'bytes' }): Promise<string | Uint8Array>;
   };
   kill(): Promise<void>;
 }
@@ -169,6 +170,7 @@ class E2BSdkDriver implements E2BSandboxDriver {
       files: sandbox.files
         ? {
             list: (path, options) => sandbox.files!.list(path, { depth: options?.depth }),
+            ...(sandbox.files.read ? { read: (path, options) => sandbox.files!.read!(path, options) } : {}),
           }
         : undefined,
       kill: () => sandbox.kill(),

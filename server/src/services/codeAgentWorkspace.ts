@@ -12,7 +12,6 @@ export interface CodeAgentWorkspaceSummary {
   toolCalls: number;
   toolResults: number;
   toolErrors: number;
-  touchedFiles: string[];
   lastToolName?: string;
 }
 
@@ -27,10 +26,6 @@ export interface CodeAgentWorkspaceSnapshot {
     hasSession: boolean;
   };
   summary: CodeAgentWorkspaceSummary;
-  files: {
-    touched: string[];
-    hiddenCount: number;
-  };
   changes: {
     available: false;
     changedFiles: string[];
@@ -39,11 +34,8 @@ export interface CodeAgentWorkspaceSnapshot {
   commands: CodeAgentWorkspaceCommand[];
 }
 
-const fileArgKeys = ['file_path', 'path', 'filename', 'target_file'];
-const MAX_VISIBLE_FILES = 40;
 const MAX_COMMANDS = 20;
 const MAX_PREVIEW_LENGTH = 240;
-const MAX_PATH_LENGTH = 140;
 const SECRET_VALUE = '[redacted]';
 
 const truncateMiddle = (value: string, maxLength: number) => {
@@ -53,46 +45,6 @@ const truncateMiddle = (value: string, maxLength: number) => {
   const prefixLength = Math.max(1, Math.floor((maxLength - 3) / 2));
   const suffixLength = Math.max(1, maxLength - 3 - prefixLength);
   return `${value.slice(0, prefixLength)}...${value.slice(-suffixLength)}`;
-};
-
-const sanitizeRelativeFileRef = (value: string): string => {
-  const parts = value
-    .replace(/^\.\//, '')
-    .split('/')
-    .filter(part => part && part !== '.' && part !== '..');
-  return parts.length > 0 ? parts.join('/') : '.';
-};
-
-export const sanitizeWorkspaceFileRef = (value: string): string => {
-  const normalized = value.trim().replace(/\\/g, '/');
-  if (!normalized) return '';
-
-  let sanitized: string;
-  if (normalized === '/workspace') {
-    sanitized = '.';
-  } else if (normalized.startsWith('/workspace/')) {
-    sanitized = sanitizeRelativeFileRef(normalized.slice('/workspace/'.length));
-  } else if (normalized.startsWith('/')) {
-    const parts = normalized.split('/').filter(Boolean).slice(-3);
-    sanitized = parts.length > 0 ? `.../${parts.join('/')}` : '.';
-  } else {
-    sanitized = sanitizeRelativeFileRef(normalized);
-  }
-
-  return truncateMiddle(sanitized, MAX_PATH_LENGTH);
-};
-
-const readFileRef = (args: Record<string, unknown> | undefined): string | null => {
-  if (!args) return null;
-
-  for (const key of fileArgKeys) {
-    const value = args[key];
-    if (typeof value === 'string' && value.trim()) {
-      return sanitizeWorkspaceFileRef(value);
-    }
-  }
-
-  return null;
 };
 
 const truncatePreview = (value: string | undefined) => {
@@ -140,9 +92,6 @@ const buildCommandHistory = (messages: Message[]): CodeAgentWorkspaceCommand[] =
 };
 
 export const summarizeWorkspaceMessages = (messages: Message[]): CodeAgentWorkspaceSummary => {
-  const touchedFilesByToolCallId = new Map<string, string>();
-  const unpairedTouchedFiles = new Set<string>();
-  const failedToolCallIds = new Set<string>();
   let toolCalls = 0;
   let toolResults = 0;
   let toolErrors = 0;
@@ -152,15 +101,6 @@ export const summarizeWorkspaceMessages = (messages: Message[]): CodeAgentWorksp
     if (message.messageType === 'tool_call') {
       toolCalls += 1;
       lastToolName = message.toolName || lastToolName;
-
-      const fileRef = readFileRef(message.toolArgs);
-      if (fileRef) {
-        if (message.toolCallId) {
-          touchedFilesByToolCallId.set(message.toolCallId, fileRef);
-        } else {
-          unpairedTouchedFiles.add(fileRef);
-        }
-      }
     }
 
     if (message.messageType === 'tool_result') {
@@ -168,17 +108,7 @@ export const summarizeWorkspaceMessages = (messages: Message[]): CodeAgentWorksp
       lastToolName = message.toolName || lastToolName;
       if (message.isError) {
         toolErrors += 1;
-        if (message.toolCallId) {
-          failedToolCallIds.add(message.toolCallId);
-        }
       }
-    }
-  }
-
-  const touchedFiles = new Set(unpairedTouchedFiles);
-  for (const [toolCallId, fileRef] of touchedFilesByToolCallId.entries()) {
-    if (!failedToolCallIds.has(toolCallId)) {
-      touchedFiles.add(fileRef);
     }
   }
 
@@ -186,7 +116,6 @@ export const summarizeWorkspaceMessages = (messages: Message[]): CodeAgentWorksp
     toolCalls,
     toolResults,
     toolErrors,
-    touchedFiles: Array.from(touchedFiles).sort((a, b) => a.localeCompare(b)),
     lastToolName,
   };
 };
@@ -194,17 +123,8 @@ export const summarizeWorkspaceMessages = (messages: Message[]): CodeAgentWorksp
 export const buildCodeAgentWorkspaceSnapshot = (
   room: Room,
   messages: Message[],
-  now = new Date(),
-  workspaceFiles: string[] = []
+  now = new Date()
 ): CodeAgentWorkspaceSnapshot => {
-  const messageSummary = summarizeWorkspaceMessages(messages);
-  const normalizedFiles = normalizeWorkspaceFiles(workspaceFiles);
-  const visibleFiles = normalizedFiles.slice(0, MAX_VISIBLE_FILES);
-  const summary: CodeAgentWorkspaceSummary = {
-    ...messageSummary,
-    touchedFiles: normalizedFiles,
-  };
-
   return {
     roomId: room.id,
     backend: 'coco',
@@ -215,11 +135,7 @@ export const buildCodeAgentWorkspaceSnapshot = (
       agentStatus: room.cocoStatus || 'idle',
       hasSession: Boolean(room.cocoSessionId),
     },
-    summary,
-    files: {
-      touched: visibleFiles,
-      hiddenCount: Math.max(0, normalizedFiles.length - visibleFiles.length),
-    },
+    summary: summarizeWorkspaceMessages(messages),
     changes: {
       available: false,
       changedFiles: [],
@@ -228,11 +144,3 @@ export const buildCodeAgentWorkspaceSnapshot = (
     commands: buildCommandHistory(messages),
   };
 };
-
-export const normalizeWorkspaceFiles = (files: string[]): string[] => (
-  Array.from(new Set(files
-    .map(file => sanitizeWorkspaceFileRef(file))
-    .filter(Boolean)
-    .filter(file => file !== '.')))
-    .sort((a, b) => a.localeCompare(b))
-);

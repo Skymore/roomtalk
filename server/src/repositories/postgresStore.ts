@@ -41,6 +41,7 @@ type RoomRow = {
   coco_session_id?: string | null;
   coco_status?: RoomCocoStatus | null;
   coco_access?: string | null;
+  code_agent_mode?: string | null;
   room_version?: number | string | null;
   updated_at?: string | Date | null;
 };
@@ -70,6 +71,7 @@ type MessageRow = {
   reply_to: unknown;
   ui_payload?: unknown;
   ai_stream_owner_id?: string | null;
+  code_agent_mode?: string | null;
   position?: number | string;
 };
 
@@ -192,8 +194,8 @@ type ClientAccountRow = {
   email_verified: boolean | null;
 };
 
-const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, coco_session_id, coco_status, coco_access, room_version, updated_at';
-const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ui_payload';
+const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, coco_session_id, coco_status, coco_access, code_agent_mode, room_version, updated_at';
+const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ui_payload, code_agent_mode';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, filename, width, height, duration_ms, uploaded_by_client_id, created_at';
 const PENDING_MEDIA_UPLOAD_COLUMNS = 'id, room_id, object_key, kind, mime_type, byte_size, filename, uploaded_by_client_id, expires_at, created_at';
@@ -294,6 +296,7 @@ const mapRoom = (row: RoomRow): Room => {
   if (row.coco_session_id) room.cocoSessionId = row.coco_session_id;
   if (row.coco_status) room.cocoStatus = row.coco_status;
   if (row.coco_access) room.cocoAccess = row.coco_access as Room['cocoAccess'];
+  if (row.code_agent_mode) room.codeAgentMode = row.code_agent_mode as Room['codeAgentMode'];
   const roomVersion = Number(row.room_version || 0);
   if (roomVersion > 0) room.roomVersion = roomVersion;
   if (row.updated_at) room.updatedAt = toIsoString(row.updated_at);
@@ -502,6 +505,7 @@ const mapMessage = (row: MessageRow): Message => {
   if (aiModel) message.aiModel = aiModel;
   if (usage) message.usage = usage;
   if (cost) message.cost = cost;
+  if (row.code_agent_mode) message.codeAgentMode = row.code_agent_mode as Message['codeAgentMode'];
   if (replyTo) message.replyTo = replyTo;
   if (uiPayload) message.uiPayload = uiPayload;
 
@@ -533,6 +537,7 @@ const messageParams = (message: Message, position: number): unknown[] => [
   toJsonb(message.replyTo),
   toJsonb(message.uiPayload),
   getAIStreamOwnerId(message) || null,
+  message.codeAgentMode || null,
   position,
 ];
 
@@ -603,9 +608,10 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   reply_to,
   ui_payload,
   ai_stream_owner_id,
+  code_agent_mode,
   position
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22::jsonb, $23::jsonb, $24, $25
+  $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22::jsonb, $23::jsonb, $24, $25, $26
 ) ON CONFLICT (id) DO UPDATE SET
   room_id = EXCLUDED.room_id,
   client_id = EXCLUDED.client_id,
@@ -630,6 +636,7 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   reply_to = EXCLUDED.reply_to,
   ui_payload = EXCLUDED.ui_payload,
   ai_stream_owner_id = EXCLUDED.ai_stream_owner_id,
+  code_agent_mode = EXCLUDED.code_agent_mode,
   position = room_messages.position`;
 
 const INSERT_ASSISTANT_RUN_SQL = `INSERT INTO assistant_runs (
@@ -1908,21 +1915,23 @@ export class PostgresStore implements DurableRoomStore {
             coco_session_id,
             coco_status,
             coco_access,
+            code_agent_mode,
             room_version,
             updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 1, NOW())
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 1, NOW())
           ON CONFLICT (id) DO UPDATE SET
             name = EXCLUDED.name,
             description = EXCLUDED.description,
             last_activity_at = GREATEST(rooms.last_activity_at, EXCLUDED.last_activity_at),
-            type = CASE WHEN $14::boolean THEN EXCLUDED.type ELSE rooms.type END,
+            type = CASE WHEN $15::boolean THEN EXCLUDED.type ELSE rooms.type END,
             sandbox_id = COALESCE(EXCLUDED.sandbox_id, rooms.sandbox_id),
             sandbox_status = COALESCE(EXCLUDED.sandbox_status, rooms.sandbox_status),
             sandbox_updated_at = COALESCE(EXCLUDED.sandbox_updated_at, rooms.sandbox_updated_at),
             coco_session_id = COALESCE(EXCLUDED.coco_session_id, rooms.coco_session_id),
             coco_status = COALESCE(EXCLUDED.coco_status, rooms.coco_status),
             coco_access = COALESCE(EXCLUDED.coco_access, rooms.coco_access),
+            code_agent_mode = COALESCE(EXCLUDED.code_agent_mode, rooms.code_agent_mode),
             room_version = rooms.room_version + 1, updated_at = NOW()
           RETURNING ${ROOM_COLUMNS}`,
           [
@@ -1939,6 +1948,7 @@ export class PostgresStore implements DurableRoomStore {
             room.cocoSessionId || null,
             room.cocoStatus || null,
             room.cocoAccess || null,
+            room.codeAgentMode || null,
             room.type !== undefined,
           ]
         );
@@ -2323,6 +2333,7 @@ export class PostgresStore implements DurableRoomStore {
     const hasPasswordHashUpdate = Object.prototype.hasOwnProperty.call(updates, 'passwordHash');
     const hasPostingScheduleUpdate = Object.prototype.hasOwnProperty.call(updates, 'postingSchedule');
     const hasCocoAccessUpdate = Object.prototype.hasOwnProperty.call(updates, 'cocoAccess');
+    const hasCodeAgentModeUpdate = Object.prototype.hasOwnProperty.call(updates, 'codeAgentMode');
 
     try {
       const result = await this.pool.query<RoomRow>(
@@ -2330,6 +2341,7 @@ export class PostgresStore implements DurableRoomStore {
         SET password_hash = CASE WHEN $2::boolean THEN $3 ELSE password_hash END,
           posting_schedule = CASE WHEN $4::boolean THEN $5::jsonb ELSE posting_schedule END,
           coco_access = CASE WHEN $6::boolean THEN $7 ELSE coco_access END,
+          code_agent_mode = CASE WHEN $8::boolean THEN $9 ELSE code_agent_mode END,
           room_version = room_version + 1, updated_at = NOW()
         WHERE id = $1
         RETURNING ${ROOM_COLUMNS}`,
@@ -2341,6 +2353,8 @@ export class PostgresStore implements DurableRoomStore {
           toJsonb(updates.postingSchedule ?? null),
           hasCocoAccessUpdate,
           updates.cocoAccess ?? null,
+          hasCodeAgentModeUpdate,
+          updates.codeAgentMode ?? null,
         ]
       );
       return result.rows[0] ? mapRoom(result.rows[0]) : null;

@@ -124,6 +124,11 @@ const parseTargetClientId = (value: unknown): { ok: true; clientId: string } | {
   return { ok: true, clientId };
 };
 
+const getClientDisplayId = (clientId: string, nickname?: string | null): string => {
+  const name = nickname?.trim() || 'User';
+  return `${name}#${clientId.slice(-4)}`;
+};
+
 const lookupKnownRoomClient = async (
   store: SocketConnectionContext['store'],
   roomId: string,
@@ -139,6 +144,7 @@ const lookupKnownRoomClient = async (
     clientId: targetClientId,
     exists: Boolean(nickname),
     nickname,
+    displayId: getClientDisplayId(targetClientId, nickname),
     memberRole: member?.role ?? null,
   };
 };
@@ -155,6 +161,7 @@ const readRoomRoleMembers = async (
     .map(member => ({
       ...member,
       nickname: nicknames[member.clientId],
+      displayId: getClientDisplayId(member.clientId, nicknames[member.clientId]),
     }))
     .sort((a, b) => roleRank[a.role] - roleRank[b.role] || a.joinedAt.localeCompare(b.joinedAt));
 };
@@ -324,7 +331,10 @@ export function registerRoomHandlers({
       return;
     }
 
-    const members = await store.getRoomOnlineMembers(roomId);
+    const members = (await store.getRoomOnlineMembers(roomId)).map(member => ({
+      ...member,
+      displayId: getClientDisplayId(member.clientId, member.nickname),
+    }));
     callback?.({ success: true, members });
   });
 
@@ -941,7 +951,7 @@ export function registerRoomHandlers({
   });
 
   socket.on('update_room_settings', async (
-    data: { roomId?: string; password?: string; clearPassword?: boolean; postingSchedule?: unknown; cocoAccess?: unknown },
+    data: { roomId?: string; password?: string; clearPassword?: boolean; postingSchedule?: unknown; cocoAccess?: unknown; codeAgentMode?: unknown },
     callback?: (result: BasicRoomAck) => void,
   ) => {
     const clientId = await store.getClientId(socket.id);
@@ -984,6 +994,13 @@ export function registerRoomHandlers({
         updates.cocoAccess = data.cocoAccess as typeof VALID_COCO_ACCESS[number];
       } else if (data.cocoAccess === null) {
         updates.cocoAccess = null;
+      }
+
+      const VALID_CODE_AGENT_MODES = ['plan', 'acceptEdits'] as const;
+      if (typeof data.codeAgentMode === 'string' && VALID_CODE_AGENT_MODES.includes(data.codeAgentMode as any)) {
+        updates.codeAgentMode = data.codeAgentMode as typeof VALID_CODE_AGENT_MODES[number];
+      } else if (data.codeAgentMode === null) {
+        updates.codeAgentMode = null;
       }
 
       // 空更新不写库不广播:写库会无意义地 bump updated_at 并触发全房 room_updated

@@ -12,6 +12,13 @@ export default defineConfig({
 		allowedHosts: true,
 	},
 	test: {
+		environment: "jsdom",
+		environmentOptions: {
+			jsdom: {
+				url: "http://localhost:3011/",
+			},
+		},
+		setupFiles: ["src/test/setup.ts"],
 		exclude: [...configDefaults.exclude, "e2e/**"],
 	},
 });

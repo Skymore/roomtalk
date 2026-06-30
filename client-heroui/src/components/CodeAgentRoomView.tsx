@@ -3,11 +3,13 @@ import { Button } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 import { ChatHeader } from './ChatHeader';
+import { CodeAgentFileBrowserPanel } from './CodeAgentFileBrowserPanel';
 import { MessageInput } from './MessageInput';
 import { MessageList, MessageListHandle } from './MessageList';
 import { AppView } from '../utils/appPersistence';
 import { CodeAgentBackend, CodeAgentMode, getCodeAgentStatus, isSupportedCodeAgentBackend } from '../utils/codeAgent';
 import { getAvatarColor, getAvatarText } from '../utils/userProfile';
+import { updateRoomSettings } from '../utils/socket';
 import { Message, Room, RoomPermissions, RoomRenameHandler } from '../utils/types';
 
 interface CodeAgentRoomViewProps {
@@ -17,7 +19,6 @@ interface CodeAgentRoomViewProps {
   username: string;
   clientId: string;
   backend: CodeAgentBackend;
-  mode: CodeAgentMode;
   availableModes: CodeAgentMode[];
   defaultMode: CodeAgentMode;
   handleCopyToClipboard: (text: string) => void;
@@ -41,7 +42,6 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   username,
   clientId,
   backend,
-  mode,
   availableModes,
   defaultMode,
   handleCopyToClipboard,
@@ -63,32 +63,28 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   const messageListRef = React.useRef<MessageListHandle>(null);
   const [composerHeight, setComposerHeight] = React.useState(96);
   const [showScrollButton, setShowScrollButton] = React.useState(false);
-  const [selectedMode, setSelectedMode] = React.useState<CodeAgentMode>('plan');
   const normalizedAvailableModes = React.useMemo(
-    () => (availableModes.length ? availableModes : [mode]),
-    [availableModes, mode]
+    () => (availableModes.length ? availableModes : ['plan' as CodeAgentMode]),
+    [availableModes]
   );
   const maxMode: CodeAgentMode = normalizedAvailableModes.includes('acceptEdits') ? 'acceptEdits' : 'plan';
   const effectiveDefaultMode = normalizedAvailableModes.includes(defaultMode) ? defaultMode : 'plan';
+  const selectedMode: CodeAgentMode = normalizedAvailableModes.includes(currentRoom.codeAgentMode as CodeAgentMode)
+    ? (currentRoom.codeAgentMode as CodeAgentMode)
+    : effectiveDefaultMode;
 
   React.useEffect(() => {
     setReplyToMessage(null);
     setShowScrollButton(false);
   }, [currentRoom.id]);
 
-  React.useEffect(() => {
-    const stored = localStorage.getItem(`roomtalk_code_agent_mode_${currentRoom.id}`);
-    const nextMode = stored === 'acceptEdits' || stored === 'plan'
-      ? stored
-      : effectiveDefaultMode;
-    setSelectedMode(normalizedAvailableModes.includes(nextMode) ? nextMode : effectiveDefaultMode);
-  }, [currentRoom.id, effectiveDefaultMode, normalizedAvailableModes]);
-
   const handleCodeAgentModeChange = React.useCallback((nextMode: CodeAgentMode) => {
     const constrainedMode = normalizedAvailableModes.includes(nextMode) ? nextMode : effectiveDefaultMode;
-    setSelectedMode(constrainedMode);
-    localStorage.setItem(`roomtalk_code_agent_mode_${currentRoom.id}`, constrainedMode);
-  }, [currentRoom.id, effectiveDefaultMode, normalizedAvailableModes]);
+    updateRoomSettings({ roomId: currentRoom.id, codeAgentMode: constrainedMode }).then(
+      (room) => onRoomUpdated(room),
+      (error) => console.error('Failed to update code agent mode', error),
+    );
+  }, [currentRoom.id, effectiveDefaultMode, normalizedAvailableModes, onRoomUpdated]);
 
   React.useLayoutEffect(() => {
     const el = composerRef.current;
@@ -149,67 +145,73 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
     <div className="flex h-full min-h-0 w-full flex-1 flex-col bg-[#f5f4ed] dark:bg-[#141413]">
       {header}
 
-      <div className="relative min-h-0 w-full flex-1 overflow-hidden">
-        <MessageList
-          key={currentRoom.id}
-          ref={messageListRef}
-          roomId={currentRoom.id}
-          room={currentRoom}
-          presentation="code-agent"
-          currentRoom={currentRoom}
-          codeAgentMode={selectedMode}
-          onReply={setReplyToMessage}
-          roomPermissions={roomPermissions}
-          bottomInsetPx={composerHeight + 12}
-          onScrollButtonVisibilityChange={setShowScrollButton}
-        />
-
-        {showScrollButton && (
-          <Button
-            isIconOnly
-            color="primary"
-            variant="solid"
-            size="sm"
-            radius="full"
-            className="absolute left-1/2 z-40 -translate-x-1/2 bg-[#30302e] text-[#faf9f5] shadow-[0_0_0_1px_rgba(194,192,182,0.7),0_10px_24px_rgba(20,20,19,0.16)] dark:bg-[#faf9f5] dark:text-[#141413]"
-            style={{ bottom: composerHeight + 16 }}
-            aria-label={t('scrollToBottom')}
-            onPress={() => messageListRef.current?.scrollToBottom('smooth')}
-          >
-            <Icon icon="lucide:arrow-down" className="h-4 w-4" />
-          </Button>
-        )}
-
-        <div
-          ref={composerRef}
-          data-testid="message-input-panel"
-          className="absolute inset-x-0 bottom-0 z-30 flex min-h-11 items-center border-t border-[#dedbd0] bg-[#faf9f5]/92 px-1 py-1 backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/92 md:block md:min-h-0 md:p-3"
-        >
-          <MessageInput
+      <div className="grid min-h-0 w-full flex-1 overflow-hidden lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_420px]">
+        <div className="relative min-h-0 overflow-hidden">
+          <MessageList
+            key={currentRoom.id}
+            ref={messageListRef}
             roomId={currentRoom.id}
-            clientId={clientId}
-            username={username}
-            avatarText={getAvatarText(username)}
-            avatarColor={getAvatarColor(username)}
-            replyToMessage={replyToMessage}
-            onCancelReply={() => setReplyToMessage(null)}
-            onOptimisticMessage={(message) => messageListRef.current?.addOptimisticMessage(message)}
-            onOptimisticMessageSaved={(clientMessageId, message) =>
-              messageListRef.current?.replaceOptimisticMessage(clientMessageId, message)
-            }
-            onOptimisticMessageFailed={(clientMessageId, error) =>
-              messageListRef.current?.markOptimisticMessageFailed(clientMessageId, error)
-            }
-            canPost={roomPermissions?.canPost ?? true}
-            postingRestrictionReason={roomPermissions?.postingRestrictionReason}
-            postingSchedule={currentRoom.postingSchedule}
-            isRoomAIProcessing={getCodeAgentStatus(currentRoom) === 'running'}
-            isCodeAgentRoom
+            room={currentRoom}
+            presentation="code-agent"
+            currentRoom={currentRoom}
             codeAgentMode={selectedMode}
-            codeAgentMaxMode={maxMode}
-            onCodeAgentModeChange={handleCodeAgentModeChange}
+            onReply={setReplyToMessage}
+            roomPermissions={roomPermissions}
+            bottomInsetPx={composerHeight + 12}
+            onScrollButtonVisibilityChange={setShowScrollButton}
           />
+
+          {showScrollButton && (
+            <Button
+              isIconOnly
+              color="primary"
+              variant="solid"
+              size="sm"
+              radius="full"
+              className="absolute left-1/2 z-40 -translate-x-1/2 bg-[#30302e] text-[#faf9f5] shadow-[0_0_0_1px_rgba(194,192,182,0.7),0_10px_24px_rgba(20,20,19,0.16)] dark:bg-[#faf9f5] dark:text-[#141413]"
+              style={{ bottom: composerHeight + 16 }}
+              aria-label={t('scrollToBottom')}
+              onPress={() => messageListRef.current?.scrollToBottom('smooth')}
+            >
+              <Icon icon="lucide:arrow-down" className="h-4 w-4" />
+            </Button>
+          )}
+
+          <div
+            ref={composerRef}
+            data-testid="message-input-panel"
+            className="absolute inset-x-0 bottom-0 z-30 flex min-h-11 items-center border-t border-[#dedbd0] bg-[#faf9f5]/92 px-1 py-1 backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/92 md:block md:min-h-0 md:p-3"
+          >
+            <MessageInput
+              roomId={currentRoom.id}
+              clientId={clientId}
+              username={username}
+              avatarText={getAvatarText(username)}
+              avatarColor={getAvatarColor(username)}
+              replyToMessage={replyToMessage}
+              onCancelReply={() => setReplyToMessage(null)}
+              onOptimisticMessage={(message) => messageListRef.current?.addOptimisticMessage(message)}
+              onOptimisticMessageSaved={(clientMessageId, message) =>
+                messageListRef.current?.replaceOptimisticMessage(clientMessageId, message)
+              }
+              onOptimisticMessageFailed={(clientMessageId, error) =>
+                messageListRef.current?.markOptimisticMessageFailed(clientMessageId, error)
+              }
+              canPost={roomPermissions?.canPost ?? true}
+              postingRestrictionReason={roomPermissions?.postingRestrictionReason}
+              postingSchedule={currentRoom.postingSchedule}
+              isRoomAIProcessing={getCodeAgentStatus(currentRoom) === 'running'}
+              isCodeAgentRoom
+              codeAgentMode={selectedMode}
+              codeAgentMaxMode={maxMode}
+              onCodeAgentModeChange={handleCodeAgentModeChange}
+            />
+          </div>
         </div>
+
+        <aside className="hidden min-h-0 border-l border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b] lg:flex">
+          <CodeAgentFileBrowserPanel key={currentRoom.id} roomId={currentRoom.id} projectName={currentRoom.name || 'Workspace'} />
+        </aside>
       </div>
     </div>
   );

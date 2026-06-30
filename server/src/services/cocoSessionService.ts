@@ -40,8 +40,9 @@ export interface CocoTurnInput {
   clientId: string;
   selectedModel: AIModelOption;
   roleName?: string;
-  mode?: CocoRunnerMode;
   maxContextMessages?: number;
+  requestedMode?: CocoRunnerMode;
+  requestedModeSource?: 'originalTurn';
 }
 
 export type CocoTurnAck = { success: boolean; messageId?: string; error?: string };
@@ -102,7 +103,7 @@ export class CocoSessionService {
       return ack({ success: false, error: 'A Coco task is already running in this room' });
     }
 
-    const turnMode = this.resolveTurnMode(input.mode);
+    const turnMode = this.resolveTurnMode(input.requestedMode ?? room!.codeAgentMode, input.requestedModeSource);
     if (!turnMode.ok) {
       return ack({ success: false, error: turnMode.error });
     }
@@ -128,6 +129,7 @@ export class CocoSessionService {
           now: this.now(),
         }),
         turnId,
+        codeAgentMode: turnMode.mode,
       };
 
       const promptContext = await this.readLatestPromptContext(input.roomId, input.clientId, input.maxContextMessages);
@@ -340,7 +342,10 @@ export class CocoSessionService {
     return { success: true };
   }
 
-  private resolveTurnMode(requestedMode?: CocoRunnerMode): { ok: true; mode: CocoRunnerMode } | { ok: false; error: string } {
+  private resolveTurnMode(
+    requestedMode?: CocoRunnerMode,
+    source?: 'originalTurn',
+  ): { ok: true; mode: CocoRunnerMode } | { ok: false; error: string } {
     const availableModes = this.availableModes();
     const defaultMode = this.defaultMode(availableModes);
     if (!requestedMode) {
@@ -350,6 +355,9 @@ export class CocoSessionService {
       return { ok: true, mode: requestedMode };
     }
     if (requestedMode === 'acceptEdits') {
+      if (source === 'originalTurn') {
+        return { ok: false, error: 'This response was originally run in Edit mode, but Edit mode is no longer available.' };
+      }
       return { ok: false, error: 'Coco edit mode is not enabled' };
     }
     return { ok: false, error: `Coco mode is not enabled: ${requestedMode}` };
@@ -470,6 +478,9 @@ export class CocoSessionService {
     if (mapped.kind === 'message') {
       if (mapped.message.messageType === 'tool_call') {
         state.needsNewSegment = true;
+      }
+      if (baseAIMessage.codeAgentMode) {
+        mapped.message.codeAgentMode = baseAIMessage.codeAgentMode;
       }
 
       const updatedRoom = await this.store.appendMessageWithAtomicPosition(mapped.message);

@@ -24,6 +24,7 @@ export interface CocoMessageDraft {
   toolOutputPreview?: string;
   exitCode?: number;
   isError?: boolean;
+  codeAgentMode?: 'plan' | 'acceptEdits';
 }
 
 export interface CocoEventMapperContext {

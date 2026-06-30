@@ -206,6 +206,16 @@ const getToolIcon = (toolName: string): string => {
   return 'lucide:wrench';
 };
 
+const getModeLabel = (message: Message, t: Translate) => {
+  if (message.codeAgentMode === 'acceptEdits') {
+    return t('codeAgentEditMode');
+  }
+  if (message.codeAgentMode === 'plan') {
+    return t('codeAgentReadOnlyMode');
+  }
+  return '';
+};
+
 const useThemeDark = () => {
   const [themeDark, setThemeDark] = React.useState(
     typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
@@ -432,6 +442,7 @@ export const CocoToolMessage: React.FC<CocoToolMessageProps> = ({ message, paire
   const isError = result?.isError || result?.status === 'error';
   const isSuccess = hasResult && !isError;
   const isPending = isToolCall && !hasResult;
+  const modeLabel = getModeLabel(message, t);
 
   const output = result?.toolOutputPreview || result?.content || '';
   const shouldCollapseOutput = output.length > OUTPUT_COLLAPSE_LIMIT;
@@ -473,6 +484,12 @@ export const CocoToolMessage: React.FC<CocoToolMessageProps> = ({ message, paire
             <span className="ml-1 font-normal text-[#87867f] dark:text-[#8f8d86]">{summary}</span>
           )}
         </span>
+
+        {modeLabel && (
+          <span className="rounded-full border border-[#dedbd0] px-1.5 py-0.5 text-[10px] font-semibold text-[#5e5d59] dark:border-[#3a3a37] dark:text-[#b0aea5]">
+            {modeLabel}
+          </span>
+        )}
 
         {isPending && (
           <span className="ml-auto inline-block h-3 w-3 flex-shrink-0 animate-spin rounded-full border-[1.5px] border-[#87867f] border-t-transparent dark:border-[#8f8d86] dark:border-t-transparent" />

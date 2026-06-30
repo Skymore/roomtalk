@@ -366,6 +366,18 @@ type SendMessageAndAskAIData = AIRequestData & {
   clientMessageId?: string;
 };
 
+const findNextCocoTurnMode = (messages: Message[], messageId: string): CocoRunnerMode | undefined => {
+  const index = messages.findIndex(message => message.id === messageId);
+  if (index === -1) {
+    return undefined;
+  }
+
+  return messages
+    .slice(index + 1)
+    .find(message => message.messageType === 'ai' && message.codeAgentMode)
+    ?.codeAgentMode as CocoRunnerMode | undefined;
+};
+
 type AIAckCallback = (response: { success: boolean; messageId?: string; error?: string }) => void;
 type SendMessageAndAskAIAckCallback = (response: {
   success: boolean;
@@ -1761,13 +1773,43 @@ export function registerAIHandlers({
         return;
       }
 
+      let requestedMode: CocoRunnerMode | undefined;
+      if (data.retryForMessageId) {
+        const retryTarget = await getRoomMessage(store, data.roomId, data.retryForMessageId);
+        if (!retryTarget) {
+          callback?.({ success: false, error: 'Message not found' });
+          return;
+        }
+        const retryAuth = await authorizeRoomAction({
+          store,
+          roomId: data.roomId,
+          clientId,
+          action: { type: 'message.delete', message: retryTarget },
+        });
+        if (!retryAuth.ok) {
+          callback?.({ success: false, error: retryAuth.message });
+          return;
+        }
+        requestedMode = retryTarget.codeAgentMode as CocoRunnerMode | undefined;
+
+        const truncation = await store.truncateBeforeMessage(data.roomId, data.retryForMessageId);
+        if (!truncation) {
+          callback?.({ success: false, error: 'Unable to update message history before generating a response' });
+          return;
+        }
+        if (truncation.targetFound) {
+          io.to(truncation.room.creatorId).emit('room_updated', truncation.room);
+          await emitLatestHistoryPage(data.roomId);
+        }
+      }
+
       await cocoSessionService.startTurn({
         roomId: data.roomId,
         clientId,
         selectedModel: normalizeAIModel(data.model),
         roleName: data.roleName,
-        ...(data.codeAgentMode ? { mode: data.codeAgentMode } : {}),
         maxContextMessages: data.maxContextMessages,
+        ...(requestedMode ? { requestedMode, requestedModeSource: 'originalTurn' as const } : {}),
       }, callback);
       return;
     }
@@ -1870,7 +1912,6 @@ export function registerAIHandlers({
         clientId,
         selectedModel: normalizeAIModel(data.model),
         roleName: data.roleName,
-        ...(data.codeAgentMode ? { mode: data.codeAgentMode } : {}),
         maxContextMessages: data.maxContextMessages,
       }, (response) => {
         if (response.success && response.messageId) {
@@ -1972,6 +2013,8 @@ export function registerAIHandlers({
       return;
     }
 
+    const messagesBeforeEdit = isCocoRoom ? await store.readMessagesByRoom(data.roomId) : [];
+    const requestedMode = isCocoRoom ? findNextCocoTurnMode(messagesBeforeEdit, data.messageId) : undefined;
     const editResult = await store.updateMessageAndTruncateAfter(data.roomId, data.messageId, data.newContent);
     if (!editResult) {
       callback?.({ success: false, error: 'Failed to save edited message' });
@@ -1993,8 +2036,8 @@ export function registerAIHandlers({
         clientId,
         selectedModel: normalizeAIModel(data.model),
         roleName: data.roleName,
-        ...(data.codeAgentMode ? { mode: data.codeAgentMode } : {}),
         maxContextMessages: data.maxContextMessages,
+        ...(requestedMode ? { requestedMode, requestedModeSource: 'originalTurn' as const } : {}),
       }, callback);
       return;
     }
