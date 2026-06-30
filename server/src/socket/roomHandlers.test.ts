@@ -861,6 +861,7 @@ describe('room socket handlers', () => {
         canManageAdmins: true,
         canManageMembers: true,
         canTransferOwnership: true,
+        canUseCoco: false,
         postingRestrictionReason: undefined,
       },
       memberCount: 2,

@@ -941,7 +941,7 @@ export function registerRoomHandlers({
   });
 
   socket.on('update_room_settings', async (
-    data: { roomId?: string; password?: string; clearPassword?: boolean; postingSchedule?: unknown },
+    data: { roomId?: string; password?: string; clearPassword?: boolean; postingSchedule?: unknown; cocoAccess?: unknown },
     callback?: (result: BasicRoomAck) => void,
   ) => {
     const clientId = await store.getClientId(socket.id);
@@ -977,6 +977,13 @@ export function registerRoomHandlers({
 
       if (Object.prototype.hasOwnProperty.call(data || {}, 'postingSchedule')) {
         updates.postingSchedule = normalizePostingSchedule(data.postingSchedule);
+      }
+
+      const VALID_COCO_ACCESS = ['owner', 'admin', 'member'] as const;
+      if (typeof data.cocoAccess === 'string' && VALID_COCO_ACCESS.includes(data.cocoAccess as any)) {
+        updates.cocoAccess = data.cocoAccess as typeof VALID_COCO_ACCESS[number];
+      } else if (data.cocoAccess === null) {
+        updates.cocoAccess = null;
       }
 
       // 空更新不写库不广播:写库会无意义地 bump updated_at 并触发全房 room_updated

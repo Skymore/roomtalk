@@ -57,7 +57,8 @@ export class CocoSandboxLifecycleService {
     if (room.type !== 'coco') {
       return { ok: false, reason: 'not_coco_room', room };
     }
-    if (room.creatorId !== clientId) {
+    const access = room.cocoAccess || 'owner';
+    if (access === 'owner' && room.creatorId !== clientId) {
       return { ok: false, reason: 'forbidden', room };
     }
 

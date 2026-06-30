@@ -13,6 +13,7 @@ export type MediaKind = 'image' | 'video' | 'audio' | 'file';
 export type RoomType = 'chat' | 'coco';
 export type RoomSandboxStatus = 'none' | 'creating' | 'ready' | 'expired' | 'error';
 export type RoomCocoStatus = 'idle' | 'running' | 'error';
+export type CocoAccessLevel = 'owner' | 'admin' | 'member';
 export type MessageType = 'text' | 'ai' | 'media' | 'sticker' | 'tool_call' | 'tool_result' | 'sandbox_status';
 export type AIModelProvider = 'openai' | 'openrouter' | 'deepseek' | 'anthropic';
 
@@ -133,6 +134,7 @@ export interface Room {
   sandboxUpdatedAt?: string;
   cocoSessionId?: string;
   cocoStatus?: RoomCocoStatus;
+  cocoAccess?: CocoAccessLevel;
   messageVersion?: number;
   hasPassword?: boolean;
   postingSchedule?: RoomPostingSchedule;
@@ -168,6 +170,7 @@ export interface RoomPermissions {
   canManageAdmins: boolean;
   canManageMembers: boolean;
   canTransferOwnership: boolean;
+  canUseCoco: boolean;
   postingRestrictionReason?: string;
 }
 

@@ -662,6 +662,7 @@ export const updateRoomSettings = (params: {
   password?: string;
   clearPassword?: boolean;
   postingSchedule?: RoomPostingSchedule | null;
+  cocoAccess?: Room['cocoAccess'] | null;
 }): Promise<Room> => {
   return emitWithAck<RoomAckResponse>(
     'update_room_settings',

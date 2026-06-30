@@ -36,6 +36,7 @@ class FakeEmitter {
 class MemoryCocoStore {
   rooms = new Map<string, Room>();
   messages = new Map<string, Message[]>();
+  members = new Map<string, { roomId: string; clientId: string; role: string; joinedAt: string }[]>();
   appendFailures = 0;
   upsertFailures = 0;
   roomCost: RoomAICostTotal = { roomId: 'room-1', currency: 'USD', totalUsd: 0 };
@@ -43,10 +44,24 @@ class MemoryCocoStore {
   constructor(initialRoom: Room, initialMessages: Message[] = []) {
     this.rooms.set(initialRoom.id, initialRoom);
     this.messages.set(initialRoom.id, initialMessages);
+    this.members.set(initialRoom.id, [
+      { roomId: initialRoom.id, clientId: initialRoom.creatorId, role: 'owner', joinedAt: initialRoom.createdAt },
+    ]);
   }
 
   async getRoomById(roomId: string) {
     return this.rooms.get(roomId) || null;
+  }
+
+  async getRoomMember(roomId: string, clientId: string) {
+    const members = this.members.get(roomId) || [];
+    return members.find(m => m.clientId === clientId) || null;
+  }
+
+  addMember(roomId: string, clientId: string, role: string) {
+    const list = this.members.get(roomId) || [];
+    list.push({ roomId, clientId, role, joinedAt: '2026-05-03T00:00:00.000Z' });
+    this.members.set(roomId, list);
   }
 
   async readMessagesByRoom(roomId: string) {
@@ -821,6 +836,53 @@ describe('CocoSessionService', () => {
       success: false,
       error: 'Room is not a Coco room',
     });
+  });
+
+  it('allows admins when cocoAccess is admin', async () => {
+    const store = new MemoryCocoStore(room({ cocoAccess: 'admin' }), [
+      { ...userMessage(), clientId: 'admin-1' },
+    ]);
+    store.addMember('room-1', 'admin-1', 'admin');
+    const runner = new FakeCocoRunnerClient([
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'ok', sessionId: 's1' },
+    ]);
+    const { service } = createService({ store, runner });
+
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'admin-1', selectedModel });
+    assert.equal(result.success, true);
+  });
+
+  it('rejects regular members when cocoAccess is admin', async () => {
+    const store = new MemoryCocoStore(room({ cocoAccess: 'admin' }), [
+      { ...userMessage(), clientId: 'member-1' },
+    ]);
+    store.addMember('room-1', 'member-1', 'member');
+    const { service } = createService({ store });
+
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'member-1', selectedModel });
+    assert.deepEqual(result, { success: false, error: 'You do not have access to this Coco room' });
+  });
+
+  it('allows all members when cocoAccess is member', async () => {
+    const store = new MemoryCocoStore(room({ cocoAccess: 'member' }), [
+      { ...userMessage(), clientId: 'member-1' },
+    ]);
+    store.addMember('room-1', 'member-1', 'member');
+    const runner = new FakeCocoRunnerClient([
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'ok', sessionId: 's1' },
+    ]);
+    const { service } = createService({ store, runner });
+
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'member-1', selectedModel });
+    assert.equal(result.success, true);
+  });
+
+  it('defaults to owner-only access when cocoAccess is not set', async () => {
+    const store = new MemoryCocoStore(room(), [userMessage()]);
+    store.addMember('room-1', 'member-1', 'member');
+
+    const result = await createService({ store }).service.startTurn({ roomId: 'room-1', clientId: 'member-1', selectedModel });
+    assert.deepEqual(result, { success: false, error: 'You do not have access to this Coco room' });
   });
 
   it('stops runner processing when a tool event cannot be persisted', async () => {

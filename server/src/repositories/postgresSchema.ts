@@ -27,6 +27,10 @@ export const POSTGRES_SCHEMA_SQL = [
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS sandbox_updated_at TIMESTAMPTZ`,
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS coco_session_id TEXT`,
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS coco_status TEXT`,
+  `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS coco_access TEXT`,
+  `ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_coco_access_check`,
+  `ALTER TABLE rooms ADD CONSTRAINT rooms_coco_access_check
+    CHECK (coco_access IS NULL OR coco_access IN ('owner', 'admin', 'member'))`,
   `ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_type_check`,
   `ALTER TABLE rooms ADD CONSTRAINT rooms_type_check
     CHECK (type IN ('chat', 'coco'))`,

@@ -227,6 +227,7 @@ export interface CreateGoogleAccountInput extends GoogleAccountProfile {
 export interface RoomSettingsUpdate {
   passwordHash?: string | null;
   postingSchedule?: RoomPostingSchedule | null;
+  cocoAccess?: Room['cocoAccess'] | null;
 }
 
 export interface DurableRoomStore {

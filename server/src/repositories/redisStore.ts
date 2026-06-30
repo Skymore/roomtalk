@@ -139,6 +139,13 @@ elseif postingScheduleMode == 'clear' then
   room['postingSchedule'] = nil
 end
 
+local cocoAccessMode = ARGV[7]
+if cocoAccessMode == 'set' then
+  room['cocoAccess'] = ARGV[8]
+elseif cocoAccessMode == 'clear' then
+  room['cocoAccess'] = nil
+end
+
 room['updatedAt'] = ARGV[2]
 room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
 local encoded = cjson.encode(room)
@@ -1662,6 +1669,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
           sandboxUpdatedAt: room.sandboxUpdatedAt ?? existingRoom.sandboxUpdatedAt,
           cocoSessionId: room.cocoSessionId ?? existingRoom.cocoSessionId,
           cocoStatus: room.cocoStatus ?? existingRoom.cocoStatus,
+          cocoAccess: room.cocoAccess ?? existingRoom.cocoAccess,
         }
         : room;
       const storedRoom = await this.writeRoomRecord(room.id, roomToSave);
@@ -2020,6 +2028,11 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
           ? 'set'
           : 'clear'
         : 'keep';
+      const cocoAccessMode = Object.prototype.hasOwnProperty.call(updates, 'cocoAccess')
+        ? updates.cocoAccess
+          ? 'set'
+          : 'clear'
+        : 'keep';
       const result = await (this.redisClient as any).eval(UPDATE_ROOM_SETTINGS_SCRIPT, {
         keys: ['rooms', getRoomPasswordHashKey(roomId)],
         arguments: [
@@ -2029,6 +2042,8 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
           updates.passwordHash || '',
           postingScheduleMode,
           updates.postingSchedule ? JSON.stringify(updates.postingSchedule) : '',
+          cocoAccessMode,
+          updates.cocoAccess || '',
         ],
       });
 

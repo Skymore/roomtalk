@@ -92,7 +92,8 @@ export class CocoSessionService {
     }
 
     const room = await this.store.getRoomById(input.roomId);
-    const validation = this.validateRoom(room, input.clientId);
+    const member = room ? await this.store.getRoomMember(input.roomId, input.clientId) : null;
+    const validation = this.validateRoom(room, input.clientId, member?.role);
     if (!validation.success) {
       return ack(validation);
     }
@@ -319,15 +320,22 @@ export class CocoSessionService {
     });
   }
 
-  private validateRoom(room: Room | null, clientId: string): CocoTurnAck {
+  private validateRoom(room: Room | null, clientId: string, memberRole?: string): CocoTurnAck {
     if (!room) {
       return { success: false, error: 'Room not found' };
     }
     if (room.type !== 'coco') {
       return { success: false, error: 'Room is not a Coco room' };
     }
-    if (room.creatorId !== clientId) {
-      return { success: false, error: 'You do not have access to this Coco room' };
+    const access = room.cocoAccess || 'owner';
+    if (access === 'owner') {
+      if (room.creatorId !== clientId) {
+        return { success: false, error: 'You do not have access to this Coco room' };
+      }
+    } else if (access === 'admin') {
+      if (room.creatorId !== clientId && memberRole !== 'admin') {
+        return { success: false, error: 'You do not have access to this Coco room' };
+      }
     }
     return { success: true };
   }

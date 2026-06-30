@@ -552,6 +552,47 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
             </div>
           )}
 
+          {isOwner && room.type === 'coco' && (
+            <div className="space-y-2">
+              {renderSectionLabel('lucide:bot', t('cocoAccess'))}
+              <div className="flex gap-1.5">
+                {(['owner', 'admin', 'member'] as const).map(level => {
+                  const current = room.cocoAccess || 'owner';
+                  const selected = current === level;
+                  return (
+                    <Button
+                      key={level}
+                      size="sm"
+                      className={`h-8 rounded-lg px-3 text-xs font-semibold ${
+                        selected
+                          ? 'bg-[#c96442] text-[#faf9f5]'
+                          : 'bg-[#e8e6dc] text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]'
+                      }`}
+                      isDisabled={isSaving}
+                      onPress={async () => {
+                        if (selected) return;
+                        setIsSaving(true);
+                        try {
+                          const updated = await updateRoomSettings({ roomId: room.id, cocoAccess: level });
+                          onRoomUpdated?.(updated);
+                        } catch {
+                          setStatusMessage(t('settingsUpdateFailed'));
+                        } finally {
+                          setIsSaving(false);
+                        }
+                      }}
+                    >
+                      {t(level)}
+                    </Button>
+                  );
+                })}
+              </div>
+              <div className="text-xs text-[#87867f] dark:text-[#b0aea5]">
+                {t('cocoAccessDescription')}
+              </div>
+            </div>
+          )}
+
           {showDangerZone && (
             <div className="space-y-2.5 rounded-xl border border-danger-200/70 bg-danger-50/40 p-3 dark:border-danger-900/40 dark:bg-danger-950/15">
               {renderSectionLabel('lucide:triangle-alert', t('dangerZone'), 'text-danger-600 dark:text-danger-400')}

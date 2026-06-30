@@ -59,6 +59,7 @@ export type MediaKind = 'image' | 'video' | 'audio' | 'file';
 export type RoomType = 'chat' | 'coco';
 export type RoomSandboxStatus = 'none' | 'creating' | 'ready' | 'expired' | 'error';
 export type RoomCocoStatus = 'idle' | 'running' | 'error';
+export type CocoAccessLevel = 'owner' | 'admin' | 'member';
 export type MessageType = 'text' | 'ai' | 'media' | 'sticker' | 'tool_call' | 'tool_result' | 'sandbox_status';
 
 export interface MessageMediaAsset {
@@ -149,6 +150,7 @@ export interface Room {
   sandboxUpdatedAt?: string;
   cocoSessionId?: string;
   cocoStatus?: RoomCocoStatus;
+  cocoAccess?: CocoAccessLevel;
   // 行级单调版本号:每次房间写入 +1,客户端 last-write-wins 的主比较键
   // (updatedAt 退为展示/兼容用途)。版本相等 ⟺ 同一次写入。
   roomVersion?: number;
@@ -189,6 +191,7 @@ export interface RoomPermissions {
   canManageAdmins: boolean;
   canManageMembers: boolean;
   canTransferOwnership: boolean;
+  canUseCoco: boolean;
   postingRestrictionReason?: string;
 }
 
