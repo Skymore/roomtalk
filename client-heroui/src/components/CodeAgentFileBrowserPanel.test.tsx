@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CodeAgentFileBrowserPanel } from './CodeAgentFileBrowserPanel';
 
@@ -15,12 +15,26 @@ const renameCodeWorkspaceEntryMock = vi.hoisted(() => vi.fn());
 const deleteCodeWorkspaceEntryMock = vi.hoisted(() => vi.fn());
 const openSearchMock = vi.hoisted(() => vi.fn());
 const resetPathsMock = vi.hoisted(() => vi.fn());
+const focusPathMock = vi.hoisted(() => vi.fn());
+const scrollToPathMock = vi.hoisted(() => vi.fn());
 const selectionHandlerRef = vi.hoisted(() => ({ current: null as null | ((paths: readonly string[]) => void) }));
 const fileTreeSelectionPathRef = vi.hoisted(() => ({ current: 'src/App.tsx' }));
 const fileTreeSearchStateRef = vi.hoisted(() => ({
   current: { isOpen: false, value: '' },
 }));
 const editorOptionsRef = vi.hoisted(() => ({ current: null as null | { onChange?: (file: { name: string; contents: string }) => void } }));
+const nextEditorContentsRef = vi.hoisted(() => ({ current: 'export const changed = true;' }));
+const editorSetSelectionsMock = vi.hoisted(() => vi.fn());
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -96,6 +110,8 @@ vi.mock('@pierre/trees/react', () => ({
       model: {
         openSearch: openSearchMock,
         resetPaths: resetPathsMock,
+        focusPath: focusPathMock,
+        scrollToPath: scrollToPathMock,
       },
     };
   },
@@ -120,6 +136,10 @@ vi.mock('@pierre/diffs/editor', () => ({
       editorOptionsRef.current = options;
     }
 
+    setSelections(selections: []) {
+      editorSetSelectionsMock(selections);
+    }
+
     cleanUp() {}
   },
 }));
@@ -138,7 +158,7 @@ vi.mock('@pierre/diffs/react', () => ({
       type="button"
       data-testid="diff-file"
       data-overflow={options.overflow}
-      onClick={() => editorOptionsRef.current?.onChange?.({ ...file, contents: 'export const changed = true;' })}
+      onClick={() => editorOptionsRef.current?.onChange?.({ ...file, contents: nextEditorContentsRef.current })}
     >
       {file.name}:{file.contents}
     </button>
@@ -161,10 +181,14 @@ describe('CodeAgentFileBrowserPanel', () => {
     deleteCodeWorkspaceEntryMock.mockReset();
     openSearchMock.mockReset();
     resetPathsMock.mockReset();
+    focusPathMock.mockReset();
+    scrollToPathMock.mockReset();
     selectionHandlerRef.current = null;
     fileTreeSelectionPathRef.current = 'src/App.tsx';
     fileTreeSearchStateRef.current = { isOpen: false, value: '' };
     editorOptionsRef.current = null;
+    nextEditorContentsRef.current = 'export const changed = true;';
+    editorSetSelectionsMock.mockReset();
     localStorage.clear();
   });
 
@@ -203,6 +227,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(explorer.style.width).toBe('var(--workspace-file-explorer-width)');
     expect(explorer.style.maxWidth).toBe('calc(100% - 180px)');
     expect(explorer.className).not.toContain('50%');
+    expect(explorerResizeHandle.className).toContain('w-6');
     expect(open).not.toHaveBeenCalled();
   });
 
@@ -321,6 +346,11 @@ describe('CodeAgentFileBrowserPanel', () => {
 
     expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:export default function App() {}');
     expect(loadCodeWorkspaceFileMock).toHaveBeenCalledWith('room-1', 'src/App.tsx', expect.any(Object));
+    await waitFor(() => {
+      expect(resetPathsMock).toHaveBeenLastCalledWith(['src/', 'README.md', 'src/App.tsx']);
+    });
+    expect(focusPathMock).toHaveBeenCalledWith('src/App.tsx');
+    expect(scrollToPathMock).toHaveBeenCalledWith('src/App.tsx', { offset: 'nearest' });
   });
 
   it('reopens cached files immediately and keeps them visible when a refresh fails', async () => {
@@ -368,6 +398,47 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(await screen.findByText('socket read failed')).toBeTruthy();
     expect(loadCodeWorkspaceFileMock).toHaveBeenCalledWith('room-1', 'src/App.tsx', expect.any(Object));
     expect(loadCodeWorkspaceFileMock).toHaveBeenCalledWith('room-1', 'src/Other.ts', expect.any(Object));
+  });
+
+  it('keeps background save failures scoped to the edited file after switching previews', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+        { path: 'src/Other.ts', name: 'Other.ts', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockImplementation((_roomId: string, path: string) => Promise.resolve({
+      path,
+      content: path === 'src/App.tsx' ? 'app content' : 'other content',
+      byteSize: 20,
+      truncated: false,
+      encoding: 'utf-8',
+    }));
+    writeCodeWorkspaceFileMock.mockRejectedValue(new Error('save failed for app'));
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    await screen.findByText('2 files');
+
+    fileTreeSelectionPathRef.current = 'src/App.tsx';
+    fireEvent.click(screen.getByLabelText('Coco files'));
+    const appFile = await screen.findByTestId('diff-file');
+    expect(appFile.textContent).toBe('src/App.tsx:app content');
+    fireEvent.click(appFile);
+
+    fileTreeSelectionPathRef.current = 'src/Other.ts';
+    fireEvent.click(screen.getByLabelText('Coco files'));
+
+    expect((await screen.findByTestId('diff-file')).textContent).toBe('src/Other.ts:other content');
+    await waitFor(() => {
+      expect(writeCodeWorkspaceFileMock).toHaveBeenCalledWith(
+        'room-1',
+        'src/App.tsx',
+        'export const changed = true;',
+        'utf-8',
+      );
+    });
+    expect(screen.queryByText('save failed for app')).toBeNull();
   });
 
   it('keeps the T3-style current file breadcrumb scrolled into view', async () => {
@@ -502,6 +573,135 @@ describe('CodeAgentFileBrowserPanel', () => {
       'export const changed = true;',
       'utf-8',
     );
+  });
+
+  it('installs T3-style editor dismissal for outside pointer interactions', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockResolvedValue({
+      path: 'src/App.tsx',
+      content: 'export default function App() {}',
+      byteSize: 32,
+      truncated: false,
+      encoding: 'utf-8',
+    });
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    await screen.findByText('1 files');
+    fireEvent.click(screen.getByLabelText('Coco files'));
+    expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:export default function App() {}');
+
+    fireEvent.pointerDown(document.body);
+
+    expect(editorSetSelectionsMock).toHaveBeenCalledWith([]);
+  });
+
+  it('keeps the latest T3-style optimistic edit when an older save confirms late', async () => {
+    const firstWrite = deferred<{ path: string; name: string; type: 'file' }>();
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockResolvedValue({
+      path: 'src/App.tsx',
+      content: 'export default function App() {}',
+      byteSize: 32,
+      truncated: false,
+      encoding: 'utf-8',
+    });
+    writeCodeWorkspaceFileMock
+      .mockReturnValueOnce(firstWrite.promise)
+      .mockResolvedValueOnce({ path: 'src/App.tsx', name: 'App.tsx', type: 'file' });
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    await screen.findByText('1 files');
+    fireEvent.click(screen.getByLabelText('Coco files'));
+    await screen.findByTestId('diff-file');
+
+    vi.useFakeTimers();
+    nextEditorContentsRef.current = 'export const first = true;';
+    fireEvent.click(screen.getByTestId('diff-file'));
+    expect(screen.getByTestId('diff-file').textContent).toBe('src/App.tsx:export const first = true;');
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(writeCodeWorkspaceFileMock).toHaveBeenCalledWith(
+      'room-1',
+      'src/App.tsx',
+      'export const first = true;',
+      'utf-8',
+    );
+
+    nextEditorContentsRef.current = 'export const latest = true;';
+    fireEvent.click(screen.getByTestId('diff-file'));
+    expect(screen.getByTestId('diff-file').textContent).toBe('src/App.tsx:export const latest = true;');
+
+    await act(async () => {
+      firstWrite.resolve({ path: 'src/App.tsx', name: 'App.tsx', type: 'file' });
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByTestId('diff-file').textContent).toBe('src/App.tsx:export const latest = true;');
+
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(writeCodeWorkspaceFileMock).toHaveBeenCalledWith(
+      'room-1',
+      'src/App.tsx',
+      'export const latest = true;',
+      'utf-8',
+    );
+  });
+
+  it('does not let a late save confirmation overwrite another open file preview', async () => {
+    const appWrite = deferred<{ path: string; name: string; type: 'file' }>();
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+        { path: 'src/Other.ts', name: 'Other.ts', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockImplementation((_roomId: string, path: string) => Promise.resolve({
+      path,
+      content: path === 'src/App.tsx' ? 'app content' : 'other content',
+      byteSize: 20,
+      truncated: false,
+      encoding: 'utf-8',
+    }));
+    writeCodeWorkspaceFileMock.mockReturnValueOnce(appWrite.promise);
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    await screen.findByText('2 files');
+
+    fileTreeSelectionPathRef.current = 'src/App.tsx';
+    fireEvent.click(screen.getByLabelText('Coco files'));
+    expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:app content');
+    vi.useFakeTimers();
+    nextEditorContentsRef.current = 'export const app = true;';
+    fireEvent.click(screen.getByTestId('diff-file'));
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    vi.useRealTimers();
+
+    fileTreeSelectionPathRef.current = 'src/Other.ts';
+    fireEvent.click(screen.getByLabelText('Coco files'));
+    expect((await screen.findByTestId('diff-file')).textContent).toBe('src/Other.ts:other content');
+
+    await act(async () => {
+      appWrite.resolve({ path: 'src/App.tsx', name: 'App.tsx', type: 'file' });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId('diff-file').textContent).toBe('src/Other.ts:other content');
   });
 
   it('saves rendered markdown task checkbox changes through the workspace write API', async () => {

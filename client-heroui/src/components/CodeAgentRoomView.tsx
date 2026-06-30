@@ -367,7 +367,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
 
       <div
         ref={workspaceLayoutRef}
-        className="grid min-h-0 w-full flex-1 overflow-hidden lg:grid-cols-[minmax(var(--code-agent-chat-min-width),1fr)_var(--code-agent-files-width)]"
+        className="grid min-h-0 min-w-0 w-full flex-1 overflow-hidden lg:grid-cols-[minmax(var(--code-agent-chat-min-width),1fr)_var(--code-agent-files-width)]"
         data-code-agent-workspace-layout="true"
         data-code-agent-files-collapsed={String(isFileManagerCollapsed)}
         style={{
@@ -377,7 +377,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
             : `${fileManagerWidth}px`,
         }}
       >
-        <div className="relative min-h-0 min-w-[30rem] overflow-hidden" data-code-agent-chat-pane="true">
+        <div className="relative min-h-0 min-w-[var(--code-agent-chat-min-width)] overflow-hidden" data-code-agent-chat-pane="true">
           <MessageList
             key={currentRoom.id}
             ref={messageListRef}
@@ -454,7 +454,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
         </div>
 
         <aside
-          className="relative hidden min-h-0 border-l border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b] lg:flex"
+          className="relative hidden min-h-0 min-w-0 overflow-hidden border-l border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b] lg:flex"
           data-code-agent-files-panel="true"
         >
           <button

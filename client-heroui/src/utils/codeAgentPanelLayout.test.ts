@@ -24,6 +24,14 @@ describe('getCodeAgentPanelResizeBounds', () => {
     });
   });
 
+  it('uses T3-style viewport fraction caps before the absolute max', () => {
+    expect(getCodeAgentPanelResizeBounds(1800)).toEqual({
+      min: 360,
+      max: 1260,
+      chatMin: 480,
+    });
+  });
+
   it('preserves an absolute chat width before shrinking the file panel on narrower layouts', () => {
     expect(getCodeAgentPanelResizeBounds(744)).toEqual({
       min: 264,

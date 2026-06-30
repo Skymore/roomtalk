@@ -44,6 +44,7 @@ import {
 import type { RoomSandboxStatus } from '../utils/types';
 import { beginHorizontalResize } from '../utils/horizontalResize';
 import { normalizeWorkspaceOpenPath, parseWorkspaceFileOpenTarget } from '../utils/workspaceFileOpenTarget';
+import { installFileEditorDismissal } from './codeAgentFileEditorDismissal';
 import { projectFileCacheKey } from './codeAgentFileContentRevision';
 import { FileSaveCoordinator } from './codeAgentFileSaveCoordinator';
 import { isMarkdownPreviewFile, setMarkdownTaskChecked } from './codeAgentFilePreviewMode';
@@ -68,6 +69,11 @@ type ProjectEntry = {
 };
 
 type SaveState = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
+type SaveStatus = {
+  path: string | null;
+  state: SaveState;
+  error: string | null;
+};
 
 type FileQueryState = {
   data: CodeWorkspaceFile | null;
@@ -158,6 +164,23 @@ function normalizeWorkspacePath(path: string): string {
   return normalizeWorkspaceOpenPath(path);
 }
 
+function updateWorkspaceFileContents(
+  current: CodeWorkspaceFile | null,
+  path: string,
+  contents: string,
+): CodeWorkspaceFile | null {
+  if (!current || normalizeWorkspacePath(current.path) !== normalizeWorkspacePath(path)) {
+    return current;
+  }
+  return {
+    ...current,
+    content: contents,
+    byteSize: new TextEncoder().encode(contents).byteLength,
+    truncated: false,
+    encoding: 'utf-8',
+  };
+}
+
 function parentPath(path: string): string {
   const normalizedPath = normalizeWorkspacePath(path);
   const index = normalizedPath.lastIndexOf('/');
@@ -211,6 +234,19 @@ function mergeWorkspaceEntries(
     byPath.set(entry.path, entry);
   }
   return [...byPath.values()];
+}
+
+function workspaceEntryForPath(path: string, type: CodeWorkspaceEntry['type'] = 'file'): CodeWorkspaceEntry | null {
+  const normalizedPath = normalizeWorkspacePath(path);
+  if (!normalizedPath) {
+    return null;
+  }
+  const parts = normalizedPath.split('/').filter(Boolean);
+  return {
+    path: normalizedPath,
+    name: parts.at(-1) ?? normalizedPath,
+    type,
+  };
 }
 
 function fileBreadcrumbs(projectName: string, relativePath: string) {
@@ -612,7 +648,7 @@ interface EditableFileSurfaceProps {
   wordWrap: boolean;
   onPostRender: FilePostRender;
   onFileChange: React.Dispatch<React.SetStateAction<CodeWorkspaceFile | null>>;
-  onSaveStateChange: (state: SaveState, error?: string | null) => void;
+  onSaveStateChange: (path: string, state: SaveState, error?: string | null) => void;
   onEntriesChanged: () => void;
 }
 
@@ -627,43 +663,48 @@ function EditableFileSurface({
   onEntriesChanged,
 }: EditableFileSurfaceProps) {
   const filePath = file.path;
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const latestDraftContentsRef = useRef(file.content);
 
   useEffect(() => {
-    onSaveStateChange('idle', null);
+    onSaveStateChange(filePath, 'idle', null);
+    latestDraftContentsRef.current = file.content;
     // Reset persistence state only when T3 mounts a different file surface.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filePath]);
 
-  const setFileContents = useCallback((contents: string) => {
-    onFileChange((current) => current ? {
-      ...current,
-      content: contents,
-      byteSize: new TextEncoder().encode(contents).byteLength,
-      truncated: false,
-      encoding: 'utf-8',
-    } : current);
-  }, [onFileChange]);
+  const setDraftFileContents = useCallback((contents: string) => {
+    latestDraftContentsRef.current = contents;
+    onFileChange((current) => updateWorkspaceFileContents(current, filePath, contents));
+  }, [filePath, onFileChange]);
+
+  const confirmFileContents = useCallback((contents: string) => {
+    if (latestDraftContentsRef.current !== contents) {
+      return;
+    }
+    onFileChange((current) => updateWorkspaceFileContents(current, filePath, contents));
+  }, [filePath, onFileChange]);
 
   const saveCoordinator = useMemo(
     () => new FileSaveCoordinator({
       debounceMs: FILE_SAVE_DEBOUNCE_MS,
-      onPendingChange: (pending) => onSaveStateChange(pending ? 'pending' : 'saved', null),
+      onPendingChange: (pending) => onSaveStateChange(filePath, pending ? 'pending' : 'saved', null),
       persist: async (contents) => {
-        onSaveStateChange('saving', null);
+        onSaveStateChange(filePath, 'saving', null);
         try {
           await writeCodeWorkspaceFile(roomId, filePath, contents, 'utf-8');
           onEntriesChanged();
           return { _tag: 'Success' };
         } catch (error) {
-          onSaveStateChange('error', error instanceof Error ? error.message : 'File save failed.');
+          onSaveStateChange(filePath, 'error', error instanceof Error ? error.message : 'File save failed.');
           return { _tag: 'Failure' };
         }
       },
       onConfirmed: (contents) => {
-        setFileContents(contents);
+        confirmFileContents(contents);
       },
     }),
-    [filePath, onEntriesChanged, onSaveStateChange, roomId, setFileContents],
+    [confirmFileContents, filePath, onEntriesChanged, onSaveStateChange, roomId],
   );
 
   useEffect(() => () => saveCoordinator.dispose(), [saveCoordinator]);
@@ -671,19 +712,30 @@ function EditableFileSurface({
   const editor = useMemo(() => {
     return new Editor({
       onChange: (nextFile) => {
-        setFileContents(nextFile.contents);
+        setDraftFileContents(nextFile.contents);
         saveCoordinator.change(nextFile.contents);
       },
     });
-  }, [saveCoordinator, setFileContents]);
+  }, [saveCoordinator, setDraftFileContents]);
 
   useEffect(() => () => {
     editor.cleanUp();
   }, [editor]);
 
+  useEffect(() => {
+    const root = surfaceRef.current;
+    if (!root) return undefined;
+    return installFileEditorDismissal({
+      root,
+      editor,
+      isBlocked: () => false,
+      onDismiss: () => undefined,
+    });
+  }, [editor]);
+
   return (
     <EditorProvider editor={editor}>
-      <div className="flex min-h-0 flex-1">
+      <div ref={surfaceRef} className="flex min-h-0 flex-1">
         <Virtualizer
           className="file-preview-virtualizer min-h-0 flex-1 overflow-auto"
           config={{
@@ -761,7 +813,7 @@ interface RenderedMarkdownSurfaceProps {
   roomId: string;
   file: CodeWorkspaceFile;
   onFileChange: React.Dispatch<React.SetStateAction<CodeWorkspaceFile | null>>;
-  onSaveStateChange: (state: SaveState, error?: string | null) => void;
+  onSaveStateChange: (path: string, state: SaveState, error?: string | null) => void;
   onEntriesChanged: () => void;
   onOpenWorkspaceFile: (path: string) => void;
 }
@@ -776,41 +828,49 @@ function RenderedMarkdownSurface({
 }: RenderedMarkdownSurfaceProps) {
   const filePath = file.path;
   const fileRef = useRef(file);
+  const latestFilePathRef = useRef(filePath);
+  const latestDraftContentsRef = useRef(file.content);
 
   useEffect(() => {
     fileRef.current = file;
-  }, [file]);
+    if (latestFilePathRef.current !== filePath) {
+      latestFilePathRef.current = filePath;
+      latestDraftContentsRef.current = file.content;
+    }
+  }, [file, filePath]);
 
-  const setFileContents = useCallback((contents: string) => {
-    onFileChange((current) => current ? {
-      ...current,
-      content: contents,
-      byteSize: new TextEncoder().encode(contents).byteLength,
-      truncated: false,
-      encoding: 'utf-8',
-    } : current);
-  }, [onFileChange]);
+  const setDraftFileContents = useCallback((contents: string) => {
+    latestDraftContentsRef.current = contents;
+    onFileChange((current) => updateWorkspaceFileContents(current, filePath, contents));
+  }, [filePath, onFileChange]);
+
+  const confirmFileContents = useCallback((contents: string) => {
+    if (latestDraftContentsRef.current !== contents) {
+      return;
+    }
+    onFileChange((current) => updateWorkspaceFileContents(current, filePath, contents));
+  }, [filePath, onFileChange]);
 
   const saveCoordinator = useMemo(
     () => new FileSaveCoordinator({
       debounceMs: FILE_SAVE_DEBOUNCE_MS,
-      onPendingChange: (pending) => onSaveStateChange(pending ? 'pending' : 'saved', null),
+      onPendingChange: (pending) => onSaveStateChange(filePath, pending ? 'pending' : 'saved', null),
       persist: async (contents) => {
-        onSaveStateChange('saving', null);
+        onSaveStateChange(filePath, 'saving', null);
         try {
           await writeCodeWorkspaceFile(roomId, filePath, contents, 'utf-8');
           onEntriesChanged();
           return { _tag: 'Success' };
         } catch (error) {
-          onSaveStateChange('error', error instanceof Error ? error.message : 'File save failed.');
+          onSaveStateChange(filePath, 'error', error instanceof Error ? error.message : 'File save failed.');
           return { _tag: 'Failure' };
         }
       },
       onConfirmed: (contents) => {
-        setFileContents(contents);
+        confirmFileContents(contents);
       },
     }),
-    [filePath, onEntriesChanged, onSaveStateChange, roomId, setFileContents],
+    [confirmFileContents, filePath, onEntriesChanged, onSaveStateChange, roomId],
   );
 
   useEffect(() => () => saveCoordinator.dispose(), [saveCoordinator]);
@@ -833,7 +893,7 @@ function RenderedMarkdownSurface({
                 truncated: false,
                 encoding: 'utf-8',
               };
-              setFileContents(nextContents);
+              setDraftFileContents(nextContents);
               saveCoordinator.change(nextContents);
             }}
           />
@@ -921,6 +981,14 @@ function FileBrowserPanel({
   }, [entryKinds, model, treePaths]);
 
   useEffect(() => {
+    if (!selectedPath || !entryKinds.has(selectedPath)) {
+      return;
+    }
+    model.focusPath(selectedPath);
+    model.scrollToPath(selectedPath, { offset: 'nearest' });
+  }, [entryKinds, model, selectedPath]);
+
+  useEffect(() => {
     onSearchQueryChange(treeSearch.isOpen ? treeSearch.value : '');
   }, [onSearchQueryChange, treeSearch.isOpen, treeSearch.value]);
 
@@ -998,7 +1066,7 @@ interface FilePreviewSurfaceProps {
   revealRequestId: number;
   saveState: SaveState;
   saveError: string | null;
-  onSaveStateChange: (state: SaveState, error?: string | null) => void;
+  onSaveStateChange: (path: string, state: SaveState, error?: string | null) => void;
   onEntriesChanged: () => void;
   onOpenWorkspaceFile: (path: string) => void;
 }
@@ -1024,7 +1092,9 @@ function FilePreviewSurface({
   const onFilePostRender = useFileLineReveal(relativePath, revealLine, revealRequestId);
 
   useEffect(() => {
-    onSaveStateChange('idle', null);
+    if (relativePath) {
+      onSaveStateChange(relativePath, 'idle', null);
+    }
   }, [onSaveStateChange, relativePath]);
 
   if (!relativePath) {
@@ -1154,8 +1224,11 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [externallySelectedFilePath, setExternallySelectedFilePath] = useState<string | null>(null);
-  const [saveState, setSaveState] = useState<SaveState>('idle');
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>({
+    path: null,
+    state: 'idle',
+    error: null,
+  });
   const [explorerOpen, setExplorerOpen] = useState(initialExplorerOpen);
   const [explorerWidth, setExplorerWidth] = useState(() => initialExplorerWidth());
   const [wordWrap, setWordWrap] = useState(readInitialFileWordWrap);
@@ -1183,9 +1256,16 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const workspaceReadyKey = `${sandboxStatus || 'none'}:${sandboxUpdatedAt || ''}`;
   const previousWorkspaceReadyKeyRef = useRef(workspaceReadyKey);
 
+  const externallySelectedEntry = useMemo(
+    () => (externallySelectedFilePath ? workspaceEntryForPath(externallySelectedFilePath, 'file') : null),
+    [externallySelectedFilePath],
+  );
   const workspaceEntries = useMemo(
-    () => mergeWorkspaceEntries(entriesQuery.data?.entries ?? [], remoteSearch.entries),
-    [entriesQuery.data?.entries, remoteSearch.entries],
+    () => mergeWorkspaceEntries(
+      entriesQuery.data?.entries ?? [],
+      externallySelectedEntry ? [...remoteSearch.entries, externallySelectedEntry] : remoteSearch.entries,
+    ),
+    [entriesQuery.data?.entries, externallySelectedEntry, remoteSearch.entries],
   );
   const entries = useMemo(
     () => projectEntriesFromWorkspace(workspaceEntries),
@@ -1219,6 +1299,8 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     ? renderMarkdown
     : Boolean(supportsWorkspaceAssetPreview && sourceView.path !== relativePath);
   const browserPreviewPending = Boolean(relativePath && browserPreviewPendingPath === relativePath);
+  const activeSaveState = saveStatus.path === relativePath ? saveStatus.state : 'idle';
+  const activeSaveError = saveStatus.path === relativePath ? saveStatus.error : null;
   const fileQuery = useCodeWorkspaceFileQuery(
     roomId,
     relativePath,
@@ -1580,15 +1662,18 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     });
   }, [assetUrlQuery.resolvedUrl, relativePath, roomId, t]);
 
-  const handleSaveStateChange = useCallback((state: SaveState, error: string | null = null) => {
-    setSaveState(state);
-    setSaveError(error);
+  const handleSaveStateChange = useCallback((path: string, state: SaveState, error: string | null = null) => {
+    setSaveStatus({
+      path,
+      state,
+      error,
+    });
   }, []);
 
   return (
     <div
       ref={panelRef}
-      className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#faf9f5] dark:bg-[#1d1d1b]"
+      className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[#faf9f5] dark:bg-[#1d1d1b]"
       data-file-browser-panel={`${roomId}:workspace`}
       style={{ ['--workspace-file-explorer-width' as string]: `${explorerWidth}px` }}
     >
@@ -1679,8 +1764,8 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
             wordWrap={wordWrap}
             revealLine={effectiveRevealLine}
             revealRequestId={effectiveRevealRequestId}
-            saveState={saveState}
-            saveError={saveError}
+            saveState={activeSaveState}
+            saveError={activeSaveError}
             onSaveStateChange={handleSaveStateChange}
             onEntriesChanged={refreshEntries}
             onOpenWorkspaceFile={handleOpenWorkspaceFileFromMarkdown}
@@ -1698,7 +1783,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
               <button
                 type="button"
                 aria-label={t('codeAgentResizeFileExplorer')}
-                className="absolute inset-y-0 -left-2 z-40 w-4 cursor-col-resize touch-none border-x border-transparent transition-colors hover:border-[#c96442]/30 hover:bg-[#c96442]/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442]"
+                className="absolute inset-y-0 -left-3 z-40 w-6 cursor-col-resize touch-none border-x border-transparent transition-colors hover:border-[#c96442]/30 hover:bg-[#c96442]/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442]"
                 onPointerDown={handleExplorerResizeStart}
               />
             ) : null}

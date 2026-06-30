@@ -212,7 +212,7 @@ describe('CodeAgentRoomView', () => {
     expect(desktopFileBrowser.parentElement?.classList.contains('flex')).toBe(true);
     expect(desktopFileBrowser.parentElement?.classList.contains('min-h-0')).toBe(true);
     expect(screen.getByTestId('message-list').parentElement?.dataset.codeAgentChatPane).toBe('true');
-    expect(screen.getByTestId('message-list').parentElement?.classList.contains('min-w-[30rem]')).toBe(true);
+    expect(screen.getByTestId('message-list').parentElement?.classList.contains('min-w-[var(--code-agent-chat-min-width)]')).toBe(true);
 
     fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     const fileBrowsers = screen.getAllByTestId('file-browser');
@@ -249,6 +249,31 @@ describe('CodeAgentRoomView', () => {
     expect(localStorage.getItem('roomtalk.codeWorkspace.fileManagerWidth')).toBe('1120');
     expect(document.body.style.userSelect).toBe('');
     expect(document.body.style.cursor).toBe('');
+  });
+
+  it('lets the workspace panel grow to the T3-style viewport fraction cap while preserving the chat pane', () => {
+    renderCodeAgentRoom(cocoRoom);
+
+    const resizeHandle = screen.getByLabelText('codeAgentResizeWorkspaceFiles');
+    const layout = resizeHandle.closest('aside')?.parentElement as HTMLDivElement;
+    vi.spyOn(layout, 'getBoundingClientRect').mockReturnValue({
+      width: 1800,
+      height: 900,
+      top: 0,
+      right: 1800,
+      bottom: 900,
+      left: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+
+    dispatchPointer(resizeHandle, 'pointerdown', { pointerId: 6, clientX: 1200, buttons: 1 });
+    dispatchPointer(window, 'pointermove', { pointerId: 6, clientX: -2000, buttons: 1 });
+    dispatchPointer(window, 'pointerup', { pointerId: 6, clientX: -2000, buttons: 0 });
+
+    expect(layout.style.getPropertyValue('--code-agent-files-width')).toBe('1260px');
+    expect(localStorage.getItem('roomtalk.codeWorkspace.fileManagerWidth')).toBe('1260');
   });
 
   it('lets the workspace panel grow up to the T3-style max width on wide layouts', () => {

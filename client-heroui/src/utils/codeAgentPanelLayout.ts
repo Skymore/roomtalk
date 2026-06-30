@@ -27,13 +27,10 @@ export function getCodeAgentPanelResizeBounds(availableWidth: number): CodeAgent
     Math.max(0, width - min),
   );
   const maxByChat = Math.max(min, width - chatMin);
-  const maxByViewport = Math.min(
-    CODE_AGENT_FILE_PANEL_MAX_WIDTH_PX,
-    Math.floor(width * CODE_AGENT_FILE_PANEL_MAX_WIDTH_FRACTION),
-  );
+  const maxByViewportFraction = Math.max(min, Math.floor(width * CODE_AGENT_FILE_PANEL_MAX_WIDTH_FRACTION));
   return {
     min,
-    max: Math.max(min, Math.min(maxByChat, maxByViewport)),
+    max: Math.max(min, Math.min(maxByChat, CODE_AGENT_FILE_PANEL_MAX_WIDTH_PX, maxByViewportFraction)),
     chatMin,
   };
 }

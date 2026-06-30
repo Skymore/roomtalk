@@ -56,9 +56,14 @@ vi.mock('@pierre/diffs/react', () => ({
             ? `${item.fileDiff.prevName.replace(/^[ab]\//, '')} → ${item.fileDiff.name.replace(/^[ab]\//, '')}`
             : item.fileDiff.name ?? item.fileDiff.prevName ?? 'diff';
           return (
-            <div key={item.id} data-testid={`diff-file-${item.id}`} data-collapsed={String(item.collapsed === true)}>
+            <div key={item.id} data-diff data-testid={`diff-file-${item.id}`} data-collapsed={String(item.collapsed === true)}>
               {renderHeaderPrefix?.(item)}
-              <span data-title>{title}</span>
+              <span data-title>
+                <span>{title}</span>
+                <span> +2 -1</span>
+              </span>
+              <button type="button" data-line="42">line 42</button>
+              <button type="button" data-column-number="24">gutter 24</button>
             </div>
           );
         })}
@@ -356,6 +361,142 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     fireEvent.click(within(codeView).getByText('src/App.tsx'));
 
     expect(onOpenFile).toHaveBeenCalledWith('src/App.tsx');
+  });
+
+  it('opens a clicked diff line with a T3-style file reveal target', async () => {
+    const onOpenFile = vi.fn();
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          { name: 'src/App.tsx', hunks: [], additionLines: [], deletionLines: [], type: 'change' },
+        ],
+      },
+    ]);
+
+    render(
+      <CodeAgentWorkspaceDiffViewer
+        roomId="room-1"
+        enabled
+        refreshKey="snapshot-1"
+        onOpenFile={onOpenFile}
+      />,
+    );
+
+    const codeView = await screen.findByTestId('code-view');
+    fireEvent.click(within(codeView).getByText('line 42'));
+
+    expect(onOpenFile).toHaveBeenCalledWith('src/App.tsx#L42');
+  });
+
+  it('resolves renamed diff line clicks to the next file reveal target', async () => {
+    const onOpenFile = vi.fn();
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/Old.tsx b/src/New.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          {
+            prevName: 'a/src/Old.tsx',
+            name: 'b/src/New.tsx',
+            cacheKey: 'rename:src/New.tsx',
+            hunks: [],
+            additionLines: [],
+            deletionLines: [],
+            type: 'rename-changed',
+          },
+        ],
+      },
+    ]);
+
+    render(
+      <CodeAgentWorkspaceDiffViewer
+        roomId="room-1"
+        enabled
+        refreshKey="snapshot-1"
+        onOpenFile={onOpenFile}
+      />,
+    );
+
+    fireEvent.click(await screen.findByText('gutter 24'));
+
+    expect(onOpenFile).toHaveBeenCalledWith('src/New.tsx#L24');
+  });
+
+  it('falls back to the only diff file when a line click has no file container', async () => {
+    const onOpenFile = vi.fn();
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          { name: 'src/App.tsx', hunks: [], additionLines: [], deletionLines: [], type: 'change' },
+        ],
+      },
+    ]);
+
+    render(
+      <CodeAgentWorkspaceDiffViewer
+        roomId="room-1"
+        enabled
+        refreshKey="snapshot-1"
+        onOpenFile={onOpenFile}
+      />,
+    );
+
+    const codeView = await screen.findByTestId('code-view');
+    const file = codeView.querySelector('[data-diff]');
+    file?.removeAttribute('data-diff');
+    fireEvent.click(within(codeView).getByText('line 42'));
+
+    expect(onOpenFile).toHaveBeenCalledWith('src/App.tsx#L42');
+  });
+
+  it('does not guess the first diff title for unscoped line clicks in multi-file diffs', async () => {
+    const onOpenFile = vi.fn();
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          { name: 'src/App.tsx', cacheKey: 'file:app', hunks: [], additionLines: [], deletionLines: [], type: 'change' },
+          { name: 'src/utils.ts', cacheKey: 'file:utils', hunks: [], additionLines: [], deletionLines: [], type: 'change' },
+        ],
+      },
+    ]);
+
+    render(
+      <CodeAgentWorkspaceDiffViewer
+        roomId="room-1"
+        enabled
+        refreshKey="snapshot-1"
+        onOpenFile={onOpenFile}
+      />,
+    );
+
+    const appFile = await screen.findByTestId('diff-file-file:app');
+    appFile.removeAttribute('data-diff');
+    screen.getByTestId('diff-file-file:utils').removeAttribute('data-diff');
+    fireEvent.click(within(appFile).getByText('line 42'));
+
+    expect(onOpenFile).not.toHaveBeenCalled();
   });
 
   it('opens the resolved T3 diff path for renamed files', async () => {

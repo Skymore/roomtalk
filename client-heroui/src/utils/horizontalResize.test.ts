@@ -10,6 +10,7 @@ function pointerEvent(type: string, values: Partial<PointerEvent>): PointerEvent
     clientX: { value: values.clientX ?? 0 },
     buttons: { value: values.buttons ?? 0 },
     pointerType: { value: values.pointerType ?? 'mouse' },
+    pressure: { value: values.pressure },
   });
   return event;
 }
@@ -26,7 +27,7 @@ describe('beginHorizontalResize', () => {
     vi.restoreAllMocks();
   });
 
-  it('tracks back from a boundary without requiring the pointer to recover overshoot', () => {
+  it('waits for pointer overshoot to return before resizing back from a boundary', () => {
     const handle = document.createElement('button');
     handle.setPointerCapture = vi.fn();
     handle.hasPointerCapture = vi.fn(() => true);
@@ -45,12 +46,66 @@ describe('beginHorizontalResize', () => {
     });
 
     window.dispatchEvent(pointerEvent('pointermove', { pointerId: 7, clientX: 500, buttons: 1 }));
+    window.dispatchEvent(pointerEvent('pointermove', { pointerId: 7, clientX: 900, buttons: 1 }));
     window.dispatchEvent(pointerEvent('pointermove', { pointerId: 7, clientX: 490, buttons: 1 }));
-    window.dispatchEvent(pointerEvent('pointerup', { pointerId: 7, clientX: 490 }));
+    window.dispatchEvent(pointerEvent('pointermove', { pointerId: 7, clientX: 290, buttons: 1 }));
+    window.dispatchEvent(pointerEvent('pointerup', { pointerId: 7, clientX: 290 }));
 
     expect(onFinish).toHaveBeenCalledWith(490);
     expect(handle.setPointerCapture).toHaveBeenCalledWith(7);
     expect(handle.releasePointerCapture).toHaveBeenCalledWith(7);
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.cursor).toBe('');
+  });
+
+  it('finishes when pointer capture is lost even if the pressed button state is stale', () => {
+    const handle = document.createElement('button');
+    handle.setPointerCapture = vi.fn();
+    handle.hasPointerCapture = vi.fn(() => true);
+    handle.releasePointerCapture = vi.fn();
+    const onFinish = vi.fn();
+
+    beginHorizontalResize({
+      pointerId: 31,
+      startX: 100,
+      initialWidth: 300,
+      direction: 1,
+      captureTarget: handle,
+      getBounds: () => ({ min: 200, max: 500 }),
+      onResize: vi.fn(),
+      onFinish,
+    });
+
+    handle.dispatchEvent(pointerEvent('lostpointercapture', { pointerId: 31, buttons: 1 }));
+
+    expect(onFinish).toHaveBeenCalledWith(300);
+    expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.cursor).toBe('');
+  });
+
+  it('finishes when pointer capture is lost after the primary button is released', () => {
+    const handle = document.createElement('button');
+    handle.setPointerCapture = vi.fn();
+    handle.hasPointerCapture = vi.fn(() => true);
+    handle.releasePointerCapture = vi.fn();
+    const onFinish = vi.fn();
+
+    beginHorizontalResize({
+      pointerId: 32,
+      startX: 100,
+      initialWidth: 300,
+      direction: 1,
+      captureTarget: handle,
+      getBounds: () => ({ min: 200, max: 500 }),
+      onResize: vi.fn(),
+      onFinish,
+    });
+
+    handle.dispatchEvent(pointerEvent('lostpointercapture', { pointerId: 32, buttons: 0 }));
+
+    expect(onFinish).toHaveBeenCalledWith(300);
+    expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
     expect(document.body.style.userSelect).toBe('');
     expect(document.body.style.cursor).toBe('');
   });
@@ -184,6 +239,33 @@ describe('beginHorizontalResize', () => {
     }));
 
     expect(onFinish).toHaveBeenCalledWith(360);
+    expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.cursor).toBe('');
+  });
+
+  it('finishes when a released mouse pointer reports stale buttons with zero pressure', () => {
+    const onFinish = vi.fn();
+    beginHorizontalResize({
+      pointerId: 25,
+      startX: 100,
+      initialWidth: 420,
+      direction: 1,
+      captureTarget: document.createElement('button'),
+      getBounds: () => ({ min: 240, max: 1200 }),
+      onResize: vi.fn(),
+      onFinish,
+    });
+
+    window.dispatchEvent(pointerEvent('pointermove', {
+      pointerId: 25,
+      pointerType: 'mouse',
+      clientX: 700,
+      buttons: 1,
+      pressure: 0,
+    }));
+
+    expect(onFinish).toHaveBeenCalledWith(420);
     expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
     expect(document.body.style.userSelect).toBe('');
     expect(document.body.style.cursor).toBe('');

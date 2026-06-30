@@ -22,7 +22,12 @@ const clampWidth = (width: number, bounds: HorizontalResizeBounds): number => {
   return Math.min(max, Math.max(min, Math.round(width)));
 };
 
-const isPrimaryButtonReleased = (buttons: number): boolean => (buttons & 1) === 0;
+const isPrimaryButtonReleased = (event: MouseEvent | PointerEvent): boolean => {
+  if ((event.buttons & 1) === 0) {
+    return true;
+  }
+  return 'pointerType' in event && event.pointerType === 'mouse' && event.pressure === 0;
+};
 
 export function beginHorizontalResize({
   pointerId,
@@ -36,8 +41,8 @@ export function beginHorizontalResize({
 }: HorizontalResizeOptions): () => void {
   activeResize?.();
 
-  let width = clampWidth(initialWidth, getBounds());
-  let lastClientX = startX;
+  const startWidth = clampWidth(initialWidth, getBounds());
+  let width = startWidth;
   let animationFrame: number | null = null;
   let finished = false;
   let pointerCaptureElement: HTMLElement | null = null;
@@ -60,9 +65,7 @@ export function beginHorizontalResize({
   };
 
   const applyClientX = (clientX: number) => {
-    const deltaFromLastMove = (clientX - lastClientX) * direction;
-    lastClientX = clientX;
-    width = clampWidth(width + deltaFromLastMove, getBounds());
+    width = clampWidth(startWidth + ((clientX - startX) * direction), getBounds());
     if (animationFrame === null) {
       animationFrame = window.requestAnimationFrame(applyWidth);
     }
@@ -150,12 +153,12 @@ export function beginHorizontalResize({
 
   function handlePointerMove(event: PointerEvent) {
     if (event.pointerId !== pointerId) {
-      if (event.pointerType === 'mouse' && isPrimaryButtonReleased(event.buttons)) {
+      if (event.pointerType === 'mouse' && isPrimaryButtonReleased(event)) {
         finishResize();
       }
       return;
     }
-    if (isPrimaryButtonReleased(event.buttons)) {
+    if (isPrimaryButtonReleased(event)) {
       finishResize();
       return;
     }
@@ -165,7 +168,7 @@ export function beginHorizontalResize({
   }
 
   function handlePointerEnd(event: PointerEvent) {
-    if (event.pointerId === pointerId || (event.pointerType === 'mouse' && isPrimaryButtonReleased(event.buttons))) {
+    if (event.pointerId === pointerId || (event.pointerType === 'mouse' && isPrimaryButtonReleased(event))) {
       event.preventDefault();
       event.stopPropagation();
       finishResize();
@@ -173,15 +176,16 @@ export function beginHorizontalResize({
   }
 
   function handlePointerReleaseProbe(event: PointerEvent) {
-    if (event.pointerType === 'mouse' && isPrimaryButtonReleased(event.buttons)) {
+    if (event.pointerType === 'mouse' && isPrimaryButtonReleased(event)) {
       finishResize();
     }
   }
 
   function handleLostPointerCapture(event: PointerEvent) {
-    if (event.pointerId === pointerId) {
-      finishResize();
+    if (event.pointerId !== pointerId) {
+      return;
     }
+    finishResize();
   }
 
   function handleMouseUp(event: MouseEvent) {
@@ -191,7 +195,7 @@ export function beginHorizontalResize({
   }
 
   function handleMouseMove(event: MouseEvent) {
-    if (isPrimaryButtonReleased(event.buttons)) {
+    if (isPrimaryButtonReleased(event)) {
       finishResize();
       return;
     }
@@ -201,20 +205,20 @@ export function beginHorizontalResize({
   }
 
   function handleMouseReleaseProbe(event: MouseEvent) {
-    if (isPrimaryButtonReleased(event.buttons)) {
+    if (isPrimaryButtonReleased(event)) {
       finishResize();
     }
   }
 
   function handleMouseLeave(event: MouseEvent) {
-    if (isPrimaryButtonReleased(event.buttons)) {
+    if (isPrimaryButtonReleased(event)) {
       finishResize();
     }
   }
 
   function handleViewportLeave(event: PointerEvent | MouseEvent) {
     if (
-      !isPrimaryButtonReleased(event.buttons) &&
+      !isPrimaryButtonReleased(event) &&
       Number.isFinite(event.clientX)
     ) {
       applyClientX(event.clientX);

@@ -192,4 +192,35 @@ describe('DesktopSidebar', () => {
     expect(document.body.style.userSelect).toBe('');
     expect(document.body.style.cursor).toBe('');
   });
+
+  it('only shrinks the right file panel when the shell cannot fit the current three-column layout', () => {
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: 1024,
+    });
+    localStorage.setItem('roomtalk.desktopSidebar.width', '760');
+
+    const host = document.createElement('div');
+    vi.spyOn(host, 'getBoundingClientRect').mockReturnValue({
+      width: 1024,
+      height: 900,
+      top: 0,
+      right: 1024,
+      bottom: 900,
+      left: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+    document.body.appendChild(host);
+
+    renderSidebar(cocoRoom, { container: host });
+
+    const sidebar = screen.getByLabelText('resizeSidebar').closest('aside') as HTMLElement;
+    const workspaceLayout = document.querySelector<HTMLElement>('[data-code-agent-workspace-layout="true"]');
+
+    expect(sidebar.style.getPropertyValue('--desktop-sidebar-width')).toBe('240px');
+    expect(localStorage.getItem('roomtalk.desktopSidebar.width')).toBe('240');
+    expect(workspaceLayout?.style.getPropertyValue('--code-agent-files-width')).toBe('304px');
+  });
 });

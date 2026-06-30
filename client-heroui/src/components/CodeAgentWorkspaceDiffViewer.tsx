@@ -225,6 +225,144 @@ function buildDiffTitlePathMap(items: readonly CodeViewDiffItem[]): ReadonlyMap<
   return candidates;
 }
 
+function normalizeDiffTitleText(title: string): string {
+  return title.replace(/\s+/g, ' ').trim();
+}
+
+function resolveDiffTitleOpenPath(rawTitle: string, pathMap: ReadonlyMap<string, string>): string | null {
+  const normalizedTitle = normalizeDiffTitleText(rawTitle);
+  if (!normalizedTitle) {
+    return null;
+  }
+
+  const directPath = pathMap.get(normalizedTitle) ?? pathMap.get(stripDiffPathPrefix(normalizedTitle));
+  if (directPath) {
+    return directPath;
+  }
+
+  const sortedTitles = [...pathMap.entries()].sort((left, right) => right[0].length - left[0].length);
+  for (const [title, path] of sortedTitles) {
+    const normalizedCandidate = normalizeDiffTitleText(title);
+    if (
+      normalizedCandidate &&
+      (normalizedTitle === normalizedCandidate || normalizedTitle.startsWith(`${normalizedCandidate} `))
+    ) {
+      return path;
+    }
+  }
+
+  const renameTarget = normalizedTitle.match(/(?:→|->)\s*(.+)$/)?.[1];
+  if (renameTarget) {
+    const normalizedTarget = stripDiffPathPrefix(renameTarget);
+    const targetPath = pathMap.get(renameTarget) ?? pathMap.get(normalizedTarget);
+    if (targetPath) {
+      return targetPath;
+    }
+    for (const [title, path] of sortedTitles) {
+      const normalizedCandidate = normalizeDiffTitleText(stripDiffPathPrefix(title));
+      if (
+        normalizedCandidate &&
+        (normalizedTarget === normalizedCandidate || normalizedTarget.startsWith(`${normalizedCandidate} `))
+      ) {
+        return path;
+      }
+    }
+  }
+
+  return stripDiffPathPrefix(normalizedTitle);
+}
+
+function parseDiffLineNumber(value: string | null | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function getDiffLineNumber(element: HTMLElement): number | null {
+  return parseDiffLineNumber(element.getAttribute('data-line'))
+    ?? parseDiffLineNumber(element.getAttribute('data-column-number'));
+}
+
+function findClickedDiffLineElement(
+  eventTarget: EventTarget | null,
+  composedPath: readonly EventTarget[],
+): HTMLElement | null {
+  const fromPath = composedPath.find((node): node is HTMLElement => (
+    node instanceof HTMLElement && getDiffLineNumber(node) !== null
+  ));
+  if (fromPath) {
+    return fromPath;
+  }
+  return eventTarget instanceof HTMLElement
+    ? eventTarget.closest<HTMLElement>('[data-line], [data-column-number]')
+    : null;
+}
+
+function findTitleTextInScope(scope: ParentNode | HTMLElement | null | undefined): string | null {
+  const title = scope instanceof HTMLElement && scope.hasAttribute('data-title')
+    ? scope
+    : scope?.querySelector?.<HTMLElement>('[data-title]');
+  const text = title?.textContent?.trim();
+  return text || null;
+}
+
+function findSingleTitleTextInScope(scope: ParentNode | HTMLElement | null | undefined): string | null {
+  if (!scope) {
+    return null;
+  }
+  if (scope instanceof HTMLElement && scope.hasAttribute('data-title')) {
+    const text = scope.textContent?.trim();
+    return text || null;
+  }
+  const titles = Array.from(scope.querySelectorAll?.<HTMLElement>('[data-title]') ?? []);
+  if (titles.length !== 1) {
+    return null;
+  }
+  const text = titles[0].textContent?.trim();
+  return text || null;
+}
+
+function isSearchableRoot(root: Node): root is Document | ShadowRoot {
+  return root instanceof Document || (typeof ShadowRoot !== 'undefined' && root instanceof ShadowRoot);
+}
+
+function findDiffTitleTextForLine(
+  lineElement: HTMLElement,
+  composedPath: readonly EventTarget[],
+): string | null {
+  const container = lineElement.closest<HTMLElement>('[data-diff], [data-file]');
+  const containerTitle = findTitleTextInScope(container);
+  if (containerTitle) {
+    return containerTitle;
+  }
+
+  const root = lineElement.getRootNode();
+  const rootTitle = findSingleTitleTextInScope(isSearchableRoot(root) ? root : null);
+  if (rootTitle) {
+    return rootTitle;
+  }
+
+  for (const node of composedPath) {
+    if (!(node instanceof HTMLElement)) {
+      continue;
+    }
+    const title = node.hasAttribute('data-diff') || node.hasAttribute('data-file')
+      ? findTitleTextInScope(node)
+      : findSingleTitleTextInScope(node.shadowRoot);
+    if (title) {
+      return title;
+    }
+  }
+
+  return null;
+}
+
+function withWorkspaceLineTarget(path: string, lineNumber: number | null): string {
+  return lineNumber === null ? path : `${path}#L${lineNumber}`;
+}
+
 function getDiffCollapseIconClassName(fileDiff: FileDiffMetadata): string {
   switch (fileDiff.type) {
     case 'new':
@@ -422,14 +560,33 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     const titleFromPath = composedPath.find((node): node is HTMLElement => (
       node instanceof HTMLElement && node.hasAttribute('data-title')
     ));
-    const title = titleFromPath ?? (event.target instanceof HTMLElement
+    const directTitle = titleFromPath ?? (event.target instanceof HTMLElement
       ? event.target.closest<HTMLElement>('[data-title]')
       : null);
-    const rawTitle = title?.textContent?.trim();
-    if (!rawTitle) {
+    const rawDirectTitle = directTitle?.textContent?.trim();
+    if (rawDirectTitle) {
+      const openPath = resolveDiffTitleOpenPath(rawDirectTitle, diffTitlePathMap);
+      if (openPath) {
+        onOpenFile(openPath);
+      }
       return;
     }
-    onOpenFile(diffTitlePathMap.get(rawTitle) ?? stripDiffPathPrefix(rawTitle));
+
+    const lineElement = findClickedDiffLineElement(event.target, composedPath);
+    const lineNumber = lineElement ? getDiffLineNumber(lineElement) : null;
+    if (lineNumber === null) {
+      return;
+    }
+
+    const rawTitle = lineElement ? findDiffTitleTextForLine(lineElement, composedPath) : null;
+    const openPath = rawTitle
+      ? resolveDiffTitleOpenPath(rawTitle, diffTitlePathMap)
+      : diffFileSummaries.length === 1
+        ? diffFileSummaries[0].path
+        : null;
+    if (openPath) {
+      onOpenFile(withWorkspaceLineTarget(openPath, lineNumber));
+    }
   };
 
   if (!enabled && diff === null) {
