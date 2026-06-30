@@ -1,9 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { parsePatchFiles, type CodeViewDiffItem, type FileDiffMetadata } from '@pierre/diffs';
+import type { CodeViewDiffItem, FileDiffMetadata } from '@pierre/diffs';
 import { CodeView, type CodeViewHandle } from '@pierre/diffs/react';
 import { ChevronDown, ChevronRight, Columns2, LoaderCircle, Pilcrow, Rows3, WrapText } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { loadCodeAgentWorkspaceDiff, type CodeAgentWorkspaceDiff } from '../utils/cocoWorkspace';
+import {
+  buildFileDiffRenderKey,
+  getRenderablePatch,
+  resolveCodeAgentDiffThemeName,
+  resolveFileDiffPath,
+} from '../utils/codeAgentDiffRendering';
 
 interface CodeAgentWorkspaceDiffViewerProps {
   roomId: string;
@@ -38,22 +44,99 @@ const DIFF_RENDER_MODE_STORAGE_KEY = 'roomtalk.codeWorkspace.diffRenderMode';
 const DIFF_IGNORE_WHITESPACE_STORAGE_KEY = 'roomtalk.codeWorkspace.diffIgnoreWhitespace';
 type DiffRenderMode = 'stacked' | 'split';
 const EMPTY_COLLAPSED_DIFF_FILE_KEYS: ReadonlySet<string> = new Set();
-const FNV_OFFSET_BASIS_32 = 0x811c9dc5;
-const FNV_PRIME_32 = 0x01000193;
-const SECONDARY_HASH_SEED = 0x9e3779b9;
-const SECONDARY_HASH_MULTIPLIER = 0x85ebca6b;
+const DIFF_PANEL_UNSAFE_CSS = `
+[data-diffs-header],
+[data-diff],
+[data-file],
+[data-error-wrapper],
+[data-virtualizer-buffer] {
+  --diffs-header-font-family: var(--font-sans, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif) !important;
+  --diffs-font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace) !important;
+  --diffs-bg: light-dark(var(--rt-ivory, #faf9f5), var(--rt-dark, #141413)) !important;
+  --diffs-light-bg: var(--rt-ivory, #faf9f5) !important;
+  --diffs-dark-bg: var(--rt-dark, #141413) !important;
+  --diffs-token-light-bg: transparent;
+  --diffs-token-dark-bg: transparent;
 
-type RenderablePatch =
-  | {
-    kind: 'files';
-    files: FileDiffMetadata[];
-  }
-  | {
-    kind: 'raw';
-    text: string;
-    reason: string;
-  };
+  --diffs-bg-context-override: light-dark(#f5f4ed, #1d1d1b);
+  --diffs-bg-hover-override: light-dark(#f0eee6, #242422);
+  --diffs-bg-separator-override: light-dark(#e8e6dc, #30302e);
+  --diffs-bg-buffer-override: light-dark(#f0eee6, #242422);
 
+  --diffs-bg-addition-override: light-dark(color-mix(in srgb, #faf9f5 88%, #2f7d46), color-mix(in srgb, #141413 78%, #48a868));
+  --diffs-bg-addition-number-override: light-dark(color-mix(in srgb, #faf9f5 82%, #2f7d46), color-mix(in srgb, #141413 70%, #48a868));
+  --diffs-bg-addition-hover-override: light-dark(color-mix(in srgb, #faf9f5 76%, #2f7d46), color-mix(in srgb, #141413 64%, #48a868));
+  --diffs-bg-addition-emphasis-override: light-dark(color-mix(in srgb, #faf9f5 68%, #2f7d46), color-mix(in srgb, #141413 56%, #48a868));
+
+  --diffs-bg-deletion-override: light-dark(color-mix(in srgb, #faf9f5 88%, #c96442), color-mix(in srgb, #141413 78%, #d97757));
+  --diffs-bg-deletion-number-override: light-dark(color-mix(in srgb, #faf9f5 82%, #c96442), color-mix(in srgb, #141413 70%, #d97757));
+  --diffs-bg-deletion-hover-override: light-dark(color-mix(in srgb, #faf9f5 76%, #c96442), color-mix(in srgb, #141413 64%, #d97757));
+  --diffs-bg-deletion-emphasis-override: light-dark(color-mix(in srgb, #faf9f5 68%, #c96442), color-mix(in srgb, #141413 56%, #d97757));
+
+  background-color: var(--diffs-bg) !important;
+}
+
+[data-file-info] {
+  background-color: light-dark(#f0eee6, #242422) !important;
+  border-block-color: light-dark(#dedbd0, #30302e) !important;
+  color: light-dark(#141413, #faf9f5) !important;
+}
+
+[data-diffs-header] {
+  position: sticky !important;
+  top: 0;
+  z-index: 4;
+  background-color: light-dark(#f0eee6, #242422) !important;
+  border-bottom: 1px solid light-dark(#dedbd0, #30302e) !important;
+  align-items: center !important;
+  font-family: var(--font-sans, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif) !important;
+  font-size: 12px !important;
+  line-height: 1 !important;
+  min-height: 32px !important;
+  padding-block: 6px !important;
+}
+
+[data-diffs-header] [data-header-content] {
+  align-items: center !important;
+  line-height: 1 !important;
+}
+
+[data-diffs-header] [data-metadata] {
+  align-items: center !important;
+  line-height: 1 !important;
+  font-variant-numeric: tabular-nums;
+}
+
+[data-diffs-header] [data-additions-count],
+[data-diffs-header] [data-deletions-count] {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace) !important;
+  font-size: 11px !important;
+  font-variant-numeric: tabular-nums;
+  line-height: 1 !important;
+}
+
+[data-diffs-header] [data-change-icon],
+[data-diffs-header] [data-rename-icon] {
+  display: block;
+  flex-shrink: 0;
+}
+
+[data-title] {
+  cursor: pointer;
+  transition:
+    color 120ms ease,
+    text-decoration-color 120ms ease;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 2px;
+  font-family: var(--font-sans, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif) !important;
+}
+
+[data-title]:hover {
+  color: light-dark(#9f462c, #ffb197) !important;
+  text-decoration-color: currentColor;
+}
+`;
 interface CollapsedDiffFilesState {
   scopeKey: string | null;
   fileKeys: Set<string>;
@@ -92,71 +175,6 @@ function readInitialDiffIgnoreWhitespace() {
   }
 }
 
-function fnv1a32(
-  input: string,
-  seed = FNV_OFFSET_BASIS_32,
-  multiplier = FNV_PRIME_32,
-): number {
-  let hash = seed >>> 0;
-  for (let index = 0; index < input.length; index += 1) {
-    hash ^= input.charCodeAt(index);
-    hash = Math.imul(hash, multiplier) >>> 0;
-  }
-  return hash >>> 0;
-}
-
-function buildPatchCacheKey(patch: string, scope = 'diff-panel'): string {
-  const normalizedPatch = patch.trim();
-  const primary = fnv1a32(normalizedPatch, FNV_OFFSET_BASIS_32, FNV_PRIME_32).toString(36);
-  const secondary = fnv1a32(
-    normalizedPatch,
-    SECONDARY_HASH_SEED,
-    SECONDARY_HASH_MULTIPLIER,
-  ).toString(36);
-  return `${scope}:${normalizedPatch.length}:${primary}:${secondary}`;
-}
-
-function getRenderablePatch(patch: string | undefined, cacheScope = 'diff-panel'): RenderablePatch | null {
-  if (!patch) {
-    return null;
-  }
-  const normalizedPatch = patch.trim();
-  if (normalizedPatch.length === 0) {
-    return null;
-  }
-
-  try {
-    const parsedPatches = parsePatchFiles(
-      normalizedPatch,
-      buildPatchCacheKey(normalizedPatch, cacheScope),
-    );
-    const files = parsedPatches.flatMap((parsedPatch) => parsedPatch.files);
-    if (files.length > 0) {
-      return { kind: 'files', files };
-    }
-    return {
-      kind: 'raw',
-      text: normalizedPatch,
-      reason: 'Unsupported diff format. Showing raw patch.',
-    };
-  } catch {
-    return {
-      kind: 'raw',
-      text: normalizedPatch,
-      reason: 'Failed to parse patch. Showing raw patch.',
-    };
-  }
-}
-
-function resolveDiffFilePath(fileDiff: FileDiffMetadata): string {
-  const rawPath = fileDiff.name ?? fileDiff.prevName ?? '';
-  return rawPath.startsWith('a/') || rawPath.startsWith('b/') ? rawPath.slice(2) : rawPath;
-}
-
-function buildDiffFileRenderKey(fileDiff: FileDiffMetadata): string {
-  return fileDiff.cacheKey ?? `${fileDiff.prevName ?? 'none'}:${fileDiff.name}`;
-}
-
 function stripDiffPathPrefix(path: string): string {
   const trimmed = path.trim();
   return trimmed.startsWith('a/') || trimmed.startsWith('b/') ? trimmed.slice(2) : trimmed;
@@ -184,7 +202,7 @@ function buildDiffTitlePathMap(items: readonly CodeViewDiffItem[]): ReadonlyMap<
     if (item.type !== 'diff') {
       continue;
     }
-    const filePath = resolveDiffFilePath(item.fileDiff);
+    const filePath = resolveFileDiffPath(item.fileDiff);
     addDiffTitlePathCandidate(candidates, item.fileDiff.name, filePath);
     addDiffTitlePathCandidate(candidates, item.fileDiff.prevName, filePath);
     if (item.fileDiff.prevName && item.fileDiff.name) {
@@ -321,7 +339,9 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   }, [diffIgnoreWhitespace, enabled, refreshKey, roomId]);
 
   const renderablePatch = useMemo(
-    () => getRenderablePatch(diff?.patch, `workspace:${roomId}:${refreshKey}:${resolvedTheme}`),
+    () => getRenderablePatch(diff?.patch, `workspace:${roomId}:${refreshKey}:${resolvedTheme}`, {
+      compactPartialHunkOffsets: true,
+    }),
     [diff?.patch, refreshKey, resolvedTheme, roomId],
   );
   const parsed = useMemo(() => {
@@ -330,13 +350,13 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     }
 
     const files = [...renderablePatch.files].sort((left, right) =>
-      resolveDiffFilePath(left).localeCompare(resolveDiffFilePath(right), undefined, {
+      resolveFileDiffPath(left).localeCompare(resolveFileDiffPath(right), undefined, {
         numeric: true,
         sensitivity: 'base',
       }),
     );
     const items = files.map((fileDiff, fileIndex) => {
-      const id = buildDiffFileRenderKey(fileDiff) || `${fileIndex}`;
+      const id = buildFileDiffRenderKey(fileDiff) || `${fileIndex}`;
       const collapsed = collapsedDiffFileKeys.has(id);
       return {
         id,
@@ -355,7 +375,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
       return;
     }
     const file = parsed.items.find((item) => (
-      item.type === 'diff' && resolveDiffFilePath(item.fileDiff) === selectedFilePath
+      item.type === 'diff' && resolveFileDiffPath(item.fileDiff) === selectedFilePath
     ));
     if (!file) {
       return;
@@ -502,7 +522,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
               if (item.type !== 'diff') {
                 return null;
               }
-              const filePath = resolveDiffFilePath(item.fileDiff);
+              const filePath = resolveFileDiffPath(item.fileDiff);
               const collapsed = item.collapsed === true;
               return (
                 <button
@@ -522,9 +542,13 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
             }}
             options={{
               diffStyle: diffRenderMode === 'split' ? 'split' : 'unified',
+              lineDiffType: 'none',
               overflow: wordWrap ? 'wrap' : 'scroll',
-              theme: resolvedTheme === 'dark' ? 'pierre-dark' : 'pierre-light',
+              theme: resolveCodeAgentDiffThemeName(resolvedTheme),
               themeType: resolvedTheme,
+              unsafeCSS: DIFF_PANEL_UNSAFE_CSS,
+              stickyHeaders: true,
+              layout: { paddingTop: 8, paddingBottom: 8, gap: 8 },
             }}
           />
         </div>

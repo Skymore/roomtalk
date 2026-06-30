@@ -10,16 +10,16 @@ import {
 describe('getCodeAgentPanelResizeBounds', () => {
   it('preserves the absolute chat width on wide layouts', () => {
     expect(getCodeAgentPanelResizeBounds(2024)).toEqual({
-      min: 420,
-      max: 1544,
+      min: 360,
+      max: 1400,
       chatMin: 480,
     });
   });
 
-  it('does not apply an extra max cap beyond the reserved chat width', () => {
+  it('matches T3-style max width caps on very wide layouts', () => {
     expect(getCodeAgentPanelResizeBounds(3440)).toEqual({
-      min: 420,
-      max: 2960,
+      min: 360,
+      max: 1400,
       chatMin: 480,
     });
   });
@@ -43,7 +43,7 @@ describe('getCodeAgentPanelResizeBounds', () => {
   });
 
   it('bases code-agent sidebar resizing on the full shell width and reserved right panel width', () => {
-    expect(getSidebarMaxWidthForCodeAgentShell(1280, 420)).toBe(380);
+    expect(getSidebarMaxWidthForCodeAgentShell(1280, 360)).toBe(440);
     expect(getSidebarMaxWidthForCodeAgentShell(1280, 48)).toBe(752);
   });
 

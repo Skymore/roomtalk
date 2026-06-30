@@ -318,6 +318,39 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(loadCodeWorkspaceFileMock).toHaveBeenCalledWith('room-1', 'src/App.tsx', expect.any(Object));
   });
 
+  it('keeps the T3-style current file breadcrumb scrolled into view', async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    const deepPath = 'src/components/deep/Button.tsx';
+    fileTreeSelectionPathRef.current = deepPath;
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: deepPath, name: 'Button.tsx', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockResolvedValue({
+      path: deepPath,
+      content: 'export function Button() {}',
+      byteSize: 27,
+      truncated: false,
+      encoding: 'utf-8',
+    });
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    await screen.findByText('1 files');
+    fireEvent.click(screen.getByLabelText('Coco files'));
+
+    expect((await screen.findByTestId('diff-file')).textContent).toBe(`${deepPath}:export function Button() {}`);
+    expect(screen.getByTestId('code-agent-file-breadcrumbs').getAttribute('data-file-breadcrumbs')).toBe('true');
+    const currentCrumb = screen.getByText('Button.tsx').closest('[data-current-file-crumb]');
+    expect(currentCrumb?.getAttribute('data-current-file-crumb')).toBe('true');
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'end' });
+  });
+
   it('merges remote workspace search matches into the T3 tree', async () => {
     loadCodeWorkspaceEntriesMock.mockResolvedValue({
       entries: [

@@ -57,4 +57,36 @@ describe('MarkdownContent math rendering', () => {
     expect(onTaskListChange).toHaveBeenNthCalledWith(1, { markerOffset: 2, checked: true });
     expect(onTaskListChange).toHaveBeenNthCalledWith(2, { markerOffset: 14, checked: false });
   });
+
+  it('opens T3-style workspace file links in the right file viewer', () => {
+    const onOpenWorkspaceFile = vi.fn();
+    const { getByText } = render(
+      <MarkdownContent
+        content={'Open [App](src/App.tsx#L42) and [server](/workspace/server/index.ts:8).'}
+        onOpenWorkspaceFile={onOpenWorkspaceFile}
+      />,
+    );
+
+    fireEvent.click(getByText('App'));
+    fireEvent.click(getByText('server'));
+
+    expect(onOpenWorkspaceFile).toHaveBeenNthCalledWith(1, 'src/App.tsx#L42');
+    expect(onOpenWorkspaceFile).toHaveBeenNthCalledWith(2, '/workspace/server/index.ts:8');
+  });
+
+  it('does not intercept external markdown links for the workspace viewer', () => {
+    const onOpenWorkspaceFile = vi.fn();
+    const { getByText } = render(
+      <MarkdownContent
+        content={'Visit [docs](https://example.com/docs).'}
+        onOpenWorkspaceFile={onOpenWorkspaceFile}
+      />,
+    );
+
+    const link = getByText('docs').closest('a');
+    link?.addEventListener('click', (event) => event.preventDefault());
+    fireEvent.click(getByText('docs'));
+
+    expect(onOpenWorkspaceFile).not.toHaveBeenCalled();
+  });
 });

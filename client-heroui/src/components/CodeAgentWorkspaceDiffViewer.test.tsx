@@ -30,12 +30,27 @@ vi.mock('@pierre/diffs/react', () => ({
     renderHeaderPrefix,
   }: {
     items: Array<{ id: string; type: 'diff'; fileDiff: { name?: string | null; prevName?: string | null; cacheKey?: string }; collapsed?: boolean }>;
-    options: { diffStyle: 'unified' | 'split'; overflow: 'scroll' | 'wrap' };
+    options: {
+      diffStyle: 'unified' | 'split';
+      lineDiffType?: 'none' | 'word' | 'word-alt' | 'char';
+      overflow: 'scroll' | 'wrap';
+      stickyHeaders?: boolean;
+      unsafeCSS?: string;
+      layout?: { paddingTop: number; paddingBottom: number; gap: number };
+    };
     renderHeaderPrefix?: (item: { id: string; type: 'diff'; fileDiff: { name?: string | null; prevName?: string | null; cacheKey?: string }; collapsed?: boolean }) => ReactNode;
   }, ref) => {
     React.useImperativeHandle(ref, () => ({ scrollTo: codeViewScrollToMock }));
     return (
-      <div data-testid="code-view" data-diff-style={options.diffStyle} data-overflow={options.overflow}>
+      <div
+        data-testid="code-view"
+        data-diff-style={options.diffStyle}
+        data-line-diff-type={options.lineDiffType || ''}
+        data-overflow={options.overflow}
+        data-sticky-headers={String(options.stickyHeaders === true)}
+        data-layout={options.layout ? `${options.layout.paddingTop}:${options.layout.paddingBottom}:${options.layout.gap}` : ''}
+        data-unsafe-css={options.unsafeCSS || ''}
+      >
         {items.map((item) => {
           const title = item.fileDiff.prevName && item.fileDiff.name
             ? `${item.fileDiff.prevName.replace(/^[ab]\//, '')} → ${item.fileDiff.name.replace(/^[ab]\//, '')}`
@@ -88,6 +103,11 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     );
     expect(screen.getByTestId('code-view').dataset.overflow).toBe('scroll');
     expect(screen.getByTestId('code-view').dataset.diffStyle).toBe('unified');
+    expect(screen.getByTestId('code-view').dataset.lineDiffType).toBe('none');
+    expect(screen.getByTestId('code-view').dataset.stickyHeaders).toBe('true');
+    expect(screen.getByTestId('code-view').dataset.layout).toBe('8:8:8');
+    expect(screen.getByTestId('code-view').dataset.unsafeCss).toContain('[data-diffs-header]');
+    expect(screen.getByTestId('code-view').dataset.unsafeCss).toContain('[data-title]:hover');
   });
 
   it('falls back to the T3 raw patch viewer when Pierre cannot parse the workspace diff', async () => {

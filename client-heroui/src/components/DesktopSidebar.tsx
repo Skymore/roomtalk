@@ -29,8 +29,8 @@ import { beginHorizontalResize } from '../utils/horizontalResize';
 import {
   CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
   CODE_AGENT_FILE_PANEL_COLLAPSED_WIDTH,
+  CODE_AGENT_FILE_PANEL_MIN_WIDTH,
   CODE_AGENT_FILE_PANEL_WIDTH_CHANGE_EVENT,
-  CODE_AGENT_FILE_PANEL_PREFERRED_MIN_WIDTH,
   type CodeAgentFilePanelWidthChangeDetail,
   clampCodeAgentFilePanelWidthForSidebarResize,
   getSidebarMaxWidthForCodeAgentShell,
@@ -101,8 +101,8 @@ const getCodeAgentFilePanelSidebarReserve = (workspaceLayout: HTMLElement): numb
     return measuredWidth || CODE_AGENT_FILE_PANEL_COLLAPSED_WIDTH;
   }
   return measuredWidth > 0
-    ? Math.min(measuredWidth, CODE_AGENT_FILE_PANEL_PREFERRED_MIN_WIDTH)
-    : CODE_AGENT_FILE_PANEL_PREFERRED_MIN_WIDTH;
+    ? Math.min(measuredWidth, CODE_AGENT_FILE_PANEL_MIN_WIDTH)
+    : CODE_AGENT_FILE_PANEL_MIN_WIDTH;
 };
 
 const getDesktopShellWidth = (sidebar?: HTMLElement): number => {
@@ -124,7 +124,7 @@ const getSidebarResizeBounds = (sidebar?: HTMLElement, reserveCodeAgentLayout = 
   } else if (reserveCodeAgentLayout && shouldReserveCodeAgentFilePanelFallback()) {
     const codeAgentMax = getSidebarMaxWidthForCodeAgentShell(
       shellWidth,
-      CODE_AGENT_FILE_PANEL_PREFERRED_MIN_WIDTH,
+      CODE_AGENT_FILE_PANEL_MIN_WIDTH,
       CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
     );
     max = Math.min(max, codeAgentMax);
@@ -464,6 +464,38 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
       // localStorage persistence is best-effort; the live resize still applies.
     }
   }, []);
+
+  const constrainSidebarWidth = React.useCallback(() => {
+    if (isCollapsed) {
+      return;
+    }
+    const sidebar = sidebarRef.current;
+    const bounds = getSidebarResizeBounds(sidebar ?? undefined, reserveCodeAgentLayoutForSidebar);
+    const nextWidth = Math.min(bounds.max, Math.max(bounds.min, Math.round(sidebarWidthRef.current)));
+    if (nextWidth === sidebarWidthRef.current) {
+      return;
+    }
+
+    sidebarWidthRef.current = nextWidth;
+    sidebar?.style.setProperty('--desktop-sidebar-width', `${nextWidth}px`);
+    setSidebarWidth(nextWidth);
+    persistSidebarWidth(nextWidth);
+
+    if (sidebar) {
+      const syncedFilePanel = clampCodeAgentFilePanelDuringSidebarResize(sidebar, nextWidth);
+      if (syncedFilePanel) {
+        dispatchCodeAgentFilePanelWidthChange(syncedFilePanel);
+      }
+    }
+  }, [isCollapsed, persistSidebarWidth, reserveCodeAgentLayoutForSidebar]);
+
+  React.useLayoutEffect(() => {
+    constrainSidebarWidth();
+    window.addEventListener('resize', constrainSidebarWidth);
+    return () => {
+      window.removeEventListener('resize', constrainSidebarWidth);
+    };
+  }, [constrainSidebarWidth]);
 
   const handleSidebarResizeStart = React.useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
     if (event.button !== 0) {

@@ -16,6 +16,7 @@ interface MarkdownContentProps {
   content: string;
   isStreaming?: boolean;
   onTaskListChange?: (change: { markerOffset: number; checked: boolean }) => void;
+  onOpenWorkspaceFile?: (path: string) => void;
 }
 interface CodeBlockProps {
   className?: string;
@@ -40,6 +41,54 @@ const codeBlockBodyClassName =
 
 const inlineCodeClassName =
   "rounded-md border border-[#dedbd0] bg-[#f0eee6] px-1.5 py-0.5 font-mono text-[0.92em] font-semibold text-[#7a321f] shadow-[inset_0_0_0_1px_rgba(250,249,245,0.35)] dark:border-[#4d4c48] dark:bg-[#30302e] dark:text-[#ffd7c2] dark:shadow-none";
+
+function decodeHrefComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function workspaceMarkdownFileTarget(href: unknown): string | null {
+  if (typeof href !== 'string') {
+    return null;
+  }
+  let target = href.trim();
+  if (!target || /^(https?:|mailto:|tel:|data:|blob:|#)/i.test(target)) {
+    return null;
+  }
+
+  if (/^file:\/\//i.test(target)) {
+    try {
+      target = new URL(target).pathname;
+    } catch {
+      target = target.replace(/^file:\/\//i, '');
+    }
+  } else if (/^[a-z][a-z0-9+.-]*:/i.test(target) && !/^[a-z]:[\\/]/i.test(target)) {
+    return null;
+  }
+
+  target = decodeHrefComponent(target).replace(/\\/g, '/');
+  const hashIndex = target.indexOf('#');
+  const hashSuffix = hashIndex >= 0 ? target.slice(hashIndex) : '';
+  const pathAndQuery = hashIndex >= 0 ? target.slice(0, hashIndex) : target;
+  const queryIndex = pathAndQuery.indexOf('?');
+  const pathPart = queryIndex >= 0 ? pathAndQuery.slice(0, queryIndex) : pathAndQuery;
+  const normalized = `${pathPart.replace(/^\.\//, '')}${hashSuffix}`;
+  const normalizedPath = pathPart.replace(/^\.\//, '');
+
+  if (
+    normalizedPath.startsWith('/workspace/') ||
+    normalizedPath.startsWith('workspace/') ||
+    pathPart.startsWith('./') ||
+    normalizedPath.includes('/') ||
+    /\.[A-Za-z0-9]+$/.test(normalizedPath)
+  ) {
+    return normalized;
+  }
+  return null;
+}
 
 /** 预处理：移除仅分割线行 */
 const removeSeparators = (content: string): string =>
@@ -238,7 +287,7 @@ const CodeBlock = memo<CodeBlockProps>(({ className, children }) => {
 CodeBlock.displayName = "CodeBlock";
 
 /** 主组件 */
-export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content, isStreaming, onTaskListChange }) => {
+export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content, isStreaming, onTaskListChange, onOpenWorkspaceFile }) => {
   const processed = React.useMemo(() => {
     const text = escapeRawHtmlTags(preprocessMarkdown(content));
     return parseMath(text);
@@ -269,6 +318,28 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content, 
           {children}
         </code>
       ) },
+      a: {
+        component: ({ children, href, ...props }: any) => {
+          const workspaceTarget = onOpenWorkspaceFile ? workspaceMarkdownFileTarget(href) : null;
+          if (!workspaceTarget) {
+            return <a href={href} {...props}>{children}</a>;
+          }
+
+          return (
+            <a
+              href={href}
+              {...props}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onOpenWorkspaceFile?.(workspaceTarget);
+              }}
+            >
+              {children}
+            </a>
+          );
+        },
+      },
       img: {
         component: ({ alt, src }: any) => <Image src={src!} alt={alt} className="max-w-full rounded my-2" isBlurred />,
       },

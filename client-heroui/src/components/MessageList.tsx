@@ -703,6 +703,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                       onRefreshAI={handleRefreshAI}
                       onReply={onReply}
                       onUserAction={handleUserAction}
+                      onOpenWorkspaceFile={onOpenWorkspaceFile}
                     />
                   );
                 })}

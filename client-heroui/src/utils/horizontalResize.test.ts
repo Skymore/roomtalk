@@ -320,6 +320,31 @@ describe('beginHorizontalResize', () => {
     expect(document.body.style.cursor).toBe('');
   });
 
+  it('finishes when the pressed pointer leaves the viewport to avoid sticky drag state', () => {
+    const onResize = vi.fn();
+    const onFinish = vi.fn();
+    beginHorizontalResize({
+      pointerId: 24,
+      startX: 100,
+      initialWidth: 420,
+      direction: 1,
+      captureTarget: document.createElement('button'),
+      getBounds: () => ({ min: 240, max: 1200 }),
+      onResize,
+      onFinish,
+    });
+
+    window.dispatchEvent(mouseEvent('mouseleave', { clientX: 1600, buttons: 1 }));
+    onResize.mockClear();
+    window.dispatchEvent(mouseEvent('mousemove', { clientX: 1800, buttons: 1 }));
+
+    expect(onFinish).toHaveBeenCalledWith(420);
+    expect(onResize).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.cursor).toBe('');
+  });
+
   it('finishes when a released pointer re-enters the window after an outside release', () => {
     const onFinish = vi.fn();
     beginHorizontalResize({

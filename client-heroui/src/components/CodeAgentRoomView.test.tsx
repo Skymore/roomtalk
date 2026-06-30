@@ -12,6 +12,10 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
+vi.mock('@iconify/react', () => ({
+  Icon: ({ icon }: { icon: string }) => <span data-icon={icon} />,
+}));
+
 vi.mock('./ChatHeader', () => ({
   ChatHeader: () => <div data-testid="chat-header" />,
 }));
@@ -28,12 +32,30 @@ vi.mock('./MessageList', async () => {
     }, ref: React.ForwardedRef<unknown>) => {
     React.useImperativeHandle(ref, () => ({ scrollToBottom: vi.fn() }));
     return (
+      <>
       <button
         type="button"
         data-testid="message-list"
         data-code-agent-mode={codeAgentMode}
         onClick={() => onOpenWorkspaceFile?.('/workspace/src/App.tsx')}
-      />
+      >
+        open-file
+      </button>
+      <button
+        type="button"
+        data-testid="message-list-line-link"
+        onClick={() => onOpenWorkspaceFile?.('/workspace/src/App.tsx:42')}
+      >
+        open-file-line
+      </button>
+      <button
+        type="button"
+        data-testid="message-list-hash-line-link"
+        onClick={() => onOpenWorkspaceFile?.('src/App.tsx#L87')}
+      >
+        open-file-hash-line
+      </button>
+      </>
     );
     }),
   };
@@ -55,10 +77,14 @@ vi.mock('./CodeAgentFileBrowserPanel', () => ({
     sandboxStatus,
     sandboxUpdatedAt,
     openFileRequest,
+    revealLine,
+    revealRequestId,
   }: {
     sandboxStatus?: string;
     sandboxUpdatedAt?: string;
     openFileRequest?: { path: string; requestId: number } | null;
+    revealLine?: number | null;
+    revealRequestId?: number;
   }) => (
     <div
       data-testid="file-browser"
@@ -66,6 +92,8 @@ vi.mock('./CodeAgentFileBrowserPanel', () => ({
       data-sandbox-updated-at={sandboxUpdatedAt}
       data-open-path={openFileRequest?.path || ''}
       data-open-request-id={openFileRequest?.requestId || ''}
+      data-reveal-line={revealLine || ''}
+      data-reveal-request-id={revealRequestId || ''}
     />
   ),
 }));
@@ -223,7 +251,7 @@ describe('CodeAgentRoomView', () => {
     expect(document.body.style.cursor).toBe('');
   });
 
-  it('lets the workspace panel grow up to the reserved chat width on wide layouts', () => {
+  it('lets the workspace panel grow up to the T3-style max width on wide layouts', () => {
     renderCodeAgentRoom(cocoRoom);
 
     const resizeHandle = screen.getByLabelText('codeAgentResizeWorkspaceFiles');
@@ -244,8 +272,8 @@ describe('CodeAgentRoomView', () => {
     dispatchPointer(window, 'pointermove', { pointerId: 5, clientX: -2000, buttons: 1 });
     dispatchPointer(window, 'pointerup', { pointerId: 5, clientX: -2000, buttons: 0 });
 
-    expect(layout.style.getPropertyValue('--code-agent-files-width')).toBe('1920px');
-    expect(localStorage.getItem('roomtalk.codeWorkspace.fileManagerWidth')).toBe('1920');
+    expect(layout.style.getPropertyValue('--code-agent-files-width')).toBe('1400px');
+    expect(localStorage.getItem('roomtalk.codeWorkspace.fileManagerWidth')).toBe('1400');
   });
 
   it('shrinks the workspace files panel when the code-agent layout gets narrower', () => {
@@ -326,7 +354,31 @@ describe('CodeAgentRoomView', () => {
     const fileBrowser = screen.getByTestId('file-browser');
     expect(fileBrowser.dataset.openPath).toBe('src/App.tsx');
     expect(fileBrowser.dataset.openRequestId).toBe('1');
+    expect(fileBrowser.dataset.revealLine).toBe('');
+    expect(fileBrowser.dataset.revealRequestId).toBe('1');
     expect(screen.getByLabelText('codeAgentCollapseWorkspaceFiles')).toBeTruthy();
+  });
+
+  it('passes T3-style file reveal requests into the right file manager', () => {
+    localStorage.setItem('roomtalk.codeWorkspace.fileManagerCollapsed', 'true');
+
+    renderCodeAgentRoom(cocoRoom);
+
+    fireEvent.click(screen.getByTestId('message-list-line-link'));
+
+    let fileBrowser = screen.getByTestId('file-browser');
+    expect(fileBrowser.dataset.openPath).toBe('src/App.tsx');
+    expect(fileBrowser.dataset.openRequestId).toBe('1');
+    expect(fileBrowser.dataset.revealLine).toBe('42');
+    expect(fileBrowser.dataset.revealRequestId).toBe('1');
+
+    fireEvent.click(screen.getByTestId('message-list-hash-line-link'));
+
+    fileBrowser = screen.getByTestId('file-browser');
+    expect(fileBrowser.dataset.openPath).toBe('src/App.tsx');
+    expect(fileBrowser.dataset.openRequestId).toBe('2');
+    expect(fileBrowser.dataset.revealLine).toBe('87');
+    expect(fileBrowser.dataset.revealRequestId).toBe('2');
   });
 
   it('constrains room edit mode when the server only allows plan mode', () => {

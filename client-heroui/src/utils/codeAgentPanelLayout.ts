@@ -1,5 +1,8 @@
+export const CODE_AGENT_FILE_PANEL_MIN_WIDTH = 360;
 export const CODE_AGENT_FILE_PANEL_PREFERRED_MIN_WIDTH = 420;
 export const CODE_AGENT_FILE_PANEL_COLLAPSED_WIDTH = 48;
+export const CODE_AGENT_FILE_PANEL_MAX_WIDTH_PX = 1400;
+export const CODE_AGENT_FILE_PANEL_MAX_WIDTH_FRACTION = 0.7;
 export const CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH = 480;
 export const CODE_AGENT_FILE_PANEL_WIDTH_CHANGE_EVENT = 'roomtalk:code-agent-file-panel-width-change';
 
@@ -16,7 +19,7 @@ export interface CodeAgentFilePanelWidthChangeDetail {
 export function getCodeAgentPanelResizeBounds(availableWidth: number): CodeAgentPanelResizeBounds {
   const width = Math.max(0, Math.floor(availableWidth));
   const min = Math.min(
-    CODE_AGENT_FILE_PANEL_PREFERRED_MIN_WIDTH,
+    CODE_AGENT_FILE_PANEL_MIN_WIDTH,
     Math.max(0, width - CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH),
   );
   const chatMin = Math.min(
@@ -24,9 +27,13 @@ export function getCodeAgentPanelResizeBounds(availableWidth: number): CodeAgent
     Math.max(0, width - min),
   );
   const maxByChat = Math.max(min, width - chatMin);
+  const maxByViewport = Math.min(
+    CODE_AGENT_FILE_PANEL_MAX_WIDTH_PX,
+    Math.floor(width * CODE_AGENT_FILE_PANEL_MAX_WIDTH_FRACTION),
+  );
   return {
     min,
-    max: maxByChat,
+    max: Math.max(min, Math.min(maxByChat, maxByViewport)),
     chatMin,
   };
 }

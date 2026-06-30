@@ -59,7 +59,17 @@ vi.mock('@iconify/react', () => ({
 }));
 
 vi.mock('./MessageItem', () => ({
-  MessageItem: ({ message, onRefreshAI, onStartEdit }: { message: Message; onRefreshAI?: (messageId: string) => void; onStartEdit?: (messageId: string) => void }) => (
+  MessageItem: ({
+    message,
+    onRefreshAI,
+    onStartEdit,
+    onOpenWorkspaceFile,
+  }: {
+    message: Message;
+    onRefreshAI?: (messageId: string) => void;
+    onStartEdit?: (messageId: string) => void;
+    onOpenWorkspaceFile?: (path: string) => void;
+  }) => (
     <div
       data-testid="message-item"
       data-message-id={message.id}
@@ -70,6 +80,7 @@ vi.mock('./MessageItem', () => ({
       {message.content}
       <button type="button" onClick={() => onRefreshAI?.(message.id)}>retry-{message.id}</button>
       <button type="button" onClick={() => onStartEdit?.(message.id)}>edit-{message.id}</button>
+      <button type="button" onClick={() => onOpenWorkspaceFile?.('src/App.tsx#L42')}>open-workspace-{message.id}</button>
     </div>
   ),
   preloadMarkdownContent: () => {},
@@ -212,6 +223,32 @@ describe('MessageList optimistic messages', () => {
     expect(await screen.findByText('will fail')).toBeTruthy();
     expect(screen.getByTestId('message-item').getAttribute('data-delivery-status')).toBe('failed');
     expect(screen.getByTestId('message-item').getAttribute('data-delivery-error')).toBe('network down');
+  });
+
+  it('passes workspace file link openings down to rendered messages', async () => {
+    const onOpenWorkspaceFile = vi.fn();
+    render(
+      <MessageList
+        roomId="room-1"
+        onReply={vi.fn()}
+        roomPermissions={null}
+        onOpenWorkspaceFile={onOpenWorkspaceFile}
+      />,
+    );
+
+    act(() => {
+      socketMock.trigger('message_history', {
+        roomId: 'room-1',
+        messages: [message({ id: 'm-workspace-link', content: 'See [App](src/App.tsx#L42)' })],
+        historyVersion: 1,
+        hasMore: false,
+        mode: 'replace',
+      });
+    });
+
+    fireEvent.click(await screen.findByText('open-workspace-m-workspace-link'));
+
+    expect(onOpenWorkspaceFile).toHaveBeenCalledWith('src/App.tsx#L42');
   });
 
   it('renders a recent message window and can load older messages', async () => {

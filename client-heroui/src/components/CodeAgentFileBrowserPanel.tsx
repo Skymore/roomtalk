@@ -1123,6 +1123,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const entriesQuery = useCodeWorkspaceEntriesQuery(roomId);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const breadcrumbRef = useRef<HTMLDivElement | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [externallySelectedFilePath, setExternallySelectedFilePath] = useState<string | null>(null);
@@ -1203,6 +1204,13 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     ? t('codeAgentDisableFileLineWrapping')
     : t('codeAgentEnableFileLineWrapping');
   const refreshWorkspaceEntries = entriesQuery.refresh;
+
+  useEffect(() => {
+    const currentCrumb = breadcrumbRef.current?.querySelector<HTMLElement>(
+      '[data-current-file-crumb="true"]',
+    );
+    currentCrumb?.scrollIntoView?.({ block: 'nearest', inline: 'end' });
+  }, [relativePath]);
 
   useEffect(() => {
     explorerWidthRef.current = explorerWidth;
@@ -1528,15 +1536,29 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     >
       {relativePath ? (
         <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[#dedbd0] px-3 dark:border-[#30302e]" data-surface-subheader>
-          <div className="flex min-w-0 flex-1 items-center overflow-hidden text-xs">
-            {breadcrumbs.map((crumb, index) => (
-              <React.Fragment key={crumb.path || 'project'}>
-                {index > 0 ? <ChevronRight className="mx-1 h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" /> : null}
-                <span className={`truncate ${crumb.kind === 'file' ? 'font-medium text-[#141413] dark:text-[#faf9f5]' : 'text-[#87867f] dark:text-[#8f8d86]'}`} title={crumb.path || projectName}>
-                  {crumb.label}
-                </span>
-              </React.Fragment>
-            ))}
+          <div
+            ref={breadcrumbRef}
+            className="min-w-0 flex-1 overflow-x-auto text-xs [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            data-file-breadcrumbs="true"
+            data-testid="code-agent-file-breadcrumbs"
+          >
+            <div className="flex h-full w-max min-w-full items-center">
+              {breadcrumbs.map((crumb, index) => (
+                <div
+                  key={crumb.path || 'project'}
+                  className="flex min-w-0 shrink-0 items-center"
+                  data-current-file-crumb={crumb.kind === 'file'}
+                >
+                  {index > 0 ? <ChevronRight className="mx-1 h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" /> : null}
+                  <span
+                    className={`max-w-40 truncate ${crumb.kind === 'file' ? 'font-medium text-[#141413] dark:text-[#faf9f5]' : 'text-[#87867f] dark:text-[#8f8d86]'}`}
+                    title={crumb.path || projectName}
+                  >
+                    {crumb.label}
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
           {fileQuery.data ? (
             <button type="button" className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]" aria-label={t('codeAgentDownloadFile')} onClick={() => createDownload(fileQuery.data!)}>

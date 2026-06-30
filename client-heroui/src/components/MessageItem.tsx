@@ -36,6 +36,7 @@ interface MessageItemProps {
   onRefreshAI?: (messageId: string, content: string) => void;
   onReply: (message: Message) => void;
   onUserAction?: (action: MessageUserAction, message: Message) => void;
+  onOpenWorkspaceFile?: (path: string) => void;
 }
 
 export type MessageUserAction = 'setAdmin' | 'removeAdmin' | 'removeMember' | 'transferOwnership';
@@ -257,6 +258,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   onRefreshAI,
   onReply,
   onUserAction,
+  onOpenWorkspaceFile,
 }) => {
   const isAI = message.messageType === 'ai' || message.clientId === 'ai_assistant';
   const isMine = !isAI && message.clientId === clientId;
@@ -952,7 +954,11 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                           )}
                         </div>
                       }>
-                        <MarkdownContent content={message.content} isStreaming={isStreaming} />
+                        <MarkdownContent
+                          content={message.content}
+                          isStreaming={isStreaming}
+                          onOpenWorkspaceFile={onOpenWorkspaceFile}
+                        />
                       </React.Suspense>
                     </div>
                   </div>

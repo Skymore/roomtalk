@@ -47,7 +47,7 @@ interface CodeAgentRoomViewProps {
 
 const FILE_MANAGER_WIDTH_STORAGE_KEY = 'roomtalk.codeWorkspace.fileManagerWidth';
 const FILE_MANAGER_COLLAPSED_STORAGE_KEY = 'roomtalk.codeWorkspace.fileManagerCollapsed';
-type WorkspaceFileOpenRequest = { path: string; requestId: number };
+type WorkspaceFileOpenRequest = { path: string; line: number | null; requestId: number };
 
 const defaultFileManagerWidth = () => {
   if (typeof window === 'undefined') {
@@ -80,6 +80,38 @@ const readStoredFileManagerCollapsed = () => {
     return false;
   }
   return window.localStorage.getItem(FILE_MANAGER_COLLAPSED_STORAGE_KEY) === 'true';
+};
+
+const normalizeWorkspaceOpenLine = (line: string | undefined): number | null => {
+  if (!line) {
+    return null;
+  }
+  const parsed = Number.parseInt(line, 10);
+  return Number.isFinite(parsed) ? Math.max(1, parsed) : null;
+};
+
+const parseWorkspaceFileOpenRequest = (path: string): Omit<WorkspaceFileOpenRequest, 'requestId'> | null => {
+  let normalizedPath = path
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\/?workspace\//, '')
+    .replace(/^\/+/, '');
+  let line: number | null = null;
+
+  const hashLineMatch = normalizedPath.match(/#L(\d+)$/i);
+  if (hashLineMatch?.index !== undefined) {
+    line = normalizeWorkspaceOpenLine(hashLineMatch[1]);
+    normalizedPath = normalizedPath.slice(0, hashLineMatch.index);
+  } else {
+    const colonLineMatch = normalizedPath.match(/:(\d+)$/);
+    if (colonLineMatch?.index !== undefined) {
+      line = normalizeWorkspaceOpenLine(colonLineMatch[1]);
+      normalizedPath = normalizedPath.slice(0, colonLineMatch.index);
+    }
+  }
+
+  normalizedPath = normalizedPath.replace(/\/+$/, '');
+  return normalizedPath ? { path: normalizedPath, line } : null;
 };
 
 export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
@@ -170,8 +202,8 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   }, []);
 
   const handleOpenWorkspaceFile = React.useCallback((path: string) => {
-    const normalizedPath = path.trim().replace(/^\/?workspace\//, '').replace(/^\/+/, '');
-    if (!normalizedPath) {
+    const target = parseWorkspaceFileOpenRequest(path);
+    if (!target) {
       return;
     }
     setFileManagerCollapsed(false);
@@ -183,7 +215,8 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
     }
     workspaceFileOpenRequestIdRef.current += 1;
     setWorkspaceFileOpenRequest({
-      path: normalizedPath,
+      path: target.path,
+      line: target.line,
       requestId: workspaceFileOpenRequestIdRef.current,
     });
   }, [setFileManagerCollapsed]);
@@ -354,6 +387,8 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       sandboxStatus={currentRoom.sandboxStatus}
       sandboxUpdatedAt={currentRoom.sandboxUpdatedAt}
       openFileRequest={workspaceFileOpenRequest}
+      revealLine={workspaceFileOpenRequest?.line ?? null}
+      revealRequestId={workspaceFileOpenRequest?.requestId ?? 0}
     />
   );
 
