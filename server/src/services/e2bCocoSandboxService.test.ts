@@ -54,7 +54,19 @@ class FakeE2BDriver implements E2BSandboxDriver {
           const stdout = new PassThrough();
           const stderr = new PassThrough();
           setTimeout(() => {
-            if (command.includes('__ROOMTALK_STATUS__')) {
+            if (command.includes('__ROOMTALK_DIFF__')) {
+              stdout.end([
+                '__ROOMTALK_DIFF__',
+                'diff --git a/src/App.tsx b/src/App.tsx',
+                'index 1111111..2222222 100644',
+                '--- a/src/App.tsx',
+                '+++ b/src/App.tsx',
+                '@@ -1 +1 @@',
+                '-export default {}',
+                '+export default function App() {}',
+                '',
+              ].join('\n'));
+            } else if (command.includes('__ROOMTALK_STATUS__')) {
               stdout.end([
                 '__ROOMTALK_STATUS__',
                 ' M src/App.tsx',
@@ -262,6 +274,34 @@ describe('E2BCocoSandboxService', () => {
     });
     assert.match(driver.commands[0], /git status --porcelain=v1/);
     assert.match(driver.commands[0], /git diff --numstat HEAD --/);
+    assert.match(driver.commands[0], /git add -N -- \./);
+    assert.deepEqual(driver.commandOptions, [{ timeoutMs: 10_000 }]);
+  });
+
+  it('reads workspace diffs from git patch output', async () => {
+    const driver = new FakeE2BDriver();
+    const service = new E2BCocoSandboxService(driver, { templateId: 'roomtalk-coco' });
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+
+    const patch = [
+      'diff --git a/src/App.tsx b/src/App.tsx',
+      'index 1111111..2222222 100644',
+      '--- a/src/App.tsx',
+      '+++ b/src/App.tsx',
+      '@@ -1 +1 @@',
+      '-export default {}',
+      '+export default function App() {}',
+      '',
+    ].join('\n');
+
+    assert.deepEqual(await service.getWorkspaceDiff(handle), {
+      available: true,
+      patch,
+      byteSize: Buffer.byteLength(patch),
+      truncated: false,
+    });
+    assert.match(driver.commands[0], /git diff --no-ext-diff --src-prefix=a\/ --dst-prefix=b\/ HEAD --/);
+    assert.match(driver.commands[0], /git add -N -- \./);
     assert.deepEqual(driver.commandOptions, [{ timeoutMs: 10_000 }]);
   });
 

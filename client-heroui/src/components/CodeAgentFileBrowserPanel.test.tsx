@@ -36,6 +36,10 @@ vi.mock('../utils/codeWorkspaceFiles', () => ({
   deleteCodeWorkspaceEntry: deleteCodeWorkspaceEntryMock,
 }));
 
+vi.mock('@pierre/diffs', () => ({
+  VirtualizedFile: class {},
+}));
+
 vi.mock('@pierre/trees/react', () => ({
   useFileTree: (options: { onSelectionChange?: (paths: readonly string[]) => void }) => {
     selectionHandlerRef.current = options.onSelectionChange || null;
@@ -227,6 +231,36 @@ describe('CodeAgentFileBrowserPanel', () => {
       'export const changed = true;',
       'utf-8',
     );
+  });
+
+  it('renders truncated text files as read-only previews', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'logs/big.log', name: 'big.log', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockResolvedValue({
+      path: 'logs/big.log',
+      content: 'partial log',
+      byteSize: 2_000_000,
+      truncated: true,
+      encoding: 'utf-8',
+    });
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    await screen.findByText('1 files');
+    selectionHandlerRef.current?.(['logs/big.log']);
+
+    const diffFile = await screen.findByTestId('diff-file');
+    expect(diffFile.textContent).toBe('logs/big.log:partial log');
+    expect(screen.getByText(/Preview limited to 11 of 2,000,000 bytes/)).toBeTruthy();
+
+    vi.useFakeTimers();
+    fireEvent.click(diffFile);
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(writeCodeWorkspaceFileMock).not.toHaveBeenCalled();
   });
 
   it('wires file manager create, rename, and delete actions to workspace mutations', async () => {

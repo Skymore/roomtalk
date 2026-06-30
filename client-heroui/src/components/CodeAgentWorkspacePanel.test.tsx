@@ -11,6 +11,12 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
+vi.mock('./CodeAgentWorkspaceDiffViewer', () => ({
+  CodeAgentWorkspaceDiffViewer: ({ enabled }: { enabled: boolean }) => (
+    <div data-testid="code-agent-workspace-diff-viewer" data-enabled={String(enabled)} />
+  ),
+}));
+
 const room: Room = {
   id: 'room-1',
   name: 'Coco',
@@ -199,5 +205,36 @@ describe('CodeAgentWorkspacePanel', () => {
     fireEvent.click(screen.getByText('codeAgentArtifacts'));
     const link = screen.getByText('RoomTalk Demo').closest('a');
     expect(link?.getAttribute('href')).toBe('https://room.ruit.me/p/roomtalk-demo/');
+  });
+
+  it('enables the diff viewer only when the changes tab is active', () => {
+    render(
+      <CodeAgentWorkspacePanel
+        room={room}
+        messages={[]}
+        mode="acceptEdits"
+        sessionCostUsd={0}
+        workspaceSnapshot={{
+          roomId: 'room-1',
+          backend: 'coco',
+          source: 'sandbox',
+          generatedAt: '2026-06-30T12:00:00.000Z',
+          status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: true },
+          summary: { toolCalls: 0, toolResults: 0, toolErrors: 0 },
+          artifacts: [],
+          changes: {
+            available: true,
+            changedFiles: ['src/App.tsx'],
+            diffSummary: { files: 1, additions: 2, deletions: 1 },
+          },
+          commands: [],
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByText('codeAgentChanges'));
+
+    expect(screen.getByText('src/App.tsx')).toBeTruthy();
+    expect(screen.getByTestId('code-agent-workspace-diff-viewer').dataset.enabled).toBe('true');
   });
 });

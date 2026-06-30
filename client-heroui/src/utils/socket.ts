@@ -108,6 +108,10 @@ type CodeWorkspaceFileAckResponse = SocketAckResponse & {
   file?: unknown;
 };
 
+type CodeWorkspaceDiffAckResponse = SocketAckResponse & {
+  diff?: unknown;
+};
+
 type CodeWorkspaceEntryAckResponse = SocketAckResponse & {
   entry?: unknown;
 };
@@ -1060,6 +1064,22 @@ export const requestCodeWorkspaceAssetUrl = (roomId: string, path: string): Prom
     }
 
     return response.asset;
+  })
+);
+
+export const requestCodeWorkspaceDiff = (roomId: string): Promise<unknown> => (
+  emitWithAck<CodeWorkspaceDiffAckResponse>(
+    'read_code_workspace_diff',
+    { roomId },
+    'Timed out while reading workspace diff',
+    'Failed to read workspace diff',
+    { retryOnSocketReconnect: true },
+  ).then((response) => {
+    if (!response.diff) {
+      throw new Error('Server did not return workspace diff');
+    }
+
+    return response.diff;
   })
 );
 

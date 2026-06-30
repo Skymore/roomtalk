@@ -16,6 +16,7 @@ import {
   getSandboxStatusClassName,
   getSandboxStatusLabelKey,
 } from '../utils/cocoRoom';
+import { CodeAgentWorkspaceDiffViewer } from './CodeAgentWorkspaceDiffViewer';
 
 interface CodeAgentWorkspacePanelProps {
   room: Room;
@@ -60,6 +61,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
 }) => {
   const { t } = useTranslation();
   const [isCollapsed, setIsCollapsed] = React.useState(false);
+  const [selectedWorkspaceTab, setSelectedWorkspaceTab] = React.useState('overview');
   const messageSummary = React.useMemo(() => summarizeCocoMessages(messages), [messages]);
   const summary = React.useMemo(
     () => {
@@ -86,6 +88,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   const isPlanMode = mode === 'plan';
   const agentStatus = getCodeAgentStatus(room);
   const detailsId = 'code-agent-workspace-details';
+  const shouldLoadDiff = selectedWorkspaceTab === 'changes' && Boolean(workspaceChanges?.available && changedFiles.length > 0);
 
   const stats = [
     { label: t('codeAgentTools'), value: summary.toolCalls, icon: 'lucide:wrench' },
@@ -186,6 +189,8 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
       >
         <Tabs
           aria-label={t('codeAgentWorkspace')}
+          selectedKey={selectedWorkspaceTab}
+          onSelectionChange={(key) => setSelectedWorkspaceTab(String(key))}
           size="sm"
           variant="underlined"
           classNames={{
@@ -346,6 +351,11 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                       </p>
                     ) : null}
                   </div>
+                  <CodeAgentWorkspaceDiffViewer
+                    roomId={room.id}
+                    enabled={shouldLoadDiff}
+                    refreshKey={workspaceSnapshot?.generatedAt || changedFiles.join('\n')}
+                  />
                 </div>
               )}
             </div>

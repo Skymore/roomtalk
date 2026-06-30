@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { VirtualizedFile } from '@pierre/diffs';
 import { Editor } from '@pierre/diffs/editor';
-import { EditorProvider, File as DiffFile, Virtualizer } from '@pierre/diffs/react';
+import { EditorProvider, File as DiffFile, type FileOptions, Virtualizer } from '@pierre/diffs/react';
 import { FileTree, useFileTree } from '@pierre/trees/react';
 import type { FileTreeIcons } from '@pierre/trees';
 import {
@@ -51,6 +52,8 @@ interface CodeAgentFileBrowserPanelProps {
   projectName: string;
   sandboxStatus?: RoomSandboxStatus;
   sandboxUpdatedAt?: string;
+  revealLine?: number | null;
+  revealRequestId?: number;
 }
 
 type ProjectEntry = {
@@ -92,11 +95,31 @@ const TREE_UNSAFE_CSS = `
 `;
 
 const FILE_SAVE_DEBOUNCE_MS = 500;
+const FILE_LINK_REVEAL_ATTRIBUTE = 'data-file-link-reveal';
+const FILE_LINK_REVEAL_UNSAFE_CSS = `
+  [${FILE_LINK_REVEAL_ATTRIBUTE}][data-line] {
+    background-color: color-mix(
+      in srgb,
+      var(--diffs-computed-diff-line-bg) 72%,
+      var(--diffs-bg-selection-override, var(--diffs-selection-base))
+    ) !important;
+  }
+
+  [${FILE_LINK_REVEAL_ATTRIBUTE}][data-column-number] {
+    background-color: color-mix(
+      in srgb,
+      var(--diffs-computed-diff-line-bg) 62%,
+      var(--diffs-bg-selection-number-override, var(--diffs-selection-base))
+    ) !important;
+    color: var(--diffs-selection-number-fg) !important;
+  }
+`;
 const FILE_EXPLORER_STORAGE_KEY = 'roomtalk.codeWorkspace.fileExplorerOpen';
 const FILE_EXPLORER_WIDTH_STORAGE_KEY = 'roomtalk.codeWorkspace.fileExplorerWidth';
 const FILE_EXPLORER_MIN_WIDTH = 180;
 const FILE_PREVIEW_MIN_WIDTH = 180;
 const FILE_EXPLORER_DEFAULT_WIDTH = 352;
+type FilePostRender = NonNullable<FileOptions<unknown>['onPostRender']>;
 
 function getFileExplorerResizeBounds(panelWidth: number) {
   return {
@@ -188,6 +211,129 @@ function useResolvedTheme() {
   }, []);
 
   return resolvedTheme;
+}
+
+function clampFileLine(contents: string, requestedLine: number): number {
+  let lineCount = 1;
+  for (let index = 0; index < contents.length; index += 1) {
+    const character = contents.charCodeAt(index);
+    if (character === 10) {
+      lineCount += 1;
+    } else if (character === 13) {
+      lineCount += 1;
+      if (contents.charCodeAt(index + 1) === 10) {
+        index += 1;
+      }
+    }
+  }
+  return Math.min(Math.max(1, requestedLine), lineCount);
+}
+
+function updateFileLinkReveal(fileContainer: HTMLElement, line: number | null): void {
+  const root = fileContainer.shadowRoot ?? fileContainer;
+  for (const element of root.querySelectorAll<HTMLElement>(`[${FILE_LINK_REVEAL_ATTRIBUTE}]`)) {
+    element.removeAttribute(FILE_LINK_REVEAL_ATTRIBUTE);
+  }
+  if (line === null) {
+    return;
+  }
+
+  root
+    .querySelector<HTMLElement>(`[data-line="${line}"]`)
+    ?.setAttribute(FILE_LINK_REVEAL_ATTRIBUTE, '');
+  root
+    .querySelector<HTMLElement>(`[data-column-number="${line}"]`)
+    ?.setAttribute(FILE_LINK_REVEAL_ATTRIBUTE, '');
+}
+
+function useFileLineReveal(
+  relativePath: string | null,
+  revealLine: number | null,
+  revealRequestId: number,
+): FilePostRender {
+  const [handledRequestIdsByPath] = useState<Map<string, number>>(() => new Map());
+  const [latestRequestIdsByPath] = useState<Map<string, number>>(() => new Map());
+  const [pendingFramesByPath] = useState<Map<string, number>>(() => new Map());
+
+  return useCallback<FilePostRender>(
+    (fileContainer, instance, phase) => {
+      if (relativePath === null) return;
+
+      const cancelPendingReveal = () => {
+        const frameId = pendingFramesByPath.get(relativePath);
+        if (frameId !== undefined) {
+          cancelAnimationFrame(frameId);
+          pendingFramesByPath.delete(relativePath);
+        }
+      };
+
+      if (phase === 'unmount') {
+        cancelPendingReveal();
+        return;
+      }
+
+      const targetLine = revealLine === null ? null : clampFileLine(instance.file?.contents ?? '', revealLine);
+      updateFileLinkReveal(fileContainer, targetLine);
+
+      if (!(instance instanceof VirtualizedFile)) return;
+
+      if (latestRequestIdsByPath.get(relativePath) !== revealRequestId) {
+        cancelPendingReveal();
+        latestRequestIdsByPath.set(relativePath, revealRequestId);
+      }
+
+      if (targetLine === null) {
+        fileContainer.style.minHeight = '';
+        return;
+      }
+
+      const scrollContainer = fileContainer.closest<HTMLElement>('.file-preview-virtualizer');
+      if (!scrollContainer) return;
+      fileContainer.style.minHeight = `${Math.ceil(Math.max(instance.height, scrollContainer.clientHeight))}px`;
+
+      if (
+        handledRequestIdsByPath.get(relativePath) === revealRequestId ||
+        pendingFramesByPath.has(relativePath)
+      ) {
+        return;
+      }
+
+      const reveal = () => {
+        pendingFramesByPath.delete(relativePath);
+        if (
+          latestRequestIdsByPath.get(relativePath) !== revealRequestId ||
+          !fileContainer.isConnected
+        ) {
+          return;
+        }
+
+        const linePosition = instance.getLinePosition(targetLine);
+        if (!linePosition) return;
+
+        const fileTop = scrollContainer.scrollTop
+          + fileContainer.getBoundingClientRect().top
+          - scrollContainer.getBoundingClientRect().top;
+        const centeredTop = Math.max(
+          0,
+          fileTop + linePosition.top - Math.max(0, (scrollContainer.clientHeight - linePosition.height) / 2),
+        );
+        const maxScrollTop = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
+
+        scrollContainer.scrollTop = Math.min(centeredTop, maxScrollTop);
+        handledRequestIdsByPath.set(relativePath, revealRequestId);
+      };
+
+      pendingFramesByPath.set(relativePath, requestAnimationFrame(reveal));
+    },
+    [
+      handledRequestIdsByPath,
+      latestRequestIdsByPath,
+      pendingFramesByPath,
+      relativePath,
+      revealLine,
+      revealRequestId,
+    ],
+  );
 }
 
 function initialExplorerOpen(): boolean {
@@ -402,10 +548,18 @@ function isMarkdownPreview(path: string) {
   return /\.(md|mdx)$/i.test(path);
 }
 
+function previewedByteSize(file: CodeWorkspaceFile): number {
+  if (file.encoding === 'utf-8') {
+    return new TextEncoder().encode(file.content).byteLength;
+  }
+  return Math.min(file.byteSize, Math.floor((file.content.length * 3) / 4));
+}
+
 interface EditableFileSurfaceProps {
   roomId: string;
   file: CodeWorkspaceFile;
   resolvedTheme: 'light' | 'dark';
+  onPostRender: FilePostRender;
   onFileChange: React.Dispatch<React.SetStateAction<CodeWorkspaceFile | null>>;
   onSaveStateChange: (state: SaveState, error?: string | null) => void;
   onEntriesChanged: () => void;
@@ -415,6 +569,7 @@ function EditableFileSurface({
   roomId,
   file,
   resolvedTheme,
+  onPostRender,
   onFileChange,
   onSaveStateChange,
   onEntriesChanged,
@@ -495,6 +650,8 @@ function EditableFileSurface({
               overflow: 'scroll',
               theme: resolvedTheme === 'dark' ? 'pierre-dark' : 'pierre-light',
               themeType: resolvedTheme,
+              unsafeCSS: FILE_LINK_REVEAL_UNSAFE_CSS,
+              onPostRender,
             }}
             className="min-h-full"
             contentEditable
@@ -502,6 +659,47 @@ function EditableFileSurface({
         </Virtualizer>
       </div>
     </EditorProvider>
+  );
+}
+
+interface ReadOnlyFileSurfaceProps {
+  file: CodeWorkspaceFile;
+  resolvedTheme: 'light' | 'dark';
+  onPostRender: FilePostRender;
+}
+
+function ReadOnlyFileSurface({
+  file,
+  resolvedTheme,
+  onPostRender,
+}: ReadOnlyFileSurfaceProps) {
+  return (
+    <div className="flex min-h-0 flex-1">
+      <Virtualizer
+        className="file-preview-virtualizer min-h-0 flex-1 overflow-auto"
+        config={{
+          overscrollSize: 600,
+          intersectionObserverMargin: 1200,
+        }}
+      >
+        <DiffFile
+          file={{
+            name: file.path,
+            contents: file.content,
+            cacheKey: projectFileCacheKey('', file.path, file.content),
+          }}
+          options={{
+            disableFileHeader: true,
+            overflow: 'scroll',
+            theme: resolvedTheme === 'dark' ? 'pierre-dark' : 'pierre-light',
+            themeType: resolvedTheme,
+            unsafeCSS: FILE_LINK_REVEAL_UNSAFE_CSS,
+            onPostRender,
+          }}
+          className="min-h-full"
+        />
+      </Virtualizer>
+    </div>
   );
 }
 
@@ -649,6 +847,8 @@ interface FilePreviewSurfaceProps {
   assetUrlQuery: AssetUrlQueryState;
   resolvedTheme: 'light' | 'dark';
   renderPreview: boolean;
+  revealLine: number | null;
+  revealRequestId: number;
   saveState: SaveState;
   saveError: string | null;
   onSaveStateChange: (state: SaveState, error?: string | null) => void;
@@ -663,12 +863,19 @@ function FilePreviewSurface({
   assetUrlQuery,
   resolvedTheme,
   renderPreview,
+  revealLine,
+  revealRequestId,
   saveState,
   saveError,
   onSaveStateChange,
   onEntriesChanged,
 }: FilePreviewSurfaceProps) {
   const { t } = useTranslation();
+  const onFilePostRender = useFileLineReveal(relativePath, revealLine, revealRequestId);
+
+  useEffect(() => {
+    onSaveStateChange('idle', null);
+  }, [onSaveStateChange, relativePath]);
 
   if (!relativePath) {
     return null;
@@ -718,11 +925,13 @@ function FilePreviewSurface({
     );
   }
 
+  const visibleByteSize = previewedByteSize(file);
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       {file.truncated ? (
         <div className="shrink-0 border-b border-amber-500/20 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
-          Preview limited to the first 1 MB of a {file.byteSize.toLocaleString()} byte file.
+          Preview limited to {visibleByteSize.toLocaleString()} of {file.byteSize.toLocaleString()} bytes.
         </div>
       ) : null}
       {saveState !== 'idle' && saveState !== 'saved' ? (
@@ -740,12 +949,20 @@ function FilePreviewSurface({
         </div>
       ) : renderPreview && isMarkdownPreview(file.path) ? (
         <RenderedMarkdownSurface contents={file.content} />
+      ) : file.truncated ? (
+        <ReadOnlyFileSurface
+          key={`${file.path}:${resolvedTheme}:${file.byteSize}`}
+          file={file}
+          resolvedTheme={resolvedTheme}
+          onPostRender={onFilePostRender}
+        />
       ) : (
         <EditableFileSurface
           key={`${file.path}:${resolvedTheme}`}
           roomId={roomId}
           file={file}
           resolvedTheme={resolvedTheme}
+          onPostRender={onFilePostRender}
           onFileChange={fileQuery.setData}
           onSaveStateChange={onSaveStateChange}
           onEntriesChanged={onEntriesChanged}
@@ -760,6 +977,8 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   projectName,
   sandboxStatus,
   sandboxUpdatedAt,
+  revealLine = null,
+  revealRequestId = 0,
 }) => {
   const { t } = useTranslation();
   const resolvedTheme = useResolvedTheme();
@@ -1022,6 +1241,8 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
             assetUrlQuery={assetUrlQuery}
             resolvedTheme={resolvedTheme}
             renderPreview={renderPreview}
+            revealLine={revealLine}
+            revealRequestId={revealRequestId}
             saveState={saveState}
             saveError={saveError}
             onSaveStateChange={handleSaveStateChange}

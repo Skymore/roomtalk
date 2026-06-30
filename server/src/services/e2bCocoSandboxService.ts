@@ -5,12 +5,14 @@ import {
   CocoSandboxService,
   CocoWorkspaceChanges,
   CocoWorkspaceAsset,
+  CocoWorkspaceDiff,
   CocoWorkspaceEntry,
   CocoWorkspaceFile,
   CreateCocoSandboxInput,
   ListCocoWorkspaceEntriesOptions,
   RenameCocoWorkspaceEntryInput,
   ReadCocoWorkspaceAssetOptions,
+  ReadCocoWorkspaceDiffOptions,
   ReadCocoWorkspaceFileOptions,
   StartCocoRunnerInput,
   WriteCocoWorkspaceFileInput,
@@ -210,6 +212,7 @@ export class E2BCocoSandboxService implements CocoSandboxService {
       '  printf "__ROOMTALK_CHANGES_UNAVAILABLE__\\n"',
       '  exit 0',
       'fi',
+      'git add -N -- . >/dev/null 2>&1 || true',
       'printf "__ROOMTALK_STATUS__\\n"',
       'git status --porcelain=v1 || true',
       'printf "__ROOMTALK_NUMSTAT__\\n"',
@@ -224,6 +227,45 @@ export class E2BCocoSandboxService implements CocoSandboxService {
       throw new Error(`E2B workspace changes query failed with exit code ${completed.exitCode}`);
     }
     return parseWorkspaceChanges(stdout);
+  }
+
+  async getWorkspaceDiff(
+    handle: CocoSandboxHandle,
+    options: ReadCocoWorkspaceDiffOptions = {}
+  ): Promise<CocoWorkspaceDiff> {
+    const connected = await this.driver.connect(handle.id);
+    if (!connected.commands?.run) {
+      throw new Error('E2B sandbox driver handle does not support command execution');
+    }
+
+    const workspace = shellQuote(handle.workspace || this.options.workspace || '/workspace');
+    const command = [
+      'set -u',
+      `cd ${workspace}`,
+      'if ! command -v git >/dev/null 2>&1; then',
+      '  printf "__ROOMTALK_DIFF_UNAVAILABLE__\\n"',
+      '  exit 0',
+      'fi',
+      'git config --global --add safe.directory "$PWD" >/dev/null 2>&1 || true',
+      'if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then',
+      '  printf "__ROOMTALK_DIFF_UNAVAILABLE__\\n"',
+      '  exit 0',
+      'fi',
+      'if ! git rev-parse --verify HEAD >/dev/null 2>&1; then',
+      '  printf "__ROOMTALK_DIFF_UNAVAILABLE__\\n"',
+      '  exit 0',
+      'fi',
+      'git add -N -- . >/dev/null 2>&1 || true',
+      'printf "__ROOMTALK_DIFF__\\n"',
+      'git diff --no-ext-diff --src-prefix=a/ --dst-prefix=b/ HEAD -- || true',
+    ].join('\n');
+    const result = await connected.commands.run(command, { timeoutMs: 10_000 });
+    const stdout = await collectReadableTextWithLimit(result.stdout, options.maxBytes ?? 10 * 1024 * 1024);
+    const completed = await result.completed;
+    if (completed && completed.exitCode !== 0) {
+      throw new Error(`E2B workspace diff query failed with exit code ${completed.exitCode}`);
+    }
+    return parseWorkspaceDiff(stdout.text, stdout.truncated, stdout.byteSize);
   }
 
   async listWorkspaceEntries(handle: CocoSandboxHandle, options: ListCocoWorkspaceEntriesOptions = {}): Promise<CocoWorkspaceEntry[]> {
@@ -264,7 +306,7 @@ export class E2BCocoSandboxService implements CocoSandboxService {
     const workspacePrefix = handle.workspace.replace(/\/+$/, '');
     const relativePath = normalizeWorkspaceInputPath(workspacePath, workspacePrefix);
     const absolutePath = `${workspacePrefix}/${relativePath}`;
-    const maxBytes = options.maxBytes ?? 1024 * 1024;
+    const maxBytes = options.maxBytes ?? 10 * 1024 * 1024;
     const { buffer, truncated, byteSize } = await readWorkspaceFileBytes(connected.files.read, absolutePath, maxBytes);
     const contentBuffer = truncated ? buffer.subarray(0, maxBytes) : buffer;
     const textContent = decodeUtf8(contentBuffer);
@@ -416,34 +458,57 @@ const portHostTemplateEnv = (handle: E2BSandboxDriverHandle): Record<string, str
 const shellQuote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
 
 const collectReadableText = async (stream: Readable | undefined, maxBytes = 256 * 1024): Promise<string> => {
+  const result = await collectReadableTextWithLimit(stream, maxBytes);
+  return result.text;
+};
+
+const collectReadableTextWithLimit = async (
+  stream: Readable | undefined,
+  maxBytes: number
+): Promise<{ text: string; byteSize: number; truncated: boolean }> => {
   if (!stream) {
-    return '';
+    return { text: '', byteSize: 0, truncated: false };
   }
 
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let byteSize = 0;
+    let truncated = false;
     let settled = false;
 
-    const settle = (value: string) => {
+    const settle = () => {
       if (settled) {
         return;
       }
       settled = true;
-      resolve(value);
+      resolve({
+        text: Buffer.concat(chunks).toString('utf8'),
+        byteSize,
+        truncated,
+      });
     };
 
     stream.on('data', (chunk: Buffer | string) => {
-      if (byteSize >= maxBytes) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      byteSize += buffer.byteLength;
+      if (truncated) {
         return;
       }
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      const remainingBytes = maxBytes - byteSize;
-      chunks.push(buffer.byteLength > remainingBytes ? buffer.subarray(0, remainingBytes) : buffer);
-      byteSize += buffer.byteLength;
+      const currentBytes = chunks.reduce((total, item) => total + item.byteLength, 0);
+      const remainingBytes = maxBytes - currentBytes;
+      if (remainingBytes <= 0) {
+        truncated = true;
+        return;
+      }
+      if (buffer.byteLength > remainingBytes) {
+        chunks.push(buffer.subarray(0, remainingBytes));
+        truncated = true;
+        return;
+      }
+      chunks.push(buffer);
     });
-    stream.on('end', () => settle(Buffer.concat(chunks).toString('utf8')));
-    stream.on('close', () => settle(Buffer.concat(chunks).toString('utf8')));
+    stream.on('end', settle);
+    stream.on('close', settle);
     stream.on('error', reject);
   });
 };
@@ -473,6 +538,25 @@ const parseWorkspaceChanges = (stdout: string): CocoWorkspaceChanges => {
   };
 };
 
+const parseWorkspaceDiff = (stdout: string, truncated: boolean, stdoutByteSize: number): CocoWorkspaceDiff => {
+  if (!stdout || stdout.includes('__ROOMTALK_DIFF_UNAVAILABLE__')) {
+    return {
+      available: false,
+      patch: '',
+      byteSize: 0,
+      truncated: false,
+    };
+  }
+
+  const patch = sectionAfterRaw(stdout, '__ROOMTALK_DIFF__');
+  return {
+    available: true,
+    patch,
+    byteSize: truncated ? stdoutByteSize : Buffer.byteLength(patch, 'utf8'),
+    truncated,
+  };
+};
+
 const sectionBetween = (value: string, startMarker: string, endMarker: string): string => {
   const start = value.indexOf(startMarker);
   if (start < 0) {
@@ -486,6 +570,15 @@ const sectionBetween = (value: string, startMarker: string, endMarker: string): 
 const sectionAfter = (value: string, marker: string): string => {
   const start = value.indexOf(marker);
   return start < 0 ? '' : value.slice(start + marker.length).trim();
+};
+
+const sectionAfterRaw = (value: string, marker: string): string => {
+  const start = value.indexOf(marker);
+  if (start < 0) {
+    return '';
+  }
+  const rest = value.slice(start + marker.length);
+  return rest.startsWith('\r\n') ? rest.slice(2) : rest.startsWith('\n') ? rest.slice(1) : rest;
 };
 
 const parseGitStatusFiles = (statusOutput: string): string[] => {

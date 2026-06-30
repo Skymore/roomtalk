@@ -33,6 +33,13 @@ export interface CodeAgentWorkspaceArtifact {
   title?: string;
 }
 
+export interface CodeAgentWorkspaceDiff {
+  available: boolean;
+  patch: string;
+  byteSize: number;
+  truncated: boolean;
+}
+
 export interface CodeAgentWorkspaceSnapshot {
   roomId: string;
   backend: 'coco';
@@ -52,6 +59,28 @@ export interface CodeAgentWorkspaceSnapshot {
   };
   commands: CodeAgentWorkspaceCommand[];
 }
+
+const validateWorkspaceDiff = (value: unknown): CodeAgentWorkspaceDiff => {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Workspace diff response is invalid');
+  }
+  const diff = value as Partial<CodeAgentWorkspaceDiff>;
+  if (
+    typeof diff.available !== 'boolean' ||
+    typeof diff.patch !== 'string' ||
+    typeof diff.byteSize !== 'number' ||
+    typeof diff.truncated !== 'boolean'
+  ) {
+    throw new Error('Workspace diff response is invalid');
+  }
+
+  return {
+    available: diff.available,
+    patch: diff.patch,
+    byteSize: diff.byteSize,
+    truncated: diff.truncated,
+  };
+};
 
 export const summarizeCocoMessages = (messages: Message[]): CocoWorkspaceSummary => {
   let toolCalls = 0;
@@ -80,6 +109,23 @@ export const summarizeCocoMessages = (messages: Message[]): CocoWorkspaceSummary
     toolErrors,
     lastToolName,
   };
+};
+
+export const loadCodeAgentWorkspaceDiff = async (
+  roomId: string,
+  options: { signal?: AbortSignal } = {}
+): Promise<CodeAgentWorkspaceDiff> => {
+  if (options.signal?.aborted) {
+    throw new Error('Workspace diff request aborted');
+  }
+
+  const { requestCodeWorkspaceDiff } = await import('./socket');
+  const data = await requestCodeWorkspaceDiff(roomId);
+  if (options.signal?.aborted) {
+    throw new Error('Workspace diff request aborted');
+  }
+
+  return validateWorkspaceDiff(data);
 };
 
 export const loadCodeAgentWorkspaceSnapshot = async (

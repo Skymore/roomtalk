@@ -1,6 +1,6 @@
 import { createCocoAccessControl } from '../services/cocoAccessControl';
 import { CodeWorkspaceAssetError } from '../services/codeWorkspaceAssetAccess';
-import { CocoSandboxHandle, CocoWorkspaceChanges, CocoWorkspaceEntry, CocoWorkspaceFile } from '../services/cocoSandboxService';
+import { CocoSandboxHandle, CocoWorkspaceChanges, CocoWorkspaceDiff, CocoWorkspaceEntry, CocoWorkspaceFile } from '../services/cocoSandboxService';
 import { buildCodeAgentWorkspaceSnapshot, CodeAgentWorkspaceSnapshot } from '../services/codeAgentWorkspace';
 import { Room } from '../types';
 import { hasRoomAccess } from './roomAccess';
@@ -22,6 +22,12 @@ type WorkspaceEntriesAck = {
 type WorkspaceFileAck = {
   success: boolean;
   file?: CocoWorkspaceFile;
+  error?: string;
+};
+
+type WorkspaceDiffAck = {
+  success: boolean;
+  diff?: CocoWorkspaceDiff;
   error?: string;
 };
 
@@ -52,6 +58,7 @@ const parsePositiveIntegerEnv = (name: string, fallback: number) => {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 };
 const WORKSPACE_FILE_MAX_BYTES = parsePositiveIntegerEnv('COCO_WORKSPACE_FILE_READ_MAX_BYTES', 10 * 1024 * 1024);
+const WORKSPACE_DIFF_MAX_BYTES = parsePositiveIntegerEnv('COCO_WORKSPACE_DIFF_READ_MAX_BYTES', 10 * 1024 * 1024);
 const unavailableWorkspaceChanges: CocoWorkspaceChanges = {
   available: false,
   changedFiles: [],
@@ -294,6 +301,39 @@ export function registerCodeAgentWorkspaceHandlers({
     } catch (error) {
       socketLogger.error('Failed to read code workspace file', { error, clientId, roomId, path, socketId: socket.id });
       callback?.({ success: false, error: 'Failed to read workspace file' });
+    }
+  });
+
+  socket.on('read_code_workspace_diff', async (payload: unknown, callback?: (response: WorkspaceDiffAck) => void) => {
+    const roomId = parseRoomId(payload);
+    let clientId: string | null = null;
+
+    try {
+      const access = await loadAuthorizedCocoRoom(roomId, 'read code workspace diff');
+      clientId = access.clientId ?? null;
+      if (!access.success) {
+        callback?.({ success: false, error: access.error });
+        return;
+      }
+      if (!cocoSandboxService?.getWorkspaceDiff) {
+        callback?.({ success: false, error: 'Workspace diff viewing is unavailable' });
+        return;
+      }
+      const workspace = await connectReadyWorkspace(access.room);
+      if (!workspace.success) {
+        callback?.({ success: false, error: workspace.error });
+        return;
+      }
+
+      callback?.({
+        success: true,
+        diff: await cocoSandboxService.getWorkspaceDiff(workspace.handle, {
+          maxBytes: WORKSPACE_DIFF_MAX_BYTES,
+        }),
+      });
+    } catch (error) {
+      socketLogger.error('Failed to read code workspace diff', { error, clientId, roomId, socketId: socket.id });
+      callback?.({ success: false, error: 'Failed to read workspace diff' });
     }
   });
 

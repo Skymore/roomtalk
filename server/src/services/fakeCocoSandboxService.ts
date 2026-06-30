@@ -5,12 +5,14 @@ import {
   CocoSandboxService,
   CocoWorkspaceChanges,
   CocoWorkspaceAsset,
+  CocoWorkspaceDiff,
   CocoWorkspaceEntry,
   CocoWorkspaceFile,
   CreateCocoSandboxInput,
   ListCocoWorkspaceEntriesOptions,
   RenameCocoWorkspaceEntryInput,
   ReadCocoWorkspaceAssetOptions,
+  ReadCocoWorkspaceDiffOptions,
   ReadCocoWorkspaceFileOptions,
   StartCocoRunnerInput,
   WriteCocoWorkspaceFileInput,
@@ -30,6 +32,7 @@ export class FakeCocoSandboxService implements CocoSandboxService {
   private readonly workspaceFileContentsBySandboxId = new Map<string, Map<string, string>>();
   private readonly workspaceFileBytesBySandboxId = new Map<string, Map<string, Buffer>>();
   private readonly workspaceChangesBySandboxId = new Map<string, CocoWorkspaceChanges>();
+  private readonly workspaceDiffBySandboxId = new Map<string, string>();
 
   constructor(private readonly now: () => Date = () => new Date()) {}
 
@@ -109,6 +112,30 @@ export class FakeCocoSandboxService implements CocoSandboxService {
     };
   }
 
+  setWorkspaceDiff(sandboxId: string, patch: string) {
+    this.workspaceDiffBySandboxId.set(sandboxId, patch);
+  }
+
+  async getWorkspaceDiff(
+    handle: CocoSandboxHandle,
+    options: ReadCocoWorkspaceDiffOptions = {}
+  ): Promise<CocoWorkspaceDiff> {
+    this.consumeFailure('connect');
+    if (!this.sandboxes.has(handle.id)) {
+      throw new Error(`Fake Coco sandbox not found: ${handle.id}`);
+    }
+    const patch = this.workspaceDiffBySandboxId.get(handle.id) || '';
+    const buffer = Buffer.from(patch, 'utf8');
+    const maxBytes = options.maxBytes ?? 10 * 1024 * 1024;
+    const truncated = buffer.byteLength > maxBytes;
+    return {
+      available: true,
+      patch: (truncated ? buffer.subarray(0, maxBytes) : buffer).toString('utf8'),
+      byteSize: buffer.byteLength,
+      truncated,
+    };
+  }
+
   setWorkspaceFiles(sandboxId: string, files: string[]) {
     this.setWorkspaceEntries(sandboxId, files.map(filePath => ({
       path: normalizeFakeWorkspacePath(filePath),
@@ -166,7 +193,7 @@ export class FakeCocoSandboxService implements CocoSandboxService {
     const normalizedPath = normalizeFakeWorkspacePath(path);
     const content = this.workspaceFileContentsBySandboxId.get(handle.id)?.get(normalizedPath) || '';
     const buffer = Buffer.from(content, 'utf8');
-    const maxBytes = options.maxBytes ?? 1024 * 1024;
+    const maxBytes = options.maxBytes ?? 10 * 1024 * 1024;
     const truncated = buffer.byteLength > maxBytes;
     return {
       path: normalizedPath,
@@ -331,6 +358,7 @@ export class FakeCocoSandboxService implements CocoSandboxService {
     this.workspaceFileContentsBySandboxId.delete(sandboxId);
     this.workspaceFileBytesBySandboxId.delete(sandboxId);
     this.workspaceChangesBySandboxId.delete(sandboxId);
+    this.workspaceDiffBySandboxId.delete(sandboxId);
   }
 
   async countActiveSandboxes(): Promise<number> {

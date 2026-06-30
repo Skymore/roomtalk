@@ -73,6 +73,7 @@ const createHarness = (options: {
   messages?: Message[];
   workspaceEntries?: CocoWorkspaceEntry[];
   workspaceChanges?: CocoWorkspaceChanges;
+  workspaceDiffPatch?: string;
   workspaceFileContent?: string;
   cocoAccess?: ReturnType<typeof createCocoAccessControl>;
   codeWorkspaceAssetAccess?: CodeWorkspaceAssetAccess;
@@ -84,6 +85,7 @@ const createHarness = (options: {
   const messages = options.messages || [];
   const listWorkspaceEntriesCalls: Array<{ sandboxId: string; maxDepth?: number; maxEntries?: number }> = [];
   const getWorkspaceChangesCalls: Array<{ sandboxId: string }> = [];
+  const getWorkspaceDiffCalls: Array<{ sandboxId: string; maxBytes?: number }> = [];
   const readWorkspaceFileCalls: Array<{ sandboxId: string; path: string; maxBytes?: number }> = [];
   const writeWorkspaceFileCalls: Array<{ sandboxId: string; path: string; content: string; encoding?: 'utf-8' | 'base64' }> = [];
   const createWorkspaceDirectoryCalls: Array<{ sandboxId: string; path: string }> = [];
@@ -143,6 +145,16 @@ const createHarness = (options: {
           available: false,
           changedFiles: [],
           diffSummary: null,
+        };
+      },
+      getWorkspaceDiff: async (handle, diffOptions) => {
+        getWorkspaceDiffCalls.push({ sandboxId: handle.id, maxBytes: diffOptions?.maxBytes });
+        const patch = options.workspaceDiffPatch || '';
+        return {
+          available: true,
+          patch,
+          byteSize: Buffer.byteLength(patch),
+          truncated: false,
         };
       },
       listWorkspaceEntries: async (handle, listOptions) => {
@@ -208,6 +220,7 @@ const createHarness = (options: {
   return {
     socket,
     getWorkspaceChangesCalls,
+    getWorkspaceDiffCalls,
     listWorkspaceEntriesCalls,
     readWorkspaceFileCalls,
     writeWorkspaceFileCalls,
@@ -326,6 +339,33 @@ describe('code-agent workspace socket handlers', () => {
       encoding: 'utf-8',
     });
     assert.deepEqual(readWorkspaceFileCalls, [{ sandboxId: 'sandbox-1', path: 'src/App.tsx', maxBytes: 10485760 }]);
+  });
+
+  it('reads Coco workspace diffs through the registered socket session', async () => {
+    const patch = [
+      'diff --git a/src/App.tsx b/src/App.tsx',
+      'index 1111111..2222222 100644',
+      '--- a/src/App.tsx',
+      '+++ b/src/App.tsx',
+      '@@ -1 +1 @@',
+      '-export default {}',
+      '+export default function App() {}',
+      '',
+    ].join('\n');
+    const { socket, getWorkspaceDiffCalls } = createHarness({
+      workspaceDiffPatch: patch,
+    });
+
+    const response = await socket.invoke<any>('read_code_workspace_diff', { roomId: 'room-1' });
+
+    assert.equal(response.success, true);
+    assert.deepEqual(response.diff, {
+      available: true,
+      patch,
+      byteSize: Buffer.byteLength(patch),
+      truncated: false,
+    });
+    assert.deepEqual(getWorkspaceDiffCalls, [{ sandboxId: 'sandbox-1', maxBytes: 10485760 }]);
   });
 
   it('creates T3-style workspace asset URLs through the socket control plane', async () => {

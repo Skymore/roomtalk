@@ -49,6 +49,10 @@ export interface ReadCocoWorkspaceFileOptions {
   maxBytes?: number;
 }
 
+export interface ReadCocoWorkspaceDiffOptions {
+  maxBytes?: number;
+}
+
 export interface ReadCocoWorkspaceAssetOptions {
   maxBytes?: number;
 }
@@ -99,12 +103,20 @@ export interface CocoWorkspaceChanges {
   diffSummary: CocoWorkspaceDiffSummary | null;
 }
 
+export interface CocoWorkspaceDiff {
+  available: boolean;
+  patch: string;
+  byteSize: number;
+  truncated: boolean;
+}
+
 export interface CocoSandboxService {
   create(input: CreateCocoSandboxInput): Promise<CocoSandboxHandle>;
   connect(sandboxId: string): Promise<CocoSandboxHandle>;
   initializeWorkspaceVersionControl?(handle: CocoSandboxHandle): Promise<void>;
   startRunner(input: StartCocoRunnerInput): Promise<CocoRunnerProcess>;
   getWorkspaceChanges?(handle: CocoSandboxHandle): Promise<CocoWorkspaceChanges>;
+  getWorkspaceDiff?(handle: CocoSandboxHandle, options?: ReadCocoWorkspaceDiffOptions): Promise<CocoWorkspaceDiff>;
   listWorkspaceEntries?(handle: CocoSandboxHandle, options?: ListCocoWorkspaceEntriesOptions): Promise<CocoWorkspaceEntry[]>;
   readWorkspaceFile?(handle: CocoSandboxHandle, path: string, options?: ReadCocoWorkspaceFileOptions): Promise<CocoWorkspaceFile>;
   readWorkspaceAsset?(handle: CocoSandboxHandle, path: string, options?: ReadCocoWorkspaceAssetOptions): Promise<CocoWorkspaceAsset>;
