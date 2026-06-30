@@ -53,6 +53,7 @@ type WorkspaceMutationAck = {
 
 const WORKSPACE_ENTRY_LIMIT = 25000;
 const WORKSPACE_ENTRY_DEPTH = 24;
+const WORKSPACE_ENTRY_SEARCH_LIMIT = 200;
 const parsePositiveIntegerEnv = (name: string, fallback: number) => {
   const value = Number.parseInt(process.env[name] || '', 10);
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -115,6 +116,17 @@ const parseWorkspaceBoolean = (payload: unknown, key: string): boolean => {
     return false;
   }
   return (payload as Record<string, unknown>)[key] === true;
+};
+
+const parseWorkspacePositiveInteger = (payload: unknown, key: string, fallback: number, max: number): number => {
+  if (!payload || typeof payload !== 'object') {
+    return fallback;
+  }
+  const value = Number.parseInt(String((payload as Record<string, unknown>)[key] ?? ''), 10);
+  if (!Number.isFinite(value) || value <= 0) {
+    return fallback;
+  }
+  return Math.min(max, value);
 };
 
 export function registerCodeAgentWorkspaceHandlers({
@@ -270,6 +282,49 @@ export function registerCodeAgentWorkspaceHandlers({
     } catch (error) {
       socketLogger.error('Failed to list code workspace entries', { error, clientId, roomId, socketId: socket.id });
       callback?.({ success: false, error: 'Failed to load workspace files' });
+    }
+  });
+
+  socket.on('search_code_workspace_entries', async (payload: unknown, callback?: (response: WorkspaceEntriesAck) => void) => {
+    const roomId = parseRoomId(payload);
+    const query = parseWorkspaceString(payload, 'query') || '';
+    const limit = parseWorkspacePositiveInteger(payload, 'limit', WORKSPACE_ENTRY_SEARCH_LIMIT, WORKSPACE_ENTRY_SEARCH_LIMIT);
+    let clientId: string | null = null;
+
+    try {
+      const access = await loadAuthorizedCocoRoom(roomId, 'search code workspace');
+      clientId = access.clientId ?? null;
+      if (!access.success) {
+        callback?.({ success: false, error: access.error });
+        return;
+      }
+      if (!query.trim()) {
+        callback?.({ success: true, entries: [], truncated: false });
+        return;
+      }
+      if (!cocoSandboxService?.searchWorkspaceEntries) {
+        callback?.({ success: false, error: 'Workspace file search is unavailable' });
+        return;
+      }
+      const workspace = await connectReadyWorkspace(access.room);
+      if (!workspace.success) {
+        callback?.({ success: false, error: workspace.error });
+        return;
+      }
+
+      const entries = await cocoSandboxService.searchWorkspaceEntries(workspace.handle, {
+        query,
+        maxDepth: WORKSPACE_ENTRY_DEPTH,
+        maxEntries: limit + 1,
+      });
+      callback?.({
+        success: true,
+        entries: entries.slice(0, limit),
+        truncated: entries.length > limit,
+      });
+    } catch (error) {
+      socketLogger.error('Failed to search code workspace entries', { error, clientId, roomId, socketId: socket.id });
+      callback?.({ success: false, error: 'Failed to search workspace files' });
     }
   });
 

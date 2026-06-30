@@ -29,7 +29,10 @@ import { beginHorizontalResize } from '../utils/horizontalResize';
 import {
   CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
   CODE_AGENT_FILE_PANEL_COLLAPSED_WIDTH,
+  CODE_AGENT_FILE_PANEL_WIDTH_CHANGE_EVENT,
   CODE_AGENT_FILE_PANEL_PREFERRED_MIN_WIDTH,
+  type CodeAgentFilePanelWidthChangeDetail,
+  clampCodeAgentFilePanelWidthForSidebarResize,
   getSidebarMaxWidthForCodeAgentShell,
 } from '../utils/codeAgentPanelLayout';
 
@@ -71,7 +74,7 @@ const readCodeAgentFilePanelWidth = (workspaceLayout: HTMLElement): number => {
   const measuredWidth = filePanel?.getBoundingClientRect().width ?? 0;
   const inlineWidth = readCssPixelValue(workspaceLayout.style.getPropertyValue('--code-agent-files-width'));
   const computedWidth = readCssPixelValue(window.getComputedStyle(workspaceLayout).getPropertyValue('--code-agent-files-width'));
-  return Math.max(measuredWidth, inlineWidth, computedWidth);
+  return inlineWidth || computedWidth || measuredWidth;
 };
 
 const isCodeAgentFilePanelVisible = (workspaceLayout: HTMLElement): boolean => {
@@ -84,6 +87,10 @@ const isCodeAgentFilePanelVisible = (workspaceLayout: HTMLElement): boolean => {
   }
   return window.getComputedStyle(filePanel).display !== 'none';
 };
+
+const shouldReserveCodeAgentFilePanelFallback = (): boolean => (
+  typeof window.matchMedia !== 'function' || window.matchMedia('(min-width: 1024px)').matches
+);
 
 const getCodeAgentFilePanelSidebarReserve = (workspaceLayout: HTMLElement): number => {
   if (!isCodeAgentFilePanelVisible(workspaceLayout)) {
@@ -103,14 +110,21 @@ const getDesktopShellWidth = (sidebar?: HTMLElement): number => {
   return shellRect && shellRect.width > 0 ? shellRect.width : window.innerWidth;
 };
 
-const getSidebarResizeBounds = (sidebar?: HTMLElement) => {
+const getSidebarResizeBounds = (sidebar?: HTMLElement, reserveCodeAgentLayout = false) => {
   const shellWidth = getDesktopShellWidth(sidebar);
   let max = shellWidth - DESKTOP_MAIN_MIN_WIDTH;
   const workspaceLayout = document.querySelector<HTMLElement>('[data-code-agent-workspace-layout="true"]');
-  if (workspaceLayout) {
+  if (workspaceLayout && isCodeAgentFilePanelVisible(workspaceLayout)) {
     const codeAgentMax = getSidebarMaxWidthForCodeAgentShell(
       shellWidth,
       getCodeAgentFilePanelSidebarReserve(workspaceLayout),
+      CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
+    );
+    max = Math.min(max, codeAgentMax);
+  } else if (reserveCodeAgentLayout && shouldReserveCodeAgentFilePanelFallback()) {
+    const codeAgentMax = getSidebarMaxWidthForCodeAgentShell(
+      shellWidth,
+      CODE_AGENT_FILE_PANEL_PREFERRED_MIN_WIDTH,
       CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
     );
     max = Math.min(max, codeAgentMax);
@@ -119,6 +133,47 @@ const getSidebarResizeBounds = (sidebar?: HTMLElement) => {
     min: DESKTOP_SIDEBAR_MIN_WIDTH,
     max: Math.max(DESKTOP_SIDEBAR_MIN_WIDTH, Math.floor(max)),
   };
+};
+
+interface SyncedCodeAgentFilePanelWidth {
+  layout: HTMLElement;
+  width: number;
+}
+
+const clampCodeAgentFilePanelDuringSidebarResize = (
+  sidebar: HTMLElement,
+  sidebarWidth: number,
+): SyncedCodeAgentFilePanelWidth | null => {
+  const workspaceLayout = document.querySelector<HTMLElement>('[data-code-agent-workspace-layout="true"]');
+  if (!workspaceLayout || workspaceLayout.dataset.codeAgentFilesCollapsed === 'true') {
+    return null;
+  }
+  if (!isCodeAgentFilePanelVisible(workspaceLayout)) {
+    return null;
+  }
+  const currentFilePanelWidth = readCodeAgentFilePanelWidth(workspaceLayout);
+  if (currentFilePanelWidth <= 0) {
+    return null;
+  }
+  const nextFilePanelWidth = clampCodeAgentFilePanelWidthForSidebarResize(
+    currentFilePanelWidth,
+    getDesktopShellWidth(sidebar),
+    sidebarWidth,
+  );
+  if (nextFilePanelWidth !== Math.round(currentFilePanelWidth)) {
+    workspaceLayout.style.setProperty('--code-agent-files-width', `${nextFilePanelWidth}px`);
+  }
+  return {
+    layout: workspaceLayout,
+    width: nextFilePanelWidth,
+  };
+};
+
+const dispatchCodeAgentFilePanelWidthChange = ({ layout, width }: SyncedCodeAgentFilePanelWidth) => {
+  layout.dispatchEvent(new CustomEvent<CodeAgentFilePanelWidthChangeDetail>(
+    CODE_AGENT_FILE_PANEL_WIDTH_CHANGE_EVENT,
+    { detail: { width } },
+  ));
 };
 
 const clampSidebarWidth = (value: number) => {
@@ -390,6 +445,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
   const [roomToDelete, setRoomToDelete] = useState<Room | null>(null);
   const [roomToRename, setRoomToRename] = useState<Room | null>(null);
   const currentLanguage = getLanguageOption(i18n.language);
+  const reserveCodeAgentLayoutForSidebar = currentRoom?.type === 'coco';
 
   React.useEffect(() => {
     sidebarWidthRef.current = sidebarWidth;
@@ -435,19 +491,24 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
       initialWidth: startWidth,
       direction: 1,
       captureTarget: event.currentTarget,
-      getBounds: () => getSidebarResizeBounds(sidebar),
+      getBounds: () => getSidebarResizeBounds(sidebar, reserveCodeAgentLayoutForSidebar),
       onResize: (width) => {
         sidebar.style.setProperty('--desktop-sidebar-width', `${width}px`);
+        clampCodeAgentFilePanelDuringSidebarResize(sidebar, width);
       },
       onFinish: (width) => {
+        const syncedFilePanel = clampCodeAgentFilePanelDuringSidebarResize(sidebar, width);
         sidebar.style.transition = '';
         sidebarWidthRef.current = width;
         setSidebarWidth(width);
         persistSidebarWidth(width);
+        if (syncedFilePanel) {
+          dispatchCodeAgentFilePanelWidthChange(syncedFilePanel);
+        }
         sidebarResizeCleanupRef.current = null;
       },
     });
-  }, [isCollapsed, persistSidebarWidth]);
+  }, [isCollapsed, persistSidebarWidth, reserveCodeAgentLayoutForSidebar]);
 
   const handleJoinRoom = () => {
     const trimmedRoomId = joinRoomId.trim();
@@ -531,7 +592,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
         <button
           type="button"
           aria-label={t('resizeSidebar')}
-          className="absolute inset-y-0 -right-1 z-40 w-2 cursor-col-resize touch-none border-x border-transparent transition-colors hover:border-[#c96442]/30 hover:bg-[#c96442]/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442]"
+          className="absolute inset-y-0 -right-3 z-40 w-6 cursor-col-resize touch-none border-x border-transparent transition-colors hover:border-[#c96442]/30 hover:bg-[#c96442]/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442]"
           onPointerDown={handleSidebarResizeStart}
         />
         <div

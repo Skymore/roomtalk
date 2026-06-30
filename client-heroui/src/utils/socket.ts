@@ -1035,6 +1035,23 @@ export const requestCodeWorkspaceEntries = (roomId: string): Promise<{ entries: 
   }))
 );
 
+export const requestCodeWorkspaceEntrySearch = (
+  roomId: string,
+  query: string,
+  limit = 200,
+): Promise<{ entries: unknown[]; truncated: boolean }> => (
+  emitWithAck<CodeWorkspaceEntriesAckResponse>(
+    'search_code_workspace_entries',
+    { roomId, query, limit },
+    'Timed out while searching workspace files',
+    'Failed to search workspace files',
+    { retryOnSocketReconnect: true },
+  ).then((response) => ({
+    entries: response.entries || [],
+    truncated: Boolean(response.truncated),
+  }))
+);
+
 export const requestCodeWorkspaceFile = (roomId: string, path: string): Promise<unknown> => (
   emitWithAck<CodeWorkspaceFileAckResponse>(
     'read_code_workspace_file',

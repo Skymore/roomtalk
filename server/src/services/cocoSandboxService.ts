@@ -45,6 +45,10 @@ export interface ListCocoWorkspaceEntriesOptions {
   maxEntries?: number;
 }
 
+export interface SearchCocoWorkspaceEntriesOptions extends ListCocoWorkspaceEntriesOptions {
+  query: string;
+}
+
 export interface ReadCocoWorkspaceFileOptions {
   maxBytes?: number;
 }
@@ -119,6 +123,7 @@ export interface CocoSandboxService {
   getWorkspaceChanges?(handle: CocoSandboxHandle): Promise<CocoWorkspaceChanges>;
   getWorkspaceDiff?(handle: CocoSandboxHandle, options?: ReadCocoWorkspaceDiffOptions): Promise<CocoWorkspaceDiff>;
   listWorkspaceEntries?(handle: CocoSandboxHandle, options?: ListCocoWorkspaceEntriesOptions): Promise<CocoWorkspaceEntry[]>;
+  searchWorkspaceEntries?(handle: CocoSandboxHandle, options: SearchCocoWorkspaceEntriesOptions): Promise<CocoWorkspaceEntry[]>;
   readWorkspaceFile?(handle: CocoSandboxHandle, path: string, options?: ReadCocoWorkspaceFileOptions): Promise<CocoWorkspaceFile>;
   readWorkspaceAsset?(handle: CocoSandboxHandle, path: string, options?: ReadCocoWorkspaceAssetOptions): Promise<CocoWorkspaceAsset>;
   writeWorkspaceFile?(handle: CocoSandboxHandle, input: WriteCocoWorkspaceFileInput): Promise<CocoWorkspaceEntry>;
@@ -129,3 +134,89 @@ export interface CocoSandboxService {
   countActiveSandboxes?(): Promise<number | undefined>;
   countActiveSandboxesForUser?(creatorId: string): Promise<number | undefined>;
 }
+
+const normalizeWorkspaceSearchQuery = (query: string): string => (
+  query.trim().toLowerCase().replace(/^[@./]+/, '')
+);
+
+const workspaceEntryBasename = (path: string): string => (
+  path.split('/').pop() || path
+);
+
+const fuzzySubsequenceScore = (value: string, query: string): number | null => {
+  if (!query) {
+    return 0;
+  }
+  let valueIndex = 0;
+  let score = 0;
+  for (const queryChar of query) {
+    const nextIndex = value.indexOf(queryChar, valueIndex);
+    if (nextIndex < 0) {
+      return null;
+    }
+    score += nextIndex - valueIndex;
+    valueIndex = nextIndex + 1;
+  }
+  return score + Math.max(0, value.length - query.length);
+};
+
+const workspaceEntrySearchScore = (entry: CocoWorkspaceEntry, query: string): number | null => {
+  if (!query) {
+    return 0;
+  }
+  const path = entry.path.toLowerCase();
+  const basename = workspaceEntryBasename(path);
+  if (basename === query) {
+    return 0;
+  }
+  const basenameIndex = basename.indexOf(query);
+  if (basenameIndex >= 0) {
+    return 100 + basenameIndex;
+  }
+  const pathIndex = path.indexOf(query);
+  if (pathIndex >= 0) {
+    return 200 + pathIndex;
+  }
+  const basenameFuzzy = fuzzySubsequenceScore(basename, query);
+  if (basenameFuzzy !== null) {
+    return 300 + basenameFuzzy;
+  }
+  const pathFuzzy = fuzzySubsequenceScore(path, query);
+  if (pathFuzzy !== null) {
+    return 400 + pathFuzzy;
+  }
+  return null;
+};
+
+const compareWorkspaceEntries = (left: CocoWorkspaceEntry, right: CocoWorkspaceEntry): number => {
+  if (left.type !== right.type) {
+    return left.type === 'directory' ? -1 : 1;
+  }
+  return left.path.localeCompare(right.path, undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  });
+};
+
+export const searchCocoWorkspaceEntries = (
+  entries: readonly CocoWorkspaceEntry[],
+  query: string,
+  maxEntries: number,
+): CocoWorkspaceEntry[] => {
+  const normalizedQuery = normalizeWorkspaceSearchQuery(query);
+  const uniqueEntries = new Map<string, CocoWorkspaceEntry>();
+  for (const entry of entries) {
+    if (entry.path.trim()) {
+      uniqueEntries.set(entry.path, entry);
+    }
+  }
+
+  return [...uniqueEntries.values()]
+    .map((entry) => ({ entry, score: workspaceEntrySearchScore(entry, normalizedQuery) }))
+    .filter((candidate): candidate is { entry: CocoWorkspaceEntry; score: number } => candidate.score !== null)
+    .sort((left, right) => (
+      left.score - right.score || compareWorkspaceEntries(left.entry, right.entry)
+    ))
+    .map((candidate) => candidate.entry)
+    .slice(0, Math.max(0, maxEntries));
+};

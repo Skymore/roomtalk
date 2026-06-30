@@ -9,6 +9,7 @@ function pointerEvent(type: string, values: Partial<PointerEvent>): PointerEvent
     pointerId: { value: values.pointerId ?? 1 },
     clientX: { value: values.clientX ?? 0 },
     buttons: { value: values.buttons ?? 0 },
+    pointerType: { value: values.pointerType ?? 'mouse' },
   });
   return event;
 }
@@ -116,6 +117,80 @@ describe('beginHorizontalResize', () => {
     expect(document.body.style.cursor).toBe('');
   });
 
+  it('catches mouseup on the captured resize handle', () => {
+    const handle = document.createElement('button');
+    const onFinish = vi.fn();
+    beginHorizontalResize({
+      pointerId: 22,
+      startX: 0,
+      initialWidth: 360,
+      direction: 1,
+      captureTarget: handle,
+      getBounds: () => ({ min: 240, max: 1200 }),
+      onResize: vi.fn(),
+      onFinish,
+    });
+
+    handle.dispatchEvent(mouseEvent('mouseup', { button: 0 }));
+
+    expect(onFinish).toHaveBeenCalledWith(360);
+    expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.cursor).toBe('');
+  });
+
+  it('finishes when a released pointer leaves or re-enters the resize surface', () => {
+    const onFinish = vi.fn();
+    beginHorizontalResize({
+      pointerId: 23,
+      startX: 100,
+      initialWidth: 420,
+      direction: 1,
+      captureTarget: document.createElement('button'),
+      getBounds: () => ({ min: 240, max: 1200 }),
+      onResize: vi.fn(),
+      onFinish,
+    });
+
+    window.dispatchEvent(pointerEvent('pointerout', {
+      pointerId: 23,
+      pointerType: 'mouse',
+      clientX: 700,
+      buttons: 0,
+    }));
+
+    expect(onFinish).toHaveBeenCalledWith(420);
+    expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.cursor).toBe('');
+  });
+
+  it('finishes on a released mouse pointer even when pointer capture reports a stale id', () => {
+    const onFinish = vi.fn();
+    beginHorizontalResize({
+      pointerId: 21,
+      startX: 0,
+      initialWidth: 360,
+      direction: 1,
+      captureTarget: document.createElement('button'),
+      getBounds: () => ({ min: 240, max: 1200 }),
+      onResize: vi.fn(),
+      onFinish,
+    });
+
+    window.dispatchEvent(pointerEvent('pointerup', {
+      pointerId: 99,
+      pointerType: 'mouse',
+      clientX: 900,
+      buttons: 0,
+    }));
+
+    expect(onFinish).toHaveBeenCalledWith(360);
+    expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.cursor).toBe('');
+  });
+
   it('covers iframe-heavy content while resizing and removes the guard on finish', () => {
     const onFinish = vi.fn();
     beginHorizontalResize({
@@ -134,6 +209,49 @@ describe('beginHorizontalResize', () => {
     expect(guard?.style.cursor).toBe('col-resize');
 
     guard?.dispatchEvent(mouseEvent('mouseup', { button: 0 }));
+
+    expect(onFinish).toHaveBeenCalledWith(360);
+    expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.cursor).toBe('');
+  });
+
+  it('catches pointer release directly on the resize guard', () => {
+    const onFinish = vi.fn();
+    beginHorizontalResize({
+      pointerId: 15,
+      startX: 0,
+      initialWidth: 360,
+      direction: 1,
+      captureTarget: document.createElement('button'),
+      getBounds: () => ({ min: 240, max: 1200 }),
+      onResize: vi.fn(),
+      onFinish,
+    });
+
+    const guard = document.querySelector<HTMLElement>('[data-horizontal-resize-guard="true"]');
+    guard?.dispatchEvent(pointerEvent('pointerup', { pointerId: 15, clientX: 900, buttons: 0 }));
+
+    expect(onFinish).toHaveBeenCalledWith(360);
+    expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.cursor).toBe('');
+  });
+
+  it('cancels dragging on context menu gestures', () => {
+    const onFinish = vi.fn();
+    beginHorizontalResize({
+      pointerId: 16,
+      startX: 0,
+      initialWidth: 360,
+      direction: 1,
+      captureTarget: document.createElement('button'),
+      getBounds: () => ({ min: 240, max: 1200 }),
+      onResize: vi.fn(),
+      onFinish,
+    });
+
+    window.dispatchEvent(mouseEvent('contextmenu', { button: 2 }));
 
     expect(onFinish).toHaveBeenCalledWith(360);
     expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
@@ -177,6 +295,75 @@ describe('beginHorizontalResize', () => {
     window.dispatchEvent(mouseEvent('mousemove', { clientX: 700, buttons: 0 }));
 
     expect(onFinish).toHaveBeenCalledWith(420);
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.cursor).toBe('');
+  });
+
+  it('finishes on mouseleave fallback after the pointer is released outside the viewport', () => {
+    const onFinish = vi.fn();
+    beginHorizontalResize({
+      pointerId: 17,
+      startX: 100,
+      initialWidth: 420,
+      direction: 1,
+      captureTarget: document.createElement('button'),
+      getBounds: () => ({ min: 240, max: 1200 }),
+      onResize: vi.fn(),
+      onFinish,
+    });
+
+    document.dispatchEvent(mouseEvent('mouseleave', { buttons: 0 }));
+
+    expect(onFinish).toHaveBeenCalledWith(420);
+    expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.cursor).toBe('');
+  });
+
+  it('finishes when a released pointer re-enters the window after an outside release', () => {
+    const onFinish = vi.fn();
+    beginHorizontalResize({
+      pointerId: 18,
+      startX: 100,
+      initialWidth: 420,
+      direction: 1,
+      captureTarget: document.createElement('button'),
+      getBounds: () => ({ min: 240, max: 1200 }),
+      onResize: vi.fn(),
+      onFinish,
+    });
+
+    window.dispatchEvent(pointerEvent('pointerover', {
+      pointerId: 99,
+      pointerType: 'mouse',
+      clientX: 700,
+      buttons: 0,
+    }));
+
+    expect(onFinish).toHaveBeenCalledWith(420);
+    expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.cursor).toBe('');
+  });
+
+  it('finishes when the resize guard sees a released mouse re-enter', () => {
+    const onFinish = vi.fn();
+    beginHorizontalResize({
+      pointerId: 19,
+      startX: 100,
+      initialWidth: 420,
+      direction: 1,
+      captureTarget: document.createElement('button'),
+      getBounds: () => ({ min: 240, max: 1200 }),
+      onResize: vi.fn(),
+      onFinish,
+    });
+
+    const guard = document.querySelector<HTMLElement>('[data-horizontal-resize-guard="true"]');
+    guard?.dispatchEvent(mouseEvent('mouseover', { clientX: 700, buttons: 0 }));
+
+    expect(onFinish).toHaveBeenCalledWith(420);
+    expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
     expect(document.body.style.userSelect).toBe('');
     expect(document.body.style.cursor).toBe('');
   });

@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { parsePatchFiles, type CodeViewDiffItem, type FileDiffMetadata } from '@pierre/diffs';
-import { CodeView } from '@pierre/diffs/react';
+import { CodeView, type CodeViewHandle } from '@pierre/diffs/react';
 import { ChevronDown, ChevronRight, Columns2, LoaderCircle, Pilcrow, Rows3, WrapText } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { loadCodeAgentWorkspaceDiff, type CodeAgentWorkspaceDiff } from '../utils/cocoWorkspace';
@@ -9,6 +9,9 @@ interface CodeAgentWorkspaceDiffViewerProps {
   roomId: string;
   enabled: boolean;
   refreshKey?: string;
+  onOpenFile?: (path: string) => void;
+  selectedFilePath?: string | null;
+  selectedFileRevealRequestId?: number;
 }
 
 function readResolvedTheme() {
@@ -35,6 +38,21 @@ const DIFF_RENDER_MODE_STORAGE_KEY = 'roomtalk.codeWorkspace.diffRenderMode';
 const DIFF_IGNORE_WHITESPACE_STORAGE_KEY = 'roomtalk.codeWorkspace.diffIgnoreWhitespace';
 type DiffRenderMode = 'stacked' | 'split';
 const EMPTY_COLLAPSED_DIFF_FILE_KEYS: ReadonlySet<string> = new Set();
+const FNV_OFFSET_BASIS_32 = 0x811c9dc5;
+const FNV_PRIME_32 = 0x01000193;
+const SECONDARY_HASH_SEED = 0x9e3779b9;
+const SECONDARY_HASH_MULTIPLIER = 0x85ebca6b;
+
+type RenderablePatch =
+  | {
+    kind: 'files';
+    files: FileDiffMetadata[];
+  }
+  | {
+    kind: 'raw';
+    text: string;
+    reason: string;
+  };
 
 interface CollapsedDiffFilesState {
   scopeKey: string | null;
@@ -74,9 +92,109 @@ function readInitialDiffIgnoreWhitespace() {
   }
 }
 
+function fnv1a32(
+  input: string,
+  seed = FNV_OFFSET_BASIS_32,
+  multiplier = FNV_PRIME_32,
+): number {
+  let hash = seed >>> 0;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, multiplier) >>> 0;
+  }
+  return hash >>> 0;
+}
+
+function buildPatchCacheKey(patch: string, scope = 'diff-panel'): string {
+  const normalizedPatch = patch.trim();
+  const primary = fnv1a32(normalizedPatch, FNV_OFFSET_BASIS_32, FNV_PRIME_32).toString(36);
+  const secondary = fnv1a32(
+    normalizedPatch,
+    SECONDARY_HASH_SEED,
+    SECONDARY_HASH_MULTIPLIER,
+  ).toString(36);
+  return `${scope}:${normalizedPatch.length}:${primary}:${secondary}`;
+}
+
+function getRenderablePatch(patch: string | undefined, cacheScope = 'diff-panel'): RenderablePatch | null {
+  if (!patch) {
+    return null;
+  }
+  const normalizedPatch = patch.trim();
+  if (normalizedPatch.length === 0) {
+    return null;
+  }
+
+  try {
+    const parsedPatches = parsePatchFiles(
+      normalizedPatch,
+      buildPatchCacheKey(normalizedPatch, cacheScope),
+    );
+    const files = parsedPatches.flatMap((parsedPatch) => parsedPatch.files);
+    if (files.length > 0) {
+      return { kind: 'files', files };
+    }
+    return {
+      kind: 'raw',
+      text: normalizedPatch,
+      reason: 'Unsupported diff format. Showing raw patch.',
+    };
+  } catch {
+    return {
+      kind: 'raw',
+      text: normalizedPatch,
+      reason: 'Failed to parse patch. Showing raw patch.',
+    };
+  }
+}
+
 function resolveDiffFilePath(fileDiff: FileDiffMetadata): string {
-  const rawPath = fileDiff.name || fileDiff.prevName || '';
+  const rawPath = fileDiff.name ?? fileDiff.prevName ?? '';
   return rawPath.startsWith('a/') || rawPath.startsWith('b/') ? rawPath.slice(2) : rawPath;
+}
+
+function buildDiffFileRenderKey(fileDiff: FileDiffMetadata): string {
+  return fileDiff.cacheKey ?? `${fileDiff.prevName ?? 'none'}:${fileDiff.name}`;
+}
+
+function stripDiffPathPrefix(path: string): string {
+  const trimmed = path.trim();
+  return trimmed.startsWith('a/') || trimmed.startsWith('b/') ? trimmed.slice(2) : trimmed;
+}
+
+function addDiffTitlePathCandidate(
+  candidates: Map<string, string>,
+  title: string | null | undefined,
+  path: string,
+) {
+  if (!title) {
+    return;
+  }
+  const trimmed = title.trim();
+  if (!trimmed) {
+    return;
+  }
+  candidates.set(trimmed, path);
+  candidates.set(stripDiffPathPrefix(trimmed), path);
+}
+
+function buildDiffTitlePathMap(items: readonly CodeViewDiffItem[]): ReadonlyMap<string, string> {
+  const candidates = new Map<string, string>();
+  for (const item of items) {
+    if (item.type !== 'diff') {
+      continue;
+    }
+    const filePath = resolveDiffFilePath(item.fileDiff);
+    addDiffTitlePathCandidate(candidates, item.fileDiff.name, filePath);
+    addDiffTitlePathCandidate(candidates, item.fileDiff.prevName, filePath);
+    if (item.fileDiff.prevName && item.fileDiff.name) {
+      const previousPath = stripDiffPathPrefix(item.fileDiff.prevName);
+      const nextPath = stripDiffPathPrefix(item.fileDiff.name);
+      addDiffTitlePathCandidate(candidates, `${previousPath} → ${nextPath}`, filePath);
+      addDiffTitlePathCandidate(candidates, `${previousPath} -> ${nextPath}`, filePath);
+    }
+  }
+  return candidates;
 }
 
 function getDiffCollapseIconClassName(fileDiff: FileDiffMetadata): string {
@@ -98,6 +216,9 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   roomId,
   enabled,
   refreshKey = '',
+  onOpenFile,
+  selectedFilePath = null,
+  selectedFileRevealRequestId = 0,
 }) => {
   const { t } = useTranslation();
   const resolvedTheme = useResolvedTheme();
@@ -107,6 +228,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   const [wordWrap, setWordWrap] = useState(readInitialDiffWordWrap);
   const [diffRenderMode, setDiffRenderMode] = useState<DiffRenderMode>(readInitialDiffRenderMode);
   const [diffIgnoreWhitespace, setDiffIgnoreWhitespace] = useState(readInitialDiffIgnoreWhitespace);
+  const codeViewRef = useRef<CodeViewHandle<unknown> | null>(null);
   const [collapsedDiffFiles, setCollapsedDiffFiles] = useState<CollapsedDiffFilesState>(() => ({
     scopeKey: null,
     fileKeys: new Set(),
@@ -198,34 +320,66 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     return () => controller.abort();
   }, [diffIgnoreWhitespace, enabled, refreshKey, roomId]);
 
+  const renderablePatch = useMemo(
+    () => getRenderablePatch(diff?.patch, `workspace:${roomId}:${refreshKey}:${resolvedTheme}`),
+    [diff?.patch, refreshKey, resolvedTheme, roomId],
+  );
   const parsed = useMemo(() => {
-    if (!diff?.patch.trim()) {
-      return { items: [] as CodeViewDiffItem[], error: null as string | null };
+    if (!renderablePatch || renderablePatch.kind !== 'files') {
+      return { items: [] as CodeViewDiffItem[] };
     }
 
-    try {
-      const patches = parsePatchFiles(diff.patch, `workspace:${roomId}:${refreshKey}`, false);
-      const items = patches.flatMap((patch, patchIndex) =>
-        patch.files.map((fileDiff, fileIndex) => {
-          const id = `${patchIndex}:${fileIndex}:${fileDiff.prevName || ''}:${fileDiff.name}`;
-          const collapsed = collapsedDiffFileKeys.has(id);
-          return {
-            id,
-            type: 'diff' as const,
-            fileDiff,
-            collapsed,
-            version: collapsed ? 1 : 0,
-          };
-        }),
-      );
-      return { items, error: null };
-    } catch (parseError) {
+    const files = [...renderablePatch.files].sort((left, right) =>
+      resolveDiffFilePath(left).localeCompare(resolveDiffFilePath(right), undefined, {
+        numeric: true,
+        sensitivity: 'base',
+      }),
+    );
+    const items = files.map((fileDiff, fileIndex) => {
+      const id = buildDiffFileRenderKey(fileDiff) || `${fileIndex}`;
+      const collapsed = collapsedDiffFileKeys.has(id);
       return {
-        items: [] as CodeViewDiffItem[],
-        error: parseError instanceof Error ? parseError.message : 'Workspace diff parse failed.',
+        id,
+        type: 'diff' as const,
+        fileDiff,
+        collapsed,
+        version: collapsed ? 1 : 0,
       };
+    });
+    return { items };
+  }, [collapsedDiffFileKeys, renderablePatch]);
+  const diffTitlePathMap = useMemo(() => buildDiffTitlePathMap(parsed.items), [parsed.items]);
+
+  useEffect(() => {
+    if (!selectedFilePath) {
+      return;
     }
-  }, [collapsedDiffFileKeys, diff?.patch, refreshKey, roomId]);
+    const file = parsed.items.find((item) => (
+      item.type === 'diff' && resolveDiffFilePath(item.fileDiff) === selectedFilePath
+    ));
+    if (!file) {
+      return;
+    }
+    codeViewRef.current?.scrollTo({ type: 'item', id: file.id, align: 'start' });
+  }, [parsed.items, selectedFilePath, selectedFileRevealRequestId]);
+
+  const handleDiffClickCapture = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!onOpenFile) {
+      return;
+    }
+    const composedPath = event.nativeEvent.composedPath?.() ?? [];
+    const titleFromPath = composedPath.find((node): node is HTMLElement => (
+      node instanceof HTMLElement && node.hasAttribute('data-title')
+    ));
+    const title = titleFromPath ?? (event.target instanceof HTMLElement
+      ? event.target.closest<HTMLElement>('[data-title]')
+      : null);
+    const rawTitle = title?.textContent?.trim();
+    if (!rawTitle) {
+      return;
+    }
+    onOpenFile(diffTitlePathMap.get(rawTitle) ?? stripDiffPathPrefix(rawTitle));
+  };
 
   if (!enabled && diff === null) {
     return null;
@@ -253,7 +407,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     );
   }
 
-  if (!diff.patch.trim() || parsed.items.length === 0) {
+  if (!renderablePatch) {
     return (
       <p className="text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentNoWorkspaceChanges')}</p>
     );
@@ -324,43 +478,56 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
           <Pilcrow className="h-3.5 w-3.5" />
         </button>
       </div>
-      {parsed.error ? (
-        <div className="rounded-lg border border-[#f0b49b]/50 bg-[#fff2ec] px-3 py-2 text-xs text-[#9f462c] dark:border-[#7a321f]/60 dark:bg-[#2a211d] dark:text-[#ff9b78]" role="alert">
-          {parsed.error}
+      {renderablePatch.kind === 'raw' ? (
+        <div className="min-h-0 overflow-auto rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-2 dark:border-[#30302e] dark:bg-[#1d1d1b]">
+          <div className="space-y-2">
+            <p className="text-[11px] text-[#87867f] dark:text-[#8f8d86]">{renderablePatch.reason}</p>
+            <pre
+              className={`max-h-[72vh] overflow-auto rounded-md border border-[#dedbd0] bg-[#f5f4ed] p-3 font-mono text-[11px] leading-relaxed text-[#5e5d59] dark:border-[#30302e] dark:bg-[#141413] dark:text-[#b0aea5] ${
+                wordWrap ? 'whitespace-pre-wrap break-words' : ''
+              }`}
+              data-testid="code-agent-workspace-raw-diff"
+            >
+              {renderablePatch.text}
+            </pre>
+          </div>
         </div>
       ) : (
-        <CodeView
-          className="h-80 min-h-0 overflow-auto rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-xs dark:border-[#30302e] dark:bg-[#1d1d1b]"
-          items={parsed.items}
-          renderHeaderPrefix={(item) => {
-            if (item.type !== 'diff') {
-              return null;
-            }
-            const filePath = resolveDiffFilePath(item.fileDiff);
-            const collapsed = item.collapsed === true;
-            return (
-              <button
-                type="button"
-                aria-label={t(collapsed ? 'codeAgentExpandDiffFile' : 'codeAgentCollapseDiffFile', { path: filePath })}
-                aria-expanded={!collapsed}
-                title={t(collapsed ? 'codeAgentExpandDiff' : 'codeAgentCollapseDiff')}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  toggleDiffFileCollapsed(item.id);
-                }}
-                className={`inline-flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-sm border-0 bg-transparent p-0 transition-colors hover:bg-[#141413]/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:hover:bg-[#faf9f5]/10 ${getDiffCollapseIconClassName(item.fileDiff)}`}
-              >
-                {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-              </button>
-            );
-          }}
-          options={{
-            diffStyle: diffRenderMode === 'split' ? 'split' : 'unified',
-            overflow: wordWrap ? 'wrap' : 'scroll',
-            theme: resolvedTheme === 'dark' ? 'pierre-dark' : 'pierre-light',
-            themeType: resolvedTheme,
-          }}
-        />
+        <div onClickCapture={handleDiffClickCapture}>
+          <CodeView
+            ref={codeViewRef}
+            className="h-80 min-h-0 overflow-auto rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-xs dark:border-[#30302e] dark:bg-[#1d1d1b]"
+            items={parsed.items}
+            renderHeaderPrefix={(item) => {
+              if (item.type !== 'diff') {
+                return null;
+              }
+              const filePath = resolveDiffFilePath(item.fileDiff);
+              const collapsed = item.collapsed === true;
+              return (
+                <button
+                  type="button"
+                  aria-label={t(collapsed ? 'codeAgentExpandDiffFile' : 'codeAgentCollapseDiffFile', { path: filePath })}
+                  aria-expanded={!collapsed}
+                  title={t(collapsed ? 'codeAgentExpandDiff' : 'codeAgentCollapseDiff')}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    toggleDiffFileCollapsed(item.id);
+                  }}
+                  className={`inline-flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-sm border-0 bg-transparent p-0 transition-colors hover:bg-[#141413]/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:hover:bg-[#faf9f5]/10 ${getDiffCollapseIconClassName(item.fileDiff)}`}
+                >
+                  {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                </button>
+              );
+            }}
+            options={{
+              diffStyle: diffRenderMode === 'split' ? 'split' : 'unified',
+              overflow: wordWrap ? 'wrap' : 'scroll',
+              theme: resolvedTheme === 'dark' ? 'pierre-dark' : 'pierre-light',
+              themeType: resolvedTheme,
+            }}
+          />
+        </div>
       )}
     </div>
   );

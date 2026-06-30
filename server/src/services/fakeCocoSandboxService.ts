@@ -14,8 +14,10 @@ import {
   ReadCocoWorkspaceAssetOptions,
   ReadCocoWorkspaceDiffOptions,
   ReadCocoWorkspaceFileOptions,
+  SearchCocoWorkspaceEntriesOptions,
   StartCocoRunnerInput,
   WriteCocoWorkspaceFileInput,
+  searchCocoWorkspaceEntries,
 } from './cocoSandboxService';
 
 type FakeSandboxFailure = 'create' | 'connect' | 'initializeWorkspaceVersionControl' | 'startRunner' | 'destroy';
@@ -179,6 +181,21 @@ export class FakeCocoSandboxService implements CocoSandboxService {
     return [...(this.workspaceEntriesBySandboxId.get(handle.id) || [])]
       .sort(compareFakeWorkspaceEntries)
       .slice(0, options.maxEntries ?? 5000);
+  }
+
+  async searchWorkspaceEntries(
+    handle: CocoSandboxHandle,
+    options: SearchCocoWorkspaceEntriesOptions
+  ): Promise<CocoWorkspaceEntry[]> {
+    this.consumeFailure('connect');
+    if (!this.sandboxes.has(handle.id)) {
+      throw new Error(`Fake Coco sandbox not found: ${handle.id}`);
+    }
+    return searchCocoWorkspaceEntries(
+      this.workspaceEntriesBySandboxId.get(handle.id) || [],
+      options.query,
+      options.maxEntries ?? 200,
+    );
   }
 
   async readWorkspaceFile(

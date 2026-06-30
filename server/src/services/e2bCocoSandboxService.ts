@@ -14,8 +14,10 @@ import {
   ReadCocoWorkspaceAssetOptions,
   ReadCocoWorkspaceDiffOptions,
   ReadCocoWorkspaceFileOptions,
+  SearchCocoWorkspaceEntriesOptions,
   StartCocoRunnerInput,
   WriteCocoWorkspaceFileInput,
+  searchCocoWorkspaceEntries,
 } from './cocoSandboxService';
 import { Readable, Writable } from 'stream';
 
@@ -292,6 +294,30 @@ export class E2BCocoSandboxService implements CocoSandboxService {
     return Array.from(uniqueEntries.values())
       .sort(compareWorkspaceEntries)
       .slice(0, maxEntries);
+  }
+
+  async searchWorkspaceEntries(
+    handle: CocoSandboxHandle,
+    options: SearchCocoWorkspaceEntriesOptions
+  ): Promise<CocoWorkspaceEntry[]> {
+    const connected = await this.driver.connect(handle.id);
+    if (!connected.files?.list) {
+      throw new Error('E2B sandbox driver handle does not support filesystem listing');
+    }
+
+    const entries = await connected.files.list(handle.workspace, {
+      depth: options.maxDepth ?? 24,
+    });
+    const workspacePrefix = handle.workspace.replace(/\/+$/, '');
+    const normalizedEntries = entries
+      .map(entry => normalizeWorkspaceEntry(entry, workspacePrefix))
+      .filter((entry): entry is CocoWorkspaceEntry => Boolean(entry));
+
+    return searchCocoWorkspaceEntries(
+      normalizedEntries,
+      options.query,
+      options.maxEntries ?? 200,
+    );
   }
 
   async readWorkspaceFile(

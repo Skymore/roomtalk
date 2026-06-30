@@ -315,6 +315,21 @@ describe('E2BCocoSandboxService', () => {
     assert.match(driver.commands[0], /git diff --no-ext-diff -w --src-prefix=a\/ --dst-prefix=b\/ HEAD --/);
   });
 
+  it('searches workspace entries with T3-style fuzzy path ranking', async () => {
+    const driver = new FakeE2BDriver();
+    const service = new E2BCocoSandboxService(driver, { templateId: 'roomtalk-coco' });
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+
+    const results = await service.searchWorkspaceEntries(handle, {
+      query: '@rpt',
+      maxDepth: 24,
+      maxEntries: 2,
+    });
+
+    assert.deepEqual(results.map(entry => entry.path), ['output/report.html']);
+    assert.deepEqual(driver.fileListRequests, [{ path: '/workspace', options: { depth: 24 } }]);
+  });
+
   it('fails loudly when the driver cannot execute commands or kill sandboxes', async () => {
     const driver = new FakeE2BDriver();
     const service = new E2BCocoSandboxService(driver, { templateId: 'roomtalk-coco' });

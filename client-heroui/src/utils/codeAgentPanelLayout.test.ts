@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  clampCodeAgentFilePanelWidthForSidebarResize,
   getCodeAgentPanelResizeBounds,
   getSidebarMaxWidthForChat,
   getSidebarMaxWidthForCodeAgentLayout,
@@ -10,16 +11,24 @@ describe('getCodeAgentPanelResizeBounds', () => {
   it('preserves the absolute chat width on wide layouts', () => {
     expect(getCodeAgentPanelResizeBounds(2024)).toEqual({
       min: 420,
-      max: 1704,
-      chatMin: 320,
+      max: 1544,
+      chatMin: 480,
+    });
+  });
+
+  it('does not apply an extra max cap beyond the reserved chat width', () => {
+    expect(getCodeAgentPanelResizeBounds(3440)).toEqual({
+      min: 420,
+      max: 2960,
+      chatMin: 480,
     });
   });
 
   it('preserves an absolute chat width before shrinking the file panel on narrower layouts', () => {
     expect(getCodeAgentPanelResizeBounds(744)).toEqual({
-      min: 420,
-      max: 424,
-      chatMin: 320,
+      min: 264,
+      max: 264,
+      chatMin: 480,
     });
   });
 
@@ -29,12 +38,17 @@ describe('getCodeAgentPanelResizeBounds', () => {
   });
 
   it('keeps left sidebar resizing from consuming the code-agent chat pane', () => {
-    expect(getSidebarMaxWidthForCodeAgentLayout(320, 1280, 960)).toBe(320);
-    expect(getSidebarMaxWidthForCodeAgentLayout(320, 1280, 760)).toBe(520);
+    expect(getSidebarMaxWidthForCodeAgentLayout(320, 1280, 960)).toBe(160);
+    expect(getSidebarMaxWidthForCodeAgentLayout(320, 1280, 760)).toBe(360);
   });
 
   it('bases code-agent sidebar resizing on the full shell width and reserved right panel width', () => {
-    expect(getSidebarMaxWidthForCodeAgentShell(1280, 420)).toBe(540);
-    expect(getSidebarMaxWidthForCodeAgentShell(1280, 48)).toBe(912);
+    expect(getSidebarMaxWidthForCodeAgentShell(1280, 420)).toBe(380);
+    expect(getSidebarMaxWidthForCodeAgentShell(1280, 48)).toBe(752);
+  });
+
+  it('shrinks the right file panel during left sidebar resizing before chat can disappear', () => {
+    expect(clampCodeAgentFilePanelWidthForSidebarResize(760, 1600, 860)).toBe(260);
+    expect(clampCodeAgentFilePanelWidthForSidebarResize(760, 1600, 520)).toBe(600);
   });
 });

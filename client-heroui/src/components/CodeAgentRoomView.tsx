@@ -13,8 +13,11 @@ import { updateRoomSettings } from '../utils/socket';
 import { Message, Room, RoomPermissions, RoomRenameHandler } from '../utils/types';
 import { beginHorizontalResize } from '../utils/horizontalResize';
 import {
+  CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
+  CODE_AGENT_FILE_PANEL_WIDTH_CHANGE_EVENT,
   clampCodeAgentFilePanelWidth,
   CODE_AGENT_FILE_PANEL_COLLAPSED_WIDTH,
+  type CodeAgentFilePanelWidthChangeDetail,
   CODE_AGENT_FILE_PANEL_PREFERRED_MIN_WIDTH,
   getCodeAgentPanelResizeBounds,
 } from '../utils/codeAgentPanelLayout';
@@ -44,6 +47,7 @@ interface CodeAgentRoomViewProps {
 
 const FILE_MANAGER_WIDTH_STORAGE_KEY = 'roomtalk.codeWorkspace.fileManagerWidth';
 const FILE_MANAGER_COLLAPSED_STORAGE_KEY = 'roomtalk.codeWorkspace.fileManagerCollapsed';
+type WorkspaceFileOpenRequest = { path: string; requestId: number };
 
 const defaultFileManagerWidth = () => {
   if (typeof window === 'undefined') {
@@ -110,7 +114,9 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   const [isMobileFileManagerOpen, setIsMobileFileManagerOpen] = React.useState(false);
   const [isFileManagerCollapsed, setIsFileManagerCollapsed] = React.useState(readStoredFileManagerCollapsed);
   const [fileManagerWidth, setFileManagerWidth] = React.useState(readStoredFileManagerWidth);
+  const [workspaceFileOpenRequest, setWorkspaceFileOpenRequest] = React.useState<WorkspaceFileOpenRequest | null>(null);
   const fileManagerWidthRef = React.useRef(fileManagerWidth);
+  const workspaceFileOpenRequestIdRef = React.useRef(0);
   const fileManagerResizeCleanupRef = React.useRef<(() => void) | null>(null);
   const normalizedAvailableModes = React.useMemo(
     () => (availableModes.length ? availableModes : ['plan' as CodeAgentMode]),
@@ -163,6 +169,25 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
     }
   }, []);
 
+  const handleOpenWorkspaceFile = React.useCallback((path: string) => {
+    const normalizedPath = path.trim().replace(/^\/?workspace\//, '').replace(/^\/+/, '');
+    if (!normalizedPath) {
+      return;
+    }
+    setFileManagerCollapsed(false);
+    if (
+      typeof window.matchMedia === 'function' &&
+      !window.matchMedia('(min-width: 1024px)').matches
+    ) {
+      setIsMobileFileManagerOpen(true);
+    }
+    workspaceFileOpenRequestIdRef.current += 1;
+    setWorkspaceFileOpenRequest({
+      path: normalizedPath,
+      requestId: workspaceFileOpenRequestIdRef.current,
+    });
+  }, [setFileManagerCollapsed]);
+
   React.useLayoutEffect(() => {
     if (isFileManagerCollapsed) return undefined;
     const layout = workspaceLayoutRef.current;
@@ -199,6 +224,32 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       resizeObserver?.disconnect();
     };
   }, [isFileManagerCollapsed, persistFileManagerWidth]);
+
+  React.useEffect(() => {
+    const layout = workspaceLayoutRef.current;
+    if (!layout) return undefined;
+
+    const handleSyncedFilePanelWidth = (event: Event) => {
+      const width = (event as CustomEvent<CodeAgentFilePanelWidthChangeDetail>).detail?.width;
+      if (!Number.isFinite(width)) {
+        return;
+      }
+      const availableWidth = layout.getBoundingClientRect().width || window.innerWidth;
+      const nextWidth = clampCodeAgentFilePanelWidth(width, availableWidth);
+      if (nextWidth === fileManagerWidthRef.current) {
+        return;
+      }
+      fileManagerWidthRef.current = nextWidth;
+      layout.style.setProperty('--code-agent-files-width', `${nextWidth}px`);
+      setFileManagerWidth(nextWidth);
+      persistFileManagerWidth(nextWidth);
+    };
+
+    layout.addEventListener(CODE_AGENT_FILE_PANEL_WIDTH_CHANGE_EVENT, handleSyncedFilePanelWidth);
+    return () => {
+      layout.removeEventListener(CODE_AGENT_FILE_PANEL_WIDTH_CHANGE_EVENT, handleSyncedFilePanelWidth);
+    };
+  }, [persistFileManagerWidth]);
 
   const handleFileManagerResizeStart = React.useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
     if (event.button !== 0) {
@@ -302,6 +353,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       projectName={currentRoom.name || 'Workspace'}
       sandboxStatus={currentRoom.sandboxStatus}
       sandboxUpdatedAt={currentRoom.sandboxUpdatedAt}
+      openFileRequest={workspaceFileOpenRequest}
     />
   );
 
@@ -311,16 +363,17 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
 
       <div
         ref={workspaceLayoutRef}
-        className="grid min-h-0 w-full flex-1 overflow-hidden lg:grid-cols-[minmax(20rem,1fr)_var(--code-agent-files-width)]"
+        className="grid min-h-0 w-full flex-1 overflow-hidden lg:grid-cols-[minmax(var(--code-agent-chat-min-width),1fr)_var(--code-agent-files-width)]"
         data-code-agent-workspace-layout="true"
         data-code-agent-files-collapsed={String(isFileManagerCollapsed)}
         style={{
+          ['--code-agent-chat-min-width' as string]: `${CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH}px`,
           ['--code-agent-files-width' as string]: isFileManagerCollapsed
             ? `${CODE_AGENT_FILE_PANEL_COLLAPSED_WIDTH}px`
             : `${fileManagerWidth}px`,
         }}
       >
-        <div className="relative min-h-0 min-w-80 overflow-hidden" data-code-agent-chat-pane="true">
+        <div className="relative min-h-0 min-w-[30rem] overflow-hidden" data-code-agent-chat-pane="true">
           <MessageList
             key={currentRoom.id}
             ref={messageListRef}
@@ -329,6 +382,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
             presentation="code-agent"
             currentRoom={currentRoom}
             codeAgentMode={selectedMode}
+            onOpenWorkspaceFile={handleOpenWorkspaceFile}
             onReply={setReplyToMessage}
             roomPermissions={roomPermissions}
             bottomInsetPx={composerHeight + 12}
@@ -402,7 +456,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
           <button
             type="button"
             aria-label={t('codeAgentResizeWorkspaceFiles')}
-            className="absolute inset-y-0 -left-1 z-40 w-2 cursor-col-resize touch-none border-x border-transparent transition-colors hover:border-[#c96442]/30 hover:bg-[#c96442]/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442]"
+            className="absolute inset-y-0 -left-3 z-40 w-6 cursor-col-resize touch-none border-x border-transparent transition-colors hover:border-[#c96442]/30 hover:bg-[#c96442]/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442]"
             onPointerDown={handleFileManagerResizeStart}
           />
           <div className={`${isFileManagerCollapsed ? 'w-full' : 'w-8'} relative flex shrink-0 justify-center border-r border-[#dedbd0] bg-[#f0eee6] dark:border-[#30302e] dark:bg-[#242422]`}>

@@ -84,6 +84,7 @@ const createHarness = (options: {
   const members = options.members || [member(currentRoom.id, options.clientId ?? 'client-1')];
   const messages = options.messages || [];
   const listWorkspaceEntriesCalls: Array<{ sandboxId: string; maxDepth?: number; maxEntries?: number }> = [];
+  const searchWorkspaceEntriesCalls: Array<{ sandboxId: string; query: string; maxDepth?: number; maxEntries?: number }> = [];
   const getWorkspaceChangesCalls: Array<{ sandboxId: string }> = [];
   const getWorkspaceDiffCalls: Array<{ sandboxId: string; maxBytes?: number; ignoreWhitespace?: boolean }> = [];
   const readWorkspaceFileCalls: Array<{ sandboxId: string; path: string; maxBytes?: number }> = [];
@@ -169,6 +170,15 @@ const createHarness = (options: {
         });
         return options.workspaceEntries || [];
       },
+      searchWorkspaceEntries: async (handle, searchOptions) => {
+        searchWorkspaceEntriesCalls.push({
+          sandboxId: handle.id,
+          query: searchOptions.query,
+          maxDepth: searchOptions.maxDepth,
+          maxEntries: searchOptions.maxEntries,
+        });
+        return options.workspaceEntries || [];
+      },
       readWorkspaceFile: async (handle, path, readOptions) => {
         readWorkspaceFileCalls.push({
           sandboxId: handle.id,
@@ -226,6 +236,7 @@ const createHarness = (options: {
     getWorkspaceChangesCalls,
     getWorkspaceDiffCalls,
     listWorkspaceEntriesCalls,
+    searchWorkspaceEntriesCalls,
     readWorkspaceFileCalls,
     writeWorkspaceFileCalls,
     createWorkspaceDirectoryCalls,
@@ -322,6 +333,35 @@ describe('code-agent workspace socket handlers', () => {
       { path: 'output/report.html', name: 'report.html', type: 'file', size: 120 },
     ]);
     assert.deepEqual(listWorkspaceEntriesCalls, [{ sandboxId: 'sandbox-1', maxDepth: 24, maxEntries: 25001 }]);
+  });
+
+  it('searches Coco workspace entries through the registered socket session', async () => {
+    const { socket, searchWorkspaceEntriesCalls } = createHarness({
+      workspaceEntries: [
+        { path: 'src/components/Composer.tsx', name: 'Composer.tsx', type: 'file' },
+        { path: 'src/components/composePrompt.ts', name: 'composePrompt.ts', type: 'file' },
+        { path: 'docs/composition.md', name: 'composition.md', type: 'file' },
+      ],
+    });
+
+    const response = await socket.invoke<any>('search_code_workspace_entries', {
+      roomId: 'room-1',
+      query: '@cmp',
+      limit: 2,
+    });
+
+    assert.equal(response.success, true);
+    assert.equal(response.truncated, true);
+    assert.deepEqual(response.entries, [
+      { path: 'src/components/Composer.tsx', name: 'Composer.tsx', type: 'file' },
+      { path: 'src/components/composePrompt.ts', name: 'composePrompt.ts', type: 'file' },
+    ]);
+    assert.deepEqual(searchWorkspaceEntriesCalls, [{
+      sandboxId: 'sandbox-1',
+      query: '@cmp',
+      maxDepth: 24,
+      maxEntries: 3,
+    }]);
   });
 
   it('reads Coco workspace files through the registered socket session', async () => {

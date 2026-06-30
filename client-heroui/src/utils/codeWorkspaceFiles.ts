@@ -1,6 +1,7 @@
 import {
   requestCodeWorkspaceAssetUrl,
   requestCodeWorkspaceEntries,
+  requestCodeWorkspaceEntrySearch,
   requestCodeWorkspaceFile,
   requestCreateCodeWorkspaceDirectory,
   requestDeleteCodeWorkspaceEntry,
@@ -41,6 +42,26 @@ export const loadCodeWorkspaceEntries = async (
   const response = await requestCodeWorkspaceEntries(roomId);
   if (options.signal?.aborted) {
     throw new Error('Workspace file request aborted');
+  }
+
+  return {
+    entries: response.entries.map(validateWorkspaceEntry),
+    truncated: response.truncated,
+  };
+};
+
+export const searchCodeWorkspaceEntries = async (
+  roomId: string,
+  query: string,
+  options: { limit?: number; signal?: AbortSignal } = {}
+): Promise<{ entries: CodeWorkspaceEntry[]; truncated: boolean }> => {
+  if (options.signal?.aborted) {
+    throw new Error('Workspace file search aborted');
+  }
+
+  const response = await requestCodeWorkspaceEntrySearch(roomId, query, options.limit);
+  if (options.signal?.aborted) {
+    throw new Error('Workspace file search aborted');
   }
 
   return {

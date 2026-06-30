@@ -89,6 +89,7 @@ const {
   sendMessageAndAskAI,
   requestAudioTranscription,
   requestCodeWorkspaceEntries,
+  requestCodeWorkspaceEntrySearch,
   setClientPassword,
   setClientAuthToken,
   setUsername,
@@ -295,6 +296,25 @@ describe('socket message acknowledgement helpers', () => {
 
     const listCalls = socketMock.emit.mock.calls.filter(([event]) => event === 'list_code_workspace_entries');
     expect(listCalls).toHaveLength(2);
+  });
+
+  it('searches workspace entries through the T3-style socket request', async () => {
+    socketMock.ackResponses.set('search_code_workspace_entries', {
+      success: true,
+      entries: [{ path: 'src/components/Composer.tsx', name: 'Composer.tsx', type: 'file' }],
+      truncated: true,
+    });
+
+    await expect(requestCodeWorkspaceEntrySearch('room-1', '@cmp', 25)).resolves.toEqual({
+      entries: [{ path: 'src/components/Composer.tsx', name: 'Composer.tsx', type: 'file' }],
+      truncated: true,
+    });
+
+    expect(socketMock.emit).toHaveBeenCalledWith(
+      'search_code_workspace_entries',
+      { roomId: 'room-1', query: '@cmp', limit: 25 },
+      expect.any(Function),
+    );
   });
 
   it('includes the stored client auth token when registering the socket', async () => {

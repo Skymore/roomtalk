@@ -46,6 +46,7 @@ interface MessageListProps {
   presentation?: 'chat' | 'code-agent';
   currentRoom?: Room;
   codeAgentMode?: CodeAgentMode;
+  onOpenWorkspaceFile?: (path: string) => void;
 }
 
 export interface MessageListHandle {
@@ -65,6 +66,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   presentation = 'chat',
   currentRoom,
   codeAgentMode = 'plan',
+  onOpenWorkspaceFile,
 }, ref) => {
   const { t } = useTranslation();
   // generate a stable ID for the scroll container
@@ -643,6 +645,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
             isRefreshingWorkspace={isWorkspaceRefreshing}
             workspaceRefreshError={workspaceRefreshError}
             onRefreshWorkspace={refreshWorkspaceSnapshot}
+            onOpenWorkspaceFile={onOpenWorkspaceFile}
           />
         )}
         <div

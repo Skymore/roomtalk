@@ -12,8 +12,21 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('./CodeAgentWorkspaceDiffViewer', () => ({
-  CodeAgentWorkspaceDiffViewer: ({ enabled }: { enabled: boolean }) => (
-    <div data-testid="code-agent-workspace-diff-viewer" data-enabled={String(enabled)} />
+  CodeAgentWorkspaceDiffViewer: ({
+    enabled,
+    selectedFilePath,
+    selectedFileRevealRequestId,
+  }: {
+    enabled: boolean;
+    selectedFilePath?: string | null;
+    selectedFileRevealRequestId?: number;
+  }) => (
+    <div
+      data-testid="code-agent-workspace-diff-viewer"
+      data-enabled={String(enabled)}
+      data-selected-file={selectedFilePath || ''}
+      data-selected-file-request-id={String(selectedFileRevealRequestId || '')}
+    />
   ),
 }));
 
@@ -234,7 +247,14 @@ describe('CodeAgentWorkspacePanel', () => {
 
     fireEvent.click(screen.getByText('codeAgentChanges'));
 
-    expect(screen.getByText('src/App.tsx')).toBeTruthy();
-    expect(screen.getByTestId('code-agent-workspace-diff-viewer').dataset.enabled).toBe('true');
+    expect(screen.getByText('src')).toBeTruthy();
+    expect(screen.getByText('App.tsx')).toBeTruthy();
+    expect(screen.getByTestId('code-agent-changed-files-tree')).toBeTruthy();
+    fireEvent.click(screen.getByText('App.tsx'));
+
+    const diffViewer = screen.getByTestId('code-agent-workspace-diff-viewer');
+    expect(diffViewer.dataset.enabled).toBe('true');
+    expect(diffViewer.dataset.selectedFile).toBe('src/App.tsx');
+    expect(diffViewer.dataset.selectedFileRequestId).toBe('1');
   });
 });
