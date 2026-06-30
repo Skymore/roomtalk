@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Room } from '../utils/types';
 import { CodeAgentRoomView } from './CodeAgentRoomView';
@@ -124,6 +124,8 @@ describe('CodeAgentRoomView', () => {
   afterEach(() => {
     cleanup();
     localStorage.clear();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it('shows a controlled unavailable state for a backend that is not wired yet', () => {
@@ -170,6 +172,8 @@ describe('CodeAgentRoomView', () => {
 
     const resizeHandle = screen.getByLabelText('codeAgentResizeWorkspaceFiles');
     const layout = resizeHandle.closest('aside')?.parentElement as HTMLDivElement;
+    expect(layout.dataset.codeAgentWorkspaceLayout).toBe('true');
+    expect(resizeHandle.closest('aside')?.dataset.codeAgentFilesPanel).toBe('true');
     vi.spyOn(layout, 'getBoundingClientRect').mockReturnValue({
       width: 1600,
       height: 900,
@@ -186,10 +190,47 @@ describe('CodeAgentRoomView', () => {
     dispatchPointer(window, 'pointermove', { pointerId: 4, clientX: 0, buttons: 1 });
     dispatchPointer(window, 'pointerup', { pointerId: 4, clientX: 0, buttons: 0 });
 
-    expect(layout.style.getPropertyValue('--code-agent-files-width')).toBe('1120px');
-    expect(localStorage.getItem('roomtalk.codeWorkspace.fileManagerWidth')).toBe('1120');
+    expect(layout.style.getPropertyValue('--code-agent-files-width')).toBe('1280px');
+    expect(localStorage.getItem('roomtalk.codeWorkspace.fileManagerWidth')).toBe('1280');
     expect(document.body.style.userSelect).toBe('');
     expect(document.body.style.cursor).toBe('');
+  });
+
+  it('shrinks the workspace files panel when the code-agent layout gets narrower', () => {
+    const resizeCallbacks: ResizeObserverCallback[] = [];
+    class MockResizeObserver {
+      observe = vi.fn();
+      disconnect = vi.fn();
+
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallbacks.push(callback);
+      }
+    }
+    vi.stubGlobal('ResizeObserver', MockResizeObserver);
+    localStorage.setItem('roomtalk.codeWorkspace.fileManagerWidth', '760');
+
+    renderCodeAgentRoom(cocoRoom);
+
+    const resizeHandle = screen.getByLabelText('codeAgentResizeWorkspaceFiles');
+    const layout = resizeHandle.closest('aside')?.parentElement as HTMLDivElement;
+    vi.spyOn(layout, 'getBoundingClientRect').mockReturnValue({
+      width: 700,
+      height: 900,
+      top: 0,
+      right: 700,
+      bottom: 900,
+      left: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+
+    act(() => {
+      resizeCallbacks.forEach((callback) => callback([], {} as ResizeObserver));
+    });
+
+    expect(layout.style.getPropertyValue('--code-agent-files-width')).toBe('380px');
+    expect(localStorage.getItem('roomtalk.codeWorkspace.fileManagerWidth')).toBe('380');
   });
 
   it('constrains room edit mode when the server only allows plan mode', () => {

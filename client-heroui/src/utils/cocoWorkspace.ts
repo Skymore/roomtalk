@@ -113,14 +113,16 @@ export const summarizeCocoMessages = (messages: Message[]): CocoWorkspaceSummary
 
 export const loadCodeAgentWorkspaceDiff = async (
   roomId: string,
-  options: { signal?: AbortSignal } = {}
+  options: { signal?: AbortSignal; ignoreWhitespace?: boolean } = {}
 ): Promise<CodeAgentWorkspaceDiff> => {
   if (options.signal?.aborted) {
     throw new Error('Workspace diff request aborted');
   }
 
   const { requestCodeWorkspaceDiff } = await import('./socket');
-  const data = await requestCodeWorkspaceDiff(roomId);
+  const data = await requestCodeWorkspaceDiff(roomId, {
+    ignoreWhitespace: options.ignoreWhitespace === true,
+  });
   if (options.signal?.aborted) {
     throw new Error('Workspace diff request aborted');
   }

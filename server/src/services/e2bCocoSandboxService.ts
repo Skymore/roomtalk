@@ -239,6 +239,7 @@ export class E2BCocoSandboxService implements CocoSandboxService {
     }
 
     const workspace = shellQuote(handle.workspace || this.options.workspace || '/workspace');
+    const whitespaceFlag = options.ignoreWhitespace ? ' -w' : '';
     const command = [
       'set -u',
       `cd ${workspace}`,
@@ -257,7 +258,7 @@ export class E2BCocoSandboxService implements CocoSandboxService {
       'fi',
       'git add -N -- . >/dev/null 2>&1 || true',
       'printf "__ROOMTALK_DIFF__\\n"',
-      'git diff --no-ext-diff --src-prefix=a/ --dst-prefix=b/ HEAD -- || true',
+      `git diff --no-ext-diff${whitespaceFlag} --src-prefix=a/ --dst-prefix=b/ HEAD -- || true`,
     ].join('\n');
     const result = await connected.commands.run(command, { timeoutMs: 10_000 });
     const stdout = await collectReadableTextWithLimit(result.stdout, options.maxBytes ?? 10 * 1024 * 1024);

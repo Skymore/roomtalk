@@ -13,6 +13,10 @@ function pointerEvent(type: string, values: Partial<PointerEvent>): PointerEvent
   return event;
 }
 
+function mouseEvent(type: string, values: MouseEventInit): MouseEvent {
+  return new MouseEvent(type, { bubbles: true, cancelable: true, ...values });
+}
+
 describe('beginHorizontalResize', () => {
   afterEach(() => {
     window.dispatchEvent(new Event('blur'));
@@ -108,6 +112,71 @@ describe('beginHorizontalResize', () => {
     window.dispatchEvent(new MouseEvent('mouseup', { button: 0 }));
 
     expect(onFinish).toHaveBeenCalledWith(360);
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.cursor).toBe('');
+  });
+
+  it('covers iframe-heavy content while resizing and removes the guard on finish', () => {
+    const onFinish = vi.fn();
+    beginHorizontalResize({
+      pointerId: 14,
+      startX: 0,
+      initialWidth: 360,
+      direction: 1,
+      captureTarget: document.createElement('button'),
+      getBounds: () => ({ min: 240, max: 1200 }),
+      onResize: vi.fn(),
+      onFinish,
+    });
+
+    const guard = document.querySelector<HTMLElement>('[data-horizontal-resize-guard="true"]');
+    expect(guard).toBeTruthy();
+    expect(guard?.style.cursor).toBe('col-resize');
+
+    guard?.dispatchEvent(mouseEvent('mouseup', { button: 0 }));
+
+    expect(onFinish).toHaveBeenCalledWith(360);
+    expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.cursor).toBe('');
+  });
+
+  it('also catches document mouseup when release is missed by the window listener', () => {
+    const onFinish = vi.fn();
+    beginHorizontalResize({
+      pointerId: 12,
+      startX: 0,
+      initialWidth: 360,
+      direction: 1,
+      captureTarget: document.createElement('button'),
+      getBounds: () => ({ min: 240, max: 1200 }),
+      onResize: vi.fn(),
+      onFinish,
+    });
+
+    document.dispatchEvent(mouseEvent('mouseup', { button: 0 }));
+
+    expect(onFinish).toHaveBeenCalledWith(360);
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.cursor).toBe('');
+  });
+
+  it('finishes on mousemove fallback when the pointer was released outside the viewport', () => {
+    const onFinish = vi.fn();
+    beginHorizontalResize({
+      pointerId: 13,
+      startX: 100,
+      initialWidth: 420,
+      direction: 1,
+      captureTarget: document.createElement('button'),
+      getBounds: () => ({ min: 240, max: 1200 }),
+      onResize: vi.fn(),
+      onFinish,
+    });
+
+    window.dispatchEvent(mouseEvent('mousemove', { clientX: 700, buttons: 0 }));
+
+    expect(onFinish).toHaveBeenCalledWith(420);
     expect(document.body.style.userSelect).toBe('');
     expect(document.body.style.cursor).toBe('');
   });

@@ -1067,10 +1067,13 @@ export const requestCodeWorkspaceAssetUrl = (roomId: string, path: string): Prom
   })
 );
 
-export const requestCodeWorkspaceDiff = (roomId: string): Promise<unknown> => (
+export const requestCodeWorkspaceDiff = (
+  roomId: string,
+  options: { ignoreWhitespace?: boolean } = {},
+): Promise<unknown> => (
   emitWithAck<CodeWorkspaceDiffAckResponse>(
     'read_code_workspace_diff',
-    { roomId },
+    { roomId, ignoreWhitespace: options.ignoreWhitespace === true },
     'Timed out while reading workspace diff',
     'Failed to read workspace diff',
     { retryOnSocketReconnect: true },

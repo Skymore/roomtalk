@@ -1,6 +1,6 @@
 export const CODE_AGENT_FILE_PANEL_PREFERRED_MIN_WIDTH = 420;
+export const CODE_AGENT_FILE_PANEL_COLLAPSED_WIDTH = 48;
 export const CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH = 320;
-export const CODE_AGENT_CHAT_PREFERRED_MIN_WIDTH = 480;
 
 export interface CodeAgentPanelResizeBounds {
   min: number;
@@ -15,7 +15,7 @@ export function getCodeAgentPanelResizeBounds(availableWidth: number): CodeAgent
     Math.max(0, width - CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH),
   );
   const chatMin = Math.min(
-    CODE_AGENT_CHAT_PREFERRED_MIN_WIDTH,
+    CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
     Math.max(0, width - min),
   );
   return {
@@ -36,4 +36,30 @@ export function getSidebarMaxWidthForChat(
   chatMin: number,
 ): number {
   return Math.floor(sidebarWidth + chatWidth - chatMin);
+}
+
+export function getSidebarMaxWidthForCodeAgentShell(
+  shellWidth: number,
+  filePanelReservedWidth: number,
+  chatMin: number = CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
+): number {
+  return Math.floor(
+    Math.max(0, shellWidth)
+    - Math.max(0, filePanelReservedWidth)
+    - Math.max(0, chatMin),
+  );
+}
+
+export function getSidebarMaxWidthForCodeAgentLayout(
+  sidebarWidth: number,
+  workspaceWidth: number,
+  filePanelWidth: number,
+  chatMin: number = CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
+): number {
+  return getSidebarMaxWidthForCodeAgentShell(
+    Math.max(0, sidebarWidth)
+    + Math.max(0, workspaceWidth),
+    filePanelWidth,
+    chatMin,
+  );
 }

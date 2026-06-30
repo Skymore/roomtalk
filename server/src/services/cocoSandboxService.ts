@@ -51,6 +51,7 @@ export interface ReadCocoWorkspaceFileOptions {
 
 export interface ReadCocoWorkspaceDiffOptions {
   maxBytes?: number;
+  ignoreWhitespace?: boolean;
 }
 
 export interface ReadCocoWorkspaceAssetOptions {

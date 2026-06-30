@@ -110,6 +110,13 @@ const parseWorkspaceOptionalString = (payload: unknown, key: string): string | u
   return typeof value === 'string' ? value : undefined;
 };
 
+const parseWorkspaceBoolean = (payload: unknown, key: string): boolean => {
+  if (!payload || typeof payload !== 'object') {
+    return false;
+  }
+  return (payload as Record<string, unknown>)[key] === true;
+};
+
 export function registerCodeAgentWorkspaceHandlers({
   socket,
   store,
@@ -306,6 +313,7 @@ export function registerCodeAgentWorkspaceHandlers({
 
   socket.on('read_code_workspace_diff', async (payload: unknown, callback?: (response: WorkspaceDiffAck) => void) => {
     const roomId = parseRoomId(payload);
+    const ignoreWhitespace = parseWorkspaceBoolean(payload, 'ignoreWhitespace');
     let clientId: string | null = null;
 
     try {
@@ -329,6 +337,7 @@ export function registerCodeAgentWorkspaceHandlers({
         success: true,
         diff: await cocoSandboxService.getWorkspaceDiff(workspace.handle, {
           maxBytes: WORKSPACE_DIFF_MAX_BYTES,
+          ignoreWhitespace,
         }),
       });
     } catch (error) {

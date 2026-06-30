@@ -85,7 +85,7 @@ const createHarness = (options: {
   const messages = options.messages || [];
   const listWorkspaceEntriesCalls: Array<{ sandboxId: string; maxDepth?: number; maxEntries?: number }> = [];
   const getWorkspaceChangesCalls: Array<{ sandboxId: string }> = [];
-  const getWorkspaceDiffCalls: Array<{ sandboxId: string; maxBytes?: number }> = [];
+  const getWorkspaceDiffCalls: Array<{ sandboxId: string; maxBytes?: number; ignoreWhitespace?: boolean }> = [];
   const readWorkspaceFileCalls: Array<{ sandboxId: string; path: string; maxBytes?: number }> = [];
   const writeWorkspaceFileCalls: Array<{ sandboxId: string; path: string; content: string; encoding?: 'utf-8' | 'base64' }> = [];
   const createWorkspaceDirectoryCalls: Array<{ sandboxId: string; path: string }> = [];
@@ -148,7 +148,11 @@ const createHarness = (options: {
         };
       },
       getWorkspaceDiff: async (handle, diffOptions) => {
-        getWorkspaceDiffCalls.push({ sandboxId: handle.id, maxBytes: diffOptions?.maxBytes });
+        getWorkspaceDiffCalls.push({
+          sandboxId: handle.id,
+          maxBytes: diffOptions?.maxBytes,
+          ignoreWhitespace: diffOptions?.ignoreWhitespace,
+        });
         const patch = options.workspaceDiffPatch || '';
         return {
           available: true,
@@ -365,7 +369,21 @@ describe('code-agent workspace socket handlers', () => {
       byteSize: Buffer.byteLength(patch),
       truncated: false,
     });
-    assert.deepEqual(getWorkspaceDiffCalls, [{ sandboxId: 'sandbox-1', maxBytes: 10485760 }]);
+    assert.deepEqual(getWorkspaceDiffCalls, [{ sandboxId: 'sandbox-1', maxBytes: 10485760, ignoreWhitespace: false }]);
+  });
+
+  it('forwards the T3 whitespace diff option through the socket session', async () => {
+    const { socket, getWorkspaceDiffCalls } = createHarness({
+      workspaceDiffPatch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+    });
+
+    const response = await socket.invoke<any>('read_code_workspace_diff', {
+      roomId: 'room-1',
+      ignoreWhitespace: true,
+    });
+
+    assert.equal(response.success, true);
+    assert.deepEqual(getWorkspaceDiffCalls, [{ sandboxId: 'sandbox-1', maxBytes: 10485760, ignoreWhitespace: true }]);
   });
 
   it('creates T3-style workspace asset URLs through the socket control plane', async () => {

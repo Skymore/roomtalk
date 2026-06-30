@@ -15,6 +15,7 @@ const deleteCodeWorkspaceEntryMock = vi.hoisted(() => vi.fn());
 const openSearchMock = vi.hoisted(() => vi.fn());
 const resetPathsMock = vi.hoisted(() => vi.fn());
 const selectionHandlerRef = vi.hoisted(() => ({ current: null as null | ((paths: readonly string[]) => void) }));
+const fileTreeSelectionPathRef = vi.hoisted(() => ({ current: 'src/App.tsx' }));
 const editorOptionsRef = vi.hoisted(() => ({ current: null as null | { onChange?: (file: { name: string; contents: string }) => void } }));
 
 vi.mock('react-i18next', () => ({
@@ -36,6 +37,44 @@ vi.mock('../utils/codeWorkspaceFiles', () => ({
   deleteCodeWorkspaceEntry: deleteCodeWorkspaceEntryMock,
 }));
 
+vi.mock('./MarkdownContent', () => ({
+  MarkdownContent: ({
+    content,
+    onTaskListChange,
+  }: {
+    content: string;
+    onTaskListChange?: (change: { markerOffset: number; checked: boolean }) => void;
+  }) => {
+    const taskLines = content.split('\n').flatMap((line, lineIndex, lines) => {
+      const lineStart = lines.slice(0, lineIndex).reduce((offset, previousLine) => offset + previousLine.length + 1, 0);
+      const markerIndex = line.indexOf('[');
+      return markerIndex >= 0 ? [{
+        checked: /\[[xX]\]/.test(line),
+        markerOffset: lineStart + markerIndex,
+        label: line.replace(/^.*\]\s*/, ''),
+      }] : [];
+    });
+
+    return (
+      <div>
+        {taskLines.map((task) => (
+          <label key={task.markerOffset}>
+            <input
+              type="checkbox"
+              checked={task.checked}
+              onChange={(event) => onTaskListChange?.({
+                markerOffset: task.markerOffset,
+                checked: event.currentTarget.checked,
+              })}
+            />
+            {task.label}
+          </label>
+        ))}
+      </div>
+    );
+  },
+}));
+
 vi.mock('@pierre/diffs', () => ({
   VirtualizedFile: class {},
 }));
@@ -51,7 +90,7 @@ vi.mock('@pierre/trees/react', () => ({
     };
   },
   FileTree: ({ 'aria-label': ariaLabel }: { 'aria-label': string }) => (
-    <button type="button" aria-label={ariaLabel} onClick={() => selectionHandlerRef.current?.(['src/App.tsx'])}>
+    <button type="button" aria-label={ariaLabel} onClick={() => selectionHandlerRef.current?.([fileTreeSelectionPathRef.current])}>
       file-tree
     </button>
   ),
@@ -97,6 +136,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     openSearchMock.mockReset();
     resetPathsMock.mockReset();
     selectionHandlerRef.current = null;
+    fileTreeSelectionPathRef.current = 'src/App.tsx';
     editorOptionsRef.current = null;
     localStorage.clear();
   });
@@ -229,6 +269,42 @@ describe('CodeAgentFileBrowserPanel', () => {
       'room-1',
       'src/App.tsx',
       'export const changed = true;',
+      'utf-8',
+    );
+  });
+
+  it('saves rendered markdown task checkbox changes through the workspace write API', async () => {
+    fileTreeSelectionPathRef.current = 'README.md';
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'README.md', name: 'README.md', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockResolvedValue({
+      path: 'README.md',
+      content: '- [ ] First\n- [x] Second\n',
+      byteSize: 25,
+      truncated: false,
+      encoding: 'utf-8',
+    });
+    writeCodeWorkspaceFileMock.mockResolvedValue({ path: 'README.md', name: 'README.md', type: 'file' });
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    await screen.findByText('1 files');
+    fireEvent.click(screen.getByLabelText('Coco files'));
+    const checkboxes = await screen.findAllByRole('checkbox') as HTMLInputElement[];
+
+    vi.useFakeTimers();
+    expect(checkboxes[0].checked).toBe(false);
+    fireEvent.click(checkboxes[0]);
+    expect(writeCodeWorkspaceFileMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(writeCodeWorkspaceFileMock).toHaveBeenCalledWith(
+      'room-1',
+      'README.md',
+      '- [x] First\n- [x] Second\n',
       'utf-8',
     );
   });

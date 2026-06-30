@@ -42,6 +42,7 @@ import type { RoomSandboxStatus } from '../utils/types';
 import { beginHorizontalResize } from '../utils/horizontalResize';
 import { projectFileCacheKey } from './codeAgentFileContentRevision';
 import { FileSaveCoordinator } from './codeAgentFileSaveCoordinator';
+import { isMarkdownPreviewFile, setMarkdownTaskChecked } from './codeAgentFilePreviewMode';
 
 const MarkdownContent = React.lazy(() =>
   import('./MarkdownContent').then((module) => ({ default: module.MarkdownContent })),
@@ -544,10 +545,6 @@ function createDownload(file: CodeWorkspaceFile) {
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
-function isMarkdownPreview(path: string) {
-  return /\.(md|mdx)$/i.test(path);
-}
-
 function previewedByteSize(file: CodeWorkspaceFile): number {
   if (file.encoding === 'utf-8') {
     return new TextEncoder().encode(file.content).byteLength;
@@ -704,15 +701,82 @@ function ReadOnlyFileSurface({
 }
 
 interface RenderedMarkdownSurfaceProps {
-  contents: string;
+  roomId: string;
+  file: CodeWorkspaceFile;
+  onFileChange: React.Dispatch<React.SetStateAction<CodeWorkspaceFile | null>>;
+  onSaveStateChange: (state: SaveState, error?: string | null) => void;
+  onEntriesChanged: () => void;
 }
 
-function RenderedMarkdownSurface({ contents }: RenderedMarkdownSurfaceProps) {
+function RenderedMarkdownSurface({
+  roomId,
+  file,
+  onFileChange,
+  onSaveStateChange,
+  onEntriesChanged,
+}: RenderedMarkdownSurfaceProps) {
+  const filePath = file.path;
+  const fileRef = useRef(file);
+
+  useEffect(() => {
+    fileRef.current = file;
+  }, [file]);
+
+  const setFileContents = useCallback((contents: string) => {
+    onFileChange((current) => current ? {
+      ...current,
+      content: contents,
+      byteSize: new TextEncoder().encode(contents).byteLength,
+      truncated: false,
+      encoding: 'utf-8',
+    } : current);
+  }, [onFileChange]);
+
+  const saveCoordinator = useMemo(
+    () => new FileSaveCoordinator({
+      debounceMs: FILE_SAVE_DEBOUNCE_MS,
+      onPendingChange: (pending) => onSaveStateChange(pending ? 'pending' : 'saved', null),
+      persist: async (contents) => {
+        onSaveStateChange('saving', null);
+        try {
+          await writeCodeWorkspaceFile(roomId, filePath, contents, 'utf-8');
+          onEntriesChanged();
+          return { _tag: 'Success' };
+        } catch (error) {
+          onSaveStateChange('error', error instanceof Error ? error.message : 'File save failed.');
+          return { _tag: 'Failure' };
+        }
+      },
+      onConfirmed: (contents) => {
+        setFileContents(contents);
+      },
+    }),
+    [filePath, onEntriesChanged, onSaveStateChange, roomId, setFileContents],
+  );
+
+  useEffect(() => () => saveCoordinator.dispose(), [saveCoordinator]);
+
   return (
     <div className="min-h-0 flex-1 overflow-auto">
       <div className="mx-auto max-w-4xl px-6 py-5 text-[#141413] dark:text-[#faf9f5]">
         <React.Suspense fallback={<LoaderCircle className="h-5 w-5 animate-spin text-[#87867f] dark:text-[#8f8d86]" />}>
-          <MarkdownContent content={contents} />
+          <MarkdownContent
+            content={file.content}
+            onTaskListChange={({ markerOffset, checked }) => {
+              const currentContents = fileRef.current.content;
+              const nextContents = setMarkdownTaskChecked(currentContents, markerOffset, checked);
+              if (nextContents === currentContents) return;
+              fileRef.current = {
+                ...fileRef.current,
+                content: nextContents,
+                byteSize: new TextEncoder().encode(nextContents).byteLength,
+                truncated: false,
+                encoding: 'utf-8',
+              };
+              setFileContents(nextContents);
+              saveCoordinator.change(nextContents);
+            }}
+          />
         </React.Suspense>
       </div>
     </div>
@@ -947,8 +1011,14 @@ function FilePreviewSurface({
             {t('codeAgentDownloadFile')}
           </button>
         </div>
-      ) : renderPreview && isMarkdownPreview(file.path) ? (
-        <RenderedMarkdownSurface contents={file.content} />
+      ) : renderPreview && isMarkdownPreviewFile(file.path) ? (
+        <RenderedMarkdownSurface
+          roomId={roomId}
+          file={file}
+          onFileChange={fileQuery.setData}
+          onSaveStateChange={onSaveStateChange}
+          onEntriesChanged={onEntriesChanged}
+        />
       ) : file.truncated ? (
         <ReadOnlyFileSurface
           key={`${file.path}:${resolvedTheme}:${file.byteSize}`}
@@ -1007,7 +1077,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   );
   const selectedKind = selectedPath ? entryKinds.get(selectedPath) : undefined;
   const relativePath = selectedPath && selectedKind === 'file' ? selectedPath : null;
-  const isMarkdown = relativePath ? isMarkdownPreview(relativePath) : false;
+  const isMarkdown = relativePath ? isMarkdownPreviewFile(relativePath) : false;
   const supportsWorkspaceAssetPreview = relativePath ? isWorkspacePreviewEntryPath(relativePath) : false;
   const supportsPreview = Boolean(relativePath && (isMarkdown || supportsWorkspaceAssetPreview));
   const renderPreview = supportsPreview && sourceView.path !== relativePath;

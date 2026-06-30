@@ -40,10 +40,27 @@ export function beginHorizontalResize({
   let finished = false;
   const previousUserSelect = document.body.style.userSelect;
   const previousCursor = document.body.style.cursor;
+  const resizeGuard = document.createElement('div');
+
+  resizeGuard.dataset.horizontalResizeGuard = 'true';
+  resizeGuard.style.position = 'fixed';
+  resizeGuard.style.inset = '0';
+  resizeGuard.style.zIndex = '2147483647';
+  resizeGuard.style.cursor = 'col-resize';
+  resizeGuard.style.touchAction = 'none';
+  resizeGuard.style.userSelect = 'none';
 
   const applyWidth = () => {
     animationFrame = null;
     onResize(width);
+  };
+
+  const applyClientX = (clientX: number) => {
+    const deltaFromOrigin = (clientX - startX) * direction;
+    width = clampWidth(originWidth + deltaFromOrigin, getBounds());
+    if (animationFrame === null) {
+      animationFrame = window.requestAnimationFrame(applyWidth);
+    }
   };
 
   const removeListeners = () => {
@@ -51,10 +68,16 @@ export function beginHorizontalResize({
     window.removeEventListener('pointerup', handlePointerEnd, true);
     window.removeEventListener('pointercancel', handlePointerEnd, true);
     window.removeEventListener('mouseup', handleMouseUp, true);
+    window.removeEventListener('mousemove', handleMouseMove, true);
+    document.removeEventListener('pointerup', handlePointerEnd, true);
+    document.removeEventListener('pointercancel', handlePointerEnd, true);
+    document.removeEventListener('mouseup', handleMouseUp, true);
+    document.removeEventListener('mousemove', handleMouseMove, true);
     window.removeEventListener('blur', finishResize);
     window.removeEventListener('pagehide', finishResize);
     document.removeEventListener('visibilitychange', handleVisibilityChange);
     captureTarget.removeEventListener('lostpointercapture', handleLostPointerCapture);
+    resizeGuard.remove();
   };
 
   const finishResize = () => {
@@ -81,17 +104,18 @@ export function beginHorizontalResize({
   };
 
   function handlePointerMove(event: PointerEvent) {
-    if (event.pointerId !== pointerId) return;
+    if (event.pointerId !== pointerId) {
+      if (event.pointerType === 'mouse' && (event.buttons & 1) === 0) {
+        finishResize();
+      }
+      return;
+    }
     if ((event.buttons & 1) === 0) {
       finishResize();
       return;
     }
     event.preventDefault();
-    const deltaFromOrigin = (event.clientX - startX) * direction;
-    width = clampWidth(originWidth + deltaFromOrigin, getBounds());
-    if (animationFrame === null) {
-      animationFrame = window.requestAnimationFrame(applyWidth);
-    }
+    applyClientX(event.clientX);
   }
 
   function handlePointerEnd(event: PointerEvent) {
@@ -112,6 +136,15 @@ export function beginHorizontalResize({
     }
   }
 
+  function handleMouseMove(event: MouseEvent) {
+    if ((event.buttons & 1) === 0) {
+      finishResize();
+      return;
+    }
+    event.preventDefault();
+    applyClientX(event.clientX);
+  }
+
   function handleVisibilityChange() {
     if (document.visibilityState === 'hidden') {
       finishResize();
@@ -121,6 +154,7 @@ export function beginHorizontalResize({
   activeResize = finishResize;
   document.body.style.userSelect = 'none';
   document.body.style.cursor = 'col-resize';
+  document.body.appendChild(resizeGuard);
   onResize(width);
 
   try {
@@ -132,6 +166,11 @@ export function beginHorizontalResize({
   window.addEventListener('pointerup', handlePointerEnd, true);
   window.addEventListener('pointercancel', handlePointerEnd, true);
   window.addEventListener('mouseup', handleMouseUp, true);
+  window.addEventListener('mousemove', handleMouseMove, { capture: true, passive: false });
+  document.addEventListener('pointerup', handlePointerEnd, true);
+  document.addEventListener('pointercancel', handlePointerEnd, true);
+  document.addEventListener('mouseup', handleMouseUp, true);
+  document.addEventListener('mousemove', handleMouseMove, { capture: true, passive: false });
   window.addEventListener('blur', finishResize);
   window.addEventListener('pagehide', finishResize);
   document.addEventListener('visibilitychange', handleVisibilityChange);

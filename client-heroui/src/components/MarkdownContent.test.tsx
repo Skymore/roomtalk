@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MarkdownContent } from './MarkdownContent';
 
@@ -39,4 +39,22 @@ describe('MarkdownContent math rendering', () => {
     expect(container.querySelector('img')).toBeNull();
     expect(container.textContent).toContain('<img src=x onerror=alert(1)>');
   }, 15_000);
+
+  it('reports T3-style markdown task marker offsets when checkboxes change', () => {
+    const onTaskListChange = vi.fn();
+    const { getAllByRole } = render(
+      <MarkdownContent
+        content={'- [ ] First\n- [x] Second\n'}
+        onTaskListChange={onTaskListChange}
+      />,
+    );
+
+    const checkboxes = getAllByRole('checkbox') as HTMLInputElement[];
+    expect(checkboxes[0].checked).toBe(false);
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[1]);
+
+    expect(onTaskListChange).toHaveBeenNthCalledWith(1, { markerOffset: 2, checked: true });
+    expect(onTaskListChange).toHaveBeenNthCalledWith(2, { markerOffset: 14, checked: false });
+  });
 });

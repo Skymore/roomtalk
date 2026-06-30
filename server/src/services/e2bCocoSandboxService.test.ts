@@ -305,6 +305,16 @@ describe('E2BCocoSandboxService', () => {
     assert.deepEqual(driver.commandOptions, [{ timeoutMs: 10_000 }]);
   });
 
+  it('uses git whitespace filtering when reading workspace diffs with the T3 option', async () => {
+    const driver = new FakeE2BDriver();
+    const service = new E2BCocoSandboxService(driver, { templateId: 'roomtalk-coco' });
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+
+    await service.getWorkspaceDiff(handle, { ignoreWhitespace: true });
+
+    assert.match(driver.commands[0], /git diff --no-ext-diff -w --src-prefix=a\/ --dst-prefix=b\/ HEAD --/);
+  });
+
   it('fails loudly when the driver cannot execute commands or kill sandboxes', async () => {
     const driver = new FakeE2BDriver();
     const service = new E2BCocoSandboxService(driver, { templateId: 'roomtalk-coco' });

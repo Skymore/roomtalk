@@ -10,10 +10,12 @@ import { Image } from "@heroui/react";
 import "katex/dist/katex.min.css";
 import katex from "katex";
 import { useTranslation } from "react-i18next";
+import { markdownTaskMarkerOffsets } from "./codeAgentFilePreviewMode";
 
 interface MarkdownContentProps {
   content: string;
   isStreaming?: boolean;
+  onTaskListChange?: (change: { markerOffset: number; checked: boolean }) => void;
 }
 interface CodeBlockProps {
   className?: string;
@@ -236,11 +238,13 @@ const CodeBlock = memo<CodeBlockProps>(({ className, children }) => {
 CodeBlock.displayName = "CodeBlock";
 
 /** 主组件 */
-export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content, isStreaming }) => {
+export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content, isStreaming, onTaskListChange }) => {
   const processed = React.useMemo(() => {
     const text = escapeRawHtmlTags(preprocessMarkdown(content));
     return parseMath(text);
   }, [content]);
+  const taskMarkerOffsets = React.useMemo(() => markdownTaskMarkerOffsets(content), [content]);
+  let taskInputIndex = 0;
 
   const mdOptions = {
     forceBlock: true,
@@ -267,6 +271,27 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content, 
       ) },
       img: {
         component: ({ alt, src }: any) => <Image src={src!} alt={alt} className="max-w-full rounded my-2" isBlurred />,
+      },
+      input: {
+        component: ({ checked, readOnly, type, ...props }: any) => {
+          if (type !== 'checkbox' || !onTaskListChange) {
+            return <input {...props} checked={checked} readOnly={readOnly} type={type} />;
+          }
+
+          const markerOffset = taskMarkerOffsets[taskInputIndex++] ?? -1;
+          return (
+            <input
+              {...props}
+              checked={Boolean(checked)}
+              readOnly={false}
+              type="checkbox"
+              onChange={(event) => onTaskListChange({
+                markerOffset,
+                checked: event.currentTarget.checked,
+              })}
+            />
+          );
+        },
       },
     },
   };

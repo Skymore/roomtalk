@@ -26,7 +26,12 @@ import { getAvatarColor, getAvatarText } from '../utils/userProfile';
 import { RoomCreateModal, RoomCreateOptions } from './RoomCreateModal';
 import { RoomRenameModal } from './RoomRenameModal';
 import { beginHorizontalResize } from '../utils/horizontalResize';
-import { getCodeAgentPanelResizeBounds, getSidebarMaxWidthForChat } from '../utils/codeAgentPanelLayout';
+import {
+  CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
+  CODE_AGENT_FILE_PANEL_COLLAPSED_WIDTH,
+  CODE_AGENT_FILE_PANEL_PREFERRED_MIN_WIDTH,
+  getSidebarMaxWidthForCodeAgentShell,
+} from '../utils/codeAgentPanelLayout';
 
 interface DesktopSidebarProps {
   clientId: string;
@@ -56,17 +61,59 @@ const DESKTOP_SIDEBAR_MIN_WIDTH = 240;
 const DESKTOP_MAIN_MIN_WIDTH = 480;
 const DESKTOP_SIDEBAR_WIDTH_STORAGE_KEY = 'roomtalk.desktopSidebar.width';
 
+const readCssPixelValue = (value: string): number => {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+};
+
+const readCodeAgentFilePanelWidth = (workspaceLayout: HTMLElement): number => {
+  const filePanel = workspaceLayout.querySelector<HTMLElement>('[data-code-agent-files-panel="true"]');
+  const measuredWidth = filePanel?.getBoundingClientRect().width ?? 0;
+  const inlineWidth = readCssPixelValue(workspaceLayout.style.getPropertyValue('--code-agent-files-width'));
+  const computedWidth = readCssPixelValue(window.getComputedStyle(workspaceLayout).getPropertyValue('--code-agent-files-width'));
+  return Math.max(measuredWidth, inlineWidth, computedWidth);
+};
+
+const isCodeAgentFilePanelVisible = (workspaceLayout: HTMLElement): boolean => {
+  const filePanel = workspaceLayout.querySelector<HTMLElement>('[data-code-agent-files-panel="true"]');
+  if (!filePanel) {
+    return false;
+  }
+  if (typeof window.matchMedia === 'function' && !window.matchMedia('(min-width: 1024px)').matches) {
+    return false;
+  }
+  return window.getComputedStyle(filePanel).display !== 'none';
+};
+
+const getCodeAgentFilePanelSidebarReserve = (workspaceLayout: HTMLElement): number => {
+  if (!isCodeAgentFilePanelVisible(workspaceLayout)) {
+    return 0;
+  }
+  const measuredWidth = readCodeAgentFilePanelWidth(workspaceLayout);
+  if (workspaceLayout.dataset.codeAgentFilesCollapsed === 'true') {
+    return measuredWidth || CODE_AGENT_FILE_PANEL_COLLAPSED_WIDTH;
+  }
+  return measuredWidth > 0
+    ? Math.min(measuredWidth, CODE_AGENT_FILE_PANEL_PREFERRED_MIN_WIDTH)
+    : CODE_AGENT_FILE_PANEL_PREFERRED_MIN_WIDTH;
+};
+
+const getDesktopShellWidth = (sidebar?: HTMLElement): number => {
+  const shellRect = sidebar?.parentElement?.getBoundingClientRect();
+  return shellRect && shellRect.width > 0 ? shellRect.width : window.innerWidth;
+};
+
 const getSidebarResizeBounds = (sidebar?: HTMLElement) => {
-  let max = window.innerWidth - DESKTOP_MAIN_MIN_WIDTH;
-  const chatPane = document.querySelector<HTMLElement>('[data-code-agent-chat-pane="true"]');
-  const workspaceLayout = chatPane?.parentElement;
-  if (sidebar && chatPane && workspaceLayout && chatPane.getBoundingClientRect().width > 0) {
-    const { chatMin } = getCodeAgentPanelResizeBounds(workspaceLayout.getBoundingClientRect().width);
-    max = getSidebarMaxWidthForChat(
-      sidebar.getBoundingClientRect().width,
-      chatPane.getBoundingClientRect().width,
-      chatMin,
+  const shellWidth = getDesktopShellWidth(sidebar);
+  let max = shellWidth - DESKTOP_MAIN_MIN_WIDTH;
+  const workspaceLayout = document.querySelector<HTMLElement>('[data-code-agent-workspace-layout="true"]');
+  if (workspaceLayout) {
+    const codeAgentMax = getSidebarMaxWidthForCodeAgentShell(
+      shellWidth,
+      getCodeAgentFilePanelSidebarReserve(workspaceLayout),
+      CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
     );
+    max = Math.min(max, codeAgentMax);
   }
   return {
     min: DESKTOP_SIDEBAR_MIN_WIDTH,

@@ -3,14 +3,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Message } from './types';
 import {
+  loadCodeAgentWorkspaceDiff,
   loadCodeAgentWorkspaceSnapshot,
   summarizeCocoMessages,
 } from './cocoWorkspace';
 
 const requestCodeAgentWorkspaceSnapshotMock = vi.hoisted(() => vi.fn());
+const requestCodeWorkspaceDiffMock = vi.hoisted(() => vi.fn());
 
 vi.mock('./socket', () => ({
   requestCodeAgentWorkspaceSnapshot: requestCodeAgentWorkspaceSnapshotMock,
+  requestCodeWorkspaceDiff: requestCodeWorkspaceDiffMock,
 }));
 
 const message = (overrides: Partial<Message>): Message => ({
@@ -27,6 +30,7 @@ describe('summarizeCocoMessages', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     requestCodeAgentWorkspaceSnapshotMock.mockReset();
+    requestCodeWorkspaceDiffMock.mockReset();
   });
 
   it('returns an empty summary when there is no tool activity', () => {
@@ -102,6 +106,19 @@ describe('summarizeCocoMessages', () => {
 
     await expect(loadCodeAgentWorkspaceSnapshot('room 1')).resolves.toEqual(snapshot);
     expect(requestCodeAgentWorkspaceSnapshotMock).toHaveBeenCalledWith('room 1');
+  });
+
+  it('loads workspace diffs over socket with the T3 whitespace option', async () => {
+    const diff = {
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    };
+    requestCodeWorkspaceDiffMock.mockResolvedValue(diff);
+
+    await expect(loadCodeAgentWorkspaceDiff('room-1', { ignoreWhitespace: true })).resolves.toEqual(diff);
+    expect(requestCodeWorkspaceDiffMock).toHaveBeenCalledWith('room-1', { ignoreWhitespace: true });
   });
 
   it('normalizes missing workspace artifacts to an empty list for older servers', async () => {

@@ -14,6 +14,7 @@ import { Message, Room, RoomPermissions, RoomRenameHandler } from '../utils/type
 import { beginHorizontalResize } from '../utils/horizontalResize';
 import {
   clampCodeAgentFilePanelWidth,
+  CODE_AGENT_FILE_PANEL_COLLAPSED_WIDTH,
   CODE_AGENT_FILE_PANEL_PREFERRED_MIN_WIDTH,
   getCodeAgentPanelResizeBounds,
 } from '../utils/codeAgentPanelLayout';
@@ -41,7 +42,6 @@ interface CodeAgentRoomViewProps {
   onRoomUpdated: (room: Room) => void;
 }
 
-const FILE_MANAGER_COLLAPSED_WIDTH = 48;
 const FILE_MANAGER_WIDTH_STORAGE_KEY = 'roomtalk.codeWorkspace.fileManagerWidth';
 const FILE_MANAGER_COLLAPSED_STORAGE_KEY = 'roomtalk.codeWorkspace.fileManagerCollapsed';
 
@@ -190,7 +190,14 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
 
     normalizeWidth();
     window.addEventListener('resize', normalizeWidth);
-    return () => window.removeEventListener('resize', normalizeWidth);
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(normalizeWidth);
+    resizeObserver?.observe(layout);
+    return () => {
+      window.removeEventListener('resize', normalizeWidth);
+      resizeObserver?.disconnect();
+    };
   }, [isFileManagerCollapsed, persistFileManagerWidth]);
 
   const handleFileManagerResizeStart = React.useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
@@ -277,7 +284,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
 
   if (!isSupportedCodeAgentBackend(backend)) {
     return (
-      <div className="flex h-full min-h-0 w-full flex-1 flex-col bg-[#f5f4ed] dark:bg-[#141413]">
+      <div className="flex h-full min-h-0 min-w-0 w-full flex-1 flex-col bg-[#f5f4ed] dark:bg-[#141413]">
         {header}
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
           <Icon icon="lucide:circle-alert" className="h-8 w-8 text-[#c96442] dark:text-[#d97757]" />
@@ -299,15 +306,17 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   );
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-1 flex-col bg-[#f5f4ed] dark:bg-[#141413]">
+    <div className="flex h-full min-h-0 min-w-0 w-full flex-1 flex-col bg-[#f5f4ed] dark:bg-[#141413]">
       {header}
 
       <div
         ref={workspaceLayoutRef}
         className="grid min-h-0 w-full flex-1 overflow-hidden lg:grid-cols-[minmax(20rem,1fr)_var(--code-agent-files-width)]"
+        data-code-agent-workspace-layout="true"
+        data-code-agent-files-collapsed={String(isFileManagerCollapsed)}
         style={{
           ['--code-agent-files-width' as string]: isFileManagerCollapsed
-            ? `${FILE_MANAGER_COLLAPSED_WIDTH}px`
+            ? `${CODE_AGENT_FILE_PANEL_COLLAPSED_WIDTH}px`
             : `${fileManagerWidth}px`,
         }}
       >
@@ -386,7 +395,10 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
           </div>
         </div>
 
-        <aside className="relative hidden min-h-0 border-l border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b] lg:flex">
+        <aside
+          className="relative hidden min-h-0 border-l border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b] lg:flex"
+          data-code-agent-files-panel="true"
+        >
           <button
             type="button"
             aria-label={t('codeAgentResizeWorkspaceFiles')}
