@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Message } from '../utils/types';
+import { getSenderColorTheme } from '../utils/userProfile';
 import { MessageItem } from './MessageItem';
 
 const getMediaDownloadUrlMock = vi.hoisted(() => vi.fn());
@@ -126,6 +127,25 @@ describe('MessageItem replies', () => {
 
     fireEvent.click(screen.getByLabelText('replyToMessage'));
     expect(onReply).toHaveBeenCalledWith(message);
+  });
+
+  it('applies a stable sender outline to text message bubbles from clientId', () => {
+    render(
+      <MessageItem
+        message={message}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    const bubble = screen.getByText('follow up').closest('.roomtalk-sender-outline') as HTMLElement | null;
+    const theme = getSenderColorTheme('sender');
+
+    expect(bubble).toBeTruthy();
+    expect(bubble?.style.getPropertyValue('--roomtalk-sender-outline-light')).toBe(theme.outlineLight);
+    expect(bubble?.style.getPropertyValue('--roomtalk-sender-outline-dark')).toBe(theme.outlineDark);
   });
 
   it('treats messageType ai as an assistant message even when clientId differs', () => {
@@ -480,6 +500,8 @@ describe('MessageItem replies', () => {
 
     expect(screen.getByText('notes.md')).toBeTruthy();
     expect(screen.getByText('2 KB')).toBeTruthy();
+    const fileCard = screen.getByText('notes.md').closest('.roomtalk-sender-outline') as HTMLElement | null;
+    expect(fileCard?.style.getPropertyValue('--roomtalk-sender-outline-light')).toBe(getSenderColorTheme('sender').outlineLight);
     await waitFor(() => {
       expect(getMediaDownloadUrlMock).toHaveBeenCalledWith({ roomId: 'room-1', assetId: 'file-1' });
     });

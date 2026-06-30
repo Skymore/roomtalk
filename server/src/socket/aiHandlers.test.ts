@@ -18,6 +18,11 @@ class FakeSocket {
   id = 'socket-1';
   handlers = new Map<string, (...args: any[]) => unknown>();
   emitted: SocketEmit[] = [];
+  handshake: { headers: Record<string, string | string[] | undefined> };
+
+  constructor(headers: Record<string, string | string[] | undefined> = {}) {
+    this.handshake = { headers };
+  }
 
   on(event: string, handler: (...args: any[]) => unknown) {
     this.handlers.set(event, handler);
@@ -51,6 +56,12 @@ const logger = {
   error() {},
   info() {},
   warn() {},
+};
+
+const roomtalkOriginHeaders = {
+  origin: 'https://room.ruit.me',
+  'x-forwarded-proto': 'https',
+  'x-forwarded-host': 'room.ruit.me',
 };
 
 const selectedModel: AIModelOption = {
@@ -156,8 +167,9 @@ const createHarness = (options: {
   messages?: Message[];
   currentRoom?: Room | null;
   cocoSessionService?: { startTurn: (...args: any[]) => Promise<unknown> };
+  headers?: Record<string, string | string[] | undefined>;
 } = {}) => {
-  const socket = new FakeSocket();
+  const socket = new FakeSocket(options.headers);
   const io = new FakeIo();
   const store = {
     rooms: options.currentRoom === undefined
@@ -455,6 +467,7 @@ describe('AI socket handlers', () => {
     const { socket, store } = createHarness({
       currentRoom: room({ type: 'coco' }),
       cocoSessionService,
+      headers: roomtalkOriginHeaders,
     });
 
     let response: unknown;
@@ -469,6 +482,8 @@ describe('AI socket handlers', () => {
       selectedModel,
       roleName: undefined,
       maxContextMessages: undefined,
+      clientOrigin: 'https://room.ruit.me',
+      serverOrigin: 'https://room.ruit.me',
     });
     assert.deepEqual(response, { success: true, messageId: 'coco-ai-1' });
     assert.equal(store.upsertedMessages.length, 0);
@@ -1042,6 +1057,7 @@ describe('AI socket handlers', () => {
     const { io, socket, store } = createHarness({
       currentRoom: room({ type: 'coco' }),
       cocoSessionService,
+      headers: roomtalkOriginHeaders,
     });
     const editedUser = message({ id: 'message-edited', content: 'original prompt' });
     const staleTool = message({
@@ -1072,6 +1088,8 @@ describe('AI socket handlers', () => {
       selectedModel,
       roleName: undefined,
       maxContextMessages: undefined,
+      clientOrigin: 'https://room.ruit.me',
+      serverOrigin: 'https://room.ruit.me',
     });
     const editedEvent = io.roomEmits.find(event => event.event === 'message_edited');
     assert.equal((editedEvent?.args[0] as Message).content, 'edited prompt');
@@ -1147,6 +1165,7 @@ describe('AI socket handlers', () => {
     const { io, socket, store } = createHarness({
       currentRoom: room({ type: 'coco' }),
       cocoSessionService,
+      headers: roomtalkOriginHeaders,
     });
 
     let response: { success: boolean; userMessage?: Message; aiMessageId?: string; aiStarted?: boolean; aiError?: string } | undefined;
@@ -1169,6 +1188,8 @@ describe('AI socket handlers', () => {
       selectedModel,
       roleName: undefined,
       maxContextMessages: undefined,
+      clientOrigin: 'https://room.ruit.me',
+      serverOrigin: 'https://room.ruit.me',
     });
     assert.equal(response?.success, true);
     assert.equal(response?.userMessage, store.appendedMessages[0]);

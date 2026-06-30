@@ -110,9 +110,16 @@ const roomCost = (roomId = 'room-1'): RoomAICostTotal => ({
   totalUsd: 0.5,
 });
 
+type HarnessOptions = {
+  publishedStaticSiteService?: {
+    deleteSitesForRoom(roomId: string): Promise<{ slugCount: number; objectCount: number }>;
+  };
+};
+
 const createHarness = (
   clientId: string | null = 'client-1',
   cocoAccess = createCocoAccessControl({ enabled: true }),
+  options: HarnessOptions = {},
 ) => {
   const socket = new FakeSocket();
   const io = new FakeIo();
@@ -352,6 +359,7 @@ const createHarness = (
     store: store as any,
     socketLogger: logger as any,
     cocoAccess,
+    publishedStaticSiteService: options.publishedStaticSiteService as any,
   } as any);
 
   return { io, socket, store };
@@ -942,7 +950,15 @@ describe('room socket handlers', () => {
     });
     assert.deepEqual(unauthorizedResponse, { success: false, message: 'You are not authorized to delete this room' });
 
-    const valid = createHarness('client-1');
+    const deletedStaticSiteRooms: string[] = [];
+    const valid = createHarness('client-1', createCocoAccessControl({ enabled: true }), {
+      publishedStaticSiteService: {
+        async deleteSitesForRoom(roomId: string) {
+          deletedStaticSiteRooms.push(roomId);
+          return { slugCount: 1, objectCount: 3 };
+        },
+      },
+    });
     valid.io.socketsByRoom.set('client-1', new Set(['socket-1', 'socket-2']));
     let response: unknown;
     await valid.socket.invoke('delete_room', 'room-1', (result: unknown) => {
@@ -950,6 +966,7 @@ describe('room socket handlers', () => {
     });
 
     assert.deepEqual(response, { success: true });
+    assert.deepEqual(deletedStaticSiteRooms, ['room-1']);
     assert.deepEqual(valid.store.deletedRooms, [{ roomId: 'room-1', creatorId: 'client-1' }]);
     assert.deepEqual(valid.io.roomEmits, [
       { roomId: 'socket-1', event: 'room_list', args: [[]] },
@@ -957,6 +974,25 @@ describe('room socket handlers', () => {
       { roomId: 'socket-2', event: 'room_list', args: [[]] },
       { roomId: 'socket-2', event: 'saved_room_list', args: [[]] },
     ]);
+  });
+
+  it('does not delete a room when published static site cleanup fails', async () => {
+    const harness = createHarness('client-1', createCocoAccessControl({ enabled: true }), {
+      publishedStaticSiteService: {
+        async deleteSitesForRoom() {
+          throw new Error('static cleanup failed');
+        },
+      },
+    });
+    let response: unknown;
+
+    await harness.socket.invoke('delete_room', 'room-1', (result: unknown) => {
+      response = result;
+    });
+
+    assert.deepEqual(response, { success: false, message: 'Failed to delete room due to server error' });
+    assert.deepEqual(harness.store.deletedRooms, []);
+    assert.equal(harness.store.rooms.some(item => item.id === 'room-1'), true);
   });
 
   it('updates posting schedules, stamps updatedAt, and broadcasts room_updated', async () => {

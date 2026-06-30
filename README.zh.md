@@ -54,7 +54,7 @@ flowchart LR
 
 环境要求：
 
-- 推荐 Node.js 22。
+- 推荐 Node.js 24.18.0 LTS。
 - 本地 Redis 运行在 `localhost:6379`。
 - 可选：用于 PostgreSQL smoke/E2E 的测试数据库。
 
@@ -190,7 +190,7 @@ Legacy Base64 图片清理可通过 `cd server && npm run migrate:media-to-objec
 
 - 推送到 `master` 会触发 `.github/workflows/fly-deploy.yml`。
 - CI 安装依赖、构建服务端/客户端、检查翻译、校验 Fly secrets，然后执行 `flyctl deploy --remote-only`。
-- Fly 应用名为 `message-system`，区域 `dfw`，Node 22 Alpine Docker 镜像，512 MB VM。
+- Fly 应用名为 `message-system`，区域 `dfw`，Node 24.18.0 Alpine Docker 镜像，512 MB VM。
 
 生产通常需要 Redis、PostgreSQL、S3/Tigris 兼容媒体存储、AI provider key 和 Google OAuth。AssemblyAI 与 Web Push VAPID key 是可选服务。
 

@@ -23,6 +23,7 @@ import { buildMediaFilename, saveUrlAsFile } from "../utils/mediaDownload";
 import { A2UIRenderer } from "./A2UIRenderer";
 import { getRoomAIRequestSettings } from "../utils/aiRequestSettings";
 import { CocoToolMessage } from './CocoToolMessage';
+import { getSenderColorTheme } from "../utils/userProfile";
 
 interface MessageItemProps {
   message: Message;
@@ -41,6 +42,10 @@ export type MessageUserAction = 'setAdmin' | 'removeAdmin' | 'removeMember' | 't
 
 type ReplyReferenceValue = NonNullable<Message['replyTo']>;
 type Translate = (key: string, values?: { name?: string }) => string;
+type SenderOutlineStyle = React.CSSProperties & {
+  "--roomtalk-sender-outline-light": string;
+  "--roomtalk-sender-outline-dark": string;
+};
 
 const tooltipClassNames = {
   content: "border border-[#dedbd0] bg-[#faf9f5] px-2 py-1 text-xs font-medium text-[#141413] shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5]",
@@ -291,6 +296,17 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const canPromoteSender = canActOnSender && Boolean(roomPermissions?.canManageAdmins) && senderRole === 'member';
   const canDemoteSender = canActOnSender && Boolean(roomPermissions?.canManageAdmins) && senderRole === 'admin';
   const canTransferToSender = canActOnSender && Boolean(roomPermissions?.canTransferOwnership) && senderRole !== 'owner';
+  const senderColorTheme = React.useMemo(() => getSenderColorTheme(message.clientId), [message.clientId]);
+  const senderOutlineStyle = React.useMemo<SenderOutlineStyle>(() => ({
+    "--roomtalk-sender-outline-light": senderColorTheme.outlineLight,
+    "--roomtalk-sender-outline-dark": senderColorTheme.outlineDark,
+  }), [senderColorTheme]);
+  const senderAvatarStyle = React.useMemo<React.CSSProperties>(() => ({
+    backgroundColor: senderColorTheme.avatarBackground,
+    color: senderColorTheme.avatarForeground,
+  }), [senderColorTheme]);
+  const senderOutlineClassName = isAI ? "" : "roomtalk-sender-outline";
+  const senderOutlineElementStyle = isAI ? undefined : senderOutlineStyle;
   const aiMetadataParts = isAI
     ? [
         message.codeAgentMode ? (message.codeAgentMode === 'acceptEdits' ? t('codeAgentEditMode') : t('codeAgentReadOnlyMode')) : null,
@@ -552,7 +568,10 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   if (isMedia) {
     if (mediaError) {
       mediaContent = (
-        <div className="w-fit rounded-lg bg-[#e8e6dc] px-3 py-2 text-sm text-danger shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e]">
+        <div
+          className={`w-fit rounded-lg bg-[#e8e6dc] px-3 py-2 text-sm text-danger shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e] ${senderOutlineClassName}`}
+          style={senderOutlineElementStyle}
+        >
           <Icon icon="lucide:alert-triangle" className="inline mr-1" />
           {t('mediaLoadFailed')}
         </div>
@@ -561,7 +580,10 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       const fileName = message.mediaAsset?.filename || buildMediaFilename(message);
       const fileSize = formatByteSize(message.mediaAsset?.byteSize, i18n.language);
       mediaContent = (
-        <div className="flex w-[min(20rem,100%)] items-center gap-3 rounded-lg bg-[#f0eee6] px-3 py-2 text-[#141413] shadow-[0_0_0_1px_rgba(222,219,208,0.95)] dark:bg-[#242421] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(61,61,58,0.9)]">
+        <div
+          className={`flex w-[min(20rem,100%)] items-center gap-3 rounded-lg bg-[#f0eee6] px-3 py-2 text-[#141413] shadow-[0_0_0_1px_rgba(222,219,208,0.95)] dark:bg-[#242421] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(61,61,58,0.9)] ${senderOutlineClassName}`}
+          style={senderOutlineElementStyle}
+        >
           <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-md bg-[#e8e6dc] text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]">
             <Icon icon="lucide:file" className="h-5 w-5" />
           </div>
@@ -586,7 +608,10 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       );
     } else if (displayMediaUrl && isImage) {
       mediaContent = (
-        <div className="relative inline-block max-w-full overflow-hidden rounded-xl bg-black/5 shadow-[0_0_0_1px_rgba(194,192,182,0.45)] dark:bg-white/5 dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)]">
+        <div
+          className={`relative inline-block max-w-full overflow-hidden rounded-xl bg-black/5 shadow-[0_0_0_1px_rgba(194,192,182,0.45)] dark:bg-white/5 dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)] ${senderOutlineClassName}`}
+          style={senderOutlineElementStyle}
+        >
           <button
             type="button"
             aria-label={t('openMediaViewer')}
@@ -611,7 +636,8 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
             controls
             src={displayMediaUrl}
             crossOrigin="anonymous"
-            className="roomtalk-audio-player block h-9 min-w-[180px] max-w-[240px]"
+            className={`roomtalk-audio-player block h-9 min-w-[180px] max-w-[240px] ${senderOutlineClassName}`}
+            style={senderOutlineElementStyle}
             onCanPlay={markMediaLoadedForCache}
             onError={handleMediaError}
           />
@@ -622,7 +648,10 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       const fileName = message.mediaAsset?.filename || buildMediaFilename(message);
       const fileSize = formatByteSize(message.mediaAsset?.byteSize, i18n.language);
       mediaContent = videoPreviewError ? (
-        <div className="flex w-[min(20rem,100%)] items-center gap-3 rounded-lg bg-[#f0eee6] px-3 py-2 text-[#141413] shadow-[0_0_0_1px_rgba(222,219,208,0.95)] dark:bg-[#242421] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(61,61,58,0.9)]">
+        <div
+          className={`flex w-[min(20rem,100%)] items-center gap-3 rounded-lg bg-[#f0eee6] px-3 py-2 text-[#141413] shadow-[0_0_0_1px_rgba(222,219,208,0.95)] dark:bg-[#242421] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(61,61,58,0.9)] ${senderOutlineClassName}`}
+          style={senderOutlineElementStyle}
+        >
           <button
             type="button"
             aria-label={t('openMediaViewer')}
@@ -657,7 +686,10 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
           </Tooltip>
         </div>
       ) : (
-        <div className="relative inline-block max-w-full overflow-hidden rounded-xl bg-black shadow-[0_0_0_1px_rgba(20,20,19,0.35)]">
+        <div
+          className={`relative inline-block max-w-full overflow-hidden rounded-xl bg-black shadow-[0_0_0_1px_rgba(20,20,19,0.35)] ${senderOutlineClassName}`}
+          style={senderOutlineElementStyle}
+        >
           <button
             type="button"
             aria-label={t('openMediaViewer')}
@@ -685,7 +717,10 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       );
     } else {
       mediaContent = (
-        <div className="flex h-24 w-36 items-center justify-center rounded-xl bg-[#e8e6dc] text-[#87867f] shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e] dark:text-[#b0aea5] dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)]">
+        <div
+          className={`flex h-24 w-36 items-center justify-center rounded-xl bg-[#e8e6dc] text-[#87867f] shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e] dark:text-[#b0aea5] dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)] ${senderOutlineClassName}`}
+          style={senderOutlineElementStyle}
+        >
           <Icon icon={isAudio ? "lucide:audio-lines" : isVideo ? "lucide:video" : isFile ? "lucide:file" : "lucide:image"} className="h-5 w-5" />
         </div>
       );
@@ -744,10 +779,11 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       <Avatar
         name={message.avatar?.text || undefined}
         icon={!message.avatar?.text ? <Icon icon="lucide:user" /> : undefined}
-        color={getValidColor(message.avatar?.color) || (placement === 'right' ? "primary" : "default")}
+        color="default"
         size="sm"
+        style={senderAvatarStyle}
         classNames={{
-          base: "flex-shrink-0 bg-[#e8e6dc] text-[#4d4c48] dark:bg-[#30302e] dark:text-[#faf9f5]",
+          base: "flex-shrink-0 font-semibold",
         }}
       />
     );
@@ -829,12 +865,12 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       data-testid="message-item"
       data-message-id={message.id}
       className={`group mb-1 flex w-full items-start ${isMine ? "justify-end" : "justify-start"}`}
-    >
-      {/* Opponent's avatar or AI avatar */}
-      {(!isMine || isAI) && !isMine && (
-        isAI ? (
-          <Avatar
-            name={message.avatar?.text || undefined}
+      >
+        {/* Opponent's avatar or AI avatar */}
+        {(!isMine || isAI) && !isMine && (
+          isAI ? (
+            <Avatar
+              name={message.avatar?.text || undefined}
             icon={<Icon icon="lucide:bot" />}
             color={getValidColor("secondary")}
             size="sm"
@@ -842,10 +878,10 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
               base: "mr-2 flex-shrink-0 bg-[#e8e6dc] text-[#4d4c48] dark:bg-[#30302e] dark:text-[#faf9f5]",
             }}
           />
-        ) : (
-          <div className="mr-2 flex-shrink-0">{userAvatar('left')}</div>
-        )
-      )}
+          ) : (
+            <div className="mr-2 flex-shrink-0">{userAvatar('left')}</div>
+          )
+        )}
 
       {/* Message Content Area */}
       <div className={`flex max-w-[82%] flex-col min-w-0 sm:max-w-[70%] ${isMine ? 'items-end' : 'items-start'}`}>
@@ -878,7 +914,10 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                   />
                 </Tooltip>
               ) : (
-                <div className="flex h-[120px] w-[120px] items-center justify-center rounded-xl bg-[#e8e6dc] text-[#8a8a85] dark:bg-[#30302e] sm:h-[140px] sm:w-[140px]">
+                <div
+                  className={`flex h-[120px] w-[120px] items-center justify-center rounded-xl bg-[#e8e6dc] text-[#8a8a85] dark:bg-[#30302e] sm:h-[140px] sm:w-[140px] ${senderOutlineClassName}`}
+                  style={senderOutlineElementStyle}
+                >
                   <Icon icon="lucide:sticker" className="h-6 w-6" />
                 </div>
               )}
@@ -887,8 +926,10 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
             // ========== Text Message (Display Mode) ==========
             <>
               <Card
+                style={senderOutlineElementStyle}
                 className={`
                   w-fit max-w-full overflow-hidden rounded-xl
+                  ${senderOutlineClassName}
                   ${isPending ? "opacity-70" : ""}
                   ${isMine
                     ? "bg-[#e8e6dc] text-[#141413] shadow-[0_0_0_1px_rgba(194,192,182,0.85)] dark:bg-[#30302e] dark:text-[#faf9f5] dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)]"

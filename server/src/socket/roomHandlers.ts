@@ -228,6 +228,8 @@ export function registerRoomHandlers({
   store,
   socketLogger,
   cocoAccess = createCocoAccessControl({ enabled: false }),
+  cocoSandboxService,
+  publishedStaticSiteService,
 }: SocketConnectionContext) {
   socket.on('register', async (payload: unknown, callback?: (result: RegisterAck) => void) => {
     const { clientId, username, clientAuthToken, browserInstanceId } = parseRegisterPayload(payload);
@@ -685,6 +687,18 @@ export function registerRoomHandlers({
 
       socketLogger.info('Attempting to delete room', { socketId: socket.id, clientId, roomId, roomName: room.name });
 
+      if (room.type === 'coco' && room.sandboxId && cocoSandboxService) {
+        await cocoSandboxService.destroy(room.sandboxId).catch(error => {
+          socketLogger.warn('Failed to destroy Coco sandbox while deleting room', {
+            error: error instanceof Error ? error.message : String(error),
+            socketId: socket.id,
+            clientId,
+            roomId,
+            sandboxId: room.sandboxId,
+          });
+        });
+      }
+      await publishedStaticSiteService?.deleteSitesForRoom(roomId);
       await store.deleteRoom(roomId, clientId);
 
       socketLogger.info('Room deleted successfully', { socketId: socket.id, clientId, roomId });

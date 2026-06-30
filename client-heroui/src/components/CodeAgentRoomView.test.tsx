@@ -71,8 +71,7 @@ const cocoRoom: Room = {
 
 const renderCodeAgentRoom = (
   room: Room,
-  mode: 'plan' | 'acceptEdits',
-  availableModes: Array<'plan' | 'acceptEdits'> = mode === 'acceptEdits' ? ['plan', 'acceptEdits'] : ['plan'],
+  availableModes: Array<'plan' | 'acceptEdits'> = room.codeAgentMode === 'acceptEdits' ? ['plan', 'acceptEdits'] : ['plan'],
   defaultMode: 'plan' | 'acceptEdits' = 'plan'
 ) => render(
   <CodeAgentRoomView
@@ -106,7 +105,7 @@ describe('CodeAgentRoomView', () => {
   });
 
   it('shows a controlled unavailable state for a backend that is not wired yet', () => {
-    renderCodeAgentRoom(unsupportedRoom, 'plan');
+    renderCodeAgentRoom(unsupportedRoom);
 
     expect(screen.getByTestId('chat-header')).toBeTruthy();
     expect(screen.getByText('codeAgentBackendUnavailable')).toBeTruthy();
@@ -115,7 +114,7 @@ describe('CodeAgentRoomView', () => {
   });
 
   it('passes the selected Coco run mode to the workspace and composer', () => {
-    renderCodeAgentRoom({ ...cocoRoom, codeAgentMode: 'acceptEdits' }, 'acceptEdits');
+    renderCodeAgentRoom({ ...cocoRoom, codeAgentMode: 'acceptEdits' });
 
     expect(screen.getByTestId('message-list').dataset.codeAgentMode).toBe('acceptEdits');
     expect(screen.getByTestId('message-input').dataset.codeAgentRoom).toBe('true');
@@ -126,7 +125,7 @@ describe('CodeAgentRoomView', () => {
   it('constrains room edit mode when the server only allows plan mode', () => {
     localStorage.setItem('roomtalk_code_agent_mode_coco-room', 'acceptEdits');
 
-    renderCodeAgentRoom({ ...cocoRoom, codeAgentMode: 'acceptEdits' }, 'plan', ['plan']);
+    renderCodeAgentRoom({ ...cocoRoom, codeAgentMode: 'acceptEdits' }, ['plan']);
 
     expect(screen.getByTestId('message-list').dataset.codeAgentMode).toBe('plan');
     expect(screen.getByTestId('message-input').dataset.codeAgentMaxMode).toBe('plan');

@@ -65,7 +65,22 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
     const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:workspace-file');
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
-    const open = vi.spyOn(window, 'open').mockReturnValue({} as Window);
+    const replace = vi.fn();
+    const previewWindow = {
+      document: {
+        title: '',
+        body: {
+          style: {},
+          textContent: '',
+        },
+      },
+      location: {
+        replace,
+        href: '',
+      },
+      opener: {},
+    } as unknown as Window;
+    const open = vi.spyOn(window, 'open').mockReturnValue(previewWindow);
 
     render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
 
@@ -86,7 +101,8 @@ describe('CodeAgentFileBrowserPanel', () => {
     await waitFor(() => {
       expect(loadCodeWorkspaceFileMock).toHaveBeenCalledWith('room-1', 'src/App.tsx');
       expect(createObjectURL).toHaveBeenCalled();
-      expect(open).toHaveBeenCalledWith('blob:workspace-file', '_blank', 'noopener,noreferrer');
+      expect(open).toHaveBeenCalledWith('about:blank', '_blank');
+      expect(replace).toHaveBeenCalledWith('blob:workspace-file');
     });
   });
 });

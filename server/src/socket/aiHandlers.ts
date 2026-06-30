@@ -47,6 +47,35 @@ const getE2EFakeAIChunkDelayMs = () => {
 
 const wait = (delayMs: number) => new Promise(resolve => setTimeout(resolve, delayMs));
 
+const firstHeaderValue = (value: string | string[] | undefined) => (
+  Array.isArray(value) ? value[0] : value
+);
+
+const getSocketOrigin = (socket: SocketConnectionContext['socket']) => (
+  firstHeaderValue(socket.handshake?.headers?.origin)
+);
+
+const getSocketServerOrigin = (socket: SocketConnectionContext['socket']) => {
+  const headers = socket.handshake?.headers || {};
+  const forwardedProto = firstHeaderValue(headers['x-forwarded-proto'])?.split(',')[0]?.trim();
+  const forwardedHost = firstHeaderValue(headers['x-forwarded-host'])?.split(',')[0]?.trim();
+  const host = forwardedHost || firstHeaderValue(headers.host);
+  if (!host) {
+    return undefined;
+  }
+  const proto = forwardedProto || ((process.env.NODE_ENV || 'development') === 'production' ? 'https' : 'http');
+  return `${proto}://${host}`;
+};
+
+const getCocoTurnOriginInput = (socket: SocketConnectionContext['socket']) => {
+  const clientOrigin = getSocketOrigin(socket);
+  const serverOrigin = getSocketServerOrigin(socket);
+  return {
+    ...(clientOrigin ? { clientOrigin } : {}),
+    ...(serverOrigin ? { serverOrigin } : {}),
+  };
+};
+
 const isPrematureCloseError = (error: unknown): boolean => {
   const message = error instanceof Error ? error.message : String(error);
   return /premature close/i.test(message);
@@ -1809,6 +1838,7 @@ export function registerAIHandlers({
         selectedModel: normalizeAIModel(data.model),
         roleName: data.roleName,
         maxContextMessages: data.maxContextMessages,
+        ...getCocoTurnOriginInput(socket),
         ...(requestedMode ? { requestedMode, requestedModeSource: 'originalTurn' as const } : {}),
       }, callback);
       return;
@@ -1913,6 +1943,7 @@ export function registerAIHandlers({
         selectedModel: normalizeAIModel(data.model),
         roleName: data.roleName,
         maxContextMessages: data.maxContextMessages,
+        ...getCocoTurnOriginInput(socket),
       }, (response) => {
         if (response.success && response.messageId) {
           callback?.({
@@ -2037,6 +2068,7 @@ export function registerAIHandlers({
         selectedModel: normalizeAIModel(data.model),
         roleName: data.roleName,
         maxContextMessages: data.maxContextMessages,
+        ...getCocoTurnOriginInput(socket),
         ...(requestedMode ? { requestedMode, requestedModeSource: 'originalTurn' as const } : {}),
       }, callback);
       return;

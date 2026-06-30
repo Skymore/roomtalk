@@ -805,7 +805,9 @@ describe('CocoSessionService', () => {
       nowMs: () => Date.parse('2026-05-03T00:00:00.000Z'),
       createId: () => 'static-publish-token-id',
     });
+    const store = new MemoryCocoStore(room({ codeAgentMode: 'acceptEdits' }), [userMessage()]);
     const { sandboxService, service } = createService({
+      store,
       runner,
       availableModes: ['plan', 'acceptEdits'],
       defaultMode: 'plan',
@@ -816,7 +818,6 @@ describe('CocoSessionService', () => {
       roomId: 'room-1',
       clientId: 'client-1',
       selectedModel,
-      mode: 'acceptEdits',
     });
 
     const env = sandboxService.startedRunnerEnvs[0];
@@ -828,6 +829,77 @@ describe('CocoSessionService', () => {
     assert.equal(claims?.clientId, 'client-1');
     assert.equal(claims?.turnId, 'turn-1');
     assert.equal(claims?.mode, 'acceptEdits');
+  });
+
+  it('injects static publish URLs using the allowed production client origin', async () => {
+    const runner = new FakeCocoRunnerClient([
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    ]);
+    const staticSitePublisher = new PublishedStaticSiteService({
+      mediaObjectStorage: new MemoryMediaObjectStorage(),
+      logger,
+      tokenSecret: 'static-publish-secret',
+      publicBaseUrl: 'https://room.ruit.me',
+      allowedPublicBaseUrls: ['https://room.ruit.me', 'https://room.ruit.me'],
+      nodeEnv: 'production',
+      nowMs: () => Date.parse('2026-05-03T00:00:00.000Z'),
+      createId: () => 'static-publish-token-id',
+    });
+    const store = new MemoryCocoStore(room({ codeAgentMode: 'acceptEdits' }), [userMessage()]);
+    const { sandboxService, service } = createService({
+      store,
+      runner,
+      availableModes: ['plan', 'acceptEdits'],
+      defaultMode: 'plan',
+      staticSitePublisher,
+    });
+
+    await service.startTurn({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      selectedModel,
+      clientOrigin: 'https://room.ruit.me',
+      serverOrigin: 'http://127.0.0.1:3012',
+    });
+
+    const env = sandboxService.startedRunnerEnvs[0];
+    assert.equal(env.ROOMTALK_STATIC_PUBLISH_URL, 'https://room.ruit.me/api/coco/publish-static-site');
+    assert.equal(env.ROOMTALK_STATIC_PUBLISH_PUBLIC_BASE_URL, 'https://room.ruit.me');
+  });
+
+  it('injects local static publish URLs from the local server origin outside production', async () => {
+    const runner = new FakeCocoRunnerClient([
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    ]);
+    const staticSitePublisher = new PublishedStaticSiteService({
+      mediaObjectStorage: new MemoryMediaObjectStorage(),
+      logger,
+      tokenSecret: 'static-publish-secret',
+      publicBaseUrl: 'https://room.ruit.me',
+      nodeEnv: 'development',
+      nowMs: () => Date.parse('2026-05-03T00:00:00.000Z'),
+      createId: () => 'static-publish-token-id',
+    });
+    const store = new MemoryCocoStore(room({ codeAgentMode: 'acceptEdits' }), [userMessage()]);
+    const { sandboxService, service } = createService({
+      store,
+      runner,
+      availableModes: ['plan', 'acceptEdits'],
+      defaultMode: 'plan',
+      staticSitePublisher,
+    });
+
+    await service.startTurn({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      selectedModel,
+      clientOrigin: 'http://127.0.0.1:3011',
+      serverOrigin: 'http://127.0.0.1:3012',
+    });
+
+    const env = sandboxService.startedRunnerEnvs[0];
+    assert.equal(env.ROOMTALK_STATIC_PUBLISH_URL, 'http://127.0.0.1:3012/api/coco/publish-static-site');
+    assert.equal(env.ROOMTALK_STATIC_PUBLISH_PUBLIC_BASE_URL, 'http://127.0.0.1:3012');
   });
 
   it('does not inject static publish credentials into plan turns', async () => {
@@ -847,7 +919,7 @@ describe('CocoSessionService', () => {
       staticSitePublisher,
     });
 
-    await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel, mode: 'plan' });
+    await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
 
     const env = sandboxService.startedRunnerEnvs[0];
     assert.equal('ROOMTALK_COCO_ENABLE_STATIC_PUBLISH' in env, false);

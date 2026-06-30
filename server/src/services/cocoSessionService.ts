@@ -45,6 +45,8 @@ export interface CocoTurnInput {
   maxContextMessages?: number;
   requestedMode?: CocoRunnerMode;
   requestedModeSource?: 'originalTurn';
+  clientOrigin?: string;
+  serverOrigin?: string;
 }
 
 export type CocoTurnAck = { success: boolean; messageId?: string; error?: string };
@@ -172,6 +174,8 @@ export class CocoSessionService {
           clientId: input.clientId,
           turnId,
           mode: turnMode.mode,
+          clientOrigin: input.clientOrigin,
+          serverOrigin: input.serverOrigin,
         }),
         timeoutMs: this.options.turnTimeoutMs,
       });
@@ -551,6 +555,8 @@ export class CocoSessionService {
     clientId: string;
     turnId: string;
     mode: CocoRunnerMode;
+    clientOrigin?: string;
+    serverOrigin?: string;
   }) {
     // This is the complete runner environment. Do not merge process.env here:
     // Coco subprocesses must only receive explicit sandbox/model credentials.
@@ -572,9 +578,16 @@ export class CocoSessionService {
     }
 
     if (context.mode === 'acceptEdits' && this.options.staticSitePublisher?.isConfigured()) {
+      const staticPublishPublicBaseUrl = this.options.staticSitePublisher.publicBaseUrlForRequest(
+        context.clientOrigin,
+        context.serverOrigin
+      );
       env.ROOMTALK_COCO_ENABLE_STATIC_PUBLISH = 'true';
-      env.ROOMTALK_STATIC_PUBLISH_URL = this.options.staticSitePublisher.publishApiUrl;
-      env.ROOMTALK_STATIC_PUBLISH_PUBLIC_BASE_URL = this.options.staticSitePublisher.publicBaseUrl || '';
+      env.ROOMTALK_STATIC_PUBLISH_URL = this.options.staticSitePublisher.publishApiUrlForRequest(
+        context.clientOrigin,
+        context.serverOrigin
+      );
+      env.ROOMTALK_STATIC_PUBLISH_PUBLIC_BASE_URL = staticPublishPublicBaseUrl || '';
       env.ROOMTALK_STATIC_PUBLISH_TOKEN = this.options.staticSitePublisher.issueTurnToken({
         roomId: context.roomId,
         clientId: context.clientId,

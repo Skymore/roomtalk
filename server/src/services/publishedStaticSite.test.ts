@@ -4,6 +4,7 @@ import { Logger } from '../logger';
 import { MemoryMediaObjectStorage } from '../testUtils/memoryMediaObjectStorage';
 import {
   PublishedStaticSiteService,
+  createPublishedStaticSiteServiceFromEnv,
   normalizePublishedSitePath,
   normalizePublishedSiteSlug,
 } from './publishedStaticSite';
@@ -13,15 +14,21 @@ const logger = new Logger('PublishedStaticSiteTest');
 const createService = (overrides: {
   storage?: MemoryMediaObjectStorage;
   nowMs?: () => number;
+  createId?: () => string;
+  publicBaseUrl?: string;
+  allowedPublicBaseUrls?: string[];
+  nodeEnv?: string;
 } = {}) => {
   const storage = overrides.storage || new MemoryMediaObjectStorage();
   const service = new PublishedStaticSiteService({
     mediaObjectStorage: storage,
     logger,
     tokenSecret: 'static-publish-secret',
-    publicBaseUrl: 'https://room.example',
+    publicBaseUrl: overrides.publicBaseUrl ?? 'https://room.example',
+    allowedPublicBaseUrls: overrides.allowedPublicBaseUrls,
+    nodeEnv: overrides.nodeEnv,
     nowMs: overrides.nowMs || (() => Date.parse('2026-06-30T12:00:00.000Z')),
-    createId: () => 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+    createId: overrides.createId || (() => 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'),
   });
   return { service, storage };
 };
@@ -87,6 +94,7 @@ describe('PublishedStaticSiteService', () => {
     assert.equal(result.slug, 'roomtalk-demo');
     assert.equal(result.fileCount, 2);
     assert.equal(storage.objects.has('published-sites/roomtalk-demo/manifest.json'), true);
+    assert.equal(storage.objects.has('published-sites/by-room/cm9vbS0x/index.json'), true);
 
     const index = await service.readFile('roomtalk-demo', '');
     assert.equal(index?.file.path, 'index.html');
@@ -98,6 +106,132 @@ describe('PublishedStaticSiteService', () => {
 
     const spaFallback = await service.readFile('roomtalk-demo', 'unknown/route');
     assert.equal(spaFallback?.file.path, 'index.html');
+  });
+
+  it('uses an allowed production client origin for publish URLs', () => {
+    const { service } = createService({
+      publicBaseUrl: 'https://room.ruit.me',
+      allowedPublicBaseUrls: ['https://room.ruit.me', 'https://room.ruit.me'],
+      nodeEnv: 'production',
+    });
+
+    assert.equal(
+      service.publishApiUrlForRequest('https://room.ruit.me/rooms/abc', 'http://127.0.0.1:3012'),
+      'https://room.ruit.me/api/coco/publish-static-site'
+    );
+    assert.equal(
+      service.publicBaseUrlForRequest('https://room.ruit.me/rooms/abc', 'http://127.0.0.1:3012'),
+      'https://room.ruit.me'
+    );
+    assert.equal(
+      service.publishApiUrlForRequest('https://evil.example', 'http://127.0.0.1:3012'),
+      'https://room.ruit.me/api/coco/publish-static-site'
+    );
+  });
+
+  it('uses the local server origin outside production even when a public fallback is configured', () => {
+    const { service } = createService({
+      publicBaseUrl: 'https://room.ruit.me',
+      nodeEnv: 'development',
+    });
+
+    assert.equal(
+      service.publishApiUrlForRequest('https://room.ruit.me', 'http://127.0.0.1:3012'),
+      'http://127.0.0.1:3012/api/coco/publish-static-site'
+    );
+    assert.equal(
+      service.publicBaseUrlForRequest('https://room.ruit.me', 'http://127.0.0.1:3012'),
+      'http://127.0.0.1:3012'
+    );
+  });
+
+  it('does not let COCO_STATIC_PUBLISH_PUBLIC_URL override local request origins from env', () => {
+    const service = createPublishedStaticSiteServiceFromEnv({
+      mediaObjectStorage: new MemoryMediaObjectStorage(),
+      logger,
+      env: {
+        NODE_ENV: 'development',
+        CLIENT_URL: 'http://localhost:3011',
+        COCO_STATIC_PUBLISH_PUBLIC_URL: 'https://room.ruit.me',
+        COCO_STATIC_PUBLISH_TOKEN_SECRET: 'static-publish-secret',
+      } as NodeJS.ProcessEnv,
+    });
+
+    assert.equal(
+      service.publishApiUrlForRequest('http://localhost:3011', 'http://127.0.0.1:3012'),
+      'http://127.0.0.1:3012/api/coco/publish-static-site'
+    );
+    assert.equal(
+      service.publicUrlForSlug('roomtalk-demo', 'http://127.0.0.1:3012'),
+      'http://127.0.0.1:3012/p/roomtalk-demo/'
+    );
+  });
+
+  it('uses CLIENT_URLS as the production public origin allowlist from env', () => {
+    const service = createPublishedStaticSiteServiceFromEnv({
+      mediaObjectStorage: new MemoryMediaObjectStorage(),
+      logger,
+      env: {
+        NODE_ENV: 'production',
+        CLIENT_URL: 'https://room.ruit.me',
+        CLIENT_URLS: 'https://room.ruit.me, https://room.ruit.me',
+        COCO_STATIC_PUBLISH_PUBLIC_URL: 'https://room.ruit.me',
+        COCO_STATIC_PUBLISH_TOKEN_SECRET: 'static-publish-secret',
+      } as NodeJS.ProcessEnv,
+    });
+
+    assert.equal(
+      service.publishApiUrlForRequest('https://room.ruit.me', 'http://127.0.0.1:3012'),
+      'https://room.ruit.me/api/coco/publish-static-site'
+    );
+    assert.equal(
+      service.publishApiUrlForRequest('https://not-allowed.example', 'http://127.0.0.1:3012'),
+      'https://room.ruit.me/api/coco/publish-static-site'
+    );
+  });
+
+  it('deletes every published object for a room', async () => {
+    const ids = [
+      'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      'bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee',
+      'cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee',
+    ];
+    const { service, storage } = createService({ createId: () => ids.shift() || 'dddddddd-bbbb-cccc-dddd-eeeeeeeeeeee' });
+    const claims = service.verifyTurnToken(service.issueTurnToken({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-1',
+      mode: 'acceptEdits',
+    }))!;
+
+    await service.publish({
+      roomId: 'room-1',
+      turnId: 'turn-1',
+      slug: 'roomtalk-demo',
+      entry: 'index.html',
+      files: [
+        textFile('index.html', '<!doctype html>v1'),
+        textFile('assets/app.js', 'console.log("v1")'),
+      ],
+    }, claims);
+    await service.publish({
+      roomId: 'room-1',
+      turnId: 'turn-1',
+      slug: 'roomtalk-demo',
+      entry: 'index.html',
+      files: [
+        textFile('index.html', '<!doctype html>v2'),
+        textFile('assets/app.js', 'console.log("v2")'),
+      ],
+    }, claims);
+
+    assert.equal([...storage.objects.keys()].filter(key => key.startsWith('published-sites/roomtalk-demo/versions/')).length, 4);
+
+    const result = await service.deleteSitesForRoom('room-1');
+
+    assert.deepEqual(result, { slugCount: 1, objectCount: 6 });
+    assert.deepEqual([...storage.objects.keys()].filter(key => key.startsWith('published-sites/')), []);
+    assert.equal(storage.deletedObjectKeys.includes('published-sites/by-room/cm9vbS0x/index.json'), true);
   });
 
   it('rejects invalid publish payloads and slug ownership conflicts', async () => {

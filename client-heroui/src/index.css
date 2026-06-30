@@ -167,6 +167,15 @@ body {
   background-color: #30302e;
 }
 
+.roomtalk-sender-outline {
+  outline: 1px solid var(--roomtalk-sender-outline-light, rgba(194, 192, 182, 0.85));
+  outline-offset: 0;
+}
+
+.dark .roomtalk-sender-outline {
+  outline-color: var(--roomtalk-sender-outline-dark, rgba(77, 76, 72, 0.8));
+}
+
 [contenteditable]:focus {
   outline: none;
 }

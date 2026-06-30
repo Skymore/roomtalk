@@ -12,6 +12,7 @@ import {
 export interface PublishedStaticSiteRouteOptions {
   service: PublishedStaticSiteService;
   logger: Logger;
+  getRoomById?: (roomId: string) => Promise<unknown | null>;
   bodyLimit?: string;
 }
 
@@ -76,6 +77,9 @@ export function registerPublishedStaticSiteRoutes(app: Express, options: Publish
     try {
       const result = await service.readFile(slug, publishedPathFromRequest(req));
       if (!result) {
+        return res.status(404).send('Published site not found');
+      }
+      if (options.getRoomById && !(await options.getRoomById(result.manifest.roomId))) {
         return res.status(404).send('Published site not found');
       }
 

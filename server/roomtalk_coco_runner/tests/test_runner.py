@@ -174,6 +174,8 @@ def test_system_prompt_matches_the_actual_tool_set():
     shell_prompt = system_prompt_for_tools(("Read", "Glob", "Grep", "Write", "Edit", "Shell", "BackgroundShell"), "acceptEdits")
     assert "- BackgroundShell:" in shell_prompt
     assert "Use Shell only for foreground commands" in shell_prompt
+    assert "Keep all downloaded repositories, fetched reference files, generated files, and publish roots inside the current workspace" in shell_prompt
+    assert "Do not work in /tmp or /var/tmp" in shell_prompt
     publish_prompt = system_prompt_for_tools(("Read", "Glob", "Grep", "PublishStaticSite"), "acceptEdits")
     assert "- PublishStaticSite:" in publish_prompt
     assert "Use PublishStaticSite after creating a static site directory" in publish_prompt

@@ -2,6 +2,7 @@
 
 import { cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MarkdownContent } from './MarkdownContent';
 
 const katexRenderMock = vi.hoisted(() => vi.fn());
 
@@ -25,7 +26,6 @@ describe('MarkdownContent math rendering', () => {
   });
 
   it('does not enable trusted KaTeX commands for user-authored formulas', async () => {
-    const { MarkdownContent } = await import('./MarkdownContent');
     render(<MarkdownContent content={'$x$'} />);
 
     await waitFor(() => expect(katexRenderMock).toHaveBeenCalled());
@@ -34,7 +34,6 @@ describe('MarkdownContent math rendering', () => {
   }, 15_000);
 
   it('renders raw HTML as text instead of creating DOM elements', async () => {
-    const { MarkdownContent } = await import('./MarkdownContent');
     const { container } = render(<MarkdownContent content={'hello <img src=x onerror=alert(1)> world'} />);
 
     expect(container.querySelector('img')).toBeNull();

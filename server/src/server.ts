@@ -343,6 +343,7 @@ registerSocketHandlers({
   cocoSessionService,
   cocoAccess,
   cocoSandboxService,
+  publishedStaticSiteService,
 });
 
 let outboxWorker: OutboxWorker | null = null;
@@ -406,6 +407,7 @@ registerApiRoutes(app, {
 registerPublishedStaticSiteRoutes(app, {
   service: publishedStaticSiteService,
   logger: staticPublishLogger,
+  getRoomById: roomId => store.getRoomById(roomId),
 });
 
 // Catch-all 路由，返回前端应用的入口 HTML 文件（支持前端路由）

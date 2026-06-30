@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "artifactName": "roomtalk-coco",
-  "artifactVersion": "roomtalk-coco-2026-06-30-static-publish",
+  "artifactVersion": "roomtalk-coco-2026-06-30-workspace-prompt",
   "pythonVersion": "3.12",
   "baseImage": {
     "name": "python",

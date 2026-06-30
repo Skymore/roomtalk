@@ -36,7 +36,7 @@ This guide provides simplified instructions for deploying your chat application 
 The repository already includes the production `Dockerfile`. Keep deployment changes in that file rather than creating a second Dockerfile:
 
 ```dockerfile
-FROM node:22-alpine
+FROM node:24.18.0-alpine
 
 WORKDIR /app
 

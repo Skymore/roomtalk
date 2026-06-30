@@ -299,6 +299,7 @@ Unavailable tools for this run: {unavailable_line}.
 {mode_guidance}
 
 Use Read / Glob / Grep to verify the workspace before editing. Edit requires old_string to match exactly once.
+Keep all downloaded repositories, fetched reference files, generated files, and publish roots inside the current workspace. In RoomTalk sandboxes this is normally /workspace. Do not work in /tmp or /var/tmp unless a tool explicitly needs an ephemeral cache; workspace-scoped tools cannot read, edit, or publish files outside the workspace.
 Use Shell only for foreground commands that finish. Use BackgroundShell for servers, watchers, dev servers, slow async tasks, or anything that should keep running after the tool returns. Pass a foreground command to BackgroundShell; do not include nohup, disown, setsid, or '&'. Include expected ports when starting web apps so URLs can be returned.
 Use PublishStaticSite after creating a static site directory that can run as plain HTML/CSS/JS. Do not use PublishStaticSite for Flask, Node, Python, databases, or any server-side app.
 When exploring a project structure, use Glob with pattern "**/*" to find files recursively.

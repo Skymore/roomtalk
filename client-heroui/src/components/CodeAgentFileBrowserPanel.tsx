@@ -166,19 +166,40 @@ const inferMimeType = (path: string, encoding: CodeWorkspaceFile['encoding']) =>
   return 'text/plain;charset=utf-8';
 };
 
-const openWorkspaceFile = async (roomId: string, relativePath: string) => {
+const openBlankPreviewWindow = (path: string): Window | null => {
+  const previewWindow = window.open('about:blank', '_blank');
+  if (!previewWindow) {
+    return null;
+  }
+
+  try {
+    previewWindow.opener = null;
+    previewWindow.document.title = path;
+    previewWindow.document.body.style.margin = '0';
+    previewWindow.document.body.style.padding = '16px';
+    previewWindow.document.body.style.fontFamily = 'system-ui, sans-serif';
+    previewWindow.document.body.textContent = 'Loading file preview...';
+  } catch {
+    // Some browsers restrict access to the blank tab immediately after opening.
+  }
+
+  return previewWindow;
+};
+
+const openWorkspaceFile = async (roomId: string, relativePath: string, previewWindow: Window | null) => {
+  if (!previewWindow) {
+    throw new Error('Browser blocked file preview. Enable pop-ups for this site and try again.');
+  }
+
   const file = await loadCodeWorkspaceFile(roomId, relativePath);
   const blob = new Blob([decodeWorkspaceFile(file)], {
     type: inferMimeType(file.path, file.encoding),
   });
   const url = URL.createObjectURL(blob);
-  const opened = window.open(url, '_blank', 'noopener,noreferrer');
-  if (!opened) {
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = file.path.split('/').pop() || 'workspace-file';
-    anchor.rel = 'noopener noreferrer';
-    anchor.click();
+  try {
+    previewWindow.location.replace(url);
+  } catch {
+    previewWindow.location.href = url;
   }
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 };
@@ -213,7 +234,8 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       const selectedPath = selectedPaths.at(-1)?.replace(/\/$/, '');
       if (selectedPath && entryKindsRef.current.get(selectedPath) === 'file') {
         setOpenError(null);
-        void openWorkspaceFile(roomId, selectedPath).catch((error) => {
+        const previewWindow = openBlankPreviewWindow(selectedPath);
+        void openWorkspaceFile(roomId, selectedPath, previewWindow).catch((error) => {
           console.error('Failed to open workspace file:', error);
           setOpenError(error instanceof Error ? error.message : 'File open failed.');
         });

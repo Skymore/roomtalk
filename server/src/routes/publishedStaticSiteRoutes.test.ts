@@ -12,10 +12,12 @@ type TestServer = {
   baseUrl: string;
   close: () => Promise<void>;
   service: PublishedStaticSiteService;
+  roomIds: Set<string>;
 };
 
 const createTestServer = async (): Promise<TestServer> => {
   const app = express();
+  const roomIds = new Set(['room-1']);
   const service = new PublishedStaticSiteService({
     mediaObjectStorage: new MemoryMediaObjectStorage(),
     logger: new Logger('PublishedStaticSiteRoutesTest'),
@@ -26,6 +28,7 @@ const createTestServer = async (): Promise<TestServer> => {
   registerPublishedStaticSiteRoutes(app, {
     service,
     logger: new Logger('PublishedStaticSiteRoutesTest'),
+    getRoomById: async roomId => roomIds.has(roomId) ? { id: roomId } : null,
   });
 
   const server = await new Promise<HttpServer>(resolve => {
@@ -35,6 +38,7 @@ const createTestServer = async (): Promise<TestServer> => {
   return {
     baseUrl: `http://127.0.0.1:${port}`,
     service,
+    roomIds,
     close: () => new Promise<void>((resolve, reject) => {
       server.close(error => error ? reject(error) : resolve());
     }),
@@ -100,6 +104,36 @@ describe('published static site routes', () => {
     assert.equal(assetResponse.status, 200);
     assert.match(assetResponse.headers.get('content-type') || '', /^text\/javascript/);
     assert.equal(await assetResponse.text(), 'window.roomtalkDemo = true');
+  });
+
+  it('does not serve a published site after its room is deleted', async () => {
+    const token = server.service.issueTurnToken({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-1',
+      mode: 'acceptEdits',
+    });
+
+    const publishResponse = await fetch(`${server.baseUrl}/api/coco/publish-static-site`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        roomId: 'room-1',
+        turnId: 'turn-1',
+        slug: 'roomtalk-demo',
+        entry: 'index.html',
+        files: [textFile('index.html', '<!doctype html>published')],
+      }),
+    });
+    assert.equal(publishResponse.status, 201);
+
+    server.roomIds.delete('room-1');
+
+    const response = await fetch(`${server.baseUrl}/p/roomtalk-demo/`);
+    assert.equal(response.status, 404);
   });
 
   it('rejects missing tokens and returns 404 for missing sites', async () => {

@@ -54,7 +54,7 @@ Client state is centered in `MessagePage`, with reusable UI in `src/components`,
 
 Requirements:
 
-- Node.js 22 recommended.
+- Node.js 24.18.0 LTS recommended.
 - Redis running locally at `localhost:6379`.
 - Optional: PostgreSQL test database for PostgreSQL-mode smoke/E2E.
 
@@ -190,7 +190,7 @@ Production deployment is CI-first:
 
 - Pushes to `master` trigger `.github/workflows/fly-deploy.yml`.
 - CI installs dependencies, builds server/client, checks translations, verifies required Fly secrets, then deploys with `flyctl deploy --remote-only`.
-- The Fly app is `message-system` in `dfw`, with a Node 22 Alpine Docker image and a 512 MB VM.
+- The Fly app is `message-system` in `dfw`, with a Node 24.18.0 Alpine Docker image and a 512 MB VM.
 
 Required production services normally include Redis, PostgreSQL, S3/Tigris-compatible media storage, AI provider keys, and Google OAuth. Optional services include AssemblyAI and web-push VAPID keys.
 

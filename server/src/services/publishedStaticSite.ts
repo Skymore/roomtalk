@@ -51,6 +51,14 @@ export interface PublishedStaticSiteManifest {
   files: PublishedStaticSiteFileManifest[];
 }
 
+interface PublishedStaticSiteRoomIndex {
+  schemaVersion: 1;
+  roomId: string;
+  slugs: string[];
+  objectKeys: string[];
+  updatedAt: string;
+}
+
 export interface PublishedStaticSitePublishResult {
   url: string;
   slug: string;
@@ -75,6 +83,8 @@ export interface PublishedStaticSiteServiceOptions {
   logger: Logger;
   tokenSecret: string;
   publicBaseUrl?: string;
+  allowedPublicBaseUrls?: string[];
+  nodeEnv?: string;
   tokenTtlSeconds?: number;
   maxFiles?: number;
   maxTotalBytes?: number;
@@ -209,11 +219,34 @@ const manifestObjectKey = (slug: string) => `published-sites/${slug}/manifest.js
 const fileObjectKey = (slug: string, versionId: string, sitePath: string) => (
   `published-sites/${slug}/versions/${versionId}/${sitePath}`
 );
+const roomIndexObjectKey = (roomId: string) => (
+  `published-sites/by-room/${base64UrlEncode(roomId)}/index.json`
+);
 
 const routePathForSlug = (slug: string) => `${COCO_STATIC_PUBLISH_ROUTE_PREFIX}/${slug}/`;
 
 const joinPublicUrl = (baseUrl: string, routePath: string) => (
   `${baseUrl.replace(/\/+$/, '')}/${routePath.replace(/^\/+/, '')}`
+);
+
+const parseUrlOrigin = (value?: string) => {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.origin : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const parseOriginList = (value?: string) => (
+  (value || '')
+    .split(',')
+    .map(parseUrlOrigin)
+    .filter((origin): origin is string => Boolean(origin))
 );
 
 const versionIdFromDate = (date: Date, suffix: string) => (
@@ -227,6 +260,30 @@ const parseManifest = (value: Buffer): PublishedStaticSiteManifest | null => {
       return null;
     }
     return parsed as unknown as PublishedStaticSiteManifest;
+  } catch {
+    return null;
+  }
+};
+
+const parseRoomIndex = (value: Buffer, roomId: string): PublishedStaticSiteRoomIndex | null => {
+  try {
+    const parsed = JSON.parse(value.toString('utf8'));
+    if (
+      !isRecord(parsed) ||
+      parsed.schemaVersion !== 1 ||
+      parsed.roomId !== roomId ||
+      !Array.isArray(parsed.slugs) ||
+      !Array.isArray(parsed.objectKeys)
+    ) {
+      return null;
+    }
+    return {
+      schemaVersion: 1,
+      roomId,
+      slugs: parsed.slugs.filter((slug): slug is string => typeof slug === 'string'),
+      objectKeys: parsed.objectKeys.filter((key): key is string => typeof key === 'string'),
+      updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : new Date(0).toISOString(),
+    };
   } catch {
     return null;
   }
@@ -250,15 +307,38 @@ export class PublishedStaticSiteService {
   }
 
   get publicBaseUrl() {
-    return this.options.publicBaseUrl?.replace(/\/+$/, '');
+    return parseUrlOrigin(this.options.publicBaseUrl);
   }
 
   get publishApiUrl() {
     return this.publicBaseUrl ? joinPublicUrl(this.publicBaseUrl, COCO_STATIC_PUBLISH_API_PATH) : COCO_STATIC_PUBLISH_API_PATH;
   }
 
+  publishApiUrlForRequest(clientOrigin?: string, serverOrigin?: string) {
+    const publicBaseUrl = this.publicBaseUrlForRequest(clientOrigin, serverOrigin);
+    return publicBaseUrl ? joinPublicUrl(publicBaseUrl, COCO_STATIC_PUBLISH_API_PATH) : COCO_STATIC_PUBLISH_API_PATH;
+  }
+
+  publicBaseUrlForRequest(clientOrigin?: string, serverOrigin?: string) {
+    const normalizedServerOrigin = parseUrlOrigin(serverOrigin);
+    if (!this.isProduction()) {
+      return normalizedServerOrigin || this.publicBaseUrl;
+    }
+
+    const normalizedClientOrigin = parseUrlOrigin(clientOrigin);
+    if (normalizedClientOrigin && this.allowedPublicBaseUrlSet().has(normalizedClientOrigin)) {
+      return normalizedClientOrigin;
+    }
+
+    return this.publicBaseUrl || normalizedServerOrigin;
+  }
+
   isConfigured() {
-    return this.options.mediaObjectStorage.isConfigured() && Boolean(this.options.mediaObjectStorage.getMediaObject);
+    return (
+      this.options.mediaObjectStorage.isConfigured() &&
+      Boolean(this.options.mediaObjectStorage.getMediaObject) &&
+      Boolean(this.options.mediaObjectStorage.deleteMediaObject)
+    );
   }
 
   issueTurnToken(input: {
@@ -419,12 +499,31 @@ export class PublishedStaticSiteService {
     };
 
     const manifestBody = Buffer.from(JSON.stringify(manifest, null, 2), 'utf8');
+    const manifestKey = manifestObjectKey(slug);
     await this.options.mediaObjectStorage.putMediaObject({
-      objectKey: manifestObjectKey(slug),
+      objectKey: manifestKey,
       body: manifestBody,
       mimeType: MANIFEST_MIME_TYPE,
       byteSize: manifestBody.length,
     });
+    try {
+      await this.recordRoomPublish(input.roomId, slug, [
+        manifestKey,
+        ...files.map(file => file.objectKey),
+      ], now);
+    } catch (error) {
+      await this.deleteObjectKeys([
+        manifestKey,
+        ...files.map(file => file.objectKey),
+      ]).catch(cleanupError => {
+        this.options.logger.error('Failed to clean up static site after room index write failed', {
+          error: cleanupError,
+          roomId: input.roomId,
+          slug,
+        });
+      });
+      throw error;
+    }
 
     this.options.logger.info('Published Coco static site', {
       roomId: input.roomId,
@@ -464,6 +563,42 @@ export class PublishedStaticSiteService {
       this.options.logger.warn('Failed to read published static site manifest', { error, slug });
       return null;
     }
+  }
+
+  async deleteSitesForRoom(roomId: string): Promise<{ slugCount: number; objectCount: number }> {
+    const index = await this.readRoomIndex(roomId);
+    if (!index) {
+      return { slugCount: 0, objectCount: 0 };
+    }
+
+    const objectCount = await this.deleteObjectKeys([
+      ...index.objectKeys,
+      roomIndexObjectKey(roomId),
+    ]);
+    this.options.logger.info('Deleted published static sites for room', {
+      roomId,
+      slugCount: index.slugs.length,
+      objectCount,
+    });
+    return { slugCount: index.slugs.length, objectCount };
+  }
+
+  async deletePublishedSiteBySlug(slug: string): Promise<{ roomId?: string; objectCount: number }> {
+    const manifest = await this.readManifest(slug);
+    if (!manifest) {
+      return { objectCount: 0 };
+    }
+
+    const objectCount = await this.deleteObjectKeys([
+      manifestObjectKey(manifest.slug),
+      ...manifest.files.map(file => file.objectKey),
+    ]);
+    this.options.logger.info('Deleted published static site by slug', {
+      roomId: manifest.roomId,
+      slug: manifest.slug,
+      objectCount,
+    });
+    return { roomId: manifest.roomId, objectCount };
   }
 
   async readFile(slug: string, requestPath: string): Promise<{
@@ -507,9 +642,77 @@ export class PublishedStaticSiteService {
   }
 
   publicUrlForSlug(slug: string, requestBaseUrl?: string) {
-    const baseUrl = this.publicBaseUrl || requestBaseUrl;
+    const baseUrl = parseUrlOrigin(requestBaseUrl) || this.publicBaseUrl;
     const routePath = routePathForSlug(slug);
     return baseUrl ? joinPublicUrl(baseUrl, routePath) : routePath;
+  }
+
+  private isProduction() {
+    return (this.options.nodeEnv || process.env.NODE_ENV || 'development') === 'production';
+  }
+
+  private allowedPublicBaseUrlSet() {
+    return new Set((this.options.allowedPublicBaseUrls || []).map(parseUrlOrigin).filter((origin): origin is string => Boolean(origin)));
+  }
+
+  private async readRoomIndex(roomId: string): Promise<PublishedStaticSiteRoomIndex | null> {
+    if (!this.options.mediaObjectStorage.getMediaObject) {
+      return null;
+    }
+
+    try {
+      const objectKey = roomIndexObjectKey(roomId);
+      const head = await this.options.mediaObjectStorage.headObject({ objectKey });
+      if (!head.exists) {
+        return null;
+      }
+      const object = await this.options.mediaObjectStorage.getMediaObject(objectKey);
+      return parseRoomIndex(object.body, roomId);
+    } catch (error) {
+      this.options.logger.warn('Failed to read published static site room index', { error, roomId });
+      return null;
+    }
+  }
+
+  private async recordRoomPublish(roomId: string, slug: string, objectKeys: string[], now: Date) {
+    const existing = await this.readRoomIndex(roomId);
+    const index: PublishedStaticSiteRoomIndex = {
+      schemaVersion: 1,
+      roomId,
+      slugs: Array.from(new Set([...(existing?.slugs || []), slug])).sort(),
+      objectKeys: Array.from(new Set([...(existing?.objectKeys || []), ...objectKeys])).sort(),
+      updatedAt: now.toISOString(),
+    };
+    const body = Buffer.from(JSON.stringify(index, null, 2), 'utf8');
+    await this.options.mediaObjectStorage.putMediaObject({
+      objectKey: roomIndexObjectKey(roomId),
+      body,
+      mimeType: MANIFEST_MIME_TYPE,
+      byteSize: body.length,
+    });
+  }
+
+  private async deleteObjectKeys(objectKeys: string[]) {
+    if (!this.options.mediaObjectStorage.deleteMediaObject) {
+      throw new PublishedStaticSiteError('Static site deletion is not configured', 503);
+    }
+
+    let deleted = 0;
+    const errors: unknown[] = [];
+    for (const objectKey of Array.from(new Set(objectKeys)).sort()) {
+      try {
+        await this.options.mediaObjectStorage.deleteMediaObject(objectKey);
+        deleted++;
+      } catch (error) {
+        errors.push(error);
+        this.options.logger.error('Failed to delete published static site object', { error, objectKey });
+      }
+    }
+
+    if (errors.length > 0) {
+      throw new PublishedStaticSiteError('Failed to delete all published static site objects', 500);
+    }
+    return deleted;
   }
 }
 
@@ -528,7 +731,7 @@ export const createPublishedStaticSiteServiceFromEnv = (input: {
   const publicBaseUrl = (
     env.COCO_STATIC_PUBLISH_PUBLIC_URL ||
     env.ROOMTALK_STATIC_PUBLISH_PUBLIC_URL ||
-    env.CLIENT_URL ||
+    ((env.NODE_ENV || 'development') === 'production' ? env.CLIENT_URL : '') ||
     ''
   ).trim() || undefined;
   return new PublishedStaticSiteService({
@@ -536,6 +739,11 @@ export const createPublishedStaticSiteServiceFromEnv = (input: {
     logger: input.logger,
     tokenSecret,
     publicBaseUrl,
+    allowedPublicBaseUrls: [
+      ...parseOriginList(env.CLIENT_URLS),
+      ...parseOriginList(env.CLIENT_URL),
+    ],
+    nodeEnv: env.NODE_ENV || 'development',
     tokenTtlSeconds: Number(env.COCO_STATIC_PUBLISH_TOKEN_TTL_SECONDS) || DEFAULT_STATIC_PUBLISH_TOKEN_TTL_SECONDS,
   });
 };

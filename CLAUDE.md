@@ -97,6 +97,10 @@ Push to `master` triggers CI (`.github/workflows/fly-deploy.yml`): builds server
 
 Production: Fly.io app `message-system` in `dfw` region, Node 22 Alpine, 512MB VM. PostgreSQL on Supabase, Redis on Upstash, media on Tigris (S3-compatible).
 
+### Coco / E2B Artifact Rule
+
+Production Coco runs from a pinned E2B sandbox artifact, not directly from the deployed Node app source or a local Coco checkout. Any change to `server/roomtalk_coco_runner`, runner tools, runner system prompts, the sandbox Dockerfile, or files copied by `scripts/coco/prepare-sandbox-context.mjs` must bump `ops/coco-sandbox/artifact.lock.json` and `ops/coco-sandbox/Dockerfile`, rebuild the E2B template, update `COCO_E2B_TEMPLATE_ID` / `COCO_ARTIFACT_VERSION`, and verify with an E2B smoke or direct runner check. Any Coco engine change in `/Users/sky/projects/coco` must first be committed and pushed there, then RoomTalk must update `ops/coco-sandbox/artifact.lock.json` `coco.sourceRef` and production `COCO_SOURCE_REF`, rebuild the E2B template, and verify it. Otherwise production sandboxes will keep using the old runner or old Coco engine even after app deploys.
+
 ## Coding Conventions
 
 - TypeScript, two-space indent, no semicolons in some newer files (inconsistent — match the file you're editing)
