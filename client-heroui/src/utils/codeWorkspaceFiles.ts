@@ -1,4 +1,13 @@
-import { requestCodeWorkspaceEntries, requestCodeWorkspaceFile } from './socket';
+import {
+  requestCodeWorkspaceAssetUrl,
+  requestCodeWorkspaceEntries,
+  requestCodeWorkspaceFile,
+  requestCreateCodeWorkspaceDirectory,
+  requestDeleteCodeWorkspaceEntry,
+  requestRenameCodeWorkspaceEntry,
+  requestWriteCodeWorkspaceFile,
+} from './socket';
+import { apiPath } from './apiBase';
 
 export interface CodeWorkspaceEntry {
   path: string;
@@ -14,6 +23,11 @@ export interface CodeWorkspaceFile {
   byteSize: number;
   truncated: boolean;
   encoding: 'utf-8' | 'base64';
+}
+
+export interface CodeWorkspaceAssetUrl {
+  relativeUrl: string;
+  expiresAt: string;
 }
 
 export const loadCodeWorkspaceEntries = async (
@@ -50,6 +64,76 @@ export const loadCodeWorkspaceFile = async (
   }
 
   return validateWorkspaceFile(file);
+};
+
+export const createCodeWorkspaceAssetUrl = async (
+  roomId: string,
+  path: string,
+  options: { signal?: AbortSignal } = {}
+): Promise<CodeWorkspaceAssetUrl> => {
+  if (options.signal?.aborted) {
+    throw new Error('Workspace preview request aborted');
+  }
+
+  const asset = await requestCodeWorkspaceAssetUrl(roomId, path);
+  if (options.signal?.aborted) {
+    throw new Error('Workspace preview request aborted');
+  }
+
+  return validateWorkspaceAssetUrl(asset);
+};
+
+export const resolveCodeWorkspaceAssetUrl = (asset: CodeWorkspaceAssetUrl): string => (
+  apiPath(asset.relativeUrl)
+);
+
+export const writeCodeWorkspaceFile = async (
+  roomId: string,
+  path: string,
+  content: string,
+  encoding: CodeWorkspaceFile['encoding'] = 'utf-8'
+): Promise<CodeWorkspaceEntry> => {
+  const entry = await requestWriteCodeWorkspaceFile({ roomId, path, content, encoding });
+  return validateWorkspaceEntry(entry);
+};
+
+export const createCodeWorkspaceDirectory = async (
+  roomId: string,
+  path: string
+): Promise<CodeWorkspaceEntry> => {
+  const entry = await requestCreateCodeWorkspaceDirectory(roomId, path);
+  return validateWorkspaceEntry(entry);
+};
+
+export const renameCodeWorkspaceEntry = async (
+  roomId: string,
+  fromPath: string,
+  toPath: string
+): Promise<CodeWorkspaceEntry> => {
+  const entry = await requestRenameCodeWorkspaceEntry(roomId, fromPath, toPath);
+  return validateWorkspaceEntry(entry);
+};
+
+export const deleteCodeWorkspaceEntry = async (
+  roomId: string,
+  path: string
+): Promise<void> => {
+  await requestDeleteCodeWorkspaceEntry(roomId, path);
+};
+
+const validateWorkspaceAssetUrl = (value: unknown): CodeWorkspaceAssetUrl => {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Workspace asset URL response is invalid');
+  }
+  const asset = value as Partial<CodeWorkspaceAssetUrl>;
+  if (typeof asset.relativeUrl !== 'string' || typeof asset.expiresAt !== 'string') {
+    throw new Error('Workspace asset URL response is invalid');
+  }
+
+  return {
+    relativeUrl: asset.relativeUrl,
+    expiresAt: asset.expiresAt,
+  };
 };
 
 const validateWorkspaceEntry = (value: unknown): CodeWorkspaceEntry => {

@@ -16,6 +16,7 @@ import { PostgresStore } from './repositories/postgresStore';
 import { CompositeRoomStore, RoomStore } from './repositories/store';
 import { AI_ROLE_GENERATOR_MODEL_ID, createAIModelRegistry, DEFAULT_AI_MODEL_ID } from './services/aiModels';
 import { registerApiRoutes } from './routes/apiRoutes';
+import { registerCodeWorkspaceAssetRoutes } from './routes/codeWorkspaceAssetRoutes';
 import { registerPublishedStaticSiteRoutes } from './routes/publishedStaticSiteRoutes';
 import { loadStickerCatalog } from './stickers/catalog';
 import { registerSocketHandlers } from './socket/registerSocketHandlers';
@@ -34,6 +35,7 @@ import { CocoSessionService } from './services/cocoSessionService';
 import { E2BCocoSandboxService, E2BSandboxDriver } from './services/e2bCocoSandboxService';
 import { createE2BSdkDriver } from './services/e2bSdkDriver';
 import { COCO_RUNNER_SCHEMA_VERSION } from './services/cocoRunnerProtocol';
+import { createCodeWorkspaceAssetAccessFromEnv } from './services/codeWorkspaceAssetAccess';
 import {
   DEFAULT_COCO_E2B_KILL_TIMEOUT_MS,
   DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS,
@@ -72,6 +74,7 @@ const publishedStaticSiteService = createPublishedStaticSiteServiceFromEnv({
   mediaObjectStorage,
   logger: staticPublishLogger,
 });
+const codeWorkspaceAssetAccess = createCodeWorkspaceAssetAccessFromEnv();
 const aiStreamOwnerId = resolveAIStreamOwnerId();
 
 const aiModelRegistry = createAIModelRegistry({
@@ -213,7 +216,7 @@ const io = new Server(server, {
     methods: ['GET', 'POST'],
     credentials: true,
   },
-  maxHttpBufferSize: 5 * 1024 * 1024, // 设置最大消息大小为 5MB
+  maxHttpBufferSize: parsePositiveIntegerEnv('SOCKET_MAX_HTTP_BUFFER_SIZE', 25 * 1024 * 1024),
   pingTimeout: 60000, // 60秒超时
   pingInterval: 25000 // 25秒ping一次
 });
@@ -343,6 +346,7 @@ registerSocketHandlers({
   cocoSessionService,
   cocoAccess,
   cocoSandboxService,
+  codeWorkspaceAssetAccess,
   publishedStaticSiteService,
 });
 
@@ -408,6 +412,14 @@ registerPublishedStaticSiteRoutes(app, {
   service: publishedStaticSiteService,
   logger: staticPublishLogger,
   getRoomById: roomId => store.getRoomById(roomId),
+});
+
+registerCodeWorkspaceAssetRoutes(app, {
+  assetAccess: codeWorkspaceAssetAccess,
+  logger: routeLogger,
+  getRoomById: roomId => store.getRoomById(roomId),
+  cocoSandboxService,
+  maxAssetBytes: parsePositiveIntegerEnv('COCO_WORKSPACE_ASSET_MAX_BYTES', 25 * 1024 * 1024),
 });
 
 // Catch-all 路由，返回前端应用的入口 HTML 文件（支持前端路由）

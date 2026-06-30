@@ -37,7 +37,13 @@ vi.mock('./MessageInput', () => ({
 }));
 
 vi.mock('./CodeAgentFileBrowserPanel', () => ({
-  CodeAgentFileBrowserPanel: () => <div data-testid="file-browser" />,
+  CodeAgentFileBrowserPanel: ({ sandboxStatus, sandboxUpdatedAt }: { sandboxStatus?: string; sandboxUpdatedAt?: string }) => (
+    <div
+      data-testid="file-browser"
+      data-sandbox-status={sandboxStatus}
+      data-sandbox-updated-at={sandboxUpdatedAt}
+    />
+  ),
 }));
 
 vi.mock('../utils/socket', () => ({
@@ -66,6 +72,7 @@ const cocoRoom: Room = {
   createdAt: '2026-05-26T00:00:00.000Z',
   type: 'coco',
   sandboxStatus: 'ready',
+  sandboxUpdatedAt: '2026-06-30T10:00:00.000Z',
   cocoStatus: 'idle',
 };
 
@@ -120,6 +127,8 @@ describe('CodeAgentRoomView', () => {
     expect(screen.getByTestId('message-input').dataset.codeAgentRoom).toBe('true');
     expect(screen.getByTestId('message-input').dataset.codeAgentMode).toBe('acceptEdits');
     expect(screen.getByTestId('message-input').dataset.codeAgentMaxMode).toBe('acceptEdits');
+    expect(screen.getByTestId('file-browser').dataset.sandboxStatus).toBe('ready');
+    expect(screen.getByTestId('file-browser').dataset.sandboxUpdatedAt).toBe('2026-06-30T10:00:00.000Z');
   });
 
   it('constrains room edit mode when the server only allows plan mode', () => {

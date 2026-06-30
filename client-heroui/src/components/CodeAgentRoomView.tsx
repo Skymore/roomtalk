@@ -63,6 +63,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   const messageListRef = React.useRef<MessageListHandle>(null);
   const [composerHeight, setComposerHeight] = React.useState(96);
   const [showScrollButton, setShowScrollButton] = React.useState(false);
+  const [isMobileFileManagerOpen, setIsMobileFileManagerOpen] = React.useState(false);
   const normalizedAvailableModes = React.useMemo(
     () => (availableModes.length ? availableModes : ['plan' as CodeAgentMode]),
     [availableModes]
@@ -76,6 +77,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   React.useEffect(() => {
     setReplyToMessage(null);
     setShowScrollButton(false);
+    setIsMobileFileManagerOpen(false);
   }, [currentRoom.id]);
 
   const handleCodeAgentModeChange = React.useCallback((nextMode: CodeAgentMode) => {
@@ -141,11 +143,21 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
     );
   }
 
+  const renderFileManagerPanel = (surface: 'desktop' | 'mobile') => (
+    <CodeAgentFileBrowserPanel
+      key={`${currentRoom.id}:${surface}`}
+      roomId={currentRoom.id}
+      projectName={currentRoom.name || 'Workspace'}
+      sandboxStatus={currentRoom.sandboxStatus}
+      sandboxUpdatedAt={currentRoom.sandboxUpdatedAt}
+    />
+  );
+
   return (
     <div className="flex h-full min-h-0 w-full flex-1 flex-col bg-[#f5f4ed] dark:bg-[#141413]">
       {header}
 
-      <div className="grid min-h-0 w-full flex-1 overflow-hidden lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_420px]">
+      <div className="grid min-h-0 w-full flex-1 overflow-hidden lg:grid-cols-[minmax(0,1fr)_560px] xl:grid-cols-[minmax(0,1fr)_680px] 2xl:grid-cols-[minmax(0,1fr)_760px]">
         <div className="relative min-h-0 overflow-hidden">
           <MessageList
             key={currentRoom.id}
@@ -176,6 +188,18 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
               <Icon icon="lucide:arrow-down" className="h-4 w-4" />
             </Button>
           )}
+
+          <Button
+            isIconOnly
+            variant="solid"
+            size="sm"
+            radius="full"
+            className="absolute right-3 top-3 z-40 bg-[#30302e] text-[#faf9f5] shadow-[0_0_0_1px_rgba(194,192,182,0.7),0_10px_24px_rgba(20,20,19,0.16)] dark:bg-[#faf9f5] dark:text-[#141413] lg:hidden"
+            aria-label={t('codeAgentWorkspaceFiles')}
+            onPress={() => setIsMobileFileManagerOpen(true)}
+          >
+            <Icon icon="lucide:folder-tree" className="h-4 w-4" />
+          </Button>
 
           <div
             ref={composerRef}
@@ -210,9 +234,31 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
         </div>
 
         <aside className="hidden min-h-0 border-l border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b] lg:flex">
-          <CodeAgentFileBrowserPanel key={currentRoom.id} roomId={currentRoom.id} projectName={currentRoom.name || 'Workspace'} />
+          {renderFileManagerPanel('desktop')}
         </aside>
       </div>
+      {isMobileFileManagerOpen && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-[#faf9f5] dark:bg-[#1d1d1b] lg:hidden">
+          <div className="safe-top flex min-h-10 items-center gap-2 border-b border-[#dedbd0] px-3 py-1 dark:border-[#30302e]">
+            <Button
+              isIconOnly
+              variant="light"
+              size="sm"
+              aria-label={t('close')}
+              onPress={() => setIsMobileFileManagerOpen(false)}
+              className="h-8 w-8 min-w-8 rounded-lg text-[#141413] dark:text-[#faf9f5]"
+            >
+              <Icon icon="lucide:x" className="h-4 w-4" />
+            </Button>
+            <div className="min-w-0 flex-1 truncate text-sm font-medium text-[#141413] dark:text-[#faf9f5]">
+              {t('codeAgentWorkspaceFiles')}
+            </div>
+          </div>
+          <div className="min-h-0 flex-1">
+            {renderFileManagerPanel('mobile')}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

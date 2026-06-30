@@ -49,6 +49,21 @@ export interface ReadCocoWorkspaceFileOptions {
   maxBytes?: number;
 }
 
+export interface ReadCocoWorkspaceAssetOptions {
+  maxBytes?: number;
+}
+
+export interface WriteCocoWorkspaceFileInput {
+  path: string;
+  content: string;
+  encoding?: 'utf-8' | 'base64';
+}
+
+export interface RenameCocoWorkspaceEntryInput {
+  fromPath: string;
+  toPath: string;
+}
+
 export interface CocoWorkspaceEntry {
   path: string;
   name: string;
@@ -65,12 +80,38 @@ export interface CocoWorkspaceFile {
   encoding: 'utf-8' | 'base64';
 }
 
+export interface CocoWorkspaceAsset {
+  path: string;
+  body: Buffer;
+  byteSize: number;
+  truncated: boolean;
+}
+
+export interface CocoWorkspaceDiffSummary {
+  files: number;
+  additions: number;
+  deletions: number;
+}
+
+export interface CocoWorkspaceChanges {
+  available: boolean;
+  changedFiles: string[];
+  diffSummary: CocoWorkspaceDiffSummary | null;
+}
+
 export interface CocoSandboxService {
   create(input: CreateCocoSandboxInput): Promise<CocoSandboxHandle>;
   connect(sandboxId: string): Promise<CocoSandboxHandle>;
+  initializeWorkspaceVersionControl?(handle: CocoSandboxHandle): Promise<void>;
   startRunner(input: StartCocoRunnerInput): Promise<CocoRunnerProcess>;
+  getWorkspaceChanges?(handle: CocoSandboxHandle): Promise<CocoWorkspaceChanges>;
   listWorkspaceEntries?(handle: CocoSandboxHandle, options?: ListCocoWorkspaceEntriesOptions): Promise<CocoWorkspaceEntry[]>;
   readWorkspaceFile?(handle: CocoSandboxHandle, path: string, options?: ReadCocoWorkspaceFileOptions): Promise<CocoWorkspaceFile>;
+  readWorkspaceAsset?(handle: CocoSandboxHandle, path: string, options?: ReadCocoWorkspaceAssetOptions): Promise<CocoWorkspaceAsset>;
+  writeWorkspaceFile?(handle: CocoSandboxHandle, input: WriteCocoWorkspaceFileInput): Promise<CocoWorkspaceEntry>;
+  createWorkspaceDirectory?(handle: CocoSandboxHandle, path: string): Promise<CocoWorkspaceEntry>;
+  renameWorkspaceEntry?(handle: CocoSandboxHandle, input: RenameCocoWorkspaceEntryInput): Promise<CocoWorkspaceEntry>;
+  deleteWorkspaceEntry?(handle: CocoSandboxHandle, path: string): Promise<void>;
   destroy(sandboxId: string): Promise<void>;
   countActiveSandboxes?(): Promise<number | undefined>;
   countActiveSandboxesForUser?(creatorId: string): Promise<number | undefined>;

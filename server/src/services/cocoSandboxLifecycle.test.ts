@@ -142,12 +142,14 @@ describe('CocoSandboxLifecycleService', () => {
     const savedRoom = await store.getRoomById('room-1');
     assert.equal(savedRoom?.sandboxStatus, 'ready');
     assert.equal(savedRoom?.sandboxId, first.ok && first.handle.id);
+    assert.deepEqual(sandboxService.initializedWorkspaceVersionControlSandboxIds, [first.ok && first.handle.id]);
 
     const second = await lifecycle.ensureReadySandbox('room-1', 'client-1');
     assert.equal(second.ok, true);
     assert.equal(second.ok && second.created, false);
     assert.equal(second.ok && first.ok && second.handle.id, first.ok && first.handle.id);
     assert.equal(await sandboxService.countActiveSandboxes(), 1);
+    assert.deepEqual(sandboxService.initializedWorkspaceVersionControlSandboxIds, [first.ok && first.handle.id]);
   });
 
   it('rejects missing, non-Coco, and unauthorized rooms', async () => {
@@ -232,6 +234,20 @@ describe('CocoSandboxLifecycleService', () => {
     assert.equal(failureReason(result), 'store_conflict');
     assert.equal(sandboxService.destroyedSandboxIds.length, 1);
     assert.equal((await store.getRoomById('room-1'))?.sandboxStatus, 'error');
+  });
+
+  it('continues creating a new sandbox when workspace version control initialization fails', async () => {
+    const store = new MemoryRoomStore([room()]);
+    const sandboxService = new FakeCocoSandboxService(() => new Date('2026-05-03T00:00:00.000Z'));
+    sandboxService.failNext('initializeWorkspaceVersionControl');
+    const { lifecycle } = createLifecycle(store, sandboxService);
+
+    const result = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.created, true);
+    assert.equal((await store.getRoomById('room-1'))?.sandboxStatus, 'ready');
+    assert.equal(await sandboxService.countActiveSandboxes(), 1);
   });
 
   it('enforces global and per-user active sandbox limits before creating', async () => {

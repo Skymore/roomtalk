@@ -161,6 +161,7 @@ export class CocoSandboxLifecycleService {
         creatorId: room.creatorId,
         ttlMs: this.options.sandboxTtlMs,
       });
+      await this.initializeNewSandboxWorkspace(handle);
       const readyRoom = await this.store.saveRoom({
         ...lockedRoom,
         sandboxId: handle.id,
@@ -183,6 +184,21 @@ export class CocoSandboxLifecycleService {
       await this.store.compareAndSetRoomSandboxStatus(room.id, ['creating'], 'error', this.now().toISOString());
       this.logger.error('Error creating Coco sandbox', { error, roomId: room.id });
       return { ok: false, reason: 'sandbox_error', room, error: error as Error };
+    }
+  }
+
+  private async initializeNewSandboxWorkspace(handle: CocoSandboxHandle): Promise<void> {
+    if (!this.sandboxService.initializeWorkspaceVersionControl) {
+      return;
+    }
+    try {
+      await this.sandboxService.initializeWorkspaceVersionControl(handle);
+    } catch (error) {
+      this.logger.warn('Coco sandbox workspace version control initialization failed', {
+        error,
+        roomId: handle.roomId,
+        sandboxId: handle.id,
+      });
     }
   }
 

@@ -15,6 +15,12 @@ export interface CodeAgentWorkspaceCommand {
   preview?: string;
 }
 
+export interface CodeAgentWorkspaceDiffSummary {
+  files: number;
+  additions: number;
+  deletions: number;
+}
+
 export interface CodeAgentWorkspaceSnapshot {
   roomId: string;
   backend: 'coco';
@@ -27,9 +33,9 @@ export interface CodeAgentWorkspaceSnapshot {
   };
   summary: CocoWorkspaceSummary;
   changes: {
-    available: false;
+    available: boolean;
     changedFiles: string[];
-    diffSummary: null;
+    diffSummary: CodeAgentWorkspaceDiffSummary | null;
   };
   commands: CodeAgentWorkspaceCommand[];
 }

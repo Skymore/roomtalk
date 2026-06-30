@@ -108,6 +108,14 @@ type CodeWorkspaceFileAckResponse = SocketAckResponse & {
   file?: unknown;
 };
 
+type CodeWorkspaceEntryAckResponse = SocketAckResponse & {
+  entry?: unknown;
+};
+
+type CodeWorkspaceAssetUrlAckResponse = SocketAckResponse & {
+  asset?: unknown;
+};
+
 type CodeAgentMode = 'plan' | 'acceptEdits';
 
 type RoomAckResponse = SocketAckResponse & {
@@ -1002,6 +1010,80 @@ export const requestCodeWorkspaceFile = (roomId: string, path: string): Promise<
 
     return response.file;
   })
+);
+
+export const requestCodeWorkspaceAssetUrl = (roomId: string, path: string): Promise<unknown> => (
+  emitWithAck<CodeWorkspaceAssetUrlAckResponse>(
+    'create_code_workspace_asset_url',
+    { roomId, path },
+    'Timed out while preparing workspace file preview',
+    'Failed to prepare workspace file preview',
+  ).then((response) => {
+    if (!response.asset) {
+      throw new Error('Server did not return workspace asset URL');
+    }
+
+    return response.asset;
+  })
+);
+
+export const requestWriteCodeWorkspaceFile = (params: {
+  roomId: string;
+  path: string;
+  content: string;
+  encoding?: 'utf-8' | 'base64';
+}): Promise<unknown> => (
+  emitWithAck<CodeWorkspaceEntryAckResponse>(
+    'write_code_workspace_file',
+    params,
+    'Timed out while writing workspace file',
+    'Failed to write workspace file',
+  ).then((response) => {
+    if (!response.entry) {
+      throw new Error('Server did not return workspace entry');
+    }
+
+    return response.entry;
+  })
+);
+
+export const requestCreateCodeWorkspaceDirectory = (roomId: string, path: string): Promise<unknown> => (
+  emitWithAck<CodeWorkspaceEntryAckResponse>(
+    'create_code_workspace_directory',
+    { roomId, path },
+    'Timed out while creating workspace directory',
+    'Failed to create workspace directory',
+  ).then((response) => {
+    if (!response.entry) {
+      throw new Error('Server did not return workspace entry');
+    }
+
+    return response.entry;
+  })
+);
+
+export const requestRenameCodeWorkspaceEntry = (roomId: string, fromPath: string, toPath: string): Promise<unknown> => (
+  emitWithAck<CodeWorkspaceEntryAckResponse>(
+    'rename_code_workspace_entry',
+    { roomId, fromPath, toPath },
+    'Timed out while renaming workspace entry',
+    'Failed to rename workspace entry',
+  ).then((response) => {
+    if (!response.entry) {
+      throw new Error('Server did not return workspace entry');
+    }
+
+    return response.entry;
+  })
+);
+
+export const requestDeleteCodeWorkspaceEntry = (roomId: string, path: string): Promise<void> => (
+  emitWithAck<SocketAckResponse>(
+    'delete_code_workspace_entry',
+    { roomId, path },
+    'Timed out while deleting workspace entry',
+    'Failed to delete workspace entry',
+  ).then(() => undefined)
 );
 
 export const sendMessageAndAskAI = (params: {

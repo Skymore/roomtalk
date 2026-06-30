@@ -46,7 +46,11 @@ interface E2BSdkSandbox {
   commands: E2BSdkCommands;
   files?: {
     list(path: string, opts?: { depth?: number }): Promise<E2BFileEntry[]>;
-    read?(path: string, opts?: { format?: 'text' | 'bytes' }): Promise<string | Uint8Array>;
+    read?(path: string, opts?: { format?: 'text' | 'bytes' | 'stream' }): Promise<string | Uint8Array | ReadableStream<Uint8Array>>;
+    write?(path: string, data: string | Uint8Array): Promise<unknown>;
+    makeDir?(path: string): Promise<unknown>;
+    rename?(oldPath: string, newPath: string): Promise<unknown>;
+    remove?(path: string): Promise<void>;
   };
   kill(): Promise<void>;
 }
@@ -171,6 +175,10 @@ class E2BSdkDriver implements E2BSandboxDriver {
         ? {
             list: (path, options) => sandbox.files!.list(path, { depth: options?.depth }),
             ...(sandbox.files.read ? { read: (path, options) => sandbox.files!.read!(path, options) } : {}),
+            ...(sandbox.files.write ? { write: (path, data) => sandbox.files!.write!(path, data) } : {}),
+            ...(sandbox.files.makeDir ? { makeDir: (path) => sandbox.files!.makeDir!(path) } : {}),
+            ...(sandbox.files.rename ? { rename: (oldPath, newPath) => sandbox.files!.rename!(oldPath, newPath) } : {}),
+            ...(sandbox.files.remove ? { remove: (path) => sandbox.files!.remove!(path) } : {}),
           }
         : undefined,
       kill: () => sandbox.kill(),

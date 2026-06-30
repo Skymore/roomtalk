@@ -79,6 +79,9 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
     () => (workspaceSnapshot?.commands || []).slice(-5).reverse(),
     [workspaceSnapshot?.commands]
   );
+  const workspaceChanges = workspaceSnapshot?.changes;
+  const changedFiles = workspaceChanges?.changedFiles || [];
+  const diffSummary = workspaceChanges?.diffSummary || null;
   const isPlanMode = mode === 'plan';
   const agentStatus = getCodeAgentStatus(room);
   const detailsId = 'code-agent-workspace-details';
@@ -260,6 +263,48 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                 </div>
               ) : (
                 <p className="px-1 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentNoActivity')}</p>
+              )}
+            </div>
+          </Tab>
+
+          <Tab
+            key="changes"
+            title={
+              <span className="inline-flex items-center gap-1.5">
+                <Icon icon="lucide:git-compare-arrows" className="h-3.5 w-3.5" />
+                {t('codeAgentChanges')}
+              </span>
+            }
+          >
+            <div className="max-h-44 overflow-y-auto px-3 py-2">
+              {!workspaceChanges?.available ? (
+                <p className="text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentChangesUnavailable')}</p>
+              ) : changedFiles.length === 0 ? (
+                <p className="text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentNoWorkspaceChanges')}</p>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-[#4d4c48] dark:text-[#e8e6dc]">
+                    <span className="font-semibold">{t('codeAgentChangedFilesCount', { count: changedFiles.length })}</span>
+                    {diffSummary ? (
+                      <span className="font-mono text-[11px] text-[#87867f] dark:text-[#8f8d86]">
+                        +{diffSummary.additions} -{diffSummary.deletions}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="space-y-1">
+                    {changedFiles.slice(0, 50).map((path) => (
+                      <div key={path} className="flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-[#4d4c48] dark:text-[#e8e6dc]">
+                        <Icon icon="lucide:file-code-2" className="h-3.5 w-3.5 flex-shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                        <span className="truncate font-mono text-[11px]" title={path}>{path}</span>
+                      </div>
+                    ))}
+                    {changedFiles.length > 50 ? (
+                      <p className="px-2 text-[11px] text-[#87867f] dark:text-[#8f8d86]">
+                        {t('codeAgentMoreChangedFiles', { count: changedFiles.length - 50 })}
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
               )}
             </div>
           </Tab>

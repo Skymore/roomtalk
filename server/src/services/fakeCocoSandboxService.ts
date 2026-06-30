@@ -3,25 +3,33 @@ import {
   CocoRunnerProcess,
   CocoSandboxHandle,
   CocoSandboxService,
+  CocoWorkspaceChanges,
+  CocoWorkspaceAsset,
   CocoWorkspaceEntry,
   CocoWorkspaceFile,
   CreateCocoSandboxInput,
   ListCocoWorkspaceEntriesOptions,
+  RenameCocoWorkspaceEntryInput,
+  ReadCocoWorkspaceAssetOptions,
   ReadCocoWorkspaceFileOptions,
   StartCocoRunnerInput,
+  WriteCocoWorkspaceFileInput,
 } from './cocoSandboxService';
 
-type FakeSandboxFailure = 'create' | 'connect' | 'startRunner' | 'destroy';
+type FakeSandboxFailure = 'create' | 'connect' | 'initializeWorkspaceVersionControl' | 'startRunner' | 'destroy';
 
 export class FakeCocoSandboxService implements CocoSandboxService {
   private readonly sandboxes = new Map<string, CocoSandboxHandle>();
   private readonly failures = new Set<FakeSandboxFailure>();
   readonly destroyedSandboxIds: string[] = [];
+  readonly initializedWorkspaceVersionControlSandboxIds: string[] = [];
   readonly startedRunnerCommands: string[] = [];
   readonly startedRunnerEnvs: Record<string, string>[] = [];
   readonly stoppedRunnerCommands: string[] = [];
   private readonly workspaceEntriesBySandboxId = new Map<string, CocoWorkspaceEntry[]>();
   private readonly workspaceFileContentsBySandboxId = new Map<string, Map<string, string>>();
+  private readonly workspaceFileBytesBySandboxId = new Map<string, Map<string, Buffer>>();
+  private readonly workspaceChangesBySandboxId = new Map<string, CocoWorkspaceChanges>();
 
   constructor(private readonly now: () => Date = () => new Date()) {}
 
@@ -52,6 +60,7 @@ export class FakeCocoSandboxService implements CocoSandboxService {
     this.sandboxes.set(handle.id, handle);
     this.workspaceEntriesBySandboxId.set(handle.id, []);
     this.workspaceFileContentsBySandboxId.set(handle.id, new Map());
+    this.workspaceFileBytesBySandboxId.set(handle.id, new Map());
     return handle;
   }
 
@@ -64,6 +73,14 @@ export class FakeCocoSandboxService implements CocoSandboxService {
     return handle;
   }
 
+  async initializeWorkspaceVersionControl(handle: CocoSandboxHandle): Promise<void> {
+    this.consumeFailure('initializeWorkspaceVersionControl');
+    if (!this.sandboxes.has(handle.id)) {
+      throw new Error(`Fake Coco sandbox not found: ${handle.id}`);
+    }
+    this.initializedWorkspaceVersionControlSandboxIds.push(handle.id);
+  }
+
   async startRunner(input: StartCocoRunnerInput): Promise<CocoRunnerProcess> {
     this.consumeFailure('startRunner');
     this.startedRunnerCommands.push(input.command);
@@ -73,6 +90,22 @@ export class FakeCocoSandboxService implements CocoSandboxService {
       stop: async () => {
         this.stoppedRunnerCommands.push(input.command);
       },
+    };
+  }
+
+  setWorkspaceChanges(sandboxId: string, changes: CocoWorkspaceChanges) {
+    this.workspaceChangesBySandboxId.set(sandboxId, changes);
+  }
+
+  async getWorkspaceChanges(handle: CocoSandboxHandle): Promise<CocoWorkspaceChanges> {
+    this.consumeFailure('connect');
+    if (!this.sandboxes.has(handle.id)) {
+      throw new Error(`Fake Coco sandbox not found: ${handle.id}`);
+    }
+    return this.workspaceChangesBySandboxId.get(handle.id) || {
+      available: false,
+      changedFiles: [],
+      diffSummary: null,
     };
   }
 
@@ -94,8 +127,18 @@ export class FakeCocoSandboxService implements CocoSandboxService {
 
   setWorkspaceFileContent(sandboxId: string, path: string, content: string) {
     const files = this.workspaceFileContentsBySandboxId.get(sandboxId) || new Map<string, string>();
-    files.set(normalizeFakeWorkspacePath(path), content);
+    const fileBytes = this.workspaceFileBytesBySandboxId.get(sandboxId) || new Map<string, Buffer>();
+    const normalizedPath = normalizeFakeWorkspacePath(path);
+    files.set(normalizedPath, content);
+    fileBytes.set(normalizedPath, Buffer.from(content, 'utf8'));
     this.workspaceFileContentsBySandboxId.set(sandboxId, files);
+    this.workspaceFileBytesBySandboxId.set(sandboxId, fileBytes);
+    this.upsertWorkspaceEntry(sandboxId, {
+      path: normalizedPath,
+      name: normalizedPath.split('/').pop() || normalizedPath,
+      type: 'file',
+      size: Buffer.byteLength(content),
+    });
   }
 
   async listWorkspaceEntries(
@@ -134,12 +177,160 @@ export class FakeCocoSandboxService implements CocoSandboxService {
     };
   }
 
+  async readWorkspaceAsset(
+    handle: CocoSandboxHandle,
+    path: string,
+    options: ReadCocoWorkspaceAssetOptions = {}
+  ): Promise<CocoWorkspaceAsset> {
+    this.consumeFailure('connect');
+    if (!this.sandboxes.has(handle.id)) {
+      throw new Error(`Fake Coco sandbox not found: ${handle.id}`);
+    }
+    const normalizedPath = normalizeFakeWorkspacePath(path);
+    const body = this.workspaceFileBytesBySandboxId.get(handle.id)?.get(normalizedPath) || Buffer.alloc(0);
+    const maxBytes = options.maxBytes ?? 10 * 1024 * 1024;
+    const truncated = body.byteLength > maxBytes;
+    return {
+      path: normalizedPath,
+      body: truncated ? body.subarray(0, maxBytes) : body,
+      byteSize: body.byteLength,
+      truncated,
+    };
+  }
+
+  async writeWorkspaceFile(
+    handle: CocoSandboxHandle,
+    input: WriteCocoWorkspaceFileInput
+  ): Promise<CocoWorkspaceEntry> {
+    this.consumeFailure('connect');
+    if (!this.sandboxes.has(handle.id)) {
+      throw new Error(`Fake Coco sandbox not found: ${handle.id}`);
+    }
+    const normalizedPath = normalizeFakeWorkspacePath(input.path);
+    const buffer = input.encoding === 'base64'
+      ? Buffer.from(input.content, 'base64')
+      : Buffer.from(input.content, 'utf8');
+    const content = input.encoding === 'base64' ? buffer.toString('binary') : input.content;
+    const files = this.workspaceFileContentsBySandboxId.get(handle.id) || new Map<string, string>();
+    const fileBytes = this.workspaceFileBytesBySandboxId.get(handle.id) || new Map<string, Buffer>();
+    files.set(normalizedPath, content);
+    fileBytes.set(normalizedPath, buffer);
+    this.workspaceFileContentsBySandboxId.set(handle.id, files);
+    this.workspaceFileBytesBySandboxId.set(handle.id, fileBytes);
+    const entry = {
+      path: normalizedPath,
+      name: normalizedPath.split('/').pop() || normalizedPath,
+      type: 'file' as const,
+      size: buffer.byteLength,
+    };
+    this.upsertWorkspaceEntry(handle.id, entry);
+    return entry;
+  }
+
+  async createWorkspaceDirectory(handle: CocoSandboxHandle, path: string): Promise<CocoWorkspaceEntry> {
+    this.consumeFailure('connect');
+    if (!this.sandboxes.has(handle.id)) {
+      throw new Error(`Fake Coco sandbox not found: ${handle.id}`);
+    }
+    const normalizedPath = normalizeFakeWorkspacePath(path);
+    const entry = {
+      path: normalizedPath,
+      name: normalizedPath.split('/').pop() || normalizedPath,
+      type: 'directory' as const,
+    };
+    this.upsertWorkspaceEntry(handle.id, entry);
+    return entry;
+  }
+
+  async renameWorkspaceEntry(
+    handle: CocoSandboxHandle,
+    input: RenameCocoWorkspaceEntryInput
+  ): Promise<CocoWorkspaceEntry> {
+    this.consumeFailure('connect');
+    if (!this.sandboxes.has(handle.id)) {
+      throw new Error(`Fake Coco sandbox not found: ${handle.id}`);
+    }
+    const fromPath = normalizeFakeWorkspacePath(input.fromPath);
+    const toPath = normalizeFakeWorkspacePath(input.toPath);
+    const entries = this.workspaceEntriesBySandboxId.get(handle.id) || [];
+    const nextEntries = entries.map(entry => {
+      if (entry.path !== fromPath && !entry.path.startsWith(`${fromPath}/`)) {
+        return entry;
+      }
+      const suffix = entry.path === fromPath ? '' : entry.path.slice(fromPath.length);
+      const path = `${toPath}${suffix}`;
+      return {
+        ...entry,
+        path,
+        name: path.split('/').pop() || path,
+      };
+    });
+    this.workspaceEntriesBySandboxId.set(handle.id, nextEntries);
+
+    const files = this.workspaceFileContentsBySandboxId.get(handle.id) || new Map<string, string>();
+    const fileBytes = this.workspaceFileBytesBySandboxId.get(handle.id) || new Map<string, Buffer>();
+    for (const [path, content] of [...files.entries()]) {
+      if (path !== fromPath && !path.startsWith(`${fromPath}/`)) {
+        continue;
+      }
+      const suffix = path === fromPath ? '' : path.slice(fromPath.length);
+      files.delete(path);
+      files.set(`${toPath}${suffix}`, content);
+    }
+    for (const [path, body] of [...fileBytes.entries()]) {
+      if (path !== fromPath && !path.startsWith(`${fromPath}/`)) {
+        continue;
+      }
+      const suffix = path === fromPath ? '' : path.slice(fromPath.length);
+      fileBytes.delete(path);
+      fileBytes.set(`${toPath}${suffix}`, body);
+    }
+    this.workspaceFileContentsBySandboxId.set(handle.id, files);
+    this.workspaceFileBytesBySandboxId.set(handle.id, fileBytes);
+
+    const renamed = nextEntries.find(entry => entry.path === toPath);
+    return renamed || {
+      path: toPath,
+      name: toPath.split('/').pop() || toPath,
+      type: 'file',
+    };
+  }
+
+  async deleteWorkspaceEntry(handle: CocoSandboxHandle, path: string): Promise<void> {
+    this.consumeFailure('connect');
+    if (!this.sandboxes.has(handle.id)) {
+      throw new Error(`Fake Coco sandbox not found: ${handle.id}`);
+    }
+    const normalizedPath = normalizeFakeWorkspacePath(path);
+    this.workspaceEntriesBySandboxId.set(
+      handle.id,
+      (this.workspaceEntriesBySandboxId.get(handle.id) || [])
+        .filter(entry => entry.path !== normalizedPath && !entry.path.startsWith(`${normalizedPath}/`))
+    );
+    const files = this.workspaceFileContentsBySandboxId.get(handle.id) || new Map<string, string>();
+    const fileBytes = this.workspaceFileBytesBySandboxId.get(handle.id) || new Map<string, Buffer>();
+    for (const filePath of [...files.keys()]) {
+      if (filePath === normalizedPath || filePath.startsWith(`${normalizedPath}/`)) {
+        files.delete(filePath);
+      }
+    }
+    for (const filePath of [...fileBytes.keys()]) {
+      if (filePath === normalizedPath || filePath.startsWith(`${normalizedPath}/`)) {
+        fileBytes.delete(filePath);
+      }
+    }
+    this.workspaceFileContentsBySandboxId.set(handle.id, files);
+    this.workspaceFileBytesBySandboxId.set(handle.id, fileBytes);
+  }
+
   async destroy(sandboxId: string): Promise<void> {
     this.consumeFailure('destroy');
     this.destroyedSandboxIds.push(sandboxId);
     this.sandboxes.delete(sandboxId);
     this.workspaceEntriesBySandboxId.delete(sandboxId);
     this.workspaceFileContentsBySandboxId.delete(sandboxId);
+    this.workspaceFileBytesBySandboxId.delete(sandboxId);
+    this.workspaceChangesBySandboxId.delete(sandboxId);
   }
 
   async countActiveSandboxes(): Promise<number> {
@@ -148,6 +339,22 @@ export class FakeCocoSandboxService implements CocoSandboxService {
 
   async countActiveSandboxesForUser(creatorId: string): Promise<number> {
     return [...this.sandboxes.values()].filter(handle => handle.creatorId === creatorId).length;
+  }
+
+  private upsertWorkspaceEntry(sandboxId: string, entry: CocoWorkspaceEntry) {
+    const entries = this.workspaceEntriesBySandboxId.get(sandboxId) || [];
+    const ancestorEntries = workspaceAncestorDirectories(entry.path)
+      .filter(path => !entries.some(candidate => candidate.path === path))
+      .map(path => ({
+        path,
+        name: path.split('/').pop() || path,
+        type: 'directory' as const,
+      }));
+    this.workspaceEntriesBySandboxId.set(sandboxId, [
+      ...entries.filter(candidate => candidate.path !== entry.path),
+      ...ancestorEntries,
+      entry,
+    ]);
   }
 }
 
@@ -162,4 +369,13 @@ const compareFakeWorkspaceEntries = (a: CocoWorkspaceEntry, b: CocoWorkspaceEntr
     return a.type === 'directory' ? -1 : 1;
   }
   return a.path.localeCompare(b.path);
+};
+
+const workspaceAncestorDirectories = (path: string): string[] => {
+  const parts = path.split('/').filter(Boolean);
+  const ancestors: string[] = [];
+  for (let index = 1; index < parts.length; index += 1) {
+    ancestors.push(parts.slice(0, index).join('/'));
+  }
+  return ancestors;
 };

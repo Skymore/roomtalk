@@ -1,4 +1,5 @@
 import { Message, Room, RoomCocoStatus, RoomSandboxStatus } from '../types';
+import { CocoWorkspaceChanges } from './cocoSandboxService';
 
 export interface CodeAgentWorkspaceCommand {
   id: string;
@@ -27,9 +28,9 @@ export interface CodeAgentWorkspaceSnapshot {
   };
   summary: CodeAgentWorkspaceSummary;
   changes: {
-    available: false;
+    available: boolean;
     changedFiles: string[];
-    diffSummary: null;
+    diffSummary: CocoWorkspaceChanges['diffSummary'];
   };
   commands: CodeAgentWorkspaceCommand[];
 }
@@ -123,7 +124,12 @@ export const summarizeWorkspaceMessages = (messages: Message[]): CodeAgentWorksp
 export const buildCodeAgentWorkspaceSnapshot = (
   room: Room,
   messages: Message[],
-  now = new Date()
+  now = new Date(),
+  changes: CocoWorkspaceChanges = {
+    available: false,
+    changedFiles: [],
+    diffSummary: null,
+  }
 ): CodeAgentWorkspaceSnapshot => {
   return {
     roomId: room.id,
@@ -136,11 +142,7 @@ export const buildCodeAgentWorkspaceSnapshot = (
       hasSession: Boolean(room.cocoSessionId),
     },
     summary: summarizeWorkspaceMessages(messages),
-    changes: {
-      available: false,
-      changedFiles: [],
-      diffSummary: null,
-    },
+    changes,
     commands: buildCommandHistory(messages),
   };
 };

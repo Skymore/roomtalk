@@ -11,7 +11,11 @@ class FakeE2BDriver implements E2BSandboxDriver {
   readonly commandOptions: Record<string, unknown>[] = [];
   readonly createInputs: unknown[] = [];
   readonly fileListRequests: Array<{ path: string; options?: { depth?: number } }> = [];
-  readonly fileReadRequests: Array<{ path: string; options?: { format?: 'text' | 'bytes' } }> = [];
+  readonly fileReadRequests: Array<{ path: string; options?: { format?: 'text' | 'bytes' | 'stream' } }> = [];
+  readonly fileWriteRequests: Array<{ path: string; data: string | Uint8Array }> = [];
+  readonly fileMakeDirRequests: string[] = [];
+  readonly fileRenameRequests: Array<{ oldPath: string; newPath: string }> = [];
+  readonly fileRemoveRequests: string[] = [];
   failList = false;
 
   async create(input: { templateId: string; timeoutMs: number; metadata: Record<string, string> }): Promise<E2BSandboxDriverHandle> {
@@ -47,11 +51,31 @@ class FakeE2BDriver implements E2BSandboxDriver {
         run: async (command, options) => {
           this.commands.push(command);
           this.commandOptions.push(options || {});
+          const stdout = new PassThrough();
+          const stderr = new PassThrough();
+          setTimeout(() => {
+            if (command.includes('__ROOMTALK_STATUS__')) {
+              stdout.end([
+                '__ROOMTALK_STATUS__',
+                ' M src/App.tsx',
+                '?? src/New File.tsx',
+                'R  src/Old.tsx -> src/New.tsx',
+                '__ROOMTALK_NUMSTAT__',
+                '10\t2\tsrc/App.tsx',
+                '5\t0\tsrc/New.tsx',
+                '-\t-\tpublic/logo.png',
+                '',
+              ].join('\n'));
+            } else {
+              stdout.end();
+            }
+            stderr.end();
+          }, 0);
           return {
             pid: 42,
             stdin: new PassThrough(),
-            stdout: new PassThrough(),
-            stderr: new PassThrough(),
+            stdout,
+            stderr,
             completed: Promise.resolve({ exitCode: 0, signal: null }),
           };
         },
@@ -67,7 +91,27 @@ class FakeE2BDriver implements E2BSandboxDriver {
         },
         read: async (path, options) => {
           this.fileReadRequests.push({ path, options });
-          return Buffer.from('<h1>Report</h1>', 'utf8');
+          return new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(Buffer.from('<h1>Report</h1>', 'utf8'));
+              controller.close();
+            },
+          });
+        },
+        write: async (path, data) => {
+          this.fileWriteRequests.push({ path, data });
+          return {};
+        },
+        makeDir: async (path) => {
+          this.fileMakeDirRequests.push(path);
+          return true;
+        },
+        rename: async (oldPath, newPath) => {
+          this.fileRenameRequests.push({ oldPath, newPath });
+          return { path: newPath, type: 'file' };
+        },
+        remove: async (path) => {
+          this.fileRemoveRequests.push(path);
         },
       },
       kill: async () => {
@@ -145,9 +189,34 @@ describe('E2BCocoSandboxService', () => {
       truncated: false,
       encoding: 'utf-8',
     });
-    assert.deepEqual(driver.fileReadRequests, [{ path: '/workspace/output/report.html', options: { format: 'bytes' } }]);
+    assert.deepEqual(driver.fileReadRequests, [{ path: '/workspace/output/report.html', options: { format: 'stream' } }]);
     assert.equal((await service.readWorkspaceFile(handle, '/workspace/plot_output.png')).path, 'plot_output.png');
-    assert.deepEqual(driver.fileReadRequests[1], { path: '/workspace/plot_output.png', options: { format: 'bytes' } });
+    assert.deepEqual(driver.fileReadRequests[1], { path: '/workspace/plot_output.png', options: { format: 'stream' } });
+    assert.deepEqual(await service.writeWorkspaceFile(handle, {
+      path: 'src/App.tsx',
+      content: 'export default {}',
+      encoding: 'utf-8',
+    }), {
+      path: 'src/App.tsx',
+      name: 'App.tsx',
+      type: 'file',
+      size: 17,
+    });
+    assert.deepEqual(driver.fileWriteRequests, [{ path: '/workspace/src/App.tsx', data: 'export default {}' }]);
+    assert.deepEqual(await service.createWorkspaceDirectory(handle, 'src/components'), {
+      path: 'src/components',
+      name: 'components',
+      type: 'directory',
+    });
+    assert.deepEqual(driver.fileMakeDirRequests, ['/workspace/src/components']);
+    assert.deepEqual(await service.renameWorkspaceEntry(handle, { fromPath: 'src/App.tsx', toPath: 'src/Main.tsx' }), {
+      path: 'src/Main.tsx',
+      name: 'Main.tsx',
+      type: 'file',
+    });
+    assert.deepEqual(driver.fileRenameRequests, [{ oldPath: '/workspace/src/App.tsx', newPath: '/workspace/src/Main.tsx' }]);
+    await service.deleteWorkspaceEntry(handle, 'src/Main.tsx');
+    assert.deepEqual(driver.fileRemoveRequests, ['/workspace/src/Main.tsx']);
     assert.equal(await service.countActiveSandboxes(), 1);
     assert.equal(await service.countActiveSandboxesForUser('client-1'), 1);
     assert.equal(await service.countActiveSandboxesForUser('client-2'), 0);
@@ -166,12 +235,44 @@ describe('E2BCocoSandboxService', () => {
     assert.deepEqual(driver.killed, [handle.id]);
   });
 
+  it('initializes workspace version control with a baseline commit', async () => {
+    const driver = new FakeE2BDriver();
+    const service = new E2BCocoSandboxService(driver, { templateId: 'roomtalk-coco' });
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+
+    await service.initializeWorkspaceVersionControl(handle);
+
+    assert.equal(driver.commands.length, 1);
+    assert.match(driver.commands[0], /cd '\/workspace'/);
+    assert.match(driver.commands[0], /git init -b main/);
+    assert.match(driver.commands[0], /git add -A/);
+    assert.match(driver.commands[0], /git commit --allow-empty -m "workspace baseline"/);
+    assert.deepEqual(driver.commandOptions, [{ timeoutMs: 30_000 }]);
+  });
+
+  it('reads workspace changed files from git status output', async () => {
+    const driver = new FakeE2BDriver();
+    const service = new E2BCocoSandboxService(driver, { templateId: 'roomtalk-coco' });
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+
+    assert.deepEqual(await service.getWorkspaceChanges(handle), {
+      available: true,
+      changedFiles: ['src/App.tsx', 'src/New File.tsx', 'src/New.tsx'],
+      diffSummary: { files: 3, additions: 15, deletions: 2 },
+    });
+    assert.match(driver.commands[0], /git status --porcelain=v1/);
+    assert.match(driver.commands[0], /git diff --numstat HEAD --/);
+    assert.deepEqual(driver.commandOptions, [{ timeoutMs: 10_000 }]);
+  });
+
   it('fails loudly when the driver cannot execute commands or kill sandboxes', async () => {
     const driver = new FakeE2BDriver();
     const service = new E2BCocoSandboxService(driver, { templateId: 'roomtalk-coco' });
     const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
     driver.handles.set(handle.id, { id: handle.id });
 
+    await assert.rejects(() => service.initializeWorkspaceVersionControl(handle), /command execution/);
+    await assert.rejects(() => service.getWorkspaceChanges(handle), /command execution/);
     await assert.rejects(() => service.startRunner({ handle, command: 'python -m roomtalk_coco_runner' }), /command execution/);
     await assert.rejects(() => service.destroy(handle.id), /kill/);
   });
