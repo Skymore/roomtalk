@@ -156,7 +156,7 @@ describe('DesktopSidebar', () => {
     expect(workspaceLayout?.style.getPropertyValue('--code-agent-files-width')).toBe('360px');
   });
 
-  it('resizes the left sidebar up to the file panel minimum without consuming the chat pane', () => {
+  it('resizes the left sidebar without consuming the code-agent chat pane', () => {
     Object.defineProperty(window, 'innerWidth', {
       configurable: true,
       value: 1600,

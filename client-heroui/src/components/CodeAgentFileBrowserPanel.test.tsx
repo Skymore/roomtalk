@@ -46,9 +46,11 @@ vi.mock('./MarkdownContent', () => ({
   MarkdownContent: ({
     content,
     onTaskListChange,
+    onOpenWorkspaceFile,
   }: {
     content: string;
     onTaskListChange?: (change: { markerOffset: number; checked: boolean }) => void;
+    onOpenWorkspaceFile?: (path: string) => void;
   }) => {
     const taskLines = content.split('\n').flatMap((line, lineIndex, lines) => {
       const lineStart = lines.slice(0, lineIndex).reduce((offset, previousLine) => offset + previousLine.length + 1, 0);
@@ -62,6 +64,9 @@ vi.mock('./MarkdownContent', () => ({
 
     return (
       <div>
+        <button type="button" aria-label="open-guide-link" onClick={() => onOpenWorkspaceFile?.('docs/Guide.md#L2')}>
+          open guide
+        </button>
         {taskLines.map((task) => (
           <label key={task.markerOffset}>
             <input
@@ -318,6 +323,53 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(loadCodeWorkspaceFileMock).toHaveBeenCalledWith('room-1', 'src/App.tsx', expect.any(Object));
   });
 
+  it('reopens cached files immediately and keeps them visible when a refresh fails', async () => {
+    let appReadCount = 0;
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+        { path: 'src/Other.ts', name: 'Other.ts', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockImplementation((_roomId: string, path: string) => {
+      if (path === 'src/App.tsx') {
+        appReadCount += 1;
+        return appReadCount === 1
+          ? Promise.resolve({
+            path: 'src/App.tsx',
+            content: 'cached app',
+            byteSize: 10,
+            truncated: false,
+            encoding: 'utf-8',
+          })
+          : Promise.reject(new Error('socket read failed'));
+      }
+      return new Promise(() => undefined);
+    });
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    await screen.findByText('2 files');
+
+    fileTreeSelectionPathRef.current = 'src/App.tsx';
+    fireEvent.click(screen.getByLabelText('Coco files'));
+    expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:cached app');
+
+    fileTreeSelectionPathRef.current = 'src/Other.ts';
+    fireEvent.click(screen.getByLabelText('Coco files'));
+    await waitFor(() => {
+      expect(screen.queryByText('src/App.tsx:cached app')).toBeNull();
+    });
+
+    fileTreeSelectionPathRef.current = 'src/App.tsx';
+    fireEvent.click(screen.getByLabelText('Coco files'));
+
+    expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:cached app');
+    expect(await screen.findByText('socket read failed')).toBeTruthy();
+    expect(loadCodeWorkspaceFileMock).toHaveBeenCalledWith('room-1', 'src/App.tsx', expect.any(Object));
+    expect(loadCodeWorkspaceFileMock).toHaveBeenCalledWith('room-1', 'src/Other.ts', expect.any(Object));
+  });
+
   it('keeps the T3-style current file breadcrumb scrolled into view', async () => {
     const scrollIntoView = vi.fn();
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
@@ -490,6 +542,39 @@ describe('CodeAgentFileBrowserPanel', () => {
       '- [x] First\n- [x] Second\n',
       'utf-8',
     );
+  });
+
+  it('opens workspace links from rendered markdown in the file viewer', async () => {
+    fileTreeSelectionPathRef.current = 'README.md';
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'README.md', name: 'README.md', type: 'file' },
+        { path: 'docs/Guide.md', name: 'Guide.md', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockImplementation((_roomId: string, path: string) => Promise.resolve({
+      path,
+      content: path === 'README.md'
+        ? '[Guide](docs/Guide.md#L2)'
+        : 'line 1\nline 2\nline 3',
+      byteSize: 24,
+      truncated: false,
+      encoding: 'utf-8',
+    }));
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    await screen.findByText('2 files');
+    fireEvent.click(screen.getByLabelText('Coco files'));
+    expect((await screen.findByTestId('diff-file')).textContent).toBe('README.md:[Guide](docs/Guide.md#L2)');
+
+    fireEvent.click(screen.getByLabelText('codeAgentShowRenderedMarkdown'));
+    fireEvent.click(await screen.findByLabelText('open-guide-link'));
+
+    await waitFor(() => {
+      expect(loadCodeWorkspaceFileMock).toHaveBeenCalledWith('room-1', 'docs/Guide.md', expect.any(Object));
+    });
+    expect((await screen.findByTestId('diff-file')).textContent).toBe('docs/Guide.md:line 1\nline 2\nline 3');
   });
 
   it('renders truncated text files as read-only previews', async () => {

@@ -43,6 +43,7 @@ import {
 } from '../utils/codeWorkspaceFilePreview';
 import type { RoomSandboxStatus } from '../utils/types';
 import { beginHorizontalResize } from '../utils/horizontalResize';
+import { normalizeWorkspaceOpenPath, parseWorkspaceFileOpenTarget } from '../utils/workspaceFileOpenTarget';
 import { projectFileCacheKey } from './codeAgentFileContentRevision';
 import { FileSaveCoordinator } from './codeAgentFileSaveCoordinator';
 import { isMarkdownPreviewFile, setMarkdownTaskChecked } from './codeAgentFilePreviewMode';
@@ -154,7 +155,7 @@ function treePath(entry: ProjectEntry): string {
 }
 
 function normalizeWorkspacePath(path: string): string {
-  return path.trim().replace(/\\/g, '/').replace(/^\/+/, '').replace(/^workspace\//, '').replace(/\/+$/, '');
+  return normalizeWorkspaceOpenPath(path);
 }
 
 function parentPath(path: string): string {
@@ -445,12 +446,26 @@ function useCodeWorkspaceEntriesQuery(roomId: string) {
 
 function useCodeWorkspaceFileQuery(roomId: string, relativePath: string | null, enabled = true): FileQueryState {
   const requestIdRef = useRef(0);
+  const fileCacheRef = useRef(new Map<string, CodeWorkspaceFile>());
   const [data, setData] = useState<CodeWorkspaceFile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
+  const normalizedPath = relativePath ? normalizeWorkspacePath(relativePath) : null;
+
+  const setCachedData = useCallback<React.Dispatch<React.SetStateAction<CodeWorkspaceFile | null>>>((nextData) => {
+    setData((current) => {
+      const resolvedData = typeof nextData === 'function'
+        ? nextData(current)
+        : nextData;
+      if (resolvedData) {
+        fileCacheRef.current.set(normalizeWorkspacePath(resolvedData.path), resolvedData);
+      }
+      return resolvedData;
+    });
+  }, []);
 
   useEffect(() => {
-    if (!relativePath || !enabled) {
+    if (!normalizedPath || !enabled) {
       setData(null);
       setError(null);
       setIsPending(false);
@@ -460,15 +475,16 @@ function useCodeWorkspaceFileQuery(roomId: string, relativePath: string | null, 
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
     const controller = new AbortController();
-    setData(null);
+    setData(fileCacheRef.current.get(normalizedPath) ?? null);
     setError(null);
     setIsPending(true);
 
-    loadCodeWorkspaceFile(roomId, relativePath, { signal: controller.signal }).then(
+    loadCodeWorkspaceFile(roomId, normalizedPath, { signal: controller.signal }).then(
       (file) => {
         if (controller.signal.aborted || requestIdRef.current !== requestId) {
           return;
         }
+        fileCacheRef.current.set(normalizeWorkspacePath(file.path), file);
         setData(file);
       },
       (nextError) => {
@@ -484,9 +500,9 @@ function useCodeWorkspaceFileQuery(roomId: string, relativePath: string | null, 
     });
 
     return () => controller.abort();
-  }, [enabled, roomId, relativePath]);
+  }, [enabled, normalizedPath, roomId]);
 
-  return { data, error, isPending, setData };
+  return { data, error, isPending, setData: setCachedData };
 }
 
 function useCodeWorkspaceAssetUrlQuery(roomId: string, relativePath: string | null, enabled: boolean): AssetUrlQueryState {
@@ -747,6 +763,7 @@ interface RenderedMarkdownSurfaceProps {
   onFileChange: React.Dispatch<React.SetStateAction<CodeWorkspaceFile | null>>;
   onSaveStateChange: (state: SaveState, error?: string | null) => void;
   onEntriesChanged: () => void;
+  onOpenWorkspaceFile: (path: string) => void;
 }
 
 function RenderedMarkdownSurface({
@@ -755,6 +772,7 @@ function RenderedMarkdownSurface({
   onFileChange,
   onSaveStateChange,
   onEntriesChanged,
+  onOpenWorkspaceFile,
 }: RenderedMarkdownSurfaceProps) {
   const filePath = file.path;
   const fileRef = useRef(file);
@@ -803,6 +821,7 @@ function RenderedMarkdownSurface({
         <React.Suspense fallback={<LoaderCircle className="h-5 w-5 animate-spin text-[#87867f] dark:text-[#8f8d86]" />}>
           <MarkdownContent
             content={file.content}
+            onOpenWorkspaceFile={onOpenWorkspaceFile}
             onTaskListChange={({ markerOffset, checked }) => {
               const currentContents = fileRef.current.content;
               const nextContents = setMarkdownTaskChecked(currentContents, markerOffset, checked);
@@ -981,6 +1000,7 @@ interface FilePreviewSurfaceProps {
   saveError: string | null;
   onSaveStateChange: (state: SaveState, error?: string | null) => void;
   onEntriesChanged: () => void;
+  onOpenWorkspaceFile: (path: string) => void;
 }
 
 function FilePreviewSurface({
@@ -998,6 +1018,7 @@ function FilePreviewSurface({
   saveError,
   onSaveStateChange,
   onEntriesChanged,
+  onOpenWorkspaceFile,
 }: FilePreviewSurfaceProps) {
   const { t } = useTranslation();
   const onFilePostRender = useFileLineReveal(relativePath, revealLine, revealRequestId);
@@ -1063,6 +1084,11 @@ function FilePreviewSurface({
           Preview limited to {visibleByteSize.toLocaleString()} of {file.byteSize.toLocaleString()} bytes.
         </div>
       ) : null}
+      {fileQuery.error ? (
+        <div className="shrink-0 border-b border-[#f0b49b]/50 bg-[#fff2ec] px-3 py-1.5 text-[11px] text-[#9f462c] dark:border-[#7a321f]/60 dark:bg-[#2a211d] dark:text-[#ff9b78]">
+          {fileQuery.error}
+        </div>
+      ) : null}
       {saveState !== 'idle' && saveState !== 'saved' ? (
         <div className="shrink-0 border-b border-[#dedbd0] px-3 py-1.5 text-[11px] text-[#87867f] dark:border-[#30302e] dark:text-[#8f8d86]">
           {saveState === 'pending' ? t('codeAgentSavePending') : saveState === 'saving' ? t('codeAgentSaving') : saveError || 'File save failed.'}
@@ -1083,6 +1109,7 @@ function FilePreviewSurface({
           onFileChange={fileQuery.setData}
           onSaveStateChange={onSaveStateChange}
           onEntriesChanged={onEntriesChanged}
+          onOpenWorkspaceFile={onOpenWorkspaceFile}
         />
       ) : file.truncated ? (
         <ReadOnlyFileSurface
@@ -1139,6 +1166,12 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     path: string | null;
     revealRequestId: number | null;
   }>({ path: null, revealRequestId: null });
+  const [localOpenFileRequest, setLocalOpenFileRequest] = useState<{
+    path: string;
+    line: number | null;
+    requestId: number;
+  } | null>(null);
+  const localOpenFileRequestIdRef = useRef(0);
   const [browserPreviewPendingPath, setBrowserPreviewPendingPath] = useState<string | null>(null);
   const [remoteSearch, setRemoteSearch] = useState<WorkspaceRemoteSearchState>({
     query: '',
@@ -1170,11 +1203,17 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const supportsWorkspaceAssetPreview = relativePath ? isWorkspacePreviewEntryPath(relativePath) : false;
   const canOpenInBrowserPreview = relativePath ? isWorkspaceBrowserPreviewPath(relativePath) : false;
   const supportsPreview = Boolean(relativePath && (isMarkdown || supportsWorkspaceAssetPreview));
+  const localRevealApplies = Boolean(
+    localOpenFileRequest &&
+    localOpenFileRequest.path === relativePath,
+  );
+  const effectiveRevealLine = localRevealApplies ? localOpenFileRequest?.line ?? null : revealLine;
+  const effectiveRevealRequestId = localRevealApplies ? localOpenFileRequest?.requestId ?? 0 : revealRequestId;
   const renderMarkdown = Boolean(
     relativePath &&
     isMarkdown &&
     markdownView.path === relativePath &&
-    (revealLine === null || markdownView.revealRequestId === revealRequestId),
+    (effectiveRevealLine === null || markdownView.revealRequestId === effectiveRevealRequestId),
   );
   const renderPreview = isMarkdown
     ? renderMarkdown
@@ -1243,6 +1282,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     }
     setSelectedPath(normalizedPath);
     setExternallySelectedFilePath(normalizedPath);
+    setLocalOpenFileRequest(null);
     setOperationError(null);
   }, [openFileRequest?.path, openFileRequest?.requestId]);
 
@@ -1346,6 +1386,24 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const handleOpenEntry = useCallback((path: string) => {
     setSelectedPath(path);
     setExternallySelectedFilePath(null);
+    setLocalOpenFileRequest(null);
+    setOperationError(null);
+  }, []);
+
+  const handleOpenWorkspaceFileFromMarkdown = useCallback((path: string) => {
+    const target = parseWorkspaceFileOpenTarget(path);
+    if (!target) {
+      return;
+    }
+
+    localOpenFileRequestIdRef.current += 1;
+    setLocalOpenFileRequest({
+      path: target.path,
+      line: target.line,
+      requestId: localOpenFileRequestIdRef.current,
+    });
+    setSelectedPath(target.path);
+    setExternallySelectedFilePath(target.path);
     setOperationError(null);
   }, []);
 
@@ -1454,14 +1512,14 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     if (isMarkdown) {
       setMarkdownView((current) => ({
         path: renderMarkdown && current.path === relativePath ? null : relativePath,
-        revealRequestId: renderMarkdown && current.path === relativePath ? null : revealRequestId,
+        revealRequestId: renderMarkdown && current.path === relativePath ? null : effectiveRevealRequestId,
       }));
       return;
     }
     setSourceView((current) => ({
       path: current.path === relativePath ? null : relativePath,
     }));
-  }, [isMarkdown, relativePath, renderMarkdown, revealRequestId]);
+  }, [effectiveRevealRequestId, isMarkdown, relativePath, renderMarkdown]);
 
   const toggleWordWrap = useCallback(() => {
     setWordWrap((current) => {
@@ -1619,12 +1677,13 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
             resolvedTheme={resolvedTheme}
             renderPreview={renderPreview}
             wordWrap={wordWrap}
-            revealLine={revealLine}
-            revealRequestId={revealRequestId}
+            revealLine={effectiveRevealLine}
+            revealRequestId={effectiveRevealRequestId}
             saveState={saveState}
             saveError={saveError}
             onSaveStateChange={handleSaveStateChange}
             onEntriesChanged={refreshEntries}
+            onOpenWorkspaceFile={handleOpenWorkspaceFileFromMarkdown}
           />
         </div>
         {explorerOpen || relativePath === null ? (

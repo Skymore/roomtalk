@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React, { type ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CodeAgentWorkspaceDiffViewer } from './CodeAgentWorkspaceDiffViewer';
@@ -94,8 +94,9 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
 
     render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
 
-    expect(await screen.findByTestId('code-view')).toBeTruthy();
-    expect(screen.getByText('src/App.tsx')).toBeTruthy();
+    const codeView = await screen.findByTestId('code-view');
+    expect(codeView).toBeTruthy();
+    expect(within(codeView).getByText('src/App.tsx')).toBeTruthy();
     expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenCalledWith('room-1', expect.any(Object));
     expect(parsePatchFilesMock).toHaveBeenCalledWith(
       'diff --git a/src/App.tsx b/src/App.tsx',
@@ -233,6 +234,99 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(screen.getByLabelText('codeAgentExpandDiffFile').getAttribute('aria-expanded')).toBe('false');
   });
 
+  it('renders T3-style changed file navigation and scrolls to a diff file', async () => {
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          {
+            name: 'src/App.tsx',
+            cacheKey: 'file:app',
+            hunks: [{ additionLines: 2, deletionLines: 1 }],
+            additionLines: [],
+            deletionLines: [],
+            type: 'change',
+          },
+          {
+            name: 'src/utils.ts',
+            cacheKey: 'file:utils',
+            hunks: [{ additionLines: 1000, deletionLines: 0 }],
+            additionLines: [],
+            deletionLines: [],
+            type: 'new',
+          },
+        ],
+      },
+    ]);
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
+
+    const nav = await screen.findByTestId('code-agent-diff-file-nav');
+    expect(within(nav).getByText('codeAgentChangedFilesCount')).toBeTruthy();
+    expect(within(nav).getByText('src/App.tsx')).toBeTruthy();
+    expect(within(nav).getByText('src/utils.ts')).toBeTruthy();
+    expect(within(nav).getByText('+2')).toBeTruthy();
+    expect(within(nav).getByText('-1')).toBeTruthy();
+    expect(within(nav).getByText('+1k')).toBeTruthy();
+
+    fireEvent.click(within(nav).getByLabelText('Scroll to diff file src/utils.ts'));
+
+    expect(codeViewScrollToMock).toHaveBeenCalledWith({ type: 'item', id: 'file:utils', align: 'start' });
+  });
+
+  it('reports parsed diff file summaries for the changed-files tree', async () => {
+    const onFileSummariesChange = vi.fn();
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          {
+            name: 'src/App.tsx',
+            cacheKey: 'file:app',
+            hunks: [{ additionLines: 4, deletionLines: 2 }],
+            additionLines: [],
+            deletionLines: [],
+            type: 'change',
+          },
+          {
+            name: 'src/utils.ts',
+            cacheKey: 'file:utils',
+            hunks: [{ additionLines: 1, deletionLines: 0 }],
+            additionLines: [],
+            deletionLines: [],
+            type: 'new',
+          },
+        ],
+      },
+    ]);
+
+    render(
+      <CodeAgentWorkspaceDiffViewer
+        roomId="room-1"
+        enabled
+        refreshKey="snapshot-1"
+        onFileSummariesChange={onFileSummariesChange}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onFileSummariesChange).toHaveBeenLastCalledWith([
+        { id: 'file:app', path: 'src/App.tsx', additions: 4, deletions: 2 },
+        { id: 'file:utils', path: 'src/utils.ts', additions: 1, deletions: 0 },
+      ]);
+    });
+  });
+
   it('opens a diff file through the T3 title click action', async () => {
     const onOpenFile = vi.fn();
     loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
@@ -258,7 +352,8 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
       />,
     );
 
-    fireEvent.click(await screen.findByText('src/App.tsx'));
+    const codeView = await screen.findByTestId('code-view');
+    fireEvent.click(within(codeView).getByText('src/App.tsx'));
 
     expect(onOpenFile).toHaveBeenCalledWith('src/App.tsx');
   });

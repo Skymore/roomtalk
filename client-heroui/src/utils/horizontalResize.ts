@@ -36,8 +36,8 @@ export function beginHorizontalResize({
 }: HorizontalResizeOptions): () => void {
   activeResize?.();
 
-  const originWidth = clampWidth(initialWidth, getBounds());
-  let width = originWidth;
+  let width = clampWidth(initialWidth, getBounds());
+  let lastClientX = startX;
   let animationFrame: number | null = null;
   let finished = false;
   let pointerCaptureElement: HTMLElement | null = null;
@@ -60,8 +60,9 @@ export function beginHorizontalResize({
   };
 
   const applyClientX = (clientX: number) => {
-    const deltaFromOrigin = (clientX - startX) * direction;
-    width = clampWidth(originWidth + deltaFromOrigin, getBounds());
+    const deltaFromLastMove = (clientX - lastClientX) * direction;
+    lastClientX = clientX;
+    width = clampWidth(width + deltaFromLastMove, getBounds());
     if (animationFrame === null) {
       animationFrame = window.requestAnimationFrame(applyWidth);
     }
@@ -211,7 +212,13 @@ export function beginHorizontalResize({
     }
   }
 
-  function handleViewportLeave() {
+  function handleViewportLeave(event: PointerEvent | MouseEvent) {
+    if (
+      !isPrimaryButtonReleased(event.buttons) &&
+      Number.isFinite(event.clientX)
+    ) {
+      applyClientX(event.clientX);
+    }
     finishResize();
   }
 

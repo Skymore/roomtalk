@@ -14,10 +14,12 @@ vi.mock('react-i18next', () => ({
 vi.mock('./CodeAgentWorkspaceDiffViewer', () => ({
   CodeAgentWorkspaceDiffViewer: ({
     enabled,
+    onFileSummariesChange,
     selectedFilePath,
     selectedFileRevealRequestId,
   }: {
     enabled: boolean;
+    onFileSummariesChange?: (summaries: readonly { id: string; path: string; additions: number; deletions: number }[]) => void;
     selectedFilePath?: string | null;
     selectedFileRevealRequestId?: number;
   }) => (
@@ -26,7 +28,17 @@ vi.mock('./CodeAgentWorkspaceDiffViewer', () => ({
       data-enabled={String(enabled)}
       data-selected-file={selectedFilePath || ''}
       data-selected-file-request-id={String(selectedFileRevealRequestId || '')}
-    />
+    >
+      <button
+        type="button"
+        data-testid="emit-diff-file-summaries"
+        onClick={() => onFileSummariesChange?.([
+          { id: 'src/App.tsx', path: 'src/App.tsx', additions: 7, deletions: 3 },
+        ])}
+      >
+        emit summaries
+      </button>
+    </div>
   ),
 }));
 
@@ -256,5 +268,40 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(diffViewer.dataset.enabled).toBe('true');
     expect(diffViewer.dataset.selectedFile).toBe('src/App.tsx');
     expect(diffViewer.dataset.selectedFileRequestId).toBe('1');
+  });
+
+  it('fills changed-file tree stats from parsed diff summaries', () => {
+    render(
+      <CodeAgentWorkspacePanel
+        room={room}
+        messages={[]}
+        mode="acceptEdits"
+        sessionCostUsd={0}
+        workspaceSnapshot={{
+          roomId: 'room-1',
+          backend: 'coco',
+          source: 'sandbox',
+          generatedAt: '2026-06-30T12:00:00.000Z',
+          status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: true },
+          summary: { toolCalls: 0, toolResults: 0, toolErrors: 0 },
+          artifacts: [],
+          changes: {
+            available: true,
+            changedFiles: ['src/App.tsx'],
+            diffSummary: null,
+          },
+          commands: [],
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByText('codeAgentChanges'));
+    expect(screen.queryByText('+7')).toBeNull();
+    expect(screen.queryByText('-3')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('emit-diff-file-summaries'));
+
+    expect(screen.getAllByText('+7').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('-3').length).toBeGreaterThan(0);
   });
 });

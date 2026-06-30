@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CodeViewDiffItem, FileDiffMetadata } from '@pierre/diffs';
 import { CodeView, type CodeViewHandle } from '@pierre/diffs/react';
-import { ChevronDown, ChevronRight, Columns2, LoaderCircle, Pilcrow, Rows3, WrapText } from 'lucide-react';
+import { ChevronDown, ChevronRight, Columns2, FileCode2, LoaderCircle, Pilcrow, Rows3, WrapText } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { loadCodeAgentWorkspaceDiff, type CodeAgentWorkspaceDiff } from '../utils/cocoWorkspace';
 import {
@@ -9,13 +9,16 @@ import {
   getRenderablePatch,
   resolveCodeAgentDiffThemeName,
   resolveFileDiffPath,
+  summarizeFileDiffStat,
 } from '../utils/codeAgentDiffRendering';
+import { formatCompactDiffCount } from '../utils/codeAgentChangedFileTree';
 
 interface CodeAgentWorkspaceDiffViewerProps {
   roomId: string;
   enabled: boolean;
   refreshKey?: string;
   onOpenFile?: (path: string) => void;
+  onFileSummariesChange?: (summaries: readonly CodeAgentWorkspaceDiffFileSummary[]) => void;
   selectedFilePath?: string | null;
   selectedFileRevealRequestId?: number;
 }
@@ -142,6 +145,13 @@ interface CollapsedDiffFilesState {
   fileKeys: Set<string>;
 }
 
+export interface CodeAgentWorkspaceDiffFileSummary {
+  id: string;
+  path: string;
+  additions: number;
+  deletions: number;
+}
+
 function readInitialDiffWordWrap() {
   if (typeof window === 'undefined') {
     return false;
@@ -235,6 +245,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   enabled,
   refreshKey = '',
   onOpenFile,
+  onFileSummariesChange,
   selectedFilePath = null,
   selectedFileRevealRequestId = 0,
 }) => {
@@ -369,6 +380,26 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     return { items };
   }, [collapsedDiffFileKeys, renderablePatch]);
   const diffTitlePathMap = useMemo(() => buildDiffTitlePathMap(parsed.items), [parsed.items]);
+  const diffFileSummaries = useMemo<CodeAgentWorkspaceDiffFileSummary[]>(() => parsed.items.flatMap((item) => {
+    if (item.type !== 'diff') {
+      return [];
+    }
+    const stat = summarizeFileDiffStat(item.fileDiff);
+    return [{
+      id: item.id,
+      path: resolveFileDiffPath(item.fileDiff),
+      additions: stat.additions,
+      deletions: stat.deletions,
+    }];
+  }), [parsed.items]);
+
+  useEffect(() => {
+    onFileSummariesChange?.(diffFileSummaries);
+  }, [diffFileSummaries, onFileSummariesChange]);
+
+  const scrollToDiffItem = useCallback((id: string) => {
+    codeViewRef.current?.scrollTo({ type: 'item', id, align: 'start' });
+  }, []);
 
   useEffect(() => {
     if (!selectedFilePath) {
@@ -380,8 +411,8 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     if (!file) {
       return;
     }
-    codeViewRef.current?.scrollTo({ type: 'item', id: file.id, align: 'start' });
-  }, [parsed.items, selectedFilePath, selectedFileRevealRequestId]);
+    scrollToDiffItem(file.id);
+  }, [parsed.items, scrollToDiffItem, selectedFilePath, selectedFileRevealRequestId]);
 
   const handleDiffClickCapture = (event: React.MouseEvent<HTMLDivElement>) => {
     if (!onOpenFile) {
@@ -513,7 +544,45 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
           </div>
         </div>
       ) : (
-        <div onClickCapture={handleDiffClickCapture}>
+        <div className="space-y-2" onClickCapture={handleDiffClickCapture}>
+          {diffFileSummaries.length > 0 ? (
+            <div
+              className="rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-2 dark:border-[#30302e] dark:bg-[#1d1d1b]"
+              data-testid="code-agent-diff-file-nav"
+            >
+              <div className="mb-1 flex items-center justify-between gap-2 px-1 text-[11px] text-[#87867f] dark:text-[#8f8d86]">
+                <span className="font-semibold text-[#5e5d59] dark:text-[#b0aea5]">
+                  {t('codeAgentChangedFilesCount', { count: diffFileSummaries.length })}
+                </span>
+              </div>
+              <div className="flex gap-1.5 overflow-x-auto pb-0.5">
+                {diffFileSummaries.map((file) => (
+                  <button
+                    key={file.id}
+                    type="button"
+                    aria-label={`Scroll to diff file ${file.path}`}
+                    title={file.path}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      scrollToDiffItem(file.id);
+                    }}
+                    className={`inline-flex max-w-[18rem] shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-left text-[11px] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] ${
+                      selectedFilePath === file.path
+                        ? 'border-[#c96442]/60 bg-[#fff2ec] text-[#9f462c] dark:border-[#d97757]/60 dark:bg-[#2a211d] dark:text-[#ffb197]'
+                        : 'border-[#dedbd0] bg-[#f5f4ed] text-[#4d4c48] hover:bg-[#f0eee6] dark:border-[#30302e] dark:bg-[#242422] dark:text-[#e8e6dc] dark:hover:bg-[#30302e]'
+                    }`}
+                  >
+                    <FileCode2 className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                    <span className="truncate font-mono">{file.path}</span>
+                    <span className="ml-1 inline-flex shrink-0 gap-1 tabular-nums">
+                      <span className="font-mono text-[#2f6f4e] dark:text-[#65d08a]">+{formatCompactDiffCount(file.additions)}</span>
+                      <span className="font-mono text-[#9f462c] dark:text-[#ff9b78]">-{formatCompactDiffCount(file.deletions)}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <CodeView
             ref={codeViewRef}
             className="h-80 min-h-0 overflow-auto rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-xs dark:border-[#30302e] dark:bg-[#1d1d1b]"

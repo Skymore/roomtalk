@@ -92,7 +92,7 @@ const shouldReserveCodeAgentFilePanelFallback = (): boolean => (
   typeof window.matchMedia !== 'function' || window.matchMedia('(min-width: 1024px)').matches
 );
 
-const getCodeAgentFilePanelSidebarReserve = (workspaceLayout: HTMLElement): number => {
+const getCodeAgentFilePanelMinimumSidebarReserve = (workspaceLayout: HTMLElement): number => {
   if (!isCodeAgentFilePanelVisible(workspaceLayout)) {
     return 0;
   }
@@ -100,9 +100,10 @@ const getCodeAgentFilePanelSidebarReserve = (workspaceLayout: HTMLElement): numb
   if (workspaceLayout.dataset.codeAgentFilesCollapsed === 'true') {
     return measuredWidth || CODE_AGENT_FILE_PANEL_COLLAPSED_WIDTH;
   }
-  return measuredWidth > 0
-    ? Math.min(measuredWidth, CODE_AGENT_FILE_PANEL_MIN_WIDTH)
-    : CODE_AGENT_FILE_PANEL_MIN_WIDTH;
+  if (measuredWidth > 0 && measuredWidth < CODE_AGENT_FILE_PANEL_MIN_WIDTH) {
+    return measuredWidth;
+  }
+  return CODE_AGENT_FILE_PANEL_MIN_WIDTH;
 };
 
 const getDesktopShellWidth = (sidebar?: HTMLElement): number => {
@@ -117,7 +118,7 @@ const getSidebarResizeBounds = (sidebar?: HTMLElement, reserveCodeAgentLayout = 
   if (workspaceLayout && isCodeAgentFilePanelVisible(workspaceLayout)) {
     const codeAgentMax = getSidebarMaxWidthForCodeAgentShell(
       shellWidth,
-      getCodeAgentFilePanelSidebarReserve(workspaceLayout),
+      getCodeAgentFilePanelMinimumSidebarReserve(workspaceLayout),
       CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
     );
     max = Math.min(max, codeAgentMax);

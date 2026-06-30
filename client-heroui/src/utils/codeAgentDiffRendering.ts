@@ -135,3 +135,13 @@ export function resolveFileDiffPath(fileDiff: FileDiffMetadata): string {
 export function buildFileDiffRenderKey(fileDiff: FileDiffMetadata): string {
   return fileDiff.cacheKey ?? `${fileDiff.prevName ?? 'none'}:${fileDiff.name}`;
 }
+
+export function summarizeFileDiffStat(fileDiff: FileDiffMetadata): { additions: number; deletions: number } {
+  return fileDiff.hunks.reduce(
+    (stat, hunk) => ({
+      additions: stat.additions + hunk.additionLines,
+      deletions: stat.deletions + hunk.deletionLines,
+    }),
+    { additions: 0, deletions: 0 },
+  );
+}

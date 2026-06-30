@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildPatchCacheKey, getRenderablePatch, resolveCodeAgentDiffThemeName } from './codeAgentDiffRendering';
+import {
+  buildPatchCacheKey,
+  getRenderablePatch,
+  resolveCodeAgentDiffThemeName,
+  summarizeFileDiffStat,
+} from './codeAgentDiffRendering';
 
 describe('codeAgentDiffRendering', () => {
   it('returns stable T3-style cache keys and includes the cache scope', () => {
@@ -63,5 +68,26 @@ describe('codeAgentDiffRendering', () => {
     expect(parsed?.kind).toBe('files');
     if (parsed?.kind !== 'files') return;
     expect(parsed.files[0]?.hunks[0]?.unifiedLineStart).toBe(47);
+  });
+
+  it('summarizes file diff stats from hunk metadata', () => {
+    const parsed = getRenderablePatch([
+      'diff --git a/example.ts b/example.ts',
+      '--- a/example.ts',
+      '+++ b/example.ts',
+      '@@ -1,3 +1,4 @@',
+      ' context',
+      '-before',
+      '+after',
+      '+added',
+      ' context',
+      '@@ -8,2 +9,2 @@',
+      '-old',
+      '+new',
+    ].join('\n'), 'workspace');
+    expect(parsed?.kind).toBe('files');
+    if (parsed?.kind !== 'files') return;
+
+    expect(summarizeFileDiffStat(parsed.files[0])).toEqual({ additions: 3, deletions: 2 });
   });
 });

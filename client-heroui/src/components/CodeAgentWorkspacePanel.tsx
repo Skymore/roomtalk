@@ -17,7 +17,10 @@ import {
   getSandboxStatusLabelKey,
 } from '../utils/cocoRoom';
 import { CodeAgentChangedFilesTree } from './CodeAgentChangedFilesTree';
-import { CodeAgentWorkspaceDiffViewer } from './CodeAgentWorkspaceDiffViewer';
+import {
+  CodeAgentWorkspaceDiffViewer,
+  type CodeAgentWorkspaceDiffFileSummary,
+} from './CodeAgentWorkspaceDiffViewer';
 
 interface CodeAgentWorkspacePanelProps {
   room: Room;
@@ -33,6 +36,11 @@ interface CodeAgentWorkspacePanelProps {
 
 const workspaceSurfaceClassName = 'rounded-xl border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]';
 const EMPTY_CHANGED_FILES: string[] = [];
+const EMPTY_DIFF_FILE_STATS = new Map<string, { additions: number; deletions: number }>();
+
+function normalizeChangedFilePath(path: string): string {
+  return path.replace(/\\/g, '/').split('/').filter(Boolean).join('/');
+}
 
 const commandStatusIcon: Record<CodeAgentWorkspaceCommand['status'], string> = {
   started: 'lucide:loader',
@@ -68,6 +76,10 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   const [selectedWorkspaceTab, setSelectedWorkspaceTab] = React.useState('overview');
   const [allChangedDirectoriesExpanded, setAllChangedDirectoriesExpanded] = React.useState(true);
   const [selectedDiffFile, setSelectedDiffFile] = React.useState<{ path: string; requestId: number } | null>(null);
+  const [diffFileStats, setDiffFileStats] = React.useState<{
+    scopeKey: string;
+    byPath: Map<string, { additions: number; deletions: number }>;
+  }>(() => ({ scopeKey: '', byPath: EMPTY_DIFF_FILE_STATS }));
   const selectedDiffFileRequestIdRef = React.useRef(0);
   const messageSummary = React.useMemo(() => summarizeCocoMessages(messages), [messages]);
   const summary = React.useMemo(
@@ -91,14 +103,22 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   const publishedArtifacts = workspaceSnapshot?.artifacts || [];
   const workspaceChanges = workspaceSnapshot?.changes;
   const changedFiles = workspaceChanges?.changedFiles ?? EMPTY_CHANGED_FILES;
+  const diffRefreshKey = workspaceSnapshot?.generatedAt || changedFiles.join('\n');
+  const activeDiffFileStats = diffFileStats.scopeKey === diffRefreshKey
+    ? diffFileStats.byPath
+    : EMPTY_DIFF_FILE_STATS;
   const changedFileEntries = React.useMemo(
-    () => changedFiles.map((path) => ({ path })),
-    [changedFiles],
+    () => changedFiles.map((path) => {
+      const normalizedPath = normalizeChangedFilePath(path);
+      const stat = activeDiffFileStats.get(normalizedPath);
+      return stat
+        ? { path: normalizedPath, additions: stat.additions, deletions: stat.deletions }
+        : { path: normalizedPath };
+    }),
+    [activeDiffFileStats, changedFiles],
   );
   const normalizedChangedFilePathSet = React.useMemo(
-    () => new Set(changedFileEntries.map((entry) => (
-      entry.path.replace(/\\/g, '/').split('/').filter(Boolean).join('/')
-    ))),
+    () => new Set(changedFileEntries.map((entry) => normalizeChangedFilePath(entry.path))),
     [changedFileEntries],
   );
   const hasChangedFileDirectories = React.useMemo(
@@ -118,12 +138,23 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   }, [normalizedChangedFilePathSet, selectedDiffFile]);
 
   const handleOpenDiffFile = React.useCallback((path: string) => {
+    const normalizedPath = normalizeChangedFilePath(path);
     selectedDiffFileRequestIdRef.current += 1;
     setSelectedDiffFile({
-      path,
+      path: normalizedPath,
       requestId: selectedDiffFileRequestIdRef.current,
     });
   }, []);
+
+  const handleDiffFileSummariesChange = React.useCallback((summaries: readonly CodeAgentWorkspaceDiffFileSummary[]) => {
+    setDiffFileStats({
+      scopeKey: diffRefreshKey,
+      byPath: new Map(summaries.map((summary) => [
+        normalizeChangedFilePath(summary.path),
+        { additions: summary.additions, deletions: summary.deletions },
+      ])),
+    });
+  }, [diffRefreshKey]);
 
   const stats = [
     { label: t('codeAgentTools'), value: summary.toolCalls, icon: 'lucide:wrench' },
@@ -395,8 +426,9 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                   <CodeAgentWorkspaceDiffViewer
                     roomId={room.id}
                     enabled={shouldLoadDiff}
-                    refreshKey={workspaceSnapshot?.generatedAt || changedFiles.join('\n')}
+                    refreshKey={diffRefreshKey}
                     onOpenFile={onOpenWorkspaceFile}
+                    onFileSummariesChange={handleDiffFileSummariesChange}
                     selectedFilePath={selectedDiffFile?.path}
                     selectedFileRevealRequestId={selectedDiffFile?.requestId}
                   />

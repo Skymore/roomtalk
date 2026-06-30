@@ -26,7 +26,7 @@ describe('beginHorizontalResize', () => {
     vi.restoreAllMocks();
   });
 
-  it('stays at the boundary until the pointer returns to the divider position', () => {
+  it('tracks back from a boundary without requiring the pointer to recover overshoot', () => {
     const handle = document.createElement('button');
     handle.setPointerCapture = vi.fn();
     handle.hasPointerCapture = vi.fn(() => true);
@@ -46,9 +46,7 @@ describe('beginHorizontalResize', () => {
 
     window.dispatchEvent(pointerEvent('pointermove', { pointerId: 7, clientX: 500, buttons: 1 }));
     window.dispatchEvent(pointerEvent('pointermove', { pointerId: 7, clientX: 490, buttons: 1 }));
-    window.dispatchEvent(pointerEvent('pointermove', { pointerId: 7, clientX: 310, buttons: 1 }));
-    window.dispatchEvent(pointerEvent('pointermove', { pointerId: 7, clientX: 290, buttons: 1 }));
-    window.dispatchEvent(pointerEvent('pointerup', { pointerId: 7, clientX: 290 }));
+    window.dispatchEvent(pointerEvent('pointerup', { pointerId: 7, clientX: 490 }));
 
     expect(onFinish).toHaveBeenCalledWith(490);
     expect(handle.setPointerCapture).toHaveBeenCalledWith(7);
@@ -320,7 +318,7 @@ describe('beginHorizontalResize', () => {
     expect(document.body.style.cursor).toBe('');
   });
 
-  it('finishes when the pressed pointer leaves the viewport to avoid sticky drag state', () => {
+  it('finishes at the viewport edge when a pressed pointer leaves the window', () => {
     const onResize = vi.fn();
     const onFinish = vi.fn();
     beginHorizontalResize({
@@ -335,11 +333,8 @@ describe('beginHorizontalResize', () => {
     });
 
     window.dispatchEvent(mouseEvent('mouseleave', { clientX: 1600, buttons: 1 }));
-    onResize.mockClear();
-    window.dispatchEvent(mouseEvent('mousemove', { clientX: 1800, buttons: 1 }));
 
-    expect(onFinish).toHaveBeenCalledWith(420);
-    expect(onResize).not.toHaveBeenCalled();
+    expect(onFinish).toHaveBeenCalledWith(1200);
     expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
     expect(document.body.style.userSelect).toBe('');
     expect(document.body.style.cursor).toBe('');
