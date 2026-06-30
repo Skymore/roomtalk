@@ -41,6 +41,7 @@ export interface CocoTurnInput {
   selectedModel: AIModelOption;
   roleName?: string;
   mode?: CocoRunnerMode;
+  maxContextMessages?: number;
 }
 
 export type CocoTurnAck = { success: boolean; messageId?: string; error?: string };
@@ -128,7 +129,7 @@ export class CocoSessionService {
         turnId,
       };
 
-      const promptContext = await this.readLatestPromptContext(input.roomId, input.clientId);
+      const promptContext = await this.readLatestPromptContext(input.roomId, input.clientId, input.maxContextMessages);
       if (!promptContext) {
         return ack({ success: false, error: 'Coco requires a text prompt in the room history' });
       }
@@ -366,7 +367,7 @@ export class CocoSessionService {
     return 'plan';
   }
 
-  private async readLatestPromptContext(roomId: string, clientId: string) {
+  private async readLatestPromptContext(roomId: string, clientId: string, maxContextMessages?: number) {
     const messages = await this.store.readMessagesByRoom(roomId);
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const message = messages[index];
@@ -376,9 +377,13 @@ export class CocoSessionService {
         typeof message.content === 'string' &&
         message.content.trim().length > 0
       ) {
+        const prior = messages.slice(0, index);
+        const limited = maxContextMessages && maxContextMessages > 0
+          ? prior.slice(-maxContextMessages)
+          : prior;
         return {
           prompt: message.content.trim(),
-          priorMessages: buildCocoPriorMessages(messages.slice(0, index)),
+          priorMessages: buildCocoPriorMessages(limited),
         };
       }
     }

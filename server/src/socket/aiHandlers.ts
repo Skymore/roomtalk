@@ -1767,6 +1767,7 @@ export function registerAIHandlers({
         selectedModel: normalizeAIModel(data.model),
         roleName: data.roleName,
         ...(data.codeAgentMode ? { mode: data.codeAgentMode } : {}),
+        maxContextMessages: data.maxContextMessages,
       }, callback);
       return;
     }
@@ -1870,6 +1871,7 @@ export function registerAIHandlers({
         selectedModel: normalizeAIModel(data.model),
         roleName: data.roleName,
         ...(data.codeAgentMode ? { mode: data.codeAgentMode } : {}),
+        maxContextMessages: data.maxContextMessages,
       }, (response) => {
         if (response.success && response.messageId) {
           callback?.({
@@ -1992,6 +1994,7 @@ export function registerAIHandlers({
         selectedModel: normalizeAIModel(data.model),
         roleName: data.roleName,
         ...(data.codeAgentMode ? { mode: data.codeAgentMode } : {}),
+        maxContextMessages: data.maxContextMessages,
       }, callback);
       return;
     }

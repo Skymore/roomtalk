@@ -411,6 +411,115 @@ describe('CocoSessionService', () => {
     ]);
   });
 
+  it('limits prior messages when maxContextMessages is set', async () => {
+    const initialMessages: Message[] = [
+      userMessage('list files'),
+      {
+        id: 'ai-prev-1',
+        clientId: 'ai_assistant',
+        content: 'I will inspect.',
+        roomId: 'room-1',
+        timestamp: '2026-05-03T00:00:01.000Z',
+        messageType: 'ai',
+        status: 'complete',
+        turnId: 'turn-prev',
+      },
+      {
+        id: 'tool-prev-1',
+        clientId: 'coco_runner',
+        content: 'Glob {"pattern":"**/*"}',
+        roomId: 'room-1',
+        timestamp: '2026-05-03T00:00:02.000Z',
+        messageType: 'tool_call',
+        username: 'Coco',
+        status: 'complete',
+        turnId: 'turn-prev',
+        toolCallId: 'tool-prev',
+        toolName: 'Glob',
+        toolArgs: { pattern: '**/*' },
+      },
+      {
+        id: 'tool-result-prev-1',
+        clientId: 'coco_runner',
+        content: 'No files found matching the pattern.',
+        roomId: 'room-1',
+        timestamp: '2026-05-03T00:00:03.000Z',
+        messageType: 'tool_result',
+        username: 'Coco',
+        status: 'complete',
+        turnId: 'turn-prev',
+        toolCallId: 'tool-prev',
+        toolName: 'Glob',
+        toolOutputPreview: 'No files found matching the pattern.',
+      },
+      {
+        id: 'ai-prev-2',
+        clientId: 'ai_assistant',
+        content: 'The directory is empty.',
+        roomId: 'room-1',
+        timestamp: '2026-05-03T00:00:04.000Z',
+        messageType: 'ai',
+        status: 'complete',
+        turnId: 'turn-prev',
+      },
+      {
+        ...userMessage('what did I ask before?'),
+        id: 'user-2',
+        timestamp: '2026-05-03T00:00:05.000Z',
+      },
+    ];
+    const store = new MemoryCocoStore(room(), initialMessages);
+    const runner = new FakeCocoRunnerClient([
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'You asked about files.', sessionId: 'session-1' },
+    ]);
+    const { service } = createService({ store, runner });
+
+    await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel, maxContextMessages: 2 });
+
+    assert.equal(runner.requests[0].prompt, 'what did I ask before?');
+    assert.deepEqual(runner.requests[0].priorMessages, [
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'The directory is empty.' },
+        ],
+      },
+    ]);
+  });
+
+  it('sends all prior messages when maxContextMessages is not set', async () => {
+    const initialMessages: Message[] = [
+      userMessage('list files'),
+      {
+        id: 'ai-prev-1',
+        clientId: 'ai_assistant',
+        content: 'Done.',
+        roomId: 'room-1',
+        timestamp: '2026-05-03T00:00:01.000Z',
+        messageType: 'ai',
+        status: 'complete',
+      },
+      {
+        ...userMessage('now what?'),
+        id: 'user-2',
+        timestamp: '2026-05-03T00:00:02.000Z',
+      },
+    ];
+    const store = new MemoryCocoStore(room(), initialMessages);
+    const runner = new FakeCocoRunnerClient([
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'ok', sessionId: 'session-1' },
+    ]);
+    const { service } = createService({ store, runner });
+
+    await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.equal(runner.requests[0].prompt, 'now what?');
+    assert.deepEqual(runner.requests[0].priorMessages, [
+      { role: 'user', content: 'list files' },
+      { role: 'assistant', content: [{ type: 'text', text: 'Done.' }] },
+    ]);
+  });
+
   it('removes the unused AI placeholder when tool events arrive before text', async () => {
     const runner = new FakeCocoRunnerClient([
       { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Write', args: { file_path: 'hello.py' } },
