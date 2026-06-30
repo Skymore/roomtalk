@@ -13,6 +13,7 @@ import { Logger } from '../logger';
 import { AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CreateGoogleAccountInput, GoogleAccountProfile, PendingMediaUpload } from '../repositories/store';
 import { AudioTranscriptionJob } from '../services/audioTranscription';
 import { createCocoAccessControl } from '../services/cocoAccessControl';
+import { MemoryMediaObjectStorage } from '../testUtils/memoryMediaObjectStorage';
 
 type EmittedEvent = {
   target: string;
@@ -520,23 +521,14 @@ async function createTestServer(overrides: {
     isOpen: true,
   };
 
-  const deletedMediaObjects: string[] = [];
-  const mediaObjectStorage = overrides.mediaObjectStorage || {
-    isConfigured: () => true,
-    async putMediaObject() {},
-    async createWriteUrl({ objectKey }: { objectKey: string }) {
-      return { url: `https://upload.example/${encodeURIComponent(objectKey)}`, expiresAt: '2026-05-03T00:15:00.000Z' };
-    },
-    async createReadUrl({ objectKey }: { objectKey: string }) {
-      return { url: `https://download.example/${encodeURIComponent(objectKey)}`, expiresAt: '2026-05-03T00:15:00.000Z' };
-    },
-    async headObject() {
-      return { exists: true };
-    },
-    async deleteMediaObject(objectKey: string) {
-      deletedMediaObjects.push(objectKey);
-    },
-  };
+  const defaultMediaObjectStorage = new MemoryMediaObjectStorage({
+    assumeObjectsExist: true,
+    uploadBaseUrl: 'https://upload.example',
+    downloadBaseUrl: 'https://download.example',
+    expiresAt: '2026-05-03T00:15:00.000Z',
+  });
+  const mediaObjectStorage = overrides.mediaObjectStorage || defaultMediaObjectStorage;
+  const deletedMediaObjects = defaultMediaObjectStorage.deletedObjectKeys;
 
   const routeLogger = {
     debug() {},

@@ -11,6 +11,8 @@ import { FakeCocoRunnerClient } from './fakeCocoRunner';
 import { FakeCocoSandboxService } from './fakeCocoSandboxService';
 import { DEFAULT_COCO_RUNNER_COMMAND } from './cocoRuntimeConfig';
 import { CocoModelGateway, InMemoryCocoModelGatewayTokenStateStore } from './cocoModelGateway';
+import { PublishedStaticSiteService } from './publishedStaticSite';
+import { MemoryMediaObjectStorage } from '../testUtils/memoryMediaObjectStorage';
 
 type RoomEmit = {
   roomId: string;
@@ -212,6 +214,7 @@ const createService = (options: {
   availableModes?: Array<'plan' | 'acceptEdits'>;
   defaultMode?: 'plan' | 'acceptEdits';
   modelGateway?: CocoModelGateway;
+  staticSitePublisher?: PublishedStaticSiteService;
 } = {}) => {
   const store = options.store || new MemoryCocoStore(room(), [userMessage()]);
   const emitter = new FakeEmitter();
@@ -238,6 +241,7 @@ const createService = (options: {
       availableModes: options.availableModes,
       defaultMode: options.defaultMode,
       modelGateway: options.modelGateway,
+      staticSitePublisher: options.staticSitePublisher,
       runnerEnv: options.runnerEnv,
       runnerProviderEnvByProvider: options.runnerProviderEnvByProvider,
       now: () => new Date('2026-05-03T00:00:00.000Z'),
@@ -787,6 +791,67 @@ describe('CocoSessionService', () => {
     assert.equal(env.ROOMTALK_COCO_ALLOW_WRITE_TOOLS, 'true');
     assert.equal('DEEPSEEK_API_KEY' in env, false);
     assert.equal(runner.requests[0].mode, 'acceptEdits');
+  });
+
+  it('injects a scoped static publish token for configured edit turns', async () => {
+    const runner = new FakeCocoRunnerClient([
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    ]);
+    const staticSitePublisher = new PublishedStaticSiteService({
+      mediaObjectStorage: new MemoryMediaObjectStorage(),
+      logger,
+      tokenSecret: 'static-publish-secret',
+      publicBaseUrl: 'https://room.example',
+      nowMs: () => Date.parse('2026-05-03T00:00:00.000Z'),
+      createId: () => 'static-publish-token-id',
+    });
+    const { sandboxService, service } = createService({
+      runner,
+      availableModes: ['plan', 'acceptEdits'],
+      defaultMode: 'plan',
+      staticSitePublisher,
+    });
+
+    await service.startTurn({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      selectedModel,
+      mode: 'acceptEdits',
+    });
+
+    const env = sandboxService.startedRunnerEnvs[0];
+    assert.equal(env.ROOMTALK_COCO_ENABLE_STATIC_PUBLISH, 'true');
+    assert.equal(env.ROOMTALK_STATIC_PUBLISH_URL, 'https://room.example/api/coco/publish-static-site');
+    assert.equal(env.ROOMTALK_STATIC_PUBLISH_PUBLIC_BASE_URL, 'https://room.example');
+    const claims = staticSitePublisher.verifyTurnToken(env.ROOMTALK_STATIC_PUBLISH_TOKEN);
+    assert.equal(claims?.roomId, 'room-1');
+    assert.equal(claims?.clientId, 'client-1');
+    assert.equal(claims?.turnId, 'turn-1');
+    assert.equal(claims?.mode, 'acceptEdits');
+  });
+
+  it('does not inject static publish credentials into plan turns', async () => {
+    const runner = new FakeCocoRunnerClient([
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    ]);
+    const staticSitePublisher = new PublishedStaticSiteService({
+      mediaObjectStorage: new MemoryMediaObjectStorage(),
+      logger,
+      tokenSecret: 'static-publish-secret',
+      publicBaseUrl: 'https://room.example',
+    });
+    const { sandboxService, service } = createService({
+      runner,
+      availableModes: ['plan', 'acceptEdits'],
+      defaultMode: 'plan',
+      staticSitePublisher,
+    });
+
+    await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel, mode: 'plan' });
+
+    const env = sandboxService.startedRunnerEnvs[0];
+    assert.equal('ROOMTALK_COCO_ENABLE_STATIC_PUBLISH' in env, false);
+    assert.equal('ROOMTALK_STATIC_PUBLISH_TOKEN' in env, false);
   });
 
   it('defaults Coco turns to plan even when edit mode is available', async () => {

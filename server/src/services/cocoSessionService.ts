@@ -12,6 +12,7 @@ import { DEFAULT_COCO_RUNNER_COMMAND } from './cocoRuntimeConfig';
 import { createAIPlaceholderMessage } from './messageDomain';
 import { CocoModelGateway } from './cocoModelGateway';
 import { buildCocoPriorMessages } from './cocoTranscript';
+import { PublishedStaticSiteService } from './publishedStaticSite';
 
 export interface CocoRoomEmitter {
   to(roomId: string): {
@@ -31,6 +32,7 @@ export interface CocoSessionServiceOptions {
   allowedPaths?: string[];
   runnerEnv?: Record<string, string>;
   runnerProviderEnvByProvider?: Partial<Record<AIModelOption['provider'], Record<string, string>>>;
+  staticSitePublisher?: PublishedStaticSiteService;
   now?: () => Date;
   createId?: () => string;
 }
@@ -567,6 +569,18 @@ export class CocoSessionService {
       });
     } else {
       Object.assign(env, this.options.runnerProviderEnvByProvider?.[selectedModel.provider] || {});
+    }
+
+    if (context.mode === 'acceptEdits' && this.options.staticSitePublisher?.isConfigured()) {
+      env.ROOMTALK_COCO_ENABLE_STATIC_PUBLISH = 'true';
+      env.ROOMTALK_STATIC_PUBLISH_URL = this.options.staticSitePublisher.publishApiUrl;
+      env.ROOMTALK_STATIC_PUBLISH_PUBLIC_BASE_URL = this.options.staticSitePublisher.publicBaseUrl || '';
+      env.ROOMTALK_STATIC_PUBLISH_TOKEN = this.options.staticSitePublisher.issueTurnToken({
+        roomId: context.roomId,
+        clientId: context.clientId,
+        turnId: context.turnId,
+        mode: context.mode,
+      });
     }
 
     if (context.mode === 'acceptEdits') {

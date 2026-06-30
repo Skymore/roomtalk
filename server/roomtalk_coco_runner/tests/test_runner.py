@@ -6,6 +6,7 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -16,6 +17,8 @@ from roomtalk_coco_runner.runner import (
     _add_coco_source_to_path,
     _api_key_for,
     _base_url_for,
+    _collect_static_publish_files,
+    _create_publish_static_site_tool,
     canonical_allowed_paths_for_engine,
     main,
     parse_request,
@@ -142,6 +145,11 @@ def test_tool_policy_keeps_plan_read_only_and_requires_explicit_write_or_shell_f
         "ROOMTALK_COCO_ALLOW_WRITE_TOOLS": "true",
         "ROOMTALK_COCO_ALLOW_SHELL": "true",
     }) == ("Read", "Glob", "Grep", "Write", "Edit", "Shell", "BackgroundShell")
+    assert tool_names_for_mode("acceptEdits", {
+        "ROOMTALK_COCO_ENABLE_STATIC_PUBLISH": "true",
+        "ROOMTALK_STATIC_PUBLISH_URL": "https://room.example/api/coco/publish-static-site",
+        "ROOMTALK_STATIC_PUBLISH_TOKEN": "turn-token",
+    }) == ("Read", "Glob", "Grep", "PublishStaticSite")
 
 
 def test_tool_policy_treats_empty_env_as_an_isolated_environment(monkeypatch):
@@ -155,17 +163,138 @@ def test_system_prompt_matches_the_actual_tool_set():
     plan_prompt = system_prompt_for_tools(("Read", "Glob", "Grep"), "plan")
     assert "- Read:" in plan_prompt
     assert "- Write:" not in plan_prompt
-    assert "Unavailable tools for this run: Write, Edit, Shell, BackgroundShell" in plan_prompt
+    assert "Unavailable tools for this run: Write, Edit, Shell, BackgroundShell, PublishStaticSite" in plan_prompt
     assert "read-only" in plan_prompt
 
     edit_prompt = system_prompt_for_tools(("Read", "Glob", "Grep", "Write", "Edit"), "acceptEdits")
     assert "- Write:" in edit_prompt
     assert "- Edit:" in edit_prompt
     assert "- Shell:" not in edit_prompt
-    assert "Unavailable tools for this run: Shell, BackgroundShell" in edit_prompt
+    assert "Unavailable tools for this run: Shell, BackgroundShell, PublishStaticSite" in edit_prompt
     shell_prompt = system_prompt_for_tools(("Read", "Glob", "Grep", "Write", "Edit", "Shell", "BackgroundShell"), "acceptEdits")
     assert "- BackgroundShell:" in shell_prompt
     assert "Use Shell only for foreground commands" in shell_prompt
+    publish_prompt = system_prompt_for_tools(("Read", "Glob", "Grep", "PublishStaticSite"), "acceptEdits")
+    assert "- PublishStaticSite:" in publish_prompt
+    assert "Use PublishStaticSite after creating a static site directory" in publish_prompt
+
+
+def test_static_publish_file_collection_is_scoped_and_filters_non_static_files(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    site = workspace / "site"
+    assets = site / "assets"
+    assets.mkdir(parents=True)
+    (site / "index.html").write_text("<!doctype html><script src='assets/app.js'></script>", encoding="utf-8")
+    (assets / "app.js").write_text("console.log('ok')", encoding="utf-8")
+    (site / "app.py").write_text("print('not static')", encoding="utf-8")
+    (site / ".DS_Store").write_text("ignored", encoding="utf-8")
+
+    entry, files, total_bytes = _collect_static_publish_files(workspace, {"root": "site"})
+
+    assert entry == "index.html"
+    assert [file["path"] for file in files] == ["assets/app.js", "index.html"]
+    assert total_bytes == sum(file["byteSize"] for file in files)
+
+    with pytest.raises(RunnerError, match="root must stay inside"):
+        _collect_static_publish_files(workspace, {"root": ".."})
+
+
+def test_static_publish_file_collection_rejects_secret_like_files(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    site = workspace / "site"
+    site.mkdir(parents=True)
+    (site / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    (site / ".env").write_text("SECRET=value", encoding="utf-8")
+
+    with pytest.raises(RunnerError, match="secret-like"):
+        _collect_static_publish_files(workspace, {"root": "site"})
+
+
+def test_publish_static_site_tool_posts_payload_and_returns_url(tmp_path: Path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    site = workspace / "site"
+    site.mkdir(parents=True)
+    (site / "index.html").write_text("<!doctype html><h1>RoomTalk</h1>", encoding="utf-8")
+    posted: dict[str, Any] = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps({
+                "url": "https://room.example/p/roomtalk-demo/",
+                "slug": "roomtalk-demo",
+                "versionId": "version-1",
+                "fileCount": 1,
+                "totalBytes": 31,
+            }).encode("utf-8")
+
+    def fake_urlopen(request_obj, timeout):
+        posted["url"] = request_obj.full_url
+        posted["auth"] = request_obj.get_header("Authorization")
+        posted["timeout"] = timeout
+        posted["body"] = json.loads(request_obj.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setattr("roomtalk_coco_runner.runner.urllib_request.urlopen", fake_urlopen)
+    parsed_request = RunnerRequest(
+        room_id="room-1",
+        turn_id="turn-1",
+        session_id=None,
+        prompt="publish",
+        prior_messages=[],
+        mode="acceptEdits",
+        provider="deepseek",
+        model_id="deepseek-v4-pro",
+        api_model="deepseek-chat",
+        workspace=workspace,
+        allowed_paths=(".",),
+    )
+
+    @dataclass
+    class FakeToolOutcome:
+        success: bool
+        content: str = ""
+        error: str | None = None
+        metadata: dict[str, Any] | None = None
+
+    @dataclass
+    class FakeToolSpec:
+        name: str
+        description: str
+        input_schema: dict[str, Any]
+        is_read_only: bool = False
+        is_concurrency_safe: bool | None = None
+
+    class FakeTool:
+        pass
+
+    tool = _create_publish_static_site_tool(
+        FakeTool,
+        FakeToolOutcome,
+        FakeToolSpec,
+        parsed_request,
+        {
+            "ROOMTALK_STATIC_PUBLISH_URL": "https://room.example/api/coco/publish-static-site",
+            "ROOMTALK_STATIC_PUBLISH_TOKEN": "turn-token",
+        },
+    )
+
+    outcome = tool.invoke({"root": "site", "slug": "roomtalk-demo", "title": "RoomTalk Demo"})
+
+    assert outcome.success is True
+    assert "https://room.example/p/roomtalk-demo/" in outcome.content
+    assert posted["url"] == "https://room.example/api/coco/publish-static-site"
+    assert posted["auth"] == "Bearer turn-token"
+    assert posted["timeout"] == 30
+    assert posted["body"]["roomId"] == "room-1"
+    assert posted["body"]["turnId"] == "turn-1"
+    assert posted["body"]["slug"] == "roomtalk-demo"
+    assert posted["body"]["files"][0]["path"] == "index.html"
 
 
 def test_replay_tool_events_preserves_pairing_and_result_metadata():

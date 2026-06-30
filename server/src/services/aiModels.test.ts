@@ -32,6 +32,12 @@ describe('AI model registry', () => {
     assert.equal(registry.modelOptions.find(model => model.id === '~google/gemini-pro-latest')?.isPremium, true);
     assert.equal(registry.modelOptions.find(model => model.id === 'google/gemini-3.5-flash')?.isPremium, false);
     assert.equal(registry.modelOptions.find(model => model.id === 'tencent/hy3-preview')?.pricing?.outputPerMillion, 0.26);
+    assert.deepEqual(registry.modelOptions.find(model => model.id === 'glm-5.2')?.pricing, {
+      currency: 'USD',
+      inputPerMillion: 0.94,
+      cachedInputPerMillion: 0.18,
+      outputPerMillion: 3,
+    });
     assert.equal(registry.modelOptions.find(model => model.id === 'deepseek-v4-pro')?.isPremium, false);
     assert.equal(isPremiumAIModel({}), true);
     assert.equal(isPremiumAIModel({ pricing: { currency: 'USD', inputPerMillion: 1, outputPerMillion: 10 } }), false);

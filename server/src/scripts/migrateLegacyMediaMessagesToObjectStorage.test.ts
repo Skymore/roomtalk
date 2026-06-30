@@ -12,6 +12,7 @@ import {
   parseLegacyImageDataUrl,
 } from './migrateLegacyMediaMessagesToObjectStorage';
 import { MediaAsset, Message, Room } from '../types';
+import { MemoryMediaObjectStorage } from '../testUtils/memoryMediaObjectStorage';
 
 const room = (overrides: Partial<Room> = {}): Room => ({
   id: 'room-1',
@@ -104,28 +105,6 @@ class MemoryLegacyMediaTarget implements LegacyMediaMigrationTarget {
   }
 }
 
-class MemoryMediaStorage {
-  uploaded = new Map<string, { body: Buffer; mimeType: string; byteSize: number }>();
-  deleted: string[] = [];
-  failUpload = false;
-
-  async putMediaObject(input: { objectKey: string; body: Buffer; mimeType: string; byteSize: number }) {
-    if (this.failUpload) {
-      throw new Error('upload failed');
-    }
-    this.uploaded.set(input.objectKey, {
-      body: input.body,
-      mimeType: input.mimeType,
-      byteSize: input.byteSize,
-    });
-  }
-
-  async deleteMediaObject(objectKey: string) {
-    this.deleted.push(objectKey);
-    this.uploaded.delete(objectKey);
-  }
-}
-
 const logger = {
   info() {},
   warn() {},
@@ -152,7 +131,7 @@ describe('migrateLegacyMediaMessagesToObjectStorage', () => {
         message({ id: 'legacy-1', messageType: 'media', content: legacyImageContent('image-1') }),
       ]]])
     );
-    const storage = new MemoryMediaStorage();
+    const storage = new MemoryMediaObjectStorage();
     const target = new MemoryLegacyMediaTarget();
     const convertedBodies: string[] = [];
 
@@ -188,7 +167,7 @@ describe('migrateLegacyMediaMessagesToObjectStorage', () => {
         message({ id: 'legacy-1', messageType: 'media', content: legacyImageContent('image-1') }),
       ]]])
     );
-    const storage = new MemoryMediaStorage();
+    const storage = new MemoryMediaObjectStorage();
     const target = new MemoryLegacyMediaTarget();
 
     const stats = await migrateLegacyMediaMessagesToObjectStorage({
@@ -265,7 +244,7 @@ describe('migrateLegacyMediaMessagesToObjectStorage', () => {
         message({ id: 'legacy-1', messageType: 'media', content: legacyImageContent('image-1') }),
       ]]])
     );
-    const storage = new MemoryMediaStorage();
+    const storage = new MemoryMediaObjectStorage();
     const target = new MemoryLegacyMediaTarget();
     target.failReplace = true;
 

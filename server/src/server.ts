@@ -16,6 +16,7 @@ import { PostgresStore } from './repositories/postgresStore';
 import { CompositeRoomStore, RoomStore } from './repositories/store';
 import { AI_ROLE_GENERATOR_MODEL_ID, createAIModelRegistry, DEFAULT_AI_MODEL_ID } from './services/aiModels';
 import { registerApiRoutes } from './routes/apiRoutes';
+import { registerPublishedStaticSiteRoutes } from './routes/publishedStaticSiteRoutes';
 import { loadStickerCatalog } from './stickers/catalog';
 import { registerSocketHandlers } from './socket/registerSocketHandlers';
 import { executeQueuedAssistantRun } from './socket/aiHandlers';
@@ -48,6 +49,10 @@ import {
 import { FakeCocoRunnerClient } from './services/fakeCocoRunner';
 import { FakeCocoSandboxService } from './services/fakeCocoSandboxService';
 import { JsonlCocoRunnerClient } from './services/jsonlCocoRunner';
+import {
+  COCO_STATIC_PUBLISH_API_PATH,
+  createPublishedStaticSiteServiceFromEnv,
+} from './services/publishedStaticSite';
 
 dotenv.config();
 
@@ -61,7 +66,12 @@ const openaiLogger = new Logger('OpenAI');
 const outboxLogger = new Logger('OutboxWorker');
 const cocoLogger = new Logger('Coco');
 const mediaStorageLogger = new Logger('MediaStorage');
+const staticPublishLogger = new Logger('StaticPublish');
 const mediaObjectStorage = createMediaObjectStorageFromEnv(mediaStorageLogger);
+const publishedStaticSiteService = createPublishedStaticSiteServiceFromEnv({
+  mediaObjectStorage,
+  logger: staticPublishLogger,
+});
 const aiStreamOwnerId = resolveAIStreamOwnerId();
 
 const aiModelRegistry = createAIModelRegistry({
@@ -99,6 +109,10 @@ console.log(`process.env.CLIENT_URLS: ${process.env.CLIENT_URLS}`);
 const defaultJsonParser = express.json();
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (req.path === DEFAULT_COCO_MODEL_GATEWAY_BASE_PATH || req.path.startsWith(`${DEFAULT_COCO_MODEL_GATEWAY_BASE_PATH}/`)) {
+    next();
+    return;
+  }
+  if (req.path === COCO_STATIC_PUBLISH_API_PATH) {
     next();
     return;
   }
@@ -271,6 +285,7 @@ const cocoSessionService = new CocoSessionService(
     allowedPaths: cocoRuntimeConfig.allowedPaths,
     runnerEnv: cocoRuntimeConfig.runnerEnv,
     runnerProviderEnvByProvider: cocoRuntimeConfig.runnerProviderEnvByProvider,
+    staticSitePublisher: publishedStaticSiteService,
   }
 );
 
@@ -386,6 +401,11 @@ registerApiRoutes(app, {
   cocoMode: cocoRuntimeConfig.mode,
   cocoAvailableModes: cocoRuntimeConfig.availableModes,
   cocoDefaultMode: cocoRuntimeConfig.defaultMode,
+});
+
+registerPublishedStaticSiteRoutes(app, {
+  service: publishedStaticSiteService,
+  logger: staticPublishLogger,
 });
 
 // Catch-all 路由，返回前端应用的入口 HTML 文件（支持前端路由）

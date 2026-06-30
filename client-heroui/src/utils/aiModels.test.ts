@@ -39,6 +39,12 @@ describe("aiModels", () => {
     expect(isPremiumAIModel(FALLBACK_AI_MODELS.find(model => model.id === "~google/gemini-pro-latest")!)).toBe(true);
     expect(isPremiumAIModel(FALLBACK_AI_MODELS.find(model => model.id === "google/gemini-3.5-flash")!)).toBe(false);
     expect(FALLBACK_AI_MODELS.find(model => model.id === "tencent/hy3-preview")?.pricing?.outputPerMillion).toBe(0.26);
+    expect(FALLBACK_AI_MODELS.find(model => model.id === "glm-5.2")?.pricing).toEqual({
+      currency: "USD",
+      inputPerMillion: 0.94,
+      cachedInputPerMillion: 0.18,
+      outputPerMillion: 3,
+    });
     expect(isPremiumAIModel({})).toBe(true);
     expect(isPremiumAIModel({ pricing: { currency: "USD", inputPerMillion: 1, outputPerMillion: 10 } })).toBe(false);
     expect(isPremiumAIModel({ pricing: { currency: "USD", inputPerMillion: 1, outputPerMillion: 10.01 } })).toBe(true);

@@ -2,6 +2,7 @@ import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectComm
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import fs from 'fs/promises';
 import path from 'path';
+import { Readable } from 'stream';
 import { Logger } from '../logger';
 
 export interface MediaObjectStorage {
@@ -316,7 +317,47 @@ export class S3MediaObjectStorage implements MediaObjectStorage {
       Key: objectKey,
     }));
   }
+
+  async getMediaObject(objectKey: string): Promise<{ body: Buffer; mimeType?: string; byteSize: number }> {
+    const result = await this.client.send(new GetObjectCommand({
+      Bucket: this.config.bucket,
+      Key: objectKey,
+    }));
+    const body = await s3BodyToBuffer(result.Body);
+    return {
+      body,
+      mimeType: result.ContentType,
+      byteSize: typeof result.ContentLength === 'number' ? result.ContentLength : body.length,
+    };
+  }
 }
+
+const s3BodyToBuffer = async (body: unknown): Promise<Buffer> => {
+  if (!body) {
+    return Buffer.alloc(0);
+  }
+  if (Buffer.isBuffer(body)) {
+    return body;
+  }
+  if (body instanceof Uint8Array) {
+    return Buffer.from(body);
+  }
+  if (typeof (body as any).transformToByteArray === 'function') {
+    return Buffer.from(await (body as any).transformToByteArray());
+  }
+  if (body instanceof Readable || typeof (body as any).on === 'function') {
+    const chunks: Buffer[] = [];
+    for await (const chunk of body as AsyncIterable<Buffer | Uint8Array | string>) {
+      if (typeof chunk === 'string') {
+        chunks.push(Buffer.from(chunk, 'utf8'));
+      } else {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+    }
+    return Buffer.concat(chunks);
+  }
+  return Buffer.from(String(body));
+};
 
 export const resolveMediaObjectStorageConfig = (env: NodeJS.ProcessEnv = process.env): MediaObjectStorageConfig | null => {
   const bucket = env.MEDIA_BUCKET_NAME || env.S3_BUCKET || env.AWS_BUCKET_NAME || env.BUCKET_NAME;

@@ -60,12 +60,12 @@ export const FALLBACK_AI_MODELS: AIModelOption[] = [
     pricing: { currency: 'USD', inputPerMillion: 0.74, outputPerMillion: 3.49 },
   },
   {
-    id: 'glm-5.1',
-    apiModel: 'z-ai/glm-5.1',
+    id: 'glm-5.2',
+    apiModel: 'z-ai/glm-5.2',
     provider: 'openrouter',
-    label: 'GLM 5.1',
+    label: 'GLM 5.2',
     description: 'Z.ai via OpenRouter',
-    pricing: { currency: 'USD', inputPerMillion: 1.05, outputPerMillion: 3.5 },
+    pricing: { currency: 'USD', inputPerMillion: 0.94, cachedInputPerMillion: 0.18, outputPerMillion: 3 },
   },
   {
     id: 'minimax-m2.7',
