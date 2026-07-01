@@ -1,4 +1,4 @@
-export const isMarkdownPreviewFile = (path: string): boolean => /\.(?:md|mdx)$/i.test(path);
+export { isMarkdownPreviewFile } from './codeAgentFilePath';
 
 export function setMarkdownTaskChecked(
   markdown: string,

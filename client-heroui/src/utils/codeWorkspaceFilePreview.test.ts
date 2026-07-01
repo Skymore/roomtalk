@@ -4,6 +4,7 @@ import {
   isWorkspaceBrowserPreviewPath,
   isWorkspaceImagePreviewPath,
   isWorkspacePreviewEntryPath,
+  isWorkspaceSvgImagePreviewPath,
 } from './codeWorkspaceFilePreview';
 
 describe('code workspace file previews', () => {
@@ -25,6 +26,12 @@ describe('code workspace file previews', () => {
   ])('recognizes image preview path %s like T3', (path) => {
     expect(isWorkspaceImagePreviewPath(path)).toBe(true);
     expect(isWorkspacePreviewEntryPath(path)).toBe(true);
+  });
+
+  it('recognizes SVG image paths for T3-style web preview rendering', () => {
+    expect(isWorkspaceImagePreviewPath('assets/diagram.svg#icon')).toBe(true);
+    expect(isWorkspaceSvgImagePreviewPath('assets/diagram.svg#icon')).toBe(true);
+    expect(isWorkspaceSvgImagePreviewPath('assets/photo.png')).toBe(false);
   });
 
   it.each(['README.md', 'src/index.ts', 'image.png.ts', 'png'])(

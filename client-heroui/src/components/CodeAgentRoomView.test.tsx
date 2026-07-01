@@ -227,7 +227,9 @@ describe('CodeAgentRoomView', () => {
     expect(desktopFileBrowser.parentElement?.classList.contains('flex')).toBe(true);
     expect(desktopFileBrowser.parentElement?.classList.contains('min-h-0')).toBe(true);
     expect(screen.getByTestId('message-list').parentElement?.dataset.codeAgentChatPane).toBe('true');
-    expect(screen.getByTestId('message-list').parentElement?.classList.contains('min-w-[var(--code-agent-chat-min-width)]')).toBe(true);
+    expect(screen.getByTestId('message-list').parentElement?.classList.contains('min-w-0')).toBe(true);
+    expect(screen.getByTestId('message-list').parentElement?.classList.contains('lg:min-w-[var(--code-agent-chat-min-width)]')).toBe(true);
+    expect(screen.getByTestId('message-list').parentElement?.classList.contains('min-w-[var(--code-agent-chat-min-width)]')).toBe(false);
 
     fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     const fileBrowsers = screen.getAllByTestId('file-browser');

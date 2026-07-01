@@ -1,6 +1,8 @@
 import {
+  Check,
   ChevronRight,
   Code2,
+  Copy,
   Download,
   Eye,
   FolderTree,
@@ -9,10 +11,11 @@ import {
   RefreshCw,
   WrapText,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { fileBreadcrumbs } from './codeAgentFilePath';
-import { isMarkdownPreviewFile } from './codeAgentFilePreviewMode';
+import { fileBreadcrumbs, isMarkdownPreviewFile } from './codeAgentFilePath';
+
+const COPY_FEEDBACK_DURATION_MS = 1200;
 
 interface CodeAgentFilePreviewHeaderProps {
   projectName: string;
@@ -53,6 +56,9 @@ export function CodeAgentFilePreviewHeader({
 }: CodeAgentFilePreviewHeaderProps) {
   const { t } = useTranslation();
   const breadcrumbRef = useRef<HTMLDivElement | null>(null);
+  const copyFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [breadcrumbFade, setBreadcrumbFade] = useState({ left: false, right: false });
+  const [copiedPath, setCopiedPath] = useState(false);
   const isMarkdown = relativePath ? isMarkdownPreviewFile(relativePath) : false;
   const breadcrumbs = useMemo(
     () => (relativePath ? fileBreadcrumbs(projectName, relativePath) : []),
@@ -65,13 +71,87 @@ export function CodeAgentFilePreviewHeader({
     ? (renderPreview ? t('codeAgentShowMarkdownSource') : t('codeAgentShowRenderedMarkdown'))
     : (renderPreview ? t('codeAgentShowSource') : t('codeAgentShowPreview'));
   const refreshCurrentFileLabel = t('codeAgentRefreshWorkspaceFile');
+  const copyFilePathLabel = copiedPath ? t('copied') : t('codeAgentCopyFilePath');
+
+  const clearCopyFeedbackTimer = useCallback(() => {
+    if (copyFeedbackTimerRef.current) {
+      clearTimeout(copyFeedbackTimerRef.current);
+      copyFeedbackTimerRef.current = null;
+    }
+  }, []);
+
+  const updateBreadcrumbFade = useCallback(() => {
+    const element = breadcrumbRef.current;
+    if (!element) {
+      return;
+    }
+    const maxScrollLeft = Math.max(0, element.scrollWidth - element.clientWidth);
+    const next = {
+      left: maxScrollLeft > 1 && element.scrollLeft > 1,
+      right: maxScrollLeft > 1 && element.scrollLeft < maxScrollLeft - 1,
+    };
+    setBreadcrumbFade((current) => (
+      current.left === next.left && current.right === next.right ? current : next
+    ));
+  }, []);
 
   useEffect(() => {
     const currentCrumb = breadcrumbRef.current?.querySelector<HTMLElement>(
       '[data-current-file-crumb="true"]',
     );
     currentCrumb?.scrollIntoView?.({ block: 'nearest', inline: 'end' });
-  }, [relativePath]);
+    const frameId = window.requestAnimationFrame(updateBreadcrumbFade);
+    return () => window.cancelAnimationFrame(frameId);
+  }, [relativePath, updateBreadcrumbFade]);
+
+  useEffect(() => {
+    const element = breadcrumbRef.current;
+    if (!element) {
+      return undefined;
+    }
+
+    updateBreadcrumbFade();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', updateBreadcrumbFade);
+      return () => window.removeEventListener('resize', updateBreadcrumbFade);
+    }
+
+    const observer = new ResizeObserver(updateBreadcrumbFade);
+    observer.observe(element);
+    if (element.firstElementChild) {
+      observer.observe(element.firstElementChild);
+    }
+    return () => observer.disconnect();
+  }, [breadcrumbs, updateBreadcrumbFade]);
+
+  useEffect(() => () => {
+    clearCopyFeedbackTimer();
+  }, [clearCopyFeedbackTimer]);
+
+  useEffect(() => {
+    clearCopyFeedbackTimer();
+    setCopiedPath(false);
+  }, [clearCopyFeedbackTimer, relativePath]);
+
+  const handleCopyFilePath = useCallback(() => {
+    if (!relativePath || typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
+      return;
+    }
+
+    void navigator.clipboard.writeText(relativePath).then(
+      () => {
+        setCopiedPath(true);
+        clearCopyFeedbackTimer();
+        copyFeedbackTimerRef.current = setTimeout(() => {
+          setCopiedPath(false);
+          copyFeedbackTimerRef.current = null;
+        }, COPY_FEEDBACK_DURATION_MS);
+      },
+      () => {
+        setCopiedPath(false);
+      },
+    );
+  }, [clearCopyFeedbackTimer, relativePath]);
 
   if (!relativePath) {
     return null;
@@ -79,30 +159,60 @@ export function CodeAgentFilePreviewHeader({
 
   return (
     <div className="surface-subheader flex h-9 shrink-0 items-center gap-2 border-b border-[#dedbd0] px-3 dark:border-[#30302e]" data-surface-subheader>
-      <div
-        ref={breadcrumbRef}
-        className="min-w-0 flex-1 overflow-x-auto text-xs [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-        data-file-breadcrumbs="true"
-        data-testid="code-agent-file-breadcrumbs"
-      >
-        <div className="flex h-full w-max min-w-full items-center">
-          {breadcrumbs.map((crumb, index) => (
-            <div
-              key={crumb.path || 'project'}
-              className="flex min-w-0 shrink-0 items-center"
-              data-current-file-crumb={crumb.kind === 'file'}
-            >
-              {index > 0 ? <ChevronRight className="mx-1 h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" /> : null}
-              <span
-                className={`max-w-40 truncate ${crumb.kind === 'file' ? 'font-medium text-[#141413] dark:text-[#faf9f5]' : 'text-[#87867f] dark:text-[#8f8d86]'}`}
-                title={crumb.path || projectName}
+      <div className="relative min-w-0 flex-1" data-file-breadcrumb-fades="true">
+        <div
+          ref={breadcrumbRef}
+          className="min-w-0 overflow-x-auto text-xs [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          data-file-breadcrumbs="true"
+          data-testid="code-agent-file-breadcrumbs"
+          onScroll={updateBreadcrumbFade}
+        >
+          <div className="flex h-full w-max min-w-full items-center">
+            {breadcrumbs.map((crumb, index) => (
+              <div
+                key={crumb.path || 'project'}
+                className="flex min-w-0 shrink-0 items-center"
+                data-current-file-crumb={crumb.kind === 'file'}
               >
-                {crumb.label}
-              </span>
-            </div>
-          ))}
+                {index > 0 ? <ChevronRight className="mx-1 h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" /> : null}
+                <span
+                  className={`max-w-40 truncate ${crumb.kind === 'file' ? 'font-medium text-[#141413] dark:text-[#faf9f5]' : 'text-[#87867f] dark:text-[#8f8d86]'}`}
+                  title={crumb.path || projectName}
+                >
+                  {crumb.label}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
+        {breadcrumbFade.left ? (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 left-0 w-5 bg-gradient-to-r from-[#faf9f5] to-transparent dark:from-[#1d1d1b]"
+            data-testid="code-agent-file-breadcrumb-fade-left"
+          />
+        ) : null}
+        {breadcrumbFade.right ? (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 right-0 w-5 bg-gradient-to-l from-[#faf9f5] to-transparent dark:from-[#1d1d1b]"
+            data-testid="code-agent-file-breadcrumb-fade-right"
+          />
+        ) : null}
       </div>
+      <button
+        type="button"
+        className={`shrink-0 rounded-md p-1.5 transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
+          copiedPath
+            ? 'text-[#9f462c] dark:text-[#ffb197]'
+            : 'text-[#87867f] dark:text-[#8f8d86]'
+        }`}
+        aria-label={copyFilePathLabel}
+        title={copyFilePathLabel}
+        onClick={handleCopyFilePath}
+      >
+        {copiedPath ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+      </button>
       <button
         type="button"
         className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-wait disabled:opacity-60 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"

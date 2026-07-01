@@ -3,6 +3,7 @@ import {
   buildDiffTitlePathMap,
   buildPatchCacheKey,
   getDiffCollapseIconClassName,
+  getCodeAgentDiffFilePreviewState,
   getRenderablePatch,
   resolveFileDiffPath,
   resolveDiffTitleOpenPath,
@@ -76,6 +77,18 @@ describe('codeAgentDiffRendering', () => {
     expect(parsed.files[0]?.hunks[0]?.unifiedLineStart).toBe(47);
   });
 
+  it('uses the T3 truncated raw excerpt reason and strips the truncation marker', () => {
+    const parsed = getRenderablePatch('not a complete patch\n[truncated]', 'workspace', {
+      truncated: true,
+    });
+
+    expect(parsed).toEqual({
+      kind: 'raw',
+      text: 'not a complete patch',
+      reason: 'Diff was truncated before it could be parsed completely. Showing the raw excerpt.',
+    });
+  });
+
   it('summarizes file diff stats from hunk metadata', () => {
     const parsed = getRenderablePatch([
       'diff --git a/example.ts b/example.ts',
@@ -108,7 +121,39 @@ describe('codeAgentDiffRendering', () => {
     expect(getDiffCollapseIconClassName({ type: 'deleted' } as any)).toBe('text-[var(--diffs-deletion-base)]');
     expect(getDiffCollapseIconClassName({ type: 'change' } as any)).toBe('text-[var(--diffs-modified-base)]');
     expect(getDiffCollapseIconClassName({ type: 'rename-pure' } as any)).toBe('text-[var(--diffs-modified-base)]');
-    expect(getDiffCollapseIconClassName({ type: 'unknown' } as any)).toBe('text-[#87867f] dark:text-[#8f8d86]');
+    expect(getDiffCollapseIconClassName({ type: 'unknown' } as any)).toBe('text-muted-foreground/80');
+  });
+
+  it('suppresses non-text diff previews like T3', () => {
+    expect(getCodeAgentDiffFilePreviewState({
+      name: 'b/assets/icon.png',
+      hunks: [],
+      additionLines: [],
+      deletionLines: [],
+    } as any)).toMatchObject({
+      kind: 'suppressed',
+      reason: 'non-text',
+      title: 'Non-text file',
+      actionLabel: null,
+    });
+  });
+
+  it('suppresses large diff previews until explicitly loaded like T3', () => {
+    expect(getCodeAgentDiffFilePreviewState({
+      name: 'b/src/big.ts',
+      hunks: [{
+        additionLines: 401,
+        deletionLines: 0,
+        hunkContent: [{ type: 'change', deletions: 0, additions: 401 }],
+      }],
+      additionLines: Array.from({ length: 401 }, (_, index) => `const line${index} = ${index};`),
+      deletionLines: [],
+    } as any)).toMatchObject({
+      kind: 'suppressed',
+      reason: 'large',
+      title: 'Large diff',
+      actionLabel: 'Load diff',
+    });
   });
 
   it('resolves T3-style diff title clicks to workspace file paths', () => {

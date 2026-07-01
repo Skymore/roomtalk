@@ -6,7 +6,7 @@ import type {
 } from '@pierre/diffs';
 import { CodeView, type CodeViewHandle, type CodeViewProps } from '@pierre/diffs/react';
 import { useCallback, useMemo, useState, type ReactNode, type Ref } from 'react';
-import { fnv1a32 } from '../utils/codeAgentDiffRendering';
+import { fnv1a32, type CodeAgentDiffFilePreviewState } from '../utils/codeAgentDiffRendering';
 import {
   buildDiffReviewComment,
   restoreDiffReviewCommentRange,
@@ -29,6 +29,8 @@ interface CodeAgentAnnotatableCodeViewFile {
   filePath: string;
   fileKey: string;
   collapsed: boolean;
+  viewed: boolean;
+  previewState: CodeAgentDiffFilePreviewState;
 }
 
 interface CodeAgentAnnotatableCodeViewProps {
@@ -45,6 +47,8 @@ interface CodeAgentAnnotatableCodeViewProps {
     fileDiff: FileDiffMetadata,
     fileKey: string,
     collapsed: boolean,
+    viewed: boolean,
+    previewState: CodeAgentDiffFilePreviewState,
   ) => ReactNode;
 }
 
@@ -75,7 +79,7 @@ export function CodeAgentAnnotatableCodeView({
   const filesByKey = useMemo(() => new Map(files.map((file) => [file.fileKey, file])), [files]);
 
   const items = useMemo<CodeViewDiffItem<DiffCommentAnnotationGroup>[]>(() => (
-    files.map(({ fileDiff, filePath, fileKey, collapsed }) => {
+    files.map(({ fileDiff, filePath, fileKey, collapsed, viewed, previewState }) => {
       const persisted = reviewComments
         .filter((comment) => (
           comment.sectionId === sectionId &&
@@ -102,7 +106,7 @@ export function CodeAgentAnnotatableCodeView({
         fileDiff,
         annotations,
         collapsed,
-        version: fnv1a32(`${collapsed ? '1' : '0'}:${annotations
+        version: fnv1a32(`${collapsed ? '1' : '0'}:${viewed ? '1' : '0'}:${previewState.kind === 'suppressed' ? previewState.reason : 'render'}:${annotations
           .flatMap((annotation) => annotation.metadata.entries.map((entry) => `${entry.id}:${entry.rangeLabel}:${entry.text}`))
           .join(':')}`),
       };
@@ -199,7 +203,13 @@ export function CodeAgentAnnotatableCodeView({
       onSelectedLinesChange={setSelectedLines}
       renderHeaderPrefix={(item) =>
         item.type === 'diff'
-          ? renderHeaderPrefix(item.fileDiff, item.id, item.collapsed === true)
+          ? renderHeaderPrefix(
+            item.fileDiff,
+            item.id,
+            item.collapsed === true,
+            filesByKey.get(item.id)?.viewed === true,
+            filesByKey.get(item.id)?.previewState ?? { kind: 'render' },
+          )
           : null
       }
       options={{

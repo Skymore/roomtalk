@@ -25,6 +25,7 @@ import {
   hasSpecificPierreIconForFileName,
   syntheticFileNameForLanguageId,
 } from '../utils/codeAgentPierreIcons';
+import { isBrowserPreviewFile } from './codeAgentFilePath';
 import { CodeAgentPierreEntryIcon } from './CodeAgentPierreEntryIcon';
 
 interface MarkdownContentProps {
@@ -32,6 +33,7 @@ interface MarkdownContentProps {
   isStreaming?: boolean;
   onTaskListChange?: (change: { markerOffset: number; checked: boolean }) => void;
   onOpenWorkspaceFile?: (path: string) => void;
+  onOpenWorkspaceFileInBrowserPreview?: (path: string) => void;
 }
 interface CodeBlockProps {
   className?: string;
@@ -483,15 +485,22 @@ const CodeBlock = memo<CodeBlockProps>(({ className, children, fenceTitle = null
 CodeBlock.displayName = "CodeBlock";
 
 /** 主组件 */
-export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content, isStreaming, onTaskListChange, onOpenWorkspaceFile }) => {
+export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({
+  content,
+  isStreaming,
+  onTaskListChange,
+  onOpenWorkspaceFile,
+  onOpenWorkspaceFileInBrowserPreview,
+}) => {
   const resolvedTheme = useResolvedTheme();
   const processed = React.useMemo(() => {
     const text = escapeRawHtmlTags(preprocessMarkdown(content));
     return parseMath(text);
   }, [content]);
+  const canOpenWorkspaceLinks = Boolean(onOpenWorkspaceFile || onOpenWorkspaceFileInBrowserPreview);
   const markdownFileLinkMetaByHref = React.useMemo(() => {
     const metaByHref = new Map<string, CodeAgentMarkdownFileLinkMeta>();
-    if (!onOpenWorkspaceFile) {
+    if (!canOpenWorkspaceLinks) {
       return metaByHref;
     }
     for (const href of extractMarkdownLinkHrefs(content)) {
@@ -503,7 +512,7 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content, 
       }
     }
     return metaByHref;
-  }, [content, onOpenWorkspaceFile]);
+  }, [canOpenWorkspaceLinks, content]);
   const fileLinkParentSuffixByPath = React.useMemo(() => {
     const filePaths = [...markdownFileLinkMetaByHref.values()].map((meta) => meta.filePath);
     return buildFileLinkParentSuffixByPath(filePaths);
@@ -544,7 +553,7 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content, 
       a: {
         component: ({ children, href, className, ...props }: any) => {
           const normalizedHref = typeof href === 'string' ? normalizeCodeAgentMarkdownLinkHrefKey(href) : '';
-          const fileLinkMeta = onOpenWorkspaceFile && normalizedHref
+          const fileLinkMeta = canOpenWorkspaceLinks && normalizedHref
             ? markdownFileLinkMetaByHref.get(normalizedHref)
               ?? resolveCodeAgentMarkdownFileLinkMeta(normalizedHref, CODE_AGENT_DEFAULT_WORKSPACE_ROOT)
             : null;
@@ -570,6 +579,10 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content, 
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
+                if (onOpenWorkspaceFileInBrowserPreview && isBrowserPreviewFile(fileLinkMeta.filePath)) {
+                  onOpenWorkspaceFileInBrowserPreview(fileLinkMeta.filePath);
+                  return;
+                }
                 onOpenWorkspaceFile?.(fileLinkMeta.targetPath);
               }}
             >

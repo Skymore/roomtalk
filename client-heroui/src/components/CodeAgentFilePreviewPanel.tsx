@@ -3,8 +3,9 @@ import { File as DiffFile, type FileOptions, Virtualizer } from '@pierre/diffs/r
 import {
   Download,
   LoaderCircle,
+  X,
 } from 'lucide-react';
-import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   writeCodeWorkspaceFile,
@@ -13,16 +14,19 @@ import {
 import { resolveCodeAgentDiffThemeName } from '../utils/codeAgentDiffRendering';
 import {
   appendWorkspaceAssetPreviewRevision,
-  isWorkspaceBrowserPreviewPath,
-  isWorkspaceImagePreviewPath,
-  isWorkspacePreviewEntryPath,
 } from '../utils/codeWorkspaceFilePreview';
 import { type ReviewCommentContext } from '../utils/codeAgentReviewComments';
 import { CodeAgentEditableFileSurface } from './CodeAgentEditableFileSurface';
 import { CodeAgentFilePreviewHeader } from './CodeAgentFilePreviewHeader';
 import { projectFileCacheKey } from './codeAgentFileContentRevision';
 import { FileSaveCoordinator } from './codeAgentFileSaveCoordinator';
-import { isMarkdownPreviewFile, setMarkdownTaskChecked } from './codeAgentFilePreviewMode';
+import { setMarkdownTaskChecked } from './codeAgentFilePreviewMode';
+import {
+  isBrowserPreviewFile,
+  isImagePreviewFile,
+  isMarkdownPreviewFile,
+  isSvgImagePreviewFile,
+} from './codeAgentFilePath';
 import {
   confirmCodeAgentProjectFileQueryData,
   getOptimisticCodeAgentProjectFileQueryData,
@@ -253,6 +257,176 @@ function createDownload(file: CodeWorkspaceFile) {
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
+function WorkspaceImageAssetPreview({ src, alt }: { src: string; alt: string }) {
+  const { t } = useTranslation();
+  const [imageLoading, setImageLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [fullScreenVisible, setFullScreenVisible] = useState(false);
+
+  useEffect(() => {
+    setImageLoading(true);
+    setLoadError(false);
+    setFullScreenVisible(false);
+  }, [src]);
+
+  useEffect(() => {
+    if (!fullScreenVisible) {
+      return undefined;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setFullScreenVisible(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [fullScreenVisible]);
+
+  return (
+    <div className="relative min-h-0 flex-1 overflow-auto bg-[#f0eee6] p-4 dark:bg-[#141413]">
+      <button
+        type="button"
+        aria-label={t('codeAgentOpenImagePreviewFullscreen', { path: alt })}
+        className="flex min-h-full w-full items-center justify-center disabled:cursor-default"
+        disabled={loadError}
+        onClick={() => setFullScreenVisible(true)}
+      >
+        <img
+          src={src}
+          alt={alt}
+          className="mx-auto max-h-full max-w-full object-contain"
+          onLoad={() => {
+            setImageLoading(false);
+            setLoadError(false);
+          }}
+          onError={() => {
+            setImageLoading(false);
+            setLoadError(true);
+            setFullScreenVisible(false);
+          }}
+        />
+      </button>
+      {imageLoading && !loadError ? (
+        <div
+          className="absolute inset-0 flex items-center justify-center bg-[#f0eee6]/80 text-[#87867f] dark:bg-[#141413]/80 dark:text-[#8f8d86]"
+          role="status"
+          aria-label={t('codeAgentLoadingImagePreview')}
+        >
+          <LoaderCircle className="h-5 w-5 animate-spin" />
+        </div>
+      ) : null}
+      {loadError ? (
+        <div className="absolute inset-0 flex items-center justify-center bg-[#faf9f5] px-6 text-center dark:bg-[#1d1d1b]">
+          <div className="max-w-sm">
+            <div className="text-sm font-semibold text-[#141413] dark:text-[#faf9f5]">
+              {t('codeAgentImagePreviewUnavailable')}
+            </div>
+            <div className="mt-1 text-xs leading-relaxed text-[#87867f] dark:text-[#8f8d86]">
+              {t('codeAgentImagePreviewLoadFailed')}
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {fullScreenVisible ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={t('codeAgentImagePreviewFullscreen', { path: alt })}
+          className="fixed inset-0 z-[1000] flex items-center justify-center bg-[#141413]/95 p-4"
+          data-testid="code-agent-image-fullscreen-preview"
+          onClick={() => setFullScreenVisible(false)}
+        >
+          <button
+            type="button"
+            aria-label={t('close')}
+            className="absolute right-3 top-3 rounded-md p-2 text-[#faf9f5] transition-colors hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#ffb197]"
+            onClick={(event) => {
+              event.stopPropagation();
+              setFullScreenVisible(false);
+            }}
+          >
+            <X className="h-5 w-5" />
+          </button>
+          <img
+            src={src}
+            alt={alt}
+            className="max-h-full max-w-full object-contain"
+            onClick={(event) => event.stopPropagation()}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function WorkspaceBrowserAssetPreview({ src, title }: { src: string; title: string }) {
+  const { t } = useTranslation();
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+
+  const handleLoad = useCallback(() => {
+    setIsLoading(false);
+  }, []);
+
+  const handleError = useCallback(() => {
+    setIsLoading(false);
+    setLoadError(t('codeAgentBrowserPreviewLoadFailed'));
+  }, [t]);
+
+  useEffect(() => {
+    setIsLoading(true);
+    setLoadError(null);
+  }, [src]);
+
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe) {
+      return undefined;
+    }
+    iframe.addEventListener('load', handleLoad);
+    iframe.addEventListener('error', handleError);
+    return () => {
+      iframe.removeEventListener('load', handleLoad);
+      iframe.removeEventListener('error', handleError);
+    };
+  }, [handleError, handleLoad, src]);
+
+  return (
+    <div className="relative flex min-h-0 flex-1 flex-col bg-white dark:bg-[#141413]">
+      {loadError ? (
+        <div className="shrink-0 border-b border-[#f0b49b]/50 bg-[#fff2ec] px-4 py-2 dark:border-[#7a321f]/60 dark:bg-[#2a211d]">
+          <div className="text-xs font-semibold text-[#9f462c] dark:text-[#ff9b78]">
+            {t('codeAgentBrowserPreviewFailed')}
+          </div>
+          <div className="mt-0.5 text-xs leading-relaxed text-[#5e5d59] dark:text-[#b0aea5]">
+            {loadError}
+          </div>
+        </div>
+      ) : null}
+      <iframe
+        ref={iframeRef}
+        src={src}
+        title={title}
+        className="min-h-0 flex-1 border-0 bg-white"
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+        onLoad={handleLoad}
+        onError={handleError}
+      />
+      {isLoading ? (
+        <div
+          className="absolute inset-0 flex items-center justify-center bg-white/80 text-[#87867f] dark:bg-[#141413]/80 dark:text-[#8f8d86]"
+          role="status"
+          aria-label={t('codeAgentLoadingBrowserPreview')}
+        >
+          <LoaderCircle className="h-5 w-5 animate-spin" />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function previewedByteSize(file: CodeWorkspaceFile): number {
   if (file.encoding === 'utf-8') {
     return new TextEncoder().encode(file.content).byteLength;
@@ -311,6 +485,7 @@ interface RenderedMarkdownSurfaceProps {
   onFileSavePendingChange?: (relativePath: string, pending: boolean) => void;
   onEntriesChanged: () => void;
   onOpenWorkspaceFile: (path: string) => void;
+  onOpenWorkspaceFileInBrowserPreview?: (path: string) => void;
 }
 
 function RenderedMarkdownSurface({
@@ -321,6 +496,7 @@ function RenderedMarkdownSurface({
   onFileSavePendingChange,
   onEntriesChanged,
   onOpenWorkspaceFile,
+  onOpenWorkspaceFileInBrowserPreview,
 }: RenderedMarkdownSurfaceProps) {
   const filePath = file.path;
   const fileRef = useRef(file);
@@ -390,6 +566,7 @@ function RenderedMarkdownSurface({
           <MarkdownContent
             content={file.content}
             onOpenWorkspaceFile={onOpenWorkspaceFile}
+            onOpenWorkspaceFileInBrowserPreview={onOpenWorkspaceFileInBrowserPreview}
             onTaskListChange={({ markerOffset, checked }) => {
               const currentContents = getOptimisticCodeAgentProjectFileQueryData(roomId, filePath)?.content
                 ?? fileRef.current.content;
@@ -435,6 +612,7 @@ interface FilePreviewSurfaceProps {
   onEntriesChanged: () => void;
   onAssetPreviewChanged: (relativePath: string) => void;
   onOpenWorkspaceFile: (path: string) => void;
+  onOpenWorkspaceFileInBrowserPreview?: (path: string) => void;
   reviewComments: readonly ReviewCommentContext[];
   onAddReviewComment?: (comment: ReviewCommentContext) => void;
   onRemoveReviewComment?: (commentId: string) => void;
@@ -463,6 +641,7 @@ function FilePreviewSurface({
   onEntriesChanged,
   onAssetPreviewChanged,
   onOpenWorkspaceFile,
+  onOpenWorkspaceFileInBrowserPreview,
   reviewComments,
   onAddReviewComment,
   onRemoveReviewComment,
@@ -471,7 +650,7 @@ function FilePreviewSurface({
   const onFilePostRender = useFileLineReveal(relativePath, revealLine, revealRequestId);
   const handleEntriesChanged = useCallback(() => {
     onEntriesChanged();
-    if (relativePath && isWorkspacePreviewEntryPath(relativePath)) {
+    if (relativePath && (isBrowserPreviewFile(relativePath) || isImagePreviewFile(relativePath))) {
       onAssetPreviewChanged(relativePath);
     }
   }, [onAssetPreviewChanged, onEntriesChanged, relativePath]);
@@ -486,8 +665,9 @@ function FilePreviewSurface({
     return null;
   }
 
-  const renderBrowserAssetPreview = renderPreview && isWorkspaceBrowserPreviewPath(relativePath);
-  const renderImageAssetPreview = renderPreview && isWorkspaceImagePreviewPath(relativePath);
+  const renderBrowserAssetPreview = renderPreview && isBrowserPreviewFile(relativePath);
+  const renderImageAssetPreview = renderPreview && isImagePreviewFile(relativePath);
+  const renderSvgWebPreview = renderImageAssetPreview && isSvgImagePreviewFile(relativePath);
   if (renderBrowserAssetPreview || renderImageAssetPreview) {
     if (assetPreviewError) {
       return (
@@ -498,21 +678,27 @@ function FilePreviewSurface({
     }
 
     if (assetPreviewPending || !assetPreviewResolvedUrl) {
+      const pendingLabel = renderImageAssetPreview
+        ? t('codeAgentPreparingImagePreview')
+        : t('codeAgentPreparingBrowserPreview');
       return (
-        <div className="flex min-h-0 flex-1 items-center justify-center text-[#87867f] dark:text-[#8f8d86]">
+        <div
+          className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-[#87867f] dark:text-[#8f8d86]"
+          role="status"
+          aria-label={pendingLabel}
+        >
           <LoaderCircle className="h-5 w-5 animate-spin" />
+          <div className="text-sm">{pendingLabel}</div>
         </div>
       );
     }
 
     const resolvedPreviewUrl = appendWorkspaceAssetPreviewRevision(assetPreviewResolvedUrl, assetPreviewRevision);
 
-    return renderImageAssetPreview ? (
-      <div className="min-h-0 flex-1 overflow-auto bg-[#f0eee6] p-4 dark:bg-[#141413]">
-        <img src={resolvedPreviewUrl} alt={relativePath} className="mx-auto max-h-full max-w-full object-contain" />
-      </div>
+    return renderImageAssetPreview && !renderSvgWebPreview ? (
+      <WorkspaceImageAssetPreview src={resolvedPreviewUrl} alt={relativePath} />
     ) : (
-      <iframe src={resolvedPreviewUrl} title={relativePath} className="min-h-0 flex-1 border-0 bg-white" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
+      <WorkspaceBrowserAssetPreview src={resolvedPreviewUrl} title={relativePath} />
     );
   }
 
@@ -561,6 +747,7 @@ function FilePreviewSurface({
           onFileSavePendingChange={onFileSavePendingChange}
           onEntriesChanged={handleEntriesChanged}
           onOpenWorkspaceFile={onOpenWorkspaceFile}
+          onOpenWorkspaceFileInBrowserPreview={onOpenWorkspaceFileInBrowserPreview}
         />
       ) : file.truncated ? (
         <ReadOnlyFileSurface
@@ -629,6 +816,7 @@ interface CodeAgentFilePreviewPanelProps {
   onEntriesChanged: () => void;
   onAssetPreviewChanged: (relativePath: string) => void;
   onOpenWorkspaceFile: (path: string) => void;
+  onOpenWorkspaceFileInBrowserPreview?: (path: string) => void;
   reviewComments: readonly ReviewCommentContext[];
   onAddReviewComment?: (comment: ReviewCommentContext) => void;
   onRemoveReviewComment?: (commentId: string) => void;
@@ -670,6 +858,7 @@ export function CodeAgentFilePreviewPanel({
   onEntriesChanged,
   onAssetPreviewChanged,
   onOpenWorkspaceFile,
+  onOpenWorkspaceFileInBrowserPreview,
   reviewComments,
   onAddReviewComment,
   onRemoveReviewComment,
@@ -733,6 +922,7 @@ export function CodeAgentFilePreviewPanel({
             onEntriesChanged={onEntriesChanged}
             onAssetPreviewChanged={onAssetPreviewChanged}
             onOpenWorkspaceFile={onOpenWorkspaceFile}
+            onOpenWorkspaceFileInBrowserPreview={onOpenWorkspaceFileInBrowserPreview}
             reviewComments={reviewComments}
             onAddReviewComment={onAddReviewComment}
             onRemoveReviewComment={onRemoveReviewComment}

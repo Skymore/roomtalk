@@ -373,6 +373,25 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(screen.queryByTestId('code-view')).toBeNull();
   });
 
+  it('uses the T3 raw excerpt reason when a truncated workspace diff cannot be parsed', async () => {
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'not a complete git patch\n+but still useful output\n',
+      byteSize: 2_000_000,
+      truncated: true,
+    });
+    parsePatchFilesMock.mockImplementation(() => {
+      throw new Error('bad patch');
+    });
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
+
+    expect((await screen.findByTestId('code-agent-workspace-raw-diff')).textContent).toBe('not a complete git patch\n+but still useful output');
+    expect(screen.getByText('Diff was truncated before it could be parsed completely. Showing the raw excerpt.')).toBeTruthy();
+    expect(screen.getByTestId('code-agent-workspace-diff-truncated')).toBeTruthy();
+    expect(screen.queryByTestId('code-view')).toBeNull();
+  });
+
   it('falls back to the T3 raw patch viewer when a parsed patch has no files', async () => {
     loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
       available: true,
@@ -613,6 +632,111 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(screen.getByLabelText('codeAgentExpandDiffFile').getAttribute('aria-expanded')).toBe('false');
   });
 
+  it('marks T3-style diff files as viewed and collapses them', async () => {
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          { name: 'src/App.tsx', cacheKey: 'file:app', hunks: [], additionLines: [], deletionLines: [], type: 'change' },
+          { name: 'src/utils.ts', cacheKey: 'file:utils', hunks: [], additionLines: [], deletionLines: [], type: 'new' },
+        ],
+      },
+    ]);
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
+
+    expect((await screen.findByTestId('diff-file-file:app')).getAttribute('data-collapsed')).toBe('false');
+    expect(screen.getByTestId('diff-file-file:utils').getAttribute('data-collapsed')).toBe('false');
+
+    fireEvent.click(screen.getAllByLabelText('codeAgentMarkDiffFileViewed')[0]);
+
+    expect(screen.getByTestId('diff-file-file:app').getAttribute('data-collapsed')).toBe('true');
+    expect(screen.getByTestId('diff-file-file:utils').getAttribute('data-collapsed')).toBe('false');
+    expect(screen.getByLabelText('codeAgentUnmarkDiffFileViewed').getAttribute('aria-pressed')).toBe('true');
+
+    fireEvent.click(screen.getByLabelText('codeAgentUnmarkDiffFileViewed'));
+
+    expect(screen.getByTestId('diff-file-file:app').getAttribute('data-collapsed')).toBe('true');
+    expect(screen.getAllByLabelText('codeAgentMarkDiffFileViewed')[0].getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('suppresses non-text diff files like T3', async () => {
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/assets/icon.png b/assets/icon.png\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          {
+            name: 'assets/icon.png',
+            cacheKey: 'file:icon',
+            hunks: [],
+            additionLines: [],
+            deletionLines: [],
+            type: 'change',
+          },
+        ],
+      },
+    ]);
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
+
+    const file = await screen.findByTestId('diff-file-file:icon');
+    expect(file.getAttribute('data-collapsed')).toBe('true');
+    const suppression = within(file).getByTestId('code-agent-diff-file-suppression');
+    expect(suppression.textContent).toContain('codeAgentNonTextDiff');
+    expect(suppression.getAttribute('title')).toBe('codeAgentNonTextDiffSuppressedMessage');
+    expect(within(file).queryByText('codeAgentLoadDiff')).toBeNull();
+  });
+
+  it('suppresses large diff files until they are explicitly loaded like T3', async () => {
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/big.ts b/src/big.ts\n',
+      byteSize: 42000,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          {
+            name: 'src/big.ts',
+            cacheKey: 'file:big',
+            hunks: [{
+              additionLines: 401,
+              deletionLines: 0,
+              hunkContent: [{ type: 'change', deletions: 0, additions: 401 }],
+            }],
+            additionLines: Array.from({ length: 401 }, (_, index) => `const line${index} = ${index};`),
+            deletionLines: [],
+            type: 'change',
+          },
+        ],
+      },
+    ]);
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
+
+    const file = await screen.findByTestId('diff-file-file:big');
+    expect(file.getAttribute('data-collapsed')).toBe('true');
+    const suppression = within(file).getByTestId('code-agent-diff-file-suppression');
+    expect(suppression.textContent).toContain('codeAgentLargeDiff');
+    expect(suppression.getAttribute('title')).toBe('codeAgentLargeDiffSuppressedMessage');
+
+    fireEvent.click(within(file).getByText('codeAgentLoadDiff'));
+
+    expect(screen.getByTestId('diff-file-file:big').getAttribute('data-collapsed')).toBe('false');
+    expect(within(screen.getByTestId('diff-file-file:big')).queryByTestId('code-agent-diff-file-suppression')).toBeNull();
+  });
+
   it('keeps T3-style collapsed diff files across workspace snapshot refreshes', async () => {
     loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
       available: true,
@@ -827,7 +951,7 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
 
     expect(await screen.findByTestId('diff-line-annotation')).toBeTruthy();
     expect(screen.getByTestId('diff-file-file:app').dataset.version).toBe(String(
-      fnv1a32('0:comment-1:+2 to +4:Please revisit this diff.:comment-2:+2 to +4:Keep this aligned with T3.'),
+      fnv1a32('0:0:render:comment-1:+2 to +4:Please revisit this diff.:comment-2:+2 to +4:Keep this aligned with T3.'),
     ));
     expect(screen.getByTestId('diff-file-file:app').dataset.version).not.toBe(String(
       fnv1a32('0:comment-1:comment:+2 to +4:Please revisit this diff.'),

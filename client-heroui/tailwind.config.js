@@ -16,6 +16,7 @@ export default {
         warmBorder: "#dedbd0",
         warmText: "#141413",
         warmMuted: "#5e5d59",
+        "muted-foreground": "rgb(var(--rt-muted-foreground-rgb) / <alpha-value>)",
         terracotta: "#c96442",
         coral: "#d97757",
         ink: "#30302e",

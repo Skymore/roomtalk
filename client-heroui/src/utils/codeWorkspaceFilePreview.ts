@@ -25,6 +25,10 @@ export const isWorkspaceImagePreviewPath = (path: string): boolean => (
   hasPreviewExtension(path, WORKSPACE_IMAGE_PREVIEW_EXTENSIONS)
 );
 
+export const isWorkspaceSvgImagePreviewPath = (path: string): boolean => (
+  hasPreviewExtension(path, ['.svg'])
+);
+
 export const isWorkspacePreviewEntryPath = (path: string): boolean => (
   isWorkspaceBrowserPreviewPath(path) || isWorkspaceImagePreviewPath(path)
 );

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   normalizeWorkspaceOpenPath,
   parseWorkspaceFileOpenTarget,
+  resolveWorkspaceOpenRelativePath,
 } from './workspaceFileOpenTarget';
 
 describe('workspace file open targets', () => {
@@ -36,14 +37,35 @@ describe('workspace file open targets', () => {
     });
   });
 
-  it('keeps Windows drive letters while stripping T3-style positions', () => {
-    expect(parseWorkspaceFileOpenTarget('C:\\workspace\\src\\App.tsx:12:4')).toEqual({
-      path: 'C:/workspace/src/App.tsx',
+  it('resolves absolute paths through the T3 workspace-relative guard', () => {
+    expect(parseWorkspaceFileOpenTarget('/workspace/src/App.tsx:12')).toEqual({
+      path: 'src/App.tsx',
       line: 12,
     });
-    expect(parseWorkspaceFileOpenTarget('C:\\workspace\\src\\App.tsx')).toEqual({
-      path: 'C:/workspace/src/App.tsx',
+    expect(parseWorkspaceFileOpenTarget('/tmp/src/App.tsx:12')).toBeNull();
+  });
+
+  it('resolves Windows workspace roots like T3 when a root is provided', () => {
+    expect(parseWorkspaceFileOpenTarget('C:\\workspace\\src\\App.tsx:12:4', {
+      workspaceRoot: 'C:\\workspace',
+    })).toEqual({
+      path: 'src/App.tsx',
+      line: 12,
+    });
+    expect(parseWorkspaceFileOpenTarget('C:\\workspace\\src\\App.tsx', {
+      workspaceRoot: 'C:\\workspace',
+    })).toEqual({
+      path: 'src/App.tsx',
       line: null,
     });
+    expect(parseWorkspaceFileOpenTarget('D:\\workspace\\src\\App.tsx', {
+      workspaceRoot: 'C:\\workspace',
+    })).toBeNull();
+  });
+
+  it('normalizes relative paths without allowing them to escape the workspace', () => {
+    expect(resolveWorkspaceOpenRelativePath('./src/../README.md')).toBe('README.md');
+    expect(resolveWorkspaceOpenRelativePath('../secrets.txt')).toBeNull();
+    expect(resolveWorkspaceOpenRelativePath('~/notes.txt')).toBeNull();
   });
 });

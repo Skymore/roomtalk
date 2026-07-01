@@ -99,10 +99,12 @@ vi.mock('./MarkdownContent', () => ({
     content,
     onTaskListChange,
     onOpenWorkspaceFile,
+    onOpenWorkspaceFileInBrowserPreview,
   }: {
     content: string;
     onTaskListChange?: (change: { markerOffset: number; checked: boolean }) => void;
     onOpenWorkspaceFile?: (path: string) => void;
+    onOpenWorkspaceFileInBrowserPreview?: (path: string) => void;
   }) => {
     const taskLines = content.split('\n').flatMap((line, lineIndex, lines) => {
       const lineStart = lines.slice(0, lineIndex).reduce((offset, previousLine) => offset + previousLine.length + 1, 0);
@@ -116,9 +118,16 @@ vi.mock('./MarkdownContent', () => ({
 
     return (
       <div>
-        <button type="button" aria-label="open-guide-link" onClick={() => onOpenWorkspaceFile?.('docs/Guide.md#L2')}>
-          open guide
-        </button>
+        {content.includes('Guide.md') ? (
+          <button type="button" aria-label="open-guide-link" onClick={() => onOpenWorkspaceFile?.('docs/Guide.md#L2')}>
+            open guide
+          </button>
+        ) : null}
+        {content.includes('report.html') ? (
+          <button type="button" aria-label="open-report-preview-link" onClick={() => onOpenWorkspaceFileInBrowserPreview?.('/workspace/output/report.html')}>
+            open report preview
+          </button>
+        ) : null}
         {taskLines.map((task) => (
           <label key={task.markerOffset}>
             <input
@@ -702,10 +711,11 @@ describe('CodeAgentFileBrowserPanel', () => {
       ],
       truncated: false,
     });
-    createCodeWorkspaceAssetUrlMock.mockResolvedValue({
-      relativeUrl: '/api/coco/workspace-assets/token/report.html',
-      expiresAt: '2026-06-30T12:15:00.000Z',
-    });
+    const assetUrl = deferred<{
+      relativeUrl: string;
+      expiresAt: string;
+    }>();
+    createCodeWorkspaceAssetUrlMock.mockReturnValue(assetUrl.promise);
     resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/coco/workspace-assets/token/report.html');
 
     const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
@@ -716,9 +726,121 @@ describe('CodeAgentFileBrowserPanel', () => {
     await waitFor(() => {
       expect(createCodeWorkspaceAssetUrlMock).toHaveBeenCalledWith('room-1', 'output/report.html', expect.any(Object));
     });
+    expect(screen.getByRole('status', { name: 'codeAgentPreparingBrowserPreview' })).toBeTruthy();
+    expect(container.querySelector('iframe')).toBeNull();
+
+    await act(async () => {
+      assetUrl.resolve({
+        relativeUrl: '/api/coco/workspace-assets/token/report.html',
+        expiresAt: '2026-06-30T12:15:00.000Z',
+      });
+    });
+
     const iframe = container.querySelector('iframe') as HTMLIFrameElement | null;
     expect(iframe).toBeTruthy();
     expect(iframe?.getAttribute('src')).toBe('/api/coco/workspace-assets/token/report.html');
+    expect(screen.getByRole('status', { name: 'codeAgentLoadingBrowserPreview' })).toBeTruthy();
+    fireEvent.load(iframe as HTMLIFrameElement);
+    await waitFor(() => {
+      expect(screen.queryByRole('status', { name: 'codeAgentLoadingBrowserPreview' })).toBeNull();
+    });
+    expect(loadCodeWorkspaceFileMock).not.toHaveBeenCalled();
+  });
+
+  it('shows T3-style image preview loading and failure states for signed asset URLs', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'assets/logo.png', name: 'logo.png', type: 'file' },
+      ],
+      truncated: false,
+    });
+    const assetUrl = deferred<{
+      relativeUrl: string;
+      expiresAt: string;
+    }>();
+    createCodeWorkspaceAssetUrlMock.mockReturnValue(assetUrl.promise);
+    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/coco/workspace-assets/token/logo.png');
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+
+    expect(await screen.findByText('1 files')).toBeTruthy();
+    selectionHandlerRef.current?.(['assets/logo.png']);
+
+    expect(await screen.findByRole('status', { name: 'codeAgentPreparingImagePreview' })).toBeTruthy();
+    await act(async () => {
+      assetUrl.resolve({
+        relativeUrl: '/api/coco/workspace-assets/token/logo.png',
+        expiresAt: '2026-06-30T12:15:00.000Z',
+      });
+    });
+
+    const image = await screen.findByAltText('assets/logo.png') as HTMLImageElement;
+    expect(image.getAttribute('src')).toBe('/api/coco/workspace-assets/token/logo.png');
+    expect(screen.queryByLabelText('codeAgentShowSource')).toBeNull();
+    expect(screen.getByRole('status', { name: 'codeAgentLoadingImagePreview' })).toBeTruthy();
+
+    fireEvent.load(image);
+    fireEvent.click(screen.getByLabelText('codeAgentOpenImagePreviewFullscreen:assets/logo.png'));
+    let fullScreenPreview = screen.getByTestId('code-agent-image-fullscreen-preview');
+    expect(fullScreenPreview.getAttribute('role')).toBe('dialog');
+    expect(screen.getAllByAltText('assets/logo.png')).toHaveLength(2);
+
+    fireEvent.click(within(fullScreenPreview).getByLabelText('close'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('code-agent-image-fullscreen-preview')).toBeNull();
+    });
+
+    fireEvent.click(screen.getByLabelText('codeAgentOpenImagePreviewFullscreen:assets/logo.png'));
+    fullScreenPreview = screen.getByTestId('code-agent-image-fullscreen-preview');
+    expect(fullScreenPreview.getAttribute('aria-label')).toBe('codeAgentImagePreviewFullscreen:assets/logo.png');
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByTestId('code-agent-image-fullscreen-preview')).toBeNull();
+    });
+
+    fireEvent.click(screen.getByLabelText('codeAgentRefreshWorkspaceFile'));
+    await waitFor(() => {
+      expect(image.getAttribute('src')).toBe('/api/coco/workspace-assets/token/logo.png?revision=1');
+    });
+
+    fireEvent.error(image);
+
+    expect(screen.getByText('codeAgentImagePreviewUnavailable')).toBeTruthy();
+    expect(screen.getByText('codeAgentImagePreviewLoadFailed')).toBeTruthy();
+    expect(loadCodeWorkspaceFileMock).not.toHaveBeenCalled();
+  });
+
+  it('renders SVG image previews through the T3-style web preview surface', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'assets/diagram.svg', name: 'diagram.svg', type: 'file' },
+      ],
+      truncated: false,
+    });
+    createCodeWorkspaceAssetUrlMock.mockResolvedValue({
+      relativeUrl: '/api/coco/workspace-assets/token/diagram.svg',
+      expiresAt: '2026-06-30T12:15:00.000Z',
+    });
+    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/coco/workspace-assets/token/diagram.svg');
+
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+
+    expect(await screen.findByText('1 files')).toBeTruthy();
+    selectionHandlerRef.current?.(['assets/diagram.svg']);
+
+    await waitFor(() => {
+      expect(createCodeWorkspaceAssetUrlMock).toHaveBeenCalledWith('room-1', 'assets/diagram.svg', expect.any(Object));
+    });
+    expect(screen.queryByAltText('assets/diagram.svg')).toBeNull();
+    expect(screen.queryByLabelText('codeAgentShowSource')).toBeNull();
+    const iframe = container.querySelector('iframe') as HTMLIFrameElement | null;
+    expect(iframe).toBeTruthy();
+    expect(iframe?.getAttribute('src')).toBe('/api/coco/workspace-assets/token/diagram.svg');
+    fireEvent.error(iframe as HTMLIFrameElement);
+    await waitFor(() => {
+      expect(screen.getByText('codeAgentBrowserPreviewFailed')).toBeTruthy();
+    });
+    expect(screen.getByText('codeAgentBrowserPreviewLoadFailed')).toBeTruthy();
     expect(loadCodeWorkspaceFileMock).not.toHaveBeenCalled();
   });
 
@@ -872,7 +994,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(screen.queryByLabelText('codeAgentShowRenderedMarkdown')).toBeNull();
   });
 
-  it('opens T3-style browser preview files in a new tab through the signed asset URL', async () => {
+  it('opens T3-style browser preview files with a fresh signed asset URL', async () => {
     loadCodeWorkspaceEntriesMock.mockResolvedValue({
       entries: [
         { path: 'output/report.html', name: 'report.html', type: 'file' },
@@ -903,8 +1025,11 @@ describe('CodeAgentFileBrowserPanel', () => {
     fireEvent.click(screen.getByLabelText('codeAgentOpenFileInPreview'));
 
     expect(open).toHaveBeenCalledWith('about:blank', '_blank');
+    await waitFor(() => {
+      expect(createCodeWorkspaceAssetUrlMock).toHaveBeenCalledTimes(2);
+    });
+    expect(createCodeWorkspaceAssetUrlMock).toHaveBeenLastCalledWith('room-1', 'output/report.html');
     expect(previewWindow.location.href).toBe('/api/coco/workspace-assets/token/report.html');
-    expect(createCodeWorkspaceAssetUrlMock).toHaveBeenCalledTimes(1);
   });
 
   it('opens a requested workspace file from an external diff action', async () => {
@@ -1687,6 +1812,52 @@ describe('CodeAgentFileBrowserPanel', () => {
       expect(loadCodeWorkspaceFileMock).toHaveBeenCalledWith('room-1', 'docs/Guide.md', expect.any(Object));
     });
     expect((await screen.findByTestId('diff-file')).textContent).toBe('docs/Guide.md:line 1\nline 2\nline 3');
+  });
+
+  it('opens browser-preview links from rendered markdown with a fresh signed asset URL', async () => {
+    fileTreeSelectionPathRef.current = 'README.md';
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'README.md', name: 'README.md', type: 'file' },
+        { path: 'output/report.html', name: 'report.html', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockResolvedValue({
+      path: 'README.md',
+      content: '[Report](output/report.html)',
+      byteSize: 28,
+      truncated: false,
+      encoding: 'utf-8',
+    });
+    createCodeWorkspaceAssetUrlMock.mockResolvedValue({
+      relativeUrl: '/api/coco/workspace-assets/token/report.html',
+      expiresAt: '2026-06-30T12:15:00.000Z',
+    });
+    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/coco/workspace-assets/token/report.html');
+    const previewWindow = {
+      closed: false,
+      close: vi.fn(),
+      location: { href: 'about:blank' },
+      opener: window,
+    } as unknown as Window;
+    const open = vi.spyOn(window, 'open').mockReturnValue(previewWindow);
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    await screen.findByText('2 files');
+    fireEvent.click(screen.getByLabelText('Coco files'));
+    expect((await screen.findByTestId('diff-file')).textContent).toBe('README.md:[Report](output/report.html)');
+
+    fireEvent.click(screen.getByLabelText('codeAgentShowRenderedMarkdown'));
+    fireEvent.click(await screen.findByLabelText('open-report-preview-link'));
+
+    expect(open).toHaveBeenCalledWith('about:blank', '_blank');
+    await waitFor(() => {
+      expect(createCodeWorkspaceAssetUrlMock).toHaveBeenCalledWith('room-1', 'output/report.html');
+    });
+    expect(previewWindow.location.href).toBe('/api/coco/workspace-assets/token/report.html');
+    expect(loadCodeWorkspaceFileMock).toHaveBeenCalledTimes(1);
+    expect(loadCodeWorkspaceFileMock).not.toHaveBeenCalledWith('room-1', 'output/report.html', expect.any(Object));
   });
 
   it('renders truncated text files as read-only previews', async () => {

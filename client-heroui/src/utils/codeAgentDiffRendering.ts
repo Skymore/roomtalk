@@ -51,6 +51,18 @@ export type RenderablePatch =
     reason: string;
   };
 
+export type CodeAgentDiffFilePreviewState =
+  | {
+    kind: 'render';
+  }
+  | {
+    kind: 'suppressed';
+    reason: 'non-text' | 'large';
+    title: string;
+    message: string;
+    actionLabel: string | null;
+  };
+
 interface RenderablePatchOptions {
   /**
    * Mirrored from T3: Pierre's partial-patch parser keeps hunk render starts in
@@ -58,6 +70,104 @@ interface RenderablePatchOptions {
    * compact rows.
    */
   compactPartialHunkOffsets?: boolean;
+  truncated?: boolean;
+}
+
+const LARGE_DIFF_LINE_THRESHOLD = 400;
+const LARGE_DIFF_CHARACTER_THRESHOLD = 24_000;
+const NON_TEXT_FILE_EXTENSIONS = new Set([
+  'png',
+  'jpg',
+  'jpeg',
+  'gif',
+  'webp',
+  'bmp',
+  'ico',
+  'icns',
+  'avif',
+  'heic',
+  'tif',
+  'tiff',
+  'mp3',
+  'wav',
+  'flac',
+  'ogg',
+  'm4a',
+  'aac',
+  'mp4',
+  'mov',
+  'avi',
+  'mkv',
+  'webm',
+  'pdf',
+  'zip',
+  'gz',
+  'tgz',
+  'bz2',
+  '7z',
+  'rar',
+  'woff',
+  'woff2',
+  'ttf',
+  'otf',
+  'eot',
+  'wasm',
+  'exe',
+  'dll',
+  'so',
+  'dylib',
+]);
+
+function getFileExtension(path: string): string | null {
+  const match = /\.([a-z0-9]+)$/i.exec(path);
+  return match?.[1]?.toLowerCase() ?? null;
+}
+
+function countFileDiffRenderableRows(fileDiff: FileDiffMetadata): number {
+  return fileDiff.hunks.reduce((total, hunk) => {
+    if (Array.isArray(hunk.hunkContent)) {
+      return total + hunk.hunkContent.reduce((hunkTotal, segment) => {
+        if (segment.type === 'context') {
+          return hunkTotal + segment.lines;
+        }
+        return hunkTotal + segment.deletions + segment.additions;
+      }, 0);
+    }
+    return total + hunk.additionLines + hunk.deletionLines;
+  }, 0);
+}
+
+function countFileDiffRenderableCharacters(fileDiff: FileDiffMetadata): number {
+  const additionCharacters = fileDiff.additionLines.reduce((total, line) => total + line.length, 0);
+  const deletionCharacters = fileDiff.deletionLines.reduce((total, line) => total + line.length, 0);
+  return additionCharacters + deletionCharacters;
+}
+
+export function getCodeAgentDiffFilePreviewState(fileDiff: FileDiffMetadata): CodeAgentDiffFilePreviewState {
+  const extension = getFileExtension(resolveFileDiffPath(fileDiff));
+  if (extension && NON_TEXT_FILE_EXTENSIONS.has(extension)) {
+    return {
+      kind: 'suppressed',
+      reason: 'non-text',
+      title: 'Non-text file',
+      message: 'Diff preview is not available for this file format.',
+      actionLabel: null,
+    };
+  }
+
+  const lineCount = countFileDiffRenderableRows(fileDiff);
+  const characterCount = countFileDiffRenderableCharacters(fileDiff);
+  if (lineCount > LARGE_DIFF_LINE_THRESHOLD || characterCount > LARGE_DIFF_CHARACTER_THRESHOLD) {
+    return {
+      kind: 'suppressed',
+      reason: 'large',
+      title: 'Large diff',
+      message: 'Large diffs are not rendered by default.',
+      actionLabel: 'Load diff',
+    };
+  }
+
+  return { kind: 'render' };
 }
 
 export function compactPartialHunkOffsets(file: FileDiffMetadata): FileDiffMetadata {
@@ -87,6 +197,18 @@ export function compactPartialHunkOffsets(file: FileDiffMetadata): FileDiffMetad
   };
 }
 
+function splitTruncationMarker(diff: string): { text: string; truncated: boolean } {
+  const trimmed = diff.trimEnd();
+  if (!trimmed.endsWith('[truncated]')) {
+    return { text: trimmed, truncated: false };
+  }
+
+  return {
+    text: trimmed.replace(/\n*\[truncated\]\s*$/, '').trimEnd(),
+    truncated: true,
+  };
+}
+
 export function getRenderablePatch(
   patch: string | undefined,
   cacheScope = 'diff-panel',
@@ -99,11 +221,22 @@ export function getRenderablePatch(
   if (normalizedPatch.length === 0) {
     return null;
   }
+  const { text: patchText, truncated: markerTruncated } = splitTruncationMarker(normalizedPatch);
+  if (patchText.length === 0) {
+    return null;
+  }
+  const isTruncated = options.truncated === true || markerTruncated;
+  const rawReason = isTruncated
+    ? 'Diff was truncated before it could be parsed completely. Showing the raw excerpt.'
+    : 'Failed to parse patch. Showing raw patch.';
+  const unsupportedReason = isTruncated
+    ? 'Diff was truncated before it could be parsed completely. Showing the raw excerpt.'
+    : 'Unsupported diff format. Showing raw patch.';
 
   try {
     const parsedPatches = parsePatchFiles(
-      normalizedPatch,
-      buildPatchCacheKey(normalizedPatch, cacheScope),
+      patchText,
+      buildPatchCacheKey(patchText, cacheScope),
     );
     const files = parsedPatches.flatMap((parsedPatch) =>
       options.compactPartialHunkOffsets
@@ -115,14 +248,14 @@ export function getRenderablePatch(
     }
     return {
       kind: 'raw',
-      text: normalizedPatch,
-      reason: 'Unsupported diff format. Showing raw patch.',
+      text: patchText,
+      reason: unsupportedReason,
     };
   } catch {
     return {
       kind: 'raw',
-      text: normalizedPatch,
-      reason: 'Failed to parse patch. Showing raw patch.',
+      text: patchText,
+      reason: rawReason,
     };
   }
 }
@@ -235,7 +368,7 @@ export function getDiffCollapseIconClassName(fileDiff: FileDiffMetadata): string
     case 'rename-changed':
       return 'text-[var(--diffs-modified-base)]';
     default:
-      return 'text-[#87867f] dark:text-[#8f8d86]';
+      return 'text-muted-foreground/80';
   }
 }
 

@@ -431,7 +431,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
             : `${fileManagerWidth}px`,
         }}
       >
-        <div className="relative min-h-0 min-w-[var(--code-agent-chat-min-width)] overflow-hidden" data-code-agent-chat-pane="true">
+        <div className="relative min-h-0 min-w-0 overflow-hidden lg:min-w-[var(--code-agent-chat-min-width)]" data-code-agent-chat-pane="true">
           <MessageList
             key={currentRoom.id}
             ref={messageListRef}

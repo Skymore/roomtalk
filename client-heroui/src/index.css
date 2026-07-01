@@ -11,6 +11,7 @@
   --rt-border: #dedbd0;
   --rt-text: #141413;
   --rt-muted: #5e5d59;
+  --rt-muted-foreground-rgb: 94 93 89;
   --rt-terracotta: #c96442;
   --rt-coral: #d97757;
   --rt-dark: #141413;
@@ -49,6 +50,7 @@ body {
 .dark {
   color-scheme: dark;
   color: var(--rt-dark-text);
+  --rt-muted-foreground-rgb: 176 174 165;
 }
 
 .dark body,

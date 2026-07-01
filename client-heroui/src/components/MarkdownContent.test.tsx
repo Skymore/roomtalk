@@ -83,6 +83,25 @@ describe('MarkdownContent math rendering', () => {
     expect(onOpenWorkspaceFile).toHaveBeenNthCalledWith(2, '/workspace/package.json:8');
   });
 
+  it('opens T3-style browser preview file links through the preview callback first', () => {
+    const onOpenWorkspaceFile = vi.fn();
+    const onOpenWorkspaceFileInBrowserPreview = vi.fn();
+    const { getByText } = render(
+      <MarkdownContent
+        content={'Open [report](/workspace/output/report.html#L4) and [guide](docs/Guide.md#L2).'}
+        onOpenWorkspaceFile={onOpenWorkspaceFile}
+        onOpenWorkspaceFileInBrowserPreview={onOpenWorkspaceFileInBrowserPreview}
+      />,
+    );
+
+    fireEvent.click(getByText('report.html · L4'));
+    fireEvent.click(getByText('Guide.md · L2'));
+
+    expect(onOpenWorkspaceFileInBrowserPreview).toHaveBeenCalledWith('/workspace/output/report.html');
+    expect(onOpenWorkspaceFile).toHaveBeenCalledTimes(1);
+    expect(onOpenWorkspaceFile).toHaveBeenCalledWith('/workspace/docs/Guide.md:2');
+  });
+
   it('renders T3-style code fence titles with Pierre file icons', () => {
     const { getByText } = render(
       <MarkdownContent content={'```tsx title="src/App.tsx"\nexport const App = () => null;\n```'} />,

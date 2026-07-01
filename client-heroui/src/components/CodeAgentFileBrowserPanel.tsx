@@ -19,15 +19,16 @@ import {
   type CodeWorkspaceEntry,
   type CodeWorkspaceFile,
 } from '../utils/codeWorkspaceFiles';
-import {
-  isWorkspaceBrowserPreviewPath,
-  isWorkspacePreviewEntryPath,
-} from '../utils/codeWorkspaceFilePreview';
 import type { RoomSandboxStatus } from '../utils/types';
 import { beginHorizontalResize } from '../utils/horizontalResize';
 import { normalizeWorkspaceOpenPath, parseWorkspaceFileOpenTarget } from '../utils/workspaceFileOpenTarget';
 import { type ReviewCommentContext } from '../utils/codeAgentReviewComments';
-import { isMarkdownPreviewFile } from './codeAgentFilePreviewMode';
+import {
+  basename,
+  isBrowserPreviewFile,
+  isImagePreviewFile,
+  isMarkdownPreviewFile,
+} from './codeAgentFilePath';
 import {
   getOptimisticCodeAgentProjectFileQueryData,
   resolveCodeAgentProjectFileQueryData,
@@ -154,11 +155,6 @@ function replacePathPrefix(path: string, previousPrefix: string, nextPrefix: str
 
 function joinWorkspacePath(directory: string, name: string): string {
   return [normalizeWorkspacePath(directory), normalizeWorkspacePath(name)].filter(Boolean).join('/');
-}
-
-function basename(path: string): string {
-  const normalizedPath = normalizeWorkspacePath(path);
-  return normalizedPath.split('/').pop() || normalizedPath;
 }
 
 function projectEntriesFromWorkspace(entries: readonly CodeWorkspaceEntry[]): CodeAgentProjectEntry[] {
@@ -597,9 +593,10 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     : undefined;
   const relativePath = previewPath && previewKind === 'file' ? previewPath : null;
   const isMarkdown = relativePath ? isMarkdownPreviewFile(relativePath) : false;
-  const supportsWorkspaceAssetPreview = relativePath ? isWorkspacePreviewEntryPath(relativePath) : false;
-  const canOpenInBrowserPreview = relativePath ? isWorkspaceBrowserPreviewPath(relativePath) : false;
-  const supportsPreview = Boolean(relativePath && (isMarkdown || supportsWorkspaceAssetPreview));
+  const isImagePreview = relativePath ? isImagePreviewFile(relativePath) : false;
+  const canOpenInBrowserPreview = relativePath ? isBrowserPreviewFile(relativePath) : false;
+  const supportsWorkspaceAssetPreview = canOpenInBrowserPreview || isImagePreview;
+  const supportsPreview = Boolean(relativePath && (isMarkdown || (supportsWorkspaceAssetPreview && !isImagePreview)));
   const localRevealApplies = Boolean(
     localOpenFileRequest &&
     localOpenFileRequest.path === relativePath,
@@ -623,7 +620,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   );
   const renderPreview = isMarkdown
     ? renderMarkdown
-    : Boolean(supportsWorkspaceAssetPreview && sourceView.path !== relativePath);
+    : Boolean(supportsWorkspaceAssetPreview && (isImagePreview || sourceView.path !== relativePath));
   const browserPreviewPending = Boolean(relativePath && browserPreviewPendingPath === relativePath);
   const activeSaveState = saveStatus.path === relativePath ? saveStatus.state : 'idle';
   const activeSaveError = saveStatus.path === relativePath ? saveStatus.error : null;
@@ -1032,8 +1029,9 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     });
   }, []);
 
-  const handleOpenInBrowserPreview = useCallback(() => {
-    if (!relativePath || !isWorkspaceBrowserPreviewPath(relativePath)) {
+  const openBrowserPreviewPath = useCallback((path: string) => {
+    const targetPath = normalizeWorkspacePath(path);
+    if (!targetPath || !isBrowserPreviewFile(targetPath)) {
       return;
     }
 
@@ -1054,12 +1052,6 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       window.open(url, '_blank', 'noopener,noreferrer');
     };
 
-    if (assetUrlQuery.resolvedUrl) {
-      openResolvedUrl(assetUrlQuery.resolvedUrl);
-      return;
-    }
-
-    const targetPath = relativePath;
     setOperationError(null);
     setBrowserPreviewPendingPath(targetPath);
     createCodeWorkspaceAssetUrl(roomId, targetPath).then(
@@ -1077,7 +1069,14 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     ).finally(() => {
       setBrowserPreviewPendingPath((current) => current === targetPath ? null : current);
     });
-  }, [assetUrlQuery.resolvedUrl, relativePath, roomId, t]);
+  }, [roomId, t]);
+
+  const handleOpenInBrowserPreview = useCallback(() => {
+    if (!relativePath) {
+      return;
+    }
+    openBrowserPreviewPath(relativePath);
+  }, [openBrowserPreviewPath, relativePath]);
 
   const handleSaveStateChange = useCallback((path: string, state: SaveState, error: string | null = null) => {
     setSaveStatus({
@@ -1454,6 +1453,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
           onEntriesChanged={refreshAfterFileContentsChanged}
           onAssetPreviewChanged={handleAssetPreviewChanged}
           onOpenWorkspaceFile={handleOpenWorkspaceFileFromMarkdown}
+          onOpenWorkspaceFileInBrowserPreview={openBrowserPreviewPath}
           reviewComments={reviewComments}
           onAddReviewComment={onAddReviewComment}
           onRemoveReviewComment={onRemoveReviewComment}
