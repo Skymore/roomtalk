@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CodeAgentFileBrowserPanel } from './CodeAgentFileBrowserPanel';
 import { resetCodeAgentRightPanelStoreForTests } from '../utils/codeAgentRightPanelStore';
+import { resetCodeAgentProjectFilesQueryStateForTests } from './codeAgentProjectFilesQueryState';
 
 const loadCodeWorkspaceEntriesMock = vi.hoisted(() => vi.fn());
 const searchCodeWorkspaceEntriesMock = vi.hoisted(() => vi.fn());
@@ -26,6 +28,7 @@ const fileTreeSearchStateRef = vi.hoisted(() => ({
 const editorOptionsRef = vi.hoisted(() => ({ current: null as null | { onChange?: (file: { name: string; contents: string }, annotations?: unknown[]) => void } }));
 const nextEditorContentsRef = vi.hoisted(() => ({ current: 'export const changed = true;' }));
 const editorSetSelectionsMock = vi.hoisted(() => vi.fn());
+const fileInstanceSetSelectedLinesMock = vi.hoisted(() => vi.fn());
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -106,6 +109,22 @@ vi.mock('./MarkdownContent', () => ({
   },
 }));
 
+vi.mock('./CodeAgentWorkspaceDiffViewer', () => ({
+  CodeAgentWorkspaceDiffViewer: ({
+    enabled,
+    onOpenFile,
+  }: {
+    enabled: boolean;
+    onOpenFile?: (path: string) => void;
+  }) => (
+    <div data-testid="code-agent-workspace-diff-viewer" data-enabled={String(enabled)}>
+      <button type="button" aria-label="open-diff-file" onClick={() => onOpenFile?.('src/App.tsx#L3')}>
+        open diff file
+      </button>
+    </div>
+  ),
+}));
+
 vi.mock('@pierre/diffs', () => ({
   VirtualizedFile: class {},
 }));
@@ -157,6 +176,7 @@ vi.mock('@pierre/diffs/react', () => ({
   File: ({
     file,
     options,
+    selectedLines,
     lineAnnotations = [],
     renderAnnotation,
   }: {
@@ -165,11 +185,27 @@ vi.mock('@pierre/diffs/react', () => ({
       overflow?: 'scroll' | 'wrap';
       enableLineSelection?: boolean;
       onLineSelectionEnd?: (range: { start: number; end: number }) => void;
+      onPostRender?: (container: HTMLElement, instance: { setSelectedLines: (range: unknown, options?: unknown) => void }, phase: 'mount' | 'update' | 'unmount') => void;
     };
+    selectedLines?: { start: number; end: number } | null;
     lineAnnotations?: Array<{ lineNumber: number; metadata: { entries: Array<{ id: string; kind: 'draft' | 'comment'; startLine: number; endLine: number; text: string }> } }>;
     renderAnnotation?: (annotation: { lineNumber: number; metadata: { entries: Array<{ id: string; kind: 'draft' | 'comment'; startLine: number; endLine: number; text: string }> } }) => React.ReactNode;
-  }) => (
-    <div>
+  }) => {
+    const containerRef = React.useRef<HTMLDivElement | null>(null);
+    React.useEffect(() => {
+      const container = containerRef.current;
+      if (!container) {
+        return undefined;
+      }
+      const instance = {
+        setSelectedLines: fileInstanceSetSelectedLinesMock,
+      };
+      options.onPostRender?.(container, instance, 'update');
+      return () => options.onPostRender?.(container, instance, 'unmount');
+    }, [options, selectedLines]);
+
+    return (
+    <div ref={containerRef}>
       <button
         type="button"
         data-testid="diff-file"
@@ -192,7 +228,8 @@ vi.mock('@pierre/diffs/react', () => ({
         </div>
       ))}
     </div>
-  ),
+  );
+  },
 }));
 
 const dispatchPointer = (
@@ -235,8 +272,10 @@ describe('CodeAgentFileBrowserPanel', () => {
     editorOptionsRef.current = null;
     nextEditorContentsRef.current = 'export const changed = true;';
     editorSetSelectionsMock.mockReset();
+    fileInstanceSetSelectedLinesMock.mockReset();
     localStorage.clear();
     resetCodeAgentRightPanelStoreForTests();
+    resetCodeAgentProjectFilesQueryStateForTests();
   });
 
   it('uses the T3-style tree plus embedded file preview instead of opening a download tab', async () => {
@@ -397,6 +436,38 @@ describe('CodeAgentFileBrowserPanel', () => {
       expect(screen.queryByTestId('diff-file')).toBeNull();
       expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('codeAgentWorkspaceFiles');
     });
+  });
+
+  it('opens a T3-style Diff surface in the right panel and can jump to file surfaces', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockResolvedValue({
+      path: 'src/App.tsx',
+      content: 'contents:src/App.tsx',
+      byteSize: 64,
+      truncated: false,
+      encoding: 'utf-8',
+    });
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    await screen.findByText('1 files');
+    fireEvent.click(screen.getByLabelText('codeAgentChanges'));
+
+    expect(screen.getByTestId('code-agent-workspace-diff-viewer').dataset.enabled).toBe('true');
+    expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('codeAgentChanges');
+    expect(screen.queryByTestId('diff-file')).toBeNull();
+
+    fireEvent.click(screen.getByLabelText('open-diff-file'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('diff-file').textContent).toBe('src/App.tsx:contents:src/App.tsx');
+    });
+    expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('codeAgentChanges');
+    expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('App.tsx');
   });
 
   it('supports T3-style file tab menu and middle-click close actions', async () => {
@@ -964,6 +1035,36 @@ describe('CodeAgentFileBrowserPanel', () => {
     }));
   });
 
+  it('keeps selected file lines synced after T3-style virtualized file renders', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockResolvedValue({
+      path: 'src/App.tsx',
+      content: 'line 1\nline 2\nline 3\nline 4',
+      byteSize: 27,
+      truncated: false,
+      encoding: 'utf-8',
+    });
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    await screen.findByText('1 files');
+    fireEvent.click(screen.getByLabelText('Coco files'));
+    await screen.findByTestId('diff-file');
+
+    fireEvent.click(screen.getByLabelText('select-lines'));
+
+    await waitFor(() => {
+      expect(fileInstanceSetSelectedLinesMock).toHaveBeenCalledWith(
+        { start: 2, end: 4 },
+        { notify: false },
+      );
+    });
+  });
+
   it('keeps the latest T3-style optimistic edit when an older save confirms late', async () => {
     const firstWrite = deferred<{ path: string; name: string; type: 'file' }>();
     loadCodeWorkspaceEntriesMock.mockResolvedValue({
@@ -1022,6 +1123,55 @@ describe('CodeAgentFileBrowserPanel', () => {
       'export const latest = true;',
       'utf-8',
     );
+  });
+
+  it('keeps T3-style optimistic file contents when a pending edit surface is reopened', async () => {
+    const pendingWrite = deferred<{ path: string; name: string; type: 'file' }>();
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockResolvedValue({
+      path: 'src/App.tsx',
+      content: 'export default function App() {}',
+      byteSize: 32,
+      truncated: false,
+      encoding: 'utf-8',
+    });
+    writeCodeWorkspaceFileMock.mockReturnValue(pendingWrite.promise);
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    await screen.findByText('1 files');
+    fireEvent.click(screen.getByLabelText('Coco files'));
+    expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:export default function App() {}');
+
+    vi.useFakeTimers();
+    nextEditorContentsRef.current = 'export const pending = true;';
+    fireEvent.click(screen.getByTestId('diff-file'));
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(writeCodeWorkspaceFileMock).toHaveBeenCalledWith(
+      'room-1',
+      'src/App.tsx',
+      'export const pending = true;',
+      'utf-8',
+    );
+    vi.useRealTimers();
+
+    fireEvent.click(screen.getByLabelText('close src/App.tsx'));
+    fireEvent.click(screen.getByLabelText('Coco files'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('diff-file').textContent).toBe('src/App.tsx:export const pending = true;');
+    });
+
+    await act(async () => {
+      pendingWrite.resolve({ path: 'src/App.tsx', name: 'App.tsx', type: 'file' });
+      await Promise.resolve();
+    });
   });
 
   it('does not let a late save confirmation overwrite another open file preview', async () => {

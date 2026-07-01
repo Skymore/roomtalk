@@ -23,16 +23,43 @@ const clampWidth = (width: number, bounds: HorizontalResizeBounds): number => {
 };
 
 const isPrimaryButtonReleased = (event: MouseEvent | PointerEvent): boolean => {
+  if (
+    'pointerType' in event &&
+    event.pointerType === 'mouse' &&
+    typeof event.pressure === 'number' &&
+    event.pressure === 0
+  ) {
+    return true;
+  }
   if (typeof event.buttons === 'number') {
     return (event.buttons & 1) === 0;
   }
-  return 'pointerType' in event && event.pointerType === 'mouse' && event.pressure === 0;
+  return false;
 };
 
 const isMouseLikePointer = (event: PointerEvent): boolean => (
   event.pointerType === 'mouse' ||
   event.pointerType === '' ||
   typeof event.pointerType !== 'string'
+);
+
+const isViewportBoundaryEvent = (event: Event): boolean => {
+  const target = event.target;
+  if (event.currentTarget === window && !(target instanceof HTMLElement)) {
+    return true;
+  }
+  return (
+    target === window ||
+    target === document ||
+    target === document.documentElement ||
+    target === document.body
+  );
+};
+
+const isViewportExitEvent = (event: MouseEvent | PointerEvent, resizeGuard: HTMLElement): boolean => (
+  (event.type === 'mouseout' || event.type === 'pointerout') &&
+  event.relatedTarget == null &&
+  (isViewportBoundaryEvent(event) || event.target === resizeGuard)
 );
 
 export function beginHorizontalResize({
@@ -51,7 +78,6 @@ export function beginHorizontalResize({
   let width = startWidth;
   let animationFrame: number | null = null;
   let finished = false;
-  let isAtClampedBoundary = false;
   let pointerCaptureElement: HTMLElement | null = null;
   const previousUserSelect = document.body.style.userSelect;
   const previousCursor = document.body.style.cursor;
@@ -77,19 +103,10 @@ export function beginHorizontalResize({
     const bounds = getBounds();
     const nextWidth = clampWidth(rawWidth, bounds);
     width = nextWidth;
-    isAtClampedBoundary = nextWidth !== Math.round(rawWidth)
-      && (nextWidth === clampWidth(bounds.min, bounds) || nextWidth === clampWidth(bounds.max, bounds));
     if (animationFrame === null) {
       animationFrame = window.requestAnimationFrame(applyWidth);
     }
   };
-
-  const isOutsideViewport = (clientX: number, clientY: number): boolean => (
-    clientX <= 0 ||
-    clientY <= 0 ||
-    clientX >= window.innerWidth ||
-    clientY >= window.innerHeight
-  );
 
   const releasePointerCapture = () => {
     try {
@@ -231,7 +248,15 @@ export function beginHorizontalResize({
   }
 
   function handlePointerReleaseProbe(event: PointerEvent) {
-    if (isMouseLikePointer(event) && (event.pointerId !== pointerId || isPrimaryButtonReleased(event))) {
+    if (!isMouseLikePointer(event)) {
+      return;
+    }
+    if (isViewportExitEvent(event, resizeGuard) && event.pointerId === pointerId && !isPrimaryButtonReleased(event)) {
+      applyClientX(event.clientX);
+      finishResize();
+      return;
+    }
+    if (event.pointerId !== pointerId || isPrimaryButtonReleased(event)) {
       finishResize();
     }
   }
@@ -248,16 +273,16 @@ export function beginHorizontalResize({
       return;
     }
     applyClientX(event.clientX);
-    if (isAtClampedBoundary && isOutsideViewport(event.clientX, event.clientY)) {
-      finishResize();
-    }
   }
 
   function handleLostPointerCapture(event: PointerEvent) {
     if (event.pointerId !== pointerId) {
       return;
     }
-    finishResize();
+    pointerCaptureElement = null;
+    if (isPrimaryButtonReleased(event)) {
+      finishResize();
+    }
   }
 
   function handleMouseUp(event: MouseEvent) {
@@ -281,6 +306,11 @@ export function beginHorizontalResize({
   }
 
   function handleMouseReleaseProbe(event: MouseEvent) {
+    if (isViewportExitEvent(event, resizeGuard) && !isPrimaryButtonReleased(event)) {
+      applyClientX(event.clientX);
+      finishResize();
+      return;
+    }
     if (isPrimaryButtonReleased(event)) {
       finishResize();
     }
@@ -292,9 +322,6 @@ export function beginHorizontalResize({
       return;
     }
     applyClientX(event.clientX);
-    if (isAtClampedBoundary && isOutsideViewport(event.clientX, event.clientY)) {
-      finishResize();
-    }
   }
 
   function handleMouseLeave(event: MouseEvent) {

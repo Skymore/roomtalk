@@ -9,6 +9,7 @@ import {
   Code2,
   Download,
   Eye,
+  FileDiff,
   FilePlus2,
   FolderPlus,
   FolderTree,
@@ -63,6 +64,14 @@ import { installFileEditorDismissal } from './codeAgentFileEditorDismissal';
 import { projectFileCacheKey } from './codeAgentFileContentRevision';
 import { FileSaveCoordinator } from './codeAgentFileSaveCoordinator';
 import { isMarkdownPreviewFile, setMarkdownTaskChecked } from './codeAgentFilePreviewMode';
+import {
+  clearCodeAgentProjectFileQueryData,
+  confirmCodeAgentProjectFileQueryData,
+  getOptimisticCodeAgentProjectFileQueryData,
+  resolveCodeAgentProjectFileQueryData,
+  setCodeAgentProjectFileQueryData,
+} from './codeAgentProjectFilesQueryState';
+import { CodeAgentWorkspaceDiffViewer } from './CodeAgentWorkspaceDiffViewer';
 import {
   activateCodeAgentRightPanelSurface,
   closeAllCodeAgentRightPanelSurfaces,
@@ -572,7 +581,11 @@ function useCodeWorkspaceFileQuery(roomId: string, relativePath: string | null, 
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
     const controller = new AbortController();
-    setData(fileCacheRef.current.get(normalizedPath) ?? null);
+    setData(resolveCodeAgentProjectFileQueryData(
+      roomId,
+      normalizedPath,
+      fileCacheRef.current.get(normalizedPath) ?? null,
+    ));
     setError(null);
     setIsPending(true);
 
@@ -581,8 +594,13 @@ function useCodeWorkspaceFileQuery(roomId: string, relativePath: string | null, 
         if (controller.signal.aborted || requestIdRef.current !== requestId) {
           return;
         }
-        fileCacheRef.current.set(normalizeWorkspacePath(file.path), file);
-        setData(file);
+        const normalizedFilePath = normalizeWorkspacePath(file.path);
+        const optimisticFile = getOptimisticCodeAgentProjectFileQueryData(roomId, normalizedFilePath);
+        fileCacheRef.current.set(normalizedFilePath, file);
+        if (optimisticFile?.content === file.content) {
+          clearCodeAgentProjectFileQueryData(roomId, normalizedFilePath);
+        }
+        setData(optimisticFile ?? file);
       },
       (nextError) => {
         if (controller.signal.aborted || requestIdRef.current !== requestId) {
@@ -740,6 +758,7 @@ function EditableFileSurface({
 }: EditableFileSurfaceProps) {
   const filePath = file.path;
   const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const selectionFrameRef = useRef<number | null>(null);
   const latestDraftContentsRef = useRef(file.content);
   const [lineAnnotations, setLineAnnotations] = useState<FileCommentLineAnnotation[]>([]);
   const [selectionOverride, setSelectionOverride] = useState<FileSelectionOverride | null>(null);
@@ -778,15 +797,17 @@ function EditableFileSurface({
 
   const setDraftFileContents = useCallback((contents: string) => {
     latestDraftContentsRef.current = contents;
+    setCodeAgentProjectFileQueryData(roomId, filePath, contents);
     onFileChange((current) => updateWorkspaceFileContents(current, filePath, contents));
-  }, [filePath, onFileChange]);
+  }, [filePath, onFileChange, roomId]);
 
   const confirmFileContents = useCallback((contents: string) => {
     if (latestDraftContentsRef.current !== contents) {
       return;
     }
+    confirmCodeAgentProjectFileQueryData(roomId, filePath, contents);
     onFileChange((current) => updateWorkspaceFileContents(current, filePath, contents));
-  }, [filePath, onFileChange]);
+  }, [filePath, onFileChange, roomId]);
 
   const handlePendingChange = useCallback((pending: boolean) => {
     onSaveStateChange(filePath, pending ? 'pending' : 'saved', null);
@@ -915,6 +936,13 @@ function EditableFileSurface({
     editor.cleanUp();
   }, [editor]);
 
+  useEffect(() => () => {
+    if (selectionFrameRef.current !== null) {
+      window.cancelAnimationFrame(selectionFrameRef.current);
+      selectionFrameRef.current = null;
+    }
+  }, []);
+
   useEffect(() => {
     const root = surfaceRef.current;
     if (!root) return undefined;
@@ -925,6 +953,26 @@ function EditableFileSurface({
       onDismiss: () => setSelectedRange(null),
     });
   }, [editor, hasOpenCommentForm, setSelectedRange]);
+
+  const handlePostRender = useCallback<FilePostRender>((fileContainer, instance, phase) => {
+    onPostRender(fileContainer, instance, phase);
+
+    if (selectionFrameRef.current !== null) {
+      window.cancelAnimationFrame(selectionFrameRef.current);
+      selectionFrameRef.current = null;
+    }
+    if (phase === 'unmount') {
+      return;
+    }
+
+    selectionFrameRef.current = window.requestAnimationFrame(() => {
+      selectionFrameRef.current = null;
+      if (!fileContainer.isConnected) {
+        return;
+      }
+      instance.setSelectedLines(selectedRange, { notify: false });
+    });
+  }, [onPostRender, selectedRange]);
 
   return (
     <EditorProvider editor={editor}>
@@ -953,7 +1001,7 @@ function EditableFileSurface({
               theme: resolvedTheme === 'dark' ? 'pierre-dark' : 'pierre-light',
               themeType: resolvedTheme,
               unsafeCSS: FILE_LINK_REVEAL_UNSAFE_CSS,
-              onPostRender,
+              onPostRender: handlePostRender,
             }}
             selectedLines={selectedRange}
             lineAnnotations={lineAnnotations}
@@ -1058,15 +1106,17 @@ function RenderedMarkdownSurface({
 
   const setDraftFileContents = useCallback((contents: string) => {
     latestDraftContentsRef.current = contents;
+    setCodeAgentProjectFileQueryData(roomId, filePath, contents);
     onFileChange((current) => updateWorkspaceFileContents(current, filePath, contents));
-  }, [filePath, onFileChange]);
+  }, [filePath, onFileChange, roomId]);
 
   const confirmFileContents = useCallback((contents: string) => {
     if (latestDraftContentsRef.current !== contents) {
       return;
     }
+    confirmCodeAgentProjectFileQueryData(roomId, filePath, contents, fileRef.current);
     onFileChange((current) => updateWorkspaceFileContents(current, filePath, contents));
-  }, [filePath, onFileChange]);
+  }, [filePath, onFileChange, roomId]);
 
   const handlePendingChange = useCallback((pending: boolean) => {
     onSaveStateChange(filePath, pending ? 'pending' : 'saved', null);
@@ -1105,7 +1155,8 @@ function RenderedMarkdownSurface({
             content={file.content}
             onOpenWorkspaceFile={onOpenWorkspaceFile}
             onTaskListChange={({ markerOffset, checked }) => {
-              const currentContents = fileRef.current.content;
+              const currentContents = getOptimisticCodeAgentProjectFileQueryData(roomId, filePath)?.content
+                ?? fileRef.current.content;
               const nextContents = setMarkdownTaskChecked(currentContents, markerOffset, checked);
               if (nextContents === currentContents) return;
               fileRef.current = {
@@ -1547,6 +1598,14 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     () => rightPanelSurfaces.find((surface) => surface.id === rightPanelState.activeSurfaceId && surface.kind === 'files') ?? null,
     [rightPanelState.activeSurfaceId, rightPanelSurfaces],
   );
+  const activeDiffSurface = useMemo(
+    () => rightPanelSurfaces.find((surface) => surface.id === rightPanelState.activeSurfaceId && surface.kind === 'diff') ?? null,
+    [rightPanelState.activeSurfaceId, rightPanelSurfaces],
+  );
+  const hasDiffSurface = useMemo(
+    () => rightPanelSurfaces.some((surface) => surface.kind === 'diff'),
+    [rightPanelSurfaces],
+  );
   const hasFilesSurface = useMemo(
     () => rightPanelSurfaces.some((surface) => surface.kind === 'files'),
     [rightPanelSurfaces],
@@ -1675,7 +1734,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   }, [rightPanelSurfaces.length, roomId]);
 
   useEffect(() => {
-    if (activeFilesSurface) {
+    if (activeFilesSurface || activeDiffSurface) {
       if (previewPath) {
         setPreviewPath(null);
       }
@@ -1689,7 +1748,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     }
     setSelectedPath(activeFileSurface.relativePath);
     setPreviewPath(activeFileSurface.relativePath);
-  }, [activeFileSurface, activeFilesSurface, fileSurfaces.length, previewPath]);
+  }, [activeDiffSurface, activeFileSurface, activeFilesSurface, fileSurfaces.length, previewPath]);
 
   useEffect(() => {
     if (entriesQuery.isPending || entriesQuery.data?.truncated) {
@@ -2058,6 +2117,23 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     openCodeAgentRightPanel(roomId, 'files');
   }, [roomId]);
 
+  const openDiffSurface = useCallback(() => {
+    openCodeAgentRightPanel(roomId, 'diff');
+  }, [roomId]);
+
+  const handleOpenWorkspaceFileFromDiff = useCallback((path: string) => {
+    const target = parseWorkspaceFileOpenTarget(path);
+    if (!target) {
+      return;
+    }
+    setSelectedPath(target.path);
+    setPreviewPath(target.path);
+    setExternallySelectedFilePath(target.path);
+    openCodeAgentRightPanelFile(roomId, target.path, target.line);
+    setLocalOpenFileRequest(null);
+    setOperationError(null);
+  }, [roomId]);
+
   const closeFileSurfaceTabMenu = useCallback(() => {
     setFileSurfaceTabMenu(null);
   }, []);
@@ -2237,10 +2313,12 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
         >
           {rightPanelSurfaces.map((surface) => {
             const isActive = surface.id === rightPanelState.activeSurfaceId;
-            const title = surface.kind === 'files'
-              ? t('codeAgentWorkspaceFiles')
-              : basename(surface.relativePath);
-            const fullTitle = surface.kind === 'files' ? t('codeAgentWorkspaceFiles') : surface.relativePath;
+            const title = surface.kind === 'diff'
+              ? t('codeAgentChanges')
+              : surface.kind === 'files'
+                ? t('codeAgentWorkspaceFiles')
+                : basename(surface.relativePath);
+            const fullTitle = surface.kind === 'file' ? surface.relativePath : title;
             return (
               <div
                 key={surface.id}
@@ -2262,7 +2340,9 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                   title={fullTitle}
                   onClick={() => activateFileSurface(surface.id)}
                 >
-                  {surface.kind === 'files' ? (
+                  {surface.kind === 'diff' ? (
+                    <FileDiff className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                  ) : surface.kind === 'files' ? (
                     <FolderTree className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
                   ) : null}
                   <span className="truncate">{title}</span>
@@ -2281,6 +2361,17 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
               </div>
             );
           })}
+          {!hasDiffSurface ? (
+            <button
+              type="button"
+              className="ml-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#faf9f5] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:bg-[#1d1d1b] dark:hover:text-[#faf9f5]"
+              aria-label={t('codeAgentChanges')}
+              title={t('codeAgentChanges')}
+              onClick={openDiffSurface}
+            >
+              <FileDiff className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
           {!hasFilesSurface ? (
             <button
               type="button"
@@ -2359,70 +2450,84 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
           </div>
         );
       })() : null}
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-        <div className={`${relativePath ? 'flex' : 'hidden'} min-w-0 flex-1 flex-col overflow-hidden`}>
-          <FilePreviewSurface
+      {activeDiffSurface ? (
+        <div className="flex min-h-0 flex-1 overflow-hidden p-2">
+          <CodeAgentWorkspaceDiffViewer
             roomId={roomId}
-            file={fileQuery.data}
-            relativePath={relativePath}
-            fileQuery={fileQuery}
-            assetUrlQuery={assetUrlQuery}
-            resolvedTheme={resolvedTheme}
-            renderPreview={renderPreview}
-            wordWrap={wordWrap}
-            revealLine={effectiveRevealLine}
-            revealRequestId={effectiveRevealRequestId}
-            saveState={activeSaveState}
-            saveError={activeSaveError}
-            onSaveStateChange={handleSaveStateChange}
-            onFileSavePendingChange={onFileSavePendingChange}
-            onEntriesChanged={refreshEntries}
-            onOpenWorkspaceFile={handleOpenWorkspaceFileFromMarkdown}
+            enabled
+            refreshKey={workspaceReadyKey}
+            onOpenFile={handleOpenWorkspaceFileFromDiff}
             reviewComments={reviewComments}
             onAddReviewComment={onAddReviewComment}
             onRemoveReviewComment={onRemoveReviewComment}
           />
         </div>
-        {explorerOpen || relativePath === null ? (
-          <aside
-            className={`${relativePath ? 'relative min-w-[160px] border-l border-[#dedbd0] dark:border-[#30302e]' : 'min-w-0 flex-1'} flex min-h-0 shrink-0 bg-[#faf9f5] dark:bg-[#1d1d1b]`}
-            style={relativePath ? {
-              width: 'var(--workspace-file-explorer-width)',
-              maxWidth: `calc(100% - ${FILE_PREVIEW_MIN_WIDTH}px)`,
-            } : undefined}
-          >
-            {relativePath ? (
-              <button
-                type="button"
-                aria-label={t('codeAgentResizeFileExplorer')}
-                className="absolute inset-y-0 -left-4 z-40 w-8 cursor-col-resize touch-none border-x border-transparent transition-colors hover:border-[#c96442]/30 hover:bg-[#c96442]/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442]"
-                onPointerDown={handleExplorerResizeStart}
-              />
-            ) : null}
-            <FileBrowserPanel
-              projectName={projectName}
-              entries={entries}
-              entryKinds={entryKinds}
-              entriesPending={entriesQuery.isPending}
-              entriesError={entriesQuery.error}
-              entriesTruncated={Boolean(entriesQuery.data?.truncated)}
-              selectedPath={selectedPath}
+      ) : (
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          <div className={`${relativePath ? 'flex' : 'hidden'} min-w-0 flex-1 flex-col overflow-hidden`}>
+            <FilePreviewSurface
+              roomId={roomId}
+              file={fileQuery.data}
+              relativePath={relativePath}
+              fileQuery={fileQuery}
+              assetUrlQuery={assetUrlQuery}
               resolvedTheme={resolvedTheme}
-              onOpenEntry={handleOpenEntry}
-              onRefresh={entriesQuery.refresh}
-              onCreateFile={handleCreateFile}
-              onCreateDirectory={handleCreateDirectory}
-              onUpload={() => uploadInputRef.current?.click()}
-              onRename={handleRename}
-              onDelete={handleDelete}
-              onSearchQueryChange={handleSearchQueryChange}
-              remoteSearchPending={remoteSearch.isPending}
-              remoteSearchError={remoteSearch.error}
-              remoteSearchTruncated={remoteSearch.truncated}
+              renderPreview={renderPreview}
+              wordWrap={wordWrap}
+              revealLine={effectiveRevealLine}
+              revealRequestId={effectiveRevealRequestId}
+              saveState={activeSaveState}
+              saveError={activeSaveError}
+              onSaveStateChange={handleSaveStateChange}
+              onFileSavePendingChange={onFileSavePendingChange}
+              onEntriesChanged={refreshEntries}
+              onOpenWorkspaceFile={handleOpenWorkspaceFileFromMarkdown}
+              reviewComments={reviewComments}
+              onAddReviewComment={onAddReviewComment}
+              onRemoveReviewComment={onRemoveReviewComment}
             />
-          </aside>
-        ) : null}
-      </div>
+          </div>
+          {explorerOpen || relativePath === null ? (
+            <aside
+              className={`${relativePath ? 'relative min-w-[160px] border-l border-[#dedbd0] dark:border-[#30302e]' : 'min-w-0 flex-1'} flex min-h-0 shrink-0 bg-[#faf9f5] dark:bg-[#1d1d1b]`}
+              style={relativePath ? {
+                width: 'var(--workspace-file-explorer-width)',
+                maxWidth: `calc(100% - ${FILE_PREVIEW_MIN_WIDTH}px)`,
+              } : undefined}
+            >
+              {relativePath ? (
+                <button
+                  type="button"
+                  aria-label={t('codeAgentResizeFileExplorer')}
+                  className="absolute inset-y-0 -left-4 z-40 w-8 cursor-col-resize touch-none border-x border-transparent transition-colors hover:border-[#c96442]/30 hover:bg-[#c96442]/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442]"
+                  onPointerDown={handleExplorerResizeStart}
+                />
+              ) : null}
+              <FileBrowserPanel
+                projectName={projectName}
+                entries={entries}
+                entryKinds={entryKinds}
+                entriesPending={entriesQuery.isPending}
+                entriesError={entriesQuery.error}
+                entriesTruncated={Boolean(entriesQuery.data?.truncated)}
+                selectedPath={selectedPath}
+                resolvedTheme={resolvedTheme}
+                onOpenEntry={handleOpenEntry}
+                onRefresh={entriesQuery.refresh}
+                onCreateFile={handleCreateFile}
+                onCreateDirectory={handleCreateDirectory}
+                onUpload={() => uploadInputRef.current?.click()}
+                onRename={handleRename}
+                onDelete={handleDelete}
+                onSearchQueryChange={handleSearchQueryChange}
+                remoteSearchPending={remoteSearch.isPending}
+                remoteSearchError={remoteSearch.error}
+                remoteSearchTruncated={remoteSearch.truncated}
+              />
+            </aside>
+          ) : null}
+        </div>
+      )}
       {operationError ? (
         <div className="border-t border-[#dedbd0] px-3 py-2 text-[11px] text-[#9f462c] dark:border-[#30302e] dark:text-[#ff9b78]">
           {operationError}

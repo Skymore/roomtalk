@@ -188,7 +188,7 @@ describe('DesktopSidebar', () => {
     dispatchPointer(window, 'pointerup', { pointerId: 9, clientX: 1600, buttons: 0 });
 
     expect(sidebar.style.getPropertyValue('--desktop-sidebar-width')).toBe('760px');
-    expect(sidebar.style.maxWidth).toBe('var(--desktop-sidebar-max-width, calc(100% - 360px))');
+    expect(sidebar.style.maxWidth).toBe('var(--desktop-sidebar-max-width, calc(100% - 480px))');
     expect(sidebar.style.getPropertyValue('--desktop-sidebar-max-width')).toBe('760px');
     expect(localStorage.getItem('roomtalk.desktopSidebar.width')).toBe('760');
     expect(workspaceLayout?.style.getPropertyValue('--code-agent-files-width')).toBe('360px');

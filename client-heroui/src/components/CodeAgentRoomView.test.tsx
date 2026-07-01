@@ -223,7 +223,7 @@ describe('CodeAgentRoomView', () => {
     const desktopFileBrowser = screen.getByTestId('file-browser');
     const layout = desktopFileBrowser.closest('[data-code-agent-workspace-layout="true"]') as HTMLDivElement;
     expect(layout.style.getPropertyValue('--code-agent-chat-min-width')).toBe('480px');
-    expect(layout.className).toContain('lg:grid-cols-[minmax(var(--code-agent-chat-min-width),1fr)_var(--code-agent-files-width)]');
+    expect(layout.className).toContain('lg:grid-cols-[minmax(var(--code-agent-chat-min-width),1fr)_minmax(0,var(--code-agent-files-width))]');
     expect(desktopFileBrowser.parentElement?.classList.contains('flex')).toBe(true);
     expect(desktopFileBrowser.parentElement?.classList.contains('min-h-0')).toBe(true);
     expect(screen.getByTestId('message-list').parentElement?.dataset.codeAgentChatPane).toBe('true');
@@ -293,7 +293,7 @@ describe('CodeAgentRoomView', () => {
     expect(localStorage.getItem('roomtalk.codeWorkspace.fileManagerWidth')).toBe('1320');
   });
 
-  it('stops workspace panel resizing after leaving the viewport at the cap', () => {
+  it('finishes after a pressed viewport exit at the cap and ignores later movement', () => {
     renderCodeAgentRoom(cocoRoom);
 
     const resizeHandle = screen.getByLabelText('codeAgentResizeWorkspaceFiles');
@@ -312,8 +312,11 @@ describe('CodeAgentRoomView', () => {
 
     dispatchPointer(resizeHandle, 'pointerdown', { pointerId: 8, clientX: 1200, buttons: 1 });
     dispatchPointer(window, 'pointermove', { pointerId: 8, clientX: -800, buttons: 1 });
-    dispatchPointer(window, 'pointerleave', { pointerId: 8, clientX: -1, buttons: 1 });
+    const resizeGuard = document.querySelector('[data-horizontal-resize-guard="true"]') as HTMLElement;
+    dispatchPointer(resizeGuard, 'pointerout', { pointerId: 8, clientX: -1, buttons: 1 });
     dispatchPointer(window, 'pointermove', { pointerId: 8, clientX: 900, buttons: 1 });
+    dispatchPointer(window, 'pointerup', { pointerId: 8, clientX: 900, buttons: 0 });
+    dispatchPointer(window, 'pointermove', { pointerId: 8, clientX: -800, buttons: 1 });
 
     expect(layout.style.getPropertyValue('--code-agent-files-width')).toBe('1120px');
     expect(localStorage.getItem('roomtalk.codeWorkspace.fileManagerWidth')).toBe('1120');

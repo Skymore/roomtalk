@@ -37,6 +37,28 @@ describe('codeAgentRightPanelStore', () => {
     });
   });
 
+  it('keeps diff as a singleton surface and preserves it when opening file surfaces', () => {
+    openCodeAgentRightPanel('room-1', 'diff');
+    openCodeAgentRightPanel('room-1', 'diff');
+    openCodeAgentRightPanel('room-1', 'files');
+    openCodeAgentRightPanelFile('room-1', 'src/index.ts');
+
+    expect(readCodeAgentRightPanelState('room-1')).toEqual({
+      isOpen: true,
+      activeSurfaceId: 'file:src/index.ts',
+      surfaces: [
+        { id: 'diff', kind: 'diff' },
+        {
+          id: 'file:src/index.ts',
+          kind: 'file',
+          relativePath: 'src/index.ts',
+          revealLine: null,
+          revealRequestId: 1,
+        },
+      ],
+    });
+  });
+
   it('replaces the standalone explorer with peer file surfaces', () => {
     openCodeAgentRightPanel('room-1', 'files');
     openCodeAgentRightPanelFile('room-1', 'src/index.ts');

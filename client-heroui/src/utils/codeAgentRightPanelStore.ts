@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
 export type CodeAgentRightPanelSurface =
+  | { id: 'diff'; kind: 'diff' }
   | { id: 'files'; kind: 'files' }
   | {
     id: `file:${string}`;
@@ -66,6 +67,12 @@ function fileSurface(relativePath: string, revealLine: number | null, revealRequ
   };
 }
 
+function singletonSurface(kind: 'diff' | 'files'): CodeAgentRightPanelSurface {
+  return kind === 'diff'
+    ? { id: 'diff', kind: 'diff' }
+    : { id: 'files', kind: 'files' };
+}
+
 function emptyStoreState(): CodeAgentRightPanelStoreState {
   return { byRoomId: {} };
 }
@@ -75,6 +82,9 @@ function coerceSurface(value: unknown): CodeAgentRightPanelSurface | null {
     return null;
   }
   const surface = value as Partial<CodeAgentRightPanelSurface>;
+  if (surface.kind === 'diff' || surface.id === 'diff') {
+    return { id: 'diff', kind: 'diff' };
+  }
   if (surface.kind === 'files' || surface.id === 'files') {
     return { id: 'files', kind: 'files' };
   }
@@ -214,14 +224,14 @@ export function readCodeAgentRightPanelState(roomId: string): CodeAgentRightPane
   return selectRoomState(roomId);
 }
 
-export function openCodeAgentRightPanel(roomId: string, kind: 'files') {
+export function openCodeAgentRightPanel(roomId: string, kind: 'diff' | 'files') {
   const roomKey = normalizeRoomId(roomId);
   if (!roomKey) {
     return;
   }
   updateStore((state) => ({
     byRoomId: updateRoom(state.byRoomId, roomKey, (current) => {
-      const surface: CodeAgentRightPanelSurface = { id: kind, kind };
+      const surface = singletonSurface(kind);
       return {
         isOpen: true,
         surfaces: current.surfaces.some((entry) => entry.id === surface.id)

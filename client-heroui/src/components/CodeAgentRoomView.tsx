@@ -421,7 +421,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
 
       <div
         ref={workspaceLayoutRef}
-        className="grid min-h-0 min-w-0 w-full flex-1 overflow-hidden lg:grid-cols-[minmax(var(--code-agent-chat-min-width),1fr)_var(--code-agent-files-width)]"
+        className="grid min-h-0 min-w-0 w-full flex-1 overflow-hidden lg:grid-cols-[minmax(var(--code-agent-chat-min-width),1fr)_minmax(0,var(--code-agent-files-width))]"
         data-code-agent-workspace-layout="true"
         data-code-agent-files-collapsed={String(isFileManagerCollapsed)}
         style={{

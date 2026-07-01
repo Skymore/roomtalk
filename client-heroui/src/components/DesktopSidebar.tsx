@@ -27,7 +27,6 @@ import { RoomCreateModal, RoomCreateOptions } from './RoomCreateModal';
 import { RoomRenameModal } from './RoomRenameModal';
 import { beginHorizontalResize } from '../utils/horizontalResize';
 import {
-  CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
   CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH,
   CODE_AGENT_FILE_PANEL_COLLAPSED_WIDTH,
   CODE_AGENT_FILE_PANEL_MIN_WIDTH,
@@ -62,7 +61,7 @@ interface DesktopSidebarProps {
 
 const DESKTOP_SIDEBAR_COLLAPSED_WIDTH = 72;
 const DESKTOP_SIDEBAR_MIN_WIDTH = 240;
-const DESKTOP_MAIN_MIN_WIDTH = CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH;
+const DESKTOP_MAIN_MIN_WIDTH = CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH;
 const DESKTOP_SIDEBAR_WIDTH_STORAGE_KEY = 'roomtalk.desktopSidebar.width';
 
 const readCssPixelValue = (value: string): number => {
