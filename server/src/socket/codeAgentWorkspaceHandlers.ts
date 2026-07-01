@@ -1,6 +1,6 @@
 import { createCocoAccessControl } from '../services/cocoAccessControl';
 import { CodeWorkspaceAssetError } from '../services/codeWorkspaceAssetAccess';
-import { CocoSandboxHandle, CocoWorkspaceChanges, CocoWorkspaceDiff, CocoWorkspaceEntry, CocoWorkspaceFile } from '../services/cocoSandboxService';
+import { CocoSandboxHandle, CocoWorkspaceChanges, CocoWorkspaceDiff, CocoWorkspaceDiffScope, CocoWorkspaceEntry, CocoWorkspaceFile, CocoWorkspaceRefs } from '../services/cocoSandboxService';
 import { buildCodeAgentWorkspaceSnapshot, CodeAgentWorkspaceSnapshot } from '../services/codeAgentWorkspace';
 import { Room } from '../types';
 import { hasRoomAccess } from './roomAccess';
@@ -31,6 +31,12 @@ type WorkspaceDiffAck = {
   error?: string;
 };
 
+type WorkspaceRefsAck = {
+  success: boolean;
+  refs?: CocoWorkspaceRefs;
+  error?: string;
+};
+
 type WorkspaceEntryAck = {
   success: boolean;
   entry?: CocoWorkspaceEntry;
@@ -54,6 +60,7 @@ type WorkspaceMutationAck = {
 const WORKSPACE_ENTRY_LIMIT = 25000;
 const WORKSPACE_ENTRY_DEPTH = 24;
 const WORKSPACE_ENTRY_SEARCH_LIMIT = 200;
+const WORKSPACE_REF_LIMIT = 200;
 const parsePositiveIntegerEnv = (name: string, fallback: number) => {
   const value = Number.parseInt(process.env[name] || '', 10);
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -116,6 +123,13 @@ const parseWorkspaceBoolean = (payload: unknown, key: string): boolean => {
     return false;
   }
   return (payload as Record<string, unknown>)[key] === true;
+};
+
+const parseWorkspaceDiffScope = (payload: unknown): CocoWorkspaceDiffScope => {
+  if (!payload || typeof payload !== 'object') {
+    return 'branch';
+  }
+  return (payload as Record<string, unknown>).scope === 'unstaged' ? 'unstaged' : 'branch';
 };
 
 const parseWorkspacePositiveInteger = (payload: unknown, key: string, fallback: number, max: number): number => {
@@ -328,6 +342,42 @@ export function registerCodeAgentWorkspaceHandlers({
     }
   });
 
+  socket.on('list_code_workspace_refs', async (payload: unknown, callback?: (response: WorkspaceRefsAck) => void) => {
+    const roomId = parseRoomId(payload);
+    const query = parseWorkspaceOptionalString(payload, 'query')?.trim() || '';
+    const limit = parseWorkspacePositiveInteger(payload, 'limit', WORKSPACE_REF_LIMIT, WORKSPACE_REF_LIMIT);
+    let clientId: string | null = null;
+
+    try {
+      const access = await loadAuthorizedCocoRoom(roomId, 'list code workspace refs');
+      clientId = access.clientId ?? null;
+      if (!access.success) {
+        callback?.({ success: false, error: access.error });
+        return;
+      }
+      if (!cocoSandboxService?.listWorkspaceRefs) {
+        callback?.({ success: false, error: 'Workspace refs are unavailable' });
+        return;
+      }
+      const workspace = await connectReadyWorkspace(access.room);
+      if (!workspace.success) {
+        callback?.({ success: false, error: workspace.error });
+        return;
+      }
+
+      callback?.({
+        success: true,
+        refs: await cocoSandboxService.listWorkspaceRefs(workspace.handle, {
+          query,
+          maxRefs: limit,
+        }),
+      });
+    } catch (error) {
+      socketLogger.error('Failed to list code workspace refs', { error, clientId, roomId, socketId: socket.id });
+      callback?.({ success: false, error: 'Failed to load workspace refs' });
+    }
+  });
+
   socket.on('read_code_workspace_file', async (payload: unknown, callback?: (response: WorkspaceFileAck) => void) => {
     const roomId = parseRoomId(payload);
     const path = parseWorkspacePath(payload);
@@ -369,6 +419,8 @@ export function registerCodeAgentWorkspaceHandlers({
   socket.on('read_code_workspace_diff', async (payload: unknown, callback?: (response: WorkspaceDiffAck) => void) => {
     const roomId = parseRoomId(payload);
     const ignoreWhitespace = parseWorkspaceBoolean(payload, 'ignoreWhitespace');
+    const scope = parseWorkspaceDiffScope(payload);
+    const baseRef = parseWorkspaceOptionalString(payload, 'baseRef')?.trim() || undefined;
     let clientId: string | null = null;
 
     try {
@@ -393,6 +445,8 @@ export function registerCodeAgentWorkspaceHandlers({
         diff: await cocoSandboxService.getWorkspaceDiff(workspace.handle, {
           maxBytes: WORKSPACE_DIFF_MAX_BYTES,
           ignoreWhitespace,
+          scope,
+          ...(scope === 'branch' && baseRef ? { baseRef } : {}),
         }),
       });
     } catch (error) {

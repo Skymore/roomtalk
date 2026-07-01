@@ -112,6 +112,10 @@ type CodeWorkspaceDiffAckResponse = SocketAckResponse & {
   diff?: unknown;
 };
 
+type CodeWorkspaceRefsAckResponse = SocketAckResponse & {
+  refs?: unknown;
+};
+
 type CodeWorkspaceEntryAckResponse = SocketAckResponse & {
   entry?: unknown;
 };
@@ -1052,6 +1056,29 @@ export const requestCodeWorkspaceEntrySearch = (
   }))
 );
 
+export const requestCodeWorkspaceRefs = (
+  roomId: string,
+  options: { query?: string; limit?: number } = {},
+): Promise<unknown> => (
+  emitWithAck<CodeWorkspaceRefsAckResponse>(
+    'list_code_workspace_refs',
+    {
+      roomId,
+      query: typeof options.query === 'string' ? options.query : '',
+      limit: options.limit,
+    },
+    'Timed out while loading workspace refs',
+    'Failed to load workspace refs',
+    { retryOnSocketReconnect: true },
+  ).then((response) => {
+    if (!response.refs) {
+      throw new Error('Server did not return workspace refs');
+    }
+
+    return response.refs;
+  })
+);
+
 export const requestCodeWorkspaceFile = (roomId: string, path: string): Promise<unknown> => (
   emitWithAck<CodeWorkspaceFileAckResponse>(
     'read_code_workspace_file',
@@ -1086,11 +1113,16 @@ export const requestCodeWorkspaceAssetUrl = (roomId: string, path: string): Prom
 
 export const requestCodeWorkspaceDiff = (
   roomId: string,
-  options: { ignoreWhitespace?: boolean } = {},
+  options: { ignoreWhitespace?: boolean; scope?: 'branch' | 'unstaged'; baseRef?: string } = {},
 ): Promise<unknown> => (
   emitWithAck<CodeWorkspaceDiffAckResponse>(
     'read_code_workspace_diff',
-    { roomId, ignoreWhitespace: options.ignoreWhitespace === true },
+    {
+      roomId,
+      ignoreWhitespace: options.ignoreWhitespace === true,
+      scope: options.scope === 'unstaged' ? 'unstaged' : 'branch',
+      baseRef: typeof options.baseRef === 'string' && options.baseRef.trim() ? options.baseRef.trim() : undefined,
+    },
     'Timed out while reading workspace diff',
     'Failed to read workspace diff',
     { retryOnSocketReconnect: true },

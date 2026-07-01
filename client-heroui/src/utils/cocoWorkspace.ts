@@ -40,6 +40,20 @@ export interface CodeAgentWorkspaceDiff {
   truncated: boolean;
 }
 
+export type CodeAgentWorkspaceDiffScope = 'branch' | 'unstaged';
+
+export interface CodeAgentWorkspaceRef {
+  name: string;
+  kind: 'local' | 'remote';
+  remoteName?: string;
+}
+
+export interface CodeAgentWorkspaceRefs {
+  available: boolean;
+  refs: CodeAgentWorkspaceRef[];
+  headRef?: string;
+}
+
 export interface CodeAgentWorkspaceSnapshot {
   roomId: string;
   backend: 'coco';
@@ -82,6 +96,36 @@ const validateWorkspaceDiff = (value: unknown): CodeAgentWorkspaceDiff => {
   };
 };
 
+const validateWorkspaceRefs = (value: unknown): CodeAgentWorkspaceRefs => {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Workspace refs response is invalid');
+  }
+  const refsValue = value as Partial<CodeAgentWorkspaceRefs>;
+  if (typeof refsValue.available !== 'boolean' || !Array.isArray(refsValue.refs)) {
+    throw new Error('Workspace refs response is invalid');
+  }
+
+  return {
+    available: refsValue.available,
+    refs: refsValue.refs.flatMap((ref): CodeAgentWorkspaceRef[] => {
+      if (
+        !ref ||
+        typeof ref !== 'object' ||
+        typeof ref.name !== 'string' ||
+        (ref.kind !== 'local' && ref.kind !== 'remote')
+      ) {
+        return [];
+      }
+      return [{
+        name: ref.name,
+        kind: ref.kind,
+        ...(typeof ref.remoteName === 'string' && ref.remoteName ? { remoteName: ref.remoteName } : {}),
+      }];
+    }),
+    ...(typeof refsValue.headRef === 'string' && refsValue.headRef ? { headRef: refsValue.headRef } : {}),
+  };
+};
+
 export const summarizeCocoMessages = (messages: Message[]): CocoWorkspaceSummary => {
   let toolCalls = 0;
   let toolResults = 0;
@@ -113,7 +157,7 @@ export const summarizeCocoMessages = (messages: Message[]): CocoWorkspaceSummary
 
 export const loadCodeAgentWorkspaceDiff = async (
   roomId: string,
-  options: { signal?: AbortSignal; ignoreWhitespace?: boolean } = {}
+  options: { signal?: AbortSignal; ignoreWhitespace?: boolean; scope?: CodeAgentWorkspaceDiffScope; baseRef?: string | null } = {}
 ): Promise<CodeAgentWorkspaceDiff> => {
   if (options.signal?.aborted) {
     throw new Error('Workspace diff request aborted');
@@ -122,12 +166,34 @@ export const loadCodeAgentWorkspaceDiff = async (
   const { requestCodeWorkspaceDiff } = await import('./socket');
   const data = await requestCodeWorkspaceDiff(roomId, {
     ignoreWhitespace: options.ignoreWhitespace === true,
+    scope: options.scope ?? 'branch',
+    baseRef: typeof options.baseRef === 'string' && options.baseRef.trim() ? options.baseRef.trim() : undefined,
   });
   if (options.signal?.aborted) {
     throw new Error('Workspace diff request aborted');
   }
 
   return validateWorkspaceDiff(data);
+};
+
+export const loadCodeAgentWorkspaceRefs = async (
+  roomId: string,
+  options: { signal?: AbortSignal; query?: string; limit?: number } = {},
+): Promise<CodeAgentWorkspaceRefs> => {
+  if (options.signal?.aborted) {
+    throw new Error('Workspace refs request aborted');
+  }
+
+  const { requestCodeWorkspaceRefs } = await import('./socket');
+  const data = await requestCodeWorkspaceRefs(roomId, {
+    query: options.query,
+    limit: options.limit,
+  });
+  if (options.signal?.aborted) {
+    throw new Error('Workspace refs request aborted');
+  }
+
+  return validateWorkspaceRefs(data);
 };
 
 export const loadCodeAgentWorkspaceSnapshot = async (

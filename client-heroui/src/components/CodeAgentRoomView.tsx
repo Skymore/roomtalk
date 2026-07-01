@@ -487,7 +487,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
           <button
             type="button"
             aria-label={t('codeAgentResizeWorkspaceFiles')}
-            className="absolute inset-y-0 -left-3 z-40 w-6 cursor-col-resize touch-none border-x border-transparent transition-colors hover:border-[#c96442]/30 hover:bg-[#c96442]/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442]"
+            className="absolute inset-y-0 -left-4 z-40 w-8 cursor-col-resize touch-none border-x border-transparent transition-colors hover:border-[#c96442]/30 hover:bg-[#c96442]/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442]"
             onPointerDown={handleFileManagerResizeStart}
           />
           <div className={`${isFileManagerCollapsed ? 'w-full' : 'w-8'} relative flex shrink-0 justify-center border-r border-[#dedbd0] bg-[#f0eee6] dark:border-[#30302e] dark:bg-[#242422]`}>

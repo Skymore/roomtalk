@@ -49,13 +49,22 @@ export interface SearchCocoWorkspaceEntriesOptions extends ListCocoWorkspaceEntr
   query: string;
 }
 
+export interface ListCocoWorkspaceRefsOptions {
+  query?: string;
+  maxRefs?: number;
+}
+
 export interface ReadCocoWorkspaceFileOptions {
   maxBytes?: number;
 }
 
+export type CocoWorkspaceDiffScope = 'branch' | 'unstaged';
+
 export interface ReadCocoWorkspaceDiffOptions {
   maxBytes?: number;
   ignoreWhitespace?: boolean;
+  scope?: CocoWorkspaceDiffScope;
+  baseRef?: string;
 }
 
 export interface ReadCocoWorkspaceAssetOptions {
@@ -115,6 +124,18 @@ export interface CocoWorkspaceDiff {
   truncated: boolean;
 }
 
+export interface CocoWorkspaceRef {
+  name: string;
+  kind: 'local' | 'remote';
+  remoteName?: string;
+}
+
+export interface CocoWorkspaceRefs {
+  available: boolean;
+  refs: CocoWorkspaceRef[];
+  headRef?: string;
+}
+
 export interface CocoSandboxService {
   create(input: CreateCocoSandboxInput): Promise<CocoSandboxHandle>;
   connect(sandboxId: string): Promise<CocoSandboxHandle>;
@@ -122,6 +143,7 @@ export interface CocoSandboxService {
   startRunner(input: StartCocoRunnerInput): Promise<CocoRunnerProcess>;
   getWorkspaceChanges?(handle: CocoSandboxHandle): Promise<CocoWorkspaceChanges>;
   getWorkspaceDiff?(handle: CocoSandboxHandle, options?: ReadCocoWorkspaceDiffOptions): Promise<CocoWorkspaceDiff>;
+  listWorkspaceRefs?(handle: CocoSandboxHandle, options?: ListCocoWorkspaceRefsOptions): Promise<CocoWorkspaceRefs>;
   listWorkspaceEntries?(handle: CocoSandboxHandle, options?: ListCocoWorkspaceEntriesOptions): Promise<CocoWorkspaceEntry[]>;
   searchWorkspaceEntries?(handle: CocoSandboxHandle, options: SearchCocoWorkspaceEntriesOptions): Promise<CocoWorkspaceEntry[]>;
   readWorkspaceFile?(handle: CocoSandboxHandle, path: string, options?: ReadCocoWorkspaceFileOptions): Promise<CocoWorkspaceFile>;

@@ -38,9 +38,15 @@ function deferred<T>() {
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, params?: Record<string, string>) => (
-      params?.path ? `${key}:${params.path}` : params?.range ? `${key}:${params.range}` : key
-    ),
+    t: (key: string, params?: Record<string, string>) => {
+      if (key === 'codeAgentWorkspaceIndexing') return 'Indexing...';
+      if (key === 'codeAgentWorkspaceFileCount') return `${params?.formattedCount} files`;
+      if (key === 'codeAgentWorkspacePartial') return 'partial';
+      if (params?.shown && params?.total) return `${key}:${params.shown}:${params.total}`;
+      if (params?.path) return `${key}:${params.path}`;
+      if (params?.range) return `${key}:${params.range}`;
+      return key;
+    },
   }),
 }));
 
@@ -552,7 +558,7 @@ describe('CodeAgentFileBrowserPanel', () => {
 
     render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
 
-    expect(await screen.findByText(/^2 files/)).toBeTruthy();
+    expect(await screen.findByText(/^2 files · partial/)).toBeTruthy();
     await waitFor(() => {
       expect(searchCodeWorkspaceEntriesMock).toHaveBeenCalledWith('room-1', 'cmp', {
         limit: 200,
@@ -904,7 +910,7 @@ describe('CodeAgentFileBrowserPanel', () => {
 
     const diffFile = await screen.findByTestId('diff-file');
     expect(diffFile.textContent).toBe('logs/big.log:partial log');
-    expect(screen.getByText(/Preview limited to 11 of 2,000,000 bytes/)).toBeTruthy();
+    expect(screen.getByText('codeAgentFilePreviewTruncated:11:2,000,000')).toBeTruthy();
 
     vi.useFakeTimers();
     fireEvent.click(diffFile);

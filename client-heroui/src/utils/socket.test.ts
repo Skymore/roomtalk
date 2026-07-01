@@ -90,6 +90,7 @@ const {
   requestAudioTranscription,
   requestCodeWorkspaceEntries,
   requestCodeWorkspaceEntrySearch,
+  requestCodeWorkspaceRefs,
   setClientPassword,
   setClientAuthToken,
   setUsername,
@@ -313,6 +314,35 @@ describe('socket message acknowledgement helpers', () => {
     expect(socketMock.emit).toHaveBeenCalledWith(
       'search_code_workspace_entries',
       { roomId: 'room-1', query: '@cmp', limit: 25 },
+      expect.any(Function),
+    );
+  });
+
+  it('loads workspace refs through the T3-style socket request', async () => {
+    socketMock.ackResponses.set('list_code_workspace_refs', {
+      success: true,
+      refs: {
+        available: true,
+        headRef: 'feature/search',
+        refs: [
+          { name: 'main', kind: 'local' },
+          { name: 'origin/main', kind: 'remote', remoteName: 'origin' },
+        ],
+      },
+    });
+
+    await expect(requestCodeWorkspaceRefs('room-1', { query: 'main', limit: 25 })).resolves.toEqual({
+      available: true,
+      headRef: 'feature/search',
+      refs: [
+        { name: 'main', kind: 'local' },
+        { name: 'origin/main', kind: 'remote', remoteName: 'origin' },
+      ],
+    });
+
+    expect(socketMock.emit).toHaveBeenCalledWith(
+      'list_code_workspace_refs',
+      { roomId: 'room-1', query: 'main', limit: 25 },
       expect.any(Function),
     );
   });

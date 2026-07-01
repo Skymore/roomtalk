@@ -151,8 +151,9 @@ describe('DesktopSidebar', () => {
     const sidebar = screen.getByLabelText('resizeSidebar').closest('aside') as HTMLElement;
     const workspaceLayout = document.querySelector<HTMLElement>('[data-code-agent-workspace-layout="true"]');
 
-    expect(sidebar.style.getPropertyValue('--desktop-sidebar-width')).toBe('480px');
-    expect(localStorage.getItem('roomtalk.desktopSidebar.width')).toBe('480');
+    expect(sidebar.style.getPropertyValue('--desktop-sidebar-width')).toBe('360px');
+    expect(sidebar.style.getPropertyValue('--desktop-sidebar-max-width')).toBe('360px');
+    expect(localStorage.getItem('roomtalk.desktopSidebar.width')).toBe('360');
     expect(workspaceLayout?.style.getPropertyValue('--code-agent-files-width')).toBe('760px');
   });
 
@@ -186,8 +187,10 @@ describe('DesktopSidebar', () => {
     dispatchPointer(window, 'pointermove', { pointerId: 9, clientX: 1600, buttons: 1 });
     dispatchPointer(window, 'pointerup', { pointerId: 9, clientX: 1600, buttons: 0 });
 
-    expect(sidebar.style.getPropertyValue('--desktop-sidebar-width')).toBe('880px');
-    expect(localStorage.getItem('roomtalk.desktopSidebar.width')).toBe('880');
+    expect(sidebar.style.getPropertyValue('--desktop-sidebar-width')).toBe('760px');
+    expect(sidebar.style.maxWidth).toBe('var(--desktop-sidebar-max-width, calc(100% - 360px))');
+    expect(sidebar.style.getPropertyValue('--desktop-sidebar-max-width')).toBe('760px');
+    expect(localStorage.getItem('roomtalk.desktopSidebar.width')).toBe('760');
     expect(workspaceLayout?.style.getPropertyValue('--code-agent-files-width')).toBe('360px');
     expect(document.body.style.userSelect).toBe('');
     expect(document.body.style.cursor).toBe('');
@@ -220,7 +223,8 @@ describe('DesktopSidebar', () => {
     const workspaceLayout = document.querySelector<HTMLElement>('[data-code-agent-workspace-layout="true"]');
 
     expect(sidebar.style.getPropertyValue('--desktop-sidebar-width')).toBe('240px');
+    expect(sidebar.style.getPropertyValue('--desktop-sidebar-max-width')).toBe('240px');
     expect(localStorage.getItem('roomtalk.desktopSidebar.width')).toBe('240');
-    expect(workspaceLayout?.style.getPropertyValue('--code-agent-files-width')).toBe('424px');
+    expect(workspaceLayout?.style.getPropertyValue('--code-agent-files-width')).toBe('304px');
   });
 });

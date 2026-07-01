@@ -8,7 +8,10 @@ import {
   CocoWorkspaceDiff,
   CocoWorkspaceEntry,
   CocoWorkspaceFile,
+  CocoWorkspaceRef,
+  CocoWorkspaceRefs,
   CreateCocoSandboxInput,
+  ListCocoWorkspaceRefsOptions,
   ListCocoWorkspaceEntriesOptions,
   RenameCocoWorkspaceEntryInput,
   ReadCocoWorkspaceAssetOptions,
@@ -242,6 +245,10 @@ export class E2BCocoSandboxService implements CocoSandboxService {
 
     const workspace = shellQuote(handle.workspace || this.options.workspace || '/workspace');
     const whitespaceFlag = options.ignoreWhitespace ? ' -w' : '';
+    const baseRef = typeof options.baseRef === 'string' && options.baseRef.trim()
+      ? shellQuote(options.baseRef.trim())
+      : 'HEAD';
+    const diffTarget = options.scope === 'unstaged' ? '--' : `${baseRef} --`;
     const command = [
       'set -u',
       `cd ${workspace}`,
@@ -260,7 +267,7 @@ export class E2BCocoSandboxService implements CocoSandboxService {
       'fi',
       'git add -N -- . >/dev/null 2>&1 || true',
       'printf "__ROOMTALK_DIFF__\\n"',
-      `git diff --no-ext-diff${whitespaceFlag} --src-prefix=a/ --dst-prefix=b/ HEAD -- || true`,
+      `git diff --no-ext-diff${whitespaceFlag} --src-prefix=a/ --dst-prefix=b/ ${diffTarget} || true`,
     ].join('\n');
     const result = await connected.commands.run(command, { timeoutMs: 10_000 });
     const stdout = await collectReadableTextWithLimit(result.stdout, options.maxBytes ?? 10 * 1024 * 1024);
@@ -269,6 +276,42 @@ export class E2BCocoSandboxService implements CocoSandboxService {
       throw new Error(`E2B workspace diff query failed with exit code ${completed.exitCode}`);
     }
     return parseWorkspaceDiff(stdout.text, stdout.truncated, stdout.byteSize);
+  }
+
+  async listWorkspaceRefs(
+    handle: CocoSandboxHandle,
+    options: ListCocoWorkspaceRefsOptions = {}
+  ): Promise<CocoWorkspaceRefs> {
+    const connected = await this.driver.connect(handle.id);
+    if (!connected.commands?.run) {
+      throw new Error('E2B sandbox driver handle does not support command execution');
+    }
+
+    const workspace = shellQuote(handle.workspace || this.options.workspace || '/workspace');
+    const command = [
+      'set -u',
+      `cd ${workspace}`,
+      'if ! command -v git >/dev/null 2>&1; then',
+      '  printf "__ROOMTALK_REFS_UNAVAILABLE__\\n"',
+      '  exit 0',
+      'fi',
+      'git config --global --add safe.directory "$PWD" >/dev/null 2>&1 || true',
+      'if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then',
+      '  printf "__ROOMTALK_REFS_UNAVAILABLE__\\n"',
+      '  exit 0',
+      'fi',
+      'printf "__ROOMTALK_HEAD_REF__\\n"',
+      'git branch --show-current || true',
+      'printf "__ROOMTALK_REFS__\\n"',
+      'git for-each-ref --format="%(refname:short)%09%(refname)" refs/heads refs/remotes || true',
+    ].join('\n');
+    const result = await connected.commands.run(command, { timeoutMs: 10_000 });
+    const stdout = await collectReadableText(result.stdout);
+    const completed = await result.completed;
+    if (completed && completed.exitCode !== 0) {
+      throw new Error(`E2B workspace refs query failed with exit code ${completed.exitCode}`);
+    }
+    return filterWorkspaceRefs(parseWorkspaceRefs(stdout), options);
   }
 
   async listWorkspaceEntries(handle: CocoSandboxHandle, options: ListCocoWorkspaceEntriesOptions = {}): Promise<CocoWorkspaceEntry[]> {
@@ -582,6 +625,84 @@ const parseWorkspaceDiff = (stdout: string, truncated: boolean, stdoutByteSize: 
     byteSize: truncated ? stdoutByteSize : Buffer.byteLength(patch, 'utf8'),
     truncated,
   };
+};
+
+const parseWorkspaceRefs = (stdout: string): CocoWorkspaceRefs => {
+  if (!stdout || stdout.includes('__ROOMTALK_REFS_UNAVAILABLE__')) {
+    return {
+      available: false,
+      refs: [],
+    };
+  }
+
+  const headRef = sectionBetween(stdout, '__ROOMTALK_HEAD_REF__', '__ROOMTALK_REFS__').trim();
+  const refs = sectionAfter(stdout, '__ROOMTALK_REFS__')
+    .split(/\r?\n/)
+    .flatMap((line): CocoWorkspaceRefs['refs'] => {
+      const [shortName, fullName] = line.split('\t');
+      const name = shortName?.trim();
+      const refName = fullName?.trim();
+      if (!name || !refName) {
+        return [];
+      }
+      if (refName.startsWith('refs/remotes/')) {
+        if (name.endsWith('/HEAD')) {
+          return [];
+        }
+        const remoteName = name.split('/', 1)[0];
+        return [{
+          name,
+          kind: 'remote',
+          ...(remoteName ? { remoteName } : {}),
+        }];
+      }
+      if (refName.startsWith('refs/heads/')) {
+        return [{
+          name,
+          kind: 'local',
+        }];
+      }
+      return [];
+    });
+
+  return {
+    available: true,
+    refs: refs.sort(compareWorkspaceRefs),
+    ...(headRef ? { headRef } : {}),
+  };
+};
+
+const filterWorkspaceRefs = (
+  value: CocoWorkspaceRefs,
+  options: ListCocoWorkspaceRefsOptions,
+): CocoWorkspaceRefs => {
+  if (!value.available) {
+    return value;
+  }
+  const query = options.query?.trim().toLowerCase() || '';
+  const maxRefs = Math.max(0, options.maxRefs ?? 200);
+  const refs = value.refs
+    .filter((ref) => (
+      !query ||
+      ref.name.toLowerCase().includes(query) ||
+      ref.remoteName?.toLowerCase().includes(query) === true
+    ))
+    .slice(0, maxRefs);
+
+  return {
+    ...value,
+    refs,
+  };
+};
+
+const compareWorkspaceRefs = (left: CocoWorkspaceRef, right: CocoWorkspaceRef): number => {
+  if (left.kind !== right.kind) {
+    return left.kind === 'local' ? -1 : 1;
+  }
+  return left.name.localeCompare(right.name, undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  });
 };
 
 const sectionBetween = (value: string, startMarker: string, endMarker: string): string => {

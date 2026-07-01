@@ -1136,6 +1136,9 @@ function FileBrowserPanel({
     unsafeCSS: TREE_UNSAFE_CSS,
   });
   const treeSearch = useFileTreeSearch(model);
+  const fileCountLabel = entriesPending && entries.length === 0
+    ? t('codeAgentWorkspaceIndexing')
+    : t('codeAgentWorkspaceFileCount', { formattedCount: fileCount.toLocaleString() });
 
   useEffect(() => {
     if (previousTreePathsRef.current === treePaths) return;
@@ -1162,8 +1165,8 @@ function FileBrowserPanel({
         <div className="min-w-0 flex-1">
           <div className="truncate text-xs font-medium text-[#141413] dark:text-[#faf9f5]">{projectName}</div>
           <div className="truncate text-[10px] leading-none text-[#87867f] dark:text-[#8f8d86]">
-            {entriesPending && entries.length === 0 ? 'Indexing...' : `${fileCount.toLocaleString()} files`}
-            {entriesTruncated ? ' · partial' : ''}
+            {fileCountLabel}
+            {entriesTruncated ? ` · ${t('codeAgentWorkspacePartial')}` : ''}
             {remoteSearchPending ? ` · ${t('codeAgentSearchingWorkspaceFiles')}` : ''}
             {remoteSearchTruncated ? ` · ${t('codeAgentWorkspaceSearchPartial')}` : ''}
           </div>
@@ -1321,7 +1324,10 @@ function FilePreviewSurface({
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       {file.truncated ? (
         <div className="shrink-0 border-b border-amber-500/20 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
-          Preview limited to {visibleByteSize.toLocaleString()} of {file.byteSize.toLocaleString()} bytes.
+          {t('codeAgentFilePreviewTruncated', {
+            shown: visibleByteSize.toLocaleString(),
+            total: file.byteSize.toLocaleString(),
+          })}
         </div>
       ) : null}
       {fileQuery.error ? (
@@ -1966,7 +1972,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
               <button
                 type="button"
                 aria-label={t('codeAgentResizeFileExplorer')}
-                className="absolute inset-y-0 -left-3 z-40 w-6 cursor-col-resize touch-none border-x border-transparent transition-colors hover:border-[#c96442]/30 hover:bg-[#c96442]/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442]"
+                className="absolute inset-y-0 -left-4 z-40 w-8 cursor-col-resize touch-none border-x border-transparent transition-colors hover:border-[#c96442]/30 hover:bg-[#c96442]/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442]"
                 onPointerDown={handleExplorerResizeStart}
               />
             ) : null}

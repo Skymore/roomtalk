@@ -46,7 +46,6 @@ export function beginHorizontalResize({
   let animationFrame: number | null = null;
   let finished = false;
   let pointerCaptureElement: HTMLElement | null = null;
-  let clampedAtBoundary = false;
   const previousUserSelect = document.body.style.userSelect;
   const previousCursor = document.body.style.cursor;
   const resizeGuard = document.createElement('div');
@@ -69,7 +68,6 @@ export function beginHorizontalResize({
     const rawWidth = startWidth + ((clientX - startX) * direction);
     const nextWidth = clampWidth(rawWidth, getBounds());
     width = nextWidth;
-    clampedAtBoundary = nextWidth !== Math.round(rawWidth);
     if (animationFrame === null) {
       animationFrame = window.requestAnimationFrame(applyWidth);
     }
@@ -182,7 +180,7 @@ export function beginHorizontalResize({
   }
 
   function handlePointerEnd(event: PointerEvent) {
-    if (event.pointerId === pointerId || (event.pointerType === 'mouse' && isPrimaryButtonReleased(event))) {
+    if (event.pointerId === pointerId || event.pointerType === 'mouse') {
       event.preventDefault();
       event.stopPropagation();
       finishResize();
@@ -204,16 +202,15 @@ export function beginHorizontalResize({
       return;
     }
     applyClientX(event.clientX);
-    if (clampedAtBoundary) {
-      finishResize();
-    }
   }
 
   function handleLostPointerCapture(event: PointerEvent) {
     if (event.pointerId !== pointerId) {
       return;
     }
-    finishResize();
+    if (isPrimaryButtonReleased(event)) {
+      finishResize();
+    }
   }
 
   function handleMouseUp(event: MouseEvent) {
@@ -244,9 +241,6 @@ export function beginHorizontalResize({
       return;
     }
     applyClientX(event.clientX);
-    if (clampedAtBoundary) {
-      finishResize();
-    }
   }
 
   function handleMouseLeave(event: MouseEvent) {

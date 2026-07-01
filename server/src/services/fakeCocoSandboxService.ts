@@ -8,7 +8,10 @@ import {
   CocoWorkspaceDiff,
   CocoWorkspaceEntry,
   CocoWorkspaceFile,
+  CocoWorkspaceRef,
+  CocoWorkspaceRefs,
   CreateCocoSandboxInput,
+  ListCocoWorkspaceRefsOptions,
   ListCocoWorkspaceEntriesOptions,
   RenameCocoWorkspaceEntryInput,
   ReadCocoWorkspaceAssetOptions,
@@ -35,6 +38,7 @@ export class FakeCocoSandboxService implements CocoSandboxService {
   private readonly workspaceFileBytesBySandboxId = new Map<string, Map<string, Buffer>>();
   private readonly workspaceChangesBySandboxId = new Map<string, CocoWorkspaceChanges>();
   private readonly workspaceDiffBySandboxId = new Map<string, string>();
+  private readonly workspaceRefsBySandboxId = new Map<string, CocoWorkspaceRefs>();
 
   constructor(private readonly now: () => Date = () => new Date()) {}
 
@@ -135,6 +139,43 @@ export class FakeCocoSandboxService implements CocoSandboxService {
       patch: (truncated ? buffer.subarray(0, maxBytes) : buffer).toString('utf8'),
       byteSize: buffer.byteLength,
       truncated,
+    };
+  }
+
+  setWorkspaceRefs(sandboxId: string, refs: CocoWorkspaceRef[], headRef?: string) {
+    this.workspaceRefsBySandboxId.set(sandboxId, {
+      available: true,
+      refs,
+      ...(headRef ? { headRef } : {}),
+    });
+  }
+
+  async listWorkspaceRefs(
+    handle: CocoSandboxHandle,
+    options: ListCocoWorkspaceRefsOptions = {}
+  ): Promise<CocoWorkspaceRefs> {
+    this.consumeFailure('connect');
+    if (!this.sandboxes.has(handle.id)) {
+      throw new Error(`Fake Coco sandbox not found: ${handle.id}`);
+    }
+    const refs = this.workspaceRefsBySandboxId.get(handle.id) || {
+      available: false,
+      refs: [],
+    };
+    if (!refs.available) {
+      return refs;
+    }
+    const query = options.query?.trim().toLowerCase() || '';
+    const maxRefs = options.maxRefs ?? 200;
+    return {
+      ...refs,
+      refs: refs.refs
+        .filter((ref) => (
+          !query ||
+          ref.name.toLowerCase().includes(query) ||
+          ref.remoteName?.toLowerCase().includes(query) === true
+        ))
+        .slice(0, maxRefs),
     };
   }
 

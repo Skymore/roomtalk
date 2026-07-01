@@ -2,10 +2,11 @@
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React, { type ReactNode } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CodeAgentWorkspaceDiffViewer } from './CodeAgentWorkspaceDiffViewer';
 
 const loadCodeAgentWorkspaceDiffMock = vi.hoisted(() => vi.fn());
+const loadCodeAgentWorkspaceRefsMock = vi.hoisted(() => vi.fn());
 const parsePatchFilesMock = vi.hoisted(() => vi.fn());
 const codeViewScrollToMock = vi.hoisted(() => vi.fn());
 
@@ -19,6 +20,7 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('../utils/cocoWorkspace', () => ({
   loadCodeAgentWorkspaceDiff: loadCodeAgentWorkspaceDiffMock,
+  loadCodeAgentWorkspaceRefs: loadCodeAgentWorkspaceRefsMock,
 }));
 
 vi.mock('@pierre/diffs', () => ({
@@ -98,10 +100,19 @@ vi.mock('@pierre/diffs/react', () => ({
 }));
 
 describe('CodeAgentWorkspaceDiffViewer', () => {
+  beforeEach(() => {
+    loadCodeAgentWorkspaceRefsMock.mockResolvedValue({
+      available: true,
+      headRef: 'feature/search',
+      refs: [],
+    });
+  });
+
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
     loadCodeAgentWorkspaceDiffMock.mockReset();
+    loadCodeAgentWorkspaceRefsMock.mockReset();
     parsePatchFilesMock.mockReset();
     codeViewScrollToMock.mockReset();
     localStorage.clear();
@@ -142,7 +153,7 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenCalledWith('room-1', expect.any(Object));
     expect(parsePatchFilesMock).toHaveBeenCalledWith(
       'diff --git a/src/App.tsx b/src/App.tsx',
-      expect.stringMatching(/^workspace:room-1:snapshot-1:(light|dark):\d+:/),
+      expect.stringMatching(/^workspace:room-1:snapshot-1:branch:auto:(light|dark):\d+:/),
     );
     expect(screen.getByTestId('code-view').dataset.overflow).toBe('scroll');
     expect(screen.getByTestId('code-view').dataset.diffStyle).toBe('unified');
@@ -185,6 +196,27 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect((await screen.findByTestId('code-agent-workspace-raw-diff')).textContent).toBe('plain output');
     expect(screen.getByText('Unsupported diff format. Showing raw patch.')).toBeTruthy();
     expect(screen.queryByTestId('code-view')).toBeNull();
+  });
+
+  it('renders the T3-style truncated diff warning when the workspace patch is partial', async () => {
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 2_000_000,
+      truncated: true,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          { name: 'src/App.tsx', hunks: [], additionLines: [], deletionLines: [], type: 'modify' },
+        ],
+      },
+    ]);
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
+
+    expect(await screen.findByText('codeAgentDiffPreviewTruncated')).toBeTruthy();
+    expect(screen.getByTestId('code-view')).toBeTruthy();
   });
 
   it('toggles T3-style diff line wrapping and persists the preference', async () => {
@@ -232,7 +264,7 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(await screen.findByTestId('code-view')).toBeTruthy();
     expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenLastCalledWith(
       'room-1',
-      expect.objectContaining({ ignoreWhitespace: false }),
+      expect.objectContaining({ ignoreWhitespace: false, scope: 'branch' }),
     );
 
     fireEvent.click(screen.getByLabelText('codeAgentHideWhitespaceChanges'));
@@ -242,10 +274,102 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     });
     expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenLastCalledWith(
       'room-1',
-      expect.objectContaining({ ignoreWhitespace: true }),
+      expect.objectContaining({ ignoreWhitespace: true, scope: 'branch' }),
     );
     expect(localStorage.getItem('roomtalk.codeWorkspace.diffIgnoreWhitespace')).toBe('true');
     expect(screen.getByLabelText('codeAgentShowWhitespaceChanges').getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('toggles the T3-style working tree diff scope and reloads the workspace patch', async () => {
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          { name: 'src/App.tsx', hunks: [], additionLines: [], deletionLines: [], type: 'modify' },
+        ],
+      },
+    ]);
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
+
+    expect(await screen.findByTestId('code-view')).toBeTruthy();
+    expect(screen.getByLabelText('codeAgentDiffScope: codeAgentDiffScopeBranch')).toBeTruthy();
+    expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenLastCalledWith(
+      'room-1',
+      expect.objectContaining({ scope: 'branch' }),
+    );
+
+    fireEvent.click(screen.getByText('codeAgentDiffScopeWorkingTree'));
+
+    await waitFor(() => {
+      expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenCalledTimes(2);
+    });
+    expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenLastCalledWith(
+      'room-1',
+      expect.objectContaining({ scope: 'unstaged' }),
+    );
+    expect(localStorage.getItem('roomtalk.codeWorkspace.diffScope')).toBe('unstaged');
+    expect(screen.getByLabelText('codeAgentDiffScope: codeAgentDiffScopeWorkingTree')).toBeTruthy();
+  });
+
+  it('selects T3-style branch base refs and toggles remote refs', async () => {
+    loadCodeAgentWorkspaceRefsMock.mockResolvedValue({
+      available: true,
+      headRef: 'feature/search',
+      refs: [
+        { name: 'main', kind: 'local' },
+        { name: 'origin/main', kind: 'remote', remoteName: 'origin' },
+        { name: 'origin/release', kind: 'remote', remoteName: 'origin' },
+      ],
+    });
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          { name: 'src/App.tsx', hunks: [], additionLines: [], deletionLines: [], type: 'modify' },
+        ],
+      },
+    ]);
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
+
+    expect(await screen.findByTestId('code-view')).toBeTruthy();
+    await waitFor(() => {
+      expect(loadCodeAgentWorkspaceRefsMock).toHaveBeenCalledWith('room-1', expect.objectContaining({ limit: 200 }));
+    });
+
+    fireEvent.change(screen.getByLabelText('codeAgentDiffBaseRefSearch'), { target: { value: 'main' } });
+    fireEvent.click(screen.getByText('main'));
+
+    await waitFor(() => {
+      expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenCalledTimes(2);
+    });
+    expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenLastCalledWith(
+      'room-1',
+      expect.objectContaining({ scope: 'branch', baseRef: 'main' }),
+    );
+    expect(localStorage.getItem('roomtalk.codeWorkspace.diffBaseRef.room-1')).toBe('main');
+
+    fireEvent.click(screen.getByLabelText('codeAgentDiffBaseRefUseRemote'));
+
+    await waitFor(() => {
+      expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenCalledTimes(3);
+    });
+    expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenLastCalledWith(
+      'room-1',
+      expect.objectContaining({ scope: 'branch', baseRef: 'origin/main' }),
+    );
+    expect(localStorage.getItem('roomtalk.codeWorkspace.diffBaseRef.room-1')).toBe('origin/main');
   });
 
   it('toggles T3-style file diff collapsing through the CodeView header prefix', async () => {
@@ -370,7 +494,7 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'codeAgentSubmitComment' }));
 
     expect(onAddReviewComment).toHaveBeenCalledWith(expect.objectContaining({
-      sectionId: 'workspace-diff:room-1:snapshot-1',
+      sectionId: 'workspace-diff:room-1:snapshot-1:branch:auto',
       sectionTitle: 'codeAgentChanges',
       filePath: 'src/App.tsx',
       rangeLabel: '+2 to +4',

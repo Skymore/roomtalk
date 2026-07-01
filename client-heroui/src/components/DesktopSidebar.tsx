@@ -28,6 +28,7 @@ import { RoomRenameModal } from './RoomRenameModal';
 import { beginHorizontalResize } from '../utils/horizontalResize';
 import {
   CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
+  CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH,
   CODE_AGENT_FILE_PANEL_COLLAPSED_WIDTH,
   CODE_AGENT_FILE_PANEL_MIN_WIDTH,
   CODE_AGENT_FILE_PANEL_WIDTH_CHANGE_EVENT,
@@ -119,6 +120,10 @@ const getDesktopShellWidth = (sidebar?: HTMLElement): number => {
   return shellRect && shellRect.width > 0 ? shellRect.width : window.innerWidth;
 };
 
+const applySidebarMaxWidth = (sidebar: HTMLElement | null | undefined, maxWidth: number) => {
+  sidebar?.style.setProperty('--desktop-sidebar-max-width', `${Math.max(DESKTOP_SIDEBAR_MIN_WIDTH, Math.floor(maxWidth))}px`);
+};
+
 type CodeAgentFilePanelReserveMode = 'current' | 'minimum';
 
 const getSidebarResizeBounds = (
@@ -133,14 +138,14 @@ const getSidebarResizeBounds = (
     const codeAgentMax = getSidebarMaxWidthForCodeAgentShell(
       shellWidth,
       getCodeAgentFilePanelSidebarReserve(workspaceLayout, filePanelReserveMode),
-      CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
+      CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH,
     );
     max = Math.min(max, codeAgentMax);
   } else if (reserveCodeAgentLayout && shouldReserveCodeAgentFilePanelFallback()) {
     const codeAgentMax = getSidebarMaxWidthForCodeAgentShell(
       shellWidth,
       CODE_AGENT_FILE_PANEL_MIN_WIDTH,
-      CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
+      CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH,
     );
     max = Math.min(max, codeAgentMax);
   }
@@ -174,6 +179,7 @@ const clampCodeAgentFilePanelDuringSidebarResize = (
     currentFilePanelWidth,
     getDesktopShellWidth(sidebar),
     sidebarWidth,
+    CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH,
   );
   if (nextFilePanelWidth !== Math.round(currentFilePanelWidth)) {
     workspaceLayout.style.setProperty('--code-agent-files-width', `${nextFilePanelWidth}px`);
@@ -486,6 +492,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
     }
     const sidebar = sidebarRef.current;
     const bounds = getSidebarResizeBounds(sidebar ?? undefined, reserveCodeAgentLayoutForSidebar);
+    applySidebarMaxWidth(sidebar, bounds.max);
     const nextWidth = Math.min(bounds.max, Math.max(bounds.min, Math.round(sidebarWidthRef.current)));
     const sidebarWidthChanged = nextWidth !== sidebarWidthRef.current;
 
@@ -523,7 +530,16 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
     }
 
     event.preventDefault();
-    const startWidth = isCollapsed ? DESKTOP_SIDEBAR_MIN_WIDTH : sidebarWidthRef.current;
+    const readResizeBounds = () => {
+      const bounds = getSidebarResizeBounds(sidebar, reserveCodeAgentLayoutForSidebar, 'minimum');
+      applySidebarMaxWidth(sidebar, bounds.max);
+      return bounds;
+    };
+    const startBounds = readResizeBounds();
+    const startWidth = Math.min(
+      startBounds.max,
+      Math.max(startBounds.min, isCollapsed ? DESKTOP_SIDEBAR_MIN_WIDTH : sidebarWidthRef.current),
+    );
 
     setIsCollapsed(false);
     sidebar.style.transition = 'none';
@@ -538,7 +554,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
       initialWidth: startWidth,
       direction: 1,
       captureTarget: event.currentTarget,
-      getBounds: () => getSidebarResizeBounds(sidebar, reserveCodeAgentLayoutForSidebar, 'minimum'),
+      getBounds: readResizeBounds,
       onResize: (width) => {
         sidebar.style.setProperty('--desktop-sidebar-width', `${width}px`);
         clampCodeAgentFilePanelDuringSidebarResize(sidebar, width);
@@ -633,13 +649,16 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
         className="relative hidden h-full flex-shrink-0 flex-col border-r border-[#dedbd0] bg-[#faf9f5] transition-[width] duration-200 dark:border-[#30302e] dark:bg-[#1d1d1b] md:flex"
         style={{
           width: isCollapsed ? DESKTOP_SIDEBAR_COLLAPSED_WIDTH : `var(--desktop-sidebar-width, ${sidebarWidth}px)`,
+          maxWidth: isCollapsed
+            ? DESKTOP_SIDEBAR_COLLAPSED_WIDTH
+            : `var(--desktop-sidebar-max-width, calc(100% - ${DESKTOP_MAIN_MIN_WIDTH}px))`,
           ['--desktop-sidebar-width' as string]: `${sidebarWidth}px`,
         }}
       >
         <button
           type="button"
           aria-label={t('resizeSidebar')}
-          className="absolute inset-y-0 -right-3 z-40 w-6 cursor-col-resize touch-none border-x border-transparent transition-colors hover:border-[#c96442]/30 hover:bg-[#c96442]/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442]"
+          className="absolute inset-y-0 -right-4 z-40 w-8 cursor-col-resize touch-none border-x border-transparent transition-colors hover:border-[#c96442]/30 hover:bg-[#c96442]/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442]"
           onPointerDown={handleSidebarResizeStart}
         />
         <div

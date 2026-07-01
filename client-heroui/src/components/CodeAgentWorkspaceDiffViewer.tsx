@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CodeViewDiffItem, CodeViewItem, FileDiffMetadata, SelectedLineRange } from '@pierre/diffs';
 import { CodeView, type CodeViewHandle } from '@pierre/diffs/react';
-import { ChevronDown, ChevronRight, Columns2, FileCode2, Pilcrow, Rows3, WrapText } from 'lucide-react';
+import { ArrowRight, Check, ChevronDown, ChevronRight, Columns2, FileCode2, Pilcrow, Rows3, Search, WrapText } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { loadCodeAgentWorkspaceDiff, type CodeAgentWorkspaceDiff } from '../utils/cocoWorkspace';
+import { loadCodeAgentWorkspaceDiff, loadCodeAgentWorkspaceRefs, type CodeAgentWorkspaceDiff, type CodeAgentWorkspaceDiffScope, type CodeAgentWorkspaceRefs } from '../utils/cocoWorkspace';
+import { buildCodeAgentBaseRefChoices, filterCodeAgentBaseRefChoices, type CodeAgentBaseRefChoice } from '../utils/codeWorkspaceRefs';
 import {
   buildFileDiffRenderKey,
   fnv1a32,
@@ -63,6 +64,10 @@ function useResolvedTheme() {
 const DIFF_WORD_WRAP_STORAGE_KEY = 'roomtalk.codeWorkspace.diffWordWrap';
 const DIFF_RENDER_MODE_STORAGE_KEY = 'roomtalk.codeWorkspace.diffRenderMode';
 const DIFF_IGNORE_WHITESPACE_STORAGE_KEY = 'roomtalk.codeWorkspace.diffIgnoreWhitespace';
+const DIFF_SCOPE_STORAGE_KEY = 'roomtalk.codeWorkspace.diffScope';
+const DIFF_BASE_REF_STORAGE_PREFIX = 'roomtalk.codeWorkspace.diffBaseRef.';
+const AUTOMATIC_BASE_REF = '__automatic_base_ref__';
+const WORKSPACE_REF_LIMIT = 200;
 type DiffRenderMode = 'stacked' | 'split';
 const EMPTY_COLLAPSED_DIFF_FILE_KEYS: ReadonlySet<string> = new Set();
 const DIFF_PANEL_UNSAFE_CSS = `
@@ -233,6 +238,28 @@ function readInitialDiffIgnoreWhitespace() {
     return window.localStorage.getItem(DIFF_IGNORE_WHITESPACE_STORAGE_KEY) === 'true';
   } catch {
     return false;
+  }
+}
+
+function readInitialDiffScope(): CodeAgentWorkspaceDiffScope {
+  if (typeof window === 'undefined') {
+    return 'branch';
+  }
+  try {
+    return window.localStorage.getItem(DIFF_SCOPE_STORAGE_KEY) === 'unstaged' ? 'unstaged' : 'branch';
+  } catch {
+    return 'branch';
+  }
+}
+
+function readInitialDiffBaseRef(roomId: string): string | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  try {
+    return window.localStorage.getItem(`${DIFF_BASE_REF_STORAGE_PREFIX}${roomId}`)?.trim() || null;
+  } catch {
+    return null;
   }
 }
 
@@ -449,6 +476,12 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   const [wordWrap, setWordWrap] = useState(readInitialDiffWordWrap);
   const [diffRenderMode, setDiffRenderMode] = useState<DiffRenderMode>(readInitialDiffRenderMode);
   const [diffIgnoreWhitespace, setDiffIgnoreWhitespace] = useState(readInitialDiffIgnoreWhitespace);
+  const [diffScope, setDiffScope] = useState<CodeAgentWorkspaceDiffScope>(readInitialDiffScope);
+  const [diffBaseRef, setDiffBaseRef] = useState<string | null>(() => readInitialDiffBaseRef(roomId));
+  const [baseRefQuery, setBaseRefQuery] = useState('');
+  const [workspaceRefs, setWorkspaceRefs] = useState<CodeAgentWorkspaceRefs | null>(null);
+  const [workspaceRefsError, setWorkspaceRefsError] = useState<string | null>(null);
+  const [isWorkspaceRefsPending, setIsWorkspaceRefsPending] = useState(false);
   const codeViewRef = useRef<CodeViewHandle<DiffCommentAnnotationGroup> | null>(null);
   const [selectedLines, setSelectedLines] = useState<{ id: string; range: SelectedLineRange } | null>(null);
   const [diffAnnotations, setDiffAnnotations] = useState<Record<string, DiffCommentLineAnnotation[]>>({});
@@ -456,14 +489,24 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     scopeKey: null,
     fileKeys: new Set(),
   }));
-  const collapseScopeKey = `${roomId}:${refreshKey}:${diffIgnoreWhitespace ? 'ignore-whitespace' : 'show-whitespace'}`;
+  const collapseScopeKey = `${roomId}:${refreshKey}:${diffScope}:${diffBaseRef ?? 'auto'}:${diffIgnoreWhitespace ? 'ignore-whitespace' : 'show-whitespace'}`;
   const collapsedDiffFileKeys = collapsedDiffFiles.scopeKey === collapseScopeKey
     ? collapsedDiffFiles.fileKeys
     : EMPTY_COLLAPSED_DIFF_FILE_KEYS;
   const wordWrapLabel = t(wordWrap ? 'codeAgentDisableDiffLineWrapping' : 'codeAgentEnableDiffLineWrapping');
   const ignoreWhitespaceLabel = t(diffIgnoreWhitespace ? 'codeAgentShowWhitespaceChanges' : 'codeAgentHideWhitespaceChanges');
-  const reviewCommentSectionId = `workspace-diff:${roomId}:${refreshKey || 'current'}`;
+  const diffScopeLabel = t(diffScope === 'unstaged' ? 'codeAgentDiffScopeWorkingTree' : 'codeAgentDiffScopeBranch');
+  const diffBaseRefLabel = diffBaseRef || t('codeAgentDiffBaseRefAutomatic');
+  const baseRefRequestQuery = baseRefQuery.trim();
+  const reviewCommentSectionId = `workspace-diff:${roomId}:${refreshKey || 'current'}:${diffScope}:${diffBaseRef ?? 'auto'}`;
   const reviewCommentSectionTitle = t('codeAgentChanges');
+
+  useEffect(() => {
+    setDiffBaseRef(readInitialDiffBaseRef(roomId));
+    setBaseRefQuery('');
+    setWorkspaceRefs(null);
+    setWorkspaceRefsError(null);
+  }, [roomId]);
 
   useEffect(() => {
     setSelectedLines(null);
@@ -503,6 +546,30 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     });
   };
 
+  const selectDiffScope = (nextScope: CodeAgentWorkspaceDiffScope) => {
+    setDiffScope(nextScope);
+    try {
+      window.localStorage.setItem(DIFF_SCOPE_STORAGE_KEY, nextScope);
+    } catch {
+      // Preference persistence is best-effort; the live scope still applies.
+    }
+  };
+
+  const selectDiffBaseRef = useCallback((nextBaseRef: string | null) => {
+    setDiffBaseRef(nextBaseRef);
+    setBaseRefQuery('');
+    try {
+      const storageKey = `${DIFF_BASE_REF_STORAGE_PREFIX}${roomId}`;
+      if (nextBaseRef) {
+        window.localStorage.setItem(storageKey, nextBaseRef);
+      } else {
+        window.localStorage.removeItem(storageKey);
+      }
+    } catch {
+      // Preference persistence is best-effort; the live base ref still applies.
+    }
+  }, [roomId]);
+
   const toggleDiffFileCollapsed = (fileKey: string) => {
     setCollapsedDiffFiles((current) => {
       const nextFileKeys = new Set(current.scopeKey === collapseScopeKey ? current.fileKeys : []);
@@ -519,6 +586,59 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   };
 
   useEffect(() => {
+    if (!enabled || diffScope !== 'branch') {
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    setIsWorkspaceRefsPending(true);
+    setWorkspaceRefsError(null);
+
+    loadCodeAgentWorkspaceRefs(roomId, {
+      signal: controller.signal,
+      query: baseRefRequestQuery || undefined,
+      limit: WORKSPACE_REF_LIMIT,
+    }).then(
+      (refs) => {
+        if (!controller.signal.aborted) {
+          setWorkspaceRefs(refs);
+        }
+      },
+      (refsError) => {
+        if (!controller.signal.aborted) {
+          setWorkspaceRefsError(refsError instanceof Error ? refsError.message : 'Workspace refs failed.');
+        }
+      },
+    ).finally(() => {
+      if (!controller.signal.aborted) {
+        setIsWorkspaceRefsPending(false);
+      }
+    });
+
+    return () => controller.abort();
+  }, [baseRefRequestQuery, diffScope, enabled, refreshKey, roomId]);
+
+  const baseRefChoices = useMemo(() => {
+    const refs = workspaceRefs?.refs ?? [];
+    const localRefs = refs.filter((ref) => ref.kind === 'local' && ref.name !== workspaceRefs?.headRef);
+    const remoteRefs = refs.filter((ref) => ref.kind === 'remote');
+    return buildCodeAgentBaseRefChoices(localRefs, remoteRefs);
+  }, [workspaceRefs]);
+  const matchingBaseRefChoices = useMemo(
+    () => filterCodeAgentBaseRefChoices(baseRefChoices, baseRefQuery),
+    [baseRefChoices, baseRefQuery],
+  );
+  const valueForBaseRefChoice = useCallback((choice: CodeAgentBaseRefChoice): string => (
+    diffBaseRef && diffBaseRef === choice.remote?.name
+      ? diffBaseRef
+      : (choice.local?.name ?? choice.remote?.name ?? choice.id)
+  ), [diffBaseRef]);
+  const filteredBaseRefItems = useMemo(() => [
+    ...(baseRefQuery.trim().length === 0 ? [AUTOMATIC_BASE_REF] : []),
+    ...matchingBaseRefChoices.map(valueForBaseRefChoice),
+  ], [baseRefQuery, matchingBaseRefChoices, valueForBaseRefChoice]);
+
+  useEffect(() => {
     if (!enabled) {
       return undefined;
     }
@@ -530,6 +650,8 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     loadCodeAgentWorkspaceDiff(roomId, {
       signal: controller.signal,
       ignoreWhitespace: diffIgnoreWhitespace,
+      scope: diffScope,
+      baseRef: diffScope === 'branch' ? diffBaseRef : null,
     }).then(
       (nextDiff) => {
         if (!controller.signal.aborted) {
@@ -548,13 +670,13 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     });
 
     return () => controller.abort();
-  }, [diffIgnoreWhitespace, enabled, refreshKey, roomId]);
+  }, [diffBaseRef, diffIgnoreWhitespace, diffScope, enabled, refreshKey, roomId]);
 
   const renderablePatch = useMemo(
-    () => getRenderablePatch(diff?.patch, `workspace:${roomId}:${refreshKey}:${resolvedTheme}`, {
+    () => getRenderablePatch(diff?.patch, `workspace:${roomId}:${refreshKey}:${diffScope}:${diffBaseRef ?? 'auto'}:${resolvedTheme}`, {
       compactPartialHunkOffsets: true,
     }),
-    [diff?.patch, refreshKey, resolvedTheme, roomId],
+    [diff?.patch, diffBaseRef, diffScope, refreshKey, resolvedTheme, roomId],
   );
   const parsed = useMemo(() => {
     if (!renderablePatch || renderablePatch.kind !== 'files') {
@@ -853,10 +975,173 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     <div className="space-y-2" data-testid="code-agent-workspace-diff-viewer">
       {diff.truncated ? (
         <div className="rounded-md border border-amber-500/20 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
-          Diff preview truncated at {diff.patch.length.toLocaleString()} characters of a {diff.byteSize.toLocaleString()} byte patch.
+          {t('codeAgentDiffPreviewTruncated')}
         </div>
       ) : null}
-      <div className="flex justify-end gap-1">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <details className="group relative min-w-0">
+            <summary
+              aria-label={`${t('codeAgentDiffScope')}: ${diffScopeLabel}`}
+              className="inline-flex h-7 max-w-48 cursor-pointer list-none items-center gap-1 rounded-md border border-[#dedbd0] bg-[#faf9f5] px-2 text-xs font-medium text-[#141413] transition-colors hover:bg-[#f0eee6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:hover:bg-[#30302e] [&::-webkit-details-marker]:hidden"
+            >
+              <span className="truncate">{diffScopeLabel}</span>
+              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[#87867f] transition-transform group-open:rotate-180 dark:text-[#8f8d86]" />
+            </summary>
+            <div className="absolute left-0 top-8 z-50 w-52 rounded-md border border-[#dedbd0] bg-[#faf9f5] p-1 shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]">
+              {([
+                ['branch', t('codeAgentDiffScopeBranch')],
+                ['unstaged', t('codeAgentDiffScopeWorkingTree')],
+              ] as const).map(([scope, label]) => (
+                <button
+                  key={scope}
+                  type="button"
+                  className="flex h-8 w-full items-center gap-2 rounded px-2 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
+                  onClick={(event) => {
+                    selectDiffScope(scope);
+                    event.currentTarget.closest('details')?.removeAttribute('open');
+                  }}
+                >
+                  <span className="min-w-0 flex-1 truncate">{label}</span>
+                  {diffScope === scope ? <Check className="h-3.5 w-3.5 shrink-0 text-[#9f462c] dark:text-[#ffb197]" /> : null}
+                </button>
+              ))}
+            </div>
+          </details>
+          {diffScope === 'branch' ? (
+            <div
+              className="flex min-w-0 max-w-full items-center gap-1.5 overflow-visible text-xs text-[#87867f] dark:text-[#8f8d86]"
+              title={`${workspaceRefs?.headRef ?? 'HEAD'} -> ${diffBaseRefLabel}`}
+              aria-label={`${t('codeAgentDiffComparing')}: ${workspaceRefs?.headRef ?? 'HEAD'} -> ${diffBaseRefLabel}`}
+            >
+              <span className="hidden max-w-28 truncate sm:inline">{workspaceRefs?.headRef ?? 'HEAD'}</span>
+              <ArrowRight className="hidden h-3.5 w-3.5 shrink-0 opacity-70 sm:block" />
+              <details className="group relative min-w-0">
+                <summary
+                  aria-label={`${t('codeAgentDiffBaseRef')}: ${diffBaseRefLabel}`}
+                  className="inline-flex h-7 max-w-52 cursor-pointer list-none items-center gap-1 rounded-md px-1.5 text-xs font-medium text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] [&::-webkit-details-marker]:hidden"
+                >
+                  <span className="truncate">{diffBaseRefLabel}</span>
+                  <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[#87867f] transition-transform group-open:rotate-180 dark:text-[#8f8d86]" />
+                </summary>
+                <div className="absolute left-0 top-8 z-50 w-72 max-w-[calc(100vw-1rem)] overflow-hidden rounded-md border border-[#dedbd0] bg-[#faf9f5] shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]">
+                  <div className="px-3 pt-2.5">
+                    <label className="relative block border-b border-[#dedbd0] pb-1.5 transition-colors focus-within:border-[#c96442] dark:border-[#30302e]">
+                      <Search className="pointer-events-none absolute left-0 top-1.5 h-4 w-4 text-[#87867f]/70 dark:text-[#8f8d86]/70" />
+                      <input
+                        aria-label={t('codeAgentDiffBaseRefSearch')}
+                        className="h-7 w-full bg-transparent pl-5 pr-1 text-sm text-[#141413] outline-none placeholder:text-[#87867f] dark:text-[#faf9f5] dark:placeholder:text-[#8f8d86]"
+                        placeholder={t('codeAgentDiffBaseRefSearch')}
+                        value={baseRefQuery}
+                        onChange={(event) => setBaseRefQuery(event.target.value)}
+                      />
+                    </label>
+                  </div>
+                  <div className="grid grid-cols-[1rem_minmax(0,1fr)] items-center gap-2 border-b border-[#dedbd0] px-3 pb-1.5 pt-2 text-[10px] font-semibold uppercase text-[#87867f] dark:border-[#30302e] dark:text-[#8f8d86]">
+                    <span aria-hidden="true" />
+                    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_2rem] items-center">
+                      <span>{t('codeAgentDiffBaseRefBranch')}</span>
+                      <span className="text-right">{t('codeAgentDiffBaseRefRemote')}</span>
+                    </div>
+                  </div>
+                  <div className="max-h-64 min-w-0 overflow-y-auto overflow-x-hidden p-1">
+                    {isWorkspaceRefsPending && !workspaceRefs ? (
+                      <div className="px-2 py-2 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentDiffBaseRefLoading')}</div>
+                    ) : workspaceRefsError ? (
+                      <div className="px-2 py-2 text-xs text-[#9f462c] dark:text-[#ff9b78]">{t('codeAgentDiffBaseRefUnavailable')}</div>
+                    ) : !workspaceRefs?.available ? (
+                      <div className="px-2 py-2 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentDiffBaseRefUnavailable')}</div>
+                    ) : filteredBaseRefItems.length === 0 ? (
+                      <div className="px-2 py-2 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentNoMatchingRefs')}</div>
+                    ) : (
+                      <>
+                        {filteredBaseRefItems.includes(AUTOMATIC_BASE_REF) ? (
+                          <button
+                            type="button"
+                            className="grid h-8 w-full grid-cols-[1rem_minmax(0,1fr)] items-center gap-2 rounded px-2 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
+                            onClick={(event) => {
+                              selectDiffBaseRef(null);
+                              event.currentTarget.closest('details')?.removeAttribute('open');
+                            }}
+                          >
+                            {diffBaseRef === null ? <Check className="h-3.5 w-3.5 text-[#9f462c] dark:text-[#ffb197]" /> : <span />}
+                            <span className="min-w-0 truncate">{t('codeAgentDiffBaseRefAutomatic')}</span>
+                          </button>
+                        ) : null}
+                        {matchingBaseRefChoices.map((choice) => {
+                          const item = valueForBaseRefChoice(choice);
+                          if (!filteredBaseRefItems.includes(item)) {
+                            return null;
+                          }
+                          const hasBoth = choice.local !== null && choice.remote !== null;
+                          const useRemote = choice.remote?.name === item;
+                          const selectItem = (details: HTMLDetailsElement | null) => {
+                            selectDiffBaseRef(item);
+                            details?.removeAttribute('open');
+                          };
+                          return (
+                            <div
+                              key={choice.id}
+                              role="button"
+                              tabIndex={0}
+                              className="grid h-8 w-full grid-cols-[1rem_minmax(0,1fr)] items-center gap-2 rounded px-2 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
+                              onClick={(event) => {
+                                selectItem(event.currentTarget.closest('details'));
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key !== 'Enter' && event.key !== ' ') {
+                                  return;
+                                }
+                                event.preventDefault();
+                                selectItem(event.currentTarget.closest('details'));
+                              }}
+                            >
+                              {diffBaseRef === item ? <Check className="h-3.5 w-3.5 text-[#9f462c] dark:text-[#ffb197]" /> : <span />}
+                              <span className="grid min-w-0 grid-cols-[minmax(0,1fr)_2rem] items-center overflow-hidden">
+                                <span className="min-w-0 truncate pr-2">{choice.label}</span>
+                                {hasBoth ? (
+                                  <span
+                                    className="flex justify-end"
+                                    onClick={(event) => event.stopPropagation()}
+                                    onPointerDown={(event) => event.stopPropagation()}
+                                  >
+                                    <label className="relative inline-flex h-4 w-7 cursor-pointer items-center">
+                                      <input
+                                        type="checkbox"
+                                        className="peer sr-only"
+                                        aria-label={t('codeAgentDiffBaseRefUseRemote', { ref: choice.label })}
+                                        checked={useRemote}
+                                        onChange={(event) => {
+                                          const nextRef = event.currentTarget.checked
+                                            ? choice.remote?.name
+                                            : choice.local?.name;
+                                          if (nextRef) {
+                                            selectDiffBaseRef(nextRef);
+                                          }
+                                        }}
+                                      />
+                                      <span className="h-3.5 w-7 rounded-full bg-[#dedbd0] transition-colors peer-checked:bg-[#c96442] dark:bg-[#30302e] dark:peer-checked:bg-[#d97757]" />
+                                      <span className="absolute left-0.5 h-2.5 w-2.5 rounded-full bg-[#faf9f5] transition-transform peer-checked:translate-x-3 dark:bg-[#faf9f5]" />
+                                    </label>
+                                  </span>
+                                ) : choice.remote ? (
+                                  <span className="flex justify-end text-[#87867f] dark:text-[#8f8d86]" title={t('codeAgentDiffBaseRefRemoteOnly')}>
+                                    <Check className="h-3.5 w-3.5" />
+                                  </span>
+                                ) : null}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </>
+                    )}
+                  </div>
+                </div>
+              </details>
+            </div>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
         <button
           type="button"
           aria-label={t('codeAgentStackedDiffView')}
@@ -913,6 +1198,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
         >
           <Pilcrow className="h-3.5 w-3.5" />
         </button>
+        </div>
       </div>
       {renderablePatch.kind === 'raw' ? (
         <div className="min-h-0 overflow-auto rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-2 dark:border-[#30302e] dark:bg-[#1d1d1b]">

@@ -49,4 +49,23 @@ describe('FakeCocoSandboxService', () => {
     service.failNext('startRunner');
     await assert.rejects(() => service.startRunner({ handle, command: 'python -m roomtalk_coco_runner' }), /startRunner failed/);
   });
+
+  it('lists configured workspace refs with T3-style filtering', async () => {
+    const service = new FakeCocoSandboxService();
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+    service.setWorkspaceRefs(handle.id, [
+      { name: 'main', kind: 'local' },
+      { name: 'origin/main', kind: 'remote', remoteName: 'origin' },
+      { name: 'origin/feature/search', kind: 'remote', remoteName: 'origin' },
+    ], 'feature/search');
+
+    assert.deepEqual(await service.listWorkspaceRefs(handle, { query: 'main', maxRefs: 2 }), {
+      available: true,
+      headRef: 'feature/search',
+      refs: [
+        { name: 'main', kind: 'local' },
+        { name: 'origin/main', kind: 'remote', remoteName: 'origin' },
+      ],
+    });
+  });
 });

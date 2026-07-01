@@ -84,7 +84,7 @@ describe('beginHorizontalResize', () => {
     expect(document.body.style.cursor).toBe('');
   });
 
-  it('finishes when pointer capture is lost even if the pressed button state is stale', () => {
+  it('keeps resizing when pointer capture is lost while the primary button is still pressed', () => {
     const handle = document.createElement('button');
     handle.setPointerCapture = vi.fn();
     handle.hasPointerCapture = vi.fn(() => true);
@@ -103,8 +103,10 @@ describe('beginHorizontalResize', () => {
     });
 
     handle.dispatchEvent(pointerEvent('lostpointercapture', { pointerId: 31, buttons: 1 }));
+    window.dispatchEvent(pointerEvent('pointermove', { pointerId: 31, clientX: 400, buttons: 1 }));
+    window.dispatchEvent(pointerEvent('pointerup', { pointerId: 31, clientX: 400, buttons: 0 }));
 
-    expect(onFinish).toHaveBeenCalledWith(300);
+    expect(onFinish).toHaveBeenCalledWith(500);
     expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
     expect(document.body.style.userSelect).toBe('');
     expect(document.body.style.cursor).toBe('');
@@ -262,6 +264,38 @@ describe('beginHorizontalResize', () => {
       pointerType: 'mouse',
       clientX: 900,
       buttons: 0,
+    }));
+
+    expect(onFinish).toHaveBeenCalledWith(360);
+    expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.cursor).toBe('');
+  });
+
+  it('finishes on mouse pointerup even when the browser reports stale buttons', () => {
+    const onFinish = vi.fn();
+    beginHorizontalResize({
+      pointerId: 33,
+      startX: 0,
+      initialWidth: 360,
+      direction: 1,
+      captureTarget: document.createElement('button'),
+      getBounds: () => ({ min: 240, max: 1200 }),
+      onResize: vi.fn(),
+      onFinish,
+    });
+
+    window.dispatchEvent(pointerEvent('pointerup', {
+      pointerId: 99,
+      pointerType: 'mouse',
+      clientX: 900,
+      buttons: 1,
+    }));
+    window.dispatchEvent(pointerEvent('pointermove', {
+      pointerId: 33,
+      pointerType: 'mouse',
+      clientX: 1100,
+      buttons: 1,
     }));
 
     expect(onFinish).toHaveBeenCalledWith(360);
@@ -431,7 +465,7 @@ describe('beginHorizontalResize', () => {
     expect(document.body.style.cursor).toBe('');
   });
 
-  it('finishes at the viewport edge after the drag is clamped at a boundary', () => {
+  it('keeps resizing active across a pressed viewport leave at a clamped boundary', () => {
     const onResize = vi.fn();
     const onFinish = vi.fn();
     beginHorizontalResize({
@@ -446,8 +480,13 @@ describe('beginHorizontalResize', () => {
     });
 
     window.dispatchEvent(mouseEvent('mouseleave', { clientX: 1600, buttons: 1 }));
+    expect(onFinish).not.toHaveBeenCalled();
+    window.dispatchEvent(mouseEvent('mousemove', { clientX: 1500, buttons: 1 }));
+    expect(onFinish).not.toHaveBeenCalled();
+    window.dispatchEvent(mouseEvent('mousemove', { clientX: 870, buttons: 1 }));
+    window.dispatchEvent(mouseEvent('mouseup', { button: 0 }));
 
-    expect(onFinish).toHaveBeenCalledWith(1200);
+    expect(onFinish).toHaveBeenCalledWith(1190);
     expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
     expect(document.body.style.userSelect).toBe('');
     expect(document.body.style.cursor).toBe('');

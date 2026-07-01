@@ -1072,7 +1072,7 @@ export const MessagePage: React.FC = () => {
         />
 
         {/* 主内容区域， flex-1 使其填充剩余空间，overflow-hidden 避免双重滚动条 */}
-        <main className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+        <main className="flex min-h-0 min-w-0 flex-1 overflow-hidden md:min-w-[360px]">
           {renderContent()} {/* 渲染当前视图 */}
         </main>
       </div>

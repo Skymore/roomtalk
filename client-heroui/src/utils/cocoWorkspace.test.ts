@@ -4,16 +4,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Message } from './types';
 import {
   loadCodeAgentWorkspaceDiff,
+  loadCodeAgentWorkspaceRefs,
   loadCodeAgentWorkspaceSnapshot,
   summarizeCocoMessages,
 } from './cocoWorkspace';
 
 const requestCodeAgentWorkspaceSnapshotMock = vi.hoisted(() => vi.fn());
 const requestCodeWorkspaceDiffMock = vi.hoisted(() => vi.fn());
+const requestCodeWorkspaceRefsMock = vi.hoisted(() => vi.fn());
 
 vi.mock('./socket', () => ({
   requestCodeAgentWorkspaceSnapshot: requestCodeAgentWorkspaceSnapshotMock,
   requestCodeWorkspaceDiff: requestCodeWorkspaceDiffMock,
+  requestCodeWorkspaceRefs: requestCodeWorkspaceRefsMock,
 }));
 
 const message = (overrides: Partial<Message>): Message => ({
@@ -31,6 +34,7 @@ describe('summarizeCocoMessages', () => {
     vi.restoreAllMocks();
     requestCodeAgentWorkspaceSnapshotMock.mockReset();
     requestCodeWorkspaceDiffMock.mockReset();
+    requestCodeWorkspaceRefsMock.mockReset();
   });
 
   it('returns an empty summary when there is no tool activity', () => {
@@ -117,8 +121,31 @@ describe('summarizeCocoMessages', () => {
     };
     requestCodeWorkspaceDiffMock.mockResolvedValue(diff);
 
-    await expect(loadCodeAgentWorkspaceDiff('room-1', { ignoreWhitespace: true })).resolves.toEqual(diff);
-    expect(requestCodeWorkspaceDiffMock).toHaveBeenCalledWith('room-1', { ignoreWhitespace: true });
+    await expect(loadCodeAgentWorkspaceDiff('room-1', { ignoreWhitespace: true, baseRef: 'origin/main' })).resolves.toEqual(diff);
+    expect(requestCodeWorkspaceDiffMock).toHaveBeenCalledWith('room-1', { ignoreWhitespace: true, scope: 'branch', baseRef: 'origin/main' });
+  });
+
+  it('loads and validates workspace refs over socket', async () => {
+    const refs = {
+      available: true,
+      headRef: 'feature/search',
+      refs: [
+        { name: 'main', kind: 'local' },
+        { name: 'origin/main', kind: 'remote', remoteName: 'origin' },
+        { name: 'bad', kind: 'tag' },
+      ],
+    };
+    requestCodeWorkspaceRefsMock.mockResolvedValue(refs);
+
+    await expect(loadCodeAgentWorkspaceRefs('room-1', { query: 'main', limit: 25 })).resolves.toEqual({
+      available: true,
+      headRef: 'feature/search',
+      refs: [
+        { name: 'main', kind: 'local' },
+        { name: 'origin/main', kind: 'remote', remoteName: 'origin' },
+      ],
+    });
+    expect(requestCodeWorkspaceRefsMock).toHaveBeenCalledWith('room-1', { query: 'main', limit: 25 });
   });
 
   it('normalizes missing workspace artifacts to an empty list for older servers', async () => {

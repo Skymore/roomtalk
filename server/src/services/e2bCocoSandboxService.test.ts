@@ -78,6 +78,18 @@ class FakeE2BDriver implements E2BSandboxDriver {
                 '-\t-\tpublic/logo.png',
                 '',
               ].join('\n'));
+            } else if (command.includes('__ROOMTALK_REFS__')) {
+              stdout.end([
+                '__ROOMTALK_HEAD_REF__',
+                'feature/search',
+                '__ROOMTALK_REFS__',
+                'main\trefs/heads/main',
+                'feature/search\trefs/heads/feature/search',
+                'origin/HEAD\trefs/remotes/origin/HEAD',
+                'origin/main\trefs/remotes/origin/main',
+                'upstream/main\trefs/remotes/upstream/main',
+                '',
+              ].join('\n'));
             } else {
               stdout.end();
             }
@@ -313,6 +325,45 @@ describe('E2BCocoSandboxService', () => {
     await service.getWorkspaceDiff(handle, { ignoreWhitespace: true });
 
     assert.match(driver.commands[0], /git diff --no-ext-diff -w --src-prefix=a\/ --dst-prefix=b\/ HEAD --/);
+  });
+
+  it('reads T3 working tree diffs without the HEAD comparison target', async () => {
+    const driver = new FakeE2BDriver();
+    const service = new E2BCocoSandboxService(driver, { templateId: 'roomtalk-coco' });
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+
+    await service.getWorkspaceDiff(handle, { scope: 'unstaged' });
+
+    assert.match(driver.commands[0], /git diff --no-ext-diff --src-prefix=a\/ --dst-prefix=b\/ --/);
+    assert.doesNotMatch(driver.commands[0], /git diff --no-ext-diff --src-prefix=a\/ --dst-prefix=b\/ HEAD --/);
+  });
+
+  it('reads T3 branch diffs against a selected base ref', async () => {
+    const driver = new FakeE2BDriver();
+    const service = new E2BCocoSandboxService(driver, { templateId: 'roomtalk-coco' });
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+
+    await service.getWorkspaceDiff(handle, { baseRef: 'origin/main' });
+
+    assert.match(driver.commands[0], /git diff --no-ext-diff --src-prefix=a\/ --dst-prefix=b\/ 'origin\/main' --/);
+  });
+
+  it('lists T3-style local and remote workspace refs from git', async () => {
+    const driver = new FakeE2BDriver();
+    const service = new E2BCocoSandboxService(driver, { templateId: 'roomtalk-coco' });
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+
+    assert.deepEqual(await service.listWorkspaceRefs(handle, { query: 'main', maxRefs: 3 }), {
+      available: true,
+      headRef: 'feature/search',
+      refs: [
+        { name: 'main', kind: 'local' },
+        { name: 'origin/main', kind: 'remote', remoteName: 'origin' },
+        { name: 'upstream/main', kind: 'remote', remoteName: 'upstream' },
+      ],
+    });
+    assert.match(driver.commands[0], /git for-each-ref --format="%\(refname:short\)%09%\(refname\)" refs\/heads refs\/remotes/);
+    assert.doesNotMatch(JSON.stringify(await service.listWorkspaceRefs(handle)), /origin\/HEAD/);
   });
 
   it('searches workspace entries with T3-style fuzzy path ranking', async () => {

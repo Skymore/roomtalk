@@ -2,7 +2,7 @@ import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { createCocoAccessControl } from '../services/cocoAccessControl';
 import { CodeWorkspaceAssetAccess } from '../services/codeWorkspaceAssetAccess';
-import { CocoWorkspaceChanges, CocoWorkspaceEntry } from '../services/cocoSandboxService';
+import { CocoWorkspaceChanges, CocoWorkspaceEntry, CocoWorkspaceRef } from '../services/cocoSandboxService';
 import { Message, Room, RoomMember } from '../types';
 import { registerCodeAgentWorkspaceHandlers } from './codeAgentWorkspaceHandlers';
 
@@ -72,6 +72,8 @@ const createHarness = (options: {
   members?: RoomMember[];
   messages?: Message[];
   workspaceEntries?: CocoWorkspaceEntry[];
+  workspaceRefs?: CocoWorkspaceRef[];
+  workspaceHeadRef?: string;
   workspaceChanges?: CocoWorkspaceChanges;
   workspaceDiffPatch?: string;
   workspaceFileContent?: string;
@@ -85,8 +87,9 @@ const createHarness = (options: {
   const messages = options.messages || [];
   const listWorkspaceEntriesCalls: Array<{ sandboxId: string; maxDepth?: number; maxEntries?: number }> = [];
   const searchWorkspaceEntriesCalls: Array<{ sandboxId: string; query: string; maxDepth?: number; maxEntries?: number }> = [];
+  const listWorkspaceRefsCalls: Array<{ sandboxId: string; query?: string; maxRefs?: number }> = [];
   const getWorkspaceChangesCalls: Array<{ sandboxId: string }> = [];
-  const getWorkspaceDiffCalls: Array<{ sandboxId: string; maxBytes?: number; ignoreWhitespace?: boolean }> = [];
+  const getWorkspaceDiffCalls: Array<{ sandboxId: string; maxBytes?: number; ignoreWhitespace?: boolean; scope?: string; baseRef?: string }> = [];
   const readWorkspaceFileCalls: Array<{ sandboxId: string; path: string; maxBytes?: number }> = [];
   const writeWorkspaceFileCalls: Array<{ sandboxId: string; path: string; content: string; encoding?: 'utf-8' | 'base64' }> = [];
   const createWorkspaceDirectoryCalls: Array<{ sandboxId: string; path: string }> = [];
@@ -153,6 +156,8 @@ const createHarness = (options: {
           sandboxId: handle.id,
           maxBytes: diffOptions?.maxBytes,
           ignoreWhitespace: diffOptions?.ignoreWhitespace,
+          scope: diffOptions?.scope,
+          ...(diffOptions?.baseRef ? { baseRef: diffOptions.baseRef } : {}),
         });
         const patch = options.workspaceDiffPatch || '';
         return {
@@ -160,6 +165,18 @@ const createHarness = (options: {
           patch,
           byteSize: Buffer.byteLength(patch),
           truncated: false,
+        };
+      },
+      listWorkspaceRefs: async (handle, refsOptions) => {
+        listWorkspaceRefsCalls.push({
+          sandboxId: handle.id,
+          query: refsOptions?.query,
+          maxRefs: refsOptions?.maxRefs,
+        });
+        return {
+          available: true,
+          refs: options.workspaceRefs || [],
+          ...(options.workspaceHeadRef ? { headRef: options.workspaceHeadRef } : {}),
         };
       },
       listWorkspaceEntries: async (handle, listOptions) => {
@@ -237,6 +254,7 @@ const createHarness = (options: {
     getWorkspaceDiffCalls,
     listWorkspaceEntriesCalls,
     searchWorkspaceEntriesCalls,
+    listWorkspaceRefsCalls,
     readWorkspaceFileCalls,
     writeWorkspaceFileCalls,
     createWorkspaceDirectoryCalls,
@@ -364,6 +382,35 @@ describe('code-agent workspace socket handlers', () => {
     }]);
   });
 
+  it('lists T3-style workspace refs through the registered socket session', async () => {
+    const { socket, listWorkspaceRefsCalls } = createHarness({
+      workspaceRefs: [
+        { name: 'main', kind: 'local' },
+        { name: 'origin/main', kind: 'remote', remoteName: 'origin' },
+        { name: 'origin/feature/search', kind: 'remote', remoteName: 'origin' },
+      ],
+      workspaceHeadRef: 'feature/search',
+    });
+
+    const response = await socket.invoke<any>('list_code_workspace_refs', {
+      roomId: 'room-1',
+      query: 'main',
+      limit: 25,
+    });
+
+    assert.equal(response.success, true);
+    assert.deepEqual(response.refs, {
+      available: true,
+      headRef: 'feature/search',
+      refs: [
+        { name: 'main', kind: 'local' },
+        { name: 'origin/main', kind: 'remote', remoteName: 'origin' },
+        { name: 'origin/feature/search', kind: 'remote', remoteName: 'origin' },
+      ],
+    });
+    assert.deepEqual(listWorkspaceRefsCalls, [{ sandboxId: 'sandbox-1', query: 'main', maxRefs: 25 }]);
+  });
+
   it('reads Coco workspace files through the registered socket session', async () => {
     const { socket, readWorkspaceFileCalls } = createHarness({
       workspaceFileContent: 'export default {}',
@@ -409,7 +456,7 @@ describe('code-agent workspace socket handlers', () => {
       byteSize: Buffer.byteLength(patch),
       truncated: false,
     });
-    assert.deepEqual(getWorkspaceDiffCalls, [{ sandboxId: 'sandbox-1', maxBytes: 10485760, ignoreWhitespace: false }]);
+    assert.deepEqual(getWorkspaceDiffCalls, [{ sandboxId: 'sandbox-1', maxBytes: 10485760, ignoreWhitespace: false, scope: 'branch' }]);
   });
 
   it('forwards the T3 whitespace diff option through the socket session', async () => {
@@ -423,7 +470,42 @@ describe('code-agent workspace socket handlers', () => {
     });
 
     assert.equal(response.success, true);
-    assert.deepEqual(getWorkspaceDiffCalls, [{ sandboxId: 'sandbox-1', maxBytes: 10485760, ignoreWhitespace: true }]);
+    assert.deepEqual(getWorkspaceDiffCalls, [{ sandboxId: 'sandbox-1', maxBytes: 10485760, ignoreWhitespace: true, scope: 'branch' }]);
+  });
+
+  it('forwards the T3 working tree diff scope through the socket session', async () => {
+    const { socket, getWorkspaceDiffCalls } = createHarness({
+      workspaceDiffPatch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+    });
+
+    const response = await socket.invoke<any>('read_code_workspace_diff', {
+      roomId: 'room-1',
+      scope: 'unstaged',
+    });
+
+    assert.equal(response.success, true);
+    assert.deepEqual(getWorkspaceDiffCalls, [{ sandboxId: 'sandbox-1', maxBytes: 10485760, ignoreWhitespace: false, scope: 'unstaged' }]);
+  });
+
+  it('forwards the T3 branch base ref through the socket session', async () => {
+    const { socket, getWorkspaceDiffCalls } = createHarness({
+      workspaceDiffPatch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+    });
+
+    const response = await socket.invoke<any>('read_code_workspace_diff', {
+      roomId: 'room-1',
+      scope: 'branch',
+      baseRef: 'origin/main',
+    });
+
+    assert.equal(response.success, true);
+    assert.deepEqual(getWorkspaceDiffCalls, [{
+      sandboxId: 'sandbox-1',
+      maxBytes: 10485760,
+      ignoreWhitespace: false,
+      scope: 'branch',
+      baseRef: 'origin/main',
+    }]);
   });
 
   it('creates T3-style workspace asset URLs through the socket control plane', async () => {

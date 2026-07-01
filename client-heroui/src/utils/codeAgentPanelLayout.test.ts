@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH,
   clampCodeAgentFilePanelWidthForSidebarResize,
   getCodeAgentPanelResizeBounds,
   getSidebarMaxWidthForChat,
@@ -40,6 +41,14 @@ describe('getCodeAgentPanelResizeBounds', () => {
     });
   });
 
+  it('can reserve a larger chat width for left sidebar resizing', () => {
+    expect(getCodeAgentPanelResizeBounds(840, CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH)).toEqual({
+      min: 360,
+      max: 360,
+      chatMin: 480,
+    });
+  });
+
   it('allows the sidebar to consume only chat width above the reserved minimum', () => {
     expect(getSidebarMaxWidthForChat(280, 900, 480)).toBe(700);
     expect(getSidebarMaxWidthForChat(280, 480, 480)).toBe(280);
@@ -52,11 +61,18 @@ describe('getCodeAgentPanelResizeBounds', () => {
 
   it('bases code-agent sidebar resizing on the full shell width and reserved right panel width', () => {
     expect(getSidebarMaxWidthForCodeAgentShell(1280, 360)).toBe(560);
+    expect(getSidebarMaxWidthForCodeAgentShell(1280, 360, CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH)).toBe(440);
     expect(getSidebarMaxWidthForCodeAgentShell(1280, 48)).toBe(872);
   });
 
   it('shrinks the right file panel during left sidebar resizing before chat can disappear', () => {
     expect(clampCodeAgentFilePanelWidthForSidebarResize(760, 1600, 860)).toBe(380);
     expect(clampCodeAgentFilePanelWidthForSidebarResize(760, 1600, 520)).toBe(720);
+    expect(clampCodeAgentFilePanelWidthForSidebarResize(
+      760,
+      1600,
+      760,
+      CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH,
+    )).toBe(360);
   });
 });
