@@ -1,5 +1,5 @@
 import React from 'react';
-import { Icon } from '@iconify/react';
+import { ChevronRight, Folder, FolderClosed } from 'lucide-react';
 import {
   buildCodeAgentChangedFileTree,
   collectChangedFileDirectoryPaths,
@@ -65,18 +65,19 @@ export const CodeAgentChangedFilesTree: React.FC<CodeAgentChangedFilesTreeProps>
         <div key={`dir:${node.path}`}>
           <button
             type="button"
+            data-scroll-anchor-ignore
             className="group flex w-full min-w-0 items-center gap-1.5 rounded-lg py-1 pr-2 text-left transition-colors hover:bg-[#f0eee6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:hover:bg-[#30302e]"
             style={{ paddingLeft: `${leftPadding}px` }}
             onClick={() => toggleDirectory(node.path)}
           >
-            <Icon
-              icon="lucide:chevron-right"
+            <ChevronRight
               className={`h-3.5 w-3.5 shrink-0 text-[#87867f] transition-transform dark:text-[#8f8d86] ${isExpanded ? 'rotate-90' : ''}`}
             />
-            <Icon
-              icon={isExpanded ? 'lucide:folder-open' : 'lucide:folder'}
-              className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]"
-            />
+            {isExpanded ? (
+              <Folder className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+            ) : (
+              <FolderClosed className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+            )}
             <span className="truncate font-mono text-[11px] text-[#4d4c48] dark:text-[#e8e6dc]">
               {node.name}
             </span>

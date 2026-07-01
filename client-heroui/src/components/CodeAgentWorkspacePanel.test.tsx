@@ -315,6 +315,7 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(screen.getByText('-1')).toBeTruthy();
     expect(screen.getByText('src')).toBeTruthy();
     expect(screen.getByText('App.tsx')).toBeTruthy();
+    expect(screen.getByText('codeAgentCollapseChangedFileTree').hasAttribute('data-scroll-anchor-ignore')).toBe(true);
     expect(screen.getByTestId('code-agent-changed-files-tree')).toBeTruthy();
     fireEvent.click(screen.getByText('App.tsx'));
 

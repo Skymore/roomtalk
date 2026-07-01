@@ -392,7 +392,7 @@ export function reconcileCodeAgentFileSurfaces(
         ...current,
         isOpen: surfaces.length > 0 && current.isOpen,
         surfaces,
-        activeSurfaceId: activeStillExists ? current.activeSurfaceId : (surfaces[0]?.id ?? null),
+        activeSurfaceId: activeStillExists ? current.activeSurfaceId : (surfaces.at(-1)?.id ?? null),
       };
     }),
   }));

@@ -27,7 +27,7 @@ export const CodeAgentDiffStatLabel = React.memo(function CodeAgentDiffStatLabel
         className={`${
           layout === 'inline'
             ? 'inline-flex items-center gap-1 tabular-nums align-middle'
-            : 'inline-grid grid-cols-[4ch_4ch] gap-1 text-right tabular-nums align-middle'
+            : 'inline-grid grid-cols-[4ch_4ch] gap-2 text-right tabular-nums align-middle'
         } ${className}`}
       >
         <span className="font-mono text-[#2f6f4e] dark:text-[#65d08a]">+{formatCompactDiffCount(additions)}</span>

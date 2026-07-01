@@ -135,12 +135,16 @@ export function CodeAgentEditableFileSurface({
     onFileChange((current) => updateWorkspaceFileContents(current, filePath, contents));
   }, [filePath, onFileChange, roomId]);
 
-  const confirmFileContents = useCallback((contents: string) => {
+  const confirmFileContents = useCallback((contents: string): boolean => {
     if (latestDraftContentsRef.current !== contents) {
-      return;
+      return false;
     }
-    confirmCodeAgentProjectFileQueryData(roomId, filePath, contents);
+    const confirmed = confirmCodeAgentProjectFileQueryData(roomId, filePath, contents);
+    if (!confirmed) {
+      return false;
+    }
     onFileChange((current) => updateWorkspaceFileContents(current, filePath, contents));
+    return true;
   }, [filePath, onFileChange, roomId]);
 
   const handlePendingChange = useCallback((pending: boolean) => {
@@ -156,7 +160,6 @@ export function CodeAgentEditableFileSurface({
         onSaveStateChange(filePath, 'saving', null);
         try {
           await writeCodeWorkspaceFile(roomId, filePath, contents, 'utf-8');
-          onEntriesChanged();
           return { _tag: 'Success' };
         } catch (error) {
           onSaveStateChange(filePath, 'error', error instanceof Error ? error.message : 'File save failed.');
@@ -164,7 +167,9 @@ export function CodeAgentEditableFileSurface({
         }
       },
       onConfirmed: (contents) => {
-        confirmFileContents(contents);
+        if (confirmFileContents(contents)) {
+          onEntriesChanged();
+        }
       },
     }),
     [confirmFileContents, filePath, handlePendingChange, onEntriesChanged, onSaveStateChange, roomId],

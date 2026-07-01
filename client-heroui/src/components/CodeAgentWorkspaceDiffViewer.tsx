@@ -329,7 +329,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     scopeKey: null,
     fileKeys: new Set(),
   }));
-  const collapseScopeKey = `${roomId}:${refreshKey}:${diffScope}:${diffBaseRef ?? 'auto'}:${diffIgnoreWhitespace ? 'ignore-whitespace' : 'show-whitespace'}`;
+  const collapseScopeKey = `${roomId}:${diffScope}`;
   const collapsedDiffFileKeys = collapsedDiffFiles.scopeKey === collapseScopeKey
     ? collapsedDiffFiles.fileKeys
     : EMPTY_COLLAPSED_DIFF_FILE_KEYS;

@@ -432,8 +432,7 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
 
     render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
 
-    const initialCodeView = await screen.findByTestId('code-view');
-    const initialMountId = initialCodeView.dataset.mountId;
+    expect(await screen.findByTestId('code-view')).toBeTruthy();
     expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenLastCalledWith(
       'room-1',
       expect.objectContaining({ ignoreWhitespace: false, scope: 'branch' }),
@@ -443,9 +442,6 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
 
     await waitFor(() => {
       expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenCalledTimes(2);
-    });
-    await waitFor(() => {
-      expect(screen.getByTestId('code-view').dataset.mountId).not.toBe(initialMountId);
     });
     expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenLastCalledWith(
       'room-1',
@@ -591,6 +587,37 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(screen.getByTestId('diff-file-none:src/App.tsx').getAttribute('data-collapsed')).toBe('true');
     expect(screen.getByTestId('diff-file-none:src/utils.ts').getAttribute('data-collapsed')).toBe('false');
     expect(screen.getByLabelText('codeAgentExpandDiffFile').getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('keeps T3-style collapsed diff files across workspace snapshot refreshes', async () => {
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          { name: 'src/App.tsx', hunks: [], additionLines: [], deletionLines: [], type: 'change' },
+          { name: 'src/utils.ts', hunks: [], additionLines: [], deletionLines: [], type: 'new' },
+        ],
+      },
+    ]);
+
+    const { rerender } = render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
+
+    expect((await screen.findByTestId('diff-file-none:src/App.tsx')).getAttribute('data-collapsed')).toBe('false');
+    fireEvent.click(screen.getAllByLabelText('codeAgentCollapseDiffFile')[0]);
+    expect(screen.getByTestId('diff-file-none:src/App.tsx').getAttribute('data-collapsed')).toBe('true');
+
+    rerender(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-2" />);
+
+    await waitFor(() => {
+      expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.getByTestId('diff-file-none:src/App.tsx').getAttribute('data-collapsed')).toBe('true');
+    expect(screen.getByTestId('diff-file-none:src/utils.ts').getAttribute('data-collapsed')).toBe('false');
   });
 
   it('supports T3-style draft and persisted comments from selected diff lines', async () => {

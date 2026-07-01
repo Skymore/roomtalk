@@ -323,6 +323,8 @@ function useCodeWorkspaceFileQuery(roomId: string, relativePath: string | null, 
   const [error, setError] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
   const normalizedPath = relativePath ? normalizeWorkspacePath(relativePath) : null;
+  const latestQueryStateRef = useRef({ normalizedPath, enabled });
+  latestQueryStateRef.current = { normalizedPath, enabled };
 
   const setCachedData = useCallback<React.Dispatch<React.SetStateAction<CodeWorkspaceFile | null>>>((nextData) => {
     setData((current) => {
@@ -337,7 +339,12 @@ function useCodeWorkspaceFileQuery(roomId: string, relativePath: string | null, 
   }, []);
 
   const refresh = useCallback(() => {
-    if (!normalizedPath || !enabled) {
+    if (
+      !normalizedPath ||
+      !enabled ||
+      latestQueryStateRef.current.normalizedPath !== normalizedPath ||
+      !latestQueryStateRef.current.enabled
+    ) {
       return;
     }
 
@@ -356,23 +363,37 @@ function useCodeWorkspaceFileQuery(roomId: string, relativePath: string | null, 
 
     loadCodeWorkspaceFile(roomId, normalizedPath, { signal: controller.signal }).then(
       (file) => {
-        if (controller.signal.aborted || requestIdRef.current !== requestId) {
+        if (
+          controller.signal.aborted ||
+          requestIdRef.current !== requestId ||
+          latestQueryStateRef.current.normalizedPath !== normalizedPath ||
+          !latestQueryStateRef.current.enabled
+        ) {
           return;
         }
         const normalizedFilePath = normalizeWorkspacePath(file.path);
         const optimisticFile = getOptimisticCodeAgentProjectFileQueryData(roomId, normalizedFilePath);
         fileCacheRef.current.set(normalizedFilePath, file);
-        settleConfirmedCodeAgentProjectFileQueryData(roomId, normalizedFilePath, file);
-        setData(optimisticFile ?? file);
+        const settled = settleConfirmedCodeAgentProjectFileQueryData(roomId, normalizedFilePath, file);
+        setData(settled ? file : optimisticFile ?? file);
       },
       (nextError) => {
-        if (controller.signal.aborted || requestIdRef.current !== requestId) {
+        if (
+          controller.signal.aborted ||
+          requestIdRef.current !== requestId ||
+          latestQueryStateRef.current.normalizedPath !== normalizedPath ||
+          !latestQueryStateRef.current.enabled
+        ) {
           return;
         }
         setError(nextError instanceof Error ? nextError.message : 'File open failed.');
       },
     ).finally(() => {
-      if (requestIdRef.current === requestId) {
+      if (
+        requestIdRef.current === requestId &&
+        latestQueryStateRef.current.normalizedPath === normalizedPath &&
+        latestQueryStateRef.current.enabled
+      ) {
         setIsPending(false);
         abortRef.current = null;
       }
@@ -727,6 +748,11 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const refreshEntries = useCallback(() => {
     refreshWorkspaceEntries();
   }, [refreshWorkspaceEntries]);
+
+  const refreshAfterFileContentsChanged = useCallback(() => {
+    refreshWorkspaceEntries();
+    refreshSourceFile();
+  }, [refreshSourceFile, refreshWorkspaceEntries]);
 
   const handleAssetPreviewChanged = useCallback((changedPath: string) => {
     setAssetPreviewRevisions((current) => ({
@@ -1425,7 +1451,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
           onToggleExplorer={toggleExplorer}
           onSaveStateChange={handleSaveStateChange}
           onFileSavePendingChange={onFileSavePendingChange}
-          onEntriesChanged={refreshEntries}
+          onEntriesChanged={refreshAfterFileContentsChanged}
           onAssetPreviewChanged={handleAssetPreviewChanged}
           onOpenWorkspaceFile={handleOpenWorkspaceFileFromMarkdown}
           reviewComments={reviewComments}

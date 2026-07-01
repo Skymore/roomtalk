@@ -460,6 +460,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                       <div className="flex justify-end">
                         <button
                           type="button"
+                          data-scroll-anchor-ignore
                           className="rounded-md border border-[#dedbd0] px-2 py-1 text-[11px] font-semibold text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:border-[#30302e] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
                           onClick={() => setAllChangedDirectoriesExpanded((expanded) => !expanded)}
                         >

@@ -197,6 +197,28 @@ describe('codeAgentRightPanelStore', () => {
     });
   });
 
+  it('falls back to the last remaining surface when reconciling invalid files like T3', () => {
+    openCodeAgentRightPanel('room-1', 'diff');
+    openCodeAgentRightPanelFile('room-1', 'src/index.ts');
+    openCodeAgentRightPanelFile('room-1', 'README.md');
+    activateCodeAgentRightPanelSurface('room-1', 'file:src/index.ts');
+
+    reconcileCodeAgentFileSurfaces('room-1', true, new Set(['README.md']));
+
+    expect(readCodeAgentRightPanelState('room-1')).toMatchObject({
+      isOpen: true,
+      activeSurfaceId: 'file:README.md',
+      surfaces: [
+        { id: 'diff', kind: 'diff' },
+        {
+          id: 'file:README.md',
+          kind: 'file',
+          relativePath: 'README.md',
+        },
+      ],
+    });
+  });
+
   it('closes all surfaces and removes room state', () => {
     openCodeAgentRightPanelFile('room-1', 'src/index.ts');
     closeAllCodeAgentRightPanelSurfaces('room-1');

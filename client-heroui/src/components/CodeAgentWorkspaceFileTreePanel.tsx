@@ -80,6 +80,7 @@ export function CodeAgentWorkspaceFileTreePanel({
 }: CodeAgentWorkspaceFileTreePanelProps) {
   const { t } = useTranslation();
   const entryKindsRef = useRef<ReadonlyMap<string, CodeAgentProjectEntry['kind']>>(entryKinds);
+  const selectionSyncingRef = useRef(false);
   const treePaths = useMemo(() => entries.map(treePath), [entries]);
   const previousTreePathsRef = useRef<readonly string[]>([]);
   const fileCount = useMemo(
@@ -94,6 +95,9 @@ export function CodeAgentWorkspaceFileTreePanel({
     initialExpansion: 1,
     icons: T3_PIERRE_ICONS,
     onSelectionChange: (selectedPaths) => {
+      if (selectionSyncingRef.current) {
+        return;
+      }
       const nextPath = selectedPaths.at(-1)?.replace(/\/$/, '');
       const kind = nextPath ? entryKindsRef.current.get(nextPath) : undefined;
       if (nextPath && kind) {
@@ -119,6 +123,19 @@ export function CodeAgentWorkspaceFileTreePanel({
   useEffect(() => {
     if (!selectedPath || !entryKinds.has(selectedPath)) {
       return;
+    }
+    const selectedItem = model.getItem(selectedPath);
+    const currentSelectedPaths = model.getSelectedPaths().map((path) => path.replace(/\/$/, ''));
+    if (selectedItem && (currentSelectedPaths.length !== 1 || currentSelectedPaths[0] !== selectedPath)) {
+      selectionSyncingRef.current = true;
+      try {
+        for (const path of model.getSelectedPaths()) {
+          model.getItem(path)?.deselect();
+        }
+        selectedItem?.select();
+      } finally {
+        selectionSyncingRef.current = false;
+      }
     }
     model.focusPath(selectedPath);
     model.scrollToPath(selectedPath, { offset: 'nearest' });

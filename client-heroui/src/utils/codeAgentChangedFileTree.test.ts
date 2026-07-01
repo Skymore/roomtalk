@@ -66,6 +66,84 @@ describe('buildCodeAgentChangedFileTree', () => {
       },
     ]);
   });
+
+  it('keeps zero-valued file stats and includes only their numeric contribution', () => {
+    expect(buildCodeAgentChangedFileTree([
+      { path: 'docs/notes.md', additions: 0, deletions: 0 },
+      { path: 'docs/todo.md', additions: 1, deletions: 1 },
+    ])).toEqual([
+      {
+        kind: 'directory',
+        name: 'docs',
+        path: 'docs',
+        stat: { additions: 1, deletions: 1 },
+        children: [
+          {
+            kind: 'file',
+            name: 'notes.md',
+            path: 'docs/notes.md',
+            stat: { additions: 0, deletions: 0 },
+          },
+          {
+            kind: 'file',
+            name: 'todo.md',
+            path: 'docs/todo.md',
+            stat: { additions: 1, deletions: 1 },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('compacts only single-directory chains and stops at branch points', () => {
+    expect(buildCodeAgentChangedFileTree([
+      { path: 'apps/server/src/index.ts', additions: 2, deletions: 1 },
+      { path: 'apps/server/main.ts', additions: 4, deletions: 0 },
+    ])).toEqual([
+      {
+        kind: 'directory',
+        name: 'apps/server',
+        path: 'apps/server',
+        stat: { additions: 6, deletions: 1 },
+        children: [
+          {
+            kind: 'directory',
+            name: 'src',
+            path: 'apps/server/src',
+            stat: { additions: 2, deletions: 1 },
+            children: [
+              {
+                kind: 'file',
+                name: 'index.ts',
+                path: 'apps/server/src/index.ts',
+                stat: { additions: 2, deletions: 1 },
+              },
+            ],
+          },
+          {
+            kind: 'file',
+            name: 'main.ts',
+            path: 'apps/server/main.ts',
+            stat: { additions: 4, deletions: 0 },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('preserves leading/trailing whitespace in path segments', () => {
+    const tree = buildCodeAgentChangedFileTree([
+      { path: 'a/file.ts', additions: 1, deletions: 0 },
+      { path: ' a/file.ts', additions: 2, deletions: 0 },
+    ]);
+
+    expect(tree).toHaveLength(2);
+    const directoryNodes = tree.filter(
+      (node): node is Extract<(typeof tree)[number], { kind: 'directory' }> => node.kind === 'directory',
+    );
+    expect(directoryNodes.map((node) => node.name).sort()).toEqual([' a', 'a']);
+    expect(directoryNodes.map((node) => node.path).sort()).toEqual([' a', 'a']);
+  });
 });
 
 describe('formatCompactDiffCount', () => {
