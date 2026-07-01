@@ -6,6 +6,11 @@ import { useTranslation } from 'react-i18next';
 import { loadCodeAgentWorkspaceDiff, loadCodeAgentWorkspaceRefs, type CodeAgentWorkspaceDiff, type CodeAgentWorkspaceDiffScope, type CodeAgentWorkspaceRefs } from '../utils/cocoWorkspace';
 import { buildCodeAgentBaseRefChoices, filterCodeAgentBaseRefChoices, type CodeAgentBaseRefChoice } from '../utils/codeWorkspaceRefs';
 import {
+  selectCodeAgentDiffBranchBaseRef,
+  selectCodeAgentDiffScope,
+  useCodeAgentDiffPanelSelection,
+} from '../utils/codeAgentDiffPanelStore';
+import {
   buildFileDiffRenderKey,
   fnv1a32,
   getRenderablePatch,
@@ -20,6 +25,7 @@ import {
   restoreDiffReviewCommentRange,
   type ReviewCommentContext,
 } from '../utils/codeAgentReviewComments';
+import { openCodeAgentDiffFilePrimaryAction } from '../utils/codeAgentDiffFileActions';
 import {
   type DiffCommentAnnotationEntry,
   type DiffCommentAnnotationGroup,
@@ -64,8 +70,6 @@ function useResolvedTheme() {
 const DIFF_WORD_WRAP_STORAGE_KEY = 'roomtalk.codeWorkspace.diffWordWrap';
 const DIFF_RENDER_MODE_STORAGE_KEY = 'roomtalk.codeWorkspace.diffRenderMode';
 const DIFF_IGNORE_WHITESPACE_STORAGE_KEY = 'roomtalk.codeWorkspace.diffIgnoreWhitespace';
-const DIFF_SCOPE_STORAGE_KEY = 'roomtalk.codeWorkspace.diffScope';
-const DIFF_BASE_REF_STORAGE_PREFIX = 'roomtalk.codeWorkspace.diffBaseRef.';
 const AUTOMATIC_BASE_REF = '__automatic_base_ref__';
 const WORKSPACE_REF_LIMIT = 200;
 type DiffRenderMode = 'stacked' | 'split';
@@ -238,28 +242,6 @@ function readInitialDiffIgnoreWhitespace() {
     return window.localStorage.getItem(DIFF_IGNORE_WHITESPACE_STORAGE_KEY) === 'true';
   } catch {
     return false;
-  }
-}
-
-function readInitialDiffScope(): CodeAgentWorkspaceDiffScope {
-  if (typeof window === 'undefined') {
-    return 'branch';
-  }
-  try {
-    return window.localStorage.getItem(DIFF_SCOPE_STORAGE_KEY) === 'unstaged' ? 'unstaged' : 'branch';
-  } catch {
-    return 'branch';
-  }
-}
-
-function readInitialDiffBaseRef(roomId: string): string | null {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-  try {
-    return window.localStorage.getItem(`${DIFF_BASE_REF_STORAGE_PREFIX}${roomId}`)?.trim() || null;
-  } catch {
-    return null;
   }
 }
 
@@ -476,8 +458,9 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   const [wordWrap, setWordWrap] = useState(readInitialDiffWordWrap);
   const [diffRenderMode, setDiffRenderMode] = useState<DiffRenderMode>(readInitialDiffRenderMode);
   const [diffIgnoreWhitespace, setDiffIgnoreWhitespace] = useState(readInitialDiffIgnoreWhitespace);
-  const [diffScope, setDiffScope] = useState<CodeAgentWorkspaceDiffScope>(readInitialDiffScope);
-  const [diffBaseRef, setDiffBaseRef] = useState<string | null>(() => readInitialDiffBaseRef(roomId));
+  const diffPanelSelection = useCodeAgentDiffPanelSelection(roomId);
+  const diffScope: CodeAgentWorkspaceDiffScope = diffPanelSelection.kind === 'unstaged' ? 'unstaged' : 'branch';
+  const diffBaseRef = diffPanelSelection.kind === 'branch' ? diffPanelSelection.baseRef : null;
   const [baseRefQuery, setBaseRefQuery] = useState('');
   const [workspaceRefs, setWorkspaceRefs] = useState<CodeAgentWorkspaceRefs | null>(null);
   const [workspaceRefsError, setWorkspaceRefsError] = useState<string | null>(null);
@@ -502,7 +485,6 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   const reviewCommentSectionTitle = t('codeAgentChanges');
 
   useEffect(() => {
-    setDiffBaseRef(readInitialDiffBaseRef(roomId));
     setBaseRefQuery('');
     setWorkspaceRefs(null);
     setWorkspaceRefsError(null);
@@ -547,27 +529,12 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   };
 
   const selectDiffScope = (nextScope: CodeAgentWorkspaceDiffScope) => {
-    setDiffScope(nextScope);
-    try {
-      window.localStorage.setItem(DIFF_SCOPE_STORAGE_KEY, nextScope);
-    } catch {
-      // Preference persistence is best-effort; the live scope still applies.
-    }
+    selectCodeAgentDiffScope(roomId, nextScope);
   };
 
   const selectDiffBaseRef = useCallback((nextBaseRef: string | null) => {
-    setDiffBaseRef(nextBaseRef);
     setBaseRefQuery('');
-    try {
-      const storageKey = `${DIFF_BASE_REF_STORAGE_PREFIX}${roomId}`;
-      if (nextBaseRef) {
-        window.localStorage.setItem(storageKey, nextBaseRef);
-      } else {
-        window.localStorage.removeItem(storageKey);
-      }
-    } catch {
-      // Preference persistence is best-effort; the live base ref still applies.
-    }
+    selectCodeAgentDiffBranchBaseRef(roomId, nextBaseRef);
   }, [roomId]);
 
   const toggleDiffFileCollapsed = (fileKey: string) => {
@@ -921,7 +888,10 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     if (rawDirectTitle) {
       const openPath = resolveDiffTitleOpenPath(rawDirectTitle, diffTitlePathMap);
       if (openPath) {
-        onOpenFile(openPath);
+        openCodeAgentDiffFilePrimaryAction({
+          filePath: openPath,
+          openInWorkspaceFileViewer: onOpenFile,
+        });
       }
       return;
     }
@@ -939,7 +909,10 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
         ? diffFileSummaries[0].path
         : null;
     if (openPath) {
-      onOpenFile(withWorkspaceLineTarget(openPath, lineNumber));
+      openCodeAgentDiffFilePrimaryAction({
+        filePath: withWorkspaceLineTarget(openPath, lineNumber),
+        openInWorkspaceFileViewer: onOpenFile,
+      });
     }
   };
 
@@ -1228,28 +1201,48 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
               </div>
               <div className="flex gap-1.5 overflow-x-auto pb-0.5">
                 {diffFileSummaries.map((file) => (
-                  <button
+                  <div
                     key={file.id}
-                    type="button"
-                    aria-label={`Scroll to diff file ${file.path}`}
-                    title={file.path}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      scrollToDiffItem(file.id);
-                    }}
-                    className={`inline-flex max-w-[18rem] shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-left text-[11px] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] ${
+                    className={`inline-flex max-w-[18rem] shrink-0 overflow-hidden rounded-md border text-[11px] transition-colors ${
                       selectedFilePath === file.path
                         ? 'border-[#c96442]/60 bg-[#fff2ec] text-[#9f462c] dark:border-[#d97757]/60 dark:bg-[#2a211d] dark:text-[#ffb197]'
                         : 'border-[#dedbd0] bg-[#f5f4ed] text-[#4d4c48] hover:bg-[#f0eee6] dark:border-[#30302e] dark:bg-[#242422] dark:text-[#e8e6dc] dark:hover:bg-[#30302e]'
                     }`}
                   >
-                    <FileCode2 className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
-                    <span className="truncate font-mono">{file.path}</span>
-                    <span className="ml-1 inline-flex shrink-0 gap-1 tabular-nums">
-                      <span className="font-mono text-[#2f6f4e] dark:text-[#65d08a]">+{formatCompactDiffCount(file.additions)}</span>
-                      <span className="font-mono text-[#9f462c] dark:text-[#ff9b78]">-{formatCompactDiffCount(file.deletions)}</span>
-                    </span>
-                  </button>
+                    <button
+                      type="button"
+                      aria-label={`${onOpenFile ? 'Open' : 'Select'} diff file ${file.path}`}
+                      title={file.path}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        openCodeAgentDiffFilePrimaryAction({
+                          filePath: file.path,
+                          openInWorkspaceFileViewer: onOpenFile,
+                          openFallback: () => scrollToDiffItem(file.id),
+                        });
+                      }}
+                      className="inline-flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442]"
+                    >
+                      <FileCode2 className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                      <span className="truncate font-mono">{file.path}</span>
+                      <span className="ml-1 inline-flex shrink-0 gap-1 tabular-nums">
+                        <span className="font-mono text-[#2f6f4e] dark:text-[#65d08a]">+{formatCompactDiffCount(file.additions)}</span>
+                        <span className="font-mono text-[#9f462c] dark:text-[#ff9b78]">-{formatCompactDiffCount(file.deletions)}</span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Scroll to diff file ${file.path}`}
+                      title={`Scroll to ${file.path}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        scrollToDiffItem(file.id);
+                      }}
+                      className="inline-flex w-7 shrink-0 items-center justify-center border-l border-current/10 text-[#87867f] transition-colors hover:bg-current/10 hover:text-[#5e5d59] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:text-[#b0aea5]"
+                    >
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 ))}
               </div>
             </div>

@@ -3,6 +3,7 @@ import { Button } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 import { ChatHeader } from './ChatHeader';
+import { CodeAgentDiffWorkerPoolProvider } from './CodeAgentDiffWorkerPoolProvider';
 import { CodeAgentFileBrowserPanel } from './CodeAgentFileBrowserPanel';
 import { MessageInput } from './MessageInput';
 import { MessageList, MessageListHandle } from './MessageList';
@@ -13,7 +14,7 @@ import { updateRoomSettings } from '../utils/socket';
 import { Message, Room, RoomPermissions, RoomRenameHandler } from '../utils/types';
 import { beginHorizontalResize } from '../utils/horizontalResize';
 import {
-  CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
+  CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH,
   CODE_AGENT_FILE_PANEL_WIDTH_CHANGE_EVENT,
   clampCodeAgentFilePanelWidth,
   CODE_AGENT_FILE_PANEL_COLLAPSED_WIDTH,
@@ -73,7 +74,7 @@ const readStoredFileManagerWidth = () => {
   }
   const parsed = Number.parseInt(window.localStorage.getItem(FILE_MANAGER_WIDTH_STORAGE_KEY) || '', 10);
   return Number.isFinite(parsed)
-    ? clampCodeAgentFilePanelWidth(parsed, window.innerWidth, CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH)
+    ? clampCodeAgentFilePanelWidth(parsed, window.innerWidth, CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH)
     : defaultFileManagerWidth();
 };
 
@@ -243,7 +244,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       const nextWidth = clampCodeAgentFilePanelWidth(
         fileManagerWidthRef.current,
         availableWidth,
-        CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
+        CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH,
       );
       if (nextWidth === fileManagerWidthRef.current) return;
       fileManagerWidthRef.current = nextWidth;
@@ -274,7 +275,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
         return;
       }
       const availableWidth = layout.getBoundingClientRect().width || window.innerWidth;
-      const nextWidth = clampCodeAgentFilePanelWidth(width, availableWidth, CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH);
+      const nextWidth = clampCodeAgentFilePanelWidth(width, availableWidth, CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH);
       if (nextWidth === fileManagerWidthRef.current) {
         return;
       }
@@ -318,7 +319,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       captureTarget: event.currentTarget,
       getBounds: () => getCodeAgentPanelResizeBounds(
         layout.getBoundingClientRect().width,
-        CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
+        CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH,
       ),
       onResize: (width) => {
         layout.style.setProperty('--code-agent-files-width', `${width}px`);
@@ -414,6 +415,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
     : fileManagerToggleLabel;
 
   return (
+    <CodeAgentDiffWorkerPoolProvider>
     <div className="flex h-full min-h-0 min-w-0 w-full flex-1 flex-col bg-[#f5f4ed] dark:bg-[#141413]">
       {header}
 
@@ -423,7 +425,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
         data-code-agent-workspace-layout="true"
         data-code-agent-files-collapsed={String(isFileManagerCollapsed)}
         style={{
-          ['--code-agent-chat-min-width' as string]: `${CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH}px`,
+          ['--code-agent-chat-min-width' as string]: `${CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH}px`,
           ['--code-agent-files-width' as string]: isFileManagerCollapsed
             ? `${CODE_AGENT_FILE_PANEL_COLLAPSED_WIDTH}px`
             : `${fileManagerWidth}px`,
@@ -571,5 +573,6 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
         </div>
       )}
     </div>
+    </CodeAgentDiffWorkerPoolProvider>
   );
 };

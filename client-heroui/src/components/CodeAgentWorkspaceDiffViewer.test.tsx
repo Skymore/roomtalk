@@ -4,6 +4,10 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import React, { type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CodeAgentWorkspaceDiffViewer } from './CodeAgentWorkspaceDiffViewer';
+import {
+  readCodeAgentDiffPanelSelection,
+  resetCodeAgentDiffPanelStoreForTests,
+} from '../utils/codeAgentDiffPanelStore';
 
 const loadCodeAgentWorkspaceDiffMock = vi.hoisted(() => vi.fn());
 const loadCodeAgentWorkspaceRefsMock = vi.hoisted(() => vi.fn());
@@ -104,6 +108,7 @@ vi.mock('@pierre/diffs/react', () => ({
 
 describe('CodeAgentWorkspaceDiffViewer', () => {
   beforeEach(() => {
+    resetCodeAgentDiffPanelStoreForTests();
     loadCodeAgentWorkspaceRefsMock.mockResolvedValue({
       available: true,
       headRef: 'feature/search',
@@ -119,6 +124,7 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     parsePatchFilesMock.mockReset();
     codeViewScrollToMock.mockReset();
     localStorage.clear();
+    resetCodeAgentDiffPanelStoreForTests();
   });
 
   it('renders the T3-style diff loading skeleton while the workspace patch is pending', async () => {
@@ -320,7 +326,11 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
       'room-1',
       expect.objectContaining({ scope: 'unstaged' }),
     );
-    expect(localStorage.getItem('roomtalk.codeWorkspace.diffScope')).toBe('unstaged');
+    expect(readCodeAgentDiffPanelSelection('room-1')).toEqual({
+      kind: 'unstaged',
+      filePath: null,
+      revealRequestId: 0,
+    });
     expect(screen.getByLabelText('codeAgentDiffScope: codeAgentDiffScopeWorkingTree')).toBeTruthy();
   });
 
@@ -365,7 +375,12 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
       'room-1',
       expect.objectContaining({ scope: 'branch', baseRef: 'main' }),
     );
-    expect(localStorage.getItem('roomtalk.codeWorkspace.diffBaseRef.room-1')).toBe('main');
+    expect(readCodeAgentDiffPanelSelection('room-1')).toEqual({
+      kind: 'branch',
+      baseRef: 'main',
+      filePath: null,
+      revealRequestId: 0,
+    });
 
     fireEvent.click(screen.getByLabelText('codeAgentDiffBaseRefUseRemote'));
 
@@ -376,7 +391,12 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
       'room-1',
       expect.objectContaining({ scope: 'branch', baseRef: 'origin/main' }),
     );
-    expect(localStorage.getItem('roomtalk.codeWorkspace.diffBaseRef.room-1')).toBe('origin/main');
+    expect(readCodeAgentDiffPanelSelection('room-1')).toEqual({
+      kind: 'branch',
+      baseRef: 'origin/main',
+      filePath: null,
+      revealRequestId: 0,
+    });
   });
 
   it('toggles T3-style file diff collapsing through the CodeView header prefix', async () => {
@@ -550,6 +570,50 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(within(nav).getByText('+2')).toBeTruthy();
     expect(within(nav).getByText('-1')).toBeTruthy();
     expect(within(nav).getByText('+1k')).toBeTruthy();
+
+    fireEvent.click(within(nav).getByLabelText('Scroll to diff file src/utils.ts'));
+
+    expect(codeViewScrollToMock).toHaveBeenCalledWith({ type: 'item', id: 'file:utils', align: 'start' });
+  });
+
+  it('opens a changed file nav item through the T3 primary file action', async () => {
+    const onOpenFile = vi.fn();
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          {
+            name: 'src/App.tsx',
+            cacheKey: 'file:app',
+            hunks: [{ additionLines: 2, deletionLines: 1 }],
+            additionLines: [],
+            deletionLines: [],
+            type: 'change',
+          },
+          {
+            name: 'src/utils.ts',
+            cacheKey: 'file:utils',
+            hunks: [{ additionLines: 1000, deletionLines: 0 }],
+            additionLines: [],
+            deletionLines: [],
+            type: 'new',
+          },
+        ],
+      },
+    ]);
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" onOpenFile={onOpenFile} />);
+
+    const nav = await screen.findByTestId('code-agent-diff-file-nav');
+    fireEvent.click(within(nav).getByLabelText('Open diff file src/utils.ts'));
+
+    expect(onOpenFile).toHaveBeenCalledWith('src/utils.ts');
+    expect(codeViewScrollToMock).not.toHaveBeenCalled();
 
     fireEvent.click(within(nav).getByLabelText('Scroll to diff file src/utils.ts'));
 

@@ -23,8 +23,8 @@ const clampWidth = (width: number, bounds: HorizontalResizeBounds): number => {
 };
 
 const isPrimaryButtonReleased = (event: MouseEvent | PointerEvent): boolean => {
-  if ((event.buttons & 1) === 0) {
-    return true;
+  if (typeof event.buttons === 'number') {
+    return (event.buttons & 1) === 0;
   }
   return 'pointerType' in event && event.pointerType === 'mouse' && event.pressure === 0;
 };
@@ -51,6 +51,7 @@ export function beginHorizontalResize({
   let width = startWidth;
   let animationFrame: number | null = null;
   let finished = false;
+  let isAtClampedBoundary = false;
   let pointerCaptureElement: HTMLElement | null = null;
   const previousUserSelect = document.body.style.userSelect;
   const previousCursor = document.body.style.cursor;
@@ -73,10 +74,30 @@ export function beginHorizontalResize({
 
   const applyClientX = (clientX: number) => {
     const rawWidth = startWidth + ((clientX - startX) * direction);
-    const nextWidth = clampWidth(rawWidth, getBounds());
+    const bounds = getBounds();
+    const nextWidth = clampWidth(rawWidth, bounds);
     width = nextWidth;
+    isAtClampedBoundary = nextWidth !== Math.round(rawWidth)
+      && (nextWidth === clampWidth(bounds.min, bounds) || nextWidth === clampWidth(bounds.max, bounds));
     if (animationFrame === null) {
       animationFrame = window.requestAnimationFrame(applyWidth);
+    }
+  };
+
+  const isOutsideViewport = (clientX: number, clientY: number): boolean => (
+    clientX <= 0 ||
+    clientY <= 0 ||
+    clientX >= window.innerWidth ||
+    clientY >= window.innerHeight
+  );
+
+  const releasePointerCapture = () => {
+    try {
+      if (pointerCaptureElement?.hasPointerCapture?.(pointerId)) {
+        pointerCaptureElement.releasePointerCapture(pointerId);
+      }
+    } catch {
+      // Pointer capture can already be gone after window or document transitions.
     }
   };
 
@@ -166,16 +187,11 @@ export function beginHorizontalResize({
     finished = true;
     if (animationFrame !== null) {
       window.cancelAnimationFrame(animationFrame);
+      animationFrame = null;
     }
     applyWidth();
+    releasePointerCapture();
     removeListeners();
-    try {
-      if (pointerCaptureElement?.hasPointerCapture?.(pointerId)) {
-        pointerCaptureElement.releasePointerCapture(pointerId);
-      }
-    } catch {
-      // Pointer capture can already be gone after window or document transitions.
-    }
     document.body.style.userSelect = previousUserSelect;
     document.body.style.cursor = previousCursor;
     if (activeResize === finishResize) {
@@ -186,7 +202,7 @@ export function beginHorizontalResize({
 
   function handlePointerMove(event: PointerEvent) {
     if (event.pointerId !== pointerId) {
-      if (isMouseLikePointer(event) && isPrimaryButtonReleased(event)) {
+      if (isMouseLikePointer(event)) {
         finishResize();
       }
       return;
@@ -215,13 +231,16 @@ export function beginHorizontalResize({
   }
 
   function handlePointerReleaseProbe(event: PointerEvent) {
-    if (isMouseLikePointer(event) && isPrimaryButtonReleased(event)) {
+    if (isMouseLikePointer(event) && (event.pointerId !== pointerId || isPrimaryButtonReleased(event))) {
       finishResize();
     }
   }
 
   function handlePointerViewportLeave(event: PointerEvent) {
-    if (event.pointerId !== pointerId && event.pointerType !== 'mouse') {
+    if (event.pointerId !== pointerId) {
+      if (isMouseLikePointer(event)) {
+        finishResize();
+      }
       return;
     }
     if (isPrimaryButtonReleased(event)) {
@@ -229,15 +248,16 @@ export function beginHorizontalResize({
       return;
     }
     applyClientX(event.clientX);
+    if (isAtClampedBoundary && isOutsideViewport(event.clientX, event.clientY)) {
+      finishResize();
+    }
   }
 
   function handleLostPointerCapture(event: PointerEvent) {
     if (event.pointerId !== pointerId) {
       return;
     }
-    if (isPrimaryButtonReleased(event)) {
-      finishResize();
-    }
+    finishResize();
   }
 
   function handleMouseUp(event: MouseEvent) {
@@ -272,6 +292,9 @@ export function beginHorizontalResize({
       return;
     }
     applyClientX(event.clientX);
+    if (isAtClampedBoundary && isOutsideViewport(event.clientX, event.clientY)) {
+      finishResize();
+    }
   }
 
   function handleMouseLeave(event: MouseEvent) {
@@ -292,20 +315,20 @@ export function beginHorizontalResize({
   document.body.appendChild(resizeGuard);
   onResize(width);
 
-  if (typeof captureTarget.setPointerCapture === 'function') {
+  if (typeof resizeGuard.setPointerCapture === 'function') {
+    try {
+      resizeGuard.setPointerCapture(pointerId);
+      pointerCaptureElement = resizeGuard;
+    } catch {
+      pointerCaptureElement = null;
+    }
+  }
+  if (!pointerCaptureElement && typeof captureTarget.setPointerCapture === 'function') {
     try {
       captureTarget.setPointerCapture(pointerId);
       pointerCaptureElement = captureTarget;
     } catch {
       pointerCaptureElement = null;
-    }
-  }
-  if (!pointerCaptureElement && typeof resizeGuard.setPointerCapture === 'function') {
-    try {
-      resizeGuard.setPointerCapture(pointerId);
-      pointerCaptureElement = resizeGuard;
-    } catch {
-      // Global listeners still provide a complete fallback when capture is unavailable.
     }
   }
   window.addEventListener('pointermove', handlePointerMove, { capture: true, passive: false });

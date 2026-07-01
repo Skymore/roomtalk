@@ -28,6 +28,7 @@ import { RoomRenameModal } from './RoomRenameModal';
 import { beginHorizontalResize } from '../utils/horizontalResize';
 import {
   CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
+  CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH,
   CODE_AGENT_FILE_PANEL_COLLAPSED_WIDTH,
   CODE_AGENT_FILE_PANEL_MIN_WIDTH,
   CODE_AGENT_FILE_PANEL_WIDTH_CHANGE_EVENT,
@@ -137,14 +138,14 @@ const getSidebarResizeBounds = (
     const codeAgentMax = getSidebarMaxWidthForCodeAgentShell(
       shellWidth,
       getCodeAgentFilePanelSidebarReserve(workspaceLayout, filePanelReserveMode),
-      CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
+      CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH,
     );
     max = Math.min(max, codeAgentMax);
   } else if (reserveCodeAgentLayout && shouldReserveCodeAgentFilePanelFallback()) {
     const codeAgentMax = getSidebarMaxWidthForCodeAgentShell(
       shellWidth,
       CODE_AGENT_FILE_PANEL_MIN_WIDTH,
-      CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
+      CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH,
     );
     max = Math.min(max, codeAgentMax);
   }
@@ -178,7 +179,7 @@ const clampCodeAgentFilePanelDuringSidebarResize = (
     currentFilePanelWidth,
     getDesktopShellWidth(sidebar),
     sidebarWidth,
-    CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
+    CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH,
   );
   if (nextFilePanelWidth !== Math.round(currentFilePanelWidth)) {
     workspaceLayout.style.setProperty('--code-agent-files-width', `${nextFilePanelWidth}px`);

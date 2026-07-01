@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Message, Room } from '../utils/types';
+import { resetCodeAgentDiffPanelStoreForTests } from '../utils/codeAgentDiffPanelStore';
 import { CodeAgentWorkspacePanel } from './CodeAgentWorkspacePanel';
 
 vi.mock('react-i18next', () => ({
@@ -66,6 +67,8 @@ const toolCall: Message = {
 describe('CodeAgentWorkspacePanel', () => {
   afterEach(() => {
     cleanup();
+    localStorage.clear();
+    resetCodeAgentDiffPanelStoreForTests();
   });
 
   it('renders plan mode as read-only workspace state', () => {
@@ -271,6 +274,10 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(diffViewer.parentElement?.className).toContain('flex-1');
     expect(diffViewer.parentElement?.parentElement?.className).toContain('max-h-[min(72vh,42rem)]');
     expect(diffViewer.parentElement?.parentElement?.className).not.toContain('max-h-44');
+
+    fireEvent.click(screen.getByText('App.tsx'));
+    expect(diffViewer.dataset.selectedFile).toBe('src/App.tsx');
+    expect(diffViewer.dataset.selectedFileRequestId).toBe('2');
   });
 
   it('fills changed-file tree stats from parsed diff summaries', () => {

@@ -20,6 +20,7 @@ import {
   Trash2,
   Upload,
   WrapText,
+  X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -62,6 +63,18 @@ import { installFileEditorDismissal } from './codeAgentFileEditorDismissal';
 import { projectFileCacheKey } from './codeAgentFileContentRevision';
 import { FileSaveCoordinator } from './codeAgentFileSaveCoordinator';
 import { isMarkdownPreviewFile, setMarkdownTaskChecked } from './codeAgentFilePreviewMode';
+import {
+  activateCodeAgentRightPanelSurface,
+  closeAllCodeAgentRightPanelSurfaces,
+  closeCodeAgentRightPanelSurface,
+  closeCodeAgentRightPanelSurfacesToRight,
+  closeOtherCodeAgentRightPanelSurfaces,
+  openCodeAgentRightPanel,
+  openCodeAgentRightPanelFile,
+  reconcileCodeAgentFileSurfaces,
+  type CodeAgentRightPanelSurface,
+  useCodeAgentRightPanelState,
+} from '../utils/codeAgentRightPanelStore';
 
 const MarkdownContent = React.lazy(() =>
   import('./MarkdownContent').then((module) => ({ default: module.MarkdownContent })),
@@ -92,6 +105,12 @@ type SaveStatus = {
   state: SaveState;
   error: string | null;
 };
+
+type FileSurfaceTabMenuState = {
+  surfaceId: string;
+  x: number;
+  y: number;
+} | null;
 
 type FileQueryState = {
   data: CodeWorkspaceFile | null;
@@ -155,8 +174,8 @@ const FILE_LINK_REVEAL_UNSAFE_CSS = `
 `;
 const FILE_EXPLORER_STORAGE_KEY = 'roomtalk.codeWorkspace.fileExplorerOpen';
 const FILE_EXPLORER_WIDTH_STORAGE_KEY = 'roomtalk.codeWorkspace.fileExplorerWidth';
-const FILE_EXPLORER_MIN_WIDTH = 180;
-const FILE_PREVIEW_MIN_WIDTH = 280;
+const FILE_EXPLORER_MIN_WIDTH = 160;
+const FILE_PREVIEW_MIN_WIDTH = 220;
 const FILE_EXPLORER_DEFAULT_WIDTH = 352;
 const WORKSPACE_TREE_REMOTE_SEARCH_LIMIT = 200;
 const WORKSPACE_TREE_REMOTE_SEARCH_DEBOUNCE_MS = 150;
@@ -226,6 +245,11 @@ function replacePathPrefix(path: string, previousPrefix: string, nextPrefix: str
 
 function joinWorkspacePath(directory: string, name: string): string {
   return [normalizeWorkspacePath(directory), normalizeWorkspacePath(name)].filter(Boolean).join('/');
+}
+
+function basename(path: string): string {
+  const normalizedPath = normalizeWorkspacePath(path);
+  return normalizedPath.split('/').pop() || normalizedPath;
 }
 
 function projectEntriesFromWorkspace(entries: readonly CodeWorkspaceEntry[]): ProjectEntry[] {
@@ -1479,6 +1503,10 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   });
   const workspaceReadyKey = `${sandboxStatus || 'none'}:${sandboxUpdatedAt || ''}`;
   const previousWorkspaceReadyKeyRef = useRef(workspaceReadyKey);
+  const rightPanelState = useCodeAgentRightPanelState(roomId);
+  const [fileSurfaceTabMenu, setFileSurfaceTabMenu] = useState<FileSurfaceTabMenuState>(null);
+  const fileSurfaceTabMenuRef = useRef<HTMLDivElement | null>(null);
+  const didInitializeRightPanelRef = useRef(false);
 
   const externallySelectedEntry = useMemo(
     () => (externallySelectedFilePath ? workspaceEntryForPath(externallySelectedFilePath, 'file') : null),
@@ -1499,6 +1527,36 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     () => new Map(entries.map((entry) => [entry.path, entry.kind] as const)),
     [entries],
   );
+  const fileEntryPathSet = useMemo(
+    () => new Set(entries
+      .filter((entry) => entry.kind === 'file')
+      .map((entry) => entry.path)
+      .concat(externallySelectedFilePath ? [externallySelectedFilePath] : [])),
+    [entries, externallySelectedFilePath],
+  );
+  const fileSurfaces = useMemo(
+    () => rightPanelState.surfaces.filter((surface) => surface.kind === 'file'),
+    [rightPanelState.surfaces],
+  );
+  const rightPanelSurfaces = rightPanelState.surfaces;
+  const activeFileSurface = useMemo(
+    () => fileSurfaces.find((surface) => surface.id === rightPanelState.activeSurfaceId) ?? null,
+    [fileSurfaces, rightPanelState.activeSurfaceId],
+  );
+  const activeFilesSurface = useMemo(
+    () => rightPanelSurfaces.find((surface) => surface.id === rightPanelState.activeSurfaceId && surface.kind === 'files') ?? null,
+    [rightPanelState.activeSurfaceId, rightPanelSurfaces],
+  );
+  const hasFilesSurface = useMemo(
+    () => rightPanelSurfaces.some((surface) => surface.kind === 'files'),
+    [rightPanelSurfaces],
+  );
+  const fileSurfaceTabMenuSurface = useMemo(
+    () => fileSurfaceTabMenu
+      ? rightPanelSurfaces.find((surface) => surface.id === fileSurfaceTabMenu.surfaceId) ?? null
+      : null,
+    [fileSurfaceTabMenu, rightPanelSurfaces],
+  );
   const selectedKind = selectedPath
     ? entryKinds.get(selectedPath) ?? (selectedPath === externallySelectedFilePath ? 'file' : undefined)
     : undefined;
@@ -1514,8 +1572,17 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     localOpenFileRequest &&
     localOpenFileRequest.path === relativePath,
   );
-  const effectiveRevealLine = localRevealApplies ? localOpenFileRequest?.line ?? null : revealLine;
-  const effectiveRevealRequestId = localRevealApplies ? localOpenFileRequest?.requestId ?? 0 : revealRequestId;
+  const surfaceRevealApplies = Boolean(activeFileSurface && activeFileSurface.relativePath === relativePath);
+  const effectiveRevealLine = localRevealApplies
+    ? localOpenFileRequest?.line ?? null
+    : surfaceRevealApplies
+      ? activeFileSurface?.revealLine ?? null
+      : revealLine;
+  const effectiveRevealRequestId = localRevealApplies
+    ? localOpenFileRequest?.requestId ?? 0
+    : surfaceRevealApplies
+      ? activeFileSurface?.revealRequestId ?? 0
+      : revealRequestId;
   const renderMarkdown = Boolean(
     relativePath &&
     isMarkdown &&
@@ -1598,6 +1665,40 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   }, [entriesQuery.isPending, entryKinds, externallySelectedFilePath, previewPath]);
 
   useEffect(() => {
+    if (didInitializeRightPanelRef.current) {
+      return;
+    }
+    didInitializeRightPanelRef.current = true;
+    if (rightPanelSurfaces.length === 0) {
+      openCodeAgentRightPanel(roomId, 'files');
+    }
+  }, [rightPanelSurfaces.length, roomId]);
+
+  useEffect(() => {
+    if (activeFilesSurface) {
+      if (previewPath) {
+        setPreviewPath(null);
+      }
+      return;
+    }
+    if (!activeFileSurface) {
+      if (previewPath && fileSurfaces.length === 0) {
+        setPreviewPath(null);
+      }
+      return;
+    }
+    setSelectedPath(activeFileSurface.relativePath);
+    setPreviewPath(activeFileSurface.relativePath);
+  }, [activeFileSurface, activeFilesSurface, fileSurfaces.length, previewPath]);
+
+  useEffect(() => {
+    if (entriesQuery.isPending || entriesQuery.data?.truncated) {
+      return;
+    }
+    reconcileCodeAgentFileSurfaces(roomId, true, fileEntryPathSet);
+  }, [entriesQuery.data?.truncated, entriesQuery.isPending, fileEntryPathSet, roomId]);
+
+  useEffect(() => {
     if (!openFileRequest?.path) {
       return;
     }
@@ -1608,9 +1709,10 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     setSelectedPath(normalizedPath);
     setPreviewPath(normalizedPath);
     setExternallySelectedFilePath(normalizedPath);
+    openCodeAgentRightPanelFile(roomId, normalizedPath, revealLine);
     setLocalOpenFileRequest(null);
     setOperationError(null);
-  }, [openFileRequest?.path, openFileRequest?.requestId]);
+  }, [openFileRequest?.path, openFileRequest?.requestId, revealLine, roomId]);
 
   useEffect(() => {
     const previousKey = previousWorkspaceReadyKeyRef.current;
@@ -1712,13 +1814,18 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
         setLocalOpenFileRequest(null);
         if (nextPreviewPath === null) {
           setExternallySelectedFilePath(null);
+          if (relativePath) {
+            closeCodeAgentRightPanelSurface(roomId, `file:${relativePath}`);
+          }
+        } else {
+          openCodeAgentRightPanelFile(roomId, nextPreviewPath);
         }
       }
       refreshEntries();
     } catch (error) {
       setOperationError(error instanceof Error ? error.message : 'Workspace file operation failed.');
     }
-  }, [refreshEntries]);
+  }, [refreshEntries, relativePath, roomId]);
 
   const handleOpenEntry = useCallback((path: string, kind: ProjectEntry['kind']) => {
     const normalizedPath = normalizeWorkspacePath(path);
@@ -1730,9 +1837,10 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       setPreviewPath(normalizedPath);
       setExternallySelectedFilePath(null);
       setLocalOpenFileRequest(null);
+      openCodeAgentRightPanelFile(roomId, normalizedPath);
     }
     setOperationError(null);
-  }, []);
+  }, [roomId]);
 
   const handleOpenWorkspaceFileFromMarkdown = useCallback((path: string) => {
     const target = parseWorkspaceFileOpenTarget(path);
@@ -1749,8 +1857,9 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     setSelectedPath(target.path);
     setPreviewPath(target.path);
     setExternallySelectedFilePath(target.path);
+    openCodeAgentRightPanelFile(roomId, target.path, target.line);
     setOperationError(null);
-  }, []);
+  }, [roomId]);
 
   const handleCreateFile = useCallback(() => {
     const path = window.prompt(t('codeAgentNewFilePrompt'), joinWorkspacePath(selectedDirectory, 'untitled.txt'));
@@ -1937,6 +2046,108 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     });
   }, []);
 
+  const activateFileSurface = useCallback((surfaceId: string) => {
+    activateCodeAgentRightPanelSurface(roomId, surfaceId);
+  }, [roomId]);
+
+  const closeFileSurface = useCallback((surfaceId: string) => {
+    closeCodeAgentRightPanelSurface(roomId, surfaceId);
+  }, [roomId]);
+
+  const openFilesSurface = useCallback(() => {
+    openCodeAgentRightPanel(roomId, 'files');
+  }, [roomId]);
+
+  const closeFileSurfaceTabMenu = useCallback(() => {
+    setFileSurfaceTabMenu(null);
+  }, []);
+
+  const handleFileSurfaceTabContextMenu = useCallback((
+    event: React.MouseEvent,
+    surface: CodeAgentRightPanelSurface,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setFileSurfaceTabMenu({
+      surfaceId: surface.id,
+      x: event.clientX,
+      y: event.clientY,
+    });
+  }, []);
+
+  const handleFileSurfaceTabMouseDown = useCallback((event: React.MouseEvent) => {
+    if (event.button !== 1) {
+      return;
+    }
+    event.preventDefault();
+  }, []);
+
+  const handleFileSurfaceTabAuxClick = useCallback((
+    event: React.MouseEvent,
+    surface: CodeAgentRightPanelSurface,
+  ) => {
+    if (event.button !== 1) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    closeFileSurface(surface.id);
+  }, [closeFileSurface]);
+
+  const copyFileSurfacePath = useCallback((relativePath: string) => {
+    closeFileSurfaceTabMenu();
+    navigator.clipboard?.writeText?.(relativePath)?.catch(() => {
+      // Clipboard access is best-effort; the tab action should not fail the UI.
+    });
+  }, [closeFileSurfaceTabMenu]);
+
+  const closeOtherFileSurfaces = useCallback((surfaceId: string) => {
+    closeFileSurfaceTabMenu();
+    closeOtherCodeAgentRightPanelSurfaces(roomId, surfaceId);
+  }, [closeFileSurfaceTabMenu, roomId]);
+
+  const closeFileSurfacesToRight = useCallback((surfaceId: string) => {
+    closeFileSurfaceTabMenu();
+    closeCodeAgentRightPanelSurfacesToRight(roomId, surfaceId);
+  }, [closeFileSurfaceTabMenu, roomId]);
+
+  const closeAllFileSurfaces = useCallback(() => {
+    closeFileSurfaceTabMenu();
+    closeAllCodeAgentRightPanelSurfaces(roomId);
+  }, [closeFileSurfaceTabMenu, roomId]);
+
+  useEffect(() => {
+    if (!fileSurfaceTabMenu || fileSurfaceTabMenuSurface) {
+      return undefined;
+    }
+    setFileSurfaceTabMenu(null);
+    return undefined;
+  }, [fileSurfaceTabMenu, fileSurfaceTabMenuSurface]);
+
+  useEffect(() => {
+    if (!fileSurfaceTabMenu) {
+      return undefined;
+    }
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && fileSurfaceTabMenuRef.current?.contains(target)) {
+        return;
+      }
+      setFileSurfaceTabMenu(null);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setFileSurfaceTabMenu(null);
+      }
+    };
+    window.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [fileSurfaceTabMenu]);
+
   return (
     <div
       ref={panelRef}
@@ -2018,6 +2229,136 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
           </button>
         </div>
       ) : null}
+      {rightPanelSurfaces.length > 0 ? (
+        <div
+          className="flex h-8 shrink-0 items-center gap-1 overflow-x-auto border-b border-[#dedbd0] bg-[#f0eee6] px-2 text-xs dark:border-[#30302e] dark:bg-[#242422]"
+          data-testid="code-agent-file-surface-tabs"
+          role="tablist"
+        >
+          {rightPanelSurfaces.map((surface) => {
+            const isActive = surface.id === rightPanelState.activeSurfaceId;
+            const title = surface.kind === 'files'
+              ? t('codeAgentWorkspaceFiles')
+              : basename(surface.relativePath);
+            const fullTitle = surface.kind === 'files' ? t('codeAgentWorkspaceFiles') : surface.relativePath;
+            return (
+              <div
+                key={surface.id}
+                data-active-tab={isActive}
+                className={`flex max-w-56 shrink-0 items-center rounded-md border ${
+                  isActive
+                    ? 'border-[#c96442]/50 bg-[#faf9f5] text-[#141413] dark:border-[#ffb197]/50 dark:bg-[#1d1d1b] dark:text-[#faf9f5]'
+                    : 'border-transparent text-[#5e5d59] hover:bg-[#faf9f5] hover:text-[#141413] dark:text-[#b0aea5] dark:hover:bg-[#1d1d1b] dark:hover:text-[#faf9f5]'
+                }`}
+                role="tab"
+                aria-selected={isActive}
+                onMouseDown={handleFileSurfaceTabMouseDown}
+                onAuxClick={(event) => handleFileSurfaceTabAuxClick(event, surface)}
+                onContextMenu={(event) => handleFileSurfaceTabContextMenu(event, surface)}
+              >
+                <button
+                  type="button"
+                  className="flex min-w-0 flex-1 items-center gap-1.5 truncate px-2 py-1 text-left"
+                  title={fullTitle}
+                  onClick={() => activateFileSurface(surface.id)}
+                >
+                  {surface.kind === 'files' ? (
+                    <FolderTree className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                  ) : null}
+                  <span className="truncate">{title}</span>
+                </button>
+                <button
+                  type="button"
+                  className="mr-0.5 rounded p-0.5 text-[#87867f] hover:bg-[#dedbd0] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+                  aria-label={`${t('close')} ${fullTitle}`}
+                  onClick={() => {
+                    closeFileSurfaceTabMenu();
+                    closeFileSurface(surface.id);
+                  }}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            );
+          })}
+          {!hasFilesSurface ? (
+            <button
+              type="button"
+              className="ml-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#faf9f5] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:bg-[#1d1d1b] dark:hover:text-[#faf9f5]"
+              aria-label={t('codeAgentWorkspaceFiles')}
+              title={t('codeAgentWorkspaceFiles')}
+              onClick={openFilesSurface}
+            >
+              <FolderTree className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {fileSurfaceTabMenu && fileSurfaceTabMenuSurface ? (() => {
+        const surface = fileSurfaceTabMenuSurface;
+        const surfaceIndex = rightPanelSurfaces.findIndex((entry) => entry.id === surface.id);
+        const hasOtherSurfaces = rightPanelSurfaces.length > 1;
+        const hasSurfacesToRight = surfaceIndex >= 0 && surfaceIndex < rightPanelSurfaces.length - 1;
+        const disabledItemClassName = 'cursor-not-allowed opacity-40';
+        const menuItemClassName = 'block w-full rounded px-2 py-1.5 text-left text-xs text-[#141413] hover:bg-[#f0eee6] disabled:hover:bg-transparent dark:text-[#faf9f5] dark:hover:bg-[#30302e]';
+        return (
+          <div
+            ref={fileSurfaceTabMenuRef}
+            className="fixed z-[90] min-w-40 rounded-md border border-[#dedbd0] bg-[#faf9f5] p-1 shadow-xl dark:border-[#30302e] dark:bg-[#1d1d1b]"
+            data-testid="code-agent-file-surface-menu"
+            role="menu"
+            style={{ left: fileSurfaceTabMenu.x, top: fileSurfaceTabMenu.y }}
+          >
+            {surface.kind === 'file' ? (
+              <button
+                type="button"
+                className={menuItemClassName}
+                role="menuitem"
+                onClick={() => copyFileSurfacePath(surface.relativePath)}
+              >
+                {t('codeAgentCopyFilePath')}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className={menuItemClassName}
+              role="menuitem"
+              onClick={() => {
+                closeFileSurfaceTabMenu();
+                closeFileSurface(surface.id);
+              }}
+            >
+              {t('codeAgentCloseFileTab')}
+            </button>
+            <button
+              type="button"
+              className={`${menuItemClassName} ${hasOtherSurfaces ? '' : disabledItemClassName}`}
+              role="menuitem"
+              disabled={!hasOtherSurfaces}
+              onClick={() => closeOtherFileSurfaces(surface.id)}
+            >
+              {t('codeAgentCloseOtherFileTabs')}
+            </button>
+            <button
+              type="button"
+              className={`${menuItemClassName} ${hasSurfacesToRight ? '' : disabledItemClassName}`}
+              role="menuitem"
+              disabled={!hasSurfacesToRight}
+              onClick={() => closeFileSurfacesToRight(surface.id)}
+            >
+              {t('codeAgentCloseFileTabsToRight')}
+            </button>
+            <button
+              type="button"
+              className={menuItemClassName}
+              role="menuitem"
+              onClick={closeAllFileSurfaces}
+            >
+              {t('codeAgentCloseAllFileTabs')}
+            </button>
+          </div>
+        );
+      })() : null}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <div className={`${relativePath ? 'flex' : 'hidden'} min-w-0 flex-1 flex-col overflow-hidden`}>
           <FilePreviewSurface
@@ -2044,7 +2385,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
         </div>
         {explorerOpen || relativePath === null ? (
           <aside
-            className={`${relativePath ? 'relative min-w-[180px] border-l border-[#dedbd0] dark:border-[#30302e]' : 'min-w-0 flex-1'} flex min-h-0 shrink-0 bg-[#faf9f5] dark:bg-[#1d1d1b]`}
+            className={`${relativePath ? 'relative min-w-[160px] border-l border-[#dedbd0] dark:border-[#30302e]' : 'min-w-0 flex-1'} flex min-h-0 shrink-0 bg-[#faf9f5] dark:bg-[#1d1d1b]`}
             style={relativePath ? {
               width: 'var(--workspace-file-explorer-width)',
               maxWidth: `calc(100% - ${FILE_PREVIEW_MIN_WIDTH}px)`,

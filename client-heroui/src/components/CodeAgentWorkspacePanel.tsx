@@ -22,6 +22,11 @@ import {
   type CodeAgentWorkspaceDiffFileSummary,
 } from './CodeAgentWorkspaceDiffViewer';
 import type { ReviewCommentContext } from '../utils/codeAgentReviewComments';
+import {
+  clearCodeAgentDiffFile,
+  selectCodeAgentDiffFile,
+  useCodeAgentDiffPanelSelection,
+} from '../utils/codeAgentDiffPanelStore';
 
 interface CodeAgentWorkspacePanelProps {
   room: Room;
@@ -82,12 +87,11 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   const [isCollapsed, setIsCollapsed] = React.useState(false);
   const [selectedWorkspaceTab, setSelectedWorkspaceTab] = React.useState('overview');
   const [allChangedDirectoriesExpanded, setAllChangedDirectoriesExpanded] = React.useState(true);
-  const [selectedDiffFile, setSelectedDiffFile] = React.useState<{ path: string; requestId: number } | null>(null);
+  const diffPanelSelection = useCodeAgentDiffPanelSelection(room.id);
   const [diffFileStats, setDiffFileStats] = React.useState<{
     scopeKey: string;
     byPath: Map<string, { additions: number; deletions: number }>;
   }>(() => ({ scopeKey: '', byPath: EMPTY_DIFF_FILE_STATS }));
-  const selectedDiffFileRequestIdRef = React.useRef(0);
   const messageSummary = React.useMemo(() => summarizeCocoMessages(messages), [messages]);
   const summary = React.useMemo(
     () => {
@@ -128,6 +132,8 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
     () => new Set(changedFileEntries.map((entry) => normalizeChangedFilePath(entry.path))),
     [changedFileEntries],
   );
+  const selectedDiffFilePath = diffPanelSelection.filePath;
+  const selectedDiffFileRequestId = diffPanelSelection.revealRequestId;
   const hasChangedFileDirectories = React.useMemo(
     () => changedFiles.some((path) => path.replace(/\\/g, '/').includes('/')),
     [changedFiles],
@@ -139,19 +145,15 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   const shouldLoadDiff = selectedWorkspaceTab === 'changes' && Boolean(workspaceChanges?.available && changedFiles.length > 0);
 
   React.useEffect(() => {
-    if (selectedDiffFile && !normalizedChangedFilePathSet.has(selectedDiffFile.path)) {
-      setSelectedDiffFile(null);
+    if (selectedDiffFilePath && !normalizedChangedFilePathSet.has(selectedDiffFilePath)) {
+      clearCodeAgentDiffFile(room.id);
     }
-  }, [normalizedChangedFilePathSet, selectedDiffFile]);
+  }, [normalizedChangedFilePathSet, room.id, selectedDiffFilePath]);
 
   const handleOpenDiffFile = React.useCallback((path: string) => {
     const normalizedPath = normalizeChangedFilePath(path);
-    selectedDiffFileRequestIdRef.current += 1;
-    setSelectedDiffFile({
-      path: normalizedPath,
-      requestId: selectedDiffFileRequestIdRef.current,
-    });
-  }, []);
+    selectCodeAgentDiffFile(room.id, normalizedPath);
+  }, [room.id]);
 
   const handleDiffFileSummariesChange = React.useCallback((summaries: readonly CodeAgentWorkspaceDiffFileSummary[]) => {
     setDiffFileStats({
@@ -426,7 +428,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                     <CodeAgentChangedFilesTree
                       files={changedFileEntries}
                       allDirectoriesExpanded={allChangedDirectoriesExpanded}
-                      selectedPath={selectedDiffFile?.path}
+                      selectedPath={selectedDiffFilePath}
                       onOpenDiffFile={handleOpenDiffFile}
                     />
                   </div>
@@ -436,8 +438,8 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                     refreshKey={diffRefreshKey}
                     onOpenFile={onOpenWorkspaceFile}
                     onFileSummariesChange={handleDiffFileSummariesChange}
-                    selectedFilePath={selectedDiffFile?.path}
-                    selectedFileRevealRequestId={selectedDiffFile?.requestId}
+                    selectedFilePath={selectedDiffFilePath}
+                    selectedFileRevealRequestId={selectedDiffFileRequestId}
                     reviewComments={reviewComments}
                     onAddReviewComment={onAddReviewComment}
                     onRemoveReviewComment={onRemoveReviewComment}

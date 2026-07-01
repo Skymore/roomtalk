@@ -4,8 +4,19 @@ import { configDefaults, defineConfig } from "vitest/config";
 // https://vitejs.dev/config/
 export default defineConfig({
 	plugins: [react()],
+	optimizeDeps: {
+		include: [
+			"@pierre/diffs",
+			"@pierre/diffs/editor",
+			"@pierre/diffs/react",
+			"@pierre/diffs/worker/worker.js",
+		],
+	},
 	build: {
 		chunkSizeWarningLimit: 1500,
+	},
+	worker: {
+		format: "es",
 	},
 	server: {
 		port: 3011,

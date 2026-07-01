@@ -307,6 +307,68 @@ describe('beginHorizontalResize', () => {
     expect(document.body.style.cursor).toBe('');
   });
 
+  it('finishes when a new mouse pointer event arrives after a missed release', () => {
+    const onFinish = vi.fn();
+    beginHorizontalResize({
+      pointerId: 35,
+      startX: 0,
+      initialWidth: 360,
+      direction: 1,
+      captureTarget: document.createElement('button'),
+      getBounds: () => ({ min: 240, max: 1200 }),
+      onResize: vi.fn(),
+      onFinish,
+    });
+
+    window.dispatchEvent(pointerEvent('pointerover', {
+      pointerId: 99,
+      pointerType: 'mouse',
+      clientX: 900,
+      buttons: 1,
+    }));
+    window.dispatchEvent(pointerEvent('pointermove', {
+      pointerId: 35,
+      pointerType: 'mouse',
+      clientX: 1100,
+      buttons: 1,
+    }));
+
+    expect(onFinish).toHaveBeenCalledWith(360);
+    expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.cursor).toBe('');
+  });
+
+  it('finishes instead of resizing when a different mouse pointer moves', () => {
+    const onResize = vi.fn();
+    const onFinish = vi.fn();
+    beginHorizontalResize({
+      pointerId: 36,
+      startX: 0,
+      initialWidth: 360,
+      direction: 1,
+      captureTarget: document.createElement('button'),
+      getBounds: () => ({ min: 240, max: 1200 }),
+      onResize,
+      onFinish,
+    });
+    onResize.mockClear();
+
+    window.dispatchEvent(pointerEvent('pointermove', {
+      pointerId: 88,
+      pointerType: 'mouse',
+      clientX: 1100,
+      buttons: 1,
+    }));
+
+    expect(onFinish).toHaveBeenCalledWith(360);
+    expect(onResize).toHaveBeenCalledTimes(1);
+    expect(onResize).toHaveBeenCalledWith(360);
+    expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.cursor).toBe('');
+  });
+
   it('finishes on mouse pointerup even when the browser reports stale buttons', () => {
     const onFinish = vi.fn();
     beginHorizontalResize({
