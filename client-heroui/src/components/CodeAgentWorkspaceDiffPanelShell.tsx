@@ -25,7 +25,7 @@ export function CodeAgentWorkspaceDiffPanelShell({
       data-testid={testId}
     >
       <div
-        className="flex shrink-0 items-center justify-between gap-2"
+        className="surface-subheader flex h-9 shrink-0 items-center justify-between gap-2 border-b border-[#dedbd0] px-3 dark:border-[#30302e]"
         data-surface-subheader
       >
         {header}

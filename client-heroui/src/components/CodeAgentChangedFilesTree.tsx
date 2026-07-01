@@ -3,31 +3,18 @@ import { Icon } from '@iconify/react';
 import {
   buildCodeAgentChangedFileTree,
   collectChangedFileDirectoryPaths,
-  formatCompactDiffCount,
-  hasNonZeroChangedFileStat,
   type CodeAgentChangedFile,
-  type CodeAgentChangedFileStat,
   type CodeAgentChangedFileTreeNode,
 } from '../utils/codeAgentChangedFileTree';
+import { CodeAgentDiffStatLabel, hasNonZeroChangedFileStat } from './CodeAgentDiffStatLabel';
+import { CodeAgentPierreEntryIcon } from './CodeAgentPierreEntryIcon';
 
 const EMPTY_DIRECTORY_OVERRIDES: Record<string, boolean> = {};
-
-function DiffStatLabel({
-  additions,
-  deletions,
-  className = '',
-}: CodeAgentChangedFileStat & { className?: string }) {
-  return (
-    <span className={`inline-grid grid-cols-[4ch_4ch] gap-1 text-right tabular-nums ${className}`}>
-      <span className="font-mono text-[#2f6f4e] dark:text-[#65d08a]">+{formatCompactDiffCount(additions)}</span>
-      <span className="font-mono text-[#9f462c] dark:text-[#ff9b78]">-{formatCompactDiffCount(deletions)}</span>
-    </span>
-  );
-}
 
 interface CodeAgentChangedFilesTreeProps {
   files: ReadonlyArray<CodeAgentChangedFile>;
   allDirectoriesExpanded: boolean;
+  resolvedTheme: 'light' | 'dark';
   selectedPath?: string | null;
   onOpenDiffFile: (path: string) => void;
 }
@@ -35,6 +22,7 @@ interface CodeAgentChangedFilesTreeProps {
 export const CodeAgentChangedFilesTree: React.FC<CodeAgentChangedFilesTreeProps> = ({
   files,
   allDirectoriesExpanded,
+  resolvedTheme,
   selectedPath = null,
   onOpenDiffFile,
 }) => {
@@ -93,7 +81,7 @@ export const CodeAgentChangedFilesTree: React.FC<CodeAgentChangedFilesTreeProps>
               {node.name}
             </span>
             {hasNonZeroChangedFileStat(node.stat) ? (
-              <DiffStatLabel additions={node.stat.additions} deletions={node.stat.deletions} className="ml-auto shrink-0 text-[10px]" />
+              <CodeAgentDiffStatLabel additions={node.stat.additions} deletions={node.stat.deletions} className="ml-auto shrink-0 text-[10px]" />
             ) : null}
           </button>
           {isExpanded ? (
@@ -121,12 +109,17 @@ export const CodeAgentChangedFilesTree: React.FC<CodeAgentChangedFilesTreeProps>
         {hasDirectoryNodes || depth > 0 ? (
           <span aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
         ) : null}
-        <Icon icon="lucide:file-code-2" className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+        <CodeAgentPierreEntryIcon
+          pathValue={node.path}
+          kind="file"
+          theme={resolvedTheme}
+          className="h-3.5 w-3.5 text-[#87867f] dark:text-[#8f8d86]"
+        />
         <span className="truncate font-mono text-[11px]" title={node.path}>
           {node.name}
         </span>
         {node.stat ? (
-          <DiffStatLabel additions={node.stat.additions} deletions={node.stat.deletions} className="ml-auto shrink-0 text-[10px]" />
+          <CodeAgentDiffStatLabel additions={node.stat.additions} deletions={node.stat.deletions} className="ml-auto shrink-0 text-[10px]" />
         ) : null}
       </button>
     );

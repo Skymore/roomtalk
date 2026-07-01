@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Message, Room } from '../utils/types';
-import { resetCodeAgentDiffPanelStoreForTests } from '../utils/codeAgentDiffPanelStore';
+import {
+  resetCodeAgentDiffPanelStoreForTests,
+  selectCodeAgentDiffScope,
+} from '../utils/codeAgentDiffPanelStore';
 import { CodeAgentWorkspacePanel } from './CodeAgentWorkspacePanel';
 
 vi.mock('react-i18next', () => ({
@@ -308,6 +311,8 @@ describe('CodeAgentWorkspacePanel', () => {
 
     fireEvent.click(screen.getByText('codeAgentChanges'));
 
+    expect(screen.getByText('+2')).toBeTruthy();
+    expect(screen.getByText('-1')).toBeTruthy();
     expect(screen.getByText('src')).toBeTruthy();
     expect(screen.getByText('App.tsx')).toBeTruthy();
     expect(screen.getByTestId('code-agent-changed-files-tree')).toBeTruthy();
@@ -359,5 +364,43 @@ describe('CodeAgentWorkspacePanel', () => {
 
     expect(screen.getAllByText('+7').length).toBeGreaterThan(0);
     expect(screen.getAllByText('-3').length).toBeGreaterThan(0);
+  });
+
+  it('does not reuse parsed changed-file stats after switching diff scope', () => {
+    render(
+      <CodeAgentWorkspacePanel
+        room={room}
+        messages={[]}
+        mode="acceptEdits"
+        sessionCostUsd={0}
+        workspaceSnapshot={{
+          roomId: 'room-1',
+          backend: 'coco',
+          source: 'sandbox',
+          generatedAt: '2026-06-30T12:00:00.000Z',
+          status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: true },
+          summary: { toolCalls: 0, toolResults: 0, toolErrors: 0 },
+          artifacts: [],
+          changes: {
+            available: true,
+            changedFiles: ['src/App.tsx'],
+            diffSummary: null,
+          },
+          commands: [],
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByText('codeAgentChanges'));
+    fireEvent.click(screen.getByTestId('emit-diff-file-summaries'));
+    expect(screen.getAllByText('+7').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('-3').length).toBeGreaterThan(0);
+
+    act(() => {
+      selectCodeAgentDiffScope('room-1', 'unstaged');
+    });
+
+    expect(screen.queryByText('+7')).toBeNull();
+    expect(screen.queryByText('-3')).toBeNull();
   });
 });

@@ -1,5 +1,4 @@
 import { FileTree, useFileTree, useFileTreeSearch } from '@pierre/trees/react';
-import type { FileTreeIcons } from '@pierre/trees';
 import {
   FilePlus2,
   FolderPlus,
@@ -11,6 +10,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { T3_PIERRE_ICONS } from '../utils/codeAgentPierreIcons';
 
 export type CodeAgentProjectEntry = {
   path: string;
@@ -22,6 +22,7 @@ interface CodeAgentWorkspaceFileTreePanelProps {
   entries: CodeAgentProjectEntry[];
   entryKinds: ReadonlyMap<string, CodeAgentProjectEntry['kind']>;
   entriesPending: boolean;
+  entriesLoaded: boolean;
   entriesError: string | null;
   entriesTruncated: boolean;
   selectedPath: string | null;
@@ -38,11 +39,6 @@ interface CodeAgentWorkspaceFileTreePanelProps {
   remoteSearchError: string | null;
   remoteSearchTruncated: boolean;
 }
-
-const T3_PIERRE_ICONS = {
-  set: 'complete',
-  colored: true,
-} satisfies FileTreeIcons;
 
 const TREE_UNSAFE_CSS = `
   :host {
@@ -65,6 +61,7 @@ export function CodeAgentWorkspaceFileTreePanel({
   entries,
   entryKinds,
   entriesPending,
+  entriesLoaded,
   entriesError,
   entriesTruncated,
   selectedPath,
@@ -108,7 +105,7 @@ export function CodeAgentWorkspaceFileTreePanel({
     unsafeCSS: TREE_UNSAFE_CSS,
   });
   const treeSearch = useFileTreeSearch(model);
-  const fileCountLabel = entriesPending && entries.length === 0
+  const fileCountLabel = entriesPending && !entriesLoaded
     ? t('codeAgentWorkspaceIndexing')
     : t('codeAgentWorkspaceFileCount', { formattedCount: fileCount.toLocaleString() });
 

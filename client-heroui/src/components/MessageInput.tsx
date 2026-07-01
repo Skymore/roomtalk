@@ -38,6 +38,7 @@ import { useAIModelSelection } from '../hooks/useAIModelSelection';
 import { startStreamingTranscription, StreamingTranscriber } from '../utils/streamingTranscription';
 import { MessageInputAIControls, MessageInputAISettingsButton } from './MessageInputAIControls';
 import { PostingScheduleDetails } from './PostingScheduleDetails';
+import { CodeAgentPendingReviewComments } from './CodeAgentPendingReviewComments';
 import {
   normalizeAIContextMessageLimit,
 } from '../utils/aiContext';
@@ -1424,33 +1425,12 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           )}
 
           {isCodeAgentRoom && reviewComments.length > 0 && (
-            <div className="mx-0 flex basis-full flex-wrap gap-1.5 px-1 py-1 sm:mx-3 sm:mt-3 sm:px-0 sm:py-0">
-              {reviewComments.map((comment) => {
-                const label = `${comment.filePath} ${comment.rangeLabel}`;
-                return (
-                  <span
-                    key={comment.id}
-                    className="inline-flex max-w-full items-center gap-1 rounded-md border border-[#dedbd0] bg-[#f5f4ed] px-2 py-1 text-[11px] font-medium text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242422] dark:text-[#e8e6dc]"
-                    title={comment.text}
-                  >
-                    <Icon icon="lucide:message-circle" className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
-                    <span className="min-w-0 max-w-64 truncate font-mono">{label}</span>
-                    <button
-                      type="button"
-                      aria-label={t('codeAgentRemoveReviewComment', { label })}
-                      className="ml-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-sm text-[#87867f] hover:bg-[#dedbd0] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        onRemoveReviewComment?.(comment.id);
-                      }}
-                    >
-                      <Icon icon="lucide:x" className="h-3 w-3" />
-                    </button>
-                  </span>
-                );
-              })}
-            </div>
+            <CodeAgentPendingReviewComments
+              comments={reviewComments}
+              onRemove={(commentId) => onRemoveReviewComment?.(commentId)}
+              removeLabel={(label) => t('codeAgentRemoveReviewComment', { label })}
+              className="mx-0 basis-full px-1 py-1 sm:mx-3 sm:mt-3 sm:px-0 sm:py-0"
+            />
           )}
 
           {isVoiceMode ? (

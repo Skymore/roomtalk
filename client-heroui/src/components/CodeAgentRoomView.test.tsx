@@ -51,7 +51,7 @@ vi.mock('./MessageList', async () => {
       <button
         type="button"
         data-testid="message-list-hash-line-link"
-        onClick={() => onOpenWorkspaceFile?.('src/App.tsx#L87')}
+        onClick={() => onOpenWorkspaceFile?.('src/App.tsx#L87C5')}
       >
         open-file-hash-line
       </button>

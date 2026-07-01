@@ -86,6 +86,79 @@ describe('codeAgentReviewComments', () => {
     expect(inferReviewCommentFenceLanguage('Makefile')).toBe('text');
   });
 
+  it('preserves nested markdown fences in source comments like T3', () => {
+    const serialized = formatReviewCommentContext({
+      id: 'comment-nested-fence',
+      sectionId: 'file:docs/plan.md',
+      sectionTitle: 'File comment',
+      filePath: 'docs/plan.md',
+      startIndex: 0,
+      endIndex: 2,
+      rangeLabel: 'L1 to L3',
+      text: 'Update this example.',
+      diff: ['# Example', '```ts', 'const value = 1;', '```'].join('\n'),
+      fenceLanguage: 'md',
+    });
+    const [segment] = parseReviewCommentMessageSegments(serialized);
+
+    expect(serialized).toContain('````md');
+    expect(segment).toEqual(expect.objectContaining({
+      kind: 'review-comment',
+      comment: expect.objectContaining({
+        fenceLanguage: 'md',
+        diff: ['# Example', '```ts', 'const value = 1;', '```'].join('\n'),
+      }),
+    }));
+  });
+
+  it('round-trips greater-than signs in attributes like T3', () => {
+    const serialized = formatReviewCommentContext({
+      id: 'comment-attribute-escape',
+      sectionId: 'turn:4',
+      sectionTitle: 'Changes > 5',
+      filePath: 'src/app.ts',
+      startIndex: 0,
+      endIndex: 0,
+      rangeLabel: '+1',
+      text: 'Check this.',
+      diff: '@@ -0,0 +1,1 @@\n+one',
+      fenceLanguage: 'diff',
+    });
+    const [segment] = parseReviewCommentMessageSegments(serialized);
+
+    expect(serialized).toContain('sectionTitle="Changes &gt; 5"');
+    expect(segment).toEqual(expect.objectContaining({
+      kind: 'review-comment',
+      comment: expect.objectContaining({ sectionTitle: 'Changes > 5' }),
+    }));
+  });
+
+  it('keeps fenced examples in comment text separate from the final context fence like T3', () => {
+    const text = ['Try this:', '```ts', 'const value = 1;', '```', 'Then retry.'].join('\n');
+    const serialized = formatReviewCommentContext({
+      id: 'comment-text-fence',
+      sectionId: 'turn:5',
+      sectionTitle: 'Turn 5',
+      filePath: 'src/app.ts',
+      startIndex: 0,
+      endIndex: 0,
+      rangeLabel: '+1',
+      text,
+      diff: '@@ -0,0 +1,1 @@\n+one',
+      fenceLanguage: 'diff',
+    });
+    const [segment] = parseReviewCommentMessageSegments(serialized);
+
+    expect(segment).toEqual(expect.objectContaining({
+      kind: 'review-comment',
+      comment: expect.objectContaining({
+        text,
+        diff: '@@ -0,0 +1,1 @@\n+one',
+        fenceLanguage: 'diff',
+      }),
+    }));
+  });
+
   it('formats mixed diff-side selections with the T3 review-comment contract', () => {
     const fileDiff = {
       name: 'src/app.ts',

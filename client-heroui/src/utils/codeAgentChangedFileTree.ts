@@ -104,6 +104,24 @@ export function hasNonZeroChangedFileStat(stat: CodeAgentChangedFileStat): boole
   return stat.additions > 0 || stat.deletions > 0;
 }
 
+export function summarizeCodeAgentChangedFileStats(
+  files: ReadonlyArray<CodeAgentChangedFile>,
+): CodeAgentChangedFileStat {
+  return files.reduce(
+    (summary, file) => {
+      const stat = readStat(file);
+      if (!stat) {
+        return summary;
+      }
+      return {
+        additions: summary.additions + stat.additions,
+        deletions: summary.deletions + stat.deletions,
+      };
+    },
+    { additions: 0, deletions: 0 },
+  );
+}
+
 export function formatCompactDiffCount(value: number): string {
   if (value < 1000) return String(value);
   if (value < 1_000_000) {

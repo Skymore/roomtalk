@@ -6,11 +6,26 @@ import React, { memo, useState, useEffect, useRef, ReactNode } from "react";
 import Markdown from "markdown-to-jsx";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { Image } from "@heroui/react";
+import { Image, Tooltip } from "@heroui/react";
 import "katex/dist/katex.min.css";
 import katex from "katex";
 import { useTranslation } from "react-i18next";
 import { markdownTaskMarkerOffsets } from "./codeAgentFilePreviewMode";
+import {
+  CODE_AGENT_CHAT_FILE_TAG_CHIP_CLASS_NAME,
+  CodeAgentFileTagChipContent,
+} from './CodeAgentFileTagChip';
+import {
+  normalizeCodeAgentMarkdownLinkDestination,
+  resolveCodeAgentMarkdownFileLinkMeta,
+  rewriteCodeAgentMarkdownFileUriHref,
+  type CodeAgentMarkdownFileLinkMeta,
+} from '../utils/codeAgentMarkdownLinks';
+import {
+  hasSpecificPierreIconForFileName,
+  syntheticFileNameForLanguageId,
+} from '../utils/codeAgentPierreIcons';
+import { CodeAgentPierreEntryIcon } from './CodeAgentPierreEntryIcon';
 
 interface MarkdownContentProps {
   content: string;
@@ -21,11 +36,16 @@ interface MarkdownContentProps {
 interface CodeBlockProps {
   className?: string;
   children: ReactNode;
+  fenceTitle?: string | null;
 }
 interface MathProps {
   children: ReactNode;
   inline?: boolean;
 }
+type MarkdownCodeElementProps = {
+  className?: string;
+  children: ReactNode;
+} & Record<string, unknown>;
 
 const codeBlockFrameClassName =
   "mb-2 max-w-full min-w-0 overflow-hidden rounded-lg border border-[#dedbd0] bg-[#fbfaf6] text-[#141413] shadow-[0_0_0_1px_rgba(194,192,182,0.18)] dark:border-[#3d3d3a] dark:bg-[#242421] dark:text-[#faf9f5] dark:shadow-none";
@@ -42,50 +62,214 @@ const codeBlockBodyClassName =
 const inlineCodeClassName =
   "rounded-md border border-[#dedbd0] bg-[#f0eee6] px-1.5 py-0.5 font-mono text-[0.92em] font-semibold text-[#7a321f] shadow-[inset_0_0_0_1px_rgba(250,249,245,0.35)] dark:border-[#4d4c48] dark:bg-[#30302e] dark:text-[#ffd7c2] dark:shadow-none";
 
-function decodeHrefComponent(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
+const CODE_AGENT_DEFAULT_WORKSPACE_ROOT = '/workspace';
+const MARKDOWN_LINK_HREF_PATTERN = /\[[^\]]*]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g;
+const CODE_FENCE_LANGUAGE_REGEX = /(?:^|\s)(?:language|lang)-([^\s]+)/;
+const FENCE_TITLE_ATTR_REGEX = /(?:^|\s)(?:title|file(?:name)?)=(?:"([^"]+)"|'([^']+)'|(\S+))/i;
+const FENCE_FILENAME_TOKEN_REGEX = /^[\w@][\w@./-]*\.[A-Za-z0-9]+$/;
+const CODE_FENCE_OPENING_LINE_REGEX = /^([ \t]{0,3})(`{3,}|~{3,})(.*)$/;
+const CODE_FENCE_TITLE_ATTRIBUTE_NAME = 'title';
+
+function readResolvedTheme() {
+  return typeof document !== 'undefined' && document.documentElement.classList.contains('dark') ? 'dark' : 'light';
 }
 
-function workspaceMarkdownFileTarget(href: unknown): string | null {
-  if (typeof href !== 'string') {
-    return null;
-  }
-  let target = href.trim();
-  if (!target || /^(https?:|mailto:|tel:|data:|blob:|#)/i.test(target)) {
-    return null;
-  }
+function useResolvedTheme() {
+  const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>(readResolvedTheme);
 
-  if (/^file:\/\//i.test(target)) {
-    try {
-      target = new URL(target).pathname;
-    } catch {
-      target = target.replace(/^file:\/\//i, '');
+  useEffect(() => {
+    if (typeof document === 'undefined') {
+      return undefined;
     }
-  } else if (/^[a-z][a-z0-9+.-]*:/i.test(target) && !/^[a-z]:[\\/]/i.test(target)) {
-    return null;
+    const observer = new MutationObserver(() => setResolvedTheme(readResolvedTheme()));
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, []);
+
+  return resolvedTheme;
+}
+
+function pathParentSegments(path: string): string[] {
+  const normalized = path.replaceAll('\\', '/');
+  const segments = normalized.split('/').filter((segment) => segment.length > 0);
+  return segments.slice(0, -1);
+}
+
+function buildFileLinkParentSuffixByPath(filePaths: ReadonlyArray<string>): Map<string, string> {
+  const groups = new Map<string, Set<string>>();
+  for (const filePath of filePaths) {
+    const pathSegments = filePath
+      .replaceAll('\\', '/')
+      .split('/')
+      .filter((segment) => segment.length > 0);
+    const basename = pathSegments[pathSegments.length - 1];
+    if (!basename) continue;
+    const group = groups.get(basename) ?? new Set<string>();
+    group.add(filePath);
+    groups.set(basename, group);
   }
 
-  target = decodeHrefComponent(target).replace(/\\/g, '/');
-  const hashIndex = target.indexOf('#');
-  const hashSuffix = hashIndex >= 0 ? target.slice(hashIndex) : '';
-  const pathAndQuery = hashIndex >= 0 ? target.slice(0, hashIndex) : target;
-  const queryIndex = pathAndQuery.indexOf('?');
-  const pathPart = queryIndex >= 0 ? pathAndQuery.slice(0, queryIndex) : pathAndQuery;
-  const normalized = `${pathPart.replace(/^\.\//, '')}${hashSuffix}`;
-  const normalizedPath = pathPart.replace(/^\.\//, '');
+  const suffixByPath = new Map<string, string>();
+  for (const group of groups.values()) {
+    const uniquePaths = [...group];
+    if (uniquePaths.length < 2) continue;
 
-  if (
-    normalizedPath.startsWith('/workspace/') ||
-    normalizedPath.startsWith('workspace/') ||
-    pathPart.startsWith('./') ||
-    normalizedPath.includes('/') ||
-    /\.[A-Za-z0-9]+$/.test(normalizedPath)
-  ) {
-    return normalized;
+    const parentSegmentsByPath = new Map(
+      uniquePaths.map((filePath) => [filePath, pathParentSegments(filePath)]),
+    );
+    const minUniqueDepthByPath = new Map<string, number>();
+
+    for (const filePath of uniquePaths) {
+      const segments = parentSegmentsByPath.get(filePath) ?? [];
+      let resolvedDepth = segments.length;
+      for (let depth = 1; depth <= segments.length; depth += 1) {
+        const candidate = segments.slice(-depth).join('/');
+        const collision = uniquePaths.some((otherPath) => {
+          if (otherPath === filePath) return false;
+          const otherSegments = parentSegmentsByPath.get(otherPath) ?? [];
+          return otherSegments.slice(-depth).join('/') === candidate;
+        });
+        if (!collision) {
+          resolvedDepth = depth;
+          break;
+        }
+      }
+      minUniqueDepthByPath.set(filePath, resolvedDepth);
+    }
+
+    for (const filePath of uniquePaths) {
+      const segments = parentSegmentsByPath.get(filePath) ?? [];
+      if (segments.length === 0) continue;
+      const minUniqueDepth = minUniqueDepthByPath.get(filePath) ?? 1;
+      const suffixDepth = globalThis.Math.min(segments.length, globalThis.Math.max(minUniqueDepth, 2));
+      suffixByPath.set(filePath, segments.slice(-suffixDepth).join('/'));
+    }
+  }
+
+  return suffixByPath;
+}
+
+function extractMarkdownLinkHrefs(text: string): string[] {
+  const hrefs: string[] = [];
+  for (const match of text.matchAll(MARKDOWN_LINK_HREF_PATTERN)) {
+    const href = match[1]?.trim();
+    if (!href) continue;
+    hrefs.push(href);
+  }
+  return hrefs;
+}
+
+function normalizeCodeAgentMarkdownLinkHrefKey(href: string): string {
+  const normalizedHref = normalizeCodeAgentMarkdownLinkDestination(href);
+  return rewriteCodeAgentMarkdownFileUriHref(normalizedHref) ?? normalizedHref;
+}
+
+function buildMarkdownFileLinkLabel(meta: CodeAgentMarkdownFileLinkMeta, parentSuffix: string | undefined): string {
+  const labelParts = [meta.basename];
+  if (typeof parentSuffix === 'string' && parentSuffix.length > 0) {
+    labelParts.push(parentSuffix);
+  }
+  if (meta.line) {
+    labelParts.push(`L${meta.line}${meta.column ? `:C${meta.column}` : ''}`);
+  }
+  return labelParts.join(' · ');
+}
+
+function extractFenceLanguage(className: string | undefined): string {
+  const match = className?.match(CODE_FENCE_LANGUAGE_REGEX);
+  const raw = match?.[1] ?? 'text';
+  return raw === 'gitignore' ? 'ini' : raw;
+}
+
+function extractFenceTitle(meta: string | undefined): string | null {
+  if (!meta) return null;
+  const attrMatch = FENCE_TITLE_ATTR_REGEX.exec(meta);
+  const attrTitle = attrMatch?.[1] ?? attrMatch?.[2] ?? attrMatch?.[3];
+  if (attrTitle) return attrTitle;
+  return meta.split(/\s+/).find((candidate) => FENCE_FILENAME_TOKEN_REGEX.test(candidate)) ?? null;
+}
+
+function escapeFenceTitleAttribute(value: string): string {
+  return value.replaceAll('"', '&quot;');
+}
+
+function normalizeCodeFenceTitles(markdown: string): string {
+  const lines = markdown.split('\n');
+  let activeFence: { marker: '`' | '~'; length: number } | null = null;
+
+  return lines.map((line) => {
+    const match = CODE_FENCE_OPENING_LINE_REGEX.exec(line);
+    if (!match) {
+      return line;
+    }
+
+    const fence = match[2]!;
+    const marker = fence[0] as '`' | '~';
+    const fenceLength = fence.length;
+
+    if (activeFence) {
+      if (marker === activeFence.marker && fenceLength >= activeFence.length) {
+        activeFence = null;
+      }
+      return line;
+    }
+
+    const info = (match[3] ?? '').trim();
+    const language = info.match(/^(\S+)/)?.[1];
+    if (!language) {
+      activeFence = { marker, length: fenceLength };
+      return line;
+    }
+
+    const meta = info.slice(language.length).trim();
+    const fenceTitle = extractFenceTitle(meta);
+    activeFence = { marker, length: fenceLength };
+    if (!fenceTitle) {
+      return line;
+    }
+
+    return `${match[1]}${fence} ${language} ${CODE_FENCE_TITLE_ATTRIBUTE_NAME}="${escapeFenceTitleAttribute(fenceTitle)}"`;
+  }).join('\n');
+}
+
+function MarkdownCodeBlockTitleContent({
+  fenceTitle,
+  language,
+  theme,
+}: {
+  fenceTitle: string | null;
+  language: string;
+  theme: 'light' | 'dark';
+}) {
+  if (fenceTitle) {
+    return (
+      <>
+        <CodeAgentPierreEntryIcon pathValue={fenceTitle} kind="file" theme={theme} className="size-3.5" />
+        <span className="truncate">{fenceTitle}</span>
+      </>
+    );
+  }
+
+  const fileName = syntheticFileNameForLanguageId(language);
+  if (!hasSpecificPierreIconForFileName(fileName)) {
+    return <span className="truncate uppercase tracking-wide">{language}</span>;
+  }
+
+  return (
+    <Tooltip content={language} placement="top" size="sm" delay={400}>
+      <span className="inline-flex shrink-0 rounded-sm" aria-label={`Language: ${language}`}>
+        <CodeAgentPierreEntryIcon pathValue={fileName} kind="file" theme={theme} className="size-3.5" />
+      </span>
+    </Tooltip>
+  );
+}
+
+function extractCodeFenceTitle(props: Record<string, unknown>): string | null {
+  for (const key of ['title', 'file', 'filename']) {
+    const value = props[key];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
+    }
   }
   return null;
 }
@@ -127,7 +311,8 @@ const parseMath = (content: string): string => {
 /** 综合预处理 */
 const preprocessMarkdown = (content: string): string => {
   let text = removeSeparators(content);
-  return fixQuoteBlocks(text);
+  text = fixQuoteBlocks(text);
+  return normalizeCodeFenceTitles(text);
 };
 
 /** KaTeX 渲染组件 */
@@ -161,7 +346,7 @@ const Math: React.FC<MathProps> = ({ children, inline = false }) => {
 };
 
 /** 块级代码组件（支持 Mermaid 渲染） */
-const CodeBlock = memo<CodeBlockProps>(({ className, children }) => {
+const CodeBlock = memo<CodeBlockProps>(({ className, children, fenceTitle = null }) => {
   const { t } = useTranslation();
   const [themeDark, setThemeDark] = useState(
     typeof document !== "undefined" && document.documentElement.classList.contains("dark")
@@ -172,8 +357,7 @@ const CodeBlock = memo<CodeBlockProps>(({ className, children }) => {
     return () => obs.disconnect();
   }, []);
 
-  const match = /(?:language|lang)-(\w+)/.exec(className || "");
-  const language = match ? match[1] : "text";
+  const language = extractFenceLanguage(className);
   const code = String(children).replace(/\n$/, "");
 
   const copyTimeout = useRef<number | null>(null);
@@ -233,7 +417,13 @@ const CodeBlock = memo<CodeBlockProps>(({ className, children }) => {
     return (
       <div className={codeBlockFrameClassName}>
         <div className={codeBlockHeaderClassName}>
-          <span className="text-xs font-semibold uppercase tracking-wide">{language}</span>
+          <span className="flex min-w-0 items-center gap-1.5 text-xs font-semibold">
+            <MarkdownCodeBlockTitleContent
+              fenceTitle={fenceTitle}
+              language={language}
+              theme={themeDark ? 'dark' : 'light'}
+            />
+          </span>
           <button onClick={handleCopy} className={codeBlockCopyButtonClassName}>
             {copied ? t('copied') : t('copy')}
           </button>
@@ -252,7 +442,13 @@ const CodeBlock = memo<CodeBlockProps>(({ className, children }) => {
     <div className={codeBlockFrameClassName}>
       {/* Header */}
       <div className={codeBlockHeaderClassName}>
-        <span className="text-xs font-semibold uppercase tracking-wide">{language}</span>
+        <span className="flex min-w-0 items-center gap-1.5 text-xs font-semibold">
+          <MarkdownCodeBlockTitleContent
+            fenceTitle={fenceTitle}
+            language={language}
+            theme={themeDark ? 'dark' : 'light'}
+          />
+        </span>
         <button onClick={handleCopy} className={codeBlockCopyButtonClassName}>
           {copied ? t('copied') : t('copy')}
         </button>
@@ -288,10 +484,30 @@ CodeBlock.displayName = "CodeBlock";
 
 /** 主组件 */
 export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content, isStreaming, onTaskListChange, onOpenWorkspaceFile }) => {
+  const resolvedTheme = useResolvedTheme();
   const processed = React.useMemo(() => {
     const text = escapeRawHtmlTags(preprocessMarkdown(content));
     return parseMath(text);
   }, [content]);
+  const markdownFileLinkMetaByHref = React.useMemo(() => {
+    const metaByHref = new Map<string, CodeAgentMarkdownFileLinkMeta>();
+    if (!onOpenWorkspaceFile) {
+      return metaByHref;
+    }
+    for (const href of extractMarkdownLinkHrefs(content)) {
+      const normalizedHref = normalizeCodeAgentMarkdownLinkHrefKey(href);
+      if (metaByHref.has(normalizedHref)) continue;
+      const meta = resolveCodeAgentMarkdownFileLinkMeta(normalizedHref, CODE_AGENT_DEFAULT_WORKSPACE_ROOT);
+      if (meta) {
+        metaByHref.set(normalizedHref, meta);
+      }
+    }
+    return metaByHref;
+  }, [content, onOpenWorkspaceFile]);
+  const fileLinkParentSuffixByPath = React.useMemo(() => {
+    const filePaths = [...markdownFileLinkMetaByHref.values()].map((meta) => meta.filePath);
+    return buildFileLinkParentSuffixByPath(filePaths);
+  }, [markdownFileLinkMetaByHref]);
   const taskMarkerOffsets = React.useMemo(() => markdownTaskMarkerOffsets(content), [content]);
   let taskInputIndex = 0;
 
@@ -308,8 +524,15 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content, 
       pre: {
         component: ({ children }: { children: ReactNode }) => {
           // children 是单个 <code> 元素
-          const codeElement = React.Children.only(children) as React.ReactElement & { props: { className?: string; children: ReactNode } };
-          return <CodeBlock className={codeElement.props.className}>{codeElement.props.children}</CodeBlock>;
+          const codeElement = React.Children.only(children) as React.ReactElement<MarkdownCodeElementProps>;
+          return (
+            <CodeBlock
+              className={codeElement.props.className}
+              fenceTitle={extractCodeFenceTitle(codeElement.props)}
+            >
+              {codeElement.props.children}
+            </CodeBlock>
+          );
         }
       },
       // 行内代码统一渲染为普通文本
@@ -319,23 +542,43 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({ content, 
         </code>
       ) },
       a: {
-        component: ({ children, href, ...props }: any) => {
-          const workspaceTarget = onOpenWorkspaceFile ? workspaceMarkdownFileTarget(href) : null;
-          if (!workspaceTarget) {
-            return <a href={href} {...props}>{children}</a>;
+        component: ({ children, href, className, ...props }: any) => {
+          const normalizedHref = typeof href === 'string' ? normalizeCodeAgentMarkdownLinkHrefKey(href) : '';
+          const fileLinkMeta = onOpenWorkspaceFile && normalizedHref
+            ? markdownFileLinkMetaByHref.get(normalizedHref)
+              ?? resolveCodeAgentMarkdownFileLinkMeta(normalizedHref, CODE_AGENT_DEFAULT_WORKSPACE_ROOT)
+            : null;
+          if (!fileLinkMeta) {
+            return <a href={href} className={className} {...props}>{children}</a>;
           }
+          const parentSuffix = fileLinkParentSuffixByPath.get(fileLinkMeta.filePath);
+
+          const fileLinkClassName = [
+            CODE_AGENT_CHAT_FILE_TAG_CHIP_CLASS_NAME,
+            'cursor-pointer align-middle no-underline transition-colors hover:bg-[#f0eee6] dark:hover:bg-[#242421]',
+            className,
+          ].filter(Boolean).join(' ');
 
           return (
             <a
-              href={href}
+              href={fileLinkMeta.targetPath}
               {...props}
+              className={fileLinkClassName}
+              title={fileLinkMeta.displayPath}
+              data-testid="code-agent-markdown-file-link"
+              data-markdown-copy={`[${fileLinkMeta.basename}](${normalizedHref || href || fileLinkMeta.targetPath})`}
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                onOpenWorkspaceFile?.(workspaceTarget);
+                onOpenWorkspaceFile?.(fileLinkMeta.targetPath);
               }}
             >
-              {children}
+              <CodeAgentFileTagChipContent
+                path={fileLinkMeta.filePath}
+                label={buildMarkdownFileLinkLabel(fileLinkMeta, parentSuffix)}
+                theme={resolvedTheme}
+                selectable
+              />
             </a>
           );
         },

@@ -78,7 +78,7 @@ export function CodeAgentFilePreviewHeader({
   }
 
   return (
-    <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[#dedbd0] px-3 dark:border-[#30302e]" data-surface-subheader>
+    <div className="surface-subheader flex h-9 shrink-0 items-center gap-2 border-b border-[#dedbd0] px-3 dark:border-[#30302e]" data-surface-subheader>
       <div
         ref={breadcrumbRef}
         className="min-w-0 flex-1 overflow-x-auto text-xs [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
@@ -118,6 +118,7 @@ export function CodeAgentFilePreviewHeader({
           type="button"
           className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
           aria-label={t('codeAgentDownloadFile')}
+          title={t('codeAgentDownloadFile')}
           onClick={onDownloadFile}
         >
           <Download className="h-3.5 w-3.5" />
@@ -144,6 +145,7 @@ export function CodeAgentFilePreviewHeader({
           type="button"
           className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-wait disabled:opacity-60 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
           aria-label={t('codeAgentOpenFileInPreview')}
+          title={t('codeAgentOpenFileInPreview')}
           disabled={browserPreviewPending}
           onClick={onOpenInBrowserPreview}
         >
@@ -156,6 +158,7 @@ export function CodeAgentFilePreviewHeader({
           className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
           aria-label={previewToggleLabel}
           aria-pressed={renderPreview}
+          title={previewToggleLabel}
           onClick={onTogglePreviewView}
         >
           {renderPreview ? <Code2 className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
@@ -163,8 +166,14 @@ export function CodeAgentFilePreviewHeader({
       ) : null}
       <button
         type="button"
-        className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+        className={`rounded-md p-1.5 transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
+          explorerOpen
+            ? 'text-[#9f462c] dark:text-[#ffb197]'
+            : 'text-[#87867f] dark:text-[#8f8d86]'
+        }`}
         aria-label={explorerOpen ? t('codeAgentHideFileExplorer') : t('codeAgentShowFileExplorer')}
+        aria-pressed={explorerOpen}
+        title={explorerOpen ? t('codeAgentHideFileExplorer') : t('codeAgentShowFileExplorer')}
         onClick={onToggleExplorer}
       >
         <FolderTree className="h-3.5 w-3.5" />

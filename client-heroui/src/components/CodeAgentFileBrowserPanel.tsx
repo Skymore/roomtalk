@@ -1207,6 +1207,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
         entries={entries}
         entryKinds={entryKinds}
         entriesPending={entriesQuery.isPending}
+        entriesLoaded={entriesQuery.data !== null}
         entriesError={entriesQuery.error}
         entriesTruncated={Boolean(entriesQuery.data?.truncated)}
         selectedPath={selectedPath}

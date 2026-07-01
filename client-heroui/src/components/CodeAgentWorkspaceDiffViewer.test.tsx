@@ -16,6 +16,7 @@ const loadCodeAgentWorkspaceDiffMock = vi.hoisted(() => vi.fn());
 const loadCodeAgentWorkspaceRefsMock = vi.hoisted(() => vi.fn());
 const parsePatchFilesMock = vi.hoisted(() => vi.fn());
 const codeViewScrollToMock = vi.hoisted(() => vi.fn());
+const codeViewMountState = vi.hoisted(() => ({ nextId: 0 }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -64,10 +65,15 @@ vi.mock('@pierre/diffs/react', () => ({
     renderHeaderPrefix?: (item: { id: string; type: 'diff'; fileDiff: { name?: string | null; prevName?: string | null; cacheKey?: string }; collapsed?: boolean }) => ReactNode;
     renderAnnotation?: (annotation: { side: 'additions' | 'deletions'; lineNumber: number; metadata: { entries: Array<{ id: string; kind: 'draft' | 'comment'; rangeLabel: string; text: string }> } }) => ReactNode;
   }, ref) => {
+    const [mountId] = React.useState(() => {
+      codeViewMountState.nextId += 1;
+      return codeViewMountState.nextId;
+    });
     React.useImperativeHandle(ref, () => ({ scrollTo: codeViewScrollToMock }));
     return (
       <div
         data-testid="code-view"
+        data-mount-id={String(mountId)}
         data-diff-style={options.diffStyle}
         data-line-diff-type={options.lineDiffType || ''}
         data-overflow={options.overflow}
@@ -135,6 +141,7 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     loadCodeAgentWorkspaceRefsMock.mockReset();
     parsePatchFilesMock.mockReset();
     codeViewScrollToMock.mockReset();
+    codeViewMountState.nextId = 0;
     localStorage.clear();
     resetCodeAgentDiffPanelStoreForTests();
   });
@@ -147,7 +154,11 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     const loading = await screen.findByTestId('code-agent-workspace-diff-loading');
     const status = screen.getByRole('status', { name: 'codeAgentLoadingBranchDiff' });
     expect(loading.contains(status)).toBe(true);
-    expect(screen.getByTestId('code-agent-workspace-diff-viewer').querySelector('[data-surface-subheader]')).toBeTruthy();
+    const subheader = screen.getByTestId('code-agent-workspace-diff-viewer').querySelector('[data-surface-subheader]');
+    expect(subheader).toBeTruthy();
+    expect(subheader?.className).toContain('surface-subheader');
+    expect(subheader?.className).toContain('h-9');
+    expect(subheader?.className).toContain('border-b');
     const viewport = screen.getByTestId('code-agent-workspace-diff-viewer').querySelector('.diff-panel-viewport');
     expect(viewport).toBeTruthy();
     expect(viewport?.contains(loading)).toBe(true);
@@ -192,10 +203,14 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(codeView).toBeTruthy();
     expect(within(codeView).getByText('src/App.tsx')).toBeTruthy();
     expect(screen.getByTestId('code-agent-workspace-diff-viewer').className).toContain('flex-1');
-    expect(codeView.dataset.className).toContain('min-h-80');
+    expect(codeView.dataset.className).toContain('h-full');
+    expect(codeView.dataset.className).toContain('min-h-0');
     expect(codeView.dataset.className).toContain('flex-1');
     expect(codeView.dataset.className).toContain('diff-render-surface');
-    expect(codeView.dataset.className?.split(/\s+/)).not.toContain('h-80');
+    expect(codeView.dataset.className).toContain('overflow-auto');
+    expect(codeView.dataset.className?.split(/\s+/)).not.toContain('min-h-80');
+    expect(codeView.dataset.className?.split(/\s+/)).not.toContain('rounded-lg');
+    expect(codeView.dataset.className?.split(/\s+/)).not.toContain('border');
     expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenCalledWith('room-1', expect.any(Object));
     expect(parsePatchFilesMock).toHaveBeenCalledWith(
       'diff --git a/src/App.tsx b/src/App.tsx',
@@ -326,6 +341,11 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
 
     expect((await screen.findByTestId('code-agent-workspace-raw-diff')).textContent).toBe('not a git patch\n+but still useful output');
     expect(screen.getByText('Failed to parse patch. Showing raw patch.')).toBeTruthy();
+    expect(screen.getByTestId('code-agent-workspace-raw-diff-shell').className).toContain('p-2');
+    expect(screen.getByTestId('code-agent-workspace-raw-diff-shell').className).not.toContain('rounded');
+    expect(screen.getByTestId('code-agent-workspace-raw-diff').className).toContain('max-h-[72vh]');
+    expect(screen.getByTestId('code-agent-workspace-raw-diff').className).not.toContain('min-h-80');
+    expect(screen.getByTestId('code-agent-workspace-raw-diff').parentElement?.className).toContain('space-y-2');
     expect(screen.queryByTestId('code-view')).toBeNull();
   });
 
@@ -412,7 +432,8 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
 
     render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
 
-    expect(await screen.findByTestId('code-view')).toBeTruthy();
+    const initialCodeView = await screen.findByTestId('code-view');
+    const initialMountId = initialCodeView.dataset.mountId;
     expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenLastCalledWith(
       'room-1',
       expect.objectContaining({ ignoreWhitespace: false, scope: 'branch' }),
@@ -422,6 +443,9 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
 
     await waitFor(() => {
       expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('code-view').dataset.mountId).not.toBe(initialMountId);
     });
     expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenLastCalledWith(
       'room-1',
@@ -448,7 +472,8 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
 
     render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
 
-    expect(await screen.findByTestId('code-view')).toBeTruthy();
+    const initialCodeView = await screen.findByTestId('code-view');
+    const initialMountId = initialCodeView.dataset.mountId;
     expect(screen.getByLabelText('codeAgentDiffScope: codeAgentDiffScopeBranch')).toBeTruthy();
     expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenLastCalledWith(
       'room-1',
@@ -459,6 +484,9 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
 
     await waitFor(() => {
       expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('code-view').dataset.mountId).not.toBe(initialMountId);
     });
     expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenLastCalledWith(
       'room-1',
@@ -700,6 +728,11 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
       diff: '@@ -0,0 +2,3 @@\n+added 2\n+added 3\n+added 4',
       fenceLanguage: 'diff',
     };
+    const secondReviewComment: ReviewCommentContext = {
+      ...reviewComment,
+      id: 'comment-2',
+      text: 'Keep this aligned with T3.',
+    };
     loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
       available: true,
       patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
@@ -737,16 +770,19 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
         roomId="room-1"
         enabled
         refreshKey="snapshot-1"
-        reviewComments={[reviewComment]}
+        reviewComments={[reviewComment, secondReviewComment]}
       />,
     );
 
     expect(await screen.findByTestId('diff-line-annotation')).toBeTruthy();
     expect(screen.getByTestId('diff-file-file:app').dataset.version).toBe(String(
-      fnv1a32('0:comment-1:+2 to +4:Please revisit this diff.'),
+      fnv1a32('0:comment-1:+2 to +4:Please revisit this diff.:comment-2:+2 to +4:Keep this aligned with T3.'),
     ));
     expect(screen.getByTestId('diff-file-file:app').dataset.version).not.toBe(String(
       fnv1a32('0:comment-1:comment:+2 to +4:Please revisit this diff.'),
+    ));
+    expect(screen.getByTestId('diff-file-file:app').dataset.version).not.toBe(String(
+      fnv1a32('0:comment-1:+2 to +4:Please revisit this diff.|comment-2:+2 to +4:Keep this aligned with T3.'),
     ));
   });
 
@@ -790,7 +826,7 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(screen.queryByTestId('diff-line-annotation')).toBeNull();
   });
 
-  it('renders T3-style changed file navigation and scrolls to a diff file', async () => {
+  it('renders parsed files directly in the T3 CodeView without a custom file nav', async () => {
     loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
       available: true,
       patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
@@ -822,61 +858,14 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
 
     render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
 
-    const nav = await screen.findByTestId('code-agent-diff-file-nav');
-    expect(within(nav).getByText('codeAgentChangedFilesCount')).toBeTruthy();
-    expect(within(nav).getByText('src/App.tsx')).toBeTruthy();
-    expect(within(nav).getByText('src/utils.ts')).toBeTruthy();
-    expect(within(nav).getByText('+2')).toBeTruthy();
-    expect(within(nav).getByText('-1')).toBeTruthy();
-    expect(within(nav).getByText('+1k')).toBeTruthy();
-
-    fireEvent.click(within(nav).getByLabelText('Scroll to diff file src/utils.ts'));
-
-    expect(codeViewScrollToMock).toHaveBeenCalledWith({ type: 'item', id: 'file:utils', align: 'start' });
-  });
-
-  it('opens a changed file nav item through the T3 primary file action', async () => {
-    const onOpenFile = vi.fn();
-    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
-      available: true,
-      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
-      byteSize: 42,
-      truncated: false,
-    });
-    parsePatchFilesMock.mockReturnValue([
-      {
-        files: [
-          {
-            name: 'src/App.tsx',
-            cacheKey: 'file:app',
-            hunks: [{ additionLines: 2, deletionLines: 1 }],
-            additionLines: [],
-            deletionLines: [],
-            type: 'change',
-          },
-          {
-            name: 'src/utils.ts',
-            cacheKey: 'file:utils',
-            hunks: [{ additionLines: 1000, deletionLines: 0 }],
-            additionLines: [],
-            deletionLines: [],
-            type: 'new',
-          },
-        ],
-      },
-    ]);
-
-    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" onOpenFile={onOpenFile} />);
-
-    const nav = await screen.findByTestId('code-agent-diff-file-nav');
-    fireEvent.click(within(nav).getByLabelText('Open diff file src/utils.ts'));
-
-    expect(onOpenFile).toHaveBeenCalledWith('src/utils.ts');
+    const codeView = await screen.findByTestId('code-view');
+    expect(screen.queryByTestId('code-agent-diff-file-nav')).toBeNull();
+    expect(within(codeView).getByText('src/App.tsx')).toBeTruthy();
+    expect(within(codeView).getByText('src/utils.ts')).toBeTruthy();
+    expect(codeView.parentElement?.className).toContain('min-h-0');
+    expect(codeView.parentElement?.className).toContain('flex-1');
+    expect(codeView.parentElement?.className).not.toContain('gap-2');
     expect(codeViewScrollToMock).not.toHaveBeenCalled();
-
-    fireEvent.click(within(nav).getByLabelText('Scroll to diff file src/utils.ts'));
-
-    expect(codeViewScrollToMock).toHaveBeenCalledWith({ type: 'item', id: 'file:utils', align: 'start' });
   });
 
   it('reports parsed diff file summaries for the changed-files tree', async () => {
@@ -1195,13 +1184,20 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
 
     expect((await screen.findByTestId('code-view')).dataset.diffStyle).toBe('unified');
-    fireEvent.click(screen.getByLabelText('codeAgentSplitDiffView'));
+    const renderModeGroup = screen.getByRole('group', {
+      name: 'codeAgentStackedDiffView / codeAgentSplitDiffView',
+    });
+    expect(renderModeGroup.contains(screen.getByLabelText('codeAgentStackedDiffView'))).toBe(true);
+    expect(renderModeGroup.contains(screen.getByLabelText('codeAgentSplitDiffView'))).toBe(true);
+    expect(screen.getByLabelText('codeAgentStackedDiffView').className).toContain('rounded-r-none');
+    expect(screen.getByLabelText('codeAgentSplitDiffView').className).toContain('rounded-l-none');
+    fireEvent.click(within(renderModeGroup).getByLabelText('codeAgentSplitDiffView'));
 
     expect(screen.getByTestId('code-view').dataset.diffStyle).toBe('split');
     expect(localStorage.getItem('roomtalk.codeWorkspace.diffRenderMode')).toBe('split');
     expect(screen.getByLabelText('codeAgentSplitDiffView').getAttribute('aria-pressed')).toBe('true');
 
-    fireEvent.click(screen.getByLabelText('codeAgentStackedDiffView'));
+    fireEvent.click(within(renderModeGroup).getByLabelText('codeAgentStackedDiffView'));
 
     expect(screen.getByTestId('code-view').dataset.diffStyle).toBe('unified');
     expect(localStorage.getItem('roomtalk.codeWorkspace.diffRenderMode')).toBe('stacked');

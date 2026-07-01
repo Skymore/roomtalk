@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { buildCodeAgentChangedFileTree, formatCompactDiffCount } from './codeAgentChangedFileTree';
+import {
+  buildCodeAgentChangedFileTree,
+  formatCompactDiffCount,
+  summarizeCodeAgentChangedFileStats,
+} from './codeAgentChangedFileTree';
 
 describe('buildCodeAgentChangedFileTree', () => {
   it('builds nested directory nodes with aggregated stats', () => {
@@ -70,5 +74,15 @@ describe('formatCompactDiffCount', () => {
     expect(formatCompactDiffCount(1_200)).toBe('1.2k');
     expect(formatCompactDiffCount(12_400)).toBe('12k');
     expect(formatCompactDiffCount(1_250_000)).toBe('1.3m');
+  });
+});
+
+describe('summarizeCodeAgentChangedFileStats', () => {
+  it('summarizes changed-file stats like T3', () => {
+    expect(summarizeCodeAgentChangedFileStats([
+      { path: 'src/App.tsx', additions: 7, deletions: 3 },
+      { path: 'src/empty.ts' },
+      { path: 'docs/Guide.md', additions: 2, deletions: 0 },
+    ])).toEqual({ additions: 9, deletions: 3 });
   });
 });

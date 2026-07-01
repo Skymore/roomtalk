@@ -104,7 +104,7 @@ export function CodeAgentAnnotatableCodeView({
         collapsed,
         version: fnv1a32(`${collapsed ? '1' : '0'}:${annotations
           .flatMap((annotation) => annotation.metadata.entries.map((entry) => `${entry.id}:${entry.rangeLabel}:${entry.text}`))
-          .join('|')}`),
+          .join(':')}`),
       };
     })
   ), [draft, files, reviewComments, sectionId]);

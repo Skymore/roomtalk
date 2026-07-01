@@ -7,6 +7,7 @@ import { CodeAgentChangedFilesTree } from './CodeAgentChangedFilesTree';
 describe('CodeAgentChangedFilesTree', () => {
   afterEach(() => {
     cleanup();
+    document.getElementById('roomtalk-pierre-file-icon-sprite')?.remove();
   });
 
   it('renders compacted directories collapsed by default', () => {
@@ -17,6 +18,7 @@ describe('CodeAgentChangedFilesTree', () => {
           { path: 'apps/web/src/main.ts' },
         ]}
         allDirectoriesExpanded={false}
+        resolvedTheme="light"
         onOpenDiffFile={vi.fn()}
       />,
     );
@@ -36,6 +38,7 @@ describe('CodeAgentChangedFilesTree', () => {
           { path: 'apps/web/src/main.ts', additions: 3, deletions: 0 },
         ]}
         allDirectoriesExpanded
+        resolvedTheme="dark"
         selectedPath="apps/web/src/main.ts"
         onOpenDiffFile={onOpenDiffFile}
       />,
@@ -49,5 +52,22 @@ describe('CodeAgentChangedFilesTree', () => {
     fireEvent.click(screen.getByText('main.ts'));
 
     expect(onOpenDiffFile).toHaveBeenCalledWith('apps/web/src/main.ts');
+  });
+
+  it('uses T3 Pierre file icons for changed files', () => {
+    render(
+      <CodeAgentChangedFilesTree
+        files={[
+          { path: 'package.json', additions: 1, deletions: 0 },
+        ]}
+        allDirectoriesExpanded
+        resolvedTheme="light"
+        onOpenDiffFile={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('package.json')).toBeTruthy();
+    expect(document.querySelector('[data-pierre-icon="t3-file-icon-package-json"]')).toBeTruthy();
+    expect(document.getElementById('roomtalk-pierre-file-icon-sprite')).toBeTruthy();
   });
 });

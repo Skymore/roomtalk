@@ -43,7 +43,16 @@ describe('CodeAgentFilePreviewHeader', () => {
     expect(within(breadcrumbs).getByText('docs')).toBeTruthy();
     expect(within(breadcrumbs).getByText('Guide.md')).toBeTruthy();
     expect(breadcrumbs.querySelector('[data-current-file-crumb="true"]')?.textContent).toContain('Guide.md');
-    expect(breadcrumbs.closest('[data-surface-subheader]')).toBeTruthy();
+    const subheader = breadcrumbs.closest('[data-surface-subheader]');
+    expect(subheader).toBeTruthy();
+    expect(subheader?.className).toContain('surface-subheader');
+    expect(subheader?.className).toContain('h-9');
+    expect(subheader?.className).toContain('border-b');
+    expect(screen.getByLabelText('codeAgentDownloadFile').getAttribute('title')).toBe('codeAgentDownloadFile');
+    expect(screen.getByLabelText('codeAgentOpenFileInPreview').getAttribute('title')).toBe('codeAgentOpenFileInPreview');
+    expect(screen.getByLabelText('codeAgentShowRenderedMarkdown').getAttribute('title')).toBe('codeAgentShowRenderedMarkdown');
+    expect(screen.getByLabelText('codeAgentHideFileExplorer').getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByLabelText('codeAgentHideFileExplorer').className).toContain('text-[#9f462c]');
 
     fireEvent.click(screen.getByLabelText('codeAgentRefreshWorkspaceFile'));
     fireEvent.click(screen.getByLabelText('codeAgentDownloadFile'));
@@ -74,7 +83,8 @@ describe('CodeAgentFilePreviewHeader', () => {
     expect((screen.getByLabelText('codeAgentOpenFileInPreview') as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByLabelText('codeAgentShowMarkdownSource').getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByLabelText('codeAgentDisableFileLineWrapping').getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByLabelText('codeAgentShowFileExplorer')).toBeTruthy();
+    expect(screen.getByLabelText('codeAgentShowFileExplorer').getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByLabelText('codeAgentShowFileExplorer').getAttribute('title')).toBe('codeAgentShowFileExplorer');
   });
 
   it('omits optional actions when no file is selected or preview controls are unavailable', () => {

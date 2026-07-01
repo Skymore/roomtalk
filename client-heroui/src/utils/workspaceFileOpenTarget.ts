@@ -3,6 +3,26 @@ export interface WorkspaceFileOpenTarget {
   line: number | null;
 }
 
+function splitWorkspacePathAndPosition(value: string): {
+  path: string;
+  line: string | undefined;
+} {
+  let path = value;
+  const columnMatch = path.match(/:(\d+)$/);
+  if (!columnMatch?.[1]) {
+    return { path, line: undefined };
+  }
+
+  path = path.slice(0, -columnMatch[0].length);
+  const lineMatch = path.match(/:(\d+)$/);
+  if (!lineMatch?.[1]) {
+    return { path, line: columnMatch[1] };
+  }
+
+  path = path.slice(0, -lineMatch[0].length);
+  return { path, line: lineMatch[1] };
+}
+
 export const normalizeWorkspaceOpenLine = (line: string | undefined): number | null => {
   if (!line) {
     return null;
@@ -40,7 +60,7 @@ export const parseWorkspaceFileOpenTarget = (path: string): WorkspaceFileOpenTar
   if (hashIndex >= 0) {
     const hash = normalizedPath.slice(hashIndex + 1);
     normalizedPath = normalizedPath.slice(0, hashIndex);
-    const hashLineMatch = hash.match(/^L(\d+)$/i);
+    const hashLineMatch = hash.match(/^L(\d+)(?:C\d+)?$/i);
     line = normalizeWorkspaceOpenLine(hashLineMatch?.[1]);
   }
 
@@ -50,11 +70,9 @@ export const parseWorkspaceFileOpenTarget = (path: string): WorkspaceFileOpenTar
   }
 
   if (line === null) {
-    const colonLineMatch = normalizedPath.match(/:(\d+)$/);
-    if (colonLineMatch?.index !== undefined) {
-      line = normalizeWorkspaceOpenLine(colonLineMatch[1]);
-      normalizedPath = normalizedPath.slice(0, colonLineMatch.index);
-    }
+    const pathAndPosition = splitWorkspacePathAndPosition(normalizedPath);
+    line = normalizeWorkspaceOpenLine(pathAndPosition.line);
+    normalizedPath = pathAndPosition.path;
   }
 
   normalizedPath = normalizeWorkspaceOpenPath(normalizedPath);

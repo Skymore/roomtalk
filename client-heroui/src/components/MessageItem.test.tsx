@@ -108,6 +108,7 @@ describe('MessageItem replies', () => {
 
   afterEach(() => {
     cleanup();
+    document.getElementById('roomtalk-pierre-file-icon-sprite')?.remove();
     getMediaDownloadUrlMock.mockReset();
     getRoomMediaHistoryMock.mockReset();
     getAudioTranscriptionMock.mockReset();
@@ -209,7 +210,10 @@ describe('MessageItem replies', () => {
     );
 
     const card = await screen.findByTestId('code-agent-review-comment-card');
-    expect(within(card).getAllByText('src/app.ts').length).toBeGreaterThanOrEqual(1);
+    expect(within(card).getByText('workspace/src/app.ts')).toBeTruthy();
+    const chip = within(card).getByTestId('code-agent-review-comment-file-chip');
+    expect(within(chip).getByText('workspace/src/app.ts')).toBeTruthy();
+    expect(chip.querySelector('[data-pierre-icon]')).toBeTruthy();
     expect(card.textContent).toContain('Turn 2 · +2 to +3');
     expect(within(card).getByText('Keep this configurable.')).toBeTruthy();
     expect(screen.getByTestId('file-diff').textContent).toBe('src/app.ts');
@@ -241,11 +245,41 @@ describe('MessageItem replies', () => {
     );
 
     expect(await screen.findByTestId('code-agent-review-comment-card')).toBeTruthy();
-    expect(screen.getByText('docs/plan.md')).toBeTruthy();
+    expect(screen.getByText('workspace/docs/plan.md')).toBeTruthy();
     expect(screen.getByText('File comment · L1 to L2')).toBeTruthy();
     expect(screen.getByText(/```md/)).toBeTruthy();
     expect(screen.queryByTestId('file-diff')).toBeNull();
     expect(document.body.textContent).not.toContain('<review_comment');
+  });
+
+  it('formats absolute sandbox paths in T3 review comment cards', async () => {
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'absolute-review-comment-message',
+          content: [
+            '<review_comment sectionId="file:/workspace/package.json" sectionTitle="File comment" filePath="/workspace/package.json" startIndex="0" endIndex="1" rangeLabel="L1 to L2">',
+            'Clarify this.',
+            '```json',
+            '{ "name": "roomtalk" }',
+            '```',
+            '</review_comment>',
+          ].join('\n'),
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    const card = await screen.findByTestId('code-agent-review-comment-card');
+    const chip = within(card).getByTestId('code-agent-review-comment-file-chip');
+    expect(within(chip).getByText('workspace/package.json')).toBeTruthy();
+    expect(chip.getAttribute('title')).toBe('/workspace/package.json');
+    expect(chip.querySelector('[data-pierre-icon="t3-file-icon-package-json"]')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('/workspace/package.json');
   });
 
   it('keeps Coco tool events addressable as normal message items', () => {

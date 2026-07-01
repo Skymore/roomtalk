@@ -1,6 +1,5 @@
 import { lazy, memo, Suspense, useEffect, useMemo, useState } from 'react';
 import { FileDiff } from '@pierre/diffs/react';
-import { MessageSquareCode } from 'lucide-react';
 import {
   buildReviewCommentRenderablePatch,
   formatReviewCommentFence,
@@ -12,11 +11,18 @@ import {
   resolveCodeAgentDiffThemeName,
   resolveFileDiffPath,
 } from '../utils/codeAgentDiffRendering';
+import { formatCodeAgentWorkspaceRelativePath } from '../utils/codeAgentFilePathDisplay';
+import {
+  CODE_AGENT_CHAT_FILE_TAG_CHIP_CLASS_NAME,
+  CodeAgentFileTagChipContent,
+} from './CodeAgentFileTagChip';
 
 interface CodeAgentReviewCommentMessageProps {
   comment: ReviewCommentContext;
   onOpenWorkspaceFile?: (path: string) => void;
 }
+
+const CODE_AGENT_DEFAULT_WORKSPACE_ROOT = '/workspace';
 
 const MarkdownContent = lazy(() =>
   import('./MarkdownContent').then((module) => ({ default: module.MarkdownContent })),
@@ -47,6 +53,7 @@ export const CodeAgentReviewCommentMessage = memo(function CodeAgentReviewCommen
 }: CodeAgentReviewCommentMessageProps) {
   const resolvedTheme = useResolvedTheme();
   const fenceLanguage = comment.fenceLanguage ?? 'diff';
+  const displayPath = formatCodeAgentWorkspaceRelativePath(comment.filePath, CODE_AGENT_DEFAULT_WORKSPACE_ROOT);
   const renderablePatch = useMemo(
     () => getRenderablePatch(
       buildReviewCommentRenderablePatch(comment),
@@ -60,12 +67,20 @@ export const CodeAgentReviewCommentMessage = memo(function CodeAgentReviewCommen
       className="space-y-2 rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-3 text-[#141413] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5]"
       data-testid="code-agent-review-comment-card"
     >
-      <div className="flex min-w-0 items-start gap-2">
-        <MessageSquareCode className="mt-0.5 h-4 w-4 shrink-0 text-[#c96442] dark:text-[#d97757]" aria-hidden="true" />
-        <div className="min-w-0 space-y-0.5">
-          <div className="truncate font-mono text-xs font-semibold" title={comment.filePath}>
-            {comment.filePath}
-          </div>
+      <div className="min-w-0 space-y-1">
+        <div
+          className={CODE_AGENT_CHAT_FILE_TAG_CHIP_CLASS_NAME}
+          title={comment.filePath}
+          data-testid="code-agent-review-comment-file-chip"
+        >
+          <CodeAgentFileTagChipContent
+            path={comment.filePath}
+            label={displayPath}
+            theme={resolvedTheme}
+            selectable
+          />
+        </div>
+        <div className="min-w-0">
           <div className="text-[11px] font-medium text-[#5e5d59] dark:text-[#b0aea5]">
             {comment.sectionTitle} · {comment.rangeLabel}
           </div>

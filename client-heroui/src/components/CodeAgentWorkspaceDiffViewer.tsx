@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CodeViewDiffItem } from '@pierre/diffs';
 import { type CodeViewHandle } from '@pierre/diffs/react';
-import { ArrowRight, Check, ChevronDown, ChevronRight, Columns2, FileCode2, Pilcrow, RefreshCw, Rows3, Search, WrapText } from 'lucide-react';
+import { ArrowRight, Check, ChevronDown, ChevronRight, Columns2, Pilcrow, RefreshCw, Rows3, Search, WrapText } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { loadCodeAgentWorkspaceDiff, loadCodeAgentWorkspaceRefs, type CodeAgentWorkspaceDiff, type CodeAgentWorkspaceDiffScope, type CodeAgentWorkspaceRefs } from '../utils/cocoWorkspace';
 import { buildCodeAgentBaseRefChoices, filterCodeAgentBaseRefChoices, type CodeAgentBaseRefChoice } from '../utils/codeWorkspaceRefs';
@@ -21,7 +21,6 @@ import {
   summarizeFileDiffStat,
   withDiffLineTarget,
 } from '../utils/codeAgentDiffRendering';
-import { formatCompactDiffCount } from '../utils/codeAgentChangedFileTree';
 import { type ReviewCommentContext } from '../utils/codeAgentReviewComments';
 import { openCodeAgentDiffFilePrimaryAction } from '../utils/codeAgentDiffFileActions';
 import { type DiffCommentAnnotationGroup } from './codeAgentDiffCommentAnnotations';
@@ -788,34 +787,40 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
           >
             <RefreshCw className={`h-3.5 w-3.5 ${isDiffRefreshPending ? 'animate-spin' : ''}`} />
           </button>
-        <button
-          type="button"
-          aria-label={t('codeAgentStackedDiffView')}
-          aria-pressed={diffRenderMode === 'stacked'}
-          title={t('codeAgentStackedDiffView')}
-          onClick={() => selectDiffRenderMode('stacked')}
-          className={`inline-flex h-7 w-7 items-center justify-center rounded-md border text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
-            diffRenderMode === 'stacked'
-              ? 'border-[#c96442]/60 bg-[#fff2ec] text-[#9f462c] dark:border-[#d97757]/60 dark:bg-[#2a211d] dark:text-[#ffb197]'
-              : 'border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]'
-          }`}
+        <div
+          className="inline-flex shrink-0"
+          role="group"
+          aria-label={`${t('codeAgentStackedDiffView')} / ${t('codeAgentSplitDiffView')}`}
         >
-          <Rows3 className="h-3.5 w-3.5" />
-        </button>
-        <button
-          type="button"
-          aria-label={t('codeAgentSplitDiffView')}
-          aria-pressed={diffRenderMode === 'split'}
-          title={t('codeAgentSplitDiffView')}
-          onClick={() => selectDiffRenderMode('split')}
-          className={`inline-flex h-7 w-7 items-center justify-center rounded-md border text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
-            diffRenderMode === 'split'
-              ? 'border-[#c96442]/60 bg-[#fff2ec] text-[#9f462c] dark:border-[#d97757]/60 dark:bg-[#2a211d] dark:text-[#ffb197]'
-              : 'border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]'
-          }`}
-        >
-          <Columns2 className="h-3.5 w-3.5" />
-        </button>
+          <button
+            type="button"
+            aria-label={t('codeAgentStackedDiffView')}
+            aria-pressed={diffRenderMode === 'stacked'}
+            title={t('codeAgentStackedDiffView')}
+            onClick={() => selectDiffRenderMode('stacked')}
+            className={`inline-flex h-7 w-7 items-center justify-center rounded-l-md rounded-r-none border text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
+              diffRenderMode === 'stacked'
+                ? 'z-10 border-[#c96442]/60 bg-[#fff2ec] text-[#9f462c] dark:border-[#d97757]/60 dark:bg-[#2a211d] dark:text-[#ffb197]'
+                : 'border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]'
+            }`}
+          >
+            <Rows3 className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            aria-label={t('codeAgentSplitDiffView')}
+            aria-pressed={diffRenderMode === 'split'}
+            title={t('codeAgentSplitDiffView')}
+            onClick={() => selectDiffRenderMode('split')}
+            className={`-ml-px inline-flex h-7 w-7 items-center justify-center rounded-l-none rounded-r-md border text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
+              diffRenderMode === 'split'
+                ? 'z-10 border-[#c96442]/60 bg-[#fff2ec] text-[#9f462c] dark:border-[#d97757]/60 dark:bg-[#2a211d] dark:text-[#ffb197]'
+                : 'border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]'
+            }`}
+          >
+            <Columns2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
         <button
           type="button"
           aria-label={wordWrapLabel}
@@ -889,11 +894,11 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
           <p className="text-xs text-[#87867f] dark:text-[#8f8d86]">{emptyPatchLabel}</p>
         </div>
       ) : renderablePatch.kind === 'raw' ? (
-        <div className="flex min-h-0 flex-1 flex-col overflow-auto rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-2 dark:border-[#30302e] dark:bg-[#1d1d1b]">
-          <div className="flex min-h-0 flex-1 flex-col gap-2">
+        <div className="min-h-0 flex-1 overflow-auto p-2" data-testid="code-agent-workspace-raw-diff-shell">
+          <div className="space-y-2">
             <p className="text-[11px] text-[#87867f] dark:text-[#8f8d86]">{renderablePatch.reason}</p>
             <pre
-              className={`min-h-80 flex-1 overflow-auto rounded-md border border-[#dedbd0] bg-[#f5f4ed] p-3 font-mono text-[11px] leading-relaxed text-[#5e5d59] dark:border-[#30302e] dark:bg-[#141413] dark:text-[#b0aea5] ${
+              className={`max-h-[72vh] overflow-auto rounded-md border border-[#dedbd0] bg-[#f5f4ed] p-3 font-mono text-[11px] leading-relaxed text-[#5e5d59] dark:border-[#30302e] dark:bg-[#141413] dark:text-[#b0aea5] ${
                 wordWrap ? 'whitespace-pre-wrap break-words' : ''
               }`}
               data-testid="code-agent-workspace-raw-diff"
@@ -903,67 +908,10 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
           </div>
         </div>
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col gap-2" onClickCapture={handleDiffClickCapture}>
-          {diffFileSummaries.length > 0 ? (
-            <div
-              className="rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-2 dark:border-[#30302e] dark:bg-[#1d1d1b]"
-              data-testid="code-agent-diff-file-nav"
-            >
-              <div className="mb-1 flex items-center justify-between gap-2 px-1 text-[11px] text-[#87867f] dark:text-[#8f8d86]">
-                <span className="font-semibold text-[#5e5d59] dark:text-[#b0aea5]">
-                  {t('codeAgentChangedFilesCount', { count: diffFileSummaries.length })}
-                </span>
-              </div>
-              <div className="flex gap-1.5 overflow-x-auto pb-0.5">
-                {diffFileSummaries.map((file) => (
-                  <div
-                    key={file.id}
-                    className={`inline-flex max-w-[18rem] shrink-0 overflow-hidden rounded-md border text-[11px] transition-colors ${
-                      selectedFilePath === file.path
-                        ? 'border-[#c96442]/60 bg-[#fff2ec] text-[#9f462c] dark:border-[#d97757]/60 dark:bg-[#2a211d] dark:text-[#ffb197]'
-                        : 'border-[#dedbd0] bg-[#f5f4ed] text-[#4d4c48] hover:bg-[#f0eee6] dark:border-[#30302e] dark:bg-[#242422] dark:text-[#e8e6dc] dark:hover:bg-[#30302e]'
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      aria-label={`${onOpenFile ? 'Open' : 'Select'} diff file ${file.path}`}
-                      title={file.path}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        openCodeAgentDiffFilePrimaryAction({
-                          filePath: file.path,
-                          openInWorkspaceFileViewer: onOpenFile,
-                          openFallback: () => scrollToDiffItem(file.id),
-                        });
-                      }}
-                      className="inline-flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442]"
-                    >
-                      <FileCode2 className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
-                      <span className="truncate font-mono">{file.path}</span>
-                      <span className="ml-1 inline-flex shrink-0 gap-1 tabular-nums">
-                        <span className="font-mono text-[#2f6f4e] dark:text-[#65d08a]">+{formatCompactDiffCount(file.additions)}</span>
-                        <span className="font-mono text-[#9f462c] dark:text-[#ff9b78]">-{formatCompactDiffCount(file.deletions)}</span>
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`Scroll to diff file ${file.path}`}
-                      title={`Scroll to ${file.path}`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        scrollToDiffItem(file.id);
-                      }}
-                      className="inline-flex w-7 shrink-0 items-center justify-center border-l border-current/10 text-[#87867f] transition-colors hover:bg-current/10 hover:text-[#5e5d59] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:text-[#b0aea5]"
-                    >
-                      <ChevronDown className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
+        <div className="min-h-0 flex-1" onClickCapture={handleDiffClickCapture}>
           <CodeAgentAnnotatableCodeView
             viewerRef={codeViewRef}
+            key={collapseScopeKey}
             files={parsed.items.map((item) => ({
               fileDiff: item.fileDiff,
               filePath: resolveFileDiffPath(item.fileDiff),
@@ -975,7 +923,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
             reviewComments={reviewComments}
             onAddReviewComment={onAddReviewComment}
             onRemoveReviewComment={onRemoveReviewComment}
-            className="diff-render-surface min-h-80 flex-1 overflow-auto rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-xs dark:border-[#30302e] dark:bg-[#1d1d1b]"
+            className="diff-render-surface h-full min-h-0 flex-1 overflow-auto"
             renderHeaderPrefix={(fileDiff, fileKey, collapsed) => {
               const filePath = resolveFileDiffPath(fileDiff);
               return (

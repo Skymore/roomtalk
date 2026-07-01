@@ -17,6 +17,7 @@ import {
   getSandboxStatusLabelKey,
 } from '../utils/cocoRoom';
 import { CodeAgentChangedFilesTree } from './CodeAgentChangedFilesTree';
+import { CodeAgentDiffStatLabel, hasNonZeroChangedFileStat } from './CodeAgentDiffStatLabel';
 import {
   CodeAgentWorkspaceDiffViewer,
   type CodeAgentWorkspaceDiffFileSummary,
@@ -27,6 +28,7 @@ import {
   selectCodeAgentDiffFile,
   useCodeAgentDiffPanelSelection,
 } from '../utils/codeAgentDiffPanelStore';
+import { summarizeCodeAgentChangedFileStats } from '../utils/codeAgentChangedFileTree';
 
 interface CodeAgentWorkspacePanelProps {
   room: Room;
@@ -46,6 +48,25 @@ interface CodeAgentWorkspacePanelProps {
 const workspaceSurfaceClassName = 'rounded-xl border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]';
 const EMPTY_CHANGED_FILES: string[] = [];
 const EMPTY_DIFF_FILE_STATS = new Map<string, { additions: number; deletions: number }>();
+
+function readResolvedTheme() {
+  return typeof document !== 'undefined' && document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+}
+
+function useResolvedTheme() {
+  const [resolvedTheme, setResolvedTheme] = React.useState<'light' | 'dark'>(readResolvedTheme);
+
+  React.useEffect(() => {
+    if (typeof document === 'undefined') {
+      return undefined;
+    }
+    const observer = new MutationObserver(() => setResolvedTheme(readResolvedTheme()));
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, []);
+
+  return resolvedTheme;
+}
 
 function normalizeChangedFilePath(path: string): string {
   return path.replace(/\\/g, '/').split('/').filter(Boolean).join('/');
@@ -84,6 +105,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   onRemoveReviewComment,
 }) => {
   const { t } = useTranslation();
+  const resolvedTheme = useResolvedTheme();
   const [isCollapsed, setIsCollapsed] = React.useState(false);
   const [selectedWorkspaceTab, setSelectedWorkspaceTab] = React.useState('overview');
   const [allChangedDirectoriesExpanded, setAllChangedDirectoriesExpanded] = React.useState(true);
@@ -115,9 +137,14 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   const workspaceChanges = workspaceSnapshot?.changes;
   const changedFiles = workspaceChanges?.changedFiles ?? EMPTY_CHANGED_FILES;
   const diffRefreshKey = workspaceSnapshot?.generatedAt || changedFiles.join('\n');
-  const activeDiffFileStats = diffFileStats.scopeKey === diffRefreshKey
+  const diffSelectionScopeKey = diffPanelSelection.kind === 'branch'
+    ? `branch:${diffPanelSelection.baseRef ?? 'auto'}`
+    : 'unstaged';
+  const diffStatsScopeKey = `${diffRefreshKey}:${diffSelectionScopeKey}`;
+  const activeDiffFileStats = diffFileStats.scopeKey === diffStatsScopeKey
     ? diffFileStats.byPath
     : EMPTY_DIFF_FILE_STATS;
+  const hasActiveDiffFileStats = diffFileStats.scopeKey === diffStatsScopeKey && diffFileStats.byPath.size > 0;
   const changedFileEntries = React.useMemo(
     () => changedFiles.map((path) => {
       const normalizedPath = normalizeChangedFilePath(path);
@@ -138,7 +165,19 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
     () => changedFiles.some((path) => path.replace(/\\/g, '/').includes('/')),
     [changedFiles],
   );
-  const diffSummary = workspaceChanges?.diffSummary || null;
+  const changedFileSummary = React.useMemo(
+    () => {
+      const parsedSummary = summarizeCodeAgentChangedFileStats(changedFileEntries);
+      if (hasActiveDiffFileStats || !workspaceChanges?.diffSummary) {
+        return parsedSummary;
+      }
+      return {
+        additions: workspaceChanges.diffSummary.additions,
+        deletions: workspaceChanges.diffSummary.deletions,
+      };
+    },
+    [changedFileEntries, hasActiveDiffFileStats, workspaceChanges?.diffSummary],
+  );
   const isPlanMode = mode === 'plan';
   const agentStatus = getCodeAgentStatus(room);
   const detailsId = 'code-agent-workspace-details';
@@ -157,13 +196,13 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
 
   const handleDiffFileSummariesChange = React.useCallback((summaries: readonly CodeAgentWorkspaceDiffFileSummary[]) => {
     setDiffFileStats({
-      scopeKey: diffRefreshKey,
+      scopeKey: diffStatsScopeKey,
       byPath: new Map(summaries.map((summary) => [
         normalizeChangedFilePath(summary.path),
         { additions: summary.additions, deletions: summary.deletions },
       ])),
     });
-  }, [diffRefreshKey]);
+  }, [diffStatsScopeKey]);
 
   const stats = [
     { label: t('codeAgentTools'), value: summary.toolCalls, icon: 'lucide:wrench' },
@@ -407,10 +446,13 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                 <div className="flex min-h-0 flex-1 flex-col gap-2">
                   <div className="flex flex-wrap items-center gap-2 text-xs text-[#4d4c48] dark:text-[#e8e6dc]">
                     <span className="font-semibold">{t('codeAgentChangedFilesCount', { count: changedFiles.length })}</span>
-                    {diffSummary ? (
-                      <span className="font-mono text-[11px] text-[#87867f] dark:text-[#8f8d86]">
-                        +{diffSummary.additions} -{diffSummary.deletions}
-                      </span>
+                    {hasNonZeroChangedFileStat(changedFileSummary) ? (
+                      <CodeAgentDiffStatLabel
+                        additions={changedFileSummary.additions}
+                        deletions={changedFileSummary.deletions}
+                        className="text-[11px]"
+                        layout="inline"
+                      />
                     ) : null}
                   </div>
                   <div className="space-y-1">
@@ -428,6 +470,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                     <CodeAgentChangedFilesTree
                       files={changedFileEntries}
                       allDirectoriesExpanded={allChangedDirectoriesExpanded}
+                      resolvedTheme={resolvedTheme}
                       selectedPath={selectedDiffFilePath}
                       onOpenDiffFile={handleOpenDiffFile}
                     />

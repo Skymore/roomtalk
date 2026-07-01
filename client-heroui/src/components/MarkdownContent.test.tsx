@@ -22,6 +22,7 @@ vi.mock('react-i18next', () => ({
 describe('MarkdownContent math rendering', () => {
   afterEach(() => {
     cleanup();
+    document.getElementById('roomtalk-pierre-file-icon-sprite')?.remove();
     katexRenderMock.mockReset();
   });
 
@@ -58,20 +59,80 @@ describe('MarkdownContent math rendering', () => {
     expect(onTaskListChange).toHaveBeenNthCalledWith(2, { markerOffset: 14, checked: false });
   });
 
-  it('opens T3-style workspace file links in the right file viewer', () => {
+  it('renders T3-style workspace file links as file chips and opens them in the right file viewer', () => {
     const onOpenWorkspaceFile = vi.fn();
-    const { getByText } = render(
+    const { getAllByTestId, getByText } = render(
       <MarkdownContent
-        content={'Open [App](src/App.tsx#L42) and [server](/workspace/server/index.ts:8).'}
+        content={'Open [App](src/App.tsx#L42) and [server](/workspace/package.json:8).'}
         onOpenWorkspaceFile={onOpenWorkspaceFile}
       />,
     );
 
-    fireEvent.click(getByText('App'));
-    fireEvent.click(getByText('server'));
+    const fileLinks = getAllByTestId('code-agent-markdown-file-link');
+    expect(fileLinks).toHaveLength(2);
+    expect(getByText('App.tsx · L42')).toBeTruthy();
+    expect(getByText('package.json · L8')).toBeTruthy();
+    expect(fileLinks[0].getAttribute('title')).toBe('workspace/src/App.tsx:42');
+    expect(fileLinks[1].getAttribute('title')).toBe('workspace/package.json:8');
+    expect(fileLinks[1].querySelector('[data-pierre-icon="t3-file-icon-package-json"]')).toBeTruthy();
 
-    expect(onOpenWorkspaceFile).toHaveBeenNthCalledWith(1, 'src/App.tsx#L42');
-    expect(onOpenWorkspaceFile).toHaveBeenNthCalledWith(2, '/workspace/server/index.ts:8');
+    fireEvent.click(getByText('App.tsx · L42'));
+    fireEvent.click(getByText('package.json · L8'));
+
+    expect(onOpenWorkspaceFile).toHaveBeenNthCalledWith(1, '/workspace/src/App.tsx:42');
+    expect(onOpenWorkspaceFile).toHaveBeenNthCalledWith(2, '/workspace/package.json:8');
+  });
+
+  it('renders T3-style code fence titles with Pierre file icons', () => {
+    const { getByText } = render(
+      <MarkdownContent content={'```tsx title="src/App.tsx"\nexport const App = () => null;\n```'} />,
+    );
+
+    const title = getByText('src/App.tsx');
+    const headerTitle = title.closest('span')?.parentElement;
+    expect(headerTitle?.querySelector('[data-pierre-icon]')).toBeTruthy();
+  });
+
+  it('normalizes T3-style bare code fence filenames before rendering code headers', () => {
+    const { getByText } = render(
+      <MarkdownContent content={'```ts src/lib/client.ts\nexport const client = true;\n```'} />,
+    );
+
+    expect(getByText('src/lib/client.ts')).toBeTruthy();
+  });
+
+  it('normalizes T3-style unquoted filename attributes before rendering code headers', () => {
+    const { getByText } = render(
+      <MarkdownContent content={'```tsx filename=src/App.tsx\nexport const App = () => null;\n```'} />,
+    );
+
+    expect(getByText('src/App.tsx')).toBeTruthy();
+  });
+
+  it('renders T3-style language icons for code fences without titles', () => {
+    const { getByLabelText } = render(
+      <MarkdownContent content={'```tsx\nexport const App = () => null;\n```'} />,
+    );
+
+    const languageIcon = getByLabelText('Language: tsx');
+    expect(languageIcon.querySelector('[data-pierre-icon]')).toBeTruthy();
+  });
+
+  it('adds T3 parent suffixes when markdown file chips have duplicate basenames', () => {
+    const onOpenWorkspaceFile = vi.fn();
+    const { getAllByTestId, getByText } = render(
+      <MarkdownContent
+        content={'Compare [primary](src/components/Button.tsx) with [test](src/lib/Button.tsx#L12).'}
+        onOpenWorkspaceFile={onOpenWorkspaceFile}
+      />,
+    );
+
+    const fileLinks = getAllByTestId('code-agent-markdown-file-link');
+    expect(fileLinks).toHaveLength(2);
+    expect(getByText('Button.tsx · src/components')).toBeTruthy();
+    expect(getByText('Button.tsx · src/lib · L12')).toBeTruthy();
+    expect(fileLinks[0].getAttribute('title')).toBe('workspace/src/components/Button.tsx');
+    expect(fileLinks[1].getAttribute('title')).toBe('workspace/src/lib/Button.tsx:12');
   });
 
   it('does not intercept external markdown links for the workspace viewer', () => {

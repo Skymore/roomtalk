@@ -904,6 +904,31 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(scrollToPathMock).toHaveBeenCalledWith('src/App.tsx', { offset: 'nearest' });
   });
 
+  it('keeps the T3 indexing label until the base workspace entries load', async () => {
+    loadCodeWorkspaceEntriesMock.mockReturnValue(new Promise(() => {}));
+    loadCodeWorkspaceFileMock.mockResolvedValue({
+      path: 'src/App.tsx',
+      content: 'export default function App() {}',
+      byteSize: 32,
+      truncated: false,
+      encoding: 'utf-8',
+    });
+
+    render(
+      <CodeAgentFileBrowserPanel
+        roomId="room-1"
+        projectName="Coco"
+        openFileRequest={{ path: '/workspace/src/App.tsx', requestId: 1 }}
+      />,
+    );
+
+    expect(await screen.findByText('Indexing...')).toBeTruthy();
+    expect(screen.queryByText('1 files')).toBeNull();
+    await waitFor(() => {
+      expect(resetPathsMock).toHaveBeenLastCalledWith(['src/', 'src/App.tsx']);
+    });
+  });
+
   it('reopens cached files immediately and keeps them visible when a refresh fails', async () => {
     let appReadCount = 0;
     loadCodeWorkspaceEntriesMock.mockResolvedValue({

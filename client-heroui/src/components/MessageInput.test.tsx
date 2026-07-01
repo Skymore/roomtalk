@@ -33,6 +33,11 @@ vi.mock('@heroui/react', () => ({
   Popover: ({ children }: any) => <div>{children}</div>,
   PopoverTrigger: ({ children }: any) => <>{children}</>,
   PopoverContent: ({ children }: any) => <div>{children}</div>,
+  Tooltip: ({ children, content }: any) => (
+    <span data-tooltip-content={typeof content === 'string' ? content : undefined}>
+      {children}
+    </span>
+  ),
   useDisclosure: () => ({
     isOpen: false,
     onOpen: vi.fn(),
@@ -453,6 +458,7 @@ describe('MessageInput optimistic send flow', () => {
     setEditorText(editor, 'review this');
 
     expect(screen.getByText('src/App.tsx L2 to L3')).toBeTruthy();
+    expect(document.querySelector('[data-tooltip-content="Please keep this typed."]')).toBeTruthy();
     fireEvent.click(screen.getByLabelText('codeAgentRemoveReviewComment'));
     expect(onRemoveReviewComment).toHaveBeenCalledWith('comment-1');
 
