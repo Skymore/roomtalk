@@ -14,6 +14,12 @@ import { updateRoomSettings } from '../utils/socket';
 import { Message, Room, RoomPermissions, RoomRenameHandler } from '../utils/types';
 import { beginHorizontalResize } from '../utils/horizontalResize';
 import {
+  addCodeAgentReviewCommentDraft,
+  clearCodeAgentReviewCommentDraft,
+  removeCodeAgentReviewCommentDraft,
+  useCodeAgentReviewCommentDraft,
+} from '../utils/codeAgentReviewCommentDraftStore';
+import {
   CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH,
   CODE_AGENT_FILE_PANEL_WIDTH_CHANGE_EVENT,
   clampCodeAgentFilePanelWidth,
@@ -118,11 +124,11 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   const [isFileManagerCollapsed, setIsFileManagerCollapsed] = React.useState(readStoredFileManagerCollapsed);
   const [fileManagerWidth, setFileManagerWidth] = React.useState(readStoredFileManagerWidth);
   const [workspaceFileOpenRequest, setWorkspaceFileOpenRequest] = React.useState<WorkspaceFileOpenRequest | null>(null);
-  const [reviewComments, setReviewComments] = React.useState<ReviewCommentContext[]>([]);
   const [pendingWorkspaceFileSaves, setPendingWorkspaceFileSaves] = React.useState<ReadonlySet<string>>(() => new Set());
   const fileManagerWidthRef = React.useRef(fileManagerWidth);
   const workspaceFileOpenRequestIdRef = React.useRef(0);
   const fileManagerResizeCleanupRef = React.useRef<(() => void) | null>(null);
+  const reviewComments = useCodeAgentReviewCommentDraft(currentRoom.id);
   const normalizedAvailableModes = React.useMemo(
     () => (availableModes.length ? availableModes : ['plan' as CodeAgentMode]),
     [availableModes]
@@ -137,7 +143,6 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
     setReplyToMessage(null);
     setShowScrollButton(false);
     setIsMobileFileManagerOpen(false);
-    setReviewComments([]);
     setPendingWorkspaceFileSaves(new Set());
   }, [currentRoom.id]);
 
@@ -158,19 +163,16 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   }, []);
 
   const handleAddReviewComment = React.useCallback((comment: ReviewCommentContext) => {
-    setReviewComments((current) => {
-      const withoutSameComment = current.filter((entry) => entry.id !== comment.id);
-      return [...withoutSameComment, comment];
-    });
-  }, []);
+    addCodeAgentReviewCommentDraft(currentRoom.id, comment);
+  }, [currentRoom.id]);
 
   const handleRemoveReviewComment = React.useCallback((commentId: string) => {
-    setReviewComments((current) => current.filter((entry) => entry.id !== commentId));
-  }, []);
+    removeCodeAgentReviewCommentDraft(currentRoom.id, commentId);
+  }, [currentRoom.id]);
 
   const handleClearReviewComments = React.useCallback(() => {
-    setReviewComments([]);
-  }, []);
+    clearCodeAgentReviewCommentDraft(currentRoom.id);
+  }, [currentRoom.id]);
 
   React.useEffect(() => {
     fileManagerWidthRef.current = fileManagerWidth;

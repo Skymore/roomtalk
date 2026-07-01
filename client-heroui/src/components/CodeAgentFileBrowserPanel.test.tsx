@@ -576,12 +576,15 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).not.toContain('codeAgentWorkspaceFiles');
 
     fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
-    const addMenu = within(screen.getByTestId('code-agent-file-surface-add-menu'));
+    const addMenuElement = screen.getByTestId('code-agent-file-surface-add-menu');
+    expect(screen.getByTestId('code-agent-file-surface-tabs').contains(addMenuElement)).toBe(false);
+    expect(addMenuElement.className).toContain('fixed');
+    const addMenu = within(addMenuElement);
     const browserSurfaceButton = addMenu.getByText('codeAgentBrowserSurface').closest('button')!;
     const terminalSurfaceButton = addMenu.getByText('codeAgentTerminalSurface').closest('button')!;
-    expect(browserSurfaceButton.disabled).toBe(true);
-    expect(browserSurfaceButton.getAttribute('aria-disabled')).toBe('true');
-    expect(browserSurfaceButton.getAttribute('title')).toBe('codeAgentBrowserSurfaceUnavailable');
+    expect(browserSurfaceButton.disabled).toBe(false);
+    expect(browserSurfaceButton.getAttribute('aria-disabled')).toBeNull();
+    expect(browserSurfaceButton.getAttribute('title')).toBeNull();
     expect(terminalSurfaceButton.disabled).toBe(true);
     expect(terminalSurfaceButton.getAttribute('aria-disabled')).toBe('true');
     expect(terminalSurfaceButton.getAttribute('title')).toBe('codeAgentTerminalSurfaceUnavailable');
@@ -749,8 +752,8 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(screen.queryByText('3 files')).toBeNull();
     const browserSurfaceButton = within(emptyState).getByText('codeAgentBrowserSurface').closest('button')!;
     const terminalSurfaceButton = within(emptyState).getByText('codeAgentTerminalSurface').closest('button')!;
-    expect(browserSurfaceButton.disabled).toBe(true);
-    expect(browserSurfaceButton.getAttribute('title')).toBe('codeAgentBrowserSurfaceUnavailable');
+    expect(browserSurfaceButton.disabled).toBe(false);
+    expect(browserSurfaceButton.getAttribute('title')).toBeNull();
     expect(terminalSurfaceButton.disabled).toBe(true);
     expect(terminalSurfaceButton.getAttribute('title')).toBe('codeAgentTerminalSurfaceUnavailable');
 
@@ -1151,15 +1154,9 @@ describe('CodeAgentFileBrowserPanel', () => {
       expiresAt: '2026-06-30T12:15:00.000Z',
     });
     resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/coco/workspace-assets/token/report.html');
-    const previewWindow = {
-      closed: false,
-      close: vi.fn(),
-      location: { href: 'about:blank' },
-      opener: window,
-    } as unknown as Window;
-    const open = vi.spyOn(window, 'open').mockReturnValue(previewWindow);
+    const open = vi.spyOn(window, 'open');
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
 
     expect(await screen.findByText('1 files')).toBeTruthy();
     selectionHandlerRef.current?.(['output/report.html']);
@@ -1169,12 +1166,14 @@ describe('CodeAgentFileBrowserPanel', () => {
 
     fireEvent.click(screen.getByLabelText('codeAgentOpenFileInPreview'));
 
-    expect(open).toHaveBeenCalledWith('about:blank', '_blank');
+    expect(open).not.toHaveBeenCalled();
     await waitFor(() => {
       expect(createCodeWorkspaceAssetUrlMock).toHaveBeenCalledTimes(2);
     });
-    expect(createCodeWorkspaceAssetUrlMock).toHaveBeenLastCalledWith('room-1', 'output/report.html');
-    expect(previewWindow.location.href).toBe('/api/coco/workspace-assets/token/report.html');
+    expect(createCodeWorkspaceAssetUrlMock).toHaveBeenLastCalledWith('room-1', 'output/report.html', expect.any(Object));
+    expect(screen.queryByLabelText('codeAgentShowSource')).toBeNull();
+    expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('report.html');
+    expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/coco/workspace-assets/token/report.html');
   });
 
   it('opens a requested workspace file from an external diff action', async () => {
@@ -2018,15 +2017,9 @@ describe('CodeAgentFileBrowserPanel', () => {
       expiresAt: '2026-06-30T12:15:00.000Z',
     });
     resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/coco/workspace-assets/token/report.html');
-    const previewWindow = {
-      closed: false,
-      close: vi.fn(),
-      location: { href: 'about:blank' },
-      opener: window,
-    } as unknown as Window;
-    const open = vi.spyOn(window, 'open').mockReturnValue(previewWindow);
+    const open = vi.spyOn(window, 'open');
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
     await screen.findByText('2 files');
     fireEvent.click(screen.getByLabelText('Coco files'));
     expect((await screen.findByTestId('diff-file')).textContent).toBe('README.md:[Report](output/report.html)');
@@ -2034,11 +2027,12 @@ describe('CodeAgentFileBrowserPanel', () => {
     fireEvent.click(screen.getByLabelText('codeAgentShowRenderedMarkdown'));
     fireEvent.click(await screen.findByLabelText('open-report-preview-link'));
 
-    expect(open).toHaveBeenCalledWith('about:blank', '_blank');
+    expect(open).not.toHaveBeenCalled();
     await waitFor(() => {
-      expect(createCodeWorkspaceAssetUrlMock).toHaveBeenCalledWith('room-1', 'output/report.html');
+      expect(createCodeWorkspaceAssetUrlMock).toHaveBeenCalledWith('room-1', 'output/report.html', expect.any(Object));
     });
-    expect(previewWindow.location.href).toBe('/api/coco/workspace-assets/token/report.html');
+    expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('report.html');
+    expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/coco/workspace-assets/token/report.html');
     expect(loadCodeWorkspaceFileMock).toHaveBeenCalledTimes(1);
     expect(loadCodeWorkspaceFileMock).not.toHaveBeenCalledWith('room-1', 'output/report.html', expect.any(Object));
   });

@@ -11,6 +11,7 @@ import {
   migrateCodeAgentRightPanelState,
   openCodeAgentRightPanel,
   openCodeAgentRightPanelFile,
+  openCodeAgentRightPanelPreview,
   readCodeAgentRightPanelState,
   reconcileCodeAgentFileSurfaces,
   removeCodeAgentRightPanelRoom,
@@ -71,6 +72,30 @@ describe('codeAgentRightPanelStore', () => {
       isOpen: true,
       activeSurfaceId: 'files',
       surfaces: [{ id: 'files', kind: 'files' }],
+    });
+  });
+
+  it('opens T3-style browser preview surfaces for cloud workspace files', () => {
+    openCodeAgentRightPanelPreview('room-1');
+    expect(readCodeAgentRightPanelState('room-1')).toEqual({
+      isOpen: true,
+      activeSurfaceId: 'browser:new',
+      surfaces: [{ id: 'browser:new', kind: 'preview', relativePath: null }],
+    });
+
+    openCodeAgentRightPanelPreview('room-1', ' output/report.html ');
+    openCodeAgentRightPanelPreview('room-1', 'output/report.html');
+
+    expect(readCodeAgentRightPanelState('room-1')).toEqual({
+      isOpen: true,
+      activeSurfaceId: 'browser:output/report.html',
+      surfaces: [
+        {
+          id: 'browser:output/report.html',
+          kind: 'preview',
+          relativePath: 'output/report.html',
+        },
+      ],
     });
   });
 
@@ -203,13 +228,15 @@ describe('codeAgentRightPanelStore', () => {
     ]);
   });
 
-  it('reconciles file surfaces when the workspace is unavailable or paths disappear', () => {
+  it('reconciles file and cloud preview surfaces when the workspace is unavailable or paths disappear', () => {
     openCodeAgentRightPanelFile('room-1', 'src/index.ts');
     openCodeAgentRightPanelFile('room-1', 'README.md');
+    openCodeAgentRightPanelPreview('room-1', 'output/report.html');
 
-    reconcileCodeAgentFileSurfaces('room-1', true, new Set(['README.md']));
+    reconcileCodeAgentFileSurfaces('room-1', true, new Set(['README.md', 'output/report.html']));
     expect(readCodeAgentRightPanelState('room-1').surfaces.map((surface) => surface.id)).toEqual([
       'file:README.md',
+      'browser:output/report.html',
     ]);
 
     reconcileCodeAgentFileSurfaces('room-1', false);
@@ -339,5 +366,18 @@ describe('codeAgentRightPanelStore', () => {
       { id: 'diff', kind: 'diff' },
       { id: 'files', kind: 'files' },
     ]);
+  });
+
+  it('toggles a T3-style browser preview surface by hiding instead of discarding tabs', () => {
+    toggleCodeAgentRightPanel('room-1', 'preview');
+    expect(selectActiveCodeAgentRightPanelKind('room-1')).toBe('preview');
+
+    toggleCodeAgentRightPanel('room-1', 'preview');
+    expect(selectActiveCodeAgentRightPanelKind('room-1')).toBeNull();
+    expect(readCodeAgentRightPanelState('room-1')).toEqual({
+      isOpen: false,
+      activeSurfaceId: 'browser:new',
+      surfaces: [{ id: 'browser:new', kind: 'preview', relativePath: null }],
+    });
   });
 });

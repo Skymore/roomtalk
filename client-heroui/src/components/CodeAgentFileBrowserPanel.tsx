@@ -3,6 +3,7 @@ import {
   FileDiff,
   Files,
   Globe2,
+  LoaderCircle,
   Plus,
   TerminalSquare,
   X,
@@ -22,6 +23,7 @@ import {
   type CodeWorkspaceEntry,
   type CodeWorkspaceFile,
 } from '../utils/codeWorkspaceFiles';
+import { appendWorkspaceAssetPreviewRevision } from '../utils/codeWorkspaceFilePreview';
 import type { RoomSandboxStatus } from '../utils/types';
 import { beginHorizontalResize } from '../utils/horizontalResize';
 import { normalizeWorkspaceOpenPath, parseWorkspaceFileOpenTarget } from '../utils/workspaceFileOpenTarget';
@@ -39,7 +41,10 @@ import {
   resolveCodeAgentProjectFileQueryData,
   settleConfirmedCodeAgentProjectFileQueryData,
 } from './codeAgentProjectFilesQueryState';
-import { CodeAgentFilePreviewPanel } from './CodeAgentFilePreviewPanel';
+import {
+  CodeAgentFilePreviewPanel,
+  WorkspaceBrowserAssetPreview,
+} from './CodeAgentFilePreviewPanel';
 import { CodeAgentPierreEntryIcon } from './CodeAgentPierreEntryIcon';
 import {
   CodeAgentWorkspaceDiffViewer,
@@ -63,6 +68,7 @@ import {
   closeOtherCodeAgentRightPanelSurfaces,
   openCodeAgentRightPanel,
   openCodeAgentRightPanelFile,
+  openCodeAgentRightPanelPreview,
   reconcileCodeAgentFileSurfaces,
   type CodeAgentRightPanelSurface,
   useCodeAgentRightPanelState,
@@ -126,8 +132,17 @@ type WorkspaceRemoteSearchState = {
 };
 
 interface CodeAgentRightPanelEmptyStateProps {
+  onAddBrowser: () => void;
   onAddFiles: () => void;
   onAddDiff: () => void;
+}
+
+type CodeAgentPreviewPanelSurface = Extract<CodeAgentRightPanelSurface, { kind: 'preview' }>;
+
+function isCodeAgentPreviewSurface(
+  surface: CodeAgentRightPanelSurface,
+): surface is CodeAgentPreviewPanelSurface {
+  return surface.kind === 'preview';
 }
 
 const FILE_WORD_WRAP_STORAGE_KEY = 'roomtalk.codeWorkspace.fileWordWrap';
@@ -156,6 +171,7 @@ function normalizeWorkspacePath(path: string): string {
 }
 
 function CodeAgentRightPanelEmptyState({
+  onAddBrowser,
   onAddFiles,
   onAddDiff,
 }: CodeAgentRightPanelEmptyStateProps) {
@@ -164,9 +180,9 @@ function CodeAgentRightPanelEmptyState({
     {
       label: t('codeAgentBrowserSurface'),
       description: t('codeAgentBrowserSurfaceDescription'),
-      disabledReason: t('codeAgentBrowserSurfaceUnavailable'),
+      disabledReason: null,
       icon: Globe2,
-      onClick: null,
+      onClick: onAddBrowser,
     },
     {
       label: t('codeAgentTerminalSurface'),
@@ -236,6 +252,66 @@ function CodeAgentRightPanelEmptyState({
         </div>
       </div>
     </div>
+  );
+}
+
+interface CodeAgentPreviewSurfaceProps {
+  surface: CodeAgentPreviewPanelSurface;
+  assetUrlQuery: AssetUrlQueryState;
+  assetPreviewRevision: number;
+}
+
+function CodeAgentPreviewSurface({
+  surface,
+  assetUrlQuery,
+  assetPreviewRevision,
+}: CodeAgentPreviewSurfaceProps) {
+  const { t } = useTranslation();
+  const relativePath = surface.relativePath;
+
+  if (!relativePath) {
+    return (
+      <div
+        className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center"
+        data-testid="code-agent-browser-surface-empty"
+      >
+        <Globe2 className="h-5 w-5 text-[#87867f] dark:text-[#8f8d86]" />
+        <div className="text-sm font-medium text-[#141413] dark:text-[#faf9f5]">
+          {t('codeAgentNoFileSelected')}
+        </div>
+        <div className="max-w-sm text-xs leading-relaxed text-[#87867f] dark:text-[#8f8d86]">
+          {t('codeAgentBrowserSurfaceDescription')}
+        </div>
+      </div>
+    );
+  }
+
+  if (assetUrlQuery.error) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-[#9f462c] dark:text-[#ff9b78]">
+        {assetUrlQuery.error}
+      </div>
+    );
+  }
+
+  if (assetUrlQuery.isPending || !assetUrlQuery.resolvedUrl) {
+    return (
+      <div
+        className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-[#87867f] dark:text-[#8f8d86]"
+        role="status"
+        aria-label={t('codeAgentPreparingBrowserPreview')}
+      >
+        <LoaderCircle className="h-5 w-5 animate-spin" />
+        <div className="text-sm">{t('codeAgentPreparingBrowserPreview')}</div>
+      </div>
+    );
+  }
+
+  return (
+    <WorkspaceBrowserAssetPreview
+      src={appendWorkspaceAssetPreviewRevision(assetUrlQuery.resolvedUrl, assetPreviewRevision)}
+      title={relativePath}
+    />
   );
 }
 
@@ -625,7 +701,6 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     requestId: number;
   } | null>(null);
   const localOpenFileRequestIdRef = useRef(0);
-  const [browserPreviewPendingPath, setBrowserPreviewPendingPath] = useState<string | null>(null);
   const [remoteSearch, setRemoteSearch] = useState<WorkspaceRemoteSearchState>({
     query: '',
     entries: [],
@@ -645,8 +720,10 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const [fileSurfaceTabMenu, setFileSurfaceTabMenu] = useState<FileSurfaceTabMenuState>(null);
   const fileSurfaceTabMenuRef = useRef<HTMLDivElement | null>(null);
   const fileSurfaceTabListRef = useRef<HTMLDivElement | null>(null);
-  const [fileSurfaceAddMenuOpen, setFileSurfaceAddMenuOpen] = useState(false);
+  const [fileSurfaceAddMenuPosition, setFileSurfaceAddMenuPosition] = useState<{ x: number; y: number } | null>(null);
+  const fileSurfaceAddMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const fileSurfaceAddMenuRef = useRef<HTMLDivElement | null>(null);
+  const fileSurfaceAddMenuOpen = fileSurfaceAddMenuPosition !== null;
   const didInitializeRightPanelRef = useRef(false);
 
   const externallySelectedEntry = useMemo(
@@ -690,6 +767,12 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   );
   const activeDiffSurface = useMemo(
     () => rightPanelSurfaces.find((surface) => surface.id === rightPanelState.activeSurfaceId && surface.kind === 'diff') ?? null,
+    [rightPanelState.activeSurfaceId, rightPanelSurfaces],
+  );
+  const activePreviewSurface = useMemo(
+    () => rightPanelSurfaces.find((surface): surface is CodeAgentPreviewPanelSurface => (
+      surface.id === rightPanelState.activeSurfaceId && isCodeAgentPreviewSurface(surface)
+    )) ?? null,
     [rightPanelState.activeSurfaceId, rightPanelSurfaces],
   );
   const diffSelectionScopeKey = diffPanelSelection.kind === 'branch'
@@ -764,7 +847,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const renderPreview = isMarkdown
     ? renderMarkdown
     : Boolean(supportsWorkspaceAssetPreview && (isImagePreview || sourceView.path !== relativePath));
-  const browserPreviewPending = Boolean(relativePath && browserPreviewPendingPath === relativePath);
+  const browserPreviewPending = false;
   const activeSaveState = saveStatus.path === relativePath ? saveStatus.state : 'idle';
   const activeSaveError = saveStatus.path === relativePath ? saveStatus.error : null;
   const fileQuery = useCodeWorkspaceFileQuery(
@@ -778,6 +861,13 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     Boolean(relativePath && renderPreview && supportsWorkspaceAssetPreview),
   );
   const activeAssetPreviewRevision = relativePath ? assetPreviewRevisions[relativePath] ?? 0 : 0;
+  const previewSurfacePath = activePreviewSurface?.relativePath ?? null;
+  const previewSurfaceAssetUrlQuery = useCodeWorkspaceAssetUrlQuery(
+    roomId,
+    previewSurfacePath,
+    Boolean(previewSurfacePath),
+  );
+  const activePreviewSurfaceRevision = previewSurfacePath ? assetPreviewRevisions[previewSurfacePath] ?? 0 : 0;
   const selectedDirectory = selectedKind === 'directory'
     ? selectedPath || ''
     : selectedPath
@@ -833,7 +923,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   }, [rightPanelSurfaces.length, roomId]);
 
   useEffect(() => {
-    if (activeFilesSurface || activeDiffSurface) {
+    if (activeFilesSurface || activeDiffSurface || activePreviewSurface) {
       if (previewPath) {
         setPreviewPath(null);
       }
@@ -847,7 +937,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     }
     setSelectedPath(activeFileSurface.relativePath);
     setPreviewPath(activeFileSurface.relativePath);
-  }, [activeDiffSurface, activeFileSurface, activeFilesSurface, fileSurfaces.length, previewPath]);
+  }, [activeDiffSurface, activeFileSurface, activeFilesSurface, activePreviewSurface, fileSurfaces.length, previewPath]);
 
   useEffect(() => {
     const activeTab = fileSurfaceTabListRef.current?.querySelector<HTMLElement>('[data-active-tab="true"]');
@@ -1203,41 +1293,11 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       return;
     }
 
-    const previewWindow = window.open('about:blank', '_blank');
-    try {
-      if (previewWindow) {
-        previewWindow.opener = null;
-      }
-    } catch {
-      // Some browsers lock this down; the asset URL still opens in a new tab.
-    }
-
-    const openResolvedUrl = (url: string) => {
-      if (previewWindow && !previewWindow.closed) {
-        previewWindow.location.href = url;
-        return;
-      }
-      window.open(url, '_blank', 'noopener,noreferrer');
-    };
-
     setOperationError(null);
-    setBrowserPreviewPendingPath(targetPath);
-    createCodeWorkspaceAssetUrl(roomId, targetPath).then(
-      (asset) => {
-        openResolvedUrl(resolveCodeWorkspaceAssetUrl(asset));
-      },
-      (error) => {
-        try {
-          previewWindow?.close();
-        } catch {
-          // The tab may already be gone.
-        }
-        setOperationError(error instanceof Error ? error.message : t('codeAgentOpenPreviewFailed'));
-      },
-    ).finally(() => {
-      setBrowserPreviewPendingPath((current) => current === targetPath ? null : current);
-    });
-  }, [roomId, t]);
+    setSelectedPath(targetPath);
+    setExternallySelectedFilePath((current) => (entryKinds.has(targetPath) ? current : targetPath));
+    openCodeAgentRightPanelPreview(roomId, targetPath);
+  }, [entryKinds, roomId]);
 
   const handleOpenInBrowserPreview = useCallback(() => {
     if (!relativePath) {
@@ -1280,15 +1340,38 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     closeCodeAgentRightPanelSurface(roomId, surfaceId);
   }, [roomId]);
 
+  const closeFileSurfaceAddMenu = useCallback(() => {
+    setFileSurfaceAddMenuPosition(null);
+  }, []);
+
+  const handleFileSurfaceAddMenuToggle = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+    if (fileSurfaceAddMenuOpen) {
+      closeFileSurfaceAddMenu();
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    const menuWidth = 160;
+    const viewportPadding = 8;
+    setFileSurfaceAddMenuPosition({
+      x: Math.max(viewportPadding, Math.min(rect.left, window.innerWidth - menuWidth - viewportPadding)),
+      y: rect.bottom + 6,
+    });
+  }, [closeFileSurfaceAddMenu, fileSurfaceAddMenuOpen]);
+
   const openFilesSurface = useCallback(() => {
-    setFileSurfaceAddMenuOpen(false);
+    closeFileSurfaceAddMenu();
     openCodeAgentRightPanel(roomId, 'files');
-  }, [roomId]);
+  }, [closeFileSurfaceAddMenu, roomId]);
+
+  const openPreviewSurface = useCallback(() => {
+    closeFileSurfaceAddMenu();
+    openCodeAgentRightPanelPreview(roomId, relativePath && isBrowserPreviewFile(relativePath) ? relativePath : null);
+  }, [closeFileSurfaceAddMenu, relativePath, roomId]);
 
   const openDiffSurface = useCallback(() => {
-    setFileSurfaceAddMenuOpen(false);
+    closeFileSurfaceAddMenu();
     openCodeAgentRightPanel(roomId, 'diff');
-  }, [roomId]);
+  }, [closeFileSurfaceAddMenu, roomId]);
 
   const handleOpenWorkspaceFileFromDiff = useCallback((path: string) => {
     const target = parseWorkspaceFileOpenTarget(path);
@@ -1414,14 +1497,17 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     }
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target;
-      if (target instanceof Node && fileSurfaceAddMenuRef.current?.contains(target)) {
+      if (
+        target instanceof Node
+        && (fileSurfaceAddMenuButtonRef.current?.contains(target) || fileSurfaceAddMenuRef.current?.contains(target))
+      ) {
         return;
       }
-      setFileSurfaceAddMenuOpen(false);
+      closeFileSurfaceAddMenu();
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setFileSurfaceAddMenuOpen(false);
+        closeFileSurfaceAddMenu();
       }
     };
     window.addEventListener('pointerdown', handlePointerDown);
@@ -1430,7 +1516,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       window.removeEventListener('pointerdown', handlePointerDown);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [fileSurfaceAddMenuOpen]);
+  }, [closeFileSurfaceAddMenu, fileSurfaceAddMenuOpen]);
 
   const fileExplorer = explorerOpen || relativePath === null ? (
     <aside
@@ -1500,8 +1586,12 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                 ? t('codeAgentChanges')
                 : surface.kind === 'files'
                   ? t('codeAgentWorkspaceFiles')
-                  : basename(surface.relativePath);
-              const fullTitle = surface.kind === 'file' ? surface.relativePath : title;
+                  : surface.kind === 'preview'
+                    ? (surface.relativePath ? basename(surface.relativePath) : t('codeAgentBrowserSurface'))
+                    : basename(surface.relativePath);
+              const fullTitle = surface.kind === 'file' || (surface.kind === 'preview' && surface.relativePath)
+                ? surface.relativePath
+                : title;
               const pending = pendingFileSurfaceIds.has(surface.id);
               return (
                 <div
@@ -1528,6 +1618,8 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                       <FileDiff className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
                     ) : surface.kind === 'files' ? (
                       <Files className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                    ) : surface.kind === 'preview' ? (
+                      <Globe2 className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
                     ) : surface.kind === 'file' ? (
                       <CodeAgentPierreEntryIcon
                         pathValue={surface.relativePath}
@@ -1563,68 +1655,69 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                 </div>
               );
             })}
-            <div ref={fileSurfaceAddMenuRef} className="relative ml-0.5 shrink-0">
+            <div className="relative ml-0.5 shrink-0">
               <button
+                ref={fileSurfaceAddMenuButtonRef}
                 type="button"
                 className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#faf9f5] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:bg-[#1d1d1b] dark:hover:text-[#faf9f5]"
                 aria-label={t('codeAgentAddWorkspaceSurface')}
                 aria-haspopup="menu"
                 aria-expanded={fileSurfaceAddMenuOpen}
                 title={t('codeAgentAddWorkspaceSurface')}
-                onClick={() => setFileSurfaceAddMenuOpen((open) => !open)}
+                onClick={handleFileSurfaceAddMenuToggle}
               >
                 <Plus className="h-3.5 w-3.5" />
               </button>
-              {fileSurfaceAddMenuOpen ? (
-                <div
-                  className="absolute left-0 top-7 z-[90] min-w-40 rounded-md border border-[#dedbd0] bg-[#faf9f5] p-1 shadow-xl dark:border-[#30302e] dark:bg-[#1d1d1b]"
-                  data-testid="code-agent-file-surface-add-menu"
-                  role="menu"
-                >
-                  <button
-                    type="button"
-                    className="flex w-full cursor-not-allowed items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] opacity-45 disabled:hover:bg-transparent dark:text-[#faf9f5] dark:disabled:hover:bg-transparent"
-                    role="menuitem"
-                    aria-disabled="true"
-                    title={t('codeAgentBrowserSurfaceUnavailable')}
-                    disabled
-                  >
-                    <Globe2 className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
-                    <span className="min-w-0 truncate">{t('codeAgentBrowserSurface')}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="flex w-full cursor-not-allowed items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] opacity-45 disabled:hover:bg-transparent dark:text-[#faf9f5] dark:disabled:hover:bg-transparent"
-                    role="menuitem"
-                    aria-disabled="true"
-                    title={t('codeAgentTerminalSurfaceUnavailable')}
-                    disabled
-                  >
-                    <TerminalSquare className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
-                    <span className="min-w-0 truncate">{t('codeAgentTerminalSurface')}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
-                    role="menuitem"
-                    onClick={openFilesSurface}
-                  >
-                    <Files className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
-                    <span className="min-w-0 truncate">{t('codeAgentWorkspaceFiles')}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
-                    role="menuitem"
-                    onClick={openDiffSurface}
-                  >
-                    <FileDiff className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
-                    <span className="min-w-0 truncate">{t('codeAgentChanges')}</span>
-                  </button>
-                </div>
-              ) : null}
             </div>
           </div>
+        </div>
+      ) : null}
+      {fileSurfaceAddMenuOpen && fileSurfaceAddMenuPosition ? (
+        <div
+          ref={fileSurfaceAddMenuRef}
+          className="fixed z-[90] min-w-40 rounded-md border border-[#dedbd0] bg-[#faf9f5] p-1 shadow-xl dark:border-[#30302e] dark:bg-[#1d1d1b]"
+          data-testid="code-agent-file-surface-add-menu"
+          role="menu"
+          style={{ left: fileSurfaceAddMenuPosition.x, top: fileSurfaceAddMenuPosition.y }}
+        >
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
+            role="menuitem"
+            onClick={openPreviewSurface}
+          >
+            <Globe2 className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+            <span className="min-w-0 truncate">{t('codeAgentBrowserSurface')}</span>
+          </button>
+          <button
+            type="button"
+            className="flex w-full cursor-not-allowed items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] opacity-45 disabled:hover:bg-transparent dark:text-[#faf9f5] dark:disabled:hover:bg-transparent"
+            role="menuitem"
+            aria-disabled="true"
+            title={t('codeAgentTerminalSurfaceUnavailable')}
+            disabled
+          >
+            <TerminalSquare className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+            <span className="min-w-0 truncate">{t('codeAgentTerminalSurface')}</span>
+          </button>
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
+            role="menuitem"
+            onClick={openFilesSurface}
+          >
+            <Files className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+            <span className="min-w-0 truncate">{t('codeAgentWorkspaceFiles')}</span>
+          </button>
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
+            role="menuitem"
+            onClick={openDiffSurface}
+          >
+            <FileDiff className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+            <span className="min-w-0 truncate">{t('codeAgentChanges')}</span>
+          </button>
         </div>
       ) : null}
       {fileSurfaceTabMenu && fileSurfaceTabMenuSurface ? (() => {
@@ -1694,8 +1787,15 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       })() : null}
       {rightPanelSurfaces.length === 0 ? (
         <CodeAgentRightPanelEmptyState
+          onAddBrowser={openPreviewSurface}
           onAddFiles={openFilesSurface}
           onAddDiff={openDiffSurface}
+        />
+      ) : activePreviewSurface ? (
+        <CodeAgentPreviewSurface
+          surface={activePreviewSurface}
+          assetUrlQuery={previewSurfaceAssetUrlQuery}
+          assetPreviewRevision={activePreviewSurfaceRevision}
         />
       ) : activeDiffSurface ? (
         <div className="flex min-h-0 flex-1 gap-2 overflow-hidden p-2">

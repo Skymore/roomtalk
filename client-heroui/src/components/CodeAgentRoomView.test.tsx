@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Room } from '../utils/types';
 import { CODE_AGENT_FILE_PANEL_WIDTH_CHANGE_EVENT, type CodeAgentFilePanelWidthChangeDetail } from '../utils/codeAgentPanelLayout';
+import type { ReviewCommentContext } from '../utils/codeAgentReviewComments';
 import { CodeAgentRoomView } from './CodeAgentRoomView';
 
 vi.mock('react-i18next', () => ({
@@ -62,13 +63,46 @@ vi.mock('./MessageList', async () => {
 });
 
 vi.mock('./MessageInput', () => ({
-  MessageInput: ({ codeAgentMode, codeAgentMaxMode, isCodeAgentRoom }: { codeAgentMode: string; codeAgentMaxMode: string; isCodeAgentRoom?: boolean }) => (
+  MessageInput: ({
+    codeAgentMode,
+    codeAgentMaxMode,
+    isCodeAgentRoom,
+    reviewComments = [],
+    onRemoveReviewComment,
+    onClearReviewComments,
+  }: {
+    codeAgentMode: string;
+    codeAgentMaxMode: string;
+    isCodeAgentRoom?: boolean;
+    reviewComments?: readonly ReviewCommentContext[];
+    onRemoveReviewComment?: (commentId: string) => void;
+    onClearReviewComments?: () => void;
+  }) => (
     <div
       data-testid="message-input"
       data-code-agent-room={String(Boolean(isCodeAgentRoom))}
       data-code-agent-mode={codeAgentMode}
       data-code-agent-max-mode={codeAgentMaxMode}
-    />
+      data-review-comments={String(reviewComments.length)}
+    >
+      {reviewComments.map((comment) => (
+        <span key={comment.id}>{comment.text}</span>
+      ))}
+      <button
+        type="button"
+        data-testid="message-input-remove-review-comment"
+        onClick={() => {
+          if (reviewComments[0]) {
+            onRemoveReviewComment?.(reviewComments[0].id);
+          }
+        }}
+      />
+      <button
+        type="button"
+        data-testid="message-input-clear-review-comments"
+        onClick={() => onClearReviewComments?.()}
+      />
+    </div>
   ),
 }));
 
@@ -79,6 +113,7 @@ vi.mock('./CodeAgentFileBrowserPanel', () => ({
     openFileRequest,
     revealLine,
     revealRequestId,
+    onAddReviewComment,
     onFileSavePendingChange,
   }: {
     sandboxStatus?: string;
@@ -86,6 +121,7 @@ vi.mock('./CodeAgentFileBrowserPanel', () => ({
     openFileRequest?: { path: string; requestId: number } | null;
     revealLine?: number | null;
     revealRequestId?: number;
+    onAddReviewComment?: (comment: ReviewCommentContext) => void;
     onFileSavePendingChange?: (relativePath: string, pending: boolean) => void;
   }) => (
     <>
@@ -107,6 +143,22 @@ vi.mock('./CodeAgentFileBrowserPanel', () => ({
         type="button"
         data-testid="file-save-pending-off"
         onClick={() => onFileSavePendingChange?.('src/App.tsx', false)}
+      />
+      <button
+        type="button"
+        data-testid="file-add-review-comment"
+        onClick={() => onAddReviewComment?.({
+          id: 'comment-1',
+          sectionId: 'file:src/App.tsx',
+          sectionTitle: 'File comment',
+          filePath: 'src/App.tsx',
+          startIndex: 0,
+          endIndex: 1,
+          rangeLabel: 'L1 to L2',
+          text: 'Persist this review comment.',
+          diff: 'line 1\nline 2',
+          fenceLanguage: 'tsx',
+        })}
       />
     </>
   ),
@@ -488,6 +540,44 @@ describe('CodeAgentRoomView', () => {
 
     expect(screen.queryByTestId('code-agent-file-save-pending-indicator')).toBeNull();
     expect(screen.getByLabelText('codeAgentCollapseWorkspaceFiles')).toBeTruthy();
+  });
+
+  it('persists T3-style review comment drafts by room', () => {
+    const storageKey = 'roomtalk.codeAgent.reviewComments.coco-room';
+    const firstRender = renderCodeAgentRoom(cocoRoom);
+
+    expect(screen.getByTestId('message-input').dataset.reviewComments).toBe('0');
+
+    fireEvent.click(screen.getByTestId('file-add-review-comment'));
+
+    expect(screen.getByTestId('message-input').dataset.reviewComments).toBe('1');
+    expect(screen.getByText('Persist this review comment.')).toBeTruthy();
+    expect(localStorage.getItem(storageKey)).toContain('Persist this review comment.');
+
+    firstRender.unmount();
+    const otherRoomRender = renderCodeAgentRoom({ ...cocoRoom, id: 'other-coco-room' });
+
+    expect(screen.getByTestId('message-input').dataset.reviewComments).toBe('0');
+    expect(localStorage.getItem('roomtalk.codeAgent.reviewComments.other-coco-room')).toBeNull();
+
+    otherRoomRender.unmount();
+    renderCodeAgentRoom(cocoRoom);
+
+    expect(screen.getByTestId('message-input').dataset.reviewComments).toBe('1');
+    expect(screen.getByText('Persist this review comment.')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('message-input-remove-review-comment'));
+
+    expect(screen.getByTestId('message-input').dataset.reviewComments).toBe('0');
+    expect(localStorage.getItem(storageKey)).toBeNull();
+
+    fireEvent.click(screen.getByTestId('file-add-review-comment'));
+    expect(localStorage.getItem(storageKey)).toContain('Persist this review comment.');
+
+    fireEvent.click(screen.getByTestId('message-input-clear-review-comments'));
+
+    expect(screen.getByTestId('message-input').dataset.reviewComments).toBe('0');
+    expect(localStorage.getItem(storageKey)).toBeNull();
   });
 
   it('constrains room edit mode when the server only allows plan mode', () => {

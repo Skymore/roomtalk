@@ -377,7 +377,7 @@ function WorkspaceImageAssetPreview({ src, alt }: { src: string; alt: string }) 
   );
 }
 
-function WorkspaceBrowserAssetPreview({ src, title }: { src: string; title: string }) {
+export function WorkspaceBrowserAssetPreview({ src, title }: { src: string; title: string }) {
   const { t } = useTranslation();
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);

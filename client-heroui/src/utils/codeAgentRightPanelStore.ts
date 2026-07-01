@@ -1,6 +1,12 @@
 import { useSyncExternalStore } from 'react';
 
 export type CodeAgentRightPanelSurface =
+  | { id: 'browser:new'; kind: 'preview'; relativePath: null }
+  | {
+    id: `browser:${string}`;
+    kind: 'preview';
+    relativePath: string;
+  }
   | { id: 'diff'; kind: 'diff' }
   | { id: 'files'; kind: 'files' }
   | {
@@ -41,7 +47,7 @@ function normalizeRoomId(roomId: string): string {
 }
 
 function normalizeWorkspacePath(path: string): string {
-  return path.replace(/\\/g, '/').split('/').filter(Boolean).join('/');
+  return path.trim().replace(/\\/g, '/').split('/').filter(Boolean).join('/');
 }
 
 function normalizeRevealLine(line: number | null | undefined): number | null {
@@ -67,6 +73,12 @@ function fileSurface(relativePath: string, revealLine: number | null, revealRequ
   };
 }
 
+function browserSurface(relativePath: string | null): CodeAgentRightPanelSurface {
+  return relativePath
+    ? { id: `browser:${relativePath}`, kind: 'preview', relativePath }
+    : { id: 'browser:new', kind: 'preview', relativePath: null };
+}
+
 function singletonSurface(kind: 'diff' | 'files'): CodeAgentRightPanelSurface {
   return kind === 'diff'
     ? { id: 'diff', kind: 'diff' }
@@ -87,6 +99,14 @@ function coerceSurface(value: unknown): CodeAgentRightPanelSurface | null {
   }
   if (surface.kind === 'files' || surface.id === 'files') {
     return { id: 'files', kind: 'files' };
+  }
+  if (surface.kind === 'preview' || (typeof surface.id === 'string' && surface.id.startsWith('browser:'))) {
+    const relativePath = normalizeWorkspacePath(
+      typeof (value as { relativePath?: unknown }).relativePath === 'string'
+        ? (value as { relativePath: string }).relativePath
+        : '',
+    );
+    return browserSurface(relativePath || null);
   }
   if (surface.kind === 'file') {
     const relativePath = normalizeWorkspacePath(
@@ -264,6 +284,29 @@ export function openCodeAgentRightPanel(roomId: string, kind: 'diff' | 'files') 
   }));
 }
 
+export function openCodeAgentRightPanelPreview(roomId: string, relativePath?: string | null) {
+  const roomKey = normalizeRoomId(roomId);
+  const normalizedPath = relativePath ? normalizeWorkspacePath(relativePath) : '';
+  if (!roomKey) {
+    return;
+  }
+  updateStore((state) => ({
+    byRoomId: updateRoom(state.byRoomId, roomKey, (current) => {
+      const surface = browserSurface(normalizedPath || null);
+      const withoutPlaceholder = surface.id !== 'browser:new'
+        ? current.surfaces.filter((entry) => entry.id !== 'browser:new')
+        : current.surfaces;
+      return {
+        isOpen: true,
+        surfaces: withoutPlaceholder.some((entry) => entry.id === surface.id)
+          ? withoutPlaceholder
+          : [...withoutPlaceholder, surface],
+        activeSurfaceId: surface.id,
+      };
+    }),
+  }));
+}
+
 export function openCodeAgentRightPanelFile(roomId: string, relativePath: string, line?: number | null) {
   const roomKey = normalizeRoomId(roomId);
   const normalizedPath = normalizeWorkspacePath(relativePath);
@@ -331,7 +374,7 @@ export function toggleCodeAgentRightPanelVisibility(roomId: string) {
   }));
 }
 
-export function toggleCodeAgentRightPanel(roomId: string, kind: 'diff' | 'files') {
+export function toggleCodeAgentRightPanel(roomId: string, kind: 'diff' | 'files' | 'preview') {
   const roomKey = normalizeRoomId(roomId);
   if (!roomKey) {
     return;
@@ -341,6 +384,15 @@ export function toggleCodeAgentRightPanel(roomId: string, kind: 'diff' | 'files'
       const active = current.surfaces.find((surface) => surface.id === current.activeSurfaceId);
       if (current.isOpen && active?.kind === kind) {
         return { ...current, isOpen: false };
+      }
+      if (kind === 'preview') {
+        const existing = current.surfaces.find((surface) => surface.kind === 'preview');
+        const surface = existing ?? browserSurface(null);
+        return {
+          isOpen: true,
+          surfaces: existing ? current.surfaces : [...current.surfaces, surface],
+          activeSurfaceId: surface.id,
+        };
       }
       const surface = singletonSurface(kind);
       return {
@@ -457,10 +509,13 @@ export function reconcileCodeAgentFileSurfaces(
   updateStore((state) => ({
     byRoomId: updateRoom(state.byRoomId, roomKey, (current) => {
       const surfaces = current.surfaces.filter((surface) => {
-        if (!workspaceAvailable && (surface.kind === 'files' || surface.kind === 'file')) {
+        if (!workspaceAvailable && (surface.kind === 'files' || surface.kind === 'file' || surface.kind === 'preview')) {
           return false;
         }
         if (surface.kind !== 'file') {
+          if (surface.kind === 'preview' && surface.relativePath) {
+            return !availableFilePaths || availableFilePaths.has(surface.relativePath);
+          }
           return true;
         }
         return !availableFilePaths || availableFilePaths.has(surface.relativePath);
