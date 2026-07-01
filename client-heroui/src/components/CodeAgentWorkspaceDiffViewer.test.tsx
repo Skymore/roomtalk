@@ -182,6 +182,30 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     );
   });
 
+  it('shows the T3-style resolved branch comparison from the workspace diff', async () => {
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+      headRef: 'feature/search',
+      baseRef: 'origin/main',
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          { name: 'src/App.tsx', hunks: [], additionLines: [], deletionLines: [], type: 'modify' },
+        ],
+      },
+    ]);
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
+
+    expect(await screen.findByTestId('code-view')).toBeTruthy();
+    expect(screen.getByLabelText('codeAgentDiffComparing: feature/search -> origin/main')).toBeTruthy();
+    expect(screen.getByText('origin/main')).toBeTruthy();
+  });
+
   it('loads a workspace patch and renders it through the Pierre CodeView', async () => {
     loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
       available: true,

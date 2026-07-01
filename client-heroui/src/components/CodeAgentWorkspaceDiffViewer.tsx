@@ -339,7 +339,8 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   const isDiffRefreshPending = isPending || isWorkspaceRefsPending;
   const diffScopeLabel = t(diffScope === 'unstaged' ? 'codeAgentDiffScopeWorkingTree' : 'codeAgentDiffScopeBranch');
   const loadingDiffLabel = t(diffScope === 'unstaged' ? 'codeAgentLoadingWorkingTreeDiff' : 'codeAgentLoadingBranchDiff');
-  const diffBaseRefLabel = diffBaseRef || t('codeAgentDiffBaseRefAutomatic');
+  const diffHeadRefLabel = diff?.headRef || workspaceRefs?.headRef || 'HEAD';
+  const diffBaseRefLabel = diff?.baseRef || diffBaseRef || t('codeAgentDiffBaseRefAutomatic');
   const baseRefRequestQuery = baseRefQuery.trim();
   const hasNoNetChanges = Boolean(diff?.available && diff.patch.trim().length === 0);
   const emptyPatchLabel = t(hasNoNetChanges ? 'codeAgentNoNetWorkspaceChanges' : 'codeAgentNoWorkspacePatch');
@@ -646,10 +647,10 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
           {diffScope === 'branch' ? (
             <div
               className="flex min-w-0 max-w-full items-center gap-1.5 overflow-visible text-xs text-[#87867f] dark:text-[#8f8d86]"
-              title={`${workspaceRefs?.headRef ?? 'HEAD'} -> ${diffBaseRefLabel}`}
-              aria-label={`${t('codeAgentDiffComparing')}: ${workspaceRefs?.headRef ?? 'HEAD'} -> ${diffBaseRefLabel}`}
+              title={`${diffHeadRefLabel} -> ${diffBaseRefLabel}`}
+              aria-label={`${t('codeAgentDiffComparing')}: ${diffHeadRefLabel} -> ${diffBaseRefLabel}`}
             >
-              <span className="hidden max-w-28 truncate sm:inline">{workspaceRefs?.headRef ?? 'HEAD'}</span>
+              <span className="hidden max-w-28 truncate sm:inline">{diffHeadRefLabel}</span>
               <ArrowRight className="hidden h-3.5 w-3.5 shrink-0 opacity-70 sm:block" />
               <details className="group relative min-w-0">
                 <summary

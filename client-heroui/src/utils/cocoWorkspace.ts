@@ -38,6 +38,8 @@ export interface CodeAgentWorkspaceDiff {
   patch: string;
   byteSize: number;
   truncated: boolean;
+  headRef?: string;
+  baseRef?: string;
 }
 
 export type CodeAgentWorkspaceDiffScope = 'branch' | 'unstaged';
@@ -93,6 +95,8 @@ const validateWorkspaceDiff = (value: unknown): CodeAgentWorkspaceDiff => {
     patch: diff.patch,
     byteSize: diff.byteSize,
     truncated: diff.truncated,
+    ...(typeof diff.headRef === 'string' && diff.headRef ? { headRef: diff.headRef } : {}),
+    ...(typeof diff.baseRef === 'string' && diff.baseRef ? { baseRef: diff.baseRef } : {}),
   };
 };
 

@@ -122,6 +122,8 @@ export interface CocoWorkspaceDiff {
   patch: string;
   byteSize: number;
   truncated: boolean;
+  headRef?: string;
+  baseRef?: string;
 }
 
 export interface CocoWorkspaceRef {

@@ -16,6 +16,16 @@ class FakeE2BDriver implements E2BSandboxDriver {
   readonly fileMakeDirRequests: string[] = [];
   readonly fileRenameRequests: Array<{ oldPath: string; newPath: string }> = [];
   readonly fileRemoveRequests: string[] = [];
+  readonly fileReadBodies = new Map<string, Buffer>([
+    ['/workspace/output/report.html', Buffer.from('<h1>Report</h1>', 'utf8')],
+    ['/workspace/plot_output.png', Buffer.from('<h1>Report</h1>', 'utf8')],
+  ]);
+  workspaceEntries: Array<{ path: string; type?: string; size?: number; modifiedAt?: string | Date; updatedAt?: string | Date }> = [
+    { path: '/workspace/plot_output.png', type: 'file', size: 42, modifiedAt: '2026-05-03T00:00:02.000Z' },
+    { path: '/workspace/output', type: 'dir' },
+    { path: '/workspace/output/report.html', type: 'file' },
+  ];
+  ignoredWorkspacePaths: string[] = [];
   failList = false;
 
   async create(input: { templateId: string; timeoutMs: number; metadata: Record<string, string> }): Promise<E2BSandboxDriverHandle> {
@@ -53,9 +63,44 @@ class FakeE2BDriver implements E2BSandboxDriver {
           this.commandOptions.push(options || {});
           const stdout = new PassThrough();
           const stderr = new PassThrough();
+          if (command.includes('git check-ignore')) {
+            const stdin = new PassThrough();
+            const chunks: Buffer[] = [];
+            stdin.on('data', (chunk: Buffer | string) => {
+              chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            });
+            stdin.on('end', () => {
+              const requestedPaths = Buffer.concat(chunks)
+                .toString('utf8')
+                .split('\0')
+                .filter(Boolean);
+              const ignoredPaths = requestedPaths.filter(path => (
+                this.ignoredWorkspacePaths.some(ignoredPath => (
+                  path === ignoredPath || path.startsWith(`${ignoredPath}/`)
+                ))
+              ));
+              stdout.end(ignoredPaths.length > 0 ? `${ignoredPaths.join('\0')}\0` : '');
+              stderr.end();
+            });
+            return {
+              pid: 42,
+              stdin,
+              stdout,
+              stderr,
+              completed: Promise.resolve({ exitCode: 0, signal: null }),
+            };
+          }
           setTimeout(() => {
-            if (command.includes('__ROOMTALK_DIFF__')) {
+            if (command.includes('__ROOMTALK_WORKSPACE_FILE_OK__')) {
+              stdout.end(command.includes('/workspace/escape.html')
+                ? '__ROOMTALK_WORKSPACE_FILE_OUTSIDE__\n'
+                : '__ROOMTALK_WORKSPACE_FILE_OK__\n');
+            } else if (command.includes('__ROOMTALK_DIFF__')) {
               stdout.end([
+                '__ROOMTALK_HEAD_REF__',
+                'feature/search',
+                '__ROOMTALK_BASE_REF__',
+                'origin/main',
                 '__ROOMTALK_DIFF__',
                 'diff --git a/src/App.tsx b/src/App.tsx',
                 'index 1111111..2222222 100644',
@@ -82,12 +127,16 @@ class FakeE2BDriver implements E2BSandboxDriver {
               stdout.end([
                 '__ROOMTALK_HEAD_REF__',
                 'feature/search',
+                '__ROOMTALK_DEFAULT_REF__',
+                'main',
                 '__ROOMTALK_REFS__',
-                'main\trefs/heads/main',
-                'feature/search\trefs/heads/feature/search',
-                'origin/HEAD\trefs/remotes/origin/HEAD',
-                'origin/main\trefs/remotes/origin/main',
-                'upstream/main\trefs/remotes/upstream/main',
+                'release\trefs/heads/release\t200',
+                'main\trefs/heads/main\t100',
+                'feature/search\trefs/heads/feature/search\t50',
+                'origin/HEAD\trefs/remotes/origin/HEAD\t600',
+                'upstream/main\trefs/remotes/upstream/main\t300',
+                'origin/main\trefs/remotes/origin/main\t500',
+                'origin/feature/search\trefs/remotes/origin/feature/search\t700',
                 '',
               ].join('\n'));
             } else {
@@ -107,17 +156,14 @@ class FakeE2BDriver implements E2BSandboxDriver {
       files: {
         list: async (path, options) => {
           this.fileListRequests.push({ path, options });
-          return [
-            { path: '/workspace/plot_output.png', type: 'file', size: 42, modifiedAt: '2026-05-03T00:00:02.000Z' },
-            { path: '/workspace/output', type: 'dir' },
-            { path: '/workspace/output/report.html', type: 'file' },
-          ];
+          return this.workspaceEntries;
         },
         read: async (path, options) => {
           this.fileReadRequests.push({ path, options });
+          const body = this.fileReadBodies.get(path) || Buffer.from('<h1>Report</h1>', 'utf8');
           return new ReadableStream<Uint8Array>({
             start(controller) {
-              controller.enqueue(Buffer.from('<h1>Report</h1>', 'utf8'));
+              controller.enqueue(body);
               controller.close();
             },
           });
@@ -259,6 +305,58 @@ describe('E2BCocoSandboxService', () => {
     assert.deepEqual(driver.killed, [handle.id]);
   });
 
+  it('marks NUL-containing workspace file reads as binary like T3', async () => {
+    const driver = new FakeE2BDriver();
+    driver.fileReadBodies.set('/workspace/data.bin', Buffer.from([0x61, 0x00, 0x62]));
+    const service = new E2BCocoSandboxService(driver, { templateId: 'roomtalk-coco' });
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+
+    assert.deepEqual(await service.readWorkspaceFile(handle, 'data.bin'), {
+      path: 'data.bin',
+      content: Buffer.from([0x61, 0x00, 0x62]).toString('base64'),
+      byteSize: 3,
+      truncated: false,
+      encoding: 'base64',
+    });
+    assert.deepEqual(driver.fileReadRequests, [{ path: '/workspace/data.bin', options: { format: 'stream' } }]);
+  });
+
+  it('normalizes workspace entries with T3-style index filtering and directory ancestors', async () => {
+    const driver = new FakeE2BDriver();
+    driver.workspaceEntries = [
+      { path: '/workspace/src/components/Button.tsx', type: 'file', size: 128 },
+      { path: '/workspace/.git/HEAD', type: 'file' },
+      { path: '/workspace/node_modules/pkg/index.js', type: 'file' },
+      { path: '/workspace/.convex/local-storage/data.json', type: 'file' },
+      { path: '/workspace/convex/UOoS-l/convex_local_storage/modules/data.json', type: 'file' },
+    ];
+    driver.ignoredWorkspacePaths = ['convex/UOoS-l/convex_local_storage/modules/data.json'];
+    const service = new E2BCocoSandboxService(driver, { templateId: 'roomtalk-coco' });
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+
+    assert.deepEqual(await service.listWorkspaceEntries(handle, { maxDepth: 24 }), [
+      { path: 'src', name: 'src', type: 'directory' },
+      { path: 'src/components', name: 'components', type: 'directory' },
+      { path: 'src/components/Button.tsx', name: 'Button.tsx', type: 'file', size: 128 },
+    ]);
+    assert.deepEqual(
+      (await service.searchWorkspaceEntries(handle, {
+        query: 'head',
+        maxDepth: 24,
+        maxEntries: 10,
+      })).map(entry => entry.path),
+      [],
+    );
+    assert.deepEqual(
+      (await service.searchWorkspaceEntries(handle, {
+        query: 'data',
+        maxDepth: 24,
+        maxEntries: 10,
+      })).map(entry => entry.path),
+      [],
+    );
+  });
+
   it('initializes workspace version control with a baseline commit', async () => {
     const driver = new FakeE2BDriver();
     const service = new E2BCocoSandboxService(driver, { templateId: 'roomtalk-coco' });
@@ -286,7 +384,8 @@ describe('E2BCocoSandboxService', () => {
     });
     assert.match(driver.commands[0], /git status --porcelain=v1/);
     assert.match(driver.commands[0], /git diff --numstat HEAD --/);
-    assert.match(driver.commands[0], /git add -N -- \./);
+    assert.match(driver.commands[0], /git ls-files --others --exclude-standard -z \| xargs -0 -r -I\{\} sh -c 'git diff --no-index --numstat -- \/dev\/null "\$1" \|\| true' sh \{\}/);
+    assert.doesNotMatch(driver.commands[0], /git add -N -- \./);
     assert.deepEqual(driver.commandOptions, [{ timeoutMs: 10_000 }]);
   });
 
@@ -311,9 +410,18 @@ describe('E2BCocoSandboxService', () => {
       patch,
       byteSize: Buffer.byteLength(patch),
       truncated: false,
+      headRef: 'feature/search',
+      baseRef: 'origin/main',
     });
-    assert.match(driver.commands[0], /git diff --no-ext-diff --src-prefix=a\/ --dst-prefix=b\/ HEAD --/);
-    assert.match(driver.commands[0], /git add -N -- \./);
+    assert.match(driver.commands[0], /git config --get "branch\.\$current_branch\.gh-merge-base"/);
+    assert.match(driver.commands[0], /git symbolic-ref --quiet "refs\/remotes\/\$primary_remote\/HEAD"/);
+    assert.match(driver.commands[0], /for candidate in "\$configured_base" "\$default_branch" main master/);
+    assert.match(driver.commands[0], /printf "__ROOMTALK_HEAD_REF__\\n%s\\n" "\$head_ref"/);
+    assert.match(driver.commands[0], /printf "__ROOMTALK_BASE_REF__\\n%s\\n" "\$base_ref"/);
+    assert.match(driver.commands[0], /git diff --no-ext-diff --patch --minimal --src-prefix=a\/ --dst-prefix=b\/ "\$\{base_ref\}\.\.\.HEAD"/);
+    assert.match(driver.commands[0], /git diff --no-ext-diff --patch --minimal --src-prefix=a\/ --dst-prefix=b\/ HEAD --/);
+    assert.match(driver.commands[0], /git ls-files --others --exclude-standard -z \| xargs -0 -r -I\{\} sh -c 'git diff --no-index --patch --minimal --src-prefix=a\/ --dst-prefix=b\/ -- \/dev\/null "\$1" \|\| true' sh \{\}/);
+    assert.doesNotMatch(driver.commands[0], /git add -N -- \./);
     assert.deepEqual(driver.commandOptions, [{ timeoutMs: 10_000 }]);
   });
 
@@ -324,7 +432,9 @@ describe('E2BCocoSandboxService', () => {
 
     await service.getWorkspaceDiff(handle, { ignoreWhitespace: true });
 
-    assert.match(driver.commands[0], /git diff --no-ext-diff -w --src-prefix=a\/ --dst-prefix=b\/ HEAD --/);
+    assert.match(driver.commands[0], /git diff --no-ext-diff --patch --minimal --ignore-all-space --src-prefix=a\/ --dst-prefix=b\/ "\$\{base_ref\}\.\.\.HEAD"/);
+    assert.match(driver.commands[0], /git diff --no-ext-diff --patch --minimal --ignore-all-space --src-prefix=a\/ --dst-prefix=b\/ HEAD --/);
+    assert.doesNotMatch(driver.commands[0], / -w /);
   });
 
   it('reads T3 working tree diffs without the HEAD comparison target', async () => {
@@ -334,8 +444,10 @@ describe('E2BCocoSandboxService', () => {
 
     await service.getWorkspaceDiff(handle, { scope: 'unstaged' });
 
-    assert.match(driver.commands[0], /git diff --no-ext-diff --src-prefix=a\/ --dst-prefix=b\/ --/);
-    assert.doesNotMatch(driver.commands[0], /git diff --no-ext-diff --src-prefix=a\/ --dst-prefix=b\/ HEAD --/);
+    assert.match(driver.commands[0], /git diff --no-ext-diff --patch --minimal --src-prefix=a\/ --dst-prefix=b\/ --/);
+    assert.match(driver.commands[0], /git diff --no-index --patch --minimal --src-prefix=a\/ --dst-prefix=b\/ -- \/dev\/null "\$1"/);
+    assert.doesNotMatch(driver.commands[0], /git diff --no-ext-diff --patch --minimal --src-prefix=a\/ --dst-prefix=b\/ HEAD --/);
+    assert.doesNotMatch(driver.commands[0], /git add -N -- \./);
   });
 
   it('reads T3 branch diffs against a selected base ref', async () => {
@@ -345,7 +457,10 @@ describe('E2BCocoSandboxService', () => {
 
     await service.getWorkspaceDiff(handle, { baseRef: 'origin/main' });
 
-    assert.match(driver.commands[0], /git diff --no-ext-diff --src-prefix=a\/ --dst-prefix=b\/ 'origin\/main' --/);
+    assert.match(driver.commands[0], /git diff --no-ext-diff --patch --minimal --src-prefix=a\/ --dst-prefix=b\/ 'origin\/main'\.\.\.HEAD/);
+    assert.doesNotMatch(driver.commands[0], /git add -N -- \./);
+    assert.doesNotMatch(driver.commands[0], /git diff --no-index --patch --minimal/);
+    assert.doesNotMatch(driver.commands[0], /'origin\/main' --/);
   });
 
   it('lists T3-style local and remote workspace refs from git', async () => {
@@ -362,7 +477,17 @@ describe('E2BCocoSandboxService', () => {
         { name: 'upstream/main', kind: 'remote', remoteName: 'upstream' },
       ],
     });
-    assert.match(driver.commands[0], /git for-each-ref --format="%\(refname:short\)%09%\(refname\)" refs\/heads refs\/remotes/);
+    assert.deepEqual((await service.listWorkspaceRefs(handle)).refs.map(ref => ref.name), [
+      'feature/search',
+      'main',
+      'release',
+      'origin/feature/search',
+      'origin/main',
+      'upstream/main',
+    ]);
+    assert.match(driver.commands[0], /__ROOMTALK_DEFAULT_REF__/);
+    assert.match(driver.commands[0], /git symbolic-ref --quiet refs\/remotes\/origin\/HEAD/);
+    assert.match(driver.commands[0], /git for-each-ref --format="%\(refname:short\)%09%\(refname\)%09%\(committerdate:unix\)" refs\/heads refs\/remotes/);
     assert.doesNotMatch(JSON.stringify(await service.listWorkspaceRefs(handle)), /origin\/HEAD/);
   });
 
@@ -379,6 +504,34 @@ describe('E2BCocoSandboxService', () => {
 
     assert.deepEqual(results.map(entry => entry.path), ['output/report.html']);
     assert.deepEqual(driver.fileListRequests, [{ path: '/workspace', options: { depth: 24 } }]);
+  });
+
+  it('rejects workspace file reads that resolve outside the workspace like T3', async () => {
+    const driver = new FakeE2BDriver();
+    const service = new E2BCocoSandboxService(driver, { templateId: 'roomtalk-coco' });
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+
+    await assert.rejects(
+      () => service.readWorkspaceFile(handle, 'escape.html'),
+      /outside workspace root/
+    );
+
+    assert.equal(driver.fileReadRequests.length, 0);
+    assert.match(driver.commands[0], /realpath -e -- "\$target"/);
+    assert.match(driver.commands[0], /__ROOMTALK_WORKSPACE_FILE_OUTSIDE__/);
+  });
+
+  it('rejects workspace asset reads that resolve outside the workspace like T3', async () => {
+    const driver = new FakeE2BDriver();
+    const service = new E2BCocoSandboxService(driver, { templateId: 'roomtalk-coco' });
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+
+    await assert.rejects(
+      () => service.readWorkspaceAsset(handle, 'escape.html'),
+      /outside workspace root/
+    );
+
+    assert.equal(driver.fileReadRequests.length, 0);
   });
 
   it('fails loudly when the driver cannot execute commands or kill sandboxes', async () => {

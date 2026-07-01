@@ -2,7 +2,7 @@ import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import path from 'path';
 
 export const CODE_WORKSPACE_ASSET_ROUTE_PREFIX = '/api/coco/workspace-assets';
-export const DEFAULT_CODE_WORKSPACE_ASSET_TOKEN_TTL_SECONDS = 15 * 60;
+export const DEFAULT_CODE_WORKSPACE_ASSET_TOKEN_TTL_SECONDS = 60 * 60;
 
 // Mirrored from T3's shared workspace file preview classification.
 export const WORKSPACE_BROWSER_PREVIEW_EXTENSIONS = ['.htm', '.html', '.pdf'] as const;
@@ -156,7 +156,10 @@ export const guessCodeWorkspaceAssetMimeType = (workspacePath: string) => (
   WORKSPACE_ASSET_MIME_TYPES[workspaceExtension(workspacePath)] || null
 );
 
-export const normalizeWorkspaceAssetPath = (value: unknown): string | null => {
+export const normalizeWorkspaceAssetPath = (
+  value: unknown,
+  options: { allowDotSegments?: boolean } = {}
+): string | null => {
   if (typeof value !== 'string') {
     return null;
   }
@@ -178,7 +181,12 @@ export const normalizeWorkspaceAssetPath = (value: unknown): string | null => {
   }
 
   const segments = normalized.split('/');
-  if (segments.some(segment => !segment || segment === '.' || segment === '..' || segment.startsWith('.'))) {
+  if (segments.some(segment => (
+    !segment ||
+    segment === '.' ||
+    segment === '..' ||
+    (!options.allowDotSegments && segment.startsWith('.'))
+  ))) {
     return null;
   }
 
@@ -216,9 +224,13 @@ const isCodeWorkspaceAssetClaims = (value: unknown): value is CodeWorkspaceAsset
   return false;
 };
 
-const normalizeBrowserRequestPath = (requestPath: string, fallbackPath: string) => {
+const normalizeBrowserRequestPath = (
+  requestPath: string,
+  fallbackPath: string,
+  options: { allowDotSegments?: boolean } = {}
+) => {
   const pathToNormalize = requestPath.trim() || fallbackPath;
-  return normalizeWorkspaceAssetPath(pathToNormalize);
+  return normalizeWorkspaceAssetPath(pathToNormalize, options);
 };
 
 export class CodeWorkspaceAssetAccess {
@@ -234,7 +246,7 @@ export class CodeWorkspaceAssetAccess {
   }
 
   issueAssetUrl(input: IssueCodeWorkspaceAssetUrlInput): CodeWorkspaceAssetUrl {
-    const workspacePath = normalizeWorkspaceAssetPath(input.path);
+    const workspacePath = normalizeWorkspaceAssetPath(input.path, { allowDotSegments: true });
     if (!workspacePath || !isWorkspacePreviewEntryPath(workspacePath)) {
       throw new CodeWorkspaceAssetError('Workspace preview is unavailable for this file type');
     }
@@ -270,7 +282,9 @@ export class CodeWorkspaceAssetAccess {
     }
 
     if (claims._tag === 'workspace-file-exact') {
-      const normalizedRequestPath = normalizeBrowserRequestPath(requestPath, path.posix.basename(claims.path));
+      const normalizedRequestPath = normalizeBrowserRequestPath(requestPath, path.posix.basename(claims.path), {
+        allowDotSegments: true,
+      });
       if (normalizedRequestPath !== path.posix.basename(claims.path)) {
         return null;
       }
@@ -288,7 +302,9 @@ export class CodeWorkspaceAssetAccess {
       return null;
     }
 
-    const joinedPath = normalizeWorkspaceAssetPath(path.posix.join(claims.basePath, requestRelativePath));
+    const joinedPath = normalizeWorkspaceAssetPath(path.posix.join(claims.basePath, requestRelativePath), {
+      allowDotSegments: true,
+    });
     if (!joinedPath || !isWorkspaceBrowserAssetPath(joinedPath)) {
       return null;
     }
@@ -328,7 +344,7 @@ export class CodeWorkspaceAssetAccess {
         return null;
       }
       if (claims._tag === 'workspace-file') {
-        const normalizedEntryPath = normalizeWorkspaceAssetPath(claims.entryPath);
+        const normalizedEntryPath = normalizeWorkspaceAssetPath(claims.entryPath, { allowDotSegments: true });
         if (
           normalizedEntryPath !== claims.entryPath ||
           !isWorkspaceBrowserPreviewPath(claims.entryPath) ||
@@ -337,7 +353,7 @@ export class CodeWorkspaceAssetAccess {
           return null;
         }
       } else {
-        const normalizedPath = normalizeWorkspaceAssetPath(claims.path);
+        const normalizedPath = normalizeWorkspaceAssetPath(claims.path, { allowDotSegments: true });
         if (normalizedPath !== claims.path || !isWorkspaceImagePreviewPath(claims.path)) {
           return null;
         }

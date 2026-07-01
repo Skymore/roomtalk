@@ -524,7 +524,7 @@ describe('code-agent workspace socket handlers', () => {
     });
 
     assert.equal(response.success, true);
-    assert.equal(response.asset.expiresAt, '2026-06-30T12:15:00.000Z');
+    assert.equal(response.asset.expiresAt, '2026-06-30T13:00:00.000Z');
     assert.match(response.asset.relativeUrl, /^\/api\/coco\/workspace-assets\/[^/]+\/report\.html$/);
     assert.deepEqual(readWorkspaceFileCalls, [{ sandboxId: 'sandbox-1', path: 'output/report.html', maxBytes: 1 }]);
 

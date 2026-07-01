@@ -133,6 +133,31 @@ describe('code workspace asset routes', () => {
     assert.equal(await siblingResponse.text(), 'window.reportReady = true');
   });
 
+  it('serves preview entry files inside hidden directories while blocking hidden sibling assets', async () => {
+    server.files.set('.storybook/index.html', Buffer.from('<!doctype html><script src="preview.js"></script><script src=".secret.js"></script>', 'utf8'));
+    server.files.set('.storybook/preview.js', Buffer.from('window.previewReady = true', 'utf8'));
+    server.files.set('.storybook/.secret.js', Buffer.from('window.secretReady = true', 'utf8'));
+
+    const asset = server.assetAccess.issueAssetUrl({
+      roomId: 'room-1',
+      sandboxId: 'sandbox-1',
+      path: '.storybook/index.html',
+    });
+
+    const entryResponse = await fetch(`${server.baseUrl}${asset.relativeUrl}`);
+    assert.equal(entryResponse.status, 200);
+    assert.match(entryResponse.headers.get('content-type') || '', /^text\/html/);
+    assert.equal(await entryResponse.text(), '<!doctype html><script src="preview.js"></script><script src=".secret.js"></script>');
+
+    const siblingResponse = await fetch(new URL('preview.js', `${server.baseUrl}${asset.relativeUrl}`).toString());
+    assert.equal(siblingResponse.status, 200);
+    assert.match(siblingResponse.headers.get('content-type') || '', /^text\/javascript/);
+    assert.equal(await siblingResponse.text(), 'window.previewReady = true');
+
+    const hiddenSiblingResponse = await fetch(new URL('.secret.js', `${server.baseUrl}${asset.relativeUrl}`).toString());
+    assert.equal(hiddenSiblingResponse.status, 404);
+  });
+
   it('serves image previews as exact workspace-file assets only', async () => {
     server.files.set('output/chart.svg', Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" />', 'utf8'));
     server.files.set('output/chart.css', Buffer.from('body{}', 'utf8'));
@@ -148,6 +173,25 @@ describe('code workspace asset routes', () => {
     assert.match(imageResponse.headers.get('content-type') || '', /^image\/svg\+xml/);
 
     const siblingResponse = await fetch(new URL('chart.css', `${server.baseUrl}${asset.relativeUrl}`).toString());
+    assert.equal(siblingResponse.status, 404);
+  });
+
+  it('serves hidden image preview files as exact workspace-file assets like T3', async () => {
+    server.files.set('output/.logo.png', Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    server.files.set('output/logo.css', Buffer.from('body{}', 'utf8'));
+
+    const asset = server.assetAccess.issueAssetUrl({
+      roomId: 'room-1',
+      sandboxId: 'sandbox-1',
+      path: 'output/.logo.png',
+    });
+
+    const imageResponse = await fetch(`${server.baseUrl}${asset.relativeUrl}`);
+    assert.equal(imageResponse.status, 200);
+    assert.match(imageResponse.headers.get('content-type') || '', /^image\/png/);
+    assert.deepEqual(Buffer.from(await imageResponse.arrayBuffer()), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+    const siblingResponse = await fetch(new URL('logo.css', `${server.baseUrl}${asset.relativeUrl}`).toString());
     assert.equal(siblingResponse.status, 404);
   });
 

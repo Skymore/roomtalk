@@ -118,6 +118,8 @@ describe('summarizeCocoMessages', () => {
       patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
       byteSize: 42,
       truncated: false,
+      headRef: 'feature/search',
+      baseRef: 'origin/main',
     };
     requestCodeWorkspaceDiffMock.mockResolvedValue(diff);
 
