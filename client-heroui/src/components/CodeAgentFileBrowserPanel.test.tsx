@@ -314,6 +314,11 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(explorer.style.maxWidth).toBe('calc(100% - 220px)');
     expect(explorer.className).not.toContain('50%');
     expect(explorerResizeHandle.className).toContain('w-8');
+    expect(explorerResizeHandle.className).not.toContain('hover:bg');
+    const highlight = explorerResizeHandle.querySelector('[data-code-agent-resize-highlight="file-explorer"]');
+    expect(highlight?.className).toContain('w-0.5');
+    expect(highlight?.className).toContain('-ml-px');
+    expect(highlight?.className).toContain('z-50');
     expect(open).not.toHaveBeenCalled();
   });
 

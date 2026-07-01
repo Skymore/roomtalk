@@ -196,6 +196,18 @@ describe('DesktopSidebar', () => {
     expect(document.body.style.cursor).toBe('');
   });
 
+  it('keeps the desktop sidebar resize affordance visual separate from the hitbox', () => {
+    renderSidebar(cocoRoom);
+
+    const resizeHandle = screen.getByLabelText('resizeSidebar');
+    expect(resizeHandle.className).toContain('w-8');
+    expect(resizeHandle.className).not.toContain('hover:bg');
+    const highlight = resizeHandle.querySelector('[data-code-agent-resize-highlight="desktop-sidebar"]');
+    expect(highlight?.className).toContain('w-0.5');
+    expect(highlight?.className).toContain('ml-px');
+    expect(highlight?.className).toContain('z-50');
+  });
+
   it('only shrinks the right file panel when the shell cannot fit the current three-column layout', () => {
     Object.defineProperty(window, 'innerWidth', {
       configurable: true,

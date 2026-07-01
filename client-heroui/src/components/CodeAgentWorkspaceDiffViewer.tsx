@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CodeViewDiffItem, CodeViewItem, FileDiffMetadata, SelectedLineRange } from '@pierre/diffs';
-import { CodeView, type CodeViewHandle } from '@pierre/diffs/react';
-import { ArrowRight, Check, ChevronDown, ChevronRight, Columns2, FileCode2, Pilcrow, Rows3, Search, WrapText } from 'lucide-react';
+import type { CodeViewDiffItem, FileDiffMetadata } from '@pierre/diffs';
+import { type CodeViewHandle } from '@pierre/diffs/react';
+import { ArrowRight, Check, ChevronDown, ChevronRight, Columns2, FileCode2, Pilcrow, RefreshCw, Rows3, Search, WrapText } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { loadCodeAgentWorkspaceDiff, loadCodeAgentWorkspaceRefs, type CodeAgentWorkspaceDiff, type CodeAgentWorkspaceDiffScope, type CodeAgentWorkspaceRefs } from '../utils/cocoWorkspace';
 import { buildCodeAgentBaseRefChoices, filterCodeAgentBaseRefChoices, type CodeAgentBaseRefChoice } from '../utils/codeWorkspaceRefs';
@@ -12,28 +12,21 @@ import {
 } from '../utils/codeAgentDiffPanelStore';
 import {
   buildFileDiffRenderKey,
-  fnv1a32,
   getRenderablePatch,
   resolveCodeAgentDiffThemeName,
   resolveFileDiffPath,
   summarizeFileDiffStat,
 } from '../utils/codeAgentDiffRendering';
 import { formatCompactDiffCount } from '../utils/codeAgentChangedFileTree';
-import { CodeAgentLocalCommentAnnotation } from './CodeAgentLocalCommentAnnotation';
-import {
-  buildDiffReviewComment,
-  restoreDiffReviewCommentRange,
-  type ReviewCommentContext,
-} from '../utils/codeAgentReviewComments';
+import { type ReviewCommentContext } from '../utils/codeAgentReviewComments';
 import { openCodeAgentDiffFilePrimaryAction } from '../utils/codeAgentDiffFileActions';
+import { type DiffCommentAnnotationGroup } from './codeAgentDiffCommentAnnotations';
+import { CodeAgentAnnotatableCodeView } from './CodeAgentAnnotatableCodeView';
 import {
-  type DiffCommentAnnotationEntry,
-  type DiffCommentAnnotationGroup,
-  type DiffCommentLineAnnotation,
-  appendDiffCommentAnnotationEntry,
-  formatDiffCommentRange,
-} from './codeAgentDiffCommentAnnotations';
-import { nextFileCommentId } from './codeAgentFileCommentAnnotations';
+  CodeAgentWorkspaceDiffLoadingState,
+  CodeAgentWorkspaceDiffPanelShell,
+  CodeAgentWorkspaceDiffPanelViewport,
+} from './CodeAgentWorkspaceDiffPanelShell';
 
 interface CodeAgentWorkspaceDiffViewerProps {
   roomId: string;
@@ -168,41 +161,9 @@ const DIFF_PANEL_UNSAFE_CSS = `
 }
 `;
 
-function DiffLoadingSkeleton({ label }: { label: string }) {
-  return (
-    <div className="flex min-h-0 flex-1 flex-col p-2" data-testid="code-agent-workspace-diff-loading">
-      <div
-        className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-[#dedbd0] bg-[#faf9f5]/70 dark:border-[#30302e] dark:bg-[#1d1d1b]/70"
-        role="status"
-        aria-live="polite"
-        aria-label={label}
-      >
-        <div className="flex items-center gap-2 border-b border-[#dedbd0]/70 px-3 py-2 dark:border-[#30302e]/70">
-          <span className="h-4 w-32 animate-pulse rounded-full bg-[#dedbd0] dark:bg-[#30302e]" />
-          <span className="ml-auto h-4 w-20 animate-pulse rounded-full bg-[#dedbd0] dark:bg-[#30302e]" />
-        </div>
-        <div className="flex min-h-0 flex-1 flex-col gap-4 px-3 py-4">
-          <div className="space-y-2">
-            <span className="block h-3 w-full animate-pulse rounded-full bg-[#e8e6dc] dark:bg-[#242422]" />
-            <span className="block h-3 w-full animate-pulse rounded-full bg-[#e8e6dc] dark:bg-[#242422]" />
-            <span className="block h-3 w-10/12 animate-pulse rounded-full bg-[#e8e6dc] dark:bg-[#242422]" />
-            <span className="block h-3 w-11/12 animate-pulse rounded-full bg-[#e8e6dc] dark:bg-[#242422]" />
-            <span className="block h-3 w-9/12 animate-pulse rounded-full bg-[#e8e6dc] dark:bg-[#242422]" />
-          </div>
-          <span className="sr-only">{label}</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 interface CollapsedDiffFilesState {
   scopeKey: string | null;
   fileKeys: Set<string>;
-}
-
-interface DiffSelectionContext {
-  item: CodeViewItem<DiffCommentAnnotationGroup>;
 }
 
 export interface CodeAgentWorkspaceDiffFileSummary {
@@ -458,6 +419,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   const [wordWrap, setWordWrap] = useState(readInitialDiffWordWrap);
   const [diffRenderMode, setDiffRenderMode] = useState<DiffRenderMode>(readInitialDiffRenderMode);
   const [diffIgnoreWhitespace, setDiffIgnoreWhitespace] = useState(readInitialDiffIgnoreWhitespace);
+  const [diffRefreshNonce, setDiffRefreshNonce] = useState(0);
   const diffPanelSelection = useCodeAgentDiffPanelSelection(roomId);
   const diffScope: CodeAgentWorkspaceDiffScope = diffPanelSelection.kind === 'unstaged' ? 'unstaged' : 'branch';
   const diffBaseRef = diffPanelSelection.kind === 'branch' ? diffPanelSelection.baseRef : null;
@@ -466,8 +428,6 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   const [workspaceRefsError, setWorkspaceRefsError] = useState<string | null>(null);
   const [isWorkspaceRefsPending, setIsWorkspaceRefsPending] = useState(false);
   const codeViewRef = useRef<CodeViewHandle<DiffCommentAnnotationGroup> | null>(null);
-  const [selectedLines, setSelectedLines] = useState<{ id: string; range: SelectedLineRange } | null>(null);
-  const [diffAnnotations, setDiffAnnotations] = useState<Record<string, DiffCommentLineAnnotation[]>>({});
   const [collapsedDiffFiles, setCollapsedDiffFiles] = useState<CollapsedDiffFilesState>(() => ({
     scopeKey: null,
     fileKeys: new Set(),
@@ -478,9 +438,14 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     : EMPTY_COLLAPSED_DIFF_FILE_KEYS;
   const wordWrapLabel = t(wordWrap ? 'codeAgentDisableDiffLineWrapping' : 'codeAgentEnableDiffLineWrapping');
   const ignoreWhitespaceLabel = t(diffIgnoreWhitespace ? 'codeAgentShowWhitespaceChanges' : 'codeAgentHideWhitespaceChanges');
+  const refreshDiffLabel = t('codeAgentRefreshWorkspaceDiff');
+  const isDiffRefreshPending = isPending || isWorkspaceRefsPending;
   const diffScopeLabel = t(diffScope === 'unstaged' ? 'codeAgentDiffScopeWorkingTree' : 'codeAgentDiffScopeBranch');
+  const loadingDiffLabel = t(diffScope === 'unstaged' ? 'codeAgentLoadingWorkingTreeDiff' : 'codeAgentLoadingBranchDiff');
   const diffBaseRefLabel = diffBaseRef || t('codeAgentDiffBaseRefAutomatic');
   const baseRefRequestQuery = baseRefQuery.trim();
+  const hasNoNetChanges = Boolean(diff?.available && diff.patch.trim().length === 0);
+  const emptyPatchLabel = t(hasNoNetChanges ? 'codeAgentNoNetWorkspaceChanges' : 'codeAgentNoWorkspacePatch');
   const reviewCommentSectionId = `workspace-diff:${roomId}:${refreshKey || 'current'}:${diffScope}:${diffBaseRef ?? 'auto'}`;
   const reviewCommentSectionTitle = t('codeAgentChanges');
 
@@ -489,11 +454,6 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     setWorkspaceRefs(null);
     setWorkspaceRefsError(null);
   }, [roomId]);
-
-  useEffect(() => {
-    setSelectedLines(null);
-    setDiffAnnotations({});
-  }, [collapseScopeKey]);
 
   const selectDiffRenderMode = (nextMode: DiffRenderMode) => {
     setDiffRenderMode(nextMode);
@@ -526,6 +486,10 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
       }
       return next;
     });
+  };
+
+  const refreshDiff = () => {
+    setDiffRefreshNonce((current) => current + 1);
   };
 
   const selectDiffScope = (nextScope: CodeAgentWorkspaceDiffScope) => {
@@ -583,7 +547,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     });
 
     return () => controller.abort();
-  }, [baseRefRequestQuery, diffScope, enabled, refreshKey, roomId]);
+  }, [baseRefRequestQuery, diffRefreshNonce, diffScope, enabled, refreshKey, roomId]);
 
   const baseRefChoices = useMemo(() => {
     const refs = workspaceRefs?.refs ?? [];
@@ -637,7 +601,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     });
 
     return () => controller.abort();
-  }, [diffBaseRef, diffIgnoreWhitespace, diffScope, enabled, refreshKey, roomId]);
+  }, [diffBaseRef, diffIgnoreWhitespace, diffRefreshNonce, diffScope, enabled, refreshKey, roomId]);
 
   const renderablePatch = useMemo(
     () => getRenderablePatch(diff?.patch, `workspace:${roomId}:${refreshKey}:${diffScope}:${diffBaseRef ?? 'auto'}:${resolvedTheme}`, {
@@ -669,45 +633,6 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     });
     return { items };
   }, [collapsedDiffFileKeys, renderablePatch]);
-  const codeViewItems = useMemo<CodeViewDiffItem<DiffCommentAnnotationGroup>[]>(() => (
-    parsed.items.map((item) => {
-      const filePath = item.type === 'diff' ? resolveFileDiffPath(item.fileDiff) : '';
-      const persistedAnnotations = item.type === 'diff'
-        ? reviewComments
-          .filter((comment) => (
-            comment.sectionId === reviewCommentSectionId &&
-            comment.filePath === filePath &&
-            (comment.fenceLanguage ?? 'diff') === 'diff'
-          ))
-          .reduce<DiffCommentLineAnnotation[]>((annotations, comment) => {
-            const range = restoreDiffReviewCommentRange(item.fileDiff, comment);
-            if (!range) return annotations;
-            return appendDiffCommentAnnotationEntry(annotations, range, {
-              id: comment.id,
-              kind: 'comment',
-              range,
-              rangeLabel: comment.rangeLabel,
-              text: comment.text,
-            });
-          }, [])
-        : [];
-      const persistedEntryIds = new Set(
-        persistedAnnotations.flatMap((annotation) => annotation.metadata.entries.map((entry) => entry.id)),
-      );
-      const localAnnotations = (diffAnnotations[item.id] || []).flatMap((annotation) => {
-        const entries = annotation.metadata.entries.filter((entry) => !persistedEntryIds.has(entry.id));
-        return entries.length > 0 ? [{ ...annotation, metadata: { entries } }] : [];
-      });
-      const annotations = [...persistedAnnotations, ...localAnnotations];
-      return {
-        ...item,
-        annotations,
-        version: fnv1a32(`${item.version || 0}:${annotations
-          .flatMap((annotation) => annotation.metadata.entries.map((entry) => `${entry.id}:${entry.kind}:${entry.rangeLabel}:${entry.text}`))
-          .join('|')}`),
-      };
-    })
-  ), [diffAnnotations, parsed.items, reviewCommentSectionId, reviewComments]);
   const diffTitlePathMap = useMemo(() => buildDiffTitlePathMap(parsed.items), [parsed.items]);
   const diffFileSummaries = useMemo<CodeAgentWorkspaceDiffFileSummary[]>(() => parsed.items.flatMap((item) => {
     if (item.type !== 'diff') {
@@ -742,136 +667,6 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     }
     scrollToDiffItem(file.id);
   }, [parsed.items, scrollToDiffItem, selectedFilePath, selectedFileRevealRequestId]);
-
-  const removeDraftDiffAnnotations = useCallback((
-    current: Record<string, DiffCommentLineAnnotation[]>,
-  ): Record<string, DiffCommentLineAnnotation[]> => {
-    const next: Record<string, DiffCommentLineAnnotation[]> = {};
-    for (const [fileKey, annotations] of Object.entries(current)) {
-      const filteredAnnotations = annotations.flatMap((annotation) => {
-        const entries = annotation.metadata.entries.filter((entry) => entry.kind !== 'draft');
-        return entries.length > 0 ? [{ ...annotation, metadata: { entries } }] : [];
-      });
-      if (filteredAnnotations.length > 0) {
-        next[fileKey] = filteredAnnotations;
-      }
-    }
-    return next;
-  }, []);
-
-  const removeAnnotationEntry = useCallback((entryId: string) => {
-    setSelectedLines(null);
-    onRemoveReviewComment?.(entryId);
-    setDiffAnnotations((current) => {
-      const next: Record<string, DiffCommentLineAnnotation[]> = {};
-      for (const [fileKey, annotations] of Object.entries(current)) {
-        const filteredAnnotations = annotations.flatMap((annotation) => {
-          const entries = annotation.metadata.entries.filter((entry) => entry.id !== entryId);
-          return entries.length > 0 ? [{ ...annotation, metadata: { entries } }] : [];
-        });
-        if (filteredAnnotations.length > 0) {
-          next[fileKey] = filteredAnnotations;
-        }
-      }
-      return next;
-    });
-  }, [onRemoveReviewComment]);
-
-  const removeLocalAnnotationEntry = useCallback((entryId: string) => {
-    setDiffAnnotations((current) => {
-      const next: Record<string, DiffCommentLineAnnotation[]> = {};
-      for (const [fileKey, annotations] of Object.entries(current)) {
-        const filteredAnnotations = annotations.flatMap((annotation) => {
-          const entries = annotation.metadata.entries.filter((entry) => entry.id !== entryId);
-          return entries.length > 0 ? [{ ...annotation, metadata: { entries } }] : [];
-        });
-        if (filteredAnnotations.length > 0) {
-          next[fileKey] = filteredAnnotations;
-        }
-      }
-      return next;
-    });
-  }, []);
-
-  const submitAnnotationEntry = useCallback((entryId: string, text: string) => {
-    setSelectedLines(null);
-    const submitted = Object.entries(diffAnnotations).flatMap(([fileKey, annotations]) => (
-      annotations.flatMap((annotation) => (
-        annotation.metadata.entries.map((entry) => ({ fileKey, entry }))
-      ))
-    )).find(({ entry }) => entry.id === entryId);
-    const item = submitted
-      ? parsed.items.find((candidate) => candidate.id === submitted.fileKey && candidate.type === 'diff')
-      : undefined;
-    const comment = submitted && item?.type === 'diff'
-      ? buildDiffReviewComment({
-        id: submitted.entry.id,
-        sectionId: reviewCommentSectionId,
-        sectionTitle: reviewCommentSectionTitle,
-        filePath: resolveFileDiffPath(item.fileDiff),
-        fileDiff: item.fileDiff,
-        range: submitted.entry.range,
-        text,
-      })
-      : null;
-    if (comment && onAddReviewComment) {
-      onAddReviewComment(comment);
-      removeLocalAnnotationEntry(entryId);
-      return;
-    }
-    setDiffAnnotations((current) => {
-      const next: Record<string, DiffCommentLineAnnotation[]> = {};
-      for (const [fileKey, annotations] of Object.entries(current)) {
-        next[fileKey] = annotations.map((annotation) => ({
-          ...annotation,
-          metadata: {
-            entries: annotation.metadata.entries.map((entry) => (
-              entry.id === entryId ? { ...entry, kind: 'comment', text } : entry
-            )),
-          },
-        }));
-      }
-      return next;
-    });
-  }, [
-    diffAnnotations,
-    onAddReviewComment,
-    parsed.items,
-    removeLocalAnnotationEntry,
-    reviewCommentSectionId,
-    reviewCommentSectionTitle,
-  ]);
-
-  const beginComment = useCallback((range: SelectedLineRange | null, context: DiffSelectionContext) => {
-    if (!range || context.item.type !== 'diff') {
-      return;
-    }
-
-    const entry: DiffCommentAnnotationEntry = {
-      id: nextFileCommentId(),
-      kind: 'draft',
-      range,
-      rangeLabel: formatDiffCommentRange(context.item.fileDiff, range),
-      text: '',
-    };
-
-    setSelectedLines({ id: context.item.id, range });
-    setDiffAnnotations((current) => {
-      const withoutDraft = removeDraftDiffAnnotations(current);
-      return {
-        ...withoutDraft,
-        [context.item.id]: appendDiffCommentAnnotationEntry(
-          withoutDraft[context.item.id] || [],
-          range,
-          entry,
-        ),
-      };
-    });
-  }, [removeDraftDiffAnnotations]);
-
-  const hasOpenCommentForm = Object.values(diffAnnotations).some((annotations) =>
-    annotations.some((annotation) => annotation.metadata.entries.some((entry) => entry.kind === 'draft')),
-  );
 
   const handleDiffClickCapture = (event: React.MouseEvent<HTMLDivElement>) => {
     if (!onOpenFile) {
@@ -920,38 +715,8 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     return null;
   }
 
-  if (isPending && diff === null) {
-    return <DiffLoadingSkeleton label={t('codeAgentLoadingWorkspaceDiff')} />;
-  }
-
-  if (error) {
-    return (
-      <div className="rounded-lg border border-[#f0b49b]/50 bg-[#fff2ec] px-3 py-2 text-xs text-[#9f462c] dark:border-[#7a321f]/60 dark:bg-[#2a211d] dark:text-[#ff9b78]" role="alert">
-        {error}
-      </div>
-    );
-  }
-
-  if (!diff?.available) {
-    return (
-      <p className="text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentChangesUnavailable')}</p>
-    );
-  }
-
-  if (!renderablePatch) {
-    return (
-      <p className="text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentNoWorkspaceChanges')}</p>
-    );
-  }
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2" data-testid="code-agent-workspace-diff-viewer">
-      {diff.truncated ? (
-        <div className="rounded-md border border-amber-500/20 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
-          {t('codeAgentDiffPreviewTruncated')}
-        </div>
-      ) : null}
-      <div className="flex shrink-0 items-center justify-between gap-2">
+  const headerRow = (
+    <>
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           <details className="group relative min-w-0">
             <summary
@@ -1115,6 +880,16 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
           ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            aria-label={refreshDiffLabel}
+            title={refreshDiffLabel}
+            disabled={isDiffRefreshPending}
+            onClick={refreshDiff}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[#dedbd0] bg-[#faf9f5] text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-wait disabled:opacity-60 dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${isDiffRefreshPending ? 'animate-spin' : ''}`} />
+          </button>
         <button
           type="button"
           aria-label={t('codeAgentStackedDiffView')}
@@ -1172,8 +947,43 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
           <Pilcrow className="h-3.5 w-3.5" />
         </button>
         </div>
-      </div>
-      {renderablePatch.kind === 'raw' ? (
+    </>
+  );
+
+  return (
+    <CodeAgentWorkspaceDiffPanelShell
+      mode="embedded"
+      header={headerRow}
+      testId="code-agent-workspace-diff-viewer"
+    >
+      <CodeAgentWorkspaceDiffPanelViewport>
+        {diff?.truncated ? (
+          <div className="rounded-md border border-amber-500/20 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
+            {t('codeAgentDiffPreviewTruncated')}
+          </div>
+        ) : null}
+        {isPending && diff === null ? (
+          <CodeAgentWorkspaceDiffLoadingState label={loadingDiffLabel} />
+        ) : error && diff === null ? (
+          <div className="rounded-lg border border-[#f0b49b]/50 bg-[#fff2ec] px-3 py-2 text-xs text-[#9f462c] dark:border-[#7a321f]/60 dark:bg-[#2a211d] dark:text-[#ff9b78]" role="alert">
+            {error}
+          </div>
+        ) : (
+          <>
+            {error ? (
+              <div className="rounded-md border border-[#f0b49b]/50 bg-[#fff2ec] px-2.5 py-1.5 text-[11px] text-[#9f462c] dark:border-[#7a321f]/60 dark:bg-[#2a211d] dark:text-[#ff9b78]" role="alert">
+                {error}
+              </div>
+            ) : null}
+            {!diff?.available ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center px-4 py-3 text-center">
+          <p className="text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentChangesUnavailable')}</p>
+        </div>
+      ) : !renderablePatch ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center px-4 py-3 text-center">
+          <p className="text-xs text-[#87867f] dark:text-[#8f8d86]">{emptyPatchLabel}</p>
+        </div>
+      ) : renderablePatch.kind === 'raw' ? (
         <div className="flex min-h-0 flex-1 flex-col overflow-auto rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-2 dark:border-[#30302e] dark:bg-[#1d1d1b]">
           <div className="flex min-h-0 flex-1 flex-col gap-2">
             <p className="text-[11px] text-[#87867f] dark:text-[#8f8d86]">{renderablePatch.reason}</p>
@@ -1247,18 +1057,22 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
               </div>
             </div>
           ) : null}
-          <CodeView<DiffCommentAnnotationGroup>
-            ref={codeViewRef}
-            className="min-h-80 flex-1 overflow-auto rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-xs dark:border-[#30302e] dark:bg-[#1d1d1b]"
-            items={codeViewItems}
-            selectedLines={selectedLines}
-            onSelectedLinesChange={setSelectedLines}
-            renderHeaderPrefix={(item) => {
-              if (item.type !== 'diff') {
-                return null;
-              }
-              const filePath = resolveFileDiffPath(item.fileDiff);
-              const collapsed = item.collapsed === true;
+          <CodeAgentAnnotatableCodeView
+            viewerRef={codeViewRef}
+            files={parsed.items.map((item) => ({
+              fileDiff: item.fileDiff,
+              filePath: resolveFileDiffPath(item.fileDiff),
+              fileKey: item.id,
+              collapsed: item.collapsed === true,
+            }))}
+            sectionId={reviewCommentSectionId}
+            sectionTitle={reviewCommentSectionTitle}
+            reviewComments={reviewComments}
+            onAddReviewComment={onAddReviewComment}
+            onRemoveReviewComment={onRemoveReviewComment}
+            className="diff-render-surface min-h-80 flex-1 overflow-auto rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-xs dark:border-[#30302e] dark:bg-[#1d1d1b]"
+            renderHeaderPrefix={(fileDiff, fileKey, collapsed) => {
+              const filePath = resolveFileDiffPath(fileDiff);
               return (
                 <button
                   type="button"
@@ -1267,9 +1081,9 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                   title={t(collapsed ? 'codeAgentExpandDiff' : 'codeAgentCollapseDiff')}
                   onClick={(event) => {
                     event.stopPropagation();
-                    toggleDiffFileCollapsed(item.id);
+                    toggleDiffFileCollapsed(fileKey);
                   }}
-                  className={`inline-flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-sm border-0 bg-transparent p-0 transition-colors hover:bg-[#141413]/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:hover:bg-[#faf9f5]/10 ${getDiffCollapseIconClassName(item.fileDiff)}`}
+                  className={`inline-flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-sm border-0 bg-transparent p-0 transition-colors hover:bg-[#141413]/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:hover:bg-[#faf9f5]/10 ${getDiffCollapseIconClassName(fileDiff)}`}
                 >
                   {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                 </button>
@@ -1282,30 +1096,15 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
               theme: resolveCodeAgentDiffThemeName(resolvedTheme),
               themeType: resolvedTheme,
               unsafeCSS: DIFF_PANEL_UNSAFE_CSS,
-              enableGutterUtility: !hasOpenCommentForm,
-              enableLineSelection: !hasOpenCommentForm,
-              onLineSelectionEnd: beginComment,
               stickyHeaders: true,
               layout: { paddingTop: 8, paddingBottom: 8, gap: 8 },
             }}
-            renderAnnotation={(annotation) => (
-              <div className="py-1">
-                {annotation.metadata.entries.map((entry) => (
-                  <CodeAgentLocalCommentAnnotation
-                    key={entry.id}
-                    kind={entry.kind}
-                    rangeLabel={entry.rangeLabel}
-                    text={entry.text}
-                    onCancel={() => removeAnnotationEntry(entry.id)}
-                    onComment={(text) => submitAnnotationEntry(entry.id, text)}
-                    onDelete={() => removeAnnotationEntry(entry.id)}
-                  />
-                ))}
-              </div>
-            )}
           />
         </div>
       )}
-    </div>
+          </>
+        )}
+      </CodeAgentWorkspaceDiffPanelViewport>
+    </CodeAgentWorkspaceDiffPanelShell>
   );
 };

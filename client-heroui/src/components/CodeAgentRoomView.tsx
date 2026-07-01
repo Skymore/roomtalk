@@ -514,15 +514,21 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
         </div>
 
         <aside
-          className="relative hidden min-h-0 min-w-0 overflow-hidden border-l border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b] lg:flex"
+          className="relative z-10 hidden min-h-0 min-w-0 overflow-visible border-l border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b] lg:flex"
           data-code-agent-files-panel="true"
         >
           <button
             type="button"
             aria-label={t('codeAgentResizeWorkspaceFiles')}
-            className="absolute inset-y-0 -left-4 z-40 w-8 cursor-col-resize touch-none border-x border-transparent transition-colors hover:border-[#c96442]/30 hover:bg-[#c96442]/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442]"
+            className="group absolute inset-y-0 -left-4 z-40 w-8 cursor-col-resize touch-none focus-visible:outline-none"
             onPointerDown={handleFileManagerResizeStart}
-          />
+          >
+            <span
+              aria-hidden="true"
+              data-code-agent-resize-highlight="workspace-files"
+              className="pointer-events-none absolute inset-y-0 left-1/2 z-50 -ml-px w-0.5 -translate-x-1/2 rounded-full bg-transparent transition-colors duration-150 group-hover:bg-[#c96442] group-active:bg-[#c96442] group-focus-visible:bg-[#c96442]"
+            />
+          </button>
           <div className={`${isFileManagerCollapsed ? 'w-full' : 'w-8'} relative flex shrink-0 justify-center border-r border-[#dedbd0] bg-[#f0eee6] dark:border-[#30302e] dark:bg-[#242422]`}>
             <Button
               isIconOnly
@@ -544,7 +550,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
             </Button>
           </div>
           {isFileManagerCollapsed ? null : (
-            <div className="flex min-h-0 min-w-0 flex-1">
+            <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
               {renderFileManagerPanel('desktop')}
             </div>
           )}

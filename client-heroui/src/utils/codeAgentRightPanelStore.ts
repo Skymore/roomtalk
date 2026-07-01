@@ -376,10 +376,13 @@ export function reconcileCodeAgentFileSurfaces(
   updateStore((state) => ({
     byRoomId: updateRoom(state.byRoomId, roomKey, (current) => {
       const surfaces = current.surfaces.filter((surface) => {
+        if (!workspaceAvailable && (surface.kind === 'files' || surface.kind === 'file')) {
+          return false;
+        }
         if (surface.kind !== 'file') {
           return true;
         }
-        return workspaceAvailable && (!availableFilePaths || availableFilePaths.has(surface.relativePath));
+        return !availableFilePaths || availableFilePaths.has(surface.relativePath);
       });
       if (surfaces.length === current.surfaces.length) {
         return current;

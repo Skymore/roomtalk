@@ -183,6 +183,20 @@ describe('codeAgentRightPanelStore', () => {
     });
   });
 
+  it('removes the standalone files surface when the workspace becomes unavailable like T3', () => {
+    openCodeAgentRightPanel('room-1', 'diff');
+    openCodeAgentRightPanel('room-1', 'files');
+    openCodeAgentRightPanelFile('room-1', 'src/index.ts');
+
+    reconcileCodeAgentFileSurfaces('room-1', false);
+
+    expect(readCodeAgentRightPanelState('room-1')).toEqual({
+      isOpen: true,
+      activeSurfaceId: 'diff',
+      surfaces: [{ id: 'diff', kind: 'diff' }],
+    });
+  });
+
   it('closes all surfaces and removes room state', () => {
     openCodeAgentRightPanelFile('room-1', 'src/index.ts');
     closeAllCodeAgentRightPanelSurfaces('room-1');

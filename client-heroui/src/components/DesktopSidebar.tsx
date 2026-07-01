@@ -657,9 +657,15 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
         <button
           type="button"
           aria-label={t('resizeSidebar')}
-          className="absolute inset-y-0 -right-4 z-40 w-8 cursor-col-resize touch-none border-x border-transparent transition-colors hover:border-[#c96442]/30 hover:bg-[#c96442]/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442]"
+          className="group absolute inset-y-0 -right-4 z-40 w-8 cursor-col-resize touch-none focus-visible:outline-none"
           onPointerDown={handleSidebarResizeStart}
-        />
+        >
+          <span
+            aria-hidden="true"
+            data-code-agent-resize-highlight="desktop-sidebar"
+            className="pointer-events-none absolute inset-y-0 left-1/2 z-50 ml-px w-0.5 -translate-x-1/2 rounded-full bg-transparent transition-colors duration-150 group-hover:bg-[#c96442] group-active:bg-[#c96442] group-focus-visible:bg-[#c96442]"
+          />
+        </button>
         <div
           className={`flex h-16 flex-shrink-0 items-center border-b border-[#dedbd0] dark:border-[#30302e] ${
             isCollapsed ? 'justify-center gap-1 px-2' : 'justify-between px-4'

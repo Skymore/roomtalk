@@ -7,6 +7,7 @@ import { CodeAgentWorkspaceDiffViewer } from './CodeAgentWorkspaceDiffViewer';
 import {
   readCodeAgentDiffPanelSelection,
   resetCodeAgentDiffPanelStoreForTests,
+  selectCodeAgentDiffScope,
 } from '../utils/codeAgentDiffPanelStore';
 
 const loadCodeAgentWorkspaceDiffMock = vi.hoisted(() => vi.fn());
@@ -133,10 +134,28 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
 
     const loading = await screen.findByTestId('code-agent-workspace-diff-loading');
-    const status = screen.getByRole('status', { name: 'codeAgentLoadingWorkspaceDiff' });
+    const status = screen.getByRole('status', { name: 'codeAgentLoadingBranchDiff' });
     expect(loading.contains(status)).toBe(true);
+    expect(screen.getByTestId('code-agent-workspace-diff-viewer').querySelector('[data-surface-subheader]')).toBeTruthy();
+    const viewport = screen.getByTestId('code-agent-workspace-diff-viewer').querySelector('.diff-panel-viewport');
+    expect(viewport).toBeTruthy();
+    expect(viewport?.contains(loading)).toBe(true);
+    expect(screen.getByLabelText('codeAgentRefreshWorkspaceDiff')).toBeTruthy();
     expect(loading.querySelectorAll('.animate-pulse').length).toBeGreaterThanOrEqual(7);
     expect(screen.queryByTestId('code-view')).toBeNull();
+  });
+
+  it('uses the T3-style working tree loading label for unstaged diffs', async () => {
+    selectCodeAgentDiffScope('room-1', 'unstaged');
+    loadCodeAgentWorkspaceDiffMock.mockReturnValue(new Promise(() => undefined));
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
+
+    expect(await screen.findByRole('status', { name: 'codeAgentLoadingWorkingTreeDiff' })).toBeTruthy();
+    expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenCalledWith(
+      'room-1',
+      expect.objectContaining({ scope: 'unstaged' }),
+    );
   });
 
   it('loads a workspace patch and renders it through the Pierre CodeView', async () => {
@@ -162,6 +181,7 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(screen.getByTestId('code-agent-workspace-diff-viewer').className).toContain('flex-1');
     expect(codeView.dataset.className).toContain('min-h-80');
     expect(codeView.dataset.className).toContain('flex-1');
+    expect(codeView.dataset.className).toContain('diff-render-surface');
     expect(codeView.dataset.className?.split(/\s+/)).not.toContain('h-80');
     expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenCalledWith('room-1', expect.any(Object));
     expect(parsePatchFilesMock).toHaveBeenCalledWith(
@@ -175,6 +195,103 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(screen.getByTestId('code-view').dataset.layout).toBe('8:8:8');
     expect(screen.getByTestId('code-view').dataset.unsafeCss).toContain('[data-diffs-header]');
     expect(screen.getByTestId('code-view').dataset.unsafeCss).toContain('[data-title]:hover');
+  });
+
+  it('refreshes the T3-style workspace diff and refs from the toolbar', async () => {
+    let patchPath = 'src/App.tsx';
+    loadCodeAgentWorkspaceDiffMock.mockImplementation(() => Promise.resolve({
+      available: true,
+      patch: `diff --git a/${patchPath} b/${patchPath}\n`,
+      byteSize: 42,
+      truncated: false,
+    }));
+    parsePatchFilesMock.mockImplementation((patch: string) => {
+      const path = patch.includes('src/Other.ts') ? 'src/Other.ts' : 'src/App.tsx';
+      return [
+        {
+          files: [
+            { name: path, hunks: [], additionLines: [], deletionLines: [], type: 'modify' },
+          ],
+        },
+      ];
+    });
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
+
+    const codeView = await screen.findByTestId('code-view');
+    expect(within(codeView).getByText('src/App.tsx')).toBeTruthy();
+    await waitFor(() => {
+      expect(loadCodeAgentWorkspaceRefsMock).toHaveBeenCalledTimes(1);
+    });
+
+    patchPath = 'src/Other.ts';
+    fireEvent.click(screen.getByLabelText('codeAgentRefreshWorkspaceDiff'));
+
+    await waitFor(() => {
+      expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(loadCodeAgentWorkspaceRefsMock).toHaveBeenCalledTimes(2);
+    });
+    expect(within(screen.getByTestId('code-view')).getByText('src/Other.ts')).toBeTruthy();
+  });
+
+  it('keeps the current T3-style workspace diff visible when a manual refresh fails', async () => {
+    let readCount = 0;
+    loadCodeAgentWorkspaceDiffMock.mockImplementation(() => {
+      readCount += 1;
+      return readCount === 1
+        ? Promise.resolve({
+          available: true,
+          patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+          byteSize: 42,
+          truncated: false,
+        })
+        : Promise.reject(new Error('socket diff failed'));
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          { name: 'src/App.tsx', hunks: [], additionLines: [], deletionLines: [], type: 'modify' },
+        ],
+      },
+    ]);
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
+
+    expect(within(await screen.findByTestId('code-view')).getByText('src/App.tsx')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('codeAgentRefreshWorkspaceDiff'));
+
+    await waitFor(() => {
+      expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.getByRole('alert').textContent).toBe('socket diff failed');
+    expect(within(screen.getByTestId('code-view')).getByText('src/App.tsx')).toBeTruthy();
+  });
+
+  it('keeps the T3-style diff toolbar available when there are no workspace changes', async () => {
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: '',
+      byteSize: 0,
+      truncated: false,
+    });
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
+
+    expect(await screen.findByText('codeAgentNoNetWorkspaceChanges')).toBeTruthy();
+    expect(screen.getByLabelText('codeAgentRefreshWorkspaceDiff')).toBeTruthy();
+    expect(screen.getByLabelText('codeAgentDiffScope: codeAgentDiffScopeBranch')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('codeAgentDiffScopeWorkingTree'));
+
+    await waitFor(() => {
+      expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenCalledTimes(2);
+    });
+    expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenLastCalledWith(
+      'room-1',
+      expect.objectContaining({ scope: 'unstaged' }),
+    );
   });
 
   it('falls back to the T3 raw patch viewer when Pierre cannot parse the workspace diff', async () => {

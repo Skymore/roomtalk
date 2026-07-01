@@ -1,26 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { VirtualizedFile, type SelectedLineRange } from '@pierre/diffs';
-import { Editor } from '@pierre/diffs/editor';
-import { EditorProvider, File as DiffFile, type FileOptions, Virtualizer } from '@pierre/diffs/react';
-import { FileTree, useFileTree, useFileTreeSearch } from '@pierre/trees/react';
-import type { FileTreeIcons } from '@pierre/trees';
 import {
-  ChevronRight,
-  Code2,
-  Download,
-  Eye,
   FileDiff,
-  FilePlus2,
-  FolderPlus,
   FolderTree,
-  Globe2,
-  LoaderCircle,
-  Pencil,
-  RefreshCw,
-  Search,
-  Trash2,
-  Upload,
-  WrapText,
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -39,40 +20,25 @@ import {
   type CodeWorkspaceFile,
 } from '../utils/codeWorkspaceFiles';
 import {
-  appendWorkspaceAssetPreviewRevision,
   isWorkspaceBrowserPreviewPath,
-  isWorkspaceImagePreviewPath,
   isWorkspacePreviewEntryPath,
 } from '../utils/codeWorkspaceFilePreview';
 import type { RoomSandboxStatus } from '../utils/types';
 import { beginHorizontalResize } from '../utils/horizontalResize';
 import { normalizeWorkspaceOpenPath, parseWorkspaceFileOpenTarget } from '../utils/workspaceFileOpenTarget';
-import {
-  buildFileReviewComment,
-  type ReviewCommentContext,
-} from '../utils/codeAgentReviewComments';
-import { CodeAgentLocalCommentAnnotation } from './CodeAgentLocalCommentAnnotation';
-import {
-  type FileCommentAnnotationEntry,
-  type FileCommentAnnotationGroup,
-  type FileCommentLineAnnotation,
-  formatFileCommentRange,
-  nextFileCommentId,
-  normalizeFileCommentRange,
-  remapFileCommentAnnotations,
-} from './codeAgentFileCommentAnnotations';
-import { installFileEditorDismissal } from './codeAgentFileEditorDismissal';
-import { projectFileCacheKey } from './codeAgentFileContentRevision';
-import { FileSaveCoordinator } from './codeAgentFileSaveCoordinator';
-import { isMarkdownPreviewFile, setMarkdownTaskChecked } from './codeAgentFilePreviewMode';
+import { type ReviewCommentContext } from '../utils/codeAgentReviewComments';
+import { isMarkdownPreviewFile } from './codeAgentFilePreviewMode';
 import {
   clearCodeAgentProjectFileQueryData,
-  confirmCodeAgentProjectFileQueryData,
   getOptimisticCodeAgentProjectFileQueryData,
   resolveCodeAgentProjectFileQueryData,
-  setCodeAgentProjectFileQueryData,
 } from './codeAgentProjectFilesQueryState';
+import { CodeAgentFilePreviewPanel } from './CodeAgentFilePreviewPanel';
 import { CodeAgentWorkspaceDiffViewer } from './CodeAgentWorkspaceDiffViewer';
+import {
+  CodeAgentWorkspaceFileTreePanel,
+  type CodeAgentProjectEntry,
+} from './CodeAgentWorkspaceFileTreePanel';
 import {
   activateCodeAgentRightPanelSurface,
   closeAllCodeAgentRightPanelSurfaces,
@@ -85,10 +51,6 @@ import {
   type CodeAgentRightPanelSurface,
   useCodeAgentRightPanelState,
 } from '../utils/codeAgentRightPanelStore';
-
-const MarkdownContent = React.lazy(() =>
-  import('./MarkdownContent').then((module) => ({ default: module.MarkdownContent })),
-);
 
 interface CodeAgentFileBrowserPanelProps {
   roomId: string;
@@ -103,11 +65,6 @@ interface CodeAgentFileBrowserPanelProps {
   onRemoveReviewComment?: (commentId: string) => void;
   onFileSavePendingChange?: (relativePath: string, pending: boolean) => void;
 }
-
-type ProjectEntry = {
-  path: string;
-  kind: 'file' | 'directory';
-};
 
 type SaveState = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
 type SaveStatus = {
@@ -145,44 +102,7 @@ type WorkspaceRemoteSearchState = {
   error: string | null;
 };
 
-const T3_PIERRE_ICONS = {
-  set: 'complete',
-  colored: true,
-} satisfies FileTreeIcons;
-
-const TREE_UNSAFE_CSS = `
-  :host {
-    --trees-bg-override: transparent;
-    --trees-selected-bg-override: color-mix(in srgb, currentColor 12%, transparent);
-    --trees-hover-bg-override: color-mix(in srgb, currentColor 7%, transparent);
-    --trees-border-color-override: color-mix(in srgb, currentColor 14%, transparent);
-    --trees-font-family-override: var(--font-sans);
-    --trees-font-size-override: 12px;
-  }
-  button[data-type='item'] { border-radius: 5px; }
-`;
-
-const FILE_SAVE_DEBOUNCE_MS = 500;
 const FILE_WORD_WRAP_STORAGE_KEY = 'roomtalk.codeWorkspace.fileWordWrap';
-const FILE_LINK_REVEAL_ATTRIBUTE = 'data-file-link-reveal';
-const FILE_LINK_REVEAL_UNSAFE_CSS = `
-  [${FILE_LINK_REVEAL_ATTRIBUTE}][data-line] {
-    background-color: color-mix(
-      in srgb,
-      var(--diffs-computed-diff-line-bg) 72%,
-      var(--diffs-bg-selection-override, var(--diffs-selection-base))
-    ) !important;
-  }
-
-  [${FILE_LINK_REVEAL_ATTRIBUTE}][data-column-number] {
-    background-color: color-mix(
-      in srgb,
-      var(--diffs-computed-diff-line-bg) 62%,
-      var(--diffs-bg-selection-number-override, var(--diffs-selection-base))
-    ) !important;
-    color: var(--diffs-selection-number-fg) !important;
-  }
-`;
 const FILE_EXPLORER_STORAGE_KEY = 'roomtalk.codeWorkspace.fileExplorerOpen';
 const FILE_EXPLORER_WIDTH_STORAGE_KEY = 'roomtalk.codeWorkspace.fileExplorerWidth';
 const FILE_EXPLORER_MIN_WIDTH = 160;
@@ -190,7 +110,6 @@ const FILE_PREVIEW_MIN_WIDTH = 220;
 const FILE_EXPLORER_DEFAULT_WIDTH = 352;
 const WORKSPACE_TREE_REMOTE_SEARCH_LIMIT = 200;
 const WORKSPACE_TREE_REMOTE_SEARCH_DEBOUNCE_MS = 150;
-type FilePostRender = NonNullable<FileOptions<unknown>['onPostRender']>;
 
 function getFileExplorerResizeBounds(panelWidth: number) {
   return {
@@ -204,29 +123,8 @@ function clampFileExplorerWidth(value: number, panelWidth: number): number {
   return Math.min(bounds.max, Math.max(bounds.min, Math.round(value)));
 }
 
-function treePath(entry: ProjectEntry): string {
-  return entry.kind === 'directory' ? `${entry.path}/` : entry.path;
-}
-
 function normalizeWorkspacePath(path: string): string {
   return normalizeWorkspaceOpenPath(path);
-}
-
-function updateWorkspaceFileContents(
-  current: CodeWorkspaceFile | null,
-  path: string,
-  contents: string,
-): CodeWorkspaceFile | null {
-  if (!current || normalizeWorkspacePath(current.path) !== normalizeWorkspacePath(path)) {
-    return current;
-  }
-  return {
-    ...current,
-    content: contents,
-    byteSize: new TextEncoder().encode(contents).byteLength,
-    truncated: false,
-    encoding: 'utf-8',
-  };
 }
 
 function parentPath(path: string): string {
@@ -263,8 +161,8 @@ function basename(path: string): string {
   return normalizedPath.split('/').pop() || normalizedPath;
 }
 
-function projectEntriesFromWorkspace(entries: readonly CodeWorkspaceEntry[]): ProjectEntry[] {
-  const byPath = new Map<string, ProjectEntry>();
+function projectEntriesFromWorkspace(entries: readonly CodeWorkspaceEntry[]): CodeAgentProjectEntry[] {
+  const byPath = new Map<string, CodeAgentProjectEntry>();
 
   for (const entry of entries) {
     const normalizedPath = normalizeWorkspacePath(entry.path);
@@ -321,18 +219,6 @@ function workspaceEntryForPath(path: string, type: CodeWorkspaceEntry['type'] = 
   };
 }
 
-function fileBreadcrumbs(projectName: string, relativePath: string) {
-  const parts = relativePath.split('/').filter(Boolean);
-  return [
-    { label: projectName, path: '', kind: 'project' as const },
-    ...parts.map((part, index) => ({
-      label: part,
-      path: parts.slice(0, index + 1).join('/'),
-      kind: index === parts.length - 1 ? ('file' as const) : ('directory' as const),
-    })),
-  ];
-}
-
 function readResolvedTheme() {
   return typeof document !== 'undefined' && document.documentElement.classList.contains('dark') ? 'dark' : 'light';
 }
@@ -350,129 +236,6 @@ function useResolvedTheme() {
   }, []);
 
   return resolvedTheme;
-}
-
-function clampFileLine(contents: string, requestedLine: number): number {
-  let lineCount = 1;
-  for (let index = 0; index < contents.length; index += 1) {
-    const character = contents.charCodeAt(index);
-    if (character === 10) {
-      lineCount += 1;
-    } else if (character === 13) {
-      lineCount += 1;
-      if (contents.charCodeAt(index + 1) === 10) {
-        index += 1;
-      }
-    }
-  }
-  return Math.min(Math.max(1, requestedLine), lineCount);
-}
-
-function updateFileLinkReveal(fileContainer: HTMLElement, line: number | null): void {
-  const root = fileContainer.shadowRoot ?? fileContainer;
-  for (const element of root.querySelectorAll<HTMLElement>(`[${FILE_LINK_REVEAL_ATTRIBUTE}]`)) {
-    element.removeAttribute(FILE_LINK_REVEAL_ATTRIBUTE);
-  }
-  if (line === null) {
-    return;
-  }
-
-  root
-    .querySelector<HTMLElement>(`[data-line="${line}"]`)
-    ?.setAttribute(FILE_LINK_REVEAL_ATTRIBUTE, '');
-  root
-    .querySelector<HTMLElement>(`[data-column-number="${line}"]`)
-    ?.setAttribute(FILE_LINK_REVEAL_ATTRIBUTE, '');
-}
-
-function useFileLineReveal(
-  relativePath: string | null,
-  revealLine: number | null,
-  revealRequestId: number,
-): FilePostRender {
-  const [handledRequestIdsByPath] = useState<Map<string, number>>(() => new Map());
-  const [latestRequestIdsByPath] = useState<Map<string, number>>(() => new Map());
-  const [pendingFramesByPath] = useState<Map<string, number>>(() => new Map());
-
-  return useCallback<FilePostRender>(
-    (fileContainer, instance, phase) => {
-      if (relativePath === null) return;
-
-      const cancelPendingReveal = () => {
-        const frameId = pendingFramesByPath.get(relativePath);
-        if (frameId !== undefined) {
-          cancelAnimationFrame(frameId);
-          pendingFramesByPath.delete(relativePath);
-        }
-      };
-
-      if (phase === 'unmount') {
-        cancelPendingReveal();
-        return;
-      }
-
-      const targetLine = revealLine === null ? null : clampFileLine(instance.file?.contents ?? '', revealLine);
-      updateFileLinkReveal(fileContainer, targetLine);
-
-      if (!(instance instanceof VirtualizedFile)) return;
-
-      if (latestRequestIdsByPath.get(relativePath) !== revealRequestId) {
-        cancelPendingReveal();
-        latestRequestIdsByPath.set(relativePath, revealRequestId);
-      }
-
-      if (targetLine === null) {
-        fileContainer.style.minHeight = '';
-        return;
-      }
-
-      const scrollContainer = fileContainer.closest<HTMLElement>('.file-preview-virtualizer');
-      if (!scrollContainer) return;
-      fileContainer.style.minHeight = `${Math.ceil(Math.max(instance.height, scrollContainer.clientHeight))}px`;
-
-      if (
-        handledRequestIdsByPath.get(relativePath) === revealRequestId ||
-        pendingFramesByPath.has(relativePath)
-      ) {
-        return;
-      }
-
-      const reveal = () => {
-        pendingFramesByPath.delete(relativePath);
-        if (
-          latestRequestIdsByPath.get(relativePath) !== revealRequestId ||
-          !fileContainer.isConnected
-        ) {
-          return;
-        }
-
-        const linePosition = instance.getLinePosition(targetLine);
-        if (!linePosition) return;
-
-        const fileTop = scrollContainer.scrollTop
-          + fileContainer.getBoundingClientRect().top
-          - scrollContainer.getBoundingClientRect().top;
-        const centeredTop = Math.max(
-          0,
-          fileTop + linePosition.top - Math.max(0, (scrollContainer.clientHeight - linePosition.height) / 2),
-        );
-        const maxScrollTop = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
-
-        scrollContainer.scrollTop = Math.min(centeredTop, maxScrollTop);
-        handledRequestIdsByPath.set(relativePath, revealRequestId);
-      };
-
-      pendingFramesByPath.set(relativePath, requestAnimationFrame(reveal));
-    },
-    [
-      handledRequestIdsByPath,
-      latestRequestIdsByPath,
-      pendingFramesByPath,
-      relativePath,
-      revealLine,
-      revealRequestId,
-    ],
-  );
 }
 
 function initialExplorerOpen(): boolean {
@@ -691,847 +454,6 @@ function useCodeWorkspaceAssetUrlQuery(roomId: string, relativePath: string | nu
   };
 }
 
-function decodeWorkspaceFile(file: CodeWorkspaceFile): BlobPart {
-  if (file.encoding === 'utf-8') {
-    return file.content;
-  }
-
-  const binary = window.atob(file.content);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
-}
-
-function inferMimeType(path: string, encoding: CodeWorkspaceFile['encoding']) {
-  if (/\.(png)$/i.test(path)) return 'image/png';
-  if (/\.(jpe?g)$/i.test(path)) return 'image/jpeg';
-  if (/\.(gif)$/i.test(path)) return 'image/gif';
-  if (/\.(webp)$/i.test(path)) return 'image/webp';
-  if (/\.(svg)$/i.test(path)) return 'image/svg+xml';
-  if (/\.(pdf)$/i.test(path)) return 'application/pdf';
-  if (encoding === 'base64') return 'application/octet-stream';
-  if (/\.(html?)$/i.test(path)) return 'text/html;charset=utf-8';
-  if (/\.(json)$/i.test(path)) return 'application/json;charset=utf-8';
-  if (/\.(css)$/i.test(path)) return 'text/css;charset=utf-8';
-  if (/\.(js|mjs|cjs|ts|tsx|jsx)$/i.test(path)) return 'text/javascript;charset=utf-8';
-  if (/\.(md|markdown)$/i.test(path)) return 'text/markdown;charset=utf-8';
-  return 'text/plain;charset=utf-8';
-}
-
-function createDownload(file: CodeWorkspaceFile) {
-  const blob = new Blob([decodeWorkspaceFile(file)], {
-    type: inferMimeType(file.path, file.encoding),
-  });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = file.path.split('/').pop() || 'workspace-file';
-  anchor.rel = 'noopener noreferrer';
-  anchor.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-}
-
-function previewedByteSize(file: CodeWorkspaceFile): number {
-  if (file.encoding === 'utf-8') {
-    return new TextEncoder().encode(file.content).byteLength;
-  }
-  return Math.min(file.byteSize, Math.floor((file.content.length * 3) / 4));
-}
-
-interface EditableFileSurfaceProps {
-  roomId: string;
-  file: CodeWorkspaceFile;
-  resolvedTheme: 'light' | 'dark';
-  wordWrap: boolean;
-  onPostRender: FilePostRender;
-  revealRequestId: number;
-  onFileChange: React.Dispatch<React.SetStateAction<CodeWorkspaceFile | null>>;
-  onSaveStateChange: (path: string, state: SaveState, error?: string | null) => void;
-  onFileSavePendingChange?: (relativePath: string, pending: boolean) => void;
-  onEntriesChanged: () => void;
-  reviewComments: readonly ReviewCommentContext[];
-  onAddReviewComment?: (comment: ReviewCommentContext) => void;
-  onRemoveReviewComment?: (commentId: string) => void;
-}
-
-interface FileSelectionOverride {
-  revealRequestId: number;
-  range: SelectedLineRange | null;
-}
-
-function EditableFileSurface({
-  roomId,
-  file,
-  resolvedTheme,
-  wordWrap,
-  onPostRender,
-  revealRequestId,
-  onFileChange,
-  onSaveStateChange,
-  onFileSavePendingChange,
-  onEntriesChanged,
-  reviewComments,
-  onAddReviewComment,
-  onRemoveReviewComment,
-}: EditableFileSurfaceProps) {
-  const filePath = file.path;
-  const surfaceRef = useRef<HTMLDivElement | null>(null);
-  const selectionFrameRef = useRef<number | null>(null);
-  const latestDraftContentsRef = useRef(file.content);
-  const [lineAnnotations, setLineAnnotations] = useState<FileCommentLineAnnotation[]>([]);
-  const [selectionOverride, setSelectionOverride] = useState<FileSelectionOverride | null>(null);
-  const fileReviewCommentIds = useMemo(() => new Set(
-    reviewComments
-      .filter((comment) => comment.sectionId === `file:${filePath}` && comment.filePath === filePath)
-      .map((comment) => comment.id),
-  ), [filePath, reviewComments]);
-  const fileReviewCommentIdsKey = useMemo(
-    () => [...fileReviewCommentIds].sort().join('\n'),
-    [fileReviewCommentIds],
-  );
-  const selectedRange = selectionOverride?.revealRequestId === revealRequestId ? selectionOverride.range : null;
-  const setSelectedRange = useCallback(
-    (range: SelectedLineRange | null) => {
-      setSelectionOverride({ revealRequestId, range });
-    },
-    [revealRequestId],
-  );
-
-  useEffect(() => {
-    onSaveStateChange(filePath, 'idle', null);
-    latestDraftContentsRef.current = file.content;
-    // Reset persistence state only when T3 mounts a different file surface.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath]);
-
-  useEffect(() => {
-    setLineAnnotations((current) => current.flatMap((annotation) => {
-      const entries = annotation.metadata.entries.filter((entry) => (
-        entry.kind === 'draft' || fileReviewCommentIds.has(entry.id)
-      ));
-      return entries.length > 0 ? [{ ...annotation, metadata: { entries } }] : [];
-    }));
-  }, [fileReviewCommentIds, fileReviewCommentIdsKey]);
-
-  const setDraftFileContents = useCallback((contents: string) => {
-    latestDraftContentsRef.current = contents;
-    setCodeAgentProjectFileQueryData(roomId, filePath, contents);
-    onFileChange((current) => updateWorkspaceFileContents(current, filePath, contents));
-  }, [filePath, onFileChange, roomId]);
-
-  const confirmFileContents = useCallback((contents: string) => {
-    if (latestDraftContentsRef.current !== contents) {
-      return;
-    }
-    confirmCodeAgentProjectFileQueryData(roomId, filePath, contents);
-    onFileChange((current) => updateWorkspaceFileContents(current, filePath, contents));
-  }, [filePath, onFileChange, roomId]);
-
-  const handlePendingChange = useCallback((pending: boolean) => {
-    onSaveStateChange(filePath, pending ? 'pending' : 'saved', null);
-    onFileSavePendingChange?.(filePath, pending);
-  }, [filePath, onFileSavePendingChange, onSaveStateChange]);
-
-  const saveCoordinator = useMemo(
-    () => new FileSaveCoordinator({
-      debounceMs: FILE_SAVE_DEBOUNCE_MS,
-      onPendingChange: handlePendingChange,
-      persist: async (contents) => {
-        onSaveStateChange(filePath, 'saving', null);
-        try {
-          await writeCodeWorkspaceFile(roomId, filePath, contents, 'utf-8');
-          onEntriesChanged();
-          return { _tag: 'Success' };
-        } catch (error) {
-          onSaveStateChange(filePath, 'error', error instanceof Error ? error.message : 'File save failed.');
-          return { _tag: 'Failure' };
-        }
-      },
-      onConfirmed: (contents) => {
-        confirmFileContents(contents);
-      },
-    }),
-    [confirmFileContents, filePath, handlePendingChange, onEntriesChanged, onSaveStateChange, roomId],
-  );
-
-  useEffect(() => () => saveCoordinator.dispose(), [saveCoordinator]);
-
-  const removeAnnotationEntry = useCallback((entryId: string) => {
-    setSelectedRange(null);
-    onRemoveReviewComment?.(entryId);
-    setLineAnnotations((current) => current.flatMap((annotation) => {
-      const entries = annotation.metadata.entries.filter((entry) => entry.id !== entryId);
-      return entries.length > 0 ? [{ ...annotation, metadata: { entries } }] : [];
-    }));
-  }, [onRemoveReviewComment, setSelectedRange]);
-
-  const submitAnnotationEntry = useCallback((entryId: string, text: string) => {
-    setSelectedRange(null);
-    const entry = lineAnnotations
-      .flatMap((annotation) => annotation.metadata.entries)
-      .find((candidate) => candidate.id === entryId);
-    if (entry) {
-      onAddReviewComment?.(buildFileReviewComment({
-        id: entry.id,
-        filePath,
-        startLine: entry.startLine,
-        endLine: entry.endLine,
-        text,
-        contents: latestDraftContentsRef.current,
-      }));
-    }
-    setLineAnnotations((current) => current.map((annotation) => ({
-      ...annotation,
-      metadata: {
-        entries: annotation.metadata.entries.map((entry) => (
-          entry.id === entryId ? { ...entry, kind: 'comment', text } : entry
-        )),
-      },
-    })));
-  }, [filePath, lineAnnotations, onAddReviewComment, setSelectedRange]);
-
-  const beginComment = useCallback((range: SelectedLineRange) => {
-    const { startLine, endLine } = normalizeFileCommentRange(range);
-    const draftEntry: FileCommentAnnotationEntry = {
-      id: nextFileCommentId(),
-      kind: 'draft',
-      startLine,
-      endLine,
-      text: '',
-    };
-    setLineAnnotations((current) => {
-      const withoutDraft = current.flatMap((annotation) => {
-        const entries = annotation.metadata.entries.filter((entry) => entry.kind !== 'draft');
-        return entries.length > 0 ? [{ ...annotation, metadata: { entries } }] : [];
-      });
-      const existingIndex = withoutDraft.findIndex((annotation) => annotation.lineNumber === endLine);
-      if (existingIndex < 0) {
-        return [
-          ...withoutDraft,
-          {
-            lineNumber: endLine,
-            metadata: { entries: [draftEntry] },
-          },
-        ];
-      }
-      return withoutDraft.map((annotation, index) => (
-        index === existingIndex
-          ? {
-              ...annotation,
-              metadata: { entries: [...annotation.metadata.entries, draftEntry] },
-            }
-          : annotation
-      ));
-    });
-  }, []);
-
-  const hasOpenCommentForm = lineAnnotations.some((annotation) =>
-    annotation.metadata.entries.some((entry) => entry.kind === 'draft'),
-  );
-
-  const handleLineSelectionEnd = useCallback((range: SelectedLineRange | null) => {
-    setSelectedRange(range);
-    if (range) {
-      beginComment(range);
-    }
-  }, [beginComment, setSelectedRange]);
-
-  const editor = useMemo(() => {
-    return new Editor<FileCommentAnnotationGroup>({
-      onChange: (nextFile, nextLineAnnotations) => {
-        setDraftFileContents(nextFile.contents);
-        saveCoordinator.change(nextFile.contents);
-        if (nextLineAnnotations) {
-          setLineAnnotations(remapFileCommentAnnotations(
-            nextLineAnnotations as FileCommentLineAnnotation[],
-          ));
-        }
-      },
-    });
-  }, [saveCoordinator, setDraftFileContents]);
-
-  useEffect(() => () => {
-    editor.cleanUp();
-  }, [editor]);
-
-  useEffect(() => () => {
-    if (selectionFrameRef.current !== null) {
-      window.cancelAnimationFrame(selectionFrameRef.current);
-      selectionFrameRef.current = null;
-    }
-  }, []);
-
-  useEffect(() => {
-    const root = surfaceRef.current;
-    if (!root) return undefined;
-    return installFileEditorDismissal({
-      root,
-      editor,
-      isBlocked: () => hasOpenCommentForm,
-      onDismiss: () => setSelectedRange(null),
-    });
-  }, [editor, hasOpenCommentForm, setSelectedRange]);
-
-  const handlePostRender = useCallback<FilePostRender>((fileContainer, instance, phase) => {
-    onPostRender(fileContainer, instance, phase);
-
-    if (selectionFrameRef.current !== null) {
-      window.cancelAnimationFrame(selectionFrameRef.current);
-      selectionFrameRef.current = null;
-    }
-    if (phase === 'unmount') {
-      return;
-    }
-
-    selectionFrameRef.current = window.requestAnimationFrame(() => {
-      selectionFrameRef.current = null;
-      if (!fileContainer.isConnected) {
-        return;
-      }
-      instance.setSelectedLines(selectedRange, { notify: false });
-    });
-  }, [onPostRender, selectedRange]);
-
-  return (
-    <EditorProvider editor={editor}>
-      <div ref={surfaceRef} className="flex min-h-0 flex-1">
-        <Virtualizer
-          className="file-preview-virtualizer min-h-0 flex-1 overflow-auto"
-          config={{
-            overscrollSize: 600,
-            intersectionObserverMargin: 1200,
-          }}
-        >
-          <DiffFile<FileCommentAnnotationGroup>
-            file={{
-              name: file.path,
-              contents: file.content,
-              cacheKey: projectFileCacheKey('', file.path, file.content),
-            }}
-            options={{
-              disableFileHeader: true,
-              enableGutterUtility: !hasOpenCommentForm,
-              enableLineSelection: !hasOpenCommentForm,
-              onGutterUtilityClick: setSelectedRange,
-              onLineSelectionChange: setSelectedRange,
-              onLineSelectionEnd: handleLineSelectionEnd,
-              overflow: wordWrap ? 'wrap' : 'scroll',
-              theme: resolvedTheme === 'dark' ? 'pierre-dark' : 'pierre-light',
-              themeType: resolvedTheme,
-              unsafeCSS: FILE_LINK_REVEAL_UNSAFE_CSS,
-              onPostRender: handlePostRender,
-            }}
-            selectedLines={selectedRange}
-            lineAnnotations={lineAnnotations}
-            renderAnnotation={(annotation) => (
-              <div className="py-1">
-                {annotation.metadata.entries.map((entry) => (
-                  <CodeAgentLocalCommentAnnotation
-                    key={entry.id}
-                    kind={entry.kind}
-                    rangeLabel={formatFileCommentRange(entry.startLine, entry.endLine)}
-                    text={entry.text}
-                    onCancel={() => removeAnnotationEntry(entry.id)}
-                    onComment={(text) => submitAnnotationEntry(entry.id, text)}
-                    onDelete={() => removeAnnotationEntry(entry.id)}
-                  />
-                ))}
-              </div>
-            )}
-            className="min-h-full"
-            contentEditable
-          />
-        </Virtualizer>
-      </div>
-    </EditorProvider>
-  );
-}
-
-interface ReadOnlyFileSurfaceProps {
-  file: CodeWorkspaceFile;
-  resolvedTheme: 'light' | 'dark';
-  wordWrap: boolean;
-  onPostRender: FilePostRender;
-}
-
-function ReadOnlyFileSurface({
-  file,
-  resolvedTheme,
-  wordWrap,
-  onPostRender,
-}: ReadOnlyFileSurfaceProps) {
-  return (
-    <div className="flex min-h-0 flex-1">
-      <Virtualizer
-        className="file-preview-virtualizer min-h-0 flex-1 overflow-auto"
-        config={{
-          overscrollSize: 600,
-          intersectionObserverMargin: 1200,
-        }}
-      >
-        <DiffFile
-          file={{
-            name: file.path,
-            contents: file.content,
-            cacheKey: projectFileCacheKey('', file.path, file.content),
-          }}
-          options={{
-            disableFileHeader: true,
-            overflow: wordWrap ? 'wrap' : 'scroll',
-            theme: resolvedTheme === 'dark' ? 'pierre-dark' : 'pierre-light',
-            themeType: resolvedTheme,
-            unsafeCSS: FILE_LINK_REVEAL_UNSAFE_CSS,
-            onPostRender,
-          }}
-          className="min-h-full"
-        />
-      </Virtualizer>
-    </div>
-  );
-}
-
-interface RenderedMarkdownSurfaceProps {
-  roomId: string;
-  file: CodeWorkspaceFile;
-  onFileChange: React.Dispatch<React.SetStateAction<CodeWorkspaceFile | null>>;
-  onSaveStateChange: (path: string, state: SaveState, error?: string | null) => void;
-  onFileSavePendingChange?: (relativePath: string, pending: boolean) => void;
-  onEntriesChanged: () => void;
-  onOpenWorkspaceFile: (path: string) => void;
-}
-
-function RenderedMarkdownSurface({
-  roomId,
-  file,
-  onFileChange,
-  onSaveStateChange,
-  onFileSavePendingChange,
-  onEntriesChanged,
-  onOpenWorkspaceFile,
-}: RenderedMarkdownSurfaceProps) {
-  const filePath = file.path;
-  const fileRef = useRef(file);
-  const latestFilePathRef = useRef(filePath);
-  const latestDraftContentsRef = useRef(file.content);
-
-  useEffect(() => {
-    fileRef.current = file;
-    if (latestFilePathRef.current !== filePath) {
-      latestFilePathRef.current = filePath;
-      latestDraftContentsRef.current = file.content;
-    }
-  }, [file, filePath]);
-
-  const setDraftFileContents = useCallback((contents: string) => {
-    latestDraftContentsRef.current = contents;
-    setCodeAgentProjectFileQueryData(roomId, filePath, contents);
-    onFileChange((current) => updateWorkspaceFileContents(current, filePath, contents));
-  }, [filePath, onFileChange, roomId]);
-
-  const confirmFileContents = useCallback((contents: string) => {
-    if (latestDraftContentsRef.current !== contents) {
-      return;
-    }
-    confirmCodeAgentProjectFileQueryData(roomId, filePath, contents, fileRef.current);
-    onFileChange((current) => updateWorkspaceFileContents(current, filePath, contents));
-  }, [filePath, onFileChange, roomId]);
-
-  const handlePendingChange = useCallback((pending: boolean) => {
-    onSaveStateChange(filePath, pending ? 'pending' : 'saved', null);
-    onFileSavePendingChange?.(filePath, pending);
-  }, [filePath, onFileSavePendingChange, onSaveStateChange]);
-
-  const saveCoordinator = useMemo(
-    () => new FileSaveCoordinator({
-      debounceMs: FILE_SAVE_DEBOUNCE_MS,
-      onPendingChange: handlePendingChange,
-      persist: async (contents) => {
-        onSaveStateChange(filePath, 'saving', null);
-        try {
-          await writeCodeWorkspaceFile(roomId, filePath, contents, 'utf-8');
-          onEntriesChanged();
-          return { _tag: 'Success' };
-        } catch (error) {
-          onSaveStateChange(filePath, 'error', error instanceof Error ? error.message : 'File save failed.');
-          return { _tag: 'Failure' };
-        }
-      },
-      onConfirmed: (contents) => {
-        confirmFileContents(contents);
-      },
-    }),
-    [confirmFileContents, filePath, handlePendingChange, onEntriesChanged, onSaveStateChange, roomId],
-  );
-
-  useEffect(() => () => saveCoordinator.dispose(), [saveCoordinator]);
-
-  return (
-    <div className="min-h-0 flex-1 overflow-auto">
-      <div className="mx-auto max-w-4xl px-6 py-5 text-[#141413] dark:text-[#faf9f5]">
-        <React.Suspense fallback={<LoaderCircle className="h-5 w-5 animate-spin text-[#87867f] dark:text-[#8f8d86]" />}>
-          <MarkdownContent
-            content={file.content}
-            onOpenWorkspaceFile={onOpenWorkspaceFile}
-            onTaskListChange={({ markerOffset, checked }) => {
-              const currentContents = getOptimisticCodeAgentProjectFileQueryData(roomId, filePath)?.content
-                ?? fileRef.current.content;
-              const nextContents = setMarkdownTaskChecked(currentContents, markerOffset, checked);
-              if (nextContents === currentContents) return;
-              fileRef.current = {
-                ...fileRef.current,
-                content: nextContents,
-                byteSize: new TextEncoder().encode(nextContents).byteLength,
-                truncated: false,
-                encoding: 'utf-8',
-              };
-              setDraftFileContents(nextContents);
-              saveCoordinator.change(nextContents);
-            }}
-          />
-        </React.Suspense>
-      </div>
-    </div>
-  );
-}
-
-interface FileBrowserPanelProps {
-  projectName: string;
-  entries: ProjectEntry[];
-  entryKinds: ReadonlyMap<string, ProjectEntry['kind']>;
-  entriesPending: boolean;
-  entriesError: string | null;
-  entriesTruncated: boolean;
-  selectedPath: string | null;
-  resolvedTheme: 'light' | 'dark';
-  onOpenEntry: (relativePath: string, kind: ProjectEntry['kind']) => void;
-  onRefresh: () => void;
-  onCreateFile: () => void;
-  onCreateDirectory: () => void;
-  onUpload: () => void;
-  onRename: () => void;
-  onDelete: () => void;
-  onSearchQueryChange: (query: string) => void;
-  remoteSearchPending: boolean;
-  remoteSearchError: string | null;
-  remoteSearchTruncated: boolean;
-}
-
-function FileBrowserPanel({
-  projectName,
-  entries,
-  entryKinds,
-  entriesPending,
-  entriesError,
-  entriesTruncated,
-  selectedPath,
-  resolvedTheme,
-  onOpenEntry,
-  onRefresh,
-  onCreateFile,
-  onCreateDirectory,
-  onUpload,
-  onRename,
-  onDelete,
-  onSearchQueryChange,
-  remoteSearchPending,
-  remoteSearchError,
-  remoteSearchTruncated,
-}: FileBrowserPanelProps) {
-  const { t } = useTranslation();
-  const entryKindsRef = useRef<ReadonlyMap<string, ProjectEntry['kind']>>(entryKinds);
-  const treePaths = useMemo(() => entries.map(treePath), [entries]);
-  const previousTreePathsRef = useRef<readonly string[]>([]);
-  const fileCount = useMemo(
-    () => entries.reduce((count, entry) => count + (entry.kind === 'file' ? 1 : 0), 0),
-    [entries],
-  );
-
-  const { model } = useFileTree({
-    density: 'compact',
-    fileTreeSearchMode: 'hide-non-matches',
-    flattenEmptyDirectories: true,
-    initialExpansion: 1,
-    icons: T3_PIERRE_ICONS,
-    onSelectionChange: (selectedPaths) => {
-      const nextPath = selectedPaths.at(-1)?.replace(/\/$/, '');
-      const kind = nextPath ? entryKindsRef.current.get(nextPath) : undefined;
-      if (nextPath && kind) {
-        onOpenEntry(nextPath, kind);
-      }
-    },
-    paths: [],
-    search: true,
-    unsafeCSS: TREE_UNSAFE_CSS,
-  });
-  const treeSearch = useFileTreeSearch(model);
-  const fileCountLabel = entriesPending && entries.length === 0
-    ? t('codeAgentWorkspaceIndexing')
-    : t('codeAgentWorkspaceFileCount', { formattedCount: fileCount.toLocaleString() });
-
-  useEffect(() => {
-    if (previousTreePathsRef.current === treePaths) return;
-    entryKindsRef.current = entryKinds;
-    previousTreePathsRef.current = treePaths;
-    model.resetPaths(treePaths);
-  }, [entryKinds, model, treePaths]);
-
-  useEffect(() => {
-    if (!selectedPath || !entryKinds.has(selectedPath)) {
-      return;
-    }
-    model.focusPath(selectedPath);
-    model.scrollToPath(selectedPath, { offset: 'nearest' });
-  }, [entryKinds, model, selectedPath]);
-
-  useEffect(() => {
-    onSearchQueryChange(treeSearch.isOpen ? treeSearch.value : '');
-  }, [onSearchQueryChange, treeSearch.isOpen, treeSearch.value]);
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col bg-[#faf9f5] dark:bg-[#1d1d1b]" data-file-browser-panel="t3-workspace">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[#dedbd0] px-3 dark:border-[#30302e]">
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-xs font-medium text-[#141413] dark:text-[#faf9f5]">{projectName}</div>
-          <div className="truncate text-[10px] leading-none text-[#87867f] dark:text-[#8f8d86]">
-            {fileCountLabel}
-            {entriesTruncated ? ` · ${t('codeAgentWorkspacePartial')}` : ''}
-            {remoteSearchPending ? ` · ${t('codeAgentSearchingWorkspaceFiles')}` : ''}
-            {remoteSearchTruncated ? ` · ${t('codeAgentWorkspaceSearchPartial')}` : ''}
-          </div>
-        </div>
-        <button type="button" className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]" aria-label={t('codeAgentSearchWorkspaceFiles')} onClick={() => model.openSearch()}>
-          <Search className="h-3.5 w-3.5" />
-        </button>
-        <button type="button" className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]" aria-label={t('codeAgentRefreshWorkspaceFiles')} onClick={onRefresh}>
-          <RefreshCw className={`h-3.5 w-3.5 ${entriesPending ? 'animate-spin' : ''}`} />
-        </button>
-      </div>
-      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-[#dedbd0] px-2 dark:border-[#30302e]">
-        <button type="button" className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]" aria-label={t('codeAgentNewFile')} onClick={onCreateFile}>
-          <FilePlus2 className="h-3.5 w-3.5" />
-        </button>
-        <button type="button" className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]" aria-label={t('codeAgentNewFolder')} onClick={onCreateDirectory}>
-          <FolderPlus className="h-3.5 w-3.5" />
-        </button>
-        <button type="button" className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]" aria-label={t('codeAgentUploadFile')} onClick={onUpload}>
-          <Upload className="h-3.5 w-3.5" />
-        </button>
-        <div className="mx-1 h-4 w-px bg-[#dedbd0] dark:bg-[#30302e]" />
-        <button type="button" disabled={!selectedPath} className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-40 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]" aria-label={t('codeAgentRenameFile')} onClick={onRename}>
-          <Pencil className="h-3.5 w-3.5" />
-        </button>
-        <button type="button" disabled={!selectedPath} className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-40 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]" aria-label={t('codeAgentDeleteFile')} onClick={onDelete}>
-          <Trash2 className="h-3.5 w-3.5" />
-        </button>
-      </div>
-      {entriesError && entries.length === 0 ? (
-        <div className="p-4 text-xs leading-relaxed text-[#9f462c] dark:text-[#ff9b78]">{entriesError}</div>
-      ) : (
-        <>
-          {remoteSearchError ? (
-            <div className="border-b border-[#dedbd0] px-3 py-1.5 text-[11px] text-[#9f462c] dark:border-[#30302e] dark:text-[#ff9b78]">
-              {remoteSearchError}
-            </div>
-          ) : null}
-          <FileTree
-            model={model}
-            aria-label={`${projectName} files`}
-            className="min-h-0 flex-1 overflow-hidden"
-            style={{
-              colorScheme: resolvedTheme,
-              ['--trees-fg-override' as string]: resolvedTheme === 'dark' ? '#faf9f5' : '#141413',
-            }}
-          />
-        </>
-      )}
-    </div>
-  );
-}
-
-interface FilePreviewSurfaceProps {
-  roomId: string;
-  file: CodeWorkspaceFile | null;
-  relativePath: string | null;
-  fileQuery: FileQueryState;
-  assetUrlQuery: AssetUrlQueryState;
-  assetPreviewRevision: number;
-  resolvedTheme: 'light' | 'dark';
-  renderPreview: boolean;
-  wordWrap: boolean;
-  revealLine: number | null;
-  revealRequestId: number;
-  saveState: SaveState;
-  saveError: string | null;
-  onSaveStateChange: (path: string, state: SaveState, error?: string | null) => void;
-  onFileSavePendingChange?: (relativePath: string, pending: boolean) => void;
-  onEntriesChanged: () => void;
-  onAssetPreviewChanged: (relativePath: string) => void;
-  onOpenWorkspaceFile: (path: string) => void;
-  reviewComments: readonly ReviewCommentContext[];
-  onAddReviewComment?: (comment: ReviewCommentContext) => void;
-  onRemoveReviewComment?: (commentId: string) => void;
-}
-
-function FilePreviewSurface({
-  roomId,
-  file,
-  relativePath,
-  fileQuery,
-  assetUrlQuery,
-  assetPreviewRevision,
-  resolvedTheme,
-  renderPreview,
-  wordWrap,
-  revealLine,
-  revealRequestId,
-  saveState,
-  saveError,
-  onSaveStateChange,
-  onFileSavePendingChange,
-  onEntriesChanged,
-  onAssetPreviewChanged,
-  onOpenWorkspaceFile,
-  reviewComments,
-  onAddReviewComment,
-  onRemoveReviewComment,
-}: FilePreviewSurfaceProps) {
-  const { t } = useTranslation();
-  const onFilePostRender = useFileLineReveal(relativePath, revealLine, revealRequestId);
-  const handleEntriesChanged = useCallback(() => {
-    onEntriesChanged();
-    if (relativePath && isWorkspacePreviewEntryPath(relativePath)) {
-      onAssetPreviewChanged(relativePath);
-    }
-  }, [onAssetPreviewChanged, onEntriesChanged, relativePath]);
-
-  useEffect(() => {
-    if (relativePath) {
-      onSaveStateChange(relativePath, 'idle', null);
-    }
-  }, [onSaveStateChange, relativePath]);
-
-  if (!relativePath) {
-    return null;
-  }
-
-  const renderBrowserAssetPreview = renderPreview && isWorkspaceBrowserPreviewPath(relativePath);
-  const renderImageAssetPreview = renderPreview && isWorkspaceImagePreviewPath(relativePath);
-  if (renderBrowserAssetPreview || renderImageAssetPreview) {
-    if (assetUrlQuery.error) {
-      return (
-        <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-[#9f462c] dark:text-[#ff9b78]">
-          {assetUrlQuery.error}
-        </div>
-      );
-    }
-
-    if (assetUrlQuery.isPending || !assetUrlQuery.resolvedUrl) {
-      return (
-        <div className="flex min-h-0 flex-1 items-center justify-center text-[#87867f] dark:text-[#8f8d86]">
-          <LoaderCircle className="h-5 w-5 animate-spin" />
-        </div>
-      );
-    }
-
-    const resolvedPreviewUrl = appendWorkspaceAssetPreviewRevision(assetUrlQuery.resolvedUrl, assetPreviewRevision);
-
-    return renderImageAssetPreview ? (
-      <div className="min-h-0 flex-1 overflow-auto bg-[#f0eee6] p-4 dark:bg-[#141413]">
-        <img src={resolvedPreviewUrl} alt={relativePath} className="mx-auto max-h-full max-w-full object-contain" />
-      </div>
-    ) : (
-      <iframe src={resolvedPreviewUrl} title={relativePath} className="min-h-0 flex-1 border-0 bg-white" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
-    );
-  }
-
-  if (fileQuery.error && file === null) {
-    return (
-      <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-[#9f462c] dark:text-[#ff9b78]">
-        {fileQuery.error}
-      </div>
-    );
-  }
-
-  if (fileQuery.isPending || !file) {
-    return (
-      <div className="flex min-h-0 flex-1 items-center justify-center text-[#87867f] dark:text-[#8f8d86]">
-        <LoaderCircle className="h-5 w-5 animate-spin" />
-      </div>
-    );
-  }
-
-  const visibleByteSize = previewedByteSize(file);
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      {file.truncated ? (
-        <div className="shrink-0 border-b border-amber-500/20 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
-          {t('codeAgentFilePreviewTruncated', {
-            shown: visibleByteSize.toLocaleString(),
-            total: file.byteSize.toLocaleString(),
-          })}
-        </div>
-      ) : null}
-      {fileQuery.error ? (
-        <div className="shrink-0 border-b border-[#f0b49b]/50 bg-[#fff2ec] px-3 py-1.5 text-[11px] text-[#9f462c] dark:border-[#7a321f]/60 dark:bg-[#2a211d] dark:text-[#ff9b78]">
-          {fileQuery.error}
-        </div>
-      ) : null}
-      {saveState !== 'idle' && saveState !== 'saved' ? (
-        <div className="shrink-0 border-b border-[#dedbd0] px-3 py-1.5 text-[11px] text-[#87867f] dark:border-[#30302e] dark:text-[#8f8d86]">
-          {saveState === 'pending' ? t('codeAgentSavePending') : saveState === 'saving' ? t('codeAgentSaving') : saveError || 'File save failed.'}
-        </div>
-      ) : null}
-      {file.encoding === 'base64' ? (
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-xs text-[#87867f] dark:text-[#8f8d86]">
-          <div>{t('codeAgentBinaryPreviewUnavailable')}</div>
-          <button type="button" className="inline-flex items-center gap-1.5 rounded-md border border-[#dedbd0] px-2 py-1 text-[#141413] hover:bg-[#f0eee6] dark:border-[#30302e] dark:text-[#faf9f5] dark:hover:bg-[#30302e]" onClick={() => createDownload(file)}>
-            <Download className="h-3.5 w-3.5" />
-            {t('codeAgentDownloadFile')}
-          </button>
-        </div>
-      ) : renderPreview && isMarkdownPreviewFile(file.path) ? (
-        <RenderedMarkdownSurface
-          roomId={roomId}
-          file={file}
-          onFileChange={fileQuery.setData}
-          onSaveStateChange={onSaveStateChange}
-          onFileSavePendingChange={onFileSavePendingChange}
-          onEntriesChanged={handleEntriesChanged}
-          onOpenWorkspaceFile={onOpenWorkspaceFile}
-        />
-      ) : file.truncated ? (
-        <ReadOnlyFileSurface
-          key={`${file.path}:${resolvedTheme}:${file.byteSize}`}
-          file={file}
-          resolvedTheme={resolvedTheme}
-          wordWrap={wordWrap}
-          onPostRender={onFilePostRender}
-        />
-      ) : (
-        <EditableFileSurface
-          key={`${file.path}:${resolvedTheme}`}
-          roomId={roomId}
-          file={file}
-          resolvedTheme={resolvedTheme}
-          wordWrap={wordWrap}
-          onPostRender={onFilePostRender}
-          revealRequestId={revealRequestId}
-          onFileChange={fileQuery.setData}
-          onSaveStateChange={onSaveStateChange}
-          onFileSavePendingChange={onFileSavePendingChange}
-          onEntriesChanged={handleEntriesChanged}
-          reviewComments={reviewComments}
-          onAddReviewComment={onAddReviewComment}
-          onRemoveReviewComment={onRemoveReviewComment}
-        />
-      )}
-    </div>
-  );
-}
-
 export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps> = ({
   roomId,
   projectName,
@@ -1550,7 +472,6 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const entriesQuery = useCodeWorkspaceEntriesQuery(roomId);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const breadcrumbRef = useRef<HTMLDivElement | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
@@ -1705,28 +626,10 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       : relativePath
         ? parentPath(relativePath)
         : '';
-  const breadcrumbs = useMemo(
-    () => (relativePath ? fileBreadcrumbs(projectName, relativePath) : []),
-    [projectName, relativePath],
-  );
   const canToggleFileWordWrap = Boolean(relativePath && fileQuery.data?.encoding === 'utf-8');
-  const wordWrapLabel = wordWrap
-    ? t('codeAgentDisableFileLineWrapping')
-    : t('codeAgentEnableFileLineWrapping');
-  const previewToggleLabel = isMarkdown
-    ? (renderPreview ? t('codeAgentShowMarkdownSource') : t('codeAgentShowRenderedMarkdown'))
-    : (renderPreview ? t('codeAgentShowSource') : t('codeAgentShowPreview'));
-  const refreshCurrentFileLabel = t('codeAgentRefreshWorkspaceFile');
   const refreshSourceFile = fileQuery.refresh;
   const refreshCurrentFilePending = (!renderPreview && fileQuery.isPending) || (renderPreview && assetUrlQuery.isPending);
   const refreshWorkspaceEntries = entriesQuery.refresh;
-
-  useEffect(() => {
-    const currentCrumb = breadcrumbRef.current?.querySelector<HTMLElement>(
-      '[data-current-file-crumb="true"]',
-    );
-    currentCrumb?.scrollIntoView?.({ block: 'nearest', inline: 'end' });
-  }, [relativePath]);
 
   useEffect(() => {
     explorerWidthRef.current = explorerWidth;
@@ -1941,7 +844,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     }
   }, [refreshEntries, relativePath, roomId]);
 
-  const handleOpenEntry = useCallback((path: string, kind: ProjectEntry['kind']) => {
+  const handleOpenEntry = useCallback((path: string, kind: CodeAgentProjectEntry['kind']) => {
     const normalizedPath = normalizeWorkspacePath(path);
     if (!normalizedPath) {
       return;
@@ -2279,6 +1182,52 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     };
   }, [fileSurfaceTabMenu]);
 
+  const fileExplorer = explorerOpen || relativePath === null ? (
+    <aside
+      className={`${relativePath ? 'relative min-w-[160px] border-l border-[#dedbd0] dark:border-[#30302e]' : 'min-w-0 flex-1'} flex min-h-0 shrink-0 bg-[#faf9f5] dark:bg-[#1d1d1b]`}
+      style={relativePath ? {
+        width: 'var(--workspace-file-explorer-width)',
+        maxWidth: `calc(100% - ${FILE_PREVIEW_MIN_WIDTH}px)`,
+      } : undefined}
+    >
+      {relativePath ? (
+        <button
+          type="button"
+          aria-label={t('codeAgentResizeFileExplorer')}
+          className="group absolute inset-y-0 -left-4 z-40 w-8 cursor-col-resize touch-none focus-visible:outline-none"
+          onPointerDown={handleExplorerResizeStart}
+        >
+          <span
+            aria-hidden="true"
+            data-code-agent-resize-highlight="file-explorer"
+            className="pointer-events-none absolute inset-y-0 left-1/2 z-50 -ml-px w-0.5 -translate-x-1/2 rounded-full bg-transparent transition-colors duration-150 group-hover:bg-[#c96442] group-active:bg-[#c96442] group-focus-visible:bg-[#c96442]"
+          />
+        </button>
+      ) : null}
+      <CodeAgentWorkspaceFileTreePanel
+        projectName={projectName}
+        entries={entries}
+        entryKinds={entryKinds}
+        entriesPending={entriesQuery.isPending}
+        entriesError={entriesQuery.error}
+        entriesTruncated={Boolean(entriesQuery.data?.truncated)}
+        selectedPath={selectedPath}
+        resolvedTheme={resolvedTheme}
+        onOpenEntry={handleOpenEntry}
+        onRefresh={entriesQuery.refresh}
+        onCreateFile={handleCreateFile}
+        onCreateDirectory={handleCreateDirectory}
+        onUpload={() => uploadInputRef.current?.click()}
+        onRename={handleRename}
+        onDelete={handleDelete}
+        onSearchQueryChange={handleSearchQueryChange}
+        remoteSearchPending={remoteSearch.isPending}
+        remoteSearchError={remoteSearch.error}
+        remoteSearchTruncated={remoteSearch.truncated}
+      />
+    </aside>
+  ) : null;
+
   return (
     <div
       ref={panelRef}
@@ -2286,90 +1235,6 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       data-file-browser-panel={`${roomId}:workspace`}
       style={{ ['--workspace-file-explorer-width' as string]: `${explorerWidth}px` }}
     >
-      {relativePath ? (
-        <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[#dedbd0] px-3 dark:border-[#30302e]" data-surface-subheader>
-          <div
-            ref={breadcrumbRef}
-            className="min-w-0 flex-1 overflow-x-auto text-xs [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-            data-file-breadcrumbs="true"
-            data-testid="code-agent-file-breadcrumbs"
-          >
-            <div className="flex h-full w-max min-w-full items-center">
-              {breadcrumbs.map((crumb, index) => (
-                <div
-                  key={crumb.path || 'project'}
-                  className="flex min-w-0 shrink-0 items-center"
-                  data-current-file-crumb={crumb.kind === 'file'}
-                >
-                  {index > 0 ? <ChevronRight className="mx-1 h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" /> : null}
-                  <span
-                    className={`max-w-40 truncate ${crumb.kind === 'file' ? 'font-medium text-[#141413] dark:text-[#faf9f5]' : 'text-[#87867f] dark:text-[#8f8d86]'}`}
-                    title={crumb.path || projectName}
-                  >
-                    {crumb.label}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-          <button
-            type="button"
-            className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-wait disabled:opacity-60 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
-            aria-label={refreshCurrentFileLabel}
-            title={refreshCurrentFileLabel}
-            disabled={refreshCurrentFilePending}
-            onClick={handleRefreshCurrentFile}
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${refreshCurrentFilePending ? 'animate-spin' : ''}`} />
-          </button>
-          {fileQuery.data ? (
-            <button type="button" className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]" aria-label={t('codeAgentDownloadFile')} onClick={() => createDownload(fileQuery.data!)}>
-              <Download className="h-3.5 w-3.5" />
-            </button>
-          ) : null}
-          {canToggleFileWordWrap ? (
-            <button
-              type="button"
-              className={`rounded-md p-1.5 transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
-                wordWrap
-                  ? 'text-[#9f462c] dark:text-[#ffb197]'
-                  : 'text-[#87867f] dark:text-[#8f8d86]'
-              }`}
-              aria-label={wordWrapLabel}
-              aria-pressed={wordWrap}
-              title={wordWrapLabel}
-              onClick={toggleWordWrap}
-            >
-              <WrapText className="h-3.5 w-3.5" />
-            </button>
-          ) : null}
-          {canOpenInBrowserPreview ? (
-            <button
-              type="button"
-              className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-wait disabled:opacity-60 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
-              aria-label={t('codeAgentOpenFileInPreview')}
-              disabled={browserPreviewPending}
-              onClick={handleOpenInBrowserPreview}
-            >
-              {browserPreviewPending ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Globe2 className="h-3.5 w-3.5" />}
-            </button>
-          ) : null}
-          {supportsPreview ? (
-            <button
-              type="button"
-              className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
-              aria-label={previewToggleLabel}
-              aria-pressed={renderPreview}
-              onClick={togglePreviewView}
-            >
-              {renderPreview ? <Code2 className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-            </button>
-          ) : null}
-          <button type="button" className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]" aria-label={explorerOpen ? t('codeAgentHideFileExplorer') : t('codeAgentShowFileExplorer')} onClick={toggleExplorer}>
-            <FolderTree className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      ) : null}
       {rightPanelSurfaces.length > 0 ? (
         <div
           className="flex h-8 shrink-0 items-center gap-1 overflow-x-auto border-b border-[#dedbd0] bg-[#f0eee6] px-2 text-xs dark:border-[#30302e] dark:bg-[#242422]"
@@ -2528,72 +1393,46 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
           />
         </div>
       ) : (
-        <div className="flex min-h-0 flex-1 overflow-hidden">
-          <div className={`${relativePath ? 'flex' : 'hidden'} min-w-0 flex-1 flex-col overflow-hidden`}>
-            <FilePreviewSurface
-              roomId={roomId}
-              file={fileQuery.data}
-              relativePath={relativePath}
-              fileQuery={fileQuery}
-              assetUrlQuery={assetUrlQuery}
-              assetPreviewRevision={activeAssetPreviewRevision}
-              resolvedTheme={resolvedTheme}
-              renderPreview={renderPreview}
-              wordWrap={wordWrap}
-              revealLine={effectiveRevealLine}
-              revealRequestId={effectiveRevealRequestId}
-              saveState={activeSaveState}
-              saveError={activeSaveError}
-              onSaveStateChange={handleSaveStateChange}
-              onFileSavePendingChange={onFileSavePendingChange}
-              onEntriesChanged={refreshEntries}
-              onAssetPreviewChanged={handleAssetPreviewChanged}
-              onOpenWorkspaceFile={handleOpenWorkspaceFileFromMarkdown}
-              reviewComments={reviewComments}
-              onAddReviewComment={onAddReviewComment}
-              onRemoveReviewComment={onRemoveReviewComment}
-            />
-          </div>
-          {explorerOpen || relativePath === null ? (
-            <aside
-              className={`${relativePath ? 'relative min-w-[160px] border-l border-[#dedbd0] dark:border-[#30302e]' : 'min-w-0 flex-1'} flex min-h-0 shrink-0 bg-[#faf9f5] dark:bg-[#1d1d1b]`}
-              style={relativePath ? {
-                width: 'var(--workspace-file-explorer-width)',
-                maxWidth: `calc(100% - ${FILE_PREVIEW_MIN_WIDTH}px)`,
-              } : undefined}
-            >
-              {relativePath ? (
-                <button
-                  type="button"
-                  aria-label={t('codeAgentResizeFileExplorer')}
-                  className="absolute inset-y-0 -left-4 z-40 w-8 cursor-col-resize touch-none border-x border-transparent transition-colors hover:border-[#c96442]/30 hover:bg-[#c96442]/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442]"
-                  onPointerDown={handleExplorerResizeStart}
-                />
-              ) : null}
-              <FileBrowserPanel
-                projectName={projectName}
-                entries={entries}
-                entryKinds={entryKinds}
-                entriesPending={entriesQuery.isPending}
-                entriesError={entriesQuery.error}
-                entriesTruncated={Boolean(entriesQuery.data?.truncated)}
-                selectedPath={selectedPath}
-                resolvedTheme={resolvedTheme}
-                onOpenEntry={handleOpenEntry}
-                onRefresh={entriesQuery.refresh}
-                onCreateFile={handleCreateFile}
-                onCreateDirectory={handleCreateDirectory}
-                onUpload={() => uploadInputRef.current?.click()}
-                onRename={handleRename}
-                onDelete={handleDelete}
-                onSearchQueryChange={handleSearchQueryChange}
-                remoteSearchPending={remoteSearch.isPending}
-                remoteSearchError={remoteSearch.error}
-                remoteSearchTruncated={remoteSearch.truncated}
-              />
-            </aside>
-          ) : null}
-        </div>
+        <CodeAgentFilePreviewPanel
+          roomId={roomId}
+          projectName={projectName}
+          relativePath={relativePath}
+          file={fileQuery.data}
+          fileError={fileQuery.error}
+          filePending={fileQuery.isPending}
+          onFileChange={fileQuery.setData}
+          assetPreviewError={assetUrlQuery.error}
+          assetPreviewPending={assetUrlQuery.isPending}
+          assetPreviewResolvedUrl={assetUrlQuery.resolvedUrl}
+          assetPreviewRevision={activeAssetPreviewRevision}
+          resolvedTheme={resolvedTheme}
+          renderPreview={renderPreview}
+          wordWrap={wordWrap}
+          revealLine={effectiveRevealLine}
+          revealRequestId={effectiveRevealRequestId}
+          saveState={activeSaveState}
+          saveError={activeSaveError}
+          explorerOpen={explorerOpen}
+          explorer={fileExplorer}
+          browserPreviewPending={browserPreviewPending}
+          canToggleFileWordWrap={canToggleFileWordWrap}
+          canOpenInBrowserPreview={canOpenInBrowserPreview}
+          supportsPreview={supportsPreview}
+          refreshCurrentFilePending={refreshCurrentFilePending}
+          onRefreshCurrentFile={handleRefreshCurrentFile}
+          onToggleWordWrap={toggleWordWrap}
+          onOpenInBrowserPreview={handleOpenInBrowserPreview}
+          onTogglePreviewView={togglePreviewView}
+          onToggleExplorer={toggleExplorer}
+          onSaveStateChange={handleSaveStateChange}
+          onFileSavePendingChange={onFileSavePendingChange}
+          onEntriesChanged={refreshEntries}
+          onAssetPreviewChanged={handleAssetPreviewChanged}
+          onOpenWorkspaceFile={handleOpenWorkspaceFileFromMarkdown}
+          reviewComments={reviewComments}
+          onAddReviewComment={onAddReviewComment}
+          onRemoveReviewComment={onRemoveReviewComment}
+        />
       )}
       {operationError ? (
         <div className="border-t border-[#dedbd0] px-3 py-2 text-[11px] text-[#9f462c] dark:border-[#30302e] dark:text-[#ff9b78]">

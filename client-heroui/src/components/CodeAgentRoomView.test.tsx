@@ -237,6 +237,24 @@ describe('CodeAgentRoomView', () => {
     expect(mobileFileBrowser?.parentElement?.classList.contains('min-h-0')).toBe(true);
   });
 
+  it('keeps the workspace files resize affordance from being clipped by the panel edge', () => {
+    renderCodeAgentRoom(cocoRoom);
+
+    const resizeHandle = screen.getByLabelText('codeAgentResizeWorkspaceFiles');
+    const filesPanel = resizeHandle.closest('[data-code-agent-files-panel="true"]') as HTMLElement;
+    expect(filesPanel.className).toContain('overflow-visible');
+    expect(filesPanel.className).not.toContain('overflow-hidden');
+    expect(resizeHandle.className).toContain('w-8');
+    expect(resizeHandle.className).not.toContain('hover:bg');
+    const highlight = resizeHandle.querySelector('[data-code-agent-resize-highlight="workspace-files"]');
+    expect(highlight?.className).toContain('w-0.5');
+    expect(highlight?.className).toContain('-ml-px');
+    expect(highlight?.className).toContain('z-50');
+
+    const fileBrowser = screen.getByTestId('file-browser');
+    expect(fileBrowser.parentElement?.classList.contains('overflow-hidden')).toBe(true);
+  });
+
   it('resizes the workspace panel against the available layout width and releases drag state', () => {
     renderCodeAgentRoom(cocoRoom);
 
