@@ -972,13 +972,13 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   }
 
   return (
-    <div className="space-y-2" data-testid="code-agent-workspace-diff-viewer">
+    <div className="flex min-h-0 flex-1 flex-col gap-2" data-testid="code-agent-workspace-diff-viewer">
       {diff.truncated ? (
         <div className="rounded-md border border-amber-500/20 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
           {t('codeAgentDiffPreviewTruncated')}
         </div>
       ) : null}
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex shrink-0 items-center justify-between gap-2">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           <details className="group relative min-w-0">
             <summary
@@ -1201,11 +1201,11 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
         </div>
       </div>
       {renderablePatch.kind === 'raw' ? (
-        <div className="min-h-0 overflow-auto rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-2 dark:border-[#30302e] dark:bg-[#1d1d1b]">
-          <div className="space-y-2">
+        <div className="flex min-h-0 flex-1 flex-col overflow-auto rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-2 dark:border-[#30302e] dark:bg-[#1d1d1b]">
+          <div className="flex min-h-0 flex-1 flex-col gap-2">
             <p className="text-[11px] text-[#87867f] dark:text-[#8f8d86]">{renderablePatch.reason}</p>
             <pre
-              className={`max-h-[72vh] overflow-auto rounded-md border border-[#dedbd0] bg-[#f5f4ed] p-3 font-mono text-[11px] leading-relaxed text-[#5e5d59] dark:border-[#30302e] dark:bg-[#141413] dark:text-[#b0aea5] ${
+              className={`min-h-80 flex-1 overflow-auto rounded-md border border-[#dedbd0] bg-[#f5f4ed] p-3 font-mono text-[11px] leading-relaxed text-[#5e5d59] dark:border-[#30302e] dark:bg-[#141413] dark:text-[#b0aea5] ${
                 wordWrap ? 'whitespace-pre-wrap break-words' : ''
               }`}
               data-testid="code-agent-workspace-raw-diff"
@@ -1215,7 +1215,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
           </div>
         </div>
       ) : (
-        <div className="space-y-2" onClickCapture={handleDiffClickCapture}>
+        <div className="flex min-h-0 flex-1 flex-col gap-2" onClickCapture={handleDiffClickCapture}>
           {diffFileSummaries.length > 0 ? (
             <div
               className="rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-2 dark:border-[#30302e] dark:bg-[#1d1d1b]"
@@ -1256,7 +1256,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
           ) : null}
           <CodeView<DiffCommentAnnotationGroup>
             ref={codeViewRef}
-            className="h-80 min-h-0 overflow-auto rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-xs dark:border-[#30302e] dark:bg-[#1d1d1b]"
+            className="min-h-80 flex-1 overflow-auto rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-xs dark:border-[#30302e] dark:bg-[#1d1d1b]"
             items={codeViewItems}
             selectedLines={selectedLines}
             onSelectedLinesChange={setSelectedLines}

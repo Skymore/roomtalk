@@ -268,6 +268,9 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(diffViewer.dataset.enabled).toBe('true');
     expect(diffViewer.dataset.selectedFile).toBe('src/App.tsx');
     expect(diffViewer.dataset.selectedFileRequestId).toBe('1');
+    expect(diffViewer.parentElement?.className).toContain('flex-1');
+    expect(diffViewer.parentElement?.parentElement?.className).toContain('max-h-[min(72vh,42rem)]');
+    expect(diffViewer.parentElement?.parentElement?.className).not.toContain('max-h-44');
   });
 
   it('fills changed-file tree stats from parsed diff summaries', () => {

@@ -73,7 +73,7 @@ const readStoredFileManagerWidth = () => {
   }
   const parsed = Number.parseInt(window.localStorage.getItem(FILE_MANAGER_WIDTH_STORAGE_KEY) || '', 10);
   return Number.isFinite(parsed)
-    ? clampCodeAgentFilePanelWidth(parsed, window.innerWidth)
+    ? clampCodeAgentFilePanelWidth(parsed, window.innerWidth, CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH)
     : defaultFileManagerWidth();
 };
 
@@ -118,6 +118,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   const [fileManagerWidth, setFileManagerWidth] = React.useState(readStoredFileManagerWidth);
   const [workspaceFileOpenRequest, setWorkspaceFileOpenRequest] = React.useState<WorkspaceFileOpenRequest | null>(null);
   const [reviewComments, setReviewComments] = React.useState<ReviewCommentContext[]>([]);
+  const [pendingWorkspaceFileSaves, setPendingWorkspaceFileSaves] = React.useState<ReadonlySet<string>>(() => new Set());
   const fileManagerWidthRef = React.useRef(fileManagerWidth);
   const workspaceFileOpenRequestIdRef = React.useRef(0);
   const fileManagerResizeCleanupRef = React.useRef<(() => void) | null>(null);
@@ -136,7 +137,24 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
     setShowScrollButton(false);
     setIsMobileFileManagerOpen(false);
     setReviewComments([]);
+    setPendingWorkspaceFileSaves(new Set());
   }, [currentRoom.id]);
+
+  const handleWorkspaceFileSavePendingChange = React.useCallback((relativePath: string, pending: boolean) => {
+    setPendingWorkspaceFileSaves((current) => {
+      const normalizedPath = relativePath.trim();
+      if (!normalizedPath || current.has(normalizedPath) === pending) {
+        return current;
+      }
+      const next = new Set(current);
+      if (pending) {
+        next.add(normalizedPath);
+      } else {
+        next.delete(normalizedPath);
+      }
+      return next;
+    });
+  }, []);
 
   const handleAddReviewComment = React.useCallback((comment: ReviewCommentContext) => {
     setReviewComments((current) => {
@@ -225,6 +243,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       const nextWidth = clampCodeAgentFilePanelWidth(
         fileManagerWidthRef.current,
         availableWidth,
+        CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
       );
       if (nextWidth === fileManagerWidthRef.current) return;
       fileManagerWidthRef.current = nextWidth;
@@ -255,7 +274,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
         return;
       }
       const availableWidth = layout.getBoundingClientRect().width || window.innerWidth;
-      const nextWidth = clampCodeAgentFilePanelWidth(width, availableWidth);
+      const nextWidth = clampCodeAgentFilePanelWidth(width, availableWidth, CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH);
       if (nextWidth === fileManagerWidthRef.current) {
         return;
       }
@@ -297,7 +316,10 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       initialWidth: startWidth,
       direction: -1,
       captureTarget: event.currentTarget,
-      getBounds: () => getCodeAgentPanelResizeBounds(layout.getBoundingClientRect().width),
+      getBounds: () => getCodeAgentPanelResizeBounds(
+        layout.getBoundingClientRect().width,
+        CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
+      ),
       onResize: (width) => {
         layout.style.setProperty('--code-agent-files-width', `${width}px`);
       },
@@ -379,8 +401,17 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       reviewComments={reviewComments}
       onAddReviewComment={handleAddReviewComment}
       onRemoveReviewComment={handleRemoveReviewComment}
+      onFileSavePendingChange={handleWorkspaceFileSavePendingChange}
     />
   );
+
+  const hasPendingWorkspaceFileSaves = pendingWorkspaceFileSaves.size > 0;
+  const fileManagerToggleLabel = isFileManagerCollapsed
+    ? t('codeAgentExpandWorkspaceFiles')
+    : t('codeAgentCollapseWorkspaceFiles');
+  const fileManagerToggleTitle = hasPendingWorkspaceFileSaves
+    ? `${fileManagerToggleLabel} - ${t('codeAgentWorkspaceFilesSavePending')}`
+    : fileManagerToggleLabel;
 
   return (
     <div className="flex h-full min-h-0 min-w-0 w-full flex-1 flex-col bg-[#f5f4ed] dark:bg-[#141413]">
@@ -495,12 +526,19 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
               isIconOnly
               variant="light"
               size="sm"
-              aria-label={isFileManagerCollapsed ? t('codeAgentExpandWorkspaceFiles') : t('codeAgentCollapseWorkspaceFiles')}
-              title={isFileManagerCollapsed ? t('codeAgentExpandWorkspaceFiles') : t('codeAgentCollapseWorkspaceFiles')}
+              aria-label={fileManagerToggleTitle}
+              title={fileManagerToggleTitle}
               onPress={() => setFileManagerCollapsed(!isFileManagerCollapsed)}
-              className="mt-2 h-7 w-7 min-w-7 rounded-md text-[#5e5d59] hover:bg-[#dedbd0] dark:text-[#b0aea5] dark:hover:bg-[#30302e]"
+              className="relative mt-2 h-7 w-7 min-w-7 rounded-md text-[#5e5d59] hover:bg-[#dedbd0] dark:text-[#b0aea5] dark:hover:bg-[#30302e]"
             >
               <Icon icon={isFileManagerCollapsed ? 'lucide:panel-right-open' : 'lucide:panel-right-close'} className="h-3.5 w-3.5" />
+              {hasPendingWorkspaceFileSaves ? (
+                <span
+                  aria-hidden="true"
+                  data-testid="code-agent-file-save-pending-indicator"
+                  className="absolute right-1 top-1 h-2 w-2 rounded-full bg-[#c96442] shadow-[0_0_0_2px_#f0eee6] dark:bg-[#ffb197] dark:shadow-[0_0_0_2px_#242422]"
+                />
+              ) : null}
             </Button>
           </div>
           {isFileManagerCollapsed ? null : (

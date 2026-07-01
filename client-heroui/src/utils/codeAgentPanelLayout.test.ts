@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH,
+  clampCodeAgentFilePanelWidth,
   clampCodeAgentFilePanelWidthForSidebarResize,
   getCodeAgentPanelResizeBounds,
   getSidebarMaxWidthForChat,
@@ -47,6 +48,11 @@ describe('getCodeAgentPanelResizeBounds', () => {
       max: 360,
       chatMin: 480,
     });
+  });
+
+  it('clamps the right file panel against an interactive chat minimum', () => {
+    expect(clampCodeAgentFilePanelWidth(1600, 1800, CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH)).toBe(1320);
+    expect(clampCodeAgentFilePanelWidth(760, 700, CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH)).toBe(220);
   });
 
   it('allows the sidebar to consume only chat width above the reserved minimum', () => {

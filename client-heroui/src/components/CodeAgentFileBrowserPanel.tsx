@@ -78,6 +78,7 @@ interface CodeAgentFileBrowserPanelProps {
   reviewComments?: readonly ReviewCommentContext[];
   onAddReviewComment?: (comment: ReviewCommentContext) => void;
   onRemoveReviewComment?: (commentId: string) => void;
+  onFileSavePendingChange?: (relativePath: string, pending: boolean) => void;
 }
 
 type ProjectEntry = {
@@ -155,7 +156,7 @@ const FILE_LINK_REVEAL_UNSAFE_CSS = `
 const FILE_EXPLORER_STORAGE_KEY = 'roomtalk.codeWorkspace.fileExplorerOpen';
 const FILE_EXPLORER_WIDTH_STORAGE_KEY = 'roomtalk.codeWorkspace.fileExplorerWidth';
 const FILE_EXPLORER_MIN_WIDTH = 180;
-const FILE_PREVIEW_MIN_WIDTH = 320;
+const FILE_PREVIEW_MIN_WIDTH = 280;
 const FILE_EXPLORER_DEFAULT_WIDTH = 352;
 const WORKSPACE_TREE_REMOTE_SEARCH_LIMIT = 200;
 const WORKSPACE_TREE_REMOTE_SEARCH_DEBOUNCE_MS = 150;
@@ -202,6 +203,25 @@ function parentPath(path: string): string {
   const normalizedPath = normalizeWorkspacePath(path);
   const index = normalizedPath.lastIndexOf('/');
   return index > 0 ? normalizedPath.slice(0, index) : '';
+}
+
+function pathContains(parent: string, child: string): boolean {
+  const normalizedParent = normalizeWorkspacePath(parent);
+  const normalizedChild = normalizeWorkspacePath(child);
+  return normalizedChild === normalizedParent || normalizedChild.startsWith(`${normalizedParent}/`);
+}
+
+function replacePathPrefix(path: string, previousPrefix: string, nextPrefix: string): string {
+  const normalizedPath = normalizeWorkspacePath(path);
+  const normalizedPreviousPrefix = normalizeWorkspacePath(previousPrefix);
+  const normalizedNextPrefix = normalizeWorkspacePath(nextPrefix);
+  if (normalizedPath === normalizedPreviousPrefix) {
+    return normalizedNextPrefix;
+  }
+  if (normalizedPath.startsWith(`${normalizedPreviousPrefix}/`)) {
+    return `${normalizedNextPrefix}${normalizedPath.slice(normalizedPreviousPrefix.length)}`;
+  }
+  return normalizedPath;
 }
 
 function joinWorkspacePath(directory: string, name: string): string {
@@ -667,6 +687,7 @@ interface EditableFileSurfaceProps {
   revealRequestId: number;
   onFileChange: React.Dispatch<React.SetStateAction<CodeWorkspaceFile | null>>;
   onSaveStateChange: (path: string, state: SaveState, error?: string | null) => void;
+  onFileSavePendingChange?: (relativePath: string, pending: boolean) => void;
   onEntriesChanged: () => void;
   reviewComments: readonly ReviewCommentContext[];
   onAddReviewComment?: (comment: ReviewCommentContext) => void;
@@ -687,6 +708,7 @@ function EditableFileSurface({
   revealRequestId,
   onFileChange,
   onSaveStateChange,
+  onFileSavePendingChange,
   onEntriesChanged,
   reviewComments,
   onAddReviewComment,
@@ -742,10 +764,15 @@ function EditableFileSurface({
     onFileChange((current) => updateWorkspaceFileContents(current, filePath, contents));
   }, [filePath, onFileChange]);
 
+  const handlePendingChange = useCallback((pending: boolean) => {
+    onSaveStateChange(filePath, pending ? 'pending' : 'saved', null);
+    onFileSavePendingChange?.(filePath, pending);
+  }, [filePath, onFileSavePendingChange, onSaveStateChange]);
+
   const saveCoordinator = useMemo(
     () => new FileSaveCoordinator({
       debounceMs: FILE_SAVE_DEBOUNCE_MS,
-      onPendingChange: (pending) => onSaveStateChange(filePath, pending ? 'pending' : 'saved', null),
+      onPendingChange: handlePendingChange,
       persist: async (contents) => {
         onSaveStateChange(filePath, 'saving', null);
         try {
@@ -761,7 +788,7 @@ function EditableFileSurface({
         confirmFileContents(contents);
       },
     }),
-    [confirmFileContents, filePath, onEntriesChanged, onSaveStateChange, roomId],
+    [confirmFileContents, filePath, handlePendingChange, onEntriesChanged, onSaveStateChange, roomId],
   );
 
   useEffect(() => () => saveCoordinator.dispose(), [saveCoordinator]);
@@ -978,6 +1005,7 @@ interface RenderedMarkdownSurfaceProps {
   file: CodeWorkspaceFile;
   onFileChange: React.Dispatch<React.SetStateAction<CodeWorkspaceFile | null>>;
   onSaveStateChange: (path: string, state: SaveState, error?: string | null) => void;
+  onFileSavePendingChange?: (relativePath: string, pending: boolean) => void;
   onEntriesChanged: () => void;
   onOpenWorkspaceFile: (path: string) => void;
 }
@@ -987,6 +1015,7 @@ function RenderedMarkdownSurface({
   file,
   onFileChange,
   onSaveStateChange,
+  onFileSavePendingChange,
   onEntriesChanged,
   onOpenWorkspaceFile,
 }: RenderedMarkdownSurfaceProps) {
@@ -1015,10 +1044,15 @@ function RenderedMarkdownSurface({
     onFileChange((current) => updateWorkspaceFileContents(current, filePath, contents));
   }, [filePath, onFileChange]);
 
+  const handlePendingChange = useCallback((pending: boolean) => {
+    onSaveStateChange(filePath, pending ? 'pending' : 'saved', null);
+    onFileSavePendingChange?.(filePath, pending);
+  }, [filePath, onFileSavePendingChange, onSaveStateChange]);
+
   const saveCoordinator = useMemo(
     () => new FileSaveCoordinator({
       debounceMs: FILE_SAVE_DEBOUNCE_MS,
-      onPendingChange: (pending) => onSaveStateChange(filePath, pending ? 'pending' : 'saved', null),
+      onPendingChange: handlePendingChange,
       persist: async (contents) => {
         onSaveStateChange(filePath, 'saving', null);
         try {
@@ -1034,7 +1068,7 @@ function RenderedMarkdownSurface({
         confirmFileContents(contents);
       },
     }),
-    [confirmFileContents, filePath, onEntriesChanged, onSaveStateChange, roomId],
+    [confirmFileContents, filePath, handlePendingChange, onEntriesChanged, onSaveStateChange, roomId],
   );
 
   useEffect(() => () => saveCoordinator.dispose(), [saveCoordinator]);
@@ -1076,7 +1110,7 @@ interface FileBrowserPanelProps {
   entriesTruncated: boolean;
   selectedPath: string | null;
   resolvedTheme: 'light' | 'dark';
-  onOpenEntry: (relativePath: string) => void;
+  onOpenEntry: (relativePath: string, kind: ProjectEntry['kind']) => void;
   onRefresh: () => void;
   onCreateFile: () => void;
   onCreateDirectory: () => void;
@@ -1127,8 +1161,9 @@ function FileBrowserPanel({
     icons: T3_PIERRE_ICONS,
     onSelectionChange: (selectedPaths) => {
       const nextPath = selectedPaths.at(-1)?.replace(/\/$/, '');
-      if (nextPath && entryKindsRef.current.has(nextPath)) {
-        onOpenEntry(nextPath);
+      const kind = nextPath ? entryKindsRef.current.get(nextPath) : undefined;
+      if (nextPath && kind) {
+        onOpenEntry(nextPath, kind);
       }
     },
     paths: [],
@@ -1234,6 +1269,7 @@ interface FilePreviewSurfaceProps {
   saveState: SaveState;
   saveError: string | null;
   onSaveStateChange: (path: string, state: SaveState, error?: string | null) => void;
+  onFileSavePendingChange?: (relativePath: string, pending: boolean) => void;
   onEntriesChanged: () => void;
   onOpenWorkspaceFile: (path: string) => void;
   reviewComments: readonly ReviewCommentContext[];
@@ -1255,6 +1291,7 @@ function FilePreviewSurface({
   saveState,
   saveError,
   onSaveStateChange,
+  onFileSavePendingChange,
   onEntriesChanged,
   onOpenWorkspaceFile,
   reviewComments,
@@ -1354,6 +1391,7 @@ function FilePreviewSurface({
           file={file}
           onFileChange={fileQuery.setData}
           onSaveStateChange={onSaveStateChange}
+          onFileSavePendingChange={onFileSavePendingChange}
           onEntriesChanged={onEntriesChanged}
           onOpenWorkspaceFile={onOpenWorkspaceFile}
         />
@@ -1376,6 +1414,7 @@ function FilePreviewSurface({
           revealRequestId={revealRequestId}
           onFileChange={fileQuery.setData}
           onSaveStateChange={onSaveStateChange}
+          onFileSavePendingChange={onFileSavePendingChange}
           onEntriesChanged={onEntriesChanged}
           reviewComments={reviewComments}
           onAddReviewComment={onAddReviewComment}
@@ -1397,6 +1436,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   reviewComments = [],
   onAddReviewComment,
   onRemoveReviewComment,
+  onFileSavePendingChange,
 }) => {
   const { t } = useTranslation();
   const resolvedTheme = useResolvedTheme();
@@ -1405,6 +1445,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const panelRef = useRef<HTMLDivElement | null>(null);
   const breadcrumbRef = useRef<HTMLDivElement | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [externallySelectedFilePath, setExternallySelectedFilePath] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>({
@@ -1461,7 +1502,10 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const selectedKind = selectedPath
     ? entryKinds.get(selectedPath) ?? (selectedPath === externallySelectedFilePath ? 'file' : undefined)
     : undefined;
-  const relativePath = selectedPath && selectedKind === 'file' ? selectedPath : null;
+  const previewKind = previewPath
+    ? entryKinds.get(previewPath) ?? (previewPath === externallySelectedFilePath ? 'file' : undefined)
+    : undefined;
+  const relativePath = previewPath && previewKind === 'file' ? previewPath : null;
   const isMarkdown = relativePath ? isMarkdownPreviewFile(relativePath) : false;
   const supportsWorkspaceAssetPreview = relativePath ? isWorkspacePreviewEntryPath(relativePath) : false;
   const canOpenInBrowserPreview = relativePath ? isWorkspaceBrowserPreviewPath(relativePath) : false;
@@ -1498,7 +1542,9 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     ? selectedPath || ''
     : selectedPath
       ? parentPath(selectedPath)
-      : '';
+      : relativePath
+        ? parentPath(relativePath)
+        : '';
   const breadcrumbs = useMemo(
     () => (relativePath ? fileBreadcrumbs(projectName, relativePath) : []),
     [projectName, relativePath],
@@ -1541,6 +1587,17 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   }, [entriesQuery.isPending, entryKinds, externallySelectedFilePath, selectedPath]);
 
   useEffect(() => {
+    if (
+      !entriesQuery.isPending &&
+      previewPath &&
+      !entryKinds.has(previewPath) &&
+      previewPath !== externallySelectedFilePath
+    ) {
+      setPreviewPath(null);
+    }
+  }, [entriesQuery.isPending, entryKinds, externallySelectedFilePath, previewPath]);
+
+  useEffect(() => {
     if (!openFileRequest?.path) {
       return;
     }
@@ -1549,6 +1606,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       return;
     }
     setSelectedPath(normalizedPath);
+    setPreviewPath(normalizedPath);
     setExternallySelectedFilePath(normalizedPath);
     setLocalOpenFileRequest(null);
     setOperationError(null);
@@ -1638,12 +1696,23 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     };
   }, [remoteSearch.query, roomId]);
 
-  const mutate = useCallback(async (operation: () => unknown, nextSelectedPath?: string | null) => {
+  const mutate = useCallback(async (
+    operation: () => unknown,
+    nextSelectedPath?: string | null,
+    nextPreviewPath?: string | null,
+  ) => {
     setOperationError(null);
     try {
       await operation();
       if (nextSelectedPath !== undefined) {
         setSelectedPath(nextSelectedPath);
+      }
+      if (nextPreviewPath !== undefined) {
+        setPreviewPath(nextPreviewPath);
+        setLocalOpenFileRequest(null);
+        if (nextPreviewPath === null) {
+          setExternallySelectedFilePath(null);
+        }
       }
       refreshEntries();
     } catch (error) {
@@ -1651,10 +1720,17 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     }
   }, [refreshEntries]);
 
-  const handleOpenEntry = useCallback((path: string) => {
-    setSelectedPath(path);
-    setExternallySelectedFilePath(null);
-    setLocalOpenFileRequest(null);
+  const handleOpenEntry = useCallback((path: string, kind: ProjectEntry['kind']) => {
+    const normalizedPath = normalizeWorkspacePath(path);
+    if (!normalizedPath) {
+      return;
+    }
+    setSelectedPath(normalizedPath);
+    if (kind === 'file') {
+      setPreviewPath(normalizedPath);
+      setExternallySelectedFilePath(null);
+      setLocalOpenFileRequest(null);
+    }
     setOperationError(null);
   }, []);
 
@@ -1671,6 +1747,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       requestId: localOpenFileRequestIdRef.current,
     });
     setSelectedPath(target.path);
+    setPreviewPath(target.path);
     setExternallySelectedFilePath(target.path);
     setOperationError(null);
   }, []);
@@ -1679,7 +1756,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     const path = window.prompt(t('codeAgentNewFilePrompt'), joinWorkspacePath(selectedDirectory, 'untitled.txt'));
     const normalizedPath = path ? normalizeWorkspacePath(path) : '';
     if (!normalizedPath) return;
-    void mutate(() => writeCodeWorkspaceFile(roomId, normalizedPath, '', 'utf-8'), normalizedPath);
+    void mutate(() => writeCodeWorkspaceFile(roomId, normalizedPath, '', 'utf-8'), normalizedPath, normalizedPath);
   }, [mutate, roomId, selectedDirectory, t]);
 
   const handleCreateDirectory = useCallback(() => {
@@ -1694,14 +1771,18 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     const path = window.prompt(t('codeAgentRenamePrompt'), selectedPath);
     const normalizedPath = path ? normalizeWorkspacePath(path) : '';
     if (!normalizedPath || normalizedPath === selectedPath) return;
-    void mutate(() => renameCodeWorkspaceEntry(roomId, selectedPath, normalizedPath), normalizedPath);
-  }, [mutate, roomId, selectedPath, t]);
+    const nextPreviewPath = relativePath && pathContains(selectedPath, relativePath)
+      ? replacePathPrefix(relativePath, selectedPath, normalizedPath)
+      : undefined;
+    void mutate(() => renameCodeWorkspaceEntry(roomId, selectedPath, normalizedPath), normalizedPath, nextPreviewPath);
+  }, [mutate, relativePath, roomId, selectedPath, t]);
 
   const handleDelete = useCallback(() => {
     if (!selectedPath) return;
     if (!window.confirm(t('codeAgentDeleteConfirm', { path: selectedPath }))) return;
-    void mutate(() => deleteCodeWorkspaceEntry(roomId, selectedPath), null);
-  }, [mutate, roomId, selectedPath, t]);
+    const nextPreviewPath = relativePath && pathContains(selectedPath, relativePath) ? null : undefined;
+    void mutate(() => deleteCodeWorkspaceEntry(roomId, selectedPath), null, nextPreviewPath);
+  }, [mutate, relativePath, roomId, selectedPath, t]);
 
   const handleUpload = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || []);
@@ -1953,6 +2034,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
             saveState={activeSaveState}
             saveError={activeSaveError}
             onSaveStateChange={handleSaveStateChange}
+            onFileSavePendingChange={onFileSavePendingChange}
             onEntriesChanged={refreshEntries}
             onOpenWorkspaceFile={handleOpenWorkspaceFileFromMarkdown}
             reviewComments={reviewComments}

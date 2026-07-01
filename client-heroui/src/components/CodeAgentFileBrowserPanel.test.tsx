@@ -254,10 +254,42 @@ describe('CodeAgentFileBrowserPanel', () => {
     const explorerResizeHandle = screen.getByLabelText('codeAgentResizeFileExplorer');
     const explorer = explorerResizeHandle.closest('aside') as HTMLElement;
     expect(explorer.style.width).toBe('var(--workspace-file-explorer-width)');
-    expect(explorer.style.maxWidth).toBe('calc(100% - 320px)');
+    expect(explorer.style.maxWidth).toBe('calc(100% - 280px)');
     expect(explorer.className).not.toContain('50%');
-    expect(explorerResizeHandle.className).toContain('w-6');
+    expect(explorerResizeHandle.className).toContain('w-8');
     expect(open).not.toHaveBeenCalled();
+  });
+
+  it('keeps the current file preview when a directory is selected for file operations', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+        { path: 'src/components', name: 'components', type: 'directory' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockResolvedValue({
+      path: 'src/App.tsx',
+      content: 'export default function App() {}',
+      byteSize: 32,
+      truncated: false,
+      encoding: 'utf-8',
+    });
+    const prompt = vi.spyOn(window, 'prompt').mockReturnValue(null);
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+
+    expect(await screen.findByText('1 files')).toBeTruthy();
+    fileTreeSelectionPathRef.current = 'src/App.tsx';
+    fireEvent.click(screen.getByLabelText('Coco files'));
+    expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:export default function App() {}');
+
+    fileTreeSelectionPathRef.current = 'src/components/';
+    fireEvent.click(screen.getByLabelText('Coco files'));
+
+    expect(screen.getByTestId('diff-file').textContent).toBe('src/App.tsx:export default function App() {}');
+    fireEvent.click(screen.getByLabelText('codeAgentNewFile'));
+    expect(prompt).toHaveBeenCalledWith('codeAgentNewFilePrompt', 'src/components/untitled.txt');
   });
 
   it('toggles T3-style file source line wrapping and persists the preference', async () => {

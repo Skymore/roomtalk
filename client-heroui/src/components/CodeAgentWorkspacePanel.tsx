@@ -396,13 +396,13 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
               </span>
             }
           >
-            <div className="max-h-44 overflow-y-auto px-3 py-2">
+            <div className="flex max-h-[min(72vh,42rem)] min-h-0 flex-col overflow-y-auto px-3 py-2">
               {!workspaceChanges?.available ? (
                 <p className="text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentChangesUnavailable')}</p>
               ) : changedFiles.length === 0 ? (
                 <p className="text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentNoWorkspaceChanges')}</p>
               ) : (
-                <div className="space-y-2">
+                <div className="flex min-h-0 flex-1 flex-col gap-2">
                   <div className="flex flex-wrap items-center gap-2 text-xs text-[#4d4c48] dark:text-[#e8e6dc]">
                     <span className="font-semibold">{t('codeAgentChangedFilesCount', { count: changedFiles.length })}</span>
                     {diffSummary ? (

@@ -29,6 +29,12 @@ const isPrimaryButtonReleased = (event: MouseEvent | PointerEvent): boolean => {
   return 'pointerType' in event && event.pointerType === 'mouse' && event.pressure === 0;
 };
 
+const isMouseLikePointer = (event: PointerEvent): boolean => (
+  event.pointerType === 'mouse' ||
+  event.pointerType === '' ||
+  typeof event.pointerType !== 'string'
+);
+
 export function beginHorizontalResize({
   pointerId,
   startX,
@@ -49,6 +55,7 @@ export function beginHorizontalResize({
   const previousUserSelect = document.body.style.userSelect;
   const previousCursor = document.body.style.cursor;
   const resizeGuard = document.createElement('div');
+  const rootElement = document.documentElement;
 
   resizeGuard.dataset.horizontalResizeGuard = 'true';
   resizeGuard.style.position = 'fixed';
@@ -103,6 +110,14 @@ export function beginHorizontalResize({
     document.removeEventListener('mouseleave', handleMouseViewportLeave, true);
     document.removeEventListener('contextmenu', finishResize, true);
     document.removeEventListener('dragend', finishResize, true);
+    document.removeEventListener('click', handleMouseEnd, true);
+    document.removeEventListener('auxclick', handleMouseEnd, true);
+    rootElement.removeEventListener('pointerup', handlePointerEnd, true);
+    rootElement.removeEventListener('pointercancel', handlePointerEnd, true);
+    rootElement.removeEventListener('pointerdown', handlePointerRestart, true);
+    rootElement.removeEventListener('mouseup', handleMouseUp, true);
+    rootElement.removeEventListener('click', handleMouseEnd, true);
+    rootElement.removeEventListener('auxclick', handleMouseEnd, true);
     window.removeEventListener('blur', finishResize);
     window.removeEventListener('pagehide', finishResize);
     document.removeEventListener('visibilitychange', handleVisibilityChange);
@@ -121,6 +136,9 @@ export function beginHorizontalResize({
     captureTarget.removeEventListener('mouseleave', handleMouseLeave, true);
     captureTarget.removeEventListener('contextmenu', finishResize, true);
     captureTarget.removeEventListener('dragend', finishResize, true);
+    captureTarget.removeEventListener('click', handleMouseEnd, true);
+    captureTarget.removeEventListener('auxclick', handleMouseEnd, true);
+    captureTarget.removeEventListener('pointerdown', handlePointerRestart, true);
     pointerCaptureElement?.removeEventListener('lostpointercapture', handleLostPointerCapture);
     resizeGuard.removeEventListener('pointermove', handlePointerMove, true);
     resizeGuard.removeEventListener('pointerenter', handlePointerReleaseProbe, true);
@@ -137,6 +155,9 @@ export function beginHorizontalResize({
     resizeGuard.removeEventListener('mouseleave', handleMouseLeave, true);
     resizeGuard.removeEventListener('contextmenu', finishResize, true);
     resizeGuard.removeEventListener('dragend', finishResize, true);
+    resizeGuard.removeEventListener('click', handleMouseEnd, true);
+    resizeGuard.removeEventListener('auxclick', handleMouseEnd, true);
+    resizeGuard.removeEventListener('pointerdown', handlePointerRestart, true);
     resizeGuard.remove();
   };
 
@@ -165,7 +186,7 @@ export function beginHorizontalResize({
 
   function handlePointerMove(event: PointerEvent) {
     if (event.pointerId !== pointerId) {
-      if (event.pointerType === 'mouse' && isPrimaryButtonReleased(event)) {
+      if (isMouseLikePointer(event) && isPrimaryButtonReleased(event)) {
         finishResize();
       }
       return;
@@ -180,15 +201,21 @@ export function beginHorizontalResize({
   }
 
   function handlePointerEnd(event: PointerEvent) {
-    if (event.pointerId === pointerId || event.pointerType === 'mouse') {
+    if (event.pointerId === pointerId || isMouseLikePointer(event)) {
       event.preventDefault();
       event.stopPropagation();
       finishResize();
     }
   }
 
+  function handlePointerRestart(event: PointerEvent) {
+    if (event.pointerId !== pointerId || isMouseLikePointer(event)) {
+      finishResize();
+    }
+  }
+
   function handlePointerReleaseProbe(event: PointerEvent) {
-    if (event.pointerType === 'mouse' && isPrimaryButtonReleased(event)) {
+    if (isMouseLikePointer(event) && isPrimaryButtonReleased(event)) {
       finishResize();
     }
   }
@@ -216,6 +243,10 @@ export function beginHorizontalResize({
   function handleMouseUp(event: MouseEvent) {
     event.preventDefault();
     event.stopPropagation();
+    finishResize();
+  }
+
+  function handleMouseEnd() {
     finishResize();
   }
 
@@ -306,6 +337,14 @@ export function beginHorizontalResize({
   document.addEventListener('mouseleave', handleMouseViewportLeave, true);
   document.addEventListener('contextmenu', finishResize, true);
   document.addEventListener('dragend', finishResize, true);
+  document.addEventListener('click', handleMouseEnd, true);
+  document.addEventListener('auxclick', handleMouseEnd, true);
+  rootElement.addEventListener('pointerup', handlePointerEnd, true);
+  rootElement.addEventListener('pointercancel', handlePointerEnd, true);
+  rootElement.addEventListener('pointerdown', handlePointerRestart, true);
+  rootElement.addEventListener('mouseup', handleMouseUp, true);
+  rootElement.addEventListener('click', handleMouseEnd, true);
+  rootElement.addEventListener('auxclick', handleMouseEnd, true);
   window.addEventListener('blur', finishResize);
   window.addEventListener('pagehide', finishResize);
   document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -324,6 +363,9 @@ export function beginHorizontalResize({
   captureTarget.addEventListener('mouseleave', handleMouseLeave, true);
   captureTarget.addEventListener('contextmenu', finishResize, true);
   captureTarget.addEventListener('dragend', finishResize, true);
+  captureTarget.addEventListener('click', handleMouseEnd, true);
+  captureTarget.addEventListener('auxclick', handleMouseEnd, true);
+  captureTarget.addEventListener('pointerdown', handlePointerRestart, true);
   pointerCaptureElement?.addEventListener('lostpointercapture', handleLostPointerCapture);
   resizeGuard.addEventListener('pointermove', handlePointerMove, { capture: true, passive: false });
   resizeGuard.addEventListener('pointerup', handlePointerEnd, true);
@@ -340,6 +382,9 @@ export function beginHorizontalResize({
   resizeGuard.addEventListener('mouseleave', handleMouseLeave, true);
   resizeGuard.addEventListener('contextmenu', finishResize, true);
   resizeGuard.addEventListener('dragend', finishResize, true);
+  resizeGuard.addEventListener('click', handleMouseEnd, true);
+  resizeGuard.addEventListener('auxclick', handleMouseEnd, true);
+  resizeGuard.addEventListener('pointerdown', handlePointerRestart, true);
 
   return finishResize;
 }

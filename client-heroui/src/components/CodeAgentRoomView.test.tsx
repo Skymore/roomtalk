@@ -79,22 +79,36 @@ vi.mock('./CodeAgentFileBrowserPanel', () => ({
     openFileRequest,
     revealLine,
     revealRequestId,
+    onFileSavePendingChange,
   }: {
     sandboxStatus?: string;
     sandboxUpdatedAt?: string;
     openFileRequest?: { path: string; requestId: number } | null;
     revealLine?: number | null;
     revealRequestId?: number;
+    onFileSavePendingChange?: (relativePath: string, pending: boolean) => void;
   }) => (
-    <div
-      data-testid="file-browser"
-      data-sandbox-status={sandboxStatus}
-      data-sandbox-updated-at={sandboxUpdatedAt}
-      data-open-path={openFileRequest?.path || ''}
-      data-open-request-id={openFileRequest?.requestId || ''}
-      data-reveal-line={revealLine || ''}
-      data-reveal-request-id={revealRequestId || ''}
-    />
+    <>
+      <div
+        data-testid="file-browser"
+        data-sandbox-status={sandboxStatus}
+        data-sandbox-updated-at={sandboxUpdatedAt}
+        data-open-path={openFileRequest?.path || ''}
+        data-open-request-id={openFileRequest?.requestId || ''}
+        data-reveal-line={revealLine || ''}
+        data-reveal-request-id={revealRequestId || ''}
+      />
+      <button
+        type="button"
+        data-testid="file-save-pending-on"
+        onClick={() => onFileSavePendingChange?.('src/App.tsx', true)}
+      />
+      <button
+        type="button"
+        data-testid="file-save-pending-off"
+        onClick={() => onFileSavePendingChange?.('src/App.tsx', false)}
+      />
+    </>
   ),
 }));
 
@@ -406,6 +420,22 @@ describe('CodeAgentRoomView', () => {
     expect(fileBrowser.dataset.openRequestId).toBe('2');
     expect(fileBrowser.dataset.revealLine).toBe('87');
     expect(fileBrowser.dataset.revealRequestId).toBe('2');
+  });
+
+  it('shows the T3-style pending save marker on the workspace files rail', () => {
+    renderCodeAgentRoom(cocoRoom);
+
+    expect(screen.queryByTestId('code-agent-file-save-pending-indicator')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('file-save-pending-on'));
+
+    expect(screen.getByTestId('code-agent-file-save-pending-indicator')).toBeTruthy();
+    expect(screen.getByLabelText('codeAgentCollapseWorkspaceFiles - codeAgentWorkspaceFilesSavePending')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('file-save-pending-off'));
+
+    expect(screen.queryByTestId('code-agent-file-save-pending-indicator')).toBeNull();
+    expect(screen.getByLabelText('codeAgentCollapseWorkspaceFiles')).toBeTruthy();
   });
 
   it('constrains room edit mode when the server only allows plan mode', () => {

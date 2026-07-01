@@ -37,8 +37,12 @@ export function getCodeAgentPanelResizeBounds(
   };
 }
 
-export function clampCodeAgentFilePanelWidth(width: number, availableWidth: number): number {
-  const bounds = getCodeAgentPanelResizeBounds(availableWidth);
+export function clampCodeAgentFilePanelWidth(
+  width: number,
+  availableWidth: number,
+  chatMinWidth: number = CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
+): number {
+  const bounds = getCodeAgentPanelResizeBounds(availableWidth, chatMinWidth);
   return Math.min(bounds.max, Math.max(bounds.min, Math.round(width)));
 }
 

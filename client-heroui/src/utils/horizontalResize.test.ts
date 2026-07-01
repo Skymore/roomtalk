@@ -5,11 +5,14 @@ import { beginHorizontalResize } from './horizontalResize';
 
 function pointerEvent(type: string, values: Partial<PointerEvent>): PointerEvent {
   const event = new Event(type, { bubbles: true, cancelable: true }) as PointerEvent;
+  const pointerType = Object.prototype.hasOwnProperty.call(values, 'pointerType')
+    ? values.pointerType
+    : 'mouse';
   Object.defineProperties(event, {
     pointerId: { value: values.pointerId ?? 1 },
     clientX: { value: values.clientX ?? 0 },
     buttons: { value: values.buttons ?? 0 },
-    pointerType: { value: values.pointerType ?? 'mouse' },
+    pointerType: { value: pointerType },
     pressure: { value: values.pressure },
   });
   return event;
@@ -264,6 +267,38 @@ describe('beginHorizontalResize', () => {
       pointerType: 'mouse',
       clientX: 900,
       buttons: 0,
+    }));
+
+    expect(onFinish).toHaveBeenCalledWith(360);
+    expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.cursor).toBe('');
+  });
+
+  it('finishes on pointerup when browsers omit pointerType and report a stale id', () => {
+    const onFinish = vi.fn();
+    beginHorizontalResize({
+      pointerId: 34,
+      startX: 0,
+      initialWidth: 360,
+      direction: 1,
+      captureTarget: document.createElement('button'),
+      getBounds: () => ({ min: 240, max: 1200 }),
+      onResize: vi.fn(),
+      onFinish,
+    });
+
+    window.dispatchEvent(pointerEvent('pointerup', {
+      pointerId: 99,
+      pointerType: undefined,
+      clientX: 900,
+      buttons: 0,
+    }));
+    window.dispatchEvent(pointerEvent('pointermove', {
+      pointerId: 34,
+      pointerType: undefined,
+      clientX: 1100,
+      buttons: 1,
     }));
 
     expect(onFinish).toHaveBeenCalledWith(360);
@@ -559,6 +594,53 @@ describe('beginHorizontalResize', () => {
 
     const guard = document.querySelector<HTMLElement>('[data-horizontal-resize-guard="true"]');
     guard?.dispatchEvent(mouseEvent('mouseover', { clientX: 700, buttons: 0 }));
+
+    expect(onFinish).toHaveBeenCalledWith(420);
+    expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.cursor).toBe('');
+  });
+
+  it('finishes on the next pointerdown if an outside release left the guard active', () => {
+    const onFinish = vi.fn();
+    beginHorizontalResize({
+      pointerId: 41,
+      startX: 100,
+      initialWidth: 420,
+      direction: 1,
+      captureTarget: document.createElement('button'),
+      getBounds: () => ({ min: 240, max: 1200 }),
+      onResize: vi.fn(),
+      onFinish,
+    });
+
+    document.documentElement.dispatchEvent(pointerEvent('pointerdown', {
+      pointerId: 42,
+      pointerType: 'mouse',
+      clientX: 700,
+      buttons: 1,
+    }));
+
+    expect(onFinish).toHaveBeenCalledWith(420);
+    expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();
+    expect(document.body.style.userSelect).toBe('');
+    expect(document.body.style.cursor).toBe('');
+  });
+
+  it('finishes on click if a browser emits click after a missed release', () => {
+    const onFinish = vi.fn();
+    beginHorizontalResize({
+      pointerId: 43,
+      startX: 100,
+      initialWidth: 420,
+      direction: 1,
+      captureTarget: document.createElement('button'),
+      getBounds: () => ({ min: 240, max: 1200 }),
+      onResize: vi.fn(),
+      onFinish,
+    });
+
+    document.dispatchEvent(mouseEvent('click', { button: 0 }));
 
     expect(onFinish).toHaveBeenCalledWith(420);
     expect(document.querySelector('[data-horizontal-resize-guard="true"]')).toBeNull();

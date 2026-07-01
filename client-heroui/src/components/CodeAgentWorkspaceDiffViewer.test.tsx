@@ -31,6 +31,7 @@ vi.mock('@pierre/diffs/react', () => ({
   CodeView: React.forwardRef(({
     items,
     options,
+    className,
     renderHeaderPrefix,
     renderAnnotation,
   }: {
@@ -51,6 +52,7 @@ vi.mock('@pierre/diffs/react', () => ({
       unsafeCSS?: string;
       layout?: { paddingTop: number; paddingBottom: number; gap: number };
     };
+    className?: string;
     renderHeaderPrefix?: (item: { id: string; type: 'diff'; fileDiff: { name?: string | null; prevName?: string | null; cacheKey?: string }; collapsed?: boolean }) => ReactNode;
     renderAnnotation?: (annotation: { side: 'additions' | 'deletions'; lineNumber: number; metadata: { entries: Array<{ id: string; kind: 'draft' | 'comment'; rangeLabel: string; text: string }> } }) => ReactNode;
   }, ref) => {
@@ -64,6 +66,7 @@ vi.mock('@pierre/diffs/react', () => ({
         data-sticky-headers={String(options.stickyHeaders === true)}
         data-layout={options.layout ? `${options.layout.paddingTop}:${options.layout.paddingBottom}:${options.layout.gap}` : ''}
         data-unsafe-css={options.unsafeCSS || ''}
+        data-class-name={className || ''}
       >
         {items.map((item) => {
           const title = item.fileDiff.prevName && item.fileDiff.name
@@ -150,6 +153,10 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     const codeView = await screen.findByTestId('code-view');
     expect(codeView).toBeTruthy();
     expect(within(codeView).getByText('src/App.tsx')).toBeTruthy();
+    expect(screen.getByTestId('code-agent-workspace-diff-viewer').className).toContain('flex-1');
+    expect(codeView.dataset.className).toContain('min-h-80');
+    expect(codeView.dataset.className).toContain('flex-1');
+    expect(codeView.dataset.className?.split(/\s+/)).not.toContain('h-80');
     expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenCalledWith('room-1', expect.any(Object));
     expect(parsePatchFilesMock).toHaveBeenCalledWith(
       'diff --git a/src/App.tsx b/src/App.tsx',
