@@ -12,6 +12,7 @@ import {
 } from '../utils/codeAgentDiffPanelStore';
 import {
   buildFileDiffRenderKey,
+  getDiffCollapseIconClassName,
   getRenderablePatch,
   resolveCodeAgentDiffThemeName,
   resolveFileDiffPath,
@@ -382,21 +383,6 @@ function findDiffTitleTextForLine(
 
 function withWorkspaceLineTarget(path: string, lineNumber: number | null): string {
   return lineNumber === null ? path : `${path}#L${lineNumber}`;
-}
-
-function getDiffCollapseIconClassName(fileDiff: FileDiffMetadata): string {
-  switch (fileDiff.type) {
-    case 'new':
-      return 'text-[var(--diffs-addition-base)]';
-    case 'deleted':
-      return 'text-[var(--diffs-deletion-base)]';
-    case 'change':
-    case 'rename-pure':
-    case 'rename-changed':
-      return 'text-[var(--diffs-modified-base)]';
-    default:
-      return 'text-[#87867f] dark:text-[#8f8d86]';
-  }
 }
 
 export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewerProps> = ({
@@ -958,7 +944,10 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     >
       <CodeAgentWorkspaceDiffPanelViewport>
         {diff?.truncated ? (
-          <div className="rounded-md border border-amber-500/20 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
+          <div
+            className="shrink-0 border-b border-amber-500/20 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-700 dark:text-amber-300"
+            data-testid="code-agent-workspace-diff-truncated"
+          >
             {t('codeAgentDiffPreviewTruncated')}
           </div>
         ) : null}
@@ -971,7 +960,11 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
         ) : (
           <>
             {error ? (
-              <div className="rounded-md border border-[#f0b49b]/50 bg-[#fff2ec] px-2.5 py-1.5 text-[11px] text-[#9f462c] dark:border-[#7a321f]/60 dark:bg-[#2a211d] dark:text-[#ff9b78]" role="alert">
+              <div
+                className="shrink-0 border-b border-[#f0b49b]/50 bg-[#fff2ec] px-3 py-1.5 text-[11px] text-[#9f462c] dark:border-[#7a321f]/60 dark:bg-[#2a211d] dark:text-[#ff9b78]"
+                data-testid="code-agent-workspace-diff-error-bar"
+                role="alert"
+              >
                 {error}
               </div>
             ) : null}

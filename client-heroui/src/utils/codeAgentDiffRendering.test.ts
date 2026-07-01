@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildPatchCacheKey,
+  getDiffCollapseIconClassName,
   getRenderablePatch,
+  resolveFileDiffPath,
   resolveCodeAgentDiffThemeName,
   summarizeFileDiffStat,
 } from './codeAgentDiffRendering';
@@ -89,5 +91,19 @@ describe('codeAgentDiffRendering', () => {
     if (parsed?.kind !== 'files') return;
 
     expect(summarizeFileDiffStat(parsed.files[0])).toEqual({ additions: 3, deletions: 2 });
+  });
+
+  it('resolves T3-style diff paths without git prefixes', () => {
+    expect(resolveFileDiffPath({ name: 'b/src/App.tsx' } as any)).toBe('src/App.tsx');
+    expect(resolveFileDiffPath({ prevName: 'a/src/Old.tsx' } as any)).toBe('src/Old.tsx');
+    expect(resolveFileDiffPath({ name: 'src/App.tsx' } as any)).toBe('src/App.tsx');
+  });
+
+  it('returns T3-style collapse icon classes by file diff type', () => {
+    expect(getDiffCollapseIconClassName({ type: 'new' } as any)).toBe('text-[var(--diffs-addition-base)]');
+    expect(getDiffCollapseIconClassName({ type: 'deleted' } as any)).toBe('text-[var(--diffs-deletion-base)]');
+    expect(getDiffCollapseIconClassName({ type: 'change' } as any)).toBe('text-[var(--diffs-modified-base)]');
+    expect(getDiffCollapseIconClassName({ type: 'rename-pure' } as any)).toBe('text-[var(--diffs-modified-base)]');
+    expect(getDiffCollapseIconClassName({ type: 'unknown' } as any)).toBe('text-[#87867f] dark:text-[#8f8d86]');
   });
 });

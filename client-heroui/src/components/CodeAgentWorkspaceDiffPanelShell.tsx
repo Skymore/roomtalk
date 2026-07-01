@@ -21,7 +21,7 @@ export function CodeAgentWorkspaceDiffPanelShell({
 }) {
   return (
     <div
-      className={`flex min-h-0 min-w-0 flex-1 flex-col gap-2 bg-transparent ${getDiffPanelWidthClassName(mode)}`}
+      className={`flex min-h-0 min-w-0 flex-1 flex-col bg-transparent ${getDiffPanelWidthClassName(mode)}`}
       data-testid={testId}
     >
       <div
@@ -37,7 +37,7 @@ export function CodeAgentWorkspaceDiffPanelShell({
 
 export function CodeAgentWorkspaceDiffPanelViewport({ children }: { children: ReactNode }) {
   return (
-    <div className="diff-panel-viewport flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden">
+    <div className="diff-panel-viewport flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       {children}
     </div>
   );

@@ -260,7 +260,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
         id={detailsId}
         data-testid="code-agent-workspace-details"
         hidden={isCollapsed}
-        className={`mt-3 ${workspaceSurfaceClassName}`}
+        className={`mt-3 min-w-0 overflow-hidden ${workspaceSurfaceClassName}`}
       >
         <Tabs
           aria-label={t('codeAgentWorkspace')}
@@ -269,10 +269,10 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
           size="sm"
           variant="underlined"
           classNames={{
-            base: 'w-full border-b border-[#dedbd0] px-2 dark:border-[#30302e]',
-            tabList: 'gap-2',
+            base: 'block w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden border-b border-[#dedbd0] px-2 [scrollbar-width:none] dark:border-[#30302e] [&::-webkit-scrollbar]:hidden',
+            tabList: 'w-max min-w-max max-w-none flex-nowrap gap-2 overflow-visible whitespace-nowrap',
             cursor: 'bg-[#d66a43]',
-            tab: 'h-9 px-2 text-xs font-semibold',
+            tab: 'h-9 shrink-0 whitespace-nowrap px-2 text-xs font-semibold',
             tabContent: 'text-[#5e5d59] group-data-[selected=true]:text-[#141413] dark:text-[#b0aea5] dark:group-data-[selected=true]:text-[#faf9f5]',
             panel: 'p-0',
           }}

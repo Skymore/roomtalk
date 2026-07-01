@@ -140,6 +140,8 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     const viewport = screen.getByTestId('code-agent-workspace-diff-viewer').querySelector('.diff-panel-viewport');
     expect(viewport).toBeTruthy();
     expect(viewport?.contains(loading)).toBe(true);
+    expect(viewport?.className).not.toContain('gap-2');
+    expect(screen.getByTestId('code-agent-workspace-diff-viewer').className).not.toContain('gap-2');
     expect(screen.getByLabelText('codeAgentRefreshWorkspaceDiff')).toBeTruthy();
     expect(loading.querySelectorAll('.animate-pulse').length).toBeGreaterThanOrEqual(7);
     expect(screen.queryByTestId('code-view')).toBeNull();
@@ -265,7 +267,11 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     await waitFor(() => {
       expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenCalledTimes(2);
     });
-    expect(screen.getByRole('alert').textContent).toBe('socket diff failed');
+    const errorBar = screen.getByTestId('code-agent-workspace-diff-error-bar');
+    expect(errorBar.textContent).toBe('socket diff failed');
+    expect(errorBar.className).toContain('border-b');
+    expect(errorBar.className).not.toContain('rounded');
+    expect(errorBar.parentElement?.className).toContain('diff-panel-viewport');
     expect(within(screen.getByTestId('code-view')).getByText('src/App.tsx')).toBeTruthy();
   });
 
@@ -345,7 +351,11 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
 
     render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
 
-    expect(await screen.findByText('codeAgentDiffPreviewTruncated')).toBeTruthy();
+    const truncatedBar = await screen.findByTestId('code-agent-workspace-diff-truncated');
+    expect(truncatedBar.textContent).toBe('codeAgentDiffPreviewTruncated');
+    expect(truncatedBar.className).toContain('border-b');
+    expect(truncatedBar.className).not.toContain('rounded');
+    expect(truncatedBar.parentElement?.className).toContain('diff-panel-viewport');
     expect(screen.getByTestId('code-view')).toBeTruthy();
   });
 

@@ -512,18 +512,8 @@ function FilePreviewSurface({
     );
   }
 
-  const visibleByteSize = previewedByteSize(file);
-
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      {file.truncated ? (
-        <div className="shrink-0 border-b border-amber-500/20 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
-          {t('codeAgentFilePreviewTruncated', {
-            shown: visibleByteSize.toLocaleString(),
-            total: file.byteSize.toLocaleString(),
-          })}
-        </div>
-      ) : null}
       {fileError ? (
         <div className="shrink-0 border-b border-[#f0b49b]/50 bg-[#fff2ec] px-3 py-1.5 text-[11px] text-[#9f462c] dark:border-[#7a321f]/60 dark:bg-[#2a211d] dark:text-[#ff9b78]">
           {fileError}
@@ -664,6 +654,9 @@ export function CodeAgentFilePreviewPanel({
   onAddReviewComment,
   onRemoveReviewComment,
 }: CodeAgentFilePreviewPanelProps) {
+  const { t } = useTranslation();
+  const showTruncatedBanner = Boolean(relativePath && file?.truncated);
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <CodeAgentFilePreviewHeader
@@ -684,7 +677,18 @@ export function CodeAgentFilePreviewPanel({
         onTogglePreviewView={onTogglePreviewView}
         onToggleExplorer={onToggleExplorer}
       />
-      <div className="flex min-h-0 flex-1 overflow-hidden">
+      {showTruncatedBanner && file ? (
+        <div
+          className="shrink-0 border-b border-amber-500/20 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-700 dark:text-amber-300"
+          data-testid="code-agent-file-preview-truncated"
+        >
+          {t('codeAgentFilePreviewTruncated', {
+            shown: previewedByteSize(file).toLocaleString(),
+            total: file.byteSize.toLocaleString(),
+          })}
+        </div>
+      ) : null}
+      <div className="flex min-h-0 flex-1 overflow-hidden" data-testid="code-agent-file-preview-body">
         <div className={`${relativePath ? 'flex' : 'hidden'} min-w-0 flex-1 flex-col overflow-hidden`}>
           <FilePreviewSurface
             roomId={roomId}

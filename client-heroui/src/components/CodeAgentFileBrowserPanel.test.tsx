@@ -1429,7 +1429,9 @@ describe('CodeAgentFileBrowserPanel', () => {
 
     const diffFile = await screen.findByTestId('diff-file');
     expect(diffFile.textContent).toBe('logs/big.log:partial log');
-    expect(screen.getByText('codeAgentFilePreviewTruncated:11:2,000,000')).toBeTruthy();
+    const truncatedBanner = screen.getByTestId('code-agent-file-preview-truncated');
+    expect(truncatedBanner.textContent).toBe('codeAgentFilePreviewTruncated:11:2,000,000');
+    expect(truncatedBanner.nextElementSibling).toBe(screen.getByTestId('code-agent-file-preview-body'));
 
     vi.useFakeTimers();
     fireEvent.click(diffFile);

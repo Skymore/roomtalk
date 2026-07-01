@@ -136,6 +136,21 @@ export function buildFileDiffRenderKey(fileDiff: FileDiffMetadata): string {
   return fileDiff.cacheKey ?? `${fileDiff.prevName ?? 'none'}:${fileDiff.name}`;
 }
 
+export function getDiffCollapseIconClassName(fileDiff: FileDiffMetadata): string {
+  switch (fileDiff.type) {
+    case 'new':
+      return 'text-[var(--diffs-addition-base)]';
+    case 'deleted':
+      return 'text-[var(--diffs-deletion-base)]';
+    case 'change':
+    case 'rename-pure':
+    case 'rename-changed':
+      return 'text-[var(--diffs-modified-base)]';
+    default:
+      return 'text-[#87867f] dark:text-[#8f8d86]';
+  }
+}
+
 export function summarizeFileDiffStat(fileDiff: FileDiffMetadata): { additions: number; deletions: number } {
   return fileDiff.hunks.reduce(
     (stat, hunk) => ({

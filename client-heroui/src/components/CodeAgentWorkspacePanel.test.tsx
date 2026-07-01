@@ -92,6 +92,40 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(screen.getByText('codeAgentNoArtifacts')).toBeTruthy();
   });
 
+  it('keeps workspace tabs horizontally scrollable on narrow screens', () => {
+    render(
+      <CodeAgentWorkspacePanel
+        room={room}
+        messages={[]}
+        mode="plan"
+        sessionCostUsd={0}
+      />
+    );
+
+    const details = screen.getByTestId('code-agent-workspace-details');
+    expect(details.className).toContain('min-w-0');
+    expect(details.className).toContain('overflow-hidden');
+
+    const tabList = screen.getByRole('tablist', { name: 'codeAgentWorkspace' });
+    const tabsViewport = tabList.parentElement;
+    expect(tabsViewport?.getAttribute('data-slot')).toBe('base');
+    expect(tabsViewport?.className).toContain('overflow-x-auto');
+    expect(tabsViewport?.className).toContain('max-w-full');
+    expect(tabsViewport?.className).toContain('[scrollbar-width:none]');
+
+    expect(tabList.className).toContain('w-max');
+    expect(tabList.className).toContain('min-w-max');
+    expect(tabList.className).toContain('flex-nowrap');
+    expect(tabList.className).toContain('max-w-none');
+
+    const tabs = screen.getAllByRole('tab');
+    expect(tabs.length).toBeGreaterThan(1);
+    tabs.forEach((tab) => {
+      expect(tab.className).toContain('shrink-0');
+      expect(tab.className).toContain('whitespace-nowrap');
+    });
+  });
+
   it('renders acceptEdits mode and derived tool activity', () => {
     const onRefreshWorkspace = vi.fn();
     render(
