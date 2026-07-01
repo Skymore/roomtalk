@@ -983,7 +983,7 @@ describe('PostgresStore', () => {
       content: 'answer',
       messageType: 'ai',
       status: 'complete',
-      aiModel: { id: 'deepseek-v4-pro', apiModel: 'deepseek-chat', provider: 'deepseek', label: 'DeepSeek V4 Pro' },
+      aiModel: { id: 'deepseek-v4-pro', apiModel: 'deepseek-v4-pro', provider: 'deepseek', label: 'DeepSeek V4 Pro' },
       usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, source: 'reported' },
       cost: cost(0.01),
       replyTo: {

@@ -4,6 +4,7 @@ import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
 import { AIModelOption, AIModelPricing, AIModelProvider, AIUsage } from '../types';
 import { CocoRunnerMode } from './cocoRunnerProtocol';
+import { ObservabilityEventInput, ObservabilityEventRecorder } from './observabilityEvents';
 
 export interface CocoModelGatewayIssueInput {
   roomId: string;
@@ -66,6 +67,7 @@ export interface CocoModelGatewayOptions {
   nowMs?: () => number;
   stateStore?: CocoModelGatewayTokenStateStore;
   logger?: Logger;
+  observability?: ObservabilityEventRecorder;
 }
 
 const DEFAULT_TOKEN_TTL_SECONDS = 15 * 60;
@@ -527,8 +529,34 @@ export class CocoModelGateway {
         actualCostUsd: consumeResult.actualCostUsd,
         budgetUsd: claims.budgetUsd,
       });
+      await this.recordObservabilityEvent(claims, {
+        level: 'warn',
+        event: 'coco.model_gateway.rejected',
+        errorCode: consumeResult.error,
+        payload: {
+          path: routePath,
+          method: req.method,
+          statusCode: status,
+          requestCount: consumeResult.requestCount,
+          actualCostUsd: consumeResult.actualCostUsd,
+          budgetUsd: claims.budgetUsd,
+        },
+      });
       return res.status(status).json({ error: consumeResult.error });
     }
+
+    await this.recordObservabilityEvent(claims, {
+      level: 'info',
+      event: 'coco.model_gateway.request',
+      payload: {
+        path: routePath,
+        method: req.method,
+        countsBudget: route.countsBudget,
+        requestCount: consumeResult.requestCount,
+        actualCostUsd: consumeResult.actualCostUsd,
+        budgetUsd: claims.budgetUsd,
+      },
+    });
 
     const providerKey = this.options.providerApiKeys[claims.provider];
     if (!providerKey) {
@@ -536,6 +564,13 @@ export class CocoModelGateway {
         provider: claims.provider,
         roomId: claims.roomId,
         turnId: claims.turnId,
+      });
+      await this.recordObservabilityEvent(claims, {
+        level: 'error',
+        event: 'coco.model_gateway.provider_missing',
+        errorCode: 'provider_not_configured',
+        errorMessage: 'Provider is not configured',
+        payload: { path: routePath, method: req.method },
       });
       return res.status(502).json({ error: 'Provider is not configured' });
     }
@@ -573,8 +608,39 @@ export class CocoModelGateway {
         turnId: claims.turnId,
         path: routePath,
       });
+      await this.recordObservabilityEvent(claims, {
+        level: 'error',
+        event: 'coco.model_gateway.upstream_error',
+        errorCode: 'upstream_request_failed',
+        errorMessage: error instanceof Error ? error.message : String(error),
+        payload: { path: routePath, method: req.method },
+      });
       return res.status(502).json({ error: 'Model gateway upstream request failed' });
     }
+  }
+
+  private async recordObservabilityEvent(
+    claims: CocoModelGatewayTokenClaims,
+    event: Omit<ObservabilityEventInput, 'roomId' | 'turnId' | 'clientId' | 'provider' | 'model'>
+  ) {
+    if (!this.options.observability) {
+      return;
+    }
+    await this.options.observability.recordEvent({
+      ...event,
+      roomId: claims.roomId,
+      turnId: claims.turnId,
+      clientId: claims.clientId,
+      provider: claims.provider,
+      model: claims.modelId,
+    }).catch(error => {
+      this.options.logger?.error('Failed to record Coco model gateway observability event', {
+        error,
+        event: event.event,
+        roomId: claims.roomId,
+        turnId: claims.turnId,
+      });
+    });
   }
 
   private ttlSecondsForClaims(claims: CocoModelGatewayTokenClaims) {
@@ -668,6 +734,12 @@ export class CocoModelGateway {
           roomId: claims.roomId,
           turnId: claims.turnId,
         });
+        await this.recordObservabilityEvent(claims, {
+          level: 'warn',
+          event: 'coco.model_gateway.missing_usage',
+          errorCode: 'missing_usage',
+          payload: { statusCode },
+        });
       }
       return;
     }
@@ -683,6 +755,22 @@ export class CocoModelGateway {
         ttlSeconds: this.ttlSecondsForClaims(claims),
         costUsd,
       });
+      await this.recordObservabilityEvent(claims, {
+        level: 'info',
+        event: 'coco.model_gateway.settled',
+        costUsd,
+        payload: {
+          statusCode,
+          requestCostUsd: costUsd,
+          actualCostUsd: result.actualCostUsd,
+          budgetUsd: claims.budgetUsd,
+          promptTokens: usage.promptTokens,
+          completionTokens: usage.completionTokens,
+          totalTokens: usage.totalTokens,
+          cachedPromptTokens: usage.cachedPromptTokens,
+          cacheHitRate: usage.cacheHitRate,
+        },
+      });
       if (result.actualCostUsd > claims.budgetUsd) {
         this.options.logger?.warn('Coco model gateway actual budget exceeded', {
           provider: claims.provider,
@@ -695,6 +783,21 @@ export class CocoModelGateway {
           promptTokens: usage.promptTokens,
           completionTokens: usage.completionTokens,
           cachedPromptTokens: usage.cachedPromptTokens,
+        });
+        await this.recordObservabilityEvent(claims, {
+          level: 'warn',
+          event: 'coco.model_gateway.budget_exceeded',
+          costUsd,
+          errorCode: 'budget_exceeded',
+          payload: {
+            statusCode,
+            requestCostUsd: costUsd,
+            actualCostUsd: result.actualCostUsd,
+            budgetUsd: claims.budgetUsd,
+            promptTokens: usage.promptTokens,
+            completionTokens: usage.completionTokens,
+            cachedPromptTokens: usage.cachedPromptTokens,
+          },
         });
       }
     } catch (error) {

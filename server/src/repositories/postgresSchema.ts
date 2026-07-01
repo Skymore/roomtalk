@@ -186,6 +186,50 @@ export const POSTGRES_SCHEMA_SQL = [
     total_usd NUMERIC(18, 9) NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
+  `CREATE TABLE IF NOT EXISTS observability_events (
+    id TEXT PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL,
+    level TEXT NOT NULL CHECK (level IN ('debug', 'info', 'warn', 'error')),
+    event TEXT NOT NULL,
+    room_id TEXT,
+    turn_id TEXT,
+    session_id TEXT,
+    client_id TEXT,
+    provider TEXT,
+    model TEXT,
+    duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms >= 0),
+    cost_usd NUMERIC(18, 9),
+    error_code TEXT,
+    error_message TEXT,
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb
+  )`,
+  `ALTER TABLE observability_events ADD COLUMN IF NOT EXISTS session_id TEXT`,
+  `ALTER TABLE observability_events ADD COLUMN IF NOT EXISTS provider TEXT`,
+  `ALTER TABLE observability_events ADD COLUMN IF NOT EXISTS model TEXT`,
+  `ALTER TABLE observability_events ADD COLUMN IF NOT EXISTS duration_ms INTEGER`,
+  `ALTER TABLE observability_events ADD COLUMN IF NOT EXISTS cost_usd NUMERIC(18, 9)`,
+  `ALTER TABLE observability_events ADD COLUMN IF NOT EXISTS error_code TEXT`,
+  `ALTER TABLE observability_events ADD COLUMN IF NOT EXISTS error_message TEXT`,
+  `ALTER TABLE observability_events ADD COLUMN IF NOT EXISTS payload JSONB NOT NULL DEFAULT '{}'::jsonb`,
+  `ALTER TABLE observability_events DROP CONSTRAINT IF EXISTS observability_events_level_check`,
+  `ALTER TABLE observability_events ADD CONSTRAINT observability_events_level_check
+    CHECK (level IN ('debug', 'info', 'warn', 'error'))`,
+  `ALTER TABLE observability_events DROP CONSTRAINT IF EXISTS observability_events_duration_ms_check`,
+  `ALTER TABLE observability_events ADD CONSTRAINT observability_events_duration_ms_check
+    CHECK (duration_ms IS NULL OR duration_ms >= 0)`,
+  `CREATE INDEX IF NOT EXISTS idx_observability_events_turn_created
+    ON observability_events (turn_id, created_at ASC)
+    WHERE turn_id IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_observability_events_room_created
+    ON observability_events (room_id, created_at ASC)
+    WHERE room_id IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_observability_events_session_created
+    ON observability_events (session_id, created_at ASC)
+    WHERE session_id IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_observability_events_event_created
+    ON observability_events (event, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_observability_events_level_created
+    ON observability_events (level, created_at DESC)`,
   `CREATE TABLE IF NOT EXISTS assistant_runs (
     id TEXT PRIMARY KEY,
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,

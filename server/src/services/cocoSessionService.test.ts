@@ -13,6 +13,7 @@ import { DEFAULT_COCO_RUNNER_COMMAND } from './cocoRuntimeConfig';
 import { CocoModelGateway, InMemoryCocoModelGatewayTokenStateStore } from './cocoModelGateway';
 import { PublishedStaticSiteService } from './publishedStaticSite';
 import { MemoryMediaObjectStorage } from '../testUtils/memoryMediaObjectStorage';
+import { ObservabilityEventInput } from './observabilityEvents';
 
 type RoomEmit = {
   roomId: string;
@@ -34,6 +35,24 @@ class FakeEmitter {
     };
   }
 }
+
+const createMemoryObservability = () => {
+  const events: ObservabilityEventInput[] = [];
+  return {
+    events,
+    recorder: {
+      async recordEvent(event: ObservabilityEventInput) {
+        events.push(event);
+        return {
+          id: `event-${events.length}`,
+          createdAt: '2026-05-03T00:00:00.000Z',
+          payload: {},
+          ...event,
+        } as any;
+      },
+    },
+  };
+};
 
 class MemoryCocoStore {
   rooms = new Map<string, Room>();
@@ -175,7 +194,7 @@ const logger = {
 
 const selectedModel: AIModelOption = {
   id: 'deepseek-v4-pro',
-  apiModel: 'deepseek-chat',
+  apiModel: 'deepseek-v4-pro',
   provider: 'deepseek',
   label: 'DeepSeek V4 Pro',
   description: 'Test model',
@@ -215,6 +234,7 @@ const createService = (options: {
   defaultMode?: 'plan' | 'acceptEdits';
   modelGateway?: CocoModelGateway;
   staticSitePublisher?: PublishedStaticSiteService;
+  observability?: ReturnType<typeof createMemoryObservability>['recorder'];
 } = {}) => {
   const store = options.store || new MemoryCocoStore(room(), [userMessage()]);
   const emitter = new FakeEmitter();
@@ -246,6 +266,7 @@ const createService = (options: {
       runnerProviderEnvByProvider: options.runnerProviderEnvByProvider,
       now: () => new Date('2026-05-03T00:00:00.000Z'),
       createId: () => ids.shift() || 'id-fallback',
+      observability: options.observability,
     }
   );
   return { emitter, lifecycle, sandboxService, service, store };
@@ -267,7 +288,8 @@ describe('CocoSessionService', () => {
         usage: { promptTokens: 100, completionTokens: 20, totalTokens: 120, source: 'reported' },
       },
     ]);
-    const { emitter, sandboxService, service, store } = createService({ runner });
+    const observability = createMemoryObservability();
+    const { emitter, sandboxService, service, store } = createService({ runner, observability: observability.recorder });
     let ack: unknown;
 
     const result = await service.startTurn({
@@ -284,7 +306,7 @@ describe('CocoSessionService', () => {
     assert.deepEqual(sandboxService.startedRunnerEnvs[0], { PYTHONUNBUFFERED: '1' });
     assert.equal(runner.requests[0].prompt, 'inspect the project');
     assert.deepEqual(runner.requests[0].priorMessages, []);
-    assert.equal(runner.requests[0].apiModel, 'deepseek-chat');
+    assert.equal(runner.requests[0].apiModel, 'deepseek-v4-pro');
     assert.equal(runner.requests[0].mode, 'plan');
     assert.equal(runner.requests[0].workspace, '/workspace/room-1');
     const messages = store.messages.get('room-1') || [];
@@ -301,6 +323,19 @@ describe('CocoSessionService', () => {
     assert.equal(emitter.roomEmits.some(event => event.event === 'ai_chunk'), true);
     assert.equal(emitter.roomEmits.some(event => event.event === 'ai_stream_end'), true);
     assert.equal(sandboxService.stoppedRunnerCommands.length, 1);
+    assert.deepEqual(observability.events.map(event => event.event), [
+      'coco.turn.started',
+      'coco.sandbox.ensure',
+      'coco.runner.started',
+      'coco.runner.status',
+      'coco.runner.tool_call',
+      'coco.runner.tool_result',
+      'coco.runner.final',
+      'coco.turn.completed',
+    ]);
+    assert.equal((observability.events[3].payload as any)?.message, 'starting');
+    assert.equal((observability.events[5].payload as any)?.outputLength, '# RoomTalk'.length);
+    assert.equal(observability.events.some(event => event.event === 'coco.runner.text_delta'), false);
   });
 
   it('persists interleaved AI text and tool events in runner order', async () => {

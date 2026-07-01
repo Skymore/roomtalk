@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  appendWorkspaceAssetPreviewRevision,
   isWorkspaceBrowserPreviewPath,
   isWorkspaceImagePreviewPath,
   isWorkspacePreviewEntryPath,
@@ -32,4 +33,13 @@ describe('code workspace file previews', () => {
       expect(isWorkspacePreviewEntryPath(path)).toBe(false);
     },
   );
+
+  it('appends T3 mobile-style asset preview revisions without changing the signed path', () => {
+    expect(appendWorkspaceAssetPreviewRevision('/api/assets/report.html', 1))
+      .toBe('/api/assets/report.html?revision=1');
+    expect(appendWorkspaceAssetPreviewRevision('/api/assets/report.html?token=abc', 2))
+      .toBe('/api/assets/report.html?token=abc&revision=2');
+    expect(appendWorkspaceAssetPreviewRevision('/api/assets/report.html', 0))
+      .toBe('/api/assets/report.html');
+  });
 });

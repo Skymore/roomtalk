@@ -9,28 +9,47 @@ import {
   registerCocoModelGatewayRoutes,
 } from './cocoModelGateway';
 import { AIModelOption } from '../types';
+import { ObservabilityEventInput } from './observabilityEvents';
 
 type FetchCall = {
   url: string;
   init: RequestInit;
 };
 
+const createMemoryObservability = () => {
+  const events: ObservabilityEventInput[] = [];
+  return {
+    events,
+    recorder: {
+      async recordEvent(event: ObservabilityEventInput) {
+        events.push(event);
+        return {
+          id: `event-${events.length}`,
+          createdAt: '2026-05-03T00:00:00.000Z',
+          payload: {},
+          ...event,
+        } as any;
+      },
+    },
+  };
+};
+
 const deepseekModel: AIModelOption = {
   id: 'deepseek-v4-pro',
-  apiModel: 'deepseek-chat',
+  apiModel: 'deepseek-v4-pro',
   provider: 'deepseek',
   label: 'DeepSeek V4 Pro',
   description: 'DeepSeek test model',
-  pricing: { currency: 'USD', inputPerMillion: 0.27, cachedInputPerMillion: 0.07, outputPerMillion: 1.1 },
+  pricing: { currency: 'USD', inputPerMillion: 0.435, cachedInputPerMillion: 0.003625, outputPerMillion: 0.87 },
 };
 
 const anthropicModel: AIModelOption = {
-  id: 'claude-sonnet-4.6',
-  apiModel: 'claude-sonnet-4-6',
+  id: 'claude-sonnet-5',
+  apiModel: 'claude-sonnet-5',
   provider: 'anthropic',
-  label: 'Claude Sonnet 4.6',
+  label: 'Claude Sonnet 5',
   description: 'Anthropic test model',
-  pricing: { currency: 'USD', inputPerMillion: 3, cachedInputPerMillion: 0.3, outputPerMillion: 15 },
+  pricing: { currency: 'USD', inputPerMillion: 2, cachedInputPerMillion: 0.2, outputPerMillion: 10 },
 };
 
 const createTestServer = async (gateway: CocoModelGateway, options: { bodyLimit?: string | number } = {}) => {
@@ -94,7 +113,7 @@ describe('CocoModelGateway', () => {
         authorization: `Bearer ${token}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({ model: 'deepseek-chat', messages: [{ role: 'user', content: 'hello' }], max_tokens: 64 }),
+      body: JSON.stringify({ model: 'deepseek-v4-pro', messages: [{ role: 'user', content: 'hello' }], max_tokens: 64 }),
     });
 
     assert.equal(response.status, 200);
@@ -136,7 +155,7 @@ describe('CocoModelGateway', () => {
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'deepseek-chat',
+        model: 'deepseek-v4-pro',
         messages: [{ role: 'user', content: 'x'.repeat(150_000) }],
         max_tokens: 64,
       }),
@@ -212,12 +231,14 @@ describe('CocoModelGateway', () => {
     server = null;
 
     let expensiveCalls = 0;
+    const observability = createMemoryObservability();
     const expensiveGateway = new CocoModelGateway({
       publicBaseUrl: 'https://room.example/api/coco/model-gateway',
       tokenSecret: 'test-secret',
       providerApiKeys: { deepseek: 'deepseek-provider-key' },
       turnBudgetUsd: 0.000001,
       nowMs: () => 1_800_000_000_000,
+      observability: observability.recorder,
       fetchFn: async () => {
         expensiveCalls += 1;
         return new Response(JSON.stringify({
@@ -241,12 +262,12 @@ describe('CocoModelGateway', () => {
     const firstBudgetResponse = await fetch(`${server.baseUrl}/api/coco/model-gateway/v1/chat/completions`, {
       method: 'POST',
       headers: { authorization: `Bearer ${budgetToken}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'deepseek-chat', messages: [{ role: 'user', content: 'hello' }], max_tokens: 4096 }),
+      body: JSON.stringify({ model: 'deepseek-v4-pro', messages: [{ role: 'user', content: 'hello' }], max_tokens: 4096 }),
     });
     const secondBudgetResponse = await fetch(`${server.baseUrl}/api/coco/model-gateway/v1/chat/completions`, {
       method: 'POST',
       headers: { authorization: `Bearer ${budgetToken}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'deepseek-chat', messages: [{ role: 'user', content: 'hello again' }], max_tokens: 4096 }),
+      body: JSON.stringify({ model: 'deepseek-v4-pro', messages: [{ role: 'user', content: 'hello again' }], max_tokens: 4096 }),
     });
 
     assert.equal(firstBudgetResponse.status, 200);
@@ -256,6 +277,15 @@ describe('CocoModelGateway', () => {
     });
     assert.equal(secondBudgetResponse.status, 402);
     assert.equal(expensiveCalls, 1);
+    assert.deepEqual(observability.events.map(event => event.event), [
+      'coco.model_gateway.request',
+      'coco.model_gateway.settled',
+      'coco.model_gateway.budget_exceeded',
+      'coco.model_gateway.rejected',
+    ]);
+    assert.equal(observability.events[1].roomId, 'room-1');
+    assert.equal(observability.events[1].turnId, 'turn-2');
+    assert.ok((observability.events[1].costUsd || 0) > 0.000001);
   });
 
   it('does not charge Coco gateway budget without reported usage', async () => {
@@ -286,12 +316,12 @@ describe('CocoModelGateway', () => {
     const first = await fetch(`${server.baseUrl}/api/coco/model-gateway/v1/chat/completions`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'deepseek-chat', messages: [{ role: 'user', content: 'hello' }], max_tokens: 4096 }),
+      body: JSON.stringify({ model: 'deepseek-v4-pro', messages: [{ role: 'user', content: 'hello' }], max_tokens: 4096 }),
     });
     const second = await fetch(`${server.baseUrl}/api/coco/model-gateway/v1/chat/completions`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'deepseek-chat', messages: [{ role: 'user', content: 'hello again' }], max_tokens: 4096 }),
+      body: JSON.stringify({ model: 'deepseek-v4-pro', messages: [{ role: 'user', content: 'hello again' }], max_tokens: 4096 }),
     });
 
     assert.equal(first.status, 200);
@@ -335,13 +365,13 @@ describe('CocoModelGateway', () => {
     const first = await fetch(`${server.baseUrl}/api/coco/model-gateway/v1/chat/completions`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'deepseek-chat', messages: [{ role: 'user', content: 'hello' }], stream: true }),
+      body: JSON.stringify({ model: 'deepseek-v4-pro', messages: [{ role: 'user', content: 'hello' }], stream: true }),
     });
     const firstText = await first.text();
     const second = await fetch(`${server.baseUrl}/api/coco/model-gateway/v1/chat/completions`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'deepseek-chat', messages: [{ role: 'user', content: 'hello again' }], stream: true }),
+      body: JSON.stringify({ model: 'deepseek-v4-pro', messages: [{ role: 'user', content: 'hello again' }], stream: true }),
     });
 
     assert.equal(first.status, 200);
@@ -387,13 +417,13 @@ describe('CocoModelGateway', () => {
     const first = await fetch(`${server.baseUrl}/api/coco/model-gateway/v1/messages`, {
       method: 'POST',
       headers: { 'x-api-key': token, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'hello' }], max_tokens: 64, stream: true }),
+      body: JSON.stringify({ model: 'claude-sonnet-5', messages: [{ role: 'user', content: 'hello' }], max_tokens: 64, stream: true }),
     });
     await first.text();
     const second = await fetch(`${server.baseUrl}/api/coco/model-gateway/v1/messages`, {
       method: 'POST',
       headers: { 'x-api-key': token, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'hello again' }], max_tokens: 64, stream: true }),
+      body: JSON.stringify({ model: 'claude-sonnet-5', messages: [{ role: 'user', content: 'hello again' }], max_tokens: 64, stream: true }),
     });
 
     assert.equal(first.status, 200);
@@ -432,7 +462,7 @@ describe('CocoModelGateway', () => {
         'content-type': 'application/json',
         'anthropic-version': '2023-06-01',
       },
-      body: JSON.stringify({ model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'hello' }], max_tokens: 64 }),
+      body: JSON.stringify({ model: 'claude-sonnet-5', messages: [{ role: 'user', content: 'hello' }], max_tokens: 64 }),
     });
 
     assert.equal(response.status, 200);
@@ -473,7 +503,7 @@ describe('CocoModelGateway', () => {
         'content-type': 'application/json',
         'anthropic-version': '2023-06-01',
       },
-      body: JSON.stringify({ model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'hello' }], max_tokens: 64 }),
+      body: JSON.stringify({ model: 'claude-sonnet-5', messages: [{ role: 'user', content: 'hello' }], max_tokens: 64 }),
     });
 
     assert.equal(response.status, 200);

@@ -100,8 +100,8 @@ const ROUNDS = 5;
 type ClientKey = 'openrouter' | 'deepseek' | 'openai' | 'anthropic';
 
 const MODELS_TO_TEST: Array<{ label: string; client: ClientKey; model: string; cacheControl?: boolean }> = [
-  { label: 'Anthropic official claude-opus-4-7',   client: 'anthropic', model: 'claude-opus-4-7',   cacheControl: true },
-  { label: 'Anthropic official claude-sonnet-4-6', client: 'anthropic', model: 'claude-sonnet-4-6', cacheControl: true },
+  { label: 'Anthropic official claude-opus-4-8', client: 'anthropic', model: 'claude-opus-4-8', cacheControl: true },
+  { label: 'Anthropic official claude-sonnet-5', client: 'anthropic', model: 'claude-sonnet-5', cacheControl: true },
 ];
 
 const sleep = (s: number) => new Promise(res => setTimeout(res, s * 1000));

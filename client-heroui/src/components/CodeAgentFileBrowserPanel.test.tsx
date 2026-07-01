@@ -637,6 +637,118 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(loadCodeWorkspaceFileMock).not.toHaveBeenCalled();
   });
 
+  it('refreshes T3-style asset previews without reading file contents', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'output/report.html', name: 'report.html', type: 'file' },
+      ],
+      truncated: false,
+    });
+    createCodeWorkspaceAssetUrlMock.mockResolvedValue({
+      relativeUrl: '/api/coco/workspace-assets/token/report.html',
+      expiresAt: '2026-06-30T12:15:00.000Z',
+    });
+    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/coco/workspace-assets/token/report.html');
+
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+
+    expect(await screen.findByText('1 files')).toBeTruthy();
+    selectionHandlerRef.current?.(['output/report.html']);
+    await waitFor(() => {
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/coco/workspace-assets/token/report.html');
+    });
+
+    fireEvent.click(screen.getByLabelText('codeAgentRefreshWorkspaceFile'));
+
+    await waitFor(() => {
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/coco/workspace-assets/token/report.html?revision=1');
+    });
+    expect(loadCodeWorkspaceFileMock).not.toHaveBeenCalled();
+    expect(createCodeWorkspaceAssetUrlMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes the current source file through the workspace read API', async () => {
+    let fileContent = 'old content';
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockImplementation((_roomId: string, path: string) => Promise.resolve({
+      path,
+      content: fileContent,
+      byteSize: fileContent.length,
+      truncated: false,
+      encoding: 'utf-8',
+    }));
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+
+    expect(await screen.findByText('1 files')).toBeTruthy();
+    selectionHandlerRef.current?.(['src/App.tsx']);
+    expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:old content');
+
+    fileContent = 'new content';
+    fireEvent.click(screen.getByLabelText('codeAgentRefreshWorkspaceFile'));
+
+    await waitFor(() => {
+      expect(loadCodeWorkspaceFileMock).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('diff-file').textContent).toBe('src/App.tsx:new content');
+    });
+  });
+
+  it('refreshes T3-style asset previews with a revision after saving source changes', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'output/report.html', name: 'report.html', type: 'file' },
+      ],
+      truncated: false,
+    });
+    createCodeWorkspaceAssetUrlMock.mockResolvedValue({
+      relativeUrl: '/api/coco/workspace-assets/token/report.html',
+      expiresAt: '2026-06-30T12:15:00.000Z',
+    });
+    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/coco/workspace-assets/token/report.html');
+    loadCodeWorkspaceFileMock.mockResolvedValue({
+      path: 'output/report.html',
+      content: '<!doctype html><main>Report</main>',
+      byteSize: 35,
+      truncated: false,
+      encoding: 'utf-8',
+    });
+    writeCodeWorkspaceFileMock.mockResolvedValue({ path: 'output/report.html', name: 'report.html', type: 'file' });
+
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+
+    expect(await screen.findByText('1 files')).toBeTruthy();
+    selectionHandlerRef.current?.(['output/report.html']);
+    await waitFor(() => {
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/coco/workspace-assets/token/report.html');
+    });
+
+    fireEvent.click(screen.getByLabelText('codeAgentShowSource'));
+    const diffFile = await screen.findByTestId('diff-file');
+
+    fireEvent.click(diffFile);
+    fireEvent.click(screen.getByLabelText('codeAgentShowPreview'));
+
+    await waitFor(() => {
+      expect(writeCodeWorkspaceFileMock).toHaveBeenCalledWith(
+        'room-1',
+        'output/report.html',
+        'export const changed = true;',
+        'utf-8',
+      );
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/coco/workspace-assets/token/report.html?revision=1');
+    });
+  });
+
   it('uses generic source and preview labels for non-markdown asset previews', async () => {
     loadCodeWorkspaceEntriesMock.mockResolvedValue({
       entries: [

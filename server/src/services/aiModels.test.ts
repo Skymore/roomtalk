@@ -4,11 +4,12 @@ import { calculateAICost, createAIModelRegistry, DEFAULT_AI_MODEL_ID, isPremiumA
 import { AIModelOption, AIUsage } from '../types';
 
 describe('AI model registry', () => {
-  it('keeps the configured default first and deduplicates configured models', () => {
-    const models = parseAIModelOptions('custom/model', 'gpt-5.5, custom/model, gpt-5.5');
+  it('keeps the default first and deduplicates built-in models', () => {
+    const models = parseAIModelOptions('custom/model');
 
     assert.equal(models[0].id, 'custom/model');
     assert.equal(models[0].isDefault, true);
+    assert.equal(models.filter(model => model.id === 'custom/model').length, 1);
     assert.equal(models.filter(model => model.id === 'gpt-5.5').length, 1);
   });
 
@@ -16,6 +17,9 @@ describe('AI model registry', () => {
     const registry = createAIModelRegistry({ defaultModelId: 'gpt-5.5' });
 
     assert.equal(registry.normalizeAIModel('openai/gpt-5.5').id, 'gpt-5.5');
+    assert.equal(registry.normalizeAIModel('deepseek-v4-flash').provider, 'deepseek');
+    assert.equal(registry.normalizeAIModel('deepseek/deepseek-v4-flash').id, 'deepseek-v4-flash-openrouter');
+    assert.equal(registry.normalizeAIModel('xiaomi/mimo-v2.5').id, 'mimo-v2.5');
     assert.equal(registry.normalizeAIModel('not-allowed').id, 'gpt-5.5');
   });
 
@@ -28,13 +32,49 @@ describe('AI model registry', () => {
     assert.equal(registry.getAIModelResponse().defaultModel, 'deepseek-v4-pro');
     assert.equal(customModels.find(model => model.id === 'custom/model')?.isPremium, true);
     assert.equal(registry.modelOptions.find(model => model.id === 'gpt-5.5')?.isPremium, true);
-    assert.equal(registry.modelOptions.find(model => model.id === 'claude-opus-4.7')?.isPremium, true);
+    assert.equal(registry.modelOptions.find(model => model.id === 'claude-opus-4.8')?.isPremium, true);
+    assert.equal(registry.modelOptions.find(model => model.id === 'claude-sonnet-5')?.isPremium, false);
     assert.equal(registry.modelOptions.find(model => model.id === '~google/gemini-pro-latest')?.isPremium, true);
     assert.equal(registry.modelOptions.find(model => model.id === 'google/gemini-3.5-flash')?.isPremium, false);
     assert.equal(registry.modelOptions.find(model => model.id === 'tencent/hy3-preview')?.pricing?.outputPerMillion, 0.26);
+    assert.deepEqual(registry.modelOptions.find(model => model.id === 'deepseek-v4-flash'), {
+      id: 'deepseek-v4-flash',
+      apiModel: 'deepseek-v4-flash',
+      provider: 'deepseek',
+      label: 'DeepSeek V4 Flash',
+      description: 'DeepSeek V4 Flash via official API (with prompt caching)',
+      pricing: {
+        currency: 'USD',
+        inputPerMillion: 0.14,
+        cachedInputPerMillion: 0.0028,
+        outputPerMillion: 0.28,
+      },
+      isPremium: false,
+      isDefault: false,
+    });
+    assert.deepEqual(registry.modelOptions.find(model => model.id === 'deepseek-v4-flash-openrouter'), {
+      id: 'deepseek-v4-flash-openrouter',
+      apiModel: 'deepseek/deepseek-v4-flash',
+      provider: 'openrouter',
+      label: 'DeepSeek V4 Flash (OpenRouter)',
+      description: 'DeepSeek V4 Flash via OpenRouter',
+      pricing: {
+        currency: 'USD',
+        inputPerMillion: 0.098,
+        cachedInputPerMillion: 0.02,
+        outputPerMillion: 0.196,
+      },
+      isPremium: false,
+      isDefault: false,
+    });
+    assert.deepEqual(registry.modelOptions.find(model => model.id === 'mimo-v2.5')?.pricing, {
+      currency: 'USD',
+      inputPerMillion: 0.105,
+      outputPerMillion: 0.28,
+    });
     assert.deepEqual(registry.modelOptions.find(model => model.id === 'glm-5.2')?.pricing, {
       currency: 'USD',
-      inputPerMillion: 0.94,
+      inputPerMillion: 0.93,
       cachedInputPerMillion: 0.18,
       outputPerMillion: 3,
     });

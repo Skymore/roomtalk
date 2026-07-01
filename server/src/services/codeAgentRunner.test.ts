@@ -21,7 +21,7 @@ const request: CocoRunnerRunRequest = {
   mode: 'plan',
   provider: 'deepseek',
   modelId: 'deepseek-v4-pro',
-  apiModel: 'deepseek-chat',
+  apiModel: 'deepseek-v4-pro',
   workspace: '/workspace/room-1',
   allowedPaths: ['.'],
 };

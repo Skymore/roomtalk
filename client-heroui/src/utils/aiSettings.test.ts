@@ -33,13 +33,13 @@ describe('room AI settings', () => {
     });
     saveRoomAISettings('room-b', {
       selectedRoleId: 'coder',
-      selectedModel: 'claude-sonnet-4.6',
+      selectedModel: 'claude-sonnet-5',
       maxContextMessages: 20,
     });
 
     expect(getStoredRoomAISettings('room-a').selectedRoleId).toBe('a2ui-demo');
     expect(getStoredRoomAISettings('room-a').maxContextMessages).toBe(1);
-    expect(getStoredRoomAISettings('room-b').selectedModel).toBe('claude-sonnet-4.6');
+    expect(getStoredRoomAISettings('room-b').selectedModel).toBe('claude-sonnet-5');
   });
 
   it('normalizes partial updates and clamps context limits', () => {

@@ -13,6 +13,7 @@ import { createAIPlaceholderMessage } from './messageDomain';
 import { CocoModelGateway } from './cocoModelGateway';
 import { buildCocoPriorMessages } from './cocoTranscript';
 import { PublishedStaticSiteService } from './publishedStaticSite';
+import { ObservabilityEventInput, ObservabilityEventRecorder } from './observabilityEvents';
 
 export interface CocoRoomEmitter {
   to(roomId: string): {
@@ -33,6 +34,7 @@ export interface CocoSessionServiceOptions {
   runnerEnv?: Record<string, string>;
   runnerProviderEnvByProvider?: Partial<Record<AIModelOption['provider'], Record<string, string>>>;
   staticSitePublisher?: PublishedStaticSiteService;
+  observability?: ObservabilityEventRecorder;
   now?: () => Date;
   createId?: () => string;
 }
@@ -88,27 +90,42 @@ export class CocoSessionService {
       return response;
     };
 
+    const turnStartedAtMs = this.now().getTime();
+    const rejectTurn = async (error: string, payload: Record<string, unknown> = {}) => {
+      await this.recordObservabilityEvent({
+        level: 'warn',
+        event: 'coco.turn.rejected',
+        roomId: input.roomId,
+        clientId: input.clientId,
+        provider: input.selectedModel.provider,
+        model: input.selectedModel.id,
+        errorMessage: error,
+        payload,
+      });
+      return ack({ success: false, error });
+    };
+
     if (!this.options.enabled) {
-      return ack({ success: false, error: 'Coco is disabled' });
+      return rejectTurn('Coco is disabled', { reason: 'disabled' });
     }
     if (this.options.allowedClientIds?.length && !this.options.allowedClientIds.includes(input.clientId)) {
-      return ack({ success: false, error: 'Coco is not enabled for this user' });
+      return rejectTurn('Coco is not enabled for this user', { reason: 'not_allowed' });
     }
 
     const room = await this.store.getRoomById(input.roomId);
     const member = room ? await this.store.getRoomMember(input.roomId, input.clientId) : null;
     const validation = this.validateRoom(room, input.clientId, member?.role);
     if (!validation.success) {
-      return ack(validation);
+      return rejectTurn(validation.error || 'Coco turn rejected', { reason: 'room_validation_failed' });
     }
 
     if (this.activeTurns.has(input.roomId)) {
-      return ack({ success: false, error: 'A Coco task is already running in this room' });
+      return rejectTurn('A Coco task is already running in this room', { reason: 'room_already_running' });
     }
 
     const turnMode = this.resolveTurnMode(input.requestedMode ?? room!.codeAgentMode, input.requestedModeSource);
     if (!turnMode.ok) {
-      return ack({ success: false, error: turnMode.error });
+      return rejectTurn(turnMode.error, { reason: 'mode_rejected', requestedMode: input.requestedMode ?? room!.codeAgentMode });
     }
 
     let aiMessageId = '';
@@ -137,16 +154,53 @@ export class CocoSessionService {
 
       const promptContext = await this.readLatestPromptContext(input.roomId, input.clientId, input.maxContextMessages);
       if (!promptContext) {
+        await this.recordTurnEvent('warn', 'coco.turn.rejected', input, turnId, turnStartedAtMs, {
+          errorMessage: 'Coco requires a text prompt in the room history',
+          payload: { reason: 'missing_prompt', mode: turnMode.mode },
+        });
         return ack({ success: false, error: 'Coco requires a text prompt in the room history' });
       }
 
+      await this.recordTurnEvent('info', 'coco.turn.started', input, turnId, turnStartedAtMs, {
+        payload: {
+          mode: turnMode.mode,
+          promptLength: promptContext.prompt.length,
+          priorMessageCount: promptContext.priorMessages.length,
+          maxContextMessages: input.maxContextMessages,
+          usesModelGateway: Boolean(this.options.modelGateway),
+          previousSessionId: room!.cocoSessionId || null,
+        },
+      });
+
       const sandbox = await this.sandboxLifecycle.ensureReadySandbox(input.roomId, input.clientId);
       if (!sandbox.ok) {
-        return ack({ success: false, error: this.describeSandboxFailure(sandbox) });
+        const error = this.describeSandboxFailure(sandbox);
+        await this.recordTurnEvent('warn', 'coco.sandbox.ensure_failed', input, turnId, turnStartedAtMs, {
+          errorCode: sandbox.reason,
+          errorMessage: error,
+          payload: {
+            reason: sandbox.reason,
+            sandboxStatus: sandbox.room?.sandboxStatus,
+            sandboxId: sandbox.room?.sandboxId,
+          },
+        });
+        return ack({ success: false, error });
       }
+      await this.recordTurnEvent('info', 'coco.sandbox.ensure', input, turnId, turnStartedAtMs, {
+        payload: {
+          sandboxId: sandbox.handle.id,
+          sandboxProvider: sandbox.handle.provider,
+          sandboxCreated: sandbox.created,
+          workspace: sandbox.handle.workspace,
+        },
+      });
 
       const runningRoom = await this.patchRoom(input.roomId, { cocoStatus: 'running' });
       if (!runningRoom) {
+        await this.recordTurnEvent('error', 'coco.turn.failed', input, turnId, turnStartedAtMs, {
+          errorCode: 'mark_running_failed',
+          errorMessage: 'Unable to mark Coco room as running',
+        });
         return ack({ success: false, error: 'Unable to mark Coco room as running' });
       }
       roomMarkedRunning = true;
@@ -158,6 +212,10 @@ export class CocoSessionService {
         if (errorRoom) {
           this.emitter.to(errorRoom.creatorId).emit('room_updated', errorRoom);
         }
+        await this.recordTurnEvent('error', 'coco.turn.failed', input, turnId, turnStartedAtMs, {
+          errorCode: 'placeholder_persist_failed',
+          errorMessage: 'Unable to start a durable Coco response',
+        });
         return ack({ success: false, error: 'Unable to start a durable Coco response' });
       }
       this.emitter.to(placeholderRoom.creatorId).emit('room_updated', placeholderRoom);
@@ -177,6 +235,13 @@ export class CocoSessionService {
           serverOrigin: input.serverOrigin,
         }),
         timeoutMs: this.options.turnTimeoutMs,
+      });
+      await this.recordTurnEvent('info', 'coco.runner.started', input, turnId, turnStartedAtMs, {
+        payload: {
+          sandboxId: sandbox.handle.id,
+          command: runnerProcess.command,
+          mode: turnMode.mode,
+        },
       });
 
       streamState = {
@@ -296,10 +361,33 @@ export class CocoSessionService {
       });
       this.emitter.to(input.roomId).emit('ai_cost_total', roomCostTotal);
       this.emitter.to((idleRoom || finalRoom).creatorId).emit('room_updated', idleRoom || finalRoom);
+      await this.recordTurnEvent('info', 'coco.turn.completed', input, turnId, turnStartedAtMs, {
+        sessionId: runResult.finalEvent.sessionId,
+        costUsd: cost?.totalUsd,
+        payload: {
+          messageId: finalActiveId,
+          initialMessageId: aiMessageId,
+          sessionId: runResult.finalEvent.sessionId,
+          segmentCount: streamState.segmentIds.length,
+          answerLength: answer.length,
+          roomCostTotalUsd: roomCostTotal.totalUsd,
+          usage,
+          cost,
+        },
+      });
       return { success: true, messageId: aiMessageId };
     } catch (error) {
       const errorTargetId = streamState?.activeMessageId || aiMessageId;
       this.logger.error('Coco turn failed', { error, roomId: input.roomId, messageId: errorTargetId });
+      await this.recordTurnEvent('error', 'coco.turn.failed', input, turnId, turnStartedAtMs, {
+        errorCode: 'turn_failed',
+        errorMessage: error instanceof Error ? error.message : String(error),
+        payload: {
+          messageId: errorTargetId,
+          placeholderAnnounced,
+          roomMarkedRunning,
+        },
+      });
       if (placeholderAnnounced && aiMessage) {
         const errorTargetMessage: Message = { ...aiMessage, id: errorTargetId };
         await this.saveCocoError(input.roomId, errorTargetMessage, error);
@@ -441,6 +529,7 @@ export class CocoSessionService {
     selectedModel: AIModelOption,
     state: CocoTurnStreamState
   ) {
+    await this.recordRunnerEvent(event, roomId, turnId, selectedModel);
     const mapped = mapCocoRunnerEvent(event, {
       roomId,
       turnId,
@@ -547,6 +636,101 @@ export class CocoSessionService {
       return null;
     }
     return this.store.saveRoom({ ...currentRoom, ...patch });
+  }
+
+  private async recordTurnEvent(
+    level: ObservabilityEventInput['level'],
+    event: string,
+    input: CocoTurnInput,
+    turnId: string,
+    startedAtMs: number,
+    extra: Partial<ObservabilityEventInput> = {}
+  ) {
+    await this.recordObservabilityEvent({
+      level,
+      event,
+      roomId: input.roomId,
+      turnId,
+      clientId: input.clientId,
+      provider: input.selectedModel.provider,
+      model: input.selectedModel.id,
+      durationMs: Math.max(0, this.now().getTime() - startedAtMs),
+      ...extra,
+    });
+  }
+
+  private async recordRunnerEvent(
+    event: CocoRunnerEvent,
+    roomId: string,
+    turnId: string,
+    selectedModel: AIModelOption
+  ) {
+    if (event.type === 'text_delta') {
+      return;
+    }
+
+    const payload = this.summarizeRunnerEvent(event);
+    await this.recordObservabilityEvent({
+      level: event.type === 'error' ? 'error' : 'info',
+      event: `coco.runner.${event.type}`,
+      roomId,
+      turnId,
+      provider: selectedModel.provider,
+      model: selectedModel.id,
+      errorMessage: event.type === 'error' ? event.message : undefined,
+      payload,
+    });
+  }
+
+  private summarizeRunnerEvent(event: CocoRunnerEvent): Record<string, unknown> {
+    switch (event.type) {
+      case 'status':
+        return { status: event.status, message: event.message };
+      case 'tool_call':
+        return {
+          toolCallId: event.id,
+          toolName: event.name,
+          argsLength: JSON.stringify(event.args || {}).length,
+        };
+      case 'tool_result':
+        return {
+          toolCallId: event.id,
+          toolName: event.name,
+          success: event.success,
+          exitCode: event.exitCode,
+          outputLength: event.output.length,
+          truncated: event.truncated,
+        };
+      case 'final':
+        return {
+          messageId: event.messageId,
+          sessionId: event.sessionId,
+          answerLength: event.answer.length,
+          usage: event.usage,
+        };
+      case 'error':
+        return {
+          message: event.message,
+          code: event.code,
+          retryable: event.retryable,
+        };
+      case 'text_delta':
+        return { deltaLength: event.delta.length };
+    }
+  }
+
+  private async recordObservabilityEvent(event: ObservabilityEventInput) {
+    if (!this.options.observability) {
+      return;
+    }
+    await this.options.observability.recordEvent(event).catch(error => {
+      this.logger.error('Failed to record Coco session observability event', {
+        error,
+        event: event.event,
+        roomId: event.roomId,
+        turnId: event.turnId,
+      });
+    });
   }
 
   private buildRunnerEnv(selectedModel: AIModelOption, context: {

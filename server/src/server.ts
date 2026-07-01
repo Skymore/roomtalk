@@ -12,7 +12,7 @@ import { createClient, RedisClientType } from 'redis';
 import dotenv from 'dotenv';
 import { RedisStore } from './repositories/redisStore';
 import { createPostgresPool } from './repositories/postgresPool';
-import { PostgresStore } from './repositories/postgresStore';
+import { PostgresPool, PostgresStore } from './repositories/postgresStore';
 import { CompositeRoomStore, RoomStore } from './repositories/store';
 import { AI_ROLE_GENERATOR_MODEL_ID, createAIModelRegistry, DEFAULT_AI_MODEL_ID } from './services/aiModels';
 import { registerApiRoutes } from './routes/apiRoutes';
@@ -55,6 +55,7 @@ import {
   COCO_STATIC_PUBLISH_API_PATH,
   createPublishedStaticSiteServiceFromEnv,
 } from './services/publishedStaticSite';
+import { NoopObservabilityEventRecorder, PostgresObservabilityEventRecorder } from './services/observabilityEvents';
 
 dotenv.config();
 
@@ -79,7 +80,6 @@ const aiStreamOwnerId = resolveAIStreamOwnerId();
 
 const aiModelRegistry = createAIModelRegistry({
   defaultModelId: process.env.AI_MODEL || process.env.OPENROUTER_MODEL || DEFAULT_AI_MODEL_ID,
-  configuredModelOptions: process.env.AI_MODEL_OPTIONS || process.env.OPENROUTER_MODEL_OPTIONS,
   logger: openaiLogger,
 });
 const { normalizeAIModel, getAIModelResponse } = aiModelRegistry;
@@ -144,6 +144,7 @@ const PERSISTENCE_STORE = (process.env.PERSISTENCE_STORE || 'redis').toLowerCase
 let activePersistenceStore = 'redis';
 let store: RoomStore = redisStore;
 let postgresStore: PostgresStore | null = null;
+let postgresPool: PostgresPool | null = null;
 
 if (PERSISTENCE_STORE === 'postgres') {
   const databaseUrl = process.env.DATABASE_URL;
@@ -151,7 +152,8 @@ if (PERSISTENCE_STORE === 'postgres') {
     throw new Error('PERSISTENCE_STORE=postgres requires DATABASE_URL');
   }
 
-  postgresStore = new PostgresStore(createPostgresPool(databaseUrl, postgresLogger), postgresLogger, mediaObjectStorage);
+  postgresPool = createPostgresPool(databaseUrl, postgresLogger);
+  postgresStore = new PostgresStore(postgresPool, postgresLogger, mediaObjectStorage);
   store = new CompositeRoomStore(postgresStore, redisStore, redisStore);
   activePersistenceStore = 'postgres';
 } else if (PERSISTENCE_STORE !== 'redis') {
@@ -164,6 +166,9 @@ const parsePositiveIntegerEnv = (name: string, fallback: number) => {
 };
 
 const cocoRuntimeConfig = resolveCocoRuntimeConfig(process.env);
+const observabilityRecorder = postgresPool
+  ? new PostgresObservabilityEventRecorder(postgresPool, new Logger('Observability'))
+  : new NoopObservabilityEventRecorder();
 const cocoAccess = createCocoAccessControl({
   enabled: cocoRuntimeConfig.enabled,
   allowedClientIds: cocoRuntimeConfig.allowedClientIds,
@@ -189,6 +194,7 @@ const cocoModelGateway = cocoRuntimeConfig.modelGateway
     },
     stateStore: new RedisCocoModelGatewayTokenStateStore(redisClient),
     logger: cocoLogger,
+    observability: observabilityRecorder,
   })
   : undefined;
 
@@ -289,6 +295,7 @@ const cocoSessionService = new CocoSessionService(
     runnerEnv: cocoRuntimeConfig.runnerEnv,
     runnerProviderEnvByProvider: cocoRuntimeConfig.runnerProviderEnvByProvider,
     staticSitePublisher: publishedStaticSiteService,
+    observability: observabilityRecorder,
   }
 );
 
@@ -307,6 +314,14 @@ const infrastructureReady = (async () => {
 
     if (postgresStore) {
       await postgresStore.initializeSchema();
+    }
+    if (postgresPool) {
+      const retentionDays = parsePositiveIntegerEnv('OBSERVABILITY_EVENT_RETENTION_DAYS', 60);
+      const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+      const deletedCount = await (observabilityRecorder as PostgresObservabilityEventRecorder).deleteEventsBefore(cutoff);
+      if (deletedCount > 0) {
+        serverLogger.info('Deleted old observability events', { deletedCount, retentionDays, cutoff });
+      }
     }
     if (process.env.E2E_TEST_MODE === 'true' && process.env.E2E_RESET_ON_START === 'true') {
       await store.resetAllDataForTests?.();

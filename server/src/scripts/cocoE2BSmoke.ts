@@ -57,7 +57,6 @@ export const buildCocoE2BSmokePlan = (env: NodeJS.ProcessEnv): CocoE2BSmokePlan 
   const config = resolveCocoRuntimeConfig(smokeEnv);
   const registry = createAIModelRegistry({
     defaultModelId: env.AI_MODEL || env.OPENROUTER_MODEL || DEFAULT_AI_MODEL_ID,
-    configuredModelOptions: env.AI_MODEL_OPTIONS || env.OPENROUTER_MODEL_OPTIONS,
   });
   const selectedModel = registry.normalizeAIModel(env.COCO_SMOKE_MODEL);
   const providerEnv = config.runnerProviderEnvByProvider[selectedModel.provider] || {};

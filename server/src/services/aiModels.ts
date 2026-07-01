@@ -12,11 +12,35 @@ interface AIModelLogger {
 export const REQUESTED_AI_MODEL_CATALOG: AIModelOption[] = [
   {
     id: 'deepseek-v4-pro',
-    apiModel: 'deepseek-chat',
+    apiModel: 'deepseek-v4-pro',
     provider: 'deepseek',
     label: 'DeepSeek V4 Pro',
     description: 'DeepSeek V4 Pro via official API (with prompt caching)',
-    pricing: { currency: 'USD', inputPerMillion: 0.27, cachedInputPerMillion: 0.07, outputPerMillion: 1.10 },
+    pricing: { currency: 'USD', inputPerMillion: 0.435, cachedInputPerMillion: 0.003625, outputPerMillion: 0.87 },
+  },
+  {
+    id: 'deepseek-v4-flash',
+    apiModel: 'deepseek-v4-flash',
+    provider: 'deepseek',
+    label: 'DeepSeek V4 Flash',
+    description: 'DeepSeek V4 Flash via official API (with prompt caching)',
+    pricing: { currency: 'USD', inputPerMillion: 0.14, cachedInputPerMillion: 0.0028, outputPerMillion: 0.28 },
+  },
+  {
+    id: 'deepseek-v4-flash-openrouter',
+    apiModel: 'deepseek/deepseek-v4-flash',
+    provider: 'openrouter',
+    label: 'DeepSeek V4 Flash (OpenRouter)',
+    description: 'DeepSeek V4 Flash via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 0.098, cachedInputPerMillion: 0.02, outputPerMillion: 0.196 },
+  },
+  {
+    id: 'mimo-v2.5',
+    apiModel: 'xiaomi/mimo-v2.5',
+    provider: 'openrouter',
+    label: 'MiMo V2.5',
+    description: 'Xiaomi MiMo V2.5 via OpenRouter',
+    pricing: { currency: 'USD', inputPerMillion: 0.105, outputPerMillion: 0.28 },
   },
   {
     id: 'gpt-5.5',
@@ -27,28 +51,28 @@ export const REQUESTED_AI_MODEL_CATALOG: AIModelOption[] = [
     pricing: { currency: 'USD', inputPerMillion: 5, cachedInputPerMillion: 0.5, outputPerMillion: 30 },
   },
   {
-    id: 'claude-sonnet-4.6',
-    apiModel: 'claude-sonnet-4-6',
+    id: 'claude-sonnet-5',
+    apiModel: 'claude-sonnet-5',
     provider: 'anthropic',
-    label: 'Claude Sonnet 4.6',
-    description: 'Anthropic Claude Sonnet 4.6 via official API (with prompt caching)',
-    pricing: { currency: 'USD', inputPerMillion: 3, cachedInputPerMillion: 0.30, outputPerMillion: 15 },
+    label: 'Claude Sonnet 5',
+    description: 'Anthropic Claude Sonnet 5 via official API (with prompt caching)',
+    pricing: { currency: 'USD', inputPerMillion: 2, cachedInputPerMillion: 0.20, outputPerMillion: 10 },
   },
   {
-    id: 'claude-opus-4.7',
-    apiModel: 'claude-opus-4-7',
+    id: 'claude-opus-4.8',
+    apiModel: 'claude-opus-4-8',
     provider: 'anthropic',
-    label: 'Claude Opus 4.7',
-    description: 'Anthropic Claude Opus 4.7 via official API (with prompt caching)',
+    label: 'Claude Opus 4.8',
+    description: 'Anthropic Claude Opus 4.8 via official API (with prompt caching)',
     pricing: { currency: 'USD', inputPerMillion: 5, cachedInputPerMillion: 0.50, outputPerMillion: 25 },
   },
   {
-    id: 'kimi-k2.6',
-    apiModel: 'moonshotai/kimi-k2.6',
+    id: 'kimi-k2.7-code',
+    apiModel: 'moonshotai/kimi-k2.7-code',
     provider: 'openrouter',
-    label: 'Kimi K2.6',
+    label: 'Kimi K2.7 Code',
     description: 'Moonshot Kimi model via OpenRouter',
-    pricing: { currency: 'USD', inputPerMillion: 0.74, outputPerMillion: 3.49 },
+    pricing: { currency: 'USD', inputPerMillion: 0.74, cachedInputPerMillion: 0.15, outputPerMillion: 3.5 },
   },
   {
     id: 'glm-5.2',
@@ -56,15 +80,15 @@ export const REQUESTED_AI_MODEL_CATALOG: AIModelOption[] = [
     provider: 'openrouter',
     label: 'GLM 5.2',
     description: 'Latest GLM model via OpenRouter',
-    pricing: { currency: 'USD', inputPerMillion: 0.94, cachedInputPerMillion: 0.18, outputPerMillion: 3 },
+    pricing: { currency: 'USD', inputPerMillion: 0.93, cachedInputPerMillion: 0.18, outputPerMillion: 3 },
   },
   {
-    id: 'minimax-m2.7',
-    apiModel: 'minimax/minimax-m2.7',
+    id: 'minimax-m3',
+    apiModel: 'minimax/minimax-m3',
     provider: 'openrouter',
-    label: 'MiniMax M2.7',
+    label: 'MiniMax M3',
     description: 'Latest MiniMax model via OpenRouter',
-    pricing: { currency: 'USD', inputPerMillion: 0.3, outputPerMillion: 1.2 },
+    pricing: { currency: 'USD', inputPerMillion: 0.3, cachedInputPerMillion: 0.06, outputPerMillion: 1.2 },
   },
   {
     id: 'x-ai/grok-4.3',
@@ -167,17 +191,11 @@ const addUniqueModel = (models: AIModelOption[], model: AIModelOption) => {
   }
 };
 
-export const parseAIModelOptions = (defaultModelId: string, value?: string): AIModelOption[] => {
-  const configuredModels = value
-    ?.split(',')
-    .map(model => model.trim())
-    .filter(Boolean) ?? [];
-
+export const parseAIModelOptions = (defaultModelId: string): AIModelOption[] => {
   const models: AIModelOption[] = [];
   const defaultModel = resolveAIModelOption(defaultModelId);
 
   addUniqueModel(models, defaultModel);
-  configuredModels.forEach(model => addUniqueModel(models, resolveAIModelOption(model)));
   REQUESTED_AI_MODEL_CATALOG.forEach(model => addUniqueModel(models, model));
 
   return models.map(model => ({
@@ -189,10 +207,9 @@ export const parseAIModelOptions = (defaultModelId: string, value?: string): AIM
 
 export function createAIModelRegistry(options: {
   defaultModelId?: string;
-  configuredModelOptions?: string;
   logger?: AIModelLogger;
 } = {}) {
-  const modelOptions = parseAIModelOptions(options.defaultModelId || DEFAULT_AI_MODEL_ID, options.configuredModelOptions);
+  const modelOptions = parseAIModelOptions(options.defaultModelId || DEFAULT_AI_MODEL_ID);
   const defaultModel = modelOptions.find(model => model.isDefault) || modelOptions[0];
 
   const normalizeAIModel = (requestedModel?: string): AIModelOption => {

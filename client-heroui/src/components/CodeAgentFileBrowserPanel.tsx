@@ -39,6 +39,7 @@ import {
   type CodeWorkspaceFile,
 } from '../utils/codeWorkspaceFiles';
 import {
+  appendWorkspaceAssetPreviewRevision,
   isWorkspaceBrowserPreviewPath,
   isWorkspaceImagePreviewPath,
   isWorkspacePreviewEntryPath,
@@ -125,6 +126,7 @@ type FileQueryState = {
   data: CodeWorkspaceFile | null;
   error: string | null;
   isPending: boolean;
+  refresh: () => void;
   setData: React.Dispatch<React.SetStateAction<CodeWorkspaceFile | null>>;
 };
 
@@ -552,6 +554,7 @@ function useCodeWorkspaceEntriesQuery(roomId: string) {
 
 function useCodeWorkspaceFileQuery(roomId: string, relativePath: string | null, enabled = true): FileQueryState {
   const requestIdRef = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
   const fileCacheRef = useRef(new Map<string, CodeWorkspaceFile>());
   const [data, setData] = useState<CodeWorkspaceFile | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -570,17 +573,16 @@ function useCodeWorkspaceFileQuery(roomId: string, relativePath: string | null, 
     });
   }, []);
 
-  useEffect(() => {
+  const refresh = useCallback(() => {
     if (!normalizedPath || !enabled) {
-      setData(null);
-      setError(null);
-      setIsPending(false);
-      return undefined;
+      return;
     }
 
+    abortRef.current?.abort();
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
     const controller = new AbortController();
+    abortRef.current = controller;
     setData(resolveCodeAgentProjectFileQueryData(
       roomId,
       normalizedPath,
@@ -611,13 +613,31 @@ function useCodeWorkspaceFileQuery(roomId: string, relativePath: string | null, 
     ).finally(() => {
       if (requestIdRef.current === requestId) {
         setIsPending(false);
+        abortRef.current = null;
       }
     });
-
-    return () => controller.abort();
   }, [enabled, normalizedPath, roomId]);
 
-  return { data, error, isPending, setData: setCachedData };
+  useEffect(() => {
+    if (!normalizedPath || !enabled) {
+      requestIdRef.current += 1;
+      abortRef.current?.abort();
+      abortRef.current = null;
+      setData(null);
+      setError(null);
+      setIsPending(false);
+      return undefined;
+    }
+
+    refresh();
+    return () => {
+      requestIdRef.current += 1;
+      abortRef.current?.abort();
+      abortRef.current = null;
+    };
+  }, [enabled, normalizedPath, refresh]);
+
+  return { data, error, isPending, refresh, setData: setCachedData };
 }
 
 function useCodeWorkspaceAssetUrlQuery(roomId: string, relativePath: string | null, enabled: boolean): AssetUrlQueryState {
@@ -1336,6 +1356,7 @@ interface FilePreviewSurfaceProps {
   relativePath: string | null;
   fileQuery: FileQueryState;
   assetUrlQuery: AssetUrlQueryState;
+  assetPreviewRevision: number;
   resolvedTheme: 'light' | 'dark';
   renderPreview: boolean;
   wordWrap: boolean;
@@ -1346,6 +1367,7 @@ interface FilePreviewSurfaceProps {
   onSaveStateChange: (path: string, state: SaveState, error?: string | null) => void;
   onFileSavePendingChange?: (relativePath: string, pending: boolean) => void;
   onEntriesChanged: () => void;
+  onAssetPreviewChanged: (relativePath: string) => void;
   onOpenWorkspaceFile: (path: string) => void;
   reviewComments: readonly ReviewCommentContext[];
   onAddReviewComment?: (comment: ReviewCommentContext) => void;
@@ -1358,6 +1380,7 @@ function FilePreviewSurface({
   relativePath,
   fileQuery,
   assetUrlQuery,
+  assetPreviewRevision,
   resolvedTheme,
   renderPreview,
   wordWrap,
@@ -1368,6 +1391,7 @@ function FilePreviewSurface({
   onSaveStateChange,
   onFileSavePendingChange,
   onEntriesChanged,
+  onAssetPreviewChanged,
   onOpenWorkspaceFile,
   reviewComments,
   onAddReviewComment,
@@ -1375,6 +1399,12 @@ function FilePreviewSurface({
 }: FilePreviewSurfaceProps) {
   const { t } = useTranslation();
   const onFilePostRender = useFileLineReveal(relativePath, revealLine, revealRequestId);
+  const handleEntriesChanged = useCallback(() => {
+    onEntriesChanged();
+    if (relativePath && isWorkspacePreviewEntryPath(relativePath)) {
+      onAssetPreviewChanged(relativePath);
+    }
+  }, [onAssetPreviewChanged, onEntriesChanged, relativePath]);
 
   useEffect(() => {
     if (relativePath) {
@@ -1405,12 +1435,14 @@ function FilePreviewSurface({
       );
     }
 
+    const resolvedPreviewUrl = appendWorkspaceAssetPreviewRevision(assetUrlQuery.resolvedUrl, assetPreviewRevision);
+
     return renderImageAssetPreview ? (
       <div className="min-h-0 flex-1 overflow-auto bg-[#f0eee6] p-4 dark:bg-[#141413]">
-        <img src={assetUrlQuery.resolvedUrl} alt={relativePath} className="mx-auto max-h-full max-w-full object-contain" />
+        <img src={resolvedPreviewUrl} alt={relativePath} className="mx-auto max-h-full max-w-full object-contain" />
       </div>
     ) : (
-      <iframe src={assetUrlQuery.resolvedUrl} title={relativePath} className="min-h-0 flex-1 border-0 bg-white" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
+      <iframe src={resolvedPreviewUrl} title={relativePath} className="min-h-0 flex-1 border-0 bg-white" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
     );
   }
 
@@ -1467,7 +1499,7 @@ function FilePreviewSurface({
           onFileChange={fileQuery.setData}
           onSaveStateChange={onSaveStateChange}
           onFileSavePendingChange={onFileSavePendingChange}
-          onEntriesChanged={onEntriesChanged}
+          onEntriesChanged={handleEntriesChanged}
           onOpenWorkspaceFile={onOpenWorkspaceFile}
         />
       ) : file.truncated ? (
@@ -1490,7 +1522,7 @@ function FilePreviewSurface({
           onFileChange={fileQuery.setData}
           onSaveStateChange={onSaveStateChange}
           onFileSavePendingChange={onFileSavePendingChange}
-          onEntriesChanged={onEntriesChanged}
+          onEntriesChanged={handleEntriesChanged}
           reviewComments={reviewComments}
           onAddReviewComment={onAddReviewComment}
           onRemoveReviewComment={onRemoveReviewComment}
@@ -1538,6 +1570,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     path: string | null;
     revealRequestId: number | null;
   }>({ path: null, revealRequestId: null });
+  const [assetPreviewRevisions, setAssetPreviewRevisions] = useState<Record<string, number>>({});
   const [localOpenFileRequest, setLocalOpenFileRequest] = useState<{
     path: string;
     line: number | null;
@@ -1664,6 +1697,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     relativePath,
     Boolean(relativePath && renderPreview && supportsWorkspaceAssetPreview),
   );
+  const activeAssetPreviewRevision = relativePath ? assetPreviewRevisions[relativePath] ?? 0 : 0;
   const selectedDirectory = selectedKind === 'directory'
     ? selectedPath || ''
     : selectedPath
@@ -1682,6 +1716,9 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const previewToggleLabel = isMarkdown
     ? (renderPreview ? t('codeAgentShowMarkdownSource') : t('codeAgentShowRenderedMarkdown'))
     : (renderPreview ? t('codeAgentShowSource') : t('codeAgentShowPreview'));
+  const refreshCurrentFileLabel = t('codeAgentRefreshWorkspaceFile');
+  const refreshSourceFile = fileQuery.refresh;
+  const refreshCurrentFilePending = (!renderPreview && fileQuery.isPending) || (renderPreview && assetUrlQuery.isPending);
   const refreshWorkspaceEntries = entriesQuery.refresh;
 
   useEffect(() => {
@@ -1789,6 +1826,24 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const refreshEntries = useCallback(() => {
     refreshWorkspaceEntries();
   }, [refreshWorkspaceEntries]);
+
+  const handleAssetPreviewChanged = useCallback((changedPath: string) => {
+    setAssetPreviewRevisions((current) => ({
+      ...current,
+      [changedPath]: (current[changedPath] ?? 0) + 1,
+    }));
+  }, []);
+
+  const handleRefreshCurrentFile = useCallback(() => {
+    if (!relativePath) {
+      return;
+    }
+    if (renderPreview && supportsWorkspaceAssetPreview) {
+      handleAssetPreviewChanged(relativePath);
+      return;
+    }
+    refreshSourceFile();
+  }, [handleAssetPreviewChanged, refreshSourceFile, relativePath, renderPreview, supportsWorkspaceAssetPreview]);
 
   const handleSearchQueryChange = useCallback((query: string) => {
     setRemoteSearch((current) => (
@@ -2257,6 +2312,16 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
               ))}
             </div>
           </div>
+          <button
+            type="button"
+            className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-wait disabled:opacity-60 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+            aria-label={refreshCurrentFileLabel}
+            title={refreshCurrentFileLabel}
+            disabled={refreshCurrentFilePending}
+            onClick={handleRefreshCurrentFile}
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${refreshCurrentFilePending ? 'animate-spin' : ''}`} />
+          </button>
           {fileQuery.data ? (
             <button type="button" className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]" aria-label={t('codeAgentDownloadFile')} onClick={() => createDownload(fileQuery.data!)}>
               <Download className="h-3.5 w-3.5" />
@@ -2471,6 +2536,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
               relativePath={relativePath}
               fileQuery={fileQuery}
               assetUrlQuery={assetUrlQuery}
+              assetPreviewRevision={activeAssetPreviewRevision}
               resolvedTheme={resolvedTheme}
               renderPreview={renderPreview}
               wordWrap={wordWrap}
@@ -2481,6 +2547,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
               onSaveStateChange={handleSaveStateChange}
               onFileSavePendingChange={onFileSavePendingChange}
               onEntriesChanged={refreshEntries}
+              onAssetPreviewChanged={handleAssetPreviewChanged}
               onOpenWorkspaceFile={handleOpenWorkspaceFileFromMarkdown}
               reviewComments={reviewComments}
               onAddReviewComment={onAddReviewComment}

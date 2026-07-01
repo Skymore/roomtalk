@@ -28,3 +28,11 @@ export const isWorkspaceImagePreviewPath = (path: string): boolean => (
 export const isWorkspacePreviewEntryPath = (path: string): boolean => (
   isWorkspaceBrowserPreviewPath(path) || isWorkspaceImagePreviewPath(path)
 );
+
+export function appendWorkspaceAssetPreviewRevision(url: string, revision: number): string {
+  const normalizedRevision = Math.floor(revision);
+  if (!Number.isFinite(normalizedRevision) || normalizedRevision <= 0) {
+    return url;
+  }
+  return `${url}${url.includes('?') ? '&' : '?'}revision=${normalizedRevision}`;
+}

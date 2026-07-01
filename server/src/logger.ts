@@ -4,6 +4,7 @@ import 'winston-daily-rotate-file';
 import fs from 'fs';
 import path from 'path';
 import express from 'express';
+import { randomUUID } from 'crypto';
 
 // 确保日志目录存在
 const logDir = 'logs';
@@ -26,6 +27,8 @@ const level = () => {
   return env === 'development' ? 'debug' : 'info';
 };
 
+const isProduction = () => (process.env.NODE_ENV || 'development') === 'production';
+
 // 定义日志颜色
 const colors = {
   error: 'red',
@@ -45,6 +48,20 @@ const errorAwareReplacer = (_key: string, value: unknown) =>
   value instanceof Error
     ? { name: value.name, message: value.message, stack: value.stack }
     : value;
+
+const normalizeMeta = (value: unknown): Record<string, unknown> => {
+  if (value === undefined || value === null) {
+    return {};
+  }
+  try {
+    const normalized = JSON.parse(JSON.stringify(value, errorAwareReplacer));
+    return typeof normalized === 'object' && normalized !== null && !Array.isArray(normalized)
+      ? normalized
+      : { meta: normalized };
+  } catch {
+    return { meta: String(value) };
+  }
+};
 
 const format = winston.format.combine(
   // 添加时间戳
@@ -74,32 +91,52 @@ const consoleFormat = winston.format.combine(
   format
 );
 
-// 创建日志传输
-const transports = [
-  // 控制台输出 —— 生产环境用纯文本（便于 fly logs / 日志聚合解析），开发用彩色
-  new winston.transports.Console({
-    format: (process.env.NODE_ENV || 'development') === 'development' ? consoleFormat : format,
-  }),
+const productionConsoleFormat = winston.format.combine(
+  winston.format.timestamp(),
+  winston.format.errors({ stack: true }),
+  winston.format.printf((info) => {
+    const meta = normalizeMeta(info.meta);
+    return JSON.stringify({
+      timestamp: info.timestamp,
+      level: info.level,
+      service: info.service || 'chat-service',
+      context: info.context,
+      message: info.message,
+      ...meta,
+      ...(info.stack ? { stack: info.stack } : {}),
+    }, errorAwareReplacer);
+  })
+);
 
-  // 旋转错误日志文件 - 按天存储，最多保留30天
-  new winston.transports.DailyRotateFile({
+// 创建日志传输
+const transports: winston.transport[] = [
+  // 控制台输出 —— 生产环境用 JSON（便于 fly logs / 事后解析），开发用彩色文本
+  new winston.transports.Console({
+    format: isProduction() ? productionConsoleFormat : consoleFormat,
+  }),
+];
+
+if (!isProduction() || process.env.LOG_FILE_ENABLED === 'true') {
+  // 旋转错误日志文件 - 按天存储，最多保留30天。本地开发有用；
+  // 生产容器文件系统不可靠，默认只写 stdout。
+  transports.push(new winston.transports.DailyRotateFile({
     filename: path.join(logDir, 'error-%DATE%.log'),
     datePattern: 'YYYY-MM-DD',
     zippedArchive: false,
     maxSize: '20m',
     maxFiles: '30d',
     level: 'error',
-  }),
-  
+  }));
+
   // 旋转所有日志文件
-  new winston.transports.DailyRotateFile({
+  transports.push(new winston.transports.DailyRotateFile({
     filename: path.join(logDir, 'combined-%DATE%.log'),
     datePattern: 'YYYY-MM-DD',
     zippedArchive: false,
     maxSize: '20m',
     maxFiles: '30d',
-  }),
-];
+  }));
+}
 
 // 创建日志实例
 const logger = winston.createLogger({
@@ -171,6 +208,8 @@ export const defaultLogger = new Logger('App');
 // 用于记录HTTP请求的中间件
 export const httpLogger = (req: express.Request, res: express.Response, next: express.NextFunction) => {
   const start = Date.now();
+  const requestId = req.get('x-request-id') || randomUUID();
+  res.setHeader('x-request-id', requestId);
   
   // 请求完成时记录
   res.on('finish', () => {
@@ -182,7 +221,9 @@ export const httpLogger = (req: express.Request, res: express.Response, next: ex
       ip: req.ip,
       statusCode: res.statusCode,
       userAgent: req.get('user-agent'),
-      duration: `${duration}ms`
+      duration: `${duration}ms`,
+      durationMs: duration,
+      requestId
     };
     
     // 根据状态码选择日志级别

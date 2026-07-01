@@ -252,7 +252,7 @@ def test_publish_static_site_tool_posts_payload_and_returns_url(tmp_path: Path, 
         mode="acceptEdits",
         provider="deepseek",
         model_id="deepseek-v4-pro",
-        api_model="deepseek-chat",
+        api_model="deepseek-v4-pro",
         workspace=workspace,
         allowed_paths=(".",),
     )
