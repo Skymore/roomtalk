@@ -5,7 +5,7 @@ import { MessageItem, MessageUserAction, preloadMarkdownContent } from './Messag
 import { Message, Room, RoomPermissions, RoomRoleMember } from '../utils/types';
 import { readMemoryRoomMessageWindow } from '../utils/messageHistoryCache';
 import { useTranslation } from 'react-i18next';
-import { getRoomAIRequestSettings } from '../utils/aiRequestSettings';
+import { getRoomAIRequestSettingsForKind, type AIRequestRoomKind } from '../utils/aiRequestSettings';
 import { formatUsdCost } from '../utils/formatters';
 import { Button, Dropdown, DropdownItem, DropdownMenu, DropdownTrigger } from '@heroui/react';
 import { downloadTranscriptHtml, downloadTranscriptZip, type ExportMediaResolver } from '../utils/chatExport';
@@ -116,9 +116,10 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const currentRoomId = codeAgentRoom?.id;
   const workspaceRefreshKey = `${currentRoomId || ''}:${codeAgentRoom?.sandboxStatus || 'none'}:${codeAgentRoom?.sandboxUpdatedAt || ''}`;
   const canManageSenderActions = Boolean(roomPermissions?.canManageMembers || roomPermissions?.canManageAdmins || roomPermissions?.canTransferOwnership);
+  const aiRequestRoomKind: AIRequestRoomKind = presentation === 'code-agent' ? 'coco' : 'chat';
   const getAIRequestSettingsForRoom = useCallback(() => (
-    getRoomAIRequestSettings(roomId)
-  ), [roomId]);
+    getRoomAIRequestSettingsForKind(roomId, aiRequestRoomKind)
+  ), [aiRequestRoomKind, roomId]);
 
   const roleMemberByClientId = React.useMemo(() => {
     const map = new Map<string, RoomRoleMember>();
@@ -708,6 +709,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                         ? 'owner'
                         : roleMemberByClientId.get(message.clientId)?.role ?? null}
                       senderDisplayId={roleMemberByClientId.get(message.clientId)?.displayId}
+                      aiRequestRoomKind={aiRequestRoomKind}
                       onStartEdit={handleOpenEditModal}
                       onDeleteMessage={handleOpenDeleteModal}
                       onRefreshAI={handleRefreshAI}

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { getRoomAIRequestSettings } from './aiRequestSettings';
+import { getRoomAIRequestSettings, getRoomAIRequestSettingsForKind, selectRoomAIRequestSettings } from './aiRequestSettings';
 
 describe('AI request settings', () => {
   beforeEach(() => {
@@ -32,6 +32,38 @@ describe('AI request settings', () => {
       roleName: 'Assistant',
       model: 'deepseek-v4-pro',
       maxContextMessages: 100,
+    });
+  });
+
+  it('keeps ordinary role prompts for chat rooms and strips them for Coco rooms', () => {
+    const settings = {
+      systemPrompt: 'Use A2UI',
+      roleName: 'A2UI Demo',
+      model: 'deepseek-v4-pro',
+      maxContextMessages: 2,
+    };
+
+    expect(selectRoomAIRequestSettings(settings, 'chat')).toEqual(settings);
+    expect(selectRoomAIRequestSettings(settings, 'coco')).toEqual({
+      model: 'deepseek-v4-pro',
+      maxContextMessages: 2,
+    });
+  });
+
+  it('resolves Coco room request settings without ordinary role prompts', () => {
+    localStorage.setItem('aiRoles', JSON.stringify([
+      { id: 'default', name: 'Assistant', systemPrompt: 'You are helpful', color: 'secondary', icon: 'lucide:bot' },
+      { id: 'coder', name: 'Code Expert', systemPrompt: 'Review code', color: 'primary', icon: 'lucide:code' },
+    ]));
+    localStorage.setItem('roomtalk:ai-settings:coco-room', JSON.stringify({
+      selectedRoleId: 'coder',
+      selectedModel: 'deepseek-v4-pro',
+      maxContextMessages: 1,
+    }));
+
+    expect(getRoomAIRequestSettingsForKind('coco-room', 'coco')).toEqual({
+      model: 'deepseek-v4-pro',
+      maxContextMessages: 1,
     });
   });
 });

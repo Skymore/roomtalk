@@ -1,9 +1,8 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
-import { Readable } from 'stream';
 import express, { Express, Request, Response } from 'express';
 import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
-import { AIModelOption, AIModelPricing, AIModelProvider } from '../types';
+import { AIModelOption, AIModelPricing, AIModelProvider, AIUsage } from '../types';
 import { CocoRunnerMode } from './cocoRunnerProtocol';
 
 export interface CocoModelGatewayIssueInput {
@@ -34,7 +33,11 @@ export interface CocoModelGatewayConsumeResult {
   ok: boolean;
   error?: 'request_limit_exceeded' | 'budget_exceeded';
   requestCount?: number;
-  estimatedCostUsd?: number;
+  actualCostUsd?: number;
+}
+
+export interface CocoModelGatewayRecordUsageResult {
+  actualCostUsd: number;
 }
 
 export interface CocoModelGatewayTokenStateStore {
@@ -43,8 +46,12 @@ export interface CocoModelGatewayTokenStateStore {
     ttlSeconds: number;
     maxRequests: number;
     budgetUsd: number;
-    estimatedCostUsd: number;
   }): Promise<CocoModelGatewayConsumeResult>;
+  recordActualCost(input: {
+    tokenId: string;
+    ttlSeconds: number;
+    costUsd: number;
+  }): Promise<CocoModelGatewayRecordUsageResult>;
 }
 
 export interface CocoModelGatewayOptions {
@@ -109,6 +116,10 @@ const isRecord = (value: unknown): value is Record<string, unknown> => (
   typeof value === 'object' && value !== null && !Array.isArray(value)
 );
 
+const readFiniteNumber = (value: unknown) => (
+  typeof value === 'number' && Number.isFinite(value) ? value : undefined
+);
+
 const parsePositiveInteger = (value: number | undefined, fallback: number) => (
   Number.isFinite(value) && value && value > 0 ? Math.floor(value) : fallback
 );
@@ -137,46 +148,22 @@ const readBearerToken = (req: Request) => {
   return anthropicApiKey?.trim() || '';
 };
 
-const estimateTextTokens = (value: string) => {
-  if (!value.trim()) return 0;
-  return Math.max(1, Math.ceil(value.length / 4));
-};
-
-const estimateInputTokens = (body: unknown) => {
-  if (!isRecord(body)) {
-    return estimateTextTokens(stableJson(body) || '');
-  }
-  const messages = Array.isArray(body.messages) ? body.messages : [];
-  if (!messages.length) {
-    return estimateTextTokens(stableJson(body) || '');
-  }
-  return estimateTextTokens(stableJson(messages) || '');
-};
-
-const estimateOutputTokens = (body: unknown) => {
-  if (!isRecord(body)) {
-    return 4096;
-  }
-  const maxTokens = body.max_tokens ?? body.max_completion_tokens;
-  return typeof maxTokens === 'number' && Number.isFinite(maxTokens) && maxTokens > 0
-    ? Math.ceil(maxTokens)
-    : 4096;
-};
-
-export const estimateCocoModelGatewayRequestCostUsd = (body: unknown, pricing?: AIModelPricing) => {
+const calculateReportedUsageCostUsd = (usage: AIUsage, pricing?: AIModelPricing) => {
   if (!pricing) {
     return 0;
   }
-  const inputTokens = estimateInputTokens(body);
-  const outputTokens = estimateOutputTokens(body);
+  const cachedPromptTokens = Math.min(usage.cachedPromptTokens || 0, usage.promptTokens);
+  const uncachedPromptTokens = Math.max(usage.promptTokens - cachedPromptTokens, 0);
+  const cachedInputPerMillion = pricing.cachedInputPerMillion ?? pricing.inputPerMillion;
   return (
-    (inputTokens / 1_000_000) * pricing.inputPerMillion +
-    (outputTokens / 1_000_000) * pricing.outputPerMillion
+    (uncachedPromptTokens / 1_000_000) * pricing.inputPerMillion +
+    (cachedPromptTokens / 1_000_000) * cachedInputPerMillion +
+    (usage.completionTokens / 1_000_000) * pricing.outputPerMillion
   );
 };
 
 export class InMemoryCocoModelGatewayTokenStateStore implements CocoModelGatewayTokenStateStore {
-  private readonly usage = new Map<string, { requestCount: number; estimatedCostUsd: number; expiresAtMs: number }>();
+  private readonly usage = new Map<string, { requestCount: number; actualCostUsd: number; expiresAtMs: number }>();
 
   constructor(private readonly nowMs: () => number = () => Date.now()) {}
 
@@ -185,29 +172,46 @@ export class InMemoryCocoModelGatewayTokenStateStore implements CocoModelGateway
     ttlSeconds: number;
     maxRequests: number;
     budgetUsd: number;
-    estimatedCostUsd: number;
   }): Promise<CocoModelGatewayConsumeResult> {
     const now = this.nowMs();
     const existing = this.usage.get(input.tokenId);
     const current = existing && existing.expiresAtMs > now
       ? existing
-      : { requestCount: 0, estimatedCostUsd: 0, expiresAtMs: now + input.ttlSeconds * 1000 };
+      : { requestCount: 0, actualCostUsd: 0, expiresAtMs: now + input.ttlSeconds * 1000 };
 
     const requestCount = current.requestCount + 1;
-    const estimatedCostUsd = current.estimatedCostUsd + input.estimatedCostUsd;
-    if (requestCount > input.maxRequests) {
-      return { ok: false, error: 'request_limit_exceeded', requestCount: current.requestCount, estimatedCostUsd: current.estimatedCostUsd };
+    if (current.actualCostUsd > input.budgetUsd) {
+      return { ok: false, error: 'budget_exceeded', requestCount: current.requestCount, actualCostUsd: current.actualCostUsd };
     }
-    if (estimatedCostUsd > input.budgetUsd) {
-      return { ok: false, error: 'budget_exceeded', requestCount: current.requestCount, estimatedCostUsd: current.estimatedCostUsd };
+    if (requestCount > input.maxRequests) {
+      return { ok: false, error: 'request_limit_exceeded', requestCount: current.requestCount, actualCostUsd: current.actualCostUsd };
     }
 
     this.usage.set(input.tokenId, {
       requestCount,
-      estimatedCostUsd,
+      actualCostUsd: current.actualCostUsd,
       expiresAtMs: current.expiresAtMs,
     });
-    return { ok: true, requestCount, estimatedCostUsd };
+    return { ok: true, requestCount, actualCostUsd: current.actualCostUsd };
+  }
+
+  async recordActualCost(input: {
+    tokenId: string;
+    ttlSeconds: number;
+    costUsd: number;
+  }): Promise<CocoModelGatewayRecordUsageResult> {
+    const now = this.nowMs();
+    const existing = this.usage.get(input.tokenId);
+    const current = existing && existing.expiresAtMs > now
+      ? existing
+      : { requestCount: 0, actualCostUsd: 0, expiresAtMs: now + input.ttlSeconds * 1000 };
+    const actualCostUsd = current.actualCostUsd + Math.max(input.costUsd, 0);
+    this.usage.set(input.tokenId, {
+      requestCount: current.requestCount,
+      actualCostUsd,
+      expiresAtMs: current.expiresAtMs,
+    });
+    return { actualCostUsd };
   }
 }
 
@@ -219,50 +223,233 @@ export class RedisCocoModelGatewayTokenStateStore implements CocoModelGatewayTok
     ttlSeconds: number;
     maxRequests: number;
     budgetUsd: number;
-    estimatedCostUsd: number;
   }): Promise<CocoModelGatewayConsumeResult> {
     const key = `coco:model-gateway-token:${input.tokenId}`;
-    const estimatedMicroUsd = Math.ceil(input.estimatedCostUsd * 1_000_000);
     const budgetMicroUsd = Math.floor(input.budgetUsd * 1_000_000);
     const result = await (this.redisClient as any).eval(REDIS_CONSUME_REQUEST_SCRIPT, {
       keys: [key],
       arguments: [
         String(input.maxRequests),
         String(budgetMicroUsd),
-        String(estimatedMicroUsd),
         String(input.ttlSeconds),
       ],
     }) as [number, string, number, number];
     const [ok, reason, requestCount, costMicroUsd] = result.map((item, index) => index === 1 ? String(item) : Number(item)) as [number, string, number, number];
     if (ok === 1) {
-      return { ok: true, requestCount, estimatedCostUsd: costMicroUsd / 1_000_000 };
+      return { ok: true, requestCount, actualCostUsd: costMicroUsd / 1_000_000 };
     }
     return {
       ok: false,
       error: reason === 'request_limit_exceeded' ? 'request_limit_exceeded' : 'budget_exceeded',
       requestCount,
-      estimatedCostUsd: costMicroUsd / 1_000_000,
+      actualCostUsd: costMicroUsd / 1_000_000,
     };
+  }
+
+  async recordActualCost(input: {
+    tokenId: string;
+    ttlSeconds: number;
+    costUsd: number;
+  }): Promise<CocoModelGatewayRecordUsageResult> {
+    const key = `coco:model-gateway-token:${input.tokenId}`;
+    const costMicroUsd = Math.ceil(Math.max(input.costUsd, 0) * 1_000_000);
+    const result = await (this.redisClient as any).eval(REDIS_RECORD_ACTUAL_COST_SCRIPT, {
+      keys: [key],
+      arguments: [
+        String(costMicroUsd),
+        String(input.ttlSeconds),
+      ],
+    }) as number;
+    return { actualCostUsd: Number(result) / 1_000_000 };
   }
 }
 
 const REDIS_CONSUME_REQUEST_SCRIPT = `
 local request_count = tonumber(redis.call('HGET', KEYS[1], 'requestCount') or '0')
-local estimated_micro_usd = tonumber(redis.call('HGET', KEYS[1], 'estimatedMicroUsd') or '0')
+local actual_micro_usd = tonumber(redis.call('HGET', KEYS[1], 'actualMicroUsd') or '0')
 local max_requests = tonumber(ARGV[1])
 local budget_micro_usd = tonumber(ARGV[2])
-local next_estimated_micro_usd = estimated_micro_usd + tonumber(ARGV[3])
 local next_request_count = request_count + 1
+if actual_micro_usd > budget_micro_usd then
+  return {0, 'budget_exceeded', request_count, actual_micro_usd}
+end
 if next_request_count > max_requests then
-  return {0, 'request_limit_exceeded', request_count, estimated_micro_usd}
+  return {0, 'request_limit_exceeded', request_count, actual_micro_usd}
 end
-if next_estimated_micro_usd > budget_micro_usd then
-  return {0, 'budget_exceeded', request_count, estimated_micro_usd}
-end
-redis.call('HSET', KEYS[1], 'requestCount', next_request_count, 'estimatedMicroUsd', next_estimated_micro_usd)
-redis.call('EXPIRE', KEYS[1], tonumber(ARGV[4]))
-return {1, 'ok', next_request_count, next_estimated_micro_usd}
+redis.call('HSET', KEYS[1], 'requestCount', next_request_count, 'actualMicroUsd', actual_micro_usd)
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
+return {1, 'ok', next_request_count, actual_micro_usd}
 `;
+
+const REDIS_RECORD_ACTUAL_COST_SCRIPT = `
+local actual_micro_usd = tonumber(redis.call('HGET', KEYS[1], 'actualMicroUsd') or '0') + tonumber(ARGV[1])
+redis.call('HSET', KEYS[1], 'actualMicroUsd', actual_micro_usd)
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
+return actual_micro_usd
+`;
+
+interface ReportedUsageAccumulator {
+  anthropic: {
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadInputTokens?: number;
+    cacheCreationInputTokens?: number;
+  };
+  openAICompatible: {
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+    cachedPromptTokens?: number;
+  };
+}
+
+interface SseUsageParserState {
+  buffer: string;
+}
+
+const createReportedUsageAccumulator = (): ReportedUsageAccumulator => ({
+  anthropic: {},
+  openAICompatible: {},
+});
+
+const mergeMaxNumber = (current: number | undefined, next: unknown) => {
+  const value = readFiniteNumber(next);
+  if (value === undefined) {
+    return current;
+  }
+  return Math.max(current ?? 0, value);
+};
+
+const addReportedUsageFragment = (accumulator: ReportedUsageAccumulator, usage: unknown) => {
+  if (!isRecord(usage)) {
+    return;
+  }
+
+  const inputTokens = readFiniteNumber(usage.input_tokens);
+  const outputTokens = readFiniteNumber(usage.output_tokens);
+  const cacheReadInputTokens = readFiniteNumber(usage.cache_read_input_tokens);
+  const cacheCreationInputTokens = readFiniteNumber(usage.cache_creation_input_tokens);
+  if (
+    inputTokens !== undefined ||
+    outputTokens !== undefined ||
+    cacheReadInputTokens !== undefined ||
+    cacheCreationInputTokens !== undefined
+  ) {
+    accumulator.anthropic.inputTokens = mergeMaxNumber(accumulator.anthropic.inputTokens, inputTokens);
+    accumulator.anthropic.outputTokens = mergeMaxNumber(accumulator.anthropic.outputTokens, outputTokens);
+    accumulator.anthropic.cacheReadInputTokens = mergeMaxNumber(accumulator.anthropic.cacheReadInputTokens, cacheReadInputTokens);
+    accumulator.anthropic.cacheCreationInputTokens = mergeMaxNumber(accumulator.anthropic.cacheCreationInputTokens, cacheCreationInputTokens);
+  }
+
+  const promptTokens = readFiniteNumber(usage.prompt_tokens);
+  const completionTokens = readFiniteNumber(usage.completion_tokens);
+  const totalTokens = readFiniteNumber(usage.total_tokens);
+  const promptTokenDetails = isRecord(usage.prompt_tokens_details) ? usage.prompt_tokens_details : undefined;
+  const cachedPromptTokens = readFiniteNumber(usage.prompt_cache_hit_tokens)
+    ?? readFiniteNumber(promptTokenDetails?.cached_tokens);
+  if (
+    promptTokens !== undefined ||
+    completionTokens !== undefined ||
+    totalTokens !== undefined ||
+    cachedPromptTokens !== undefined
+  ) {
+    accumulator.openAICompatible.promptTokens = mergeMaxNumber(accumulator.openAICompatible.promptTokens, promptTokens);
+    accumulator.openAICompatible.completionTokens = mergeMaxNumber(accumulator.openAICompatible.completionTokens, completionTokens);
+    accumulator.openAICompatible.totalTokens = mergeMaxNumber(accumulator.openAICompatible.totalTokens, totalTokens);
+    accumulator.openAICompatible.cachedPromptTokens = mergeMaxNumber(accumulator.openAICompatible.cachedPromptTokens, cachedPromptTokens);
+  }
+};
+
+const addReportedUsageFromPayload = (accumulator: ReportedUsageAccumulator, payload: unknown) => {
+  if (!isRecord(payload)) {
+    return;
+  }
+  addReportedUsageFragment(accumulator, payload.usage);
+  if (isRecord(payload.message)) {
+    addReportedUsageFragment(accumulator, payload.message.usage);
+  }
+};
+
+const readUsageFromAccumulator = (accumulator: ReportedUsageAccumulator): AIUsage | undefined => {
+  const openAIUsage = accumulator.openAICompatible;
+  if (openAIUsage.promptTokens !== undefined && openAIUsage.completionTokens !== undefined) {
+    const totalTokens = openAIUsage.totalTokens ?? openAIUsage.promptTokens + openAIUsage.completionTokens;
+    const cachedPromptTokens = openAIUsage.cachedPromptTokens;
+    const cacheHitRate = cachedPromptTokens !== undefined && openAIUsage.promptTokens > 0
+      ? Math.min(Math.max(cachedPromptTokens / openAIUsage.promptTokens, 0), 1)
+      : undefined;
+    return {
+      promptTokens: openAIUsage.promptTokens,
+      completionTokens: openAIUsage.completionTokens,
+      totalTokens,
+      cachedPromptTokens,
+      cacheHitRate,
+      source: 'reported',
+    };
+  }
+
+  const anthropicUsage = accumulator.anthropic;
+  if (anthropicUsage.inputTokens !== undefined && anthropicUsage.outputTokens !== undefined) {
+    const cacheReadInputTokens = anthropicUsage.cacheReadInputTokens ?? 0;
+    const cacheCreationInputTokens = anthropicUsage.cacheCreationInputTokens ?? 0;
+    const promptTokens = anthropicUsage.inputTokens + cacheReadInputTokens + cacheCreationInputTokens;
+    const cacheHitRate = promptTokens > 0
+      ? Math.min(Math.max(cacheReadInputTokens / promptTokens, 0), 1)
+      : undefined;
+    return {
+      promptTokens,
+      completionTokens: anthropicUsage.outputTokens,
+      totalTokens: promptTokens + anthropicUsage.outputTokens,
+      cachedPromptTokens: cacheReadInputTokens,
+      cacheHitRate,
+      source: 'reported',
+    };
+  }
+
+  return undefined;
+};
+
+const appendSseTextToUsage = (
+  accumulator: ReportedUsageAccumulator,
+  state: SseUsageParserState,
+  text: string
+) => {
+  state.buffer += text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+  let eventBoundary = state.buffer.indexOf('\n\n');
+  while (eventBoundary >= 0) {
+    const rawEvent = state.buffer.slice(0, eventBoundary);
+    state.buffer = state.buffer.slice(eventBoundary + 2);
+    eventBoundary = state.buffer.indexOf('\n\n');
+
+    const data = rawEvent
+      .split('\n')
+      .filter(line => line.startsWith('data:'))
+      .map(line => line.slice(5).trimStart())
+      .join('\n')
+      .trim();
+    if (!data || data === '[DONE]') {
+      continue;
+    }
+
+    try {
+      addReportedUsageFromPayload(accumulator, JSON.parse(data));
+    } catch {
+      // Ignore malformed SSE payloads; the upstream response is still proxied unchanged.
+    }
+  }
+};
+
+const addJsonTextUsage = (accumulator: ReportedUsageAccumulator, text: string) => {
+  if (!text.trim()) {
+    return;
+  }
+  try {
+    addReportedUsageFromPayload(accumulator, JSON.parse(text));
+  } catch {
+    // Ignore non-JSON bodies.
+  }
+};
 
 export class CocoModelGateway {
   readonly publicBaseUrl: string;
@@ -322,18 +509,24 @@ export class CocoModelGateway {
       return res.status(validation.status).json({ error: validation.error });
     }
 
-    const estimatedCostUsd = route.countsBudget
-      ? estimateCocoModelGatewayRequestCostUsd(req.body, claims.pricing)
-      : 0;
     const consumeResult = await this.stateStore.consumeRequest({
       tokenId: claims.jti,
-      ttlSeconds: Math.max(1, claims.exp - Math.floor(this.nowMs() / 1000)),
+      ttlSeconds: this.ttlSecondsForClaims(claims),
       maxRequests: claims.maxRequests,
       budgetUsd: claims.budgetUsd,
-      estimatedCostUsd,
     });
     if (!consumeResult.ok) {
       const status = consumeResult.error === 'budget_exceeded' ? 402 : 429;
+      this.options.logger?.warn('Coco model gateway request rejected', {
+        reason: consumeResult.error,
+        provider: claims.provider,
+        modelId: claims.modelId,
+        roomId: claims.roomId,
+        turnId: claims.turnId,
+        requestCount: consumeResult.requestCount,
+        actualCostUsd: consumeResult.actualCostUsd,
+        budgetUsd: claims.budgetUsd,
+      });
       return res.status(status).json({ error: consumeResult.error });
     }
 
@@ -359,11 +552,19 @@ export class CocoModelGateway {
           res.setHeader(key, value);
         }
       });
+      const contentType = upstream.headers.get('content-type') || '';
       if (!upstream.body) {
         const text = await upstream.text().catch(() => '');
+        await this.recordUsageFromText(text, contentType, route.countsBudget, claims, upstream.status);
         return res.end(text);
       }
-      return Readable.fromWeb(upstream.body as any).pipe(res);
+      if (contentType.toLowerCase().includes('text/event-stream')) {
+        return this.proxySseResponse(upstream.body as ReadableStream<Uint8Array>, res, route.countsBudget, claims, upstream.status);
+      }
+
+      const text = await upstream.text();
+      await this.recordUsageFromText(text, contentType, route.countsBudget, claims, upstream.status);
+      return res.end(text);
     } catch (error) {
       this.options.logger?.error('Coco model gateway upstream request failed', {
         error,
@@ -373,6 +574,136 @@ export class CocoModelGateway {
         path: routePath,
       });
       return res.status(502).json({ error: 'Model gateway upstream request failed' });
+    }
+  }
+
+  private ttlSecondsForClaims(claims: CocoModelGatewayTokenClaims) {
+    return Math.max(1, claims.exp - Math.floor(this.nowMs() / 1000));
+  }
+
+  private async proxySseResponse(
+    body: ReadableStream<Uint8Array>,
+    res: Response,
+    countsBudget: boolean,
+    claims: CocoModelGatewayTokenClaims,
+    statusCode: number
+  ) {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    const accumulator = createReportedUsageAccumulator();
+    const sseState: SseUsageParserState = { buffer: '' };
+
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) {
+          break;
+        }
+        if (!value) {
+          continue;
+        }
+        if (countsBudget) {
+          appendSseTextToUsage(accumulator, sseState, decoder.decode(value, { stream: true }));
+        }
+        res.write(Buffer.from(value));
+      }
+
+      if (countsBudget) {
+        appendSseTextToUsage(accumulator, sseState, decoder.decode());
+        if (sseState.buffer.trim()) {
+          appendSseTextToUsage(accumulator, sseState, '\n\n');
+        }
+        await this.recordUsageAccumulator(accumulator, claims, statusCode);
+      }
+      return res.end();
+    } catch (error) {
+      this.options.logger?.error('Coco model gateway streaming response failed', {
+        error,
+        provider: claims.provider,
+        roomId: claims.roomId,
+        turnId: claims.turnId,
+      });
+      if (res.headersSent) {
+        return res.destroy(error instanceof Error ? error : undefined);
+      }
+      return res.status(502).json({ error: 'Model gateway streaming response failed' });
+    }
+  }
+
+  private async recordUsageFromText(
+    text: string,
+    contentType: string,
+    countsBudget: boolean,
+    claims: CocoModelGatewayTokenClaims,
+    statusCode: number
+  ) {
+    if (!countsBudget) {
+      return;
+    }
+
+    const accumulator = createReportedUsageAccumulator();
+    if (contentType.toLowerCase().includes('text/event-stream')) {
+      const sseState: SseUsageParserState = { buffer: '' };
+      appendSseTextToUsage(accumulator, sseState, text);
+      if (sseState.buffer.trim()) {
+        appendSseTextToUsage(accumulator, sseState, '\n\n');
+      }
+    } else {
+      addJsonTextUsage(accumulator, text);
+    }
+    await this.recordUsageAccumulator(accumulator, claims, statusCode);
+  }
+
+  private async recordUsageAccumulator(
+    accumulator: ReportedUsageAccumulator,
+    claims: CocoModelGatewayTokenClaims,
+    statusCode: number
+  ) {
+    const usage = readUsageFromAccumulator(accumulator);
+    if (!usage) {
+      if (statusCode < 400) {
+        this.options.logger?.warn('Coco model gateway response did not include reported usage', {
+          provider: claims.provider,
+          modelId: claims.modelId,
+          roomId: claims.roomId,
+          turnId: claims.turnId,
+        });
+      }
+      return;
+    }
+
+    const costUsd = calculateReportedUsageCostUsd(usage, claims.pricing);
+    if (!(costUsd > 0)) {
+      return;
+    }
+
+    try {
+      const result = await this.stateStore.recordActualCost({
+        tokenId: claims.jti,
+        ttlSeconds: this.ttlSecondsForClaims(claims),
+        costUsd,
+      });
+      if (result.actualCostUsd > claims.budgetUsd) {
+        this.options.logger?.warn('Coco model gateway actual budget exceeded', {
+          provider: claims.provider,
+          modelId: claims.modelId,
+          roomId: claims.roomId,
+          turnId: claims.turnId,
+          requestCostUsd: costUsd,
+          actualCostUsd: result.actualCostUsd,
+          budgetUsd: claims.budgetUsd,
+          promptTokens: usage.promptTokens,
+          completionTokens: usage.completionTokens,
+          cachedPromptTokens: usage.cachedPromptTokens,
+        });
+      }
+    } catch (error) {
+      this.options.logger?.error('Coco model gateway failed to record reported usage', {
+        error,
+        provider: claims.provider,
+        roomId: claims.roomId,
+        turnId: claims.turnId,
+      });
     }
   }
 

@@ -52,6 +52,7 @@ import {
   appendReviewCommentsToPrompt,
   type ReviewCommentContext,
 } from '../utils/codeAgentReviewComments';
+import { selectRoomAIRequestSettings } from '../utils/aiRequestSettings';
 
 interface MessageInputProps {
   roomId: string;
@@ -514,16 +515,17 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       const promptForSend = isCodeAgentRoom
         ? appendReviewCommentsToPrompt(prompt, reviewComments)
         : prompt;
+      const aiRequestSettings = selectRoomAIRequestSettings({
+        systemPrompt: selectedRole.systemPrompt,
+        roleName: selectedRole.name,
+        model: selectedAIModel || defaultAIModel,
+        maxContextMessages: aiContextMessageLimit,
+      }, isCodeAgentRoom ? 'coco' : 'chat');
 
       if (!promptForSend) {
         await requestAIResponse({
           roomId,
-          ...(!isCodeAgentRoom ? {
-            systemPrompt: selectedRole.systemPrompt,
-            roleName: selectedRole.name,
-          } : {}),
-          model: selectedAIModel || defaultAIModel,
-          maxContextMessages: aiContextMessageLimit,
+          ...aiRequestSettings,
         });
         return;
       }
@@ -541,12 +543,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         avatar,
         replyToMessageId: replyToMessage?.id,
         clientMessageId,
-        ...(!isCodeAgentRoom ? {
-          systemPrompt: selectedRole.systemPrompt,
-          roleName: selectedRole.name,
-        } : {}),
-        model: selectedAIModel || defaultAIModel,
-        maxContextMessages: aiContextMessageLimit,
+        ...aiRequestSettings,
       });
 
       onOptimisticMessageSaved?.(clientMessageId, userMessage);
@@ -557,7 +554,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         setErrorMessage(aiError);
       }
       onCancelReply();
-      console.log('Sent AI request (without prompt) with role and model:', selectedRole.name, selectedAIModel || defaultAIModel);
+      console.log('Sent AI request (without prompt) with model:', selectedAIModel || defaultAIModel);
 
     } catch (error) {
       console.error('Error sending AI request:', error);

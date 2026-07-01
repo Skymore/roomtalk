@@ -432,7 +432,12 @@ describe('AI socket handlers', () => {
     });
 
     let response: unknown;
-    await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id, codeAgentMode: 'plan' }, (ack: unknown) => {
+    await socket.invoke('ask_ai', {
+      roomId: 'room-1',
+      model: selectedModel.id,
+      roleName: 'Assistant',
+      codeAgentMode: 'plan',
+    }, (ack: unknown) => {
       response = ack;
     });
 
@@ -480,11 +485,11 @@ describe('AI socket handlers', () => {
       roomId: 'room-1',
       clientId: 'client-1',
       selectedModel,
-      roleName: undefined,
       maxContextMessages: undefined,
       clientOrigin: 'https://room.ruit.me',
       serverOrigin: 'https://room.ruit.me',
     });
+    assert.equal(Object.prototype.hasOwnProperty.call(calls[0][0], 'roleName'), false);
     assert.deepEqual(response, { success: true, messageId: 'coco-ai-1' });
     assert.equal(store.upsertedMessages.length, 0);
     assert.equal(store.assistantRuns.length, 0);
@@ -1074,6 +1079,7 @@ describe('AI socket handlers', () => {
       messageId: 'message-edited',
       newContent: 'edited prompt',
       model: selectedModel.id,
+      roleName: 'Assistant',
       codeAgentMode: 'acceptEdits',
     }, (ack: unknown) => {
       response = ack;
@@ -1086,11 +1092,11 @@ describe('AI socket handlers', () => {
       roomId: 'room-1',
       clientId: 'client-1',
       selectedModel,
-      roleName: undefined,
       maxContextMessages: undefined,
       clientOrigin: 'https://room.ruit.me',
       serverOrigin: 'https://room.ruit.me',
     });
+    assert.equal(Object.prototype.hasOwnProperty.call(calls[0][0], 'roleName'), false);
     const editedEvent = io.roomEmits.find(event => event.event === 'message_edited');
     assert.equal((editedEvent?.args[0] as Message).content, 'edited prompt');
     const historyEvent = io.roomEmits.find(event => event.event === 'message_history');
@@ -1174,6 +1180,7 @@ describe('AI socket handlers', () => {
       content: 'fresh prompt',
       clientMessageId: 'client-message-1',
       model: selectedModel.id,
+      roleName: 'Assistant',
       codeAgentMode: 'acceptEdits',
     }, (ack: { success: boolean; userMessage?: Message; aiMessageId?: string; aiStarted?: boolean; aiError?: string }) => {
       response = ack;
@@ -1186,11 +1193,11 @@ describe('AI socket handlers', () => {
       roomId: 'room-1',
       clientId: 'client-1',
       selectedModel,
-      roleName: undefined,
       maxContextMessages: undefined,
       clientOrigin: 'https://room.ruit.me',
       serverOrigin: 'https://room.ruit.me',
     });
+    assert.equal(Object.prototype.hasOwnProperty.call(calls[0][0], 'roleName'), false);
     assert.equal(response?.success, true);
     assert.equal(response?.userMessage, store.appendedMessages[0]);
     assert.equal(response?.aiMessageId, 'coco-ai-2');
@@ -1333,6 +1340,31 @@ describe('AI socket handlers', () => {
     assert.doesNotMatch(followUp!.content, /followUp/);
     assert.ok(io.roomEmits.some(event => event.event === 'new_message'));
     assert.ok(io.roomEmits.some(event => event.event === 'ai_stream_end'), 'expected a new AI turn to complete');
+  });
+
+  it('does not route Coco room A2UI follow-up actions to ordinary chat AI', async () => {
+    const { io, socket, store } = createHarness({
+      currentRoom: room({ type: 'coco' }),
+      messages: [message(), a2uiOwningMessage()],
+    });
+
+    await socket.invoke('a2ui_action', {
+      roomId: 'room-1',
+      messageId: 'ai-msg-1',
+      roleName: 'Assistant',
+      action: {
+        name: 'submit_choice',
+        surfaceId: 's',
+        sourceComponentId: 'cta',
+        timestamp: '2026-05-03T00:01:00.000Z',
+        context: { followUp: true, dataModel: { selectedNextStep: ['export'] } },
+      },
+    });
+
+    assert.equal(store.appendedMessages.length, 0);
+    assert.equal(store.upsertedMessages.length, 0);
+    assert.equal(store.assistantRuns.length, 0);
+    assert.ok(!io.roomEmits.some(event => event.event === 'ai_stream_end'));
   });
 
   it('uses client-provided role, model, and context settings for A2UI follow-up turns', async () => {

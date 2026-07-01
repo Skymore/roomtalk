@@ -178,7 +178,7 @@ describe('CocoModelGateway', () => {
     assert.equal(upstreamCalled, false);
   });
 
-  it('enforces per-turn request limits and estimated budgets', async () => {
+  it('enforces per-turn request limits and actual usage budgets', async () => {
     const gateway = new CocoModelGateway({
       publicBaseUrl: 'https://room.example/api/coco/model-gateway',
       tokenSecret: 'test-secret',
@@ -211,13 +211,23 @@ describe('CocoModelGateway', () => {
     await server.close();
     server = null;
 
+    let expensiveCalls = 0;
     const expensiveGateway = new CocoModelGateway({
       publicBaseUrl: 'https://room.example/api/coco/model-gateway',
       tokenSecret: 'test-secret',
       providerApiKeys: { deepseek: 'deepseek-provider-key' },
       turnBudgetUsd: 0.000001,
       nowMs: () => 1_800_000_000_000,
-      fetchFn: async () => new Response('{}'),
+      fetchFn: async () => {
+        expensiveCalls += 1;
+        return new Response(JSON.stringify({
+          id: 'completion-expensive',
+          usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 },
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
     });
     const budgetToken = expensiveGateway.issueTurnToken({
       roomId: 'room-1',
@@ -228,13 +238,167 @@ describe('CocoModelGateway', () => {
     });
     server = await createTestServer(expensiveGateway);
 
-    const budgetResponse = await fetch(`${server.baseUrl}/api/coco/model-gateway/v1/chat/completions`, {
+    const firstBudgetResponse = await fetch(`${server.baseUrl}/api/coco/model-gateway/v1/chat/completions`, {
       method: 'POST',
       headers: { authorization: `Bearer ${budgetToken}`, 'content-type': 'application/json' },
       body: JSON.stringify({ model: 'deepseek-chat', messages: [{ role: 'user', content: 'hello' }], max_tokens: 4096 }),
     });
+    const secondBudgetResponse = await fetch(`${server.baseUrl}/api/coco/model-gateway/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${budgetToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'deepseek-chat', messages: [{ role: 'user', content: 'hello again' }], max_tokens: 4096 }),
+    });
 
-    assert.equal(budgetResponse.status, 402);
+    assert.equal(firstBudgetResponse.status, 200);
+    assert.deepEqual(await firstBudgetResponse.json(), {
+      id: 'completion-expensive',
+      usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 },
+    });
+    assert.equal(secondBudgetResponse.status, 402);
+    assert.equal(expensiveCalls, 1);
+  });
+
+  it('does not charge Coco gateway budget without reported usage', async () => {
+    let calls = 0;
+    const gateway = new CocoModelGateway({
+      publicBaseUrl: 'https://room.example/api/coco/model-gateway',
+      tokenSecret: 'test-secret',
+      providerApiKeys: { deepseek: 'deepseek-provider-key' },
+      turnBudgetUsd: 0.000001,
+      nowMs: () => 1_800_000_000_000,
+      fetchFn: async () => {
+        calls += 1;
+        return new Response(JSON.stringify({ id: `completion-${calls}` }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+    const token = gateway.issueTurnToken({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-no-usage',
+      mode: 'plan',
+      model: deepseekModel,
+    });
+    server = await createTestServer(gateway);
+
+    const first = await fetch(`${server.baseUrl}/api/coco/model-gateway/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'deepseek-chat', messages: [{ role: 'user', content: 'hello' }], max_tokens: 4096 }),
+    });
+    const second = await fetch(`${server.baseUrl}/api/coco/model-gateway/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'deepseek-chat', messages: [{ role: 'user', content: 'hello again' }], max_tokens: 4096 }),
+    });
+
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+    assert.equal(calls, 2);
+  });
+
+  it('records streaming usage before enforcing the next gateway budget check', async () => {
+    let calls = 0;
+    const encoder = new TextEncoder();
+    const gateway = new CocoModelGateway({
+      publicBaseUrl: 'https://room.example/api/coco/model-gateway',
+      tokenSecret: 'test-secret',
+      providerApiKeys: { deepseek: 'deepseek-provider-key' },
+      turnBudgetUsd: 0.000001,
+      nowMs: () => 1_800_000_000_000,
+      fetchFn: async () => {
+        calls += 1;
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"hello"}}]}\n\n'));
+            controller.enqueue(encoder.encode('data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}}\n\n'));
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+            controller.close();
+          },
+        }), {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      },
+    });
+    const token = gateway.issueTurnToken({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-stream',
+      mode: 'plan',
+      model: deepseekModel,
+    });
+    server = await createTestServer(gateway);
+
+    const first = await fetch(`${server.baseUrl}/api/coco/model-gateway/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'deepseek-chat', messages: [{ role: 'user', content: 'hello' }], stream: true }),
+    });
+    const firstText = await first.text();
+    const second = await fetch(`${server.baseUrl}/api/coco/model-gateway/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'deepseek-chat', messages: [{ role: 'user', content: 'hello again' }], stream: true }),
+    });
+
+    assert.equal(first.status, 200);
+    assert.match(firstText, /"usage"/);
+    assert.equal(second.status, 402);
+    assert.equal(calls, 1);
+  });
+
+  it('records Anthropic streaming usage split across SSE events', async () => {
+    let calls = 0;
+    const encoder = new TextEncoder();
+    const gateway = new CocoModelGateway({
+      publicBaseUrl: 'https://room.example/api/coco/model-gateway',
+      tokenSecret: 'test-secret',
+      providerApiKeys: { anthropic: 'anthropic-provider-key' },
+      turnBudgetUsd: 0.000001,
+      nowMs: () => 1_800_000_000_000,
+      fetchFn: async () => {
+        calls += 1;
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode('event: message_start\n'));
+            controller.enqueue(encoder.encode('data: {"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":0,"cache_read_input_tokens":5}}}\n\n'));
+            controller.enqueue(encoder.encode('event: message_delta\n'));
+            controller.enqueue(encoder.encode('data: {"type":"message_delta","usage":{"output_tokens":1}}\n\n'));
+            controller.close();
+          },
+        }), {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      },
+    });
+    const token = gateway.issueTurnToken({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-anthropic-stream',
+      mode: 'plan',
+      model: anthropicModel,
+    });
+    server = await createTestServer(gateway);
+
+    const first = await fetch(`${server.baseUrl}/api/coco/model-gateway/v1/messages`, {
+      method: 'POST',
+      headers: { 'x-api-key': token, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'hello' }], max_tokens: 64, stream: true }),
+    });
+    await first.text();
+    const second = await fetch(`${server.baseUrl}/api/coco/model-gateway/v1/messages`, {
+      method: 'POST',
+      headers: { 'x-api-key': token, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'hello again' }], max_tokens: 64, stream: true }),
+    });
+
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 402);
+    assert.equal(calls, 1);
   });
 
   it('proxies Anthropic requests through x-api-key with scoped sandbox token auth', async () => {

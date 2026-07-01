@@ -41,7 +41,6 @@ export interface CocoTurnInput {
   roomId: string;
   clientId: string;
   selectedModel: AIModelOption;
-  roleName?: string;
   maxContextMessages?: number;
   requestedMode?: CocoRunnerMode;
   requestedModeSource?: 'originalTurn';
@@ -128,7 +127,7 @@ export class CocoSessionService {
         ...createAIPlaceholderMessage({
           id: aiMessageId,
           roomId: input.roomId,
-          roleName: input.roleName || 'Coco',
+          roleName: 'Coco',
           model: input.selectedModel,
           now: this.now(),
         }),

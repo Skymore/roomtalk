@@ -21,8 +21,9 @@ import {
 } from '../services/messageDomain';
 import { notifyRoomMessageBestEffort } from '../services/pushNotifications';
 import { withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
-import { CocoRunnerMode } from '../services/cocoRunnerProtocol';
-import { A2UIActionEvent, Message } from '../types';
+import type { CocoRunnerMode } from '../services/cocoRunnerProtocol';
+import type { CocoTurnInput } from '../services/cocoSessionService';
+import type { A2UIActionEvent, AIModelOption, Message } from '../types';
 import { hasRoomAccess } from './roomAccess';
 import { authorizeRoomAction, getRoomMessage } from './roomAuthorization';
 import { SocketConnectionContext, SocketHandlerDeps } from './types';
@@ -75,6 +76,29 @@ const getCocoTurnOriginInput = (socket: SocketConnectionContext['socket']) => {
     ...(serverOrigin ? { serverOrigin } : {}),
   };
 };
+
+const buildCocoTurnInput = ({
+  roomId,
+  clientId,
+  selectedModel,
+  maxContextMessages,
+  socket,
+  requestedMode,
+}: {
+  roomId: string;
+  clientId: string;
+  selectedModel: AIModelOption;
+  maxContextMessages?: number;
+  socket: SocketConnectionContext['socket'];
+  requestedMode?: CocoRunnerMode;
+}): CocoTurnInput => ({
+  roomId,
+  clientId,
+  selectedModel,
+  maxContextMessages,
+  ...getCocoTurnOriginInput(socket),
+  ...(requestedMode ? { requestedMode, requestedModeSource: 'originalTurn' as const } : {}),
+});
 
 const isPrematureCloseError = (error: unknown): boolean => {
   const message = error instanceof Error ? error.message : String(error);
@@ -869,7 +893,7 @@ export function registerAIHandlers({
     });
   };
 
-  const startAIResponse = async (
+  const startChatAIResponse = async (
     data: AIRequestData,
     clientId: string,
     callback?: AIAckCallback,
@@ -1832,15 +1856,14 @@ export function registerAIHandlers({
         }
       }
 
-      await cocoSessionService.startTurn({
+      await cocoSessionService.startTurn(buildCocoTurnInput({
         roomId: data.roomId,
         clientId,
         selectedModel: normalizeAIModel(data.model),
-        roleName: data.roleName,
         maxContextMessages: data.maxContextMessages,
-        ...getCocoTurnOriginInput(socket),
-        ...(requestedMode ? { requestedMode, requestedModeSource: 'originalTurn' as const } : {}),
-      }, callback);
+        socket,
+        requestedMode,
+      }), callback);
       return;
     }
 
@@ -1855,7 +1878,7 @@ export function registerAIHandlers({
       return;
     }
 
-    await startAIResponse(data, clientId, callback);
+    await startChatAIResponse(data, clientId, callback);
   });
 
   socket.on('send_message_and_ask_ai', async (
@@ -1937,14 +1960,13 @@ export function registerAIHandlers({
         return;
       }
 
-      await cocoSessionService.startTurn({
+      await cocoSessionService.startTurn(buildCocoTurnInput({
         roomId: data.roomId,
         clientId,
         selectedModel: normalizeAIModel(data.model),
-        roleName: data.roleName,
         maxContextMessages: data.maxContextMessages,
-        ...getCocoTurnOriginInput(socket),
-      }, (response) => {
+        socket,
+      }), (response) => {
         if (response.success && response.messageId) {
           callback?.({
             success: true,
@@ -1970,7 +1992,7 @@ export function registerAIHandlers({
       ? latestHistory
       : [...latestHistory, userMessage];
 
-    await startAIResponse(
+    await startChatAIResponse(
       {
         roomId: data.roomId,
         systemPrompt: data.systemPrompt,
@@ -2062,19 +2084,18 @@ export function registerAIHandlers({
     await emitLatestHistoryPage(data.roomId);
 
     if (isCocoRoom) {
-      await cocoSessionService!.startTurn({
+      await cocoSessionService!.startTurn(buildCocoTurnInput({
         roomId: data.roomId,
         clientId,
         selectedModel: normalizeAIModel(data.model),
-        roleName: data.roleName,
         maxContextMessages: data.maxContextMessages,
-        ...getCocoTurnOriginInput(socket),
-        ...(requestedMode ? { requestedMode, requestedModeSource: 'originalTurn' as const } : {}),
-      }, callback);
+        socket,
+        requestedMode,
+      }), callback);
       return;
     }
 
-    await startAIResponse({
+    await startChatAIResponse({
       roomId: data.roomId,
       systemPrompt: data.systemPrompt,
       roleName: data.roleName,
@@ -2112,6 +2133,11 @@ export function registerAIHandlers({
       return;
     }
 
+    const room = await store.getRoomById(roomId);
+    if (room?.type === 'coco') {
+      return;
+    }
+
     const owningMessage = await getRoomMessage(store, roomId, messageId);
     if (!owningMessage || owningMessage.uiPayload?.format !== 'a2ui') {
       return;
@@ -2140,7 +2166,7 @@ export function registerAIHandlers({
       : [...latestHistory, followUpMessage];
 
     const followUpRequest = payload as { systemPrompt?: unknown; roleName?: unknown; model?: unknown; maxContextMessages?: unknown };
-    await startAIResponse(
+    await startChatAIResponse(
       {
         roomId,
         systemPrompt: typeof followUpRequest.systemPrompt === 'string' ? followUpRequest.systemPrompt : undefined,

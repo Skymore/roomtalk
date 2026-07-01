@@ -21,7 +21,7 @@ import { MediaViewerModal } from "./MediaViewerModal";
 import { getVideoPreviewUrl } from "../utils/videoPreview";
 import { buildMediaFilename, saveUrlAsFile } from "../utils/mediaDownload";
 import { A2UIRenderer } from "./A2UIRenderer";
-import { getRoomAIRequestSettings } from "../utils/aiRequestSettings";
+import { getRoomAIRequestSettingsForKind, type AIRequestRoomKind } from "../utils/aiRequestSettings";
 import { CocoToolMessage } from './CocoToolMessage';
 import { getSenderColorTheme } from "../utils/userProfile";
 import { parseReviewCommentMessageSegments } from "../utils/codeAgentReviewComments";
@@ -33,6 +33,7 @@ interface MessageItemProps {
   roomPermissions: RoomPermissions | null;
   senderRole?: RoomMemberRole | null;
   senderDisplayId?: string;
+  aiRequestRoomKind?: AIRequestRoomKind;
   onStartEdit: (messageId: string) => void;
   onDeleteMessage: (messageId: string) => void;
   onRefreshAI?: (messageId: string, content: string) => void;
@@ -255,6 +256,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   roomPermissions,
   senderRole,
   senderDisplayId,
+  aiRequestRoomKind = 'chat',
   onStartEdit,
   onDeleteMessage,
   onRefreshAI,
@@ -342,11 +344,11 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       roomId: message.roomId,
       messageId: message.id,
       action,
-      ...getRoomAIRequestSettings(message.roomId),
+      ...getRoomAIRequestSettingsForKind(message.roomId, aiRequestRoomKind),
     }).catch((error) => {
       console.error("Failed to send A2UI action:", error);
     });
-  }, [message.id, message.roomId]);
+  }, [aiRequestRoomKind, message.id, message.roomId]);
 
   const [copyStatus, setCopyStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [liked, setLiked] = useState(false);

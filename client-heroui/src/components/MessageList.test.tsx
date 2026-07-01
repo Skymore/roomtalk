@@ -61,11 +61,13 @@ vi.mock('@iconify/react', () => ({
 vi.mock('./MessageItem', () => ({
   MessageItem: ({
     message,
+    aiRequestRoomKind,
     onRefreshAI,
     onStartEdit,
     onOpenWorkspaceFile,
   }: {
     message: Message;
+    aiRequestRoomKind?: string;
     onRefreshAI?: (messageId: string) => void;
     onStartEdit?: (messageId: string) => void;
     onOpenWorkspaceFile?: (path: string) => void;
@@ -76,6 +78,7 @@ vi.mock('./MessageItem', () => ({
       data-client-message-id={message.clientMessageId || ''}
       data-delivery-status={message.deliveryStatus || ''}
       data-delivery-error={message.deliveryError || ''}
+      data-ai-request-room-kind={aiRequestRoomKind || ''}
     >
       {message.content}
       <button type="button" onClick={() => onRefreshAI?.(message.id)}>retry-{message.id}</button>
@@ -539,7 +542,7 @@ describe('MessageList optimistic messages', () => {
     });
   });
 
-  it('passes the current code-agent mode when retrying in a code-agent room', async () => {
+  it('uses Coco AI request settings when retrying in a code-agent room', async () => {
     window.localStorage.setItem('aiRoles', JSON.stringify([
       { id: 'default', name: 'Assistant', systemPrompt: 'You are helpful', color: 'secondary', icon: 'lucide:bot' },
       { id: 'coder', name: 'Code Expert', systemPrompt: 'Review code', color: 'primary', icon: 'lucide:code' },
@@ -569,14 +572,13 @@ describe('MessageList optimistic messages', () => {
       });
     });
 
-    fireEvent.click(await screen.findByText('retry-ai-1'));
+    expect((await screen.findByTestId('message-item')).dataset.aiRequestRoomKind).toBe('coco');
+    fireEvent.click(screen.getByText('retry-ai-1'));
 
     await waitFor(() => {
       expect(requestAIResponseMock).toHaveBeenCalledWith({
         roomId: 'room-1',
         retryForMessageId: 'ai-1',
-        systemPrompt: 'Review code',
-        roleName: 'Code Expert',
         model: 'deepseek-v4-pro',
         maxContextMessages: 1,
       });
@@ -621,7 +623,7 @@ describe('MessageList optimistic messages', () => {
     });
   });
 
-  it('passes the current code-agent mode when editing and asking in a code-agent room', async () => {
+  it('uses Coco AI request settings when editing and asking in a code-agent room', async () => {
     window.localStorage.setItem('aiRoles', JSON.stringify([
       { id: 'default', name: 'Assistant', systemPrompt: 'You are helpful', color: 'secondary', icon: 'lucide:bot' },
       { id: 'a2ui-demo', name: 'A2UI Demo', systemPrompt: 'Use A2UI', color: 'warning', icon: 'lucide:layout-dashboard' },
@@ -659,12 +661,11 @@ describe('MessageList optimistic messages', () => {
         roomId: 'room-1',
         messageId: 'm-edit',
         newContent: 'edited content',
-        systemPrompt: 'Use A2UI',
-        roleName: 'A2UI Demo',
         model: 'deepseek-v4-pro',
         maxContextMessages: 2,
       });
     });
+    expect(screen.getByTestId('message-item').dataset.aiRequestRoomKind).toBe('coco');
   });
 
   it('does not force the room back to the bottom after the user scrolls away', () => {

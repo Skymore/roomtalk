@@ -501,6 +501,73 @@ describe('MessageItem replies', () => {
     });
   });
 
+  it('omits chat role settings from Coco A2UI actions', async () => {
+    localStorage.setItem('aiRoles', JSON.stringify([
+      {
+        id: 'default',
+        name: 'Assistant',
+        systemPrompt: 'You are helpful',
+        color: 'secondary',
+        icon: 'lucide:bot',
+      },
+      {
+        id: 'a2ui-demo',
+        name: 'A2UI Demo',
+        systemPrompt: 'Use A2UI',
+        color: 'warning',
+        icon: 'lucide:layout-dashboard',
+      },
+    ]));
+    localStorage.setItem('roomtalk:ai-settings:room-1', JSON.stringify({
+      selectedRoleId: 'a2ui-demo',
+      selectedModel: 'deepseek-v4-pro',
+      maxContextMessages: 1,
+    }));
+    sendA2UIActionMock.mockResolvedValue(undefined);
+
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'ai-message',
+          messageType: 'ai',
+          uiPayload: {
+            format: 'a2ui',
+            version: 'v0.9',
+            messages: [],
+          },
+        }}
+        aiRequestRoomKind="coco"
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByText('a2ui-action'));
+
+    await waitFor(() => {
+      expect(sendA2UIActionMock).toHaveBeenCalledTimes(1);
+    });
+    const payload = sendA2UIActionMock.mock.calls[0][0];
+    expect(payload).toMatchObject({
+      roomId: 'room-1',
+      messageId: 'ai-message',
+      action: {
+        name: 'refresh',
+        surfaceId: 'surface-1',
+        sourceComponentId: 'refresh_btn',
+        timestamp: '2026-05-03T10:00:00.000Z',
+        context: { followUp: true },
+      },
+      model: 'deepseek-v4-pro',
+      maxContextMessages: 1,
+    });
+    expect(payload).not.toHaveProperty('systemPrompt');
+    expect(payload).not.toHaveProperty('roleName');
+  });
+
   it('loads signed URLs for asset-backed images without using legacy base64 content', async () => {
     getMediaDownloadUrlMock.mockResolvedValue({
       url: 'https://signed.example/rooms/room-1/asset-1.webp',
