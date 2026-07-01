@@ -22,6 +22,7 @@ import {
   getCodeAgentPanelResizeBounds,
 } from '../utils/codeAgentPanelLayout';
 import { parseWorkspaceFileOpenTarget } from '../utils/workspaceFileOpenTarget';
+import type { ReviewCommentContext } from '../utils/codeAgentReviewComments';
 
 interface CodeAgentRoomViewProps {
   currentRoom: Room;
@@ -116,6 +117,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   const [isFileManagerCollapsed, setIsFileManagerCollapsed] = React.useState(readStoredFileManagerCollapsed);
   const [fileManagerWidth, setFileManagerWidth] = React.useState(readStoredFileManagerWidth);
   const [workspaceFileOpenRequest, setWorkspaceFileOpenRequest] = React.useState<WorkspaceFileOpenRequest | null>(null);
+  const [reviewComments, setReviewComments] = React.useState<ReviewCommentContext[]>([]);
   const fileManagerWidthRef = React.useRef(fileManagerWidth);
   const workspaceFileOpenRequestIdRef = React.useRef(0);
   const fileManagerResizeCleanupRef = React.useRef<(() => void) | null>(null);
@@ -133,7 +135,23 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
     setReplyToMessage(null);
     setShowScrollButton(false);
     setIsMobileFileManagerOpen(false);
+    setReviewComments([]);
   }, [currentRoom.id]);
+
+  const handleAddReviewComment = React.useCallback((comment: ReviewCommentContext) => {
+    setReviewComments((current) => {
+      const withoutSameComment = current.filter((entry) => entry.id !== comment.id);
+      return [...withoutSameComment, comment];
+    });
+  }, []);
+
+  const handleRemoveReviewComment = React.useCallback((commentId: string) => {
+    setReviewComments((current) => current.filter((entry) => entry.id !== commentId));
+  }, []);
+
+  const handleClearReviewComments = React.useCallback(() => {
+    setReviewComments([]);
+  }, []);
 
   React.useEffect(() => {
     fileManagerWidthRef.current = fileManagerWidth;
@@ -358,6 +376,9 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       openFileRequest={workspaceFileOpenRequest}
       revealLine={workspaceFileOpenRequest?.line ?? null}
       revealRequestId={workspaceFileOpenRequest?.requestId ?? 0}
+      reviewComments={reviewComments}
+      onAddReviewComment={handleAddReviewComment}
+      onRemoveReviewComment={handleRemoveReviewComment}
     />
   );
 
@@ -387,6 +408,9 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
             currentRoom={currentRoom}
             codeAgentMode={selectedMode}
             onOpenWorkspaceFile={handleOpenWorkspaceFile}
+            reviewComments={reviewComments}
+            onAddReviewComment={handleAddReviewComment}
+            onRemoveReviewComment={handleRemoveReviewComment}
             onReply={setReplyToMessage}
             roomPermissions={roomPermissions}
             bottomInsetPx={composerHeight + 12}
@@ -449,6 +473,9 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
               codeAgentMode={selectedMode}
               codeAgentMaxMode={maxMode}
               onCodeAgentModeChange={handleCodeAgentModeChange}
+              reviewComments={reviewComments}
+              onRemoveReviewComment={handleRemoveReviewComment}
+              onClearReviewComments={handleClearReviewComments}
             />
           </div>
         </div>

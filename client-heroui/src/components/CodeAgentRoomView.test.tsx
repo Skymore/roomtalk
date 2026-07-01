@@ -207,7 +207,7 @@ describe('CodeAgentRoomView', () => {
 
     const desktopFileBrowser = screen.getByTestId('file-browser');
     const layout = desktopFileBrowser.closest('[data-code-agent-workspace-layout="true"]') as HTMLDivElement;
-    expect(layout.style.getPropertyValue('--code-agent-chat-min-width')).toBe('480px');
+    expect(layout.style.getPropertyValue('--code-agent-chat-min-width')).toBe('360px');
     expect(layout.className).toContain('lg:grid-cols-[minmax(var(--code-agent-chat-min-width),1fr)_var(--code-agent-files-width)]');
     expect(desktopFileBrowser.parentElement?.classList.contains('flex')).toBe(true);
     expect(desktopFileBrowser.parentElement?.classList.contains('min-h-0')).toBe(true);
@@ -242,16 +242,18 @@ describe('CodeAgentRoomView', () => {
     });
 
     dispatchPointer(resizeHandle, 'pointerdown', { pointerId: 4, clientX: 1200, buttons: 1 });
+    dispatchPointer(resizeHandle, 'pointerleave', { pointerId: 4, clientX: 1190, buttons: 1 });
     dispatchPointer(window, 'pointermove', { pointerId: 4, clientX: 0, buttons: 1 });
     dispatchPointer(window, 'pointerup', { pointerId: 4, clientX: 0, buttons: 0 });
+    dispatchPointer(window, 'pointermove', { pointerId: 4, clientX: 900, buttons: 1 });
 
-    expect(layout.style.getPropertyValue('--code-agent-files-width')).toBe('1120px');
-    expect(localStorage.getItem('roomtalk.codeWorkspace.fileManagerWidth')).toBe('1120');
+    expect(layout.style.getPropertyValue('--code-agent-files-width')).toBe('1240px');
+    expect(localStorage.getItem('roomtalk.codeWorkspace.fileManagerWidth')).toBe('1240');
     expect(document.body.style.userSelect).toBe('');
     expect(document.body.style.cursor).toBe('');
   });
 
-  it('lets the workspace panel grow to the T3-style viewport fraction cap while preserving the chat pane', () => {
+  it('lets the workspace panel grow to the chat-preserving cap', () => {
     renderCodeAgentRoom(cocoRoom);
 
     const resizeHandle = screen.getByLabelText('codeAgentResizeWorkspaceFiles');
@@ -272,11 +274,11 @@ describe('CodeAgentRoomView', () => {
     dispatchPointer(window, 'pointermove', { pointerId: 6, clientX: -2000, buttons: 1 });
     dispatchPointer(window, 'pointerup', { pointerId: 6, clientX: -2000, buttons: 0 });
 
-    expect(layout.style.getPropertyValue('--code-agent-files-width')).toBe('1260px');
-    expect(localStorage.getItem('roomtalk.codeWorkspace.fileManagerWidth')).toBe('1260');
+    expect(layout.style.getPropertyValue('--code-agent-files-width')).toBe('1440px');
+    expect(localStorage.getItem('roomtalk.codeWorkspace.fileManagerWidth')).toBe('1440');
   });
 
-  it('lets the workspace panel grow up to the T3-style max width on wide layouts', () => {
+  it('lets the workspace panel use wide layouts while preserving the chat pane', () => {
     renderCodeAgentRoom(cocoRoom);
 
     const resizeHandle = screen.getByLabelText('codeAgentResizeWorkspaceFiles');
@@ -297,8 +299,8 @@ describe('CodeAgentRoomView', () => {
     dispatchPointer(window, 'pointermove', { pointerId: 5, clientX: -2000, buttons: 1 });
     dispatchPointer(window, 'pointerup', { pointerId: 5, clientX: -2000, buttons: 0 });
 
-    expect(layout.style.getPropertyValue('--code-agent-files-width')).toBe('1400px');
-    expect(localStorage.getItem('roomtalk.codeWorkspace.fileManagerWidth')).toBe('1400');
+    expect(layout.style.getPropertyValue('--code-agent-files-width')).toBe('2040px');
+    expect(localStorage.getItem('roomtalk.codeWorkspace.fileManagerWidth')).toBe('2040');
   });
 
   it('shrinks the workspace files panel when the code-agent layout gets narrower', () => {
@@ -334,8 +336,8 @@ describe('CodeAgentRoomView', () => {
       resizeCallbacks.forEach((callback) => callback([], {} as ResizeObserver));
     });
 
-    expect(layout.style.getPropertyValue('--code-agent-files-width')).toBe('220px');
-    expect(localStorage.getItem('roomtalk.codeWorkspace.fileManagerWidth')).toBe('220');
+    expect(layout.style.getPropertyValue('--code-agent-files-width')).toBe('340px');
+    expect(localStorage.getItem('roomtalk.codeWorkspace.fileManagerWidth')).toBe('340');
   });
 
   it('syncs the workspace files panel width after sidebar resizing compresses it', () => {
@@ -363,8 +365,8 @@ describe('CodeAgentRoomView', () => {
       ));
     });
 
-    expect(layout.style.getPropertyValue('--code-agent-files-width')).toBe('420px');
-    expect(localStorage.getItem('roomtalk.codeWorkspace.fileManagerWidth')).toBe('420');
+    expect(layout.style.getPropertyValue('--code-agent-files-width')).toBe('540px');
+    expect(localStorage.getItem('roomtalk.codeWorkspace.fileManagerWidth')).toBe('540');
   });
 
   it('opens the right file manager when a workspace diff file is selected', () => {

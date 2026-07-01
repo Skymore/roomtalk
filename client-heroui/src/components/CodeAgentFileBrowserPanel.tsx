@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { VirtualizedFile } from '@pierre/diffs';
+import { VirtualizedFile, type SelectedLineRange } from '@pierre/diffs';
 import { Editor } from '@pierre/diffs/editor';
 import { EditorProvider, File as DiffFile, type FileOptions, Virtualizer } from '@pierre/diffs/react';
 import { FileTree, useFileTree, useFileTreeSearch } from '@pierre/trees/react';
@@ -44,6 +44,20 @@ import {
 import type { RoomSandboxStatus } from '../utils/types';
 import { beginHorizontalResize } from '../utils/horizontalResize';
 import { normalizeWorkspaceOpenPath, parseWorkspaceFileOpenTarget } from '../utils/workspaceFileOpenTarget';
+import {
+  buildFileReviewComment,
+  type ReviewCommentContext,
+} from '../utils/codeAgentReviewComments';
+import { CodeAgentLocalCommentAnnotation } from './CodeAgentLocalCommentAnnotation';
+import {
+  type FileCommentAnnotationEntry,
+  type FileCommentAnnotationGroup,
+  type FileCommentLineAnnotation,
+  formatFileCommentRange,
+  nextFileCommentId,
+  normalizeFileCommentRange,
+  remapFileCommentAnnotations,
+} from './codeAgentFileCommentAnnotations';
 import { installFileEditorDismissal } from './codeAgentFileEditorDismissal';
 import { projectFileCacheKey } from './codeAgentFileContentRevision';
 import { FileSaveCoordinator } from './codeAgentFileSaveCoordinator';
@@ -61,6 +75,9 @@ interface CodeAgentFileBrowserPanelProps {
   openFileRequest?: { path: string; requestId: number } | null;
   revealLine?: number | null;
   revealRequestId?: number;
+  reviewComments?: readonly ReviewCommentContext[];
+  onAddReviewComment?: (comment: ReviewCommentContext) => void;
+  onRemoveReviewComment?: (commentId: string) => void;
 }
 
 type ProjectEntry = {
@@ -138,7 +155,7 @@ const FILE_LINK_REVEAL_UNSAFE_CSS = `
 const FILE_EXPLORER_STORAGE_KEY = 'roomtalk.codeWorkspace.fileExplorerOpen';
 const FILE_EXPLORER_WIDTH_STORAGE_KEY = 'roomtalk.codeWorkspace.fileExplorerWidth';
 const FILE_EXPLORER_MIN_WIDTH = 180;
-const FILE_PREVIEW_MIN_WIDTH = 180;
+const FILE_PREVIEW_MIN_WIDTH = 320;
 const FILE_EXPLORER_DEFAULT_WIDTH = 352;
 const WORKSPACE_TREE_REMOTE_SEARCH_LIMIT = 200;
 const WORKSPACE_TREE_REMOTE_SEARCH_DEBOUNCE_MS = 150;
@@ -647,9 +664,18 @@ interface EditableFileSurfaceProps {
   resolvedTheme: 'light' | 'dark';
   wordWrap: boolean;
   onPostRender: FilePostRender;
+  revealRequestId: number;
   onFileChange: React.Dispatch<React.SetStateAction<CodeWorkspaceFile | null>>;
   onSaveStateChange: (path: string, state: SaveState, error?: string | null) => void;
   onEntriesChanged: () => void;
+  reviewComments: readonly ReviewCommentContext[];
+  onAddReviewComment?: (comment: ReviewCommentContext) => void;
+  onRemoveReviewComment?: (commentId: string) => void;
+}
+
+interface FileSelectionOverride {
+  revealRequestId: number;
+  range: SelectedLineRange | null;
 }
 
 function EditableFileSurface({
@@ -658,13 +684,35 @@ function EditableFileSurface({
   resolvedTheme,
   wordWrap,
   onPostRender,
+  revealRequestId,
   onFileChange,
   onSaveStateChange,
   onEntriesChanged,
+  reviewComments,
+  onAddReviewComment,
+  onRemoveReviewComment,
 }: EditableFileSurfaceProps) {
   const filePath = file.path;
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const latestDraftContentsRef = useRef(file.content);
+  const [lineAnnotations, setLineAnnotations] = useState<FileCommentLineAnnotation[]>([]);
+  const [selectionOverride, setSelectionOverride] = useState<FileSelectionOverride | null>(null);
+  const fileReviewCommentIds = useMemo(() => new Set(
+    reviewComments
+      .filter((comment) => comment.sectionId === `file:${filePath}` && comment.filePath === filePath)
+      .map((comment) => comment.id),
+  ), [filePath, reviewComments]);
+  const fileReviewCommentIdsKey = useMemo(
+    () => [...fileReviewCommentIds].sort().join('\n'),
+    [fileReviewCommentIds],
+  );
+  const selectedRange = selectionOverride?.revealRequestId === revealRequestId ? selectionOverride.range : null;
+  const setSelectedRange = useCallback(
+    (range: SelectedLineRange | null) => {
+      setSelectionOverride({ revealRequestId, range });
+    },
+    [revealRequestId],
+  );
 
   useEffect(() => {
     onSaveStateChange(filePath, 'idle', null);
@@ -672,6 +720,15 @@ function EditableFileSurface({
     // Reset persistence state only when T3 mounts a different file surface.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filePath]);
+
+  useEffect(() => {
+    setLineAnnotations((current) => current.flatMap((annotation) => {
+      const entries = annotation.metadata.entries.filter((entry) => (
+        entry.kind === 'draft' || fileReviewCommentIds.has(entry.id)
+      ));
+      return entries.length > 0 ? [{ ...annotation, metadata: { entries } }] : [];
+    }));
+  }, [fileReviewCommentIds, fileReviewCommentIdsKey]);
 
   const setDraftFileContents = useCallback((contents: string) => {
     latestDraftContentsRef.current = contents;
@@ -709,11 +766,96 @@ function EditableFileSurface({
 
   useEffect(() => () => saveCoordinator.dispose(), [saveCoordinator]);
 
+  const removeAnnotationEntry = useCallback((entryId: string) => {
+    setSelectedRange(null);
+    onRemoveReviewComment?.(entryId);
+    setLineAnnotations((current) => current.flatMap((annotation) => {
+      const entries = annotation.metadata.entries.filter((entry) => entry.id !== entryId);
+      return entries.length > 0 ? [{ ...annotation, metadata: { entries } }] : [];
+    }));
+  }, [onRemoveReviewComment, setSelectedRange]);
+
+  const submitAnnotationEntry = useCallback((entryId: string, text: string) => {
+    setSelectedRange(null);
+    const entry = lineAnnotations
+      .flatMap((annotation) => annotation.metadata.entries)
+      .find((candidate) => candidate.id === entryId);
+    if (entry) {
+      onAddReviewComment?.(buildFileReviewComment({
+        id: entry.id,
+        filePath,
+        startLine: entry.startLine,
+        endLine: entry.endLine,
+        text,
+        contents: latestDraftContentsRef.current,
+      }));
+    }
+    setLineAnnotations((current) => current.map((annotation) => ({
+      ...annotation,
+      metadata: {
+        entries: annotation.metadata.entries.map((entry) => (
+          entry.id === entryId ? { ...entry, kind: 'comment', text } : entry
+        )),
+      },
+    })));
+  }, [filePath, lineAnnotations, onAddReviewComment, setSelectedRange]);
+
+  const beginComment = useCallback((range: SelectedLineRange) => {
+    const { startLine, endLine } = normalizeFileCommentRange(range);
+    const draftEntry: FileCommentAnnotationEntry = {
+      id: nextFileCommentId(),
+      kind: 'draft',
+      startLine,
+      endLine,
+      text: '',
+    };
+    setLineAnnotations((current) => {
+      const withoutDraft = current.flatMap((annotation) => {
+        const entries = annotation.metadata.entries.filter((entry) => entry.kind !== 'draft');
+        return entries.length > 0 ? [{ ...annotation, metadata: { entries } }] : [];
+      });
+      const existingIndex = withoutDraft.findIndex((annotation) => annotation.lineNumber === endLine);
+      if (existingIndex < 0) {
+        return [
+          ...withoutDraft,
+          {
+            lineNumber: endLine,
+            metadata: { entries: [draftEntry] },
+          },
+        ];
+      }
+      return withoutDraft.map((annotation, index) => (
+        index === existingIndex
+          ? {
+              ...annotation,
+              metadata: { entries: [...annotation.metadata.entries, draftEntry] },
+            }
+          : annotation
+      ));
+    });
+  }, []);
+
+  const hasOpenCommentForm = lineAnnotations.some((annotation) =>
+    annotation.metadata.entries.some((entry) => entry.kind === 'draft'),
+  );
+
+  const handleLineSelectionEnd = useCallback((range: SelectedLineRange | null) => {
+    setSelectedRange(range);
+    if (range) {
+      beginComment(range);
+    }
+  }, [beginComment, setSelectedRange]);
+
   const editor = useMemo(() => {
-    return new Editor({
-      onChange: (nextFile) => {
+    return new Editor<FileCommentAnnotationGroup>({
+      onChange: (nextFile, nextLineAnnotations) => {
         setDraftFileContents(nextFile.contents);
         saveCoordinator.change(nextFile.contents);
+        if (nextLineAnnotations) {
+          setLineAnnotations(remapFileCommentAnnotations(
+            nextLineAnnotations as FileCommentLineAnnotation[],
+          ));
+        }
       },
     });
   }, [saveCoordinator, setDraftFileContents]);
@@ -728,10 +870,10 @@ function EditableFileSurface({
     return installFileEditorDismissal({
       root,
       editor,
-      isBlocked: () => false,
-      onDismiss: () => undefined,
+      isBlocked: () => hasOpenCommentForm,
+      onDismiss: () => setSelectedRange(null),
     });
-  }, [editor]);
+  }, [editor, hasOpenCommentForm, setSelectedRange]);
 
   return (
     <EditorProvider editor={editor}>
@@ -743,7 +885,7 @@ function EditableFileSurface({
             intersectionObserverMargin: 1200,
           }}
         >
-          <DiffFile
+          <DiffFile<FileCommentAnnotationGroup>
             file={{
               name: file.path,
               contents: file.content,
@@ -751,12 +893,34 @@ function EditableFileSurface({
             }}
             options={{
               disableFileHeader: true,
+              enableGutterUtility: !hasOpenCommentForm,
+              enableLineSelection: !hasOpenCommentForm,
+              onGutterUtilityClick: setSelectedRange,
+              onLineSelectionChange: setSelectedRange,
+              onLineSelectionEnd: handleLineSelectionEnd,
               overflow: wordWrap ? 'wrap' : 'scroll',
               theme: resolvedTheme === 'dark' ? 'pierre-dark' : 'pierre-light',
               themeType: resolvedTheme,
               unsafeCSS: FILE_LINK_REVEAL_UNSAFE_CSS,
               onPostRender,
             }}
+            selectedLines={selectedRange}
+            lineAnnotations={lineAnnotations}
+            renderAnnotation={(annotation) => (
+              <div className="py-1">
+                {annotation.metadata.entries.map((entry) => (
+                  <CodeAgentLocalCommentAnnotation
+                    key={entry.id}
+                    kind={entry.kind}
+                    rangeLabel={formatFileCommentRange(entry.startLine, entry.endLine)}
+                    text={entry.text}
+                    onCancel={() => removeAnnotationEntry(entry.id)}
+                    onComment={(text) => submitAnnotationEntry(entry.id, text)}
+                    onDelete={() => removeAnnotationEntry(entry.id)}
+                  />
+                ))}
+              </div>
+            )}
             className="min-h-full"
             contentEditable
           />
@@ -1069,6 +1233,9 @@ interface FilePreviewSurfaceProps {
   onSaveStateChange: (path: string, state: SaveState, error?: string | null) => void;
   onEntriesChanged: () => void;
   onOpenWorkspaceFile: (path: string) => void;
+  reviewComments: readonly ReviewCommentContext[];
+  onAddReviewComment?: (comment: ReviewCommentContext) => void;
+  onRemoveReviewComment?: (commentId: string) => void;
 }
 
 function FilePreviewSurface({
@@ -1087,6 +1254,9 @@ function FilePreviewSurface({
   onSaveStateChange,
   onEntriesChanged,
   onOpenWorkspaceFile,
+  reviewComments,
+  onAddReviewComment,
+  onRemoveReviewComment,
 }: FilePreviewSurfaceProps) {
   const { t } = useTranslation();
   const onFilePostRender = useFileLineReveal(relativePath, revealLine, revealRequestId);
@@ -1197,9 +1367,13 @@ function FilePreviewSurface({
           resolvedTheme={resolvedTheme}
           wordWrap={wordWrap}
           onPostRender={onFilePostRender}
+          revealRequestId={revealRequestId}
           onFileChange={fileQuery.setData}
           onSaveStateChange={onSaveStateChange}
           onEntriesChanged={onEntriesChanged}
+          reviewComments={reviewComments}
+          onAddReviewComment={onAddReviewComment}
+          onRemoveReviewComment={onRemoveReviewComment}
         />
       )}
     </div>
@@ -1214,6 +1388,9 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   openFileRequest = null,
   revealLine = null,
   revealRequestId = 0,
+  reviewComments = [],
+  onAddReviewComment,
+  onRemoveReviewComment,
 }) => {
   const { t } = useTranslation();
   const resolvedTheme = useResolvedTheme();
@@ -1324,6 +1501,9 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const wordWrapLabel = wordWrap
     ? t('codeAgentDisableFileLineWrapping')
     : t('codeAgentEnableFileLineWrapping');
+  const previewToggleLabel = isMarkdown
+    ? (renderPreview ? t('codeAgentShowMarkdownSource') : t('codeAgentShowRenderedMarkdown'))
+    : (renderPreview ? t('codeAgentShowSource') : t('codeAgentShowPreview'));
   const refreshWorkspaceEntries = entriesQuery.refresh;
 
   useEffect(() => {
@@ -1739,7 +1919,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
             <button
               type="button"
               className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
-              aria-label={renderPreview ? t('codeAgentShowMarkdownSource') : t('codeAgentShowRenderedMarkdown')}
+              aria-label={previewToggleLabel}
               aria-pressed={renderPreview}
               onClick={togglePreviewView}
             >
@@ -1769,6 +1949,9 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
             onSaveStateChange={handleSaveStateChange}
             onEntriesChanged={refreshEntries}
             onOpenWorkspaceFile={handleOpenWorkspaceFileFromMarkdown}
+            reviewComments={reviewComments}
+            onAddReviewComment={onAddReviewComment}
+            onRemoveReviewComment={onRemoveReviewComment}
           />
         </div>
         {explorerOpen || relativePath === null ? (

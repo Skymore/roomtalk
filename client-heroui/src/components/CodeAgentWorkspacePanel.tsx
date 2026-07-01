@@ -21,6 +21,7 @@ import {
   CodeAgentWorkspaceDiffViewer,
   type CodeAgentWorkspaceDiffFileSummary,
 } from './CodeAgentWorkspaceDiffViewer';
+import type { ReviewCommentContext } from '../utils/codeAgentReviewComments';
 
 interface CodeAgentWorkspacePanelProps {
   room: Room;
@@ -32,6 +33,9 @@ interface CodeAgentWorkspacePanelProps {
   workspaceRefreshError?: string | null;
   onRefreshWorkspace?: () => void;
   onOpenWorkspaceFile?: (path: string) => void;
+  reviewComments?: readonly ReviewCommentContext[];
+  onAddReviewComment?: (comment: ReviewCommentContext) => void;
+  onRemoveReviewComment?: (commentId: string) => void;
 }
 
 const workspaceSurfaceClassName = 'rounded-xl border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]';
@@ -70,6 +74,9 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   workspaceRefreshError,
   onRefreshWorkspace,
   onOpenWorkspaceFile,
+  reviewComments = [],
+  onAddReviewComment,
+  onRemoveReviewComment,
 }) => {
   const { t } = useTranslation();
   const [isCollapsed, setIsCollapsed] = React.useState(false);
@@ -431,6 +438,9 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                     onFileSummariesChange={handleDiffFileSummariesChange}
                     selectedFilePath={selectedDiffFile?.path}
                     selectedFileRevealRequestId={selectedDiffFile?.requestId}
+                    reviewComments={reviewComments}
+                    onAddReviewComment={onAddReviewComment}
+                    onRemoveReviewComment={onRemoveReviewComment}
                   />
                 </div>
               )}

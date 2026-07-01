@@ -38,6 +38,12 @@ vi.mock('./MarkdownContent', () => ({
   MarkdownContent: ({ content }: { content: string }) => <span>{content}</span>,
 }));
 
+vi.mock('@pierre/diffs/react', () => ({
+  FileDiff: ({ fileDiff }: { fileDiff: { name?: string } }) => (
+    <div data-testid="file-diff">{fileDiff.name}</div>
+  ),
+}));
+
 vi.mock('./A2UIRenderer', () => ({
   A2UIRenderer: ({ onAction }: any) => (
     <button
@@ -174,6 +180,72 @@ describe('MessageItem replies', () => {
     expect(screen.getByText('Coco')).toBeTruthy();
     expect(screen.getByText('assistant response')).toBeTruthy();
     expect(screen.getByLabelText('retry')).toBeTruthy();
+  });
+
+  it('renders T3 review comment contexts as structured cards instead of raw tags', async () => {
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'review-comment-message',
+          content: [
+            'Please apply this.',
+            '<review_comment sectionId="turn:2" sectionTitle="Turn 2" filePath="src/app.ts" startIndex="1" endIndex="2" rangeLabel="+2 to +3">',
+            'Keep this configurable.',
+            '```diff',
+            '@@ -2,1 +2,2 @@',
+            '-old',
+            '+new',
+            '+extra',
+            '```',
+            '</review_comment>',
+          ].join('\n'),
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    const card = await screen.findByTestId('code-agent-review-comment-card');
+    expect(within(card).getAllByText('src/app.ts').length).toBeGreaterThanOrEqual(1);
+    expect(card.textContent).toContain('Turn 2 · +2 to +3');
+    expect(within(card).getByText('Keep this configurable.')).toBeTruthy();
+    expect(screen.getByTestId('file-diff').textContent).toBe('src/app.ts');
+    expect(document.body.textContent).not.toContain('<review_comment');
+    expect(document.body.textContent).not.toContain('</review_comment>');
+  });
+
+  it('renders file review comments as source code cards', async () => {
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'file-review-comment-message',
+          content: [
+            '<review_comment sectionId="file:docs/plan.md" sectionTitle="File comment" filePath="docs/plan.md" startIndex="0" endIndex="1" rangeLabel="L1 to L2">',
+            'Clarify this.',
+            '```md',
+            '# Plan',
+            '- Step one',
+            '```',
+            '</review_comment>',
+          ].join('\n'),
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    expect(await screen.findByTestId('code-agent-review-comment-card')).toBeTruthy();
+    expect(screen.getByText('docs/plan.md')).toBeTruthy();
+    expect(screen.getByText('File comment · L1 to L2')).toBeTruthy();
+    expect(screen.getByText(/```md/)).toBeTruthy();
+    expect(screen.queryByTestId('file-diff')).toBeNull();
+    expect(document.body.textContent).not.toContain('<review_comment');
   });
 
   it('keeps Coco tool events addressable as normal message items', () => {

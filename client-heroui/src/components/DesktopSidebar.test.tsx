@@ -151,12 +151,12 @@ describe('DesktopSidebar', () => {
     const sidebar = screen.getByLabelText('resizeSidebar').closest('aside') as HTMLElement;
     const workspaceLayout = document.querySelector<HTMLElement>('[data-code-agent-workspace-layout="true"]');
 
-    expect(sidebar.style.getPropertyValue('--desktop-sidebar-width')).toBe('760px');
-    expect(localStorage.getItem('roomtalk.desktopSidebar.width')).toBe('760');
-    expect(workspaceLayout?.style.getPropertyValue('--code-agent-files-width')).toBe('360px');
+    expect(sidebar.style.getPropertyValue('--desktop-sidebar-width')).toBe('480px');
+    expect(localStorage.getItem('roomtalk.desktopSidebar.width')).toBe('480');
+    expect(workspaceLayout?.style.getPropertyValue('--code-agent-files-width')).toBe('760px');
   });
 
-  it('resizes the left sidebar without consuming the code-agent chat pane', () => {
+  it('resizes the left sidebar by shrinking the file panel before consuming the code-agent chat pane', () => {
     Object.defineProperty(window, 'innerWidth', {
       configurable: true,
       value: 1600,
@@ -186,8 +186,8 @@ describe('DesktopSidebar', () => {
     dispatchPointer(window, 'pointermove', { pointerId: 9, clientX: 1600, buttons: 1 });
     dispatchPointer(window, 'pointerup', { pointerId: 9, clientX: 1600, buttons: 0 });
 
-    expect(sidebar.style.getPropertyValue('--desktop-sidebar-width')).toBe('760px');
-    expect(localStorage.getItem('roomtalk.desktopSidebar.width')).toBe('760');
+    expect(sidebar.style.getPropertyValue('--desktop-sidebar-width')).toBe('880px');
+    expect(localStorage.getItem('roomtalk.desktopSidebar.width')).toBe('880');
     expect(workspaceLayout?.style.getPropertyValue('--code-agent-files-width')).toBe('360px');
     expect(document.body.style.userSelect).toBe('');
     expect(document.body.style.cursor).toBe('');
@@ -221,6 +221,6 @@ describe('DesktopSidebar', () => {
 
     expect(sidebar.style.getPropertyValue('--desktop-sidebar-width')).toBe('240px');
     expect(localStorage.getItem('roomtalk.desktopSidebar.width')).toBe('240');
-    expect(workspaceLayout?.style.getPropertyValue('--code-agent-files-width')).toBe('304px');
+    expect(workspaceLayout?.style.getPropertyValue('--code-agent-files-width')).toBe('424px');
   });
 });

@@ -22,7 +22,7 @@ const fileTreeSelectionPathRef = vi.hoisted(() => ({ current: 'src/App.tsx' }));
 const fileTreeSearchStateRef = vi.hoisted(() => ({
   current: { isOpen: false, value: '' },
 }));
-const editorOptionsRef = vi.hoisted(() => ({ current: null as null | { onChange?: (file: { name: string; contents: string }) => void } }));
+const editorOptionsRef = vi.hoisted(() => ({ current: null as null | { onChange?: (file: { name: string; contents: string }, annotations?: unknown[]) => void } }));
 const nextEditorContentsRef = vi.hoisted(() => ({ current: 'export const changed = true;' }));
 const editorSetSelectionsMock = vi.hoisted(() => vi.fn());
 
@@ -39,7 +39,7 @@ function deferred<T>() {
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, params?: Record<string, string>) => (
-      params?.path ? `${key}:${params.path}` : key
+      params?.path ? `${key}:${params.path}` : params?.range ? `${key}:${params.range}` : key
     ),
   }),
 }));
@@ -132,7 +132,7 @@ vi.mock('@pierre/trees/react', () => ({
 
 vi.mock('@pierre/diffs/editor', () => ({
   Editor: class {
-    constructor(options: { onChange?: (file: { name: string; contents: string }) => void }) {
+    constructor(options: { onChange?: (file: { name: string; contents: string }, annotations?: unknown[]) => void }) {
       editorOptionsRef.current = options;
     }
 
@@ -150,18 +150,41 @@ vi.mock('@pierre/diffs/react', () => ({
   File: ({
     file,
     options,
+    lineAnnotations = [],
+    renderAnnotation,
   }: {
     file: { name: string; contents: string };
-    options: { overflow?: 'scroll' | 'wrap' };
+    options: {
+      overflow?: 'scroll' | 'wrap';
+      enableLineSelection?: boolean;
+      onLineSelectionEnd?: (range: { start: number; end: number }) => void;
+    };
+    lineAnnotations?: Array<{ lineNumber: number; metadata: { entries: Array<{ id: string; kind: 'draft' | 'comment'; startLine: number; endLine: number; text: string }> } }>;
+    renderAnnotation?: (annotation: { lineNumber: number; metadata: { entries: Array<{ id: string; kind: 'draft' | 'comment'; startLine: number; endLine: number; text: string }> } }) => React.ReactNode;
   }) => (
-    <button
-      type="button"
-      data-testid="diff-file"
-      data-overflow={options.overflow}
-      onClick={() => editorOptionsRef.current?.onChange?.({ ...file, contents: nextEditorContentsRef.current })}
-    >
-      {file.name}:{file.contents}
-    </button>
+    <div>
+      <button
+        type="button"
+        data-testid="diff-file"
+        data-overflow={options.overflow}
+        onClick={() => editorOptionsRef.current?.onChange?.({ ...file, contents: nextEditorContentsRef.current })}
+      >
+        {file.name}:{file.contents}
+      </button>
+      <button
+        type="button"
+        aria-label="select-lines"
+        disabled={!options.enableLineSelection}
+        onClick={() => options.onLineSelectionEnd?.({ start: 2, end: 4 })}
+      >
+        select lines
+      </button>
+      {lineAnnotations.map((annotation) => (
+        <div key={annotation.lineNumber} data-testid="line-annotation">
+          {renderAnnotation?.(annotation)}
+        </div>
+      ))}
+    </div>
   ),
 }));
 
@@ -225,7 +248,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     const explorerResizeHandle = screen.getByLabelText('codeAgentResizeFileExplorer');
     const explorer = explorerResizeHandle.closest('aside') as HTMLElement;
     expect(explorer.style.width).toBe('var(--workspace-file-explorer-width)');
-    expect(explorer.style.maxWidth).toBe('calc(100% - 180px)');
+    expect(explorer.style.maxWidth).toBe('calc(100% - 320px)');
     expect(explorer.className).not.toContain('50%');
     expect(explorerResizeHandle.className).toContain('w-6');
     expect(open).not.toHaveBeenCalled();
@@ -284,6 +307,44 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(iframe).toBeTruthy();
     expect(iframe?.getAttribute('src')).toBe('/api/coco/workspace-assets/token/report.html');
     expect(loadCodeWorkspaceFileMock).not.toHaveBeenCalled();
+  });
+
+  it('uses generic source and preview labels for non-markdown asset previews', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'output/report.html', name: 'report.html', type: 'file' },
+      ],
+      truncated: false,
+    });
+    createCodeWorkspaceAssetUrlMock.mockResolvedValue({
+      relativeUrl: '/api/coco/workspace-assets/token/report.html',
+      expiresAt: '2026-06-30T12:15:00.000Z',
+    });
+    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/coco/workspace-assets/token/report.html');
+    loadCodeWorkspaceFileMock.mockResolvedValue({
+      path: 'output/report.html',
+      content: '<!doctype html><main>Report</main>',
+      byteSize: 35,
+      truncated: false,
+      encoding: 'utf-8',
+    });
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+
+    expect(await screen.findByText('1 files')).toBeTruthy();
+    selectionHandlerRef.current?.(['output/report.html']);
+
+    await waitFor(() => {
+      expect(createCodeWorkspaceAssetUrlMock).toHaveBeenCalledWith('room-1', 'output/report.html', expect.any(Object));
+    });
+    expect(screen.getByLabelText('codeAgentShowSource')).toBeTruthy();
+    expect(screen.queryByLabelText('codeAgentShowMarkdownSource')).toBeNull();
+
+    fireEvent.click(screen.getByLabelText('codeAgentShowSource'));
+
+    expect(await screen.findByTestId('diff-file')).toBeTruthy();
+    expect(screen.getByLabelText('codeAgentShowPreview')).toBeTruthy();
+    expect(screen.queryByLabelText('codeAgentShowRenderedMarkdown')).toBeNull();
   });
 
   it('opens T3-style browser preview files in a new tab through the signed asset URL', async () => {
@@ -598,6 +659,51 @@ describe('CodeAgentFileBrowserPanel', () => {
     fireEvent.pointerDown(document.body);
 
     expect(editorSetSelectionsMock).toHaveBeenCalledWith([]);
+  });
+
+  it('supports T3-style local file comments from selected file lines', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockResolvedValue({
+      path: 'src/App.tsx',
+      content: 'line 1\nline 2\nline 3\nline 4',
+      byteSize: 27,
+      truncated: false,
+      encoding: 'utf-8',
+    });
+
+    const onAddReviewComment = vi.fn();
+    render(
+      <CodeAgentFileBrowserPanel
+        roomId="room-1"
+        projectName="Coco"
+        onAddReviewComment={onAddReviewComment}
+      />,
+    );
+    await screen.findByText('1 files');
+    fireEvent.click(screen.getByLabelText('Coco files'));
+    expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:line 1\nline 2\nline 3\nline 4');
+
+    fireEvent.click(screen.getByLabelText('select-lines'));
+
+    const input = await screen.findByLabelText('codeAgentCommentOnLines:L2 to L4');
+    fireEvent.change(input, { target: { value: 'Please adjust this range.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'codeAgentSubmitComment' }));
+
+    expect(screen.getByText('codeAgentLocalComment')).toBeTruthy();
+    expect(screen.getByText('L2 to L4')).toBeTruthy();
+    expect(screen.getByText('Please adjust this range.')).toBeTruthy();
+    expect(onAddReviewComment).toHaveBeenCalledWith(expect.objectContaining({
+      filePath: 'src/App.tsx',
+      rangeLabel: 'L2 to L4',
+      text: 'Please adjust this range.',
+      diff: 'line 2\nline 3\nline 4',
+      fenceLanguage: 'tsx',
+    }));
   });
 
   it('keeps the latest T3-style optimistic edit when an older save confirms late', async () => {

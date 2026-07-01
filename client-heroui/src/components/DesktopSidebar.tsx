@@ -119,14 +119,20 @@ const getDesktopShellWidth = (sidebar?: HTMLElement): number => {
   return shellRect && shellRect.width > 0 ? shellRect.width : window.innerWidth;
 };
 
-const getSidebarResizeBounds = (sidebar?: HTMLElement, reserveCodeAgentLayout = false) => {
+type CodeAgentFilePanelReserveMode = 'current' | 'minimum';
+
+const getSidebarResizeBounds = (
+  sidebar?: HTMLElement,
+  reserveCodeAgentLayout = false,
+  filePanelReserveMode: CodeAgentFilePanelReserveMode = 'current',
+) => {
   const shellWidth = getDesktopShellWidth(sidebar);
   let max = shellWidth - DESKTOP_MAIN_MIN_WIDTH;
   const workspaceLayout = document.querySelector<HTMLElement>('[data-code-agent-workspace-layout="true"]');
   if (workspaceLayout && isCodeAgentFilePanelVisible(workspaceLayout)) {
     const codeAgentMax = getSidebarMaxWidthForCodeAgentShell(
       shellWidth,
-      getCodeAgentFilePanelSidebarReserve(workspaceLayout, 'minimum'),
+      getCodeAgentFilePanelSidebarReserve(workspaceLayout, filePanelReserveMode),
       CODE_AGENT_CHAT_ABSOLUTE_MIN_WIDTH,
     );
     max = Math.min(max, codeAgentMax);
@@ -481,14 +487,14 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
     const sidebar = sidebarRef.current;
     const bounds = getSidebarResizeBounds(sidebar ?? undefined, reserveCodeAgentLayoutForSidebar);
     const nextWidth = Math.min(bounds.max, Math.max(bounds.min, Math.round(sidebarWidthRef.current)));
-    if (nextWidth === sidebarWidthRef.current) {
-      return;
-    }
+    const sidebarWidthChanged = nextWidth !== sidebarWidthRef.current;
 
-    sidebarWidthRef.current = nextWidth;
-    sidebar?.style.setProperty('--desktop-sidebar-width', `${nextWidth}px`);
-    setSidebarWidth(nextWidth);
-    persistSidebarWidth(nextWidth);
+    if (sidebarWidthChanged) {
+      sidebarWidthRef.current = nextWidth;
+      sidebar?.style.setProperty('--desktop-sidebar-width', `${nextWidth}px`);
+      setSidebarWidth(nextWidth);
+      persistSidebarWidth(nextWidth);
+    }
 
     if (sidebar) {
       const syncedFilePanel = clampCodeAgentFilePanelDuringSidebarResize(sidebar, nextWidth);
@@ -532,7 +538,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
       initialWidth: startWidth,
       direction: 1,
       captureTarget: event.currentTarget,
-      getBounds: () => getSidebarResizeBounds(sidebar, reserveCodeAgentLayoutForSidebar),
+      getBounds: () => getSidebarResizeBounds(sidebar, reserveCodeAgentLayoutForSidebar, 'minimum'),
       onResize: (width) => {
         sidebar.style.setProperty('--desktop-sidebar-width', `${width}px`);
         clampCodeAgentFilePanelDuringSidebarResize(sidebar, width);

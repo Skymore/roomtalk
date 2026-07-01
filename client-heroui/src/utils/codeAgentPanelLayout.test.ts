@@ -11,32 +11,32 @@ describe('getCodeAgentPanelResizeBounds', () => {
   it('preserves the absolute chat width on wide layouts', () => {
     expect(getCodeAgentPanelResizeBounds(2024)).toEqual({
       min: 360,
-      max: 1400,
-      chatMin: 480,
+      max: 1664,
+      chatMin: 360,
     });
   });
 
-  it('matches T3-style max width caps on very wide layouts', () => {
+  it('uses the available wide layout while preserving the chat pane', () => {
     expect(getCodeAgentPanelResizeBounds(3440)).toEqual({
       min: 360,
-      max: 1400,
-      chatMin: 480,
+      max: 3080,
+      chatMin: 360,
     });
   });
 
-  it('uses T3-style viewport fraction caps before the absolute max', () => {
+  it('avoids viewport fraction caps before the chat-preserving cap', () => {
     expect(getCodeAgentPanelResizeBounds(1800)).toEqual({
       min: 360,
-      max: 1260,
-      chatMin: 480,
+      max: 1440,
+      chatMin: 360,
     });
   });
 
   it('preserves an absolute chat width before shrinking the file panel on narrower layouts', () => {
     expect(getCodeAgentPanelResizeBounds(744)).toEqual({
-      min: 264,
-      max: 264,
-      chatMin: 480,
+      min: 360,
+      max: 384,
+      chatMin: 360,
     });
   });
 
@@ -46,17 +46,17 @@ describe('getCodeAgentPanelResizeBounds', () => {
   });
 
   it('keeps left sidebar resizing from consuming the code-agent chat pane', () => {
-    expect(getSidebarMaxWidthForCodeAgentLayout(320, 1280, 960)).toBe(160);
-    expect(getSidebarMaxWidthForCodeAgentLayout(320, 1280, 760)).toBe(360);
+    expect(getSidebarMaxWidthForCodeAgentLayout(320, 1280, 960)).toBe(280);
+    expect(getSidebarMaxWidthForCodeAgentLayout(320, 1280, 760)).toBe(480);
   });
 
   it('bases code-agent sidebar resizing on the full shell width and reserved right panel width', () => {
-    expect(getSidebarMaxWidthForCodeAgentShell(1280, 360)).toBe(440);
-    expect(getSidebarMaxWidthForCodeAgentShell(1280, 48)).toBe(752);
+    expect(getSidebarMaxWidthForCodeAgentShell(1280, 360)).toBe(560);
+    expect(getSidebarMaxWidthForCodeAgentShell(1280, 48)).toBe(872);
   });
 
   it('shrinks the right file panel during left sidebar resizing before chat can disappear', () => {
-    expect(clampCodeAgentFilePanelWidthForSidebarResize(760, 1600, 860)).toBe(260);
-    expect(clampCodeAgentFilePanelWidthForSidebarResize(760, 1600, 520)).toBe(600);
+    expect(clampCodeAgentFilePanelWidthForSidebarResize(760, 1600, 860)).toBe(380);
+    expect(clampCodeAgentFilePanelWidthForSidebarResize(760, 1600, 520)).toBe(720);
   });
 });

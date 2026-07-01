@@ -24,6 +24,7 @@ import {
 import { useRoomMessageEvents } from '../hooks/useRoomMessageEvents';
 import { CodeAgentMode } from '../utils/codeAgent';
 import { CodeAgentWorkspaceSnapshot, loadCodeAgentWorkspaceSnapshot } from '../utils/cocoWorkspace';
+import type { ReviewCommentContext } from '../utils/codeAgentReviewComments';
 
 // Import your new modals
 import { DeleteConfirmationModal } from './DeleteConfirmationModal';
@@ -47,6 +48,9 @@ interface MessageListProps {
   currentRoom?: Room;
   codeAgentMode?: CodeAgentMode;
   onOpenWorkspaceFile?: (path: string) => void;
+  reviewComments?: readonly ReviewCommentContext[];
+  onAddReviewComment?: (comment: ReviewCommentContext) => void;
+  onRemoveReviewComment?: (commentId: string) => void;
 }
 
 export interface MessageListHandle {
@@ -67,6 +71,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   currentRoom,
   codeAgentMode = 'plan',
   onOpenWorkspaceFile,
+  reviewComments = [],
+  onAddReviewComment,
+  onRemoveReviewComment,
 }, ref) => {
   const { t } = useTranslation();
   // generate a stable ID for the scroll container
@@ -646,6 +653,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
             workspaceRefreshError={workspaceRefreshError}
             onRefreshWorkspace={refreshWorkspaceSnapshot}
             onOpenWorkspaceFile={onOpenWorkspaceFile}
+            reviewComments={reviewComments}
+            onAddReviewComment={onAddReviewComment}
+            onRemoveReviewComment={onRemoveReviewComment}
           />
         )}
         <div

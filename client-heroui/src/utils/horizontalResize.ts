@@ -46,6 +46,7 @@ export function beginHorizontalResize({
   let animationFrame: number | null = null;
   let finished = false;
   let pointerCaptureElement: HTMLElement | null = null;
+  let clampedAtBoundary = false;
   const previousUserSelect = document.body.style.userSelect;
   const previousCursor = document.body.style.cursor;
   const resizeGuard = document.createElement('div');
@@ -65,7 +66,10 @@ export function beginHorizontalResize({
   };
 
   const applyClientX = (clientX: number) => {
-    width = clampWidth(startWidth + ((clientX - startX) * direction), getBounds());
+    const rawWidth = startWidth + ((clientX - startX) * direction);
+    const nextWidth = clampWidth(rawWidth, getBounds());
+    width = nextWidth;
+    clampedAtBoundary = nextWidth !== Math.round(rawWidth);
     if (animationFrame === null) {
       animationFrame = window.requestAnimationFrame(applyWidth);
     }
@@ -73,40 +77,47 @@ export function beginHorizontalResize({
 
   const removeListeners = () => {
     window.removeEventListener('pointermove', handlePointerMove, true);
+    window.removeEventListener('pointerenter', handlePointerReleaseProbe, true);
     window.removeEventListener('pointerover', handlePointerReleaseProbe, true);
     window.removeEventListener('pointerout', handlePointerReleaseProbe, true);
-    window.removeEventListener('pointerleave', handleViewportLeave, true);
+    window.removeEventListener('pointerleave', handlePointerViewportLeave, true);
     window.removeEventListener('pointerup', handlePointerEnd, true);
     window.removeEventListener('pointercancel', handlePointerEnd, true);
     window.removeEventListener('mouseup', handleMouseUp, true);
     window.removeEventListener('mousemove', handleMouseMove, true);
+    window.removeEventListener('mouseenter', handleMouseReleaseProbe, true);
     window.removeEventListener('mouseover', handleMouseReleaseProbe, true);
     window.removeEventListener('mouseout', handleMouseReleaseProbe, true);
-    window.removeEventListener('mouseleave', handleViewportLeave, true);
+    window.removeEventListener('mouseleave', handleMouseViewportLeave, true);
     window.removeEventListener('contextmenu', finishResize, true);
     window.removeEventListener('dragend', finishResize, true);
     document.removeEventListener('pointerup', handlePointerEnd, true);
     document.removeEventListener('pointercancel', handlePointerEnd, true);
+    document.removeEventListener('pointerenter', handlePointerReleaseProbe, true);
     document.removeEventListener('pointerover', handlePointerReleaseProbe, true);
     document.removeEventListener('pointerout', handlePointerReleaseProbe, true);
-    document.removeEventListener('pointerleave', handleViewportLeave, true);
+    document.removeEventListener('pointerleave', handlePointerViewportLeave, true);
     document.removeEventListener('mouseup', handleMouseUp, true);
     document.removeEventListener('mousemove', handleMouseMove, true);
+    document.removeEventListener('mouseenter', handleMouseReleaseProbe, true);
     document.removeEventListener('mouseover', handleMouseReleaseProbe, true);
     document.removeEventListener('mouseout', handleMouseReleaseProbe, true);
-    document.removeEventListener('mouseleave', handleViewportLeave, true);
+    document.removeEventListener('mouseleave', handleMouseViewportLeave, true);
     document.removeEventListener('contextmenu', finishResize, true);
     document.removeEventListener('dragend', finishResize, true);
     window.removeEventListener('blur', finishResize);
     window.removeEventListener('pagehide', finishResize);
     document.removeEventListener('visibilitychange', handleVisibilityChange);
     captureTarget.removeEventListener('pointermove', handlePointerMove, true);
+    captureTarget.removeEventListener('pointerenter', handlePointerReleaseProbe, true);
     captureTarget.removeEventListener('pointerover', handlePointerReleaseProbe, true);
     captureTarget.removeEventListener('pointerout', handlePointerReleaseProbe, true);
+    captureTarget.removeEventListener('pointerleave', handlePointerReleaseProbe, true);
     captureTarget.removeEventListener('pointerup', handlePointerEnd, true);
     captureTarget.removeEventListener('pointercancel', handlePointerEnd, true);
     captureTarget.removeEventListener('mouseup', handleMouseUp, true);
     captureTarget.removeEventListener('mousemove', handleMouseMove, true);
+    captureTarget.removeEventListener('mouseenter', handleMouseReleaseProbe, true);
     captureTarget.removeEventListener('mouseover', handleMouseReleaseProbe, true);
     captureTarget.removeEventListener('mouseout', handleMouseReleaseProbe, true);
     captureTarget.removeEventListener('mouseleave', handleMouseLeave, true);
@@ -114,12 +125,15 @@ export function beginHorizontalResize({
     captureTarget.removeEventListener('dragend', finishResize, true);
     pointerCaptureElement?.removeEventListener('lostpointercapture', handleLostPointerCapture);
     resizeGuard.removeEventListener('pointermove', handlePointerMove, true);
+    resizeGuard.removeEventListener('pointerenter', handlePointerReleaseProbe, true);
     resizeGuard.removeEventListener('pointerover', handlePointerReleaseProbe, true);
     resizeGuard.removeEventListener('pointerout', handlePointerReleaseProbe, true);
+    resizeGuard.removeEventListener('pointerleave', handlePointerReleaseProbe, true);
     resizeGuard.removeEventListener('pointerup', handlePointerEnd, true);
     resizeGuard.removeEventListener('pointercancel', handlePointerEnd, true);
     resizeGuard.removeEventListener('mouseup', handleMouseUp, true);
     resizeGuard.removeEventListener('mousemove', handleMouseMove, true);
+    resizeGuard.removeEventListener('mouseenter', handleMouseReleaseProbe, true);
     resizeGuard.removeEventListener('mouseover', handleMouseReleaseProbe, true);
     resizeGuard.removeEventListener('mouseout', handleMouseReleaseProbe, true);
     resizeGuard.removeEventListener('mouseleave', handleMouseLeave, true);
@@ -181,6 +195,20 @@ export function beginHorizontalResize({
     }
   }
 
+  function handlePointerViewportLeave(event: PointerEvent) {
+    if (event.pointerId !== pointerId && event.pointerType !== 'mouse') {
+      return;
+    }
+    if (isPrimaryButtonReleased(event)) {
+      finishResize();
+      return;
+    }
+    applyClientX(event.clientX);
+    if (clampedAtBoundary) {
+      finishResize();
+    }
+  }
+
   function handleLostPointerCapture(event: PointerEvent) {
     if (event.pointerId !== pointerId) {
       return;
@@ -210,20 +238,21 @@ export function beginHorizontalResize({
     }
   }
 
-  function handleMouseLeave(event: MouseEvent) {
+  function handleMouseViewportLeave(event: MouseEvent) {
     if (isPrimaryButtonReleased(event)) {
+      finishResize();
+      return;
+    }
+    applyClientX(event.clientX);
+    if (clampedAtBoundary) {
       finishResize();
     }
   }
 
-  function handleViewportLeave(event: PointerEvent | MouseEvent) {
-    if (
-      !isPrimaryButtonReleased(event) &&
-      Number.isFinite(event.clientX)
-    ) {
-      applyClientX(event.clientX);
+  function handleMouseLeave(event: MouseEvent) {
+    if (isPrimaryButtonReleased(event)) {
+      finishResize();
     }
-    finishResize();
   }
 
   function handleVisibilityChange() {
@@ -255,28 +284,32 @@ export function beginHorizontalResize({
     }
   }
   window.addEventListener('pointermove', handlePointerMove, { capture: true, passive: false });
+  window.addEventListener('pointerenter', handlePointerReleaseProbe, true);
   window.addEventListener('pointerover', handlePointerReleaseProbe, true);
   window.addEventListener('pointerout', handlePointerReleaseProbe, true);
-  window.addEventListener('pointerleave', handleViewportLeave, true);
+  window.addEventListener('pointerleave', handlePointerViewportLeave, true);
   window.addEventListener('pointerup', handlePointerEnd, true);
   window.addEventListener('pointercancel', handlePointerEnd, true);
   window.addEventListener('mouseup', handleMouseUp, true);
   window.addEventListener('mousemove', handleMouseMove, { capture: true, passive: false });
+  window.addEventListener('mouseenter', handleMouseReleaseProbe, true);
   window.addEventListener('mouseover', handleMouseReleaseProbe, true);
   window.addEventListener('mouseout', handleMouseReleaseProbe, true);
-  window.addEventListener('mouseleave', handleViewportLeave, true);
+  window.addEventListener('mouseleave', handleMouseViewportLeave, true);
   window.addEventListener('contextmenu', finishResize, true);
   window.addEventListener('dragend', finishResize, true);
   document.addEventListener('pointerup', handlePointerEnd, true);
   document.addEventListener('pointercancel', handlePointerEnd, true);
+  document.addEventListener('pointerenter', handlePointerReleaseProbe, true);
   document.addEventListener('pointerover', handlePointerReleaseProbe, true);
   document.addEventListener('pointerout', handlePointerReleaseProbe, true);
-  document.addEventListener('pointerleave', handleViewportLeave, true);
+  document.addEventListener('pointerleave', handlePointerViewportLeave, true);
   document.addEventListener('mouseup', handleMouseUp, true);
   document.addEventListener('mousemove', handleMouseMove, { capture: true, passive: false });
+  document.addEventListener('mouseenter', handleMouseReleaseProbe, true);
   document.addEventListener('mouseover', handleMouseReleaseProbe, true);
   document.addEventListener('mouseout', handleMouseReleaseProbe, true);
-  document.addEventListener('mouseleave', handleViewportLeave, true);
+  document.addEventListener('mouseleave', handleMouseViewportLeave, true);
   document.addEventListener('contextmenu', finishResize, true);
   document.addEventListener('dragend', finishResize, true);
   window.addEventListener('blur', finishResize);
@@ -285,10 +318,13 @@ export function beginHorizontalResize({
   captureTarget.addEventListener('pointermove', handlePointerMove, { capture: true, passive: false });
   captureTarget.addEventListener('pointerup', handlePointerEnd, true);
   captureTarget.addEventListener('pointercancel', handlePointerEnd, true);
+  captureTarget.addEventListener('pointerenter', handlePointerReleaseProbe, true);
   captureTarget.addEventListener('pointerover', handlePointerReleaseProbe, true);
   captureTarget.addEventListener('pointerout', handlePointerReleaseProbe, true);
+  captureTarget.addEventListener('pointerleave', handlePointerReleaseProbe, true);
   captureTarget.addEventListener('mouseup', handleMouseUp, true);
   captureTarget.addEventListener('mousemove', handleMouseMove, { capture: true, passive: false });
+  captureTarget.addEventListener('mouseenter', handleMouseReleaseProbe, true);
   captureTarget.addEventListener('mouseover', handleMouseReleaseProbe, true);
   captureTarget.addEventListener('mouseout', handleMouseReleaseProbe, true);
   captureTarget.addEventListener('mouseleave', handleMouseLeave, true);
@@ -298,10 +334,13 @@ export function beginHorizontalResize({
   resizeGuard.addEventListener('pointermove', handlePointerMove, { capture: true, passive: false });
   resizeGuard.addEventListener('pointerup', handlePointerEnd, true);
   resizeGuard.addEventListener('pointercancel', handlePointerEnd, true);
+  resizeGuard.addEventListener('pointerenter', handlePointerReleaseProbe, true);
   resizeGuard.addEventListener('pointerover', handlePointerReleaseProbe, true);
   resizeGuard.addEventListener('pointerout', handlePointerReleaseProbe, true);
+  resizeGuard.addEventListener('pointerleave', handlePointerReleaseProbe, true);
   resizeGuard.addEventListener('mouseup', handleMouseUp, true);
   resizeGuard.addEventListener('mousemove', handleMouseMove, { capture: true, passive: false });
+  resizeGuard.addEventListener('mouseenter', handleMouseReleaseProbe, true);
   resizeGuard.addEventListener('mouseover', handleMouseReleaseProbe, true);
   resizeGuard.addEventListener('mouseout', handleMouseReleaseProbe, true);
   resizeGuard.addEventListener('mouseleave', handleMouseLeave, true);

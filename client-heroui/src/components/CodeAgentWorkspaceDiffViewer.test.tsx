@@ -11,7 +11,9 @@ const codeViewScrollToMock = vi.hoisted(() => vi.fn());
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: (key: string, params?: Record<string, string>) => (
+      params?.range ? `${key}:${params.range}` : key
+    ),
   }),
 }));
 
@@ -28,17 +30,27 @@ vi.mock('@pierre/diffs/react', () => ({
     items,
     options,
     renderHeaderPrefix,
+    renderAnnotation,
   }: {
-    items: Array<{ id: string; type: 'diff'; fileDiff: { name?: string | null; prevName?: string | null; cacheKey?: string }; collapsed?: boolean }>;
+    items: Array<{
+      id: string;
+      type: 'diff';
+      fileDiff: { name?: string | null; prevName?: string | null; cacheKey?: string };
+      collapsed?: boolean;
+      annotations?: Array<{ side: 'additions' | 'deletions'; lineNumber: number; metadata: { entries: Array<{ id: string; kind: 'draft' | 'comment'; rangeLabel: string; text: string }> } }>;
+    }>;
     options: {
       diffStyle: 'unified' | 'split';
       lineDiffType?: 'none' | 'word' | 'word-alt' | 'char';
       overflow: 'scroll' | 'wrap';
+      enableLineSelection?: boolean;
+      onLineSelectionEnd?: (range: { start: number; end: number; side?: 'additions' | 'deletions'; endSide?: 'additions' | 'deletions' }, context: { item: any }) => void;
       stickyHeaders?: boolean;
       unsafeCSS?: string;
       layout?: { paddingTop: number; paddingBottom: number; gap: number };
     };
     renderHeaderPrefix?: (item: { id: string; type: 'diff'; fileDiff: { name?: string | null; prevName?: string | null; cacheKey?: string }; collapsed?: boolean }) => ReactNode;
+    renderAnnotation?: (annotation: { side: 'additions' | 'deletions'; lineNumber: number; metadata: { entries: Array<{ id: string; kind: 'draft' | 'comment'; rangeLabel: string; text: string }> } }) => ReactNode;
   }, ref) => {
     React.useImperativeHandle(ref, () => ({ scrollTo: codeViewScrollToMock }));
     return (
@@ -64,6 +76,19 @@ vi.mock('@pierre/diffs/react', () => ({
               </span>
               <button type="button" data-line="42">line 42</button>
               <button type="button" data-column-number="24">gutter 24</button>
+              <button
+                type="button"
+                aria-label={`select diff lines ${item.id}`}
+                disabled={!options.enableLineSelection}
+                onClick={() => options.onLineSelectionEnd?.({ start: 2, end: 4, side: 'additions', endSide: 'additions' }, { item })}
+              >
+                select diff lines
+              </button>
+              {item.annotations?.map((annotation) => (
+                <div key={`${annotation.side}:${annotation.lineNumber}`} data-testid="diff-line-annotation">
+                  {renderAnnotation?.(annotation)}
+                </div>
+              ))}
             </div>
           );
         })}
@@ -80,6 +105,18 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     parsePatchFilesMock.mockReset();
     codeViewScrollToMock.mockReset();
     localStorage.clear();
+  });
+
+  it('renders the T3-style diff loading skeleton while the workspace patch is pending', async () => {
+    loadCodeAgentWorkspaceDiffMock.mockReturnValue(new Promise(() => undefined));
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
+
+    const loading = await screen.findByTestId('code-agent-workspace-diff-loading');
+    const status = screen.getByRole('status', { name: 'codeAgentLoadingWorkspaceDiff' });
+    expect(loading.contains(status)).toBe(true);
+    expect(loading.querySelectorAll('.animate-pulse').length).toBeGreaterThanOrEqual(7);
+    expect(screen.queryByTestId('code-view')).toBeNull();
   });
 
   it('loads a workspace patch and renders it through the Pierre CodeView', async () => {
@@ -237,6 +274,110 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(screen.getByTestId('diff-file-none:src/App.tsx').getAttribute('data-collapsed')).toBe('true');
     expect(screen.getByTestId('diff-file-none:src/utils.ts').getAttribute('data-collapsed')).toBe('false');
     expect(screen.getByLabelText('codeAgentExpandDiffFile').getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('supports T3-style local comments from selected diff lines', async () => {
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          {
+            name: 'src/App.tsx',
+            cacheKey: 'file:app',
+            hunks: [{
+              additionStart: 1,
+              deletionStart: 1,
+              additionLines: 3,
+              deletionLines: 0,
+              hunkContent: [
+                { type: 'context', lines: 1 },
+                { type: 'change', deletions: 0, additions: 3 },
+              ],
+            }],
+            additionLines: ['same', 'added 2', 'added 3', 'added 4'],
+            deletionLines: ['same'],
+            type: 'change',
+          },
+        ],
+      },
+    ]);
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
+
+    fireEvent.click(await screen.findByLabelText('select diff lines file:app'));
+
+    const input = await screen.findByLabelText('codeAgentCommentOnLines:+2 to +4');
+    fireEvent.change(input, { target: { value: 'Please revisit this diff.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'codeAgentSubmitComment' }));
+
+    expect(screen.getByText('codeAgentLocalComment')).toBeTruthy();
+    expect(screen.getByText('+2 to +4')).toBeTruthy();
+    expect(screen.getByText('Please revisit this diff.')).toBeTruthy();
+  });
+
+  it('adds T3 review comments when selected diff lines are submitted', async () => {
+    const onAddReviewComment = vi.fn();
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          {
+            name: 'src/App.tsx',
+            cacheKey: 'file:app',
+            hunks: [{
+              additionStart: 1,
+              deletionStart: 1,
+              deletionLineIndex: 0,
+              additionLineIndex: 0,
+              additionLines: 3,
+              deletionLines: 0,
+              hunkContent: [
+                { type: 'context', lines: 1 },
+                { type: 'change', deletions: 0, additions: 3 },
+              ],
+            }],
+            additionLines: ['same', 'added 2', 'added 3', 'added 4'],
+            deletionLines: ['same'],
+            type: 'change',
+          },
+        ],
+      },
+    ]);
+
+    render(
+      <CodeAgentWorkspaceDiffViewer
+        roomId="room-1"
+        enabled
+        refreshKey="snapshot-1"
+        onAddReviewComment={onAddReviewComment}
+      />,
+    );
+
+    fireEvent.click(await screen.findByLabelText('select diff lines file:app'));
+
+    const input = await screen.findByLabelText('codeAgentCommentOnLines:+2 to +4');
+    fireEvent.change(input, { target: { value: 'Please revisit this diff.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'codeAgentSubmitComment' }));
+
+    expect(onAddReviewComment).toHaveBeenCalledWith(expect.objectContaining({
+      sectionId: 'workspace-diff:room-1:snapshot-1',
+      sectionTitle: 'codeAgentChanges',
+      filePath: 'src/App.tsx',
+      rangeLabel: '+2 to +4',
+      text: 'Please revisit this diff.',
+      diff: '@@ -0,0 +2,3 @@\n+added 2\n+added 3\n+added 4',
+      fenceLanguage: 'diff',
+    }));
   });
 
   it('renders T3-style changed file navigation and scrolls to a diff file', async () => {

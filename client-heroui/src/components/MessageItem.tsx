@@ -24,6 +24,8 @@ import { A2UIRenderer } from "./A2UIRenderer";
 import { getRoomAIRequestSettings } from "../utils/aiRequestSettings";
 import { CocoToolMessage } from './CocoToolMessage';
 import { getSenderColorTheme } from "../utils/userProfile";
+import { parseReviewCommentMessageSegments } from "../utils/codeAgentReviewComments";
+import { CodeAgentReviewCommentMessage } from "./CodeAgentReviewCommentMessage";
 
 interface MessageItemProps {
   message: Message;
@@ -309,6 +311,17 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   }), [senderColorTheme]);
   const senderOutlineClassName = isAI ? "" : "roomtalk-sender-outline";
   const senderOutlineElementStyle = isAI ? undefined : senderOutlineStyle;
+  const reviewCommentSegments = React.useMemo(
+    () => parseReviewCommentMessageSegments(message.content),
+    [message.content],
+  );
+  const hasReviewCommentSegments = reviewCommentSegments.some((segment) => segment.kind === 'review-comment');
+  const markdownFallbackContent = hasReviewCommentSegments
+    ? reviewCommentSegments
+        .map((segment) => segment.kind === 'text' ? segment.text.trim() : `${segment.comment.filePath} ${segment.comment.rangeLabel}\n${segment.comment.text}`)
+        .filter(Boolean)
+        .join('\n\n')
+    : message.content;
   const aiMetadataParts = isAI
     ? [
         message.codeAgentMode ? (message.codeAgentMode === 'acceptEdits' ? t('codeAgentEditMode') : t('codeAgentReadOnlyMode')) : null,
@@ -948,17 +961,44 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                     <div className="max-w-full overflow-x-auto" style={{ wordBreak: 'break-word', overflowWrap: 'break-word' }}>
                       <React.Suspense fallback={
                         <div className="whitespace-pre-wrap break-words">
-                          {message.content}
+                          {markdownFallbackContent}
                           {isStreaming && (
                             <span className="inline-block w-1.5 h-3 bg-current animate-pulse ml-0.5 align-baseline"></span>
                           )}
                         </div>
                       }>
-                        <MarkdownContent
-                          content={message.content}
-                          isStreaming={isStreaming}
-                          onOpenWorkspaceFile={onOpenWorkspaceFile}
-                        />
+                        {hasReviewCommentSegments ? (
+                          <div className="space-y-3">
+                            {reviewCommentSegments.map((segment) => {
+                              if (segment.kind === 'text') {
+                                const text = segment.text.trim();
+                                return text.length > 0 ? (
+                                  <MarkdownContent
+                                    key={segment.id}
+                                    content={text}
+                                    onOpenWorkspaceFile={onOpenWorkspaceFile}
+                                  />
+                                ) : null;
+                              }
+                              return (
+                                <CodeAgentReviewCommentMessage
+                                  key={segment.comment.id}
+                                  comment={segment.comment}
+                                  onOpenWorkspaceFile={onOpenWorkspaceFile}
+                                />
+                              );
+                            })}
+                            {isStreaming && (
+                              <span className="inline-block w-1.5 h-3 bg-current animate-pulse ml-0.5 align-baseline"></span>
+                            )}
+                          </div>
+                        ) : (
+                          <MarkdownContent
+                            content={message.content}
+                            isStreaming={isStreaming}
+                            onOpenWorkspaceFile={onOpenWorkspaceFile}
+                          />
+                        )}
                       </React.Suspense>
                     </div>
                   </div>

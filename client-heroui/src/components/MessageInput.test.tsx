@@ -423,6 +423,51 @@ describe('MessageInput optimistic send flow', () => {
     expect(payload).not.toHaveProperty('roleName');
   });
 
+  it('appends code review comments to Coco Ask AI prompts and clears them after send', async () => {
+    const onClearReviewComments = vi.fn();
+    const onRemoveReviewComment = vi.fn();
+    const savedMessage = message({ id: 'server-message-review', content: 'review this' });
+    socketMocks.sendMessageAndAskAI.mockResolvedValue({
+      userMessage: savedMessage,
+      aiMessageId: 'coco-ai-message-review',
+      aiStarted: true,
+    });
+
+    const { editor } = renderMessageInput({
+      isCodeAgentRoom: true,
+      reviewComments: [{
+        id: 'comment-1',
+        sectionId: 'file:src/App.tsx',
+        sectionTitle: 'File comment',
+        filePath: 'src/App.tsx',
+        startIndex: 1,
+        endIndex: 2,
+        rangeLabel: 'L2 to L3',
+        text: 'Please keep this typed.',
+        diff: 'const value = 1;\nconst next = 2;',
+        fenceLanguage: 'tsx',
+      }],
+      onClearReviewComments,
+      onRemoveReviewComment,
+    });
+    setEditorText(editor, 'review this');
+
+    expect(screen.getByText('src/App.tsx L2 to L3')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('codeAgentRemoveReviewComment'));
+    expect(onRemoveReviewComment).toHaveBeenCalledWith('comment-1');
+
+    fireEvent.click(screen.getByText('ask-ai'));
+
+    await waitFor(() => expect(socketMocks.sendMessageAndAskAI).toHaveBeenCalledTimes(1));
+    const payload = socketMocks.sendMessageAndAskAI.mock.calls[0][0];
+
+    expect(payload.content).toContain('review this');
+    expect(payload.content).toContain('<review_comment');
+    expect(payload.content).toContain('filePath="src/App.tsx"');
+    expect(payload.content).toContain('```tsx\nconst value = 1;\nconst next = 2;\n```');
+    expect(onClearReviewComments).toHaveBeenCalledTimes(1);
+  });
+
   it('confirms the optimistic message when only the AI startup fails', async () => {
     const savedMessage = message({ id: 'server-message-4', content: 'ask this' });
     socketMocks.sendMessageAndAskAI.mockResolvedValue({

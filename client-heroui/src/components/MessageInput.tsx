@@ -48,6 +48,10 @@ import {
 } from '../utils/keyboardComposition';
 import { Message, RoomPostingSchedule } from '../utils/types';
 import { CodeAgentMode } from '../utils/codeAgent';
+import {
+  appendReviewCommentsToPrompt,
+  type ReviewCommentContext,
+} from '../utils/codeAgentReviewComments';
 
 interface MessageInputProps {
   roomId: string;
@@ -68,6 +72,9 @@ interface MessageInputProps {
   codeAgentMode?: CodeAgentMode;
   codeAgentMaxMode?: CodeAgentMode;
   onCodeAgentModeChange?: (mode: CodeAgentMode) => void;
+  reviewComments?: readonly ReviewCommentContext[];
+  onRemoveReviewComment?: (commentId: string) => void;
+  onClearReviewComments?: () => void;
 }
 
 // 使用WeakMap存储图片元素和对应的File对象
@@ -158,6 +165,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   codeAgentMode = 'plan',
   codeAgentMaxMode = 'plan',
   onCodeAgentModeChange,
+  reviewComments = [],
+  onRemoveReviewComment,
+  onClearReviewComments,
 }) => {
   const { t } = useTranslation();
   const [_contentItems, setContentItems] = useState<MessageContentItem[]>(emptyMessageContent());
@@ -501,8 +511,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       const avatar = { text: avatarText, color: avatarColor };
 
       const prompt = buildAIPrompt(latestContentItems);
+      const promptForSend = isCodeAgentRoom
+        ? appendReviewCommentsToPrompt(prompt, reviewComments)
+        : prompt;
 
-      if (!prompt) {
+      if (!promptForSend) {
         await requestAIResponse({
           roomId,
           ...(!isCodeAgentRoom ? {
@@ -517,13 +530,13 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
       const clientMessageId = createClientMessageId();
       optimisticClientMessageId = clientMessageId;
-      const optimisticMessage = buildOptimisticTextMessage(prompt, clientMessageId, avatar, replyToMessage);
+      const optimisticMessage = buildOptimisticTextMessage(promptForSend, clientMessageId, avatar, replyToMessage);
       onOptimisticMessage?.(optimisticMessage);
       clearEditorImmediately({ blur: true });
 
       const { userMessage, aiError } = await sendMessageAndAskAI({
         roomId,
-        content: prompt,
+        content: promptForSend,
         username,
         avatar,
         replyToMessageId: replyToMessage?.id,
@@ -537,6 +550,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       });
 
       onOptimisticMessageSaved?.(clientMessageId, userMessage);
+      if (isCodeAgentRoom && reviewComments.length > 0) {
+        onClearReviewComments?.();
+      }
       if (aiError) {
         setErrorMessage(aiError);
       }
@@ -1407,6 +1423,36 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               >
                 <Icon icon="lucide:x" className="h-3.5 w-3.5" />
               </Button>
+            </div>
+          )}
+
+          {isCodeAgentRoom && reviewComments.length > 0 && (
+            <div className="mx-0 flex basis-full flex-wrap gap-1.5 px-1 py-1 sm:mx-3 sm:mt-3 sm:px-0 sm:py-0">
+              {reviewComments.map((comment) => {
+                const label = `${comment.filePath} ${comment.rangeLabel}`;
+                return (
+                  <span
+                    key={comment.id}
+                    className="inline-flex max-w-full items-center gap-1 rounded-md border border-[#dedbd0] bg-[#f5f4ed] px-2 py-1 text-[11px] font-medium text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242422] dark:text-[#e8e6dc]"
+                    title={comment.text}
+                  >
+                    <Icon icon="lucide:message-circle" className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                    <span className="min-w-0 max-w-64 truncate font-mono">{label}</span>
+                    <button
+                      type="button"
+                      aria-label={t('codeAgentRemoveReviewComment', { label })}
+                      className="ml-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-sm text-[#87867f] hover:bg-[#dedbd0] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onRemoveReviewComment?.(comment.id);
+                      }}
+                    >
+                      <Icon icon="lucide:x" className="h-3 w-3" />
+                    </button>
+                  </span>
+                );
+              })}
             </div>
           )}
 
