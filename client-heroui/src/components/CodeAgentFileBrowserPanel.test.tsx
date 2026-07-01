@@ -150,13 +150,41 @@ vi.mock('./CodeAgentWorkspaceDiffViewer', () => ({
   CodeAgentWorkspaceDiffViewer: ({
     enabled,
     onOpenFile,
+    onFileSummariesChange,
+    selectedFilePath,
+    selectedFileRevealRequestId,
   }: {
     enabled: boolean;
     onOpenFile?: (path: string) => void;
+    onFileSummariesChange?: (summaries: readonly { id: string; path: string; additions: number; deletions: number }[]) => void;
+    selectedFilePath?: string | null;
+    selectedFileRevealRequestId?: number;
   }) => (
-    <div data-testid="code-agent-workspace-diff-viewer" data-enabled={String(enabled)}>
+    <div
+      data-testid="code-agent-workspace-diff-viewer"
+      data-enabled={String(enabled)}
+      data-selected-file={selectedFilePath || ''}
+      data-selected-file-request-id={String(selectedFileRevealRequestId || '')}
+    >
       <button type="button" aria-label="open-diff-file" onClick={() => onOpenFile?.('src/App.tsx#L3')}>
         open diff file
+      </button>
+      <button
+        type="button"
+        data-testid="emit-diff-file-summaries"
+        onClick={() => onFileSummariesChange?.([
+          { id: 'file:app', path: 'src/App.tsx', additions: 7, deletions: 3 },
+          { id: 'file:utils', path: 'src/utils.ts', additions: 1, deletions: 0 },
+        ])}
+      >
+        emit summaries
+      </button>
+      <button
+        type="button"
+        data-testid="emit-empty-diff-file-summaries"
+        onClick={() => onFileSummariesChange?.([])}
+      >
+        emit empty summaries
       </button>
     </div>
   ),
@@ -548,7 +576,16 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).not.toContain('codeAgentWorkspaceFiles');
 
     fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
-    fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentWorkspaceFiles'));
+    const addMenu = within(screen.getByTestId('code-agent-file-surface-add-menu'));
+    const browserSurfaceButton = addMenu.getByText('codeAgentBrowserSurface').closest('button')!;
+    const terminalSurfaceButton = addMenu.getByText('codeAgentTerminalSurface').closest('button')!;
+    expect(browserSurfaceButton.disabled).toBe(true);
+    expect(browserSurfaceButton.getAttribute('aria-disabled')).toBe('true');
+    expect(browserSurfaceButton.getAttribute('title')).toBe('codeAgentBrowserSurfaceUnavailable');
+    expect(terminalSurfaceButton.disabled).toBe(true);
+    expect(terminalSurfaceButton.getAttribute('aria-disabled')).toBe('true');
+    expect(terminalSurfaceButton.getAttribute('title')).toBe('codeAgentTerminalSurfaceUnavailable');
+    fireEvent.click(addMenu.getByText('codeAgentWorkspaceFiles'));
     await waitFor(() => {
       expect(screen.queryByTestId('diff-file')).toBeNull();
       expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('codeAgentWorkspaceFiles');
@@ -586,6 +623,46 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
     expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('codeAgentChanges');
     expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('App.tsx');
+  });
+
+  it('renders a T3-style changed-files tree for the active Diff surface and selects diff items', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+        { path: 'src/utils.ts', name: 'utils.ts', type: 'file' },
+      ],
+      truncated: false,
+    });
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    await screen.findByText('2 files');
+    fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
+    fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentChanges'));
+
+    expect(screen.queryByTestId('code-agent-diff-changed-files-sidebar')).toBeNull();
+    fireEvent.click(screen.getByTestId('emit-diff-file-summaries'));
+
+    const sidebar = await screen.findByTestId('code-agent-diff-changed-files-sidebar');
+    expect(within(sidebar).getByTestId('code-agent-changed-files-tree')).toBeTruthy();
+    expect(within(sidebar).getByText('codeAgentChangedFilesCount')).toBeTruthy();
+    expect(within(sidebar).getByText('+7')).toBeTruthy();
+    expect(within(sidebar).getAllByText('-3').length).toBeGreaterThan(0);
+    expect(within(sidebar).getByText('codeAgentCollapseChangedFileTree').hasAttribute('data-scroll-anchor-ignore')).toBe(true);
+
+    fireEvent.click(within(sidebar).getByText('App.tsx'));
+    expect(screen.getByTestId('code-agent-workspace-diff-viewer').dataset.selectedFile).toBe('src/App.tsx');
+    expect(screen.getByTestId('code-agent-workspace-diff-viewer').dataset.selectedFileRequestId).toBe('1');
+    expect(screen.queryByTestId('diff-file')).toBeNull();
+
+    fireEvent.click(within(sidebar).getByText('App.tsx'));
+    expect(screen.getByTestId('code-agent-workspace-diff-viewer').dataset.selectedFile).toBe('src/App.tsx');
+    expect(screen.getByTestId('code-agent-workspace-diff-viewer').dataset.selectedFileRequestId).toBe('2');
+
+    fireEvent.click(screen.getByTestId('emit-empty-diff-file-summaries'));
+    expect(screen.queryByTestId('code-agent-diff-changed-files-sidebar')).toBeNull();
+    await waitFor(() => {
+      expect(screen.getByTestId('code-agent-workspace-diff-viewer').dataset.selectedFile).toBe('');
+    });
   });
 
   it('supports T3-style file tab menu and middle-click close actions', async () => {

@@ -332,6 +332,45 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(diffViewer.dataset.selectedFileRequestId).toBe('2');
   });
 
+  it('loads live diff summaries even when the old workspace snapshot marks changes unavailable', () => {
+    render(
+      <CodeAgentWorkspacePanel
+        room={room}
+        messages={[]}
+        mode="acceptEdits"
+        sessionCostUsd={0}
+        workspaceSnapshot={{
+          roomId: 'room-1',
+          backend: 'coco',
+          source: 'sandbox',
+          generatedAt: '2026-06-30T12:00:00.000Z',
+          status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: true },
+          summary: { toolCalls: 0, toolResults: 0, toolErrors: 0 },
+          artifacts: [],
+          changes: { available: false, changedFiles: [], diffSummary: null },
+          commands: [],
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByText('codeAgentChanges'));
+
+    const diffViewer = screen.getByTestId('code-agent-workspace-diff-viewer');
+    expect(diffViewer.dataset.enabled).toBe('true');
+    expect(screen.queryByText('codeAgentChangesUnavailable')).toBeNull();
+    expect(screen.queryByTestId('code-agent-changed-files-tree')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('emit-diff-file-summaries'));
+
+    expect(screen.getByTestId('code-agent-changed-files-tree')).toBeTruthy();
+    expect(screen.getByText('codeAgentChangedFilesCount')).toBeTruthy();
+    expect(screen.getByText('codeAgentCollapseChangedFileTree')).toBeTruthy();
+    expect(screen.getByText('src')).toBeTruthy();
+    expect(screen.getByText('App.tsx')).toBeTruthy();
+    expect(screen.getAllByText('+7').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('-3').length).toBeGreaterThan(0);
+  });
+
   it('fills changed-file tree stats from parsed diff summaries', () => {
     render(
       <CodeAgentWorkspacePanel

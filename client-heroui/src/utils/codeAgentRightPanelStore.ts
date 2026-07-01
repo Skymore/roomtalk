@@ -17,7 +17,7 @@ export interface CodeAgentRightPanelState {
   surfaces: CodeAgentRightPanelSurface[];
 }
 
-interface CodeAgentRightPanelStoreState {
+export interface CodeAgentRightPanelStoreState {
   byRoomId: Record<string, CodeAgentRightPanelState>;
 }
 
@@ -130,6 +130,23 @@ function coerceRoomState(value: unknown): CodeAgentRightPanelState | null {
   };
 }
 
+export function migrateCodeAgentRightPanelState(persistedState: unknown): CodeAgentRightPanelStoreState {
+  if (!persistedState || typeof persistedState !== 'object') {
+    return emptyStoreState();
+  }
+  const byRoomId: Record<string, CodeAgentRightPanelState> = {};
+  for (const [roomId, roomState] of Object.entries(
+    (persistedState as Partial<CodeAgentRightPanelStoreState>).byRoomId ?? {},
+  )) {
+    const normalizedRoomId = normalizeRoomId(roomId);
+    const coerced = coerceRoomState(roomState);
+    if (normalizedRoomId && coerced) {
+      byRoomId[normalizedRoomId] = coerced;
+    }
+  }
+  return { byRoomId };
+}
+
 function readPersistedState(): CodeAgentRightPanelStoreState {
   if (typeof window === 'undefined') {
     return emptyStoreState();
@@ -140,15 +157,7 @@ function readPersistedState(): CodeAgentRightPanelStoreState {
       return emptyStoreState();
     }
     const payload = JSON.parse(raw) as PersistedCodeAgentRightPanelStore;
-    const byRoomId: Record<string, CodeAgentRightPanelState> = {};
-    for (const [roomId, roomState] of Object.entries(payload.state?.byRoomId ?? {})) {
-      const normalizedRoomId = normalizeRoomId(roomId);
-      const coerced = coerceRoomState(roomState);
-      if (normalizedRoomId && coerced) {
-        byRoomId[normalizedRoomId] = coerced;
-      }
-    }
-    return { byRoomId };
+    return migrateCodeAgentRightPanelState(payload.state);
   } catch {
     return emptyStoreState();
   }

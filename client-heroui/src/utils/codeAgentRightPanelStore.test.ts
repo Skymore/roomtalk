@@ -8,6 +8,7 @@ import {
   closeCodeAgentRightPanelSurfacesToRight,
   closeOtherCodeAgentRightPanelSurfaces,
   closeCodeAgentRightPanel,
+  migrateCodeAgentRightPanelState,
   openCodeAgentRightPanel,
   openCodeAgentRightPanelFile,
   readCodeAgentRightPanelState,
@@ -30,6 +31,36 @@ describe('codeAgentRightPanelStore', () => {
   afterEach(() => {
     localStorage.clear();
     resetCodeAgentRightPanelStoreForTests();
+  });
+
+  it('upgrades saved file surfaces with neutral reveal state like T3', () => {
+    expect(
+      migrateCodeAgentRightPanelState({
+        byRoomId: {
+          ' room-1 ': {
+            isOpen: true,
+            activeSurfaceId: 'file:src/index.ts',
+            surfaces: [{ id: 'file:src/index.ts', kind: 'file', relativePath: 'src/index.ts' }],
+          },
+        },
+      }),
+    ).toEqual({
+      byRoomId: {
+        'room-1': {
+          isOpen: true,
+          activeSurfaceId: 'file:src/index.ts',
+          surfaces: [
+            {
+              id: 'file:src/index.ts',
+              kind: 'file',
+              relativePath: 'src/index.ts',
+              revealLine: null,
+              revealRequestId: 0,
+            },
+          ],
+        },
+      },
+    });
   });
 
   it('keeps files as a singleton surface', () => {

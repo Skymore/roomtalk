@@ -29,6 +29,15 @@ describe('fileBreadcrumbs', () => {
     ]);
   });
 
+  it('normalizes Windows separators like the rest of the T3 file viewer path helpers', () => {
+    expect(fileBreadcrumbs('workspace', 'src\\components//App.tsx')).toEqual([
+      { label: 'workspace', path: '', kind: 'project' },
+      { label: 'src', path: 'src', kind: 'directory' },
+      { label: 'components', path: 'src/components', kind: 'directory' },
+      { label: 'App.tsx', path: 'src/components/App.tsx', kind: 'file' },
+    ]);
+  });
+
   it('matches T3 basename handling across slash styles', () => {
     expect(basename('apps/web/src/main.tsx')).toBe('main.tsx');
     expect(basename('C:\\workspace\\src\\main.tsx')).toBe('main.tsx');

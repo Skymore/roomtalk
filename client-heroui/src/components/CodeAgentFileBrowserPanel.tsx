@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FileDiff,
-  FolderTree,
+  Files,
   Globe2,
   Plus,
   TerminalSquare,
@@ -32,6 +32,8 @@ import {
   isImagePreviewFile,
   isMarkdownPreviewFile,
 } from './codeAgentFilePath';
+import { CodeAgentChangedFilesTree } from './CodeAgentChangedFilesTree';
+import { CodeAgentDiffStatLabel, hasNonZeroChangedFileStat } from './CodeAgentDiffStatLabel';
 import {
   getOptimisticCodeAgentProjectFileQueryData,
   resolveCodeAgentProjectFileQueryData,
@@ -39,11 +41,20 @@ import {
 } from './codeAgentProjectFilesQueryState';
 import { CodeAgentFilePreviewPanel } from './CodeAgentFilePreviewPanel';
 import { CodeAgentPierreEntryIcon } from './CodeAgentPierreEntryIcon';
-import { CodeAgentWorkspaceDiffViewer } from './CodeAgentWorkspaceDiffViewer';
+import {
+  CodeAgentWorkspaceDiffViewer,
+  type CodeAgentWorkspaceDiffFileSummary,
+} from './CodeAgentWorkspaceDiffViewer';
 import {
   CodeAgentWorkspaceFileTreePanel,
   type CodeAgentProjectEntry,
 } from './CodeAgentWorkspaceFileTreePanel';
+import {
+  clearCodeAgentDiffFile,
+  selectCodeAgentDiffFile,
+  useCodeAgentDiffPanelSelection,
+} from '../utils/codeAgentDiffPanelStore';
+import { summarizeCodeAgentChangedFileStats } from '../utils/codeAgentChangedFileTree';
 import {
   activateCodeAgentRightPanelSurface,
   closeAllCodeAgentRightPanelSurfaces,
@@ -77,6 +88,13 @@ type SaveStatus = {
   state: SaveState;
   error: string | null;
 };
+
+type ScopedDiffFileSummaries = {
+  scopeKey: string | null;
+  summaries: readonly CodeAgentWorkspaceDiffFileSummary[];
+};
+
+const EMPTY_DIFF_FILE_SUMMARIES: readonly CodeAgentWorkspaceDiffFileSummary[] = [];
 
 type FileSurfaceTabMenuState = {
   surfaceId: string;
@@ -161,7 +179,7 @@ function CodeAgentRightPanelEmptyState({
       label: t('codeAgentWorkspaceFiles'),
       description: t('codeAgentFilesSurfaceDescription'),
       disabledReason: null,
-      icon: FolderTree,
+      icon: Files,
       onClick: onAddFiles,
     },
     {
@@ -618,6 +636,12 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const workspaceReadyKey = `${sandboxStatus || 'none'}:${sandboxUpdatedAt || ''}`;
   const previousWorkspaceReadyKeyRef = useRef(workspaceReadyKey);
   const rightPanelState = useCodeAgentRightPanelState(roomId);
+  const diffPanelSelection = useCodeAgentDiffPanelSelection(roomId);
+  const [diffFileSummaries, setDiffFileSummaries] = useState<ScopedDiffFileSummaries>({
+    scopeKey: null,
+    summaries: [],
+  });
+  const [allChangedDirectoriesExpanded, setAllChangedDirectoriesExpanded] = useState(true);
   const [fileSurfaceTabMenu, setFileSurfaceTabMenu] = useState<FileSurfaceTabMenuState>(null);
   const fileSurfaceTabMenuRef = useRef<HTMLDivElement | null>(null);
   const fileSurfaceTabListRef = useRef<HTMLDivElement | null>(null);
@@ -667,6 +691,36 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const activeDiffSurface = useMemo(
     () => rightPanelSurfaces.find((surface) => surface.id === rightPanelState.activeSurfaceId && surface.kind === 'diff') ?? null,
     [rightPanelState.activeSurfaceId, rightPanelSurfaces],
+  );
+  const diffSelectionScopeKey = diffPanelSelection.kind === 'branch'
+    ? `branch:${diffPanelSelection.baseRef ?? 'auto'}`
+    : 'unstaged';
+  const diffFileSummaryScopeKey = `${workspaceReadyKey}:${diffSelectionScopeKey}`;
+  const hasActiveDiffFileSummaries = diffFileSummaries.scopeKey === diffFileSummaryScopeKey;
+  const activeDiffFileSummaries = hasActiveDiffFileSummaries
+    ? diffFileSummaries.summaries
+    : EMPTY_DIFF_FILE_SUMMARIES;
+  const changedFileEntries = useMemo(
+    () => activeDiffFileSummaries.map((summary) => ({
+      path: normalizeWorkspacePath(summary.path),
+      additions: summary.additions,
+      deletions: summary.deletions,
+    })).filter((entry) => entry.path.length > 0),
+    [activeDiffFileSummaries],
+  );
+  const changedFileSummary = useMemo(
+    () => summarizeCodeAgentChangedFileStats(changedFileEntries),
+    [changedFileEntries],
+  );
+  const selectedDiffFilePath = diffPanelSelection.filePath;
+  const selectedDiffFileRequestId = diffPanelSelection.revealRequestId;
+  const normalizedChangedFilePathSet = useMemo(
+    () => new Set(changedFileEntries.map((entry) => entry.path)),
+    [changedFileEntries],
+  );
+  const hasChangedFileDirectories = useMemo(
+    () => changedFileEntries.some((entry) => entry.path.includes('/')),
+    [changedFileEntries],
   );
   const fileSurfaceTabMenuSurface = useMemo(
     () => fileSurfaceTabMenu
@@ -808,6 +862,24 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     }
     reconcileCodeAgentFileSurfaces(roomId, true, fileEntryPathSet);
   }, [entriesQuery.data?.truncated, entriesQuery.isPending, fileEntryPathSet, roomId]);
+
+  useEffect(() => {
+    if (
+      !activeDiffSurface ||
+      !selectedDiffFilePath ||
+      !hasActiveDiffFileSummaries ||
+      normalizedChangedFilePathSet.has(selectedDiffFilePath)
+    ) {
+      return;
+    }
+    clearCodeAgentDiffFile(roomId);
+  }, [
+    activeDiffSurface,
+    hasActiveDiffFileSummaries,
+    normalizedChangedFilePathSet,
+    roomId,
+    selectedDiffFilePath,
+  ]);
 
   useEffect(() => {
     if (!openFileRequest?.path) {
@@ -1231,6 +1303,21 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     setOperationError(null);
   }, [roomId]);
 
+  const handleDiffFileSummariesChange = useCallback((summaries: readonly CodeAgentWorkspaceDiffFileSummary[]) => {
+    setDiffFileSummaries({
+      scopeKey: diffFileSummaryScopeKey,
+      summaries,
+    });
+  }, [diffFileSummaryScopeKey]);
+
+  const handleOpenChangedDiffFile = useCallback((path: string) => {
+    const normalizedPath = normalizeWorkspacePath(path);
+    if (!normalizedPath) {
+      return;
+    }
+    selectCodeAgentDiffFile(roomId, normalizedPath);
+  }, [roomId]);
+
   const closeFileSurfaceTabMenu = useCallback(() => {
     setFileSurfaceTabMenu(null);
   }, []);
@@ -1440,7 +1527,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                     {surface.kind === 'diff' ? (
                       <FileDiff className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
                     ) : surface.kind === 'files' ? (
-                      <FolderTree className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                      <Files className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
                     ) : surface.kind === 'file' ? (
                       <CodeAgentPierreEntryIcon
                         pathValue={surface.relativePath}
@@ -1496,12 +1583,25 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                 >
                   <button
                     type="button"
-                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
+                    className="flex w-full cursor-not-allowed items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] opacity-45 disabled:hover:bg-transparent dark:text-[#faf9f5] dark:disabled:hover:bg-transparent"
                     role="menuitem"
-                    onClick={openDiffSurface}
+                    aria-disabled="true"
+                    title={t('codeAgentBrowserSurfaceUnavailable')}
+                    disabled
                   >
-                    <FileDiff className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
-                    <span className="min-w-0 truncate">{t('codeAgentChanges')}</span>
+                    <Globe2 className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                    <span className="min-w-0 truncate">{t('codeAgentBrowserSurface')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="flex w-full cursor-not-allowed items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] opacity-45 disabled:hover:bg-transparent dark:text-[#faf9f5] dark:disabled:hover:bg-transparent"
+                    role="menuitem"
+                    aria-disabled="true"
+                    title={t('codeAgentTerminalSurfaceUnavailable')}
+                    disabled
+                  >
+                    <TerminalSquare className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                    <span className="min-w-0 truncate">{t('codeAgentTerminalSurface')}</span>
                   </button>
                   <button
                     type="button"
@@ -1509,8 +1609,17 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                     role="menuitem"
                     onClick={openFilesSurface}
                   >
-                    <FolderTree className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                    <Files className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
                     <span className="min-w-0 truncate">{t('codeAgentWorkspaceFiles')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
+                    role="menuitem"
+                    onClick={openDiffSurface}
+                  >
+                    <FileDiff className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                    <span className="min-w-0 truncate">{t('codeAgentChanges')}</span>
                   </button>
                 </div>
               ) : null}
@@ -1589,12 +1698,54 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
           onAddDiff={openDiffSurface}
         />
       ) : activeDiffSurface ? (
-        <div className="flex min-h-0 flex-1 overflow-hidden p-2">
+        <div className="flex min-h-0 flex-1 gap-2 overflow-hidden p-2">
+          {changedFileEntries.length > 0 ? (
+            <aside
+              className="flex min-h-0 w-[min(18rem,34%)] min-w-48 shrink-0 flex-col overflow-hidden rounded-md border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]"
+              data-testid="code-agent-diff-changed-files-sidebar"
+            >
+              <div className="flex min-h-0 shrink-0 items-center gap-2 border-b border-[#dedbd0] px-3 py-2 text-xs text-[#4d4c48] dark:border-[#30302e] dark:text-[#e8e6dc]">
+                <span className="min-w-0 flex-1 truncate font-semibold">
+                  {t('codeAgentChangedFilesCount', { count: changedFileEntries.length })}
+                </span>
+                {hasNonZeroChangedFileStat(changedFileSummary) ? (
+                  <CodeAgentDiffStatLabel
+                    additions={changedFileSummary.additions}
+                    deletions={changedFileSummary.deletions}
+                    className="shrink-0 text-[11px]"
+                    layout="inline"
+                  />
+                ) : null}
+                {hasChangedFileDirectories ? (
+                  <button
+                    type="button"
+                    data-scroll-anchor-ignore
+                    className="shrink-0 rounded-md border border-[#dedbd0] px-2 py-1 text-[11px] font-semibold text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:border-[#30302e] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+                    onClick={() => setAllChangedDirectoriesExpanded((expanded) => !expanded)}
+                  >
+                    {allChangedDirectoriesExpanded ? t('codeAgentCollapseChangedFileTree') : t('codeAgentExpandChangedFileTree')}
+                  </button>
+                ) : null}
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto p-2">
+                <CodeAgentChangedFilesTree
+                  files={changedFileEntries}
+                  allDirectoriesExpanded={allChangedDirectoriesExpanded}
+                  resolvedTheme={resolvedTheme}
+                  selectedPath={selectedDiffFilePath}
+                  onOpenDiffFile={handleOpenChangedDiffFile}
+                />
+              </div>
+            </aside>
+          ) : null}
           <CodeAgentWorkspaceDiffViewer
             roomId={roomId}
             enabled
             refreshKey={workspaceReadyKey}
             onOpenFile={handleOpenWorkspaceFileFromDiff}
+            onFileSummariesChange={handleDiffFileSummariesChange}
+            selectedFilePath={selectedDiffFilePath}
+            selectedFileRevealRequestId={selectedDiffFileRequestId}
             reviewComments={reviewComments}
             onAddReviewComment={onAddReviewComment}
             onRemoveReviewComment={onRemoveReviewComment}

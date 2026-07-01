@@ -13,6 +13,10 @@ import {
   fnv1a32,
   resetCodeAgentRenderablePatchCacheForTests,
 } from '../utils/codeAgentDiffRendering';
+import {
+  readCodeAgentRightPanelState,
+  resetCodeAgentRightPanelStoreForTests,
+} from '../utils/codeAgentRightPanelStore';
 import type { ReviewCommentContext } from '../utils/codeAgentReviewComments';
 
 const loadCodeAgentWorkspaceDiffMock = vi.hoisted(() => vi.fn());
@@ -136,6 +140,7 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
   beforeEach(() => {
     resetCodeAgentRenderablePatchCacheForTests();
     resetCodeAgentDiffPanelStoreForTests();
+    resetCodeAgentRightPanelStoreForTests();
     loadCodeAgentWorkspaceRefsMock.mockResolvedValue({
       available: true,
       headRef: 'feature/search',
@@ -154,6 +159,7 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     localStorage.clear();
     resetCodeAgentRenderablePatchCacheForTests();
     resetCodeAgentDiffPanelStoreForTests();
+    resetCodeAgentRightPanelStoreForTests();
   });
 
   it('renders the T3-style diff loading skeleton while the workspace patch is pending', async () => {
@@ -572,6 +578,57 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
       revealRequestId: 0,
     });
     expect(screen.getByLabelText('codeAgentDiffScope: codeAgentDiffScopeWorkingTree')).toBeTruthy();
+  });
+
+  it('does not report stale file summaries while a newly selected diff scope is loading', async () => {
+    const summaryReports: Array<readonly { id: string; path: string; additions: number; deletions: number }[]> = [];
+    loadCodeAgentWorkspaceDiffMock
+      .mockResolvedValueOnce({
+        available: true,
+        patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+        byteSize: 42,
+        truncated: false,
+      })
+      .mockReturnValueOnce(new Promise(() => undefined));
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          {
+            name: 'src/App.tsx',
+            hunks: [],
+            additionLines: ['next'],
+            deletionLines: ['prev'],
+            type: 'modify',
+          },
+        ],
+      },
+    ]);
+
+    render(
+      <CodeAgentWorkspaceDiffViewer
+        roomId="room-1"
+        enabled
+        refreshKey="snapshot-1"
+        onFileSummariesChange={(summaries) => summaryReports.push(summaries)}
+      />,
+    );
+
+    expect(within(await screen.findByTestId('code-view')).getByText('src/App.tsx')).toBeTruthy();
+    await waitFor(() => {
+      expect(summaryReports.at(-1)?.map((summary) => summary.path)).toEqual(['src/App.tsx']);
+    });
+
+    fireEvent.click(screen.getByText('codeAgentDiffScopeWorkingTree'));
+
+    await waitFor(() => {
+      expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.queryByTestId('code-view')).toBeNull();
+    expect(screen.getByTestId('code-agent-workspace-diff-loading')).toBeTruthy();
+    await waitFor(() => {
+      expect(summaryReports.at(-1)).toEqual([]);
+    });
+    expect(parsePatchFilesMock).toHaveBeenCalledTimes(1);
   });
 
   it('selects T3-style branch base refs and toggles remote refs', async () => {
@@ -1214,7 +1271,6 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
   });
 
   it('opens a diff file through the T3 title click action', async () => {
-    const onOpenFile = vi.fn();
     loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
       available: true,
       patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
@@ -1234,18 +1290,27 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
         roomId="room-1"
         enabled
         refreshKey="snapshot-1"
-        onOpenFile={onOpenFile}
       />,
     );
 
     const codeView = await screen.findByTestId('code-view');
     fireEvent.click(within(codeView).getByText('src/App.tsx'));
 
-    expect(onOpenFile).toHaveBeenCalledWith('src/App.tsx');
+    expect(readCodeAgentRightPanelState('room-1')).toMatchObject({
+      isOpen: true,
+      activeSurfaceId: 'file:src/App.tsx',
+      surfaces: [
+        {
+          id: 'file:src/App.tsx',
+          kind: 'file',
+          relativePath: 'src/App.tsx',
+          revealLine: null,
+        },
+      ],
+    });
   });
 
   it('opens a clicked diff line with a T3-style file reveal target', async () => {
-    const onOpenFile = vi.fn();
     loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
       available: true,
       patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
@@ -1265,18 +1330,26 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
         roomId="room-1"
         enabled
         refreshKey="snapshot-1"
-        onOpenFile={onOpenFile}
       />,
     );
 
     const codeView = await screen.findByTestId('code-view');
     fireEvent.click(within(codeView).getByText('line 42'));
 
-    expect(onOpenFile).toHaveBeenCalledWith('src/App.tsx#L42');
+    expect(readCodeAgentRightPanelState('room-1')).toMatchObject({
+      activeSurfaceId: 'file:src/App.tsx',
+      surfaces: [
+        {
+          id: 'file:src/App.tsx',
+          kind: 'file',
+          relativePath: 'src/App.tsx',
+          revealLine: 42,
+        },
+      ],
+    });
   });
 
   it('resolves renamed diff line clicks to the next file reveal target', async () => {
-    const onOpenFile = vi.fn();
     loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
       available: true,
       patch: 'diff --git a/src/Old.tsx b/src/New.tsx\n',
@@ -1304,17 +1377,25 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
         roomId="room-1"
         enabled
         refreshKey="snapshot-1"
-        onOpenFile={onOpenFile}
       />,
     );
 
     fireEvent.click(await screen.findByText('gutter 24'));
 
-    expect(onOpenFile).toHaveBeenCalledWith('src/New.tsx#L24');
+    expect(readCodeAgentRightPanelState('room-1')).toMatchObject({
+      activeSurfaceId: 'file:src/New.tsx',
+      surfaces: [
+        {
+          id: 'file:src/New.tsx',
+          kind: 'file',
+          relativePath: 'src/New.tsx',
+          revealLine: 24,
+        },
+      ],
+    });
   });
 
   it('falls back to the only diff file when a line click has no file container', async () => {
-    const onOpenFile = vi.fn();
     loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
       available: true,
       patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
@@ -1334,7 +1415,6 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
         roomId="room-1"
         enabled
         refreshKey="snapshot-1"
-        onOpenFile={onOpenFile}
       />,
     );
 
@@ -1343,11 +1423,20 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     file?.removeAttribute('data-diff');
     fireEvent.click(within(codeView).getByText('line 42'));
 
-    expect(onOpenFile).toHaveBeenCalledWith('src/App.tsx#L42');
+    expect(readCodeAgentRightPanelState('room-1')).toMatchObject({
+      activeSurfaceId: 'file:src/App.tsx',
+      surfaces: [
+        {
+          id: 'file:src/App.tsx',
+          kind: 'file',
+          relativePath: 'src/App.tsx',
+          revealLine: 42,
+        },
+      ],
+    });
   });
 
   it('does not guess the first diff title for unscoped line clicks in multi-file diffs', async () => {
-    const onOpenFile = vi.fn();
     loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
       available: true,
       patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
@@ -1368,7 +1457,6 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
         roomId="room-1"
         enabled
         refreshKey="snapshot-1"
-        onOpenFile={onOpenFile}
       />,
     );
 
@@ -1377,11 +1465,14 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     screen.getByTestId('diff-file-file:utils').removeAttribute('data-diff');
     fireEvent.click(within(appFile).getByText('line 42'));
 
-    expect(onOpenFile).not.toHaveBeenCalled();
+    expect(readCodeAgentRightPanelState('room-1')).toEqual({
+      isOpen: false,
+      activeSurfaceId: null,
+      surfaces: [],
+    });
   });
 
   it('opens the resolved T3 diff path for renamed files', async () => {
-    const onOpenFile = vi.fn();
     loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
       available: true,
       patch: 'diff --git a/src/Old.tsx b/src/New.tsx\n',
@@ -1409,14 +1500,23 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
         roomId="room-1"
         enabled
         refreshKey="snapshot-1"
-        onOpenFile={onOpenFile}
       />,
     );
 
     fireEvent.click(await screen.findByText('src/Old.tsx → src/New.tsx'));
 
     expect(screen.getByTestId('diff-file-rename:src/New.tsx')).toBeTruthy();
-    expect(onOpenFile).toHaveBeenCalledWith('src/New.tsx');
+    expect(readCodeAgentRightPanelState('room-1')).toMatchObject({
+      activeSurfaceId: 'file:src/New.tsx',
+      surfaces: [
+        {
+          id: 'file:src/New.tsx',
+          kind: 'file',
+          relativePath: 'src/New.tsx',
+          revealLine: null,
+        },
+      ],
+    });
   });
 
   it('scrolls to a selected changed file like the T3 diff panel', async () => {

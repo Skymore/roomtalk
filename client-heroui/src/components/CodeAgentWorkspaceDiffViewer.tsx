@@ -181,6 +181,11 @@ interface DiffFileVisibilityEntry {
 
 type DiffFileVisibilityState = Map<string, DiffFileVisibilityEntry>;
 
+interface ScopedWorkspaceDiff {
+  scopeKey: string;
+  diff: CodeAgentWorkspaceDiff;
+}
+
 export interface CodeAgentWorkspaceDiffFileSummary {
   id: string;
   path: string;
@@ -331,7 +336,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
 }) => {
   const { t } = useTranslation();
   const resolvedTheme = useResolvedTheme();
-  const [diff, setDiff] = useState<CodeAgentWorkspaceDiff | null>(null);
+  const [diffState, setDiffState] = useState<ScopedWorkspaceDiff | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
   const [wordWrap, setWordWrap] = useState(readInitialDiffWordWrap);
@@ -341,6 +346,8 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   const diffPanelSelection = useCodeAgentDiffPanelSelection(roomId);
   const diffScope: CodeAgentWorkspaceDiffScope = diffPanelSelection.kind === 'unstaged' ? 'unstaged' : 'branch';
   const diffBaseRef = diffPanelSelection.kind === 'branch' ? diffPanelSelection.baseRef : null;
+  const diffContentScopeKey = `${roomId}:${refreshKey}:${diffIgnoreWhitespace ? 'ignore-whitespace' : 'all-whitespace'}:${diffScope}:${diffScope === 'branch' ? diffBaseRef ?? 'auto' : 'working-tree'}`;
+  const diff = diffState?.scopeKey === diffContentScopeKey ? diffState.diff : null;
   const [baseRefQuery, setBaseRefQuery] = useState('');
   const [workspaceRefs, setWorkspaceRefs] = useState<CodeAgentWorkspaceRefs | null>(null);
   const [workspaceRefsError, setWorkspaceRefsError] = useState<string | null>(null);
@@ -551,7 +558,10 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     }).then(
       (nextDiff) => {
         if (!controller.signal.aborted) {
-          setDiff(nextDiff);
+          setDiffState({
+            scopeKey: diffContentScopeKey,
+            diff: nextDiff,
+          });
         }
       },
       (nextError) => {
@@ -566,7 +576,15 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     });
 
     return () => controller.abort();
-  }, [diffBaseRef, diffIgnoreWhitespace, diffRefreshNonce, diffScope, enabled, refreshKey, roomId]);
+  }, [
+    diffBaseRef,
+    diffContentScopeKey,
+    diffIgnoreWhitespace,
+    diffRefreshNonce,
+    diffScope,
+    enabled,
+    roomId,
+  ]);
 
   const renderablePatch = useMemo(
     () => getRenderablePatch(diff?.patch, `workspace:${roomId}:${refreshKey}:${diffScope}:${diffBaseRef ?? 'auto'}:${resolvedTheme}`, {
@@ -659,9 +677,6 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   }, [parsed.items, scrollToDiffItem, selectedFilePath, selectedFileRevealRequestId]);
 
   const handleDiffClickCapture = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (!onOpenFile) {
-      return;
-    }
     const composedPath = event.nativeEvent.composedPath?.() ?? [];
     const titleFromPath = composedPath.find((node): node is HTMLElement => (
       node instanceof HTMLElement && node.hasAttribute('data-title')
@@ -674,6 +689,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
       const openPath = resolveDiffTitleOpenPath(rawDirectTitle, diffTitlePathMap);
       if (openPath) {
         openCodeAgentDiffFilePrimaryAction({
+          roomId,
           filePath: openPath,
           openInWorkspaceFileViewer: onOpenFile,
         });
@@ -695,6 +711,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
         : null;
     if (openPath) {
       openCodeAgentDiffFilePrimaryAction({
+        roomId,
         filePath: withDiffLineTarget(openPath, lineNumber),
         openInWorkspaceFileViewer: onOpenFile,
       });
@@ -1083,7 +1100,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                         revealLargeDiffFile(fileKey);
                       }}
                     >
-                      <span className="min-w-0 truncate">
+                      <span className="hidden min-w-0 truncate sm:block">
                         {t('codeAgentLargeDiffSuppressedMessage')}
                       </span>
                       <span className="shrink-0 text-[#9f462c] dark:text-[#ffb197]">
@@ -1126,7 +1143,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                 : 'codeAgentNonTextDiffContentsUnavailable';
               return (
                 <span
-                  className="inline-flex max-w-[28rem] items-center gap-2 overflow-hidden rounded-sm bg-[#f0eee6] px-2 py-1 text-[11px] leading-4 text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]"
+                  className={`${previewState.reason === 'large' ? 'hidden sm:inline-flex' : 'inline-flex'} max-w-[28rem] items-center gap-2 overflow-hidden rounded-sm bg-[#f0eee6] px-2 py-1 text-[11px] leading-4 text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]`}
                   data-testid="code-agent-diff-file-suppression-notice"
                   title={t(messageKey)}
                 >
