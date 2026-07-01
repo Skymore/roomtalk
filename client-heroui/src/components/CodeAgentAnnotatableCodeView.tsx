@@ -50,6 +50,13 @@ interface CodeAgentAnnotatableCodeViewProps {
     viewed: boolean,
     previewState: CodeAgentDiffFilePreviewState,
   ) => ReactNode;
+  renderHeaderMetadata?: (
+    fileDiff: FileDiffMetadata,
+    fileKey: string,
+    collapsed: boolean,
+    viewed: boolean,
+    previewState: CodeAgentDiffFilePreviewState,
+  ) => ReactNode;
 }
 
 interface DiffSelectionContext {
@@ -67,6 +74,7 @@ export function CodeAgentAnnotatableCodeView({
   viewerRef,
   className,
   renderHeaderPrefix,
+  renderHeaderMetadata,
 }: CodeAgentAnnotatableCodeViewProps) {
   const [selectedLines, setSelectedLines] = useState<{
     id: string;
@@ -212,6 +220,18 @@ export function CodeAgentAnnotatableCodeView({
           )
           : null
       }
+      renderHeaderMetadata={renderHeaderMetadata ? (item) => {
+        if (item.type !== 'diff') {
+          return null;
+        }
+        return renderHeaderMetadata(
+          item.fileDiff,
+          item.id,
+          item.collapsed === true,
+          filesByKey.get(item.id)?.viewed === true,
+          filesByKey.get(item.id)?.previewState ?? { kind: 'render' },
+        );
+      } : undefined}
       options={{
         ...options,
         enableGutterUtility: !hasOpenCommentForm,

@@ -15,6 +15,7 @@ import { resolveCodeAgentDiffThemeName } from '../utils/codeAgentDiffRendering';
 import {
   appendWorkspaceAssetPreviewRevision,
 } from '../utils/codeWorkspaceFilePreview';
+import { preloadWorkspaceImagePreview } from '../utils/codeWorkspaceImagePreviewCache';
 import { type ReviewCommentContext } from '../utils/codeAgentReviewComments';
 import { CodeAgentEditableFileSurface } from './CodeAgentEditableFileSurface';
 import { CodeAgentFilePreviewHeader } from './CodeAgentFilePreviewHeader';
@@ -264,9 +265,25 @@ function WorkspaceImageAssetPreview({ src, alt }: { src: string; alt: string }) 
   const [fullScreenVisible, setFullScreenVisible] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     setImageLoading(true);
     setLoadError(false);
     setFullScreenVisible(false);
+
+    void preloadWorkspaceImagePreview(src).then((loaded) => {
+      if (cancelled) {
+        return;
+      }
+      setImageLoading(false);
+      setLoadError(!loaded);
+      if (!loaded) {
+        setFullScreenVisible(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [src]);
 
   useEffect(() => {

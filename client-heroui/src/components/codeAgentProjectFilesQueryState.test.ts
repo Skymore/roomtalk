@@ -74,6 +74,52 @@ describe('codeAgentProjectFilesQueryState', () => {
     expect(getOptimisticCodeAgentProjectFileQueryData('room-1', 'src/App.tsx')).toBeNull();
   });
 
+  it('does not clear confirmed optimistic data from a refreshed read for another path', () => {
+    const savedContents = 'export const saved = true;';
+    setCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', savedContents);
+
+    expect(confirmCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', savedContents)).toBe(true);
+    expect(settleConfirmedCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', {
+      path: 'src/Other.tsx',
+      content: savedContents,
+      byteSize: 26,
+      truncated: false,
+      encoding: 'utf-8',
+    })).toBe(false);
+    expect(getOptimisticCodeAgentProjectFileQueryData('room-1', 'src/App.tsx')?.content).toBe(savedContents);
+
+    expect(settleConfirmedCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', {
+      path: 'src/App.tsx',
+      content: savedContents,
+      byteSize: 26,
+      truncated: false,
+      encoding: 'utf-8',
+    })).toBe(true);
+    expect(getOptimisticCodeAgentProjectFileQueryData('room-1', 'src/App.tsx')).toBeNull();
+  });
+
+  it('does not clear confirmed optimistic data from truncated or non-utf8 refreshed reads', () => {
+    const savedContents = 'export const saved = true;';
+    setCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', savedContents);
+
+    expect(confirmCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', savedContents)).toBe(true);
+    expect(settleConfirmedCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', {
+      path: 'src/App.tsx',
+      content: savedContents,
+      byteSize: 26,
+      truncated: true,
+      encoding: 'utf-8',
+    })).toBe(false);
+    expect(settleConfirmedCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', {
+      path: 'src/App.tsx',
+      content: savedContents,
+      byteSize: 26,
+      truncated: false,
+      encoding: 'base64',
+    })).toBe(false);
+    expect(getOptimisticCodeAgentProjectFileQueryData('room-1', 'src/App.tsx')?.content).toBe(savedContents);
+  });
+
   it('does not clear a newer optimistic draft after an older confirmation refreshes', async () => {
     setCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', 'export const saved = true;');
 

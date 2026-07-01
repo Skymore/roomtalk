@@ -22,6 +22,18 @@ const buildOptimisticFile = (relativePath: string, contents: string): CodeWorksp
   encoding: 'utf-8',
 });
 
+const refreshedFileMatchesOptimistic = (
+  relativePath: string,
+  optimisticFile: CodeWorkspaceFile,
+  refreshedFile: CodeWorkspaceFile,
+): boolean => (
+  normalizeWorkspaceOpenPath(refreshedFile.path) === normalizeWorkspaceOpenPath(relativePath) &&
+  refreshedFile.content === optimisticFile.content &&
+  refreshedFile.byteSize === optimisticFile.byteSize &&
+  refreshedFile.truncated === optimisticFile.truncated &&
+  refreshedFile.encoding === optimisticFile.encoding
+);
+
 export function setCodeAgentProjectFileQueryData(
   roomId: string,
   relativePath: string,
@@ -80,7 +92,7 @@ export function settleConfirmedCodeAgentProjectFileQueryData(
   if (!optimisticFile || optimisticFile.confirmedAgainst === undefined) {
     return false;
   }
-  if (optimisticFile.data.content !== refreshedFile.content) {
+  if (!refreshedFileMatchesOptimistic(relativePath, optimisticFile.data, refreshedFile)) {
     return false;
   }
   optimisticFiles.delete(key);

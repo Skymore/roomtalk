@@ -11,11 +11,17 @@ import {
   useCodeAgentDiffPanelSelection,
 } from '../utils/codeAgentDiffPanelStore';
 import {
+  getValidExplicitCodeAgentDiffFileKeys,
+  removeCodeAgentDiffFileKey,
+  toggleCodeAgentDiffFileKey,
+} from '../utils/codeAgentDiffFileVisibility';
+import {
   buildFileDiffRenderKey,
   buildDiffTitlePathMap,
   getCodeAgentDiffFilePreviewState,
   getDiffCollapseIconClassName,
   getRenderablePatch,
+  isPureRenameFileDiff,
   resolveCodeAgentDiffThemeName,
   resolveDiffTitleOpenPath,
   resolveFileDiffPath,
@@ -70,6 +76,7 @@ const DIFF_RENDER_MODE_STORAGE_KEY = 'roomtalk.codeWorkspace.diffRenderMode';
 const DIFF_IGNORE_WHITESPACE_STORAGE_KEY = 'roomtalk.codeWorkspace.diffIgnoreWhitespace';
 const AUTOMATIC_BASE_REF = '__automatic_base_ref__';
 const WORKSPACE_REF_LIMIT = 200;
+const DIFF_MAX_LINE_DIFF_LENGTH = 1_000;
 type DiffRenderMode = 'stacked' | 'split';
 const EMPTY_DIFF_FILE_KEYS: ReadonlySet<string> = new Set();
 const RENDER_DIFF_FILE_PREVIEW_STATE: CodeAgentDiffFilePreviewState = { kind: 'render' };
@@ -167,12 +174,13 @@ const DIFF_PANEL_UNSAFE_CSS = `
 }
 `;
 
-interface DiffFileVisibilityState {
-  scopeKey: string | null;
+interface DiffFileVisibilityEntry {
   collapsedFileKeys: Set<string>;
   viewedFileKeys: Set<string>;
   revealedLargeFileKeys: Set<string>;
 }
+
+type DiffFileVisibilityState = Map<string, DiffFileVisibilityEntry>;
 
 export interface CodeAgentWorkspaceDiffFileSummary {
   id: string;
@@ -339,22 +347,12 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   const [workspaceRefsError, setWorkspaceRefsError] = useState<string | null>(null);
   const [isWorkspaceRefsPending, setIsWorkspaceRefsPending] = useState(false);
   const codeViewRef = useRef<CodeViewHandle<DiffCommentAnnotationGroup> | null>(null);
-  const [diffFileVisibility, setDiffFileVisibility] = useState<DiffFileVisibilityState>(() => ({
-    scopeKey: null,
-    collapsedFileKeys: new Set(),
-    viewedFileKeys: new Set(),
-    revealedLargeFileKeys: new Set(),
-  }));
+  const [diffFileVisibility, setDiffFileVisibility] = useState<DiffFileVisibilityState>(() => new Map());
   const diffFileVisibilityScopeKey = `${roomId}:${diffScope}:${diffScope === 'branch' ? diffBaseRef ?? 'auto' : 'working-tree'}`;
-  const collapsedDiffFileKeys = diffFileVisibility.scopeKey === diffFileVisibilityScopeKey
-    ? diffFileVisibility.collapsedFileKeys
-    : EMPTY_DIFF_FILE_KEYS;
-  const viewedDiffFileKeys = diffFileVisibility.scopeKey === diffFileVisibilityScopeKey
-    ? diffFileVisibility.viewedFileKeys
-    : EMPTY_DIFF_FILE_KEYS;
-  const revealedLargeDiffFileKeys = diffFileVisibility.scopeKey === diffFileVisibilityScopeKey
-    ? diffFileVisibility.revealedLargeFileKeys
-    : EMPTY_DIFF_FILE_KEYS;
+  const scopedDiffFileVisibility = diffFileVisibility.get(diffFileVisibilityScopeKey);
+  const collapsedDiffFileKeys = scopedDiffFileVisibility?.collapsedFileKeys ?? EMPTY_DIFF_FILE_KEYS;
+  const viewedDiffFileKeys = scopedDiffFileVisibility?.viewedFileKeys ?? EMPTY_DIFF_FILE_KEYS;
+  const revealedLargeDiffFileKeys = scopedDiffFileVisibility?.revealedLargeFileKeys ?? EMPTY_DIFF_FILE_KEYS;
   const wordWrapLabel = t(wordWrap ? 'codeAgentDisableDiffLineWrapping' : 'codeAgentEnableDiffLineWrapping');
   const ignoreWhitespaceLabel = t(diffIgnoreWhitespace ? 'codeAgentShowWhitespaceChanges' : 'codeAgentHideWhitespaceChanges');
   const refreshDiffLabel = t('codeAgentRefreshWorkspaceDiff');
@@ -423,59 +421,64 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
 
   const toggleDiffFileCollapsed = (fileKey: string) => {
     setDiffFileVisibility((current) => {
-      const active = current.scopeKey === diffFileVisibilityScopeKey;
-      const collapsedFileKeys = new Set(active ? current.collapsedFileKeys : []);
-      const viewedFileKeys = new Set(active ? current.viewedFileKeys : []);
-      const revealedLargeFileKeys = new Set(active ? current.revealedLargeFileKeys : []);
-      if (collapsedFileKeys.has(fileKey)) {
-        collapsedFileKeys.delete(fileKey);
-      } else {
-        collapsedFileKeys.add(fileKey);
-      }
-      return {
-        scopeKey: diffFileVisibilityScopeKey,
+      const scopedVisibility = current.get(diffFileVisibilityScopeKey);
+      const collapsedFileKeys = new Set(toggleCodeAgentDiffFileKey(
+        [...(scopedVisibility?.collapsedFileKeys ?? [])],
+        fileKey,
+      ));
+      const viewedFileKeys = new Set(scopedVisibility?.viewedFileKeys ?? []);
+      const revealedLargeFileKeys = new Set(scopedVisibility?.revealedLargeFileKeys ?? []);
+      const next = new Map(current);
+      next.set(diffFileVisibilityScopeKey, {
         collapsedFileKeys,
         viewedFileKeys,
         revealedLargeFileKeys,
-      };
+      });
+      return next;
     });
   };
 
   const toggleDiffFileViewed = (fileKey: string) => {
     setDiffFileVisibility((current) => {
-      const active = current.scopeKey === diffFileVisibilityScopeKey;
-      const collapsedFileKeys = new Set(active ? current.collapsedFileKeys : []);
-      const viewedFileKeys = new Set(active ? current.viewedFileKeys : []);
-      const revealedLargeFileKeys = new Set(active ? current.revealedLargeFileKeys : []);
-      if (viewedFileKeys.has(fileKey)) {
-        viewedFileKeys.delete(fileKey);
-      } else {
+      const scopedVisibility = current.get(diffFileVisibilityScopeKey);
+      const collapsedFileKeys = new Set(scopedVisibility?.collapsedFileKeys ?? []);
+      const viewedBeforeToggle = scopedVisibility?.viewedFileKeys.has(fileKey) === true;
+      const viewedFileKeys = new Set(toggleCodeAgentDiffFileKey(
+        [...(scopedVisibility?.viewedFileKeys ?? [])],
+        fileKey,
+      ));
+      const revealedLargeFileKeys = new Set(scopedVisibility?.revealedLargeFileKeys ?? []);
+      if (!viewedBeforeToggle) {
         viewedFileKeys.add(fileKey);
         collapsedFileKeys.add(fileKey);
       }
-      return {
-        scopeKey: diffFileVisibilityScopeKey,
+      const next = new Map(current);
+      next.set(diffFileVisibilityScopeKey, {
         collapsedFileKeys,
         viewedFileKeys,
         revealedLargeFileKeys,
-      };
+      });
+      return next;
     });
   };
 
   const revealLargeDiffFile = (fileKey: string) => {
     setDiffFileVisibility((current) => {
-      const active = current.scopeKey === diffFileVisibilityScopeKey;
-      const collapsedFileKeys = new Set(active ? current.collapsedFileKeys : []);
-      const viewedFileKeys = new Set(active ? current.viewedFileKeys : []);
-      const revealedLargeFileKeys = new Set(active ? current.revealedLargeFileKeys : []);
+      const scopedVisibility = current.get(diffFileVisibilityScopeKey);
+      const collapsedFileKeys = new Set(removeCodeAgentDiffFileKey(
+        [...(scopedVisibility?.collapsedFileKeys ?? [])],
+        fileKey,
+      ));
+      const viewedFileKeys = new Set(scopedVisibility?.viewedFileKeys ?? []);
+      const revealedLargeFileKeys = new Set(scopedVisibility?.revealedLargeFileKeys ?? []);
       revealedLargeFileKeys.add(fileKey);
-      collapsedFileKeys.delete(fileKey);
-      return {
-        scopeKey: diffFileVisibilityScopeKey,
+      const next = new Map(current);
+      next.set(diffFileVisibilityScopeKey, {
         collapsedFileKeys,
         viewedFileKeys,
         revealedLargeFileKeys,
-      };
+      });
+      return next;
     });
   };
 
@@ -573,6 +576,8 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     }),
     [diff?.patch, diff?.truncated, diffBaseRef, diffScope, refreshKey, resolvedTheme, roomId],
   );
+  const showTruncatedDiff = diff?.truncated === true || renderablePatch?.truncated === true;
+  const truncatedDiffMessage = renderablePatch?.notice ?? t('codeAgentDiffPreviewTruncated');
   const parsed = useMemo(() => {
     if (!renderablePatch || renderablePatch.kind !== 'files') {
       return { items: [] as ParsedWorkspaceDiffItem[] };
@@ -584,13 +589,29 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
         sensitivity: 'base',
       }),
     );
-    const items = files.map((fileDiff, fileIndex) => {
-      const id = buildFileDiffRenderKey(fileDiff) || `${fileIndex}`;
+    const filesWithIds = files.map((fileDiff, fileIndex) => ({
+      fileDiff,
+      id: buildFileDiffRenderKey(fileDiff) || `${fileIndex}`,
+    }));
+    const visibilityFiles = filesWithIds.map(({ id }) => ({ id }));
+    const validCollapsedDiffFileKeys = new Set(getValidExplicitCodeAgentDiffFileKeys(
+      visibilityFiles,
+      [...collapsedDiffFileKeys],
+    ));
+    const validViewedDiffFileKeys = new Set(getValidExplicitCodeAgentDiffFileKeys(
+      visibilityFiles,
+      [...viewedDiffFileKeys],
+    ));
+    const validRevealedLargeDiffFileKeys = new Set(getValidExplicitCodeAgentDiffFileKeys(
+      visibilityFiles,
+      [...revealedLargeDiffFileKeys],
+    ));
+    const items = filesWithIds.map(({ fileDiff, id }) => {
       const previewState = getCodeAgentDiffFilePreviewState(fileDiff);
       const suppressed = previewState.kind === 'suppressed'
-        && (previewState.reason !== 'large' || !revealedLargeDiffFileKeys.has(id));
-      const collapsed = suppressed || collapsedDiffFileKeys.has(id);
-      const viewed = viewedDiffFileKeys.has(id);
+        && (previewState.reason !== 'large' || !validRevealedLargeDiffFileKeys.has(id));
+      const collapsed = suppressed || validCollapsedDiffFileKeys.has(id);
+      const viewed = validViewedDiffFileKeys.has(id);
       return {
         id,
         type: 'diff' as const,
@@ -933,12 +954,12 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
       testId="code-agent-workspace-diff-viewer"
     >
       <CodeAgentWorkspaceDiffPanelViewport>
-        {diff?.truncated ? (
+        {showTruncatedDiff ? (
           <div
             className="shrink-0 border-b border-amber-500/20 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-700 dark:text-amber-300"
             data-testid="code-agent-workspace-diff-truncated"
           >
-            {t('codeAgentDiffPreviewTruncated')}
+            {truncatedDiffMessage}
           </div>
         ) : null}
         {isPending && diff === null ? (
@@ -1002,21 +1023,34 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
             renderHeaderPrefix={(fileDiff, fileKey, collapsed, viewed, previewState) => {
               const filePath = resolveFileDiffPath(fileDiff);
               const suppression = previewState.kind === 'suppressed' ? previewState : null;
+              const canLoadSuppressedDiff = suppression?.reason === 'large';
+              const isCollapseButtonDisabled = suppression !== null && !canLoadSuppressedDiff;
+              const suppressionMessageKey = suppression?.reason === 'large'
+                ? 'codeAgentLargeDiffSuppressedMessage'
+                : 'codeAgentNonTextDiffSuppressedMessage';
               return (
                 <div className="inline-flex shrink-0 items-center gap-1">
                   <button
                     type="button"
                     aria-label={t(collapsed ? 'codeAgentExpandDiffFile' : 'codeAgentCollapseDiffFile', { path: filePath })}
                     aria-expanded={!collapsed}
-                    title={t(collapsed ? 'codeAgentExpandDiff' : 'codeAgentCollapseDiff')}
+                    disabled={isCollapseButtonDisabled}
+                    title={t(canLoadSuppressedDiff ? 'codeAgentLoadDiff' : collapsed ? 'codeAgentExpandDiff' : 'codeAgentCollapseDiff')}
                     onClick={(event) => {
                       event.stopPropagation();
                       if (suppression) {
+                        if (canLoadSuppressedDiff) {
+                          revealLargeDiffFile(fileKey);
+                        }
                         return;
                       }
                       toggleDiffFileCollapsed(fileKey);
                     }}
-                    className={`inline-flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-sm border-0 bg-transparent p-0 transition-colors hover:bg-[#141413]/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:hover:bg-[#faf9f5]/10 ${suppression ? 'opacity-60' : getDiffCollapseIconClassName(fileDiff)}`}
+                    className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm border-0 bg-transparent p-0 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] disabled:cursor-not-allowed disabled:opacity-50 ${
+                      isCollapseButtonDisabled
+                        ? 'text-[#87867f] dark:text-[#8f8d86]'
+                        : `cursor-pointer hover:bg-[#141413]/10 dark:hover:bg-[#faf9f5]/10 ${canLoadSuppressedDiff ? 'text-[#9f462c] dark:text-[#ffb197]' : getDiffCollapseIconClassName(fileDiff)}`
+                    }`}
                   >
                     {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                   </button>
@@ -1037,35 +1071,86 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                   >
                     <Check className="h-3.5 w-3.5" />
                   </button>
-                  {suppression ? (
+                  {suppression && canLoadSuppressedDiff ? (
+                    <button
+                      type="button"
+                      className="inline-flex h-5 max-w-48 cursor-pointer items-center gap-1 overflow-hidden rounded-sm bg-[#f0eee6] px-1.5 text-[10px] font-medium text-[#5e5d59] transition-colors hover:bg-[#ead6cc] hover:text-[#9f462c] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:bg-[#30302e] dark:text-[#b0aea5] dark:hover:bg-[#3b332f] dark:hover:text-[#ffb197] sm:max-w-64"
+                      data-testid="code-agent-diff-file-suppression-load"
+                      title={t('codeAgentLargeDiffSuppressedMessage')}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        revealLargeDiffFile(fileKey);
+                      }}
+                    >
+                      <span className="min-w-0 truncate">
+                        {t('codeAgentLargeDiffSuppressedMessage')}
+                      </span>
+                      <span className="shrink-0 text-[#9f462c] dark:text-[#ffb197]">
+                        {t('codeAgentLoadDiff')}
+                      </span>
+                    </button>
+                  ) : suppression ? (
                     <span
                       className="inline-flex h-5 max-w-48 items-center gap-1 overflow-hidden rounded-sm bg-[#f0eee6] px-1.5 text-[10px] font-medium text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]"
                       data-testid="code-agent-diff-file-suppression"
-                      title={t(suppression.reason === 'large' ? 'codeAgentLargeDiffSuppressedMessage' : 'codeAgentNonTextDiffSuppressedMessage')}
+                      title={t(suppressionMessageKey)}
                     >
                       <span className="truncate">
-                        {t(suppression.reason === 'large' ? 'codeAgentLargeDiff' : 'codeAgentNonTextDiff')}
+                        {t('codeAgentNonTextDiff')}
                       </span>
-                      {suppression.reason === 'large' ? (
-                        <button
-                          type="button"
-                          className="shrink-0 rounded-sm px-1 text-[#9f462c] hover:bg-[#c96442]/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#ffb197] dark:hover:bg-[#d97757]/15"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            revealLargeDiffFile(fileKey);
-                          }}
-                        >
-                          {t('codeAgentLoadDiff')}
-                        </button>
-                      ) : null}
                     </span>
                   ) : null}
                 </div>
               );
             }}
+            renderHeaderMetadata={(_fileDiff, fileKey, _collapsed, _viewed, previewState) => {
+              if (previewState.kind !== 'suppressed') {
+                if (!isPureRenameFileDiff(_fileDiff)) {
+                  return null;
+                }
+                return (
+                  <span
+                    className="inline-flex max-w-[28rem] items-center overflow-hidden rounded-sm bg-[#f0eee6] px-2 py-1 text-[11px] leading-4 text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]"
+                    data-testid="code-agent-diff-file-rename-notice"
+                    title={t('codeAgentRenameOnlyDiffMessage')}
+                  >
+                    <span className="min-w-0 truncate">
+                      {t('codeAgentRenameOnlyDiffMessage')}
+                    </span>
+                  </span>
+                );
+              }
+              const messageKey = previewState.reason === 'large'
+                ? 'codeAgentLargeDiffSuppressedMessage'
+                : 'codeAgentNonTextDiffContentsUnavailable';
+              return (
+                <span
+                  className="inline-flex max-w-[28rem] items-center gap-2 overflow-hidden rounded-sm bg-[#f0eee6] px-2 py-1 text-[11px] leading-4 text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]"
+                  data-testid="code-agent-diff-file-suppression-notice"
+                  title={t(messageKey)}
+                >
+                  <span className="min-w-0 truncate">
+                    {t(messageKey)}
+                  </span>
+                  {previewState.reason === 'large' ? (
+                    <button
+                      type="button"
+                      className="shrink-0 rounded-sm px-1.5 py-0.5 text-[#9f462c] hover:bg-[#c96442]/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#ffb197] dark:hover:bg-[#d97757]/15"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        revealLargeDiffFile(fileKey);
+                      }}
+                    >
+                      {t('codeAgentLoadDiff')}
+                    </button>
+                  ) : null}
+                </span>
+              );
+            }}
             options={{
               diffStyle: diffRenderMode === 'split' ? 'split' : 'unified',
-              lineDiffType: 'none',
+              lineDiffType: 'word-alt',
+              maxLineDiffLength: DIFF_MAX_LINE_DIFF_LENGTH,
               overflow: wordWrap ? 'wrap' : 'scroll',
               theme: resolveCodeAgentDiffThemeName(resolvedTheme),
               themeType: resolvedTheme,

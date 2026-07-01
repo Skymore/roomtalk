@@ -9,7 +9,10 @@ import {
   resetCodeAgentDiffPanelStoreForTests,
   selectCodeAgentDiffScope,
 } from '../utils/codeAgentDiffPanelStore';
-import { fnv1a32 } from '../utils/codeAgentDiffRendering';
+import {
+  fnv1a32,
+  resetCodeAgentRenderablePatchCacheForTests,
+} from '../utils/codeAgentDiffRendering';
 import type { ReviewCommentContext } from '../utils/codeAgentReviewComments';
 
 const loadCodeAgentWorkspaceDiffMock = vi.hoisted(() => vi.fn());
@@ -41,6 +44,7 @@ vi.mock('@pierre/diffs/react', () => ({
     options,
     className,
     renderHeaderPrefix,
+    renderHeaderMetadata,
     renderAnnotation,
   }: {
     items: Array<{
@@ -54,6 +58,7 @@ vi.mock('@pierre/diffs/react', () => ({
     options: {
       diffStyle: 'unified' | 'split';
       lineDiffType?: 'none' | 'word' | 'word-alt' | 'char';
+      maxLineDiffLength?: number;
       overflow: 'scroll' | 'wrap';
       enableLineSelection?: boolean;
       onLineSelectionEnd?: (range: { start: number; end: number; side?: 'additions' | 'deletions'; endSide?: 'additions' | 'deletions' }, context: { item: any }) => void;
@@ -63,6 +68,7 @@ vi.mock('@pierre/diffs/react', () => ({
     };
     className?: string;
     renderHeaderPrefix?: (item: { id: string; type: 'diff'; fileDiff: { name?: string | null; prevName?: string | null; cacheKey?: string }; collapsed?: boolean }) => ReactNode;
+    renderHeaderMetadata?: (item: { id: string; type: 'diff'; fileDiff: { name?: string | null; prevName?: string | null; cacheKey?: string }; collapsed?: boolean }) => ReactNode;
     renderAnnotation?: (annotation: { side: 'additions' | 'deletions'; lineNumber: number; metadata: { entries: Array<{ id: string; kind: 'draft' | 'comment'; rangeLabel: string; text: string }> } }) => ReactNode;
   }, ref) => {
     const [mountId] = React.useState(() => {
@@ -76,6 +82,7 @@ vi.mock('@pierre/diffs/react', () => ({
         data-mount-id={String(mountId)}
         data-diff-style={options.diffStyle}
         data-line-diff-type={options.lineDiffType || ''}
+        data-max-line-diff-length={String(options.maxLineDiffLength ?? '')}
         data-overflow={options.overflow}
         data-sticky-headers={String(options.stickyHeaders === true)}
         data-layout={options.layout ? `${options.layout.paddingTop}:${options.layout.paddingBottom}:${options.layout.gap}` : ''}
@@ -93,6 +100,7 @@ vi.mock('@pierre/diffs/react', () => ({
                 <span>{title}</span>
                 <span> +2 -1</span>
               </span>
+              {renderHeaderMetadata?.(item)}
               <button type="button" data-line="42">line 42</button>
               <button type="button" data-column-number="24">gutter 24</button>
               <button
@@ -126,6 +134,7 @@ vi.mock('@pierre/diffs/react', () => ({
 
 describe('CodeAgentWorkspaceDiffViewer', () => {
   beforeEach(() => {
+    resetCodeAgentRenderablePatchCacheForTests();
     resetCodeAgentDiffPanelStoreForTests();
     loadCodeAgentWorkspaceRefsMock.mockResolvedValue({
       available: true,
@@ -143,6 +152,7 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     codeViewScrollToMock.mockReset();
     codeViewMountState.nextId = 0;
     localStorage.clear();
+    resetCodeAgentRenderablePatchCacheForTests();
     resetCodeAgentDiffPanelStoreForTests();
   });
 
@@ -242,7 +252,8 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     );
     expect(screen.getByTestId('code-view').dataset.overflow).toBe('scroll');
     expect(screen.getByTestId('code-view').dataset.diffStyle).toBe('unified');
-    expect(screen.getByTestId('code-view').dataset.lineDiffType).toBe('none');
+    expect(screen.getByTestId('code-view').dataset.lineDiffType).toBe('word-alt');
+    expect(screen.getByTestId('code-view').dataset.maxLineDiffLength).toBe('1000');
     expect(screen.getByTestId('code-view').dataset.stickyHeaders).toBe('true');
     expect(screen.getByTestId('code-view').dataset.layout).toBe('8:8:8');
     expect(screen.getByTestId('code-view').dataset.unsafeCss).toContain('[data-diffs-header]');
@@ -392,6 +403,28 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(screen.queryByTestId('code-view')).toBeNull();
   });
 
+  it('surfaces the T3 truncation marker even without workspace diff metadata', async () => {
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'not a complete git patch\n+but still useful output\n[truncated]\n',
+      byteSize: 2_000_000,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockImplementation(() => {
+      throw new Error('bad patch');
+    });
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
+
+    expect((await screen.findByTestId('code-agent-workspace-raw-diff')).textContent).toBe('not a complete git patch\n+but still useful output');
+    expect(parsePatchFilesMock).toHaveBeenCalledWith(
+      'not a complete git patch\n+but still useful output',
+      expect.any(String),
+    );
+    expect(screen.getByText('Diff was truncated before it could be parsed completely. Showing the raw excerpt.')).toBeTruthy();
+    expect(screen.getByTestId('code-agent-workspace-diff-truncated')).toBeTruthy();
+  });
+
   it('falls back to the T3 raw patch viewer when a parsed patch has no files', async () => {
     loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
       available: true,
@@ -426,7 +459,7 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
 
     const truncatedBar = await screen.findByTestId('code-agent-workspace-diff-truncated');
-    expect(truncatedBar.textContent).toBe('codeAgentDiffPreviewTruncated');
+    expect(truncatedBar.textContent).toBe('Diff output hit the server size cap. Showing the available excerpt.');
     expect(truncatedBar.className).toContain('border-b');
     expect(truncatedBar.className).not.toContain('rounded');
     expect(truncatedBar.parentElement?.className).toContain('diff-panel-viewport');
@@ -694,6 +727,15 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     const suppression = within(file).getByTestId('code-agent-diff-file-suppression');
     expect(suppression.textContent).toContain('codeAgentNonTextDiff');
     expect(suppression.getAttribute('title')).toBe('codeAgentNonTextDiffSuppressedMessage');
+    const expandButton = within(file).getByLabelText('codeAgentExpandDiffFile') as HTMLButtonElement;
+    expect(expandButton.disabled).toBe(true);
+    expect(expandButton.className).toContain('cursor-not-allowed');
+    expect(expandButton.className).not.toContain('cursor-pointer');
+    fireEvent.click(expandButton);
+    expect(screen.getByTestId('diff-file-file:icon').getAttribute('data-collapsed')).toBe('true');
+    const notice = within(file).getByTestId('code-agent-diff-file-suppression-notice');
+    expect(notice.textContent).toContain('codeAgentNonTextDiffContentsUnavailable');
+    expect(notice.getAttribute('title')).toBe('codeAgentNonTextDiffContentsUnavailable');
     expect(within(file).queryByText('codeAgentLoadDiff')).toBeNull();
   });
 
@@ -727,14 +769,54 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
 
     const file = await screen.findByTestId('diff-file-file:big');
     expect(file.getAttribute('data-collapsed')).toBe('true');
-    const suppression = within(file).getByTestId('code-agent-diff-file-suppression');
-    expect(suppression.textContent).toContain('codeAgentLargeDiff');
+    const expandButton = within(file).getByLabelText('codeAgentExpandDiffFile') as HTMLButtonElement;
+    expect(expandButton.disabled).toBe(false);
+    const suppression = within(file).getByTestId('code-agent-diff-file-suppression-load');
+    expect(suppression.textContent).toContain('codeAgentLargeDiffSuppressedMessage');
+    expect(suppression.textContent).toContain('codeAgentLoadDiff');
     expect(suppression.getAttribute('title')).toBe('codeAgentLargeDiffSuppressedMessage');
+    const notice = within(file).getByTestId('code-agent-diff-file-suppression-notice');
+    expect(notice.textContent).toContain('codeAgentLargeDiffSuppressedMessage');
+    expect(notice.getAttribute('title')).toBe('codeAgentLargeDiffSuppressedMessage');
 
-    fireEvent.click(within(file).getByText('codeAgentLoadDiff'));
+    fireEvent.click(expandButton);
 
     expect(screen.getByTestId('diff-file-file:big').getAttribute('data-collapsed')).toBe('false');
-    expect(within(screen.getByTestId('diff-file-file:big')).queryByTestId('code-agent-diff-file-suppression')).toBeNull();
+    expect(within(screen.getByTestId('diff-file-file:big')).queryByTestId('code-agent-diff-file-suppression-load')).toBeNull();
+    expect(within(screen.getByTestId('diff-file-file:big')).queryByTestId('code-agent-diff-file-suppression-notice')).toBeNull();
+  });
+
+  it('shows T3-style notices for pure rename diff files', async () => {
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/Old.ts b/src/New.ts\nsimilarity index 100%\nrename from src/Old.ts\nrename to src/New.ts\n',
+      byteSize: 98,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          {
+            prevName: 'a/src/Old.ts',
+            name: 'b/src/New.ts',
+            cacheKey: 'file:rename',
+            hunks: [],
+            additionLines: [],
+            deletionLines: [],
+            type: 'rename-pure',
+          },
+        ],
+      },
+    ]);
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
+
+    const file = await screen.findByTestId('diff-file-file:rename');
+    expect(file.getAttribute('data-collapsed')).toBe('false');
+    expect(within(file).queryByTestId('code-agent-diff-file-suppression')).toBeNull();
+    const notice = within(file).getByTestId('code-agent-diff-file-rename-notice');
+    expect(notice.textContent).toContain('codeAgentRenameOnlyDiffMessage');
+    expect(notice.getAttribute('title')).toBe('codeAgentRenameOnlyDiffMessage');
   });
 
   it('keeps T3-style collapsed diff files across workspace snapshot refreshes', async () => {
@@ -763,6 +845,44 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
 
     await waitFor(() => {
       expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.getByTestId('diff-file-none:src/App.tsx').getAttribute('data-collapsed')).toBe('true');
+    expect(screen.getByTestId('diff-file-none:src/utils.ts').getAttribute('data-collapsed')).toBe('false');
+  });
+
+  it('keeps T3-style file visibility independently for each diff scope', async () => {
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          { name: 'src/App.tsx', hunks: [], additionLines: [], deletionLines: [], type: 'change' },
+          { name: 'src/utils.ts', hunks: [], additionLines: [], deletionLines: [], type: 'new' },
+        ],
+      },
+    ]);
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
+
+    expect((await screen.findByTestId('diff-file-none:src/App.tsx')).getAttribute('data-collapsed')).toBe('false');
+    fireEvent.click(screen.getAllByLabelText('codeAgentCollapseDiffFile')[0]);
+    expect(screen.getByTestId('diff-file-none:src/App.tsx').getAttribute('data-collapsed')).toBe('true');
+
+    fireEvent.click(screen.getByText('codeAgentDiffScopeWorkingTree'));
+    await waitFor(() => {
+      expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.getByTestId('diff-file-none:src/App.tsx').getAttribute('data-collapsed')).toBe('false');
+    fireEvent.click(screen.getAllByLabelText('codeAgentCollapseDiffFile')[1]);
+    expect(screen.getByTestId('diff-file-none:src/utils.ts').getAttribute('data-collapsed')).toBe('true');
+
+    fireEvent.click(screen.getByText('codeAgentDiffScopeBranch'));
+    await waitFor(() => {
+      expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenCalledTimes(3);
     });
     expect(screen.getByTestId('diff-file-none:src/App.tsx').getAttribute('data-collapsed')).toBe('true');
     expect(screen.getByTestId('diff-file-none:src/utils.ts').getAttribute('data-collapsed')).toBe('false');

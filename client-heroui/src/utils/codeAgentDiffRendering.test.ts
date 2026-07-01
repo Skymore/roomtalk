@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildDiffTitlePathMap,
   buildPatchCacheKey,
   getDiffCollapseIconClassName,
   getCodeAgentDiffFilePreviewState,
   getRenderablePatch,
+  isPureRenameFileDiff,
+  resetCodeAgentRenderablePatchCacheForTests,
   resolveFileDiffPath,
   resolveDiffTitleOpenPath,
   resolveCodeAgentDiffThemeName,
@@ -14,6 +16,11 @@ import {
 } from './codeAgentDiffRendering';
 
 describe('codeAgentDiffRendering', () => {
+  afterEach(() => {
+    resetCodeAgentRenderablePatchCacheForTests();
+    vi.restoreAllMocks();
+  });
+
   it('returns stable T3-style cache keys and includes the cache scope', () => {
     const patch = "diff --git a/a.ts b/a.ts\n+console.log('hello')";
 
@@ -24,6 +31,45 @@ describe('codeAgentDiffRendering', () => {
   it('resolves Pierre theme names like T3', () => {
     expect(resolveCodeAgentDiffThemeName('light')).toBe('pierre-light');
     expect(resolveCodeAgentDiffThemeName('dark')).toBe('pierre-dark');
+  });
+
+  it('reuses T3-style parsed diff results for the same cache scope and diff', () => {
+    const patch = [
+      'diff --git a/example.ts b/example.ts',
+      '--- a/example.ts',
+      '+++ b/example.ts',
+      '@@ -1,1 +1,1 @@',
+      '-before',
+      '+after',
+    ].join('\n');
+
+    const first = getRenderablePatch(patch, 'workspace:room-1:branch:auto');
+    const second = getRenderablePatch(`\n${patch}\n`, 'workspace:room-1:branch:auto');
+    expect(second).toBe(first);
+
+    const differentScope = getRenderablePatch(patch, 'workspace:room-1:working-tree');
+    expect(differentScope).not.toBe(first);
+  });
+
+  it('recomputes cached parsed diffs when render options change', () => {
+    const patch = [
+      'diff --git a/example.ts b/example.ts',
+      '--- a/example.ts',
+      '+++ b/example.ts',
+      '@@ -48,1 +48,1 @@',
+      '-before',
+      '+after',
+    ].join('\n');
+
+    const sourceOffsets = getRenderablePatch(patch, 'workspace:partial');
+    const compactOffsets = getRenderablePatch(patch, 'workspace:partial', {
+      compactPartialHunkOffsets: true,
+    });
+
+    expect(compactOffsets).not.toBe(sourceOffsets);
+    expect(compactOffsets).toBe(getRenderablePatch(patch, 'workspace:partial', {
+      compactPartialHunkOffsets: true,
+    }));
   });
 
   it('compacts partial hunk render offsets for virtualized workspace diffs', () => {
@@ -86,7 +132,40 @@ describe('codeAgentDiffRendering', () => {
       kind: 'raw',
       text: 'not a complete patch',
       reason: 'Diff was truncated before it could be parsed completely. Showing the raw excerpt.',
+      truncated: true,
+      notice: 'Diff output hit the server size cap. Showing the available excerpt.',
     });
+  });
+
+  it('silences Pierre parser errors while preserving partial file results like T3', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const parsed = getRenderablePatch('diff --git a/a.ts b/a.ts\n@@ broken', 'workspace');
+
+    expect(consoleError).not.toHaveBeenCalled();
+    expect(parsed?.kind).toBe('files');
+    if (parsed?.kind !== 'files') return;
+    expect(parsed.files).toHaveLength(1);
+    expect(parsed.files[0]?.hunks).toEqual([]);
+  });
+
+  it('treats T3 truncation markers as partial renderable diffs', () => {
+    const parsed = getRenderablePatch([
+      'diff --git a/example.ts b/example.ts',
+      'index 1111111..2222222 100644',
+      '--- a/example.ts',
+      '+++ b/example.ts',
+      '@@ -1 +1,2 @@',
+      ' const before = 1;',
+      '+const after = 2;',
+      '',
+      '[truncated]',
+    ].join('\n'), 'workspace');
+
+    expect(parsed?.kind).toBe('files');
+    if (parsed?.kind !== 'files') return;
+    expect(parsed.truncated).toBe(true);
+    expect(parsed.notice).toBe('Diff output hit the server size cap. Showing the available excerpt.');
+    expect(parsed.files).toHaveLength(1);
   });
 
   it('summarizes file diff stats from hunk metadata', () => {
@@ -122,6 +201,38 @@ describe('codeAgentDiffRendering', () => {
     expect(getDiffCollapseIconClassName({ type: 'change' } as any)).toBe('text-[var(--diffs-modified-base)]');
     expect(getDiffCollapseIconClassName({ type: 'rename-pure' } as any)).toBe('text-[var(--diffs-modified-base)]');
     expect(getDiffCollapseIconClassName({ type: 'unknown' } as any)).toBe('text-muted-foreground/80');
+  });
+
+  it('detects T3-style pure rename files without modifications', () => {
+    expect(isPureRenameFileDiff({
+      type: 'rename-pure',
+      name: 'b/src/New.ts',
+      prevName: 'a/src/Old.ts',
+      hunks: [],
+      additionLines: [],
+      deletionLines: [],
+    } as any)).toBe(true);
+
+    expect(isPureRenameFileDiff({
+      type: 'rename-pure',
+      name: 'b/src/New.ts',
+      prevName: 'a/src/Old.ts',
+      hunks: [{
+        additionLines: 1,
+        deletionLines: 0,
+        hunkContent: [{ type: 'change', deletions: 0, additions: 1 }],
+      }],
+      additionLines: ['export const renamed = true;'],
+      deletionLines: [],
+    } as any)).toBe(false);
+
+    expect(isPureRenameFileDiff({
+      type: 'change',
+      name: 'b/src/App.ts',
+      hunks: [],
+      additionLines: [],
+      deletionLines: [],
+    } as any)).toBe(false);
   });
 
   it('suppresses non-text diff previews like T3', () => {

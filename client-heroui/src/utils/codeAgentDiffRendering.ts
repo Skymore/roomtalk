@@ -44,11 +44,15 @@ export type RenderablePatch =
   | {
     kind: 'files';
     files: FileDiffMetadata[];
+    truncated?: boolean;
+    notice?: string;
   }
   | {
     kind: 'raw';
     text: string;
     reason: string;
+    truncated?: boolean;
+    notice?: string;
   };
 
 export type CodeAgentDiffFilePreviewState =
@@ -71,6 +75,13 @@ interface RenderablePatchOptions {
    */
   compactPartialHunkOffsets?: boolean;
   truncated?: boolean;
+}
+
+interface RenderablePatchCacheEntry {
+  patchText: string;
+  truncated: boolean;
+  compactPartialHunkOffsets: boolean;
+  result: RenderablePatch;
 }
 
 const LARGE_DIFF_LINE_THRESHOLD = 400;
@@ -117,6 +128,12 @@ const NON_TEXT_FILE_EXTENSIONS = new Set([
   'so',
   'dylib',
 ]);
+const TRUNCATED_DIFF_NOTICE = 'Diff output hit the server size cap. Showing the available excerpt.';
+const renderablePatchCache = new Map<string, RenderablePatchCacheEntry>();
+
+export function resetCodeAgentRenderablePatchCacheForTests(): void {
+  renderablePatchCache.clear();
+}
 
 function getFileExtension(path: string): string | null {
   const match = /\.([a-z0-9]+)$/i.exec(path);
@@ -209,6 +226,16 @@ function splitTruncationMarker(diff: string): { text: string; truncated: boolean
   };
 }
 
+function runDiffParserSilently<T>(callback: () => T): T {
+  const originalConsoleError = console.error;
+  console.error = () => undefined;
+  try {
+    return callback();
+  } finally {
+    console.error = originalConsoleError;
+  }
+}
+
 export function getRenderablePatch(
   patch: string | undefined,
   cacheScope = 'diff-panel',
@@ -226,38 +253,67 @@ export function getRenderablePatch(
     return null;
   }
   const isTruncated = options.truncated === true || markerTruncated;
+  const truncatedNotice = isTruncated ? TRUNCATED_DIFF_NOTICE : undefined;
   const rawReason = isTruncated
     ? 'Diff was truncated before it could be parsed completely. Showing the raw excerpt.'
     : 'Failed to parse patch. Showing raw patch.';
   const unsupportedReason = isTruncated
     ? 'Diff was truncated before it could be parsed completely. Showing the raw excerpt.'
     : 'Unsupported diff format. Showing raw patch.';
+  const compactPartialHunkOffsetsOption = options.compactPartialHunkOffsets === true;
+  const cached = renderablePatchCache.get(cacheScope);
+  if (
+    cached?.patchText === patchText &&
+    cached.truncated === isTruncated &&
+    cached.compactPartialHunkOffsets === compactPartialHunkOffsetsOption
+  ) {
+    return cached.result;
+  }
 
+  let result: RenderablePatch;
   try {
-    const parsedPatches = parsePatchFiles(
+    const parsedPatches = runDiffParserSilently(() => parsePatchFiles(
       patchText,
       buildPatchCacheKey(patchText, cacheScope),
-    );
+    ));
     const files = parsedPatches.flatMap((parsedPatch) =>
-      options.compactPartialHunkOffsets
+      compactPartialHunkOffsetsOption
         ? parsedPatch.files.map(compactPartialHunkOffsets)
         : parsedPatch.files,
     );
     if (files.length > 0) {
-      return { kind: 'files', files };
+      result = {
+        kind: 'files',
+        files,
+        ...(isTruncated ? { truncated: true } : {}),
+        ...(truncatedNotice ? { notice: truncatedNotice } : {}),
+      };
+    } else {
+      result = {
+        kind: 'raw',
+        text: patchText,
+        reason: unsupportedReason,
+        ...(isTruncated ? { truncated: true } : {}),
+        ...(truncatedNotice ? { notice: truncatedNotice } : {}),
+      };
     }
-    return {
-      kind: 'raw',
-      text: patchText,
-      reason: unsupportedReason,
-    };
   } catch {
-    return {
+    result = {
       kind: 'raw',
       text: patchText,
       reason: rawReason,
+      ...(isTruncated ? { truncated: true } : {}),
+      ...(truncatedNotice ? { notice: truncatedNotice } : {}),
     };
   }
+
+  renderablePatchCache.set(cacheScope, {
+    patchText,
+    truncated: isTruncated,
+    compactPartialHunkOffsets: compactPartialHunkOffsetsOption,
+    result,
+  });
+  return result;
 }
 
 export function resolveFileDiffPath(fileDiff: FileDiffMetadata): string {
@@ -370,6 +426,10 @@ export function getDiffCollapseIconClassName(fileDiff: FileDiffMetadata): string
     default:
       return 'text-muted-foreground/80';
   }
+}
+
+export function isPureRenameFileDiff(fileDiff: FileDiffMetadata): boolean {
+  return fileDiff.type === 'rename-pure' && countFileDiffRenderableRows(fileDiff) === 0;
 }
 
 export function summarizeFileDiffStat(fileDiff: FileDiffMetadata): { additions: number; deletions: number } {
