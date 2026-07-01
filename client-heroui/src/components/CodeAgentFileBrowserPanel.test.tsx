@@ -588,7 +588,15 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(terminalSurfaceButton.disabled).toBe(true);
     expect(terminalSurfaceButton.getAttribute('aria-disabled')).toBe('true');
     expect(terminalSurfaceButton.getAttribute('title')).toBe('codeAgentTerminalSurfaceUnavailable');
-    fireEvent.click(addMenu.getByText('codeAgentWorkspaceFiles'));
+    fireEvent.click(browserSurfaceButton);
+    await waitFor(() => {
+      expect(screen.getByTestId('code-agent-browser-surface-empty')).toBeTruthy();
+      expect(within(screen.getByTestId('code-agent-file-surface-tabs')).getByText('codeAgentBrowserSurface')).toBeTruthy();
+      expect(screen.queryByTestId('diff-file')).toBeNull();
+    });
+
+    fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
+    fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentWorkspaceFiles'));
     await waitFor(() => {
       expect(screen.queryByTestId('diff-file')).toBeNull();
       expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('codeAgentWorkspaceFiles');
@@ -762,6 +770,80 @@ describe('CodeAgentFileBrowserPanel', () => {
       expect(screen.getByTestId('code-agent-workspace-diff-viewer').dataset.enabled).toBe('true');
       expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('codeAgentChanges');
     });
+  });
+
+  it('keeps T3-style file surface menus inside the viewport', async () => {
+    const originalInnerWidth = window.innerWidth;
+    const originalInnerHeight = window.innerHeight;
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      writable: true,
+      value: 180,
+    });
+    Object.defineProperty(window, 'innerHeight', {
+      configurable: true,
+      writable: true,
+      value: 120,
+    });
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockResolvedValue({
+      path: 'src/App.tsx',
+      content: 'contents:src/App.tsx',
+      byteSize: 64,
+      truncated: false,
+      encoding: 'utf-8',
+    });
+
+    try {
+      render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+      await screen.findByText('1 files');
+
+      fileTreeSelectionPathRef.current = 'src/App.tsx';
+      fireEvent.click(screen.getByLabelText('Coco files'));
+      expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:contents:src/App.tsx');
+
+      const addSurfaceButton = screen.getByLabelText('codeAgentAddWorkspaceSurface') as HTMLButtonElement;
+      addSurfaceButton.getBoundingClientRect = () => ({
+        x: 500,
+        y: 500,
+        left: 500,
+        top: 500,
+        right: 524,
+        bottom: 524,
+        width: 24,
+        height: 24,
+        toJSON: () => ({}),
+      });
+      fireEvent.click(addSurfaceButton);
+      const addMenuElement = screen.getByTestId('code-agent-file-surface-add-menu');
+      expect(addMenuElement.className).toContain('fixed');
+      expect(addMenuElement.style.left).toBe('12px');
+      expect(addMenuElement.style.top).toBe('8px');
+      fireEvent.click(addSurfaceButton);
+
+      const tabs = within(screen.getByTestId('code-agent-file-surface-tabs'));
+      fireEvent.contextMenu(tabs.getByText('App.tsx'), { clientX: 500, clientY: 500 });
+      const tabMenuElement = screen.getByTestId('code-agent-file-surface-menu');
+      expect(tabMenuElement.className).toContain('fixed');
+      expect(tabMenuElement.style.left).toBe('12px');
+      expect(tabMenuElement.style.top).toBe('8px');
+    } finally {
+      Object.defineProperty(window, 'innerWidth', {
+        configurable: true,
+        writable: true,
+        value: originalInnerWidth,
+      });
+      Object.defineProperty(window, 'innerHeight', {
+        configurable: true,
+        writable: true,
+        value: originalInnerHeight,
+      });
+    }
   });
 
   it('keeps the current file preview when a directory is selected for file operations', async () => {

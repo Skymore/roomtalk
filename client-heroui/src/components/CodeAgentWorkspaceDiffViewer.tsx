@@ -353,6 +353,8 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   const [workspaceRefsError, setWorkspaceRefsError] = useState<string | null>(null);
   const [isWorkspaceRefsPending, setIsWorkspaceRefsPending] = useState(false);
   const codeViewRef = useRef<CodeViewHandle<DiffCommentAnnotationGroup> | null>(null);
+  const diffScopeMenuRef = useRef<HTMLDetailsElement | null>(null);
+  const diffBaseRefMenuRef = useRef<HTMLDetailsElement | null>(null);
   const [diffFileVisibility, setDiffFileVisibility] = useState<DiffFileVisibilityState>(() => new Map());
   const diffFileVisibilityScopeKey = `${roomId}:${diffScope}:${diffScope === 'branch' ? diffBaseRef ?? 'auto' : 'working-tree'}`;
   const scopedDiffFileVisibility = diffFileVisibility.get(diffFileVisibilityScopeKey);
@@ -415,6 +417,23 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   const refreshDiff = () => {
     setDiffRefreshNonce((current) => current + 1);
   };
+
+  const closeDiffToolbarMenus = useCallback(() => {
+    diffScopeMenuRef.current?.removeAttribute('open');
+    diffBaseRefMenuRef.current?.removeAttribute('open');
+  }, []);
+
+  const handleDiffScopeMenuToggle = useCallback((event: React.SyntheticEvent<HTMLDetailsElement>) => {
+    if (event.currentTarget.open) {
+      diffBaseRefMenuRef.current?.removeAttribute('open');
+    }
+  }, []);
+
+  const handleDiffBaseRefMenuToggle = useCallback((event: React.SyntheticEvent<HTMLDetailsElement>) => {
+    if (event.currentTarget.open) {
+      diffScopeMenuRef.current?.removeAttribute('open');
+    }
+  }, []);
 
   const selectDiffScope = (nextScope: CodeAgentWorkspaceDiffScope) => {
     selectCodeAgentDiffScope(roomId, nextScope);
@@ -520,6 +539,30 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
 
     return () => controller.abort();
   }, [baseRefRequestQuery, diffRefreshNonce, diffScope, enabled, refreshKey, roomId]);
+
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        (diffScopeMenuRef.current?.contains(target) || diffBaseRefMenuRef.current?.contains(target))
+      ) {
+        return;
+      }
+      closeDiffToolbarMenus();
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeDiffToolbarMenus();
+      }
+    };
+    window.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [closeDiffToolbarMenus]);
 
   const baseRefChoices = useMemo(() => {
     const refs = workspaceRefs?.refs ?? [];
@@ -726,7 +769,11 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     <>
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
           <div className="inline-flex max-w-full shrink-0 items-center gap-1.5 whitespace-nowrap">
-            <details className="group relative min-w-0 shrink-0">
+            <details
+              ref={diffScopeMenuRef}
+              className="group relative min-w-0 shrink-0"
+              onToggle={handleDiffScopeMenuToggle}
+            >
               <summary
                 aria-label={`${t('codeAgentDiffScope')}: ${diffScopeLabel}`}
                 className="inline-flex h-7 max-w-40 cursor-pointer list-none items-center gap-1 rounded-md border border-[#dedbd0] bg-[#faf9f5] px-2 text-xs font-medium text-[#141413] transition-colors hover:bg-[#f0eee6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:hover:bg-[#30302e] [&::-webkit-details-marker]:hidden"
@@ -743,9 +790,9 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                     key={scope}
                     type="button"
                     className="flex h-8 w-full items-center gap-2 rounded px-2 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
-                    onClick={(event) => {
+                    onClick={() => {
                       selectDiffScope(scope);
-                      event.currentTarget.closest('details')?.removeAttribute('open');
+                      closeDiffToolbarMenus();
                     }}
                   >
                     <span className="min-w-0 flex-1 truncate">{label}</span>
@@ -762,7 +809,11 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
             >
               <span className="hidden max-w-28 truncate sm:inline">{diffHeadRefLabel}</span>
               <ArrowRight className="hidden h-3.5 w-3.5 shrink-0 opacity-70 sm:block" />
-              <details className="group relative min-w-0 shrink-0">
+              <details
+                ref={diffBaseRefMenuRef}
+                className="group relative min-w-0 shrink-0"
+                onToggle={handleDiffBaseRefMenuToggle}
+              >
                 <summary
                   aria-label={`${t('codeAgentDiffBaseRef')}: ${diffBaseRefLabel}`}
                   className="inline-flex h-7 max-w-32 cursor-pointer list-none items-center gap-1 rounded-md px-1.5 text-xs font-medium text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] [&::-webkit-details-marker]:hidden"
@@ -805,9 +856,9 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                           <button
                             type="button"
                             className="grid h-8 w-full grid-cols-[1rem_minmax(0,1fr)] items-center gap-2 rounded px-2 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
-                            onClick={(event) => {
+                            onClick={() => {
                               selectDiffBaseRef(null);
-                              event.currentTarget.closest('details')?.removeAttribute('open');
+                              closeDiffToolbarMenus();
                             }}
                           >
                             {diffBaseRef === null ? <Check className="h-3.5 w-3.5 text-[#9f462c] dark:text-[#ffb197]" /> : <span />}
@@ -821,9 +872,9 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                           }
                           const hasBoth = choice.local !== null && choice.remote !== null;
                           const useRemote = choice.remote?.name === item;
-                          const selectItem = (details: HTMLDetailsElement | null) => {
+                          const selectItem = () => {
                             selectDiffBaseRef(item);
-                            details?.removeAttribute('open');
+                            closeDiffToolbarMenus();
                           };
                           return (
                             <div
@@ -831,15 +882,15 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                               role="button"
                               tabIndex={0}
                               className="grid h-8 w-full grid-cols-[1rem_minmax(0,1fr)] items-center gap-2 rounded px-2 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
-                              onClick={(event) => {
-                                selectItem(event.currentTarget.closest('details'));
+                              onClick={() => {
+                                selectItem();
                               }}
                               onKeyDown={(event) => {
                                 if (event.key !== 'Enter' && event.key !== ' ') {
                                   return;
                                 }
                                 event.preventDefault();
-                                selectItem(event.currentTarget.closest('details'));
+                                selectItem();
                               }}
                             >
                               {diffBaseRef === item ? <Check className="h-3.5 w-3.5 text-[#9f462c] dark:text-[#ffb197]" /> : <span />}

@@ -696,6 +696,49 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     });
   });
 
+  it('dismisses T3-style diff toolbar menus from outside interactions', async () => {
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          { name: 'src/App.tsx', hunks: [], additionLines: [], deletionLines: [], type: 'modify' },
+        ],
+      },
+    ]);
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
+
+    expect(await screen.findByTestId('code-view')).toBeTruthy();
+    const scopeDetails = screen
+      .getByLabelText('codeAgentDiffScope: codeAgentDiffScopeBranch')
+      .closest('details') as HTMLDetailsElement;
+    const baseRefDetails = screen
+      .getByLabelText('codeAgentDiffBaseRef: codeAgentDiffBaseRefAutomatic')
+      .closest('details') as HTMLDetailsElement;
+
+    scopeDetails.open = true;
+    fireEvent(scopeDetails, new Event('toggle'));
+    expect(scopeDetails.open).toBe(true);
+
+    fireEvent.pointerDown(document.body);
+    expect(scopeDetails.open).toBe(false);
+
+    scopeDetails.open = true;
+    fireEvent(scopeDetails, new Event('toggle'));
+    baseRefDetails.open = true;
+    fireEvent(baseRefDetails, new Event('toggle'));
+    expect(baseRefDetails.open).toBe(true);
+    expect(scopeDetails.open).toBe(false);
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(baseRefDetails.open).toBe(false);
+  });
+
   it('toggles T3-style file diff collapsing through the CodeView header prefix', async () => {
     loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
       available: true,

@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   activateCodeAgentRightPanelSurface,
+  addCodeAgentRightPanelPreviewSurface,
   closeAllCodeAgentRightPanelSurfaces,
   closeCodeAgentRightPanelSurface,
   closeCodeAgentRightPanelSurfacesToRight,
@@ -95,6 +96,20 @@ describe('codeAgentRightPanelStore', () => {
           kind: 'preview',
           relativePath: 'output/report.html',
         },
+      ],
+    });
+  });
+
+  it('adds another blank browser surface from the T3-style add browser action', () => {
+    addCodeAgentRightPanelPreviewSurface('room-1');
+    addCodeAgentRightPanelPreviewSurface('room-1');
+
+    expect(readCodeAgentRightPanelState('room-1')).toEqual({
+      isOpen: true,
+      activeSurfaceId: 'browser:new:2',
+      surfaces: [
+        { id: 'browser:new', kind: 'preview', relativePath: null },
+        { id: 'browser:new:2', kind: 'preview', relativePath: null },
       ],
     });
   });

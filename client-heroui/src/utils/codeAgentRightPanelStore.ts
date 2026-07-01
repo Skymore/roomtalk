@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
 export type CodeAgentRightPanelSurface =
-  | { id: 'browser:new'; kind: 'preview'; relativePath: null }
+  | { id: 'browser:new' | `browser:new:${number}`; kind: 'preview'; relativePath: null }
   | {
     id: `browser:${string}`;
     kind: 'preview';
@@ -79,6 +79,20 @@ function browserSurface(relativePath: string | null): CodeAgentRightPanelSurface
     : { id: 'browser:new', kind: 'preview', relativePath: null };
 }
 
+function nextBlankBrowserSurface(surfaces: readonly CodeAgentRightPanelSurface[]): CodeAgentRightPanelSurface {
+  const blankIds = new Set(surfaces
+    .filter((surface) => surface.kind === 'preview' && surface.relativePath === null)
+    .map((surface) => surface.id));
+  if (!blankIds.has('browser:new')) {
+    return browserSurface(null);
+  }
+  let index = 2;
+  while (blankIds.has(`browser:new:${index}`)) {
+    index += 1;
+  }
+  return { id: `browser:new:${index}`, kind: 'preview', relativePath: null };
+}
+
 function singletonSurface(kind: 'diff' | 'files'): CodeAgentRightPanelSurface {
   return kind === 'diff'
     ? { id: 'diff', kind: 'diff' }
@@ -106,6 +120,14 @@ function coerceSurface(value: unknown): CodeAgentRightPanelSurface | null {
         ? (value as { relativePath: string }).relativePath
         : '',
     );
+    const rawId = typeof surface.id === 'string' ? surface.id : '';
+    if (!relativePath && /^browser:new(?::\d+)?$/.test(rawId)) {
+      return {
+        id: rawId as 'browser:new' | `browser:new:${number}`,
+        kind: 'preview',
+        relativePath: null,
+      };
+    }
     return browserSurface(relativePath || null);
   }
   if (surface.kind === 'file') {
@@ -301,6 +323,23 @@ export function openCodeAgentRightPanelPreview(roomId: string, relativePath?: st
         surfaces: withoutPlaceholder.some((entry) => entry.id === surface.id)
           ? withoutPlaceholder
           : [...withoutPlaceholder, surface],
+        activeSurfaceId: surface.id,
+      };
+    }),
+  }));
+}
+
+export function addCodeAgentRightPanelPreviewSurface(roomId: string) {
+  const roomKey = normalizeRoomId(roomId);
+  if (!roomKey) {
+    return;
+  }
+  updateStore((state) => ({
+    byRoomId: updateRoom(state.byRoomId, roomKey, (current) => {
+      const surface = nextBlankBrowserSurface(current.surfaces);
+      return {
+        isOpen: true,
+        surfaces: [...current.surfaces, surface],
         activeSurfaceId: surface.id,
       };
     }),

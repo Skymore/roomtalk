@@ -62,6 +62,7 @@ import {
 import { summarizeCodeAgentChangedFileStats } from '../utils/codeAgentChangedFileTree';
 import {
   activateCodeAgentRightPanelSurface,
+  addCodeAgentRightPanelPreviewSurface,
   closeAllCodeAgentRightPanelSurfaces,
   closeCodeAgentRightPanelSurface,
   closeCodeAgentRightPanelSurfacesToRight,
@@ -151,6 +152,11 @@ const FILE_EXPLORER_WIDTH_STORAGE_KEY = 'roomtalk.codeWorkspace.fileExplorerWidt
 const FILE_EXPLORER_MIN_WIDTH = 160;
 const FILE_PREVIEW_MIN_WIDTH = 220;
 const FILE_EXPLORER_DEFAULT_WIDTH = 352;
+const FILE_SURFACE_MENU_VIEWPORT_PADDING = 8;
+const FILE_SURFACE_ADD_MENU_WIDTH = 160;
+const FILE_SURFACE_ADD_MENU_HEIGHT = 136;
+const FILE_SURFACE_TAB_MENU_WIDTH = 160;
+const FILE_SURFACE_TAB_MENU_HEIGHT = 168;
 const WORKSPACE_TREE_REMOTE_SEARCH_LIMIT = 200;
 const WORKSPACE_TREE_REMOTE_SEARCH_DEBOUNCE_MS = 150;
 
@@ -164,6 +170,36 @@ function getFileExplorerResizeBounds(panelWidth: number) {
 function clampFileExplorerWidth(value: number, panelWidth: number): number {
   const bounds = getFileExplorerResizeBounds(panelWidth);
   return Math.min(bounds.max, Math.max(bounds.min, Math.round(value)));
+}
+
+function clampFixedMenuPosition({
+  x,
+  y,
+  width,
+  height,
+}: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}): { x: number; y: number } {
+  const viewportWidth = typeof window === 'undefined'
+    ? width + FILE_SURFACE_MENU_VIEWPORT_PADDING * 2
+    : window.innerWidth;
+  const viewportHeight = typeof window === 'undefined'
+    ? height + FILE_SURFACE_MENU_VIEWPORT_PADDING * 2
+    : window.innerHeight;
+
+  return {
+    x: Math.max(
+      FILE_SURFACE_MENU_VIEWPORT_PADDING,
+      Math.min(Math.round(x), viewportWidth - width - FILE_SURFACE_MENU_VIEWPORT_PADDING),
+    ),
+    y: Math.max(
+      FILE_SURFACE_MENU_VIEWPORT_PADDING,
+      Math.min(Math.round(y), viewportHeight - height - FILE_SURFACE_MENU_VIEWPORT_PADDING),
+    ),
+  };
 }
 
 function normalizeWorkspacePath(path: string): string {
@@ -1350,12 +1386,12 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       return;
     }
     const rect = event.currentTarget.getBoundingClientRect();
-    const menuWidth = 160;
-    const viewportPadding = 8;
-    setFileSurfaceAddMenuPosition({
-      x: Math.max(viewportPadding, Math.min(rect.left, window.innerWidth - menuWidth - viewportPadding)),
+    setFileSurfaceAddMenuPosition(clampFixedMenuPosition({
+      x: rect.left,
       y: rect.bottom + 6,
-    });
+      width: FILE_SURFACE_ADD_MENU_WIDTH,
+      height: FILE_SURFACE_ADD_MENU_HEIGHT,
+    }));
   }, [closeFileSurfaceAddMenu, fileSurfaceAddMenuOpen]);
 
   const openFilesSurface = useCallback(() => {
@@ -1365,8 +1401,8 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
 
   const openPreviewSurface = useCallback(() => {
     closeFileSurfaceAddMenu();
-    openCodeAgentRightPanelPreview(roomId, relativePath && isBrowserPreviewFile(relativePath) ? relativePath : null);
-  }, [closeFileSurfaceAddMenu, relativePath, roomId]);
+    addCodeAgentRightPanelPreviewSurface(roomId);
+  }, [closeFileSurfaceAddMenu, roomId]);
 
   const openDiffSurface = useCallback(() => {
     closeFileSurfaceAddMenu();
@@ -1413,8 +1449,12 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     event.stopPropagation();
     setFileSurfaceTabMenu({
       surfaceId: surface.id,
-      x: event.clientX,
-      y: event.clientY,
+      ...clampFixedMenuPosition({
+        x: event.clientX,
+        y: event.clientY,
+        width: FILE_SURFACE_TAB_MENU_WIDTH,
+        height: FILE_SURFACE_TAB_MENU_HEIGHT,
+      }),
     });
   }, []);
 
