@@ -7,6 +7,7 @@ import {
   resetCodeAgentProjectFilesQueryStateForTests,
   resolveCodeAgentProjectFileQueryData,
   setCodeAgentProjectFileQueryData,
+  settleConfirmedCodeAgentProjectFileQueryData,
 } from './codeAgentProjectFilesQueryState';
 
 describe('codeAgentProjectFilesQueryState', () => {
@@ -40,7 +41,7 @@ describe('codeAgentProjectFilesQueryState', () => {
     expect(confirmCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', 'export const latest = true;')).toBe(true);
   });
 
-  it('clears confirmed optimistic data after the confirmation turn settles', async () => {
+  it('keeps confirmed optimistic data until a refreshed read catches up', async () => {
     setCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', 'export const saved = true;');
 
     expect(confirmCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', 'export const saved = true;')).toBe(true);
@@ -50,16 +51,43 @@ describe('codeAgentProjectFilesQueryState', () => {
 
     await Promise.resolve();
 
+    expect(getOptimisticCodeAgentProjectFileQueryData('room-1', 'src/App.tsx')?.content).toBe(
+      'export const saved = true;',
+    );
+    expect(settleConfirmedCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', {
+      path: 'src/App.tsx',
+      content: 'export const stale = true;',
+      byteSize: 26,
+      truncated: false,
+      encoding: 'utf-8',
+    })).toBe(false);
+    expect(getOptimisticCodeAgentProjectFileQueryData('room-1', 'src/App.tsx')?.content).toBe(
+      'export const saved = true;',
+    );
+    expect(settleConfirmedCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', {
+      path: 'src/App.tsx',
+      content: 'export const saved = true;',
+      byteSize: 26,
+      truncated: false,
+      encoding: 'utf-8',
+    })).toBe(true);
     expect(getOptimisticCodeAgentProjectFileQueryData('room-1', 'src/App.tsx')).toBeNull();
   });
 
-  it('does not clear a newer optimistic draft after an older confirmation settles', async () => {
+  it('does not clear a newer optimistic draft after an older confirmation refreshes', async () => {
     setCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', 'export const saved = true;');
 
     expect(confirmCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', 'export const saved = true;')).toBe(true);
     setCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', 'export const newer = true;');
 
     await Promise.resolve();
+    expect(settleConfirmedCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', {
+      path: 'src/App.tsx',
+      content: 'export const saved = true;',
+      byteSize: 26,
+      truncated: false,
+      encoding: 'utf-8',
+    })).toBe(false);
 
     expect(getOptimisticCodeAgentProjectFileQueryData('room-1', 'src/App.tsx')?.content).toBe(
       'export const newer = true;',

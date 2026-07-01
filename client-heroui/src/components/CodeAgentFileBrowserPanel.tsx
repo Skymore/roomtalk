@@ -29,9 +29,9 @@ import { normalizeWorkspaceOpenPath, parseWorkspaceFileOpenTarget } from '../uti
 import { type ReviewCommentContext } from '../utils/codeAgentReviewComments';
 import { isMarkdownPreviewFile } from './codeAgentFilePreviewMode';
 import {
-  clearCodeAgentProjectFileQueryData,
   getOptimisticCodeAgentProjectFileQueryData,
   resolveCodeAgentProjectFileQueryData,
+  settleConfirmedCodeAgentProjectFileQueryData,
 } from './codeAgentProjectFilesQueryState';
 import { CodeAgentFilePreviewPanel } from './CodeAgentFilePreviewPanel';
 import { CodeAgentWorkspaceDiffViewer } from './CodeAgentWorkspaceDiffViewer';
@@ -362,9 +362,7 @@ function useCodeWorkspaceFileQuery(roomId: string, relativePath: string | null, 
         const normalizedFilePath = normalizeWorkspacePath(file.path);
         const optimisticFile = getOptimisticCodeAgentProjectFileQueryData(roomId, normalizedFilePath);
         fileCacheRef.current.set(normalizedFilePath, file);
-        if (optimisticFile?.content === file.content) {
-          clearCodeAgentProjectFileQueryData(roomId, normalizedFilePath);
-        }
+        settleConfirmedCodeAgentProjectFileQueryData(roomId, normalizedFilePath, file);
         setData(optimisticFile ?? file);
       },
       (nextError) => {

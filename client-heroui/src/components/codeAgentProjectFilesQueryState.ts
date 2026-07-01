@@ -67,11 +67,23 @@ export function confirmCodeAgentProjectFileQueryData(
     confirmedAgainst,
   };
   optimisticFiles.set(key, confirmed);
-  Promise.resolve().then(() => {
-    if (optimisticFiles.get(key) === confirmed) {
-      optimisticFiles.delete(key);
-    }
-  });
+  return true;
+}
+
+export function settleConfirmedCodeAgentProjectFileQueryData(
+  roomId: string,
+  relativePath: string,
+  refreshedFile: CodeWorkspaceFile,
+): boolean {
+  const key = fileKey(roomId, relativePath);
+  const optimisticFile = optimisticFiles.get(key);
+  if (!optimisticFile || optimisticFile.confirmedAgainst === undefined) {
+    return false;
+  }
+  if (optimisticFile.data.content !== refreshedFile.content) {
+    return false;
+  }
+  optimisticFiles.delete(key);
   return true;
 }
 

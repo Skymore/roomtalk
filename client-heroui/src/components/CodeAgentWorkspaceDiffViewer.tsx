@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CodeViewDiffItem, FileDiffMetadata } from '@pierre/diffs';
+import type { CodeViewDiffItem } from '@pierre/diffs';
 import { type CodeViewHandle } from '@pierre/diffs/react';
 import { ArrowRight, Check, ChevronDown, ChevronRight, Columns2, FileCode2, Pilcrow, RefreshCw, Rows3, Search, WrapText } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -12,11 +12,14 @@ import {
 } from '../utils/codeAgentDiffPanelStore';
 import {
   buildFileDiffRenderKey,
+  buildDiffTitlePathMap,
   getDiffCollapseIconClassName,
   getRenderablePatch,
   resolveCodeAgentDiffThemeName,
+  resolveDiffTitleOpenPath,
   resolveFileDiffPath,
   summarizeFileDiffStat,
+  withDiffLineTarget,
 } from '../utils/codeAgentDiffRendering';
 import { formatCompactDiffCount } from '../utils/codeAgentChangedFileTree';
 import { type ReviewCommentContext } from '../utils/codeAgentReviewComments';
@@ -207,93 +210,6 @@ function readInitialDiffIgnoreWhitespace() {
   }
 }
 
-function stripDiffPathPrefix(path: string): string {
-  const trimmed = path.trim();
-  return trimmed.startsWith('a/') || trimmed.startsWith('b/') ? trimmed.slice(2) : trimmed;
-}
-
-function addDiffTitlePathCandidate(
-  candidates: Map<string, string>,
-  title: string | null | undefined,
-  path: string,
-) {
-  if (!title) {
-    return;
-  }
-  const trimmed = title.trim();
-  if (!trimmed) {
-    return;
-  }
-  candidates.set(trimmed, path);
-  candidates.set(stripDiffPathPrefix(trimmed), path);
-}
-
-function buildDiffTitlePathMap(items: ReadonlyArray<{ type: 'diff'; fileDiff: FileDiffMetadata }>): ReadonlyMap<string, string> {
-  const candidates = new Map<string, string>();
-  for (const item of items) {
-    if (item.type !== 'diff') {
-      continue;
-    }
-    const filePath = resolveFileDiffPath(item.fileDiff);
-    addDiffTitlePathCandidate(candidates, item.fileDiff.name, filePath);
-    addDiffTitlePathCandidate(candidates, item.fileDiff.prevName, filePath);
-    if (item.fileDiff.prevName && item.fileDiff.name) {
-      const previousPath = stripDiffPathPrefix(item.fileDiff.prevName);
-      const nextPath = stripDiffPathPrefix(item.fileDiff.name);
-      addDiffTitlePathCandidate(candidates, `${previousPath} → ${nextPath}`, filePath);
-      addDiffTitlePathCandidate(candidates, `${previousPath} -> ${nextPath}`, filePath);
-    }
-  }
-  return candidates;
-}
-
-function normalizeDiffTitleText(title: string): string {
-  return title.replace(/\s+/g, ' ').trim();
-}
-
-function resolveDiffTitleOpenPath(rawTitle: string, pathMap: ReadonlyMap<string, string>): string | null {
-  const normalizedTitle = normalizeDiffTitleText(rawTitle);
-  if (!normalizedTitle) {
-    return null;
-  }
-
-  const directPath = pathMap.get(normalizedTitle) ?? pathMap.get(stripDiffPathPrefix(normalizedTitle));
-  if (directPath) {
-    return directPath;
-  }
-
-  const sortedTitles = [...pathMap.entries()].sort((left, right) => right[0].length - left[0].length);
-  for (const [title, path] of sortedTitles) {
-    const normalizedCandidate = normalizeDiffTitleText(title);
-    if (
-      normalizedCandidate &&
-      (normalizedTitle === normalizedCandidate || normalizedTitle.startsWith(`${normalizedCandidate} `))
-    ) {
-      return path;
-    }
-  }
-
-  const renameTarget = normalizedTitle.match(/(?:→|->)\s*(.+)$/)?.[1];
-  if (renameTarget) {
-    const normalizedTarget = stripDiffPathPrefix(renameTarget);
-    const targetPath = pathMap.get(renameTarget) ?? pathMap.get(normalizedTarget);
-    if (targetPath) {
-      return targetPath;
-    }
-    for (const [title, path] of sortedTitles) {
-      const normalizedCandidate = normalizeDiffTitleText(stripDiffPathPrefix(title));
-      if (
-        normalizedCandidate &&
-        (normalizedTarget === normalizedCandidate || normalizedTarget.startsWith(`${normalizedCandidate} `))
-      ) {
-        return path;
-      }
-    }
-  }
-
-  return stripDiffPathPrefix(normalizedTitle);
-}
-
 function parseDiffLineNumber(value: string | null | undefined): number | null {
   if (!value) {
     return null;
@@ -379,10 +295,6 @@ function findDiffTitleTextForLine(
   }
 
   return null;
-}
-
-function withWorkspaceLineTarget(path: string, lineNumber: number | null): string {
-  return lineNumber === null ? path : `${path}#L${lineNumber}`;
 }
 
 export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewerProps> = ({
@@ -619,7 +531,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     });
     return { items };
   }, [collapsedDiffFileKeys, renderablePatch]);
-  const diffTitlePathMap = useMemo(() => buildDiffTitlePathMap(parsed.items), [parsed.items]);
+  const diffTitlePathMap = useMemo(() => buildDiffTitlePathMap(parsed.items.map((item) => item.fileDiff)), [parsed.items]);
   const diffFileSummaries = useMemo<CodeAgentWorkspaceDiffFileSummary[]>(() => parsed.items.flatMap((item) => {
     if (item.type !== 'diff') {
       return [];
@@ -691,7 +603,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
         : null;
     if (openPath) {
       openCodeAgentDiffFilePrimaryAction({
-        filePath: withWorkspaceLineTarget(openPath, lineNumber),
+        filePath: withDiffLineTarget(openPath, lineNumber),
         openInWorkspaceFileViewer: onOpenFile,
       });
     }

@@ -174,7 +174,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   return (
     <section
       data-testid="code-agent-workspace"
-      className="sticky top-0 z-30 flex-shrink-0 border-b border-[#dedbd0] bg-[#f5f4ed]/95 px-3 pb-3 pt-3 shadow-[0_1px_0_rgba(20,20,19,0.04)] backdrop-blur dark:border-[#30302e] dark:bg-[#141413]/95 dark:shadow-[0_1px_0_rgba(250,249,245,0.04)]"
+      className="sticky top-0 z-30 min-w-0 max-w-full flex-shrink-0 overflow-x-hidden border-b border-[#dedbd0] bg-[#f5f4ed]/95 px-3 pb-3 pt-3 shadow-[0_1px_0_rgba(20,20,19,0.04)] backdrop-blur dark:border-[#30302e] dark:bg-[#141413]/95 dark:shadow-[0_1px_0_rgba(250,249,245,0.04)]"
       aria-label={t('codeAgentWorkspace')}
     >
       <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
@@ -269,10 +269,10 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
           size="sm"
           variant="underlined"
           classNames={{
-            base: 'block w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden border-b border-[#dedbd0] px-2 [scrollbar-width:none] dark:border-[#30302e] [&::-webkit-scrollbar]:hidden',
-            tabList: 'w-max min-w-max max-w-none flex-nowrap gap-2 overflow-visible whitespace-nowrap',
+            base: 'block w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden overscroll-x-contain border-b border-[#dedbd0] [scrollbar-width:none] [-webkit-overflow-scrolling:touch] touch-pan-x dark:border-[#30302e] [&::-webkit-scrollbar]:hidden',
+            tabList: 'inline-flex w-max min-w-max max-w-none flex-nowrap gap-2 overflow-visible whitespace-nowrap p-0 px-2',
             cursor: 'bg-[#d66a43]',
-            tab: 'h-9 shrink-0 whitespace-nowrap px-2 text-xs font-semibold',
+            tab: 'h-9 w-auto flex-none whitespace-nowrap px-2 text-xs font-semibold',
             tabContent: 'text-[#5e5d59] group-data-[selected=true]:text-[#141413] dark:text-[#b0aea5] dark:group-data-[selected=true]:text-[#faf9f5]',
             panel: 'p-0',
           }}

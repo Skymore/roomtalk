@@ -10,6 +10,7 @@ import {
   writeCodeWorkspaceFile,
   type CodeWorkspaceFile,
 } from '../utils/codeWorkspaceFiles';
+import { resolveCodeAgentDiffThemeName } from '../utils/codeAgentDiffRendering';
 import {
   appendWorkspaceAssetPreviewRevision,
   isWorkspaceBrowserPreviewPath,
@@ -39,18 +40,32 @@ const FILE_SAVE_DEBOUNCE_MS = 500;
 const FILE_LINK_REVEAL_ATTRIBUTE = 'data-file-link-reveal';
 const FILE_LINK_REVEAL_UNSAFE_CSS = `
   [${FILE_LINK_REVEAL_ATTRIBUTE}][data-line] {
-    background-color: color-mix(
-      in srgb,
-      var(--diffs-computed-diff-line-bg) 72%,
-      var(--diffs-bg-selection-override, var(--diffs-selection-base))
+    background-color: light-dark(
+      color-mix(
+        in lab,
+        var(--diffs-computed-diff-line-bg) 82%,
+        var(--diffs-bg-selection-override, var(--diffs-selection-base))
+      ),
+      color-mix(
+        in lab,
+        var(--diffs-computed-diff-line-bg) 75%,
+        var(--diffs-bg-selection-override, var(--diffs-selection-base))
+      )
     ) !important;
   }
 
   [${FILE_LINK_REVEAL_ATTRIBUTE}][data-column-number] {
-    background-color: color-mix(
-      in srgb,
-      var(--diffs-computed-diff-line-bg) 62%,
-      var(--diffs-bg-selection-number-override, var(--diffs-selection-base))
+    background-color: light-dark(
+      color-mix(
+        in lab,
+        var(--diffs-computed-diff-line-bg) 75%,
+        var(--diffs-bg-selection-number-override, var(--diffs-selection-base))
+      ),
+      color-mix(
+        in lab,
+        var(--diffs-computed-diff-line-bg) 60%,
+        var(--diffs-bg-selection-number-override, var(--diffs-selection-base))
+      )
     ) !important;
     color: var(--diffs-selection-number-fg) !important;
   }
@@ -276,7 +291,7 @@ function ReadOnlyFileSurface({
           options={{
             disableFileHeader: true,
             overflow: wordWrap ? 'wrap' : 'scroll',
-            theme: resolvedTheme === 'dark' ? 'pierre-dark' : 'pierre-light',
+            theme: resolveCodeAgentDiffThemeName(resolvedTheme),
             themeType: resolvedTheme,
             unsafeCSS: FILE_LINK_REVEAL_UNSAFE_CSS,
             onPostRender,

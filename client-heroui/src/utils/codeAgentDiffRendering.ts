@@ -132,8 +132,96 @@ export function resolveFileDiffPath(fileDiff: FileDiffMetadata): string {
   return rawPath.startsWith('a/') || rawPath.startsWith('b/') ? rawPath.slice(2) : rawPath;
 }
 
+export function stripDiffPathPrefix(path: string): string {
+  const trimmed = path.trim();
+  return trimmed.startsWith('a/') || trimmed.startsWith('b/') ? trimmed.slice(2) : trimmed;
+}
+
 export function buildFileDiffRenderKey(fileDiff: FileDiffMetadata): string {
   return fileDiff.cacheKey ?? `${fileDiff.prevName ?? 'none'}:${fileDiff.name}`;
+}
+
+function addDiffTitlePathCandidate(
+  candidates: Map<string, string>,
+  title: string | null | undefined,
+  path: string,
+) {
+  if (!title) {
+    return;
+  }
+  const trimmed = title.trim();
+  if (!trimmed) {
+    return;
+  }
+  candidates.set(trimmed, path);
+  candidates.set(stripDiffPathPrefix(trimmed), path);
+}
+
+export function buildDiffTitlePathMap(fileDiffs: ReadonlyArray<FileDiffMetadata>): ReadonlyMap<string, string> {
+  const candidates = new Map<string, string>();
+  for (const fileDiff of fileDiffs) {
+    const filePath = resolveFileDiffPath(fileDiff);
+    addDiffTitlePathCandidate(candidates, fileDiff.name, filePath);
+    addDiffTitlePathCandidate(candidates, fileDiff.prevName, filePath);
+    if (fileDiff.prevName && fileDiff.name) {
+      const previousPath = stripDiffPathPrefix(fileDiff.prevName);
+      const nextPath = stripDiffPathPrefix(fileDiff.name);
+      addDiffTitlePathCandidate(candidates, `${previousPath} → ${nextPath}`, filePath);
+      addDiffTitlePathCandidate(candidates, `${previousPath} -> ${nextPath}`, filePath);
+    }
+  }
+  return candidates;
+}
+
+function normalizeDiffTitleText(title: string): string {
+  return title.replace(/\s+/g, ' ').trim();
+}
+
+export function resolveDiffTitleOpenPath(rawTitle: string, pathMap: ReadonlyMap<string, string>): string | null {
+  const normalizedTitle = normalizeDiffTitleText(rawTitle);
+  if (!normalizedTitle) {
+    return null;
+  }
+
+  const directPath = pathMap.get(normalizedTitle) ?? pathMap.get(stripDiffPathPrefix(normalizedTitle));
+  if (directPath) {
+    return directPath;
+  }
+
+  const sortedTitles = [...pathMap.entries()].sort((left, right) => right[0].length - left[0].length);
+  for (const [title, path] of sortedTitles) {
+    const normalizedCandidate = normalizeDiffTitleText(title);
+    if (
+      normalizedCandidate &&
+      (normalizedTitle === normalizedCandidate || normalizedTitle.startsWith(`${normalizedCandidate} `))
+    ) {
+      return path;
+    }
+  }
+
+  const renameTarget = normalizedTitle.match(/(?:→|->)\s*(.+)$/)?.[1];
+  if (renameTarget) {
+    const normalizedTarget = stripDiffPathPrefix(renameTarget);
+    const targetPath = pathMap.get(renameTarget) ?? pathMap.get(normalizedTarget);
+    if (targetPath) {
+      return targetPath;
+    }
+    for (const [title, path] of sortedTitles) {
+      const normalizedCandidate = normalizeDiffTitleText(stripDiffPathPrefix(title));
+      if (
+        normalizedCandidate &&
+        (normalizedTarget === normalizedCandidate || normalizedTarget.startsWith(`${normalizedCandidate} `))
+      ) {
+        return path;
+      }
+    }
+  }
+
+  return stripDiffPathPrefix(normalizedTitle);
+}
+
+export function withDiffLineTarget(path: string, lineNumber: number | null): string {
+  return lineNumber === null ? path : `${path}#L${lineNumber}`;
 }
 
 export function getDiffCollapseIconClassName(fileDiff: FileDiffMetadata): string {

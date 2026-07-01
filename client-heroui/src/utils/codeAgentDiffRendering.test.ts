@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildDiffTitlePathMap,
   buildPatchCacheKey,
   getDiffCollapseIconClassName,
   getRenderablePatch,
   resolveFileDiffPath,
+  resolveDiffTitleOpenPath,
   resolveCodeAgentDiffThemeName,
   summarizeFileDiffStat,
+  stripDiffPathPrefix,
+  withDiffLineTarget,
 } from './codeAgentDiffRendering';
 
 describe('codeAgentDiffRendering', () => {
@@ -105,5 +109,28 @@ describe('codeAgentDiffRendering', () => {
     expect(getDiffCollapseIconClassName({ type: 'change' } as any)).toBe('text-[var(--diffs-modified-base)]');
     expect(getDiffCollapseIconClassName({ type: 'rename-pure' } as any)).toBe('text-[var(--diffs-modified-base)]');
     expect(getDiffCollapseIconClassName({ type: 'unknown' } as any)).toBe('text-[#87867f] dark:text-[#8f8d86]');
+  });
+
+  it('resolves T3-style diff title clicks to workspace file paths', () => {
+    const pathMap = buildDiffTitlePathMap([
+      { name: 'b/src/App.tsx' },
+      { prevName: 'a/src/Old.tsx', name: 'b/src/New.tsx' },
+    ] as any);
+
+    expect(pathMap.get('b/src/App.tsx')).toBe('src/App.tsx');
+    expect(pathMap.get('src/App.tsx')).toBe('src/App.tsx');
+    expect(resolveDiffTitleOpenPath('src/App.tsx +2 -1', pathMap)).toBe('src/App.tsx');
+    expect(resolveDiffTitleOpenPath('src/Old.tsx → src/New.tsx +1 -0', pathMap)).toBe('src/New.tsx');
+    expect(resolveDiffTitleOpenPath('src/Old.tsx -> src/New.tsx', pathMap)).toBe('src/New.tsx');
+    expect(resolveDiffTitleOpenPath('b/src/Unknown.ts', pathMap)).toBe('src/Unknown.ts');
+    expect(resolveDiffTitleOpenPath('   ', pathMap)).toBeNull();
+  });
+
+  it('normalizes T3-style diff path prefixes and line targets', () => {
+    expect(stripDiffPathPrefix('a/src/App.tsx')).toBe('src/App.tsx');
+    expect(stripDiffPathPrefix('b/src/App.tsx')).toBe('src/App.tsx');
+    expect(stripDiffPathPrefix('src/App.tsx')).toBe('src/App.tsx');
+    expect(withDiffLineTarget('src/App.tsx', 42)).toBe('src/App.tsx#L42');
+    expect(withDiffLineTarget('src/App.tsx', null)).toBe('src/App.tsx');
   });
 });

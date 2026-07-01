@@ -9,6 +9,8 @@ import {
   resetCodeAgentDiffPanelStoreForTests,
   selectCodeAgentDiffScope,
 } from '../utils/codeAgentDiffPanelStore';
+import { fnv1a32 } from '../utils/codeAgentDiffRendering';
+import type { ReviewCommentContext } from '../utils/codeAgentReviewComments';
 
 const loadCodeAgentWorkspaceDiffMock = vi.hoisted(() => vi.fn());
 const loadCodeAgentWorkspaceRefsMock = vi.hoisted(() => vi.fn());
@@ -45,6 +47,7 @@ vi.mock('@pierre/diffs/react', () => ({
       type: 'diff';
       fileDiff: { name?: string | null; prevName?: string | null; cacheKey?: string };
       collapsed?: boolean;
+      version?: number;
       annotations?: Array<{ side: 'additions' | 'deletions'; lineNumber: number; metadata: { entries: Array<{ id: string; kind: 'draft' | 'comment'; rangeLabel: string; text: string }> } }>;
     }>;
     options: {
@@ -78,7 +81,7 @@ vi.mock('@pierre/diffs/react', () => ({
             ? `${item.fileDiff.prevName.replace(/^[ab]\//, '')} → ${item.fileDiff.name.replace(/^[ab]\//, '')}`
             : item.fileDiff.name ?? item.fileDiff.prevName ?? 'diff';
           return (
-            <div key={item.id} data-diff data-testid={`diff-file-${item.id}`} data-collapsed={String(item.collapsed === true)}>
+            <div key={item.id} data-diff data-testid={`diff-file-${item.id}`} data-collapsed={String(item.collapsed === true)} data-version={String(item.version ?? '')}>
               {renderHeaderPrefix?.(item)}
               <span data-title>
                 <span>{title}</span>
@@ -93,6 +96,14 @@ vi.mock('@pierre/diffs/react', () => ({
                 onClick={() => options.onLineSelectionEnd?.({ start: 2, end: 4, side: 'additions', endSide: 'additions' }, { item })}
               >
                 select diff lines
+              </button>
+              <button
+                type="button"
+                aria-label={`select invalid diff lines ${item.id}`}
+                disabled={!options.enableLineSelection}
+                onClick={() => options.onLineSelectionEnd?.({ start: 99, end: 100, side: 'additions', endSide: 'additions' }, { item })}
+              >
+                select invalid diff lines
               </button>
               {item.annotations?.map((annotation) => (
                 <div key={`${annotation.side}:${annotation.lineNumber}`} data-testid="diff-line-annotation">
@@ -554,7 +565,7 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(screen.getByLabelText('codeAgentExpandDiffFile').getAttribute('aria-expanded')).toBe('false');
   });
 
-  it('supports T3-style local comments from selected diff lines', async () => {
+  it('supports T3-style draft and persisted comments from selected diff lines', async () => {
     loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
       available: true,
       patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
@@ -585,7 +596,25 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
       },
     ]);
 
-    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
+    function StatefulDiffViewer() {
+      const [comments, setComments] = React.useState<ReviewCommentContext[]>([]);
+      return (
+        <CodeAgentWorkspaceDiffViewer
+          roomId="room-1"
+          enabled
+          refreshKey="snapshot-1"
+          reviewComments={comments}
+          onAddReviewComment={(comment) => {
+            setComments((current) => [
+              ...current.filter((entry) => entry.id !== comment.id),
+              comment,
+            ]);
+          }}
+        />
+      );
+    }
+
+    render(<StatefulDiffViewer />);
 
     fireEvent.click(await screen.findByLabelText('select diff lines file:app'));
 
@@ -656,6 +685,109 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
       diff: '@@ -0,0 +2,3 @@\n+added 2\n+added 3\n+added 4',
       fenceLanguage: 'diff',
     }));
+  });
+
+  it('matches T3 diff annotation item versions without hashing entry kind', async () => {
+    const reviewComment: ReviewCommentContext = {
+      id: 'comment-1',
+      sectionId: 'workspace-diff:room-1:snapshot-1:branch:auto',
+      sectionTitle: 'codeAgentChanges',
+      filePath: 'src/App.tsx',
+      startIndex: 1,
+      endIndex: 3,
+      rangeLabel: '+2 to +4',
+      text: 'Please revisit this diff.',
+      diff: '@@ -0,0 +2,3 @@\n+added 2\n+added 3\n+added 4',
+      fenceLanguage: 'diff',
+    };
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          {
+            name: 'src/App.tsx',
+            cacheKey: 'file:app',
+            hunks: [{
+              additionStart: 1,
+              deletionStart: 1,
+              deletionLineIndex: 0,
+              additionLineIndex: 0,
+              additionLines: 3,
+              deletionLines: 0,
+              hunkContent: [
+                { type: 'context', lines: 1 },
+                { type: 'change', deletions: 0, additions: 3 },
+              ],
+            }],
+            additionLines: ['same', 'added 2', 'added 3', 'added 4'],
+            deletionLines: ['same'],
+            type: 'change',
+          },
+        ],
+      },
+    ]);
+
+    render(
+      <CodeAgentWorkspaceDiffViewer
+        roomId="room-1"
+        enabled
+        refreshKey="snapshot-1"
+        reviewComments={[reviewComment]}
+      />,
+    );
+
+    expect(await screen.findByTestId('diff-line-annotation')).toBeTruthy();
+    expect(screen.getByTestId('diff-file-file:app').dataset.version).toBe(String(
+      fnv1a32('0:comment-1:+2 to +4:Please revisit this diff.'),
+    ));
+    expect(screen.getByTestId('diff-file-file:app').dataset.version).not.toBe(String(
+      fnv1a32('0:comment-1:comment:+2 to +4:Please revisit this diff.'),
+    ));
+  });
+
+  it('does not create a draft for diff selections that T3 review comments cannot map', async () => {
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          {
+            name: 'src/App.tsx',
+            cacheKey: 'file:app',
+            hunks: [{
+              additionStart: 1,
+              deletionStart: 1,
+              deletionLineIndex: 0,
+              additionLineIndex: 0,
+              additionLines: 1,
+              deletionLines: 0,
+              hunkContent: [
+                { type: 'context', lines: 1 },
+              ],
+            }],
+            additionLines: ['same'],
+            deletionLines: ['same'],
+            type: 'change',
+          },
+        ],
+      },
+    ]);
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
+
+    fireEvent.click(await screen.findByLabelText('select invalid diff lines file:app'));
+
+    expect(screen.queryByLabelText(/^codeAgentCommentOnLines:/)).toBeNull();
+    expect(screen.queryByTestId('diff-line-annotation')).toBeNull();
   });
 
   it('renders T3-style changed file navigation and scrolls to a diff file', async () => {

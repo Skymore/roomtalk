@@ -102,6 +102,11 @@ describe('CodeAgentWorkspacePanel', () => {
       />
     );
 
+    const workspace = screen.getByTestId('code-agent-workspace');
+    expect(workspace.className).toContain('min-w-0');
+    expect(workspace.className).toContain('max-w-full');
+    expect(workspace.className).toContain('overflow-x-hidden');
+
     const details = screen.getByTestId('code-agent-workspace-details');
     expect(details.className).toContain('min-w-0');
     expect(details.className).toContain('overflow-hidden');
@@ -110,18 +115,25 @@ describe('CodeAgentWorkspacePanel', () => {
     const tabsViewport = tabList.parentElement;
     expect(tabsViewport?.getAttribute('data-slot')).toBe('base');
     expect(tabsViewport?.className).toContain('overflow-x-auto');
+    expect(tabsViewport?.className).toContain('overflow-y-hidden');
+    expect(tabsViewport?.className).toContain('overscroll-x-contain');
     expect(tabsViewport?.className).toContain('max-w-full');
     expect(tabsViewport?.className).toContain('[scrollbar-width:none]');
+    expect(tabsViewport?.className).toContain('[-webkit-overflow-scrolling:touch]');
+    expect(tabsViewport?.className).toContain('touch-pan-x');
 
+    expect(tabList.className).toContain('inline-flex');
     expect(tabList.className).toContain('w-max');
     expect(tabList.className).toContain('min-w-max');
-    expect(tabList.className).toContain('flex-nowrap');
     expect(tabList.className).toContain('max-w-none');
+    expect(tabList.className).toContain('flex-nowrap');
+    expect(tabList.className).toContain('overflow-visible');
 
     const tabs = screen.getAllByRole('tab');
     expect(tabs.length).toBeGreaterThan(1);
     tabs.forEach((tab) => {
-      expect(tab.className).toContain('shrink-0');
+      expect(tab.className).toContain('flex-none');
+      expect(tab.className).toContain('w-auto');
       expect(tab.className).toContain('whitespace-nowrap');
     });
   });

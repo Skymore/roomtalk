@@ -2,6 +2,7 @@ import { type SelectedLineRange } from '@pierre/diffs';
 import { Editor } from '@pierre/diffs/editor';
 import { EditorProvider, File as DiffFile, type FileOptions, Virtualizer } from '@pierre/diffs/react';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { resolveCodeAgentDiffThemeName } from '../utils/codeAgentDiffRendering';
 import { writeCodeWorkspaceFile, type CodeWorkspaceFile } from '../utils/codeWorkspaceFiles';
 import {
   buildFileReviewComment,
@@ -257,13 +258,27 @@ export function CodeAgentEditableFileSurface({
         setDraftFileContents(nextFile.contents);
         saveCoordinator.change(nextFile.contents);
         if (nextLineAnnotations) {
-          setLineAnnotations(remapFileCommentAnnotations(
+          const remapped = remapFileCommentAnnotations(
             nextLineAnnotations as FileCommentLineAnnotation[],
-          ));
+          );
+          setLineAnnotations(remapped);
+          for (const annotation of remapped) {
+            for (const entry of annotation.metadata.entries) {
+              if (entry.kind !== 'comment') continue;
+              onAddReviewComment?.(buildFileReviewComment({
+                id: entry.id,
+                filePath,
+                startLine: entry.startLine,
+                endLine: entry.endLine,
+                text: entry.text,
+                contents: nextFile.contents,
+              }));
+            }
+          }
         }
       },
     });
-  }, [saveCoordinator, setDraftFileContents]);
+  }, [filePath, onAddReviewComment, saveCoordinator, setDraftFileContents]);
 
   useEffect(() => () => {
     editor.cleanUp();
@@ -331,7 +346,7 @@ export function CodeAgentEditableFileSurface({
               onLineSelectionChange: setSelectedRange,
               onLineSelectionEnd: handleLineSelectionEnd,
               overflow: wordWrap ? 'wrap' : 'scroll',
-              theme: resolvedTheme === 'dark' ? 'pierre-dark' : 'pierre-light',
+              theme: resolveCodeAgentDiffThemeName(resolvedTheme),
               themeType: resolvedTheme,
               unsafeCSS: fileLinkRevealUnsafeCss,
               onPostRender: handlePostRender,

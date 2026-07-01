@@ -18,7 +18,7 @@ import {
   type DiffCommentAnnotationGroup,
   type DiffCommentLineAnnotation,
   appendDiffCommentAnnotationEntry,
-  formatDiffCommentRange,
+  diffAnnotationSide,
 } from './codeAgentDiffCommentAnnotations';
 import { nextFileCommentId } from './codeAgentFileCommentAnnotations';
 
@@ -68,12 +68,15 @@ export function CodeAgentAnnotatableCodeView({
     id: string;
     range: SelectedLineRange;
   } | null>(null);
-  const [diffAnnotations, setDiffAnnotations] = useState<Record<string, DiffCommentLineAnnotation[]>>({});
+  const [draft, setDraft] = useState<{
+    fileKey: string;
+    annotation: DiffCommentLineAnnotation;
+  } | null>(null);
   const filesByKey = useMemo(() => new Map(files.map((file) => [file.fileKey, file])), [files]);
 
   const items = useMemo<CodeViewDiffItem<DiffCommentAnnotationGroup>[]>(() => (
     files.map(({ fileDiff, filePath, fileKey, collapsed }) => {
-      const persistedAnnotations = reviewComments
+      const persisted = reviewComments
         .filter((comment) => (
           comment.sectionId === sectionId &&
           comment.filePath === filePath &&
@@ -90,14 +93,9 @@ export function CodeAgentAnnotatableCodeView({
             text: comment.text,
           });
         }, []);
-      const persistedEntryIds = new Set(
-        persistedAnnotations.flatMap((annotation) => annotation.metadata.entries.map((entry) => entry.id)),
-      );
-      const localAnnotations = (diffAnnotations[fileKey] || []).flatMap((annotation) => {
-        const entries = annotation.metadata.entries.filter((entry) => !persistedEntryIds.has(entry.id));
-        return entries.length > 0 ? [{ ...annotation, metadata: { entries } }] : [];
-      });
-      const annotations = [...persistedAnnotations, ...localAnnotations];
+      const annotations = draft?.fileKey === fileKey
+        ? [...persisted, draft.annotation]
+        : persisted;
       return {
         id: fileKey,
         type: 'diff',
@@ -105,93 +103,47 @@ export function CodeAgentAnnotatableCodeView({
         annotations,
         collapsed,
         version: fnv1a32(`${collapsed ? '1' : '0'}:${annotations
-          .flatMap((annotation) => annotation.metadata.entries.map((entry) => `${entry.id}:${entry.kind}:${entry.rangeLabel}:${entry.text}`))
+          .flatMap((annotation) => annotation.metadata.entries.map((entry) => `${entry.id}:${entry.rangeLabel}:${entry.text}`))
           .join('|')}`),
       };
     })
-  ), [diffAnnotations, files, reviewComments, sectionId]);
-
-  const removeDraftDiffAnnotations = useCallback((
-    current: Record<string, DiffCommentLineAnnotation[]>,
-  ): Record<string, DiffCommentLineAnnotation[]> => {
-    const next: Record<string, DiffCommentLineAnnotation[]> = {};
-    for (const [fileKey, annotations] of Object.entries(current)) {
-      const filteredAnnotations = annotations.flatMap((annotation) => {
-        const entries = annotation.metadata.entries.filter((entry) => entry.kind !== 'draft');
-        return entries.length > 0 ? [{ ...annotation, metadata: { entries } }] : [];
-      });
-      if (filteredAnnotations.length > 0) {
-        next[fileKey] = filteredAnnotations;
-      }
-    }
-    return next;
-  }, []);
-
-  const removeLocalAnnotationEntry = useCallback((entryId: string) => {
-    setDiffAnnotations((current) => {
-      const next: Record<string, DiffCommentLineAnnotation[]> = {};
-      for (const [fileKey, annotations] of Object.entries(current)) {
-        const filteredAnnotations = annotations.flatMap((annotation) => {
-          const entries = annotation.metadata.entries.filter((entry) => entry.id !== entryId);
-          return entries.length > 0 ? [{ ...annotation, metadata: { entries } }] : [];
-        });
-        if (filteredAnnotations.length > 0) {
-          next[fileKey] = filteredAnnotations;
-        }
-      }
-      return next;
-    });
-  }, []);
+  ), [draft, files, reviewComments, sectionId]);
 
   const removeAnnotationEntry = useCallback((entryId: string) => {
     setSelectedLines(null);
+    if (draft?.annotation.metadata.entries.some((entry) => entry.id === entryId)) {
+      setDraft(null);
+      return;
+    }
     onRemoveReviewComment?.(entryId);
-    removeLocalAnnotationEntry(entryId);
-  }, [onRemoveReviewComment, removeLocalAnnotationEntry]);
+  }, [draft, onRemoveReviewComment]);
 
   const submitAnnotationEntry = useCallback((entryId: string, text: string) => {
-    setSelectedLines(null);
-    const submitted = Object.entries(diffAnnotations).flatMap(([fileKey, annotations]) => (
-      annotations.flatMap((annotation) => (
-        annotation.metadata.entries.map((entry) => ({ fileKey, entry }))
-      ))
-    )).find(({ entry }) => entry.id === entryId);
-    const file = submitted ? filesByKey.get(submitted.fileKey) : undefined;
-    const comment = submitted && file
+    const entry = draft?.annotation.metadata.entries.find((candidate) => candidate.id === entryId);
+    const file = draft ? filesByKey.get(draft.fileKey) : undefined;
+    if (!entry || !file) {
+      return;
+    }
+    const comment = entry && file
       ? buildDiffReviewComment({
-        id: submitted.entry.id,
+        id: entry.id,
         sectionId,
         sectionTitle,
         filePath: file.filePath,
         fileDiff: file.fileDiff,
-        range: submitted.entry.range,
+        range: entry.range,
         text,
       })
       : null;
-    if (comment && onAddReviewComment) {
-      onAddReviewComment(comment);
-      removeLocalAnnotationEntry(entryId);
-      return;
+    if (comment) {
+      onAddReviewComment?.(comment);
     }
-    setDiffAnnotations((current) => {
-      const next: Record<string, DiffCommentLineAnnotation[]> = {};
-      for (const [fileKey, annotations] of Object.entries(current)) {
-        next[fileKey] = annotations.map((annotation) => ({
-          ...annotation,
-          metadata: {
-            entries: annotation.metadata.entries.map((entry) => (
-              entry.id === entryId ? { ...entry, kind: 'comment', text } : entry
-            )),
-          },
-        }));
-      }
-      return next;
-    });
+    setSelectedLines(null);
+    setDraft(null);
   }, [
-    diffAnnotations,
+    draft,
     filesByKey,
     onAddReviewComment,
-    removeLocalAnnotationEntry,
     sectionId,
     sectionTitle,
   ]);
@@ -200,32 +152,43 @@ export function CodeAgentAnnotatableCodeView({
     if (!range || context.item.type !== 'diff') {
       return;
     }
+    const file = filesByKey.get(context.item.id);
+    if (!file) {
+      return;
+    }
 
+    const id = nextFileCommentId();
+    const comment = buildDiffReviewComment({
+      id,
+      sectionId,
+      sectionTitle,
+      filePath: file.filePath,
+      fileDiff: file.fileDiff,
+      range,
+      text: '',
+    });
+    if (!comment) {
+      return;
+    }
     const entry: DiffCommentAnnotationEntry = {
-      id: nextFileCommentId(),
+      id,
       kind: 'draft',
       range,
-      rangeLabel: formatDiffCommentRange(context.item.fileDiff, range),
+      rangeLabel: comment.rangeLabel,
       text: '',
     };
 
-    setSelectedLines({ id: context.item.id, range });
-    setDiffAnnotations((current) => {
-      const withoutDraft = removeDraftDiffAnnotations(current);
-      return {
-        ...withoutDraft,
-        [context.item.id]: appendDiffCommentAnnotationEntry(
-          withoutDraft[context.item.id] || [],
-          range,
-          entry,
-        ),
-      };
+    setDraft({
+      fileKey: context.item.id,
+      annotation: {
+        side: diffAnnotationSide(range),
+        lineNumber: range.end,
+        metadata: { entries: [entry] },
+      },
     });
-  }, [removeDraftDiffAnnotations]);
+  }, [filesByKey, sectionId, sectionTitle]);
 
-  const hasOpenCommentForm = Object.values(diffAnnotations).some((annotations) =>
-    annotations.some((annotation) => annotation.metadata.entries.some((entry) => entry.kind === 'draft')),
-  );
+  const hasOpenCommentForm = draft !== null;
 
   return (
     <CodeView<DiffCommentAnnotationGroup>
