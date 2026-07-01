@@ -452,6 +452,7 @@ function previewedByteSize(file: CodeWorkspaceFile): number {
 }
 
 interface ReadOnlyFileSurfaceProps {
+  roomId: string;
   file: CodeWorkspaceFile;
   resolvedTheme: 'light' | 'dark';
   wordWrap: boolean;
@@ -459,6 +460,7 @@ interface ReadOnlyFileSurfaceProps {
 }
 
 function ReadOnlyFileSurface({
+  roomId,
   file,
   resolvedTheme,
   wordWrap,
@@ -477,7 +479,7 @@ function ReadOnlyFileSurface({
           file={{
             name: file.path,
             contents: file.content,
-            cacheKey: projectFileCacheKey('', file.path, file.content),
+            cacheKey: projectFileCacheKey(roomId, file.path, file.content),
           }}
           options={{
             disableFileHeader: true,
@@ -769,6 +771,7 @@ function FilePreviewSurface({
       ) : file.truncated ? (
         <ReadOnlyFileSurface
           key={`${file.path}:${resolvedTheme}:${file.byteSize}`}
+          roomId={roomId}
           file={file}
           resolvedTheme={resolvedTheme}
           wordWrap={wordWrap}

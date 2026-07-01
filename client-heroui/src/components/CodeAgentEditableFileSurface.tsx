@@ -341,7 +341,7 @@ export function CodeAgentEditableFileSurface({
             file={{
               name: file.path,
               contents: file.content,
-              cacheKey: projectFileCacheKey('', file.path, file.content),
+              cacheKey: projectFileCacheKey(roomId, file.path, file.content),
             }}
             options={{
               disableFileHeader: true,

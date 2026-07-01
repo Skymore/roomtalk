@@ -76,7 +76,6 @@ const DIFF_RENDER_MODE_STORAGE_KEY = 'roomtalk.codeWorkspace.diffRenderMode';
 const DIFF_IGNORE_WHITESPACE_STORAGE_KEY = 'roomtalk.codeWorkspace.diffIgnoreWhitespace';
 const AUTOMATIC_BASE_REF = '__automatic_base_ref__';
 const WORKSPACE_REF_LIMIT = 200;
-const DIFF_MAX_LINE_DIFF_LENGTH = 1_000;
 type DiffRenderMode = 'stacked' | 'split';
 const EMPTY_DIFF_FILE_KEYS: ReadonlySet<string> = new Set();
 const RENDER_DIFF_FILE_PREVIEW_STATE: CodeAgentDiffFilePreviewState = { kind: 'render' };
@@ -708,52 +707,53 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
 
   const headerRow = (
     <>
-        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-          <details className="group relative min-w-0">
-            <summary
-              aria-label={`${t('codeAgentDiffScope')}: ${diffScopeLabel}`}
-              className="inline-flex h-7 max-w-48 cursor-pointer list-none items-center gap-1 rounded-md border border-[#dedbd0] bg-[#faf9f5] px-2 text-xs font-medium text-[#141413] transition-colors hover:bg-[#f0eee6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:hover:bg-[#30302e] [&::-webkit-details-marker]:hidden"
-            >
-              <span className="truncate">{diffScopeLabel}</span>
-              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[#87867f] transition-transform group-open:rotate-180 dark:text-[#8f8d86]" />
-            </summary>
-            <div className="absolute left-0 top-8 z-50 w-52 rounded-md border border-[#dedbd0] bg-[#faf9f5] p-1 shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]">
-              {([
-                ['branch', t('codeAgentDiffScopeBranch')],
-                ['unstaged', t('codeAgentDiffScopeWorkingTree')],
-              ] as const).map(([scope, label]) => (
-                <button
-                  key={scope}
-                  type="button"
-                  className="flex h-8 w-full items-center gap-2 rounded px-2 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
-                  onClick={(event) => {
-                    selectDiffScope(scope);
-                    event.currentTarget.closest('details')?.removeAttribute('open');
-                  }}
-                >
-                  <span className="min-w-0 flex-1 truncate">{label}</span>
-                  {diffScope === scope ? <Check className="h-3.5 w-3.5 shrink-0 text-[#9f462c] dark:text-[#ffb197]" /> : null}
-                </button>
-              ))}
-            </div>
-          </details>
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+          <div className="inline-flex max-w-full shrink-0 items-center gap-1.5 whitespace-nowrap">
+            <details className="group relative min-w-0 shrink-0">
+              <summary
+                aria-label={`${t('codeAgentDiffScope')}: ${diffScopeLabel}`}
+                className="inline-flex h-7 max-w-40 cursor-pointer list-none items-center gap-1 rounded-md border border-[#dedbd0] bg-[#faf9f5] px-2 text-xs font-medium text-[#141413] transition-colors hover:bg-[#f0eee6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:hover:bg-[#30302e] [&::-webkit-details-marker]:hidden"
+              >
+                <span className="truncate">{diffScopeLabel}</span>
+                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[#87867f] transition-transform group-open:rotate-180 dark:text-[#8f8d86]" />
+              </summary>
+              <div className="absolute left-0 top-8 z-50 w-52 rounded-md border border-[#dedbd0] bg-[#faf9f5] p-1 shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]">
+                {([
+                  ['branch', t('codeAgentDiffScopeBranch')],
+                  ['unstaged', t('codeAgentDiffScopeWorkingTree')],
+                ] as const).map(([scope, label]) => (
+                  <button
+                    key={scope}
+                    type="button"
+                    className="flex h-8 w-full items-center gap-2 rounded px-2 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
+                    onClick={(event) => {
+                      selectDiffScope(scope);
+                      event.currentTarget.closest('details')?.removeAttribute('open');
+                    }}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{label}</span>
+                    {diffScope === scope ? <Check className="h-3.5 w-3.5 shrink-0 text-[#9f462c] dark:text-[#ffb197]" /> : null}
+                  </button>
+                ))}
+              </div>
+            </details>
           {diffScope === 'branch' ? (
             <div
-              className="flex min-w-0 max-w-full items-center gap-1.5 overflow-visible text-xs text-[#87867f] dark:text-[#8f8d86]"
+              className="flex min-w-0 max-w-full shrink-0 items-center gap-1.5 overflow-visible text-xs text-[#87867f] dark:text-[#8f8d86]"
               title={`${diffHeadRefLabel} -> ${diffBaseRefLabel}`}
               aria-label={`${t('codeAgentDiffComparing')}: ${diffHeadRefLabel} -> ${diffBaseRefLabel}`}
             >
               <span className="hidden max-w-28 truncate sm:inline">{diffHeadRefLabel}</span>
               <ArrowRight className="hidden h-3.5 w-3.5 shrink-0 opacity-70 sm:block" />
-              <details className="group relative min-w-0">
+              <details className="group relative min-w-0 shrink-0">
                 <summary
                   aria-label={`${t('codeAgentDiffBaseRef')}: ${diffBaseRefLabel}`}
-                  className="inline-flex h-7 max-w-52 cursor-pointer list-none items-center gap-1 rounded-md px-1.5 text-xs font-medium text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] [&::-webkit-details-marker]:hidden"
+                  className="inline-flex h-7 max-w-32 cursor-pointer list-none items-center gap-1 rounded-md px-1.5 text-xs font-medium text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] [&::-webkit-details-marker]:hidden"
                 >
                   <span className="truncate">{diffBaseRefLabel}</span>
                   <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[#87867f] transition-transform group-open:rotate-180 dark:text-[#8f8d86]" />
                 </summary>
-                <div className="absolute left-0 top-8 z-50 w-72 max-w-[calc(100vw-1rem)] overflow-hidden rounded-md border border-[#dedbd0] bg-[#faf9f5] shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]">
+                <div className="absolute left-0 top-8 z-50 w-60 max-w-[calc(100vw-1rem)] overflow-hidden rounded-md border border-[#dedbd0] bg-[#faf9f5] shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]">
                   <div className="px-3 pt-2.5">
                     <label className="relative block border-b border-[#dedbd0] pb-1.5 transition-colors focus-within:border-[#c96442] dark:border-[#30302e]">
                       <Search className="pointer-events-none absolute left-0 top-1.5 h-4 w-4 text-[#87867f]/70 dark:text-[#8f8d86]/70" />
@@ -768,7 +768,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                   </div>
                   <div className="grid grid-cols-[1rem_minmax(0,1fr)] items-center gap-2 border-b border-[#dedbd0] px-3 pb-1.5 pt-2 text-[10px] font-semibold uppercase text-[#87867f] dark:border-[#30302e] dark:text-[#8f8d86]">
                     <span aria-hidden="true" />
-                    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_2rem] items-center">
+                    <div className="inline-grid max-w-full grid-cols-[minmax(0,9rem)_3rem] items-center gap-3">
                       <span>{t('codeAgentDiffBaseRefBranch')}</span>
                       <span className="text-right">{t('codeAgentDiffBaseRefRemote')}</span>
                     </div>
@@ -826,7 +826,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                               }}
                             >
                               {diffBaseRef === item ? <Check className="h-3.5 w-3.5 text-[#9f462c] dark:text-[#ffb197]" /> : <span />}
-                              <span className="grid min-w-0 grid-cols-[minmax(0,1fr)_2rem] items-center overflow-hidden">
+                              <span className="inline-grid max-w-full grid-cols-[minmax(0,9rem)_3rem] items-center gap-3 overflow-hidden">
                                 <span className="min-w-0 truncate pr-2">{choice.label}</span>
                                 {hasBoth ? (
                                   <span
@@ -869,6 +869,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
               </details>
             </div>
           ) : null}
+          </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <button
@@ -1149,8 +1150,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
             }}
             options={{
               diffStyle: diffRenderMode === 'split' ? 'split' : 'unified',
-              lineDiffType: 'word-alt',
-              maxLineDiffLength: DIFF_MAX_LINE_DIFF_LENGTH,
+              lineDiffType: 'none',
               overflow: wordWrap ? 'wrap' : 'scroll',
               theme: resolveCodeAgentDiffThemeName(resolvedTheme),
               themeType: resolvedTheme,

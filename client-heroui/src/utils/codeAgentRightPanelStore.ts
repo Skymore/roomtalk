@@ -224,6 +224,18 @@ export function readCodeAgentRightPanelState(roomId: string): CodeAgentRightPane
   return selectRoomState(roomId);
 }
 
+export function selectActiveCodeAgentRightPanelSurface(roomId: string): CodeAgentRightPanelSurface | null {
+  const state = selectRoomState(roomId);
+  if (!state.isOpen) {
+    return null;
+  }
+  return state.surfaces.find((surface) => surface.id === state.activeSurfaceId) ?? null;
+}
+
+export function selectActiveCodeAgentRightPanelKind(roomId: string): CodeAgentRightPanelSurface['kind'] | null {
+  return selectActiveCodeAgentRightPanelSurface(roomId)?.kind ?? null;
+}
+
 export function openCodeAgentRightPanel(roomId: string, kind: 'diff' | 'files') {
   const roomKey = normalizeRoomId(roomId);
   if (!roomKey) {
@@ -268,6 +280,66 @@ export function openCodeAgentRightPanelFile(roomId: string, relativePath: string
         surfaces: existing
           ? withoutStandaloneExplorer.map((entry) => entry.id === surface.id ? surface : entry)
           : [...withoutStandaloneExplorer, surface],
+      };
+    }),
+  }));
+}
+
+export function showCodeAgentRightPanel(roomId: string) {
+  const roomKey = normalizeRoomId(roomId);
+  if (!roomKey) {
+    return;
+  }
+  updateStore((state) => ({
+    byRoomId: updateRoom(state.byRoomId, roomKey, (current) => (
+      current.isOpen ? current : { ...current, isOpen: true }
+    )),
+  }));
+}
+
+export function closeCodeAgentRightPanel(roomId: string) {
+  const roomKey = normalizeRoomId(roomId);
+  if (!roomKey) {
+    return;
+  }
+  updateStore((state) => ({
+    byRoomId: updateRoom(state.byRoomId, roomKey, (current) => (
+      current.isOpen ? { ...current, isOpen: false } : current
+    )),
+  }));
+}
+
+export function toggleCodeAgentRightPanelVisibility(roomId: string) {
+  const roomKey = normalizeRoomId(roomId);
+  if (!roomKey) {
+    return;
+  }
+  updateStore((state) => ({
+    byRoomId: updateRoom(state.byRoomId, roomKey, (current) => ({
+      ...current,
+      isOpen: !current.isOpen,
+    })),
+  }));
+}
+
+export function toggleCodeAgentRightPanel(roomId: string, kind: 'diff' | 'files') {
+  const roomKey = normalizeRoomId(roomId);
+  if (!roomKey) {
+    return;
+  }
+  updateStore((state) => ({
+    byRoomId: updateRoom(state.byRoomId, roomKey, (current) => {
+      const active = current.surfaces.find((surface) => surface.id === current.activeSurfaceId);
+      if (current.isOpen && active?.kind === kind) {
+        return { ...current, isOpen: false };
+      }
+      const surface = singletonSurface(kind);
+      return {
+        isOpen: true,
+        surfaces: current.surfaces.some((entry) => entry.id === surface.id)
+          ? current.surfaces
+          : [...current.surfaces, surface],
+        activeSurfaceId: surface.id,
       };
     }),
   }));

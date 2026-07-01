@@ -169,6 +169,8 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(subheader?.className).toContain('surface-subheader');
     expect(subheader?.className).toContain('h-9');
     expect(subheader?.className).toContain('border-b');
+    expect(subheader?.children[0]?.className).toContain('flex-1');
+    expect(subheader?.children[1]?.className).toContain('shrink-0');
     const viewport = screen.getByTestId('code-agent-workspace-diff-viewer').querySelector('.diff-panel-viewport');
     expect(viewport).toBeTruthy();
     expect(viewport?.contains(loading)).toBe(true);
@@ -252,8 +254,8 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     );
     expect(screen.getByTestId('code-view').dataset.overflow).toBe('scroll');
     expect(screen.getByTestId('code-view').dataset.diffStyle).toBe('unified');
-    expect(screen.getByTestId('code-view').dataset.lineDiffType).toBe('word-alt');
-    expect(screen.getByTestId('code-view').dataset.maxLineDiffLength).toBe('1000');
+    expect(screen.getByTestId('code-view').dataset.lineDiffType).toBe('none');
+    expect(screen.getByTestId('code-view').dataset.maxLineDiffLength).toBe('');
     expect(screen.getByTestId('code-view').dataset.stickyHeaders).toBe('true');
     expect(screen.getByTestId('code-view').dataset.layout).toBe('8:8:8');
     expect(screen.getByTestId('code-view').dataset.unsafeCss).toContain('[data-diffs-header]');

@@ -7,12 +7,18 @@ import {
   closeCodeAgentRightPanelSurface,
   closeCodeAgentRightPanelSurfacesToRight,
   closeOtherCodeAgentRightPanelSurfaces,
+  closeCodeAgentRightPanel,
   openCodeAgentRightPanel,
   openCodeAgentRightPanelFile,
   readCodeAgentRightPanelState,
   reconcileCodeAgentFileSurfaces,
   removeCodeAgentRightPanelRoom,
   resetCodeAgentRightPanelStoreForTests,
+  selectActiveCodeAgentRightPanelKind,
+  selectActiveCodeAgentRightPanelSurface,
+  showCodeAgentRightPanel,
+  toggleCodeAgentRightPanel,
+  toggleCodeAgentRightPanelVisibility,
 } from './codeAgentRightPanelStore';
 
 describe('codeAgentRightPanelStore', () => {
@@ -244,5 +250,63 @@ describe('codeAgentRightPanelStore', () => {
 
     expect(readCodeAgentRightPanelState('room-1').activeSurfaceId).toBe('file:src/index.ts');
     expect(readCodeAgentRightPanelState('room-1').surfaces).toHaveLength(2);
+  });
+
+  it('hides the panel without clearing its selected surface like T3', () => {
+    openCodeAgentRightPanel('room-1', 'diff');
+
+    closeCodeAgentRightPanel('room-1');
+
+    expect(selectActiveCodeAgentRightPanelKind('room-1')).toBeNull();
+    expect(selectActiveCodeAgentRightPanelSurface('room-1')).toBeNull();
+    expect(readCodeAgentRightPanelState('room-1')).toEqual({
+      isOpen: false,
+      activeSurfaceId: 'diff',
+      surfaces: [{ id: 'diff', kind: 'diff' }],
+    });
+
+    showCodeAgentRightPanel('room-1');
+    expect(selectActiveCodeAgentRightPanelKind('room-1')).toBe('diff');
+    expect(selectActiveCodeAgentRightPanelSurface('room-1')).toEqual({ id: 'diff', kind: 'diff' });
+  });
+
+  it('toggles empty panel visibility without creating a surface like T3', () => {
+    toggleCodeAgentRightPanelVisibility('room-1');
+    expect(readCodeAgentRightPanelState('room-1')).toEqual({
+      isOpen: true,
+      activeSurfaceId: null,
+      surfaces: [],
+    });
+
+    toggleCodeAgentRightPanelVisibility('room-1');
+    expect(readCodeAgentRightPanelState('room-1')).toEqual({
+      isOpen: false,
+      activeSurfaceId: null,
+      surfaces: [],
+    });
+  });
+
+  it('toggles an active singleton surface by hiding instead of discarding tabs like T3', () => {
+    toggleCodeAgentRightPanel('room-1', 'diff');
+    expect(selectActiveCodeAgentRightPanelKind('room-1')).toBe('diff');
+
+    toggleCodeAgentRightPanel('room-1', 'diff');
+    expect(selectActiveCodeAgentRightPanelKind('room-1')).toBeNull();
+    expect(readCodeAgentRightPanelState('room-1')).toEqual({
+      isOpen: false,
+      activeSurfaceId: 'diff',
+      surfaces: [{ id: 'diff', kind: 'diff' }],
+    });
+  });
+
+  it('toggles to a different singleton surface by switching active tabs like T3', () => {
+    toggleCodeAgentRightPanel('room-1', 'diff');
+    toggleCodeAgentRightPanel('room-1', 'files');
+
+    expect(selectActiveCodeAgentRightPanelKind('room-1')).toBe('files');
+    expect(readCodeAgentRightPanelState('room-1').surfaces).toEqual([
+      { id: 'diff', kind: 'diff' },
+      { id: 'files', kind: 'files' },
+    ]);
   });
 });

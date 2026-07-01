@@ -219,7 +219,7 @@ vi.mock('@pierre/diffs/react', () => ({
     lineAnnotations = [],
     renderAnnotation,
   }: {
-    file: { name: string; contents: string };
+    file: { name: string; contents: string; cacheKey?: string };
     options: {
       overflow?: 'scroll' | 'wrap';
       enableLineSelection?: boolean;
@@ -252,6 +252,7 @@ vi.mock('@pierre/diffs/react', () => ({
       <button
         type="button"
         data-testid="diff-file"
+        data-cache-key={file.cacheKey}
         data-overflow={options.overflow}
         onClick={() => editorOptionsRef.current?.onChange?.({ ...file, contents: nextEditorContentsRef.current })}
       >
@@ -367,7 +368,9 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(openSearchMock).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByLabelText('Coco files'));
-    expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:export default function App() {}');
+    const diffFile = await screen.findByTestId('diff-file');
+    expect(diffFile.textContent).toBe('src/App.tsx:export default function App() {}');
+    expect(diffFile.dataset.cacheKey).toMatch(/^room-1:src\/App\.tsx:/);
     expect(loadCodeWorkspaceFileMock).toHaveBeenCalledWith('room-1', 'src/App.tsx', expect.any(Object));
     const explorerResizeHandle = screen.getByLabelText('codeAgentResizeFileExplorer');
     const explorer = explorerResizeHandle.closest('aside') as HTMLElement;
@@ -456,8 +459,14 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
 
     const tabs = screen.getByTestId('code-agent-file-surface-tabs');
+    expect(tabs.className).toContain('overflow-x-auto');
+    expect(tabs.firstElementChild?.className).toContain('w-max');
+    expect(tabs.firstElementChild?.className).toContain('min-w-full');
     expect(tabs.textContent).toContain('App.tsx');
     expect(tabs.textContent).toContain('Guide.md');
+    expect(tabs.querySelector('[data-pierre-icon]')).toBeTruthy();
+    expect(screen.getByLabelText('close src/App.tsx').className).toContain('opacity-0');
+    expect(screen.getByLabelText('close src/App.tsx').className).toContain('group-hover:opacity-100');
 
     fireEvent.click(screen.getByText('App.tsx'));
     await waitFor(() => {
@@ -467,6 +476,47 @@ describe('CodeAgentFileBrowserPanel', () => {
     fireEvent.click(screen.getByLabelText('close src/App.tsx'));
     await waitFor(() => {
       expect(screen.getByTestId('diff-file').textContent).toBe('docs/Guide.md:contents:docs/Guide.md');
+    });
+  });
+
+  it('keeps the T3-style active file surface tab scrolled into view', async () => {
+    const scrolledTabTexts: string[] = [];
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value(this: HTMLElement) {
+        scrolledTabTexts.push(this.textContent ?? '');
+      },
+    });
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+        { path: 'docs/Guide.md', name: 'Guide.md', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockImplementation((_roomId: string, path: string) => Promise.resolve({
+      path,
+      content: `contents:${path}`,
+      byteSize: 64,
+      truncated: false,
+      encoding: 'utf-8',
+    }));
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    await screen.findByText('2 files');
+
+    fileTreeSelectionPathRef.current = 'src/App.tsx';
+    fireEvent.click(screen.getByLabelText('Coco files'));
+    expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:contents:src/App.tsx');
+
+    fileTreeSelectionPathRef.current = 'docs/Guide.md';
+    fireEvent.click(screen.getByLabelText('Coco files'));
+
+    await waitFor(() => {
+      const tabs = within(screen.getByTestId('code-agent-file-surface-tabs'));
+      const guideTab = tabs.getByText('Guide.md').closest('[role="tab"]');
+      expect(guideTab?.getAttribute('data-active-tab')).toBe('true');
+      expect(scrolledTabTexts.some((text) => text.includes('Guide.md'))).toBe(true);
     });
   });
 
@@ -497,7 +547,8 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
     expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).not.toContain('codeAgentWorkspaceFiles');
 
-    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
+    fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
+    fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentWorkspaceFiles'));
     await waitFor(() => {
       expect(screen.queryByTestId('diff-file')).toBeNull();
       expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('codeAgentWorkspaceFiles');
@@ -521,7 +572,8 @@ describe('CodeAgentFileBrowserPanel', () => {
 
     render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
     await screen.findByText('1 files');
-    fireEvent.click(screen.getByLabelText('codeAgentChanges'));
+    fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
+    fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentChanges'));
 
     expect(screen.getByTestId('code-agent-workspace-diff-viewer').dataset.enabled).toBe('true');
     expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('codeAgentChanges');
@@ -613,6 +665,22 @@ describe('CodeAgentFileBrowserPanel', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('code-agent-file-surface-tabs')).toBeNull();
       expect(screen.queryByTestId('diff-file')).toBeNull();
+    });
+
+    const emptyState = screen.getByTestId('code-agent-file-surface-empty');
+    expect(emptyState.textContent).toContain('codeAgentOpenWorkspaceSurface');
+    expect(screen.queryByText('3 files')).toBeNull();
+    const browserSurfaceButton = within(emptyState).getByText('codeAgentBrowserSurface').closest('button')!;
+    const terminalSurfaceButton = within(emptyState).getByText('codeAgentTerminalSurface').closest('button')!;
+    expect(browserSurfaceButton.disabled).toBe(true);
+    expect(browserSurfaceButton.getAttribute('title')).toBe('codeAgentBrowserSurfaceUnavailable');
+    expect(terminalSurfaceButton.disabled).toBe(true);
+    expect(terminalSurfaceButton.getAttribute('title')).toBe('codeAgentTerminalSurfaceUnavailable');
+
+    fireEvent.click(within(emptyState).getByText('codeAgentChanges'));
+    await waitFor(() => {
+      expect(screen.getByTestId('code-agent-workspace-diff-viewer').dataset.enabled).toBe('true');
+      expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('codeAgentChanges');
     });
   });
 
@@ -1316,6 +1384,42 @@ describe('CodeAgentFileBrowserPanel', () => {
     );
   });
 
+  it('shows T3-style pending file tab markers while saving edits', async () => {
+    const pendingWrite = deferred<{ path: string; name: string; type: 'file' }>();
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockResolvedValue({
+      path: 'src/App.tsx',
+      content: 'export default function App() {}',
+      byteSize: 32,
+      truncated: false,
+      encoding: 'utf-8',
+    });
+    writeCodeWorkspaceFileMock.mockReturnValue(pendingWrite.promise);
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    await screen.findByText('1 files');
+    fireEvent.click(screen.getByLabelText('Coco files'));
+    await screen.findByTestId('diff-file');
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByTestId('diff-file'));
+    expect(screen.getByTestId('code-agent-file-tab-pending-indicator')).toBeTruthy();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(screen.getByTestId('code-agent-file-tab-pending-indicator')).toBeTruthy();
+
+    await act(async () => {
+      pendingWrite.resolve({ path: 'src/App.tsx', name: 'App.tsx', type: 'file' });
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.queryByTestId('code-agent-file-tab-pending-indicator')).toBeNull();
+  });
+
   it('installs T3-style editor dismissal for outside pointer interactions', async () => {
     loadCodeWorkspaceEntriesMock.mockResolvedValue({
       entries: [
@@ -1579,10 +1683,12 @@ describe('CodeAgentFileBrowserPanel', () => {
       'export const pending = true;',
       'utf-8',
     );
+    expect(screen.getByTestId('code-agent-file-tab-pending-indicator')).toBeTruthy();
     vi.useRealTimers();
 
     fireEvent.click(screen.getByLabelText('close src/App.tsx'));
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(within(screen.getByTestId('code-agent-file-surface-empty')).getByText('codeAgentWorkspaceFiles'));
+    fireEvent.click(await screen.findByLabelText('Coco files'));
 
     await waitFor(() => {
       expect(screen.getByTestId('diff-file').textContent).toBe('src/App.tsx:export const pending = true;');
@@ -1881,6 +1987,7 @@ describe('CodeAgentFileBrowserPanel', () => {
 
     const diffFile = await screen.findByTestId('diff-file');
     expect(diffFile.textContent).toBe('logs/big.log:partial log');
+    expect(diffFile.dataset.cacheKey).toMatch(/^room-1:logs\/big\.log:/);
     const truncatedBanner = screen.getByTestId('code-agent-file-preview-truncated');
     expect(truncatedBanner.textContent).toBe('codeAgentFilePreviewTruncated:11:2,000,000');
     expect(truncatedBanner.nextElementSibling).toBe(screen.getByTestId('code-agent-file-preview-body'));

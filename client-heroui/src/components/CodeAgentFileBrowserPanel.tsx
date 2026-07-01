@@ -2,6 +2,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   FileDiff,
   FolderTree,
+  Globe2,
+  Plus,
+  TerminalSquare,
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -35,6 +38,7 @@ import {
   settleConfirmedCodeAgentProjectFileQueryData,
 } from './codeAgentProjectFilesQueryState';
 import { CodeAgentFilePreviewPanel } from './CodeAgentFilePreviewPanel';
+import { CodeAgentPierreEntryIcon } from './CodeAgentPierreEntryIcon';
 import { CodeAgentWorkspaceDiffViewer } from './CodeAgentWorkspaceDiffViewer';
 import {
   CodeAgentWorkspaceFileTreePanel,
@@ -103,6 +107,11 @@ type WorkspaceRemoteSearchState = {
   error: string | null;
 };
 
+interface CodeAgentRightPanelEmptyStateProps {
+  onAddFiles: () => void;
+  onAddDiff: () => void;
+}
+
 const FILE_WORD_WRAP_STORAGE_KEY = 'roomtalk.codeWorkspace.fileWordWrap';
 const FILE_EXPLORER_STORAGE_KEY = 'roomtalk.codeWorkspace.fileExplorerOpen';
 const FILE_EXPLORER_WIDTH_STORAGE_KEY = 'roomtalk.codeWorkspace.fileExplorerWidth';
@@ -126,6 +135,90 @@ function clampFileExplorerWidth(value: number, panelWidth: number): number {
 
 function normalizeWorkspacePath(path: string): string {
   return normalizeWorkspaceOpenPath(path);
+}
+
+function CodeAgentRightPanelEmptyState({
+  onAddFiles,
+  onAddDiff,
+}: CodeAgentRightPanelEmptyStateProps) {
+  const { t } = useTranslation();
+  const actions = [
+    {
+      label: t('codeAgentBrowserSurface'),
+      description: t('codeAgentBrowserSurfaceDescription'),
+      disabledReason: t('codeAgentBrowserSurfaceUnavailable'),
+      icon: Globe2,
+      onClick: null,
+    },
+    {
+      label: t('codeAgentTerminalSurface'),
+      description: t('codeAgentTerminalSurfaceDescription'),
+      disabledReason: t('codeAgentTerminalSurfaceUnavailable'),
+      icon: TerminalSquare,
+      onClick: null,
+    },
+    {
+      label: t('codeAgentWorkspaceFiles'),
+      description: t('codeAgentFilesSurfaceDescription'),
+      disabledReason: null,
+      icon: FolderTree,
+      onClick: onAddFiles,
+    },
+    {
+      label: t('codeAgentChanges'),
+      description: t('codeAgentDiffSurfaceDescription'),
+      disabledReason: null,
+      icon: FileDiff,
+      onClick: onAddDiff,
+    },
+  ] as const;
+
+  return (
+    <div
+      className="flex min-h-0 flex-1 items-center justify-center p-6"
+      data-testid="code-agent-file-surface-empty"
+    >
+      <div className="w-full max-w-xl">
+        <div className="mb-5 text-center">
+          <h3 className="text-sm font-medium text-[#141413] dark:text-[#faf9f5]">
+            {t('codeAgentOpenWorkspaceSurface')}
+          </h3>
+          <p className="mt-1 text-xs text-[#87867f] dark:text-[#8f8d86]">
+            {t('codeAgentChooseWorkspaceSurface')}
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          {actions.map((action) => {
+            const Icon = action.icon;
+            const available = action.onClick !== null;
+            return (
+              <button
+                key={action.label}
+                type="button"
+                aria-disabled={!available}
+                disabled={!available}
+                title={action.disabledReason ?? undefined}
+                onClick={action.onClick ?? undefined}
+                className={`flex min-h-28 w-full flex-col items-start rounded-lg border border-[#dedbd0] bg-[#faf9f5]/70 p-4 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b]/70 ${
+                  available
+                    ? 'hover:border-[#c9c5b8] hover:bg-[#f0eee6] dark:hover:border-[#3c3c38] dark:hover:bg-[#242422]'
+                    : 'cursor-not-allowed opacity-40'
+                }`}
+              >
+                <Icon className="mb-3 h-5 w-5 text-[#5e5d59] dark:text-[#b0aea5]" />
+                <span className="text-sm font-medium text-[#141413] dark:text-[#faf9f5]">
+                  {action.label}
+                </span>
+                <span className="mt-1 text-xs leading-relaxed text-[#87867f] dark:text-[#8f8d86]">
+                  {action.description}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function parentPath(path: string): string {
@@ -496,6 +589,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     state: 'idle',
     error: null,
   });
+  const [pendingFileSurfaceIds, setPendingFileSurfaceIds] = useState<ReadonlySet<string>>(() => new Set());
   const [explorerOpen, setExplorerOpen] = useState(initialExplorerOpen);
   const [explorerWidth, setExplorerWidth] = useState(() => initialExplorerWidth());
   const [wordWrap, setWordWrap] = useState(readInitialFileWordWrap);
@@ -526,6 +620,9 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const rightPanelState = useCodeAgentRightPanelState(roomId);
   const [fileSurfaceTabMenu, setFileSurfaceTabMenu] = useState<FileSurfaceTabMenuState>(null);
   const fileSurfaceTabMenuRef = useRef<HTMLDivElement | null>(null);
+  const fileSurfaceTabListRef = useRef<HTMLDivElement | null>(null);
+  const [fileSurfaceAddMenuOpen, setFileSurfaceAddMenuOpen] = useState(false);
+  const fileSurfaceAddMenuRef = useRef<HTMLDivElement | null>(null);
   const didInitializeRightPanelRef = useRef(false);
 
   const externallySelectedEntry = useMemo(
@@ -570,14 +667,6 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const activeDiffSurface = useMemo(
     () => rightPanelSurfaces.find((surface) => surface.id === rightPanelState.activeSurfaceId && surface.kind === 'diff') ?? null,
     [rightPanelState.activeSurfaceId, rightPanelSurfaces],
-  );
-  const hasDiffSurface = useMemo(
-    () => rightPanelSurfaces.some((surface) => surface.kind === 'diff'),
-    [rightPanelSurfaces],
-  );
-  const hasFilesSurface = useMemo(
-    () => rightPanelSurfaces.some((surface) => surface.kind === 'files'),
-    [rightPanelSurfaces],
   );
   const fileSurfaceTabMenuSurface = useMemo(
     () => fileSurfaceTabMenu
@@ -705,6 +794,13 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     setSelectedPath(activeFileSurface.relativePath);
     setPreviewPath(activeFileSurface.relativePath);
   }, [activeDiffSurface, activeFileSurface, activeFilesSurface, fileSurfaces.length, previewPath]);
+
+  useEffect(() => {
+    const activeTab = fileSurfaceTabListRef.current?.querySelector<HTMLElement>('[data-active-tab="true"]');
+    if (typeof activeTab?.scrollIntoView === 'function') {
+      activeTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  }, [rightPanelState.activeSurfaceId]);
 
   useEffect(() => {
     if (entriesQuery.isPending || entriesQuery.data?.truncated) {
@@ -1084,6 +1180,24 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       state,
       error,
     });
+    const normalizedPath = normalizeWorkspacePath(path);
+    if (!normalizedPath) {
+      return;
+    }
+    const surfaceId = `file:${normalizedPath}`;
+    const pending = state === 'pending' || state === 'saving';
+    setPendingFileSurfaceIds((current) => {
+      if (current.has(surfaceId) === pending) {
+        return current;
+      }
+      const next = new Set(current);
+      if (pending) {
+        next.add(surfaceId);
+      } else {
+        next.delete(surfaceId);
+      }
+      return next;
+    });
   }, []);
 
   const activateFileSurface = useCallback((surfaceId: string) => {
@@ -1095,10 +1209,12 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   }, [roomId]);
 
   const openFilesSurface = useCallback(() => {
+    setFileSurfaceAddMenuOpen(false);
     openCodeAgentRightPanel(roomId, 'files');
   }, [roomId]);
 
   const openDiffSurface = useCallback(() => {
+    setFileSurfaceAddMenuOpen(false);
     openCodeAgentRightPanel(roomId, 'diff');
   }, [roomId]);
 
@@ -1205,6 +1321,30 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     };
   }, [fileSurfaceTabMenu]);
 
+  useEffect(() => {
+    if (!fileSurfaceAddMenuOpen) {
+      return undefined;
+    }
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && fileSurfaceAddMenuRef.current?.contains(target)) {
+        return;
+      }
+      setFileSurfaceAddMenuOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setFileSurfaceAddMenuOpen(false);
+      }
+    };
+    window.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [fileSurfaceAddMenuOpen]);
+
   const fileExplorer = explorerOpen || relativePath === null ? (
     <aside
       className={`${relativePath ? 'relative min-w-[160px] border-l border-[#dedbd0] dark:border-[#30302e]' : 'min-w-0 flex-1'} flex min-h-0 shrink-0 bg-[#faf9f5] dark:bg-[#1d1d1b]`}
@@ -1261,82 +1401,121 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     >
       {rightPanelSurfaces.length > 0 ? (
         <div
-          className="flex h-8 shrink-0 items-center gap-1 overflow-x-auto border-b border-[#dedbd0] bg-[#f0eee6] px-2 text-xs dark:border-[#30302e] dark:bg-[#242422]"
+          ref={fileSurfaceTabListRef}
+          className="h-8 shrink-0 overflow-x-auto border-b border-[#dedbd0] bg-[#f0eee6] px-2 text-xs dark:border-[#30302e] dark:bg-[#242422]"
           data-testid="code-agent-file-surface-tabs"
           role="tablist"
         >
-          {rightPanelSurfaces.map((surface) => {
-            const isActive = surface.id === rightPanelState.activeSurfaceId;
-            const title = surface.kind === 'diff'
-              ? t('codeAgentChanges')
-              : surface.kind === 'files'
-                ? t('codeAgentWorkspaceFiles')
-                : basename(surface.relativePath);
-            const fullTitle = surface.kind === 'file' ? surface.relativePath : title;
-            return (
-              <div
-                key={surface.id}
-                data-active-tab={isActive}
-                className={`flex max-w-56 shrink-0 items-center rounded-md border ${
-                  isActive
-                    ? 'border-[#c96442]/50 bg-[#faf9f5] text-[#141413] dark:border-[#ffb197]/50 dark:bg-[#1d1d1b] dark:text-[#faf9f5]'
-                    : 'border-transparent text-[#5e5d59] hover:bg-[#faf9f5] hover:text-[#141413] dark:text-[#b0aea5] dark:hover:bg-[#1d1d1b] dark:hover:text-[#faf9f5]'
-                }`}
-                role="tab"
-                aria-selected={isActive}
-                onMouseDown={handleFileSurfaceTabMouseDown}
-                onAuxClick={(event) => handleFileSurfaceTabAuxClick(event, surface)}
-                onContextMenu={(event) => handleFileSurfaceTabContextMenu(event, surface)}
+          <div className="flex h-full w-max min-w-full items-center gap-1">
+            {rightPanelSurfaces.map((surface) => {
+              const isActive = surface.id === rightPanelState.activeSurfaceId;
+              const title = surface.kind === 'diff'
+                ? t('codeAgentChanges')
+                : surface.kind === 'files'
+                  ? t('codeAgentWorkspaceFiles')
+                  : basename(surface.relativePath);
+              const fullTitle = surface.kind === 'file' ? surface.relativePath : title;
+              const pending = pendingFileSurfaceIds.has(surface.id);
+              return (
+                <div
+                  key={surface.id}
+                  data-active-tab={isActive}
+                  className={`group flex max-w-56 shrink-0 items-center rounded-md border ${
+                    isActive
+                      ? 'border-[#c96442]/50 bg-[#faf9f5] text-[#141413] dark:border-[#ffb197]/50 dark:bg-[#1d1d1b] dark:text-[#faf9f5]'
+                      : 'border-transparent text-[#5e5d59] hover:bg-[#faf9f5] hover:text-[#141413] dark:text-[#b0aea5] dark:hover:bg-[#1d1d1b] dark:hover:text-[#faf9f5]'
+                  }`}
+                  role="tab"
+                  aria-selected={isActive}
+                  onMouseDown={handleFileSurfaceTabMouseDown}
+                  onAuxClick={(event) => handleFileSurfaceTabAuxClick(event, surface)}
+                  onContextMenu={(event) => handleFileSurfaceTabContextMenu(event, surface)}
+                >
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-1 items-center gap-1.5 truncate px-2 py-1 text-left"
+                    title={fullTitle}
+                    onClick={() => activateFileSurface(surface.id)}
+                  >
+                    {surface.kind === 'diff' ? (
+                      <FileDiff className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                    ) : surface.kind === 'files' ? (
+                      <FolderTree className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                    ) : surface.kind === 'file' ? (
+                      <CodeAgentPierreEntryIcon
+                        pathValue={surface.relativePath}
+                        kind="file"
+                        theme={resolvedTheme}
+                        className="size-3.5"
+                      />
+                    ) : null}
+                    <span className="truncate">{title}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`relative mr-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded p-0.5 text-[#87867f] hover:bg-[#dedbd0] hover:text-[#141413] focus:opacity-100 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${pending ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+                    aria-label={`${t('close')} ${fullTitle}`}
+                    onClick={() => {
+                      closeFileSurfaceTabMenu();
+                      closeFileSurface(surface.id);
+                    }}
+                  >
+                    {pending ? (
+                      <>
+                        <span
+                          className="h-2 w-2 rounded-full bg-current group-hover:hidden"
+                          data-testid="code-agent-file-tab-pending-indicator"
+                          aria-hidden="true"
+                        />
+                        <X className="hidden h-3 w-3 group-hover:block" />
+                      </>
+                    ) : (
+                      <X className="h-3 w-3" />
+                    )}
+                  </button>
+                </div>
+              );
+            })}
+            <div ref={fileSurfaceAddMenuRef} className="relative ml-0.5 shrink-0">
+              <button
+                type="button"
+                className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#faf9f5] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:bg-[#1d1d1b] dark:hover:text-[#faf9f5]"
+                aria-label={t('codeAgentAddWorkspaceSurface')}
+                aria-haspopup="menu"
+                aria-expanded={fileSurfaceAddMenuOpen}
+                title={t('codeAgentAddWorkspaceSurface')}
+                onClick={() => setFileSurfaceAddMenuOpen((open) => !open)}
               >
-                <button
-                  type="button"
-                  className="flex min-w-0 flex-1 items-center gap-1.5 truncate px-2 py-1 text-left"
-                  title={fullTitle}
-                  onClick={() => activateFileSurface(surface.id)}
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+              {fileSurfaceAddMenuOpen ? (
+                <div
+                  className="absolute left-0 top-7 z-[90] min-w-40 rounded-md border border-[#dedbd0] bg-[#faf9f5] p-1 shadow-xl dark:border-[#30302e] dark:bg-[#1d1d1b]"
+                  data-testid="code-agent-file-surface-add-menu"
+                  role="menu"
                 >
-                  {surface.kind === 'diff' ? (
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
+                    role="menuitem"
+                    onClick={openDiffSurface}
+                  >
                     <FileDiff className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
-                  ) : surface.kind === 'files' ? (
+                    <span className="min-w-0 truncate">{t('codeAgentChanges')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
+                    role="menuitem"
+                    onClick={openFilesSurface}
+                  >
                     <FolderTree className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
-                  ) : null}
-                  <span className="truncate">{title}</span>
-                </button>
-                <button
-                  type="button"
-                  className="mr-0.5 rounded p-0.5 text-[#87867f] hover:bg-[#dedbd0] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
-                  aria-label={`${t('close')} ${fullTitle}`}
-                  onClick={() => {
-                    closeFileSurfaceTabMenu();
-                    closeFileSurface(surface.id);
-                  }}
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            );
-          })}
-          {!hasDiffSurface ? (
-            <button
-              type="button"
-              className="ml-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#faf9f5] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:bg-[#1d1d1b] dark:hover:text-[#faf9f5]"
-              aria-label={t('codeAgentChanges')}
-              title={t('codeAgentChanges')}
-              onClick={openDiffSurface}
-            >
-              <FileDiff className="h-3.5 w-3.5" />
-            </button>
-          ) : null}
-          {!hasFilesSurface ? (
-            <button
-              type="button"
-              className="ml-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#faf9f5] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:bg-[#1d1d1b] dark:hover:text-[#faf9f5]"
-              aria-label={t('codeAgentWorkspaceFiles')}
-              title={t('codeAgentWorkspaceFiles')}
-              onClick={openFilesSurface}
-            >
-              <FolderTree className="h-3.5 w-3.5" />
-            </button>
-          ) : null}
+                    <span className="min-w-0 truncate">{t('codeAgentWorkspaceFiles')}</span>
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </div>
         </div>
       ) : null}
       {fileSurfaceTabMenu && fileSurfaceTabMenuSurface ? (() => {
@@ -1404,7 +1583,12 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
           </div>
         );
       })() : null}
-      {activeDiffSurface ? (
+      {rightPanelSurfaces.length === 0 ? (
+        <CodeAgentRightPanelEmptyState
+          onAddFiles={openFilesSurface}
+          onAddDiff={openDiffSurface}
+        />
+      ) : activeDiffSurface ? (
         <div className="flex min-h-0 flex-1 overflow-hidden p-2">
           <CodeAgentWorkspaceDiffViewer
             roomId={roomId}

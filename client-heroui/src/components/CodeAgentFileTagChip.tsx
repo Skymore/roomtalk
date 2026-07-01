@@ -1,11 +1,16 @@
 import { inferEntryKindFromPath } from '../utils/codeAgentPierreIcons';
+import {
+  CODE_AGENT_CHAT_INLINE_CHIP_CLASS_NAME,
+  CODE_AGENT_CHAT_INLINE_CHIP_LABEL_CLASS_NAME,
+  CODE_AGENT_COMPOSER_INLINE_CHIP_CLASS_NAME,
+  CODE_AGENT_COMPOSER_INLINE_CHIP_ICON_CLASS_NAME,
+  CODE_AGENT_COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME,
+} from './codeAgentComposerInlineChip';
 import { CodeAgentPierreEntryIcon } from './CodeAgentPierreEntryIcon';
 
-export const CODE_AGENT_FILE_TAG_CHIP_CLASS_NAME =
-  'inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-md border border-[#dedbd0] bg-[#f0eee6] px-2 py-1 text-xs font-semibold text-[#141413] dark:border-[#30302e] dark:bg-[#242421] dark:text-[#faf9f5]';
+export const CODE_AGENT_FILE_TAG_CHIP_CLASS_NAME = CODE_AGENT_COMPOSER_INLINE_CHIP_CLASS_NAME;
 
-export const CODE_AGENT_CHAT_FILE_TAG_CHIP_CLASS_NAME =
-  'inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-md border border-[#dedbd0] bg-[#faf9f5] px-2 py-1 text-xs font-semibold text-[#141413] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5]';
+export const CODE_AGENT_CHAT_FILE_TAG_CHIP_CLASS_NAME = CODE_AGENT_CHAT_INLINE_CHIP_CLASS_NAME;
 
 export function CodeAgentFileTagChipContent(props: {
   path: string;
@@ -19,13 +24,13 @@ export function CodeAgentFileTagChipContent(props: {
         pathValue={props.path}
         kind={inferEntryKindFromPath(props.path)}
         theme={props.theme}
-        className="h-3.5 w-3.5"
+        className={CODE_AGENT_COMPOSER_INLINE_CHIP_ICON_CLASS_NAME}
       />
       <span
         className={
           props.selectable
-            ? 'min-w-0 truncate font-mono'
-            : 'min-w-0 truncate'
+            ? CODE_AGENT_CHAT_INLINE_CHIP_LABEL_CLASS_NAME
+            : CODE_AGENT_COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME
         }
       >
         {props.label}
