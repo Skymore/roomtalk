@@ -13,6 +13,7 @@ import {
   type FileCommentAnnotationEntry,
   type FileCommentAnnotationGroup,
   type FileCommentLineAnnotation,
+  fileReviewCommentAnnotations,
   formatFileCommentRange,
   nextFileCommentId,
   normalizeFileCommentRange,
@@ -98,14 +99,23 @@ export function CodeAgentEditableFileSurface({
   const latestDraftContentsRef = useRef(file.content);
   const [lineAnnotations, setLineAnnotations] = useState<FileCommentLineAnnotation[]>([]);
   const [selectionOverride, setSelectionOverride] = useState<FileSelectionOverride | null>(null);
-  const fileReviewCommentIds = useMemo(() => new Set(
-    reviewComments
-      .filter((comment) => comment.sectionId === `file:${filePath}` && comment.filePath === filePath)
-      .map((comment) => comment.id),
-  ), [filePath, reviewComments]);
-  const fileReviewCommentIdsKey = useMemo(
-    () => [...fileReviewCommentIds].sort().join('\n'),
-    [fileReviewCommentIds],
+  const previousPersistedCommentIdsRef = useRef<Set<string>>(new Set());
+  const persistedLineAnnotations = useMemo(
+    () => fileReviewCommentAnnotations(reviewComments, filePath),
+    [filePath, reviewComments],
+  );
+  const persistedCommentIds = useMemo(() => new Set(
+    persistedLineAnnotations.flatMap((annotation) =>
+      annotation.metadata.entries.map((entry) => entry.id),
+    ),
+  ), [persistedLineAnnotations]);
+  const persistedLineAnnotationsKey = useMemo(
+    () => persistedLineAnnotations
+      .flatMap((annotation) => annotation.metadata.entries.map((entry) => (
+        `${annotation.lineNumber}:${entry.id}:${entry.startLine}:${entry.endLine}:${entry.text}`
+      )))
+      .join('\n'),
+    [persistedLineAnnotations],
   );
   const selectedRange = selectionOverride?.revealRequestId === revealRequestId ? selectionOverride.range : null;
   const setSelectedRange = useCallback(
@@ -118,18 +128,45 @@ export function CodeAgentEditableFileSurface({
   useEffect(() => {
     onSaveStateChange(filePath, 'idle', null);
     latestDraftContentsRef.current = file.content;
-    // Reset persistence state only when T3 mounts a different file surface.
+    // Reset persistence state only when a different file surface mounts.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filePath]);
 
   useEffect(() => {
-    setLineAnnotations((current) => current.flatMap((annotation) => {
-      const entries = annotation.metadata.entries.filter((entry) => (
-        entry.kind === 'draft' || fileReviewCommentIds.has(entry.id)
-      ));
-      return entries.length > 0 ? [{ ...annotation, metadata: { entries } }] : [];
-    }));
-  }, [fileReviewCommentIds, fileReviewCommentIdsKey]);
+    const previousPersistedCommentIds = previousPersistedCommentIdsRef.current;
+    setLineAnnotations((current) => {
+      const entriesByLineNumber = new Map<number, FileCommentAnnotationEntry[]>();
+
+      for (const annotation of persistedLineAnnotations) {
+        entriesByLineNumber.set(annotation.lineNumber, [...annotation.metadata.entries]);
+      }
+
+      for (const annotation of current) {
+        const localEntries = annotation.metadata.entries.filter((entry) => (
+          entry.kind === 'draft'
+          || (!persistedCommentIds.has(entry.id) && !previousPersistedCommentIds.has(entry.id))
+        ));
+        if (localEntries.length === 0) {
+          continue;
+        }
+        const entries = entriesByLineNumber.get(annotation.lineNumber);
+        if (entries) {
+          entries.push(...localEntries);
+        } else {
+          entriesByLineNumber.set(annotation.lineNumber, localEntries);
+        }
+      }
+
+      const next = [...entriesByLineNumber.entries()]
+        .sort(([left], [right]) => left - right)
+        .map(([lineNumber, entries]) => ({
+          lineNumber,
+          metadata: { entries },
+        }));
+      return next;
+    });
+    previousPersistedCommentIdsRef.current = persistedCommentIds;
+  }, [persistedCommentIds, persistedLineAnnotations, persistedLineAnnotationsKey]);
 
   const setDraftFileContents = useCallback((contents: string) => {
     latestDraftContentsRef.current = contents;

@@ -377,11 +377,28 @@ function WorkspaceImageAssetPreview({ src, alt }: { src: string; alt: string }) 
   );
 }
 
-export function WorkspaceBrowserAssetPreview({ src, title }: { src: string; title: string }) {
+export function WorkspaceBrowserAssetPreview({
+  src,
+  title,
+  zoomFactor = 1,
+  onLoadingChange,
+}: {
+  src: string;
+  title: string;
+  zoomFactor?: number;
+  onLoadingChange?: (loading: boolean) => void;
+}) {
   const { t } = useTranslation();
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const normalizedZoomFactor = Number.isFinite(zoomFactor) && zoomFactor > 0 ? zoomFactor : 1;
+  const zoomFrameStyle = {
+    width: `${100 / normalizedZoomFactor}%`,
+    height: `${100 / normalizedZoomFactor}%`,
+    transform: `scale(${normalizedZoomFactor})`,
+    transformOrigin: 'top left',
+  };
 
   const handleLoad = useCallback(() => {
     setIsLoading(false);
@@ -396,6 +413,10 @@ export function WorkspaceBrowserAssetPreview({ src, title }: { src: string; titl
     setIsLoading(true);
     setLoadError(null);
   }, [src]);
+
+  useEffect(() => {
+    onLoadingChange?.(isLoading);
+  }, [isLoading, onLoadingChange]);
 
   useEffect(() => {
     const iframe = iframeRef.current;
@@ -422,15 +443,23 @@ export function WorkspaceBrowserAssetPreview({ src, title }: { src: string; titl
           </div>
         </div>
       ) : null}
-      <iframe
-        ref={iframeRef}
-        src={src}
-        title={title}
-        className="min-h-0 flex-1 border-0 bg-white"
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-        onLoad={handleLoad}
-        onError={handleError}
-      />
+      <div className="min-h-0 flex-1 overflow-auto bg-white" data-testid="code-agent-browser-preview-viewport">
+        <div
+          className="min-h-full"
+          data-testid="code-agent-browser-preview-zoom-frame"
+          style={zoomFrameStyle}
+        >
+          <iframe
+            ref={iframeRef}
+            src={src}
+            title={title}
+            className="h-full min-h-full w-full border-0 bg-white"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            onLoad={handleLoad}
+            onError={handleError}
+          />
+        </div>
+      </div>
       {isLoading ? (
         <div
           className="absolute inset-0 flex items-center justify-center bg-white/80 text-[#87867f] dark:bg-[#141413]/80 dark:text-[#8f8d86]"

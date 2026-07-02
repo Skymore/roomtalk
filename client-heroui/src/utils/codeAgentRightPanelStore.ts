@@ -1,19 +1,24 @@
 import { useSyncExternalStore } from 'react';
 
 export type CodeAgentRightPanelSurface =
-  | { id: 'browser:new' | `browser:new:${number}`; kind: 'preview'; relativePath: null; url?: null }
+  | ({
+    id: 'browser:new' | `browser:new:${number}`;
+    kind: 'preview';
+    relativePath: null;
+    url?: null;
+  } & CodeAgentPreviewNavigationState)
   | {
     id: `browser:${string}`;
     kind: 'preview';
     relativePath: string;
     url?: null;
-  }
-  | {
+  } & CodeAgentPreviewNavigationState
+  | ({
     id: `browser:url:${string}`;
     kind: 'preview';
     relativePath: null;
     url: string;
-  }
+  } & CodeAgentPreviewNavigationState)
   | { id: 'diff'; kind: 'diff' }
   | { id: 'files'; kind: 'files' }
   | {
@@ -22,7 +27,17 @@ export type CodeAgentRightPanelSurface =
     relativePath: string;
     revealLine: number | null;
     revealRequestId: number;
-  };
+};
+
+export type CodeAgentPreviewNavigationTarget =
+  | { kind: 'workspace-file'; relativePath: string }
+  | { kind: 'url'; url: string };
+
+type CodeAgentPreviewNavigationState = {
+  navigationHistory?: CodeAgentPreviewNavigationTarget[];
+  navigationIndex?: number;
+  zoomFactor?: number;
+};
 
 export interface CodeAgentRightPanelState {
   isOpen: boolean;
@@ -34,6 +49,7 @@ type CodeAgentPreviewSurface = Extract<CodeAgentRightPanelSurface, { kind: 'prev
 
 export interface CodeAgentRightPanelStoreState {
   byRoomId: Record<string, CodeAgentRightPanelState>;
+  recentPreviewTargetsByRoomId?: Record<string, CodeAgentPreviewNavigationTarget[]>;
 }
 
 interface PersistedCodeAgentRightPanelStore {
@@ -42,12 +58,17 @@ interface PersistedCodeAgentRightPanelStore {
 }
 
 const STORAGE_KEY = 'roomtalk.codeWorkspace.rightPanelState.v1';
+const PREVIEW_RECENT_TARGET_LIMIT = 10;
+const PREVIEW_ZOOM_MIN = 0.25;
+const PREVIEW_ZOOM_MAX = 3;
+const PREVIEW_ZOOM_EPSILON = 0.001;
 
 const EMPTY_ROOM_STATE: CodeAgentRightPanelState = {
   isOpen: false,
   activeSurfaceId: null,
   surfaces: [],
 };
+const EMPTY_PREVIEW_RECENT_TARGETS: readonly CodeAgentPreviewNavigationTarget[] = [];
 
 const listeners = new Set<() => void>();
 
@@ -72,6 +93,87 @@ function normalizeBrowserHttpUrl(input: string | null | undefined): string | nul
   }
 }
 
+function normalizePreviewNavigationTarget(value: unknown): CodeAgentPreviewNavigationTarget | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const target = value as Partial<CodeAgentPreviewNavigationTarget>;
+  if (target.kind === 'url') {
+    const url = normalizeBrowserHttpUrl(typeof target.url === 'string' ? target.url : '');
+    return url ? { kind: 'url', url } : null;
+  }
+  if (target.kind === 'workspace-file') {
+    const relativePath = normalizeWorkspacePath(
+      typeof target.relativePath === 'string' ? target.relativePath : '',
+    );
+    return relativePath ? { kind: 'workspace-file', relativePath } : null;
+  }
+  return null;
+}
+
+function previewNavigationTargetId(target: CodeAgentPreviewNavigationTarget): string {
+  return target.kind === 'url'
+    ? `browser:url:${encodeURIComponent(target.url)}`
+    : `browser:${target.relativePath}`;
+}
+
+function previewNavigationTargetsEqual(
+  left: CodeAgentPreviewNavigationTarget | null,
+  right: CodeAgentPreviewNavigationTarget | null,
+): boolean {
+  if (!left || !right || left.kind !== right.kind) {
+    return left === right;
+  }
+  return left.kind === 'url'
+    ? left.url === (right as Extract<CodeAgentPreviewNavigationTarget, { kind: 'url' }>).url
+    : left.relativePath === (right as Extract<CodeAgentPreviewNavigationTarget, { kind: 'workspace-file' }>).relativePath;
+}
+
+function normalizeRecentPreviewTargets(value: unknown): CodeAgentPreviewNavigationTarget[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const targets: CodeAgentPreviewNavigationTarget[] = [];
+  for (const item of value) {
+    const target = normalizePreviewNavigationTarget(item);
+    if (!target || targets.some((existing) => previewNavigationTargetsEqual(existing, target))) {
+      continue;
+    }
+    targets.push(target);
+    if (targets.length >= PREVIEW_RECENT_TARGET_LIMIT) {
+      break;
+    }
+  }
+  return targets;
+}
+
+function recentPreviewTargetsFromSurfaces(
+  surfaces: readonly CodeAgentRightPanelSurface[],
+): CodeAgentPreviewNavigationTarget[] {
+  const targets: CodeAgentPreviewNavigationTarget[] = [];
+  const remember = (target: CodeAgentPreviewNavigationTarget | null) => {
+    if (!target || targets.some((existing) => previewNavigationTargetsEqual(existing, target))) {
+      return;
+    }
+    targets.push(target);
+  };
+
+  for (const surface of [...surfaces].reverse()) {
+    if (surface.kind !== 'preview') {
+      continue;
+    }
+    remember(previewTargetFromSurface(surface));
+    const history = surface.navigationHistory ?? [];
+    for (const target of [...history].reverse()) {
+      remember(normalizePreviewNavigationTarget(target));
+      if (targets.length >= PREVIEW_RECENT_TARGET_LIMIT) {
+        return targets;
+      }
+    }
+  }
+  return targets;
+}
+
 function normalizeRevealLine(line: number | null | undefined): number | null {
   if (line === undefined || line === null || !Number.isFinite(line)) {
     return null;
@@ -85,6 +187,29 @@ function normalizeRevealRequestId(value: unknown): number {
     : 0;
 }
 
+function clampPreviewZoomFactor(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 1;
+  }
+  return Math.min(PREVIEW_ZOOM_MAX, Math.max(PREVIEW_ZOOM_MIN, Math.round(value * 100) / 100));
+}
+
+function normalizePreviewZoomFactor(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return clampPreviewZoomFactor(value);
+}
+
+function previewZoomStateFromSurface(
+  surface: Partial<CodeAgentPreviewSurface> | null,
+): Pick<CodeAgentPreviewNavigationState, 'zoomFactor'> {
+  const zoomFactor = normalizePreviewZoomFactor(surface?.zoomFactor);
+  return zoomFactor === undefined || Math.abs(zoomFactor - 1) < PREVIEW_ZOOM_EPSILON
+    ? {}
+    : { zoomFactor };
+}
+
 function fileSurface(relativePath: string, revealLine: number | null, revealRequestId: number): CodeAgentRightPanelSurface {
   return {
     id: `file:${relativePath}`,
@@ -95,22 +220,122 @@ function fileSurface(relativePath: string, revealLine: number | null, revealRequ
   };
 }
 
-function browserSurface(relativePath: string | null): CodeAgentPreviewSurface {
-  return relativePath
-    ? { id: `browser:${relativePath}`, kind: 'preview', relativePath }
-    : { id: 'browser:new', kind: 'preview', relativePath: null };
+function normalizePreviewNavigationState(
+  surface: Partial<CodeAgentPreviewSurface>,
+  currentTarget: CodeAgentPreviewNavigationTarget | null,
+): CodeAgentPreviewNavigationState {
+  if (!currentTarget) {
+    return {};
+  }
+  const history = Array.isArray(surface.navigationHistory)
+    ? surface.navigationHistory.flatMap((target) => {
+      const normalized = normalizePreviewNavigationTarget(target);
+      return normalized ? [normalized] : [];
+    })
+    : [];
+  const navigationIndex = typeof surface.navigationIndex === 'number' &&
+    Number.isSafeInteger(surface.navigationIndex) &&
+    surface.navigationIndex >= 0 &&
+    surface.navigationIndex < history.length
+    ? surface.navigationIndex
+    : -1;
+
+  if (navigationIndex >= 0 && previewNavigationTargetsEqual(history[navigationIndex] ?? null, currentTarget)) {
+    return { navigationHistory: history, navigationIndex };
+  }
+
+  return { navigationHistory: [currentTarget], navigationIndex: 0 };
 }
 
-function browserUrlSurface(url: string): CodeAgentPreviewSurface | null {
+function previewTargetFromSurface(surface: CodeAgentPreviewSurface): CodeAgentPreviewNavigationTarget | null {
+  if (surface.url) {
+    return { kind: 'url', url: surface.url };
+  }
+  if (surface.relativePath) {
+    return { kind: 'workspace-file', relativePath: surface.relativePath };
+  }
+  return null;
+}
+
+function browserSurface(
+  relativePath: string | null,
+  navigationState?: CodeAgentPreviewNavigationState,
+): CodeAgentPreviewSurface {
+  if (!relativePath) {
+    return { id: 'browser:new', kind: 'preview', relativePath: null };
+  }
+  const target: CodeAgentPreviewNavigationTarget = { kind: 'workspace-file', relativePath };
+  return {
+    id: previewNavigationTargetId(target) as `browser:${string}`,
+    kind: 'preview',
+    relativePath,
+    ...(navigationState ?? { navigationHistory: [target], navigationIndex: 0 }),
+  };
+}
+
+function browserUrlSurface(
+  url: string,
+  navigationState?: CodeAgentPreviewNavigationState,
+): CodeAgentPreviewSurface | null {
   const normalizedUrl = normalizeBrowserHttpUrl(url);
   if (!normalizedUrl) {
     return null;
   }
+  const target: CodeAgentPreviewNavigationTarget = { kind: 'url', url: normalizedUrl };
   return {
-    id: `browser:url:${encodeURIComponent(normalizedUrl)}`,
+    id: previewNavigationTargetId(target) as `browser:url:${string}`,
     kind: 'preview',
     relativePath: null,
     url: normalizedUrl,
+    ...(navigationState ?? { navigationHistory: [target], navigationIndex: 0 }),
+  };
+}
+
+function previewSurfaceFromTarget(
+  target: CodeAgentPreviewNavigationTarget,
+  navigationState?: CodeAgentPreviewNavigationState,
+): CodeAgentPreviewSurface | null {
+  return target.kind === 'workspace-file'
+    ? browserSurface(target.relativePath, navigationState)
+    : browserUrlSurface(target.url, navigationState);
+}
+
+function navigationStateAfterPreviewTarget(
+  sourceSurface: CodeAgentPreviewSurface | null,
+  nextTarget: CodeAgentPreviewNavigationTarget,
+): CodeAgentPreviewNavigationState {
+  if (!sourceSurface) {
+    return { navigationHistory: [nextTarget], navigationIndex: 0 };
+  }
+  const currentTarget = previewTargetFromSurface(sourceSurface);
+  const currentNavigation = normalizePreviewNavigationState(sourceSurface, currentTarget);
+  const history = currentNavigation.navigationHistory ?? [];
+  const index = currentNavigation.navigationIndex ?? -1;
+  if (previewNavigationTargetsEqual(currentTarget, nextTarget)) {
+    return history.length > 0 && index >= 0
+      ? { navigationHistory: history, navigationIndex: index }
+      : { navigationHistory: [nextTarget], navigationIndex: 0 };
+  }
+
+  return {
+    navigationHistory: [...history.slice(0, index + 1), nextTarget],
+    navigationIndex: index + 1,
+  };
+}
+
+export function getCodeAgentPreviewSurfaceNavigationState(
+  surface: CodeAgentRightPanelSurface,
+): { canGoBack: boolean; canGoForward: boolean } {
+  if (surface.kind !== 'preview') {
+    return { canGoBack: false, canGoForward: false };
+  }
+  const currentTarget = previewTargetFromSurface(surface);
+  const navigation = normalizePreviewNavigationState(surface, currentTarget);
+  const history = navigation.navigationHistory ?? [];
+  const index = navigation.navigationIndex ?? -1;
+  return {
+    canGoBack: index > 0,
+    canGoForward: index >= 0 && index < history.length - 1,
   };
 }
 
@@ -150,6 +375,7 @@ function coerceSurface(value: unknown): CodeAgentRightPanelSurface | null {
     return { id: 'files', kind: 'files' };
   }
   if (surface.kind === 'preview' || (typeof surface.id === 'string' && surface.id.startsWith('browser:'))) {
+    const previewSurface = surface as Partial<CodeAgentPreviewSurface>;
     const relativePath = normalizeWorkspacePath(
       typeof (value as { relativePath?: unknown }).relativePath === 'string'
         ? (value as { relativePath: string }).relativePath
@@ -160,7 +386,15 @@ function coerceSurface(value: unknown): CodeAgentRightPanelSurface | null {
       : '';
     const rawId = typeof surface.id === 'string' ? surface.id : '';
     if (!relativePath && rawUrl) {
-      return browserUrlSurface(rawUrl);
+      const target = normalizePreviewNavigationTarget({ kind: 'url', url: rawUrl });
+      const nextSurface = target?.kind === 'url' ? browserUrlSurface(target.url) : null;
+      return nextSurface
+        ? {
+            ...nextSurface,
+            ...normalizePreviewNavigationState(previewSurface, target),
+            ...previewZoomStateFromSurface(previewSurface),
+          }
+        : null;
     }
     if (!relativePath && /^browser:new(?::\d+)?$/.test(rawId)) {
       return {
@@ -169,7 +403,13 @@ function coerceSurface(value: unknown): CodeAgentRightPanelSurface | null {
         relativePath: null,
       };
     }
-    return browserSurface(relativePath || null);
+    const target = relativePath ? normalizePreviewNavigationTarget({ kind: 'workspace-file', relativePath }) : null;
+    const nextSurface = target?.kind === 'workspace-file' ? browserSurface(target.relativePath) : browserSurface(null);
+    return {
+      ...nextSurface,
+      ...normalizePreviewNavigationState(previewSurface, target),
+      ...previewZoomStateFromSurface(previewSurface),
+    };
   }
   if (surface.kind === 'file') {
     const relativePath = normalizeWorkspacePath(
@@ -218,6 +458,10 @@ export function migrateCodeAgentRightPanelState(persistedState: unknown): CodeAg
     return emptyStoreState();
   }
   const byRoomId: Record<string, CodeAgentRightPanelState> = {};
+  const recentPreviewTargetsByRoomId: Record<string, CodeAgentPreviewNavigationTarget[]> = {};
+  const persistedRecentTargets = (
+    persistedState as Partial<CodeAgentRightPanelStoreState>
+  ).recentPreviewTargetsByRoomId ?? {};
   for (const [roomId, roomState] of Object.entries(
     (persistedState as Partial<CodeAgentRightPanelStoreState>).byRoomId ?? {},
   )) {
@@ -225,9 +469,20 @@ export function migrateCodeAgentRightPanelState(persistedState: unknown): CodeAg
     const coerced = coerceRoomState(roomState);
     if (normalizedRoomId && coerced) {
       byRoomId[normalizedRoomId] = coerced;
+      const explicitRecentTargets = normalizeRecentPreviewTargets(
+        persistedRecentTargets[normalizedRoomId] ?? persistedRecentTargets[roomId],
+      );
+      const derivedRecentTargets = explicitRecentTargets.length > 0
+        ? explicitRecentTargets
+        : recentPreviewTargetsFromSurfaces(coerced.surfaces);
+      if (derivedRecentTargets.length > 0) {
+        recentPreviewTargetsByRoomId[normalizedRoomId] = derivedRecentTargets;
+      }
     }
   }
-  return { byRoomId };
+  return Object.keys(recentPreviewTargetsByRoomId).length > 0
+    ? { byRoomId, recentPreviewTargetsByRoomId }
+    : { byRoomId };
 }
 
 function readPersistedState(): CodeAgentRightPanelStoreState {
@@ -292,9 +547,46 @@ function updateStore(updater: (state: CodeAgentRightPanelStoreState) => CodeAgen
   emit();
 }
 
+function withRecentPreviewTarget(
+  state: CodeAgentRightPanelStoreState,
+  roomKey: string,
+  target: CodeAgentPreviewNavigationTarget | null,
+): CodeAgentRightPanelStoreState {
+  const normalizedTarget = normalizePreviewNavigationTarget(target);
+  if (!normalizedTarget) {
+    return state;
+  }
+  const currentByRoomId = state.recentPreviewTargetsByRoomId ?? {};
+  const currentTargets = currentByRoomId[roomKey] ?? [];
+  const nextTargets = [
+    normalizedTarget,
+    ...currentTargets.filter((target) => !previewNavigationTargetsEqual(target, normalizedTarget)),
+  ].slice(0, PREVIEW_RECENT_TARGET_LIMIT);
+  if (
+    currentTargets.length === nextTargets.length &&
+    currentTargets.every((target, index) => previewNavigationTargetsEqual(target, nextTargets[index]))
+  ) {
+    return state;
+  }
+  return {
+    ...state,
+    recentPreviewTargetsByRoomId: {
+      ...currentByRoomId,
+      [roomKey]: nextTargets,
+    },
+  };
+}
+
 function selectRoomState(roomId: string): CodeAgentRightPanelState {
   const roomKey = normalizeRoomId(roomId);
   return roomKey ? storeState.byRoomId[roomKey] ?? EMPTY_ROOM_STATE : EMPTY_ROOM_STATE;
+}
+
+function selectPreviewRecentTargets(roomId: string): readonly CodeAgentPreviewNavigationTarget[] {
+  const roomKey = normalizeRoomId(roomId);
+  return roomKey
+    ? storeState.recentPreviewTargetsByRoomId?.[roomKey] ?? EMPTY_PREVIEW_RECENT_TARGETS
+    : EMPTY_PREVIEW_RECENT_TARGETS;
 }
 
 function subscribe(listener: () => void): () => void {
@@ -312,8 +604,24 @@ export function useCodeAgentRightPanelState(roomId: string): CodeAgentRightPanel
   );
 }
 
+export function useCodeAgentPreviewRecentTargets(
+  roomId: string,
+): readonly CodeAgentPreviewNavigationTarget[] {
+  return useSyncExternalStore(
+    subscribe,
+    () => selectPreviewRecentTargets(roomId),
+    () => EMPTY_PREVIEW_RECENT_TARGETS,
+  );
+}
+
 export function readCodeAgentRightPanelState(roomId: string): CodeAgentRightPanelState {
   return selectRoomState(roomId);
+}
+
+export function readCodeAgentPreviewRecentTargets(
+  roomId: string,
+): readonly CodeAgentPreviewNavigationTarget[] {
+  return selectPreviewRecentTargets(roomId);
 }
 
 export function selectActiveCodeAgentRightPanelSurface(roomId: string): CodeAgentRightPanelSurface | null {
@@ -334,6 +642,7 @@ export function openCodeAgentRightPanel(roomId: string, kind: 'diff' | 'files') 
     return;
   }
   updateStore((state) => ({
+    ...state,
     byRoomId: updateRoom(state.byRoomId, roomKey, (current) => {
       const surface = singletonSurface(kind);
       return {
@@ -355,10 +664,11 @@ function replacePreviewSurface(
   const sourceIndex = current.surfaces.findIndex((surface) => surface.id === surfaceId);
   const duplicateIndex = current.surfaces.findIndex((surface) => surface.id === nextSurface.id);
   if (duplicateIndex >= 0 && duplicateIndex !== sourceIndex) {
+    const withoutSource = current.surfaces.filter((_, index) => index !== sourceIndex);
     return {
       isOpen: true,
       activeSurfaceId: nextSurface.id,
-      surfaces: current.surfaces.filter((surface) => surface.id !== surfaceId),
+      surfaces: withoutSource.map((surface) => (surface.id === nextSurface.id ? nextSurface : surface)),
     };
   }
   if (sourceIndex >= 0) {
@@ -386,19 +696,99 @@ export function navigateCodeAgentRightPanelPreviewSurface(
   if (!roomKey) {
     return;
   }
-  const nextSurface = target.kind === 'workspace-file'
-    ? browserSurface(normalizeWorkspacePath(target.relativePath))
-    : browserUrlSurface(target.url);
-  if (!nextSurface) {
+  const nextTarget = normalizePreviewNavigationTarget(target);
+  if (!nextTarget) {
     return;
   }
-  if (target.kind === 'workspace-file' && !nextSurface.relativePath) {
+  if (nextTarget.kind === 'workspace-file' && !nextTarget.relativePath) {
     return;
   }
+  updateStore((state) => withRecentPreviewTarget({
+    ...state,
+    byRoomId: updateRoom(state.byRoomId, roomKey, (current) => {
+      const sourceSurface = current.surfaces.find(
+        (surface): surface is CodeAgentPreviewSurface => surface.id === surfaceId && surface.kind === 'preview',
+      ) ?? null;
+      const navigationState = navigationStateAfterPreviewTarget(sourceSurface, nextTarget);
+      const nextSurface = previewSurfaceFromTarget(nextTarget, {
+        ...navigationState,
+        ...previewZoomStateFromSurface(sourceSurface),
+      });
+      return nextSurface ? replacePreviewSurface(current, surfaceId, nextSurface) : current;
+    }),
+  }, roomKey, nextTarget));
+}
+
+export function navigateCodeAgentRightPanelPreviewHistory(
+  roomId: string,
+  surfaceId: string,
+  direction: 'back' | 'forward',
+) {
+  const roomKey = normalizeRoomId(roomId);
+  if (!roomKey) {
+    return;
+  }
+  updateStore((state) => {
+    let rememberedTarget: CodeAgentPreviewNavigationTarget | null = null;
+    const byRoomId = updateRoom(state.byRoomId, roomKey, (current) => {
+      const sourceSurface = current.surfaces.find(
+        (surface): surface is CodeAgentPreviewSurface => surface.id === surfaceId && surface.kind === 'preview',
+      );
+      if (!sourceSurface) {
+        return current;
+      }
+      const currentTarget = previewTargetFromSurface(sourceSurface);
+      const navigation = normalizePreviewNavigationState(sourceSurface, currentTarget);
+      const history = navigation.navigationHistory ?? [];
+      const index = navigation.navigationIndex ?? -1;
+      const nextIndex = direction === 'back' ? index - 1 : index + 1;
+      const nextTarget = history[nextIndex];
+      if (!nextTarget) {
+        return current;
+      }
+      rememberedTarget = normalizePreviewNavigationTarget(nextTarget);
+      const nextSurface = previewSurfaceFromTarget(nextTarget, {
+        navigationHistory: history,
+        navigationIndex: nextIndex,
+        ...previewZoomStateFromSurface(sourceSurface),
+      });
+      return nextSurface ? replacePreviewSurface(current, surfaceId, nextSurface) : current;
+    });
+    return withRecentPreviewTarget({ ...state, byRoomId }, roomKey, rememberedTarget);
+  });
+}
+
+export function setCodeAgentRightPanelPreviewZoomFactor(
+  roomId: string,
+  surfaceId: string,
+  zoomFactor: number,
+) {
+  const roomKey = normalizeRoomId(roomId);
+  if (!roomKey) {
+    return;
+  }
+  const nextZoomFactor = clampPreviewZoomFactor(zoomFactor);
   updateStore((state) => ({
-    byRoomId: updateRoom(state.byRoomId, roomKey, (current) => (
-      replacePreviewSurface(current, surfaceId, nextSurface)
-    )),
+    ...state,
+    byRoomId: updateRoom(state.byRoomId, roomKey, (current) => {
+      const nextSurfaces = current.surfaces.map((surface) => {
+        if (surface.id !== surfaceId || surface.kind !== 'preview') {
+          return surface;
+        }
+        const currentZoomFactor = surface.zoomFactor ?? 1;
+        if (Math.abs(currentZoomFactor - nextZoomFactor) < PREVIEW_ZOOM_EPSILON) {
+          return surface;
+        }
+        if (Math.abs(nextZoomFactor - 1) < PREVIEW_ZOOM_EPSILON) {
+          const { zoomFactor: _removed, ...rest } = surface;
+          return rest;
+        }
+        return { ...surface, zoomFactor: nextZoomFactor };
+      });
+      return nextSurfaces.every((surface, index) => surface === current.surfaces[index])
+        ? current
+        : { ...current, surfaces: nextSurfaces };
+    }),
   }));
 }
 
@@ -408,21 +798,25 @@ export function openCodeAgentRightPanelPreview(roomId: string, relativePath?: st
   if (!roomKey) {
     return;
   }
-  updateStore((state) => ({
-    byRoomId: updateRoom(state.byRoomId, roomKey, (current) => {
-      const surface = browserSurface(normalizedPath || null);
-      const withoutPlaceholder = surface.id !== 'browser:new'
-        ? current.surfaces.filter((entry) => entry.id !== 'browser:new')
-        : current.surfaces;
-      return {
-        isOpen: true,
-        surfaces: withoutPlaceholder.some((entry) => entry.id === surface.id)
-          ? withoutPlaceholder
-          : [...withoutPlaceholder, surface],
-        activeSurfaceId: surface.id,
-      };
-    }),
-  }));
+  updateStore((state) => {
+    const target = normalizedPath ? { kind: 'workspace-file' as const, relativePath: normalizedPath } : null;
+    return withRecentPreviewTarget({
+      ...state,
+      byRoomId: updateRoom(state.byRoomId, roomKey, (current) => {
+        const surface = browserSurface(normalizedPath || null);
+        const withoutPlaceholder = surface.id !== 'browser:new'
+          ? current.surfaces.filter((entry) => entry.id !== 'browser:new')
+          : current.surfaces;
+        return {
+          isOpen: true,
+          surfaces: withoutPlaceholder.some((entry) => entry.id === surface.id)
+            ? withoutPlaceholder
+            : [...withoutPlaceholder, surface],
+          activeSurfaceId: surface.id,
+        };
+      }),
+    }, roomKey, target);
+  });
 }
 
 export function addCodeAgentRightPanelPreviewSurface(roomId: string) {
@@ -431,6 +825,7 @@ export function addCodeAgentRightPanelPreviewSurface(roomId: string) {
     return;
   }
   updateStore((state) => ({
+    ...state,
     byRoomId: updateRoom(state.byRoomId, roomKey, (current) => {
       const surface = nextBlankBrowserSurface(current.surfaces);
       return {
@@ -449,6 +844,7 @@ export function openCodeAgentRightPanelFile(roomId: string, relativePath: string
     return;
   }
   updateStore((state) => ({
+    ...state,
     byRoomId: updateRoom(state.byRoomId, roomKey, (current) => {
       const withoutStandaloneExplorer = current.surfaces.filter((surface) => surface.kind !== 'files');
       const surfaceId = `file:${normalizedPath}` as const;
@@ -478,6 +874,7 @@ export function showCodeAgentRightPanel(roomId: string) {
     return;
   }
   updateStore((state) => ({
+    ...state,
     byRoomId: updateRoom(state.byRoomId, roomKey, (current) => (
       current.isOpen ? current : { ...current, isOpen: true }
     )),
@@ -490,6 +887,7 @@ export function closeCodeAgentRightPanel(roomId: string) {
     return;
   }
   updateStore((state) => ({
+    ...state,
     byRoomId: updateRoom(state.byRoomId, roomKey, (current) => (
       current.isOpen ? { ...current, isOpen: false } : current
     )),
@@ -502,6 +900,7 @@ export function toggleCodeAgentRightPanelVisibility(roomId: string) {
     return;
   }
   updateStore((state) => ({
+    ...state,
     byRoomId: updateRoom(state.byRoomId, roomKey, (current) => ({
       ...current,
       isOpen: !current.isOpen,
@@ -515,6 +914,7 @@ export function toggleCodeAgentRightPanel(roomId: string, kind: 'diff' | 'files'
     return;
   }
   updateStore((state) => ({
+    ...state,
     byRoomId: updateRoom(state.byRoomId, roomKey, (current) => {
       const active = current.surfaces.find((surface) => surface.id === current.activeSurfaceId);
       if (current.isOpen && active?.kind === kind) {
@@ -547,6 +947,7 @@ export function activateCodeAgentRightPanelSurface(roomId: string, surfaceId: st
     return;
   }
   updateStore((state) => ({
+    ...state,
     byRoomId: updateRoom(state.byRoomId, roomKey, (current) => (
       current.surfaces.some((surface) => surface.id === surfaceId)
         ? { ...current, isOpen: true, activeSurfaceId: surfaceId }
@@ -561,6 +962,7 @@ export function closeCodeAgentRightPanelSurface(roomId: string, surfaceId: strin
     return;
   }
   updateStore((state) => ({
+    ...state,
     byRoomId: updateRoom(state.byRoomId, roomKey, (current) => {
       const index = current.surfaces.findIndex((surface) => surface.id === surfaceId);
       if (index < 0) return current;
@@ -585,6 +987,7 @@ export function closeOtherCodeAgentRightPanelSurfaces(roomId: string, surfaceId:
     return;
   }
   updateStore((state) => ({
+    ...state,
     byRoomId: updateRoom(state.byRoomId, roomKey, (current) => {
       const surface = current.surfaces.find((entry) => entry.id === surfaceId);
       if (!surface || current.surfaces.length === 1) return current;
@@ -604,6 +1007,7 @@ export function closeCodeAgentRightPanelSurfacesToRight(roomId: string, surfaceI
     return;
   }
   updateStore((state) => ({
+    ...state,
     byRoomId: updateRoom(state.byRoomId, roomKey, (current) => {
       const index = current.surfaces.findIndex((surface) => surface.id === surfaceId);
       if (index < 0 || index === current.surfaces.length - 1) return current;
@@ -624,6 +1028,7 @@ export function closeAllCodeAgentRightPanelSurfaces(roomId: string) {
     return;
   }
   updateStore((state) => ({
+    ...state,
     byRoomId: updateRoom(state.byRoomId, roomKey, (current) => (
       current.surfaces.length === 0
         ? current
@@ -642,6 +1047,7 @@ export function reconcileCodeAgentFileSurfaces(
     return;
   }
   updateStore((state) => ({
+    ...state,
     byRoomId: updateRoom(state.byRoomId, roomKey, (current) => {
       const surfaces = current.surfaces.filter((surface) => {
         if (!workspaceAvailable && (surface.kind === 'files' || surface.kind === 'file' || surface.kind === 'preview')) {
@@ -675,11 +1081,15 @@ export function removeCodeAgentRightPanelRoom(roomId: string) {
     return;
   }
   updateStore((state) => {
-    if (!(roomKey in state.byRoomId)) {
+    if (!(roomKey in state.byRoomId) && !(roomKey in (state.recentPreviewTargetsByRoomId ?? {}))) {
       return state;
     }
     const { [roomKey]: _removed, ...byRoomId } = state.byRoomId;
-    return { byRoomId };
+    const { [roomKey]: _removedRecent, ...recentPreviewTargetsByRoomId } =
+      state.recentPreviewTargetsByRoomId ?? {};
+    return Object.keys(recentPreviewTargetsByRoomId).length > 0
+      ? { byRoomId, recentPreviewTargetsByRoomId }
+      : { byRoomId };
   });
 }
 

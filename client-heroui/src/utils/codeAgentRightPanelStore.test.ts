@@ -9,17 +9,21 @@ import {
   closeCodeAgentRightPanelSurfacesToRight,
   closeOtherCodeAgentRightPanelSurfaces,
   closeCodeAgentRightPanel,
+  getCodeAgentPreviewSurfaceNavigationState,
   migrateCodeAgentRightPanelState,
+  navigateCodeAgentRightPanelPreviewHistory,
   navigateCodeAgentRightPanelPreviewSurface,
   openCodeAgentRightPanel,
   openCodeAgentRightPanelFile,
   openCodeAgentRightPanelPreview,
+  readCodeAgentPreviewRecentTargets,
   readCodeAgentRightPanelState,
   reconcileCodeAgentFileSurfaces,
   removeCodeAgentRightPanelRoom,
   resetCodeAgentRightPanelStoreForTests,
   selectActiveCodeAgentRightPanelKind,
   selectActiveCodeAgentRightPanelSurface,
+  setCodeAgentRightPanelPreviewZoomFactor,
   showCodeAgentRightPanel,
   toggleCodeAgentRightPanel,
   toggleCodeAgentRightPanelVisibility,
@@ -96,6 +100,8 @@ describe('codeAgentRightPanelStore', () => {
           id: 'browser:output/report.html',
           kind: 'preview',
           relativePath: 'output/report.html',
+          navigationHistory: [{ kind: 'workspace-file', relativePath: 'output/report.html' }],
+          navigationIndex: 0,
         },
       ],
     });
@@ -131,6 +137,8 @@ describe('codeAgentRightPanelStore', () => {
           kind: 'preview',
           relativePath: null,
           url: 'https://example.com/report',
+          navigationHistory: [{ kind: 'url', url: 'https://example.com/report' }],
+          navigationIndex: 0,
         },
       ],
     });
@@ -152,6 +160,251 @@ describe('codeAgentRightPanelStore', () => {
           id: 'browser:output/report.html',
           kind: 'preview',
           relativePath: 'output/report.html',
+          navigationHistory: [
+            { kind: 'url', url: 'https://example.com/report' },
+            { kind: 'workspace-file', relativePath: 'output/report.html' },
+          ],
+          navigationIndex: 1,
+        },
+      ],
+    });
+  });
+
+  it('remembers recent browser preview targets for empty browser tabs', () => {
+    addCodeAgentRightPanelPreviewSurface('room-1');
+    navigateCodeAgentRightPanelPreviewSurface('room-1', 'browser:new', {
+      kind: 'url',
+      url: ' https://example.com/report ',
+    });
+    navigateCodeAgentRightPanelPreviewSurface(
+      'room-1',
+      'browser:url:https%3A%2F%2Fexample.com%2Freport',
+      {
+        kind: 'workspace-file',
+        relativePath: ' output/report.html ',
+      },
+    );
+    navigateCodeAgentRightPanelPreviewSurface(
+      'room-1',
+      'browser:output/report.html',
+      {
+        kind: 'url',
+        url: 'https://example.com/report',
+      },
+    );
+    navigateCodeAgentRightPanelPreviewSurface(
+      'room-1',
+      'browser:url:https%3A%2F%2Fexample.com%2Freport',
+      {
+        kind: 'url',
+        url: 'javascript:alert(1)',
+      },
+    );
+
+    expect(readCodeAgentPreviewRecentTargets('room-1')).toEqual([
+      { kind: 'url', url: 'https://example.com/report' },
+      { kind: 'workspace-file', relativePath: 'output/report.html' },
+    ]);
+
+    for (let index = 0; index < 12; index += 1) {
+      navigateCodeAgentRightPanelPreviewSurface(
+        'room-1',
+        readCodeAgentRightPanelState('room-1').activeSurfaceId || 'browser:new',
+        {
+          kind: 'url',
+          url: `https://example.com/${index}`,
+        },
+      );
+    }
+
+    const recentTargets = readCodeAgentPreviewRecentTargets('room-1');
+    expect(recentTargets).toHaveLength(10);
+    expect(recentTargets[0]).toEqual({ kind: 'url', url: 'https://example.com/11' });
+    expect(recentTargets.at(-1)).toEqual({ kind: 'url', url: 'https://example.com/2' });
+  });
+
+  it('moves browser preview surfaces through their navigation history', () => {
+    addCodeAgentRightPanelPreviewSurface('room-1');
+    navigateCodeAgentRightPanelPreviewSurface('room-1', 'browser:new', {
+      kind: 'url',
+      url: 'https://example.com/one',
+    });
+    navigateCodeAgentRightPanelPreviewSurface(
+      'room-1',
+      'browser:url:https%3A%2F%2Fexample.com%2Fone',
+      {
+        kind: 'url',
+        url: 'https://example.com/two',
+      },
+    );
+
+    let state = readCodeAgentRightPanelState('room-1');
+    expect(state.activeSurfaceId).toBe('browser:url:https%3A%2F%2Fexample.com%2Ftwo');
+    expect(getCodeAgentPreviewSurfaceNavigationState(state.surfaces[0])).toEqual({
+      canGoBack: true,
+      canGoForward: false,
+    });
+
+    navigateCodeAgentRightPanelPreviewHistory(
+      'room-1',
+      'browser:url:https%3A%2F%2Fexample.com%2Ftwo',
+      'back',
+    );
+
+    state = readCodeAgentRightPanelState('room-1');
+    expect(state).toEqual({
+      isOpen: true,
+      activeSurfaceId: 'browser:url:https%3A%2F%2Fexample.com%2Fone',
+      surfaces: [
+        {
+          id: 'browser:url:https%3A%2F%2Fexample.com%2Fone',
+          kind: 'preview',
+          relativePath: null,
+          url: 'https://example.com/one',
+          navigationHistory: [
+            { kind: 'url', url: 'https://example.com/one' },
+            { kind: 'url', url: 'https://example.com/two' },
+          ],
+          navigationIndex: 0,
+        },
+      ],
+    });
+    expect(getCodeAgentPreviewSurfaceNavigationState(state.surfaces[0])).toEqual({
+      canGoBack: false,
+      canGoForward: true,
+    });
+
+    navigateCodeAgentRightPanelPreviewHistory(
+      'room-1',
+      'browser:url:https%3A%2F%2Fexample.com%2Fone',
+      'forward',
+    );
+
+    state = readCodeAgentRightPanelState('room-1');
+    expect(state.activeSurfaceId).toBe('browser:url:https%3A%2F%2Fexample.com%2Ftwo');
+    expect(state.surfaces[0]).toMatchObject({
+      url: 'https://example.com/two',
+      navigationIndex: 1,
+    });
+  });
+
+  it('keeps browser preview zoom scoped to a surface across navigation', () => {
+    addCodeAgentRightPanelPreviewSurface('room-1');
+    navigateCodeAgentRightPanelPreviewSurface('room-1', 'browser:new', {
+      kind: 'url',
+      url: 'https://example.com/one',
+    });
+    setCodeAgentRightPanelPreviewZoomFactor(
+      'room-1',
+      'browser:url:https%3A%2F%2Fexample.com%2Fone',
+      1.2,
+    );
+
+    expect(readCodeAgentRightPanelState('room-1').surfaces[0]).toMatchObject({
+      id: 'browser:url:https%3A%2F%2Fexample.com%2Fone',
+      zoomFactor: 1.2,
+    });
+
+    navigateCodeAgentRightPanelPreviewSurface(
+      'room-1',
+      'browser:url:https%3A%2F%2Fexample.com%2Fone',
+      {
+        kind: 'url',
+        url: 'https://example.com/two',
+      },
+    );
+    expect(readCodeAgentRightPanelState('room-1').surfaces[0]).toMatchObject({
+      id: 'browser:url:https%3A%2F%2Fexample.com%2Ftwo',
+      zoomFactor: 1.2,
+    });
+
+    setCodeAgentRightPanelPreviewZoomFactor(
+      'room-1',
+      'browser:url:https%3A%2F%2Fexample.com%2Ftwo',
+      1,
+    );
+    expect(readCodeAgentRightPanelState('room-1').surfaces[0]).not.toHaveProperty('zoomFactor');
+  });
+
+  it('truncates browser preview forward history after a new navigation', () => {
+    addCodeAgentRightPanelPreviewSurface('room-1');
+    navigateCodeAgentRightPanelPreviewSurface('room-1', 'browser:new', {
+      kind: 'url',
+      url: 'https://example.com/one',
+    });
+    navigateCodeAgentRightPanelPreviewSurface(
+      'room-1',
+      'browser:url:https%3A%2F%2Fexample.com%2Fone',
+      {
+        kind: 'url',
+        url: 'https://example.com/two',
+      },
+    );
+    navigateCodeAgentRightPanelPreviewHistory(
+      'room-1',
+      'browser:url:https%3A%2F%2Fexample.com%2Ftwo',
+      'back',
+    );
+    navigateCodeAgentRightPanelPreviewSurface(
+      'room-1',
+      'browser:url:https%3A%2F%2Fexample.com%2Fone',
+      {
+        kind: 'workspace-file',
+        relativePath: 'output/report.html',
+      },
+    );
+
+    const state = readCodeAgentRightPanelState('room-1');
+    expect(state.activeSurfaceId).toBe('browser:output/report.html');
+    expect(state.surfaces[0]).toMatchObject({
+      relativePath: 'output/report.html',
+      navigationHistory: [
+        { kind: 'url', url: 'https://example.com/one' },
+        { kind: 'workspace-file', relativePath: 'output/report.html' },
+      ],
+      navigationIndex: 1,
+    });
+    expect(getCodeAgentPreviewSurfaceNavigationState(state.surfaces[0])).toEqual({
+      canGoBack: true,
+      canGoForward: false,
+    });
+  });
+
+  it('keeps browser preview history when navigation reuses an existing surface', () => {
+    addCodeAgentRightPanelPreviewSurface('room-1');
+    navigateCodeAgentRightPanelPreviewSurface('room-1', 'browser:new', {
+      kind: 'url',
+      url: 'https://example.com/one',
+    });
+    addCodeAgentRightPanelPreviewSurface('room-1');
+    navigateCodeAgentRightPanelPreviewSurface('room-1', 'browser:new', {
+      kind: 'url',
+      url: 'https://example.com/two',
+    });
+    navigateCodeAgentRightPanelPreviewSurface(
+      'room-1',
+      'browser:url:https%3A%2F%2Fexample.com%2Ftwo',
+      {
+        kind: 'url',
+        url: 'https://example.com/one',
+      },
+    );
+
+    const state = readCodeAgentRightPanelState('room-1');
+    expect(state).toEqual({
+      isOpen: true,
+      activeSurfaceId: 'browser:url:https%3A%2F%2Fexample.com%2Fone',
+      surfaces: [
+        {
+          id: 'browser:url:https%3A%2F%2Fexample.com%2Fone',
+          kind: 'preview',
+          relativePath: null,
+          url: 'https://example.com/one',
+          navigationHistory: [
+            { kind: 'url', url: 'https://example.com/two' },
+            { kind: 'url', url: 'https://example.com/one' },
+          ],
+          navigationIndex: 1,
         },
       ],
     });
@@ -217,9 +470,14 @@ describe('codeAgentRightPanelStore', () => {
               kind: 'preview',
               relativePath: null,
               url: 'https://example.com/report',
+              navigationHistory: [{ kind: 'url', url: 'https://example.com/report' }],
+              navigationIndex: 0,
             },
           ],
         },
+      },
+      recentPreviewTargetsByRoomId: {
+        'room-1': [{ kind: 'url', url: 'https://example.com/report' }],
       },
     });
   });

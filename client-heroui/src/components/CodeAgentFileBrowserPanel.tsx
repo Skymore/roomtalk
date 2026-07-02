@@ -1,12 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowLeft,
+  ArrowRight,
   ExternalLink,
   FileDiff,
   Files,
   Globe2,
   LoaderCircle,
+  Minus,
+  MoreVertical,
   Plus,
   RefreshCw,
+  RotateCcw,
   TerminalSquare,
   X,
 } from 'lucide-react';
@@ -28,6 +33,7 @@ import {
 import { appendWorkspaceAssetPreviewRevision } from '../utils/codeWorkspaceFilePreview';
 import type { CodeAgentWorkspaceSnapshot } from '../utils/cocoWorkspace';
 import type { RoomSandboxStatus } from '../utils/types';
+import { codeAgentFaviconUrlForOrigin } from '../utils/codeAgentFavicon';
 import { beginHorizontalResize } from '../utils/horizontalResize';
 import { normalizeWorkspaceOpenPath, parseWorkspaceFileOpenTarget } from '../utils/workspaceFileOpenTarget';
 import { type ReviewCommentContext } from '../utils/codeAgentReviewComments';
@@ -74,11 +80,16 @@ import {
   closeCodeAgentRightPanelSurface,
   closeCodeAgentRightPanelSurfacesToRight,
   closeOtherCodeAgentRightPanelSurfaces,
+  getCodeAgentPreviewSurfaceNavigationState,
+  navigateCodeAgentRightPanelPreviewHistory,
   navigateCodeAgentRightPanelPreviewSurface,
   openCodeAgentRightPanel,
   openCodeAgentRightPanelFile,
   openCodeAgentRightPanelPreview,
   reconcileCodeAgentFileSurfaces,
+  setCodeAgentRightPanelPreviewZoomFactor,
+  useCodeAgentPreviewRecentTargets,
+  type CodeAgentPreviewNavigationTarget,
   type CodeAgentRightPanelSurface,
   useCodeAgentRightPanelState,
 } from '../utils/codeAgentRightPanelStore';
@@ -165,6 +176,10 @@ const FILE_EXPLORER_WIDTH_STORAGE_KEY = 'roomtalk.codeWorkspace.fileExplorerWidt
 const FILE_EXPLORER_MIN_WIDTH = 160;
 const FILE_PREVIEW_MIN_WIDTH = 220;
 const FILE_EXPLORER_DEFAULT_WIDTH = 352;
+const DIFF_CHANGED_FILES_WIDTH_STORAGE_KEY = 'roomtalk.codeWorkspace.diffChangedFilesWidth';
+const DIFF_CHANGED_FILES_MIN_WIDTH = 180;
+const DIFF_VIEWER_MIN_WIDTH = 260;
+const DIFF_CHANGED_FILES_DEFAULT_WIDTH = 288;
 const FILE_SURFACE_MENU_VIEWPORT_PADDING = 8;
 const FILE_SURFACE_ADD_MENU_WIDTH = 160;
 const FILE_SURFACE_ADD_MENU_HEIGHT = 136;
@@ -183,6 +198,18 @@ function getFileExplorerResizeBounds(panelWidth: number) {
 
 function clampFileExplorerWidth(value: number, panelWidth: number): number {
   const bounds = getFileExplorerResizeBounds(panelWidth);
+  return Math.min(bounds.max, Math.max(bounds.min, Math.round(value)));
+}
+
+function getDiffChangedFilesResizeBounds(panelWidth: number) {
+  return {
+    min: DIFF_CHANGED_FILES_MIN_WIDTH,
+    max: Math.max(DIFF_CHANGED_FILES_MIN_WIDTH, Math.floor(panelWidth - DIFF_VIEWER_MIN_WIDTH)),
+  };
+}
+
+function clampDiffChangedFilesWidth(value: number, panelWidth: number): number {
+  const bounds = getDiffChangedFilesResizeBounds(panelWidth);
   return Math.min(bounds.max, Math.max(bounds.min, Math.round(value)));
 }
 
@@ -256,6 +283,303 @@ function formatBrowserSurfaceUrlTitle(url: string): string {
   } catch {
     return url;
   }
+}
+
+function formatBrowserPreviewTargetTitle(target: CodeAgentPreviewNavigationTarget): string {
+  return target.kind === 'url'
+    ? formatBrowserSurfaceUrlTitle(target.url)
+    : basename(target.relativePath);
+}
+
+function formatBrowserPreviewTargetSubtitle(target: CodeAgentPreviewNavigationTarget): string {
+  return target.kind === 'url' ? target.url : target.relativePath;
+}
+
+const BROWSER_PREVIEW_ZOOM_MIN = 0.25;
+const BROWSER_PREVIEW_ZOOM_MAX = 3;
+const BROWSER_PREVIEW_ZOOM_STEP = 0.1;
+const BROWSER_PREVIEW_ZOOM_EPSILON = 0.001;
+const BROWSER_PREVIEW_ZOOM_INDICATOR_HIDE_MS = 1500;
+const BROWSER_PREVIEW_LOAD_TICK_INTERVAL_MS = 120;
+const BROWSER_PREVIEW_LOAD_FADE_OUT_MS = 220;
+const BROWSER_PREVIEW_LOAD_SEED_PERCENT = 4;
+const BROWSER_PREVIEW_LOAD_ASYMPTOTE_PERCENT = 90;
+const BROWSER_PREVIEW_LOAD_APPROACH_FACTOR = 0.08;
+const BROWSER_PREVIEW_LOAD_MIN_INCREMENT = 0.5;
+
+function clampBrowserPreviewZoomFactor(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 1;
+  }
+  return Math.min(BROWSER_PREVIEW_ZOOM_MAX, Math.max(BROWSER_PREVIEW_ZOOM_MIN, Math.round(value * 100) / 100));
+}
+
+function formatBrowserPreviewZoomFactor(value: number): string {
+  return `${Math.round(clampBrowserPreviewZoomFactor(value) * 100)}%`;
+}
+
+function useCodeAgentBrowserLoadingProgress(loading: boolean): number {
+  const [progress, setProgress] = useState(0);
+  const progressRef = useRef(0);
+  progressRef.current = progress;
+
+  useEffect(() => {
+    if (!loading) {
+      if (progressRef.current === 0) {
+        return undefined;
+      }
+      setProgress(100);
+      const timer = window.setTimeout(() => setProgress(0), BROWSER_PREVIEW_LOAD_FADE_OUT_MS);
+      return () => window.clearTimeout(timer);
+    }
+
+    setProgress((value) => (
+      value > 0 && value < 95 ? value : BROWSER_PREVIEW_LOAD_SEED_PERCENT
+    ));
+    const interval = window.setInterval(() => {
+      const current = progressRef.current;
+      if (current >= BROWSER_PREVIEW_LOAD_ASYMPTOTE_PERCENT) {
+        return;
+      }
+      const remaining = BROWSER_PREVIEW_LOAD_ASYMPTOTE_PERCENT - current;
+      const increment = Math.max(BROWSER_PREVIEW_LOAD_MIN_INCREMENT, remaining * BROWSER_PREVIEW_LOAD_APPROACH_FACTOR);
+      setProgress(Math.min(BROWSER_PREVIEW_LOAD_ASYMPTOTE_PERCENT, current + increment));
+    }, BROWSER_PREVIEW_LOAD_TICK_INTERVAL_MS);
+
+    return () => window.clearInterval(interval);
+  }, [loading]);
+
+  return progress;
+}
+
+function CodeAgentBrowserTabIcon({
+  url,
+}: {
+  url: string | null | undefined;
+}) {
+  const faviconUrl = codeAgentFaviconUrlForOrigin(url, 32);
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+
+  if (!faviconUrl || failedUrl === faviconUrl) {
+    return (
+      <Globe2
+        className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]"
+        data-testid="code-agent-browser-tab-favicon-fallback"
+      />
+    );
+  }
+
+  return (
+    <img
+      src={faviconUrl}
+      alt=""
+      aria-hidden="true"
+      draggable={false}
+      className="h-3.5 w-3.5 shrink-0 rounded-sm"
+      data-testid="code-agent-browser-tab-favicon"
+      onError={() => setFailedUrl(faviconUrl)}
+    />
+  );
+}
+
+function CodeAgentBrowserZoomIndicator({
+  zoomFactor,
+}: {
+  zoomFactor: number;
+}) {
+  const [visible, setVisible] = useState(false);
+  const lastZoomFactorRef = useRef(zoomFactor);
+  const timerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (Math.abs(lastZoomFactorRef.current - zoomFactor) < BROWSER_PREVIEW_ZOOM_EPSILON) {
+      return undefined;
+    }
+    lastZoomFactorRef.current = zoomFactor;
+    setVisible(true);
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+    }
+    timerRef.current = window.setTimeout(() => {
+      setVisible(false);
+      timerRef.current = null;
+    }, BROWSER_PREVIEW_ZOOM_INDICATOR_HIDE_MS);
+    return () => {
+      if (timerRef.current !== null) {
+        window.clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [zoomFactor]);
+
+  return (
+    <div
+      aria-hidden={!visible}
+      className={`pointer-events-none absolute right-3 top-3 z-20 select-none rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-2.5 py-1 text-xs font-medium tabular-nums text-[#141413] shadow-lg backdrop-blur transition-all duration-200 dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#faf9f5] ${
+        visible ? 'translate-y-0 opacity-100' : '-translate-y-1 opacity-0'
+      }`}
+      data-testid="code-agent-browser-zoom-indicator"
+    >
+      {formatBrowserPreviewZoomFactor(zoomFactor)}
+    </div>
+  );
+}
+
+function CodeAgentBrowserMoreMenu({
+  canRefresh,
+  canZoom,
+  zoomFactor,
+  onHardReload,
+  onZoomIn,
+  onZoomOut,
+  onResetZoom,
+}: {
+  canRefresh: boolean;
+  canZoom: boolean;
+  zoomFactor: number;
+  onHardReload: () => void;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onResetZoom: () => void;
+}) {
+  const { t } = useTranslation();
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
+  const menuOpen = menuPosition !== null;
+  const zoomLabel = formatBrowserPreviewZoomFactor(zoomFactor);
+  const canZoomOut = canZoom && zoomFactor > BROWSER_PREVIEW_ZOOM_MIN + BROWSER_PREVIEW_ZOOM_EPSILON;
+  const canZoomIn = canZoom && zoomFactor < BROWSER_PREVIEW_ZOOM_MAX - BROWSER_PREVIEW_ZOOM_EPSILON;
+  const canResetZoom = canZoom && Math.abs(zoomFactor - 1) >= BROWSER_PREVIEW_ZOOM_EPSILON;
+
+  const closeMenu = useCallback(() => {
+    setMenuPosition(null);
+  }, []);
+
+  const toggleMenu = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+    if (menuOpen) {
+      closeMenu();
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    const menuWidth = 224;
+    const menuHeight = 150;
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || menuWidth;
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || menuHeight;
+    setMenuPosition({
+      x: Math.min(Math.max(8, rect.right - menuWidth), Math.max(8, viewportWidth - menuWidth - 8)),
+      y: Math.min(rect.bottom + 6, Math.max(8, viewportHeight - menuHeight - 8)),
+    });
+  }, [closeMenu, menuOpen]);
+
+  useEffect(() => {
+    if (!menuOpen) {
+      return undefined;
+    }
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        (buttonRef.current?.contains(target) || menuRef.current?.contains(target))
+      ) {
+        return;
+      }
+      closeMenu();
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeMenu();
+      }
+    };
+    window.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [closeMenu, menuOpen]);
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+        aria-label={t('moreActions')}
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+        title={t('moreActions')}
+        onClick={toggleMenu}
+      >
+        <MoreVertical className="h-3.5 w-3.5" />
+      </button>
+      {menuOpen && menuPosition ? (
+        <div
+          ref={menuRef}
+          className="fixed z-[90] min-w-56 rounded-md border border-[#dedbd0] bg-[#faf9f5] p-1 shadow-xl dark:border-[#30302e] dark:bg-[#1d1d1b]"
+          data-testid="code-agent-browser-more-menu"
+          role="menu"
+          style={{ left: menuPosition.x, top: menuPosition.y }}
+        >
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] hover:bg-[#f0eee6] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent dark:text-[#faf9f5] dark:hover:bg-[#30302e] dark:disabled:hover:bg-transparent"
+            role="menuitem"
+            disabled={!canRefresh}
+            onClick={() => {
+              onHardReload();
+              closeMenu();
+            }}
+          >
+            <RefreshCw className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+            <span className="min-w-0 truncate">{t('codeAgentBrowserHardReload')}</span>
+          </button>
+          <div className="my-1 h-px bg-[#dedbd0] dark:bg-[#30302e]" />
+          <div
+            className={`flex items-center justify-between gap-3 rounded px-2 py-1.5 text-xs ${
+              canZoom ? 'text-[#141413] dark:text-[#faf9f5]' : 'text-[#87867f] opacity-60 dark:text-[#8f8d86]'
+            }`}
+            role="group"
+            aria-label={t('codeAgentBrowserZoom')}
+          >
+            <span>{t('codeAgentBrowserZoom')}</span>
+            <span className="flex items-center gap-1">
+              <button
+                type="button"
+                className="inline-flex h-6 w-6 items-center justify-center rounded border border-[#dedbd0] text-[#5e5d59] hover:bg-[#f0eee6] disabled:cursor-not-allowed disabled:opacity-40 dark:border-[#30302e] dark:text-[#b0aea5] dark:hover:bg-[#30302e]"
+                aria-label={t('codeAgentBrowserZoomOut')}
+                disabled={!canZoomOut}
+                onClick={onZoomOut}
+              >
+                <Minus className="h-3.5 w-3.5" />
+              </button>
+              <span className="min-w-12 text-center text-[11px] tabular-nums text-[#87867f] dark:text-[#8f8d86]">
+                {zoomLabel}
+              </span>
+              <button
+                type="button"
+                className="inline-flex h-6 w-6 items-center justify-center rounded border border-[#dedbd0] text-[#5e5d59] hover:bg-[#f0eee6] disabled:cursor-not-allowed disabled:opacity-40 dark:border-[#30302e] dark:text-[#b0aea5] dark:hover:bg-[#30302e]"
+                aria-label={t('codeAgentBrowserZoomIn')}
+                disabled={!canZoomIn}
+                onClick={onZoomIn}
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                className="inline-flex h-6 w-6 items-center justify-center rounded text-[#5e5d59] hover:bg-[#f0eee6] disabled:cursor-not-allowed disabled:opacity-40 dark:text-[#b0aea5] dark:hover:bg-[#30302e]"
+                aria-label={t('codeAgentBrowserResetZoom')}
+                disabled={!canResetZoom}
+                onClick={onResetZoom}
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+              </button>
+            </span>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
 }
 
 function CodeAgentRightPanelEmptyState({
@@ -344,54 +668,130 @@ function CodeAgentRightPanelEmptyState({
 }
 
 interface CodeAgentPreviewSurfaceProps {
+  roomId: string;
   surface: CodeAgentPreviewPanelSurface;
   assetUrlQuery: AssetUrlQueryState;
   assetPreviewRevision: number;
+  focusUrlNonce?: number;
+  recentTargets: readonly CodeAgentPreviewNavigationTarget[];
   workspaceRoot?: string | null;
   onNavigate: (
     surfaceId: string,
     target: { kind: 'workspace-file'; relativePath: string } | { kind: 'url'; url: string },
   ) => void;
+  onNavigateHistory: (surfaceId: string, direction: 'back' | 'forward') => void;
   onRefreshWorkspacePreview: (relativePath: string) => void;
 }
 
 interface CodeAgentBrowserSurfaceChromeProps {
   value: string;
   loading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
   canRefresh: boolean;
   canOpenExternal: boolean;
+  canZoom: boolean;
+  zoomFactor: number;
+  focusUrlNonce?: number;
   navigationError: string | null;
+  onBack: () => void;
+  onForward: () => void;
   onSubmit: (value: string) => void;
   onRefresh: () => void;
   onOpenExternal: () => void;
+  onHardReload: () => void;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onResetZoom: () => void;
+}
+
+function formatBrowserSurfaceAddressDisplay(value: string): string {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.host : value;
+  } catch {
+    return value;
+  }
 }
 
 function CodeAgentBrowserSurfaceChrome({
   value,
   loading,
+  canGoBack,
+  canGoForward,
   canRefresh,
   canOpenExternal,
+  canZoom,
+  zoomFactor,
+  focusUrlNonce,
   navigationError,
+  onBack,
+  onForward,
   onSubmit,
   onRefresh,
   onOpenExternal,
+  onHardReload,
+  onZoomIn,
+  onZoomOut,
+  onResetZoom,
 }: CodeAgentBrowserSurfaceChromeProps) {
   const { t } = useTranslation();
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const [draft, setDraft] = useState(value);
+  const [inputFocused, setInputFocused] = useState(false);
+  const loadProgress = useCodeAgentBrowserLoadingProgress(loading);
 
   useEffect(() => {
     setDraft(value);
   }, [value]);
 
+  useEffect(() => {
+    if (focusUrlNonce === undefined) {
+      return;
+    }
+    inputRef.current?.focus();
+  }, [focusUrlNonce]);
+
+  const submit = useCallback((event?: React.FormEvent | React.KeyboardEvent) => {
+    event?.preventDefault();
+    const nextValue = draft.trim();
+    if (!nextValue) {
+      return;
+    }
+    onSubmit(nextValue);
+    setInputFocused(false);
+    inputRef.current?.blur();
+  }, [draft, onSubmit]);
+
+  const displayValue = inputFocused ? draft : formatBrowserSurfaceAddressDisplay(value);
+  const displayTitle = !inputFocused && displayValue !== value ? value : undefined;
+
   return (
-    <div className="shrink-0 border-b border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]">
+    <div className="relative shrink-0 border-b border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]">
       <form
         className="flex h-9 items-center gap-1.5 px-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          onSubmit(draft);
-        }}
+        onSubmit={submit}
       >
+        <button
+          type="button"
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-45 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+          aria-label={t('codeAgentBrowserBack')}
+          title={t('codeAgentBrowserBack')}
+          disabled={!canGoBack}
+          onClick={onBack}
+        >
+          <ArrowLeft className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-45 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+          aria-label={t('codeAgentBrowserForward')}
+          title={t('codeAgentBrowserForward')}
+          disabled={!canGoForward}
+          onClick={onForward}
+        >
+          <ArrowRight className="h-3.5 w-3.5" />
+        </button>
         <button
           type="button"
           className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-45 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
@@ -403,17 +803,32 @@ function CodeAgentBrowserSurfaceChrome({
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
         </button>
         <input
+          ref={inputRef}
           aria-label={t('codeAgentBrowserAddressLabel')}
           className="h-7 min-w-0 flex-1 rounded-md border border-transparent bg-[#f0eee6] px-2 text-xs text-[#141413] outline-none transition-colors placeholder:text-[#87867f] focus:border-[#c96442]/70 focus:bg-[#faf9f5] dark:bg-[#242422] dark:text-[#faf9f5] dark:placeholder:text-[#8f8d86] dark:focus:border-[#d97757]/70 dark:focus:bg-[#1d1d1b]"
           placeholder={t('codeAgentBrowserAddressPlaceholder')}
           spellCheck={false}
-          value={draft}
+          title={displayTitle}
+          value={displayValue}
           onChange={(event) => setDraft(event.target.value)}
+          onFocus={() => {
+            setDraft(value);
+            setInputFocused(true);
+            queueMicrotask(() => inputRef.current?.select());
+          }}
+          onBlur={() => {
+            setInputFocused(false);
+          }}
           onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              submit(event);
+              return;
+            }
             if (event.key === 'Escape') {
               event.preventDefault();
               setDraft(value);
-              event.currentTarget.blur();
+              setInputFocused(false);
+              inputRef.current?.blur();
             }
           }}
         />
@@ -427,6 +842,15 @@ function CodeAgentBrowserSurfaceChrome({
         >
           <ExternalLink className="h-3.5 w-3.5" />
         </button>
+        <CodeAgentBrowserMoreMenu
+          canRefresh={canRefresh}
+          canZoom={canZoom}
+          zoomFactor={zoomFactor}
+          onHardReload={onHardReload}
+          onZoomIn={onZoomIn}
+          onZoomOut={onZoomOut}
+          onResetZoom={onResetZoom}
+        />
       </form>
       {navigationError ? (
         <div
@@ -436,16 +860,31 @@ function CodeAgentBrowserSurfaceChrome({
           {navigationError}
         </div>
       ) : null}
+      {loadProgress > 0 ? (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute bottom-0 left-0 z-10 h-0.5 rounded-r-full bg-[#c96442] transition-all duration-150 ease-out dark:bg-[#d97757]"
+          data-testid="code-agent-browser-loading-progress"
+          style={{
+            width: `${loadProgress}%`,
+            boxShadow: '0 0 6px 1px rgba(201, 100, 66, 0.45)',
+          }}
+        />
+      ) : null}
     </div>
   );
 }
 
 function CodeAgentPreviewSurface({
+  roomId,
   surface,
   assetUrlQuery,
   assetPreviewRevision,
+  focusUrlNonce,
+  recentTargets,
   workspaceRoot,
   onNavigate,
+  onNavigateHistory,
   onRefreshWorkspacePreview,
 }: CodeAgentPreviewSurfaceProps) {
   const { t } = useTranslation();
@@ -453,12 +892,16 @@ function CodeAgentPreviewSurface({
   const previewUrl = surface.url ?? null;
   const [navigationError, setNavigationError] = useState<string | null>(null);
   const [browserReloadNonce, setBrowserReloadNonce] = useState(0);
+  const [browserFrameLoading, setBrowserFrameLoading] = useState(false);
+  const zoomFactor = surface.zoomFactor ?? 1;
   const currentAddress = previewUrl ?? relativePath ?? '';
   const resolvedWorkspacePreviewUrl = relativePath && assetUrlQuery.resolvedUrl
     ? appendWorkspaceAssetPreviewRevision(assetUrlQuery.resolvedUrl, assetPreviewRevision)
     : null;
   const resolvedPreviewUrl = previewUrl ?? resolvedWorkspacePreviewUrl;
   const canRefreshPreview = Boolean(resolvedPreviewUrl || relativePath);
+  const browserChromeLoading = assetUrlQuery.isPending || (Boolean(resolvedPreviewUrl) && browserFrameLoading);
+  const { canGoBack, canGoForward } = getCodeAgentPreviewSurfaceNavigationState(surface);
 
   useEffect(() => {
     setNavigationError(null);
@@ -482,6 +925,14 @@ function CodeAgentPreviewSurface({
     setBrowserReloadNonce((current) => current + 1);
   }, [onRefreshWorkspacePreview, relativePath]);
 
+  const handleBack = useCallback(() => {
+    onNavigateHistory(surface.id, 'back');
+  }, [onNavigateHistory, surface.id]);
+
+  const handleForward = useCallback(() => {
+    onNavigateHistory(surface.id, 'forward');
+  }, [onNavigateHistory, surface.id]);
+
   const handleOpenExternal = useCallback(() => {
     if (!resolvedPreviewUrl) {
       return;
@@ -489,16 +940,47 @@ function CodeAgentPreviewSurface({
     window.open(resolvedPreviewUrl, '_blank', 'noopener,noreferrer');
   }, [resolvedPreviewUrl]);
 
+  const updateZoomFactor = useCallback((nextZoomFactor: number) => {
+    setCodeAgentRightPanelPreviewZoomFactor(
+      roomId,
+      surface.id,
+      nextZoomFactor,
+    );
+  }, [roomId, surface.id]);
+
+  const handleZoomIn = useCallback(() => {
+    updateZoomFactor(clampBrowserPreviewZoomFactor(zoomFactor + BROWSER_PREVIEW_ZOOM_STEP));
+  }, [updateZoomFactor, zoomFactor]);
+
+  const handleZoomOut = useCallback(() => {
+    updateZoomFactor(clampBrowserPreviewZoomFactor(zoomFactor - BROWSER_PREVIEW_ZOOM_STEP));
+  }, [updateZoomFactor, zoomFactor]);
+
+  const handleResetZoom = useCallback(() => {
+    updateZoomFactor(1);
+  }, [updateZoomFactor]);
+
   const chrome = (
     <CodeAgentBrowserSurfaceChrome
       value={currentAddress}
-      loading={assetUrlQuery.isPending}
+      loading={browserChromeLoading}
+      canGoBack={canGoBack}
+      canGoForward={canGoForward}
       canRefresh={canRefreshPreview}
       canOpenExternal={Boolean(resolvedPreviewUrl)}
+      canZoom={Boolean(resolvedPreviewUrl)}
+      zoomFactor={zoomFactor}
+      focusUrlNonce={focusUrlNonce}
       navigationError={navigationError}
+      onBack={handleBack}
+      onForward={handleForward}
       onSubmit={handleNavigate}
       onRefresh={handleRefresh}
       onOpenExternal={handleOpenExternal}
+      onHardReload={handleRefresh}
+      onZoomIn={handleZoomIn}
+      onZoomOut={handleZoomOut}
+      onResetZoom={handleResetZoom}
     />
   );
 
@@ -507,7 +989,7 @@ function CodeAgentPreviewSurface({
       <div className="flex min-h-0 flex-1 flex-col bg-[#faf9f5] dark:bg-[#1d1d1b]">
         {chrome}
         <div
-          className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center"
+          className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 overflow-auto px-6 py-8 text-center"
           data-testid="code-agent-browser-surface-empty"
         >
           <Globe2 className="h-5 w-5 text-[#87867f] dark:text-[#8f8d86]" />
@@ -517,6 +999,41 @@ function CodeAgentPreviewSurface({
           <div className="max-w-sm text-xs leading-relaxed text-[#87867f] dark:text-[#8f8d86]">
             {t('codeAgentBrowserSurfaceDescription')}
           </div>
+          {recentTargets.length > 0 ? (
+            <div
+              className="mt-2 w-full max-w-md text-left"
+              data-testid="code-agent-browser-recent-targets"
+            >
+              <div className="mb-2 px-1 text-xs font-medium text-[#5e5d59] dark:text-[#b0aea5]">
+                {t('recentlyUsed')}
+              </div>
+              <div className="flex flex-col divide-y divide-[#dedbd0] overflow-hidden rounded-md border border-[#dedbd0] bg-[#faf9f5] dark:divide-[#30302e] dark:border-[#30302e] dark:bg-[#1d1d1b]">
+                {recentTargets.map((target) => {
+                  const title = formatBrowserPreviewTargetTitle(target);
+                  const subtitle = formatBrowserPreviewTargetSubtitle(target);
+                  return (
+                    <button
+                      key={`${target.kind}:${subtitle}`}
+                      type="button"
+                      className="flex min-w-0 items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[#f0eee6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:hover:bg-[#242422]"
+                      title={subtitle}
+                      onClick={() => onNavigate(surface.id, target)}
+                    >
+                      <Globe2 className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-xs font-medium text-[#141413] dark:text-[#faf9f5]">
+                          {title}
+                        </span>
+                        <span className="block truncate text-[11px] text-[#87867f] dark:text-[#8f8d86]">
+                          {subtitle}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
     );
@@ -553,11 +1070,16 @@ function CodeAgentPreviewSurface({
     <div className="flex min-h-0 flex-1 flex-col bg-[#faf9f5] dark:bg-[#1d1d1b]">
       {chrome}
       {resolvedPreviewUrl ? (
-        <WorkspaceBrowserAssetPreview
-          key={`${resolvedPreviewUrl}:${browserReloadNonce}`}
-          src={resolvedPreviewUrl}
-          title={previewUrl ?? relativePath ?? t('codeAgentBrowserSurface')}
-        />
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <WorkspaceBrowserAssetPreview
+            key={`${resolvedPreviewUrl}:${browserReloadNonce}`}
+            src={resolvedPreviewUrl}
+            title={previewUrl ?? relativePath ?? t('codeAgentBrowserSurface')}
+            zoomFactor={zoomFactor}
+            onLoadingChange={setBrowserFrameLoading}
+          />
+          <CodeAgentBrowserZoomIndicator zoomFactor={zoomFactor} />
+        </div>
       ) : null}
     </div>
   );
@@ -687,6 +1209,18 @@ function initialExplorerWidth(): number {
       : FILE_EXPLORER_DEFAULT_WIDTH;
   } catch {
     return FILE_EXPLORER_DEFAULT_WIDTH;
+  }
+}
+
+function initialDiffChangedFilesWidth(): number {
+  try {
+    const stored = window.localStorage.getItem(DIFF_CHANGED_FILES_WIDTH_STORAGE_KEY);
+    const parsed = Number.parseInt(stored || '', 10);
+    return Number.isFinite(parsed)
+      ? clampDiffChangedFilesWidth(parsed, window.innerWidth)
+      : DIFF_CHANGED_FILES_DEFAULT_WIDTH;
+  } catch {
+    return DIFF_CHANGED_FILES_DEFAULT_WIDTH;
   }
 }
 
@@ -948,6 +1482,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const entriesQuery = useCodeWorkspaceEntriesQuery(roomId);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const diffSurfaceRef = useRef<HTMLDivElement | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
@@ -960,9 +1495,12 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const [pendingFileSurfaceIds, setPendingFileSurfaceIds] = useState<ReadonlySet<string>>(() => new Set());
   const [explorerOpen, setExplorerOpen] = useState(initialExplorerOpen);
   const [explorerWidth, setExplorerWidth] = useState(() => initialExplorerWidth());
+  const [diffChangedFilesWidth, setDiffChangedFilesWidth] = useState(() => initialDiffChangedFilesWidth());
   const [wordWrap, setWordWrap] = useState(readInitialFileWordWrap);
   const explorerWidthRef = useRef(explorerWidth);
   const explorerResizeCleanupRef = useRef<(() => void) | null>(null);
+  const diffChangedFilesWidthRef = useRef(diffChangedFilesWidth);
+  const diffChangedFilesResizeCleanupRef = useRef<(() => void) | null>(null);
   const [sourceView, setSourceView] = useState<{ path: string | null }>({ path: null });
   const [markdownView, setMarkdownView] = useState<{
     path: string | null;
@@ -987,6 +1525,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const remoteSearchScopeKey = `${roomId}:${workspaceReadyKey}`;
   const previousWorkspaceReadyKeyRef = useRef(workspaceReadyKey);
   const rightPanelState = useCodeAgentRightPanelState(roomId);
+  const previewRecentTargets = useCodeAgentPreviewRecentTargets(roomId);
   const diffPanelSelection = useCodeAgentDiffPanelSelection(roomId);
   const [diffFileSummaries, setDiffFileSummaries] = useState<ScopedDiffFileSummaries>({
     scopeKey: null,
@@ -999,6 +1538,8 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const fileSurfaceAddMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const fileSurfaceAddMenuRef = useRef<HTMLDivElement | null>(null);
   const fileSurfaceAddMenuOpen = fileSurfaceAddMenuPosition !== null;
+  const pendingBrowserAddressFocusRef = useRef(false);
+  const [browserAddressFocusRequests, setBrowserAddressFocusRequests] = useState<Record<string, number>>({});
   const didInitializeRightPanelRef = useRef(false);
 
   const externallySelectedEntry = useMemo(
@@ -1174,6 +1715,14 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     workspaceReadyKey,
   );
   const activePreviewSurfaceRevision = previewSurfacePath ? assetPreviewRevisions[previewSurfacePath] ?? 0 : 0;
+  const recentPreviewTargets = useMemo(() => {
+    const workspaceFileSetIsAuthoritative = entriesQuery.data !== null && !entriesQuery.data.truncated;
+    return previewRecentTargets.filter((target) => (
+      target.kind === 'url' ||
+      !workspaceFileSetIsAuthoritative ||
+      fileEntryPathSet.has(target.relativePath)
+    ));
+  }, [entriesQuery.data, fileEntryPathSet, previewRecentTargets]);
   const selectedDirectory = selectedKind === 'directory'
     ? selectedPath || ''
     : selectedPath
@@ -1191,9 +1740,16 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     panelRef.current?.style.setProperty('--workspace-file-explorer-width', `${explorerWidth}px`);
   }, [explorerWidth]);
 
+  useEffect(() => {
+    diffChangedFilesWidthRef.current = diffChangedFilesWidth;
+    panelRef.current?.style.setProperty('--workspace-diff-changed-files-width', `${diffChangedFilesWidth}px`);
+  }, [diffChangedFilesWidth]);
+
   useEffect(() => () => {
     explorerResizeCleanupRef.current?.();
     explorerResizeCleanupRef.current = null;
+    diffChangedFilesResizeCleanupRef.current?.();
+    diffChangedFilesResizeCleanupRef.current = null;
   }, []);
 
   useEffect(() => {
@@ -1267,6 +1823,17 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     }
     reconcileCodeAgentFileSurfaces(roomId, true, fileEntryPathSet);
   }, [entriesQuery.data, entriesQuery.error, entriesQuery.isPending, fileEntryPathSet, roomId]);
+
+  useEffect(() => {
+    if (!pendingBrowserAddressFocusRef.current || !activePreviewSurface) {
+      return;
+    }
+    pendingBrowserAddressFocusRef.current = false;
+    setBrowserAddressFocusRequests((current) => ({
+      ...current,
+      [activePreviewSurface.id]: (current[activePreviewSurface.id] ?? 0) + 1,
+    }));
+  }, [activePreviewSurface]);
 
   useEffect(() => {
     if (
@@ -1590,6 +2157,42 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     });
   }, []);
 
+  const handleDiffChangedFilesResizeStart = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    const surface = diffSurfaceRef.current;
+    if (!surface) {
+      return;
+    }
+
+    event.preventDefault();
+    const startWidth = diffChangedFilesWidthRef.current;
+    diffChangedFilesResizeCleanupRef.current?.();
+    diffChangedFilesResizeCleanupRef.current = beginHorizontalResize({
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      initialWidth: startWidth,
+      direction: 1,
+      captureTarget: event.currentTarget,
+      getBounds: () => getDiffChangedFilesResizeBounds(surface.getBoundingClientRect().width),
+      onResize: (width) => {
+        panelRef.current?.style.setProperty('--workspace-diff-changed-files-width', `${width}px`);
+      },
+      onFinish: (width) => {
+        diffChangedFilesWidthRef.current = width;
+        setDiffChangedFilesWidth(width);
+        try {
+          window.localStorage.setItem(DIFF_CHANGED_FILES_WIDTH_STORAGE_KEY, String(width));
+        } catch {
+          // localStorage persistence is best-effort; the live resize still applies.
+        }
+        diffChangedFilesResizeCleanupRef.current = null;
+      },
+    });
+  }, []);
+
   const togglePreviewView = useCallback(() => {
     if (!relativePath) {
       return;
@@ -1652,6 +2255,14 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     navigateCodeAgentRightPanelPreviewSurface(roomId, surfaceId, target);
     setOperationError(null);
   }, [entryKinds, roomId]);
+
+  const handleNavigatePreviewHistory = useCallback((
+    surfaceId: string,
+    direction: 'back' | 'forward',
+  ) => {
+    navigateCodeAgentRightPanelPreviewHistory(roomId, surfaceId, direction);
+    setOperationError(null);
+  }, [roomId]);
 
   const handleOpenInBrowserPreview = useCallback(() => {
     if (!relativePath) {
@@ -1719,6 +2330,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
 
   const openPreviewSurface = useCallback(() => {
     closeFileSurfaceAddMenu();
+    pendingBrowserAddressFocusRef.current = true;
     addCodeAgentRightPanelPreviewSurface(roomId);
   }, [closeFileSurfaceAddMenu, roomId]);
 
@@ -1928,7 +2540,10 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       ref={panelRef}
       className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[#faf9f5] dark:bg-[#1d1d1b]"
       data-file-browser-panel={`${roomId}:workspace`}
-      style={{ ['--workspace-file-explorer-width' as string]: `${explorerWidth}px` }}
+      style={{
+        ['--workspace-file-explorer-width' as string]: `${explorerWidth}px`,
+        ['--workspace-diff-changed-files-width' as string]: `${diffChangedFilesWidth}px`,
+      }}
     >
       {rightPanelSurfaces.length > 0 ? (
         <div
@@ -1983,7 +2598,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                     ) : surface.kind === 'files' ? (
                       <Files className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
                     ) : surface.kind === 'preview' ? (
-                      <Globe2 className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                      <CodeAgentBrowserTabIcon url={surface.url} />
                     ) : surface.kind === 'file' ? (
                       <CodeAgentPierreEntryIcon
                         pathValue={surface.relativePath}
@@ -2157,52 +2772,78 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
         />
       ) : activePreviewSurface ? (
         <CodeAgentPreviewSurface
+          roomId={roomId}
           surface={activePreviewSurface}
           assetUrlQuery={previewSurfaceAssetUrlQuery}
           assetPreviewRevision={activePreviewSurfaceRevision}
+          focusUrlNonce={browserAddressFocusRequests[activePreviewSurface.id]}
+          recentTargets={recentPreviewTargets}
           workspaceRoot={workspaceRoot}
           onNavigate={handleNavigatePreviewSurface}
+          onNavigateHistory={handleNavigatePreviewHistory}
           onRefreshWorkspacePreview={handleAssetPreviewChanged}
         />
       ) : activeDiffSurface ? (
-        <div className="flex min-h-0 flex-1 gap-2 overflow-hidden p-2">
+        <div
+          ref={diffSurfaceRef}
+          className="flex min-h-0 flex-1 gap-2 overflow-hidden p-2"
+          data-testid="code-agent-diff-surface-body"
+        >
           {changedFileEntries.length > 0 ? (
             <aside
-              className="flex min-h-0 w-[min(18rem,34%)] min-w-48 shrink-0 flex-col overflow-hidden rounded-md border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]"
+              className="relative flex min-h-0 min-w-[180px] shrink-0"
               data-testid="code-agent-diff-changed-files-sidebar"
+              style={{
+                width: 'var(--workspace-diff-changed-files-width)',
+                maxWidth: `calc(100% - ${DIFF_VIEWER_MIN_WIDTH}px)`,
+              }}
             >
-              <div className="flex min-h-0 shrink-0 items-center gap-2 border-b border-[#dedbd0] px-3 py-2 text-xs text-[#4d4c48] dark:border-[#30302e] dark:text-[#e8e6dc]">
-                <span className="min-w-0 flex-1 truncate font-semibold">
-                  {t('codeAgentChangedFilesCount', { count: changedFileEntries.length })}
-                </span>
-                {hasNonZeroChangedFileStat(changedFileSummary) ? (
-                  <CodeAgentDiffStatLabel
-                    additions={changedFileSummary.additions}
-                    deletions={changedFileSummary.deletions}
-                    className="shrink-0 text-[11px]"
-                    layout="inline"
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]">
+                <div className="flex min-h-0 shrink-0 items-center gap-2 border-b border-[#dedbd0] px-3 py-2 text-xs text-[#4d4c48] dark:border-[#30302e] dark:text-[#e8e6dc]">
+                  <span className="min-w-0 flex-1 truncate font-semibold">
+                    {t('codeAgentChangedFilesCount', { count: changedFileEntries.length })}
+                  </span>
+                  {hasNonZeroChangedFileStat(changedFileSummary) ? (
+                    <CodeAgentDiffStatLabel
+                      additions={changedFileSummary.additions}
+                      deletions={changedFileSummary.deletions}
+                      className="shrink-0 text-[11px]"
+                      layout="inline"
+                    />
+                  ) : null}
+                  {hasChangedFileDirectories ? (
+                    <button
+                      type="button"
+                      data-scroll-anchor-ignore
+                      className="shrink-0 rounded-md border border-[#dedbd0] px-2 py-1 text-[11px] font-semibold text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:border-[#30302e] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+                      onClick={() => setCodeAgentChangedFilesExpanded(roomId, changedFilesExpansionScopeKey, !allChangedDirectoriesExpanded)}
+                    >
+                      {allChangedDirectoriesExpanded ? t('codeAgentCollapseChangedFileTree') : t('codeAgentExpandChangedFileTree')}
+                    </button>
+                  ) : null}
+                </div>
+                <div className="min-h-0 flex-1 overflow-auto p-2">
+                  <CodeAgentChangedFilesTree
+                    files={changedFileEntries}
+                    allDirectoriesExpanded={allChangedDirectoriesExpanded}
+                    resolvedTheme={resolvedTheme}
+                    selectedPath={selectedDiffFilePath}
+                    onOpenDiffFile={handleOpenChangedDiffFile}
                   />
-                ) : null}
-                {hasChangedFileDirectories ? (
-                  <button
-                    type="button"
-                    data-scroll-anchor-ignore
-                    className="shrink-0 rounded-md border border-[#dedbd0] px-2 py-1 text-[11px] font-semibold text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:border-[#30302e] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
-                    onClick={() => setCodeAgentChangedFilesExpanded(roomId, changedFilesExpansionScopeKey, !allChangedDirectoriesExpanded)}
-                  >
-                    {allChangedDirectoriesExpanded ? t('codeAgentCollapseChangedFileTree') : t('codeAgentExpandChangedFileTree')}
-                  </button>
-                ) : null}
+                </div>
               </div>
-              <div className="min-h-0 flex-1 overflow-auto p-2">
-                <CodeAgentChangedFilesTree
-                  files={changedFileEntries}
-                  allDirectoriesExpanded={allChangedDirectoriesExpanded}
-                  resolvedTheme={resolvedTheme}
-                  selectedPath={selectedDiffFilePath}
-                  onOpenDiffFile={handleOpenChangedDiffFile}
+              <button
+                type="button"
+                aria-label={t('codeAgentResizeChangedFiles')}
+                className="group absolute inset-y-0 -right-4 z-40 w-8 cursor-col-resize touch-none focus-visible:outline-none"
+                onPointerDown={handleDiffChangedFilesResizeStart}
+              >
+                <span
+                  aria-hidden="true"
+                  data-code-agent-resize-highlight="diff-changed-files"
+                  className="pointer-events-none absolute inset-y-0 left-1/2 z-50 -ml-px w-0.5 -translate-x-1/2 rounded-full bg-transparent transition-colors duration-150 group-hover:bg-[#c96442] group-active:bg-[#c96442] group-focus-visible:bg-[#c96442]"
                 />
-              </div>
+              </button>
             </aside>
           ) : null}
           <CodeAgentWorkspaceDiffViewer
