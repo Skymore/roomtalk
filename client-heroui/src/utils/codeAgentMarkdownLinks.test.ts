@@ -78,6 +78,20 @@ describe('resolveCodeAgentMarkdownFileLinkTarget', () => {
     });
   });
 
+  it('formats display paths relative to a room-specific sandbox root', () => {
+    expect(
+      resolveCodeAgentMarkdownFileLinkMeta(
+        'file:///workspace/room-1/apps/web/src/session-logic.ts#L501',
+        '/workspace/room-1',
+      ),
+    ).toMatchObject({
+      displayPath: 'room-1/apps/web/src/session-logic.ts:501',
+      workspaceRelativePath: 'apps/web/src/session-logic.ts',
+      basename: 'session-logic.ts',
+      line: 501,
+    });
+  });
+
   it('does not create a preview path for files outside the workspace', () => {
     expect(resolveCodeAgentMarkdownFileLinkMeta('/tmp/report.ts', '/workspace')).toMatchObject({
       workspaceRelativePath: null,

@@ -10,6 +10,7 @@ import {
   closeOtherCodeAgentRightPanelSurfaces,
   closeCodeAgentRightPanel,
   migrateCodeAgentRightPanelState,
+  navigateCodeAgentRightPanelPreviewSurface,
   openCodeAgentRightPanel,
   openCodeAgentRightPanelFile,
   openCodeAgentRightPanelPreview,
@@ -111,6 +112,115 @@ describe('codeAgentRightPanelStore', () => {
         { id: 'browser:new', kind: 'preview', relativePath: null },
         { id: 'browser:new:2', kind: 'preview', relativePath: null },
       ],
+    });
+  });
+
+  it('navigates a browser surface to URL and workspace preview targets', () => {
+    addCodeAgentRightPanelPreviewSurface('room-1');
+    navigateCodeAgentRightPanelPreviewSurface('room-1', 'browser:new', {
+      kind: 'url',
+      url: ' https://example.com/report ',
+    });
+
+    expect(readCodeAgentRightPanelState('room-1')).toEqual({
+      isOpen: true,
+      activeSurfaceId: 'browser:url:https%3A%2F%2Fexample.com%2Freport',
+      surfaces: [
+        {
+          id: 'browser:url:https%3A%2F%2Fexample.com%2Freport',
+          kind: 'preview',
+          relativePath: null,
+          url: 'https://example.com/report',
+        },
+      ],
+    });
+
+    navigateCodeAgentRightPanelPreviewSurface(
+      'room-1',
+      'browser:url:https%3A%2F%2Fexample.com%2Freport',
+      {
+        kind: 'workspace-file',
+        relativePath: ' output/report.html ',
+      },
+    );
+
+    expect(readCodeAgentRightPanelState('room-1')).toEqual({
+      isOpen: true,
+      activeSurfaceId: 'browser:output/report.html',
+      surfaces: [
+        {
+          id: 'browser:output/report.html',
+          kind: 'preview',
+          relativePath: 'output/report.html',
+        },
+      ],
+    });
+  });
+
+  it('rejects unsafe browser preview URLs when navigating a surface', () => {
+    addCodeAgentRightPanelPreviewSurface('room-1');
+
+    navigateCodeAgentRightPanelPreviewSurface('room-1', 'browser:new', {
+      kind: 'url',
+      url: 'javascript:alert(1)',
+    });
+    navigateCodeAgentRightPanelPreviewSurface('room-1', 'browser:new', {
+      kind: 'url',
+      url: 'data:text/html,<h1>preview</h1>',
+    });
+
+    expect(readCodeAgentRightPanelState('room-1')).toEqual({
+      isOpen: true,
+      activeSurfaceId: 'browser:new',
+      surfaces: [{ id: 'browser:new', kind: 'preview', relativePath: null }],
+    });
+  });
+
+  it('drops unsafe saved browser preview URLs during migration', () => {
+    expect(
+      migrateCodeAgentRightPanelState({
+        byRoomId: {
+          'room-1': {
+            isOpen: true,
+            activeSurfaceId: 'browser:url:javascript%3Aalert(1)',
+            surfaces: [
+              {
+                id: 'browser:url:javascript%3Aalert(1)',
+                kind: 'preview',
+                relativePath: null,
+                url: 'javascript:alert(1)',
+              },
+              {
+                id: 'browser:url:https%3A%2F%2Fexample.com%2Freport',
+                kind: 'preview',
+                relativePath: null,
+                url: ' https://example.com/report ',
+              },
+              {
+                id: 'browser:url:data%3Atext%2Fhtml%2C%3Ch1%3Epreview%3C%2Fh1%3E',
+                kind: 'preview',
+                relativePath: null,
+                url: 'data:text/html,<h1>preview</h1>',
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      byRoomId: {
+        'room-1': {
+          isOpen: true,
+          activeSurfaceId: null,
+          surfaces: [
+            {
+              id: 'browser:url:https%3A%2F%2Fexample.com%2Freport',
+              kind: 'preview',
+              relativePath: null,
+              url: 'https://example.com/report',
+            },
+          ],
+        },
+      },
     });
   });
 

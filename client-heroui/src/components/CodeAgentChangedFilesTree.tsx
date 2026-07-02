@@ -11,6 +11,15 @@ import { CodeAgentPierreEntryIcon } from './CodeAgentPierreEntryIcon';
 
 const EMPTY_DIRECTORY_OVERRIDES: Record<string, boolean> = {};
 
+function ancestorPaths(pathValue: string): string[] {
+  const parts = pathValue.split('/').filter(Boolean);
+  const ancestors: string[] = [];
+  for (let index = 1; index < parts.length; index += 1) {
+    ancestors.push(parts.slice(0, index).join('/'));
+  }
+  return ancestors;
+}
+
 interface CodeAgentChangedFilesTreeProps {
   files: ReadonlyArray<CodeAgentChangedFile>;
   allDirectoriesExpanded: boolean;
@@ -31,6 +40,7 @@ export const CodeAgentChangedFilesTree: React.FC<CodeAgentChangedFilesTreeProps>
     () => collectChangedFileDirectoryPaths(treeNodes).join('\u0000'),
     [treeNodes],
   );
+  const rootRef = React.useRef<HTMLDivElement | null>(null);
   const expansionStateKey = `${allDirectoriesExpanded ? 'expanded' : 'collapsed'}\u0000${directoryPathsKey}`;
   const [directoryExpansionState, setDirectoryExpansionState] = React.useState<{
     key: string;
@@ -56,6 +66,36 @@ export const CodeAgentChangedFilesTree: React.FC<CodeAgentChangedFilesTreeProps>
       };
     });
   }, [allDirectoriesExpanded, expansionStateKey]);
+
+  React.useEffect(() => {
+    if (!selectedPath) {
+      return;
+    }
+
+    setDirectoryExpansionState((current) => {
+      const nextOverrides = current.key === expansionStateKey ? { ...current.overrides } : {};
+      let changed = current.key !== expansionStateKey;
+      for (const ancestor of ancestorPaths(selectedPath)) {
+        if (nextOverrides[ancestor] !== true) {
+          nextOverrides[ancestor] = true;
+          changed = true;
+        }
+      }
+      return changed ? { key: expansionStateKey, overrides: nextOverrides } : current;
+    });
+  }, [expansionStateKey, selectedPath]);
+
+  React.useEffect(() => {
+    if (!selectedPath || typeof window === 'undefined') {
+      return undefined;
+    }
+    const frameId = window.requestAnimationFrame(() => {
+      rootRef.current
+        ?.querySelector<HTMLElement>('[data-code-agent-changed-file-selected="true"]')
+        ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [directoryExpansionState, selectedPath]);
 
   const renderTreeNode = (node: CodeAgentChangedFileTreeNode, depth: number): React.ReactNode => {
     const leftPadding = 8 + depth * 14;
@@ -99,6 +139,8 @@ export const CodeAgentChangedFilesTree: React.FC<CodeAgentChangedFilesTreeProps>
       <button
         key={`file:${node.path}`}
         type="button"
+        aria-current={isSelected ? 'true' : undefined}
+        data-code-agent-changed-file-selected={isSelected ? 'true' : undefined}
         className={`group flex w-full min-w-0 items-center gap-1.5 rounded-lg py-1 pr-2 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] ${
           isSelected
             ? 'bg-[#fff2ec] text-[#9f462c] dark:bg-[#2a211d] dark:text-[#ffb197]'
@@ -127,7 +169,7 @@ export const CodeAgentChangedFilesTree: React.FC<CodeAgentChangedFilesTreeProps>
   };
 
   return (
-    <div className="space-y-0.5" data-testid="code-agent-changed-files-tree">
+    <div ref={rootRef} className="space-y-0.5" data-testid="code-agent-changed-files-tree">
       {treeNodes.map((node) => renderTreeNode(node, 0))}
     </div>
   );

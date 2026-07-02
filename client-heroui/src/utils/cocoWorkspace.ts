@@ -21,6 +21,12 @@ export interface CodeAgentWorkspaceDiffSummary {
   deletions: number;
 }
 
+export interface CodeAgentWorkspaceChangedFileStat {
+  path: string;
+  additions: number;
+  deletions: number;
+}
+
 export interface CodeAgentWorkspaceArtifact {
   slug: string;
   url: string;
@@ -61,6 +67,7 @@ export interface CodeAgentWorkspaceSnapshot {
   backend: 'coco';
   source: 'sandbox';
   generatedAt: string;
+  workspaceRoot?: string;
   status: {
     sandboxStatus: string;
     agentStatus: string;
@@ -71,6 +78,7 @@ export interface CodeAgentWorkspaceSnapshot {
   changes: {
     available: boolean;
     changedFiles: string[];
+    changedFileStats: CodeAgentWorkspaceChangedFileStat[];
     diffSummary: CodeAgentWorkspaceDiffSummary | null;
   };
   commands: CodeAgentWorkspaceCommand[];
@@ -127,6 +135,55 @@ const validateWorkspaceRefs = (value: unknown): CodeAgentWorkspaceRefs => {
       }];
     }),
     ...(typeof refsValue.headRef === 'string' && refsValue.headRef ? { headRef: refsValue.headRef } : {}),
+  };
+};
+
+const sanitizeChangedFileStats = (value: unknown): CodeAgentWorkspaceChangedFileStat[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((item): CodeAgentWorkspaceChangedFileStat[] => {
+    if (!item || typeof item !== 'object') {
+      return [];
+    }
+    const stat = item as Partial<CodeAgentWorkspaceChangedFileStat>;
+    if (
+      typeof stat.path !== 'string' ||
+      !stat.path.trim() ||
+      typeof stat.additions !== 'number' ||
+      typeof stat.deletions !== 'number' ||
+      !Number.isFinite(stat.additions) ||
+      !Number.isFinite(stat.deletions)
+    ) {
+      return [];
+    }
+    return [{
+      path: stat.path,
+      additions: stat.additions,
+      deletions: stat.deletions,
+    }];
+  });
+};
+
+const sanitizeWorkspaceChanges = (
+  value: Partial<CodeAgentWorkspaceSnapshot>['changes'],
+): CodeAgentWorkspaceSnapshot['changes'] => {
+  const changes = value as Partial<CodeAgentWorkspaceSnapshot['changes']> | undefined;
+  const diffSummary = changes?.diffSummary && typeof changes.diffSummary === 'object'
+    && typeof changes.diffSummary.files === 'number'
+    && typeof changes.diffSummary.additions === 'number'
+    && typeof changes.diffSummary.deletions === 'number'
+    ? changes.diffSummary
+    : null;
+
+  return {
+    available: typeof changes?.available === 'boolean' ? changes.available : false,
+    changedFiles: Array.isArray(changes?.changedFiles)
+      ? changes.changedFiles.filter((path): path is string => typeof path === 'string')
+      : [],
+    changedFileStats: sanitizeChangedFileStats(changes?.changedFileStats),
+    diffSummary,
   };
 };
 
@@ -226,8 +283,14 @@ export const loadCodeAgentWorkspaceSnapshot = async (
     throw new Error('Workspace snapshot response is invalid');
   }
 
+  const workspaceRoot = typeof snapshot.workspaceRoot === 'string' && snapshot.workspaceRoot.trim()
+    ? snapshot.workspaceRoot.trim()
+    : undefined;
+
   return {
     ...snapshot,
+    ...(workspaceRoot ? { workspaceRoot } : {}),
     artifacts: Array.isArray(snapshot.artifacts) ? snapshot.artifacts : [],
+    changes: sanitizeWorkspaceChanges(snapshot.changes),
   } as CodeAgentWorkspaceSnapshot;
 };

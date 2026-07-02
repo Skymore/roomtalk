@@ -40,6 +40,7 @@ interface MessageItemProps {
   onReply: (message: Message) => void;
   onUserAction?: (action: MessageUserAction, message: Message) => void;
   onOpenWorkspaceFile?: (path: string) => void;
+  workspaceRoot?: string | null;
 }
 
 export type MessageUserAction = 'setAdmin' | 'removeAdmin' | 'removeMember' | 'transferOwnership';
@@ -263,6 +264,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   onReply,
   onUserAction,
   onOpenWorkspaceFile,
+  workspaceRoot,
 }) => {
   const isAI = message.messageType === 'ai' || message.clientId === 'ai_assistant';
   const isMine = !isAI && message.clientId === clientId;
@@ -979,6 +981,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                                     key={segment.id}
                                     content={text}
                                     onOpenWorkspaceFile={onOpenWorkspaceFile}
+                                    workspaceRoot={workspaceRoot}
                                   />
                                 ) : null;
                               }
@@ -987,6 +990,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                                   key={segment.comment.id}
                                   comment={segment.comment}
                                   onOpenWorkspaceFile={onOpenWorkspaceFile}
+                                  workspaceRoot={workspaceRoot}
                                 />
                               );
                             })}
@@ -999,6 +1003,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                             content={message.content}
                             isStreaming={isStreaming}
                             onOpenWorkspaceFile={onOpenWorkspaceFile}
+                            workspaceRoot={workspaceRoot}
                           />
                         )}
                       </React.Suspense>

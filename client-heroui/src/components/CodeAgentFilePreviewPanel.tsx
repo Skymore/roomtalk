@@ -498,7 +498,9 @@ function ReadOnlyFileSurface({
 
 interface RenderedMarkdownSurfaceProps {
   roomId: string;
+  workspaceScopeKey?: string;
   file: CodeWorkspaceFile;
+  workspaceRoot?: string | null;
   onFileChange: React.Dispatch<React.SetStateAction<CodeWorkspaceFile | null>>;
   onSaveStateChange: (path: string, state: SaveState, error?: string | null) => void;
   onFileSavePendingChange?: (relativePath: string, pending: boolean) => void;
@@ -509,7 +511,9 @@ interface RenderedMarkdownSurfaceProps {
 
 function RenderedMarkdownSurface({
   roomId,
+  workspaceScopeKey = '',
   file,
+  workspaceRoot,
   onFileChange,
   onSaveStateChange,
   onFileSavePendingChange,
@@ -532,21 +536,21 @@ function RenderedMarkdownSurface({
 
   const setDraftFileContents = useCallback((contents: string) => {
     latestDraftContentsRef.current = contents;
-    setCodeAgentProjectFileQueryData(roomId, filePath, contents);
+    setCodeAgentProjectFileQueryData(roomId, filePath, contents, workspaceScopeKey);
     onFileChange((current) => updateWorkspaceFileContents(current, filePath, contents));
-  }, [filePath, onFileChange, roomId]);
+  }, [filePath, onFileChange, roomId, workspaceScopeKey]);
 
   const confirmFileContents = useCallback((contents: string): boolean => {
     if (latestDraftContentsRef.current !== contents) {
       return false;
     }
-    const confirmed = confirmCodeAgentProjectFileQueryData(roomId, filePath, contents, fileRef.current);
+    const confirmed = confirmCodeAgentProjectFileQueryData(roomId, filePath, contents, fileRef.current, workspaceScopeKey);
     if (!confirmed) {
       return false;
     }
     onFileChange((current) => updateWorkspaceFileContents(current, filePath, contents));
     return true;
-  }, [filePath, onFileChange, roomId]);
+  }, [filePath, onFileChange, roomId, workspaceScopeKey]);
 
   const handlePendingChange = useCallback((pending: boolean) => {
     onSaveStateChange(filePath, pending ? 'pending' : 'saved', null);
@@ -586,8 +590,9 @@ function RenderedMarkdownSurface({
             content={file.content}
             onOpenWorkspaceFile={onOpenWorkspaceFile}
             onOpenWorkspaceFileInBrowserPreview={onOpenWorkspaceFileInBrowserPreview}
+            workspaceRoot={workspaceRoot}
             onTaskListChange={({ markerOffset, checked }) => {
-              const currentContents = getOptimisticCodeAgentProjectFileQueryData(roomId, filePath)?.content
+              const currentContents = getOptimisticCodeAgentProjectFileQueryData(roomId, filePath, workspaceScopeKey)?.content
                 ?? fileRef.current.content;
               const nextContents = setMarkdownTaskChecked(currentContents, markerOffset, checked);
               if (nextContents === currentContents) return;
@@ -610,8 +615,10 @@ function RenderedMarkdownSurface({
 
 interface FilePreviewSurfaceProps {
   roomId: string;
+  workspaceScopeKey?: string;
   file: CodeWorkspaceFile | null;
   relativePath: string | null;
+  workspaceRoot?: string | null;
   fileError: string | null;
   filePending: boolean;
   onFileChange: React.Dispatch<React.SetStateAction<CodeWorkspaceFile | null>>;
@@ -639,8 +646,10 @@ interface FilePreviewSurfaceProps {
 
 function FilePreviewSurface({
   roomId,
+  workspaceScopeKey = '',
   file,
   relativePath,
+  workspaceRoot,
   fileError,
   filePending,
   onFileChange,
@@ -760,7 +769,9 @@ function FilePreviewSurface({
       ) : renderPreview && isMarkdownPreviewFile(file.path) ? (
         <RenderedMarkdownSurface
           roomId={roomId}
+          workspaceScopeKey={workspaceScopeKey}
           file={file}
+          workspaceRoot={workspaceRoot}
           onFileChange={onFileChange}
           onSaveStateChange={onSaveStateChange}
           onFileSavePendingChange={onFileSavePendingChange}
@@ -781,6 +792,7 @@ function FilePreviewSurface({
         <CodeAgentEditableFileSurface
           key={`${file.path}:${resolvedTheme}`}
           roomId={roomId}
+          workspaceScopeKey={workspaceScopeKey}
           file={file}
           resolvedTheme={resolvedTheme}
           wordWrap={wordWrap}
@@ -802,8 +814,10 @@ function FilePreviewSurface({
 
 interface CodeAgentFilePreviewPanelProps {
   roomId: string;
+  workspaceScopeKey?: string;
   projectName: string;
   relativePath: string | null;
+  workspaceRoot?: string | null;
   file: CodeWorkspaceFile | null;
   fileError: string | null;
   filePending: boolean;
@@ -844,8 +858,10 @@ interface CodeAgentFilePreviewPanelProps {
 
 export function CodeAgentFilePreviewPanel({
   roomId,
+  workspaceScopeKey = '',
   projectName,
   relativePath,
+  workspaceRoot,
   file,
   fileError,
   filePending,
@@ -921,8 +937,10 @@ export function CodeAgentFilePreviewPanel({
         <div className={`${relativePath ? 'flex' : 'hidden'} min-w-0 flex-1 flex-col overflow-hidden`}>
           <FilePreviewSurface
             roomId={roomId}
+            workspaceScopeKey={workspaceScopeKey}
             file={file}
             relativePath={relativePath}
+            workspaceRoot={workspaceRoot}
             fileError={fileError}
             filePending={filePending}
             onFileChange={onFileChange}

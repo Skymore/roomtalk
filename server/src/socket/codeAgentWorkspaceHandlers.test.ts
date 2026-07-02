@@ -66,6 +66,15 @@ const member = (roomId = 'room-1', clientId = 'client-1'): RoomMember => ({
   joinedAt: '2026-05-03T00:00:00.000Z',
 });
 
+const normalizeHarnessWorkspacePath = (value: string, workspaceRoot: string): string => {
+  const normalizedValue = value.trim().replace(/\\/g, '/');
+  const workspacePrefix = workspaceRoot.replace(/\/+$/, '');
+  const relativePath = normalizedValue.startsWith(`${workspacePrefix}/`)
+    ? normalizedValue.slice(workspacePrefix.length + 1)
+    : normalizedValue.replace(/^\/+/, '');
+  return relativePath.split('/').filter(Boolean).join('/');
+};
+
 const createHarness = (options: {
   clientId?: string | null;
   currentRoom?: Room;
@@ -77,6 +86,7 @@ const createHarness = (options: {
   workspaceChanges?: CocoWorkspaceChanges;
   workspaceDiffPatch?: string;
   workspaceFileContent?: string;
+  workspaceRoot?: string;
   cocoAccess?: ReturnType<typeof createCocoAccessControl>;
   codeWorkspaceAssetAccess?: CodeWorkspaceAssetAccess;
   publishedArtifacts?: any[];
@@ -96,6 +106,7 @@ const createHarness = (options: {
   const renameWorkspaceEntryCalls: Array<{ sandboxId: string; fromPath: string; toPath: string }> = [];
   const deleteWorkspaceEntryCalls: Array<{ sandboxId: string; path: string }> = [];
   const listSitesForRoomCalls: Array<{ roomId: string; requestBaseUrl?: string }> = [];
+  const workspaceRoot = options.workspaceRoot || '/workspace';
   const store = {
     getClientId: async () => options.clientId === undefined ? 'client-1' : options.clientId,
     getRoomById: async (roomId: string) => roomId === currentRoom.id ? currentRoom : null,
@@ -128,7 +139,7 @@ const createHarness = (options: {
         provider: 'e2b',
         roomId: currentRoom.id,
         creatorId: currentRoom.creatorId,
-        workspace: '/workspace',
+        workspace: workspaceRoot,
         createdAt: '2026-05-03T00:00:00.000Z',
       }),
       connect: async (sandboxId: string) => ({
@@ -136,7 +147,7 @@ const createHarness = (options: {
         provider: 'e2b',
         roomId: currentRoom.id,
         creatorId: currentRoom.creatorId,
-        workspace: '/workspace',
+        workspace: workspaceRoot,
         createdAt: '2026-05-03T00:00:00.000Z',
       }),
       startRunner: async () => ({
@@ -148,6 +159,7 @@ const createHarness = (options: {
         return options.workspaceChanges || {
           available: false,
           changedFiles: [],
+          changedFileStats: [],
           diffSummary: null,
         };
       },
@@ -204,7 +216,7 @@ const createHarness = (options: {
         });
         const content = options.workspaceFileContent ?? 'hello';
         return {
-          path,
+          path: normalizeHarnessWorkspacePath(path, workspaceRoot),
           content,
           byteSize: Buffer.byteLength(content),
           truncated: false,
@@ -267,9 +279,14 @@ const createHarness = (options: {
 describe('code-agent workspace socket handlers', () => {
   it('returns Coco workspace snapshots through the registered socket session', async () => {
     const { socket, getWorkspaceChangesCalls, listWorkspaceEntriesCalls, listSitesForRoomCalls } = createHarness({
+      workspaceRoot: '/workspace/room-1',
       workspaceChanges: {
         available: true,
         changedFiles: ['src/App.tsx', 'src/index.css'],
+        changedFileStats: [
+          { path: 'src/App.tsx', additions: 10, deletions: 2 },
+          { path: 'src/index.css', additions: 2, deletions: 1 },
+        ],
         diffSummary: { files: 2, additions: 12, deletions: 3 },
       },
       publishedArtifacts: [
@@ -308,11 +325,16 @@ describe('code-agent workspace socket handlers', () => {
     assert.equal(response.success, true);
     assert.equal(response.snapshot.roomId, 'room-1');
     assert.equal(response.snapshot.backend, 'coco');
+    assert.equal(response.snapshot.workspaceRoot, '/workspace/room-1');
     assert.deepEqual(response.snapshot.status, { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: true });
     assert.deepEqual(response.snapshot.summary, { toolCalls: 1, toolResults: 1, toolErrors: 0, lastToolName: 'Read' });
     assert.deepEqual(response.snapshot.changes, {
       available: true,
       changedFiles: ['src/App.tsx', 'src/index.css'],
+      changedFileStats: [
+        { path: 'src/App.tsx', additions: 10, deletions: 2 },
+        { path: 'src/index.css', additions: 2, deletions: 1 },
+      ],
       diffSummary: { files: 2, additions: 12, deletions: 3 },
     });
     assert.deepEqual(response.snapshot.artifacts, [
@@ -508,7 +530,7 @@ describe('code-agent workspace socket handlers', () => {
     }]);
   });
 
-  it('creates T3-style workspace asset URLs through the socket control plane', async () => {
+  it('creates workspace asset URLs through the socket control plane', async () => {
     const assetAccess = new CodeWorkspaceAssetAccess({
       tokenSecret: 'workspace-asset-secret',
       nowMs: () => Date.parse('2026-06-30T12:00:00.000Z'),
@@ -527,6 +549,35 @@ describe('code-agent workspace socket handlers', () => {
     assert.equal(response.asset.expiresAt, '2026-06-30T13:00:00.000Z');
     assert.match(response.asset.relativeUrl, /^\/api\/coco\/workspace-assets\/[^/]+\/report\.html$/);
     assert.deepEqual(readWorkspaceFileCalls, [{ sandboxId: 'sandbox-1', path: 'output/report.html', maxBytes: 1 }]);
+
+    const token = response.asset.relativeUrl.split('/')[4];
+    assert.deepEqual(assetAccess.resolveAsset(token, 'assets/app.js'), {
+      roomId: 'room-1',
+      sandboxId: 'sandbox-1',
+      path: 'output/assets/app.js',
+      mimeType: 'text/javascript; charset=utf-8',
+    });
+  });
+
+  it('normalizes absolute workspace paths before signing asset URLs', async () => {
+    const assetAccess = new CodeWorkspaceAssetAccess({
+      tokenSecret: 'workspace-asset-secret',
+      nowMs: () => Date.parse('2026-06-30T12:00:00.000Z'),
+      createId: () => 'asset-token-id',
+    });
+    const { socket, readWorkspaceFileCalls } = createHarness({
+      codeWorkspaceAssetAccess: assetAccess,
+      workspaceRoot: '/workspace',
+    });
+
+    const response = await socket.invoke<any>('create_code_workspace_asset_url', {
+      roomId: 'room-1',
+      path: '/workspace/output/report.html',
+    });
+
+    assert.equal(response.success, true);
+    assert.match(response.asset.relativeUrl, /^\/api\/coco\/workspace-assets\/[^/]+\/report\.html$/);
+    assert.deepEqual(readWorkspaceFileCalls, [{ sandboxId: 'sandbox-1', path: '/workspace/output/report.html', maxBytes: 1 }]);
 
     const token = response.asset.relativeUrl.split('/')[4];
     assert.deepEqual(assetAccess.resolveAsset(token, 'assets/app.js'), {

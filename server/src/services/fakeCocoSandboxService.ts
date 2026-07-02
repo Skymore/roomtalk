@@ -114,6 +114,7 @@ export class FakeCocoSandboxService implements CocoSandboxService {
     return this.workspaceChangesBySandboxId.get(handle.id) || {
       available: false,
       changedFiles: [],
+      changedFileStats: [],
       diffSummary: null,
     };
   }

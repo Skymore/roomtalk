@@ -29,6 +29,10 @@ import {
   useCodeAgentDiffPanelSelection,
 } from '../utils/codeAgentDiffPanelStore';
 import { summarizeCodeAgentChangedFileStats } from '../utils/codeAgentChangedFileTree';
+import {
+  setCodeAgentChangedFilesExpanded,
+  useCodeAgentChangedFilesExpanded,
+} from '../utils/codeAgentChangedFilesExpansionStore';
 
 interface CodeAgentWorkspacePanelProps {
   room: Room;
@@ -47,6 +51,7 @@ interface CodeAgentWorkspacePanelProps {
 
 const workspaceSurfaceClassName = 'rounded-xl border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]';
 const EMPTY_CHANGED_FILES: string[] = [];
+const EMPTY_CHANGED_FILE_STATS: CodeAgentWorkspaceSnapshot['changes']['changedFileStats'] = [];
 const EMPTY_DIFF_FILE_SUMMARIES: readonly CodeAgentWorkspaceDiffFileSummary[] = [];
 
 type ScopedDiffFileSummaries = {
@@ -113,7 +118,6 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   const resolvedTheme = useResolvedTheme();
   const [isCollapsed, setIsCollapsed] = React.useState(false);
   const [selectedWorkspaceTab, setSelectedWorkspaceTab] = React.useState('overview');
-  const [allChangedDirectoriesExpanded, setAllChangedDirectoriesExpanded] = React.useState(true);
   const diffPanelSelection = useCodeAgentDiffPanelSelection(room.id);
   const [diffFileSummaries, setDiffFileSummaries] = React.useState<ScopedDiffFileSummaries>(() => ({
     scopeKey: '',
@@ -141,10 +145,13 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   const publishedArtifacts = workspaceSnapshot?.artifacts || [];
   const workspaceChanges = workspaceSnapshot?.changes;
   const changedFiles = workspaceChanges?.changedFiles ?? EMPTY_CHANGED_FILES;
+  const changedFileStats = workspaceChanges?.changedFileStats ?? EMPTY_CHANGED_FILE_STATS;
   const diffRefreshKey = `${room.sandboxStatus || 'none'}:${room.sandboxUpdatedAt || ''}:${workspaceSnapshot?.generatedAt || ''}`;
   const diffSelectionScopeKey = diffPanelSelection.kind === 'branch'
     ? `branch:${diffPanelSelection.baseRef ?? 'auto'}`
     : 'unstaged';
+  const changedFilesExpansionScopeKey = `${room.sandboxStatus || 'none'}:${room.sandboxUpdatedAt || ''}:${diffSelectionScopeKey}`;
+  const allChangedDirectoriesExpanded = useCodeAgentChangedFilesExpanded(room.id, changedFilesExpansionScopeKey);
   const diffSummaryScopeKey = `${diffRefreshKey}:${diffSelectionScopeKey}`;
   const hasActiveDiffFileSummaries = diffFileSummaries.scopeKey === diffSummaryScopeKey;
   const activeDiffFileSummaries = hasActiveDiffFileSummaries
@@ -159,8 +166,22 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
     [activeDiffFileSummaries],
   );
   const snapshotChangedFileEntries = React.useMemo(
-    () => changedFiles.map((path) => ({ path: normalizeChangedFilePath(path) })).filter((entry) => entry.path.length > 0),
-    [changedFiles],
+    () => {
+      const statEntries = changedFileStats.map((stat) => ({
+        path: normalizeChangedFilePath(stat.path),
+        additions: stat.additions,
+        deletions: stat.deletions,
+      })).filter((entry) => entry.path.length > 0);
+      const statPathSet = new Set(statEntries.map((entry) => entry.path));
+      const fallbackEntries = changedFiles
+        .map((path) => ({ path: normalizeChangedFilePath(path) }))
+        .filter((entry) => entry.path.length > 0 && !statPathSet.has(entry.path));
+      if (statEntries.length > 0) {
+        return [...statEntries, ...fallbackEntries];
+      }
+      return fallbackEntries;
+    },
+    [changedFileStats, changedFiles],
   );
   const changedFileEntries = hasActiveDiffFileSummaries
     ? liveChangedFileEntries
@@ -474,7 +495,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                           type="button"
                           data-scroll-anchor-ignore
                           className="rounded-md border border-[#dedbd0] px-2 py-1 text-[11px] font-semibold text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:border-[#30302e] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
-                          onClick={() => setAllChangedDirectoriesExpanded((expanded) => !expanded)}
+                          onClick={() => setCodeAgentChangedFilesExpanded(room.id, changedFilesExpansionScopeKey, !allChangedDirectoriesExpanded)}
                         >
                           {allChangedDirectoriesExpanded ? t('codeAgentCollapseChangedFileTree') : t('codeAgentExpandChangedFileTree')}
                         </button>

@@ -7,6 +7,7 @@ import {
   resetCodeAgentDiffPanelStoreForTests,
   selectCodeAgentDiffScope,
 } from '../utils/codeAgentDiffPanelStore';
+import { resetCodeAgentChangedFilesExpansionStoreForTests } from '../utils/codeAgentChangedFilesExpansionStore';
 import { CodeAgentWorkspacePanel } from './CodeAgentWorkspacePanel';
 
 vi.mock('react-i18next', () => ({
@@ -71,6 +72,7 @@ describe('CodeAgentWorkspacePanel', () => {
   afterEach(() => {
     cleanup();
     localStorage.clear();
+    resetCodeAgentChangedFilesExpansionStoreForTests();
     resetCodeAgentDiffPanelStoreForTests();
   });
 
@@ -247,7 +249,7 @@ describe('CodeAgentWorkspacePanel', () => {
               updatedAt: '2026-06-30T12:00:00.000Z',
             },
           ],
-          changes: { available: false, changedFiles: [], diffSummary: null },
+          changes: { available: false, changedFiles: [], changedFileStats: [], diffSummary: null },
           commands: [
             {
               id: 'tool-1',
@@ -302,6 +304,7 @@ describe('CodeAgentWorkspacePanel', () => {
           changes: {
             available: true,
             changedFiles: ['src/App.tsx'],
+            changedFileStats: [{ path: 'src/App.tsx', additions: 2, deletions: 1 }],
             diffSummary: { files: 1, additions: 2, deletions: 1 },
           },
           commands: [],
@@ -311,8 +314,8 @@ describe('CodeAgentWorkspacePanel', () => {
 
     fireEvent.click(screen.getByText('codeAgentChanges'));
 
-    expect(screen.getByText('+2')).toBeTruthy();
-    expect(screen.getByText('-1')).toBeTruthy();
+    expect(screen.getAllByText('+2').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('-1').length).toBeGreaterThan(0);
     expect(screen.getByText('src')).toBeTruthy();
     expect(screen.getByText('App.tsx')).toBeTruthy();
     expect(screen.getByText('codeAgentCollapseChangedFileTree').hasAttribute('data-scroll-anchor-ignore')).toBe(true);
@@ -332,6 +335,54 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(diffViewer.dataset.selectedFileRequestId).toBe('2');
   });
 
+  it('persists changed-file tree collapse state for the same workspace scope', () => {
+    const workspaceSnapshot = {
+      roomId: 'room-1',
+      backend: 'coco' as const,
+      source: 'sandbox' as const,
+      generatedAt: '2026-06-30T12:00:00.000Z',
+      status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: true },
+      summary: { toolCalls: 0, toolResults: 0, toolErrors: 0 },
+      artifacts: [],
+      changes: {
+        available: true,
+        changedFiles: ['src/App.tsx'],
+        changedFileStats: [{ path: 'src/App.tsx', additions: 2, deletions: 1 }],
+        diffSummary: { files: 1, additions: 2, deletions: 1 },
+      },
+      commands: [],
+    };
+
+    const { unmount } = render(
+      <CodeAgentWorkspacePanel
+        room={room}
+        messages={[]}
+        mode="acceptEdits"
+        sessionCostUsd={0}
+        workspaceSnapshot={workspaceSnapshot}
+      />
+    );
+    fireEvent.click(screen.getByText('codeAgentChanges'));
+    fireEvent.click(screen.getByText('codeAgentCollapseChangedFileTree'));
+    expect(screen.getByText('codeAgentExpandChangedFileTree')).toBeTruthy();
+
+    unmount();
+
+    render(
+      <CodeAgentWorkspacePanel
+        room={room}
+        messages={[]}
+        mode="acceptEdits"
+        sessionCostUsd={0}
+        workspaceSnapshot={workspaceSnapshot}
+      />
+    );
+    fireEvent.click(screen.getByText('codeAgentChanges'));
+
+    expect(screen.getByText('codeAgentExpandChangedFileTree')).toBeTruthy();
+    expect(screen.queryByText('App.tsx')).toBeNull();
+  });
+
   it('loads live diff summaries even when the old workspace snapshot marks changes unavailable', () => {
     render(
       <CodeAgentWorkspacePanel
@@ -347,7 +398,7 @@ describe('CodeAgentWorkspacePanel', () => {
           status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: true },
           summary: { toolCalls: 0, toolResults: 0, toolErrors: 0 },
           artifacts: [],
-          changes: { available: false, changedFiles: [], diffSummary: null },
+          changes: { available: false, changedFiles: [], changedFileStats: [], diffSummary: null },
           commands: [],
         }}
       />
@@ -389,6 +440,7 @@ describe('CodeAgentWorkspacePanel', () => {
           changes: {
             available: true,
             changedFiles: ['src/App.tsx'],
+            changedFileStats: [],
             diffSummary: null,
           },
           commands: [],
@@ -424,6 +476,7 @@ describe('CodeAgentWorkspacePanel', () => {
           changes: {
             available: true,
             changedFiles: ['src/App.tsx'],
+            changedFileStats: [],
             diffSummary: null,
           },
           commands: [],

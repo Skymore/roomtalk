@@ -41,7 +41,7 @@ describe('MarkdownContent math rendering', () => {
     expect(container.textContent).toContain('<img src=x onerror=alert(1)>');
   }, 15_000);
 
-  it('reports T3-style markdown task marker offsets when checkboxes change', () => {
+  it('reports markdown task marker offsets when checkboxes change', () => {
     const onTaskListChange = vi.fn();
     const { getAllByRole } = render(
       <MarkdownContent
@@ -59,7 +59,7 @@ describe('MarkdownContent math rendering', () => {
     expect(onTaskListChange).toHaveBeenNthCalledWith(2, { markerOffset: 14, checked: false });
   });
 
-  it('renders T3-style workspace file links as file chips and opens them in the right file viewer', () => {
+  it('renders workspace file links as file chips and opens them in the right file viewer', () => {
     const onOpenWorkspaceFile = vi.fn();
     const { getAllByTestId, getByText } = render(
       <MarkdownContent
@@ -79,11 +79,28 @@ describe('MarkdownContent math rendering', () => {
     fireEvent.click(getByText('App.tsx · L42'));
     fireEvent.click(getByText('package.json · L8'));
 
-    expect(onOpenWorkspaceFile).toHaveBeenNthCalledWith(1, '/workspace/src/App.tsx:42');
-    expect(onOpenWorkspaceFile).toHaveBeenNthCalledWith(2, '/workspace/package.json:8');
+    expect(onOpenWorkspaceFile).toHaveBeenNthCalledWith(1, 'src/App.tsx:42');
+    expect(onOpenWorkspaceFile).toHaveBeenNthCalledWith(2, 'package.json:8');
   });
 
-  it('opens T3-style browser preview file links through the preview callback first', () => {
+  it('resolves workspace file links against a custom sandbox root', () => {
+    const onOpenWorkspaceFile = vi.fn();
+    const { getByText } = render(
+      <MarkdownContent
+        content={'Open [App](/workspace/room-1/src/App.tsx#L7).'}
+        onOpenWorkspaceFile={onOpenWorkspaceFile}
+        workspaceRoot="/workspace/room-1"
+      />,
+    );
+
+    expect(getByText('App.tsx · L7').closest('a')?.getAttribute('title')).toBe('room-1/src/App.tsx:7');
+
+    fireEvent.click(getByText('App.tsx · L7'));
+
+    expect(onOpenWorkspaceFile).toHaveBeenCalledWith('src/App.tsx:7');
+  });
+
+  it('opens browser preview file links through the preview callback first', () => {
     const onOpenWorkspaceFile = vi.fn();
     const onOpenWorkspaceFileInBrowserPreview = vi.fn();
     const { getByText } = render(
@@ -97,12 +114,12 @@ describe('MarkdownContent math rendering', () => {
     fireEvent.click(getByText('report.html · L4'));
     fireEvent.click(getByText('Guide.md · L2'));
 
-    expect(onOpenWorkspaceFileInBrowserPreview).toHaveBeenCalledWith('/workspace/output/report.html');
+    expect(onOpenWorkspaceFileInBrowserPreview).toHaveBeenCalledWith('output/report.html');
     expect(onOpenWorkspaceFile).toHaveBeenCalledTimes(1);
-    expect(onOpenWorkspaceFile).toHaveBeenCalledWith('/workspace/docs/Guide.md:2');
+    expect(onOpenWorkspaceFile).toHaveBeenCalledWith('docs/Guide.md:2');
   });
 
-  it('renders T3-style code fence titles with Pierre file icons', () => {
+  it('renders code fence titles with Pierre file icons', () => {
     const { getByText } = render(
       <MarkdownContent content={'```tsx title="src/App.tsx"\nexport const App = () => null;\n```'} />,
     );
@@ -112,7 +129,7 @@ describe('MarkdownContent math rendering', () => {
     expect(headerTitle?.querySelector('[data-pierre-icon]')).toBeTruthy();
   });
 
-  it('normalizes T3-style bare code fence filenames before rendering code headers', () => {
+  it('normalizes bare code fence filenames before rendering code headers', () => {
     const { getByText } = render(
       <MarkdownContent content={'```ts src/lib/client.ts\nexport const client = true;\n```'} />,
     );
@@ -120,7 +137,7 @@ describe('MarkdownContent math rendering', () => {
     expect(getByText('src/lib/client.ts')).toBeTruthy();
   });
 
-  it('normalizes T3-style unquoted filename attributes before rendering code headers', () => {
+  it('normalizes unquoted filename attributes before rendering code headers', () => {
     const { getByText } = render(
       <MarkdownContent content={'```tsx filename=src/App.tsx\nexport const App = () => null;\n```'} />,
     );
@@ -128,7 +145,7 @@ describe('MarkdownContent math rendering', () => {
     expect(getByText('src/App.tsx')).toBeTruthy();
   });
 
-  it('renders T3-style language icons for code fences without titles', () => {
+  it('renders language icons for code fences without titles', () => {
     const { getByLabelText } = render(
       <MarkdownContent content={'```tsx\nexport const App = () => null;\n```'} />,
     );
@@ -137,7 +154,7 @@ describe('MarkdownContent math rendering', () => {
     expect(languageIcon.querySelector('[data-pierre-icon]')).toBeTruthy();
   });
 
-  it('adds T3 parent suffixes when markdown file chips have duplicate basenames', () => {
+  it('adds parent suffixes when markdown file chips have duplicate basenames', () => {
     const onOpenWorkspaceFile = vi.fn();
     const { getAllByTestId, getByText } = render(
       <MarkdownContent

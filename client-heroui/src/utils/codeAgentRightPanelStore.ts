@@ -1,11 +1,18 @@
 import { useSyncExternalStore } from 'react';
 
 export type CodeAgentRightPanelSurface =
-  | { id: 'browser:new' | `browser:new:${number}`; kind: 'preview'; relativePath: null }
+  | { id: 'browser:new' | `browser:new:${number}`; kind: 'preview'; relativePath: null; url?: null }
   | {
     id: `browser:${string}`;
     kind: 'preview';
     relativePath: string;
+    url?: null;
+  }
+  | {
+    id: `browser:url:${string}`;
+    kind: 'preview';
+    relativePath: null;
+    url: string;
   }
   | { id: 'diff'; kind: 'diff' }
   | { id: 'files'; kind: 'files' }
@@ -22,6 +29,8 @@ export interface CodeAgentRightPanelState {
   activeSurfaceId: string | null;
   surfaces: CodeAgentRightPanelSurface[];
 }
+
+type CodeAgentPreviewSurface = Extract<CodeAgentRightPanelSurface, { kind: 'preview' }>;
 
 export interface CodeAgentRightPanelStoreState {
   byRoomId: Record<string, CodeAgentRightPanelState>;
@@ -50,6 +59,19 @@ function normalizeWorkspacePath(path: string): string {
   return path.trim().replace(/\\/g, '/').split('/').filter(Boolean).join('/');
 }
 
+function normalizeBrowserHttpUrl(input: string | null | undefined): string | null {
+  const trimmed = input?.trim() ?? '';
+  if (!/^https?:\/\//i.test(trimmed)) {
+    return null;
+  }
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 function normalizeRevealLine(line: number | null | undefined): number | null {
   if (line === undefined || line === null || !Number.isFinite(line)) {
     return null;
@@ -73,10 +95,23 @@ function fileSurface(relativePath: string, revealLine: number | null, revealRequ
   };
 }
 
-function browserSurface(relativePath: string | null): CodeAgentRightPanelSurface {
+function browserSurface(relativePath: string | null): CodeAgentPreviewSurface {
   return relativePath
     ? { id: `browser:${relativePath}`, kind: 'preview', relativePath }
     : { id: 'browser:new', kind: 'preview', relativePath: null };
+}
+
+function browserUrlSurface(url: string): CodeAgentPreviewSurface | null {
+  const normalizedUrl = normalizeBrowserHttpUrl(url);
+  if (!normalizedUrl) {
+    return null;
+  }
+  return {
+    id: `browser:url:${encodeURIComponent(normalizedUrl)}`,
+    kind: 'preview',
+    relativePath: null,
+    url: normalizedUrl,
+  };
 }
 
 function nextBlankBrowserSurface(surfaces: readonly CodeAgentRightPanelSurface[]): CodeAgentRightPanelSurface {
@@ -120,7 +155,13 @@ function coerceSurface(value: unknown): CodeAgentRightPanelSurface | null {
         ? (value as { relativePath: string }).relativePath
         : '',
     );
+    const rawUrl = typeof (value as { url?: unknown }).url === 'string'
+      ? (value as { url: string }).url
+      : '';
     const rawId = typeof surface.id === 'string' ? surface.id : '';
+    if (!relativePath && rawUrl) {
+      return browserUrlSurface(rawUrl);
+    }
     if (!relativePath && /^browser:new(?::\d+)?$/.test(rawId)) {
       return {
         id: rawId as 'browser:new' | `browser:new:${number}`,
@@ -303,6 +344,61 @@ export function openCodeAgentRightPanel(roomId: string, kind: 'diff' | 'files') 
         activeSurfaceId: surface.id,
       };
     }),
+  }));
+}
+
+function replacePreviewSurface(
+  current: CodeAgentRightPanelState,
+  surfaceId: string,
+  nextSurface: CodeAgentPreviewSurface,
+): CodeAgentRightPanelState {
+  const sourceIndex = current.surfaces.findIndex((surface) => surface.id === surfaceId);
+  const duplicateIndex = current.surfaces.findIndex((surface) => surface.id === nextSurface.id);
+  if (duplicateIndex >= 0 && duplicateIndex !== sourceIndex) {
+    return {
+      isOpen: true,
+      activeSurfaceId: nextSurface.id,
+      surfaces: current.surfaces.filter((surface) => surface.id !== surfaceId),
+    };
+  }
+  if (sourceIndex >= 0) {
+    return {
+      isOpen: true,
+      activeSurfaceId: nextSurface.id,
+      surfaces: current.surfaces.map((surface, index) => (index === sourceIndex ? nextSurface : surface)),
+    };
+  }
+  return {
+    isOpen: true,
+    activeSurfaceId: nextSurface.id,
+    surfaces: current.surfaces.some((surface) => surface.id === nextSurface.id)
+      ? current.surfaces
+      : [...current.surfaces, nextSurface],
+  };
+}
+
+export function navigateCodeAgentRightPanelPreviewSurface(
+  roomId: string,
+  surfaceId: string,
+  target: { kind: 'workspace-file'; relativePath: string } | { kind: 'url'; url: string },
+) {
+  const roomKey = normalizeRoomId(roomId);
+  if (!roomKey) {
+    return;
+  }
+  const nextSurface = target.kind === 'workspace-file'
+    ? browserSurface(normalizeWorkspacePath(target.relativePath))
+    : browserUrlSurface(target.url);
+  if (!nextSurface) {
+    return;
+  }
+  if (target.kind === 'workspace-file' && !nextSurface.relativePath) {
+    return;
+  }
+  updateStore((state) => ({
+    byRoomId: updateRoom(state.byRoomId, roomKey, (current) => (
+      replacePreviewSurface(current, surfaceId, nextSurface)
+    )),
   }));
 }
 

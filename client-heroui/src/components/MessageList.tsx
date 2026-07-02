@@ -48,6 +48,8 @@ interface MessageListProps {
   currentRoom?: Room;
   codeAgentMode?: CodeAgentMode;
   onOpenWorkspaceFile?: (path: string) => void;
+  onWorkspaceRootChange?: (workspaceRoot: string | null) => void;
+  onWorkspaceChangesChange?: (changes: CodeAgentWorkspaceSnapshot['changes'] | null) => void;
   reviewComments?: readonly ReviewCommentContext[];
   onAddReviewComment?: (comment: ReviewCommentContext) => void;
   onRemoveReviewComment?: (commentId: string) => void;
@@ -71,6 +73,8 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   currentRoom,
   codeAgentMode = 'plan',
   onOpenWorkspaceFile,
+  onWorkspaceRootChange,
+  onWorkspaceChangesChange,
   reviewComments = [],
   onAddReviewComment,
   onRemoveReviewComment,
@@ -115,6 +119,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const codeAgentRoom = currentRoom || (presentation === 'code-agent' ? room : undefined);
   const currentRoomId = codeAgentRoom?.id;
   const workspaceRefreshKey = `${currentRoomId || ''}:${codeAgentRoom?.sandboxStatus || 'none'}:${codeAgentRoom?.sandboxUpdatedAt || ''}`;
+  const workspaceRoot = workspaceSnapshot?.workspaceRoot ?? null;
   const canManageSenderActions = Boolean(roomPermissions?.canManageMembers || roomPermissions?.canManageAdmins || roomPermissions?.canTransferOwnership);
   const aiRequestRoomKind: AIRequestRoomKind = presentation === 'code-agent' ? 'coco' : 'chat';
   const getAIRequestSettingsForRoom = useCallback(() => (
@@ -264,6 +269,8 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       const snapshot = await loadCodeAgentWorkspaceSnapshot(currentRoomId, { signal: controller.signal });
       if (!controller.signal.aborted) {
         setWorkspaceSnapshot(snapshot);
+        onWorkspaceRootChange?.(snapshot.workspaceRoot ?? null);
+        onWorkspaceChangesChange?.(snapshot.changes);
       }
     } catch (error) {
       if (!controller.signal.aborted) {
@@ -276,12 +283,14 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
         setIsWorkspaceRefreshing(false);
       }
     }
-  }, [currentRoomId, presentation]);
+  }, [currentRoomId, onWorkspaceChangesChange, onWorkspaceRootChange, presentation]);
 
   useEffect(() => {
     if (presentation !== 'code-agent' || !currentRoomId) {
       setWorkspaceSnapshot(null);
       setWorkspaceRefreshError(null);
+      onWorkspaceRootChange?.(null);
+      onWorkspaceChangesChange?.(null);
       return;
     }
 
@@ -290,7 +299,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     return () => {
       workspaceFetchAbortRef.current?.abort();
     };
-  }, [currentRoomId, presentation, refreshWorkspaceSnapshot, workspaceRefreshKey]);
+  }, [currentRoomId, onWorkspaceChangesChange, onWorkspaceRootChange, presentation, refreshWorkspaceSnapshot, workspaceRefreshKey]);
 
   // Warm the lazily-loaded markdown chunk on mount so the first message renders
   // as markdown immediately instead of flashing plain text. The component
@@ -716,6 +725,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                       onReply={onReply}
                       onUserAction={handleUserAction}
                       onOpenWorkspaceFile={onOpenWorkspaceFile}
+                      workspaceRoot={workspaceRoot}
                     />
                   );
                 })}

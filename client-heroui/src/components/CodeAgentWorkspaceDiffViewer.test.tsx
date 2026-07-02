@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React, { type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CodeAgentWorkspaceDiffViewer } from './CodeAgentWorkspaceDiffViewer';
@@ -135,6 +135,16 @@ vi.mock('@pierre/diffs/react', () => ({
     );
   }),
 }));
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, resolve, reject };
+}
 
 describe('CodeAgentWorkspaceDiffViewer', () => {
   beforeEach(() => {
@@ -663,7 +673,7 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     });
 
     fireEvent.change(screen.getByLabelText('codeAgentDiffBaseRefSearch'), { target: { value: 'main' } });
-    fireEvent.click(screen.getByText('main'));
+    fireEvent.click(await screen.findByText('main'));
 
     await waitFor(() => {
       expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenCalledTimes(2);
@@ -694,6 +704,63 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
       filePath: null,
       revealRequestId: 0,
     });
+  });
+
+  it('scopes branch base refs to the active workspace refresh', async () => {
+    const nextRefs = createDeferred<{
+      available: boolean;
+      headRef: string;
+      refs: Array<{ name: string; kind: 'local' | 'remote'; remoteName?: string }>;
+    }>();
+    loadCodeAgentWorkspaceRefsMock
+      .mockResolvedValueOnce({
+        available: true,
+        headRef: 'feature/old',
+        refs: [
+          { name: 'old-main', kind: 'local' },
+          { name: 'origin/old-main', kind: 'remote', remoteName: 'origin' },
+        ],
+      })
+      .mockReturnValueOnce(nextRefs.promise);
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          { name: 'src/App.tsx', hunks: [], additionLines: [], deletionLines: [], type: 'modify' },
+        ],
+      },
+    ]);
+
+    const { rerender } = render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" />);
+
+    expect(await screen.findByText('old-main')).toBeTruthy();
+
+    rerender(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-2" />);
+
+    await waitFor(() => {
+      expect(loadCodeAgentWorkspaceRefsMock).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.queryByText('old-main')).toBeNull();
+    expect(screen.getByText('codeAgentDiffBaseRefLoading')).toBeTruthy();
+
+    await act(async () => {
+      nextRefs.resolve({
+        available: true,
+        headRef: 'feature/new',
+        refs: [
+          { name: 'new-main', kind: 'local' },
+          { name: 'origin/new-main', kind: 'remote', remoteName: 'origin' },
+        ],
+      });
+    });
+
+    expect(await screen.findByText('new-main')).toBeTruthy();
+    expect(screen.queryByText('old-main')).toBeNull();
   });
 
   it('dismisses T3-style diff toolbar menus from outside interactions', async () => {
@@ -1052,7 +1119,7 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(screen.getByText('Please revisit this diff.')).toBeTruthy();
   });
 
-  it('adds T3 review comments when selected diff lines are submitted', async () => {
+  it('adds review comments when selected diff lines are submitted', async () => {
     const onAddReviewComment = vi.fn();
     loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
       available: true,
@@ -1102,7 +1169,7 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'codeAgentSubmitComment' }));
 
     expect(onAddReviewComment).toHaveBeenCalledWith(expect.objectContaining({
-      sectionId: 'workspace-diff:room-1:snapshot-1:branch:auto',
+      sectionId: 'workspace-diff:room-1:branch:auto',
       sectionTitle: 'codeAgentChanges',
       filePath: 'src/App.tsx',
       rangeLabel: '+2 to +4',
@@ -1112,10 +1179,80 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     }));
   });
 
-  it('matches T3 diff annotation item versions without hashing entry kind', async () => {
+  it('keeps diff review annotations across workspace refreshes', async () => {
     const reviewComment: ReviewCommentContext = {
       id: 'comment-1',
-      sectionId: 'workspace-diff:room-1:snapshot-1:branch:auto',
+      sectionId: 'workspace-diff:room-1:branch:auto',
+      sectionTitle: 'codeAgentChanges',
+      filePath: 'src/App.tsx',
+      startIndex: 1,
+      endIndex: 3,
+      rangeLabel: '+2 to +4',
+      text: 'Please revisit this diff.',
+      diff: '@@ -0,0 +2,3 @@\n+added 2\n+added 3\n+added 4',
+      fenceLanguage: 'diff',
+    };
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          {
+            name: 'src/App.tsx',
+            cacheKey: 'file:app',
+            hunks: [{
+              additionStart: 1,
+              deletionStart: 1,
+              deletionLineIndex: 0,
+              additionLineIndex: 0,
+              additionLines: 3,
+              deletionLines: 0,
+              hunkContent: [
+                { type: 'context', lines: 1 },
+                { type: 'change', deletions: 0, additions: 3 },
+              ],
+            }],
+            additionLines: ['same', 'added 2', 'added 3', 'added 4'],
+            deletionLines: ['same'],
+            type: 'change',
+          },
+        ],
+      },
+    ]);
+
+    const { rerender } = render(
+      <CodeAgentWorkspaceDiffViewer
+        roomId="room-1"
+        enabled
+        refreshKey="snapshot-1"
+        reviewComments={[reviewComment]}
+      />,
+    );
+
+    expect(await screen.findByText('Please revisit this diff.')).toBeTruthy();
+
+    rerender(
+      <CodeAgentWorkspaceDiffViewer
+        roomId="room-1"
+        enabled
+        refreshKey="snapshot-2"
+        reviewComments={[reviewComment]}
+      />,
+    );
+
+    await waitFor(() => expect(loadCodeAgentWorkspaceDiffMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('Please revisit this diff.')).toBeTruthy();
+    expect(screen.getByText('+2 to +4')).toBeTruthy();
+  });
+
+  it('matches diff annotation item versions without hashing entry kind', async () => {
+    const reviewComment: ReviewCommentContext = {
+      id: 'comment-1',
+      sectionId: 'workspace-diff:room-1:branch:auto',
       sectionTitle: 'codeAgentChanges',
       filePath: 'src/App.tsx',
       startIndex: 1,
@@ -1128,7 +1265,7 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     const secondReviewComment: ReviewCommentContext = {
       ...reviewComment,
       id: 'comment-2',
-      text: 'Keep this aligned with T3.',
+      text: 'Keep this aligned with the review state.',
     };
     loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
       available: true,
@@ -1173,17 +1310,17 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
 
     expect(await screen.findByTestId('diff-line-annotation')).toBeTruthy();
     expect(screen.getByTestId('diff-file-file:app').dataset.version).toBe(String(
-      fnv1a32('0:0:render:comment-1:+2 to +4:Please revisit this diff.:comment-2:+2 to +4:Keep this aligned with T3.'),
+      fnv1a32('0:0:render:comment-1:+2 to +4:Please revisit this diff.:comment-2:+2 to +4:Keep this aligned with the review state.'),
     ));
     expect(screen.getByTestId('diff-file-file:app').dataset.version).not.toBe(String(
       fnv1a32('0:comment-1:comment:+2 to +4:Please revisit this diff.'),
     ));
     expect(screen.getByTestId('diff-file-file:app').dataset.version).not.toBe(String(
-      fnv1a32('0:comment-1:+2 to +4:Please revisit this diff.|comment-2:+2 to +4:Keep this aligned with T3.'),
+      fnv1a32('0:comment-1:+2 to +4:Please revisit this diff.|comment-2:+2 to +4:Keep this aligned with the review state.'),
     ));
   });
 
-  it('does not create a draft for diff selections that T3 review comments cannot map', async () => {
+  it('does not create a draft for diff selections that review comments cannot map', async () => {
     loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
       available: true,
       patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',

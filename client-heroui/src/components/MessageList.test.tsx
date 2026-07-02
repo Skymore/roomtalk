@@ -150,7 +150,7 @@ describe('MessageList optimistic messages', () => {
         lastToolName: null,
       },
       artifacts: [],
-      changes: { available: false, changedFiles: [], diffSummary: null },
+      changes: { available: false, changedFiles: [], changedFileStats: [], diffSummary: null },
       commands: [],
     });
     Element.prototype.scrollIntoView = vi.fn();

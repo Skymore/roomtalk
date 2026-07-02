@@ -12,6 +12,7 @@ import { CodeAgentBackend, CodeAgentMode, getCodeAgentStatus, isSupportedCodeAge
 import { getAvatarColor, getAvatarText } from '../utils/userProfile';
 import { updateRoomSettings } from '../utils/socket';
 import { Message, Room, RoomPermissions, RoomRenameHandler } from '../utils/types';
+import type { CodeAgentWorkspaceSnapshot } from '../utils/cocoWorkspace';
 import { beginHorizontalResize } from '../utils/horizontalResize';
 import {
   addCodeAgentReviewCommentDraft,
@@ -124,6 +125,8 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   const [isFileManagerCollapsed, setIsFileManagerCollapsed] = React.useState(readStoredFileManagerCollapsed);
   const [fileManagerWidth, setFileManagerWidth] = React.useState(readStoredFileManagerWidth);
   const [workspaceFileOpenRequest, setWorkspaceFileOpenRequest] = React.useState<WorkspaceFileOpenRequest | null>(null);
+  const [workspaceRoot, setWorkspaceRoot] = React.useState<string | null>(null);
+  const [workspaceChanges, setWorkspaceChanges] = React.useState<CodeAgentWorkspaceSnapshot['changes'] | null>(null);
   const [pendingWorkspaceFileSaves, setPendingWorkspaceFileSaves] = React.useState<ReadonlySet<string>>(() => new Set());
   const fileManagerWidthRef = React.useRef(fileManagerWidth);
   const workspaceFileOpenRequestIdRef = React.useRef(0);
@@ -143,6 +146,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
     setReplyToMessage(null);
     setShowScrollButton(false);
     setIsMobileFileManagerOpen(false);
+    setWorkspaceRoot(null);
     setPendingWorkspaceFileSaves(new Set());
   }, [currentRoom.id]);
 
@@ -210,7 +214,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   }, []);
 
   const handleOpenWorkspaceFile = React.useCallback((path: string) => {
-    const target = parseWorkspaceFileOpenTarget(path);
+    const target = parseWorkspaceFileOpenTarget(path, { workspaceRoot: workspaceRoot ?? undefined });
     if (!target) {
       return;
     }
@@ -227,7 +231,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       line: target.line,
       requestId: workspaceFileOpenRequestIdRef.current,
     });
-  }, [setFileManagerCollapsed]);
+  }, [setFileManagerCollapsed, workspaceRoot]);
 
   React.useLayoutEffect(() => {
     if (isFileManagerCollapsed) return undefined;
@@ -398,6 +402,8 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       projectName={currentRoom.name || 'Workspace'}
       sandboxStatus={currentRoom.sandboxStatus}
       sandboxUpdatedAt={currentRoom.sandboxUpdatedAt}
+      workspaceRoot={workspaceRoot}
+      workspaceChanges={workspaceChanges}
       openFileRequest={workspaceFileOpenRequest}
       revealLine={workspaceFileOpenRequest?.line ?? null}
       revealRequestId={workspaceFileOpenRequest?.requestId ?? 0}
@@ -443,6 +449,8 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
             currentRoom={currentRoom}
             codeAgentMode={selectedMode}
             onOpenWorkspaceFile={handleOpenWorkspaceFile}
+            onWorkspaceRootChange={setWorkspaceRoot}
+            onWorkspaceChangesChange={setWorkspaceChanges}
             reviewComments={reviewComments}
             onAddReviewComment={handleAddReviewComment}
             onRemoveReviewComment={handleRemoveReviewComment}

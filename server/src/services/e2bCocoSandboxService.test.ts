@@ -113,16 +113,17 @@ class FakeE2BDriver implements E2BSandboxDriver {
               ].join('\n'));
             } else if (command.includes('__ROOMTALK_STATUS__')) {
               stdout.end([
-                '__ROOMTALK_STATUS__',
-                ' M src/App.tsx',
-                '?? src/New File.tsx',
-                'R  src/Old.tsx -> src/New.tsx',
-                '__ROOMTALK_NUMSTAT__',
-                '10\t2\tsrc/App.tsx',
-                '5\t0\tsrc/New.tsx',
-                '-\t-\tpublic/logo.png',
-                '',
-              ].join('\n'));
+                '__ROOMTALK_STATUS__\n',
+                ' M src/App.tsx\0',
+                '?? src/New File.tsx\0',
+                'R  src/New.tsx\0src/Old.tsx\0',
+                '?? src/a -> b.ts\0',
+                '?? src/line\nbreak.ts\0',
+                '__ROOMTALK_NUMSTAT__\n',
+                '10\t2\tsrc/App.tsx\n',
+                '5\t0\tsrc/New.tsx\n',
+                '-\t-\tpublic/logo.png\n',
+              ].join(''));
             } else if (command.includes('__ROOMTALK_REFS__')) {
               stdout.end([
                 '__ROOMTALK_HEAD_REF__',
@@ -379,10 +380,17 @@ describe('E2BCocoSandboxService', () => {
 
     assert.deepEqual(await service.getWorkspaceChanges(handle), {
       available: true,
-      changedFiles: ['src/App.tsx', 'src/New File.tsx', 'src/New.tsx'],
-      diffSummary: { files: 3, additions: 15, deletions: 2 },
+      changedFiles: ['src/a -> b.ts', 'src/App.tsx', 'src/line\nbreak.ts', 'src/New File.tsx', 'src/New.tsx'],
+      changedFileStats: [
+        { path: 'src/a -> b.ts', additions: 0, deletions: 0 },
+        { path: 'src/App.tsx', additions: 10, deletions: 2 },
+        { path: 'src/line\nbreak.ts', additions: 0, deletions: 0 },
+        { path: 'src/New File.tsx', additions: 0, deletions: 0 },
+        { path: 'src/New.tsx', additions: 5, deletions: 0 },
+      ],
+      diffSummary: { files: 5, additions: 15, deletions: 2 },
     });
-    assert.match(driver.commands[0], /git status --porcelain=v1/);
+    assert.match(driver.commands[0], /git status --porcelain=v1 -z/);
     assert.match(driver.commands[0], /git diff --numstat HEAD --/);
     assert.match(driver.commands[0], /git ls-files --others --exclude-standard -z \| xargs -0 -r -I\{\} sh -c 'git diff --no-index --numstat -- \/dev\/null "\$1" \|\| true' sh \{\}/);
     assert.doesNotMatch(driver.commands[0], /git add -N -- \./);
@@ -434,6 +442,7 @@ describe('E2BCocoSandboxService', () => {
 
     assert.match(driver.commands[0], /git diff --no-ext-diff --patch --minimal --ignore-all-space --src-prefix=a\/ --dst-prefix=b\/ "\$\{base_ref\}\.\.\.HEAD"/);
     assert.match(driver.commands[0], /git diff --no-ext-diff --patch --minimal --ignore-all-space --src-prefix=a\/ --dst-prefix=b\/ HEAD --/);
+    assert.match(driver.commands[0], /git diff --no-index --patch --minimal --ignore-all-space --src-prefix=a\/ --dst-prefix=b\/ -- \/dev\/null "\$1"/);
     assert.doesNotMatch(driver.commands[0], / -w /);
   });
 
@@ -486,7 +495,10 @@ describe('E2BCocoSandboxService', () => {
       'upstream/main',
     ]);
     assert.match(driver.commands[0], /__ROOMTALK_DEFAULT_REF__/);
-    assert.match(driver.commands[0], /git symbolic-ref --quiet refs\/remotes\/origin\/HEAD/);
+    assert.match(driver.commands[0], /if git remote get-url origin >/);
+    assert.match(driver.commands[0], /primary_remote=\$\(git remote \| sed -n "1p" \|\| true\)/);
+    assert.match(driver.commands[0], /git symbolic-ref --quiet "refs\/remotes\/\$primary_remote\/HEAD"/);
+    assert.doesNotMatch(driver.commands[0], /refs\/remotes\/origin\/HEAD/);
     assert.match(driver.commands[0], /git for-each-ref --format="%\(refname:short\)%09%\(refname\)%09%\(committerdate:unix\)" refs\/heads refs\/remotes/);
     assert.doesNotMatch(JSON.stringify(await service.listWorkspaceRefs(handle)), /origin\/HEAD/);
   });

@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ExternalLink,
   FileDiff,
   Files,
   Globe2,
   LoaderCircle,
   Plus,
+  RefreshCw,
   TerminalSquare,
   X,
 } from 'lucide-react';
@@ -24,6 +26,7 @@ import {
   type CodeWorkspaceFile,
 } from '../utils/codeWorkspaceFiles';
 import { appendWorkspaceAssetPreviewRevision } from '../utils/codeWorkspaceFilePreview';
+import type { CodeAgentWorkspaceSnapshot } from '../utils/cocoWorkspace';
 import type { RoomSandboxStatus } from '../utils/types';
 import { beginHorizontalResize } from '../utils/horizontalResize';
 import { normalizeWorkspaceOpenPath, parseWorkspaceFileOpenTarget } from '../utils/workspaceFileOpenTarget';
@@ -61,12 +64,17 @@ import {
 } from '../utils/codeAgentDiffPanelStore';
 import { summarizeCodeAgentChangedFileStats } from '../utils/codeAgentChangedFileTree';
 import {
+  setCodeAgentChangedFilesExpanded,
+  useCodeAgentChangedFilesExpanded,
+} from '../utils/codeAgentChangedFilesExpansionStore';
+import {
   activateCodeAgentRightPanelSurface,
   addCodeAgentRightPanelPreviewSurface,
   closeAllCodeAgentRightPanelSurfaces,
   closeCodeAgentRightPanelSurface,
   closeCodeAgentRightPanelSurfacesToRight,
   closeOtherCodeAgentRightPanelSurfaces,
+  navigateCodeAgentRightPanelPreviewSurface,
   openCodeAgentRightPanel,
   openCodeAgentRightPanelFile,
   openCodeAgentRightPanelPreview,
@@ -80,6 +88,8 @@ interface CodeAgentFileBrowserPanelProps {
   projectName: string;
   sandboxStatus?: RoomSandboxStatus;
   sandboxUpdatedAt?: string;
+  workspaceRoot?: string | null;
+  workspaceChanges?: CodeAgentWorkspaceSnapshot['changes'] | null;
   openFileRequest?: { path: string; requestId: number } | null;
   revealLine?: number | null;
   revealRequestId?: number;
@@ -102,6 +112,8 @@ type ScopedDiffFileSummaries = {
 };
 
 const EMPTY_DIFF_FILE_SUMMARIES: readonly CodeAgentWorkspaceDiffFileSummary[] = [];
+const EMPTY_CHANGED_FILES: string[] = [];
+const EMPTY_CHANGED_FILE_STATS: CodeAgentWorkspaceSnapshot['changes']['changedFileStats'] = [];
 
 type FileSurfaceTabMenuState = {
   surfaceId: string;
@@ -126,6 +138,7 @@ type AssetUrlQueryState = {
 
 type WorkspaceRemoteSearchState = {
   query: string;
+  scopeKey: string | null;
   entries: CodeWorkspaceEntry[];
   truncated: boolean;
   isPending: boolean;
@@ -159,6 +172,7 @@ const FILE_SURFACE_TAB_MENU_WIDTH = 160;
 const FILE_SURFACE_TAB_MENU_HEIGHT = 168;
 const WORKSPACE_TREE_REMOTE_SEARCH_LIMIT = 200;
 const WORKSPACE_TREE_REMOTE_SEARCH_DEBOUNCE_MS = 150;
+const EMPTY_WORKSPACE_ENTRIES: readonly CodeWorkspaceEntry[] = [];
 
 function getFileExplorerResizeBounds(panelWidth: number) {
   return {
@@ -204,6 +218,44 @@ function clampFixedMenuPosition({
 
 function normalizeWorkspacePath(path: string): string {
   return normalizeWorkspaceOpenPath(path);
+}
+
+function normalizeBrowserHttpUrl(input: string): string | null {
+  const trimmed = input.trim();
+  if (!/^https?:\/\//i.test(trimmed)) {
+    return null;
+  }
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveBrowserNavigationTarget(
+  input: string,
+  workspaceRoot?: string | null,
+): { kind: 'workspace-file'; relativePath: string } | { kind: 'url'; url: string } | null {
+  const url = normalizeBrowserHttpUrl(input);
+  if (url) {
+    return { kind: 'url', url };
+  }
+
+  const target = parseWorkspaceFileOpenTarget(input, { workspaceRoot: workspaceRoot ?? undefined });
+  if (!target || !isBrowserPreviewFile(target.path)) {
+    return null;
+  }
+  return { kind: 'workspace-file', relativePath: target.path };
+}
+
+function formatBrowserSurfaceUrlTitle(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname || url;
+  } catch {
+    return url;
+  }
 }
 
 function CodeAgentRightPanelEmptyState({
@@ -295,28 +347,176 @@ interface CodeAgentPreviewSurfaceProps {
   surface: CodeAgentPreviewPanelSurface;
   assetUrlQuery: AssetUrlQueryState;
   assetPreviewRevision: number;
+  workspaceRoot?: string | null;
+  onNavigate: (
+    surfaceId: string,
+    target: { kind: 'workspace-file'; relativePath: string } | { kind: 'url'; url: string },
+  ) => void;
+  onRefreshWorkspacePreview: (relativePath: string) => void;
+}
+
+interface CodeAgentBrowserSurfaceChromeProps {
+  value: string;
+  loading: boolean;
+  canRefresh: boolean;
+  canOpenExternal: boolean;
+  navigationError: string | null;
+  onSubmit: (value: string) => void;
+  onRefresh: () => void;
+  onOpenExternal: () => void;
+}
+
+function CodeAgentBrowserSurfaceChrome({
+  value,
+  loading,
+  canRefresh,
+  canOpenExternal,
+  navigationError,
+  onSubmit,
+  onRefresh,
+  onOpenExternal,
+}: CodeAgentBrowserSurfaceChromeProps) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  return (
+    <div className="shrink-0 border-b border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]">
+      <form
+        className="flex h-9 items-center gap-1.5 px-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSubmit(draft);
+        }}
+      >
+        <button
+          type="button"
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-45 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+          aria-label={t('codeAgentBrowserRefresh')}
+          title={t('codeAgentBrowserRefresh')}
+          disabled={!canRefresh}
+          onClick={onRefresh}
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+        </button>
+        <input
+          aria-label={t('codeAgentBrowserAddressLabel')}
+          className="h-7 min-w-0 flex-1 rounded-md border border-transparent bg-[#f0eee6] px-2 text-xs text-[#141413] outline-none transition-colors placeholder:text-[#87867f] focus:border-[#c96442]/70 focus:bg-[#faf9f5] dark:bg-[#242422] dark:text-[#faf9f5] dark:placeholder:text-[#8f8d86] dark:focus:border-[#d97757]/70 dark:focus:bg-[#1d1d1b]"
+          placeholder={t('codeAgentBrowserAddressPlaceholder')}
+          spellCheck={false}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              setDraft(value);
+              event.currentTarget.blur();
+            }
+          }}
+        />
+        <button
+          type="button"
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-45 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+          aria-label={t('codeAgentOpenBrowserPreviewExternally')}
+          title={t('codeAgentOpenBrowserPreviewExternally')}
+          disabled={!canOpenExternal}
+          onClick={onOpenExternal}
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+        </button>
+      </form>
+      {navigationError ? (
+        <div
+          className="border-t border-[#f0b49b]/50 bg-[#fff2ec] px-3 py-1.5 text-[11px] text-[#9f462c] dark:border-[#7a321f]/60 dark:bg-[#2a211d] dark:text-[#ff9b78]"
+          role="alert"
+        >
+          {navigationError}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function CodeAgentPreviewSurface({
   surface,
   assetUrlQuery,
   assetPreviewRevision,
+  workspaceRoot,
+  onNavigate,
+  onRefreshWorkspacePreview,
 }: CodeAgentPreviewSurfaceProps) {
   const { t } = useTranslation();
   const relativePath = surface.relativePath;
+  const previewUrl = surface.url ?? null;
+  const [navigationError, setNavigationError] = useState<string | null>(null);
+  const [browserReloadNonce, setBrowserReloadNonce] = useState(0);
+  const currentAddress = previewUrl ?? relativePath ?? '';
+  const resolvedWorkspacePreviewUrl = relativePath && assetUrlQuery.resolvedUrl
+    ? appendWorkspaceAssetPreviewRevision(assetUrlQuery.resolvedUrl, assetPreviewRevision)
+    : null;
+  const resolvedPreviewUrl = previewUrl ?? resolvedWorkspacePreviewUrl;
+  const canRefreshPreview = Boolean(resolvedPreviewUrl || relativePath);
 
-  if (!relativePath) {
+  useEffect(() => {
+    setNavigationError(null);
+    setBrowserReloadNonce(0);
+  }, [currentAddress, surface.id]);
+
+  const handleNavigate = useCallback((value: string) => {
+    const target = resolveBrowserNavigationTarget(value, workspaceRoot);
+    if (!target) {
+      setNavigationError(t('codeAgentBrowserInvalidTarget'));
+      return;
+    }
+    setNavigationError(null);
+    onNavigate(surface.id, target);
+  }, [onNavigate, surface.id, t, workspaceRoot]);
+
+  const handleRefresh = useCallback(() => {
+    if (relativePath) {
+      onRefreshWorkspacePreview(relativePath);
+    }
+    setBrowserReloadNonce((current) => current + 1);
+  }, [onRefreshWorkspacePreview, relativePath]);
+
+  const handleOpenExternal = useCallback(() => {
+    if (!resolvedPreviewUrl) {
+      return;
+    }
+    window.open(resolvedPreviewUrl, '_blank', 'noopener,noreferrer');
+  }, [resolvedPreviewUrl]);
+
+  const chrome = (
+    <CodeAgentBrowserSurfaceChrome
+      value={currentAddress}
+      loading={assetUrlQuery.isPending}
+      canRefresh={canRefreshPreview}
+      canOpenExternal={Boolean(resolvedPreviewUrl)}
+      navigationError={navigationError}
+      onSubmit={handleNavigate}
+      onRefresh={handleRefresh}
+      onOpenExternal={handleOpenExternal}
+    />
+  );
+
+  if (!relativePath && !previewUrl) {
     return (
-      <div
-        className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center"
-        data-testid="code-agent-browser-surface-empty"
-      >
-        <Globe2 className="h-5 w-5 text-[#87867f] dark:text-[#8f8d86]" />
-        <div className="text-sm font-medium text-[#141413] dark:text-[#faf9f5]">
-          {t('codeAgentNoFileSelected')}
-        </div>
-        <div className="max-w-sm text-xs leading-relaxed text-[#87867f] dark:text-[#8f8d86]">
-          {t('codeAgentBrowserSurfaceDescription')}
+      <div className="flex min-h-0 flex-1 flex-col bg-[#faf9f5] dark:bg-[#1d1d1b]">
+        {chrome}
+        <div
+          className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center"
+          data-testid="code-agent-browser-surface-empty"
+        >
+          <Globe2 className="h-5 w-5 text-[#87867f] dark:text-[#8f8d86]" />
+          <div className="text-sm font-medium text-[#141413] dark:text-[#faf9f5]">
+            {t('codeAgentNoPreviewLoaded')}
+          </div>
+          <div className="max-w-sm text-xs leading-relaxed text-[#87867f] dark:text-[#8f8d86]">
+            {t('codeAgentBrowserSurfaceDescription')}
+          </div>
         </div>
       </div>
     );
@@ -324,30 +524,42 @@ function CodeAgentPreviewSurface({
 
   if (assetUrlQuery.error) {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-[#9f462c] dark:text-[#ff9b78]">
-        {assetUrlQuery.error}
+      <div className="flex min-h-0 flex-1 flex-col bg-[#faf9f5] dark:bg-[#1d1d1b]">
+        {chrome}
+        <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-[#9f462c] dark:text-[#ff9b78]">
+          {assetUrlQuery.error}
+        </div>
       </div>
     );
   }
 
-  if (assetUrlQuery.isPending || !assetUrlQuery.resolvedUrl) {
+  if (relativePath && (assetUrlQuery.isPending || !assetUrlQuery.resolvedUrl)) {
     return (
-      <div
-        className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-[#87867f] dark:text-[#8f8d86]"
-        role="status"
-        aria-label={t('codeAgentPreparingBrowserPreview')}
-      >
-        <LoaderCircle className="h-5 w-5 animate-spin" />
-        <div className="text-sm">{t('codeAgentPreparingBrowserPreview')}</div>
+      <div className="flex min-h-0 flex-1 flex-col bg-[#faf9f5] dark:bg-[#1d1d1b]">
+        {chrome}
+        <div
+          className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-[#87867f] dark:text-[#8f8d86]"
+          role="status"
+          aria-label={t('codeAgentPreparingBrowserPreview')}
+        >
+          <LoaderCircle className="h-5 w-5 animate-spin" />
+          <div className="text-sm">{t('codeAgentPreparingBrowserPreview')}</div>
+        </div>
       </div>
     );
   }
 
   return (
-    <WorkspaceBrowserAssetPreview
-      src={appendWorkspaceAssetPreviewRevision(assetUrlQuery.resolvedUrl, assetPreviewRevision)}
-      title={relativePath}
-    />
+    <div className="flex min-h-0 flex-1 flex-col bg-[#faf9f5] dark:bg-[#1d1d1b]">
+      {chrome}
+      {resolvedPreviewUrl ? (
+        <WorkspaceBrowserAssetPreview
+          key={`${resolvedPreviewUrl}:${browserReloadNonce}`}
+          src={resolvedPreviewUrl}
+          title={previewUrl ?? relativePath ?? t('codeAgentBrowserSurface')}
+        />
+      ) : null}
+    </div>
   );
 }
 
@@ -534,7 +746,16 @@ function useCodeWorkspaceEntriesQuery(roomId: string) {
   return { data, error, isPending, refresh };
 }
 
-function useCodeWorkspaceFileQuery(roomId: string, relativePath: string | null, enabled = true): FileQueryState {
+function scopedFileCacheKey(roomId: string, scopeKey: string, normalizedPath: string): string {
+  return `${roomId}:${scopeKey}:${normalizedPath}`;
+}
+
+function useCodeWorkspaceFileQuery(
+  roomId: string,
+  relativePath: string | null,
+  enabled = true,
+  scopeKey = '',
+): FileQueryState {
   const requestIdRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const fileCacheRef = useRef(new Map<string, CodeWorkspaceFile>());
@@ -542,8 +763,9 @@ function useCodeWorkspaceFileQuery(roomId: string, relativePath: string | null, 
   const [error, setError] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
   const normalizedPath = relativePath ? normalizeWorkspacePath(relativePath) : null;
-  const latestQueryStateRef = useRef({ normalizedPath, enabled });
-  latestQueryStateRef.current = { normalizedPath, enabled };
+  const normalizedScopeKey = scopeKey || 'default';
+  const latestQueryStateRef = useRef({ normalizedPath, enabled, scopeKey: normalizedScopeKey });
+  latestQueryStateRef.current = { normalizedPath, enabled, scopeKey: normalizedScopeKey };
 
   const setCachedData = useCallback<React.Dispatch<React.SetStateAction<CodeWorkspaceFile | null>>>((nextData) => {
     setData((current) => {
@@ -551,18 +773,23 @@ function useCodeWorkspaceFileQuery(roomId: string, relativePath: string | null, 
         ? nextData(current)
         : nextData;
       if (resolvedData) {
-        fileCacheRef.current.set(normalizeWorkspacePath(resolvedData.path), resolvedData);
+        const normalizedFilePath = normalizeWorkspacePath(resolvedData.path);
+        fileCacheRef.current.set(
+          scopedFileCacheKey(roomId, latestQueryStateRef.current.scopeKey, normalizedFilePath),
+          resolvedData,
+        );
       }
       return resolvedData;
     });
-  }, []);
+  }, [roomId]);
 
   const refresh = useCallback(() => {
     if (
       !normalizedPath ||
       !enabled ||
       latestQueryStateRef.current.normalizedPath !== normalizedPath ||
-      !latestQueryStateRef.current.enabled
+      !latestQueryStateRef.current.enabled ||
+      latestQueryStateRef.current.scopeKey !== normalizedScopeKey
     ) {
       return;
     }
@@ -575,7 +802,8 @@ function useCodeWorkspaceFileQuery(roomId: string, relativePath: string | null, 
     setData(resolveCodeAgentProjectFileQueryData(
       roomId,
       normalizedPath,
-      fileCacheRef.current.get(normalizedPath) ?? null,
+      fileCacheRef.current.get(scopedFileCacheKey(roomId, normalizedScopeKey, normalizedPath)) ?? null,
+      normalizedScopeKey,
     ));
     setError(null);
     setIsPending(true);
@@ -586,14 +814,15 @@ function useCodeWorkspaceFileQuery(roomId: string, relativePath: string | null, 
           controller.signal.aborted ||
           requestIdRef.current !== requestId ||
           latestQueryStateRef.current.normalizedPath !== normalizedPath ||
-          !latestQueryStateRef.current.enabled
+          !latestQueryStateRef.current.enabled ||
+          latestQueryStateRef.current.scopeKey !== normalizedScopeKey
         ) {
           return;
         }
         const normalizedFilePath = normalizeWorkspacePath(file.path);
-        const optimisticFile = getOptimisticCodeAgentProjectFileQueryData(roomId, normalizedFilePath);
-        fileCacheRef.current.set(normalizedFilePath, file);
-        const settled = settleConfirmedCodeAgentProjectFileQueryData(roomId, normalizedFilePath, file);
+        const optimisticFile = getOptimisticCodeAgentProjectFileQueryData(roomId, normalizedFilePath, normalizedScopeKey);
+        fileCacheRef.current.set(scopedFileCacheKey(roomId, normalizedScopeKey, normalizedFilePath), file);
+        const settled = settleConfirmedCodeAgentProjectFileQueryData(roomId, normalizedFilePath, file, normalizedScopeKey);
         setData(settled ? file : optimisticFile ?? file);
       },
       (nextError) => {
@@ -601,7 +830,8 @@ function useCodeWorkspaceFileQuery(roomId: string, relativePath: string | null, 
           controller.signal.aborted ||
           requestIdRef.current !== requestId ||
           latestQueryStateRef.current.normalizedPath !== normalizedPath ||
-          !latestQueryStateRef.current.enabled
+          !latestQueryStateRef.current.enabled ||
+          latestQueryStateRef.current.scopeKey !== normalizedScopeKey
         ) {
           return;
         }
@@ -611,13 +841,14 @@ function useCodeWorkspaceFileQuery(roomId: string, relativePath: string | null, 
       if (
         requestIdRef.current === requestId &&
         latestQueryStateRef.current.normalizedPath === normalizedPath &&
-        latestQueryStateRef.current.enabled
+        latestQueryStateRef.current.enabled &&
+        latestQueryStateRef.current.scopeKey === normalizedScopeKey
       ) {
         setIsPending(false);
         abortRef.current = null;
       }
     });
-  }, [enabled, normalizedPath, roomId]);
+  }, [enabled, normalizedPath, normalizedScopeKey, roomId]);
 
   useEffect(() => {
     if (!normalizedPath || !enabled) {
@@ -636,12 +867,17 @@ function useCodeWorkspaceFileQuery(roomId: string, relativePath: string | null, 
       abortRef.current?.abort();
       abortRef.current = null;
     };
-  }, [enabled, normalizedPath, refresh]);
+  }, [enabled, normalizedPath, normalizedScopeKey, refresh]);
 
   return { data, error, isPending, refresh, setData: setCachedData };
 }
 
-function useCodeWorkspaceAssetUrlQuery(roomId: string, relativePath: string | null, enabled: boolean): AssetUrlQueryState {
+function useCodeWorkspaceAssetUrlQuery(
+  roomId: string,
+  relativePath: string | null,
+  enabled: boolean,
+  scopeKey = '',
+): AssetUrlQueryState {
   const requestIdRef = useRef(0);
   const [data, setData] = useState<CodeWorkspaceAssetUrl | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -682,7 +918,7 @@ function useCodeWorkspaceAssetUrlQuery(roomId: string, relativePath: string | nu
     });
 
     return () => controller.abort();
-  }, [enabled, roomId, relativePath]);
+  }, [enabled, roomId, relativePath, scopeKey]);
 
   return {
     data,
@@ -697,6 +933,8 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   projectName,
   sandboxStatus,
   sandboxUpdatedAt,
+  workspaceRoot,
+  workspaceChanges,
   openFileRequest = null,
   revealLine = null,
   revealRequestId = 0,
@@ -739,12 +977,14 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const localOpenFileRequestIdRef = useRef(0);
   const [remoteSearch, setRemoteSearch] = useState<WorkspaceRemoteSearchState>({
     query: '',
+    scopeKey: null,
     entries: [],
     truncated: false,
     isPending: false,
     error: null,
   });
   const workspaceReadyKey = `${sandboxStatus || 'none'}:${sandboxUpdatedAt || ''}`;
+  const remoteSearchScopeKey = `${roomId}:${workspaceReadyKey}`;
   const previousWorkspaceReadyKeyRef = useRef(workspaceReadyKey);
   const rightPanelState = useCodeAgentRightPanelState(roomId);
   const diffPanelSelection = useCodeAgentDiffPanelSelection(roomId);
@@ -752,7 +992,6 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     scopeKey: null,
     summaries: [],
   });
-  const [allChangedDirectoriesExpanded, setAllChangedDirectoriesExpanded] = useState(true);
   const [fileSurfaceTabMenu, setFileSurfaceTabMenu] = useState<FileSurfaceTabMenuState>(null);
   const fileSurfaceTabMenuRef = useRef<HTMLDivElement | null>(null);
   const fileSurfaceTabListRef = useRef<HTMLDivElement | null>(null);
@@ -766,12 +1005,15 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     () => (externallySelectedFilePath ? workspaceEntryForPath(externallySelectedFilePath, 'file') : null),
     [externallySelectedFilePath],
   );
+  const activeRemoteSearchEntries = remoteSearch.scopeKey === remoteSearchScopeKey
+    ? remoteSearch.entries
+    : EMPTY_WORKSPACE_ENTRIES;
   const workspaceEntries = useMemo(
     () => mergeWorkspaceEntries(
       entriesQuery.data?.entries ?? [],
-      externallySelectedEntry ? [...remoteSearch.entries, externallySelectedEntry] : remoteSearch.entries,
+      externallySelectedEntry ? [...activeRemoteSearchEntries, externallySelectedEntry] : activeRemoteSearchEntries,
     ),
-    [entriesQuery.data?.entries, externallySelectedEntry, remoteSearch.entries],
+    [activeRemoteSearchEntries, entriesQuery.data?.entries, externallySelectedEntry],
   );
   const entries = useMemo(
     () => projectEntriesFromWorkspace(workspaceEntries),
@@ -814,12 +1056,16 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const diffSelectionScopeKey = diffPanelSelection.kind === 'branch'
     ? `branch:${diffPanelSelection.baseRef ?? 'auto'}`
     : 'unstaged';
+  const changedFilesExpansionScopeKey = `${workspaceReadyKey}:${diffSelectionScopeKey}`;
+  const allChangedDirectoriesExpanded = useCodeAgentChangedFilesExpanded(roomId, changedFilesExpansionScopeKey);
   const diffFileSummaryScopeKey = `${workspaceReadyKey}:${diffSelectionScopeKey}`;
   const hasActiveDiffFileSummaries = diffFileSummaries.scopeKey === diffFileSummaryScopeKey;
   const activeDiffFileSummaries = hasActiveDiffFileSummaries
     ? diffFileSummaries.summaries
     : EMPTY_DIFF_FILE_SUMMARIES;
-  const changedFileEntries = useMemo(
+  const snapshotChangedFiles = workspaceChanges?.changedFiles ?? EMPTY_CHANGED_FILES;
+  const snapshotChangedFileStats = workspaceChanges?.changedFileStats ?? EMPTY_CHANGED_FILE_STATS;
+  const liveChangedFileEntries = useMemo(
     () => activeDiffFileSummaries.map((summary) => ({
       path: normalizeWorkspacePath(summary.path),
       additions: summary.additions,
@@ -827,6 +1073,27 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     })).filter((entry) => entry.path.length > 0),
     [activeDiffFileSummaries],
   );
+  const snapshotChangedFileEntries = useMemo(
+    () => {
+      const statEntries = snapshotChangedFileStats.map((stat) => ({
+        path: normalizeWorkspacePath(stat.path),
+        additions: stat.additions,
+        deletions: stat.deletions,
+      })).filter((entry) => entry.path.length > 0);
+      const statPathSet = new Set(statEntries.map((entry) => entry.path));
+      const fallbackEntries = snapshotChangedFiles
+        .map((path) => ({ path: normalizeWorkspacePath(path) }))
+        .filter((entry) => entry.path.length > 0 && !statPathSet.has(entry.path));
+      if (statEntries.length > 0) {
+        return [...statEntries, ...fallbackEntries];
+      }
+      return fallbackEntries;
+    },
+    [snapshotChangedFileStats, snapshotChangedFiles],
+  );
+  const changedFileEntries = hasActiveDiffFileSummaries
+    ? liveChangedFileEntries
+    : snapshotChangedFileEntries;
   const changedFileSummary = useMemo(
     () => summarizeCodeAgentChangedFileStats(changedFileEntries),
     [changedFileEntries],
@@ -890,11 +1157,13 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     roomId,
     relativePath,
     Boolean(relativePath && (!renderPreview || isMarkdown)),
+    workspaceReadyKey,
   );
   const assetUrlQuery = useCodeWorkspaceAssetUrlQuery(
     roomId,
     relativePath,
     Boolean(relativePath && renderPreview && supportsWorkspaceAssetPreview),
+    workspaceReadyKey,
   );
   const activeAssetPreviewRevision = relativePath ? assetPreviewRevisions[relativePath] ?? 0 : 0;
   const previewSurfacePath = activePreviewSurface?.relativePath ?? null;
@@ -902,6 +1171,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     roomId,
     previewSurfacePath,
     Boolean(previewSurfacePath),
+    workspaceReadyKey,
   );
   const activePreviewSurfaceRevision = previewSurfacePath ? assetPreviewRevisions[previewSurfacePath] ?? 0 : 0;
   const selectedDirectory = selectedKind === 'directory'
@@ -983,11 +1253,20 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   }, [rightPanelState.activeSurfaceId]);
 
   useEffect(() => {
-    if (entriesQuery.isPending || entriesQuery.data?.truncated) {
+    if (entriesQuery.isPending) {
+      return;
+    }
+    if (entriesQuery.data === null) {
+      if (entriesQuery.error) {
+        reconcileCodeAgentFileSurfaces(roomId, false);
+      }
+      return;
+    }
+    if (entriesQuery.data.truncated) {
       return;
     }
     reconcileCodeAgentFileSurfaces(roomId, true, fileEntryPathSet);
-  }, [entriesQuery.data?.truncated, entriesQuery.isPending, fileEntryPathSet, roomId]);
+  }, [entriesQuery.data, entriesQuery.error, entriesQuery.isPending, fileEntryPathSet, roomId]);
 
   useEffect(() => {
     if (
@@ -1027,9 +1306,12 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     const previousKey = previousWorkspaceReadyKeyRef.current;
     previousWorkspaceReadyKeyRef.current = workspaceReadyKey;
     if (sandboxStatus === 'ready' && previousKey !== workspaceReadyKey) {
+      if (rightPanelSurfaces.length === 0) {
+        openCodeAgentRightPanel(roomId, 'files');
+      }
       refreshWorkspaceEntries();
     }
-  }, [refreshWorkspaceEntries, sandboxStatus, workspaceReadyKey]);
+  }, [refreshWorkspaceEntries, rightPanelSurfaces.length, roomId, sandboxStatus, workspaceReadyKey]);
 
   useEffect(() => {
     setSourceView({ path: null });
@@ -1075,9 +1357,13 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     const query = remoteSearch.query.trim();
     if (query.length < 2) {
       setRemoteSearch((current) => (
-        current.entries.length === 0 && !current.truncated && !current.isPending && current.error === null
+        current.scopeKey === null
+        && current.entries.length === 0
+        && !current.truncated
+        && !current.isPending
+        && current.error === null
           ? current
-          : { ...current, entries: [], truncated: false, isPending: false, error: null }
+          : { ...current, scopeKey: null, entries: [], truncated: false, isPending: false, error: null }
       ));
       return undefined;
     }
@@ -1086,7 +1372,14 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     const timeout = window.setTimeout(() => {
       setRemoteSearch((current) => (
         current.query === remoteSearch.query
-          ? { ...current, isPending: true, error: null }
+          ? {
+            ...current,
+            scopeKey: remoteSearchScopeKey,
+            entries: current.scopeKey === remoteSearchScopeKey ? current.entries : [],
+            truncated: current.scopeKey === remoteSearchScopeKey ? current.truncated : false,
+            isPending: true,
+            error: null,
+          }
           : current
       ));
       searchCodeWorkspaceEntries(roomId, query, {
@@ -1099,6 +1392,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
             current.query === remoteSearch.query
               ? {
                 ...current,
+                scopeKey: remoteSearchScopeKey,
                 entries: result.entries,
                 truncated: result.truncated,
                 isPending: false,
@@ -1113,6 +1407,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
             current.query === remoteSearch.query
               ? {
                 ...current,
+                scopeKey: remoteSearchScopeKey,
                 entries: [],
                 truncated: false,
                 isPending: false,
@@ -1128,7 +1423,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       controller.abort();
       window.clearTimeout(timeout);
     };
-  }, [remoteSearch.query, roomId]);
+  }, [remoteSearch.query, remoteSearchScopeKey, roomId]);
 
   const mutate = useCallback(async (
     operation: () => unknown,
@@ -1175,7 +1470,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   }, [roomId]);
 
   const handleOpenWorkspaceFileFromMarkdown = useCallback((path: string) => {
-    const target = parseWorkspaceFileOpenTarget(path);
+    const target = parseWorkspaceFileOpenTarget(path, { workspaceRoot: workspaceRoot ?? undefined });
     if (!target) {
       return;
     }
@@ -1191,7 +1486,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     setExternallySelectedFilePath(target.path);
     openCodeAgentRightPanelFile(roomId, target.path, target.line);
     setOperationError(null);
-  }, [roomId]);
+  }, [roomId, workspaceRoot]);
 
   const handleCreateFile = useCallback(() => {
     const path = window.prompt(t('codeAgentNewFilePrompt'), joinWorkspacePath(selectedDirectory, 'untitled.txt'));
@@ -1324,7 +1619,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   }, []);
 
   const openBrowserPreviewPath = useCallback((path: string) => {
-    const targetPath = normalizeWorkspacePath(path);
+    const targetPath = parseWorkspaceFileOpenTarget(path, { workspaceRoot: workspaceRoot ?? undefined })?.path ?? '';
     if (!targetPath || !isBrowserPreviewFile(targetPath)) {
       return;
     }
@@ -1333,6 +1628,29 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     setSelectedPath(targetPath);
     setExternallySelectedFilePath((current) => (entryKinds.has(targetPath) ? current : targetPath));
     openCodeAgentRightPanelPreview(roomId, targetPath);
+  }, [entryKinds, roomId, workspaceRoot]);
+
+  const handleNavigatePreviewSurface = useCallback((
+    surfaceId: string,
+    target: { kind: 'workspace-file'; relativePath: string } | { kind: 'url'; url: string },
+  ) => {
+    if (target.kind === 'workspace-file') {
+      const normalizedPath = normalizeWorkspacePath(target.relativePath);
+      if (!normalizedPath || !isBrowserPreviewFile(normalizedPath)) {
+        return;
+      }
+      setSelectedPath(normalizedPath);
+      setExternallySelectedFilePath((current) => (entryKinds.has(normalizedPath) ? current : normalizedPath));
+      navigateCodeAgentRightPanelPreviewSurface(roomId, surfaceId, {
+        kind: 'workspace-file',
+        relativePath: normalizedPath,
+      });
+      setOperationError(null);
+      return;
+    }
+
+    navigateCodeAgentRightPanelPreviewSurface(roomId, surfaceId, target);
+    setOperationError(null);
   }, [entryKinds, roomId]);
 
   const handleOpenInBrowserPreview = useCallback(() => {
@@ -1410,7 +1728,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   }, [closeFileSurfaceAddMenu, roomId]);
 
   const handleOpenWorkspaceFileFromDiff = useCallback((path: string) => {
-    const target = parseWorkspaceFileOpenTarget(path);
+    const target = parseWorkspaceFileOpenTarget(path, { workspaceRoot: workspaceRoot ?? undefined });
     if (!target) {
       return;
     }
@@ -1420,7 +1738,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     openCodeAgentRightPanelFile(roomId, target.path, target.line);
     setLocalOpenFileRequest(null);
     setOperationError(null);
-  }, [roomId]);
+  }, [roomId, workspaceRoot]);
 
   const handleDiffFileSummariesChange = useCallback((summaries: readonly CodeAgentWorkspaceDiffFileSummary[]) => {
     setDiffFileSummaries({
@@ -1627,11 +1945,17 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                 : surface.kind === 'files'
                   ? t('codeAgentWorkspaceFiles')
                   : surface.kind === 'preview'
-                    ? (surface.relativePath ? basename(surface.relativePath) : t('codeAgentBrowserSurface'))
+                    ? (surface.relativePath
+                      ? basename(surface.relativePath)
+                      : surface.url
+                        ? formatBrowserSurfaceUrlTitle(surface.url)
+                        : t('codeAgentBrowserSurface'))
                     : basename(surface.relativePath);
-              const fullTitle = surface.kind === 'file' || (surface.kind === 'preview' && surface.relativePath)
+              const fullTitle = surface.kind === 'file'
                 ? surface.relativePath
-                : title;
+                : surface.kind === 'preview'
+                  ? surface.relativePath ?? surface.url ?? title
+                  : title;
               const pending = pendingFileSurfaceIds.has(surface.id);
               return (
                 <div
@@ -1836,6 +2160,9 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
           surface={activePreviewSurface}
           assetUrlQuery={previewSurfaceAssetUrlQuery}
           assetPreviewRevision={activePreviewSurfaceRevision}
+          workspaceRoot={workspaceRoot}
+          onNavigate={handleNavigatePreviewSurface}
+          onRefreshWorkspacePreview={handleAssetPreviewChanged}
         />
       ) : activeDiffSurface ? (
         <div className="flex min-h-0 flex-1 gap-2 overflow-hidden p-2">
@@ -1861,7 +2188,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                     type="button"
                     data-scroll-anchor-ignore
                     className="shrink-0 rounded-md border border-[#dedbd0] px-2 py-1 text-[11px] font-semibold text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:border-[#30302e] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
-                    onClick={() => setAllChangedDirectoriesExpanded((expanded) => !expanded)}
+                    onClick={() => setCodeAgentChangedFilesExpanded(roomId, changedFilesExpansionScopeKey, !allChangedDirectoriesExpanded)}
                   >
                     {allChangedDirectoriesExpanded ? t('codeAgentCollapseChangedFileTree') : t('codeAgentExpandChangedFileTree')}
                   </button>
@@ -1894,7 +2221,9 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       ) : (
         <CodeAgentFilePreviewPanel
           roomId={roomId}
+          workspaceScopeKey={workspaceReadyKey}
           projectName={projectName}
+          workspaceRoot={workspaceRoot}
           relativePath={relativePath}
           file={fileQuery.data}
           fileError={fileQuery.error}

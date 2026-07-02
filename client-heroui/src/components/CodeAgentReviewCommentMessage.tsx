@@ -20,6 +20,7 @@ import {
 interface CodeAgentReviewCommentMessageProps {
   comment: ReviewCommentContext;
   onOpenWorkspaceFile?: (path: string) => void;
+  workspaceRoot?: string | null;
 }
 
 const CODE_AGENT_DEFAULT_WORKSPACE_ROOT = '/workspace';
@@ -50,10 +51,14 @@ function useResolvedTheme() {
 export const CodeAgentReviewCommentMessage = memo(function CodeAgentReviewCommentMessage({
   comment,
   onOpenWorkspaceFile,
+  workspaceRoot,
 }: CodeAgentReviewCommentMessageProps) {
   const resolvedTheme = useResolvedTheme();
   const fenceLanguage = comment.fenceLanguage ?? 'diff';
-  const displayPath = formatCodeAgentWorkspaceRelativePath(comment.filePath, CODE_AGENT_DEFAULT_WORKSPACE_ROOT);
+  const displayPath = formatCodeAgentWorkspaceRelativePath(
+    comment.filePath,
+    workspaceRoot || CODE_AGENT_DEFAULT_WORKSPACE_ROOT,
+  );
   const renderablePatch = useMemo(
     () => getRenderablePatch(
       buildReviewCommentRenderablePatch(comment),
@@ -102,6 +107,7 @@ export const CodeAgentReviewCommentMessage = memo(function CodeAgentReviewCommen
           <MarkdownContent
             content={formatReviewCommentFence(fenceLanguage, comment.diff)}
             onOpenWorkspaceFile={onOpenWorkspaceFile}
+            workspaceRoot={workspaceRoot}
           />
         </Suspense>
       )}

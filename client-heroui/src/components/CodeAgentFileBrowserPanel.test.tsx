@@ -4,11 +4,21 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CodeAgentFileBrowserPanel } from './CodeAgentFileBrowserPanel';
-import { resetCodeAgentRightPanelStoreForTests } from '../utils/codeAgentRightPanelStore';
+import {
+  openCodeAgentRightPanel,
+  openCodeAgentRightPanelFile,
+  openCodeAgentRightPanelPreview,
+  readCodeAgentRightPanelState,
+  resetCodeAgentRightPanelStoreForTests,
+} from '../utils/codeAgentRightPanelStore';
 import {
   getOptimisticCodeAgentProjectFileQueryData,
   resetCodeAgentProjectFilesQueryStateForTests,
 } from './codeAgentProjectFilesQueryState';
+import {
+  resetCodeAgentChangedFilesExpansionStoreForTests,
+  setCodeAgentChangedFilesExpanded,
+} from '../utils/codeAgentChangedFilesExpansionStore';
 
 const loadCodeWorkspaceEntriesMock = vi.hoisted(() => vi.fn());
 const searchCodeWorkspaceEntriesMock = vi.hoisted(() => vi.fn());
@@ -364,6 +374,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     fileInstanceSetSelectedLinesMock.mockReset();
     document.documentElement.classList.remove('dark');
     localStorage.clear();
+    resetCodeAgentChangedFilesExpansionStoreForTests();
     resetCodeAgentRightPanelStoreForTests();
     resetCodeAgentProjectFilesQueryStateForTests();
   });
@@ -603,6 +614,93 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
   });
 
+  it('navigates browser surfaces to http URLs without creating workspace asset URLs', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [],
+      truncated: false,
+    });
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+
+    await screen.findByText('0 files');
+    fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
+    fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentBrowserSurface'));
+
+    const address = screen.getByLabelText('codeAgentBrowserAddressLabel') as HTMLInputElement;
+    fireEvent.change(address, { target: { value: 'https://example.com/report' } });
+    fireEvent.submit(address.closest('form') as HTMLFormElement);
+
+    await waitFor(() => {
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('https://example.com/report');
+    });
+    expect(createCodeWorkspaceAssetUrlMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('example.com');
+
+    fireEvent.click(screen.getByLabelText('codeAgentOpenBrowserPreviewExternally'));
+    expect(open).toHaveBeenCalledWith('https://example.com/report', '_blank', 'noopener,noreferrer');
+
+    fireEvent.click(screen.getByLabelText('codeAgentBrowserRefresh'));
+    await waitFor(() => {
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('https://example.com/report');
+    });
+  });
+
+  it('navigates browser surfaces to previewable workspace files', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'output/report.html', name: 'report.html', type: 'file' },
+      ],
+      truncated: false,
+    });
+    createCodeWorkspaceAssetUrlMock.mockResolvedValue({
+      relativeUrl: '/api/coco/workspace-assets/token/report.html',
+      expiresAt: '2026-06-30T12:15:00.000Z',
+    });
+    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/coco/workspace-assets/token/report.html');
+
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+
+    await screen.findByText('1 files');
+    fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
+    fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentBrowserSurface'));
+
+    const address = screen.getByLabelText('codeAgentBrowserAddressLabel') as HTMLInputElement;
+    fireEvent.change(address, { target: { value: ' output/report.html ' } });
+    fireEvent.submit(address.closest('form') as HTMLFormElement);
+
+    await waitFor(() => {
+      expect(createCodeWorkspaceAssetUrlMock).toHaveBeenCalledWith('room-1', 'output/report.html', expect.any(Object));
+    });
+    await waitFor(() => {
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/coco/workspace-assets/token/report.html');
+    });
+    expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('report.html');
+  });
+
+  it('shows an error for unsupported browser surface targets', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+      ],
+      truncated: false,
+    });
+
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+
+    await screen.findByText('1 files');
+    fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
+    fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentBrowserSurface'));
+
+    const address = screen.getByLabelText('codeAgentBrowserAddressLabel') as HTMLInputElement;
+    fireEvent.change(address, { target: { value: 'src/App.tsx' } });
+    fireEvent.submit(address.closest('form') as HTMLFormElement);
+
+    expect(screen.getByRole('alert').textContent).toBe('codeAgentBrowserInvalidTarget');
+    expect(container.querySelector('iframe')).toBeNull();
+    expect(createCodeWorkspaceAssetUrlMock).not.toHaveBeenCalled();
+  });
+
   it('opens a T3-style Diff surface in the right panel and can jump to file surfaces', async () => {
     loadCodeWorkspaceEntriesMock.mockResolvedValue({
       entries: [
@@ -674,6 +772,69 @@ describe('CodeAgentFileBrowserPanel', () => {
     await waitFor(() => {
       expect(screen.getByTestId('code-agent-workspace-diff-viewer').dataset.selectedFile).toBe('');
     });
+  });
+
+  it('renders snapshot changed-file stats before live diff summaries load', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+      ],
+      truncated: false,
+    });
+
+    render(
+      <CodeAgentFileBrowserPanel
+        roomId="room-1"
+        projectName="Coco"
+        workspaceChanges={{
+          available: true,
+          changedFiles: ['src/App.tsx'],
+          changedFileStats: [{ path: 'src/App.tsx', additions: 2, deletions: 1 }],
+          diffSummary: { files: 1, additions: 2, deletions: 1 },
+        }}
+      />
+    );
+    await screen.findByText('1 files');
+    fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
+    fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentChanges'));
+
+    const sidebar = await screen.findByTestId('code-agent-diff-changed-files-sidebar');
+    expect(within(sidebar).getByTestId('code-agent-changed-files-tree')).toBeTruthy();
+    expect(within(sidebar).getByText('App.tsx')).toBeTruthy();
+    expect(within(sidebar).getAllByText('+2').length).toBeGreaterThan(0);
+    expect(within(sidebar).getAllByText('-1').length).toBeGreaterThan(0);
+  });
+
+  it('uses persisted changed-file collapse state for the active workspace scope', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+      ],
+      truncated: false,
+    });
+    setCodeAgentChangedFilesExpanded('room-1', 'ready:2026-07-01T00:00:00.000Z:branch:auto', false);
+
+    render(
+      <CodeAgentFileBrowserPanel
+        roomId="room-1"
+        projectName="Coco"
+        sandboxStatus="ready"
+        sandboxUpdatedAt="2026-07-01T00:00:00.000Z"
+        workspaceChanges={{
+          available: true,
+          changedFiles: ['src/App.tsx'],
+          changedFileStats: [{ path: 'src/App.tsx', additions: 2, deletions: 1 }],
+          diffSummary: { files: 1, additions: 2, deletions: 1 },
+        }}
+      />
+    );
+    await screen.findByText('1 files');
+    fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
+    fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentChanges'));
+
+    const sidebar = await screen.findByTestId('code-agent-diff-changed-files-sidebar');
+    expect(within(sidebar).getByText('codeAgentExpandChangedFileTree')).toBeTruthy();
+    expect(within(sidebar).queryByText('App.tsx')).toBeNull();
   });
 
   it('supports T3-style file tab menu and middle-click close actions', async () => {
@@ -1475,6 +1636,121 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
   });
 
+  it('scopes remote workspace search matches to the current sandbox', async () => {
+    const nextSearch = deferred<{
+      entries: { path: string; name: string; type: 'file' }[];
+      truncated: boolean;
+    }>();
+    loadCodeWorkspaceEntriesMock
+      .mockResolvedValueOnce({
+        entries: [
+          { path: 'README.md', name: 'README.md', type: 'file' },
+        ],
+        truncated: true,
+      })
+      .mockResolvedValueOnce({
+        entries: [
+          { path: 'package.json', name: 'package.json', type: 'file' },
+        ],
+        truncated: true,
+      });
+    searchCodeWorkspaceEntriesMock
+      .mockResolvedValueOnce({
+        entries: [
+          { path: 'old/components/Composer.tsx', name: 'Composer.tsx', type: 'file' },
+        ],
+        truncated: false,
+      })
+      .mockReturnValueOnce(nextSearch.promise);
+    fileTreeSearchStateRef.current = { isOpen: true, value: 'cmp' };
+
+    const { rerender } = render(
+      <CodeAgentFileBrowserPanel
+        roomId="room-1"
+        projectName="Coco"
+        sandboxStatus="ready"
+        sandboxUpdatedAt="2026-06-30T10:00:00.000Z"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(resetPathsMock).toHaveBeenLastCalledWith([
+        'old/',
+        'old/components/',
+        'old/components/Composer.tsx',
+        'README.md',
+      ]);
+    });
+
+    rerender(
+      <CodeAgentFileBrowserPanel
+        roomId="room-1"
+        projectName="Coco"
+        sandboxStatus="ready"
+        sandboxUpdatedAt="2026-06-30T10:01:00.000Z"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(resetPathsMock).toHaveBeenLastCalledWith(['package.json']);
+    });
+    expect(resetPathsMock).not.toHaveBeenLastCalledWith(expect.arrayContaining(['old/components/Composer.tsx']));
+    await waitFor(() => {
+      expect(searchCodeWorkspaceEntriesMock).toHaveBeenCalledTimes(2);
+    });
+
+    act(() => {
+      nextSearch.resolve({
+        entries: [
+          { path: 'new/components/Composer.tsx', name: 'Composer.tsx', type: 'file' },
+        ],
+        truncated: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(resetPathsMock).toHaveBeenLastCalledWith([
+        'new/',
+        'new/components/',
+        'new/components/Composer.tsx',
+        'package.json',
+      ]);
+    });
+  });
+
+  it('keeps restored file surfaces while workspace entries are still loading', async () => {
+    openCodeAgentRightPanelFile('room-1', 'src/App.tsx');
+    loadCodeWorkspaceEntriesMock.mockReturnValue(new Promise(() => {}));
+    loadCodeWorkspaceFileMock.mockReturnValue(new Promise(() => {}));
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+
+    await waitFor(() => {
+      expect(loadCodeWorkspaceEntriesMock).toHaveBeenCalledTimes(1);
+    });
+    expect(readCodeAgentRightPanelState('room-1').surfaces.map((surface) => surface.id)).toEqual([
+      'file:src/App.tsx',
+    ]);
+  });
+
+  it('reconciles restored file surfaces when the workspace is unavailable', async () => {
+    openCodeAgentRightPanelFile('room-1', 'src/App.tsx');
+    openCodeAgentRightPanelPreview('room-1', 'output/report.html');
+    openCodeAgentRightPanel('room-1', 'diff');
+    loadCodeWorkspaceEntriesMock.mockRejectedValue(new Error('Workspace sandbox is not ready'));
+    loadCodeWorkspaceFileMock.mockReturnValue(new Promise(() => {}));
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+
+    await waitFor(() => {
+      expect(readCodeAgentRightPanelState('room-1')).toMatchObject({
+        isOpen: true,
+        activeSurfaceId: 'diff',
+        surfaces: [{ id: 'diff', kind: 'diff' }],
+      });
+    });
+  });
+
   it('reloads workspace files when the room sandbox becomes ready', async () => {
     loadCodeWorkspaceEntriesMock
       .mockRejectedValueOnce(new Error('Workspace sandbox is not ready'))
@@ -1506,6 +1782,199 @@ describe('CodeAgentFileBrowserPanel', () => {
 
     expect(await screen.findByText('1 files')).toBeTruthy();
     expect(loadCodeWorkspaceEntriesMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('scopes open file contents to the current sandbox refresh', async () => {
+    const nextFile = deferred<{
+      path: string;
+      content: string;
+      byteSize: number;
+      truncated: boolean;
+      encoding: 'utf-8';
+    }>();
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock
+      .mockResolvedValueOnce({
+        path: 'src/App.tsx',
+        content: 'old sandbox content',
+        byteSize: 19,
+        truncated: false,
+        encoding: 'utf-8',
+      })
+      .mockReturnValueOnce(nextFile.promise);
+
+    const { rerender } = render(
+      <CodeAgentFileBrowserPanel
+        roomId="room-1"
+        projectName="Coco"
+        sandboxStatus="ready"
+        sandboxUpdatedAt="2026-06-30T10:00:00.000Z"
+      />,
+    );
+
+    expect(await screen.findByText('1 files')).toBeTruthy();
+    selectionHandlerRef.current?.(['src/App.tsx']);
+    expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:old sandbox content');
+
+    rerender(
+      <CodeAgentFileBrowserPanel
+        roomId="room-1"
+        projectName="Coco"
+        sandboxStatus="ready"
+        sandboxUpdatedAt="2026-06-30T10:01:00.000Z"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(loadCodeWorkspaceFileMock).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.queryByTestId('diff-file')).toBeNull();
+
+    await act(async () => {
+      nextFile.resolve({
+        path: 'src/App.tsx',
+        content: 'new sandbox content',
+        byteSize: 19,
+        truncated: false,
+        encoding: 'utf-8',
+      });
+    });
+
+    expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:new sandbox content');
+  });
+
+  it('does not carry optimistic file edits into a refreshed sandbox', async () => {
+    const nextFile = deferred<{
+      path: string;
+      content: string;
+      byteSize: number;
+      truncated: boolean;
+      encoding: 'utf-8';
+    }>();
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock
+      .mockResolvedValueOnce({
+        path: 'src/App.tsx',
+        content: 'old sandbox content',
+        byteSize: 19,
+        truncated: false,
+        encoding: 'utf-8',
+      })
+      .mockReturnValueOnce(nextFile.promise);
+
+    const { rerender } = render(
+      <CodeAgentFileBrowserPanel
+        roomId="room-1"
+        projectName="Coco"
+        sandboxStatus="ready"
+        sandboxUpdatedAt="2026-06-30T10:00:00.000Z"
+      />,
+    );
+
+    expect(await screen.findByText('1 files')).toBeTruthy();
+    selectionHandlerRef.current?.(['src/App.tsx']);
+    expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:old sandbox content');
+
+    nextEditorContentsRef.current = 'optimistic old sandbox edit';
+    fireEvent.click(screen.getByTestId('diff-file'));
+    expect(screen.getByTestId('diff-file').textContent).toBe('src/App.tsx:optimistic old sandbox edit');
+
+    rerender(
+      <CodeAgentFileBrowserPanel
+        roomId="room-1"
+        projectName="Coco"
+        sandboxStatus="ready"
+        sandboxUpdatedAt="2026-06-30T10:01:00.000Z"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(loadCodeWorkspaceFileMock).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.queryByTestId('diff-file')).toBeNull();
+
+    await act(async () => {
+      nextFile.resolve({
+        path: 'src/App.tsx',
+        content: 'new sandbox content',
+        byteSize: 19,
+        truncated: false,
+        encoding: 'utf-8',
+      });
+    });
+
+    expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:new sandbox content');
+  });
+
+  it('scopes workspace asset preview URLs to the current sandbox refresh', async () => {
+    const nextAsset = deferred<{
+      relativeUrl: string;
+      expiresAt: string;
+    }>();
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'output/report.html', name: 'report.html', type: 'file' },
+      ],
+      truncated: false,
+    });
+    createCodeWorkspaceAssetUrlMock
+      .mockResolvedValueOnce({
+        relativeUrl: '/api/coco/workspace-assets/old/report.html',
+        expiresAt: '2026-06-30T12:15:00.000Z',
+      })
+      .mockReturnValueOnce(nextAsset.promise);
+    resolveCodeWorkspaceAssetUrlMock.mockImplementation((asset: { relativeUrl: string }) => asset.relativeUrl);
+
+    const { container, rerender } = render(
+      <CodeAgentFileBrowserPanel
+        roomId="room-1"
+        projectName="Coco"
+        sandboxStatus="ready"
+        sandboxUpdatedAt="2026-06-30T10:00:00.000Z"
+      />,
+    );
+
+    expect(await screen.findByText('1 files')).toBeTruthy();
+    selectionHandlerRef.current?.(['output/report.html']);
+    await waitFor(() => {
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/coco/workspace-assets/old/report.html');
+    });
+
+    rerender(
+      <CodeAgentFileBrowserPanel
+        roomId="room-1"
+        projectName="Coco"
+        sandboxStatus="ready"
+        sandboxUpdatedAt="2026-06-30T10:01:00.000Z"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(createCodeWorkspaceAssetUrlMock).toHaveBeenCalledTimes(2);
+    });
+    expect(container.querySelector('iframe')).toBeNull();
+    expect(screen.getByRole('status', { name: 'codeAgentPreparingBrowserPreview' })).toBeTruthy();
+
+    await act(async () => {
+      nextAsset.resolve({
+        relativeUrl: '/api/coco/workspace-assets/new/report.html',
+        expiresAt: '2026-06-30T12:16:00.000Z',
+      });
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/coco/workspace-assets/new/report.html');
+    });
   });
 
   it('debounces edits through the workspace write API', async () => {
@@ -1902,7 +2371,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       expect(loadCodeWorkspaceFileMock.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
     expect(screen.getByTestId('diff-file').textContent).toBe('src/App.tsx:export const saved = true;');
-    expect(getOptimisticCodeAgentProjectFileQueryData('room-1', 'src/App.tsx')?.content).toBe(
+    expect(getOptimisticCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', 'none:')?.content).toBe(
       'export const saved = true;',
     );
   });
@@ -1958,7 +2427,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       expect(loadCodeWorkspaceFileMock.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
     expect(screen.getByTestId('diff-file').textContent).toBe('src/App.tsx:export const saved = true;');
-    expect(getOptimisticCodeAgentProjectFileQueryData('room-1', 'src/App.tsx')).toBeNull();
+    expect(getOptimisticCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', 'none:')).toBeNull();
   });
 
   it('does not let a late save confirmation overwrite another open file preview', async () => {

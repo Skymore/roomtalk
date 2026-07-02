@@ -111,9 +111,16 @@ export interface CocoWorkspaceDiffSummary {
   deletions: number;
 }
 
+export interface CocoWorkspaceChangedFileStat {
+  path: string;
+  additions: number;
+  deletions: number;
+}
+
 export interface CocoWorkspaceChanges {
   available: boolean;
   changedFiles: string[];
+  changedFileStats: CocoWorkspaceChangedFileStat[];
   diffSummary: CocoWorkspaceDiffSummary | null;
 }
 

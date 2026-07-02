@@ -142,11 +142,46 @@ describe('codeAgentProjectFilesQueryState', () => {
 
   it('clears optimistic file data by room and path', () => {
     setCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', 'room 1');
+    setCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', 'room 1 scoped', 'ready:1');
     setCodeAgentProjectFileQueryData('room-2', 'src/App.tsx', 'room 2');
 
     clearCodeAgentProjectFileQueryData('room-1', 'src/App.tsx');
 
     expect(getOptimisticCodeAgentProjectFileQueryData('room-1', 'src/App.tsx')).toBeNull();
+    expect(getOptimisticCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', 'ready:1')).toBeNull();
     expect(getOptimisticCodeAgentProjectFileQueryData('room-2', 'src/App.tsx')?.content).toBe('room 2');
+  });
+
+  it('scopes optimistic file data by workspace refresh key', () => {
+    const initial = {
+      path: 'src/App.tsx',
+      content: 'server content',
+      byteSize: 14,
+      truncated: false,
+      encoding: 'utf-8',
+    } satisfies CodeWorkspaceFile;
+
+    setCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', 'old workspace edit', 'ready:old');
+    setCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', 'new workspace edit', 'ready:new');
+
+    expect(getOptimisticCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', 'ready:old')?.content).toBe(
+      'old workspace edit',
+    );
+    expect(getOptimisticCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', 'ready:new')?.content).toBe(
+      'new workspace edit',
+    );
+    expect(resolveCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', initial, 'ready:missing')).toBe(initial);
+    expect(confirmCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', 'old workspace edit', null, 'ready:new')).toBe(false);
+    expect(confirmCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', 'old workspace edit', null, 'ready:old')).toBe(true);
+    expect(settleConfirmedCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', {
+      path: 'src/App.tsx',
+      content: 'old workspace edit',
+      byteSize: 18,
+      truncated: false,
+      encoding: 'utf-8',
+    }, 'ready:new')).toBe(false);
+    expect(getOptimisticCodeAgentProjectFileQueryData('room-1', 'src/App.tsx', 'ready:old')?.content).toBe(
+      'old workspace edit',
+    );
   });
 });

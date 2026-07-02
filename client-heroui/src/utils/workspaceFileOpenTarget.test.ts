@@ -11,7 +11,7 @@ describe('workspace file open targets', () => {
     expect(normalizeWorkspaceOpenPath('workspace/docs/README.md/')).toBe('docs/README.md');
   });
 
-  it('parses T3-style line targets', () => {
+  it('parses workspace line targets', () => {
     expect(parseWorkspaceFileOpenTarget('/workspace/src/App.tsx:42')).toEqual({
       path: 'src/App.tsx',
       line: 42,
@@ -37,7 +37,7 @@ describe('workspace file open targets', () => {
     });
   });
 
-  it('resolves absolute paths through the T3 workspace-relative guard', () => {
+  it('resolves absolute paths through the workspace-relative guard', () => {
     expect(parseWorkspaceFileOpenTarget('/workspace/src/App.tsx:12')).toEqual({
       path: 'src/App.tsx',
       line: 12,
@@ -45,7 +45,19 @@ describe('workspace file open targets', () => {
     expect(parseWorkspaceFileOpenTarget('/tmp/src/App.tsx:12')).toBeNull();
   });
 
-  it('resolves Windows workspace roots like T3 when a root is provided', () => {
+  it('resolves room-specific sandbox roots when a root is provided', () => {
+    expect(parseWorkspaceFileOpenTarget('/workspace/room-1/src/App.tsx:12', {
+      workspaceRoot: '/workspace/room-1',
+    })).toEqual({
+      path: 'src/App.tsx',
+      line: 12,
+    });
+    expect(parseWorkspaceFileOpenTarget('/workspace/other-room/src/App.tsx:12', {
+      workspaceRoot: '/workspace/room-1',
+    })).toBeNull();
+  });
+
+  it('resolves Windows workspace roots when a root is provided', () => {
     expect(parseWorkspaceFileOpenTarget('C:\\workspace\\src\\App.tsx:12:4', {
       workspaceRoot: 'C:\\workspace',
     })).toEqual({

@@ -54,6 +54,7 @@ function updateWorkspaceFileContents(
 
 interface EditableFileSurfaceProps {
   roomId: string;
+  workspaceScopeKey?: string;
   file: CodeWorkspaceFile;
   resolvedTheme: 'light' | 'dark';
   wordWrap: boolean;
@@ -76,6 +77,7 @@ interface FileSelectionOverride {
 
 export function CodeAgentEditableFileSurface({
   roomId,
+  workspaceScopeKey = '',
   file,
   resolvedTheme,
   wordWrap,
@@ -131,21 +133,21 @@ export function CodeAgentEditableFileSurface({
 
   const setDraftFileContents = useCallback((contents: string) => {
     latestDraftContentsRef.current = contents;
-    setCodeAgentProjectFileQueryData(roomId, filePath, contents);
+    setCodeAgentProjectFileQueryData(roomId, filePath, contents, workspaceScopeKey);
     onFileChange((current) => updateWorkspaceFileContents(current, filePath, contents));
-  }, [filePath, onFileChange, roomId]);
+  }, [filePath, onFileChange, roomId, workspaceScopeKey]);
 
   const confirmFileContents = useCallback((contents: string): boolean => {
     if (latestDraftContentsRef.current !== contents) {
       return false;
     }
-    const confirmed = confirmCodeAgentProjectFileQueryData(roomId, filePath, contents);
+    const confirmed = confirmCodeAgentProjectFileQueryData(roomId, filePath, contents, null, workspaceScopeKey);
     if (!confirmed) {
       return false;
     }
     onFileChange((current) => updateWorkspaceFileContents(current, filePath, contents));
     return true;
-  }, [filePath, onFileChange, roomId]);
+  }, [filePath, onFileChange, roomId, workspaceScopeKey]);
 
   const handlePendingChange = useCallback((pending: boolean) => {
     onSaveStateChange(filePath, pending ? 'pending' : 'saved', null);

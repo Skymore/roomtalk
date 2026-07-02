@@ -64,7 +64,12 @@ describe('code-agent workspace snapshots', () => {
       lastToolName: 'Read',
     });
     assert.deepEqual(snapshot.artifacts, []);
-    assert.deepEqual(snapshot.changes, { available: false, changedFiles: [], diffSummary: null });
+    assert.deepEqual(snapshot.changes, {
+      available: false,
+      changedFiles: [],
+      changedFileStats: [],
+      diffSummary: null,
+    });
     assert.deepEqual(snapshot.commands, [{
       id: 'tool-1',
       name: 'Read',
@@ -139,7 +144,7 @@ describe('code-agent workspace snapshots', () => {
       room,
       [],
       new Date('2026-05-29T01:00:00.000Z'),
-      { available: false, changedFiles: [], diffSummary: null },
+      { available: false, changedFiles: [], changedFileStats: [], diffSummary: null },
       [{
         slug: 'roomtalk-demo',
         title: 'RoomTalk Demo',
@@ -164,5 +169,18 @@ describe('code-agent workspace snapshots', () => {
       createdAt: '2026-06-30T12:00:00.000Z',
       updatedAt: '2026-06-30T12:00:00.000Z',
     }]);
+  });
+
+  it('includes the connected sandbox workspace root when supplied', () => {
+    const snapshot = buildCodeAgentWorkspaceSnapshot(
+      room,
+      [],
+      new Date('2026-05-29T01:00:00.000Z'),
+      { available: false, changedFiles: [], changedFileStats: [], diffSummary: null },
+      [],
+      '/workspace/room-1',
+    );
+
+    assert.equal(snapshot.workspaceRoot, '/workspace/room-1');
   });
 });

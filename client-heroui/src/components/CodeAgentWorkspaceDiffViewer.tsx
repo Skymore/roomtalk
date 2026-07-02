@@ -186,6 +186,16 @@ interface ScopedWorkspaceDiff {
   diff: CodeAgentWorkspaceDiff;
 }
 
+interface ScopedWorkspaceRefs {
+  scopeKey: string;
+  refs: CodeAgentWorkspaceRefs;
+}
+
+interface ScopedWorkspaceRefsError {
+  scopeKey: string;
+  message: string;
+}
+
 export interface CodeAgentWorkspaceDiffFileSummary {
   id: string;
   path: string;
@@ -349,8 +359,14 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   const diffContentScopeKey = `${roomId}:${refreshKey}:${diffIgnoreWhitespace ? 'ignore-whitespace' : 'all-whitespace'}:${diffScope}:${diffScope === 'branch' ? diffBaseRef ?? 'auto' : 'working-tree'}`;
   const diff = diffState?.scopeKey === diffContentScopeKey ? diffState.diff : null;
   const [baseRefQuery, setBaseRefQuery] = useState('');
-  const [workspaceRefs, setWorkspaceRefs] = useState<CodeAgentWorkspaceRefs | null>(null);
-  const [workspaceRefsError, setWorkspaceRefsError] = useState<string | null>(null);
+  const baseRefRequestQuery = baseRefQuery.trim();
+  const workspaceRefsScopeKey = `${roomId}:${refreshKey}:${diffScope}:${baseRefRequestQuery}`;
+  const [workspaceRefsState, setWorkspaceRefsState] = useState<ScopedWorkspaceRefs | null>(null);
+  const [workspaceRefsErrorState, setWorkspaceRefsErrorState] = useState<ScopedWorkspaceRefsError | null>(null);
+  const workspaceRefs = workspaceRefsState?.scopeKey === workspaceRefsScopeKey ? workspaceRefsState.refs : null;
+  const workspaceRefsError = workspaceRefsErrorState?.scopeKey === workspaceRefsScopeKey
+    ? workspaceRefsErrorState.message
+    : null;
   const [isWorkspaceRefsPending, setIsWorkspaceRefsPending] = useState(false);
   const codeViewRef = useRef<CodeViewHandle<DiffCommentAnnotationGroup> | null>(null);
   const diffScopeMenuRef = useRef<HTMLDetailsElement | null>(null);
@@ -369,16 +385,16 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   const loadingDiffLabel = t(diffScope === 'unstaged' ? 'codeAgentLoadingWorkingTreeDiff' : 'codeAgentLoadingBranchDiff');
   const diffHeadRefLabel = diff?.headRef || workspaceRefs?.headRef || 'HEAD';
   const diffBaseRefLabel = diff?.baseRef || diffBaseRef || t('codeAgentDiffBaseRefAutomatic');
-  const baseRefRequestQuery = baseRefQuery.trim();
   const hasNoNetChanges = Boolean(diff?.available && diff.patch.trim().length === 0);
   const emptyPatchLabel = t(hasNoNetChanges ? 'codeAgentNoNetWorkspaceChanges' : 'codeAgentNoWorkspacePatch');
-  const reviewCommentSectionId = `workspace-diff:${roomId}:${refreshKey || 'current'}:${diffScope}:${diffBaseRef ?? 'auto'}`;
+  const diffReviewCommentScopeKey = `${roomId}:${diffScope}:${diffScope === 'branch' ? diffBaseRef ?? 'auto' : 'working-tree'}`;
+  const reviewCommentSectionId = `workspace-diff:${diffReviewCommentScopeKey}`;
   const reviewCommentSectionTitle = t('codeAgentChanges');
 
   useEffect(() => {
     setBaseRefQuery('');
-    setWorkspaceRefs(null);
-    setWorkspaceRefsError(null);
+    setWorkspaceRefsState(null);
+    setWorkspaceRefsErrorState(null);
   }, [roomId]);
 
   const selectDiffRenderMode = (nextMode: DiffRenderMode) => {
@@ -509,12 +525,13 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
 
   useEffect(() => {
     if (!enabled || diffScope !== 'branch') {
+      setIsWorkspaceRefsPending(false);
       return undefined;
     }
 
     const controller = new AbortController();
     setIsWorkspaceRefsPending(true);
-    setWorkspaceRefsError(null);
+    setWorkspaceRefsErrorState(null);
 
     loadCodeAgentWorkspaceRefs(roomId, {
       signal: controller.signal,
@@ -523,12 +540,18 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     }).then(
       (refs) => {
         if (!controller.signal.aborted) {
-          setWorkspaceRefs(refs);
+          setWorkspaceRefsState({
+            scopeKey: workspaceRefsScopeKey,
+            refs,
+          });
         }
       },
       (refsError) => {
         if (!controller.signal.aborted) {
-          setWorkspaceRefsError(refsError instanceof Error ? refsError.message : 'Workspace refs failed.');
+          setWorkspaceRefsErrorState({
+            scopeKey: workspaceRefsScopeKey,
+            message: refsError instanceof Error ? refsError.message : 'Workspace refs failed.',
+          });
         }
       },
     ).finally(() => {
@@ -538,7 +561,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     });
 
     return () => controller.abort();
-  }, [baseRefRequestQuery, diffRefreshNonce, diffScope, enabled, refreshKey, roomId]);
+  }, [baseRefRequestQuery, diffRefreshNonce, diffScope, enabled, roomId, workspaceRefsScopeKey]);
 
   useEffect(() => {
     const handlePointerDown = (event: PointerEvent) => {

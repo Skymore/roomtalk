@@ -70,6 +70,7 @@ const WORKSPACE_DIFF_MAX_BYTES = parsePositiveIntegerEnv('COCO_WORKSPACE_DIFF_RE
 const unavailableWorkspaceChanges: CocoWorkspaceChanges = {
   available: false,
   changedFiles: [],
+  changedFileStats: [],
   diffSummary: null,
 };
 
@@ -207,19 +208,34 @@ export function registerCodeAgentWorkspaceHandlers({
     return { success: true, handle: await cocoSandboxService.connect(room.sandboxId) };
   };
 
-  const loadWorkspaceChanges = async (room: Room): Promise<CocoWorkspaceChanges> => {
-    if (!cocoSandboxService?.getWorkspaceChanges || !room.sandboxId || room.sandboxStatus !== 'ready') {
-      return unavailableWorkspaceChanges;
+  const loadWorkspaceSnapshotState = async (room: Room): Promise<{
+    changes: CocoWorkspaceChanges;
+    workspaceRoot: string | null;
+  }> => {
+    if (!cocoSandboxService || !room.sandboxId || room.sandboxStatus !== 'ready') {
+      return { changes: unavailableWorkspaceChanges, workspaceRoot: null };
     }
     try {
       const workspace = await connectReadyWorkspace(room);
       if (!workspace.success) {
-        return unavailableWorkspaceChanges;
+        return { changes: unavailableWorkspaceChanges, workspaceRoot: null };
       }
-      return await cocoSandboxService.getWorkspaceChanges(workspace.handle);
+      const workspaceRoot = workspace.handle.workspace || null;
+      if (!cocoSandboxService.getWorkspaceChanges) {
+        return { changes: unavailableWorkspaceChanges, workspaceRoot };
+      }
+      try {
+        return {
+          changes: await cocoSandboxService.getWorkspaceChanges(workspace.handle),
+          workspaceRoot,
+        };
+      } catch (error) {
+        socketLogger.warn('Failed to load code workspace changes', { error, roomId: room.id, socketId: socket.id });
+        return { changes: unavailableWorkspaceChanges, workspaceRoot };
+      }
     } catch (error) {
-      socketLogger.warn('Failed to load code workspace changes', { error, roomId: room.id, socketId: socket.id });
-      return unavailableWorkspaceChanges;
+      socketLogger.warn('Failed to connect code workspace for snapshot', { error, roomId: room.id, socketId: socket.id });
+      return { changes: unavailableWorkspaceChanges, workspaceRoot: null };
     }
   };
 
@@ -250,12 +266,19 @@ export function registerCodeAgentWorkspaceHandlers({
         return;
       }
       const messages = await store.readMessagesByRoom(access.room.id);
-      const changes = await loadWorkspaceChanges(access.room);
+      const workspaceState = await loadWorkspaceSnapshotState(access.room);
       const artifacts = await loadPublishedArtifacts(access.room);
 
       callback?.({
         success: true,
-        snapshot: buildCodeAgentWorkspaceSnapshot(access.room, messages, new Date(), changes, artifacts),
+        snapshot: buildCodeAgentWorkspaceSnapshot(
+          access.room,
+          messages,
+          new Date(),
+          workspaceState.changes,
+          artifacts,
+          workspaceState.workspaceRoot,
+        ),
       });
     } catch (error) {
       socketLogger.error('Failed to build code workspace snapshot', { error, clientId, roomId, socketId: socket.id });
@@ -485,13 +508,13 @@ export function registerCodeAgentWorkspaceHandlers({
         return;
       }
 
-      await cocoSandboxService.readWorkspaceFile(workspace.handle, path, { maxBytes: 1 });
+      const previewFile = await cocoSandboxService.readWorkspaceFile(workspace.handle, path, { maxBytes: 1 });
       callback?.({
         success: true,
         asset: codeWorkspaceAssetAccess.issueAssetUrl({
           roomId: access.room.id,
           sandboxId: access.room.sandboxId!,
-          path,
+          path: previewFile.path,
         }),
       });
     } catch (error) {

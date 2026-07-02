@@ -90,6 +90,7 @@ describe('summarizeCocoMessages', () => {
       backend: 'coco',
       source: 'sandbox',
       generatedAt: '2026-05-29T00:00:00.000Z',
+      workspaceRoot: '/workspace/room-1',
       status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: false },
       summary: { toolCalls: 1, toolResults: 0, toolErrors: 0 },
       artifacts: [{
@@ -103,7 +104,12 @@ describe('summarizeCocoMessages', () => {
         createdAt: '2026-06-30T12:00:00.000Z',
         updatedAt: '2026-06-30T12:00:00.000Z',
       }],
-      changes: { available: false, changedFiles: [], diffSummary: null },
+      changes: {
+        available: true,
+        changedFiles: ['src/App.tsx'],
+        changedFileStats: [{ path: 'src/App.tsx', additions: 2, deletions: 1 }],
+        diffSummary: { files: 1, additions: 2, deletions: 1 },
+      },
       commands: [],
     };
     requestCodeAgentWorkspaceSnapshotMock.mockResolvedValue(snapshot);
@@ -166,6 +172,7 @@ describe('summarizeCocoMessages', () => {
     await expect(loadCodeAgentWorkspaceSnapshot('room-1')).resolves.toEqual({
       ...snapshot,
       artifacts: [],
+      changes: { available: false, changedFiles: [], changedFileStats: [], diffSummary: null },
     });
   });
 

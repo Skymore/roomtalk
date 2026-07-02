@@ -34,6 +34,7 @@ interface MarkdownContentProps {
   onTaskListChange?: (change: { markerOffset: number; checked: boolean }) => void;
   onOpenWorkspaceFile?: (path: string) => void;
   onOpenWorkspaceFileInBrowserPreview?: (path: string) => void;
+  workspaceRoot?: string | null;
 }
 interface CodeBlockProps {
   className?: string;
@@ -175,6 +176,12 @@ function buildMarkdownFileLinkLabel(meta: CodeAgentMarkdownFileLinkMeta, parentS
     labelParts.push(`L${meta.line}${meta.column ? `:C${meta.column}` : ''}`);
   }
   return labelParts.join(' · ');
+}
+
+function buildMarkdownFileOpenTarget(meta: CodeAgentMarkdownFileLinkMeta): string {
+  const path = meta.workspaceRelativePath ?? meta.filePath;
+  if (!meta.line) return path;
+  return `${path}:${meta.line}${meta.column ? `:${meta.column}` : ''}`;
 }
 
 function extractFenceLanguage(className: string | undefined): string {
@@ -491,8 +498,12 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({
   onTaskListChange,
   onOpenWorkspaceFile,
   onOpenWorkspaceFileInBrowserPreview,
+  workspaceRoot,
 }) => {
   const resolvedTheme = useResolvedTheme();
+  const resolvedWorkspaceRoot = workspaceRoot === undefined
+    ? CODE_AGENT_DEFAULT_WORKSPACE_ROOT
+    : workspaceRoot || undefined;
   const processed = React.useMemo(() => {
     const text = escapeRawHtmlTags(preprocessMarkdown(content));
     return parseMath(text);
@@ -506,13 +517,13 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({
     for (const href of extractMarkdownLinkHrefs(content)) {
       const normalizedHref = normalizeCodeAgentMarkdownLinkHrefKey(href);
       if (metaByHref.has(normalizedHref)) continue;
-      const meta = resolveCodeAgentMarkdownFileLinkMeta(normalizedHref, CODE_AGENT_DEFAULT_WORKSPACE_ROOT);
+      const meta = resolveCodeAgentMarkdownFileLinkMeta(normalizedHref, resolvedWorkspaceRoot);
       if (meta) {
         metaByHref.set(normalizedHref, meta);
       }
     }
     return metaByHref;
-  }, [canOpenWorkspaceLinks, content]);
+  }, [canOpenWorkspaceLinks, content, resolvedWorkspaceRoot]);
   const fileLinkParentSuffixByPath = React.useMemo(() => {
     const filePaths = [...markdownFileLinkMetaByHref.values()].map((meta) => meta.filePath);
     return buildFileLinkParentSuffixByPath(filePaths);
@@ -555,7 +566,7 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({
           const normalizedHref = typeof href === 'string' ? normalizeCodeAgentMarkdownLinkHrefKey(href) : '';
           const fileLinkMeta = canOpenWorkspaceLinks && normalizedHref
             ? markdownFileLinkMetaByHref.get(normalizedHref)
-              ?? resolveCodeAgentMarkdownFileLinkMeta(normalizedHref, CODE_AGENT_DEFAULT_WORKSPACE_ROOT)
+              ?? resolveCodeAgentMarkdownFileLinkMeta(normalizedHref, resolvedWorkspaceRoot)
             : null;
           if (!fileLinkMeta) {
             return <a href={href} className={className} {...props}>{children}</a>;
@@ -579,11 +590,15 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = memo(({
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                if (onOpenWorkspaceFileInBrowserPreview && isBrowserPreviewFile(fileLinkMeta.filePath)) {
-                  onOpenWorkspaceFileInBrowserPreview(fileLinkMeta.filePath);
+                if (
+                  onOpenWorkspaceFileInBrowserPreview &&
+                  fileLinkMeta.workspaceRelativePath &&
+                  isBrowserPreviewFile(fileLinkMeta.workspaceRelativePath)
+                ) {
+                  onOpenWorkspaceFileInBrowserPreview(fileLinkMeta.workspaceRelativePath);
                   return;
                 }
-                onOpenWorkspaceFile?.(fileLinkMeta.targetPath);
+                onOpenWorkspaceFile?.(buildMarkdownFileOpenTarget(fileLinkMeta));
               }}
             >
               <CodeAgentFileTagChipContent

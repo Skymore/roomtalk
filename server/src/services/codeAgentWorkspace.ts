@@ -33,6 +33,7 @@ export interface CodeAgentWorkspaceSnapshot {
   backend: 'coco';
   source: 'sandbox';
   generatedAt: string;
+  workspaceRoot?: string;
   status: {
     sandboxStatus: RoomSandboxStatus;
     agentStatus: RoomCocoStatus;
@@ -43,6 +44,7 @@ export interface CodeAgentWorkspaceSnapshot {
   changes: {
     available: boolean;
     changedFiles: string[];
+    changedFileStats: CocoWorkspaceChanges['changedFileStats'];
     diffSummary: CocoWorkspaceChanges['diffSummary'];
   };
   commands: CodeAgentWorkspaceCommand[];
@@ -141,15 +143,18 @@ export const buildCodeAgentWorkspaceSnapshot = (
   changes: CocoWorkspaceChanges = {
     available: false,
     changedFiles: [],
+    changedFileStats: [],
     diffSummary: null,
   },
-  artifacts: CodeAgentWorkspaceArtifact[] = []
+  artifacts: CodeAgentWorkspaceArtifact[] = [],
+  workspaceRoot?: string | null
 ): CodeAgentWorkspaceSnapshot => {
   return {
     roomId: room.id,
     backend: 'coco',
     source: 'sandbox',
     generatedAt: now.toISOString(),
+    ...(workspaceRoot ? { workspaceRoot } : {}),
     status: {
       sandboxStatus: room.sandboxStatus || 'none',
       agentStatus: room.cocoStatus || 'idle',

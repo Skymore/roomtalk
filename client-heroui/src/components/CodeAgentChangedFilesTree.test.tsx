@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CodeAgentChangedFilesTree } from './CodeAgentChangedFilesTree';
@@ -186,6 +186,41 @@ describe('CodeAgentChangedFilesTree', () => {
     fireEvent.click(screen.getByText('main.ts'));
 
     expect(onOpenDiffFile).toHaveBeenCalledWith('apps/web/src/main.ts');
+  });
+
+  it('expands ancestor directories and scrolls the selected diff file into view', async () => {
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    render(
+      <CodeAgentChangedFilesTree
+        files={[
+          { path: 'apps/web/src/index.ts', additions: 2, deletions: 1 },
+          { path: 'apps/web/src/main.ts', additions: 3, deletions: 0 },
+        ]}
+        allDirectoriesExpanded={false}
+        resolvedTheme="light"
+        selectedPath="apps/web/src/main.ts"
+        onOpenDiffFile={vi.fn()}
+      />,
+    );
+
+    const selected = await screen.findByText('main.ts');
+    expect(selected.closest('button')?.getAttribute('aria-current')).toBe('true');
+    expect(screen.getByText('index.ts')).toBeTruthy();
+
+    await waitFor(() => {
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' });
+    });
+
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: originalScrollIntoView,
+    });
   });
 
   it('uses T3 Pierre file icons for changed files', () => {

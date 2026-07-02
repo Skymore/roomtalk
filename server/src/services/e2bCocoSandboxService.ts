@@ -218,7 +218,7 @@ export class E2BCocoSandboxService implements CocoSandboxService {
       '  exit 0',
       'fi',
       'printf "__ROOMTALK_STATUS__\\n"',
-      'git status --porcelain=v1 || true',
+      'git status --porcelain=v1 -z || true',
       'printf "__ROOMTALK_NUMSTAT__\\n"',
       'if git rev-parse --verify HEAD >/dev/null 2>&1; then',
       '  git diff --numstat HEAD -- || true',
@@ -252,7 +252,7 @@ export class E2BCocoSandboxService implements CocoSandboxService {
     const isExplicitBranchRange = isBranchScope && Boolean(trimmedBaseRef);
     const diffTarget = options.scope === 'unstaged' ? '--' : 'HEAD --';
     const fallbackDiffCommand = `git diff --no-ext-diff --patch --minimal${whitespaceFlag} --src-prefix=a/ --dst-prefix=b/ ${diffTarget} || true`;
-    const untrackedDiffCommand = 'git ls-files --others --exclude-standard -z | xargs -0 -r -I{} sh -c \'git diff --no-index --patch --minimal --src-prefix=a/ --dst-prefix=b/ -- /dev/null "$1" || true\' sh {}';
+    const untrackedDiffCommand = `git ls-files --others --exclude-standard -z | xargs -0 -r -I{} sh -c 'git diff --no-index --patch --minimal${whitespaceFlag} --src-prefix=a/ --dst-prefix=b/ -- /dev/null "$1" || true' sh {}`;
     const printDiffMetadataLines = [
       'printf "__ROOMTALK_HEAD_REF__\\n%s\\n" "$head_ref"',
       'printf "__ROOMTALK_BASE_REF__\\n%s\\n" "$base_ref"',
@@ -368,8 +368,16 @@ export class E2BCocoSandboxService implements CocoSandboxService {
       'fi',
       'printf "__ROOMTALK_HEAD_REF__\\n"',
       'git branch --show-current || true',
+      'primary_remote=""',
+      'if git remote get-url origin >/dev/null 2>&1; then',
+      '  primary_remote="origin"',
+      'else',
+      '  primary_remote=$(git remote | sed -n "1p" || true)',
+      'fi',
       'printf "__ROOMTALK_DEFAULT_REF__\\n"',
-      'git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed "s#^refs/remotes/origin/##" || true',
+      'if [ -n "$primary_remote" ]; then',
+      '  git symbolic-ref --quiet "refs/remotes/$primary_remote/HEAD" 2>/dev/null | sed "s#^refs/remotes/$primary_remote/##" || true',
+      'fi',
       'printf "__ROOMTALK_REFS__\\n"',
       'git for-each-ref --format="%(refname:short)%09%(refname)%09%(committerdate:unix)" refs/heads refs/remotes || true',
     ].join('\n');
@@ -746,18 +754,29 @@ const parseWorkspaceChanges = (stdout: string): CocoWorkspaceChanges => {
     return {
       available: false,
       changedFiles: [],
+      changedFileStats: [],
       diffSummary: null,
     };
   }
 
-  const statusOutput = sectionBetween(stdout, '__ROOMTALK_STATUS__', '__ROOMTALK_NUMSTAT__');
+  const statusOutput = sectionBetweenRaw(stdout, '__ROOMTALK_STATUS__', '__ROOMTALK_NUMSTAT__');
   const numstatOutput = sectionAfter(stdout, '__ROOMTALK_NUMSTAT__');
   const changedFiles = parseGitStatusFiles(statusOutput);
   const diffStats = parseGitNumstat(numstatOutput);
+  const fileStatMap = new Map(diffStats.files.map((file) => [file.path, file]));
+  const changedFileStats = changedFiles.map((path) => {
+    const stat = fileStatMap.get(path);
+    return {
+      path,
+      additions: stat?.additions ?? 0,
+      deletions: stat?.deletions ?? 0,
+    };
+  });
 
   return {
     available: true,
     changedFiles,
+    changedFileStats,
     diffSummary: {
       files: changedFiles.length,
       additions: diffStats.additions,
@@ -924,6 +943,17 @@ const sectionBetween = (value: string, startMarker: string, endMarker: string): 
   return (end < 0 ? value.slice(contentStart) : value.slice(contentStart, end)).trim();
 };
 
+const sectionBetweenRaw = (value: string, startMarker: string, endMarker: string): string => {
+  const start = value.indexOf(startMarker);
+  if (start < 0) {
+    return '';
+  }
+  const contentStart = start + startMarker.length;
+  const end = value.indexOf(endMarker, contentStart);
+  const raw = end < 0 ? value.slice(contentStart) : value.slice(contentStart, end);
+  return raw.startsWith('\r\n') ? raw.slice(2) : raw.startsWith('\n') ? raw.slice(1) : raw;
+};
+
 const sectionAfter = (value: string, marker: string): string => {
   const start = value.indexOf(marker);
   return start < 0 ? '' : value.slice(start + marker.length).trim();
@@ -940,6 +970,31 @@ const sectionAfterRaw = (value: string, marker: string): string => {
 
 const parseGitStatusFiles = (statusOutput: string): string[] => {
   const files = new Set<string>();
+  if (statusOutput.includes('\0')) {
+    const records = statusOutput.split('\0');
+    for (let index = 0; index < records.length; index += 1) {
+      const record = records[index];
+      if (!record || record.length < 4 || record[2] !== ' ') {
+        continue;
+      }
+      const status = record.slice(0, 2);
+      if (!/^[ MADRCU?!]{2}$/.test(status)) {
+        continue;
+      }
+      const rawPath = record.slice(3);
+      if (rawPath) {
+        files.add(rawPath);
+      }
+      if (status[0] === 'R' || status[0] === 'C' || status[1] === 'R' || status[1] === 'C') {
+        index += 1;
+      }
+    }
+    return [...files].sort((left, right) => left.localeCompare(right, undefined, {
+      numeric: true,
+      sensitivity: 'base',
+    }));
+  }
+
   for (const line of statusOutput.split(/\r?\n/)) {
     const match = /^[ MADRCU?!]{1,2}\s+(.+)$/.exec(line);
     if (!match) {
@@ -958,21 +1013,49 @@ const parseGitStatusFiles = (statusOutput: string): string[] => {
   }));
 };
 
-const parseGitNumstat = (numstatOutput: string): { additions: number; deletions: number } => {
+const parseGitNumstat = (numstatOutput: string): {
+  additions: number;
+  deletions: number;
+  files: Array<{ path: string; additions: number; deletions: number }>;
+} => {
   let additions = 0;
   let deletions = 0;
+  const fileStats = new Map<string, { path: string; additions: number; deletions: number }>();
   for (const line of numstatOutput.split(/\r?\n/)) {
-    const [added, deleted] = line.split('\t');
+    if (!line.trim()) {
+      continue;
+    }
+    const [added, deleted, ...pathParts] = line.split('\t');
+    const rawPath = pathParts.length > 1
+      ? (pathParts.at(-1) || '').trim()
+      : pathParts.join('\t').trim();
+    if (!rawPath) {
+      continue;
+    }
     const addedCount = Number.parseInt(added || '', 10);
     const deletedCount = Number.parseInt(deleted || '', 10);
-    if (Number.isFinite(addedCount)) {
-      additions += addedCount;
-    }
-    if (Number.isFinite(deletedCount)) {
-      deletions += deletedCount;
-    }
+    const fileAdditions = Number.isFinite(addedCount) ? addedCount : 0;
+    const fileDeletions = Number.isFinite(deletedCount) ? deletedCount : 0;
+    const renameArrowIndex = rawPath.indexOf(' => ');
+    const normalizedPath = renameArrowIndex >= 0
+      ? rawPath.slice(renameArrowIndex + ' => '.length).trim()
+      : rawPath;
+    const path = normalizedPath || rawPath;
+    additions += fileAdditions;
+    deletions += fileDeletions;
+    const existing = fileStats.get(path) || { path, additions: 0, deletions: 0 };
+    existing.additions += fileAdditions;
+    existing.deletions += fileDeletions;
+    fileStats.set(path, existing);
   }
-  return { additions, deletions };
+  return {
+    additions,
+    deletions,
+    files: [...fileStats.values()].sort((left, right) => left.path.localeCompare(right.path, undefined, {
+      numeric: true,
+      sensitivity: 'base',
+    })),
+  };
 };
 
 const unquoteGitPath = (path: string): string => path
