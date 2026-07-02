@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import {
+  CodeWorkspacePreviewAutomationError,
   connectCodeWorkspacePreviewAutomationHost,
   runCodeWorkspacePreviewAutomationRequest,
   validateCodeWorkspacePreviewAutomationHost,
@@ -8,6 +9,7 @@ import {
 import type { CodeWorkspacePreviewAutomationEvent } from './socket';
 
 const connectMock = vi.hoisted(() => vi.fn());
+const disconnectMock = vi.hoisted(() => vi.fn());
 const focusMock = vi.hoisted(() => vi.fn());
 const requestMock = vi.hoisted(() => vi.fn());
 const respondMock = vi.hoisted(() => vi.fn());
@@ -17,6 +19,7 @@ const connectCallbacks = vi.hoisted(() => new Set<() => void>());
 vi.mock('./socket', () => ({
   requestCodeWorkspacePreviewAutomation: requestMock,
   requestConnectCodeWorkspacePreviewAutomation: connectMock,
+  requestDisconnectCodeWorkspacePreviewAutomation: disconnectMock,
   requestFocusCodeWorkspacePreviewAutomation: focusMock,
   requestRespondCodeWorkspacePreviewAutomation: respondMock,
   onSocketConnected: (callback: () => void) => {
@@ -48,15 +51,25 @@ const tabHost = {
   tabId: 'browser:preview',
 };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+}
+
 describe('codeWorkspacePreviewAutomation', () => {
   beforeEach(() => {
     eventCallbacks.clear();
     connectCallbacks.clear();
     connectMock.mockReset();
+    disconnectMock.mockReset();
     focusMock.mockReset();
     requestMock.mockReset();
     respondMock.mockReset();
     connectMock.mockResolvedValue(host);
+    disconnectMock.mockResolvedValue(undefined);
     focusMock.mockResolvedValue({ ...host, focused: false });
     respondMock.mockResolvedValue({
       clientId: 'client-1',
@@ -114,12 +127,21 @@ describe('codeWorkspacePreviewAutomation', () => {
       connectionId: 'automation-1',
       requestId: 'request-2',
       ok: false,
-      error: { _tag: 'PreviewAutomationExecutionError', message: 'no frame' },
+      error: {
+        _tag: 'PreviewAutomationTabNotFoundError',
+        message: 'no frame',
+        detail: { tabId: 'browser:missing' },
+      },
     });
     await expect(runCodeWorkspacePreviewAutomationRequest({
       roomId: 'room-1',
       operation: 'snapshot',
-    })).rejects.toThrow('no frame');
+    })).rejects.toMatchObject({
+      name: 'PreviewAutomationTabNotFoundError',
+      _tag: 'PreviewAutomationTabNotFoundError',
+      message: 'no frame',
+      detail: { tabId: 'browser:missing' },
+    } satisfies Partial<CodeWorkspacePreviewAutomationError>);
   });
 
   it('responds to matching preview automation requests', async () => {
@@ -155,6 +177,10 @@ describe('codeWorkspacePreviewAutomation', () => {
     });
     expect(handle).toHaveBeenCalledTimes(1);
     controller.dispose();
+    expect(disconnectMock).toHaveBeenCalledWith({
+      roomId: 'room-1',
+      connectionId: 'automation-1',
+    });
   });
 
   it('registers tab-scoped automation hosts across reconnects', async () => {
@@ -216,8 +242,74 @@ describe('codeWorkspacePreviewAutomation', () => {
         requestId: 'request-1',
         ok: false,
         error: {
-          _tag: 'Error',
+          _tag: 'PreviewAutomationExecutionError',
           message: 'unsupported',
+          detail: {
+            requestId: 'request-1',
+            operation: 'click',
+            roomId: 'room-1',
+            tabId: null,
+          },
+        },
+      });
+    });
+  });
+
+  it('preserves typed preview automation errors in host responses', async () => {
+    const typedError = Object.assign(
+      new Error('Preview automation type request request-1 requires an editable target in tab browser:preview.'),
+      {
+        _tag: 'PreviewAutomationTargetNotEditableError',
+        detail: {
+          requestId: 'request-1',
+          operation: 'type',
+          roomId: 'room-1',
+          tabId: 'browser:preview',
+          selectorKind: 'selector',
+          selectorLength: 7,
+        },
+      },
+    );
+
+    await connectCodeWorkspacePreviewAutomationHost({
+      roomId: 'room-1',
+      handle: () => {
+        throw typedError;
+      },
+    });
+
+    eventCallbacks.forEach((callback) => callback({
+      type: 'request',
+      roomId: 'room-1',
+      connectionId: 'automation-1',
+      createdAt: '2026-05-03T10:00:00.000Z',
+      request: {
+        requestId: 'request-1',
+        roomId: 'room-1',
+        tabId: 'browser:preview',
+        operation: 'type',
+        input: { selector: '#submit', text: 'hello' },
+        timeoutMs: 1000,
+      },
+    }));
+
+    await vi.waitFor(() => {
+      expect(respondMock).toHaveBeenCalledWith({
+        roomId: 'room-1',
+        connectionId: 'automation-1',
+        requestId: 'request-1',
+        ok: false,
+        error: {
+          _tag: 'PreviewAutomationTargetNotEditableError',
+          message: 'Preview automation type request request-1 requires an editable target in tab browser:preview.',
+          detail: {
+            requestId: 'request-1',
+            operation: 'type',
+            roomId: 'room-1',
+            tabId: 'browser:preview',
+            selectorKind: 'selector',
+            selectorLength: 7,
+          },
         },
       });
     });
@@ -235,5 +327,85 @@ describe('codeWorkspacePreviewAutomation', () => {
     await vi.waitFor(() => {
       expect(connectMock).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it('suppresses stale automation responses after the host reconnects', async () => {
+    const pendingRequest = deferred<unknown>();
+    const handle = vi.fn(() => pendingRequest.promise);
+    connectMock
+      .mockResolvedValueOnce(host)
+      .mockResolvedValueOnce({
+        ...host,
+        connectionId: 'automation-2',
+        updatedAt: '2026-05-03T10:00:01.000Z',
+      });
+
+    await connectCodeWorkspacePreviewAutomationHost({
+      roomId: 'room-1',
+      handle,
+    });
+
+    eventCallbacks.forEach((callback) => callback({
+      type: 'request',
+      roomId: 'room-1',
+      connectionId: 'automation-1',
+      createdAt: '2026-05-03T10:00:00.000Z',
+      request: {
+        requestId: 'request-stale',
+        roomId: 'room-1',
+        operation: 'status',
+        input: {},
+        timeoutMs: 1000,
+      },
+    }));
+    expect(handle).toHaveBeenCalledTimes(1);
+
+    connectCallbacks.forEach((callback) => callback());
+    await vi.waitFor(() => {
+      expect(connectMock).toHaveBeenCalledTimes(2);
+    });
+    pendingRequest.resolve({ available: true });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(respondMock).not.toHaveBeenCalledWith(expect.objectContaining({
+      connectionId: 'automation-1',
+      requestId: 'request-stale',
+    }));
+  });
+
+  it('suppresses stale automation responses after dispose', async () => {
+    const pendingRequest = deferred<unknown>();
+    const handle = vi.fn(() => pendingRequest.promise);
+
+    const controller = await connectCodeWorkspacePreviewAutomationHost({
+      roomId: 'room-1',
+      handle,
+    });
+
+    eventCallbacks.forEach((callback) => callback({
+      type: 'request',
+      roomId: 'room-1',
+      connectionId: 'automation-1',
+      createdAt: '2026-05-03T10:00:00.000Z',
+      request: {
+        requestId: 'request-disposed',
+        roomId: 'room-1',
+        operation: 'status',
+        input: {},
+        timeoutMs: 1000,
+      },
+    }));
+    controller.dispose();
+    pendingRequest.resolve({ available: true });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(disconnectMock).toHaveBeenCalledWith({
+      roomId: 'room-1',
+      connectionId: 'automation-1',
+    });
+    expect(respondMock).not.toHaveBeenCalledWith(expect.objectContaining({
+      connectionId: 'automation-1',
+      requestId: 'request-disposed',
+    }));
   });
 });

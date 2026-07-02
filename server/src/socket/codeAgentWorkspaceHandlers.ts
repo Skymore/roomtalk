@@ -207,6 +207,7 @@ const PREVIEW_AUTOMATION_CONNECTION_ID_MAX_LENGTH = 128;
 const PREVIEW_AUTOMATION_REQUEST_ID_MAX_LENGTH = 128;
 const PREVIEW_AUTOMATION_TIMEOUT_FALLBACK_MS = 15000;
 const PREVIEW_AUTOMATION_TIMEOUT_MAX_MS = 60000;
+const PREVIEW_AUTOMATION_EVALUATE_EXPRESSION_MAX_LENGTH = 64_000;
 const PREVIEW_AUTOMATION_OPERATIONS: WorkspacePreviewAutomationOperation[] = [
   'status',
   'open',
@@ -229,10 +230,17 @@ const previewAutomationOperationSet = new Set<string>(PREVIEW_AUTOMATION_OPERATI
 const workspacePreviewSessionsByRoomId = new Map<string, Map<string, WorkspacePreviewSessionSnapshot>>();
 const workspacePreviewHistoryByRoomAndTabId = new Map<string, string[]>();
 const workspacePreviewAutomationHostsByRoomId = new Map<string, Map<string, WorkspacePreviewAutomationHostRecord>>();
+const workspacePreviewAutomationAssignmentsByRoomAndClientId = new Map<string, {
+  clientId: string;
+  connectionId: string;
+  tabId?: string;
+  updatedAt: string;
+}>();
 const workspacePreviewAutomationPendingByRoomAndRequestId = new Map<string, {
   hostConnectionId: string;
   operation: WorkspacePreviewAutomationOperation;
   tabId?: string;
+  assignmentKey?: string;
   timeout: ReturnType<typeof setTimeout>;
   callback: (response: WorkspacePreviewAutomationAck) => void;
 }>();
@@ -354,6 +362,383 @@ const parsePreviewAutomationInput = (payload: unknown): unknown => (
     ? (payload as { input?: unknown }).input
     : {}
 );
+
+// Accept full preview-tool inputs while preserving RoomTalk's socket request shape.
+type PreviewAutomationNormalizedInput = {
+  input: Record<string, unknown>;
+  tabId?: string;
+  timeoutMs?: number;
+};
+
+type PreviewAutomationInputValidationResult =
+  | { ok: true; value: PreviewAutomationNormalizedInput }
+  | { ok: false; error: string };
+
+const isWorkspaceRecord = (value: unknown): value is Record<string, unknown> => (
+  typeof value === 'object' && value !== null
+);
+
+const hasWorkspaceOwnProperty = (value: Record<string, unknown>, key: string): boolean => (
+  Object.prototype.hasOwnProperty.call(value, key)
+);
+
+const previewAutomationInputRecord = (input: unknown): Record<string, unknown> => (
+  isWorkspaceRecord(input) ? input : {}
+);
+
+const previewAutomationInputString = (
+  input: Record<string, unknown>,
+  key: string,
+  maxLength = PREVIEW_URL_MAX_LENGTH,
+): string | undefined => {
+  if (!hasWorkspaceOwnProperty(input, key)) {
+    return undefined;
+  }
+  const value = input[key];
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
+};
+
+const previewAutomationInputStringPresent = (input: Record<string, unknown>, key: string): boolean => (
+  previewAutomationInputString(input, key) !== undefined
+);
+
+const previewAutomationInputBooleanValid = (input: Record<string, unknown>, key: string): boolean => (
+  !hasWorkspaceOwnProperty(input, key) || typeof input[key] === 'boolean'
+);
+
+const previewAutomationInputFiniteNumber = (
+  input: Record<string, unknown>,
+  key: string,
+): number | undefined => {
+  if (!hasWorkspaceOwnProperty(input, key)) {
+    return undefined;
+  }
+  const value = input[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+};
+
+const previewAutomationInputInteger = (
+  input: Record<string, unknown>,
+  key: string,
+): number | undefined => {
+  const value = previewAutomationInputFiniteNumber(input, key);
+  return value !== undefined && Number.isInteger(value) ? value : undefined;
+};
+
+const parsePreviewAutomationInputTabId = (input: Record<string, unknown>): string | undefined | null => {
+  if (!hasWorkspaceOwnProperty(input, 'tabId')) {
+    return undefined;
+  }
+  const value = input.tabId;
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const tabId = value.trim();
+  return tabId && tabId.length <= PREVIEW_TAB_ID_MAX_LENGTH ? tabId : null;
+};
+
+const parsePreviewAutomationInputTimeout = (input: Record<string, unknown>): number | undefined | null => {
+  if (!hasWorkspaceOwnProperty(input, 'timeoutMs')) {
+    return undefined;
+  }
+  const value = input.timeoutMs;
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
+  }
+  const timeoutMs = Math.round(value);
+  return timeoutMs > 0 && timeoutMs <= PREVIEW_AUTOMATION_TIMEOUT_MAX_MS ? timeoutMs : null;
+};
+
+const normalizedPreviewAutomationForwardInput = (input: Record<string, unknown>): Record<string, unknown> => {
+  const normalized = { ...input };
+  delete normalized.tabId;
+  delete normalized.timeoutMs;
+  return normalized;
+};
+
+const isPreviewAutomationTarget = (target: unknown): boolean => {
+  if (!isWorkspaceRecord(target)) {
+    return false;
+  }
+  if (target.kind === 'url') {
+    return previewAutomationInputStringPresent(target, 'url');
+  }
+  if (target.kind !== 'environment-port') {
+    return false;
+  }
+  const port = previewAutomationInputInteger(target, 'port');
+  if (port === undefined || port <= 0 || port >= 65536) {
+    return false;
+  }
+  if (
+    hasWorkspaceOwnProperty(target, 'protocol')
+    && target.protocol !== 'http'
+    && target.protocol !== 'https'
+  ) {
+    return false;
+  }
+  return !hasWorkspaceOwnProperty(target, 'path')
+    || (typeof target.path === 'string' && target.path.trim().length <= PREVIEW_URL_MAX_LENGTH);
+};
+
+const validatePreviewAutomationSelectorChoice = (
+  input: Record<string, unknown>,
+  operation: string,
+  { allowCoordinates = false, requireOne = false }: { allowCoordinates?: boolean; requireOne?: boolean } = {},
+): string | null => {
+  const hasSelector = previewAutomationInputStringPresent(input, 'selector');
+  const hasLocator = previewAutomationInputStringPresent(input, 'locator');
+  if (hasWorkspaceOwnProperty(input, 'selector') && !hasSelector) {
+    return `Preview automation ${operation} selector is invalid`;
+  }
+  if (hasWorkspaceOwnProperty(input, 'locator') && !hasLocator) {
+    return `Preview automation ${operation} locator is invalid`;
+  }
+  if (hasSelector && hasLocator) {
+    return `Preview automation ${operation} accepts at most one of selector or locator`;
+  }
+  const hasX = hasWorkspaceOwnProperty(input, 'x');
+  const hasY = hasWorkspaceOwnProperty(input, 'y');
+  if (!allowCoordinates) {
+    return requireOne && !hasSelector && !hasLocator
+      ? `Preview automation ${operation} requires a target`
+      : null;
+  }
+  if (hasX !== hasY) {
+    return `Preview automation ${operation} coordinates require both x and y`;
+  }
+  const hasCoordinates = hasX && hasY;
+  if (hasCoordinates && (
+    previewAutomationInputFiniteNumber(input, 'x') === undefined
+    || previewAutomationInputFiniteNumber(input, 'y') === undefined
+  )) {
+    return `Preview automation ${operation} coordinates are invalid`;
+  }
+  const targetModes = Number(hasSelector) + Number(hasLocator) + Number(hasCoordinates);
+  return targetModes === 1 || (!requireOne && targetModes === 0)
+    ? null
+    : `Preview automation ${operation} requires exactly one target`;
+};
+
+const validatePreviewAutomationOperationInput = (
+  operation: WorkspacePreviewAutomationOperation,
+  input: Record<string, unknown>,
+): string | null => {
+  switch (operation) {
+    case 'status':
+    case 'snapshot':
+    case 'previewAnnotation':
+    case 'clearCookies':
+    case 'clearCache':
+    case 'recordingStart':
+    case 'recordingStop':
+      return null;
+    case 'open': {
+      if (!previewAutomationInputBooleanValid(input, 'show')) {
+        return 'Preview automation open show must be boolean';
+      }
+      if (!previewAutomationInputBooleanValid(input, 'reuseExistingTab')) {
+        return 'Preview automation open reuseExistingTab must be boolean';
+      }
+      if (input.reuseExistingTab === false && hasWorkspaceOwnProperty(input, 'tabId')) {
+        return 'Preview automation open cannot combine tabId with reuseExistingTab=false';
+      }
+      if (hasWorkspaceOwnProperty(input, 'url') && !previewAutomationInputStringPresent(input, 'url')) {
+        return 'Preview automation open url is invalid';
+      }
+      return null;
+    }
+    case 'navigate': {
+      const hasUrl = previewAutomationInputStringPresent(input, 'url');
+      const hasTarget = hasWorkspaceOwnProperty(input, 'target');
+      if (Number(hasUrl) + Number(hasTarget) !== 1) {
+        return 'Preview automation navigate requires exactly one of url or target';
+      }
+      if (hasWorkspaceOwnProperty(input, 'url') && !hasUrl) {
+        return 'Preview automation navigate url is invalid';
+      }
+      if (hasTarget && !isPreviewAutomationTarget(input.target)) {
+        return 'Preview automation navigate target is invalid';
+      }
+      if (
+        hasWorkspaceOwnProperty(input, 'readiness')
+        && input.readiness !== 'load'
+        && input.readiness !== 'domContentLoaded'
+        && input.readiness !== 'none'
+      ) {
+        return 'Preview automation navigate readiness is invalid';
+      }
+      return null;
+    }
+    case 'resize': {
+      if (input.mode !== 'fill' && input.mode !== 'freeform' && input.mode !== 'preset') {
+        return 'Preview automation resize mode is invalid';
+      }
+      const width = previewAutomationInputInteger(input, 'width');
+      const height = previewAutomationInputInteger(input, 'height');
+      const hasWidth = hasWorkspaceOwnProperty(input, 'width');
+      const hasHeight = hasWorkspaceOwnProperty(input, 'height');
+      const hasPreset = hasWorkspaceOwnProperty(input, 'preset');
+      if (input.mode === 'fill') {
+        return hasPreset || hasWidth || hasHeight || hasWorkspaceOwnProperty(input, 'orientation')
+          ? 'Preview automation resize fill mode does not accept preset, dimensions, or orientation'
+          : null;
+      }
+      if (input.mode === 'freeform') {
+        if (!hasWidth || !hasHeight || width === undefined || height === undefined || hasPreset || hasWorkspaceOwnProperty(input, 'orientation')) {
+          return 'Preview automation resize freeform mode requires width and height only';
+        }
+        if (
+          width < PREVIEW_VIEWPORT_MIN_DIMENSION
+          || height < PREVIEW_VIEWPORT_MIN_DIMENSION
+          || width > PREVIEW_VIEWPORT_MAX_DIMENSION
+          || height > PREVIEW_VIEWPORT_MAX_DIMENSION
+          || width * height > PREVIEW_VIEWPORT_MAX_AREA
+        ) {
+          return 'Preview automation resize dimensions are invalid';
+        }
+        return null;
+      }
+      if (!hasPreset || typeof input.preset !== 'string' || !input.preset.trim() || hasWidth || hasHeight) {
+        return 'Preview automation resize preset mode requires a preset and no custom dimensions';
+      }
+      if (
+        hasWorkspaceOwnProperty(input, 'orientation')
+        && input.orientation !== 'portrait'
+        && input.orientation !== 'landscape'
+      ) {
+        return 'Preview automation resize orientation is invalid';
+      }
+      return null;
+    }
+    case 'click':
+      return validatePreviewAutomationSelectorChoice(input, 'click', { allowCoordinates: true, requireOne: true });
+    case 'type': {
+      if (!hasWorkspaceOwnProperty(input, 'text') || typeof input.text !== 'string') {
+        return 'Preview automation type text is required';
+      }
+      if (!previewAutomationInputBooleanValid(input, 'clear')) {
+        return 'Preview automation type clear must be boolean';
+      }
+      return validatePreviewAutomationSelectorChoice(input, 'type');
+    }
+    case 'press': {
+      if (!previewAutomationInputStringPresent(input, 'key')) {
+        return 'Preview automation press key is required';
+      }
+      if (!hasWorkspaceOwnProperty(input, 'modifiers')) {
+        return null;
+      }
+      const modifiers = input.modifiers;
+      const allowed = new Set(['Alt', 'Control', 'Meta', 'Shift']);
+      return Array.isArray(modifiers) && modifiers.every((modifier) => typeof modifier === 'string' && allowed.has(modifier))
+        ? null
+        : 'Preview automation press modifiers are invalid';
+    }
+    case 'scroll': {
+      if (
+        !hasWorkspaceOwnProperty(input, 'deltaX')
+        && !hasWorkspaceOwnProperty(input, 'deltaY')
+      ) {
+        return 'Preview automation scroll requires deltaX or deltaY';
+      }
+      if (
+        (hasWorkspaceOwnProperty(input, 'deltaX') && previewAutomationInputFiniteNumber(input, 'deltaX') === undefined)
+        || (hasWorkspaceOwnProperty(input, 'deltaY') && previewAutomationInputFiniteNumber(input, 'deltaY') === undefined)
+      ) {
+        return 'Preview automation scroll delta is invalid';
+      }
+      return validatePreviewAutomationSelectorChoice(input, 'scroll');
+    }
+    case 'evaluate': {
+      const expression = previewAutomationInputString(input, 'expression', PREVIEW_AUTOMATION_EVALUATE_EXPRESSION_MAX_LENGTH);
+      if (!expression) {
+        return 'Preview automation evaluate expression is required';
+      }
+      if (!previewAutomationInputBooleanValid(input, 'awaitPromise')) {
+        return 'Preview automation evaluate awaitPromise must be boolean';
+      }
+      if (!previewAutomationInputBooleanValid(input, 'returnByValue')) {
+        return 'Preview automation evaluate returnByValue must be boolean';
+      }
+      return null;
+    }
+    case 'waitFor': {
+      const selectorError = validatePreviewAutomationSelectorChoice(input, 'waitFor');
+      if (selectorError) {
+        return selectorError;
+      }
+      const hasSelector = previewAutomationInputStringPresent(input, 'selector');
+      const hasLocator = previewAutomationInputStringPresent(input, 'locator');
+      const hasText = previewAutomationInputStringPresent(input, 'text');
+      const hasUrlIncludes = previewAutomationInputStringPresent(input, 'urlIncludes');
+      if (hasWorkspaceOwnProperty(input, 'text') && !hasText) {
+        return 'Preview automation waitFor text is invalid';
+      }
+      if (hasWorkspaceOwnProperty(input, 'urlIncludes') && !hasUrlIncludes) {
+        return 'Preview automation waitFor urlIncludes is invalid';
+      }
+      return hasSelector || hasLocator || hasText || hasUrlIncludes
+        ? null
+        : 'Preview automation waitFor requires at least one condition';
+    }
+    default:
+      return null;
+  }
+};
+
+const normalizePreviewAutomationInput = (
+  operation: WorkspacePreviewAutomationOperation,
+  rawInput: unknown,
+  topLevelTabId?: string,
+): PreviewAutomationInputValidationResult => {
+  const input = previewAutomationInputRecord(rawInput);
+  const inputTabId = parsePreviewAutomationInputTabId(input);
+  if (inputTabId === null) {
+    return { ok: false, error: 'Preview automation tabId is invalid' };
+  }
+  if (topLevelTabId && inputTabId && topLevelTabId !== inputTabId) {
+    return { ok: false, error: 'Preview automation tabId is ambiguous' };
+  }
+  if (operation === 'open' && topLevelTabId && input.reuseExistingTab === false) {
+    return { ok: false, error: 'Preview automation open cannot combine tabId with reuseExistingTab=false' };
+  }
+  const timeoutMs = parsePreviewAutomationInputTimeout(input);
+  if (timeoutMs === null) {
+    return { ok: false, error: 'Preview automation timeoutMs is invalid' };
+  }
+  const validationError = validatePreviewAutomationOperationInput(operation, input);
+  if (validationError) {
+    return { ok: false, error: validationError };
+  }
+  return {
+    ok: true,
+    value: {
+      input: normalizedPreviewAutomationForwardInput(input),
+      ...(inputTabId ? { tabId: inputTabId } : {}),
+      ...(timeoutMs ? { timeoutMs } : {}),
+    },
+  };
+};
+
+const readPreviewAutomationResultTabId = (result: unknown): string | null | undefined => {
+  if (!result || typeof result !== 'object' || !Object.prototype.hasOwnProperty.call(result, 'tabId')) {
+    return undefined;
+  }
+  const tabId = (result as { tabId?: unknown }).tabId;
+  if (tabId === null) {
+    return null;
+  }
+  if (typeof tabId !== 'string') {
+    return undefined;
+  }
+  const normalized = tabId.trim();
+  return normalized && normalized.length <= PREVIEW_TAB_ID_MAX_LENGTH ? normalized : undefined;
+};
 
 type WorkspacePreviewAutomationRecordingUpload = {
   id: string;
@@ -574,6 +959,8 @@ const parsePreviewViewport = (payload: unknown): WorkspacePreviewViewportSetting
 const previewHistoryKey = (roomId: string, tabId: string): string => `${roomId}\u0000${tabId}`;
 
 const previewAutomationRequestKey = (roomId: string, requestId: string): string => `${roomId}\u0000${requestId}`;
+
+const previewAutomationAssignmentKey = (roomId: string, clientId: string): string => `${roomId}\u0000${clientId}`;
 
 const previewUrlFromStatus = (status: WorkspacePreviewNavStatus): string | null => (
   status._tag === 'Idle' ? null : status.url
@@ -813,9 +1200,13 @@ export function registerCodeAgentWorkspaceHandlers({
     roomId: string,
     operation: WorkspacePreviewAutomationOperation,
     tabId?: string,
+    clientId?: string,
   ): WorkspacePreviewAutomationHostRecord | null => {
     let candidates = [...getPreviewAutomationHostsForRoom(roomId).values()]
-      .filter((host) => host.supportedOperations.includes(operation));
+      .filter((host) => (
+        host.supportedOperations.includes(operation)
+        && (!clientId || host.clientId === clientId)
+      ));
     if (tabId) {
       const exactTabCandidates = candidates.filter((host) => host.tabId === tabId);
       candidates = exactTabCandidates.length > 0
@@ -831,6 +1222,80 @@ export function registerCodeAgentWorkspaceHandlers({
       }
       return right.updatedAt.localeCompare(left.updatedAt);
     })[0] || null;
+  };
+
+  const assignedPreviewAutomationRuntime = (
+    roomId: string,
+    assignmentKey: string,
+  ): { clientId: string; connectionId: string; tabId?: string } | null => {
+    const assignment = workspacePreviewAutomationAssignmentsByRoomAndClientId.get(assignmentKey);
+    if (!assignment) {
+      return null;
+    }
+    const host = getPreviewAutomationHostsForRoom(roomId).get(assignment.connectionId);
+    if (!host) {
+      workspacePreviewAutomationAssignmentsByRoomAndClientId.delete(assignmentKey);
+      return null;
+    }
+    return {
+      clientId: host.clientId,
+      connectionId: host.connectionId,
+      ...(assignment.tabId ? { tabId: assignment.tabId } : {}),
+    };
+  };
+
+  const rememberPreviewAutomationAssignment = (
+    assignmentKey: string,
+    clientId: string,
+    connectionId: string,
+    tabId: string | null | undefined,
+  ) => {
+    if (tabId === undefined) {
+      return;
+    }
+    if (tabId === null) {
+      workspacePreviewAutomationAssignmentsByRoomAndClientId.delete(assignmentKey);
+      return;
+    }
+    workspacePreviewAutomationAssignmentsByRoomAndClientId.set(assignmentKey, {
+      clientId,
+      connectionId,
+      tabId,
+      updatedAt: new Date().toISOString(),
+    });
+  };
+
+  const clearPreviewAutomationAssignmentsForConnections = (
+    connectionIds: ReadonlySet<string>,
+  ) => {
+    if (connectionIds.size === 0) {
+      return;
+    }
+    for (const [key, assignment] of workspacePreviewAutomationAssignmentsByRoomAndClientId.entries()) {
+      if (connectionIds.has(assignment.connectionId)) {
+        workspacePreviewAutomationAssignmentsByRoomAndClientId.delete(key);
+      }
+    }
+  };
+
+  const failPreviewAutomationPendingForConnections = (
+    connectionIds: ReadonlySet<string>,
+    error = 'Preview automation host disconnected',
+  ) => {
+    if (connectionIds.size === 0) {
+      return;
+    }
+    for (const [key, pending] of workspacePreviewAutomationPendingByRoomAndRequestId.entries()) {
+      if (!connectionIds.has(pending.hostConnectionId)) {
+        continue;
+      }
+      clearTimeout(pending.timeout);
+      workspacePreviewAutomationPendingByRoomAndRequestId.delete(key);
+      pending.callback({
+        success: false,
+        error,
+      });
+    }
   };
 
   const savePreviewAutomationRecording = async (
@@ -914,17 +1379,8 @@ export function registerCodeAgentWorkspaceHandlers({
     if (removedConnections.size === 0) {
       return;
     }
-    for (const [key, pending] of workspacePreviewAutomationPendingByRoomAndRequestId.entries()) {
-      if (!removedConnections.has(pending.hostConnectionId)) {
-        continue;
-      }
-      clearTimeout(pending.timeout);
-      workspacePreviewAutomationPendingByRoomAndRequestId.delete(key);
-      pending.callback({
-        success: false,
-        error: 'Preview automation host disconnected',
-      });
-    }
+    clearPreviewAutomationAssignmentsForConnections(removedConnections);
+    failPreviewAutomationPendingForConnections(removedConnections);
   };
 
   const emitPreviewEvent = (event: WorkspacePreviewEvent) => {
@@ -1056,12 +1512,14 @@ export function registerCodeAgentWorkspaceHandlers({
         return;
       }
       const existing = getPreviewSessionsForRoom(access.room.id).get(tabId);
+      const baseSnapshot = existing ?? buildPreviewSnapshot({
+        roomId: access.room.id,
+        tabId,
+        navStatus: { _tag: 'Idle' },
+      });
+      const { renderedViewport: _staleRenderedViewport, ...snapshotWithoutRenderedViewport } = baseSnapshot;
       const session = putPreviewSession(access.room.id, tabId, {
-        ...(existing ?? buildPreviewSnapshot({
-          roomId: access.room.id,
-          tabId,
-          navStatus: { _tag: 'Idle' },
-        })),
+        ...snapshotWithoutRenderedViewport,
         viewport,
         updatedAt: new Date().toISOString(),
       }, 'resized');
@@ -1284,6 +1742,7 @@ export function registerCodeAgentWorkspaceHandlers({
 
       const now = new Date().toISOString();
       const hosts = getPreviewAutomationHostsForRoom(access.room.id);
+      const replacedConnectionIds = new Set<string>();
       for (const [connectionId, host] of hosts.entries()) {
         const replacesRequestedConnection = requestedConnectionId && connectionId === requestedConnectionId;
         const sameClient = host.clientId === access.clientId || host.socketId === socket.id;
@@ -1294,8 +1753,17 @@ export function registerCodeAgentWorkspaceHandlers({
         );
         if (replacesRequestedConnection || replacesSameScope) {
           hosts.delete(connectionId);
+          replacedConnectionIds.add(connectionId);
+          io.to(access.room.id).emit('code_workspace_preview_automation_host_event', {
+            type: 'disconnected',
+            roomId: access.room.id,
+            connectionId,
+            createdAt: now,
+          });
         }
       }
+      clearPreviewAutomationAssignmentsForConnections(replacedConnectionIds);
+      failPreviewAutomationPendingForConnections(replacedConnectionIds);
       const connectionId = requestedConnectionId || `preview-automation:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`;
       const host: WorkspacePreviewAutomationHostRecord = {
         roomId: access.room.id,
@@ -1332,6 +1800,52 @@ export function registerCodeAgentWorkspaceHandlers({
     } catch (error) {
       socketLogger.error('Failed to connect code workspace preview automation', { error, clientId, roomId, socketId: socket.id });
       callback?.({ success: false, error: 'Failed to connect workspace preview automation' });
+    }
+  });
+
+  socket.on('disconnect_code_workspace_preview_automation', async (payload: unknown, callback?: (response: WorkspacePreviewAutomationAck) => void) => {
+    const roomId = parseRoomId(payload);
+    const connectionId = parsePreviewAutomationConnectionId(payload);
+    let clientId: string | null = null;
+
+    try {
+      const access = await loadAuthorizedCocoRoom(roomId, 'disconnect code workspace preview automation');
+      clientId = access.clientId ?? null;
+      if (!access.success) {
+        callback?.({ success: false, error: access.error });
+        return;
+      }
+      if (!connectionId) {
+        callback?.({ success: false, error: 'Preview automation connection ID is required' });
+        return;
+      }
+      const hosts = getPreviewAutomationHostsForRoom(access.room.id);
+      const host = hosts.get(connectionId);
+      if (!host) {
+        callback?.({ success: true, connectionId });
+        return;
+      }
+      if (host.clientId !== access.clientId) {
+        callback?.({ success: false, error: 'Preview automation host is not connected' });
+        return;
+      }
+      hosts.delete(connectionId);
+      if (hosts.size === 0) {
+        workspacePreviewAutomationHostsByRoomId.delete(access.room.id);
+      }
+      const removedConnections = new Set([connectionId]);
+      clearPreviewAutomationAssignmentsForConnections(removedConnections);
+      failPreviewAutomationPendingForConnections(removedConnections);
+      io.to(access.room.id).emit('code_workspace_preview_automation_host_event', {
+        type: 'disconnected',
+        roomId: access.room.id,
+        connectionId,
+        createdAt: new Date().toISOString(),
+      });
+      callback?.({ success: true, connectionId });
+    } catch (error) {
+      socketLogger.error('Failed to disconnect code workspace preview automation', { error, clientId, roomId, socketId: socket.id });
+      callback?.({ success: false, error: 'Failed to disconnect workspace preview automation' });
     }
   });
 
@@ -1399,9 +1913,10 @@ export function registerCodeAgentWorkspaceHandlers({
   socket.on('request_code_workspace_preview_automation', async (payload: unknown, callback?: (response: WorkspacePreviewAutomationAck) => void) => {
     const roomId = parseRoomId(payload);
     const operation = parsePreviewAutomationOperation(payload);
-    const tabId = parsePreviewTabId(payload) || undefined;
+    const explicitTabId = parsePreviewTabId(payload) || undefined;
     const requestId = parsePreviewAutomationRequestId(payload) || `preview-request:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`;
-    const timeoutMs = parsePreviewAutomationTimeout(payload);
+    const rawInput = parsePreviewAutomationInput(payload);
+    const topLevelTimeoutMs = parsePreviewAutomationTimeout(payload);
     let clientId: string | null = null;
 
     try {
@@ -1415,7 +1930,22 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'Preview automation operation is invalid' });
         return;
       }
-      const host = selectPreviewAutomationHost(access.room.id, operation, tabId);
+      const normalizedInput = normalizePreviewAutomationInput(operation, rawInput, explicitTabId);
+      if (!normalizedInput.ok) {
+        callback?.({ success: false, error: normalizedInput.error });
+        return;
+      }
+      const assignmentKey = previewAutomationAssignmentKey(access.room.id, access.clientId);
+      const requestedTabId = explicitTabId ?? normalizedInput.value.tabId;
+      const assignedRuntime = requestedTabId ? null : assignedPreviewAutomationRuntime(access.room.id, assignmentKey);
+      const tabId = requestedTabId ?? assignedRuntime?.tabId;
+      const timeoutMs = normalizedInput.value.timeoutMs ?? topLevelTimeoutMs;
+      const host = selectPreviewAutomationHost(
+        access.room.id,
+        operation,
+        tabId,
+        assignedRuntime?.clientId,
+      );
       if (!host) {
         callback?.({ success: false, error: `No preview automation host supports ${operation}` });
         return;
@@ -1424,9 +1954,9 @@ export function registerCodeAgentWorkspaceHandlers({
       const request: WorkspacePreviewAutomationRequest = {
         requestId,
         roomId: access.room.id,
-        ...(tabId ? { tabId, tabIdExplicit: true } : {}),
+        ...(tabId ? { tabId, tabIdExplicit: requestedTabId !== undefined } : {}),
         operation,
-        input: parsePreviewAutomationInput(payload),
+        input: normalizedInput.value.input,
         timeoutMs,
       };
       const requestKey = previewAutomationRequestKey(access.room.id, requestId);
@@ -1443,6 +1973,7 @@ export function registerCodeAgentWorkspaceHandlers({
         hostConnectionId: host.connectionId,
         operation,
         ...(tabId ? { tabId } : {}),
+        assignmentKey,
         timeout,
         callback: (response) => callback?.(response),
       });
@@ -1544,6 +2075,15 @@ export function registerCodeAgentWorkspaceHandlers({
               error instanceof Error ? error.message : 'Failed to save preview recording artifact',
             );
           }
+        }
+        if (pending.assignmentKey && response.ok && pending.operation !== 'recordingStop') {
+          const responseTabId = readPreviewAutomationResultTabId(response.result);
+          rememberPreviewAutomationAssignment(
+            pending.assignmentKey,
+            host.clientId,
+            connectionId,
+            responseTabId === undefined ? pending.tabId : responseTabId,
+          );
         }
         pending.callback({ success: true, response });
       }

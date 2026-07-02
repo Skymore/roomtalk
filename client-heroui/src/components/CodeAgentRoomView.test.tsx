@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Room } from '../utils/types';
 import { CODE_AGENT_FILE_PANEL_WIDTH_CHANGE_EVENT, type CodeAgentFilePanelWidthChangeDetail } from '../utils/codeAgentPanelLayout';
@@ -370,6 +370,89 @@ describe('CodeAgentRoomView', () => {
     expect(mobileFileBrowser?.parentElement?.classList.contains('min-h-0')).toBe(true);
   });
 
+  it('keeps the mobile file manager mounted while the sheet is hidden', () => {
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: 390,
+    });
+    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })));
+
+    renderCodeAgentRoom(cocoRoom);
+
+    const desktopFileBrowser = screen.getByTestId('file-browser');
+    expect(desktopFileBrowser.dataset.surface).toBe('desktop');
+    expect(screen.queryByTestId('code-agent-mobile-file-manager-sheet')).toBeNull();
+
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
+    const openSheet = screen.getByTestId('code-agent-mobile-file-manager-sheet') as HTMLDivElement;
+    expect(openSheet.hidden).toBe(false);
+    expect(openSheet.dataset.open).toBe('true');
+    const mobileFileBrowser = screen.getAllByTestId('file-browser').find((element) => (
+      element.dataset.surface === 'mobile'
+    ));
+    expect(mobileFileBrowser).toBeTruthy();
+
+    fireEvent.click(within(openSheet).getByLabelText('close'));
+    const hiddenSheet = screen.getByTestId('code-agent-mobile-file-manager-sheet') as HTMLDivElement;
+    expect(hiddenSheet.hidden).toBe(true);
+    expect(hiddenSheet.dataset.open).toBe('false');
+    expect(screen.getAllByTestId('file-browser').find((element) => (
+      element.dataset.surface === 'mobile'
+    ))).toBe(mobileFileBrowser);
+
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
+    const reopenedSheet = screen.getByTestId('code-agent-mobile-file-manager-sheet') as HTMLDivElement;
+    expect(reopenedSheet.hidden).toBe(false);
+    expect(reopenedSheet.dataset.open).toBe('true');
+    expect(screen.getAllByTestId('file-browser').find((element) => (
+      element.dataset.surface === 'mobile'
+    ))).toBe(mobileFileBrowser);
+  });
+
+  it('opens the mobile file manager when a workspace file link is selected', () => {
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: 390,
+    });
+    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })));
+
+    renderCodeAgentRoom(cocoRoom);
+
+    expect(screen.queryByTestId('code-agent-mobile-file-manager-sheet')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('message-list-line-link'));
+
+    const openSheet = screen.getByTestId('code-agent-mobile-file-manager-sheet') as HTMLDivElement;
+    expect(openSheet.hidden).toBe(false);
+    expect(openSheet.dataset.open).toBe('true');
+    const mobileFileBrowser = screen.getAllByTestId('file-browser').find((element) => (
+      element.dataset.surface === 'mobile'
+    ));
+    expect(mobileFileBrowser).toBeTruthy();
+    expect(mobileFileBrowser?.dataset.openPath).toBe('src/App.tsx');
+    expect(mobileFileBrowser?.dataset.openRequestId).toBe('1');
+    expect(mobileFileBrowser?.dataset.revealLine).toBe('42');
+    expect(mobileFileBrowser?.dataset.revealRequestId).toBe('1');
+  });
+
   it('keeps the workspace files resize affordance from being clipped by the panel edge', () => {
     renderCodeAgentRoom(cocoRoom);
 
@@ -683,6 +766,59 @@ describe('CodeAgentRoomView', () => {
 
     expect(screen.getByTestId('message-input').dataset.reviewComments).toBe('0');
     expect(localStorage.getItem(storageKey)).toBeNull();
+  });
+
+  it('keeps mobile workspace draft contexts visible and removable inside the sheet', () => {
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: 390,
+    });
+    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })));
+    const reviewStorageKey = 'roomtalk.codeAgent.reviewComments.coco-room';
+    const previewStorageKey = 'roomtalk.codeAgent.previewAnnotations.coco-room';
+
+    renderCodeAgentRoom(cocoRoom);
+
+    expect(screen.queryByTestId('code-agent-mobile-review-drafts')).toBeNull();
+    expect(screen.queryByTestId('code-agent-mobile-preview-annotation-drafts')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('file-add-review-comment'));
+    fireEvent.click(screen.getByTestId('file-add-preview-annotation'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
+
+    const sheet = screen.getByTestId('code-agent-mobile-file-manager-sheet');
+    const reviewDrafts = within(sheet).getByTestId('code-agent-mobile-review-drafts');
+    const previewDrafts = within(sheet).getByTestId('code-agent-mobile-preview-annotation-drafts');
+    expect(within(reviewDrafts).getByText('codeAgentPendingReviewComments')).toBeTruthy();
+    expect(within(reviewDrafts).getByText('1')).toBeTruthy();
+    expect(within(reviewDrafts).getByText('src/App.tsx L1 to L2')).toBeTruthy();
+    expect(localStorage.getItem(reviewStorageKey)).toContain('Persist this review comment.');
+    expect(within(previewDrafts).getByText('codeAgentPendingPreviewAnnotations')).toBeTruthy();
+    expect(within(previewDrafts).getByText('1')).toBeTruthy();
+    expect(within(previewDrafts).getByText('Preview app <button>')).toBeTruthy();
+    expect(localStorage.getItem(previewStorageKey)).toContain('Preview app');
+
+    fireEvent.click(within(reviewDrafts).getByLabelText('codeAgentRemoveReviewComment'));
+
+    expect(screen.getByTestId('message-input').dataset.reviewComments).toBe('0');
+    expect(within(sheet).queryByTestId('code-agent-mobile-review-drafts')).toBeNull();
+    expect(within(sheet).getByTestId('code-agent-mobile-preview-annotation-drafts')).toBeTruthy();
+    expect(localStorage.getItem(reviewStorageKey)).toBeNull();
+
+    fireEvent.click(within(previewDrafts).getByLabelText('codeAgentRemovePreviewAnnotation'));
+
+    expect(screen.getByTestId('message-input').dataset.previewAnnotations).toBe('0');
+    expect(within(sheet).queryByTestId('code-agent-mobile-preview-annotation-drafts')).toBeNull();
+    expect(localStorage.getItem(previewStorageKey)).toBeNull();
   });
 
   it('persists preview annotation drafts by room', () => {

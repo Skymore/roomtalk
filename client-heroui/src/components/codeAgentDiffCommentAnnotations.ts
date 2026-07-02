@@ -7,6 +7,7 @@ import type {
 export interface DiffCommentAnnotationEntry {
   id: string;
   kind: 'draft' | 'comment';
+  fileKey?: string;
   filePath?: string;
   range: SelectedLineRange;
   rangeLabel: string;

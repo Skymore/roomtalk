@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import { MessageCircle, Send, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import type { ReviewCommentPreviewLine } from '../utils/codeAgentReviewComments';
 
 interface LocalCommentAnnotationProps {
   kind: 'draft' | 'comment';
   rangeLabel: string;
   text: string;
   filePath?: string;
+  previewLines?: readonly ReviewCommentPreviewLine[];
   mobileLayout?: boolean;
   onCancel: () => void;
   onComment: (text: string) => void;
@@ -18,6 +20,7 @@ export function CodeAgentLocalCommentAnnotation({
   rangeLabel,
   text: savedText,
   filePath,
+  previewLines = [],
   mobileLayout = false,
   onCancel,
   onComment,
@@ -27,6 +30,7 @@ export function CodeAgentLocalCommentAnnotation({
   const [text, setText] = useState('');
   const commentOnLinesLabel = t('codeAgentCommentOnLines', { range: rangeLabel });
   const textareaId = `code-agent-mobile-comment-${rangeLabel.replace(/[^A-Za-z0-9_-]+/g, '-')}`;
+  const hasPreviewLines = previewLines.length > 0;
 
   if (kind === 'comment') {
     return (
@@ -98,6 +102,45 @@ export function CodeAgentLocalCommentAnnotation({
               </div>
             ) : null}
           </div>
+          {hasPreviewLines ? (
+            <div
+              data-testid="code-agent-mobile-review-comment-preview"
+              className="mt-4 max-h-[132px] overflow-auto rounded-[20px] border border-[#dedbd0] bg-[#f7f5ee] font-mono text-xs leading-5 text-[#141413] [-webkit-overflow-scrolling:touch] dark:border-[#30302e] dark:bg-[#141413] dark:text-[#faf9f5]"
+            >
+              <div className="min-w-max py-1">
+                {previewLines.map((line) => (
+                  <div
+                    key={line.id}
+                    data-review-comment-preview-line
+                    data-change={line.change}
+                    className={`grid min-h-6 grid-cols-[3px_3.25rem_minmax(16rem,1fr)] items-start ${
+                      line.change === 'add'
+                        ? 'bg-[#e7f6ed] dark:bg-[#163120]'
+                        : line.change === 'delete'
+                          ? 'bg-[#fdebea] dark:bg-[#361b1b]'
+                          : ''
+                    }`}
+                  >
+                    <span className={`h-full w-full ${
+                      line.change === 'add'
+                        ? 'bg-[#34a267]'
+                        : line.change === 'delete'
+                          ? 'bg-[#d85f5f]'
+                          : line.change === 'source'
+                            ? 'bg-[#b8b4a8] dark:bg-[#4a4842]'
+                            : 'bg-transparent'
+                    }`} />
+                    <span className="select-none px-2 py-0.5 text-right text-[11px] tabular-nums text-[#87867f] dark:text-[#8f8d86]">
+                      {line.lineNumberLabel}
+                    </span>
+                    <span className="whitespace-pre px-2 py-0.5 text-[#141413] dark:text-[#faf9f5]">
+                      {line.content || ' '}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <label className="mt-4 block text-sm font-semibold text-[#141413] dark:text-[#faf9f5]" htmlFor={textareaId}>
             {t('codeAgentLocalComment')}
           </label>

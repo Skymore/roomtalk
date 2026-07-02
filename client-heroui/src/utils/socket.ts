@@ -1442,6 +1442,20 @@ export const requestFocusCodeWorkspacePreviewAutomation = (
   })
 );
 
+export const requestDisconnectCodeWorkspacePreviewAutomation = (
+  payload: {
+    roomId: string;
+    connectionId: string;
+  },
+): Promise<void> => (
+  emitWithAck<CodeWorkspacePreviewAutomationAckResponse>(
+    'disconnect_code_workspace_preview_automation',
+    payload,
+    'Timed out while disconnecting workspace preview automation',
+    'Failed to disconnect workspace preview automation',
+  ).then(() => undefined)
+);
+
 export const requestCodeWorkspacePreviewAutomation = (
   payload: {
     roomId: string;

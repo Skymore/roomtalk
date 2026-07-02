@@ -31,6 +31,13 @@ interface DiffReviewLine {
   readonly content: string;
 }
 
+export interface ReviewCommentPreviewLine {
+  readonly id: string;
+  readonly change: 'context' | 'add' | 'delete' | 'source';
+  readonly lineNumberLabel: string;
+  readonly content: string;
+}
+
 const REVIEW_COMMENT_BLOCK_PATTERN = /<review_comment\b([^>]*)>\s*([\s\S]*?)<\/review_comment>/g;
 const REVIEW_COMMENT_ATTRIBUTE_PATTERN = /([a-zA-Z][a-zA-Z0-9_-]*)="([^"]*)"/g;
 const REVIEW_COMMENT_FENCE_PATTERN = /(`{3,})([^\s`]*)[^\n]*\n([\s\S]*?)\n\1/g;
@@ -251,6 +258,27 @@ export function buildFileReviewComment(input: {
   };
 }
 
+export function buildFileReviewCommentPreviewLines(input: {
+  contents: string;
+  startLine: number;
+  endLine: number;
+}): ReviewCommentPreviewLine[] {
+  const startLine = Math.max(1, Math.min(input.startLine, input.endLine));
+  const endLine = Math.max(startLine, Math.max(input.startLine, input.endLine));
+  return input.contents
+    .split('\n')
+    .slice(startLine - 1, endLine)
+    .map((content, index) => {
+      const lineNumber = startLine + index;
+      return {
+        id: `source:${lineNumber}`,
+        change: 'source',
+        lineNumberLabel: String(lineNumber),
+        content,
+      };
+    });
+}
+
 function stripTrailingNewline(value: string): string {
   return value.endsWith('\n') ? value.slice(0, -1) : value;
 }
@@ -418,6 +446,35 @@ export function buildDiffReviewComment(input: {
     ].join('\n'),
     fenceLanguage: 'diff',
   };
+}
+
+function diffReviewLineNumberLabel(line: DiffReviewLine): string {
+  const lineNumber = line.newLineNumber ?? line.oldLineNumber;
+  return lineNumber === null ? '' : String(lineNumber);
+}
+
+export function buildDiffReviewCommentPreviewLines(input: {
+  fileDiff: FileDiffMetadata;
+  range: SelectedLineRange;
+}): ReviewCommentPreviewLine[] {
+  const lines = buildDiffReviewLines(input.fileDiff);
+  const startIndex = findDiffReviewLineIndex(lines, input.range.start, input.range.side);
+  const endIndex = findDiffReviewLineIndex(
+    lines,
+    input.range.end,
+    input.range.endSide ?? input.range.side,
+  );
+  if (startIndex < 0 || endIndex < 0) {
+    return [];
+  }
+  const normalizedStartIndex = Math.min(startIndex, endIndex);
+  const normalizedEndIndex = Math.max(startIndex, endIndex);
+  return lines.slice(normalizedStartIndex, normalizedEndIndex + 1).map((line, index) => ({
+    id: `diff:${normalizedStartIndex + index}`,
+    change: line.change,
+    lineNumberLabel: diffReviewLineNumberLabel(line),
+    content: line.content,
+  }));
 }
 
 export function buildReviewCommentRenderablePatch(comment: ReviewCommentContext): string {

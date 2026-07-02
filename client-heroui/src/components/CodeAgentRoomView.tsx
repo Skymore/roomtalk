@@ -5,6 +5,8 @@ import { useTranslation } from 'react-i18next';
 import { ChatHeader } from './ChatHeader';
 import { CodeAgentDiffWorkerPoolProvider } from './CodeAgentDiffWorkerPoolProvider';
 import { CodeAgentFileBrowserPanel } from './CodeAgentFileBrowserPanel';
+import { CodeAgentPendingPreviewAnnotations } from './CodeAgentPendingPreviewAnnotations';
+import { CodeAgentPendingReviewComments } from './CodeAgentPendingReviewComments';
 import { MessageInput } from './MessageInput';
 import { MessageList, MessageListHandle } from './MessageList';
 import { AppView } from '../utils/appPersistence';
@@ -129,6 +131,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   const [composerHeight, setComposerHeight] = React.useState(96);
   const [showScrollButton, setShowScrollButton] = React.useState(false);
   const [isMobileFileManagerOpen, setIsMobileFileManagerOpen] = React.useState(false);
+  const [hasMobileFileManagerMounted, setHasMobileFileManagerMounted] = React.useState(false);
   const [isFileManagerCollapsed, setIsFileManagerCollapsed] = React.useState(readStoredFileManagerCollapsed);
   const [fileManagerWidth, setFileManagerWidth] = React.useState(readStoredFileManagerWidth);
   const [workspaceFileOpenRequest, setWorkspaceFileOpenRequest] = React.useState<WorkspaceFileOpenRequest | null>(null);
@@ -154,6 +157,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
     setReplyToMessage(null);
     setShowScrollButton(false);
     setIsMobileFileManagerOpen(false);
+    setHasMobileFileManagerMounted(false);
     setWorkspaceRoot(null);
     setPendingWorkspaceFileSaves(new Set());
   }, [currentRoom.id]);
@@ -243,6 +247,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       typeof window.matchMedia === 'function' &&
       !window.matchMedia('(min-width: 1024px)').matches
     ) {
+      setHasMobileFileManagerMounted(true);
       setIsMobileFileManagerOpen(true);
     }
     workspaceFileOpenRequestIdRef.current += 1;
@@ -510,7 +515,10 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
             className="absolute right-3 top-3 z-40 bg-[#30302e] text-[#faf9f5] shadow-[0_0_0_1px_rgba(194,192,182,0.7),0_10px_24px_rgba(20,20,19,0.16)] dark:bg-[#faf9f5] dark:text-[#141413] lg:hidden"
             aria-label={mobileFileManagerTitle}
             title={mobileFileManagerTitle}
-            onPress={() => setIsMobileFileManagerOpen(true)}
+            onPress={() => {
+              setHasMobileFileManagerMounted(true);
+              setIsMobileFileManagerOpen(true);
+            }}
           >
             <Icon icon="lucide:folder-tree" className="h-4 w-4" />
             {hasPendingWorkspaceFileSaves ? (
@@ -603,8 +611,14 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
           )}
         </aside>
       </div>
-      {isMobileFileManagerOpen && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-[#faf9f5] dark:bg-[#1d1d1b] lg:hidden">
+      {hasMobileFileManagerMounted && (
+        <div
+          className={`fixed inset-0 z-50 flex-col bg-[#faf9f5] dark:bg-[#1d1d1b] lg:hidden ${isMobileFileManagerOpen ? 'flex' : 'hidden'}`}
+          data-testid="code-agent-mobile-file-manager-sheet"
+          data-open={isMobileFileManagerOpen ? 'true' : 'false'}
+          hidden={!isMobileFileManagerOpen}
+          aria-hidden={!isMobileFileManagerOpen}
+        >
           <div className="safe-top flex min-h-10 items-center gap-2 border-b border-[#dedbd0] px-3 py-1 dark:border-[#30302e]">
             <Button
               isIconOnly
@@ -632,6 +646,46 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
               ) : null}
             </div>
           </div>
+          {reviewComments.length > 0 ? (
+            <div
+              data-testid="code-agent-mobile-review-drafts"
+              className="shrink-0 border-b border-[#dedbd0] px-3 py-2 dark:border-[#30302e]"
+            >
+              <div className="mb-1.5 flex min-w-0 items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#87867f] dark:text-[#8f8d86]">
+                <Icon icon="lucide:message-circle" className="h-3.5 w-3.5 shrink-0" />
+                <span className="min-w-0 truncate">{t('codeAgentPendingReviewComments')}</span>
+                <span className="ml-auto shrink-0 rounded-full border border-[#dedbd0] px-1.5 py-px text-[10px] leading-none text-[#5e5d59] dark:border-[#30302e] dark:text-[#b0aea5]">
+                  {reviewComments.length}
+                </span>
+              </div>
+              <CodeAgentPendingReviewComments
+                comments={reviewComments}
+                onRemove={handleRemoveReviewComment}
+                removeLabel={(label) => t('codeAgentRemoveReviewComment', { label })}
+                className="max-h-20 overflow-y-auto pr-1 overscroll-contain"
+              />
+            </div>
+          ) : null}
+          {previewAnnotations.length > 0 ? (
+            <div
+              data-testid="code-agent-mobile-preview-annotation-drafts"
+              className="shrink-0 border-b border-[#dedbd0] px-3 py-2 dark:border-[#30302e]"
+            >
+              <div className="mb-1.5 flex min-w-0 items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#87867f] dark:text-[#8f8d86]">
+                <Icon icon="lucide:mouse-pointer-click" className="h-3.5 w-3.5 shrink-0" />
+                <span className="min-w-0 truncate">{t('codeAgentPendingPreviewAnnotations')}</span>
+                <span className="ml-auto shrink-0 rounded-full border border-[#dedbd0] px-1.5 py-px text-[10px] leading-none text-[#5e5d59] dark:border-[#30302e] dark:text-[#b0aea5]">
+                  {previewAnnotations.length}
+                </span>
+              </div>
+              <CodeAgentPendingPreviewAnnotations
+                annotations={previewAnnotations}
+                onRemove={handleRemovePreviewAnnotation}
+                removeLabel={(label) => t('codeAgentRemovePreviewAnnotation', { label })}
+                className="max-h-20 overflow-y-auto pr-1 overscroll-contain"
+              />
+            </div>
+          ) : null}
           <div className="flex min-h-0 flex-1">
             {renderFileManagerPanel('mobile')}
           </div>

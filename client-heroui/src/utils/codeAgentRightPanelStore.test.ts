@@ -18,6 +18,8 @@ import {
   openCodeAgentRightPanelPreview,
   readCodeAgentPreviewRecentTargets,
   readCodeAgentRightPanelState,
+  closeCodeAgentPreviewSessionSurface,
+  reconcileCodeAgentPreviewSessionSurfaces,
   reconcileCodeAgentFileSurfaces,
   removeCodeAgentRightPanelRoom,
   resetCodeAgentRightPanelStoreForTests,
@@ -120,6 +122,96 @@ describe('codeAgentRightPanelStore', () => {
         { id: 'browser:new', kind: 'preview', relativePath: null },
         { id: 'browser:new:2', kind: 'preview', relativePath: null },
       ],
+    });
+  });
+
+  it('reconciles cloud preview sessions into browser surfaces without stealing file focus', () => {
+    openCodeAgentRightPanelFile('room-1', 'src/App.tsx');
+
+    reconcileCodeAgentPreviewSessionSurfaces('room-1', [
+      {
+        tabId: 'preview-tab-1',
+        navStatus: {
+          _tag: 'Success',
+          url: 'https://5173-sandbox.e2b.dev/dashboard',
+          title: 'Dashboard',
+        },
+        viewport: { _tag: 'freeform', width: 390, height: 844 },
+        updatedAt: '2026-07-02T00:00:00.000Z',
+      },
+    ]);
+
+    expect(readCodeAgentRightPanelState('room-1')).toEqual({
+      isOpen: true,
+      activeSurfaceId: 'file:src/App.tsx',
+      surfaces: [
+        {
+          id: 'file:src/App.tsx',
+          kind: 'file',
+          relativePath: 'src/App.tsx',
+          revealLine: null,
+          revealRequestId: 1,
+        },
+        {
+          id: 'browser:url:https%3A%2F%2F5173-sandbox.e2b.dev%2Fdashboard',
+          kind: 'preview',
+          relativePath: null,
+          url: 'https://5173-sandbox.e2b.dev/dashboard',
+          navigationHistory: [{ kind: 'url', url: 'https://5173-sandbox.e2b.dev/dashboard' }],
+          navigationIndex: 0,
+          previewSessionId: 'preview-tab-1',
+          viewport: { _tag: 'freeform', width: 390, height: 844 },
+        },
+      ],
+    });
+    expect(readCodeAgentPreviewRecentTargets('room-1')[0]).toEqual({
+      kind: 'url',
+      url: 'https://5173-sandbox.e2b.dev/dashboard',
+    });
+  });
+
+  it('updates and closes reconciled cloud preview session surfaces by tab id', () => {
+    reconcileCodeAgentPreviewSessionSurfaces('room-1', [
+      {
+        tabId: 'preview-tab-1',
+        navStatus: {
+          _tag: 'Success',
+          url: 'https://5173-sandbox.e2b.dev/dashboard',
+          title: 'Dashboard',
+        },
+        viewport: { _tag: 'fill' },
+      },
+    ]);
+    reconcileCodeAgentPreviewSessionSurfaces('room-1', [
+      {
+        tabId: 'preview-tab-1',
+        navStatus: {
+          _tag: 'Success',
+          url: 'https://5173-sandbox.e2b.dev/settings',
+          title: 'Settings',
+        },
+        viewport: { _tag: 'fill' },
+      },
+    ]);
+
+    expect(readCodeAgentRightPanelState('room-1')).toMatchObject({
+      isOpen: true,
+      activeSurfaceId: 'browser:url:https%3A%2F%2F5173-sandbox.e2b.dev%2Fsettings',
+      surfaces: [
+        {
+          kind: 'preview',
+          url: 'https://5173-sandbox.e2b.dev/settings',
+          previewSessionId: 'preview-tab-1',
+        },
+      ],
+    });
+
+    closeCodeAgentPreviewSessionSurface('room-1', 'preview-tab-1');
+
+    expect(readCodeAgentRightPanelState('room-1')).toEqual({
+      isOpen: false,
+      activeSurfaceId: null,
+      surfaces: [],
     });
   });
 

@@ -16,6 +16,10 @@ import {
   toggleCodeAgentDiffFileKey,
 } from '../utils/codeAgentDiffFileVisibility';
 import {
+  updateCodeAgentDiffFileVisibility,
+  useCodeAgentDiffFileVisibility,
+} from '../utils/codeAgentDiffFileVisibilityStore';
+import {
   buildFileDiffRenderKey,
   buildDiffTitlePathMap,
   getCodeAgentDiffFilePreviewState,
@@ -33,6 +37,7 @@ import { type ReviewCommentContext } from '../utils/codeAgentReviewComments';
 import { openCodeAgentDiffFilePrimaryAction } from '../utils/codeAgentDiffFileActions';
 import { type DiffCommentAnnotationGroup } from './codeAgentDiffCommentAnnotations';
 import { CodeAgentAnnotatableCodeView } from './CodeAgentAnnotatableCodeView';
+import { CodeAgentDiffStatLabel } from './CodeAgentDiffStatLabel';
 import {
   CodeAgentWorkspaceDiffLoadingState,
   CodeAgentWorkspaceDiffPanelShell,
@@ -77,8 +82,17 @@ const DIFF_RENDER_MODE_STORAGE_KEY = 'roomtalk.codeWorkspace.diffRenderMode';
 const DIFF_IGNORE_WHITESPACE_STORAGE_KEY = 'roomtalk.codeWorkspace.diffIgnoreWhitespace';
 const AUTOMATIC_BASE_REF = '__automatic_base_ref__';
 const WORKSPACE_REF_LIMIT = 200;
+const MOBILE_DIFF_WORD_ALT_MAX_LINE_LENGTH = 1_000;
 type DiffRenderMode = 'stacked' | 'split';
-const EMPTY_DIFF_FILE_KEYS: ReadonlySet<string> = new Set();
+type MobileDiffToolbarMenuKind = 'scope' | 'baseRef';
+interface MobileDiffToolbarMenuState {
+  kind: MobileDiffToolbarMenuKind;
+  left: number;
+  top: number;
+  width: number;
+  maxHeight: string;
+}
+const EMPTY_DIFF_FILE_KEYS: readonly string[] = [];
 const RENDER_DIFF_FILE_PREVIEW_STATE: CodeAgentDiffFilePreviewState = { kind: 'render' };
 const DIFF_PANEL_UNSAFE_CSS = `
 [data-diffs-header],
@@ -173,14 +187,6 @@ const DIFF_PANEL_UNSAFE_CSS = `
   text-decoration-color: currentColor;
 }
 `;
-
-interface DiffFileVisibilityEntry {
-  collapsedFileKeys: Set<string>;
-  viewedFileKeys: Set<string>;
-  revealedLargeFileKeys: Set<string>;
-}
-
-type DiffFileVisibilityState = Map<string, DiffFileVisibilityEntry>;
 
 interface ScopedWorkspaceDiff {
   scopeKey: string;
@@ -355,6 +361,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   const [diffRenderMode, setDiffRenderMode] = useState<DiffRenderMode>(readInitialDiffRenderMode);
   const [diffIgnoreWhitespace, setDiffIgnoreWhitespace] = useState(readInitialDiffIgnoreWhitespace);
   const [diffRefreshNonce, setDiffRefreshNonce] = useState(0);
+  const [mobileDiffToolbarMenu, setMobileDiffToolbarMenu] = useState<MobileDiffToolbarMenuState | null>(null);
   const diffPanelSelection = useCodeAgentDiffPanelSelection(roomId);
   const diffScope: CodeAgentWorkspaceDiffScope = diffPanelSelection.kind === 'unstaged' ? 'unstaged' : 'branch';
   const diffBaseRef = diffPanelSelection.kind === 'branch' ? diffPanelSelection.baseRef : null;
@@ -373,9 +380,11 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   const codeViewRef = useRef<CodeViewHandle<DiffCommentAnnotationGroup> | null>(null);
   const diffScopeMenuRef = useRef<HTMLDetailsElement | null>(null);
   const diffBaseRefMenuRef = useRef<HTMLDetailsElement | null>(null);
-  const [diffFileVisibility, setDiffFileVisibility] = useState<DiffFileVisibilityState>(() => new Map());
+  const mobileDiffToolbarMenuRef = useRef<HTMLDivElement | null>(null);
+  const mobileDiffScopeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const mobileDiffBaseRefButtonRef = useRef<HTMLButtonElement | null>(null);
   const diffFileVisibilityScopeKey = `${roomId}:${diffScope}:${diffScope === 'branch' ? diffBaseRef ?? 'auto' : 'working-tree'}`;
-  const scopedDiffFileVisibility = diffFileVisibility.get(diffFileVisibilityScopeKey);
+  const scopedDiffFileVisibility = useCodeAgentDiffFileVisibility(diffFileVisibilityScopeKey);
   const collapsedDiffFileKeys = scopedDiffFileVisibility?.collapsedFileKeys ?? EMPTY_DIFF_FILE_KEYS;
   const viewedDiffFileKeys = scopedDiffFileVisibility?.viewedFileKeys ?? EMPTY_DIFF_FILE_KEYS;
   const revealedLargeDiffFileKeys = scopedDiffFileVisibility?.revealedLargeFileKeys ?? EMPTY_DIFF_FILE_KEYS;
@@ -436,9 +445,31 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     setDiffRefreshNonce((current) => current + 1);
   };
 
+  const openMobileDiffToolbarMenu = useCallback((
+    kind: MobileDiffToolbarMenuKind,
+    button: HTMLElement,
+    preferredWidth: number,
+  ) => {
+    const rect = button.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    const viewportWidth = viewport?.width ?? window.innerWidth ?? preferredWidth;
+    const width = Math.min(preferredWidth, Math.max(160, viewportWidth - 16));
+    const maxLeft = Math.max(8, viewportWidth - width - 8);
+    const left = Math.min(Math.max(8, rect.left), maxLeft);
+    const top = Math.max(8, rect.bottom + 4);
+    setMobileDiffToolbarMenu({
+      kind,
+      left: Math.round(left),
+      top: Math.round(top),
+      width: Math.round(width),
+      maxHeight: `calc(100vh - ${Math.round(top + 8)}px)`,
+    });
+  }, []);
+
   const closeDiffToolbarMenus = useCallback(() => {
     diffScopeMenuRef.current?.removeAttribute('open');
     diffBaseRefMenuRef.current?.removeAttribute('open');
+    setMobileDiffToolbarMenu(null);
   }, []);
 
   const handleDiffScopeMenuToggle = useCallback((event: React.SyntheticEvent<HTMLDetailsElement>) => {
@@ -463,65 +494,51 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   }, [roomId]);
 
   const toggleDiffFileCollapsed = (fileKey: string) => {
-    setDiffFileVisibility((current) => {
-      const scopedVisibility = current.get(diffFileVisibilityScopeKey);
-      const collapsedFileKeys = new Set(toggleCodeAgentDiffFileKey(
-        [...(scopedVisibility?.collapsedFileKeys ?? [])],
+    updateCodeAgentDiffFileVisibility(diffFileVisibilityScopeKey, (current) => {
+      const collapsedFileKeys = toggleCodeAgentDiffFileKey(
+        current.collapsedFileKeys,
         fileKey,
-      ));
-      const viewedFileKeys = new Set(scopedVisibility?.viewedFileKeys ?? []);
-      const revealedLargeFileKeys = new Set(scopedVisibility?.revealedLargeFileKeys ?? []);
-      const next = new Map(current);
-      next.set(diffFileVisibilityScopeKey, {
+      );
+      return {
         collapsedFileKeys,
-        viewedFileKeys,
-        revealedLargeFileKeys,
-      });
-      return next;
+        viewedFileKeys: current.viewedFileKeys,
+        revealedLargeFileKeys: current.revealedLargeFileKeys,
+      };
     });
   };
 
   const toggleDiffFileViewed = (fileKey: string) => {
-    setDiffFileVisibility((current) => {
-      const scopedVisibility = current.get(diffFileVisibilityScopeKey);
-      const collapsedFileKeys = new Set(scopedVisibility?.collapsedFileKeys ?? []);
-      const viewedBeforeToggle = scopedVisibility?.viewedFileKeys.has(fileKey) === true;
-      const viewedFileKeys = new Set(toggleCodeAgentDiffFileKey(
-        [...(scopedVisibility?.viewedFileKeys ?? [])],
+    updateCodeAgentDiffFileVisibility(diffFileVisibilityScopeKey, (current) => {
+      const collapsedFileKeys = new Set(current.collapsedFileKeys);
+      const viewedBeforeToggle = current.viewedFileKeys.includes(fileKey);
+      const viewedFileKeys = toggleCodeAgentDiffFileKey(
+        current.viewedFileKeys,
         fileKey,
-      ));
-      const revealedLargeFileKeys = new Set(scopedVisibility?.revealedLargeFileKeys ?? []);
+      );
       if (!viewedBeforeToggle) {
-        viewedFileKeys.add(fileKey);
         collapsedFileKeys.add(fileKey);
       }
-      const next = new Map(current);
-      next.set(diffFileVisibilityScopeKey, {
-        collapsedFileKeys,
+      return {
+        collapsedFileKeys: [...collapsedFileKeys],
         viewedFileKeys,
-        revealedLargeFileKeys,
-      });
-      return next;
+        revealedLargeFileKeys: current.revealedLargeFileKeys,
+      };
     });
   };
 
   const revealLargeDiffFile = (fileKey: string) => {
-    setDiffFileVisibility((current) => {
-      const scopedVisibility = current.get(diffFileVisibilityScopeKey);
-      const collapsedFileKeys = new Set(removeCodeAgentDiffFileKey(
-        [...(scopedVisibility?.collapsedFileKeys ?? [])],
+    updateCodeAgentDiffFileVisibility(diffFileVisibilityScopeKey, (current) => {
+      const collapsedFileKeys = removeCodeAgentDiffFileKey(
+        current.collapsedFileKeys,
         fileKey,
-      ));
-      const viewedFileKeys = new Set(scopedVisibility?.viewedFileKeys ?? []);
-      const revealedLargeFileKeys = new Set(scopedVisibility?.revealedLargeFileKeys ?? []);
+      );
+      const revealedLargeFileKeys = new Set(current.revealedLargeFileKeys);
       revealedLargeFileKeys.add(fileKey);
-      const next = new Map(current);
-      next.set(diffFileVisibilityScopeKey, {
+      return {
         collapsedFileKeys,
-        viewedFileKeys,
-        revealedLargeFileKeys,
-      });
-      return next;
+        viewedFileKeys: current.viewedFileKeys,
+        revealedLargeFileKeys: [...revealedLargeFileKeys],
+      };
     });
   };
 
@@ -570,7 +587,13 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
       const target = event.target;
       if (
         target instanceof Node &&
-        (diffScopeMenuRef.current?.contains(target) || diffBaseRefMenuRef.current?.contains(target))
+        (
+          diffScopeMenuRef.current?.contains(target) ||
+          diffBaseRefMenuRef.current?.contains(target) ||
+          mobileDiffToolbarMenuRef.current?.contains(target) ||
+          mobileDiffScopeButtonRef.current?.contains(target) ||
+          mobileDiffBaseRefButtonRef.current?.contains(target)
+        )
       ) {
         return;
       }
@@ -588,6 +611,12 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [closeDiffToolbarMenus]);
+
+  useEffect(() => {
+    if (!mobileLayout) {
+      setMobileDiffToolbarMenu(null);
+    }
+  }, [mobileLayout]);
 
   const baseRefChoices = useMemo(() => {
     const refs = workspaceRefs?.refs ?? [];
@@ -681,15 +710,15 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     const visibilityFiles = filesWithIds.map(({ id }) => ({ id }));
     const validCollapsedDiffFileKeys = new Set(getValidExplicitCodeAgentDiffFileKeys(
       visibilityFiles,
-      [...collapsedDiffFileKeys],
+      collapsedDiffFileKeys,
     ));
     const validViewedDiffFileKeys = new Set(getValidExplicitCodeAgentDiffFileKeys(
       visibilityFiles,
-      [...viewedDiffFileKeys],
+      viewedDiffFileKeys,
     ));
     const validRevealedLargeDiffFileKeys = new Set(getValidExplicitCodeAgentDiffFileKeys(
       visibilityFiles,
-      [...revealedLargeDiffFileKeys],
+      revealedLargeDiffFileKeys,
     ));
     const items = filesWithIds.map(({ fileDiff, id }) => {
       const previewState = getCodeAgentDiffFilePreviewState(fileDiff);
@@ -722,6 +751,15 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
       deletions: stat.deletions,
     }];
   }), [parsed.items]);
+  const mobileDiffSummary = useMemo(() => (
+    diffFileSummaries.reduce(
+      (summary, file) => ({
+        additions: summary.additions + file.additions,
+        deletions: summary.deletions + file.deletions,
+      }),
+      { additions: 0, deletions: 0 },
+    )
+  ), [diffFileSummaries]);
 
   useEffect(() => {
     onFileSummariesChange?.(diffFileSummaries);
@@ -835,43 +873,211 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   const diffFileSuppressionPillClassName = mobileLayout
     ? 'inline-flex h-8 max-w-56 items-center gap-1.5 overflow-hidden rounded-md px-2 text-xs font-medium'
     : 'inline-flex h-5 max-w-48 items-center gap-1 overflow-hidden rounded-sm px-1.5 text-[10px] font-medium sm:max-w-64';
+  const mobileDiffToolbarMenuKind = mobileDiffToolbarMenu?.kind ?? null;
+  const diffScopeChevronClassName = `${controlIconClassName} shrink-0 text-[#87867f] transition-transform dark:text-[#8f8d86] ${
+    mobileDiffToolbarMenuKind === 'scope' ? 'rotate-180' : 'group-open:rotate-180'
+  }`;
+  const diffBaseRefChevronClassName = `${controlIconClassName} shrink-0 text-[#87867f] transition-transform dark:text-[#8f8d86] ${
+    mobileDiffToolbarMenuKind === 'baseRef' ? 'rotate-180' : 'group-open:rotate-180'
+  }`;
+  const diffScopeMenuContent = ([
+    ['branch', t('codeAgentDiffScopeBranch')],
+    ['unstaged', t('codeAgentDiffScopeWorkingTree')],
+  ] as const).map(([scope, label]) => (
+    <button
+      key={scope}
+      type="button"
+      className={diffScopeMenuItemClassName}
+      role="menuitem"
+      onClick={() => {
+        selectDiffScope(scope);
+        closeDiffToolbarMenus();
+      }}
+    >
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {diffScope === scope ? <Check className="h-3.5 w-3.5 shrink-0 text-[#9f462c] dark:text-[#ffb197]" /> : null}
+    </button>
+  ));
+  const diffBaseRefMenuContent = (
+    <>
+      <div className="px-3 pt-2.5">
+        <label className="relative block border-b border-[#dedbd0] pb-1.5 transition-colors focus-within:border-[#c96442] dark:border-[#30302e]">
+          <Search className="pointer-events-none absolute left-0 top-1.5 h-4 w-4 text-[#87867f]/70 dark:text-[#8f8d86]/70" />
+          <input
+            aria-label={t('codeAgentDiffBaseRefSearch')}
+            className="h-7 w-full bg-transparent pl-5 pr-1 text-sm text-[#141413] outline-none placeholder:text-[#87867f] dark:text-[#faf9f5] dark:placeholder:text-[#8f8d86]"
+            placeholder={t('codeAgentDiffBaseRefSearch')}
+            value={baseRefQuery}
+            onChange={(event) => setBaseRefQuery(event.target.value)}
+          />
+        </label>
+      </div>
+      <div className="grid grid-cols-[1rem_minmax(0,1fr)] items-center gap-2 border-b border-[#dedbd0] px-3 pb-1.5 pt-2 text-[10px] font-semibold uppercase text-[#87867f] dark:border-[#30302e] dark:text-[#8f8d86]">
+        <span aria-hidden="true" />
+        <div className="inline-grid max-w-full grid-cols-[minmax(0,9rem)_3rem] items-center gap-3">
+          <span>{t('codeAgentDiffBaseRefBranch')}</span>
+          <span className="text-right">{t('codeAgentDiffBaseRefRemote')}</span>
+        </div>
+      </div>
+      <div className="max-h-64 min-w-0 overflow-y-auto overflow-x-hidden p-1">
+        {isWorkspaceRefsPending && !workspaceRefs ? (
+          <div className="px-2 py-2 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentDiffBaseRefLoading')}</div>
+        ) : workspaceRefsError ? (
+          <div className="px-2 py-2 text-xs text-[#9f462c] dark:text-[#ff9b78]">{t('codeAgentDiffBaseRefUnavailable')}</div>
+        ) : !workspaceRefs?.available ? (
+          <div className="px-2 py-2 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentDiffBaseRefUnavailable')}</div>
+        ) : filteredBaseRefItems.length === 0 ? (
+          <div className="px-2 py-2 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentNoMatchingRefs')}</div>
+        ) : (
+          <>
+            {filteredBaseRefItems.includes(AUTOMATIC_BASE_REF) ? (
+              <button
+                type="button"
+                className={diffBaseRefItemClassName}
+                role="menuitem"
+                onClick={() => {
+                  selectDiffBaseRef(null);
+                  closeDiffToolbarMenus();
+                }}
+              >
+                {diffBaseRef === null ? <Check className="h-3.5 w-3.5 text-[#9f462c] dark:text-[#ffb197]" /> : <span />}
+                <span className="min-w-0 truncate">{t('codeAgentDiffBaseRefAutomatic')}</span>
+              </button>
+            ) : null}
+            {matchingBaseRefChoices.map((choice) => {
+              const item = valueForBaseRefChoice(choice);
+              if (!filteredBaseRefItems.includes(item)) {
+                return null;
+              }
+              const hasBoth = choice.local !== null && choice.remote !== null;
+              const useRemote = choice.remote?.name === item;
+              const selectItem = () => {
+                selectDiffBaseRef(item);
+                closeDiffToolbarMenus();
+              };
+              return (
+                <div
+                  key={choice.id}
+                  role="menuitem"
+                  tabIndex={0}
+                  className={diffBaseRefItemClassName}
+                  onClick={() => {
+                    selectItem();
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') {
+                      return;
+                    }
+                    event.preventDefault();
+                    selectItem();
+                  }}
+                >
+                  {diffBaseRef === item ? <Check className="h-3.5 w-3.5 text-[#9f462c] dark:text-[#ffb197]" /> : <span />}
+                  <span className="inline-grid max-w-full grid-cols-[minmax(0,9rem)_3rem] items-center gap-3 overflow-hidden">
+                    <span className="min-w-0 truncate pr-2">{choice.label}</span>
+                    {hasBoth ? (
+                      <span
+                        className="flex justify-end"
+                        onClick={(event) => event.stopPropagation()}
+                        onPointerDown={(event) => event.stopPropagation()}
+                      >
+                        <label className="relative inline-flex h-4 w-7 cursor-pointer items-center">
+                          <input
+                            type="checkbox"
+                            className="peer sr-only"
+                            aria-label={t('codeAgentDiffBaseRefUseRemote', { ref: choice.label })}
+                            checked={useRemote}
+                            onChange={(event) => {
+                              const nextRef = event.currentTarget.checked
+                                ? choice.remote?.name
+                                : choice.local?.name;
+                              if (nextRef) {
+                                selectDiffBaseRef(nextRef);
+                              }
+                            }}
+                          />
+                          <span className="h-3.5 w-7 rounded-full bg-[#dedbd0] transition-colors peer-checked:bg-[#c96442] dark:bg-[#30302e] dark:peer-checked:bg-[#d97757]" />
+                          <span className="absolute left-0.5 h-2.5 w-2.5 rounded-full bg-[#faf9f5] transition-transform peer-checked:translate-x-3 dark:bg-[#faf9f5]" />
+                        </label>
+                      </span>
+                    ) : choice.remote ? (
+                      <span className="flex justify-end text-[#87867f] dark:text-[#8f8d86]" title={t('codeAgentDiffBaseRefRemoteOnly')}>
+                        <Check className="h-3.5 w-3.5" />
+                      </span>
+                    ) : null}
+                  </span>
+                </div>
+              );
+            })}
+          </>
+        )}
+      </div>
+    </>
+  );
+  const mobileDiffToolbarMenuOverlay = mobileLayout && mobileDiffToolbarMenu ? (
+    <div
+      ref={mobileDiffToolbarMenuRef}
+      className={`fixed z-[90] overflow-hidden rounded-lg border border-[#dedbd0] bg-[#faf9f5] shadow-xl dark:border-[#30302e] dark:bg-[#1d1d1b] ${
+        mobileDiffToolbarMenu.kind === 'scope' ? 'p-1' : ''
+      }`}
+      data-testid={
+        mobileDiffToolbarMenu.kind === 'scope'
+          ? 'code-agent-mobile-diff-scope-menu'
+          : 'code-agent-mobile-diff-base-ref-menu'
+      }
+      role="menu"
+      style={{
+        left: mobileDiffToolbarMenu.left,
+        top: mobileDiffToolbarMenu.top,
+        width: mobileDiffToolbarMenu.width,
+        maxHeight: mobileDiffToolbarMenu.maxHeight,
+      }}
+    >
+      {mobileDiffToolbarMenu.kind === 'scope' ? diffScopeMenuContent : diffBaseRefMenuContent}
+    </div>
+  ) : null;
 
   const headerControls = (
     <>
         <div className={`flex min-w-0 flex-1 items-center ${controlClusterGap} ${mobileLayout ? 'flex-nowrap' : 'flex-wrap'}`}>
           <div className={`inline-flex max-w-full shrink-0 items-center ${controlClusterGap} whitespace-nowrap`}>
-            <details
-              ref={diffScopeMenuRef}
-              className="group relative min-w-0 shrink-0"
-              onToggle={handleDiffScopeMenuToggle}
-            >
-              <summary
+            {mobileLayout ? (
+              <button
+                ref={mobileDiffScopeButtonRef}
+                type="button"
                 aria-label={`${t('codeAgentDiffScope')}: ${diffScopeLabel}`}
+                aria-haspopup="menu"
+                aria-expanded={mobileDiffToolbarMenuKind === 'scope'}
                 className={diffScopeSummaryClassName}
+                onClick={(event) => {
+                  if (mobileDiffToolbarMenuKind === 'scope') {
+                    closeDiffToolbarMenus();
+                    return;
+                  }
+                  openMobileDiffToolbarMenu('scope', event.currentTarget, 224);
+                }}
               >
                 <span className="truncate">{diffScopeLabel}</span>
-                <ChevronDown className={`${controlIconClassName} shrink-0 text-[#87867f] transition-transform group-open:rotate-180 dark:text-[#8f8d86]`} />
-              </summary>
-              <div className={diffScopeMenuClassName}>
-                {([
-                  ['branch', t('codeAgentDiffScopeBranch')],
-                  ['unstaged', t('codeAgentDiffScopeWorkingTree')],
-                ] as const).map(([scope, label]) => (
-                  <button
-                    key={scope}
-                    type="button"
-                    className={diffScopeMenuItemClassName}
-                    onClick={() => {
-                      selectDiffScope(scope);
-                      closeDiffToolbarMenus();
-                    }}
-                  >
-                    <span className="min-w-0 flex-1 truncate">{label}</span>
-                    {diffScope === scope ? <Check className="h-3.5 w-3.5 shrink-0 text-[#9f462c] dark:text-[#ffb197]" /> : null}
-                  </button>
-                ))}
-              </div>
-            </details>
+                <ChevronDown className={diffScopeChevronClassName} />
+              </button>
+            ) : (
+              <details
+                ref={diffScopeMenuRef}
+                className="group relative min-w-0 shrink-0"
+                onToggle={handleDiffScopeMenuToggle}
+              >
+                <summary
+                  aria-label={`${t('codeAgentDiffScope')}: ${diffScopeLabel}`}
+                  className={diffScopeSummaryClassName}
+                >
+                  <span className="truncate">{diffScopeLabel}</span>
+                  <ChevronDown className={diffScopeChevronClassName} />
+                </summary>
+                <div className={diffScopeMenuClassName} role="menu">
+                  {diffScopeMenuContent}
+                </div>
+              </details>
+            )}
           {diffScope === 'branch' ? (
             <div
               className={`flex min-w-0 max-w-full shrink-0 items-center ${controlClusterGap} overflow-visible text-xs text-[#87867f] dark:text-[#8f8d86]`}
@@ -880,132 +1086,43 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
             >
               <span className="hidden max-w-28 truncate sm:inline">{diffHeadRefLabel}</span>
               <ArrowRight className="hidden h-3.5 w-3.5 shrink-0 opacity-70 sm:block" />
-              <details
-                ref={diffBaseRefMenuRef}
-                className="group relative min-w-0 shrink-0"
-                onToggle={handleDiffBaseRefMenuToggle}
-              >
-                <summary
+              {mobileLayout ? (
+                <button
+                  ref={mobileDiffBaseRefButtonRef}
+                  type="button"
                   aria-label={`${t('codeAgentDiffBaseRef')}: ${diffBaseRefLabel}`}
+                  aria-haspopup="menu"
+                  aria-expanded={mobileDiffToolbarMenuKind === 'baseRef'}
                   className={diffBaseRefSummaryClassName}
+                  onClick={(event) => {
+                    if (mobileDiffToolbarMenuKind === 'baseRef') {
+                      closeDiffToolbarMenus();
+                      return;
+                    }
+                    openMobileDiffToolbarMenu('baseRef', event.currentTarget, 288);
+                  }}
                 >
                   <span className="truncate">{diffBaseRefLabel}</span>
-                  <ChevronDown className={`${controlIconClassName} shrink-0 text-[#87867f] transition-transform group-open:rotate-180 dark:text-[#8f8d86]`} />
-                </summary>
-                <div className={diffBaseRefMenuClassName}>
-                  <div className="px-3 pt-2.5">
-                    <label className="relative block border-b border-[#dedbd0] pb-1.5 transition-colors focus-within:border-[#c96442] dark:border-[#30302e]">
-                      <Search className="pointer-events-none absolute left-0 top-1.5 h-4 w-4 text-[#87867f]/70 dark:text-[#8f8d86]/70" />
-                      <input
-                        aria-label={t('codeAgentDiffBaseRefSearch')}
-                        className="h-7 w-full bg-transparent pl-5 pr-1 text-sm text-[#141413] outline-none placeholder:text-[#87867f] dark:text-[#faf9f5] dark:placeholder:text-[#8f8d86]"
-                        placeholder={t('codeAgentDiffBaseRefSearch')}
-                        value={baseRefQuery}
-                        onChange={(event) => setBaseRefQuery(event.target.value)}
-                      />
-                    </label>
+                  <ChevronDown className={diffBaseRefChevronClassName} />
+                </button>
+              ) : (
+                <details
+                  ref={diffBaseRefMenuRef}
+                  className="group relative min-w-0 shrink-0"
+                  onToggle={handleDiffBaseRefMenuToggle}
+                >
+                  <summary
+                    aria-label={`${t('codeAgentDiffBaseRef')}: ${diffBaseRefLabel}`}
+                    className={diffBaseRefSummaryClassName}
+                  >
+                    <span className="truncate">{diffBaseRefLabel}</span>
+                    <ChevronDown className={diffBaseRefChevronClassName} />
+                  </summary>
+                  <div className={diffBaseRefMenuClassName} role="menu">
+                    {diffBaseRefMenuContent}
                   </div>
-                  <div className="grid grid-cols-[1rem_minmax(0,1fr)] items-center gap-2 border-b border-[#dedbd0] px-3 pb-1.5 pt-2 text-[10px] font-semibold uppercase text-[#87867f] dark:border-[#30302e] dark:text-[#8f8d86]">
-                    <span aria-hidden="true" />
-                    <div className="inline-grid max-w-full grid-cols-[minmax(0,9rem)_3rem] items-center gap-3">
-                      <span>{t('codeAgentDiffBaseRefBranch')}</span>
-                      <span className="text-right">{t('codeAgentDiffBaseRefRemote')}</span>
-                    </div>
-                  </div>
-                  <div className="max-h-64 min-w-0 overflow-y-auto overflow-x-hidden p-1">
-                    {isWorkspaceRefsPending && !workspaceRefs ? (
-                      <div className="px-2 py-2 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentDiffBaseRefLoading')}</div>
-                    ) : workspaceRefsError ? (
-                      <div className="px-2 py-2 text-xs text-[#9f462c] dark:text-[#ff9b78]">{t('codeAgentDiffBaseRefUnavailable')}</div>
-                    ) : !workspaceRefs?.available ? (
-                      <div className="px-2 py-2 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentDiffBaseRefUnavailable')}</div>
-                    ) : filteredBaseRefItems.length === 0 ? (
-                      <div className="px-2 py-2 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentNoMatchingRefs')}</div>
-                    ) : (
-                      <>
-                        {filteredBaseRefItems.includes(AUTOMATIC_BASE_REF) ? (
-                          <button
-                            type="button"
-                            className={diffBaseRefItemClassName}
-                            onClick={() => {
-                              selectDiffBaseRef(null);
-                              closeDiffToolbarMenus();
-                            }}
-                          >
-                            {diffBaseRef === null ? <Check className="h-3.5 w-3.5 text-[#9f462c] dark:text-[#ffb197]" /> : <span />}
-                            <span className="min-w-0 truncate">{t('codeAgentDiffBaseRefAutomatic')}</span>
-                          </button>
-                        ) : null}
-                        {matchingBaseRefChoices.map((choice) => {
-                          const item = valueForBaseRefChoice(choice);
-                          if (!filteredBaseRefItems.includes(item)) {
-                            return null;
-                          }
-                          const hasBoth = choice.local !== null && choice.remote !== null;
-                          const useRemote = choice.remote?.name === item;
-                          const selectItem = () => {
-                            selectDiffBaseRef(item);
-                            closeDiffToolbarMenus();
-                          };
-                          return (
-                            <div
-                              key={choice.id}
-                              role="button"
-                              tabIndex={0}
-                              className={diffBaseRefItemClassName}
-                              onClick={() => {
-                                selectItem();
-                              }}
-                              onKeyDown={(event) => {
-                                if (event.key !== 'Enter' && event.key !== ' ') {
-                                  return;
-                                }
-                                event.preventDefault();
-                                selectItem();
-                              }}
-                            >
-                              {diffBaseRef === item ? <Check className="h-3.5 w-3.5 text-[#9f462c] dark:text-[#ffb197]" /> : <span />}
-                              <span className="inline-grid max-w-full grid-cols-[minmax(0,9rem)_3rem] items-center gap-3 overflow-hidden">
-                                <span className="min-w-0 truncate pr-2">{choice.label}</span>
-                                {hasBoth ? (
-                                  <span
-                                    className="flex justify-end"
-                                    onClick={(event) => event.stopPropagation()}
-                                    onPointerDown={(event) => event.stopPropagation()}
-                                  >
-                                    <label className="relative inline-flex h-4 w-7 cursor-pointer items-center">
-                                      <input
-                                        type="checkbox"
-                                        className="peer sr-only"
-                                        aria-label={t('codeAgentDiffBaseRefUseRemote', { ref: choice.label })}
-                                        checked={useRemote}
-                                        onChange={(event) => {
-                                          const nextRef = event.currentTarget.checked
-                                            ? choice.remote?.name
-                                            : choice.local?.name;
-                                          if (nextRef) {
-                                            selectDiffBaseRef(nextRef);
-                                          }
-                                        }}
-                                      />
-                                      <span className="h-3.5 w-7 rounded-full bg-[#dedbd0] transition-colors peer-checked:bg-[#c96442] dark:bg-[#30302e] dark:peer-checked:bg-[#d97757]" />
-                                      <span className="absolute left-0.5 h-2.5 w-2.5 rounded-full bg-[#faf9f5] transition-transform peer-checked:translate-x-3 dark:bg-[#faf9f5]" />
-                                    </label>
-                                  </span>
-                                ) : choice.remote ? (
-                                  <span className="flex justify-end text-[#87867f] dark:text-[#8f8d86]" title={t('codeAgentDiffBaseRefRemoteOnly')}>
-                                    <Check className="h-3.5 w-3.5" />
-                                  </span>
-                                ) : null}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </>
-                    )}
-                  </div>
-                </div>
-              </details>
+                </details>
+              )}
             </div>
           ) : null}
           </div>
@@ -1072,9 +1189,38 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   );
   const headerRow = mobileLayout ? (
     <div
-      className="flex min-w-0 flex-1 items-center"
+      className="flex min-w-0 flex-1 flex-col items-stretch gap-1"
       data-testid="code-agent-mobile-workspace-diff-header"
     >
+      {diffFileSummaries.length > 0 || reviewComments.length > 0 ? (
+        <div
+          className="flex min-h-5 min-w-0 items-center gap-2 px-0.5 text-[11px] leading-5 text-[#87867f] dark:text-[#8f8d86]"
+          data-testid="code-agent-mobile-workspace-diff-summary-row"
+        >
+          {diffFileSummaries.length > 0 ? (
+            <>
+              <span className="min-w-0 truncate font-semibold text-[#4d4c48] dark:text-[#e8e6dc]">
+                {t('codeAgentChangedFilesCount', { count: diffFileSummaries.length })}
+              </span>
+              <CodeAgentDiffStatLabel
+                additions={mobileDiffSummary.additions}
+                deletions={mobileDiffSummary.deletions}
+                className="shrink-0 text-[11px]"
+                layout="inline"
+              />
+            </>
+          ) : null}
+          {reviewComments.length > 0 ? (
+            <span
+              className="ml-auto shrink-0 rounded-full border border-[#ead6cc] bg-[#fff7f2] px-1.5 py-px text-[10px] font-semibold leading-none text-[#9f462c] dark:border-[#4a3027] dark:bg-[#2a211d] dark:text-[#ffb197]"
+              data-count={reviewComments.length}
+              data-testid="code-agent-mobile-workspace-diff-pending-review-count"
+            >
+              {t('codeAgentPendingReviewCommentCount', { count: reviewComments.length })}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
       <div
         className="-mx-2 flex min-w-0 overflow-x-auto px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         data-testid="code-agent-mobile-workspace-diff-controls-row"
@@ -1091,8 +1237,9 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
       mode="embedded"
       header={headerRow}
       testId="code-agent-workspace-diff-viewer"
-      headerClassName={mobileLayout ? 'min-h-12 items-center px-2 py-1.5' : undefined}
+      headerClassName={mobileLayout ? 'min-h-12 items-stretch px-2 py-1.5' : undefined}
     >
+      {mobileDiffToolbarMenuOverlay}
       <CodeAgentWorkspaceDiffPanelViewport>
         {showTruncatedDiff ? (
           <div
@@ -1293,7 +1440,8 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
             }}
             options={{
               diffStyle: diffRenderMode === 'split' ? 'split' : 'unified',
-              lineDiffType: 'none',
+              lineDiffType: mobileLayout ? 'word-alt' : 'none',
+              ...(mobileLayout ? { maxLineDiffLength: MOBILE_DIFF_WORD_ALT_MAX_LINE_LENGTH } : {}),
               overflow: wordWrap ? 'wrap' : 'scroll',
               theme: resolveCodeAgentDiffThemeName(resolvedTheme),
               themeType: resolvedTheme,

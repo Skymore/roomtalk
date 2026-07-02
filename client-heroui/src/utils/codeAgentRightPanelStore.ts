@@ -54,6 +54,16 @@ export interface CodeAgentRightPanelState {
 
 type CodeAgentPreviewSurface = Extract<CodeAgentRightPanelSurface, { kind: 'preview' }>;
 
+export type CodeAgentPreviewSessionSurfaceSnapshot = {
+  tabId: string;
+  navStatus:
+    | { _tag: 'Idle' }
+    | { _tag: 'Loading' | 'Success'; url: string; title: string }
+    | { _tag: 'LoadFailed'; url: string; title: string; code: number; description: string };
+  viewport?: CodeAgentPreviewViewportSetting;
+  updatedAt?: string;
+};
+
 export interface CodeAgentRightPanelStoreState {
   byRoomId: Record<string, CodeAgentRightPanelState>;
   recentPreviewTargetsByRoomId?: Record<string, CodeAgentPreviewNavigationTarget[]>;
@@ -280,6 +290,15 @@ function previewTargetFromSurface(surface: CodeAgentPreviewSurface): CodeAgentPr
   return null;
 }
 
+function previewTargetFromSessionSnapshot(
+  snapshot: CodeAgentPreviewSessionSurfaceSnapshot,
+): CodeAgentPreviewNavigationTarget | null {
+  if (snapshot.navStatus._tag === 'Idle') {
+    return null;
+  }
+  return normalizePreviewNavigationTarget({ kind: 'url', url: snapshot.navStatus.url });
+}
+
 function browserSurface(
   relativePath: string | null,
   navigationState?: CodeAgentPreviewNavigationState,
@@ -374,6 +393,38 @@ function nextBlankBrowserSurface(surfaces: readonly CodeAgentRightPanelSurface[]
     index += 1;
   }
   return { id: `browser:new:${index}`, kind: 'preview', relativePath: null };
+}
+
+function previewSurfaceFromSessionSnapshot(
+  snapshot: CodeAgentPreviewSessionSurfaceSnapshot,
+  existingSurface: CodeAgentPreviewSurface | null,
+  blankSurface: CodeAgentPreviewSurface | null,
+): CodeAgentPreviewSurface | null {
+  const tabId = snapshot.tabId.trim().slice(0, 256);
+  if (!tabId) {
+    return null;
+  }
+  const viewport = coerceCodeAgentPreviewViewportSetting(snapshot.viewport);
+  const sessionState: CodeAgentPreviewNavigationState = {
+    ...previewZoomStateFromSurface(existingSurface),
+    ...(viewport && viewport._tag !== 'fill' ? { viewport } : {}),
+    previewSessionId: tabId,
+  };
+  const target = previewTargetFromSessionSnapshot(snapshot);
+  if (!target) {
+    const blank = existingSurface && !previewTargetFromSurface(existingSurface)
+      ? existingSurface
+      : blankSurface ?? browserSurface(null);
+    return {
+      ...blank,
+      ...sessionState,
+    };
+  }
+  const sourceSurface = existingSurface ?? null;
+  return previewSurfaceFromTarget(target, {
+    ...navigationStateAfterPreviewTarget(sourceSurface, target),
+    ...sessionState,
+  });
 }
 
 function singletonSurface(kind: 'diff' | 'files'): CodeAgentRightPanelSurface {
@@ -946,6 +997,132 @@ export function addCodeAgentRightPanelPreviewSurface(roomId: string) {
         isOpen: true,
         surfaces: [...current.surfaces, surface],
         activeSurfaceId: surface.id,
+      };
+    }),
+  }));
+}
+
+export function reconcileCodeAgentPreviewSessionSurfaces(
+  roomId: string,
+  snapshots: readonly CodeAgentPreviewSessionSurfaceSnapshot[],
+) {
+  const roomKey = normalizeRoomId(roomId);
+  if (!roomKey) {
+    return;
+  }
+  updateStore((state) => {
+    let rememberedTarget: CodeAgentPreviewNavigationTarget | null = null;
+    const byRoomId = updateRoom(state.byRoomId, roomKey, (current) => {
+      if (snapshots.length === 0) {
+        return current;
+      }
+      let surfaces = current.surfaces;
+      let activeSurfaceId = current.activeSurfaceId;
+      let changed = false;
+      let fallbackSurfaceId: string | null = null;
+
+      const upsertSurface = (
+        nextSurface: CodeAgentPreviewSurface,
+        sourceIndex: number,
+      ) => {
+        const duplicateIndex = surfaces.findIndex((surface) => surface.id === nextSurface.id);
+        const sourceSurface = sourceIndex >= 0 ? surfaces[sourceIndex] : null;
+        const nextSurfaces = [...surfaces];
+
+        if (duplicateIndex >= 0 && duplicateIndex !== sourceIndex) {
+          nextSurfaces[duplicateIndex] = nextSurface;
+          if (sourceIndex >= 0) {
+            nextSurfaces.splice(sourceIndex, 1);
+          }
+          if (sourceSurface && activeSurfaceId === sourceSurface.id) {
+            activeSurfaceId = nextSurface.id;
+          }
+          if (activeSurfaceId === surfaces[duplicateIndex]?.id) {
+            activeSurfaceId = nextSurface.id;
+          }
+        } else if (sourceIndex >= 0) {
+          nextSurfaces[sourceIndex] = nextSurface;
+          if (sourceSurface && activeSurfaceId === sourceSurface.id) {
+            activeSurfaceId = nextSurface.id;
+          }
+        } else {
+          nextSurfaces.push(nextSurface);
+        }
+
+        if (
+          nextSurfaces.length !== surfaces.length ||
+          nextSurfaces.some((surface, index) => surface !== surfaces[index])
+        ) {
+          changed = true;
+          surfaces = nextSurfaces;
+        }
+        fallbackSurfaceId = nextSurface.id;
+      };
+
+      for (const snapshot of snapshots) {
+        const tabId = snapshot.tabId.trim();
+        if (!tabId) {
+          continue;
+        }
+        const sourceIndex = surfaces.findIndex((surface) => (
+          surface.kind === 'preview' && (surface.previewSessionId === tabId || surface.id === tabId)
+        ));
+        const sourceSurface = sourceIndex >= 0 && surfaces[sourceIndex].kind === 'preview'
+          ? surfaces[sourceIndex] as CodeAgentPreviewSurface
+          : null;
+        const blankSurface = sourceSurface
+          ? null
+          : nextBlankBrowserSurface(surfaces) as CodeAgentPreviewSurface;
+        const nextSurface = previewSurfaceFromSessionSnapshot(snapshot, sourceSurface, blankSurface);
+        if (!nextSurface) {
+          continue;
+        }
+        rememberedTarget = previewTargetFromSurface(nextSurface) ?? rememberedTarget;
+        upsertSurface(nextSurface, sourceIndex);
+      }
+
+      if (!changed) {
+        return current;
+      }
+      const activeStillExists = activeSurfaceId !== null && surfaces.some((surface) => surface.id === activeSurfaceId);
+      const nextActiveSurfaceId = activeStillExists
+        ? activeSurfaceId
+        : (fallbackSurfaceId ?? surfaces.at(-1)?.id ?? null);
+      return {
+        isOpen: current.isOpen || current.activeSurfaceId === null,
+        surfaces,
+        activeSurfaceId: nextActiveSurfaceId,
+      };
+    });
+    return withRecentPreviewTarget({ ...state, byRoomId }, roomKey, rememberedTarget);
+  });
+}
+
+export function closeCodeAgentPreviewSessionSurface(roomId: string, tabId: string) {
+  const roomKey = normalizeRoomId(roomId);
+  const normalizedTabId = tabId.trim();
+  if (!roomKey || !normalizedTabId) {
+    return;
+  }
+  updateStore((state) => ({
+    ...state,
+    byRoomId: updateRoom(state.byRoomId, roomKey, (current) => {
+      const index = current.surfaces.findIndex((surface) => (
+        surface.kind === 'preview' && (surface.previewSessionId === normalizedTabId || surface.id === normalizedTabId)
+      ));
+      if (index < 0) {
+        return current;
+      }
+      const surfaces = current.surfaces.filter((_, surfaceIndex) => surfaceIndex !== index);
+      if (current.activeSurfaceId !== current.surfaces[index].id) {
+        return { ...current, isOpen: surfaces.length > 0 && current.isOpen, surfaces };
+      }
+      const fallback = surfaces[Math.min(index, surfaces.length - 1)] ?? null;
+      return {
+        ...current,
+        isOpen: surfaces.length > 0 && current.isOpen,
+        surfaces,
+        activeSurfaceId: fallback?.id ?? null,
       };
     }),
   }));

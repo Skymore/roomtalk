@@ -381,7 +381,9 @@ function WorkspaceImageAssetPreview({ roomId, src, alt }: { roomId: string; src:
   );
 }
 
-type WorkspaceBrowserPreviewStatus = 'success' | 'failed';
+export type WorkspaceBrowserPreviewStatus =
+  | { _tag: 'Success'; renderedViewport?: { width: number; height: number } }
+  | { _tag: 'LoadFailed'; code: number; description: string };
 
 type WorkspaceBrowserViewportChangeHandler = (
   viewport: CodeAgentPreviewViewportSetting,
@@ -394,10 +396,8 @@ interface WorkspaceBrowserAssetPreviewProps {
   viewport?: CodeAgentPreviewViewportSetting;
   onViewportChange?: WorkspaceBrowserViewportChangeHandler;
   onViewportContainerSizeChange?: (size: CodeAgentPreviewViewportSize) => void;
-  onPreviewStatusChange?: (
-    status: WorkspaceBrowserPreviewStatus,
-    renderedViewport?: { width: number; height: number },
-  ) => void;
+  onRenderedViewportChange?: (size: CodeAgentPreviewViewportSize) => void;
+  onPreviewStatusChange?: (status: WorkspaceBrowserPreviewStatus) => void;
   onLoadingChange?: (loading: boolean) => void;
   automationTabId?: string;
   onAutomationHandlerChange?: (handler: CodeWorkspacePreviewDomAutomationHandler | null) => void;
@@ -410,6 +410,7 @@ export function WorkspaceBrowserAssetPreview({
   viewport = FILL_CODE_AGENT_PREVIEW_VIEWPORT,
   onViewportChange,
   onViewportContainerSizeChange,
+  onRenderedViewportChange,
   onPreviewStatusChange,
   onLoadingChange,
   automationTabId,
@@ -462,21 +463,30 @@ export function WorkspaceBrowserAssetPreview({
       transformOrigin: 'top left',
     }
     : null;
+  const renderedViewportWidth = effectiveViewport._tag === 'fill'
+    ? viewportContainerSize.width
+    : effectiveViewport.width;
+  const renderedViewportHeight = effectiveViewport._tag === 'fill'
+    ? viewportContainerSize.height
+    : effectiveViewport.height;
+  const renderedViewport = useMemo<CodeAgentPreviewViewportSize>(() => ({
+    width: renderedViewportWidth,
+    height: renderedViewportHeight,
+  }), [renderedViewportHeight, renderedViewportWidth]);
 
   const handleLoad = useCallback(() => {
     setIsLoading(false);
-    const iframe = iframeRef.current;
-    const rect = iframe?.getBoundingClientRect();
-    onPreviewStatusChange?.('success', rect ? {
-      width: Math.max(1, Math.round(rect.width)),
-      height: Math.max(1, Math.round(rect.height)),
-    } : undefined);
-  }, [onPreviewStatusChange]);
+    onPreviewStatusChange?.({
+      _tag: 'Success',
+      renderedViewport,
+    });
+  }, [onPreviewStatusChange, renderedViewport]);
 
   const handleError = useCallback(() => {
+    const description = t('codeAgentBrowserPreviewLoadFailed');
     setIsLoading(false);
-    setLoadError(t('codeAgentBrowserPreviewLoadFailed'));
-    onPreviewStatusChange?.('failed');
+    setLoadError(description);
+    onPreviewStatusChange?.({ _tag: 'LoadFailed', code: 0, description });
   }, [onPreviewStatusChange, t]);
 
   useEffect(() => {
@@ -487,6 +497,10 @@ export function WorkspaceBrowserAssetPreview({
   useEffect(() => {
     onLoadingChange?.(isLoading);
   }, [isLoading, onLoadingChange]);
+
+  useEffect(() => {
+    onRenderedViewportChange?.(renderedViewport);
+  }, [onRenderedViewportChange, renderedViewport]);
 
   useEffect(() => {
     const element = viewportContainerRef.current;

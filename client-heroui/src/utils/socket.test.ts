@@ -92,6 +92,7 @@ const {
   requestCodeWorkspaceEntries,
   requestCodeWorkspaceEntrySearch,
   requestConnectCodeWorkspacePreviewAutomation,
+  requestDisconnectCodeWorkspacePreviewAutomation,
   requestFocusCodeWorkspacePreviewAutomation,
   requestListCodeWorkspacePreviewAutomationHosts,
   requestResolveCodeWorkspacePreviewTarget,
@@ -384,6 +385,10 @@ describe('socket message acknowledgement helpers', () => {
       success: true,
       host: { ...host, focused: false },
     });
+    socketMock.ackResponses.set('disconnect_code_workspace_preview_automation', {
+      success: true,
+      connectionId: 'automation-1',
+    });
     socketMock.ackResponses.set('request_code_workspace_preview_automation', {
       success: true,
       response,
@@ -412,6 +417,10 @@ describe('socket message acknowledgement helpers', () => {
       connectionId: 'automation-1',
       focused: false,
     })).resolves.toEqual({ ...host, focused: false });
+    await expect(requestDisconnectCodeWorkspacePreviewAutomation({
+      roomId: 'room-1',
+      connectionId: 'automation-1',
+    })).resolves.toBeUndefined();
     await expect(requestCodeWorkspacePreviewAutomation({
       roomId: 'room-1',
       requestId: 'request-1',
@@ -438,6 +447,11 @@ describe('socket message acknowledgement helpers', () => {
     expect(socketMock.emit).toHaveBeenCalledWith(
       'connect_code_workspace_preview_automation',
       { roomId: 'room-1', focused: true, supportedOperations: ['status', 'navigate'] },
+      expect.any(Function),
+    );
+    expect(socketMock.emit).toHaveBeenCalledWith(
+      'disconnect_code_workspace_preview_automation',
+      { roomId: 'room-1', connectionId: 'automation-1' },
       expect.any(Function),
     );
     expect(socketMock.emit).toHaveBeenCalledWith(

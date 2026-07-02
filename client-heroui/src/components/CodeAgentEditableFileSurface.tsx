@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { resolveCodeAgentDiffThemeName } from '../utils/codeAgentDiffRendering';
 import { writeCodeWorkspaceFile, type CodeWorkspaceFile } from '../utils/codeWorkspaceFiles';
 import {
+  buildFileReviewCommentPreviewLines,
   buildFileReviewComment,
   type ReviewCommentContext,
 } from '../utils/codeAgentReviewComments';
@@ -439,6 +440,13 @@ export function CodeAgentEditableFileSurface({
                     rangeLabel={formatFileCommentRange(entry.startLine, entry.endLine)}
                     text={entry.text}
                     filePath={filePath}
+                    previewLines={mobileLayout && entry.kind === 'draft'
+                      ? buildFileReviewCommentPreviewLines({
+                          contents: latestDraftContentsRef.current,
+                          startLine: entry.startLine,
+                          endLine: entry.endLine,
+                        })
+                      : undefined}
                     mobileLayout={mobileLayout}
                     onCancel={() => removeAnnotationEntry(entry.id)}
                     onComment={(text) => submitAnnotationEntry(entry.id, text)}

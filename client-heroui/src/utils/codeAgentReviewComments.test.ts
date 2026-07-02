@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { FileDiffMetadata } from '@pierre/diffs';
 import {
   appendReviewCommentsToPrompt,
+  buildDiffReviewCommentPreviewLines,
   buildDiffReviewComment,
+  buildFileReviewCommentPreviewLines,
   buildFileReviewComment,
   buildReviewCommentRenderablePatch,
   formatReviewCommentContext,
@@ -77,6 +79,33 @@ describe('codeAgentReviewComments', () => {
     });
     expect(prompt).toContain('<review_comment');
     expect(prompt).toContain('```ts\ntwo\nthree\n```');
+  });
+
+  it('builds source preview lines for mobile file review comments', () => {
+    expect(buildFileReviewCommentPreviewLines({
+      contents: ['one', 'two', 'three', 'four'].join('\n'),
+      startLine: 2,
+      endLine: 4,
+    })).toEqual([
+      {
+        id: 'source:2',
+        change: 'source',
+        lineNumberLabel: '2',
+        content: 'two',
+      },
+      {
+        id: 'source:3',
+        change: 'source',
+        lineNumberLabel: '3',
+        content: 'three',
+      },
+      {
+        id: 'source:4',
+        change: 'source',
+        lineNumberLabel: '4',
+        content: 'four',
+      },
+    ]);
   });
 
   it('infers file review fence languages like T3', () => {
@@ -212,6 +241,55 @@ describe('codeAgentReviewComments', () => {
       end: 2,
       endSide: 'additions',
     });
+  });
+
+  it('builds diff preview lines for mobile diff review comments', () => {
+    const fileDiff = {
+      name: 'src/app.ts',
+      prevName: 'src/app.ts',
+      hunks: [{
+        deletionStart: 1,
+        additionStart: 1,
+        deletionLineIndex: 0,
+        additionLineIndex: 0,
+        hunkContent: [
+          { type: 'context', lines: 1 },
+          { type: 'change', deletions: 0, additions: 3 },
+        ],
+      }],
+      deletionLines: ['same'],
+      additionLines: ['same', 'added 2', 'added 3', 'added 4'],
+      type: 'change',
+    } as unknown as FileDiffMetadata;
+
+    expect(buildDiffReviewCommentPreviewLines({
+      fileDiff,
+      range: {
+        start: 2,
+        side: 'additions',
+        end: 4,
+        endSide: 'additions',
+      },
+    })).toEqual([
+      {
+        id: 'diff:1',
+        change: 'add',
+        lineNumberLabel: '2',
+        content: 'added 2',
+      },
+      {
+        id: 'diff:2',
+        change: 'add',
+        lineNumberLabel: '3',
+        content: 'added 3',
+      },
+      {
+        id: 'diff:3',
+        change: 'add',
+        lineNumberLabel: '4',
+        content: 'added 4',
+      },
+    ]);
   });
 
   it('builds a renderable git patch for review comment diffs', () => {

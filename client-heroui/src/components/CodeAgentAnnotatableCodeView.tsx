@@ -9,6 +9,7 @@ import { useCallback, useMemo, useState, type ReactNode, type Ref } from 'react'
 import { useTranslation } from 'react-i18next';
 import { fnv1a32, type CodeAgentDiffFilePreviewState } from '../utils/codeAgentDiffRendering';
 import {
+  buildDiffReviewCommentPreviewLines,
   buildDiffReviewComment,
   restoreDiffReviewCommentRange,
   type ReviewCommentContext,
@@ -111,6 +112,7 @@ export function CodeAgentAnnotatableCodeView({
           return appendDiffCommentAnnotationEntry(annotations, range, {
             id: comment.id,
             kind: 'comment',
+            fileKey,
             filePath,
             range,
             rangeLabel: comment.rangeLabel,
@@ -199,6 +201,7 @@ export function CodeAgentAnnotatableCodeView({
     const entry: DiffCommentAnnotationEntry = {
       id,
       kind: 'draft',
+      fileKey: context.item.id,
       filePath: file.filePath,
       range,
       rangeLabel: comment.rangeLabel,
@@ -246,6 +249,19 @@ export function CodeAgentAnnotatableCodeView({
     setSelectedLines(null);
     setMobilePendingDraft(null);
   }, []);
+  const diffPreviewLinesForEntry = useCallback((entry: DiffCommentAnnotationEntry) => {
+    if (!mobileLayout || entry.kind !== 'draft' || !entry.fileKey) {
+      return undefined;
+    }
+    const file = filesByKey.get(entry.fileKey);
+    if (!file) {
+      return undefined;
+    }
+    return buildDiffReviewCommentPreviewLines({
+      fileDiff: file.fileDiff,
+      range: entry.range,
+    });
+  }, [filesByKey, mobileLayout]);
 
   return (
     <div className="relative h-full min-h-0 flex-1">
@@ -293,6 +309,7 @@ export function CodeAgentAnnotatableCodeView({
                 rangeLabel={entry.rangeLabel}
                 text={entry.text}
                 filePath={entry.filePath}
+                previewLines={diffPreviewLinesForEntry(entry)}
                 mobileLayout={mobileLayout}
                 onCancel={() => removeAnnotationEntry(entry.id)}
                 onComment={(text) => submitAnnotationEntry(entry.id, text)}

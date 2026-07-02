@@ -7,7 +7,7 @@ import { Message, Room, RoomMember } from '../types';
 import { registerCodeAgentWorkspaceHandlers } from './codeAgentWorkspaceHandlers';
 
 class FakeSocket {
-  id = 'socket-1';
+  id: string;
   handshake = {
     headers: {
       origin: 'https://room.ruit.me',
@@ -15,6 +15,10 @@ class FakeSocket {
   };
   handlers = new Map<string, (...args: any[]) => unknown>();
   emittedEvents: Array<{ event: string; payload: unknown }> = [];
+
+  constructor(id = 'socket-1') {
+    this.id = id;
+  }
 
   on(event: string, handler: (...args: any[]) => unknown) {
     this.handlers.set(event, handler);
@@ -82,6 +86,7 @@ const normalizeHarnessWorkspacePath = (value: string, workspaceRoot: string): st
 
 const createHarness = (options: {
   clientId?: string | null;
+  socketId?: string;
   currentRoom?: Room;
   members?: RoomMember[];
   messages?: Message[];
@@ -98,7 +103,7 @@ const createHarness = (options: {
   codeWorkspaceAssetAccess?: CodeWorkspaceAssetAccess;
   publishedArtifacts?: any[];
 } = {}) => {
-  const socket = new FakeSocket();
+  const socket = new FakeSocket(options.socketId);
   const currentRoom = options.currentRoom || room();
   const members = options.members || [member(currentRoom.id, options.clientId ?? 'client-1')];
   const messages = options.messages || [];
@@ -526,6 +531,17 @@ describe('code-agent workspace socket handlers', () => {
     assert.deepEqual(reported.session.renderedViewport, { width: 393, height: 852 });
     assert.equal((socketEvents.at(-1)?.payload as any).type, 'status');
 
+    const resizedAgain = await socket.invoke<any>('resize_code_workspace_preview_session', {
+      roomId: 'room-1',
+      tabId: 'browser:new',
+      viewport: { _tag: 'fill' },
+    });
+
+    assert.equal(resizedAgain.success, true);
+    assert.deepEqual(resizedAgain.session.viewport, { _tag: 'fill' });
+    assert.equal(resizedAgain.session.renderedViewport, undefined);
+    assert.equal((socketEvents.at(-1)?.payload as any).type, 'resized');
+
     const listed = await socket.invoke<any>('list_code_workspace_preview_sessions', {
       roomId: 'room-1',
     });
@@ -675,6 +691,273 @@ describe('code-agent workspace socket handlers', () => {
     assert.equal(socketEvents.at(-1)?.event, 'code_workspace_preview_automation_response');
   });
 
+  it('unregisters disposed preview automation hosts and fails their pending requests', async () => {
+    const currentRoom = room({ id: 'room-preview-dispose', sandboxStatus: 'ready', sandboxId: 'sandbox-1' });
+    const { socket, socketEvents } = createHarness({
+      currentRoom,
+    });
+
+    await socket.invoke<any>('connect_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      connectionId: 'automation-disposed',
+      tabId: 'browser:disposed',
+      focused: true,
+      supportedOperations: ['status'],
+    });
+
+    const requestPromise = socket.invoke<any>('request_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      requestId: 'request-disposed',
+      operation: 'status',
+      tabId: 'browser:disposed',
+      input: {},
+      timeoutMs: 1000,
+    });
+
+    await new Promise(resolve => setImmediate(resolve));
+    const requestEvent = socket.emittedEvents.find((entry) => (
+      entry.event === 'code_workspace_preview_automation_event'
+      && (entry.payload as any).type === 'request'
+      && (entry.payload as any).request?.requestId === 'request-disposed'
+    ));
+    assert.ok(requestEvent);
+    assert.equal((requestEvent.payload as any).connectionId, 'automation-disposed');
+
+    const disconnectAck = await socket.invoke<any>('disconnect_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      connectionId: 'automation-disposed',
+    });
+    const requestAck = await requestPromise;
+
+    assert.equal(disconnectAck.success, true);
+    assert.equal(requestAck.success, false);
+    assert.equal(requestAck.error, 'Preview automation host disconnected');
+    assert.equal(socketEvents.at(-1)?.event, 'code_workspace_preview_automation_host_event');
+    assert.equal((socketEvents.at(-1)?.payload as any).type, 'disconnected');
+
+    const listed = await socket.invoke<any>('list_code_workspace_preview_automation_hosts', {
+      roomId: currentRoom.id,
+    });
+    assert.deepEqual(listed.hosts, []);
+
+    const lateResponse = await socket.invoke<any>('respond_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      connectionId: 'automation-disposed',
+      requestId: 'request-disposed',
+      ok: true,
+      result: { available: true },
+    });
+    assert.equal(lateResponse.success, false);
+    assert.equal(lateResponse.error, 'Preview automation host is not connected');
+  });
+
+  it('fails pending preview automation requests when reconnect replaces a host', async () => {
+    const currentRoom = room({ id: 'room-preview-reconnect', sandboxStatus: 'ready', sandboxId: 'sandbox-1' });
+    const { socket } = createHarness({
+      currentRoom,
+    });
+
+    await socket.invoke<any>('connect_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      connectionId: 'automation-old',
+      tabId: 'browser:reconnect',
+      focused: true,
+      supportedOperations: ['status'],
+    });
+
+    const requestPromise = socket.invoke<any>('request_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      requestId: 'request-replaced',
+      operation: 'status',
+      tabId: 'browser:reconnect',
+      input: {},
+      timeoutMs: 1000,
+    });
+
+    await new Promise(resolve => setImmediate(resolve));
+    const reconnectAck = await socket.invoke<any>('connect_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      connectionId: 'automation-new',
+      tabId: 'browser:reconnect',
+      focused: true,
+      supportedOperations: ['status'],
+    });
+    const requestAck = await requestPromise;
+
+    assert.equal(reconnectAck.success, true);
+    assert.equal(requestAck.success, false);
+    assert.equal(requestAck.error, 'Preview automation host disconnected');
+
+    const listed = await socket.invoke<any>('list_code_workspace_preview_automation_hosts', {
+      roomId: currentRoom.id,
+    });
+    assert.deepEqual(listed.hosts.map((host: any) => host.connectionId), ['automation-new']);
+  });
+
+  it('normalizes cloud preview automation tool input before routing', async () => {
+    const { socket } = createHarness({
+      currentRoom: room({ sandboxStatus: 'ready', sandboxId: 'sandbox-1' }),
+    });
+
+    await socket.invoke<any>('connect_code_workspace_preview_automation', {
+      roomId: 'room-1',
+      connectionId: 'automation-tool-input',
+      tabId: 'browser:target',
+      focused: true,
+      supportedOperations: ['navigate'],
+    });
+
+    const requestPromise = socket.invoke<any>('request_code_workspace_preview_automation', {
+      roomId: 'room-1',
+      requestId: 'request-tool-input',
+      operation: 'navigate',
+      input: {
+        tabId: 'browser:target',
+        timeoutMs: 2345,
+        url: 'https://example.com/app',
+        readiness: 'domContentLoaded',
+      },
+    });
+
+    await new Promise(resolve => setImmediate(resolve));
+    const requestEvent = socket.emittedEvents.find((entry) => (
+      entry.event === 'code_workspace_preview_automation_event'
+      && (entry.payload as any).type === 'request'
+      && (entry.payload as any).request?.requestId === 'request-tool-input'
+    ));
+
+    assert.ok(requestEvent);
+    assert.equal((requestEvent.payload as any).connectionId, 'automation-tool-input');
+    assert.deepEqual((requestEvent.payload as any).request, {
+      requestId: 'request-tool-input',
+      roomId: 'room-1',
+      tabId: 'browser:target',
+      tabIdExplicit: true,
+      operation: 'navigate',
+      input: {
+        url: 'https://example.com/app',
+        readiness: 'domContentLoaded',
+      },
+      timeoutMs: 2345,
+    });
+
+    await socket.invoke<any>('respond_code_workspace_preview_automation', {
+      roomId: 'room-1',
+      connectionId: 'automation-tool-input',
+      requestId: 'request-tool-input',
+      ok: true,
+      result: { tabId: 'browser:target', url: 'https://example.com/app', loading: false },
+    });
+
+    const requestAck = await requestPromise;
+    assert.equal(requestAck.success, true);
+    assert.deepEqual(requestAck.response.result, {
+      tabId: 'browser:target',
+      url: 'https://example.com/app',
+      loading: false,
+    });
+  });
+
+  it('rejects invalid cloud preview automation input before dispatching to hosts', async () => {
+    const { socket } = createHarness({
+      currentRoom: room({ sandboxStatus: 'ready', sandboxId: 'sandbox-1' }),
+    });
+
+    await socket.invoke<any>('connect_code_workspace_preview_automation', {
+      roomId: 'room-1',
+      connectionId: 'automation-validation',
+      focused: true,
+      supportedOperations: ['navigate', 'click'],
+    });
+    const emittedBefore = socket.emittedEvents.length;
+
+    const invalidNavigate = await socket.invoke<any>('request_code_workspace_preview_automation', {
+      roomId: 'room-1',
+      requestId: 'request-invalid-navigate',
+      operation: 'navigate',
+      input: {
+        url: 'https://example.com/app',
+        target: { kind: 'environment-port', port: 5173 },
+      },
+    });
+    const invalidClick = await socket.invoke<any>('request_code_workspace_preview_automation', {
+      roomId: 'room-1',
+      requestId: 'request-invalid-click',
+      operation: 'click',
+      input: {
+        selector: '#save',
+        locator: 'role=button[name="Save"]',
+      },
+    });
+
+    assert.equal(invalidNavigate.success, false);
+    assert.equal(invalidNavigate.error, 'Preview automation navigate requires exactly one of url or target');
+    assert.equal(invalidClick.success, false);
+    assert.equal(invalidClick.error, 'Preview automation click accepts at most one of selector or locator');
+    assert.equal(socket.emittedEvents.length, emittedBefore);
+  });
+
+  it('preserves typed cloud preview automation failure details', async () => {
+    const { socket, socketEvents } = createHarness({
+      currentRoom: room({ sandboxStatus: 'ready', sandboxId: 'sandbox-1' }),
+    });
+
+    await socket.invoke<any>('connect_code_workspace_preview_automation', {
+      roomId: 'room-1',
+      connectionId: 'automation-errors',
+      tabId: 'browser:preview',
+      focused: true,
+      supportedOperations: ['type'],
+    });
+
+    const requestPromise = socket.invoke<any>('request_code_workspace_preview_automation', {
+      roomId: 'room-1',
+      requestId: 'request-not-editable',
+      operation: 'type',
+      tabId: 'browser:preview',
+      input: { selector: '#submit', text: 'hello' },
+      timeoutMs: 1000,
+    });
+
+    await new Promise(resolve => setImmediate(resolve));
+    const responseAck = await socket.invoke<any>('respond_code_workspace_preview_automation', {
+      roomId: 'room-1',
+      connectionId: 'automation-errors',
+      requestId: 'request-not-editable',
+      ok: false,
+      error: {
+        _tag: 'PreviewAutomationTargetNotEditableError',
+        message: 'Preview automation type request request-not-editable requires an editable target in tab browser:preview.',
+        detail: {
+          requestId: 'request-not-editable',
+          operation: 'type',
+          roomId: 'room-1',
+          tabId: 'browser:preview',
+          selectorKind: 'selector',
+          selectorLength: 7,
+        },
+      },
+    });
+    const requestAck = await requestPromise;
+
+    const expectedError = {
+      _tag: 'PreviewAutomationTargetNotEditableError',
+      message: 'Preview automation type request request-not-editable requires an editable target in tab browser:preview.',
+      detail: {
+        requestId: 'request-not-editable',
+        operation: 'type',
+        roomId: 'room-1',
+        tabId: 'browser:preview',
+        selectorKind: 'selector',
+        selectorLength: 7,
+      },
+    };
+    assert.equal(responseAck.success, true);
+    assert.equal(requestAck.success, true);
+    assert.deepEqual(requestAck.response.error, expectedError);
+    assert.deepEqual((socketEvents.at(-1)?.payload as any).response.error, expectedError);
+  });
+
   it('routes tab-targeted preview automation to the matching host', async () => {
     const { socket } = createHarness({
       currentRoom: room({ sandboxStatus: 'ready', sandboxId: 'sandbox-1' }),
@@ -750,6 +1033,318 @@ describe('code-agent workspace socket handlers', () => {
     });
     assert.equal(missing.success, false);
     assert.equal(missing.error, 'No preview automation host supports snapshot');
+  });
+
+  it('keeps preview automation on the learned tab when later requests omit tabId', async () => {
+    const currentRoom = room({ id: 'room-preview-assignment', sandboxStatus: 'ready', sandboxId: 'sandbox-1' });
+    const { socket } = createHarness({ currentRoom });
+
+    const panelConnected = await socket.invoke<any>('connect_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      connectionId: 'automation-panel-assignment',
+      focused: true,
+      supportedOperations: ['status', 'open', 'navigate', 'resize'],
+    });
+    const browserConnected = await socket.invoke<any>('connect_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      connectionId: 'automation-browser-assignment',
+      tabId: 'browser:learned',
+      focused: false,
+      supportedOperations: ['snapshot', 'click'],
+    });
+
+    assert.equal(panelConnected.success, true);
+    assert.equal(browserConnected.success, true);
+
+    const openPromise = socket.invoke<any>('request_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      requestId: 'assignment-open',
+      operation: 'open',
+      input: { url: 'https://example.com/app' },
+      timeoutMs: 1000,
+    });
+
+    await new Promise(resolve => setImmediate(resolve));
+    const openEvent = socket.emittedEvents.find((entry) => (
+      entry.event === 'code_workspace_preview_automation_event'
+      && (entry.payload as any).type === 'request'
+      && (entry.payload as any).request?.requestId === 'assignment-open'
+    ));
+    assert.ok(openEvent);
+    assert.equal((openEvent.payload as any).connectionId, 'automation-panel-assignment');
+    assert.deepEqual((openEvent.payload as any).request, {
+      requestId: 'assignment-open',
+      roomId: currentRoom.id,
+      operation: 'open',
+      input: { url: 'https://example.com/app' },
+      timeoutMs: 1000,
+    });
+
+    await socket.invoke<any>('respond_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      connectionId: 'automation-panel-assignment',
+      requestId: 'assignment-open',
+      ok: true,
+      result: {
+        tabId: 'browser:learned',
+        url: 'https://example.com/app',
+        loading: false,
+      },
+    });
+    assert.equal((await openPromise).success, true);
+
+    const snapshotPromise = socket.invoke<any>('request_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      requestId: 'assignment-snapshot',
+      operation: 'snapshot',
+      input: {},
+      timeoutMs: 1000,
+    });
+
+    await new Promise(resolve => setImmediate(resolve));
+    const snapshotEvent = socket.emittedEvents.find((entry) => (
+      entry.event === 'code_workspace_preview_automation_event'
+      && (entry.payload as any).type === 'request'
+      && (entry.payload as any).request?.requestId === 'assignment-snapshot'
+    ));
+    assert.ok(snapshotEvent);
+    assert.equal((snapshotEvent.payload as any).connectionId, 'automation-browser-assignment');
+    assert.deepEqual((snapshotEvent.payload as any).request, {
+      requestId: 'assignment-snapshot',
+      roomId: currentRoom.id,
+      tabId: 'browser:learned',
+      tabIdExplicit: false,
+      operation: 'snapshot',
+      input: {},
+      timeoutMs: 1000,
+    });
+
+    await socket.invoke<any>('respond_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      connectionId: 'automation-browser-assignment',
+      requestId: 'assignment-snapshot',
+      ok: true,
+      result: {
+        tabId: 'browser:learned',
+        screenshot: { mimeType: 'image/png', data: 'cG5n' },
+      },
+    });
+    assert.equal((await snapshotPromise).success, true);
+
+    const navigatePromise = socket.invoke<any>('request_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      requestId: 'assignment-navigate',
+      operation: 'navigate',
+      input: { url: 'https://example.com/settings' },
+      timeoutMs: 1000,
+    });
+
+    await new Promise(resolve => setImmediate(resolve));
+    const navigateEvent = socket.emittedEvents.find((entry) => (
+      entry.event === 'code_workspace_preview_automation_event'
+      && (entry.payload as any).type === 'request'
+      && (entry.payload as any).request?.requestId === 'assignment-navigate'
+    ));
+    assert.ok(navigateEvent);
+    assert.equal((navigateEvent.payload as any).connectionId, 'automation-panel-assignment');
+    assert.deepEqual((navigateEvent.payload as any).request, {
+      requestId: 'assignment-navigate',
+      roomId: currentRoom.id,
+      tabId: 'browser:learned',
+      tabIdExplicit: false,
+      operation: 'navigate',
+      input: { url: 'https://example.com/settings' },
+      timeoutMs: 1000,
+    });
+
+    await socket.invoke<any>('respond_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      connectionId: 'automation-panel-assignment',
+      requestId: 'assignment-navigate',
+      ok: true,
+      result: {
+        tabId: 'browser:learned',
+        url: 'https://example.com/settings',
+        loading: false,
+      },
+    });
+    assert.equal((await navigatePromise).success, true);
+  });
+
+  it('does not move an assigned preview automation session to another client runtime implicitly', async () => {
+    const currentRoom = room({ id: 'room-preview-affinity', sandboxStatus: 'ready', sandboxId: 'sandbox-1' });
+    const members = [member(currentRoom.id, 'client-1'), member(currentRoom.id, 'client-2')];
+    const firstRuntime = createHarness({
+      clientId: 'client-1',
+      socketId: 'socket-preview-affinity-1',
+      currentRoom,
+      members,
+    });
+    const secondRuntime = createHarness({
+      clientId: 'client-2',
+      socketId: 'socket-preview-affinity-2',
+      currentRoom,
+      members,
+    });
+
+    await firstRuntime.socket.invoke<any>('connect_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      connectionId: 'runtime-one-panel',
+      focused: true,
+      supportedOperations: ['open'],
+    });
+    await secondRuntime.socket.invoke<any>('connect_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      connectionId: 'runtime-two-browser',
+      tabId: 'browser:learned',
+      focused: true,
+      supportedOperations: ['snapshot'],
+    });
+
+    const openPromise = firstRuntime.socket.invoke<any>('request_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      requestId: 'runtime-affinity-open',
+      operation: 'open',
+      input: { url: 'https://example.com/app' },
+      timeoutMs: 1000,
+    });
+
+    await new Promise(resolve => setImmediate(resolve));
+    await firstRuntime.socket.invoke<any>('respond_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      connectionId: 'runtime-one-panel',
+      requestId: 'runtime-affinity-open',
+      ok: true,
+      result: {
+        tabId: 'browser:learned',
+        url: 'https://example.com/app',
+        loading: false,
+      },
+    });
+    assert.equal((await openPromise).success, true);
+
+    const snapshotPromise = firstRuntime.socket.invoke<any>('request_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      requestId: 'runtime-affinity-snapshot',
+      operation: 'snapshot',
+      input: {},
+      timeoutMs: 1000,
+    });
+
+    await new Promise(resolve => setImmediate(resolve));
+    const leakedRequest = secondRuntime.socket.emittedEvents.find((entry) => (
+      entry.event === 'code_workspace_preview_automation_event'
+      && (entry.payload as any).type === 'request'
+      && (entry.payload as any).request?.requestId === 'runtime-affinity-snapshot'
+    ));
+    if (leakedRequest) {
+      await secondRuntime.socket.invoke<any>('respond_code_workspace_preview_automation', {
+        roomId: currentRoom.id,
+        connectionId: 'runtime-two-browser',
+        requestId: 'runtime-affinity-snapshot',
+        ok: true,
+        result: { tabId: 'browser:learned', screenshot: { mimeType: 'image/png', data: 'cG5n' } },
+      });
+    }
+    const snapshotAck = await snapshotPromise;
+
+    assert.equal(leakedRequest, undefined);
+    assert.equal(snapshotAck.success, false);
+    assert.equal(snapshotAck.error, 'No preview automation host supports snapshot');
+  });
+
+  it('fails over assigned preview automation only after the runtime disconnects', async () => {
+    const currentRoom = room({ id: 'room-preview-failover', sandboxStatus: 'ready', sandboxId: 'sandbox-1' });
+    const members = [member(currentRoom.id, 'client-1'), member(currentRoom.id, 'client-2')];
+    const firstRuntime = createHarness({
+      clientId: 'client-1',
+      socketId: 'socket-preview-failover-1',
+      currentRoom,
+      members,
+    });
+    const secondRuntime = createHarness({
+      clientId: 'client-2',
+      socketId: 'socket-preview-failover-2',
+      currentRoom,
+      members,
+    });
+
+    await firstRuntime.socket.invoke<any>('connect_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      connectionId: 'failover-runtime-one',
+      focused: true,
+      supportedOperations: ['open'],
+    });
+    await secondRuntime.socket.invoke<any>('connect_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      connectionId: 'failover-runtime-two',
+      focused: true,
+      supportedOperations: ['status'],
+    });
+
+    const openPromise = firstRuntime.socket.invoke<any>('request_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      requestId: 'failover-open',
+      operation: 'open',
+      input: {},
+      timeoutMs: 1000,
+    });
+
+    await new Promise(resolve => setImmediate(resolve));
+    await firstRuntime.socket.invoke<any>('respond_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      connectionId: 'failover-runtime-one',
+      requestId: 'failover-open',
+      ok: true,
+      result: { tabId: 'browser:first-runtime' },
+    });
+    assert.equal((await openPromise).success, true);
+
+    firstRuntime.socket.handlers.get('disconnect')?.();
+
+    const statusPromise = firstRuntime.socket.invoke<any>('request_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      requestId: 'failover-status',
+      operation: 'status',
+      input: {},
+      timeoutMs: 1000,
+    });
+
+    await new Promise(resolve => setImmediate(resolve));
+    const statusEvent = secondRuntime.socket.emittedEvents.find((entry) => (
+      entry.event === 'code_workspace_preview_automation_event'
+      && (entry.payload as any).type === 'request'
+      && (entry.payload as any).request?.requestId === 'failover-status'
+    ));
+    assert.ok(statusEvent);
+    assert.equal((statusEvent.payload as any).connectionId, 'failover-runtime-two');
+    assert.deepEqual((statusEvent.payload as any).request, {
+      requestId: 'failover-status',
+      roomId: currentRoom.id,
+      operation: 'status',
+      input: {},
+      timeoutMs: 1000,
+    });
+
+    await secondRuntime.socket.invoke<any>('respond_code_workspace_preview_automation', {
+      roomId: currentRoom.id,
+      connectionId: 'failover-runtime-two',
+      requestId: 'failover-status',
+      ok: true,
+      result: {
+        tabId: 'browser:second-runtime',
+        url: 'https://example.com/second',
+        loading: false,
+      },
+    });
+
+    const statusAck = await statusPromise;
+    assert.equal(statusAck.success, true);
+    assert.deepEqual(statusAck.response.result, {
+      tabId: 'browser:second-runtime',
+      url: 'https://example.com/second',
+      loading: false,
+    });
   });
 
   it('saves cloud preview automation recordings into the workspace before responding', async () => {

@@ -3,6 +3,7 @@ import {
   onSocketConnected,
   requestCodeWorkspacePreviewAutomation,
   requestConnectCodeWorkspacePreviewAutomation,
+  requestDisconnectCodeWorkspacePreviewAutomation,
   requestFocusCodeWorkspacePreviewAutomation,
   requestRespondCodeWorkspacePreviewAutomation,
   type CodeWorkspacePreviewAutomationEvent,
@@ -46,6 +47,20 @@ export type CodeWorkspacePreviewAutomationHostController = {
   setFocused: (focused: boolean) => Promise<CodeWorkspacePreviewAutomationHost>;
   dispose: () => void;
 };
+
+export class CodeWorkspacePreviewAutomationError extends Error {
+  readonly _tag: string;
+  readonly detail?: unknown;
+
+  constructor(error: NonNullable<CodeWorkspacePreviewAutomationResponse['error']>) {
+    super(error.message || 'Workspace preview automation failed');
+    this.name = error._tag || 'PreviewAutomationExecutionError';
+    this._tag = this.name;
+    if (Object.prototype.hasOwnProperty.call(error, 'detail')) {
+      this.detail = error.detail;
+    }
+  }
+}
 
 const isObject = (value: unknown): value is Record<string, unknown> => (
   typeof value === 'object' && value !== null
@@ -115,16 +130,49 @@ export function validateCodeWorkspacePreviewAutomationResponse(
   };
 }
 
-function serializePreviewAutomationError(error: unknown): NonNullable<CodeWorkspacePreviewAutomationResponse['error']> {
-  if (error instanceof Error) {
+function previewAutomationRequestDetail(
+  request?: CodeWorkspacePreviewAutomationRequest,
+): Record<string, unknown> | undefined {
+  if (!request) {
+    return undefined;
+  }
+  return {
+    requestId: request.requestId,
+    operation: request.operation,
+    roomId: request.roomId,
+    tabId: request.tabId ?? null,
+  };
+}
+
+function serializePreviewAutomationError(
+  error: unknown,
+  request?: CodeWorkspacePreviewAutomationRequest,
+): NonNullable<CodeWorkspacePreviewAutomationResponse['error']> {
+  if (isObject(error) && typeof error._tag === 'string' && typeof error.message === 'string') {
     return {
-      _tag: error.name || 'PreviewAutomationExecutionError',
+      _tag: error._tag,
       message: error.message,
+      ...(Object.prototype.hasOwnProperty.call(error, 'detail') ? { detail: error.detail } : {}),
     };
   }
+  if (error instanceof Error) {
+    const structuredError = error as Error & { _tag?: unknown; detail?: unknown };
+    const detail = Object.prototype.hasOwnProperty.call(error, 'detail')
+      ? structuredError.detail
+      : previewAutomationRequestDetail(request);
+    return {
+      _tag: typeof structuredError._tag === 'string'
+        ? structuredError._tag
+        : 'PreviewAutomationExecutionError',
+      message: error.message,
+      ...(detail === undefined ? {} : { detail }),
+    };
+  }
+  const detail = previewAutomationRequestDetail(request);
   return {
     _tag: 'PreviewAutomationExecutionError',
     message: typeof error === 'string' ? error : 'Workspace preview automation failed',
+    ...(detail === undefined ? {} : { detail }),
   };
 }
 
@@ -140,7 +188,10 @@ export async function runCodeWorkspacePreviewAutomationRequest(payload: {
     await requestCodeWorkspacePreviewAutomation(payload),
   );
   if (!response.ok) {
-    throw new Error(response.error?.message || 'Workspace preview automation failed');
+    throw new CodeWorkspacePreviewAutomationError(response.error ?? {
+      _tag: 'PreviewAutomationExecutionError',
+      message: 'Workspace preview automation failed',
+    });
   }
   return response.result;
 }
@@ -188,25 +239,32 @@ export async function connectCodeWorkspacePreviewAutomationHost({
     ) {
       return;
     }
-    void Promise.resolve()
-      .then(() => handle(event.request))
-      .then(
-        (result) => requestRespondCodeWorkspacePreviewAutomation({
+    void (async () => {
+      try {
+        const result = await handle(event.request);
+        if (disposed || currentHost.connectionId !== host.connectionId) {
+          return;
+        }
+        await requestRespondCodeWorkspacePreviewAutomation({
           roomId,
           connectionId: host.connectionId,
           requestId: event.request.requestId,
           ok: true,
           ...(result === undefined ? {} : { result }),
-        }),
-        (error) => requestRespondCodeWorkspacePreviewAutomation({
+        });
+      } catch (error) {
+        if (disposed || currentHost.connectionId !== host.connectionId) {
+          return;
+        }
+        await requestRespondCodeWorkspacePreviewAutomation({
           roomId,
           connectionId: host.connectionId,
           requestId: event.request.requestId,
           ok: false,
-          error: serializePreviewAutomationError(error),
-        }),
-      )
-      .catch(() => undefined);
+          error: serializePreviewAutomationError(error, event.request),
+        });
+      }
+    })().catch(() => undefined);
   });
   const unsubscribeReconnect = onSocketConnected(() => {
     if (disposed) {
@@ -226,9 +284,14 @@ export async function connectCodeWorkspacePreviewAutomationHost({
       return currentHost;
     },
     dispose: () => {
+      const host = currentHost;
       disposed = true;
       unsubscribe();
       unsubscribeReconnect();
+      void requestDisconnectCodeWorkspacePreviewAutomation({
+        roomId,
+        connectionId: host.connectionId,
+      }).catch(() => undefined);
     },
   };
 }

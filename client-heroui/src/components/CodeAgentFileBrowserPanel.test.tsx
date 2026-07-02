@@ -33,6 +33,7 @@ const deleteCodeWorkspaceEntryMock = vi.hoisted(() => vi.fn());
 const openPreviewSessionMock = vi.hoisted(() => vi.fn());
 const navigatePreviewSessionMock = vi.hoisted(() => vi.fn());
 const resizePreviewSessionMock = vi.hoisted(() => vi.fn());
+const listPreviewSessionsMock = vi.hoisted(() => vi.fn());
 const reportPreviewSessionMock = vi.hoisted(() => vi.fn());
 const resolvePreviewTargetMock = vi.hoisted(() => vi.fn());
 const refreshPreviewSessionMock = vi.hoisted(() => vi.fn());
@@ -144,6 +145,9 @@ vi.mock('../utils/codeWorkspacePreviewSessions', () => {
   });
 
   return {
+    codeWorkspacePreviewUrlFromStatus: (status: { _tag: string; url?: string }) => (
+      status._tag === 'Idle' ? null : status.url ?? null
+    ),
     navigateCodeWorkspacePreviewSession: navigatePreviewSessionMock.mockImplementation((payload) => Promise.resolve(session(payload))),
     openCodeWorkspacePreviewSession: openPreviewSessionMock.mockImplementation((payload) => Promise.resolve(session({
       ...payload,
@@ -151,6 +155,7 @@ vi.mock('../utils/codeWorkspacePreviewSessions', () => {
     }))),
     refreshCodeWorkspacePreviewSession: refreshPreviewSessionMock.mockImplementation((payload) => Promise.resolve(session(payload))),
     closeCodeWorkspacePreviewSession: closePreviewSessionMock.mockImplementation(() => Promise.resolve([])),
+    listCodeWorkspacePreviewSessions: listPreviewSessionsMock.mockImplementation(() => Promise.resolve([])),
     reportCodeWorkspacePreviewSession: reportPreviewSessionMock.mockImplementation((payload) => Promise.resolve(session(payload))),
     resolveCodeWorkspacePreviewTarget: resolvePreviewTargetMock.mockImplementation(({ target }) => Promise.resolve({
       requestedUrl: `http://localhost:${target.port}${target.path ?? '/'}`,
@@ -163,6 +168,12 @@ vi.mock('../utils/codeWorkspacePreviewSessions', () => {
 });
 
 vi.mock('../utils/codeWorkspacePreviewAutomation', () => ({
+  CODE_WORKSPACE_PREVIEW_AUTOMATION_SESSION_OPERATIONS: [
+    'status',
+    'open',
+    'navigate',
+    'resize',
+  ],
   CODE_WORKSPACE_PREVIEW_AUTOMATION_CLOUD_BROWSER_OPERATIONS: [
     'status',
     'open',
@@ -474,6 +485,8 @@ describe('CodeAgentFileBrowserPanel', () => {
     openPreviewSessionMock.mockClear();
     navigatePreviewSessionMock.mockClear();
     resizePreviewSessionMock.mockClear();
+    listPreviewSessionsMock.mockReset();
+    listPreviewSessionsMock.mockResolvedValue([]);
     reportPreviewSessionMock.mockClear();
     resolvePreviewTargetMock.mockClear();
     refreshPreviewSessionMock.mockClear();
@@ -973,6 +986,334 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
   });
 
+  it('opens a browser surface from panel-level preview automation before a tab host exists', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [],
+      truncated: false,
+    });
+
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+
+    await screen.findByText('0 files');
+    const panelConnectCall = await waitFor(() => {
+      const call = connectPreviewAutomationHostMock.mock.calls.find(([options]) => (
+        !options.tabId
+        && JSON.stringify(options.supportedOperations) === JSON.stringify(['status', 'open', 'navigate', 'resize'])
+      ));
+      expect(call).toBeTruthy();
+      return call!;
+    });
+    const panelHandle = panelConnectCall[0].handle;
+
+    await expect(panelHandle({
+      requestId: 'panel-status',
+      roomId: 'room-1',
+      operation: 'status',
+      input: {},
+      timeoutMs: 1000,
+    })).resolves.toMatchObject({
+      available: true,
+      visible: false,
+      tabId: null,
+      url: null,
+      loading: false,
+    });
+
+    await expect(panelHandle({
+      requestId: 'panel-navigate',
+      roomId: 'room-1',
+      operation: 'navigate',
+      input: {
+        target: {
+          kind: 'environment-port',
+          port: 5173,
+          path: '/dashboard',
+        },
+      },
+      timeoutMs: 1000,
+    })).resolves.toMatchObject({
+      available: true,
+      visible: true,
+      tabId: 'browser:new',
+      url: 'https://5173-sandbox.e2b.dev/dashboard',
+      loading: false,
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('https://5173-sandbox.e2b.dev/dashboard');
+      expect(screen.getByLabelText('codeAgentBrowserAddressLabel')).toBeTruthy();
+    });
+    expect(resolvePreviewTargetMock).toHaveBeenCalledWith({
+      roomId: 'room-1',
+      target: {
+        kind: 'environment-port',
+        port: 5173,
+        path: '/dashboard',
+      },
+    });
+    await waitFor(() => {
+      expect(openPreviewSessionMock).toHaveBeenCalledWith(expect.objectContaining({
+        roomId: 'room-1',
+        tabId: 'browser:new',
+        url: 'https://5173-sandbox.e2b.dev/dashboard',
+      }));
+      expect(connectPreviewAutomationHostMock).toHaveBeenCalledWith(expect.objectContaining({
+        roomId: 'room-1',
+        tabId: 'browser:new',
+      }));
+    });
+  });
+
+  it('syncs requested preview automation sessions before targeting a browser surface', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [],
+      truncated: false,
+    });
+    const serverSession = {
+      roomId: 'room-1',
+      tabId: 'browser:agent',
+      navStatus: {
+        _tag: 'Success',
+        url: 'https://5173-sandbox.e2b.dev/dashboard',
+        title: 'Dashboard',
+      },
+      canGoBack: false,
+      canGoForward: false,
+      viewport: { _tag: 'fill' },
+      updatedAt: '2026-07-02T00:00:00.000Z',
+    };
+    listPreviewSessionsMock.mockResolvedValue([serverSession]);
+
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+
+    await screen.findByText('0 files');
+    const panelConnectCall = await waitFor(() => {
+      const call = connectPreviewAutomationHostMock.mock.calls.find(([options]) => (
+        !options.tabId
+        && JSON.stringify(options.supportedOperations) === JSON.stringify(['status', 'open', 'navigate', 'resize'])
+      ));
+      expect(call).toBeTruthy();
+      return call!;
+    });
+    const panelHandle = panelConnectCall[0].handle;
+
+    await expect(panelHandle({
+      requestId: 'panel-status-existing',
+      roomId: 'room-1',
+      tabId: 'browser:agent',
+      tabIdExplicit: true,
+      operation: 'status',
+      input: {},
+      timeoutMs: 1000,
+    })).resolves.toMatchObject({
+      available: true,
+      visible: false,
+      tabId: 'browser:agent',
+      url: 'https://5173-sandbox.e2b.dev/dashboard',
+      title: 'Dashboard',
+      loading: false,
+    });
+    expect(container.querySelector('iframe')).toBeNull();
+
+    await expect(panelHandle({
+      requestId: 'panel-resize-existing',
+      roomId: 'room-1',
+      tabId: 'browser:agent',
+      tabIdExplicit: true,
+      operation: 'resize',
+      input: { mode: 'freeform', width: 390, height: 844 },
+      timeoutMs: 1000,
+    })).resolves.toMatchObject({
+      tabId: 'browser:agent',
+      setting: { _tag: 'freeform', width: 390, height: 844 },
+      viewport: { width: 390, height: 844 },
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('https://5173-sandbox.e2b.dev/dashboard');
+    });
+    expect(resizePreviewSessionMock).toHaveBeenCalledWith({
+      roomId: 'room-1',
+      tabId: 'browser:agent',
+      viewport: { _tag: 'freeform', width: 390, height: 844 },
+    });
+    const syncedSurface = readCodeAgentRightPanelState('room-1').surfaces.find((candidate) => (
+      candidate.kind === 'preview' && candidate.previewSessionId === 'browser:agent'
+    ));
+    expect(syncedSurface).toMatchObject({
+      kind: 'preview',
+      previewSessionId: 'browser:agent',
+      url: 'https://5173-sandbox.e2b.dev/dashboard',
+    });
+  });
+
+  it('restores cloud preview sessions into desktop browser tabs on mount', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [],
+      truncated: false,
+    });
+    listPreviewSessionsMock.mockResolvedValue([{
+      roomId: 'room-1',
+      tabId: 'preview-tab-1',
+      navStatus: {
+        _tag: 'Success',
+        url: 'https://5173-sandbox.e2b.dev/dashboard',
+        title: 'Dashboard',
+      },
+      canGoBack: false,
+      canGoForward: false,
+      viewport: { _tag: 'freeform', width: 390, height: 844 },
+      updatedAt: '2026-07-02T00:00:00.000Z',
+    }]);
+
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+
+    await screen.findByText('0 files');
+    await waitFor(() => {
+      expect(listPreviewSessionsMock).toHaveBeenCalledWith('room-1');
+      expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('5173-sandbox.e2b.dev');
+    });
+    fireEvent.click(within(screen.getByTestId('code-agent-file-surface-tabs')).getByTitle('https://5173-sandbox.e2b.dev/dashboard'));
+    await waitFor(() => {
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('https://5173-sandbox.e2b.dev/dashboard');
+    });
+    expect(readCodeAgentRightPanelState('room-1').surfaces).toEqual([
+      expect.objectContaining({ kind: 'files' }),
+      expect.objectContaining({
+        kind: 'preview',
+        previewSessionId: 'preview-tab-1',
+        url: 'https://5173-sandbox.e2b.dev/dashboard',
+        viewport: { _tag: 'freeform', width: 390, height: 844 },
+      }),
+    ]);
+  });
+
+  it('restores cloud preview sessions into mobile browser tabs on mount', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [],
+      truncated: false,
+    });
+    listPreviewSessionsMock.mockResolvedValue([{
+      roomId: 'room-1',
+      tabId: 'preview-tab-mobile',
+      navStatus: {
+        _tag: 'Success',
+        url: 'https://5173-sandbox.e2b.dev/mobile',
+        title: 'Mobile preview',
+      },
+      canGoBack: false,
+      canGoForward: false,
+      viewport: { _tag: 'fill' },
+      updatedAt: '2026-07-02T00:00:00.000Z',
+    }]);
+
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" surface="mobile" />);
+
+    await screen.findByText('0 files');
+    await waitFor(() => {
+      expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('5173-sandbox.e2b.dev');
+    });
+    fireEvent.click(within(screen.getByTestId('code-agent-file-surface-tabs')).getByTitle('https://5173-sandbox.e2b.dev/mobile'));
+    await waitFor(() => {
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('https://5173-sandbox.e2b.dev/mobile');
+    });
+    const mobileChrome = screen.getByTestId('code-agent-mobile-browser-chrome');
+    expect(mobileChrome.dataset.mobileBrowserChrome).toBe('true');
+    expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('5173-sandbox.e2b.dev');
+    const mobilePreviewSurface = readCodeAgentRightPanelState('room-1').surfaces.find((candidate) => (
+      candidate.kind === 'preview' && candidate.previewSessionId === 'preview-tab-mobile'
+    ));
+    expect(mobilePreviewSurface).toMatchObject({
+      kind: 'preview',
+      previewSessionId: 'preview-tab-mobile',
+      url: 'https://5173-sandbox.e2b.dev/mobile',
+    });
+  });
+
+  it('recovers desktop preview sessions from local URL tabs when the server list is empty', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [],
+      truncated: false,
+    });
+    const localPreviewUrl = 'https://example.com/app';
+    resetCodeAgentRightPanelStoreForTests({
+      byRoomId: {
+        'room-1': {
+          isOpen: true,
+          activeSurfaceId: 'files',
+          surfaces: [
+            { id: 'files', kind: 'files' },
+            {
+              id: `browser:url:${encodeURIComponent(localPreviewUrl)}`,
+              kind: 'preview',
+              relativePath: null,
+              url: localPreviewUrl,
+              navigationHistory: [{ kind: 'url', url: localPreviewUrl }],
+              navigationIndex: 0,
+              previewSessionId: 'preview-tab-local',
+              viewport: { _tag: 'freeform', width: 390, height: 844 },
+            },
+          ],
+        },
+      },
+    });
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+
+    await screen.findByText('0 files');
+    await waitFor(() => {
+      expect(openPreviewSessionMock).toHaveBeenCalledWith({
+        roomId: 'room-1',
+        tabId: 'preview-tab-local',
+        url: localPreviewUrl,
+        title: localPreviewUrl,
+        viewport: { _tag: 'freeform', width: 390, height: 844 },
+      });
+    });
+    expect(readCodeAgentRightPanelState('room-1').activeSurfaceId).toBe('files');
+  });
+
+  it('recovers mobile preview sessions from local URL tabs when the server list is empty', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [],
+      truncated: false,
+    });
+    const localPreviewUrl = 'https://example.com/mobile';
+    resetCodeAgentRightPanelStoreForTests({
+      byRoomId: {
+        'room-1': {
+          isOpen: true,
+          activeSurfaceId: 'files',
+          surfaces: [
+            { id: 'files', kind: 'files' },
+            {
+              id: `browser:url:${encodeURIComponent(localPreviewUrl)}`,
+              kind: 'preview',
+              relativePath: null,
+              url: localPreviewUrl,
+              navigationHistory: [{ kind: 'url', url: localPreviewUrl }],
+              navigationIndex: 0,
+              previewSessionId: 'preview-tab-mobile-local',
+            },
+          ],
+        },
+      },
+    });
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" surface="mobile" />);
+
+    await screen.findByText('0 files');
+    await waitFor(() => {
+      expect(openPreviewSessionMock).toHaveBeenCalledWith(expect.objectContaining({
+        roomId: 'room-1',
+        tabId: 'preview-tab-mobile-local',
+        url: localPreviewUrl,
+      }));
+    });
+    expect(readCodeAgentRightPanelState('room-1').activeSurfaceId).toBe('files');
+    expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('example.com');
+  });
+
   it('closes cloud preview sessions when browser surfaces are closed in bulk', async () => {
     loadCodeWorkspaceEntriesMock.mockResolvedValue({
       entries: [],
@@ -1257,17 +1598,10 @@ describe('CodeAgentFileBrowserPanel', () => {
     fireEvent.change(address, { target: { value: 'https://example.com/app' } });
     fireEvent.submit(address.closest('form') as HTMLFormElement);
 
-    const iframe = await waitFor(() => {
+    let iframe = await waitFor(() => {
       const frame = container.querySelector('iframe');
       expect(frame).toBeTruthy();
       return frame as HTMLIFrameElement;
-    });
-    const frameDocument = iframe.contentDocument!;
-    frameDocument.open();
-    frameDocument.write('<button id="save" type="button" aria-label="Save changes">Save</button><input id="title" aria-label="Title" />');
-    frameDocument.close();
-    frameDocument.getElementById('save')?.addEventListener('click', () => {
-      frameDocument.body.setAttribute('data-saved', 'true');
     });
 
     await waitFor(() => {
@@ -1278,6 +1612,32 @@ describe('CodeAgentFileBrowserPanel', () => {
         handle: expect.any(Function),
       }));
       expect(previewAutomationHandleRef.current).toEqual(expect.any(Function));
+    });
+
+    await expect(previewAutomationHandleRef.current?.({
+      requestId: 'request-resize',
+      roomId: 'room-1',
+      tabId: 'browser:new',
+      operation: 'resize',
+      input: { mode: 'freeform', width: 390, height: 844 },
+      timeoutMs: 1000,
+    })).resolves.toMatchObject({
+      tabId: 'browser:new',
+      setting: { _tag: 'freeform', width: 390, height: 844 },
+      viewport: { width: 390, height: 844 },
+    });
+
+    iframe = await waitFor(() => {
+      const frame = container.querySelector('iframe');
+      expect(frame).toBeTruthy();
+      return frame as HTMLIFrameElement;
+    });
+    const frameDocument = iframe.contentDocument!;
+    frameDocument.open();
+    frameDocument.write('<button id="save" type="button" aria-label="Save changes">Save</button><input id="title" aria-label="Title" />');
+    frameDocument.close();
+    frameDocument.getElementById('save')?.addEventListener('click', () => {
+      frameDocument.body.setAttribute('data-saved', 'true');
     });
 
     await expect(previewAutomationHandleRef.current?.({
@@ -1368,6 +1728,44 @@ describe('CodeAgentFileBrowserPanel', () => {
       url: 'https://example.com/fast',
       loading: true,
     });
+  });
+
+  it('rejects cloud browser automation navigation readiness when the preview load fails', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [],
+      truncated: false,
+    });
+
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+
+    await screen.findByText('0 files');
+    fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
+    fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentBrowserSurface'));
+
+    const address = screen.getByLabelText('codeAgentBrowserAddressLabel') as HTMLInputElement;
+    fireEvent.change(address, { target: { value: 'https://example.com/app' } });
+    fireEvent.submit(address.closest('form') as HTMLFormElement);
+
+    await waitFor(() => {
+      expect(previewAutomationHandleRef.current).toEqual(expect.any(Function));
+    });
+
+    const navigationRequest = Promise.resolve(previewAutomationHandleRef.current?.({
+      requestId: 'request-failed-navigation',
+      roomId: 'room-1',
+      tabId: 'browser:new',
+      operation: 'navigate',
+      input: { url: 'https://example.com/unreachable' },
+      timeoutMs: 1000,
+    }));
+    await waitFor(() => {
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('https://example.com/unreachable');
+    });
+
+    fireEvent.error(container.querySelector('iframe') as HTMLIFrameElement);
+
+    await expect(navigationRequest).rejects.toThrow('codeAgentBrowserPreviewFailed');
+    expect(await screen.findByTestId('code-agent-browser-preview-unreachable')).toBeTruthy();
   });
 
   it('captures cloud browser preview screenshots from the chrome action', async () => {
@@ -1737,6 +2135,75 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
   });
 
+  it('renders preview unreachable state from cloud preview session failures', async () => {
+    const previewEventCallbacks: Array<(event: any) => void> = [];
+    subscribePreviewEventsMock.mockImplementation((_roomId, callback) => {
+      previewEventCallbacks.push(callback);
+      return () => undefined;
+    });
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [],
+      truncated: false,
+    });
+
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+
+    await screen.findByText('0 files');
+    fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
+    fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentBrowserSurface'));
+
+    const address = screen.getByLabelText('codeAgentBrowserAddressLabel') as HTMLInputElement;
+    fireEvent.change(address, { target: { value: 'https://example.com/report' } });
+    fireEvent.submit(address.closest('form') as HTMLFormElement);
+
+    await waitFor(() => {
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('https://example.com/report');
+    });
+
+    act(() => {
+      for (const callback of previewEventCallbacks) {
+        callback({
+          type: 'status',
+          roomId: 'room-1',
+          tabId: 'browser:new',
+          createdAt: '2026-07-02T00:00:00.000Z',
+          snapshot: {
+            roomId: 'room-1',
+            tabId: 'browser:new',
+            navStatus: {
+              _tag: 'LoadFailed',
+              url: 'https://example.com/report',
+              title: 'Example',
+              code: -102,
+              description: 'ERR_CONNECTION_REFUSED',
+            },
+            canGoBack: false,
+            canGoForward: false,
+            viewport: { _tag: 'fill' },
+            updatedAt: '2026-07-02T00:00:00.000Z',
+          },
+        });
+      }
+    });
+
+    expect(await screen.findByTestId('code-agent-browser-preview-unreachable')).toBeTruthy();
+    expect(screen.getByText('ERR_CONNECTION_REFUSED')).toBeTruthy();
+    expect((screen.getByLabelText('codeAgentBrowserCaptureScreenshot') as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(screen.getByText('codeAgentBrowserUnreachableDetails'));
+    expect(screen.getByText('codeAgentBrowserUnreachableCheckServer')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('codeAgentBrowserUnreachableReload'));
+    await waitFor(() => {
+      expect(refreshPreviewSessionMock).toHaveBeenCalledWith({
+        roomId: 'room-1',
+        tabId: 'browser:new',
+      });
+      expect(screen.queryByTestId('code-agent-browser-preview-unreachable')).toBeNull();
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('https://example.com/report');
+    });
+  });
+
   it('shows recent cloud preview targets in empty browser surfaces', async () => {
     loadCodeWorkspaceEntriesMock.mockResolvedValue({
       entries: [],
@@ -2053,9 +2520,10 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(mobileRows.some((row) => row.dataset.kind === 'directory' && row.dataset.path === 'src')).toBe(true);
     expect(mobileRows.some((row) => row.dataset.kind === 'file' && row.dataset.path === 'src/App.tsx')).toBe(true);
     const mobileChangedFilesHeader = within(mobileFilesPanel).getByTestId('code-agent-changed-files-panel-header');
-    expect(within(mobileChangedFilesHeader).getByText('codeAgentChangedFiles')).toBeTruthy();
-    expect(within(mobileChangedFilesHeader).queryByText('codeAgentChangedFilesCount')).toBeNull();
-    expect(within(mobileChangedFilesHeader).queryByText('+8')).toBeNull();
+    expect(mobileChangedFilesHeader.className).toContain('flex-wrap');
+    expect(within(mobileChangedFilesHeader).getByText('codeAgentChangedFilesCount')).toBeTruthy();
+    expect(within(mobileChangedFilesHeader).getByText('+8')).toBeTruthy();
+    expect(within(mobileChangedFilesHeader).getByText('-3')).toBeTruthy();
     expect(within(mobileFilesPanel).getByText('+7')).toBeTruthy();
     expect(within(mobileFilesPanel).getAllByText('-3').length).toBeGreaterThan(0);
 
@@ -3564,6 +4032,12 @@ describe('CodeAgentFileBrowserPanel', () => {
     const mobileCommentSheet = await screen.findByTestId('code-agent-mobile-review-comment-sheet');
     expect(mobileCommentSheet.dataset.mobileCommentAnnotation).toBe('true');
     expect(within(mobileCommentSheet).getByText('src/App.tsx')).toBeTruthy();
+    const selectionPreview = within(mobileCommentSheet).getByTestId('code-agent-mobile-review-comment-preview');
+    expect(selectionPreview.className).toContain('overflow-auto');
+    expect(within(selectionPreview).getByText('line 2')).toBeTruthy();
+    expect(within(selectionPreview).getByText('line 3')).toBeTruthy();
+    expect(within(selectionPreview).getByText('line 4')).toBeTruthy();
+    expect(Array.from(selectionPreview.querySelectorAll('[data-review-comment-preview-line]')).map((row) => row.getAttribute('data-change'))).toEqual(['source', 'source', 'source']);
     const mobileCommentInput = within(mobileCommentSheet).getByTestId('code-agent-mobile-review-comment-textarea');
     expect(mobileCommentInput.className).toContain('min-h-[132px]');
     expect(within(mobileCommentSheet).getByRole('button', { name: 'codeAgentSubmitComment' }).className).toContain('min-h-11');
