@@ -7,6 +7,7 @@ import {
   CocoWorkspaceDiffScope,
   CocoWorkspaceEntry,
   CocoWorkspaceFile,
+  CocoWorkspacePreviewServer,
   CocoWorkspacePreviewTargetResolution,
   CocoWorkspaceRefs,
   ResolveCocoWorkspacePreviewTargetInput,
@@ -110,6 +111,12 @@ type WorkspacePreviewTargetAck = {
   error?: string;
 };
 
+type WorkspacePreviewServersAck = {
+  success: boolean;
+  servers?: CocoWorkspacePreviewServer[];
+  error?: string;
+};
+
 type WorkspacePreviewEvent = {
   type: 'opened' | 'navigated' | 'resized' | 'status' | 'refreshed' | 'closed';
   roomId: string;
@@ -129,6 +136,7 @@ type WorkspacePreviewAutomationOperation =
   | 'scroll'
   | 'evaluate'
   | 'waitFor'
+  | 'previewAnnotation'
   | 'clearCookies'
   | 'clearCache'
   | 'recordingStart'
@@ -140,6 +148,7 @@ type WorkspacePreviewAutomationHostSnapshot = {
   clientId: string;
   connectionId: string;
   socketId: string;
+  tabId?: string;
   focused: boolean;
   supportedOperations: WorkspacePreviewAutomationOperation[];
   connectedAt: string;
@@ -209,6 +218,7 @@ const PREVIEW_AUTOMATION_OPERATIONS: WorkspacePreviewAutomationOperation[] = [
   'scroll',
   'evaluate',
   'waitFor',
+  'previewAnnotation',
   'clearCookies',
   'clearCache',
   'recordingStart',
@@ -781,6 +791,7 @@ export function registerCodeAgentWorkspaceHandlers({
     clientId: host.clientId,
     connectionId: host.connectionId,
     socketId: host.socketId,
+    ...(host.tabId ? { tabId: host.tabId } : {}),
     focused: host.focused,
     supportedOperations: host.supportedOperations,
     connectedAt: host.connectedAt,
@@ -801,9 +812,16 @@ export function registerCodeAgentWorkspaceHandlers({
   const selectPreviewAutomationHost = (
     roomId: string,
     operation: WorkspacePreviewAutomationOperation,
+    tabId?: string,
   ): WorkspacePreviewAutomationHostRecord | null => {
-    const candidates = [...getPreviewAutomationHostsForRoom(roomId).values()]
+    let candidates = [...getPreviewAutomationHostsForRoom(roomId).values()]
       .filter((host) => host.supportedOperations.includes(operation));
+    if (tabId) {
+      const exactTabCandidates = candidates.filter((host) => host.tabId === tabId);
+      candidates = exactTabCandidates.length > 0
+        ? exactTabCandidates
+        : candidates.filter((host) => !host.tabId);
+    }
     if (candidates.length === 0) {
       return null;
     }
@@ -1219,9 +1237,40 @@ export function registerCodeAgentWorkspaceHandlers({
     }
   });
 
+  socket.on('list_code_workspace_preview_servers', async (payload: unknown, callback?: (response: WorkspacePreviewServersAck) => void) => {
+    const roomId = parseRoomId(payload);
+    let clientId: string | null = null;
+
+    try {
+      const access = await loadAuthorizedCocoRoom(roomId, 'list code workspace preview servers');
+      clientId = access.clientId ?? null;
+      if (!access.success) {
+        callback?.({ success: false, error: access.error });
+        return;
+      }
+      if (!cocoSandboxService?.listWorkspacePreviewServers) {
+        callback?.({ success: true, servers: [] });
+        return;
+      }
+      const workspace = await connectReadyWorkspace(access.room);
+      if (!workspace.success) {
+        callback?.({ success: false, error: workspace.error });
+        return;
+      }
+      callback?.({
+        success: true,
+        servers: await cocoSandboxService.listWorkspacePreviewServers(workspace.handle),
+      });
+    } catch (error) {
+      socketLogger.error('Failed to list code workspace preview servers', { error, clientId, roomId, socketId: socket.id });
+      callback?.({ success: false, error: 'Failed to list workspace preview servers' });
+    }
+  });
+
   socket.on('connect_code_workspace_preview_automation', async (payload: unknown, callback?: (response: WorkspacePreviewAutomationAck) => void) => {
     const roomId = parseRoomId(payload);
     const requestedConnectionId = parsePreviewAutomationConnectionId(payload);
+    const tabId = parsePreviewTabId(payload) || undefined;
     const supportedOperations = parsePreviewAutomationSupportedOperations(payload);
     let clientId: string | null = null;
 
@@ -1236,7 +1285,14 @@ export function registerCodeAgentWorkspaceHandlers({
       const now = new Date().toISOString();
       const hosts = getPreviewAutomationHostsForRoom(access.room.id);
       for (const [connectionId, host] of hosts.entries()) {
-        if (host.socketId === socket.id || host.clientId === access.clientId) {
+        const replacesRequestedConnection = requestedConnectionId && connectionId === requestedConnectionId;
+        const sameClient = host.clientId === access.clientId || host.socketId === socket.id;
+        const replacesSameScope = sameClient && (
+          tabId
+            ? host.tabId === tabId
+            : !host.tabId
+        );
+        if (replacesRequestedConnection || replacesSameScope) {
           hosts.delete(connectionId);
         }
       }
@@ -1246,6 +1302,7 @@ export function registerCodeAgentWorkspaceHandlers({
         clientId: access.clientId,
         connectionId,
         socketId: socket.id,
+        ...(tabId ? { tabId } : {}),
         focused: parseWorkspaceBoolean(payload, 'focused'),
         supportedOperations,
         connectedAt: now,
@@ -1358,7 +1415,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'Preview automation operation is invalid' });
         return;
       }
-      const host = selectPreviewAutomationHost(access.room.id, operation);
+      const host = selectPreviewAutomationHost(access.room.id, operation, tabId);
       if (!host) {
         callback?.({ success: false, error: `No preview automation host supports ${operation}` });
         return;

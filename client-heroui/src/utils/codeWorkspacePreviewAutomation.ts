@@ -30,6 +30,7 @@ export const CODE_WORKSPACE_PREVIEW_AUTOMATION_CLOUD_BROWSER_OPERATIONS = [
   'scroll',
   'evaluate',
   'waitFor',
+  'previewAnnotation',
   'clearCookies',
   'clearCache',
   'recordingStart',
@@ -74,6 +75,7 @@ export function validateCodeWorkspacePreviewAutomationHost(
     clientId: value.clientId,
     connectionId: value.connectionId,
     socketId: value.socketId,
+    ...(typeof value.tabId === 'string' && value.tabId.trim() ? { tabId: value.tabId } : {}),
     focused: value.focused === true,
     supportedOperations: operations,
     connectedAt: typeof value.connectedAt === 'string' ? value.connectedAt : new Date(0).toISOString(),
@@ -145,11 +147,13 @@ export async function runCodeWorkspacePreviewAutomationRequest(payload: {
 
 export async function connectCodeWorkspacePreviewAutomationHost({
   roomId,
+  tabId,
   focused = typeof document === 'undefined' ? true : document.hasFocus(),
   supportedOperations = CODE_WORKSPACE_PREVIEW_AUTOMATION_SESSION_OPERATIONS,
   handle,
 }: {
   roomId: string;
+  tabId?: string;
   focused?: boolean;
   supportedOperations?: readonly CodeWorkspacePreviewAutomationOperation[];
   handle: CodeWorkspacePreviewAutomationHandler;
@@ -157,6 +161,7 @@ export async function connectCodeWorkspacePreviewAutomationHost({
   let currentHost = validateCodeWorkspacePreviewAutomationHost(
     await requestConnectCodeWorkspacePreviewAutomation({
       roomId,
+      ...(tabId ? { tabId } : {}),
       focused,
       supportedOperations: [...supportedOperations],
     }),
@@ -166,6 +171,7 @@ export async function connectCodeWorkspacePreviewAutomationHost({
     currentHost = validateCodeWorkspacePreviewAutomationHost(
       await requestConnectCodeWorkspacePreviewAutomation({
         roomId,
+        ...(tabId ? { tabId } : {}),
         focused: typeof document === 'undefined' ? true : document.hasFocus(),
         supportedOperations: [...supportedOperations],
       }),

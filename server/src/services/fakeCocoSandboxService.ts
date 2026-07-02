@@ -8,6 +8,7 @@ import {
   CocoWorkspaceDiff,
   CocoWorkspaceEntry,
   CocoWorkspaceFile,
+  CocoWorkspacePreviewServer,
   CocoWorkspaceRef,
   CocoWorkspaceRefs,
   CreateCocoSandboxInput,
@@ -38,6 +39,7 @@ export class FakeCocoSandboxService implements CocoSandboxService {
   private readonly workspaceFileBytesBySandboxId = new Map<string, Map<string, Buffer>>();
   private readonly workspaceChangesBySandboxId = new Map<string, CocoWorkspaceChanges>();
   private readonly workspaceDiffBySandboxId = new Map<string, string>();
+  private readonly workspacePreviewServersBySandboxId = new Map<string, CocoWorkspacePreviewServer[]>();
   private readonly workspaceRefsBySandboxId = new Map<string, CocoWorkspaceRefs>();
 
   constructor(private readonly now: () => Date = () => new Date()) {}
@@ -284,6 +286,18 @@ export class FakeCocoSandboxService implements CocoSandboxService {
     };
   }
 
+  setWorkspacePreviewServers(sandboxId: string, servers: CocoWorkspacePreviewServer[]) {
+    this.workspacePreviewServersBySandboxId.set(sandboxId, servers.map(server => ({ ...server })));
+  }
+
+  async listWorkspacePreviewServers(handle: CocoSandboxHandle): Promise<CocoWorkspacePreviewServer[]> {
+    this.consumeFailure('connect');
+    if (!this.sandboxes.has(handle.id)) {
+      throw new Error(`Fake Coco sandbox not found: ${handle.id}`);
+    }
+    return (this.workspacePreviewServersBySandboxId.get(handle.id) || []).map(server => ({ ...server }));
+  }
+
   async writeWorkspaceFile(
     handle: CocoSandboxHandle,
     input: WriteCocoWorkspaceFileInput
@@ -418,6 +432,7 @@ export class FakeCocoSandboxService implements CocoSandboxService {
     this.workspaceFileBytesBySandboxId.delete(sandboxId);
     this.workspaceChangesBySandboxId.delete(sandboxId);
     this.workspaceDiffBySandboxId.delete(sandboxId);
+    this.workspacePreviewServersBySandboxId.delete(sandboxId);
   }
 
   async countActiveSandboxes(): Promise<number> {

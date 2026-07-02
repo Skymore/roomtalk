@@ -133,6 +133,10 @@ type CodeWorkspacePreviewTargetAckResponse = SocketAckResponse & {
   target?: unknown;
 };
 
+type CodeWorkspacePreviewServersAckResponse = SocketAckResponse & {
+  servers?: unknown[];
+};
+
 type CodeWorkspacePreviewAutomationAckResponse = SocketAckResponse & {
   connectionId?: string;
   host?: unknown;
@@ -1147,6 +1151,7 @@ export type CodeWorkspacePreviewAutomationOperation =
   | 'scroll'
   | 'evaluate'
   | 'waitFor'
+  | 'previewAnnotation'
   | 'clearCookies'
   | 'clearCache'
   | 'recordingStart'
@@ -1158,6 +1163,7 @@ export type CodeWorkspacePreviewAutomationHost = {
   clientId: string;
   connectionId: string;
   socketId: string;
+  tabId?: string;
   focused: boolean;
   supportedOperations: CodeWorkspacePreviewAutomationOperation[];
   connectedAt: string;
@@ -1229,6 +1235,14 @@ export type CodeWorkspacePreviewResolvedTarget = {
   resolutionKind: 'direct' | 'e2b-port-host';
 };
 
+export type CodeWorkspacePreviewServerSnapshot = {
+  host: string;
+  port: number;
+  url: string;
+  processName?: string | null;
+  pid?: number | null;
+};
+
 export const requestResolveCodeWorkspacePreviewTarget = (
   payload: { roomId: string; target: CodeWorkspacePreviewNavigationTarget },
 ): Promise<unknown> => (
@@ -1244,6 +1258,16 @@ export const requestResolveCodeWorkspacePreviewTarget = (
     }
     return response.target;
   })
+);
+
+export const requestCodeWorkspacePreviewServers = (roomId: string): Promise<unknown[]> => (
+  emitWithAck<CodeWorkspacePreviewServersAckResponse>(
+    'list_code_workspace_preview_servers',
+    { roomId },
+    'Timed out while loading workspace preview servers',
+    'Failed to load workspace preview servers',
+    { retryOnSocketReconnect: true },
+  ).then((response) => response.servers || [])
 );
 
 export const requestOpenCodeWorkspacePreviewSession = (
@@ -1368,6 +1392,7 @@ export const requestConnectCodeWorkspacePreviewAutomation = (
   payload: {
     roomId: string;
     connectionId?: string;
+    tabId?: string;
     focused?: boolean;
     supportedOperations?: CodeWorkspacePreviewAutomationOperation[];
   },

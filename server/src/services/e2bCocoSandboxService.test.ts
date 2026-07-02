@@ -111,6 +111,15 @@ class FakeE2BDriver implements E2BSandboxDriver {
                 '+export default function App() {}',
                 '',
               ].join('\n'));
+            } else if (command.includes('__ROOMTALK_PREVIEW_SERVERS__')) {
+              stdout.end([
+                '__ROOMTALK_PREVIEW_SERVERS__',
+                'LISTEN 0      511        0.0.0.0:5173      0.0.0.0:*    users:(("node",pid=123,fd=18))',
+                'LISTEN 0      511           [::]:5173         [::]:*    users:(("node",pid=123,fd=19))',
+                'tcp        0      0 127.0.0.1:3000          0.0.0.0:*               LISTEN      456/python',
+                'tcp        0      0 127.0.0.11:33337        0.0.0.0:*               LISTEN      -',
+                '',
+              ].join('\n'));
             } else if (command.includes('__ROOMTALK_STATUS__')) {
               stdout.end([
                 '__ROOMTALK_STATUS__\n',
@@ -313,6 +322,31 @@ describe('E2BCocoSandboxService', () => {
 
     await service.destroy(handle.id);
     assert.deepEqual(driver.killed, [handle.id]);
+  });
+
+  it('lists workspace preview servers from sandbox listening ports', async () => {
+    const driver = new FakeE2BDriver();
+    const service = new E2BCocoSandboxService(driver, { templateId: 'roomtalk-coco' });
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+
+    assert.deepEqual(await service.listWorkspacePreviewServers(handle), [
+      {
+        host: 'localhost',
+        port: 3000,
+        url: 'http://localhost:3000/',
+        processName: 'python',
+        pid: 456,
+      },
+      {
+        host: 'localhost',
+        port: 5173,
+        url: 'http://localhost:5173/',
+        processName: 'node',
+        pid: 123,
+      },
+    ]);
+    assert.match(driver.commands[0], /ss -H -ltnp/);
+    assert.deepEqual(driver.commandOptions[0], { timeoutMs: 10_000 });
   });
 
   it('marks NUL-containing workspace file reads as binary like T3', async () => {

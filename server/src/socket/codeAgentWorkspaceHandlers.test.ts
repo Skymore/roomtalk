@@ -2,7 +2,7 @@ import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { createCocoAccessControl } from '../services/cocoAccessControl';
 import { CodeWorkspaceAssetAccess } from '../services/codeWorkspaceAssetAccess';
-import { CocoWorkspaceChanges, CocoWorkspaceEntry, CocoWorkspaceRef } from '../services/cocoSandboxService';
+import { CocoWorkspaceChanges, CocoWorkspaceEntry, CocoWorkspacePreviewServer, CocoWorkspaceRef } from '../services/cocoSandboxService';
 import { Message, Room, RoomMember } from '../types';
 import { registerCodeAgentWorkspaceHandlers } from './codeAgentWorkspaceHandlers';
 
@@ -91,6 +91,7 @@ const createHarness = (options: {
   workspaceChanges?: CocoWorkspaceChanges;
   workspaceDiffPatch?: string;
   workspaceFileContent?: string;
+  workspacePreviewServers?: CocoWorkspacePreviewServer[];
   workspaceRoot?: string;
   workspacePreviewTargetResolvedUrl?: string;
   cocoAccess?: ReturnType<typeof createCocoAccessControl>;
@@ -108,6 +109,7 @@ const createHarness = (options: {
   const getWorkspaceDiffCalls: Array<{ sandboxId: string; maxBytes?: number; ignoreWhitespace?: boolean; scope?: string; baseRef?: string }> = [];
   const readWorkspaceFileCalls: Array<{ sandboxId: string; path: string; maxBytes?: number }> = [];
   const resolveWorkspacePreviewTargetCalls: Array<{ sandboxId: string; port: number; protocol?: 'http' | 'https'; path?: string }> = [];
+  const listWorkspacePreviewServersCalls: Array<{ sandboxId: string }> = [];
   const writeWorkspaceFileCalls: Array<{ sandboxId: string; path: string; content: string; encoding?: 'utf-8' | 'base64' }> = [];
   const createWorkspaceDirectoryCalls: Array<{ sandboxId: string; path: string }> = [];
   const renameWorkspaceEntryCalls: Array<{ sandboxId: string; fromPath: string; toPath: string }> = [];
@@ -252,6 +254,10 @@ const createHarness = (options: {
           resolutionKind: 'e2b-port-host' as const,
         };
       },
+      listWorkspacePreviewServers: async (handle) => {
+        listWorkspacePreviewServersCalls.push({ sandboxId: handle.id });
+        return options.workspacePreviewServers || [];
+      },
       writeWorkspaceFile: async (handle, input) => {
         writeWorkspaceFileCalls.push({
           sandboxId: handle.id,
@@ -300,6 +306,7 @@ const createHarness = (options: {
     listWorkspaceRefsCalls,
     readWorkspaceFileCalls,
     resolveWorkspacePreviewTargetCalls,
+    listWorkspacePreviewServersCalls,
     writeWorkspaceFileCalls,
     createWorkspaceDirectoryCalls,
     renameWorkspaceEntryCalls,
@@ -561,6 +568,36 @@ describe('code-agent workspace socket handlers', () => {
     }]);
   });
 
+  it('lists browser preview servers through the ready sandbox', async () => {
+    const { socket, listWorkspacePreviewServersCalls } = createHarness({
+      workspacePreviewServers: [
+        {
+          host: 'localhost',
+          port: 5173,
+          url: 'http://localhost:5173/',
+          processName: 'vite',
+          pid: 1234,
+        },
+      ],
+    });
+
+    const listed = await socket.invoke<any>('list_code_workspace_preview_servers', {
+      roomId: 'room-1',
+    });
+
+    assert.equal(listed.success, true);
+    assert.deepEqual(listed.servers, [
+      {
+        host: 'localhost',
+        port: 5173,
+        url: 'http://localhost:5173/',
+        processName: 'vite',
+        pid: 1234,
+      },
+    ]);
+    assert.deepEqual(listWorkspacePreviewServersCalls, [{ sandboxId: 'sandbox-1' }]);
+  });
+
   it('routes cloud preview automation requests through registered socket hosts', async () => {
     const { socket, socketEvents } = createHarness({
       currentRoom: room({ sandboxStatus: 'creating', sandboxId: undefined }),
@@ -636,6 +673,83 @@ describe('code-agent workspace socket handlers', () => {
     assert.equal(requestAck.success, true);
     assert.deepEqual(requestAck.response.result, { url: 'https://example.com/app', loading: false });
     assert.equal(socketEvents.at(-1)?.event, 'code_workspace_preview_automation_response');
+  });
+
+  it('routes tab-targeted preview automation to the matching host', async () => {
+    const { socket } = createHarness({
+      currentRoom: room({ sandboxStatus: 'ready', sandboxId: 'sandbox-1' }),
+    });
+
+    const leftConnected = await socket.invoke<any>('connect_code_workspace_preview_automation', {
+      roomId: 'room-1',
+      connectionId: 'automation-left',
+      tabId: 'browser:left',
+      focused: false,
+      supportedOperations: ['status', 'snapshot'],
+    });
+    const rightConnected = await socket.invoke<any>('connect_code_workspace_preview_automation', {
+      roomId: 'room-1',
+      connectionId: 'automation-right',
+      tabId: 'browser:right',
+      focused: true,
+      supportedOperations: ['status', 'snapshot'],
+    });
+
+    assert.equal(leftConnected.success, true);
+    assert.equal(leftConnected.host.tabId, 'browser:left');
+    assert.equal(rightConnected.success, true);
+    assert.equal(rightConnected.host.tabId, 'browser:right');
+
+    const listed = await socket.invoke<any>('list_code_workspace_preview_automation_hosts', {
+      roomId: 'room-1',
+    });
+    assert.equal(listed.success, true);
+    assert.ok(listed.hosts.some((host: any) => host.connectionId === 'automation-left'));
+    assert.ok(listed.hosts.some((host: any) => host.connectionId === 'automation-right'));
+
+    const requestPromise = socket.invoke<any>('request_code_workspace_preview_automation', {
+      roomId: 'room-1',
+      requestId: 'tab-targeted-request',
+      operation: 'snapshot',
+      tabId: 'browser:left',
+      input: {},
+      timeoutMs: 1000,
+    });
+
+    await new Promise(resolve => setImmediate(resolve));
+    const requestEvent = socket.emittedEvents.find((entry) => (
+      entry.event === 'code_workspace_preview_automation_event'
+      && (entry.payload as any).type === 'request'
+      && (entry.payload as any).request?.requestId === 'tab-targeted-request'
+    ));
+    assert.ok(requestEvent);
+    assert.equal((requestEvent.payload as any).connectionId, 'automation-left');
+
+    await socket.invoke<any>('respond_code_workspace_preview_automation', {
+      roomId: 'room-1',
+      connectionId: 'automation-left',
+      requestId: 'tab-targeted-request',
+      ok: true,
+      result: { tabId: 'browser:left', screenshot: { mimeType: 'image/png', data: 'cG5n' } },
+    });
+
+    const requestAck = await requestPromise;
+    assert.equal(requestAck.success, true);
+    assert.deepEqual(requestAck.response.result, {
+      tabId: 'browser:left',
+      screenshot: { mimeType: 'image/png', data: 'cG5n' },
+    });
+
+    const missing = await socket.invoke<any>('request_code_workspace_preview_automation', {
+      roomId: 'room-1',
+      requestId: 'tab-targeted-missing',
+      operation: 'snapshot',
+      tabId: 'browser:missing',
+      input: {},
+      timeoutMs: 1000,
+    });
+    assert.equal(missing.success, false);
+    assert.equal(missing.error, 'No preview automation host supports snapshot');
   });
 
   it('saves cloud preview automation recordings into the workspace before responding', async () => {

@@ -3,6 +3,9 @@ import {
   ArrowLeft,
   ArrowRight,
   Camera,
+  Check,
+  Copy,
+  Download,
   ExternalLink,
   FileDiff,
   Files,
@@ -10,11 +13,15 @@ import {
   LoaderCircle,
   Minus,
   MoreVertical,
+  MousePointerClick,
   Plus,
+  RadioTower,
   RefreshCw,
   RotateCcw,
+  Square,
   TerminalSquare,
   Trash2,
+  Video,
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -39,6 +46,10 @@ import { codeAgentFaviconUrlForOrigin } from '../utils/codeAgentFavicon';
 import { beginHorizontalResize } from '../utils/horizontalResize';
 import { normalizeWorkspaceOpenPath, parseWorkspaceFileOpenTarget } from '../utils/workspaceFileOpenTarget';
 import { type ReviewCommentContext } from '../utils/codeAgentReviewComments';
+import {
+  isCodeAgentPreviewAnnotationContext,
+  type CodeAgentPreviewAnnotationContext,
+} from '../utils/codeAgentPreviewAnnotations';
 import {
   basename,
   isBrowserPreviewFile,
@@ -98,6 +109,7 @@ import {
   useCodeAgentRightPanelState,
 } from '../utils/codeAgentRightPanelStore';
 import {
+  closeCodeWorkspacePreviewSession,
   navigateCodeWorkspacePreviewSession,
   openCodeWorkspacePreviewSession,
   refreshCodeWorkspacePreviewSession,
@@ -106,6 +118,13 @@ import {
   resizeCodeWorkspacePreviewSession,
   subscribeCodeWorkspacePreviewEvents,
 } from '../utils/codeWorkspacePreviewSessions';
+import {
+  listCodeWorkspacePreviewServers,
+  mergeCodeWorkspacePreviewServers,
+  previewPortTargetFromLocalUrl,
+  type CodeWorkspacePreviewServer,
+  type PreviewableCodeWorkspacePreviewServer,
+} from '../utils/codeWorkspacePreviewServers';
 import {
   CODE_AGENT_PREVIEW_VIEWPORT_PRESET_IDS,
   FILL_CODE_AGENT_PREVIEW_VIEWPORT,
@@ -120,6 +139,12 @@ import {
   runCodeWorkspacePreviewAutomationRequest,
   type CodeWorkspacePreviewAutomationRequest,
 } from '../utils/codeWorkspacePreviewAutomation';
+import {
+  codeWorkspacePreviewAutomationOpenNeedsReadiness,
+  codeWorkspacePreviewAutomationReadiness,
+  codeWorkspacePreviewAutomationTimeoutMs,
+  type CodeWorkspacePreviewAutomationReadiness,
+} from '../utils/codeWorkspacePreviewAutomationReadiness';
 import {
   isCodeWorkspacePreviewDomAutomationOperation,
   type CodeWorkspacePreviewDomAutomationHandler,
@@ -139,6 +164,7 @@ interface CodeAgentFileBrowserPanelProps {
   reviewComments?: readonly ReviewCommentContext[];
   onAddReviewComment?: (comment: ReviewCommentContext) => void;
   onRemoveReviewComment?: (commentId: string) => void;
+  onAddPreviewAnnotation?: (annotation: CodeAgentPreviewAnnotationContext) => void;
   onFileSavePendingChange?: (relativePath: string, pending: boolean) => void;
 }
 
@@ -782,6 +808,9 @@ interface CodeAgentPreviewSurfaceProps {
   ) => void;
   onNavigateHistory: (surfaceId: string, direction: 'back' | 'forward') => void;
   onRefreshWorkspacePreview: (relativePath: string) => void;
+  onRecordingArtifactSaved: (artifact: CodeAgentPreviewRecordingArtifact) => void;
+  onOpenWorkspaceFile: (relativePath: string) => void;
+  onAddPreviewAnnotation?: (annotation: CodeAgentPreviewAnnotationContext) => void;
 }
 
 type CodeAgentPreviewAutomationHandler = (
@@ -805,6 +834,25 @@ type CodeAgentPreviewAutomationSnapshot = {
   screenshot: CodeAgentPreviewAutomationScreenshot;
 };
 
+type CodeAgentPreviewRecordingArtifact = {
+  id: string;
+  tabId: string;
+  path: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt: string;
+};
+
+type CodeAgentPreviewAutomationNavigationWaiter = {
+  id: number;
+  requestId: string;
+  url: string;
+  readiness: CodeWorkspacePreviewAutomationReadiness;
+  timeoutId: number;
+  resolve: () => void;
+  reject: (error: Error) => void;
+};
+
 interface CodeAgentBrowserSurfaceChromeProps {
   value: string;
   loading: boolean;
@@ -813,8 +861,14 @@ interface CodeAgentBrowserSurfaceChromeProps {
   canRefresh: boolean;
   canOpenExternal: boolean;
   canCaptureScreenshot: boolean;
+  canRecordPreview: boolean;
+  canAnnotatePreview: boolean;
   screenshotCapturePending: boolean;
   screenshotCaptureCopied: boolean;
+  recordingActive: boolean;
+  recordingPending: boolean;
+  annotationActive: boolean;
+  annotationPending: boolean;
   canZoom: boolean;
   canToggleDeviceToolbar: boolean;
   canClearBrowserData: boolean;
@@ -831,6 +885,8 @@ interface CodeAgentBrowserSurfaceChromeProps {
   onRefresh: () => void;
   onOpenExternal: () => void;
   onCaptureScreenshot: () => void;
+  onToggleRecording: () => void;
+  onToggleAnnotation: () => void;
   onHardReload: () => void;
   onToggleDeviceToolbar: () => void;
   onZoomIn: () => void;
@@ -960,6 +1016,41 @@ function isPreviewAutomationSnapshot(value: unknown): value is CodeAgentPreviewA
   );
 }
 
+function isPreviewRecordingStart(value: unknown): value is { tabId: string; recording: true; startedAt: string } {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const record = value as Partial<{ tabId: unknown; recording: unknown; startedAt: unknown }>;
+  return (
+    typeof record.tabId === 'string'
+    && record.recording === true
+    && typeof record.startedAt === 'string'
+    && record.startedAt.length > 0
+  );
+}
+
+function isPreviewRecordingArtifact(value: unknown): value is CodeAgentPreviewRecordingArtifact {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const record = value as Partial<CodeAgentPreviewRecordingArtifact>;
+  return (
+    typeof record.id === 'string'
+    && record.id.length > 0
+    && typeof record.tabId === 'string'
+    && record.tabId.length > 0
+    && typeof record.path === 'string'
+    && record.path.length > 0
+    && typeof record.mimeType === 'string'
+    && record.mimeType.length > 0
+    && typeof record.sizeBytes === 'number'
+    && Number.isFinite(record.sizeBytes)
+    && record.sizeBytes >= 0
+    && typeof record.createdAt === 'string'
+    && record.createdAt.length > 0
+  );
+}
+
 function previewScreenshotFilename(value: string): string {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const rawName = (() => {
@@ -979,10 +1070,25 @@ function previewScreenshotFilename(value: string): string {
   return `roomtalk-preview-${safeName}-${timestamp}.png`;
 }
 
+function previewRecordingFilename(path: string): string {
+  const filename = path.split('/').pop()?.trim();
+  return filename || 'preview-recording.webm';
+}
+
 function downloadPreviewScreenshot(screenshot: CodeAgentPreviewAutomationScreenshot, filename: string): void {
   const link = document.createElement('a');
   link.href = `data:image/png;base64,${screenshot.data}`;
   link.download = filename;
+  link.rel = 'noopener';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+function downloadWorkspaceAssetUrl(url: string, path: string): void {
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = previewRecordingFilename(path);
   link.rel = 'noopener';
   document.body.appendChild(link);
   link.click();
@@ -1013,6 +1119,18 @@ async function copyPreviewScreenshotToClipboard(screenshot: CodeAgentPreviewAuto
   return true;
 }
 
+async function copyTextToClipboard(value: string): Promise<boolean> {
+  if (
+    typeof navigator === 'undefined'
+    || !navigator.clipboard
+    || typeof navigator.clipboard.writeText !== 'function'
+  ) {
+    return false;
+  }
+  await navigator.clipboard.writeText(value);
+  return true;
+}
+
 function CodeAgentBrowserSurfaceChrome({
   value,
   loading,
@@ -1021,8 +1139,14 @@ function CodeAgentBrowserSurfaceChrome({
   canRefresh,
   canOpenExternal,
   canCaptureScreenshot,
+  canRecordPreview,
+  canAnnotatePreview,
   screenshotCapturePending,
   screenshotCaptureCopied,
+  recordingActive,
+  recordingPending,
+  annotationActive,
+  annotationPending,
   canZoom,
   canToggleDeviceToolbar,
   canClearBrowserData,
@@ -1039,6 +1163,8 @@ function CodeAgentBrowserSurfaceChrome({
   onRefresh,
   onOpenExternal,
   onCaptureScreenshot,
+  onToggleRecording,
+  onToggleAnnotation,
   onHardReload,
   onToggleDeviceToolbar,
   onZoomIn,
@@ -1078,6 +1204,16 @@ function CodeAgentBrowserSurfaceChrome({
   const displayValue = inputFocused ? draft : formatBrowserSurfaceAddressDisplay(value);
   const displayTitle = !inputFocused && displayValue !== value ? value : undefined;
   const captureScreenshotLabel = screenshotCaptureCopied ? t('copied') : t('codeAgentBrowserCaptureScreenshot');
+  const recordingLabel = recordingPending
+    ? (recordingActive ? t('codeAgentBrowserRecordingStopping') : t('codeAgentBrowserRecordingStarting'))
+    : recordingActive
+      ? t('codeAgentBrowserStopRecording')
+      : t('codeAgentBrowserStartRecording');
+  const annotationLabel = annotationPending
+    ? t('codeAgentBrowserPreviewAnnotationCapturing')
+    : annotationActive
+      ? t('codeAgentBrowserCancelPreviewAnnotation')
+      : t('codeAgentBrowserAnnotatePreview');
   const browserChromeButtonClass = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-45 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]';
   const addressInput = (
     <input
@@ -1165,10 +1301,46 @@ function CodeAgentBrowserSurfaceChrome({
       className={browserChromeButtonClass}
       aria-label={captureScreenshotLabel}
       title={captureScreenshotLabel}
-      disabled={!canCaptureScreenshot || screenshotCapturePending}
+      disabled={!canCaptureScreenshot || screenshotCapturePending || recordingActive || recordingPending}
       onClick={onCaptureScreenshot}
     >
       {screenshotCapturePending ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Camera className="h-3.5 w-3.5" />}
+    </button>
+  );
+  const recordingButton = (
+    <button
+      type="button"
+      className={`${browserChromeButtonClass} ${recordingActive ? 'bg-[#fff2ec] text-[#c94b2c] hover:bg-[#f7ded3] hover:text-[#9f321b] dark:bg-[#332019] dark:text-[#ff9b78] dark:hover:bg-[#4a271d]' : ''}`}
+      aria-label={recordingLabel}
+      aria-pressed={recordingActive}
+      title={recordingLabel}
+      disabled={!canRecordPreview || recordingPending}
+      onClick={onToggleRecording}
+    >
+      {recordingPending ? (
+        <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+      ) : recordingActive ? (
+        <Square className="h-3.5 w-3.5 fill-current" />
+      ) : (
+        <Video className="h-3.5 w-3.5" />
+      )}
+    </button>
+  );
+  const annotationButton = (
+    <button
+      type="button"
+      className={`${browserChromeButtonClass} ${annotationActive ? 'bg-[#fff2ec] text-[#c94b2c] hover:bg-[#f7ded3] hover:text-[#9f321b] dark:bg-[#332019] dark:text-[#ff9b78] dark:hover:bg-[#4a271d]' : ''}`}
+      aria-label={annotationLabel}
+      aria-pressed={annotationActive}
+      title={annotationLabel}
+      disabled={!canAnnotatePreview || annotationPending}
+      onClick={onToggleAnnotation}
+    >
+      {annotationPending ? (
+        <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+      ) : (
+        <MousePointerClick className="h-3.5 w-3.5" />
+      )}
     </button>
   );
   const moreMenu = (
@@ -1209,7 +1381,9 @@ function CodeAgentBrowserSurfaceChrome({
               {refreshButton}
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-1">
+              {annotationButton}
               {screenshotButton}
+              {recordingButton}
               {openExternalButton}
               {moreMenu}
             </div>
@@ -1258,6 +1432,8 @@ function CodeAgentBrowserSurfaceChrome({
         {refreshButton}
         {addressInput}
         {screenshotButton}
+        {recordingButton}
+        {annotationButton}
         {openExternalButton}
         {moreMenu}
       </form>
@@ -1296,26 +1472,45 @@ function CodeAgentPreviewSurface({
   onNavigate,
   onNavigateHistory,
   onRefreshWorkspacePreview,
+  onRecordingArtifactSaved,
+  onOpenWorkspaceFile,
+  onAddPreviewAnnotation,
 }: CodeAgentPreviewSurfaceProps) {
   const { t } = useTranslation();
   const relativePath = surface.relativePath;
   const previewUrl = surface.url ?? null;
+  const isBrowserEmptyPreview = !relativePath && !previewUrl;
   const [navigationError, setNavigationError] = useState<string | null>(null);
   const [browserReloadNonce, setBrowserReloadNonce] = useState(0);
   const [browserFrameLoading, setBrowserFrameLoading] = useState(false);
+  const [workspacePreviewServers, setWorkspacePreviewServers] = useState<CodeWorkspacePreviewServer[]>([]);
+  const [workspacePreviewServersPending, setWorkspacePreviewServersPending] = useState(false);
+  const [workspacePreviewServersError, setWorkspacePreviewServersError] = useState<string | null>(null);
+  const [workspacePreviewServersRefreshNonce, setWorkspacePreviewServersRefreshNonce] = useState(0);
   const [screenshotCaptureState, setScreenshotCaptureState] = useState<'idle' | 'pending' | 'copied'>('idle');
+  const [browserRecordingActive, setBrowserRecordingActive] = useState(false);
+  const [browserRecordingAction, setBrowserRecordingAction] = useState<'idle' | 'starting' | 'stopping'>('idle');
+  const [browserRecordingArtifact, setBrowserRecordingArtifact] = useState<CodeAgentPreviewRecordingArtifact | null>(null);
+  const [browserRecordingAssetUrl, setBrowserRecordingAssetUrl] = useState<string | null>(null);
+  const [browserRecordingPathCopied, setBrowserRecordingPathCopied] = useState(false);
   const [browserDataAction, setBrowserDataAction] = useState<'clearCookies' | 'clearCache' | null>(null);
+  const [previewAnnotationActive, setPreviewAnnotationActive] = useState(false);
+  const [previewAnnotationPending, setPreviewAnnotationPending] = useState(false);
+  const [previewAnnotationDraft, setPreviewAnnotationDraft] = useState<CodeAgentPreviewAnnotationContext | null>(null);
+  const [previewAnnotationComment, setPreviewAnnotationComment] = useState('');
   const [previewViewportContainerSize, setPreviewViewportContainerSize] = useState({ width: 1024, height: 768 });
   const zoomFactor = surface.zoomFactor ?? 1;
   const viewport = surface.viewport ?? FILL_CODE_AGENT_PREVIEW_VIEWPORT;
   const viewportRef = useRef(viewport);
   const screenshotCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recordingCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previewAnnotationCommentRef = useRef<HTMLTextAreaElement | null>(null);
   const currentAddress = previewUrl ?? relativePath ?? '';
   const resolvedWorkspacePreviewUrl = relativePath && assetUrlQuery.resolvedUrl
     ? appendWorkspaceAssetPreviewRevision(assetUrlQuery.resolvedUrl, assetPreviewRevision)
     : null;
   const resolvedPreviewUrl = previewUrl ?? resolvedWorkspacePreviewUrl;
-  const canRefreshPreview = Boolean(resolvedPreviewUrl || relativePath);
+  const canRefreshPreview = Boolean(resolvedPreviewUrl || relativePath || isBrowserEmptyPreview);
   const browserChromeLoading = assetUrlQuery.isPending || (Boolean(resolvedPreviewUrl) && browserFrameLoading);
   const { canGoBack, canGoForward } = getCodeAgentPreviewSurfaceNavigationState(surface);
   const previewSessionTabId = surface.previewSessionId ?? surface.id;
@@ -1323,6 +1518,10 @@ function CodeAgentPreviewSurface({
     throw new Error('Workspace preview automation is not ready.');
   });
   const previewDomAutomationHandlerRef = useRef<CodeWorkspacePreviewDomAutomationHandler | null>(null);
+  const previewNavigationWaitersRef = useRef<CodeAgentPreviewAutomationNavigationWaiter[]>([]);
+  const previewNavigationWaiterIdRef = useRef(0);
+  const browserChromeLoadingRef = useRef(browserChromeLoading);
+  const resolvedPreviewUrlRef = useRef(resolvedPreviewUrl);
 
   const ensurePreviewSessionTabId = useCallback(() => {
     const tabId = surface.previewSessionId ?? surface.id;
@@ -1342,11 +1541,60 @@ function CodeAgentPreviewSurface({
       clearTimeout(screenshotCopiedTimerRef.current);
       screenshotCopiedTimerRef.current = null;
     }
+    if (recordingCopiedTimerRef.current !== null) {
+      clearTimeout(recordingCopiedTimerRef.current);
+      recordingCopiedTimerRef.current = null;
+    }
   }, []);
 
   useEffect(() => {
     viewportRef.current = viewport;
   }, [viewport]);
+
+  useEffect(() => {
+    browserChromeLoadingRef.current = browserChromeLoading;
+  }, [browserChromeLoading]);
+
+  useEffect(() => {
+    resolvedPreviewUrlRef.current = resolvedPreviewUrl;
+  }, [resolvedPreviewUrl]);
+
+  useEffect(() => {
+    if (!isBrowserEmptyPreview) {
+      return undefined;
+    }
+    let disposed = false;
+    setWorkspacePreviewServersPending(true);
+    setWorkspacePreviewServersError(null);
+    void listCodeWorkspacePreviewServers(roomId)
+      .then((servers) => {
+        if (disposed) return;
+        setWorkspacePreviewServers(servers);
+      })
+      .catch((error) => {
+        if (disposed) return;
+        setWorkspacePreviewServers([]);
+        setWorkspacePreviewServersError(error instanceof Error ? error.message : 'Workspace preview server scan failed');
+      })
+      .finally(() => {
+        if (disposed) return;
+        setWorkspacePreviewServersPending(false);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [isBrowserEmptyPreview, roomId, surface.id, workspacePreviewServersRefreshNonce]);
+
+  const recentPreviewUrls = useMemo(() => recentTargets.flatMap((target) => (
+    target.kind === 'url' ? [target.url] : []
+  )), [recentTargets]);
+  const workspacePreviewServerItems = useMemo(() => mergeCodeWorkspacePreviewServers({
+    scanner: workspacePreviewServers,
+    recentlySeenUrls: recentPreviewUrls,
+  }), [recentPreviewUrls, workspacePreviewServers]);
+  const browserRecentTargets = useMemo(() => recentTargets.filter((target) => (
+    target.kind !== 'url' || !previewPortTargetFromLocalUrl(target.url)
+  )), [recentTargets]);
 
   useEffect(() => {
     if (!resolvedPreviewUrl) {
@@ -1368,6 +1616,33 @@ function CodeAgentPreviewSurface({
     };
   }, [previewSessionTabId, relativePath, resolvedPreviewUrl, roomId, surface.id, previewUrl, t]);
 
+  const navigateResolvedBrowserUrl = useCallback((url: string, title?: string) => {
+    const tabId = ensurePreviewSessionTabId();
+    void navigateCodeWorkspacePreviewSession({
+      roomId,
+      tabId,
+      url,
+      ...(title ? { title } : {}),
+    }).catch(() => undefined);
+    onNavigate(surface.id, { kind: 'url', url });
+  }, [ensurePreviewSessionTabId, onNavigate, roomId, surface.id]);
+
+  const navigatePreviewUrl = useCallback((url: string) => {
+    const portTarget = previewPortTargetFromLocalUrl(url);
+    if (!portTarget) {
+      navigateResolvedBrowserUrl(url);
+      return;
+    }
+    void resolveCodeWorkspacePreviewTarget({ roomId, target: portTarget })
+      .then((resolution) => {
+        setNavigationError(null);
+        navigateResolvedBrowserUrl(resolution.resolvedUrl, resolution.requestedUrl);
+      })
+      .catch((error) => {
+        setNavigationError(error instanceof Error ? error.message : t('codeAgentBrowserInvalidTarget'));
+      });
+  }, [navigateResolvedBrowserUrl, roomId, t]);
+
   const handleNavigate = useCallback((value: string) => {
     const target = resolveBrowserNavigationTarget(value, workspaceRoot);
     if (!target) {
@@ -1375,24 +1650,41 @@ function CodeAgentPreviewSurface({
       return;
     }
     setNavigationError(null);
-    const tabId = ensurePreviewSessionTabId();
     if (target.kind === 'url') {
-      void navigateCodeWorkspacePreviewSession({
-        roomId,
-        tabId,
-        url: target.url,
-      }).catch(() => undefined);
+      navigatePreviewUrl(target.url);
+      return;
     }
     onNavigate(surface.id, target);
-  }, [ensurePreviewSessionTabId, onNavigate, roomId, surface.id, t, workspaceRoot]);
+  }, [navigatePreviewUrl, onNavigate, surface.id, t, workspaceRoot]);
+
+  const handleOpenWorkspacePreviewServer = useCallback((server: PreviewableCodeWorkspacePreviewServer) => {
+    const target = previewPortTargetFromLocalUrl(server.url) ?? {
+      kind: 'environment-port' as const,
+      port: server.port,
+      protocol: 'http' as const,
+      path: '/',
+    };
+    setNavigationError(null);
+    void resolveCodeWorkspacePreviewTarget({ roomId, target })
+      .then((resolution) => {
+        navigateResolvedBrowserUrl(resolution.resolvedUrl, resolution.requestedUrl);
+      })
+      .catch((error) => {
+        setNavigationError(error instanceof Error ? error.message : t('codeAgentWorkspacePreviewServersUnavailable'));
+      });
+  }, [navigateResolvedBrowserUrl, roomId, t]);
 
   const handleRefresh = useCallback(() => {
+    if (isBrowserEmptyPreview) {
+      setWorkspacePreviewServersRefreshNonce((current) => current + 1);
+      return;
+    }
     void refreshCodeWorkspacePreviewSession({ roomId, tabId: previewSessionTabId }).catch(() => undefined);
     if (relativePath) {
       onRefreshWorkspacePreview(relativePath);
     }
     setBrowserReloadNonce((current) => current + 1);
-  }, [onRefreshWorkspacePreview, previewSessionTabId, relativePath, roomId]);
+  }, [isBrowserEmptyPreview, onRefreshWorkspacePreview, previewSessionTabId, relativePath, roomId]);
 
   const handleBack = useCallback(() => {
     ensurePreviewSessionTabId();
@@ -1454,6 +1746,116 @@ function CodeAgentPreviewSurface({
     });
   }, [previewSessionTabId, previewUrl, relativePath, resolvedPreviewUrl, roomId, screenshotCaptureState, t]);
 
+  const resolveRecordingAssetUrl = useCallback(async (path: string) => {
+    const asset = await createCodeWorkspaceAssetUrl(roomId, path);
+    return resolveCodeWorkspaceAssetUrl(asset);
+  }, [roomId]);
+
+  const handleToggleRecording = useCallback(() => {
+    if (!resolvedPreviewUrl || browserRecordingAction !== 'idle') {
+      return;
+    }
+    setNavigationError(null);
+    if (!browserRecordingActive) {
+      setBrowserRecordingAction('starting');
+      setBrowserRecordingArtifact(null);
+      setBrowserRecordingAssetUrl(null);
+      setBrowserRecordingPathCopied(false);
+      void runCodeWorkspacePreviewAutomationRequest({
+        requestId: `recording-start:${Date.now().toString(36)}`,
+        roomId,
+        tabId: previewSessionTabId,
+        operation: 'recordingStart',
+        input: {},
+        timeoutMs: 10000,
+      }).then((result) => {
+        if (!isPreviewRecordingStart(result)) {
+          throw new Error(t('codeAgentBrowserRecordingStartFailed'));
+        }
+        setBrowserRecordingActive(true);
+      }).catch((error) => {
+        setBrowserRecordingActive(false);
+        setNavigationError(error instanceof Error ? error.message : t('codeAgentBrowserRecordingStartFailed'));
+      }).finally(() => {
+        setBrowserRecordingAction('idle');
+      });
+      return;
+    }
+
+    setBrowserRecordingAction('stopping');
+    void runCodeWorkspacePreviewAutomationRequest({
+      requestId: `recording-stop:${Date.now().toString(36)}`,
+      roomId,
+      tabId: previewSessionTabId,
+      operation: 'recordingStop',
+      input: {},
+      timeoutMs: 60000,
+    }).then(async (result) => {
+      if (!isPreviewRecordingArtifact(result)) {
+        throw new Error(t('codeAgentBrowserRecordingStopFailed'));
+      }
+      setBrowserRecordingActive(false);
+      setBrowserRecordingArtifact(result);
+      onRecordingArtifactSaved(result);
+      try {
+        setBrowserRecordingAssetUrl(await resolveRecordingAssetUrl(result.path));
+      } catch {
+        setBrowserRecordingAssetUrl(null);
+      }
+    }).catch((error) => {
+      setBrowserRecordingActive(false);
+      setNavigationError(error instanceof Error ? error.message : t('codeAgentBrowserRecordingStopFailed'));
+    }).finally(() => {
+      setBrowserRecordingAction('idle');
+    });
+  }, [
+    browserRecordingAction,
+    browserRecordingActive,
+    onRecordingArtifactSaved,
+    previewSessionTabId,
+    resolvedPreviewUrl,
+    resolveRecordingAssetUrl,
+    roomId,
+    t,
+  ]);
+
+  const handleCopyRecordingPath = useCallback(() => {
+    if (!browserRecordingArtifact) {
+      return;
+    }
+    void copyTextToClipboard(browserRecordingArtifact.path).then((copied) => {
+      if (!copied) {
+        setNavigationError(t('codeAgentBrowserRecordingCopyPathFailed'));
+        return;
+      }
+      setBrowserRecordingPathCopied(true);
+      if (recordingCopiedTimerRef.current !== null) {
+        clearTimeout(recordingCopiedTimerRef.current);
+      }
+      recordingCopiedTimerRef.current = setTimeout(() => {
+        recordingCopiedTimerRef.current = null;
+        setBrowserRecordingPathCopied(false);
+      }, 1200);
+    }).catch((error) => {
+      setNavigationError(error instanceof Error ? error.message : t('codeAgentBrowserRecordingCopyPathFailed'));
+    });
+  }, [browserRecordingArtifact, t]);
+
+  const handleOpenRecordingFile = useCallback(() => {
+    if (!browserRecordingArtifact) {
+      return;
+    }
+    onOpenWorkspaceFile(browserRecordingArtifact.path);
+  }, [browserRecordingArtifact, onOpenWorkspaceFile]);
+
+  const handleDownloadRecording = useCallback(() => {
+    if (!browserRecordingArtifact || !browserRecordingAssetUrl) {
+      setNavigationError(t('codeAgentBrowserRecordingDownloadUnavailable'));
+      return;
+    }
+    downloadWorkspaceAssetUrl(browserRecordingAssetUrl, browserRecordingArtifact.path);
+  }, [browserRecordingArtifact, browserRecordingAssetUrl, t]);
+
   const clearBrowserData = useCallback((operation: 'clearCookies' | 'clearCache') => {
     if (!resolvedPreviewUrl || browserDataAction !== null) {
       return;
@@ -1487,6 +1889,107 @@ function CodeAgentPreviewSurface({
   const handleClearCache = useCallback(() => {
     clearBrowserData('clearCache');
   }, [clearBrowserData]);
+
+  const handleToggleAnnotation = useCallback(() => {
+    if (!resolvedPreviewUrl || previewAnnotationPending) {
+      return;
+    }
+    setNavigationError(null);
+    setPreviewAnnotationDraft(null);
+    setPreviewAnnotationComment('');
+    setPreviewAnnotationActive((active) => !active);
+  }, [previewAnnotationPending, resolvedPreviewUrl]);
+
+  useEffect(() => {
+    if (!previewAnnotationActive) {
+      return undefined;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setPreviewAnnotationDraft(null);
+        setPreviewAnnotationComment('');
+        setPreviewAnnotationActive(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [previewAnnotationActive]);
+
+  useEffect(() => {
+    if (!previewAnnotationDraft) {
+      return undefined;
+    }
+    const frameId = window.requestAnimationFrame(() => {
+      previewAnnotationCommentRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [previewAnnotationDraft]);
+
+  const handlePreviewAnnotationPick = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!resolvedPreviewUrl || previewAnnotationPending || previewAnnotationDraft || !onAddPreviewAnnotation) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    setPreviewAnnotationPending(true);
+    setNavigationError(null);
+    void runCodeWorkspacePreviewAutomationRequest({
+      requestId: `preview-annotation:${Date.now().toString(36)}`,
+      roomId,
+      tabId: previewSessionTabId,
+      operation: 'previewAnnotation',
+      input: {
+        clientX: event.clientX,
+        clientY: event.clientY,
+      },
+      timeoutMs: 10000,
+    }).then((result) => {
+      if (!isCodeAgentPreviewAnnotationContext(result)) {
+        throw new Error(t('codeAgentBrowserPreviewAnnotationFailed'));
+      }
+      setPreviewAnnotationDraft(result);
+      setPreviewAnnotationComment(result.comment);
+    }).catch((error) => {
+      setNavigationError(error instanceof Error ? error.message : t('codeAgentBrowserPreviewAnnotationFailed'));
+    }).finally(() => {
+      setPreviewAnnotationPending(false);
+    });
+  }, [
+    onAddPreviewAnnotation,
+    previewAnnotationDraft,
+    previewAnnotationPending,
+    previewSessionTabId,
+    resolvedPreviewUrl,
+    roomId,
+    t,
+  ]);
+
+  const handleCancelPreviewAnnotation = useCallback(() => {
+    setPreviewAnnotationDraft(null);
+    setPreviewAnnotationComment('');
+    setPreviewAnnotationActive(false);
+  }, []);
+
+  const handleAttachPreviewAnnotation = useCallback(() => {
+    if (!previewAnnotationDraft || !onAddPreviewAnnotation) {
+      return;
+    }
+    onAddPreviewAnnotation({
+      ...previewAnnotationDraft,
+      comment: previewAnnotationComment.trim(),
+    });
+    setPreviewAnnotationDraft(null);
+    setPreviewAnnotationComment('');
+    setPreviewAnnotationActive(false);
+  }, [onAddPreviewAnnotation, previewAnnotationComment, previewAnnotationDraft]);
+
+  const handlePreviewAnnotationCommentKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== 'Enter' || (!event.metaKey && !event.ctrlKey)) {
+      return;
+    }
+    event.preventDefault();
+    handleAttachPreviewAnnotation();
+  }, [handleAttachPreviewAnnotation]);
 
   const updateViewport = useCallback(async (nextViewport: CodeAgentPreviewViewportSetting) => {
     const session = await resizeCodeWorkspacePreviewSession({
@@ -1526,6 +2029,75 @@ function CodeAgentPreviewSurface({
     resolvedPreviewUrl,
   ]);
 
+  const removePreviewNavigationWaiter = useCallback((id: number) => {
+    const waiters = previewNavigationWaitersRef.current;
+    const index = waiters.findIndex((waiter) => waiter.id === id);
+    if (index >= 0) {
+      waiters.splice(index, 1);
+    }
+  }, []);
+
+  const createPreviewAutomationNavigationWait = useCallback((
+    url: string,
+    readiness: CodeWorkspacePreviewAutomationReadiness,
+    timeoutMs: number,
+    requestId: string,
+  ): Promise<void> => {
+    if (readiness === 'none') {
+      return Promise.resolve();
+    }
+    if (resolvedPreviewUrlRef.current === url && !browserChromeLoadingRef.current) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve, reject) => {
+      const id = previewNavigationWaiterIdRef.current + 1;
+      previewNavigationWaiterIdRef.current = id;
+      const timeoutId = window.setTimeout(() => {
+        removePreviewNavigationWaiter(id);
+        reject(new Error(
+          `Preview navigation for request ${requestId} did not reach ${readiness} readiness within ${timeoutMs}ms.`,
+        ));
+      }, timeoutMs);
+      previewNavigationWaitersRef.current.push({
+        id,
+        requestId,
+        url,
+        readiness,
+        timeoutId,
+        resolve,
+        reject,
+      });
+    });
+  }, [removePreviewNavigationWaiter]);
+
+  const settlePreviewAutomationNavigationWaiters = useCallback((url: string | null) => {
+    if (!url) {
+      return;
+    }
+    const waiters = previewNavigationWaitersRef.current;
+    if (waiters.length === 0) {
+      return;
+    }
+    const matching = waiters.filter((waiter) => waiter.url === url);
+    if (matching.length === 0) {
+      return;
+    }
+    previewNavigationWaitersRef.current = waiters.filter((waiter) => waiter.url !== url);
+    for (const waiter of matching) {
+      window.clearTimeout(waiter.timeoutId);
+      waiter.resolve();
+    }
+  }, []);
+
+  useEffect(() => () => {
+    const waiters = previewNavigationWaitersRef.current;
+    previewNavigationWaitersRef.current = [];
+    for (const waiter of waiters) {
+      window.clearTimeout(waiter.timeoutId);
+      waiter.reject(new Error('Workspace preview automation closed before navigation reached readiness.'));
+    }
+  }, []);
+
   useEffect(() => {
     previewAutomationHandlerRef.current = async (request: CodeWorkspacePreviewAutomationRequest) => {
       if (request.operation === 'status') {
@@ -1533,13 +2105,42 @@ function CodeAgentPreviewSurface({
       }
       if (request.operation === 'open' || request.operation === 'navigate') {
         const url = await previewAutomationNavigationUrl(roomId, request.input);
+        const readiness = codeWorkspacePreviewAutomationReadiness(request.input);
+        const timeoutMs = codeWorkspacePreviewAutomationTimeoutMs(request.input, request.timeoutMs);
         if (!url) {
           if (request.operation === 'open') {
-            return previewAutomationStatus();
+            const status = previewAutomationStatus();
+            const currentNavStatus = status.url
+              ? {
+                _tag: status.loading ? 'Loading' as const : 'Success' as const,
+                url: status.url,
+                title: status.title,
+              }
+              : { _tag: 'Idle' as const };
+            if (
+              status.url
+              && status.loading
+              && readiness !== 'none'
+              && codeWorkspacePreviewAutomationOpenNeedsReadiness(request.input, currentNavStatus)
+            ) {
+              await createPreviewAutomationNavigationWait(status.url, readiness, timeoutMs, request.requestId);
+              return previewAutomationStatus({ url: status.url, loading: false });
+            }
+            return status;
           }
           throw new Error('Workspace preview automation requires a direct URL or environment-port target in this cloud surface.');
         }
+        const readinessWait = createPreviewAutomationNavigationWait(
+          url,
+          readiness,
+          timeoutMs,
+          request.requestId,
+        );
         handleNavigate(url);
+        if (readiness !== 'none') {
+          await readinessWait;
+          return previewAutomationStatus({ url, loading: false });
+        }
         return previewAutomationStatus({ url, loading: true });
       }
       if (request.operation === 'resize') {
@@ -1564,6 +2165,7 @@ function CodeAgentPreviewSurface({
       throw new Error(`Workspace preview automation does not support ${request.operation} in the cloud browser surface yet.`);
     };
   }, [
+    createPreviewAutomationNavigationWait,
     handleNavigate,
     previewAutomationStatus,
     previewSessionTabId,
@@ -1578,6 +2180,7 @@ function CodeAgentPreviewSurface({
     let controller: CodeAgentPreviewAutomationController | null = null;
     void connectCodeWorkspacePreviewAutomationHost({
       roomId,
+      tabId: previewSessionTabId,
       supportedOperations: CODE_WORKSPACE_PREVIEW_AUTOMATION_CLOUD_BROWSER_OPERATIONS,
       handle: (request) => previewAutomationHandlerRef.current(request),
     }).then((nextController) => {
@@ -1601,7 +2204,7 @@ function CodeAgentPreviewSurface({
       window.removeEventListener('blur', reportFocus);
       controller?.dispose();
     };
-  }, [roomId, surface.id]);
+  }, [previewSessionTabId, roomId, surface.id]);
 
   const handleToggleDeviceToolbar = useCallback(() => {
     if (!resolvedPreviewUrl) {
@@ -1625,6 +2228,7 @@ function CodeAgentPreviewSurface({
     if (!resolvedPreviewUrl) {
       return;
     }
+    settlePreviewAutomationNavigationWaiters(resolvedPreviewUrl);
     void reportCodeWorkspacePreviewSession({
       roomId,
       tabId: previewSessionTabId,
@@ -1639,7 +2243,7 @@ function CodeAgentPreviewSurface({
         },
       ...(renderedViewport ? { renderedViewport } : {}),
     }).catch(() => undefined);
-  }, [previewSessionTabId, relativePath, resolvedPreviewUrl, roomId, previewUrl, t]);
+  }, [previewSessionTabId, relativePath, resolvedPreviewUrl, roomId, previewUrl, settlePreviewAutomationNavigationWaiters, t]);
 
   const handlePreviewDomAutomationHandlerChange = useCallback((
     handler: CodeWorkspacePreviewDomAutomationHandler | null,
@@ -1667,6 +2271,49 @@ function CodeAgentPreviewSurface({
     updateZoomFactor(1);
   }, [updateZoomFactor]);
 
+  const recordingArtifactBanner = browserRecordingArtifact ? (
+    <div
+      className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[#dedbd0] bg-[#f8f5ee] px-3 py-2 text-xs text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242422] dark:text-[#e8e6dc]"
+      data-testid="code-agent-browser-recording-saved"
+    >
+      <span className="min-w-0 flex-1 truncate">
+        <span className="font-medium text-[#141413] dark:text-[#faf9f5]">
+          {t('codeAgentBrowserRecordingSaved')}
+        </span>
+        <span className="ml-2 font-mono text-[11px] text-[#87867f] dark:text-[#b0aea5]">
+          {browserRecordingArtifact.path}
+        </span>
+      </span>
+      <span className="flex shrink-0 items-center gap-1">
+        <button
+          type="button"
+          className="inline-flex h-7 items-center gap-1 rounded-md border border-[#dedbd0] px-2 text-[#141413] transition-colors hover:bg-[#f0eee6] dark:border-[#30302e] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
+          onClick={handleCopyRecordingPath}
+        >
+          {browserRecordingPathCopied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+          {browserRecordingPathCopied ? t('copied') : t('codeAgentCopyFilePath')}
+        </button>
+        <button
+          type="button"
+          className="inline-flex h-7 items-center gap-1 rounded-md border border-[#dedbd0] px-2 text-[#141413] transition-colors hover:bg-[#f0eee6] dark:border-[#30302e] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
+          onClick={handleOpenRecordingFile}
+        >
+          <Files className="h-3.5 w-3.5" />
+          {t('codeAgentBrowserOpenRecording')}
+        </button>
+        <button
+          type="button"
+          className="inline-flex h-7 items-center gap-1 rounded-md border border-[#dedbd0] px-2 text-[#141413] transition-colors hover:bg-[#f0eee6] disabled:cursor-not-allowed disabled:opacity-45 dark:border-[#30302e] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
+          disabled={!browserRecordingAssetUrl}
+          onClick={handleDownloadRecording}
+        >
+          <Download className="h-3.5 w-3.5" />
+          {t('codeAgentDownloadFile')}
+        </button>
+      </span>
+    </div>
+  ) : null;
+
   const chrome = (
     <CodeAgentBrowserSurfaceChrome
       value={currentAddress}
@@ -1676,8 +2323,14 @@ function CodeAgentPreviewSurface({
       canRefresh={canRefreshPreview}
       canOpenExternal={Boolean(resolvedPreviewUrl)}
       canCaptureScreenshot={Boolean(resolvedPreviewUrl)}
+      canRecordPreview={Boolean(resolvedPreviewUrl)}
+      canAnnotatePreview={Boolean(resolvedPreviewUrl && onAddPreviewAnnotation)}
       screenshotCapturePending={screenshotCaptureState === 'pending'}
       screenshotCaptureCopied={screenshotCaptureState === 'copied'}
+      recordingActive={browserRecordingActive}
+      recordingPending={browserRecordingAction !== 'idle'}
+      annotationActive={previewAnnotationActive}
+      annotationPending={previewAnnotationPending}
       canZoom={Boolean(resolvedPreviewUrl)}
       canToggleDeviceToolbar={Boolean(resolvedPreviewUrl)}
       canClearBrowserData={Boolean(resolvedPreviewUrl)}
@@ -1694,6 +2347,8 @@ function CodeAgentPreviewSurface({
       onRefresh={handleRefresh}
       onOpenExternal={handleOpenExternal}
       onCaptureScreenshot={handleCaptureScreenshot}
+      onToggleRecording={handleToggleRecording}
+      onToggleAnnotation={handleToggleAnnotation}
       onHardReload={handleRefresh}
       onToggleDeviceToolbar={handleToggleDeviceToolbar}
       onZoomIn={handleZoomIn}
@@ -1704,22 +2359,94 @@ function CodeAgentPreviewSurface({
     />
   );
 
-  if (!relativePath && !previewUrl) {
+  if (isBrowserEmptyPreview) {
     return (
       <div className="flex min-h-0 flex-1 flex-col bg-[#faf9f5] dark:bg-[#1d1d1b]">
         {chrome}
+        {recordingArtifactBanner}
         <div
-          className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 overflow-auto px-6 py-8 text-center"
+          className="flex min-h-0 flex-1 overflow-auto px-5 py-8"
           data-testid="code-agent-browser-surface-empty"
         >
-          <Globe2 className="h-5 w-5 text-[#87867f] dark:text-[#8f8d86]" />
-          <div className="text-sm font-medium text-[#141413] dark:text-[#faf9f5]">
-            {t('codeAgentNoPreviewLoaded')}
-          </div>
-          <div className="max-w-sm text-xs leading-relaxed text-[#87867f] dark:text-[#8f8d86]">
-            {t('codeAgentBrowserSurfaceDescription')}
-          </div>
-          {recentTargets.length > 0 ? (
+          <div className="m-auto flex w-full max-w-xl flex-col items-center gap-3 text-center">
+            {workspacePreviewServerItems.length > 0 ? (
+              <div className="w-full text-left" data-testid="code-agent-browser-preview-servers">
+                <div className="mb-2 flex items-center gap-2 px-1 text-xs font-medium text-[#5e5d59] dark:text-[#b0aea5]">
+                  <RadioTower className="h-3.5 w-3.5 shrink-0" />
+                  <span>{t('codeAgentWorkspacePreviewServers')}</span>
+                </div>
+                <div className="flex flex-col divide-y divide-[#dedbd0] overflow-hidden rounded-md border border-[#dedbd0] bg-[#faf9f5] dark:divide-[#30302e] dark:border-[#30302e] dark:bg-[#1d1d1b]">
+                  {workspacePreviewServerItems.map((server) => {
+                    const label = server.processName
+                      || (server.listening
+                        ? t('codeAgentWorkspacePreviewServerListening')
+                        : server.source === 'configured'
+                          ? t('codeAgentWorkspacePreviewServerConfigured')
+                          : t('codeAgentWorkspacePreviewServerRecent'));
+                    const subtitle = `${server.host}:${server.port}`;
+                    return (
+                      <button
+                        key={`${server.host}:${server.port}`}
+                        type="button"
+                        className="flex min-w-0 items-center gap-3 px-3 py-3 text-left transition-colors hover:bg-[#f0eee6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:hover:bg-[#242422]"
+                        data-testid={`code-agent-browser-preview-server-${server.port}`}
+                        title={server.url}
+                        onClick={() => handleOpenWorkspacePreviewServer(server)}
+                      >
+                        <TerminalSquare className="h-4 w-4 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-xs font-medium text-[#141413] dark:text-[#faf9f5]">
+                            {label}
+                          </span>
+                          <span className="block truncate text-[11px] text-[#87867f] dark:text-[#8f8d86]">
+                            {subtitle}
+                          </span>
+                        </span>
+                        {server.listening ? (
+                          <span
+                            aria-label={t('codeAgentWorkspacePreviewServerListening')}
+                            className="relative inline-flex h-2 w-2 shrink-0"
+                          >
+                            <span className="absolute inset-0 animate-ping rounded-full bg-[#1f9d68] opacity-60" />
+                            <span className="relative inline-flex h-2 w-2 rounded-full bg-[#1f9d68]" />
+                          </span>
+                        ) : (
+                          <span
+                            aria-label={t('codeAgentWorkspacePreviewServerNotListening')}
+                            className="h-2 w-2 shrink-0 rounded-full bg-[#b8b4aa] dark:bg-[#5e5d59]"
+                          />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-2 px-1 text-xs leading-relaxed text-[#87867f] dark:text-[#8f8d86]">
+                  {t('codeAgentWorkspacePreviewServersHint')}
+                </p>
+              </div>
+            ) : (
+              <>
+                <Globe2 className="h-5 w-5 text-[#87867f] dark:text-[#8f8d86]" />
+                <div className="text-sm font-medium text-[#141413] dark:text-[#faf9f5]">
+                  {t('codeAgentNoPreviewLoaded')}
+                </div>
+                <div className="max-w-sm text-xs leading-relaxed text-[#87867f] dark:text-[#8f8d86]">
+                  {t('codeAgentBrowserSurfaceDescription')}
+                </div>
+              </>
+            )}
+            {workspacePreviewServersPending ? (
+              <div className="flex items-center gap-2 text-xs text-[#87867f] dark:text-[#8f8d86]">
+                <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                <span>{t('codeAgentWorkspacePreviewServersScanning')}</span>
+              </div>
+            ) : null}
+            {workspacePreviewServersError ? (
+              <div className="max-w-md rounded-md border border-[#f0b49b]/60 bg-[#fff2ec] px-3 py-2 text-xs leading-relaxed text-[#9f462c] dark:border-[#7a321f]/60 dark:bg-[#2a211d] dark:text-[#ff9b78]">
+                {t('codeAgentWorkspacePreviewServersUnavailable')}
+              </div>
+            ) : null}
+          {browserRecentTargets.length > 0 ? (
             <div
               className="mt-2 w-full max-w-md text-left"
               data-testid="code-agent-browser-recent-targets"
@@ -1728,7 +2455,7 @@ function CodeAgentPreviewSurface({
                 {t('recentlyUsed')}
               </div>
               <div className="flex flex-col divide-y divide-[#dedbd0] overflow-hidden rounded-md border border-[#dedbd0] bg-[#faf9f5] dark:divide-[#30302e] dark:border-[#30302e] dark:bg-[#1d1d1b]">
-                {recentTargets.map((target) => {
+                {browserRecentTargets.map((target) => {
                   const title = formatBrowserPreviewTargetTitle(target);
                   const subtitle = formatBrowserPreviewTargetSubtitle(target);
                   return (
@@ -1754,6 +2481,7 @@ function CodeAgentPreviewSurface({
               </div>
             </div>
           ) : null}
+          </div>
         </div>
       </div>
     );
@@ -1763,6 +2491,7 @@ function CodeAgentPreviewSurface({
     return (
       <div className="flex min-h-0 flex-1 flex-col bg-[#faf9f5] dark:bg-[#1d1d1b]">
         {chrome}
+        {recordingArtifactBanner}
         <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-[#9f462c] dark:text-[#ff9b78]">
           {assetUrlQuery.error}
         </div>
@@ -1774,6 +2503,7 @@ function CodeAgentPreviewSurface({
     return (
       <div className="flex min-h-0 flex-1 flex-col bg-[#faf9f5] dark:bg-[#1d1d1b]">
         {chrome}
+        {recordingArtifactBanner}
         <div
           className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-[#87867f] dark:text-[#8f8d86]"
           role="status"
@@ -1789,6 +2519,7 @@ function CodeAgentPreviewSurface({
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-[#faf9f5] dark:bg-[#1d1d1b]">
       {chrome}
+      {recordingArtifactBanner}
       {resolvedPreviewUrl ? (
         <div className="relative flex min-h-0 flex-1 flex-col">
           <WorkspaceBrowserAssetPreview
@@ -1804,6 +2535,80 @@ function CodeAgentPreviewSurface({
             onLoadingChange={setBrowserFrameLoading}
             onAutomationHandlerChange={handlePreviewDomAutomationHandlerChange}
           />
+          {previewAnnotationActive ? (
+            <div
+              className={`absolute inset-0 z-30 flex justify-center bg-[#141413]/10 p-3 text-center backdrop-blur-[1px] dark:bg-[#faf9f5]/10 ${
+                previewAnnotationDraft
+                  ? 'items-end sm:items-start'
+                  : 'cursor-crosshair items-start'
+              }`}
+              data-testid="code-agent-preview-annotation-overlay"
+              role={previewAnnotationDraft ? 'dialog' : 'button'}
+              tabIndex={0}
+              aria-label={previewAnnotationDraft
+                ? t('codeAgentPreviewAnnotationEditorTitle')
+                : t('codeAgentBrowserPreviewAnnotationOverlay')}
+              onPointerDown={previewAnnotationDraft ? undefined : handlePreviewAnnotationPick}
+            >
+              {previewAnnotationDraft ? (
+                <form
+                  className={`pointer-events-auto border border-[#d8d0c3] bg-[#faf9f5]/95 p-3 text-left shadow-xl dark:border-[#454540] dark:bg-[#1d1d1b]/95 ${
+                    mobileLayout
+                      ? 'w-full max-w-none rounded-xl'
+                      : 'w-[min(360px,calc(100vw-16px))] rounded-lg'
+                  }`}
+                  data-testid="code-agent-preview-annotation-editor"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    handleAttachPreviewAnnotation();
+                  }}
+                >
+                  <div className="mb-2 min-w-0">
+                    <div className="text-xs font-semibold text-[#141413] dark:text-[#faf9f5]">
+                      {t('codeAgentPreviewAnnotationEditorTitle')}
+                    </div>
+                    <div className="mt-0.5 truncate text-[11px] text-[#6f6a60] dark:text-[#a9a49a]">
+                      {previewAnnotationDraft.pageTitle || previewAnnotationDraft.pageUrl}
+                    </div>
+                  </div>
+                  <label className="block">
+                    <span className="sr-only">{t('codeAgentPreviewAnnotationCommentLabel')}</span>
+                    <textarea
+                      ref={previewAnnotationCommentRef}
+                      value={previewAnnotationComment}
+                      onChange={(event) => setPreviewAnnotationComment(event.currentTarget.value)}
+                      onKeyDown={handlePreviewAnnotationCommentKeyDown}
+                      rows={3}
+                      placeholder={t('codeAgentPreviewAnnotationCommentPlaceholder')}
+                      className="min-h-[76px] w-full resize-none rounded-md border border-[#d8d0c3] bg-white/85 px-2.5 py-2 text-xs text-[#141413] outline-none transition focus:border-[#c96442] focus:ring-2 focus:ring-[#c96442]/20 dark:border-[#454540] dark:bg-[#10100f]/85 dark:text-[#faf9f5] dark:focus:border-[#d97757] dark:focus:ring-[#d97757]/20"
+                    />
+                  </label>
+                  <div className="mt-3 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      className="rounded-md border border-[#d8d0c3] px-2.5 py-1.5 text-xs font-medium text-[#5f5a52] transition hover:bg-[#f1eee8] dark:border-[#454540] dark:text-[#c9c4ba] dark:hover:bg-[#2b2a27]"
+                      onClick={handleCancelPreviewAnnotation}
+                    >
+                      {t('cancel')}
+                    </button>
+                    <button
+                      type="submit"
+                      className="rounded-md bg-[#c96442] px-2.5 py-1.5 text-xs font-semibold text-white transition hover:bg-[#b45738] dark:bg-[#d97757] dark:hover:bg-[#c9684c]"
+                    >
+                      {t('codeAgentAttachPreviewAnnotation')}
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <div className="pointer-events-none rounded-full border border-[#c96442]/70 bg-[#faf9f5]/95 px-3 py-1 text-[11px] font-medium text-[#141413] shadow-md dark:border-[#d97757]/70 dark:bg-[#1d1d1b]/95 dark:text-[#faf9f5]">
+                  {previewAnnotationPending
+                    ? t('codeAgentBrowserPreviewAnnotationCapturing')
+                    : t('codeAgentBrowserPreviewAnnotationOverlay')}
+                </div>
+              )}
+            </div>
+          ) : null}
           <CodeAgentBrowserZoomIndicator zoomFactor={zoomFactor} />
         </div>
       ) : null}
@@ -2202,6 +3007,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   reviewComments = [],
   onAddReviewComment,
   onRemoveReviewComment,
+  onAddPreviewAnnotation,
   onFileSavePendingChange,
 }) => {
   const { t } = useTranslation();
@@ -2646,6 +3452,26 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     }));
   }, []);
 
+  const handlePreviewRecordingArtifactSaved = useCallback((artifact: CodeAgentPreviewRecordingArtifact) => {
+    handleAssetPreviewChanged(artifact.path);
+    refreshWorkspaceEntries();
+  }, [handleAssetPreviewChanged, refreshWorkspaceEntries]);
+
+  const handleOpenWorkspaceFileFromPreviewSurface = useCallback((path: string) => {
+    const normalizedPath = normalizeWorkspacePath(path);
+    if (!normalizedPath) {
+      return;
+    }
+    setSelectedPath(normalizedPath);
+    setPreviewPath(normalizedPath);
+    setExternallySelectedFilePath(normalizedPath);
+    if (isMobileSurface) {
+      setMobileExplorerOpen(false);
+    }
+    openCodeAgentRightPanelFile(roomId, normalizedPath);
+    setOperationError(null);
+  }, [isMobileSurface, roomId]);
+
   const handleRefreshCurrentFile = useCallback(() => {
     if (!relativePath) {
       return;
@@ -3062,9 +3888,30 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     activateCodeAgentRightPanelSurface(roomId, surfaceId);
   }, [roomId]);
 
-  const closeFileSurface = useCallback((surfaceId: string) => {
-    closeCodeAgentRightPanelSurface(roomId, surfaceId);
+  const closePreviewSessionsForSurfaces = useCallback((
+    surfaces: readonly CodeAgentRightPanelSurface[],
+  ) => {
+    const tabIds = new Set<string>();
+    for (const surface of surfaces) {
+      if (!isCodeAgentPreviewSurface(surface)) {
+        continue;
+      }
+      tabIds.add(surface.previewSessionId ?? surface.id);
+    }
+    for (const tabId of tabIds) {
+      void closeCodeWorkspacePreviewSession({ roomId, tabId }).catch(() => {
+        // Closing the local surface should not be blocked by a stale cloud preview session.
+      });
+    }
   }, [roomId]);
+
+  const closeFileSurface = useCallback((surfaceId: string) => {
+    const surface = rightPanelSurfaces.find((entry) => entry.id === surfaceId);
+    if (surface) {
+      closePreviewSessionsForSurfaces([surface]);
+    }
+    closeCodeAgentRightPanelSurface(roomId, surfaceId);
+  }, [closePreviewSessionsForSurfaces, rightPanelSurfaces, roomId]);
 
   const closeFileSurfaceAddMenu = useCallback(() => {
     setFileSurfaceAddMenuPosition(null);
@@ -3203,18 +4050,24 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
 
   const closeOtherFileSurfaces = useCallback((surfaceId: string) => {
     closeFileSurfaceTabMenu();
+    closePreviewSessionsForSurfaces(rightPanelSurfaces.filter((surface) => surface.id !== surfaceId));
     closeOtherCodeAgentRightPanelSurfaces(roomId, surfaceId);
-  }, [closeFileSurfaceTabMenu, roomId]);
+  }, [closeFileSurfaceTabMenu, closePreviewSessionsForSurfaces, rightPanelSurfaces, roomId]);
 
   const closeFileSurfacesToRight = useCallback((surfaceId: string) => {
     closeFileSurfaceTabMenu();
+    const surfaceIndex = rightPanelSurfaces.findIndex((surface) => surface.id === surfaceId);
+    if (surfaceIndex >= 0) {
+      closePreviewSessionsForSurfaces(rightPanelSurfaces.slice(surfaceIndex + 1));
+    }
     closeCodeAgentRightPanelSurfacesToRight(roomId, surfaceId);
-  }, [closeFileSurfaceTabMenu, roomId]);
+  }, [closeFileSurfaceTabMenu, closePreviewSessionsForSurfaces, rightPanelSurfaces, roomId]);
 
   const closeAllFileSurfaces = useCallback(() => {
     closeFileSurfaceTabMenu();
+    closePreviewSessionsForSurfaces(rightPanelSurfaces);
     closeAllCodeAgentRightPanelSurfaces(roomId);
-  }, [closeFileSurfaceTabMenu, roomId]);
+  }, [closeFileSurfaceTabMenu, closePreviewSessionsForSurfaces, rightPanelSurfaces, roomId]);
 
   useEffect(() => {
     if (!fileSurfaceTabMenu || fileSurfaceTabMenuSurface) {
@@ -3630,6 +4483,9 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
           onNavigate={handleNavigatePreviewSurface}
           onNavigateHistory={handleNavigatePreviewHistory}
           onRefreshWorkspacePreview={handleAssetPreviewChanged}
+          onRecordingArtifactSaved={handlePreviewRecordingArtifactSaved}
+          onOpenWorkspaceFile={handleOpenWorkspaceFileFromPreviewSurface}
+          onAddPreviewAnnotation={onAddPreviewAnnotation}
         />
       ) : activeDiffSurface ? (
         <div

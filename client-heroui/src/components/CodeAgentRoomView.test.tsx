@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Room } from '../utils/types';
 import { CODE_AGENT_FILE_PANEL_WIDTH_CHANGE_EVENT, type CodeAgentFilePanelWidthChangeDetail } from '../utils/codeAgentPanelLayout';
 import type { ReviewCommentContext } from '../utils/codeAgentReviewComments';
+import type { CodeAgentPreviewAnnotationContext } from '../utils/codeAgentPreviewAnnotations';
 import { CodeAgentRoomView } from './CodeAgentRoomView';
 
 vi.mock('react-i18next', () => ({
@@ -70,6 +71,9 @@ vi.mock('./MessageInput', () => ({
     reviewComments = [],
     onRemoveReviewComment,
     onClearReviewComments,
+    previewAnnotations = [],
+    onRemovePreviewAnnotation,
+    onClearPreviewAnnotations,
   }: {
     codeAgentMode: string;
     codeAgentMaxMode: string;
@@ -77,6 +81,9 @@ vi.mock('./MessageInput', () => ({
     reviewComments?: readonly ReviewCommentContext[];
     onRemoveReviewComment?: (commentId: string) => void;
     onClearReviewComments?: () => void;
+    previewAnnotations?: readonly CodeAgentPreviewAnnotationContext[];
+    onRemovePreviewAnnotation?: (annotationId: string) => void;
+    onClearPreviewAnnotations?: () => void;
   }) => (
     <div
       data-testid="message-input"
@@ -84,9 +91,13 @@ vi.mock('./MessageInput', () => ({
       data-code-agent-mode={codeAgentMode}
       data-code-agent-max-mode={codeAgentMaxMode}
       data-review-comments={String(reviewComments.length)}
+      data-preview-annotations={String(previewAnnotations.length)}
     >
       {reviewComments.map((comment) => (
         <span key={comment.id}>{comment.text}</span>
+      ))}
+      {previewAnnotations.map((annotation) => (
+        <span key={annotation.id}>{annotation.pageTitle || annotation.pageUrl}</span>
       ))}
       <button
         type="button"
@@ -102,6 +113,20 @@ vi.mock('./MessageInput', () => ({
         data-testid="message-input-clear-review-comments"
         onClick={() => onClearReviewComments?.()}
       />
+      <button
+        type="button"
+        data-testid="message-input-remove-preview-annotation"
+        onClick={() => {
+          if (previewAnnotations[0]) {
+            onRemovePreviewAnnotation?.(previewAnnotations[0].id);
+          }
+        }}
+      />
+      <button
+        type="button"
+        data-testid="message-input-clear-preview-annotations"
+        onClick={() => onClearPreviewAnnotations?.()}
+      />
     </div>
   ),
 }));
@@ -115,6 +140,7 @@ vi.mock('./CodeAgentFileBrowserPanel', () => ({
     revealLine,
     revealRequestId,
     onAddReviewComment,
+    onAddPreviewAnnotation,
     onFileSavePendingChange,
   }: {
     surface?: 'desktop' | 'mobile';
@@ -124,6 +150,7 @@ vi.mock('./CodeAgentFileBrowserPanel', () => ({
     revealLine?: number | null;
     revealRequestId?: number;
     onAddReviewComment?: (comment: ReviewCommentContext) => void;
+    onAddPreviewAnnotation?: (annotation: CodeAgentPreviewAnnotationContext) => void;
     onFileSavePendingChange?: (relativePath: string, pending: boolean) => void;
   }) => (
     <>
@@ -161,6 +188,37 @@ vi.mock('./CodeAgentFileBrowserPanel', () => ({
           text: 'Persist this review comment.',
           diff: 'line 1\nline 2',
           fenceLanguage: 'tsx',
+        })}
+      />
+      <button
+        type="button"
+        data-testid="file-add-preview-annotation"
+        onClick={() => onAddPreviewAnnotation?.({
+          id: 'annotation-1',
+          pageUrl: 'https://example.com/app',
+          pageTitle: 'Preview app',
+          comment: '',
+          elements: [{
+            id: 'element-1',
+            element: {
+              pageUrl: 'https://example.com/app',
+              pageTitle: 'Preview app',
+              tagName: 'button',
+              selector: '#save',
+              htmlPreview: '<button id="save">Save</button>',
+              componentName: null,
+              source: null,
+              stack: [],
+              styles: 'display: inline-flex;',
+              pickedAt: '2026-07-02T00:00:00.000Z',
+            },
+            rect: { x: 10, y: 20, width: 120, height: 32 },
+          }],
+          regions: [],
+          strokes: [],
+          styleChanges: [],
+          screenshot: null,
+          createdAt: '2026-07-02T00:00:00.000Z',
         })}
       />
     </>
@@ -624,6 +682,45 @@ describe('CodeAgentRoomView', () => {
     fireEvent.click(screen.getByTestId('message-input-clear-review-comments'));
 
     expect(screen.getByTestId('message-input').dataset.reviewComments).toBe('0');
+    expect(localStorage.getItem(storageKey)).toBeNull();
+  });
+
+  it('persists preview annotation drafts by room', () => {
+    const storageKey = 'roomtalk.codeAgent.previewAnnotations.coco-room';
+    const firstRender = renderCodeAgentRoom(cocoRoom);
+
+    expect(screen.getByTestId('message-input').dataset.previewAnnotations).toBe('0');
+
+    fireEvent.click(screen.getByTestId('file-add-preview-annotation'));
+
+    expect(screen.getByTestId('message-input').dataset.previewAnnotations).toBe('1');
+    expect(screen.getByText('Preview app')).toBeTruthy();
+    expect(localStorage.getItem(storageKey)).toContain('Preview app');
+    expect(localStorage.getItem(storageKey)).not.toContain('data:image/png');
+
+    firstRender.unmount();
+    const otherRoomRender = renderCodeAgentRoom({ ...cocoRoom, id: 'other-coco-room' });
+
+    expect(screen.getByTestId('message-input').dataset.previewAnnotations).toBe('0');
+    expect(localStorage.getItem('roomtalk.codeAgent.previewAnnotations.other-coco-room')).toBeNull();
+
+    otherRoomRender.unmount();
+    renderCodeAgentRoom(cocoRoom);
+
+    expect(screen.getByTestId('message-input').dataset.previewAnnotations).toBe('1');
+    expect(screen.getByText('Preview app')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('message-input-remove-preview-annotation'));
+
+    expect(screen.getByTestId('message-input').dataset.previewAnnotations).toBe('0');
+    expect(localStorage.getItem(storageKey)).toBeNull();
+
+    fireEvent.click(screen.getByTestId('file-add-preview-annotation'));
+    expect(localStorage.getItem(storageKey)).toContain('Preview app');
+
+    fireEvent.click(screen.getByTestId('message-input-clear-preview-annotations'));
+
+    expect(screen.getByTestId('message-input').dataset.previewAnnotations).toBe('0');
     expect(localStorage.getItem(storageKey)).toBeNull();
   });
 

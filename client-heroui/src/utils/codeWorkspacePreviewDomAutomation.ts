@@ -11,6 +11,7 @@ export const CODE_WORKSPACE_PREVIEW_AUTOMATION_DOM_OPERATIONS = [
   'scroll',
   'evaluate',
   'waitFor',
+  'previewAnnotation',
   'clearCookies',
   'clearCache',
   'recordingStart',
@@ -25,6 +26,8 @@ const MAX_SCREENSHOT_WIDTH = 1280;
 const SCREENSHOT_IMAGE_LOAD_TIMEOUT_MS = 250;
 const RECORDING_FRAME_INTERVAL_MS = 500;
 const RECORDING_FRAME_RATE = 4;
+const PREVIEW_ANNOTATION_HTML_LIMIT = 4000;
+const PREVIEW_ANNOTATION_STYLE_LIMIT = 4000;
 
 type DomAutomationInput = Record<string, unknown>;
 
@@ -495,6 +498,180 @@ function elementSelector(element: Element): string {
     .filter((child) => child.tagName === element.tagName)
     .indexOf(element) + 1;
   return `${elementSelector(parent)} > ${tagName}:nth-of-type(${index})`;
+}
+
+function inputClientPointElement(
+  state: DomAutomationFrameState,
+  doc: Document,
+  input: DomAutomationInput,
+): Element | null {
+  const clientX = numberInput(input, 'clientX');
+  const clientY = numberInput(input, 'clientY');
+  if (clientX === null && clientY === null) {
+    return null;
+  }
+  if (clientX === null || clientY === null) {
+    throw new Error('Preview annotation client coordinates require both clientX and clientY.');
+  }
+  const iframe = state.iframe;
+  if (!iframe) {
+    throw new Error('Workspace preview automation frame is not ready.');
+  }
+  const rect = iframe.getBoundingClientRect();
+  if (
+    clientX < rect.left
+    || clientX > rect.right
+    || clientY < rect.top
+    || clientY > rect.bottom
+  ) {
+    throw new Error('Preview annotation target is outside the preview frame.');
+  }
+  const scaleX = rect.width > 0 && iframe.clientWidth > 0 ? iframe.clientWidth / rect.width : 1;
+  const scaleY = rect.height > 0 && iframe.clientHeight > 0 ? iframe.clientHeight / rect.height : 1;
+  const frameX = (clientX - rect.left) * scaleX;
+  const frameY = (clientY - rect.top) * scaleY;
+  return doc.elementFromPoint(frameX, frameY);
+}
+
+function previewAnnotationTargetElement(
+  state: DomAutomationFrameState,
+  doc: Document,
+  input: DomAutomationInput,
+): Element {
+  const target = inputClientPointElement(state, doc, input) ?? targetElement(doc, input);
+  if (!target || target === doc.body || target === doc.documentElement) {
+    throw new Error('Preview annotation target was not found.');
+  }
+  return target;
+}
+
+function truncatePreviewAnnotationString(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  return `${value.slice(0, Math.max(0, limit - 3))}...`;
+}
+
+function previewAnnotationElementId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `element-${crypto.randomUUID()}`;
+  }
+  return `element-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function previewAnnotationId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `annotation-${crypto.randomUUID()}`;
+  }
+  return `annotation-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function rectFromDomRect(rect: DOMRect): {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+} {
+  return {
+    x: Number(rect.x.toFixed(2)),
+    y: Number(rect.y.toFixed(2)),
+    width: Number(rect.width.toFixed(2)),
+    height: Number(rect.height.toFixed(2)),
+  };
+}
+
+function computedStylePreview(element: Element): string {
+  const ownerWindow = element.ownerDocument.defaultView;
+  if (!ownerWindow || typeof ownerWindow.getComputedStyle !== 'function') {
+    return '';
+  }
+  const style = ownerWindow.getComputedStyle(element);
+  const properties = [
+    'display',
+    'position',
+    'width',
+    'height',
+    'margin',
+    'padding',
+    'color',
+    'background-color',
+    'font-family',
+    'font-size',
+    'font-weight',
+    'line-height',
+    'border',
+    'border-radius',
+    'box-shadow',
+    'opacity',
+    'transform',
+  ];
+  const lines = properties
+    .map((property) => {
+      const value = style.getPropertyValue(property).trim();
+      return value ? `${property}: ${value};` : '';
+    })
+    .filter(Boolean);
+  return truncatePreviewAnnotationString(lines.join('\n'), PREVIEW_ANNOTATION_STYLE_LIMIT);
+}
+
+async function previewAnnotationForTarget(
+  state: DomAutomationFrameState,
+  input: DomAutomationInput,
+): Promise<unknown> {
+  const doc = frameDocument(state);
+  const element = previewAnnotationTargetElement(state, doc, input);
+  const win = frameWindow(state);
+  const rect = rectFromDomRect(element.getBoundingClientRect());
+  const elementId = previewAnnotationElementId();
+  const createdAt = new Date().toISOString();
+  const comment = stringInput(input, 'comment') ?? '';
+  let screenshot: {
+    dataUrl: string;
+    width: number;
+    height: number;
+    cropRect: typeof rect;
+  } | null = null;
+  try {
+    const captured = await captureFrameScreenshot(doc, win);
+    if (!captured.unavailable) {
+      screenshot = {
+        dataUrl: `data:${captured.mimeType};base64,${captured.data}`,
+        width: captured.width,
+        height: captured.height,
+        cropRect: rect,
+      };
+    }
+  } catch {
+    screenshot = null;
+  }
+  return {
+    id: previewAnnotationId(),
+    pageUrl: doc.location?.href || state.url,
+    pageTitle: doc.title || state.title || null,
+    comment,
+    elements: [{
+      id: elementId,
+      element: {
+        pageUrl: doc.location?.href || state.url,
+        pageTitle: doc.title || state.title || null,
+        tagName: element.tagName.toLowerCase(),
+        selector: elementSelector(element),
+        htmlPreview: truncatePreviewAnnotationString(
+          (element as HTMLElement).outerHTML || element.textContent || '',
+          PREVIEW_ANNOTATION_HTML_LIMIT,
+        ),
+        componentName: null,
+        source: null,
+        stack: [],
+        styles: computedStylePreview(element),
+        pickedAt: createdAt,
+      },
+      rect,
+    }],
+    regions: [],
+    strokes: [],
+    styleChanges: [],
+    screenshot,
+    createdAt,
+  };
 }
 
 function interactiveElements(doc: Document) {
@@ -1027,6 +1204,8 @@ export async function runCodeWorkspacePreviewDomAutomation(
       return evaluateFrame(state, input);
     case 'waitFor':
       return waitForCondition(state, input, request.timeoutMs);
+    case 'previewAnnotation':
+      return previewAnnotationForTarget(state, input);
     case 'clearCookies':
       return clearFrameCookies(state);
     case 'clearCache':

@@ -36,11 +36,13 @@ const resizePreviewSessionMock = vi.hoisted(() => vi.fn());
 const reportPreviewSessionMock = vi.hoisted(() => vi.fn());
 const resolvePreviewTargetMock = vi.hoisted(() => vi.fn());
 const refreshPreviewSessionMock = vi.hoisted(() => vi.fn());
+const closePreviewSessionMock = vi.hoisted(() => vi.fn());
 const subscribePreviewEventsMock = vi.hoisted(() => vi.fn());
 const connectPreviewAutomationHostMock = vi.hoisted(() => vi.fn());
 const runPreviewAutomationRequestMock = vi.hoisted(() => vi.fn());
 const previewAutomationHandleRef = vi.hoisted(() => ({ current: null as null | ((request: any) => unknown) }));
 const getRoomMediaHistoryMock = vi.hoisted(() => vi.fn());
+const requestCodeWorkspacePreviewServersMock = vi.hoisted(() => vi.fn());
 const openSearchMock = vi.hoisted(() => vi.fn());
 const resetPathsMock = vi.hoisted(() => vi.fn());
 const focusPathMock = vi.hoisted(() => vi.fn());
@@ -148,6 +150,7 @@ vi.mock('../utils/codeWorkspacePreviewSessions', () => {
       tabId: payload.tabId ?? 'browser:new',
     }))),
     refreshCodeWorkspacePreviewSession: refreshPreviewSessionMock.mockImplementation((payload) => Promise.resolve(session(payload))),
+    closeCodeWorkspacePreviewSession: closePreviewSessionMock.mockImplementation(() => Promise.resolve([])),
     reportCodeWorkspacePreviewSession: reportPreviewSessionMock.mockImplementation((payload) => Promise.resolve(session(payload))),
     resolveCodeWorkspacePreviewTarget: resolvePreviewTargetMock.mockImplementation(({ target }) => Promise.resolve({
       requestedUrl: `http://localhost:${target.port}${target.path ?? '/'}`,
@@ -172,6 +175,7 @@ vi.mock('../utils/codeWorkspacePreviewAutomation', () => ({
     'scroll',
     'evaluate',
     'waitFor',
+    'previewAnnotation',
     'clearCookies',
     'clearCache',
     'recordingStart',
@@ -198,8 +202,9 @@ vi.mock('../utils/codeWorkspacePreviewAutomation', () => ({
         clientId: 'client-1',
         connectionId: 'preview-automation:test',
         socketId: 'socket-1',
+        ...(options.tabId ? { tabId: options.tabId } : {}),
         focused: true,
-        supportedOperations: ['status', 'open', 'navigate', 'resize', 'snapshot', 'click', 'type', 'press', 'scroll', 'evaluate', 'waitFor', 'clearCookies', 'clearCache', 'recordingStart', 'recordingStop'],
+        supportedOperations: ['status', 'open', 'navigate', 'resize', 'snapshot', 'click', 'type', 'press', 'scroll', 'evaluate', 'waitFor', 'previewAnnotation', 'clearCookies', 'clearCache', 'recordingStart', 'recordingStop'],
         connectedAt: '2026-05-03T00:00:00.000Z',
         updatedAt: '2026-05-03T00:00:00.000Z',
       },
@@ -211,6 +216,7 @@ vi.mock('../utils/codeWorkspacePreviewAutomation', () => ({
 
 vi.mock('../utils/socket', () => ({
   getRoomMediaHistory: getRoomMediaHistoryMock,
+  requestCodeWorkspacePreviewServers: requestCodeWorkspacePreviewServersMock,
 }));
 
 vi.mock('./MarkdownContent', () => ({
@@ -471,6 +477,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     reportPreviewSessionMock.mockClear();
     resolvePreviewTargetMock.mockClear();
     refreshPreviewSessionMock.mockClear();
+    closePreviewSessionMock.mockClear();
     subscribePreviewEventsMock.mockClear();
     connectPreviewAutomationHostMock.mockClear();
     runPreviewAutomationRequestMock.mockClear();
@@ -482,6 +489,8 @@ describe('CodeAgentFileBrowserPanel', () => {
       hasMore: false,
       nextCursor: null,
     });
+    requestCodeWorkspacePreviewServersMock.mockReset();
+    requestCodeWorkspacePreviewServersMock.mockResolvedValue([]);
     openSearchMock.mockReset();
     resetPathsMock.mockReset();
     focusPathMock.mockReset();
@@ -964,6 +973,57 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
   });
 
+  it('closes cloud preview sessions when browser surfaces are closed in bulk', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [],
+      truncated: false,
+    });
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    await screen.findByText('0 files');
+
+    fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
+    fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentBrowserSurface'));
+    fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
+    fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentBrowserSurface'));
+
+    const tabs = screen.getByTestId('code-agent-file-surface-tabs');
+    expect(within(tabs).getAllByText('codeAgentBrowserSurface')).toHaveLength(2);
+
+    fireEvent.contextMenu(within(tabs).getAllByRole('tab')[0], { clientX: 12, clientY: 24 });
+    fireEvent.click(screen.getByText('codeAgentCloseAllFileTabs'));
+
+    await waitFor(() => {
+      expect(closePreviewSessionMock).toHaveBeenCalledWith({ roomId: 'room-1', tabId: 'browser:new' });
+      expect(closePreviewSessionMock).toHaveBeenCalledWith({ roomId: 'room-1', tabId: 'browser:new:2' });
+    });
+    expect(screen.queryByTestId('code-agent-file-surface-tabs')).toBeNull();
+  });
+
+  it('closes cloud preview sessions from mobile browser tabs', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [],
+      truncated: false,
+    });
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" surface="mobile" />);
+    await screen.findByText('0 files');
+
+    fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
+    fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentBrowserSurface'));
+
+    const tabs = screen.getByTestId('code-agent-file-surface-tabs');
+    fireEvent.click(within(tabs).getByLabelText('close codeAgentBrowserSurface'));
+
+    await waitFor(() => {
+      expect(closePreviewSessionMock).toHaveBeenCalledWith({ roomId: 'room-1', tabId: 'browser:new' });
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('codeAgentWorkspaceFiles');
+      expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).not.toContain('codeAgentBrowserSurface');
+    });
+  });
+
   it('navigates browser surfaces to http URLs without creating workspace asset URLs', async () => {
     loadCodeWorkspaceEntriesMock.mockResolvedValue({
       entries: [],
@@ -1213,7 +1273,8 @@ describe('CodeAgentFileBrowserPanel', () => {
     await waitFor(() => {
       expect(connectPreviewAutomationHostMock).toHaveBeenCalledWith(expect.objectContaining({
         roomId: 'room-1',
-        supportedOperations: ['status', 'open', 'navigate', 'resize', 'snapshot', 'click', 'type', 'press', 'scroll', 'evaluate', 'waitFor', 'clearCookies', 'clearCache', 'recordingStart', 'recordingStop'],
+        tabId: 'browser:new',
+        supportedOperations: ['status', 'open', 'navigate', 'resize', 'snapshot', 'click', 'type', 'press', 'scroll', 'evaluate', 'waitFor', 'previewAnnotation', 'clearCookies', 'clearCache', 'recordingStart', 'recordingStop'],
         handle: expect.any(Function),
       }));
       expect(previewAutomationHandleRef.current).toEqual(expect.any(Function));
@@ -1228,6 +1289,10 @@ describe('CodeAgentFileBrowserPanel', () => {
       timeoutMs: 1000,
     })).resolves.toMatchObject({ clicked: true });
     expect(frameDocument.body.getAttribute('data-saved')).toBe('true');
+    const automationCursor = await screen.findByTestId('code-agent-browser-automation-cursor');
+    expect(automationCursor.dataset.phase).toBe('click');
+    expect(automationCursor.dataset.sequence).toBe('1');
+    expect(screen.getByTestId('code-agent-browser-automation-cursor-ping')).toBeTruthy();
 
     await expect(previewAutomationHandleRef.current?.({
       requestId: 'request-type',
@@ -1253,7 +1318,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       ]),
     });
 
-    await expect(previewAutomationHandleRef.current?.({
+    const navigateRequest = Promise.resolve(previewAutomationHandleRef.current?.({
       requestId: 'request-port',
       roomId: 'room-1',
       tabId: 'browser:new',
@@ -1266,9 +1331,14 @@ describe('CodeAgentFileBrowserPanel', () => {
         },
       },
       timeoutMs: 1000,
-    })).resolves.toMatchObject({
+    }));
+    await waitFor(() => {
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('https://5173-sandbox.e2b.dev/dashboard?tab=preview');
+    });
+    fireEvent.load(container.querySelector('iframe') as HTMLIFrameElement);
+    await expect(navigateRequest).resolves.toMatchObject({
       url: 'https://5173-sandbox.e2b.dev/dashboard?tab=preview',
-      loading: true,
+      loading: false,
     });
     expect(resolvePreviewTargetMock).toHaveBeenCalledWith({
       roomId: 'room-1',
@@ -1283,6 +1353,21 @@ describe('CodeAgentFileBrowserPanel', () => {
       tabId: 'browser:new',
       url: 'https://5173-sandbox.e2b.dev/dashboard?tab=preview',
     }));
+
+    await expect(previewAutomationHandleRef.current?.({
+      requestId: 'request-fast-navigation',
+      roomId: 'room-1',
+      tabId: 'browser:new',
+      operation: 'navigate',
+      input: {
+        url: 'https://example.com/fast',
+        readiness: 'none',
+      },
+      timeoutMs: 1000,
+    })).resolves.toMatchObject({
+      url: 'https://example.com/fast',
+      loading: true,
+    });
   });
 
   it('captures cloud browser preview screenshots from the chrome action', async () => {
@@ -1364,6 +1449,206 @@ describe('CodeAgentFileBrowserPanel', () => {
     }
   });
 
+  it('captures preview annotations through the cloud browser automation path', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [],
+      truncated: false,
+    });
+    const annotation = {
+      id: 'annotation-1',
+      pageUrl: 'https://example.com/app',
+      pageTitle: 'Preview app',
+      comment: '',
+      elements: [{
+        id: 'element-1',
+        element: {
+          pageUrl: 'https://example.com/app',
+          pageTitle: 'Preview app',
+          tagName: 'button',
+          selector: '#save',
+          htmlPreview: '<button id="save">Save</button>',
+          componentName: null,
+          source: null,
+          stack: [],
+          styles: 'display: inline-flex;',
+          pickedAt: '2026-07-02T00:00:00.000Z',
+        },
+        rect: { x: 12, y: 16, width: 96, height: 32 },
+      }],
+      regions: [],
+      strokes: [],
+      styleChanges: [],
+      screenshot: null,
+      createdAt: '2026-07-02T00:00:00.000Z',
+    };
+    runPreviewAutomationRequestMock.mockResolvedValueOnce(annotation);
+    const onAddPreviewAnnotation = vi.fn();
+
+    render(
+      <CodeAgentFileBrowserPanel
+        roomId="room-1"
+        projectName="Coco"
+        surface="mobile"
+        onAddPreviewAnnotation={onAddPreviewAnnotation}
+      />,
+    );
+
+    await screen.findByText('0 files');
+    fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
+    fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentBrowserSurface'));
+
+    const address = screen.getByLabelText('codeAgentBrowserAddressLabel') as HTMLInputElement;
+    fireEvent.change(address, { target: { value: 'https://example.com/app' } });
+    fireEvent.submit(address.closest('form') as HTMLFormElement);
+
+    fireEvent.click(await screen.findByLabelText('codeAgentBrowserAnnotatePreview'));
+    const overlay = await screen.findByTestId('code-agent-preview-annotation-overlay');
+    fireEvent(overlay, new MouseEvent('pointerdown', {
+      bubbles: true,
+      clientX: 120,
+      clientY: 180,
+    }));
+
+    await waitFor(() => {
+      expect(runPreviewAutomationRequestMock).toHaveBeenCalledWith(expect.objectContaining({
+        roomId: 'room-1',
+        tabId: expect.any(String),
+        operation: 'previewAnnotation',
+        input: { clientX: 120, clientY: 180 },
+        timeoutMs: 10000,
+      }));
+    });
+    expect(onAddPreviewAnnotation).not.toHaveBeenCalled();
+
+    const editor = await screen.findByTestId('code-agent-preview-annotation-editor');
+    expect(editor.className).toContain('w-full');
+    expect(editor.className).toContain('rounded-xl');
+    const comment = within(editor).getByLabelText('codeAgentPreviewAnnotationCommentLabel');
+    fireEvent.change(comment, { target: { value: 'Make the save button primary' } });
+    fireEvent.click(within(editor).getByText('codeAgentAttachPreviewAnnotation'));
+
+    await waitFor(() => {
+      expect(onAddPreviewAnnotation).toHaveBeenCalledWith({
+        ...annotation,
+        comment: 'Make the save button primary',
+      });
+    });
+    expect(screen.queryByTestId('code-agent-preview-annotation-overlay')).toBeNull();
+  });
+
+  it('records cloud browser previews and exposes the saved workspace artifact', async () => {
+    const recordingPath = '.roomtalk/preview-recordings/preview-recording-browser-new.webm';
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockResolvedValue({
+      path: recordingPath,
+      content: 'cmVjb3JkaW5n',
+      byteSize: 9,
+      truncated: false,
+      encoding: 'base64',
+    });
+    createCodeWorkspaceAssetUrlMock.mockResolvedValue({
+      relativeUrl: '/api/coco/workspace-assets/token/preview-recording-browser-new.webm',
+      expiresAt: '2026-07-02T00:30:00.000Z',
+    });
+    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/coco/workspace-assets/token/preview-recording-browser-new.webm');
+    runPreviewAutomationRequestMock
+      .mockResolvedValueOnce({
+        tabId: 'browser:new',
+        recording: true,
+        startedAt: '2026-07-02T00:00:00.000Z',
+      })
+      .mockResolvedValueOnce({
+        id: 'preview-recording-browser-new',
+        tabId: 'browser:new',
+        path: recordingPath,
+        mimeType: 'video/webm',
+        sizeBytes: 9,
+        createdAt: '2026-07-02T00:00:05.000Z',
+      });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const originalClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    let downloadedHref = '';
+    let downloadedFilename = '';
+    const clickMock = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function click(this: HTMLAnchorElement) {
+      downloadedHref = this.href;
+      downloadedFilename = this.download;
+    });
+
+    try {
+      render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+
+      await screen.findByText('0 files');
+      fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
+      fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentBrowserSurface'));
+
+      const address = screen.getByLabelText('codeAgentBrowserAddressLabel') as HTMLInputElement;
+      expect((screen.getByLabelText('codeAgentBrowserStartRecording') as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.change(address, { target: { value: 'https://example.com/app' } });
+      fireEvent.submit(address.closest('form') as HTMLFormElement);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('codeAgentBrowserStartRecording')).toBeTruthy();
+        expect((screen.getByLabelText('codeAgentBrowserStartRecording') as HTMLButtonElement).disabled).toBe(false);
+      });
+
+      fireEvent.click(screen.getByLabelText('codeAgentBrowserStartRecording'));
+      await waitFor(() => {
+        expect(runPreviewAutomationRequestMock).toHaveBeenCalledWith(expect.objectContaining({
+          roomId: 'room-1',
+          tabId: 'browser:new',
+          operation: 'recordingStart',
+          input: {},
+          timeoutMs: 10000,
+        }));
+        expect(screen.getByLabelText('codeAgentBrowserStopRecording')).toBeTruthy();
+      });
+
+      fireEvent.click(screen.getByLabelText('codeAgentBrowserStopRecording'));
+      const banner = await screen.findByTestId('code-agent-browser-recording-saved');
+      expect(banner.textContent).toContain('codeAgentBrowserRecordingSaved');
+      expect(banner.textContent).toContain(recordingPath);
+      expect(runPreviewAutomationRequestMock).toHaveBeenCalledWith(expect.objectContaining({
+        roomId: 'room-1',
+        tabId: 'browser:new',
+        operation: 'recordingStop',
+        input: {},
+        timeoutMs: 60000,
+      }));
+      expect(createCodeWorkspaceAssetUrlMock).toHaveBeenCalledWith('room-1', recordingPath);
+      await waitFor(() => {
+        expect(loadCodeWorkspaceEntriesMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+      });
+
+      fireEvent.click(within(banner).getByText('codeAgentCopyFilePath'));
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith(recordingPath);
+      });
+
+      fireEvent.click(within(banner).getByText('codeAgentDownloadFile'));
+      expect(clickMock).toHaveBeenCalled();
+      expect(downloadedHref).toContain('/api/coco/workspace-assets/token/preview-recording-browser-new.webm');
+      expect(downloadedFilename).toBe('preview-recording-browser-new.webm');
+
+      fireEvent.click(within(banner).getByText('codeAgentBrowserOpenRecording'));
+      await waitFor(() => {
+        expect(loadCodeWorkspaceFileMock).toHaveBeenCalledWith('room-1', recordingPath, expect.any(Object));
+      });
+    } finally {
+      clickMock.mockRestore();
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: originalClipboard,
+      });
+    }
+  });
+
   it('uses a two-row browser preview chrome on mobile surfaces', async () => {
     loadCodeWorkspaceEntriesMock.mockResolvedValue({
       entries: [],
@@ -1389,10 +1674,12 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(within(actionRow).getByLabelText('codeAgentBrowserForward')).toBeTruthy();
     expect(within(actionRow).getByLabelText('codeAgentBrowserRefresh')).toBeTruthy();
     expect(within(actionRow).getByLabelText('codeAgentBrowserCaptureScreenshot')).toBeTruthy();
+    expect(within(actionRow).getByLabelText('codeAgentBrowserStartRecording')).toBeTruthy();
     expect(within(actionRow).getByLabelText('codeAgentOpenBrowserPreviewExternally')).toBeTruthy();
     expect(within(actionRow).getByLabelText('moreActions')).toBeTruthy();
     expect((within(actionRow).getByLabelText('codeAgentOpenBrowserPreviewExternally') as HTMLButtonElement).disabled).toBe(true);
     expect((within(actionRow).getByLabelText('codeAgentBrowserCaptureScreenshot') as HTMLButtonElement).disabled).toBe(true);
+    expect((within(actionRow).getByLabelText('codeAgentBrowserStartRecording') as HTMLButtonElement).disabled).toBe(true);
 
     fireEvent.change(address, { target: { value: 'https://example.com/mobile' } });
     fireEvent.submit(address.closest('form') as HTMLFormElement);
@@ -1485,6 +1772,89 @@ describe('CodeAgentFileBrowserPanel', () => {
       expect((screen.getByLabelText('codeAgentBrowserAddressLabel') as HTMLInputElement).value).toBe(
         'https://example.com/report',
       );
+    });
+  });
+
+  it('lists sandbox preview servers in empty browser surfaces', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [],
+      truncated: false,
+    });
+    requestCodeWorkspacePreviewServersMock.mockResolvedValue([
+      {
+        host: 'localhost',
+        port: 5173,
+        url: 'http://localhost:5173/',
+        processName: 'vite',
+        pid: 1234,
+      },
+    ]);
+
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+
+    await screen.findByText('0 files');
+    fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
+    fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentBrowserSurface'));
+
+    const servers = await screen.findByTestId('code-agent-browser-preview-servers');
+    expect(within(servers).getByText('codeAgentWorkspacePreviewServers')).toBeTruthy();
+    expect(within(servers).getByText('vite')).toBeTruthy();
+    expect(within(servers).getByText('localhost:5173')).toBeTruthy();
+
+    fireEvent.click(within(servers).getByText('vite'));
+
+    await waitFor(() => {
+      expect(resolvePreviewTargetMock).toHaveBeenCalledWith({
+        roomId: 'room-1',
+        target: {
+          kind: 'environment-port',
+          port: 5173,
+          protocol: 'http',
+          path: '/',
+        },
+      });
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('https://5173-sandbox.e2b.dev/');
+    });
+  });
+
+  it('lists sandbox preview servers in mobile empty browser surfaces', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [],
+      truncated: false,
+    });
+    requestCodeWorkspacePreviewServersMock.mockResolvedValue([
+      {
+        host: 'localhost',
+        port: 3000,
+        url: 'http://localhost:3000/',
+        processName: 'next',
+        pid: 5678,
+      },
+    ]);
+
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" surface="mobile" />);
+
+    await screen.findByText('0 files');
+    fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
+    fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentBrowserSurface'));
+
+    const servers = await screen.findByTestId('code-agent-browser-preview-servers');
+    expect(within(servers).getByText('next')).toBeTruthy();
+    expect(within(servers).getByText('localhost:3000')).toBeTruthy();
+
+    fireEvent.click(within(servers).getByText('next'));
+
+    await waitFor(() => {
+      expect(resolvePreviewTargetMock).toHaveBeenCalledWith({
+        roomId: 'room-1',
+        target: {
+          kind: 'environment-port',
+          port: 3000,
+          protocol: 'http',
+          path: '/',
+        },
+      });
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('https://3000-sandbox.e2b.dev/');
     });
   });
 

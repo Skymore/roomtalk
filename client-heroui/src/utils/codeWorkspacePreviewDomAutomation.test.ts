@@ -61,6 +61,7 @@ describe('codeWorkspacePreviewDomAutomation', () => {
       'scroll',
       'evaluate',
       'waitFor',
+      'previewAnnotation',
       'clearCookies',
       'clearCache',
       'recordingStart',
@@ -68,6 +69,7 @@ describe('codeWorkspacePreviewDomAutomation', () => {
     ]);
     expect(isCodeWorkspacePreviewDomAutomationOperation('click')).toBe(true);
     expect(isCodeWorkspacePreviewDomAutomationOperation('clearCache')).toBe(true);
+    expect(isCodeWorkspacePreviewDomAutomationOperation('previewAnnotation')).toBe(true);
     expect(isCodeWorkspacePreviewDomAutomationOperation('recordingStart')).toBe(true);
     expect(isCodeWorkspacePreviewDomAutomationOperation('navigate')).toBe(false);
   });
@@ -92,6 +94,67 @@ describe('codeWorkspacePreviewDomAutomation', () => {
       frameState(iframe),
     );
     expect((iframe.contentDocument?.querySelector('#message') as HTMLInputElement).value).toBe('hello');
+  });
+
+  it('captures a preview annotation from client coordinates inside the frame', async () => {
+    const iframe = createIframe(`
+      <main>
+        <button id="save" type="button" class="primary">Save changes</button>
+      </main>
+    `);
+    const button = iframe.contentDocument?.querySelector('#save') as HTMLButtonElement;
+    Object.defineProperties(iframe, {
+      clientWidth: { configurable: true, value: 400 },
+      clientHeight: { configurable: true, value: 300 },
+    });
+    vi.spyOn(iframe, 'getBoundingClientRect').mockReturnValue({
+      x: 10,
+      y: 20,
+      left: 10,
+      top: 20,
+      right: 410,
+      bottom: 320,
+      width: 400,
+      height: 300,
+      toJSON: () => ({}),
+    } as DOMRect);
+    Object.defineProperty(iframe.contentDocument!, 'elementFromPoint', {
+      configurable: true,
+      value: vi.fn(() => button),
+    });
+    vi.spyOn(button, 'getBoundingClientRect').mockReturnValue({
+      x: 24,
+      y: 32,
+      left: 24,
+      top: 32,
+      right: 144,
+      bottom: 64,
+      width: 120,
+      height: 32,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    await expect(runCodeWorkspacePreviewDomAutomation(
+      request('previewAnnotation', { clientX: 64, clientY: 48 }),
+      frameState(iframe),
+    )).resolves.toMatchObject({
+      pageUrl: expect.stringContaining('about:blank'),
+      elements: [
+        expect.objectContaining({
+          element: expect.objectContaining({
+            tagName: 'button',
+            selector: '#save',
+            htmlPreview: expect.stringContaining('Save changes'),
+          }),
+          rect: {
+            x: 24,
+            y: 32,
+            width: 120,
+            height: 32,
+          },
+        }),
+      ],
+    });
   });
 
   it('evaluates, waits for text, and returns a semantic snapshot', async () => {

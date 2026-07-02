@@ -39,6 +39,7 @@ import { startStreamingTranscription, StreamingTranscriber } from '../utils/stre
 import { MessageInputAIControls, MessageInputAISettingsButton } from './MessageInputAIControls';
 import { PostingScheduleDetails } from './PostingScheduleDetails';
 import { CodeAgentPendingReviewComments } from './CodeAgentPendingReviewComments';
+import { CodeAgentPendingPreviewAnnotations } from './CodeAgentPendingPreviewAnnotations';
 import {
   normalizeAIContextMessageLimit,
 } from '../utils/aiContext';
@@ -53,6 +54,10 @@ import {
   appendReviewCommentsToPrompt,
   type ReviewCommentContext,
 } from '../utils/codeAgentReviewComments';
+import {
+  appendPreviewAnnotationsToPrompt,
+  type CodeAgentPreviewAnnotationContext,
+} from '../utils/codeAgentPreviewAnnotations';
 import { selectRoomAIRequestSettings } from '../utils/aiRequestSettings';
 
 interface MessageInputProps {
@@ -77,6 +82,9 @@ interface MessageInputProps {
   reviewComments?: readonly ReviewCommentContext[];
   onRemoveReviewComment?: (commentId: string) => void;
   onClearReviewComments?: () => void;
+  previewAnnotations?: readonly CodeAgentPreviewAnnotationContext[];
+  onRemovePreviewAnnotation?: (annotationId: string) => void;
+  onClearPreviewAnnotations?: () => void;
 }
 
 // 使用WeakMap存储图片元素和对应的File对象
@@ -170,6 +178,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   reviewComments = [],
   onRemoveReviewComment,
   onClearReviewComments,
+  previewAnnotations = [],
+  onRemovePreviewAnnotation,
+  onClearPreviewAnnotations,
 }) => {
   const { t } = useTranslation();
   const [_contentItems, setContentItems] = useState<MessageContentItem[]>(emptyMessageContent());
@@ -514,7 +525,10 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
       const prompt = buildAIPrompt(latestContentItems);
       const promptForSend = isCodeAgentRoom
-        ? appendReviewCommentsToPrompt(prompt, reviewComments)
+        ? appendPreviewAnnotationsToPrompt(
+          appendReviewCommentsToPrompt(prompt, reviewComments),
+          previewAnnotations,
+        )
         : prompt;
       const aiRequestSettings = selectRoomAIRequestSettings({
         systemPrompt: selectedRole.systemPrompt,
@@ -550,6 +564,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       onOptimisticMessageSaved?.(clientMessageId, userMessage);
       if (isCodeAgentRoom && reviewComments.length > 0) {
         onClearReviewComments?.();
+      }
+      if (isCodeAgentRoom && previewAnnotations.length > 0) {
+        onClearPreviewAnnotations?.();
       }
       if (aiError) {
         setErrorMessage(aiError);
@@ -1429,6 +1446,15 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               comments={reviewComments}
               onRemove={(commentId) => onRemoveReviewComment?.(commentId)}
               removeLabel={(label) => t('codeAgentRemoveReviewComment', { label })}
+              className="mx-0 basis-full px-1 py-1 sm:mx-3 sm:mt-3 sm:px-0 sm:py-0"
+            />
+          )}
+
+          {isCodeAgentRoom && previewAnnotations.length > 0 && (
+            <CodeAgentPendingPreviewAnnotations
+              annotations={previewAnnotations}
+              onRemove={(annotationId) => onRemovePreviewAnnotation?.(annotationId)}
+              removeLabel={(label) => t('codeAgentRemovePreviewAnnotation', { label })}
               className="mx-0 basis-full px-1 py-1 sm:mx-3 sm:mt-3 sm:px-0 sm:py-0"
             />
           )}

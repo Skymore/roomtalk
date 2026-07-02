@@ -95,6 +95,14 @@ export interface CocoWorkspacePreviewTargetResolution {
   resolutionKind: 'e2b-port-host';
 }
 
+export interface CocoWorkspacePreviewServer {
+  host: string;
+  port: number;
+  url: string;
+  processName?: string | null;
+  pid?: number | null;
+}
+
 export interface CocoWorkspaceEntry {
   path: string;
   name: string;
@@ -171,6 +179,7 @@ export interface CocoSandboxService {
   readWorkspaceFile?(handle: CocoSandboxHandle, path: string, options?: ReadCocoWorkspaceFileOptions): Promise<CocoWorkspaceFile>;
   readWorkspaceAsset?(handle: CocoSandboxHandle, path: string, options?: ReadCocoWorkspaceAssetOptions): Promise<CocoWorkspaceAsset>;
   resolveWorkspacePreviewTarget?(handle: CocoSandboxHandle, input: ResolveCocoWorkspacePreviewTargetInput): Promise<CocoWorkspacePreviewTargetResolution>;
+  listWorkspacePreviewServers?(handle: CocoSandboxHandle): Promise<CocoWorkspacePreviewServer[]>;
   writeWorkspaceFile?(handle: CocoSandboxHandle, input: WriteCocoWorkspaceFileInput): Promise<CocoWorkspaceEntry>;
   createWorkspaceDirectory?(handle: CocoSandboxHandle, path: string): Promise<CocoWorkspaceEntry>;
   renameWorkspaceEntry?(handle: CocoSandboxHandle, input: RenameCocoWorkspaceEntryInput): Promise<CocoWorkspaceEntry>;

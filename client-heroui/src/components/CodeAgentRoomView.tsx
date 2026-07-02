@@ -21,6 +21,12 @@ import {
   useCodeAgentReviewCommentDraft,
 } from '../utils/codeAgentReviewCommentDraftStore';
 import {
+  addCodeAgentPreviewAnnotationDraft,
+  clearCodeAgentPreviewAnnotationDraft,
+  removeCodeAgentPreviewAnnotationDraft,
+  useCodeAgentPreviewAnnotationDraft,
+} from '../utils/codeAgentPreviewAnnotationDraftStore';
+import {
   CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH,
   CODE_AGENT_FILE_PANEL_WIDTH_CHANGE_EVENT,
   clampCodeAgentFilePanelWidth,
@@ -31,6 +37,7 @@ import {
 } from '../utils/codeAgentPanelLayout';
 import { parseWorkspaceFileOpenTarget } from '../utils/workspaceFileOpenTarget';
 import type { ReviewCommentContext } from '../utils/codeAgentReviewComments';
+import type { CodeAgentPreviewAnnotationContext } from '../utils/codeAgentPreviewAnnotations';
 
 interface CodeAgentRoomViewProps {
   currentRoom: Room;
@@ -132,6 +139,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   const workspaceFileOpenRequestIdRef = React.useRef(0);
   const fileManagerResizeCleanupRef = React.useRef<(() => void) | null>(null);
   const reviewComments = useCodeAgentReviewCommentDraft(currentRoom.id);
+  const previewAnnotations = useCodeAgentPreviewAnnotationDraft(currentRoom.id);
   const normalizedAvailableModes = React.useMemo(
     () => (availableModes.length ? availableModes : ['plan' as CodeAgentMode]),
     [availableModes]
@@ -176,6 +184,18 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
 
   const handleClearReviewComments = React.useCallback(() => {
     clearCodeAgentReviewCommentDraft(currentRoom.id);
+  }, [currentRoom.id]);
+
+  const handleAddPreviewAnnotation = React.useCallback((annotation: CodeAgentPreviewAnnotationContext) => {
+    addCodeAgentPreviewAnnotationDraft(currentRoom.id, annotation);
+  }, [currentRoom.id]);
+
+  const handleRemovePreviewAnnotation = React.useCallback((annotationId: string) => {
+    removeCodeAgentPreviewAnnotationDraft(currentRoom.id, annotationId);
+  }, [currentRoom.id]);
+
+  const handleClearPreviewAnnotations = React.useCallback(() => {
+    clearCodeAgentPreviewAnnotationDraft(currentRoom.id);
   }, [currentRoom.id]);
 
   React.useEffect(() => {
@@ -411,6 +431,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       reviewComments={reviewComments}
       onAddReviewComment={handleAddReviewComment}
       onRemoveReviewComment={handleRemoveReviewComment}
+      onAddPreviewAnnotation={handleAddPreviewAnnotation}
       onFileSavePendingChange={handleWorkspaceFileSavePendingChange}
     />
   );
@@ -532,6 +553,9 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
               reviewComments={reviewComments}
               onRemoveReviewComment={handleRemoveReviewComment}
               onClearReviewComments={handleClearReviewComments}
+              previewAnnotations={previewAnnotations}
+              onRemovePreviewAnnotation={handleRemovePreviewAnnotation}
+              onClearPreviewAnnotations={handleClearPreviewAnnotations}
             />
           </div>
         </div>

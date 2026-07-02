@@ -18,6 +18,7 @@ import {
   ReadCocoWorkspaceDiffOptions,
   ReadCocoWorkspaceFileOptions,
   ResolveCocoWorkspacePreviewTargetInput,
+  CocoWorkspacePreviewServer,
   CocoWorkspacePreviewTargetResolution,
   SearchCocoWorkspaceEntriesOptions,
   StartCocoRunnerInput,
@@ -503,6 +504,28 @@ export class E2BCocoSandboxService implements CocoSandboxService {
     };
   }
 
+  async listWorkspacePreviewServers(handle: CocoSandboxHandle): Promise<CocoWorkspacePreviewServer[]> {
+    const connected = await this.driver.connect(handle.id);
+    if (!connected.commands?.run) {
+      throw new Error('E2B sandbox driver handle does not support command execution');
+    }
+
+    const command = [
+      'set -u',
+      'printf "__ROOMTALK_PREVIEW_SERVERS__\\n"',
+      'if command -v ss >/dev/null 2>&1; then',
+      '  ss -H -ltnp 2>/dev/null || ss -H -ltn 2>/dev/null || true',
+      'elif command -v netstat >/dev/null 2>&1; then',
+      '  netstat -ltnp 2>/dev/null || netstat -ltn 2>/dev/null || true',
+      'else',
+      '  true',
+      'fi',
+    ].join('\n');
+    const result = await connected.commands.run(command, { timeoutMs: 10_000 });
+    const stdout = await collectReadableText(result.stdout);
+    return parseWorkspacePreviewServers(stdout);
+  }
+
   async writeWorkspaceFile(handle: CocoSandboxHandle, input: WriteCocoWorkspaceFileInput): Promise<CocoWorkspaceEntry> {
     const connected = await this.driver.connect(handle.id);
     if (!connected.files?.write) {
@@ -732,6 +755,80 @@ const resolveE2BPreviewHostUrl = (host: string, path: string): string => {
     ? trimmedHost
     : `https://${trimmedHost}`;
   return new URL(path, baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).toString();
+};
+
+const parseWorkspacePreviewServers = (stdout: string): CocoWorkspacePreviewServer[] => {
+  const marker = '__ROOMTALK_PREVIEW_SERVERS__';
+  const body = stdout.includes(marker) ? stdout.slice(stdout.indexOf(marker) + marker.length) : stdout;
+  const servers = new Map<number, CocoWorkspacePreviewServer>();
+  for (const line of body.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || /^Proto\b/i.test(trimmed)) {
+      continue;
+    }
+    const address = parseListeningAddress(trimmed);
+    if (!address) {
+      continue;
+    }
+    const process = parseListeningProcess(trimmed);
+    const existing = servers.get(address.port);
+    servers.set(address.port, {
+      host: existing?.host || 'localhost',
+      port: address.port,
+      url: `http://localhost:${address.port}/`,
+      processName: process.processName ?? existing?.processName ?? null,
+      pid: process.pid ?? existing?.pid ?? null,
+    });
+  }
+  return [...servers.values()].sort((a, b) => a.port - b.port);
+};
+
+const parseListeningAddress = (line: string): { port: number } | null => {
+  for (const token of line.split(/\s+/)) {
+    const parsed = parseListeningAddressToken(token);
+    if (parsed) {
+      return parsed;
+    }
+  }
+  return null;
+};
+
+const parseListeningAddressToken = (token: string): { port: number } | null => {
+  const cleaned = token.trim().replace(/,$/, '');
+  const bracketed = cleaned.match(/^\[([^\]]+)\]:(\d{1,5})$/);
+  const generic = bracketed ? null : cleaned.match(/^(.*):(\d{1,5})$/);
+  const host = bracketed ? bracketed[1] : generic?.[1];
+  const rawPort = bracketed ? bracketed[2] : generic?.[2];
+  if (!host || !rawPort) {
+    return null;
+  }
+  const normalizedHost = host.replace(/^\[|\]$/g, '').toLowerCase();
+  if (normalizedHost === '127.0.0.11') {
+    return null;
+  }
+  const port = Number.parseInt(rawPort, 10);
+  if (!Number.isInteger(port) || port <= 0 || port >= 65536) {
+    return null;
+  }
+  return { port };
+};
+
+const parseListeningProcess = (line: string): { processName: string | null; pid: number | null } => {
+  const ssProcess = line.match(/\("([^"]+)".*?pid=(\d+)/);
+  if (ssProcess) {
+    return {
+      processName: ssProcess[1] || null,
+      pid: Number.parseInt(ssProcess[2], 10) || null,
+    };
+  }
+  const netstatProcess = line.match(/\b(\d+)\/([^\s/]+)\b/);
+  if (netstatProcess) {
+    return {
+      processName: netstatProcess[2] === '-' ? null : netstatProcess[2],
+      pid: Number.parseInt(netstatProcess[1], 10) || null,
+    };
+  }
+  return { processName: null, pid: null };
 };
 
 const shellQuote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;

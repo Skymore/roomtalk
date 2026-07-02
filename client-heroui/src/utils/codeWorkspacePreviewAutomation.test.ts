@@ -43,6 +43,10 @@ const host = {
   connectedAt: '2026-05-03T10:00:00.000Z',
   updatedAt: '2026-05-03T10:00:00.000Z',
 };
+const tabHost = {
+  ...host,
+  tabId: 'browser:preview',
+};
 
 describe('codeWorkspacePreviewAutomation', () => {
   beforeEach(() => {
@@ -71,6 +75,7 @@ describe('codeWorkspacePreviewAutomation', () => {
 
   it('validates automation host and response payloads', () => {
     expect(validateCodeWorkspacePreviewAutomationHost(host)).toEqual(host);
+    expect(validateCodeWorkspacePreviewAutomationHost(tabHost)).toEqual(tabHost);
     expect(validateCodeWorkspacePreviewAutomationResponse({
       clientId: 'client-1',
       connectionId: 'automation-1',
@@ -150,6 +155,36 @@ describe('codeWorkspacePreviewAutomation', () => {
     });
     expect(handle).toHaveBeenCalledTimes(1);
     controller.dispose();
+  });
+
+  it('registers tab-scoped automation hosts across reconnects', async () => {
+    connectMock.mockResolvedValue(tabHost);
+    const controller = await connectCodeWorkspacePreviewAutomationHost({
+      roomId: 'room-1',
+      tabId: 'browser:preview',
+      focused: true,
+      supportedOperations: ['status', 'navigate'],
+      handle: () => ({ available: true }),
+    });
+
+    expect(controller.host.tabId).toBe('browser:preview');
+    expect(connectMock).toHaveBeenCalledWith({
+      roomId: 'room-1',
+      tabId: 'browser:preview',
+      focused: true,
+      supportedOperations: ['status', 'navigate'],
+    });
+
+    connectCallbacks.forEach((callback) => callback());
+
+    await vi.waitFor(() => {
+      expect(connectMock).toHaveBeenCalledTimes(2);
+    });
+    expect(connectMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      roomId: 'room-1',
+      tabId: 'browser:preview',
+      supportedOperations: ['status', 'navigate'],
+    }));
   });
 
   it('serializes handler failures into automation responses', async () => {

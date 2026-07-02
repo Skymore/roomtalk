@@ -22,6 +22,7 @@ import {
   CodeAgentBrowserViewportResizeHandles,
   useCodeAgentBrowserViewportResize,
 } from './CodeAgentBrowserViewportControls';
+import { CodeAgentBrowserAutomationCursor } from './CodeAgentBrowserAutomationCursor';
 import { CodeAgentFilePreviewHeader } from './CodeAgentFilePreviewHeader';
 import { MediaViewerModal } from './MediaViewerModal';
 import { projectFileCacheKey } from './codeAgentFileContentRevision';
@@ -47,6 +48,10 @@ import {
   runCodeWorkspacePreviewDomAutomation,
   type CodeWorkspacePreviewDomAutomationHandler,
 } from '../utils/codeWorkspacePreviewDomAutomation';
+import {
+  buildCodeWorkspacePreviewAutomationCursorEvent,
+  type CodeWorkspacePreviewAutomationCursorEvent,
+} from '../utils/codeWorkspacePreviewAutomationCursor';
 import type { CodeWorkspacePreviewAutomationRequest } from '../utils/socket';
 
 const MarkdownContent = React.lazy(() =>
@@ -418,6 +423,9 @@ export function WorkspaceBrowserAssetPreview({
   const [viewportContainerSize, setViewportContainerSize] =
     useState<CodeAgentPreviewViewportSize>({ width: 1, height: 1 });
   const [aspectRatioLocked, setAspectRatioLocked] = useState(false);
+  const [automationCursorEvent, setAutomationCursorEvent] =
+    useState<CodeWorkspacePreviewAutomationCursorEvent | null>(null);
+  const automationCursorSequenceRef = useRef(0);
   const normalizedZoomFactor = Number.isFinite(zoomFactor) && zoomFactor > 0 ? zoomFactor : 1;
   const fillZoomFrameStyle = {
     width: `${100 / normalizedZoomFactor}%`,
@@ -523,15 +531,24 @@ export function WorkspaceBrowserAssetPreview({
     if (!onAutomationHandlerChange) {
       return undefined;
     }
-    const handler = (request: CodeWorkspacePreviewAutomationRequest) => (
-      runCodeWorkspacePreviewDomAutomation(request, {
+    const handler = (request: CodeWorkspacePreviewAutomationRequest) => {
+      const nextCursorEvent = buildCodeWorkspacePreviewAutomationCursorEvent(
+        request,
+        iframeRef.current,
+        automationCursorSequenceRef.current + 1,
+      );
+      if (nextCursorEvent) {
+        automationCursorSequenceRef.current = nextCursorEvent.sequence;
+        setAutomationCursorEvent(nextCursorEvent);
+      }
+      return runCodeWorkspacePreviewDomAutomation(request, {
         iframe: iframeRef.current,
         tabId: automationTabId ?? title,
         loading: isLoading,
         title,
         url: src,
-      })
-    );
+      });
+    };
     onAutomationHandlerChange(handler);
     return () => {
       onAutomationHandlerChange(null);
@@ -557,7 +574,7 @@ export function WorkspaceBrowserAssetPreview({
       >
         {effectiveViewport._tag === 'fill' ? (
           <div
-            className="min-h-full"
+            className="relative min-h-full"
             data-testid="code-agent-browser-preview-zoom-frame"
             style={fillZoomFrameStyle}
           >
@@ -570,6 +587,7 @@ export function WorkspaceBrowserAssetPreview({
               onLoad={handleLoad}
               onError={handleError}
             />
+            <CodeAgentBrowserAutomationCursor event={automationCursorEvent} />
           </div>
         ) : (
           <div
@@ -600,6 +618,7 @@ export function WorkspaceBrowserAssetPreview({
                 onLoad={handleLoad}
                 onError={handleError}
               />
+              <CodeAgentBrowserAutomationCursor event={automationCursorEvent} />
             </div>
             <CodeAgentBrowserViewportResizeHandles
               layout={layout}
