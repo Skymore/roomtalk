@@ -97,6 +97,7 @@ import {
 interface CodeAgentFileBrowserPanelProps {
   roomId: string;
   projectName: string;
+  surface?: 'desktop' | 'mobile';
   sandboxStatus?: RoomSandboxStatus;
   sandboxUpdatedAt?: string;
   workspaceRoot?: string | null;
@@ -670,6 +671,7 @@ function CodeAgentRightPanelEmptyState({
 interface CodeAgentPreviewSurfaceProps {
   roomId: string;
   surface: CodeAgentPreviewPanelSurface;
+  mobileLayout?: boolean;
   assetUrlQuery: AssetUrlQueryState;
   assetPreviewRevision: number;
   focusUrlNonce?: number;
@@ -692,6 +694,7 @@ interface CodeAgentBrowserSurfaceChromeProps {
   canOpenExternal: boolean;
   canZoom: boolean;
   zoomFactor: number;
+  mobileLayout?: boolean;
   focusUrlNonce?: number;
   navigationError: string | null;
   onBack: () => void;
@@ -723,6 +726,7 @@ function CodeAgentBrowserSurfaceChrome({
   canOpenExternal,
   canZoom,
   zoomFactor,
+  mobileLayout = false,
   focusUrlNonce,
   navigationError,
   onBack,
@@ -765,6 +769,144 @@ function CodeAgentBrowserSurfaceChrome({
 
   const displayValue = inputFocused ? draft : formatBrowserSurfaceAddressDisplay(value);
   const displayTitle = !inputFocused && displayValue !== value ? value : undefined;
+  const browserChromeButtonClass = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-45 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]';
+  const addressInput = (
+    <input
+      ref={inputRef}
+      aria-label={t('codeAgentBrowserAddressLabel')}
+      className="h-7 min-w-0 flex-1 rounded-md border border-transparent bg-[#f0eee6] px-2 text-xs text-[#141413] outline-none transition-colors placeholder:text-[#87867f] focus:border-[#c96442]/70 focus:bg-[#faf9f5] dark:bg-[#242422] dark:text-[#faf9f5] dark:placeholder:text-[#8f8d86] dark:focus:border-[#d97757]/70 dark:focus:bg-[#1d1d1b]"
+      placeholder={t('codeAgentBrowserAddressPlaceholder')}
+      spellCheck={false}
+      title={displayTitle}
+      value={displayValue}
+      onChange={(event) => setDraft(event.target.value)}
+      onFocus={() => {
+        setDraft(value);
+        setInputFocused(true);
+        queueMicrotask(() => inputRef.current?.select());
+      }}
+      onBlur={() => {
+        setInputFocused(false);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          submit(event);
+          return;
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          setDraft(value);
+          setInputFocused(false);
+          inputRef.current?.blur();
+        }
+      }}
+    />
+  );
+  const backButton = (
+    <button
+      type="button"
+      className={browserChromeButtonClass}
+      aria-label={t('codeAgentBrowserBack')}
+      title={t('codeAgentBrowserBack')}
+      disabled={!canGoBack}
+      onClick={onBack}
+    >
+      <ArrowLeft className="h-3.5 w-3.5" />
+    </button>
+  );
+  const forwardButton = (
+    <button
+      type="button"
+      className={browserChromeButtonClass}
+      aria-label={t('codeAgentBrowserForward')}
+      title={t('codeAgentBrowserForward')}
+      disabled={!canGoForward}
+      onClick={onForward}
+    >
+      <ArrowRight className="h-3.5 w-3.5" />
+    </button>
+  );
+  const refreshButton = (
+    <button
+      type="button"
+      className={browserChromeButtonClass}
+      aria-label={t('codeAgentBrowserRefresh')}
+      title={t('codeAgentBrowserRefresh')}
+      disabled={!canRefresh}
+      onClick={onRefresh}
+    >
+      <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+    </button>
+  );
+  const openExternalButton = (
+    <button
+      type="button"
+      className={browserChromeButtonClass}
+      aria-label={t('codeAgentOpenBrowserPreviewExternally')}
+      title={t('codeAgentOpenBrowserPreviewExternally')}
+      disabled={!canOpenExternal}
+      onClick={onOpenExternal}
+    >
+      <ExternalLink className="h-3.5 w-3.5" />
+    </button>
+  );
+  const moreMenu = (
+    <CodeAgentBrowserMoreMenu
+      canRefresh={canRefresh}
+      canZoom={canZoom}
+      zoomFactor={zoomFactor}
+      onHardReload={onHardReload}
+      onZoomIn={onZoomIn}
+      onZoomOut={onZoomOut}
+      onResetZoom={onResetZoom}
+    />
+  );
+
+  if (mobileLayout) {
+    return (
+      <div
+        className="relative shrink-0 border-b border-[#dedbd0] bg-[#faf9f5] px-2 py-2 dark:border-[#30302e] dark:bg-[#1d1d1b]"
+        data-mobile-browser-chrome="true"
+        data-testid="code-agent-mobile-browser-chrome"
+      >
+        <form className="flex flex-col gap-2" onSubmit={submit}>
+          <div className="flex h-8 items-center gap-2" data-testid="code-agent-mobile-browser-address-row">
+            {addressInput}
+          </div>
+          <div className="flex h-8 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" data-testid="code-agent-mobile-browser-action-row">
+            <div className="flex shrink-0 items-center gap-1" role="group">
+              {backButton}
+              {forwardButton}
+              {refreshButton}
+            </div>
+            <div className="ml-auto flex shrink-0 items-center gap-1">
+              {openExternalButton}
+              {moreMenu}
+            </div>
+          </div>
+        </form>
+        {navigationError ? (
+          <div
+            className="mt-2 rounded-md border border-[#f0b49b]/50 bg-[#fff2ec] px-2 py-1.5 text-[11px] text-[#9f462c] dark:border-[#7a321f]/60 dark:bg-[#2a211d] dark:text-[#ff9b78]"
+            role="alert"
+          >
+            {navigationError}
+          </div>
+        ) : null}
+        {loadProgress > 0 ? (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute bottom-0 left-0 z-10 h-0.5 rounded-r-full bg-[#c96442] transition-all duration-150 ease-out dark:bg-[#d97757]"
+            data-testid="code-agent-browser-loading-progress"
+            style={{
+              width: `${loadProgress}%`,
+              boxShadow: '0 0 6px 1px rgba(201, 100, 66, 0.45)',
+            }}
+          />
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div className="relative shrink-0 border-b border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]">
@@ -774,7 +916,7 @@ function CodeAgentBrowserSurfaceChrome({
       >
         <button
           type="button"
-          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-45 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+          className={browserChromeButtonClass}
           aria-label={t('codeAgentBrowserBack')}
           title={t('codeAgentBrowserBack')}
           disabled={!canGoBack}
@@ -782,75 +924,11 @@ function CodeAgentBrowserSurfaceChrome({
         >
           <ArrowLeft className="h-3.5 w-3.5" />
         </button>
-        <button
-          type="button"
-          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-45 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
-          aria-label={t('codeAgentBrowserForward')}
-          title={t('codeAgentBrowserForward')}
-          disabled={!canGoForward}
-          onClick={onForward}
-        >
-          <ArrowRight className="h-3.5 w-3.5" />
-        </button>
-        <button
-          type="button"
-          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-45 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
-          aria-label={t('codeAgentBrowserRefresh')}
-          title={t('codeAgentBrowserRefresh')}
-          disabled={!canRefresh}
-          onClick={onRefresh}
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-        </button>
-        <input
-          ref={inputRef}
-          aria-label={t('codeAgentBrowserAddressLabel')}
-          className="h-7 min-w-0 flex-1 rounded-md border border-transparent bg-[#f0eee6] px-2 text-xs text-[#141413] outline-none transition-colors placeholder:text-[#87867f] focus:border-[#c96442]/70 focus:bg-[#faf9f5] dark:bg-[#242422] dark:text-[#faf9f5] dark:placeholder:text-[#8f8d86] dark:focus:border-[#d97757]/70 dark:focus:bg-[#1d1d1b]"
-          placeholder={t('codeAgentBrowserAddressPlaceholder')}
-          spellCheck={false}
-          title={displayTitle}
-          value={displayValue}
-          onChange={(event) => setDraft(event.target.value)}
-          onFocus={() => {
-            setDraft(value);
-            setInputFocused(true);
-            queueMicrotask(() => inputRef.current?.select());
-          }}
-          onBlur={() => {
-            setInputFocused(false);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              submit(event);
-              return;
-            }
-            if (event.key === 'Escape') {
-              event.preventDefault();
-              setDraft(value);
-              setInputFocused(false);
-              inputRef.current?.blur();
-            }
-          }}
-        />
-        <button
-          type="button"
-          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-45 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
-          aria-label={t('codeAgentOpenBrowserPreviewExternally')}
-          title={t('codeAgentOpenBrowserPreviewExternally')}
-          disabled={!canOpenExternal}
-          onClick={onOpenExternal}
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-        </button>
-        <CodeAgentBrowserMoreMenu
-          canRefresh={canRefresh}
-          canZoom={canZoom}
-          zoomFactor={zoomFactor}
-          onHardReload={onHardReload}
-          onZoomIn={onZoomIn}
-          onZoomOut={onZoomOut}
-          onResetZoom={onResetZoom}
-        />
+        {forwardButton}
+        {refreshButton}
+        {addressInput}
+        {openExternalButton}
+        {moreMenu}
       </form>
       {navigationError ? (
         <div
@@ -878,6 +956,7 @@ function CodeAgentBrowserSurfaceChrome({
 function CodeAgentPreviewSurface({
   roomId,
   surface,
+  mobileLayout = false,
   assetUrlQuery,
   assetPreviewRevision,
   focusUrlNonce,
@@ -970,6 +1049,7 @@ function CodeAgentPreviewSurface({
       canOpenExternal={Boolean(resolvedPreviewUrl)}
       canZoom={Boolean(resolvedPreviewUrl)}
       zoomFactor={zoomFactor}
+      mobileLayout={mobileLayout}
       focusUrlNonce={focusUrlNonce}
       navigationError={navigationError}
       onBack={handleBack}
@@ -1465,6 +1545,7 @@ function useCodeWorkspaceAssetUrlQuery(
 export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps> = ({
   roomId,
   projectName,
+  surface = 'desktop',
   sandboxStatus,
   sandboxUpdatedAt,
   workspaceRoot,
@@ -1494,6 +1575,8 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   });
   const [pendingFileSurfaceIds, setPendingFileSurfaceIds] = useState<ReadonlySet<string>>(() => new Set());
   const [explorerOpen, setExplorerOpen] = useState(initialExplorerOpen);
+  const [mobileExplorerOpen, setMobileExplorerOpen] = useState(false);
+  const [mobileDiffFileListOpen, setMobileDiffFileListOpen] = useState(false);
   const [explorerWidth, setExplorerWidth] = useState(() => initialExplorerWidth());
   const [diffChangedFilesWidth, setDiffChangedFilesWidth] = useState(() => initialDiffChangedFilesWidth());
   const [wordWrap, setWordWrap] = useState(readInitialFileWordWrap);
@@ -1541,6 +1624,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const pendingBrowserAddressFocusRef = useRef(false);
   const [browserAddressFocusRequests, setBrowserAddressFocusRequests] = useState<Record<string, number>>({});
   const didInitializeRightPanelRef = useRef(false);
+  const isMobileSurface = surface === 'mobile';
 
   const externallySelectedEntry = useMemo(
     () => (externallySelectedFilePath ? workspaceEntryForPath(externallySelectedFilePath, 'file') : null),
@@ -1703,7 +1787,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const assetUrlQuery = useCodeWorkspaceAssetUrlQuery(
     roomId,
     relativePath,
-    Boolean(relativePath && renderPreview && supportsWorkspaceAssetPreview),
+    Boolean(relativePath && supportsWorkspaceAssetPreview && (renderPreview || (isMobileSurface && canOpenInBrowserPreview))),
     workspaceReadyKey,
   );
   const activeAssetPreviewRevision = relativePath ? assetPreviewRevisions[relativePath] ?? 0 : 0;
@@ -1854,6 +1938,12 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   ]);
 
   useEffect(() => {
+    if (!isMobileSurface || !activeDiffSurface || changedFileEntries.length === 0) {
+      setMobileDiffFileListOpen(false);
+    }
+  }, [activeDiffSurface, changedFileEntries.length, isMobileSurface]);
+
+  useEffect(() => {
     if (!openFileRequest?.path) {
       return;
     }
@@ -1864,10 +1954,13 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     setSelectedPath(normalizedPath);
     setPreviewPath(normalizedPath);
     setExternallySelectedFilePath(normalizedPath);
+    if (isMobileSurface) {
+      setMobileExplorerOpen(false);
+    }
     openCodeAgentRightPanelFile(roomId, normalizedPath, revealLine);
     setLocalOpenFileRequest(null);
     setOperationError(null);
-  }, [openFileRequest?.path, openFileRequest?.requestId, revealLine, roomId]);
+  }, [isMobileSurface, openFileRequest?.path, openFileRequest?.requestId, revealLine, roomId]);
 
   useEffect(() => {
     const previousKey = previousWorkspaceReadyKeyRef.current;
@@ -2012,6 +2105,9 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
             closeCodeAgentRightPanelSurface(roomId, `file:${relativePath}`);
           }
         } else {
+          if (isMobileSurface) {
+            setMobileExplorerOpen(false);
+          }
           openCodeAgentRightPanelFile(roomId, nextPreviewPath);
         }
       }
@@ -2019,7 +2115,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     } catch (error) {
       setOperationError(error instanceof Error ? error.message : 'Workspace file operation failed.');
     }
-  }, [refreshEntries, relativePath, roomId]);
+  }, [isMobileSurface, refreshEntries, relativePath, roomId]);
 
   const handleOpenEntry = useCallback((path: string, kind: CodeAgentProjectEntry['kind']) => {
     const normalizedPath = normalizeWorkspacePath(path);
@@ -2031,10 +2127,13 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       setPreviewPath(normalizedPath);
       setExternallySelectedFilePath(null);
       setLocalOpenFileRequest(null);
+      if (isMobileSurface) {
+        setMobileExplorerOpen(false);
+      }
       openCodeAgentRightPanelFile(roomId, normalizedPath);
     }
     setOperationError(null);
-  }, [roomId]);
+  }, [isMobileSurface, roomId]);
 
   const handleOpenWorkspaceFileFromMarkdown = useCallback((path: string) => {
     const target = parseWorkspaceFileOpenTarget(path, { workspaceRoot: workspaceRoot ?? undefined });
@@ -2051,9 +2150,12 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     setSelectedPath(target.path);
     setPreviewPath(target.path);
     setExternallySelectedFilePath(target.path);
+    if (isMobileSurface) {
+      setMobileExplorerOpen(false);
+    }
     openCodeAgentRightPanelFile(roomId, target.path, target.line);
     setOperationError(null);
-  }, [roomId, workspaceRoot]);
+  }, [isMobileSurface, roomId, workspaceRoot]);
 
   const handleCreateFile = useCallback(() => {
     const path = window.prompt(t('codeAgentNewFilePrompt'), joinWorkspacePath(selectedDirectory, 'untitled.txt'));
@@ -2110,6 +2212,10 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   }, [mutate, roomId, selectedDirectory]);
 
   const toggleExplorer = useCallback(() => {
+    if (isMobileSurface) {
+      setMobileExplorerOpen((current) => !current);
+      return;
+    }
     setExplorerOpen((current) => {
       const next = !current;
       try {
@@ -2119,6 +2225,9 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       }
       return next;
     });
+  }, [isMobileSurface]);
+  const handleBackToMobileFilePreview = useCallback(() => {
+    setMobileExplorerOpen(false);
   }, []);
 
   const handleExplorerResizeStart = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
@@ -2347,10 +2456,13 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     setSelectedPath(target.path);
     setPreviewPath(target.path);
     setExternallySelectedFilePath(target.path);
+    if (isMobileSurface) {
+      setMobileExplorerOpen(false);
+    }
     openCodeAgentRightPanelFile(roomId, target.path, target.line);
     setLocalOpenFileRequest(null);
     setOperationError(null);
-  }, [roomId, workspaceRoot]);
+  }, [isMobileSurface, roomId, workspaceRoot]);
 
   const handleDiffFileSummariesChange = useCallback((summaries: readonly CodeAgentWorkspaceDiffFileSummary[]) => {
     setDiffFileSummaries({
@@ -2367,6 +2479,11 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     selectCodeAgentDiffFile(roomId, normalizedPath);
   }, [roomId]);
 
+  const handleOpenMobileChangedDiffFile = useCallback((path: string) => {
+    handleOpenChangedDiffFile(path);
+    setMobileDiffFileListOpen(false);
+  }, [handleOpenChangedDiffFile]);
+
   const closeFileSurfaceTabMenu = useCallback(() => {
     setFileSurfaceTabMenu(null);
   }, []);
@@ -2382,6 +2499,24 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       ...clampFixedMenuPosition({
         x: event.clientX,
         y: event.clientY,
+        width: FILE_SURFACE_TAB_MENU_WIDTH,
+        height: FILE_SURFACE_TAB_MENU_HEIGHT,
+      }),
+    });
+  }, []);
+
+  const handleFileSurfaceTabMenuButtonClick = useCallback((
+    event: React.MouseEvent<HTMLButtonElement>,
+    surface: CodeAgentRightPanelSurface,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    setFileSurfaceTabMenu({
+      surfaceId: surface.id,
+      ...clampFixedMenuPosition({
+        x: rect.left,
+        y: rect.bottom + 6,
         width: FILE_SURFACE_TAB_MENU_WIDTH,
         height: FILE_SURFACE_TAB_MENU_HEIGHT,
       }),
@@ -2488,15 +2623,18 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     };
   }, [closeFileSurfaceAddMenu, fileSurfaceAddMenuOpen]);
 
-  const fileExplorer = explorerOpen || relativePath === null ? (
+  const effectiveExplorerOpen = isMobileSurface ? mobileExplorerOpen : explorerOpen;
+  const fileExplorerHasPreviewSibling = Boolean(relativePath && !isMobileSurface);
+  const fileExplorer = effectiveExplorerOpen || relativePath === null ? (
     <aside
-      className={`${relativePath ? 'relative min-w-[160px] border-l border-[#dedbd0] dark:border-[#30302e]' : 'min-w-0 flex-1'} flex min-h-0 shrink-0 bg-[#faf9f5] dark:bg-[#1d1d1b]`}
-      style={relativePath ? {
+      className={`${fileExplorerHasPreviewSibling ? 'relative min-w-[160px] border-l border-[#dedbd0] dark:border-[#30302e]' : 'min-w-0 flex-1'} flex min-h-0 shrink-0 bg-[#faf9f5] dark:bg-[#1d1d1b]`}
+      data-mobile-file-explorer={isMobileSurface ? 'true' : undefined}
+      style={fileExplorerHasPreviewSibling ? {
         width: 'var(--workspace-file-explorer-width)',
         maxWidth: `calc(100% - ${FILE_PREVIEW_MIN_WIDTH}px)`,
       } : undefined}
     >
-      {relativePath ? (
+      {fileExplorerHasPreviewSibling ? (
         <button
           type="button"
           aria-label={t('codeAgentResizeFileExplorer')}
@@ -2531,8 +2669,51 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
         remoteSearchPending={remoteSearch.isPending}
         remoteSearchError={remoteSearch.error}
         remoteSearchTruncated={remoteSearch.truncated}
+        mobileLayout={isMobileSurface}
+        onBackToPreview={isMobileSurface ? handleBackToMobileFilePreview : undefined}
       />
     </aside>
+  ) : null;
+  const showMobileDiffFileList = isMobileSurface && mobileDiffFileListOpen && changedFileEntries.length > 0;
+  const changedFilesTreePanel = changedFileEntries.length > 0 ? (
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]">
+      <div
+        className={`${isMobileSurface ? 'min-h-10' : 'min-h-0'} flex shrink-0 items-center gap-2 border-b border-[#dedbd0] px-3 py-2 text-xs text-[#4d4c48] dark:border-[#30302e] dark:text-[#e8e6dc]`}
+        data-testid="code-agent-changed-files-panel-header"
+      >
+        <span className="min-w-0 flex-1 truncate font-semibold">
+          {isMobileSurface ? t('codeAgentChangedFiles') : t('codeAgentChangedFilesCount', { count: changedFileEntries.length })}
+        </span>
+        {!isMobileSurface && hasNonZeroChangedFileStat(changedFileSummary) ? (
+          <CodeAgentDiffStatLabel
+            additions={changedFileSummary.additions}
+            deletions={changedFileSummary.deletions}
+            className="shrink-0 text-[11px]"
+            layout="inline"
+          />
+        ) : null}
+        {hasChangedFileDirectories ? (
+          <button
+            type="button"
+            data-scroll-anchor-ignore
+            className={`${isMobileSurface ? 'min-h-8 px-2.5' : 'px-2 py-1'} shrink-0 rounded-md border border-[#dedbd0] text-[11px] font-semibold text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:border-[#30302e] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]`}
+            onClick={() => setCodeAgentChangedFilesExpanded(roomId, changedFilesExpansionScopeKey, !allChangedDirectoriesExpanded)}
+          >
+            {allChangedDirectoriesExpanded ? t('codeAgentCollapseChangedFileTree') : t('codeAgentExpandChangedFileTree')}
+          </button>
+        ) : null}
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto p-2">
+        <CodeAgentChangedFilesTree
+          files={changedFileEntries}
+          allDirectoriesExpanded={allChangedDirectoriesExpanded}
+          resolvedTheme={resolvedTheme}
+          selectedPath={selectedDiffFilePath}
+          onOpenDiffFile={isMobileSurface ? handleOpenMobileChangedDiffFile : handleOpenChangedDiffFile}
+          mobileLayout={isMobileSurface}
+        />
+      </div>
+    </div>
   ) : null;
 
   return (
@@ -2589,7 +2770,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                 >
                   <button
                     type="button"
-                    className="flex min-w-0 flex-1 items-center gap-1.5 truncate px-2 py-1 text-left"
+                    className={`flex min-w-0 flex-1 items-center gap-1.5 truncate px-2 text-left ${isMobileSurface ? 'min-h-7 py-1.5' : 'py-1'}`}
                     title={fullTitle}
                     onClick={() => activateFileSurface(surface.id)}
                   >
@@ -2609,9 +2790,23 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                     ) : null}
                     <span className="truncate">{title}</span>
                   </button>
+                  {isMobileSurface ? (
+                    <button
+                      type="button"
+                      className="mr-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[#87867f] hover:bg-[#dedbd0] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+                      aria-label={`${t('moreActions')} ${fullTitle}`}
+                      title={t('moreActions')}
+                      data-testid="code-agent-mobile-file-tab-actions"
+                      onClick={(event) => handleFileSurfaceTabMenuButtonClick(event, surface)}
+                    >
+                      <MoreVertical className="h-3.5 w-3.5" />
+                    </button>
+                  ) : null}
                   <button
                     type="button"
-                    className={`relative mr-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded p-0.5 text-[#87867f] hover:bg-[#dedbd0] hover:text-[#141413] focus:opacity-100 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${pending ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+                    className={`relative mr-0.5 inline-flex shrink-0 items-center justify-center rounded text-[#87867f] hover:bg-[#dedbd0] hover:text-[#141413] focus:opacity-100 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
+                      isMobileSurface ? 'h-6 w-6 p-1 opacity-100' : `h-4 w-4 p-0.5 ${pending ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`
+                    }`}
                     aria-label={`${t('close')} ${fullTitle}`}
                     onClick={() => {
                       closeFileSurfaceTabMenu();
@@ -2774,6 +2969,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
         <CodeAgentPreviewSurface
           roomId={roomId}
           surface={activePreviewSurface}
+          mobileLayout={isMobileSurface}
           assetUrlQuery={previewSurfaceAssetUrlQuery}
           assetPreviewRevision={activePreviewSurfaceRevision}
           focusUrlNonce={browserAddressFocusRequests[activePreviewSurface.id]}
@@ -2786,10 +2982,32 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       ) : activeDiffSurface ? (
         <div
           ref={diffSurfaceRef}
-          className="flex min-h-0 flex-1 gap-2 overflow-hidden p-2"
+          className={`${isMobileSurface ? 'flex-col' : ''} flex min-h-0 flex-1 gap-2 overflow-hidden p-2`}
           data-testid="code-agent-diff-surface-body"
+          data-mobile-layout={isMobileSurface ? 'true' : undefined}
+          data-mobile-view={isMobileSurface ? (showMobileDiffFileList ? 'files' : 'diff') : undefined}
         >
-          {changedFileEntries.length > 0 ? (
+          {isMobileSurface && changedFileEntries.length > 0 ? (
+            <div className="flex shrink-0 items-center gap-2 rounded-md border border-[#dedbd0] bg-[#faf9f5] px-2 py-1.5 text-xs text-[#4d4c48] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#e8e6dc]">
+              <button
+                type="button"
+                className="inline-flex min-w-0 flex-1 items-center gap-1.5 rounded px-2 py-1 text-left font-semibold text-[#141413] transition-colors hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
+                data-testid="code-agent-mobile-diff-files-toggle"
+                aria-pressed={showMobileDiffFileList}
+                onClick={() => setMobileDiffFileListOpen((open) => !open)}
+              >
+                {showMobileDiffFileList ? (
+                  <FileDiff className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                ) : (
+                  <Files className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                )}
+                <span className="min-w-0 truncate">
+                  {showMobileDiffFileList ? t('codeAgentChanges') : t('codeAgentChangedFiles')}
+                </span>
+              </button>
+            </div>
+          ) : null}
+          {!isMobileSurface && changedFileEntries.length > 0 ? (
             <aside
               className="relative flex min-h-0 min-w-[180px] shrink-0"
               data-testid="code-agent-diff-changed-files-sidebar"
@@ -2798,40 +3016,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                 maxWidth: `calc(100% - ${DIFF_VIEWER_MIN_WIDTH}px)`,
               }}
             >
-              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]">
-                <div className="flex min-h-0 shrink-0 items-center gap-2 border-b border-[#dedbd0] px-3 py-2 text-xs text-[#4d4c48] dark:border-[#30302e] dark:text-[#e8e6dc]">
-                  <span className="min-w-0 flex-1 truncate font-semibold">
-                    {t('codeAgentChangedFilesCount', { count: changedFileEntries.length })}
-                  </span>
-                  {hasNonZeroChangedFileStat(changedFileSummary) ? (
-                    <CodeAgentDiffStatLabel
-                      additions={changedFileSummary.additions}
-                      deletions={changedFileSummary.deletions}
-                      className="shrink-0 text-[11px]"
-                      layout="inline"
-                    />
-                  ) : null}
-                  {hasChangedFileDirectories ? (
-                    <button
-                      type="button"
-                      data-scroll-anchor-ignore
-                      className="shrink-0 rounded-md border border-[#dedbd0] px-2 py-1 text-[11px] font-semibold text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:border-[#30302e] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
-                      onClick={() => setCodeAgentChangedFilesExpanded(roomId, changedFilesExpansionScopeKey, !allChangedDirectoriesExpanded)}
-                    >
-                      {allChangedDirectoriesExpanded ? t('codeAgentCollapseChangedFileTree') : t('codeAgentExpandChangedFileTree')}
-                    </button>
-                  ) : null}
-                </div>
-                <div className="min-h-0 flex-1 overflow-auto p-2">
-                  <CodeAgentChangedFilesTree
-                    files={changedFileEntries}
-                    allDirectoriesExpanded={allChangedDirectoriesExpanded}
-                    resolvedTheme={resolvedTheme}
-                    selectedPath={selectedDiffFilePath}
-                    onOpenDiffFile={handleOpenChangedDiffFile}
-                  />
-                </div>
-              </div>
+              {changedFilesTreePanel}
               <button
                 type="button"
                 aria-label={t('codeAgentResizeChangedFiles')}
@@ -2846,18 +3031,28 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
               </button>
             </aside>
           ) : null}
-          <CodeAgentWorkspaceDiffViewer
-            roomId={roomId}
-            enabled
-            refreshKey={workspaceReadyKey}
-            onOpenFile={handleOpenWorkspaceFileFromDiff}
-            onFileSummariesChange={handleDiffFileSummariesChange}
-            selectedFilePath={selectedDiffFilePath}
-            selectedFileRevealRequestId={selectedDiffFileRequestId}
-            reviewComments={reviewComments}
-            onAddReviewComment={onAddReviewComment}
-            onRemoveReviewComment={onRemoveReviewComment}
-          />
+          {showMobileDiffFileList ? (
+            <section
+              className="flex min-h-0 min-w-0 flex-1"
+              data-testid="code-agent-mobile-diff-changed-files-panel"
+            >
+              {changedFilesTreePanel}
+            </section>
+          ) : (
+            <CodeAgentWorkspaceDiffViewer
+              roomId={roomId}
+              enabled
+              refreshKey={workspaceReadyKey}
+              onOpenFile={handleOpenWorkspaceFileFromDiff}
+              onFileSummariesChange={handleDiffFileSummariesChange}
+              selectedFilePath={selectedDiffFilePath}
+              selectedFileRevealRequestId={selectedDiffFileRequestId}
+              reviewComments={reviewComments}
+              onAddReviewComment={onAddReviewComment}
+              onRemoveReviewComment={onRemoveReviewComment}
+              mobileLayout={isMobileSurface}
+            />
+          )}
         </div>
       ) : (
         <CodeAgentFilePreviewPanel
@@ -2881,9 +3076,12 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
           revealRequestId={effectiveRevealRequestId}
           saveState={activeSaveState}
           saveError={activeSaveError}
-          explorerOpen={explorerOpen}
+          mobileLayout={isMobileSurface}
+          explorerOpen={effectiveExplorerOpen}
           explorer={fileExplorer}
           browserPreviewPending={browserPreviewPending}
+          externalPreviewUrl={isMobileSurface && canOpenInBrowserPreview ? assetUrlQuery.resolvedUrl : undefined}
+          externalPreviewPending={isMobileSurface && canOpenInBrowserPreview ? assetUrlQuery.isPending : false}
           canToggleFileWordWrap={canToggleFileWordWrap}
           canOpenInBrowserPreview={canOpenInBrowserPreview}
           supportsPreview={supportsPreview}

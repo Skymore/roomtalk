@@ -662,6 +662,7 @@ interface FilePreviewSurfaceProps {
   revealRequestId: number;
   saveState: SaveState;
   saveError: string | null;
+  mobileLayout?: boolean;
   onSaveStateChange: (path: string, state: SaveState, error?: string | null) => void;
   onFileSavePendingChange?: (relativePath: string, pending: boolean) => void;
   onEntriesChanged: () => void;
@@ -693,6 +694,7 @@ function FilePreviewSurface({
   revealRequestId,
   saveState,
   saveError,
+  mobileLayout = false,
   onSaveStateChange,
   onFileSavePendingChange,
   onEntriesChanged,
@@ -825,6 +827,7 @@ function FilePreviewSurface({
           file={file}
           resolvedTheme={resolvedTheme}
           wordWrap={wordWrap}
+          mobileLayout={mobileLayout}
           onPostRender={onFilePostRender}
           revealRequestId={revealRequestId}
           onFileChange={onFileChange}
@@ -862,9 +865,12 @@ interface CodeAgentFilePreviewPanelProps {
   revealRequestId: number;
   saveState: SaveState;
   saveError: string | null;
+  mobileLayout?: boolean;
   explorerOpen: boolean;
   explorer: React.ReactNode;
   browserPreviewPending: boolean;
+  externalPreviewUrl?: string | null;
+  externalPreviewPending?: boolean;
   canToggleFileWordWrap: boolean;
   canOpenInBrowserPreview: boolean;
   supportsPreview: boolean;
@@ -906,9 +912,12 @@ export function CodeAgentFilePreviewPanel({
   revealRequestId,
   saveState,
   saveError,
+  mobileLayout = false,
   explorerOpen,
   explorer,
   browserPreviewPending,
+  externalPreviewUrl,
+  externalPreviewPending = false,
   canToggleFileWordWrap,
   canOpenInBrowserPreview,
   supportsPreview,
@@ -930,6 +939,8 @@ export function CodeAgentFilePreviewPanel({
 }: CodeAgentFilePreviewPanelProps) {
   const { t } = useTranslation();
   const showTruncatedBanner = Boolean(relativePath && file?.truncated);
+  const showMobileExplorerOnly = mobileLayout && explorer !== null && (explorerOpen || !relativePath);
+  const showFilePreview = Boolean(relativePath && !showMobileExplorerOnly);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -940,10 +951,13 @@ export function CodeAgentFilePreviewPanel({
         wordWrap={wordWrap}
         explorerOpen={explorerOpen}
         browserPreviewPending={browserPreviewPending}
+        externalPreviewUrl={externalPreviewUrl}
+        externalPreviewPending={externalPreviewPending}
         canToggleFileWordWrap={canToggleFileWordWrap}
         canOpenInBrowserPreview={canOpenInBrowserPreview}
         supportsPreview={supportsPreview}
         refreshCurrentFilePending={refreshCurrentFilePending}
+        mobileLayout={mobileLayout}
         onRefreshCurrentFile={onRefreshCurrentFile}
         onDownloadFile={file ? () => createDownload(file) : undefined}
         onToggleWordWrap={onToggleWordWrap}
@@ -962,8 +976,16 @@ export function CodeAgentFilePreviewPanel({
           })}
         </div>
       ) : null}
-      <div className="flex min-h-0 flex-1 overflow-hidden" data-testid="code-agent-file-preview-body">
-        <div className={`${relativePath ? 'flex' : 'hidden'} min-w-0 flex-1 flex-col overflow-hidden`}>
+      <div
+        className="flex min-h-0 flex-1 overflow-hidden"
+        data-testid="code-agent-file-preview-body"
+        data-mobile-layout={mobileLayout ? 'true' : undefined}
+        data-mobile-view={mobileLayout ? (showMobileExplorerOnly ? 'explorer' : 'preview') : undefined}
+      >
+        <div
+          className={`${showFilePreview ? 'flex' : 'hidden'} min-w-0 flex-1 flex-col overflow-hidden`}
+          data-testid="code-agent-file-preview-content"
+        >
           <FilePreviewSurface
             roomId={roomId}
             workspaceScopeKey={workspaceScopeKey}
@@ -984,6 +1006,7 @@ export function CodeAgentFilePreviewPanel({
             revealRequestId={revealRequestId}
             saveState={saveState}
             saveError={saveError}
+            mobileLayout={mobileLayout}
             onSaveStateChange={onSaveStateChange}
             onFileSavePendingChange={onFileSavePendingChange}
             onEntriesChanged={onEntriesChanged}
@@ -995,7 +1018,7 @@ export function CodeAgentFilePreviewPanel({
             onRemoveReviewComment={onRemoveReviewComment}
           />
         </div>
-        {explorer}
+        {mobileLayout ? (showMobileExplorerOnly ? explorer : null) : explorer}
       </div>
     </div>
   );

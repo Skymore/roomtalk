@@ -2,6 +2,7 @@ import { type SelectedLineRange } from '@pierre/diffs';
 import { Editor } from '@pierre/diffs/editor';
 import { EditorProvider, File as DiffFile, type FileOptions, Virtualizer } from '@pierre/diffs/react';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { resolveCodeAgentDiffThemeName } from '../utils/codeAgentDiffRendering';
 import { writeCodeWorkspaceFile, type CodeWorkspaceFile } from '../utils/codeWorkspaceFiles';
 import {
@@ -26,6 +27,7 @@ import {
   confirmCodeAgentProjectFileQueryData,
   setCodeAgentProjectFileQueryData,
 } from './codeAgentProjectFilesQueryState';
+import { CodeAgentMobileReviewSelectionActionBar } from './CodeAgentMobileReviewSelectionActionBar';
 
 type SaveState = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
 type FilePostRender = NonNullable<FileOptions<unknown>['onPostRender']>;
@@ -59,6 +61,7 @@ interface EditableFileSurfaceProps {
   file: CodeWorkspaceFile;
   resolvedTheme: 'light' | 'dark';
   wordWrap: boolean;
+  mobileLayout?: boolean;
   onPostRender: FilePostRender;
   revealRequestId: number;
   onFileChange: React.Dispatch<React.SetStateAction<CodeWorkspaceFile | null>>;
@@ -82,6 +85,7 @@ export function CodeAgentEditableFileSurface({
   file,
   resolvedTheme,
   wordWrap,
+  mobileLayout = false,
   onPostRender,
   revealRequestId,
   onFileChange,
@@ -93,12 +97,14 @@ export function CodeAgentEditableFileSurface({
   onRemoveReviewComment,
   fileLinkRevealUnsafeCss,
 }: EditableFileSurfaceProps) {
+  const { t } = useTranslation();
   const filePath = file.path;
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const selectionFrameRef = useRef<number | null>(null);
   const latestDraftContentsRef = useRef(file.content);
   const [lineAnnotations, setLineAnnotations] = useState<FileCommentLineAnnotation[]>([]);
   const [selectionOverride, setSelectionOverride] = useState<FileSelectionOverride | null>(null);
+  const [mobilePendingDraft, setMobilePendingDraft] = useState<SelectedLineRange | null>(null);
   const previousPersistedCommentIdsRef = useRef<Set<string>>(new Set());
   const persistedLineAnnotations = useMemo(
     () => fileReviewCommentAnnotations(reviewComments, filePath),
@@ -218,6 +224,7 @@ export function CodeAgentEditableFileSurface({
 
   const removeAnnotationEntry = useCallback((entryId: string) => {
     setSelectedRange(null);
+    setMobilePendingDraft(null);
     onRemoveReviewComment?.(entryId);
     setLineAnnotations((current) => current.flatMap((annotation) => {
       const entries = annotation.metadata.entries.filter((entry) => entry.id !== entryId);
@@ -227,6 +234,7 @@ export function CodeAgentEditableFileSurface({
 
   const submitAnnotationEntry = useCallback((entryId: string, text: string) => {
     setSelectedRange(null);
+    setMobilePendingDraft(null);
     const entry = lineAnnotations
       .flatMap((annotation) => annotation.metadata.entries)
       .find((candidate) => candidate.id === entryId);
@@ -250,7 +258,7 @@ export function CodeAgentEditableFileSurface({
     })));
   }, [filePath, lineAnnotations, onAddReviewComment, setSelectedRange]);
 
-  const beginComment = useCallback((range: SelectedLineRange) => {
+  const addDraftComment = useCallback((range: SelectedLineRange) => {
     const { startLine, endLine } = normalizeFileCommentRange(range);
     const draftEntry: FileCommentAnnotationEntry = {
       id: nextFileCommentId(),
@@ -291,10 +299,35 @@ export function CodeAgentEditableFileSurface({
 
   const handleLineSelectionEnd = useCallback((range: SelectedLineRange | null) => {
     setSelectedRange(range);
-    if (range) {
-      beginComment(range);
+    if (!range) {
+      setMobilePendingDraft(null);
+      return;
     }
-  }, [beginComment, setSelectedRange]);
+    if (mobileLayout) {
+      setMobilePendingDraft(range);
+      return;
+    }
+    addDraftComment(range);
+  }, [addDraftComment, mobileLayout, setSelectedRange]);
+
+  const mobilePendingDraftRangeLabel = mobilePendingDraft
+    ? (() => {
+        const { startLine, endLine } = normalizeFileCommentRange(mobilePendingDraft);
+        return formatFileCommentRange(startLine, endLine);
+      })()
+    : null;
+  const openMobileCommentDraft = useCallback(() => {
+    if (!mobilePendingDraft) {
+      return;
+    }
+    addDraftComment(mobilePendingDraft);
+    setSelectedRange(null);
+    setMobilePendingDraft(null);
+  }, [addDraftComment, mobilePendingDraft, setSelectedRange]);
+  const clearMobileCommentSelection = useCallback(() => {
+    setSelectedRange(null);
+    setMobilePendingDraft(null);
+  }, [setSelectedRange]);
 
   const editor = useMemo(() => {
     return new Editor<FileCommentAnnotationGroup>({
@@ -368,7 +401,7 @@ export function CodeAgentEditableFileSurface({
 
   return (
     <EditorProvider editor={editor}>
-      <div ref={surfaceRef} className="flex min-h-0 flex-1">
+      <div ref={surfaceRef} className="relative flex min-h-0 flex-1">
         <Virtualizer
           className="file-preview-virtualizer min-h-0 flex-1 overflow-auto"
           config={{
@@ -405,6 +438,8 @@ export function CodeAgentEditableFileSurface({
                     kind={entry.kind}
                     rangeLabel={formatFileCommentRange(entry.startLine, entry.endLine)}
                     text={entry.text}
+                    filePath={filePath}
+                    mobileLayout={mobileLayout}
                     onCancel={() => removeAnnotationEntry(entry.id)}
                     onComment={(text) => submitAnnotationEntry(entry.id, text)}
                     onDelete={() => removeAnnotationEntry(entry.id)}
@@ -416,6 +451,14 @@ export function CodeAgentEditableFileSurface({
             contentEditable
           />
         </Virtualizer>
+        {mobileLayout ? (
+          <CodeAgentMobileReviewSelectionActionBar
+            title={mobilePendingDraftRangeLabel ? t('codeAgentCommentOnLines', { range: mobilePendingDraftRangeLabel }) : null}
+            clearLabel={t('codeAgentCancelComment')}
+            onOpenComment={mobilePendingDraft ? openMobileCommentDraft : null}
+            onClear={clearMobileCommentSelection}
+          />
+        ) : null}
       </div>
     </EditorProvider>
   );

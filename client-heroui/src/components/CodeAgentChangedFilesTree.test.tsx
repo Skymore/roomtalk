@@ -188,6 +188,42 @@ describe('CodeAgentChangedFilesTree', () => {
     expect(onOpenDiffFile).toHaveBeenCalledWith('apps/web/src/main.ts');
   });
 
+  it('uses touch-sized rows and directory counts in mobile layout', () => {
+    const onOpenDiffFile = vi.fn();
+
+    render(
+      <CodeAgentChangedFilesTree
+        files={[
+          { path: 'src/App.tsx', additions: 7, deletions: 3 },
+          { path: 'src/utils.ts', additions: 1, deletions: 0 },
+        ]}
+        allDirectoriesExpanded
+        resolvedTheme="light"
+        selectedPath="src/App.tsx"
+        onOpenDiffFile={onOpenDiffFile}
+        mobileLayout
+      />,
+    );
+
+    const tree = screen.getByTestId('code-agent-changed-files-tree');
+    expect(tree.dataset.mobileLayout).toBe('true');
+    const rows = screen.getAllByTestId('code-agent-changed-files-tree-row');
+    expect(rows.length).toBe(3);
+    expect(rows.every((row) => row.dataset.mobileLayout === 'true')).toBe(true);
+    expect(rows.every((row) => row.className.includes('min-h-[42px]'))).toBe(true);
+
+    const directoryRow = rows.find((row) => row.dataset.path === 'src');
+    expect(directoryRow?.dataset.kind).toBe('directory');
+    expect(directoryRow?.textContent).toContain('2');
+
+    const fileRow = rows.find((row) => row.dataset.path === 'src/App.tsx');
+    expect(fileRow?.dataset.kind).toBe('file');
+    expect(fileRow?.getAttribute('aria-current')).toBe('true');
+
+    fireEvent.click(screen.getByText('App.tsx'));
+    expect(onOpenDiffFile).toHaveBeenCalledWith('src/App.tsx');
+  });
+
   it('expands ancestor directories and scrolls the selected diff file into view', async () => {
     const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
     const scrollIntoView = vi.fn();

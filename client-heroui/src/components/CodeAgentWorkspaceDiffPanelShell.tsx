@@ -13,11 +13,13 @@ export function CodeAgentWorkspaceDiffPanelShell({
   header,
   children,
   testId,
+  headerClassName,
 }: {
   mode: CodeAgentWorkspaceDiffPanelMode;
   header: ReactNode;
   children: ReactNode;
   testId?: string;
+  headerClassName?: string;
 }) {
   return (
     <div
@@ -25,7 +27,9 @@ export function CodeAgentWorkspaceDiffPanelShell({
       data-testid={testId}
     >
       <div
-        className="surface-subheader flex h-9 shrink-0 items-center justify-between gap-2 border-b border-[#dedbd0] px-3 dark:border-[#30302e]"
+        className={`surface-subheader flex shrink-0 border-b border-[#dedbd0] dark:border-[#30302e] ${
+          headerClassName ?? 'h-9 items-center justify-between gap-2 px-3'
+        }`}
         data-surface-subheader
       >
         {header}

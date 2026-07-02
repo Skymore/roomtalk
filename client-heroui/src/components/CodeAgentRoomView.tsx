@@ -400,6 +400,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       key={`${currentRoom.id}:${surface}`}
       roomId={currentRoom.id}
       projectName={currentRoom.name || 'Workspace'}
+      surface={surface}
       sandboxStatus={currentRoom.sandboxStatus}
       sandboxUpdatedAt={currentRoom.sandboxUpdatedAt}
       workspaceRoot={workspaceRoot}
@@ -421,6 +422,9 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   const fileManagerToggleTitle = hasPendingWorkspaceFileSaves
     ? `${fileManagerToggleLabel} - ${t('codeAgentWorkspaceFilesSavePending')}`
     : fileManagerToggleLabel;
+  const mobileFileManagerTitle = hasPendingWorkspaceFileSaves
+    ? `${t('codeAgentWorkspaceFiles')} - ${t('codeAgentWorkspaceFilesSavePending')}`
+    : t('codeAgentWorkspaceFiles');
 
   return (
     <CodeAgentDiffWorkerPoolProvider>
@@ -434,6 +438,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
         data-code-agent-files-collapsed={String(isFileManagerCollapsed)}
         style={{
           ['--code-agent-chat-min-width' as string]: `${CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH}px`,
+          ['--code-agent-composer-height' as string]: `${composerHeight}px`,
           ['--code-agent-files-width' as string]: isFileManagerCollapsed
             ? `${CODE_AGENT_FILE_PANEL_COLLAPSED_WIDTH}px`
             : `${fileManagerWidth}px`,
@@ -482,10 +487,18 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
             size="sm"
             radius="full"
             className="absolute right-3 top-3 z-40 bg-[#30302e] text-[#faf9f5] shadow-[0_0_0_1px_rgba(194,192,182,0.7),0_10px_24px_rgba(20,20,19,0.16)] dark:bg-[#faf9f5] dark:text-[#141413] lg:hidden"
-            aria-label={t('codeAgentWorkspaceFiles')}
+            aria-label={mobileFileManagerTitle}
+            title={mobileFileManagerTitle}
             onPress={() => setIsMobileFileManagerOpen(true)}
           >
             <Icon icon="lucide:folder-tree" className="h-4 w-4" />
+            {hasPendingWorkspaceFileSaves ? (
+              <span
+                aria-hidden="true"
+                data-testid="code-agent-mobile-file-save-pending-indicator"
+                className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-[#c96442] shadow-[0_0_0_2px_#30302e] dark:bg-[#ffb197] dark:shadow-[0_0_0_2px_#faf9f5]"
+              />
+            ) : null}
           </Button>
 
           <div
@@ -579,8 +592,20 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
             >
               <Icon icon="lucide:x" className="h-4 w-4" />
             </Button>
-            <div className="min-w-0 flex-1 truncate text-sm font-medium text-[#141413] dark:text-[#faf9f5]">
+            <div
+              className="flex min-w-0 flex-1 items-center gap-2 text-sm font-medium text-[#141413] dark:text-[#faf9f5]"
+              title={mobileFileManagerTitle}
+            >
+              <span className="min-w-0 truncate">
               {t('codeAgentWorkspaceFiles')}
+              </span>
+              {hasPendingWorkspaceFileSaves ? (
+                <span
+                  aria-hidden="true"
+                  data-testid="code-agent-mobile-sheet-file-save-pending-indicator"
+                  className="h-2 w-2 shrink-0 rounded-full bg-[#c96442] dark:bg-[#ffb197]"
+                />
+              ) : null}
             </div>
           </div>
           <div className="flex min-h-0 flex-1">

@@ -50,6 +50,7 @@ interface CodeAgentWorkspaceDiffViewerProps {
   reviewComments?: readonly ReviewCommentContext[];
   onAddReviewComment?: (comment: ReviewCommentContext) => void;
   onRemoveReviewComment?: (commentId: string) => void;
+  mobileLayout?: boolean;
 }
 
 function readResolvedTheme() {
@@ -343,6 +344,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   reviewComments = [],
   onAddReviewComment,
   onRemoveReviewComment,
+  mobileLayout = false,
 }) => {
   const { t } = useTranslation();
   const resolvedTheme = useResolvedTheme();
@@ -788,10 +790,56 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     return null;
   }
 
-  const headerRow = (
+  const controlClusterGap = mobileLayout ? 'gap-2' : 'gap-1.5';
+  const controlIconClassName = mobileLayout ? 'h-4 w-4' : 'h-3.5 w-3.5';
+  const diffScopeSummaryClassName = mobileLayout
+    ? 'inline-flex h-9 max-w-[11rem] cursor-pointer list-none items-center gap-2 rounded-lg border border-[#dedbd0] bg-[#faf9f5] px-3 text-sm font-semibold text-[#141413] transition-colors hover:bg-[#f0eee6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:hover:bg-[#30302e] [&::-webkit-details-marker]:hidden'
+    : 'inline-flex h-7 max-w-40 cursor-pointer list-none items-center gap-1 rounded-md border border-[#dedbd0] bg-[#faf9f5] px-2 text-xs font-medium text-[#141413] transition-colors hover:bg-[#f0eee6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:hover:bg-[#30302e] [&::-webkit-details-marker]:hidden';
+  const diffScopeMenuClassName = mobileLayout
+    ? 'absolute left-0 top-10 z-50 w-56 rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-1 shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]'
+    : 'absolute left-0 top-8 z-50 w-52 rounded-md border border-[#dedbd0] bg-[#faf9f5] p-1 shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]';
+  const diffScopeMenuItemClassName = mobileLayout
+    ? 'flex h-10 w-full items-center gap-2 rounded-md px-3 text-left text-sm text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]'
+    : 'flex h-8 w-full items-center gap-2 rounded px-2 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]';
+  const diffBaseRefSummaryClassName = mobileLayout
+    ? 'inline-flex h-9 max-w-[10rem] cursor-pointer list-none items-center gap-2 rounded-lg border border-[#dedbd0] bg-[#faf9f5] px-3 text-sm font-semibold text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] [&::-webkit-details-marker]:hidden'
+    : 'inline-flex h-7 max-w-32 cursor-pointer list-none items-center gap-1 rounded-md px-1.5 text-xs font-medium text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] [&::-webkit-details-marker]:hidden';
+  const diffBaseRefMenuClassName = mobileLayout
+    ? 'absolute left-0 top-10 z-50 w-72 max-w-[calc(100vw-1rem)] overflow-hidden rounded-lg border border-[#dedbd0] bg-[#faf9f5] shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]'
+    : 'absolute left-0 top-8 z-50 w-60 max-w-[calc(100vw-1rem)] overflow-hidden rounded-md border border-[#dedbd0] bg-[#faf9f5] shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]';
+  const diffBaseRefItemClassName = mobileLayout
+    ? 'grid h-10 w-full grid-cols-[1rem_minmax(0,1fr)] items-center gap-2 rounded-md px-3 text-left text-sm text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]'
+    : 'grid h-8 w-full grid-cols-[1rem_minmax(0,1fr)] items-center gap-2 rounded px-2 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]';
+  const diffIconButtonClassName = (active = false) => `inline-flex ${mobileLayout ? 'h-9 w-9 rounded-lg' : 'h-7 w-7 rounded-md'} items-center justify-center border text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-wait disabled:opacity-60 dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
+    active
+      ? 'border-[#c96442]/60 bg-[#fff2ec] text-[#9f462c] dark:border-[#d97757]/60 dark:bg-[#2a211d] dark:text-[#ffb197]'
+      : 'border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]'
+  }`;
+  const diffRenderModeButtonClassName = (active: boolean, side: 'left' | 'right') => `${side === 'right' ? '-ml-px' : ''} inline-flex ${mobileLayout ? 'h-9 w-9' : 'h-7 w-7'} items-center justify-center border text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
+    side === 'left'
+      ? `${mobileLayout ? 'rounded-l-lg' : 'rounded-l-md'} rounded-r-none`
+      : `rounded-l-none ${mobileLayout ? 'rounded-r-lg' : 'rounded-r-md'}`
+  } ${
+    active
+      ? 'z-10 border-[#c96442]/60 bg-[#fff2ec] text-[#9f462c] dark:border-[#d97757]/60 dark:bg-[#2a211d] dark:text-[#ffb197]'
+      : 'border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]'
+  }`;
+  const diffFileHeaderPrefixClassName = mobileLayout
+    ? 'inline-flex shrink-0 items-center gap-1.5'
+    : 'inline-flex shrink-0 items-center gap-1';
+  const diffFileHeaderIconButtonSizeClassName = mobileLayout
+    ? 'h-8 w-8 rounded-md'
+    : 'h-5 w-5 rounded-sm';
+  const diffFileHeaderCollapseIconClassName = 'h-4 w-4';
+  const diffFileHeaderViewedIconClassName = mobileLayout ? 'h-4 w-4' : 'h-3.5 w-3.5';
+  const diffFileSuppressionPillClassName = mobileLayout
+    ? 'inline-flex h-8 max-w-56 items-center gap-1.5 overflow-hidden rounded-md px-2 text-xs font-medium'
+    : 'inline-flex h-5 max-w-48 items-center gap-1 overflow-hidden rounded-sm px-1.5 text-[10px] font-medium sm:max-w-64';
+
+  const headerControls = (
     <>
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-          <div className="inline-flex max-w-full shrink-0 items-center gap-1.5 whitespace-nowrap">
+        <div className={`flex min-w-0 flex-1 items-center ${controlClusterGap} ${mobileLayout ? 'flex-nowrap' : 'flex-wrap'}`}>
+          <div className={`inline-flex max-w-full shrink-0 items-center ${controlClusterGap} whitespace-nowrap`}>
             <details
               ref={diffScopeMenuRef}
               className="group relative min-w-0 shrink-0"
@@ -799,12 +847,12 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
             >
               <summary
                 aria-label={`${t('codeAgentDiffScope')}: ${diffScopeLabel}`}
-                className="inline-flex h-7 max-w-40 cursor-pointer list-none items-center gap-1 rounded-md border border-[#dedbd0] bg-[#faf9f5] px-2 text-xs font-medium text-[#141413] transition-colors hover:bg-[#f0eee6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:hover:bg-[#30302e] [&::-webkit-details-marker]:hidden"
+                className={diffScopeSummaryClassName}
               >
                 <span className="truncate">{diffScopeLabel}</span>
-                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[#87867f] transition-transform group-open:rotate-180 dark:text-[#8f8d86]" />
+                <ChevronDown className={`${controlIconClassName} shrink-0 text-[#87867f] transition-transform group-open:rotate-180 dark:text-[#8f8d86]`} />
               </summary>
-              <div className="absolute left-0 top-8 z-50 w-52 rounded-md border border-[#dedbd0] bg-[#faf9f5] p-1 shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]">
+              <div className={diffScopeMenuClassName}>
                 {([
                   ['branch', t('codeAgentDiffScopeBranch')],
                   ['unstaged', t('codeAgentDiffScopeWorkingTree')],
@@ -812,7 +860,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                   <button
                     key={scope}
                     type="button"
-                    className="flex h-8 w-full items-center gap-2 rounded px-2 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
+                    className={diffScopeMenuItemClassName}
                     onClick={() => {
                       selectDiffScope(scope);
                       closeDiffToolbarMenus();
@@ -826,7 +874,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
             </details>
           {diffScope === 'branch' ? (
             <div
-              className="flex min-w-0 max-w-full shrink-0 items-center gap-1.5 overflow-visible text-xs text-[#87867f] dark:text-[#8f8d86]"
+              className={`flex min-w-0 max-w-full shrink-0 items-center ${controlClusterGap} overflow-visible text-xs text-[#87867f] dark:text-[#8f8d86]`}
               title={`${diffHeadRefLabel} -> ${diffBaseRefLabel}`}
               aria-label={`${t('codeAgentDiffComparing')}: ${diffHeadRefLabel} -> ${diffBaseRefLabel}`}
             >
@@ -839,12 +887,12 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
               >
                 <summary
                   aria-label={`${t('codeAgentDiffBaseRef')}: ${diffBaseRefLabel}`}
-                  className="inline-flex h-7 max-w-32 cursor-pointer list-none items-center gap-1 rounded-md px-1.5 text-xs font-medium text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] [&::-webkit-details-marker]:hidden"
+                  className={diffBaseRefSummaryClassName}
                 >
                   <span className="truncate">{diffBaseRefLabel}</span>
-                  <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[#87867f] transition-transform group-open:rotate-180 dark:text-[#8f8d86]" />
+                  <ChevronDown className={`${controlIconClassName} shrink-0 text-[#87867f] transition-transform group-open:rotate-180 dark:text-[#8f8d86]`} />
                 </summary>
-                <div className="absolute left-0 top-8 z-50 w-60 max-w-[calc(100vw-1rem)] overflow-hidden rounded-md border border-[#dedbd0] bg-[#faf9f5] shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]">
+                <div className={diffBaseRefMenuClassName}>
                   <div className="px-3 pt-2.5">
                     <label className="relative block border-b border-[#dedbd0] pb-1.5 transition-colors focus-within:border-[#c96442] dark:border-[#30302e]">
                       <Search className="pointer-events-none absolute left-0 top-1.5 h-4 w-4 text-[#87867f]/70 dark:text-[#8f8d86]/70" />
@@ -878,7 +926,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                         {filteredBaseRefItems.includes(AUTOMATIC_BASE_REF) ? (
                           <button
                             type="button"
-                            className="grid h-8 w-full grid-cols-[1rem_minmax(0,1fr)] items-center gap-2 rounded px-2 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
+                            className={diffBaseRefItemClassName}
                             onClick={() => {
                               selectDiffBaseRef(null);
                               closeDiffToolbarMenus();
@@ -904,7 +952,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                               key={choice.id}
                               role="button"
                               tabIndex={0}
-                              className="grid h-8 w-full grid-cols-[1rem_minmax(0,1fr)] items-center gap-2 rounded px-2 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
+                              className={diffBaseRefItemClassName}
                               onClick={() => {
                                 selectItem();
                               }}
@@ -962,16 +1010,16 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
           ) : null}
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+        <div className={`flex shrink-0 items-center ${mobileLayout ? 'gap-1.5' : 'gap-1'}`}>
           <button
             type="button"
             aria-label={refreshDiffLabel}
             title={refreshDiffLabel}
             disabled={isDiffRefreshPending}
             onClick={refreshDiff}
-            className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[#dedbd0] bg-[#faf9f5] text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-wait disabled:opacity-60 dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+            className={diffIconButtonClassName(false)}
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${isDiffRefreshPending ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`${controlIconClassName} ${isDiffRefreshPending ? 'animate-spin' : ''}`} />
           </button>
         <div
           className="inline-flex shrink-0"
@@ -984,13 +1032,9 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
             aria-pressed={diffRenderMode === 'stacked'}
             title={t('codeAgentStackedDiffView')}
             onClick={() => selectDiffRenderMode('stacked')}
-            className={`inline-flex h-7 w-7 items-center justify-center rounded-l-md rounded-r-none border text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
-              diffRenderMode === 'stacked'
-                ? 'z-10 border-[#c96442]/60 bg-[#fff2ec] text-[#9f462c] dark:border-[#d97757]/60 dark:bg-[#2a211d] dark:text-[#ffb197]'
-                : 'border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]'
-            }`}
+            className={diffRenderModeButtonClassName(diffRenderMode === 'stacked', 'left')}
           >
-            <Rows3 className="h-3.5 w-3.5" />
+            <Rows3 className={controlIconClassName} />
           </button>
           <button
             type="button"
@@ -998,13 +1042,9 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
             aria-pressed={diffRenderMode === 'split'}
             title={t('codeAgentSplitDiffView')}
             onClick={() => selectDiffRenderMode('split')}
-            className={`-ml-px inline-flex h-7 w-7 items-center justify-center rounded-l-none rounded-r-md border text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
-              diffRenderMode === 'split'
-                ? 'z-10 border-[#c96442]/60 bg-[#fff2ec] text-[#9f462c] dark:border-[#d97757]/60 dark:bg-[#2a211d] dark:text-[#ffb197]'
-                : 'border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]'
-            }`}
+            className={diffRenderModeButtonClassName(diffRenderMode === 'split', 'right')}
           >
-            <Columns2 className="h-3.5 w-3.5" />
+            <Columns2 className={controlIconClassName} />
           </button>
         </div>
         <button
@@ -1013,13 +1053,9 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
           aria-pressed={wordWrap}
           title={wordWrapLabel}
           onClick={toggleWordWrap}
-          className={`inline-flex h-7 w-7 items-center justify-center rounded-md border text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
-            wordWrap
-              ? 'border-[#c96442]/60 bg-[#fff2ec] text-[#9f462c] dark:border-[#d97757]/60 dark:bg-[#2a211d] dark:text-[#ffb197]'
-              : 'border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]'
-          }`}
+          className={diffIconButtonClassName(wordWrap)}
         >
-          <WrapText className="h-3.5 w-3.5" />
+          <WrapText className={controlIconClassName} />
         </button>
         <button
           type="button"
@@ -1027,23 +1063,35 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
           aria-pressed={diffIgnoreWhitespace}
           title={ignoreWhitespaceLabel}
           onClick={toggleDiffIgnoreWhitespace}
-          className={`inline-flex h-7 w-7 items-center justify-center rounded-md border text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
-            diffIgnoreWhitespace
-              ? 'border-[#c96442]/60 bg-[#fff2ec] text-[#9f462c] dark:border-[#d97757]/60 dark:bg-[#2a211d] dark:text-[#ffb197]'
-              : 'border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]'
-          }`}
+          className={diffIconButtonClassName(diffIgnoreWhitespace)}
         >
-          <Pilcrow className="h-3.5 w-3.5" />
+          <Pilcrow className={controlIconClassName} />
         </button>
         </div>
     </>
   );
+  const headerRow = mobileLayout ? (
+    <div
+      className="flex min-w-0 flex-1 items-center"
+      data-testid="code-agent-mobile-workspace-diff-header"
+    >
+      <div
+        className="-mx-2 flex min-w-0 overflow-x-auto px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        data-testid="code-agent-mobile-workspace-diff-controls-row"
+      >
+        <div className="flex min-w-max items-center gap-1.5">
+          {headerControls}
+        </div>
+      </div>
+    </div>
+  ) : headerControls;
 
   return (
     <CodeAgentWorkspaceDiffPanelShell
       mode="embedded"
       header={headerRow}
       testId="code-agent-workspace-diff-viewer"
+      headerClassName={mobileLayout ? 'min-h-12 items-center px-2 py-1.5' : undefined}
     >
       <CodeAgentWorkspaceDiffPanelViewport>
         {showTruncatedDiff ? (
@@ -1111,6 +1159,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
             reviewComments={reviewComments}
             onAddReviewComment={onAddReviewComment}
             onRemoveReviewComment={onRemoveReviewComment}
+            mobileLayout={mobileLayout}
             className="diff-render-surface h-full min-h-0 flex-1 overflow-auto"
             renderHeaderPrefix={(fileDiff, fileKey, collapsed, viewed, previewState) => {
               const filePath = resolveFileDiffPath(fileDiff);
@@ -1121,7 +1170,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                 ? 'codeAgentLargeDiffSuppressedMessage'
                 : 'codeAgentNonTextDiffSuppressedMessage';
               return (
-                <div className="inline-flex shrink-0 items-center gap-1">
+                <div className={diffFileHeaderPrefixClassName}>
                   <button
                     type="button"
                     aria-label={t(collapsed ? 'codeAgentExpandDiffFile' : 'codeAgentCollapseDiffFile', { path: filePath })}
@@ -1138,13 +1187,13 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                       }
                       toggleDiffFileCollapsed(fileKey);
                     }}
-                    className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm border-0 bg-transparent p-0 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] disabled:cursor-not-allowed disabled:opacity-50 ${
+                    className={`inline-flex ${diffFileHeaderIconButtonSizeClassName} shrink-0 items-center justify-center border-0 bg-transparent p-0 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] disabled:cursor-not-allowed disabled:opacity-50 ${
                       isCollapseButtonDisabled
                         ? 'text-[#87867f] dark:text-[#8f8d86]'
                         : `cursor-pointer hover:bg-[#141413]/10 dark:hover:bg-[#faf9f5]/10 ${canLoadSuppressedDiff ? 'text-[#9f462c] dark:text-[#ffb197]' : getDiffCollapseIconClassName(fileDiff)}`
                     }`}
                   >
-                    {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                    {collapsed ? <ChevronRight className={diffFileHeaderCollapseIconClassName} /> : <ChevronDown className={diffFileHeaderCollapseIconClassName} />}
                   </button>
                   <button
                     type="button"
@@ -1155,18 +1204,18 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                       event.stopPropagation();
                       toggleDiffFileViewed(fileKey);
                     }}
-                    className={`inline-flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-sm border-0 p-0 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] ${
+                    className={`inline-flex ${diffFileHeaderIconButtonSizeClassName} shrink-0 cursor-pointer items-center justify-center border-0 p-0 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] ${
                       viewed
                         ? 'bg-[#2f7d46]/10 text-[#2f7d46] hover:bg-[#2f7d46]/20 dark:bg-[#48a868]/15 dark:text-[#8bd59e] dark:hover:bg-[#48a868]/25'
                         : 'bg-transparent text-[#87867f] hover:bg-[#141413]/10 hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#faf9f5]/10 dark:hover:text-[#faf9f5]'
                     }`}
                   >
-                    <Check className="h-3.5 w-3.5" />
+                    <Check className={diffFileHeaderViewedIconClassName} />
                   </button>
                   {suppression && canLoadSuppressedDiff ? (
                     <button
                       type="button"
-                      className="inline-flex h-5 max-w-48 cursor-pointer items-center gap-1 overflow-hidden rounded-sm bg-[#f0eee6] px-1.5 text-[10px] font-medium text-[#5e5d59] transition-colors hover:bg-[#ead6cc] hover:text-[#9f462c] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:bg-[#30302e] dark:text-[#b0aea5] dark:hover:bg-[#3b332f] dark:hover:text-[#ffb197] sm:max-w-64"
+                      className={`${diffFileSuppressionPillClassName} cursor-pointer bg-[#f0eee6] text-[#5e5d59] transition-colors hover:bg-[#ead6cc] hover:text-[#9f462c] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:bg-[#30302e] dark:text-[#b0aea5] dark:hover:bg-[#3b332f] dark:hover:text-[#ffb197]`}
                       data-testid="code-agent-diff-file-suppression-load"
                       title={t('codeAgentLargeDiffSuppressedMessage')}
                       onClick={(event) => {
@@ -1174,6 +1223,9 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                         revealLargeDiffFile(fileKey);
                       }}
                     >
+                      <span className="min-w-0 truncate sm:hidden">
+                        {t('codeAgentLargeDiff')}
+                      </span>
                       <span className="hidden min-w-0 truncate sm:block">
                         {t('codeAgentLargeDiffSuppressedMessage')}
                       </span>
@@ -1183,7 +1235,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                     </button>
                   ) : suppression ? (
                     <span
-                      className="inline-flex h-5 max-w-48 items-center gap-1 overflow-hidden rounded-sm bg-[#f0eee6] px-1.5 text-[10px] font-medium text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]"
+                      className={`${diffFileSuppressionPillClassName} bg-[#f0eee6] text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]`}
                       data-testid="code-agent-diff-file-suppression"
                       title={t(suppressionMessageKey)}
                     >
@@ -1217,7 +1269,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                 : 'codeAgentNonTextDiffContentsUnavailable';
               return (
                 <span
-                  className={`${previewState.reason === 'large' ? 'hidden sm:inline-flex' : 'inline-flex'} max-w-[28rem] items-center gap-2 overflow-hidden rounded-sm bg-[#f0eee6] px-2 py-1 text-[11px] leading-4 text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]`}
+                  className={`${previewState.reason === 'large' && !mobileLayout ? 'hidden sm:inline-flex' : 'inline-flex'} max-w-[18rem] items-center gap-2 overflow-hidden rounded-sm bg-[#f0eee6] px-2 py-1 text-[11px] leading-4 text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5] sm:max-w-[28rem]`}
                   data-testid="code-agent-diff-file-suppression-notice"
                   title={t(messageKey)}
                 >

@@ -5,6 +5,7 @@ import {
   Copy,
   Download,
   Eye,
+  ExternalLink,
   FolderTree,
   Globe2,
   LoaderCircle,
@@ -24,10 +25,13 @@ interface CodeAgentFilePreviewHeaderProps {
   wordWrap: boolean;
   explorerOpen: boolean;
   browserPreviewPending: boolean;
+  externalPreviewUrl?: string | null;
+  externalPreviewPending?: boolean;
   canToggleFileWordWrap: boolean;
   canOpenInBrowserPreview: boolean;
   supportsPreview: boolean;
   refreshCurrentFilePending: boolean;
+  mobileLayout?: boolean;
   onRefreshCurrentFile: () => void;
   onDownloadFile?: () => void;
   onToggleWordWrap: () => void;
@@ -43,10 +47,13 @@ export function CodeAgentFilePreviewHeader({
   wordWrap,
   explorerOpen,
   browserPreviewPending,
+  externalPreviewUrl,
+  externalPreviewPending = false,
   canToggleFileWordWrap,
   canOpenInBrowserPreview,
   supportsPreview,
   refreshCurrentFilePending,
+  mobileLayout = false,
   onRefreshCurrentFile,
   onDownloadFile,
   onToggleWordWrap,
@@ -70,8 +77,11 @@ export function CodeAgentFilePreviewHeader({
   const previewToggleLabel = isMarkdown
     ? (renderPreview ? t('codeAgentShowMarkdownSource') : t('codeAgentShowRenderedMarkdown'))
     : (renderPreview ? t('codeAgentShowSource') : t('codeAgentShowPreview'));
+  const previewModeLabel = isMarkdown ? t('codeAgentShowRenderedMarkdown') : t('codeAgentShowPreview');
+  const sourceModeLabel = isMarkdown ? t('codeAgentShowMarkdownSource') : t('codeAgentShowSource');
   const refreshCurrentFileLabel = t('codeAgentRefreshWorkspaceFile');
   const copyFilePathLabel = copiedPath ? t('copied') : t('codeAgentCopyFilePath');
+  const openExternalPreviewLabel = t('codeAgentOpenBrowserPreviewExternally');
 
   const clearCopyFeedbackTimer = useCallback(() => {
     if (copyFeedbackTimerRef.current) {
@@ -153,66 +163,215 @@ export function CodeAgentFilePreviewHeader({
     );
   }, [clearCopyFeedbackTimer, relativePath]);
 
+  const handleOpenExternalPreview = useCallback(() => {
+    if (!externalPreviewUrl) {
+      return;
+    }
+    window.open(externalPreviewUrl, '_blank', 'noopener,noreferrer');
+  }, [externalPreviewUrl]);
+
   if (!relativePath) {
     return null;
   }
 
-  return (
-    <div className="surface-subheader flex h-9 shrink-0 items-center gap-2 border-b border-[#dedbd0] px-3 dark:border-[#30302e]" data-surface-subheader>
-      <div className="relative min-w-0 flex-1" data-file-breadcrumb-fades="true">
-        <div
-          ref={breadcrumbRef}
-          className="min-w-0 overflow-x-auto text-xs [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-          data-file-breadcrumbs="true"
-          data-testid="code-agent-file-breadcrumbs"
-          onScroll={updateBreadcrumbFade}
-        >
-          <div className="flex h-full w-max min-w-full items-center">
-            {breadcrumbs.map((crumb, index) => (
-              <div
-                key={crumb.path || 'project'}
-                className="flex min-w-0 shrink-0 items-center"
-                data-current-file-crumb={crumb.kind === 'file'}
+  const breadcrumbStrip = (
+    <div className="relative min-w-0 flex-1" data-file-breadcrumb-fades="true">
+      <div
+        ref={breadcrumbRef}
+        className="min-w-0 overflow-x-auto text-xs [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        data-file-breadcrumbs="true"
+        data-testid="code-agent-file-breadcrumbs"
+        onScroll={updateBreadcrumbFade}
+      >
+        <div className="flex h-full w-max min-w-full items-center">
+          {breadcrumbs.map((crumb, index) => (
+            <div
+              key={crumb.path || 'project'}
+              className="flex min-w-0 shrink-0 items-center"
+              data-current-file-crumb={crumb.kind === 'file'}
+            >
+              {index > 0 ? <ChevronRight className="mx-1 h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" /> : null}
+              <span
+                className={`max-w-40 truncate ${crumb.kind === 'file' ? 'font-medium text-[#141413] dark:text-[#faf9f5]' : 'text-[#87867f] dark:text-[#8f8d86]'}`}
+                title={crumb.path || projectName}
               >
-                {index > 0 ? <ChevronRight className="mx-1 h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" /> : null}
-                <span
-                  className={`max-w-40 truncate ${crumb.kind === 'file' ? 'font-medium text-[#141413] dark:text-[#faf9f5]' : 'text-[#87867f] dark:text-[#8f8d86]'}`}
-                  title={crumb.path || projectName}
-                >
-                  {crumb.label}
-                </span>
-              </div>
-            ))}
+                {crumb.label}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+      {breadcrumbFade.left ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 left-0 w-5 bg-gradient-to-r from-[#faf9f5] to-transparent dark:from-[#1d1d1b]"
+          data-testid="code-agent-file-breadcrumb-fade-left"
+        />
+      ) : null}
+      {breadcrumbFade.right ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 right-0 w-5 bg-gradient-to-l from-[#faf9f5] to-transparent dark:from-[#1d1d1b]"
+          data-testid="code-agent-file-breadcrumb-fade-right"
+        />
+      ) : null}
+    </div>
+  );
+
+  const copyButtonClassName = `${mobileLayout
+    ? 'inline-flex h-8 w-8 items-center justify-center rounded-md'
+    : 'rounded-md p-1.5'
+  } shrink-0 transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
+    copiedPath
+      ? 'text-[#9f462c] dark:text-[#ffb197]'
+      : 'text-[#87867f] dark:text-[#8f8d86]'
+  }`;
+
+  const copyButton = (
+    <button
+      type="button"
+      className={copyButtonClassName}
+      aria-label={copyFilePathLabel}
+      title={copyFilePathLabel}
+      data-testid="code-agent-file-copy-path-button"
+      onClick={handleCopyFilePath}
+    >
+      {copiedPath ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+    </button>
+  );
+
+  if (mobileLayout) {
+    const mobileIconButtonClass = 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-wait disabled:opacity-60 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]';
+    const mobileModeButtonClass = (active: boolean) => `inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold transition-colors ${
+      active
+        ? 'border-[#c96442]/45 bg-[#f0eee6] text-[#141413] dark:border-[#ffb197]/45 dark:bg-[#30302e] dark:text-[#faf9f5]'
+        : 'border-[#dedbd0] text-[#5e5d59] hover:bg-[#f0eee6] hover:text-[#141413] dark:border-[#30302e] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]'
+    }`;
+
+    return (
+      <div
+        className="surface-subheader flex shrink-0 flex-col gap-2 border-b border-[#dedbd0] px-3 py-2 dark:border-[#30302e]"
+        data-mobile-file-preview-header="true"
+        data-surface-subheader
+        data-testid="code-agent-mobile-file-preview-header"
+      >
+        <div className="flex min-h-8 items-center gap-2" data-testid="code-agent-mobile-file-preview-breadcrumb-row">
+          {breadcrumbStrip}
+          {copyButton}
+        </div>
+        <div className="flex min-h-8 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" data-testid="code-agent-mobile-file-preview-action-row">
+          {supportsPreview ? (
+            <div className="flex shrink-0 items-center gap-1" role="group">
+              <button
+                type="button"
+                className={mobileModeButtonClass(renderPreview)}
+                aria-label={previewModeLabel}
+                aria-pressed={renderPreview}
+                title={previewModeLabel}
+                onClick={() => {
+                  if (!renderPreview) {
+                    onTogglePreviewView();
+                  }
+                }}
+              >
+                <Eye className="h-3.5 w-3.5" />
+                <span>{previewModeLabel}</span>
+              </button>
+              <button
+                type="button"
+                className={mobileModeButtonClass(!renderPreview)}
+                aria-label={sourceModeLabel}
+                aria-pressed={!renderPreview}
+                title={sourceModeLabel}
+                onClick={() => {
+                  if (renderPreview) {
+                    onTogglePreviewView();
+                  }
+                }}
+              >
+                <Code2 className="h-3.5 w-3.5" />
+                <span>{sourceModeLabel}</span>
+              </button>
+            </div>
+          ) : null}
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            <button
+              type="button"
+              className={mobileIconButtonClass}
+              aria-label={refreshCurrentFileLabel}
+              title={refreshCurrentFileLabel}
+              disabled={refreshCurrentFilePending}
+              onClick={onRefreshCurrentFile}
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${refreshCurrentFilePending ? 'animate-spin' : ''}`} />
+            </button>
+            {onDownloadFile ? (
+              <button
+                type="button"
+                className={mobileIconButtonClass}
+                aria-label={t('codeAgentDownloadFile')}
+                title={t('codeAgentDownloadFile')}
+                onClick={onDownloadFile}
+              >
+                <Download className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+            {canToggleFileWordWrap ? (
+              <button
+                type="button"
+                className={`${mobileIconButtonClass} ${wordWrap ? 'text-[#9f462c] dark:text-[#ffb197]' : ''}`}
+                aria-label={wordWrapLabel}
+                aria-pressed={wordWrap}
+                title={wordWrapLabel}
+                onClick={onToggleWordWrap}
+              >
+                <WrapText className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+            {canOpenInBrowserPreview ? (
+              <button
+                type="button"
+                className={mobileIconButtonClass}
+                aria-label={t('codeAgentOpenFileInPreview')}
+                title={t('codeAgentOpenFileInPreview')}
+                disabled={browserPreviewPending}
+                onClick={onOpenInBrowserPreview}
+              >
+                {browserPreviewPending ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Globe2 className="h-3.5 w-3.5" />}
+              </button>
+            ) : null}
+            {externalPreviewUrl !== undefined ? (
+              <button
+                type="button"
+                className={mobileIconButtonClass}
+                aria-label={openExternalPreviewLabel}
+                title={openExternalPreviewLabel}
+                disabled={externalPreviewPending || externalPreviewUrl === null}
+                onClick={handleOpenExternalPreview}
+              >
+                {externalPreviewPending ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <ExternalLink className="h-3.5 w-3.5" />}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className={`${mobileIconButtonClass} ${explorerOpen ? 'text-[#9f462c] dark:text-[#ffb197]' : ''}`}
+              aria-label={explorerOpen ? t('codeAgentHideFileExplorer') : t('codeAgentShowFileExplorer')}
+              aria-pressed={explorerOpen}
+              title={explorerOpen ? t('codeAgentHideFileExplorer') : t('codeAgentShowFileExplorer')}
+              onClick={onToggleExplorer}
+            >
+              <FolderTree className="h-3.5 w-3.5" />
+            </button>
           </div>
         </div>
-        {breadcrumbFade.left ? (
-          <span
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 left-0 w-5 bg-gradient-to-r from-[#faf9f5] to-transparent dark:from-[#1d1d1b]"
-            data-testid="code-agent-file-breadcrumb-fade-left"
-          />
-        ) : null}
-        {breadcrumbFade.right ? (
-          <span
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 right-0 w-5 bg-gradient-to-l from-[#faf9f5] to-transparent dark:from-[#1d1d1b]"
-            data-testid="code-agent-file-breadcrumb-fade-right"
-          />
-        ) : null}
       </div>
-      <button
-        type="button"
-        className={`shrink-0 rounded-md p-1.5 transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
-          copiedPath
-            ? 'text-[#9f462c] dark:text-[#ffb197]'
-            : 'text-[#87867f] dark:text-[#8f8d86]'
-        }`}
-        aria-label={copyFilePathLabel}
-        title={copyFilePathLabel}
-        onClick={handleCopyFilePath}
-      >
-        {copiedPath ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-      </button>
+    );
+  }
+
+  return (
+    <div className="surface-subheader flex h-9 shrink-0 items-center gap-2 border-b border-[#dedbd0] px-3 dark:border-[#30302e]" data-surface-subheader>
+      {breadcrumbStrip}
+      {copyButton}
       <button
         type="button"
         className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-wait disabled:opacity-60 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"

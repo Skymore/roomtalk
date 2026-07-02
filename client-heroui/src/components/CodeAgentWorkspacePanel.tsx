@@ -53,6 +53,7 @@ const workspaceSurfaceClassName = 'rounded-xl border border-[#dedbd0] bg-[#faf9f
 const EMPTY_CHANGED_FILES: string[] = [];
 const EMPTY_CHANGED_FILE_STATS: CodeAgentWorkspaceSnapshot['changes']['changedFileStats'] = [];
 const EMPTY_DIFF_FILE_SUMMARIES: readonly CodeAgentWorkspaceDiffFileSummary[] = [];
+const MOBILE_WORKSPACE_QUERY = '(max-width: 1023px)';
 
 type ScopedDiffFileSummaries = {
   scopeKey: string;
@@ -76,6 +77,34 @@ function useResolvedTheme() {
   }, []);
 
   return resolvedTheme;
+}
+
+function readIsMobileWorkspaceLayout() {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia(MOBILE_WORKSPACE_QUERY).matches;
+}
+
+function useMobileWorkspaceLayout() {
+  const [isMobileWorkspaceLayout, setIsMobileWorkspaceLayout] = React.useState(readIsMobileWorkspaceLayout);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return undefined;
+    }
+    const mediaQuery = window.matchMedia(MOBILE_WORKSPACE_QUERY);
+    const update = () => setIsMobileWorkspaceLayout(mediaQuery.matches);
+    update();
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', update);
+      return () => mediaQuery.removeEventListener('change', update);
+    }
+    mediaQuery.addListener(update);
+    return () => mediaQuery.removeListener(update);
+  }, []);
+
+  return isMobileWorkspaceLayout;
 }
 
 function normalizeChangedFilePath(path: string): string {
@@ -116,6 +145,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
 }) => {
   const { t } = useTranslation();
   const resolvedTheme = useResolvedTheme();
+  const isMobileWorkspaceLayout = useMobileWorkspaceLayout();
   const [isCollapsed, setIsCollapsed] = React.useState(false);
   const [selectedWorkspaceTab, setSelectedWorkspaceTab] = React.useState('overview');
   const diffPanelSelection = useCodeAgentDiffPanelSelection(room.id);
@@ -186,6 +216,10 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   const changedFileEntries = hasActiveDiffFileSummaries
     ? liveChangedFileEntries
     : snapshotChangedFileEntries;
+  const showOuterChangedFilesSummary = changedFileEntries.length > 0 && !isMobileWorkspaceLayout;
+  const showOuterChangedFilesTree = changedFileEntries.length > 0 && (
+    !isMobileWorkspaceLayout || changedFileEntries.length > 1
+  );
   const normalizedChangedFilePathSet = React.useMemo(
     () => new Set(changedFileEntries.map((entry) => normalizeChangedFilePath(entry.path))),
     [changedFileEntries],
@@ -213,6 +247,12 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   const agentStatus = getCodeAgentStatus(room);
   const detailsId = 'code-agent-workspace-details';
   const shouldLoadDiff = selectedWorkspaceTab === 'changes';
+  const changesScrollClassName = isMobileWorkspaceLayout
+    ? 'flex max-h-[clamp(16rem,calc(100dvh-var(--code-agent-composer-height,96px)-22rem),42rem)] min-h-0 flex-col overflow-y-auto overscroll-contain px-3 pb-[calc(var(--code-agent-composer-height,96px)+env(safe-area-inset-bottom)+1rem)] pt-2 [-webkit-overflow-scrolling:touch] touch-pan-y'
+    : 'flex max-h-[min(72vh,42rem)] min-h-0 flex-col overflow-y-auto px-3 py-2';
+  const changesContentClassName = isMobileWorkspaceLayout
+    ? 'flex min-w-0 flex-col gap-2'
+    : 'flex min-h-0 flex-1 flex-col gap-2';
 
   React.useEffect(() => {
     const hasResolvedChangedFiles = hasActiveDiffFileSummaries || changedFiles.length > 0 || workspaceChanges?.available === true;
@@ -473,42 +513,51 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
               </span>
             }
           >
-            <div className="flex max-h-[min(72vh,42rem)] min-h-0 flex-col overflow-y-auto px-3 py-2">
-              <div className="flex min-h-0 flex-1 flex-col gap-2">
-                {changedFileEntries.length > 0 ? (
+            <div
+              className={changesScrollClassName}
+              data-testid="code-agent-workspace-changes-scroll"
+              data-mobile-layout={isMobileWorkspaceLayout ? 'true' : undefined}
+            >
+              <div className={changesContentClassName} data-testid="code-agent-workspace-changes-content">
+                {showOuterChangedFilesSummary || showOuterChangedFilesTree ? (
                   <>
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-[#4d4c48] dark:text-[#e8e6dc]">
-                    <span className="font-semibold">{t('codeAgentChangedFilesCount', { count: changedFileEntries.length })}</span>
-                    {hasNonZeroChangedFileStat(changedFileSummary) ? (
-                      <CodeAgentDiffStatLabel
-                        additions={changedFileSummary.additions}
-                        deletions={changedFileSummary.deletions}
-                        className="text-[11px]"
-                        layout="inline"
-                      />
-                    ) : null}
-                  </div>
-                  <div className="space-y-1">
-                    {hasChangedFileDirectories ? (
-                      <div className="flex justify-end">
-                        <button
-                          type="button"
-                          data-scroll-anchor-ignore
-                          className="rounded-md border border-[#dedbd0] px-2 py-1 text-[11px] font-semibold text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:border-[#30302e] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
-                          onClick={() => setCodeAgentChangedFilesExpanded(room.id, changedFilesExpansionScopeKey, !allChangedDirectoriesExpanded)}
-                        >
-                          {allChangedDirectoriesExpanded ? t('codeAgentCollapseChangedFileTree') : t('codeAgentExpandChangedFileTree')}
-                        </button>
+                    {showOuterChangedFilesSummary ? (
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-[#4d4c48] dark:text-[#e8e6dc]">
+                        <span className="font-semibold">{t('codeAgentChangedFilesCount', { count: changedFileEntries.length })}</span>
+                        {hasNonZeroChangedFileStat(changedFileSummary) ? (
+                          <CodeAgentDiffStatLabel
+                            additions={changedFileSummary.additions}
+                            deletions={changedFileSummary.deletions}
+                            className="text-[11px]"
+                            layout="inline"
+                          />
+                        ) : null}
                       </div>
                     ) : null}
-                    <CodeAgentChangedFilesTree
-                      files={changedFileEntries}
-                      allDirectoriesExpanded={allChangedDirectoriesExpanded}
-                      resolvedTheme={resolvedTheme}
-                      selectedPath={selectedDiffFilePath}
-                      onOpenDiffFile={handleOpenDiffFile}
-                    />
-                  </div>
+                    {showOuterChangedFilesTree ? (
+                      <div className="space-y-1">
+                        {hasChangedFileDirectories ? (
+                          <div className="flex justify-end">
+                            <button
+                              type="button"
+                              data-scroll-anchor-ignore
+                              className={`${isMobileWorkspaceLayout ? 'min-h-8 px-2.5' : 'px-2 py-1'} rounded-md border border-[#dedbd0] text-[11px] font-semibold text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:border-[#30302e] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]`}
+                              onClick={() => setCodeAgentChangedFilesExpanded(room.id, changedFilesExpansionScopeKey, !allChangedDirectoriesExpanded)}
+                            >
+                              {allChangedDirectoriesExpanded ? t('codeAgentCollapseChangedFileTree') : t('codeAgentExpandChangedFileTree')}
+                            </button>
+                          </div>
+                        ) : null}
+                        <CodeAgentChangedFilesTree
+                          files={changedFileEntries}
+                          allDirectoriesExpanded={allChangedDirectoriesExpanded}
+                          resolvedTheme={resolvedTheme}
+                          selectedPath={selectedDiffFilePath}
+                          onOpenDiffFile={handleOpenDiffFile}
+                          mobileLayout={isMobileWorkspaceLayout}
+                        />
+                      </div>
+                    ) : null}
                   </>
                 ) : null}
                 <CodeAgentWorkspaceDiffViewer
@@ -522,6 +571,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                   reviewComments={reviewComments}
                   onAddReviewComment={onAddReviewComment}
                   onRemoveReviewComment={onRemoveReviewComment}
+                  mobileLayout={isMobileWorkspaceLayout}
                 />
               </div>
             </div>

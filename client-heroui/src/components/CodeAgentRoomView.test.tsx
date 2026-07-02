@@ -108,6 +108,7 @@ vi.mock('./MessageInput', () => ({
 
 vi.mock('./CodeAgentFileBrowserPanel', () => ({
   CodeAgentFileBrowserPanel: ({
+    surface,
     sandboxStatus,
     sandboxUpdatedAt,
     openFileRequest,
@@ -116,6 +117,7 @@ vi.mock('./CodeAgentFileBrowserPanel', () => ({
     onAddReviewComment,
     onFileSavePendingChange,
   }: {
+    surface?: 'desktop' | 'mobile';
     sandboxStatus?: string;
     sandboxUpdatedAt?: string;
     openFileRequest?: { path: string; requestId: number } | null;
@@ -127,6 +129,7 @@ vi.mock('./CodeAgentFileBrowserPanel', () => ({
     <>
       <div
         data-testid="file-browser"
+        data-surface={surface || ''}
         data-sandbox-status={sandboxStatus}
         data-sandbox-updated-at={sandboxUpdatedAt}
         data-open-path={openFileRequest?.path || ''}
@@ -270,11 +273,28 @@ describe('CodeAgentRoomView', () => {
   });
 
   it('gives desktop and mobile file managers a flex height context', () => {
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: 390,
+    });
+    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })));
+
     renderCodeAgentRoom(cocoRoom);
 
     const desktopFileBrowser = screen.getByTestId('file-browser');
+    expect(desktopFileBrowser.dataset.surface).toBe('desktop');
     const layout = desktopFileBrowser.closest('[data-code-agent-workspace-layout="true"]') as HTMLDivElement;
     expect(layout.style.getPropertyValue('--code-agent-chat-min-width')).toBe('480px');
+    expect(layout.style.getPropertyValue('--code-agent-composer-height')).toMatch(/px$/);
     expect(layout.className).toContain('lg:grid-cols-[minmax(var(--code-agent-chat-min-width),1fr)_minmax(0,var(--code-agent-files-width))]');
     expect(desktopFileBrowser.parentElement?.classList.contains('flex')).toBe(true);
     expect(desktopFileBrowser.parentElement?.classList.contains('min-h-0')).toBe(true);
@@ -287,6 +307,7 @@ describe('CodeAgentRoomView', () => {
     const fileBrowsers = screen.getAllByTestId('file-browser');
     expect(fileBrowsers).toHaveLength(2);
     const mobileFileBrowser = fileBrowsers.find((element) => element !== desktopFileBrowser);
+    expect(mobileFileBrowser?.dataset.surface).toBe('mobile');
     expect(mobileFileBrowser?.parentElement?.classList.contains('flex')).toBe(true);
     expect(mobileFileBrowser?.parentElement?.classList.contains('min-h-0')).toBe(true);
   });
@@ -526,20 +547,46 @@ describe('CodeAgentRoomView', () => {
     expect(fileBrowser.dataset.revealRequestId).toBe('2');
   });
 
-  it('shows the T3-style pending save marker on the workspace files rail', () => {
+  it('shows pending save markers on the desktop rail and mobile workspace sheet', () => {
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: 390,
+    });
+    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })));
+
     renderCodeAgentRoom(cocoRoom);
 
     expect(screen.queryByTestId('code-agent-file-save-pending-indicator')).toBeNull();
+    expect(screen.queryByTestId('code-agent-mobile-file-save-pending-indicator')).toBeNull();
+    expect(screen.getByLabelText('codeAgentWorkspaceFiles').getAttribute('title')).toBe('codeAgentWorkspaceFiles');
 
     fireEvent.click(screen.getByTestId('file-save-pending-on'));
 
     expect(screen.getByTestId('code-agent-file-save-pending-indicator')).toBeTruthy();
     expect(screen.getByLabelText('codeAgentCollapseWorkspaceFiles - codeAgentWorkspaceFilesSavePending')).toBeTruthy();
+    expect(screen.getByTestId('code-agent-mobile-file-save-pending-indicator')).toBeTruthy();
+    const mobileWorkspaceButton = screen.getByLabelText('codeAgentWorkspaceFiles - codeAgentWorkspaceFilesSavePending');
+    expect(mobileWorkspaceButton.getAttribute('title')).toBe('codeAgentWorkspaceFiles - codeAgentWorkspaceFilesSavePending');
 
-    fireEvent.click(screen.getByTestId('file-save-pending-off'));
+    fireEvent.click(mobileWorkspaceButton);
+    expect(screen.getByTestId('code-agent-mobile-sheet-file-save-pending-indicator')).toBeTruthy();
+
+    fireEvent.click(screen.getAllByTestId('file-save-pending-off')[0]);
 
     expect(screen.queryByTestId('code-agent-file-save-pending-indicator')).toBeNull();
+    expect(screen.queryByTestId('code-agent-mobile-file-save-pending-indicator')).toBeNull();
+    expect(screen.queryByTestId('code-agent-mobile-sheet-file-save-pending-indicator')).toBeNull();
     expect(screen.getByLabelText('codeAgentCollapseWorkspaceFiles')).toBeTruthy();
+    expect(screen.getByLabelText('codeAgentWorkspaceFiles').getAttribute('title')).toBe('codeAgentWorkspaceFiles');
   });
 
   it('persists T3-style review comment drafts by room', () => {

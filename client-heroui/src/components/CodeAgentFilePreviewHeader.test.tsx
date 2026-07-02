@@ -97,6 +97,57 @@ describe('CodeAgentFilePreviewHeader', () => {
     expect(screen.getByLabelText('codeAgentShowFileExplorer').getAttribute('title')).toBe('codeAgentShowFileExplorer');
   });
 
+  it('uses a two-row file preview header on mobile surfaces', async () => {
+    const writeTextMock = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: writeTextMock },
+    });
+
+    render(<CodeAgentFilePreviewHeader {...defaultProps} mobileLayout />);
+
+    const header = screen.getByTestId('code-agent-mobile-file-preview-header');
+    expect(header.dataset.mobileFilePreviewHeader).toBe('true');
+    expect(header.className).toContain('flex-col');
+    expect(header.className).toContain('gap-2');
+    expect(header.className).not.toContain('h-9');
+
+    const breadcrumbRow = screen.getByTestId('code-agent-mobile-file-preview-breadcrumb-row');
+    expect(within(breadcrumbRow).getByText('Coco')).toBeTruthy();
+    expect(within(breadcrumbRow).getByText('Guide.md')).toBeTruthy();
+    expect(within(breadcrumbRow).getByLabelText('codeAgentCopyFilePath')).toBeTruthy();
+
+    const actionRow = screen.getByTestId('code-agent-mobile-file-preview-action-row');
+    const previewModeButton = within(actionRow).getByLabelText('codeAgentShowRenderedMarkdown');
+    const sourceModeButton = within(actionRow).getByLabelText('codeAgentShowMarkdownSource');
+    expect(previewModeButton.getAttribute('aria-pressed')).toBe('false');
+    expect(sourceModeButton.getAttribute('aria-pressed')).toBe('true');
+    expect(actionRow.textContent).toContain('codeAgentShowRenderedMarkdown');
+    expect(actionRow.textContent).toContain('codeAgentShowMarkdownSource');
+    expect(within(actionRow).getByLabelText('codeAgentRefreshWorkspaceFile')).toBeTruthy();
+    expect(within(actionRow).getByLabelText('codeAgentDownloadFile')).toBeTruthy();
+    expect(within(actionRow).getByLabelText('codeAgentEnableFileLineWrapping')).toBeTruthy();
+    expect(within(actionRow).getByLabelText('codeAgentOpenFileInPreview')).toBeTruthy();
+    expect(within(actionRow).getByLabelText('codeAgentHideFileExplorer')).toBeTruthy();
+
+    fireEvent.click(previewModeButton);
+    fireEvent.click(sourceModeButton);
+    fireEvent.click(within(actionRow).getByLabelText('codeAgentRefreshWorkspaceFile'));
+    fireEvent.click(within(actionRow).getByLabelText('codeAgentDownloadFile'));
+    fireEvent.click(within(actionRow).getByLabelText('codeAgentEnableFileLineWrapping'));
+    fireEvent.click(within(actionRow).getByLabelText('codeAgentOpenFileInPreview'));
+    fireEvent.click(within(actionRow).getByLabelText('codeAgentHideFileExplorer'));
+    fireEvent.click(within(breadcrumbRow).getByLabelText('codeAgentCopyFilePath'));
+
+    expect(defaultProps.onTogglePreviewView).toHaveBeenCalledTimes(1);
+    expect(defaultProps.onRefreshCurrentFile).toHaveBeenCalledTimes(1);
+    expect(defaultProps.onDownloadFile).toHaveBeenCalledTimes(1);
+    expect(defaultProps.onToggleWordWrap).toHaveBeenCalledTimes(1);
+    expect(defaultProps.onOpenInBrowserPreview).toHaveBeenCalledTimes(1);
+    expect(defaultProps.onToggleExplorer).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(writeTextMock).toHaveBeenCalledWith('docs/Guide.md'));
+  });
+
   it('shows T3-style breadcrumb scroll fades when the breadcrumb strip overflows', () => {
     render(<CodeAgentFilePreviewHeader {...defaultProps} relativePath="a/b/c/d/e/f/Guide.md" />);
 

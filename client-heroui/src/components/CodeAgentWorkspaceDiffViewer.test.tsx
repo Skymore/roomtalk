@@ -278,6 +278,60 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(screen.getByTestId('code-view').dataset.unsafeCss).toContain('[data-title]:hover');
   });
 
+  it('uses a compact mobile diff toolbar with internally scrollable controls', async () => {
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+      headRef: 'feature/mobile',
+      baseRef: 'origin/main',
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          { name: 'src/App.tsx', hunks: [], additionLines: [], deletionLines: [], type: 'modify' },
+        ],
+      },
+    ]);
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" mobileLayout />);
+
+    expect(await screen.findByTestId('code-view')).toBeTruthy();
+    const subheader = screen.getByTestId('code-agent-workspace-diff-viewer').querySelector('[data-surface-subheader]');
+    expect(subheader).toBeTruthy();
+    expect(subheader?.className).toContain('min-h-12');
+    expect(subheader?.className).not.toContain('min-h-[4.75rem]');
+    expect(subheader?.className).not.toContain('h-9');
+
+    const mobileHeader = screen.getByTestId('code-agent-mobile-workspace-diff-header');
+    expect(within(mobileHeader).queryByTestId('code-agent-mobile-workspace-diff-summary-row')).toBeNull();
+    expect(within(mobileHeader).queryByText('codeAgentChanges')).toBeNull();
+    expect(within(mobileHeader).queryByText('feature/mobile -> origin/main')).toBeNull();
+    expect(within(mobileHeader).queryByText('codeAgentChangedFilesCount')).toBeNull();
+
+    const controlsRow = within(mobileHeader).getByTestId('code-agent-mobile-workspace-diff-controls-row');
+    expect(controlsRow.className).toContain('overflow-x-auto');
+    expect(controlsRow.firstElementChild?.className).toContain('min-w-max');
+    expect(controlsRow.contains(screen.getByLabelText('codeAgentRefreshWorkspaceDiff'))).toBe(true);
+    const refreshButton = screen.getByLabelText('codeAgentRefreshWorkspaceDiff');
+    expect(refreshButton.className).toContain('h-9');
+    expect(refreshButton.className).toContain('w-9');
+    const scopeButton = screen.getByLabelText('codeAgentDiffScope: codeAgentDiffScopeBranch');
+    expect(controlsRow.contains(scopeButton)).toBe(true);
+    expect(scopeButton.className).toContain('h-9');
+    expect(scopeButton.className).toContain('rounded-lg');
+    expect(scopeButton.className).toContain('text-sm');
+    expect(screen.getByText('codeAgentDiffScopeWorkingTree').closest('button')?.className).toContain('h-10');
+    expect(controlsRow.contains(screen.getByRole('group', {
+      name: 'codeAgentStackedDiffView / codeAgentSplitDiffView',
+    }))).toBe(true);
+    expect(screen.getByLabelText('codeAgentStackedDiffView').className).toContain('h-9');
+    expect(screen.getByLabelText('codeAgentStackedDiffView').className).toContain('rounded-l-lg');
+    expect(screen.getByLabelText('codeAgentSplitDiffView').className).toContain('h-9');
+    expect(screen.getByLabelText('codeAgentSplitDiffView').className).toContain('rounded-r-lg');
+  });
+
   it('refreshes the T3-style workspace diff and refs from the toolbar', async () => {
     let patchPath = 'src/App.tsx';
     loadCodeAgentWorkspaceDiffMock.mockImplementation(() => Promise.resolve({
@@ -831,7 +885,42 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
 
     expect(screen.getByTestId('diff-file-none:src/App.tsx').getAttribute('data-collapsed')).toBe('true');
     expect(screen.getByTestId('diff-file-none:src/utils.ts').getAttribute('data-collapsed')).toBe('false');
-    expect(screen.getByLabelText('codeAgentExpandDiffFile').getAttribute('aria-expanded')).toBe('false');
+    const expandButton = screen.getByLabelText('codeAgentExpandDiffFile');
+    expect(expandButton.getAttribute('aria-expanded')).toBe('false');
+    expect(expandButton.className).toContain('h-5');
+    expect(expandButton.className).toContain('w-5');
+    expect(expandButton.className).toContain('rounded-sm');
+  });
+
+  it('uses touch-sized diff file header controls on mobile only', async () => {
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          { name: 'src/App.tsx', hunks: [], additionLines: [], deletionLines: [], type: 'change' },
+        ],
+      },
+    ]);
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" mobileLayout />);
+
+    await screen.findByTestId('diff-file-none:src/App.tsx');
+    const collapseButton = screen.getByLabelText('codeAgentCollapseDiffFile');
+    const viewedButton = screen.getByLabelText('codeAgentMarkDiffFileViewed');
+
+    expect(collapseButton.className).toContain('h-8');
+    expect(collapseButton.className).toContain('w-8');
+    expect(collapseButton.className).toContain('rounded-md');
+    expect(collapseButton.className).not.toContain('h-5');
+    expect(viewedButton.className).toContain('h-8');
+    expect(viewedButton.className).toContain('w-8');
+    expect(viewedButton.className).toContain('rounded-md');
+    expect(viewedButton.className).not.toContain('w-5');
   });
 
   it('marks T3-style diff files as viewed and collapses them', async () => {
@@ -953,6 +1042,49 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(screen.getByTestId('diff-file-file:big').getAttribute('data-collapsed')).toBe('false');
     expect(within(screen.getByTestId('diff-file-file:big')).queryByTestId('code-agent-diff-file-suppression-load')).toBeNull();
     expect(within(screen.getByTestId('diff-file-file:big')).queryByTestId('code-agent-diff-file-suppression-notice')).toBeNull();
+  });
+
+  it('keeps the large diff reason visible in the mobile diff header before loading', async () => {
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/big.ts b/src/big.ts\n',
+      byteSize: 42000,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          {
+            name: 'src/big.ts',
+            cacheKey: 'file:big',
+            hunks: [{
+              additionLines: 401,
+              deletionLines: 0,
+              hunkContent: [{ type: 'change', deletions: 0, additions: 401 }],
+            }],
+            additionLines: Array.from({ length: 401 }, (_, index) => `const line${index} = ${index};`),
+            deletionLines: [],
+            type: 'change',
+          },
+        ],
+      },
+    ]);
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" mobileLayout />);
+
+    const file = await screen.findByTestId('diff-file-file:big');
+    expect(file.getAttribute('data-collapsed')).toBe('true');
+    const suppression = within(file).getByTestId('code-agent-diff-file-suppression-load');
+    const mobileLabel = within(suppression).getByText('codeAgentLargeDiff');
+    expect(mobileLabel.className).toContain('sm:hidden');
+    expect(suppression.className).toContain('h-8');
+    expect(suppression.className).toContain('rounded-md');
+    expect(suppression.className).not.toContain('h-5');
+    expect(suppression.textContent).toContain('codeAgentLoadDiff');
+    const notice = within(file).getByTestId('code-agent-diff-file-suppression-notice');
+    expect(notice.textContent).toContain('codeAgentLargeDiffSuppressedMessage');
+    expect(notice.className).toContain('inline-flex');
+    expect(notice.className).not.toContain('hidden sm:inline-flex');
   });
 
   it('shows T3-style notices for pure rename diff files', async () => {
@@ -1177,6 +1309,122 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
       diff: '@@ -0,0 +2,3 @@\n+added 2\n+added 3\n+added 4',
       fenceLanguage: 'diff',
     }));
+  });
+
+  it('uses a mobile selection action bar before opening a diff comment draft', async () => {
+    const onAddReviewComment = vi.fn();
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          {
+            name: 'src/App.tsx',
+            cacheKey: 'file:app',
+            hunks: [{
+              additionStart: 1,
+              deletionStart: 1,
+              deletionLineIndex: 0,
+              additionLineIndex: 0,
+              additionLines: 3,
+              deletionLines: 0,
+              hunkContent: [
+                { type: 'context', lines: 1 },
+                { type: 'change', deletions: 0, additions: 3 },
+              ],
+            }],
+            additionLines: ['same', 'added 2', 'added 3', 'added 4'],
+            deletionLines: ['same'],
+            type: 'change',
+          },
+        ],
+      },
+    ]);
+
+    render(
+      <CodeAgentWorkspaceDiffViewer
+        roomId="room-1"
+        enabled
+        refreshKey="snapshot-1"
+        onAddReviewComment={onAddReviewComment}
+        mobileLayout
+      />,
+    );
+
+    fireEvent.click(await screen.findByLabelText('select diff lines file:app'));
+
+    const actionBar = await screen.findByTestId('code-agent-mobile-review-selection-action-bar');
+    expect(actionBar.className).toContain('absolute');
+    expect(actionBar.className).toContain('bottom-3');
+    expect(screen.queryByLabelText('codeAgentCommentOnLines:+2 to +4')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'codeAgentCommentOnLines:+2 to +4' }));
+
+    const mobileCommentSheet = await screen.findByTestId('code-agent-mobile-review-comment-sheet');
+    expect(mobileCommentSheet.dataset.mobileCommentAnnotation).toBe('true');
+    expect(within(mobileCommentSheet).getByText('src/App.tsx')).toBeTruthy();
+    const mobileCommentInput = within(mobileCommentSheet).getByTestId('code-agent-mobile-review-comment-textarea');
+    expect(mobileCommentInput.className).toContain('min-h-[132px]');
+    expect(within(mobileCommentSheet).getByRole('button', { name: 'codeAgentSubmitComment' }).className).toContain('min-h-11');
+    const input = await screen.findByLabelText('codeAgentCommentOnLines:+2 to +4');
+    fireEvent.change(input, { target: { value: 'Please revisit this diff.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'codeAgentSubmitComment' }));
+
+    expect(onAddReviewComment).toHaveBeenCalledWith(expect.objectContaining({
+      sectionId: 'workspace-diff:room-1:branch:auto',
+      filePath: 'src/App.tsx',
+      rangeLabel: '+2 to +4',
+      text: 'Please revisit this diff.',
+    }));
+    expect(screen.queryByTestId('code-agent-mobile-review-selection-action-bar')).toBeNull();
+  });
+
+  it('clears a mobile diff comment selection without opening a draft', async () => {
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          {
+            name: 'src/App.tsx',
+            cacheKey: 'file:app',
+            hunks: [{
+              additionStart: 1,
+              deletionStart: 1,
+              deletionLineIndex: 0,
+              additionLineIndex: 0,
+              additionLines: 3,
+              deletionLines: 0,
+              hunkContent: [
+                { type: 'context', lines: 1 },
+                { type: 'change', deletions: 0, additions: 3 },
+              ],
+            }],
+            additionLines: ['same', 'added 2', 'added 3', 'added 4'],
+            deletionLines: ['same'],
+            type: 'change',
+          },
+        ],
+      },
+    ]);
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" mobileLayout />);
+
+    fireEvent.click(await screen.findByLabelText('select diff lines file:app'));
+    expect(await screen.findByTestId('code-agent-mobile-review-selection-action-bar')).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText('codeAgentCancelComment'));
+
+    expect(screen.queryByTestId('code-agent-mobile-review-selection-action-bar')).toBeNull();
+    expect(screen.queryByLabelText('codeAgentCommentOnLines:+2 to +4')).toBeNull();
   });
 
   it('keeps diff review annotations across workspace refreshes', async () => {
@@ -1766,6 +2014,8 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     });
     expect(renderModeGroup.contains(screen.getByLabelText('codeAgentStackedDiffView'))).toBe(true);
     expect(renderModeGroup.contains(screen.getByLabelText('codeAgentSplitDiffView'))).toBe(true);
+    expect(screen.getByLabelText('codeAgentStackedDiffView').className).toContain('h-7');
+    expect(screen.getByLabelText('codeAgentSplitDiffView').className).toContain('h-7');
     expect(screen.getByLabelText('codeAgentStackedDiffView').className).toContain('rounded-r-none');
     expect(screen.getByLabelText('codeAgentSplitDiffView').className).toContain('rounded-l-none');
     fireEvent.click(within(renderModeGroup).getByLabelText('codeAgentSplitDiffView'));
