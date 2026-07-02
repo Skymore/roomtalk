@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
+  Camera,
   ExternalLink,
   FileDiff,
   Files,
@@ -13,6 +14,7 @@ import {
   RefreshCw,
   RotateCcw,
   TerminalSquare,
+  Trash2,
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -115,6 +117,7 @@ import { resolveResponsiveCodeAgentBrowserViewportSize } from '../utils/codeAgen
 import {
   CODE_WORKSPACE_PREVIEW_AUTOMATION_CLOUD_BROWSER_OPERATIONS,
   connectCodeWorkspacePreviewAutomationHost,
+  runCodeWorkspacePreviewAutomationRequest,
   type CodeWorkspacePreviewAutomationRequest,
 } from '../utils/codeWorkspacePreviewAutomation';
 import {
@@ -458,6 +461,9 @@ function CodeAgentBrowserMoreMenu({
   canRefresh,
   canZoom,
   canToggleDeviceToolbar,
+  canClearBrowserData,
+  clearCookiesPending,
+  clearCachePending,
   zoomFactor,
   deviceToolbarVisible,
   onHardReload,
@@ -465,10 +471,15 @@ function CodeAgentBrowserMoreMenu({
   onZoomIn,
   onZoomOut,
   onResetZoom,
+  onClearCookies,
+  onClearCache,
 }: {
   canRefresh: boolean;
   canZoom: boolean;
   canToggleDeviceToolbar: boolean;
+  canClearBrowserData: boolean;
+  clearCookiesPending: boolean;
+  clearCachePending: boolean;
   zoomFactor: number;
   deviceToolbarVisible: boolean;
   onHardReload: () => void;
@@ -476,6 +487,8 @@ function CodeAgentBrowserMoreMenu({
   onZoomIn: () => void;
   onZoomOut: () => void;
   onResetZoom: () => void;
+  onClearCookies: () => void;
+  onClearCache: () => void;
 }) {
   const { t } = useTranslation();
   const buttonRef = useRef<HTMLButtonElement | null>(null);
@@ -498,7 +511,7 @@ function CodeAgentBrowserMoreMenu({
     }
     const rect = event.currentTarget.getBoundingClientRect();
     const menuWidth = 224;
-    const menuHeight = 150;
+    const menuHeight = 240;
     const viewportWidth = window.innerWidth || document.documentElement.clientWidth || menuWidth;
     const viewportHeight = window.innerHeight || document.documentElement.clientHeight || menuHeight;
     setMenuPosition({
@@ -628,6 +641,41 @@ function CodeAgentBrowserMoreMenu({
               </button>
             </span>
           </div>
+          <div className="my-1 h-px bg-[#dedbd0] dark:bg-[#30302e]" />
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] hover:bg-[#f0eee6] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent dark:text-[#faf9f5] dark:hover:bg-[#30302e] dark:disabled:hover:bg-transparent"
+            role="menuitem"
+            disabled={!canClearBrowserData || clearCookiesPending}
+            onClick={() => {
+              onClearCookies();
+              closeMenu();
+            }}
+          >
+            {clearCookiesPending ? (
+              <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin text-[#87867f] dark:text-[#8f8d86]" />
+            ) : (
+              <Trash2 className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+            )}
+            <span className="min-w-0 truncate">{t('codeAgentBrowserClearCookies')}</span>
+          </button>
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] hover:bg-[#f0eee6] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent dark:text-[#faf9f5] dark:hover:bg-[#30302e] dark:disabled:hover:bg-transparent"
+            role="menuitem"
+            disabled={!canClearBrowserData || clearCachePending}
+            onClick={() => {
+              onClearCache();
+              closeMenu();
+            }}
+          >
+            {clearCachePending ? (
+              <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin text-[#87867f] dark:text-[#8f8d86]" />
+            ) : (
+              <Trash2 className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+            )}
+            <span className="min-w-0 truncate">{t('codeAgentBrowserClearCache')}</span>
+          </button>
         </div>
       ) : null}
     </>
@@ -745,6 +793,18 @@ type CodeAgentPreviewAutomationController = {
   setFocused: (focused: boolean) => unknown;
 };
 
+type CodeAgentPreviewAutomationScreenshot = {
+  mimeType: 'image/png';
+  data: string;
+  width: number;
+  height: number;
+  unavailable?: boolean;
+};
+
+type CodeAgentPreviewAutomationSnapshot = {
+  screenshot: CodeAgentPreviewAutomationScreenshot;
+};
+
 interface CodeAgentBrowserSurfaceChromeProps {
   value: string;
   loading: boolean;
@@ -752,8 +812,14 @@ interface CodeAgentBrowserSurfaceChromeProps {
   canGoForward: boolean;
   canRefresh: boolean;
   canOpenExternal: boolean;
+  canCaptureScreenshot: boolean;
+  screenshotCapturePending: boolean;
+  screenshotCaptureCopied: boolean;
   canZoom: boolean;
   canToggleDeviceToolbar: boolean;
+  canClearBrowserData: boolean;
+  clearCookiesPending: boolean;
+  clearCachePending: boolean;
   zoomFactor: number;
   deviceToolbarVisible: boolean;
   mobileLayout?: boolean;
@@ -764,11 +830,14 @@ interface CodeAgentBrowserSurfaceChromeProps {
   onSubmit: (value: string) => void;
   onRefresh: () => void;
   onOpenExternal: () => void;
+  onCaptureScreenshot: () => void;
   onHardReload: () => void;
   onToggleDeviceToolbar: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onResetZoom: () => void;
+  onClearCookies: () => void;
+  onClearCache: () => void;
 }
 
 function formatBrowserSurfaceAddressDisplay(value: string): string {
@@ -869,6 +938,81 @@ function previewAutomationViewportSetting(input: unknown): CodeAgentPreviewViewp
   throw new Error('Preview automation resize input is invalid.');
 }
 
+function isPreviewAutomationSnapshot(value: unknown): value is CodeAgentPreviewAutomationSnapshot {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const screenshot = (value as { screenshot?: unknown }).screenshot;
+  if (!screenshot || typeof screenshot !== 'object') {
+    return false;
+  }
+  const record = screenshot as Partial<CodeAgentPreviewAutomationScreenshot>;
+  return (
+    record.mimeType === 'image/png'
+    && typeof record.data === 'string'
+    && record.data.length > 0
+    && typeof record.width === 'number'
+    && Number.isInteger(record.width)
+    && record.width > 0
+    && typeof record.height === 'number'
+    && Number.isInteger(record.height)
+    && record.height > 0
+  );
+}
+
+function previewScreenshotFilename(value: string): string {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const rawName = (() => {
+    try {
+      const url = new URL(value);
+      return `${url.hostname}${url.pathname}`;
+    } catch {
+      return value || 'preview';
+    }
+  })();
+  const safeName = rawName
+    .replace(/[\r\n]+/g, '')
+    .replace(/[\\/:*?"<>|]+/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || 'preview';
+  return `roomtalk-preview-${safeName}-${timestamp}.png`;
+}
+
+function downloadPreviewScreenshot(screenshot: CodeAgentPreviewAutomationScreenshot, filename: string): void {
+  const link = document.createElement('a');
+  link.href = `data:image/png;base64,${screenshot.data}`;
+  link.download = filename;
+  link.rel = 'noopener';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+function previewScreenshotBlob(screenshot: CodeAgentPreviewAutomationScreenshot): Blob {
+  const raw = window.atob(screenshot.data);
+  const bytes = new Uint8Array(raw.length);
+  for (let index = 0; index < raw.length; index += 1) {
+    bytes[index] = raw.charCodeAt(index);
+  }
+  return new Blob([bytes], { type: screenshot.mimeType });
+}
+
+async function copyPreviewScreenshotToClipboard(screenshot: CodeAgentPreviewAutomationScreenshot): Promise<boolean> {
+  if (
+    typeof navigator === 'undefined'
+    || !navigator.clipboard
+    || typeof navigator.clipboard.write !== 'function'
+    || typeof ClipboardItem === 'undefined'
+  ) {
+    return false;
+  }
+  await navigator.clipboard.write([
+    new ClipboardItem({ [screenshot.mimeType]: previewScreenshotBlob(screenshot) }),
+  ]);
+  return true;
+}
+
 function CodeAgentBrowserSurfaceChrome({
   value,
   loading,
@@ -876,8 +1020,14 @@ function CodeAgentBrowserSurfaceChrome({
   canGoForward,
   canRefresh,
   canOpenExternal,
+  canCaptureScreenshot,
+  screenshotCapturePending,
+  screenshotCaptureCopied,
   canZoom,
   canToggleDeviceToolbar,
+  canClearBrowserData,
+  clearCookiesPending,
+  clearCachePending,
   zoomFactor,
   deviceToolbarVisible,
   mobileLayout = false,
@@ -888,11 +1038,14 @@ function CodeAgentBrowserSurfaceChrome({
   onSubmit,
   onRefresh,
   onOpenExternal,
+  onCaptureScreenshot,
   onHardReload,
   onToggleDeviceToolbar,
   onZoomIn,
   onZoomOut,
   onResetZoom,
+  onClearCookies,
+  onClearCache,
 }: CodeAgentBrowserSurfaceChromeProps) {
   const { t } = useTranslation();
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -924,6 +1077,7 @@ function CodeAgentBrowserSurfaceChrome({
 
   const displayValue = inputFocused ? draft : formatBrowserSurfaceAddressDisplay(value);
   const displayTitle = !inputFocused && displayValue !== value ? value : undefined;
+  const captureScreenshotLabel = screenshotCaptureCopied ? t('copied') : t('codeAgentBrowserCaptureScreenshot');
   const browserChromeButtonClass = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-45 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]';
   const addressInput = (
     <input
@@ -1005,11 +1159,26 @@ function CodeAgentBrowserSurfaceChrome({
       <ExternalLink className="h-3.5 w-3.5" />
     </button>
   );
+  const screenshotButton = (
+    <button
+      type="button"
+      className={browserChromeButtonClass}
+      aria-label={captureScreenshotLabel}
+      title={captureScreenshotLabel}
+      disabled={!canCaptureScreenshot || screenshotCapturePending}
+      onClick={onCaptureScreenshot}
+    >
+      {screenshotCapturePending ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Camera className="h-3.5 w-3.5" />}
+    </button>
+  );
   const moreMenu = (
     <CodeAgentBrowserMoreMenu
       canRefresh={canRefresh}
       canZoom={canZoom}
       canToggleDeviceToolbar={canToggleDeviceToolbar}
+      canClearBrowserData={canClearBrowserData}
+      clearCookiesPending={clearCookiesPending}
+      clearCachePending={clearCachePending}
       zoomFactor={zoomFactor}
       deviceToolbarVisible={deviceToolbarVisible}
       onHardReload={onHardReload}
@@ -1017,6 +1186,8 @@ function CodeAgentBrowserSurfaceChrome({
       onZoomIn={onZoomIn}
       onZoomOut={onZoomOut}
       onResetZoom={onResetZoom}
+      onClearCookies={onClearCookies}
+      onClearCache={onClearCache}
     />
   );
 
@@ -1038,6 +1209,7 @@ function CodeAgentBrowserSurfaceChrome({
               {refreshButton}
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-1">
+              {screenshotButton}
               {openExternalButton}
               {moreMenu}
             </div>
@@ -1085,6 +1257,7 @@ function CodeAgentBrowserSurfaceChrome({
         {forwardButton}
         {refreshButton}
         {addressInput}
+        {screenshotButton}
         {openExternalButton}
         {moreMenu}
       </form>
@@ -1130,10 +1303,13 @@ function CodeAgentPreviewSurface({
   const [navigationError, setNavigationError] = useState<string | null>(null);
   const [browserReloadNonce, setBrowserReloadNonce] = useState(0);
   const [browserFrameLoading, setBrowserFrameLoading] = useState(false);
+  const [screenshotCaptureState, setScreenshotCaptureState] = useState<'idle' | 'pending' | 'copied'>('idle');
+  const [browserDataAction, setBrowserDataAction] = useState<'clearCookies' | 'clearCache' | null>(null);
   const [previewViewportContainerSize, setPreviewViewportContainerSize] = useState({ width: 1024, height: 768 });
   const zoomFactor = surface.zoomFactor ?? 1;
   const viewport = surface.viewport ?? FILL_CODE_AGENT_PREVIEW_VIEWPORT;
   const viewportRef = useRef(viewport);
+  const screenshotCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentAddress = previewUrl ?? relativePath ?? '';
   const resolvedWorkspacePreviewUrl = relativePath && assetUrlQuery.resolvedUrl
     ? appendWorkspaceAssetPreviewRevision(assetUrlQuery.resolvedUrl, assetPreviewRevision)
@@ -1160,6 +1336,13 @@ function CodeAgentPreviewSurface({
     setNavigationError(null);
     setBrowserReloadNonce(0);
   }, [currentAddress, surface.id]);
+
+  useEffect(() => () => {
+    if (screenshotCopiedTimerRef.current !== null) {
+      clearTimeout(screenshotCopiedTimerRef.current);
+      screenshotCopiedTimerRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     viewportRef.current = viewport;
@@ -1227,6 +1410,83 @@ function CodeAgentPreviewSurface({
     }
     window.open(resolvedPreviewUrl, '_blank', 'noopener,noreferrer');
   }, [resolvedPreviewUrl]);
+
+  const handleCaptureScreenshot = useCallback(() => {
+    if (!resolvedPreviewUrl || screenshotCaptureState === 'pending') {
+      return;
+    }
+    setScreenshotCaptureState('pending');
+    setNavigationError(null);
+    void runCodeWorkspacePreviewAutomationRequest({
+      requestId: `capture-screenshot:${Date.now().toString(36)}`,
+      roomId,
+      tabId: previewSessionTabId,
+      operation: 'snapshot',
+      input: {},
+      timeoutMs: 5000,
+    }).then(async (result) => {
+      if (!isPreviewAutomationSnapshot(result) || result.screenshot.unavailable) {
+        throw new Error(t('codeAgentBrowserScreenshotUnavailable'));
+      }
+      const filename = previewScreenshotFilename(previewUrl ?? relativePath ?? resolvedPreviewUrl);
+      downloadPreviewScreenshot(result.screenshot, filename);
+      let copied = false;
+      try {
+        copied = await copyPreviewScreenshotToClipboard(result.screenshot);
+      } catch {
+        copied = false;
+      }
+      if (copied) {
+        setScreenshotCaptureState('copied');
+        if (screenshotCopiedTimerRef.current !== null) {
+          clearTimeout(screenshotCopiedTimerRef.current);
+        }
+        screenshotCopiedTimerRef.current = setTimeout(() => {
+          screenshotCopiedTimerRef.current = null;
+          setScreenshotCaptureState('idle');
+        }, 1200);
+        return;
+      }
+      setScreenshotCaptureState('idle');
+    }).catch((error) => {
+      setScreenshotCaptureState('idle');
+      setNavigationError(error instanceof Error ? error.message : t('codeAgentBrowserScreenshotFailed'));
+    });
+  }, [previewSessionTabId, previewUrl, relativePath, resolvedPreviewUrl, roomId, screenshotCaptureState, t]);
+
+  const clearBrowserData = useCallback((operation: 'clearCookies' | 'clearCache') => {
+    if (!resolvedPreviewUrl || browserDataAction !== null) {
+      return;
+    }
+    setBrowserDataAction(operation);
+    setNavigationError(null);
+    void runCodeWorkspacePreviewAutomationRequest({
+      requestId: `${operation}:${Date.now().toString(36)}`,
+      roomId,
+      tabId: previewSessionTabId,
+      operation,
+      input: {},
+      timeoutMs: 10000,
+    }).then(() => {
+      void refreshCodeWorkspacePreviewSession({ roomId, tabId: previewSessionTabId }).catch(() => undefined);
+      setBrowserReloadNonce((current) => current + 1);
+    }).catch((error) => {
+      const fallback = operation === 'clearCookies'
+        ? t('codeAgentBrowserClearCookiesFailed')
+        : t('codeAgentBrowserClearCacheFailed');
+      setNavigationError(error instanceof Error ? error.message : fallback);
+    }).finally(() => {
+      setBrowserDataAction(null);
+    });
+  }, [browserDataAction, previewSessionTabId, resolvedPreviewUrl, roomId, t]);
+
+  const handleClearCookies = useCallback(() => {
+    clearBrowserData('clearCookies');
+  }, [clearBrowserData]);
+
+  const handleClearCache = useCallback(() => {
+    clearBrowserData('clearCache');
+  }, [clearBrowserData]);
 
   const updateViewport = useCallback(async (nextViewport: CodeAgentPreviewViewportSetting) => {
     const session = await resizeCodeWorkspacePreviewSession({
@@ -1415,8 +1675,14 @@ function CodeAgentPreviewSurface({
       canGoForward={canGoForward}
       canRefresh={canRefreshPreview}
       canOpenExternal={Boolean(resolvedPreviewUrl)}
+      canCaptureScreenshot={Boolean(resolvedPreviewUrl)}
+      screenshotCapturePending={screenshotCaptureState === 'pending'}
+      screenshotCaptureCopied={screenshotCaptureState === 'copied'}
       canZoom={Boolean(resolvedPreviewUrl)}
       canToggleDeviceToolbar={Boolean(resolvedPreviewUrl)}
+      canClearBrowserData={Boolean(resolvedPreviewUrl)}
+      clearCookiesPending={browserDataAction === 'clearCookies'}
+      clearCachePending={browserDataAction === 'clearCache'}
       zoomFactor={zoomFactor}
       deviceToolbarVisible={viewport._tag !== 'fill'}
       mobileLayout={mobileLayout}
@@ -1427,11 +1693,14 @@ function CodeAgentPreviewSurface({
       onSubmit={handleNavigate}
       onRefresh={handleRefresh}
       onOpenExternal={handleOpenExternal}
+      onCaptureScreenshot={handleCaptureScreenshot}
       onHardReload={handleRefresh}
       onToggleDeviceToolbar={handleToggleDeviceToolbar}
       onZoomIn={handleZoomIn}
       onZoomOut={handleZoomOut}
       onResetZoom={handleResetZoom}
+      onClearCookies={handleClearCookies}
+      onClearCache={handleClearCache}
     />
   );
 

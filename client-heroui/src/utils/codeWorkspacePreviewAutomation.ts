@@ -1,6 +1,7 @@
 import {
   onCodeWorkspacePreviewAutomationEvent,
   onSocketConnected,
+  requestCodeWorkspacePreviewAutomation,
   requestConnectCodeWorkspacePreviewAutomation,
   requestFocusCodeWorkspacePreviewAutomation,
   requestRespondCodeWorkspacePreviewAutomation,
@@ -29,6 +30,10 @@ export const CODE_WORKSPACE_PREVIEW_AUTOMATION_CLOUD_BROWSER_OPERATIONS = [
   'scroll',
   'evaluate',
   'waitFor',
+  'clearCookies',
+  'clearCache',
+  'recordingStart',
+  'recordingStop',
 ] as const satisfies readonly CodeWorkspacePreviewAutomationOperation[];
 
 export type CodeWorkspacePreviewAutomationHandler = (
@@ -119,6 +124,23 @@ function serializePreviewAutomationError(error: unknown): NonNullable<CodeWorksp
     _tag: 'PreviewAutomationExecutionError',
     message: typeof error === 'string' ? error : 'Workspace preview automation failed',
   };
+}
+
+export async function runCodeWorkspacePreviewAutomationRequest(payload: {
+  roomId: string;
+  requestId?: string;
+  tabId?: string;
+  operation: CodeWorkspacePreviewAutomationOperation;
+  input?: unknown;
+  timeoutMs?: number;
+}): Promise<unknown> {
+  const response = validateCodeWorkspacePreviewAutomationResponse(
+    await requestCodeWorkspacePreviewAutomation(payload),
+  );
+  if (!response.ok) {
+    throw new Error(response.error?.message || 'Workspace preview automation failed');
+  }
+  return response.result;
 }
 
 export async function connectCodeWorkspacePreviewAutomationHost({

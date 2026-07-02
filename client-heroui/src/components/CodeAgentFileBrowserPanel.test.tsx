@@ -2,7 +2,7 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CodeAgentFileBrowserPanel } from './CodeAgentFileBrowserPanel';
 import {
   openCodeAgentRightPanel,
@@ -38,6 +38,7 @@ const resolvePreviewTargetMock = vi.hoisted(() => vi.fn());
 const refreshPreviewSessionMock = vi.hoisted(() => vi.fn());
 const subscribePreviewEventsMock = vi.hoisted(() => vi.fn());
 const connectPreviewAutomationHostMock = vi.hoisted(() => vi.fn());
+const runPreviewAutomationRequestMock = vi.hoisted(() => vi.fn());
 const previewAutomationHandleRef = vi.hoisted(() => ({ current: null as null | ((request: any) => unknown) }));
 const getRoomMediaHistoryMock = vi.hoisted(() => vi.fn());
 const openSearchMock = vi.hoisted(() => vi.fn());
@@ -171,7 +172,24 @@ vi.mock('../utils/codeWorkspacePreviewAutomation', () => ({
     'scroll',
     'evaluate',
     'waitFor',
+    'clearCookies',
+    'clearCache',
+    'recordingStart',
+    'recordingStop',
   ],
+  runCodeWorkspacePreviewAutomationRequest: runPreviewAutomationRequestMock.mockImplementation((request) => {
+    if (!previewAutomationHandleRef.current) {
+      return Promise.reject(new Error('Workspace preview automation is not ready.'));
+    }
+    return Promise.resolve(previewAutomationHandleRef.current({
+      requestId: request.requestId ?? 'preview-request:test',
+      roomId: request.roomId,
+      tabId: request.tabId,
+      operation: request.operation,
+      input: request.input ?? {},
+      timeoutMs: request.timeoutMs ?? 15000,
+    }));
+  }),
   connectCodeWorkspacePreviewAutomationHost: connectPreviewAutomationHostMock.mockImplementation((options) => {
     previewAutomationHandleRef.current = options.handle;
     return Promise.resolve({
@@ -181,7 +199,7 @@ vi.mock('../utils/codeWorkspacePreviewAutomation', () => ({
         connectionId: 'preview-automation:test',
         socketId: 'socket-1',
         focused: true,
-        supportedOperations: ['status', 'open', 'navigate', 'resize', 'snapshot', 'click', 'type', 'press', 'scroll', 'evaluate', 'waitFor'],
+        supportedOperations: ['status', 'open', 'navigate', 'resize', 'snapshot', 'click', 'type', 'press', 'scroll', 'evaluate', 'waitFor', 'clearCookies', 'clearCache', 'recordingStart', 'recordingStop'],
         connectedAt: '2026-05-03T00:00:00.000Z',
         updatedAt: '2026-05-03T00:00:00.000Z',
       },
@@ -425,6 +443,15 @@ const dispatchPointer = (
 };
 
 describe('CodeAgentFileBrowserPanel', () => {
+  beforeEach(() => {
+    if (typeof HTMLElement.prototype.scrollIntoView !== 'function') {
+      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+        configurable: true,
+        value: vi.fn(),
+      });
+    }
+  });
+
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
@@ -446,6 +473,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     refreshPreviewSessionMock.mockClear();
     subscribePreviewEventsMock.mockClear();
     connectPreviewAutomationHostMock.mockClear();
+    runPreviewAutomationRequestMock.mockClear();
     previewAutomationHandleRef.current = null;
     getRoomMediaHistoryMock.mockReset();
     getRoomMediaHistoryMock.mockResolvedValue({
@@ -783,6 +811,60 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
   });
 
+  it('scrolls the selected mobile file tree row into view and supports pull refresh', async () => {
+    const scrolledPaths: string[] = [];
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value(this: HTMLElement) {
+        if (this.dataset.path) {
+          scrolledPaths.push(this.dataset.path);
+        }
+      },
+    });
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/nested/Deep.tsx', name: 'Deep.tsx', type: 'file' },
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+        { path: 'docs/Guide.md', name: 'Guide.md', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockImplementation((_roomId: string, path: string) => Promise.resolve({
+      path,
+      content: `contents:${path}`,
+      byteSize: 64,
+      truncated: false,
+      encoding: 'utf-8',
+    }));
+    openCodeAgentRightPanelFile('room-1', 'src/nested/Deep.tsx');
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" surface="mobile" />);
+    await waitFor(() => {
+      expect(screen.getByTestId('diff-file').textContent).toBe('src/nested/Deep.tsx:contents:src/nested/Deep.tsx');
+    });
+
+    fireEvent.click(screen.getByLabelText('codeAgentShowFileExplorer'));
+    const mobileExplorer = await screen.findByTestId('code-agent-mobile-file-tree-list');
+    await waitFor(() => {
+      expect(scrolledPaths).toContain('src/nested/Deep.tsx');
+    });
+
+    const refreshCallCount = loadCodeWorkspaceEntriesMock.mock.calls.length;
+    fireEvent.touchStart(mobileExplorer, {
+      touches: [{ clientY: 12 }],
+    });
+    fireEvent.touchMove(mobileExplorer, {
+      touches: [{ clientY: 160 }],
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('code-agent-mobile-file-tree-pull-refresh').dataset.pullReady).toBe('true');
+    });
+    fireEvent.touchEnd(mobileExplorer);
+    await waitFor(() => {
+      expect(loadCodeWorkspaceEntriesMock).toHaveBeenCalledTimes(refreshCallCount + 1);
+    });
+  });
+
   it('keeps the T3-style active file surface tab scrolled into view', async () => {
     const scrolledTabTexts: string[] = [];
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
@@ -1013,6 +1095,36 @@ describe('CodeAgentFileBrowserPanel', () => {
       expect(container.querySelector('iframe')).not.toBe(iframeBeforeHardReload);
     });
 
+    const iframeBeforeClearCookies = container.querySelector('iframe');
+    fireEvent.click(screen.getByLabelText('moreActions'));
+    browserMoreMenu = screen.getByTestId('code-agent-browser-more-menu');
+    fireEvent.click(within(browserMoreMenu).getByText('codeAgentBrowserClearCookies'));
+    await waitFor(() => {
+      expect(runPreviewAutomationRequestMock).toHaveBeenCalledWith(expect.objectContaining({
+        roomId: 'room-1',
+        tabId: 'browser:new',
+        operation: 'clearCookies',
+        input: {},
+        timeoutMs: 10000,
+      }));
+      expect(container.querySelector('iframe')).not.toBe(iframeBeforeClearCookies);
+    });
+
+    const iframeBeforeClearCache = container.querySelector('iframe');
+    fireEvent.click(screen.getByLabelText('moreActions'));
+    browserMoreMenu = screen.getByTestId('code-agent-browser-more-menu');
+    fireEvent.click(within(browserMoreMenu).getByText('codeAgentBrowserClearCache'));
+    await waitFor(() => {
+      expect(runPreviewAutomationRequestMock).toHaveBeenCalledWith(expect.objectContaining({
+        roomId: 'room-1',
+        tabId: 'browser:new',
+        operation: 'clearCache',
+        input: {},
+        timeoutMs: 10000,
+      }));
+      expect(container.querySelector('iframe')).not.toBe(iframeBeforeClearCache);
+    });
+
     fireEvent.click(screen.getByLabelText('moreActions'));
     browserMoreMenu = screen.getByTestId('code-agent-browser-more-menu');
     fireEvent.click(within(browserMoreMenu).getByLabelText('codeAgentBrowserZoomIn'));
@@ -1101,7 +1213,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     await waitFor(() => {
       expect(connectPreviewAutomationHostMock).toHaveBeenCalledWith(expect.objectContaining({
         roomId: 'room-1',
-        supportedOperations: ['status', 'open', 'navigate', 'resize', 'snapshot', 'click', 'type', 'press', 'scroll', 'evaluate', 'waitFor'],
+        supportedOperations: ['status', 'open', 'navigate', 'resize', 'snapshot', 'click', 'type', 'press', 'scroll', 'evaluate', 'waitFor', 'clearCookies', 'clearCache', 'recordingStart', 'recordingStop'],
         handle: expect.any(Function),
       }));
       expect(previewAutomationHandleRef.current).toEqual(expect.any(Function));
@@ -1173,6 +1285,85 @@ describe('CodeAgentFileBrowserPanel', () => {
     }));
   });
 
+  it('captures cloud browser preview screenshots from the chrome action', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [],
+      truncated: false,
+    });
+    class TestImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+    const originalImage = window.Image;
+    Object.defineProperty(window, 'Image', {
+      configurable: true,
+      value: TestImage,
+    });
+    let downloadedHref = '';
+    let downloadedFilename = '';
+    const clickMock = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function click(this: HTMLAnchorElement) {
+      downloadedHref = this.href;
+      downloadedFilename = this.download;
+    });
+
+    try {
+      const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+
+      await screen.findByText('0 files');
+      fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
+      fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentBrowserSurface'));
+
+      const address = screen.getByLabelText('codeAgentBrowserAddressLabel') as HTMLInputElement;
+      expect((screen.getByLabelText('codeAgentBrowserCaptureScreenshot') as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.change(address, { target: { value: 'https://example.com/app' } });
+      fireEvent.submit(address.closest('form') as HTMLFormElement);
+
+      const iframe = await waitFor(() => {
+        const frame = container.querySelector('iframe');
+        expect(frame).toBeTruthy();
+        return frame as HTMLIFrameElement;
+      });
+      const frameWindow = iframe.contentWindow as Window & typeof globalThis;
+      Object.defineProperties(frameWindow, {
+        Image: { configurable: true, value: TestImage },
+        innerWidth: { configurable: true, value: 1440 },
+        innerHeight: { configurable: true, value: 900 },
+      });
+      vi.spyOn(frameWindow.HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+        drawImage: vi.fn(),
+      } as unknown as CanvasRenderingContext2D);
+      vi.spyOn(frameWindow.HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,c2NyZWVuc2hvdA==');
+      iframe.contentDocument?.open();
+      iframe.contentDocument?.write('<main><h1>Preview report</h1></main>');
+      iframe.contentDocument?.close();
+
+      fireEvent.click(screen.getByLabelText('codeAgentBrowserCaptureScreenshot'));
+
+      await waitFor(() => {
+        expect(clickMock).toHaveBeenCalled();
+        expect(downloadedHref).toContain('data:image/png;base64,c2NyZWVuc2hvdA==');
+        expect(downloadedFilename).toMatch(/^roomtalk-preview-example\.com-app-.*\.png$/);
+      });
+      expect(runPreviewAutomationRequestMock).toHaveBeenCalledWith(expect.objectContaining({
+        roomId: 'room-1',
+        tabId: expect.any(String),
+        operation: 'snapshot',
+        input: {},
+        timeoutMs: 5000,
+      }));
+    } finally {
+      clickMock.mockRestore();
+      Object.defineProperty(window, 'Image', {
+        configurable: true,
+        value: originalImage,
+      });
+    }
+  });
+
   it('uses a two-row browser preview chrome on mobile surfaces', async () => {
     loadCodeWorkspaceEntriesMock.mockResolvedValue({
       entries: [],
@@ -1197,9 +1388,11 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(within(actionRow).getByLabelText('codeAgentBrowserBack')).toBeTruthy();
     expect(within(actionRow).getByLabelText('codeAgentBrowserForward')).toBeTruthy();
     expect(within(actionRow).getByLabelText('codeAgentBrowserRefresh')).toBeTruthy();
+    expect(within(actionRow).getByLabelText('codeAgentBrowserCaptureScreenshot')).toBeTruthy();
     expect(within(actionRow).getByLabelText('codeAgentOpenBrowserPreviewExternally')).toBeTruthy();
     expect(within(actionRow).getByLabelText('moreActions')).toBeTruthy();
     expect((within(actionRow).getByLabelText('codeAgentOpenBrowserPreviewExternally') as HTMLButtonElement).disabled).toBe(true);
+    expect((within(actionRow).getByLabelText('codeAgentBrowserCaptureScreenshot') as HTMLButtonElement).disabled).toBe(true);
 
     fireEvent.change(address, { target: { value: 'https://example.com/mobile' } });
     fireEvent.submit(address.closest('form') as HTMLFormElement);
@@ -1222,6 +1415,21 @@ describe('CodeAgentFileBrowserPanel', () => {
     fireEvent.click(within(browserMoreMenu).getByText('codeAgentBrowserHardReload'));
     await waitFor(() => {
       expect(container.querySelector('iframe')).not.toBe(iframeBeforeHardReload);
+    });
+
+    fireEvent.click(within(actionRow).getByLabelText('moreActions'));
+    browserMoreMenu = screen.getByTestId('code-agent-browser-more-menu');
+    expect(within(browserMoreMenu).getByText('codeAgentBrowserClearCookies')).toBeTruthy();
+    expect(within(browserMoreMenu).getByText('codeAgentBrowserClearCache')).toBeTruthy();
+    fireEvent.click(within(browserMoreMenu).getByText('codeAgentBrowserClearCookies'));
+    await waitFor(() => {
+      expect(runPreviewAutomationRequestMock).toHaveBeenCalledWith(expect.objectContaining({
+        roomId: 'room-1',
+        tabId: 'browser:new',
+        operation: 'clearCookies',
+        input: {},
+        timeoutMs: 10000,
+      }));
     });
 
     fireEvent.click(within(actionRow).getByLabelText('moreActions'));

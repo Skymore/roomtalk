@@ -49,6 +49,7 @@ describe('codeWorkspacePreviewDomAutomation', () => {
   afterEach(() => {
     document.body.innerHTML = '';
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it('advertises DOM operations distinctly from session operations', () => {
@@ -60,8 +61,14 @@ describe('codeWorkspacePreviewDomAutomation', () => {
       'scroll',
       'evaluate',
       'waitFor',
+      'clearCookies',
+      'clearCache',
+      'recordingStart',
+      'recordingStop',
     ]);
     expect(isCodeWorkspacePreviewDomAutomationOperation('click')).toBe(true);
+    expect(isCodeWorkspacePreviewDomAutomationOperation('clearCache')).toBe(true);
+    expect(isCodeWorkspacePreviewDomAutomationOperation('recordingStart')).toBe(true);
     expect(isCodeWorkspacePreviewDomAutomationOperation('navigate')).toBe(false);
   });
 
@@ -121,6 +128,238 @@ describe('codeWorkspacePreviewDomAutomation', () => {
         unavailable: true,
       }),
     });
+  });
+
+  it('captures a PNG screenshot for accessible preview snapshots', async () => {
+    class TestImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+    Object.defineProperty(window, 'Image', {
+      configurable: true,
+      value: TestImage,
+    });
+    const iframe = createIframe(`
+      <main style="width: 320px; height: 240px">
+        <h1>Dashboard</h1>
+      </main>
+    `);
+    const frameWindow = iframe.contentWindow as Window & typeof globalThis;
+    vi.spyOn(frameWindow.HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+      drawImage: vi.fn(),
+    } as unknown as CanvasRenderingContext2D);
+    vi.spyOn(frameWindow.HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,c2NyZWVuc2hvdA==');
+    Object.defineProperties(iframe.contentWindow, {
+      innerWidth: { configurable: true, value: 1440 },
+      innerHeight: { configurable: true, value: 900 },
+      Image: { configurable: true, value: TestImage },
+    });
+
+    const snapshot = await runCodeWorkspacePreviewDomAutomation(
+      request('snapshot'),
+      frameState(iframe),
+    ) as { screenshot: { data: string; width: number; height: number; unavailable?: boolean } };
+
+    expect(snapshot.screenshot).toMatchObject({
+      data: 'c2NyZWVuc2hvdA==',
+      width: 1280,
+      height: 800,
+    });
+    expect(snapshot.screenshot.unavailable).toBeUndefined();
+  });
+
+  it('clears browser data inside an accessible preview frame', async () => {
+    const iframe = createIframe('<main>Preview</main>');
+    const doc = iframe.contentDocument;
+    const win = iframe.contentWindow as Window & typeof globalThis;
+    if (!doc) {
+      throw new Error('test iframe document was not created');
+    }
+
+    let cookieValue = 'session=abc; theme=dark';
+    Object.defineProperty(doc, 'cookie', {
+      configurable: true,
+      get: () => cookieValue,
+      set: (value: string) => {
+        const cookieName = value.split('=')[0]?.trim();
+        if (!cookieName) {
+          return;
+        }
+        cookieValue = cookieValue
+          .split(';')
+          .map((cookie) => cookie.trim())
+          .filter((cookie) => cookie && !cookie.startsWith(`${cookieName}=`))
+          .join('; ');
+      },
+    });
+
+    const localStorageClear = vi.fn();
+    const sessionStorageClear = vi.fn();
+    const cacheKeys = vi.fn().mockResolvedValue(['assets-v1', 'runtime-v1']);
+    const cacheDelete = vi.fn().mockResolvedValue(true);
+    const databases = vi.fn().mockResolvedValue([{ name: 'app-db' }, { name: '' }]);
+    const deleteDatabase = vi.fn((_name: string) => {
+      const deleteRequest: Partial<IDBOpenDBRequest> = {};
+      queueMicrotask(() => {
+        deleteRequest.onsuccess?.call(deleteRequest as IDBOpenDBRequest, new Event('success'));
+      });
+      return deleteRequest as IDBOpenDBRequest;
+    });
+    Object.defineProperties(win, {
+      localStorage: {
+        configurable: true,
+        value: { clear: localStorageClear },
+      },
+      sessionStorage: {
+        configurable: true,
+        value: { clear: sessionStorageClear },
+      },
+      caches: {
+        configurable: true,
+        value: { keys: cacheKeys, delete: cacheDelete },
+      },
+      indexedDB: {
+        configurable: true,
+        value: { databases, deleteDatabase },
+      },
+    });
+
+    await expect(runCodeWorkspacePreviewDomAutomation(
+      request('clearCookies'),
+      frameState(iframe),
+    )).resolves.toMatchObject({
+      cleared: true,
+      cookieNames: ['session', 'theme'],
+      beforeCount: 2,
+      afterCount: 0,
+      httpOnlyUnavailable: true,
+    });
+
+    await expect(runCodeWorkspacePreviewDomAutomation(
+      request('clearCache'),
+      frameState(iframe),
+    )).resolves.toMatchObject({
+      cleared: true,
+      localStorage: true,
+      sessionStorage: true,
+      cacheStorageKeys: ['assets-v1', 'runtime-v1'],
+      indexedDbNames: ['app-db'],
+    });
+    expect(localStorageClear).toHaveBeenCalledTimes(1);
+    expect(sessionStorageClear).toHaveBeenCalledTimes(1);
+    expect(cacheDelete).toHaveBeenCalledWith('assets-v1');
+    expect(cacheDelete).toHaveBeenCalledWith('runtime-v1');
+    expect(deleteDatabase).toHaveBeenCalledWith('app-db');
+  });
+
+  it('records an accessible preview frame as a base64 browser artifact upload', async () => {
+    class TestImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+    class TestMediaRecorder extends EventTarget {
+      static isTypeSupported = vi.fn((mimeType: string) => mimeType.startsWith('video/webm'));
+
+      state: RecordingState = 'inactive';
+      readonly mimeType: string;
+
+      constructor(_stream: MediaStream, options?: MediaRecorderOptions) {
+        super();
+        this.mimeType = options?.mimeType || 'video/webm';
+      }
+
+      start() {
+        this.state = 'recording';
+      }
+
+      stop() {
+        const dataEvent = new Event('dataavailable') as Event & { data: Blob };
+        Object.defineProperty(dataEvent, 'data', {
+          configurable: true,
+          value: new Blob(['recorded-video'], { type: this.mimeType }),
+        });
+        this.dispatchEvent(dataEvent);
+        this.state = 'inactive';
+        this.dispatchEvent(new Event('stop'));
+      }
+    }
+    const originalMediaRecorder = Object.getOwnPropertyDescriptor(globalThis, 'MediaRecorder');
+    const originalWindowMediaRecorder = Object.getOwnPropertyDescriptor(window, 'MediaRecorder');
+    Object.defineProperty(globalThis, 'MediaRecorder', {
+      configurable: true,
+      value: TestMediaRecorder,
+    });
+    Object.defineProperty(window, 'MediaRecorder', {
+      configurable: true,
+      value: TestMediaRecorder,
+    });
+    Object.defineProperty(window, 'Image', {
+      configurable: true,
+      value: TestImage,
+    });
+    const iframe = createIframe('<main><h1>Recorder</h1></main>');
+    const frameWindow = iframe.contentWindow as Window & typeof globalThis;
+    Object.defineProperties(frameWindow, {
+      innerWidth: { configurable: true, value: 640 },
+      innerHeight: { configurable: true, value: 360 },
+      Image: { configurable: true, value: TestImage },
+    });
+    vi.spyOn(frameWindow.HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+      drawImage: vi.fn(),
+    } as unknown as CanvasRenderingContext2D);
+    Object.defineProperty(frameWindow.HTMLCanvasElement.prototype, 'captureStream', {
+      configurable: true,
+      value: vi.fn(() => ({} as MediaStream)),
+    });
+
+    try {
+      await expect(runCodeWorkspacePreviewDomAutomation(
+        request('recordingStart'),
+        frameState(iframe),
+      )).resolves.toMatchObject({
+        tabId: 'browser:preview',
+        recording: true,
+        startedAt: expect.any(String),
+      });
+
+      const artifact = await runCodeWorkspacePreviewDomAutomation(
+        request('recordingStop'),
+        frameState(iframe),
+      ) as {
+        data: string;
+        encoding: string;
+        mimeType: string;
+        path: string;
+        sizeBytes: number;
+      };
+
+      expect(artifact).toMatchObject({
+        encoding: 'base64',
+        mimeType: 'video/webm;codecs=vp9',
+        path: expect.stringMatching(/^\.roomtalk\/preview-recordings\/preview-recording-browser-preview-/),
+        sizeBytes: 'recorded-video'.length,
+      });
+      expect(artifact.data).toBe(btoa('recorded-video'));
+    } finally {
+      if (originalMediaRecorder) {
+        Object.defineProperty(globalThis, 'MediaRecorder', originalMediaRecorder);
+      } else {
+        Reflect.deleteProperty(globalThis, 'MediaRecorder');
+      }
+      if (originalWindowMediaRecorder) {
+        Object.defineProperty(window, 'MediaRecorder', originalWindowMediaRecorder);
+      } else {
+        Reflect.deleteProperty(window, 'MediaRecorder');
+      }
+    }
   });
 
   it('reports an inaccessible preview frame clearly', async () => {

@@ -11,7 +11,7 @@ import {
   Upload,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   buildCodeAgentMobileFileTree,
@@ -63,6 +63,13 @@ const TREE_UNSAFE_CSS = `
   button[data-type='item'] { border-radius: 5px; }
 `;
 
+const MOBILE_PULL_REFRESH_THRESHOLD = 72;
+const MOBILE_PULL_REFRESH_MAX_DISTANCE = 104;
+
+const firstTouch = (touches: ReactTouchEvent<HTMLDivElement>['touches']) => (
+  typeof touches.item === 'function' ? touches.item(0) : touches[0]
+);
+
 function CodeAgentMobileFileTreeList({
   entries,
   entriesPending,
@@ -83,7 +90,20 @@ function CodeAgentMobileFileTreeList({
   onOpenEntry: (relativePath: string, kind: CodeAgentProjectEntry['kind']) => void;
 }) {
   const { t } = useTranslation();
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const selectedScrollFrameRef = useRef<number | null>(null);
+  const pullGestureRef = useRef<{
+    pointerId: number | null;
+    startY: number;
+    maxDistance: number;
+  }>({
+    pointerId: null,
+    startY: 0,
+    maxDistance: 0,
+  });
+  const suppressNextClickRef = useRef(false);
   const [expandedPaths, setExpandedPaths] = useState<ReadonlySet<string>>(() => new Set());
+  const [pullDistance, setPullDistance] = useState(0);
   const tree = useMemo(() => buildCodeAgentMobileFileTree(entries), [entries]);
   const defaultExpanded = useMemo(() => defaultExpandedCodeAgentMobileTreePaths(tree), [tree]);
   const visibleNodes = useMemo(() => flattenCodeAgentMobileFileTree({
@@ -114,6 +134,35 @@ function CodeAgentMobileFileTreeList({
     });
   }, [selectedPath]);
 
+  useEffect(() => {
+    if (!selectedPath) {
+      return undefined;
+    }
+    if (selectedScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(selectedScrollFrameRef.current);
+    }
+    selectedScrollFrameRef.current = window.requestAnimationFrame(() => {
+      selectedScrollFrameRef.current = null;
+      listRef.current
+        ?.querySelector<HTMLElement>('[data-selected="true"]')
+        ?.scrollIntoView({ block: 'nearest' });
+    });
+    return () => {
+      if (selectedScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(selectedScrollFrameRef.current);
+        selectedScrollFrameRef.current = null;
+      }
+    };
+  }, [selectedPath, visibleNodes]);
+
+  useEffect(() => {
+    if (!entriesPending) {
+      return;
+    }
+    pullGestureRef.current = { pointerId: null, startY: 0, maxDistance: 0 };
+    setPullDistance(0);
+  }, [entriesPending]);
+
   const toggleDirectory = useCallback((path: string) => {
     setExpandedPaths((current) => {
       const next = new Set(current);
@@ -126,6 +175,128 @@ function CodeAgentMobileFileTreeList({
     });
   }, []);
 
+  const finishPullGesture = useCallback((pointerId: number | null) => {
+    const gesture = pullGestureRef.current;
+    if (pointerId !== null && gesture.pointerId !== pointerId) {
+      return;
+    }
+    const shouldRefresh = gesture.maxDistance >= MOBILE_PULL_REFRESH_THRESHOLD && !entriesPending;
+    pullGestureRef.current = { pointerId: null, startY: 0, maxDistance: 0 };
+    setPullDistance(0);
+    if (shouldRefresh) {
+      onRefresh();
+    }
+  }, [entriesPending, onRefresh]);
+
+  const handlePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (entriesPending || (event.pointerType === 'mouse' && event.button !== 0)) {
+      return;
+    }
+    const element = event.currentTarget;
+    if (element.scrollTop > 0) {
+      return;
+    }
+    pullGestureRef.current = {
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      maxDistance: 0,
+    };
+    try {
+      element.setPointerCapture?.(event.pointerId);
+    } catch {
+      // Synthetic pointer events may not be registered as active pointers.
+    }
+  }, [entriesPending]);
+
+  const handlePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const gesture = pullGestureRef.current;
+    if (gesture.pointerId !== event.pointerId || entriesPending) {
+      return;
+    }
+    const element = event.currentTarget;
+    if (element.scrollTop > 0) {
+      finishPullGesture(event.pointerId);
+      return;
+    }
+    const delta = event.clientY - gesture.startY;
+    if (delta <= 0) {
+      gesture.maxDistance = 0;
+      setPullDistance(0);
+      return;
+    }
+    const nextDistance = Math.min(MOBILE_PULL_REFRESH_MAX_DISTANCE, Math.round(delta * 0.55));
+    gesture.maxDistance = Math.max(gesture.maxDistance, nextDistance);
+    setPullDistance(nextDistance);
+    if (nextDistance > 8) {
+      suppressNextClickRef.current = true;
+      event.preventDefault();
+    }
+  }, [entriesPending, finishPullGesture]);
+
+  const handlePointerEnd = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    finishPullGesture(event.pointerId);
+  }, [finishPullGesture]);
+
+  const handleTouchStart = useCallback((event: ReactTouchEvent<HTMLDivElement>) => {
+    if (entriesPending || pullGestureRef.current.pointerId !== null) {
+      return;
+    }
+    const touch = firstTouch(event.touches);
+    if (!touch || event.currentTarget.scrollTop > 0) {
+      return;
+    }
+    pullGestureRef.current = {
+      pointerId: null,
+      startY: touch.clientY,
+      maxDistance: 0,
+    };
+  }, [entriesPending]);
+
+  const handleTouchMove = useCallback((event: ReactTouchEvent<HTMLDivElement>) => {
+    const gesture = pullGestureRef.current;
+    if (gesture.pointerId !== null || entriesPending) {
+      return;
+    }
+    const touch = firstTouch(event.touches);
+    if (!touch) {
+      return;
+    }
+    const element = event.currentTarget;
+    if (element.scrollTop > 0) {
+      finishPullGesture(null);
+      return;
+    }
+    const delta = touch.clientY - gesture.startY;
+    if (delta <= 0) {
+      gesture.maxDistance = 0;
+      setPullDistance(0);
+      return;
+    }
+    const nextDistance = Math.min(MOBILE_PULL_REFRESH_MAX_DISTANCE, Math.round(delta * 0.55));
+    gesture.maxDistance = Math.max(gesture.maxDistance, nextDistance);
+    setPullDistance(nextDistance);
+    if (nextDistance > 8) {
+      suppressNextClickRef.current = true;
+      event.preventDefault();
+    }
+  }, [entriesPending, finishPullGesture]);
+
+  const handleTouchEnd = useCallback(() => {
+    if (pullGestureRef.current.pointerId !== null) {
+      return;
+    }
+    finishPullGesture(null);
+  }, [finishPullGesture]);
+
+  const handleClickCapture = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (!suppressNextClickRef.current) {
+      return;
+    }
+    suppressNextClickRef.current = false;
+    event.preventDefault();
+    event.stopPropagation();
+  }, []);
+
   if (entriesError && entries.length === 0) {
     return (
       <div className="px-4 py-5 text-xs leading-relaxed text-[#9f462c] dark:text-[#ff9b78]">
@@ -136,9 +307,36 @@ function CodeAgentMobileFileTreeList({
 
   return (
     <div
+      ref={listRef}
       className="min-h-0 flex-1 overflow-y-auto overscroll-contain py-2 [-webkit-overflow-scrolling:touch] touch-pan-y"
       data-testid="code-agent-mobile-file-tree-list"
+      onClickCapture={handleClickCapture}
+      onPointerCancel={handlePointerEnd}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerEnd}
+      onTouchCancel={handleTouchEnd}
+      onTouchEnd={handleTouchEnd}
+      onTouchMove={handleTouchMove}
+      onTouchStart={handleTouchStart}
     >
+      {pullDistance > 0 ? (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none sticky top-0 z-20 -mb-8 flex h-8 justify-center"
+          data-pull-ready={pullDistance >= MOBILE_PULL_REFRESH_THRESHOLD ? 'true' : 'false'}
+          data-testid="code-agent-mobile-file-tree-pull-refresh"
+          style={{ transform: `translateY(${Math.min(pullDistance, MOBILE_PULL_REFRESH_MAX_DISTANCE)}px)` }}
+        >
+          <div className="flex h-7 w-7 items-center justify-center rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 text-[#87867f] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#8f8d86]">
+            <RefreshCw
+              className={`h-3.5 w-3.5 transition-transform ${
+                pullDistance >= MOBILE_PULL_REFRESH_THRESHOLD ? 'rotate-180 text-[#9f462c] dark:text-[#ffb197]' : ''
+              }`}
+            />
+          </div>
+        </div>
+      ) : null}
       {entriesPending ? (
         <div className="mx-2 mb-1 flex items-center justify-between rounded-lg border border-[#dedbd0] px-2 py-1.5 text-[11px] text-[#87867f] dark:border-[#30302e] dark:text-[#8f8d86]">
           <span>{t('codeAgentWorkspaceIndexing')}</span>

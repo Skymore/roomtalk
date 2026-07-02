@@ -263,7 +263,9 @@ const createHarness = (options: {
           path: input.path,
           name: input.path.split('/').pop() || input.path,
           type: 'file' as const,
-          size: Buffer.byteLength(input.content),
+          size: input.encoding === 'base64'
+            ? Buffer.from(input.content, 'base64').byteLength
+            : Buffer.byteLength(input.content),
         };
       },
       createWorkspaceDirectory: async (handle, path) => {
@@ -634,6 +636,71 @@ describe('code-agent workspace socket handlers', () => {
     assert.equal(requestAck.success, true);
     assert.deepEqual(requestAck.response.result, { url: 'https://example.com/app', loading: false });
     assert.equal(socketEvents.at(-1)?.event, 'code_workspace_preview_automation_response');
+  });
+
+  it('saves cloud preview automation recordings into the workspace before responding', async () => {
+    const { socket, writeWorkspaceFileCalls, socketEvents } = createHarness();
+    const recordingData = Buffer.from('recorded-video').toString('base64');
+
+    await socket.invoke<any>('connect_code_workspace_preview_automation', {
+      roomId: 'room-1',
+      connectionId: 'automation-recording',
+      focused: true,
+      supportedOperations: ['recordingStop'],
+    });
+
+    const requestPromise = socket.invoke<any>('request_code_workspace_preview_automation', {
+      roomId: 'room-1',
+      requestId: 'recording-request-1',
+      operation: 'recordingStop',
+      tabId: 'browser:preview',
+      timeoutMs: 1000,
+    });
+
+    await new Promise(resolve => setImmediate(resolve));
+    const requestEvent = socket.emittedEvents.find((entry) => (
+      entry.event === 'code_workspace_preview_automation_event'
+      && (entry.payload as any).type === 'request'
+      && (entry.payload as any).request?.requestId === 'recording-request-1'
+    ));
+    assert.ok(requestEvent);
+
+    const responseAck = await socket.invoke<any>('respond_code_workspace_preview_automation', {
+      roomId: 'room-1',
+      connectionId: 'automation-recording',
+      requestId: 'recording-request-1',
+      ok: true,
+      result: {
+        id: 'preview-recording-browser-preview-2026-05-03T00-00-00-000Z',
+        tabId: 'browser:preview',
+        path: 'ignored-client-path.webm',
+        mimeType: 'video/webm',
+        sizeBytes: recordingData.length,
+        createdAt: '2026-05-03T00:00:00.000Z',
+        encoding: 'base64',
+        data: recordingData,
+      },
+    });
+    const requestAck = await requestPromise;
+
+    assert.equal(responseAck.success, true);
+    assert.equal(requestAck.success, true);
+    assert.deepEqual(writeWorkspaceFileCalls, [{
+      sandboxId: 'sandbox-1',
+      path: '.roomtalk/preview-recordings/preview-recording-browser-preview-2026-05-03T00-00-00-000Z.webm',
+      content: recordingData,
+      encoding: 'base64',
+    }]);
+    assert.deepEqual(requestAck.response.result, {
+      id: 'preview-recording-browser-preview-2026-05-03T00-00-00-000Z',
+      tabId: 'browser:preview',
+      path: '.roomtalk/preview-recordings/preview-recording-browser-preview-2026-05-03T00-00-00-000Z.webm',
+      mimeType: 'video/webm',
+      sizeBytes: 'recorded-video'.length,
+      createdAt: '2026-05-03T00:00:00.000Z',
+    });
+    assert.equal((requestAck.response.result as any).data, undefined);
+    assert.equal((socketEvents.at(-1)?.payload as any).response.result.data, undefined);
   });
 
   it('reads Coco workspace files through the registered socket session', async () => {

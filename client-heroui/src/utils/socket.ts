@@ -1147,6 +1147,8 @@ export type CodeWorkspacePreviewAutomationOperation =
   | 'scroll'
   | 'evaluate'
   | 'waitFor'
+  | 'clearCookies'
+  | 'clearCache'
   | 'recordingStart'
   | 'recordingStop'
   | 'resize';

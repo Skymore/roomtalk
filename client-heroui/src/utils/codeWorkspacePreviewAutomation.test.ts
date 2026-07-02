@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import {
   connectCodeWorkspacePreviewAutomationHost,
+  runCodeWorkspacePreviewAutomationRequest,
   validateCodeWorkspacePreviewAutomationHost,
   validateCodeWorkspacePreviewAutomationResponse,
 } from './codeWorkspacePreviewAutomation';
@@ -8,11 +9,13 @@ import type { CodeWorkspacePreviewAutomationEvent } from './socket';
 
 const connectMock = vi.hoisted(() => vi.fn());
 const focusMock = vi.hoisted(() => vi.fn());
+const requestMock = vi.hoisted(() => vi.fn());
 const respondMock = vi.hoisted(() => vi.fn());
 const eventCallbacks = vi.hoisted(() => new Set<(event: CodeWorkspacePreviewAutomationEvent) => void>());
 const connectCallbacks = vi.hoisted(() => new Set<() => void>());
 
 vi.mock('./socket', () => ({
+  requestCodeWorkspacePreviewAutomation: requestMock,
   requestConnectCodeWorkspacePreviewAutomation: connectMock,
   requestFocusCodeWorkspacePreviewAutomation: focusMock,
   requestRespondCodeWorkspacePreviewAutomation: respondMock,
@@ -47,6 +50,7 @@ describe('codeWorkspacePreviewAutomation', () => {
     connectCallbacks.clear();
     connectMock.mockReset();
     focusMock.mockReset();
+    requestMock.mockReset();
     respondMock.mockReset();
     connectMock.mockResolvedValue(host);
     focusMock.mockResolvedValue({ ...host, focused: false });
@@ -55,6 +59,13 @@ describe('codeWorkspacePreviewAutomation', () => {
       connectionId: 'automation-1',
       requestId: 'request-1',
       ok: true,
+    });
+    requestMock.mockResolvedValue({
+      clientId: 'client-1',
+      connectionId: 'automation-1',
+      requestId: 'request-1',
+      ok: true,
+      result: { screenshot: { mimeType: 'image/png', data: 'cG5n', width: 10, height: 10 } },
     });
   });
 
@@ -73,6 +84,37 @@ describe('codeWorkspacePreviewAutomation', () => {
       ok: false,
       error: { _tag: 'PreviewAutomationExecutionError', message: 'failed' },
     });
+  });
+
+  it('runs preview automation requests through the socket response contract', async () => {
+    await expect(runCodeWorkspacePreviewAutomationRequest({
+      roomId: 'room-1',
+      tabId: 'tab-1',
+      operation: 'snapshot',
+      input: {},
+      timeoutMs: 5000,
+    })).resolves.toEqual({
+      screenshot: { mimeType: 'image/png', data: 'cG5n', width: 10, height: 10 },
+    });
+    expect(requestMock).toHaveBeenCalledWith({
+      roomId: 'room-1',
+      tabId: 'tab-1',
+      operation: 'snapshot',
+      input: {},
+      timeoutMs: 5000,
+    });
+
+    requestMock.mockResolvedValueOnce({
+      clientId: 'client-1',
+      connectionId: 'automation-1',
+      requestId: 'request-2',
+      ok: false,
+      error: { _tag: 'PreviewAutomationExecutionError', message: 'no frame' },
+    });
+    await expect(runCodeWorkspacePreviewAutomationRequest({
+      roomId: 'room-1',
+      operation: 'snapshot',
+    })).rejects.toThrow('no frame');
   });
 
   it('responds to matching preview automation requests', async () => {

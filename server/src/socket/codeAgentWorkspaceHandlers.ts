@@ -129,6 +129,8 @@ type WorkspacePreviewAutomationOperation =
   | 'scroll'
   | 'evaluate'
   | 'waitFor'
+  | 'clearCookies'
+  | 'clearCache'
   | 'recordingStart'
   | 'recordingStop'
   | 'resize';
@@ -207,6 +209,8 @@ const PREVIEW_AUTOMATION_OPERATIONS: WorkspacePreviewAutomationOperation[] = [
   'scroll',
   'evaluate',
   'waitFor',
+  'clearCookies',
+  'clearCache',
   'recordingStart',
   'recordingStop',
   'resize',
@@ -217,6 +221,8 @@ const workspacePreviewHistoryByRoomAndTabId = new Map<string, string[]>();
 const workspacePreviewAutomationHostsByRoomId = new Map<string, Map<string, WorkspacePreviewAutomationHostRecord>>();
 const workspacePreviewAutomationPendingByRoomAndRequestId = new Map<string, {
   hostConnectionId: string;
+  operation: WorkspacePreviewAutomationOperation;
+  tabId?: string;
   timeout: ReturnType<typeof setTimeout>;
   callback: (response: WorkspacePreviewAutomationAck) => void;
 }>();
@@ -338,6 +344,55 @@ const parsePreviewAutomationInput = (payload: unknown): unknown => (
     ? (payload as { input?: unknown }).input
     : {}
 );
+
+type WorkspacePreviewAutomationRecordingUpload = {
+  id: string;
+  tabId: string;
+  mimeType: string;
+  data: string;
+  createdAt: string;
+};
+
+const parsePreviewAutomationRecordingUpload = (result: unknown): WorkspacePreviewAutomationRecordingUpload | null => {
+  if (!result || typeof result !== 'object') {
+    return null;
+  }
+  const record = result as Record<string, unknown>;
+  if (
+    typeof record.id !== 'string'
+    || typeof record.tabId !== 'string'
+    || typeof record.mimeType !== 'string'
+    || typeof record.data !== 'string'
+    || typeof record.createdAt !== 'string'
+  ) {
+    return null;
+  }
+  const id = record.id.trim();
+  const tabId = record.tabId.trim();
+  const mimeType = record.mimeType.trim().toLowerCase();
+  const createdAt = record.createdAt.trim();
+  const data = record.data.replace(/^data:[^,]+,/, '').replace(/\s+/g, '');
+  if (!id || !tabId || !mimeType || !createdAt || !data) {
+    return null;
+  }
+  return { id, tabId, mimeType, data, createdAt };
+};
+
+const previewRecordingFileExtension = (mimeType: string): string => {
+  if (mimeType.includes('mp4')) return 'mp4';
+  if (mimeType.includes('webm')) return 'webm';
+  if (mimeType.includes('png')) return 'png';
+  if (mimeType.includes('json')) return 'json';
+  return 'bin';
+};
+
+const previewRecordingWorkspacePath = (id: string, mimeType: string): string => {
+  const safeId = id
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 120) || `preview-recording-${Date.now().toString(36)}`;
+  return `.roomtalk/preview-recordings/${safeId}.${previewRecordingFileExtension(mimeType)}`;
+};
 
 const parsePreviewTitle = (payload: unknown): string => {
   const title = parseWorkspaceOptionalString(payload, 'title')?.trim() || '';
@@ -759,6 +814,64 @@ export function registerCodeAgentWorkspaceHandlers({
       return right.updatedAt.localeCompare(left.updatedAt);
     })[0] || null;
   };
+
+  const savePreviewAutomationRecording = async (
+    room: Room,
+    result: unknown,
+  ): Promise<{
+    id: string;
+    tabId: string;
+    path: string;
+    mimeType: string;
+    sizeBytes: number;
+    createdAt: string;
+  }> => {
+    const upload = parsePreviewAutomationRecordingUpload(result);
+    if (!upload) {
+      throw new Error('Preview recording artifact payload is invalid');
+    }
+    if (!cocoSandboxService?.writeWorkspaceFile) {
+      throw new Error('Workspace recording artifact storage is unavailable');
+    }
+    const workspace = await connectReadyWorkspace(room);
+    if (!workspace.success) {
+      throw new Error(workspace.error);
+    }
+    const content = Buffer.from(upload.data, 'base64');
+    if (content.byteLength <= 0) {
+      throw new Error('Preview recording artifact is empty');
+    }
+    const path = previewRecordingWorkspacePath(upload.id, upload.mimeType);
+    const entry = await cocoSandboxService.writeWorkspaceFile(workspace.handle, {
+      path,
+      content: upload.data,
+      encoding: 'base64',
+    });
+    return {
+      id: upload.id,
+      tabId: upload.tabId,
+      path: entry.path,
+      mimeType: upload.mimeType,
+      sizeBytes: entry.size ?? content.byteLength,
+      createdAt: upload.createdAt,
+    };
+  };
+
+  const previewAutomationErrorResponse = (
+    clientId: string,
+    connectionId: string,
+    requestId: string,
+    message: string,
+  ): WorkspacePreviewAutomationResponse => ({
+    clientId,
+    connectionId,
+    requestId,
+    ok: false,
+    error: {
+      _tag: 'PreviewAutomationExecutionError',
+      message,
+    },
+  });
 
   const cleanupPreviewAutomationSocket = (socketId: string) => {
     const removedConnections = new Set<string>();
@@ -1271,6 +1384,8 @@ export function registerCodeAgentWorkspaceHandlers({
       }, timeoutMs);
       workspacePreviewAutomationPendingByRoomAndRequestId.set(requestKey, {
         hostConnectionId: host.connectionId,
+        operation,
+        ...(tabId ? { tabId } : {}),
         timeout,
         callback: (response) => callback?.(response),
       });
@@ -1322,7 +1437,7 @@ export function registerCodeAgentWorkspaceHandlers({
       const rawError = payload && typeof payload === 'object'
         ? (payload as { error?: unknown }).error
         : undefined;
-      const response: WorkspacePreviewAutomationResponse = {
+      let response: WorkspacePreviewAutomationResponse = {
         clientId: access.clientId,
         connectionId,
         requestId,
@@ -1351,6 +1466,28 @@ export function registerCodeAgentWorkspaceHandlers({
         }
         clearTimeout(pending.timeout);
         workspacePreviewAutomationPendingByRoomAndRequestId.delete(requestKey);
+        if (pending.operation === 'recordingStop' && response.ok) {
+          try {
+            response = {
+              ...response,
+              result: await savePreviewAutomationRecording(access.room, response.result),
+            };
+          } catch (error) {
+            socketLogger.warn('Failed to save preview automation recording', {
+              error,
+              clientId,
+              roomId,
+              requestId,
+              socketId: socket.id,
+            });
+            response = previewAutomationErrorResponse(
+              access.clientId,
+              connectionId,
+              requestId,
+              error instanceof Error ? error.message : 'Failed to save preview recording artifact',
+            );
+          }
+        }
         pending.callback({ success: true, response });
       }
       io.to(access.room.id).emit('code_workspace_preview_automation_response', {

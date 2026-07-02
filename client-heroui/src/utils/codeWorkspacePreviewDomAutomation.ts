@@ -11,12 +11,20 @@ export const CODE_WORKSPACE_PREVIEW_AUTOMATION_DOM_OPERATIONS = [
   'scroll',
   'evaluate',
   'waitFor',
+  'clearCookies',
+  'clearCache',
+  'recordingStart',
+  'recordingStop',
 ] as const satisfies readonly CodeWorkspacePreviewAutomationOperation[];
 
 const domOperationSet = new Set<string>(CODE_WORKSPACE_PREVIEW_AUTOMATION_DOM_OPERATIONS);
 
 const TRANSPARENT_PIXEL_PNG =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+const MAX_SCREENSHOT_WIDTH = 1280;
+const SCREENSHOT_IMAGE_LOAD_TIMEOUT_MS = 250;
+const RECORDING_FRAME_INTERVAL_MS = 500;
+const RECORDING_FRAME_RATE = 4;
 
 type DomAutomationInput = Record<string, unknown>;
 
@@ -89,6 +97,188 @@ function frameDocument(state: DomAutomationFrameState): Document {
         : 'Workspace preview automation frame is not ready.',
     );
   }
+}
+
+function parseCookieNames(cookieHeader: string): string[] {
+  return Array.from(new Set(
+    cookieHeader
+      .split(';')
+      .map((cookie) => cookie.split('=')[0]?.trim() ?? '')
+      .filter(Boolean),
+  ));
+}
+
+function frameUrl(state: DomAutomationFrameState, doc: Document): URL | null {
+  const candidates = [
+    state.url,
+    doc.location.href === 'about:blank' ? '' : doc.location.href,
+  ];
+  for (const candidate of candidates) {
+    try {
+      return new URL(candidate);
+    } catch {
+      // Continue with the next candidate.
+    }
+  }
+  return null;
+}
+
+function cookiePathCandidates(url: URL | null): string[] {
+  const paths = new Set<string>(['/']);
+  const segments = (url?.pathname || '/').split('/').filter(Boolean);
+  let current = '';
+  for (const segment of segments) {
+    current += `/${segment}`;
+    paths.add(current);
+  }
+  return [...paths];
+}
+
+function cookieDomainCandidates(url: URL | null): string[] {
+  const hostname = url?.hostname;
+  if (!hostname || hostname === 'localhost' || hostname.includes(':') || /^[\d.]+$/.test(hostname)) {
+    return [];
+  }
+  const parts = hostname.split('.').filter(Boolean);
+  if (parts.length < 2) {
+    return [];
+  }
+  const domains = new Set<string>([hostname, `.${hostname}`]);
+  for (let index = 1; index < parts.length - 1; index += 1) {
+    domains.add(`.${parts.slice(index).join('.')}`);
+  }
+  return [...domains];
+}
+
+function clearFrameCookies(state: DomAutomationFrameState): {
+  cleared: true;
+  cookieNames: string[];
+  beforeCount: number;
+  afterCount: number;
+  httpOnlyUnavailable: true;
+} {
+  const doc = frameDocument(state);
+  const cookieNames = parseCookieNames(doc.cookie);
+  const url = frameUrl(state, doc);
+  const paths = cookiePathCandidates(url);
+  const domains = cookieDomainCandidates(url);
+  const expires = 'expires=Thu, 01 Jan 1970 00:00:00 GMT; max-age=0';
+
+  for (const cookieName of cookieNames) {
+    const safeName = cookieName.replace(/[\r\n;]/g, '');
+    if (!safeName) {
+      continue;
+    }
+    for (const path of paths) {
+      doc.cookie = `${safeName}=; ${expires}; path=${path}`;
+      for (const domain of domains) {
+        doc.cookie = `${safeName}=; ${expires}; path=${path}; domain=${domain}`;
+      }
+    }
+  }
+
+  return {
+    cleared: true,
+    cookieNames,
+    beforeCount: cookieNames.length,
+    afterCount: parseCookieNames(doc.cookie).length,
+    httpOnlyUnavailable: true,
+  };
+}
+
+type IndexedDbWithDatabases = IDBFactory & {
+  databases?: () => Promise<Array<{ name?: string | null }>>;
+};
+
+function deleteIndexedDbDatabase(indexedDB: IDBFactory, name: string): Promise<void> {
+  return new Promise((resolve) => {
+    const request = indexedDB.deleteDatabase(name);
+    request.onsuccess = () => resolve();
+    request.onerror = () => resolve();
+    request.onblocked = () => resolve();
+  });
+}
+
+async function clearFrameCache(state: DomAutomationFrameState): Promise<{
+  cleared: true;
+  localStorage: boolean;
+  sessionStorage: boolean;
+  cacheStorageKeys: string[];
+  indexedDbNames: string[];
+  serviceWorkerScopes: string[];
+}> {
+  const doc = frameDocument(state);
+  const win = frameWindow(state) as Window & typeof globalThis & {
+    caches?: CacheStorage;
+    indexedDB?: IndexedDbWithDatabases;
+  };
+  void doc.body;
+
+  let localStorage = false;
+  let sessionStorage = false;
+  const cacheStorageKeys: string[] = [];
+  const indexedDbNames: string[] = [];
+  const serviceWorkerScopes: string[] = [];
+
+  try {
+    win.localStorage.clear();
+    localStorage = true;
+  } catch {
+    localStorage = false;
+  }
+  try {
+    win.sessionStorage.clear();
+    sessionStorage = true;
+  } catch {
+    sessionStorage = false;
+  }
+
+  if (win.caches && typeof win.caches.keys === 'function' && typeof win.caches.delete === 'function') {
+    try {
+      const keys = await win.caches.keys();
+      cacheStorageKeys.push(...keys);
+      await Promise.all(keys.map((key) => win.caches!.delete(key).catch(() => false)));
+    } catch {
+      // Cache Storage can be unavailable for opaque or restricted frames.
+    }
+  }
+
+  if (
+    win.indexedDB
+    && typeof win.indexedDB.databases === 'function'
+    && typeof win.indexedDB.deleteDatabase === 'function'
+  ) {
+    try {
+      const databases = await win.indexedDB.databases();
+      const names = databases
+        .map((database) => database.name)
+        .filter((name): name is string => typeof name === 'string' && name.trim().length > 0);
+      indexedDbNames.push(...names);
+      await Promise.all(names.map((name) => deleteIndexedDbDatabase(win.indexedDB!, name)));
+    } catch {
+      // Some browsers do not expose indexedDB.databases() in iframe contexts.
+    }
+  }
+
+  const serviceWorker = win.navigator?.serviceWorker;
+  if (serviceWorker && typeof serviceWorker.getRegistrations === 'function') {
+    try {
+      const registrations = await serviceWorker.getRegistrations();
+      serviceWorkerScopes.push(...registrations.map((registration) => registration.scope));
+      await Promise.all(registrations.map((registration) => registration.unregister().catch(() => false)));
+    } catch {
+      // Service worker access can be blocked for sandboxed or insecure previews.
+    }
+  }
+
+  return {
+    cleared: true,
+    localStorage,
+    sessionStorage,
+    cacheStorageKeys,
+    indexedDbNames,
+    serviceWorkerScopes,
+  };
 }
 
 function visibleText(element: Element): string {
@@ -335,9 +525,233 @@ function interactiveElements(doc: Document) {
     });
 }
 
-function snapshotFrame(state: DomAutomationFrameState): unknown {
+type PreviewAutomationScreenshot = {
+  mimeType: 'image/png';
+  data: string;
+  width: number;
+  height: number;
+  unavailable?: boolean;
+};
+
+type PreviewAutomationRecordingArtifactUpload = {
+  id: string;
+  tabId: string;
+  path: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt: string;
+  encoding: 'base64';
+  data: string;
+  startedAt: string;
+  stoppedAt: string;
+  durationMs: number;
+  frameCount: number;
+};
+
+type ActiveDomRecording = {
+  id: string;
+  tabId: string;
+  canvas: HTMLCanvasElement;
+  context: CanvasRenderingContext2D;
+  recorder: MediaRecorder;
+  chunks: Blob[];
+  mimeType: string;
+  startedAt: string;
+  frameCount: number;
+  intervalId: number;
+  stopping?: Promise<PreviewAutomationRecordingArtifactUpload>;
+};
+
+function fallbackScreenshot(win: Window): PreviewAutomationScreenshot {
+  return {
+    mimeType: 'image/png',
+    data: TRANSPARENT_PIXEL_PNG,
+    width: Math.max(1, Math.round(win.innerWidth || 1)),
+    height: Math.max(1, Math.round(win.innerHeight || 1)),
+    unavailable: true,
+  };
+}
+
+function recordingMimeType(): string {
+  const candidates = [
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm',
+    'video/mp4',
+  ];
+  return candidates.find((candidate) => (
+    typeof MediaRecorder !== 'undefined'
+    && typeof MediaRecorder.isTypeSupported === 'function'
+    && MediaRecorder.isTypeSupported(candidate)
+  )) ?? 'video/webm';
+}
+
+function recordingId(tabId: string, startedAt: string): string {
+  const safeTabId = tabId
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || 'preview';
+  return `preview-recording-${safeTabId}-${startedAt.replace(/[:.]/g, '-')}`;
+}
+
+function recordingPath(id: string, mimeType: string): string {
+  const extension = mimeType.includes('mp4') ? 'mp4' : 'webm';
+  return `.roomtalk/preview-recordings/${id}.${extension}`;
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
+  if (typeof blob.arrayBuffer === 'function') {
+    return blob.arrayBuffer();
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (reader.result instanceof ArrayBuffer) {
+        resolve(reader.result);
+        return;
+      }
+      reject(new Error('Workspace preview automation recording could not read the recorded blob.'));
+    };
+    reader.onerror = () => {
+      reject(reader.error ?? new Error('Workspace preview automation recording could not read the recorded blob.'));
+    };
+    reader.readAsArrayBuffer(blob);
+  });
+}
+
+function cloneDocumentForScreenshot(doc: Document, width: number, height: number): HTMLElement {
+  const wrapper = doc.createElement('div');
+  const styles = Array.from(doc.querySelectorAll<HTMLStyleElement | HTMLLinkElement>('style, link[rel="stylesheet"]'))
+    .map((element) => element.outerHTML)
+    .join('');
+  const bodyStyle = doc.body && doc.defaultView ? doc.defaultView.getComputedStyle(doc.body) : null;
+  wrapper.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+  wrapper.style.width = `${width}px`;
+  wrapper.style.minHeight = `${height}px`;
+  wrapper.style.boxSizing = 'border-box';
+  wrapper.style.margin = '0';
+  wrapper.style.background = bodyStyle?.backgroundColor || 'white';
+  wrapper.style.color = bodyStyle?.color || 'black';
+  wrapper.style.font = bodyStyle?.font || '16px sans-serif';
+  wrapper.innerHTML = `${styles}${doc.body?.innerHTML ?? ''}`;
+  return wrapper;
+}
+
+async function drawDocumentToCanvas(
+  doc: Document,
+  win: Window,
+  canvas: HTMLCanvasElement,
+  context: CanvasRenderingContext2D,
+): Promise<void> {
+  const width = Math.max(
+    1,
+    Math.round(win.innerWidth || doc.documentElement.clientWidth || doc.body?.clientWidth || 1),
+  );
+  const height = Math.max(
+    1,
+    Math.round(win.innerHeight || doc.documentElement.clientHeight || doc.body?.clientHeight || 1),
+  );
+  if (canvas.width !== width) {
+    canvas.width = width;
+  }
+  if (canvas.height !== height) {
+    canvas.height = height;
+  }
+  const screenshotDocument = cloneDocumentForScreenshot(doc, width, height);
+  const serialized = new XMLSerializer().serializeToString(screenshotDocument);
+  const svg = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+    `<foreignObject width="100%" height="100%">${serialized}</foreignObject>`,
+    '</svg>',
+  ].join('');
+  const image = await loadImage(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`, doc);
+  context.drawImage(image, 0, 0, width, height);
+}
+
+function loadImage(src: string, ownerDocument: Document): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const ownerWindow = ownerDocument.defaultView ?? window;
+    const image = new ownerWindow.Image();
+    const timeout = window.setTimeout(() => {
+      image.onload = null;
+      image.onerror = null;
+      reject(new Error('Workspace preview automation screenshot image timed out.'));
+    }, SCREENSHOT_IMAGE_LOAD_TIMEOUT_MS);
+    image.onload = () => {
+      window.clearTimeout(timeout);
+      resolve(image);
+    };
+    image.onerror = () => {
+      window.clearTimeout(timeout);
+      reject(new Error('Workspace preview automation screenshot image failed to load.'));
+    };
+    image.src = src;
+  });
+}
+
+async function captureFrameScreenshot(
+  doc: Document,
+  win: Window,
+): Promise<PreviewAutomationScreenshot> {
+  const sourceWidth = Math.max(
+    1,
+    Math.round(win.innerWidth || doc.documentElement.clientWidth || doc.body?.clientWidth || 1),
+  );
+  const sourceHeight = Math.max(
+    1,
+    Math.round(win.innerHeight || doc.documentElement.clientHeight || doc.body?.clientHeight || 1),
+  );
+  const scale = sourceWidth > MAX_SCREENSHOT_WIDTH ? MAX_SCREENSHOT_WIDTH / sourceWidth : 1;
+  const width = Math.max(1, Math.round(sourceWidth * scale));
+  const height = Math.max(1, Math.round(sourceHeight * scale));
+  const screenshotDocument = cloneDocumentForScreenshot(doc, sourceWidth, sourceHeight);
+  const serialized = new XMLSerializer().serializeToString(screenshotDocument);
+  const svg = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${sourceWidth}" height="${sourceHeight}" viewBox="0 0 ${sourceWidth} ${sourceHeight}">`,
+    `<foreignObject width="100%" height="100%">${serialized}</foreignObject>`,
+    '</svg>',
+  ].join('');
+  const image = await loadImage(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`, doc);
+  const canvas = doc.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  if (!context) {
+    throw new Error('Workspace preview automation screenshot canvas is unavailable.');
+  }
+  context.drawImage(image, 0, 0, width, height);
+  const dataUrl = canvas.toDataURL('image/png');
+  const data = dataUrl.slice(dataUrl.indexOf(',') + 1);
+  if (!data || data === dataUrl) {
+    throw new Error('Workspace preview automation screenshot encoding failed.');
+  }
+  return {
+    mimeType: 'image/png',
+    data,
+    width,
+    height,
+  };
+}
+
+async function snapshotFrame(state: DomAutomationFrameState): Promise<unknown> {
   const doc = frameDocument(state);
   const win = frameWindow(state);
+  let screenshot = fallbackScreenshot(win);
+  try {
+    screenshot = await captureFrameScreenshot(doc, win);
+  } catch {
+    screenshot = fallbackScreenshot(win);
+  }
   return {
     url: doc.location?.href || state.url,
     title: doc.title || state.title,
@@ -351,14 +765,170 @@ function snapshotFrame(state: DomAutomationFrameState): unknown {
     consoleEntries: [],
     networkEntries: [],
     actionTimeline: [],
-    screenshot: {
-      mimeType: 'image/png',
-      data: TRANSPARENT_PIXEL_PNG,
-      width: Math.max(1, Math.round(win.innerWidth || 1)),
-      height: Math.max(1, Math.round(win.innerHeight || 1)),
-      unavailable: true,
-    },
+    screenshot,
   };
+}
+
+let activeRecording: ActiveDomRecording | null = null;
+
+async function startRecording(state: DomAutomationFrameState): Promise<{
+  tabId: string;
+  recording: true;
+  startedAt: string;
+}> {
+  const doc = frameDocument(state);
+  const win = frameWindow(state);
+  if (activeRecording) {
+    if (activeRecording.tabId === state.tabId) {
+      return {
+        tabId: activeRecording.tabId,
+        recording: true,
+        startedAt: activeRecording.startedAt,
+      };
+    }
+    throw new Error(`Cannot record tab ${state.tabId} while tab ${activeRecording.tabId} is already being recorded.`);
+  }
+  if (typeof MediaRecorder === 'undefined') {
+    throw new Error('Workspace preview automation recording requires MediaRecorder support.');
+  }
+  const canvas = doc.createElement('canvas');
+  if (typeof canvas.captureStream !== 'function') {
+    throw new Error('Workspace preview automation recording requires canvas captureStream support.');
+  }
+  const context = canvas.getContext('2d', { alpha: false });
+  if (!context) {
+    throw new Error('Workspace preview automation recording canvas is unavailable.');
+  }
+  await drawDocumentToCanvas(doc, win, canvas, context);
+  const mimeType = recordingMimeType();
+  const recorder = new MediaRecorder(canvas.captureStream(RECORDING_FRAME_RATE), {
+    mimeType,
+    videoBitsPerSecond: 4_000_000,
+  });
+  const startedAt = new Date().toISOString();
+  const id = recordingId(state.tabId, startedAt);
+  const recording: ActiveDomRecording = {
+    id,
+    tabId: state.tabId,
+    canvas,
+    context,
+    recorder,
+    chunks: [],
+    mimeType,
+    startedAt,
+    frameCount: 1,
+    intervalId: window.setInterval(() => {
+      void drawDocumentToCanvas(doc, win, canvas, context)
+        .then(() => {
+          if (activeRecording === recording) {
+            recording.frameCount += 1;
+          }
+        })
+        .catch(() => undefined);
+    }, RECORDING_FRAME_INTERVAL_MS),
+  };
+  recorder.addEventListener('dataavailable', (event) => {
+    const data = (event as BlobEvent).data;
+    if (data?.size > 0) {
+      recording.chunks.push(data);
+    }
+  });
+  activeRecording = recording;
+  try {
+    recorder.start(1000);
+  } catch (error) {
+    window.clearInterval(recording.intervalId);
+    activeRecording = null;
+    throw error;
+  }
+  return {
+    tabId: recording.tabId,
+    recording: true,
+    startedAt,
+  };
+}
+
+function stopMediaRecorder(recorder: MediaRecorder): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (recorder.state === 'inactive') {
+      resolve();
+      return;
+    }
+    const cleanup = () => {
+      recorder.removeEventListener('stop', onStop);
+      recorder.removeEventListener('error', onError);
+    };
+    const onStop = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (event: Event) => {
+      cleanup();
+      reject(event instanceof ErrorEvent ? event.error : new Error('Workspace preview automation recording failed.'));
+    };
+    recorder.addEventListener('stop', onStop, { once: true });
+    recorder.addEventListener('error', onError, { once: true });
+    recorder.stop();
+  });
+}
+
+function clearRecording(recording: ActiveDomRecording): void {
+  window.clearInterval(recording.intervalId);
+  if (activeRecording === recording) {
+    activeRecording = null;
+  }
+}
+
+async function stopRecording(state: DomAutomationFrameState, request: CodeWorkspacePreviewAutomationRequest): Promise<PreviewAutomationRecordingArtifactUpload> {
+  const requestedTabId = request.tabIdExplicit ? request.tabId : undefined;
+  const recording = activeRecording;
+  const stopTabId = requestedTabId ?? recording?.tabId ?? state.tabId;
+  if (!recording || recording.tabId !== stopTabId) {
+    throw new Error(`Preview automation request ${request.requestId} found no active recording for tab ${stopTabId ?? 'unassigned'}.`);
+  }
+  if (recording.stopping) {
+    return recording.stopping;
+  }
+  const stopPromise = Promise.resolve()
+    .then(async () => {
+      clearRecording(recording);
+      try {
+        await drawDocumentToCanvas(
+          frameDocument(state),
+          frameWindow(state),
+          recording.canvas,
+          recording.context,
+        );
+        recording.frameCount += 1;
+      } catch {
+        // Keep the recording stoppable even if the iframe navigated cross-origin.
+      }
+      await stopMediaRecorder(recording.recorder);
+      const stoppedAt = new Date().toISOString();
+      const blob = new Blob(recording.chunks, { type: recording.mimeType });
+      const data = arrayBufferToBase64(await blobToArrayBuffer(blob));
+      return {
+        id: recording.id,
+        tabId: recording.tabId,
+        path: recordingPath(recording.id, recording.mimeType),
+        mimeType: recording.mimeType,
+        sizeBytes: blob.size,
+        createdAt: stoppedAt,
+        encoding: 'base64' as const,
+        data,
+        startedAt: recording.startedAt,
+        stoppedAt,
+        durationMs: Math.max(0, Date.parse(stoppedAt) - Date.parse(recording.startedAt)),
+        frameCount: recording.frameCount,
+      };
+    })
+    .finally(() => {
+      if (activeRecording === recording) {
+        activeRecording = null;
+      }
+    });
+  recording.stopping = stopPromise;
+  return stopPromise;
 }
 
 function wait(delayMs: number): Promise<void> {
@@ -457,6 +1027,14 @@ export async function runCodeWorkspacePreviewDomAutomation(
       return evaluateFrame(state, input);
     case 'waitFor':
       return waitForCondition(state, input, request.timeoutMs);
+    case 'clearCookies':
+      return clearFrameCookies(state);
+    case 'clearCache':
+      return clearFrameCache(state);
+    case 'recordingStart':
+      return startRecording(state);
+    case 'recordingStop':
+      return stopRecording(state, request);
     default:
       throw new Error(`Workspace preview automation does not support ${request.operation} in this browser surface.`);
   }
