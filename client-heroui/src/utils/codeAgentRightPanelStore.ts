@@ -1,4 +1,9 @@
 import { useSyncExternalStore } from 'react';
+import {
+  FILL_CODE_AGENT_PREVIEW_VIEWPORT,
+  coerceCodeAgentPreviewViewportSetting,
+  type CodeAgentPreviewViewportSetting,
+} from './codeAgentPreviewViewport';
 
 export type CodeAgentRightPanelSurface =
   | ({
@@ -36,6 +41,8 @@ export type CodeAgentPreviewNavigationTarget =
 type CodeAgentPreviewNavigationState = {
   navigationHistory?: CodeAgentPreviewNavigationTarget[];
   navigationIndex?: number;
+  previewSessionId?: string;
+  viewport?: CodeAgentPreviewViewportSetting;
   zoomFactor?: number;
 };
 
@@ -208,6 +215,22 @@ function previewZoomStateFromSurface(
   return zoomFactor === undefined || Math.abs(zoomFactor - 1) < PREVIEW_ZOOM_EPSILON
     ? {}
     : { zoomFactor };
+}
+
+function previewViewportStateFromSurface(
+  surface: Partial<CodeAgentPreviewSurface> | null,
+): Pick<CodeAgentPreviewNavigationState, 'viewport'> {
+  const viewport = coerceCodeAgentPreviewViewportSetting(surface?.viewport);
+  return !viewport || viewport._tag === 'fill' ? {} : { viewport };
+}
+
+function previewSessionStateFromSurface(
+  surface: Partial<CodeAgentPreviewSurface> | null,
+): Pick<CodeAgentPreviewNavigationState, 'previewSessionId'> {
+  const previewSessionId = typeof surface?.previewSessionId === 'string'
+    ? surface.previewSessionId.trim().slice(0, 256)
+    : '';
+  return previewSessionId ? { previewSessionId } : {};
 }
 
 function fileSurface(relativePath: string, revealLine: number | null, revealRequestId: number): CodeAgentRightPanelSurface {
@@ -390,10 +413,12 @@ function coerceSurface(value: unknown): CodeAgentRightPanelSurface | null {
       const nextSurface = target?.kind === 'url' ? browserUrlSurface(target.url) : null;
       return nextSurface
         ? {
-            ...nextSurface,
-            ...normalizePreviewNavigationState(previewSurface, target),
-            ...previewZoomStateFromSurface(previewSurface),
-          }
+          ...nextSurface,
+          ...normalizePreviewNavigationState(previewSurface, target),
+          ...previewSessionStateFromSurface(previewSurface),
+          ...previewViewportStateFromSurface(previewSurface),
+          ...previewZoomStateFromSurface(previewSurface),
+        }
         : null;
     }
     if (!relativePath && /^browser:new(?::\d+)?$/.test(rawId)) {
@@ -401,6 +426,9 @@ function coerceSurface(value: unknown): CodeAgentRightPanelSurface | null {
         id: rawId as 'browser:new' | `browser:new:${number}`,
         kind: 'preview',
         relativePath: null,
+        ...previewSessionStateFromSurface(previewSurface),
+        ...previewViewportStateFromSurface(previewSurface),
+        ...previewZoomStateFromSurface(previewSurface),
       };
     }
     const target = relativePath ? normalizePreviewNavigationTarget({ kind: 'workspace-file', relativePath }) : null;
@@ -408,6 +436,8 @@ function coerceSurface(value: unknown): CodeAgentRightPanelSurface | null {
     return {
       ...nextSurface,
       ...normalizePreviewNavigationState(previewSurface, target),
+      ...previewSessionStateFromSurface(previewSurface),
+      ...previewViewportStateFromSurface(previewSurface),
       ...previewZoomStateFromSurface(previewSurface),
     };
   }
@@ -712,6 +742,8 @@ export function navigateCodeAgentRightPanelPreviewSurface(
       const navigationState = navigationStateAfterPreviewTarget(sourceSurface, nextTarget);
       const nextSurface = previewSurfaceFromTarget(nextTarget, {
         ...navigationState,
+        ...previewSessionStateFromSurface(sourceSurface),
+        ...previewViewportStateFromSurface(sourceSurface),
         ...previewZoomStateFromSurface(sourceSurface),
       });
       return nextSurface ? replacePreviewSurface(current, surfaceId, nextSurface) : current;
@@ -750,6 +782,8 @@ export function navigateCodeAgentRightPanelPreviewHistory(
       const nextSurface = previewSurfaceFromTarget(nextTarget, {
         navigationHistory: history,
         navigationIndex: nextIndex,
+        ...previewSessionStateFromSurface(sourceSurface),
+        ...previewViewportStateFromSurface(sourceSurface),
         ...previewZoomStateFromSurface(sourceSurface),
       });
       return nextSurface ? replacePreviewSurface(current, surfaceId, nextSurface) : current;
@@ -772,7 +806,10 @@ export function setCodeAgentRightPanelPreviewZoomFactor(
     ...state,
     byRoomId: updateRoom(state.byRoomId, roomKey, (current) => {
       const nextSurfaces = current.surfaces.map((surface) => {
-        if (surface.id !== surfaceId || surface.kind !== 'preview') {
+        if (
+          surface.kind !== 'preview' ||
+          (surface.id !== surfaceId && surface.previewSessionId !== surfaceId)
+        ) {
           return surface;
         }
         const currentZoomFactor = surface.zoomFactor ?? 1;
@@ -784,6 +821,83 @@ export function setCodeAgentRightPanelPreviewZoomFactor(
           return rest;
         }
         return { ...surface, zoomFactor: nextZoomFactor };
+      });
+      return nextSurfaces.every((surface, index) => surface === current.surfaces[index])
+        ? current
+        : { ...current, surfaces: nextSurfaces };
+    }),
+  }));
+}
+
+export function setCodeAgentRightPanelPreviewViewport(
+  roomId: string,
+  surfaceId: string,
+  viewport: CodeAgentPreviewViewportSetting,
+) {
+  const roomKey = normalizeRoomId(roomId);
+  if (!roomKey) {
+    return;
+  }
+  const nextViewport = coerceCodeAgentPreviewViewportSetting(viewport) ?? FILL_CODE_AGENT_PREVIEW_VIEWPORT;
+  updateStore((state) => ({
+    ...state,
+    byRoomId: updateRoom(state.byRoomId, roomKey, (current) => {
+      const nextSurfaces = current.surfaces.map((surface) => {
+        if (
+          surface.kind !== 'preview' ||
+          (surface.id !== surfaceId && surface.previewSessionId !== surfaceId)
+        ) {
+          return surface;
+        }
+        const currentViewport = coerceCodeAgentPreviewViewportSetting(surface.viewport)
+          ?? FILL_CODE_AGENT_PREVIEW_VIEWPORT;
+        if (
+          currentViewport._tag === nextViewport._tag &&
+          (currentViewport._tag === 'fill' || (
+            nextViewport._tag !== 'fill' &&
+            currentViewport.width === nextViewport.width &&
+            currentViewport.height === nextViewport.height &&
+            (
+              currentViewport._tag !== 'preset' ||
+              (nextViewport._tag === 'preset' && currentViewport.presetId === nextViewport.presetId)
+            )
+          ))
+        ) {
+          return surface;
+        }
+        if (nextViewport._tag === 'fill') {
+          const { viewport: _removed, ...rest } = surface;
+          return rest;
+        }
+        return { ...surface, viewport: nextViewport };
+      });
+      return nextSurfaces.every((surface, index) => surface === current.surfaces[index])
+        ? current
+        : { ...current, surfaces: nextSurfaces };
+    }),
+  }));
+}
+
+export function setCodeAgentRightPanelPreviewSessionId(
+  roomId: string,
+  surfaceId: string,
+  previewSessionId: string,
+) {
+  const roomKey = normalizeRoomId(roomId);
+  const nextPreviewSessionId = previewSessionId.trim().slice(0, 256);
+  if (!roomKey || !nextPreviewSessionId) {
+    return;
+  }
+  updateStore((state) => ({
+    ...state,
+    byRoomId: updateRoom(state.byRoomId, roomKey, (current) => {
+      const nextSurfaces = current.surfaces.map((surface) => {
+        if (surface.id !== surfaceId || surface.kind !== 'preview') {
+          return surface;
+        }
+        return surface.previewSessionId === nextPreviewSessionId
+          ? surface
+          : { ...surface, previewSessionId: nextPreviewSessionId };
       });
       return nextSurfaces.every((surface, index) => surface === current.surfaces[index])
         ? current

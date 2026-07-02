@@ -3,7 +3,6 @@ import { File as DiffFile, type FileOptions, Virtualizer } from '@pierre/diffs/r
 import {
   Download,
   LoaderCircle,
-  X,
 } from 'lucide-react';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -18,7 +17,13 @@ import {
 import { preloadWorkspaceImagePreview } from '../utils/codeWorkspaceImagePreviewCache';
 import { type ReviewCommentContext } from '../utils/codeAgentReviewComments';
 import { CodeAgentEditableFileSurface } from './CodeAgentEditableFileSurface';
+import {
+  CodeAgentBrowserDeviceToolbar,
+  CodeAgentBrowserViewportResizeHandles,
+  useCodeAgentBrowserViewportResize,
+} from './CodeAgentBrowserViewportControls';
 import { CodeAgentFilePreviewHeader } from './CodeAgentFilePreviewHeader';
+import { MediaViewerModal } from './MediaViewerModal';
 import { projectFileCacheKey } from './codeAgentFileContentRevision';
 import { FileSaveCoordinator } from './codeAgentFileSaveCoordinator';
 import { setMarkdownTaskChecked } from './codeAgentFilePreviewMode';
@@ -33,6 +38,16 @@ import {
   getOptimisticCodeAgentProjectFileQueryData,
   setCodeAgentProjectFileQueryData,
 } from './codeAgentProjectFilesQueryState';
+import {
+  FILL_CODE_AGENT_PREVIEW_VIEWPORT,
+  type CodeAgentPreviewViewportSetting,
+  type CodeAgentPreviewViewportSize,
+} from '../utils/codeAgentPreviewViewport';
+import {
+  runCodeWorkspacePreviewDomAutomation,
+  type CodeWorkspacePreviewDomAutomationHandler,
+} from '../utils/codeWorkspacePreviewDomAutomation';
+import type { CodeWorkspacePreviewAutomationRequest } from '../utils/socket';
 
 const MarkdownContent = React.lazy(() =>
   import('./MarkdownContent').then((module) => ({ default: module.MarkdownContent })),
@@ -258,7 +273,7 @@ function createDownload(file: CodeWorkspaceFile) {
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
-function WorkspaceImageAssetPreview({ src, alt }: { src: string; alt: string }) {
+function WorkspaceImageAssetPreview({ roomId, src, alt }: { roomId: string; src: string; alt: string }) {
   const { t } = useTranslation();
   const [imageLoading, setImageLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
@@ -345,69 +360,116 @@ function WorkspaceImageAssetPreview({ src, alt }: { src: string; alt: string }) 
           </div>
         </div>
       ) : null}
-      {fullScreenVisible ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label={t('codeAgentImagePreviewFullscreen', { path: alt })}
-          className="fixed inset-0 z-[1000] flex items-center justify-center bg-[#141413]/95 p-4"
-          data-testid="code-agent-image-fullscreen-preview"
-          onClick={() => setFullScreenVisible(false)}
-        >
-          <button
-            type="button"
-            aria-label={t('close')}
-            className="absolute right-3 top-3 rounded-md p-2 text-[#faf9f5] transition-colors hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#ffb197]"
-            onClick={(event) => {
-              event.stopPropagation();
-              setFullScreenVisible(false);
-            }}
-          >
-            <X className="h-5 w-5" />
-          </button>
-          <img
-            src={src}
-            alt={alt}
-            className="max-h-full max-w-full object-contain"
-            onClick={(event) => event.stopPropagation()}
-          />
-        </div>
-      ) : null}
+      <MediaViewerModal
+        isOpen={fullScreenVisible}
+        src={src}
+        kind="image"
+        title={t('codeAgentImagePreviewFullscreen', { path: alt })}
+        alt={alt}
+        roomId={roomId}
+        historyEnabled={false}
+        actionsEnabled={false}
+        dialogTestId="code-agent-image-fullscreen-preview"
+        onClose={() => setFullScreenVisible(false)}
+      />
     </div>
   );
+}
+
+type WorkspaceBrowserPreviewStatus = 'success' | 'failed';
+
+type WorkspaceBrowserViewportChangeHandler = (
+  viewport: CodeAgentPreviewViewportSetting,
+) => unknown;
+
+interface WorkspaceBrowserAssetPreviewProps {
+  src: string;
+  title: string;
+  zoomFactor?: number;
+  viewport?: CodeAgentPreviewViewportSetting;
+  onViewportChange?: WorkspaceBrowserViewportChangeHandler;
+  onViewportContainerSizeChange?: (size: CodeAgentPreviewViewportSize) => void;
+  onPreviewStatusChange?: (
+    status: WorkspaceBrowserPreviewStatus,
+    renderedViewport?: { width: number; height: number },
+  ) => void;
+  onLoadingChange?: (loading: boolean) => void;
+  automationTabId?: string;
+  onAutomationHandlerChange?: (handler: CodeWorkspacePreviewDomAutomationHandler | null) => void;
 }
 
 export function WorkspaceBrowserAssetPreview({
   src,
   title,
   zoomFactor = 1,
+  viewport = FILL_CODE_AGENT_PREVIEW_VIEWPORT,
+  onViewportChange,
+  onViewportContainerSizeChange,
+  onPreviewStatusChange,
   onLoadingChange,
-}: {
-  src: string;
-  title: string;
-  zoomFactor?: number;
-  onLoadingChange?: (loading: boolean) => void;
-}) {
+  automationTabId,
+  onAutomationHandlerChange,
+}: WorkspaceBrowserAssetPreviewProps) {
   const { t } = useTranslation();
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const viewportContainerRef = useRef<HTMLDivElement | null>(null);
+  const [viewportContainerSize, setViewportContainerSize] =
+    useState<CodeAgentPreviewViewportSize>({ width: 1, height: 1 });
+  const [aspectRatioLocked, setAspectRatioLocked] = useState(false);
   const normalizedZoomFactor = Number.isFinite(zoomFactor) && zoomFactor > 0 ? zoomFactor : 1;
-  const zoomFrameStyle = {
+  const fillZoomFrameStyle = {
     width: `${100 / normalizedZoomFactor}%`,
     height: `${100 / normalizedZoomFactor}%`,
     transform: `scale(${normalizedZoomFactor})`,
     transformOrigin: 'top left',
   };
+  const viewportAspectRatio = viewport._tag === 'fill' ? null : viewport.width / viewport.height;
+  const lockedAspectRatio = aspectRatioLocked && viewportAspectRatio !== null
+    ? viewportAspectRatio
+    : null;
+  const {
+    activeDrag,
+    commitViewportChange,
+    effectiveViewport,
+    handleResizeKeyDown,
+    handleResizePointerDown,
+    layout,
+  } = useCodeAgentBrowserViewportResize({
+    viewport,
+    zoomFactor,
+    containerSize: viewportContainerSize,
+    deviceToolbarVisible: viewport._tag !== 'fill',
+    aspectRatio: lockedAspectRatio,
+    onChange: onViewportChange ?? (() => undefined),
+  });
+  const fixedZoomFrameStyle = effectiveViewport._tag !== 'fill'
+    ? {
+      left: layout.viewportX,
+      top: layout.viewportY,
+      width: effectiveViewport.width,
+      height: effectiveViewport.height,
+      transform: `scale(${normalizedZoomFactor * layout.viewportScale})`,
+      transformOrigin: 'top left',
+    }
+    : null;
 
   const handleLoad = useCallback(() => {
     setIsLoading(false);
-  }, []);
+    const iframe = iframeRef.current;
+    const rect = iframe?.getBoundingClientRect();
+    onPreviewStatusChange?.('success', rect ? {
+      width: Math.max(1, Math.round(rect.width)),
+      height: Math.max(1, Math.round(rect.height)),
+    } : undefined);
+  }, [onPreviewStatusChange]);
 
   const handleError = useCallback(() => {
     setIsLoading(false);
     setLoadError(t('codeAgentBrowserPreviewLoadFailed'));
-  }, [t]);
+    onPreviewStatusChange?.('failed');
+  }, [onPreviewStatusChange, t]);
 
   useEffect(() => {
     setIsLoading(true);
@@ -417,6 +479,32 @@ export function WorkspaceBrowserAssetPreview({
   useEffect(() => {
     onLoadingChange?.(isLoading);
   }, [isLoading, onLoadingChange]);
+
+  useEffect(() => {
+    const element = viewportContainerRef.current;
+    if (!element) {
+      return undefined;
+    }
+    const readSize = () => {
+      const rect = element.getBoundingClientRect();
+      const next = {
+        width: Math.max(1, Math.round(rect.width || element.clientWidth || 1)),
+        height: Math.max(1, Math.round(rect.height || element.clientHeight || 1)),
+      };
+      setViewportContainerSize((current) => (
+        current.width === next.width && current.height === next.height ? current : next
+      ));
+      onViewportContainerSizeChange?.(next);
+    };
+    readSize();
+    if (typeof ResizeObserver === 'function') {
+      const observer = new ResizeObserver(readSize);
+      observer.observe(element);
+      return () => observer.disconnect();
+    }
+    window.addEventListener('resize', readSize);
+    return () => window.removeEventListener('resize', readSize);
+  }, [onViewportContainerSizeChange]);
 
   useEffect(() => {
     const iframe = iframeRef.current;
@@ -431,6 +519,25 @@ export function WorkspaceBrowserAssetPreview({
     };
   }, [handleError, handleLoad, src]);
 
+  useEffect(() => {
+    if (!onAutomationHandlerChange) {
+      return undefined;
+    }
+    const handler = (request: CodeWorkspacePreviewAutomationRequest) => (
+      runCodeWorkspacePreviewDomAutomation(request, {
+        iframe: iframeRef.current,
+        tabId: automationTabId ?? title,
+        loading: isLoading,
+        title,
+        url: src,
+      })
+    );
+    onAutomationHandlerChange(handler);
+    return () => {
+      onAutomationHandlerChange(null);
+    };
+  }, [automationTabId, isLoading, onAutomationHandlerChange, src, title]);
+
   return (
     <div className="relative flex min-h-0 flex-1 flex-col bg-white dark:bg-[#141413]">
       {loadError ? (
@@ -443,22 +550,80 @@ export function WorkspaceBrowserAssetPreview({
           </div>
         </div>
       ) : null}
-      <div className="min-h-0 flex-1 overflow-auto bg-white" data-testid="code-agent-browser-preview-viewport">
-        <div
-          className="min-h-full"
-          data-testid="code-agent-browser-preview-zoom-frame"
-          style={zoomFrameStyle}
-        >
-          <iframe
-            ref={iframeRef}
-            src={src}
-            title={title}
-            className="h-full min-h-full w-full border-0 bg-white"
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-            onLoad={handleLoad}
-            onError={handleError}
-          />
-        </div>
+      <div
+        ref={viewportContainerRef}
+        className="min-h-0 flex-1 overflow-auto bg-white dark:bg-[#141413]"
+        data-testid="code-agent-browser-preview-viewport"
+      >
+        {effectiveViewport._tag === 'fill' ? (
+          <div
+            className="min-h-full"
+            data-testid="code-agent-browser-preview-zoom-frame"
+            style={fillZoomFrameStyle}
+          >
+            <iframe
+              ref={iframeRef}
+              src={src}
+              title={title}
+              className="h-full min-h-full w-full border-0 bg-white"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+              onLoad={handleLoad}
+              onError={handleError}
+            />
+          </div>
+        ) : (
+          <div
+            className="relative"
+            style={{ width: layout.canvasWidth, height: layout.canvasHeight }}
+            data-testid="code-agent-browser-preview-device-canvas"
+          >
+            <CodeAgentBrowserDeviceToolbar
+              setting={effectiveViewport}
+              width={Math.max(1, Math.round(viewportContainerSize.width))}
+              aspectRatio={lockedAspectRatio}
+              onAspectRatioChange={(aspectRatio) => setAspectRatioLocked(aspectRatio !== null)}
+              onChange={commitViewportChange}
+            />
+            <div
+              className="absolute overflow-hidden bg-white ring-1 ring-[#dedbd0] shadow-sm dark:ring-[#30302e]"
+              data-testid="code-agent-browser-preview-zoom-frame"
+              data-preview-viewport-mode={effectiveViewport._tag}
+              data-preview-viewport-key={`${effectiveViewport._tag}:${effectiveViewport.width}:${effectiveViewport.height}`}
+              style={fixedZoomFrameStyle ?? undefined}
+            >
+              <iframe
+                ref={iframeRef}
+                src={src}
+                title={title}
+                className="h-full w-full border-0 bg-white"
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                onLoad={handleLoad}
+                onError={handleError}
+              />
+            </div>
+            <CodeAgentBrowserViewportResizeHandles
+              layout={layout}
+              activeDirection={activeDrag?.direction ?? null}
+              onPointerDown={handleResizePointerDown}
+              onKeyDown={handleResizeKeyDown}
+            />
+            {activeDrag ? (
+              <div
+                className="pointer-events-none absolute z-40 -translate-x-1/2 rounded-md border border-[#dedbd0] bg-[#faf9f5]/95 px-2 py-1 text-[11px] font-medium tabular-nums text-[#141413] shadow-md backdrop-blur-sm dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#faf9f5]"
+                style={{
+                  left: layout.viewportX + layout.viewportWidth / 2,
+                  top: layout.viewportY + 10,
+                }}
+                aria-hidden="true"
+              >
+                {t('codeAgentBrowserViewportSizeLabel', {
+                  width: String(activeDrag.width),
+                  height: String(activeDrag.height),
+                })}
+              </div>
+            ) : null}
+          </div>
+        )}
       </div>
       {isLoading ? (
         <div
@@ -755,7 +920,7 @@ function FilePreviewSurface({
     const resolvedPreviewUrl = appendWorkspaceAssetPreviewRevision(assetPreviewResolvedUrl, assetPreviewRevision);
 
     return renderImageAssetPreview && !renderSvgWebPreview ? (
-      <WorkspaceImageAssetPreview src={resolvedPreviewUrl} alt={relativePath} />
+      <WorkspaceImageAssetPreview roomId={roomId} src={resolvedPreviewUrl} alt={relativePath} />
     ) : (
       <WorkspaceBrowserAssetPreview src={resolvedPreviewUrl} title={relativePath} />
     );

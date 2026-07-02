@@ -82,6 +82,19 @@ export interface RenameCocoWorkspaceEntryInput {
   toPath: string;
 }
 
+export interface ResolveCocoWorkspacePreviewTargetInput {
+  kind: 'environment-port';
+  port: number;
+  protocol?: 'http' | 'https';
+  path?: string;
+}
+
+export interface CocoWorkspacePreviewTargetResolution {
+  requestedUrl: string;
+  resolvedUrl: string;
+  resolutionKind: 'e2b-port-host';
+}
+
 export interface CocoWorkspaceEntry {
   path: string;
   name: string;
@@ -157,6 +170,7 @@ export interface CocoSandboxService {
   searchWorkspaceEntries?(handle: CocoSandboxHandle, options: SearchCocoWorkspaceEntriesOptions): Promise<CocoWorkspaceEntry[]>;
   readWorkspaceFile?(handle: CocoSandboxHandle, path: string, options?: ReadCocoWorkspaceFileOptions): Promise<CocoWorkspaceFile>;
   readWorkspaceAsset?(handle: CocoSandboxHandle, path: string, options?: ReadCocoWorkspaceAssetOptions): Promise<CocoWorkspaceAsset>;
+  resolveWorkspacePreviewTarget?(handle: CocoSandboxHandle, input: ResolveCocoWorkspacePreviewTargetInput): Promise<CocoWorkspacePreviewTargetResolution>;
   writeWorkspaceFile?(handle: CocoSandboxHandle, input: WriteCocoWorkspaceFileInput): Promise<CocoWorkspaceEntry>;
   createWorkspaceDirectory?(handle: CocoSandboxHandle, path: string): Promise<CocoWorkspaceEntry>;
   renameWorkspaceEntry?(handle: CocoSandboxHandle, input: RenameCocoWorkspaceEntryInput): Promise<CocoWorkspaceEntry>;

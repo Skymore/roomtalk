@@ -88,9 +88,16 @@ const {
   sendMessage,
   sendMessageAndAskAI,
   requestAudioTranscription,
+  requestCodeWorkspacePreviewAutomation,
   requestCodeWorkspaceEntries,
   requestCodeWorkspaceEntrySearch,
+  requestConnectCodeWorkspacePreviewAutomation,
+  requestFocusCodeWorkspacePreviewAutomation,
+  requestListCodeWorkspacePreviewAutomationHosts,
+  requestResolveCodeWorkspacePreviewTarget,
+  requestRespondCodeWorkspacePreviewAutomation,
   requestCodeWorkspaceRefs,
+  onCodeWorkspacePreviewAutomationEvent,
   setClientPassword,
   setClientAuthToken,
   setUsername,
@@ -345,6 +352,138 @@ describe('socket message acknowledgement helpers', () => {
       { roomId: 'room-1', query: 'main', limit: 25 },
       expect.any(Function),
     );
+  });
+
+  it('connects and uses workspace preview automation socket handlers', async () => {
+    const host = {
+      roomId: 'room-1',
+      clientId: 'client-uuid',
+      connectionId: 'automation-1',
+      socketId: 'socket-1',
+      focused: true,
+      supportedOperations: ['status', 'navigate'],
+      connectedAt: '2026-05-03T10:00:00.000Z',
+      updatedAt: '2026-05-03T10:00:00.000Z',
+    };
+    const response = {
+      clientId: 'client-uuid',
+      connectionId: 'automation-1',
+      requestId: 'request-1',
+      ok: true,
+      result: { url: 'https://example.com' },
+    };
+    socketMock.ackResponses.set('connect_code_workspace_preview_automation', {
+      success: true,
+      host,
+    });
+    socketMock.ackResponses.set('list_code_workspace_preview_automation_hosts', {
+      success: true,
+      hosts: [host],
+    });
+    socketMock.ackResponses.set('focus_code_workspace_preview_automation', {
+      success: true,
+      host: { ...host, focused: false },
+    });
+    socketMock.ackResponses.set('request_code_workspace_preview_automation', {
+      success: true,
+      response,
+    });
+    socketMock.ackResponses.set('resolve_code_workspace_preview_target', {
+      success: true,
+      target: {
+        requestedUrl: 'http://localhost:5173/app',
+        resolvedUrl: 'https://5173-sandbox.e2b.dev/app',
+        resolutionKind: 'e2b-port-host',
+      },
+    });
+    socketMock.ackResponses.set('respond_code_workspace_preview_automation', {
+      success: true,
+      response,
+    });
+
+    await expect(requestConnectCodeWorkspacePreviewAutomation({
+      roomId: 'room-1',
+      focused: true,
+      supportedOperations: ['status', 'navigate'],
+    })).resolves.toEqual(host);
+    await expect(requestListCodeWorkspacePreviewAutomationHosts('room-1')).resolves.toEqual([host]);
+    await expect(requestFocusCodeWorkspacePreviewAutomation({
+      roomId: 'room-1',
+      connectionId: 'automation-1',
+      focused: false,
+    })).resolves.toEqual({ ...host, focused: false });
+    await expect(requestCodeWorkspacePreviewAutomation({
+      roomId: 'room-1',
+      requestId: 'request-1',
+      operation: 'navigate',
+      input: { url: 'https://example.com' },
+      timeoutMs: 1000,
+    })).resolves.toEqual(response);
+    await expect(requestResolveCodeWorkspacePreviewTarget({
+      roomId: 'room-1',
+      target: { kind: 'environment-port', port: 5173, path: '/app' },
+    })).resolves.toEqual({
+      requestedUrl: 'http://localhost:5173/app',
+      resolvedUrl: 'https://5173-sandbox.e2b.dev/app',
+      resolutionKind: 'e2b-port-host',
+    });
+    await expect(requestRespondCodeWorkspacePreviewAutomation({
+      roomId: 'room-1',
+      connectionId: 'automation-1',
+      requestId: 'request-1',
+      ok: true,
+      result: { url: 'https://example.com' },
+    })).resolves.toEqual(response);
+
+    expect(socketMock.emit).toHaveBeenCalledWith(
+      'connect_code_workspace_preview_automation',
+      { roomId: 'room-1', focused: true, supportedOperations: ['status', 'navigate'] },
+      expect.any(Function),
+    );
+    expect(socketMock.emit).toHaveBeenCalledWith(
+      'request_code_workspace_preview_automation',
+      {
+        roomId: 'room-1',
+        requestId: 'request-1',
+        operation: 'navigate',
+        input: { url: 'https://example.com' },
+        timeoutMs: 1000,
+      },
+      expect.any(Function),
+    );
+    expect(socketMock.emit).toHaveBeenCalledWith(
+      'resolve_code_workspace_preview_target',
+      {
+        roomId: 'room-1',
+        target: { kind: 'environment-port', port: 5173, path: '/app' },
+      },
+      expect.any(Function),
+    );
+  });
+
+  it('subscribes to workspace preview automation events', () => {
+    const callback = vi.fn();
+    const unsubscribe = onCodeWorkspacePreviewAutomationEvent(callback);
+    const event = {
+      type: 'request',
+      roomId: 'room-1',
+      connectionId: 'automation-1',
+      request: {
+        requestId: 'request-1',
+        roomId: 'room-1',
+        operation: 'status',
+        input: {},
+        timeoutMs: 1000,
+      },
+      createdAt: '2026-05-03T10:00:00.000Z',
+    };
+
+    socketMock.handlers.get('code_workspace_preview_automation_event')?.forEach(handler => handler(event));
+    expect(callback).toHaveBeenCalledWith(event);
+
+    unsubscribe();
+    socketMock.handlers.get('code_workspace_preview_automation_event')?.forEach(handler => handler(event));
+    expect(callback).toHaveBeenCalledTimes(1);
   });
 
   it('includes the stored client auth token when registering the socket', async () => {

@@ -87,12 +87,40 @@ import {
   openCodeAgentRightPanelFile,
   openCodeAgentRightPanelPreview,
   reconcileCodeAgentFileSurfaces,
+  setCodeAgentRightPanelPreviewSessionId,
   setCodeAgentRightPanelPreviewZoomFactor,
+  setCodeAgentRightPanelPreviewViewport,
   useCodeAgentPreviewRecentTargets,
   type CodeAgentPreviewNavigationTarget,
   type CodeAgentRightPanelSurface,
   useCodeAgentRightPanelState,
 } from '../utils/codeAgentRightPanelStore';
+import {
+  navigateCodeWorkspacePreviewSession,
+  openCodeWorkspacePreviewSession,
+  refreshCodeWorkspacePreviewSession,
+  reportCodeWorkspacePreviewSession,
+  resolveCodeWorkspacePreviewTarget,
+  resizeCodeWorkspacePreviewSession,
+  subscribeCodeWorkspacePreviewEvents,
+} from '../utils/codeWorkspacePreviewSessions';
+import {
+  CODE_AGENT_PREVIEW_VIEWPORT_PRESET_IDS,
+  FILL_CODE_AGENT_PREVIEW_VIEWPORT,
+  resolveCodeAgentPreviewViewport,
+  type CodeAgentPreviewViewportPresetId,
+  type CodeAgentPreviewViewportSetting,
+} from '../utils/codeAgentPreviewViewport';
+import { resolveResponsiveCodeAgentBrowserViewportSize } from '../utils/codeAgentBrowserViewportLayout';
+import {
+  CODE_WORKSPACE_PREVIEW_AUTOMATION_CLOUD_BROWSER_OPERATIONS,
+  connectCodeWorkspacePreviewAutomationHost,
+  type CodeWorkspacePreviewAutomationRequest,
+} from '../utils/codeWorkspacePreviewAutomation';
+import {
+  isCodeWorkspacePreviewDomAutomationOperation,
+  type CodeWorkspacePreviewDomAutomationHandler,
+} from '../utils/codeWorkspacePreviewDomAutomation';
 
 interface CodeAgentFileBrowserPanelProps {
   roomId: string;
@@ -429,16 +457,22 @@ function CodeAgentBrowserZoomIndicator({
 function CodeAgentBrowserMoreMenu({
   canRefresh,
   canZoom,
+  canToggleDeviceToolbar,
   zoomFactor,
+  deviceToolbarVisible,
   onHardReload,
+  onToggleDeviceToolbar,
   onZoomIn,
   onZoomOut,
   onResetZoom,
 }: {
   canRefresh: boolean;
   canZoom: boolean;
+  canToggleDeviceToolbar: boolean;
   zoomFactor: number;
+  deviceToolbarVisible: boolean;
   onHardReload: () => void;
+  onToggleDeviceToolbar: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onResetZoom: () => void;
@@ -534,6 +568,23 @@ function CodeAgentBrowserMoreMenu({
           >
             <RefreshCw className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
             <span className="min-w-0 truncate">{t('codeAgentBrowserHardReload')}</span>
+          </button>
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] hover:bg-[#f0eee6] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent dark:text-[#faf9f5] dark:hover:bg-[#30302e] dark:disabled:hover:bg-transparent"
+            role="menuitem"
+            disabled={!canToggleDeviceToolbar}
+            onClick={() => {
+              onToggleDeviceToolbar();
+              closeMenu();
+            }}
+          >
+            <Globe2 className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+            <span className="min-w-0 truncate">
+              {deviceToolbarVisible
+                ? t('codeAgentBrowserHideDeviceToolbar')
+                : t('codeAgentBrowserShowDeviceToolbar')}
+            </span>
           </button>
           <div className="my-1 h-px bg-[#dedbd0] dark:bg-[#30302e]" />
           <div
@@ -685,6 +736,15 @@ interface CodeAgentPreviewSurfaceProps {
   onRefreshWorkspacePreview: (relativePath: string) => void;
 }
 
+type CodeAgentPreviewAutomationHandler = (
+  request: CodeWorkspacePreviewAutomationRequest,
+) => unknown;
+
+type CodeAgentPreviewAutomationController = {
+  dispose: () => void;
+  setFocused: (focused: boolean) => unknown;
+};
+
 interface CodeAgentBrowserSurfaceChromeProps {
   value: string;
   loading: boolean;
@@ -693,7 +753,9 @@ interface CodeAgentBrowserSurfaceChromeProps {
   canRefresh: boolean;
   canOpenExternal: boolean;
   canZoom: boolean;
+  canToggleDeviceToolbar: boolean;
   zoomFactor: number;
+  deviceToolbarVisible: boolean;
   mobileLayout?: boolean;
   focusUrlNonce?: number;
   navigationError: string | null;
@@ -703,6 +765,7 @@ interface CodeAgentBrowserSurfaceChromeProps {
   onRefresh: () => void;
   onOpenExternal: () => void;
   onHardReload: () => void;
+  onToggleDeviceToolbar: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onResetZoom: () => void;
@@ -717,6 +780,95 @@ function formatBrowserSurfaceAddressDisplay(value: string): string {
   }
 }
 
+function previewAutomationStringInput(input: unknown, key: string): string | null {
+  if (!input || typeof input !== 'object') {
+    return null;
+  }
+  const value = (input as Record<string, unknown>)[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+type PreviewAutomationNavigationTarget =
+  | { kind: 'url'; url: string }
+  | { kind: 'environment-port'; port: number; protocol?: 'http' | 'https'; path?: string };
+
+function previewAutomationNavigationTarget(input: unknown): PreviewAutomationNavigationTarget | null {
+  const directUrl = previewAutomationStringInput(input, 'url');
+  if (directUrl) {
+    return { kind: 'url', url: directUrl };
+  }
+  if (!input || typeof input !== 'object') {
+    return null;
+  }
+  const target = (input as { target?: unknown }).target;
+  if (!target || typeof target !== 'object') {
+    return null;
+  }
+  const kind = (target as { kind?: unknown }).kind;
+  if (kind === 'url') {
+    const url = previewAutomationStringInput(target, 'url');
+    return url ? { kind: 'url', url } : null;
+  }
+  if (kind !== 'environment-port') {
+    return null;
+  }
+  const port = Number((target as { port?: unknown }).port);
+  if (!Number.isInteger(port) || port <= 0 || port >= 65536) {
+    return null;
+  }
+  const rawProtocol = (target as { protocol?: unknown }).protocol;
+  const protocol = rawProtocol === 'https' ? 'https' : rawProtocol === 'http' ? 'http' : undefined;
+  const path = previewAutomationStringInput(target, 'path');
+  return {
+    kind: 'environment-port',
+    port,
+    ...(protocol ? { protocol } : {}),
+    ...(path ? { path } : {}),
+  };
+}
+
+async function previewAutomationNavigationUrl(roomId: string, input: unknown): Promise<string | null> {
+  const target = previewAutomationNavigationTarget(input);
+  if (!target) {
+    return null;
+  }
+  if (target.kind === 'url') {
+    return target.url;
+  }
+  const resolution = await resolveCodeWorkspacePreviewTarget({ roomId, target });
+  return resolution.resolvedUrl;
+}
+
+function previewAutomationViewportSetting(input: unknown): CodeAgentPreviewViewportSetting {
+  if (!input || typeof input !== 'object') {
+    throw new Error('Preview automation resize input is invalid.');
+  }
+  const record = input as Record<string, unknown>;
+  if (record.mode === 'fill') {
+    return FILL_CODE_AGENT_PREVIEW_VIEWPORT;
+  }
+  if (record.mode === 'freeform') {
+    return resolveCodeAgentPreviewViewport({
+      mode: 'freeform',
+      width: Number(record.width),
+      height: Number(record.height),
+    });
+  }
+  if (record.mode === 'preset' && typeof record.preset === 'string') {
+    if (!CODE_AGENT_PREVIEW_VIEWPORT_PRESET_IDS.includes(record.preset as CodeAgentPreviewViewportPresetId)) {
+      throw new Error(`Unknown preview viewport preset: ${record.preset}`);
+    }
+    return resolveCodeAgentPreviewViewport({
+      mode: 'preset',
+      preset: record.preset as CodeAgentPreviewViewportPresetId,
+      orientation: record.orientation === 'landscape' || record.orientation === 'portrait'
+        ? record.orientation
+        : undefined,
+    });
+  }
+  throw new Error('Preview automation resize input is invalid.');
+}
+
 function CodeAgentBrowserSurfaceChrome({
   value,
   loading,
@@ -725,7 +877,9 @@ function CodeAgentBrowserSurfaceChrome({
   canRefresh,
   canOpenExternal,
   canZoom,
+  canToggleDeviceToolbar,
   zoomFactor,
+  deviceToolbarVisible,
   mobileLayout = false,
   focusUrlNonce,
   navigationError,
@@ -735,6 +889,7 @@ function CodeAgentBrowserSurfaceChrome({
   onRefresh,
   onOpenExternal,
   onHardReload,
+  onToggleDeviceToolbar,
   onZoomIn,
   onZoomOut,
   onResetZoom,
@@ -854,8 +1009,11 @@ function CodeAgentBrowserSurfaceChrome({
     <CodeAgentBrowserMoreMenu
       canRefresh={canRefresh}
       canZoom={canZoom}
+      canToggleDeviceToolbar={canToggleDeviceToolbar}
       zoomFactor={zoomFactor}
+      deviceToolbarVisible={deviceToolbarVisible}
       onHardReload={onHardReload}
+      onToggleDeviceToolbar={onToggleDeviceToolbar}
       onZoomIn={onZoomIn}
       onZoomOut={onZoomOut}
       onResetZoom={onResetZoom}
@@ -972,7 +1130,10 @@ function CodeAgentPreviewSurface({
   const [navigationError, setNavigationError] = useState<string | null>(null);
   const [browserReloadNonce, setBrowserReloadNonce] = useState(0);
   const [browserFrameLoading, setBrowserFrameLoading] = useState(false);
+  const [previewViewportContainerSize, setPreviewViewportContainerSize] = useState({ width: 1024, height: 768 });
   const zoomFactor = surface.zoomFactor ?? 1;
+  const viewport = surface.viewport ?? FILL_CODE_AGENT_PREVIEW_VIEWPORT;
+  const viewportRef = useRef(viewport);
   const currentAddress = previewUrl ?? relativePath ?? '';
   const resolvedWorkspacePreviewUrl = relativePath && assetUrlQuery.resolvedUrl
     ? appendWorkspaceAssetPreviewRevision(assetUrlQuery.resolvedUrl, assetPreviewRevision)
@@ -981,11 +1142,48 @@ function CodeAgentPreviewSurface({
   const canRefreshPreview = Boolean(resolvedPreviewUrl || relativePath);
   const browserChromeLoading = assetUrlQuery.isPending || (Boolean(resolvedPreviewUrl) && browserFrameLoading);
   const { canGoBack, canGoForward } = getCodeAgentPreviewSurfaceNavigationState(surface);
+  const previewSessionTabId = surface.previewSessionId ?? surface.id;
+  const previewAutomationHandlerRef = useRef<CodeAgentPreviewAutomationHandler>(async () => {
+    throw new Error('Workspace preview automation is not ready.');
+  });
+  const previewDomAutomationHandlerRef = useRef<CodeWorkspacePreviewDomAutomationHandler | null>(null);
+
+  const ensurePreviewSessionTabId = useCallback(() => {
+    const tabId = surface.previewSessionId ?? surface.id;
+    if (surface.previewSessionId !== tabId) {
+      setCodeAgentRightPanelPreviewSessionId(roomId, surface.id, tabId);
+    }
+    return tabId;
+  }, [roomId, surface.id, surface.previewSessionId]);
 
   useEffect(() => {
     setNavigationError(null);
     setBrowserReloadNonce(0);
   }, [currentAddress, surface.id]);
+
+  useEffect(() => {
+    viewportRef.current = viewport;
+  }, [viewport]);
+
+  useEffect(() => {
+    if (!resolvedPreviewUrl) {
+      return undefined;
+    }
+    let disposed = false;
+    void openCodeWorkspacePreviewSession({
+      roomId,
+      tabId: previewSessionTabId,
+      url: resolvedPreviewUrl,
+      title: previewUrl ?? relativePath ?? t('codeAgentBrowserSurface'),
+      viewport: viewportRef.current,
+    }).then((session) => {
+      if (disposed) return;
+      setCodeAgentRightPanelPreviewViewport(roomId, session.tabId, session.viewport);
+    }).catch(() => undefined);
+    return () => {
+      disposed = true;
+    };
+  }, [previewSessionTabId, relativePath, resolvedPreviewUrl, roomId, surface.id, previewUrl, t]);
 
   const handleNavigate = useCallback((value: string) => {
     const target = resolveBrowserNavigationTarget(value, workspaceRoot);
@@ -994,23 +1192,34 @@ function CodeAgentPreviewSurface({
       return;
     }
     setNavigationError(null);
+    const tabId = ensurePreviewSessionTabId();
+    if (target.kind === 'url') {
+      void navigateCodeWorkspacePreviewSession({
+        roomId,
+        tabId,
+        url: target.url,
+      }).catch(() => undefined);
+    }
     onNavigate(surface.id, target);
-  }, [onNavigate, surface.id, t, workspaceRoot]);
+  }, [ensurePreviewSessionTabId, onNavigate, roomId, surface.id, t, workspaceRoot]);
 
   const handleRefresh = useCallback(() => {
+    void refreshCodeWorkspacePreviewSession({ roomId, tabId: previewSessionTabId }).catch(() => undefined);
     if (relativePath) {
       onRefreshWorkspacePreview(relativePath);
     }
     setBrowserReloadNonce((current) => current + 1);
-  }, [onRefreshWorkspacePreview, relativePath]);
+  }, [onRefreshWorkspacePreview, previewSessionTabId, relativePath, roomId]);
 
   const handleBack = useCallback(() => {
+    ensurePreviewSessionTabId();
     onNavigateHistory(surface.id, 'back');
-  }, [onNavigateHistory, surface.id]);
+  }, [ensurePreviewSessionTabId, onNavigateHistory, surface.id]);
 
   const handleForward = useCallback(() => {
+    ensurePreviewSessionTabId();
     onNavigateHistory(surface.id, 'forward');
-  }, [onNavigateHistory, surface.id]);
+  }, [ensurePreviewSessionTabId, onNavigateHistory, surface.id]);
 
   const handleOpenExternal = useCallback(() => {
     if (!resolvedPreviewUrl) {
@@ -1018,6 +1227,165 @@ function CodeAgentPreviewSurface({
     }
     window.open(resolvedPreviewUrl, '_blank', 'noopener,noreferrer');
   }, [resolvedPreviewUrl]);
+
+  const updateViewport = useCallback(async (nextViewport: CodeAgentPreviewViewportSetting) => {
+    const session = await resizeCodeWorkspacePreviewSession({
+      roomId,
+      tabId: previewSessionTabId,
+      viewport: nextViewport,
+    });
+    setCodeAgentRightPanelPreviewViewport(roomId, session.tabId, session.viewport);
+  }, [previewSessionTabId, roomId]);
+
+  const previewAutomationStatus = useCallback((override?: {
+    url?: string | null;
+    loading?: boolean;
+    viewport?: CodeAgentPreviewViewportSetting;
+  }) => {
+    const statusUrl = override?.url ?? resolvedPreviewUrl ?? previewUrl ?? null;
+    return {
+      available: true,
+      visible: true,
+      tabId: previewSessionTabId,
+      url: statusUrl,
+      title: previewUrl ?? relativePath ?? '',
+      loading: override?.loading ?? browserChromeLoading,
+      viewportSetting: override?.viewport ?? viewportRef.current,
+      viewport: {
+        width: Math.max(1, Math.round(previewViewportContainerSize.width)),
+        height: Math.max(1, Math.round(previewViewportContainerSize.height)),
+      },
+    };
+  }, [
+    browserChromeLoading,
+    previewSessionTabId,
+    previewUrl,
+    previewViewportContainerSize.height,
+    previewViewportContainerSize.width,
+    relativePath,
+    resolvedPreviewUrl,
+  ]);
+
+  useEffect(() => {
+    previewAutomationHandlerRef.current = async (request: CodeWorkspacePreviewAutomationRequest) => {
+      if (request.operation === 'status') {
+        return previewAutomationStatus();
+      }
+      if (request.operation === 'open' || request.operation === 'navigate') {
+        const url = await previewAutomationNavigationUrl(roomId, request.input);
+        if (!url) {
+          if (request.operation === 'open') {
+            return previewAutomationStatus();
+          }
+          throw new Error('Workspace preview automation requires a direct URL or environment-port target in this cloud surface.');
+        }
+        handleNavigate(url);
+        return previewAutomationStatus({ url, loading: true });
+      }
+      if (request.operation === 'resize') {
+        const nextViewport = previewAutomationViewportSetting(request.input);
+        await updateViewport(nextViewport);
+        return {
+          tabId: previewSessionTabId,
+          setting: nextViewport,
+          viewport: {
+            width: Math.max(1, Math.round(previewViewportContainerSize.width)),
+            height: Math.max(1, Math.round(previewViewportContainerSize.height)),
+          },
+        };
+      }
+      if (isCodeWorkspacePreviewDomAutomationOperation(request.operation)) {
+        const handler = previewDomAutomationHandlerRef.current;
+        if (!handler) {
+          throw new Error('Workspace preview automation frame is not ready.');
+        }
+        return handler(request);
+      }
+      throw new Error(`Workspace preview automation does not support ${request.operation} in the cloud browser surface yet.`);
+    };
+  }, [
+    handleNavigate,
+    previewAutomationStatus,
+    previewSessionTabId,
+    previewViewportContainerSize.height,
+    previewViewportContainerSize.width,
+    roomId,
+    updateViewport,
+  ]);
+
+  useEffect(() => {
+    let disposed = false;
+    let controller: CodeAgentPreviewAutomationController | null = null;
+    void connectCodeWorkspacePreviewAutomationHost({
+      roomId,
+      supportedOperations: CODE_WORKSPACE_PREVIEW_AUTOMATION_CLOUD_BROWSER_OPERATIONS,
+      handle: (request) => previewAutomationHandlerRef.current(request),
+    }).then((nextController) => {
+      if (disposed) {
+        nextController.dispose();
+        return;
+      }
+      controller = nextController;
+    }).catch(() => undefined);
+
+    const reportFocus = () => {
+      void Promise.resolve(
+        controller?.setFocused(typeof document === 'undefined' ? true : document.hasFocus()),
+      ).catch(() => undefined);
+    };
+    window.addEventListener('focus', reportFocus);
+    window.addEventListener('blur', reportFocus);
+    return () => {
+      disposed = true;
+      window.removeEventListener('focus', reportFocus);
+      window.removeEventListener('blur', reportFocus);
+      controller?.dispose();
+    };
+  }, [roomId, surface.id]);
+
+  const handleToggleDeviceToolbar = useCallback(() => {
+    if (!resolvedPreviewUrl) {
+      return;
+    }
+    if (viewport._tag !== 'fill') {
+      void updateViewport(FILL_CODE_AGENT_PREVIEW_VIEWPORT).catch(() => undefined);
+      return;
+    }
+    const responsiveSize = resolveResponsiveCodeAgentBrowserViewportSize(
+      previewViewportContainerSize,
+      zoomFactor,
+    );
+    void updateViewport({ _tag: 'freeform', ...responsiveSize }).catch(() => undefined);
+  }, [previewViewportContainerSize, resolvedPreviewUrl, updateViewport, viewport._tag, zoomFactor]);
+
+  const handlePreviewStatusChange = useCallback((
+    status: 'success' | 'failed',
+    renderedViewport?: { width: number; height: number },
+  ) => {
+    if (!resolvedPreviewUrl) {
+      return;
+    }
+    void reportCodeWorkspacePreviewSession({
+      roomId,
+      tabId: previewSessionTabId,
+      navStatus: status === 'success'
+        ? { _tag: 'Success', url: resolvedPreviewUrl, title: previewUrl ?? relativePath ?? '' }
+        : {
+          _tag: 'LoadFailed',
+          url: resolvedPreviewUrl,
+          title: previewUrl ?? relativePath ?? '',
+          code: 0,
+          description: t('codeAgentBrowserPreviewLoadFailed'),
+        },
+      ...(renderedViewport ? { renderedViewport } : {}),
+    }).catch(() => undefined);
+  }, [previewSessionTabId, relativePath, resolvedPreviewUrl, roomId, previewUrl, t]);
+
+  const handlePreviewDomAutomationHandlerChange = useCallback((
+    handler: CodeWorkspacePreviewDomAutomationHandler | null,
+  ) => {
+    previewDomAutomationHandlerRef.current = handler;
+  }, []);
 
   const updateZoomFactor = useCallback((nextZoomFactor: number) => {
     setCodeAgentRightPanelPreviewZoomFactor(
@@ -1048,7 +1416,9 @@ function CodeAgentPreviewSurface({
       canRefresh={canRefreshPreview}
       canOpenExternal={Boolean(resolvedPreviewUrl)}
       canZoom={Boolean(resolvedPreviewUrl)}
+      canToggleDeviceToolbar={Boolean(resolvedPreviewUrl)}
       zoomFactor={zoomFactor}
+      deviceToolbarVisible={viewport._tag !== 'fill'}
       mobileLayout={mobileLayout}
       focusUrlNonce={focusUrlNonce}
       navigationError={navigationError}
@@ -1058,6 +1428,7 @@ function CodeAgentPreviewSurface({
       onRefresh={handleRefresh}
       onOpenExternal={handleOpenExternal}
       onHardReload={handleRefresh}
+      onToggleDeviceToolbar={handleToggleDeviceToolbar}
       onZoomIn={handleZoomIn}
       onZoomOut={handleZoomOut}
       onResetZoom={handleResetZoom}
@@ -1156,7 +1527,13 @@ function CodeAgentPreviewSurface({
             src={resolvedPreviewUrl}
             title={previewUrl ?? relativePath ?? t('codeAgentBrowserSurface')}
             zoomFactor={zoomFactor}
+            viewport={viewport}
+            automationTabId={previewSessionTabId}
+            onViewportChange={updateViewport}
+            onViewportContainerSizeChange={setPreviewViewportContainerSize}
+            onPreviewStatusChange={handlePreviewStatusChange}
             onLoadingChange={setBrowserFrameLoading}
+            onAutomationHandlerChange={handlePreviewDomAutomationHandlerChange}
           />
           <CodeAgentBrowserZoomIndicator zoomFactor={zoomFactor} />
         </div>
@@ -1678,6 +2055,12 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     )) ?? null,
     [rightPanelState.activeSurfaceId, rightPanelSurfaces],
   );
+  useEffect(() => subscribeCodeWorkspacePreviewEvents(roomId, (event) => {
+    if (!event.snapshot) {
+      return;
+    }
+    setCodeAgentRightPanelPreviewViewport(roomId, event.snapshot.tabId, event.snapshot.viewport);
+  }), [roomId]);
   const diffSelectionScopeKey = diffPanelSelection.kind === 'branch'
     ? `branch:${diffPanelSelection.baseRef ?? 'auto'}`
     : 'unstaged';

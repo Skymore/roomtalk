@@ -30,6 +30,16 @@ const writeCodeWorkspaceFileMock = vi.hoisted(() => vi.fn());
 const createCodeWorkspaceDirectoryMock = vi.hoisted(() => vi.fn());
 const renameCodeWorkspaceEntryMock = vi.hoisted(() => vi.fn());
 const deleteCodeWorkspaceEntryMock = vi.hoisted(() => vi.fn());
+const openPreviewSessionMock = vi.hoisted(() => vi.fn());
+const navigatePreviewSessionMock = vi.hoisted(() => vi.fn());
+const resizePreviewSessionMock = vi.hoisted(() => vi.fn());
+const reportPreviewSessionMock = vi.hoisted(() => vi.fn());
+const resolvePreviewTargetMock = vi.hoisted(() => vi.fn());
+const refreshPreviewSessionMock = vi.hoisted(() => vi.fn());
+const subscribePreviewEventsMock = vi.hoisted(() => vi.fn());
+const connectPreviewAutomationHostMock = vi.hoisted(() => vi.fn());
+const previewAutomationHandleRef = vi.hoisted(() => ({ current: null as null | ((request: any) => unknown) }));
+const getRoomMediaHistoryMock = vi.hoisted(() => vi.fn());
 const openSearchMock = vi.hoisted(() => vi.fn());
 const resetPathsMock = vi.hoisted(() => vi.fn());
 const focusPathMock = vi.hoisted(() => vi.fn());
@@ -81,6 +91,7 @@ function deferred<T>() {
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
+    i18n: { language: 'en' },
     t: (key: string, params?: Record<string, string>) => {
       if (key === 'codeAgentWorkspaceIndexing') return 'Indexing...';
       if (key === 'codeAgentWorkspaceFileCount') return `${params?.formattedCount} files`;
@@ -103,6 +114,85 @@ vi.mock('../utils/codeWorkspaceFiles', () => ({
   createCodeWorkspaceDirectory: createCodeWorkspaceDirectoryMock,
   renameCodeWorkspaceEntry: renameCodeWorkspaceEntryMock,
   deleteCodeWorkspaceEntry: deleteCodeWorkspaceEntryMock,
+}));
+
+vi.mock('../utils/codeWorkspacePreviewSessions', () => {
+  const session = (payload: {
+    roomId: string;
+    tabId: string;
+    url?: string | null;
+    title?: string;
+    viewport?: unknown;
+    navStatus?: unknown;
+    renderedViewport?: { width: number; height: number };
+  }) => ({
+    roomId: payload.roomId,
+    tabId: payload.tabId,
+    navStatus: payload.navStatus ?? (
+      payload.url
+        ? { _tag: 'Loading', url: payload.url, title: payload.title ?? '' }
+        : { _tag: 'Idle' }
+    ),
+    canGoBack: false,
+    canGoForward: false,
+    viewport: payload.viewport ?? { _tag: 'fill' },
+    ...(payload.renderedViewport ? { renderedViewport: payload.renderedViewport } : {}),
+    updatedAt: '2026-07-02T00:00:00.000Z',
+  });
+
+  return {
+    navigateCodeWorkspacePreviewSession: navigatePreviewSessionMock.mockImplementation((payload) => Promise.resolve(session(payload))),
+    openCodeWorkspacePreviewSession: openPreviewSessionMock.mockImplementation((payload) => Promise.resolve(session({
+      ...payload,
+      tabId: payload.tabId ?? 'browser:new',
+    }))),
+    refreshCodeWorkspacePreviewSession: refreshPreviewSessionMock.mockImplementation((payload) => Promise.resolve(session(payload))),
+    reportCodeWorkspacePreviewSession: reportPreviewSessionMock.mockImplementation((payload) => Promise.resolve(session(payload))),
+    resolveCodeWorkspacePreviewTarget: resolvePreviewTargetMock.mockImplementation(({ target }) => Promise.resolve({
+      requestedUrl: `http://localhost:${target.port}${target.path ?? '/'}`,
+      resolvedUrl: `https://${target.port}-sandbox.e2b.dev${target.path ?? '/'}`,
+      resolutionKind: 'e2b-port-host',
+    })),
+    resizeCodeWorkspacePreviewSession: resizePreviewSessionMock.mockImplementation((payload) => Promise.resolve(session(payload))),
+    subscribeCodeWorkspacePreviewEvents: subscribePreviewEventsMock.mockImplementation(() => () => {}),
+  };
+});
+
+vi.mock('../utils/codeWorkspacePreviewAutomation', () => ({
+  CODE_WORKSPACE_PREVIEW_AUTOMATION_CLOUD_BROWSER_OPERATIONS: [
+    'status',
+    'open',
+    'navigate',
+    'resize',
+    'snapshot',
+    'click',
+    'type',
+    'press',
+    'scroll',
+    'evaluate',
+    'waitFor',
+  ],
+  connectCodeWorkspacePreviewAutomationHost: connectPreviewAutomationHostMock.mockImplementation((options) => {
+    previewAutomationHandleRef.current = options.handle;
+    return Promise.resolve({
+      host: {
+        roomId: 'room-1',
+        clientId: 'client-1',
+        connectionId: 'preview-automation:test',
+        socketId: 'socket-1',
+        focused: true,
+        supportedOperations: ['status', 'open', 'navigate', 'resize', 'snapshot', 'click', 'type', 'press', 'scroll', 'evaluate', 'waitFor'],
+        connectedAt: '2026-05-03T00:00:00.000Z',
+        updatedAt: '2026-05-03T00:00:00.000Z',
+      },
+      setFocused: vi.fn().mockResolvedValue({}),
+      dispose: vi.fn(),
+    });
+  }),
+}));
+
+vi.mock('../utils/socket', () => ({
+  getRoomMediaHistory: getRoomMediaHistoryMock,
 }));
 
 vi.mock('./MarkdownContent', () => ({
@@ -348,6 +438,22 @@ describe('CodeAgentFileBrowserPanel', () => {
     createCodeWorkspaceDirectoryMock.mockReset();
     renameCodeWorkspaceEntryMock.mockReset();
     deleteCodeWorkspaceEntryMock.mockReset();
+    openPreviewSessionMock.mockClear();
+    navigatePreviewSessionMock.mockClear();
+    resizePreviewSessionMock.mockClear();
+    reportPreviewSessionMock.mockClear();
+    resolvePreviewTargetMock.mockClear();
+    refreshPreviewSessionMock.mockClear();
+    subscribePreviewEventsMock.mockClear();
+    connectPreviewAutomationHostMock.mockClear();
+    previewAutomationHandleRef.current = null;
+    getRoomMediaHistoryMock.mockReset();
+    getRoomMediaHistoryMock.mockResolvedValue({
+      roomId: 'room-1',
+      items: [],
+      hasMore: false,
+      nextCursor: null,
+    });
     openSearchMock.mockReset();
     resetPathsMock.mockReset();
     focusPathMock.mockReset();
@@ -796,11 +902,33 @@ describe('CodeAgentFileBrowserPanel', () => {
     await waitFor(() => {
       expect(container.querySelector('iframe')?.getAttribute('src')).toBe('https://example.com/report');
     });
+    await waitFor(() => {
+      expect(navigatePreviewSessionMock).toHaveBeenCalledWith(expect.objectContaining({
+        roomId: 'room-1',
+        tabId: 'browser:new',
+        url: 'https://example.com/report',
+      }));
+      expect(openPreviewSessionMock).toHaveBeenCalledWith(expect.objectContaining({
+        roomId: 'room-1',
+        tabId: 'browser:new',
+        url: 'https://example.com/report',
+      }));
+    });
     const firstIframe = container.querySelector('iframe') as HTMLIFrameElement;
     await waitFor(() => {
       expect(screen.getByTestId('code-agent-browser-loading-progress').style.width).not.toBe('0%');
     });
     fireEvent.load(firstIframe);
+    await waitFor(() => {
+      expect(reportPreviewSessionMock).toHaveBeenCalledWith(expect.objectContaining({
+        roomId: 'room-1',
+        tabId: 'browser:new',
+        navStatus: expect.objectContaining({
+          _tag: 'Success',
+          url: 'https://example.com/report',
+        }),
+      }));
+    });
     await waitFor(() => {
       expect(screen.getByTestId('code-agent-browser-loading-progress').style.width).toBe('100%');
     });
@@ -832,6 +960,13 @@ describe('CodeAgentFileBrowserPanel', () => {
     await waitFor(() => {
       expect(container.querySelector('iframe')?.getAttribute('src')).toBe('https://example.org/next');
       expect(address.value).toBe('example.org');
+    });
+    await waitFor(() => {
+      expect(navigatePreviewSessionMock).toHaveBeenCalledWith(expect.objectContaining({
+        roomId: 'room-1',
+        tabId: 'browser:new',
+        url: 'https://example.org/next',
+      }));
     });
     expect((screen.getByLabelText('codeAgentBrowserBack') as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByLabelText('codeAgentBrowserForward') as HTMLButtonElement).disabled).toBe(true);
@@ -903,6 +1038,139 @@ describe('CodeAgentFileBrowserPanel', () => {
       (surface) => surface.id === 'browser:url:https%3A%2F%2Fexample.org%2Fnext',
     );
     expect(resetBrowserSurface).not.toHaveProperty('zoomFactor');
+    expect(resetBrowserSurface).toMatchObject({ previewSessionId: 'browser:new' });
+
+    browserMoreMenu = screen.getByTestId('code-agent-browser-more-menu');
+    fireEvent.click(within(browserMoreMenu).getByText('codeAgentBrowserShowDeviceToolbar'));
+    const deviceToolbar = await screen.findByTestId('code-agent-browser-device-toolbar');
+    expect(deviceToolbar).toBeTruthy();
+    await waitFor(() => {
+      expect(resizePreviewSessionMock).toHaveBeenCalledWith(expect.objectContaining({
+        roomId: 'room-1',
+        tabId: 'browser:new',
+        viewport: expect.objectContaining({ _tag: 'freeform' }),
+      }));
+    });
+
+    fireEvent.change(screen.getByLabelText('codeAgentBrowserDevicePreset'), {
+      target: { value: 'iphone-12-pro' },
+    });
+    await waitFor(() => {
+      expect(resizePreviewSessionMock).toHaveBeenCalledWith(expect.objectContaining({
+        roomId: 'room-1',
+        tabId: 'browser:new',
+        viewport: {
+          _tag: 'preset',
+          presetId: 'iphone-12-pro',
+          width: 390,
+          height: 844,
+        },
+      }));
+    });
+  });
+
+  it('registers cloud browser automation with DOM operations and executes them in the iframe', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [],
+      truncated: false,
+    });
+
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+
+    await screen.findByText('0 files');
+    fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
+    fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentBrowserSurface'));
+
+    const address = screen.getByLabelText('codeAgentBrowserAddressLabel') as HTMLInputElement;
+    fireEvent.change(address, { target: { value: 'https://example.com/app' } });
+    fireEvent.submit(address.closest('form') as HTMLFormElement);
+
+    const iframe = await waitFor(() => {
+      const frame = container.querySelector('iframe');
+      expect(frame).toBeTruthy();
+      return frame as HTMLIFrameElement;
+    });
+    const frameDocument = iframe.contentDocument!;
+    frameDocument.open();
+    frameDocument.write('<button id="save" type="button" aria-label="Save changes">Save</button><input id="title" aria-label="Title" />');
+    frameDocument.close();
+    frameDocument.getElementById('save')?.addEventListener('click', () => {
+      frameDocument.body.setAttribute('data-saved', 'true');
+    });
+
+    await waitFor(() => {
+      expect(connectPreviewAutomationHostMock).toHaveBeenCalledWith(expect.objectContaining({
+        roomId: 'room-1',
+        supportedOperations: ['status', 'open', 'navigate', 'resize', 'snapshot', 'click', 'type', 'press', 'scroll', 'evaluate', 'waitFor'],
+        handle: expect.any(Function),
+      }));
+      expect(previewAutomationHandleRef.current).toEqual(expect.any(Function));
+    });
+
+    await expect(previewAutomationHandleRef.current?.({
+      requestId: 'request-click',
+      roomId: 'room-1',
+      tabId: 'browser:new',
+      operation: 'click',
+      input: { locator: 'role=button[name="Save"]' },
+      timeoutMs: 1000,
+    })).resolves.toMatchObject({ clicked: true });
+    expect(frameDocument.body.getAttribute('data-saved')).toBe('true');
+
+    await expect(previewAutomationHandleRef.current?.({
+      requestId: 'request-type',
+      roomId: 'room-1',
+      tabId: 'browser:new',
+      operation: 'type',
+      input: { selector: '#title', text: 'Launch', clear: true },
+      timeoutMs: 1000,
+    })).resolves.toMatchObject({ typed: true });
+    expect((frameDocument.querySelector('#title') as HTMLInputElement).value).toBe('Launch');
+
+    await expect(previewAutomationHandleRef.current?.({
+      requestId: 'request-snapshot',
+      roomId: 'room-1',
+      tabId: 'browser:new',
+      operation: 'snapshot',
+      input: {},
+      timeoutMs: 1000,
+    })).resolves.toMatchObject({
+      visibleText: expect.stringContaining('Save'),
+      interactiveElements: expect.arrayContaining([
+        expect.objectContaining({ role: 'button', name: 'Save changes' }),
+      ]),
+    });
+
+    await expect(previewAutomationHandleRef.current?.({
+      requestId: 'request-port',
+      roomId: 'room-1',
+      tabId: 'browser:new',
+      operation: 'navigate',
+      input: {
+        target: {
+          kind: 'environment-port',
+          port: 5173,
+          path: '/dashboard?tab=preview',
+        },
+      },
+      timeoutMs: 1000,
+    })).resolves.toMatchObject({
+      url: 'https://5173-sandbox.e2b.dev/dashboard?tab=preview',
+      loading: true,
+    });
+    expect(resolvePreviewTargetMock).toHaveBeenCalledWith({
+      roomId: 'room-1',
+      target: {
+        kind: 'environment-port',
+        port: 5173,
+        path: '/dashboard?tab=preview',
+      },
+    });
+    expect(navigatePreviewSessionMock).toHaveBeenCalledWith(expect.objectContaining({
+      roomId: 'room-1',
+      tabId: 'browser:new',
+      url: 'https://5173-sandbox.e2b.dev/dashboard?tab=preview',
+    }));
   });
 
   it('uses a two-row browser preview chrome on mobile surfaces', async () => {
@@ -962,6 +1230,15 @@ describe('CodeAgentFileBrowserPanel', () => {
     await waitFor(() => {
       const zoomFrame = screen.getByTestId('code-agent-browser-preview-zoom-frame');
       expect(zoomFrame.style.transform).toBe('scale(1.1)');
+    });
+    fireEvent.click(within(browserMoreMenu).getByText('codeAgentBrowserShowDeviceToolbar'));
+    expect(await screen.findByTestId('code-agent-browser-device-toolbar')).toBeTruthy();
+    await waitFor(() => {
+      expect(resizePreviewSessionMock).toHaveBeenCalledWith(expect.objectContaining({
+        roomId: 'room-1',
+        tabId: 'browser:new',
+        viewport: expect.objectContaining({ _tag: 'freeform' }),
+      }));
     });
   });
 
@@ -1655,6 +1932,18 @@ describe('CodeAgentFileBrowserPanel', () => {
     let fullScreenPreview = screen.getByTestId('code-agent-image-fullscreen-preview');
     expect(fullScreenPreview.getAttribute('role')).toBe('dialog');
     expect(screen.getAllByAltText('assets/logo.png')).toHaveLength(2);
+    expect(screen.queryByLabelText('openMediaHistory')).toBeNull();
+    expect(getRoomMediaHistoryMock).not.toHaveBeenCalled();
+
+    const stage = screen.getByTestId('media-viewer-stage');
+    Object.defineProperty(stage, 'clientWidth', { configurable: true, value: 320 });
+    Object.defineProperty(stage, 'clientHeight', { configurable: true, value: 520 });
+    const fullScreenImage = document.body.querySelector('[data-testid="media-viewer-stage"] [data-active-media="true"] img') as HTMLElement | null;
+    expect(fullScreenImage).toBeTruthy();
+    fireEvent.doubleClick(stage, { clientX: 180, clientY: 220 });
+    await waitFor(() => {
+      expect(fullScreenImage?.style.transform).toContain('scale(2)');
+    });
 
     fireEvent.click(within(fullScreenPreview).getByLabelText('close'));
     await waitFor(() => {
@@ -1664,6 +1953,18 @@ describe('CodeAgentFileBrowserPanel', () => {
     fireEvent.click(screen.getByLabelText('codeAgentOpenImagePreviewFullscreen:assets/logo.png'));
     fullScreenPreview = screen.getByTestId('code-agent-image-fullscreen-preview');
     expect(fullScreenPreview.getAttribute('aria-label')).toBe('codeAgentImagePreviewFullscreen:assets/logo.png');
+    const swipeStage = screen.getByTestId('media-viewer-stage');
+    Object.defineProperty(swipeStage, 'clientWidth', { configurable: true, value: 320 });
+    Object.defineProperty(swipeStage, 'clientHeight', { configurable: true, value: 520 });
+    fireEvent.pointerDown(swipeStage, { pointerId: 1, clientX: 180, clientY: 120 });
+    fireEvent.pointerMove(swipeStage, { pointerId: 1, clientX: 184, clientY: 218 });
+    fireEvent.pointerUp(swipeStage, { pointerId: 1, clientX: 184, clientY: 230 });
+    await waitFor(() => {
+      expect(screen.queryByTestId('code-agent-image-fullscreen-preview')).toBeNull();
+    });
+
+    fireEvent.click(screen.getByLabelText('codeAgentOpenImagePreviewFullscreen:assets/logo.png'));
+    fullScreenPreview = screen.getByTestId('code-agent-image-fullscreen-preview');
     fireEvent.keyDown(window, { key: 'Escape' });
     await waitFor(() => {
       expect(screen.queryByTestId('code-agent-image-fullscreen-preview')).toBeNull();

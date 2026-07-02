@@ -17,6 +17,8 @@ import {
   ReadCocoWorkspaceAssetOptions,
   ReadCocoWorkspaceDiffOptions,
   ReadCocoWorkspaceFileOptions,
+  ResolveCocoWorkspacePreviewTargetInput,
+  CocoWorkspacePreviewTargetResolution,
   SearchCocoWorkspaceEntriesOptions,
   StartCocoRunnerInput,
   WriteCocoWorkspaceFileInput,
@@ -480,6 +482,27 @@ export class E2BCocoSandboxService implements CocoSandboxService {
     };
   }
 
+  async resolveWorkspacePreviewTarget(
+    handle: CocoSandboxHandle,
+    input: ResolveCocoWorkspacePreviewTargetInput
+  ): Promise<CocoWorkspacePreviewTargetResolution> {
+    const connected = await this.driver.connect(handle.id);
+    if (!connected.getHost) {
+      throw new Error('E2B sandbox driver handle does not support preview port URLs');
+    }
+    const host = connected.getHost(input.port);
+    if (!host || typeof host !== 'string') {
+      throw new Error('E2B sandbox driver returned an invalid preview host');
+    }
+    const path = normalizePreviewPortPath(input.path);
+    const requestedProtocol = input.protocol ?? 'http';
+    return {
+      requestedUrl: `${requestedProtocol}://localhost:${input.port}${path}`,
+      resolvedUrl: resolveE2BPreviewHostUrl(host, path),
+      resolutionKind: 'e2b-port-host',
+    };
+  }
+
   async writeWorkspaceFile(handle: CocoSandboxHandle, input: WriteCocoWorkspaceFileInput): Promise<CocoWorkspaceEntry> {
     const connected = await this.driver.connect(handle.id);
     if (!connected.files?.write) {
@@ -689,6 +712,26 @@ const portHostTemplateEnv = (handle: E2BSandboxDriverHandle): Record<string, str
   return {
     ROOMTALK_E2B_PORT_HOST_TEMPLATE: host.replace(String(placeholderPort), '{port}'),
   };
+};
+
+const normalizePreviewPortPath = (value: string | undefined): string => {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (!trimmed) {
+    return '/';
+  }
+  if (trimmed.startsWith('?') || trimmed.startsWith('#')) {
+    return `/${trimmed}`;
+  }
+  const withLeadingSlash = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return withLeadingSlash.replace(/^\/{2,}/, '/');
+};
+
+const resolveE2BPreviewHostUrl = (host: string, path: string): string => {
+  const trimmedHost = host.trim();
+  const baseUrl = /^https?:\/\//i.test(trimmedHost)
+    ? trimmedHost
+    : `https://${trimmedHost}`;
+  return new URL(path, baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).toString();
 };
 
 const shellQuote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;

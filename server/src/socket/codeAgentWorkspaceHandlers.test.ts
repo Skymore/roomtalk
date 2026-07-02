@@ -14,9 +14,14 @@ class FakeSocket {
     },
   };
   handlers = new Map<string, (...args: any[]) => unknown>();
+  emittedEvents: Array<{ event: string; payload: unknown }> = [];
 
   on(event: string, handler: (...args: any[]) => unknown) {
     this.handlers.set(event, handler);
+  }
+
+  emit(event: string, payload: unknown) {
+    this.emittedEvents.push({ event, payload });
   }
 
   async invoke<T>(event: string, payload: unknown): Promise<T> {
@@ -87,6 +92,7 @@ const createHarness = (options: {
   workspaceDiffPatch?: string;
   workspaceFileContent?: string;
   workspaceRoot?: string;
+  workspacePreviewTargetResolvedUrl?: string;
   cocoAccess?: ReturnType<typeof createCocoAccessControl>;
   codeWorkspaceAssetAccess?: CodeWorkspaceAssetAccess;
   publishedArtifacts?: any[];
@@ -101,11 +107,20 @@ const createHarness = (options: {
   const getWorkspaceChangesCalls: Array<{ sandboxId: string }> = [];
   const getWorkspaceDiffCalls: Array<{ sandboxId: string; maxBytes?: number; ignoreWhitespace?: boolean; scope?: string; baseRef?: string }> = [];
   const readWorkspaceFileCalls: Array<{ sandboxId: string; path: string; maxBytes?: number }> = [];
+  const resolveWorkspacePreviewTargetCalls: Array<{ sandboxId: string; port: number; protocol?: 'http' | 'https'; path?: string }> = [];
   const writeWorkspaceFileCalls: Array<{ sandboxId: string; path: string; content: string; encoding?: 'utf-8' | 'base64' }> = [];
   const createWorkspaceDirectoryCalls: Array<{ sandboxId: string; path: string }> = [];
   const renameWorkspaceEntryCalls: Array<{ sandboxId: string; fromPath: string; toPath: string }> = [];
   const deleteWorkspaceEntryCalls: Array<{ sandboxId: string; path: string }> = [];
   const listSitesForRoomCalls: Array<{ roomId: string; requestBaseUrl?: string }> = [];
+  const socketEvents: Array<{ roomId: string; event: string; payload: unknown }> = [];
+  const io = {
+    to: (roomId: string) => ({
+      emit: (event: string, payload: unknown) => {
+        socketEvents.push({ roomId, event, payload });
+      },
+    }),
+  };
   const workspaceRoot = options.workspaceRoot || '/workspace';
   const store = {
     getClientId: async () => options.clientId === undefined ? 'client-1' : options.clientId,
@@ -117,7 +132,7 @@ const createHarness = (options: {
   };
 
   registerCodeAgentWorkspaceHandlers({
-    io: {} as any,
+    io: io as any,
     socket: socket as any,
     store: store as any,
     socketLogger: logger as any,
@@ -223,6 +238,20 @@ const createHarness = (options: {
           encoding: 'utf-8' as const,
         };
       },
+      resolveWorkspacePreviewTarget: async (handle, input) => {
+        resolveWorkspacePreviewTargetCalls.push({
+          sandboxId: handle.id,
+          port: input.port,
+          protocol: input.protocol,
+          path: input.path,
+        });
+        const path = input.path ?? '/';
+        return {
+          requestedUrl: `${input.protocol ?? 'http'}://localhost:${input.port}${path}`,
+          resolvedUrl: options.workspacePreviewTargetResolvedUrl ?? `https://${input.port}-sandbox.e2b.dev${path}`,
+          resolutionKind: 'e2b-port-host' as const,
+        };
+      },
       writeWorkspaceFile: async (handle, input) => {
         writeWorkspaceFileCalls.push({
           sandboxId: handle.id,
@@ -268,11 +297,13 @@ const createHarness = (options: {
     searchWorkspaceEntriesCalls,
     listWorkspaceRefsCalls,
     readWorkspaceFileCalls,
+    resolveWorkspacePreviewTargetCalls,
     writeWorkspaceFileCalls,
     createWorkspaceDirectoryCalls,
     renameWorkspaceEntryCalls,
     deleteWorkspaceEntryCalls,
     listSitesForRoomCalls,
+    socketEvents,
   };
 };
 
@@ -431,6 +462,178 @@ describe('code-agent workspace socket handlers', () => {
       ],
     });
     assert.deepEqual(listWorkspaceRefsCalls, [{ sandboxId: 'sandbox-1', query: 'main', maxRefs: 25 }]);
+  });
+
+  it('tracks cloud preview sessions and viewport changes through the socket control plane', async () => {
+    const { socket, socketEvents } = createHarness({
+      currentRoom: room({ sandboxStatus: 'creating', sandboxId: undefined }),
+    });
+
+    const opened = await socket.invoke<any>('open_code_workspace_preview_session', {
+      roomId: 'room-1',
+      tabId: 'browser:new',
+      url: 'https://example.com/app',
+      title: 'Example',
+      viewport: { _tag: 'fill' },
+    });
+
+    assert.equal(opened.success, true);
+    assert.deepEqual(opened.session.navStatus, {
+      _tag: 'Loading',
+      url: 'https://example.com/app',
+      title: 'Example',
+    });
+    assert.deepEqual(opened.session.viewport, { _tag: 'fill' });
+    assert.equal(socketEvents.at(-1)?.event, 'code_workspace_preview_event');
+    assert.equal((socketEvents.at(-1)?.payload as any).type, 'opened');
+
+    const resized = await socket.invoke<any>('resize_code_workspace_preview_session', {
+      roomId: 'room-1',
+      tabId: 'browser:new',
+      viewport: { _tag: 'freeform', width: 393, height: 852 },
+    });
+
+    assert.equal(resized.success, true);
+    assert.deepEqual(resized.session.viewport, { _tag: 'freeform', width: 393, height: 852 });
+    assert.equal((socketEvents.at(-1)?.payload as any).type, 'resized');
+
+    const reported = await socket.invoke<any>('report_code_workspace_preview_session', {
+      roomId: 'room-1',
+      tabId: 'browser:new',
+      navStatus: {
+        _tag: 'Success',
+        url: 'https://example.com/app',
+        title: 'Example App',
+      },
+      renderedViewport: { width: 393, height: 852 },
+    });
+
+    assert.equal(reported.success, true);
+    assert.deepEqual(reported.session.navStatus, {
+      _tag: 'Success',
+      url: 'https://example.com/app',
+      title: 'Example App',
+    });
+    assert.deepEqual(reported.session.renderedViewport, { width: 393, height: 852 });
+    assert.equal((socketEvents.at(-1)?.payload as any).type, 'status');
+
+    const listed = await socket.invoke<any>('list_code_workspace_preview_sessions', {
+      roomId: 'room-1',
+    });
+    assert.equal(listed.success, true);
+    assert.equal(listed.sessions.length, 1);
+    assert.equal(listed.sessions[0].tabId, 'browser:new');
+
+    const closed = await socket.invoke<any>('close_code_workspace_preview_session', {
+      roomId: 'room-1',
+      tabId: 'browser:new',
+    });
+    assert.equal(closed.success, true);
+    assert.deepEqual(closed.sessions, []);
+    assert.equal((socketEvents.at(-1)?.payload as any).type, 'closed');
+  });
+
+  it('resolves environment-port browser preview targets through the ready sandbox', async () => {
+    const { socket, resolveWorkspacePreviewTargetCalls } = createHarness();
+
+    const resolved = await socket.invoke<any>('resolve_code_workspace_preview_target', {
+      roomId: 'room-1',
+      target: {
+        kind: 'environment-port',
+        port: 5173,
+        path: '/dashboard?tab=preview',
+      },
+    });
+
+    assert.equal(resolved.success, true);
+    assert.deepEqual(resolved.target, {
+      requestedUrl: 'http://localhost:5173/dashboard?tab=preview',
+      resolvedUrl: 'https://5173-sandbox.e2b.dev/dashboard?tab=preview',
+      resolutionKind: 'e2b-port-host',
+    });
+    assert.deepEqual(resolveWorkspacePreviewTargetCalls, [{
+      sandboxId: 'sandbox-1',
+      port: 5173,
+      protocol: undefined,
+      path: '/dashboard?tab=preview',
+    }]);
+  });
+
+  it('routes cloud preview automation requests through registered socket hosts', async () => {
+    const { socket, socketEvents } = createHarness({
+      currentRoom: room({ sandboxStatus: 'creating', sandboxId: undefined }),
+    });
+
+    const connected = await socket.invoke<any>('connect_code_workspace_preview_automation', {
+      roomId: 'room-1',
+      connectionId: 'automation-1',
+      focused: true,
+      supportedOperations: ['status', 'navigate', 'resize'],
+    });
+
+    assert.equal(connected.success, true);
+    assert.equal(connected.connectionId, 'automation-1');
+    assert.equal(connected.host.clientId, 'client-1');
+    assert.deepEqual(connected.host.supportedOperations, ['status', 'navigate', 'resize']);
+    assert.equal(socket.emittedEvents.at(-1)?.event, 'code_workspace_preview_automation_event');
+    assert.equal((socket.emittedEvents.at(-1)?.payload as any).type, 'connected');
+
+    const focused = await socket.invoke<any>('focus_code_workspace_preview_automation', {
+      roomId: 'room-1',
+      connectionId: 'automation-1',
+      focused: false,
+    });
+
+    assert.equal(focused.success, true);
+    assert.equal(focused.host.focused, false);
+
+    const listed = await socket.invoke<any>('list_code_workspace_preview_automation_hosts', {
+      roomId: 'room-1',
+    });
+
+    assert.equal(listed.success, true);
+    assert.equal(listed.hosts.length, 1);
+    assert.equal(listed.hosts[0].connectionId, 'automation-1');
+
+    const requestPromise = socket.invoke<any>('request_code_workspace_preview_automation', {
+      roomId: 'room-1',
+      requestId: 'request-1',
+      operation: 'navigate',
+      tabId: 'browser:new',
+      input: { url: 'https://example.com/app' },
+      timeoutMs: 1000,
+    });
+
+    await new Promise(resolve => setImmediate(resolve));
+    const requestEvent = socket.emittedEvents.find((entry) => (
+      entry.event === 'code_workspace_preview_automation_event'
+      && (entry.payload as any).type === 'request'
+    ));
+    assert.ok(requestEvent);
+    assert.equal((requestEvent.payload as any).connectionId, 'automation-1');
+    assert.deepEqual((requestEvent.payload as any).request, {
+      requestId: 'request-1',
+      roomId: 'room-1',
+      tabId: 'browser:new',
+      tabIdExplicit: true,
+      operation: 'navigate',
+      input: { url: 'https://example.com/app' },
+      timeoutMs: 1000,
+    });
+
+    const responseAck = await socket.invoke<any>('respond_code_workspace_preview_automation', {
+      roomId: 'room-1',
+      connectionId: 'automation-1',
+      requestId: 'request-1',
+      ok: true,
+      result: { url: 'https://example.com/app', loading: false },
+    });
+    const requestAck = await requestPromise;
+
+    assert.equal(responseAck.success, true);
+    assert.equal(requestAck.success, true);
+    assert.deepEqual(requestAck.response.result, { url: 'https://example.com/app', loading: false });
+    assert.equal(socketEvents.at(-1)?.event, 'code_workspace_preview_automation_response');
   });
 
   it('reads Coco workspace files through the registered socket session', async () => {

@@ -26,6 +26,9 @@ interface MediaViewerModalProps {
   title: string;
   alt: string;
   roomId: string;
+  historyEnabled?: boolean;
+  actionsEnabled?: boolean;
+  dialogTestId?: string;
   assetId?: string;
   mimeType?: string;
   byteSize?: number;
@@ -1251,6 +1254,9 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
   title,
   alt,
   roomId,
+  historyEnabled = true,
+  actionsEnabled = true,
+  dialogTestId,
   assetId,
   mimeType,
   byteSize,
@@ -1293,6 +1299,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
     filterOverride?: MediaHistoryFilter,
     beforeOverride?: string | null,
   ) => {
+    if (!historyEnabled) return null;
     if (isHistoryLoading && mode === "more") return null;
 
     const requestSequence = historyRequestSequenceRef.current + 1;
@@ -1334,7 +1341,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
         setIsHistoryLoading(false);
       }
     }
-  }, [historyCursor, historyFilter, isHistoryLoading, roomId]);
+  }, [historyCursor, historyEnabled, historyFilter, isHistoryLoading, roomId]);
 
   React.useEffect(() => {
     if (!src) {
@@ -1420,13 +1427,13 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
 
   React.useEffect(() => {
     const requestKey = `${roomId}:${historyFilter}`;
-    if (!isOpen || !activeMedia || initialHistoryRequestKeyRef.current === requestKey) {
+    if (!historyEnabled || !isOpen || !activeMedia || initialHistoryRequestKeyRef.current === requestKey) {
       return;
     }
 
     initialHistoryRequestKeyRef.current = requestKey;
     void loadHistory("reset");
-  }, [activeMedia, historyFilter, isOpen, loadHistory, roomId]);
+  }, [activeMedia, historyEnabled, historyFilter, isOpen, loadHistory, roomId]);
 
   React.useEffect(() => {
     return () => {
@@ -1437,6 +1444,9 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
   }, []);
 
   const carouselItems = React.useMemo(() => {
+    if (!historyEnabled) {
+      return activeMedia ? [activeMedia] : [];
+    }
     const nextItems = historyItems.map(historyItemToActiveMedia);
     if (activeMedia && !nextItems.some(item => isSameMedia(item, activeMedia))) {
       nextItems.push(activeMedia);
@@ -1451,7 +1461,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
         seen.add(key);
         return true;
       });
-  }, [activeMedia, historyItems]);
+  }, [activeMedia, historyEnabled, historyItems]);
 
   const historyItemsOldestFirst = React.useMemo(() => (
     [...historyItems].sort(compareHistoryItemAscending)
@@ -1480,14 +1490,14 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
       return;
     }
 
-    if (offset < 0 && hasMoreHistory && !isHistoryLoading) {
+    if (historyEnabled && offset < 0 && hasMoreHistory && !isHistoryLoading) {
       const loadedItems = await loadHistory("more");
       const firstLoadedItem = loadedItems?.[0];
       if (firstLoadedItem) {
         setActiveMedia(historyItemToActiveMedia(firstLoadedItem));
       }
     }
-  }, [activeMedia, carouselItems, hasMoreHistory, isHistoryLoading, loadHistory]);
+  }, [activeMedia, carouselItems, hasMoreHistory, historyEnabled, isHistoryLoading, loadHistory]);
 
   const handlePreviousMedia = React.useCallback(() => {
     void goToMedia(-1);
@@ -1536,6 +1546,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
   };
 
   const handleOpenHistory = () => {
+    if (!historyEnabled) return;
     setIsHistoryOpen(true);
     setHasViewedHistoryItem(false);
     if ((historyItems.length === 0 || historyError) && !isHistoryLoading) {
@@ -1640,8 +1651,8 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
       ? "lucide:alert-circle"
       : "lucide:share-2";
   const historyGroups = groupHistoryByMonth(historyItemsOldestFirst, i18n.language);
-  const canGoPrevious = activeMediaIndex > 0 || hasMoreHistory;
-  const canGoNext = activeMediaIndex >= 0 && activeMediaIndex < carouselItems.length - 1;
+  const canGoPrevious = historyEnabled && (activeMediaIndex > 0 || hasMoreHistory);
+  const canGoNext = historyEnabled && activeMediaIndex >= 0 && activeMediaIndex < carouselItems.length - 1;
   const activePosition = activeMediaIndex >= 0 ? `${activeMediaIndex + 1} / ${Math.max(carouselItems.length, activeMediaIndex + 1)}` : "";
   const renderActionToolbar = (centerAction: { label: string; icon: string; onPress: () => void }) => (
     <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-white/10 bg-white/10 px-3 py-2 shadow-2xl backdrop-blur-xl">
@@ -1658,6 +1669,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
       aria-modal="true"
       aria-label={title}
       tabIndex={-1}
+      data-testid={dialogTestId}
       className="fixed inset-0 z-[1000] flex h-[var(--app-height,100dvh)] w-screen flex-col overflow-hidden bg-[#080807] text-white outline-none"
       onMouseDown={handleBackdropMouseDown}
     >
@@ -1696,21 +1708,23 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
         onImageTransformChange={handleImageTransformChange}
       />
 
-      <footer
-        className="safe-bottom pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col items-center gap-2 bg-gradient-to-t from-black/80 to-transparent px-4 pt-8"
-        style={{
-          opacity: "var(--media-viewer-chrome-opacity, 1)",
-          transition: "var(--media-viewer-chrome-transition, none)",
-        }}
-      >
-        <div className="mb-3">
-          {renderActionToolbar({ label: t("openMediaHistory"), icon: "lucide:grid-3x3", onPress: handleOpenHistory })}
-        </div>
-      </footer>
+      {actionsEnabled && historyEnabled ? (
+        <footer
+          className="safe-bottom pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col items-center gap-2 bg-gradient-to-t from-black/80 to-transparent px-4 pt-8"
+          style={{
+            opacity: "var(--media-viewer-chrome-opacity, 1)",
+            transition: "var(--media-viewer-chrome-transition, none)",
+          }}
+        >
+          <div className="mb-3">
+            {renderActionToolbar({ label: t("openMediaHistory"), icon: "lucide:grid-3x3", onPress: handleOpenHistory })}
+          </div>
+        </footer>
+      ) : null}
 
       <span className="sr-only" aria-live="polite">{activePosition}</span>
 
-      {isHistoryOpen && (
+      {historyEnabled && isHistoryOpen && (
         <section
           aria-label={t("mediaHistory")}
           className="safe-top safe-bottom absolute inset-0 z-40 flex flex-col bg-[#111110] text-white"

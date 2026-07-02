@@ -23,7 +23,9 @@ import {
   resetCodeAgentRightPanelStoreForTests,
   selectActiveCodeAgentRightPanelKind,
   selectActiveCodeAgentRightPanelSurface,
+  setCodeAgentRightPanelPreviewSessionId,
   setCodeAgentRightPanelPreviewZoomFactor,
+  setCodeAgentRightPanelPreviewViewport,
   showCodeAgentRightPanel,
   toggleCodeAgentRightPanel,
   toggleCodeAgentRightPanelVisibility,
@@ -324,6 +326,40 @@ describe('codeAgentRightPanelStore', () => {
       1,
     );
     expect(readCodeAgentRightPanelState('room-1').surfaces[0]).not.toHaveProperty('zoomFactor');
+  });
+
+  it('keeps cloud preview session identity stable across URL navigation', () => {
+    addCodeAgentRightPanelPreviewSurface('room-1');
+    setCodeAgentRightPanelPreviewSessionId('room-1', 'browser:new', 'browser:new');
+    navigateCodeAgentRightPanelPreviewSurface('room-1', 'browser:new', {
+      kind: 'url',
+      url: 'https://example.com/one',
+    });
+    navigateCodeAgentRightPanelPreviewSurface(
+      'room-1',
+      'browser:url:https%3A%2F%2Fexample.com%2Fone',
+      {
+        kind: 'url',
+        url: 'https://example.com/two',
+      },
+    );
+
+    expect(readCodeAgentRightPanelState('room-1').surfaces[0]).toMatchObject({
+      id: 'browser:url:https%3A%2F%2Fexample.com%2Ftwo',
+      previewSessionId: 'browser:new',
+    });
+
+    setCodeAgentRightPanelPreviewViewport('room-1', 'browser:new', {
+      _tag: 'freeform',
+      width: 390,
+      height: 844,
+    });
+
+    expect(readCodeAgentRightPanelState('room-1').surfaces[0]).toMatchObject({
+      id: 'browser:url:https%3A%2F%2Fexample.com%2Ftwo',
+      previewSessionId: 'browser:new',
+      viewport: { _tag: 'freeform', width: 390, height: 844 },
+    });
   });
 
   it('truncates browser preview forward history after a new navigation', () => {

@@ -241,6 +241,15 @@ describe('E2BCocoSandboxService', () => {
       },
       timeoutMs: 300_000,
     }]);
+    assert.deepEqual(await service.resolveWorkspacePreviewTarget(handle, {
+      kind: 'environment-port',
+      port: 5173,
+      path: '//dashboard?tab=preview',
+    }), {
+      requestedUrl: 'http://localhost:5173/dashboard?tab=preview',
+      resolvedUrl: 'https://5173-e2b-1.sandbox.e2b.dev/dashboard?tab=preview',
+      resolutionKind: 'e2b-port-host',
+    });
     assert.deepEqual(await service.listWorkspaceEntries(handle, { maxDepth: 3 }), [
       { path: 'output', name: 'output', type: 'directory' },
       { path: 'output/report.html', name: 'report.html', type: 'file' },

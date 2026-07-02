@@ -124,6 +124,23 @@ type CodeWorkspaceAssetUrlAckResponse = SocketAckResponse & {
   asset?: unknown;
 };
 
+type CodeWorkspacePreviewSessionAckResponse = SocketAckResponse & {
+  session?: unknown;
+  sessions?: unknown[];
+};
+
+type CodeWorkspacePreviewTargetAckResponse = SocketAckResponse & {
+  target?: unknown;
+};
+
+type CodeWorkspacePreviewAutomationAckResponse = SocketAckResponse & {
+  connectionId?: string;
+  host?: unknown;
+  hosts?: unknown[];
+  request?: unknown;
+  response?: unknown;
+};
+
 type CodeAgentMode = 'plan' | 'acceptEdits';
 
 type RoomAckResponse = SocketAckResponse & {
@@ -1111,6 +1128,339 @@ export const requestCodeWorkspaceAssetUrl = (roomId: string, path: string): Prom
   })
 );
 
+export type CodeWorkspacePreviewEvent = {
+  type: 'opened' | 'navigated' | 'resized' | 'status' | 'refreshed' | 'closed';
+  roomId: string;
+  tabId: string;
+  createdAt: string;
+  snapshot?: unknown;
+};
+
+export type CodeWorkspacePreviewAutomationOperation =
+  | 'status'
+  | 'open'
+  | 'navigate'
+  | 'snapshot'
+  | 'click'
+  | 'type'
+  | 'press'
+  | 'scroll'
+  | 'evaluate'
+  | 'waitFor'
+  | 'recordingStart'
+  | 'recordingStop'
+  | 'resize';
+
+export type CodeWorkspacePreviewAutomationHost = {
+  roomId: string;
+  clientId: string;
+  connectionId: string;
+  socketId: string;
+  focused: boolean;
+  supportedOperations: CodeWorkspacePreviewAutomationOperation[];
+  connectedAt: string;
+  updatedAt: string;
+};
+
+export type CodeWorkspacePreviewAutomationRequest = {
+  requestId: string;
+  roomId: string;
+  tabId?: string;
+  tabIdExplicit?: boolean;
+  operation: CodeWorkspacePreviewAutomationOperation;
+  input: unknown;
+  timeoutMs: number;
+};
+
+export type CodeWorkspacePreviewAutomationResponse = {
+  clientId: string;
+  connectionId: string;
+  requestId: string;
+  ok: boolean;
+  result?: unknown;
+  error?: {
+    _tag: string;
+    message: string;
+    detail?: unknown;
+  };
+};
+
+export type CodeWorkspacePreviewAutomationEvent =
+  | {
+    type: 'connected';
+    roomId: string;
+    connectionId: string;
+    host: CodeWorkspacePreviewAutomationHost;
+    createdAt: string;
+  }
+  | {
+    type: 'request';
+    roomId: string;
+    connectionId: string;
+    request: CodeWorkspacePreviewAutomationRequest;
+    createdAt: string;
+  };
+
+export type CodeWorkspacePreviewAutomationHostEvent = {
+  type: 'connected' | 'focused' | 'disconnected';
+  roomId: string;
+  connectionId: string;
+  host?: CodeWorkspacePreviewAutomationHost;
+  createdAt: string;
+};
+
+export type CodeWorkspacePreviewAutomationResponseEvent = {
+  roomId: string;
+  connectionId: string;
+  requestId: string;
+  response: CodeWorkspacePreviewAutomationResponse;
+  createdAt: string;
+};
+
+export type CodeWorkspacePreviewNavigationTarget =
+  | { kind: 'url'; url: string }
+  | { kind: 'environment-port'; port: number; protocol?: 'http' | 'https'; path?: string };
+
+export type CodeWorkspacePreviewResolvedTarget = {
+  requestedUrl: string;
+  resolvedUrl: string;
+  resolutionKind: 'direct' | 'e2b-port-host';
+};
+
+export const requestResolveCodeWorkspacePreviewTarget = (
+  payload: { roomId: string; target: CodeWorkspacePreviewNavigationTarget },
+): Promise<unknown> => (
+  emitWithAck<CodeWorkspacePreviewTargetAckResponse>(
+    'resolve_code_workspace_preview_target',
+    payload,
+    'Timed out while resolving workspace preview target',
+    'Failed to resolve workspace preview target',
+    { retryOnSocketReconnect: true },
+  ).then((response) => {
+    if (!response.target) {
+      throw new Error('Server did not return workspace preview target');
+    }
+    return response.target;
+  })
+);
+
+export const requestOpenCodeWorkspacePreviewSession = (
+  payload: {
+    roomId: string;
+    tabId?: string;
+    url?: string | null;
+    title?: string;
+    viewport?: unknown;
+  },
+): Promise<unknown> => (
+  emitWithAck<CodeWorkspacePreviewSessionAckResponse>(
+    'open_code_workspace_preview_session',
+    payload,
+    'Timed out while opening workspace preview',
+    'Failed to open workspace preview',
+    { retryOnSocketReconnect: true },
+  ).then((response) => {
+    if (!response.session) {
+      throw new Error('Server did not return workspace preview session');
+    }
+    return response.session;
+  })
+);
+
+export const requestNavigateCodeWorkspacePreviewSession = (
+  payload: { roomId: string; tabId: string; url: string; title?: string },
+): Promise<unknown> => (
+  emitWithAck<CodeWorkspacePreviewSessionAckResponse>(
+    'navigate_code_workspace_preview_session',
+    payload,
+    'Timed out while navigating workspace preview',
+    'Failed to navigate workspace preview',
+    { retryOnSocketReconnect: true },
+  ).then((response) => {
+    if (!response.session) {
+      throw new Error('Server did not return workspace preview session');
+    }
+    return response.session;
+  })
+);
+
+export const requestResizeCodeWorkspacePreviewSession = (
+  payload: { roomId: string; tabId: string; viewport: unknown },
+): Promise<unknown> => (
+  emitWithAck<CodeWorkspacePreviewSessionAckResponse>(
+    'resize_code_workspace_preview_session',
+    payload,
+    'Timed out while resizing workspace preview',
+    'Failed to resize workspace preview',
+    { retryOnSocketReconnect: true },
+  ).then((response) => {
+    if (!response.session) {
+      throw new Error('Server did not return workspace preview session');
+    }
+    return response.session;
+  })
+);
+
+export const requestReportCodeWorkspacePreviewSession = (
+  payload: {
+    roomId: string;
+    tabId: string;
+    navStatus: unknown;
+    renderedViewport?: { width: number; height: number };
+  },
+): Promise<unknown> => (
+  emitWithAck<CodeWorkspacePreviewSessionAckResponse>(
+    'report_code_workspace_preview_session',
+    payload,
+    'Timed out while reporting workspace preview status',
+    'Failed to report workspace preview status',
+    { retryOnSocketReconnect: true },
+  ).then((response) => {
+    if (!response.session) {
+      throw new Error('Server did not return workspace preview session');
+    }
+    return response.session;
+  })
+);
+
+export const requestRefreshCodeWorkspacePreviewSession = (
+  payload: { roomId: string; tabId: string },
+): Promise<unknown> => (
+  emitWithAck<CodeWorkspacePreviewSessionAckResponse>(
+    'refresh_code_workspace_preview_session',
+    payload,
+    'Timed out while refreshing workspace preview',
+    'Failed to refresh workspace preview',
+    { retryOnSocketReconnect: true },
+  ).then((response) => {
+    if (!response.session) {
+      throw new Error('Server did not return workspace preview session');
+    }
+    return response.session;
+  })
+);
+
+export const requestCodeWorkspacePreviewSessions = (roomId: string): Promise<unknown[]> => (
+  emitWithAck<CodeWorkspacePreviewSessionAckResponse>(
+    'list_code_workspace_preview_sessions',
+    { roomId },
+    'Timed out while loading workspace previews',
+    'Failed to load workspace previews',
+    { retryOnSocketReconnect: true },
+  ).then((response) => response.sessions || [])
+);
+
+export const requestCloseCodeWorkspacePreviewSession = (
+  payload: { roomId: string; tabId?: string },
+): Promise<unknown[]> => (
+  emitWithAck<CodeWorkspacePreviewSessionAckResponse>(
+    'close_code_workspace_preview_session',
+    payload,
+    'Timed out while closing workspace preview',
+    'Failed to close workspace preview',
+    { retryOnSocketReconnect: true },
+  ).then((response) => response.sessions || [])
+);
+
+export const requestConnectCodeWorkspacePreviewAutomation = (
+  payload: {
+    roomId: string;
+    connectionId?: string;
+    focused?: boolean;
+    supportedOperations?: CodeWorkspacePreviewAutomationOperation[];
+  },
+): Promise<unknown> => (
+  emitWithAck<CodeWorkspacePreviewAutomationAckResponse>(
+    'connect_code_workspace_preview_automation',
+    payload,
+    'Timed out while connecting workspace preview automation',
+    'Failed to connect workspace preview automation',
+    { retryOnSocketReconnect: true },
+  ).then((response) => {
+    if (!response.host) {
+      throw new Error('Server did not return workspace preview automation host');
+    }
+    return response.host;
+  })
+);
+
+export const requestListCodeWorkspacePreviewAutomationHosts = (roomId: string): Promise<unknown[]> => (
+  emitWithAck<CodeWorkspacePreviewAutomationAckResponse>(
+    'list_code_workspace_preview_automation_hosts',
+    { roomId },
+    'Timed out while loading workspace preview automation hosts',
+    'Failed to load workspace preview automation hosts',
+    { retryOnSocketReconnect: true },
+  ).then((response) => response.hosts || [])
+);
+
+export const requestFocusCodeWorkspacePreviewAutomation = (
+  payload: {
+    roomId: string;
+    connectionId: string;
+    focused: boolean;
+  },
+): Promise<unknown> => (
+  emitWithAck<CodeWorkspacePreviewAutomationAckResponse>(
+    'focus_code_workspace_preview_automation',
+    payload,
+    'Timed out while focusing workspace preview automation',
+    'Failed to focus workspace preview automation',
+    { retryOnSocketReconnect: true },
+  ).then((response) => {
+    if (!response.host) {
+      throw new Error('Server did not return workspace preview automation host');
+    }
+    return response.host;
+  })
+);
+
+export const requestCodeWorkspacePreviewAutomation = (
+  payload: {
+    roomId: string;
+    requestId?: string;
+    tabId?: string;
+    operation: CodeWorkspacePreviewAutomationOperation;
+    input?: unknown;
+    timeoutMs?: number;
+  },
+): Promise<unknown> => (
+  emitWithAck<CodeWorkspacePreviewAutomationAckResponse>(
+    'request_code_workspace_preview_automation',
+    payload,
+    'Timed out while running workspace preview automation',
+    'Failed to run workspace preview automation',
+  ).then((response) => {
+    if (!response.response) {
+      throw new Error('Server did not return workspace preview automation response');
+    }
+    return response.response;
+  })
+);
+
+export const requestRespondCodeWorkspacePreviewAutomation = (
+  payload: {
+    roomId: string;
+    connectionId: string;
+    requestId: string;
+    ok: boolean;
+    result?: unknown;
+    error?: CodeWorkspacePreviewAutomationResponse['error'];
+  },
+): Promise<unknown> => (
+  emitWithAck<CodeWorkspacePreviewAutomationAckResponse>(
+    'respond_code_workspace_preview_automation',
+    payload,
+    'Timed out while responding to workspace preview automation',
+    'Failed to respond to workspace preview automation',
+  ).then((response) => {
+    if (!response.response) {
+      throw new Error('Server did not return workspace preview automation response');
+    }
+    return response.response;
+  })
+);
+
 export const requestCodeWorkspaceDiff = (
   roomId: string,
   options: { ignoreWhitespace?: boolean; scope?: 'branch' | 'unstaged'; baseRef?: string } = {},
@@ -1410,6 +1760,51 @@ export const onUsernameAdopted = (callback: (username: string) => void) => {
     if (index !== -1) {
       usernameAdoptedCallbacks.splice(index, 1);
     }
+  };
+};
+
+export const onCodeWorkspacePreviewEvent = (
+  callback: (event: CodeWorkspacePreviewEvent) => void,
+) => {
+  socket.on('code_workspace_preview_event', callback);
+  return () => {
+    socket.off('code_workspace_preview_event', callback);
+  };
+};
+
+export const onCodeWorkspacePreviewAutomationEvent = (
+  callback: (event: CodeWorkspacePreviewAutomationEvent) => void,
+) => {
+  socket.on('code_workspace_preview_automation_event', callback);
+  return () => {
+    socket.off('code_workspace_preview_automation_event', callback);
+  };
+};
+
+export const onCodeWorkspacePreviewAutomationHostEvent = (
+  callback: (event: CodeWorkspacePreviewAutomationHostEvent) => void,
+) => {
+  socket.on('code_workspace_preview_automation_host_event', callback);
+  return () => {
+    socket.off('code_workspace_preview_automation_host_event', callback);
+  };
+};
+
+export const onCodeWorkspacePreviewAutomationResponse = (
+  callback: (event: CodeWorkspacePreviewAutomationResponseEvent) => void,
+) => {
+  socket.on('code_workspace_preview_automation_response', callback);
+  return () => {
+    socket.off('code_workspace_preview_automation_response', callback);
+  };
+};
+
+export const onSocketConnected = (
+  callback: () => void,
+) => {
+  socket.on('connect', callback);
+  return () => {
+    socket.off('connect', callback);
   };
 };
 
