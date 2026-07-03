@@ -3266,7 +3266,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
         remoteSearchError={remoteSearch.error}
         remoteSearchTruncated={remoteSearch.truncated}
         mobileLayout={isMobileSurface}
-        onBackToPreview={isMobileSurface ? handleBackToMobileFilePreview : undefined}
+        onBackToPreview={isMobileSurface && relativePath ? handleBackToMobileFilePreview : undefined}
       />
     </aside>
   ) : null;

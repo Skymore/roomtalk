@@ -976,6 +976,21 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
   });
 
+  it('does not show a back-to-preview button on the standalone mobile Files surface', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+      ],
+      truncated: false,
+    });
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" surface="mobile" />);
+
+    const mobileFileTreeHeader = await screen.findByTestId('code-agent-mobile-file-tree-header');
+    expect(within(mobileFileTreeHeader).getByText('1 files')).toBeTruthy();
+    expect(within(mobileFileTreeHeader).queryByLabelText('codeAgentBackToFilePreview')).toBeNull();
+  });
+
   it('restores cloud preview sessions into desktop browser tabs on mount', async () => {
     loadCodeWorkspaceEntriesMock.mockResolvedValue({
       entries: [],
