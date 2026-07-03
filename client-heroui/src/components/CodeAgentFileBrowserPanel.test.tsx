@@ -290,6 +290,7 @@ vi.mock('./CodeAgentWorkspaceDiffViewer', () => ({
     selectedFilePath,
     selectedFileRevealRequestId,
     mobileLayout,
+    onOpenChangedFiles,
   }: {
     enabled: boolean;
     onOpenFile?: (path: string) => void;
@@ -297,6 +298,7 @@ vi.mock('./CodeAgentWorkspaceDiffViewer', () => ({
     selectedFilePath?: string | null;
     selectedFileRevealRequestId?: number;
     mobileLayout?: boolean;
+    onOpenChangedFiles?: () => void;
   }) => (
     <div
       data-testid="code-agent-workspace-diff-viewer"
@@ -305,6 +307,15 @@ vi.mock('./CodeAgentWorkspaceDiffViewer', () => ({
       data-selected-file-request-id={String(selectedFileRevealRequestId || '')}
       data-mobile-layout={String(mobileLayout === true)}
     >
+      {mobileLayout && onOpenChangedFiles ? (
+        <button
+          type="button"
+          data-testid="code-agent-mobile-diff-files-button"
+          onClick={onOpenChangedFiles}
+        >
+          codeAgentChangedFiles
+        </button>
+      ) : null}
       <button type="button" aria-label="open-diff-file" onClick={() => onOpenFile?.('src/App.tsx#L3')}>
         open diff file
       </button>
@@ -763,8 +774,14 @@ describe('CodeAgentFileBrowserPanel', () => {
     const previewContent = screen.getByTestId('code-agent-file-preview-content');
     const previewHeader = screen.getByTestId('code-agent-mobile-file-preview-header');
     expect(previewHeader.dataset.mobileFilePreviewHeader).toBe('true');
-    expect(screen.getByTestId('code-agent-mobile-file-preview-breadcrumb-row')).toBeTruthy();
-    expect(screen.getByTestId('code-agent-mobile-file-preview-action-row')).toBeTruthy();
+    const mobileBreadcrumbRow = screen.getByTestId('code-agent-mobile-file-preview-breadcrumb-row');
+    expect(within(mobileBreadcrumbRow).queryByText('Coco')).toBeNull();
+    expect(within(mobileBreadcrumbRow).getByText('src')).toBeTruthy();
+    expect(within(mobileBreadcrumbRow).getByText('App.tsx')).toBeTruthy();
+    const mobilePreviewActionRow = screen.getByTestId('code-agent-mobile-file-preview-action-row');
+    expect(previewHeader.contains(mobileBreadcrumbRow)).toBe(true);
+    expect(previewHeader.contains(mobilePreviewActionRow)).toBe(true);
+    expect(previewHeader.className).toContain('overflow-x-auto');
     const mobileCopyPathButton = within(previewHeader).getByTestId('code-agent-file-copy-path-button');
     expect(mobileCopyPathButton.className).toContain('h-8');
     expect(mobileCopyPathButton.className).toContain('w-8');
@@ -781,6 +798,8 @@ describe('CodeAgentFileBrowserPanel', () => {
       expect(previewBody.dataset.mobileView).toBe('explorer');
       expect(previewContent.classList.contains('hidden')).toBe(true);
     });
+    expect(screen.queryByTestId('code-agent-mobile-file-preview-header')).toBeNull();
+    expect(screen.queryByTestId('code-agent-file-preview-truncated')).toBeNull();
     let mobileExplorer = screen.getByTestId('code-agent-mobile-file-tree-header').closest('aside') as HTMLElement;
     expect(mobileExplorer.dataset.mobileFileExplorer).toBe('true');
     expect(mobileExplorer.style.width).toBe('');
@@ -789,7 +808,10 @@ describe('CodeAgentFileBrowserPanel', () => {
     let mobileFileTreeHeader = screen.getByTestId('code-agent-mobile-file-tree-header');
     let mobileFileTreeActions = screen.getByTestId('code-agent-mobile-file-tree-actions');
     expect(mobileFileTreeHeader.className).toContain('min-h-10');
-    expect(mobileFileTreeHeader.className).toContain('py-2');
+    expect(mobileFileTreeHeader.className).toContain('overflow-x-auto');
+    expect(mobileFileTreeHeader.contains(mobileFileTreeActions)).toBe(true);
+    expect(within(mobileFileTreeHeader).queryByText('Coco')).toBeNull();
+    expect(within(mobileFileTreeHeader).getByText('2 files')).toBeTruthy();
     const mobileBackToPreview = within(mobileFileTreeHeader).getByLabelText('codeAgentBackToFilePreview');
     expect(mobileBackToPreview.className).toContain('h-8');
     expect(mobileBackToPreview.className).toContain('w-8');
@@ -798,15 +820,17 @@ describe('CodeAgentFileBrowserPanel', () => {
       expect(previewBody.dataset.mobileView).toBe('preview');
       expect(previewContent.classList.contains('hidden')).toBe(false);
     });
+    expect(screen.getByTestId('code-agent-mobile-file-preview-header')).toBeTruthy();
     fireEvent.click(screen.getByLabelText('codeAgentShowFileExplorer'));
     await waitFor(() => {
       expect(previewBody.dataset.mobileView).toBe('explorer');
     });
+    expect(screen.queryByTestId('code-agent-mobile-file-preview-header')).toBeNull();
     mobileExplorer = screen.getByTestId('code-agent-mobile-file-tree-header').closest('aside') as HTMLElement;
     mobileFileTreeHeader = screen.getByTestId('code-agent-mobile-file-tree-header');
     mobileFileTreeActions = screen.getByTestId('code-agent-mobile-file-tree-actions');
-    expect(mobileFileTreeActions.className).toContain('min-h-10');
-    expect(mobileFileTreeActions.className).toContain('overflow-x-auto');
+    expect(mobileFileTreeHeader.contains(mobileFileTreeActions)).toBe(true);
+    expect(mobileFileTreeActions.className).toContain('min-w-max');
     expect(screen.getByLabelText('codeAgentSearchWorkspaceFiles').className).toContain('h-8');
     expect(screen.getByLabelText('codeAgentSearchWorkspaceFiles').className).toContain('w-8');
     expect(screen.getByLabelText('codeAgentNewFile').className).toContain('h-8');
@@ -2498,17 +2522,21 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(screen.queryByLabelText('codeAgentResizeChangedFiles')).toBeNull();
     expect(screen.getByTestId('code-agent-workspace-diff-viewer').dataset.enabled).toBe('true');
     expect(screen.getByTestId('code-agent-workspace-diff-viewer').dataset.mobileLayout).toBe('true');
-    const mobileDiffFilesToggle = screen.getByTestId('code-agent-mobile-diff-files-toggle');
-    expect(within(mobileDiffFilesToggle).getByText('codeAgentChangedFiles')).toBeTruthy();
-    expect(within(mobileDiffFilesToggle).queryByText('codeAgentChangedFilesCount')).toBeNull();
-    expect(within(mobileDiffFilesToggle).queryByText('+8')).toBeNull();
-    expect(within(mobileDiffFilesToggle).queryByText('-3')).toBeNull();
+    expect(screen.queryByTestId('code-agent-mobile-diff-files-toggle')).toBeNull();
+    const mobileDiffFilesButton = screen.getByTestId('code-agent-mobile-diff-files-button');
+    expect(within(screen.getByTestId('code-agent-workspace-diff-viewer')).getByTestId('code-agent-mobile-diff-files-button')).toBe(mobileDiffFilesButton);
+    expect(within(mobileDiffFilesButton).getByText('codeAgentChangedFiles')).toBeTruthy();
 
-    fireEvent.click(mobileDiffFilesToggle);
+    fireEvent.click(mobileDiffFilesButton);
     expect(diffSurface.dataset.mobileView).toBe('files');
     expect(screen.queryByTestId('code-agent-workspace-diff-viewer')).toBeNull();
     expect(screen.queryByTestId('code-agent-diff-changed-files-sidebar')).toBeNull();
     expect(screen.queryByLabelText('codeAgentResizeChangedFiles')).toBeNull();
+    const mobileDiffFilesToggle = screen.getByTestId('code-agent-mobile-diff-files-toggle');
+    expect(within(mobileDiffFilesToggle).getByText('codeAgentChanges')).toBeTruthy();
+    expect(within(mobileDiffFilesToggle).queryByText('codeAgentChangedFilesCount')).toBeNull();
+    expect(within(mobileDiffFilesToggle).queryByText('+8')).toBeNull();
+    expect(within(mobileDiffFilesToggle).queryByText('-3')).toBeNull();
 
     const mobileFilesPanel = screen.getByTestId('code-agent-mobile-diff-changed-files-panel');
     const mobileChangedFilesTree = within(mobileFilesPanel).getByTestId('code-agent-changed-files-tree');

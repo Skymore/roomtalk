@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 import { MessageCircle, Send, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { ReviewCommentPreviewLine } from '../utils/codeAgentReviewComments';
@@ -15,6 +16,36 @@ interface LocalCommentAnnotationProps {
   onDelete: () => void;
 }
 
+function useVisualViewportKeyboardOffset(enabled: boolean) {
+  const [keyboardOffset, setKeyboardOffset] = useState(0);
+
+  useEffect(() => {
+    if (!enabled || typeof window === 'undefined' || !window.visualViewport) {
+      setKeyboardOffset(0);
+      return undefined;
+    }
+
+    const viewport = window.visualViewport;
+    const updateKeyboardOffset = () => {
+      const layoutHeight = window.innerHeight || viewport.height;
+      const nextOffset = Math.max(0, Math.round(layoutHeight - viewport.height - viewport.offsetTop));
+      setKeyboardOffset((current) => (current === nextOffset ? current : nextOffset));
+    };
+
+    updateKeyboardOffset();
+    viewport.addEventListener('resize', updateKeyboardOffset);
+    viewport.addEventListener('scroll', updateKeyboardOffset);
+    window.addEventListener('orientationchange', updateKeyboardOffset);
+    return () => {
+      viewport.removeEventListener('resize', updateKeyboardOffset);
+      viewport.removeEventListener('scroll', updateKeyboardOffset);
+      window.removeEventListener('orientationchange', updateKeyboardOffset);
+    };
+  }, [enabled]);
+
+  return keyboardOffset;
+}
+
 export function CodeAgentLocalCommentAnnotation({
   kind,
   rangeLabel,
@@ -28,6 +59,7 @@ export function CodeAgentLocalCommentAnnotation({
 }: LocalCommentAnnotationProps) {
   const { t } = useTranslation();
   const [text, setText] = useState('');
+  const keyboardOffset = useVisualViewportKeyboardOffset(mobileLayout && kind === 'draft');
   const commentOnLinesLabel = t('codeAgentCommentOnLines', { range: rangeLabel });
   const textareaId = `code-agent-mobile-comment-${rangeLabel.replace(/[^A-Za-z0-9_-]+/g, '-')}`;
   const hasPreviewLines = previewLines.length > 0;
@@ -67,14 +99,21 @@ export function CodeAgentLocalCommentAnnotation({
   }
 
   if (mobileLayout) {
-    return (
+    const sheetBottom = keyboardOffset > 0
+      ? `calc(${keyboardOffset}px + env(safe-area-inset-bottom) + 0.75rem)`
+      : 'calc(var(--code-agent-composer-height, 96px) + env(safe-area-inset-bottom) + 0.75rem)';
+    const sheetStyle = {
+      '--code-agent-mobile-comment-bottom': sheetBottom,
+    } as CSSProperties;
+    const sheet = (
       <div
         data-file-comment-annotation
         data-mobile-comment-annotation="true"
         data-testid="code-agent-mobile-review-comment-sheet"
         role="dialog"
         aria-label={t('codeAgentLocalComment')}
-        className="fixed inset-x-3 bottom-[calc(var(--code-agent-composer-height,96px)+env(safe-area-inset-bottom)+0.75rem)] z-[90] max-h-[min(80dvh,32rem)] overflow-hidden rounded-[22px] border border-[#dedbd0] bg-[#faf9f5] shadow-2xl shadow-[#141413]/20 dark:border-[#30302e] dark:bg-[#1d1d1b]"
+        className="fixed inset-x-3 bottom-[var(--code-agent-mobile-comment-bottom)] z-[90] max-h-[min(80dvh,32rem)] overflow-hidden rounded-[22px] border border-[#dedbd0] bg-[#faf9f5] shadow-2xl shadow-[#141413]/20 dark:border-[#30302e] dark:bg-[#1d1d1b]"
+        style={sheetStyle}
         contentEditable={false}
         onPointerDown={(event) => event.stopPropagation()}
       >
@@ -185,6 +224,7 @@ export function CodeAgentLocalCommentAnnotation({
         </div>
       </div>
     );
+    return typeof document === 'undefined' ? sheet : createPortal(sheet, document.body);
   }
 
   return (

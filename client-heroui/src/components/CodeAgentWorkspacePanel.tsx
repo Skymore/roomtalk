@@ -217,9 +217,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
     ? liveChangedFileEntries
     : snapshotChangedFileEntries;
   const showOuterChangedFilesSummary = changedFileEntries.length > 0 && !isMobileWorkspaceLayout;
-  const showOuterChangedFilesTree = changedFileEntries.length > 0 && (
-    !isMobileWorkspaceLayout || changedFileEntries.length > 1
-  );
+  const showOuterChangedFilesTree = changedFileEntries.length > 0 && !isMobileWorkspaceLayout;
   const normalizedChangedFilePathSet = React.useMemo(
     () => new Set(changedFileEntries.map((entry) => normalizeChangedFilePath(entry.path))),
     [changedFileEntries],
@@ -279,6 +277,34 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
       summaries,
     });
   }, [diffSummaryScopeKey]);
+
+  const renderWorkspaceDiffViewer = React.useCallback(() => (
+    <CodeAgentWorkspaceDiffViewer
+      roomId={room.id}
+      enabled={shouldLoadDiff}
+      refreshKey={diffRefreshKey}
+      onOpenFile={onOpenWorkspaceFile}
+      onFileSummariesChange={handleDiffFileSummariesChange}
+      selectedFilePath={selectedDiffFilePath}
+      selectedFileRevealRequestId={selectedDiffFileRequestId}
+      reviewComments={reviewComments}
+      onAddReviewComment={onAddReviewComment}
+      onRemoveReviewComment={onRemoveReviewComment}
+      mobileLayout={isMobileWorkspaceLayout}
+    />
+  ), [
+    diffRefreshKey,
+    handleDiffFileSummariesChange,
+    isMobileWorkspaceLayout,
+    onAddReviewComment,
+    onOpenWorkspaceFile,
+    onRemoveReviewComment,
+    reviewComments,
+    room.id,
+    selectedDiffFilePath,
+    selectedDiffFileRequestId,
+    shouldLoadDiff,
+  ]);
 
   const stats = [
     { label: t('codeAgentTools'), value: summary.toolCalls, icon: 'lucide:wrench' },
@@ -519,7 +545,14 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
               data-mobile-layout={isMobileWorkspaceLayout ? 'true' : undefined}
             >
               <div className={changesContentClassName} data-testid="code-agent-workspace-changes-content">
-                {showOuterChangedFilesSummary || showOuterChangedFilesTree ? (
+                {isMobileWorkspaceLayout ? (
+                  <div
+                    className="flex h-[clamp(18rem,52dvh,38rem)] min-h-0 min-w-0 flex-col overflow-hidden"
+                    data-testid="code-agent-mobile-changes-inline"
+                  >
+                    {renderWorkspaceDiffViewer()}
+                  </div>
+                ) : showOuterChangedFilesSummary || showOuterChangedFilesTree ? (
                   <>
                     {showOuterChangedFilesSummary ? (
                       <div className="flex flex-wrap items-center gap-2 text-xs text-[#4d4c48] dark:text-[#e8e6dc]">
@@ -560,19 +593,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                     ) : null}
                   </>
                 ) : null}
-                <CodeAgentWorkspaceDiffViewer
-                  roomId={room.id}
-                  enabled={shouldLoadDiff}
-                  refreshKey={diffRefreshKey}
-                  onOpenFile={onOpenWorkspaceFile}
-                  onFileSummariesChange={handleDiffFileSummariesChange}
-                  selectedFilePath={selectedDiffFilePath}
-                  selectedFileRevealRequestId={selectedDiffFileRequestId}
-                  reviewComments={reviewComments}
-                  onAddReviewComment={onAddReviewComment}
-                  onRemoveReviewComment={onRemoveReviewComment}
-                  mobileLayout={isMobileWorkspaceLayout}
-                />
+                {isMobileWorkspaceLayout ? null : renderWorkspaceDiffViewer()}
               </div>
             </div>
           </Tab>

@@ -397,14 +397,16 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(screen.queryByText('codeAgentChangedFilesCount')).toBeNull();
     expect(screen.queryByText('+888')).toBeNull();
     expect(screen.queryByTestId('code-agent-changed-files-tree')).toBeNull();
-
-    const diffViewer = screen.getByTestId('code-agent-workspace-diff-viewer');
-    expect(diffViewer.dataset.enabled).toBe('true');
-    expect(diffViewer.dataset.mobileLayout).toBe('true');
-    expect(changesScroll.contains(diffViewer)).toBe(true);
+    expect(screen.queryByTestId('code-agent-mobile-changes-summary')).toBeNull();
+    const inlineChanges = screen.getByTestId('code-agent-mobile-changes-inline');
+    expect(inlineChanges.className).toContain('h-[clamp(18rem,52dvh,38rem)]');
+    const inlineDiffViewer = screen.getByTestId('code-agent-workspace-diff-viewer');
+    expect(inlineDiffViewer.dataset.enabled).toBe('true');
+    expect(inlineDiffViewer.dataset.mobileLayout).toBe('true');
+    expect(inlineChanges.contains(inlineDiffViewer)).toBe(true);
   });
 
-  it('keeps the mobile changed-file tree as navigation when multiple files changed', () => {
+  it('uses inline mobile changes instead of embedding a changed-file tree', () => {
     mockWorkspacePanelMobileLayout(true);
 
     render(
@@ -438,19 +440,16 @@ describe('CodeAgentWorkspacePanel', () => {
     fireEvent.click(screen.getByText('codeAgentChanges'));
 
     expect(screen.queryByText('codeAgentChangedFilesCount')).toBeNull();
-    const mobileChangedFilesTree = screen.getByTestId('code-agent-changed-files-tree');
-    expect(mobileChangedFilesTree.dataset.mobileLayout).toBe('true');
-    const rows = screen.getAllByTestId('code-agent-changed-files-tree-row');
-    expect(rows.length).toBeGreaterThan(0);
-    expect(rows.every((row) => row.dataset.mobileLayout === 'true')).toBe(true);
-    expect(rows.every((row) => row.className.includes('min-h-[42px]'))).toBe(true);
-    expect(rows.some((row) => row.dataset.kind === 'directory' && row.dataset.path === 'src')).toBe(true);
-    expect(rows.some((row) => row.dataset.kind === 'file' && row.dataset.path === 'src/App.tsx')).toBe(true);
-
-    fireEvent.click(screen.getByText('App.tsx'));
-    const diffViewer = screen.getByTestId('code-agent-workspace-diff-viewer');
-    expect(diffViewer.dataset.selectedFile).toBe('src/App.tsx');
-    expect(diffViewer.dataset.selectedFileRequestId).toBe('1');
+    expect(screen.queryByTestId('code-agent-changed-files-tree')).toBeNull();
+    expect(screen.queryByTestId('code-agent-changed-files-tree-row')).toBeNull();
+    expect(screen.queryByText('App.tsx')).toBeNull();
+    expect(screen.queryByTestId('code-agent-mobile-changes-summary')).toBeNull();
+    const inlineDiffViewer = screen.getByTestId('code-agent-workspace-diff-viewer');
+    const inlineChanges = screen.getByTestId('code-agent-mobile-changes-inline');
+    expect(inlineChanges.className).toContain('h-[clamp(18rem,52dvh,38rem)]');
+    expect(inlineChanges.contains(inlineDiffViewer)).toBe(true);
+    expect(inlineDiffViewer.dataset.enabled).toBe('true');
+    expect(inlineDiffViewer.dataset.mobileLayout).toBe('true');
   });
 
   it('persists changed-file tree collapse state for the same workspace scope', () => {

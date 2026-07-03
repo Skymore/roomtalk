@@ -67,18 +67,21 @@ export function CodeAgentFilePreviewHeader({
   const [breadcrumbFade, setBreadcrumbFade] = useState({ left: false, right: false });
   const [copiedPath, setCopiedPath] = useState(false);
   const isMarkdown = relativePath ? isMarkdownPreviewFile(relativePath) : false;
-  const breadcrumbs = useMemo(
-    () => (relativePath ? fileBreadcrumbs(projectName, relativePath) : []),
-    [projectName, relativePath],
-  );
+  const breadcrumbs = useMemo(() => {
+    if (!relativePath) {
+      return [];
+    }
+    const nextBreadcrumbs = fileBreadcrumbs(projectName, relativePath);
+    return mobileLayout
+      ? nextBreadcrumbs.filter((crumb) => crumb.kind !== 'project')
+      : nextBreadcrumbs;
+  }, [mobileLayout, projectName, relativePath]);
   const wordWrapLabel = wordWrap
     ? t('codeAgentDisableFileLineWrapping')
     : t('codeAgentEnableFileLineWrapping');
   const previewToggleLabel = isMarkdown
     ? (renderPreview ? t('codeAgentShowMarkdownSource') : t('codeAgentShowRenderedMarkdown'))
     : (renderPreview ? t('codeAgentShowSource') : t('codeAgentShowPreview'));
-  const previewModeLabel = isMarkdown ? t('codeAgentShowRenderedMarkdown') : t('codeAgentShowPreview');
-  const sourceModeLabel = isMarkdown ? t('codeAgentShowMarkdownSource') : t('codeAgentShowSource');
   const refreshCurrentFileLabel = t('codeAgentRefreshWorkspaceFile');
   const copyFilePathLabel = copiedPath ? t('copied') : t('codeAgentCopyFilePath');
   const openExternalPreviewLabel = t('codeAgentOpenBrowserPreviewExternally');
@@ -242,59 +245,33 @@ export function CodeAgentFilePreviewHeader({
 
   if (mobileLayout) {
     const mobileIconButtonClass = 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-wait disabled:opacity-60 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]';
-    const mobileModeButtonClass = (active: boolean) => `inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold transition-colors ${
-      active
-        ? 'border-[#c96442]/45 bg-[#f0eee6] text-[#141413] dark:border-[#ffb197]/45 dark:bg-[#30302e] dark:text-[#faf9f5]'
-        : 'border-[#dedbd0] text-[#5e5d59] hover:bg-[#f0eee6] hover:text-[#141413] dark:border-[#30302e] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]'
-    }`;
+    const mobileActiveIconButtonClass = `${mobileIconButtonClass} text-[#9f462c] dark:text-[#ffb197]`;
 
     return (
       <div
-        className="surface-subheader flex shrink-0 flex-col gap-2 border-b border-[#dedbd0] px-3 py-2 dark:border-[#30302e]"
+        className="surface-subheader flex min-h-10 shrink-0 items-center gap-2 overflow-x-auto border-b border-[#dedbd0] px-2 py-1 [scrollbar-width:none] dark:border-[#30302e] [&::-webkit-scrollbar]:hidden"
         data-mobile-file-preview-header="true"
         data-surface-subheader
         data-testid="code-agent-mobile-file-preview-header"
       >
-        <div className="flex min-h-8 items-center gap-2" data-testid="code-agent-mobile-file-preview-breadcrumb-row">
+        <div className="min-w-[7rem] flex-1" data-testid="code-agent-mobile-file-preview-breadcrumb-row">
           {breadcrumbStrip}
-          {copyButton}
         </div>
-        <div className="flex min-h-8 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" data-testid="code-agent-mobile-file-preview-action-row">
+        <div className="flex min-w-max shrink-0 items-center gap-1" data-testid="code-agent-mobile-file-preview-action-row">
+          {copyButton}
           {supportsPreview ? (
-            <div className="flex shrink-0 items-center gap-1" role="group">
-              <button
-                type="button"
-                className={mobileModeButtonClass(renderPreview)}
-                aria-label={previewModeLabel}
-                aria-pressed={renderPreview}
-                title={previewModeLabel}
-                onClick={() => {
-                  if (!renderPreview) {
-                    onTogglePreviewView();
-                  }
-                }}
-              >
-                <Eye className="h-3.5 w-3.5" />
-                <span>{previewModeLabel}</span>
-              </button>
-              <button
-                type="button"
-                className={mobileModeButtonClass(!renderPreview)}
-                aria-label={sourceModeLabel}
-                aria-pressed={!renderPreview}
-                title={sourceModeLabel}
-                onClick={() => {
-                  if (renderPreview) {
-                    onTogglePreviewView();
-                  }
-                }}
-              >
-                <Code2 className="h-3.5 w-3.5" />
-                <span>{sourceModeLabel}</span>
-              </button>
-            </div>
+            <button
+              type="button"
+              className={renderPreview ? mobileActiveIconButtonClass : mobileIconButtonClass}
+              aria-label={previewToggleLabel}
+              aria-pressed={renderPreview}
+              title={previewToggleLabel}
+              onClick={onTogglePreviewView}
+            >
+              {renderPreview ? <Code2 className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+            </button>
           ) : null}
-          <div className="ml-auto flex shrink-0 items-center gap-1">
+          <div className="flex shrink-0 items-center gap-1">
             <button
               type="button"
               className={mobileIconButtonClass}

@@ -1136,33 +1136,35 @@ export function CodeAgentFilePreviewPanel({
   onRemoveReviewComment,
 }: CodeAgentFilePreviewPanelProps) {
   const { t } = useTranslation();
-  const showTruncatedBanner = Boolean(relativePath && file?.truncated);
   const showMobileExplorerOnly = mobileLayout && explorer !== null && (explorerOpen || !relativePath);
   const showFilePreview = Boolean(relativePath && !showMobileExplorerOnly);
+  const showTruncatedBanner = Boolean(showFilePreview && file?.truncated);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <CodeAgentFilePreviewHeader
-        projectName={projectName}
-        relativePath={relativePath}
-        renderPreview={renderPreview}
-        wordWrap={wordWrap}
-        explorerOpen={explorerOpen}
-        browserPreviewPending={browserPreviewPending}
-        externalPreviewUrl={externalPreviewUrl}
-        externalPreviewPending={externalPreviewPending}
-        canToggleFileWordWrap={canToggleFileWordWrap}
-        canOpenInBrowserPreview={canOpenInBrowserPreview}
-        supportsPreview={supportsPreview}
-        refreshCurrentFilePending={refreshCurrentFilePending}
-        mobileLayout={mobileLayout}
-        onRefreshCurrentFile={onRefreshCurrentFile}
-        onDownloadFile={file ? () => createDownload(file) : undefined}
-        onToggleWordWrap={onToggleWordWrap}
-        onOpenInBrowserPreview={onOpenInBrowserPreview}
-        onTogglePreviewView={onTogglePreviewView}
-        onToggleExplorer={onToggleExplorer}
-      />
+      {!showMobileExplorerOnly ? (
+        <CodeAgentFilePreviewHeader
+          projectName={projectName}
+          relativePath={relativePath}
+          renderPreview={renderPreview}
+          wordWrap={wordWrap}
+          explorerOpen={explorerOpen}
+          browserPreviewPending={browserPreviewPending}
+          externalPreviewUrl={externalPreviewUrl}
+          externalPreviewPending={externalPreviewPending}
+          canToggleFileWordWrap={canToggleFileWordWrap}
+          canOpenInBrowserPreview={canOpenInBrowserPreview}
+          supportsPreview={supportsPreview}
+          refreshCurrentFilePending={refreshCurrentFilePending}
+          mobileLayout={mobileLayout}
+          onRefreshCurrentFile={onRefreshCurrentFile}
+          onDownloadFile={file ? () => createDownload(file) : undefined}
+          onToggleWordWrap={onToggleWordWrap}
+          onOpenInBrowserPreview={onOpenInBrowserPreview}
+          onTogglePreviewView={onTogglePreviewView}
+          onToggleExplorer={onToggleExplorer}
+        />
+      ) : null}
       {showTruncatedBanner && file ? (
         <div
           className="shrink-0 border-b border-amber-500/20 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-700 dark:text-amber-300"

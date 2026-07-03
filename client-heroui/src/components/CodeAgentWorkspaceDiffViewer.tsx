@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FileDiffMetadata } from '@pierre/diffs';
 import { type CodeViewHandle } from '@pierre/diffs/react';
-import { ArrowRight, Check, ChevronDown, ChevronRight, Columns2, Pilcrow, RefreshCw, Rows3, Search, WrapText } from 'lucide-react';
+import { ArrowRight, Check, ChevronDown, ChevronRight, Columns2, Files, Pilcrow, RefreshCw, Rows3, Search, WrapText } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { loadCodeAgentWorkspaceDiff, loadCodeAgentWorkspaceRefs, type CodeAgentWorkspaceDiff, type CodeAgentWorkspaceDiffScope, type CodeAgentWorkspaceRefs } from '../utils/cocoWorkspace';
 import { buildCodeAgentBaseRefChoices, filterCodeAgentBaseRefChoices, type CodeAgentBaseRefChoice } from '../utils/codeWorkspaceRefs';
@@ -61,6 +61,7 @@ interface CodeAgentWorkspaceDiffViewerProps {
   onAddReviewComment?: (comment: ReviewCommentContext) => void;
   onRemoveReviewComment?: (commentId: string) => void;
   mobileLayout?: boolean;
+  onOpenChangedFiles?: () => void;
 }
 
 function readResolvedTheme() {
@@ -353,6 +354,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   onAddReviewComment,
   onRemoveReviewComment,
   mobileLayout = false,
+  onOpenChangedFiles,
 }) => {
   const { t } = useTranslation();
   const resolvedTheme = useResolvedTheme();
@@ -786,12 +788,6 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
       { additions: 0, deletions: 0 },
     )
   ), [diffFileSummaries]);
-  const mobileReviewSummaryTitle = diffFileSummaries.length > 0
-    ? t('codeAgentReviewFilesChanged')
-    : selectedReviewSectionLabel;
-  const mobileReviewSummarySubtitle = diffFileSummaries.length > 0
-    ? selectedReviewSectionLabel
-    : selectedReviewSectionSubtitle;
   const showMobileReviewStats = diffFileSummaries.length > 0
     && (mobileDiffSummary.additions !== 0 || mobileDiffSummary.deletions !== 0);
 
@@ -834,6 +830,10 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
           openInWorkspaceFileViewer: onOpenFile,
         });
       }
+      return;
+    }
+
+    if (mobileLayout) {
       return;
     }
 
@@ -937,29 +937,6 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   const diffScopeMenuContent = (
     <>
       {diffScopeSectionItems}
-      {mobileLayout ? (
-        <>
-          <div className="my-1 h-px bg-[#dedbd0] dark:bg-[#30302e]" role="separator" />
-          <button
-            type="button"
-            className={`${diffScopeMenuItemClassName} disabled:cursor-wait disabled:opacity-60`}
-            disabled={isDiffRefreshPending}
-            role="menuitem"
-            onClick={() => {
-              refreshDiff();
-              closeDiffToolbarMenus();
-            }}
-          >
-            <span className="min-w-0 flex-1">
-              <span className="block truncate font-semibold">{t('codeAgentRefreshCurrentDiff')}</span>
-              <span className="block truncate text-[11px] font-normal text-[#87867f] dark:text-[#8f8d86]">
-                {selectedReviewSectionLabel}
-              </span>
-            </span>
-            <RefreshCw className={`${controlIconClassName} shrink-0 text-[#87867f] dark:text-[#8f8d86] ${isDiffRefreshPending ? 'animate-spin' : ''}`} />
-          </button>
-        </>
-      ) : null}
     </>
   );
   const diffBaseRefMenuContent = (
@@ -1194,6 +1171,18 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
           </div>
         </div>
         <div className={`flex shrink-0 items-center ${mobileLayout ? 'gap-1.5' : 'gap-1'}`}>
+          {mobileLayout && onOpenChangedFiles ? (
+            <button
+              type="button"
+              aria-label={t('codeAgentChangedFiles')}
+              title={t('codeAgentChangedFiles')}
+              data-testid="code-agent-mobile-diff-files-button"
+              onClick={onOpenChangedFiles}
+              className={diffIconButtonClassName(false)}
+            >
+              <Files className={controlIconClassName} />
+            </button>
+          ) : null}
           <button
             type="button"
             aria-label={refreshDiffLabel}
@@ -1255,21 +1244,14 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   );
   const headerRow = mobileLayout ? (
     <div
-      className="flex min-w-0 flex-1 flex-col items-stretch gap-1"
+      className="-mx-2 flex min-w-0 flex-1 overflow-x-auto px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       data-testid="code-agent-mobile-workspace-diff-header"
     >
       <div
-        className="flex min-h-8 min-w-0 items-center gap-2 px-0.5 text-[11px] leading-4 text-[#87867f] dark:text-[#8f8d86]"
-        data-testid="code-agent-mobile-workspace-diff-summary-row"
+        className="flex min-h-9 min-w-max items-center gap-1.5 text-[11px] leading-4 text-[#87867f] dark:text-[#8f8d86]"
+        data-testid="code-agent-mobile-workspace-diff-controls-row"
       >
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-xs font-semibold leading-4 text-[#4d4c48] dark:text-[#e8e6dc]">
-            {mobileReviewSummaryTitle}
-          </div>
-          <div className="truncate">
-            {mobileReviewSummarySubtitle}
-          </div>
-        </div>
+        {headerControls}
         {showMobileReviewStats ? (
           <CodeAgentDiffStatLabel
             additions={mobileDiffSummary.additions}
@@ -1288,14 +1270,6 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
           </span>
         ) : null}
       </div>
-      <div
-        className="-mx-2 flex min-w-0 overflow-x-auto px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-        data-testid="code-agent-mobile-workspace-diff-controls-row"
-      >
-        <div className="flex min-w-max items-center gap-1.5">
-          {headerControls}
-        </div>
-      </div>
     </div>
   ) : headerControls;
 
@@ -1304,7 +1278,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
       mode="embedded"
       header={headerRow}
       testId="code-agent-workspace-diff-viewer"
-      headerClassName={mobileLayout ? 'min-h-12 items-stretch px-2 py-1.5' : undefined}
+      headerClassName={mobileLayout ? 'min-h-10 items-center px-2 py-1' : undefined}
     >
       {mobileDiffToolbarMenuOverlay}
       <CodeAgentWorkspaceDiffPanelViewport>

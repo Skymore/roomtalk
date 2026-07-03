@@ -5232,7 +5232,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
           data-mobile-layout={isMobileSurface ? 'true' : undefined}
           data-mobile-view={isMobileSurface ? (showMobileDiffFileList ? 'files' : 'diff') : undefined}
         >
-          {isMobileSurface && changedFileEntries.length > 0 ? (
+          {showMobileDiffFileList ? (
             <div className="flex shrink-0 items-center gap-2 rounded-md border border-[#dedbd0] bg-[#faf9f5] px-2 py-1.5 text-xs text-[#4d4c48] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#e8e6dc]">
               <button
                 type="button"
@@ -5296,6 +5296,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
               onAddReviewComment={onAddReviewComment}
               onRemoveReviewComment={onRemoveReviewComment}
               mobileLayout={isMobileSurface}
+              onOpenChangedFiles={isMobileSurface && changedFileEntries.length > 0 ? () => setMobileDiffFileListOpen(true) : undefined}
             />
           )}
         </div>
