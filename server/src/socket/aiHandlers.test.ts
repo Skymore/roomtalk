@@ -1158,6 +1158,32 @@ describe('AI socket handlers', () => {
     assert.equal(store.upsertedMessages[1].content, expectedE2EFakeContent('fresh prompt'));
   });
 
+  it('rejects send-message-and-ask-ai before saving when posting is closed', async () => {
+    const { io, socket, store } = createHarness({
+      currentRoom: room({
+        postingSchedule: {
+          enabled: true,
+          timezone: 'UTC',
+          windows: [],
+        },
+      }),
+    });
+
+    let response: unknown;
+    await socket.invoke('send_message_and_ask_ai', {
+      roomId: 'room-1',
+      content: 'fresh prompt',
+      model: selectedModel.id,
+    }, (ack: unknown) => {
+      response = ack;
+    });
+
+    assert.equal(store.appendedMessages.length, 0);
+    assert.equal(store.upsertedMessages.length, 0);
+    assert.equal(io.roomEmits.length, 0);
+    assert.deepEqual(response, { success: false, error: 'Posting closed' });
+  });
+
   it('saves a user message before routing Coco ask requests to the Coco session service', async () => {
     const calls: unknown[][] = [];
     const cocoSessionService = {
@@ -1205,6 +1231,60 @@ describe('AI socket handlers', () => {
     assert.equal(io.roomEmits.some(event =>
       event.event === 'new_message' && (event.args[0] as Message).id === store.appendedMessages[0].id
     ), true);
+  });
+
+  it('rejects Coco send-message-and-ask-ai before saving when the member cannot use Coco', async () => {
+    const calls: unknown[][] = [];
+    const cocoSessionService = {
+      async startTurn(...args: unknown[]) {
+        calls.push(args);
+        return { success: true, messageId: 'coco-ai-2' };
+      },
+    };
+    const { io, socket, store } = createHarness({
+      currentRoom: room({ type: 'coco', creatorId: 'owner-1' }),
+      cocoSessionService,
+    });
+
+    let response: unknown;
+    await socket.invoke('send_message_and_ask_ai', {
+      roomId: 'room-1',
+      content: 'fresh prompt',
+      model: selectedModel.id,
+    }, (ack: unknown) => {
+      response = ack;
+    });
+
+    assert.equal(store.appendedMessages.length, 0);
+    assert.equal(store.upsertedMessages.length, 0);
+    assert.equal(calls.length, 0);
+    assert.equal(io.roomEmits.length, 0);
+    assert.deepEqual(response, { success: false, error: 'You do not have access to this Coco room' });
+  });
+
+  it('rejects Coco ask-ai requests before starting when the member cannot use Coco', async () => {
+    const calls: unknown[][] = [];
+    const cocoSessionService = {
+      async startTurn(...args: unknown[]) {
+        calls.push(args);
+        return { success: true, messageId: 'coco-ai-2' };
+      },
+    };
+    const { socket } = createHarness({
+      currentRoom: room({ type: 'coco', creatorId: 'owner-1' }),
+      cocoSessionService,
+    });
+
+    let response: unknown;
+    await socket.invoke('ask_ai', {
+      roomId: 'room-1',
+      model: selectedModel.id,
+    }, (ack: unknown) => {
+      response = ack;
+    });
+
+    assert.equal(calls.length, 0);
+    assert.deepEqual(response, { success: false, error: 'You do not have access to this Coco room' });
   });
 
   it('acknowledges the saved user message when AI startup fails afterward', async () => {

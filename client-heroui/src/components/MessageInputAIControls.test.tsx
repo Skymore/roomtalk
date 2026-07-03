@@ -52,7 +52,11 @@ vi.mock('@heroui/react', () => ({
 }));
 
 vi.mock('./AIRoleManager', () => ({
-  AIRoleManager: () => <div data-testid="ai-role-manager">roles</div>,
+  AIRoleManager: ({ onSelectRole }: { onSelectRole: (roleId: string) => void }) => (
+    <div data-testid="ai-role-manager">
+      <button type="button" onClick={() => onSelectRole('critic')}>select critic</button>
+    </div>
+  ),
 }));
 
 vi.mock('./HoverTooltip', () => ({
@@ -67,6 +71,14 @@ const role: AIRole = {
   color: 'primary',
 };
 
+const criticRole: AIRole = {
+  id: 'critic',
+  name: 'Critic',
+  systemPrompt: 'Review carefully',
+  icon: 'lucide:brain',
+  color: 'secondary',
+};
+
 const model = {
   id: 'model-a',
   apiModel: 'provider/model-a',
@@ -75,7 +87,7 @@ const model = {
 };
 
 const baseProps = {
-  roles: [role],
+  roles: [role, criticRole],
   selectedRoleId: role.id,
   selectedRole: role,
   aiModels: [model],
@@ -117,12 +129,14 @@ describe('MessageInputAIControls', () => {
     vi.clearAllMocks();
   });
 
-  it('shows code agent mode picker in settings modal', () => {
+  it('applies code agent mode changes from the settings modal', () => {
     const onCodeAgentModeChange = vi.fn();
+    const onSettingsClose = vi.fn();
     render(
       <MessageInputAIControls
         {...baseProps}
         isSettingsOpen
+        onSettingsClose={onSettingsClose}
         isCodeAgentRoom
         codeAgentMode="plan"
         codeAgentMaxMode="acceptEdits"
@@ -134,7 +148,39 @@ describe('MessageInputAIControls', () => {
     expect(screen.queryByLabelText('selectAIRole')).toBeNull();
 
     fireEvent.click(screen.getByTestId('change-codeAgentModeControl'));
+    expect(onCodeAgentModeChange).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'apply' }));
     expect(onCodeAgentModeChange).toHaveBeenCalledWith('acceptEdits');
+    expect(onSettingsClose).toHaveBeenCalled();
+  });
+
+  it('disables Apply until settings change', () => {
+    render(<MessageInputAIControls {...baseProps} isSettingsOpen />);
+
+    expect((screen.getByRole('button', { name: 'apply' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('applies role manager selection from the settings modal', () => {
+    const onRoleChange = vi.fn();
+    const onSettingsClose = vi.fn();
+    render(
+      <MessageInputAIControls
+        {...baseProps}
+        isSettingsOpen
+        onRoleChange={onRoleChange}
+        onSettingsClose={onSettingsClose}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'select critic' }));
+
+    expect(onRoleChange).not.toHaveBeenCalled();
+    expect((screen.getByRole('button', { name: 'apply' }) as HTMLButtonElement).disabled).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'apply' }));
+    expect(onRoleChange).toHaveBeenCalledWith('critic');
+    expect(onSettingsClose).toHaveBeenCalled();
   });
 
   it('shows role picker in settings modal for chat rooms', () => {

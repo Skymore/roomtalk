@@ -153,6 +153,9 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   const [aiContextMessageLimitDraft, setAIContextMessageLimitDraft] = React.useState(() => (
     normalizeAIContextMessageLimit(aiContextMessageLimit)
   ));
+  const [selectedAIModelDraft, setSelectedAIModelDraft] = React.useState(selectedAIModel || defaultAIModel);
+  const [selectedRoleIdDraft, setSelectedRoleIdDraft] = React.useState(selectedRoleId);
+  const [codeAgentModeDraft, setCodeAgentModeDraft] = React.useState<CodeAgentMode>('plan');
   const [pendingPremiumModelId, setPendingPremiumModelId] = React.useState<string | null>(null);
   const [premiumConfirmationStep, setPremiumConfirmationStep] = React.useState<1 | 2>(1);
   const pendingPremiumModel = aiModels.find(model => model.id === pendingPremiumModelId);
@@ -162,6 +165,8 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   const askActionIcon = isCodeAgentRoom ? 'lucide:bot' : selectedRole.icon;
   const effectiveCodeAgentMode = codeAgentMaxMode === 'acceptEdits' ? codeAgentMode : 'plan';
   const canSwitchCodeAgentMode = isCodeAgentRoom && codeAgentMaxMode === 'acceptEdits';
+  const appliedAIModelId = selectedAIModel || defaultAIModel;
+  const selectedRoleDraft = roles.find(role => role.id === selectedRoleIdDraft) || selectedRole;
   const codeAgentModeOptions: Array<{ id: CodeAgentMode; label: string; icon: string }> = [
     { id: 'plan', label: t('codeAgentReadOnlyMode'), icon: 'lucide:eye' },
     ...(codeAgentMaxMode === 'acceptEdits'
@@ -187,7 +192,12 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   React.useEffect(() => {
     if (!isSettingsOpen) return;
     setAIContextMessageLimitDraft(normalizeAIContextMessageLimit(aiContextMessageLimit));
-  }, [aiContextMessageLimit, isSettingsOpen]);
+    setSelectedAIModelDraft(appliedAIModelId);
+    setSelectedRoleIdDraft(selectedRoleId);
+    setCodeAgentModeDraft(effectiveCodeAgentMode);
+    setPendingPremiumModelId(null);
+    setPremiumConfirmationStep(1);
+  }, [aiContextMessageLimit, appliedAIModelId, effectiveCodeAgentMode, selectedRoleId, isSettingsOpen]);
 
   const closePremiumConfirmation = () => {
     setPendingPremiumModelId(null);
@@ -195,7 +205,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   };
 
   const requestModelChange = (modelId: string) => {
-    if (modelId === selectedAIModel) return;
+    if (modelId === selectedAIModelDraft) return;
 
     const model = aiModels.find(item => item.id === modelId);
     if (model && isPremiumAIModel(model)) {
@@ -204,7 +214,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
       return;
     }
 
-    onModelChange(modelId);
+    setSelectedAIModelDraft(modelId);
   };
 
   const confirmPremiumModelChange = () => {
@@ -218,7 +228,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
       return;
     }
 
-    onModelChange(pendingPremiumModel.id);
+    setSelectedAIModelDraft(pendingPremiumModel.id);
     closePremiumConfirmation();
   };
 
@@ -226,19 +236,38 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
     setAIContextMessageLimitDraft(normalizeAIContextMessageLimit(event.target.value, MIN_AI_CONTEXT_MESSAGE_LIMIT));
   };
 
-  const handleAIContextMessageLimitApply = () => {
-    const normalizedLimit = normalizeAIContextMessageLimit(aiContextMessageLimitDraft);
-    setAIContextMessageLimitDraft(normalizedLimit);
-    onAIContextMessageLimitChange(normalizedLimit);
-  };
-
-  const aiContextLimitChanged = aiContextMessageLimitDraft !== normalizeAIContextMessageLimit(aiContextMessageLimit);
   const handleCodeAgentModeSelection = (keys: 'all' | Set<React.Key>) => {
     if (keys === 'all') return;
     const selectedKey = Array.from(keys)[0]?.toString();
     if (selectedKey === 'plan' || selectedKey === 'acceptEdits') {
-      onCodeAgentModeChange?.(selectedKey);
+      setCodeAgentModeDraft(selectedKey);
     }
+  };
+  const normalizedAIContextMessageLimitDraft = normalizeAIContextMessageLimit(aiContextMessageLimitDraft);
+  const normalizedAIContextMessageLimit = normalizeAIContextMessageLimit(aiContextMessageLimit);
+  const settingsChanged = (
+    selectedAIModelDraft !== appliedAIModelId
+    || normalizedAIContextMessageLimitDraft !== normalizedAIContextMessageLimit
+    || (!isCodeAgentRoom && selectedRoleIdDraft !== selectedRoleId)
+    || (isCodeAgentRoom && codeAgentModeDraft !== effectiveCodeAgentMode)
+  );
+  const handleSettingsApply = () => {
+    if (!settingsChanged) return;
+
+    if (selectedAIModelDraft !== appliedAIModelId) {
+      onModelChange(selectedAIModelDraft);
+    }
+    if (!isCodeAgentRoom && selectedRoleIdDraft !== selectedRoleId) {
+      onRoleChange(selectedRoleIdDraft);
+    }
+    if (isCodeAgentRoom && codeAgentModeDraft !== effectiveCodeAgentMode && canSwitchCodeAgentMode) {
+      onCodeAgentModeChange?.(codeAgentModeDraft);
+    }
+    if (normalizedAIContextMessageLimitDraft !== normalizedAIContextMessageLimit) {
+      setAIContextMessageLimitDraft(normalizedAIContextMessageLimitDraft);
+      onAIContextMessageLimitChange(normalizedAIContextMessageLimitDraft);
+    }
+    onSettingsClose();
   };
 
   return (
@@ -311,7 +340,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               label={t('selectAIModel')}
               aria-label={t('selectAIModel')}
               data-testid="ai-model-select"
-              selectedKeys={[selectedAIModel || defaultAIModel]}
+              selectedKeys={[selectedAIModelDraft]}
               onSelectionChange={(keys) => {
                 const selectedKey = Array.from(keys)[0]?.toString();
                 if (selectedKey) requestModelChange(selectedKey);
@@ -360,14 +389,14 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
             {isCodeAgentRoom && (
               <div className="space-y-2 rounded-lg border border-[#dedbd0] bg-[#f0eee6] p-3 dark:border-[#30302e] dark:bg-[#242421]">
                 <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[#87867f] dark:text-[#b0aea5]">
-                  <Icon icon={effectiveCodeAgentMode === 'plan' ? 'lucide:eye' : 'lucide:pencil-ruler'} className="h-3.5 w-3.5" aria-hidden="true" />
+                  <Icon icon={codeAgentModeDraft === 'plan' ? 'lucide:eye' : 'lucide:pencil-ruler'} className="h-3.5 w-3.5" aria-hidden="true" />
                   {t('selectCodeAgentMode')}
                 </div>
                 <Select
                   size="sm"
                   aria-label={t('codeAgentModeControl')}
                   data-testid="code-agent-mode-select"
-                  selectedKeys={[effectiveCodeAgentMode]}
+                  selectedKeys={[codeAgentModeDraft]}
                   onSelectionChange={handleCodeAgentModeSelection}
                   isDisabled={!canSwitchCodeAgentMode}
                   classNames={{
@@ -388,7 +417,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                 </Select>
                 <p className="text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">
                   {canSwitchCodeAgentMode
-                    ? (effectiveCodeAgentMode === 'plan' ? t('codeAgentReadOnlyDescription') : t('codeAgentEditDescription'))
+                    ? (codeAgentModeDraft === 'plan' ? t('codeAgentReadOnlyDescription') : t('codeAgentEditDescription'))
                     : t('codeAgentModeLockedDescription')}
                 </p>
               </div>
@@ -398,10 +427,10 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                 size="sm"
                 label={t('selectAIRole')}
                 aria-label={t('selectAIRole')}
-                selectedKeys={[selectedRoleId]}
+                selectedKeys={[selectedRoleIdDraft]}
                 onSelectionChange={(keys) => {
                   const selectedKey = Array.from(keys)[0]?.toString();
-                  if (selectedKey) onRoleChange(selectedKey);
+                  if (selectedKey) setSelectedRoleIdDraft(selectedKey);
                 }}
                 classNames={{
                   trigger: "min-h-11 rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242421] dark:text-[#faf9f5]",
@@ -410,7 +439,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                   popoverContent: "w-52 border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
                   listboxWrapper: "relative max-h-[14rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]",
                 }}
-                startContent={<Icon icon={selectedRole.icon} className="h-4 w-4" />}
+                startContent={<Icon icon={selectedRoleDraft.icon} className="h-4 w-4" />}
               >
                 {roles.map((role) => (
                   <SelectItem
@@ -428,36 +457,23 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                 <Icon icon="lucide:brain-circuit" className="h-3.5 w-3.5" aria-hidden="true" />
                 {t('aiContextLimit')}
               </div>
-              <div className="grid grid-cols-[minmax(0,1fr)_3rem] items-start gap-2">
-                <Input
-                  type="number"
-                  aria-label={t('aiContextLimit')}
-                  description={t('aiContextLimitDescription')}
-                  min={MIN_AI_CONTEXT_MESSAGE_LIMIT}
-                  max={MAX_AI_CONTEXT_MESSAGE_LIMIT}
-                  step={1}
-                  value={String(aiContextMessageLimitDraft)}
-                  onChange={handleAIContextMessageLimitInputChange}
-                  classNames={{ inputWrapper: 'h-11' }}
-                />
-                <HoverTooltip content={t('save')}>
-                  <Button
-                    isIconOnly
-                    aria-label={t('save')}
-                    className="h-11 w-11 min-w-11 rounded-lg bg-[#c96442] text-[#faf9f5]"
-                    isDisabled={!aiContextLimitChanged}
-                    onPress={handleAIContextMessageLimitApply}
-                  >
-                    <Icon icon="lucide:check" className="h-5 w-5" />
-                  </Button>
-                </HoverTooltip>
-              </div>
+              <Input
+                type="number"
+                aria-label={t('aiContextLimit')}
+                description={t('aiContextLimitDescription')}
+                min={MIN_AI_CONTEXT_MESSAGE_LIMIT}
+                max={MAX_AI_CONTEXT_MESSAGE_LIMIT}
+                step={1}
+                value={String(aiContextMessageLimitDraft)}
+                onChange={handleAIContextMessageLimitInputChange}
+                classNames={{ inputWrapper: 'h-11' }}
+              />
             </div>
             {!isCodeAgentRoom && (
               <AIRoleManager
                 roles={roles}
-                selectedRoleId={selectedRoleId}
-                onSelectRole={onRoleChange}
+                selectedRoleId={selectedRoleIdDraft}
+                onSelectRole={setSelectedRoleIdDraft}
                 onAddRole={onAddRole}
                 onUpdateRole={onUpdateRole}
                 onDeleteRole={onDeleteRole}
@@ -465,7 +481,14 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
             )}
           </ModalBody>
           <ModalFooter>
-            <Button variant="light" onPress={onSettingsClose}>{t('close')}</Button>
+            <Button
+              color="secondary"
+              onPress={handleSettingsApply}
+              isDisabled={!settingsChanged}
+              className="bg-[#c96442] text-[#faf9f5]"
+            >
+              {t('apply')}
+            </Button>
           </ModalFooter>
         </ModalContent>
       </Modal>

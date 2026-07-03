@@ -1015,6 +1015,24 @@ describe('room socket handlers', () => {
     assert.equal(io.roomEmits.some(item => item.event === 'room_permissions_invalidated'), true);
   });
 
+  it('rejects Coco access setting updates from administrators', async () => {
+    const { socket, store } = createHarness('client-2');
+    store.rooms[0] = { ...store.rooms[0], type: 'coco' };
+    store.members.add('room-1:client-2');
+    store.memberRoles.set('room-1:client-2', 'admin');
+    let response: unknown;
+
+    await socket.invoke('update_room_settings', {
+      roomId: 'room-1',
+      cocoAccess: 'member',
+    }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.deepEqual(response, { success: false, error: 'Only the room owner can manage Coco access' });
+    assert.equal(store.rooms[0].cocoAccess, undefined);
+  });
+
   it('returns the room without writing or broadcasting for empty settings updates', async () => {
     const { io, socket } = createHarness('client-1');
     let response: unknown;

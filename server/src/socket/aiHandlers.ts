@@ -21,11 +21,12 @@ import {
 } from '../services/messageDomain';
 import { notifyRoomMessageBestEffort } from '../services/pushNotifications';
 import { withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
+import { COCO_ACCESS_DENIED_MESSAGE } from '../services/cocoRoomAccess';
 import type { CocoRunnerMode } from '../services/cocoRunnerProtocol';
 import type { CocoTurnInput } from '../services/cocoSessionService';
 import type { A2UIActionEvent, AIModelOption, Message } from '../types';
 import { hasRoomAccess } from './roomAccess';
-import { authorizeRoomAction, getRoomMessage } from './roomAuthorization';
+import { authorizeRoomAction, buildRoomPermissions, getRoomMessage } from './roomAuthorization';
 import { SocketConnectionContext, SocketHandlerDeps } from './types';
 
 // Upper bound on the AI response length (Anthropic). Raised from 8096 to reduce
@@ -1820,6 +1821,22 @@ export function registerAIHandlers({
 
     const room = await store.getRoomById(data.roomId);
     if (room?.type === 'coco') {
+      const postAuth = await authorizeRoomAction({
+        store,
+        roomId: data.roomId,
+        clientId,
+        action: { type: 'message.post' },
+      });
+      if (!postAuth.ok) {
+        callback?.({ success: false, error: postAuth.message });
+        return;
+      }
+      const permissions = buildRoomPermissions(postAuth.actor, data.roomId, clientId, postAuth.actor.room);
+      if (!permissions.canUseCoco) {
+        callback?.({ success: false, error: COCO_ACCESS_DENIED_MESSAGE });
+        return;
+      }
+
       if (!cocoSessionService) {
         socket.emit('error', { message: 'Coco is unavailable' });
         callback?.({ success: false, error: 'Coco is unavailable' });
@@ -1909,7 +1926,26 @@ export function registerAIHandlers({
       return;
     }
 
-    const roomForAIRequest = await store.getRoomById(data.roomId);
+    const postAuth = await authorizeRoomAction({
+      store,
+      roomId: data.roomId,
+      clientId,
+      action: { type: 'message.post' },
+    });
+    if (!postAuth.ok) {
+      callback?.({ success: false, error: postAuth.message });
+      return;
+    }
+
+    const roomForAIRequest = postAuth.actor.room;
+    if (roomForAIRequest.type === 'coco') {
+      const permissions = buildRoomPermissions(postAuth.actor, data.roomId, clientId, roomForAIRequest);
+      if (!permissions.canUseCoco) {
+        callback?.({ success: false, error: COCO_ACCESS_DENIED_MESSAGE });
+        return;
+      }
+    }
+
     let roomMessages: Message[] = [];
     let replyTo;
     if (data.replyToMessageId) {

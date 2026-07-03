@@ -143,6 +143,11 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   const selectedMode: CodeAgentMode = normalizedAvailableModes.includes(currentRoom.codeAgentMode as CodeAgentMode)
     ? (currentRoom.codeAgentMode as CodeAgentMode)
     : effectiveDefaultMode;
+  const canUseCoco = roomPermissions?.canUseCoco ?? true;
+  const canUseComposer = (roomPermissions?.canPost ?? true) && canUseCoco;
+  const composerRestrictionReason = canUseCoco
+    ? roomPermissions?.postingRestrictionReason
+    : t('cocoAccessDenied');
 
   React.useEffect(() => {
     setReplyToMessage(null);
@@ -457,6 +462,8 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
             presentation="code-agent"
             currentRoom={currentRoom}
             codeAgentMode={selectedMode}
+            codeAgentMaxMode={maxMode}
+            onCodeAgentModeChange={handleCodeAgentModeChange}
             onOpenWorkspaceFile={handleOpenWorkspaceFile}
             onWorkspaceRootChange={setWorkspaceRoot}
             onWorkspaceChangesChange={setWorkspaceChanges}
@@ -528,8 +535,8 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
               onOptimisticMessageFailed={(clientMessageId, error) =>
                 messageListRef.current?.markOptimisticMessageFailed(clientMessageId, error)
               }
-              canPost={roomPermissions?.canPost ?? true}
-              postingRestrictionReason={roomPermissions?.postingRestrictionReason}
+              canPost={canUseComposer}
+              postingRestrictionReason={composerRestrictionReason}
               postingSchedule={currentRoom.postingSchedule}
               isRoomAIProcessing={getCodeAgentStatus(currentRoom) === 'running'}
               isCodeAgentRoom

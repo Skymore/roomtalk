@@ -47,6 +47,8 @@ interface MessageListProps {
   presentation?: 'chat' | 'code-agent';
   currentRoom?: Room;
   codeAgentMode?: CodeAgentMode;
+  codeAgentMaxMode?: CodeAgentMode;
+  onCodeAgentModeChange?: (mode: CodeAgentMode) => void;
   onOpenWorkspaceFile?: (path: string) => void;
   onWorkspaceRootChange?: (workspaceRoot: string | null) => void;
   onWorkspaceChangesChange?: (changes: CodeAgentWorkspaceSnapshot['changes'] | null) => void;
@@ -72,6 +74,8 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   presentation = 'chat',
   currentRoom,
   codeAgentMode = 'plan',
+  codeAgentMaxMode = 'plan',
+  onCodeAgentModeChange,
   onOpenWorkspaceFile,
   onWorkspaceRootChange,
   onWorkspaceChangesChange,
@@ -657,6 +661,8 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
             room={codeAgentRoom}
             messages={messages}
             mode={codeAgentMode}
+            canSwitchMode={codeAgentMaxMode === 'acceptEdits'}
+            onModeChange={onCodeAgentModeChange}
             sessionCostUsd={sessionCostUsd ?? 0}
             workspaceSnapshot={workspaceSnapshot}
             isRefreshingWorkspace={isWorkspaceRefreshing}

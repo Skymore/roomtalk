@@ -1,5 +1,5 @@
 import React from 'react';
-import { Button, Chip, Tab, Tabs } from '@heroui/react';
+import { Button, Tab, Tabs } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 import { formatUsdCost } from '../utils/formatters';
@@ -38,6 +38,8 @@ interface CodeAgentWorkspacePanelProps {
   room: Room;
   messages: Message[];
   mode: CodeAgentMode;
+  canSwitchMode?: boolean;
+  onModeChange?: (mode: CodeAgentMode) => void;
   sessionCostUsd: number;
   workspaceSnapshot?: CodeAgentWorkspaceSnapshot | null;
   isRefreshingWorkspace?: boolean;
@@ -133,6 +135,8 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   room,
   messages,
   mode,
+  canSwitchMode = false,
+  onModeChange,
   sessionCostUsd,
   workspaceSnapshot,
   isRefreshingWorkspace = false,
@@ -311,6 +315,8 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
     { label: t('codeAgentResults'), value: summary.toolResults, icon: 'lucide:list-checks' },
     { label: t('codeAgentErrors'), value: summary.toolErrors, icon: 'lucide:circle-alert' },
   ];
+  const canToggleMode = canSwitchMode && Boolean(onModeChange);
+  const nextMode: CodeAgentMode = isPlanMode ? 'acceptEdits' : 'plan';
 
   return (
     <section
@@ -324,17 +330,26 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
             <h3 className="truncate text-sm font-semibold uppercase tracking-normal text-[#5e5d59] dark:text-[#b0aea5]">
               {t('codeAgentWorkspace')}
             </h3>
-            <Chip
+            <Button
               size="sm"
               variant="flat"
-              startContent={<Icon icon={isPlanMode ? 'lucide:eye' : 'lucide:pencil-ruler'} className="h-3 w-3" />}
-              classNames={{
-                base: 'h-6 border border-[#dedbd0] bg-[#faf9f5] px-1.5 text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242421] dark:text-[#faf9f5]',
-                content: 'px-0 text-[11px] font-semibold',
+              radius="full"
+              aria-label={t('codeAgentModeControl')}
+              title={t('codeAgentModeControl')}
+              data-testid="code-agent-mode-toggle"
+              isDisabled={!canToggleMode}
+              onPress={() => {
+                if (!canToggleMode) return;
+                onModeChange?.(nextMode);
               }}
+              className={`h-6 min-w-0 gap-1 border border-[#dedbd0] bg-[#faf9f5] px-1.5 text-[11px] font-semibold text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242421] dark:text-[#faf9f5] ${
+                canToggleMode ? 'cursor-pointer' : 'cursor-default opacity-100'
+              }`}
             >
+              <Icon icon={isPlanMode ? 'lucide:eye' : 'lucide:pencil-ruler'} className="h-3 w-3 flex-shrink-0" />
               {isPlanMode ? t('codeAgentReadOnlyMode') : t('codeAgentEditMode')}
-            </Chip>
+              {canToggleMode ? <Icon icon="lucide:repeat-2" className="h-3 w-3 flex-shrink-0 opacity-70" /> : null}
+            </Button>
             {onRefreshWorkspace && (
               <Button
                 size="sm"

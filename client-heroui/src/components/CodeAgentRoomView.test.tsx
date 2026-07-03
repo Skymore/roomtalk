@@ -2,7 +2,7 @@
 
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Room } from '../utils/types';
+import { Room, RoomPermissions } from '../utils/types';
 import { CODE_AGENT_FILE_PANEL_WIDTH_CHANGE_EVENT, type CodeAgentFilePanelWidthChangeDetail } from '../utils/codeAgentPanelLayout';
 import type { ReviewCommentContext } from '../utils/codeAgentReviewComments';
 import { CodeAgentRoomView } from './CodeAgentRoomView';
@@ -67,6 +67,8 @@ vi.mock('./MessageInput', () => ({
     codeAgentMode,
     codeAgentMaxMode,
     isCodeAgentRoom,
+    canPost,
+    postingRestrictionReason,
     reviewComments = [],
     onRemoveReviewComment,
     onClearReviewComments,
@@ -74,6 +76,8 @@ vi.mock('./MessageInput', () => ({
     codeAgentMode: string;
     codeAgentMaxMode: string;
     isCodeAgentRoom?: boolean;
+    canPost?: boolean;
+    postingRestrictionReason?: string;
     reviewComments?: readonly ReviewCommentContext[];
     onRemoveReviewComment?: (commentId: string) => void;
     onClearReviewComments?: () => void;
@@ -83,6 +87,8 @@ vi.mock('./MessageInput', () => ({
       data-code-agent-room={String(Boolean(isCodeAgentRoom))}
       data-code-agent-mode={codeAgentMode}
       data-code-agent-max-mode={codeAgentMaxMode}
+      data-can-post={String(Boolean(canPost))}
+      data-posting-restriction-reason={postingRestrictionReason || ''}
       data-review-comments={String(reviewComments.length)}
     >
       {reviewComments.map((comment) => (
@@ -197,6 +203,22 @@ const cocoRoom: Room = {
   cocoStatus: 'idle',
 };
 
+const permissions = (overrides: Partial<RoomPermissions> = {}): RoomPermissions => ({
+  roomId: 'coco-room',
+  clientId: 'client-1',
+  role: 'owner',
+  canPost: true,
+  canEditAnyMessage: true,
+  canDeleteAnyMessage: true,
+  canClearHistory: true,
+  canManageRoom: true,
+  canManageAdmins: true,
+  canManageMembers: true,
+  canTransferOwnership: true,
+  canUseCoco: true,
+  ...overrides,
+});
+
 const dispatchPointer = (
   target: EventTarget,
   type: string,
@@ -216,7 +238,8 @@ const dispatchPointer = (
 const renderCodeAgentRoom = (
   room: Room,
   availableModes: Array<'plan' | 'acceptEdits'> = room.codeAgentMode === 'acceptEdits' ? ['plan', 'acceptEdits'] : ['plan'],
-  defaultMode: 'plan' | 'acceptEdits' = 'plan'
+  defaultMode: 'plan' | 'acceptEdits' = 'plan',
+  roomPermissions: RoomPermissions | null = null,
 ) => render(
   <CodeAgentRoomView
     currentRoom={room}
@@ -237,7 +260,7 @@ const renderCodeAgentRoom = (
     handleClearChatMessages={vi.fn()}
     handleDeleteRoom={vi.fn()}
     handleRenameRoom={vi.fn()}
-    roomPermissions={null}
+    roomPermissions={roomPermissions}
     onRoomUpdated={vi.fn()}
   />
 );
@@ -270,6 +293,17 @@ describe('CodeAgentRoomView', () => {
     expect(screen.getByTestId('file-browser').dataset.sandboxUpdatedAt).toBe('2026-06-30T10:00:00.000Z');
     expect(screen.getByLabelText('codeAgentResizeWorkspaceFiles')).toBeTruthy();
     expect(screen.getByLabelText('codeAgentCollapseWorkspaceFiles')).toBeTruthy();
+  });
+
+  it('disables the composer when room permissions cannot use Coco', () => {
+    renderCodeAgentRoom(cocoRoom, ['plan'], 'plan', permissions({
+      role: 'member',
+      canUseCoco: false,
+    }));
+
+    const input = screen.getByTestId('message-input');
+    expect(input.dataset.canPost).toBe('false');
+    expect(input.dataset.postingRestrictionReason).toBe('cocoAccessDenied');
   });
 
   it('gives desktop and mobile file managers a flex height context', () => {

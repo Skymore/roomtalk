@@ -1,5 +1,8 @@
 import { Message, Room, RoomMember, RoomPermissions, RoomPostingSchedule } from '../types';
 import { RoomStore } from '../repositories/store';
+import { canUseCocoRoom } from '../services/cocoRoomAccess';
+
+export { canUseCocoRoom } from '../services/cocoRoomAccess';
 
 export type RoomActor = {
   room: Room;
@@ -183,12 +186,6 @@ export function buildRoomPermissions(actor: RoomActor | null, roomId: string, cl
   const isOwner = actor?.role === 'owner';
   const isAdmin = actor?.role === 'admin';
 
-  let canUseCoco = false;
-  if (actor && targetRoom?.type === 'coco') {
-    const access = targetRoom.cocoAccess || 'owner';
-    canUseCoco = access === 'member' || (access === 'admin' && (isOwner || isAdmin)) || (access === 'owner' && isOwner);
-  }
-
   return {
     roomId,
     clientId,
@@ -201,7 +198,7 @@ export function buildRoomPermissions(actor: RoomActor | null, roomId: string, cl
     canManageAdmins: Boolean(isOwner),
     canManageMembers: Boolean(isOwner || isAdmin),
     canTransferOwnership: Boolean(isOwner),
-    canUseCoco,
+    canUseCoco: Boolean(actor && targetRoom && canUseCocoRoom(targetRoom, clientId, actor.role)),
     postingRestrictionReason: posting.allowed ? undefined : posting.reason,
   };
 }

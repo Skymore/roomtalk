@@ -50,4 +50,15 @@ describe('RoomCreateModal', () => {
 
     expect(props.onRoomTypeChange).toHaveBeenCalledWith('coco');
   });
+
+  it('uses a full-height mobile modal shell', () => {
+    renderModal(true);
+
+    const dialog = screen.getByRole('dialog');
+
+    expect(dialog.className).toContain('h-[var(--app-height,100dvh)]');
+    expect(dialog.className).toContain('max-h-[var(--app-height,100dvh)]');
+    expect(dialog.className).toContain('rounded-none');
+    expect(dialog.className).toContain('sm:max-w-lg');
+  });
 });

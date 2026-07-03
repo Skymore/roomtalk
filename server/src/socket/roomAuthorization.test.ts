@@ -1,6 +1,6 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
-import { getPostingAvailability } from './roomAuthorization';
+import { canUseCocoRoom, getPostingAvailability } from './roomAuthorization';
 import { Room, RoomPostingSchedule } from '../types';
 
 // 对拍向量:与 client-heroui/src/utils/postingSchedule.test.ts 使用同一组场景
@@ -63,5 +63,37 @@ describe('getPostingAvailability', () => {
     // 客户端向量:12:00 UTC = 08:00 EDT,距开门 1h
     assert.equal(getPostingAvailability(target, mondayUtc('12:00:00')).allowed, false);
     assert.equal(getPostingAvailability(target, mondayUtc('13:00:00')).allowed, true);
+  });
+});
+
+describe('canUseCocoRoom', () => {
+  const cocoRoom = (overrides: Partial<Room> = {}): Room => ({
+    ...room(),
+    type: 'coco',
+    ...overrides,
+  });
+
+  it('defaults Coco access to owner only', () => {
+    const target = cocoRoom();
+
+    assert.equal(canUseCocoRoom(target, 'client-1', 'owner'), true);
+    assert.equal(canUseCocoRoom(target, 'client-2', 'member'), false);
+  });
+
+  it('allows administrators only when Coco access is admin', () => {
+    const target = cocoRoom({ cocoAccess: 'admin' });
+
+    assert.equal(canUseCocoRoom(target, 'client-2', 'admin'), true);
+    assert.equal(canUseCocoRoom(target, 'client-3', 'member'), false);
+  });
+
+  it('allows all room members when Coco access is member', () => {
+    const target = cocoRoom({ cocoAccess: 'member' });
+
+    assert.equal(canUseCocoRoom(target, 'client-2', 'member'), true);
+  });
+
+  it('rejects non-Coco rooms', () => {
+    assert.equal(canUseCocoRoom(room(), 'client-1', 'owner'), false);
   });
 });

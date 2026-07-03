@@ -92,11 +92,20 @@ export const RoomCreateModal: React.FC<RoomCreateModalProps> = ({
   const scheduleReady = !scheduleEnabled || (selectedDays.length > 0 && startTime !== endTime);
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} scrollBehavior="inside" classNames={{ wrapper: 'roomtalk-modal-viewport' }}>
-      <ModalContent>
-        <ModalHeader className="flex flex-col gap-1">{t('createNewRoom')}</ModalHeader>
-        <ModalBody>
-          <div className={`grid gap-2 ${isCocoEnabled ? 'grid-cols-2' : 'grid-cols-1'}`} role="radiogroup" aria-label={t('roomType')}>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      size="lg"
+      scrollBehavior="inside"
+      placement="auto"
+      classNames={{ wrapper: 'roomtalk-modal-viewport' }}
+    >
+      <ModalContent className="m-0 h-[var(--app-height,100dvh)] max-h-[var(--app-height,100dvh)] w-full max-w-full rounded-none sm:mx-6 sm:my-16 sm:h-auto sm:max-h-[85dvh] sm:max-w-lg sm:rounded-large">
+        <ModalHeader className="flex flex-col gap-1 px-4 pb-3 pt-[max(env(safe-area-inset-top),1rem)] sm:px-6 sm:pt-4">
+          {t('createNewRoom')}
+        </ModalHeader>
+        <ModalBody className="min-h-0 flex-1 px-4 pb-4 pt-0 sm:px-6">
+          <div className={`grid gap-2 ${isCocoEnabled ? 'grid-cols-1 min-[420px]:grid-cols-2' : 'grid-cols-1'}`} role="radiogroup" aria-label={t('roomType')}>
             {([
               { type: 'chat' as const, icon: 'lucide:message-circle', label: t('chatRoomType'), description: t('chatRoomDescription') },
               ...(isCocoEnabled ? [{ type: 'coco' as const, icon: 'lucide:terminal-square', label: t('cocoRoomType'), description: t('cocoRoomDescription') }] : []),
@@ -108,7 +117,7 @@ export const RoomCreateModal: React.FC<RoomCreateModalProps> = ({
                   type="button"
                   variant={isSelected ? 'flat' : 'bordered'}
                   color={isSelected ? 'secondary' : 'default'}
-                  className={`h-auto min-h-20 justify-start rounded-lg border px-3 py-3 text-left ${
+                  className={`h-auto min-h-20 justify-start whitespace-normal rounded-lg border px-3 py-3 text-left ${
                     isSelected
                       ? 'border-[#c96442] bg-[#f3d8ca] text-[#7f3f29] dark:bg-[#44271f] dark:text-[#faf9f5]'
                       : 'border-[#dedbd0] bg-transparent text-[#4d4c48] dark:border-[#30302e] dark:text-[#b0aea5]'
@@ -120,7 +129,7 @@ export const RoomCreateModal: React.FC<RoomCreateModalProps> = ({
                 >
                   <span className="flex min-w-0 flex-col">
                     <span className="text-sm font-semibold">{option.label}</span>
-                    <span className="mt-1 line-clamp-2 text-xs opacity-75">{option.description}</span>
+                    <span className="mt-1 whitespace-normal text-xs leading-5 opacity-75">{option.description}</span>
                   </span>
                 </Button>
               );
@@ -176,7 +185,7 @@ export const RoomCreateModal: React.FC<RoomCreateModalProps> = ({
             />
           </div>
         </ModalBody>
-        <ModalFooter>
+        <ModalFooter className="border-t border-[#dedbd0] px-4 pb-[max(env(safe-area-inset-bottom),1rem)] pt-3 dark:border-[#30302e] sm:border-t-0 sm:px-6 sm:pb-4">
           <Button variant="flat" onPress={onClose} isDisabled={isCreating}>
             {t('cancel')}
           </Button>

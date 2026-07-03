@@ -991,6 +991,12 @@ export function registerRoomHandlers({
       return;
     }
 
+    const hasCocoAccessUpdate = Object.prototype.hasOwnProperty.call(data || {}, 'cocoAccess');
+    if (hasCocoAccessUpdate && auth.actor.role !== 'owner') {
+      callback?.({ success: false, error: 'Only the room owner can manage Coco access' });
+      return;
+    }
+
     try {
       const updates: Parameters<typeof store.updateRoomSettings>[1] = {};
       if (typeof data.password === 'string' && data.password.trim()) {

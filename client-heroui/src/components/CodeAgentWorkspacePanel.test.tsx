@@ -114,6 +114,24 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(screen.getByText('codeAgentNoArtifacts')).toBeTruthy();
   });
 
+  it('toggles run mode from the workspace header when switching is available', () => {
+    const onModeChange = vi.fn();
+    render(
+      <CodeAgentWorkspacePanel
+        room={room}
+        messages={[]}
+        mode="plan"
+        canSwitchMode
+        onModeChange={onModeChange}
+        sessionCostUsd={0}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId('code-agent-mode-toggle'));
+
+    expect(onModeChange).toHaveBeenCalledWith('acceptEdits');
+  });
+
   it('keeps workspace tabs horizontally scrollable on narrow screens', () => {
     render(
       <CodeAgentWorkspacePanel

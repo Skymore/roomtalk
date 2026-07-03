@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../logger';
 import { RoomStore } from '../repositories/store';
-import { AIModelOption, Message, Room } from '../types';
+import { AIModelOption, Message, Room, RoomMemberRole } from '../types';
 import { calculateAICost, getMessageAIModel } from './aiModels';
 import { CocoSandboxLifecycleService, EnsureCocoSandboxResult } from './cocoSandboxLifecycle';
 import { CocoSandboxService, CocoRunnerProcess } from './cocoSandboxService';
@@ -14,6 +14,7 @@ import { CocoModelGateway } from './cocoModelGateway';
 import { buildCocoPriorMessages } from './cocoTranscript';
 import { PublishedStaticSiteService } from './publishedStaticSite';
 import { ObservabilityEventInput, ObservabilityEventRecorder } from './observabilityEvents';
+import { canUseCocoRoom, COCO_ACCESS_DENIED_MESSAGE } from './cocoRoomAccess';
 
 export interface CocoRoomEmitter {
   to(roomId: string): {
@@ -415,22 +416,15 @@ export class CocoSessionService {
     });
   }
 
-  private validateRoom(room: Room | null, clientId: string, memberRole?: string): CocoTurnAck {
+  private validateRoom(room: Room | null, clientId: string, memberRole?: RoomMemberRole): CocoTurnAck {
     if (!room) {
       return { success: false, error: 'Room not found' };
     }
     if (room.type !== 'coco') {
       return { success: false, error: 'Room is not a Coco room' };
     }
-    const access = room.cocoAccess || 'owner';
-    if (access === 'owner') {
-      if (room.creatorId !== clientId) {
-        return { success: false, error: 'You do not have access to this Coco room' };
-      }
-    } else if (access === 'admin') {
-      if (room.creatorId !== clientId && memberRole !== 'admin') {
-        return { success: false, error: 'You do not have access to this Coco room' };
-      }
+    if (!canUseCocoRoom(room, clientId, memberRole)) {
+      return { success: false, error: COCO_ACCESS_DENIED_MESSAGE };
     }
     return { success: true };
   }
