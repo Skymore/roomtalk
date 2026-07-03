@@ -2,11 +2,16 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  CODE_AGENT_BRANCH_RANGE_REVIEW_SECTION_ID,
+  CODE_AGENT_WORKING_TREE_REVIEW_SECTION_ID,
   clearCodeAgentDiffFile,
+  getCodeAgentDiffReviewSectionId,
+  getCodeAgentDiffScopeForReviewSectionId,
   readCodeAgentDiffPanelSelection,
   resetCodeAgentDiffPanelStoreForTests,
   selectCodeAgentDiffBranchBaseRef,
   selectCodeAgentDiffFile,
+  selectCodeAgentDiffReviewSection,
   selectCodeAgentDiffScope,
 } from './codeAgentDiffPanelStore';
 
@@ -72,6 +77,34 @@ describe('codeAgentDiffPanelStore', () => {
       filePath: null,
       revealRequestId: 0,
     });
+  });
+
+  it('maps review section selection onto the existing diff scope state', () => {
+    selectCodeAgentDiffBranchBaseRef('room-1', 'origin/main');
+
+    expect(getCodeAgentDiffScopeForReviewSectionId(CODE_AGENT_BRANCH_RANGE_REVIEW_SECTION_ID)).toBe('branch');
+    expect(getCodeAgentDiffScopeForReviewSectionId(CODE_AGENT_WORKING_TREE_REVIEW_SECTION_ID)).toBe('unstaged');
+
+    selectCodeAgentDiffReviewSection('room-1', CODE_AGENT_WORKING_TREE_REVIEW_SECTION_ID);
+
+    const workingTreeSelection = readCodeAgentDiffPanelSelection('room-1');
+    expect(workingTreeSelection).toEqual({
+      kind: 'unstaged',
+      filePath: null,
+      revealRequestId: 0,
+    });
+    expect(getCodeAgentDiffReviewSectionId(workingTreeSelection)).toBe(CODE_AGENT_WORKING_TREE_REVIEW_SECTION_ID);
+
+    selectCodeAgentDiffReviewSection('room-1', CODE_AGENT_BRANCH_RANGE_REVIEW_SECTION_ID);
+
+    const branchSelection = readCodeAgentDiffPanelSelection('room-1');
+    expect(branchSelection).toEqual({
+      kind: 'branch',
+      baseRef: 'origin/main',
+      filePath: null,
+      revealRequestId: 0,
+    });
+    expect(getCodeAgentDiffReviewSectionId(branchSelection)).toBe(CODE_AGENT_BRANCH_RANGE_REVIEW_SECTION_ID);
   });
 
   it('clears selected file without changing the current diff scope', () => {

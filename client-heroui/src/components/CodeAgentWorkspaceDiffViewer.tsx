@@ -6,10 +6,15 @@ import { useTranslation } from 'react-i18next';
 import { loadCodeAgentWorkspaceDiff, loadCodeAgentWorkspaceRefs, type CodeAgentWorkspaceDiff, type CodeAgentWorkspaceDiffScope, type CodeAgentWorkspaceRefs } from '../utils/cocoWorkspace';
 import { buildCodeAgentBaseRefChoices, filterCodeAgentBaseRefChoices, type CodeAgentBaseRefChoice } from '../utils/codeWorkspaceRefs';
 import {
+  getCodeAgentDiffReviewSectionId,
+  selectCodeAgentDiffReviewSection,
   selectCodeAgentDiffBranchBaseRef,
-  selectCodeAgentDiffScope,
   useCodeAgentDiffPanelSelection,
 } from '../utils/codeAgentDiffPanelStore';
+import {
+  buildCodeAgentReviewSections,
+  type CodeAgentReviewSectionItem,
+} from '../utils/codeAgentReviewSections';
 import {
   getValidExplicitCodeAgentDiffFileKeys,
   removeCodeAgentDiffFileKey,
@@ -188,10 +193,7 @@ const DIFF_PANEL_UNSAFE_CSS = `
 }
 `;
 
-interface ScopedWorkspaceDiff {
-  scopeKey: string;
-  diff: CodeAgentWorkspaceDiff;
-}
+type ScopedWorkspaceDiffCache = Record<string, CodeAgentWorkspaceDiff>;
 
 interface ScopedWorkspaceRefs {
   scopeKey: string;
@@ -354,7 +356,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
 }) => {
   const { t } = useTranslation();
   const resolvedTheme = useResolvedTheme();
-  const [diffState, setDiffState] = useState<ScopedWorkspaceDiff | null>(null);
+  const [diffStateByScopeKey, setDiffStateByScopeKey] = useState<ScopedWorkspaceDiffCache>({});
   const [error, setError] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
   const [wordWrap, setWordWrap] = useState(readInitialDiffWordWrap);
@@ -366,7 +368,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   const diffScope: CodeAgentWorkspaceDiffScope = diffPanelSelection.kind === 'unstaged' ? 'unstaged' : 'branch';
   const diffBaseRef = diffPanelSelection.kind === 'branch' ? diffPanelSelection.baseRef : null;
   const diffContentScopeKey = `${roomId}:${refreshKey}:${diffIgnoreWhitespace ? 'ignore-whitespace' : 'all-whitespace'}:${diffScope}:${diffScope === 'branch' ? diffBaseRef ?? 'auto' : 'working-tree'}`;
-  const diff = diffState?.scopeKey === diffContentScopeKey ? diffState.diff : null;
+  const diff = diffStateByScopeKey[diffContentScopeKey] ?? null;
   const [baseRefQuery, setBaseRefQuery] = useState('');
   const baseRefRequestQuery = baseRefQuery.trim();
   const workspaceRefsScopeKey = `${roomId}:${refreshKey}:${diffScope}:${baseRefRequestQuery}`;
@@ -392,10 +394,30 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   const ignoreWhitespaceLabel = t(diffIgnoreWhitespace ? 'codeAgentShowWhitespaceChanges' : 'codeAgentHideWhitespaceChanges');
   const refreshDiffLabel = t('codeAgentRefreshWorkspaceDiff');
   const isDiffRefreshPending = isPending || isWorkspaceRefsPending;
-  const diffScopeLabel = t(diffScope === 'unstaged' ? 'codeAgentDiffScopeWorkingTree' : 'codeAgentDiffScopeBranch');
   const loadingDiffLabel = t(diffScope === 'unstaged' ? 'codeAgentLoadingWorkingTreeDiff' : 'codeAgentLoadingBranchDiff');
   const diffHeadRefLabel = diff?.headRef || workspaceRefs?.headRef || 'HEAD';
   const diffBaseRefLabel = diff?.baseRef || diffBaseRef || t('codeAgentDiffBaseRefAutomatic');
+  const reviewSections = useMemo(() => buildCodeAgentReviewSections({
+    selection: diffPanelSelection,
+    diff,
+    refs: workspaceRefs,
+    isDiffPending: isPending,
+    isRefsPending: isWorkspaceRefsPending,
+  }), [diff, diffPanelSelection, isPending, isWorkspaceRefsPending, workspaceRefs]);
+  const selectedReviewSectionId = getCodeAgentDiffReviewSectionId(diffPanelSelection);
+  const selectedReviewSection = reviewSections.find((section) => section.id === selectedReviewSectionId) ?? reviewSections[0]!;
+  const getReviewSectionLabel = useCallback((section: CodeAgentReviewSectionItem) => (
+    t(section.kind === 'working-tree'
+      ? 'codeAgentReviewSectionWorkingTree'
+      : 'codeAgentReviewSectionBranchRange')
+  ), [t]);
+  const getReviewSectionSubtitle = useCallback((section: CodeAgentReviewSectionItem) => (
+    section.kind === 'working-tree'
+      ? t('codeAgentReviewSectionWorkingTreeSubtitle')
+      : `${section.headRef || diffHeadRefLabel} -> ${section.baseRef || t('codeAgentDiffBaseRefAutomatic')}`
+  ), [diffHeadRefLabel, t]);
+  const selectedReviewSectionLabel = getReviewSectionLabel(selectedReviewSection);
+  const selectedReviewSectionSubtitle = getReviewSectionSubtitle(selectedReviewSection);
   const hasNoNetChanges = Boolean(diff?.available && diff.patch.trim().length === 0);
   const emptyPatchLabel = t(hasNoNetChanges ? 'codeAgentNoNetWorkspaceChanges' : 'codeAgentNoWorkspacePatch');
   const diffReviewCommentScopeKey = `${roomId}:${diffScope}:${diffScope === 'branch' ? diffBaseRef ?? 'auto' : 'working-tree'}`;
@@ -407,6 +429,10 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     setWorkspaceRefsState(null);
     setWorkspaceRefsErrorState(null);
   }, [roomId]);
+
+  useEffect(() => {
+    setDiffStateByScopeKey({});
+  }, [refreshKey, roomId]);
 
   const selectDiffRenderMode = (nextMode: DiffRenderMode) => {
     setDiffRenderMode(nextMode);
@@ -484,9 +510,9 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     }
   }, []);
 
-  const selectDiffScope = (nextScope: CodeAgentWorkspaceDiffScope) => {
-    selectCodeAgentDiffScope(roomId, nextScope);
-  };
+  const selectReviewSection = useCallback((sectionId: CodeAgentReviewSectionItem['id']) => {
+    selectCodeAgentDiffReviewSection(roomId, sectionId);
+  }, [roomId]);
 
   const selectDiffBaseRef = useCallback((nextBaseRef: string | null) => {
     setBaseRefQuery('');
@@ -655,10 +681,10 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     }).then(
       (nextDiff) => {
         if (!controller.signal.aborted) {
-          setDiffState({
-            scopeKey: diffContentScopeKey,
-            diff: nextDiff,
-          });
+          setDiffStateByScopeKey((current) => ({
+            ...current,
+            [diffContentScopeKey]: nextDiff,
+          }));
         }
       },
       (nextError) => {
@@ -760,6 +786,14 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
       { additions: 0, deletions: 0 },
     )
   ), [diffFileSummaries]);
+  const mobileReviewSummaryTitle = diffFileSummaries.length > 0
+    ? t('codeAgentReviewFilesChanged')
+    : selectedReviewSectionLabel;
+  const mobileReviewSummarySubtitle = diffFileSummaries.length > 0
+    ? selectedReviewSectionLabel
+    : selectedReviewSectionSubtitle;
+  const showMobileReviewStats = diffFileSummaries.length > 0
+    && (mobileDiffSummary.additions !== 0 || mobileDiffSummary.deletions !== 0);
 
   useEffect(() => {
     onFileSummariesChange?.(diffFileSummaries);
@@ -831,14 +865,14 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   const controlClusterGap = mobileLayout ? 'gap-2' : 'gap-1.5';
   const controlIconClassName = mobileLayout ? 'h-4 w-4' : 'h-3.5 w-3.5';
   const diffScopeSummaryClassName = mobileLayout
-    ? 'inline-flex h-9 max-w-[11rem] cursor-pointer list-none items-center gap-2 rounded-lg border border-[#dedbd0] bg-[#faf9f5] px-3 text-sm font-semibold text-[#141413] transition-colors hover:bg-[#f0eee6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:hover:bg-[#30302e] [&::-webkit-details-marker]:hidden'
-    : 'inline-flex h-7 max-w-40 cursor-pointer list-none items-center gap-1 rounded-md border border-[#dedbd0] bg-[#faf9f5] px-2 text-xs font-medium text-[#141413] transition-colors hover:bg-[#f0eee6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:hover:bg-[#30302e] [&::-webkit-details-marker]:hidden';
+    ? 'inline-flex h-9 max-w-[14rem] cursor-pointer list-none items-center gap-2 rounded-lg border border-[#dedbd0] bg-[#faf9f5] px-3 text-sm font-semibold text-[#141413] transition-colors hover:bg-[#f0eee6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:hover:bg-[#30302e] [&::-webkit-details-marker]:hidden'
+    : 'inline-flex h-7 max-w-52 cursor-pointer list-none items-center gap-1 rounded-md border border-[#dedbd0] bg-[#faf9f5] px-2 text-xs font-medium text-[#141413] transition-colors hover:bg-[#f0eee6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:hover:bg-[#30302e] [&::-webkit-details-marker]:hidden';
   const diffScopeMenuClassName = mobileLayout
-    ? 'absolute left-0 top-10 z-50 w-56 rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-1 shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]'
-    : 'absolute left-0 top-8 z-50 w-52 rounded-md border border-[#dedbd0] bg-[#faf9f5] p-1 shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]';
+    ? 'absolute left-0 top-10 z-50 w-72 rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-1 shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]'
+    : 'absolute left-0 top-8 z-50 w-64 rounded-md border border-[#dedbd0] bg-[#faf9f5] p-1 shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]';
   const diffScopeMenuItemClassName = mobileLayout
-    ? 'flex h-10 w-full items-center gap-2 rounded-md px-3 text-left text-sm text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]'
-    : 'flex h-8 w-full items-center gap-2 rounded px-2 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]';
+    ? 'flex min-h-14 w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]'
+    : 'flex min-h-12 w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]';
   const diffBaseRefSummaryClassName = mobileLayout
     ? 'inline-flex h-9 max-w-[10rem] cursor-pointer list-none items-center gap-2 rounded-lg border border-[#dedbd0] bg-[#faf9f5] px-3 text-sm font-semibold text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] [&::-webkit-details-marker]:hidden'
     : 'inline-flex h-7 max-w-32 cursor-pointer list-none items-center gap-1 rounded-md px-1.5 text-xs font-medium text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] [&::-webkit-details-marker]:hidden';
@@ -880,24 +914,54 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   const diffBaseRefChevronClassName = `${controlIconClassName} shrink-0 text-[#87867f] transition-transform dark:text-[#8f8d86] ${
     mobileDiffToolbarMenuKind === 'baseRef' ? 'rotate-180' : 'group-open:rotate-180'
   }`;
-  const diffScopeMenuContent = ([
-    ['branch', t('codeAgentDiffScopeBranch')],
-    ['unstaged', t('codeAgentDiffScopeWorkingTree')],
-  ] as const).map(([scope, label]) => (
+  const diffScopeSectionItems = reviewSections.map((section) => (
     <button
-      key={scope}
+      key={section.id}
       type="button"
       className={diffScopeMenuItemClassName}
       role="menuitem"
       onClick={() => {
-        selectDiffScope(scope);
+        selectReviewSection(section.id);
         closeDiffToolbarMenus();
       }}
     >
-      <span className="min-w-0 flex-1 truncate">{label}</span>
-      {diffScope === scope ? <Check className="h-3.5 w-3.5 shrink-0 text-[#9f462c] dark:text-[#ffb197]" /> : null}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-semibold">{getReviewSectionLabel(section)}</span>
+        <span className="block truncate text-[11px] font-normal text-[#87867f] dark:text-[#8f8d86]">
+          {getReviewSectionSubtitle(section)}
+        </span>
+      </span>
+      {section.selected ? <Check className="h-3.5 w-3.5 shrink-0 text-[#9f462c] dark:text-[#ffb197]" /> : null}
     </button>
   ));
+  const diffScopeMenuContent = (
+    <>
+      {diffScopeSectionItems}
+      {mobileLayout ? (
+        <>
+          <div className="my-1 h-px bg-[#dedbd0] dark:bg-[#30302e]" role="separator" />
+          <button
+            type="button"
+            className={`${diffScopeMenuItemClassName} disabled:cursor-wait disabled:opacity-60`}
+            disabled={isDiffRefreshPending}
+            role="menuitem"
+            onClick={() => {
+              refreshDiff();
+              closeDiffToolbarMenus();
+            }}
+          >
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-semibold">{t('codeAgentRefreshCurrentDiff')}</span>
+              <span className="block truncate text-[11px] font-normal text-[#87867f] dark:text-[#8f8d86]">
+                {selectedReviewSectionLabel}
+              </span>
+            </span>
+            <RefreshCw className={`${controlIconClassName} shrink-0 text-[#87867f] dark:text-[#8f8d86] ${isDiffRefreshPending ? 'animate-spin' : ''}`} />
+          </button>
+        </>
+      ) : null}
+    </>
+  );
   const diffBaseRefMenuContent = (
     <>
       <div className="px-3 pt-2.5">
@@ -1045,7 +1109,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
               <button
                 ref={mobileDiffScopeButtonRef}
                 type="button"
-                aria-label={`${t('codeAgentDiffScope')}: ${diffScopeLabel}`}
+                aria-label={`${t('codeAgentReviewSection')}: ${selectedReviewSectionLabel}`}
                 aria-haspopup="menu"
                 aria-expanded={mobileDiffToolbarMenuKind === 'scope'}
                 className={diffScopeSummaryClassName}
@@ -1054,10 +1118,11 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                     closeDiffToolbarMenus();
                     return;
                   }
-                  openMobileDiffToolbarMenu('scope', event.currentTarget, 224);
+                  openMobileDiffToolbarMenu('scope', event.currentTarget, 288);
                 }}
+                title={selectedReviewSectionSubtitle}
               >
-                <span className="truncate">{diffScopeLabel}</span>
+                <span className="truncate">{selectedReviewSectionLabel}</span>
                 <ChevronDown className={diffScopeChevronClassName} />
               </button>
             ) : (
@@ -1067,10 +1132,11 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                 onToggle={handleDiffScopeMenuToggle}
               >
                 <summary
-                  aria-label={`${t('codeAgentDiffScope')}: ${diffScopeLabel}`}
+                  aria-label={`${t('codeAgentReviewSection')}: ${selectedReviewSectionLabel}`}
                   className={diffScopeSummaryClassName}
+                  title={selectedReviewSectionSubtitle}
                 >
-                  <span className="truncate">{diffScopeLabel}</span>
+                  <span className="truncate">{selectedReviewSectionLabel}</span>
                   <ChevronDown className={diffScopeChevronClassName} />
                 </summary>
                 <div className={diffScopeMenuClassName} role="menu">
@@ -1192,35 +1258,36 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
       className="flex min-w-0 flex-1 flex-col items-stretch gap-1"
       data-testid="code-agent-mobile-workspace-diff-header"
     >
-      {diffFileSummaries.length > 0 || reviewComments.length > 0 ? (
-        <div
-          className="flex min-h-5 min-w-0 items-center gap-2 px-0.5 text-[11px] leading-5 text-[#87867f] dark:text-[#8f8d86]"
-          data-testid="code-agent-mobile-workspace-diff-summary-row"
-        >
-          {diffFileSummaries.length > 0 ? (
-            <>
-              <span className="min-w-0 truncate font-semibold text-[#4d4c48] dark:text-[#e8e6dc]">
-                {t('codeAgentChangedFilesCount', { count: diffFileSummaries.length })}
-              </span>
-              <CodeAgentDiffStatLabel
-                additions={mobileDiffSummary.additions}
-                deletions={mobileDiffSummary.deletions}
-                className="shrink-0 text-[11px]"
-                layout="inline"
-              />
-            </>
-          ) : null}
-          {reviewComments.length > 0 ? (
-            <span
-              className="ml-auto shrink-0 rounded-full border border-[#ead6cc] bg-[#fff7f2] px-1.5 py-px text-[10px] font-semibold leading-none text-[#9f462c] dark:border-[#4a3027] dark:bg-[#2a211d] dark:text-[#ffb197]"
-              data-count={reviewComments.length}
-              data-testid="code-agent-mobile-workspace-diff-pending-review-count"
-            >
-              {t('codeAgentPendingReviewCommentCount', { count: reviewComments.length })}
-            </span>
-          ) : null}
+      <div
+        className="flex min-h-8 min-w-0 items-center gap-2 px-0.5 text-[11px] leading-4 text-[#87867f] dark:text-[#8f8d86]"
+        data-testid="code-agent-mobile-workspace-diff-summary-row"
+      >
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-xs font-semibold leading-4 text-[#4d4c48] dark:text-[#e8e6dc]">
+            {mobileReviewSummaryTitle}
+          </div>
+          <div className="truncate">
+            {mobileReviewSummarySubtitle}
+          </div>
         </div>
-      ) : null}
+        {showMobileReviewStats ? (
+          <CodeAgentDiffStatLabel
+            additions={mobileDiffSummary.additions}
+            deletions={mobileDiffSummary.deletions}
+            className="shrink-0 text-[11px]"
+            layout="inline"
+          />
+        ) : null}
+        {reviewComments.length > 0 ? (
+          <span
+            className="shrink-0 rounded-full border border-[#ead6cc] bg-[#fff7f2] px-1.5 py-px text-[10px] font-semibold leading-none text-[#9f462c] dark:border-[#4a3027] dark:bg-[#2a211d] dark:text-[#ffb197]"
+            data-count={reviewComments.length}
+            data-testid="code-agent-mobile-workspace-diff-pending-review-count"
+          >
+            {t('codeAgentPendingReviewCommentCount', { count: reviewComments.length })}
+          </span>
+        ) : null}
+      </div>
       <div
         className="-mx-2 flex min-w-0 overflow-x-auto px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         data-testid="code-agent-mobile-workspace-diff-controls-row"

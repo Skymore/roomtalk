@@ -5,6 +5,12 @@ export type CodeAgentDiffPanelSelection =
   | { kind: 'branch'; baseRef: string | null; filePath: string | null; revealRequestId: number }
   | { kind: 'unstaged'; filePath: string | null; revealRequestId: number };
 
+export const CODE_AGENT_BRANCH_RANGE_REVIEW_SECTION_ID = 'git:branch-range';
+export const CODE_AGENT_WORKING_TREE_REVIEW_SECTION_ID = 'git:working-tree';
+export type CodeAgentDiffReviewSectionId =
+  | typeof CODE_AGENT_BRANCH_RANGE_REVIEW_SECTION_ID
+  | typeof CODE_AGENT_WORKING_TREE_REVIEW_SECTION_ID;
+
 interface CodeAgentDiffPanelStoreState {
   byRoomId: Record<string, CodeAgentDiffPanelSelection>;
   branchBaseRefByRoomId: Record<string, string | null>;
@@ -250,6 +256,27 @@ export function selectCodeAgentDiffScope(roomId: string, scope: CodeAgentWorkspa
         : state.branchBaseRefByRoomId,
     };
   });
+}
+
+export function getCodeAgentDiffReviewSectionId(
+  selection: CodeAgentDiffPanelSelection,
+): CodeAgentDiffReviewSectionId {
+  return selection.kind === 'unstaged'
+    ? CODE_AGENT_WORKING_TREE_REVIEW_SECTION_ID
+    : CODE_AGENT_BRANCH_RANGE_REVIEW_SECTION_ID;
+}
+
+export function getCodeAgentDiffScopeForReviewSectionId(
+  sectionId: CodeAgentDiffReviewSectionId,
+): CodeAgentWorkspaceDiffScope {
+  return sectionId === CODE_AGENT_WORKING_TREE_REVIEW_SECTION_ID ? 'unstaged' : 'branch';
+}
+
+export function selectCodeAgentDiffReviewSection(
+  roomId: string,
+  sectionId: CodeAgentDiffReviewSectionId,
+) {
+  selectCodeAgentDiffScope(roomId, getCodeAgentDiffScopeForReviewSectionId(sectionId));
 }
 
 export function selectCodeAgentDiffBranchBaseRef(roomId: string, baseRef: string | null) {
