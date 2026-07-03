@@ -174,8 +174,60 @@ export class Logger {
   debug(message: string, meta?: any): void {
     logger.debug({ message, meta, context: this.context });
   }
+
+  private summarizeContentForLog(content: unknown): Record<string, unknown> {
+    if (typeof content === 'string') {
+      return {
+        hasContent: content.length > 0,
+        contentLength: content.length,
+      };
+    }
+
+    if (content === undefined || content === null) {
+      return {
+        hasContent: false,
+        contentLength: 0,
+      };
+    }
+
+    try {
+      return {
+        hasContent: true,
+        contentLength: JSON.stringify(content, errorAwareReplacer).length,
+        contentType: Array.isArray(content) ? 'array' : typeof content,
+      };
+    } catch {
+      return {
+        hasContent: true,
+        contentType: typeof content,
+      };
+    }
+  }
+
+  private formatReplyReferenceForLog(replyTo: any): any {
+    if (typeof replyTo !== 'object' || replyTo === null) {
+      return replyTo;
+    }
+
+    const logReplyTo = { ...replyTo };
+    if ('preview' in logReplyTo) {
+      const previewSummary = this.summarizeContentForLog(logReplyTo.preview);
+      delete logReplyTo.preview;
+      logReplyTo.hasPreview = previewSummary.hasContent;
+      logReplyTo.previewLength = previewSummary.contentLength;
+    }
+    if (logReplyTo.mediaAsset) {
+      logReplyTo.mediaAsset = {
+        id: logReplyTo.mediaAsset.id,
+        kind: logReplyTo.mediaAsset.kind,
+        mimeType: logReplyTo.mediaAsset.mimeType,
+        byteSize: logReplyTo.mediaAsset.byteSize,
+      };
+    }
+    return logReplyTo;
+  }
   
-  // 格式化消息对象，避免记录过大的内容
+  // 格式化消息对象，避免把对话正文或媒体正文写进日志
   formatMessageForLog(message: any): any {
     // 如果不是对象，直接返回
     if (typeof message !== 'object' || message === null) {
@@ -184,10 +236,17 @@ export class Logger {
     
     // 创建消息对象的副本，避免修改原始数据
     const logMessage = { ...message };
-    
+
+    if ('content' in logMessage) {
+      Object.assign(logMessage, this.summarizeContentForLog(logMessage.content));
+      delete logMessage.content;
+    }
+    if (logMessage.replyTo) {
+      logMessage.replyTo = this.formatReplyReferenceForLog(logMessage.replyTo);
+    }
+
     // Media payloads live in object storage; logs keep only metadata.
     if (logMessage.messageType === 'media') {
-      logMessage.content = logMessage.content ? '[MEDIA_CAPTION]' : '';
       if (logMessage.mediaAsset) {
         logMessage.mediaAsset = {
           id: logMessage.mediaAsset.id,
