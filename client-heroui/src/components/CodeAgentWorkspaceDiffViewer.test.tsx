@@ -1225,7 +1225,7 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(within(file).queryByText('codeAgentLoadDiff')).toBeNull();
   });
 
-  it('suppresses large diff files until they are explicitly loaded like T3', async () => {
+  it('suppresses large diff files until they are explicitly loaded', async () => {
     loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
       available: true,
       patch: 'diff --git a/src/big.ts b/src/big.ts\n',
@@ -1257,13 +1257,12 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(file.getAttribute('data-collapsed')).toBe('true');
     const expandButton = within(file).getByLabelText('codeAgentExpandDiffFile') as HTMLButtonElement;
     expect(expandButton.disabled).toBe(false);
-    const suppression = within(file).getByTestId('code-agent-diff-file-suppression-load');
-    expect(suppression.textContent).toContain('codeAgentLargeDiffSuppressedMessage');
-    expect(suppression.textContent).toContain('codeAgentLoadDiff');
-    expect(suppression.getAttribute('title')).toBe('codeAgentLargeDiffSuppressedMessage');
+    expect(within(file).queryByTestId('code-agent-diff-file-suppression-load')).toBeNull();
     const notice = within(file).getByTestId('code-agent-diff-file-suppression-notice');
     expect(notice.textContent).toContain('codeAgentLargeDiffSuppressedMessage');
+    expect(notice.textContent).toContain('codeAgentLoadDiff');
     expect(notice.getAttribute('title')).toBe('codeAgentLargeDiffSuppressedMessage');
+    expect(within(file).getAllByText('codeAgentLargeDiffSuppressedMessage')).toHaveLength(1);
 
     fireEvent.click(expandButton);
 

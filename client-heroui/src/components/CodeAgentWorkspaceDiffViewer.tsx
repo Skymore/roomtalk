@@ -1400,7 +1400,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                   >
                     <Check className={diffFileHeaderViewedIconClassName} />
                   </button>
-                  {suppression && canLoadSuppressedDiff ? (
+                  {mobileLayout && suppression && canLoadSuppressedDiff ? (
                     <button
                       type="button"
                       className={`${diffFileSuppressionPillClassName} cursor-pointer bg-[#f0eee6] text-[#5e5d59] transition-colors hover:bg-[#ead6cc] hover:text-[#9f462c] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:bg-[#30302e] dark:text-[#b0aea5] dark:hover:bg-[#3b332f] dark:hover:text-[#ffb197]`}
