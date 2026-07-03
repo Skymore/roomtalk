@@ -523,7 +523,15 @@ export class E2BCocoSandboxService implements CocoSandboxService {
     ].join('\n');
     const result = await connected.commands.run(command, { timeoutMs: 10_000 });
     const stdout = await collectReadableText(result.stdout);
-    return parseWorkspacePreviewServers(stdout);
+    const candidates = parseWorkspacePreviewServers(stdout);
+    if (candidates.length === 0) {
+      return [];
+    }
+    const previewablePorts = await probeWorkspacePreviewServerPorts(
+      connected,
+      candidates.map((server) => server.port),
+    );
+    return candidates.filter((server) => previewablePorts.has(server.port));
   }
 
   async writeWorkspaceFile(handle: CocoSandboxHandle, input: WriteCocoWorkspaceFileInput): Promise<CocoWorkspaceEntry> {
@@ -781,6 +789,75 @@ const parseWorkspacePreviewServers = (stdout: string): CocoWorkspacePreviewServe
     });
   }
   return [...servers.values()].sort((a, b) => a.port - b.port);
+};
+
+const probeWorkspacePreviewServerPorts = async (
+  handle: E2BSandboxDriverHandle,
+  ports: readonly number[],
+): Promise<Set<number>> => {
+  if (!handle.commands?.run || ports.length === 0) {
+    return new Set();
+  }
+  const uniquePorts = [...new Set(ports)]
+    .filter((port) => Number.isInteger(port) && port > 0 && port < 65536)
+    .slice(0, 32);
+  if (uniquePorts.length === 0) {
+    return new Set();
+  }
+  const command = [
+    'set -u',
+    'printf "__ROOMTALK_PREVIEW_SERVER_PROBE__\\n"',
+    `ports=${shellQuote(uniquePorts.join(' '))}`,
+    'if command -v curl >/dev/null 2>&1; then',
+    '  for port in $ports; do',
+    '    code="$(curl --max-time 1 --silent --output /dev/null --write-out "%{http_code}" "http://127.0.0.1:${port}/" 2>/dev/null || true)"',
+    '    case "$code" in',
+    '      [1-5][0-9][0-9]) printf "%s\\t%s\\n" "$port" "$code" ;;',
+    '    esac',
+    '  done',
+    'elif command -v python3 >/dev/null 2>&1; then',
+    '  python3 - "$ports" <<\'PY\'',
+    'import http.client',
+    'import socket',
+    'import sys',
+    'for raw_port in sys.argv[1].split():',
+    '    try:',
+    '        port = int(raw_port)',
+    '        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=1)',
+    '        conn.request("GET", "/")',
+    '        response = conn.getresponse()',
+    '        print(f"{port}\\t{response.status}")',
+    '        conn.close()',
+    '    except (OSError, ValueError, http.client.HTTPException, socket.timeout):',
+    '        pass',
+    'PY',
+    'fi',
+  ].join('\n');
+  const result = await handle.commands.run(command, { timeoutMs: 10_000 });
+  const stdout = await collectReadableText(result.stdout);
+  return parseWorkspacePreviewServerProbePorts(stdout);
+};
+
+const parseWorkspacePreviewServerProbePorts = (stdout: string): Set<number> => {
+  const marker = '__ROOMTALK_PREVIEW_SERVER_PROBE__';
+  const body = stdout.includes(marker) ? stdout.slice(stdout.indexOf(marker) + marker.length) : stdout;
+  const ports = new Set<number>();
+  for (const line of body.split(/\r?\n/)) {
+    const [rawPort, rawStatus] = line.trim().split(/\s+/, 2);
+    const port = Number.parseInt(rawPort || '', 10);
+    const status = Number.parseInt(rawStatus || '', 10);
+    if (
+      Number.isInteger(port)
+      && port > 0
+      && port < 65536
+      && Number.isInteger(status)
+      && status >= 100
+      && status < 600
+    ) {
+      ports.add(port);
+    }
+  }
+  return ports;
 };
 
 const parseListeningAddress = (line: string): { port: number } | null => {

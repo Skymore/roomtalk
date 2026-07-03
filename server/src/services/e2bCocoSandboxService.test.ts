@@ -114,10 +114,20 @@ class FakeE2BDriver implements E2BSandboxDriver {
             } else if (command.includes('__ROOMTALK_PREVIEW_SERVERS__')) {
               stdout.end([
                 '__ROOMTALK_PREVIEW_SERVERS__',
+                'LISTEN 0      128        0.0.0.0:22        0.0.0.0:*    users:(("sshd",pid=22,fd=3))',
+                'LISTEN 0      128        0.0.0.0:111       0.0.0.0:*    users:(("rpcbind",pid=111,fd=3))',
                 'LISTEN 0      511        0.0.0.0:5173      0.0.0.0:*    users:(("node",pid=123,fd=18))',
                 'LISTEN 0      511           [::]:5173         [::]:*    users:(("node",pid=123,fd=19))',
                 'tcp        0      0 127.0.0.1:3000          0.0.0.0:*               LISTEN      456/python',
+                'tcp        0      0 127.0.0.1:49983         0.0.0.0:*               LISTEN      789/python',
                 'tcp        0      0 127.0.0.11:33337        0.0.0.0:*               LISTEN      -',
+                '',
+              ].join('\n'));
+            } else if (command.includes('__ROOMTALK_PREVIEW_SERVER_PROBE__')) {
+              stdout.end([
+                '__ROOMTALK_PREVIEW_SERVER_PROBE__',
+                '3000\t200',
+                '5173\t404',
                 '',
               ].join('\n'));
             } else if (command.includes('__ROOMTALK_STATUS__')) {
@@ -346,7 +356,10 @@ describe('E2BCocoSandboxService', () => {
       },
     ]);
     assert.match(driver.commands[0], /ss -H -ltnp/);
-    assert.deepEqual(driver.commandOptions[0], { timeoutMs: 10_000 });
+    assert.match(driver.commands[1], /__ROOMTALK_PREVIEW_SERVER_PROBE__/);
+    assert.match(driver.commands[1], /curl --max-time 1/);
+    assert.match(driver.commands[1], /python3/);
+    assert.deepEqual(driver.commandOptions, [{ timeoutMs: 10_000 }, { timeoutMs: 10_000 }]);
   });
 
   it('marks NUL-containing workspace file reads as binary like T3', async () => {

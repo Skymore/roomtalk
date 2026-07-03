@@ -477,14 +477,13 @@ export function CodeAgentWorkspaceFileTreePanel({
     : t('codeAgentWorkspaceFileCount', { formattedCount: fileCount.toLocaleString() });
   const headerRowClassName = mobileLayout
     ? 'flex min-h-10 shrink-0 items-center gap-2 overflow-x-auto border-b border-[#dedbd0] px-2 py-1 [scrollbar-width:none] dark:border-[#30302e] [&::-webkit-scrollbar]:hidden'
-    : 'flex h-9 shrink-0 items-center gap-2 border-b border-[#dedbd0] px-3 dark:border-[#30302e]';
-  const actionRowClassName = 'flex h-9 shrink-0 items-center gap-1 border-b border-[#dedbd0] px-2 dark:border-[#30302e]';
+    : 'flex min-h-10 shrink-0 items-center gap-2 overflow-x-auto border-b border-[#dedbd0] px-2 py-1 [scrollbar-width:none] dark:border-[#30302e] [&::-webkit-scrollbar]:hidden';
   const toolbarButtonClassName = mobileLayout
     ? 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-40 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]'
-    : 'rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-40 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]';
+    : 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-40 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]';
   const fileCountClassName = mobileLayout
     ? 'max-w-[7rem] shrink-0 truncate text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5]'
-    : 'truncate text-[10px] leading-none text-[#87867f] dark:text-[#8f8d86]';
+    : 'shrink-0 truncate text-[11px] text-[#87867f] dark:text-[#8f8d86]';
 
   useEffect(() => {
     if (previousTreePathsRef.current === treePaths) return;
@@ -534,7 +533,7 @@ export function CodeAgentWorkspaceFileTreePanel({
     >
       <div
         className={headerRowClassName}
-        data-testid={mobileLayout ? 'code-agent-mobile-file-tree-header' : undefined}
+        data-testid={mobileLayout ? 'code-agent-mobile-file-tree-header' : 'code-agent-desktop-file-tree-header'}
       >
         {mobileLayout && onBackToPreview ? (
           <button
@@ -548,7 +547,7 @@ export function CodeAgentWorkspaceFileTreePanel({
             <ArrowLeft className="h-3.5 w-3.5" />
           </button>
         ) : null}
-        <div className={mobileLayout ? 'min-w-0 shrink-0' : 'min-w-0 flex-1'}>
+        <div className={mobileLayout ? 'min-w-0 shrink-0' : 'flex min-w-[8rem] flex-1 items-baseline gap-2'}>
           {!mobileLayout ? (
             <div className="truncate text-xs font-medium text-[#141413] dark:text-[#faf9f5]">{projectName}</div>
           ) : null}
@@ -559,57 +558,28 @@ export function CodeAgentWorkspaceFileTreePanel({
             {remoteSearchTruncated ? ` · ${t('codeAgentWorkspaceSearchPartial')}` : ''}
           </div>
         </div>
-        {mobileLayout ? (
-          <div
-            className="flex min-w-max shrink-0 items-center gap-1"
-            data-testid="code-agent-mobile-file-tree-actions"
+        <div
+          className="flex min-w-max shrink-0 items-center gap-1"
+          data-testid={mobileLayout ? 'code-agent-mobile-file-tree-actions' : 'code-agent-desktop-file-tree-actions'}
+        >
+          <button
+            type="button"
+            className={toolbarButtonClassName}
+            aria-label={t('codeAgentSearchWorkspaceFiles')}
+            onClick={() => {
+              if (mobileLayout) {
+                setMobileSearchOpen((open) => !open);
+              } else {
+                model.openSearch();
+              }
+            }}
           >
-            <button
-              type="button"
-              className={toolbarButtonClassName}
-              aria-label={t('codeAgentSearchWorkspaceFiles')}
-              onClick={() => setMobileSearchOpen((open) => !open)}
-            >
-              <Search className="h-3.5 w-3.5" />
-            </button>
-            <button type="button" className={toolbarButtonClassName} aria-label={t('codeAgentRefreshWorkspaceFiles')} onClick={onRefresh}>
-              <RefreshCw className={`h-3.5 w-3.5 ${entriesPending ? 'animate-spin' : ''}`} />
-            </button>
-            <button type="button" className={toolbarButtonClassName} aria-label={t('codeAgentNewFile')} onClick={onCreateFile}>
-              <FilePlus2 className="h-3.5 w-3.5" />
-            </button>
-            <button type="button" className={toolbarButtonClassName} aria-label={t('codeAgentNewFolder')} onClick={onCreateDirectory}>
-              <FolderPlus className="h-3.5 w-3.5" />
-            </button>
-            <button type="button" className={toolbarButtonClassName} aria-label={t('codeAgentUploadFile')} onClick={onUpload}>
-              <Upload className="h-3.5 w-3.5" />
-            </button>
-            <div className="mx-1 h-5 w-px shrink-0 bg-[#dedbd0] dark:bg-[#30302e]" />
-            <button type="button" disabled={!selectedPath} className={toolbarButtonClassName} aria-label={t('codeAgentRenameFile')} onClick={onRename}>
-              <Pencil className="h-3.5 w-3.5" />
-            </button>
-            <button type="button" disabled={!selectedPath} className={toolbarButtonClassName} aria-label={t('codeAgentDeleteFile')} onClick={onDelete}>
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        ) : (
-          <>
-            <button
-              type="button"
-              className={toolbarButtonClassName}
-              aria-label={t('codeAgentSearchWorkspaceFiles')}
-              onClick={() => model.openSearch()}
-            >
-              <Search className="h-3.5 w-3.5" />
-            </button>
-            <button type="button" className={toolbarButtonClassName} aria-label={t('codeAgentRefreshWorkspaceFiles')} onClick={onRefresh}>
-              <RefreshCw className={`h-3.5 w-3.5 ${entriesPending ? 'animate-spin' : ''}`} />
-            </button>
-          </>
-        )}
-      </div>
-      {!mobileLayout ? (
-        <div className={actionRowClassName}>
+            <Search className="h-3.5 w-3.5" />
+          </button>
+          <button type="button" className={toolbarButtonClassName} aria-label={t('codeAgentRefreshWorkspaceFiles')} onClick={onRefresh}>
+            <RefreshCw className={`h-3.5 w-3.5 ${entriesPending ? 'animate-spin' : ''}`} />
+          </button>
+          <div className="mx-1 h-5 w-px shrink-0 bg-[#dedbd0] dark:bg-[#30302e]" />
           <button type="button" className={toolbarButtonClassName} aria-label={t('codeAgentNewFile')} onClick={onCreateFile}>
             <FilePlus2 className="h-3.5 w-3.5" />
           </button>
@@ -627,7 +597,7 @@ export function CodeAgentWorkspaceFileTreePanel({
             <Trash2 className="h-3.5 w-3.5" />
           </button>
         </div>
-      ) : null}
+      </div>
       {entriesError && entries.length === 0 ? (
         <div className="p-4 text-xs leading-relaxed text-[#9f462c] dark:text-[#ff9b78]">{entriesError}</div>
       ) : (

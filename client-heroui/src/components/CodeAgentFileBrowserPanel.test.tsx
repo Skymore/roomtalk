@@ -533,6 +533,36 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(open).not.toHaveBeenCalled();
   });
 
+  it('keeps desktop file tree actions in a single header row', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+        { path: 'docs/Guide.md', name: 'Guide.md', type: 'file' },
+      ],
+      truncated: false,
+    });
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+
+    const desktopHeader = await screen.findByTestId('code-agent-desktop-file-tree-header');
+    const desktopActions = within(desktopHeader).getByTestId('code-agent-desktop-file-tree-actions');
+    expect(desktopHeader.className).toContain('min-h-10');
+    expect(desktopHeader.className).toContain('overflow-x-auto');
+    expect(desktopHeader.contains(desktopActions)).toBe(true);
+    expect(within(desktopHeader).getByText('Coco')).toBeTruthy();
+    expect(within(desktopHeader).getByText('2 files')).toBeTruthy();
+    expect(within(desktopActions).getByLabelText('codeAgentNewFile')).toBeTruthy();
+    expect(within(desktopActions).getByLabelText('codeAgentNewFolder')).toBeTruthy();
+    expect(within(desktopActions).getByLabelText('codeAgentUploadFile')).toBeTruthy();
+    expect(within(desktopActions).getByLabelText('codeAgentRenameFile')).toBeTruthy();
+    expect(within(desktopActions).getByLabelText('codeAgentDeleteFile')).toBeTruthy();
+    expect(within(desktopActions).getByLabelText('codeAgentNewFile').className).toContain('h-7');
+
+    fireEvent.click(within(desktopActions).getByLabelText('codeAgentSearchWorkspaceFiles'));
+    expect(openSearchMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('code-agent-mobile-file-tree-search-row')).toBeNull();
+  });
+
   it('resizes the file explorer against the looser preview-preserving cap', async () => {
     loadCodeWorkspaceEntriesMock.mockResolvedValue({
       entries: [
