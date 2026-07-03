@@ -137,14 +137,6 @@ type CodeWorkspacePreviewServersAckResponse = SocketAckResponse & {
   servers?: unknown[];
 };
 
-type CodeWorkspacePreviewAutomationAckResponse = SocketAckResponse & {
-  connectionId?: string;
-  host?: unknown;
-  hosts?: unknown[];
-  request?: unknown;
-  response?: unknown;
-};
-
 type CodeAgentMode = 'plan' | 'acceptEdits';
 
 type RoomAckResponse = SocketAckResponse & {
@@ -1140,91 +1132,6 @@ export type CodeWorkspacePreviewEvent = {
   snapshot?: unknown;
 };
 
-export type CodeWorkspacePreviewAutomationOperation =
-  | 'status'
-  | 'open'
-  | 'navigate'
-  | 'snapshot'
-  | 'click'
-  | 'type'
-  | 'press'
-  | 'scroll'
-  | 'evaluate'
-  | 'waitFor'
-  | 'previewAnnotation'
-  | 'clearCookies'
-  | 'clearCache'
-  | 'recordingStart'
-  | 'recordingStop'
-  | 'resize';
-
-export type CodeWorkspacePreviewAutomationHost = {
-  roomId: string;
-  clientId: string;
-  connectionId: string;
-  socketId: string;
-  tabId?: string;
-  focused: boolean;
-  supportedOperations: CodeWorkspacePreviewAutomationOperation[];
-  connectedAt: string;
-  updatedAt: string;
-};
-
-export type CodeWorkspacePreviewAutomationRequest = {
-  requestId: string;
-  roomId: string;
-  tabId?: string;
-  tabIdExplicit?: boolean;
-  operation: CodeWorkspacePreviewAutomationOperation;
-  input: unknown;
-  timeoutMs: number;
-};
-
-export type CodeWorkspacePreviewAutomationResponse = {
-  clientId: string;
-  connectionId: string;
-  requestId: string;
-  ok: boolean;
-  result?: unknown;
-  error?: {
-    _tag: string;
-    message: string;
-    detail?: unknown;
-  };
-};
-
-export type CodeWorkspacePreviewAutomationEvent =
-  | {
-    type: 'connected';
-    roomId: string;
-    connectionId: string;
-    host: CodeWorkspacePreviewAutomationHost;
-    createdAt: string;
-  }
-  | {
-    type: 'request';
-    roomId: string;
-    connectionId: string;
-    request: CodeWorkspacePreviewAutomationRequest;
-    createdAt: string;
-  };
-
-export type CodeWorkspacePreviewAutomationHostEvent = {
-  type: 'connected' | 'focused' | 'disconnected';
-  roomId: string;
-  connectionId: string;
-  host?: CodeWorkspacePreviewAutomationHost;
-  createdAt: string;
-};
-
-export type CodeWorkspacePreviewAutomationResponseEvent = {
-  roomId: string;
-  connectionId: string;
-  requestId: string;
-  response: CodeWorkspacePreviewAutomationResponse;
-  createdAt: string;
-};
-
 export type CodeWorkspacePreviewNavigationTarget =
   | { kind: 'url'; url: string }
   | { kind: 'environment-port'; port: number; protocol?: 'http' | 'https'; path?: string };
@@ -1386,120 +1293,6 @@ export const requestCloseCodeWorkspacePreviewSession = (
     'Failed to close workspace preview',
     { retryOnSocketReconnect: true },
   ).then((response) => response.sessions || [])
-);
-
-export const requestConnectCodeWorkspacePreviewAutomation = (
-  payload: {
-    roomId: string;
-    connectionId?: string;
-    tabId?: string;
-    focused?: boolean;
-    supportedOperations?: CodeWorkspacePreviewAutomationOperation[];
-  },
-): Promise<unknown> => (
-  emitWithAck<CodeWorkspacePreviewAutomationAckResponse>(
-    'connect_code_workspace_preview_automation',
-    payload,
-    'Timed out while connecting workspace preview automation',
-    'Failed to connect workspace preview automation',
-    { retryOnSocketReconnect: true },
-  ).then((response) => {
-    if (!response.host) {
-      throw new Error('Server did not return workspace preview automation host');
-    }
-    return response.host;
-  })
-);
-
-export const requestListCodeWorkspacePreviewAutomationHosts = (roomId: string): Promise<unknown[]> => (
-  emitWithAck<CodeWorkspacePreviewAutomationAckResponse>(
-    'list_code_workspace_preview_automation_hosts',
-    { roomId },
-    'Timed out while loading workspace preview automation hosts',
-    'Failed to load workspace preview automation hosts',
-    { retryOnSocketReconnect: true },
-  ).then((response) => response.hosts || [])
-);
-
-export const requestFocusCodeWorkspacePreviewAutomation = (
-  payload: {
-    roomId: string;
-    connectionId: string;
-    focused: boolean;
-  },
-): Promise<unknown> => (
-  emitWithAck<CodeWorkspacePreviewAutomationAckResponse>(
-    'focus_code_workspace_preview_automation',
-    payload,
-    'Timed out while focusing workspace preview automation',
-    'Failed to focus workspace preview automation',
-    { retryOnSocketReconnect: true },
-  ).then((response) => {
-    if (!response.host) {
-      throw new Error('Server did not return workspace preview automation host');
-    }
-    return response.host;
-  })
-);
-
-export const requestDisconnectCodeWorkspacePreviewAutomation = (
-  payload: {
-    roomId: string;
-    connectionId: string;
-  },
-): Promise<void> => (
-  emitWithAck<CodeWorkspacePreviewAutomationAckResponse>(
-    'disconnect_code_workspace_preview_automation',
-    payload,
-    'Timed out while disconnecting workspace preview automation',
-    'Failed to disconnect workspace preview automation',
-  ).then(() => undefined)
-);
-
-export const requestCodeWorkspacePreviewAutomation = (
-  payload: {
-    roomId: string;
-    requestId?: string;
-    tabId?: string;
-    operation: CodeWorkspacePreviewAutomationOperation;
-    input?: unknown;
-    timeoutMs?: number;
-  },
-): Promise<unknown> => (
-  emitWithAck<CodeWorkspacePreviewAutomationAckResponse>(
-    'request_code_workspace_preview_automation',
-    payload,
-    'Timed out while running workspace preview automation',
-    'Failed to run workspace preview automation',
-  ).then((response) => {
-    if (!response.response) {
-      throw new Error('Server did not return workspace preview automation response');
-    }
-    return response.response;
-  })
-);
-
-export const requestRespondCodeWorkspacePreviewAutomation = (
-  payload: {
-    roomId: string;
-    connectionId: string;
-    requestId: string;
-    ok: boolean;
-    result?: unknown;
-    error?: CodeWorkspacePreviewAutomationResponse['error'];
-  },
-): Promise<unknown> => (
-  emitWithAck<CodeWorkspacePreviewAutomationAckResponse>(
-    'respond_code_workspace_preview_automation',
-    payload,
-    'Timed out while responding to workspace preview automation',
-    'Failed to respond to workspace preview automation',
-  ).then((response) => {
-    if (!response.response) {
-      throw new Error('Server did not return workspace preview automation response');
-    }
-    return response.response;
-  })
 );
 
 export const requestCodeWorkspaceDiff = (
@@ -1810,33 +1603,6 @@ export const onCodeWorkspacePreviewEvent = (
   socket.on('code_workspace_preview_event', callback);
   return () => {
     socket.off('code_workspace_preview_event', callback);
-  };
-};
-
-export const onCodeWorkspacePreviewAutomationEvent = (
-  callback: (event: CodeWorkspacePreviewAutomationEvent) => void,
-) => {
-  socket.on('code_workspace_preview_automation_event', callback);
-  return () => {
-    socket.off('code_workspace_preview_automation_event', callback);
-  };
-};
-
-export const onCodeWorkspacePreviewAutomationHostEvent = (
-  callback: (event: CodeWorkspacePreviewAutomationHostEvent) => void,
-) => {
-  socket.on('code_workspace_preview_automation_host_event', callback);
-  return () => {
-    socket.off('code_workspace_preview_automation_host_event', callback);
-  };
-};
-
-export const onCodeWorkspacePreviewAutomationResponse = (
-  callback: (event: CodeWorkspacePreviewAutomationResponseEvent) => void,
-) => {
-  socket.on('code_workspace_preview_automation_response', callback);
-  return () => {
-    socket.off('code_workspace_preview_automation_response', callback);
   };
 };
 

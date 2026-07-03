@@ -88,17 +88,10 @@ const {
   sendMessage,
   sendMessageAndAskAI,
   requestAudioTranscription,
-  requestCodeWorkspacePreviewAutomation,
   requestCodeWorkspaceEntries,
   requestCodeWorkspaceEntrySearch,
-  requestConnectCodeWorkspacePreviewAutomation,
-  requestDisconnectCodeWorkspacePreviewAutomation,
-  requestFocusCodeWorkspacePreviewAutomation,
-  requestListCodeWorkspacePreviewAutomationHosts,
   requestResolveCodeWorkspacePreviewTarget,
-  requestRespondCodeWorkspacePreviewAutomation,
   requestCodeWorkspaceRefs,
-  onCodeWorkspacePreviewAutomationEvent,
   setClientPassword,
   setClientAuthToken,
   setUsername,
@@ -307,7 +300,7 @@ describe('socket message acknowledgement helpers', () => {
     expect(listCalls).toHaveLength(2);
   });
 
-  it('searches workspace entries through the T3-style socket request', async () => {
+  it('searches workspace entries through the socket request', async () => {
     socketMock.ackResponses.set('search_code_workspace_entries', {
       success: true,
       entries: [{ path: 'src/components/Composer.tsx', name: 'Composer.tsx', type: 'file' }],
@@ -326,7 +319,7 @@ describe('socket message acknowledgement helpers', () => {
     );
   });
 
-  it('loads workspace refs through the T3-style socket request', async () => {
+  it('loads workspace refs through the socket request', async () => {
     socketMock.ackResponses.set('list_code_workspace_refs', {
       success: true,
       refs: {
@@ -355,44 +348,7 @@ describe('socket message acknowledgement helpers', () => {
     );
   });
 
-  it('connects and uses workspace preview automation socket handlers', async () => {
-    const host = {
-      roomId: 'room-1',
-      clientId: 'client-uuid',
-      connectionId: 'automation-1',
-      socketId: 'socket-1',
-      focused: true,
-      supportedOperations: ['status', 'navigate'],
-      connectedAt: '2026-05-03T10:00:00.000Z',
-      updatedAt: '2026-05-03T10:00:00.000Z',
-    };
-    const response = {
-      clientId: 'client-uuid',
-      connectionId: 'automation-1',
-      requestId: 'request-1',
-      ok: true,
-      result: { url: 'https://example.com' },
-    };
-    socketMock.ackResponses.set('connect_code_workspace_preview_automation', {
-      success: true,
-      host,
-    });
-    socketMock.ackResponses.set('list_code_workspace_preview_automation_hosts', {
-      success: true,
-      hosts: [host],
-    });
-    socketMock.ackResponses.set('focus_code_workspace_preview_automation', {
-      success: true,
-      host: { ...host, focused: false },
-    });
-    socketMock.ackResponses.set('disconnect_code_workspace_preview_automation', {
-      success: true,
-      connectionId: 'automation-1',
-    });
-    socketMock.ackResponses.set('request_code_workspace_preview_automation', {
-      success: true,
-      response,
-    });
+  it('resolves workspace preview targets through the socket request', async () => {
     socketMock.ackResponses.set('resolve_code_workspace_preview_target', {
       success: true,
       target: {
@@ -401,33 +357,7 @@ describe('socket message acknowledgement helpers', () => {
         resolutionKind: 'e2b-port-host',
       },
     });
-    socketMock.ackResponses.set('respond_code_workspace_preview_automation', {
-      success: true,
-      response,
-    });
 
-    await expect(requestConnectCodeWorkspacePreviewAutomation({
-      roomId: 'room-1',
-      focused: true,
-      supportedOperations: ['status', 'navigate'],
-    })).resolves.toEqual(host);
-    await expect(requestListCodeWorkspacePreviewAutomationHosts('room-1')).resolves.toEqual([host]);
-    await expect(requestFocusCodeWorkspacePreviewAutomation({
-      roomId: 'room-1',
-      connectionId: 'automation-1',
-      focused: false,
-    })).resolves.toEqual({ ...host, focused: false });
-    await expect(requestDisconnectCodeWorkspacePreviewAutomation({
-      roomId: 'room-1',
-      connectionId: 'automation-1',
-    })).resolves.toBeUndefined();
-    await expect(requestCodeWorkspacePreviewAutomation({
-      roomId: 'room-1',
-      requestId: 'request-1',
-      operation: 'navigate',
-      input: { url: 'https://example.com' },
-      timeoutMs: 1000,
-    })).resolves.toEqual(response);
     await expect(requestResolveCodeWorkspacePreviewTarget({
       roomId: 'room-1',
       target: { kind: 'environment-port', port: 5173, path: '/app' },
@@ -436,35 +366,7 @@ describe('socket message acknowledgement helpers', () => {
       resolvedUrl: 'https://5173-sandbox.e2b.dev/app',
       resolutionKind: 'e2b-port-host',
     });
-    await expect(requestRespondCodeWorkspacePreviewAutomation({
-      roomId: 'room-1',
-      connectionId: 'automation-1',
-      requestId: 'request-1',
-      ok: true,
-      result: { url: 'https://example.com' },
-    })).resolves.toEqual(response);
 
-    expect(socketMock.emit).toHaveBeenCalledWith(
-      'connect_code_workspace_preview_automation',
-      { roomId: 'room-1', focused: true, supportedOperations: ['status', 'navigate'] },
-      expect.any(Function),
-    );
-    expect(socketMock.emit).toHaveBeenCalledWith(
-      'disconnect_code_workspace_preview_automation',
-      { roomId: 'room-1', connectionId: 'automation-1' },
-      expect.any(Function),
-    );
-    expect(socketMock.emit).toHaveBeenCalledWith(
-      'request_code_workspace_preview_automation',
-      {
-        roomId: 'room-1',
-        requestId: 'request-1',
-        operation: 'navigate',
-        input: { url: 'https://example.com' },
-        timeoutMs: 1000,
-      },
-      expect.any(Function),
-    );
     expect(socketMock.emit).toHaveBeenCalledWith(
       'resolve_code_workspace_preview_target',
       {
@@ -473,31 +375,6 @@ describe('socket message acknowledgement helpers', () => {
       },
       expect.any(Function),
     );
-  });
-
-  it('subscribes to workspace preview automation events', () => {
-    const callback = vi.fn();
-    const unsubscribe = onCodeWorkspacePreviewAutomationEvent(callback);
-    const event = {
-      type: 'request',
-      roomId: 'room-1',
-      connectionId: 'automation-1',
-      request: {
-        requestId: 'request-1',
-        roomId: 'room-1',
-        operation: 'status',
-        input: {},
-        timeoutMs: 1000,
-      },
-      createdAt: '2026-05-03T10:00:00.000Z',
-    };
-
-    socketMock.handlers.get('code_workspace_preview_automation_event')?.forEach(handler => handler(event));
-    expect(callback).toHaveBeenCalledWith(event);
-
-    unsubscribe();
-    socketMock.handlers.get('code_workspace_preview_automation_event')?.forEach(handler => handler(event));
-    expect(callback).toHaveBeenCalledTimes(1);
   });
 
   it('includes the stored client auth token when registering the socket', async () => {

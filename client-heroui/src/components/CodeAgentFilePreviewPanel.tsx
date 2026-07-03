@@ -22,7 +22,6 @@ import {
   CodeAgentBrowserViewportResizeHandles,
   useCodeAgentBrowserViewportResize,
 } from './CodeAgentBrowserViewportControls';
-import { CodeAgentBrowserAutomationCursor } from './CodeAgentBrowserAutomationCursor';
 import { CodeAgentFilePreviewHeader } from './CodeAgentFilePreviewHeader';
 import { MediaViewerModal } from './MediaViewerModal';
 import { projectFileCacheKey } from './codeAgentFileContentRevision';
@@ -44,15 +43,6 @@ import {
   type CodeAgentPreviewViewportSetting,
   type CodeAgentPreviewViewportSize,
 } from '../utils/codeAgentPreviewViewport';
-import {
-  runCodeWorkspacePreviewDomAutomation,
-  type CodeWorkspacePreviewDomAutomationHandler,
-} from '../utils/codeWorkspacePreviewDomAutomation';
-import {
-  buildCodeWorkspacePreviewAutomationCursorEvent,
-  type CodeWorkspacePreviewAutomationCursorEvent,
-} from '../utils/codeWorkspacePreviewAutomationCursor';
-import type { CodeWorkspacePreviewAutomationRequest } from '../utils/socket';
 
 const MarkdownContent = React.lazy(() =>
   import('./MarkdownContent').then((module) => ({ default: module.MarkdownContent })),
@@ -399,8 +389,6 @@ interface WorkspaceBrowserAssetPreviewProps {
   onRenderedViewportChange?: (size: CodeAgentPreviewViewportSize) => void;
   onPreviewStatusChange?: (status: WorkspaceBrowserPreviewStatus) => void;
   onLoadingChange?: (loading: boolean) => void;
-  automationTabId?: string;
-  onAutomationHandlerChange?: (handler: CodeWorkspacePreviewDomAutomationHandler | null) => void;
 }
 
 export function WorkspaceBrowserAssetPreview({
@@ -413,8 +401,6 @@ export function WorkspaceBrowserAssetPreview({
   onRenderedViewportChange,
   onPreviewStatusChange,
   onLoadingChange,
-  automationTabId,
-  onAutomationHandlerChange,
 }: WorkspaceBrowserAssetPreviewProps) {
   const { t } = useTranslation();
   const [isLoading, setIsLoading] = useState(true);
@@ -424,9 +410,6 @@ export function WorkspaceBrowserAssetPreview({
   const [viewportContainerSize, setViewportContainerSize] =
     useState<CodeAgentPreviewViewportSize>({ width: 1, height: 1 });
   const [aspectRatioLocked, setAspectRatioLocked] = useState(false);
-  const [automationCursorEvent, setAutomationCursorEvent] =
-    useState<CodeWorkspacePreviewAutomationCursorEvent | null>(null);
-  const automationCursorSequenceRef = useRef(0);
   const normalizedZoomFactor = Number.isFinite(zoomFactor) && zoomFactor > 0 ? zoomFactor : 1;
   const fillZoomFrameStyle = {
     width: `${100 / normalizedZoomFactor}%`,
@@ -541,34 +524,6 @@ export function WorkspaceBrowserAssetPreview({
     };
   }, [handleError, handleLoad, src]);
 
-  useEffect(() => {
-    if (!onAutomationHandlerChange) {
-      return undefined;
-    }
-    const handler = (request: CodeWorkspacePreviewAutomationRequest) => {
-      const nextCursorEvent = buildCodeWorkspacePreviewAutomationCursorEvent(
-        request,
-        iframeRef.current,
-        automationCursorSequenceRef.current + 1,
-      );
-      if (nextCursorEvent) {
-        automationCursorSequenceRef.current = nextCursorEvent.sequence;
-        setAutomationCursorEvent(nextCursorEvent);
-      }
-      return runCodeWorkspacePreviewDomAutomation(request, {
-        iframe: iframeRef.current,
-        tabId: automationTabId ?? title,
-        loading: isLoading,
-        title,
-        url: src,
-      });
-    };
-    onAutomationHandlerChange(handler);
-    return () => {
-      onAutomationHandlerChange(null);
-    };
-  }, [automationTabId, isLoading, onAutomationHandlerChange, src, title]);
-
   return (
     <div className="relative flex min-h-0 flex-1 flex-col bg-white dark:bg-[#141413]">
       {loadError ? (
@@ -601,7 +556,6 @@ export function WorkspaceBrowserAssetPreview({
               onLoad={handleLoad}
               onError={handleError}
             />
-            <CodeAgentBrowserAutomationCursor event={automationCursorEvent} />
           </div>
         ) : (
           <div
@@ -632,7 +586,6 @@ export function WorkspaceBrowserAssetPreview({
                 onLoad={handleLoad}
                 onError={handleError}
               />
-              <CodeAgentBrowserAutomationCursor event={automationCursorEvent} />
             </div>
             <CodeAgentBrowserViewportResizeHandles
               layout={layout}

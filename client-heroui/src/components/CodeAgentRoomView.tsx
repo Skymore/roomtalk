@@ -5,7 +5,6 @@ import { useTranslation } from 'react-i18next';
 import { ChatHeader } from './ChatHeader';
 import { CodeAgentDiffWorkerPoolProvider } from './CodeAgentDiffWorkerPoolProvider';
 import { CodeAgentFileBrowserPanel } from './CodeAgentFileBrowserPanel';
-import { CodeAgentPendingPreviewAnnotations } from './CodeAgentPendingPreviewAnnotations';
 import { CodeAgentPendingReviewComments } from './CodeAgentPendingReviewComments';
 import { MessageInput } from './MessageInput';
 import { MessageList, MessageListHandle } from './MessageList';
@@ -23,12 +22,6 @@ import {
   useCodeAgentReviewCommentDraft,
 } from '../utils/codeAgentReviewCommentDraftStore';
 import {
-  addCodeAgentPreviewAnnotationDraft,
-  clearCodeAgentPreviewAnnotationDraft,
-  removeCodeAgentPreviewAnnotationDraft,
-  useCodeAgentPreviewAnnotationDraft,
-} from '../utils/codeAgentPreviewAnnotationDraftStore';
-import {
   CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH,
   CODE_AGENT_FILE_PANEL_WIDTH_CHANGE_EVENT,
   clampCodeAgentFilePanelWidth,
@@ -39,7 +32,6 @@ import {
 } from '../utils/codeAgentPanelLayout';
 import { parseWorkspaceFileOpenTarget } from '../utils/workspaceFileOpenTarget';
 import type { ReviewCommentContext } from '../utils/codeAgentReviewComments';
-import type { CodeAgentPreviewAnnotationContext } from '../utils/codeAgentPreviewAnnotations';
 
 interface CodeAgentRoomViewProps {
   currentRoom: Room;
@@ -142,7 +134,6 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   const workspaceFileOpenRequestIdRef = React.useRef(0);
   const fileManagerResizeCleanupRef = React.useRef<(() => void) | null>(null);
   const reviewComments = useCodeAgentReviewCommentDraft(currentRoom.id);
-  const previewAnnotations = useCodeAgentPreviewAnnotationDraft(currentRoom.id);
   const normalizedAvailableModes = React.useMemo(
     () => (availableModes.length ? availableModes : ['plan' as CodeAgentMode]),
     [availableModes]
@@ -188,18 +179,6 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
 
   const handleClearReviewComments = React.useCallback(() => {
     clearCodeAgentReviewCommentDraft(currentRoom.id);
-  }, [currentRoom.id]);
-
-  const handleAddPreviewAnnotation = React.useCallback((annotation: CodeAgentPreviewAnnotationContext) => {
-    addCodeAgentPreviewAnnotationDraft(currentRoom.id, annotation);
-  }, [currentRoom.id]);
-
-  const handleRemovePreviewAnnotation = React.useCallback((annotationId: string) => {
-    removeCodeAgentPreviewAnnotationDraft(currentRoom.id, annotationId);
-  }, [currentRoom.id]);
-
-  const handleClearPreviewAnnotations = React.useCallback(() => {
-    clearCodeAgentPreviewAnnotationDraft(currentRoom.id);
   }, [currentRoom.id]);
 
   React.useEffect(() => {
@@ -436,7 +415,6 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       reviewComments={reviewComments}
       onAddReviewComment={handleAddReviewComment}
       onRemoveReviewComment={handleRemoveReviewComment}
-      onAddPreviewAnnotation={handleAddPreviewAnnotation}
       onFileSavePendingChange={handleWorkspaceFileSavePendingChange}
     />
   );
@@ -561,9 +539,6 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
               reviewComments={reviewComments}
               onRemoveReviewComment={handleRemoveReviewComment}
               onClearReviewComments={handleClearReviewComments}
-              previewAnnotations={previewAnnotations}
-              onRemovePreviewAnnotation={handleRemovePreviewAnnotation}
-              onClearPreviewAnnotations={handleClearPreviewAnnotations}
             />
           </div>
         </div>
@@ -662,26 +637,6 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
                 comments={reviewComments}
                 onRemove={handleRemoveReviewComment}
                 removeLabel={(label) => t('codeAgentRemoveReviewComment', { label })}
-                className="max-h-20 overflow-y-auto pr-1 overscroll-contain"
-              />
-            </div>
-          ) : null}
-          {previewAnnotations.length > 0 ? (
-            <div
-              data-testid="code-agent-mobile-preview-annotation-drafts"
-              className="shrink-0 border-b border-[#dedbd0] px-3 py-2 dark:border-[#30302e]"
-            >
-              <div className="mb-1.5 flex min-w-0 items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#87867f] dark:text-[#8f8d86]">
-                <Icon icon="lucide:mouse-pointer-click" className="h-3.5 w-3.5 shrink-0" />
-                <span className="min-w-0 truncate">{t('codeAgentPendingPreviewAnnotations')}</span>
-                <span className="ml-auto shrink-0 rounded-full border border-[#dedbd0] px-1.5 py-px text-[10px] leading-none text-[#5e5d59] dark:border-[#30302e] dark:text-[#b0aea5]">
-                  {previewAnnotations.length}
-                </span>
-              </div>
-              <CodeAgentPendingPreviewAnnotations
-                annotations={previewAnnotations}
-                onRemove={handleRemovePreviewAnnotation}
-                removeLabel={(label) => t('codeAgentRemovePreviewAnnotation', { label })}
                 className="max-h-20 overflow-y-auto pr-1 overscroll-contain"
               />
             </div>

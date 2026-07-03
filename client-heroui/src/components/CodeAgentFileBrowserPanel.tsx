@@ -2,10 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
-  Camera,
-  Check,
-  Copy,
-  Download,
   ExternalLink,
   FileDiff,
   FileWarning,
@@ -14,15 +10,11 @@ import {
   LoaderCircle,
   Minus,
   MoreVertical,
-  MousePointerClick,
   Plus,
   RadioTower,
   RefreshCw,
   RotateCcw,
-  Square,
   TerminalSquare,
-  Trash2,
-  Video,
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -47,10 +39,6 @@ import { codeAgentFaviconUrlForOrigin } from '../utils/codeAgentFavicon';
 import { beginHorizontalResize } from '../utils/horizontalResize';
 import { normalizeWorkspaceOpenPath, parseWorkspaceFileOpenTarget } from '../utils/workspaceFileOpenTarget';
 import { type ReviewCommentContext } from '../utils/codeAgentReviewComments';
-import {
-  isCodeAgentPreviewAnnotationContext,
-  type CodeAgentPreviewAnnotationContext,
-} from '../utils/codeAgentPreviewAnnotations';
 import {
   basename,
   isBrowserPreviewFile,
@@ -116,7 +104,6 @@ import {
 } from '../utils/codeAgentRightPanelStore';
 import {
   closeCodeWorkspacePreviewSession,
-  codeWorkspacePreviewUrlFromStatus,
   listCodeWorkspacePreviewSessions,
   navigateCodeWorkspacePreviewSession,
   openCodeWorkspacePreviewSession,
@@ -129,12 +116,6 @@ import {
   type CodeWorkspacePreviewSession,
 } from '../utils/codeWorkspacePreviewSessions';
 import {
-  needsCodeWorkspacePreviewAutomationSessionSync,
-  resolveCodeWorkspacePreviewAutomationOpenTab,
-  resolveCodeWorkspacePreviewAutomationTarget,
-  type CodeWorkspacePreviewAutomationSessionIndex,
-} from '../utils/codeWorkspacePreviewAutomationTarget';
-import {
   listCodeWorkspacePreviewServers,
   mergeCodeWorkspacePreviewServers,
   previewPortTargetFromLocalUrl,
@@ -142,35 +123,12 @@ import {
   type PreviewableCodeWorkspacePreviewServer,
 } from '../utils/codeWorkspacePreviewServers';
 import {
-  CODE_AGENT_PREVIEW_VIEWPORT_PRESET_IDS,
   FILL_CODE_AGENT_PREVIEW_VIEWPORT,
-  resolveCodeAgentPreviewViewport,
-  type CodeAgentPreviewViewportPresetId,
   type CodeAgentPreviewViewportSetting,
-  type CodeAgentPreviewViewportSize,
 } from '../utils/codeAgentPreviewViewport';
 import {
-  codeAgentBrowserViewportSettingKey,
   resolveResponsiveCodeAgentBrowserViewportSize,
 } from '../utils/codeAgentBrowserViewportLayout';
-import {
-  CODE_WORKSPACE_PREVIEW_AUTOMATION_CLOUD_BROWSER_OPERATIONS,
-  CODE_WORKSPACE_PREVIEW_AUTOMATION_SESSION_OPERATIONS,
-  connectCodeWorkspacePreviewAutomationHost,
-  runCodeWorkspacePreviewAutomationRequest,
-  type CodeWorkspacePreviewAutomationRequest,
-} from '../utils/codeWorkspacePreviewAutomation';
-import {
-  codeWorkspacePreviewAutomationOpenNeedsReadiness,
-  codeWorkspacePreviewAutomationReadiness,
-  codeWorkspacePreviewAutomationTimeoutMs,
-  type CodeWorkspacePreviewAutomationReadiness,
-} from '../utils/codeWorkspacePreviewAutomationReadiness';
-import { isCodeWorkspacePreviewViewportReady } from '../utils/codeWorkspacePreviewViewportReadiness';
-import {
-  isCodeWorkspacePreviewDomAutomationOperation,
-  type CodeWorkspacePreviewDomAutomationHandler,
-} from '../utils/codeWorkspacePreviewDomAutomation';
 
 interface CodeAgentFileBrowserPanelProps {
   roomId: string;
@@ -186,7 +144,6 @@ interface CodeAgentFileBrowserPanelProps {
   reviewComments?: readonly ReviewCommentContext[];
   onAddReviewComment?: (comment: ReviewCommentContext) => void;
   onRemoveReviewComment?: (commentId: string) => void;
-  onAddPreviewAnnotation?: (annotation: CodeAgentPreviewAnnotationContext) => void;
   onFileSavePendingChange?: (relativePath: string, pending: boolean) => void;
 }
 
@@ -250,106 +207,8 @@ function isCodeAgentPreviewSurface(
   return surface.kind === 'preview';
 }
 
-function previewAutomationRequestedTabId(
-  request: CodeWorkspacePreviewAutomationRequest,
-): string | undefined {
-  const tabId = typeof request.tabId === 'string' ? request.tabId.trim() : '';
-  return tabId || undefined;
-}
-
-function previewAutomationTabIdFromSurface(surface: CodeAgentPreviewPanelSurface): string {
+function previewSessionTabIdFromSurface(surface: CodeAgentPreviewPanelSurface): string {
   return surface.previewSessionId ?? surface.id;
-}
-
-function previewAutomationSessionFromSurface(
-  roomId: string,
-  surface: CodeAgentPreviewPanelSurface,
-): CodeWorkspacePreviewSession {
-  const url = surface.url ?? null;
-  return {
-    roomId,
-    tabId: previewAutomationTabIdFromSurface(surface),
-    navStatus: url
-      ? { _tag: 'Success', url, title: url }
-      : { _tag: 'Idle' },
-    canGoBack: false,
-    canGoForward: false,
-    viewport: surface.viewport ?? FILL_CODE_AGENT_PREVIEW_VIEWPORT,
-    updatedAt: new Date(0).toISOString(),
-  };
-}
-
-function findPreviewAutomationSurfaceByTabId(
-  state: CodeAgentRightPanelState,
-  tabId: string | null | undefined,
-): CodeAgentPreviewPanelSurface | null {
-  if (!tabId) {
-    return null;
-  }
-  return state.surfaces.find((surface): surface is CodeAgentPreviewPanelSurface => (
-    isCodeAgentPreviewSurface(surface) && previewAutomationTabIdFromSurface(surface) === tabId
-  )) ?? null;
-}
-
-function previewAutomationSessionIndexFromRightPanelState(
-  roomId: string,
-  state: CodeAgentRightPanelState,
-  serverSessions: readonly CodeWorkspacePreviewSession[] = [],
-): CodeWorkspacePreviewAutomationSessionIndex {
-  const sessions: Record<string, CodeWorkspacePreviewSession> = {};
-  for (const surface of state.surfaces) {
-    if (!isCodeAgentPreviewSurface(surface)) {
-      continue;
-    }
-    const session = previewAutomationSessionFromSurface(roomId, surface);
-    sessions[session.tabId] = session;
-  }
-  for (const session of serverSessions) {
-    sessions[session.tabId] = session;
-  }
-  const activeSurface = state.surfaces.find((surface): surface is CodeAgentPreviewPanelSurface => (
-    state.activeSurfaceId === surface.id && isCodeAgentPreviewSurface(surface)
-  )) ?? null;
-  const activeTabId = activeSurface ? previewAutomationTabIdFromSurface(activeSurface) : null;
-  return {
-    snapshot: activeTabId ? sessions[activeTabId] ?? null : null,
-    sessions,
-  };
-}
-
-function previewAutomationStatusFromSession(
-  state: CodeAgentRightPanelState,
-  surface: CodeAgentPreviewPanelSurface | null,
-  session: CodeWorkspacePreviewSession,
-) {
-  const navStatus = session.navStatus;
-  const url = codeWorkspacePreviewUrlFromStatus(navStatus);
-  const visible = Boolean(surface && state.isOpen && state.activeSurfaceId === surface.id);
-  return {
-    available: true,
-    visible,
-    tabId: session.tabId,
-    url,
-    title: navStatus._tag === 'Idle' ? null : navStatus.title || url,
-    loading: navStatus._tag === 'Loading',
-    viewportSetting: session.viewport ?? FILL_CODE_AGENT_PREVIEW_VIEWPORT,
-  };
-}
-
-function previewAutomationStatusFromSurface(
-  state: CodeAgentRightPanelState,
-  surface: CodeAgentPreviewPanelSurface | null,
-) {
-  const visible = Boolean(surface && state.isOpen && state.activeSurfaceId === surface.id);
-  return {
-    available: true,
-    visible,
-    tabId: surface ? previewAutomationTabIdFromSurface(surface) : null,
-    url: surface?.url ?? surface?.relativePath ?? null,
-    title: surface?.url ?? surface?.relativePath ?? null,
-    loading: false,
-    ...(surface ? { viewportSetting: surface.viewport ?? FILL_CODE_AGENT_PREVIEW_VIEWPORT } : {}),
-  };
 }
 
 function recoverablePreviewSessionSurfaces(
@@ -619,9 +478,6 @@ function CodeAgentBrowserMoreMenu({
   canRefresh,
   canZoom,
   canToggleDeviceToolbar,
-  canClearBrowserData,
-  clearCookiesPending,
-  clearCachePending,
   zoomFactor,
   deviceToolbarVisible,
   onHardReload,
@@ -629,15 +485,10 @@ function CodeAgentBrowserMoreMenu({
   onZoomIn,
   onZoomOut,
   onResetZoom,
-  onClearCookies,
-  onClearCache,
 }: {
   canRefresh: boolean;
   canZoom: boolean;
   canToggleDeviceToolbar: boolean;
-  canClearBrowserData: boolean;
-  clearCookiesPending: boolean;
-  clearCachePending: boolean;
   zoomFactor: number;
   deviceToolbarVisible: boolean;
   onHardReload: () => void;
@@ -645,8 +496,6 @@ function CodeAgentBrowserMoreMenu({
   onZoomIn: () => void;
   onZoomOut: () => void;
   onResetZoom: () => void;
-  onClearCookies: () => void;
-  onClearCache: () => void;
 }) {
   const { t } = useTranslation();
   const buttonRef = useRef<HTMLButtonElement | null>(null);
@@ -669,7 +518,7 @@ function CodeAgentBrowserMoreMenu({
     }
     const rect = event.currentTarget.getBoundingClientRect();
     const menuWidth = 224;
-    const menuHeight = 240;
+    const menuHeight = 176;
     const viewportWidth = window.innerWidth || document.documentElement.clientWidth || menuWidth;
     const viewportHeight = window.innerHeight || document.documentElement.clientHeight || menuHeight;
     setMenuPosition({
@@ -799,41 +648,6 @@ function CodeAgentBrowserMoreMenu({
               </button>
             </span>
           </div>
-          <div className="my-1 h-px bg-[#dedbd0] dark:bg-[#30302e]" />
-          <button
-            type="button"
-            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] hover:bg-[#f0eee6] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent dark:text-[#faf9f5] dark:hover:bg-[#30302e] dark:disabled:hover:bg-transparent"
-            role="menuitem"
-            disabled={!canClearBrowserData || clearCookiesPending}
-            onClick={() => {
-              onClearCookies();
-              closeMenu();
-            }}
-          >
-            {clearCookiesPending ? (
-              <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin text-[#87867f] dark:text-[#8f8d86]" />
-            ) : (
-              <Trash2 className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
-            )}
-            <span className="min-w-0 truncate">{t('codeAgentBrowserClearCookies')}</span>
-          </button>
-          <button
-            type="button"
-            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] hover:bg-[#f0eee6] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent dark:text-[#faf9f5] dark:hover:bg-[#30302e] dark:disabled:hover:bg-transparent"
-            role="menuitem"
-            disabled={!canClearBrowserData || clearCachePending}
-            onClick={() => {
-              onClearCache();
-              closeMenu();
-            }}
-          >
-            {clearCachePending ? (
-              <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin text-[#87867f] dark:text-[#8f8d86]" />
-            ) : (
-              <Trash2 className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
-            )}
-            <span className="min-w-0 truncate">{t('codeAgentBrowserClearCache')}</span>
-          </button>
         </div>
       ) : null}
     </>
@@ -940,76 +754,7 @@ interface CodeAgentPreviewSurfaceProps {
   ) => void;
   onNavigateHistory: (surfaceId: string, direction: 'back' | 'forward') => void;
   onRefreshWorkspacePreview: (relativePath: string) => void;
-  onRecordingArtifactSaved: (artifact: CodeAgentPreviewRecordingArtifact) => void;
-  onOpenWorkspaceFile: (relativePath: string) => void;
-  onAddPreviewAnnotation?: (annotation: CodeAgentPreviewAnnotationContext) => void;
-  onRenderedViewportChange: (
-    tabId: string,
-    setting: CodeAgentPreviewViewportSetting,
-    viewport: CodeAgentPreviewViewportSize,
-  ) => void;
-  waitForRenderedViewport: (
-    tabId: string,
-    setting: CodeAgentPreviewViewportSetting,
-    timeoutMs: number,
-    requestId: string,
-  ) => unknown;
 }
-
-type CodeAgentPreviewAutomationHandler = (
-  request: CodeWorkspacePreviewAutomationRequest,
-) => unknown;
-
-type CodeAgentPreviewAutomationController = {
-  dispose: () => void;
-  setFocused: (focused: boolean) => unknown;
-};
-
-type CodeAgentPreviewAutomationScreenshot = {
-  mimeType: 'image/png';
-  data: string;
-  width: number;
-  height: number;
-  unavailable?: boolean;
-};
-
-type CodeAgentPreviewAutomationSnapshot = {
-  screenshot: CodeAgentPreviewAutomationScreenshot;
-};
-
-type CodeAgentPreviewRecordingArtifact = {
-  id: string;
-  tabId: string;
-  path: string;
-  mimeType: string;
-  sizeBytes: number;
-  createdAt: string;
-};
-
-type CodeAgentPreviewAutomationNavigationWaiter = {
-  id: number;
-  requestId: string;
-  url: string;
-  readiness: CodeWorkspacePreviewAutomationReadiness;
-  timeoutId: number;
-  resolve: () => void;
-  reject: (error: Error) => void;
-};
-
-type CodeAgentPreviewAutomationViewportWaiter = {
-  id: number;
-  requestId: string;
-  tabId: string;
-  setting: CodeAgentPreviewViewportSetting;
-  timeoutId: number;
-  resolve: (viewport: CodeAgentPreviewViewportSize) => void;
-  reject: (error: Error) => void;
-};
-
-type CodeAgentPreviewRenderedViewportSnapshot = {
-  setting: CodeAgentPreviewViewportSetting;
-  viewport: CodeAgentPreviewViewportSize;
-};
 
 interface CodeAgentBrowserSurfaceChromeProps {
   value: string;
@@ -1018,20 +763,8 @@ interface CodeAgentBrowserSurfaceChromeProps {
   canGoForward: boolean;
   canRefresh: boolean;
   canOpenExternal: boolean;
-  canCaptureScreenshot: boolean;
-  canRecordPreview: boolean;
-  canAnnotatePreview: boolean;
-  screenshotCapturePending: boolean;
-  screenshotCaptureCopied: boolean;
-  recordingActive: boolean;
-  recordingPending: boolean;
-  annotationActive: boolean;
-  annotationPending: boolean;
   canZoom: boolean;
   canToggleDeviceToolbar: boolean;
-  canClearBrowserData: boolean;
-  clearCookiesPending: boolean;
-  clearCachePending: boolean;
   zoomFactor: number;
   deviceToolbarVisible: boolean;
   mobileLayout?: boolean;
@@ -1042,16 +775,11 @@ interface CodeAgentBrowserSurfaceChromeProps {
   onSubmit: (value: string) => void;
   onRefresh: () => void;
   onOpenExternal: () => void;
-  onCaptureScreenshot: () => void;
-  onToggleRecording: () => void;
-  onToggleAnnotation: () => void;
   onHardReload: () => void;
   onToggleDeviceToolbar: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onResetZoom: () => void;
-  onClearCookies: () => void;
-  onClearCache: () => void;
 }
 
 function formatBrowserSurfaceAddressDisplay(value: string): string {
@@ -1193,232 +921,6 @@ function CodeAgentBrowserUnreachable({
   );
 }
 
-function previewAutomationStringInput(input: unknown, key: string): string | null {
-  if (!input || typeof input !== 'object') {
-    return null;
-  }
-  const value = (input as Record<string, unknown>)[key];
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
-type PreviewAutomationNavigationTarget =
-  | { kind: 'url'; url: string }
-  | { kind: 'environment-port'; port: number; protocol?: 'http' | 'https'; path?: string };
-
-function previewAutomationNavigationTarget(input: unknown): PreviewAutomationNavigationTarget | null {
-  const directUrl = previewAutomationStringInput(input, 'url');
-  if (directUrl) {
-    return { kind: 'url', url: directUrl };
-  }
-  if (!input || typeof input !== 'object') {
-    return null;
-  }
-  const target = (input as { target?: unknown }).target;
-  if (!target || typeof target !== 'object') {
-    return null;
-  }
-  const kind = (target as { kind?: unknown }).kind;
-  if (kind === 'url') {
-    const url = previewAutomationStringInput(target, 'url');
-    return url ? { kind: 'url', url } : null;
-  }
-  if (kind !== 'environment-port') {
-    return null;
-  }
-  const port = Number((target as { port?: unknown }).port);
-  if (!Number.isInteger(port) || port <= 0 || port >= 65536) {
-    return null;
-  }
-  const rawProtocol = (target as { protocol?: unknown }).protocol;
-  const protocol = rawProtocol === 'https' ? 'https' : rawProtocol === 'http' ? 'http' : undefined;
-  const path = previewAutomationStringInput(target, 'path');
-  return {
-    kind: 'environment-port',
-    port,
-    ...(protocol ? { protocol } : {}),
-    ...(path ? { path } : {}),
-  };
-}
-
-async function previewAutomationNavigationUrl(roomId: string, input: unknown): Promise<string | null> {
-  const target = previewAutomationNavigationTarget(input);
-  if (!target) {
-    return null;
-  }
-  if (target.kind === 'url') {
-    return target.url;
-  }
-  const resolution = await resolveCodeWorkspacePreviewTarget({ roomId, target });
-  return resolution.resolvedUrl;
-}
-
-function previewAutomationViewportSetting(input: unknown): CodeAgentPreviewViewportSetting {
-  if (!input || typeof input !== 'object') {
-    throw new Error('Preview automation resize input is invalid.');
-  }
-  const record = input as Record<string, unknown>;
-  if (record.mode === 'fill') {
-    return FILL_CODE_AGENT_PREVIEW_VIEWPORT;
-  }
-  if (record.mode === 'freeform') {
-    return resolveCodeAgentPreviewViewport({
-      mode: 'freeform',
-      width: Number(record.width),
-      height: Number(record.height),
-    });
-  }
-  if (record.mode === 'preset' && typeof record.preset === 'string') {
-    if (!CODE_AGENT_PREVIEW_VIEWPORT_PRESET_IDS.includes(record.preset as CodeAgentPreviewViewportPresetId)) {
-      throw new Error(`Unknown preview viewport preset: ${record.preset}`);
-    }
-    return resolveCodeAgentPreviewViewport({
-      mode: 'preset',
-      preset: record.preset as CodeAgentPreviewViewportPresetId,
-      orientation: record.orientation === 'landscape' || record.orientation === 'portrait'
-        ? record.orientation
-        : undefined,
-    });
-  }
-  throw new Error('Preview automation resize input is invalid.');
-}
-
-function isPreviewAutomationSnapshot(value: unknown): value is CodeAgentPreviewAutomationSnapshot {
-  if (!value || typeof value !== 'object') {
-    return false;
-  }
-  const screenshot = (value as { screenshot?: unknown }).screenshot;
-  if (!screenshot || typeof screenshot !== 'object') {
-    return false;
-  }
-  const record = screenshot as Partial<CodeAgentPreviewAutomationScreenshot>;
-  return (
-    record.mimeType === 'image/png'
-    && typeof record.data === 'string'
-    && record.data.length > 0
-    && typeof record.width === 'number'
-    && Number.isInteger(record.width)
-    && record.width > 0
-    && typeof record.height === 'number'
-    && Number.isInteger(record.height)
-    && record.height > 0
-  );
-}
-
-function isPreviewRecordingStart(value: unknown): value is { tabId: string; recording: true; startedAt: string } {
-  if (!value || typeof value !== 'object') {
-    return false;
-  }
-  const record = value as Partial<{ tabId: unknown; recording: unknown; startedAt: unknown }>;
-  return (
-    typeof record.tabId === 'string'
-    && record.recording === true
-    && typeof record.startedAt === 'string'
-    && record.startedAt.length > 0
-  );
-}
-
-function isPreviewRecordingArtifact(value: unknown): value is CodeAgentPreviewRecordingArtifact {
-  if (!value || typeof value !== 'object') {
-    return false;
-  }
-  const record = value as Partial<CodeAgentPreviewRecordingArtifact>;
-  return (
-    typeof record.id === 'string'
-    && record.id.length > 0
-    && typeof record.tabId === 'string'
-    && record.tabId.length > 0
-    && typeof record.path === 'string'
-    && record.path.length > 0
-    && typeof record.mimeType === 'string'
-    && record.mimeType.length > 0
-    && typeof record.sizeBytes === 'number'
-    && Number.isFinite(record.sizeBytes)
-    && record.sizeBytes >= 0
-    && typeof record.createdAt === 'string'
-    && record.createdAt.length > 0
-  );
-}
-
-function previewScreenshotFilename(value: string): string {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const rawName = (() => {
-    try {
-      const url = new URL(value);
-      return `${url.hostname}${url.pathname}`;
-    } catch {
-      return value || 'preview';
-    }
-  })();
-  const safeName = rawName
-    .replace(/[\r\n]+/g, '')
-    .replace(/[\\/:*?"<>|]+/g, '-')
-    .replace(/\s+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 80) || 'preview';
-  return `roomtalk-preview-${safeName}-${timestamp}.png`;
-}
-
-function previewRecordingFilename(path: string): string {
-  const filename = path.split('/').pop()?.trim();
-  return filename || 'preview-recording.webm';
-}
-
-function downloadPreviewScreenshot(screenshot: CodeAgentPreviewAutomationScreenshot, filename: string): void {
-  const link = document.createElement('a');
-  link.href = `data:image/png;base64,${screenshot.data}`;
-  link.download = filename;
-  link.rel = 'noopener';
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-}
-
-function downloadWorkspaceAssetUrl(url: string, path: string): void {
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = previewRecordingFilename(path);
-  link.rel = 'noopener';
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-}
-
-function previewScreenshotBlob(screenshot: CodeAgentPreviewAutomationScreenshot): Blob {
-  const raw = window.atob(screenshot.data);
-  const bytes = new Uint8Array(raw.length);
-  for (let index = 0; index < raw.length; index += 1) {
-    bytes[index] = raw.charCodeAt(index);
-  }
-  return new Blob([bytes], { type: screenshot.mimeType });
-}
-
-async function copyPreviewScreenshotToClipboard(screenshot: CodeAgentPreviewAutomationScreenshot): Promise<boolean> {
-  if (
-    typeof navigator === 'undefined'
-    || !navigator.clipboard
-    || typeof navigator.clipboard.write !== 'function'
-    || typeof ClipboardItem === 'undefined'
-  ) {
-    return false;
-  }
-  await navigator.clipboard.write([
-    new ClipboardItem({ [screenshot.mimeType]: previewScreenshotBlob(screenshot) }),
-  ]);
-  return true;
-}
-
-async function copyTextToClipboard(value: string): Promise<boolean> {
-  if (
-    typeof navigator === 'undefined'
-    || !navigator.clipboard
-    || typeof navigator.clipboard.writeText !== 'function'
-  ) {
-    return false;
-  }
-  await navigator.clipboard.writeText(value);
-  return true;
-}
-
 function CodeAgentBrowserSurfaceChrome({
   value,
   loading,
@@ -1426,20 +928,8 @@ function CodeAgentBrowserSurfaceChrome({
   canGoForward,
   canRefresh,
   canOpenExternal,
-  canCaptureScreenshot,
-  canRecordPreview,
-  canAnnotatePreview,
-  screenshotCapturePending,
-  screenshotCaptureCopied,
-  recordingActive,
-  recordingPending,
-  annotationActive,
-  annotationPending,
   canZoom,
   canToggleDeviceToolbar,
-  canClearBrowserData,
-  clearCookiesPending,
-  clearCachePending,
   zoomFactor,
   deviceToolbarVisible,
   mobileLayout = false,
@@ -1450,16 +940,11 @@ function CodeAgentBrowserSurfaceChrome({
   onSubmit,
   onRefresh,
   onOpenExternal,
-  onCaptureScreenshot,
-  onToggleRecording,
-  onToggleAnnotation,
   onHardReload,
   onToggleDeviceToolbar,
   onZoomIn,
   onZoomOut,
   onResetZoom,
-  onClearCookies,
-  onClearCache,
 }: CodeAgentBrowserSurfaceChromeProps) {
   const { t } = useTranslation();
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -1491,17 +976,6 @@ function CodeAgentBrowserSurfaceChrome({
 
   const displayValue = inputFocused ? draft : formatBrowserSurfaceAddressDisplay(value);
   const displayTitle = !inputFocused && displayValue !== value ? value : undefined;
-  const captureScreenshotLabel = screenshotCaptureCopied ? t('copied') : t('codeAgentBrowserCaptureScreenshot');
-  const recordingLabel = recordingPending
-    ? (recordingActive ? t('codeAgentBrowserRecordingStopping') : t('codeAgentBrowserRecordingStarting'))
-    : recordingActive
-      ? t('codeAgentBrowserStopRecording')
-      : t('codeAgentBrowserStartRecording');
-  const annotationLabel = annotationPending
-    ? t('codeAgentBrowserPreviewAnnotationCapturing')
-    : annotationActive
-      ? t('codeAgentBrowserCancelPreviewAnnotation')
-      : t('codeAgentBrowserAnnotatePreview');
   const browserChromeButtonClass = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-45 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]';
   const addressInput = (
     <input
@@ -1583,62 +1057,11 @@ function CodeAgentBrowserSurfaceChrome({
       <ExternalLink className="h-3.5 w-3.5" />
     </button>
   );
-  const screenshotButton = (
-    <button
-      type="button"
-      className={browserChromeButtonClass}
-      aria-label={captureScreenshotLabel}
-      title={captureScreenshotLabel}
-      disabled={!canCaptureScreenshot || screenshotCapturePending || recordingActive || recordingPending}
-      onClick={onCaptureScreenshot}
-    >
-      {screenshotCapturePending ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Camera className="h-3.5 w-3.5" />}
-    </button>
-  );
-  const recordingButton = (
-    <button
-      type="button"
-      className={`${browserChromeButtonClass} ${recordingActive ? 'bg-[#fff2ec] text-[#c94b2c] hover:bg-[#f7ded3] hover:text-[#9f321b] dark:bg-[#332019] dark:text-[#ff9b78] dark:hover:bg-[#4a271d]' : ''}`}
-      aria-label={recordingLabel}
-      aria-pressed={recordingActive}
-      title={recordingLabel}
-      disabled={!canRecordPreview || recordingPending}
-      onClick={onToggleRecording}
-    >
-      {recordingPending ? (
-        <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-      ) : recordingActive ? (
-        <Square className="h-3.5 w-3.5 fill-current" />
-      ) : (
-        <Video className="h-3.5 w-3.5" />
-      )}
-    </button>
-  );
-  const annotationButton = (
-    <button
-      type="button"
-      className={`${browserChromeButtonClass} ${annotationActive ? 'bg-[#fff2ec] text-[#c94b2c] hover:bg-[#f7ded3] hover:text-[#9f321b] dark:bg-[#332019] dark:text-[#ff9b78] dark:hover:bg-[#4a271d]' : ''}`}
-      aria-label={annotationLabel}
-      aria-pressed={annotationActive}
-      title={annotationLabel}
-      disabled={!canAnnotatePreview || annotationPending}
-      onClick={onToggleAnnotation}
-    >
-      {annotationPending ? (
-        <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-      ) : (
-        <MousePointerClick className="h-3.5 w-3.5" />
-      )}
-    </button>
-  );
   const moreMenu = (
     <CodeAgentBrowserMoreMenu
       canRefresh={canRefresh}
       canZoom={canZoom}
       canToggleDeviceToolbar={canToggleDeviceToolbar}
-      canClearBrowserData={canClearBrowserData}
-      clearCookiesPending={clearCookiesPending}
-      clearCachePending={clearCachePending}
       zoomFactor={zoomFactor}
       deviceToolbarVisible={deviceToolbarVisible}
       onHardReload={onHardReload}
@@ -1646,8 +1069,6 @@ function CodeAgentBrowserSurfaceChrome({
       onZoomIn={onZoomIn}
       onZoomOut={onZoomOut}
       onResetZoom={onResetZoom}
-      onClearCookies={onClearCookies}
-      onClearCache={onClearCache}
     />
   );
 
@@ -1669,9 +1090,6 @@ function CodeAgentBrowserSurfaceChrome({
               {refreshButton}
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-1">
-              {annotationButton}
-              {screenshotButton}
-              {recordingButton}
               {openExternalButton}
               {moreMenu}
             </div>
@@ -1719,9 +1137,6 @@ function CodeAgentBrowserSurfaceChrome({
         {forwardButton}
         {refreshButton}
         {addressInput}
-        {screenshotButton}
-        {recordingButton}
-        {annotationButton}
         {openExternalButton}
         {moreMenu}
       </form>
@@ -1760,11 +1175,6 @@ function CodeAgentPreviewSurface({
   onNavigate,
   onNavigateHistory,
   onRefreshWorkspacePreview,
-  onRecordingArtifactSaved,
-  onOpenWorkspaceFile,
-  onAddPreviewAnnotation,
-  onRenderedViewportChange,
-  waitForRenderedViewport,
 }: CodeAgentPreviewSurfaceProps) {
   const { t } = useTranslation();
   const relativePath = surface.relativePath;
@@ -1778,24 +1188,10 @@ function CodeAgentPreviewSurface({
   const [workspacePreviewServersPending, setWorkspacePreviewServersPending] = useState(false);
   const [workspacePreviewServersError, setWorkspacePreviewServersError] = useState<string | null>(null);
   const [workspacePreviewServersRefreshNonce, setWorkspacePreviewServersRefreshNonce] = useState(0);
-  const [screenshotCaptureState, setScreenshotCaptureState] = useState<'idle' | 'pending' | 'copied'>('idle');
-  const [browserRecordingActive, setBrowserRecordingActive] = useState(false);
-  const [browserRecordingAction, setBrowserRecordingAction] = useState<'idle' | 'starting' | 'stopping'>('idle');
-  const [browserRecordingArtifact, setBrowserRecordingArtifact] = useState<CodeAgentPreviewRecordingArtifact | null>(null);
-  const [browserRecordingAssetUrl, setBrowserRecordingAssetUrl] = useState<string | null>(null);
-  const [browserRecordingPathCopied, setBrowserRecordingPathCopied] = useState(false);
-  const [browserDataAction, setBrowserDataAction] = useState<'clearCookies' | 'clearCache' | null>(null);
-  const [previewAnnotationActive, setPreviewAnnotationActive] = useState(false);
-  const [previewAnnotationPending, setPreviewAnnotationPending] = useState(false);
-  const [previewAnnotationDraft, setPreviewAnnotationDraft] = useState<CodeAgentPreviewAnnotationContext | null>(null);
-  const [previewAnnotationComment, setPreviewAnnotationComment] = useState('');
   const [previewViewportContainerSize, setPreviewViewportContainerSize] = useState({ width: 1024, height: 768 });
   const zoomFactor = surface.zoomFactor ?? 1;
   const viewport = surface.viewport ?? FILL_CODE_AGENT_PREVIEW_VIEWPORT;
   const viewportRef = useRef(viewport);
-  const screenshotCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const recordingCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const previewAnnotationCommentRef = useRef<HTMLTextAreaElement | null>(null);
   const currentAddress = previewUrl ?? relativePath ?? '';
   const resolvedWorkspacePreviewUrl = relativePath && assetUrlQuery.resolvedUrl
     ? appendWorkspaceAssetPreviewRevision(assetUrlQuery.resolvedUrl, assetPreviewRevision)
@@ -1805,14 +1201,6 @@ function CodeAgentPreviewSurface({
   const browserChromeLoading = assetUrlQuery.isPending || (Boolean(resolvedPreviewUrl) && browserFrameLoading);
   const { canGoBack, canGoForward } = getCodeAgentPreviewSurfaceNavigationState(surface);
   const previewSessionTabId = surface.previewSessionId ?? surface.id;
-  const previewAutomationHandlerRef = useRef<CodeAgentPreviewAutomationHandler>(async () => {
-    throw new Error('Workspace preview automation is not ready.');
-  });
-  const previewDomAutomationHandlerRef = useRef<CodeWorkspacePreviewDomAutomationHandler | null>(null);
-  const previewNavigationWaitersRef = useRef<CodeAgentPreviewAutomationNavigationWaiter[]>([]);
-  const previewNavigationWaiterIdRef = useRef(0);
-  const browserChromeLoadingRef = useRef(browserChromeLoading);
-  const resolvedPreviewUrlRef = useRef(resolvedPreviewUrl);
 
   const ensurePreviewSessionTabId = useCallback(() => {
     const tabId = surface.previewSessionId ?? surface.id;
@@ -1828,28 +1216,9 @@ function CodeAgentPreviewSurface({
     setBrowserReloadNonce(0);
   }, [currentAddress, surface.id]);
 
-  useEffect(() => () => {
-    if (screenshotCopiedTimerRef.current !== null) {
-      clearTimeout(screenshotCopiedTimerRef.current);
-      screenshotCopiedTimerRef.current = null;
-    }
-    if (recordingCopiedTimerRef.current !== null) {
-      clearTimeout(recordingCopiedTimerRef.current);
-      recordingCopiedTimerRef.current = null;
-    }
-  }, []);
-
   useEffect(() => {
     viewportRef.current = viewport;
   }, [viewport]);
-
-  useEffect(() => {
-    browserChromeLoadingRef.current = browserChromeLoading;
-  }, [browserChromeLoading]);
-
-  useEffect(() => {
-    resolvedPreviewUrlRef.current = resolvedPreviewUrl;
-  }, [resolvedPreviewUrl]);
 
   useEffect(() => subscribeCodeWorkspacePreviewEvents(roomId, (event) => {
     if (!event.snapshot || event.snapshot.tabId !== previewSessionTabId) {
@@ -2016,294 +1385,6 @@ function CodeAgentPreviewSurface({
     window.open(resolvedPreviewUrl, '_blank', 'noopener,noreferrer');
   }, [resolvedPreviewUrl]);
 
-  const handleCaptureScreenshot = useCallback(() => {
-    if (!resolvedPreviewUrl || screenshotCaptureState === 'pending') {
-      return;
-    }
-    setScreenshotCaptureState('pending');
-    setNavigationError(null);
-    void runCodeWorkspacePreviewAutomationRequest({
-      requestId: `capture-screenshot:${Date.now().toString(36)}`,
-      roomId,
-      tabId: previewSessionTabId,
-      operation: 'snapshot',
-      input: {},
-      timeoutMs: 5000,
-    }).then(async (result) => {
-      if (!isPreviewAutomationSnapshot(result) || result.screenshot.unavailable) {
-        throw new Error(t('codeAgentBrowserScreenshotUnavailable'));
-      }
-      const filename = previewScreenshotFilename(previewUrl ?? relativePath ?? resolvedPreviewUrl);
-      downloadPreviewScreenshot(result.screenshot, filename);
-      let copied = false;
-      try {
-        copied = await copyPreviewScreenshotToClipboard(result.screenshot);
-      } catch {
-        copied = false;
-      }
-      if (copied) {
-        setScreenshotCaptureState('copied');
-        if (screenshotCopiedTimerRef.current !== null) {
-          clearTimeout(screenshotCopiedTimerRef.current);
-        }
-        screenshotCopiedTimerRef.current = setTimeout(() => {
-          screenshotCopiedTimerRef.current = null;
-          setScreenshotCaptureState('idle');
-        }, 1200);
-        return;
-      }
-      setScreenshotCaptureState('idle');
-    }).catch((error) => {
-      setScreenshotCaptureState('idle');
-      setNavigationError(error instanceof Error ? error.message : t('codeAgentBrowserScreenshotFailed'));
-    });
-  }, [previewSessionTabId, previewUrl, relativePath, resolvedPreviewUrl, roomId, screenshotCaptureState, t]);
-
-  const resolveRecordingAssetUrl = useCallback(async (path: string) => {
-    const asset = await createCodeWorkspaceAssetUrl(roomId, path);
-    return resolveCodeWorkspaceAssetUrl(asset);
-  }, [roomId]);
-
-  const handleToggleRecording = useCallback(() => {
-    if (!resolvedPreviewUrl || browserRecordingAction !== 'idle') {
-      return;
-    }
-    setNavigationError(null);
-    if (!browserRecordingActive) {
-      setBrowserRecordingAction('starting');
-      setBrowserRecordingArtifact(null);
-      setBrowserRecordingAssetUrl(null);
-      setBrowserRecordingPathCopied(false);
-      void runCodeWorkspacePreviewAutomationRequest({
-        requestId: `recording-start:${Date.now().toString(36)}`,
-        roomId,
-        tabId: previewSessionTabId,
-        operation: 'recordingStart',
-        input: {},
-        timeoutMs: 10000,
-      }).then((result) => {
-        if (!isPreviewRecordingStart(result)) {
-          throw new Error(t('codeAgentBrowserRecordingStartFailed'));
-        }
-        setBrowserRecordingActive(true);
-      }).catch((error) => {
-        setBrowserRecordingActive(false);
-        setNavigationError(error instanceof Error ? error.message : t('codeAgentBrowserRecordingStartFailed'));
-      }).finally(() => {
-        setBrowserRecordingAction('idle');
-      });
-      return;
-    }
-
-    setBrowserRecordingAction('stopping');
-    void runCodeWorkspacePreviewAutomationRequest({
-      requestId: `recording-stop:${Date.now().toString(36)}`,
-      roomId,
-      tabId: previewSessionTabId,
-      operation: 'recordingStop',
-      input: {},
-      timeoutMs: 60000,
-    }).then(async (result) => {
-      if (!isPreviewRecordingArtifact(result)) {
-        throw new Error(t('codeAgentBrowserRecordingStopFailed'));
-      }
-      setBrowserRecordingActive(false);
-      setBrowserRecordingArtifact(result);
-      onRecordingArtifactSaved(result);
-      try {
-        setBrowserRecordingAssetUrl(await resolveRecordingAssetUrl(result.path));
-      } catch {
-        setBrowserRecordingAssetUrl(null);
-      }
-    }).catch((error) => {
-      setBrowserRecordingActive(false);
-      setNavigationError(error instanceof Error ? error.message : t('codeAgentBrowserRecordingStopFailed'));
-    }).finally(() => {
-      setBrowserRecordingAction('idle');
-    });
-  }, [
-    browserRecordingAction,
-    browserRecordingActive,
-    onRecordingArtifactSaved,
-    previewSessionTabId,
-    resolvedPreviewUrl,
-    resolveRecordingAssetUrl,
-    roomId,
-    t,
-  ]);
-
-  const handleCopyRecordingPath = useCallback(() => {
-    if (!browserRecordingArtifact) {
-      return;
-    }
-    void copyTextToClipboard(browserRecordingArtifact.path).then((copied) => {
-      if (!copied) {
-        setNavigationError(t('codeAgentBrowserRecordingCopyPathFailed'));
-        return;
-      }
-      setBrowserRecordingPathCopied(true);
-      if (recordingCopiedTimerRef.current !== null) {
-        clearTimeout(recordingCopiedTimerRef.current);
-      }
-      recordingCopiedTimerRef.current = setTimeout(() => {
-        recordingCopiedTimerRef.current = null;
-        setBrowserRecordingPathCopied(false);
-      }, 1200);
-    }).catch((error) => {
-      setNavigationError(error instanceof Error ? error.message : t('codeAgentBrowserRecordingCopyPathFailed'));
-    });
-  }, [browserRecordingArtifact, t]);
-
-  const handleOpenRecordingFile = useCallback(() => {
-    if (!browserRecordingArtifact) {
-      return;
-    }
-    onOpenWorkspaceFile(browserRecordingArtifact.path);
-  }, [browserRecordingArtifact, onOpenWorkspaceFile]);
-
-  const handleDownloadRecording = useCallback(() => {
-    if (!browserRecordingArtifact || !browserRecordingAssetUrl) {
-      setNavigationError(t('codeAgentBrowserRecordingDownloadUnavailable'));
-      return;
-    }
-    downloadWorkspaceAssetUrl(browserRecordingAssetUrl, browserRecordingArtifact.path);
-  }, [browserRecordingArtifact, browserRecordingAssetUrl, t]);
-
-  const clearBrowserData = useCallback((operation: 'clearCookies' | 'clearCache') => {
-    if (!resolvedPreviewUrl || browserDataAction !== null) {
-      return;
-    }
-    setBrowserDataAction(operation);
-    setNavigationError(null);
-    void runCodeWorkspacePreviewAutomationRequest({
-      requestId: `${operation}:${Date.now().toString(36)}`,
-      roomId,
-      tabId: previewSessionTabId,
-      operation,
-      input: {},
-      timeoutMs: 10000,
-    }).then(() => {
-      void refreshCodeWorkspacePreviewSession({ roomId, tabId: previewSessionTabId }).catch(() => undefined);
-      setBrowserReloadNonce((current) => current + 1);
-    }).catch((error) => {
-      const fallback = operation === 'clearCookies'
-        ? t('codeAgentBrowserClearCookiesFailed')
-        : t('codeAgentBrowserClearCacheFailed');
-      setNavigationError(error instanceof Error ? error.message : fallback);
-    }).finally(() => {
-      setBrowserDataAction(null);
-    });
-  }, [browserDataAction, previewSessionTabId, resolvedPreviewUrl, roomId, t]);
-
-  const handleClearCookies = useCallback(() => {
-    clearBrowserData('clearCookies');
-  }, [clearBrowserData]);
-
-  const handleClearCache = useCallback(() => {
-    clearBrowserData('clearCache');
-  }, [clearBrowserData]);
-
-  const handleToggleAnnotation = useCallback(() => {
-    if (!resolvedPreviewUrl || previewAnnotationPending) {
-      return;
-    }
-    setNavigationError(null);
-    setPreviewAnnotationDraft(null);
-    setPreviewAnnotationComment('');
-    setPreviewAnnotationActive((active) => !active);
-  }, [previewAnnotationPending, resolvedPreviewUrl]);
-
-  useEffect(() => {
-    if (!previewAnnotationActive) {
-      return undefined;
-    }
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setPreviewAnnotationDraft(null);
-        setPreviewAnnotationComment('');
-        setPreviewAnnotationActive(false);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [previewAnnotationActive]);
-
-  useEffect(() => {
-    if (!previewAnnotationDraft) {
-      return undefined;
-    }
-    const frameId = window.requestAnimationFrame(() => {
-      previewAnnotationCommentRef.current?.focus();
-    });
-    return () => window.cancelAnimationFrame(frameId);
-  }, [previewAnnotationDraft]);
-
-  const handlePreviewAnnotationPick = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    if (!resolvedPreviewUrl || previewAnnotationPending || previewAnnotationDraft || !onAddPreviewAnnotation) {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    setPreviewAnnotationPending(true);
-    setNavigationError(null);
-    void runCodeWorkspacePreviewAutomationRequest({
-      requestId: `preview-annotation:${Date.now().toString(36)}`,
-      roomId,
-      tabId: previewSessionTabId,
-      operation: 'previewAnnotation',
-      input: {
-        clientX: event.clientX,
-        clientY: event.clientY,
-      },
-      timeoutMs: 10000,
-    }).then((result) => {
-      if (!isCodeAgentPreviewAnnotationContext(result)) {
-        throw new Error(t('codeAgentBrowserPreviewAnnotationFailed'));
-      }
-      setPreviewAnnotationDraft(result);
-      setPreviewAnnotationComment(result.comment);
-    }).catch((error) => {
-      setNavigationError(error instanceof Error ? error.message : t('codeAgentBrowserPreviewAnnotationFailed'));
-    }).finally(() => {
-      setPreviewAnnotationPending(false);
-    });
-  }, [
-    onAddPreviewAnnotation,
-    previewAnnotationDraft,
-    previewAnnotationPending,
-    previewSessionTabId,
-    resolvedPreviewUrl,
-    roomId,
-    t,
-  ]);
-
-  const handleCancelPreviewAnnotation = useCallback(() => {
-    setPreviewAnnotationDraft(null);
-    setPreviewAnnotationComment('');
-    setPreviewAnnotationActive(false);
-  }, []);
-
-  const handleAttachPreviewAnnotation = useCallback(() => {
-    if (!previewAnnotationDraft || !onAddPreviewAnnotation) {
-      return;
-    }
-    onAddPreviewAnnotation({
-      ...previewAnnotationDraft,
-      comment: previewAnnotationComment.trim(),
-    });
-    setPreviewAnnotationDraft(null);
-    setPreviewAnnotationComment('');
-    setPreviewAnnotationActive(false);
-  }, [onAddPreviewAnnotation, previewAnnotationComment, previewAnnotationDraft]);
-
-  const handlePreviewAnnotationCommentKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== 'Enter' || (!event.metaKey && !event.ctrlKey)) {
-      return;
-    }
-    event.preventDefault();
-    handleAttachPreviewAnnotation();
-  }, [handleAttachPreviewAnnotation]);
-
   const updateViewport = useCallback(async (nextViewport: CodeAgentPreviewViewportSetting) => {
     const session = await resizeCodeWorkspacePreviewSession({
       roomId,
@@ -2313,225 +1394,6 @@ function CodeAgentPreviewSurface({
     setCodeAgentRightPanelPreviewViewport(roomId, session.tabId, session.viewport);
     return session;
   }, [previewSessionTabId, roomId]);
-
-  const handleRenderedViewportChange = useCallback((size: CodeAgentPreviewViewportSize) => {
-    onRenderedViewportChange(previewSessionTabId, viewport, size);
-  }, [onRenderedViewportChange, previewSessionTabId, viewport]);
-
-  const previewAutomationStatus = useCallback((override?: {
-    url?: string | null;
-    loading?: boolean;
-    viewport?: CodeAgentPreviewViewportSetting;
-  }) => {
-    const statusUrl = override?.url ?? resolvedPreviewUrl ?? previewUrl ?? null;
-    return {
-      available: true,
-      visible: true,
-      tabId: previewSessionTabId,
-      url: statusUrl,
-      title: previewUrl ?? relativePath ?? '',
-      loading: override?.loading ?? browserChromeLoading,
-      viewportSetting: override?.viewport ?? viewportRef.current,
-      viewport: {
-        width: Math.max(1, Math.round(previewViewportContainerSize.width)),
-        height: Math.max(1, Math.round(previewViewportContainerSize.height)),
-      },
-    };
-  }, [
-    browserChromeLoading,
-    previewSessionTabId,
-    previewUrl,
-    previewViewportContainerSize.height,
-    previewViewportContainerSize.width,
-    relativePath,
-    resolvedPreviewUrl,
-  ]);
-
-  const removePreviewNavigationWaiter = useCallback((id: number) => {
-    const waiters = previewNavigationWaitersRef.current;
-    const index = waiters.findIndex((waiter) => waiter.id === id);
-    if (index >= 0) {
-      waiters.splice(index, 1);
-    }
-  }, []);
-
-  const createPreviewAutomationNavigationWait = useCallback((
-    url: string,
-    readiness: CodeWorkspacePreviewAutomationReadiness,
-    timeoutMs: number,
-    requestId: string,
-  ): Promise<void> => {
-    if (readiness === 'none') {
-      return Promise.resolve();
-    }
-    if (resolvedPreviewUrlRef.current === url && !browserChromeLoadingRef.current) {
-      return Promise.resolve();
-    }
-    return new Promise<void>((resolve, reject) => {
-      const id = previewNavigationWaiterIdRef.current + 1;
-      previewNavigationWaiterIdRef.current = id;
-      const timeoutId = window.setTimeout(() => {
-        removePreviewNavigationWaiter(id);
-        reject(new Error(
-          `Preview navigation for request ${requestId} did not reach ${readiness} readiness within ${timeoutMs}ms.`,
-        ));
-      }, timeoutMs);
-      previewNavigationWaitersRef.current.push({
-        id,
-        requestId,
-        url,
-        readiness,
-        timeoutId,
-        resolve,
-        reject,
-      });
-    });
-  }, [removePreviewNavigationWaiter]);
-
-  const settlePreviewAutomationNavigationWaiters = useCallback((url: string | null, error?: Error) => {
-    if (!url) {
-      return;
-    }
-    const waiters = previewNavigationWaitersRef.current;
-    if (waiters.length === 0) {
-      return;
-    }
-    const matching = waiters.filter((waiter) => waiter.url === url);
-    if (matching.length === 0) {
-      return;
-    }
-    previewNavigationWaitersRef.current = waiters.filter((waiter) => waiter.url !== url);
-    for (const waiter of matching) {
-      window.clearTimeout(waiter.timeoutId);
-      if (error) {
-        waiter.reject(error);
-      } else {
-        waiter.resolve();
-      }
-    }
-  }, []);
-
-  useEffect(() => () => {
-    const waiters = previewNavigationWaitersRef.current;
-    previewNavigationWaitersRef.current = [];
-    for (const waiter of waiters) {
-      window.clearTimeout(waiter.timeoutId);
-      waiter.reject(new Error('Workspace preview automation closed before navigation reached readiness.'));
-    }
-  }, []);
-
-  useEffect(() => {
-    previewAutomationHandlerRef.current = async (request: CodeWorkspacePreviewAutomationRequest) => {
-      if (request.operation === 'status') {
-        return previewAutomationStatus();
-      }
-      if (request.operation === 'open' || request.operation === 'navigate') {
-        const url = await previewAutomationNavigationUrl(roomId, request.input);
-        const readiness = codeWorkspacePreviewAutomationReadiness(request.input);
-        const timeoutMs = codeWorkspacePreviewAutomationTimeoutMs(request.input, request.timeoutMs);
-        if (!url) {
-          if (request.operation === 'open') {
-            const status = previewAutomationStatus();
-            const currentNavStatus = status.url
-              ? {
-                _tag: status.loading ? 'Loading' as const : 'Success' as const,
-                url: status.url,
-                title: status.title,
-              }
-              : { _tag: 'Idle' as const };
-            if (
-              status.url
-              && status.loading
-              && readiness !== 'none'
-              && codeWorkspacePreviewAutomationOpenNeedsReadiness(request.input, currentNavStatus)
-            ) {
-              await createPreviewAutomationNavigationWait(status.url, readiness, timeoutMs, request.requestId);
-              return previewAutomationStatus({ url: status.url, loading: false });
-            }
-            return status;
-          }
-          throw new Error('Workspace preview automation requires a direct URL or environment-port target in this cloud surface.');
-        }
-        const readinessWait = createPreviewAutomationNavigationWait(
-          url,
-          readiness,
-          timeoutMs,
-          request.requestId,
-        );
-        handleNavigate(url);
-        if (readiness !== 'none') {
-          await readinessWait;
-          return previewAutomationStatus({ url, loading: false });
-        }
-        return previewAutomationStatus({ url, loading: true });
-      }
-      if (request.operation === 'resize') {
-        const nextViewport = previewAutomationViewportSetting(request.input);
-        const timeoutMs = codeWorkspacePreviewAutomationTimeoutMs(request.input, request.timeoutMs);
-        const session = await updateViewport(nextViewport);
-        const renderedViewport = await waitForRenderedViewport(
-          session.tabId,
-          session.viewport,
-          timeoutMs,
-          request.requestId,
-        ) as CodeAgentPreviewViewportSize;
-        return {
-          tabId: session.tabId,
-          setting: session.viewport,
-          viewport: renderedViewport,
-        };
-      }
-      if (isCodeWorkspacePreviewDomAutomationOperation(request.operation)) {
-        const handler = previewDomAutomationHandlerRef.current;
-        if (!handler) {
-          throw new Error('Workspace preview automation frame is not ready.');
-        }
-        return handler(request);
-      }
-      throw new Error(`Workspace preview automation does not support ${request.operation} in the cloud browser surface yet.`);
-    };
-  }, [
-    createPreviewAutomationNavigationWait,
-    handleNavigate,
-    previewAutomationStatus,
-    previewSessionTabId,
-    previewViewportContainerSize.height,
-    previewViewportContainerSize.width,
-    roomId,
-    updateViewport,
-    waitForRenderedViewport,
-  ]);
-
-  useEffect(() => {
-    let disposed = false;
-    let controller: CodeAgentPreviewAutomationController | null = null;
-    void connectCodeWorkspacePreviewAutomationHost({
-      roomId,
-      tabId: previewSessionTabId,
-      supportedOperations: CODE_WORKSPACE_PREVIEW_AUTOMATION_CLOUD_BROWSER_OPERATIONS,
-      handle: (request) => previewAutomationHandlerRef.current(request),
-    }).then((nextController) => {
-      if (disposed) {
-        nextController.dispose();
-        return;
-      }
-      controller = nextController;
-    }).catch(() => undefined);
-
-    const reportFocus = () => {
-      void Promise.resolve(
-        controller?.setFocused(typeof document === 'undefined' ? true : document.hasFocus()),
-      ).catch(() => undefined);
-    };
-    window.addEventListener('focus', reportFocus);
-    window.addEventListener('blur', reportFocus);
-    return () => {
-      disposed = true;
-      window.removeEventListener('focus', reportFocus);
-      window.removeEventListener('blur', reportFocus);
-      controller?.dispose();
-    };
-  }, [previewSessionTabId, roomId, surface.id]);
 
   const handleToggleDeviceToolbar = useCallback(() => {
     if (!resolvedPreviewUrl) {
@@ -2565,13 +1427,8 @@ function CodeAgentPreviewSurface({
     if (navStatus._tag === 'LoadFailed') {
       const failure = browserLoadFailureFromNavStatus(navStatus);
       setBrowserLoadFailure(failure);
-      settlePreviewAutomationNavigationWaiters(
-        resolvedPreviewUrl,
-        new Error(`${t('codeAgentBrowserPreviewFailed')}: ${navStatus.description}`),
-      );
     } else {
       setBrowserLoadFailure(null);
-      settlePreviewAutomationNavigationWaiters(resolvedPreviewUrl);
     }
     void reportCodeWorkspacePreviewSession({
       roomId,
@@ -2581,13 +1438,7 @@ function CodeAgentPreviewSurface({
         ? { renderedViewport: status.renderedViewport }
         : {}),
     }).catch(() => undefined);
-  }, [previewSessionTabId, relativePath, resolvedPreviewUrl, roomId, previewUrl, settlePreviewAutomationNavigationWaiters, t]);
-
-  const handlePreviewDomAutomationHandlerChange = useCallback((
-    handler: CodeWorkspacePreviewDomAutomationHandler | null,
-  ) => {
-    previewDomAutomationHandlerRef.current = handler;
-  }, []);
+  }, [previewSessionTabId, relativePath, resolvedPreviewUrl, roomId, previewUrl]);
 
   const updateZoomFactor = useCallback((nextZoomFactor: number) => {
     setCodeAgentRightPanelPreviewZoomFactor(
@@ -2614,49 +1465,6 @@ function CodeAgentPreviewSurface({
     : null;
   const browserFrameAvailable = Boolean(resolvedPreviewUrl && !activeBrowserLoadFailure);
 
-  const recordingArtifactBanner = browserRecordingArtifact ? (
-    <div
-      className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[#dedbd0] bg-[#f8f5ee] px-3 py-2 text-xs text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242422] dark:text-[#e8e6dc]"
-      data-testid="code-agent-browser-recording-saved"
-    >
-      <span className="min-w-0 flex-1 truncate">
-        <span className="font-medium text-[#141413] dark:text-[#faf9f5]">
-          {t('codeAgentBrowserRecordingSaved')}
-        </span>
-        <span className="ml-2 font-mono text-[11px] text-[#87867f] dark:text-[#b0aea5]">
-          {browserRecordingArtifact.path}
-        </span>
-      </span>
-      <span className="flex shrink-0 items-center gap-1">
-        <button
-          type="button"
-          className="inline-flex h-7 items-center gap-1 rounded-md border border-[#dedbd0] px-2 text-[#141413] transition-colors hover:bg-[#f0eee6] dark:border-[#30302e] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
-          onClick={handleCopyRecordingPath}
-        >
-          {browserRecordingPathCopied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-          {browserRecordingPathCopied ? t('copied') : t('codeAgentCopyFilePath')}
-        </button>
-        <button
-          type="button"
-          className="inline-flex h-7 items-center gap-1 rounded-md border border-[#dedbd0] px-2 text-[#141413] transition-colors hover:bg-[#f0eee6] dark:border-[#30302e] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
-          onClick={handleOpenRecordingFile}
-        >
-          <Files className="h-3.5 w-3.5" />
-          {t('codeAgentBrowserOpenRecording')}
-        </button>
-        <button
-          type="button"
-          className="inline-flex h-7 items-center gap-1 rounded-md border border-[#dedbd0] px-2 text-[#141413] transition-colors hover:bg-[#f0eee6] disabled:cursor-not-allowed disabled:opacity-45 dark:border-[#30302e] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
-          disabled={!browserRecordingAssetUrl}
-          onClick={handleDownloadRecording}
-        >
-          <Download className="h-3.5 w-3.5" />
-          {t('codeAgentDownloadFile')}
-        </button>
-      </span>
-    </div>
-  ) : null;
-
   const chrome = (
     <CodeAgentBrowserSurfaceChrome
       value={currentAddress}
@@ -2665,20 +1473,8 @@ function CodeAgentPreviewSurface({
       canGoForward={canGoForward}
       canRefresh={canRefreshPreview}
       canOpenExternal={Boolean(resolvedPreviewUrl)}
-      canCaptureScreenshot={browserFrameAvailable}
-      canRecordPreview={browserFrameAvailable}
-      canAnnotatePreview={Boolean(browserFrameAvailable && onAddPreviewAnnotation)}
-      screenshotCapturePending={screenshotCaptureState === 'pending'}
-      screenshotCaptureCopied={screenshotCaptureState === 'copied'}
-      recordingActive={browserRecordingActive}
-      recordingPending={browserRecordingAction !== 'idle'}
-      annotationActive={previewAnnotationActive}
-      annotationPending={previewAnnotationPending}
       canZoom={browserFrameAvailable}
       canToggleDeviceToolbar={browserFrameAvailable}
-      canClearBrowserData={browserFrameAvailable}
-      clearCookiesPending={browserDataAction === 'clearCookies'}
-      clearCachePending={browserDataAction === 'clearCache'}
       zoomFactor={zoomFactor}
       deviceToolbarVisible={viewport._tag !== 'fill'}
       mobileLayout={mobileLayout}
@@ -2689,16 +1485,11 @@ function CodeAgentPreviewSurface({
       onSubmit={handleNavigate}
       onRefresh={handleRefresh}
       onOpenExternal={handleOpenExternal}
-      onCaptureScreenshot={handleCaptureScreenshot}
-      onToggleRecording={handleToggleRecording}
-      onToggleAnnotation={handleToggleAnnotation}
       onHardReload={handleRefresh}
       onToggleDeviceToolbar={handleToggleDeviceToolbar}
       onZoomIn={handleZoomIn}
       onZoomOut={handleZoomOut}
       onResetZoom={handleResetZoom}
-      onClearCookies={handleClearCookies}
-      onClearCache={handleClearCache}
     />
   );
 
@@ -2706,7 +1497,6 @@ function CodeAgentPreviewSurface({
     return (
       <div className="flex min-h-0 flex-1 flex-col bg-[#faf9f5] dark:bg-[#1d1d1b]">
         {chrome}
-        {recordingArtifactBanner}
         <div
           className="flex min-h-0 flex-1 overflow-auto px-5 py-8"
           data-testid="code-agent-browser-surface-empty"
@@ -2834,7 +1624,6 @@ function CodeAgentPreviewSurface({
     return (
       <div className="flex min-h-0 flex-1 flex-col bg-[#faf9f5] dark:bg-[#1d1d1b]">
         {chrome}
-        {recordingArtifactBanner}
         <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-[#9f462c] dark:text-[#ff9b78]">
           {assetUrlQuery.error}
         </div>
@@ -2846,7 +1635,6 @@ function CodeAgentPreviewSurface({
     return (
       <div className="flex min-h-0 flex-1 flex-col bg-[#faf9f5] dark:bg-[#1d1d1b]">
         {chrome}
-        {recordingArtifactBanner}
         <div
           className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-[#87867f] dark:text-[#8f8d86]"
           role="status"
@@ -2862,7 +1650,6 @@ function CodeAgentPreviewSurface({
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-[#faf9f5] dark:bg-[#1d1d1b]">
       {chrome}
-      {recordingArtifactBanner}
       {resolvedPreviewUrl ? (
         <div className="relative flex min-h-0 flex-1 flex-col">
           {activeBrowserLoadFailure ? (
@@ -2877,89 +1664,12 @@ function CodeAgentPreviewSurface({
               title={previewUrl ?? relativePath ?? t('codeAgentBrowserSurface')}
               zoomFactor={zoomFactor}
               viewport={viewport}
-              automationTabId={previewSessionTabId}
               onViewportChange={updateViewport}
               onViewportContainerSizeChange={setPreviewViewportContainerSize}
-              onRenderedViewportChange={handleRenderedViewportChange}
               onPreviewStatusChange={handlePreviewStatusChange}
               onLoadingChange={setBrowserFrameLoading}
-              onAutomationHandlerChange={handlePreviewDomAutomationHandlerChange}
             />
           )}
-          {previewAnnotationActive ? (
-            <div
-              className={`absolute inset-0 z-30 flex justify-center bg-[#141413]/10 p-3 text-center backdrop-blur-[1px] dark:bg-[#faf9f5]/10 ${
-                previewAnnotationDraft
-                  ? 'items-end sm:items-start'
-                  : 'cursor-crosshair items-start'
-              }`}
-              data-testid="code-agent-preview-annotation-overlay"
-              role={previewAnnotationDraft ? 'dialog' : 'button'}
-              tabIndex={0}
-              aria-label={previewAnnotationDraft
-                ? t('codeAgentPreviewAnnotationEditorTitle')
-                : t('codeAgentBrowserPreviewAnnotationOverlay')}
-              onPointerDown={previewAnnotationDraft ? undefined : handlePreviewAnnotationPick}
-            >
-              {previewAnnotationDraft ? (
-                <form
-                  className={`pointer-events-auto border border-[#d8d0c3] bg-[#faf9f5]/95 p-3 text-left shadow-xl dark:border-[#454540] dark:bg-[#1d1d1b]/95 ${
-                    mobileLayout
-                      ? 'w-full max-w-none rounded-xl'
-                      : 'w-[min(360px,calc(100vw-16px))] rounded-lg'
-                  }`}
-                  data-testid="code-agent-preview-annotation-editor"
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    handleAttachPreviewAnnotation();
-                  }}
-                >
-                  <div className="mb-2 min-w-0">
-                    <div className="text-xs font-semibold text-[#141413] dark:text-[#faf9f5]">
-                      {t('codeAgentPreviewAnnotationEditorTitle')}
-                    </div>
-                    <div className="mt-0.5 truncate text-[11px] text-[#6f6a60] dark:text-[#a9a49a]">
-                      {previewAnnotationDraft.pageTitle || previewAnnotationDraft.pageUrl}
-                    </div>
-                  </div>
-                  <label className="block">
-                    <span className="sr-only">{t('codeAgentPreviewAnnotationCommentLabel')}</span>
-                    <textarea
-                      ref={previewAnnotationCommentRef}
-                      value={previewAnnotationComment}
-                      onChange={(event) => setPreviewAnnotationComment(event.currentTarget.value)}
-                      onKeyDown={handlePreviewAnnotationCommentKeyDown}
-                      rows={3}
-                      placeholder={t('codeAgentPreviewAnnotationCommentPlaceholder')}
-                      className="min-h-[76px] w-full resize-none rounded-md border border-[#d8d0c3] bg-white/85 px-2.5 py-2 text-xs text-[#141413] outline-none transition focus:border-[#c96442] focus:ring-2 focus:ring-[#c96442]/20 dark:border-[#454540] dark:bg-[#10100f]/85 dark:text-[#faf9f5] dark:focus:border-[#d97757] dark:focus:ring-[#d97757]/20"
-                    />
-                  </label>
-                  <div className="mt-3 flex items-center justify-end gap-2">
-                    <button
-                      type="button"
-                      className="rounded-md border border-[#d8d0c3] px-2.5 py-1.5 text-xs font-medium text-[#5f5a52] transition hover:bg-[#f1eee8] dark:border-[#454540] dark:text-[#c9c4ba] dark:hover:bg-[#2b2a27]"
-                      onClick={handleCancelPreviewAnnotation}
-                    >
-                      {t('cancel')}
-                    </button>
-                    <button
-                      type="submit"
-                      className="rounded-md bg-[#c96442] px-2.5 py-1.5 text-xs font-semibold text-white transition hover:bg-[#b45738] dark:bg-[#d97757] dark:hover:bg-[#c9684c]"
-                    >
-                      {t('codeAgentAttachPreviewAnnotation')}
-                    </button>
-                  </div>
-                </form>
-              ) : (
-                <div className="pointer-events-none rounded-full border border-[#c96442]/70 bg-[#faf9f5]/95 px-3 py-1 text-[11px] font-medium text-[#141413] shadow-md dark:border-[#d97757]/70 dark:bg-[#1d1d1b]/95 dark:text-[#faf9f5]">
-                  {previewAnnotationPending
-                    ? t('codeAgentBrowserPreviewAnnotationCapturing')
-                    : t('codeAgentBrowserPreviewAnnotationOverlay')}
-                </div>
-              )}
-            </div>
-          ) : null}
           <CodeAgentBrowserZoomIndicator zoomFactor={zoomFactor} />
         </div>
       ) : null}
@@ -3358,7 +2068,6 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   reviewComments = [],
   onAddReviewComment,
   onRemoveReviewComment,
-  onAddPreviewAnnotation,
   onFileSavePendingChange,
 }) => {
   const { t } = useTranslation();
@@ -3425,128 +2134,10 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const fileSurfaceAddMenuRef = useRef<HTMLDivElement | null>(null);
   const fileSurfaceAddMenuOpen = fileSurfaceAddMenuPosition !== null;
   const pendingBrowserAddressFocusRef = useRef(false);
-  const panelPreviewAutomationHandlerRef = useRef<CodeAgentPreviewAutomationHandler>(async () => ({
-    available: true,
-    visible: false,
-    tabId: null,
-    url: null,
-    title: null,
-    loading: false,
-  }));
-  const panelPreviewAutomationSessionsRef = useRef<CodeWorkspacePreviewSession[]>([]);
-  const previewRenderedViewportByTabIdRef = useRef(new Map<string, CodeAgentPreviewRenderedViewportSnapshot>());
-  const previewViewportWaitersRef = useRef<CodeAgentPreviewAutomationViewportWaiter[]>([]);
-  const previewViewportWaiterIdRef = useRef(0);
+  const previewSessionsRef = useRef<CodeWorkspacePreviewSession[]>([]);
   const [browserAddressFocusRequests, setBrowserAddressFocusRequests] = useState<Record<string, number>>({});
   const didInitializeRightPanelRef = useRef(false);
   const isMobileSurface = surface === 'mobile';
-
-  const readRenderedPreviewViewport = useCallback((
-    tabId: string,
-    setting: CodeAgentPreviewViewportSetting,
-  ): CodeAgentPreviewViewportSize | null => {
-    const snapshot = previewRenderedViewportByTabIdRef.current.get(tabId);
-    if (snapshot) {
-      const declaredViewport = snapshot.setting._tag === 'fill'
-        ? snapshot.viewport
-        : { width: snapshot.setting.width, height: snapshot.setting.height };
-      if (isCodeWorkspacePreviewViewportReady({
-        setting,
-        appliedSettingKey: codeAgentBrowserViewportSettingKey(snapshot.setting),
-        declaredViewport,
-        renderedViewport: snapshot.viewport,
-      })) {
-        return snapshot.viewport;
-      }
-    }
-
-    const state = readCodeAgentRightPanelState(roomId);
-    const surface = findPreviewAutomationSurfaceByTabId(state, tabId);
-    const appliedSetting = surface?.viewport ?? FILL_CODE_AGENT_PREVIEW_VIEWPORT;
-    if (
-      setting._tag !== 'fill'
-      && codeAgentBrowserViewportSettingKey(appliedSetting) === codeAgentBrowserViewportSettingKey(setting)
-    ) {
-      return { width: setting.width, height: setting.height };
-    }
-    return null;
-  }, [roomId]);
-
-  const settlePreviewViewportWaiters = useCallback(() => {
-    const pending = previewViewportWaitersRef.current;
-    if (pending.length === 0) {
-      return;
-    }
-    const remaining: CodeAgentPreviewAutomationViewportWaiter[] = [];
-    for (const waiter of pending) {
-      const viewport = readRenderedPreviewViewport(waiter.tabId, waiter.setting);
-      if (viewport) {
-        window.clearTimeout(waiter.timeoutId);
-        waiter.resolve(viewport);
-      } else {
-        remaining.push(waiter);
-      }
-    }
-    previewViewportWaitersRef.current = remaining;
-  }, [readRenderedPreviewViewport]);
-
-  const waitForPreviewRenderedViewport = useCallback((
-    tabId: string,
-    setting: CodeAgentPreviewViewportSetting,
-    timeoutMs: number,
-    requestId: string,
-  ): Promise<CodeAgentPreviewViewportSize> => {
-    const current = readRenderedPreviewViewport(tabId, setting);
-    if (current) {
-      return Promise.resolve(current);
-    }
-    return new Promise<CodeAgentPreviewViewportSize>((resolve, reject) => {
-      const id = previewViewportWaiterIdRef.current + 1;
-      previewViewportWaiterIdRef.current = id;
-      const timeoutId = window.setTimeout(() => {
-        previewViewportWaitersRef.current = previewViewportWaitersRef.current.filter((waiter) => waiter.id !== id);
-        reject(new Error(
-          `Preview viewport for request ${requestId} on tab ${tabId} was not rendered within ${timeoutMs}ms.`,
-        ));
-      }, timeoutMs);
-      previewViewportWaitersRef.current.push({
-        id,
-        requestId,
-        tabId,
-        setting,
-        timeoutId,
-        resolve,
-        reject,
-      });
-    });
-  }, [readRenderedPreviewViewport]);
-
-  const handlePreviewRenderedViewportChange = useCallback((
-    tabId: string,
-    setting: CodeAgentPreviewViewportSetting,
-    viewport: CodeAgentPreviewViewportSize,
-  ) => {
-    const current = previewRenderedViewportByTabIdRef.current.get(tabId);
-    if (
-      current
-      && codeAgentBrowserViewportSettingKey(current.setting) === codeAgentBrowserViewportSettingKey(setting)
-      && current.viewport.width === viewport.width
-      && current.viewport.height === viewport.height
-    ) {
-      return;
-    }
-    previewRenderedViewportByTabIdRef.current.set(tabId, { setting, viewport });
-    settlePreviewViewportWaiters();
-  }, [settlePreviewViewportWaiters]);
-
-  useEffect(() => () => {
-    const waiters = previewViewportWaitersRef.current;
-    previewViewportWaitersRef.current = [];
-    for (const waiter of waiters) {
-      window.clearTimeout(waiter.timeoutId);
-      waiter.reject(new Error('Workspace preview automation closed before viewport rendered.'));
-    }
-  }, []);
 
   const externallySelectedEntry = useMemo(
     () => (externallySelectedFilePath ? workspaceEntryForPath(externallySelectedFilePath, 'file') : null),
@@ -3601,191 +2192,6 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     [rightPanelState.activeSurfaceId, rightPanelSurfaces],
   );
 
-  const readActivePreviewSurface = useCallback((): CodeAgentPreviewPanelSurface | null => {
-    const state = readCodeAgentRightPanelState(roomId);
-    return state.surfaces.find((surface): surface is CodeAgentPreviewPanelSurface => (
-      surface.id === state.activeSurfaceId && isCodeAgentPreviewSurface(surface)
-    )) ?? null;
-  }, [roomId]);
-
-  const readPanelPreviewAutomationState = useCallback(async (
-    requestedTabId: string | undefined,
-  ): Promise<{
-    state: CodeAgentRightPanelState;
-    index: CodeWorkspacePreviewAutomationSessionIndex;
-  }> => {
-    const currentState = readCodeAgentRightPanelState(roomId);
-    const currentIndex = previewAutomationSessionIndexFromRightPanelState(
-      roomId,
-      currentState,
-      panelPreviewAutomationSessionsRef.current,
-    );
-    if (!needsCodeWorkspacePreviewAutomationSessionSync(currentIndex, requestedTabId)) {
-      return { state: currentState, index: currentIndex };
-    }
-    const sessions = await listCodeWorkspacePreviewSessions(roomId);
-    panelPreviewAutomationSessionsRef.current = sessions;
-    const nextState = readCodeAgentRightPanelState(roomId);
-    return {
-      state: nextState,
-      index: previewAutomationSessionIndexFromRightPanelState(roomId, nextState, sessions),
-    };
-  }, [roomId]);
-
-  const syncPanelPreviewSurfaceForSession = useCallback((
-    session: CodeWorkspacePreviewSession,
-  ): CodeAgentPreviewPanelSurface => {
-    const currentState = readCodeAgentRightPanelState(roomId);
-    let surface = findPreviewAutomationSurfaceByTabId(currentState, session.tabId);
-    if (!surface) {
-      addCodeAgentRightPanelPreviewSurface(roomId);
-      surface = readActivePreviewSurface();
-    }
-    if (!surface) {
-      throw new Error('Workspace preview surface is not available.');
-    }
-    setCodeAgentRightPanelPreviewSessionId(roomId, surface.id, session.tabId);
-    setCodeAgentRightPanelPreviewViewport(roomId, session.tabId, session.viewport);
-
-    const sessionUrl = codeWorkspacePreviewUrlFromStatus(session.navStatus);
-    if (sessionUrl) {
-      navigateCodeAgentRightPanelPreviewSurface(roomId, surface.id, { kind: 'url', url: sessionUrl });
-    } else {
-      activateCodeAgentRightPanelSurface(roomId, surface.id);
-    }
-
-    const nextState = readCodeAgentRightPanelState(roomId);
-    return findPreviewAutomationSurfaceByTabId(nextState, session.tabId)
-      ?? readActivePreviewSurface()
-      ?? surface;
-  }, [readActivePreviewSurface, roomId]);
-
-  const panelPreviewAutomationStatus = useCallback(async (
-    request?: CodeWorkspacePreviewAutomationRequest,
-    surfaceOverride?: CodeAgentPreviewPanelSurface | null,
-  ) => {
-    const requestedTabId = request ? previewAutomationRequestedTabId(request) : undefined;
-    const { state, index } = await readPanelPreviewAutomationState(requestedTabId);
-    if (surfaceOverride !== undefined) {
-      return previewAutomationStatusFromSurface(state, surfaceOverride);
-    }
-    const target = resolveCodeWorkspacePreviewAutomationTarget(index, requestedTabId ?? null);
-    if (target.snapshot) {
-      return previewAutomationStatusFromSession(
-        state,
-        findPreviewAutomationSurfaceByTabId(state, target.tabId),
-        target.snapshot,
-      );
-    }
-    const surface = requestedTabId ? null : readActivePreviewSurface();
-    return previewAutomationStatusFromSurface(state, surface);
-  }, [readActivePreviewSurface, readPanelPreviewAutomationState]);
-
-  const ensurePanelPreviewSurface = useCallback((
-    reuseExisting: boolean,
-    existingTabId?: string | null,
-  ): CodeAgentPreviewPanelSurface => {
-    const existingState = readCodeAgentRightPanelState(roomId);
-    const existing = existingTabId
-      ? findPreviewAutomationSurfaceByTabId(existingState, existingTabId)
-      : (reuseExisting ? readActivePreviewSurface() : null);
-    if (existing) {
-      activateCodeAgentRightPanelSurface(roomId, existing.id);
-      return existing;
-    }
-    addCodeAgentRightPanelPreviewSurface(roomId);
-    const surface = readActivePreviewSurface();
-    if (!surface) {
-      throw new Error('Workspace preview surface is not available.');
-    }
-    return surface;
-  }, [readActivePreviewSurface, roomId]);
-
-  const handlePanelPreviewAutomationSession = useCallback(async (
-    request: CodeWorkspacePreviewAutomationRequest,
-  ): Promise<unknown> => {
-    if (request.operation === 'status') {
-      return panelPreviewAutomationStatus(request);
-    }
-
-    if (request.operation === 'open' || request.operation === 'navigate') {
-      const input = request.input && typeof request.input === 'object'
-        ? request.input as Record<string, unknown>
-        : {};
-      const requestedTabId = previewAutomationRequestedTabId(request);
-      const { index } = await readPanelPreviewAutomationState(requestedTabId);
-      const reuseExistingTab = input.reuseExistingTab !== false;
-      const existingTabId = resolveCodeWorkspacePreviewAutomationOpenTab(
-        index,
-        requestedTabId,
-        reuseExistingTab,
-      );
-      const url = await previewAutomationNavigationUrl(roomId, request.input);
-      if (request.operation === 'navigate' && !url) {
-        throw new Error('Workspace preview automation requires a direct URL or environment-port target in this cloud surface.');
-      }
-      if (request.operation === 'navigate' && requestedTabId && !existingTabId) {
-        throw new Error(`Workspace preview tab ${requestedTabId} is not available.`);
-      }
-      const existingSession = existingTabId ? index.sessions[existingTabId] ?? null : null;
-      const surface = existingSession
-        ? syncPanelPreviewSurfaceForSession(existingSession)
-        : ensurePanelPreviewSurface(reuseExistingTab, existingTabId);
-      if (!url) {
-        return panelPreviewAutomationStatus(request, surface);
-      }
-      setCodeAgentRightPanelPreviewSessionId(roomId, surface.id, surface.previewSessionId ?? surface.id);
-      navigateCodeAgentRightPanelPreviewSurface(roomId, surface.id, { kind: 'url', url });
-      return panelPreviewAutomationStatus(request, readActivePreviewSurface());
-    }
-
-    if (request.operation === 'resize') {
-      const requestedTabId = previewAutomationRequestedTabId(request);
-      const { index } = await readPanelPreviewAutomationState(requestedTabId);
-      const target = resolveCodeWorkspacePreviewAutomationTarget(index, requestedTabId ?? null);
-      const surface = target.snapshot
-        ? syncPanelPreviewSurfaceForSession(target.snapshot)
-        : (requestedTabId ? null : readActivePreviewSurface());
-      if (!surface) {
-        throw new Error('Workspace preview surface is not open.');
-      }
-      const nextViewport = previewAutomationViewportSetting(request.input);
-      const timeoutMs = codeWorkspacePreviewAutomationTimeoutMs(request.input, request.timeoutMs);
-      const tabId = previewAutomationTabIdFromSurface(surface);
-      const session = await resizeCodeWorkspacePreviewSession({
-        roomId,
-        tabId,
-        viewport: nextViewport,
-      });
-      setCodeAgentRightPanelPreviewViewport(roomId, session.tabId, session.viewport);
-      const renderedViewport = await waitForPreviewRenderedViewport(
-        session.tabId,
-        session.viewport,
-        timeoutMs,
-        request.requestId,
-      );
-      return {
-        tabId: session.tabId,
-        setting: session.viewport,
-        viewport: renderedViewport,
-      };
-    }
-
-    throw new Error(`Workspace preview automation opener does not support ${request.operation}.`);
-  }, [
-    ensurePanelPreviewSurface,
-    panelPreviewAutomationStatus,
-    readActivePreviewSurface,
-    readPanelPreviewAutomationState,
-    roomId,
-    syncPanelPreviewSurfaceForSession,
-    waitForPreviewRenderedViewport,
-  ]);
-
-  useEffect(() => {
-    panelPreviewAutomationHandlerRef.current = handlePanelPreviewAutomationSession;
-  }, [handlePanelPreviewAutomationSession]);
-
   useEffect(() => {
     let disposed = false;
     void listCodeWorkspacePreviewSessions(roomId)
@@ -3799,7 +2205,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
             const recoveredSessions = (await Promise.all(recoverableSurfaces.map((surface) => (
               openCodeWorkspacePreviewSession({
                 roomId,
-                tabId: previewAutomationTabIdFromSurface(surface),
+                tabId: previewSessionTabIdFromSurface(surface),
                 url: surface.url,
                 title: surface.url,
                 viewport: surface.viewport ?? FILL_CODE_AGENT_PREVIEW_VIEWPORT,
@@ -3809,13 +2215,13 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
               return;
             }
             if (recoveredSessions.length > 0) {
-              panelPreviewAutomationSessionsRef.current = recoveredSessions;
+              previewSessionsRef.current = recoveredSessions;
               reconcileCodeAgentPreviewSessionSurfaces(roomId, recoveredSessions);
               return;
             }
           }
         }
-        panelPreviewAutomationSessionsRef.current = sessions;
+        previewSessionsRef.current = sessions;
         reconcileCodeAgentPreviewSessionSurfaces(roomId, sessions);
       })
       .catch(() => undefined);
@@ -3824,48 +2230,18 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     };
   }, [roomId]);
 
-  useEffect(() => {
-    let disposed = false;
-    let controller: CodeAgentPreviewAutomationController | null = null;
-    void connectCodeWorkspacePreviewAutomationHost({
-      roomId,
-      supportedOperations: CODE_WORKSPACE_PREVIEW_AUTOMATION_SESSION_OPERATIONS,
-      handle: (request) => panelPreviewAutomationHandlerRef.current(request),
-    }).then((nextController) => {
-      if (disposed) {
-        nextController.dispose();
-        return;
-      }
-      controller = nextController;
-    }).catch(() => undefined);
-
-    const reportFocus = () => {
-      void Promise.resolve(
-        controller?.setFocused(typeof document === 'undefined' ? true : document.hasFocus()),
-      ).catch(() => undefined);
-    };
-    window.addEventListener('focus', reportFocus);
-    window.addEventListener('blur', reportFocus);
-    return () => {
-      disposed = true;
-      window.removeEventListener('focus', reportFocus);
-      window.removeEventListener('blur', reportFocus);
-      controller?.dispose();
-    };
-  }, [roomId]);
-
   useEffect(() => subscribeCodeWorkspacePreviewEvents(roomId, (event) => {
     if (event.snapshot) {
-      panelPreviewAutomationSessionsRef.current = [
+      previewSessionsRef.current = [
         event.snapshot,
-        ...panelPreviewAutomationSessionsRef.current.filter((session) => session.tabId !== event.snapshot?.tabId),
+        ...previewSessionsRef.current.filter((session) => session.tabId !== event.snapshot?.tabId),
       ];
       reconcileCodeAgentPreviewSessionSurfaces(roomId, [event.snapshot]);
       setCodeAgentRightPanelPreviewViewport(roomId, event.snapshot.tabId, event.snapshot.viewport);
       return;
     }
     if (event.type === 'closed') {
-      panelPreviewAutomationSessionsRef.current = panelPreviewAutomationSessionsRef.current.filter(
+      previewSessionsRef.current = previewSessionsRef.current.filter(
         (session) => session.tabId !== event.tabId,
       );
       closeCodeAgentPreviewSessionSurface(roomId, event.tabId);
@@ -4186,26 +2562,6 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       [changedPath]: (current[changedPath] ?? 0) + 1,
     }));
   }, []);
-
-  const handlePreviewRecordingArtifactSaved = useCallback((artifact: CodeAgentPreviewRecordingArtifact) => {
-    handleAssetPreviewChanged(artifact.path);
-    refreshWorkspaceEntries();
-  }, [handleAssetPreviewChanged, refreshWorkspaceEntries]);
-
-  const handleOpenWorkspaceFileFromPreviewSurface = useCallback((path: string) => {
-    const normalizedPath = normalizeWorkspacePath(path);
-    if (!normalizedPath) {
-      return;
-    }
-    setSelectedPath(normalizedPath);
-    setPreviewPath(normalizedPath);
-    setExternallySelectedFilePath(normalizedPath);
-    if (isMobileSurface) {
-      setMobileExplorerOpen(false);
-    }
-    openCodeAgentRightPanelFile(roomId, normalizedPath);
-    setOperationError(null);
-  }, [isMobileSurface, roomId]);
 
   const handleRefreshCurrentFile = useCallback(() => {
     if (!relativePath) {
@@ -5218,11 +3574,6 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
           onNavigate={handleNavigatePreviewSurface}
           onNavigateHistory={handleNavigatePreviewHistory}
           onRefreshWorkspacePreview={handleAssetPreviewChanged}
-          onRecordingArtifactSaved={handlePreviewRecordingArtifactSaved}
-          onOpenWorkspaceFile={handleOpenWorkspaceFileFromPreviewSurface}
-          onAddPreviewAnnotation={onAddPreviewAnnotation}
-          onRenderedViewportChange={handlePreviewRenderedViewportChange}
-          waitForRenderedViewport={waitForPreviewRenderedViewport}
         />
       ) : activeDiffSurface ? (
         <div
