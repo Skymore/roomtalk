@@ -34,7 +34,7 @@ import { CocoSandboxLifecycleService } from './services/cocoSandboxLifecycle';
 import { CocoSessionService } from './services/cocoSessionService';
 import { E2BCocoSandboxService, E2BSandboxDriver } from './services/e2bCocoSandboxService';
 import { createE2BSdkDriver } from './services/e2bSdkDriver';
-import { COCO_RUNNER_SCHEMA_VERSION } from './services/cocoRunnerProtocol';
+import { CODE_AGENT_RUNNER_SCHEMA_VERSION } from './services/codeAgentRunnerProtocol';
 import { createCodeWorkspaceAssetAccessFromEnv } from './services/codeWorkspaceAssetAccess';
 import {
   DEFAULT_CODEX_CLI_RUNNER_COMMAND,
@@ -52,9 +52,9 @@ import {
   RedisCocoModelGatewayTokenStateStore,
   registerCocoModelGatewayRoutes,
 } from './services/cocoModelGateway';
-import { FakeCocoRunnerClient } from './services/fakeCocoRunner';
+import { FakeCodeAgentRunnerClient } from './services/fakeCodeAgentRunner';
 import { FakeCocoSandboxService } from './services/fakeCocoSandboxService';
-import { JsonlCocoRunnerClient } from './services/jsonlCocoRunner';
+import { JsonlCodeAgentRunnerClient } from './services/jsonlCodeAgentRunner';
 import {
   COCO_STATIC_PUBLISH_API_PATH,
   createPublishedStaticSiteServiceFromEnv,
@@ -310,19 +310,19 @@ const cocoSandboxLifecycle = new CocoSandboxLifecycleService(store, cocoSandboxS
   maxActiveSandboxesPerUser: parsePositiveIntegerEnv('COCO_MAX_ACTIVE_SANDBOXES_PER_USER', Number.POSITIVE_INFINITY),
   reconnectTimedOutSandboxes: cocoRuntimeConfig.e2bLifecycle.onTimeout === 'pause',
 });
-const fakeCocoToolOutput = [
-  'stdout: hello from Coco fake runner',
+const fakeCodeAgentToolOutput = [
+  'stdout: hello from code agent fake runner',
   'stderr: simulated warning for UI coverage',
   'line '.repeat(260).trim(),
 ].join('\n');
-const cocoRunnerClient = cocoRuntimeConfig.runnerClient === 'jsonl' ? new JsonlCocoRunnerClient() : new FakeCocoRunnerClient([
-  { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'status', turnId: 'fake', status: 'starting', message: 'Coco fake runner starting' },
-  { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'fake-ai', delta: 'Coco fake runner received the task.' },
-  { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'fake-tool-1', name: 'Shell', args: { command: 'printf "hello from Coco fake runner\\n"' } },
-  { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'fake-tool-1', name: 'Shell', success: false, output: fakeCocoToolOutput, exitCode: 2, truncated: true },
-  { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'fake-ai', answer: 'Coco fake runner received the task.', sessionId: 'fake-coco-session' },
+const codeAgentRunnerClient = cocoRuntimeConfig.runnerClient === 'jsonl' ? new JsonlCodeAgentRunnerClient() : new FakeCodeAgentRunnerClient([
+  { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'status', turnId: 'fake', status: 'starting', message: 'Code agent fake runner starting' },
+  { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'fake-ai', delta: 'Code agent fake runner received the task.' },
+  { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'fake-tool-1', name: 'Shell', args: { command: 'printf "hello from code agent fake runner\\n"' } },
+  { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'fake-tool-1', name: 'Shell', success: false, output: fakeCodeAgentToolOutput, exitCode: 2, truncated: true },
+  { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'fake-ai', answer: 'Code agent fake runner received the task.', sessionId: 'fake-code-agent-session' },
 ], { eventDelayMs: parsePositiveIntegerEnv('COCO_FAKE_RUNNER_EVENT_DELAY_MS', 0) });
-const codeAgentRunner = createCodeAgentRunner(cocoRuntimeConfig.backend, cocoRunnerClient);
+const codeAgentRunner = createCodeAgentRunner(cocoRuntimeConfig.backend, codeAgentRunnerClient);
 const codexRunnerEnv = {
   PYTHONPATH: cocoRuntimeConfig.runnerEnv.PYTHONPATH || DEFAULT_COCO_RUNNER_PYTHONPATH,
   COCO_WORKSPACE_ROOT: cocoRuntimeConfig.runnerEnv.COCO_WORKSPACE_ROOT || cocoRuntimeConfig.e2bWorkspace || DEFAULT_COCO_WORKSPACE_ROOT,

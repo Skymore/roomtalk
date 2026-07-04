@@ -2,8 +2,8 @@ import { Logger } from '../logger';
 import dotenv from 'dotenv';
 import { AIModelOption } from '../types';
 import { DEFAULT_AI_MODEL_ID, createAIModelRegistry } from '../services/aiModels';
-import { COCO_RUNNER_SCHEMA_VERSION } from '../services/cocoRunnerProtocol';
-import { JsonlCocoRunnerClient } from '../services/jsonlCocoRunner';
+import { CODE_AGENT_RUNNER_SCHEMA_VERSION } from '../services/codeAgentRunnerProtocol';
+import { JsonlCodeAgentRunnerClient } from '../services/jsonlCodeAgentRunner';
 import { resolveCocoRuntimeConfig, CocoRuntimeConfig } from '../services/cocoRuntimeConfig';
 import { E2BCocoSandboxService } from '../services/e2bCocoSandboxService';
 import { createE2BSdkDriver } from '../services/e2bSdkDriver';
@@ -117,7 +117,7 @@ export const runCocoE2BSmoke = async (plan: Extract<CocoE2BSmokePlan, { run: tru
     lifecycle: plan.config.e2bLifecycle,
     logger,
   });
-  const runnerClient = new JsonlCocoRunnerClient();
+  const runnerClient = new JsonlCodeAgentRunnerClient();
   const handle = await sandboxService.create({
     roomId: plan.roomId,
     creatorId: 'coco-e2b-smoke',
@@ -134,7 +134,7 @@ export const runCocoE2BSmoke = async (plan: Extract<CocoE2BSmokePlan, { run: tru
       timeoutMs: plan.turnTimeoutMs,
     });
     const result = await runnerClient.run({
-      schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
       type: 'run',
       roomId: plan.roomId,
       turnId: plan.turnId,

@@ -2,7 +2,7 @@ import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import path from 'path';
 import { Logger } from '../logger';
 import { MediaObjectStorage } from './mediaObjectStorage';
-import { CocoRunnerMode } from './cocoRunnerProtocol';
+import { CodeAgentRunnerMode } from './codeAgentRunnerProtocol';
 
 export const COCO_STATIC_PUBLISH_API_PATH = '/api/coco/publish-static-site';
 export const COCO_STATIC_PUBLISH_ROUTE_PREFIX = '/p';
@@ -86,7 +86,7 @@ export interface PublishedStaticSiteTokenClaims {
   roomId: string;
   clientId: string;
   turnId: string;
-  mode: CocoRunnerMode;
+  mode: CodeAgentRunnerMode;
   exp: number;
 }
 
@@ -357,7 +357,7 @@ export class PublishedStaticSiteService {
     roomId: string;
     clientId: string;
     turnId: string;
-    mode: CocoRunnerMode;
+    mode: CodeAgentRunnerMode;
   }) {
     const claims: PublishedStaticSiteTokenClaims = {
       v: 1,

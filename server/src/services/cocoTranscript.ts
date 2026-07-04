@@ -1,12 +1,12 @@
 import { Message } from '../types';
-import { CocoRunnerPriorMessage } from './cocoRunnerProtocol';
+import { CodeAgentRunnerPriorMessage } from './codeAgentRunnerProtocol';
 
-type CocoPriorBlock = Exclude<CocoRunnerPriorMessage['content'], string>[number];
+type CocoPriorBlock = Exclude<CodeAgentRunnerPriorMessage['content'], string>[number];
 
 const isNonEmptyText = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
 
-const appendAssistantBlock = (messages: CocoRunnerPriorMessage[], block: CocoPriorBlock) => {
+const appendAssistantBlock = (messages: CodeAgentRunnerPriorMessage[], block: CocoPriorBlock) => {
   const last = messages[messages.length - 1];
   if (last?.role === 'assistant' && Array.isArray(last.content)) {
     last.content.push(block);
@@ -16,7 +16,7 @@ const appendAssistantBlock = (messages: CocoRunnerPriorMessage[], block: CocoPri
   messages.push({ role: 'assistant', content: [block] });
 };
 
-const appendToolResultBlock = (messages: CocoRunnerPriorMessage[], block: CocoPriorBlock) => {
+const appendToolResultBlock = (messages: CodeAgentRunnerPriorMessage[], block: CocoPriorBlock) => {
   const last = messages[messages.length - 1];
   if (
     last?.role === 'user' &&
@@ -30,8 +30,8 @@ const appendToolResultBlock = (messages: CocoRunnerPriorMessage[], block: CocoPr
   messages.push({ role: 'user', content: [block] });
 };
 
-export const buildCocoPriorMessages = (messages: Message[]): CocoRunnerPriorMessage[] => {
-  const priorMessages: CocoRunnerPriorMessage[] = [];
+export const buildCocoPriorMessages = (messages: Message[]): CodeAgentRunnerPriorMessage[] => {
+  const priorMessages: CodeAgentRunnerPriorMessage[] = [];
   const completedToolCallIds = new Set(
     messages
       .filter(message => message.messageType === 'tool_result' && message.toolCallId)

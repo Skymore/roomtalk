@@ -1,10 +1,10 @@
-import { CocoRunnerRunRequest } from './cocoRunnerProtocol';
+import { CodeAgentRunnerRunRequest } from './codeAgentRunnerProtocol';
 import {
-  CocoRunnerClient,
-  CocoRunnerHandlers,
-  CocoRunnerRunContext,
-  CocoRunnerRunResult,
-} from './fakeCocoRunner';
+  CodeAgentRunnerClient,
+  CodeAgentRunnerHandlers,
+  CodeAgentRunnerRunContext,
+  CodeAgentRunnerRunResult,
+} from './fakeCodeAgentRunner';
 import type { CodeAgentBackend } from '../types';
 
 export type { CodeAgentBackend } from '../types';
@@ -12,47 +12,47 @@ export type { CodeAgentBackend } from '../types';
 export interface CodeAgentRunner {
   readonly backend: CodeAgentBackend;
   run(
-    request: CocoRunnerRunRequest,
-    handlers: CocoRunnerHandlers,
-    context?: CocoRunnerRunContext
-  ): Promise<CocoRunnerRunResult>;
+    request: CodeAgentRunnerRunRequest,
+    handlers: CodeAgentRunnerHandlers,
+    context?: CodeAgentRunnerRunContext
+  ): Promise<CodeAgentRunnerRunResult>;
 }
 
-export class CocoCodeAgentRunner implements CodeAgentRunner {
+export class CodeAgentRunnerAdapter implements CodeAgentRunner {
   readonly backend: CodeAgentBackend;
 
   constructor(
-    private readonly client: CocoRunnerClient,
+    private readonly client: CodeAgentRunnerClient,
     backend: CodeAgentBackend = 'coco'
   ) {
     this.backend = backend;
   }
 
   run(
-    request: CocoRunnerRunRequest,
-    handlers: CocoRunnerHandlers,
-    context?: CocoRunnerRunContext
-  ): Promise<CocoRunnerRunResult> {
+    request: CodeAgentRunnerRunRequest,
+    handlers: CodeAgentRunnerHandlers,
+    context?: CodeAgentRunnerRunContext
+  ): Promise<CodeAgentRunnerRunResult> {
     return this.client.run(request, handlers, context);
   }
 }
 
 export interface CodeAgentRunnerFactoryOptions {
   /**
-   * Long-term escape hatch for a dedicated Codex runner. Route 1 uses the
-   * shared Coco JSONL runner client and swaps only the sandbox command.
+   * Escape hatch for a backend-specific runner. The current CLI path shares
+   * one JSONL runner client and swaps only the sandbox command/env.
    */
   codexRunner?: CodeAgentRunner;
 }
 
 export const createCodeAgentRunner = (
   backend: CodeAgentBackend,
-  cocoClient: CocoRunnerClient,
+  sharedClient: CodeAgentRunnerClient,
   options: CodeAgentRunnerFactoryOptions = {}
 ): CodeAgentRunner => {
   switch (backend) {
     case 'coco':
-      return new CocoCodeAgentRunner(cocoClient);
+      return new CodeAgentRunnerAdapter(sharedClient);
     case 'codex':
       if (options.codexRunner) {
         if (options.codexRunner.backend !== 'codex') {
@@ -60,7 +60,7 @@ export const createCodeAgentRunner = (
         }
         return options.codexRunner;
       }
-      return new CocoCodeAgentRunner(cocoClient, 'codex');
+      return new CodeAgentRunnerAdapter(sharedClient, 'codex');
     default: {
       const exhaustive: never = backend;
       throw new Error(`Unsupported code-agent backend: ${exhaustive}`);

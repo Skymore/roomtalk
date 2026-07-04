@@ -1,16 +1,16 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-  COCO_RUNNER_SCHEMA_VERSION,
-  CocoRunnerJsonlParser,
-  CocoRunnerProtocolError,
-  CocoRunnerRunRequest,
-  parseCocoRunnerEventLine,
-  serializeCocoRunnerRequest,
-} from './cocoRunnerProtocol';
+  CODE_AGENT_RUNNER_SCHEMA_VERSION,
+  CodeAgentRunnerJsonlParser,
+  CodeAgentRunnerProtocolError,
+  CodeAgentRunnerRunRequest,
+  parseCodeAgentRunnerEventLine,
+  serializeCodeAgentRunnerRequest,
+} from './codeAgentRunnerProtocol';
 
-const request: CocoRunnerRunRequest = {
-  schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+const request: CodeAgentRunnerRunRequest = {
+  schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
   type: 'run',
   roomId: 'room-1',
   turnId: 'turn-1',
@@ -24,15 +24,15 @@ const request: CocoRunnerRunRequest = {
   allowedPaths: ['.'],
 };
 
-describe('Coco runner protocol', () => {
+describe('code agent runner protocol', () => {
   it('serializes run requests as one JSONL line', () => {
-    const serialized = serializeCocoRunnerRequest(request);
+    const serialized = serializeCodeAgentRunnerRequest(request);
     assert.equal(serialized.endsWith('\n'), true);
     assert.deepEqual(JSON.parse(serialized), request);
   });
 
   it('serializes Coco prior messages in run requests', () => {
-    const withPrior: CocoRunnerRunRequest = {
+    const withPrior: CodeAgentRunnerRunRequest = {
       ...request,
       codexModel: 'gpt-5.5',
       codexReasoningEffort: 'xhigh',
@@ -55,11 +55,11 @@ describe('Coco runner protocol', () => {
       ],
     };
 
-    assert.deepEqual(JSON.parse(serializeCocoRunnerRequest(withPrior)), withPrior);
+    assert.deepEqual(JSON.parse(serializeCodeAgentRunnerRequest(withPrior)), withPrior);
   });
 
   it('parses all runner event shapes', () => {
-    assert.deepEqual(parseCocoRunnerEventLine(JSON.stringify({
+    assert.deepEqual(parseCodeAgentRunnerEventLine(JSON.stringify({
       schemaVersion: 1,
       type: 'text_delta',
       messageId: 'ai-1',
@@ -71,7 +71,7 @@ describe('Coco runner protocol', () => {
       delta: '',
     });
 
-    assert.deepEqual(parseCocoRunnerEventLine(JSON.stringify({
+    assert.deepEqual(parseCodeAgentRunnerEventLine(JSON.stringify({
       schemaVersion: 1,
       type: 'status',
       turnId: 'turn-1',
@@ -84,7 +84,7 @@ describe('Coco runner protocol', () => {
       message: undefined,
     });
 
-    assert.deepEqual(parseCocoRunnerEventLine(JSON.stringify({
+    assert.deepEqual(parseCodeAgentRunnerEventLine(JSON.stringify({
       schemaVersion: 1,
       type: 'tool_call',
       id: 'tool-1',
@@ -100,7 +100,7 @@ describe('Coco runner protocol', () => {
       messageId: 'tool-message-1',
     });
 
-    assert.deepEqual(parseCocoRunnerEventLine(JSON.stringify({
+    assert.deepEqual(parseCodeAgentRunnerEventLine(JSON.stringify({
       schemaVersion: 1,
       type: 'tool_result',
       id: 'tool-1',
@@ -123,7 +123,7 @@ describe('Coco runner protocol', () => {
       truncated: true,
     });
 
-    assert.deepEqual(parseCocoRunnerEventLine(JSON.stringify({
+    assert.deepEqual(parseCodeAgentRunnerEventLine(JSON.stringify({
       schemaVersion: 1,
       type: 'final',
       messageId: 'ai-1',
@@ -141,14 +141,14 @@ describe('Coco runner protocol', () => {
   });
 
   it('rejects unsupported schema versions and malformed JSON', () => {
-    assert.throws(() => parseCocoRunnerEventLine('{bad'), CocoRunnerProtocolError);
-    assert.throws(() => parseCocoRunnerEventLine(JSON.stringify({
+    assert.throws(() => parseCodeAgentRunnerEventLine('{bad'), CodeAgentRunnerProtocolError);
+    assert.throws(() => parseCodeAgentRunnerEventLine(JSON.stringify({
       schemaVersion: 2,
       type: 'status',
       turnId: 'turn-1',
       status: 'starting',
-    })), /Unsupported Coco runner schemaVersion/);
-    assert.throws(() => parseCocoRunnerEventLine(JSON.stringify({
+    })), /Unsupported code agent runner schemaVersion/);
+    assert.throws(() => parseCodeAgentRunnerEventLine(JSON.stringify({
       schemaVersion: 1,
       type: 'tool_result',
       id: 'tool-1',
@@ -156,20 +156,20 @@ describe('Coco runner protocol', () => {
       success: 'true',
       output: '',
     })), /Expected boolean field "success"/);
-    assert.throws(() => parseCocoRunnerEventLine(JSON.stringify({
+    assert.throws(() => parseCodeAgentRunnerEventLine(JSON.stringify({
       schemaVersion: 1,
       type: 'tool_call',
       id: 'tool-1',
       name: 'Read',
       args: 'README.md',
     })), /Expected object field "args"/);
-    assert.throws(() => parseCocoRunnerEventLine(JSON.stringify({
+    assert.throws(() => parseCodeAgentRunnerEventLine(JSON.stringify({
       schemaVersion: 1,
       type: 'tool_call',
       id: 'tool-1',
       name: 'Read',
     })), /Expected object field "args"/);
-    assert.throws(() => parseCocoRunnerEventLine(JSON.stringify({
+    assert.throws(() => parseCodeAgentRunnerEventLine(JSON.stringify({
       schemaVersion: 1,
       type: 'error',
       message: 'boom',
@@ -178,7 +178,7 @@ describe('Coco runner protocol', () => {
   });
 
   it('parses JSONL chunks without losing partial lines', () => {
-    const parser = new CocoRunnerJsonlParser();
+    const parser = new CodeAgentRunnerJsonlParser();
     const first = '{"schemaVersion":1,"type":"text_delta","messageId":"ai","delta":"hel';
     const second = 'lo"}\n{"schemaVersion":1,"type":"error","message":"boom"}\n';
 
@@ -199,7 +199,7 @@ describe('Coco runner protocol', () => {
   });
 
   it('flushes a final line even when the stream has no trailing newline', () => {
-    const parser = new CocoRunnerJsonlParser();
+    const parser = new CodeAgentRunnerJsonlParser();
     assert.deepEqual(parser.push('{"schemaVersion":1,"type":"error","message":"boom"}'), []);
     const parsed = parser.flush();
     assert.equal(parsed.length, 1);

@@ -1,6 +1,6 @@
 import {
-  CocoRunnerProcess,
-  CocoRunnerProcessExit,
+  CodeAgentRunnerProcess,
+  CodeAgentRunnerProcessExit,
   CocoSandboxHandle,
   CocoSandboxService,
   CocoWorkspaceChanges,
@@ -25,7 +25,7 @@ import {
   CocoWorkspacePreviewServer,
   CocoWorkspacePreviewTargetResolution,
   SearchCocoWorkspaceEntriesOptions,
-  StartCocoRunnerInput,
+  StartCodeAgentRunnerInput,
   WriteCocoSandboxSecretFileInput,
   WriteCocoWorkspaceFileInput,
   searchCocoWorkspaceEntries,
@@ -74,7 +74,7 @@ export interface E2BCommandResult {
   stdin?: Writable;
   stdout?: Readable;
   stderr?: Readable;
-  completed?: Promise<CocoRunnerProcessExit>;
+  completed?: Promise<CodeAgentRunnerProcessExit>;
   stop?(): Promise<void>;
 }
 
@@ -181,7 +181,7 @@ export class E2BCocoSandboxService implements CocoSandboxService {
     }
   }
 
-  async startRunner(input: StartCocoRunnerInput): Promise<CocoRunnerProcess> {
+  async startRunner(input: StartCodeAgentRunnerInput): Promise<CodeAgentRunnerProcess> {
     const handle = await this.driver.connect(input.handle.id);
     if (!handle.commands?.run) {
       throw new Error('E2B sandbox driver handle does not support command execution');

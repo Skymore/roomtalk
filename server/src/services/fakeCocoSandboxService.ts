@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import {
-  CocoRunnerProcess,
+  CodeAgentRunnerProcess,
   CocoSandboxHandle,
   CocoSandboxService,
   CocoWorkspaceChanges,
@@ -20,7 +20,7 @@ import {
   ReadCocoWorkspaceDiffOptions,
   ReadCocoWorkspaceFileOptions,
   SearchCocoWorkspaceEntriesOptions,
-  StartCocoRunnerInput,
+  StartCodeAgentRunnerInput,
   WriteCocoSandboxSecretFileInput,
   WriteCocoWorkspaceFileInput,
   searchCocoWorkspaceEntries,
@@ -96,7 +96,7 @@ export class FakeCocoSandboxService implements CocoSandboxService {
     this.initializedWorkspaceVersionControlSandboxIds.push(handle.id);
   }
 
-  async startRunner(input: StartCocoRunnerInput): Promise<CocoRunnerProcess> {
+  async startRunner(input: StartCodeAgentRunnerInput): Promise<CodeAgentRunnerProcess> {
     this.consumeFailure('startRunner');
     this.startedRunnerCommands.push(input.command);
     this.startedRunnerEnvs.push({ ...(input.env || {}) });

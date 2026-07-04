@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { COCO_RUNNER_SCHEMA_VERSION, CocoRunnerEvent, CocoRunnerRunRequest } from './cocoRunnerProtocol';
-import { FakeCocoRunnerClient } from './fakeCocoRunner';
+import { CODE_AGENT_RUNNER_SCHEMA_VERSION, CodeAgentRunnerEvent, CodeAgentRunnerRunRequest } from './codeAgentRunnerProtocol';
+import { FakeCodeAgentRunnerClient } from './fakeCodeAgentRunner';
 
-const request: CocoRunnerRunRequest = {
-  schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+const request: CodeAgentRunnerRunRequest = {
+  schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
   type: 'run',
   roomId: 'room-1',
   turnId: 'turn-1',
@@ -17,16 +17,16 @@ const request: CocoRunnerRunRequest = {
   allowedPaths: ['.'],
 };
 
-describe('FakeCocoRunnerClient', () => {
+describe('FakeCodeAgentRunnerClient', () => {
   it('emits scripted events in order and records requests', async () => {
-    const events: CocoRunnerEvent[] = [
+    const events: CodeAgentRunnerEvent[] = [
       { schemaVersion: 1, type: 'text_delta', messageId: 'ai-1', delta: 'checking' },
       { schemaVersion: 1, type: 'tool_call', id: 'tool-1', name: 'Read', args: { file_path: 'README.md' } },
       { schemaVersion: 1, type: 'tool_result', id: 'tool-1', name: 'Read', success: true, output: '# RoomTalk' },
       { schemaVersion: 1, type: 'final', messageId: 'ai-1', answer: 'done', sessionId: 'session-1' },
     ];
-    const runner = new FakeCocoRunnerClient(events);
-    const emitted: CocoRunnerEvent[] = [];
+    const runner = new FakeCodeAgentRunnerClient(events);
+    const emitted: CodeAgentRunnerEvent[] = [];
 
     const result = await runner.run(request, { onEvent: event => { emitted.push(event); } });
 
@@ -37,7 +37,7 @@ describe('FakeCocoRunnerClient', () => {
   });
 
   it('returns the terminal error event when a script fails', async () => {
-    const runner = new FakeCocoRunnerClient([
+    const runner = new FakeCodeAgentRunnerClient([
       { schemaVersion: 1, type: 'error', message: 'runner crashed', code: 'runner_exit', retryable: false },
       { schemaVersion: 1, type: 'text_delta', messageId: 'ai-1', delta: 'should not emit' },
     ]);

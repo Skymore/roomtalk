@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { mapCocoRunnerEvent } from './cocoEventMapper';
+import { mapCodeAgentRunnerEvent } from './codeAgentEventMapper';
 
 const now = new Date('2026-05-16T10:00:00.000Z');
 const context = {
@@ -10,9 +10,9 @@ const context = {
   createMessageId: (prefix: string) => `${prefix}_id`,
 };
 
-describe('Coco runner event mapper', () => {
+describe('code agent runner event mapper', () => {
   it('maps text deltas without creating persisted messages', () => {
-    const mapped = mapCocoRunnerEvent({
+    const mapped = mapCodeAgentRunnerEvent({
       schemaVersion: 1,
       type: 'text_delta',
       messageId: 'ai-1',
@@ -23,7 +23,7 @@ describe('Coco runner event mapper', () => {
   });
 
   it('maps tool calls into message drafts', () => {
-    const mapped = mapCocoRunnerEvent({
+    const mapped = mapCodeAgentRunnerEvent({
       schemaVersion: 1,
       type: 'tool_call',
       id: 'tool-1',
@@ -40,8 +40,26 @@ describe('Coco runner event mapper', () => {
     assert.deepEqual(mapped.message.toolArgs, { file_path: 'README.md' });
   });
 
+  it('maps tool messages with backend-specific identity when provided', () => {
+    const mapped = mapCodeAgentRunnerEvent({
+      schemaVersion: 1,
+      type: 'tool_call',
+      id: 'tool-codex-1',
+      name: 'Shell',
+      args: { command: 'git status --short' },
+    }, {
+      ...context,
+      username: 'Codex',
+    });
+
+    assert.equal(mapped.kind, 'message');
+    if (mapped.kind !== 'message') return;
+    assert.equal(mapped.message.clientId, 'coco_runner');
+    assert.equal(mapped.message.username, 'Codex');
+  });
+
   it('maps failed tool results into error message drafts with truncated output', () => {
-    const mapped = mapCocoRunnerEvent({
+    const mapped = mapCodeAgentRunnerEvent({
       schemaVersion: 1,
       type: 'tool_result',
       id: 'tool-1',
@@ -66,7 +84,7 @@ describe('Coco runner event mapper', () => {
   });
 
   it('ignores non-error status events and maps error status messages', () => {
-    const starting = mapCocoRunnerEvent({
+    const starting = mapCodeAgentRunnerEvent({
       schemaVersion: 1,
       type: 'status',
       turnId: 'turn-1',
@@ -75,7 +93,7 @@ describe('Coco runner event mapper', () => {
     }, context);
     assert.deepEqual(starting, { kind: 'ignored' });
 
-    const running = mapCocoRunnerEvent({
+    const running = mapCodeAgentRunnerEvent({
       schemaVersion: 1,
       type: 'status',
       turnId: 'turn-1',
@@ -83,7 +101,7 @@ describe('Coco runner event mapper', () => {
     }, context);
     assert.deepEqual(running, { kind: 'ignored' });
 
-    const ready = mapCocoRunnerEvent({
+    const ready = mapCodeAgentRunnerEvent({
       schemaVersion: 1,
       type: 'status',
       turnId: 'turn-1',
@@ -91,7 +109,7 @@ describe('Coco runner event mapper', () => {
     }, context);
     assert.deepEqual(ready, { kind: 'ignored' });
 
-    const complete = mapCocoRunnerEvent({
+    const complete = mapCodeAgentRunnerEvent({
       schemaVersion: 1,
       type: 'status',
       turnId: 'turn-1',
@@ -99,7 +117,7 @@ describe('Coco runner event mapper', () => {
     }, context);
     assert.deepEqual(complete, { kind: 'ignored' });
 
-    const startingWithoutMessage = mapCocoRunnerEvent({
+    const startingWithoutMessage = mapCodeAgentRunnerEvent({
       schemaVersion: 1,
       type: 'status',
       turnId: 'turn-1',
@@ -107,7 +125,7 @@ describe('Coco runner event mapper', () => {
     }, context);
     assert.deepEqual(startingWithoutMessage, { kind: 'ignored' });
 
-    const error = mapCocoRunnerEvent({
+    const error = mapCodeAgentRunnerEvent({
       schemaVersion: 1,
       type: 'status',
       turnId: 'turn-1',
@@ -121,7 +139,7 @@ describe('Coco runner event mapper', () => {
   });
 
   it('maps successful tool results into complete message drafts', () => {
-    const mapped = mapCocoRunnerEvent({
+    const mapped = mapCodeAgentRunnerEvent({
       schemaVersion: 1,
       type: 'tool_result',
       id: 'tool-2',
@@ -141,7 +159,7 @@ describe('Coco runner event mapper', () => {
   });
 
   it('maps final events and runner errors', () => {
-    const final = mapCocoRunnerEvent({
+    const final = mapCodeAgentRunnerEvent({
       schemaVersion: 1,
       type: 'final',
       messageId: 'ai-1',
@@ -156,7 +174,7 @@ describe('Coco runner event mapper', () => {
       usage: undefined,
     });
 
-    const error = mapCocoRunnerEvent({
+    const error = mapCodeAgentRunnerEvent({
       schemaVersion: 1,
       type: 'error',
       message: 'runner exited',

@@ -1,28 +1,28 @@
 import { AIModelProvider, AIUsage, CodexPermissionMode, CodexReasoningEffort } from '../types';
 
-export const COCO_RUNNER_SCHEMA_VERSION = 1 as const;
+export const CODE_AGENT_RUNNER_SCHEMA_VERSION = 1 as const;
 
-export type CocoRunnerMode = 'plan' | 'acceptEdits';
+export type CodeAgentRunnerMode = 'plan' | 'acceptEdits';
 
-export type CocoRunnerPriorContentBlock =
+export type CodeAgentRunnerPriorContentBlock =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
   | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
 
-export interface CocoRunnerPriorMessage {
+export interface CodeAgentRunnerPriorMessage {
   role: 'user' | 'assistant';
-  content: string | CocoRunnerPriorContentBlock[];
+  content: string | CodeAgentRunnerPriorContentBlock[];
 }
 
-export interface CocoRunnerRunRequest {
-  schemaVersion: typeof COCO_RUNNER_SCHEMA_VERSION;
+export interface CodeAgentRunnerRunRequest {
+  schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
   type: 'run';
   roomId: string;
   clientId?: string;
   turnId: string;
   sessionId?: string | null;
   prompt: string;
-  mode: CocoRunnerMode;
+  mode: CodeAgentRunnerMode;
   provider: AIModelProvider;
   modelId: string;
   apiModel: string;
@@ -31,26 +31,26 @@ export interface CocoRunnerRunRequest {
   codexPermissionMode?: CodexPermissionMode;
   workspace: string;
   allowedPaths: string[];
-  priorMessages?: CocoRunnerPriorMessage[];
+  priorMessages?: CodeAgentRunnerPriorMessage[];
 }
 
-export interface CocoRunnerStatusEvent {
-  schemaVersion: typeof COCO_RUNNER_SCHEMA_VERSION;
+export interface CodeAgentRunnerStatusEvent {
+  schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
   type: 'status';
   turnId: string;
   status: 'starting' | 'ready' | 'running' | 'complete' | 'error';
   message?: string;
 }
 
-export interface CocoRunnerTextDeltaEvent {
-  schemaVersion: typeof COCO_RUNNER_SCHEMA_VERSION;
+export interface CodeAgentRunnerTextDeltaEvent {
+  schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
   type: 'text_delta';
   messageId: string;
   delta: string;
 }
 
-export interface CocoRunnerToolCallEvent {
-  schemaVersion: typeof COCO_RUNNER_SCHEMA_VERSION;
+export interface CodeAgentRunnerToolCallEvent {
+  schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
   type: 'tool_call';
   id: string;
   name: string;
@@ -58,8 +58,8 @@ export interface CocoRunnerToolCallEvent {
   messageId?: string;
 }
 
-export interface CocoRunnerToolResultEvent {
-  schemaVersion: typeof COCO_RUNNER_SCHEMA_VERSION;
+export interface CodeAgentRunnerToolResultEvent {
+  schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
   type: 'tool_result';
   id: string;
   name: string;
@@ -71,8 +71,8 @@ export interface CocoRunnerToolResultEvent {
   truncated?: boolean;
 }
 
-export interface CocoRunnerFinalEvent {
-  schemaVersion: typeof COCO_RUNNER_SCHEMA_VERSION;
+export interface CodeAgentRunnerFinalEvent {
+  schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
   type: 'final';
   messageId: string;
   answer: string;
@@ -80,8 +80,8 @@ export interface CocoRunnerFinalEvent {
   usage?: AIUsage;
 }
 
-export interface CocoRunnerErrorEvent {
-  schemaVersion: typeof COCO_RUNNER_SCHEMA_VERSION;
+export interface CodeAgentRunnerErrorEvent {
+  schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
   type: 'error';
   message: string;
   turnId?: string;
@@ -89,18 +89,18 @@ export interface CocoRunnerErrorEvent {
   retryable?: boolean;
 }
 
-export type CocoRunnerEvent =
-  | CocoRunnerStatusEvent
-  | CocoRunnerTextDeltaEvent
-  | CocoRunnerToolCallEvent
-  | CocoRunnerToolResultEvent
-  | CocoRunnerFinalEvent
-  | CocoRunnerErrorEvent;
+export type CodeAgentRunnerEvent =
+  | CodeAgentRunnerStatusEvent
+  | CodeAgentRunnerTextDeltaEvent
+  | CodeAgentRunnerToolCallEvent
+  | CodeAgentRunnerToolResultEvent
+  | CodeAgentRunnerFinalEvent
+  | CodeAgentRunnerErrorEvent;
 
-export class CocoRunnerProtocolError extends Error {
+export class CodeAgentRunnerProtocolError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'CocoRunnerProtocolError';
+    this.name = 'CodeAgentRunnerProtocolError';
   }
 }
 
@@ -111,7 +111,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> => {
 const readRequiredString = (value: Record<string, unknown>, key: string): string => {
   const field = value[key];
   if (typeof field !== 'string' || field.length === 0) {
-    throw new CocoRunnerProtocolError(`Expected non-empty string field "${key}".`);
+    throw new CodeAgentRunnerProtocolError(`Expected non-empty string field "${key}".`);
   }
   return field;
 };
@@ -119,7 +119,7 @@ const readRequiredString = (value: Record<string, unknown>, key: string): string
 const readString = (value: Record<string, unknown>, key: string): string => {
   const field = value[key];
   if (typeof field !== 'string') {
-    throw new CocoRunnerProtocolError(`Expected string field "${key}".`);
+    throw new CodeAgentRunnerProtocolError(`Expected string field "${key}".`);
   }
   return field;
 };
@@ -127,7 +127,7 @@ const readString = (value: Record<string, unknown>, key: string): string => {
 const readRequiredBoolean = (value: Record<string, unknown>, key: string): boolean => {
   const field = value[key];
   if (typeof field !== 'boolean') {
-    throw new CocoRunnerProtocolError(`Expected boolean field "${key}".`);
+    throw new CodeAgentRunnerProtocolError(`Expected boolean field "${key}".`);
   }
   return field;
 };
@@ -138,7 +138,7 @@ const readOptionalString = (value: Record<string, unknown>, key: string): string
     return undefined;
   }
   if (typeof field !== 'string' || field.length === 0) {
-    throw new CocoRunnerProtocolError(`Expected non-empty string field "${key}".`);
+    throw new CodeAgentRunnerProtocolError(`Expected non-empty string field "${key}".`);
   }
   return field;
 };
@@ -149,7 +149,7 @@ const readOptionalNumber = (value: Record<string, unknown>, key: string): number
     return undefined;
   }
   if (typeof field !== 'number' || !Number.isFinite(field)) {
-    throw new CocoRunnerProtocolError(`Expected finite number field "${key}".`);
+    throw new CodeAgentRunnerProtocolError(`Expected finite number field "${key}".`);
   }
   return field;
 };
@@ -160,7 +160,7 @@ const readOptionalBoolean = (value: Record<string, unknown>, key: string): boole
     return undefined;
   }
   if (typeof field !== 'boolean') {
-    throw new CocoRunnerProtocolError(`Expected boolean field "${key}".`);
+    throw new CodeAgentRunnerProtocolError(`Expected boolean field "${key}".`);
   }
   return field;
 };
@@ -168,7 +168,7 @@ const readOptionalBoolean = (value: Record<string, unknown>, key: string): boole
 const readRecord = (value: Record<string, unknown>, key: string): Record<string, unknown> => {
   const field = value[key];
   if (!isRecord(field)) {
-    throw new CocoRunnerProtocolError(`Expected object field "${key}".`);
+    throw new CodeAgentRunnerProtocolError(`Expected object field "${key}".`);
   }
   return field;
 };
@@ -179,7 +179,7 @@ const readOptionalUsage = (value: Record<string, unknown>): AIUsage | undefined 
     return undefined;
   }
   if (!isRecord(usage)) {
-    throw new CocoRunnerProtocolError('Expected object field "usage".');
+    throw new CodeAgentRunnerProtocolError('Expected object field "usage".');
   }
 
   const promptTokens = usage.promptTokens;
@@ -193,7 +193,7 @@ const readOptionalUsage = (value: Record<string, unknown>): AIUsage | undefined 
     typeof totalTokens !== 'number' ||
     (source !== 'reported' && source !== 'estimated')
   ) {
-    throw new CocoRunnerProtocolError('Invalid usage payload.');
+    throw new CodeAgentRunnerProtocolError('Invalid usage payload.');
   }
 
   const parsed: AIUsage = {
@@ -214,30 +214,30 @@ const readOptionalUsage = (value: Record<string, unknown>): AIUsage | undefined 
 };
 
 const assertSchemaVersion = (value: Record<string, unknown>) => {
-  if (value.schemaVersion !== COCO_RUNNER_SCHEMA_VERSION) {
-    throw new CocoRunnerProtocolError(`Unsupported Coco runner schemaVersion: ${String(value.schemaVersion)}.`);
+  if (value.schemaVersion !== CODE_AGENT_RUNNER_SCHEMA_VERSION) {
+    throw new CodeAgentRunnerProtocolError(`Unsupported code agent runner schemaVersion: ${String(value.schemaVersion)}.`);
   }
 };
 
-export const serializeCocoRunnerRequest = (request: CocoRunnerRunRequest): string => {
+export const serializeCodeAgentRunnerRequest = (request: CodeAgentRunnerRunRequest): string => {
   return `${JSON.stringify(request)}\n`;
 };
 
-export const parseCocoRunnerEventLine = (line: string): CocoRunnerEvent => {
+export const parseCodeAgentRunnerEventLine = (line: string): CodeAgentRunnerEvent => {
   const trimmed = line.trim();
   if (!trimmed) {
-    throw new CocoRunnerProtocolError('Cannot parse an empty Coco runner event line.');
+    throw new CodeAgentRunnerProtocolError('Cannot parse an empty code agent runner event line.');
   }
 
   let raw: unknown;
   try {
     raw = JSON.parse(trimmed);
   } catch (error) {
-    throw new CocoRunnerProtocolError(`Invalid Coco runner JSON event: ${(error as Error).message}`);
+    throw new CodeAgentRunnerProtocolError(`Invalid code agent runner JSON event: ${(error as Error).message}`);
   }
 
   if (!isRecord(raw)) {
-    throw new CocoRunnerProtocolError('Coco runner event must be a JSON object.');
+    throw new CodeAgentRunnerProtocolError('code agent runner event must be a JSON object.');
   }
   assertSchemaVersion(raw);
 
@@ -246,26 +246,26 @@ export const parseCocoRunnerEventLine = (line: string): CocoRunnerEvent => {
     case 'status': {
       const status = readRequiredString(raw, 'status');
       if (!['starting', 'ready', 'running', 'complete', 'error'].includes(status)) {
-        throw new CocoRunnerProtocolError(`Invalid status event value: ${status}.`);
+        throw new CodeAgentRunnerProtocolError(`Invalid status event value: ${status}.`);
       }
       return {
-        schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type,
         turnId: readRequiredString(raw, 'turnId'),
-        status: status as CocoRunnerStatusEvent['status'],
+        status: status as CodeAgentRunnerStatusEvent['status'],
         message: readOptionalString(raw, 'message'),
       };
     }
     case 'text_delta':
       return {
-        schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type,
         messageId: readRequiredString(raw, 'messageId'),
         delta: readString(raw, 'delta'),
       };
     case 'tool_call':
       return {
-        schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type,
         id: readRequiredString(raw, 'id'),
         name: readRequiredString(raw, 'name'),
@@ -274,7 +274,7 @@ export const parseCocoRunnerEventLine = (line: string): CocoRunnerEvent => {
       };
     case 'tool_result':
       return {
-        schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type,
         id: readRequiredString(raw, 'id'),
         name: readRequiredString(raw, 'name'),
@@ -287,7 +287,7 @@ export const parseCocoRunnerEventLine = (line: string): CocoRunnerEvent => {
       };
     case 'final':
       return {
-        schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type,
         messageId: readRequiredString(raw, 'messageId'),
         answer: readString(raw, 'answer'),
@@ -296,7 +296,7 @@ export const parseCocoRunnerEventLine = (line: string): CocoRunnerEvent => {
       };
     case 'error':
       return {
-        schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type,
         message: readRequiredString(raw, 'message'),
         turnId: readOptionalString(raw, 'turnId'),
@@ -304,27 +304,27 @@ export const parseCocoRunnerEventLine = (line: string): CocoRunnerEvent => {
         retryable: readOptionalBoolean(raw, 'retryable'),
       };
     default:
-      throw new CocoRunnerProtocolError(`Unknown Coco runner event type: ${String(type)}.`);
+      throw new CodeAgentRunnerProtocolError(`Unknown code agent runner event type: ${String(type)}.`);
   }
 };
 
-export class CocoRunnerJsonlParser {
+export class CodeAgentRunnerJsonlParser {
   private buffer = '';
 
-  push(chunk: string): CocoRunnerEvent[] {
+  push(chunk: string): CodeAgentRunnerEvent[] {
     this.buffer += chunk;
     const lines = this.buffer.split(/\r?\n/);
     this.buffer = lines.pop() || '';
     // Fail fast: one malformed line aborts the current turn and the caller must surface that protocol error.
-    return lines.filter(line => line.trim() !== '').map(parseCocoRunnerEventLine);
+    return lines.filter(line => line.trim() !== '').map(parseCodeAgentRunnerEventLine);
   }
 
-  flush(): CocoRunnerEvent[] {
+  flush(): CodeAgentRunnerEvent[] {
     if (!this.buffer.trim()) {
       this.buffer = '';
       return [];
     }
-    const event = parseCocoRunnerEventLine(this.buffer);
+    const event = parseCodeAgentRunnerEventLine(this.buffer);
     this.buffer = '';
     return [event];
   }

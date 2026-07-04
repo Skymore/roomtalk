@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { PassThrough, Writable } from 'stream';
-import { COCO_RUNNER_SCHEMA_VERSION, CocoRunnerEvent, CocoRunnerRunRequest } from './cocoRunnerProtocol';
-import { CocoRunnerProcess, CocoRunnerProcessExit, CocoSandboxHandle } from './cocoSandboxService';
-import { JsonlCocoRunnerClient } from './jsonlCocoRunner';
+import { CODE_AGENT_RUNNER_SCHEMA_VERSION, CodeAgentRunnerEvent, CodeAgentRunnerRunRequest } from './codeAgentRunnerProtocol';
+import { CodeAgentRunnerProcess, CodeAgentRunnerProcessExit, CocoSandboxHandle } from './cocoSandboxService';
+import { JsonlCodeAgentRunnerClient } from './jsonlCodeAgentRunner';
 
-const request: CocoRunnerRunRequest = {
-  schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+const request: CodeAgentRunnerRunRequest = {
+  schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
   type: 'run',
   roomId: 'room-1',
   turnId: 'turn-1',
@@ -29,19 +29,19 @@ const sandbox: CocoSandboxHandle = {
   createdAt: '2026-05-03T00:00:00.000Z',
 };
 
-class MemoryRunnerProcess implements CocoRunnerProcess {
+class MemoryRunnerProcess implements CodeAgentRunnerProcess {
   readonly command = 'python -m roomtalk_coco_runner';
   readonly stdin = new PassThrough();
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
   readonly writtenInput: Promise<string>;
-  private resolveExit!: (exit: CocoRunnerProcessExit) => void;
+  private resolveExit!: (exit: CodeAgentRunnerProcessExit) => void;
   private rejectExit!: (error: unknown) => void;
-  readonly completed: Promise<CocoRunnerProcessExit>;
+  readonly completed: Promise<CodeAgentRunnerProcessExit>;
   stopCalled = false;
 
   constructor() {
-    const completionSuccess = new Promise<CocoRunnerProcessExit>(resolve => {
+    const completionSuccess = new Promise<CodeAgentRunnerProcessExit>(resolve => {
       this.resolveExit = resolve;
     });
     const completionFailure = new Promise<never>((_, reject) => {
@@ -72,13 +72,13 @@ class MemoryRunnerProcess implements CocoRunnerProcess {
   }
 }
 
-class StdinFailureRunnerProcess implements CocoRunnerProcess {
+class StdinFailureRunnerProcess implements CodeAgentRunnerProcess {
   readonly command = 'python -m roomtalk_coco_runner';
   readonly stdin: Writable;
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
-  private resolveExit!: (exit: CocoRunnerProcessExit) => void;
-  readonly completed: Promise<CocoRunnerProcessExit>;
+  private resolveExit!: (exit: CodeAgentRunnerProcessExit) => void;
+  readonly completed: Promise<CodeAgentRunnerProcessExit>;
 
   constructor(error: Error) {
     this.stdin = new Writable({
@@ -86,7 +86,7 @@ class StdinFailureRunnerProcess implements CocoRunnerProcess {
         callback(error);
       },
     });
-    this.completed = new Promise<CocoRunnerProcessExit>(resolve => {
+    this.completed = new Promise<CodeAgentRunnerProcessExit>(resolve => {
       this.resolveExit = resolve;
     });
   }
@@ -100,16 +100,16 @@ class StdinFailureRunnerProcess implements CocoRunnerProcess {
   async stop() {}
 }
 
-const createContext = (process: CocoRunnerProcess = new MemoryRunnerProcess()) => ({
+const createContext = (process: CodeAgentRunnerProcess = new MemoryRunnerProcess()) => ({
   process,
   sandbox,
 });
 
-describe('JsonlCocoRunnerClient', () => {
+describe('JsonlCodeAgentRunnerClient', () => {
   it('writes one JSONL request and returns final events in order', async () => {
     const process = new MemoryRunnerProcess();
-    const runner = new JsonlCocoRunnerClient();
-    const emitted: CocoRunnerEvent[] = [];
+    const runner = new JsonlCodeAgentRunnerClient();
+    const emitted: CodeAgentRunnerEvent[] = [];
 
     const run = runner.run(request, {
       onEvent: event => {
@@ -131,8 +131,8 @@ describe('JsonlCocoRunnerClient', () => {
 
   it('turns malformed stdout into a runner protocol error event', async () => {
     const process = new MemoryRunnerProcess();
-    const runner = new JsonlCocoRunnerClient();
-    const emitted: CocoRunnerEvent[] = [];
+    const runner = new JsonlCodeAgentRunnerClient();
+    const emitted: CodeAgentRunnerEvent[] = [];
 
     const run = runner.run(request, {
       onEvent: event => {
@@ -145,14 +145,14 @@ describe('JsonlCocoRunnerClient', () => {
 
     const result = await run;
     assert.equal(result.errorEvent?.code, 'protocol_error');
-    assert.match(result.errorEvent?.message || '', /Invalid Coco runner JSON event/);
+    assert.match(result.errorEvent?.message || '', /Invalid code agent runner JSON event/);
     assert.deepEqual(emitted.map(event => event.type), ['error']);
   });
 
   it('turns process failure before final into a runner exit error event with stderr tail', async () => {
     const process = new MemoryRunnerProcess();
-    const runner = new JsonlCocoRunnerClient();
-    const emitted: CocoRunnerEvent[] = [];
+    const runner = new JsonlCodeAgentRunnerClient();
+    const emitted: CodeAgentRunnerEvent[] = [];
 
     const run = runner.run(request, {
       onEvent: event => {
@@ -171,8 +171,8 @@ describe('JsonlCocoRunnerClient', () => {
 
   it('turns stdin write failures into a runner error event with stderr tail', async () => {
     const process = new StdinFailureRunnerProcess(new Error('write |1: broken pipe'));
-    const runner = new JsonlCocoRunnerClient();
-    const emitted: CocoRunnerEvent[] = [];
+    const runner = new JsonlCodeAgentRunnerClient();
+    const emitted: CodeAgentRunnerEvent[] = [];
 
     const run = runner.run(request, {
       onEvent: event => {
@@ -192,7 +192,7 @@ describe('JsonlCocoRunnerClient', () => {
 
   it('reports clean exit without final as a protocol-level missing final error', async () => {
     const process = new MemoryRunnerProcess();
-    const runner = new JsonlCocoRunnerClient();
+    const runner = new JsonlCodeAgentRunnerClient();
 
     const run = runner.run(request, { onEvent: () => {} }, createContext(process));
     process.complete(0);
@@ -204,7 +204,7 @@ describe('JsonlCocoRunnerClient', () => {
 
   it('turns completion promise failures into runner process errors', async () => {
     const process = new MemoryRunnerProcess();
-    const runner = new JsonlCocoRunnerClient();
+    const runner = new JsonlCodeAgentRunnerClient();
 
     const run = runner.run(request, { onEvent: () => {} }, createContext(process));
     process.failCompletion(new Error('completion rejected'));
@@ -216,7 +216,7 @@ describe('JsonlCocoRunnerClient', () => {
 
   it('propagates handler failures so the session can stop the owned runner process', async () => {
     const process = new MemoryRunnerProcess();
-    const runner = new JsonlCocoRunnerClient();
+    const runner = new JsonlCodeAgentRunnerClient();
 
     const run = runner.run(request, {
       onEvent: () => {
@@ -231,7 +231,7 @@ describe('JsonlCocoRunnerClient', () => {
   });
 
   it('requires a process created by the sandbox service', async () => {
-    const runner = new JsonlCocoRunnerClient();
+    const runner = new JsonlCodeAgentRunnerClient();
 
     await assert.rejects(
       () => runner.run(request, { onEvent: () => {} }),

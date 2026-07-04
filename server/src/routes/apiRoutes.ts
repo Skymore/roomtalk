@@ -25,7 +25,7 @@ import {
 import { VerifyGoogleCredentialResult, resolveGoogleClientIds, verifyGoogleCredential } from '../services/googleAuth';
 import { getStickerCatalog } from '../stickers/catalog';
 import { CocoAccessControl, createCocoAccessControl } from '../services/cocoAccessControl';
-import { CocoRunnerMode } from '../services/cocoRunnerProtocol';
+import { CodeAgentRunnerMode } from '../services/codeAgentRunnerProtocol';
 import { CodexConnectionService } from '../services/codexConnection';
 import { CodexDeviceAuthSessionManager } from '../services/codexDeviceAuthSession';
 import { registerCodexConnectionRoutes } from './codexConnectionRoutes';
@@ -43,9 +43,9 @@ interface ApiRouteOptions {
   googleClientIds?: string[];
   verifyGoogleCredential?: (credential: string, clientIds: string[]) => Promise<VerifyGoogleCredentialResult>;
   cocoAccess?: CocoAccessControl;
-  cocoMode?: CocoRunnerMode;
-  cocoAvailableModes?: CocoRunnerMode[];
-  cocoDefaultMode?: CocoRunnerMode;
+  cocoMode?: CodeAgentRunnerMode;
+  cocoAvailableModes?: CodeAgentRunnerMode[];
+  cocoDefaultMode?: CodeAgentRunnerMode;
   codexConnections?: {
     enabled: boolean;
     service?: CodexConnectionService;

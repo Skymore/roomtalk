@@ -4,10 +4,10 @@ import { RoomStore } from '../repositories/store';
 import { AIModelOption, CodeAgentBackend, Message, Room, RoomMemberRole } from '../types';
 import { calculateAICost, getMessageAIModel } from './aiModels';
 import { CocoSandboxLifecycleService, EnsureCocoSandboxResult } from './cocoSandboxLifecycle';
-import { CocoSandboxHandle, CocoSandboxService, CocoRunnerProcess } from './cocoSandboxService';
-import { mapCocoRunnerEvent } from './cocoEventMapper';
+import { CocoSandboxHandle, CocoSandboxService, CodeAgentRunnerProcess } from './cocoSandboxService';
+import { mapCodeAgentRunnerEvent } from './codeAgentEventMapper';
 import { CodeAgentRunner } from './codeAgentRunner';
-import { COCO_RUNNER_SCHEMA_VERSION, CocoRunnerEvent, CocoRunnerMode, CocoRunnerRunRequest } from './cocoRunnerProtocol';
+import { CODE_AGENT_RUNNER_SCHEMA_VERSION, CodeAgentRunnerEvent, CodeAgentRunnerMode, CodeAgentRunnerRunRequest } from './codeAgentRunnerProtocol';
 import { DEFAULT_CODEX_CLI_RUNNER_COMMAND, DEFAULT_COCO_RUNNER_COMMAND } from './cocoRuntimeConfig';
 import { createAIPlaceholderMessage } from './messageDomain';
 import { CocoModelGateway } from './cocoModelGateway';
@@ -16,7 +16,7 @@ import { PublishedStaticSiteService } from './publishedStaticSite';
 import { ObservabilityEventInput, ObservabilityEventRecorder } from './observabilityEvents';
 import { canUseCocoRoom, COCO_ACCESS_DENIED_MESSAGE } from './cocoRoomAccess';
 import { CodexConnectionService } from './codexConnection';
-import { CocoRunnerHandlers, CocoRunnerRunResult } from './fakeCocoRunner';
+import { CodeAgentRunnerHandlers, CodeAgentRunnerRunResult } from './fakeCodeAgentRunner';
 import { CodexRunSettings, getCodexMessageAIModel, normalizeCodexRunSettings } from './codexRunSettings';
 
 export interface CocoRoomEmitter {
@@ -28,9 +28,9 @@ export interface CocoRoomEmitter {
 export interface CocoSessionServiceOptions {
   enabled: boolean;
   allowedClientIds?: string[];
-  mode?: CocoRunnerMode;
-  availableModes?: CocoRunnerMode[];
-  defaultMode?: CocoRunnerMode;
+  mode?: CodeAgentRunnerMode;
+  availableModes?: CodeAgentRunnerMode[];
+  defaultMode?: CodeAgentRunnerMode;
   modelGateway?: CocoModelGateway;
   backend?: CodeAgentBackend;
   runnerCommand?: string;
@@ -54,7 +54,7 @@ export interface CocoTurnInput {
   selectedModel: AIModelOption;
   codexRunSettings?: CodexRunSettings;
   maxContextMessages?: number;
-  requestedMode?: CocoRunnerMode;
+  requestedMode?: CodeAgentRunnerMode;
   requestedModeSource?: 'originalTurn';
   clientOrigin?: string;
   serverOrigin?: string;
@@ -151,7 +151,7 @@ export class CocoSessionService {
     let aiMessageId = '';
     let turnId = '';
     let aiMessage: Message | null = null;
-    let runnerProcess: CocoRunnerProcess | null = null;
+    let runnerProcess: CodeAgentRunnerProcess | null = null;
     let placeholderAnnounced = false;
     let roomMarkedRunning = false;
     let streamState: CocoTurnStreamState | null = null;
@@ -267,8 +267,8 @@ export class CocoSessionService {
         }),
         ...(this.options.runnerEnvByBackend?.[turnBackend] || {}),
       };
-      const runnerRequest: CocoRunnerRunRequest = {
-        schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+      const runnerRequest: CodeAgentRunnerRunRequest = {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'run',
         roomId: input.roomId,
         clientId: input.clientId,
@@ -308,7 +308,7 @@ export class CocoSessionService {
         return runnerProcess;
       };
       const runnerHandlers = {
-        onEvent: async (event: CocoRunnerEvent) => {
+        onEvent: async (event: CodeAgentRunnerEvent) => {
           await this.handleRunnerEvent(event, input.roomId, turnId, aiMessage!, input.selectedModel, streamState!, turnBackend, codexRunSettings);
         },
       };
@@ -327,7 +327,7 @@ export class CocoSessionService {
         throw new Error(runResult.errorEvent.message);
       }
       if (!runResult.finalEvent) {
-        throw new Error('Coco runner exited without a final event');
+        throw new Error('code agent runner exited without a final event');
       }
 
       // Seal the current segment and create a new one for the final answer
@@ -462,9 +462,9 @@ export class CocoSessionService {
     }
   }
 
-  private async stopRunnerProcess(runnerProcess: CocoRunnerProcess, roomId: string) {
+  private async stopRunnerProcess(runnerProcess: CodeAgentRunnerProcess, roomId: string) {
     await runnerProcess.stop().catch(error => {
-      this.logger.warn('Failed to stop Coco runner process', { error, roomId });
+      this.logger.warn('Failed to stop code agent runner process', { error, roomId });
     });
   }
 
@@ -473,11 +473,11 @@ export class CocoSessionService {
     clientId: string;
     turnId: string;
     runnerEnv: Record<string, string>;
-    request: CocoRunnerRunRequest;
-    handlers: CocoRunnerHandlers;
+    request: CodeAgentRunnerRunRequest;
+    handlers: CodeAgentRunnerHandlers;
     sandbox: CocoSandboxHandle;
-    startRunnerProcess: (env: Record<string, string>) => Promise<CocoRunnerProcess>;
-  }): Promise<CocoRunnerRunResult> {
+    startRunnerProcess: (env: Record<string, string>) => Promise<CodeAgentRunnerProcess>;
+  }): Promise<CodeAgentRunnerRunResult> {
     if (input.backend !== 'codex') {
       const process = await input.startRunnerProcess(input.runnerEnv);
       return this.runner.run(input.request, input.handlers, {
@@ -575,9 +575,9 @@ export class CocoSessionService {
   }
 
   private resolveTurnMode(
-    requestedMode?: CocoRunnerMode,
+    requestedMode?: CodeAgentRunnerMode,
     source?: 'originalTurn',
-  ): { ok: true; mode: CocoRunnerMode } | { ok: false; error: string } {
+  ): { ok: true; mode: CodeAgentRunnerMode } | { ok: false; error: string } {
     const availableModes = this.availableModes();
     const defaultMode = this.defaultMode(availableModes);
     if (!requestedMode) {
@@ -647,7 +647,7 @@ export class CocoSessionService {
     return backend === 'codex' ? DEFAULT_CODEX_CLI_RUNNER_COMMAND : DEFAULT_COCO_RUNNER_COMMAND;
   }
 
-  private availableModes(): CocoRunnerMode[] {
+  private availableModes(): CodeAgentRunnerMode[] {
     if (this.options.availableModes?.length) {
       return Array.from(new Set(this.options.availableModes));
     }
@@ -657,7 +657,7 @@ export class CocoSessionService {
     return ['plan'];
   }
 
-  private defaultMode(availableModes: CocoRunnerMode[]): CocoRunnerMode {
+  private defaultMode(availableModes: CodeAgentRunnerMode[]): CodeAgentRunnerMode {
     if (this.options.defaultMode && availableModes.includes(this.options.defaultMode)) {
       return this.options.defaultMode;
     }
@@ -713,7 +713,7 @@ export class CocoSessionService {
   }
 
   private async handleRunnerEvent(
-    event: CocoRunnerEvent,
+    event: CodeAgentRunnerEvent,
     roomId: string,
     turnId: string,
     baseAIMessage: Message,
@@ -723,9 +723,10 @@ export class CocoSessionService {
     codexRunSettings: CodexRunSettings
   ) {
     await this.recordRunnerEvent(event, roomId, turnId, selectedModel, backend, codexRunSettings);
-    const mapped = mapCocoRunnerEvent(event, {
+    const mapped = mapCodeAgentRunnerEvent(event, {
       roomId,
       turnId,
+      username: this.displayBackendName(backend),
       now: this.now(),
       createMessageId: prefix => `${prefix}_${this.createId()}`,
     });
@@ -853,7 +854,7 @@ export class CocoSessionService {
   }
 
   private async recordRunnerEvent(
-    event: CocoRunnerEvent,
+    event: CodeAgentRunnerEvent,
     roomId: string,
     turnId: string,
     selectedModel: AIModelOption,
@@ -877,7 +878,7 @@ export class CocoSessionService {
     });
   }
 
-  private summarizeRunnerEvent(event: CocoRunnerEvent): Record<string, unknown> {
+  private summarizeRunnerEvent(event: CodeAgentRunnerEvent): Record<string, unknown> {
     switch (event.type) {
       case 'status':
         return { status: event.status, message: event.message };
@@ -932,7 +933,7 @@ export class CocoSessionService {
     roomId: string;
     clientId: string;
     turnId: string;
-    mode: CocoRunnerMode;
+    mode: CodeAgentRunnerMode;
     clientOrigin?: string;
     serverOrigin?: string;
   }) {

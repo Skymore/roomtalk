@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
-import { parseCocoRunnerEventLine } from './cocoRunnerProtocol';
+import { parseCodeAgentRunnerEventLine } from './codeAgentRunnerProtocol';
 import {
   CodexCliDiagnosticsTail,
   CodexCliEventMapper,
@@ -33,7 +33,7 @@ describe('CodexExecJsonlParser', () => {
 });
 
 describe('CodexCliEventMapper', () => {
-  test('maps Codex JSONL events to Coco runner events with normalized workspace paths', () => {
+  test('maps Codex JSONL events to code agent runner events with normalized workspace paths', () => {
     const mapper = new CodexCliEventMapper({
       turnId: 'turn-1',
       messageId: 'ai-1',
@@ -100,7 +100,7 @@ describe('CodexCliEventMapper', () => {
     const final = mapper.createFinalEvent(`Finished ${workspace}/src/demo.js`);
 
     for (const event of [...events, final]) {
-      assert.equal(parseCocoRunnerEventLine(JSON.stringify(event)).type, event.type);
+      assert.equal(parseCodeAgentRunnerEventLine(JSON.stringify(event)).type, event.type);
     }
     assert.deepEqual(events.map(event => event.type), [
       'status',

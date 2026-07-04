@@ -1,9 +1,9 @@
 import { AIModelProvider } from '../types';
 import { CodeAgentBackend } from './codeAgentRunner';
 import { CocoSandboxProvider } from './cocoSandboxService';
-import { CocoRunnerMode } from './cocoRunnerProtocol';
+import { CodeAgentRunnerMode } from './codeAgentRunnerProtocol';
 
-export type CocoRunnerClientKind = 'fake' | 'jsonl';
+export type CodeAgentRunnerClientKind = 'fake' | 'jsonl';
 export type CocoArtifactMode = 'production' | 'development';
 export type CocoE2BOnTimeout = 'kill' | 'pause';
 
@@ -11,14 +11,14 @@ export interface CocoRuntimeConfig {
   enabled: boolean;
   backend: CodeAgentBackend;
   sandboxProvider: CocoSandboxProvider;
-  runnerClient: CocoRunnerClientKind;
+  runnerClient: CodeAgentRunnerClientKind;
   artifactMode: CocoArtifactMode;
   artifactVersion?: string;
   cocoSourceRef?: string;
   allowedClientIds: string[];
-  mode: CocoRunnerMode;
-  availableModes: CocoRunnerMode[];
-  defaultMode: CocoRunnerMode;
+  mode: CodeAgentRunnerMode;
+  availableModes: CodeAgentRunnerMode[];
+  defaultMode: CodeAgentRunnerMode;
   modelGateway?: {
     publicBaseUrl: string;
     tokenSecret: string;
@@ -91,7 +91,7 @@ const readCodeAgentBackend = (env: NodeJS.ProcessEnv): CodeAgentBackend => {
   throw new Error(`Unsupported CODE_AGENT_BACKEND: ${value}`);
 };
 
-const readRunnerClient = (env: NodeJS.ProcessEnv): CocoRunnerClientKind => {
+const readRunnerClient = (env: NodeJS.ProcessEnv): CodeAgentRunnerClientKind => {
   const value = (env.COCO_RUNNER_CLIENT || 'fake').toLowerCase();
   if (value === 'fake' || value === 'jsonl') {
     return value;
@@ -134,7 +134,7 @@ const readE2BLifecycle = (env: NodeJS.ProcessEnv): CocoRuntimeConfig['e2bLifecyc
   return { onTimeout, autoResume, keepMemory };
 };
 
-const readMode = (env: NodeJS.ProcessEnv): CocoRunnerMode => {
+const readMode = (env: NodeJS.ProcessEnv): CodeAgentRunnerMode => {
   const value = env.COCO_MODE?.trim();
   if (!value || value === 'plan') {
     return 'plan';
@@ -146,37 +146,37 @@ const readMode = (env: NodeJS.ProcessEnv): CocoRunnerMode => {
   return 'plan';
 };
 
-const isCocoRunnerMode = (value: string): value is CocoRunnerMode => (
+const isCodeAgentRunnerMode = (value: string): value is CodeAgentRunnerMode => (
   value === 'plan' || value === 'acceptEdits'
 );
 
-const normalizeModeSet = (modes: CocoRunnerMode[]) => {
+const normalizeModeSet = (modes: CodeAgentRunnerMode[]) => {
   const unique = Array.from(new Set(modes));
   return unique.includes('acceptEdits') && !unique.includes('plan')
-    ? ['plan', ...unique] as CocoRunnerMode[]
+    ? ['plan', ...unique] as CodeAgentRunnerMode[]
     : unique;
 };
 
-const readAvailableModes = (env: NodeJS.ProcessEnv): CocoRunnerMode[] => {
+const readAvailableModes = (env: NodeJS.ProcessEnv): CodeAgentRunnerMode[] => {
   const configured = parseCsvEnv(env.COCO_ALLOWED_RUN_MODES);
   if (configured.length > 0) {
-    const invalid = configured.find(mode => !isCocoRunnerMode(mode));
+    const invalid = configured.find(mode => !isCodeAgentRunnerMode(mode));
     if (invalid) {
       throw new Error(`Unsupported COCO_ALLOWED_RUN_MODES entry: ${invalid}`);
     }
-    return normalizeModeSet(configured as CocoRunnerMode[]);
+    return normalizeModeSet(configured as CodeAgentRunnerMode[]);
   }
 
   const legacyMode = readMode(env);
   return legacyMode === 'acceptEdits' ? ['plan', 'acceptEdits'] : ['plan'];
 };
 
-const readDefaultMode = (env: NodeJS.ProcessEnv, availableModes: CocoRunnerMode[]): CocoRunnerMode => {
+const readDefaultMode = (env: NodeJS.ProcessEnv, availableModes: CodeAgentRunnerMode[]): CodeAgentRunnerMode => {
   const configured = env.COCO_DEFAULT_MODE?.trim();
   if (!configured) {
     return 'plan';
   }
-  if (!isCocoRunnerMode(configured)) {
+  if (!isCodeAgentRunnerMode(configured)) {
     throw new Error(`Unsupported COCO_DEFAULT_MODE: ${configured}`);
   }
   if (!availableModes.includes(configured)) {
@@ -185,7 +185,7 @@ const readDefaultMode = (env: NodeJS.ProcessEnv, availableModes: CocoRunnerMode[
   return configured;
 };
 
-const highestAvailableMode = (availableModes: CocoRunnerMode[]): CocoRunnerMode => (
+const highestAvailableMode = (availableModes: CodeAgentRunnerMode[]): CodeAgentRunnerMode => (
   availableModes.includes('acceptEdits') ? 'acceptEdits' : 'plan'
 );
 
@@ -268,7 +268,7 @@ const pickRunnerEnv = (env: NodeJS.ProcessEnv) => pickEnv(env, [
 const baseRunnerEnv = (
   env: NodeJS.ProcessEnv,
   sandboxProvider: CocoSandboxProvider,
-  runnerClient: CocoRunnerClientKind
+  runnerClient: CodeAgentRunnerClientKind
 ): Record<string, string> => {
   if (sandboxProvider !== 'e2b' || runnerClient !== 'jsonl') {
     return {};
@@ -286,7 +286,7 @@ const providerEnv = (env: NodeJS.ProcessEnv): Partial<Record<AIModelProvider, Re
   openrouter: pickEnv(env, ['OPENROUTER_API_KEY', 'OPENROUTER_BASE_URL']),
 });
 
-const shouldForwardProviderEnv = (env: NodeJS.ProcessEnv, runnerClient: CocoRunnerClientKind, availableModes: CocoRunnerMode[]) => (
+const shouldForwardProviderEnv = (env: NodeJS.ProcessEnv, runnerClient: CodeAgentRunnerClientKind, availableModes: CodeAgentRunnerMode[]) => (
   runnerClient === 'jsonl' &&
   !availableModes.includes('acceptEdits') &&
   !usesOutOfBandModelAccess(env)

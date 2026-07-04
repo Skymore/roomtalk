@@ -1,31 +1,31 @@
 import {
-  COCO_RUNNER_SCHEMA_VERSION,
-  CocoRunnerErrorEvent,
-  CocoRunnerEvent,
-  CocoRunnerFinalEvent,
-  CocoRunnerJsonlParser,
-  CocoRunnerProtocolError,
-  CocoRunnerRunRequest,
-  serializeCocoRunnerRequest,
-} from './cocoRunnerProtocol';
+  CODE_AGENT_RUNNER_SCHEMA_VERSION,
+  CodeAgentRunnerErrorEvent,
+  CodeAgentRunnerEvent,
+  CodeAgentRunnerFinalEvent,
+  CodeAgentRunnerJsonlParser,
+  CodeAgentRunnerProtocolError,
+  CodeAgentRunnerRunRequest,
+  serializeCodeAgentRunnerRequest,
+} from './codeAgentRunnerProtocol';
 import {
-  CocoRunnerClient,
-  CocoRunnerHandlers,
-  CocoRunnerRunContext,
-  CocoRunnerRunResult,
-} from './fakeCocoRunner';
+  CodeAgentRunnerClient,
+  CodeAgentRunnerHandlers,
+  CodeAgentRunnerRunContext,
+  CodeAgentRunnerRunResult,
+} from './fakeCodeAgentRunner';
 
 const STDERR_TAIL_CHARS = 4000;
 
-export class JsonlCocoRunnerClient implements CocoRunnerClient {
+export class JsonlCodeAgentRunnerClient implements CodeAgentRunnerClient {
   async run(
-    request: CocoRunnerRunRequest,
-    handlers: CocoRunnerHandlers,
-    context?: CocoRunnerRunContext
-  ): Promise<CocoRunnerRunResult> {
+    request: CodeAgentRunnerRunRequest,
+    handlers: CodeAgentRunnerHandlers,
+    context?: CodeAgentRunnerRunContext
+  ): Promise<CodeAgentRunnerRunResult> {
     const runnerProcess = context?.process;
     if (!runnerProcess?.stdin || !runnerProcess.stdout || !runnerProcess.completed || !context?.sandbox) {
-      throw new Error('JsonlCocoRunnerClient requires a started runner process with stdin, stdout, completion, and sandbox context');
+      throw new Error('JsonlCodeAgentRunnerClient requires a started runner process with stdin, stdout, completion, and sandbox context');
     }
 
     const stderrTail = collectStderrTail(runnerProcess.stderr);
@@ -34,14 +34,14 @@ export class JsonlCocoRunnerClient implements CocoRunnerClient {
       error => ({ ok: false as const, error })
     );
 
-    const events: CocoRunnerEvent[] = [];
-    let finalEvent: CocoRunnerFinalEvent | undefined;
-    let errorEvent: CocoRunnerErrorEvent | undefined;
+    const events: CodeAgentRunnerEvent[] = [];
+    let finalEvent: CodeAgentRunnerFinalEvent | undefined;
+    let errorEvent: CodeAgentRunnerErrorEvent | undefined;
 
-    const emitEvent = async (event: CocoRunnerEvent) => {
+    const emitEvent = async (event: CodeAgentRunnerEvent) => {
       if (finalEvent || errorEvent) {
         const terminalType = finalEvent ? 'final' : 'error';
-        throw new CocoRunnerProtocolError(`Coco runner emitted ${event.type} after terminal ${terminalType} event`);
+        throw new CodeAgentRunnerProtocolError(`code agent runner emitted ${event.type} after terminal ${terminalType} event`);
       }
       events.push(event);
       if (event.type === 'final') {
@@ -60,7 +60,7 @@ export class JsonlCocoRunnerClient implements CocoRunnerClient {
       const completed = await completionWithin(completion, 500);
       const stderr = stderrTail();
       const details = [
-        `Coco runner stdin write failed: ${writeError instanceof Error ? writeError.message : String(writeError)}`,
+        `code agent runner stdin write failed: ${writeError instanceof Error ? writeError.message : String(writeError)}`,
         completed ? describeCompletion(completed) : 'runner process status was not available yet',
         stderr ? `stderr: ${stderr}` : '',
       ].filter(Boolean).join('; ');
@@ -68,7 +68,7 @@ export class JsonlCocoRunnerClient implements CocoRunnerClient {
     }
 
     try {
-      const parser = new CocoRunnerJsonlParser();
+      const parser = new CodeAgentRunnerJsonlParser();
       for await (const chunk of runnerProcess.stdout) {
         const parsedEvents = parser.push(bufferToString(chunk));
         for (const event of parsedEvents) {
@@ -79,7 +79,7 @@ export class JsonlCocoRunnerClient implements CocoRunnerClient {
         await emitEvent(event);
       }
     } catch (error) {
-      if (error instanceof CocoRunnerProtocolError) {
+      if (error instanceof CodeAgentRunnerProtocolError) {
         return emitRunnerError(events, request, handlers, error.message, 'protocol_error');
       }
       throw error;
@@ -91,7 +91,7 @@ export class JsonlCocoRunnerClient implements CocoRunnerClient {
         events,
         request,
         handlers,
-        `Coco runner process failed: ${completed.error instanceof Error ? completed.error.message : String(completed.error)}`,
+        `code agent runner process failed: ${completed.error instanceof Error ? completed.error.message : String(completed.error)}`,
         'runner_process_error'
       );
     }
@@ -106,8 +106,8 @@ export class JsonlCocoRunnerClient implements CocoRunnerClient {
     }
 
     const exitDescription = exitCode === 0
-      ? 'Coco runner exited without a final event'
-      : `Coco runner exited before final event with code ${exitCode ?? 'null'}${signal ? ` and signal ${signal}` : ''}`;
+      ? 'code agent runner exited without a final event'
+      : `code agent runner exited before final event with code ${exitCode ?? 'null'}${signal ? ` and signal ${signal}` : ''}`;
     const stderr = stderrTail();
     return emitRunnerError(
       events,
@@ -119,8 +119,8 @@ export class JsonlCocoRunnerClient implements CocoRunnerClient {
   }
 }
 
-const writeRequest = (stdin: NodeJS.WritableStream, request: CocoRunnerRunRequest) => {
-  const serialized = serializeCocoRunnerRequest(request);
+const writeRequest = (stdin: NodeJS.WritableStream, request: CodeAgentRunnerRunRequest) => {
+  const serialized = serializeCodeAgentRunnerRequest(request);
   return new Promise<void>((resolve, reject) => {
     let settled = false;
     const cleanup = () => {
@@ -146,14 +146,14 @@ const writeRequest = (stdin: NodeJS.WritableStream, request: CocoRunnerRunReques
 };
 
 const emitRunnerError = async (
-  events: CocoRunnerEvent[],
-  request: CocoRunnerRunRequest,
-  handlers: CocoRunnerHandlers,
+  events: CodeAgentRunnerEvent[],
+  request: CodeAgentRunnerRunRequest,
+  handlers: CodeAgentRunnerHandlers,
   message: string,
   code: string
-): Promise<CocoRunnerRunResult> => {
-  const errorEvent: CocoRunnerErrorEvent = {
-    schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+): Promise<CodeAgentRunnerRunResult> => {
+  const errorEvent: CodeAgentRunnerErrorEvent = {
+    schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
     type: 'error',
     message,
     turnId: request.turnId,

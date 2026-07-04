@@ -1,18 +1,18 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { Readable, Writable } from 'node:stream';
-import { COCO_RUNNER_SCHEMA_VERSION, CocoRunnerEvent, CocoRunnerRunRequest } from './cocoRunnerProtocol';
-import { CocoCodeAgentRunner, createCodeAgentRunner } from './codeAgentRunner';
+import { CODE_AGENT_RUNNER_SCHEMA_VERSION, CodeAgentRunnerEvent, CodeAgentRunnerRunRequest } from './codeAgentRunnerProtocol';
+import { CodeAgentRunnerAdapter, createCodeAgentRunner } from './codeAgentRunner';
 import {
-  CocoRunnerClient,
-  CocoRunnerHandlers,
-  CocoRunnerRunContext,
-  CocoRunnerRunResult,
-  FakeCocoRunnerClient,
-} from './fakeCocoRunner';
+  CodeAgentRunnerClient,
+  CodeAgentRunnerHandlers,
+  CodeAgentRunnerRunContext,
+  CodeAgentRunnerRunResult,
+  FakeCodeAgentRunnerClient,
+} from './fakeCodeAgentRunner';
 
-const request: CocoRunnerRunRequest = {
-  schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+const request: CodeAgentRunnerRunRequest = {
+  schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
   type: 'run',
   roomId: 'room-1',
   turnId: 'turn-1',
@@ -27,14 +27,14 @@ const request: CocoRunnerRunRequest = {
 };
 
 describe('CodeAgentRunner', () => {
-  it('delegates Coco runs through the backend boundary', async () => {
-    const events: CocoRunnerEvent[] = [
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'status', turnId: 'turn-1', status: 'starting' },
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+  it('delegates code-agent runs through the backend boundary', async () => {
+    const events: CodeAgentRunnerEvent[] = [
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'status', turnId: 'turn-1', status: 'starting' },
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
     ];
-    const cocoClient = new FakeCocoRunnerClient(events);
-    const runner = new CocoCodeAgentRunner(cocoClient);
-    const emitted: CocoRunnerEvent[] = [];
+    const sharedClient = new FakeCodeAgentRunnerClient(events);
+    const runner = new CodeAgentRunnerAdapter(sharedClient);
+    const emitted: CodeAgentRunnerEvent[] = [];
 
     const result = await runner.run(request, {
       onEvent: event => {
@@ -43,28 +43,28 @@ describe('CodeAgentRunner', () => {
     });
 
     assert.equal(runner.backend, 'coco');
-    assert.deepEqual(cocoClient.requests, [request]);
+    assert.deepEqual(sharedClient.requests, [request]);
     assert.equal(result.finalEvent?.answer, 'Done');
     assert.deepEqual(emitted.map(event => event.type), ['status', 'final']);
   });
 
-  it('forwards runner process and sandbox context to the Coco client', async () => {
-    class ContextRecordingRunner implements CocoRunnerClient {
-      context: CocoRunnerRunContext | undefined;
+  it('forwards runner process and sandbox context to the code-agent client', async () => {
+    class ContextRecordingRunner implements CodeAgentRunnerClient {
+      context: CodeAgentRunnerRunContext | undefined;
 
       async run(
-        _request: CocoRunnerRunRequest,
-        _handlers: CocoRunnerHandlers,
-        context?: CocoRunnerRunContext
-      ): Promise<CocoRunnerRunResult> {
+        _request: CodeAgentRunnerRunRequest,
+        _handlers: CodeAgentRunnerHandlers,
+        context?: CodeAgentRunnerRunContext
+      ): Promise<CodeAgentRunnerRunResult> {
         this.context = context;
         return { events: [] };
       }
     }
 
-    const cocoClient = new ContextRecordingRunner();
-    const runner = new CocoCodeAgentRunner(cocoClient);
-    const context: CocoRunnerRunContext = {
+    const sharedClient = new ContextRecordingRunner();
+    const runner = new CodeAgentRunnerAdapter(sharedClient);
+    const context: CodeAgentRunnerRunContext = {
       process: {
         command: 'python -m roomtalk_coco_runner',
         stdin: new Writable({
@@ -90,21 +90,21 @@ describe('CodeAgentRunner', () => {
 
     await runner.run(request, { onEvent: () => {} }, context);
 
-    assert.equal(cocoClient.context, context);
+    assert.equal(sharedClient.context, context);
   });
 
   it('creates Coco by default and lets Codex reuse the shared runner client', () => {
-    const cocoClient = new FakeCocoRunnerClient([]);
+    const sharedClient = new FakeCodeAgentRunnerClient([]);
     const codexRunner = {
       backend: 'codex' as const,
       run: async () => ({ events: [] }),
     };
 
-    assert.equal(createCodeAgentRunner('coco', cocoClient).backend, 'coco');
-    assert.equal(createCodeAgentRunner('codex', cocoClient).backend, 'codex');
-    assert.equal(createCodeAgentRunner('codex', cocoClient, { codexRunner }).backend, 'codex');
+    assert.equal(createCodeAgentRunner('coco', sharedClient).backend, 'coco');
+    assert.equal(createCodeAgentRunner('codex', sharedClient).backend, 'codex');
+    assert.equal(createCodeAgentRunner('codex', sharedClient, { codexRunner }).backend, 'codex');
     assert.throws(
-      () => createCodeAgentRunner('codex', cocoClient, { codexRunner: createCodeAgentRunner('coco', cocoClient) }),
+      () => createCodeAgentRunner('codex', sharedClient, { codexRunner: createCodeAgentRunner('coco', sharedClient) }),
       /backend=codex/
     );
   });

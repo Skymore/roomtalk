@@ -2,12 +2,12 @@ import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { Logger } from '../logger';
 import { AIModelOption, Message, Room, RoomAICostTotal } from '../types';
-import { CocoCodeAgentRunner, CodeAgentBackend } from './codeAgentRunner';
+import { CodeAgentRunnerAdapter, CodeAgentBackend } from './codeAgentRunner';
 import { CocoSandboxLifecycleService } from './cocoSandboxLifecycle';
 import { CocoSessionService } from './cocoSessionService';
-import { COCO_RUNNER_SCHEMA_VERSION, CocoRunnerEvent, CocoRunnerRunRequest } from './cocoRunnerProtocol';
-import { CocoRunnerClient, CocoRunnerRunResult } from './fakeCocoRunner';
-import { FakeCocoRunnerClient } from './fakeCocoRunner';
+import { CODE_AGENT_RUNNER_SCHEMA_VERSION, CodeAgentRunnerEvent, CodeAgentRunnerRunRequest } from './codeAgentRunnerProtocol';
+import { CodeAgentRunnerClient, CodeAgentRunnerRunResult } from './fakeCodeAgentRunner';
+import { FakeCodeAgentRunnerClient } from './fakeCodeAgentRunner';
 import { FakeCocoSandboxService } from './fakeCocoSandboxService';
 import { DEFAULT_CODEX_CLI_RUNNER_COMMAND, DEFAULT_COCO_RUNNER_COMMAND } from './cocoRuntimeConfig';
 import { CocoModelGateway, InMemoryCocoModelGatewayTokenStateStore } from './cocoModelGateway';
@@ -155,8 +155,8 @@ class MemoryCocoStore {
   }
 }
 
-class BlockingRunner implements CocoRunnerClient {
-  requests: CocoRunnerRunRequest[] = [];
+class BlockingRunner implements CodeAgentRunnerClient {
+  requests: CodeAgentRunnerRunRequest[] = [];
   private releaseRun!: () => void;
   private markStarted!: () => void;
   started = new Promise<void>(resolve => {
@@ -170,12 +170,12 @@ class BlockingRunner implements CocoRunnerClient {
     this.releaseRun();
   }
 
-  async run(request: CocoRunnerRunRequest): Promise<CocoRunnerRunResult> {
+  async run(request: CodeAgentRunnerRunRequest): Promise<CodeAgentRunnerRunResult> {
     this.requests.push(request);
     this.markStarted();
     await this.blocked;
     const finalEvent = {
-      schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
       type: 'final' as const,
       messageId: 'ai',
       answer: 'done',
@@ -223,7 +223,7 @@ const userMessage = (content = 'inspect the project'): Message => ({
 
 const createService = (options: {
   store?: MemoryCocoStore;
-  runner?: CocoRunnerClient;
+  runner?: CodeAgentRunnerClient;
   backend?: CodeAgentBackend;
   enabled?: boolean;
   allowedClientIds?: string[];
@@ -258,7 +258,7 @@ const createService = (options: {
     emitter,
     lifecycle,
     sandboxService,
-    new CocoCodeAgentRunner(options.runner || new FakeCocoRunnerClient([]), options.backend || 'coco'),
+    new CodeAgentRunnerAdapter(options.runner || new FakeCodeAgentRunnerClient([]), options.backend || 'coco'),
     logger,
     {
       enabled: options.enabled ?? true,
@@ -286,13 +286,13 @@ const createService = (options: {
 
 describe('CocoSessionService', () => {
   it('runs a full fake Coco turn and persists runner events', async () => {
-    const runner = new FakeCocoRunnerClient([
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'status', turnId: 'turn-1', status: 'starting', message: 'starting' },
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Working...' },
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Read', args: { file_path: 'README.md' } },
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-1', name: 'Read', success: true, output: '# RoomTalk' },
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'status', turnId: 'turn-1', status: 'starting', message: 'starting' },
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Working...' },
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Read', args: { file_path: 'README.md' } },
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-1', name: 'Read', success: true, output: '# RoomTalk' },
       {
-        schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'final',
         messageId: 'ai-1',
         answer: 'Done',
@@ -357,8 +357,8 @@ describe('CocoSessionService', () => {
     const authCalls: Array<{ clientId: string; runId: string }> = [];
     const refreshedAuths: Array<string | undefined> = [];
     let sandboxService: FakeCocoSandboxService;
-    const runner: CocoRunnerClient = {
-      async run(request, handlers, context): Promise<CocoRunnerRunResult> {
+    const runner: CodeAgentRunnerClient = {
+      async run(request, handlers, context): Promise<CodeAgentRunnerRunResult> {
         assert.equal(request.codexModel, 'gpt-5.3-codex-spark');
         assert.equal(request.codexReasoningEffort, 'high');
         assert.equal(request.codexPermissionMode, 'fullAccess');
@@ -370,7 +370,7 @@ describe('CocoSessionService', () => {
           content: refreshedAuthJson,
         });
         const finalEvent = {
-          schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
           type: 'final' as const,
           messageId: 'codex-turn-1',
           answer: 'Codex done',
@@ -441,13 +441,13 @@ describe('CocoSessionService', () => {
   it('lets a room select Codex while the service default backend remains Coco', async () => {
     const authCalls: Array<{ clientId: string; runId: string }> = [];
     let sandboxService: FakeCocoSandboxService;
-    const runner: CocoRunnerClient = {
-      async run(_request, handlers): Promise<CocoRunnerRunResult> {
+    const runner: CodeAgentRunnerClient = {
+      async run(_request, handlers): Promise<CodeAgentRunnerRunResult> {
         const env = sandboxService.startedRunnerEnvs[sandboxService.startedRunnerEnvs.length - 1];
         assert.equal(env.CODEX_CLI_BIN, '/usr/local/bin/codex');
         assert.ok(env.ROOMTALK_CODEX_AUTH_JSON_PATH);
         const finalEvent = {
-          schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
           type: 'final' as const,
           messageId: 'codex-turn-1',
           answer: 'Room-level Codex done',
@@ -496,8 +496,8 @@ describe('CocoSessionService', () => {
   });
 
   it('fails Codex backend turns without a configured Codex connection service before starting the runner', async () => {
-    const runner = new FakeCocoRunnerClient([
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'unexpected', sessionId: 'session-1' },
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'unexpected', sessionId: 'session-1' },
     ]);
     const { sandboxService, service, store } = createService({
       backend: 'codex',
@@ -521,13 +521,13 @@ describe('CocoSessionService', () => {
   });
 
   it('persists interleaved AI text and tool events in runner order', async () => {
-    const runner = new FakeCocoRunnerClient([
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'I will inspect.' },
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Glob', args: { pattern: '**/*' } },
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-1', name: 'Glob', success: true, output: 'No files found matching the pattern.' },
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'The current directory is empty.' },
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'I will inspect.' },
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Glob', args: { pattern: '**/*' } },
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-1', name: 'Glob', success: true, output: 'No files found matching the pattern.' },
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'The current directory is empty.' },
       {
-        schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'final',
         messageId: 'ai-1',
         answer: 'The current directory is empty.',
@@ -614,8 +614,8 @@ describe('CocoSessionService', () => {
       },
     ];
     const store = new MemoryCocoStore(room({ cocoSessionId: 'session-prev' }), initialMessages);
-    const runner = new FakeCocoRunnerClient([
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'You asked me to list files.', sessionId: 'session-prev' },
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'You asked me to list files.', sessionId: 'session-prev' },
     ]);
     const { service } = createService({ store, runner });
 
@@ -705,8 +705,8 @@ describe('CocoSessionService', () => {
       },
     ];
     const store = new MemoryCocoStore(room(), initialMessages);
-    const runner = new FakeCocoRunnerClient([
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'You asked about files.', sessionId: 'session-1' },
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'You asked about files.', sessionId: 'session-1' },
     ]);
     const { service } = createService({ store, runner });
 
@@ -742,8 +742,8 @@ describe('CocoSessionService', () => {
       },
     ];
     const store = new MemoryCocoStore(room(), initialMessages);
-    const runner = new FakeCocoRunnerClient([
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'ok', sessionId: 'session-1' },
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'ok', sessionId: 'session-1' },
     ]);
     const { service } = createService({ store, runner });
 
@@ -757,14 +757,14 @@ describe('CocoSessionService', () => {
   });
 
   it('removes the unused AI placeholder when tool events arrive before text', async () => {
-    const runner = new FakeCocoRunnerClient([
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Write', args: { file_path: 'hello.py' } },
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-1', name: 'Write', success: true, output: 'wrote hello.py' },
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-2', name: 'Shell', args: { command: 'python3 hello.py' } },
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-2', name: 'Shell', success: true, output: 'Hello, World!' },
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Done. The program prints Hello, World!' },
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Write', args: { file_path: 'hello.py' } },
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-1', name: 'Write', success: true, output: 'wrote hello.py' },
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-2', name: 'Shell', args: { command: 'python3 hello.py' } },
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-2', name: 'Shell', success: true, output: 'Hello, World!' },
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Done. The program prints Hello, World!' },
       {
-        schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'final',
         messageId: 'ai-1',
         answer: 'Done. The program prints Hello, World!',
@@ -798,11 +798,11 @@ describe('CocoSessionService', () => {
   });
 
   it('removes the unused AI placeholder when a tool-only turn completes with a final answer', async () => {
-    const runner = new FakeCocoRunnerClient([
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Shell', args: { command: 'python3 hello.py' } },
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-1', name: 'Shell', success: true, output: 'Hello, World!' },
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Shell', args: { command: 'python3 hello.py' } },
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-1', name: 'Shell', success: true, output: 'Hello, World!' },
       {
-        schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'final',
         messageId: 'ai-1',
         answer: 'The script printed Hello, World!',
@@ -836,8 +836,8 @@ describe('CocoSessionService', () => {
   });
 
   it('stops the runner before broadcasting the final stream end', async () => {
-    const runner = new FakeCocoRunnerClient([
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
     ]);
     const { emitter, sandboxService, service } = createService({ runner });
     const stopCountsAtStreamEnd: number[] = [];
@@ -856,8 +856,8 @@ describe('CocoSessionService', () => {
     const previousAnthropicKey = process.env.ANTHROPIC_API_KEY;
     process.env.ANTHROPIC_API_KEY = 'must-not-leak';
     try {
-      const runner = new FakeCocoRunnerClient([
-        { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+      const runner = new FakeCodeAgentRunnerClient([
+        { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
       ]);
       const { sandboxService, service } = createService({
         runner,
@@ -881,8 +881,8 @@ describe('CocoSessionService', () => {
   });
 
   it('passes only the selected model provider env to runner processes', async () => {
-    const runner = new FakeCocoRunnerClient([
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
     ]);
     const { sandboxService, service } = createService({
       runner,
@@ -901,8 +901,8 @@ describe('CocoSessionService', () => {
   });
 
   it('allows each Coco turn to choose plan mode within an edit-capable server configuration', async () => {
-    const runner = new FakeCocoRunnerClient([
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
     ]);
     const store = new MemoryCocoStore(room({ codeAgentMode: 'plan' }), [userMessage()]);
     const { service } = createService({ store, runner, mode: 'acceptEdits' });
@@ -917,8 +917,8 @@ describe('CocoSessionService', () => {
   });
 
   it('rejects edit mode requests when the server is configured for plan mode only', async () => {
-    const runner = new FakeCocoRunnerClient([
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
     ]);
     const store = new MemoryCocoStore(room({ codeAgentMode: 'acceptEdits' }), [userMessage()]);
     const { service } = createService({ store, runner, mode: 'plan' });
@@ -939,8 +939,8 @@ describe('CocoSessionService', () => {
     process.env.OPENAI_API_KEY = 'host-openai-key';
     process.env.ANTHROPIC_API_KEY = 'host-anthropic-key';
     try {
-      const runner = new FakeCocoRunnerClient([
-        { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+      const runner = new FakeCodeAgentRunnerClient([
+        { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
       ]);
       const { sandboxService, service } = createService({
         runner,
@@ -974,8 +974,8 @@ describe('CocoSessionService', () => {
   });
 
   it('injects a per-turn model gateway token and write tools only for edit turns', async () => {
-    const runner = new FakeCocoRunnerClient([
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
     ]);
     const gateway = new CocoModelGateway({
       publicBaseUrl: 'https://room.example/api/coco/model-gateway',
@@ -1011,8 +1011,8 @@ describe('CocoSessionService', () => {
   });
 
   it('injects a scoped static publish token for configured edit turns', async () => {
-    const runner = new FakeCocoRunnerClient([
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
     ]);
     const staticSitePublisher = new PublishedStaticSiteService({
       mediaObjectStorage: new MemoryMediaObjectStorage(),
@@ -1049,8 +1049,8 @@ describe('CocoSessionService', () => {
   });
 
   it('injects static publish URLs using the allowed production client origin', async () => {
-    const runner = new FakeCocoRunnerClient([
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
     ]);
     const staticSitePublisher = new PublishedStaticSiteService({
       mediaObjectStorage: new MemoryMediaObjectStorage(),
@@ -1085,8 +1085,8 @@ describe('CocoSessionService', () => {
   });
 
   it('injects local static publish URLs from the local server origin outside production', async () => {
-    const runner = new FakeCocoRunnerClient([
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
     ]);
     const staticSitePublisher = new PublishedStaticSiteService({
       mediaObjectStorage: new MemoryMediaObjectStorage(),
@@ -1120,8 +1120,8 @@ describe('CocoSessionService', () => {
   });
 
   it('does not inject static publish credentials into plan turns', async () => {
-    const runner = new FakeCocoRunnerClient([
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
     ]);
     const staticSitePublisher = new PublishedStaticSiteService({
       mediaObjectStorage: new MemoryMediaObjectStorage(),
@@ -1144,8 +1144,8 @@ describe('CocoSessionService', () => {
   });
 
   it('defaults Coco turns to plan even when edit mode is available', async () => {
-    const runner = new FakeCocoRunnerClient([
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
     ]);
     const { sandboxService, service } = createService({
       runner,
@@ -1197,8 +1197,8 @@ describe('CocoSessionService', () => {
       { ...userMessage(), clientId: 'admin-1' },
     ]);
     store.addMember('room-1', 'admin-1', 'admin');
-    const runner = new FakeCocoRunnerClient([
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'ok', sessionId: 's1' },
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'ok', sessionId: 's1' },
     ]);
     const { service } = createService({ store, runner });
 
@@ -1222,8 +1222,8 @@ describe('CocoSessionService', () => {
       { ...userMessage(), clientId: 'member-1' },
     ]);
     store.addMember('room-1', 'member-1', 'member');
-    const runner = new FakeCocoRunnerClient([
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'ok', sessionId: 's1' },
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'ok', sessionId: 's1' },
     ]);
     const { service } = createService({ store, runner });
 
@@ -1240,9 +1240,9 @@ describe('CocoSessionService', () => {
   });
 
   it('stops runner processing when a tool event cannot be persisted', async () => {
-    const runner = new FakeCocoRunnerClient([
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Read', args: { file_path: 'README.md' } },
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-1', name: 'Read', success: true, output: '# RoomTalk' },
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Read', args: { file_path: 'README.md' } },
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-1', name: 'Read', success: true, output: '# RoomTalk' },
     ]);
     const store = new MemoryCocoStore(room(), [userMessage()]);
     store.appendFailures = 1;
@@ -1275,8 +1275,8 @@ describe('CocoSessionService', () => {
   });
 
   it('marks the AI placeholder as error when the runner returns an error event', async () => {
-    const runner = new FakeCocoRunnerClient([
-      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'error', message: 'runner crashed', code: 'runner_exit', retryable: false },
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'error', message: 'runner crashed', code: 'runner_exit', retryable: false },
     ]);
     const { service, store } = createService({ runner });
 

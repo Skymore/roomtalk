@@ -12,17 +12,17 @@ export interface CocoSandboxHandle {
   expiresAt?: string;
 }
 
-export interface CocoRunnerProcess {
+export interface CodeAgentRunnerProcess {
   pid?: number;
   command: string;
   stdin?: Writable;
   stdout?: Readable;
   stderr?: Readable;
-  completed?: Promise<CocoRunnerProcessExit>;
+  completed?: Promise<CodeAgentRunnerProcessExit>;
   stop(): Promise<void>;
 }
 
-export interface CocoRunnerProcessExit {
+export interface CodeAgentRunnerProcessExit {
   exitCode: number | null;
   signal?: string | null;
 }
@@ -33,7 +33,7 @@ export interface CreateCocoSandboxInput {
   ttlMs: number;
 }
 
-export interface StartCocoRunnerInput {
+export interface StartCodeAgentRunnerInput {
   handle: CocoSandboxHandle;
   command: string;
   env?: Record<string, string>;
@@ -194,7 +194,7 @@ export interface CocoSandboxService {
   create(input: CreateCocoSandboxInput): Promise<CocoSandboxHandle>;
   connect(sandboxId: string): Promise<CocoSandboxHandle>;
   initializeWorkspaceVersionControl?(handle: CocoSandboxHandle): Promise<void>;
-  startRunner(input: StartCocoRunnerInput): Promise<CocoRunnerProcess>;
+  startRunner(input: StartCodeAgentRunnerInput): Promise<CodeAgentRunnerProcess>;
   getWorkspaceChanges?(handle: CocoSandboxHandle): Promise<CocoWorkspaceChanges>;
   getWorkspaceDiff?(handle: CocoSandboxHandle, options?: ReadCocoWorkspaceDiffOptions): Promise<CocoWorkspaceDiff>;
   listWorkspaceRefs?(handle: CocoSandboxHandle, options?: ListCocoWorkspaceRefsOptions): Promise<CocoWorkspaceRefs>;

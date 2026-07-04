@@ -3,14 +3,14 @@ import express, { Express, Request, Response } from 'express';
 import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
 import { AIModelOption, AIModelPricing, AIModelProvider, AIUsage } from '../types';
-import { CocoRunnerMode } from './cocoRunnerProtocol';
+import { CodeAgentRunnerMode } from './codeAgentRunnerProtocol';
 import { ObservabilityEventInput, ObservabilityEventRecorder } from './observabilityEvents';
 
 export interface CocoModelGatewayIssueInput {
   roomId: string;
   clientId: string;
   turnId: string;
-  mode: CocoRunnerMode;
+  mode: CodeAgentRunnerMode;
   model: AIModelOption;
 }
 
@@ -20,7 +20,7 @@ interface CocoModelGatewayTokenClaims {
   roomId: string;
   clientId: string;
   turnId: string;
-  mode: CocoRunnerMode;
+  mode: CodeAgentRunnerMode;
   provider: AIModelProvider;
   modelId: string;
   apiModel: string;

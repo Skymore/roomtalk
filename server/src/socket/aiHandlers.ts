@@ -23,7 +23,7 @@ import { notifyRoomMessageBestEffort } from '../services/pushNotifications';
 import { withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 import { COCO_ACCESS_DENIED_MESSAGE } from '../services/cocoRoomAccess';
 import { normalizeCodexRunSettings } from '../services/codexRunSettings';
-import type { CocoRunnerMode } from '../services/cocoRunnerProtocol';
+import type { CodeAgentRunnerMode } from '../services/codeAgentRunnerProtocol';
 import type { CocoTurnInput } from '../services/cocoSessionService';
 import type { A2UIActionEvent, AIModelOption, CodexPermissionMode, CodexReasoningEffort, Message } from '../types';
 import { hasRoomAccess } from './roomAccess';
@@ -98,7 +98,7 @@ const buildCocoTurnInput = ({
   codexPermissionMode?: CodexPermissionMode;
   maxContextMessages?: number;
   socket: SocketConnectionContext['socket'];
-  requestedMode?: CocoRunnerMode;
+  requestedMode?: CodeAgentRunnerMode;
 }): CocoTurnInput => ({
   roomId,
   clientId,
@@ -395,7 +395,7 @@ type AIRequestData = {
   editedMessageId?: string;
   retryForMessageId?: string;
   maxContextMessages?: number;
-  codeAgentMode?: CocoRunnerMode;
+  codeAgentMode?: CodeAgentRunnerMode;
 };
 
 type AIRunnerMode = 'inline' | 'worker';
@@ -433,7 +433,7 @@ type SendMessageAndAskAIData = AIRequestData & {
   clientMessageId?: string;
 };
 
-const findNextCocoTurnMode = (messages: Message[], messageId: string): CocoRunnerMode | undefined => {
+const findNextCocoTurnMode = (messages: Message[], messageId: string): CodeAgentRunnerMode | undefined => {
   const index = messages.findIndex(message => message.id === messageId);
   if (index === -1) {
     return undefined;
@@ -442,7 +442,7 @@ const findNextCocoTurnMode = (messages: Message[], messageId: string): CocoRunne
   return messages
     .slice(index + 1)
     .find(message => message.messageType === 'ai' && message.codeAgentMode)
-    ?.codeAgentMode as CocoRunnerMode | undefined;
+    ?.codeAgentMode as CodeAgentRunnerMode | undefined;
 };
 
 type AIAckCallback = (response: { success: boolean; messageId?: string; error?: string }) => void;
@@ -1856,7 +1856,7 @@ export function registerAIHandlers({
         return;
       }
 
-      let requestedMode: CocoRunnerMode | undefined;
+      let requestedMode: CodeAgentRunnerMode | undefined;
       if (data.retryForMessageId) {
         const retryTarget = await getRoomMessage(store, data.roomId, data.retryForMessageId);
         if (!retryTarget) {
@@ -1873,7 +1873,7 @@ export function registerAIHandlers({
           callback?.({ success: false, error: retryAuth.message });
           return;
         }
-        requestedMode = retryTarget.codeAgentMode as CocoRunnerMode | undefined;
+        requestedMode = retryTarget.codeAgentMode as CodeAgentRunnerMode | undefined;
 
         const truncation = await store.truncateBeforeMessage(data.roomId, data.retryForMessageId);
         if (!truncation) {

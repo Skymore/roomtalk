@@ -6,11 +6,11 @@ import { Logger } from '../logger';
 import { AIModelOption } from '../types';
 import { DEFAULT_AI_MODEL_ID, createAIModelRegistry } from '../services/aiModels';
 import { resolveCodexCliRunnerConfig } from '../services/codexCliRunnerConfig';
-import { COCO_RUNNER_SCHEMA_VERSION } from '../services/cocoRunnerProtocol';
+import { CODE_AGENT_RUNNER_SCHEMA_VERSION } from '../services/codeAgentRunnerProtocol';
 import { resolveCocoRuntimeConfig, CocoRuntimeConfig } from '../services/cocoRuntimeConfig';
 import { E2BCocoSandboxService } from '../services/e2bCocoSandboxService';
 import { createE2BSdkDriver } from '../services/e2bSdkDriver';
-import { JsonlCocoRunnerClient } from '../services/jsonlCocoRunner';
+import { JsonlCodeAgentRunnerClient } from '../services/jsonlCodeAgentRunner';
 
 const DEFAULT_SMOKE_PROMPT = 'Reply exactly: codex e2b smoke ok';
 const DEFAULT_TURN_TIMEOUT_MS = 3 * 60 * 1000;
@@ -124,7 +124,7 @@ export const runCodexE2BSmoke = async (
     lifecycle: plan.config.e2bLifecycle,
     logger,
   });
-  const runnerClient = new JsonlCocoRunnerClient();
+  const runnerClient = new JsonlCodeAgentRunnerClient();
   const handle = await sandboxService.create({
     roomId: plan.roomId,
     creatorId: 'codex-e2b-smoke',
@@ -152,7 +152,7 @@ export const runCodexE2BSmoke = async (
       timeoutMs: plan.turnTimeoutMs,
     });
     const result = await runnerClient.run({
-      schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
       type: 'run',
       roomId: plan.roomId,
       turnId: plan.turnId,

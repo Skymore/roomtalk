@@ -1,10 +1,10 @@
 import path from 'path';
 import { AIUsage } from '../types';
 import {
-  COCO_RUNNER_SCHEMA_VERSION,
-  CocoRunnerEvent,
-  CocoRunnerFinalEvent,
-} from './cocoRunnerProtocol';
+  CODE_AGENT_RUNNER_SCHEMA_VERSION,
+  CodeAgentRunnerEvent,
+  CodeAgentRunnerFinalEvent,
+} from './codeAgentRunnerProtocol';
 
 export interface CodexExecItem {
   id: string;
@@ -97,11 +97,11 @@ export class CodexCliEventMapper {
 
   constructor(private readonly options: CodexCliEventMapperOptions) {}
 
-  mapEvent(event: CodexExecEvent): CocoRunnerEvent[] {
+  mapEvent(event: CodexExecEvent): CodeAgentRunnerEvent[] {
     if (event.type === 'thread.started') {
       this.sessionId = event.thread_id || this.sessionId;
       return [{
-        schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'status',
         turnId: this.options.turnId,
         status: 'starting',
@@ -111,7 +111,7 @@ export class CodexCliEventMapper {
 
     if (event.type === 'turn.started') {
       return [{
-        schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'status',
         turnId: this.options.turnId,
         status: 'running',
@@ -122,7 +122,7 @@ export class CodexCliEventMapper {
     if (event.type === 'turn.completed') {
       this.usage = toAIUsage(event.usage) || this.usage;
       return [{
-        schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'status',
         turnId: this.options.turnId,
         status: 'complete',
@@ -132,7 +132,7 @@ export class CodexCliEventMapper {
 
     if (event.type === 'turn.failed' || event.type === 'error') {
       return [{
-        schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'error',
         turnId: this.options.turnId,
         message: event.message || event.error || 'Codex CLI turn failed',
@@ -148,7 +148,7 @@ export class CodexCliEventMapper {
 
     if (item.type === 'agent_message' && event.type === 'item.completed') {
       return [{
-        schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'text_delta',
         messageId: this.options.messageId,
         delta: `${normalizeWorkspaceText(this.options.workspace, item.text || '')}\n\n`,
@@ -160,7 +160,7 @@ export class CodexCliEventMapper {
       const toolName = roomtalkToolName(command) || 'shell';
       this.commandToolNames[item.id] = toolName;
       return [{
-        schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'tool_call',
         id: item.id,
         name: toolName,
@@ -174,7 +174,7 @@ export class CodexCliEventMapper {
       const command = item.command || '';
       const toolName = roomtalkToolName(command) || this.commandToolNames[item.id] || 'shell';
       return [{
-        schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'tool_result',
         id: item.id,
         name: toolName,
@@ -188,7 +188,7 @@ export class CodexCliEventMapper {
     if (item.type === 'file_change' && event.type === 'item.started') {
       const changes = normalizeChanges(this.options.workspace, item.changes);
       return [{
-        schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'tool_call',
         id: item.id,
         name: 'file_change',
@@ -200,7 +200,7 @@ export class CodexCliEventMapper {
     if (item.type === 'file_change' && event.type === 'item.completed') {
       const changes = normalizeChanges(this.options.workspace, item.changes);
       return [{
-        schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'tool_result',
         id: item.id,
         name: 'file_change',
@@ -216,9 +216,9 @@ export class CodexCliEventMapper {
     return [];
   }
 
-  createFinalEvent(answer: string): CocoRunnerFinalEvent {
+  createFinalEvent(answer: string): CodeAgentRunnerFinalEvent {
     return {
-      schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
       type: 'final',
       messageId: this.options.messageId,
       answer: normalizeWorkspaceText(this.options.workspace, answer),
