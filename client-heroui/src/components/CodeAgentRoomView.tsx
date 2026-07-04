@@ -21,6 +21,7 @@ import {
   removeCodeAgentReviewCommentDraft,
   useCodeAgentReviewCommentDraft,
 } from '../utils/codeAgentReviewCommentDraftStore';
+import { openCodeAgentRightPanel } from '../utils/codeAgentRightPanelStore';
 import {
   CODE_AGENT_CHAT_SIDEBAR_MIN_WIDTH,
   CODE_AGENT_FILE_PANEL_WIDTH_CHANGE_EVENT,
@@ -501,6 +502,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
             aria-label={mobileFileManagerTitle}
             title={mobileFileManagerTitle}
             onPress={() => {
+              openCodeAgentRightPanel(currentRoom.id, 'files');
               setHasMobileFileManagerMounted(true);
               setIsMobileFileManagerOpen(true);
             }}

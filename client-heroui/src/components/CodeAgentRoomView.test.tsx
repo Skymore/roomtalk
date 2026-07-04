@@ -5,6 +5,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Room, RoomPermissions } from '../utils/types';
 import { CODE_AGENT_FILE_PANEL_WIDTH_CHANGE_EVENT, type CodeAgentFilePanelWidthChangeDetail } from '../utils/codeAgentPanelLayout';
 import type { ReviewCommentContext } from '../utils/codeAgentReviewComments';
+import {
+  addCodeAgentRightPanelPreviewSurface,
+  readCodeAgentRightPanelState,
+  resetCodeAgentRightPanelStoreForTests,
+} from '../utils/codeAgentRightPanelStore';
 import { CodeAgentRoomView } from './CodeAgentRoomView';
 
 vi.mock('react-i18next', () => ({
@@ -268,6 +273,7 @@ const renderCodeAgentRoom = (
 describe('CodeAgentRoomView', () => {
   afterEach(() => {
     cleanup();
+    resetCodeAgentRightPanelStoreForTests();
     localStorage.clear();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -704,6 +710,31 @@ describe('CodeAgentRoomView', () => {
     expect(screen.queryByTestId('code-agent-mobile-sheet-file-save-pending-indicator')).toBeNull();
     expect(screen.getByLabelText('codeAgentCollapseWorkspaceFiles')).toBeTruthy();
     expect(screen.getByLabelText('codeAgentWorkspaceFiles').getAttribute('title')).toBe('codeAgentWorkspaceFiles');
+  });
+
+  it('opens the mobile workspace files entry on the files surface even after another surface was active', () => {
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: 390,
+    });
+    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })));
+    addCodeAgentRightPanelPreviewSurface('coco-room');
+    expect(readCodeAgentRightPanelState('coco-room').activeSurfaceId).toBe('browser:new');
+
+    renderCodeAgentRoom(cocoRoom);
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
+
+    expect(screen.getByTestId('code-agent-mobile-file-manager-sheet').dataset.open).toBe('true');
+    expect(readCodeAgentRightPanelState('coco-room').activeSurfaceId).toBe('files');
   });
 
   it('persists review comment drafts by room', () => {
