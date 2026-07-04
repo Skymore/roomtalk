@@ -22,7 +22,7 @@ import {
   truncateBeforeMessage,
 } from '../utils/messageState';
 import { useRoomMessageEvents } from '../hooks/useRoomMessageEvents';
-import { CodeAgentBackend, CodeAgentMode, isCodexCodeAgentBackend } from '../utils/codeAgent';
+import { CodeAgentBackend, CodeAgentMode } from '../utils/codeAgent';
 import { CodeAgentWorkspaceSnapshot, loadCodeAgentWorkspaceSnapshot } from '../utils/cocoWorkspace';
 import type { ReviewCommentContext } from '../utils/codeAgentReviewComments';
 
@@ -127,8 +127,6 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const [roleMembers, setRoleMembers] = useState<RoomRoleMember[]>([]);
   const codeAgentRoom = currentRoom || (presentation === 'code-agent' ? room : undefined);
   const currentRoomId = codeAgentRoom?.id;
-  const effectiveCodeAgentBackend = codeAgentBackend || codeAgentRoom?.codeAgentBackend;
-  const showCodeAgentSessionCost = presentation === 'code-agent' && !isCodexCodeAgentBackend(effectiveCodeAgentBackend);
   const workspaceRefreshKey = `${currentRoomId || ''}:${codeAgentRoom?.sandboxStatus || 'none'}:${codeAgentRoom?.sandboxUpdatedAt || ''}`;
   const workspaceRoot = workspaceSnapshot?.workspaceRoot ?? null;
   const canManageSenderActions = Boolean(roomPermissions?.canManageMembers || roomPermissions?.canManageAdmins || roomPermissions?.canTransferOwnership);
@@ -652,12 +650,10 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
               </DropdownItem>
             </DropdownMenu>
           </Dropdown>
-          {showCodeAgentSessionCost && (
-            <div className="flex items-center gap-1 rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-2.5 py-1 text-tiny font-medium text-[#4d4c48] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc]">
-              <Icon icon="lucide:coins" className="h-3.5 w-3.5" />
-              <span>{t('sessionCost')}: {sessionCostUsd === null ? '...' : formatUsdCost(sessionCostUsd)}</span>
-            </div>
-          )}
+          <div className="flex items-center gap-1 rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-2.5 py-1 text-tiny font-medium text-[#4d4c48] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc]">
+            <Icon icon="lucide:coins" className="h-3.5 w-3.5" />
+            <span>{t('sessionCost')}: {sessionCostUsd === null ? '...' : formatUsdCost(sessionCostUsd)}</span>
+          </div>
         </div>
       </div>
       )}
@@ -677,7 +673,6 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
             onModeChange={onCodeAgentModeChange}
             onBackendChange={onCodeAgentBackendChange}
             sessionCostUsd={sessionCostUsd ?? 0}
-            showSessionCost={showCodeAgentSessionCost}
             workspaceSnapshot={workspaceSnapshot}
             isRefreshingWorkspace={isWorkspaceRefreshing}
             workspaceRefreshError={workspaceRefreshError}

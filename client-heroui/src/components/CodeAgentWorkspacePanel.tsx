@@ -56,7 +56,6 @@ interface CodeAgentWorkspacePanelProps {
   onModeChange?: (mode: CodeAgentMode) => void;
   onBackendChange?: (backend: CodeAgentBackend) => void;
   sessionCostUsd: number;
-  showSessionCost?: boolean;
   workspaceSnapshot?: CodeAgentWorkspaceSnapshot | null;
   isRefreshingWorkspace?: boolean;
   workspaceRefreshError?: string | null;
@@ -164,7 +163,6 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   onModeChange,
   onBackendChange,
   sessionCostUsd,
-  showSessionCost = true,
   workspaceSnapshot,
   isRefreshingWorkspace = false,
   workspaceRefreshError,
@@ -492,12 +490,10 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
             <Icon icon="lucide:bot" className="h-3 w-3 flex-shrink-0" />
             <span className="truncate">{t(getCocoStatusLabelKey(agentStatus))}</span>
           </span>
-          {showSessionCost && (
-            <span className="inline-flex items-center gap-1 rounded-full border border-[#dedbd0] bg-[#faf9f5] px-2 py-1 text-[11px] font-medium text-[#4d4c48] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#e8e6dc]">
-              <Icon icon="lucide:coins" className="h-3 w-3" />
-              {t('sessionCost')}: {formatUsdCost(sessionCostUsd)}
-            </span>
-          )}
+          <span className="inline-flex items-center gap-1 rounded-full border border-[#dedbd0] bg-[#faf9f5] px-2 py-1 text-[11px] font-medium text-[#4d4c48] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#e8e6dc]">
+            <Icon icon="lucide:coins" className="h-3 w-3" />
+            {t('sessionCost')}: {formatUsdCost(sessionCostUsd)}
+          </span>
         </div>
       </div>
 
