@@ -43,6 +43,7 @@ interface CodeAgentWorkspaceFileTreePanelProps {
   onUpload: () => void;
   onRename: () => void;
   onDelete: () => void;
+  workspaceEditable?: boolean;
   onSearchQueryChange: (query: string) => void;
   remoteSearchPending: boolean;
   remoteSearchError: string | null;
@@ -431,6 +432,7 @@ export function CodeAgentWorkspaceFileTreePanel({
   onUpload,
   onRename,
   onDelete,
+  workspaceEditable = true,
   onSearchQueryChange,
   remoteSearchPending,
   remoteSearchError,
@@ -484,6 +486,7 @@ export function CodeAgentWorkspaceFileTreePanel({
   const fileCountClassName = mobileLayout
     ? 'max-w-[7rem] shrink-0 truncate text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5]'
     : 'shrink-0 truncate text-[11px] text-[#87867f] dark:text-[#8f8d86]';
+  const readOnlyTitle = workspaceEditable ? undefined : t('codeAgentReadOnlyDescription');
 
   useEffect(() => {
     if (previousTreePathsRef.current === treePaths) return;
@@ -580,20 +583,20 @@ export function CodeAgentWorkspaceFileTreePanel({
             <RefreshCw className={`h-3.5 w-3.5 ${entriesPending ? 'animate-spin' : ''}`} />
           </button>
           <div className="mx-1 h-5 w-px shrink-0 bg-[#dedbd0] dark:bg-[#30302e]" />
-          <button type="button" className={toolbarButtonClassName} aria-label={t('codeAgentNewFile')} onClick={onCreateFile}>
+          <button type="button" disabled={!workspaceEditable} className={toolbarButtonClassName} aria-label={t('codeAgentNewFile')} title={readOnlyTitle} onClick={onCreateFile}>
             <FilePlus2 className="h-3.5 w-3.5" />
           </button>
-          <button type="button" className={toolbarButtonClassName} aria-label={t('codeAgentNewFolder')} onClick={onCreateDirectory}>
+          <button type="button" disabled={!workspaceEditable} className={toolbarButtonClassName} aria-label={t('codeAgentNewFolder')} title={readOnlyTitle} onClick={onCreateDirectory}>
             <FolderPlus className="h-3.5 w-3.5" />
           </button>
-          <button type="button" className={toolbarButtonClassName} aria-label={t('codeAgentUploadFile')} onClick={onUpload}>
+          <button type="button" disabled={!workspaceEditable} className={toolbarButtonClassName} aria-label={t('codeAgentUploadFile')} title={readOnlyTitle} onClick={onUpload}>
             <Upload className="h-3.5 w-3.5" />
           </button>
           <div className="mx-1 h-5 w-px shrink-0 bg-[#dedbd0] dark:bg-[#30302e]" />
-          <button type="button" disabled={!selectedPath} className={toolbarButtonClassName} aria-label={t('codeAgentRenameFile')} onClick={onRename}>
+          <button type="button" disabled={!workspaceEditable || !selectedPath} className={toolbarButtonClassName} aria-label={t('codeAgentRenameFile')} title={readOnlyTitle} onClick={onRename}>
             <Pencil className="h-3.5 w-3.5" />
           </button>
-          <button type="button" disabled={!selectedPath} className={toolbarButtonClassName} aria-label={t('codeAgentDeleteFile')} onClick={onDelete}>
+          <button type="button" disabled={!workspaceEditable || !selectedPath} className={toolbarButtonClassName} aria-label={t('codeAgentDeleteFile')} title={readOnlyTitle} onClick={onDelete}>
             <Trash2 className="h-3.5 w-3.5" />
           </button>
         </div>

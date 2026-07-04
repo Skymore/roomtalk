@@ -415,6 +415,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       sandboxUpdatedAt={currentRoom.sandboxUpdatedAt}
       workspaceRoot={workspaceRoot}
       workspaceChanges={workspaceChanges}
+      workspaceEditable={selectedMode === 'acceptEdits'}
       openFileRequest={workspaceFileOpenRequest}
       revealLine={workspaceFileOpenRequest?.line ?? null}
       revealRequestId={workspaceFileOpenRequest?.requestId ?? 0}

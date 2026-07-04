@@ -138,6 +138,7 @@ interface CodeAgentFileBrowserPanelProps {
   sandboxUpdatedAt?: string;
   workspaceRoot?: string | null;
   workspaceChanges?: CodeAgentWorkspaceSnapshot['changes'] | null;
+  workspaceEditable?: boolean;
   openFileRequest?: { path: string; requestId: number } | null;
   revealLine?: number | null;
   revealRequestId?: number;
@@ -2062,6 +2063,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   sandboxUpdatedAt,
   workspaceRoot,
   workspaceChanges,
+  workspaceEditable = true,
   openFileRequest = null,
   revealLine = null,
   revealRequestId = 0,
@@ -2727,20 +2729,23 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   }, [isMobileSurface, roomId, workspaceRoot]);
 
   const handleCreateFile = useCallback(() => {
+    if (!workspaceEditable) return;
     const path = window.prompt(t('codeAgentNewFilePrompt'), joinWorkspacePath(selectedDirectory, 'untitled.txt'));
     const normalizedPath = path ? normalizeWorkspacePath(path) : '';
     if (!normalizedPath) return;
     void mutate(() => writeCodeWorkspaceFile(roomId, normalizedPath, '', 'utf-8'), normalizedPath, normalizedPath);
-  }, [mutate, roomId, selectedDirectory, t]);
+  }, [mutate, roomId, selectedDirectory, t, workspaceEditable]);
 
   const handleCreateDirectory = useCallback(() => {
+    if (!workspaceEditable) return;
     const path = window.prompt(t('codeAgentNewFolderPrompt'), joinWorkspacePath(selectedDirectory, 'new-folder'));
     const normalizedPath = path ? normalizeWorkspacePath(path) : '';
     if (!normalizedPath) return;
     void mutate(() => createCodeWorkspaceDirectory(roomId, normalizedPath), normalizedPath);
-  }, [mutate, roomId, selectedDirectory, t]);
+  }, [mutate, roomId, selectedDirectory, t, workspaceEditable]);
 
   const handleRename = useCallback(() => {
+    if (!workspaceEditable) return;
     if (!selectedPath) return;
     const path = window.prompt(t('codeAgentRenamePrompt'), selectedPath);
     const normalizedPath = path ? normalizeWorkspacePath(path) : '';
@@ -2749,16 +2754,21 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       ? replacePathPrefix(relativePath, selectedPath, normalizedPath)
       : undefined;
     void mutate(() => renameCodeWorkspaceEntry(roomId, selectedPath, normalizedPath), normalizedPath, nextPreviewPath);
-  }, [mutate, relativePath, roomId, selectedPath, t]);
+  }, [mutate, relativePath, roomId, selectedPath, t, workspaceEditable]);
 
   const handleDelete = useCallback(() => {
+    if (!workspaceEditable) return;
     if (!selectedPath) return;
     if (!window.confirm(t('codeAgentDeleteConfirm', { path: selectedPath }))) return;
     const nextPreviewPath = relativePath && pathContains(selectedPath, relativePath) ? null : undefined;
     void mutate(() => deleteCodeWorkspaceEntry(roomId, selectedPath), null, nextPreviewPath);
-  }, [mutate, relativePath, roomId, selectedPath, t]);
+  }, [mutate, relativePath, roomId, selectedPath, t, workspaceEditable]);
 
   const handleUpload = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    if (!workspaceEditable) {
+      event.target.value = '';
+      return;
+    }
     const files = Array.from(event.target.files || []);
     event.target.value = '';
     if (files.length === 0) return;
@@ -2778,7 +2788,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
         );
       }
     });
-  }, [mutate, roomId, selectedDirectory]);
+  }, [mutate, roomId, selectedDirectory, workspaceEditable]);
 
   const toggleExplorer = useCallback(() => {
     if (isMobileSurface) {
@@ -3258,9 +3268,14 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
         onRefresh={entriesQuery.refresh}
         onCreateFile={handleCreateFile}
         onCreateDirectory={handleCreateDirectory}
-        onUpload={() => uploadInputRef.current?.click()}
+        onUpload={() => {
+          if (workspaceEditable) {
+            uploadInputRef.current?.click();
+          }
+        }}
         onRename={handleRename}
         onDelete={handleDelete}
+        workspaceEditable={workspaceEditable}
         onSearchQueryChange={handleSearchQueryChange}
         remoteSearchPending={remoteSearch.isPending}
         remoteSearchError={remoteSearch.error}
@@ -3704,7 +3719,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
           {operationError}
         </div>
       ) : null}
-      <input ref={uploadInputRef} type="file" className="hidden" multiple onChange={handleUpload} />
+      <input ref={uploadInputRef} type="file" className="hidden" multiple disabled={!workspaceEditable} onChange={handleUpload} />
     </div>
   );
 };

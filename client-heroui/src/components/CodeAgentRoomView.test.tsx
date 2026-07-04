@@ -122,6 +122,7 @@ vi.mock('./CodeAgentFileBrowserPanel', () => ({
     surface,
     sandboxStatus,
     sandboxUpdatedAt,
+    workspaceEditable,
     openFileRequest,
     revealLine,
     revealRequestId,
@@ -131,6 +132,7 @@ vi.mock('./CodeAgentFileBrowserPanel', () => ({
     surface?: 'desktop' | 'mobile';
     sandboxStatus?: string;
     sandboxUpdatedAt?: string;
+    workspaceEditable?: boolean;
     openFileRequest?: { path: string; requestId: number } | null;
     revealLine?: number | null;
     revealRequestId?: number;
@@ -143,6 +145,7 @@ vi.mock('./CodeAgentFileBrowserPanel', () => ({
         data-surface={surface || ''}
         data-sandbox-status={sandboxStatus}
         data-sandbox-updated-at={sandboxUpdatedAt}
+        data-workspace-editable={String(Boolean(workspaceEditable))}
         data-open-path={openFileRequest?.path || ''}
         data-open-request-id={openFileRequest?.requestId || ''}
         data-reveal-line={revealLine || ''}
@@ -297,6 +300,7 @@ describe('CodeAgentRoomView', () => {
     expect(screen.getByTestId('message-input').dataset.codeAgentMaxMode).toBe('acceptEdits');
     expect(screen.getByTestId('file-browser').dataset.sandboxStatus).toBe('ready');
     expect(screen.getByTestId('file-browser').dataset.sandboxUpdatedAt).toBe('2026-06-30T10:00:00.000Z');
+    expect(screen.getByTestId('file-browser').dataset.workspaceEditable).toBe('true');
     expect(screen.getByLabelText('codeAgentResizeWorkspaceFiles')).toBeTruthy();
     expect(screen.getByLabelText('codeAgentCollapseWorkspaceFiles')).toBeTruthy();
   });
@@ -820,5 +824,6 @@ describe('CodeAgentRoomView', () => {
 
     expect(screen.getByTestId('message-list').dataset.codeAgentMode).toBe('plan');
     expect(screen.getByTestId('message-input').dataset.codeAgentMaxMode).toBe('plan');
+    expect(screen.getByTestId('file-browser').dataset.workspaceEditable).toBe('false');
   });
 });

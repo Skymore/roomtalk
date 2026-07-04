@@ -563,6 +563,50 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(screen.queryByTestId('code-agent-mobile-file-tree-search-row')).toBeNull();
   });
 
+  it('disables desktop file write actions when the workspace is read-only', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockResolvedValue({
+      path: 'src/App.tsx',
+      content: 'export default function App() {}',
+      byteSize: 32,
+      truncated: false,
+      encoding: 'utf-8',
+    });
+    const prompt = vi.spyOn(window, 'prompt').mockReturnValue('src/New.tsx');
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" workspaceEditable={false} />);
+
+    await screen.findByText('1 files');
+    fireEvent.click(screen.getByLabelText('Coco files'));
+    await screen.findByTestId('diff-file');
+
+    const desktopActions = within(screen.getByTestId('code-agent-desktop-file-tree-header'))
+      .getByTestId('code-agent-desktop-file-tree-actions');
+    const searchButton = within(desktopActions).getByLabelText('codeAgentSearchWorkspaceFiles') as HTMLButtonElement;
+    const refreshButton = within(desktopActions).getByLabelText('codeAgentRefreshWorkspaceFiles') as HTMLButtonElement;
+    const writeButtons = [
+      within(desktopActions).getByLabelText('codeAgentNewFile') as HTMLButtonElement,
+      within(desktopActions).getByLabelText('codeAgentNewFolder') as HTMLButtonElement,
+      within(desktopActions).getByLabelText('codeAgentUploadFile') as HTMLButtonElement,
+      within(desktopActions).getByLabelText('codeAgentRenameFile') as HTMLButtonElement,
+      within(desktopActions).getByLabelText('codeAgentDeleteFile') as HTMLButtonElement,
+    ];
+
+    expect(searchButton.disabled).toBe(false);
+    expect(refreshButton.disabled).toBe(false);
+    for (const button of writeButtons) {
+      expect(button.disabled).toBe(true);
+      expect(button.title).toBe('codeAgentReadOnlyDescription');
+    }
+    fireEvent.click(writeButtons[0]);
+    expect(prompt).not.toHaveBeenCalled();
+  });
+
   it('resizes the file explorer against the looser preview-preserving cap', async () => {
     loadCodeWorkspaceEntriesMock.mockResolvedValue({
       entries: [
@@ -821,6 +865,47 @@ describe('CodeAgentFileBrowserPanel', () => {
       expect(screen.getByTestId('diff-file').textContent).toBe('docs/Guide.md:contents:docs/Guide.md');
       expect(screen.getByTestId('code-agent-file-preview-body').dataset.mobileView).toBe('preview');
     });
+  });
+
+  it('disables mobile file write actions when the workspace is read-only', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockResolvedValue({
+      path: 'src/App.tsx',
+      content: 'export default function App() {}',
+      byteSize: 32,
+      truncated: false,
+      encoding: 'utf-8',
+    });
+    openCodeAgentRightPanelFile('room-1', 'src/App.tsx');
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" surface="mobile" workspaceEditable={false} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('diff-file').textContent).toBe('src/App.tsx:export default function App() {}');
+    });
+
+    fireEvent.click(screen.getByLabelText('codeAgentShowFileExplorer'));
+    const mobileActions = await screen.findByTestId('code-agent-mobile-file-tree-actions');
+    const searchButton = within(mobileActions).getByLabelText('codeAgentSearchWorkspaceFiles') as HTMLButtonElement;
+    const refreshButton = within(mobileActions).getByLabelText('codeAgentRefreshWorkspaceFiles') as HTMLButtonElement;
+    const writeButtons = [
+      within(mobileActions).getByLabelText('codeAgentNewFile') as HTMLButtonElement,
+      within(mobileActions).getByLabelText('codeAgentNewFolder') as HTMLButtonElement,
+      within(mobileActions).getByLabelText('codeAgentUploadFile') as HTMLButtonElement,
+      within(mobileActions).getByLabelText('codeAgentRenameFile') as HTMLButtonElement,
+      within(mobileActions).getByLabelText('codeAgentDeleteFile') as HTMLButtonElement,
+    ];
+
+    expect(searchButton.disabled).toBe(false);
+    expect(refreshButton.disabled).toBe(false);
+    for (const button of writeButtons) {
+      expect(button.disabled).toBe(true);
+      expect(button.title).toBe('codeAgentReadOnlyDescription');
+    }
   });
 
   it('scrolls the selected mobile file tree row into view and supports pull refresh', async () => {
