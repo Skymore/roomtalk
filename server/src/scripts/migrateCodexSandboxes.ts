@@ -311,6 +311,7 @@ const codexProbeCommand = () => [
   'import subprocess',
   'import sys',
   'importlib.import_module("roomtalk_coco_runner.codex_cli")',
+  'importlib.import_module("roomtalk_coco_runner.codex_app_server")',
   'codex = shutil.which("codex")',
   'if not codex:',
   '    print("codex executable missing", file=sys.stderr)',

@@ -95,10 +95,11 @@ describe('probeCodexCapability', () => {
 
     assert.equal(result.ok, true);
     assert.match(service.commands[0], /roomtalk_coco_runner\.codex_cli/);
+    assert.match(service.commands[0], /roomtalk_coco_runner\.codex_app_server/);
   });
 
   it('rejects sandboxes missing the codex runner module', async () => {
-    const service = createProbeService('', '/usr/local/bin/python: No module named roomtalk_coco_runner.codex_cli\n', 1);
+    const service = createProbeService('', '/usr/local/bin/python: No module named roomtalk_coco_runner.codex_app_server\n', 1);
 
     const result = await probeCodexCapability(service, handle, { PYTHONPATH: '/runner' });
 
