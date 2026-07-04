@@ -5,6 +5,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Message } from '../utils/types';
 import { getCodeAgentModeLabelKey, normalizeCodeAgentMode } from '../utils/codeAgent';
+import { respondCodeAgentApproval } from '../utils/socket';
 
 interface CocoToolMessageProps {
   message: Message;
@@ -204,6 +205,7 @@ const getToolIcon = (toolName: string): string => {
   if (lower.includes('search') || lower.includes('grep')) return 'lucide:search';
   if (lower.includes('web') || lower.includes('fetch')) return 'lucide:globe';
   if (lower.includes('list') || lower.includes('glob')) return 'lucide:folder-open';
+  if (lower === 'approval_request') return 'lucide:shield-question';
   return 'lucide:wrench';
 };
 
@@ -414,6 +416,8 @@ export const CocoToolMessage: React.FC<CocoToolMessageProps> = ({ message, paire
   const { t } = useTranslation();
   const [isExpanded, setIsExpanded] = React.useState(false);
   const [isOutputExpanded, setIsOutputExpanded] = React.useState(false);
+  const [approvalInFlight, setApprovalInFlight] = React.useState<string | null>(null);
+  const [approvalError, setApprovalError] = React.useState<string | null>(null);
   const themeDark = useThemeDark();
 
   const isToolCall = message.messageType === 'tool_call';
@@ -441,6 +445,23 @@ export const CocoToolMessage: React.FC<CocoToolMessageProps> = ({ message, paire
   const isSuccess = hasResult && !isError;
   const isPending = isToolCall && !hasResult;
   const modeLabel = getModeLabel(message, t);
+  const isApprovalRequest = isToolCall && toolName === 'approval_request';
+  const approvalId = isApprovalRequest && typeof message.toolArgs?.approvalId === 'string'
+    ? message.toolArgs.approvalId
+    : null;
+  const canRespondToApproval = isApprovalRequest && isPending && approvalId && !approvalInFlight;
+
+  const handleApprovalDecision = (decision: 'accept' | 'acceptForSession' | 'decline' | 'cancel') => (event: React.MouseEvent) => {
+    event.stopPropagation();
+    if (!approvalId || approvalInFlight) return;
+    setApprovalError(null);
+    setApprovalInFlight(decision);
+    respondCodeAgentApproval(message.roomId, approvalId, decision)
+      .catch((error) => {
+        setApprovalError(error instanceof Error ? error.message : t('codeAgentApprovalFailed'));
+        setApprovalInFlight(null);
+      });
+  };
 
   const output = result?.toolOutputPreview || result?.content || '';
   const shouldCollapseOutput = output.length > OUTPUT_COLLAPSE_LIMIT;
@@ -508,6 +529,44 @@ export const CocoToolMessage: React.FC<CocoToolMessageProps> = ({ message, paire
           className={`h-3 w-3 flex-shrink-0 text-[#b0aea5] transition-transform dark:text-[#6b6a65] ${isExpanded ? 'rotate-90' : ''}`}
         />
       </button>
+
+      {isApprovalRequest && isPending ? (
+        <div className="mt-1 flex flex-wrap items-center gap-1.5 pl-6 pr-1">
+          <button
+            type="button"
+            className="inline-flex h-7 items-center gap-1 rounded-md bg-[#2f6f4e] px-2 text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60 dark:bg-[#3d8a61]"
+            disabled={!canRespondToApproval}
+            onClick={handleApprovalDecision('accept')}
+          >
+            <Icon icon="lucide:check" className="h-3.5 w-3.5" />
+            {t('codeAgentApprove')}
+          </button>
+          <button
+            type="button"
+            className="inline-flex h-7 items-center gap-1 rounded-md border border-[#dedbd0] px-2 text-[11px] font-semibold text-[#4d4c48] disabled:cursor-not-allowed disabled:opacity-60 dark:border-[#30302e] dark:text-[#e8e6dc]"
+            disabled={!canRespondToApproval}
+            onClick={handleApprovalDecision('acceptForSession')}
+          >
+            <Icon icon="lucide:repeat" className="h-3.5 w-3.5" />
+            {t('codeAgentApproveSession')}
+          </button>
+          <button
+            type="button"
+            className="inline-flex h-7 items-center gap-1 rounded-md bg-[#9f462c] px-2 text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60 dark:bg-[#b95335]"
+            disabled={!canRespondToApproval}
+            onClick={handleApprovalDecision('decline')}
+          >
+            <Icon icon="lucide:x" className="h-3.5 w-3.5" />
+            {t('codeAgentDecline')}
+          </button>
+          {approvalInFlight ? (
+            <span className="text-[11px] font-medium text-[#87867f] dark:text-[#8f8d86]">{t('saving')}</span>
+          ) : null}
+          {approvalError ? (
+            <span className="basis-full text-[11px] font-medium text-danger-500 dark:text-danger-400">{approvalError}</span>
+          ) : null}
+        </div>
+      ) : null}
 
       {isExpanded && (
         <div className="mt-1 space-y-1.5 pl-6 pr-1">

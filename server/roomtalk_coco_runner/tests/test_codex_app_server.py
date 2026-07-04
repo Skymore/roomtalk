@@ -321,6 +321,125 @@ def test_codex_app_server_responds_to_auth_refresh_from_auth_json(tmp_path: Path
     }
 
 
+def test_codex_app_server_emits_interactive_approval_request_in_edit_mode(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    auth_json = tmp_path / "auth.json"
+    auth_json.write_text('{"accessToken":"initial"}', encoding="utf-8")
+    stdout = io.StringIO()
+    popen = FakeAppServerPopenFactory([
+        {"id": 0, "result": {}},
+        {"id": 1, "result": {"thread": {"id": "thread-app-approval"}}},
+        {"id": 2, "result": {"turn": {"id": "turn-app-approval"}}},
+        {
+            "id": 88,
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "thread-app-approval",
+                "turnId": "turn-app-approval",
+                "itemId": "cmd-approval",
+                "command": "npm install",
+                "cwd": str(workspace),
+                "startedAtMs": 123,
+            },
+        },
+        {"method": "turn/completed", "params": {"threadId": "thread-app-approval", "turn": {"id": "turn-app-approval", "status": "completed", "items": []}}},
+    ])
+
+    codex_app_server.run_request(
+        codex_app_request(workspace, mode="edit", codexPermissionMode="edit"),
+        emitter=EventEmitter(stdout),
+        config=codex_app_server.CodexCliRunConfig(
+            secret_parent=tmp_path / "secrets",
+            auth_json_path=auth_json,
+        ),
+        popen_factory=popen,
+        env={"COCO_WORKSPACE_ROOT": str(tmp_path)},
+    )
+
+    events = event_lines(stdout)
+    approval = next(event for event in events if event["type"] == "approval_request")
+    assert approval["approvalId"] == "cmd-approval"
+    assert approval["approvalType"] == "command"
+    assert approval["command"] == "npm install"
+    assert approval["cwd"] == str(workspace)
+    assert all(message.get("id") != 88 for message in jsonrpc_lines(popen.processes[0]))
+
+
+def test_codex_app_server_runs_thread_list_query(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    auth_json = tmp_path / "auth.json"
+    auth_json.write_text('{"accessToken":"initial"}', encoding="utf-8")
+    stdout = io.StringIO()
+    popen = FakeAppServerPopenFactory([
+        {"id": 0, "result": {}},
+        {
+            "id": 1,
+            "result": {
+                "data": [
+                    {
+                        "id": "thread-1",
+                        "title": "Inspect project",
+                        "updatedAt": "2026-07-04T10:00:00Z",
+                    },
+                ],
+                "nextCursor": "cursor-next",
+            },
+        },
+    ])
+    request = codex_app_server.parse_app_server_request(json.dumps({
+        "schemaVersion": 1,
+        "type": "thread_list",
+        "roomId": "room-threads",
+        "clientId": "client-1",
+        "workspace": str(workspace),
+        "limit": 10,
+        "searchTerm": "inspect",
+    }))
+
+    codex_app_server.run_thread_query_request(
+        request,
+        emitter=EventEmitter(stdout),
+        config=codex_app_server.CodexCliRunConfig(
+            secret_parent=tmp_path / "secrets",
+            auth_json_path=auth_json,
+        ),
+        popen_factory=popen,
+        env={"COCO_WORKSPACE_ROOT": str(tmp_path)},
+    )
+
+    sent = jsonrpc_lines(popen.processes[0])
+    assert [message["method"] for message in sent if "method" in message] == [
+        "initialize",
+        "initialized",
+        "thread/list",
+    ]
+    assert sent[2]["params"] == {
+        "limit": 10,
+        "sortKey": "updated_at",
+        "sortDirection": "desc",
+        "cwd": str(workspace),
+        "archived": False,
+        "searchTerm": "inspect",
+    }
+    events = event_lines(stdout)
+    assert events == [{
+        "schemaVersion": 1,
+        "type": "thread_list_result",
+        "roomId": "room-threads",
+        "threads": [
+            {
+                "id": "thread-1",
+                "title": "Inspect project",
+                "updatedAt": "2026-07-04T10:00:00Z",
+            },
+        ],
+        "nextCursor": "cursor-next",
+        "backwardsCursor": None,
+    }]
+
+
 def test_codex_app_server_main_emits_error_events_for_invalid_requests():
     stdout = io.StringIO()
 

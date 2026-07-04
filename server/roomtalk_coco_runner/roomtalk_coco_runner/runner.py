@@ -7,6 +7,7 @@ import os
 import posixpath
 import re
 import sys
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,11 +57,13 @@ class RunnerRequest:
 class EventEmitter:
     def __init__(self, stream: TextIO):
         self._stream = stream
+        self._lock = threading.Lock()
 
     def emit(self, event: dict[str, Any]) -> None:
         event.setdefault("schemaVersion", SCHEMA_VERSION)
-        self._stream.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
-        self._stream.flush()
+        with self._lock:
+            self._stream.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
+            self._stream.flush()
 
 
 def parse_request(line: str) -> RunnerRequest:

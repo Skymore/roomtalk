@@ -5,6 +5,7 @@ import {
   CodeAgentRunnerFinalEvent,
   CodeAgentRunnerJsonlParser,
   CodeAgentRunnerProtocolError,
+  CodeAgentRunnerRequest,
   CodeAgentRunnerRunRequest,
   serializeCodeAgentRunnerRequest,
 } from './codeAgentRunnerProtocol';
@@ -52,7 +53,7 @@ export class JsonlCodeAgentRunnerClient implements CodeAgentRunnerClient {
       await handlers.onEvent(event);
     };
 
-    const writeError = await writeRequest(runnerProcess.stdin, request).then(
+    const writeError = await writeCodeAgentRunnerRequest(runnerProcess.stdin, request).then(
       () => undefined,
       error => error
     );
@@ -119,7 +120,7 @@ export class JsonlCodeAgentRunnerClient implements CodeAgentRunnerClient {
   }
 }
 
-const writeRequest = (stdin: NodeJS.WritableStream, request: CodeAgentRunnerRunRequest) => {
+export const writeCodeAgentRunnerRequest = (stdin: NodeJS.WritableStream, request: CodeAgentRunnerRequest) => {
   const serialized = serializeCodeAgentRunnerRequest(request);
   return new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -141,7 +142,7 @@ const writeRequest = (stdin: NodeJS.WritableStream, request: CodeAgentRunnerRunR
     };
     const onError = (error: Error) => finish(error);
     stdin.once('error', onError);
-    stdin.end(serialized, 'utf8', finish);
+    stdin.write(serialized, 'utf8', finish);
   });
 };
 

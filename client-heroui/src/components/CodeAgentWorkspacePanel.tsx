@@ -44,6 +44,7 @@ import {
   setCodeAgentChangedFilesExpanded,
   useCodeAgentChangedFilesExpanded,
 } from '../utils/codeAgentChangedFilesExpansionStore';
+import { requestCodexThread, requestCodexThreads } from '../utils/socket';
 
 interface CodeAgentWorkspacePanelProps {
   room: Room;
@@ -60,6 +61,7 @@ interface CodeAgentWorkspacePanelProps {
   isRefreshingWorkspace?: boolean;
   workspaceRefreshError?: string | null;
   onRefreshWorkspace?: () => void;
+  onInterruptTurn?: () => void;
   onOpenWorkspaceFile?: (path: string) => void;
   reviewComments?: readonly ReviewCommentContext[];
   onAddReviewComment?: (comment: ReviewCommentContext) => void;
@@ -152,6 +154,37 @@ const backendShortLabels: Record<CodeAgentBackend, string> = {
   'codex-app-server': 'App',
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+};
+
+const readString = (value: unknown, key: string): string => {
+  if (!isRecord(value)) return '';
+  const item = value[key];
+  return typeof item === 'string' ? item : '';
+};
+
+const readNumber = (value: unknown, key: string): number | null => {
+  if (!isRecord(value)) return null;
+  const item = value[key];
+  return typeof item === 'number' && Number.isFinite(item) ? item : null;
+};
+
+const threadIdFor = (thread: unknown) => readString(thread, 'id');
+const threadTitleFor = (thread: unknown) => readString(thread, 'name') || readString(thread, 'preview') || threadIdFor(thread);
+const threadPreviewFor = (thread: unknown) => readString(thread, 'preview');
+
+const threadUpdatedAtFor = (thread: unknown) => {
+  const updatedAt = readNumber(thread, 'updatedAt') || readNumber(thread, 'createdAt');
+  if (!updatedAt) return '';
+  return new Date(updatedAt * 1000).toLocaleString();
+};
+
+const threadTurnCountFor = (thread: unknown) => {
+  if (!isRecord(thread) || !Array.isArray(thread.turns)) return 0;
+  return thread.turns.length;
+};
+
 export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = ({
   room,
   messages,
@@ -167,6 +200,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   isRefreshingWorkspace = false,
   workspaceRefreshError,
   onRefreshWorkspace,
+  onInterruptTurn,
   onOpenWorkspaceFile,
   reviewComments = [],
   onAddReviewComment,
@@ -177,6 +211,13 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   const isMobileWorkspaceLayout = useMobileWorkspaceLayout();
   const [isCollapsed, setIsCollapsed] = React.useState(false);
   const [selectedWorkspaceTab, setSelectedWorkspaceTab] = React.useState('overview');
+  const [codexThreads, setCodexThreads] = React.useState<unknown[]>([]);
+  const [codexThreadsNextCursor, setCodexThreadsNextCursor] = React.useState<string | null | undefined>(null);
+  const [isLoadingCodexThreads, setIsLoadingCodexThreads] = React.useState(false);
+  const [codexThreadsError, setCodexThreadsError] = React.useState<string | null>(null);
+  const [selectedCodexThreadId, setSelectedCodexThreadId] = React.useState<string | null>(null);
+  const [selectedCodexThread, setSelectedCodexThread] = React.useState<unknown | null>(null);
+  const [isLoadingSelectedCodexThread, setIsLoadingSelectedCodexThread] = React.useState(false);
   const diffPanelSelection = useCodeAgentDiffPanelSelection(room.id);
   const [diffFileSummaries, setDiffFileSummaries] = React.useState<ScopedDiffFileSummaries>(() => ({
     scopeKey: '',
@@ -351,6 +392,43 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   const canToggleMode = canSwitchMode && normalizedAvailableModes.length > 1 && Boolean(onModeChange);
   const currentBackend: CodeAgentBackend = backend || room.codeAgentBackend || 'coco';
   const canToggleBackend = canSwitchBackend && Boolean(onBackendChange);
+  const canBrowseCodexThreads = currentBackend === 'codex-app-server';
+  const loadCodexThreads = React.useCallback(async (cursor?: string | null) => {
+    if (!canBrowseCodexThreads) {
+      setCodexThreads([]);
+      setCodexThreadsNextCursor(null);
+      return;
+    }
+    setIsLoadingCodexThreads(true);
+    setCodexThreadsError(null);
+    try {
+      const result = await requestCodexThreads(room.id, { cursor: cursor || null, limit: 25 });
+      setCodexThreads((current) => cursor ? [...current, ...result.threads] : result.threads);
+      setCodexThreadsNextCursor(result.nextCursor);
+    } catch (error) {
+      setCodexThreadsError(error instanceof Error ? error.message : t('codeAgentThreadBrowserFailed'));
+    } finally {
+      setIsLoadingCodexThreads(false);
+    }
+  }, [canBrowseCodexThreads, room.id, t]);
+
+  React.useEffect(() => {
+    if (selectedWorkspaceTab === 'threads') {
+      void loadCodexThreads(null);
+    }
+  }, [loadCodexThreads, selectedWorkspaceTab]);
+
+  const handleOpenCodexThread = React.useCallback(async (threadId: string) => {
+    setSelectedCodexThreadId(threadId);
+    setIsLoadingSelectedCodexThread(true);
+    try {
+      setSelectedCodexThread(await requestCodexThread(room.id, threadId, { includeTurns: true }));
+    } catch (error) {
+      setCodexThreadsError(error instanceof Error ? error.message : t('codeAgentThreadBrowserFailed'));
+    } finally {
+      setIsLoadingSelectedCodexThread(false);
+    }
+  }, [room.id, t]);
 
   return (
     <section
@@ -451,6 +529,21 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                 <span className="hidden sm:inline">{t('codeAgentRefreshWorkspace')}</span>
               </Button>
             )}
+            {agentStatus === 'running' && onInterruptTurn ? (
+              <Button
+                isIconOnly
+                size="sm"
+                variant="flat"
+                radius="full"
+                aria-label={t('codeAgentInterrupt')}
+                title={t('codeAgentInterrupt')}
+                data-testid="code-agent-interrupt-turn"
+                className="h-6 w-6 min-w-6 border border-[#f0b49e] bg-[#fff1eb] text-[#a44428] dark:border-[#6f3526] dark:bg-[#321f19] dark:text-[#ffb197]"
+                onPress={onInterruptTurn}
+              >
+                <Icon icon="lucide:square" className="h-3.5 w-3.5" />
+              </Button>
+            ) : null}
             <Button
               isIconOnly
               size="sm"
@@ -627,6 +720,93 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
               ) : (
                 <p className="px-1 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentNoActivity')}</p>
               )}
+            </div>
+          </Tab>
+
+          <Tab
+            key="threads"
+            title={
+              <span className="inline-flex items-center gap-1.5">
+                <Icon icon="lucide:messages-square" className="h-3.5 w-3.5" />
+                {t('codeAgentThreads')}
+              </span>
+            }
+          >
+            <div className="grid max-h-56 min-h-0 divide-y divide-[#dedbd0] overflow-y-auto dark:divide-[#30302e] lg:grid-cols-[minmax(0,1fr)_minmax(12rem,0.8fr)] lg:divide-x lg:divide-y-0">
+              <div className="min-w-0 px-2 py-2">
+                {!canBrowseCodexThreads ? (
+                  <p className="px-1 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentThreadBrowserUnavailable')}</p>
+                ) : codexThreadsError ? (
+                  <p className="px-1 text-xs font-medium text-[#9f462c] dark:text-[#ff9b78]">{codexThreadsError}</p>
+                ) : isLoadingCodexThreads && codexThreads.length === 0 ? (
+                  <p className="px-1 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('loading')}</p>
+                ) : codexThreads.length === 0 ? (
+                  <p className="px-1 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentNoThreads')}</p>
+                ) : (
+                  <div className="space-y-1">
+                    {codexThreads.map((thread) => {
+                      const threadId = threadIdFor(thread);
+                      const selected = selectedCodexThreadId === threadId;
+                      return (
+                        <button
+                          key={threadId || JSON.stringify(thread)}
+                          type="button"
+                          className={`grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors ${
+                            selected
+                              ? 'bg-[#fff1eb] text-[#9f462c] dark:bg-[#3a241d] dark:text-[#ffb197]'
+                              : 'text-[#4d4c48] hover:bg-[#f0eee6] dark:text-[#e8e6dc] dark:hover:bg-[#242421]'
+                          }`}
+                          onClick={() => threadId && handleOpenCodexThread(threadId)}
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate font-semibold">{threadTitleFor(thread)}</span>
+                            <span className="block truncate font-mono text-[10px] text-[#87867f] dark:text-[#8f8d86]">{threadUpdatedAtFor(thread)}</span>
+                          </span>
+                          <Icon icon="lucide:chevron-right" className="mt-0.5 h-3.5 w-3.5 text-[#b0aea5]" />
+                        </button>
+                      );
+                    })}
+                    {codexThreadsNextCursor ? (
+                      <Button
+                        size="sm"
+                        variant="light"
+                        className="h-7 w-full text-xs"
+                        isLoading={isLoadingCodexThreads}
+                        onPress={() => loadCodexThreads(codexThreadsNextCursor)}
+                      >
+                        {t('showMore')}
+                      </Button>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+              <div className="min-w-0 px-3 py-2">
+                {isLoadingSelectedCodexThread ? (
+                  <p className="text-xs text-[#87867f] dark:text-[#8f8d86]">{t('loading')}</p>
+                ) : selectedCodexThread ? (
+                  <div className="space-y-2 text-xs">
+                    <div>
+                      <div className="truncate font-semibold text-[#4d4c48] dark:text-[#e8e6dc]">{threadTitleFor(selectedCodexThread)}</div>
+                      <div className="mt-0.5 truncate font-mono text-[10px] text-[#87867f] dark:text-[#8f8d86]">{threadIdFor(selectedCodexThread)}</div>
+                    </div>
+                    {threadPreviewFor(selectedCodexThread) ? (
+                      <p className="line-clamp-3 text-[#5e5d59] dark:text-[#b0aea5]">{threadPreviewFor(selectedCodexThread)}</p>
+                    ) : null}
+                    <div className="flex flex-wrap gap-1.5">
+                      <span className="rounded-full border border-[#dedbd0] px-2 py-0.5 text-[10px] font-semibold text-[#5e5d59] dark:border-[#30302e] dark:text-[#b0aea5]">
+                        {t('codeAgentThreadTurns')}: {threadTurnCountFor(selectedCodexThread)}
+                      </span>
+                      {readString(selectedCodexThread, 'modelProvider') ? (
+                        <span className="rounded-full border border-[#dedbd0] px-2 py-0.5 text-[10px] font-semibold text-[#5e5d59] dark:border-[#30302e] dark:text-[#b0aea5]">
+                          {readString(selectedCodexThread, 'modelProvider')}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentSelectThread')}</p>
+                )}
+              </div>
             </div>
           </Tab>
 

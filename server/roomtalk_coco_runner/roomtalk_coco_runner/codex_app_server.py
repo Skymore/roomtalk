@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
 import threading
 import base64
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, TextIO
@@ -35,6 +37,76 @@ APP_SERVER_CLIENT_INFO = {
     "title": "RoomTalk",
     "version": "0.1.0",
 }
+
+ControlQueue = queue.Queue[dict[str, Any] | None]
+
+
+@dataclass(frozen=True)
+class CodexThreadQueryRequest:
+    type: str
+    room_id: str
+    client_id: str | None
+    workspace: Path
+    cursor: str | None = None
+    limit: int | None = None
+    search_term: str | None = None
+    thread_id: str | None = None
+    include_turns: bool = False
+
+
+@dataclass
+class _PendingApproval:
+    approval_id: str
+    json_rpc_id: int | str
+    method: str
+    params: dict[str, Any]
+    started_at_ms: int
+
+
+@dataclass
+class _AppServerRunState:
+    roomtalk_turn_id: str
+    thread_id: str | None = None
+    app_turn_id: str | None = None
+    pending_approvals: dict[str, _PendingApproval] = field(default_factory=dict)
+    stopped: bool = False
+    condition: threading.Condition = field(default_factory=threading.Condition)
+
+    def set_thread_id(self, thread_id: str) -> None:
+        with self.condition:
+            self.thread_id = thread_id
+            self.condition.notify_all()
+
+    def set_turn_id(self, turn_id: str) -> None:
+        with self.condition:
+            self.app_turn_id = turn_id
+            self.condition.notify_all()
+
+    def stop(self) -> None:
+        with self.condition:
+            self.stopped = True
+            self.condition.notify_all()
+
+    def active_ids(self, timeout_seconds: float = 30) -> tuple[str, str] | None:
+        deadline = time.monotonic() + timeout_seconds
+        with self.condition:
+            while not self.stopped and (not self.thread_id or not self.app_turn_id):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self.condition.wait(timeout=remaining)
+            if self.thread_id and self.app_turn_id:
+                return self.thread_id, self.app_turn_id
+            return None
+
+    def add_pending_approval(self, pending: _PendingApproval) -> None:
+        with self.condition:
+            self.pending_approvals[pending.approval_id] = pending
+            self.condition.notify_all()
+
+    def pop_pending_approval(self, approval_id: str) -> _PendingApproval | None:
+        with self.condition:
+            return self.pending_approvals.pop(approval_id, None)
 
 
 @dataclass
@@ -294,6 +366,7 @@ def run_request(
     config: CodexCliRunConfig | None = None,
     popen_factory: Callable[..., subprocess.Popen] = subprocess.Popen,
     env: dict[str, str] | None = None,
+    control_queue: ControlQueue | None = None,
 ) -> None:
     env = dict(env or os.environ)
     config = config or config_from_env(env)
@@ -345,7 +418,7 @@ def run_request(
                 workspace=workspace,
                 fallback_session_id=request.session_id,
             )
-            _drive_app_server(process, request, mapper, emitter, env, workspace, config, codex_home)
+            _drive_app_server(process, request, mapper, emitter, env, workspace, config, codex_home, control_queue=control_queue)
             exit_code = _stop_app_server(process)
         finally:
             timeout.cancel()
@@ -377,6 +450,124 @@ def run_request(
             shutil.rmtree(codex_home, ignore_errors=True)
 
 
+def parse_app_server_request(line: str) -> RunnerRequest | CodexThreadQueryRequest:
+    try:
+        raw = json.loads(line)
+    except json.JSONDecodeError as exc:
+        raise RunnerError(f"Invalid JSON request: {exc.msg}", code="invalid_json") from exc
+    if not isinstance(raw, dict):
+        raise RunnerError("Runner request must be a JSON object", code="invalid_request")
+    if raw.get("schemaVersion") != SCHEMA_VERSION:
+        raise RunnerError(f"Unsupported schemaVersion: {raw.get('schemaVersion')}", code="unsupported_schema")
+
+    request_type = raw.get("type")
+    if request_type == "run":
+        return parse_request(line)
+    if request_type in ("thread_list", "thread_read"):
+        return _parse_thread_query_request(raw)
+    raise RunnerError(f"Unsupported request type: {request_type}", code="unsupported_type")
+
+
+def _parse_thread_query_request(raw: dict[str, Any]) -> CodexThreadQueryRequest:
+    def string_field(key: str) -> str:
+        value = raw.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise RunnerError(f"Expected non-empty string field {key!r}", code="invalid_request")
+        return value.strip()
+
+    limit_raw = raw.get("limit")
+    limit = limit_raw if isinstance(limit_raw, int) and limit_raw > 0 else None
+    if limit is not None:
+        limit = min(limit, 100)
+
+    thread_id = raw.get("threadId")
+    request_type = string_field("type")
+    if request_type == "thread_read" and (not isinstance(thread_id, str) or not thread_id.strip()):
+        raise RunnerError("Expected non-empty string field 'threadId'", code="invalid_request")
+
+    client_id = raw.get("clientId")
+    cursor = raw.get("cursor")
+    search_term = raw.get("searchTerm")
+    return CodexThreadQueryRequest(
+        type=request_type,
+        room_id=string_field("roomId"),
+        client_id=client_id.strip() if isinstance(client_id, str) and client_id.strip() else None,
+        workspace=Path(string_field("workspace")),
+        cursor=cursor if isinstance(cursor, str) and cursor else None,
+        limit=limit,
+        search_term=search_term.strip() if isinstance(search_term, str) and search_term.strip() else None,
+        thread_id=thread_id.strip() if isinstance(thread_id, str) and thread_id.strip() else None,
+        include_turns=raw.get("includeTurns") is True,
+    )
+
+
+def run_thread_query_request(
+    request: CodexThreadQueryRequest,
+    *,
+    emitter: EventEmitter,
+    config: CodexCliRunConfig | None = None,
+    popen_factory: Callable[..., subprocess.Popen] = subprocess.Popen,
+    env: dict[str, str] | None = None,
+) -> None:
+    env = dict(env or os.environ)
+    config = config or config_from_env(env)
+    workspace = validate_workspace_path(request.workspace, env)
+    codex_home = _create_persistent_app_server_home(config, request)
+    stderr_tail = _Tail(MAX_STDERR_TAIL_CHARS)
+    process: Any | None = None
+    timeout: threading.Timer | None = None
+    timed_out = False
+
+    try:
+        _restore_auth_json(config, codex_home)
+        process = popen_factory(
+            [config.cli_bin, "app-server", "--stdio"],
+            cwd=str(workspace),
+            env=_build_child_env(env, codex_home),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        stderr_thread = _start_stderr_tail_thread(process.stderr, stderr_tail)
+
+        def kill_after_timeout() -> None:
+            nonlocal timed_out
+            timed_out = True
+            process.kill()
+
+        timeout = threading.Timer(config.timeout_ms / 1000, kill_after_timeout)
+        timeout.daemon = True
+        timeout.start()
+
+        try:
+            _drive_app_server_thread_query(process, request, emitter, config, codex_home, workspace)
+            exit_code = _stop_app_server(process)
+        finally:
+            timeout.cancel()
+            stderr_thread.join(timeout=1)
+
+        if timed_out:
+            raise RunnerError(f"Codex app-server timed out after {config.timeout_ms}ms", code="codex_app_server_timeout")
+
+        refreshed_auth = codex_home / "auth.json"
+        if refreshed_auth.exists() and config.refreshed_auth_json_path:
+            _write_private_file(config.refreshed_auth_json_path, refreshed_auth.read_text(encoding="utf-8"))
+
+        if exit_code not in (0, None):
+            tail = stderr_tail.value()
+            message = f"Codex app-server exited with code {exit_code}"
+            if tail:
+                message = f"{message}: {tail}"
+            raise RunnerError(message, code="codex_app_server_exit")
+    finally:
+        if process is not None and getattr(process, "returncode", None) is None:
+            _terminate_process(process)
+        if not config.keep_codex_home:
+            _remove_app_server_sensitive_files(codex_home)
+
+
 def _drive_app_server(
     process: Any,
     request: RunnerRequest,
@@ -386,23 +577,34 @@ def _drive_app_server(
     workspace: Path,
     config: CodexCliRunConfig,
     codex_home: Path,
+    control_queue: ControlQueue | None = None,
 ) -> None:
     if process.stdin is None or process.stdout is None:
         raise RunnerError("Codex app-server did not expose stdio", code="codex_app_server_process_error", turn_id=request.turn_id)
 
     next_id = 0
+    send_lock = threading.Lock()
+    state = _AppServerRunState(roomtalk_turn_id=request.turn_id)
 
     def send(method: str, params: dict[str, Any] | None = None, *, request_id: int | None = None) -> int | None:
         nonlocal next_id
-        payload: dict[str, Any] = {"method": method, "params": params or {}}
-        if request_id is not None:
-            payload["id"] = request_id
-        elif method != "initialized":
-            payload["id"] = next_id
-            next_id += 1
-        process.stdin.write(json.dumps(payload, separators=(",", ":")) + "\n")
-        process.stdin.flush()
+        with send_lock:
+            payload: dict[str, Any] = {"method": method, "params": params or {}}
+            if request_id is not None:
+                payload["id"] = request_id
+            elif method != "initialized":
+                payload["id"] = next_id
+                next_id += 1
+            process.stdin.write(json.dumps(payload, separators=(",", ":")) + "\n")
+            process.stdin.flush()
         return payload.get("id") if isinstance(payload.get("id"), int) else None
+
+    def write_response(payload: dict[str, Any]) -> None:
+        with send_lock:
+            process.stdin.write(json.dumps(payload, separators=(",", ":")) + "\n")
+            process.stdin.flush()
+
+    control_thread = _start_control_dispatch_thread(control_queue, send, write_response, state, emitter) if control_queue else None
 
     initialize_id = send("initialize", {
         "clientInfo": APP_SERVER_CLIENT_INFO,
@@ -416,50 +618,78 @@ def _drive_app_server(
     turn_start_id: int | None = None
     turn_completed = False
 
-    for line_number, line in enumerate(process.stdout, start=1):
-        if not line.strip():
-            continue
-        message = _parse_json_rpc_line(line, line_number, request.turn_id)
+    try:
+        for line_number, line in enumerate(process.stdout, start=1):
+            if not line.strip():
+                continue
+            message = _parse_json_rpc_line(line, line_number, request.turn_id)
 
-        if _is_server_request(message):
-            _respond_to_server_request(process, message, config=config, codex_home=codex_home)
-            continue
-
-        if "id" in message:
-            if message.get("error"):
-                if message.get("id") == thread_open_id and thread_open_method == "thread/resume":
-                    for mapped in [mapper._status("running", "codex app-server resume failed; starting a new thread")]:
-                        emitter.emit(mapped)
-                    thread_open_method = "thread/start"
-                    thread_open_id = send("thread/start", _thread_start_params(request, workspace))
-                    continue
-                error = message.get("error") if isinstance(message.get("error"), dict) else {}
-                raise RunnerError(
-                    str(error.get("message") or f"Codex app-server request {message.get('id')} failed"),
-                    code="codex_app_server_rpc_error",
-                    turn_id=request.turn_id,
+            if _is_server_request(message):
+                _respond_to_server_request(
+                    process,
+                    message,
+                    config=config,
+                    codex_home=codex_home,
+                    request=request,
+                    emitter=emitter,
+                    state=state,
+                    send_lock=send_lock,
                 )
-            if message.get("id") == initialize_id:
                 continue
-            if message.get("id") == thread_open_id:
-                thread_id = _read_nested_string(message, "result", "thread", "id")
-                if not thread_id:
-                    raise RunnerError(f"Codex app-server {thread_open_method} response did not include thread.id", code="codex_app_server_protocol_error", turn_id=request.turn_id)
-                mapper.session_id = thread_id
-                turn_start_id = send("turn/start", _turn_start_params(request, env, workspace, thread_id))
-                continue
-            if message.get("id") == turn_start_id:
-                continue
-            continue
 
-        if "id" not in message and isinstance(message.get("method"), str):
-            for mapped in mapper.map_notification(message):
-                emitter.emit(mapped)
-                if mapped.get("type") == "error":
-                    raise RunnerError(str(mapped.get("message") or "Codex app-server turn failed"), code="codex_app_server_error", turn_id=request.turn_id)
-            if message.get("method") == "turn/completed":
-                turn_completed = True
-                break
+            if "id" in message:
+                if message.get("error"):
+                    if message.get("id") == thread_open_id and thread_open_method == "thread/resume":
+                        for mapped in [mapper._status("running", "codex app-server resume failed; starting a new thread")]:
+                            emitter.emit(mapped)
+                        thread_open_method = "thread/start"
+                        thread_open_id = send("thread/start", _thread_start_params(request, workspace))
+                        continue
+                    error = message.get("error") if isinstance(message.get("error"), dict) else {}
+                    raise RunnerError(
+                        str(error.get("message") or f"Codex app-server request {message.get('id')} failed"),
+                        code="codex_app_server_rpc_error",
+                        turn_id=request.turn_id,
+                    )
+                if message.get("id") == initialize_id:
+                    continue
+                if message.get("id") == thread_open_id:
+                    thread_id = _read_nested_string(message, "result", "thread", "id")
+                    if not thread_id:
+                        raise RunnerError(f"Codex app-server {thread_open_method} response did not include thread.id", code="codex_app_server_protocol_error", turn_id=request.turn_id)
+                    mapper.session_id = thread_id
+                    state.set_thread_id(thread_id)
+                    turn_start_id = send("turn/start", _turn_start_params(request, env, workspace, thread_id))
+                    continue
+                if message.get("id") == turn_start_id:
+                    app_turn_id = _read_nested_string(message, "result", "turn", "id")
+                    if app_turn_id:
+                        state.set_turn_id(app_turn_id)
+                    continue
+                continue
+
+            if "id" not in message and isinstance(message.get("method"), str):
+                method = str(message.get("method") or "")
+                params = message.get("params") if isinstance(message.get("params"), dict) else {}
+                if method == "thread/started":
+                    thread_id = _read_nested_string(params, "thread", "id") or _read_string(params, "threadId")
+                    if thread_id:
+                        state.set_thread_id(thread_id)
+                elif method == "turn/started":
+                    app_turn_id = _read_nested_string(params, "turn", "id") or _read_string(params, "turnId")
+                    if app_turn_id:
+                        state.set_turn_id(app_turn_id)
+                for mapped in mapper.map_notification(message):
+                    emitter.emit(mapped)
+                    if mapped.get("type") == "error":
+                        raise RunnerError(str(mapped.get("message") or "Codex app-server turn failed"), code="codex_app_server_error", turn_id=request.turn_id)
+                if message.get("method") == "turn/completed":
+                    turn_completed = True
+                    break
+    finally:
+        state.stop()
+        if control_thread is not None:
+            control_thread.join(timeout=1)
 
     if not turn_completed:
         raise RunnerError("Codex app-server exited before turn/completed", code="codex_app_server_missing_completion", turn_id=request.turn_id)
@@ -467,11 +697,106 @@ def _drive_app_server(
     emitter.emit(mapper.final_event())
 
 
+def _drive_app_server_thread_query(
+    process: Any,
+    request: CodexThreadQueryRequest,
+    emitter: EventEmitter,
+    config: CodexCliRunConfig,
+    codex_home: Path,
+    workspace: Path,
+) -> None:
+    if process.stdin is None or process.stdout is None:
+        raise RunnerError("Codex app-server did not expose stdio", code="codex_app_server_process_error")
+
+    next_id = 0
+
+    def send(method: str, params: dict[str, Any] | None = None) -> int | None:
+        nonlocal next_id
+        payload: dict[str, Any] = {"method": method, "params": params or {}}
+        if method != "initialized":
+            payload["id"] = next_id
+            next_id += 1
+        process.stdin.write(json.dumps(payload, separators=(",", ":")) + "\n")
+        process.stdin.flush()
+        return payload.get("id") if isinstance(payload.get("id"), int) else None
+
+    initialize_id = send("initialize", {
+        "clientInfo": APP_SERVER_CLIENT_INFO,
+        "capabilities": {
+            "experimentalApi": True,
+        },
+    })
+    send("initialized", {})
+    query_method = "thread/list" if request.type == "thread_list" else "thread/read"
+    query_id = send(query_method, _thread_query_params(request, workspace))
+
+    for line_number, line in enumerate(process.stdout, start=1):
+        if not line.strip():
+            continue
+        message = _parse_json_rpc_line(line, line_number, None)
+        if _is_server_request(message):
+            _respond_to_server_request(process, message, config=config, codex_home=codex_home)
+            continue
+        if "id" not in message:
+            continue
+        if message.get("id") == initialize_id:
+            if message.get("error"):
+                error = message.get("error") if isinstance(message.get("error"), dict) else {}
+                raise RunnerError(str(error.get("message") or "Codex app-server initialize failed"), code="codex_app_server_rpc_error")
+            continue
+        if message.get("id") != query_id:
+            continue
+        if message.get("error"):
+            error = message.get("error") if isinstance(message.get("error"), dict) else {}
+            raise RunnerError(str(error.get("message") or f"Codex app-server {query_method} failed"), code="codex_app_server_rpc_error")
+        result = message.get("result") if isinstance(message.get("result"), dict) else {}
+        if request.type == "thread_list":
+            emitter.emit({
+                "schemaVersion": SCHEMA_VERSION,
+                "type": "thread_list_result",
+                "roomId": request.room_id,
+                "threads": result.get("data") if isinstance(result.get("data"), list) else [],
+                "nextCursor": result.get("nextCursor") if isinstance(result.get("nextCursor"), str) else None,
+                "backwardsCursor": result.get("backwardsCursor") if isinstance(result.get("backwardsCursor"), str) else None,
+            })
+            return
+        thread = result.get("thread")
+        emitter.emit({
+            "schemaVersion": SCHEMA_VERSION,
+            "type": "thread_read_result",
+            "roomId": request.room_id,
+            "thread": thread if isinstance(thread, dict) else {},
+        })
+        return
+
+    raise RunnerError(f"Codex app-server exited before {query_method} response", code="codex_app_server_missing_query_response")
+
+
+def _thread_query_params(request: CodexThreadQueryRequest, workspace: Path) -> dict[str, Any]:
+    if request.type == "thread_read":
+        return {
+            "threadId": request.thread_id,
+            "includeTurns": request.include_turns,
+        }
+    params: dict[str, Any] = {
+        "limit": request.limit or 25,
+        "sortKey": "updated_at",
+        "sortDirection": "desc",
+        "cwd": str(workspace),
+        "archived": False,
+    }
+    if request.cursor:
+        params["cursor"] = request.cursor
+    if request.search_term:
+        params["searchTerm"] = request.search_term
+    return params
+
+
 def _persistent_app_server_home_enabled(env: dict[str, str]) -> bool:
     return env.get("ROOMTALK_CODEX_APP_SERVER_PERSIST_HOME", "true").lower() != "false"
 
 
-def _create_persistent_app_server_home(config: CodexCliRunConfig, request: RunnerRequest) -> Path:
+def _create_persistent_app_server_home(config: CodexCliRunConfig, request: RunnerRequest | CodexThreadQueryRequest) -> Path:
     safe_room_id = _safe_path_part(request.room_id or "room")
     path = config.secret_parent / f"app-server-{safe_room_id}"
     path.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -553,7 +878,7 @@ def _prompt_with_app_server_tools(request: RunnerRequest, env: dict[str, str]) -
     return _prompt_with_roomtalk_tools(request, env)
 
 
-def _parse_json_rpc_line(line: str, line_number: int, turn_id: str) -> dict[str, Any]:
+def _parse_json_rpc_line(line: str, line_number: int, turn_id: str | None) -> dict[str, Any]:
     try:
         message = json.loads(line)
     except json.JSONDecodeError as exc:
@@ -576,14 +901,265 @@ def _is_server_request(message: dict[str, Any]) -> bool:
     return isinstance(message.get("id"), (int, str)) and isinstance(method, str)
 
 
+def _start_runner_control_reader(stdin: TextIO, control_queue: ControlQueue) -> threading.Thread:
+    def read_controls() -> None:
+        for line in stdin:
+            if not line.strip():
+                continue
+            try:
+                raw = json.loads(line)
+                if isinstance(raw, dict):
+                    control_queue.put(raw)
+            except Exception:
+                continue
+        control_queue.put(None)
+
+    thread = threading.Thread(target=read_controls, daemon=True)
+    thread.start()
+    return thread
+
+
+def _start_control_dispatch_thread(
+    control_queue: ControlQueue,
+    send: Callable[[str, dict[str, Any] | None], int | None],
+    write_response: Callable[[dict[str, Any]], None],
+    state: _AppServerRunState,
+    emitter: EventEmitter,
+) -> threading.Thread:
+    def dispatch_controls() -> None:
+        while True:
+            try:
+                control = control_queue.get()
+            except Exception:
+                return
+            if control is None:
+                return
+            if control.get("schemaVersion") != SCHEMA_VERSION or control.get("turnId") != state.roomtalk_turn_id:
+                continue
+            control_type = control.get("type")
+            try:
+                if control_type == "interrupt":
+                    active_ids = state.active_ids()
+                    if not active_ids:
+                        emitter.emit(_control_status(state.roomtalk_turn_id, "error", "Codex turn is not ready to interrupt"))
+                        continue
+                    thread_id, app_turn_id = active_ids
+                    send("turn/interrupt", {"threadId": thread_id, "turnId": app_turn_id})
+                    emitter.emit(_control_status(state.roomtalk_turn_id, "running", "Codex interrupt sent"))
+                elif control_type == "steer":
+                    prompt = control.get("prompt")
+                    if not isinstance(prompt, str) or not prompt.strip():
+                        continue
+                    active_ids = state.active_ids()
+                    if not active_ids:
+                        emitter.emit(_control_status(state.roomtalk_turn_id, "error", "Codex turn is not ready to steer"))
+                        continue
+                    thread_id, app_turn_id = active_ids
+                    send("turn/steer", {
+                        "threadId": thread_id,
+                        "expectedTurnId": app_turn_id,
+                        "input": [{"type": "text", "text": prompt.strip(), "text_elements": []}],
+                    })
+                    emitter.emit(_control_status(state.roomtalk_turn_id, "running", "Codex steer sent"))
+                elif control_type == "approval_response":
+                    approval_id = control.get("approvalId")
+                    decision = control.get("decision")
+                    if not isinstance(approval_id, str) or not isinstance(decision, str):
+                        continue
+                    pending = state.pop_pending_approval(approval_id)
+                    if not pending:
+                        emitter.emit(_approval_result_event(approval_id, decision, success=False, output="Approval request is no longer pending."))
+                        continue
+                    write_response({"id": pending.json_rpc_id, "result": _approval_response_result(pending, decision)})
+                    emitter.emit(_approval_result_event(approval_id, decision, success=decision in ("accept", "acceptForSession")))
+            except Exception as exc:
+                emitter.emit({
+                    "schemaVersion": SCHEMA_VERSION,
+                    "type": "error",
+                    "turnId": state.roomtalk_turn_id,
+                    "message": str(exc),
+                    "code": "codex_app_server_control_error",
+                    "retryable": False,
+                })
+
+    thread = threading.Thread(target=dispatch_controls, daemon=True)
+    thread.start()
+    return thread
+
+
+def _control_status(turn_id: str, status: str, message: str) -> dict[str, Any]:
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "type": "status",
+        "turnId": turn_id,
+        "status": status,
+        "message": message,
+    }
+
+
+def _is_interactive_approval_method(method: str) -> bool:
+    return method in {
+        "item/commandExecution/requestApproval",
+        "item/fileChange/requestApproval",
+        "item/permissions/requestApproval",
+        "execCommandApproval",
+        "applyPatchApproval",
+    }
+
+
+def _pending_approval_from_request(message: dict[str, Any]) -> _PendingApproval:
+    method = str(message.get("method") or "")
+    params = message.get("params") if isinstance(message.get("params"), dict) else {}
+    message_id = message.get("id")
+    approval_id = _first_string(
+        params.get("approvalId"),
+        params.get("itemId"),
+        params.get("callId"),
+        str(message_id) if message_id is not None else None,
+    ) or "approval"
+    if approval_id in ("None", "null"):
+        approval_id = str(message_id) if message_id is not None else "approval"
+    return _PendingApproval(
+        approval_id=approval_id,
+        json_rpc_id=message_id if isinstance(message_id, (int, str)) else approval_id,
+        method=method,
+        params=params,
+        started_at_ms=int(params.get("startedAtMs") if isinstance(params.get("startedAtMs"), int) else time.time() * 1000),
+    )
+
+
+def _approval_request_event(turn_id: str, pending: _PendingApproval) -> dict[str, Any]:
+    params = pending.params
+    approval_type = _approval_type_for_method(pending.method)
+    title = _approval_title_for_method(pending.method)
+    reason = _first_string(params.get("reason"))
+    command = params.get("command")
+    if isinstance(command, list):
+        command = " ".join(str(item) for item in command)
+    args: dict[str, Any] = {
+        "approvalId": pending.approval_id,
+        "approvalType": approval_type,
+        "requestMethod": pending.method,
+        "startedAtMs": pending.started_at_ms,
+    }
+    for key in ("threadId", "turnId", "itemId", "callId", "cwd", "grantRoot", "environmentId"):
+        if key in params:
+            args[key] = params[key]
+    if command:
+        args["command"] = str(command)
+    if reason:
+        args["reason"] = reason
+    if pending.method == "item/fileChange/requestApproval":
+        args["changes"] = params.get("changes") if isinstance(params.get("changes"), list) else []
+    if pending.method == "item/permissions/requestApproval":
+        args["permissions"] = params.get("permissions") if isinstance(params.get("permissions"), dict) else {}
+    if pending.method == "applyPatchApproval":
+        args["fileChanges"] = params.get("fileChanges") if isinstance(params.get("fileChanges"), dict) else {}
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "type": "approval_request",
+        "turnId": turn_id,
+        "id": pending.approval_id,
+        "approvalType": approval_type,
+        "title": title,
+        "message": reason,
+        "args": args,
+        "messageId": f"codex_app_approval_{pending.approval_id}",
+    }
+
+
+def _approval_type_for_method(method: str) -> str:
+    if method == "item/commandExecution/requestApproval":
+        return "command"
+    if method == "item/fileChange/requestApproval":
+        return "file_change"
+    if method == "item/permissions/requestApproval":
+        return "permissions"
+    if method == "execCommandApproval":
+        return "exec_command"
+    return "apply_patch"
+
+
+def _approval_title_for_method(method: str) -> str:
+    if method in ("item/commandExecution/requestApproval", "execCommandApproval"):
+        return "Codex wants to run a command"
+    if method in ("item/fileChange/requestApproval", "applyPatchApproval"):
+        return "Codex wants to change files"
+    return "Codex requests additional permissions"
+
+
+def _approval_response_result(pending: _PendingApproval, decision: str) -> dict[str, Any]:
+    if pending.method == "item/permissions/requestApproval":
+        if decision in ("accept", "acceptForSession"):
+            permissions = pending.params.get("permissions") if isinstance(pending.params.get("permissions"), dict) else {}
+            return {
+                "permissions": permissions,
+                "scope": "session" if decision == "acceptForSession" else "turn",
+                "strictAutoReview": True,
+            }
+        return {
+            "permissions": {},
+            "scope": "turn",
+            "strictAutoReview": True,
+        }
+
+    if pending.method in ("execCommandApproval", "applyPatchApproval"):
+        legacy_decision = {
+            "accept": "approved",
+            "acceptForSession": "approved_for_session",
+            "decline": "denied",
+            "cancel": "abort",
+        }.get(decision, "denied")
+        return {"decision": legacy_decision}
+
+    normalized_decision = decision if decision in ("accept", "acceptForSession", "decline", "cancel") else "decline"
+    return {"decision": normalized_decision}
+
+
+def _approval_result_event(
+    approval_id: str,
+    decision: str,
+    *,
+    success: bool,
+    output: str | None = None,
+) -> dict[str, Any]:
+    if output is None:
+        output = "Approved." if success else ("Cancelled." if decision == "cancel" else "Declined.")
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "type": "tool_result",
+        "id": approval_id,
+        "name": "approval_request",
+        "success": success,
+        "output": output,
+        "messageId": f"codex_app_approval_result_{approval_id}",
+    }
+
+
 def _respond_to_server_request(
     process: Any,
     message: dict[str, Any],
     *,
     config: CodexCliRunConfig,
     codex_home: Path,
+    request: RunnerRequest | None = None,
+    emitter: EventEmitter | None = None,
+    state: _AppServerRunState | None = None,
+    send_lock: threading.Lock | None = None,
 ) -> None:
     method = str(message.get("method") or "")
+    if (
+        request is not None
+        and emitter is not None
+        and state is not None
+        and _is_interactive_approval_method(method)
+        and _codex_exec_permissions(request).approval_policy == "on-request"
+    ):
+        pending = _pending_approval_from_request(message)
+        state.add_pending_approval(pending)
+        emitter.emit(_approval_request_event(request.turn_id, pending))
+        return
+
     if method in ("item/commandExecution/requestApproval", "item/fileChange/requestApproval"):
         result: dict[str, Any] = {"decision": "decline"}
     elif method == "item/permissions/requestApproval":
@@ -602,17 +1178,24 @@ def _respond_to_server_request(
         try:
             result = _chatgpt_auth_tokens_refresh_result(config, codex_home)
         except RunnerError as exc:
-            _write_json_rpc_response(process, {"id": message["id"], "error": {"code": -32010, "message": str(exc)}})
+            _write_json_rpc_response(process, {"id": message["id"], "error": {"code": -32010, "message": str(exc)}}, send_lock=send_lock)
             return
     else:
-        _write_json_rpc_response(process, {"id": message["id"], "error": {"code": -32601, "message": f"Unsupported server request in RoomTalk non-interactive runner: {method}"}})
+        _write_json_rpc_response(process, {"id": message["id"], "error": {"code": -32601, "message": f"Unsupported server request in RoomTalk non-interactive runner: {method}"}}, send_lock=send_lock)
         return
-    _write_json_rpc_response(process, {"id": message["id"], "result": result})
+    _write_json_rpc_response(process, {"id": message["id"], "result": result}, send_lock=send_lock)
 
 
-def _write_json_rpc_response(process: Any, payload: dict[str, Any]) -> None:
-    process.stdin.write(json.dumps(payload, separators=(",", ":")) + "\n")
-    process.stdin.flush()
+def _write_json_rpc_response(process: Any, payload: dict[str, Any], *, send_lock: threading.Lock | None = None) -> None:
+    if send_lock is None:
+        process.stdin.write(json.dumps(payload, separators=(",", ":")) + "\n")
+        process.stdin.flush()
+        return
+    with send_lock:
+        process.stdin.write(json.dumps(payload, separators=(",", ":")) + "\n")
+        process.stdin.flush()
+
+
 
 
 def _chatgpt_auth_tokens_refresh_result(config: CodexCliRunConfig, codex_home: Path) -> dict[str, Any]:
@@ -830,16 +1413,21 @@ def main(stdin: TextIO | None = None, stdout: TextIO | None = None) -> int:
     stdin = stdin or sys.stdin
     stdout = stdout or sys.stdout
     line = stdin.readline()
-    request: RunnerRequest | None = None
+    request: RunnerRequest | CodexThreadQueryRequest | None = None
     if not line:
         _emit_error(stdout, RunnerError("No runner request received", code="missing_request"))
         return 1
     try:
-        request = parse_request(line)
-        run_request(request, emitter=EventEmitter(stdout))
+        request = parse_app_server_request(line)
+        if isinstance(request, RunnerRequest):
+            control_queue: ControlQueue = queue.Queue()
+            _start_runner_control_reader(stdin, control_queue)
+            run_request(request, emitter=EventEmitter(stdout), control_queue=control_queue)
+        else:
+            run_thread_query_request(request, emitter=EventEmitter(stdout))
         return 0
     except Exception as exc:
-        turn_id = request.turn_id if request else None
+        turn_id = request.turn_id if isinstance(request, RunnerRequest) else None
         if isinstance(exc, RunnerError):
             turn_id = exc.turn_id or turn_id
         _emit_error(stdout, exc, turn_id=turn_id)

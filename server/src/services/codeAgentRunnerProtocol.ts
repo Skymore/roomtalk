@@ -34,6 +34,62 @@ export interface CodeAgentRunnerRunRequest {
   priorMessages?: CodeAgentRunnerPriorMessage[];
 }
 
+export interface CodeAgentRunnerInterruptRequest {
+  schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
+  type: 'interrupt';
+  turnId: string;
+  reason?: string;
+}
+
+export interface CodeAgentRunnerSteerRequest {
+  schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
+  type: 'steer';
+  turnId: string;
+  prompt: string;
+}
+
+export type CodeAgentRunnerApprovalDecision = 'accept' | 'acceptForSession' | 'decline' | 'cancel';
+
+export interface CodeAgentRunnerApprovalResponseRequest {
+  schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
+  type: 'approval_response';
+  turnId: string;
+  approvalId: string;
+  decision: CodeAgentRunnerApprovalDecision;
+}
+
+export interface CodeAgentRunnerThreadListRequest {
+  schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
+  type: 'thread_list';
+  roomId: string;
+  clientId?: string;
+  workspace: string;
+  cursor?: string | null;
+  limit?: number;
+  searchTerm?: string;
+}
+
+export interface CodeAgentRunnerThreadReadRequest {
+  schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
+  type: 'thread_read';
+  roomId: string;
+  clientId?: string;
+  workspace: string;
+  threadId: string;
+  includeTurns?: boolean;
+}
+
+export type CodeAgentRunnerControlRequest =
+  | CodeAgentRunnerInterruptRequest
+  | CodeAgentRunnerSteerRequest
+  | CodeAgentRunnerApprovalResponseRequest;
+
+export type CodeAgentRunnerRequest =
+  | CodeAgentRunnerRunRequest
+  | CodeAgentRunnerControlRequest
+  | CodeAgentRunnerThreadListRequest
+  | CodeAgentRunnerThreadReadRequest;
+
 export interface CodeAgentRunnerStatusEvent {
   schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
   type: 'status';
@@ -89,13 +145,44 @@ export interface CodeAgentRunnerErrorEvent {
   retryable?: boolean;
 }
 
+export interface CodeAgentRunnerApprovalRequestEvent {
+  schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
+  type: 'approval_request';
+  turnId: string;
+  id: string;
+  approvalType: 'command' | 'file_change' | 'permissions' | 'exec_command' | 'apply_patch';
+  title: string;
+  message?: string;
+  args: Record<string, unknown>;
+  messageId?: string;
+}
+
+export interface CodeAgentRunnerThreadListResultEvent {
+  schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
+  type: 'thread_list_result';
+  roomId: string;
+  threads: unknown[];
+  nextCursor?: string | null;
+  backwardsCursor?: string | null;
+}
+
+export interface CodeAgentRunnerThreadReadResultEvent {
+  schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
+  type: 'thread_read_result';
+  roomId: string;
+  thread: unknown;
+}
+
 export type CodeAgentRunnerEvent =
   | CodeAgentRunnerStatusEvent
   | CodeAgentRunnerTextDeltaEvent
   | CodeAgentRunnerToolCallEvent
   | CodeAgentRunnerToolResultEvent
   | CodeAgentRunnerFinalEvent
-  | CodeAgentRunnerErrorEvent;
+  | CodeAgentRunnerErrorEvent
+  | CodeAgentRunnerApprovalRequestEvent
+  | CodeAgentRunnerThreadListResultEvent
+  | CodeAgentRunnerThreadReadResultEvent;
 
 export class CodeAgentRunnerProtocolError extends Error {
   constructor(message: string) {
@@ -219,7 +306,7 @@ const assertSchemaVersion = (value: Record<string, unknown>) => {
   }
 };
 
-export const serializeCodeAgentRunnerRequest = (request: CodeAgentRunnerRunRequest): string => {
+export const serializeCodeAgentRunnerRequest = (request: CodeAgentRunnerRequest): string => {
   return `${JSON.stringify(request)}\n`;
 };
 
@@ -302,6 +389,44 @@ export const parseCodeAgentRunnerEventLine = (line: string): CodeAgentRunnerEven
         turnId: readOptionalString(raw, 'turnId'),
         code: readOptionalString(raw, 'code'),
         retryable: readOptionalBoolean(raw, 'retryable'),
+      };
+    case 'approval_request': {
+      const approvalType = readRequiredString(raw, 'approvalType');
+      if (!['command', 'file_change', 'permissions', 'exec_command', 'apply_patch'].includes(approvalType)) {
+        throw new CodeAgentRunnerProtocolError(`Invalid approval request type: ${approvalType}.`);
+      }
+      return {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type,
+        turnId: readRequiredString(raw, 'turnId'),
+        id: readRequiredString(raw, 'id'),
+        approvalType: approvalType as CodeAgentRunnerApprovalRequestEvent['approvalType'],
+        title: readRequiredString(raw, 'title'),
+        message: readOptionalString(raw, 'message'),
+        args: readRecord(raw, 'args'),
+        messageId: readOptionalString(raw, 'messageId'),
+      };
+    }
+    case 'thread_list_result': {
+      const threads = raw.threads;
+      if (!Array.isArray(threads)) {
+        throw new CodeAgentRunnerProtocolError('Expected array field "threads".');
+      }
+      return {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type,
+        roomId: readRequiredString(raw, 'roomId'),
+        threads,
+        nextCursor: raw.nextCursor === null ? null : readOptionalString(raw, 'nextCursor'),
+        backwardsCursor: raw.backwardsCursor === null ? null : readOptionalString(raw, 'backwardsCursor'),
+      };
+    }
+    case 'thread_read_result':
+      return {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type,
+        roomId: readRequiredString(raw, 'roomId'),
+        thread: raw.thread,
       };
     default:
       throw new CodeAgentRunnerProtocolError(`Unknown code agent runner event type: ${String(type)}.`);

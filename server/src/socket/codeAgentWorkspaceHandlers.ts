@@ -13,6 +13,7 @@ import {
   ResolveCocoWorkspacePreviewTargetInput,
 } from '../services/cocoSandboxService';
 import { buildCodeAgentWorkspaceSnapshot, CodeAgentWorkspaceSnapshot } from '../services/codeAgentWorkspace';
+import { CodeAgentRunnerApprovalDecision } from '../services/codeAgentRunnerProtocol';
 import { Room } from '../types';
 import { hasRoomAccess } from './roomAccess';
 import { SocketConnectionContext } from './types';
@@ -65,6 +66,25 @@ type WorkspaceAssetUrlAck = {
 
 type WorkspaceMutationAck = {
   success: boolean;
+  error?: string;
+};
+
+type CodeAgentControlAck = {
+  success: boolean;
+  error?: string;
+};
+
+type CodexThreadListAck = {
+  success: boolean;
+  threads?: unknown[];
+  nextCursor?: string | null;
+  backwardsCursor?: string | null;
+  error?: string;
+};
+
+type CodexThreadReadAck = {
+  success: boolean;
+  thread?: unknown;
   error?: string;
 };
 
@@ -434,6 +454,14 @@ const parseWorkspacePositiveInteger = (payload: unknown, key: string, fallback: 
   return Math.min(max, value);
 };
 
+const parseApprovalDecision = (payload: unknown): CodeAgentRunnerApprovalDecision | null => {
+  const decision = parseWorkspaceString(payload, 'decision');
+  if (decision === 'accept' || decision === 'acceptForSession' || decision === 'decline' || decision === 'cancel') {
+    return decision;
+  }
+  return null;
+};
+
 export function registerCodeAgentWorkspaceHandlers({
   io,
   socket,
@@ -441,6 +469,7 @@ export function registerCodeAgentWorkspaceHandlers({
   socketLogger,
   cocoAccess = createCocoAccessControl({ enabled: false }),
   cocoSandboxService,
+  codeAgentSessionService,
   codeWorkspaceAssetAccess,
   publishedStaticSiteService,
 }: SocketConnectionContext) {
@@ -498,6 +527,122 @@ export function registerCodeAgentWorkspaceHandlers({
     }
     return { success: true, handle: await cocoSandboxService.connect(room.sandboxId) };
   };
+
+  socket.on('interrupt_code_agent_turn', async (payload: unknown, callback?: (response: CodeAgentControlAck) => void) => {
+    const roomId = parseRoomId(payload);
+    const authorized = await loadAuthorizedCocoRoom(roomId, 'interrupt code agent turn');
+    if (!authorized.success) {
+      callback?.({ success: false, error: authorized.error });
+      return;
+    }
+    if (!codeAgentSessionService) {
+      callback?.({ success: false, error: 'Coco is unavailable' });
+      return;
+    }
+    const reason = parseWorkspaceOptionalString(payload, 'reason')?.slice(0, 500);
+    const response = await codeAgentSessionService.interruptTurn(authorized.room.id, authorized.clientId, reason);
+    callback?.(response);
+  });
+
+  socket.on('steer_code_agent_turn', async (payload: unknown, callback?: (response: CodeAgentControlAck) => void) => {
+    const roomId = parseRoomId(payload);
+    const authorized = await loadAuthorizedCocoRoom(roomId, 'steer code agent turn');
+    if (!authorized.success) {
+      callback?.({ success: false, error: authorized.error });
+      return;
+    }
+    if (!codeAgentSessionService) {
+      callback?.({ success: false, error: 'Coco is unavailable' });
+      return;
+    }
+    const prompt = parseWorkspaceString(payload, 'prompt');
+    if (!prompt) {
+      callback?.({ success: false, error: 'Steer prompt is required' });
+      return;
+    }
+    const response = await codeAgentSessionService.steerTurn(authorized.room.id, authorized.clientId, prompt);
+    callback?.(response);
+  });
+
+  socket.on('respond_code_agent_approval', async (payload: unknown, callback?: (response: CodeAgentControlAck) => void) => {
+    const roomId = parseRoomId(payload);
+    const authorized = await loadAuthorizedCocoRoom(roomId, 'respond to code agent approval');
+    if (!authorized.success) {
+      callback?.({ success: false, error: authorized.error });
+      return;
+    }
+    if (!codeAgentSessionService) {
+      callback?.({ success: false, error: 'Coco is unavailable' });
+      return;
+    }
+    const approvalId = parseWorkspaceString(payload, 'approvalId');
+    const decision = parseApprovalDecision(payload);
+    if (!approvalId || !decision) {
+      callback?.({ success: false, error: 'Approval id and decision are required' });
+      return;
+    }
+    const response = await codeAgentSessionService.respondToApproval(authorized.room.id, authorized.clientId, approvalId, decision);
+    callback?.(response);
+  });
+
+  socket.on('list_codex_threads', async (payload: unknown, callback?: (response: CodexThreadListAck) => void) => {
+    const roomId = parseRoomId(payload);
+    const authorized = await loadAuthorizedCocoRoom(roomId, 'list Codex threads');
+    if (!authorized.success) {
+      callback?.({ success: false, error: authorized.error });
+      return;
+    }
+    if (!codeAgentSessionService) {
+      callback?.({ success: false, error: 'Coco is unavailable' });
+      return;
+    }
+    const limit = parseWorkspacePositiveInteger(payload, 'limit', 25, 100);
+    const cursor = parseWorkspaceOptionalString(payload, 'cursor') || null;
+    const searchTerm = parseWorkspaceOptionalString(payload, 'searchTerm')?.trim() || undefined;
+    try {
+      const result = await codeAgentSessionService.listCodexThreads({
+        roomId: authorized.room.id,
+        clientId: authorized.clientId,
+        limit,
+        cursor,
+        searchTerm,
+      });
+      callback?.({ success: true, ...result });
+    } catch (error) {
+      socketLogger.warn('Failed to list Codex threads', { error, roomId: authorized.room.id, clientId: authorized.clientId });
+      callback?.({ success: false, error: error instanceof Error ? error.message : 'Failed to list Codex threads' });
+    }
+  });
+
+  socket.on('read_codex_thread', async (payload: unknown, callback?: (response: CodexThreadReadAck) => void) => {
+    const roomId = parseRoomId(payload);
+    const authorized = await loadAuthorizedCocoRoom(roomId, 'read Codex thread');
+    if (!authorized.success) {
+      callback?.({ success: false, error: authorized.error });
+      return;
+    }
+    if (!codeAgentSessionService) {
+      callback?.({ success: false, error: 'Coco is unavailable' });
+      return;
+    }
+    const threadId = parseWorkspaceString(payload, 'threadId');
+    if (!threadId) {
+      callback?.({ success: false, error: 'Thread id is required' });
+      return;
+    }
+    try {
+      const result = await codeAgentSessionService.readCodexThread({
+        roomId: authorized.room.id,
+        clientId: authorized.clientId,
+        threadId,
+        includeTurns: parseWorkspaceBoolean(payload, 'includeTurns'),
+      });
+      callback?.({ success: true, thread: result.thread });
+    } catch (error) {
+      socketLogger.warn('Failed to read Codex thread', { error, roomId: authorized.room.id, clientId: authorized.clientId, threadId });
+      callback?.({ success: false, error: error instanceof Error ? error.message : 'Failed to read Codex thread' });
+    }
+  });
 
   const loadWorkspaceSnapshotState = async (room: Room): Promise<{
     changes: CocoWorkspaceChanges;

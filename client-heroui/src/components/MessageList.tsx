@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback, useImperativeHandle } from 'react';
 import { Icon } from '@iconify/react';
-import { getMediaDownloadUrl, getRoomMessagesForExport, getRoomRoleMembers, removeRoomAdmin, removeRoomMember, requestAIResponse, requestEditMessageAndAIResponse, setRoomAdmin, socket, transferRoomOwnership } from '../utils/socket';
+import { getMediaDownloadUrl, getRoomMessagesForExport, getRoomRoleMembers, interruptCodeAgentTurn, removeRoomAdmin, removeRoomMember, requestAIResponse, requestEditMessageAndAIResponse, setRoomAdmin, socket, transferRoomOwnership } from '../utils/socket';
 import { MessageItem, MessageUserAction, preloadMarkdownContent } from './MessageItem';
 import { Message, Room, RoomPermissions, RoomRoleMember } from '../utils/types';
 import { readMemoryRoomMessageWindow } from '../utils/messageHistoryCache';
@@ -124,6 +124,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const [workspaceSnapshot, setWorkspaceSnapshot] = useState<CodeAgentWorkspaceSnapshot | null>(null);
   const [isWorkspaceRefreshing, setIsWorkspaceRefreshing] = useState(false);
   const [workspaceRefreshError, setWorkspaceRefreshError] = useState<string | null>(null);
+  const [codeAgentInterruptError, setCodeAgentInterruptError] = useState<string | null>(null);
   const [roleMembers, setRoleMembers] = useState<RoomRoleMember[]>([]);
   const codeAgentRoom = currentRoom || (presentation === 'code-agent' ? room : undefined);
   const currentRoomId = codeAgentRoom?.id;
@@ -294,10 +295,18 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     }
   }, [currentRoomId, onWorkspaceChangesChange, onWorkspaceRootChange, presentation]);
 
+  const handleInterruptCodeAgentTurn = useCallback(() => {
+    setCodeAgentInterruptError(null);
+    interruptCodeAgentTurn(roomId).catch((error) => {
+      setCodeAgentInterruptError(error instanceof Error ? error.message : t('codeAgentInterruptFailed'));
+    });
+  }, [roomId, t]);
+
   useEffect(() => {
     if (presentation !== 'code-agent' || !currentRoomId) {
       setWorkspaceSnapshot(null);
       setWorkspaceRefreshError(null);
+      setCodeAgentInterruptError(null);
       onWorkspaceRootChange?.(null);
       onWorkspaceChangesChange?.(null);
       return;
@@ -675,8 +684,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
             sessionCostUsd={sessionCostUsd ?? 0}
             workspaceSnapshot={workspaceSnapshot}
             isRefreshingWorkspace={isWorkspaceRefreshing}
-            workspaceRefreshError={workspaceRefreshError}
+            workspaceRefreshError={workspaceRefreshError || codeAgentInterruptError}
             onRefreshWorkspace={refreshWorkspaceSnapshot}
+            onInterruptTurn={handleInterruptCodeAgentTurn}
             onOpenWorkspaceFile={onOpenWorkspaceFile}
             reviewComments={reviewComments}
             onAddReviewComment={onAddReviewComment}

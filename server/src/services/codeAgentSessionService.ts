@@ -7,7 +7,18 @@ import { CocoSandboxLifecycleService, EnsureCocoSandboxResult } from './cocoSand
 import { CocoSandboxHandle, CocoSandboxService, CodeAgentRunnerProcess } from './cocoSandboxService';
 import { mapCodeAgentRunnerEvent } from './codeAgentEventMapper';
 import { CodeAgentRunner } from './codeAgentRunner';
-import { CODE_AGENT_RUNNER_SCHEMA_VERSION, CodeAgentRunnerEvent, CodeAgentRunnerMode, CodeAgentRunnerRunRequest } from './codeAgentRunnerProtocol';
+import {
+  CODE_AGENT_RUNNER_SCHEMA_VERSION,
+  CodeAgentRunnerApprovalDecision,
+  CodeAgentRunnerEvent,
+  CodeAgentRunnerJsonlParser,
+  CodeAgentRunnerMode,
+  CodeAgentRunnerRunRequest,
+  CodeAgentRunnerThreadListRequest,
+  CodeAgentRunnerThreadListResultEvent,
+  CodeAgentRunnerThreadReadRequest,
+  CodeAgentRunnerThreadReadResultEvent,
+} from './codeAgentRunnerProtocol';
 import { DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND, DEFAULT_CODEX_CLI_RUNNER_COMMAND, DEFAULT_COCO_RUNNER_COMMAND } from './codeAgentRuntimeConfig';
 import { createAIPlaceholderMessage } from './messageDomain';
 import { CocoModelGateway } from './cocoModelGateway';
@@ -17,6 +28,7 @@ import { ObservabilityEventInput, ObservabilityEventRecorder } from './observabi
 import { canUseCocoRoom, COCO_ACCESS_DENIED_MESSAGE } from './cocoRoomAccess';
 import { CodexConnectionService } from './codexConnection';
 import { CodeAgentRunnerHandlers, CodeAgentRunnerRunResult } from './fakeCodeAgentRunner';
+import { writeCodeAgentRunnerRequest } from './jsonlCodeAgentRunner';
 import { CodexRunSettings, getCodexMessageAIModel, normalizeCodexRunSettings } from './codexRunSettings';
 import {
   codeAgentModeAllowsShell,
@@ -74,6 +86,27 @@ export interface CodeAgentTurnInput {
 export type CodeAgentTurnAck = { success: boolean; messageId?: string; error?: string };
 export type CodeAgentTurnAckCallback = (response: CodeAgentTurnAck) => void;
 
+export type CodeAgentControlAck = { success: boolean; error?: string };
+
+export interface CodeAgentThreadListResult {
+  threads: unknown[];
+  nextCursor?: string | null;
+  backwardsCursor?: string | null;
+}
+
+export interface CodeAgentThreadReadResult {
+  thread: unknown;
+}
+
+interface ActiveCodeAgentTurn {
+  roomId: string;
+  clientId: string;
+  turnId: string;
+  backend: CodeAgentBackend;
+  sandbox?: CocoSandboxHandle;
+  process?: CodeAgentRunnerProcess;
+}
+
 interface CodeAgentTurnStreamState {
   activeMessageId: string;
   segmentContent: string;
@@ -84,7 +117,7 @@ interface CodeAgentTurnStreamState {
 }
 
 export class CodeAgentSessionService {
-  private readonly activeTurns = new Set<string>();
+  private readonly activeTurns = new Map<string, ActiveCodeAgentTurn>();
   private readonly now: () => Date;
   private readonly createId: () => string;
 
@@ -168,9 +201,14 @@ export class CodeAgentSessionService {
     let streamState: CodeAgentTurnStreamState | null = null;
 
     try {
-      this.activeTurns.add(input.roomId);
       aiMessageId = this.createId();
       turnId = this.createId();
+      this.activeTurns.set(input.roomId, {
+        roomId: input.roomId,
+        clientId: input.clientId,
+        turnId,
+        backend: turnBackend,
+      });
       const placeholderMessage = createAIPlaceholderMessage({
           id: aiMessageId,
           roomId: input.roomId,
@@ -230,6 +268,10 @@ export class CodeAgentSessionService {
           workspace: sandbox.handle.workspace,
         },
       });
+      const activeTurn = this.activeTurns.get(input.roomId);
+      if (activeTurn) {
+        activeTurn.sandbox = sandbox.handle;
+      }
 
       const runningRoom = await this.patchRoom(input.roomId, { cocoStatus: 'running' });
       if (!runningRoom) {
@@ -308,6 +350,11 @@ export class CodeAgentSessionService {
           env,
           timeoutMs: this.options.turnTimeoutMs,
         });
+        const active = this.activeTurns.get(input.roomId);
+        if (active?.turnId === turnId) {
+          active.process = runnerProcess;
+          active.sandbox = sandbox.handle;
+        }
         await this.recordTurnEvent('info', 'coco.runner.started', input, turnId, turnStartedAtMs, {
           payload: {
             backend: turnBackend,
@@ -473,10 +520,279 @@ export class CodeAgentSessionService {
     }
   }
 
+  async interruptTurn(roomId: string, clientId: string, reason?: string): Promise<CodeAgentControlAck> {
+    const active = this.activeTurns.get(roomId);
+    if (!active) {
+      return { success: false, error: 'No code agent turn is running in this room' };
+    }
+    if (active.clientId !== clientId) {
+      this.logger.info('Code agent interrupt requested by another room member', { roomId, startedBy: active.clientId, requestedBy: clientId });
+    }
+    if (active.backend !== 'codex-app-server') {
+      if (active.process) {
+        await this.stopRunnerProcess(active.process, roomId);
+        return { success: true };
+      }
+      return { success: false, error: 'The current engine does not support interactive interrupt yet' };
+    }
+    return this.writeActiveControl(roomId, {
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'interrupt',
+      turnId: active.turnId,
+      ...(reason ? { reason } : {}),
+    });
+  }
+
+  async steerTurn(roomId: string, clientId: string, prompt: string): Promise<CodeAgentControlAck> {
+    const active = this.activeTurns.get(roomId);
+    if (!active) {
+      return { success: false, error: 'No code agent turn is running in this room' };
+    }
+    if (active.backend !== 'codex-app-server') {
+      return { success: false, error: 'Turn steering requires the Codex App engine' };
+    }
+    const trimmedPrompt = prompt.trim();
+    if (!trimmedPrompt) {
+      return { success: false, error: 'Steer prompt is required' };
+    }
+    if (active.clientId !== clientId) {
+      this.logger.info('Code agent steer requested by another room member', { roomId, startedBy: active.clientId, requestedBy: clientId });
+    }
+    return this.writeActiveControl(roomId, {
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'steer',
+      turnId: active.turnId,
+      prompt: trimmedPrompt,
+    });
+  }
+
+  async respondToApproval(
+    roomId: string,
+    clientId: string,
+    approvalId: string,
+    decision: CodeAgentRunnerApprovalDecision
+  ): Promise<CodeAgentControlAck> {
+    const active = this.activeTurns.get(roomId);
+    if (!active) {
+      return { success: false, error: 'No code agent turn is running in this room' };
+    }
+    if (active.backend !== 'codex-app-server') {
+      return { success: false, error: 'Interactive approval requires the Codex App engine' };
+    }
+    if (active.clientId !== clientId) {
+      this.logger.info('Code agent approval response from another room member', { roomId, startedBy: active.clientId, requestedBy: clientId, approvalId });
+    }
+    return this.writeActiveControl(roomId, {
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'approval_response',
+      turnId: active.turnId,
+      approvalId,
+      decision,
+    });
+  }
+
+  async listCodexThreads(input: {
+    roomId: string;
+    clientId: string;
+    cursor?: string | null;
+    limit?: number;
+    searchTerm?: string;
+  }): Promise<CodeAgentThreadListResult> {
+    const prepared = await this.prepareCodexThreadQuery(input.roomId, input.clientId);
+    const request: CodeAgentRunnerThreadListRequest = {
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'thread_list',
+      roomId: input.roomId,
+      clientId: input.clientId,
+      workspace: prepared.sandbox.workspace,
+      cursor: input.cursor || null,
+      limit: input.limit,
+      searchTerm: input.searchTerm,
+    };
+    const event = await this.runCodexThreadQuery<CodeAgentRunnerThreadListResultEvent>({
+      clientId: input.clientId,
+      sandbox: prepared.sandbox,
+      request,
+      expectedType: 'thread_list_result',
+    });
+    return {
+      threads: event.threads,
+      nextCursor: event.nextCursor,
+      backwardsCursor: event.backwardsCursor,
+    };
+  }
+
+  async readCodexThread(input: {
+    roomId: string;
+    clientId: string;
+    threadId: string;
+    includeTurns?: boolean;
+  }): Promise<CodeAgentThreadReadResult> {
+    const prepared = await this.prepareCodexThreadQuery(input.roomId, input.clientId);
+    const request: CodeAgentRunnerThreadReadRequest = {
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'thread_read',
+      roomId: input.roomId,
+      clientId: input.clientId,
+      workspace: prepared.sandbox.workspace,
+      threadId: input.threadId,
+      includeTurns: input.includeTurns,
+    };
+    const event = await this.runCodexThreadQuery<CodeAgentRunnerThreadReadResultEvent>({
+      clientId: input.clientId,
+      sandbox: prepared.sandbox,
+      request,
+      expectedType: 'thread_read_result',
+    });
+    return { thread: event.thread };
+  }
+
   private async stopRunnerProcess(runnerProcess: CodeAgentRunnerProcess, roomId: string) {
     await runnerProcess.stop().catch(error => {
       this.logger.warn('Failed to stop code agent runner process', { error, roomId });
     });
+  }
+
+  private async writeActiveControl(
+    roomId: string,
+    request: Parameters<typeof writeCodeAgentRunnerRequest>[1]
+  ): Promise<CodeAgentControlAck> {
+    const active = this.activeTurns.get(roomId);
+    const stdin = active?.process?.stdin;
+    if (!active || !stdin) {
+      return { success: false, error: 'Code agent runner is not ready for control input' };
+    }
+    try {
+      await writeCodeAgentRunnerRequest(stdin, request);
+      return { success: true };
+    } catch (error) {
+      this.logger.warn('Failed to write code agent control request', {
+        error,
+        roomId,
+        turnId: active.turnId,
+        requestType: request.type,
+      });
+      return { success: false, error: 'Failed to send control request to the running code agent' };
+    }
+  }
+
+  private async prepareCodexThreadQuery(roomId: string, clientId: string): Promise<{ room: Room; sandbox: CocoSandboxHandle }> {
+    if (this.activeTurns.has(roomId)) {
+      throw new Error('Codex thread browser is available after the current turn finishes');
+    }
+    const room = await this.store.getRoomById(roomId);
+    const member = room ? await this.store.getRoomMember(roomId, clientId) : null;
+    const validation = this.validateRoom(room, clientId, member?.role);
+    if (!validation.success || !room) {
+      throw new Error(validation.error || 'Room not found');
+    }
+    const backend = this.resolveTurnBackend(room);
+    if (backend !== 'codex-app-server') {
+      throw new Error('Codex thread browser requires the Codex App engine');
+    }
+    const sandbox = await this.sandboxLifecycle.ensureReadySandbox(roomId, clientId);
+    if (!sandbox.ok) {
+      throw new Error(this.describeSandboxFailure(sandbox));
+    }
+    return { room, sandbox: sandbox.handle };
+  }
+
+  private async runCodexThreadQuery<T extends CodeAgentRunnerThreadListResultEvent | CodeAgentRunnerThreadReadResultEvent>(input: {
+    clientId: string;
+    sandbox: CocoSandboxHandle;
+    request: CodeAgentRunnerThreadListRequest | CodeAgentRunnerThreadReadRequest;
+    expectedType: T['type'];
+  }): Promise<T> {
+    if (this.options.codexBackendEnabled === false) {
+      throw new Error('Codex CLI backend is not enabled');
+    }
+    const connectionService = this.options.codexConnectionService;
+    if (!connectionService) {
+      throw new Error('Codex connection service is not configured');
+    }
+    if (!this.sandboxService.writeSecretFile || !this.sandboxService.deleteSecretFile) {
+      throw new Error('Codex backend requires sandbox secret file support');
+    }
+
+    const queryId = this.createId();
+    return connectionService.withCodexAuth(input.clientId, queryId, async authJson => {
+      const authPath = this.codexSecretFilePath(queryId, 'auth.json');
+      const refreshedAuthPath = this.codexSecretFilePath(queryId, 'refreshed-auth.json');
+      await this.sandboxService.writeSecretFile!(input.sandbox, {
+        path: authPath,
+        content: authJson,
+      });
+
+      let refreshedAuthJson: string | undefined;
+      try {
+        const runnerProcess = await this.sandboxService.startRunner({
+          handle: input.sandbox,
+          command: DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND,
+          env: {
+            PYTHONUNBUFFERED: '1',
+            ...(this.options.runnerEnv || {}),
+            ...(this.options.runnerEnvByBackend?.['codex-app-server'] || {}),
+            ROOMTALK_CODEX_AUTH_JSON_PATH: authPath,
+            ROOMTALK_CODEX_REFRESHED_AUTH_JSON_PATH: refreshedAuthPath,
+          },
+          timeoutMs: this.options.turnTimeoutMs,
+        });
+        try {
+          const result = await this.collectCodexThreadQueryResult<T>(runnerProcess, input.request, input.expectedType);
+          refreshedAuthJson = await this.readOptionalCodexRefreshedAuth(input.sandbox, refreshedAuthPath);
+          return {
+            result,
+            ...(refreshedAuthJson ? { refreshedAuthJson } : {}),
+          };
+        } finally {
+          await this.stopRunnerProcess(runnerProcess, input.request.roomId);
+        }
+      } finally {
+        await Promise.all([
+          this.deleteCodexSecretFile(input.sandbox, authPath),
+          this.deleteCodexSecretFile(input.sandbox, refreshedAuthPath),
+        ]);
+      }
+    });
+  }
+
+  private async collectCodexThreadQueryResult<T extends CodeAgentRunnerThreadListResultEvent | CodeAgentRunnerThreadReadResultEvent>(
+    runnerProcess: CodeAgentRunnerProcess,
+    request: CodeAgentRunnerThreadListRequest | CodeAgentRunnerThreadReadRequest,
+    expectedType: T['type']
+  ): Promise<T> {
+    if (!runnerProcess.stdin || !runnerProcess.stdout || !runnerProcess.completed) {
+      throw new Error('Codex thread browser requires a runner process with stdin, stdout, and completion');
+    }
+    await writeCodeAgentRunnerRequest(runnerProcess.stdin, request);
+    const parser = new CodeAgentRunnerJsonlParser();
+    let result: T | undefined;
+    for await (const chunk of runnerProcess.stdout) {
+      for (const event of parser.push(bufferToString(chunk))) {
+        if (event.type === 'error') {
+          throw new Error(event.message);
+        }
+        if (event.type === expectedType) {
+          result = event as T;
+        }
+      }
+    }
+    for (const event of parser.flush()) {
+      if (event.type === 'error') {
+        throw new Error(event.message);
+      }
+      if (event.type === expectedType) {
+        result = event as T;
+      }
+    }
+    const completed = await runnerProcess.completed;
+    if (completed.exitCode !== 0) {
+      throw new Error(`Codex thread browser exited with code ${completed.exitCode ?? 'null'}`);
+    }
+    if (!result) {
+      throw new Error('Codex thread browser did not return a result');
+    }
+    return result;
   }
 
   private async runRunnerWithBackendAuth(input: {
@@ -930,6 +1246,23 @@ export class CodeAgentSessionService {
           code: event.code,
           retryable: event.retryable,
         };
+      case 'approval_request':
+        return {
+          approvalId: event.id,
+          approvalType: event.approvalType,
+          title: event.title,
+        };
+      case 'thread_list_result':
+        return {
+          roomId: event.roomId,
+          threadCount: event.threads.length,
+          nextCursor: event.nextCursor,
+        };
+      case 'thread_read_result':
+        return {
+          roomId: event.roomId,
+          hasThread: Boolean(event.thread),
+        };
       case 'text_delta':
         return { deltaLength: event.delta.length };
     }
@@ -1010,3 +1343,7 @@ export class CodeAgentSessionService {
     return env;
   }
 }
+
+const bufferToString = (chunk: unknown) => {
+  return Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
+};

@@ -139,6 +139,16 @@ type CodeWorkspacePreviewServersAckResponse = SocketAckResponse & {
   servers?: unknown[];
 };
 
+type CodexThreadListAckResponse = SocketAckResponse & {
+  threads?: unknown[];
+  nextCursor?: string | null;
+  backwardsCursor?: string | null;
+};
+
+type CodexThreadReadAckResponse = SocketAckResponse & {
+  thread?: unknown;
+};
+
 type RoomAckResponse = SocketAckResponse & {
   room?: Room;
 };
@@ -1380,6 +1390,66 @@ export const requestDeleteCodeWorkspaceEntry = (roomId: string, path: string): P
     'Timed out while deleting workspace entry',
     'Failed to delete workspace entry',
   ).then(() => undefined)
+);
+
+export const interruptCodeAgentTurn = (roomId: string, reason?: string): Promise<void> => (
+  emitWithAck<SocketAckResponse>(
+    'interrupt_code_agent_turn',
+    { roomId, reason },
+    'Timed out while interrupting code agent',
+    'Failed to interrupt code agent',
+  ).then(() => undefined)
+);
+
+export const steerCodeAgentTurn = (roomId: string, prompt: string): Promise<void> => (
+  emitWithAck<SocketAckResponse>(
+    'steer_code_agent_turn',
+    { roomId, prompt },
+    'Timed out while steering code agent',
+    'Failed to steer code agent',
+  ).then(() => undefined)
+);
+
+export const respondCodeAgentApproval = (
+  roomId: string,
+  approvalId: string,
+  decision: 'accept' | 'acceptForSession' | 'decline' | 'cancel',
+): Promise<void> => (
+  emitWithAck<SocketAckResponse>(
+    'respond_code_agent_approval',
+    { roomId, approvalId, decision },
+    'Timed out while responding to approval',
+    'Failed to respond to approval',
+  ).then(() => undefined)
+);
+
+export const requestCodexThreads = (
+  roomId: string,
+  options: { cursor?: string | null; limit?: number; searchTerm?: string } = {},
+): Promise<{ threads: unknown[]; nextCursor?: string | null; backwardsCursor?: string | null }> => (
+  emitWithAck<CodexThreadListAckResponse>(
+    'list_codex_threads',
+    { roomId, ...options },
+    'Timed out while loading Codex threads',
+    'Failed to load Codex threads',
+  ).then((response) => ({
+    threads: response.threads || [],
+    nextCursor: response.nextCursor,
+    backwardsCursor: response.backwardsCursor,
+  }))
+);
+
+export const requestCodexThread = (
+  roomId: string,
+  threadId: string,
+  options: { includeTurns?: boolean } = {},
+): Promise<unknown> => (
+  emitWithAck<CodexThreadReadAckResponse>(
+    'read_codex_thread',
+    { roomId, threadId, ...options },
+    'Timed out while loading Codex thread',
+    'Failed to load Codex thread',
+  ).then((response) => response.thread)
 );
 
 export const sendMessageAndAskAI = (params: {

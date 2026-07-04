@@ -8,7 +8,7 @@ import {
   useDisclosure,
 } from "@heroui/react";
 import { Icon } from '@iconify/react';
-import { requestAIResponse, sendMessage, sendMessageAndAskAI, sendSticker, uploadMediaMessage } from '../utils/socket';
+import { requestAIResponse, sendMessage, sendMessageAndAskAI, sendSticker, steerCodeAgentTurn, uploadMediaMessage } from '../utils/socket';
 import { useRecentStickers, useStickerSearch } from '../hooks/useStickers';
 import { inlineStickerQuery, loadStickerCatalog } from '../utils/stickerCatalog';
 import { apiPath } from '../utils/apiBase';
@@ -205,7 +205,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   const isComposingRef = useRef(false);
   const lastCompositionEndAtRef = useRef(0);
   const [isAiProcessing, setIsAiProcessing] = useState(false); // 新增: 跟踪 AI 处理状态
-  const isAIInputLocked = isAiProcessing || isRoomAIProcessing;
+  const isSteeringCodeAgent = isCodeAgentRoom && isRoomAIProcessing;
+  const isAIInputLocked = isAiProcessing || (isRoomAIProcessing && !isCodeAgentRoom);
+  const isNonTextInputDisabled = isSending || isAIInputLocked || isSteeringCodeAgent || !canPost;
 
   // Voice recording state
   const [isVoiceMode, setIsVoiceMode] = useState(false);
@@ -537,7 +539,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
     const latestContentItems = parseEditorContent();
 
-    if (isSending || isAIInputLocked) return;
+    if (isSending || isAIInputLocked || isSteeringCodeAgent) return;
 
     let optimisticClientMessageId: string | null = null;
     setIsAiProcessing(true);
@@ -562,6 +564,22 @@ export const MessageInput: React.FC<MessageInputProps> = ({
             codexPermissionMode: selectedCodexPermissionMode,
           }
         : {};
+
+      if (isSteeringCodeAgent) {
+        if (!promptForSend) {
+          return;
+        }
+        const clientMessageId = createClientMessageId();
+        optimisticClientMessageId = clientMessageId;
+        const optimisticMessage = buildOptimisticTextMessage(promptForSend, clientMessageId, avatar, replyToMessage);
+        onOptimisticMessage?.(optimisticMessage);
+        clearEditorImmediately({ blur: true });
+        const savedMessage = await sendMessage(promptForSend, roomId, 'text', username, avatar, replyToMessage?.id, clientMessageId);
+        onOptimisticMessageSaved?.(clientMessageId, savedMessage);
+        await steerCodeAgentTurn(roomId, promptForSend);
+        onCancelReply();
+        return;
+      }
 
       if (!promptForSend) {
         await requestAIResponse({
@@ -640,6 +658,10 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       sendMessage(singleTextItem.content, roomId, 'text', username, avatar, replyToMessage?.id, clientMessageId)
         .then((savedMessage) => {
           onOptimisticMessageSaved?.(clientMessageId, savedMessage);
+          if (isSteeringCodeAgent) {
+            return steerCodeAgentTurn(roomId, singleTextItem.content);
+          }
+          return undefined;
         })
         .catch((error) => {
           console.error('Error sending message:', error);
@@ -654,6 +676,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         editorRef.current?.focus();
         focusTimerRef.current = null;
       }, 0);
+      return;
+    }
+
+    if (isSteeringCodeAgent) {
+      setErrorMessage(t('codeAgentSteerTextOnly'));
       return;
     }
 
@@ -1033,7 +1060,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       return;
     }
 
-    if (isSending || isAIInputLocked) return;
+    if (isSending || isAIInputLocked || isSteeringCodeAgent) return;
 
     setIsSending(true);
     try {
@@ -1484,7 +1511,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                       type="button"
                       className="h-11 rounded-xl bg-[#e8e6dc] px-2 text-sm font-medium text-[#4d4c48] shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e] dark:text-[#faf9f5]"
                       onPress={() => startVoiceRecording('voice')}
-                      isDisabled={isSending || !canPost}
+                      isDisabled={isNonTextInputDisabled}
                     >
                       <Icon icon="lucide:mic" className="mr-1 h-4 w-4" />
                       {t('recordVoice')}
@@ -1493,7 +1520,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                       type="button"
                       className="h-11 rounded-xl bg-[#30302e] px-2 text-sm font-medium text-[#faf9f5] shadow-[0_0_0_1px_rgba(48,48,46,0.85)] dark:bg-[#faf9f5] dark:text-[#141413]"
                       onPress={() => startVoiceRecording('transcript')}
-                      isDisabled={isSending || !canPost}
+                      isDisabled={isNonTextInputDisabled}
                     >
                       <Icon icon="lucide:captions" className="mr-1 h-4 w-4" />
                       {t('voiceToText')}
@@ -1559,7 +1586,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                         type="button"
                         className="h-10 rounded-xl bg-[#c96442] text-sm font-medium text-[#faf9f5] shadow-[0_0_0_1px_rgba(201,100,66,0.9)]"
                         onPress={handleSendVoiceDraft}
-                        isDisabled={isSending || !recordedVoiceBlob || !canPost}
+                        isDisabled={isNonTextInputDisabled || !recordedVoiceBlob}
                       >
                         <Icon icon="lucide:send" className="mr-1 h-4 w-4" />
                         {t('send')}
@@ -1608,7 +1635,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               aria-label={isVoiceMode ? t('keyboardInput') : t('voiceInput')}
               className="h-7 w-7 min-w-7 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
               onPress={handleToggleVoiceMode}
-              isDisabled={isSending || isAIInputLocked || !canPost}
+              isDisabled={isNonTextInputDisabled}
             >
               <Icon icon={isVoiceMode ? 'lucide:keyboard' : 'lucide:mic'} className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
             </Button>
@@ -1623,7 +1650,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                   aria-label={t('uploadMedia')}
                   className="h-7 w-7 min-w-7 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
                   onPress={() => fileInputRef.current?.click()}
-                  isDisabled={isSending || isAIInputLocked || !canPost}
+                  isDisabled={isNonTextInputDisabled}
                 >
                   <Icon icon="lucide:image-plus" className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
                 </Button>
@@ -1642,7 +1669,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                       variant="light"
                       aria-label={t('stickers')}
                       className="h-7 w-7 min-w-7 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
-                      isDisabled={isSending || isAIInputLocked || !canPost}
+                      isDisabled={isNonTextInputDisabled}
                     >
                       <Icon icon="lucide:smile" className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
                     </Button>
@@ -1659,7 +1686,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                   aria-label={t('attachFile')}
                   className="h-7 w-7 min-w-7 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
                   onPress={() => arbitraryFileInputRef.current?.click()}
-                  isDisabled={isSending || isAIInputLocked || !canPost}
+                  isDisabled={isNonTextInputDisabled}
                 >
                   <Icon icon="lucide:paperclip" className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
                 </Button>
@@ -1667,7 +1694,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                 {/* AI设置按钮 */}
                 <MessageInputAISettingsButton
                   onOpen={onAISettingsOpen}
-                  isDisabled={isSending || isAIInputLocked}
+                  isDisabled={isSending || isAIInputLocked || isSteeringCodeAgent}
                 />
               </>
             )}
@@ -1681,7 +1708,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               accept="image/*,video/*,.m4v,.mov,.mp4,.qt,.webm"
               multiple={true}
               onChange={handleImageUpload}
-              disabled={isSending || isAIInputLocked || !canPost}
+              disabled={isNonTextInputDisabled}
             />
 
             <input
@@ -1691,7 +1718,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               className="hidden"
               multiple={true}
               onChange={handleArbitraryFileUpload}
-              disabled={isSending || isAIInputLocked || !canPost}
+              disabled={isNonTextInputDisabled}
             />
 
             {/* AI角色选择和发送按钮区 (text mode only) */}

@@ -1,5 +1,6 @@
 import {
   CodeAgentRunnerEvent,
+  CodeAgentRunnerApprovalRequestEvent,
   CodeAgentRunnerFinalEvent,
   CodeAgentRunnerTextDeltaEvent,
   CodeAgentRunnerToolCallEvent,
@@ -115,6 +116,33 @@ const mapToolResult = (event: CodeAgentRunnerToolResultEvent, context: CodeAgent
   };
 };
 
+const mapApprovalRequest = (event: CodeAgentRunnerApprovalRequestEvent, context: CodeAgentEventMapperContext): CodeAgentMappedRunnerEvent => {
+  const content = `${event.title}${event.message ? `\n${event.message}` : ''}`;
+  return {
+    kind: 'message',
+    message: {
+      id: event.messageId || event.id,
+      clientId: clientIdFor(context),
+      content,
+      roomId: context.roomId,
+      timestamp: timestampFor(context),
+      messageType: 'tool_call',
+      username: usernameFor(context),
+      status: 'complete',
+      turnId: context.turnId,
+      toolCallId: event.id,
+      toolName: 'approval_request',
+      toolArgs: {
+        ...event.args,
+        approvalId: event.id,
+        approvalType: event.approvalType,
+        title: event.title,
+        message: event.message,
+      },
+    },
+  };
+};
+
 export const mapCodeAgentRunnerEvent = (
   event: CodeAgentRunnerEvent,
   context: CodeAgentEventMapperContext
@@ -126,6 +154,8 @@ export const mapCodeAgentRunnerEvent = (
       return mapToolCall(event, context);
     case 'tool_result':
       return mapToolResult(event, context);
+    case 'approval_request':
+      return mapApprovalRequest(event, context);
     case 'final':
       return {
         kind: 'final',
@@ -173,5 +203,8 @@ export const mapCodeAgentRunnerEvent = (
         },
       };
     }
+    case 'thread_list_result':
+    case 'thread_read_result':
+      return { kind: 'ignored' };
   }
 };
