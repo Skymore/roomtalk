@@ -61,13 +61,16 @@ describe('codeAgent room adapters', () => {
     expect(getCodeAgentDefaultMode(editCapableFlags)).toBe('plan');
   });
 
-  it('recognizes Codex rooms but marks their backend unavailable for now', () => {
+  it('recognizes Codex-backed code-agent rooms as supported', () => {
     const unsupportedRoom = room({ type: 'codex' as Room['type'] });
+    const cocoCodexRoom = room({ type: 'coco', codeAgentBackend: 'codex', cocoStatus: 'running' });
 
     expect(isCodeAgentRoom(unsupportedRoom)).toBe(true);
     expect(getCodeAgentBackend(unsupportedRoom)).toBe('codex');
-    expect(isSupportedCodeAgentBackend('codex')).toBe(false);
+    expect(isSupportedCodeAgentBackend('codex')).toBe(true);
     expect(isSupportedCodeAgentBackend('coco')).toBe(true);
-    expect(getCodeAgentStatus(unsupportedRoom)).toBeUndefined();
+    expect(getCodeAgentStatus(unsupportedRoom)).toBe('idle');
+    expect(getCodeAgentBackend(cocoCodexRoom)).toBe('codex');
+    expect(getCodeAgentStatus(cocoCodexRoom)).toBe('running');
   });
 });

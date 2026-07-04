@@ -10,7 +10,7 @@ const runtimeRoomType = (room: Room | null | undefined): string | undefined => (
 export const getCodeAgentBackend = (room: Room | null | undefined): CodeAgentBackend | null => {
   const roomType = runtimeRoomType(room);
   if (roomType === 'coco') {
-    return 'coco';
+    return room?.codeAgentBackend || 'coco';
   }
   if (roomType === 'codex') {
     return 'codex';
@@ -37,9 +37,9 @@ export const getCodeAgentDefaultMode = (featureFlags: FeatureFlags): CodeAgentMo
 );
 
 export const isSupportedCodeAgentBackend = (backend: CodeAgentBackend | null): boolean => (
-  backend === 'coco'
+  backend === 'coco' || backend === 'codex'
 );
 
 export const getCodeAgentStatus = (room: Room | null | undefined): RoomCocoStatus | undefined => (
-  getCodeAgentBackend(room) === 'coco' ? (room?.cocoStatus || 'idle') : undefined
+  getCodeAgentBackend(room) !== null ? (room?.cocoStatus || 'idle') : undefined
 );

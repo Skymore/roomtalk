@@ -9,7 +9,7 @@ import {
   summarizeCocoMessages,
 } from '../utils/cocoWorkspace';
 import { Message, Room } from '../utils/types';
-import { CodeAgentMode, getCodeAgentStatus } from '../utils/codeAgent';
+import { CodeAgentBackend, CodeAgentMode, getCodeAgentStatus } from '../utils/codeAgent';
 import {
   getCocoAgentStatusClassName,
   getCocoStatusLabelKey,
@@ -38,8 +38,11 @@ interface CodeAgentWorkspacePanelProps {
   room: Room;
   messages: Message[];
   mode: CodeAgentMode;
+  backend?: CodeAgentBackend;
   canSwitchMode?: boolean;
+  canSwitchBackend?: boolean;
   onModeChange?: (mode: CodeAgentMode) => void;
+  onBackendChange?: (backend: CodeAgentBackend) => void;
   sessionCostUsd: number;
   workspaceSnapshot?: CodeAgentWorkspaceSnapshot | null;
   isRefreshingWorkspace?: boolean;
@@ -135,8 +138,11 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   room,
   messages,
   mode,
+  backend,
   canSwitchMode = false,
+  canSwitchBackend = false,
   onModeChange,
+  onBackendChange,
   sessionCostUsd,
   workspaceSnapshot,
   isRefreshingWorkspace = false,
@@ -318,6 +324,8 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   ];
   const canToggleMode = canSwitchMode && Boolean(onModeChange);
   const nextMode: CodeAgentMode = isPlanMode ? 'acceptEdits' : 'plan';
+  const currentBackend: CodeAgentBackend = backend || room.codeAgentBackend || 'coco';
+  const canToggleBackend = canSwitchBackend && Boolean(onBackendChange);
 
   return (
     <section
@@ -351,6 +359,40 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
               {isPlanMode ? t('codeAgentReadOnlyMode') : t('codeAgentEditMode')}
               {canToggleMode ? <Icon icon="lucide:repeat-2" className="h-3 w-3 flex-shrink-0 opacity-70" /> : null}
             </Button>
+            <div
+              role="group"
+              aria-label={t('codeAgentEngine')}
+              data-testid="code-agent-backend-toggle"
+              className="inline-flex h-6 shrink-0 overflow-hidden rounded-full border border-[#dedbd0] bg-[#faf9f5] p-0.5 dark:border-[#30302e] dark:bg-[#242421]"
+            >
+              {(['coco', 'codex'] as const).map((option) => {
+                const selected = currentBackend === option;
+                const label = option === 'codex' ? 'Codex' : 'Coco';
+                return (
+                  <Button
+                    key={option}
+                    size="sm"
+                    variant="light"
+                    radius="full"
+                    aria-label={option === 'codex' ? t('codeAgentEngineCodex') : t('codeAgentEngineCoco')}
+                    title={option === 'codex' ? t('codeAgentEngineCodex') : t('codeAgentEngineCoco')}
+                    data-testid={`code-agent-backend-${option}`}
+                    isDisabled={!canToggleBackend}
+                    onPress={() => {
+                      if (!canToggleBackend || selected) return;
+                      onBackendChange?.(option);
+                    }}
+                    className={`h-5 min-w-12 px-2 text-[11px] font-semibold leading-none ${
+                      selected
+                        ? 'bg-[#30302e] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413]'
+                        : 'bg-transparent text-[#5e5d59] dark:text-[#b0aea5]'
+                    }`}
+                  >
+                    {label}
+                  </Button>
+                );
+              })}
+            </div>
             {onRefreshWorkspace && (
               <Button
                 size="sm"

@@ -207,6 +207,16 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
     );
   }, [currentRoom.id, effectiveDefaultMode, normalizedAvailableModes, onRoomUpdated]);
 
+  const handleCodeAgentBackendChange = React.useCallback((nextBackend: CodeAgentBackend) => {
+    if (nextBackend !== 'coco' && nextBackend !== 'codex') {
+      return;
+    }
+    updateRoomSettings({ roomId: currentRoom.id, codeAgentBackend: nextBackend }).then(
+      (room) => onRoomUpdated(room),
+      (error) => console.error('Failed to update code agent backend', error),
+    );
+  }, [currentRoom.id, onRoomUpdated]);
+
   const setFileManagerCollapsed = React.useCallback((collapsed: boolean) => {
     setIsFileManagerCollapsed(collapsed);
     try {
@@ -471,8 +481,10 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
               presentation="code-agent"
               currentRoom={currentRoom}
               codeAgentMode={selectedMode}
+              codeAgentBackend={backend}
               codeAgentMaxMode={maxMode}
               onCodeAgentModeChange={handleCodeAgentModeChange}
+              onCodeAgentBackendChange={handleCodeAgentBackendChange}
               onOpenWorkspaceFile={handleOpenWorkspaceFile}
               onWorkspaceRootChange={setWorkspaceRoot}
               onWorkspaceChangesChange={setWorkspaceChanges}

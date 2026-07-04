@@ -336,6 +336,31 @@ describe('E2BCocoSandboxService', () => {
     assert.deepEqual(driver.killed, [handle.id]);
   });
 
+  it('exports and imports workspace archives for sandbox migration', async () => {
+    const driver = new FakeE2BDriver();
+    const service = new E2BCocoSandboxService(driver, { templateId: 'roomtalk-coco' });
+    const source = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+    const target = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+    driver.fileReadBodies.set('/tmp/roomtalk-codex/workspace-export-1.tar.gz', Buffer.from('workspace-archive', 'utf8'));
+    const originalNow = Date.now;
+    Date.now = () => 1;
+    try {
+      const archive = await service.exportWorkspaceArchive(source, { maxBytes: 1024 });
+      await service.importWorkspaceArchive(target, archive);
+
+      assert.equal(archive.body.toString('utf8'), 'workspace-archive');
+      assert.equal(archive.byteSize, 'workspace-archive'.length);
+      assert.equal(driver.fileWriteRequests[0].path, '/tmp/roomtalk-codex/workspace-import-1.tar.gz');
+      assert.equal(Buffer.from(driver.fileWriteRequests[0].data as Uint8Array).toString('utf8'), 'workspace-archive');
+      assert.equal(driver.commands.some(command => command.includes('tar -C "$workspace" -czf "$archive" .')), true);
+      assert.equal(driver.commands.some(command => command.includes('tar -C "$workspace" -xzf "$archive"')), true);
+      assert.equal(driver.fileRemoveRequests.includes('/tmp/roomtalk-codex/workspace-export-1.tar.gz'), true);
+      assert.equal(driver.fileRemoveRequests.includes('/tmp/roomtalk-codex/workspace-import-1.tar.gz'), true);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
   it('writes, reads, and deletes secret files under the Codex secret root only', async () => {
     const driver = new FakeE2BDriver();
     const service = new E2BCocoSandboxService(driver, { templateId: 'roomtalk-coco' });

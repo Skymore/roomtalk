@@ -5,6 +5,7 @@ import {
   CocoSandboxService,
   CocoWorkspaceChanges,
   CocoWorkspaceAsset,
+  CocoWorkspaceArchive,
   CocoWorkspaceDiff,
   CocoWorkspaceEntry,
   CocoWorkspaceFile,
@@ -14,6 +15,8 @@ import {
   ListCocoWorkspaceRefsOptions,
   ListCocoWorkspaceEntriesOptions,
   RenameCocoWorkspaceEntryInput,
+  ExportCocoWorkspaceArchiveOptions,
+  ImportCocoWorkspaceArchiveOptions,
   ReadCocoWorkspaceAssetOptions,
   ReadCocoSandboxSecretFileOptions,
   ReadCocoWorkspaceDiffOptions,
@@ -483,6 +486,91 @@ export class E2BCocoSandboxService implements CocoSandboxService {
       byteSize,
       truncated,
     };
+  }
+
+  async exportWorkspaceArchive(
+    handle: CocoSandboxHandle,
+    options: ExportCocoWorkspaceArchiveOptions = {}
+  ): Promise<CocoWorkspaceArchive> {
+    const connected = await this.driver.connect(handle.id);
+    if (!connected.commands?.run || !connected.files?.read) {
+      throw new Error('E2B sandbox driver handle does not support workspace archive export');
+    }
+
+    const workspace = shellQuote(handle.workspace || this.options.workspace || '/workspace');
+    const archivePath = `/tmp/roomtalk-codex/workspace-export-${Date.now()}.tar.gz`;
+    const quotedArchive = shellQuote(archivePath);
+    const command = [
+      'set -eu',
+      `workspace=${workspace}`,
+      `archive=${quotedArchive}`,
+      'mkdir -p "$(dirname "$archive")',
+      'rm -f "$archive"',
+      'if [ ! -d "$workspace" ]; then mkdir -p "$workspace"; fi',
+      'tar -C "$workspace" -czf "$archive" .',
+      'printf "__ROOMTALK_WORKSPACE_ARCHIVE_BYTES__\\n"',
+      'wc -c < "$archive" | tr -d " "',
+      'printf "\\n"',
+    ].join('\n');
+
+    try {
+      const result = await connected.commands.run(command, { timeoutMs: options.timeoutMs ?? 120_000 });
+      const completed = await result.completed;
+      if (completed && completed.exitCode !== 0) {
+        throw new Error(`E2B workspace archive export failed with exit code ${completed.exitCode}`);
+      }
+      const maxBytes = options.maxBytes ?? 200 * 1024 * 1024;
+      const archive = await readWorkspaceFileBytes(connected.files.read, archivePath, maxBytes);
+      if (archive.truncated || archive.byteSize > maxBytes) {
+        throw new Error(`E2B workspace archive exceeds max size: ${archive.byteSize} bytes`);
+      }
+      return {
+        body: archive.buffer,
+        byteSize: archive.byteSize,
+      };
+    } finally {
+      await connected.files.remove?.(archivePath).catch(error => {
+        this.options.logger?.warn('Unable to delete E2B workspace export archive', { error, sandboxId: handle.id, archivePath });
+      });
+    }
+  }
+
+  async importWorkspaceArchive(
+    handle: CocoSandboxHandle,
+    archive: CocoWorkspaceArchive,
+    options: ImportCocoWorkspaceArchiveOptions = {}
+  ): Promise<void> {
+    const connected = await this.driver.connect(handle.id);
+    if (!connected.commands?.run || !connected.files?.write) {
+      throw new Error('E2B sandbox driver handle does not support workspace archive import');
+    }
+
+    const archivePath = `/tmp/roomtalk-codex/workspace-import-${Date.now()}.tar.gz`;
+    await this.ensureSecretDirectory(connected, archivePath);
+    await connected.files.write(archivePath, archive.body);
+
+    const workspace = shellQuote(handle.workspace || this.options.workspace || '/workspace');
+    const quotedArchive = shellQuote(archivePath);
+    const command = [
+      'set -eu',
+      `workspace=${workspace}`,
+      `archive=${quotedArchive}`,
+      'mkdir -p "$workspace"',
+      'find "$workspace" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +',
+      'tar -C "$workspace" -xzf "$archive"',
+    ].join('\n');
+
+    try {
+      const result = await connected.commands.run(command, { timeoutMs: options.timeoutMs ?? 120_000 });
+      const completed = await result.completed;
+      if (completed && completed.exitCode !== 0) {
+        throw new Error(`E2B workspace archive import failed with exit code ${completed.exitCode}`);
+      }
+    } finally {
+      await connected.files.remove?.(archivePath).catch(error => {
+        this.options.logger?.warn('Unable to delete E2B workspace import archive', { error, sandboxId: handle.id, archivePath });
+      });
+    }
   }
 
   async resolveWorkspacePreviewTarget(

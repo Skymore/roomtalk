@@ -22,7 +22,7 @@ import {
   truncateBeforeMessage,
 } from '../utils/messageState';
 import { useRoomMessageEvents } from '../hooks/useRoomMessageEvents';
-import { CodeAgentMode } from '../utils/codeAgent';
+import { CodeAgentBackend, CodeAgentMode } from '../utils/codeAgent';
 import { CodeAgentWorkspaceSnapshot, loadCodeAgentWorkspaceSnapshot } from '../utils/cocoWorkspace';
 import type { ReviewCommentContext } from '../utils/codeAgentReviewComments';
 
@@ -47,8 +47,10 @@ interface MessageListProps {
   presentation?: 'chat' | 'code-agent';
   currentRoom?: Room;
   codeAgentMode?: CodeAgentMode;
+  codeAgentBackend?: CodeAgentBackend;
   codeAgentMaxMode?: CodeAgentMode;
   onCodeAgentModeChange?: (mode: CodeAgentMode) => void;
+  onCodeAgentBackendChange?: (backend: CodeAgentBackend) => void;
   onOpenWorkspaceFile?: (path: string) => void;
   onWorkspaceRootChange?: (workspaceRoot: string | null) => void;
   onWorkspaceChangesChange?: (changes: CodeAgentWorkspaceSnapshot['changes'] | null) => void;
@@ -74,8 +76,10 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   presentation = 'chat',
   currentRoom,
   codeAgentMode = 'plan',
+  codeAgentBackend,
   codeAgentMaxMode = 'plan',
   onCodeAgentModeChange,
+  onCodeAgentBackendChange,
   onOpenWorkspaceFile,
   onWorkspaceRootChange,
   onWorkspaceChangesChange,
@@ -662,8 +666,11 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
             room={codeAgentRoom}
             messages={messages}
             mode={codeAgentMode}
+            backend={codeAgentBackend}
             canSwitchMode={codeAgentMaxMode === 'acceptEdits' && canManageCodeAgentMode}
+            canSwitchBackend={canManageCodeAgentMode}
             onModeChange={onCodeAgentModeChange}
+            onBackendChange={onCodeAgentBackendChange}
             sessionCostUsd={sessionCostUsd ?? 0}
             workspaceSnapshot={workspaceSnapshot}
             isRefreshingWorkspace={isWorkspaceRefreshing}

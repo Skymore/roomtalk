@@ -31,12 +31,16 @@ vi.mock('./MessageList', async () => {
   return {
     MessageList: React.forwardRef(({
       codeAgentMode,
+      codeAgentBackend,
       bottomInsetPx,
       onOpenWorkspaceFile,
+      onCodeAgentBackendChange,
     }: {
       codeAgentMode: string;
+      codeAgentBackend?: string;
       bottomInsetPx?: number;
       onOpenWorkspaceFile?: (path: string) => void;
+      onCodeAgentBackendChange?: (backend: 'coco' | 'codex') => void;
     }, ref: React.ForwardedRef<unknown>) => {
     React.useImperativeHandle(ref, () => ({ scrollToBottom: vi.fn() }));
     return (
@@ -45,10 +49,18 @@ vi.mock('./MessageList', async () => {
         type="button"
         data-testid="message-list"
         data-code-agent-mode={codeAgentMode}
+        data-code-agent-backend={codeAgentBackend || ''}
         data-bottom-inset-px={String(bottomInsetPx ?? '')}
         onClick={() => onOpenWorkspaceFile?.('/workspace/src/App.tsx')}
       >
         open-file
+      </button>
+      <button
+        type="button"
+        data-testid="message-list-switch-codex"
+        onClick={() => onCodeAgentBackendChange?.('codex')}
+      >
+        switch-codex
       </button>
       <button
         type="button"
@@ -188,13 +200,14 @@ vi.mock('./CodeAgentFileBrowserPanel', () => ({
 }));
 
 vi.mock('../utils/socket', () => ({
-  updateRoomSettings: vi.fn(async ({ roomId, codeAgentMode }: { roomId: string; codeAgentMode: 'plan' | 'acceptEdits' }) => ({
+  updateRoomSettings: vi.fn(async ({ roomId, codeAgentMode, codeAgentBackend }: { roomId: string; codeAgentMode?: 'plan' | 'acceptEdits'; codeAgentBackend?: 'coco' | 'codex' }) => ({
     id: roomId,
     name: 'Coco Room',
     creatorId: 'client-1',
     createdAt: '2026-05-26T00:00:00.000Z',
     type: 'coco',
-    codeAgentMode,
+    ...(codeAgentMode ? { codeAgentMode } : {}),
+    ...(codeAgentBackend ? { codeAgentBackend } : {}),
   })),
 }));
 
@@ -261,7 +274,7 @@ const renderCodeAgentRoom = (
     isRestoringRoom={false}
     username="User"
     clientId="client-1"
-    backend={room.type === 'coco' ? 'coco' : 'codex'}
+    backend={room.codeAgentBackend || (room.type === 'coco' ? 'coco' : 'codex')}
     availableModes={availableModes}
     defaultMode={defaultMode}
     handleCopyToClipboard={vi.fn()}
@@ -288,13 +301,12 @@ describe('CodeAgentRoomView', () => {
     vi.restoreAllMocks();
   });
 
-  it('shows a controlled unavailable state for a backend that is not wired yet', () => {
+  it('renders Codex-backed rooms through the shared code-agent UI', () => {
     renderCodeAgentRoom(unsupportedRoom);
 
     expect(screen.getByTestId('chat-header')).toBeTruthy();
-    expect(screen.getByText('codeAgentBackendUnavailable')).toBeTruthy();
-    expect(screen.getByText('codeAgentBackendUnavailableDescription')).toBeTruthy();
-    expect(screen.queryByTestId('message-input-panel')).toBeNull();
+    expect(screen.getByTestId('message-list').dataset.codeAgentBackend).toBe('codex');
+    expect(screen.getByTestId('message-input-panel')).toBeTruthy();
   });
 
   it('passes the selected Coco run mode to the workspace and composer', () => {
@@ -310,6 +322,16 @@ describe('CodeAgentRoomView', () => {
     expect(screen.getByTestId('file-browser').dataset.workspaceEditable).toBe('true');
     expect(screen.getByLabelText('codeAgentResizeWorkspaceFiles')).toBeTruthy();
     expect(screen.getByLabelText('codeAgentCollapseWorkspaceFiles')).toBeTruthy();
+  });
+
+  it('updates the room engine when the workspace header switches backend', async () => {
+    const { updateRoomSettings } = await import('../utils/socket');
+    renderCodeAgentRoom(cocoRoom, ['plan'], 'plan', permissions());
+
+    fireEvent.click(screen.getByTestId('message-list-switch-codex'));
+    await act(async () => {});
+
+    expect(updateRoomSettings).toHaveBeenCalledWith({ roomId: 'coco-room', codeAgentBackend: 'codex' });
   });
 
   it('keeps the message scrollbar above the floating composer', () => {

@@ -71,6 +71,15 @@ export interface ReadCocoWorkspaceAssetOptions {
   maxBytes?: number;
 }
 
+export interface ExportCocoWorkspaceArchiveOptions {
+  maxBytes?: number;
+  timeoutMs?: number;
+}
+
+export interface ImportCocoWorkspaceArchiveOptions {
+  timeoutMs?: number;
+}
+
 export interface WriteCocoWorkspaceFileInput {
   path: string;
   content: string;
@@ -136,6 +145,11 @@ export interface CocoWorkspaceAsset {
   truncated: boolean;
 }
 
+export interface CocoWorkspaceArchive {
+  body: Buffer;
+  byteSize: number;
+}
+
 export interface CocoWorkspaceDiffSummary {
   files: number;
   additions: number;
@@ -188,6 +202,8 @@ export interface CocoSandboxService {
   searchWorkspaceEntries?(handle: CocoSandboxHandle, options: SearchCocoWorkspaceEntriesOptions): Promise<CocoWorkspaceEntry[]>;
   readWorkspaceFile?(handle: CocoSandboxHandle, path: string, options?: ReadCocoWorkspaceFileOptions): Promise<CocoWorkspaceFile>;
   readWorkspaceAsset?(handle: CocoSandboxHandle, path: string, options?: ReadCocoWorkspaceAssetOptions): Promise<CocoWorkspaceAsset>;
+  exportWorkspaceArchive?(handle: CocoSandboxHandle, options?: ExportCocoWorkspaceArchiveOptions): Promise<CocoWorkspaceArchive>;
+  importWorkspaceArchive?(handle: CocoSandboxHandle, archive: CocoWorkspaceArchive, options?: ImportCocoWorkspaceArchiveOptions): Promise<void>;
   resolveWorkspacePreviewTarget?(handle: CocoSandboxHandle, input: ResolveCocoWorkspacePreviewTargetInput): Promise<CocoWorkspacePreviewTargetResolution>;
   listWorkspacePreviewServers?(handle: CocoSandboxHandle): Promise<CocoWorkspacePreviewServer[]>;
   writeWorkspaceFile?(handle: CocoSandboxHandle, input: WriteCocoWorkspaceFileInput): Promise<CocoWorkspaceEntry>;

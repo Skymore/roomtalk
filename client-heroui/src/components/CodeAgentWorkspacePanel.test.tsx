@@ -135,6 +135,25 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(onModeChange).toHaveBeenCalledWith('acceptEdits');
   });
 
+  it('toggles code-agent engine from the workspace header when switching is available', () => {
+    const onBackendChange = vi.fn();
+    render(
+      <CodeAgentWorkspacePanel
+        room={room}
+        messages={[]}
+        mode="plan"
+        backend="coco"
+        canSwitchBackend
+        onBackendChange={onBackendChange}
+        sessionCostUsd={0}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId('code-agent-backend-codex'));
+
+    expect(onBackendChange).toHaveBeenCalledWith('codex');
+  });
+
   it('keeps workspace tabs horizontally scrollable on narrow screens', () => {
     render(
       <CodeAgentWorkspacePanel

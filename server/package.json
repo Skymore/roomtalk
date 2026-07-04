@@ -11,6 +11,7 @@
     "start:e2e": "ts-node src/server.ts",
     "migrate:redis-to-postgres": "ts-node src/scripts/migrateRedisToPostgres.ts",
     "migrate:media-to-object-storage": "ts-node src/scripts/migrateLegacyMediaMessagesToObjectStorage.ts",
+    "migrate:codex-sandboxes": "ts-node src/scripts/migrateCodexSandboxes.ts",
     "provision:postgres-app-user": "ts-node src/scripts/provisionPostgresAppUser.ts",
     "smoke:codex:e2b": "ts-node src/scripts/codexE2BSmoke.ts",
     "smoke:persistence": "ts-node src/scripts/persistenceSmoke.ts",
