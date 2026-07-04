@@ -1,9 +1,12 @@
+import { normalizeCodeAgentMode, normalizeCodeAgentModeList } from './codeAgentModes';
+import type { CodeAgentMode } from './types';
+
 export interface FeatureFlags {
   coco: {
     enabled: boolean;
-    mode: 'plan' | 'acceptEdits';
-    availableModes: Array<'plan' | 'acceptEdits'>;
-    defaultMode: 'plan' | 'acceptEdits';
+    mode: CodeAgentMode;
+    availableModes: CodeAgentMode[];
+    defaultMode: CodeAgentMode;
     rollout?: 'disabled' | 'allowlist' | 'all';
     reason?: string;
   };
@@ -41,17 +44,11 @@ export const fetchFeatureFlags = async (clientId: string): Promise<FeatureFlags>
   if (typeof data?.coco?.enabled !== 'boolean') {
     throw new Error('Feature flag response is invalid');
   }
-  const parseMode = (value: unknown): 'plan' | 'acceptEdits' => (
-    value === 'acceptEdits' ? 'acceptEdits' : 'plan'
+  const cocoMode = normalizeCodeAgentMode(data.coco.mode);
+  const normalizedAvailableModes = normalizeCodeAgentModeList(
+    Array.isArray(data.coco.availableModes) ? data.coco.availableModes : [cocoMode]
   );
-  const cocoMode = parseMode(data.coco.mode);
-  const availableModes: Array<'plan' | 'acceptEdits'> = Array.isArray(data.coco.availableModes)
-    ? Array.from(new Set(data.coco.availableModes.map(parseMode) as Array<'plan' | 'acceptEdits'>))
-    : (cocoMode === 'acceptEdits' ? ['plan', 'acceptEdits'] : ['plan']);
-  const normalizedAvailableModes: Array<'plan' | 'acceptEdits'> = availableModes.includes('acceptEdits') && !availableModes.includes('plan')
-    ? ['plan', ...availableModes]
-    : availableModes;
-  const defaultMode = parseMode(data.coco.defaultMode);
+  const defaultMode = normalizeCodeAgentMode(data.coco.defaultMode);
 
   return {
     coco: {

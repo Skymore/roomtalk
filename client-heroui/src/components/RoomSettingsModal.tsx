@@ -23,7 +23,12 @@ import {
 } from '../utils/socket';
 import {
   CODE_AGENT_BACKEND_OPTIONS,
+  CodeAgentMode,
+  getCodeAgentModeIcon,
+  getCodeAgentModeLabelKey,
   getCodeAgentBackendLabelKey,
+  normalizeCodeAgentMode,
+  normalizeCodeAgentModeList,
   type CodeAgentBackend,
 } from '../utils/codeAgent';
 import {
@@ -80,6 +85,8 @@ interface RoomSettingsModalProps {
   onRenameRoom: RoomRenameHandler;
   onClearHistory: (confirmation: string) => unknown;
   onDeleteRoom: (roomId: string) => void;
+  codeAgentAvailableModes?: CodeAgentMode[];
+  codeAgentDefaultMode?: CodeAgentMode;
   onRoomUpdated?: (room: Room) => void;
 }
 
@@ -92,6 +99,8 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   onRenameRoom,
   onClearHistory,
   onDeleteRoom,
+  codeAgentAvailableModes = ['plan'],
+  codeAgentDefaultMode = 'plan',
   onRoomUpdated,
 }) => {
   const { t } = useTranslation();
@@ -103,6 +112,15 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   const isAdmin = roomPermissions?.role === 'admin';
   const canClearHistory = Boolean(roomPermissions?.canClearHistory);
   const canManageGeneral = Boolean(isOwner || canClearHistory || canManageSettings);
+  const normalizedCodeAgentModes = React.useMemo(
+    () => normalizeCodeAgentModeList(codeAgentAvailableModes),
+    [codeAgentAvailableModes]
+  );
+  const normalizedRoomMode = normalizeCodeAgentMode(room.codeAgentMode);
+  const normalizedDefaultMode = normalizeCodeAgentMode(codeAgentDefaultMode);
+  const currentCodeAgentMode = normalizedCodeAgentModes.includes(normalizedRoomMode)
+    ? normalizedRoomMode
+    : (normalizedCodeAgentModes.includes(normalizedDefaultMode) ? normalizedDefaultMode : 'plan');
 
   const [activeTab, setActiveTab] = React.useState<SettingsTabKey>('general');
   const [roomName, setRoomName] = React.useState(room.name);
@@ -705,14 +723,14 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
           {(isOwner || isAdmin) && room.type === 'coco' && (
             <div className="space-y-2">
               {renderSectionLabel('lucide:settings-2', t('codeAgentMode'))}
-              <div className="flex gap-1.5">
-                {(['plan', 'acceptEdits'] as const).map(mode => {
-                  const current = room.codeAgentMode || 'plan';
-                  const selected = current === mode;
+              <div className="flex flex-wrap gap-1.5">
+                {normalizedCodeAgentModes.map(mode => {
+                  const selected = currentCodeAgentMode === mode;
                   return (
                     <Button
                       key={mode}
                       size="sm"
+                      startContent={<Icon icon={getCodeAgentModeIcon(mode)} className="h-3.5 w-3.5" />}
                       className={`h-8 rounded-lg px-3 text-xs font-semibold ${
                         selected
                           ? 'bg-[#c96442] text-[#faf9f5]'
@@ -732,7 +750,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                         }
                       }}
                     >
-                      {mode === 'plan' ? 'Plan' : 'Edit'}
+                      {t(getCodeAgentModeLabelKey(mode))}
                     </Button>
                   );
                 })}

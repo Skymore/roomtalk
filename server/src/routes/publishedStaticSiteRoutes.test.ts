@@ -67,7 +67,7 @@ describe('published static site routes', () => {
       roomId: 'room-1',
       clientId: 'client-1',
       turnId: 'turn-1',
-      mode: 'acceptEdits',
+      mode: 'fullAccess',
     });
 
     const publishResponse = await fetch(`${server.baseUrl}/api/coco/publish-static-site`, {
@@ -111,7 +111,7 @@ describe('published static site routes', () => {
       roomId: 'room-1',
       clientId: 'client-1',
       turnId: 'turn-1',
-      mode: 'acceptEdits',
+      mode: 'fullAccess',
     });
 
     const publishResponse = await fetch(`${server.baseUrl}/api/coco/publish-static-site`, {

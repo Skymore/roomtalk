@@ -83,7 +83,7 @@ def parse_request(line: str) -> RunnerRequest:
         return value
 
     mode = string_field("mode")
-    if mode not in ("plan", "acceptEdits"):
+    if mode not in ("plan", "acceptEdits", "edit", "approveForMe", "fullAccess"):
         raise RunnerError(f"Unsupported mode: {mode}", code="invalid_mode", turn_id=raw.get("turnId"))
 
     allowed_paths_raw = raw.get("allowedPaths")
@@ -716,7 +716,7 @@ def create_coco_engine(request: RunnerRequest, env: dict[str, str] | None = None
     llm = LLMClient.from_settings(settings)
     # File access enforcement is delegated to Coco tools plus the outer sandbox.
     # This adapter validates requested roots but does not intercept each tool IO.
-    permissions = PermissionChecker(auto_approve=True, mode=request.mode)
+    permissions = PermissionChecker(auto_approve=True, mode="plan" if request.mode == "plan" else "acceptEdits")
     allowed_tools = set(READ_ONLY_TOOLS) if request.mode == "plan" else None
     return Engine(
         llm,

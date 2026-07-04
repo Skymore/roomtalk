@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Message } from '../utils/types';
+import { getCodeAgentModeLabelKey, normalizeCodeAgentMode } from '../utils/codeAgent';
 
 interface CocoToolMessageProps {
   message: Message;
@@ -207,11 +208,8 @@ const getToolIcon = (toolName: string): string => {
 };
 
 const getModeLabel = (message: Message, t: Translate) => {
-  if (message.codeAgentMode === 'acceptEdits') {
-    return t('codeAgentEditMode');
-  }
-  if (message.codeAgentMode === 'plan') {
-    return t('codeAgentReadOnlyMode');
+  if (message.codeAgentMode) {
+    return t(getCodeAgentModeLabelKey(normalizeCodeAgentMode(message.codeAgentMode)));
   }
   return '';
 };

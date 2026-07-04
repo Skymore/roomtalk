@@ -5,6 +5,7 @@ import { apiPath } from './apiBase';
 import {
   A2UIActionEvent,
   AudioTranscription,
+  CodeAgentMode,
   MediaKind,
   Message,
   Room,
@@ -137,8 +138,6 @@ type CodeWorkspacePreviewTargetAckResponse = SocketAckResponse & {
 type CodeWorkspacePreviewServersAckResponse = SocketAckResponse & {
   servers?: unknown[];
 };
-
-type CodeAgentMode = 'plan' | 'acceptEdits';
 
 type RoomAckResponse = SocketAckResponse & {
   room?: Room;

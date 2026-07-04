@@ -26,6 +26,7 @@ import { CocoToolMessage } from './CocoToolMessage';
 import { getSenderColorTheme } from "../utils/userProfile";
 import { parseReviewCommentMessageSegments } from "../utils/codeAgentReviewComments";
 import { CodeAgentReviewCommentMessage } from "./CodeAgentReviewCommentMessage";
+import { getCodeAgentModeLabelKey, normalizeCodeAgentMode } from "../utils/codeAgent";
 
 interface MessageItemProps {
   message: Message;
@@ -328,7 +329,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     : message.content;
   const aiMetadataParts = isAI
     ? [
-        message.codeAgentMode ? (message.codeAgentMode === 'acceptEdits' ? t('codeAgentEditMode') : t('codeAgentReadOnlyMode')) : null,
+        message.codeAgentMode ? t(getCodeAgentModeLabelKey(normalizeCodeAgentMode(message.codeAgentMode))) : null,
         message.aiModel?.label,
         message.cost ? formatUsdCost(message.cost.totalUsd) : null,
         message.cost?.estimated ? t('estimatedCost') : null,

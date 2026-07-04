@@ -35,8 +35,8 @@ describe('feature flags', () => {
     await expect(fetchFeatureFlags('client-1')).resolves.toEqual({
       coco: {
         enabled: true,
-        mode: 'acceptEdits',
-        availableModes: ['plan', 'acceptEdits'],
+        mode: 'edit',
+        availableModes: ['plan', 'edit'],
         defaultMode: 'plan',
         rollout: 'allowlist',
         reason: undefined,
@@ -70,8 +70,8 @@ describe('feature flags', () => {
 
     await expect(fetchFeatureFlags('client-1')).resolves.toMatchObject({
       coco: {
-        mode: 'acceptEdits',
-        availableModes: ['plan', 'acceptEdits'],
+        mode: 'edit',
+        availableModes: ['plan', 'edit'],
         defaultMode: 'plan',
       },
     });

@@ -48,7 +48,7 @@ interface MessageListProps {
   currentRoom?: Room;
   codeAgentMode?: CodeAgentMode;
   codeAgentBackend?: CodeAgentBackend;
-  codeAgentMaxMode?: CodeAgentMode;
+  codeAgentAvailableModes?: CodeAgentMode[];
   onCodeAgentModeChange?: (mode: CodeAgentMode) => void;
   onCodeAgentBackendChange?: (backend: CodeAgentBackend) => void;
   onOpenWorkspaceFile?: (path: string) => void;
@@ -77,7 +77,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   currentRoom,
   codeAgentMode = 'plan',
   codeAgentBackend,
-  codeAgentMaxMode = 'plan',
+  codeAgentAvailableModes = ['plan'],
   onCodeAgentModeChange,
   onCodeAgentBackendChange,
   onOpenWorkspaceFile,
@@ -666,8 +666,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
             room={codeAgentRoom}
             messages={messages}
             mode={codeAgentMode}
+            availableModes={codeAgentAvailableModes}
             backend={codeAgentBackend}
-            canSwitchMode={codeAgentMaxMode === 'acceptEdits' && canManageCodeAgentMode}
+            canSwitchMode={codeAgentAvailableModes.length > 1 && canManageCodeAgentMode}
             canSwitchBackend={canManageCodeAgentMode}
             onModeChange={onCodeAgentModeChange}
             onBackendChange={onCodeAgentBackendChange}

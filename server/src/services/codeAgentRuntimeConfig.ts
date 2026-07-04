@@ -1,5 +1,11 @@
 import { AIModelProvider } from '../types';
 import { CodeAgentBackend } from './codeAgentRunner';
+import {
+  codeAgentModeAllowsWriteTools,
+  highestCodeAgentMode,
+  normalizeCodeAgentMode,
+  normalizeCodeAgentModeSet,
+} from './codeAgentModes';
 import { CocoSandboxProvider } from './cocoSandboxService';
 import { CodeAgentRunnerMode } from './codeAgentRunnerProtocol';
 
@@ -143,25 +149,23 @@ const readE2BLifecycle = (env: NodeJS.ProcessEnv): CodeAgentRuntimeConfig['e2bLi
 
 const readMode = (env: NodeJS.ProcessEnv): CodeAgentRunnerMode => {
   const value = env.COCO_MODE?.trim();
-  if (!value || value === 'plan') {
+  if (!value) {
     return 'plan';
   }
-  if (value === 'acceptEdits') {
-    return 'acceptEdits';
+  const normalized = normalizeCodeAgentMode(value);
+  if (normalized) {
+    return normalized;
   }
   console.warn(`Unsupported COCO_MODE: ${value}; falling back to plan`);
   return 'plan';
 };
 
 const isCodeAgentRunnerMode = (value: string): value is CodeAgentRunnerMode => (
-  value === 'plan' || value === 'acceptEdits'
+  normalizeCodeAgentMode(value) !== null
 );
 
 const normalizeModeSet = (modes: CodeAgentRunnerMode[]) => {
-  const unique = Array.from(new Set(modes));
-  return unique.includes('acceptEdits') && !unique.includes('plan')
-    ? ['plan', ...unique] as CodeAgentRunnerMode[]
-    : unique;
+  return normalizeCodeAgentModeSet(modes);
 };
 
 const readAvailableModes = (env: NodeJS.ProcessEnv): CodeAgentRunnerMode[] => {
@@ -175,7 +179,7 @@ const readAvailableModes = (env: NodeJS.ProcessEnv): CodeAgentRunnerMode[] => {
   }
 
   const legacyMode = readMode(env);
-  return legacyMode === 'acceptEdits' ? ['plan', 'acceptEdits'] : ['plan'];
+  return normalizeModeSet([legacyMode]);
 };
 
 const readDefaultMode = (env: NodeJS.ProcessEnv, availableModes: CodeAgentRunnerMode[]): CodeAgentRunnerMode => {
@@ -183,17 +187,18 @@ const readDefaultMode = (env: NodeJS.ProcessEnv, availableModes: CodeAgentRunner
   if (!configured) {
     return 'plan';
   }
-  if (!isCodeAgentRunnerMode(configured)) {
+  const normalized = normalizeCodeAgentMode(configured);
+  if (!normalized) {
     throw new Error(`Unsupported COCO_DEFAULT_MODE: ${configured}`);
   }
-  if (!availableModes.includes(configured)) {
+  if (!availableModes.includes(normalized)) {
     throw new Error(`COCO_DEFAULT_MODE=${configured} must be included in COCO_ALLOWED_RUN_MODES`);
   }
-  return configured;
+  return normalized;
 };
 
 const highestAvailableMode = (availableModes: CodeAgentRunnerMode[]): CodeAgentRunnerMode => (
-  availableModes.includes('acceptEdits') ? 'acceptEdits' : 'plan'
+  highestCodeAgentMode(availableModes)
 );
 
 const hasPositiveNumber = (value?: string) => {
@@ -295,7 +300,7 @@ const providerEnv = (env: NodeJS.ProcessEnv): Partial<Record<AIModelProvider, Re
 
 const shouldForwardProviderEnv = (env: NodeJS.ProcessEnv, runnerClient: CodeAgentRunnerClientKind, availableModes: CodeAgentRunnerMode[]) => (
   runnerClient === 'jsonl' &&
-  !availableModes.includes('acceptEdits') &&
+  !availableModes.some(codeAgentModeAllowsWriteTools) &&
   !usesOutOfBandModelAccess(env)
 );
 
@@ -362,7 +367,8 @@ const validateEnabledConfig = (config: CodeAgentRuntimeConfig, env: NodeJS.Proce
   }
 
   const shellEnabled = config.runnerEnv.ROOMTALK_COCO_ALLOW_SHELL === 'true';
-  const writeToolsEnabled = config.runnerEnv.ROOMTALK_COCO_ALLOW_WRITE_TOOLS === 'true' || config.availableModes.includes('acceptEdits');
+  const writeToolsEnabled = config.runnerEnv.ROOMTALK_COCO_ALLOW_WRITE_TOOLS === 'true' ||
+    config.availableModes.some(codeAgentModeAllowsWriteTools);
   const requiresModelAccessContract = shellEnabled || writeToolsEnabled;
   if (
     hasRoomTalkModelGatewaySettings(env) &&
@@ -384,7 +390,7 @@ const validateEnabledConfig = (config: CodeAgentRuntimeConfig, env: NodeJS.Proce
     throw new Error('JSONL Coco scoped provider key mode requires TTL, budget, and audit id');
   }
   if (config.runnerClient === 'jsonl' && requiresModelAccessContract && !hasApprovedModelAccess(config, env)) {
-    throw new Error('JSONL Coco acceptEdits/write/Shell mode requires RoomTalk model gateway, model proxy with token, or scoped provider key contract');
+    throw new Error('JSONL Coco write or shell mode requires RoomTalk model gateway, model proxy with token, or scoped provider key contract');
   }
 
   if (config.sandboxProvider === 'e2b' && config.runnerClient === 'jsonl') {

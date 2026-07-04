@@ -18,6 +18,13 @@ import { canUseCocoRoom, COCO_ACCESS_DENIED_MESSAGE } from './cocoRoomAccess';
 import { CodexConnectionService } from './codexConnection';
 import { CodeAgentRunnerHandlers, CodeAgentRunnerRunResult } from './fakeCodeAgentRunner';
 import { CodexRunSettings, getCodexMessageAIModel, normalizeCodexRunSettings } from './codexRunSettings';
+import {
+  codeAgentModeAllowsShell,
+  codeAgentModeAllowsStaticPublish,
+  codeAgentModeAllowsWriteTools,
+  normalizeCodeAgentMode,
+  normalizeCodeAgentModeSet,
+} from './codeAgentModes';
 
 const isCodexBackend = (backend: CodeAgentBackend) => (
   backend === 'codex' || backend === 'codex-app-server'
@@ -579,7 +586,7 @@ export class CodeAgentSessionService {
   }
 
   private resolveTurnMode(
-    requestedMode?: CodeAgentRunnerMode,
+    requestedMode?: unknown,
     source?: 'originalTurn',
   ): { ok: true; mode: CodeAgentRunnerMode } | { ok: false; error: string } {
     const availableModes = this.availableModes();
@@ -587,16 +594,20 @@ export class CodeAgentSessionService {
     if (!requestedMode) {
       return { ok: true, mode: defaultMode };
     }
-    if (availableModes.includes(requestedMode)) {
-      return { ok: true, mode: requestedMode };
+    const normalizedMode = normalizeCodeAgentMode(requestedMode);
+    if (!normalizedMode) {
+      return { ok: false, error: `Coco mode is not enabled: ${requestedMode}` };
     }
-    if (requestedMode === 'acceptEdits') {
+    if (availableModes.includes(normalizedMode)) {
+      return { ok: true, mode: normalizedMode };
+    }
+    if (normalizedMode === 'edit') {
       if (source === 'originalTurn') {
         return { ok: false, error: 'This response was originally run in Edit mode, but Edit mode is no longer available.' };
       }
       return { ok: false, error: 'Coco edit mode is not enabled' };
     }
-    return { ok: false, error: `Coco mode is not enabled: ${requestedMode}` };
+    return { ok: false, error: `Coco mode is not enabled: ${normalizedMode}` };
   }
 
   private resolveTurnBackend(room: Room): CodeAgentBackend {
@@ -659,20 +670,19 @@ export class CodeAgentSessionService {
 
   private availableModes(): CodeAgentRunnerMode[] {
     if (this.options.availableModes?.length) {
-      return Array.from(new Set(this.options.availableModes));
+      return normalizeCodeAgentModeSet(this.options.availableModes);
     }
-    if (this.options.mode === 'acceptEdits') {
-      return ['plan', 'acceptEdits'];
-    }
-    return ['plan'];
+    return normalizeCodeAgentModeSet([this.options.mode || 'plan']);
   }
 
   private defaultMode(availableModes: CodeAgentRunnerMode[]): CodeAgentRunnerMode {
-    if (this.options.defaultMode && availableModes.includes(this.options.defaultMode)) {
-      return this.options.defaultMode;
+    const defaultMode = normalizeCodeAgentMode(this.options.defaultMode);
+    if (defaultMode && availableModes.includes(defaultMode)) {
+      return defaultMode;
     }
-    if (this.options.mode && availableModes.includes(this.options.mode)) {
-      return this.options.mode;
+    const configuredMode = normalizeCodeAgentMode(this.options.mode);
+    if (configuredMode && availableModes.includes(configuredMode)) {
+      return configuredMode;
     }
     return 'plan';
   }
@@ -953,20 +963,21 @@ export class CodeAgentSessionService {
       PYTHONUNBUFFERED: '1',
       ...(this.options.runnerEnv || {}),
     };
+    const normalizedMode = normalizeCodeAgentMode(context.mode) || 'plan';
     if (this.options.modelGateway) {
       env.COCO_MODEL_PROXY_URL = `${this.options.modelGateway.publicBaseUrl}/v1`;
       env.COCO_MODEL_PROXY_TOKEN = this.options.modelGateway.issueTurnToken({
         roomId: context.roomId,
         clientId: context.clientId,
         turnId: context.turnId,
-        mode: context.mode,
+        mode: normalizedMode,
         model: selectedModel,
       });
     } else {
       Object.assign(env, this.options.runnerProviderEnvByProvider?.[selectedModel.provider] || {});
     }
 
-    if (context.mode === 'acceptEdits' && this.options.staticSitePublisher?.isConfigured()) {
+    if (codeAgentModeAllowsStaticPublish(normalizedMode) && this.options.staticSitePublisher?.isConfigured()) {
       const staticPublishPublicBaseUrl = this.options.staticSitePublisher.publicBaseUrlForRequest(
         context.clientOrigin,
         context.serverOrigin
@@ -981,14 +992,19 @@ export class CodeAgentSessionService {
         roomId: context.roomId,
         clientId: context.clientId,
         turnId: context.turnId,
-        mode: context.mode,
+        mode: normalizedMode,
       });
     }
 
-    if (context.mode === 'acceptEdits') {
+    if (codeAgentModeAllowsWriteTools(normalizedMode)) {
       env.ROOMTALK_COCO_ALLOW_WRITE_TOOLS = 'true';
     } else if (env.ROOMTALK_COCO_ALLOW_WRITE_TOOLS === 'true') {
       delete env.ROOMTALK_COCO_ALLOW_WRITE_TOOLS;
+    }
+    if (codeAgentModeAllowsShell(normalizedMode)) {
+      env.ROOMTALK_COCO_ALLOW_SHELL = 'true';
+    } else if (env.ROOMTALK_COCO_ALLOW_SHELL === 'true') {
+      delete env.ROOMTALK_COCO_ALLOW_SHELL;
     }
 
     return env;

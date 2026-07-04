@@ -92,7 +92,7 @@ vi.mock('./MessageList', async () => {
 vi.mock('./MessageInput', () => ({
   MessageInput: ({
     codeAgentMode,
-    codeAgentMaxMode,
+    codeAgentAvailableModes,
     canSwitchCodeAgentMode,
     isCodeAgentRoom,
     canPost,
@@ -102,7 +102,7 @@ vi.mock('./MessageInput', () => ({
     onClearReviewComments,
   }: {
     codeAgentMode: string;
-    codeAgentMaxMode: string;
+    codeAgentAvailableModes?: string[];
     canSwitchCodeAgentMode?: boolean;
     isCodeAgentRoom?: boolean;
     canPost?: boolean;
@@ -115,7 +115,7 @@ vi.mock('./MessageInput', () => ({
       data-testid="message-input"
       data-code-agent-room={String(Boolean(isCodeAgentRoom))}
       data-code-agent-mode={codeAgentMode}
-      data-code-agent-max-mode={codeAgentMaxMode}
+      data-code-agent-available-modes={(codeAgentAvailableModes || []).join(',')}
       data-can-switch-code-agent-mode={String(Boolean(canSwitchCodeAgentMode))}
       data-can-post={String(Boolean(canPost))}
       data-posting-restriction-reason={postingRestrictionReason || ''}
@@ -207,7 +207,7 @@ vi.mock('./CodeAgentFileBrowserPanel', () => ({
 }));
 
 vi.mock('../utils/socket', () => ({
-  updateRoomSettings: vi.fn(async ({ roomId, codeAgentMode, codeAgentBackend }: { roomId: string; codeAgentMode?: 'plan' | 'acceptEdits'; codeAgentBackend?: 'coco' | 'codex' | 'codex-app-server' }) => ({
+  updateRoomSettings: vi.fn(async ({ roomId, codeAgentMode, codeAgentBackend }: { roomId: string; codeAgentMode?: 'plan' | 'edit' | 'approveForMe' | 'fullAccess' | 'acceptEdits'; codeAgentBackend?: 'coco' | 'codex' | 'codex-app-server' }) => ({
     id: roomId,
     name: 'Coco Room',
     creatorId: 'client-1',
@@ -271,8 +271,8 @@ const dispatchPointer = (
 
 const renderCodeAgentRoom = (
   room: Room,
-  availableModes: Array<'plan' | 'acceptEdits'> = room.codeAgentMode === 'acceptEdits' ? ['plan', 'acceptEdits'] : ['plan'],
-  defaultMode: 'plan' | 'acceptEdits' = 'plan',
+  availableModes: Array<'plan' | 'edit' | 'approveForMe' | 'fullAccess' | 'acceptEdits'> = room.codeAgentMode === 'edit' ? ['plan', 'edit'] : ['plan'],
+  defaultMode: 'plan' | 'edit' | 'approveForMe' | 'fullAccess' | 'acceptEdits' = 'plan',
   roomPermissions: RoomPermissions | null = null,
 ) => render(
   <CodeAgentRoomView
@@ -317,12 +317,12 @@ describe('CodeAgentRoomView', () => {
   });
 
   it('passes the selected Coco run mode to the workspace and composer', () => {
-    renderCodeAgentRoom({ ...cocoRoom, codeAgentMode: 'acceptEdits' }, ['plan', 'acceptEdits'], 'plan', permissions());
+    renderCodeAgentRoom({ ...cocoRoom, codeAgentMode: 'edit' }, ['plan', 'edit'], 'plan', permissions());
 
-    expect(screen.getByTestId('message-list').dataset.codeAgentMode).toBe('acceptEdits');
+    expect(screen.getByTestId('message-list').dataset.codeAgentMode).toBe('edit');
     expect(screen.getByTestId('message-input').dataset.codeAgentRoom).toBe('true');
-    expect(screen.getByTestId('message-input').dataset.codeAgentMode).toBe('acceptEdits');
-    expect(screen.getByTestId('message-input').dataset.codeAgentMaxMode).toBe('acceptEdits');
+    expect(screen.getByTestId('message-input').dataset.codeAgentMode).toBe('edit');
+    expect(screen.getByTestId('message-input').dataset.codeAgentAvailableModes).toBe('plan,edit');
     expect(screen.getByTestId('message-input').dataset.canSwitchCodeAgentMode).toBe('true');
     expect(screen.getByTestId('file-browser').dataset.sandboxStatus).toBe('ready');
     expect(screen.getByTestId('file-browser').dataset.sandboxUpdatedAt).toBe('2026-06-30T10:00:00.000Z');
@@ -387,7 +387,7 @@ describe('CodeAgentRoomView', () => {
   });
 
   it('keeps composer mode switching locked for non-managers while preserving edit capability', () => {
-    renderCodeAgentRoom({ ...cocoRoom, codeAgentMode: 'acceptEdits' }, ['plan', 'acceptEdits'], 'plan', permissions({
+    renderCodeAgentRoom({ ...cocoRoom, codeAgentMode: 'edit' }, ['plan', 'edit'], 'plan', permissions({
       role: 'member',
       canManageRoom: false,
       canManageAdmins: false,
@@ -395,8 +395,8 @@ describe('CodeAgentRoomView', () => {
       canTransferOwnership: false,
     }));
 
-    expect(screen.getByTestId('message-input').dataset.codeAgentMode).toBe('acceptEdits');
-    expect(screen.getByTestId('message-input').dataset.codeAgentMaxMode).toBe('acceptEdits');
+    expect(screen.getByTestId('message-input').dataset.codeAgentMode).toBe('edit');
+    expect(screen.getByTestId('message-input').dataset.codeAgentAvailableModes).toBe('plan,edit');
     expect(screen.getByTestId('message-input').dataset.canSwitchCodeAgentMode).toBe('false');
   });
 
@@ -922,7 +922,7 @@ describe('CodeAgentRoomView', () => {
     renderCodeAgentRoom({ ...cocoRoom, codeAgentMode: 'acceptEdits' }, ['plan']);
 
     expect(screen.getByTestId('message-list').dataset.codeAgentMode).toBe('plan');
-    expect(screen.getByTestId('message-input').dataset.codeAgentMaxMode).toBe('plan');
+    expect(screen.getByTestId('message-input').dataset.codeAgentAvailableModes).toBe('plan');
     expect(screen.getByTestId('file-browser').dataset.workspaceEditable).toBe('false');
   });
 });

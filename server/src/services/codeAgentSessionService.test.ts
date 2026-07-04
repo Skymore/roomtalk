@@ -1,7 +1,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { Logger } from '../logger';
-import { AIModelOption, Message, Room, RoomAICostTotal } from '../types';
+import { AIModelOption, CodeAgentMode, Message, Room, RoomAICostTotal } from '../types';
 import { CodeAgentRunnerAdapter, CodeAgentBackend } from './codeAgentRunner';
 import { CocoSandboxLifecycleService } from './cocoSandboxLifecycle';
 import { CodeAgentSessionService } from './codeAgentSessionService';
@@ -235,9 +235,9 @@ const createService = (options: {
   runnerProviderEnvByProvider?: Partial<Record<AIModelOption['provider'], Record<string, string>>>;
   codexBackendEnabled?: boolean;
   codexConnectionService?: any;
-  mode?: 'plan' | 'acceptEdits';
-  availableModes?: Array<'plan' | 'acceptEdits'>;
-  defaultMode?: 'plan' | 'acceptEdits';
+  mode?: CodeAgentMode;
+  availableModes?: CodeAgentMode[];
+  defaultMode?: CodeAgentMode;
   modelGateway?: CocoModelGateway;
   staticSitePublisher?: PublishedStaticSiteService;
   observability?: ReturnType<typeof createMemoryObservability>['recorder'];
@@ -1074,10 +1074,10 @@ describe('CodeAgentSessionService', () => {
     assert.notEqual(env.COCO_MODEL_PROXY_TOKEN, 'deepseek-provider-key');
     assert.equal(env.ROOMTALK_COCO_ALLOW_WRITE_TOOLS, 'true');
     assert.equal('DEEPSEEK_API_KEY' in env, false);
-    assert.equal(runner.requests[0].mode, 'acceptEdits');
+    assert.equal(runner.requests[0].mode, 'edit');
   });
 
-  it('injects a scoped static publish token for configured edit turns', async () => {
+  it('injects a scoped static publish token for configured full access turns', async () => {
     const runner = new FakeCodeAgentRunnerClient([
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
     ]);
@@ -1089,11 +1089,11 @@ describe('CodeAgentSessionService', () => {
       nowMs: () => Date.parse('2026-05-03T00:00:00.000Z'),
       createId: () => 'static-publish-token-id',
     });
-    const store = new MemoryCocoStore(room({ codeAgentMode: 'acceptEdits' }), [userMessage()]);
+    const store = new MemoryCocoStore(room({ codeAgentMode: 'fullAccess' }), [userMessage()]);
     const { sandboxService, service } = createService({
       store,
       runner,
-      availableModes: ['plan', 'acceptEdits'],
+      availableModes: ['fullAccess'],
       defaultMode: 'plan',
       staticSitePublisher,
     });
@@ -1112,7 +1112,7 @@ describe('CodeAgentSessionService', () => {
     assert.equal(claims?.roomId, 'room-1');
     assert.equal(claims?.clientId, 'client-1');
     assert.equal(claims?.turnId, 'turn-1');
-    assert.equal(claims?.mode, 'acceptEdits');
+    assert.equal(claims?.mode, 'fullAccess');
   });
 
   it('injects static publish URLs using the allowed production client origin', async () => {
@@ -1129,11 +1129,11 @@ describe('CodeAgentSessionService', () => {
       nowMs: () => Date.parse('2026-05-03T00:00:00.000Z'),
       createId: () => 'static-publish-token-id',
     });
-    const store = new MemoryCocoStore(room({ codeAgentMode: 'acceptEdits' }), [userMessage()]);
+    const store = new MemoryCocoStore(room({ codeAgentMode: 'fullAccess' }), [userMessage()]);
     const { sandboxService, service } = createService({
       store,
       runner,
-      availableModes: ['plan', 'acceptEdits'],
+      availableModes: ['fullAccess'],
       defaultMode: 'plan',
       staticSitePublisher,
     });
@@ -1164,11 +1164,11 @@ describe('CodeAgentSessionService', () => {
       nowMs: () => Date.parse('2026-05-03T00:00:00.000Z'),
       createId: () => 'static-publish-token-id',
     });
-    const store = new MemoryCocoStore(room({ codeAgentMode: 'acceptEdits' }), [userMessage()]);
+    const store = new MemoryCocoStore(room({ codeAgentMode: 'fullAccess' }), [userMessage()]);
     const { sandboxService, service } = createService({
       store,
       runner,
-      availableModes: ['plan', 'acceptEdits'],
+      availableModes: ['fullAccess'],
       defaultMode: 'plan',
       staticSitePublisher,
     });
@@ -1198,7 +1198,7 @@ describe('CodeAgentSessionService', () => {
     });
     const { sandboxService, service } = createService({
       runner,
-      availableModes: ['plan', 'acceptEdits'],
+      availableModes: ['fullAccess'],
       defaultMode: 'plan',
       staticSitePublisher,
     });
@@ -1216,7 +1216,7 @@ describe('CodeAgentSessionService', () => {
     ]);
     const { sandboxService, service } = createService({
       runner,
-      availableModes: ['plan', 'acceptEdits'],
+      availableModes: ['fullAccess'],
       defaultMode: 'plan',
       runnerEnv: { ROOMTALK_COCO_ALLOW_WRITE_TOOLS: 'true' },
     });

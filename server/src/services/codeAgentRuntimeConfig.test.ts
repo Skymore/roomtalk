@@ -108,15 +108,15 @@ describe('resolveCodeAgentRuntimeConfig', () => {
       COCO_ALLOWED_RUN_MODES: 'acceptEdits',
     });
 
-    assert.equal(config.mode, 'acceptEdits');
-    assert.deepEqual(config.availableModes, ['plan', 'acceptEdits']);
+    assert.equal(config.mode, 'edit');
+    assert.deepEqual(config.availableModes, ['plan', 'edit']);
     assert.equal(config.defaultMode, 'plan');
 
     const editDefault = resolveCodeAgentRuntimeConfig({
       COCO_ALLOWED_RUN_MODES: 'plan,acceptEdits',
       COCO_DEFAULT_MODE: 'acceptEdits',
     });
-    assert.equal(editDefault.defaultMode, 'acceptEdits');
+    assert.equal(editDefault.defaultMode, 'edit');
 
     assert.throws(() => resolveCodeAgentRuntimeConfig({
       COCO_ALLOWED_RUN_MODES: 'plan,writeEverything',
@@ -395,8 +395,8 @@ describe('resolveCodeAgentRuntimeConfig', () => {
       ...scopedProviderKeyEnv,
       ...pinnedArtifactEnv,
     });
-    assert.equal(scoped.mode, 'acceptEdits');
-    assert.deepEqual(scoped.availableModes, ['plan', 'acceptEdits']);
+    assert.equal(scoped.mode, 'edit');
+    assert.deepEqual(scoped.availableModes, ['plan', 'edit']);
     assert.deepEqual(scoped.runnerProviderEnvByProvider, {});
   });
 
@@ -418,8 +418,8 @@ describe('resolveCodeAgentRuntimeConfig', () => {
       ...pinnedArtifactEnv,
     });
 
-    assert.equal(config.mode, 'acceptEdits');
-    assert.deepEqual(config.availableModes, ['plan', 'acceptEdits']);
+    assert.equal(config.mode, 'edit');
+    assert.deepEqual(config.availableModes, ['plan', 'edit']);
     assert.equal(config.defaultMode, 'plan');
     assert.deepEqual(config.runnerProviderEnvByProvider, {});
     assert.equal(config.modelGateway?.publicBaseUrl, 'https://room.example/api/coco/model-gateway');
@@ -475,8 +475,8 @@ describe('resolveCodeAgentRuntimeConfig', () => {
       ...pinnedArtifactEnv,
     });
 
-    assert.equal(proxy.mode, 'acceptEdits');
-    assert.deepEqual(proxy.availableModes, ['plan', 'acceptEdits']);
+    assert.equal(proxy.mode, 'edit');
+    assert.deepEqual(proxy.availableModes, ['plan', 'edit']);
     assert.equal(proxy.runnerEnv.PYTHONPATH, DEFAULT_COCO_RUNNER_PYTHONPATH);
     assert.equal(proxy.runnerEnv.COCO_WORKSPACE_ROOT, DEFAULT_COCO_WORKSPACE_ROOT);
     assert.equal(proxy.runnerEnv.COCO_MODEL_PROXY_URL, 'https://model-proxy.internal');

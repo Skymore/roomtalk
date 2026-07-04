@@ -2,7 +2,7 @@ import { AIModelProvider, AIUsage, CodexPermissionMode, CodexReasoningEffort } f
 
 export const CODE_AGENT_RUNNER_SCHEMA_VERSION = 1 as const;
 
-export type CodeAgentRunnerMode = 'plan' | 'acceptEdits';
+export type CodeAgentRunnerMode = 'plan' | 'edit' | 'approveForMe' | 'fullAccess' | 'acceptEdits';
 
 export type CodeAgentRunnerPriorContentBlock =
   | { type: 'text'; text: string }

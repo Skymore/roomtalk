@@ -24,7 +24,7 @@ export interface CodeAgentMessageDraft {
   toolOutputPreview?: string;
   exitCode?: number;
   isError?: boolean;
-  codeAgentMode?: 'plan' | 'acceptEdits';
+  codeAgentMode?: 'plan' | 'edit' | 'approveForMe' | 'fullAccess' | 'acceptEdits';
 }
 
 export interface CodeAgentEventMapperContext {

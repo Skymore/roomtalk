@@ -493,7 +493,7 @@ describe('MessageList optimistic messages', () => {
           cocoStatus: 'idle',
         }}
         codeAgentMode="plan"
-        codeAgentMaxMode="acceptEdits"
+        codeAgentAvailableModes={['plan', 'edit']}
         onCodeAgentModeChange={onCodeAgentModeChange}
       />
     );

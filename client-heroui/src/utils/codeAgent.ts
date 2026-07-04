@@ -1,7 +1,19 @@
 import { FeatureFlags } from './features';
 import { CodeAgentBackend, CodeAgentMode, Room, RoomCocoStatus } from './types';
+import {
+  normalizeCodeAgentMode,
+  normalizeCodeAgentModeList,
+} from './codeAgentModes';
 
 export type { CodeAgentBackend, CodeAgentMode } from './types';
+export {
+  getCodeAgentModeDescriptionKey,
+  getCodeAgentModeIcon,
+  getCodeAgentModeLabelKey,
+  getHighestCodeAgentMode,
+  normalizeCodeAgentMode,
+  normalizeCodeAgentModeList,
+} from './codeAgentModes';
 
 export const CODE_AGENT_BACKEND_OPTIONS = ['coco', 'codex', 'codex-app-server'] as const satisfies readonly CodeAgentBackend[];
 
@@ -25,16 +37,16 @@ export const isCodeAgentRoom = (room: Room | null | undefined): boolean => (
 );
 
 export const getCodeAgentMode = (featureFlags: FeatureFlags): CodeAgentMode => (
-  featureFlags.coco.mode
+  normalizeCodeAgentMode(featureFlags.coco.mode)
 );
 
 export const getCodeAgentAvailableModes = (featureFlags: FeatureFlags): CodeAgentMode[] => (
-  featureFlags.coco.availableModes?.length ? featureFlags.coco.availableModes : ['plan']
+  normalizeCodeAgentModeList(featureFlags.coco.availableModes)
 );
 
 export const getCodeAgentDefaultMode = (featureFlags: FeatureFlags): CodeAgentMode => (
-  featureFlags.coco.availableModes.includes(featureFlags.coco.defaultMode)
-    ? featureFlags.coco.defaultMode
+  getCodeAgentAvailableModes(featureFlags).includes(normalizeCodeAgentMode(featureFlags.coco.defaultMode))
+    ? normalizeCodeAgentMode(featureFlags.coco.defaultMode)
     : 'plan'
 );
 

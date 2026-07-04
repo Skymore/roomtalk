@@ -1,5 +1,5 @@
 import React from 'react';
-import { Button, Tab, Tabs } from '@heroui/react';
+import { Button, Dropdown, DropdownItem, DropdownMenu, DropdownTrigger, Tab, Tabs } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 import { formatUsdCost } from '../utils/formatters';
@@ -14,7 +14,12 @@ import {
   CodeAgentBackend,
   CodeAgentMode,
   getCodeAgentBackendLabelKey,
+  getCodeAgentModeDescriptionKey,
+  getCodeAgentModeIcon,
+  getCodeAgentModeLabelKey,
   getCodeAgentStatus,
+  normalizeCodeAgentMode,
+  normalizeCodeAgentModeList,
 } from '../utils/codeAgent';
 import {
   getCocoAgentStatusClassName,
@@ -44,6 +49,7 @@ interface CodeAgentWorkspacePanelProps {
   room: Room;
   messages: Message[];
   mode: CodeAgentMode;
+  availableModes?: CodeAgentMode[];
   backend?: CodeAgentBackend;
   canSwitchMode?: boolean;
   canSwitchBackend?: boolean;
@@ -150,6 +156,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   room,
   messages,
   mode,
+  availableModes,
   backend,
   canSwitchMode = false,
   canSwitchBackend = false,
@@ -263,7 +270,14 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
     },
     [changedFileEntries, hasActiveDiffFileSummaries, workspaceChanges?.diffSummary],
   );
-  const isPlanMode = mode === 'plan';
+  const normalizedAvailableModes = React.useMemo(
+    () => normalizeCodeAgentModeList(availableModes?.length ? availableModes : [mode]),
+    [availableModes, mode]
+  );
+  const normalizedMode = normalizeCodeAgentMode(mode);
+  const selectedMode = normalizedAvailableModes.includes(normalizedMode)
+    ? normalizedMode
+    : normalizedAvailableModes[0];
   const agentStatus = getCodeAgentStatus(room);
   const detailsId = 'code-agent-workspace-details';
   const shouldLoadDiff = selectedWorkspaceTab === 'changes';
@@ -334,8 +348,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
     { label: t('codeAgentResults'), value: summary.toolResults, icon: 'lucide:list-checks' },
     { label: t('codeAgentErrors'), value: summary.toolErrors, icon: 'lucide:circle-alert' },
   ];
-  const canToggleMode = canSwitchMode && Boolean(onModeChange);
-  const nextMode: CodeAgentMode = isPlanMode ? 'acceptEdits' : 'plan';
+  const canToggleMode = canSwitchMode && normalizedAvailableModes.length > 1 && Boolean(onModeChange);
   const currentBackend: CodeAgentBackend = backend || room.codeAgentBackend || 'coco';
   const canToggleBackend = canSwitchBackend && Boolean(onBackendChange);
 
@@ -351,26 +364,43 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
             <h3 className="truncate text-sm font-semibold uppercase tracking-normal text-[#5e5d59] dark:text-[#b0aea5]">
               {t('codeAgentWorkspace')}
             </h3>
-            <Button
-              size="sm"
-              variant="flat"
-              radius="full"
-              aria-label={t('codeAgentModeControl')}
-              title={t('codeAgentModeControl')}
-              data-testid="code-agent-mode-toggle"
-              isDisabled={!canToggleMode}
-              onPress={() => {
-                if (!canToggleMode) return;
-                onModeChange?.(nextMode);
-              }}
-              className={`h-6 min-w-0 gap-1 border border-[#dedbd0] bg-[#faf9f5] px-1.5 text-[11px] font-semibold text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242421] dark:text-[#faf9f5] ${
-                canToggleMode ? 'cursor-pointer' : 'cursor-default opacity-100'
-              }`}
-            >
-              <Icon icon={isPlanMode ? 'lucide:eye' : 'lucide:pencil-ruler'} className="h-3 w-3 flex-shrink-0" />
-              {isPlanMode ? t('codeAgentReadOnlyMode') : t('codeAgentEditMode')}
-              {canToggleMode ? <Icon icon="lucide:repeat-2" className="h-3 w-3 flex-shrink-0 opacity-70" /> : null}
-            </Button>
+            <Dropdown placement="bottom-start">
+              <DropdownTrigger>
+                <Button
+                  size="sm"
+                  variant="flat"
+                  radius="full"
+                  aria-label={t('codeAgentModeControl')}
+                  title={t('codeAgentModeControl')}
+                  data-testid="code-agent-mode-toggle"
+                  isDisabled={!canToggleMode}
+                  className={`h-6 min-w-0 gap-1 border border-[#dedbd0] bg-[#faf9f5] px-1.5 text-[11px] font-semibold text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242421] dark:text-[#faf9f5] ${
+                    canToggleMode ? 'cursor-pointer' : 'cursor-default opacity-100'
+                  }`}
+                >
+                  <Icon icon={getCodeAgentModeIcon(selectedMode)} className="h-3 w-3 flex-shrink-0" />
+                  {t(getCodeAgentModeLabelKey(selectedMode))}
+                  {canToggleMode ? <Icon icon="lucide:chevron-down" className="h-3 w-3 flex-shrink-0 opacity-70" /> : null}
+                </Button>
+              </DropdownTrigger>
+              <DropdownMenu
+                aria-label={t('codeAgentModeControl')}
+                selectionMode="single"
+                selectedKeys={[selectedMode]}
+                onAction={(key) => {
+                  const nextMode = normalizeCodeAgentMode(key.toString());
+                  if (canToggleMode && normalizedAvailableModes.includes(nextMode)) {
+                    onModeChange?.(nextMode);
+                  }
+                }}
+              >
+                {normalizedAvailableModes.map(option => (
+                  <DropdownItem key={option} startContent={<Icon icon={getCodeAgentModeIcon(option)} />}>
+                    {t(getCodeAgentModeLabelKey(option))}
+                  </DropdownItem>
+                ))}
+              </DropdownMenu>
+            </Dropdown>
             <div
               role="group"
               aria-label={t('codeAgentEngine')}
@@ -438,7 +468,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
           </div>
           {!isCollapsed && (
             <p className="mt-1 max-w-3xl text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">
-              {isPlanMode ? t('codeAgentReadOnlyDescription') : t('codeAgentEditDescription')}
+              {t(getCodeAgentModeDescriptionKey(selectedMode))}
             </p>
           )}
           {workspaceRefreshError && (

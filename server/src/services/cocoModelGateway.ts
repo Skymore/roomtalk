@@ -4,6 +4,7 @@ import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
 import { AIModelOption, AIModelPricing, AIModelProvider, AIUsage } from '../types';
 import { CodeAgentRunnerMode } from './codeAgentRunnerProtocol';
+import { normalizeCodeAgentMode } from './codeAgentModes';
 import { ObservabilityEventInput, ObservabilityEventRecorder } from './observabilityEvents';
 
 export interface CocoModelGatewayIssueInput {
@@ -837,7 +838,7 @@ export class CocoModelGateway {
       !claims.turnId ||
       !claims.apiModel ||
       !['anthropic', 'deepseek', 'openai', 'openrouter'].includes(claims.provider) ||
-      !['plan', 'acceptEdits'].includes(claims.mode)
+      !normalizeCodeAgentMode(claims.mode)
     ) {
       return { ok: false, error: 'Invalid model gateway token' };
     }

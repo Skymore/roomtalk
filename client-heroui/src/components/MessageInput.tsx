@@ -48,7 +48,13 @@ import {
   isConfirmingIMEComposition,
 } from '../utils/keyboardComposition';
 import { Message, RoomPostingSchedule } from '../utils/types';
-import { CodeAgentBackend, CodeAgentMode, isCodexCodeAgentBackend } from '../utils/codeAgent';
+import {
+  CodeAgentBackend,
+  CodeAgentMode,
+  isCodexCodeAgentBackend,
+  normalizeCodeAgentMode,
+  normalizeCodeAgentModeList,
+} from '../utils/codeAgent';
 import {
   appendReviewCommentsToPrompt,
   type ReviewCommentContext,
@@ -58,6 +64,7 @@ import {
   defaultCodexRunSettings,
   getStoredRoomCodexSettings,
   updateStoredRoomCodexSettings,
+  type CodexPermissionMode,
   type CodexRunSettings,
 } from '../utils/codexSettings';
 
@@ -79,7 +86,7 @@ interface MessageInputProps {
   isCodeAgentRoom?: boolean;
   codeAgentBackend?: CodeAgentBackend;
   codeAgentMode?: CodeAgentMode;
-  codeAgentMaxMode?: CodeAgentMode;
+  codeAgentAvailableModes?: CodeAgentMode[];
   canSwitchCodeAgentMode?: boolean;
   onCodeAgentModeChange?: (mode: CodeAgentMode) => void;
   reviewComments?: readonly ReviewCommentContext[];
@@ -174,8 +181,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   isCodeAgentRoom = false,
   codeAgentBackend = 'coco',
   codeAgentMode = 'plan',
-  codeAgentMaxMode = 'plan',
-  canSwitchCodeAgentMode = codeAgentMaxMode === 'acceptEdits',
+  codeAgentAvailableModes = ['plan'],
+  canSwitchCodeAgentMode = codeAgentAvailableModes.length > 1,
   onCodeAgentModeChange,
   reviewComments = [],
   onRemoveReviewComment,
@@ -266,7 +273,12 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   // 新增角色设置模态框的状态
   const { isOpen: isAISettingsOpen, onOpen: onAISettingsOpen, onClose: onAISettingsClose } = useDisclosure();
   const postingClosedMessage = t('postingClosed');
-  const selectedCodeAgentMode = codeAgentMaxMode === 'acceptEdits' ? codeAgentMode : 'plan';
+  const normalizedCodeAgentAvailableModes = normalizeCodeAgentModeList(codeAgentAvailableModes);
+  const normalizedCodeAgentMode = normalizeCodeAgentMode(codeAgentMode);
+  const selectedCodeAgentMode = normalizedCodeAgentAvailableModes.includes(normalizedCodeAgentMode)
+    ? normalizedCodeAgentMode
+    : normalizedCodeAgentAvailableModes[0];
+  const selectedCodexPermissionMode = selectedCodeAgentMode as CodexPermissionMode;
 
   const handleAIContextMessageLimitChange = useCallback((limit: number) => {
     const normalizedLimit = normalizeAIContextMessageLimit(limit);
@@ -547,7 +559,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         ? {
             codexModel: codexRunSettings.model,
             codexReasoningEffort: codexRunSettings.reasoningEffort,
-            codexPermissionMode: selectedCodeAgentMode === 'plan' ? 'plan' : codexRunSettings.permissionMode,
+            codexPermissionMode: selectedCodexPermissionMode,
           }
         : {};
 
@@ -1712,7 +1724,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                 isCodeAgentRoom={isCodeAgentRoom}
                 codeAgentBackend={codeAgentBackend}
                 codeAgentMode={selectedCodeAgentMode}
-                codeAgentMaxMode={codeAgentMaxMode}
+                codeAgentAvailableModes={normalizedCodeAgentAvailableModes}
                 canSwitchCodeAgentMode={canSwitchCodeAgentMode}
                 onCodeAgentModeChange={onCodeAgentModeChange}
                 codexRunSettings={codexRunSettings}

@@ -31,7 +31,7 @@ vi.mock('@heroui/react', () => ({
   ModalHeader: ({ children }: any) => <div>{children}</div>,
   Select: ({ children, 'aria-label': ariaLabel, onSelectionChange, isDisabled, ...props }: any) => {
     const nextKeyByLabel: Record<string, string> = {
-      codeAgentModeControl: 'acceptEdits',
+      codeAgentModeControl: 'edit',
       selectCodexPermission: 'fullAccess',
       selectCodexModel: 'gpt-5.3-codex-spark',
       selectCodexReasoning: 'xhigh',
@@ -47,7 +47,7 @@ vi.mock('@heroui/react', () => ({
           type="button"
           data-testid={`change-${ariaLabel}`}
           disabled={isDisabled}
-          onClick={() => onSelectionChange?.(new Set([nextKeyByLabel[ariaLabel] || 'acceptEdits']))}
+          onClick={() => onSelectionChange?.(new Set([nextKeyByLabel[ariaLabel] || 'edit']))}
         >
           change
         </button>
@@ -147,7 +147,7 @@ describe('MessageInputAIControls', () => {
         onSettingsClose={onSettingsClose}
         isCodeAgentRoom
         codeAgentMode="plan"
-        codeAgentMaxMode="acceptEdits"
+        codeAgentAvailableModes={['plan', 'edit']}
         onCodeAgentModeChange={onCodeAgentModeChange}
       />
     );
@@ -159,7 +159,7 @@ describe('MessageInputAIControls', () => {
     expect(onCodeAgentModeChange).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'apply' }));
-    expect(onCodeAgentModeChange).toHaveBeenCalledWith('acceptEdits');
+    expect(onCodeAgentModeChange).toHaveBeenCalledWith('edit');
     expect(onSettingsClose).toHaveBeenCalled();
   });
 
@@ -171,7 +171,7 @@ describe('MessageInputAIControls', () => {
         isSettingsOpen
         isCodeAgentRoom
         codeAgentMode="plan"
-        codeAgentMaxMode="acceptEdits"
+        codeAgentAvailableModes={['plan', 'edit']}
         canSwitchCodeAgentMode={false}
         onCodeAgentModeChange={onCodeAgentModeChange}
       />
@@ -195,8 +195,8 @@ describe('MessageInputAIControls', () => {
         onSettingsClose={onSettingsClose}
         isCodeAgentRoom
         codeAgentBackend="codex"
-        codeAgentMode="acceptEdits"
-        codeAgentMaxMode="acceptEdits"
+        codeAgentMode="approveForMe"
+        codeAgentAvailableModes={['plan', 'edit', 'approveForMe', 'fullAccess']}
         codexRunSettings={{ model: 'gpt-5.5', reasoningEffort: 'medium', permissionMode: 'approveForMe' }}
         onCodexRunSettingsChange={onCodexRunSettingsChange}
       />
@@ -227,8 +227,8 @@ describe('MessageInputAIControls', () => {
         isSettingsOpen
         isCodeAgentRoom
         codeAgentBackend="codex"
-        codeAgentMode="acceptEdits"
-        codeAgentMaxMode="acceptEdits"
+        codeAgentMode="approveForMe"
+        codeAgentAvailableModes={['plan', 'edit', 'approveForMe', 'fullAccess']}
         codexRunSettings={{ model: 'gpt-5.5', reasoningEffort: 'xhigh', permissionMode: 'approveForMe' }}
         onCodexRunSettingsChange={onCodexRunSettingsChange}
         onCodeAgentModeChange={onCodeAgentModeChange}
@@ -243,7 +243,7 @@ describe('MessageInputAIControls', () => {
       reasoningEffort: 'xhigh',
       permissionMode: 'fullAccess',
     });
-    expect(onCodeAgentModeChange).not.toHaveBeenCalled();
+    expect(onCodeAgentModeChange).toHaveBeenCalledWith('fullAccess');
   });
 
   it('disables Apply until settings change', () => {

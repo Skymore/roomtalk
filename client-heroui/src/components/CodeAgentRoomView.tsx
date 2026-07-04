@@ -9,7 +9,14 @@ import { CodeAgentPendingReviewComments } from './CodeAgentPendingReviewComments
 import { MessageInput } from './MessageInput';
 import { MessageList, MessageListHandle } from './MessageList';
 import { AppView } from '../utils/appPersistence';
-import { CodeAgentBackend, CodeAgentMode, getCodeAgentStatus, isSupportedCodeAgentBackend } from '../utils/codeAgent';
+import {
+  CodeAgentBackend,
+  CodeAgentMode,
+  getCodeAgentStatus,
+  isSupportedCodeAgentBackend,
+  normalizeCodeAgentMode,
+  normalizeCodeAgentModeList,
+} from '../utils/codeAgent';
 import { getAvatarColor, getAvatarText } from '../utils/userProfile';
 import { updateRoomSettings } from '../utils/socket';
 import { Message, Room, RoomPermissions, RoomRenameHandler } from '../utils/types';
@@ -137,13 +144,14 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   const fileManagerResizeCleanupRef = React.useRef<(() => void) | null>(null);
   const reviewComments = useCodeAgentReviewCommentDraft(currentRoom.id);
   const normalizedAvailableModes = React.useMemo(
-    () => (availableModes.length ? availableModes : ['plan' as CodeAgentMode]),
+    () => normalizeCodeAgentModeList(availableModes),
     [availableModes]
   );
-  const maxMode: CodeAgentMode = normalizedAvailableModes.includes('acceptEdits') ? 'acceptEdits' : 'plan';
-  const effectiveDefaultMode = normalizedAvailableModes.includes(defaultMode) ? defaultMode : 'plan';
-  const selectedMode: CodeAgentMode = normalizedAvailableModes.includes(currentRoom.codeAgentMode as CodeAgentMode)
-    ? (currentRoom.codeAgentMode as CodeAgentMode)
+  const normalizedDefaultMode = normalizeCodeAgentMode(defaultMode);
+  const effectiveDefaultMode = normalizedAvailableModes.includes(normalizedDefaultMode) ? normalizedDefaultMode : 'plan';
+  const normalizedRoomMode = normalizeCodeAgentMode(currentRoom.codeAgentMode);
+  const selectedMode: CodeAgentMode = normalizedAvailableModes.includes(normalizedRoomMode)
+    ? normalizedRoomMode
     : effectiveDefaultMode;
   const canManageCodeAgentMode = Boolean(roomPermissions?.canManageRoom);
   const canUseCoco = roomPermissions?.canUseCoco ?? true;
@@ -200,7 +208,8 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   }, []);
 
   const handleCodeAgentModeChange = React.useCallback((nextMode: CodeAgentMode) => {
-    const constrainedMode = normalizedAvailableModes.includes(nextMode) ? nextMode : effectiveDefaultMode;
+    const normalizedNextMode = normalizeCodeAgentMode(nextMode);
+    const constrainedMode = normalizedAvailableModes.includes(normalizedNextMode) ? normalizedNextMode : effectiveDefaultMode;
     updateRoomSettings({ roomId: currentRoom.id, codeAgentMode: constrainedMode }).then(
       (room) => onRoomUpdated(room),
       (error) => console.error('Failed to update code agent mode', error),
@@ -400,6 +409,8 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       handleRenameRoom={handleRenameRoom}
       clientId={clientId}
       roomPermissions={roomPermissions}
+      codeAgentAvailableModes={normalizedAvailableModes}
+      codeAgentDefaultMode={effectiveDefaultMode}
       onRoomUpdated={onRoomUpdated}
     />
   );
@@ -427,7 +438,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       sandboxUpdatedAt={currentRoom.sandboxUpdatedAt}
       workspaceRoot={workspaceRoot}
       workspaceChanges={workspaceChanges}
-      workspaceEditable={selectedMode === 'acceptEdits'}
+      workspaceEditable={selectedMode !== 'plan'}
       openFileRequest={workspaceFileOpenRequest}
       revealLine={workspaceFileOpenRequest?.line ?? null}
       revealRequestId={workspaceFileOpenRequest?.requestId ?? 0}
@@ -482,7 +493,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
               currentRoom={currentRoom}
               codeAgentMode={selectedMode}
               codeAgentBackend={backend}
-              codeAgentMaxMode={maxMode}
+              codeAgentAvailableModes={normalizedAvailableModes}
               onCodeAgentModeChange={handleCodeAgentModeChange}
               onCodeAgentBackendChange={handleCodeAgentBackendChange}
               onOpenWorkspaceFile={handleOpenWorkspaceFile}
@@ -565,7 +576,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
               isCodeAgentRoom
               codeAgentBackend={backend}
               codeAgentMode={selectedMode}
-              codeAgentMaxMode={maxMode}
+              codeAgentAvailableModes={normalizedAvailableModes}
               canSwitchCodeAgentMode={canManageCodeAgentMode}
               onCodeAgentModeChange={handleCodeAgentModeChange}
               reviewComments={reviewComments}

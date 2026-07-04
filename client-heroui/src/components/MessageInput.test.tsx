@@ -102,13 +102,13 @@ vi.mock('./MessageInputAIControls', () => ({
       settings
     </button>
   ),
-  MessageInputAIControls: ({ onAskAI, onSend, isCodeAgentRoom, codeAgentBackend, codeAgentMode, codeAgentMaxMode }: any) => (
+  MessageInputAIControls: ({ onAskAI, onSend, isCodeAgentRoom, codeAgentBackend, codeAgentMode, codeAgentAvailableModes }: any) => (
     <div
       data-testid="message-input-ai-controls"
       data-code-agent-room={String(Boolean(isCodeAgentRoom))}
       data-code-agent-backend={codeAgentBackend || ''}
       data-code-agent-mode={codeAgentMode || ''}
-      data-code-agent-max-mode={codeAgentMaxMode || ''}
+      data-code-agent-available-modes={(codeAgentAvailableModes || []).join(',')}
     >
       <button type="button" onClick={onAskAI}>ask-ai</button>
       <button type="button" onClick={onSend}>send-message</button>
@@ -408,7 +408,7 @@ describe('MessageInput optimistic send flow', () => {
     const { editor } = renderMessageInput({
       isCodeAgentRoom: true,
       codeAgentMode: 'plan',
-      codeAgentMaxMode: 'acceptEdits',
+      codeAgentAvailableModes: ['plan', 'edit'],
     });
     setEditorText(editor, 'write python');
 
@@ -442,7 +442,7 @@ describe('MessageInput optimistic send flow', () => {
       isCodeAgentRoom: true,
       codeAgentBackend: 'codex',
       codeAgentMode: 'plan',
-      codeAgentMaxMode: 'acceptEdits',
+      codeAgentAvailableModes: ['plan', 'edit', 'approveForMe', 'fullAccess'],
     });
     setEditorText(editor, 'who are you');
 

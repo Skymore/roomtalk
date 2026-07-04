@@ -26,6 +26,7 @@ import { VerifyGoogleCredentialResult, resolveGoogleClientIds, verifyGoogleCrede
 import { getStickerCatalog } from '../stickers/catalog';
 import { CocoAccessControl, createCocoAccessControl } from '../services/cocoAccessControl';
 import { CodeAgentRunnerMode } from '../services/codeAgentRunnerProtocol';
+import { normalizeCodeAgentMode, normalizeCodeAgentModeSet } from '../services/codeAgentModes';
 import { CodexConnectionService } from '../services/codexConnection';
 import { CodexDeviceAuthSessionManager } from '../services/codexDeviceAuthSession';
 import { registerCodexConnectionRoutes } from './codexConnectionRoutes';
@@ -292,12 +293,13 @@ const consumeMediaUploadRateLimit = (clientId: string, ip: string | undefined, n
 export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   const { store, io, redisClient, routeLogger, getAIModelResponse, generateAIRoleDraft, persistenceStore = 'redis', mediaObjectStorage, audioTranscriptionRunner } = options;
   const cocoAccess = options.cocoAccess ?? createCocoAccessControl({ enabled: false });
-  const codeAgentMode = options.codeAgentMode ?? 'plan';
-  const codeAgentAvailableModes = options.codeAgentAvailableModes?.length
-    ? options.codeAgentAvailableModes
-    : (codeAgentMode === 'acceptEdits' ? ['plan', 'acceptEdits'] : ['plan']);
-  const codeAgentDefaultMode = options.codeAgentDefaultMode && codeAgentAvailableModes.includes(options.codeAgentDefaultMode)
-    ? options.codeAgentDefaultMode
+  const codeAgentMode = normalizeCodeAgentMode(options.codeAgentMode) || 'plan';
+  const codeAgentAvailableModes = normalizeCodeAgentModeSet(
+    options.codeAgentAvailableModes?.length ? options.codeAgentAvailableModes : [codeAgentMode]
+  );
+  const normalizedCodeAgentDefaultMode = normalizeCodeAgentMode(options.codeAgentDefaultMode);
+  const codeAgentDefaultMode = normalizedCodeAgentDefaultMode && codeAgentAvailableModes.includes(normalizedCodeAgentDefaultMode)
+    ? normalizedCodeAgentDefaultMode
     : 'plan';
   const mediaUploadCleanup = options.mediaUploadCleanup || {};
   const getNowMs = mediaUploadCleanup.nowMs || (() => Date.now());

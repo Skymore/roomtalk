@@ -633,7 +633,7 @@ describe('API routes', () => {
     assert.equal(status.persistenceStore, 'redis');
     assert.equal(status.redis, 'connected');
     assert.equal(status.rooms, 1);
-    assert.deepEqual(status.features.coco, { enabled: true, rollout: 'all', mode: 'acceptEdits', availableModes: ['plan', 'acceptEdits'], defaultMode: 'plan' });
+    assert.deepEqual(status.features.coco, { enabled: true, rollout: 'all', mode: 'edit', availableModes: ['plan', 'edit'], defaultMode: 'plan' });
     assert.deepEqual(status.features.codex, { connections: { enabled: false } });
 
     const featuresResponse = await fetch(`${server.baseUrl}/api/features?clientId=client-1`);
@@ -642,8 +642,8 @@ describe('API routes', () => {
       coco: {
         enabled: true,
         rollout: 'all',
-        mode: 'acceptEdits',
-        availableModes: ['plan', 'acceptEdits'],
+        mode: 'edit',
+        availableModes: ['plan', 'edit'],
         defaultMode: 'plan',
       },
       codex: {

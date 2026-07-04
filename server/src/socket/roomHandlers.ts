@@ -3,6 +3,7 @@ import { createCocoAccessControl } from '../services/cocoAccessControl';
 import { hashRoomPassword, verifyRoomPassword } from '../services/roomSecurity';
 import { createRoomMemberEvent, createRoomRecord } from '../services/messageDomain';
 import { isClientRequestAuthorized } from '../services/clientAuth';
+import { normalizeCodeAgentMode } from '../services/codeAgentModes';
 import { Room, RoomClientLookup, RoomOnlineMember, RoomPermissions, RoomPostingSchedule, RoomRoleMember, RoomType } from '../types';
 import { authorizeRoomAction, buildRoomPermissions, getRoomActor, normalizePostingSchedule } from './roomAuthorization';
 import { hasRoomAccess } from './roomAccess';
@@ -1016,9 +1017,9 @@ export function registerRoomHandlers({
         updates.cocoAccess = null;
       }
 
-      const VALID_CODE_AGENT_MODES = ['plan', 'acceptEdits'] as const;
-      if (typeof data.codeAgentMode === 'string' && VALID_CODE_AGENT_MODES.includes(data.codeAgentMode as any)) {
-        updates.codeAgentMode = data.codeAgentMode as typeof VALID_CODE_AGENT_MODES[number];
+      const normalizedMode = normalizeCodeAgentMode(data.codeAgentMode);
+      if (normalizedMode) {
+        updates.codeAgentMode = normalizedMode;
       } else if (data.codeAgentMode === null) {
         updates.codeAgentMode = null;
       }

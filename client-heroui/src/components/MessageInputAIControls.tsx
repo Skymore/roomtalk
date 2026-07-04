@@ -21,7 +21,16 @@ import {
   MIN_AI_CONTEXT_MESSAGE_LIMIT,
   normalizeAIContextMessageLimit,
 } from '../utils/aiContext';
-import { CodeAgentBackend, CodeAgentMode, isCodexCodeAgentBackend } from '../utils/codeAgent';
+import {
+  CodeAgentBackend,
+  CodeAgentMode,
+  getCodeAgentModeDescriptionKey,
+  getCodeAgentModeIcon,
+  getCodeAgentModeLabelKey,
+  isCodexCodeAgentBackend,
+  normalizeCodeAgentMode,
+  normalizeCodeAgentModeList,
+} from '../utils/codeAgent';
 import {
   CODEX_PERMISSION_OPTIONS,
   CODEX_MODEL_OPTIONS,
@@ -73,8 +82,10 @@ const ModelPriceGrid: React.FC<{ model: AIModelOption }> = ({ model }) => {
 };
 
 const codexPermissionToCodeAgentMode = (permissionMode: CodexPermissionMode): CodeAgentMode => (
-  permissionMode === 'plan' ? 'plan' : 'acceptEdits'
+  permissionMode
 );
+
+const DEFAULT_CODEX_RUN_SETTINGS = defaultCodexRunSettings();
 
 interface MessageInputAISettingsButtonProps {
   onOpen: () => void;
@@ -127,7 +138,7 @@ interface MessageInputAIControlsProps {
   isCodeAgentRoom?: boolean;
   codeAgentBackend?: CodeAgentBackend;
   codeAgentMode?: CodeAgentMode;
-  codeAgentMaxMode?: CodeAgentMode;
+  codeAgentAvailableModes?: CodeAgentMode[];
   canSwitchCodeAgentMode?: boolean;
   onCodeAgentModeChange?: (mode: CodeAgentMode) => void;
   codexRunSettings?: CodexRunSettings;
@@ -162,10 +173,10 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   isCodeAgentRoom = false,
   codeAgentBackend = 'coco',
   codeAgentMode = 'plan',
-  codeAgentMaxMode = 'plan',
-  canSwitchCodeAgentMode = codeAgentMaxMode === 'acceptEdits',
+  codeAgentAvailableModes = ['plan'],
+  canSwitchCodeAgentMode = codeAgentAvailableModes.length > 1,
   onCodeAgentModeChange,
-  codexRunSettings = defaultCodexRunSettings(),
+  codexRunSettings = DEFAULT_CODEX_RUN_SETTINGS,
   onCodexRunSettingsChange,
 }) => {
   const { t } = useTranslation();
@@ -185,19 +196,22 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   const askActionLabel = isCodeAgentRoom ? t('runAgent') : t('askAI');
   const askActionIcon = isCodeAgentRoom ? 'lucide:bot' : selectedRole.icon;
   const isCodexCodeAgent = isCodeAgentRoom && isCodexCodeAgentBackend(codeAgentBackend);
-  const effectiveCodeAgentMode = codeAgentMaxMode === 'acceptEdits' ? codeAgentMode : 'plan';
-  const canSwitchEffectiveCodeAgentMode = isCodeAgentRoom && codeAgentMaxMode === 'acceptEdits' && canSwitchCodeAgentMode;
+  const effectiveAvailableCodeAgentModes = normalizeCodeAgentModeList(codeAgentAvailableModes);
+  const normalizedCodeAgentMode = normalizeCodeAgentMode(codeAgentMode);
+  const effectiveCodeAgentMode = effectiveAvailableCodeAgentModes.includes(normalizedCodeAgentMode)
+    ? normalizedCodeAgentMode
+    : effectiveAvailableCodeAgentModes[0];
+  const canSwitchEffectiveCodeAgentMode = isCodeAgentRoom && effectiveAvailableCodeAgentModes.length > 1 && canSwitchCodeAgentMode;
   const appliedAIModelId = selectedAIModel || defaultAIModel;
   const selectedRoleDraft = roles.find(role => role.id === selectedRoleIdDraft) || selectedRole;
   const codeAgentModeOptions: Array<{ id: CodeAgentMode; label: string; icon: string }> = [
-    { id: 'plan', label: t('codeAgentReadOnlyMode'), icon: 'lucide:eye' },
-    ...(codeAgentMaxMode === 'acceptEdits'
-      ? [{ id: 'acceptEdits' as const, label: t('codeAgentEditMode'), icon: 'lucide:pencil-ruler' }]
-      : []),
+    ...effectiveAvailableCodeAgentModes.map(mode => ({
+      id: mode,
+      label: t(getCodeAgentModeLabelKey(mode)),
+      icon: getCodeAgentModeIcon(mode),
+    })),
   ];
-  const codexPermissionOptions = codeAgentMaxMode === 'acceptEdits'
-    ? CODEX_PERMISSION_OPTIONS
-    : CODEX_PERMISSION_OPTIONS.filter(option => option.id === 'plan');
+  const codexPermissionOptions = CODEX_PERMISSION_OPTIONS.filter(option => effectiveAvailableCodeAgentModes.includes(option.id));
   const selectedCodexPermissionOption = (
     codexPermissionOptions.find(option => option.id === codexRunSettingsDraft.permissionMode)
     || codexPermissionOptions[0]
@@ -227,13 +241,13 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
     setCodeAgentModeDraft(effectiveCodeAgentMode);
     setCodexRunSettingsDraft({
       ...codexRunSettings,
-      permissionMode: effectiveCodeAgentMode === 'plan'
-        ? 'plan'
-        : codexRunSettings.permissionMode,
+      permissionMode: isCodexCodeAgent
+        ? effectiveCodeAgentMode as CodexPermissionMode
+        : (effectiveCodeAgentMode === 'plan' ? 'plan' : codexRunSettings.permissionMode),
     });
     setPendingPremiumModelId(null);
     setPremiumConfirmationStep(1);
-  }, [aiContextMessageLimit, appliedAIModelId, codexRunSettings, effectiveCodeAgentMode, selectedRoleId, isSettingsOpen]);
+  }, [aiContextMessageLimit, appliedAIModelId, codexRunSettings, effectiveCodeAgentMode, isCodexCodeAgent, selectedRoleId, isSettingsOpen]);
 
   const closePremiumConfirmation = () => {
     setPendingPremiumModelId(null);
@@ -280,8 +294,9 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
       setCodeAgentModeDraft(codexPermissionToCodeAgentMode(selectedKey));
       return;
     }
-    if (selectedKey === 'plan' || selectedKey === 'acceptEdits') {
-      setCodeAgentModeDraft(selectedKey);
+    const selectedMode = normalizeCodeAgentMode(selectedKey);
+    if (effectiveAvailableCodeAgentModes.includes(selectedMode)) {
+      setCodeAgentModeDraft(selectedMode);
     }
   };
   const handleCodexModelSelection = (keys: 'all' | Set<React.Key>) => {
@@ -515,7 +530,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               <div className="space-y-2 rounded-lg border border-[#dedbd0] bg-[#f0eee6] p-3 dark:border-[#30302e] dark:bg-[#242421]">
                 <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[#87867f] dark:text-[#b0aea5]">
                   <Icon
-                    icon={isCodexCodeAgent ? selectedCodexPermissionOption.icon : codeAgentModeDraft === 'plan' ? 'lucide:eye' : 'lucide:pencil-ruler'}
+                    icon={isCodexCodeAgent ? selectedCodexPermissionOption.icon : getCodeAgentModeIcon(codeAgentModeDraft)}
                     className="h-3.5 w-3.5"
                     aria-hidden="true"
                   />
@@ -559,7 +574,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                     ? t('codeAgentModeLockedDescription')
                     : isCodexCodeAgent
                       ? t(selectedCodexPermissionOption.descriptionKey)
-                      : (codeAgentModeDraft === 'plan' ? t('codeAgentReadOnlyDescription') : t('codeAgentEditDescription'))}
+                      : t(getCodeAgentModeDescriptionKey(codeAgentModeDraft))}
                 </p>
               </div>
             )}

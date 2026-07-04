@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Message, Room } from '../utils/types';
 import {
   resetCodeAgentDiffPanelStoreForTests,
@@ -88,6 +88,10 @@ function mockWorkspacePanelMobileLayout(matches: boolean) {
 }
 
 describe('CodeAgentWorkspacePanel', () => {
+  beforeEach(() => {
+    vi.stubGlobal('CSS', { escape: (value: string) => value });
+  });
+
   afterEach(() => {
     cleanup();
     localStorage.clear();
@@ -106,8 +110,8 @@ describe('CodeAgentWorkspacePanel', () => {
       />
     );
 
-    expect(screen.getByText('codeAgentReadOnlyMode')).toBeTruthy();
-    expect(screen.getByText('codeAgentReadOnlyDescription')).toBeTruthy();
+    expect(screen.getByText('codexPermissionPlan')).toBeTruthy();
+    expect(screen.getByText('codexPermissionPlanDescription')).toBeTruthy();
     expect(screen.getByText('codeAgentTools')).toBeTruthy();
     expect(screen.getByText('codeAgentResults')).toBeTruthy();
     expect(screen.getByText('codeAgentErrors')).toBeTruthy();
@@ -117,13 +121,14 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(screen.getByText('codeAgentNoArtifacts')).toBeTruthy();
   });
 
-  it('toggles run mode from the workspace header when switching is available', () => {
+  it('selects run mode from the workspace header when switching is available', async () => {
     const onModeChange = vi.fn();
     render(
       <CodeAgentWorkspacePanel
         room={room}
         messages={[]}
         mode="plan"
+        availableModes={['plan', 'edit']}
         canSwitchMode
         onModeChange={onModeChange}
         sessionCostUsd={0}
@@ -131,8 +136,9 @@ describe('CodeAgentWorkspacePanel', () => {
     );
 
     fireEvent.click(screen.getByTestId('code-agent-mode-toggle'));
+    fireEvent.click(await screen.findByText('codexPermissionEdit'));
 
-    expect(onModeChange).toHaveBeenCalledWith('acceptEdits');
+    expect(onModeChange).toHaveBeenCalledWith('edit');
   });
 
   it('toggles code-agent engine from the workspace header when switching is available', () => {
@@ -203,20 +209,20 @@ describe('CodeAgentWorkspacePanel', () => {
     });
   });
 
-  it('renders acceptEdits mode and derived tool activity', () => {
+  it('renders edit mode and derived tool activity', () => {
     const onRefreshWorkspace = vi.fn();
     render(
       <CodeAgentWorkspacePanel
         room={{ ...room, cocoStatus: 'running' }}
         messages={[toolCall]}
-        mode="acceptEdits"
+        mode="edit"
         sessionCostUsd={0.25}
         onRefreshWorkspace={onRefreshWorkspace}
       />
     );
 
-    expect(screen.getByText('codeAgentEditMode')).toBeTruthy();
-    expect(screen.getByText('codeAgentEditDescription')).toBeTruthy();
+    expect(screen.getByText('codexPermissionEdit')).toBeTruthy();
+    expect(screen.getByText('codexPermissionEditDescription')).toBeTruthy();
 
     fireEvent.click(screen.getByText('codeAgentActivity'));
     expect(screen.getByText('Read')).toBeTruthy();
@@ -265,10 +271,10 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(details.getAttribute('hidden')).toBe('');
     expect(screen.getByText('codeAgentWorkspace')).toBeTruthy();
-    expect(screen.getByText('codeAgentReadOnlyMode')).toBeTruthy();
+    expect(screen.getByText('codexPermissionPlan')).toBeTruthy();
     expect(screen.getByText('sandboxStatusReady')).toBeTruthy();
     expect(screen.getByText('cocoStatusIdle')).toBeTruthy();
-    expect(screen.queryByText('codeAgentReadOnlyDescription')).toBeNull();
+    expect(screen.queryByText('codexPermissionPlanDescription')).toBeNull();
 
     fireEvent.click(toggle);
 
@@ -351,7 +357,7 @@ describe('CodeAgentWorkspacePanel', () => {
       <CodeAgentWorkspacePanel
         room={room}
         messages={[]}
-        mode="acceptEdits"
+        mode="edit"
         sessionCostUsd={0}
         workspaceSnapshot={{
           roomId: 'room-1',
@@ -404,7 +410,7 @@ describe('CodeAgentWorkspacePanel', () => {
       <CodeAgentWorkspacePanel
         room={room}
         messages={[]}
-        mode="acceptEdits"
+        mode="edit"
         sessionCostUsd={0}
         workspaceSnapshot={{
           roomId: 'room-1',
@@ -461,7 +467,7 @@ describe('CodeAgentWorkspacePanel', () => {
       <CodeAgentWorkspacePanel
         room={room}
         messages={[]}
-        mode="acceptEdits"
+        mode="edit"
         sessionCostUsd={0}
         workspaceSnapshot={{
           roomId: 'room-1',
@@ -523,7 +529,7 @@ describe('CodeAgentWorkspacePanel', () => {
       <CodeAgentWorkspacePanel
         room={room}
         messages={[]}
-        mode="acceptEdits"
+        mode="edit"
         sessionCostUsd={0}
         workspaceSnapshot={workspaceSnapshot}
       />
@@ -538,7 +544,7 @@ describe('CodeAgentWorkspacePanel', () => {
       <CodeAgentWorkspacePanel
         room={room}
         messages={[]}
-        mode="acceptEdits"
+        mode="edit"
         sessionCostUsd={0}
         workspaceSnapshot={workspaceSnapshot}
       />
@@ -554,7 +560,7 @@ describe('CodeAgentWorkspacePanel', () => {
       <CodeAgentWorkspacePanel
         room={room}
         messages={[]}
-        mode="acceptEdits"
+        mode="edit"
         sessionCostUsd={0}
         workspaceSnapshot={{
           roomId: 'room-1',
@@ -593,7 +599,7 @@ describe('CodeAgentWorkspacePanel', () => {
       <CodeAgentWorkspacePanel
         room={room}
         messages={[]}
-        mode="acceptEdits"
+        mode="edit"
         sessionCostUsd={0}
         workspaceSnapshot={{
           roomId: 'room-1',
@@ -629,7 +635,7 @@ describe('CodeAgentWorkspacePanel', () => {
       <CodeAgentWorkspacePanel
         room={room}
         messages={[]}
-        mode="acceptEdits"
+        mode="edit"
         sessionCostUsd={0}
         workspaceSnapshot={{
           roomId: 'room-1',

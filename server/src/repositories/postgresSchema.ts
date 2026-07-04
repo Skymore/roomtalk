@@ -34,7 +34,7 @@ export const POSTGRES_SCHEMA_SQL = [
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS code_agent_mode TEXT`,
   `ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_code_agent_mode_check`,
   `ALTER TABLE rooms ADD CONSTRAINT rooms_code_agent_mode_check
-    CHECK (code_agent_mode IS NULL OR code_agent_mode IN ('plan', 'acceptEdits'))`,
+    CHECK (code_agent_mode IS NULL OR code_agent_mode IN ('plan', 'acceptEdits', 'edit', 'approveForMe', 'fullAccess'))`,
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS code_agent_backend TEXT`,
   `ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_code_agent_backend_check`,
   `ALTER TABLE rooms ADD CONSTRAINT rooms_code_agent_backend_check

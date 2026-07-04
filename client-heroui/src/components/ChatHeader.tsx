@@ -17,7 +17,7 @@ import {
 } from '@heroui/react';
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
-import { Room, RoomOnlineMember, RoomPermissions, RoomRenameHandler } from "../utils/types";
+import { CodeAgentMode, Room, RoomOnlineMember, RoomPermissions, RoomRenameHandler } from "../utils/types";
 import { getRoomMembers } from "../utils/socket";
 import { RoomSettingsModal } from './RoomSettingsModal';
 import { useIsTouchDevice } from "../hooks/useIsTouchDevice";
@@ -41,6 +41,8 @@ interface ChatHeaderProps {
   handleRenameRoom: RoomRenameHandler;
   roomPermissions: RoomPermissions | null;
   clientId: string;
+  codeAgentAvailableModes?: CodeAgentMode[];
+  codeAgentDefaultMode?: CodeAgentMode;
   onRoomUpdated: (room: Room) => void;
 }
 
@@ -60,6 +62,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   handleRenameRoom,
   roomPermissions,
   clientId,
+  codeAgentAvailableModes,
+  codeAgentDefaultMode,
   onRoomUpdated,
 }) => {
   const { t } = useTranslation();
@@ -290,6 +294,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
       onRenameRoom={handleRenameRoom}
       onClearHistory={handleClearChatMessages}
       onDeleteRoom={handleDeleteRoom}
+      codeAgentAvailableModes={codeAgentAvailableModes}
+      codeAgentDefaultMode={codeAgentDefaultMode}
       onRoomUpdated={onRoomUpdated}
     />
     <Modal isOpen={isScheduleOpen} onClose={() => setIsScheduleOpen(false)} size="sm">

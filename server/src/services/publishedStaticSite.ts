@@ -3,6 +3,7 @@ import path from 'path';
 import { Logger } from '../logger';
 import { MediaObjectStorage } from './mediaObjectStorage';
 import { CodeAgentRunnerMode } from './codeAgentRunnerProtocol';
+import { codeAgentModeAllowsStaticPublish, normalizeCodeAgentMode } from './codeAgentModes';
 
 export const COCO_STATIC_PUBLISH_API_PATH = '/api/coco/publish-static-site';
 export const COCO_STATIC_PUBLISH_ROUTE_PREFIX = '/p';
@@ -390,7 +391,7 @@ export class PublishedStaticSiteService {
         typeof claims.roomId !== 'string' ||
         typeof claims.clientId !== 'string' ||
         typeof claims.turnId !== 'string' ||
-        (claims.mode !== 'plan' && claims.mode !== 'acceptEdits') ||
+        !normalizeCodeAgentMode(claims.mode) ||
         typeof claims.exp !== 'number'
       ) {
         return null;
@@ -408,8 +409,8 @@ export class PublishedStaticSiteService {
     if (!this.isConfigured()) {
       throw new PublishedStaticSiteError('Static site publishing is not configured', 503);
     }
-    if (claims.mode !== 'acceptEdits') {
-      throw new PublishedStaticSiteError('Static site publishing requires edit mode', 403);
+    if (!codeAgentModeAllowsStaticPublish(claims.mode)) {
+      throw new PublishedStaticSiteError('Static site publishing requires full access mode', 403);
     }
     if (input.roomId !== claims.roomId || input.turnId !== claims.turnId) {
       throw new PublishedStaticSiteError('Publish token does not match this Coco turn', 403);

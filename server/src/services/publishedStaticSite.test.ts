@@ -55,13 +55,13 @@ describe('PublishedStaticSiteService', () => {
       roomId: 'room-1',
       clientId: 'client-1',
       turnId: 'turn-1',
-      mode: 'acceptEdits',
+      mode: 'fullAccess',
     });
 
     const claims = service.verifyTurnToken(token);
     assert.equal(claims?.roomId, 'room-1');
     assert.equal(claims?.clientId, 'client-1');
-    assert.equal(claims?.mode, 'acceptEdits');
+    assert.equal(claims?.mode, 'fullAccess');
     assert.equal(service.verifyTurnToken(`${token}x`), null);
 
     now += 16 * 60 * 1000;
@@ -74,7 +74,7 @@ describe('PublishedStaticSiteService', () => {
       roomId: 'room-1',
       clientId: 'client-1',
       turnId: 'turn-1',
-      mode: 'acceptEdits',
+      mode: 'fullAccess',
     });
     const claims = service.verifyTurnToken(token)!;
 
@@ -118,7 +118,7 @@ describe('PublishedStaticSiteService', () => {
       roomId: 'room-1',
       clientId: 'client-1',
       turnId: 'turn-1',
-      mode: 'acceptEdits',
+      mode: 'fullAccess',
     }))!;
 
     await service.publish({
@@ -243,7 +243,7 @@ describe('PublishedStaticSiteService', () => {
       roomId: 'room-1',
       clientId: 'client-1',
       turnId: 'turn-1',
-      mode: 'acceptEdits',
+      mode: 'fullAccess',
     }))!;
 
     await service.publish({
@@ -282,7 +282,7 @@ describe('PublishedStaticSiteService', () => {
       roomId: 'room-1',
       clientId: 'client-1',
       turnId: 'turn-1',
-      mode: 'acceptEdits',
+      mode: 'fullAccess',
     }))!;
 
     await assert.rejects(
@@ -319,7 +319,7 @@ describe('PublishedStaticSiteService', () => {
       roomId: 'room-2',
       clientId: 'client-2',
       turnId: 'turn-2',
-      mode: 'acceptEdits',
+      mode: 'fullAccess',
     }))!;
 
     await assert.rejects(
@@ -349,7 +349,7 @@ describe('PublishedStaticSiteService', () => {
         turnId: 'turn-1',
         files: [textFile('index.html', '<!doctype html>')],
       }, claims),
-      /requires edit mode/
+      /requires full access mode/
     );
   });
 });
