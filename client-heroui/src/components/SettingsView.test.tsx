@@ -113,6 +113,7 @@ describe('SettingsView Codex connection controls', () => {
 
     await waitFor(() => expect(codexApiMock.startCodexDeviceAuth).toHaveBeenCalledWith('client-1'));
     expect((await screen.findAllByText('ABCD-EFGH')).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText('codexDeviceCodeInstruction')).length).toBeGreaterThan(0);
     expect(screen.getByText('codexLoginTitle')).toBeTruthy();
     expect(window.open).toHaveBeenCalledWith('https://auth.openai.com/codex/device', '_blank', 'noopener,noreferrer');
   });

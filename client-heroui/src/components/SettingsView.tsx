@@ -879,6 +879,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
                 {codexDeviceAuth && (
                   <div className="grid gap-2 rounded-lg bg-[#e8e6dc] p-3 dark:bg-[#242423]">
+                    <p className="text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">
+                      {t("codexDeviceCodeInstruction")}
+                    </p>
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-xs font-medium uppercase text-[#77756f] dark:text-[#b0aea5]">
                         {t("codexDeviceCode")}
@@ -1075,6 +1078,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     {codexDeviceAuth.code}
                   </code>
                 </div>
+                <p className="text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">
+                  {t("codexDeviceCodeInstruction")}
+                </p>
                 {codexExpiryLabel && (
                   <p className="text-xs leading-5 text-[#77756f] dark:text-[#b0aea5]">
                     {codexExpiryLabel}
@@ -1084,24 +1090,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             )}
           </div>
         </ModalBody>
-        <ModalFooter>
-          <Button
-            variant="light"
-            isLoading={isUpdatingCodex}
-            startContent={!isUpdatingCodex ? <Icon icon="lucide:x" /> : undefined}
-            onPress={handleCancelCodexDeviceAuth}
-          >
-            {t("cancelCodexLogin")}
-          </Button>
-          {codexDeviceAuth && (
-            <Button
-              variant="flat"
-              startContent={<Icon icon="lucide:copy" />}
-              onPress={handleCopyCodexDeviceCode}
-            >
-              {t("copyCodexDeviceCode")}
-            </Button>
-          )}
+        <ModalFooter className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {codexDeviceAuth && (
             <Button
               as="a"
@@ -1109,12 +1098,31 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               target="_blank"
               rel="noreferrer"
               color="secondary"
-              className="bg-[#c96442] text-[#faf9f5]"
+              className="min-w-0 bg-[#c96442] text-[#faf9f5] sm:col-span-2"
               startContent={<Icon icon="lucide:external-link" />}
             >
-              {t("openCodexLogin")}
+              {t("openCodexLoginShort")}
             </Button>
           )}
+          {codexDeviceAuth && (
+            <Button
+              variant="flat"
+              className="min-w-0"
+              startContent={<Icon icon="lucide:copy" />}
+              onPress={handleCopyCodexDeviceCode}
+            >
+              {t("copyCodexDeviceCodeShort")}
+            </Button>
+          )}
+          <Button
+            variant="light"
+            className="min-w-0"
+            isLoading={isUpdatingCodex}
+            startContent={!isUpdatingCodex ? <Icon icon="lucide:x" /> : undefined}
+            onPress={handleCancelCodexDeviceAuth}
+          >
+            {t("cancelCodexLogin")}
+          </Button>
         </ModalFooter>
       </ModalContent>
     </Modal>
