@@ -4,7 +4,7 @@ import { AIModelOption } from '../types';
 import { DEFAULT_AI_MODEL_ID, createAIModelRegistry } from '../services/aiModels';
 import { CODE_AGENT_RUNNER_SCHEMA_VERSION } from '../services/codeAgentRunnerProtocol';
 import { JsonlCodeAgentRunnerClient } from '../services/jsonlCodeAgentRunner';
-import { resolveCocoRuntimeConfig, CocoRuntimeConfig } from '../services/cocoRuntimeConfig';
+import { resolveCodeAgentRuntimeConfig, CodeAgentRuntimeConfig } from '../services/codeAgentRuntimeConfig';
 import { E2BCocoSandboxService } from '../services/e2bCocoSandboxService';
 import { createE2BSdkDriver } from '../services/e2bSdkDriver';
 
@@ -16,7 +16,7 @@ type CocoE2BSmokePlan =
   | { run: false; reason: string }
   | {
     run: true;
-    config: CocoRuntimeConfig;
+    config: CodeAgentRuntimeConfig;
     e2bTemplateId: string;
     selectedModel: AIModelOption;
     runnerEnv: Record<string, string>;
@@ -54,7 +54,7 @@ export const buildCocoE2BSmokePlan = (env: NodeJS.ProcessEnv): CocoE2BSmokePlan 
     COCO_RUNNER_CLIENT: 'jsonl',
     COCO_MODE: env.COCO_MODE || 'plan',
   };
-  const config = resolveCocoRuntimeConfig(smokeEnv);
+  const config = resolveCodeAgentRuntimeConfig(smokeEnv);
   const registry = createAIModelRegistry({
     defaultModelId: env.AI_MODEL || env.OPENROUTER_MODEL || DEFAULT_AI_MODEL_ID,
   });

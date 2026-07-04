@@ -4,15 +4,15 @@ import { CocoSandboxProvider } from './cocoSandboxService';
 import { CodeAgentRunnerMode } from './codeAgentRunnerProtocol';
 
 export type CodeAgentRunnerClientKind = 'fake' | 'jsonl';
-export type CocoArtifactMode = 'production' | 'development';
-export type CocoE2BOnTimeout = 'kill' | 'pause';
+export type CodeAgentArtifactMode = 'production' | 'development';
+export type CodeAgentE2BOnTimeout = 'kill' | 'pause';
 
-export interface CocoRuntimeConfig {
+export interface CodeAgentRuntimeConfig {
   enabled: boolean;
   backend: CodeAgentBackend;
   sandboxProvider: CocoSandboxProvider;
   runnerClient: CodeAgentRunnerClientKind;
-  artifactMode: CocoArtifactMode;
+  artifactMode: CodeAgentArtifactMode;
   artifactVersion?: string;
   cocoSourceRef?: string;
   allowedClientIds: string[];
@@ -33,7 +33,7 @@ export interface CocoRuntimeConfig {
   e2bTemplateId?: string;
   e2bWorkspace?: string;
   e2bLifecycle: {
-    onTimeout: CocoE2BOnTimeout;
+    onTimeout: CodeAgentE2BOnTimeout;
     autoResume: boolean;
     keepMemory: boolean;
   };
@@ -103,7 +103,7 @@ const defaultRunnerCommandForBackend = (backend: CodeAgentBackend) => (
   backend === 'codex' ? DEFAULT_CODEX_CLI_RUNNER_COMMAND : DEFAULT_COCO_RUNNER_COMMAND
 );
 
-const readArtifactMode = (env: NodeJS.ProcessEnv): CocoArtifactMode => {
+const readArtifactMode = (env: NodeJS.ProcessEnv): CodeAgentArtifactMode => {
   const value = (env.COCO_ARTIFACT_MODE || 'production').toLowerCase();
   if (value === 'production' || value === 'development') {
     return value;
@@ -111,7 +111,7 @@ const readArtifactMode = (env: NodeJS.ProcessEnv): CocoArtifactMode => {
   throw new Error(`Unsupported COCO_ARTIFACT_MODE: ${value}`);
 };
 
-const readE2BOnTimeout = (env: NodeJS.ProcessEnv): CocoE2BOnTimeout => {
+const readE2BOnTimeout = (env: NodeJS.ProcessEnv): CodeAgentE2BOnTimeout => {
   const value = (env.COCO_E2B_ON_TIMEOUT || 'pause').trim();
   if (value === 'pause' || value === 'kill') {
     return value;
@@ -119,7 +119,7 @@ const readE2BOnTimeout = (env: NodeJS.ProcessEnv): CocoE2BOnTimeout => {
   throw new Error(`Unsupported COCO_E2B_ON_TIMEOUT: ${value}`);
 };
 
-const readE2BLifecycle = (env: NodeJS.ProcessEnv): CocoRuntimeConfig['e2bLifecycle'] => {
+const readE2BLifecycle = (env: NodeJS.ProcessEnv): CodeAgentRuntimeConfig['e2bLifecycle'] => {
   const onTimeout = readE2BOnTimeout(env);
   const keepMemory = parseBooleanEnv(env.COCO_E2B_KEEP_MEMORY, true);
   const autoResume = parseBooleanEnv(env.COCO_E2B_AUTO_RESUME, onTimeout === 'pause');
@@ -241,7 +241,7 @@ const usesOutOfBandModelAccess = (env: NodeJS.ProcessEnv) => (
   env.COCO_SCOPED_PROVIDER_KEY === 'true'
 );
 
-const hasApprovedModelAccess = (config: CocoRuntimeConfig, env: NodeJS.ProcessEnv) => {
+const hasApprovedModelAccess = (config: CodeAgentRuntimeConfig, env: NodeJS.ProcessEnv) => {
   if (config.modelGateway) {
     return true;
   }
@@ -302,7 +302,7 @@ const parsePositiveNumberEnv = (env: NodeJS.ProcessEnv, name: string, fallback: 
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
-const readModelGatewayConfig = (env: NodeJS.ProcessEnv): CocoRuntimeConfig['modelGateway'] | undefined => {
+const readModelGatewayConfig = (env: NodeJS.ProcessEnv): CodeAgentRuntimeConfig['modelGateway'] | undefined => {
   if (!hasRoomTalkModelGatewaySettings(env)) {
     return undefined;
   }
@@ -331,7 +331,7 @@ const readModelGatewayConfig = (env: NodeJS.ProcessEnv): CocoRuntimeConfig['mode
   };
 };
 
-const validateEnabledConfig = (config: CocoRuntimeConfig, env: NodeJS.ProcessEnv) => {
+const validateEnabledConfig = (config: CodeAgentRuntimeConfig, env: NodeJS.ProcessEnv) => {
   if (config.runnerClient === 'jsonl' && config.sandboxProvider === 'fake') {
     throw new Error('COCO_RUNNER_CLIENT=jsonl requires a non-fake sandbox provider');
   }
@@ -395,7 +395,7 @@ const validateEnabledConfig = (config: CocoRuntimeConfig, env: NodeJS.ProcessEnv
   }
 };
 
-export const resolveCocoRuntimeConfig = (env: NodeJS.ProcessEnv): CocoRuntimeConfig => {
+export const resolveCodeAgentRuntimeConfig = (env: NodeJS.ProcessEnv): CodeAgentRuntimeConfig => {
   const availableModes = readAvailableModes(env);
   const defaultMode = readDefaultMode(env, availableModes);
   const mode = highestAvailableMode(availableModes);
@@ -405,7 +405,7 @@ export const resolveCocoRuntimeConfig = (env: NodeJS.ProcessEnv): CocoRuntimeCon
   const artifactMode = readArtifactMode(env);
   const e2bLifecycle = readE2BLifecycle(env);
   const modelGateway = readModelGatewayConfig(env);
-  const config: CocoRuntimeConfig = {
+  const config: CodeAgentRuntimeConfig = {
     enabled: env.COCO_ENABLED === 'true',
     backend,
     sandboxProvider,

@@ -5,7 +5,7 @@ import type { AIModelOption } from '../types';
 import type { AIClientWrapper } from '../services/aiClients';
 import type { CocoAccessControl } from '../services/cocoAccessControl';
 import type { CocoSandboxService } from '../services/cocoSandboxService';
-import type { CocoSessionService } from '../services/cocoSessionService';
+import type { CodeAgentSessionService } from '../services/codeAgentSessionService';
 import type { CodeWorkspaceAssetAccess } from '../services/codeWorkspaceAssetAccess';
 import type { PublishedStaticSiteService } from '../services/publishedStaticSite';
 
@@ -18,7 +18,7 @@ export interface SocketHandlerDeps {
   getAIClientForModel: (model: AIModelOption) => AIClientWrapper;
   aiStreamOwnerId?: string;
   assemblyAIApiKey?: string;
-  cocoSessionService?: CocoSessionService;
+  codeAgentSessionService?: CodeAgentSessionService;
   cocoAccess?: CocoAccessControl;
   cocoSandboxService?: CocoSandboxService;
   codeWorkspaceAssetAccess?: CodeWorkspaceAssetAccess;

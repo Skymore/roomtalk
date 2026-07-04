@@ -1,7 +1,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { buildCodexE2BSmokePlan } from './codexE2BSmoke';
-import { DEFAULT_CODEX_CLI_RUNNER_COMMAND } from '../services/cocoRuntimeConfig';
+import { DEFAULT_CODEX_CLI_RUNNER_COMMAND } from '../services/codeAgentRuntimeConfig';
 
 const baseEnv = {
   RUN_CODEX_E2B_SMOKE: 'true',

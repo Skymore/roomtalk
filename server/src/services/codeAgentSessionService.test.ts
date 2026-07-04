@@ -4,12 +4,12 @@ import { Logger } from '../logger';
 import { AIModelOption, Message, Room, RoomAICostTotal } from '../types';
 import { CodeAgentRunnerAdapter, CodeAgentBackend } from './codeAgentRunner';
 import { CocoSandboxLifecycleService } from './cocoSandboxLifecycle';
-import { CocoSessionService } from './cocoSessionService';
+import { CodeAgentSessionService } from './codeAgentSessionService';
 import { CODE_AGENT_RUNNER_SCHEMA_VERSION, CodeAgentRunnerEvent, CodeAgentRunnerRunRequest } from './codeAgentRunnerProtocol';
 import { CodeAgentRunnerClient, CodeAgentRunnerRunResult } from './fakeCodeAgentRunner';
 import { FakeCodeAgentRunnerClient } from './fakeCodeAgentRunner';
 import { FakeCocoSandboxService } from './fakeCocoSandboxService';
-import { DEFAULT_CODEX_CLI_RUNNER_COMMAND, DEFAULT_COCO_RUNNER_COMMAND } from './cocoRuntimeConfig';
+import { DEFAULT_CODEX_CLI_RUNNER_COMMAND, DEFAULT_COCO_RUNNER_COMMAND } from './codeAgentRuntimeConfig';
 import { CocoModelGateway, InMemoryCocoModelGatewayTokenStateStore } from './cocoModelGateway';
 import { PublishedStaticSiteService } from './publishedStaticSite';
 import { MemoryMediaObjectStorage } from '../testUtils/memoryMediaObjectStorage';
@@ -253,7 +253,7 @@ const createService = (options: {
     maxActiveSandboxesPerUser: 10,
   }, () => new Date('2026-05-03T00:00:00.000Z'));
   const ids = [...(options.ids || ['ai-1', 'turn-1', 'status-1', 'result-1', 'error-1'])];
-  const service = new CocoSessionService(
+  const service = new CodeAgentSessionService(
     store as any,
     emitter,
     lifecycle,
@@ -284,7 +284,7 @@ const createService = (options: {
   return { emitter, lifecycle, sandboxService, service, store };
 };
 
-describe('CocoSessionService', () => {
+describe('CodeAgentSessionService', () => {
   it('runs a full fake Coco turn and persists runner events', async () => {
     const runner = new FakeCodeAgentRunnerClient([
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'status', turnId: 'turn-1', status: 'starting', message: 'starting' },

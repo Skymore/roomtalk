@@ -7,8 +7,8 @@ import {
   DEFAULT_CODEX_CLI_RUNNER_COMMAND,
   DEFAULT_COCO_RUNNER_PYTHONPATH,
   DEFAULT_COCO_WORKSPACE_ROOT,
-  resolveCocoRuntimeConfig,
-} from './cocoRuntimeConfig';
+  resolveCodeAgentRuntimeConfig,
+} from './codeAgentRuntimeConfig';
 
 const pinnedArtifactEnv = {
   COCO_ARTIFACT_VERSION: 'roomtalk-coco-2026-06-28-a4e70e6',
@@ -32,9 +32,9 @@ const modelProxyEnv = {
   COCO_MODEL_PROXY_TOKEN: 'short-lived-proxy-token',
 };
 
-describe('resolveCocoRuntimeConfig', () => {
+describe('resolveCodeAgentRuntimeConfig', () => {
   it('defaults to disabled fake sandbox and fake runner', () => {
-    const config = resolveCocoRuntimeConfig({});
+    const config = resolveCodeAgentRuntimeConfig({});
 
     assert.equal(config.enabled, false);
     assert.equal(config.backend, 'coco');
@@ -54,25 +54,25 @@ describe('resolveCocoRuntimeConfig', () => {
   });
 
   it('accepts only implemented code-agent backends', () => {
-    assert.equal(resolveCocoRuntimeConfig({ CODE_AGENT_BACKEND: 'coco' }).backend, 'coco');
+    assert.equal(resolveCodeAgentRuntimeConfig({ CODE_AGENT_BACKEND: 'coco' }).backend, 'coco');
     assert.throws(
-      () => resolveCocoRuntimeConfig({ CODE_AGENT_BACKEND: 'codex' }),
+      () => resolveCodeAgentRuntimeConfig({ CODE_AGENT_BACKEND: 'codex' }),
       /CODE_AGENT_BACKEND=codex requires CODEX_CLI_BACKEND_ENABLED=true/
     );
-    assert.equal(resolveCocoRuntimeConfig({
+    assert.equal(resolveCodeAgentRuntimeConfig({
       CODE_AGENT_BACKEND: 'codex',
       CODEX_CLI_BACKEND_ENABLED: 'true',
     }).backend, 'codex');
-    assert.equal(resolveCocoRuntimeConfig({
+    assert.equal(resolveCodeAgentRuntimeConfig({
       CODE_AGENT_BACKEND: 'codex',
       CODEX_CLI_BACKEND_ENABLED: 'true',
     }).runnerCommand, DEFAULT_CODEX_CLI_RUNNER_COMMAND);
-    assert.equal(resolveCocoRuntimeConfig({
+    assert.equal(resolveCodeAgentRuntimeConfig({
       CODE_AGENT_BACKEND: 'codex',
       CODEX_CLI_BACKEND_ENABLED: 'true',
       COCO_RUNNER_COMMAND: 'custom runner',
     }).runnerCommand, 'custom runner');
-    assert.throws(() => resolveCocoRuntimeConfig({ CODE_AGENT_BACKEND: 'unknown' }), /Unsupported CODE_AGENT_BACKEND: unknown/);
+    assert.throws(() => resolveCodeAgentRuntimeConfig({ CODE_AGENT_BACKEND: 'unknown' }), /Unsupported CODE_AGENT_BACKEND: unknown/);
   });
 
   it('falls back to plan mode and warns when COCO_MODE is invalid', () => {
@@ -83,7 +83,7 @@ describe('resolveCocoRuntimeConfig', () => {
     };
 
     try {
-      const config = resolveCocoRuntimeConfig({ COCO_MODE: 'accept_edits' });
+      const config = resolveCodeAgentRuntimeConfig({ COCO_MODE: 'accept_edits' });
 
       assert.equal(config.mode, 'plan');
       assert.deepEqual(config.availableModes, ['plan']);
@@ -95,7 +95,7 @@ describe('resolveCocoRuntimeConfig', () => {
   });
 
   it('supports explicit per-turn mode availability with plan as the default', () => {
-    const config = resolveCocoRuntimeConfig({
+    const config = resolveCodeAgentRuntimeConfig({
       COCO_ALLOWED_RUN_MODES: 'acceptEdits',
     });
 
@@ -103,23 +103,23 @@ describe('resolveCocoRuntimeConfig', () => {
     assert.deepEqual(config.availableModes, ['plan', 'acceptEdits']);
     assert.equal(config.defaultMode, 'plan');
 
-    const editDefault = resolveCocoRuntimeConfig({
+    const editDefault = resolveCodeAgentRuntimeConfig({
       COCO_ALLOWED_RUN_MODES: 'plan,acceptEdits',
       COCO_DEFAULT_MODE: 'acceptEdits',
     });
     assert.equal(editDefault.defaultMode, 'acceptEdits');
 
-    assert.throws(() => resolveCocoRuntimeConfig({
+    assert.throws(() => resolveCodeAgentRuntimeConfig({
       COCO_ALLOWED_RUN_MODES: 'plan,writeEverything',
     }), /Unsupported COCO_ALLOWED_RUN_MODES entry/);
-    assert.throws(() => resolveCocoRuntimeConfig({
+    assert.throws(() => resolveCodeAgentRuntimeConfig({
       COCO_ALLOWED_RUN_MODES: 'plan',
       COCO_DEFAULT_MODE: 'acceptEdits',
     }), /must be included in COCO_ALLOWED_RUN_MODES/);
   });
 
   it('rejects jsonl runner with fake sandbox when Coco is enabled', () => {
-    assert.throws(() => resolveCocoRuntimeConfig({
+    assert.throws(() => resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_RUNNER_CLIENT: 'jsonl',
       COCO_MODE: 'plan',
@@ -127,14 +127,14 @@ describe('resolveCocoRuntimeConfig', () => {
   });
 
   it('rejects E2B fake-runner pairing outside explicit test mode', () => {
-    assert.throws(() => resolveCocoRuntimeConfig({
+    assert.throws(() => resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'fake',
       COCO_E2B_TEMPLATE_ID: 'roomtalk-coco',
     }), /requires COCO_RUNNER_CLIENT=jsonl/);
 
-    const testConfig = resolveCocoRuntimeConfig({
+    const testConfig = resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'fake',
@@ -146,7 +146,7 @@ describe('resolveCocoRuntimeConfig', () => {
   });
 
   it('rejects E2B without a template id', () => {
-    assert.throws(() => resolveCocoRuntimeConfig({
+    assert.throws(() => resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
@@ -156,7 +156,7 @@ describe('resolveCocoRuntimeConfig', () => {
   });
 
   it('requires pinned production artifact metadata for E2B JSONL mode', () => {
-    assert.throws(() => resolveCocoRuntimeConfig({
+    assert.throws(() => resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
@@ -165,7 +165,7 @@ describe('resolveCocoRuntimeConfig', () => {
       ...e2bCredentialEnv,
     }), /requires COCO_ARTIFACT_VERSION and COCO_SOURCE_REF/);
 
-    assert.throws(() => resolveCocoRuntimeConfig({
+    assert.throws(() => resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
@@ -178,7 +178,7 @@ describe('resolveCocoRuntimeConfig', () => {
   });
 
   it('requires E2B credentials for enabled E2B JSONL mode', () => {
-    assert.throws(() => resolveCocoRuntimeConfig({
+    assert.throws(() => resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
@@ -189,7 +189,7 @@ describe('resolveCocoRuntimeConfig', () => {
   });
 
   it('configures E2B pause and auto-resume lifecycle with safe validation', () => {
-    const paused = resolveCocoRuntimeConfig({
+    const paused = resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
@@ -199,30 +199,30 @@ describe('resolveCocoRuntimeConfig', () => {
     });
     assert.deepEqual(paused.e2bLifecycle, { onTimeout: 'pause', autoResume: true, keepMemory: true });
 
-    const kill = resolveCocoRuntimeConfig({
+    const kill = resolveCodeAgentRuntimeConfig({
       COCO_E2B_ON_TIMEOUT: 'kill',
       COCO_E2B_AUTO_RESUME: 'false',
     });
     assert.deepEqual(kill.e2bLifecycle, { onTimeout: 'kill', autoResume: false, keepMemory: true });
 
-    assert.throws(() => resolveCocoRuntimeConfig({
+    assert.throws(() => resolveCodeAgentRuntimeConfig({
       COCO_E2B_ON_TIMEOUT: 'kill',
       COCO_E2B_AUTO_RESUME: 'true',
     }), /requires COCO_E2B_ON_TIMEOUT=pause/);
 
-    assert.throws(() => resolveCocoRuntimeConfig({
+    assert.throws(() => resolveCodeAgentRuntimeConfig({
       COCO_E2B_ON_TIMEOUT: 'pause',
       COCO_E2B_KEEP_MEMORY: 'false',
       COCO_E2B_AUTO_RESUME: 'true',
     }), /requires COCO_E2B_KEEP_MEMORY=true/);
 
-    assert.throws(() => resolveCocoRuntimeConfig({
+    assert.throws(() => resolveCodeAgentRuntimeConfig({
       COCO_E2B_ON_TIMEOUT: 'hibernate',
     }), /Unsupported COCO_E2B_ON_TIMEOUT/);
   });
 
   it('allows local Coco source mounts only in development artifact mode', () => {
-    assert.throws(() => resolveCocoRuntimeConfig({
+    assert.throws(() => resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
@@ -232,7 +232,7 @@ describe('resolveCocoRuntimeConfig', () => {
       ...e2bCredentialEnv,
     }), /requires COCO_SOURCE_DIR/);
 
-    const config = resolveCocoRuntimeConfig({
+    const config = resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
@@ -251,7 +251,7 @@ describe('resolveCocoRuntimeConfig', () => {
   });
 
   it('allows JSONL plan mode with E2B and only selected allowlisted env groups', () => {
-    const config = resolveCocoRuntimeConfig({
+    const config = resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
@@ -282,7 +282,7 @@ describe('resolveCocoRuntimeConfig', () => {
   });
 
   it('rejects JSONL acceptEdits/write/Shell without proxy or scoped-key model access', () => {
-    assert.throws(() => resolveCocoRuntimeConfig({
+    assert.throws(() => resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
@@ -292,7 +292,7 @@ describe('resolveCocoRuntimeConfig', () => {
       ...pinnedArtifactEnv,
     }), /requires RoomTalk model gateway, model proxy with token, or scoped provider key contract/);
 
-    assert.throws(() => resolveCocoRuntimeConfig({
+    assert.throws(() => resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
@@ -303,7 +303,7 @@ describe('resolveCocoRuntimeConfig', () => {
       ...pinnedArtifactEnv,
     }), /requires RoomTalk model gateway, model proxy with token, or scoped provider key contract/);
 
-    assert.throws(() => resolveCocoRuntimeConfig({
+    assert.throws(() => resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
@@ -314,7 +314,7 @@ describe('resolveCocoRuntimeConfig', () => {
       ...pinnedArtifactEnv,
     }), /requires HTTPS COCO_MODEL_PROXY_URL and COCO_MODEL_PROXY_TOKEN/);
 
-    assert.throws(() => resolveCocoRuntimeConfig({
+    assert.throws(() => resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
@@ -326,7 +326,7 @@ describe('resolveCocoRuntimeConfig', () => {
       ...pinnedArtifactEnv,
     }), /requires HTTPS COCO_MODEL_PROXY_URL and COCO_MODEL_PROXY_TOKEN/);
 
-    assert.throws(() => resolveCocoRuntimeConfig({
+    assert.throws(() => resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
@@ -339,20 +339,20 @@ describe('resolveCocoRuntimeConfig', () => {
       ...pinnedArtifactEnv,
     }), /require COCO_MODEL_ACCESS_STRATEGY=proxy/);
 
-    assert.throws(() => resolveCocoRuntimeConfig({
+    assert.throws(() => resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_MODEL_PROXY_URL: 'https://model-proxy.internal',
       COCO_MODEL_PROXY_TOKEN: 'short-lived-proxy-token',
     }), /require COCO_MODEL_ACCESS_STRATEGY=proxy/);
 
-    assert.throws(() => resolveCocoRuntimeConfig({
+    assert.throws(() => resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_MODEL_ACCESS_STRATEGY: 'proxy',
       COCO_MODEL_PROXY_URL: 'http://model-proxy.internal',
       COCO_MODEL_PROXY_TOKEN: 'short-lived-proxy-token',
     }), /requires HTTPS COCO_MODEL_PROXY_URL and COCO_MODEL_PROXY_TOKEN/);
 
-    assert.throws(() => resolveCocoRuntimeConfig({
+    assert.throws(() => resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
@@ -364,7 +364,7 @@ describe('resolveCocoRuntimeConfig', () => {
       ...pinnedArtifactEnv,
     }), /requires HTTPS COCO_MODEL_PROXY_URL and COCO_MODEL_PROXY_TOKEN/);
 
-    assert.throws(() => resolveCocoRuntimeConfig({
+    assert.throws(() => resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
@@ -375,7 +375,7 @@ describe('resolveCocoRuntimeConfig', () => {
       ...pinnedArtifactEnv,
     }), /requires TTL, budget, and audit id/);
 
-    const scoped = resolveCocoRuntimeConfig({
+    const scoped = resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
@@ -392,7 +392,7 @@ describe('resolveCocoRuntimeConfig', () => {
   });
 
   it('allows JSONL acceptEdits through the built-in RoomTalk model gateway', () => {
-    const config = resolveCocoRuntimeConfig({
+    const config = resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
@@ -421,7 +421,7 @@ describe('resolveCocoRuntimeConfig', () => {
   });
 
   it('does not forward provider keys in plan mode when a scoped key or proxy is configured', () => {
-    const scoped = resolveCocoRuntimeConfig({
+    const scoped = resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
@@ -434,7 +434,7 @@ describe('resolveCocoRuntimeConfig', () => {
     });
     assert.deepEqual(scoped.runnerProviderEnvByProvider, {});
 
-    const proxied = resolveCocoRuntimeConfig({
+    const proxied = resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',
@@ -455,7 +455,7 @@ describe('resolveCocoRuntimeConfig', () => {
   });
 
   it('allows JSONL acceptEdits through an explicit model proxy configuration', () => {
-    const proxy = resolveCocoRuntimeConfig({
+    const proxy = resolveCodeAgentRuntimeConfig({
       COCO_ENABLED: 'true',
       COCO_SANDBOX_PROVIDER: 'e2b',
       COCO_RUNNER_CLIENT: 'jsonl',

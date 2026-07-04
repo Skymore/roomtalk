@@ -565,9 +565,9 @@ async function createTestServer(overrides: {
     googleClientIds: overrides.googleClientIds,
     verifyGoogleCredential: overrides.verifyGoogleCredential,
     cocoAccess: overrides.cocoAccess ?? createCocoAccessControl({ enabled: true }),
-    cocoMode: 'acceptEdits',
-    cocoAvailableModes: ['plan', 'acceptEdits'],
-    cocoDefaultMode: 'plan',
+    codeAgentMode: 'acceptEdits',
+    codeAgentAvailableModes: ['plan', 'acceptEdits'],
+    codeAgentDefaultMode: 'plan',
     mediaUploadCleanup: overrides.mediaUploadCleanup,
   });
 

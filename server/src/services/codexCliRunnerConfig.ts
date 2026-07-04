@@ -1,5 +1,5 @@
 import { assertNoCodexApiKeyAuthEnv, type CodexConnectionConfig } from './codexConnectionConfig';
-import type { CocoRuntimeConfig } from './cocoRuntimeConfig';
+import type { CodeAgentRuntimeConfig } from './codeAgentRuntimeConfig';
 
 export interface CodexCliRunnerConfig {
   enabled: boolean;
@@ -46,14 +46,14 @@ export function resolveCodexCliRunnerConfig(env: NodeJS.ProcessEnv = process.env
 }
 
 export interface CodexBackendStartupGateInput {
-  cocoRuntimeConfig: Pick<CocoRuntimeConfig, 'backend'>;
+  codeAgentRuntimeConfig: Pick<CodeAgentRuntimeConfig, 'backend'>;
   codexCliRunnerConfig: Pick<CodexCliRunnerConfig, 'enabled'>;
   codexConnectionConfig: Pick<CodexConnectionConfig, 'enabled'>;
   hasCodexConnectionService: boolean;
 }
 
 export function assertCodexBackendStartupGate(input: CodexBackendStartupGateInput): void {
-  if (input.cocoRuntimeConfig.backend !== 'codex') {
+  if (input.codeAgentRuntimeConfig.backend !== 'codex') {
     return;
   }
   if (!input.codexCliRunnerConfig.enabled) {

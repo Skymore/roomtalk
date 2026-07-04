@@ -7,7 +7,7 @@ import { AIModelOption } from '../types';
 import { DEFAULT_AI_MODEL_ID, createAIModelRegistry } from '../services/aiModels';
 import { resolveCodexCliRunnerConfig } from '../services/codexCliRunnerConfig';
 import { CODE_AGENT_RUNNER_SCHEMA_VERSION } from '../services/codeAgentRunnerProtocol';
-import { resolveCocoRuntimeConfig, CocoRuntimeConfig } from '../services/cocoRuntimeConfig';
+import { resolveCodeAgentRuntimeConfig, CodeAgentRuntimeConfig } from '../services/codeAgentRuntimeConfig';
 import { E2BCocoSandboxService } from '../services/e2bCocoSandboxService';
 import { createE2BSdkDriver } from '../services/e2bSdkDriver';
 import { JsonlCodeAgentRunnerClient } from '../services/jsonlCodeAgentRunner';
@@ -20,7 +20,7 @@ type CodexE2BSmokePlan =
   | { run: false; reason: string }
   | {
     run: true;
-    config: CocoRuntimeConfig;
+    config: CodeAgentRuntimeConfig;
     selectedModel: AIModelOption;
     authJsonPath: string;
     authSecretPath: string;
@@ -66,7 +66,7 @@ export const buildCodexE2BSmokePlan = (env: NodeJS.ProcessEnv): CodexE2BSmokePla
     CODE_AGENT_BACKEND: 'codex',
     CODEX_CLI_BACKEND_ENABLED: 'true',
   };
-  const config = resolveCocoRuntimeConfig(smokeEnv);
+  const config = resolveCodeAgentRuntimeConfig(smokeEnv);
   const codexCli = resolveCodexCliRunnerConfig(smokeEnv);
   const registry = createAIModelRegistry({
     defaultModelId: env.AI_MODEL || env.OPENROUTER_MODEL || DEFAULT_AI_MODEL_ID,

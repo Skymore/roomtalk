@@ -8,7 +8,7 @@ import { CocoSandboxHandle, CocoSandboxService, CodeAgentRunnerProcess } from '.
 import { mapCodeAgentRunnerEvent } from './codeAgentEventMapper';
 import { CodeAgentRunner } from './codeAgentRunner';
 import { CODE_AGENT_RUNNER_SCHEMA_VERSION, CodeAgentRunnerEvent, CodeAgentRunnerMode, CodeAgentRunnerRunRequest } from './codeAgentRunnerProtocol';
-import { DEFAULT_CODEX_CLI_RUNNER_COMMAND, DEFAULT_COCO_RUNNER_COMMAND } from './cocoRuntimeConfig';
+import { DEFAULT_CODEX_CLI_RUNNER_COMMAND, DEFAULT_COCO_RUNNER_COMMAND } from './codeAgentRuntimeConfig';
 import { createAIPlaceholderMessage } from './messageDomain';
 import { CocoModelGateway } from './cocoModelGateway';
 import { buildCocoPriorMessages } from './cocoTranscript';
@@ -19,13 +19,13 @@ import { CodexConnectionService } from './codexConnection';
 import { CodeAgentRunnerHandlers, CodeAgentRunnerRunResult } from './fakeCodeAgentRunner';
 import { CodexRunSettings, getCodexMessageAIModel, normalizeCodexRunSettings } from './codexRunSettings';
 
-export interface CocoRoomEmitter {
+export interface CodeAgentRoomEmitter {
   to(roomId: string): {
     emit(event: string, ...args: unknown[]): void;
   };
 }
 
-export interface CocoSessionServiceOptions {
+export interface CodeAgentSessionServiceOptions {
   enabled: boolean;
   allowedClientIds?: string[];
   mode?: CodeAgentRunnerMode;
@@ -48,7 +48,7 @@ export interface CocoSessionServiceOptions {
   createId?: () => string;
 }
 
-export interface CocoTurnInput {
+export interface CodeAgentTurnInput {
   roomId: string;
   clientId: string;
   selectedModel: AIModelOption;
@@ -60,10 +60,10 @@ export interface CocoTurnInput {
   serverOrigin?: string;
 }
 
-export type CocoTurnAck = { success: boolean; messageId?: string; error?: string };
-export type CocoTurnAckCallback = (response: CocoTurnAck) => void;
+export type CodeAgentTurnAck = { success: boolean; messageId?: string; error?: string };
+export type CodeAgentTurnAckCallback = (response: CodeAgentTurnAck) => void;
 
-interface CocoTurnStreamState {
+interface CodeAgentTurnStreamState {
   activeMessageId: string;
   segmentContent: string;
   fullContent: string;
@@ -72,27 +72,27 @@ interface CocoTurnStreamState {
   nonEmptySegmentIds: Set<string>;
 }
 
-export class CocoSessionService {
+export class CodeAgentSessionService {
   private readonly activeTurns = new Set<string>();
   private readonly now: () => Date;
   private readonly createId: () => string;
 
   constructor(
     private readonly store: RoomStore,
-    private readonly emitter: CocoRoomEmitter,
+    private readonly emitter: CodeAgentRoomEmitter,
     private readonly sandboxLifecycle: CocoSandboxLifecycleService,
     private readonly sandboxService: CocoSandboxService,
     private readonly runner: CodeAgentRunner,
     private readonly logger: Logger,
-    private readonly options: CocoSessionServiceOptions
+    private readonly options: CodeAgentSessionServiceOptions
   ) {
     this.now = options.now || (() => new Date());
     this.createId = options.createId || (() => uuidv4());
   }
 
-  async startTurn(input: CocoTurnInput, callback?: CocoTurnAckCallback): Promise<CocoTurnAck> {
+  async startTurn(input: CodeAgentTurnInput, callback?: CodeAgentTurnAckCallback): Promise<CodeAgentTurnAck> {
     let callbackSent = false;
-    const ack = (response: CocoTurnAck) => {
+    const ack = (response: CodeAgentTurnAck) => {
       if (!callbackSent) {
         callbackSent = true;
         callback?.(response);
@@ -154,7 +154,7 @@ export class CocoSessionService {
     let runnerProcess: CodeAgentRunnerProcess | null = null;
     let placeholderAnnounced = false;
     let roomMarkedRunning = false;
-    let streamState: CocoTurnStreamState | null = null;
+    let streamState: CodeAgentTurnStreamState | null = null;
 
     try {
       this.activeTurns.add(input.roomId);
@@ -561,7 +561,7 @@ export class CocoSessionService {
     return `/tmp/roomtalk-codex/${safeTurnId}-${safeSuffix}`;
   }
 
-  private validateRoom(room: Room | null, clientId: string, memberRole?: RoomMemberRole): CocoTurnAck {
+  private validateRoom(room: Room | null, clientId: string, memberRole?: RoomMemberRole): CodeAgentTurnAck {
     if (!room) {
       return { success: false, error: 'Room not found' };
     }
@@ -718,7 +718,7 @@ export class CocoSessionService {
     turnId: string,
     baseAIMessage: Message,
     selectedModel: AIModelOption,
-    state: CocoTurnStreamState,
+    state: CodeAgentTurnStreamState,
     backend: CodeAgentBackend,
     codexRunSettings: CodexRunSettings
   ) {
@@ -780,7 +780,7 @@ export class CocoSessionService {
     }
   }
 
-  private async sealCurrentSegment(roomId: string, baseAIMessage: Message, state: CocoTurnStreamState) {
+  private async sealCurrentSegment(roomId: string, baseAIMessage: Message, state: CodeAgentTurnStreamState) {
     if (!state.segmentContent.trim()) return;
 
     this.emitter.to(roomId).emit('ai_stream_end', {
@@ -835,7 +835,7 @@ export class CocoSessionService {
   private async recordTurnEvent(
     level: ObservabilityEventInput['level'],
     event: string,
-    input: CocoTurnInput,
+    input: CodeAgentTurnInput,
     turnId: string,
     startedAtMs: number,
     extra: Partial<ObservabilityEventInput> = {}

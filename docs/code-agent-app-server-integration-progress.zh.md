@@ -27,7 +27,7 @@ Codex manual 中 app-server 被描述为 rich client 接口，覆盖 authenticat
 
 - [x] 当前 master 已有 Codex CLI subscription auth POC，可作为 `codex` backend 保留。
 - [x] Pre-commit 1: runner protocol/event/client 命名通用化。
-- [ ] Pre-commit 2: session/sandbox/config 命名通用化。
+- [x] Pre-commit 2: session/runtime config/socket 注入命名通用化。
 - [ ] Codex app-server backend 接入。
 - [x] 轻量验证：TypeScript compile。
 - [ ] 轻量验证：runner parser tests、Codex app-server adapter unit tests。
@@ -39,6 +39,8 @@ Codex manual 中 app-server 被描述为 rich client 接口，覆盖 authenticat
 - 保留 `CocoSandboxService`、E2B artifact、Coco model gateway、`type: 'coco'`、`cocoSessionId`、`cocoStatus` 等 Coco 语义边界，避免把持久化和产品语义误改成通用名。
 - runner event mapper 支持按 backend 传入显示名；默认仍为 Coco，Codex backend 可显示 Codex。
 - 已通过 `server` 目录下 `npx tsc --noEmit --pretty false`。
+- Pre-commit 2 已把 `CocoSessionService`/`CocoRuntimeConfig` 改为 `CodeAgentSessionService`/`CodeAgentRuntimeConfig`，并把 socket/server 注入点改为 `codeAgentSessionService`。
+- `/api/features` 和 `/api/status` 的对外 `coco` payload 保持不变；`COCO_*` env、Coco model gateway、Coco sandbox lifecycle、E2B artifact/source ref 继续保留为兼容契约。
 
 ## 风险
 

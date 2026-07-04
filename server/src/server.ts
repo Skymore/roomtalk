@@ -31,7 +31,7 @@ import { createOutboxWorkerFromEnv, OutboxWorker } from './services/outboxWorker
 import { createCocoAccessControl } from './services/cocoAccessControl';
 import { createCodeAgentRunner } from './services/codeAgentRunner';
 import { CocoSandboxLifecycleService } from './services/cocoSandboxLifecycle';
-import { CocoSessionService } from './services/cocoSessionService';
+import { CodeAgentSessionService } from './services/codeAgentSessionService';
 import { E2BCocoSandboxService, E2BSandboxDriver } from './services/e2bCocoSandboxService';
 import { createE2BSdkDriver } from './services/e2bSdkDriver';
 import { CODE_AGENT_RUNNER_SCHEMA_VERSION } from './services/codeAgentRunnerProtocol';
@@ -43,8 +43,8 @@ import {
   DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS,
   DEFAULT_COCO_RUNNER_PYTHONPATH,
   DEFAULT_COCO_WORKSPACE_ROOT,
-  resolveCocoRuntimeConfig,
-} from './services/cocoRuntimeConfig';
+  resolveCodeAgentRuntimeConfig,
+} from './services/codeAgentRuntimeConfig';
 import {
   CocoModelGateway,
   DEFAULT_COCO_MODEL_GATEWAY_BASE_PATH,
@@ -207,9 +207,9 @@ if (codexConnectionConfig.enabled) {
   });
 }
 
-const cocoRuntimeConfig = resolveCocoRuntimeConfig(process.env);
+const codeAgentRuntimeConfig = resolveCodeAgentRuntimeConfig(process.env);
 assertCodexBackendStartupGate({
-  cocoRuntimeConfig,
+  codeAgentRuntimeConfig,
   codexCliRunnerConfig,
   codexConnectionConfig,
   hasCodexConnectionService: Boolean(codexConnectionService),
@@ -218,16 +218,16 @@ const observabilityRecorder = postgresPool
   ? new PostgresObservabilityEventRecorder(postgresPool, new Logger('Observability'))
   : new NoopObservabilityEventRecorder();
 const cocoAccess = createCocoAccessControl({
-  enabled: cocoRuntimeConfig.enabled,
-  allowedClientIds: cocoRuntimeConfig.allowedClientIds,
+  enabled: codeAgentRuntimeConfig.enabled,
+  allowedClientIds: codeAgentRuntimeConfig.allowedClientIds,
 });
-const cocoModelGateway = cocoRuntimeConfig.modelGateway
+const cocoModelGateway = codeAgentRuntimeConfig.modelGateway
   ? new CocoModelGateway({
-    publicBaseUrl: cocoRuntimeConfig.modelGateway.publicBaseUrl,
-    tokenSecret: cocoRuntimeConfig.modelGateway.tokenSecret,
-    tokenTtlSeconds: cocoRuntimeConfig.modelGateway.tokenTtlSeconds,
-    maxRequestsPerTurn: cocoRuntimeConfig.modelGateway.maxRequestsPerTurn,
-    turnBudgetUsd: cocoRuntimeConfig.modelGateway.turnBudgetUsd,
+    publicBaseUrl: codeAgentRuntimeConfig.modelGateway.publicBaseUrl,
+    tokenSecret: codeAgentRuntimeConfig.modelGateway.tokenSecret,
+    tokenTtlSeconds: codeAgentRuntimeConfig.modelGateway.tokenTtlSeconds,
+    maxRequestsPerTurn: codeAgentRuntimeConfig.modelGateway.maxRequestsPerTurn,
+    turnBudgetUsd: codeAgentRuntimeConfig.modelGateway.turnBudgetUsd,
     providerApiKeys: {
       anthropic: process.env.ANTHROPIC_API_KEY,
       deepseek: process.env.DEEPSEEK_API_KEY,
@@ -284,22 +284,22 @@ const createE2BDriver = (): E2BSandboxDriver => createE2BSdkDriver({
   requestTimeoutMs: parsePositiveIntegerEnv('E2B_REQUEST_TIMEOUT_MS', 60_000),
 });
 
-if (cocoRuntimeConfig.enabled && cocoRuntimeConfig.sandboxProvider === 'e2b') {
-  cocoLogger.info('E2B sandbox provider selected', { artifactMode: cocoRuntimeConfig.artifactMode });
+if (codeAgentRuntimeConfig.enabled && codeAgentRuntimeConfig.sandboxProvider === 'e2b') {
+  cocoLogger.info('E2B sandbox provider selected', { artifactMode: codeAgentRuntimeConfig.artifactMode });
 }
 
-const cocoSandboxService = cocoRuntimeConfig.enabled && cocoRuntimeConfig.sandboxProvider === 'e2b'
+const cocoSandboxService = codeAgentRuntimeConfig.enabled && codeAgentRuntimeConfig.sandboxProvider === 'e2b'
   ? new E2BCocoSandboxService(createE2BDriver(), {
-    templateId: cocoRuntimeConfig.e2bTemplateId || '',
-    workspace: cocoRuntimeConfig.e2bWorkspace,
-    artifactVersion: cocoRuntimeConfig.artifactVersion,
-    cocoSourceRef: cocoRuntimeConfig.cocoSourceRef,
-    lifecycle: cocoRuntimeConfig.e2bLifecycle,
+    templateId: codeAgentRuntimeConfig.e2bTemplateId || '',
+    workspace: codeAgentRuntimeConfig.e2bWorkspace,
+    artifactVersion: codeAgentRuntimeConfig.artifactVersion,
+    cocoSourceRef: codeAgentRuntimeConfig.cocoSourceRef,
+    lifecycle: codeAgentRuntimeConfig.e2bLifecycle,
     logger: cocoLogger,
   })
   : new FakeCocoSandboxService();
 const cocoTurnTimeoutMs = parsePositiveIntegerEnv('COCO_TURN_TIMEOUT_MS', 5 * 60 * 1000);
-const defaultCocoSandboxTtlMs = cocoRuntimeConfig.e2bLifecycle.onTimeout === 'pause'
+const defaultCocoSandboxTtlMs = codeAgentRuntimeConfig.e2bLifecycle.onTimeout === 'pause'
   ? DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS
   : DEFAULT_COCO_E2B_KILL_TIMEOUT_MS;
 const cocoSandboxLifecycle = new CocoSandboxLifecycleService(store, cocoSandboxService, cocoLogger, {
@@ -308,32 +308,32 @@ const cocoSandboxLifecycle = new CocoSandboxLifecycleService(store, cocoSandboxS
   creatingStaleMs: parsePositiveIntegerEnv('COCO_CREATING_STALE_MS', 2 * 60 * 1000),
   maxActiveSandboxes: parsePositiveIntegerEnv('COCO_MAX_ACTIVE_SANDBOXES', Number.POSITIVE_INFINITY),
   maxActiveSandboxesPerUser: parsePositiveIntegerEnv('COCO_MAX_ACTIVE_SANDBOXES_PER_USER', Number.POSITIVE_INFINITY),
-  reconnectTimedOutSandboxes: cocoRuntimeConfig.e2bLifecycle.onTimeout === 'pause',
+  reconnectTimedOutSandboxes: codeAgentRuntimeConfig.e2bLifecycle.onTimeout === 'pause',
 });
 const fakeCodeAgentToolOutput = [
   'stdout: hello from code agent fake runner',
   'stderr: simulated warning for UI coverage',
   'line '.repeat(260).trim(),
 ].join('\n');
-const codeAgentRunnerClient = cocoRuntimeConfig.runnerClient === 'jsonl' ? new JsonlCodeAgentRunnerClient() : new FakeCodeAgentRunnerClient([
+const codeAgentRunnerClient = codeAgentRuntimeConfig.runnerClient === 'jsonl' ? new JsonlCodeAgentRunnerClient() : new FakeCodeAgentRunnerClient([
   { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'status', turnId: 'fake', status: 'starting', message: 'Code agent fake runner starting' },
   { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'fake-ai', delta: 'Code agent fake runner received the task.' },
   { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'fake-tool-1', name: 'Shell', args: { command: 'printf "hello from code agent fake runner\\n"' } },
   { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'fake-tool-1', name: 'Shell', success: false, output: fakeCodeAgentToolOutput, exitCode: 2, truncated: true },
   { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'fake-ai', answer: 'Code agent fake runner received the task.', sessionId: 'fake-code-agent-session' },
 ], { eventDelayMs: parsePositiveIntegerEnv('COCO_FAKE_RUNNER_EVENT_DELAY_MS', 0) });
-const codeAgentRunner = createCodeAgentRunner(cocoRuntimeConfig.backend, codeAgentRunnerClient);
+const codeAgentRunner = createCodeAgentRunner(codeAgentRuntimeConfig.backend, codeAgentRunnerClient);
 const codexRunnerEnv = {
-  PYTHONPATH: cocoRuntimeConfig.runnerEnv.PYTHONPATH || DEFAULT_COCO_RUNNER_PYTHONPATH,
-  COCO_WORKSPACE_ROOT: cocoRuntimeConfig.runnerEnv.COCO_WORKSPACE_ROOT || cocoRuntimeConfig.e2bWorkspace || DEFAULT_COCO_WORKSPACE_ROOT,
+  PYTHONPATH: codeAgentRuntimeConfig.runnerEnv.PYTHONPATH || DEFAULT_COCO_RUNNER_PYTHONPATH,
+  COCO_WORKSPACE_ROOT: codeAgentRuntimeConfig.runnerEnv.COCO_WORKSPACE_ROOT || codeAgentRuntimeConfig.e2bWorkspace || DEFAULT_COCO_WORKSPACE_ROOT,
   CODEX_CLI_BIN: codexCliRunnerConfig.cliBin,
   ROOMTALK_CODEX_TIMEOUT_MS: String(codexCliRunnerConfig.timeoutMs),
 };
 const runnerCommandByBackend = {
-  coco: cocoRuntimeConfig.backend === 'coco' ? cocoRuntimeConfig.runnerCommand : DEFAULT_COCO_RUNNER_COMMAND,
-  codex: cocoRuntimeConfig.backend === 'codex' ? cocoRuntimeConfig.runnerCommand : DEFAULT_CODEX_CLI_RUNNER_COMMAND,
+  coco: codeAgentRuntimeConfig.backend === 'coco' ? codeAgentRuntimeConfig.runnerCommand : DEFAULT_COCO_RUNNER_COMMAND,
+  codex: codeAgentRuntimeConfig.backend === 'codex' ? codeAgentRuntimeConfig.runnerCommand : DEFAULT_CODEX_CLI_RUNNER_COMMAND,
 };
-const cocoSessionService = new CocoSessionService(
+const codeAgentSessionService = new CodeAgentSessionService(
   store,
   io,
   cocoSandboxLifecycle,
@@ -341,22 +341,22 @@ const cocoSessionService = new CocoSessionService(
   codeAgentRunner,
   cocoLogger,
   {
-    enabled: cocoRuntimeConfig.enabled,
-    allowedClientIds: cocoRuntimeConfig.allowedClientIds,
-    mode: cocoRuntimeConfig.mode,
-    availableModes: cocoRuntimeConfig.availableModes,
-    defaultMode: cocoRuntimeConfig.defaultMode,
+    enabled: codeAgentRuntimeConfig.enabled,
+    allowedClientIds: codeAgentRuntimeConfig.allowedClientIds,
+    mode: codeAgentRuntimeConfig.mode,
+    availableModes: codeAgentRuntimeConfig.availableModes,
+    defaultMode: codeAgentRuntimeConfig.defaultMode,
     modelGateway: cocoModelGateway,
-    backend: cocoRuntimeConfig.backend,
-    runnerCommand: cocoRuntimeConfig.runnerCommand,
+    backend: codeAgentRuntimeConfig.backend,
+    runnerCommand: codeAgentRuntimeConfig.runnerCommand,
     runnerCommandByBackend,
     turnTimeoutMs: cocoTurnTimeoutMs,
-    allowedPaths: cocoRuntimeConfig.allowedPaths,
-    runnerEnv: cocoRuntimeConfig.runnerEnv,
+    allowedPaths: codeAgentRuntimeConfig.allowedPaths,
+    runnerEnv: codeAgentRuntimeConfig.runnerEnv,
     runnerEnvByBackend: {
       codex: codexRunnerEnv,
     },
-    runnerProviderEnvByProvider: cocoRuntimeConfig.runnerProviderEnvByProvider,
+    runnerProviderEnvByProvider: codeAgentRuntimeConfig.runnerProviderEnvByProvider,
     codexBackendEnabled: codexCliRunnerConfig.enabled && Boolean(codexConnectionService),
     codexConnectionService,
     staticSitePublisher: publishedStaticSiteService,
@@ -423,7 +423,7 @@ registerSocketHandlers({
   getAIClientForModel,
   aiStreamOwnerId,
   assemblyAIApiKey,
-  cocoSessionService,
+  codeAgentSessionService,
   cocoAccess,
   cocoSandboxService,
   codeWorkspaceAssetAccess,
@@ -447,7 +447,7 @@ if (process.env.OUTBOX_WORKER_ENABLED === 'true') {
         getAIClientForModel,
         aiStreamOwnerId,
         assemblyAIApiKey,
-        cocoSessionService,
+        codeAgentSessionService,
         cocoAccess,
       }),
     },
@@ -483,9 +483,9 @@ registerApiRoutes(app, {
   mediaObjectStorage,
   audioTranscriptionRunner,
   cocoAccess,
-  cocoMode: cocoRuntimeConfig.mode,
-  cocoAvailableModes: cocoRuntimeConfig.availableModes,
-  cocoDefaultMode: cocoRuntimeConfig.defaultMode,
+  codeAgentMode: codeAgentRuntimeConfig.mode,
+  codeAgentAvailableModes: codeAgentRuntimeConfig.availableModes,
+  codeAgentDefaultMode: codeAgentRuntimeConfig.defaultMode,
   codexConnections: {
     enabled: codexConnectionConfig.enabled,
     service: codexConnectionService,

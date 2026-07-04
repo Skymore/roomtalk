@@ -69,7 +69,7 @@ describe('resolveCodexCliRunnerConfig', () => {
 describe('assertCodexBackendStartupGate', () => {
   it('allows Codex backend startup once CLI backend and connection service are configured', () => {
     assert.doesNotThrow(() => assertCodexBackendStartupGate({
-      cocoRuntimeConfig: { backend: 'codex' },
+      codeAgentRuntimeConfig: { backend: 'codex' },
       codexCliRunnerConfig: { enabled: true },
       codexConnectionConfig: { enabled: true },
       hasCodexConnectionService: true,
@@ -79,7 +79,7 @@ describe('assertCodexBackendStartupGate', () => {
   it('rejects Codex backend startup without required Codex flags and service', () => {
     assert.throws(
       () => assertCodexBackendStartupGate({
-        cocoRuntimeConfig: { backend: 'codex' },
+        codeAgentRuntimeConfig: { backend: 'codex' },
         codexCliRunnerConfig: { enabled: false },
         codexConnectionConfig: { enabled: true },
         hasCodexConnectionService: true,
@@ -88,7 +88,7 @@ describe('assertCodexBackendStartupGate', () => {
     );
     assert.throws(
       () => assertCodexBackendStartupGate({
-        cocoRuntimeConfig: { backend: 'codex' },
+        codeAgentRuntimeConfig: { backend: 'codex' },
         codexCliRunnerConfig: { enabled: true },
         codexConnectionConfig: { enabled: false },
         hasCodexConnectionService: false,

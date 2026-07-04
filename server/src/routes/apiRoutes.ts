@@ -43,9 +43,9 @@ interface ApiRouteOptions {
   googleClientIds?: string[];
   verifyGoogleCredential?: (credential: string, clientIds: string[]) => Promise<VerifyGoogleCredentialResult>;
   cocoAccess?: CocoAccessControl;
-  cocoMode?: CodeAgentRunnerMode;
-  cocoAvailableModes?: CodeAgentRunnerMode[];
-  cocoDefaultMode?: CodeAgentRunnerMode;
+  codeAgentMode?: CodeAgentRunnerMode;
+  codeAgentAvailableModes?: CodeAgentRunnerMode[];
+  codeAgentDefaultMode?: CodeAgentRunnerMode;
   codexConnections?: {
     enabled: boolean;
     service?: CodexConnectionService;
@@ -292,12 +292,12 @@ const consumeMediaUploadRateLimit = (clientId: string, ip: string | undefined, n
 export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   const { store, io, redisClient, routeLogger, getAIModelResponse, generateAIRoleDraft, persistenceStore = 'redis', mediaObjectStorage, audioTranscriptionRunner } = options;
   const cocoAccess = options.cocoAccess ?? createCocoAccessControl({ enabled: false });
-  const cocoMode = options.cocoMode ?? 'plan';
-  const cocoAvailableModes = options.cocoAvailableModes?.length
-    ? options.cocoAvailableModes
-    : (cocoMode === 'acceptEdits' ? ['plan', 'acceptEdits'] : ['plan']);
-  const cocoDefaultMode = options.cocoDefaultMode && cocoAvailableModes.includes(options.cocoDefaultMode)
-    ? options.cocoDefaultMode
+  const codeAgentMode = options.codeAgentMode ?? 'plan';
+  const codeAgentAvailableModes = options.codeAgentAvailableModes?.length
+    ? options.codeAgentAvailableModes
+    : (codeAgentMode === 'acceptEdits' ? ['plan', 'acceptEdits'] : ['plan']);
+  const codeAgentDefaultMode = options.codeAgentDefaultMode && codeAgentAvailableModes.includes(options.codeAgentDefaultMode)
+    ? options.codeAgentDefaultMode
     : 'plan';
   const mediaUploadCleanup = options.mediaUploadCleanup || {};
   const getNowMs = mediaUploadCleanup.nowMs || (() => Date.now());
@@ -1323,9 +1323,9 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
     return res.json({
       coco: {
         ...cocoAccess.toFeaturePayload(clientId),
-        mode: cocoMode,
-        availableModes: cocoAvailableModes,
-        defaultMode: cocoDefaultMode,
+        mode: codeAgentMode,
+        availableModes: codeAgentAvailableModes,
+        defaultMode: codeAgentDefaultMode,
       },
       codex: {
         connections: {
@@ -1473,9 +1473,9 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
           coco: {
             enabled: cocoAccess.enabled,
             rollout: !cocoAccess.enabled ? 'disabled' : cocoAccess.hasAllowlist ? 'allowlist' : 'all',
-            mode: cocoMode,
-            availableModes: cocoAvailableModes,
-            defaultMode: cocoDefaultMode,
+            mode: codeAgentMode,
+            availableModes: codeAgentAvailableModes,
+            defaultMode: codeAgentDefaultMode,
           },
           codex: {
             connections: {

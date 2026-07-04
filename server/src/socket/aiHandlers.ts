@@ -24,7 +24,7 @@ import { withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 import { COCO_ACCESS_DENIED_MESSAGE } from '../services/cocoRoomAccess';
 import { normalizeCodexRunSettings } from '../services/codexRunSettings';
 import type { CodeAgentRunnerMode } from '../services/codeAgentRunnerProtocol';
-import type { CocoTurnInput } from '../services/cocoSessionService';
+import type { CodeAgentTurnInput } from '../services/codeAgentSessionService';
 import type { A2UIActionEvent, AIModelOption, CodexPermissionMode, CodexReasoningEffort, Message } from '../types';
 import { hasRoomAccess } from './roomAccess';
 import { authorizeRoomAction, buildRoomPermissions, getRoomMessage } from './roomAuthorization';
@@ -70,7 +70,7 @@ const getSocketServerOrigin = (socket: SocketConnectionContext['socket']) => {
   return `${proto}://${host}`;
 };
 
-const getCocoTurnOriginInput = (socket: SocketConnectionContext['socket']) => {
+const getCodeAgentTurnOriginInput = (socket: SocketConnectionContext['socket']) => {
   const clientOrigin = getSocketOrigin(socket);
   const serverOrigin = getSocketServerOrigin(socket);
   return {
@@ -79,7 +79,7 @@ const getCocoTurnOriginInput = (socket: SocketConnectionContext['socket']) => {
   };
 };
 
-const buildCocoTurnInput = ({
+const buildCodeAgentTurnInput = ({
   roomId,
   clientId,
   selectedModel,
@@ -99,7 +99,7 @@ const buildCocoTurnInput = ({
   maxContextMessages?: number;
   socket: SocketConnectionContext['socket'];
   requestedMode?: CodeAgentRunnerMode;
-}): CocoTurnInput => ({
+}): CodeAgentTurnInput => ({
   roomId,
   clientId,
   selectedModel,
@@ -107,7 +107,7 @@ const buildCocoTurnInput = ({
     ? { codexRunSettings: normalizeCodexRunSettings(codexModel, codexReasoningEffort, codexPermissionMode) }
     : {}),
   maxContextMessages,
-  ...getCocoTurnOriginInput(socket),
+  ...getCodeAgentTurnOriginInput(socket),
   ...(requestedMode ? { requestedMode, requestedModeSource: 'originalTurn' as const } : {}),
 });
 
@@ -433,7 +433,7 @@ type SendMessageAndAskAIData = AIRequestData & {
   clientMessageId?: string;
 };
 
-const findNextCocoTurnMode = (messages: Message[], messageId: string): CodeAgentRunnerMode | undefined => {
+const findNextCodeAgentTurnMode = (messages: Message[], messageId: string): CodeAgentRunnerMode | undefined => {
   const index = messages.findIndex(message => message.id === messageId);
   if (index === -1) {
     return undefined;
@@ -897,7 +897,7 @@ export function registerAIHandlers({
   normalizeAIModel,
   getAIClientForModel,
   aiStreamOwnerId,
-  cocoSessionService,
+  codeAgentSessionService,
 }: SocketConnectionContext) {
   const emitLatestHistoryPage = async (roomId: string) => {
     const page = await store.readMessagePageByRoom(roomId);
@@ -1850,7 +1850,7 @@ export function registerAIHandlers({
         return;
       }
 
-      if (!cocoSessionService) {
+      if (!codeAgentSessionService) {
         socket.emit('error', { message: 'Coco is unavailable' });
         callback?.({ success: false, error: 'Coco is unavailable' });
         return;
@@ -1886,7 +1886,7 @@ export function registerAIHandlers({
         }
       }
 
-      await cocoSessionService.startTurn(buildCocoTurnInput({
+      await codeAgentSessionService.startTurn(buildCodeAgentTurnInput({
         roomId: data.roomId,
         clientId,
         selectedModel: normalizeAIModel(data.model),
@@ -2002,7 +2002,7 @@ export function registerAIHandlers({
     notifyRoomMessageBestEffort({ store, room: updatedRoom, message: userMessage, logger: socketLogger });
 
     if (roomForAIRequest?.type === 'coco') {
-      if (!cocoSessionService) {
+      if (!codeAgentSessionService) {
         callback?.({
           success: true,
           userMessage,
@@ -2012,7 +2012,7 @@ export function registerAIHandlers({
         return;
       }
 
-      await cocoSessionService.startTurn(buildCocoTurnInput({
+      await codeAgentSessionService.startTurn(buildCodeAgentTurnInput({
         roomId: data.roomId,
         clientId,
         selectedModel: normalizeAIModel(data.model),
@@ -2099,7 +2099,7 @@ export function registerAIHandlers({
 
     const room = await store.getRoomById(data.roomId);
     const isCocoRoom = room?.type === 'coco';
-    if (isCocoRoom && !cocoSessionService) {
+    if (isCocoRoom && !codeAgentSessionService) {
       callback?.({ success: false, error: 'Coco is unavailable' });
       return;
     }
@@ -2122,7 +2122,7 @@ export function registerAIHandlers({
     }
 
     const messagesBeforeEdit = isCocoRoom ? await store.readMessagesByRoom(data.roomId) : [];
-    const requestedMode = isCocoRoom ? findNextCocoTurnMode(messagesBeforeEdit, data.messageId) : undefined;
+    const requestedMode = isCocoRoom ? findNextCodeAgentTurnMode(messagesBeforeEdit, data.messageId) : undefined;
     const editResult = await store.updateMessageAndTruncateAfter(data.roomId, data.messageId, data.newContent);
     if (!editResult) {
       callback?.({ success: false, error: 'Failed to save edited message' });
@@ -2139,7 +2139,7 @@ export function registerAIHandlers({
     await emitLatestHistoryPage(data.roomId);
 
     if (isCocoRoom) {
-      await cocoSessionService!.startTurn(buildCocoTurnInput({
+      await codeAgentSessionService!.startTurn(buildCodeAgentTurnInput({
         roomId: data.roomId,
         clientId,
         selectedModel: normalizeAIModel(data.model),

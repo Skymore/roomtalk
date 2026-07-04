@@ -166,7 +166,7 @@ const createHarness = (options: {
   aiClientWrapper?: any;
   messages?: Message[];
   currentRoom?: Room | null;
-  cocoSessionService?: { startTurn: (...args: any[]) => Promise<unknown> };
+  codeAgentSessionService?: { startTurn: (...args: any[]) => Promise<unknown> };
   headers?: Record<string, string | string[] | undefined>;
 } = {}) => {
   const socket = new FakeSocket(options.headers);
@@ -331,7 +331,7 @@ const createHarness = (options: {
       throw new Error('E2E fake AI should not request a real client');
     },
     aiStreamOwnerId: options.aiStreamOwnerId || 'test-stream-owner',
-    cocoSessionService: options.cocoSessionService as any,
+    codeAgentSessionService: options.codeAgentSessionService as any,
   });
 
   return { io, socket, store };
@@ -461,7 +461,7 @@ describe('AI socket handlers', () => {
 
   it('routes Coco room AI requests to the Coco session service', async () => {
     const calls: unknown[][] = [];
-    const cocoSessionService = {
+    const codeAgentSessionService = {
       async startTurn(...args: unknown[]) {
         calls.push(args);
         const callback = args[1] as ((response: { success: boolean; messageId?: string }) => void) | undefined;
@@ -471,7 +471,7 @@ describe('AI socket handlers', () => {
     };
     const { socket, store } = createHarness({
       currentRoom: room({ type: 'coco' }),
-      cocoSessionService,
+      codeAgentSessionService,
       headers: roomtalkOriginHeaders,
     });
 
@@ -498,7 +498,7 @@ describe('AI socket handlers', () => {
 
   it('passes Codex model and reasoning settings to Coco session service for Codex-backed rooms', async () => {
     const calls: unknown[][] = [];
-    const cocoSessionService = {
+    const codeAgentSessionService = {
       async startTurn(...args: unknown[]) {
         calls.push(args);
         const callback = args[1] as ((response: { success: boolean; messageId?: string }) => void) | undefined;
@@ -508,7 +508,7 @@ describe('AI socket handlers', () => {
     };
     const { socket } = createHarness({
       currentRoom: room({ type: 'coco', codeAgentBackend: 'codex' }),
-      cocoSessionService,
+      codeAgentSessionService,
       headers: roomtalkOriginHeaders,
     });
 
@@ -1083,7 +1083,7 @@ describe('AI socket handlers', () => {
 
   it('edits, truncates, and routes Coco edit-and-ask to the Coco session service', async () => {
     const calls: unknown[][] = [];
-    const cocoSessionService = {
+    const codeAgentSessionService = {
       async startTurn(...args: unknown[]) {
         calls.push(args);
         const callback = args[1] as ((response: { success: boolean; messageId?: string }) => void) | undefined;
@@ -1093,7 +1093,7 @@ describe('AI socket handlers', () => {
     };
     const { io, socket, store } = createHarness({
       currentRoom: room({ type: 'coco' }),
-      cocoSessionService,
+      codeAgentSessionService,
       headers: roomtalkOriginHeaders,
     });
     const editedUser = message({ id: 'message-edited', content: 'original prompt' });
@@ -1218,7 +1218,7 @@ describe('AI socket handlers', () => {
 
   it('saves a user message before routing Coco ask requests to the Coco session service', async () => {
     const calls: unknown[][] = [];
-    const cocoSessionService = {
+    const codeAgentSessionService = {
       async startTurn(...args: unknown[]) {
         calls.push(args);
         const callback = args[1] as ((response: { success: boolean; messageId?: string }) => void) | undefined;
@@ -1228,7 +1228,7 @@ describe('AI socket handlers', () => {
     };
     const { io, socket, store } = createHarness({
       currentRoom: room({ type: 'coco' }),
-      cocoSessionService,
+      codeAgentSessionService,
       headers: roomtalkOriginHeaders,
     });
 
@@ -1267,7 +1267,7 @@ describe('AI socket handlers', () => {
 
   it('rejects Coco send-message-and-ask-ai before saving when the member cannot use Coco', async () => {
     const calls: unknown[][] = [];
-    const cocoSessionService = {
+    const codeAgentSessionService = {
       async startTurn(...args: unknown[]) {
         calls.push(args);
         return { success: true, messageId: 'coco-ai-2' };
@@ -1275,7 +1275,7 @@ describe('AI socket handlers', () => {
     };
     const { io, socket, store } = createHarness({
       currentRoom: room({ type: 'coco', creatorId: 'owner-1' }),
-      cocoSessionService,
+      codeAgentSessionService,
     });
 
     let response: unknown;
@@ -1296,7 +1296,7 @@ describe('AI socket handlers', () => {
 
   it('rejects Coco ask-ai requests before starting when the member cannot use Coco', async () => {
     const calls: unknown[][] = [];
-    const cocoSessionService = {
+    const codeAgentSessionService = {
       async startTurn(...args: unknown[]) {
         calls.push(args);
         return { success: true, messageId: 'coco-ai-2' };
@@ -1304,7 +1304,7 @@ describe('AI socket handlers', () => {
     };
     const { socket } = createHarness({
       currentRoom: room({ type: 'coco', creatorId: 'owner-1' }),
-      cocoSessionService,
+      codeAgentSessionService,
     });
 
     let response: unknown;

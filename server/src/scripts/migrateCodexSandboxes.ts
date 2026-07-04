@@ -6,7 +6,7 @@ import { createPostgresPool } from '../repositories/postgresPool';
 import { PostgresPool } from '../repositories/postgresStore';
 import { Room } from '../types';
 import { CocoSandboxHandle, CocoSandboxService } from '../services/cocoSandboxService';
-import { DEFAULT_COCO_E2B_KILL_TIMEOUT_MS, DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS, DEFAULT_COCO_RUNNER_PYTHONPATH, DEFAULT_COCO_WORKSPACE_ROOT, resolveCocoRuntimeConfig } from '../services/cocoRuntimeConfig';
+import { DEFAULT_COCO_E2B_KILL_TIMEOUT_MS, DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS, DEFAULT_COCO_RUNNER_PYTHONPATH, DEFAULT_COCO_WORKSPACE_ROOT, resolveCodeAgentRuntimeConfig } from '../services/codeAgentRuntimeConfig';
 import { E2BCocoSandboxService } from '../services/e2bCocoSandboxService';
 import { createE2BSdkDriver } from '../services/e2bSdkDriver';
 
@@ -96,7 +96,7 @@ export const buildCodexSandboxMigrationPlan = (env: NodeJS.ProcessEnv): CodexSan
     COCO_SANDBOX_PROVIDER: 'e2b',
     COCO_RUNNER_CLIENT: 'jsonl',
   };
-  const config = resolveCocoRuntimeConfig(migrationEnv);
+  const config = resolveCodeAgentRuntimeConfig(migrationEnv);
   const persistenceStore = (env.PERSISTENCE_STORE || 'redis').toLowerCase();
   if (persistenceStore !== 'postgres' && persistenceStore !== 'redis') {
     return { run: false, reason: `Unsupported PERSISTENCE_STORE for migration: ${persistenceStore}` };
