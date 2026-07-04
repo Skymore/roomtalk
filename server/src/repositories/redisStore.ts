@@ -153,6 +153,13 @@ elseif codeAgentModeMode == 'clear' then
   room['codeAgentMode'] = nil
 end
 
+local codeAgentBackendMode = ARGV[11]
+if codeAgentBackendMode == 'set' then
+  room['codeAgentBackend'] = ARGV[12]
+elseif codeAgentBackendMode == 'clear' then
+  room['codeAgentBackend'] = nil
+end
+
 room['updatedAt'] = ARGV[2]
 room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
 local encoded = cjson.encode(room)
@@ -1678,6 +1685,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
           cocoStatus: room.cocoStatus ?? existingRoom.cocoStatus,
           cocoAccess: room.cocoAccess ?? existingRoom.cocoAccess,
           codeAgentMode: room.codeAgentMode ?? existingRoom.codeAgentMode,
+          codeAgentBackend: room.codeAgentBackend ?? existingRoom.codeAgentBackend,
         }
         : room;
       const storedRoom = await this.writeRoomRecord(room.id, roomToSave);
@@ -2046,6 +2054,11 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
           ? 'set'
           : 'clear'
         : 'keep';
+      const codeAgentBackendMode = Object.prototype.hasOwnProperty.call(updates, 'codeAgentBackend')
+        ? updates.codeAgentBackend
+          ? 'set'
+          : 'clear'
+        : 'keep';
       const result = await (this.redisClient as any).eval(UPDATE_ROOM_SETTINGS_SCRIPT, {
         keys: ['rooms', getRoomPasswordHashKey(roomId)],
         arguments: [
@@ -2059,6 +2072,8 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
           updates.cocoAccess || '',
           codeAgentModeMode,
           updates.codeAgentMode || '',
+          codeAgentBackendMode,
+          updates.codeAgentBackend || '',
         ],
       });
 

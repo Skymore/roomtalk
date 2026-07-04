@@ -7,12 +7,32 @@ import {
   CodexDeviceAuthDriver,
   CodexDeviceAuthInfo,
   InMemoryCodexConnectionStore,
+  summarizeCodexAuthAccount,
 } from './codexConnection';
 
+const fakeJwt = (claims: Record<string, unknown>) => (
+  [
+    Buffer.from(JSON.stringify({ alg: 'none' })).toString('base64url'),
+    Buffer.from(JSON.stringify(claims)).toString('base64url'),
+    'signature',
+  ].join('.')
+);
+
 const authJson = JSON.stringify({
-  OPENAI_AUTH: {
+  tokens: {
     access_token: 'secret-access-token',
     refresh_token: 'secret-refresh-token',
+    account_id: 'acct_token',
+    id_token: fakeJwt({
+      email: 'ada@example.com',
+      name: 'Ada Lovelace',
+      sub: 'user_sub',
+      'https://api.openai.com/auth': {
+        chatgpt_account_id: 'acct_claim',
+        chatgpt_plan_type: 'pro',
+        chatgpt_user_id: 'user_claim',
+      },
+    }),
   },
 });
 
@@ -97,6 +117,20 @@ describe('Codex auth cipher', () => {
 });
 
 describe('Codex connection service', () => {
+  it('summarizes the connected ChatGPT account without exposing token material', () => {
+    const summary = summarizeCodexAuthAccount(authJson);
+
+    assert.deepEqual(summary, {
+      email: 'ada@example.com',
+      name: 'Ada Lovelace',
+      accountId: 'acct_token',
+      userId: 'user_claim',
+      planType: 'pro',
+    });
+    assert.equal(JSON.stringify(summary).includes('secret-access-token'), false);
+    assert.equal(JSON.stringify(summary).includes('secret-refresh-token'), false);
+  });
+
   it('connects with device auth, stores encrypted auth, and returns public status only', async () => {
     const { service, store, driver } = makeService();
     const deviceCodes: CodexDeviceAuthInfo[] = [];
@@ -110,6 +144,13 @@ describe('Codex connection service', () => {
     assert.equal(status.status, 'connected');
     assert.equal(status.provider, 'codex');
     assert.equal(status.authVersion, 1);
+    assert.deepEqual(status.account, {
+      email: 'ada@example.com',
+      name: 'Ada Lovelace',
+      accountId: 'acct_token',
+      userId: 'user_claim',
+      planType: 'pro',
+    });
     assert.equal(status.lastValidatedAt, '2026-07-04T00:00:00.000Z');
     assert.equal(JSON.stringify(status).includes('secret-access-token'), false);
 

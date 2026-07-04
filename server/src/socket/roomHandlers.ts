@@ -965,7 +965,7 @@ export function registerRoomHandlers({
   });
 
   socket.on('update_room_settings', async (
-    data: { roomId?: string; password?: string; clearPassword?: boolean; postingSchedule?: unknown; cocoAccess?: unknown; codeAgentMode?: unknown },
+    data: { roomId?: string; password?: string; clearPassword?: boolean; postingSchedule?: unknown; cocoAccess?: unknown; codeAgentMode?: unknown; codeAgentBackend?: unknown },
     callback?: (result: BasicRoomAck) => void,
   ) => {
     const clientId = await store.getClientId(socket.id);
@@ -1021,6 +1021,13 @@ export function registerRoomHandlers({
         updates.codeAgentMode = data.codeAgentMode as typeof VALID_CODE_AGENT_MODES[number];
       } else if (data.codeAgentMode === null) {
         updates.codeAgentMode = null;
+      }
+
+      const VALID_CODE_AGENT_BACKENDS = ['coco', 'codex'] as const;
+      if (typeof data.codeAgentBackend === 'string' && VALID_CODE_AGENT_BACKENDS.includes(data.codeAgentBackend as any)) {
+        updates.codeAgentBackend = data.codeAgentBackend as typeof VALID_CODE_AGENT_BACKENDS[number];
+      } else if (data.codeAgentBackend === null) {
+        updates.codeAgentBackend = null;
       }
 
       // 空更新不写库不广播:写库会无意义地 bump updated_at 并触发全房 room_updated

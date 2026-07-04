@@ -26,6 +26,14 @@ export interface CodexConnectionRecord {
   lastError?: string;
 }
 
+export interface CodexConnectionAccountSummary {
+  email?: string;
+  name?: string;
+  accountId?: string;
+  userId?: string;
+  planType?: string;
+}
+
 export interface CodexConnectionPublicStatus {
   clientId: string;
   provider: 'codex';
@@ -37,6 +45,7 @@ export interface CodexConnectionPublicStatus {
   lastUsedAt?: string;
   locked: boolean;
   lastError?: string;
+  account?: CodexConnectionAccountSummary;
 }
 
 export interface CodexDeviceAuthInfo {
@@ -183,7 +192,7 @@ export class CodexConnectionService {
         lastValidatedAt: this.timestamp(),
         lastError: undefined,
       });
-      return publicStatus(connected, this.now());
+      return publicStatus(connected, this.now(), summarizeCodexAuthAccount(result.authJson));
     } catch (error) {
       if (isCodexConnectionError(error, 'device_auth_cancelled') || options.signal?.aborted) {
         if (existing) {
@@ -222,7 +231,7 @@ export class CodexConnectionService {
         locked: false,
       };
     }
-    return publicStatus(record, this.now());
+    return publicStatus(record, this.now(), this.accountSummaryForRecord(record));
   }
 
   async disconnect(clientId: string): Promise<CodexConnectionPublicStatus> {
@@ -279,6 +288,17 @@ export class CodexConnectionService {
 
   private timestamp() {
     return this.now().toISOString();
+  }
+
+  private accountSummaryForRecord(record: CodexConnectionRecord): CodexConnectionAccountSummary | undefined {
+    if (!record.encryptedAuthJson) {
+      return undefined;
+    }
+    try {
+      return summarizeCodexAuthAccount(this.cipher.decryptAuthJson(record.encryptedAuthJson));
+    } catch {
+      return undefined;
+    }
   }
 }
 
@@ -342,7 +362,11 @@ export class InMemoryCodexConnectionStore implements CodexConnectionStore {
   }
 }
 
-const publicStatus = (record: CodexConnectionRecord, now: Date): CodexConnectionPublicStatus => ({
+const publicStatus = (
+  record: CodexConnectionRecord,
+  now: Date,
+  account?: CodexConnectionAccountSummary
+): CodexConnectionPublicStatus => ({
   clientId: record.clientId,
   provider: 'codex',
   status: record.status,
@@ -353,7 +377,89 @@ const publicStatus = (record: CodexConnectionRecord, now: Date): CodexConnection
   lastUsedAt: record.lastUsedAt,
   locked: isLocked(record, now),
   lastError: record.lastError,
+  ...(account ? { account } : {}),
 });
+
+export const summarizeCodexAuthAccount = (authJson: string): CodexConnectionAccountSummary | undefined => {
+  const parsed = parseJsonObject(authJson);
+  if (!parsed) {
+    return undefined;
+  }
+
+  const openaiAuth = objectValue(parsed.OPENAI_AUTH) || objectValue(parsed.openaiAuth);
+  const tokens = objectValue(parsed.tokens) || objectValue(openaiAuth?.tokens) || openaiAuth || parsed;
+  const idClaims = decodeJwtPayload(stringValue(tokens.id_token) || stringValue(tokens.idToken) || stringValue(parsed.id_token));
+  const accessClaims = decodeJwtPayload(stringValue(tokens.access_token) || stringValue(tokens.accessToken) || stringValue(parsed.access_token));
+  const authClaim = objectValue(idClaims?.['https://api.openai.com/auth'])
+    || objectValue(accessClaims?.['https://api.openai.com/auth']);
+  const profileClaim = objectValue(accessClaims?.['https://api.openai.com/profile'])
+    || objectValue(idClaims?.['https://api.openai.com/profile']);
+
+  const summary: CodexConnectionAccountSummary = {
+    email: firstString(idClaims?.email, profileClaim?.email, parsed.email, openaiAuth?.email),
+    name: firstString(idClaims?.name, profileClaim?.name, parsed.name, openaiAuth?.name),
+    accountId: firstString(
+      tokens.account_id,
+      tokens.accountId,
+      parsed.account_id,
+      parsed.accountId,
+      authClaim?.chatgpt_account_id,
+    ),
+    userId: firstString(
+      authClaim?.chatgpt_user_id,
+      authClaim?.chatgpt_account_user_id,
+      authClaim?.user_id,
+      idClaims?.sub,
+      accessClaims?.sub,
+    ),
+    planType: firstString(authClaim?.chatgpt_plan_type, parsed.plan_type, parsed.planType),
+  };
+
+  return Object.values(summary).some(Boolean) ? summary : undefined;
+};
+
+const parseJsonObject = (value: string): Record<string, unknown> | undefined => {
+  try {
+    return objectValue(JSON.parse(value));
+  } catch {
+    return undefined;
+  }
+};
+
+const decodeJwtPayload = (token: string | undefined): Record<string, unknown> | undefined => {
+  if (!token) {
+    return undefined;
+  }
+  const payload = token.split('.')[1];
+  if (!payload) {
+    return undefined;
+  }
+  try {
+    const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=');
+    return objectValue(JSON.parse(Buffer.from(padded, 'base64').toString('utf8')));
+  } catch {
+    return undefined;
+  }
+};
+
+const objectValue = (value: unknown): Record<string, unknown> | undefined => (
+  value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+);
+
+const stringValue = (value: unknown): string | undefined => (
+  typeof value === 'string' && value.trim() ? value.trim() : undefined
+);
+
+const firstString = (...values: unknown[]): string | undefined => {
+  for (const value of values) {
+    const normalized = stringValue(value);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return undefined;
+};
 
 const isLocked = (record: CodexConnectionRecord, now: Date) => (
   Boolean(record.activeRunId && record.lockedUntil && Date.parse(record.lockedUntil) > now.getTime())

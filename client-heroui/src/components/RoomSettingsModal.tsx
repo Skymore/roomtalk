@@ -650,6 +650,48 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
 
           {(isOwner || isAdmin) && room.type === 'coco' && (
             <div className="space-y-2">
+              {renderSectionLabel('lucide:terminal', t('codeAgentEngine'))}
+              <div className="flex flex-wrap gap-1.5">
+                {(['coco', 'codex'] as const).map(backend => {
+                  const current = room.codeAgentBackend || 'coco';
+                  const selected = current === backend;
+                  return (
+                    <Button
+                      key={backend}
+                      size="sm"
+                      className={`h-8 rounded-lg px-3 text-xs font-semibold ${
+                        selected
+                          ? 'bg-[#c96442] text-[#faf9f5]'
+                          : 'bg-[#e8e6dc] text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]'
+                      }`}
+                      startContent={<Icon icon={backend === 'codex' ? 'lucide:bot' : 'lucide:sparkles'} className="h-3.5 w-3.5" />}
+                      isDisabled={isSaving}
+                      onPress={async () => {
+                        if (selected) return;
+                        setIsSaving(true);
+                        try {
+                          const updated = await updateRoomSettings({ roomId: room.id, codeAgentBackend: backend });
+                          onRoomUpdated?.(updated);
+                        } catch {
+                          setStatusMessage(t('settingsUpdateFailed'));
+                        } finally {
+                          setIsSaving(false);
+                        }
+                      }}
+                    >
+                      {backend === 'codex' ? t('codeAgentEngineCodex') : t('codeAgentEngineCoco')}
+                    </Button>
+                  );
+                })}
+              </div>
+              <div className="text-xs text-[#87867f] dark:text-[#b0aea5]">
+                {t('codeAgentEngineDescription')}
+              </div>
+            </div>
+          )}
+
+          {(isOwner || isAdmin) && room.type === 'coco' && (
+            <div className="space-y-2">
               {renderSectionLabel('lucide:settings-2', t('codeAgentMode'))}
               <div className="flex gap-1.5">
                 {(['plan', 'acceptEdits'] as const).map(mode => {

@@ -13,6 +13,13 @@ export interface CodexConnectionStatus {
   lastUsedAt?: string;
   locked: boolean;
   lastError?: string;
+  account?: {
+    email?: string;
+    name?: string;
+    accountId?: string;
+    userId?: string;
+    planType?: string;
+  };
 }
 
 export interface CodexDeviceAuthInfo {

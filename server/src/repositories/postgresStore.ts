@@ -42,6 +42,7 @@ type RoomRow = {
   coco_status?: RoomCocoStatus | null;
   coco_access?: string | null;
   code_agent_mode?: string | null;
+  code_agent_backend?: string | null;
   room_version?: number | string | null;
   updated_at?: string | Date | null;
 };
@@ -194,7 +195,7 @@ type ClientAccountRow = {
   email_verified: boolean | null;
 };
 
-const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, coco_session_id, coco_status, coco_access, code_agent_mode, room_version, updated_at';
+const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, coco_session_id, coco_status, coco_access, code_agent_mode, code_agent_backend, room_version, updated_at';
 const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ui_payload, code_agent_mode';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, filename, width, height, duration_ms, uploaded_by_client_id, created_at';
@@ -297,6 +298,7 @@ const mapRoom = (row: RoomRow): Room => {
   if (row.coco_status) room.cocoStatus = row.coco_status;
   if (row.coco_access) room.cocoAccess = row.coco_access as Room['cocoAccess'];
   if (row.code_agent_mode) room.codeAgentMode = row.code_agent_mode as Room['codeAgentMode'];
+  if (row.code_agent_backend) room.codeAgentBackend = row.code_agent_backend as Room['codeAgentBackend'];
   const roomVersion = Number(row.room_version || 0);
   if (roomVersion > 0) room.roomVersion = roomVersion;
   if (row.updated_at) room.updatedAt = toIsoString(row.updated_at);
@@ -1916,15 +1918,16 @@ export class PostgresStore implements DurableRoomStore {
             coco_status,
             coco_access,
             code_agent_mode,
+            code_agent_backend,
             room_version,
             updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 1, NOW())
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 1, NOW())
           ON CONFLICT (id) DO UPDATE SET
             name = EXCLUDED.name,
             description = EXCLUDED.description,
             last_activity_at = GREATEST(rooms.last_activity_at, EXCLUDED.last_activity_at),
-            type = CASE WHEN $15::boolean THEN EXCLUDED.type ELSE rooms.type END,
+            type = CASE WHEN $16::boolean THEN EXCLUDED.type ELSE rooms.type END,
             sandbox_id = COALESCE(EXCLUDED.sandbox_id, rooms.sandbox_id),
             sandbox_status = COALESCE(EXCLUDED.sandbox_status, rooms.sandbox_status),
             sandbox_updated_at = COALESCE(EXCLUDED.sandbox_updated_at, rooms.sandbox_updated_at),
@@ -1932,6 +1935,7 @@ export class PostgresStore implements DurableRoomStore {
             coco_status = COALESCE(EXCLUDED.coco_status, rooms.coco_status),
             coco_access = COALESCE(EXCLUDED.coco_access, rooms.coco_access),
             code_agent_mode = COALESCE(EXCLUDED.code_agent_mode, rooms.code_agent_mode),
+            code_agent_backend = COALESCE(EXCLUDED.code_agent_backend, rooms.code_agent_backend),
             room_version = rooms.room_version + 1, updated_at = NOW()
           RETURNING ${ROOM_COLUMNS}`,
           [
@@ -1949,6 +1953,7 @@ export class PostgresStore implements DurableRoomStore {
             room.cocoStatus || null,
             room.cocoAccess || null,
             room.codeAgentMode || null,
+            room.codeAgentBackend || null,
             room.type !== undefined,
           ]
         );
@@ -2334,6 +2339,7 @@ export class PostgresStore implements DurableRoomStore {
     const hasPostingScheduleUpdate = Object.prototype.hasOwnProperty.call(updates, 'postingSchedule');
     const hasCocoAccessUpdate = Object.prototype.hasOwnProperty.call(updates, 'cocoAccess');
     const hasCodeAgentModeUpdate = Object.prototype.hasOwnProperty.call(updates, 'codeAgentMode');
+    const hasCodeAgentBackendUpdate = Object.prototype.hasOwnProperty.call(updates, 'codeAgentBackend');
 
     try {
       const result = await this.pool.query<RoomRow>(
@@ -2342,6 +2348,7 @@ export class PostgresStore implements DurableRoomStore {
           posting_schedule = CASE WHEN $4::boolean THEN $5::jsonb ELSE posting_schedule END,
           coco_access = CASE WHEN $6::boolean THEN $7 ELSE coco_access END,
           code_agent_mode = CASE WHEN $8::boolean THEN $9 ELSE code_agent_mode END,
+          code_agent_backend = CASE WHEN $10::boolean THEN $11 ELSE code_agent_backend END,
           room_version = room_version + 1, updated_at = NOW()
         WHERE id = $1
         RETURNING ${ROOM_COLUMNS}`,
@@ -2355,6 +2362,8 @@ export class PostgresStore implements DurableRoomStore {
           updates.cocoAccess ?? null,
           hasCodeAgentModeUpdate,
           updates.codeAgentMode ?? null,
+          hasCodeAgentBackendUpdate,
+          updates.codeAgentBackend ?? null,
         ]
       );
       return result.rows[0] ? mapRoom(result.rows[0]) : null;

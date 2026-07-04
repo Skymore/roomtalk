@@ -14,6 +14,8 @@ export type RoomType = 'chat' | 'coco';
 export type RoomSandboxStatus = 'none' | 'creating' | 'ready' | 'expired' | 'error';
 export type RoomCocoStatus = 'idle' | 'running' | 'error';
 export type CocoAccessLevel = 'owner' | 'admin' | 'member';
+export type CodeAgentMode = 'plan' | 'acceptEdits';
+export type CodeAgentBackend = 'coco' | 'codex';
 export type MessageType = 'text' | 'ai' | 'media' | 'sticker' | 'tool_call' | 'tool_result' | 'sandbox_status';
 export type AIModelProvider = 'openai' | 'openrouter' | 'deepseek' | 'anthropic';
 
@@ -116,7 +118,7 @@ export interface Message {
   };
   usage?: AIUsage;
   cost?: AICost;
-  codeAgentMode?: 'plan' | 'acceptEdits';
+  codeAgentMode?: CodeAgentMode;
   replyTo?: MessageReplyReference;
   mediaAsset?: MessageMediaAsset;
   uiPayload?: A2UIPayload;
@@ -136,7 +138,8 @@ export interface Room {
   cocoSessionId?: string;
   cocoStatus?: RoomCocoStatus;
   cocoAccess?: CocoAccessLevel;
-  codeAgentMode?: 'plan' | 'acceptEdits';
+  codeAgentMode?: CodeAgentMode;
+  codeAgentBackend?: CodeAgentBackend;
   messageVersion?: number;
   hasPassword?: boolean;
   postingSchedule?: RoomPostingSchedule;

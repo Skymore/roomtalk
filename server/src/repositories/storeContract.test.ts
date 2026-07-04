@@ -472,6 +472,7 @@ type RoomRow = {
   coco_status?: Room['cocoStatus'] | null;
   coco_access?: Room['cocoAccess'] | null;
   code_agent_mode?: Room['codeAgentMode'] | null;
+  code_agent_backend?: Room['codeAgentBackend'] | null;
 };
 
 type MessageRow = {
@@ -596,6 +597,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         cocoStatus,
         cocoAccess,
         codeAgentMode,
+        codeAgentBackend,
         shouldUpdateType,
       ] = params;
       const roomId = String(id);
@@ -614,6 +616,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
           coco_status: cocoStatus === null || cocoStatus === undefined ? existing.coco_status : cocoStatus as Room['cocoStatus'],
           coco_access: cocoAccess === null || cocoAccess === undefined ? existing.coco_access : cocoAccess as Room['cocoAccess'],
           code_agent_mode: codeAgentMode === null || codeAgentMode === undefined ? existing.code_agent_mode : codeAgentMode as Room['codeAgentMode'],
+          code_agent_backend: codeAgentBackend === null || codeAgentBackend === undefined ? existing.code_agent_backend : codeAgentBackend as Room['codeAgentBackend'],
           room_version: (existing.room_version || 0) + 1,
           updated_at: new Date().toISOString(),
         }
@@ -633,6 +636,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
           coco_status: cocoStatus === null || cocoStatus === undefined ? null : cocoStatus as Room['cocoStatus'],
           coco_access: cocoAccess === null || cocoAccess === undefined ? null : cocoAccess as Room['cocoAccess'],
           code_agent_mode: codeAgentMode === null || codeAgentMode === undefined ? null : codeAgentMode as Room['codeAgentMode'],
+          code_agent_backend: codeAgentBackend === null || codeAgentBackend === undefined ? null : codeAgentBackend as Room['codeAgentBackend'],
           room_version: 1,
           updated_at: new Date().toISOString(),
         };

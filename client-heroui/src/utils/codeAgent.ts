@@ -1,8 +1,7 @@
 import { FeatureFlags } from './features';
-import { Room, RoomCocoStatus } from './types';
+import { CodeAgentBackend, CodeAgentMode, Room, RoomCocoStatus } from './types';
 
-export type CodeAgentBackend = 'coco' | 'codex';
-export type CodeAgentMode = 'plan' | 'acceptEdits';
+export type { CodeAgentBackend, CodeAgentMode } from './types';
 
 const runtimeRoomType = (room: Room | null | undefined): string | undefined => (
   room?.type as string | undefined

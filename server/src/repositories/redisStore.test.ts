@@ -197,7 +197,20 @@ class MemoryRedis {
     }
 
     if (script.includes('local passwordMode = ARGV[3]')) {
-      const [roomId, updatedAt, passwordMode, passwordHash, postingScheduleMode, postingScheduleJson] = options.arguments;
+      const [
+        roomId,
+        updatedAt,
+        passwordMode,
+        passwordHash,
+        postingScheduleMode,
+        postingScheduleJson,
+        cocoAccessMode,
+        cocoAccess,
+        codeAgentModeMode,
+        codeAgentMode,
+        codeAgentBackendMode,
+        codeAgentBackend,
+      ] = options.arguments;
       const roomJson = this.hash('rooms').get(roomId);
       if (!roomJson) {
         return '';
@@ -214,6 +227,21 @@ class MemoryRedis {
         room.postingSchedule = JSON.parse(postingScheduleJson);
       } else if (postingScheduleMode === 'clear') {
         delete room.postingSchedule;
+      }
+      if (cocoAccessMode === 'set') {
+        room.cocoAccess = cocoAccess;
+      } else if (cocoAccessMode === 'clear') {
+        delete room.cocoAccess;
+      }
+      if (codeAgentModeMode === 'set') {
+        room.codeAgentMode = codeAgentMode;
+      } else if (codeAgentModeMode === 'clear') {
+        delete room.codeAgentMode;
+      }
+      if (codeAgentBackendMode === 'set') {
+        room.codeAgentBackend = codeAgentBackend;
+      } else if (codeAgentBackendMode === 'clear') {
+        delete room.codeAgentBackend;
       }
       const updatedRoom = {
         ...room,
@@ -645,10 +673,12 @@ describe('RedisStore', () => {
     const settingsUpdated = await settingsStore.updateRoomSettings('room-1', {
       passwordHash: 'secret-hash',
       postingSchedule: schedule,
+      codeAgentBackend: 'codex',
     });
 
     assert.equal(settingsUpdated?.name, 'Concurrent Rename');
     assert.deepEqual(settingsUpdated?.postingSchedule, schedule);
+    assert.equal(settingsUpdated?.codeAgentBackend, 'codex');
     assert.equal(settingsUpdated?.hasPassword, true);
     assert.equal(await settingsStore.readRoomPasswordHash('room-1'), 'secret-hash');
   });

@@ -5,8 +5,9 @@ import {
   CocoRunnerRunContext,
   CocoRunnerRunResult,
 } from './fakeCocoRunner';
+import type { CodeAgentBackend } from '../types';
 
-export type CodeAgentBackend = 'coco' | 'codex';
+export type { CodeAgentBackend } from '../types';
 
 export interface CodeAgentRunner {
   readonly backend: CodeAgentBackend;

@@ -37,8 +37,12 @@ import { createE2BSdkDriver } from './services/e2bSdkDriver';
 import { COCO_RUNNER_SCHEMA_VERSION } from './services/cocoRunnerProtocol';
 import { createCodeWorkspaceAssetAccessFromEnv } from './services/codeWorkspaceAssetAccess';
 import {
+  DEFAULT_CODEX_CLI_RUNNER_COMMAND,
+  DEFAULT_COCO_RUNNER_COMMAND,
   DEFAULT_COCO_E2B_KILL_TIMEOUT_MS,
   DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS,
+  DEFAULT_COCO_RUNNER_PYTHONPATH,
+  DEFAULT_COCO_WORKSPACE_ROOT,
   resolveCocoRuntimeConfig,
 } from './services/cocoRuntimeConfig';
 import {
@@ -319,13 +323,16 @@ const cocoRunnerClient = cocoRuntimeConfig.runnerClient === 'jsonl' ? new JsonlC
   { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'fake-ai', answer: 'Coco fake runner received the task.', sessionId: 'fake-coco-session' },
 ], { eventDelayMs: parsePositiveIntegerEnv('COCO_FAKE_RUNNER_EVENT_DELAY_MS', 0) });
 const codeAgentRunner = createCodeAgentRunner(cocoRuntimeConfig.backend, cocoRunnerClient);
-const cocoRunnerEnv = cocoRuntimeConfig.backend === 'codex'
-  ? {
-    ...cocoRuntimeConfig.runnerEnv,
-    CODEX_CLI_BIN: codexCliRunnerConfig.cliBin,
-    ROOMTALK_CODEX_TIMEOUT_MS: String(codexCliRunnerConfig.timeoutMs),
-  }
-  : cocoRuntimeConfig.runnerEnv;
+const codexRunnerEnv = {
+  PYTHONPATH: cocoRuntimeConfig.runnerEnv.PYTHONPATH || DEFAULT_COCO_RUNNER_PYTHONPATH,
+  COCO_WORKSPACE_ROOT: cocoRuntimeConfig.runnerEnv.COCO_WORKSPACE_ROOT || cocoRuntimeConfig.e2bWorkspace || DEFAULT_COCO_WORKSPACE_ROOT,
+  CODEX_CLI_BIN: codexCliRunnerConfig.cliBin,
+  ROOMTALK_CODEX_TIMEOUT_MS: String(codexCliRunnerConfig.timeoutMs),
+};
+const runnerCommandByBackend = {
+  coco: cocoRuntimeConfig.backend === 'coco' ? cocoRuntimeConfig.runnerCommand : DEFAULT_COCO_RUNNER_COMMAND,
+  codex: cocoRuntimeConfig.backend === 'codex' ? cocoRuntimeConfig.runnerCommand : DEFAULT_CODEX_CLI_RUNNER_COMMAND,
+};
 const cocoSessionService = new CocoSessionService(
   store,
   io,
@@ -340,11 +347,17 @@ const cocoSessionService = new CocoSessionService(
     availableModes: cocoRuntimeConfig.availableModes,
     defaultMode: cocoRuntimeConfig.defaultMode,
     modelGateway: cocoModelGateway,
+    backend: cocoRuntimeConfig.backend,
     runnerCommand: cocoRuntimeConfig.runnerCommand,
+    runnerCommandByBackend,
     turnTimeoutMs: cocoTurnTimeoutMs,
     allowedPaths: cocoRuntimeConfig.allowedPaths,
-    runnerEnv: cocoRunnerEnv,
+    runnerEnv: cocoRuntimeConfig.runnerEnv,
+    runnerEnvByBackend: {
+      codex: codexRunnerEnv,
+    },
     runnerProviderEnvByProvider: cocoRuntimeConfig.runnerProviderEnvByProvider,
+    codexBackendEnabled: codexCliRunnerConfig.enabled && Boolean(codexConnectionService),
     codexConnectionService,
     staticSitePublisher: publishedStaticSiteService,
     observability: observabilityRecorder,

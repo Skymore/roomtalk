@@ -577,6 +577,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       : codexStatus?.status === 'reauth_required'
         ? 'danger'
         : 'default';
+  const codexAccountIdentity = codexStatus?.status === 'connected'
+    ? (codexStatus.account?.email || codexStatus.account?.name || codexStatus.account?.accountId || codexStatus.account?.userId || null)
+    : null;
+  const codexAccountPlan = codexStatus?.status === 'connected'
+    ? formatCodexPlanType(codexStatus.account?.planType)
+    : null;
   const codexExpiryLabel = React.useMemo(() => {
     if (codexDeviceAuthSecondsRemaining === null) {
       return '';
@@ -876,6 +882,20 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     </Button>
                   )}
                 </div>
+                {codexAccountIdentity && (
+                  <p className="flex min-w-0 items-center gap-1.5 text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">
+                    <Icon icon="lucide:user-round-check" className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    <span className="shrink-0">{t("codexSignedInAs")}</span>
+                    <span className="min-w-0 truncate font-medium text-[#30302e] dark:text-[#faf9f5]">
+                      {codexAccountIdentity}
+                    </span>
+                    {codexAccountPlan && (
+                      <span className="shrink-0 text-[#77756f] dark:text-[#b0aea5]">
+                        · {codexAccountPlan}
+                      </span>
+                    )}
+                  </p>
+                )}
 
                 {codexDeviceAuth && (
                   <div className="grid gap-2 rounded-lg bg-[#e8e6dc] p-3 dark:bg-[#242423]">
@@ -1134,4 +1154,15 @@ const formatCountdown = (seconds: number) => {
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = seconds % 60;
   return `${minutes}:${String(remainingSeconds).padStart(2, '0')}`;
+};
+
+const formatCodexPlanType = (value?: string) => {
+  const normalized = value?.replace(/[_-]+/g, ' ').trim();
+  if (!normalized) {
+    return null;
+  }
+  return normalized
+    .split(/\s+/)
+    .map(part => `${part.charAt(0).toUpperCase()}${part.slice(1).toLowerCase()}`)
+    .join(' ');
 };

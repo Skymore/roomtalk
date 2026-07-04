@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { PassThrough } from 'stream';
+import { PassThrough, Writable } from 'stream';
 import { COCO_RUNNER_SCHEMA_VERSION, CocoRunnerEvent, CocoRunnerRunRequest } from './cocoRunnerProtocol';
 import { CocoRunnerProcess, CocoRunnerProcessExit, CocoSandboxHandle } from './cocoSandboxService';
 import { JsonlCocoRunnerClient } from './jsonlCocoRunner';
@@ -72,7 +72,35 @@ class MemoryRunnerProcess implements CocoRunnerProcess {
   }
 }
 
-const createContext = (process = new MemoryRunnerProcess()) => ({
+class StdinFailureRunnerProcess implements CocoRunnerProcess {
+  readonly command = 'python -m roomtalk_coco_runner';
+  readonly stdin: Writable;
+  readonly stdout = new PassThrough();
+  readonly stderr = new PassThrough();
+  private resolveExit!: (exit: CocoRunnerProcessExit) => void;
+  readonly completed: Promise<CocoRunnerProcessExit>;
+
+  constructor(error: Error) {
+    this.stdin = new Writable({
+      write(_chunk, _encoding, callback) {
+        callback(error);
+      },
+    });
+    this.completed = new Promise<CocoRunnerProcessExit>(resolve => {
+      this.resolveExit = resolve;
+    });
+  }
+
+  complete(exitCode = 1, signal: string | null = null) {
+    this.stdout.end();
+    this.stderr.end();
+    this.resolveExit({ exitCode, signal });
+  }
+
+  async stop() {}
+}
+
+const createContext = (process: CocoRunnerProcess = new MemoryRunnerProcess()) => ({
   process,
   sandbox,
 });
@@ -138,6 +166,27 @@ describe('JsonlCocoRunnerClient', () => {
     const result = await run;
     assert.equal(result.errorEvent?.code, 'runner_exit');
     assert.match(result.errorEvent?.message || '', /provider failed/);
+    assert.deepEqual(emitted.map(event => event.type), ['error']);
+  });
+
+  it('turns stdin write failures into a runner error event with stderr tail', async () => {
+    const process = new StdinFailureRunnerProcess(new Error('write |1: broken pipe'));
+    const runner = new JsonlCocoRunnerClient();
+    const emitted: CocoRunnerEvent[] = [];
+
+    const run = runner.run(request, {
+      onEvent: event => {
+        emitted.push(event);
+      },
+    }, createContext(process));
+
+    process.stderr.write('ModuleNotFoundError: roomtalk_coco_runner.codex_cli');
+    process.complete(1);
+
+    const result = await run;
+    assert.equal(result.errorEvent?.code, 'runner_stdin_write_failed');
+    assert.match(result.errorEvent?.message || '', /broken pipe/);
+    assert.match(result.errorEvent?.message || '', /roomtalk_coco_runner\.codex_cli/);
     assert.deepEqual(emitted.map(event => event.type), ['error']);
   });
 

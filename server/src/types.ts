@@ -61,6 +61,7 @@ export type RoomSandboxStatus = 'none' | 'creating' | 'ready' | 'expired' | 'err
 export type RoomCocoStatus = 'idle' | 'running' | 'error';
 export type CocoAccessLevel = 'owner' | 'admin' | 'member';
 export type CodeAgentMode = 'plan' | 'acceptEdits';
+export type CodeAgentBackend = 'coco' | 'codex';
 export type MessageType = 'text' | 'ai' | 'media' | 'sticker' | 'tool_call' | 'tool_result' | 'sandbox_status';
 
 export interface MessageMediaAsset {
@@ -154,6 +155,7 @@ export interface Room {
   cocoStatus?: RoomCocoStatus;
   cocoAccess?: CocoAccessLevel;
   codeAgentMode?: CodeAgentMode;
+  codeAgentBackend?: CodeAgentBackend;
   // 行级单调版本号:每次房间写入 +1,客户端 last-write-wins 的主比较键
   // (updatedAt 退为展示/兼容用途)。版本相等 ⟺ 同一次写入。
   roomVersion?: number;

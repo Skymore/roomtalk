@@ -734,6 +734,7 @@ export const updateRoomSettings = (params: {
   postingSchedule?: RoomPostingSchedule | null;
   cocoAccess?: Room['cocoAccess'] | null;
   codeAgentMode?: Room['codeAgentMode'] | null;
+  codeAgentBackend?: Room['codeAgentBackend'] | null;
 }): Promise<Room> => {
   return emitWithAck<RoomAckResponse>(
     'update_room_settings',

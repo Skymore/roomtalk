@@ -1,14 +1,14 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../logger';
 import { RoomStore } from '../repositories/store';
-import { AIModelOption, Message, Room, RoomMemberRole } from '../types';
+import { AIModelOption, CodeAgentBackend, Message, Room, RoomMemberRole } from '../types';
 import { calculateAICost, getMessageAIModel } from './aiModels';
 import { CocoSandboxLifecycleService, EnsureCocoSandboxResult } from './cocoSandboxLifecycle';
 import { CocoSandboxHandle, CocoSandboxService, CocoRunnerProcess } from './cocoSandboxService';
 import { mapCocoRunnerEvent } from './cocoEventMapper';
 import { CodeAgentRunner } from './codeAgentRunner';
 import { COCO_RUNNER_SCHEMA_VERSION, CocoRunnerEvent, CocoRunnerMode, CocoRunnerRunRequest } from './cocoRunnerProtocol';
-import { DEFAULT_COCO_RUNNER_COMMAND } from './cocoRuntimeConfig';
+import { DEFAULT_CODEX_CLI_RUNNER_COMMAND, DEFAULT_COCO_RUNNER_COMMAND } from './cocoRuntimeConfig';
 import { createAIPlaceholderMessage } from './messageDomain';
 import { CocoModelGateway } from './cocoModelGateway';
 import { buildCocoPriorMessages } from './cocoTranscript';
@@ -31,11 +31,15 @@ export interface CocoSessionServiceOptions {
   availableModes?: CocoRunnerMode[];
   defaultMode?: CocoRunnerMode;
   modelGateway?: CocoModelGateway;
+  backend?: CodeAgentBackend;
   runnerCommand?: string;
+  runnerCommandByBackend?: Partial<Record<CodeAgentBackend, string>>;
   turnTimeoutMs?: number;
   allowedPaths?: string[];
   runnerEnv?: Record<string, string>;
+  runnerEnvByBackend?: Partial<Record<CodeAgentBackend, Record<string, string>>>;
   runnerProviderEnvByProvider?: Partial<Record<AIModelOption['provider'], Record<string, string>>>;
+  codexBackendEnabled?: boolean;
   codexConnectionService?: Pick<CodexConnectionService, 'withCodexAuth'>;
   staticSitePublisher?: PublishedStaticSiteService;
   observability?: ObservabilityEventRecorder;
@@ -131,6 +135,11 @@ export class CocoSessionService {
     if (!turnMode.ok) {
       return rejectTurn(turnMode.error, { reason: 'mode_rejected', requestedMode: input.requestedMode ?? room!.codeAgentMode });
     }
+    const turnBackend = this.resolveTurnBackend(room!);
+    const backendValidation = this.validateTurnBackend(turnBackend);
+    if (!backendValidation.ok) {
+      return rejectTurn(backendValidation.error, { reason: 'backend_rejected', backend: turnBackend });
+    }
 
     let aiMessageId = '';
     let turnId = '';
@@ -148,7 +157,7 @@ export class CocoSessionService {
         ...createAIPlaceholderMessage({
           id: aiMessageId,
           roomId: input.roomId,
-          roleName: 'Coco',
+          roleName: this.displayBackendName(turnBackend),
           model: input.selectedModel,
           now: this.now(),
         }),
@@ -167,6 +176,7 @@ export class CocoSessionService {
 
       await this.recordTurnEvent('info', 'coco.turn.started', input, turnId, turnStartedAtMs, {
         payload: {
+          backend: turnBackend,
           mode: turnMode.mode,
           promptLength: promptContext.prompt.length,
           priorMessageCount: promptContext.priorMessages.length,
@@ -192,6 +202,7 @@ export class CocoSessionService {
       }
       await this.recordTurnEvent('info', 'coco.sandbox.ensure', input, turnId, turnStartedAtMs, {
         payload: {
+          backend: turnBackend,
           sandboxId: sandbox.handle.id,
           sandboxProvider: sandbox.handle.provider,
           sandboxCreated: sandbox.created,
@@ -235,14 +246,17 @@ export class CocoSessionService {
         segmentIds: [aiMessageId],
         nonEmptySegmentIds: new Set(),
       };
-      const runnerEnv = this.buildRunnerEnv(input.selectedModel, {
-        roomId: input.roomId,
-        clientId: input.clientId,
-        turnId,
-        mode: turnMode.mode,
-        clientOrigin: input.clientOrigin,
-        serverOrigin: input.serverOrigin,
-      });
+      const runnerEnv = {
+        ...this.buildRunnerEnv(input.selectedModel, {
+          roomId: input.roomId,
+          clientId: input.clientId,
+          turnId,
+          mode: turnMode.mode,
+          clientOrigin: input.clientOrigin,
+          serverOrigin: input.serverOrigin,
+        }),
+        ...(this.options.runnerEnvByBackend?.[turnBackend] || {}),
+      };
       const runnerRequest: CocoRunnerRunRequest = {
         schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
         type: 'run',
@@ -262,13 +276,13 @@ export class CocoSessionService {
       const startRunnerProcess = async (env: Record<string, string>) => {
         runnerProcess = await this.sandboxService.startRunner({
           handle: sandbox.handle,
-          command: this.options.runnerCommand || DEFAULT_COCO_RUNNER_COMMAND,
+          command: this.runnerCommandForBackend(turnBackend),
           env,
           timeoutMs: this.options.turnTimeoutMs,
         });
         await this.recordTurnEvent('info', 'coco.runner.started', input, turnId, turnStartedAtMs, {
           payload: {
-            backend: this.runner.backend,
+            backend: turnBackend,
             sandboxId: sandbox.handle.id,
             command: runnerProcess.command,
             mode: turnMode.mode,
@@ -278,10 +292,11 @@ export class CocoSessionService {
       };
       const runnerHandlers = {
         onEvent: async (event: CocoRunnerEvent) => {
-          await this.handleRunnerEvent(event, input.roomId, turnId, aiMessage!, input.selectedModel, streamState!);
+          await this.handleRunnerEvent(event, input.roomId, turnId, aiMessage!, input.selectedModel, streamState!, turnBackend);
         },
       };
       const runResult = await this.runRunnerWithBackendAuth({
+        backend: turnBackend,
         clientId: input.clientId,
         turnId,
         runnerEnv,
@@ -381,6 +396,7 @@ export class CocoSessionService {
         sessionId: runResult.finalEvent.sessionId,
         costUsd: cost?.totalUsd,
         payload: {
+          backend: turnBackend,
           messageId: finalActiveId,
           initialMessageId: aiMessageId,
           sessionId: runResult.finalEvent.sessionId,
@@ -394,11 +410,12 @@ export class CocoSessionService {
       return { success: true, messageId: aiMessageId };
     } catch (error) {
       const errorTargetId = streamState?.activeMessageId || aiMessageId;
-      this.logger.error('Coco turn failed', { error, roomId: input.roomId, messageId: errorTargetId });
+      this.logger.error('Code agent turn failed', { error, roomId: input.roomId, messageId: errorTargetId, backend: turnBackend });
       await this.recordTurnEvent('error', 'coco.turn.failed', input, turnId, turnStartedAtMs, {
         errorCode: 'turn_failed',
         errorMessage: error instanceof Error ? error.message : String(error),
         payload: {
+          backend: turnBackend,
           messageId: errorTargetId,
           placeholderAnnounced,
           roomMarkedRunning,
@@ -406,7 +423,7 @@ export class CocoSessionService {
       });
       if (placeholderAnnounced && aiMessage) {
         const errorTargetMessage: Message = { ...aiMessage, id: errorTargetId };
-        await this.saveCocoError(input.roomId, errorTargetMessage, error);
+        await this.saveCocoError(input.roomId, errorTargetMessage, error, turnBackend);
       } else if (roomMarkedRunning) {
         const errorRoom = await this.patchRoom(input.roomId, { cocoStatus: 'error' });
         if (errorRoom) {
@@ -414,9 +431,9 @@ export class CocoSessionService {
         }
       }
       if (!callbackSent) {
-        ack({ success: false, error: 'Coco task failed' });
+        ack({ success: false, error: `${this.displayBackendName(turnBackend)} task failed` });
       }
-      return { success: false, messageId: aiMessageId || undefined, error: 'Coco task failed' };
+      return { success: false, messageId: aiMessageId || undefined, error: `${this.displayBackendName(turnBackend)} task failed` };
     } finally {
       if (runnerProcess) {
         await this.stopRunnerProcess(runnerProcess, input.roomId);
@@ -432,6 +449,7 @@ export class CocoSessionService {
   }
 
   private async runRunnerWithBackendAuth(input: {
+    backend: CodeAgentBackend;
     clientId: string;
     turnId: string;
     runnerEnv: Record<string, string>;
@@ -440,12 +458,15 @@ export class CocoSessionService {
     sandbox: CocoSandboxHandle;
     startRunnerProcess: (env: Record<string, string>) => Promise<CocoRunnerProcess>;
   }): Promise<CocoRunnerRunResult> {
-    if (this.runner.backend !== 'codex') {
+    if (input.backend !== 'codex') {
       const process = await input.startRunnerProcess(input.runnerEnv);
       return this.runner.run(input.request, input.handlers, {
         process,
         sandbox: input.sandbox,
       });
+    }
+    if (this.options.codexBackendEnabled === false) {
+      throw new Error('Codex CLI backend is not enabled');
     }
 
     const connectionService = this.options.codexConnectionService;
@@ -554,6 +575,33 @@ export class CocoSessionService {
     return { ok: false, error: `Coco mode is not enabled: ${requestedMode}` };
   }
 
+  private resolveTurnBackend(room: Room): CodeAgentBackend {
+    return room.codeAgentBackend || this.options.backend || this.runner.backend || 'coco';
+  }
+
+  private validateTurnBackend(backend: CodeAgentBackend): { ok: true } | { ok: false; error: string } {
+    if (backend === 'codex' && this.options.codexBackendEnabled === false) {
+      return { ok: false, error: 'Codex CLI backend is not enabled' };
+    }
+    return { ok: true };
+  }
+
+  private displayBackendName(backend: CodeAgentBackend): string {
+    return backend === 'codex' ? 'Codex' : 'Coco';
+  }
+
+  private runnerCommandForBackend(backend: CodeAgentBackend): string {
+    const command = this.options.runnerCommandByBackend?.[backend];
+    if (command) {
+      return command;
+    }
+    const defaultBackend = this.options.backend || this.runner.backend || 'coco';
+    if (backend === defaultBackend && this.options.runnerCommand) {
+      return this.options.runnerCommand;
+    }
+    return backend === 'codex' ? DEFAULT_CODEX_CLI_RUNNER_COMMAND : DEFAULT_COCO_RUNNER_COMMAND;
+  }
+
   private availableModes(): CocoRunnerMode[] {
     if (this.options.availableModes?.length) {
       return Array.from(new Set(this.options.availableModes));
@@ -625,9 +673,10 @@ export class CocoSessionService {
     turnId: string,
     baseAIMessage: Message,
     selectedModel: AIModelOption,
-    state: CocoTurnStreamState
+    state: CocoTurnStreamState,
+    backend: CodeAgentBackend
   ) {
-    await this.recordRunnerEvent(event, roomId, turnId, selectedModel);
+    await this.recordRunnerEvent(event, roomId, turnId, selectedModel, backend);
     const mapped = mapCocoRunnerEvent(event, {
       roomId,
       turnId,
@@ -705,7 +754,7 @@ export class CocoSessionService {
     });
   }
 
-  private async saveCocoError(roomId: string, aiMessage: Message, error: unknown) {
+  private async saveCocoError(roomId: string, aiMessage: Message, error: unknown, backend: CodeAgentBackend) {
     const content = error instanceof Error ? error.message : 'Coco task failed';
     const errorMessage: Message = {
       ...aiMessage,
@@ -723,7 +772,7 @@ export class CocoSessionService {
     }
     this.emitter.to(roomId).emit('ai_stream_error', {
       messageId: aiMessage.id,
-      error: 'Coco task failed.',
+      error: `${this.displayBackendName(backend)} task failed.`,
       roomId,
     });
   }
@@ -761,7 +810,8 @@ export class CocoSessionService {
     event: CocoRunnerEvent,
     roomId: string,
     turnId: string,
-    selectedModel: AIModelOption
+    selectedModel: AIModelOption,
+    backend: CodeAgentBackend
   ) {
     if (event.type === 'text_delta') {
       return;
@@ -776,7 +826,7 @@ export class CocoSessionService {
       provider: selectedModel.provider,
       model: selectedModel.id,
       errorMessage: event.type === 'error' ? event.message : undefined,
-      payload,
+      payload: { backend, ...payload },
     });
   }
 

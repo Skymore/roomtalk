@@ -33,7 +33,6 @@ export class JsonlCocoRunnerClient implements CocoRunnerClient {
       exit => ({ ok: true as const, exit }),
       error => ({ ok: false as const, error })
     );
-    await writeRequest(runnerProcess.stdin, request);
 
     const events: CocoRunnerEvent[] = [];
     let finalEvent: CocoRunnerFinalEvent | undefined;
@@ -52,6 +51,21 @@ export class JsonlCocoRunnerClient implements CocoRunnerClient {
       }
       await handlers.onEvent(event);
     };
+
+    const writeError = await writeRequest(runnerProcess.stdin, request).then(
+      () => undefined,
+      error => error
+    );
+    if (writeError) {
+      const completed = await completionWithin(completion, 500);
+      const stderr = stderrTail();
+      const details = [
+        `Coco runner stdin write failed: ${writeError instanceof Error ? writeError.message : String(writeError)}`,
+        completed ? describeCompletion(completed) : 'runner process status was not available yet',
+        stderr ? `stderr: ${stderr}` : '',
+      ].filter(Boolean).join('; ');
+      return emitRunnerError(events, request, handlers, details, 'runner_stdin_write_failed');
+    }
 
     try {
       const parser = new CocoRunnerJsonlParser();
@@ -109,19 +123,24 @@ const writeRequest = (stdin: NodeJS.WritableStream, request: CocoRunnerRunReques
   const serialized = serializeCocoRunnerRequest(request);
   return new Promise<void>((resolve, reject) => {
     let settled = false;
+    const cleanup = () => {
+      stdin.removeListener('error', onError);
+    };
     const finish = (error?: Error | null) => {
       if (settled) {
         return;
       }
       settled = true;
-      stdin.removeListener('error', finish);
       if (error) {
+        setImmediate(cleanup);
         reject(error);
       } else {
+        cleanup();
         resolve();
       }
     };
-    stdin.once('error', finish);
+    const onError = (error: Error) => finish(error);
+    stdin.once('error', onError);
     stdin.end(serialized, 'utf8', finish);
   });
 };
@@ -155,6 +174,22 @@ const collectStderrTail = (stderr: NodeJS.ReadableStream | undefined) => {
     tail = `${tail}${bufferToString(chunk)}`.slice(-STDERR_TAIL_CHARS);
   });
   return () => tail.trim();
+};
+
+const completionWithin = <T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> => (
+  Promise.race([
+    promise,
+    new Promise<null>(resolve => setTimeout(() => resolve(null), timeoutMs)),
+  ])
+);
+
+const describeCompletion = (
+  completed: { ok: true; exit: { exitCode: number | null; signal?: string | null } } | { ok: false; error: unknown }
+): string => {
+  if (!completed.ok) {
+    return `runner process failed: ${completed.error instanceof Error ? completed.error.message : String(completed.error)}`;
+  }
+  return `runner process exited with code ${completed.exit.exitCode ?? 'null'}${completed.exit.signal ? ` and signal ${completed.exit.signal}` : ''}`;
 };
 
 const bufferToString = (chunk: unknown) => {

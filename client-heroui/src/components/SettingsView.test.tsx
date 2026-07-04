@@ -118,6 +118,28 @@ describe('SettingsView Codex connection controls', () => {
     expect(window.open).toHaveBeenCalledWith('https://auth.openai.com/codex/device', '_blank', 'noopener,noreferrer');
   });
 
+  it('shows the connected Codex account summary', async () => {
+    codexApiMock.getCodexConnectionStatus.mockResolvedValueOnce({
+      clientId: 'client-1',
+      provider: 'codex',
+      status: 'connected',
+      authVersion: 1,
+      createdAt: '2026-07-04T00:00:00.000Z',
+      updatedAt: '2026-07-04T00:00:00.000Z',
+      locked: false,
+      account: {
+        email: 'ada@example.com',
+        planType: 'pro',
+      },
+    });
+
+    render(<SettingsView {...baseProps} isCodexConnectionsEnabled />);
+
+    expect(await screen.findByText('ada@example.com')).toBeTruthy();
+    expect(document.body.textContent).toContain('Pro');
+    expect(screen.getByText('codexSignedInAs')).toBeTruthy();
+  });
+
   it('cancels a pending Codex device auth session', async () => {
     render(<SettingsView {...baseProps} isCodexConnectionsEnabled />);
 

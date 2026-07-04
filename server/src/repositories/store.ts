@@ -229,6 +229,7 @@ export interface RoomSettingsUpdate {
   postingSchedule?: RoomPostingSchedule | null;
   cocoAccess?: Room['cocoAccess'] | null;
   codeAgentMode?: Room['codeAgentMode'] | null;
+  codeAgentBackend?: Room['codeAgentBackend'] | null;
 }
 
 export interface DurableRoomStore {
