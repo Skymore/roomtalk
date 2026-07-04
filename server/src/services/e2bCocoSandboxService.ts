@@ -506,7 +506,7 @@ export class E2BCocoSandboxService implements CocoSandboxService {
       `archive=${quotedArchive}`,
       'export ROOMTALK_WORKSPACE="$workspace"',
       'export ROOMTALK_ARCHIVE="$archive"',
-      'mkdir -p "$(dirname "$archive")',
+      'mkdir -p "$(dirname "$archive")"',
       'rm -f "$archive"',
       'if [ ! -d "$workspace" ]; then mkdir -p "$workspace"; fi',
       'python - <<\'PY\'',

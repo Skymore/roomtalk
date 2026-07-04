@@ -1,5 +1,6 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
+import { spawnSync } from 'child_process';
 import { PassThrough } from 'stream';
 import { E2BCocoSandboxService, E2BSandboxDriver, E2BSandboxDriverHandle } from './e2bCocoSandboxService';
 
@@ -354,6 +355,10 @@ describe('E2BCocoSandboxService', () => {
       assert.equal(Buffer.from(driver.fileWriteRequests[0].data as Uint8Array).toString('utf8'), 'workspace-archive');
       assert.equal(driver.commands.some(command => command.includes('tarfile.open(archive, "w:gz"')), true);
       assert.equal(driver.commands.some(command => command.includes('tarfile.open(archive, "r:gz"')), true);
+      for (const command of driver.commands.filter(command => command.includes('ROOMTALK_ARCHIVE'))) {
+        const syntaxCheck = spawnSync('bash', ['-n'], { input: command, encoding: 'utf8' });
+        assert.equal(syntaxCheck.status, 0, syntaxCheck.stderr);
+      }
       assert.equal(driver.fileRemoveRequests.includes('/tmp/roomtalk-codex/workspace-export-1.tar.gz'), true);
       assert.equal(driver.fileRemoveRequests.includes('/tmp/roomtalk-codex/workspace-import-1.tar.gz'), true);
     } finally {
