@@ -64,6 +64,13 @@ vi.mock('./MessageList', async () => {
       </button>
       <button
         type="button"
+        data-testid="message-list-switch-app"
+        onClick={() => onCodeAgentBackendChange?.('codex-app-server')}
+      >
+        switch-app
+      </button>
+      <button
+        type="button"
         data-testid="message-list-line-link"
         onClick={() => onOpenWorkspaceFile?.('/workspace/src/App.tsx:42')}
       >
@@ -332,6 +339,16 @@ describe('CodeAgentRoomView', () => {
     await act(async () => {});
 
     expect(updateRoomSettings).toHaveBeenCalledWith({ roomId: 'coco-room', codeAgentBackend: 'codex' });
+  });
+
+  it('updates the room engine when the workspace header switches to Codex app-server', async () => {
+    const { updateRoomSettings } = await import('../utils/socket');
+    renderCodeAgentRoom(cocoRoom, ['plan'], 'plan', permissions());
+
+    fireEvent.click(screen.getByTestId('message-list-switch-app'));
+    await act(async () => {});
+
+    expect(updateRoomSettings).toHaveBeenCalledWith({ roomId: 'coco-room', codeAgentBackend: 'codex-app-server' });
   });
 
   it('keeps the message scrollbar above the floating composer', () => {

@@ -208,7 +208,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   }, [currentRoom.id, effectiveDefaultMode, normalizedAvailableModes, onRoomUpdated]);
 
   const handleCodeAgentBackendChange = React.useCallback((nextBackend: CodeAgentBackend) => {
-    if (nextBackend !== 'coco' && nextBackend !== 'codex') {
+    if (!isSupportedCodeAgentBackend(nextBackend)) {
       return;
     }
     updateRoomSettings({ roomId: currentRoom.id, codeAgentBackend: nextBackend }).then(
