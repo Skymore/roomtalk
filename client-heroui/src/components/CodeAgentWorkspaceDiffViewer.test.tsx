@@ -70,6 +70,7 @@ vi.mock('@pierre/diffs/react', () => ({
       stickyHeaders?: boolean;
       unsafeCSS?: string;
       layout?: { paddingTop: number; paddingBottom: number; gap: number };
+      itemMetrics?: { lineHeight?: number; diffHeaderHeight?: number; spacing?: number; paddingTop?: number; paddingBottom?: number };
     };
     className?: string;
     renderHeaderPrefix?: (item: { id: string; type: 'diff'; fileDiff: { name?: string | null; prevName?: string | null; cacheKey?: string }; collapsed?: boolean }) => ReactNode;
@@ -91,6 +92,7 @@ vi.mock('@pierre/diffs/react', () => ({
         data-overflow={options.overflow}
         data-sticky-headers={String(options.stickyHeaders === true)}
         data-layout={options.layout ? `${options.layout.paddingTop}:${options.layout.paddingBottom}:${options.layout.gap}` : ''}
+        data-item-metrics={options.itemMetrics ? `${options.itemMetrics.lineHeight}:${options.itemMetrics.diffHeaderHeight}:${options.itemMetrics.spacing}:${options.itemMetrics.paddingTop}:${options.itemMetrics.paddingBottom}` : ''}
         data-unsafe-css={options.unsafeCSS || ''}
         data-class-name={className || ''}
       >
@@ -2457,6 +2459,73 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
 
     expect(screen.getByTestId('code-view').dataset.diffStyle).toBe('unified');
     expect(localStorage.getItem('roomtalk.codeWorkspace.diffRenderMode')).toBe('stacked');
+  });
+
+  it('uses compact controls for embedded workspace diff previews without changing the default toolbar size', async () => {
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          { name: 'src/App.tsx', hunks: [], additionLines: [], deletionLines: [], type: 'modify' },
+        ],
+      },
+    ]);
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" compactLayout />);
+
+    expect(await screen.findByTestId('code-view')).toBeTruthy();
+    const subheader = screen.getByTestId('code-agent-workspace-diff-viewer').querySelector('[data-surface-subheader]');
+    expect(subheader?.className).toContain('h-8');
+    expect(subheader?.className).toContain('px-2');
+    expect(screen.getByLabelText('codeAgentStackedDiffView').className).toContain('h-6');
+    expect(screen.getByLabelText('codeAgentSplitDiffView').className).toContain('h-6');
+    expect(screen.getByLabelText('codeAgentRefreshWorkspaceDiff').className).toContain('h-6');
+    expect(screen.getByLabelText('codeAgentReviewSection: codeAgentReviewSectionBranchRange').className).toContain('h-6');
+    expect(screen.getByLabelText('codeAgentReviewSection: codeAgentReviewSectionBranchRange').className).toContain('text-[11px]');
+    expect(screen.getByTestId('code-view').dataset.layout).toBe('4:4:4');
+    expect(screen.getByTestId('code-view').dataset.itemMetrics).toBe('18:32:4:0:4');
+    expect(screen.getByTestId('code-view').dataset.unsafeCss).toContain('--diffs-font-size: 12px');
+    expect(screen.getByTestId('code-view').dataset.unsafeCss).toContain('[data-diffs-header]');
+  });
+
+  it('uses compact mobile controls for embedded workspace diff previews', async () => {
+    loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
+      available: true,
+      patch: 'diff --git a/src/App.tsx b/src/App.tsx\n',
+      byteSize: 42,
+      truncated: false,
+    });
+    parsePatchFilesMock.mockReturnValue([
+      {
+        files: [
+          { name: 'src/App.tsx', hunks: [], additionLines: [], deletionLines: [], type: 'modify' },
+        ],
+      },
+    ]);
+
+    render(<CodeAgentWorkspaceDiffViewer roomId="room-1" enabled refreshKey="snapshot-1" mobileLayout compactLayout />);
+
+    expect(await screen.findByTestId('code-view')).toBeTruthy();
+    const subheader = screen.getByTestId('code-agent-workspace-diff-viewer').querySelector('[data-surface-subheader]');
+    expect(subheader?.className).toContain('min-h-8');
+    expect(subheader?.className).toContain('px-1');
+    const controlsRow = screen.getByTestId('code-agent-mobile-workspace-diff-controls-row');
+    expect(controlsRow.className).toContain('min-h-7');
+    expect(controlsRow.className).toContain('text-[10px]');
+    expect(screen.getByLabelText('codeAgentStackedDiffView').className).toContain('h-7');
+    expect(screen.getByLabelText('codeAgentSplitDiffView').className).toContain('h-7');
+    expect(screen.getByLabelText('codeAgentRefreshWorkspaceDiff').className).toContain('h-7');
+    expect(screen.getByLabelText('codeAgentReviewSection: codeAgentReviewSectionBranchRange').className).toContain('h-7');
+    expect(screen.getByLabelText('codeAgentReviewSection: codeAgentReviewSectionBranchRange').className).toContain('text-[11px]');
+    expect(screen.getByTestId('code-view').dataset.layout).toBe('4:4:4');
+    expect(screen.getByTestId('code-view').dataset.itemMetrics).toBe('18:32:4:0:4');
+    expect(screen.getByTestId('code-view').dataset.unsafeCss).toContain('line-height: 18px');
+    expect(screen.getByLabelText('codeAgentCollapseDiffFile', { selector: 'button' }).className).toContain('h-6');
   });
 
   it('does not request the patch until the changes tab enables it', async () => {

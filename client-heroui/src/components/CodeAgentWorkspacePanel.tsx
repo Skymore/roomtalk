@@ -250,8 +250,8 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   const detailsId = 'code-agent-workspace-details';
   const shouldLoadDiff = selectedWorkspaceTab === 'changes';
   const changesScrollClassName = isMobileWorkspaceLayout
-    ? 'flex max-h-[clamp(16rem,calc(100dvh-var(--code-agent-composer-height,96px)-22rem),42rem)] min-h-0 flex-col overflow-y-auto overscroll-contain px-3 pb-[calc(var(--code-agent-composer-height,96px)+env(safe-area-inset-bottom)+1rem)] pt-2 [-webkit-overflow-scrolling:touch] touch-pan-y'
-    : 'flex max-h-[min(72vh,42rem)] min-h-0 flex-col overflow-y-auto px-3 py-2';
+    ? 'flex max-h-[min(42dvh,22rem)] min-h-0 flex-col overflow-y-auto overscroll-contain px-3 py-2 [-webkit-overflow-scrolling:touch] touch-pan-y'
+    : 'flex max-h-[min(44vh,30rem)] min-h-0 flex-col overflow-y-auto px-3 py-2';
   const changesContentClassName = isMobileWorkspaceLayout
     ? 'flex min-w-0 flex-col gap-2'
     : 'flex min-h-0 flex-1 flex-col gap-2';
@@ -295,6 +295,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
       onAddReviewComment={onAddReviewComment}
       onRemoveReviewComment={onRemoveReviewComment}
       mobileLayout={isMobileWorkspaceLayout}
+      compactLayout
     />
   ), [
     diffRefreshKey,
@@ -321,7 +322,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   return (
     <section
       data-testid="code-agent-workspace"
-      className="sticky top-0 z-30 min-w-0 max-w-full flex-shrink-0 overflow-x-hidden border-b border-[#dedbd0] bg-[#f5f4ed]/95 px-3 pb-3 pt-3 shadow-[0_1px_0_rgba(20,20,19,0.04)] backdrop-blur dark:border-[#30302e] dark:bg-[#141413]/95 dark:shadow-[0_1px_0_rgba(250,249,245,0.04)]"
+      className="sticky top-0 z-30 max-h-[calc(100dvh-var(--code-agent-composer-height,96px)-2.5rem)] min-w-0 max-w-full flex-shrink-0 overflow-x-hidden overflow-y-auto border-b border-[#dedbd0] bg-[#f5f4ed]/95 px-3 pb-3 pt-3 shadow-[0_1px_0_rgba(20,20,19,0.04)] backdrop-blur dark:border-[#30302e] dark:bg-[#141413]/95 dark:shadow-[0_1px_0_rgba(250,249,245,0.04)] lg:max-h-[calc(100dvh-var(--code-agent-composer-height,96px)-4rem)]"
       aria-label={t('codeAgentWorkspace')}
     >
       <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
@@ -562,7 +563,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
               <div className={changesContentClassName} data-testid="code-agent-workspace-changes-content">
                 {isMobileWorkspaceLayout ? (
                   <div
-                    className="flex h-[clamp(18rem,52dvh,38rem)] min-h-0 min-w-0 flex-col overflow-hidden"
+                    className="flex h-[clamp(14rem,38dvh,24rem)] min-h-0 min-w-0 flex-col overflow-hidden"
                     data-testid="code-agent-mobile-changes-inline"
                   >
                     {renderWorkspaceDiffViewer()}

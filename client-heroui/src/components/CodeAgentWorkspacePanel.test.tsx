@@ -23,12 +23,14 @@ vi.mock('./CodeAgentWorkspaceDiffViewer', () => ({
     selectedFilePath,
     selectedFileRevealRequestId,
     mobileLayout,
+    compactLayout,
   }: {
     enabled: boolean;
     onFileSummariesChange?: (summaries: readonly { id: string; path: string; additions: number; deletions: number }[]) => void;
     selectedFilePath?: string | null;
     selectedFileRevealRequestId?: number;
     mobileLayout?: boolean;
+    compactLayout?: boolean;
   }) => (
     <div
       data-testid="code-agent-workspace-diff-viewer"
@@ -36,6 +38,7 @@ vi.mock('./CodeAgentWorkspaceDiffViewer', () => ({
       data-selected-file={selectedFilePath || ''}
       data-selected-file-request-id={String(selectedFileRevealRequestId || '')}
       data-mobile-layout={String(Boolean(mobileLayout))}
+      data-compact-layout={String(Boolean(compactLayout))}
     >
       <button
         type="button"
@@ -146,6 +149,9 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(workspace.className).toContain('min-w-0');
     expect(workspace.className).toContain('max-w-full');
     expect(workspace.className).toContain('overflow-x-hidden');
+    expect(workspace.className).toContain('overflow-y-auto');
+    expect(workspace.className).toContain('max-h-[calc(100dvh-var(--code-agent-composer-height,96px)-2.5rem)]');
+    expect(workspace.className).toContain('lg:max-h-[calc(100dvh-var(--code-agent-composer-height,96px)-4rem)]');
 
     const details = screen.getByTestId('code-agent-workspace-details');
     expect(details.className).toContain('min-w-0');
@@ -362,8 +368,9 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(diffViewer.dataset.selectedFile).toBe('src/App.tsx');
     expect(diffViewer.dataset.selectedFileRequestId).toBe('1');
     expect(diffViewer.dataset.mobileLayout).toBe('false');
+    expect(diffViewer.dataset.compactLayout).toBe('true');
     expect(diffViewer.parentElement?.className).toContain('flex-1');
-    expect(diffViewer.parentElement?.parentElement?.className).toContain('max-h-[min(72vh,42rem)]');
+    expect(diffViewer.parentElement?.parentElement?.className).toContain('max-h-[min(44vh,30rem)]');
     expect(diffViewer.parentElement?.parentElement?.className).not.toContain('max-h-44');
 
     fireEvent.click(screen.getByText('App.tsx'));
@@ -406,9 +413,10 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(changesScroll.className).toContain('overflow-y-auto');
     expect(changesScroll.className).toContain('overscroll-contain');
     expect(changesScroll.className).toContain('touch-pan-y');
-    expect(changesScroll.className).toContain('max-h-[clamp(16rem,calc(100dvh-var(--code-agent-composer-height,96px)-22rem),42rem)]');
-    expect(changesScroll.className).toContain('pb-[calc(var(--code-agent-composer-height,96px)+env(safe-area-inset-bottom)+1rem)]');
-    expect(changesScroll.className).not.toContain('max-h-[min(72vh,42rem)]');
+    expect(changesScroll.className).toContain('max-h-[min(42dvh,22rem)]');
+    expect(changesScroll.className).toContain('py-2');
+    expect(changesScroll.className).not.toContain('pb-[calc(var(--code-agent-composer-height,96px)+env(safe-area-inset-bottom)+1rem)]');
+    expect(changesScroll.className).not.toContain('max-h-[min(44vh,30rem)]');
     const changesContent = screen.getByTestId('code-agent-workspace-changes-content');
     expect(changesContent.className).toContain('flex-col');
     expect(changesContent.className).not.toContain('flex-1');
@@ -417,10 +425,11 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(screen.queryByTestId('code-agent-changed-files-tree')).toBeNull();
     expect(screen.queryByTestId('code-agent-mobile-changes-summary')).toBeNull();
     const inlineChanges = screen.getByTestId('code-agent-mobile-changes-inline');
-    expect(inlineChanges.className).toContain('h-[clamp(18rem,52dvh,38rem)]');
+    expect(inlineChanges.className).toContain('h-[clamp(14rem,38dvh,24rem)]');
     const inlineDiffViewer = screen.getByTestId('code-agent-workspace-diff-viewer');
     expect(inlineDiffViewer.dataset.enabled).toBe('true');
     expect(inlineDiffViewer.dataset.mobileLayout).toBe('true');
+    expect(inlineDiffViewer.dataset.compactLayout).toBe('true');
     expect(inlineChanges.contains(inlineDiffViewer)).toBe(true);
   });
 
@@ -464,10 +473,11 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(screen.queryByTestId('code-agent-mobile-changes-summary')).toBeNull();
     const inlineDiffViewer = screen.getByTestId('code-agent-workspace-diff-viewer');
     const inlineChanges = screen.getByTestId('code-agent-mobile-changes-inline');
-    expect(inlineChanges.className).toContain('h-[clamp(18rem,52dvh,38rem)]');
+    expect(inlineChanges.className).toContain('h-[clamp(14rem,38dvh,24rem)]');
     expect(inlineChanges.contains(inlineDiffViewer)).toBe(true);
     expect(inlineDiffViewer.dataset.enabled).toBe('true');
     expect(inlineDiffViewer.dataset.mobileLayout).toBe('true');
+    expect(inlineDiffViewer.dataset.compactLayout).toBe('true');
   });
 
   it('persists changed-file tree collapse state for the same workspace scope', () => {

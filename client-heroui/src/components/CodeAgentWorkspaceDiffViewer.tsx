@@ -61,6 +61,7 @@ interface CodeAgentWorkspaceDiffViewerProps {
   onAddReviewComment?: (comment: ReviewCommentContext) => void;
   onRemoveReviewComment?: (commentId: string) => void;
   mobileLayout?: boolean;
+  compactLayout?: boolean;
   onOpenChangedFiles?: () => void;
 }
 
@@ -191,6 +192,52 @@ const DIFF_PANEL_UNSAFE_CSS = `
 [data-title]:hover {
   color: light-dark(#9f462c, #ffb197) !important;
   text-decoration-color: currentColor;
+}
+`;
+const DIFF_PANEL_COMPACT_UNSAFE_CSS = `
+:host {
+  --diffs-font-size: 12px;
+  --diffs-line-height: 18px;
+  --diffs-gap-block: 4px;
+  --diffs-gap-inline: 6px;
+  --diffs-scrollbar-gutter-override: 4px;
+}
+
+[data-diffs-header] {
+  min-height: 28px !important;
+  padding-block: 4px !important;
+  padding-inline: 10px !important;
+  font-size: 11px !important;
+}
+
+[data-header-content] {
+  gap: 6px !important;
+}
+
+[data-title] {
+  font-size: 11px !important;
+}
+
+[data-diffs-header] [data-additions-count],
+[data-diffs-header] [data-deletions-count] {
+  font-size: 10px !important;
+}
+
+[data-line],
+[data-column-number],
+[data-gutter-buffer],
+[data-content-buffer] {
+  font-size: 12px !important;
+  line-height: 18px !important;
+}
+
+[data-line],
+[data-column-number] {
+  padding-inline: 0.75ch !important;
+}
+
+[data-column-number] {
+  padding-left: 1ch !important;
 }
 `;
 
@@ -354,6 +401,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   onAddReviewComment,
   onRemoveReviewComment,
   mobileLayout = false,
+  compactLayout = false,
   onOpenChangedFiles,
 }) => {
   const { t } = useTranslation();
@@ -921,51 +969,76 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     return null;
   }
 
-  const controlClusterGap = mobileLayout ? 'gap-2' : 'gap-1.5';
-  const controlIconClassName = mobileLayout ? 'h-4 w-4' : 'h-3.5 w-3.5';
-  const diffScopeSummaryClassName = mobileLayout
-    ? 'inline-flex h-9 max-w-[14rem] cursor-pointer list-none items-center gap-2 rounded-lg border border-[#dedbd0] bg-[#faf9f5] px-3 text-sm font-semibold text-[#141413] transition-colors hover:bg-[#f0eee6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:hover:bg-[#30302e] [&::-webkit-details-marker]:hidden'
-    : 'inline-flex h-7 min-w-0 max-w-52 cursor-pointer list-none items-center gap-1 rounded-md border border-[#dedbd0] bg-[#faf9f5] px-2 text-xs font-medium text-[#141413] transition-colors hover:bg-[#f0eee6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:hover:bg-[#30302e] [&::-webkit-details-marker]:hidden';
+  const controlClusterGap = compactLayout ? 'gap-1' : mobileLayout ? 'gap-2' : 'gap-1.5';
+  const controlIconClassName = compactLayout ? (mobileLayout ? 'h-3 w-3' : 'h-3 w-3') : mobileLayout ? 'h-4 w-4' : 'h-3.5 w-3.5';
+  const diffScopeSummaryClassName = compactLayout
+    ? `inline-flex ${mobileLayout ? 'h-7 max-w-[8.5rem] gap-1 rounded-md px-1.5 text-[11px] font-semibold' : 'h-6 min-w-0 max-w-40 gap-1 rounded-md px-1.5 text-[11px] font-medium'} cursor-pointer list-none items-center border border-[#dedbd0] bg-[#faf9f5] text-[#141413] transition-colors hover:bg-[#f0eee6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:hover:bg-[#30302e] [&::-webkit-details-marker]:hidden`
+    : mobileLayout
+      ? 'inline-flex h-9 max-w-[14rem] cursor-pointer list-none items-center gap-2 rounded-lg border border-[#dedbd0] bg-[#faf9f5] px-3 text-sm font-semibold text-[#141413] transition-colors hover:bg-[#f0eee6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:hover:bg-[#30302e] [&::-webkit-details-marker]:hidden'
+      : 'inline-flex h-7 min-w-0 max-w-52 cursor-pointer list-none items-center gap-1 rounded-md border border-[#dedbd0] bg-[#faf9f5] px-2 text-xs font-medium text-[#141413] transition-colors hover:bg-[#f0eee6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:hover:bg-[#30302e] [&::-webkit-details-marker]:hidden';
   const diffScopeMenuClassName = mobileLayout
     ? 'absolute left-0 top-10 z-50 w-72 rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-1 shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]'
     : 'absolute left-0 top-8 z-50 w-64 rounded-md border border-[#dedbd0] bg-[#faf9f5] p-1 shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]';
   const diffScopeMenuItemClassName = mobileLayout
     ? 'flex min-h-14 w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]'
     : 'flex min-h-12 w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]';
-  const diffBaseRefSummaryClassName = mobileLayout
-    ? 'inline-flex h-9 max-w-[10rem] cursor-pointer list-none items-center gap-2 rounded-lg border border-[#dedbd0] bg-[#faf9f5] px-3 text-sm font-semibold text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] [&::-webkit-details-marker]:hidden'
-    : 'inline-flex h-7 min-w-0 max-w-32 cursor-pointer list-none items-center gap-1 rounded-md px-1.5 text-xs font-medium text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] [&::-webkit-details-marker]:hidden';
+  const diffBaseRefSummaryClassName = compactLayout
+    ? `inline-flex ${mobileLayout ? 'h-7 max-w-[7rem] gap-1 rounded-md px-1.5 text-[11px] font-semibold' : 'h-6 min-w-0 max-w-24 gap-1 rounded-md px-1.5 text-[11px] font-medium'} cursor-pointer list-none items-center text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] [&::-webkit-details-marker]:hidden`
+    : mobileLayout
+      ? 'inline-flex h-9 max-w-[10rem] cursor-pointer list-none items-center gap-2 rounded-lg border border-[#dedbd0] bg-[#faf9f5] px-3 text-sm font-semibold text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] [&::-webkit-details-marker]:hidden'
+      : 'inline-flex h-7 min-w-0 max-w-32 cursor-pointer list-none items-center gap-1 rounded-md px-1.5 text-xs font-medium text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] [&::-webkit-details-marker]:hidden';
   const diffBaseRefMenuClassName = mobileLayout
     ? 'absolute left-0 top-10 z-50 w-72 max-w-[calc(100vw-1rem)] overflow-hidden rounded-lg border border-[#dedbd0] bg-[#faf9f5] shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]'
     : 'absolute left-0 top-8 z-50 w-60 max-w-[calc(100vw-1rem)] overflow-hidden rounded-md border border-[#dedbd0] bg-[#faf9f5] shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]';
   const diffBaseRefItemClassName = mobileLayout
     ? 'grid h-10 w-full grid-cols-[1rem_minmax(0,1fr)] items-center gap-2 rounded-md px-3 text-left text-sm text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]'
     : 'grid h-8 w-full grid-cols-[1rem_minmax(0,1fr)] items-center gap-2 rounded px-2 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]';
-  const diffIconButtonClassName = (active = false) => `inline-flex ${mobileLayout ? 'h-9 w-9 rounded-lg' : 'h-7 w-7 rounded-md'} items-center justify-center border text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-wait disabled:opacity-60 dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
+  const diffIconButtonClassName = (active = false) => `inline-flex ${compactLayout ? (mobileLayout ? 'h-7 w-7 rounded-md' : 'h-6 w-6 rounded-md') : mobileLayout ? 'h-9 w-9 rounded-lg' : 'h-7 w-7 rounded-md'} items-center justify-center border text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-wait disabled:opacity-60 dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
     active
       ? 'border-[#c96442]/60 bg-[#fff2ec] text-[#9f462c] dark:border-[#d97757]/60 dark:bg-[#2a211d] dark:text-[#ffb197]'
       : 'border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]'
   }`;
-  const diffRenderModeButtonClassName = (active: boolean, side: 'left' | 'right') => `${side === 'right' ? '-ml-px' : ''} inline-flex ${mobileLayout ? 'h-9 w-9' : 'h-7 w-7'} items-center justify-center border text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
+  const diffRenderModeButtonClassName = (active: boolean, side: 'left' | 'right') => `${side === 'right' ? '-ml-px' : ''} inline-flex ${compactLayout ? (mobileLayout ? 'h-7 w-7' : 'h-6 w-6') : mobileLayout ? 'h-9 w-9' : 'h-7 w-7'} items-center justify-center border text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
     side === 'left'
-      ? `${mobileLayout ? 'rounded-l-lg' : 'rounded-l-md'} rounded-r-none`
-      : `rounded-l-none ${mobileLayout ? 'rounded-r-lg' : 'rounded-r-md'}`
+      ? `${compactLayout ? 'rounded-l-md' : mobileLayout ? 'rounded-l-lg' : 'rounded-l-md'} rounded-r-none`
+      : `rounded-l-none ${compactLayout ? 'rounded-r-md' : mobileLayout ? 'rounded-r-lg' : 'rounded-r-md'}`
   } ${
     active
       ? 'z-10 border-[#c96442]/60 bg-[#fff2ec] text-[#9f462c] dark:border-[#d97757]/60 dark:bg-[#2a211d] dark:text-[#ffb197]'
       : 'border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]'
   }`;
   const diffFileHeaderPrefixClassName = mobileLayout
-    ? 'inline-flex shrink-0 items-center gap-1.5'
+    ? `inline-flex shrink-0 items-center ${compactLayout ? 'gap-1' : 'gap-1.5'}`
     : 'inline-flex shrink-0 items-center gap-1';
-  const diffFileHeaderIconButtonSizeClassName = mobileLayout
-    ? 'h-8 w-8 rounded-md'
-    : 'h-5 w-5 rounded-sm';
-  const diffFileHeaderCollapseIconClassName = 'h-4 w-4';
-  const diffFileHeaderViewedIconClassName = mobileLayout ? 'h-4 w-4' : 'h-3.5 w-3.5';
-  const diffFileSuppressionPillClassName = mobileLayout
-    ? 'inline-flex h-8 max-w-56 items-center gap-1.5 overflow-hidden rounded-md px-2 text-xs font-medium'
-    : 'inline-flex h-5 max-w-48 items-center gap-1 overflow-hidden rounded-sm px-1.5 text-[10px] font-medium sm:max-w-64';
+  const diffFileHeaderIconButtonSizeClassName = compactLayout
+    ? mobileLayout
+      ? 'h-6 w-6 rounded'
+      : 'h-5 w-5 rounded-sm'
+    : mobileLayout
+      ? 'h-8 w-8 rounded-md'
+      : 'h-5 w-5 rounded-sm';
+  const diffFileHeaderCollapseIconClassName = compactLayout ? 'h-3.5 w-3.5' : 'h-4 w-4';
+  const diffFileHeaderViewedIconClassName = compactLayout ? 'h-3.5 w-3.5' : mobileLayout ? 'h-4 w-4' : 'h-3.5 w-3.5';
+  const diffFileSuppressionPillClassName = compactLayout
+    ? 'inline-flex h-6 max-w-44 items-center gap-1 overflow-hidden rounded px-1.5 text-[10px] font-medium'
+    : mobileLayout
+      ? 'inline-flex h-8 max-w-56 items-center gap-1.5 overflow-hidden rounded-md px-2 text-xs font-medium'
+      : 'inline-flex h-5 max-w-48 items-center gap-1 overflow-hidden rounded-sm px-1.5 text-[10px] font-medium sm:max-w-64';
+  const diffPanelUnsafeCSS = compactLayout
+    ? `${DIFF_PANEL_UNSAFE_CSS}\n${DIFF_PANEL_COMPACT_UNSAFE_CSS}`
+    : DIFF_PANEL_UNSAFE_CSS;
+  const diffCodeViewLayout = compactLayout
+    ? { paddingTop: 4, paddingBottom: 4, gap: 4 }
+    : { paddingTop: 8, paddingBottom: 8, gap: 8 };
+  const diffCodeViewItemMetrics = compactLayout
+    ? {
+      lineHeight: 18,
+      diffHeaderHeight: 32,
+      spacing: 4,
+      paddingTop: 0,
+      paddingBottom: 4,
+    }
+    : undefined;
   const mobileDiffToolbarMenuKind = mobileDiffToolbarMenu?.kind ?? null;
   const diffScopeChevronClassName = `${controlIconClassName} shrink-0 text-[#87867f] transition-transform dark:text-[#8f8d86] ${
     mobileDiffToolbarMenuKind === 'scope' ? 'rotate-180' : 'group-open:rotate-180'
@@ -1314,11 +1387,11 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     >
       <div
         ref={mobileDiffHeaderScrollRef}
-        className="flex min-w-0 flex-1 overflow-x-auto px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        className={`flex min-w-0 flex-1 overflow-x-auto ${compactLayout ? 'px-1' : 'px-2'} [scrollbar-width:none] [&::-webkit-scrollbar]:hidden`}
         data-testid="code-agent-mobile-workspace-diff-header"
       >
         <div
-          className="flex min-h-9 min-w-max items-center gap-1.5 pr-7 text-[11px] leading-4 text-[#87867f] dark:text-[#8f8d86]"
+          className={`flex ${compactLayout ? 'min-h-7 gap-1 pr-5 text-[10px]' : 'min-h-9 gap-1.5 pr-7 text-[11px]'} min-w-max items-center leading-4 text-[#87867f] dark:text-[#8f8d86]`}
           data-testid="code-agent-mobile-workspace-diff-controls-row"
         >
           {headerControls}
@@ -1365,7 +1438,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
       mode="embedded"
       header={headerRow}
       testId="code-agent-workspace-diff-viewer"
-      headerClassName={mobileLayout ? 'min-h-10 items-center px-2 py-1' : undefined}
+      headerClassName={compactLayout ? (mobileLayout ? 'min-h-8 items-center px-1 py-0.5' : 'h-8 items-center justify-between gap-1 px-2') : mobileLayout ? 'min-h-10 items-center px-2 py-1' : undefined}
     >
       {mobileDiffToolbarMenuOverlay}
       <CodeAgentWorkspaceDiffPanelViewport>
@@ -1573,9 +1646,10 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
               overflow: wordWrap ? 'wrap' : 'scroll',
               theme: resolveCodeAgentDiffThemeName(resolvedTheme),
               themeType: resolvedTheme,
-              unsafeCSS: DIFF_PANEL_UNSAFE_CSS,
+              unsafeCSS: diffPanelUnsafeCSS,
               stickyHeaders: true,
-              layout: { paddingTop: 8, paddingBottom: 8, gap: 8 },
+              layout: diffCodeViewLayout,
+              itemMetrics: diffCodeViewItemMetrics,
             }}
           />
         </div>
