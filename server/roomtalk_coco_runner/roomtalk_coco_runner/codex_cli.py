@@ -297,8 +297,8 @@ def _build_codex_exec_args(
         "--ephemeral",
         "--model",
         model,
-        "--ask-for-approval",
-        permission.approval_policy,
+        "-c",
+        f'approval_policy="{permission.approval_policy}"',
         "-c",
         f'model_reasoning_effort="{reasoning_effort}"',
     ]
