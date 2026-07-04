@@ -74,6 +74,12 @@ describe('assertCodexBackendStartupGate', () => {
       codexConnectionConfig: { enabled: true },
       hasCodexConnectionService: true,
     }));
+    assert.doesNotThrow(() => assertCodexBackendStartupGate({
+      codeAgentRuntimeConfig: { backend: 'codex-app-server' },
+      codexCliRunnerConfig: { enabled: true },
+      codexConnectionConfig: { enabled: true },
+      hasCodexConnectionService: true,
+    }));
   });
 
   it('rejects Codex backend startup without required Codex flags and service', () => {

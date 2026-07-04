@@ -22,7 +22,7 @@ const options = {
     'codex --version >/dev/null',
     'codex-linux-sandbox --help >/dev/null',
     'roomtalk --help >/dev/null',
-    'python -c "import importlib; importlib.import_module(\\"roomtalk_coco_runner.runner\\"); importlib.import_module(\\"roomtalk_coco_runner.codex_cli\\")"',
+    'python -c "import importlib; importlib.import_module(\\"roomtalk_coco_runner.runner\\"); importlib.import_module(\\"roomtalk_coco_runner.codex_cli\\"); importlib.import_module(\\"roomtalk_coco_runner.codex_app_server\\")"',
   ].join(' && '),
 };
 

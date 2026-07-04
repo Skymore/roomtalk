@@ -22,6 +22,11 @@ import {
   updateRoomSettings,
 } from '../utils/socket';
 import {
+  CODE_AGENT_BACKEND_OPTIONS,
+  getCodeAgentBackendLabelKey,
+  type CodeAgentBackend,
+} from '../utils/codeAgent';
+import {
   Room,
   RoomClientLookup,
   RoomMemberRole,
@@ -31,6 +36,12 @@ import {
   RoomRenameHandler,
 } from '../utils/types';
 import { PostingScheduleEditor } from './PostingScheduleEditor';
+
+const backendIcons: Record<CodeAgentBackend, string> = {
+  coco: 'lucide:sparkles',
+  codex: 'lucide:terminal',
+  'codex-app-server': 'lucide:server',
+};
 
 const localTimezone = () => {
   try {
@@ -652,9 +663,10 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
             <div className="space-y-2">
               {renderSectionLabel('lucide:terminal', t('codeAgentEngine'))}
               <div className="flex flex-wrap gap-1.5">
-                {(['coco', 'codex'] as const).map(backend => {
+                {CODE_AGENT_BACKEND_OPTIONS.map(backend => {
                   const current = room.codeAgentBackend || 'coco';
                   const selected = current === backend;
+                  const labelKey = getCodeAgentBackendLabelKey(backend);
                   return (
                     <Button
                       key={backend}
@@ -664,7 +676,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                           ? 'bg-[#c96442] text-[#faf9f5]'
                           : 'bg-[#e8e6dc] text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]'
                       }`}
-                      startContent={<Icon icon={backend === 'codex' ? 'lucide:bot' : 'lucide:sparkles'} className="h-3.5 w-3.5" />}
+                      startContent={<Icon icon={backendIcons[backend]} className="h-3.5 w-3.5" />}
                       isDisabled={isSaving}
                       onPress={async () => {
                         if (selected) return;
@@ -679,7 +691,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                         }
                       }}
                     >
-                      {backend === 'codex' ? t('codeAgentEngineCodex') : t('codeAgentEngineCoco')}
+                      {t(labelKey)}
                     </Button>
                   );
                 })}

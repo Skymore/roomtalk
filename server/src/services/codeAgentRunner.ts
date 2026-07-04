@@ -61,6 +61,8 @@ export const createCodeAgentRunner = (
         return options.codexRunner;
       }
       return new CodeAgentRunnerAdapter(sharedClient, 'codex');
+    case 'codex-app-server':
+      return new CodeAgentRunnerAdapter(sharedClient, 'codex-app-server');
     default: {
       const exhaustive: never = backend;
       throw new Error(`Unsupported code-agent backend: ${exhaustive}`);

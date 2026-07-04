@@ -41,6 +41,7 @@ export interface CodeAgentRuntimeConfig {
 
 export const DEFAULT_COCO_RUNNER_COMMAND = 'python -m roomtalk_coco_runner';
 export const DEFAULT_CODEX_CLI_RUNNER_COMMAND = 'python -m roomtalk_coco_runner.codex_cli';
+export const DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND = 'python -m roomtalk_coco_runner.codex_app_server';
 export const DEFAULT_COCO_RUNNER_PYTHONPATH = '/opt/coco/src:/opt/roomtalk_coco_runner';
 export const DEFAULT_COCO_WORKSPACE_ROOT = '/workspace';
 export const DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS = 5 * 60 * 1000;
@@ -82,9 +83,9 @@ const readCodeAgentBackend = (env: NodeJS.ProcessEnv): CodeAgentBackend => {
   if (value === 'coco') {
     return value;
   }
-  if (value === 'codex') {
+  if (value === 'codex' || value === 'codex-app-server') {
     if (env.CODEX_CLI_BACKEND_ENABLED !== 'true') {
-      throw new Error('CODE_AGENT_BACKEND=codex requires CODEX_CLI_BACKEND_ENABLED=true');
+      throw new Error(`CODE_AGENT_BACKEND=${value} requires CODEX_CLI_BACKEND_ENABLED=true`);
     }
     return value;
   }
@@ -99,9 +100,15 @@ const readRunnerClient = (env: NodeJS.ProcessEnv): CodeAgentRunnerClientKind => 
   throw new Error(`Unsupported COCO_RUNNER_CLIENT: ${value}`);
 };
 
-const defaultRunnerCommandForBackend = (backend: CodeAgentBackend) => (
-  backend === 'codex' ? DEFAULT_CODEX_CLI_RUNNER_COMMAND : DEFAULT_COCO_RUNNER_COMMAND
-);
+const defaultRunnerCommandForBackend = (backend: CodeAgentBackend) => {
+  if (backend === 'codex') {
+    return DEFAULT_CODEX_CLI_RUNNER_COMMAND;
+  }
+  if (backend === 'codex-app-server') {
+    return DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND;
+  }
+  return DEFAULT_COCO_RUNNER_COMMAND;
+};
 
 const readArtifactMode = (env: NodeJS.ProcessEnv): CodeAgentArtifactMode => {
   const value = (env.COCO_ARTIFACT_MODE || 'production').toLowerCase();

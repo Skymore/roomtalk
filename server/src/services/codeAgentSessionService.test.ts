@@ -9,7 +9,7 @@ import { CODE_AGENT_RUNNER_SCHEMA_VERSION, CodeAgentRunnerEvent, CodeAgentRunner
 import { CodeAgentRunnerClient, CodeAgentRunnerRunResult } from './fakeCodeAgentRunner';
 import { FakeCodeAgentRunnerClient } from './fakeCodeAgentRunner';
 import { FakeCocoSandboxService } from './fakeCocoSandboxService';
-import { DEFAULT_CODEX_CLI_RUNNER_COMMAND, DEFAULT_COCO_RUNNER_COMMAND } from './codeAgentRuntimeConfig';
+import { DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND, DEFAULT_CODEX_CLI_RUNNER_COMMAND, DEFAULT_COCO_RUNNER_COMMAND } from './codeAgentRuntimeConfig';
 import { CocoModelGateway, InMemoryCocoModelGatewayTokenStateStore } from './cocoModelGateway';
 import { PublishedStaticSiteService } from './publishedStaticSite';
 import { MemoryMediaObjectStorage } from '../testUtils/memoryMediaObjectStorage';
@@ -493,6 +493,73 @@ describe('CodeAgentSessionService', () => {
     const messages = setup.store.messages.get('room-1') || [];
     assert.equal(messages[1].username, 'Codex');
     assert.equal(messages[messages.length - 1].content, 'Room-level Codex done');
+  });
+
+  it('lets a room select Codex app-server while reusing Codex subscription auth', async () => {
+    const authCalls: Array<{ clientId: string; runId: string }> = [];
+    let sandboxService: FakeCocoSandboxService;
+    const runner: CodeAgentRunnerClient = {
+      async run(request, handlers): Promise<CodeAgentRunnerRunResult> {
+        assert.equal(request.codexModel, 'gpt-5.5');
+        assert.equal(request.codexReasoningEffort, 'xhigh');
+        const env = sandboxService.startedRunnerEnvs[sandboxService.startedRunnerEnvs.length - 1];
+        assert.equal(env.CODEX_CLI_BIN, '/usr/local/bin/codex');
+        assert.ok(env.ROOMTALK_CODEX_AUTH_JSON_PATH);
+        const finalEvent = {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'final' as const,
+          messageId: 'codex-app-turn-1',
+          answer: 'Codex app-server done',
+          sessionId: 'codex-app-session-1',
+        };
+        await handlers.onEvent(finalEvent);
+        return { events: [finalEvent], finalEvent };
+      },
+    };
+    const codexConnectionService = {
+      async withCodexAuth(clientId: string, runId: string, work: (authJson: string) => Promise<any>) {
+        authCalls.push({ clientId, runId });
+        const workResult = await work(JSON.stringify({ OPENAI_AUTH: { access_token: 'app-server-token' } }));
+        return workResult.result;
+      },
+    };
+    const setup = createService({
+      store: new MemoryCocoStore(room({ codeAgentBackend: 'codex-app-server' }), [userMessage()]),
+      runner,
+      backend: 'coco',
+      runnerCommandByBackend: {
+        coco: DEFAULT_COCO_RUNNER_COMMAND,
+        codex: DEFAULT_CODEX_CLI_RUNNER_COMMAND,
+        'codex-app-server': DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND,
+      },
+      runnerEnvByBackend: {
+        'codex-app-server': { CODEX_CLI_BIN: '/usr/local/bin/codex' },
+      },
+      codexBackendEnabled: true,
+      codexConnectionService,
+      ids: ['ai-1', 'turn-1'],
+    });
+    sandboxService = setup.sandboxService;
+
+    const result = await setup.service.startTurn({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      selectedModel,
+      codexRunSettings: { model: 'gpt-5.5', reasoningEffort: 'xhigh', permissionMode: 'approveForMe' },
+    });
+
+    assert.deepEqual(result, { success: true, messageId: 'ai-1' });
+    assert.deepEqual(authCalls, [{ clientId: 'client-1', runId: 'turn-1' }]);
+    assert.equal(sandboxService.startedRunnerCommands[0], DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND);
+    const messages = setup.store.messages.get('room-1') || [];
+    assert.equal(messages[1].username, 'Codex');
+    assert.equal(messages[messages.length - 1].content, 'Codex app-server done');
+    assert.deepEqual(messages[messages.length - 1].aiModel, {
+      id: 'gpt-5.5',
+      apiModel: 'gpt-5.5',
+      provider: 'openai',
+      label: 'GPT-5.5 Extra High',
+    });
   });
 
   it('fails Codex backend turns without a configured Codex connection service before starting the runner', async () => {

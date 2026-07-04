@@ -48,7 +48,7 @@ import {
   isConfirmingIMEComposition,
 } from '../utils/keyboardComposition';
 import { Message, RoomPostingSchedule } from '../utils/types';
-import { CodeAgentBackend, CodeAgentMode } from '../utils/codeAgent';
+import { CodeAgentBackend, CodeAgentMode, isCodexCodeAgentBackend } from '../utils/codeAgent';
 import {
   appendReviewCommentsToPrompt,
   type ReviewCommentContext,
@@ -543,7 +543,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         model: selectedAIModel || defaultAIModel,
         maxContextMessages: aiContextMessageLimit,
       }, isCodeAgentRoom ? 'coco' : 'chat');
-      const codeAgentRunSettings = isCodeAgentRoom && codeAgentBackend === 'codex'
+      const codeAgentRunSettings = isCodeAgentRoom && isCodexCodeAgentBackend(codeAgentBackend)
         ? {
             codexModel: codexRunSettings.model,
             codexReasoningEffort: codexRunSettings.reasoningEffort,

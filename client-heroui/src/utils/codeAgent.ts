@@ -3,6 +3,8 @@ import { CodeAgentBackend, CodeAgentMode, Room, RoomCocoStatus } from './types';
 
 export type { CodeAgentBackend, CodeAgentMode } from './types';
 
+export const CODE_AGENT_BACKEND_OPTIONS = ['coco', 'codex', 'codex-app-server'] as const satisfies readonly CodeAgentBackend[];
+
 const runtimeRoomType = (room: Room | null | undefined): string | undefined => (
   room?.type as string | undefined
 );
@@ -37,8 +39,19 @@ export const getCodeAgentDefaultMode = (featureFlags: FeatureFlags): CodeAgentMo
 );
 
 export const isSupportedCodeAgentBackend = (backend: CodeAgentBackend | null): boolean => (
-  backend === 'coco' || backend === 'codex'
+  backend === 'coco' || backend === 'codex' || backend === 'codex-app-server'
 );
+
+export const isCodexCodeAgentBackend = (backend: CodeAgentBackend | null | undefined): boolean => (
+  backend === 'codex' || backend === 'codex-app-server'
+);
+
+export const getCodeAgentBackendLabelKey = (backend: CodeAgentBackend): string => {
+  if (backend === 'codex-app-server') {
+    return 'codeAgentEngineCodexAppServer';
+  }
+  return backend === 'codex' ? 'codeAgentEngineCodex' : 'codeAgentEngineCoco';
+};
 
 export const getCodeAgentStatus = (room: Room | null | undefined): RoomCocoStatus | undefined => (
   getCodeAgentBackend(room) !== null ? (room?.cocoStatus || 'idle') : undefined

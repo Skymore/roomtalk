@@ -28,9 +28,9 @@ Codex manual 中 app-server 被描述为 rich client 接口，覆盖 authenticat
 - [x] 当前 master 已有 Codex CLI subscription auth POC，可作为 `codex` backend 保留。
 - [x] Pre-commit 1: runner protocol/event/client 命名通用化。
 - [x] Pre-commit 2: session/runtime config/socket 注入命名通用化。
-- [ ] Codex app-server backend 接入。
+- [x] Codex app-server backend 接入。
 - [x] 轻量验证：TypeScript compile。
-- [ ] 轻量验证：runner parser tests、Codex app-server adapter unit tests。
+- [x] 轻量验证：runner parser tests、Codex app-server adapter unit tests。
 - [ ] 后续部署动作：E2B template rebuild、production env update、sandbox migration/restart。
 
 ## 2026-07-04 进展
@@ -41,6 +41,17 @@ Codex manual 中 app-server 被描述为 rich client 接口，覆盖 authenticat
 - 已通过 `server` 目录下 `npx tsc --noEmit --pretty false`。
 - Pre-commit 2 已把 `CocoSessionService`/`CocoRuntimeConfig` 改为 `CodeAgentSessionService`/`CodeAgentRuntimeConfig`，并把 socket/server 注入点改为 `codeAgentSessionService`。
 - `/api/features` 和 `/api/status` 的对外 `coco` payload 保持不变；`COCO_*` env、Coco model gateway、Coco sandbox lifecycle、E2B artifact/source ref 继续保留为兼容契约。
+- App-server commit 新增 `python -m roomtalk_coco_runner.codex_app_server` runner，接入 `CODE_AGENT_BACKEND=codex-app-server`，并复用 Codex subscription auth 注入、E2B sandbox、JSONL runner client。
+- 前端 backend selector 支持 `Coco CLI`、`Codex CLI`、`Codex App Server` 并行切换；Codex CLI 和 app-server 都显示 Codex 模型、思考深度、权限模式。
+- 已 bump `ops/coco-sandbox/artifact.lock.json` 和 `ops/coco-sandbox/Dockerfile`，E2B template rebuild 时会验证 `roomtalk_coco_runner.codex_app_server`。
+
+## 已执行验证
+
+- `server/roomtalk_coco_runner`: `pytest tests/test_codex_app_server.py`
+- `server`: `npx tsc --noEmit --pretty false`
+- `server`: `node -r ts-node/register --test src/services/codeAgentRuntimeConfig.test.ts src/services/codeAgentRunner.test.ts src/services/codexCliRunnerConfig.test.ts src/services/codeAgentSessionService.test.ts`
+- `client-heroui`: `npm run check:i18n`
+- `client-heroui`: `npx tsc --noEmit --pretty false`
 
 ## 风险
 

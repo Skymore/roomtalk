@@ -15,7 +15,7 @@ export type RoomSandboxStatus = 'none' | 'creating' | 'ready' | 'expired' | 'err
 export type RoomCocoStatus = 'idle' | 'running' | 'error';
 export type CocoAccessLevel = 'owner' | 'admin' | 'member';
 export type CodeAgentMode = 'plan' | 'acceptEdits';
-export type CodeAgentBackend = 'coco' | 'codex';
+export type CodeAgentBackend = 'coco' | 'codex' | 'codex-app-server';
 export type MessageType = 'text' | 'ai' | 'media' | 'sticker' | 'tool_call' | 'tool_result' | 'sandbox_status';
 export type AIModelProvider = 'openai' | 'openrouter' | 'deepseek' | 'anthropic';
 

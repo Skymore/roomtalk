@@ -9,7 +9,13 @@ import {
   summarizeCocoMessages,
 } from '../utils/cocoWorkspace';
 import { Message, Room } from '../utils/types';
-import { CodeAgentBackend, CodeAgentMode, getCodeAgentStatus } from '../utils/codeAgent';
+import {
+  CODE_AGENT_BACKEND_OPTIONS,
+  CodeAgentBackend,
+  CodeAgentMode,
+  getCodeAgentBackendLabelKey,
+  getCodeAgentStatus,
+} from '../utils/codeAgent';
 import {
   getCocoAgentStatusClassName,
   getCocoStatusLabelKey,
@@ -132,6 +138,12 @@ const commandStatusLabelKey: Record<CodeAgentWorkspaceCommand['status'], string>
   started: 'codeAgentCommandStarted',
   succeeded: 'codeAgentCommandSucceeded',
   failed: 'codeAgentCommandFailed',
+};
+
+const backendShortLabels: Record<CodeAgentBackend, string> = {
+  coco: 'Coco',
+  codex: 'CLI',
+  'codex-app-server': 'App',
 };
 
 export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = ({
@@ -365,30 +377,30 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
               data-testid="code-agent-backend-toggle"
               className="inline-flex h-6 shrink-0 overflow-hidden rounded-full border border-[#dedbd0] bg-[#faf9f5] p-0.5 dark:border-[#30302e] dark:bg-[#242421]"
             >
-              {(['coco', 'codex'] as const).map((option) => {
+              {CODE_AGENT_BACKEND_OPTIONS.map((option) => {
                 const selected = currentBackend === option;
-                const label = option === 'codex' ? 'Codex' : 'Coco';
+                const labelKey = getCodeAgentBackendLabelKey(option);
                 return (
                   <Button
                     key={option}
                     size="sm"
                     variant="light"
                     radius="full"
-                    aria-label={option === 'codex' ? t('codeAgentEngineCodex') : t('codeAgentEngineCoco')}
-                    title={option === 'codex' ? t('codeAgentEngineCodex') : t('codeAgentEngineCoco')}
+                    aria-label={t(labelKey)}
+                    title={t(labelKey)}
                     data-testid={`code-agent-backend-${option}`}
                     isDisabled={!canToggleBackend}
                     onPress={() => {
                       if (!canToggleBackend || selected) return;
                       onBackendChange?.(option);
                     }}
-                    className={`h-5 min-w-12 px-2 text-[11px] font-semibold leading-none ${
+                    className={`h-5 min-w-8 px-1.5 text-[10px] font-semibold leading-none ${
                       selected
                         ? 'bg-[#30302e] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#141413]'
                         : 'bg-transparent text-[#5e5d59] dark:text-[#b0aea5]'
                     }`}
                   >
-                    {label}
+                    {backendShortLabels[option]}
                   </Button>
                 );
               })}

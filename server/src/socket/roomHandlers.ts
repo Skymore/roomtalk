@@ -1023,7 +1023,7 @@ export function registerRoomHandlers({
         updates.codeAgentMode = null;
       }
 
-      const VALID_CODE_AGENT_BACKENDS = ['coco', 'codex'] as const;
+      const VALID_CODE_AGENT_BACKENDS = ['coco', 'codex', 'codex-app-server'] as const;
       if (typeof data.codeAgentBackend === 'string' && VALID_CODE_AGENT_BACKENDS.includes(data.codeAgentBackend as any)) {
         updates.codeAgentBackend = data.codeAgentBackend as typeof VALID_CODE_AGENT_BACKENDS[number];
       } else if (data.codeAgentBackend === null) {

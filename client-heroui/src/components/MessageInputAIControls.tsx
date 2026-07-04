@@ -21,7 +21,7 @@ import {
   MIN_AI_CONTEXT_MESSAGE_LIMIT,
   normalizeAIContextMessageLimit,
 } from '../utils/aiContext';
-import { CodeAgentBackend, CodeAgentMode } from '../utils/codeAgent';
+import { CodeAgentBackend, CodeAgentMode, isCodexCodeAgentBackend } from '../utils/codeAgent';
 import {
   CODEX_PERMISSION_OPTIONS,
   CODEX_MODEL_OPTIONS,
@@ -184,7 +184,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   const isControlLocked = isSending || isAiProcessing || isInputLocked || !canPost;
   const askActionLabel = isCodeAgentRoom ? t('runAgent') : t('askAI');
   const askActionIcon = isCodeAgentRoom ? 'lucide:bot' : selectedRole.icon;
-  const isCodexCodeAgent = isCodeAgentRoom && codeAgentBackend === 'codex';
+  const isCodexCodeAgent = isCodeAgentRoom && isCodexCodeAgentBackend(codeAgentBackend);
   const effectiveCodeAgentMode = codeAgentMaxMode === 'acceptEdits' ? codeAgentMode : 'plan';
   const canSwitchEffectiveCodeAgentMode = isCodeAgentRoom && codeAgentMaxMode === 'acceptEdits' && canSwitchCodeAgentMode;
   const appliedAIModelId = selectedAIModel || defaultAIModel;

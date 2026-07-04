@@ -102,6 +102,7 @@ describe('CodeAgentRunner', () => {
 
     assert.equal(createCodeAgentRunner('coco', sharedClient).backend, 'coco');
     assert.equal(createCodeAgentRunner('codex', sharedClient).backend, 'codex');
+    assert.equal(createCodeAgentRunner('codex-app-server', sharedClient).backend, 'codex-app-server');
     assert.equal(createCodeAgentRunner('codex', sharedClient, { codexRunner }).backend, 'codex');
     assert.throws(
       () => createCodeAgentRunner('codex', sharedClient, { codexRunner: createCodeAgentRunner('coco', sharedClient) }),

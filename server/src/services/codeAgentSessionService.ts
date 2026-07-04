@@ -8,7 +8,7 @@ import { CocoSandboxHandle, CocoSandboxService, CodeAgentRunnerProcess } from '.
 import { mapCodeAgentRunnerEvent } from './codeAgentEventMapper';
 import { CodeAgentRunner } from './codeAgentRunner';
 import { CODE_AGENT_RUNNER_SCHEMA_VERSION, CodeAgentRunnerEvent, CodeAgentRunnerMode, CodeAgentRunnerRunRequest } from './codeAgentRunnerProtocol';
-import { DEFAULT_CODEX_CLI_RUNNER_COMMAND, DEFAULT_COCO_RUNNER_COMMAND } from './codeAgentRuntimeConfig';
+import { DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND, DEFAULT_CODEX_CLI_RUNNER_COMMAND, DEFAULT_COCO_RUNNER_COMMAND } from './codeAgentRuntimeConfig';
 import { createAIPlaceholderMessage } from './messageDomain';
 import { CocoModelGateway } from './cocoModelGateway';
 import { buildCocoPriorMessages } from './cocoTranscript';
@@ -18,6 +18,10 @@ import { canUseCocoRoom, COCO_ACCESS_DENIED_MESSAGE } from './cocoRoomAccess';
 import { CodexConnectionService } from './codexConnection';
 import { CodeAgentRunnerHandlers, CodeAgentRunnerRunResult } from './fakeCodeAgentRunner';
 import { CodexRunSettings, getCodexMessageAIModel, normalizeCodexRunSettings } from './codexRunSettings';
+
+const isCodexBackend = (backend: CodeAgentBackend) => (
+  backend === 'codex' || backend === 'codex-app-server'
+);
 
 export interface CodeAgentRoomEmitter {
   to(roomId: string): {
@@ -192,7 +196,7 @@ export class CodeAgentSessionService {
           maxContextMessages: input.maxContextMessages,
           usesModelGateway: Boolean(this.options.modelGateway),
           previousSessionId: room!.cocoSessionId || null,
-          codexRunSettings: turnBackend === 'codex' ? codexRunSettings : undefined,
+          codexRunSettings: isCodexBackend(turnBackend) ? codexRunSettings : undefined,
         },
       });
 
@@ -280,7 +284,7 @@ export class CodeAgentSessionService {
         provider: input.selectedModel.provider,
         modelId: input.selectedModel.id,
         apiModel: input.selectedModel.apiModel,
-        ...(turnBackend === 'codex'
+        ...(isCodexBackend(turnBackend)
           ? {
               codexModel: codexRunSettings.model,
               codexReasoningEffort: codexRunSettings.reasoningEffort,
@@ -411,8 +415,8 @@ export class CodeAgentSessionService {
       this.emitter.to((idleRoom || finalRoom).creatorId).emit('room_updated', idleRoom || finalRoom);
       await this.recordTurnEvent('info', 'coco.turn.completed', input, turnId, turnStartedAtMs, {
         sessionId: runResult.finalEvent.sessionId,
-        provider: turnBackend === 'codex' ? 'codex' : input.selectedModel.provider,
-        model: turnBackend === 'codex' ? codexRunSettings.model : input.selectedModel.id,
+        provider: isCodexBackend(turnBackend) ? 'codex' : input.selectedModel.provider,
+        model: isCodexBackend(turnBackend) ? codexRunSettings.model : input.selectedModel.id,
         costUsd: completionMetadata.cost?.totalUsd,
         payload: {
           backend: turnBackend,
@@ -422,7 +426,7 @@ export class CodeAgentSessionService {
           segmentCount: streamState.segmentIds.length,
           answerLength: answer.length,
           roomCostTotalUsd: roomCostTotal.totalUsd,
-          codexRunSettings: turnBackend === 'codex' ? codexRunSettings : undefined,
+          codexRunSettings: isCodexBackend(turnBackend) ? codexRunSettings : undefined,
           usage,
           cost: completionMetadata.cost,
         },
@@ -478,7 +482,7 @@ export class CodeAgentSessionService {
     sandbox: CocoSandboxHandle;
     startRunnerProcess: (env: Record<string, string>) => Promise<CodeAgentRunnerProcess>;
   }): Promise<CodeAgentRunnerRunResult> {
-    if (input.backend !== 'codex') {
+    if (!isCodexBackend(input.backend)) {
       const process = await input.startRunnerProcess(input.runnerEnv);
       return this.runner.run(input.request, input.handlers, {
         process,
@@ -600,14 +604,14 @@ export class CodeAgentSessionService {
   }
 
   private validateTurnBackend(backend: CodeAgentBackend): { ok: true } | { ok: false; error: string } {
-    if (backend === 'codex' && this.options.codexBackendEnabled === false) {
+    if (isCodexBackend(backend) && this.options.codexBackendEnabled === false) {
       return { ok: false, error: 'Codex CLI backend is not enabled' };
     }
     return { ok: true };
   }
 
   private displayBackendName(backend: CodeAgentBackend): string {
-    return backend === 'codex' ? 'Codex' : 'Coco';
+    return isCodexBackend(backend) ? 'Codex' : 'Coco';
   }
 
   private messageAIModelForBackend(
@@ -615,7 +619,7 @@ export class CodeAgentSessionService {
     selectedModel: AIModelOption,
     codexRunSettings: CodexRunSettings
   ): Message['aiModel'] {
-    if (backend === 'codex') {
+    if (isCodexBackend(backend)) {
       return getCodexMessageAIModel(codexRunSettings);
     }
     return getMessageAIModel(selectedModel);
@@ -628,7 +632,7 @@ export class CodeAgentSessionService {
     usage?: Message['usage']
   ): Pick<Message, 'aiModel' | 'usage' | 'cost'> {
     const aiModel = this.messageAIModelForBackend(backend, selectedModel, codexRunSettings);
-    if (backend === 'codex') {
+    if (isCodexBackend(backend)) {
       return { aiModel };
     }
     const cost = usage ? calculateAICost(selectedModel, usage) : undefined;
@@ -644,7 +648,13 @@ export class CodeAgentSessionService {
     if (backend === defaultBackend && this.options.runnerCommand) {
       return this.options.runnerCommand;
     }
-    return backend === 'codex' ? DEFAULT_CODEX_CLI_RUNNER_COMMAND : DEFAULT_COCO_RUNNER_COMMAND;
+    if (backend === 'codex') {
+      return DEFAULT_CODEX_CLI_RUNNER_COMMAND;
+    }
+    if (backend === 'codex-app-server') {
+      return DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND;
+    }
+    return DEFAULT_COCO_RUNNER_COMMAND;
   }
 
   private availableModes(): CodeAgentRunnerMode[] {
@@ -871,8 +881,8 @@ export class CodeAgentSessionService {
       event: `coco.runner.${event.type}`,
       roomId,
       turnId,
-      provider: backend === 'codex' ? 'codex' : selectedModel.provider,
-      model: backend === 'codex' ? codexRunSettings.model : selectedModel.id,
+      provider: isCodexBackend(backend) ? 'codex' : selectedModel.provider,
+      model: isCodexBackend(backend) ? codexRunSettings.model : selectedModel.id,
       errorMessage: event.type === 'error' ? event.message : undefined,
       payload: { backend, ...payload },
     });

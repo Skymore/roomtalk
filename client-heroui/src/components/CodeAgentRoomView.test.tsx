@@ -40,7 +40,7 @@ vi.mock('./MessageList', async () => {
       codeAgentBackend?: string;
       bottomInsetPx?: number;
       onOpenWorkspaceFile?: (path: string) => void;
-      onCodeAgentBackendChange?: (backend: 'coco' | 'codex') => void;
+      onCodeAgentBackendChange?: (backend: 'coco' | 'codex' | 'codex-app-server') => void;
     }, ref: React.ForwardedRef<unknown>) => {
     React.useImperativeHandle(ref, () => ({ scrollToBottom: vi.fn() }));
     return (
@@ -200,7 +200,7 @@ vi.mock('./CodeAgentFileBrowserPanel', () => ({
 }));
 
 vi.mock('../utils/socket', () => ({
-  updateRoomSettings: vi.fn(async ({ roomId, codeAgentMode, codeAgentBackend }: { roomId: string; codeAgentMode?: 'plan' | 'acceptEdits'; codeAgentBackend?: 'coco' | 'codex' }) => ({
+  updateRoomSettings: vi.fn(async ({ roomId, codeAgentMode, codeAgentBackend }: { roomId: string; codeAgentMode?: 'plan' | 'acceptEdits'; codeAgentBackend?: 'coco' | 'codex' | 'codex-app-server' }) => ({
     id: roomId,
     name: 'Coco Room',
     creatorId: 'client-1',

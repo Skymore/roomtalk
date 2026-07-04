@@ -53,14 +53,15 @@ export interface CodexBackendStartupGateInput {
 }
 
 export function assertCodexBackendStartupGate(input: CodexBackendStartupGateInput): void {
-  if (input.codeAgentRuntimeConfig.backend !== 'codex') {
+  const backend = input.codeAgentRuntimeConfig.backend;
+  if (backend !== 'codex' && backend !== 'codex-app-server') {
     return;
   }
   if (!input.codexCliRunnerConfig.enabled) {
-    throw new Error('CODE_AGENT_BACKEND=codex requires CODEX_CLI_BACKEND_ENABLED=true');
+    throw new Error(`CODE_AGENT_BACKEND=${backend} requires CODEX_CLI_BACKEND_ENABLED=true`);
   }
   if (!input.codexConnectionConfig.enabled || !input.hasCodexConnectionService) {
-    throw new Error('CODE_AGENT_BACKEND=codex requires CODEX_CONNECTIONS_ENABLED=true and a configured Codex connection service');
+    throw new Error(`CODE_AGENT_BACKEND=${backend} requires CODEX_CONNECTIONS_ENABLED=true and a configured Codex connection service`);
   }
 }
 
