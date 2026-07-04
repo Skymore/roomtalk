@@ -46,6 +46,9 @@ class RunnerRequest:
     provider: str
     model_id: str
     api_model: str
+    codex_model: str | None
+    codex_reasoning_effort: str | None
+    codex_permission_mode: str | None
     workspace: Path
     allowed_paths: tuple[str, ...]
 
@@ -101,9 +104,20 @@ def parse_request(line: str) -> RunnerRequest:
         provider=string_field("provider"),
         model_id=string_field("modelId"),
         api_model=string_field("apiModel"),
+        codex_model=_optional_string(raw.get("codexModel"), "codexModel", turn_id=raw.get("turnId")),
+        codex_reasoning_effort=_optional_string(raw.get("codexReasoningEffort"), "codexReasoningEffort", turn_id=raw.get("turnId")),
+        codex_permission_mode=_optional_string(raw.get("codexPermissionMode"), "codexPermissionMode", turn_id=raw.get("turnId")),
         workspace=Path(string_field("workspace")),
         allowed_paths=tuple(allowed_paths_raw),
     )
+
+
+def _optional_string(value: Any, key: str, *, turn_id: str | None = None) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise RunnerError(f"Expected non-empty string field {key!r}", code="invalid_request", turn_id=turn_id)
+    return value.strip()
 
 
 def _parse_prior_messages(value: Any, *, turn_id: str | None = None) -> list[dict[str, Any]]:

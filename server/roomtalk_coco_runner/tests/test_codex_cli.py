@@ -139,16 +139,18 @@ def test_codex_cli_maps_exec_jsonl_and_saves_refreshed_auth(tmp_path: Path):
     }
 
     call = popen.calls[0]
-    assert call["args"][:8] == [
-        "codex",
-        "exec",
-        "--json",
-        "--ephemeral",
-        "--sandbox",
-        "workspace-write",
-        "--cd",
-        str(workspace),
-    ]
+    call_args = call["args"]
+    assert call_args[:4] == ["codex", "exec", "--json", "--ephemeral"]
+    assert call_args[call_args.index("--model") + 1] == "gpt-5.5"
+    assert call_args[call_args.index("--ask-for-approval") + 1] == "never"
+    assert 'model_reasoning_effort="xhigh"' in call_args
+    assert "sandbox_workspace_write.network_access=true" in call_args
+    assert call_args[call_args.index("--sandbox") + 1] == "read-only"
+    assert call_args[call_args.index("--cd") + 1] == str(workspace)
+    assert call_args[call_args.index("--output-last-message") + 1].endswith("last-message.txt")
+    assert call["args"][-1].endswith("inspect with codex")
+    assert "non-interactive cloud sandbox" in call["args"][-1]
+    assert "configured sandbox permissions" in call["args"][-1]
     child_env = call["env"]
     assert child_env["PUBLIC_VALUE"] == "visible"
     assert child_env["CODEX_HOME"].startswith(str(tmp_path / "secrets"))
@@ -157,6 +159,177 @@ def test_codex_cli_maps_exec_jsonl_and_saves_refreshed_auth(tmp_path: Path):
     assert "ROOMTALK_CODEX_AUTH_JSON_PATH" not in child_env
     assert refreshed_auth_json.read_text(encoding="utf-8") == '{"accessToken":"refreshed"}'
     assert not Path(child_env["CODEX_HOME"]).exists()
+
+
+def test_codex_cli_injects_roomtalk_tool_prompt_and_scoped_shell_env(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    auth_json = tmp_path / "auth.json"
+    auth_json.write_text('{"accessToken":"initial"}', encoding="utf-8")
+    stdout = io.StringIO()
+    popen = FakeCodexPopenFactory([
+        {"type": "thread.started", "thread_id": "thread-1"},
+        {"type": "turn.completed"},
+    ])
+    run_request = parse_request(json.dumps(request(
+        mode="acceptEdits",
+        turnId="turn-codex",
+        roomId="room-codex",
+        workspace=str(workspace),
+    )))
+
+    codex_cli.run_request(
+        run_request,
+        emitter=EventEmitter(stdout),
+        config=codex_cli.CodexCliRunConfig(
+            secret_parent=tmp_path / "secrets",
+            auth_json_path=auth_json,
+            keep_codex_home=True,
+        ),
+        popen_factory=popen,
+        env={
+            "COCO_WORKSPACE_ROOT": str(tmp_path),
+            "PYTHONPATH": "/opt/coco/src:/opt/roomtalk_coco_runner",
+            "ROOMTALK_COCO_ENABLE_STATIC_PUBLISH": "true",
+            "ROOMTALK_STATIC_PUBLISH_URL": "https://room.example/api/coco/publish-static-site",
+            "ROOMTALK_STATIC_PUBLISH_PUBLIC_BASE_URL": "https://room.example",
+            "ROOMTALK_STATIC_PUBLISH_TOKEN": "turn-token",
+            "ROOMTALK_E2B_PORT_HOST_TEMPLATE": "{port}.sandbox.e2b.dev",
+        },
+    )
+
+    call = popen.calls[0]
+    call_args = call["args"]
+    assert call_args[call_args.index("--sandbox") + 1] == "workspace-write"
+    assert call_args[call_args.index("--ask-for-approval") + 1] == "never"
+    assert "sandbox_workspace_write.network_access=true" in call_args
+    assert "roomtalk publish-static-site" in call_args[-1]
+    assert "roomtalk background-shell start" in call_args[-1]
+
+    child_env = call["env"]
+    assert "ROOMTALK_STATIC_PUBLISH_TOKEN" not in child_env
+    config_toml = (Path(child_env["CODEX_HOME"]) / "config.toml").read_text(encoding="utf-8")
+    assert 'ROOMTALK_CODE_AGENT_ROOM_ID = "room-codex"' in config_toml
+    assert 'ROOMTALK_CODE_AGENT_TURN_ID = "turn-codex"' in config_toml
+    assert 'ROOMTALK_STATIC_PUBLISH_TOKEN = "turn-token"' in config_toml
+    assert 'ROOMTALK_E2B_PORT_HOST_TEMPLATE = "{port}.sandbox.e2b.dev"' in config_toml
+
+
+def test_codex_cli_passes_requested_model_and_reasoning_effort(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    auth_json = tmp_path / "auth.json"
+    auth_json.write_text('{"accessToken":"initial"}', encoding="utf-8")
+    stdout = io.StringIO()
+    popen = FakeCodexPopenFactory([
+        {"type": "thread.started", "thread_id": "thread-1"},
+        {"type": "turn.completed"},
+    ])
+    run_request = parse_request(json.dumps(request(
+        turnId="turn-codex",
+        workspace=str(workspace),
+        codexModel="gpt-5.3-codex-spark",
+        codexReasoningEffort="high",
+    )))
+
+    codex_cli.run_request(
+        run_request,
+        emitter=EventEmitter(stdout),
+        config=codex_cli.CodexCliRunConfig(
+            secret_parent=tmp_path / "secrets",
+            auth_json_path=auth_json,
+        ),
+        popen_factory=popen,
+        env={"COCO_WORKSPACE_ROOT": str(tmp_path)},
+    )
+
+    call_args = popen.calls[0]["args"]
+    assert call_args[call_args.index("--model") + 1] == "gpt-5.3-codex-spark"
+    assert call_args[call_args.index("-c") + 1] == 'model_reasoning_effort="high"'
+
+
+@pytest.mark.parametrize(
+    ("permission_mode", "sandbox", "approval_policy", "network_enabled"),
+    [
+        ("plan", "read-only", "never", False),
+        ("edit", "workspace-write", "on-request", True),
+        ("approveForMe", "workspace-write", "never", True),
+        ("fullAccess", "danger-full-access", "never", False),
+    ],
+)
+def test_codex_cli_maps_permission_modes_to_exec_flags(
+    tmp_path: Path,
+    permission_mode: str,
+    sandbox: str,
+    approval_policy: str,
+    network_enabled: bool,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    auth_json = tmp_path / "auth.json"
+    auth_json.write_text('{"accessToken":"initial"}', encoding="utf-8")
+    popen = FakeCodexPopenFactory([
+        {"type": "thread.started", "thread_id": "thread-1"},
+        {"type": "turn.completed"},
+    ])
+    run_request = parse_request(json.dumps(request(
+        mode="acceptEdits",
+        turnId=f"turn-{permission_mode}",
+        workspace=str(workspace),
+        codexPermissionMode=permission_mode,
+    )))
+
+    codex_cli.run_request(
+        run_request,
+        emitter=EventEmitter(io.StringIO()),
+        config=codex_cli.CodexCliRunConfig(
+            secret_parent=tmp_path / "secrets",
+            auth_json_path=auth_json,
+        ),
+        popen_factory=popen,
+        env={"COCO_WORKSPACE_ROOT": str(tmp_path)},
+    )
+
+    call_args = popen.calls[0]["args"]
+    assert call_args[call_args.index("--sandbox") + 1] == sandbox
+    assert call_args[call_args.index("--ask-for-approval") + 1] == approval_policy
+    assert ("sandbox_workspace_write.network_access=true" in call_args) is network_enabled
+
+
+def test_codex_cli_maps_roomtalk_commands_to_platform_tool_events(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    mapper = codex_cli.CodexCliEventMapper(
+        turn_id="turn-codex",
+        message_id="ai-codex",
+        workspace=workspace,
+    )
+
+    events = [
+        *mapper.map_event({
+            "type": "item.started",
+            "item": {
+                "id": "cmd-publish",
+                "type": "command_execution",
+                "command": "roomtalk publish-static-site --root site",
+            },
+        }),
+        *mapper.map_event({
+            "type": "item.completed",
+            "item": {
+                "id": "cmd-publish",
+                "type": "command_execution",
+                "status": "completed",
+                "exit_code": 0,
+                "aggregated_output": "Published static site: https://room.example/p/demo/",
+            },
+        }),
+    ]
+
+    assert [event["name"] for event in events if event["type"] in ("tool_call", "tool_result")] == [
+        "PublishStaticSite",
+        "PublishStaticSite",
+    ]
 
 
 def test_codex_cli_requires_auth_json_path(tmp_path: Path):

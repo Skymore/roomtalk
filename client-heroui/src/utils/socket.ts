@@ -19,6 +19,7 @@ import {
   RoomType,
 } from './types';
 import { Socket } from 'socket.io-client';
+import type { CodexPermissionMode, CodexReasoningEffort } from './codexSettings';
 
 // Get client ID from local storage or create a new one
 // This ID persists across browser sessions and uniquely identifies the user
@@ -1015,6 +1016,9 @@ export const requestAIResponse = (data: {
   systemPrompt?: string;
   roleName?: string;
   model?: string;
+  codexModel?: string;
+  codexReasoningEffort?: CodexReasoningEffort;
+  codexPermissionMode?: CodexPermissionMode;
   editedMessageId?: string;
   retryForMessageId?: string;
   maxContextMessages?: number;
@@ -1389,6 +1393,9 @@ export const sendMessageAndAskAI = (params: {
   systemPrompt?: string;
   roleName?: string;
   model?: string;
+  codexModel?: string;
+  codexReasoningEffort?: CodexReasoningEffort;
+  codexPermissionMode?: CodexPermissionMode;
   maxContextMessages?: number;
   codeAgentMode?: CodeAgentMode;
 }): Promise<{ userMessage: Message; aiMessageId?: string; aiStarted: boolean; aiError?: string }> => {
@@ -1418,6 +1425,9 @@ export const requestEditMessageAndAIResponse = (data: {
   systemPrompt?: string;
   roleName?: string;
   model?: string;
+  codexModel?: string;
+  codexReasoningEffort?: CodexReasoningEffort;
+  codexPermissionMode?: CodexPermissionMode;
   maxContextMessages?: number;
   codeAgentMode?: CodeAgentMode;
 }) => {

@@ -1,4 +1,4 @@
-import { AIModelProvider, AIUsage } from '../types';
+import { AIModelProvider, AIUsage, CodexPermissionMode, CodexReasoningEffort } from '../types';
 
 export const COCO_RUNNER_SCHEMA_VERSION = 1 as const;
 
@@ -26,6 +26,9 @@ export interface CocoRunnerRunRequest {
   provider: AIModelProvider;
   modelId: string;
   apiModel: string;
+  codexModel?: string;
+  codexReasoningEffort?: CodexReasoningEffort;
+  codexPermissionMode?: CodexPermissionMode;
   workspace: string;
   allowedPaths: string[];
   priorMessages?: CocoRunnerPriorMessage[];

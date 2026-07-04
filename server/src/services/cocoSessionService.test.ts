@@ -358,7 +358,10 @@ describe('CocoSessionService', () => {
     const refreshedAuths: Array<string | undefined> = [];
     let sandboxService: FakeCocoSandboxService;
     const runner: CocoRunnerClient = {
-      async run(_request, handlers, context): Promise<CocoRunnerRunResult> {
+      async run(request, handlers, context): Promise<CocoRunnerRunResult> {
+        assert.equal(request.codexModel, 'gpt-5.3-codex-spark');
+        assert.equal(request.codexReasoningEffort, 'high');
+        assert.equal(request.codexPermissionMode, 'fullAccess');
         const env = sandboxService.startedRunnerEnvs[sandboxService.startedRunnerEnvs.length - 1];
         assert.ok(env.ROOMTALK_CODEX_AUTH_JSON_PATH);
         assert.ok(env.ROOMTALK_CODEX_REFRESHED_AUTH_JSON_PATH);
@@ -372,6 +375,14 @@ describe('CocoSessionService', () => {
           messageId: 'codex-turn-1',
           answer: 'Codex done',
           sessionId: 'codex-session-1',
+          usage: {
+            promptTokens: 1200,
+            completionTokens: 100,
+            totalTokens: 1300,
+            cachedPromptTokens: 900,
+            cacheHitRate: 0.75,
+            source: 'reported' as const,
+          },
         };
         await handlers.onEvent(finalEvent);
         return { events: [finalEvent], finalEvent };
@@ -399,6 +410,7 @@ describe('CocoSessionService', () => {
       roomId: 'room-1',
       clientId: 'client-1',
       selectedModel,
+      codexRunSettings: { model: 'gpt-5.3-codex-spark', reasoningEffort: 'high', permissionMode: 'fullAccess' },
     });
 
     assert.deepEqual(result, { success: true, messageId: 'ai-1' });
@@ -415,6 +427,15 @@ describe('CocoSessionService', () => {
     ]);
     const messages = setup.store.messages.get('room-1') || [];
     assert.equal(messages[messages.length - 1].content, 'Codex done');
+    assert.deepEqual(messages[messages.length - 1].aiModel, {
+      id: 'gpt-5.3-codex-spark',
+      apiModel: 'gpt-5.3-codex-spark',
+      provider: 'openai',
+      label: 'GPT-5.3-Codex-Spark High',
+    });
+    assert.equal(messages[messages.length - 1].usage, undefined);
+    assert.equal(messages[messages.length - 1].cost, undefined);
+    assert.equal(setup.store.roomCost.totalUsd, 0);
   });
 
   it('lets a room select Codex while the service default backend remains Coco', async () => {

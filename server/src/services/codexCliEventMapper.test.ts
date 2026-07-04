@@ -157,6 +157,35 @@ describe('CodexCliEventMapper', () => {
     assert.equal(result.type === 'tool_result' ? result.exitCode : undefined, 2);
   });
 
+  test('maps RoomTalk platform commands to named tool events', () => {
+    const mapper = new CodexCliEventMapper({ turnId: 'turn-1', messageId: 'ai-1', workspace });
+    const events = [
+      ...mapper.mapEvent({
+        type: 'item.started',
+        item: {
+          id: 'cmd-publish',
+          type: 'command_execution',
+          command: 'roomtalk publish-static-site --root site',
+        },
+      }),
+      ...mapper.mapEvent({
+        type: 'item.completed',
+        item: {
+          id: 'cmd-publish',
+          type: 'command_execution',
+          status: 'completed',
+          exit_code: 0,
+          aggregated_output: 'Published static site: https://room.example/p/demo/',
+        },
+      }),
+    ];
+
+    assert.deepEqual(events.map(event => event.type === 'tool_call' || event.type === 'tool_result' ? event.name : ''), [
+      'PublishStaticSite',
+      'PublishStaticSite',
+    ]);
+  });
+
   test('maps turn failures to Coco error events', () => {
     const mapper = new CodexCliEventMapper({ turnId: 'turn-1', messageId: 'ai-1', workspace });
     const events = mapper.mapEvent({ type: 'turn.failed', message: 'model failed' });

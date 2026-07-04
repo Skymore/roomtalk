@@ -29,23 +29,31 @@ vi.mock('@heroui/react', () => ({
   ModalContent: ({ children }: any) => <div>{children}</div>,
   ModalFooter: ({ children }: any) => <div>{children}</div>,
   ModalHeader: ({ children }: any) => <div>{children}</div>,
-  Select: ({ children, 'aria-label': ariaLabel, onSelectionChange, isDisabled, ...props }: any) => (
-    <div
-      aria-label={ariaLabel}
-      data-testid={props['data-testid'] || ariaLabel}
-      data-disabled={String(Boolean(isDisabled))}
-    >
-      {children}
-      <button
-        type="button"
-        data-testid={`change-${ariaLabel}`}
-        disabled={isDisabled}
-        onClick={() => onSelectionChange?.(new Set(['acceptEdits']))}
+  Select: ({ children, 'aria-label': ariaLabel, onSelectionChange, isDisabled, ...props }: any) => {
+    const nextKeyByLabel: Record<string, string> = {
+      codeAgentModeControl: 'acceptEdits',
+      selectCodexPermission: 'fullAccess',
+      selectCodexModel: 'gpt-5.3-codex-spark',
+      selectCodexReasoning: 'xhigh',
+    };
+    return (
+      <div
+        aria-label={ariaLabel}
+        data-testid={props['data-testid'] || ariaLabel}
+        data-disabled={String(Boolean(isDisabled))}
       >
-        change
-      </button>
-    </div>
-  ),
+        {children}
+        <button
+          type="button"
+          data-testid={`change-${ariaLabel}`}
+          disabled={isDisabled}
+          onClick={() => onSelectionChange?.(new Set([nextKeyByLabel[ariaLabel] || 'acceptEdits']))}
+        >
+          change
+        </button>
+      </div>
+    );
+  },
   SelectItem: ({ children }: any) => <div>{children}</div>,
   Tab: ({ children, title }: any) => <div><span>{title}</span>{children}</div>,
   Tabs: ({ children }: any) => <div>{children}</div>,
@@ -174,6 +182,67 @@ describe('MessageInputAIControls', () => {
     fireEvent.click(screen.getByTestId('change-codeAgentModeControl'));
     fireEvent.click(screen.getByRole('button', { name: 'apply' }));
 
+    expect(onCodeAgentModeChange).not.toHaveBeenCalled();
+  });
+
+  it('applies Codex model and reasoning settings without showing the priced AI model picker', () => {
+    const onCodexRunSettingsChange = vi.fn();
+    const onSettingsClose = vi.fn();
+    render(
+      <MessageInputAIControls
+        {...baseProps}
+        isSettingsOpen
+        onSettingsClose={onSettingsClose}
+        isCodeAgentRoom
+        codeAgentBackend="codex"
+        codeAgentMode="acceptEdits"
+        codeAgentMaxMode="acceptEdits"
+        codexRunSettings={{ model: 'gpt-5.5', reasoningEffort: 'medium', permissionMode: 'approveForMe' }}
+        onCodexRunSettingsChange={onCodexRunSettingsChange}
+      />
+    );
+
+    expect(screen.getByTestId('codex-model-select')).toBeTruthy();
+    expect(screen.getByTestId('codex-reasoning-select')).toBeTruthy();
+    expect(screen.queryByTestId('ai-model-select')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('change-selectCodexModel'));
+    fireEvent.click(screen.getByTestId('change-selectCodexReasoning'));
+    fireEvent.click(screen.getByRole('button', { name: 'apply' }));
+
+    expect(onCodexRunSettingsChange).toHaveBeenCalledWith({
+      model: 'gpt-5.3-codex-spark',
+      reasoningEffort: 'xhigh',
+      permissionMode: 'approveForMe',
+    });
+    expect(onSettingsClose).toHaveBeenCalled();
+  });
+
+  it('applies Codex permission changes through the code mode control', () => {
+    const onCodexRunSettingsChange = vi.fn();
+    const onCodeAgentModeChange = vi.fn();
+    render(
+      <MessageInputAIControls
+        {...baseProps}
+        isSettingsOpen
+        isCodeAgentRoom
+        codeAgentBackend="codex"
+        codeAgentMode="acceptEdits"
+        codeAgentMaxMode="acceptEdits"
+        codexRunSettings={{ model: 'gpt-5.5', reasoningEffort: 'xhigh', permissionMode: 'approveForMe' }}
+        onCodexRunSettingsChange={onCodexRunSettingsChange}
+        onCodeAgentModeChange={onCodeAgentModeChange}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId('change-selectCodexPermission'));
+    fireEvent.click(screen.getByRole('button', { name: 'apply' }));
+
+    expect(onCodexRunSettingsChange).toHaveBeenCalledWith({
+      model: 'gpt-5.5',
+      reasoningEffort: 'xhigh',
+      permissionMode: 'fullAccess',
+    });
     expect(onCodeAgentModeChange).not.toHaveBeenCalled();
   });
 

@@ -22,9 +22,10 @@ import {
 import { notifyRoomMessageBestEffort } from '../services/pushNotifications';
 import { withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
 import { COCO_ACCESS_DENIED_MESSAGE } from '../services/cocoRoomAccess';
+import { normalizeCodexRunSettings } from '../services/codexRunSettings';
 import type { CocoRunnerMode } from '../services/cocoRunnerProtocol';
 import type { CocoTurnInput } from '../services/cocoSessionService';
-import type { A2UIActionEvent, AIModelOption, Message } from '../types';
+import type { A2UIActionEvent, AIModelOption, CodexPermissionMode, CodexReasoningEffort, Message } from '../types';
 import { hasRoomAccess } from './roomAccess';
 import { authorizeRoomAction, buildRoomPermissions, getRoomMessage } from './roomAuthorization';
 import { SocketConnectionContext, SocketHandlerDeps } from './types';
@@ -82,6 +83,9 @@ const buildCocoTurnInput = ({
   roomId,
   clientId,
   selectedModel,
+  codexModel,
+  codexReasoningEffort,
+  codexPermissionMode,
   maxContextMessages,
   socket,
   requestedMode,
@@ -89,6 +93,9 @@ const buildCocoTurnInput = ({
   roomId: string;
   clientId: string;
   selectedModel: AIModelOption;
+  codexModel?: string;
+  codexReasoningEffort?: CodexReasoningEffort;
+  codexPermissionMode?: CodexPermissionMode;
   maxContextMessages?: number;
   socket: SocketConnectionContext['socket'];
   requestedMode?: CocoRunnerMode;
@@ -96,6 +103,9 @@ const buildCocoTurnInput = ({
   roomId,
   clientId,
   selectedModel,
+  ...((codexModel || codexReasoningEffort || codexPermissionMode)
+    ? { codexRunSettings: normalizeCodexRunSettings(codexModel, codexReasoningEffort, codexPermissionMode) }
+    : {}),
   maxContextMessages,
   ...getCocoTurnOriginInput(socket),
   ...(requestedMode ? { requestedMode, requestedModeSource: 'originalTurn' as const } : {}),
@@ -378,6 +388,9 @@ type AIRequestData = {
   systemPrompt?: string;
   roleName?: string;
   model?: string;
+  codexModel?: string;
+  codexReasoningEffort?: CodexReasoningEffort;
+  codexPermissionMode?: CodexPermissionMode;
   userMessageId?: string;
   editedMessageId?: string;
   retryForMessageId?: string;
@@ -1877,6 +1890,9 @@ export function registerAIHandlers({
         roomId: data.roomId,
         clientId,
         selectedModel: normalizeAIModel(data.model),
+        codexModel: data.codexModel,
+        codexReasoningEffort: data.codexReasoningEffort,
+        codexPermissionMode: data.codexPermissionMode,
         maxContextMessages: data.maxContextMessages,
         socket,
         requestedMode,
@@ -2000,6 +2016,9 @@ export function registerAIHandlers({
         roomId: data.roomId,
         clientId,
         selectedModel: normalizeAIModel(data.model),
+        codexModel: data.codexModel,
+        codexReasoningEffort: data.codexReasoningEffort,
+        codexPermissionMode: data.codexPermissionMode,
         maxContextMessages: data.maxContextMessages,
         socket,
       }), (response) => {
@@ -2124,6 +2143,9 @@ export function registerAIHandlers({
         roomId: data.roomId,
         clientId,
         selectedModel: normalizeAIModel(data.model),
+        codexModel: data.codexModel,
+        codexReasoningEffort: data.codexReasoningEffort,
+        codexPermissionMode: data.codexPermissionMode,
         maxContextMessages: data.maxContextMessages,
         socket,
         requestedMode,

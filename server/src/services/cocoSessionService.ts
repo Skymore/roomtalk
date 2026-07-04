@@ -17,6 +17,7 @@ import { ObservabilityEventInput, ObservabilityEventRecorder } from './observabi
 import { canUseCocoRoom, COCO_ACCESS_DENIED_MESSAGE } from './cocoRoomAccess';
 import { CodexConnectionService } from './codexConnection';
 import { CocoRunnerHandlers, CocoRunnerRunResult } from './fakeCocoRunner';
+import { CodexRunSettings, getCodexMessageAIModel, normalizeCodexRunSettings } from './codexRunSettings';
 
 export interface CocoRoomEmitter {
   to(roomId: string): {
@@ -51,6 +52,7 @@ export interface CocoTurnInput {
   roomId: string;
   clientId: string;
   selectedModel: AIModelOption;
+  codexRunSettings?: CodexRunSettings;
   maxContextMessages?: number;
   requestedMode?: CocoRunnerMode;
   requestedModeSource?: 'originalTurn';
@@ -140,6 +142,11 @@ export class CocoSessionService {
     if (!backendValidation.ok) {
       return rejectTurn(backendValidation.error, { reason: 'backend_rejected', backend: turnBackend });
     }
+    const codexRunSettings = normalizeCodexRunSettings(
+      input.codexRunSettings?.model,
+      input.codexRunSettings?.reasoningEffort,
+      input.codexRunSettings?.permissionMode
+    );
 
     let aiMessageId = '';
     let turnId = '';
@@ -153,14 +160,16 @@ export class CocoSessionService {
       this.activeTurns.add(input.roomId);
       aiMessageId = this.createId();
       turnId = this.createId();
-      aiMessage = {
-        ...createAIPlaceholderMessage({
+      const placeholderMessage = createAIPlaceholderMessage({
           id: aiMessageId,
           roomId: input.roomId,
           roleName: this.displayBackendName(turnBackend),
           model: input.selectedModel,
           now: this.now(),
-        }),
+      });
+      placeholderMessage.aiModel = this.messageAIModelForBackend(turnBackend, input.selectedModel, codexRunSettings);
+      aiMessage = {
+        ...placeholderMessage,
         turnId,
         codeAgentMode: turnMode.mode,
       };
@@ -183,6 +192,7 @@ export class CocoSessionService {
           maxContextMessages: input.maxContextMessages,
           usesModelGateway: Boolean(this.options.modelGateway),
           previousSessionId: room!.cocoSessionId || null,
+          codexRunSettings: turnBackend === 'codex' ? codexRunSettings : undefined,
         },
       });
 
@@ -270,6 +280,13 @@ export class CocoSessionService {
         provider: input.selectedModel.provider,
         modelId: input.selectedModel.id,
         apiModel: input.selectedModel.apiModel,
+        ...(turnBackend === 'codex'
+          ? {
+              codexModel: codexRunSettings.model,
+              codexReasoningEffort: codexRunSettings.reasoningEffort,
+              codexPermissionMode: codexRunSettings.permissionMode,
+            }
+          : {}),
         workspace: sandbox.handle.workspace,
         allowedPaths: this.options.allowedPaths || ['.'],
       };
@@ -292,7 +309,7 @@ export class CocoSessionService {
       };
       const runnerHandlers = {
         onEvent: async (event: CocoRunnerEvent) => {
-          await this.handleRunnerEvent(event, input.roomId, turnId, aiMessage!, input.selectedModel, streamState!, turnBackend);
+          await this.handleRunnerEvent(event, input.roomId, turnId, aiMessage!, input.selectedModel, streamState!, turnBackend, codexRunSettings);
         },
       };
       const runResult = await this.runRunnerWithBackendAuth({
@@ -326,7 +343,7 @@ export class CocoSessionService {
             content: '',
             status: 'streaming',
             timestamp: this.now().toISOString(),
-            aiModel: getMessageAIModel(input.selectedModel),
+            aiModel: this.messageAIModelForBackend(turnBackend, input.selectedModel, codexRunSettings),
           };
           const segmentRoom = await this.store.appendMessageWithAtomicPosition(segmentMessage);
           if (segmentRoom) {
@@ -342,8 +359,8 @@ export class CocoSessionService {
 
       const answer = runResult.finalEvent.answer || streamState.segmentContent || streamState.fullContent;
       const usage = runResult.finalEvent.usage;
-      const cost = usage ? calculateAICost(input.selectedModel, usage) : undefined;
-      const roomCostTotal = await this.store.incrementRoomAICost(input.roomId, cost || null);
+      const completionMetadata = this.completionMetadataForBackend(turnBackend, input.selectedModel, codexRunSettings, usage);
+      const roomCostTotal = await this.store.incrementRoomAICost(input.roomId, completionMetadata.cost || null);
 
       const finalActiveId = streamState.activeMessageId;
       const finalMessage: Message = {
@@ -352,9 +369,9 @@ export class CocoSessionService {
         content: answer,
         status: 'complete',
         timestamp: this.now().toISOString(),
-        aiModel: getMessageAIModel(input.selectedModel),
-        usage,
-        cost,
+        aiModel: completionMetadata.aiModel,
+        usage: completionMetadata.usage,
+        cost: completionMetadata.cost,
       };
       const finalRoom = await this.store.upsertMessage(finalMessage);
       if (!finalRoom) {
@@ -386,15 +403,17 @@ export class CocoSessionService {
         roomId: input.roomId,
         content: finalMessage.content,
         aiModel: finalMessage.aiModel,
-        usage,
-        cost,
+        usage: finalMessage.usage,
+        cost: finalMessage.cost,
         sessionCost: roomCostTotal,
       });
       this.emitter.to(input.roomId).emit('ai_cost_total', roomCostTotal);
       this.emitter.to((idleRoom || finalRoom).creatorId).emit('room_updated', idleRoom || finalRoom);
       await this.recordTurnEvent('info', 'coco.turn.completed', input, turnId, turnStartedAtMs, {
         sessionId: runResult.finalEvent.sessionId,
-        costUsd: cost?.totalUsd,
+        provider: turnBackend === 'codex' ? 'codex' : input.selectedModel.provider,
+        model: turnBackend === 'codex' ? codexRunSettings.model : input.selectedModel.id,
+        costUsd: completionMetadata.cost?.totalUsd,
         payload: {
           backend: turnBackend,
           messageId: finalActiveId,
@@ -403,8 +422,9 @@ export class CocoSessionService {
           segmentCount: streamState.segmentIds.length,
           answerLength: answer.length,
           roomCostTotalUsd: roomCostTotal.totalUsd,
+          codexRunSettings: turnBackend === 'codex' ? codexRunSettings : undefined,
           usage,
-          cost,
+          cost: completionMetadata.cost,
         },
       });
       return { success: true, messageId: aiMessageId };
@@ -590,6 +610,31 @@ export class CocoSessionService {
     return backend === 'codex' ? 'Codex' : 'Coco';
   }
 
+  private messageAIModelForBackend(
+    backend: CodeAgentBackend,
+    selectedModel: AIModelOption,
+    codexRunSettings: CodexRunSettings
+  ): Message['aiModel'] {
+    if (backend === 'codex') {
+      return getCodexMessageAIModel(codexRunSettings);
+    }
+    return getMessageAIModel(selectedModel);
+  }
+
+  private completionMetadataForBackend(
+    backend: CodeAgentBackend,
+    selectedModel: AIModelOption,
+    codexRunSettings: CodexRunSettings,
+    usage?: Message['usage']
+  ): Pick<Message, 'aiModel' | 'usage' | 'cost'> {
+    const aiModel = this.messageAIModelForBackend(backend, selectedModel, codexRunSettings);
+    if (backend === 'codex') {
+      return { aiModel };
+    }
+    const cost = usage ? calculateAICost(selectedModel, usage) : undefined;
+    return { aiModel, usage, cost };
+  }
+
   private runnerCommandForBackend(backend: CodeAgentBackend): string {
     const command = this.options.runnerCommandByBackend?.[backend];
     if (command) {
@@ -674,9 +719,10 @@ export class CocoSessionService {
     baseAIMessage: Message,
     selectedModel: AIModelOption,
     state: CocoTurnStreamState,
-    backend: CodeAgentBackend
+    backend: CodeAgentBackend,
+    codexRunSettings: CodexRunSettings
   ) {
-    await this.recordRunnerEvent(event, roomId, turnId, selectedModel, backend);
+    await this.recordRunnerEvent(event, roomId, turnId, selectedModel, backend, codexRunSettings);
     const mapped = mapCocoRunnerEvent(event, {
       roomId,
       turnId,
@@ -694,7 +740,7 @@ export class CocoSessionService {
           content: '',
           status: 'streaming',
           timestamp: this.now().toISOString(),
-          aiModel: getMessageAIModel(selectedModel),
+          aiModel: this.messageAIModelForBackend(backend, selectedModel, codexRunSettings),
         };
         const segmentRoom = await this.store.appendMessageWithAtomicPosition(segmentMessage);
         if (!segmentRoom) {
@@ -811,7 +857,8 @@ export class CocoSessionService {
     roomId: string,
     turnId: string,
     selectedModel: AIModelOption,
-    backend: CodeAgentBackend
+    backend: CodeAgentBackend,
+    codexRunSettings: CodexRunSettings
   ) {
     if (event.type === 'text_delta') {
       return;
@@ -823,8 +870,8 @@ export class CocoSessionService {
       event: `coco.runner.${event.type}`,
       roomId,
       turnId,
-      provider: selectedModel.provider,
-      model: selectedModel.id,
+      provider: backend === 'codex' ? 'codex' : selectedModel.provider,
+      model: backend === 'codex' ? codexRunSettings.model : selectedModel.id,
       errorMessage: event.type === 'error' ? event.message : undefined,
       payload: { backend, ...payload },
     });

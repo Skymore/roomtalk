@@ -20,6 +20,8 @@ const options = {
   team: process.env.E2B_TEAM_ID || '',
   readyCmd: process.env.COCO_E2B_TEMPLATE_READY_CMD || [
     'codex --version >/dev/null',
+    'codex-linux-sandbox --help >/dev/null',
+    'roomtalk --help >/dev/null',
     'python -c "import importlib; importlib.import_module(\\"roomtalk_coco_runner.runner\\"); importlib.import_module(\\"roomtalk_coco_runner.codex_cli\\")"',
   ].join(' && '),
 };

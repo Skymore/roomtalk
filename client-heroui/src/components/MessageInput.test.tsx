@@ -102,10 +102,11 @@ vi.mock('./MessageInputAIControls', () => ({
       settings
     </button>
   ),
-  MessageInputAIControls: ({ onAskAI, onSend, isCodeAgentRoom, codeAgentMode, codeAgentMaxMode }: any) => (
+  MessageInputAIControls: ({ onAskAI, onSend, isCodeAgentRoom, codeAgentBackend, codeAgentMode, codeAgentMaxMode }: any) => (
     <div
       data-testid="message-input-ai-controls"
       data-code-agent-room={String(Boolean(isCodeAgentRoom))}
+      data-code-agent-backend={codeAgentBackend || ''}
       data-code-agent-mode={codeAgentMode || ''}
       data-code-agent-max-mode={codeAgentMaxMode || ''}
     >
@@ -417,6 +418,7 @@ describe('MessageInput optimistic send flow', () => {
     const payload = socketMocks.sendMessageAndAskAI.mock.calls[0][0];
 
     expect(screen.getByTestId('message-input-ai-controls').dataset.codeAgentRoom).toBe('true');
+    expect(screen.getByTestId('message-input-ai-controls').dataset.codeAgentBackend).toBe('coco');
     expect(screen.getByTestId('message-input-ai-controls').dataset.codeAgentMode).toBe('plan');
     expect(payload).toMatchObject({
       roomId: 'room-1',
@@ -424,6 +426,39 @@ describe('MessageInput optimistic send flow', () => {
       model: 'model-a',
     });
     expect(payload).not.toHaveProperty('codeAgentMode');
+    expect(payload).not.toHaveProperty('systemPrompt');
+    expect(payload).not.toHaveProperty('roleName');
+  });
+
+  it('sends Codex subscription model settings for Codex Ask AI', async () => {
+    const savedMessage = message({ id: 'server-message-codex', content: 'who are you' });
+    socketMocks.sendMessageAndAskAI.mockResolvedValue({
+      userMessage: savedMessage,
+      aiMessageId: 'codex-ai-message-1',
+      aiStarted: true,
+    });
+
+    const { editor } = renderMessageInput({
+      isCodeAgentRoom: true,
+      codeAgentBackend: 'codex',
+      codeAgentMode: 'plan',
+      codeAgentMaxMode: 'acceptEdits',
+    });
+    setEditorText(editor, 'who are you');
+
+    fireEvent.click(screen.getByText('ask-ai'));
+
+    await waitFor(() => expect(socketMocks.sendMessageAndAskAI).toHaveBeenCalledTimes(1));
+    const payload = socketMocks.sendMessageAndAskAI.mock.calls[0][0];
+
+    expect(screen.getByTestId('message-input-ai-controls').dataset.codeAgentBackend).toBe('codex');
+    expect(payload).toMatchObject({
+      roomId: 'room-1',
+      content: 'who are you',
+      codexModel: 'gpt-5.5',
+      codexReasoningEffort: 'xhigh',
+      codexPermissionMode: 'plan',
+    });
     expect(payload).not.toHaveProperty('systemPrompt');
     expect(payload).not.toHaveProperty('roleName');
   });

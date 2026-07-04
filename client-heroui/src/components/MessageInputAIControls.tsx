@@ -21,7 +21,15 @@ import {
   MIN_AI_CONTEXT_MESSAGE_LIMIT,
   normalizeAIContextMessageLimit,
 } from '../utils/aiContext';
-import { CodeAgentMode } from '../utils/codeAgent';
+import { CodeAgentBackend, CodeAgentMode } from '../utils/codeAgent';
+import {
+  CODEX_PERMISSION_OPTIONS,
+  CODEX_MODEL_OPTIONS,
+  CODEX_REASONING_OPTIONS,
+  defaultCodexRunSettings,
+  type CodexPermissionMode,
+  type CodexRunSettings,
+} from '../utils/codexSettings';
 
 const formatPriceRate = (value: number | undefined) => {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
@@ -63,6 +71,10 @@ const ModelPriceGrid: React.FC<{ model: AIModelOption }> = ({ model }) => {
     </div>
   );
 };
+
+const codexPermissionToCodeAgentMode = (permissionMode: CodexPermissionMode): CodeAgentMode => (
+  permissionMode === 'plan' ? 'plan' : 'acceptEdits'
+);
 
 interface MessageInputAISettingsButtonProps {
   onOpen: () => void;
@@ -113,10 +125,13 @@ interface MessageInputAIControlsProps {
   onAskAI: () => void;
   onSend: () => void;
   isCodeAgentRoom?: boolean;
+  codeAgentBackend?: CodeAgentBackend;
   codeAgentMode?: CodeAgentMode;
   codeAgentMaxMode?: CodeAgentMode;
   canSwitchCodeAgentMode?: boolean;
   onCodeAgentModeChange?: (mode: CodeAgentMode) => void;
+  codexRunSettings?: CodexRunSettings;
+  onCodexRunSettingsChange?: (settings: Partial<CodexRunSettings>) => void;
 }
 
 export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
@@ -145,10 +160,13 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   onAskAI,
   onSend,
   isCodeAgentRoom = false,
+  codeAgentBackend = 'coco',
   codeAgentMode = 'plan',
   codeAgentMaxMode = 'plan',
   canSwitchCodeAgentMode = codeAgentMaxMode === 'acceptEdits',
   onCodeAgentModeChange,
+  codexRunSettings = defaultCodexRunSettings(),
+  onCodexRunSettingsChange,
 }) => {
   const { t } = useTranslation();
   const [isMobileViewport, setIsMobileViewport] = React.useState(false);
@@ -158,6 +176,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   const [selectedAIModelDraft, setSelectedAIModelDraft] = React.useState(selectedAIModel || defaultAIModel);
   const [selectedRoleIdDraft, setSelectedRoleIdDraft] = React.useState(selectedRoleId);
   const [codeAgentModeDraft, setCodeAgentModeDraft] = React.useState<CodeAgentMode>('plan');
+  const [codexRunSettingsDraft, setCodexRunSettingsDraft] = React.useState<CodexRunSettings>(codexRunSettings);
   const [pendingPremiumModelId, setPendingPremiumModelId] = React.useState<string | null>(null);
   const [premiumConfirmationStep, setPremiumConfirmationStep] = React.useState<1 | 2>(1);
   const pendingPremiumModel = aiModels.find(model => model.id === pendingPremiumModelId);
@@ -165,6 +184,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   const isControlLocked = isSending || isAiProcessing || isInputLocked || !canPost;
   const askActionLabel = isCodeAgentRoom ? t('runAgent') : t('askAI');
   const askActionIcon = isCodeAgentRoom ? 'lucide:bot' : selectedRole.icon;
+  const isCodexCodeAgent = isCodeAgentRoom && codeAgentBackend === 'codex';
   const effectiveCodeAgentMode = codeAgentMaxMode === 'acceptEdits' ? codeAgentMode : 'plan';
   const canSwitchEffectiveCodeAgentMode = isCodeAgentRoom && codeAgentMaxMode === 'acceptEdits' && canSwitchCodeAgentMode;
   const appliedAIModelId = selectedAIModel || defaultAIModel;
@@ -175,6 +195,14 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
       ? [{ id: 'acceptEdits' as const, label: t('codeAgentEditMode'), icon: 'lucide:pencil-ruler' }]
       : []),
   ];
+  const codexPermissionOptions = codeAgentMaxMode === 'acceptEdits'
+    ? CODEX_PERMISSION_OPTIONS
+    : CODEX_PERMISSION_OPTIONS.filter(option => option.id === 'plan');
+  const selectedCodexPermissionOption = (
+    codexPermissionOptions.find(option => option.id === codexRunSettingsDraft.permissionMode)
+    || codexPermissionOptions[0]
+    || CODEX_PERMISSION_OPTIONS[0]
+  );
   const compactItemClassNames = {
     base: "w-full px-2 py-2",
     title: "text-xs font-medium leading-4 text-[#141413] dark:text-[#faf9f5]",
@@ -197,9 +225,15 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
     setSelectedAIModelDraft(appliedAIModelId);
     setSelectedRoleIdDraft(selectedRoleId);
     setCodeAgentModeDraft(effectiveCodeAgentMode);
+    setCodexRunSettingsDraft({
+      ...codexRunSettings,
+      permissionMode: effectiveCodeAgentMode === 'plan'
+        ? 'plan'
+        : codexRunSettings.permissionMode,
+    });
     setPendingPremiumModelId(null);
     setPremiumConfirmationStep(1);
-  }, [aiContextMessageLimit, appliedAIModelId, effectiveCodeAgentMode, selectedRoleId, isSettingsOpen]);
+  }, [aiContextMessageLimit, appliedAIModelId, codexRunSettings, effectiveCodeAgentMode, selectedRoleId, isSettingsOpen]);
 
   const closePremiumConfirmation = () => {
     setPendingPremiumModelId(null);
@@ -241,23 +275,54 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   const handleCodeAgentModeSelection = (keys: 'all' | Set<React.Key>) => {
     if (keys === 'all') return;
     const selectedKey = Array.from(keys)[0]?.toString();
+    if (isCodexCodeAgent && (selectedKey === 'plan' || selectedKey === 'edit' || selectedKey === 'approveForMe' || selectedKey === 'fullAccess')) {
+      setCodexRunSettingsDraft(current => ({ ...current, permissionMode: selectedKey }));
+      setCodeAgentModeDraft(codexPermissionToCodeAgentMode(selectedKey));
+      return;
+    }
     if (selectedKey === 'plan' || selectedKey === 'acceptEdits') {
       setCodeAgentModeDraft(selectedKey);
+    }
+  };
+  const handleCodexModelSelection = (keys: 'all' | Set<React.Key>) => {
+    if (keys === 'all') return;
+    const selectedKey = Array.from(keys)[0]?.toString();
+    if (selectedKey && CODEX_MODEL_OPTIONS.some(option => option.id === selectedKey)) {
+      setCodexRunSettingsDraft(current => ({ ...current, model: selectedKey }));
+    }
+  };
+  const handleCodexReasoningSelection = (keys: 'all' | Set<React.Key>) => {
+    if (keys === 'all') return;
+    const selectedKey = Array.from(keys)[0]?.toString();
+    if (selectedKey === 'low' || selectedKey === 'medium' || selectedKey === 'high' || selectedKey === 'xhigh') {
+      setCodexRunSettingsDraft(current => ({ ...current, reasoningEffort: selectedKey }));
     }
   };
   const normalizedAIContextMessageLimitDraft = normalizeAIContextMessageLimit(aiContextMessageLimitDraft);
   const normalizedAIContextMessageLimit = normalizeAIContextMessageLimit(aiContextMessageLimit);
   const settingsChanged = (
-    selectedAIModelDraft !== appliedAIModelId
+    (!isCodexCodeAgent && selectedAIModelDraft !== appliedAIModelId)
     || normalizedAIContextMessageLimitDraft !== normalizedAIContextMessageLimit
     || (!isCodeAgentRoom && selectedRoleIdDraft !== selectedRoleId)
     || (isCodeAgentRoom && codeAgentModeDraft !== effectiveCodeAgentMode)
+    || (isCodexCodeAgent && (
+      codexRunSettingsDraft.model !== codexRunSettings.model
+      || codexRunSettingsDraft.reasoningEffort !== codexRunSettings.reasoningEffort
+      || codexRunSettingsDraft.permissionMode !== codexRunSettings.permissionMode
+    ))
   );
   const handleSettingsApply = () => {
     if (!settingsChanged) return;
 
-    if (selectedAIModelDraft !== appliedAIModelId) {
+    if (!isCodexCodeAgent && selectedAIModelDraft !== appliedAIModelId) {
       onModelChange(selectedAIModelDraft);
+    }
+    if (isCodexCodeAgent && (
+      codexRunSettingsDraft.model !== codexRunSettings.model
+      || codexRunSettingsDraft.reasoningEffort !== codexRunSettings.reasoningEffort
+      || codexRunSettingsDraft.permissionMode !== codexRunSettings.permissionMode
+    )) {
+      onCodexRunSettingsChange?.(codexRunSettingsDraft);
     }
     if (!isCodeAgentRoom && selectedRoleIdDraft !== selectedRoleId) {
       onRoleChange(selectedRoleIdDraft);
@@ -337,68 +402,130 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
         <ModalContent>
           <ModalHeader>{t('aiSettings')}</ModalHeader>
           <ModalBody>
-            <Select
-              size="sm"
-              label={t('selectAIModel')}
-              aria-label={t('selectAIModel')}
-              data-testid="ai-model-select"
-              selectedKeys={[selectedAIModelDraft]}
-              onSelectionChange={(keys) => {
-                const selectedKey = Array.from(keys)[0]?.toString();
-                if (selectedKey) requestModelChange(selectedKey);
-              }}
-              classNames={{
-                trigger: "min-h-11 rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242421] dark:text-[#faf9f5]",
-                label: "text-[#5e5d59] dark:text-[#b0aea5]",
-                value: "text-sm font-semibold",
-                popoverContent: "w-[min(22rem,calc(100vw-2rem))] border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
-                listboxWrapper: "relative max-h-[16rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]",
-              }}
-              startContent={<Icon icon="lucide:brain-circuit" className="h-4 w-4" />}
-            >
-              {aiModels.map((model) => (
-                <SelectItem
-                  key={model.id}
-                  classNames={compactItemClassNames}
-                  textValue={model.label}
+            {isCodexCodeAgent ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Select
+                  size="sm"
+                  label={t('selectCodexModel')}
+                  aria-label={t('selectCodexModel')}
+                  data-testid="codex-model-select"
+                  selectedKeys={[codexRunSettingsDraft.model]}
+                  onSelectionChange={handleCodexModelSelection}
+                  classNames={{
+                    trigger: "min-h-11 rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242421] dark:text-[#faf9f5]",
+                    label: "text-[#5e5d59] dark:text-[#b0aea5]",
+                    value: "text-sm font-semibold",
+                    popoverContent: "w-[min(18rem,calc(100vw-2rem))] border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
+                    listboxWrapper: "relative max-h-[14rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]",
+                  }}
+                  startContent={<Icon icon="lucide:terminal" className="h-4 w-4" />}
                 >
-                  <span className="block w-full min-w-0">
-                    <span className="flex min-w-0 items-center gap-1.5">
-                      <span className="min-w-0 truncate text-xs font-medium leading-4">
+                  {CODEX_MODEL_OPTIONS.map((model) => (
+                    <SelectItem
+                      key={model.id}
+                      classNames={compactItemClassNames}
+                      textValue={model.label}
+                    >
+                      <span className="block truncate text-xs font-medium leading-4">
                         {model.label}
                       </span>
-                      {model.isDefault && (
-                        <Icon
-                          icon="lucide:badge-check"
-                          aria-label={t('defaultModel')}
-                          className="flex-shrink-0 text-[#c96442] dark:text-[#ff9b76]"
-                          width={11}
-                          height={11}
-                        />
-                      )}
-                      <span className="inline-flex flex-shrink-0 items-center rounded px-1 py-px text-[9px] font-semibold leading-none border border-[#c2c0b6]/60 bg-[#e8e6dc] text-[#4d4c48] dark:border-[#4d4c48]/60 dark:bg-[#30302e] dark:text-[#b0aea5] whitespace-nowrap">
-                        {getProviderLabel(model.provider)}
+                    </SelectItem>
+                  ))}
+                </Select>
+                <Select
+                  size="sm"
+                  label={t('selectCodexReasoning')}
+                  aria-label={t('selectCodexReasoning')}
+                  data-testid="codex-reasoning-select"
+                  selectedKeys={[codexRunSettingsDraft.reasoningEffort]}
+                  onSelectionChange={handleCodexReasoningSelection}
+                  classNames={{
+                    trigger: "min-h-11 rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242421] dark:text-[#faf9f5]",
+                    label: "text-[#5e5d59] dark:text-[#b0aea5]",
+                    value: "text-sm font-semibold",
+                    popoverContent: "w-[min(15rem,calc(100vw-2rem))] border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
+                  }}
+                  startContent={<Icon icon="lucide:gauge" className="h-4 w-4" />}
+                >
+                  {CODEX_REASONING_OPTIONS.map((option) => (
+                    <SelectItem
+                      key={option.id}
+                      classNames={compactItemClassNames}
+                      startContent={<Icon icon="lucide:gauge" className="h-3.5 w-3.5" />}
+                    >
+                      {t(option.labelKey)}
+                    </SelectItem>
+                  ))}
+                </Select>
+              </div>
+            ) : (
+              <Select
+                size="sm"
+                label={t('selectAIModel')}
+                aria-label={t('selectAIModel')}
+                data-testid="ai-model-select"
+                selectedKeys={[selectedAIModelDraft]}
+                onSelectionChange={(keys) => {
+                  const selectedKey = Array.from(keys)[0]?.toString();
+                  if (selectedKey) requestModelChange(selectedKey);
+                }}
+                classNames={{
+                  trigger: "min-h-11 rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242421] dark:text-[#faf9f5]",
+                  label: "text-[#5e5d59] dark:text-[#b0aea5]",
+                  value: "text-sm font-semibold",
+                  popoverContent: "w-[min(22rem,calc(100vw-2rem))] border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
+                  listboxWrapper: "relative max-h-[16rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]",
+                }}
+                startContent={<Icon icon="lucide:brain-circuit" className="h-4 w-4" />}
+              >
+                {aiModels.map((model) => (
+                  <SelectItem
+                    key={model.id}
+                    classNames={compactItemClassNames}
+                    textValue={model.label}
+                  >
+                    <span className="block w-full min-w-0">
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <span className="min-w-0 truncate text-xs font-medium leading-4">
+                          {model.label}
+                        </span>
+                        {model.isDefault && (
+                          <Icon
+                            icon="lucide:badge-check"
+                            aria-label={t('defaultModel')}
+                            className="flex-shrink-0 text-[#c96442] dark:text-[#ff9b76]"
+                            width={11}
+                            height={11}
+                          />
+                        )}
+                        <span className="inline-flex flex-shrink-0 items-center rounded px-1 py-px text-[9px] font-semibold leading-none border border-[#c2c0b6]/60 bg-[#e8e6dc] text-[#4d4c48] dark:border-[#4d4c48]/60 dark:bg-[#30302e] dark:text-[#b0aea5] whitespace-nowrap">
+                          {getProviderLabel(model.provider)}
+                        </span>
+                        {isPremiumAIModel(model) && (
+                          <Icon icon="lucide:gem" className="flex-shrink-0 text-warning" width={10} height={10} />
+                        )}
                       </span>
-                      {isPremiumAIModel(model) && (
-                        <Icon icon="lucide:gem" className="flex-shrink-0 text-warning" width={10} height={10} />
-                      )}
+                      <ModelPriceGrid model={model} />
                     </span>
-                    <ModelPriceGrid model={model} />
-                  </span>
-                </SelectItem>
-              ))}
-            </Select>
+                  </SelectItem>
+                ))}
+              </Select>
+            )}
             {isCodeAgentRoom && (
               <div className="space-y-2 rounded-lg border border-[#dedbd0] bg-[#f0eee6] p-3 dark:border-[#30302e] dark:bg-[#242421]">
                 <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[#87867f] dark:text-[#b0aea5]">
-                  <Icon icon={codeAgentModeDraft === 'plan' ? 'lucide:eye' : 'lucide:pencil-ruler'} className="h-3.5 w-3.5" aria-hidden="true" />
-                  {t('selectCodeAgentMode')}
+                  <Icon
+                    icon={isCodexCodeAgent ? selectedCodexPermissionOption.icon : codeAgentModeDraft === 'plan' ? 'lucide:eye' : 'lucide:pencil-ruler'}
+                    className="h-3.5 w-3.5"
+                    aria-hidden="true"
+                  />
+                  {isCodexCodeAgent ? t('selectCodexPermission') : t('selectCodeAgentMode')}
                 </div>
                 <Select
                   size="sm"
-                  aria-label={t('codeAgentModeControl')}
+                  aria-label={isCodexCodeAgent ? t('selectCodexPermission') : t('codeAgentModeControl')}
                   data-testid="code-agent-mode-select"
-                  selectedKeys={[codeAgentModeDraft]}
+                  selectedKeys={[isCodexCodeAgent ? selectedCodexPermissionOption.id : codeAgentModeDraft]}
                   onSelectionChange={handleCodeAgentModeSelection}
                   isDisabled={!canSwitchEffectiveCodeAgentMode}
                   classNames={{
@@ -407,20 +534,32 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                     popoverContent: "border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
                   }}
                 >
-                  {codeAgentModeOptions.map((option) => (
-                    <SelectItem
-                      key={option.id}
-                      classNames={compactItemClassNames}
-                      startContent={<Icon icon={option.icon} className="h-3.5 w-3.5" />}
-                    >
-                      {option.label}
-                    </SelectItem>
-                  ))}
+                  {isCodexCodeAgent
+                    ? codexPermissionOptions.map((option) => (
+                      <SelectItem
+                        key={option.id}
+                        classNames={compactItemClassNames}
+                        startContent={<Icon icon={option.icon} className="h-3.5 w-3.5" />}
+                      >
+                        {t(option.labelKey)}
+                      </SelectItem>
+                    ))
+                    : codeAgentModeOptions.map((option) => (
+                      <SelectItem
+                        key={option.id}
+                        classNames={compactItemClassNames}
+                        startContent={<Icon icon={option.icon} className="h-3.5 w-3.5" />}
+                      >
+                        {option.label}
+                      </SelectItem>
+                    ))}
                 </Select>
                 <p className="text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">
-                  {canSwitchEffectiveCodeAgentMode
-                    ? (codeAgentModeDraft === 'plan' ? t('codeAgentReadOnlyDescription') : t('codeAgentEditDescription'))
-                    : t('codeAgentModeLockedDescription')}
+                  {!canSwitchEffectiveCodeAgentMode
+                    ? t('codeAgentModeLockedDescription')
+                    : isCodexCodeAgent
+                      ? t(selectedCodexPermissionOption.descriptionKey)
+                      : (codeAgentModeDraft === 'plan' ? t('codeAgentReadOnlyDescription') : t('codeAgentEditDescription'))}
                 </p>
               </div>
             )}

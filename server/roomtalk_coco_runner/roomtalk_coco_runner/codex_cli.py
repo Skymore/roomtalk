@@ -12,7 +12,9 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, TextIO
 
 from .runner import (
+    BACKGROUND_SHELL_TOOL,
     EventEmitter,
+    PUBLISH_STATIC_SITE_TOOL,
     RunnerError,
     RunnerRequest,
     parse_request,
@@ -23,6 +25,12 @@ SCHEMA_VERSION = 1
 DEFAULT_CODEX_CLI_BIN = "codex"
 DEFAULT_CODEX_SECRET_PARENT = "/tmp/roomtalk-codex"
 DEFAULT_CODEX_TIMEOUT_MS = 120_000
+DEFAULT_CODEX_MODEL = "gpt-5.5"
+DEFAULT_CODEX_REASONING_EFFORT = "xhigh"
+DEFAULT_CODEX_PERMISSION_MODE = "approveForMe"
+ALLOWED_CODEX_MODELS = {"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"}
+ALLOWED_CODEX_REASONING_EFFORTS = {"low", "medium", "high", "xhigh"}
+ALLOWED_CODEX_PERMISSION_MODES = {"plan", "edit", "approveForMe", "fullAccess"}
 MAX_STDERR_TAIL_CHARS = 4_000
 
 
@@ -45,6 +53,7 @@ class CodexCliEventMapper:
     session_id: str | None = None
     usage: dict[str, Any] | None = None
     ignored_item_types: dict[str, int] = field(default_factory=dict)
+    command_tool_names: dict[str, str] = field(default_factory=dict)
 
     def map_event(self, event: dict[str, Any]) -> list[dict[str, Any]]:
         event_type = event.get("type")
@@ -89,23 +98,28 @@ class CodexCliEventMapper:
             }]
 
         if item_type == "command_execution" and event_type == "item.started":
+            command = str(item.get("command") or "")
+            tool_name = _roomtalk_tool_name(command) or "shell"
+            self.command_tool_names[item_id] = tool_name
             return [{
                 "schemaVersion": SCHEMA_VERSION,
                 "type": "tool_call",
                 "id": item_id,
-                "name": "shell",
-                "args": {"command": str(item.get("command") or "")},
+                "name": tool_name,
+                "args": {"command": command},
                 "messageId": f"codex_tool_{item_id}",
             }]
 
         if item_type == "command_execution" and event_type == "item.completed":
             exit_code = item.get("exit_code")
             normalized_exit_code = exit_code if isinstance(exit_code, int) else None
+            command = str(item.get("command") or "")
+            tool_name = _roomtalk_tool_name(command) or self.command_tool_names.get(item_id) or "shell"
             event_payload: dict[str, Any] = {
                 "schemaVersion": SCHEMA_VERSION,
                 "type": "tool_result",
                 "id": item_id,
-                "name": "shell",
+                "name": tool_name,
                 "success": item.get("status") == "completed" and (normalized_exit_code in (None, 0)),
                 "output": _normalize_workspace_text(self.workspace, str(item.get("aggregated_output") or "")),
                 "messageId": f"codex_tool_result_{item_id}",
@@ -201,23 +215,11 @@ def run_request(
     })
 
     try:
-        _write_codex_config(codex_home)
+        _write_codex_config(codex_home, request, env, workspace)
         _restore_auth_json(config, codex_home)
 
         process = popen_factory(
-            [
-                config.cli_bin,
-                "exec",
-                "--json",
-                "--ephemeral",
-                "--sandbox",
-                "workspace-write",
-                "--cd",
-                str(workspace),
-                "--output-last-message",
-                str(last_message_path),
-                request.prompt,
-            ],
+            _build_codex_exec_args(config, request, env, workspace, last_message_path),
             cwd=str(workspace),
             env=_build_child_env(env, codex_home),
             stdin=subprocess.DEVNULL,
@@ -278,6 +280,83 @@ def run_request(
             shutil.rmtree(codex_home, ignore_errors=True)
 
 
+def _build_codex_exec_args(
+    config: CodexCliRunConfig,
+    request: RunnerRequest,
+    env: dict[str, str],
+    workspace: Path,
+    last_message_path: Path,
+) -> list[str]:
+    model = _normalize_codex_model(request.codex_model)
+    reasoning_effort = _normalize_codex_reasoning_effort(request.codex_reasoning_effort)
+    permission = _codex_exec_permissions(request)
+    args = [
+        config.cli_bin,
+        "exec",
+        "--json",
+        "--ephemeral",
+        "--model",
+        model,
+        "--ask-for-approval",
+        permission.approval_policy,
+        "-c",
+        f'model_reasoning_effort="{reasoning_effort}"',
+    ]
+    if permission.sandbox == "workspace-write":
+        args.extend([
+            "-c",
+            "sandbox_workspace_write.network_access=true",
+        ])
+    args.extend([
+        "--sandbox",
+        permission.sandbox,
+        "--cd",
+        str(workspace),
+        "--output-last-message",
+        str(last_message_path),
+        _prompt_with_roomtalk_tools(request, env),
+    ])
+    return args
+
+
+def _normalize_codex_model(value: str | None) -> str:
+    if not value:
+        return DEFAULT_CODEX_MODEL
+    return value if value in ALLOWED_CODEX_MODELS else DEFAULT_CODEX_MODEL
+
+
+def _normalize_codex_reasoning_effort(value: str | None) -> str:
+    if not value:
+        return DEFAULT_CODEX_REASONING_EFFORT
+    return value if value in ALLOWED_CODEX_REASONING_EFFORTS else DEFAULT_CODEX_REASONING_EFFORT
+
+
+@dataclass(frozen=True)
+class _CodexExecPermissions:
+    mode: str
+    sandbox: str
+    approval_policy: str
+
+
+def _codex_exec_permissions(request: RunnerRequest) -> _CodexExecPermissions:
+    mode = _normalize_codex_permission_mode(request.codex_permission_mode, request.mode)
+    if mode == "plan":
+        return _CodexExecPermissions(mode=mode, sandbox="read-only", approval_policy="never")
+    if mode == "edit":
+        return _CodexExecPermissions(mode=mode, sandbox="workspace-write", approval_policy="on-request")
+    if mode == "fullAccess":
+        return _CodexExecPermissions(mode=mode, sandbox="danger-full-access", approval_policy="never")
+    return _CodexExecPermissions(mode="approveForMe", sandbox="workspace-write", approval_policy="never")
+
+
+def _normalize_codex_permission_mode(value: str | None, runner_mode: str) -> str:
+    if runner_mode == "plan":
+        return "plan"
+    if not value:
+        return DEFAULT_CODEX_PERMISSION_MODE
+    return value if value in ALLOWED_CODEX_PERMISSION_MODES else DEFAULT_CODEX_PERMISSION_MODE
+
+
 def main(stdin: TextIO | None = None, stdout: TextIO | None = None) -> int:
     stdin = stdin or sys.stdin
     stdout = stdout or sys.stdout
@@ -335,17 +414,25 @@ def _restore_auth_json(config: CodexCliRunConfig, codex_home: Path) -> None:
     _write_private_file(codex_home / "auth.json", auth_json)
 
 
-def _write_codex_config(codex_home: Path) -> None:
-    _write_private_file(codex_home / "config.toml", "\n".join([
+def _write_codex_config(codex_home: Path, request: RunnerRequest, env: dict[str, str], workspace: Path) -> None:
+    sandbox = _codex_exec_permissions(request).sandbox
+    lines = [
         'cli_auth_credentials_store = "file"',
-        'sandbox_mode = "workspace-write"',
+        f'sandbox_mode = "{sandbox}"',
         "",
         "[shell_environment_policy]",
         'inherit = "core"',
         "ignore_default_excludes = false",
         'exclude = ["CODEX_HOME", "CODEX_ACCESS_TOKEN", "CODEX_API_KEY", "OPENAI_API_KEY", "*_TOKEN", "*_SECRET", "*_KEY"]',
         "",
-    ]))
+    ]
+    tool_env = _roomtalk_tool_env(request, env, workspace)
+    if tool_env:
+        lines.append("[shell_environment_policy.set]")
+        for key in sorted(tool_env):
+            lines.append(f"{key} = {_toml_string(tool_env[key])}")
+        lines.append("")
+    _write_private_file(codex_home / "config.toml", "\n".join(lines))
 
 
 def _write_private_file(path: Path, value: str) -> None:
@@ -367,6 +454,84 @@ def _build_child_env(env: dict[str, str], codex_home: Path) -> dict[str, str]:
         child_env[key] = value
     child_env["CODEX_HOME"] = str(codex_home)
     return child_env
+
+
+def _roomtalk_tool_env(request: RunnerRequest, env: dict[str, str], workspace: Path) -> dict[str, str]:
+    values: dict[str, str] = {
+        "ROOMTALK_CODE_AGENT_ROOM_ID": request.room_id,
+        "ROOMTALK_CODE_AGENT_TURN_ID": request.turn_id,
+        "ROOMTALK_WORKSPACE": str(workspace),
+    }
+    for key in (
+        "PYTHONPATH",
+        "COCO_WORKSPACE_ROOT",
+        "ROOMTALK_COCO_ENABLE_STATIC_PUBLISH",
+        "ROOMTALK_STATIC_PUBLISH_URL",
+        "ROOMTALK_STATIC_PUBLISH_PUBLIC_BASE_URL",
+        "ROOMTALK_STATIC_PUBLISH_TOKEN",
+        "ROOMTALK_E2B_PORT_HOST_TEMPLATE",
+        "ROOMTALK_E2B_PORT_URL_TEMPLATE",
+        "COCO_PORT_HOST_TEMPLATE",
+        "COCO_PORT_URL_TEMPLATE",
+        "ROOMTALK_COCO_BACKGROUND_JOBS_DIR",
+        "COCO_BACKGROUND_JOBS_DIR",
+    ):
+        value = (env.get(key) or "").strip()
+        if value:
+            values[key] = value
+    return values
+
+
+def _prompt_with_roomtalk_tools(request: RunnerRequest, env: dict[str, str]) -> str:
+    permission = _codex_exec_permissions(request)
+    if permission.mode == "plan":
+        mode_guidance = "This RoomTalk turn is in Plan mode. Inspect and explain, but do not edit files, run mutating commands, start background services, or publish sites."
+    elif permission.mode == "edit":
+        mode_guidance = "This RoomTalk turn is in Edit mode. You may edit files and run commands inside the workspace. If an approval prompt blocks progress, stop and explain what approval is needed."
+    elif permission.mode == "fullAccess":
+        mode_guidance = "This RoomTalk turn is in Full access mode. You may use the isolated sandbox without Codex filesystem restrictions, but keep work relevant to the requested workspace."
+    else:
+        mode_guidance = "This RoomTalk turn is in Approve for me mode. You may edit files and run commands inside the workspace without approval prompts."
+
+    tool_lines = [
+        "RoomTalk sandbox context:",
+        f"- {mode_guidance}",
+        "- Keep generated files, downloaded references, and publish roots inside the current workspace.",
+        "- This is a non-interactive cloud sandbox. Work within the configured sandbox permissions for this turn.",
+    ]
+    if _codex_static_publish_enabled(env):
+        tool_lines.extend([
+            "- To publish a plain static HTML/CSS/JS site, run `roomtalk publish-static-site --root <dir> --entry index.html` after creating the site directory.",
+            "- Do not use static publishing for Flask, Node, Python, databases, or any server-side app.",
+        ])
+    if request.mode != "plan":
+        tool_lines.extend([
+            "- For long-running dev servers or watchers, Codex may use its native background terminal support when available.",
+            "- If a persistent RoomTalk job or preview URL is needed, run `roomtalk background-shell start --command \"<foreground command>\" --port <port>`.",
+            "- Check jobs with `roomtalk background-shell list` or `roomtalk background-shell status --job-id <id>`; stop them with `roomtalk background-shell stop --job-id <id>`.",
+        ])
+    return "\n".join(tool_lines) + "\n\nUser request:\n" + request.prompt
+
+
+def _codex_static_publish_enabled(env: dict[str, str]) -> bool:
+    return (
+        env.get("ROOMTALK_COCO_ENABLE_STATIC_PUBLISH") == "true"
+        and bool((env.get("ROOMTALK_STATIC_PUBLISH_URL") or "").strip())
+        and bool((env.get("ROOMTALK_STATIC_PUBLISH_TOKEN") or "").strip())
+    )
+
+
+def _roomtalk_tool_name(command: str) -> str | None:
+    normalized = " ".join(command.split()).lower()
+    if "roomtalk publish-static-site" in normalized or "platform_tools publish-static-site" in normalized:
+        return PUBLISH_STATIC_SITE_TOOL
+    if "roomtalk background-shell" in normalized or "platform_tools background-shell" in normalized:
+        return BACKGROUND_SHELL_TOOL
+    return None
+
+
+def _toml_string(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
 
 
 def _start_stderr_tail_thread(stream: Any, tail: "_Tail") -> threading.Thread:

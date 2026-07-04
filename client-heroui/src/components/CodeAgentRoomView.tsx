@@ -563,6 +563,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
               postingSchedule={currentRoom.postingSchedule}
               isRoomAIProcessing={getCodeAgentStatus(currentRoom) === 'running'}
               isCodeAgentRoom
+              codeAgentBackend={backend}
               codeAgentMode={selectedMode}
               codeAgentMaxMode={maxMode}
               canSwitchCodeAgentMode={canManageCodeAgentMode}

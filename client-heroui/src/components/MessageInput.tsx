@@ -48,12 +48,18 @@ import {
   isConfirmingIMEComposition,
 } from '../utils/keyboardComposition';
 import { Message, RoomPostingSchedule } from '../utils/types';
-import { CodeAgentMode } from '../utils/codeAgent';
+import { CodeAgentBackend, CodeAgentMode } from '../utils/codeAgent';
 import {
   appendReviewCommentsToPrompt,
   type ReviewCommentContext,
 } from '../utils/codeAgentReviewComments';
 import { selectRoomAIRequestSettings } from '../utils/aiRequestSettings';
+import {
+  defaultCodexRunSettings,
+  getStoredRoomCodexSettings,
+  updateStoredRoomCodexSettings,
+  type CodexRunSettings,
+} from '../utils/codexSettings';
 
 interface MessageInputProps {
   roomId: string;
@@ -71,6 +77,7 @@ interface MessageInputProps {
   postingSchedule?: RoomPostingSchedule;
   isRoomAIProcessing?: boolean;
   isCodeAgentRoom?: boolean;
+  codeAgentBackend?: CodeAgentBackend;
   codeAgentMode?: CodeAgentMode;
   codeAgentMaxMode?: CodeAgentMode;
   canSwitchCodeAgentMode?: boolean;
@@ -165,6 +172,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   postingSchedule,
   isRoomAIProcessing = false,
   isCodeAgentRoom = false,
+  codeAgentBackend = 'coco',
   codeAgentMode = 'plan',
   codeAgentMaxMode = 'plan',
   canSwitchCodeAgentMode = codeAgentMaxMode === 'acceptEdits',
@@ -251,6 +259,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   const [aiContextMessageLimit, setAIContextMessageLimit] = useState(() => (
     getStoredRoomAISettings(roomId, defaultRoomAISettings(defaultAIModel)).maxContextMessages
   ));
+  const [codexRunSettings, setCodexRunSettings] = useState<CodexRunSettings>(() => (
+    getStoredRoomCodexSettings(roomId, defaultCodexRunSettings())
+  ));
 
   // 新增角色设置模态框的状态
   const { isOpen: isAISettingsOpen, onOpen: onAISettingsOpen, onClose: onAISettingsClose } = useDisclosure();
@@ -266,6 +277,14 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   useEffect(() => {
     setAIContextMessageLimit(getStoredRoomAISettings(roomId, defaultRoomAISettings(defaultAIModel)).maxContextMessages);
   }, [defaultAIModel, roomId]);
+
+  useEffect(() => {
+    setCodexRunSettings(getStoredRoomCodexSettings(roomId, defaultCodexRunSettings()));
+  }, [roomId]);
+
+  const handleCodexRunSettingsChange = useCallback((updates: Partial<CodexRunSettings>) => {
+    setCodexRunSettings(updateStoredRoomCodexSettings(roomId, updates, defaultCodexRunSettings()));
+  }, [roomId]);
 
   const buildReplyReference = useCallback((message: Message | null): Message['replyTo'] => {
     if (!message) return undefined;
@@ -524,11 +543,19 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         model: selectedAIModel || defaultAIModel,
         maxContextMessages: aiContextMessageLimit,
       }, isCodeAgentRoom ? 'coco' : 'chat');
+      const codeAgentRunSettings = isCodeAgentRoom && codeAgentBackend === 'codex'
+        ? {
+            codexModel: codexRunSettings.model,
+            codexReasoningEffort: codexRunSettings.reasoningEffort,
+            codexPermissionMode: selectedCodeAgentMode === 'plan' ? 'plan' : codexRunSettings.permissionMode,
+          }
+        : {};
 
       if (!promptForSend) {
         await requestAIResponse({
           roomId,
           ...aiRequestSettings,
+          ...codeAgentRunSettings,
         });
         return;
       }
@@ -547,6 +574,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         replyToMessageId: replyToMessage?.id,
         clientMessageId,
         ...aiRequestSettings,
+        ...codeAgentRunSettings,
       });
 
       onOptimisticMessageSaved?.(clientMessageId, userMessage);
@@ -1682,10 +1710,13 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                 onAskAI={handleAskAI}
                 onSend={handleSubmit}
                 isCodeAgentRoom={isCodeAgentRoom}
+                codeAgentBackend={codeAgentBackend}
                 codeAgentMode={selectedCodeAgentMode}
                 codeAgentMaxMode={codeAgentMaxMode}
                 canSwitchCodeAgentMode={canSwitchCodeAgentMode}
                 onCodeAgentModeChange={onCodeAgentModeChange}
+                codexRunSettings={codexRunSettings}
+                onCodexRunSettingsChange={handleCodexRunSettingsChange}
               />
             )}
           </div>

@@ -93,6 +93,7 @@ export class CodexCliEventMapper {
   private sessionId?: string;
   private usage?: AIUsage;
   private readonly ignoredItemTypes: Record<string, number> = {};
+  private readonly commandToolNames: Record<string, string> = {};
 
   constructor(private readonly options: CodexCliEventMapperOptions) {}
 
@@ -155,23 +156,28 @@ export class CodexCliEventMapper {
     }
 
     if (item.type === 'command_execution' && event.type === 'item.started') {
+      const command = item.command || '';
+      const toolName = roomtalkToolName(command) || 'shell';
+      this.commandToolNames[item.id] = toolName;
       return [{
         schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
         type: 'tool_call',
         id: item.id,
-        name: 'shell',
-        args: { command: item.command || '' },
+        name: toolName,
+        args: { command },
         messageId: `codex_tool_${item.id}`,
       }];
     }
 
     if (item.type === 'command_execution' && event.type === 'item.completed') {
       const exitCode = typeof item.exit_code === 'number' ? item.exit_code : undefined;
+      const command = item.command || '';
+      const toolName = roomtalkToolName(command) || this.commandToolNames[item.id] || 'shell';
       return [{
         schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
         type: 'tool_result',
         id: item.id,
-        name: 'shell',
+        name: toolName,
         success: item.status === 'completed' && (exitCode === undefined || exitCode === 0),
         output: normalizeWorkspaceText(this.options.workspace, item.aggregated_output || ''),
         messageId: `codex_tool_result_${item.id}`,
@@ -282,6 +288,17 @@ const normalizeChanges = (workspace: string, changes: Array<{ path: string; kind
 
 const summarizeFileChanges = (changes: Array<{ path: string; kind: string }> = []) => {
   return changes.map(change => `${change.kind} ${change.path}`).join('\n');
+};
+
+const roomtalkToolName = (command: string) => {
+  const normalized = command.trim().replace(/\s+/g, ' ').toLowerCase();
+  if (normalized.includes('roomtalk publish-static-site') || normalized.includes('platform_tools publish-static-site')) {
+    return 'PublishStaticSite';
+  }
+  if (normalized.includes('roomtalk background-shell') || normalized.includes('platform_tools background-shell')) {
+    return 'BackgroundShell';
+  }
+  return undefined;
 };
 
 const toAIUsage = (usage: CodexExecUsage | undefined): AIUsage | undefined => {

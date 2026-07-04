@@ -63,6 +63,18 @@ def test_parse_request_validates_schema_and_required_fields():
     assert parsed.mode == "plan"
     assert parsed.allowed_paths == (".",)
     assert parsed.prior_messages == []
+    assert parsed.codex_model is None
+    assert parsed.codex_reasoning_effort is None
+    assert parsed.codex_permission_mode is None
+
+    parsed_codex = parse_request(json.dumps(request(
+        codexModel="gpt-5.5",
+        codexReasoningEffort="xhigh",
+        codexPermissionMode="approveForMe",
+    )))
+    assert parsed_codex.codex_model == "gpt-5.5"
+    assert parsed_codex.codex_reasoning_effort == "xhigh"
+    assert parsed_codex.codex_permission_mode == "approveForMe"
 
     prior_messages = [
         {"role": "user", "content": "list files"},
@@ -253,6 +265,9 @@ def test_publish_static_site_tool_posts_payload_and_returns_url(tmp_path: Path, 
         provider="deepseek",
         model_id="deepseek-v4-pro",
         api_model="deepseek-v4-pro",
+        codex_model=None,
+        codex_reasoning_effort=None,
+        codex_permission_mode=None,
         workspace=workspace,
         allowed_paths=(".",),
     )

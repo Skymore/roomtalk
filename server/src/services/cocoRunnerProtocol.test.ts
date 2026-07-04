@@ -34,6 +34,9 @@ describe('Coco runner protocol', () => {
   it('serializes Coco prior messages in run requests', () => {
     const withPrior: CocoRunnerRunRequest = {
       ...request,
+      codexModel: 'gpt-5.5',
+      codexReasoningEffort: 'xhigh',
+      codexPermissionMode: 'approveForMe',
       priorMessages: [
         { role: 'user', content: 'list files' },
         {
