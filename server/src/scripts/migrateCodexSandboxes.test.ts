@@ -98,6 +98,21 @@ describe('probeCodexCapability', () => {
     assert.match(service.commands[0], /roomtalk_coco_runner\.codex_app_server/);
   });
 
+  it('checks the sandbox artifact version when an expected version is provided', async () => {
+    const service = createProbeService('__ROOMTALK_CODEX_READY__\n', '', 0);
+
+    const result = await probeCodexCapability(
+      service,
+      handle,
+      { PYTHONPATH: '/runner' },
+      'roomtalk-coco-2026-07-04-codex-app-server-v2'
+    );
+
+    assert.equal(result.ok, true);
+    assert.match(service.commands[0], /expected_artifact_version = "roomtalk-coco-2026-07-04-codex-app-server-v2"/);
+    assert.match(service.commands[0], /roomtalk-coco-artifact\.lock\.json/);
+  });
+
   it('rejects sandboxes missing the codex runner module', async () => {
     const service = createProbeService('', '/usr/local/bin/python: No module named roomtalk_coco_runner.codex_app_server\n', 1);
 
@@ -105,6 +120,24 @@ describe('probeCodexCapability', () => {
 
     assert.equal(result.ok, false);
     assert.match(result.stderr, /No module named/);
+  });
+
+  it('rejects sandboxes with an older artifact version', async () => {
+    const service = createProbeService(
+      '',
+      'artifact version mismatch: expected roomtalk-coco-2026-07-04-codex-app-server-v2, got roomtalk-coco-2026-07-04-dual-cli-candidate\n',
+      44
+    );
+
+    const result = await probeCodexCapability(
+      service,
+      handle,
+      { PYTHONPATH: '/runner' },
+      'roomtalk-coco-2026-07-04-codex-app-server-v2'
+    );
+
+    assert.equal(result.ok, false);
+    assert.match(result.stderr, /artifact version mismatch/);
   });
 });
 

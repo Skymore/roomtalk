@@ -196,7 +196,7 @@ const migrateCandidate = async (
     return failed(candidate, error);
   }
 
-  const oldProbe = await probeCodexCapability(sandboxService, oldHandle, plan.runnerEnv);
+  const oldProbe = await probeCodexCapability(sandboxService, oldHandle, plan.runnerEnv, plan.artifactVersion);
   if (oldProbe.ok) {
     logger.info('Codex sandbox already supports dual-cli runner', { roomId: candidate.roomId, sandboxId: candidate.sandboxId });
     return { roomId: candidate.roomId, oldSandboxId: candidate.sandboxId, status: 'already_ready' };
@@ -228,7 +228,7 @@ const migrateCandidate = async (
       timeoutMs: plan.archiveTimeoutMs,
     });
 
-    const newProbe = await probeCodexCapability(sandboxService, newHandle, plan.runnerEnv);
+    const newProbe = await probeCodexCapability(sandboxService, newHandle, plan.runnerEnv, plan.artifactVersion);
     if (!newProbe.ok) {
       throw new Error(`New sandbox does not support Codex CLI: ${summarizeProbeFailure(newProbe)}`);
     }
@@ -271,13 +271,14 @@ const migrateCandidate = async (
 export const probeCodexCapability = async (
   sandboxService: Pick<CocoSandboxService, 'startRunner'>,
   handle: CocoSandboxHandle,
-  runnerEnv: Record<string, string>
+  runnerEnv: Record<string, string>,
+  expectedArtifactVersion?: string
 ): Promise<CodexProbeResult> => {
   let process: Awaited<ReturnType<CocoSandboxService['startRunner']>> | undefined;
   try {
     process = await sandboxService.startRunner({
       handle,
-      command: codexProbeCommand(),
+      command: codexProbeCommand(expectedArtifactVersion),
       env: runnerEnv,
       timeoutMs: 30_000,
     });
@@ -304,9 +305,12 @@ export const probeCodexCapability = async (
   }
 };
 
-const codexProbeCommand = () => [
+const codexProbeCommand = (expectedArtifactVersion?: string) => [
   'python - <<\'PY\'',
   'import importlib',
+  'import json',
+  'import os',
+  'from pathlib import Path',
   'import shutil',
   'import subprocess',
   'import sys',
@@ -320,6 +324,20 @@ const codexProbeCommand = () => [
   'if result.returncode != 0:',
   '    print((result.stderr or result.stdout).strip(), file=sys.stderr)',
   '    raise SystemExit(result.returncode)',
+  `expected_artifact_version = ${JSON.stringify(expectedArtifactVersion || '')}`,
+  'if expected_artifact_version:',
+  '    artifact_version = os.environ.get("ROOMTALK_COCO_ARTIFACT_VERSION", "")',
+  '    artifact_lock_path = Path("/opt/roomtalk-coco-artifact.lock.json")',
+  '    if artifact_lock_path.exists():',
+  '        try:',
+  '            artifact_version = json.loads(artifact_lock_path.read_text()).get("artifactVersion") or artifact_version',
+  '        except Exception as error:',
+  '            print(f"unable to read artifact lock: {error}", file=sys.stderr)',
+  '            raise SystemExit(43)',
+  '    if artifact_version != expected_artifact_version:',
+  '        observed = artifact_version or "missing"',
+  '        print(f"artifact version mismatch: expected {expected_artifact_version}, got {observed}", file=sys.stderr)',
+  '        raise SystemExit(44)',
   `print("${CODEX_READY_MARKER}")`,
   'PY',
 ].join('\n');
