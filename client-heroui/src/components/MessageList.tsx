@@ -86,6 +86,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const { t } = useTranslation();
   // generate a stable ID for the scroll container
   const scrollContainerId = `message-list-scroll-${roomId}`;
+  const canManageCodeAgentMode = Boolean(roomPermissions?.canManageRoom);
   // Lazy initializers read the synchronous in-memory cache so the first paint
   // already shows the cached window (requires the `key={roomId}` remount in the
   // parent so these run per room).
@@ -661,7 +662,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
             room={codeAgentRoom}
             messages={messages}
             mode={codeAgentMode}
-            canSwitchMode={codeAgentMaxMode === 'acceptEdits'}
+            canSwitchMode={codeAgentMaxMode === 'acceptEdits' && canManageCodeAgentMode}
             onModeChange={onCodeAgentModeChange}
             sessionCostUsd={sessionCostUsd ?? 0}
             workspaceSnapshot={workspaceSnapshot}

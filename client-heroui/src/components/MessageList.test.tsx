@@ -3,7 +3,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Message } from '../utils/types';
+import { Message, RoomPermissions } from '../utils/types';
 import { MessageList, MessageListHandle } from './MessageList';
 
 const requestAIResponseMock = vi.hoisted(() => vi.fn());
@@ -458,6 +458,49 @@ describe('MessageList optimistic messages', () => {
     expect(screen.getByTestId('code-agent-workspace').closest('[data-testid="message-list-scroll"]')).toBeNull();
     expect(screen.getByTestId('code-agent-workspace').className).toContain('sticky');
     expect(screen.getByTestId('code-agent-workspace').className).toContain('top-0');
+  });
+
+  it('does not expose code-agent mode switching to non-managers', () => {
+    const onCodeAgentModeChange = vi.fn();
+    const memberPermissions: RoomPermissions = {
+      roomId: 'room-1',
+      clientId: 'member-1',
+      role: 'member',
+      canPost: true,
+      canEditAnyMessage: false,
+      canDeleteAnyMessage: false,
+      canClearHistory: false,
+      canManageRoom: false,
+      canManageAdmins: false,
+      canManageMembers: false,
+      canTransferOwnership: false,
+      canUseCoco: true,
+    };
+
+    render(
+      <MessageList
+        roomId="room-1"
+        onReply={vi.fn()}
+        roomPermissions={memberPermissions}
+        presentation="code-agent"
+        currentRoom={{
+          id: 'room-1',
+          name: 'Coco',
+          createdAt: '2026-05-26T00:00:00.000Z',
+          creatorId: 'client-1',
+          type: 'coco',
+          sandboxStatus: 'ready',
+          cocoStatus: 'idle',
+        }}
+        codeAgentMode="plan"
+        codeAgentMaxMode="acceptEdits"
+        onCodeAgentModeChange={onCodeAgentModeChange}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId('code-agent-mode-toggle'));
+
+    expect(onCodeAgentModeChange).not.toHaveBeenCalled();
   });
 
   it('refreshes the code workspace snapshot when the sandbox becomes ready', async () => {

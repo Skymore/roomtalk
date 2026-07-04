@@ -144,6 +144,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   const selectedMode: CodeAgentMode = normalizedAvailableModes.includes(currentRoom.codeAgentMode as CodeAgentMode)
     ? (currentRoom.codeAgentMode as CodeAgentMode)
     : effectiveDefaultMode;
+  const canManageCodeAgentMode = Boolean(roomPermissions?.canManageRoom);
   const canUseCoco = roomPermissions?.canUseCoco ?? true;
   const canUseComposer = (roomPermissions?.canPost ?? true) && canUseCoco;
   const composerRestrictionReason = canUseCoco
@@ -545,6 +546,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
               isCodeAgentRoom
               codeAgentMode={selectedMode}
               codeAgentMaxMode={maxMode}
+              canSwitchCodeAgentMode={canManageCodeAgentMode}
               onCodeAgentModeChange={handleCodeAgentModeChange}
               reviewComments={reviewComments}
               onRemoveReviewComment={handleRemoveReviewComment}

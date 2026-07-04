@@ -115,6 +115,7 @@ interface MessageInputAIControlsProps {
   isCodeAgentRoom?: boolean;
   codeAgentMode?: CodeAgentMode;
   codeAgentMaxMode?: CodeAgentMode;
+  canSwitchCodeAgentMode?: boolean;
   onCodeAgentModeChange?: (mode: CodeAgentMode) => void;
 }
 
@@ -146,6 +147,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   isCodeAgentRoom = false,
   codeAgentMode = 'plan',
   codeAgentMaxMode = 'plan',
+  canSwitchCodeAgentMode = codeAgentMaxMode === 'acceptEdits',
   onCodeAgentModeChange,
 }) => {
   const { t } = useTranslation();
@@ -164,7 +166,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   const askActionLabel = isCodeAgentRoom ? t('runAgent') : t('askAI');
   const askActionIcon = isCodeAgentRoom ? 'lucide:bot' : selectedRole.icon;
   const effectiveCodeAgentMode = codeAgentMaxMode === 'acceptEdits' ? codeAgentMode : 'plan';
-  const canSwitchCodeAgentMode = isCodeAgentRoom && codeAgentMaxMode === 'acceptEdits';
+  const canSwitchEffectiveCodeAgentMode = isCodeAgentRoom && codeAgentMaxMode === 'acceptEdits' && canSwitchCodeAgentMode;
   const appliedAIModelId = selectedAIModel || defaultAIModel;
   const selectedRoleDraft = roles.find(role => role.id === selectedRoleIdDraft) || selectedRole;
   const codeAgentModeOptions: Array<{ id: CodeAgentMode; label: string; icon: string }> = [
@@ -260,7 +262,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
     if (!isCodeAgentRoom && selectedRoleIdDraft !== selectedRoleId) {
       onRoleChange(selectedRoleIdDraft);
     }
-    if (isCodeAgentRoom && codeAgentModeDraft !== effectiveCodeAgentMode && canSwitchCodeAgentMode) {
+    if (isCodeAgentRoom && codeAgentModeDraft !== effectiveCodeAgentMode && canSwitchEffectiveCodeAgentMode) {
       onCodeAgentModeChange?.(codeAgentModeDraft);
     }
     if (normalizedAIContextMessageLimitDraft !== normalizedAIContextMessageLimit) {
@@ -398,7 +400,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                   data-testid="code-agent-mode-select"
                   selectedKeys={[codeAgentModeDraft]}
                   onSelectionChange={handleCodeAgentModeSelection}
-                  isDisabled={!canSwitchCodeAgentMode}
+                  isDisabled={!canSwitchEffectiveCodeAgentMode}
                   classNames={{
                     trigger: "min-h-11 rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-[#4d4c48] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5]",
                     value: "text-sm font-semibold",
@@ -416,7 +418,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                   ))}
                 </Select>
                 <p className="text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">
-                  {canSwitchCodeAgentMode
+                  {canSwitchEffectiveCodeAgentMode
                     ? (codeAgentModeDraft === 'plan' ? t('codeAgentReadOnlyDescription') : t('codeAgentEditDescription'))
                     : t('codeAgentModeLockedDescription')}
                 </p>

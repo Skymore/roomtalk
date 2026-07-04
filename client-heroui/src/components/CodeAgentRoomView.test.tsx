@@ -71,6 +71,7 @@ vi.mock('./MessageInput', () => ({
   MessageInput: ({
     codeAgentMode,
     codeAgentMaxMode,
+    canSwitchCodeAgentMode,
     isCodeAgentRoom,
     canPost,
     postingRestrictionReason,
@@ -80,6 +81,7 @@ vi.mock('./MessageInput', () => ({
   }: {
     codeAgentMode: string;
     codeAgentMaxMode: string;
+    canSwitchCodeAgentMode?: boolean;
     isCodeAgentRoom?: boolean;
     canPost?: boolean;
     postingRestrictionReason?: string;
@@ -92,6 +94,7 @@ vi.mock('./MessageInput', () => ({
       data-code-agent-room={String(Boolean(isCodeAgentRoom))}
       data-code-agent-mode={codeAgentMode}
       data-code-agent-max-mode={codeAgentMaxMode}
+      data-can-switch-code-agent-mode={String(Boolean(canSwitchCodeAgentMode))}
       data-can-post={String(Boolean(canPost))}
       data-posting-restriction-reason={postingRestrictionReason || ''}
       data-review-comments={String(reviewComments.length)}
@@ -292,17 +295,32 @@ describe('CodeAgentRoomView', () => {
   });
 
   it('passes the selected Coco run mode to the workspace and composer', () => {
-    renderCodeAgentRoom({ ...cocoRoom, codeAgentMode: 'acceptEdits' });
+    renderCodeAgentRoom({ ...cocoRoom, codeAgentMode: 'acceptEdits' }, ['plan', 'acceptEdits'], 'plan', permissions());
 
     expect(screen.getByTestId('message-list').dataset.codeAgentMode).toBe('acceptEdits');
     expect(screen.getByTestId('message-input').dataset.codeAgentRoom).toBe('true');
     expect(screen.getByTestId('message-input').dataset.codeAgentMode).toBe('acceptEdits');
     expect(screen.getByTestId('message-input').dataset.codeAgentMaxMode).toBe('acceptEdits');
+    expect(screen.getByTestId('message-input').dataset.canSwitchCodeAgentMode).toBe('true');
     expect(screen.getByTestId('file-browser').dataset.sandboxStatus).toBe('ready');
     expect(screen.getByTestId('file-browser').dataset.sandboxUpdatedAt).toBe('2026-06-30T10:00:00.000Z');
     expect(screen.getByTestId('file-browser').dataset.workspaceEditable).toBe('true');
     expect(screen.getByLabelText('codeAgentResizeWorkspaceFiles')).toBeTruthy();
     expect(screen.getByLabelText('codeAgentCollapseWorkspaceFiles')).toBeTruthy();
+  });
+
+  it('keeps composer mode switching locked for non-managers while preserving edit capability', () => {
+    renderCodeAgentRoom({ ...cocoRoom, codeAgentMode: 'acceptEdits' }, ['plan', 'acceptEdits'], 'plan', permissions({
+      role: 'member',
+      canManageRoom: false,
+      canManageAdmins: false,
+      canManageMembers: false,
+      canTransferOwnership: false,
+    }));
+
+    expect(screen.getByTestId('message-input').dataset.codeAgentMode).toBe('acceptEdits');
+    expect(screen.getByTestId('message-input').dataset.codeAgentMaxMode).toBe('acceptEdits');
+    expect(screen.getByTestId('message-input').dataset.canSwitchCodeAgentMode).toBe('false');
   });
 
   it('disables the composer when room permissions cannot use Coco', () => {

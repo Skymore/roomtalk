@@ -73,6 +73,7 @@ interface MessageInputProps {
   isCodeAgentRoom?: boolean;
   codeAgentMode?: CodeAgentMode;
   codeAgentMaxMode?: CodeAgentMode;
+  canSwitchCodeAgentMode?: boolean;
   onCodeAgentModeChange?: (mode: CodeAgentMode) => void;
   reviewComments?: readonly ReviewCommentContext[];
   onRemoveReviewComment?: (commentId: string) => void;
@@ -166,6 +167,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   isCodeAgentRoom = false,
   codeAgentMode = 'plan',
   codeAgentMaxMode = 'plan',
+  canSwitchCodeAgentMode = codeAgentMaxMode === 'acceptEdits',
   onCodeAgentModeChange,
   reviewComments = [],
   onRemoveReviewComment,
@@ -1682,6 +1684,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                 isCodeAgentRoom={isCodeAgentRoom}
                 codeAgentMode={selectedCodeAgentMode}
                 codeAgentMaxMode={codeAgentMaxMode}
+                canSwitchCodeAgentMode={canSwitchCodeAgentMode}
                 onCodeAgentModeChange={onCodeAgentModeChange}
               />
             )}

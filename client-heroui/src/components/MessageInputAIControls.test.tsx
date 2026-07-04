@@ -155,6 +155,28 @@ describe('MessageInputAIControls', () => {
     expect(onSettingsClose).toHaveBeenCalled();
   });
 
+  it('locks code agent mode selection when the current user cannot switch modes', () => {
+    const onCodeAgentModeChange = vi.fn();
+    render(
+      <MessageInputAIControls
+        {...baseProps}
+        isSettingsOpen
+        isCodeAgentRoom
+        codeAgentMode="plan"
+        codeAgentMaxMode="acceptEdits"
+        canSwitchCodeAgentMode={false}
+        onCodeAgentModeChange={onCodeAgentModeChange}
+      />
+    );
+
+    expect(screen.getByTestId('code-agent-mode-select').dataset.disabled).toBe('true');
+
+    fireEvent.click(screen.getByTestId('change-codeAgentModeControl'));
+    fireEvent.click(screen.getByRole('button', { name: 'apply' }));
+
+    expect(onCodeAgentModeChange).not.toHaveBeenCalled();
+  });
+
   it('disables Apply until settings change', () => {
     render(<MessageInputAIControls {...baseProps} isSettingsOpen />);
 
