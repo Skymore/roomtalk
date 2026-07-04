@@ -31,7 +31,7 @@ Codex manual 中 app-server 被描述为 rich client 接口，覆盖 authenticat
 - [x] Codex app-server backend 接入。
 - [x] 轻量验证：TypeScript compile。
 - [x] 轻量验证：runner parser tests、Codex app-server adapter unit tests。
-- [ ] 后续部署动作：E2B template rebuild、production env update、sandbox migration/restart。
+- [x] 后续部署动作：E2B template rebuild、production env update、sandbox migration/restart。
 
 ## 2026-07-04 进展
 
@@ -44,6 +44,12 @@ Codex manual 中 app-server 被描述为 rich client 接口，覆盖 authenticat
 - App-server commit 新增 `python -m roomtalk_coco_runner.codex_app_server` runner，接入 `CODE_AGENT_BACKEND=codex-app-server`，并复用 Codex subscription auth 注入、E2B sandbox、JSONL runner client。
 - 前端 backend selector 支持 `Coco CLI`、`Codex CLI`、`Codex App Server` 并行切换；Codex CLI 和 app-server 都显示 Codex 模型、思考深度、权限模式。
 - 已 bump `ops/coco-sandbox/artifact.lock.json` 和 `ops/coco-sandbox/Dockerfile`，E2B template rebuild 时会验证 `roomtalk_coco_runner.codex_app_server`。
+- E2B template 已 rebuild 并 publish 为 `realruitao/roomtalk-coco-2026-07-04-codex-app-server`；ready command 覆盖 `codex --version`、`codex-linux-sandbox --help`、`roomtalk --help`，以及 `roomtalk_coco_runner.runner`、`roomtalk_coco_runner.codex_cli`、`roomtalk_coco_runner.codex_app_server` import。
+- 已修复 sandbox 内 `/usr/local/bin/roomtalk` launcher 生成问题，避免 E2B 中出现不可执行的坏 shebang。
+- 生产 Fly secrets 已更新为 `COCO_E2B_TEMPLATE_ID=roomtalk-coco-2026-07-04-codex-app-server`、`COCO_ARTIFACT_VERSION=roomtalk-coco-2026-07-04-codex-app-server`；默认 `CODE_AGENT_BACKEND=coco` 保持不变。
+- 生产 Codex 沙箱已通过迁移脚本做 archive/import/probe 后切换到新 template，并在成功后销毁旧 sandbox。迁移房间共 5 个：`ET08NWIhgh`、`4sPMatu90U`、`4NNTnc8b6N`、`emY9TGYwXs`、`MZPxmVYl4Y`。
+- 迁移后 dry-run 复查结果：5 个候选房间全部为 `already_ready`，对应新 sandbox 分别为 `i4v6140mbqgtm61rkfs2z`、`i4jq5ty78d1fqsrnr7c9g`、`iedjesi6ls68mq10prrvd`、`ibow2snctkqnflbjmkahy`、`iytovs6qxwyarg43uylzk`。
+- `master` CI/CD run `28708530641` 已通过 server build、client build、translation check 和 Fly deploy。
 
 ## 已执行验证
 
