@@ -31,9 +31,11 @@ vi.mock('./MessageList', async () => {
   return {
     MessageList: React.forwardRef(({
       codeAgentMode,
+      bottomInsetPx,
       onOpenWorkspaceFile,
     }: {
       codeAgentMode: string;
+      bottomInsetPx?: number;
       onOpenWorkspaceFile?: (path: string) => void;
     }, ref: React.ForwardedRef<unknown>) => {
     React.useImperativeHandle(ref, () => ({ scrollToBottom: vi.fn() }));
@@ -43,6 +45,7 @@ vi.mock('./MessageList', async () => {
         type="button"
         data-testid="message-list"
         data-code-agent-mode={codeAgentMode}
+        data-bottom-inset-px={String(bottomInsetPx ?? '')}
         onClick={() => onOpenWorkspaceFile?.('/workspace/src/App.tsx')}
       >
         open-file
@@ -309,6 +312,41 @@ describe('CodeAgentRoomView', () => {
     expect(screen.getByLabelText('codeAgentCollapseWorkspaceFiles')).toBeTruthy();
   });
 
+  it('keeps the message scrollbar above the floating composer', () => {
+    const resizeCallbacks: ResizeObserverCallback[] = [];
+    class MockResizeObserver {
+      observe = vi.fn();
+      disconnect = vi.fn();
+
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallbacks.push(callback);
+      }
+    }
+    vi.stubGlobal('ResizeObserver', MockResizeObserver);
+
+    renderCodeAgentRoom(cocoRoom);
+
+    const composer = screen.getByTestId('message-input-panel') as HTMLDivElement;
+    vi.spyOn(composer, 'getBoundingClientRect').mockReturnValue({
+      width: 800,
+      height: 148,
+      top: 752,
+      right: 800,
+      bottom: 900,
+      left: 0,
+      x: 0,
+      y: 752,
+      toJSON: () => ({}),
+    });
+
+    act(() => {
+      resizeCallbacks.forEach((callback) => callback([], {} as ResizeObserver));
+    });
+
+    expect(screen.getByTestId('message-list-layer').getAttribute('style')).toContain('bottom: 148px');
+    expect(screen.getByTestId('message-list').dataset.bottomInsetPx).toBe('12');
+  });
+
   it('keeps composer mode switching locked for non-managers while preserving edit capability', () => {
     renderCodeAgentRoom({ ...cocoRoom, codeAgentMode: 'acceptEdits' }, ['plan', 'acceptEdits'], 'plan', permissions({
       role: 'member',
@@ -360,10 +398,14 @@ describe('CodeAgentRoomView', () => {
     expect(layout.className).toContain('lg:grid-cols-[minmax(var(--code-agent-chat-min-width),1fr)_minmax(0,var(--code-agent-files-width))]');
     expect(desktopFileBrowser.parentElement?.classList.contains('flex')).toBe(true);
     expect(desktopFileBrowser.parentElement?.classList.contains('min-h-0')).toBe(true);
-    expect(screen.getByTestId('message-list').parentElement?.dataset.codeAgentChatPane).toBe('true');
-    expect(screen.getByTestId('message-list').parentElement?.classList.contains('min-w-0')).toBe(true);
-    expect(screen.getByTestId('message-list').parentElement?.classList.contains('lg:min-w-[var(--code-agent-chat-min-width)]')).toBe(true);
-    expect(screen.getByTestId('message-list').parentElement?.classList.contains('min-w-[var(--code-agent-chat-min-width)]')).toBe(false);
+    const messageListLayer = screen.getByTestId('message-list-layer');
+    const chatPane = screen.getByTestId('message-list').closest('[data-code-agent-chat-pane="true"]');
+    expect(messageListLayer.classList.contains('absolute')).toBe(true);
+    expect(messageListLayer.classList.contains('overflow-hidden')).toBe(true);
+    expect(chatPane).toBeTruthy();
+    expect(chatPane?.classList.contains('min-w-0')).toBe(true);
+    expect(chatPane?.classList.contains('lg:min-w-[var(--code-agent-chat-min-width)]')).toBe(true);
+    expect(chatPane?.classList.contains('min-w-[var(--code-agent-chat-min-width)]')).toBe(false);
 
     fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     const fileBrowsers = screen.getAllByTestId('file-browser');

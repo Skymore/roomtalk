@@ -9,6 +9,8 @@ import { AppView } from '../utils/appPersistence';
 import { getAvatarColor, getAvatarText } from '../utils/userProfile';
 import { Message, Room, RoomPermissions, RoomRenameHandler } from '../utils/types';
 
+const MESSAGE_LIST_BOTTOM_GAP_PX = 12;
+
 interface ChatRoomViewProps {
   currentRoom: Room;
   memberCount: number | null;
@@ -103,16 +105,22 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
       />
 
       <div className="relative min-h-0 w-full flex-1 overflow-hidden">
-        <MessageList
-          key={currentRoom.id}
-          ref={messageListRef}
-          roomId={currentRoom.id}
-          room={currentRoom}
-          onReply={setReplyToMessage}
-          roomPermissions={roomPermissions}
-          bottomInsetPx={composerHeight + 12}
-          onScrollButtonVisibilityChange={setShowScrollButton}
-        />
+        <div
+          data-testid="message-list-layer"
+          className="absolute inset-x-0 top-0 overflow-hidden"
+          style={{ bottom: composerHeight }}
+        >
+          <MessageList
+            key={currentRoom.id}
+            ref={messageListRef}
+            roomId={currentRoom.id}
+            room={currentRoom}
+            onReply={setReplyToMessage}
+            roomPermissions={roomPermissions}
+            bottomInsetPx={MESSAGE_LIST_BOTTOM_GAP_PX}
+            onScrollButtonVisibilityChange={setShowScrollButton}
+          />
+        </div>
 
         {showScrollButton && (
           <Button

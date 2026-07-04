@@ -59,6 +59,7 @@ interface CodeAgentRoomViewProps {
 
 const FILE_MANAGER_WIDTH_STORAGE_KEY = 'roomtalk.codeWorkspace.fileManagerWidth';
 const FILE_MANAGER_COLLAPSED_STORAGE_KEY = 'roomtalk.codeWorkspace.fileManagerCollapsed';
+const MESSAGE_LIST_BOTTOM_GAP_PX = 12;
 type WorkspaceFileOpenRequest = { path: string; line: number | null; requestId: number };
 
 const defaultFileManagerWidth = () => {
@@ -457,27 +458,33 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
         }}
       >
         <div className="relative min-h-0 min-w-0 overflow-hidden lg:min-w-[var(--code-agent-chat-min-width)]" data-code-agent-chat-pane="true">
-          <MessageList
-            key={currentRoom.id}
-            ref={messageListRef}
-            roomId={currentRoom.id}
-            room={currentRoom}
-            presentation="code-agent"
-            currentRoom={currentRoom}
-            codeAgentMode={selectedMode}
-            codeAgentMaxMode={maxMode}
-            onCodeAgentModeChange={handleCodeAgentModeChange}
-            onOpenWorkspaceFile={handleOpenWorkspaceFile}
-            onWorkspaceRootChange={setWorkspaceRoot}
-            onWorkspaceChangesChange={setWorkspaceChanges}
-            reviewComments={reviewComments}
-            onAddReviewComment={handleAddReviewComment}
-            onRemoveReviewComment={handleRemoveReviewComment}
-            onReply={setReplyToMessage}
-            roomPermissions={roomPermissions}
-            bottomInsetPx={composerHeight + 12}
-            onScrollButtonVisibilityChange={setShowScrollButton}
-          />
+          <div
+            data-testid="message-list-layer"
+            className="absolute inset-x-0 top-0 overflow-hidden"
+            style={{ bottom: composerHeight }}
+          >
+            <MessageList
+              key={currentRoom.id}
+              ref={messageListRef}
+              roomId={currentRoom.id}
+              room={currentRoom}
+              presentation="code-agent"
+              currentRoom={currentRoom}
+              codeAgentMode={selectedMode}
+              codeAgentMaxMode={maxMode}
+              onCodeAgentModeChange={handleCodeAgentModeChange}
+              onOpenWorkspaceFile={handleOpenWorkspaceFile}
+              onWorkspaceRootChange={setWorkspaceRoot}
+              onWorkspaceChangesChange={setWorkspaceChanges}
+              reviewComments={reviewComments}
+              onAddReviewComment={handleAddReviewComment}
+              onRemoveReviewComment={handleRemoveReviewComment}
+              onReply={setReplyToMessage}
+              roomPermissions={roomPermissions}
+              bottomInsetPx={MESSAGE_LIST_BOTTOM_GAP_PX}
+              onScrollButtonVisibilityChange={setShowScrollButton}
+            />
+          </div>
 
           {showScrollButton && (
             <Button
