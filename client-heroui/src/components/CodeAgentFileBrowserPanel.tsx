@@ -3342,6 +3342,9 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     </aside>
   ) : null;
   const showMobileDiffFileList = isMobileSurface && mobileDiffFileListOpen && changedFileEntries.length > 0;
+  const diffSurfaceBodyClassName = isMobileSurface
+    ? `flex-col ${showMobileDiffFileList ? 'p-2' : 'p-0'}`
+    : 'p-2';
   const changedFilesTreePanel = changedFileEntries.length > 0 ? (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]">
       <div
@@ -3670,7 +3673,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       ) : activeDiffSurface ? (
         <div
           ref={diffSurfaceRef}
-          className={`${isMobileSurface ? 'flex-col' : ''} flex min-h-0 flex-1 gap-2 overflow-hidden p-2`}
+          className={`${diffSurfaceBodyClassName} flex min-h-0 flex-1 gap-2 overflow-hidden`}
           data-testid="code-agent-diff-surface-body"
           data-mobile-layout={isMobileSurface ? 'true' : undefined}
           data-mobile-view={isMobileSurface ? (showMobileDiffFileList ? 'files' : 'diff') : undefined}
@@ -3739,6 +3742,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
               onAddReviewComment={onAddReviewComment}
               onRemoveReviewComment={onRemoveReviewComment}
               mobileLayout={isMobileSurface}
+              compactLayout={isMobileSurface}
               onOpenChangedFiles={isMobileSurface && changedFileEntries.length > 0 ? () => setMobileDiffFileListOpen(true) : undefined}
             />
           )}

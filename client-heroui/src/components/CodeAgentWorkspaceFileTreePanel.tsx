@@ -478,7 +478,7 @@ export function CodeAgentWorkspaceFileTreePanel({
     ? t('codeAgentWorkspaceIndexing')
     : t('codeAgentWorkspaceFileCount', { formattedCount: fileCount.toLocaleString() });
   const headerRowClassName = mobileLayout
-    ? 'flex min-h-10 shrink-0 items-center gap-2 overflow-x-auto border-b border-[#dedbd0] px-2 py-1 [scrollbar-width:none] dark:border-[#30302e] [&::-webkit-scrollbar]:hidden'
+    ? 'flex h-9 min-h-9 shrink-0 items-center gap-2 overflow-x-auto border-b border-[#dedbd0] px-2 py-0 [scrollbar-width:none] dark:border-[#30302e] [&::-webkit-scrollbar]:hidden'
     : 'flex min-h-10 shrink-0 items-center gap-2 overflow-x-auto border-b border-[#dedbd0] px-2 py-1 [scrollbar-width:none] dark:border-[#30302e] [&::-webkit-scrollbar]:hidden';
   const toolbarButtonClassName = mobileLayout
     ? 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-40 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]'

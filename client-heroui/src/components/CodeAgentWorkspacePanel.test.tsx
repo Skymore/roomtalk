@@ -414,7 +414,9 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(changesScroll.className).toContain('overscroll-contain');
     expect(changesScroll.className).toContain('touch-pan-y');
     expect(changesScroll.className).toContain('max-h-[min(42dvh,22rem)]');
-    expect(changesScroll.className).toContain('py-2');
+    expect(changesScroll.className).toContain('p-0');
+    expect(changesScroll.className).not.toContain('px-3');
+    expect(changesScroll.className).not.toContain('py-2');
     expect(changesScroll.className).not.toContain('pb-[calc(var(--code-agent-composer-height,96px)+env(safe-area-inset-bottom)+1rem)]');
     expect(changesScroll.className).not.toContain('max-h-[min(44vh,30rem)]');
     const changesContent = screen.getByTestId('code-agent-workspace-changes-content');

@@ -250,7 +250,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   const detailsId = 'code-agent-workspace-details';
   const shouldLoadDiff = selectedWorkspaceTab === 'changes';
   const changesScrollClassName = isMobileWorkspaceLayout
-    ? 'flex max-h-[min(42dvh,22rem)] min-h-0 flex-col overflow-y-auto overscroll-contain px-3 py-2 [-webkit-overflow-scrolling:touch] touch-pan-y'
+    ? 'flex max-h-[min(42dvh,22rem)] min-h-0 flex-col overflow-y-auto overscroll-contain p-0 [-webkit-overflow-scrolling:touch] touch-pan-y'
     : 'flex max-h-[min(44vh,30rem)] min-h-0 flex-col overflow-y-auto px-3 py-2';
   const changesContentClassName = isMobileWorkspaceLayout
     ? 'flex min-w-0 flex-col gap-2'
