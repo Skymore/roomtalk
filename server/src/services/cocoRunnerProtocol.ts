@@ -18,6 +18,7 @@ export interface CocoRunnerRunRequest {
   schemaVersion: typeof COCO_RUNNER_SCHEMA_VERSION;
   type: 'run';
   roomId: string;
+  clientId?: string;
   turnId: string;
   sessionId?: string | null;
   prompt: string;

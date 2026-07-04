@@ -7,10 +7,16 @@ export interface FeatureFlags {
     rollout?: 'disabled' | 'allowlist' | 'all';
     reason?: string;
   };
+  codex: {
+    connections: {
+      enabled: boolean;
+    };
+  };
 }
 
 export const FALLBACK_FEATURE_FLAGS: FeatureFlags = {
   coco: { enabled: false, mode: 'plan', availableModes: ['plan'], defaultMode: 'plan', rollout: 'disabled' },
+  codex: { connections: { enabled: false } },
 };
 
 const getApiBaseUrl = () => {
@@ -55,6 +61,11 @@ export const fetchFeatureFlags = async (clientId: string): Promise<FeatureFlags>
       defaultMode: normalizedAvailableModes.includes(defaultMode) ? defaultMode : 'plan',
       rollout: data.coco.rollout,
       reason: data.coco.reason,
+    },
+    codex: {
+      connections: {
+        enabled: data?.codex?.connections?.enabled === true,
+      },
     },
   };
 };

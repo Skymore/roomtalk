@@ -1,5 +1,19 @@
 import React from 'react';
-import { Avatar, Button, Input, Dropdown, DropdownTrigger, DropdownMenu, DropdownItem, Chip } from "@heroui/react";
+import {
+  Avatar,
+  Button,
+  Input,
+  Dropdown,
+  DropdownTrigger,
+  DropdownMenu,
+  DropdownItem,
+  Chip,
+  Modal,
+  ModalContent,
+  ModalHeader,
+  ModalBody,
+  ModalFooter,
+} from "@heroui/react";
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { getAvatarText, getAvatarColor } from "../utils/userProfile";
@@ -20,6 +34,14 @@ import {
   getPushNotificationStatus,
   PushNotificationStatus,
 } from "../utils/pushNotifications";
+import {
+  CodexConnectionStatus,
+  CodexDeviceAuthInfo,
+  cancelCodexDeviceAuth,
+  disconnectCodexConnection,
+  getCodexConnectionStatus,
+  startCodexDeviceAuth,
+} from "../utils/codexConnection";
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim();
 const GOOGLE_BUTTON_MAX_WIDTH = 320;
@@ -112,6 +134,7 @@ interface SettingsViewProps {
   setTheme: (theme: string) => void;
   i18n: any;
   changeLanguage: (lang: string) => void;
+  isCodexConnectionsEnabled?: boolean;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
@@ -125,7 +148,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   isDark,
   setTheme,
   i18n,
-  changeLanguage
+  changeLanguage,
+  isCodexConnectionsEnabled = false
 }) => {
   const { t } = useTranslation();
   const currentLanguage = getLanguageOption(i18n.language);
@@ -145,6 +169,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [googleAuthError, setGoogleAuthError] = React.useState('');
   const [googleAuthMessage, setGoogleAuthMessage] = React.useState('');
   const googleButtonRef = React.useRef<HTMLDivElement | null>(null);
+  const [codexStatus, setCodexStatus] = React.useState<CodexConnectionStatus | null>(null);
+  const [codexDeviceAuth, setCodexDeviceAuth] = React.useState<CodexDeviceAuthInfo | null>(null);
+  const [isLoadingCodexStatus, setIsLoadingCodexStatus] = React.useState(false);
+  const [isUpdatingCodex, setIsUpdatingCodex] = React.useState(false);
+  const [codexError, setCodexError] = React.useState('');
+  const [codexMessage, setCodexMessage] = React.useState('');
+  const [isCodexLoginModalOpen, setIsCodexLoginModalOpen] = React.useState(false);
+  const [codexDeviceAuthSecondsRemaining, setCodexDeviceAuthSecondsRemaining] = React.useState<number | null>(null);
 
   const refreshPushStatus = React.useCallback(async () => {
     try {
@@ -186,6 +218,64 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   React.useEffect(() => {
     void refreshAccountStatus();
   }, [refreshAccountStatus]);
+
+  const refreshCodexStatus = React.useCallback(async (options: { silent?: boolean } = {}) => {
+    if (!isCodexConnectionsEnabled) {
+      setCodexStatus(null);
+      setCodexDeviceAuth(null);
+      return;
+    }
+    if (!options.silent) {
+      setIsLoadingCodexStatus(true);
+    }
+    try {
+      const status = await getCodexConnectionStatus(clientId);
+      setCodexStatus(status);
+      if (status.status === 'connected' || status.status === 'disconnected' || status.status === 'reauth_required') {
+        setCodexDeviceAuth(null);
+        setIsCodexLoginModalOpen(false);
+      }
+      setCodexError('');
+    } catch (error) {
+      setCodexError(error instanceof Error ? error.message : t('codexConnectionUnknownError'));
+    } finally {
+      if (!options.silent) {
+        setIsLoadingCodexStatus(false);
+      }
+    }
+  }, [clientId, isCodexConnectionsEnabled, t]);
+
+  React.useEffect(() => {
+    void refreshCodexStatus();
+  }, [refreshCodexStatus]);
+
+  React.useEffect(() => {
+    if (!isCodexConnectionsEnabled || (!codexDeviceAuth && codexStatus?.status !== 'pending')) {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      void refreshCodexStatus({ silent: true });
+    }, 2500);
+    return () => window.clearInterval(interval);
+  }, [codexDeviceAuth, codexStatus?.status, isCodexConnectionsEnabled, refreshCodexStatus]);
+
+  React.useEffect(() => {
+    if (!codexDeviceAuth?.expiresAt) {
+      setCodexDeviceAuthSecondsRemaining(null);
+      return;
+    }
+    const expiresAtMs = Date.parse(codexDeviceAuth.expiresAt);
+    if (!Number.isFinite(expiresAtMs)) {
+      setCodexDeviceAuthSecondsRemaining(null);
+      return;
+    }
+    const update = () => {
+      setCodexDeviceAuthSecondsRemaining(Math.max(0, Math.ceil((expiresAtMs - Date.now()) / 1000)));
+    };
+    update();
+    const interval = window.setInterval(update, 1000);
+    return () => window.clearInterval(interval);
+  }, [codexDeviceAuth?.expiresAt]);
 
   const handleEnablePush = React.useCallback(async () => {
     setIsUpdatingPush(true);
@@ -254,6 +344,82 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     } finally {
       setIsUpdatingClientAuth(false);
     }
+  };
+
+  const handleStartCodexConnection = async () => {
+    setCodexError('');
+    setCodexMessage('');
+    setIsUpdatingCodex(true);
+    try {
+      const started = await startCodexDeviceAuth(clientId);
+      setCodexDeviceAuth(started.deviceAuth);
+      setCodexStatus({
+        clientId: started.clientId,
+        provider: 'codex',
+        status: 'pending',
+        authVersion: codexStatus?.authVersion || 0,
+        createdAt: codexStatus?.createdAt || '',
+        updatedAt: new Date().toISOString(),
+        locked: false,
+      });
+      setCodexMessage(t('codexConnectionStarted'));
+      setIsCodexLoginModalOpen(true);
+      window.open(started.deviceAuth.url, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      setCodexError(error instanceof Error ? error.message : t('codexConnectionUnknownError'));
+      await refreshCodexStatus({ silent: true });
+    } finally {
+      setIsUpdatingCodex(false);
+    }
+  };
+
+  const handleCancelCodexDeviceAuth = async () => {
+    setCodexError('');
+    setCodexMessage('');
+    setIsUpdatingCodex(true);
+    try {
+      const result = await cancelCodexDeviceAuth(clientId);
+      setCodexStatus(result.status);
+      setCodexDeviceAuth(null);
+      setIsCodexLoginModalOpen(false);
+      setCodexMessage(result.cancelled ? t('codexConnectionCancelled') : t('codexConnectionDisconnected'));
+    } catch (error) {
+      setCodexError(error instanceof Error ? error.message : t('codexConnectionUnknownError'));
+    } finally {
+      setIsUpdatingCodex(false);
+    }
+  };
+
+  const handleCloseCodexLoginModal = () => {
+    if (codexDeviceAuth && codexStatus?.status === 'pending') {
+      void handleCancelCodexDeviceAuth();
+      return;
+    }
+    setIsCodexLoginModalOpen(false);
+  };
+
+  const handleDisconnectCodex = async () => {
+    setCodexError('');
+    setCodexMessage('');
+    setIsUpdatingCodex(true);
+    try {
+      const status = await disconnectCodexConnection(clientId);
+      setCodexStatus(status);
+      setCodexDeviceAuth(null);
+      setCodexMessage(t('codexConnectionDisconnected'));
+    } catch (error) {
+      setCodexError(error instanceof Error ? error.message : t('codexConnectionUnknownError'));
+    } finally {
+      setIsUpdatingCodex(false);
+    }
+  };
+
+  const handleCopyCodexDeviceCode = () => {
+    if (!codexDeviceAuth?.code) {
+      return;
+    }
+    handleCopyToClipboard(codexDeviceAuth.code);
+    setCodexMessage(t('codexDeviceCodeCopied'));
   };
 
   const handleGoogleCredential = React.useCallback(async (response: GoogleCredentialResponse) => {
@@ -397,7 +563,32 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     return null;
   }, [handleEnablePush, pushStatus, t]);
 
+  const codexStatusLabel = React.useMemo(() => {
+    if (codexStatus?.status === 'connected') return t('codexConnectionStatusConnected');
+    if (codexStatus?.status === 'pending') return t('codexConnectionStatusConnecting');
+    if (codexStatus?.status === 'reauth_required') return t('codexConnectionStatusReauthRequired');
+    return t('codexConnectionStatusDisconnected');
+  }, [codexStatus?.status, t]);
+
+  const codexStatusColor = codexStatus?.status === 'connected'
+    ? 'success'
+    : codexStatus?.status === 'pending'
+      ? 'warning'
+      : codexStatus?.status === 'reauth_required'
+        ? 'danger'
+        : 'default';
+  const codexExpiryLabel = React.useMemo(() => {
+    if (codexDeviceAuthSecondsRemaining === null) {
+      return '';
+    }
+    if (codexDeviceAuthSecondsRemaining <= 0) {
+      return t('codexDeviceCodeExpired');
+    }
+    return t('codexDeviceCodeExpiresIn', { time: formatCountdown(codexDeviceAuthSecondsRemaining) });
+  }, [codexDeviceAuthSecondsRemaining, t]);
+
   return (
+    <>
     <div className="h-full w-full overflow-y-auto p-4 md:p-8">
       <div className="mx-auto flex w-full max-w-3xl flex-col">
         <div className="mb-8 flex items-center gap-4">
@@ -640,6 +831,108 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </section>
 
+        {isCodexConnectionsEnabled && (
+          <section className="mt-8 border-t border-[#dedbd0] dark:border-[#30302e]">
+            <div className="flex min-h-[72px] flex-col gap-3 py-4 sm:flex-row">
+              <div className="w-full pt-1 text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5] sm:w-32">
+                {t("codexConnection")}
+              </div>
+              <div className="flex min-w-0 flex-1 flex-col gap-3 sm:max-w-sm">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Chip size="sm" variant="flat" color={codexStatusColor}>
+                    {codexStatusLabel}
+                  </Chip>
+                  <Button
+                    isIconOnly
+                    size="sm"
+                    variant="flat"
+                    className="h-8 w-8 min-w-8"
+                    isLoading={isLoadingCodexStatus}
+                    onPress={() => refreshCodexStatus()}
+                    aria-label={t("refreshCodexConnection")}
+                  >
+                    <Icon icon="lucide:refresh-cw" className="text-sm" />
+                  </Button>
+                  {codexStatus?.status === 'connected' ? (
+                    <Button
+                      size="sm"
+                      variant="flat"
+                      isLoading={isUpdatingCodex}
+                      startContent={!isUpdatingCodex ? <Icon icon="lucide:unlink" /> : undefined}
+                      onPress={handleDisconnectCodex}
+                    >
+                      {t("disconnectCodex")}
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      color="secondary"
+                      className="bg-[#c96442] text-[#faf9f5]"
+                      isLoading={isUpdatingCodex}
+                      startContent={!isUpdatingCodex ? <Icon icon="lucide:terminal" /> : undefined}
+                      onPress={handleStartCodexConnection}
+                    >
+                      {t("connectCodex")}
+                    </Button>
+                  )}
+                </div>
+
+                {codexDeviceAuth && (
+                  <div className="grid gap-2 rounded-lg bg-[#e8e6dc] p-3 dark:bg-[#242423]">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-medium uppercase text-[#77756f] dark:text-[#b0aea5]">
+                        {t("codexDeviceCode")}
+                      </span>
+                      <code className="rounded-md bg-[#f7f5ed] px-2 py-1 text-sm font-semibold tracking-normal text-[#141413] dark:bg-[#30302e] dark:text-[#faf9f5]">
+                        {codexDeviceAuth.code}
+                      </code>
+                      <Button
+                        isIconOnly
+                        size="sm"
+                        variant="light"
+                        className="h-8 w-8 min-w-8"
+                        onPress={handleCopyCodexDeviceCode}
+                        aria-label={t("copyCodexDeviceCode")}
+                      >
+                        <Icon icon="lucide:copy" className="text-sm" />
+                      </Button>
+                    </div>
+                    <Button
+                      as="a"
+                      href={codexDeviceAuth.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      size="sm"
+                      variant="flat"
+                      className="justify-self-start"
+                      startContent={<Icon icon="lucide:external-link" />}
+                    >
+                      {t("openCodexLogin")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="light"
+                      className="justify-self-start"
+                      isLoading={isUpdatingCodex}
+                      startContent={!isUpdatingCodex ? <Icon icon="lucide:x" /> : undefined}
+                      onPress={handleCancelCodexDeviceAuth}
+                    >
+                      {t("cancelCodexLogin")}
+                    </Button>
+                  </div>
+                )}
+
+                {codexMessage && (
+                  <p className="text-xs leading-5 text-[#2f7d4f] dark:text-[#7ed9a3]">{codexMessage}</p>
+                )}
+                {codexError && (
+                  <p className="text-xs leading-5 text-[#b54832] dark:text-[#ff8b6e]">{codexError}</p>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
+
         <section className="mt-8 border-t border-[#dedbd0] dark:border-[#30302e]">
           <div className="flex min-h-[72px] flex-col gap-3 border-b border-[#dedbd0] py-4 dark:border-[#30302e] sm:flex-row sm:items-center">
             <div className="w-full text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5] sm:w-32">
@@ -757,5 +1050,80 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </section>
       </div>
     </div>
+    <Modal
+      isOpen={isCodexLoginModalOpen && Boolean(codexDeviceAuth)}
+      onClose={handleCloseCodexLoginModal}
+      size="sm"
+      scrollBehavior="inside"
+    >
+      <ModalContent>
+        <ModalHeader className="flex flex-col gap-1">
+          {t("codexLoginTitle")}
+        </ModalHeader>
+        <ModalBody>
+          <div className="grid gap-4">
+            <p className="text-sm leading-6 text-[#5e5d59] dark:text-[#b0aea5]">
+              {t("codexLoginModalDescription")}
+            </p>
+            {codexDeviceAuth && (
+              <div className="grid gap-3 rounded-lg bg-[#e8e6dc] p-4 dark:bg-[#242423]">
+                <div className="grid gap-1">
+                  <span className="text-xs font-medium uppercase text-[#77756f] dark:text-[#b0aea5]">
+                    {t("codexDeviceCode")}
+                  </span>
+                  <code className="w-full rounded-md bg-[#f7f5ed] px-3 py-2 text-center text-lg font-semibold tracking-normal text-[#141413] dark:bg-[#30302e] dark:text-[#faf9f5]">
+                    {codexDeviceAuth.code}
+                  </code>
+                </div>
+                {codexExpiryLabel && (
+                  <p className="text-xs leading-5 text-[#77756f] dark:text-[#b0aea5]">
+                    {codexExpiryLabel}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        </ModalBody>
+        <ModalFooter>
+          <Button
+            variant="light"
+            isLoading={isUpdatingCodex}
+            startContent={!isUpdatingCodex ? <Icon icon="lucide:x" /> : undefined}
+            onPress={handleCancelCodexDeviceAuth}
+          >
+            {t("cancelCodexLogin")}
+          </Button>
+          {codexDeviceAuth && (
+            <Button
+              variant="flat"
+              startContent={<Icon icon="lucide:copy" />}
+              onPress={handleCopyCodexDeviceCode}
+            >
+              {t("copyCodexDeviceCode")}
+            </Button>
+          )}
+          {codexDeviceAuth && (
+            <Button
+              as="a"
+              href={codexDeviceAuth.url}
+              target="_blank"
+              rel="noreferrer"
+              color="secondary"
+              className="bg-[#c96442] text-[#faf9f5]"
+              startContent={<Icon icon="lucide:external-link" />}
+            >
+              {t("openCodexLogin")}
+            </Button>
+          )}
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
+    </>
   );
+};
+
+const formatCountdown = (seconds: number) => {
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${minutes}:${String(remainingSeconds).padStart(2, '0')}`;
 };

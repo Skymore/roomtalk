@@ -27,9 +27,16 @@ const outputDir = resolve(outputPath);
 const localCocoRepo = cocoRepoPath || process.env.COCO_LOCAL_PATH || '';
 const cocoRef = lock.coco.sourceRef;
 const cocoSourceRepo = lock.coco.sourceRepo;
+const codexCliBackend = lock.runner?.backends?.codex_cli;
 
 if (!/^[0-9a-f]{40}$/i.test(cocoRef)) {
   throw new Error(`Coco sourceRef must be a pinned 40-character commit SHA, got: ${cocoRef}`);
+}
+if (!codexCliBackend || codexCliBackend.command !== 'python -m roomtalk_coco_runner.codex_cli') {
+  throw new Error('Coco artifact lock must declare runner.backends.codex_cli.command');
+}
+if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(codexCliBackend.codexCliVersion || '')) {
+  throw new Error(`Codex CLI version must be pinned, got: ${codexCliBackend.codexCliVersion || ''}`);
 }
 
 const isInside = (child, parent) => {
@@ -114,6 +121,7 @@ try {
     cocoSourceRef: cocoRef,
     cocoSourceRepo: cocoSource.sourceRepo,
     cocoSourceMode: cocoSource.sourceMode,
+    runnerBackends: lock.runner.backends,
     preparedAt: new Date().toISOString(),
   }, null, 2) + '\n');
 } finally {

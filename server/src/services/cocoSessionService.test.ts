@@ -2,14 +2,14 @@ import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { Logger } from '../logger';
 import { AIModelOption, Message, Room, RoomAICostTotal } from '../types';
-import { CocoCodeAgentRunner } from './codeAgentRunner';
+import { CocoCodeAgentRunner, CodeAgentBackend } from './codeAgentRunner';
 import { CocoSandboxLifecycleService } from './cocoSandboxLifecycle';
 import { CocoSessionService } from './cocoSessionService';
 import { COCO_RUNNER_SCHEMA_VERSION, CocoRunnerEvent, CocoRunnerRunRequest } from './cocoRunnerProtocol';
 import { CocoRunnerClient, CocoRunnerRunResult } from './fakeCocoRunner';
 import { FakeCocoRunnerClient } from './fakeCocoRunner';
 import { FakeCocoSandboxService } from './fakeCocoSandboxService';
-import { DEFAULT_COCO_RUNNER_COMMAND } from './cocoRuntimeConfig';
+import { DEFAULT_CODEX_CLI_RUNNER_COMMAND, DEFAULT_COCO_RUNNER_COMMAND } from './cocoRuntimeConfig';
 import { CocoModelGateway, InMemoryCocoModelGatewayTokenStateStore } from './cocoModelGateway';
 import { PublishedStaticSiteService } from './publishedStaticSite';
 import { MemoryMediaObjectStorage } from '../testUtils/memoryMediaObjectStorage';
@@ -224,11 +224,14 @@ const userMessage = (content = 'inspect the project'): Message => ({
 const createService = (options: {
   store?: MemoryCocoStore;
   runner?: CocoRunnerClient;
+  backend?: CodeAgentBackend;
   enabled?: boolean;
   allowedClientIds?: string[];
   ids?: string[];
   runnerEnv?: Record<string, string>;
+  runnerCommand?: string;
   runnerProviderEnvByProvider?: Partial<Record<AIModelOption['provider'], Record<string, string>>>;
+  codexConnectionService?: any;
   mode?: 'plan' | 'acceptEdits';
   availableModes?: Array<'plan' | 'acceptEdits'>;
   defaultMode?: 'plan' | 'acceptEdits';
@@ -252,7 +255,7 @@ const createService = (options: {
     emitter,
     lifecycle,
     sandboxService,
-    new CocoCodeAgentRunner(options.runner || new FakeCocoRunnerClient([])),
+    new CocoCodeAgentRunner(options.runner || new FakeCocoRunnerClient([]), options.backend || 'coco'),
     logger,
     {
       enabled: options.enabled ?? true,
@@ -261,9 +264,11 @@ const createService = (options: {
       availableModes: options.availableModes,
       defaultMode: options.defaultMode,
       modelGateway: options.modelGateway,
+      runnerCommand: options.runnerCommand,
       staticSitePublisher: options.staticSitePublisher,
       runnerEnv: options.runnerEnv,
       runnerProviderEnvByProvider: options.runnerProviderEnvByProvider,
+      codexConnectionService: options.codexConnectionService,
       now: () => new Date('2026-05-03T00:00:00.000Z'),
       createId: () => ids.shift() || 'id-fallback',
       observability: options.observability,
@@ -305,6 +310,7 @@ describe('CocoSessionService', () => {
     assert.equal(sandboxService.startedRunnerCommands[0], DEFAULT_COCO_RUNNER_COMMAND);
     assert.deepEqual(sandboxService.startedRunnerEnvs[0], { PYTHONUNBUFFERED: '1' });
     assert.equal(runner.requests[0].prompt, 'inspect the project');
+    assert.equal(runner.requests[0].clientId, 'client-1');
     assert.deepEqual(runner.requests[0].priorMessages, []);
     assert.equal(runner.requests[0].apiModel, 'deepseek-v4-pro');
     assert.equal(runner.requests[0].mode, 'plan');
@@ -336,6 +342,97 @@ describe('CocoSessionService', () => {
     assert.equal((observability.events[3].payload as any)?.message, 'starting');
     assert.equal((observability.events[5].payload as any)?.outputLength, '# RoomTalk'.length);
     assert.equal(observability.events.some(event => event.event === 'coco.runner.text_delta'), false);
+  });
+
+  it('runs Codex backend turns with sandbox secret auth injection and refreshed auth persistence', async () => {
+    const initialAuthJson = JSON.stringify({ OPENAI_AUTH: { access_token: 'initial-access', refresh_token: 'initial-refresh' } });
+    const refreshedAuthJson = JSON.stringify({ OPENAI_AUTH: { access_token: 'refreshed-access', refresh_token: 'initial-refresh' } });
+    const authCalls: Array<{ clientId: string; runId: string }> = [];
+    const refreshedAuths: Array<string | undefined> = [];
+    let sandboxService: FakeCocoSandboxService;
+    const runner: CocoRunnerClient = {
+      async run(_request, handlers, context): Promise<CocoRunnerRunResult> {
+        const env = sandboxService.startedRunnerEnvs[sandboxService.startedRunnerEnvs.length - 1];
+        assert.ok(env.ROOMTALK_CODEX_AUTH_JSON_PATH);
+        assert.ok(env.ROOMTALK_CODEX_REFRESHED_AUTH_JSON_PATH);
+        await sandboxService.writeSecretFile(context!.sandbox, {
+          path: env.ROOMTALK_CODEX_REFRESHED_AUTH_JSON_PATH,
+          content: refreshedAuthJson,
+        });
+        const finalEvent = {
+          schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
+          type: 'final' as const,
+          messageId: 'codex-turn-1',
+          answer: 'Codex done',
+          sessionId: 'codex-session-1',
+        };
+        await handlers.onEvent(finalEvent);
+        return { events: [finalEvent], finalEvent };
+      },
+    };
+    const codexConnectionService = {
+      async withCodexAuth(clientId: string, runId: string, work: (authJson: string) => Promise<any>) {
+        authCalls.push({ clientId, runId });
+        const workResult = await work(initialAuthJson);
+        refreshedAuths.push(workResult.refreshedAuthJson);
+        return workResult.result;
+      },
+    };
+    const setup = createService({
+      backend: 'codex',
+      runner,
+      runnerCommand: DEFAULT_CODEX_CLI_RUNNER_COMMAND,
+      runnerEnv: { PYTHONUNBUFFERED: '1', CODEX_CLI_BIN: '/usr/local/bin/codex' },
+      codexConnectionService,
+      ids: ['ai-1', 'turn-1'],
+    });
+    sandboxService = setup.sandboxService;
+
+    const result = await setup.service.startTurn({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      selectedModel,
+    });
+
+    assert.deepEqual(result, { success: true, messageId: 'ai-1' });
+    assert.deepEqual(authCalls, [{ clientId: 'client-1', runId: 'turn-1' }]);
+    assert.deepEqual(refreshedAuths, [refreshedAuthJson]);
+    assert.equal(sandboxService.startedRunnerCommands[0], DEFAULT_CODEX_CLI_RUNNER_COMMAND);
+    const env = sandboxService.startedRunnerEnvs[0];
+    assert.match(env.ROOMTALK_CODEX_AUTH_JSON_PATH, /^\/tmp\/roomtalk-codex\/turn-1-auth\.json$/);
+    assert.match(env.ROOMTALK_CODEX_REFRESHED_AUTH_JSON_PATH, /^\/tmp\/roomtalk-codex\/turn-1-refreshed-auth\.json$/);
+    assert.equal(JSON.stringify(env).includes('initial-access'), false);
+    assert.deepEqual(sandboxService.deletedSecretFilePaths.sort(), [
+      '/tmp/roomtalk-codex/turn-1-auth.json',
+      '/tmp/roomtalk-codex/turn-1-refreshed-auth.json',
+    ]);
+    const messages = setup.store.messages.get('room-1') || [];
+    assert.equal(messages[messages.length - 1].content, 'Codex done');
+  });
+
+  it('fails Codex backend turns without a configured Codex connection service before starting the runner', async () => {
+    const runner = new FakeCocoRunnerClient([
+      { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'unexpected', sessionId: 'session-1' },
+    ]);
+    const { sandboxService, service, store } = createService({
+      backend: 'codex',
+      runner,
+      runnerCommand: DEFAULT_CODEX_CLI_RUNNER_COMMAND,
+      ids: ['ai-1', 'turn-1'],
+    });
+
+    const result = await service.startTurn({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      selectedModel,
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(sandboxService.startedRunnerCommands.length, 0);
+    assert.equal(runner.requests.length, 0);
+    const messages = store.messages.get('room-1') || [];
+    assert.equal(messages[1].status, 'error');
+    assert.equal(messages[1].content, 'Codex connection service is not configured');
   });
 
   it('persists interleaved AI text and tool events in runner order', async () => {

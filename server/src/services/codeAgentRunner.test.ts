@@ -93,10 +93,19 @@ describe('CodeAgentRunner', () => {
     assert.equal(cocoClient.context, context);
   });
 
-  it('creates only the implemented Coco backend', () => {
+  it('creates Coco by default and lets Codex reuse the shared runner client', () => {
     const cocoClient = new FakeCocoRunnerClient([]);
+    const codexRunner = {
+      backend: 'codex' as const,
+      run: async () => ({ events: [] }),
+    };
 
     assert.equal(createCodeAgentRunner('coco', cocoClient).backend, 'coco');
-    assert.throws(() => createCodeAgentRunner('codex', cocoClient), /not implemented: codex/);
+    assert.equal(createCodeAgentRunner('codex', cocoClient).backend, 'codex');
+    assert.equal(createCodeAgentRunner('codex', cocoClient, { codexRunner }).backend, 'codex');
+    assert.throws(
+      () => createCodeAgentRunner('codex', cocoClient, { codexRunner: createCodeAgentRunner('coco', cocoClient) }),
+      /backend=codex/
+    );
   });
 });

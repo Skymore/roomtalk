@@ -4,10 +4,10 @@ import { RoomStore } from '../repositories/store';
 import { AIModelOption, Message, Room, RoomMemberRole } from '../types';
 import { calculateAICost, getMessageAIModel } from './aiModels';
 import { CocoSandboxLifecycleService, EnsureCocoSandboxResult } from './cocoSandboxLifecycle';
-import { CocoSandboxService, CocoRunnerProcess } from './cocoSandboxService';
+import { CocoSandboxHandle, CocoSandboxService, CocoRunnerProcess } from './cocoSandboxService';
 import { mapCocoRunnerEvent } from './cocoEventMapper';
 import { CodeAgentRunner } from './codeAgentRunner';
-import { COCO_RUNNER_SCHEMA_VERSION, CocoRunnerEvent, CocoRunnerMode } from './cocoRunnerProtocol';
+import { COCO_RUNNER_SCHEMA_VERSION, CocoRunnerEvent, CocoRunnerMode, CocoRunnerRunRequest } from './cocoRunnerProtocol';
 import { DEFAULT_COCO_RUNNER_COMMAND } from './cocoRuntimeConfig';
 import { createAIPlaceholderMessage } from './messageDomain';
 import { CocoModelGateway } from './cocoModelGateway';
@@ -15,6 +15,8 @@ import { buildCocoPriorMessages } from './cocoTranscript';
 import { PublishedStaticSiteService } from './publishedStaticSite';
 import { ObservabilityEventInput, ObservabilityEventRecorder } from './observabilityEvents';
 import { canUseCocoRoom, COCO_ACCESS_DENIED_MESSAGE } from './cocoRoomAccess';
+import { CodexConnectionService } from './codexConnection';
+import { CocoRunnerHandlers, CocoRunnerRunResult } from './fakeCocoRunner';
 
 export interface CocoRoomEmitter {
   to(roomId: string): {
@@ -34,6 +36,7 @@ export interface CocoSessionServiceOptions {
   allowedPaths?: string[];
   runnerEnv?: Record<string, string>;
   runnerProviderEnvByProvider?: Partial<Record<AIModelOption['provider'], Record<string, string>>>;
+  codexConnectionService?: Pick<CodexConnectionService, 'withCodexAuth'>;
   staticSitePublisher?: PublishedStaticSiteService;
   observability?: ObservabilityEventRecorder;
   now?: () => Date;
@@ -224,27 +227,6 @@ export class CocoSessionService {
       placeholderAnnounced = true;
       ack({ success: true, messageId: aiMessageId });
 
-      runnerProcess = await this.sandboxService.startRunner({
-        handle: sandbox.handle,
-        command: this.options.runnerCommand || DEFAULT_COCO_RUNNER_COMMAND,
-        env: this.buildRunnerEnv(input.selectedModel, {
-          roomId: input.roomId,
-          clientId: input.clientId,
-          turnId,
-          mode: turnMode.mode,
-          clientOrigin: input.clientOrigin,
-          serverOrigin: input.serverOrigin,
-        }),
-        timeoutMs: this.options.turnTimeoutMs,
-      });
-      await this.recordTurnEvent('info', 'coco.runner.started', input, turnId, turnStartedAtMs, {
-        payload: {
-          sandboxId: sandbox.handle.id,
-          command: runnerProcess.command,
-          mode: turnMode.mode,
-        },
-      });
-
       streamState = {
         activeMessageId: aiMessageId,
         segmentContent: '',
@@ -253,10 +235,19 @@ export class CocoSessionService {
         segmentIds: [aiMessageId],
         nonEmptySegmentIds: new Set(),
       };
-      const runResult = await this.runner.run({
+      const runnerEnv = this.buildRunnerEnv(input.selectedModel, {
+        roomId: input.roomId,
+        clientId: input.clientId,
+        turnId,
+        mode: turnMode.mode,
+        clientOrigin: input.clientOrigin,
+        serverOrigin: input.serverOrigin,
+      });
+      const runnerRequest: CocoRunnerRunRequest = {
         schemaVersion: COCO_RUNNER_SCHEMA_VERSION,
         type: 'run',
         roomId: input.roomId,
+        clientId: input.clientId,
         turnId,
         sessionId: room!.cocoSessionId || null,
         prompt: promptContext.prompt,
@@ -267,13 +258,37 @@ export class CocoSessionService {
         apiModel: input.selectedModel.apiModel,
         workspace: sandbox.handle.workspace,
         allowedPaths: this.options.allowedPaths || ['.'],
-      }, {
-        onEvent: async event => {
+      };
+      const startRunnerProcess = async (env: Record<string, string>) => {
+        runnerProcess = await this.sandboxService.startRunner({
+          handle: sandbox.handle,
+          command: this.options.runnerCommand || DEFAULT_COCO_RUNNER_COMMAND,
+          env,
+          timeoutMs: this.options.turnTimeoutMs,
+        });
+        await this.recordTurnEvent('info', 'coco.runner.started', input, turnId, turnStartedAtMs, {
+          payload: {
+            backend: this.runner.backend,
+            sandboxId: sandbox.handle.id,
+            command: runnerProcess.command,
+            mode: turnMode.mode,
+          },
+        });
+        return runnerProcess;
+      };
+      const runnerHandlers = {
+        onEvent: async (event: CocoRunnerEvent) => {
           await this.handleRunnerEvent(event, input.roomId, turnId, aiMessage!, input.selectedModel, streamState!);
         },
-      }, {
-        process: runnerProcess,
+      };
+      const runResult = await this.runRunnerWithBackendAuth({
+        clientId: input.clientId,
+        turnId,
+        runnerEnv,
+        request: runnerRequest,
+        handlers: runnerHandlers,
         sandbox: sandbox.handle,
+        startRunnerProcess,
       });
 
       if (runResult.errorEvent) {
@@ -414,6 +429,95 @@ export class CocoSessionService {
     await runnerProcess.stop().catch(error => {
       this.logger.warn('Failed to stop Coco runner process', { error, roomId });
     });
+  }
+
+  private async runRunnerWithBackendAuth(input: {
+    clientId: string;
+    turnId: string;
+    runnerEnv: Record<string, string>;
+    request: CocoRunnerRunRequest;
+    handlers: CocoRunnerHandlers;
+    sandbox: CocoSandboxHandle;
+    startRunnerProcess: (env: Record<string, string>) => Promise<CocoRunnerProcess>;
+  }): Promise<CocoRunnerRunResult> {
+    if (this.runner.backend !== 'codex') {
+      const process = await input.startRunnerProcess(input.runnerEnv);
+      return this.runner.run(input.request, input.handlers, {
+        process,
+        sandbox: input.sandbox,
+      });
+    }
+
+    const connectionService = this.options.codexConnectionService;
+    if (!connectionService) {
+      throw new Error('Codex connection service is not configured');
+    }
+    if (!this.sandboxService.writeSecretFile || !this.sandboxService.deleteSecretFile) {
+      throw new Error('Codex backend requires sandbox secret file support');
+    }
+
+    return connectionService.withCodexAuth(input.clientId, input.turnId, async authJson => {
+      const authPath = this.codexSecretFilePath(input.turnId, 'auth.json');
+      const refreshedAuthPath = this.codexSecretFilePath(input.turnId, 'refreshed-auth.json');
+      await this.sandboxService.writeSecretFile!(input.sandbox, {
+        path: authPath,
+        content: authJson,
+      });
+
+      let refreshedAuthJson: string | undefined;
+      try {
+        const process = await input.startRunnerProcess({
+          ...input.runnerEnv,
+          ROOMTALK_CODEX_AUTH_JSON_PATH: authPath,
+          ROOMTALK_CODEX_REFRESHED_AUTH_JSON_PATH: refreshedAuthPath,
+        });
+        const result = await this.runner.run(input.request, input.handlers, {
+          process,
+          sandbox: input.sandbox,
+        });
+        refreshedAuthJson = await this.readOptionalCodexRefreshedAuth(input.sandbox, refreshedAuthPath);
+        return {
+          result,
+          ...(refreshedAuthJson ? { refreshedAuthJson } : {}),
+        };
+      } finally {
+        await Promise.all([
+          this.deleteCodexSecretFile(input.sandbox, authPath),
+          this.deleteCodexSecretFile(input.sandbox, refreshedAuthPath),
+        ]);
+      }
+    });
+  }
+
+  private async readOptionalCodexRefreshedAuth(sandbox: CocoSandboxHandle, path: string): Promise<string | undefined> {
+    if (!this.sandboxService.readSecretFile) {
+      return undefined;
+    }
+    try {
+      const value = await this.sandboxService.readSecretFile(sandbox, path, { maxBytes: 1024 * 1024 });
+      return value.trim() ? value : undefined;
+    } catch (error) {
+      this.logger.warn('Codex runner did not provide refreshed auth JSON', {
+        error,
+        sandboxId: sandbox.id,
+      });
+      return undefined;
+    }
+  }
+
+  private async deleteCodexSecretFile(sandbox: CocoSandboxHandle, path: string): Promise<void> {
+    await this.sandboxService.deleteSecretFile?.(sandbox, path).catch(error => {
+      this.logger.warn('Failed to delete Codex sandbox secret file', {
+        error,
+        sandboxId: sandbox.id,
+      });
+    });
+  }
+
+  private codexSecretFilePath(turnId: string, suffix: string): string {
+    const safeTurnId = turnId.replace(/[^a-zA-Z0-9_.-]/g, '_');
+    const safeSuffix = suffix.replace(/[^a-zA-Z0-9_.-]/g, '_');
+    return `/tmp/roomtalk-codex/${safeTurnId}-${safeSuffix}`;
   }
 
   private validateRoom(room: Room | null, clientId: string, memberRole?: RoomMemberRole): CocoTurnAck {

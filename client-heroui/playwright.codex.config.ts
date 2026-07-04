@@ -1,15 +1,17 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const clientPort = Number(process.env.E2E_CLIENT_PORT || 3311);
-const serverPort = Number(process.env.E2E_SERVER_PORT || 3312);
+const clientPort = Number(process.env.E2E_CLIENT_PORT || 3331);
+const serverPort = Number(process.env.E2E_SERVER_PORT || 3332);
 const clientURL = `http://127.0.0.1:${clientPort}`;
 const serverURL = `http://127.0.0.1:${serverPort}`;
+const fakeCodexStateDir = `/tmp/roomtalk-codex-ui-e2e-${serverPort}`;
 
 export default defineConfig({
   testDir: './e2e',
-  timeout: 30_000,
+  testMatch: /.*\/codex-connection\.spec\.ts/,
+  timeout: 40_000,
   expect: {
-    timeout: 8_000,
+    timeout: 10_000,
   },
   fullyParallel: false,
   workers: 1,
@@ -21,14 +23,8 @@ export default defineConfig({
   },
   projects: [
     {
-      name: 'chromium',
-      testIgnore: /.*(mobile|postgres|codex).*\.spec\.ts/,
+      name: 'codex-chromium',
       use: { ...devices['Desktop Chrome'] },
-    },
-    {
-      name: 'mobile-chromium',
-      testMatch: /.*mobile.*\.spec\.ts/,
-      use: { ...devices['Pixel 7'] },
     },
   ],
   webServer: [
@@ -48,6 +44,14 @@ export default defineConfig({
         'COCO_RUNNER_CLIENT=fake',
         'COCO_MODE=plan',
         'COCO_FAKE_RUNNER_EVENT_DELAY_MS=250',
+        'CODEX_CONNECTIONS_ENABLED=true',
+        'CODEX_AUTH_ENCRYPTION_KEY=e2e-codex-connection-secret',
+        'CODEX_AUTH_LOGIN_TIMEOUT_MS=30000',
+        'CODEX_DEVICE_CODE_TIMEOUT_MS=10000',
+        'CODEX_CLI_BIN=./scripts/fake-codex-cli.mjs',
+        'CODEX_DEVICE_AUTH_SCRIPT_BIN=./scripts/fake-script-bin.mjs',
+        'ROOMTALK_FAKE_CODEX_LOGIN_PLAN=first-hold-then-success',
+        `ROOMTALK_FAKE_CODEX_STATE_DIR=${fakeCodexStateDir}`,
         'AI_MODEL=deepseek-v4-pro',
         'OPENAI_API_KEY=e2e',
         'OPENROUTER_API_KEY=e2e',
@@ -57,7 +61,7 @@ export default defineConfig({
       ].join(' '),
       cwd: '../server',
       url: `${serverURL}/api/status`,
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: false,
       timeout: 60_000,
     },
     {
@@ -66,7 +70,7 @@ export default defineConfig({
         `npm run dev -- --host 127.0.0.1 --port ${clientPort}`,
       ].join(' '),
       url: clientURL,
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: false,
       timeout: 60_000,
     },
   ],

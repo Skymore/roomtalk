@@ -619,12 +619,22 @@ describe('API routes', () => {
 
     const statusResponse = await fetch(`${server.baseUrl}/api/status`);
     assert.equal(statusResponse.status, 200);
-    const status = await statusResponse.json() as { status: string; persistenceStore: string; redis: string; rooms: number; features: { coco: { enabled: boolean; rollout: string; mode: string; availableModes: string[]; defaultMode: string } } };
+    const status = await statusResponse.json() as {
+      status: string;
+      persistenceStore: string;
+      redis: string;
+      rooms: number;
+      features: {
+        coco: { enabled: boolean; rollout: string; mode: string; availableModes: string[]; defaultMode: string };
+        codex: { connections: { enabled: boolean } };
+      };
+    };
     assert.equal(status.status, 'online');
     assert.equal(status.persistenceStore, 'redis');
     assert.equal(status.redis, 'connected');
     assert.equal(status.rooms, 1);
     assert.deepEqual(status.features.coco, { enabled: true, rollout: 'all', mode: 'acceptEdits', availableModes: ['plan', 'acceptEdits'], defaultMode: 'plan' });
+    assert.deepEqual(status.features.codex, { connections: { enabled: false } });
 
     const featuresResponse = await fetch(`${server.baseUrl}/api/features?clientId=client-1`);
     assert.equal(featuresResponse.status, 200);
@@ -635,6 +645,11 @@ describe('API routes', () => {
         mode: 'acceptEdits',
         availableModes: ['plan', 'acceptEdits'],
         defaultMode: 'plan',
+      },
+      codex: {
+        connections: {
+          enabled: false,
+        },
       },
     });
   });

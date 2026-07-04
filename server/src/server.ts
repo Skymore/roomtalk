@@ -56,6 +56,12 @@ import {
   createPublishedStaticSiteServiceFromEnv,
 } from './services/publishedStaticSite';
 import { NoopObservabilityEventRecorder, PostgresObservabilityEventRecorder } from './services/observabilityEvents';
+import { CodexAuthCipher, CodexConnectionService } from './services/codexConnection';
+import { resolveCodexConnectionConfig } from './services/codexConnectionConfig';
+import { CodexCliDeviceAuthDriver } from './services/codexCliDeviceAuthDriver';
+import { assertCodexBackendStartupGate, resolveCodexCliRunnerConfig } from './services/codexCliRunnerConfig';
+import { CodexDeviceAuthSessionManager } from './services/codexDeviceAuthSession';
+import { PostgresCodexConnectionStore, RedisCodexConnectionStore } from './services/codexConnectionStore';
 
 dotenv.config();
 
@@ -68,6 +74,7 @@ const routeLogger = new Logger('Routes');
 const openaiLogger = new Logger('OpenAI');
 const outboxLogger = new Logger('OutboxWorker');
 const cocoLogger = new Logger('Coco');
+const codexLogger = new Logger('Codex');
 const mediaStorageLogger = new Logger('MediaStorage');
 const staticPublishLogger = new Logger('StaticPublish');
 const mediaObjectStorage = createMediaObjectStorageFromEnv(mediaStorageLogger);
@@ -104,7 +111,7 @@ const corsOrigin = resolveCorsOrigin();
 const app = express();
 app.use(cors({
   origin: corsOrigin,
-  methods: ['GET', 'POST', 'PUT'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true,
 }));
 console.log(`process.env.CLIENT_URL: ${process.env.CLIENT_URL}`);
@@ -165,7 +172,44 @@ const parsePositiveIntegerEnv = (name: string, fallback: number) => {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 };
 
+const codexConnectionConfig = resolveCodexConnectionConfig(process.env);
+const codexCliRunnerConfig = resolveCodexCliRunnerConfig(process.env);
+let codexConnectionService: CodexConnectionService | undefined;
+let codexDeviceAuthSessions: CodexDeviceAuthSessionManager | undefined;
+if (codexConnectionConfig.enabled) {
+  const codexConnectionStore = postgresPool
+    ? new PostgresCodexConnectionStore(postgresPool)
+    : new RedisCodexConnectionStore(redisClient);
+  codexConnectionService = new CodexConnectionService(
+    codexConnectionStore,
+    new CodexAuthCipher(codexConnectionConfig.authEncryptionKey, 'v1'),
+    new CodexCliDeviceAuthDriver({
+      cliBin: codexConnectionConfig.cliBin,
+      loginTimeoutMs: codexConnectionConfig.authLoginTimeoutMs,
+      scriptBin: codexConnectionConfig.authScriptBin,
+    }),
+    {
+      lockTtlMs: parsePositiveIntegerEnv('CODEX_CONNECTION_LOCK_TTL_MS', 10 * 60 * 1000),
+    }
+  );
+  codexDeviceAuthSessions = new CodexDeviceAuthSessionManager(codexConnectionService, {
+    deviceCodeTimeoutMs: parsePositiveIntegerEnv('CODEX_DEVICE_CODE_TIMEOUT_MS', 30_000),
+    onBackgroundError: (error, clientId) => {
+      codexLogger.warn('Codex device auth background task failed', {
+        error: error instanceof Error ? error.message : String(error),
+        clientId,
+      });
+    },
+  });
+}
+
 const cocoRuntimeConfig = resolveCocoRuntimeConfig(process.env);
+assertCodexBackendStartupGate({
+  cocoRuntimeConfig,
+  codexCliRunnerConfig,
+  codexConnectionConfig,
+  hasCodexConnectionService: Boolean(codexConnectionService),
+});
 const observabilityRecorder = postgresPool
   ? new PostgresObservabilityEventRecorder(postgresPool, new Logger('Observability'))
   : new NoopObservabilityEventRecorder();
@@ -275,6 +319,13 @@ const cocoRunnerClient = cocoRuntimeConfig.runnerClient === 'jsonl' ? new JsonlC
   { schemaVersion: COCO_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'fake-ai', answer: 'Coco fake runner received the task.', sessionId: 'fake-coco-session' },
 ], { eventDelayMs: parsePositiveIntegerEnv('COCO_FAKE_RUNNER_EVENT_DELAY_MS', 0) });
 const codeAgentRunner = createCodeAgentRunner(cocoRuntimeConfig.backend, cocoRunnerClient);
+const cocoRunnerEnv = cocoRuntimeConfig.backend === 'codex'
+  ? {
+    ...cocoRuntimeConfig.runnerEnv,
+    CODEX_CLI_BIN: codexCliRunnerConfig.cliBin,
+    ROOMTALK_CODEX_TIMEOUT_MS: String(codexCliRunnerConfig.timeoutMs),
+  }
+  : cocoRuntimeConfig.runnerEnv;
 const cocoSessionService = new CocoSessionService(
   store,
   io,
@@ -292,8 +343,9 @@ const cocoSessionService = new CocoSessionService(
     runnerCommand: cocoRuntimeConfig.runnerCommand,
     turnTimeoutMs: cocoTurnTimeoutMs,
     allowedPaths: cocoRuntimeConfig.allowedPaths,
-    runnerEnv: cocoRuntimeConfig.runnerEnv,
+    runnerEnv: cocoRunnerEnv,
     runnerProviderEnvByProvider: cocoRuntimeConfig.runnerProviderEnvByProvider,
+    codexConnectionService,
     staticSitePublisher: publishedStaticSiteService,
     observability: observabilityRecorder,
   }
@@ -421,6 +473,11 @@ registerApiRoutes(app, {
   cocoMode: cocoRuntimeConfig.mode,
   cocoAvailableModes: cocoRuntimeConfig.availableModes,
   cocoDefaultMode: cocoRuntimeConfig.defaultMode,
+  codexConnections: {
+    enabled: codexConnectionConfig.enabled,
+    service: codexConnectionService,
+    deviceAuthSessions: codexDeviceAuthSessions,
+  },
 });
 
 registerPublishedStaticSiteRoutes(app, {

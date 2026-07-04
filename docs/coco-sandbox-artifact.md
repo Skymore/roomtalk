@@ -65,6 +65,17 @@ docker build -t roomtalk-coco:roomtalk-coco-2026-06-28-a4e70e6 /tmp/roomtalk-coc
 
 Publish that image as the E2B template named by `COCO_E2B_TEMPLATE_ID`.
 
+For the Codex dual-CLI template, use the helper so the build context, E2B create command, and optional publish step stay consistent:
+
+```bash
+node scripts/coco/build-e2b-template.mjs \
+  --clean \
+  --template roomtalk-coco-2026-07-04-dual-cli-candidate \
+  --publish
+```
+
+The helper defaults the template name from `COCO_E2B_TEMPLATE_ID` or `ops/coco-sandbox/artifact.lock.json`'s `artifactVersion`. Use `--dry-run` to print the `prepare-sandbox-context`, `npx --yes @e2b/cli template create`, and `npx --yes @e2b/cli template publish` commands without requiring E2B auth. For interactive login, run `e2b auth login` if the CLI is installed globally, or `npm exec --yes @e2b/cli -- auth login`; `npx e2b ...` resolves to the SDK package and has no executable.
+
 The Dockerfile installs Python dependencies from `requirements.lock` with `--require-hashes`, then loads the pinned Coco and `roomtalk_coco_runner` source trees through `PYTHONPATH`. This avoids implicit build-isolation downloads for local source packages. The base image is pinned by digest and the container runs as the non-root `roomtalk` user. RoomTalk also passes `PYTHONPATH=/opt/coco/src:/opt/roomtalk_coco_runner` explicitly when starting the E2B command, because E2B command-level envs do not reliably inherit image-level `ENV` values.
 
 ## Production Config
@@ -115,4 +126,5 @@ This is intentionally not accepted as production config.
 - Development mode is the only mode allowed to use the local Coco source path.
 - Real sandbox smoke is available through `cd server && npm run smoke:coco:e2b`; the script loads `server/.env`, skips unless `RUN_COCO_E2B_SMOKE=true`, and then requires E2B/model credentials.
 - To run the real smoke with credentials already stored in `server/.env`, use `cd server && RUN_COCO_E2B_SMOKE=true npm run smoke:coco:e2b`.
+- Codex dual-CLI sandbox smoke is available through `cd server && npm run smoke:codex:e2b`; it skips unless `RUN_CODEX_E2B_SMOKE=true`, then requires E2B credentials, a dual-CLI template, and `CODEX_E2B_SMOKE_AUTH_JSON_PATH` or `~/.codex/auth.json`.
 - 2026-06-26 validation confirmed the real E2B smoke creates a sandbox, streams JSONL runner events, completes with `deepseek-v4-pro`, and cleans up the sandbox.

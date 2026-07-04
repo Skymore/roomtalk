@@ -15,6 +15,7 @@ import {
   ListCocoWorkspaceEntriesOptions,
   RenameCocoWorkspaceEntryInput,
   ReadCocoWorkspaceAssetOptions,
+  ReadCocoSandboxSecretFileOptions,
   ReadCocoWorkspaceDiffOptions,
   ReadCocoWorkspaceFileOptions,
   ResolveCocoWorkspacePreviewTargetInput,
@@ -22,6 +23,7 @@ import {
   CocoWorkspacePreviewTargetResolution,
   SearchCocoWorkspaceEntriesOptions,
   StartCocoRunnerInput,
+  WriteCocoSandboxSecretFileInput,
   WriteCocoWorkspaceFileInput,
   searchCocoWorkspaceEntries,
 } from './cocoSandboxService';
@@ -555,6 +557,53 @@ export class E2BCocoSandboxService implements CocoSandboxService {
     };
   }
 
+  async writeSecretFile(handle: CocoSandboxHandle, input: WriteCocoSandboxSecretFileInput): Promise<void> {
+    const connected = await this.driver.connect(handle.id);
+    if (!connected.files?.write) {
+      throw new Error('E2B sandbox driver handle does not support secret file writes');
+    }
+    const secretPath = normalizeSecretFilePath(input.path);
+    await this.ensureSecretDirectory(connected, secretPath);
+    const content = input.encoding === 'base64'
+      ? Buffer.from(input.content, 'base64')
+      : input.content;
+    await connected.files.write(secretPath, content);
+    await this.chmodSecretFile(connected, secretPath);
+  }
+
+  async readSecretFile(
+    handle: CocoSandboxHandle,
+    filePath: string,
+    options: ReadCocoSandboxSecretFileOptions = {}
+  ): Promise<string> {
+    const connected = await this.driver.connect(handle.id);
+    if (!connected.files?.read) {
+      throw new Error('E2B sandbox driver handle does not support secret file reads');
+    }
+    const secretPath = normalizeSecretFilePath(filePath);
+    const maxBytes = options.maxBytes ?? 1024 * 1024;
+    const { buffer, truncated, byteSize } = await readWorkspaceFileBytes(connected.files.read, secretPath, maxBytes);
+    if (truncated || byteSize > maxBytes) {
+      throw new Error(`Secret file is too large: ${secretPath}`);
+    }
+    const content = decodeUtf8(buffer);
+    if (content === null) {
+      throw new Error(`Secret file is not valid UTF-8: ${secretPath}`);
+    }
+    return content;
+  }
+
+  async deleteSecretFile(handle: CocoSandboxHandle, filePath: string): Promise<void> {
+    const connected = await this.driver.connect(handle.id);
+    if (!connected.files?.remove) {
+      return;
+    }
+    const secretPath = normalizeSecretFilePath(filePath);
+    await connected.files.remove(secretPath).catch(error => {
+      this.options.logger?.warn('Unable to delete E2B secret file', { error, sandboxId: handle.id, path: secretPath });
+    });
+  }
+
   async createWorkspaceDirectory(handle: CocoSandboxHandle, workspacePath: string): Promise<CocoWorkspaceEntry> {
     const connected = await this.driver.connect(handle.id);
     if (!connected.files?.makeDir) {
@@ -708,6 +757,36 @@ export class E2BCocoSandboxService implements CocoSandboxService {
     await handle.kill();
   }
 
+  private async ensureSecretDirectory(connected: E2BSandboxDriverHandle, filePath: string): Promise<void> {
+    const directory = filePath.slice(0, filePath.lastIndexOf('/')) || CODEX_SECRET_ROOT;
+    if (connected.commands?.run) {
+      const result = await connected.commands.run([
+        'set -eu',
+        `mkdir -p ${shellQuote(directory)}`,
+        `chmod 700 ${shellQuote(CODEX_SECRET_ROOT)} ${shellQuote(directory)}`,
+      ].join('\n'), { timeoutMs: 10_000 });
+      const completed = await result.completed;
+      if (completed && completed.exitCode !== 0) {
+        throw new Error(`E2B secret directory setup failed with exit code ${completed.exitCode}`);
+      }
+      return;
+    }
+    if (connected.files?.makeDir) {
+      await connected.files.makeDir(directory);
+    }
+  }
+
+  private async chmodSecretFile(connected: E2BSandboxDriverHandle, filePath: string): Promise<void> {
+    if (!connected.commands?.run) {
+      return;
+    }
+    const result = await connected.commands.run(`chmod 600 ${shellQuote(filePath)}`, { timeoutMs: 10_000 });
+    const completed = await result.completed;
+    if (completed && completed.exitCode !== 0) {
+      throw new Error(`E2B secret file chmod failed with exit code ${completed.exitCode}`);
+    }
+  }
+
   async countActiveSandboxes(): Promise<number | undefined> {
     const sandboxes = await this.listActiveSandboxes();
     return sandboxes?.length;
@@ -743,6 +822,20 @@ const portHostTemplateEnv = (handle: E2BSandboxDriverHandle): Record<string, str
   return {
     ROOMTALK_E2B_PORT_HOST_TEMPLATE: host.replace(String(placeholderPort), '{port}'),
   };
+};
+
+const CODEX_SECRET_ROOT = '/tmp/roomtalk-codex';
+
+const normalizeSecretFilePath = (value: string): string => {
+  const normalized = value.trim().replace(/\\/g, '/').replace(/\/+/g, '/');
+  if (!normalized.startsWith(`${CODEX_SECRET_ROOT}/`)) {
+    throw new Error(`Secret file path must stay under ${CODEX_SECRET_ROOT}`);
+  }
+  const parts = normalized.slice(CODEX_SECRET_ROOT.length + 1).split('/').filter(Boolean);
+  if (parts.length === 0 || parts.some(part => part === '.' || part === '..')) {
+    throw new Error('Secret file path is invalid');
+  }
+  return `${CODEX_SECRET_ROOT}/${parts.join('/')}`;
 };
 
 const normalizePreviewPortPath = (value: string | undefined): string => {

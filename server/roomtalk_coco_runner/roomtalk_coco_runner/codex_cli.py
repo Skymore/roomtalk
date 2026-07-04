@@ -1,0 +1,483 @@
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Iterable, TextIO
+
+from .runner import (
+    EventEmitter,
+    RunnerError,
+    RunnerRequest,
+    parse_request,
+    validate_workspace_path,
+)
+
+SCHEMA_VERSION = 1
+DEFAULT_CODEX_CLI_BIN = "codex"
+DEFAULT_CODEX_SECRET_PARENT = "/tmp/roomtalk-codex"
+DEFAULT_CODEX_TIMEOUT_MS = 120_000
+MAX_STDERR_TAIL_CHARS = 4_000
+
+
+@dataclass
+class CodexCliRunConfig:
+    cli_bin: str = DEFAULT_CODEX_CLI_BIN
+    secret_parent: Path = Path(DEFAULT_CODEX_SECRET_PARENT)
+    auth_json_path: Path | None = None
+    refreshed_auth_json_path: Path | None = None
+    timeout_ms: int = DEFAULT_CODEX_TIMEOUT_MS
+    keep_codex_home: bool = False
+
+
+@dataclass
+class CodexCliEventMapper:
+    turn_id: str
+    message_id: str
+    workspace: Path
+    fallback_session_id: str | None = None
+    session_id: str | None = None
+    usage: dict[str, Any] | None = None
+    ignored_item_types: dict[str, int] = field(default_factory=dict)
+
+    def map_event(self, event: dict[str, Any]) -> list[dict[str, Any]]:
+        event_type = event.get("type")
+        if event_type == "thread.started":
+            thread_id = event.get("thread_id")
+            if isinstance(thread_id, str) and thread_id:
+                self.session_id = thread_id
+            return [self._status("starting", "codex thread started")]
+
+        if event_type == "turn.started":
+            return [self._status("running", "codex turn started")]
+
+        if event_type == "turn.completed":
+            self.usage = _to_runner_usage(event.get("usage")) or self.usage
+            return [self._status("complete", "codex turn completed")]
+
+        if event_type in ("turn.failed", "error"):
+            message = event.get("message") or event.get("error") or "Codex CLI turn failed"
+            return [{
+                "schemaVersion": SCHEMA_VERSION,
+                "type": "error",
+                "turnId": self.turn_id,
+                "message": str(message),
+                "code": "codex_cli_error",
+                "retryable": False,
+            }]
+
+        item = event.get("item")
+        if not isinstance(item, dict):
+            return []
+
+        item_type = item.get("type")
+        item_id = str(item.get("id") or "")
+        if item_type == "agent_message" and event_type == "item.completed":
+            text = str(item.get("text") or "")
+            return [{
+                "schemaVersion": SCHEMA_VERSION,
+                "type": "text_delta",
+                "messageId": self.message_id,
+                "turnId": self.turn_id,
+                "delta": f"{_normalize_workspace_text(self.workspace, text)}\n\n",
+            }]
+
+        if item_type == "command_execution" and event_type == "item.started":
+            return [{
+                "schemaVersion": SCHEMA_VERSION,
+                "type": "tool_call",
+                "id": item_id,
+                "name": "shell",
+                "args": {"command": str(item.get("command") or "")},
+                "messageId": f"codex_tool_{item_id}",
+            }]
+
+        if item_type == "command_execution" and event_type == "item.completed":
+            exit_code = item.get("exit_code")
+            normalized_exit_code = exit_code if isinstance(exit_code, int) else None
+            event_payload: dict[str, Any] = {
+                "schemaVersion": SCHEMA_VERSION,
+                "type": "tool_result",
+                "id": item_id,
+                "name": "shell",
+                "success": item.get("status") == "completed" and (normalized_exit_code in (None, 0)),
+                "output": _normalize_workspace_text(self.workspace, str(item.get("aggregated_output") or "")),
+                "messageId": f"codex_tool_result_{item_id}",
+            }
+            if normalized_exit_code is not None:
+                event_payload["exitCode"] = normalized_exit_code
+            return [event_payload]
+
+        if item_type == "file_change" and event_type == "item.started":
+            changes = _normalize_changes(self.workspace, item.get("changes"))
+            return [{
+                "schemaVersion": SCHEMA_VERSION,
+                "type": "tool_call",
+                "id": item_id,
+                "name": "file_change",
+                "args": {"changes": changes},
+                "messageId": f"codex_tool_{item_id}",
+            }]
+
+        if item_type == "file_change" and event_type == "item.completed":
+            changes = _normalize_changes(self.workspace, item.get("changes"))
+            return [{
+                "schemaVersion": SCHEMA_VERSION,
+                "type": "tool_result",
+                "id": item_id,
+                "name": "file_change",
+                "success": item.get("status") == "completed",
+                "output": "\n".join(f"{change.get('kind')} {change.get('path')}" for change in changes),
+                "messageId": f"codex_tool_result_{item_id}",
+            }]
+
+        if event_type in ("item.started", "item.completed") and isinstance(item_type, str):
+            self.ignored_item_types[item_type] = self.ignored_item_types.get(item_type, 0) + 1
+        return []
+
+    def final_event(self, answer: str) -> dict[str, Any]:
+        event: dict[str, Any] = {
+            "schemaVersion": SCHEMA_VERSION,
+            "type": "final",
+            "messageId": self.message_id,
+            "turnId": self.turn_id,
+            "answer": _normalize_workspace_text(self.workspace, answer),
+            "sessionId": self.session_id or self.fallback_session_id or "codex-cli-session",
+        }
+        if self.usage:
+            event["usage"] = self.usage
+        return event
+
+    def _status(self, status: str, message: str) -> dict[str, Any]:
+        return {
+            "schemaVersion": SCHEMA_VERSION,
+            "type": "status",
+            "turnId": self.turn_id,
+            "status": status,
+            "message": message,
+        }
+
+
+def config_from_env(env: dict[str, str] | None = None) -> CodexCliRunConfig:
+    env = env or os.environ
+    auth_json_path = _path_from_env(env.get("ROOMTALK_CODEX_AUTH_JSON_PATH"))
+    refreshed_auth_json_path = _path_from_env(env.get("ROOMTALK_CODEX_REFRESHED_AUTH_JSON_PATH"))
+    return CodexCliRunConfig(
+        cli_bin=(env.get("CODEX_CLI_BIN") or DEFAULT_CODEX_CLI_BIN).strip() or DEFAULT_CODEX_CLI_BIN,
+        secret_parent=Path(env.get("ROOMTALK_CODEX_SECRET_PARENT") or DEFAULT_CODEX_SECRET_PARENT),
+        auth_json_path=auth_json_path,
+        refreshed_auth_json_path=refreshed_auth_json_path,
+        timeout_ms=_positive_int(env.get("ROOMTALK_CODEX_TIMEOUT_MS"), DEFAULT_CODEX_TIMEOUT_MS),
+        keep_codex_home=env.get("ROOMTALK_CODEX_KEEP_HOME") == "true",
+    )
+
+
+def run_request(
+    request: RunnerRequest,
+    *,
+    emitter: EventEmitter,
+    config: CodexCliRunConfig | None = None,
+    popen_factory: Callable[..., subprocess.Popen] = subprocess.Popen,
+    env: dict[str, str] | None = None,
+) -> None:
+    env = dict(env or os.environ)
+    config = config or config_from_env(env)
+    workspace = validate_workspace_path(request.workspace, env)
+    codex_home = _create_codex_home(config, request.turn_id)
+    last_message_path = codex_home / "last-message.txt"
+    stderr_tail = _Tail(MAX_STDERR_TAIL_CHARS)
+
+    emitter.emit({
+        "type": "status",
+        "turnId": request.turn_id,
+        "status": "starting",
+        "message": "codex_cli starting",
+    })
+
+    try:
+        _write_codex_config(codex_home)
+        _restore_auth_json(config, codex_home)
+
+        process = popen_factory(
+            [
+                config.cli_bin,
+                "exec",
+                "--json",
+                "--ephemeral",
+                "--sandbox",
+                "workspace-write",
+                "--cd",
+                str(workspace),
+                "--output-last-message",
+                str(last_message_path),
+                request.prompt,
+            ],
+            cwd=str(workspace),
+            env=_build_child_env(env, codex_home),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        stderr_thread = _start_stderr_tail_thread(process.stderr, stderr_tail)
+        mapper = CodexCliEventMapper(
+            turn_id=request.turn_id,
+            message_id=f"codex_{request.turn_id}",
+            workspace=workspace,
+            fallback_session_id=request.session_id,
+        )
+        timed_out = False
+
+        def kill_after_timeout() -> None:
+            nonlocal timed_out
+            timed_out = True
+            process.kill()
+
+        timeout = threading.Timer(config.timeout_ms / 1000, kill_after_timeout)
+        timeout.daemon = True
+        timeout.start()
+
+        try:
+            _consume_codex_stdout(process.stdout, mapper, emitter)
+            exit_code = process.wait()
+        finally:
+            timeout.cancel()
+            stderr_thread.join(timeout=1)
+
+        if timed_out:
+            raise RunnerError(
+                f"Codex CLI timed out after {config.timeout_ms}ms",
+                code="codex_timeout",
+                turn_id=request.turn_id,
+            )
+
+        refreshed_auth = codex_home / "auth.json"
+        if refreshed_auth.exists() and config.refreshed_auth_json_path:
+            _write_private_file(config.refreshed_auth_json_path, refreshed_auth.read_text(encoding="utf-8"))
+
+        if exit_code != 0:
+            tail = stderr_tail.value()
+            message = f"Codex CLI exited with code {exit_code}"
+            if tail:
+                message = f"{message}: {tail}"
+            raise RunnerError(message, code="codex_exit", turn_id=request.turn_id)
+
+        if not last_message_path.exists():
+            raise RunnerError("Codex CLI exited without a final answer file", code="codex_missing_final", turn_id=request.turn_id)
+
+        emitter.emit(mapper.final_event(last_message_path.read_text(encoding="utf-8")))
+    finally:
+        if not config.keep_codex_home:
+            shutil.rmtree(codex_home, ignore_errors=True)
+
+
+def main(stdin: TextIO | None = None, stdout: TextIO | None = None) -> int:
+    stdin = stdin or sys.stdin
+    stdout = stdout or sys.stdout
+    line = stdin.readline()
+    request: RunnerRequest | None = None
+    if not line:
+        _emit_error(stdout, RunnerError("No runner request received", code="missing_request"))
+        return 1
+    try:
+        request = parse_request(line)
+        run_request(request, emitter=EventEmitter(stdout))
+        return 0
+    except Exception as exc:
+        turn_id = request.turn_id if request else None
+        if isinstance(exc, RunnerError):
+            turn_id = exc.turn_id or turn_id
+        _emit_error(stdout, exc, turn_id=turn_id)
+        return 1
+
+
+def _consume_codex_stdout(stream: Any, mapper: CodexCliEventMapper, emitter: EventEmitter) -> None:
+    if stream is None:
+        raise RunnerError("Codex CLI did not expose stdout", code="codex_process_error", turn_id=mapper.turn_id)
+    for line_number, line in enumerate(stream, start=1):
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise RunnerError(
+                f"Invalid Codex exec JSONL at line {line_number}: {exc.msg}",
+                code="codex_protocol_error",
+                turn_id=mapper.turn_id,
+            ) from exc
+        if not isinstance(event, dict) or not isinstance(event.get("type"), str):
+            raise RunnerError(
+                f"Invalid Codex exec JSONL at line {line_number}: event must include a type",
+                code="codex_protocol_error",
+                turn_id=mapper.turn_id,
+            )
+        for mapped in mapper.map_event(event):
+            emitter.emit(mapped)
+
+
+def _create_codex_home(config: CodexCliRunConfig, turn_id: str) -> Path:
+    parent = config.secret_parent
+    parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix=f"codex-{turn_id}-", dir=str(parent)))
+
+
+def _restore_auth_json(config: CodexCliRunConfig, codex_home: Path) -> None:
+    if not config.auth_json_path:
+        raise RunnerError("codex_cli requires ROOMTALK_CODEX_AUTH_JSON_PATH", code="codex_missing_auth")
+    auth_json = config.auth_json_path.read_text(encoding="utf-8")
+    _write_private_file(codex_home / "auth.json", auth_json)
+
+
+def _write_codex_config(codex_home: Path) -> None:
+    _write_private_file(codex_home / "config.toml", "\n".join([
+        'cli_auth_credentials_store = "file"',
+        'sandbox_mode = "workspace-write"',
+        "",
+        "[shell_environment_policy]",
+        'inherit = "core"',
+        "ignore_default_excludes = false",
+        'exclude = ["CODEX_HOME", "CODEX_ACCESS_TOKEN", "CODEX_API_KEY", "OPENAI_API_KEY", "*_TOKEN", "*_SECRET", "*_KEY"]',
+        "",
+    ]))
+
+
+def _write_private_file(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    path.write_text(value, encoding="utf-8")
+    path.chmod(0o600)
+
+
+def _build_child_env(env: dict[str, str], codex_home: Path) -> dict[str, str]:
+    child_env: dict[str, str] = {}
+    for key, value in env.items():
+        upper = key.upper()
+        if upper in {"CODEX_HOME", "CODEX_ACCESS_TOKEN", "CODEX_API_KEY", "OPENAI_API_KEY"}:
+            continue
+        if upper.endswith("_TOKEN") or upper.endswith("_SECRET") or upper.endswith("_KEY"):
+            continue
+        if upper.startswith("ROOMTALK_CODEX_"):
+            continue
+        child_env[key] = value
+    child_env["CODEX_HOME"] = str(codex_home)
+    return child_env
+
+
+def _start_stderr_tail_thread(stream: Any, tail: "_Tail") -> threading.Thread:
+    def consume() -> None:
+        if stream is None:
+            return
+        for chunk in stream:
+            tail.push(str(chunk))
+
+    thread = threading.Thread(target=consume, daemon=True)
+    thread.start()
+    return thread
+
+
+class _Tail:
+    def __init__(self, max_chars: int):
+        self.max_chars = max_chars
+        self._value = ""
+
+    def push(self, value: str) -> None:
+        self._value = f"{self._value}{value}"[-self.max_chars:]
+
+    def value(self) -> str:
+        return self._value.strip()
+
+
+def _to_runner_usage(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    prompt_tokens = value.get("input_tokens")
+    completion_tokens = value.get("output_tokens")
+    if not isinstance(prompt_tokens, int) or not isinstance(completion_tokens, int):
+        return None
+    total_tokens = value.get("total_tokens")
+    result: dict[str, Any] = {
+        "promptTokens": prompt_tokens,
+        "completionTokens": completion_tokens,
+        "totalTokens": total_tokens if isinstance(total_tokens, int) else prompt_tokens + completion_tokens,
+        "source": "reported",
+    }
+    cached = value.get("cached_input_tokens")
+    if isinstance(cached, int):
+        result["cachedPromptTokens"] = cached
+        result["cacheHitRate"] = cached / prompt_tokens if prompt_tokens > 0 else 0
+    return result
+
+
+def _normalize_changes(workspace: Path, value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    changes = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        change = dict(item)
+        path_value = change.get("path")
+        if isinstance(path_value, str):
+            change["path"] = _normalize_workspace_path(workspace, path_value)
+        changes.append(change)
+    return changes
+
+
+def _normalize_workspace_path(workspace: Path, value: str) -> str:
+    path = Path(value)
+    if not path.is_absolute():
+        return value
+    try:
+        return str(path.relative_to(workspace))
+    except ValueError:
+        return value
+
+
+def _normalize_workspace_text(workspace: Path, value: str) -> str:
+    prefix = str(workspace).rstrip("/") + "/"
+    return value.replace(prefix, "")
+
+
+def _path_from_env(value: str | None) -> Path | None:
+    if not value or not value.strip():
+        return None
+    path = Path(value.strip())
+    if not path.is_absolute():
+        raise RunnerError("Codex auth paths must be absolute", code="invalid_codex_auth_path")
+    return path
+
+
+def _positive_int(value: str | None, fallback: int) -> int:
+    if not value or not value.strip():
+        return fallback
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise RunnerError("ROOMTALK_CODEX_TIMEOUT_MS must be a positive integer", code="invalid_codex_timeout") from exc
+    if parsed <= 0:
+        raise RunnerError("ROOMTALK_CODEX_TIMEOUT_MS must be a positive integer", code="invalid_codex_timeout")
+    return parsed
+
+
+def _emit_error(stream: TextIO, error: Exception, turn_id: str | None = None) -> None:
+    runner_error = error if isinstance(error, RunnerError) else RunnerError(str(error), turn_id=turn_id)
+    event: dict[str, Any] = {
+        "type": "error",
+        "message": str(runner_error),
+        "code": runner_error.code,
+        "retryable": False,
+    }
+    event_turn_id = runner_error.turn_id or turn_id
+    if event_turn_id:
+        event["turnId"] = event_turn_id
+    EventEmitter(stream).emit(event)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

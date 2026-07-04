@@ -26,6 +26,9 @@ import { VerifyGoogleCredentialResult, resolveGoogleClientIds, verifyGoogleCrede
 import { getStickerCatalog } from '../stickers/catalog';
 import { CocoAccessControl, createCocoAccessControl } from '../services/cocoAccessControl';
 import { CocoRunnerMode } from '../services/cocoRunnerProtocol';
+import { CodexConnectionService } from '../services/codexConnection';
+import { CodexDeviceAuthSessionManager } from '../services/codexDeviceAuthSession';
+import { registerCodexConnectionRoutes } from './codexConnectionRoutes';
 
 interface ApiRouteOptions {
   store: RoomStore;
@@ -43,6 +46,11 @@ interface ApiRouteOptions {
   cocoMode?: CocoRunnerMode;
   cocoAvailableModes?: CocoRunnerMode[];
   cocoDefaultMode?: CocoRunnerMode;
+  codexConnections?: {
+    enabled: boolean;
+    service?: CodexConnectionService;
+    deviceAuthSessions?: CodexDeviceAuthSessionManager;
+  };
   mediaUploadCleanup?: {
     disabled?: boolean;
     pendingUploadTtlMs?: number;
@@ -298,6 +306,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   const sweepBatchSize = mediaUploadCleanup.sweepBatchSize ?? MEDIA_PENDING_UPLOAD_SWEEP_BATCH_SIZE;
   const googleClientIds = options.googleClientIds ?? resolveGoogleClientIds();
   const verifyGoogleCredentialFn = options.verifyGoogleCredential ?? verifyGoogleCredential;
+  const codexConnections = options.codexConnections || { enabled: false };
 
   // AI role drafts are a global per-client feature, not room-gated. Abuse (burning
   // OpenRouter credits) is bounded purely by source IP — keyed by IP so rotating the
@@ -490,6 +499,16 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
         runningAudioTranscriptionJobs.delete(record.assetId);
       });
   };
+
+  registerCodexConnectionRoutes(app, {
+    enabled: codexConnections.enabled,
+    service: codexConnections.service,
+    deviceAuthSessions: codexConnections.deviceAuthSessions,
+    routeLogger,
+    getQueryClientId,
+    getBodyClientId,
+    authorizeClientRequest,
+  });
 
   const resolveAudioMessageForTranscription = async (req: Request, res: Response, input: {
     roomId: string;
@@ -1308,6 +1327,11 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
         availableModes: cocoAvailableModes,
         defaultMode: cocoDefaultMode,
       },
+      codex: {
+        connections: {
+          enabled: codexConnections.enabled,
+        },
+      },
     });
   });
 
@@ -1452,6 +1476,11 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
             mode: cocoMode,
             availableModes: cocoAvailableModes,
             defaultMode: cocoDefaultMode,
+          },
+          codex: {
+            connections: {
+              enabled: codexConnections.enabled,
+            },
           },
         },
         rooms: roomCount,

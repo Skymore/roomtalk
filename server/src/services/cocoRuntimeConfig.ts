@@ -40,6 +40,7 @@ export interface CocoRuntimeConfig {
 }
 
 export const DEFAULT_COCO_RUNNER_COMMAND = 'python -m roomtalk_coco_runner';
+export const DEFAULT_CODEX_CLI_RUNNER_COMMAND = 'python -m roomtalk_coco_runner.codex_cli';
 export const DEFAULT_COCO_RUNNER_PYTHONPATH = '/opt/coco/src:/opt/roomtalk_coco_runner';
 export const DEFAULT_COCO_WORKSPACE_ROOT = '/workspace';
 export const DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS = 5 * 60 * 1000;
@@ -82,7 +83,10 @@ const readCodeAgentBackend = (env: NodeJS.ProcessEnv): CodeAgentBackend => {
     return value;
   }
   if (value === 'codex') {
-    throw new Error('CODE_AGENT_BACKEND=codex is not implemented');
+    if (env.CODEX_CLI_BACKEND_ENABLED !== 'true') {
+      throw new Error('CODE_AGENT_BACKEND=codex requires CODEX_CLI_BACKEND_ENABLED=true');
+    }
+    return value;
   }
   throw new Error(`Unsupported CODE_AGENT_BACKEND: ${value}`);
 };
@@ -94,6 +98,10 @@ const readRunnerClient = (env: NodeJS.ProcessEnv): CocoRunnerClientKind => {
   }
   throw new Error(`Unsupported COCO_RUNNER_CLIENT: ${value}`);
 };
+
+const defaultRunnerCommandForBackend = (backend: CodeAgentBackend) => (
+  backend === 'codex' ? DEFAULT_CODEX_CLI_RUNNER_COMMAND : DEFAULT_COCO_RUNNER_COMMAND
+);
 
 const readArtifactMode = (env: NodeJS.ProcessEnv): CocoArtifactMode => {
   const value = (env.COCO_ARTIFACT_MODE || 'production').toLowerCase();
@@ -410,7 +418,7 @@ export const resolveCocoRuntimeConfig = (env: NodeJS.ProcessEnv): CocoRuntimeCon
     availableModes,
     defaultMode,
     modelGateway,
-    runnerCommand: env.COCO_RUNNER_COMMAND || DEFAULT_COCO_RUNNER_COMMAND,
+    runnerCommand: env.COCO_RUNNER_COMMAND || defaultRunnerCommandForBackend(backend),
     allowedPaths: parseCsvEnv(env.COCO_ALLOWED_PATHS || '.'),
     runnerEnv: {
       ...baseRunnerEnv(env, sandboxProvider, runnerClient),

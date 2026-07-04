@@ -50,6 +50,29 @@ describe('FakeCocoSandboxService', () => {
     await assert.rejects(() => service.startRunner({ handle, command: 'python -m roomtalk_coco_runner' }), /startRunner failed/);
   });
 
+  it('stores sandbox secret files outside the fake workspace and enforces the secret root', async () => {
+    const service = new FakeCocoSandboxService();
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+
+    await service.writeSecretFile(handle, {
+      path: '/tmp/roomtalk-codex/turn-1-auth.json',
+      content: '{"token":"secret"}',
+    });
+
+    assert.equal(await service.readSecretFile(handle, '/tmp/roomtalk-codex/turn-1-auth.json'), '{"token":"secret"}');
+    await assert.rejects(
+      () => service.writeSecretFile(handle, { path: '/workspace/auth.json', content: 'secret' }),
+      /secret file path must stay under/
+    );
+
+    await service.deleteSecretFile(handle, '/tmp/roomtalk-codex/turn-1-auth.json');
+    assert.deepEqual(service.deletedSecretFilePaths, ['/tmp/roomtalk-codex/turn-1-auth.json']);
+    await assert.rejects(
+      () => service.readSecretFile(handle, '/tmp/roomtalk-codex/turn-1-auth.json'),
+      /secret file not found/
+    );
+  });
+
   it('lists configured workspace refs with T3-style filtering', async () => {
     const service = new FakeCocoSandboxService();
     const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });

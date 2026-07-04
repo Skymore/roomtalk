@@ -77,6 +77,16 @@ export interface WriteCocoWorkspaceFileInput {
   encoding?: 'utf-8' | 'base64';
 }
 
+export interface WriteCocoSandboxSecretFileInput {
+  path: string;
+  content: string;
+  encoding?: 'utf-8' | 'base64';
+}
+
+export interface ReadCocoSandboxSecretFileOptions {
+  maxBytes?: number;
+}
+
 export interface RenameCocoWorkspaceEntryInput {
   fromPath: string;
   toPath: string;
@@ -181,6 +191,9 @@ export interface CocoSandboxService {
   resolveWorkspacePreviewTarget?(handle: CocoSandboxHandle, input: ResolveCocoWorkspacePreviewTargetInput): Promise<CocoWorkspacePreviewTargetResolution>;
   listWorkspacePreviewServers?(handle: CocoSandboxHandle): Promise<CocoWorkspacePreviewServer[]>;
   writeWorkspaceFile?(handle: CocoSandboxHandle, input: WriteCocoWorkspaceFileInput): Promise<CocoWorkspaceEntry>;
+  writeSecretFile?(handle: CocoSandboxHandle, input: WriteCocoSandboxSecretFileInput): Promise<void>;
+  readSecretFile?(handle: CocoSandboxHandle, path: string, options?: ReadCocoSandboxSecretFileOptions): Promise<string>;
+  deleteSecretFile?(handle: CocoSandboxHandle, path: string): Promise<void>;
   createWorkspaceDirectory?(handle: CocoSandboxHandle, path: string): Promise<CocoWorkspaceEntry>;
   renameWorkspaceEntry?(handle: CocoSandboxHandle, input: RenameCocoWorkspaceEntryInput): Promise<CocoWorkspaceEntry>;
   deleteWorkspaceEntry?(handle: CocoSandboxHandle, path: string): Promise<void>;

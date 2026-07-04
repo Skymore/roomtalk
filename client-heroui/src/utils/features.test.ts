@@ -9,6 +9,7 @@ describe('feature flags', () => {
   it('defaults Coco to disabled for fail-closed UI behavior', () => {
     expect(FALLBACK_FEATURE_FLAGS).toEqual({
       coco: { enabled: false, mode: 'plan', availableModes: ['plan'], defaultMode: 'plan', rollout: 'disabled' },
+      codex: { connections: { enabled: false } },
     });
   });
 
@@ -23,6 +24,11 @@ describe('feature flags', () => {
           defaultMode: 'plan',
           rollout: 'allowlist',
         },
+        codex: {
+          connections: {
+            enabled: true,
+          },
+        },
       }),
     })));
 
@@ -34,6 +40,11 @@ describe('feature flags', () => {
         defaultMode: 'plan',
         rollout: 'allowlist',
         reason: undefined,
+      },
+      codex: {
+        connections: {
+          enabled: true,
+        },
       },
     });
     expect(fetch).toHaveBeenCalledWith('/api/features?clientId=client-1');
@@ -47,6 +58,7 @@ describe('feature flags', () => {
 
     await expect(fetchFeatureFlags('client-1')).resolves.toMatchObject({
       coco: { enabled: true, mode: 'plan', availableModes: ['plan'], defaultMode: 'plan' },
+      codex: { connections: { enabled: false } },
     });
   });
 

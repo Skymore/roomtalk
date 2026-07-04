@@ -16,10 +16,12 @@ import {
   ListCocoWorkspaceEntriesOptions,
   RenameCocoWorkspaceEntryInput,
   ReadCocoWorkspaceAssetOptions,
+  ReadCocoSandboxSecretFileOptions,
   ReadCocoWorkspaceDiffOptions,
   ReadCocoWorkspaceFileOptions,
   SearchCocoWorkspaceEntriesOptions,
   StartCocoRunnerInput,
+  WriteCocoSandboxSecretFileInput,
   WriteCocoWorkspaceFileInput,
   searchCocoWorkspaceEntries,
 } from './cocoSandboxService';
@@ -34,9 +36,11 @@ export class FakeCocoSandboxService implements CocoSandboxService {
   readonly startedRunnerCommands: string[] = [];
   readonly startedRunnerEnvs: Record<string, string>[] = [];
   readonly stoppedRunnerCommands: string[] = [];
+  readonly deletedSecretFilePaths: string[] = [];
   private readonly workspaceEntriesBySandboxId = new Map<string, CocoWorkspaceEntry[]>();
   private readonly workspaceFileContentsBySandboxId = new Map<string, Map<string, string>>();
   private readonly workspaceFileBytesBySandboxId = new Map<string, Map<string, Buffer>>();
+  private readonly secretFileContentsBySandboxId = new Map<string, Map<string, Buffer>>();
   private readonly workspaceChangesBySandboxId = new Map<string, CocoWorkspaceChanges>();
   private readonly workspaceDiffBySandboxId = new Map<string, string>();
   private readonly workspacePreviewServersBySandboxId = new Map<string, CocoWorkspacePreviewServer[]>();
@@ -327,6 +331,48 @@ export class FakeCocoSandboxService implements CocoSandboxService {
     return entry;
   }
 
+  async writeSecretFile(handle: CocoSandboxHandle, input: WriteCocoSandboxSecretFileInput): Promise<void> {
+    this.consumeFailure('connect');
+    if (!this.sandboxes.has(handle.id)) {
+      throw new Error(`Fake Coco sandbox not found: ${handle.id}`);
+    }
+    const secretPath = normalizeFakeSecretPath(input.path);
+    const files = this.secretFileContentsBySandboxId.get(handle.id) || new Map<string, Buffer>();
+    files.set(secretPath, input.encoding === 'base64' ? Buffer.from(input.content, 'base64') : Buffer.from(input.content, 'utf8'));
+    this.secretFileContentsBySandboxId.set(handle.id, files);
+  }
+
+  async readSecretFile(
+    handle: CocoSandboxHandle,
+    filePath: string,
+    options: ReadCocoSandboxSecretFileOptions = {}
+  ): Promise<string> {
+    this.consumeFailure('connect');
+    if (!this.sandboxes.has(handle.id)) {
+      throw new Error(`Fake Coco sandbox not found: ${handle.id}`);
+    }
+    const secretPath = normalizeFakeSecretPath(filePath);
+    const content = this.secretFileContentsBySandboxId.get(handle.id)?.get(secretPath);
+    if (!content) {
+      throw new Error(`Fake Coco secret file not found: ${secretPath}`);
+    }
+    const maxBytes = options.maxBytes ?? 1024 * 1024;
+    if (content.byteLength > maxBytes) {
+      throw new Error(`Fake Coco secret file is too large: ${secretPath}`);
+    }
+    return content.toString('utf8');
+  }
+
+  async deleteSecretFile(handle: CocoSandboxHandle, filePath: string): Promise<void> {
+    this.consumeFailure('connect');
+    if (!this.sandboxes.has(handle.id)) {
+      throw new Error(`Fake Coco sandbox not found: ${handle.id}`);
+    }
+    const secretPath = normalizeFakeSecretPath(filePath);
+    this.deletedSecretFilePaths.push(secretPath);
+    this.secretFileContentsBySandboxId.get(handle.id)?.delete(secretPath);
+  }
+
   async createWorkspaceDirectory(handle: CocoSandboxHandle, path: string): Promise<CocoWorkspaceEntry> {
     this.consumeFailure('connect');
     if (!this.sandboxes.has(handle.id)) {
@@ -430,6 +476,7 @@ export class FakeCocoSandboxService implements CocoSandboxService {
     this.workspaceEntriesBySandboxId.delete(sandboxId);
     this.workspaceFileContentsBySandboxId.delete(sandboxId);
     this.workspaceFileBytesBySandboxId.delete(sandboxId);
+    this.secretFileContentsBySandboxId.delete(sandboxId);
     this.workspaceChangesBySandboxId.delete(sandboxId);
     this.workspaceDiffBySandboxId.delete(sandboxId);
     this.workspacePreviewServersBySandboxId.delete(sandboxId);
@@ -464,6 +511,18 @@ const normalizeFakeWorkspacePath = (value: string): string => {
   const normalized = value.trim().replace(/\\/g, '/').replace(/^\/+/, '');
   const parts = normalized.split('/').filter(part => part && part !== '.' && part !== '..');
   return parts.join('/');
+};
+
+const normalizeFakeSecretPath = (value: string): string => {
+  const normalized = value.trim().replace(/\\/g, '/').replace(/\/+/g, '/');
+  if (!normalized.startsWith('/tmp/roomtalk-codex/')) {
+    throw new Error('Fake Coco secret file path must stay under /tmp/roomtalk-codex');
+  }
+  const parts = normalized.slice('/tmp/roomtalk-codex/'.length).split('/').filter(Boolean);
+  if (parts.length === 0 || parts.some(part => part === '.' || part === '..')) {
+    throw new Error('Fake Coco secret file path is invalid');
+  }
+  return `/tmp/roomtalk-codex/${parts.join('/')}`;
 };
 
 const compareFakeWorkspaceEntries = (a: CocoWorkspaceEntry, b: CocoWorkspaceEntry) => {

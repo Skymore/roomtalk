@@ -15,6 +15,7 @@
     "build": "npm run check:i18n && tsc && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "test:e2e": "playwright test",
+    "test:e2e:codex": "E2E_SERVER_PORT=${E2E_SERVER_PORT:-3332} E2E_CLIENT_PORT=${E2E_CLIENT_PORT:-3331} playwright test --config=playwright.codex.config.ts",
     "test:e2e:postgres": "E2E_SERVER_PORT=${E2E_SERVER_PORT:-3322} E2E_CLIENT_PORT=${E2E_CLIENT_PORT:-3321} playwright test --config=playwright.postgres.config.ts",
     "test:e2e:headed": "playwright test --headed",
     "preview": "vite preview"

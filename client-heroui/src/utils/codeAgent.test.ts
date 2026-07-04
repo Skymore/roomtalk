@@ -50,6 +50,11 @@ describe('codeAgent room adapters', () => {
         availableModes: ['plan', 'acceptEdits'],
         defaultMode: 'plan',
       },
+      codex: {
+        connections: {
+          enabled: false,
+        },
+      },
     };
     expect(getCodeAgentMode(editCapableFlags)).toBe('acceptEdits');
     expect(getCodeAgentAvailableModes(editCapableFlags)).toEqual(['plan', 'acceptEdits']);

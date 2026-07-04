@@ -355,6 +355,40 @@ export const POSTGRES_SCHEMA_SQL = [
     ON client_auth_tokens (client_id)`,
   `CREATE INDEX IF NOT EXISTS idx_client_auth_tokens_account_id
     ON client_auth_tokens (account_id)`,
+  `CREATE TABLE IF NOT EXISTS codex_connections (
+    client_id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL DEFAULT 'codex' CHECK (provider = 'codex'),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'connected', 'reauth_required', 'disconnected')),
+    encrypted_auth_json JSONB,
+    auth_version INTEGER NOT NULL DEFAULT 0,
+    key_version TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    last_validated_at TIMESTAMPTZ,
+    last_used_at TIMESTAMPTZ,
+    active_run_id TEXT,
+    locked_until TIMESTAMPTZ,
+    last_error TEXT
+  )`,
+  `ALTER TABLE codex_connections ADD COLUMN IF NOT EXISTS encrypted_auth_json JSONB`,
+  `ALTER TABLE codex_connections ADD COLUMN IF NOT EXISTS auth_version INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE codex_connections ADD COLUMN IF NOT EXISTS key_version TEXT NOT NULL DEFAULT 'v1'`,
+  `ALTER TABLE codex_connections ADD COLUMN IF NOT EXISTS last_validated_at TIMESTAMPTZ`,
+  `ALTER TABLE codex_connections ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ`,
+  `ALTER TABLE codex_connections ADD COLUMN IF NOT EXISTS active_run_id TEXT`,
+  `ALTER TABLE codex_connections ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ`,
+  `ALTER TABLE codex_connections ADD COLUMN IF NOT EXISTS last_error TEXT`,
+  `ALTER TABLE codex_connections DROP CONSTRAINT IF EXISTS codex_connections_provider_check`,
+  `ALTER TABLE codex_connections ADD CONSTRAINT codex_connections_provider_check
+    CHECK (provider = 'codex')`,
+  `ALTER TABLE codex_connections DROP CONSTRAINT IF EXISTS codex_connections_status_check`,
+  `ALTER TABLE codex_connections ADD CONSTRAINT codex_connections_status_check
+    CHECK (status IN ('pending', 'connected', 'reauth_required', 'disconnected'))`,
+  `CREATE INDEX IF NOT EXISTS idx_codex_connections_status_updated
+    ON codex_connections (status, updated_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_codex_connections_locked_until
+    ON codex_connections (locked_until)
+    WHERE locked_until IS NOT NULL`,
 ];
 
 // One-time data migrations, applied at most once and recorded in the

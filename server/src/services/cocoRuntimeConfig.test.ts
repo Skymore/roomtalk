@@ -4,6 +4,7 @@ import {
   DEFAULT_COCO_E2B_KILL_TIMEOUT_MS,
   DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS,
   DEFAULT_COCO_RUNNER_COMMAND,
+  DEFAULT_CODEX_CLI_RUNNER_COMMAND,
   DEFAULT_COCO_RUNNER_PYTHONPATH,
   DEFAULT_COCO_WORKSPACE_ROOT,
   resolveCocoRuntimeConfig,
@@ -54,7 +55,23 @@ describe('resolveCocoRuntimeConfig', () => {
 
   it('accepts only implemented code-agent backends', () => {
     assert.equal(resolveCocoRuntimeConfig({ CODE_AGENT_BACKEND: 'coco' }).backend, 'coco');
-    assert.throws(() => resolveCocoRuntimeConfig({ CODE_AGENT_BACKEND: 'codex' }), /CODE_AGENT_BACKEND=codex is not implemented/);
+    assert.throws(
+      () => resolveCocoRuntimeConfig({ CODE_AGENT_BACKEND: 'codex' }),
+      /CODE_AGENT_BACKEND=codex requires CODEX_CLI_BACKEND_ENABLED=true/
+    );
+    assert.equal(resolveCocoRuntimeConfig({
+      CODE_AGENT_BACKEND: 'codex',
+      CODEX_CLI_BACKEND_ENABLED: 'true',
+    }).backend, 'codex');
+    assert.equal(resolveCocoRuntimeConfig({
+      CODE_AGENT_BACKEND: 'codex',
+      CODEX_CLI_BACKEND_ENABLED: 'true',
+    }).runnerCommand, DEFAULT_CODEX_CLI_RUNNER_COMMAND);
+    assert.equal(resolveCocoRuntimeConfig({
+      CODE_AGENT_BACKEND: 'codex',
+      CODEX_CLI_BACKEND_ENABLED: 'true',
+      COCO_RUNNER_COMMAND: 'custom runner',
+    }).runnerCommand, 'custom runner');
     assert.throws(() => resolveCocoRuntimeConfig({ CODE_AGENT_BACKEND: 'unknown' }), /Unsupported CODE_AGENT_BACKEND: unknown/);
   });
 

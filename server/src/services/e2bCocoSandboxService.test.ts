@@ -190,6 +190,7 @@ class FakeE2BDriver implements E2BSandboxDriver {
         },
         write: async (path, data) => {
           this.fileWriteRequests.push({ path, data });
+          this.fileReadBodies.set(path, typeof data === 'string' ? Buffer.from(data, 'utf8') : Buffer.from(data));
           return {};
         },
         makeDir: async (path) => {
@@ -202,6 +203,7 @@ class FakeE2BDriver implements E2BSandboxDriver {
         },
         remove: async (path) => {
           this.fileRemoveRequests.push(path);
+          this.fileReadBodies.delete(path);
         },
       },
       kill: async () => {
@@ -332,6 +334,34 @@ describe('E2BCocoSandboxService', () => {
 
     await service.destroy(handle.id);
     assert.deepEqual(driver.killed, [handle.id]);
+  });
+
+  it('writes, reads, and deletes secret files under the Codex secret root only', async () => {
+    const driver = new FakeE2BDriver();
+    const service = new E2BCocoSandboxService(driver, { templateId: 'roomtalk-coco' });
+    const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+
+    await service.writeSecretFile(handle, {
+      path: '/tmp/roomtalk-codex/turn-1-auth.json',
+      content: '{"token":"secret"}',
+    });
+
+    assert.equal(await service.readSecretFile(handle, '/tmp/roomtalk-codex/turn-1-auth.json'), '{"token":"secret"}');
+    assert.deepEqual(driver.fileWriteRequests, [{ path: '/tmp/roomtalk-codex/turn-1-auth.json', data: '{"token":"secret"}' }]);
+    assert.equal(driver.commands.some(command => command.includes('mkdir -p') && command.includes('/tmp/roomtalk-codex')), true);
+    assert.equal(driver.commands.some(command => command.includes('chmod 600') && command.includes('/tmp/roomtalk-codex/turn-1-auth.json')), true);
+
+    await assert.rejects(
+      () => service.writeSecretFile(handle, { path: '/workspace/auth.json', content: 'secret' }),
+      /Secret file path must stay under/
+    );
+    await assert.rejects(
+      () => service.readSecretFile(handle, '/tmp/roomtalk-codex/../auth.json'),
+      /Secret file path/
+    );
+
+    await service.deleteSecretFile(handle, '/tmp/roomtalk-codex/turn-1-auth.json');
+    assert.equal(driver.fileRemoveRequests.includes('/tmp/roomtalk-codex/turn-1-auth.json'), true);
   });
 
   it('lists workspace preview servers from sandbox listening ports', async () => {

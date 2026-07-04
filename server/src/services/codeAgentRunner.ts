@@ -18,9 +18,14 @@ export interface CodeAgentRunner {
 }
 
 export class CocoCodeAgentRunner implements CodeAgentRunner {
-  readonly backend = 'coco' as const;
+  readonly backend: CodeAgentBackend;
 
-  constructor(private readonly client: CocoRunnerClient) {}
+  constructor(
+    private readonly client: CocoRunnerClient,
+    backend: CodeAgentBackend = 'coco'
+  ) {
+    this.backend = backend;
+  }
 
   run(
     request: CocoRunnerRunRequest,
@@ -31,15 +36,30 @@ export class CocoCodeAgentRunner implements CodeAgentRunner {
   }
 }
 
+export interface CodeAgentRunnerFactoryOptions {
+  /**
+   * Long-term escape hatch for a dedicated Codex runner. Route 1 uses the
+   * shared Coco JSONL runner client and swaps only the sandbox command.
+   */
+  codexRunner?: CodeAgentRunner;
+}
+
 export const createCodeAgentRunner = (
   backend: CodeAgentBackend,
-  cocoClient: CocoRunnerClient
+  cocoClient: CocoRunnerClient,
+  options: CodeAgentRunnerFactoryOptions = {}
 ): CodeAgentRunner => {
   switch (backend) {
     case 'coco':
       return new CocoCodeAgentRunner(cocoClient);
     case 'codex':
-      throw new Error(`Code-agent backend is not implemented: ${backend}`);
+      if (options.codexRunner) {
+        if (options.codexRunner.backend !== 'codex') {
+          throw new Error('Configured Codex runner must report backend=codex');
+        }
+        return options.codexRunner;
+      }
+      return new CocoCodeAgentRunner(cocoClient, 'codex');
     default: {
       const exhaustive: never = backend;
       throw new Error(`Unsupported code-agent backend: ${exhaustive}`);

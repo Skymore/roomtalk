@@ -983,6 +983,7 @@ export const MessagePage: React.FC = () => {
             setTheme={setTheme}
             i18n={i18n}
             changeLanguage={changeLanguage}
+            isCodexConnectionsEnabled={featureFlags.codex.connections.enabled}
           />
         );
       case "chat": {
