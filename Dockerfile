@@ -2,6 +2,15 @@ FROM node:24.18.0-alpine
 
 WORKDIR /app
 
+ARG CODEX_CLI_NPM_VERSION=0.142.5
+
+# Codex agent turns run inside the E2B sandbox template. The app host keeps a
+# small Codex CLI install only for the subscription device-auth handshake.
+RUN apk add --no-cache util-linux \
+  && npm install -g @openai/codex@${CODEX_CLI_NPM_VERSION} \
+  && test -x /usr/bin/script \
+  && codex --version
+
 # 复制前端和后端的 package.json
 COPY client-heroui/package*.json ./client-heroui/
 COPY server/package*.json ./server/
