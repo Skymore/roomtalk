@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import base64
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, TextIO
@@ -47,11 +48,25 @@ class CodexAppServerJsonRpcMapper:
     completed_agent_message_ids: set[str] = field(default_factory=set)
     streamed_agent_message_ids: set[str] = field(default_factory=set)
     command_tool_names: dict[str, str] = field(default_factory=dict)
+    command_output_parts: dict[str, list[str]] = field(default_factory=dict)
+    file_change_output_parts: dict[str, list[str]] = field(default_factory=dict)
     ignored_item_types: dict[str, int] = field(default_factory=dict)
+    usage: dict[str, Any] | None = None
 
     def map_notification(self, message: dict[str, Any]) -> list[dict[str, Any]]:
         method = str(message.get("method") or "")
         params = message.get("params") if isinstance(message.get("params"), dict) else {}
+
+        if method == "error":
+            error = params.get("error") if isinstance(params.get("error"), dict) else params
+            return [{
+                "schemaVersion": SCHEMA_VERSION,
+                "type": "error",
+                "turnId": self.turn_id,
+                "message": str(error.get("message") or params.get("message") or "Codex app-server error"),
+                "code": _codex_error_code(error),
+                "retryable": _codex_error_retryable(error),
+            }]
 
         if method == "thread/started":
             thread_id = _read_nested_string(params, "thread", "id") or _read_string(params, "threadId")
@@ -79,6 +94,37 @@ class CodexAppServerJsonRpcMapper:
                 }]
             return []
 
+        if method in ("item/commandExecution/outputDelta", "command/exec/outputDelta"):
+            item_id = _read_string(params, "itemId") or _read_string(params, "callId") or _read_string(params, "id") or ""
+            delta = str(params.get("delta") or "")
+            if item_id and delta:
+                self.command_output_parts.setdefault(item_id, []).append(_normalize_workspace_text(self.workspace, delta))
+            return []
+
+        if method == "item/fileChange/outputDelta":
+            item_id = _read_string(params, "itemId") or ""
+            delta = str(params.get("delta") or "")
+            if item_id and delta:
+                self.file_change_output_parts.setdefault(item_id, []).append(_normalize_workspace_text(self.workspace, delta))
+            return []
+
+        if method == "thread/tokenUsage/updated":
+            self.usage = _to_runner_usage(params.get("tokenUsage")) or self.usage
+            return []
+
+        if method == "item/plan/delta":
+            delta = str(params.get("delta") or "").strip()
+            if delta:
+                return [self._status("running", f"codex app-server plan: {delta[:200]}")]
+            return []
+
+        if method == "model/rerouted":
+            return [self._status("running", "codex app-server rerouted model")]
+
+        if method in ("warning", "guardianWarning", "deprecationNotice", "configWarning"):
+            message_text = str(params.get("message") or params.get("warning") or method)
+            return [self._status("running", message_text)]
+
         if method == "item/started":
             item = params.get("item")
             return self._map_item(item, completed=False) if isinstance(item, dict) else []
@@ -97,15 +143,15 @@ class CodexAppServerJsonRpcMapper:
                     "type": "error",
                     "turnId": self.turn_id,
                     "message": str(error.get("message") or "Codex app-server turn failed"),
-                    "code": "codex_app_server_error",
-                    "retryable": False,
+                    "code": _codex_error_code(error),
+                    "retryable": _codex_error_retryable(error),
                 }]
             return [self._status("complete", "codex app-server turn completed")]
 
         return []
 
     def final_event(self) -> dict[str, Any]:
-        return {
+        event: dict[str, Any] = {
             "schemaVersion": SCHEMA_VERSION,
             "type": "final",
             "messageId": self.message_id,
@@ -113,6 +159,9 @@ class CodexAppServerJsonRpcMapper:
             "answer": _normalize_workspace_text(self.workspace, "".join(self.answer_parts)),
             "sessionId": self.session_id or self.fallback_session_id or "codex-app-server-session",
         }
+        if self.usage:
+            event["usage"] = self.usage
+        return event
 
     def _map_item(self, item: dict[str, Any], *, completed: bool) -> list[dict[str, Any]]:
         item_type = str(item.get("type") or "")
@@ -152,13 +201,16 @@ class CodexAppServerJsonRpcMapper:
             command = str(item.get("command") or "")
             tool_name = _roomtalk_tool_name(command) or self.command_tool_names.get(item_id) or "shell"
             status = str(item.get("status") or "")
+            aggregated_output = str(item.get("aggregatedOutput") or "")
+            if not aggregated_output:
+                aggregated_output = "".join(self.command_output_parts.get(item_id, []))
             event: dict[str, Any] = {
                 "schemaVersion": SCHEMA_VERSION,
                 "type": "tool_result",
                 "id": item_id,
                 "name": tool_name,
                 "success": status == "completed" and (normalized_exit_code in (None, 0)),
-                "output": _normalize_workspace_text(self.workspace, str(item.get("aggregatedOutput") or "")),
+                "output": _normalize_workspace_text(self.workspace, aggregated_output),
                 "messageId": f"codex_app_tool_result_{item_id}",
             }
             if normalized_exit_code is not None:
@@ -181,13 +233,43 @@ class CodexAppServerJsonRpcMapper:
 
         if item_type == "fileChange" and completed:
             changes = _normalize_app_server_changes(self.workspace, item.get("changes"))
+            output = "\n".join(f"{change.get('kind')} {change.get('path')}" for change in changes)
+            if not output:
+                output = "".join(self.file_change_output_parts.get(item_id, []))
             return [{
                 "schemaVersion": SCHEMA_VERSION,
                 "type": "tool_result",
                 "id": item_id,
                 "name": "file_change",
                 "success": str(item.get("status") or "") == "completed",
-                "output": "\n".join(f"{change.get('kind')} {change.get('path')}" for change in changes),
+                "output": output,
+                "messageId": f"codex_app_tool_result_{item_id}",
+            }]
+
+        if item_type == "mcpToolCall" and not completed:
+            server = str(item.get("server") or "mcp")
+            tool = str(item.get("tool") or "tool")
+            return [{
+                "schemaVersion": SCHEMA_VERSION,
+                "type": "tool_call",
+                "id": item_id,
+                "name": f"{server}.{tool}",
+                "args": item.get("arguments") if isinstance(item.get("arguments"), dict) else {},
+                "messageId": f"codex_app_tool_{item_id}",
+            }]
+
+        if item_type == "mcpToolCall" and completed:
+            server = str(item.get("server") or "mcp")
+            tool = str(item.get("tool") or "tool")
+            error = item.get("error") if isinstance(item.get("error"), dict) else None
+            result = item.get("result")
+            return [{
+                "schemaVersion": SCHEMA_VERSION,
+                "type": "tool_result",
+                "id": item_id,
+                "name": f"{server}.{tool}",
+                "success": error is None and str(item.get("status") or "") not in {"failed", "error"},
+                "output": _stringify_tool_output(result if error is None else error),
                 "messageId": f"codex_app_tool_result_{item_id}",
             }]
 
@@ -216,7 +298,8 @@ def run_request(
     env = dict(env or os.environ)
     config = config or config_from_env(env)
     workspace = validate_workspace_path(request.workspace, env)
-    codex_home = _create_codex_home(config, request.turn_id)
+    persistent_codex_home = _persistent_app_server_home_enabled(env)
+    codex_home = _create_persistent_app_server_home(config, request) if persistent_codex_home else _create_codex_home(config, request.turn_id)
     stderr_tail = _Tail(MAX_STDERR_TAIL_CHARS)
 
     emitter.emit({
@@ -262,7 +345,7 @@ def run_request(
                 workspace=workspace,
                 fallback_session_id=request.session_id,
             )
-            _drive_app_server(process, request, mapper, emitter, env, workspace)
+            _drive_app_server(process, request, mapper, emitter, env, workspace, config, codex_home)
             exit_code = _stop_app_server(process)
         finally:
             timeout.cancel()
@@ -288,7 +371,9 @@ def run_request(
     finally:
         if process is not None and getattr(process, "returncode", None) is None:
             _terminate_process(process)
-        if not config.keep_codex_home:
+        if persistent_codex_home and not config.keep_codex_home:
+            _remove_app_server_sensitive_files(codex_home)
+        elif not config.keep_codex_home:
             shutil.rmtree(codex_home, ignore_errors=True)
 
 
@@ -299,6 +384,8 @@ def _drive_app_server(
     emitter: EventEmitter,
     env: dict[str, str],
     workspace: Path,
+    config: CodexCliRunConfig,
+    codex_home: Path,
 ) -> None:
     if process.stdin is None or process.stdout is None:
         raise RunnerError("Codex app-server did not expose stdio", code="codex_app_server_process_error", turn_id=request.turn_id)
@@ -324,7 +411,8 @@ def _drive_app_server(
         },
     })
     send("initialized", {})
-    thread_start_id = send("thread/start", _thread_start_params(request, workspace))
+    thread_open_method = "thread/resume" if request.session_id else "thread/start"
+    thread_open_id = send(thread_open_method, _thread_open_params(thread_open_method, request, workspace))
     turn_start_id: int | None = None
     turn_completed = False
 
@@ -334,11 +422,17 @@ def _drive_app_server(
         message = _parse_json_rpc_line(line, line_number, request.turn_id)
 
         if _is_server_request(message):
-            _respond_to_server_request(process, message)
+            _respond_to_server_request(process, message, config=config, codex_home=codex_home)
             continue
 
         if "id" in message:
             if message.get("error"):
+                if message.get("id") == thread_open_id and thread_open_method == "thread/resume":
+                    for mapped in [mapper._status("running", "codex app-server resume failed; starting a new thread")]:
+                        emitter.emit(mapped)
+                    thread_open_method = "thread/start"
+                    thread_open_id = send("thread/start", _thread_start_params(request, workspace))
+                    continue
                 error = message.get("error") if isinstance(message.get("error"), dict) else {}
                 raise RunnerError(
                     str(error.get("message") or f"Codex app-server request {message.get('id')} failed"),
@@ -347,10 +441,10 @@ def _drive_app_server(
                 )
             if message.get("id") == initialize_id:
                 continue
-            if message.get("id") == thread_start_id:
+            if message.get("id") == thread_open_id:
                 thread_id = _read_nested_string(message, "result", "thread", "id")
                 if not thread_id:
-                    raise RunnerError("Codex app-server thread/start response did not include thread.id", code="codex_app_server_protocol_error", turn_id=request.turn_id)
+                    raise RunnerError(f"Codex app-server {thread_open_method} response did not include thread.id", code="codex_app_server_protocol_error", turn_id=request.turn_id)
                 mapper.session_id = thread_id
                 turn_start_id = send("turn/start", _turn_start_params(request, env, workspace, thread_id))
                 continue
@@ -373,12 +467,56 @@ def _drive_app_server(
     emitter.emit(mapper.final_event())
 
 
+def _persistent_app_server_home_enabled(env: dict[str, str]) -> bool:
+    return env.get("ROOMTALK_CODEX_APP_SERVER_PERSIST_HOME", "true").lower() != "false"
+
+
+def _create_persistent_app_server_home(config: CodexCliRunConfig, request: RunnerRequest) -> Path:
+    safe_room_id = _safe_path_part(request.room_id or "room")
+    path = config.secret_parent / f"app-server-{safe_room_id}"
+    path.mkdir(parents=True, mode=0o700, exist_ok=True)
+    path.chmod(0o700)
+    return path
+
+
+def _remove_app_server_sensitive_files(codex_home: Path) -> None:
+    for name in ("auth.json", "config.toml"):
+        try:
+            (codex_home / name).unlink()
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+
+
+def _safe_path_part(value: str) -> str:
+    safe = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in value)
+    return safe[:80] or "room"
+
+
+def _thread_open_params(method: str, request: RunnerRequest, workspace: Path) -> dict[str, Any]:
+    if method == "thread/resume":
+        return _thread_resume_params(request, workspace)
+    return _thread_start_params(request, workspace)
+
+
 def _thread_start_params(request: RunnerRequest, workspace: Path) -> dict[str, Any]:
     permission = _codex_exec_permissions(request)
     return {
         "model": _normalize_codex_model(request.codex_model),
         "cwd": str(workspace),
-        "ephemeral": True,
+        "ephemeral": False,
+        "sandbox": permission.sandbox,
+        "approvalPolicy": permission.approval_policy,
+    }
+
+
+def _thread_resume_params(request: RunnerRequest, workspace: Path) -> dict[str, Any]:
+    permission = _codex_exec_permissions(request)
+    return {
+        "threadId": request.session_id,
+        "model": _normalize_codex_model(request.codex_model),
+        "cwd": str(workspace),
         "sandbox": permission.sandbox,
         "approvalPolicy": permission.approval_policy,
     }
@@ -438,22 +576,108 @@ def _is_server_request(message: dict[str, Any]) -> bool:
     return isinstance(message.get("id"), (int, str)) and isinstance(method, str)
 
 
-def _respond_to_server_request(process: Any, message: dict[str, Any]) -> None:
+def _respond_to_server_request(
+    process: Any,
+    message: dict[str, Any],
+    *,
+    config: CodexCliRunConfig,
+    codex_home: Path,
+) -> None:
     method = str(message.get("method") or "")
     if method in ("item/commandExecution/requestApproval", "item/fileChange/requestApproval"):
         result: dict[str, Any] = {"decision": "decline"}
     elif method == "item/permissions/requestApproval":
         result = {
-            "permissions": {
-                "fileSystem": None,
-                "network": None,
-            },
+            "permissions": {},
             "scope": "turn",
+            "strictAutoReview": True,
         }
+    elif method in ("execCommandApproval", "applyPatchApproval"):
+        result = {"decision": "denied"}
+    elif method == "item/tool/requestUserInput":
+        result = {"answers": {}}
+    elif method == "mcpServer/elicitation/request":
+        result = {"action": "decline", "content": None, "_meta": None}
+    elif method == "account/chatgptAuthTokens/refresh":
+        try:
+            result = _chatgpt_auth_tokens_refresh_result(config, codex_home)
+        except RunnerError as exc:
+            _write_json_rpc_response(process, {"id": message["id"], "error": {"code": -32010, "message": str(exc)}})
+            return
     else:
-        result = {"error": "Unsupported server request in RoomTalk non-interactive runner"}
-    process.stdin.write(json.dumps({"id": message["id"], "result": result}, separators=(",", ":")) + "\n")
+        _write_json_rpc_response(process, {"id": message["id"], "error": {"code": -32601, "message": f"Unsupported server request in RoomTalk non-interactive runner: {method}"}})
+        return
+    _write_json_rpc_response(process, {"id": message["id"], "result": result})
+
+
+def _write_json_rpc_response(process: Any, payload: dict[str, Any]) -> None:
+    process.stdin.write(json.dumps(payload, separators=(",", ":")) + "\n")
     process.stdin.flush()
+
+
+def _chatgpt_auth_tokens_refresh_result(config: CodexCliRunConfig, codex_home: Path) -> dict[str, Any]:
+    auth_path = codex_home / "auth.json"
+    if not auth_path.exists() and config.auth_json_path:
+        auth_path = config.auth_json_path
+    parsed = _read_json_object(auth_path)
+    tokens = _auth_tokens_object(parsed)
+    access_token = _first_string(tokens.get("access_token"), tokens.get("accessToken"), parsed.get("access_token"), parsed.get("accessToken"))
+    id_claims = _decode_jwt_payload(_first_string(tokens.get("id_token"), tokens.get("idToken"), parsed.get("id_token"), parsed.get("idToken")))
+    access_claims = _decode_jwt_payload(access_token)
+    auth_claim = _object_value(id_claims.get("https://api.openai.com/auth")) or _object_value(access_claims.get("https://api.openai.com/auth")) or {}
+    account_id = _first_string(
+        tokens.get("account_id"),
+        tokens.get("accountId"),
+        parsed.get("account_id"),
+        parsed.get("accountId"),
+        auth_claim.get("chatgpt_account_id"),
+    )
+    plan_type = _first_string(auth_claim.get("chatgpt_plan_type"), parsed.get("plan_type"), parsed.get("planType"))
+    if not access_token or not account_id:
+        raise RunnerError("Codex app-server requested ChatGPT auth refresh, but auth.json did not include an access token and account id", code="codex_app_server_auth_refresh_unavailable")
+    return {
+        "accessToken": access_token,
+        "chatgptAccountId": account_id,
+        "chatgptPlanType": plan_type,
+    }
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RunnerError("Codex auth JSON is not readable", code="codex_auth_unreadable") from exc
+    if not isinstance(value, dict):
+        raise RunnerError("Codex auth JSON must be an object", code="codex_auth_invalid")
+    return value
+
+
+def _auth_tokens_object(parsed: dict[str, Any]) -> dict[str, Any]:
+    openai_auth = _object_value(parsed.get("OPENAI_AUTH")) or _object_value(parsed.get("openaiAuth")) or {}
+    return _object_value(parsed.get("tokens")) or _object_value(openai_auth.get("tokens")) or openai_auth or parsed
+
+
+def _object_value(value: Any) -> dict[str, Any] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _first_string(*values: Any) -> str | None:
+    for value in values:
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _decode_jwt_payload(token: str | None) -> dict[str, Any]:
+    if not token or token.count(".") < 2:
+        return {}
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        decoded = json.loads(base64.urlsafe_b64decode(payload.encode("ascii")).decode("utf-8"))
+        return decoded if isinstance(decoded, dict) else {}
+    except Exception:
+        return {}
 
 
 def _stop_app_server(process: Any) -> int | None:
@@ -518,6 +742,62 @@ def _normalize_workspace_path(workspace: Path, value: str) -> str:
         return str(path.relative_to(workspace))
     except ValueError:
         return value
+
+
+def _to_runner_usage(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    last = value.get("last") if isinstance(value.get("last"), dict) else None
+    total = value.get("total") if isinstance(value.get("total"), dict) else None
+    usage = last or total
+    if not usage:
+        return None
+    input_tokens = usage.get("inputTokens")
+    output_tokens = usage.get("outputTokens")
+    total_tokens = usage.get("totalTokens")
+    if not isinstance(input_tokens, int) or not isinstance(output_tokens, int) or not isinstance(total_tokens, int):
+        return None
+    result: dict[str, Any] = {
+        "promptTokens": input_tokens,
+        "completionTokens": output_tokens,
+        "totalTokens": total_tokens,
+        "source": "reported",
+    }
+    cached = usage.get("cachedInputTokens")
+    if isinstance(cached, int):
+        result["cachedPromptTokens"] = cached
+        result["cacheHitRate"] = cached / input_tokens if input_tokens > 0 else 0
+    return result
+
+
+def _codex_error_code(error: Any) -> str:
+    if not isinstance(error, dict):
+        return "codex_app_server_error"
+    info = error.get("info") or error.get("code") or error.get("type")
+    if isinstance(info, str) and info:
+        return f"codex_app_server_{info}"
+    if isinstance(info, dict) and info:
+        first_key = next(iter(info))
+        return f"codex_app_server_{first_key}"
+    return "codex_app_server_error"
+
+
+def _codex_error_retryable(error: Any) -> bool:
+    if not isinstance(error, dict):
+        return False
+    text = json.dumps(error, ensure_ascii=False).lower()
+    return "serveroverloaded" in text or "overloaded" in text or "connectionfailed" in text or "disconnected" in text
+
+
+def _stringify_tool_output(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False, indent=2)
+    except Exception:
+        return str(value)
 
 
 def _read_string(value: dict[str, Any], key: str) -> str | None:

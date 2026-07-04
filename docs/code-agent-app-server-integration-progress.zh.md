@@ -50,6 +50,8 @@ Codex manual 中 app-server 被描述为 rich client 接口，覆盖 authenticat
 - 生产 Codex 沙箱已通过迁移脚本做 archive/import/probe 后切换到新 template，并在成功后销毁旧 sandbox。迁移房间共 5 个：`ET08NWIhgh`、`4sPMatu90U`、`4NNTnc8b6N`、`emY9TGYwXs`、`MZPxmVYl4Y`。
 - 迁移后 dry-run 复查结果：5 个候选房间全部为 `already_ready`，对应新 sandbox 分别为 `i4v6140mbqgtm61rkfs2z`、`i4jq5ty78d1fqsrnr7c9g`、`iedjesi6ls68mq10prrvd`、`ibow2snctkqnflbjmkahy`、`iytovs6qxwyarg43uylzk`。
 - `master` CI/CD run `28708530641` 已通过 server build、client build、translation check 和 Fly deploy。
+- app-server 一等公民第一批能力已补齐：per-room persistent Codex home、`thread/resume` 优先并在 resume 失败时 fallback 到 `thread/start`、非 ephemeral thread、`thread/tokenUsage/updated` usage 回传、command/file output delta 聚合、MCP tool item 映射、warning/error/model reroute 状态映射、server request 的 approval/user-input/elicitation/auth-refresh 响应结构。
+- runner package 已 bump 到 `0.1.5`，E2B artifact version 已 bump 到 `roomtalk-coco-2026-07-04-codex-app-server-v2`。app-server persistent home 会在每轮结束清理 `auth.json` 和 `config.toml`，保留 Codex thread/history 数据。
 
 ## 已执行验证
 
@@ -63,3 +65,4 @@ Codex manual 中 app-server 被描述为 rich client 接口，覆盖 authenticat
 
 - 大量历史文件、文档和数据库字段仍以 Coco 命名存在。代码内部接口先通用化，持久化命名后续再单独迁移，避免一次变更同时碰 runtime 和数据迁移。
 - app-server 的部分 API 需要 `experimentalApi` capability。第一版 adapter 只使用必要的稳定 thread/turn/event 流；需要权限 profile/list 或 background terminal API 时再显式开启 experimental capability。
+- app-server 目前仍是后台非交互 runner，不会把 approval request 弹到 RoomTalk UI 让用户实时批准；第一批实现会以 schema-compatible 的拒绝/空权限响应处理受限请求。完整交互审批、`turn/steer`、`turn/interrupt`、thread list/read UI、permission profile UI 是后续阶段。
