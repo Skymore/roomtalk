@@ -1003,6 +1003,39 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
   });
 
+  it('shows file surface tab overflow fades only in the scrollable directions', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+      ],
+      truncated: false,
+    });
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    await screen.findByText('1 files');
+
+    expect(screen.getByTestId('code-agent-file-surface-tabs-frame')).toBeTruthy();
+    const tabList = screen.getByTestId('code-agent-file-surface-tabs');
+    const fadeStart = screen.getByTestId('code-agent-file-surface-tabs-scroll-fade-start');
+    const fadeEnd = screen.getByTestId('code-agent-file-surface-tabs-scroll-fade-end');
+
+    Object.defineProperty(tabList, 'clientWidth', { configurable: true, value: 260 });
+    Object.defineProperty(tabList, 'scrollWidth', { configurable: true, value: 520 });
+    Object.defineProperty(tabList, 'scrollLeft', { configurable: true, writable: true, value: 0 });
+    fireEvent.scroll(tabList);
+    await waitFor(() => {
+      expect(fadeStart.dataset.visible).toBe('false');
+      expect(fadeEnd.dataset.visible).toBe('true');
+    });
+
+    tabList.scrollLeft = 260;
+    fireEvent.scroll(tabList);
+    await waitFor(() => {
+      expect(fadeStart.dataset.visible).toBe('true');
+      expect(fadeEnd.dataset.visible).toBe('false');
+    });
+  });
+
   it('opens and restores the T3-style Files surface from the right panel tabs', async () => {
     loadCodeWorkspaceEntriesMock.mockResolvedValue({
       entries: [

@@ -2131,6 +2131,10 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
   const [fileSurfaceTabMenu, setFileSurfaceTabMenu] = useState<FileSurfaceTabMenuState>(null);
   const fileSurfaceTabMenuRef = useRef<HTMLDivElement | null>(null);
   const fileSurfaceTabListRef = useRef<HTMLDivElement | null>(null);
+  const [fileSurfaceTabScrollState, setFileSurfaceTabScrollState] = useState({
+    canScrollStart: false,
+    canScrollEnd: false,
+  });
   const [fileSurfaceAddMenuPosition, setFileSurfaceAddMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const fileSurfaceAddMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const fileSurfaceAddMenuRef = useRef<HTMLDivElement | null>(null);
@@ -2462,6 +2466,58 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       activeTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }
   }, [rightPanelState.activeSurfaceId]);
+
+  const updateFileSurfaceTabScrollState = useCallback(() => {
+    const element = fileSurfaceTabListRef.current;
+    if (!element) {
+      setFileSurfaceTabScrollState((current) => (
+        current.canScrollStart || current.canScrollEnd
+          ? { canScrollStart: false, canScrollEnd: false }
+          : current
+      ));
+      return;
+    }
+    const next = {
+      canScrollStart: element.scrollLeft > 1,
+      canScrollEnd: element.scrollLeft + element.clientWidth < element.scrollWidth - 1,
+    };
+    setFileSurfaceTabScrollState((current) => (
+      current.canScrollStart === next.canScrollStart && current.canScrollEnd === next.canScrollEnd
+        ? current
+        : next
+    ));
+  }, []);
+
+  useEffect(() => {
+    if (rightPanelSurfaces.length === 0) {
+      setFileSurfaceTabScrollState((current) => (
+        current.canScrollStart || current.canScrollEnd
+          ? { canScrollStart: false, canScrollEnd: false }
+          : current
+      ));
+      return undefined;
+    }
+    const element = fileSurfaceTabListRef.current;
+    if (!element) {
+      return undefined;
+    }
+    updateFileSurfaceTabScrollState();
+    element.addEventListener('scroll', updateFileSurfaceTabScrollState, { passive: true });
+    window.addEventListener('resize', updateFileSurfaceTabScrollState);
+    const observer = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(updateFileSurfaceTabScrollState);
+    observer?.observe(element);
+    return () => {
+      element.removeEventListener('scroll', updateFileSurfaceTabScrollState);
+      window.removeEventListener('resize', updateFileSurfaceTabScrollState);
+      observer?.disconnect();
+    };
+  }, [rightPanelSurfaces.length, updateFileSurfaceTabScrollState]);
+
+  useEffect(() => {
+    updateFileSurfaceTabScrollState();
+  });
 
   useEffect(() => {
     if (entriesQuery.isPending) {
@@ -3339,122 +3395,143 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     >
       {rightPanelSurfaces.length > 0 ? (
         <div
-          ref={fileSurfaceTabListRef}
-          className="h-8 shrink-0 overflow-x-auto border-b border-[#dedbd0] bg-[#f0eee6] px-2 text-xs dark:border-[#30302e] dark:bg-[#242422]"
-          data-testid="code-agent-file-surface-tabs"
-          role="tablist"
+          className="relative h-8 shrink-0 border-b border-[#dedbd0] bg-[#f0eee6] text-xs dark:border-[#30302e] dark:bg-[#242422]"
+          data-testid="code-agent-file-surface-tabs-frame"
         >
-          <div className="flex h-full w-max min-w-full items-center gap-1">
-            {rightPanelSurfaces.map((surface) => {
-              const isActive = surface.id === rightPanelState.activeSurfaceId;
-              const title = surface.kind === 'diff'
-                ? t('codeAgentChanges')
-                : surface.kind === 'files'
-                  ? t('codeAgentWorkspaceFiles')
+          <div
+            ref={fileSurfaceTabListRef}
+            className="h-full overflow-x-auto px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            data-testid="code-agent-file-surface-tabs"
+            role="tablist"
+          >
+            <div className="flex h-full w-max min-w-full items-center gap-1 pr-7">
+              {rightPanelSurfaces.map((surface) => {
+                const isActive = surface.id === rightPanelState.activeSurfaceId;
+                const title = surface.kind === 'diff'
+                  ? t('codeAgentChanges')
+                  : surface.kind === 'files'
+                    ? t('codeAgentWorkspaceFiles')
+                    : surface.kind === 'preview'
+                      ? (surface.relativePath
+                        ? basename(surface.relativePath)
+                        : surface.url
+                          ? formatBrowserSurfaceUrlTitle(surface.url)
+                          : t('codeAgentBrowserSurface'))
+                      : basename(surface.relativePath);
+                const fullTitle = surface.kind === 'file'
+                  ? surface.relativePath
                   : surface.kind === 'preview'
-                    ? (surface.relativePath
-                      ? basename(surface.relativePath)
-                      : surface.url
-                        ? formatBrowserSurfaceUrlTitle(surface.url)
-                        : t('codeAgentBrowserSurface'))
-                    : basename(surface.relativePath);
-              const fullTitle = surface.kind === 'file'
-                ? surface.relativePath
-                : surface.kind === 'preview'
-                  ? surface.relativePath ?? surface.url ?? title
-                  : title;
-              const pending = pendingFileSurfaceIds.has(surface.id);
-              return (
-                <div
-                  key={surface.id}
-                  data-active-tab={isActive}
-                  className={`group flex max-w-56 shrink-0 items-center rounded-md border ${
-                    isActive
-                      ? 'border-[#c96442]/50 bg-[#faf9f5] text-[#141413] dark:border-[#ffb197]/50 dark:bg-[#1d1d1b] dark:text-[#faf9f5]'
-                      : 'border-transparent text-[#5e5d59] hover:bg-[#faf9f5] hover:text-[#141413] dark:text-[#b0aea5] dark:hover:bg-[#1d1d1b] dark:hover:text-[#faf9f5]'
-                  }`}
-                  role="tab"
-                  aria-selected={isActive}
-                  onMouseDown={handleFileSurfaceTabMouseDown}
-                  onAuxClick={(event) => handleFileSurfaceTabAuxClick(event, surface)}
-                  onContextMenu={(event) => handleFileSurfaceTabContextMenu(event, surface)}
-                >
-                  <button
-                    type="button"
-                    className={`flex min-w-0 flex-1 items-center gap-1.5 truncate px-2 text-left ${isMobileSurface ? 'min-h-7 py-1.5' : 'py-1'}`}
-                    title={fullTitle}
-                    onClick={() => activateFileSurface(surface.id)}
+                    ? surface.relativePath ?? surface.url ?? title
+                    : title;
+                const pending = pendingFileSurfaceIds.has(surface.id);
+                return (
+                  <div
+                    key={surface.id}
+                    data-active-tab={isActive}
+                    className={`group flex max-w-56 shrink-0 items-center rounded-md border ${
+                      isActive
+                        ? 'border-[#c96442]/50 bg-[#faf9f5] text-[#141413] dark:border-[#ffb197]/50 dark:bg-[#1d1d1b] dark:text-[#faf9f5]'
+                        : 'border-transparent text-[#5e5d59] hover:bg-[#faf9f5] hover:text-[#141413] dark:text-[#b0aea5] dark:hover:bg-[#1d1d1b] dark:hover:text-[#faf9f5]'
+                    }`}
+                    role="tab"
+                    aria-selected={isActive}
+                    onMouseDown={handleFileSurfaceTabMouseDown}
+                    onAuxClick={(event) => handleFileSurfaceTabAuxClick(event, surface)}
+                    onContextMenu={(event) => handleFileSurfaceTabContextMenu(event, surface)}
                   >
-                    {surface.kind === 'diff' ? (
-                      <FileDiff className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
-                    ) : surface.kind === 'files' ? (
-                      <Files className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
-                    ) : surface.kind === 'preview' ? (
-                      <CodeAgentBrowserTabIcon url={surface.url} />
-                    ) : surface.kind === 'file' ? (
-                      <CodeAgentPierreEntryIcon
-                        pathValue={surface.relativePath}
-                        kind="file"
-                        theme={resolvedTheme}
-                        className="size-3.5"
-                      />
-                    ) : null}
-                    <span className="truncate">{title}</span>
-                  </button>
-                  {isMobileSurface ? (
                     <button
                       type="button"
-                      className="mr-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[#87867f] hover:bg-[#dedbd0] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
-                      aria-label={`${t('moreActions')} ${fullTitle}`}
-                      title={t('moreActions')}
-                      data-testid="code-agent-mobile-file-tab-actions"
-                      onClick={(event) => handleFileSurfaceTabMenuButtonClick(event, surface)}
+                      className={`flex min-w-0 flex-1 items-center gap-1.5 truncate px-2 text-left ${isMobileSurface ? 'min-h-7 py-1.5' : 'py-1'}`}
+                      title={fullTitle}
+                      onClick={() => activateFileSurface(surface.id)}
                     >
-                      <MoreVertical className="h-3.5 w-3.5" />
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    className={`relative mr-0.5 inline-flex shrink-0 items-center justify-center rounded text-[#87867f] hover:bg-[#dedbd0] hover:text-[#141413] focus:opacity-100 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
-                      isMobileSurface ? 'h-6 w-6 p-1 opacity-100' : `h-4 w-4 p-0.5 ${pending ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`
-                    }`}
-                    aria-label={`${t('close')} ${fullTitle}`}
-                    onClick={() => {
-                      closeFileSurfaceTabMenu();
-                      closeFileSurface(surface.id);
-                    }}
-                  >
-                    {pending ? (
-                      <>
-                        <span
-                          className="h-2 w-2 rounded-full bg-current group-hover:hidden"
-                          data-testid="code-agent-file-tab-pending-indicator"
-                          aria-hidden="true"
+                      {surface.kind === 'diff' ? (
+                        <FileDiff className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                      ) : surface.kind === 'files' ? (
+                        <Files className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                      ) : surface.kind === 'preview' ? (
+                        <CodeAgentBrowserTabIcon url={surface.url} />
+                      ) : surface.kind === 'file' ? (
+                        <CodeAgentPierreEntryIcon
+                          pathValue={surface.relativePath}
+                          kind="file"
+                          theme={resolvedTheme}
+                          className="size-3.5"
                         />
-                        <X className="hidden h-3 w-3 group-hover:block" />
-                      </>
-                    ) : (
-                      <X className="h-3 w-3" />
-                    )}
-                  </button>
-                </div>
-              );
-            })}
-            <div className="relative ml-0.5 shrink-0">
-              <button
-                ref={fileSurfaceAddMenuButtonRef}
-                type="button"
-                className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#faf9f5] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:bg-[#1d1d1b] dark:hover:text-[#faf9f5]"
-                aria-label={t('codeAgentAddWorkspaceSurface')}
-                aria-haspopup="menu"
-                aria-expanded={fileSurfaceAddMenuOpen}
-                title={t('codeAgentAddWorkspaceSurface')}
-                onClick={handleFileSurfaceAddMenuToggle}
-              >
-                <Plus className="h-3.5 w-3.5" />
-              </button>
+                      ) : null}
+                      <span className="truncate">{title}</span>
+                    </button>
+                    {isMobileSurface ? (
+                      <button
+                        type="button"
+                        className="mr-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[#87867f] hover:bg-[#dedbd0] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+                        aria-label={`${t('moreActions')} ${fullTitle}`}
+                        title={t('moreActions')}
+                        data-testid="code-agent-mobile-file-tab-actions"
+                        onClick={(event) => handleFileSurfaceTabMenuButtonClick(event, surface)}
+                      >
+                        <MoreVertical className="h-3.5 w-3.5" />
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className={`relative mr-0.5 inline-flex shrink-0 items-center justify-center rounded text-[#87867f] hover:bg-[#dedbd0] hover:text-[#141413] focus:opacity-100 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
+                        isMobileSurface ? 'h-6 w-6 p-1 opacity-100' : `h-4 w-4 p-0.5 ${pending ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`
+                      }`}
+                      aria-label={`${t('close')} ${fullTitle}`}
+                      onClick={() => {
+                        closeFileSurfaceTabMenu();
+                        closeFileSurface(surface.id);
+                      }}
+                    >
+                      {pending ? (
+                        <>
+                          <span
+                            className="h-2 w-2 rounded-full bg-current group-hover:hidden"
+                            data-testid="code-agent-file-tab-pending-indicator"
+                            aria-hidden="true"
+                          />
+                          <X className="hidden h-3 w-3 group-hover:block" />
+                        </>
+                      ) : (
+                        <X className="h-3 w-3" />
+                      )}
+                    </button>
+                  </div>
+                );
+              })}
+              <div className="relative ml-0.5 shrink-0">
+                <button
+                  ref={fileSurfaceAddMenuButtonRef}
+                  type="button"
+                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#faf9f5] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:bg-[#1d1d1b] dark:hover:text-[#faf9f5]"
+                  aria-label={t('codeAgentAddWorkspaceSurface')}
+                  aria-haspopup="menu"
+                  aria-expanded={fileSurfaceAddMenuOpen}
+                  title={t('codeAgentAddWorkspaceSurface')}
+                  onClick={handleFileSurfaceAddMenuToggle}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              </div>
             </div>
           </div>
+          <span
+            aria-hidden="true"
+            className={`pointer-events-none absolute inset-y-1 left-0 z-10 w-5 bg-gradient-to-r from-[#f0eee6] to-transparent transition-opacity dark:from-[#242422] ${
+              fileSurfaceTabScrollState.canScrollStart ? 'opacity-100' : 'opacity-0'
+            }`}
+            data-testid="code-agent-file-surface-tabs-scroll-fade-start"
+            data-visible={fileSurfaceTabScrollState.canScrollStart ? 'true' : 'false'}
+          />
+          <span
+            aria-hidden="true"
+            className={`pointer-events-none absolute inset-y-1 right-0 z-10 w-8 bg-gradient-to-l from-[#f0eee6] to-transparent transition-opacity dark:from-[#242422] ${
+              fileSurfaceTabScrollState.canScrollEnd ? 'opacity-100' : 'opacity-0'
+            }`}
+            data-testid="code-agent-file-surface-tabs-scroll-fade-end"
+            data-visible={fileSurfaceTabScrollState.canScrollEnd ? 'true' : 'false'}
+          />
         </div>
       ) : null}
       {fileSurfaceAddMenuOpen && fileSurfaceAddMenuPosition ? (
