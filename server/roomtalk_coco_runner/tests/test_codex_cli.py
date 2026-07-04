@@ -144,7 +144,7 @@ def test_codex_cli_maps_exec_jsonl_and_saves_refreshed_auth(tmp_path: Path):
     assert call_args[call_args.index("--model") + 1] == "gpt-5.5"
     assert call_args[call_args.index("--ask-for-approval") + 1] == "never"
     assert 'model_reasoning_effort="xhigh"' in call_args
-    assert "sandbox_workspace_write.network_access=true" in call_args
+    assert "sandbox_workspace_write.network_access=true" not in call_args
     assert call_args[call_args.index("--sandbox") + 1] == "read-only"
     assert call_args[call_args.index("--cd") + 1] == str(workspace)
     assert call_args[call_args.index("--output-last-message") + 1].endswith("last-message.txt")
@@ -252,7 +252,7 @@ def test_codex_cli_passes_requested_model_and_reasoning_effort(tmp_path: Path):
     ("permission_mode", "sandbox", "approval_policy", "network_enabled"),
     [
         ("plan", "read-only", "never", False),
-        ("edit", "workspace-write", "on-request", True),
+        ("edit", "workspace-write", "never", True),
         ("approveForMe", "workspace-write", "never", True),
         ("fullAccess", "danger-full-access", "never", False),
     ],

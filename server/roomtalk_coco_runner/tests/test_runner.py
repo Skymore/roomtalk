@@ -162,6 +162,22 @@ def test_tool_policy_keeps_plan_read_only_and_requires_explicit_write_or_shell_f
         "ROOMTALK_STATIC_PUBLISH_URL": "https://room.example/api/coco/publish-static-site",
         "ROOMTALK_STATIC_PUBLISH_TOKEN": "turn-token",
     }) == ("Read", "Glob", "Grep", "PublishStaticSite")
+    assert tool_names_for_mode("fullAccess", {
+        "ROOMTALK_COCO_ALLOW_WRITE_TOOLS": "true",
+        "ROOMTALK_COCO_ALLOW_SHELL": "true",
+        "ROOMTALK_COCO_ENABLE_STATIC_PUBLISH": "true",
+        "ROOMTALK_STATIC_PUBLISH_URL": "https://room.example/api/coco/publish-static-site",
+        "ROOMTALK_STATIC_PUBLISH_TOKEN": "turn-token",
+    }) == (
+        "Read",
+        "Glob",
+        "Grep",
+        "Write",
+        "Edit",
+        "Shell",
+        "BackgroundShell",
+        "PublishStaticSite",
+    )
 
 
 def test_tool_policy_treats_empty_env_as_an_isolated_environment(monkeypatch):

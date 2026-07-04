@@ -343,7 +343,7 @@ def _codex_exec_permissions(request: RunnerRequest) -> _CodexExecPermissions:
     if mode == "plan":
         return _CodexExecPermissions(mode=mode, sandbox="read-only", approval_policy="never")
     if mode == "edit":
-        return _CodexExecPermissions(mode=mode, sandbox="workspace-write", approval_policy="on-request")
+        return _CodexExecPermissions(mode=mode, sandbox="workspace-write", approval_policy="never")
     if mode == "fullAccess":
         return _CodexExecPermissions(mode=mode, sandbox="danger-full-access", approval_policy="never")
     return _CodexExecPermissions(mode="approveForMe", sandbox="workspace-write", approval_policy="never")

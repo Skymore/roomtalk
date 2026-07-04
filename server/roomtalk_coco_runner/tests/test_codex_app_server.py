@@ -359,10 +359,11 @@ def test_codex_app_server_emits_interactive_approval_request_in_edit_mode(tmp_pa
 
     events = event_lines(stdout)
     approval = next(event for event in events if event["type"] == "approval_request")
-    assert approval["approvalId"] == "cmd-approval"
+    assert approval["id"] == "cmd-approval"
     assert approval["approvalType"] == "command"
-    assert approval["command"] == "npm install"
-    assert approval["cwd"] == str(workspace)
+    assert approval["args"]["approvalId"] == "cmd-approval"
+    assert approval["args"]["command"] == "npm install"
+    assert approval["args"]["cwd"] == str(workspace)
     assert all(message.get("id") != 88 for message in jsonrpc_lines(popen.processes[0]))
 
 

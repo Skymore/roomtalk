@@ -9,7 +9,7 @@ import sys
 import threading
 import base64
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, TextIO
 
@@ -826,7 +826,7 @@ def _thread_open_params(method: str, request: RunnerRequest, workspace: Path) ->
 
 
 def _thread_start_params(request: RunnerRequest, workspace: Path) -> dict[str, Any]:
-    permission = _codex_exec_permissions(request)
+    permission = _codex_app_server_permissions(request)
     return {
         "model": _normalize_codex_model(request.codex_model),
         "cwd": str(workspace),
@@ -837,7 +837,7 @@ def _thread_start_params(request: RunnerRequest, workspace: Path) -> dict[str, A
 
 
 def _thread_resume_params(request: RunnerRequest, workspace: Path) -> dict[str, Any]:
-    permission = _codex_exec_permissions(request)
+    permission = _codex_app_server_permissions(request)
     return {
         "threadId": request.session_id,
         "model": _normalize_codex_model(request.codex_model),
@@ -848,7 +848,7 @@ def _thread_resume_params(request: RunnerRequest, workspace: Path) -> dict[str, 
 
 
 def _turn_start_params(request: RunnerRequest, env: dict[str, str], workspace: Path, thread_id: str) -> dict[str, Any]:
-    permission = _codex_exec_permissions(request)
+    permission = _codex_app_server_permissions(request)
     return {
         "threadId": thread_id,
         "input": [{"type": "text", "text": _prompt_with_app_server_tools(request, env)}],
@@ -870,6 +870,13 @@ def _sandbox_policy_for_permission(sandbox: str, workspace: Path) -> dict[str, A
         "networkAccess": True,
         "writableRoots": [str(workspace)],
     }
+
+
+def _codex_app_server_permissions(request: RunnerRequest):
+    permission = _codex_exec_permissions(request)
+    if permission.mode == "edit":
+        return replace(permission, approval_policy="on-request")
+    return permission
 
 
 def _prompt_with_app_server_tools(request: RunnerRequest, env: dict[str, str]) -> str:
@@ -1153,7 +1160,7 @@ def _respond_to_server_request(
         and emitter is not None
         and state is not None
         and _is_interactive_approval_method(method)
-        and _codex_exec_permissions(request).approval_policy == "on-request"
+        and _codex_app_server_permissions(request).approval_policy == "on-request"
     ):
         pending = _pending_approval_from_request(message)
         state.add_pending_approval(pending)
