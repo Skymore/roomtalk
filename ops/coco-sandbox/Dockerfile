@@ -24,7 +24,7 @@ RUN apt-get update \
   && apt-get update \
   && apt-get install -y --no-install-recommends nodejs \
   && npm install -g @openai/codex@${CODEX_CLI_NPM_VERSION} \
-  && printf '%s\n' '#!/bin/sh' 'exec python -m roomtalk_coco_runner.platform_tools "$@"' > /usr/local/bin/roomtalk \
+  && { echo '#!/bin/sh'; echo 'exec python -m roomtalk_coco_runner.platform_tools "$@"'; } > /usr/local/bin/roomtalk \
   && chmod 755 /usr/local/bin/roomtalk \
   && CODEX_NATIVE_BIN="$(find "$(npm root -g)/@openai/codex" -path '*/vendor/x86_64-unknown-linux-musl/bin/codex' -type f -perm /111 | head -n 1)" \
   && test -n "${CODEX_NATIVE_BIN}" \
