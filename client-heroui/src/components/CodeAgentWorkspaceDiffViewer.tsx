@@ -866,7 +866,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   const controlIconClassName = mobileLayout ? 'h-4 w-4' : 'h-3.5 w-3.5';
   const diffScopeSummaryClassName = mobileLayout
     ? 'inline-flex h-9 max-w-[14rem] cursor-pointer list-none items-center gap-2 rounded-lg border border-[#dedbd0] bg-[#faf9f5] px-3 text-sm font-semibold text-[#141413] transition-colors hover:bg-[#f0eee6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:hover:bg-[#30302e] [&::-webkit-details-marker]:hidden'
-    : 'inline-flex h-7 max-w-52 cursor-pointer list-none items-center gap-1 rounded-md border border-[#dedbd0] bg-[#faf9f5] px-2 text-xs font-medium text-[#141413] transition-colors hover:bg-[#f0eee6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:hover:bg-[#30302e] [&::-webkit-details-marker]:hidden';
+    : 'inline-flex h-7 min-w-0 max-w-52 cursor-pointer list-none items-center gap-1 rounded-md border border-[#dedbd0] bg-[#faf9f5] px-2 text-xs font-medium text-[#141413] transition-colors hover:bg-[#f0eee6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5] dark:hover:bg-[#30302e] [&::-webkit-details-marker]:hidden';
   const diffScopeMenuClassName = mobileLayout
     ? 'absolute left-0 top-10 z-50 w-72 rounded-lg border border-[#dedbd0] bg-[#faf9f5] p-1 shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]'
     : 'absolute left-0 top-8 z-50 w-64 rounded-md border border-[#dedbd0] bg-[#faf9f5] p-1 shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]';
@@ -875,7 +875,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     : 'flex min-h-12 w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]';
   const diffBaseRefSummaryClassName = mobileLayout
     ? 'inline-flex h-9 max-w-[10rem] cursor-pointer list-none items-center gap-2 rounded-lg border border-[#dedbd0] bg-[#faf9f5] px-3 text-sm font-semibold text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] [&::-webkit-details-marker]:hidden'
-    : 'inline-flex h-7 max-w-32 cursor-pointer list-none items-center gap-1 rounded-md px-1.5 text-xs font-medium text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] [&::-webkit-details-marker]:hidden';
+    : 'inline-flex h-7 min-w-0 max-w-32 cursor-pointer list-none items-center gap-1 rounded-md px-1.5 text-xs font-medium text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] [&::-webkit-details-marker]:hidden';
   const diffBaseRefMenuClassName = mobileLayout
     ? 'absolute left-0 top-10 z-50 w-72 max-w-[calc(100vw-1rem)] overflow-hidden rounded-lg border border-[#dedbd0] bg-[#faf9f5] shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]'
     : 'absolute left-0 top-8 z-50 w-60 max-w-[calc(100vw-1rem)] overflow-hidden rounded-md border border-[#dedbd0] bg-[#faf9f5] shadow-lg dark:border-[#30302e] dark:bg-[#1d1d1b]';
@@ -1080,8 +1080,11 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
 
   const headerControls = (
     <>
-        <div className={`flex min-w-0 flex-1 items-center ${controlClusterGap} ${mobileLayout ? 'flex-nowrap' : 'flex-wrap'}`}>
-          <div className={`inline-flex max-w-full shrink-0 items-center ${controlClusterGap} whitespace-nowrap`}>
+        <div
+          className={`flex min-w-0 flex-1 items-center ${controlClusterGap} flex-nowrap`}
+          data-testid={mobileLayout ? undefined : 'code-agent-desktop-workspace-diff-primary-controls'}
+        >
+          <div className={`${mobileLayout ? 'inline-flex max-w-full shrink-0' : 'flex min-w-0 flex-1'} items-center ${controlClusterGap} whitespace-nowrap`}>
             {mobileLayout ? (
               <button
                 ref={mobileDiffScopeButtonRef}
@@ -1105,7 +1108,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
             ) : (
               <details
                 ref={diffScopeMenuRef}
-                className="group relative min-w-0 shrink-0"
+                className="group relative min-w-0"
                 onToggle={handleDiffScopeMenuToggle}
               >
                 <summary
@@ -1123,7 +1126,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
             )}
           {diffScope === 'branch' ? (
             <div
-              className={`flex min-w-0 max-w-full shrink-0 items-center ${controlClusterGap} overflow-visible text-xs text-[#87867f] dark:text-[#8f8d86]`}
+              className={`flex min-w-0 max-w-full ${mobileLayout ? 'shrink-0' : 'shrink'} items-center ${controlClusterGap} overflow-visible text-xs text-[#87867f] dark:text-[#8f8d86]`}
               title={`${diffHeadRefLabel} -> ${diffBaseRefLabel}`}
               aria-label={`${t('codeAgentDiffComparing')}: ${diffHeadRefLabel} -> ${diffBaseRefLabel}`}
             >
@@ -1151,7 +1154,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
               ) : (
                 <details
                   ref={diffBaseRefMenuRef}
-                  className="group relative min-w-0 shrink-0"
+                  className="group relative min-w-0"
                   onToggle={handleDiffBaseRefMenuToggle}
                 >
                   <summary
@@ -1170,7 +1173,10 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
           ) : null}
           </div>
         </div>
-        <div className={`flex shrink-0 items-center ${mobileLayout ? 'gap-1.5' : 'gap-1'}`}>
+        <div
+          className={`flex shrink-0 items-center ${mobileLayout ? 'gap-1.5' : 'gap-1'}`}
+          data-testid={mobileLayout ? undefined : 'code-agent-desktop-workspace-diff-action-controls'}
+        >
           {mobileLayout && onOpenChangedFiles ? (
             <button
               type="button"

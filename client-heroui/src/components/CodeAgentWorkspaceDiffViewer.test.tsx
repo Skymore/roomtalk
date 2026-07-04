@@ -190,6 +190,12 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(subheader?.className).toContain('border-b');
     expect(subheader?.children[0]?.className).toContain('flex-1');
     expect(subheader?.children[1]?.className).toContain('shrink-0');
+    const primaryControls = screen.getByTestId('code-agent-desktop-workspace-diff-primary-controls');
+    expect(primaryControls.className).toContain('flex-nowrap');
+    expect(primaryControls.className).not.toContain('flex-wrap');
+    expect(primaryControls.children[0]?.className).toContain('min-w-0');
+    expect(primaryControls.children[0]?.className).toContain('flex-1');
+    expect(screen.getByTestId('code-agent-desktop-workspace-diff-action-controls').className).toContain('shrink-0');
     const viewport = screen.getByTestId('code-agent-workspace-diff-viewer').querySelector('.diff-panel-viewport');
     expect(viewport).toBeTruthy();
     expect(viewport?.contains(loading)).toBe(true);
