@@ -352,8 +352,8 @@ describe('E2BCocoSandboxService', () => {
       assert.equal(archive.byteSize, 'workspace-archive'.length);
       assert.equal(driver.fileWriteRequests[0].path, '/tmp/roomtalk-codex/workspace-import-1.tar.gz');
       assert.equal(Buffer.from(driver.fileWriteRequests[0].data as Uint8Array).toString('utf8'), 'workspace-archive');
-      assert.equal(driver.commands.some(command => command.includes('tar -C "$workspace" -czf "$archive" .')), true);
-      assert.equal(driver.commands.some(command => command.includes('tar -C "$workspace" -xzf "$archive"')), true);
+      assert.equal(driver.commands.some(command => command.includes('tarfile.open(archive, "w:gz"')), true);
+      assert.equal(driver.commands.some(command => command.includes('tarfile.open(archive, "r:gz"')), true);
       assert.equal(driver.fileRemoveRequests.includes('/tmp/roomtalk-codex/workspace-export-1.tar.gz'), true);
       assert.equal(driver.fileRemoveRequests.includes('/tmp/roomtalk-codex/workspace-import-1.tar.gz'), true);
     } finally {

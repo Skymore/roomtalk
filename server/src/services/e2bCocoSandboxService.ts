@@ -504,10 +504,53 @@ export class E2BCocoSandboxService implements CocoSandboxService {
       'set -eu',
       `workspace=${workspace}`,
       `archive=${quotedArchive}`,
+      'export ROOMTALK_WORKSPACE="$workspace"',
+      'export ROOMTALK_ARCHIVE="$archive"',
       'mkdir -p "$(dirname "$archive")',
       'rm -f "$archive"',
       'if [ ! -d "$workspace" ]; then mkdir -p "$workspace"; fi',
-      'tar -C "$workspace" -czf "$archive" .',
+      'python - <<\'PY\'',
+      'import os',
+      'import stat',
+      'import sys',
+      'import tarfile',
+      'from pathlib import Path',
+      '',
+      'workspace = Path(os.environ["ROOMTALK_WORKSPACE"])',
+      'archive = os.environ["ROOMTALK_ARCHIVE"]',
+      'skipped = 0',
+      '',
+      'def to_arcname(path: Path) -> str:',
+      '    relative = path.relative_to(workspace)',
+      '    return "." if str(relative) == "." else relative.as_posix()',
+      '',
+      'def add_entry(tar: tarfile.TarFile, path: Path) -> None:',
+      '    global skipped',
+      '    try:',
+      '        mode = os.lstat(path).st_mode',
+      '        if stat.S_ISSOCK(mode) or stat.S_ISFIFO(mode) or stat.S_ISCHR(mode) or stat.S_ISBLK(mode):',
+      '            skipped += 1',
+      '            return',
+      '        tar.add(path, arcname=to_arcname(path), recursive=False)',
+      '    except (FileNotFoundError, PermissionError, OSError) as exc:',
+      '        skipped += 1',
+      '        print(f"skipped {path}: {exc}", file=sys.stderr)',
+      '',
+      'with tarfile.open(archive, "w:gz", dereference=False) as tar:',
+      '    for root, dirs, files in os.walk(workspace, topdown=True, followlinks=False):',
+      '        root_path = Path(root)',
+      '        if root_path != workspace:',
+      '            add_entry(tar, root_path)',
+      '        for dirname in list(dirs):',
+      '            dir_path = root_path / dirname',
+      '            if dir_path.is_symlink():',
+      '                add_entry(tar, dir_path)',
+      '        for filename in files:',
+      '            add_entry(tar, root_path / filename)',
+      '',
+      'if skipped:',
+      '    print(f"__ROOMTALK_WORKSPACE_ARCHIVE_SKIPPED__ {skipped}", file=sys.stderr)',
+      'PY',
       'printf "__ROOMTALK_WORKSPACE_ARCHIVE_BYTES__\\n"',
       'wc -c < "$archive" | tr -d " "',
       'printf "\\n"',
@@ -515,9 +558,12 @@ export class E2BCocoSandboxService implements CocoSandboxService {
 
     try {
       const result = await connected.commands.run(command, { timeoutMs: options.timeoutMs ?? 120_000 });
+      const stdoutPromise = collectReadableText(result.stdout, 64 * 1024);
+      const stderrPromise = collectReadableText(result.stderr, 64 * 1024);
       const completed = await result.completed;
+      const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
       if (completed && completed.exitCode !== 0) {
-        throw new Error(`E2B workspace archive export failed with exit code ${completed.exitCode}`);
+        throw new Error(formatE2BCommandFailure('E2B workspace archive export', completed.exitCode, stdout, stderr));
       }
       const maxBytes = options.maxBytes ?? 200 * 1024 * 1024;
       const archive = await readWorkspaceFileBytes(connected.files.read, archivePath, maxBytes);
@@ -555,16 +601,48 @@ export class E2BCocoSandboxService implements CocoSandboxService {
       'set -eu',
       `workspace=${workspace}`,
       `archive=${quotedArchive}`,
+      'export ROOMTALK_WORKSPACE="$workspace"',
+      'export ROOMTALK_ARCHIVE="$archive"',
       'mkdir -p "$workspace"',
-      'find "$workspace" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +',
-      'tar -C "$workspace" -xzf "$archive"',
+      'python - <<\'PY\'',
+      'import os',
+      'import shutil',
+      'import tarfile',
+      'from pathlib import Path',
+      '',
+      'workspace = Path(os.environ["ROOMTALK_WORKSPACE"])',
+      'archive = os.environ["ROOMTALK_ARCHIVE"]',
+      '',
+      'for entry in workspace.iterdir():',
+      '    if entry.is_dir() and not entry.is_symlink():',
+      '        shutil.rmtree(entry)',
+      '    else:',
+      '        entry.unlink()',
+      '',
+      'def safe_members(tar: tarfile.TarFile):',
+      '    root = workspace.resolve()',
+      '    for member in tar.getmembers():',
+      '        member_path = Path(member.name)',
+      '        if member_path.is_absolute() or ".." in member_path.parts:',
+      '            raise RuntimeError(f"Unsafe archive member: {member.name}")',
+      '        target = (workspace / member.name).resolve()',
+      '        if root != target and root not in target.parents:',
+      '            raise RuntimeError(f"Archive member escapes workspace: {member.name}")',
+      '        yield member',
+      '',
+      'with tarfile.open(archive, "r:gz") as tar:',
+      '    tar.extractall(workspace, members=safe_members(tar))',
+      'PY',
     ].join('\n');
 
     try {
       const result = await connected.commands.run(command, { timeoutMs: options.timeoutMs ?? 120_000 });
+      const stdoutPromise = collectReadableText(result.stdout, 64 * 1024);
+      const stderrPromise = collectReadableText(result.stderr, 64 * 1024);
       const completed = await result.completed;
+      const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
       if (completed && completed.exitCode !== 0) {
-        throw new Error(`E2B workspace archive import failed with exit code ${completed.exitCode}`);
+        throw new Error(formatE2BCommandFailure('E2B workspace archive import', completed.exitCode, stdout, stderr));
       }
     } finally {
       await connected.files.remove?.(archivePath).catch(error => {
@@ -1094,6 +1172,11 @@ const shellQuote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'
 const collectReadableText = async (stream: Readable | undefined, maxBytes = 256 * 1024): Promise<string> => {
   const result = await collectReadableTextWithLimit(stream, maxBytes);
   return result.text;
+};
+
+const formatE2BCommandFailure = (action: string, exitCode: number | null | undefined, stdout: string, stderr: string): string => {
+  const details = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n').slice(0, 4096);
+  return `${action} failed with exit code ${exitCode ?? 'unknown'}${details ? `: ${details}` : ''}`;
 };
 
 const collectReadableTextWithLimit = async (
