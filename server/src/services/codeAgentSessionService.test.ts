@@ -433,7 +433,14 @@ describe('CodeAgentSessionService', () => {
       provider: 'openai',
       label: 'GPT-5.3-Codex-Spark High',
     });
-    assert.equal(messages[messages.length - 1].usage, undefined);
+    assert.deepEqual(messages[messages.length - 1].usage, {
+      promptTokens: 1200,
+      completionTokens: 100,
+      totalTokens: 1300,
+      cachedPromptTokens: 900,
+      cacheHitRate: 0.75,
+      source: 'reported',
+    });
     assert.equal(messages[messages.length - 1].cost, undefined);
     assert.equal(setup.store.roomCost.totalUsd, 0);
   });

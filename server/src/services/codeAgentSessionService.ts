@@ -644,7 +644,7 @@ export class CodeAgentSessionService {
   ): Pick<Message, 'aiModel' | 'usage' | 'cost'> {
     const aiModel = this.messageAIModelForBackend(backend, selectedModel, codexRunSettings);
     if (isCodexBackend(backend)) {
-      return { aiModel };
+      return { aiModel, usage };
     }
     const cost = usage ? calculateAICost(selectedModel, usage) : undefined;
     return { aiModel, usage, cost };
