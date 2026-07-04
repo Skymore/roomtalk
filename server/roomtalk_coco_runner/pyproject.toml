@@ -13,6 +13,7 @@ dependencies = []
 roomtalk-coco-runner = "roomtalk_coco_runner.runner:main"
 roomtalk-codex-cli-runner = "roomtalk_coco_runner.codex_cli:main"
 roomtalk-codex-app-server-runner = "roomtalk_coco_runner.codex_app_server:main"
+roomtalk-codex-sdk-app-server-runner = "roomtalk_coco_runner.codex_sdk_app_server:main"
 roomtalk = "roomtalk_coco_runner.platform_tools:main"
 
 [tool.setuptools.packages.find]

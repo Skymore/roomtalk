@@ -33,6 +33,7 @@ export interface CodeAgentRuntimeConfig {
     turnBudgetUsd: number;
   };
   runnerCommand: string;
+  runnerCommandByBackend: Partial<Record<CodeAgentBackend, string>>;
   allowedPaths: string[];
   runnerEnv: Record<string, string>;
   runnerProviderEnvByProvider: Partial<Record<AIModelProvider, Record<string, string>>>;
@@ -48,6 +49,7 @@ export interface CodeAgentRuntimeConfig {
 export const DEFAULT_COCO_RUNNER_COMMAND = 'python -m roomtalk_coco_runner';
 export const DEFAULT_CODEX_CLI_RUNNER_COMMAND = 'python -m roomtalk_coco_runner.codex_cli';
 export const DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND = 'python -m roomtalk_coco_runner.codex_app_server';
+export const DEFAULT_CODEX_SDK_APP_SERVER_RUNNER_COMMAND = 'python -m roomtalk_coco_runner.codex_sdk_app_server';
 export const DEFAULT_COCO_RUNNER_PYTHONPATH = '/opt/coco/src:/opt/roomtalk_coco_runner';
 export const DEFAULT_COCO_WORKSPACE_ROOT = '/workspace';
 export const DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS = 5 * 60 * 1000;
@@ -418,6 +420,12 @@ export const resolveCodeAgentRuntimeConfig = (env: NodeJS.ProcessEnv): CodeAgent
   const artifactMode = readArtifactMode(env);
   const e2bLifecycle = readE2BLifecycle(env);
   const modelGateway = readModelGatewayConfig(env);
+  const runnerCommand = env.COCO_RUNNER_COMMAND || defaultRunnerCommandForBackend(backend);
+  const runnerCommandByBackend = {
+    coco: backend === 'coco' ? runnerCommand : DEFAULT_COCO_RUNNER_COMMAND,
+    codex: env.CODEX_CLI_RUNNER_COMMAND || (backend === 'codex' ? runnerCommand : DEFAULT_CODEX_CLI_RUNNER_COMMAND),
+    'codex-app-server': env.CODEX_APP_SERVER_RUNNER_COMMAND || (backend === 'codex-app-server' ? runnerCommand : DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND),
+  } satisfies Partial<Record<CodeAgentBackend, string>>;
   const config: CodeAgentRuntimeConfig = {
     enabled: env.COCO_ENABLED === 'true',
     backend,
@@ -431,7 +439,8 @@ export const resolveCodeAgentRuntimeConfig = (env: NodeJS.ProcessEnv): CodeAgent
     availableModes,
     defaultMode,
     modelGateway,
-    runnerCommand: env.COCO_RUNNER_COMMAND || defaultRunnerCommandForBackend(backend),
+    runnerCommand,
+    runnerCommandByBackend,
     allowedPaths: parseCsvEnv(env.COCO_ALLOWED_PATHS || '.'),
     runnerEnv: {
       ...baseRunnerEnv(env, sandboxProvider, runnerClient),

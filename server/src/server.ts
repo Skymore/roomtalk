@@ -1,6 +1,5 @@
 // 导入日志类
 import { Logger, httpLogger } from './logger';
-import type { CodeAgentBackend } from './types';
 
 import express, { Request, Response, NextFunction } from 'express';
 import http from 'http';
@@ -38,9 +37,6 @@ import { createE2BSdkDriver } from './services/e2bSdkDriver';
 import { CODE_AGENT_RUNNER_SCHEMA_VERSION } from './services/codeAgentRunnerProtocol';
 import { createCodeWorkspaceAssetAccessFromEnv } from './services/codeWorkspaceAssetAccess';
 import {
-  DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND,
-  DEFAULT_CODEX_CLI_RUNNER_COMMAND,
-  DEFAULT_COCO_RUNNER_COMMAND,
   DEFAULT_COCO_E2B_KILL_TIMEOUT_MS,
   DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS,
   DEFAULT_COCO_RUNNER_PYTHONPATH,
@@ -331,13 +327,6 @@ const codexRunnerEnv = {
   CODEX_CLI_BIN: codexCliRunnerConfig.cliBin,
   ROOMTALK_CODEX_TIMEOUT_MS: String(codexCliRunnerConfig.timeoutMs),
 };
-const runnerCommandByBackend = {
-  coco: codeAgentRuntimeConfig.backend === 'coco' ? codeAgentRuntimeConfig.runnerCommand : DEFAULT_COCO_RUNNER_COMMAND,
-  codex: codeAgentRuntimeConfig.backend === 'codex' ? codeAgentRuntimeConfig.runnerCommand : DEFAULT_CODEX_CLI_RUNNER_COMMAND,
-  'codex-app-server': codeAgentRuntimeConfig.backend === 'codex-app-server'
-    ? codeAgentRuntimeConfig.runnerCommand
-    : DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND,
-} satisfies Partial<Record<CodeAgentBackend, string>>;
 const codeAgentSessionService = new CodeAgentSessionService(
   store,
   io,
@@ -354,7 +343,7 @@ const codeAgentSessionService = new CodeAgentSessionService(
     modelGateway: cocoModelGateway,
     backend: codeAgentRuntimeConfig.backend,
     runnerCommand: codeAgentRuntimeConfig.runnerCommand,
-    runnerCommandByBackend,
+    runnerCommandByBackend: codeAgentRuntimeConfig.runnerCommandByBackend,
     turnTimeoutMs: cocoTurnTimeoutMs,
     allowedPaths: codeAgentRuntimeConfig.allowedPaths,
     runnerEnv: codeAgentRuntimeConfig.runnerEnv,

@@ -4,7 +4,7 @@ ARG CODEX_CLI_NPM_VERSION=0.142.5
 
 ENV PYTHONUNBUFFERED=1
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
-ENV ROOMTALK_COCO_ARTIFACT_VERSION=roomtalk-coco-2026-07-04-codex-permission-mapping-v2
+ENV ROOMTALK_COCO_ARTIFACT_VERSION=roomtalk-coco-2026-07-04-codex-sdk-app-server-poc-v3
 ENV ROOMTALK_COCO_SOURCE_REF=a4e70e674e46d59a63874371276f5fec0fcd3f41
 ENV ROOMTALK_CODEX_CLI_VERSION=${CODEX_CLI_NPM_VERSION}
 ENV PYTHONPATH=/opt/coco/src:/opt/roomtalk_coco_runner
@@ -15,6 +15,7 @@ COPY coco /opt/coco
 COPY roomtalk_coco_runner /opt/roomtalk_coco_runner
 COPY artifact.lock.json /opt/roomtalk-coco-artifact.lock.json
 COPY requirements.lock /opt/roomtalk-coco-requirements.lock
+COPY codex-sdk.requirements.lock /opt/roomtalk-codex-sdk-requirements.lock
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl gnupg git bash bubblewrap \
@@ -33,7 +34,8 @@ RUN apt-get update \
   && codex-linux-sandbox --help >/dev/null \
   && roomtalk --help >/dev/null \
   && python -m pip install --no-cache-dir --require-hashes -r /opt/roomtalk-coco-requirements.lock \
-  && python -c 'import importlib; importlib.import_module("core.engine"); importlib.import_module("roomtalk_coco_runner.runner"); importlib.import_module("roomtalk_coco_runner.codex_cli"); importlib.import_module("roomtalk_coco_runner.codex_app_server")' \
+  && python -m pip install --no-cache-dir --no-deps --require-hashes -r /opt/roomtalk-codex-sdk-requirements.lock \
+  && python -c 'import importlib; importlib.import_module("core.engine"); importlib.import_module("roomtalk_coco_runner.runner"); importlib.import_module("roomtalk_coco_runner.codex_cli"); importlib.import_module("roomtalk_coco_runner.codex_app_server"); importlib.import_module("roomtalk_coco_runner.codex_sdk_app_server"); importlib.import_module("openai_codex")' \
   && apt-get purge -y --auto-remove curl gnupg \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*

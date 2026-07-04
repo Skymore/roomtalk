@@ -1,0 +1,5 @@
+# This file pins the official Python Codex SDK without installing its pinned
+# runtime dependency. The sandbox already installs @openai/codex through npm and
+# the RoomTalk SDK runner passes CodexConfig.codex_bin to that binary.
+openai-codex==0.1.0b3 \
+    --hash=sha256:8d1f9d346667aeecb435c6a45d0edb3f016187276ec452cf8094d813896276c4

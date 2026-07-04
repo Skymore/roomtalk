@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "artifactName": "roomtalk-coco",
-  "artifactVersion": "roomtalk-coco-2026-07-04-codex-permission-mapping-v2",
+  "artifactVersion": "roomtalk-coco-2026-07-04-codex-sdk-app-server-poc-v3",
   "pythonVersion": "3.12",
   "baseImage": {
     "name": "python",
@@ -30,12 +30,18 @@
       "codex_app_server": {
         "command": "python -m roomtalk_coco_runner.codex_app_server",
         "codexCliVersion": "0.142.5"
+      },
+      "codex_sdk_app_server": {
+        "command": "python -m roomtalk_coco_runner.codex_sdk_app_server",
+        "codexCliVersion": "0.142.5",
+        "pythonSdkVersion": "0.1.0b3"
       }
     }
   },
   "image": {
     "dockerfile": "ops/coco-sandbox/Dockerfile",
     "requirementsLock": "ops/coco-sandbox/requirements.lock",
+    "codexSdkRequirementsLock": "ops/coco-sandbox/codex-sdk.requirements.lock",
     "workspace": "/workspace",
     "cocoInstallPath": "/opt/coco",
     "runnerInstallPath": "/opt/roomtalk_coco_runner"

@@ -1062,17 +1062,25 @@ def _approval_request_event(turn_id: str, pending: _PendingApproval) -> dict[str
         args["permissions"] = params.get("permissions") if isinstance(params.get("permissions"), dict) else {}
     if pending.method == "applyPatchApproval":
         args["fileChanges"] = params.get("fileChanges") if isinstance(params.get("fileChanges"), dict) else {}
-    return {
+    event: dict[str, Any] = {
         "schemaVersion": SCHEMA_VERSION,
         "type": "approval_request",
         "turnId": turn_id,
         "id": pending.approval_id,
+        "approvalId": pending.approval_id,
         "approvalType": approval_type,
         "title": title,
         "message": reason,
         "args": args,
         "messageId": f"codex_app_approval_{pending.approval_id}",
     }
+    if command:
+        event["command"] = str(command)
+    if "cwd" in args:
+        event["cwd"] = args["cwd"]
+    if "changes" in args:
+        event["changes"] = args["changes"]
+    return event
 
 
 def _approval_type_for_method(method: str) -> str:

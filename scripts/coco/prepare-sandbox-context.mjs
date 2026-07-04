@@ -29,6 +29,7 @@ const cocoRef = lock.coco.sourceRef;
 const cocoSourceRepo = lock.coco.sourceRepo;
 const codexCliBackend = lock.runner?.backends?.codex_cli;
 const codexAppServerBackend = lock.runner?.backends?.codex_app_server;
+const codexSdkAppServerBackend = lock.runner?.backends?.codex_sdk_app_server;
 
 if (!/^[0-9a-f]{40}$/i.test(cocoRef)) {
   throw new Error(`Coco sourceRef must be a pinned 40-character commit SHA, got: ${cocoRef}`);
@@ -44,6 +45,15 @@ if (!codexAppServerBackend || codexAppServerBackend.command !== 'python -m roomt
 }
 if (codexAppServerBackend.codexCliVersion !== codexCliBackend.codexCliVersion) {
   throw new Error('Codex app-server backend must pin the same Codex CLI version as codex_cli');
+}
+if (!codexSdkAppServerBackend || codexSdkAppServerBackend.command !== 'python -m roomtalk_coco_runner.codex_sdk_app_server') {
+  throw new Error('Coco artifact lock must declare runner.backends.codex_sdk_app_server.command');
+}
+if (codexSdkAppServerBackend.codexCliVersion !== codexCliBackend.codexCliVersion) {
+  throw new Error('Codex SDK app-server backend must pin the same Codex CLI version as codex_cli');
+}
+if (codexSdkAppServerBackend.pythonSdkVersion !== '0.1.0b3') {
+  throw new Error(`Codex SDK app-server backend must pin openai-codex 0.1.0b3, got: ${codexSdkAppServerBackend.pythonSdkVersion || ''}`);
 }
 
 const isInside = (child, parent) => {
@@ -120,6 +130,9 @@ try {
   });
   cpSync(resolve(repoRoot, lock.image.dockerfile), resolve(outputDir, 'Dockerfile'));
   cpSync(resolve(repoRoot, lock.image.requirementsLock), resolve(outputDir, 'requirements.lock'));
+  if (lock.image.codexSdkRequirementsLock) {
+    cpSync(resolve(repoRoot, lock.image.codexSdkRequirementsLock), resolve(outputDir, 'codex-sdk.requirements.lock'));
+  }
   cpSync(lockPath, resolve(outputDir, 'artifact.lock.json'));
 
   writeFileSync(resolve(outputDir, 'BUILD-METADATA.json'), JSON.stringify({
