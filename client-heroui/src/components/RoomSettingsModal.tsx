@@ -24,6 +24,7 @@ import {
 import {
   CODE_AGENT_BACKEND_OPTIONS,
   CodeAgentMode,
+  getCodeAgentBackend,
   getCodeAgentModeIcon,
   getCodeAgentModeLabelKey,
   getCodeAgentBackendLabelKey,
@@ -121,6 +122,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   const currentCodeAgentMode = normalizedCodeAgentModes.includes(normalizedRoomMode)
     ? normalizedRoomMode
     : (normalizedCodeAgentModes.includes(normalizedDefaultMode) ? normalizedDefaultMode : 'plan');
+  const runtimeRoomType = room.type as string | undefined;
 
   const [activeTab, setActiveTab] = React.useState<SettingsTabKey>('general');
   const [roomName, setRoomName] = React.useState(room.name);
@@ -677,12 +679,12 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
             </div>
           )}
 
-          {(isOwner || isAdmin) && room.type === 'coco' && (
+          {(isOwner || isAdmin) && (runtimeRoomType === 'coco' || runtimeRoomType === 'codex') && (
             <div className="space-y-2">
               {renderSectionLabel('lucide:terminal', t('codeAgentEngine'))}
               <div className="flex flex-wrap gap-1.5">
                 {CODE_AGENT_BACKEND_OPTIONS.map(backend => {
-                  const current = room.codeAgentBackend || 'coco';
+                  const current = getCodeAgentBackend(room) || 'coco';
                   const selected = current === backend;
                   const labelKey = getCodeAgentBackendLabelKey(backend);
                   return (

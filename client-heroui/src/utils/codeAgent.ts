@@ -16,18 +16,23 @@ export {
 } from './codeAgentModes';
 
 export const CODE_AGENT_BACKEND_OPTIONS = ['coco', 'codex', 'codex-app-server'] as const satisfies readonly CodeAgentBackend[];
+const CODE_AGENT_BACKENDS = new Set<CodeAgentBackend>(CODE_AGENT_BACKEND_OPTIONS);
 
 const runtimeRoomType = (room: Room | null | undefined): string | undefined => (
   room?.type as string | undefined
 );
 
+const storedCodeAgentBackend = (room: Room | null | undefined): CodeAgentBackend | null => (
+  room?.codeAgentBackend && CODE_AGENT_BACKENDS.has(room.codeAgentBackend) ? room.codeAgentBackend : null
+);
+
 export const getCodeAgentBackend = (room: Room | null | undefined): CodeAgentBackend | null => {
   const roomType = runtimeRoomType(room);
   if (roomType === 'coco') {
-    return room?.codeAgentBackend || 'coco';
+    return storedCodeAgentBackend(room) || 'coco';
   }
   if (roomType === 'codex') {
-    return 'codex';
+    return storedCodeAgentBackend(room) || 'codex';
   }
   return null;
 };
@@ -51,7 +56,7 @@ export const getCodeAgentDefaultMode = (featureFlags: FeatureFlags): CodeAgentMo
 );
 
 export const isSupportedCodeAgentBackend = (backend: CodeAgentBackend | null): boolean => (
-  backend === 'coco' || backend === 'codex' || backend === 'codex-app-server'
+  backend !== null && CODE_AGENT_BACKENDS.has(backend)
 );
 
 export const isCodexCodeAgentBackend = (backend: CodeAgentBackend | null | undefined): boolean => (

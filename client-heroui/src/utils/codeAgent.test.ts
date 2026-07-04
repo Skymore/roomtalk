@@ -63,11 +63,13 @@ describe('codeAgent room adapters', () => {
 
   it('recognizes Codex-backed code-agent rooms as supported', () => {
     const unsupportedRoom = room({ type: 'codex' as Room['type'] });
+    const legacyCodexAppRoom = room({ type: 'codex' as Room['type'], codeAgentBackend: 'codex-app-server' });
     const cocoCodexRoom = room({ type: 'coco', codeAgentBackend: 'codex', cocoStatus: 'running' });
     const cocoCodexAppRoom = room({ type: 'coco', codeAgentBackend: 'codex-app-server' });
 
     expect(isCodeAgentRoom(unsupportedRoom)).toBe(true);
     expect(getCodeAgentBackend(unsupportedRoom)).toBe('codex');
+    expect(getCodeAgentBackend(legacyCodexAppRoom)).toBe('codex-app-server');
     expect(isSupportedCodeAgentBackend('codex')).toBe(true);
     expect(isSupportedCodeAgentBackend('codex-app-server')).toBe(true);
     expect(isSupportedCodeAgentBackend('coco')).toBe(true);

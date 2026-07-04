@@ -38,7 +38,7 @@ export const POSTGRES_SCHEMA_SQL = [
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS code_agent_backend TEXT`,
   `ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_code_agent_backend_check`,
   `ALTER TABLE rooms ADD CONSTRAINT rooms_code_agent_backend_check
-    CHECK (code_agent_backend IS NULL OR code_agent_backend IN ('coco', 'codex'))`,
+    CHECK (code_agent_backend IS NULL OR code_agent_backend IN ('coco', 'codex', 'codex-app-server'))`,
   `ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_type_check`,
   `ALTER TABLE rooms ADD CONSTRAINT rooms_type_check
     CHECK (type IN ('chat', 'coco'))`,
