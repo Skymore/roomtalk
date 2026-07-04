@@ -387,6 +387,11 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   const mobileDiffToolbarMenuRef = useRef<HTMLDivElement | null>(null);
   const mobileDiffScopeButtonRef = useRef<HTMLButtonElement | null>(null);
   const mobileDiffBaseRefButtonRef = useRef<HTMLButtonElement | null>(null);
+  const mobileDiffHeaderScrollRef = useRef<HTMLDivElement | null>(null);
+  const [mobileDiffHeaderScrollState, setMobileDiffHeaderScrollState] = useState({
+    canScrollStart: false,
+    canScrollEnd: false,
+  });
   const diffFileVisibilityScopeKey = `${roomId}:${diffScope}:${diffScope === 'branch' ? diffBaseRef ?? 'auto' : 'working-tree'}`;
   const scopedDiffFileVisibility = useCodeAgentDiffFileVisibility(diffFileVisibilityScopeKey);
   const collapsedDiffFileKeys = scopedDiffFileVisibility?.collapsedFileKeys ?? EMPTY_DIFF_FILE_KEYS;
@@ -645,6 +650,60 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
       setMobileDiffToolbarMenu(null);
     }
   }, [mobileLayout]);
+
+  const updateMobileDiffHeaderScrollState = useCallback(() => {
+    const element = mobileDiffHeaderScrollRef.current;
+    if (!element) {
+      setMobileDiffHeaderScrollState((current) => (
+        current.canScrollStart || current.canScrollEnd
+          ? { canScrollStart: false, canScrollEnd: false }
+          : current
+      ));
+      return;
+    }
+    const next = {
+      canScrollStart: element.scrollLeft > 1,
+      canScrollEnd: element.scrollLeft + element.clientWidth < element.scrollWidth - 1,
+    };
+    setMobileDiffHeaderScrollState((current) => (
+      current.canScrollStart === next.canScrollStart && current.canScrollEnd === next.canScrollEnd
+        ? current
+        : next
+    ));
+  }, []);
+
+  useEffect(() => {
+    if (!mobileLayout) {
+      setMobileDiffHeaderScrollState((current) => (
+        current.canScrollStart || current.canScrollEnd
+          ? { canScrollStart: false, canScrollEnd: false }
+          : current
+      ));
+      return undefined;
+    }
+    const element = mobileDiffHeaderScrollRef.current;
+    if (!element) {
+      return undefined;
+    }
+    updateMobileDiffHeaderScrollState();
+    element.addEventListener('scroll', updateMobileDiffHeaderScrollState, { passive: true });
+    window.addEventListener('resize', updateMobileDiffHeaderScrollState);
+    const observer = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(updateMobileDiffHeaderScrollState);
+    observer?.observe(element);
+    return () => {
+      element.removeEventListener('scroll', updateMobileDiffHeaderScrollState);
+      window.removeEventListener('resize', updateMobileDiffHeaderScrollState);
+      observer?.disconnect();
+    };
+  }, [mobileLayout, updateMobileDiffHeaderScrollState]);
+
+  useEffect(() => {
+    if (mobileLayout) {
+      updateMobileDiffHeaderScrollState();
+    }
+  });
 
   const baseRefChoices = useMemo(() => {
     const refs = workspaceRefs?.refs ?? [];
@@ -1250,32 +1309,54 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
   );
   const headerRow = mobileLayout ? (
     <div
-      className="-mx-2 flex min-w-0 flex-1 overflow-x-auto px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-      data-testid="code-agent-mobile-workspace-diff-header"
+      className="relative -mx-2 flex min-w-0 flex-1"
+      data-testid="code-agent-mobile-workspace-diff-header-frame"
     >
       <div
-        className="flex min-h-9 min-w-max items-center gap-1.5 text-[11px] leading-4 text-[#87867f] dark:text-[#8f8d86]"
-        data-testid="code-agent-mobile-workspace-diff-controls-row"
+        ref={mobileDiffHeaderScrollRef}
+        className="flex min-w-0 flex-1 overflow-x-auto px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        data-testid="code-agent-mobile-workspace-diff-header"
       >
-        {headerControls}
-        {showMobileReviewStats ? (
-          <CodeAgentDiffStatLabel
-            additions={mobileDiffSummary.additions}
-            deletions={mobileDiffSummary.deletions}
-            className="shrink-0 text-[11px]"
-            layout="inline"
-          />
-        ) : null}
-        {reviewComments.length > 0 ? (
-          <span
-            className="shrink-0 rounded-full border border-[#ead6cc] bg-[#fff7f2] px-1.5 py-px text-[10px] font-semibold leading-none text-[#9f462c] dark:border-[#4a3027] dark:bg-[#2a211d] dark:text-[#ffb197]"
-            data-count={reviewComments.length}
-            data-testid="code-agent-mobile-workspace-diff-pending-review-count"
-          >
-            {t('codeAgentPendingReviewCommentCount', { count: reviewComments.length })}
-          </span>
-        ) : null}
+        <div
+          className="flex min-h-9 min-w-max items-center gap-1.5 pr-7 text-[11px] leading-4 text-[#87867f] dark:text-[#8f8d86]"
+          data-testid="code-agent-mobile-workspace-diff-controls-row"
+        >
+          {headerControls}
+          {showMobileReviewStats ? (
+            <CodeAgentDiffStatLabel
+              additions={mobileDiffSummary.additions}
+              deletions={mobileDiffSummary.deletions}
+              className="shrink-0 text-[11px]"
+              layout="inline"
+            />
+          ) : null}
+          {reviewComments.length > 0 ? (
+            <span
+              className="shrink-0 rounded-full border border-[#ead6cc] bg-[#fff7f2] px-1.5 py-px text-[10px] font-semibold leading-none text-[#9f462c] dark:border-[#4a3027] dark:bg-[#2a211d] dark:text-[#ffb197]"
+              data-count={reviewComments.length}
+              data-testid="code-agent-mobile-workspace-diff-pending-review-count"
+            >
+              {t('codeAgentPendingReviewCommentCount', { count: reviewComments.length })}
+            </span>
+          ) : null}
+        </div>
       </div>
+      <span
+        aria-hidden="true"
+        className={`pointer-events-none absolute inset-y-1 left-0 z-10 w-5 bg-gradient-to-r from-[#faf9f5] to-transparent transition-opacity dark:from-[#1d1d1b] ${
+          mobileDiffHeaderScrollState.canScrollStart ? 'opacity-100' : 'opacity-0'
+        }`}
+        data-testid="code-agent-mobile-workspace-diff-scroll-fade-start"
+        data-visible={mobileDiffHeaderScrollState.canScrollStart ? 'true' : 'false'}
+      />
+      <span
+        aria-hidden="true"
+        className={`pointer-events-none absolute inset-y-1 right-0 z-10 w-8 bg-gradient-to-l from-[#faf9f5] to-transparent transition-opacity dark:from-[#1d1d1b] ${
+          mobileDiffHeaderScrollState.canScrollEnd ? 'opacity-100' : 'opacity-0'
+        }`}
+        data-testid="code-agent-mobile-workspace-diff-scroll-fade-end"
+        data-visible={mobileDiffHeaderScrollState.canScrollEnd ? 'true' : 'false'}
+      />
     </div>
   ) : headerControls;
 

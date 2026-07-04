@@ -360,6 +360,22 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(within(mobileHeader).queryByText('codeAgentReviewFilesChanged')).toBeNull();
     const controlsRow = within(mobileHeader).getByTestId('code-agent-mobile-workspace-diff-controls-row');
     expect(controlsRow.className).toContain('min-w-max');
+    const fadeStart = screen.getByTestId('code-agent-mobile-workspace-diff-scroll-fade-start');
+    const fadeEnd = screen.getByTestId('code-agent-mobile-workspace-diff-scroll-fade-end');
+    Object.defineProperty(mobileHeader, 'clientWidth', { configurable: true, value: 320 });
+    Object.defineProperty(mobileHeader, 'scrollWidth', { configurable: true, value: 520 });
+    Object.defineProperty(mobileHeader, 'scrollLeft', { configurable: true, writable: true, value: 0 });
+    fireEvent.scroll(mobileHeader);
+    await waitFor(() => {
+      expect(fadeStart.dataset.visible).toBe('false');
+      expect(fadeEnd.dataset.visible).toBe('true');
+    });
+    mobileHeader.scrollLeft = 200;
+    fireEvent.scroll(mobileHeader);
+    await waitFor(() => {
+      expect(fadeStart.dataset.visible).toBe('true');
+      expect(fadeEnd.dataset.visible).toBe('false');
+    });
     expect(within(controlsRow).getByText('codeAgentReviewSectionBranchRange')).toBeTruthy();
     expect(within(controlsRow).getByText('+2')).toBeTruthy();
     expect(within(controlsRow).getByText('-1')).toBeTruthy();
