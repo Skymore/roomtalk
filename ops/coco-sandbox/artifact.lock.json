@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "artifactName": "roomtalk-coco",
-  "artifactVersion": "roomtalk-coco-2026-07-05-playwright-chromium-timeout-v1",
+  "artifactVersion": "roomtalk-coco-2026-07-05-toolchains-v1",
   "pythonVersion": "3.12",
   "baseImage": {
     "name": "python",
@@ -45,6 +45,58 @@
     ],
     "browsersPath": "/ms-playwright",
     "nodePath": "/usr/lib/node_modules"
+  },
+  "runtimeTools": {
+    "cli": [
+      "bash",
+      "curl",
+      "wget",
+      "git",
+      "git-lfs",
+      "openssh-client",
+      "jq",
+      "ripgrep",
+      "fd",
+      "tree",
+      "file",
+      "less",
+      "lsof",
+      "procps",
+      "psmisc",
+      "iproute2",
+      "iputils-ping",
+      "dnsutils",
+      "netcat-openbsd",
+      "rsync",
+      "sqlite3",
+      "postgresql-client",
+      "redis-tools",
+      "shellcheck",
+      "zip",
+      "unzip",
+      "xz-utils"
+    ],
+    "build": [
+      "build-essential",
+      "pkg-config",
+      "cmake",
+      "ninja-build"
+    ],
+    "languages": {
+      "python": "3.12",
+      "node": "22",
+      "go": "debian-bookworm golang-go",
+      "rust": "debian-bookworm rustc+cargo",
+      "java": "openjdk-17-jdk-headless+maven",
+      "ruby": "debian-bookworm ruby-full",
+      "php": "debian-bookworm php-cli+composer"
+    },
+    "nodeGlobalPackages": {
+      "pnpm": "11.10.0",
+      "yarn": "1.22.22",
+      "typescript": "6.0.3",
+      "tsx": "4.23.0"
+    }
   },
   "image": {
     "dockerfile": "ops/coco-sandbox/Dockerfile",
