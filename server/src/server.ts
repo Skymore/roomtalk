@@ -311,16 +311,16 @@ const codeAgentSandboxLifecycle = new CodeAgentSandboxLifecycleService(store, co
   codeAgentSourceRef: codeAgentRuntimeConfig.codeAgentSourceRef,
 });
 const fakeCodeAgentToolOutput = [
-  'stdout: hello from code agent fake runner',
+  'stdout: hello from Coco Agent fake runner',
   'stderr: simulated warning for UI coverage',
   'line '.repeat(260).trim(),
 ].join('\n');
 const codeAgentRunnerClient = codeAgentRuntimeConfig.runnerClient === 'jsonl' ? new JsonlCodeAgentRunnerClient() : new FakeCodeAgentRunnerClient([
-  { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'status', turnId: 'fake', status: 'starting', message: 'Code agent fake runner starting' },
-  { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'fake-ai', delta: 'Code agent fake runner received the task.' },
-  { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'fake-tool-1', name: 'Shell', args: { command: 'printf "hello from code agent fake runner\\n"' } },
+  { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'status', turnId: 'fake', status: 'starting', message: 'Coco Agent fake runner starting' },
+  { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'fake-ai', delta: 'Coco Agent fake runner received the task.' },
+  { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'fake-tool-1', name: 'Shell', args: { command: 'printf "hello from Coco Agent fake runner\\n"' } },
   { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'fake-tool-1', name: 'Shell', success: false, output: fakeCodeAgentToolOutput, exitCode: 2, truncated: true },
-  { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'fake-ai', answer: 'Code agent fake runner received the task.', sessionId: 'fake-code-agent-session' },
+  { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'fake-ai', answer: 'Coco Agent fake runner received the task.', sessionId: 'fake-code-agent-session' },
 ], { eventDelayMs: parsePositiveIntegerEnv('CODE_AGENT_FAKE_RUNNER_EVENT_DELAY_MS', 0) });
 const codeAgentRunner = createCodeAgentRunner(codeAgentRuntimeConfig.backend, codeAgentRunnerClient);
 const codexRunnerEnv = {

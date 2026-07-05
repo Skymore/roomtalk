@@ -418,7 +418,7 @@ export function registerRoomHandlers({
           clientId,
           reason: access.reason,
         });
-        callback?.({ success: false, error: access.message || 'Code agent is unavailable' });
+        callback?.({ success: false, error: access.message || 'Coco Agent is unavailable' });
         return;
       }
     }
@@ -497,8 +497,8 @@ export function registerRoomHandlers({
           roomId,
           reason: access.reason,
         });
-        socket.emit('error', { message: access.message || 'Code agent is unavailable' });
-        callback?.({ success: false, error: access.message || 'Code agent is unavailable' });
+        socket.emit('error', { message: access.message || 'Coco Agent is unavailable' });
+        callback?.({ success: false, error: access.message || 'Coco Agent is unavailable' });
         return;
       }
     }

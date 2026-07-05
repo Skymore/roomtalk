@@ -162,10 +162,10 @@ export class CodeAgentSessionService {
     };
 
     if (!this.options.enabled) {
-      return rejectTurn('Code agent is disabled', { reason: 'disabled' });
+      return rejectTurn('Coco Agent is disabled', { reason: 'disabled' });
     }
     if (this.options.allowedClientIds?.length && !this.options.allowedClientIds.includes(input.clientId)) {
-      return rejectTurn('Code agent is not enabled for this user', { reason: 'not_allowed' });
+      return rejectTurn('Coco Agent is not enabled for this user', { reason: 'not_allowed' });
     }
 
     const room = await this.store.getRoomById(input.roomId);
@@ -176,7 +176,7 @@ export class CodeAgentSessionService {
     }
 
     if (this.activeTurns.has(input.roomId)) {
-      return rejectTurn('A code-agent task is already running in this room', { reason: 'room_already_running' });
+      return rejectTurn('A Coco Agent task is already running in this room', { reason: 'room_already_running' });
     }
 
     const turnMode = this.resolveTurnMode(input.requestedMode ?? room!.codeAgentMode, input.requestedModeSource);
@@ -228,10 +228,10 @@ export class CodeAgentSessionService {
       const promptContext = await this.readLatestPromptContext(input.roomId, input.clientId, input.maxContextMessages);
       if (!promptContext) {
         await this.recordTurnEvent('warn', 'code_agent.turn.rejected', input, turnId, turnStartedAtMs, {
-          errorMessage: 'Code agent requires a text prompt in the room history',
+          errorMessage: 'Coco Agent requires a text prompt in the room history',
           payload: { reason: 'missing_prompt', mode: turnMode.mode },
         });
-        return ack({ success: false, error: 'Code agent requires a text prompt in the room history' });
+        return ack({ success: false, error: 'Coco Agent requires a text prompt in the room history' });
       }
 
       await this.recordTurnEvent('info', 'code_agent.turn.started', input, turnId, turnStartedAtMs, {
@@ -279,9 +279,9 @@ export class CodeAgentSessionService {
       if (!runningRoom) {
         await this.recordTurnEvent('error', 'code_agent.turn.failed', input, turnId, turnStartedAtMs, {
           errorCode: 'mark_running_failed',
-          errorMessage: 'Unable to mark code-agent room as running',
+          errorMessage: 'Unable to mark Coco Agent room as running',
         });
-        return ack({ success: false, error: 'Unable to mark code-agent room as running' });
+        return ack({ success: false, error: 'Unable to mark Coco Agent room as running' });
       }
       roomMarkedRunning = true;
       this.emitter.to(runningRoom.creatorId).emit('room_updated', runningRoom);
@@ -525,7 +525,7 @@ export class CodeAgentSessionService {
   async interruptTurn(roomId: string, clientId: string, reason?: string): Promise<CodeAgentControlAck> {
     const active = this.activeTurns.get(roomId);
     if (!active) {
-      return { success: false, error: 'No code agent turn is running in this room' };
+      return { success: false, error: 'No Coco Agent turn is running in this room' };
     }
     if (active.clientId !== clientId) {
       this.logger.info('Code agent interrupt requested by another room member', { roomId, startedBy: active.clientId, requestedBy: clientId });
@@ -548,7 +548,7 @@ export class CodeAgentSessionService {
   async steerTurn(roomId: string, clientId: string, prompt: string): Promise<CodeAgentControlAck> {
     const active = this.activeTurns.get(roomId);
     if (!active) {
-      return { success: false, error: 'No code agent turn is running in this room' };
+      return { success: false, error: 'No Coco Agent turn is running in this room' };
     }
     if (active.backend !== 'codex-app-server') {
       return { success: false, error: 'Turn steering requires the Codex App engine' };
@@ -576,7 +576,7 @@ export class CodeAgentSessionService {
   ): Promise<CodeAgentControlAck> {
     const active = this.activeTurns.get(roomId);
     if (!active) {
-      return { success: false, error: 'No code agent turn is running in this room' };
+      return { success: false, error: 'No Coco Agent turn is running in this room' };
     }
     if (active.backend !== 'codex-app-server') {
       return { success: false, error: 'Interactive approval requires the Codex App engine' };
@@ -662,7 +662,7 @@ export class CodeAgentSessionService {
     const active = this.activeTurns.get(roomId);
     const stdin = active?.process?.stdin;
     if (!active || !stdin) {
-      return { success: false, error: 'Code agent runner is not ready for control input' };
+      return { success: false, error: 'Coco Agent is not ready for control input' };
     }
     try {
       await writeCodeAgentRunnerRequest(stdin, request);
@@ -674,7 +674,7 @@ export class CodeAgentSessionService {
         turnId: active.turnId,
         requestType: request.type,
       });
-      return { success: false, error: 'Failed to send control request to the running code agent' };
+      return { success: false, error: 'Failed to send control request to the running Coco Agent' };
     }
   }
 
@@ -895,7 +895,7 @@ export class CodeAgentSessionService {
       return { success: false, error: 'Room not found' };
     }
     if (room.type !== 'codeAgent') {
-      return { success: false, error: 'Room is not a code-agent room' };
+      return { success: false, error: 'Room is not a Coco Agent room' };
     }
     if (!canUseCodeAgentRoom(room, clientId, memberRole)) {
       return { success: false, error: CODE_AGENT_ACCESS_DENIED_MESSAGE };
@@ -914,7 +914,7 @@ export class CodeAgentSessionService {
     }
     const normalizedMode = normalizeCodeAgentMode(requestedMode);
     if (!normalizedMode) {
-      return { ok: false, error: `Code agent mode is not enabled: ${requestedMode}` };
+      return { ok: false, error: `Coco Agent mode is not enabled: ${requestedMode}` };
     }
     if (availableModes.includes(normalizedMode)) {
       return { ok: true, mode: normalizedMode };
@@ -923,9 +923,9 @@ export class CodeAgentSessionService {
       if (source === 'originalTurn') {
         return { ok: false, error: 'This response was originally run in Edit mode, but Edit mode is no longer available.' };
       }
-      return { ok: false, error: 'code-agent edit mode is not enabled' };
+      return { ok: false, error: 'Coco Agent edit mode is not enabled' };
     }
-    return { ok: false, error: `Code agent mode is not enabled: ${normalizedMode}` };
+    return { ok: false, error: `Coco Agent mode is not enabled: ${normalizedMode}` };
   }
 
   private resolveTurnBackend(room: Room): CodeAgentBackend {
@@ -940,7 +940,10 @@ export class CodeAgentSessionService {
   }
 
   private displayBackendName(backend: CodeAgentBackend): string {
-    return isCodexBackend(backend) ? 'Codex' : 'Code Agent';
+    if (backend === 'codex-app-server') {
+      return 'Codex-app';
+    }
+    return backend === 'codex' ? 'Codex' : 'Coco';
   }
 
   private messageAIModelForBackend(
@@ -1038,9 +1041,9 @@ export class CodeAgentSessionService {
       case 'limit_exceeded':
         return 'Code-agent sandbox limit exceeded';
       case 'forbidden':
-        return 'You do not have access to this code agent room';
+        return 'You do not have access to this Coco Agent room';
       case 'not_code_agent_room':
-        return 'Room is not a code-agent room';
+        return 'Room is not a Coco Agent room';
       case 'missing_room':
         return 'Room not found';
       case 'store_conflict':
@@ -1140,7 +1143,7 @@ export class CodeAgentSessionService {
   }
 
   private async saveCodeAgentError(roomId: string, aiMessage: Message, error: unknown, backend: CodeAgentBackend) {
-    const content = error instanceof Error ? error.message : 'code-agent task failed';
+    const content = error instanceof Error ? error.message : 'Coco Agent task failed';
     const errorMessage: Message = {
       ...aiMessage,
       content,

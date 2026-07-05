@@ -1851,8 +1851,8 @@ export function registerAIHandlers({
       }
 
       if (!codeAgentSessionService) {
-        socket.emit('error', { message: 'Code agent is unavailable' });
-        callback?.({ success: false, error: 'Code agent is unavailable' });
+        socket.emit('error', { message: 'Coco Agent is unavailable' });
+        callback?.({ success: false, error: 'Coco Agent is unavailable' });
         return;
       }
 
@@ -2007,7 +2007,7 @@ export function registerAIHandlers({
           success: true,
           userMessage,
           aiStarted: false,
-          aiError: 'Code agent is unavailable',
+          aiError: 'Coco Agent is unavailable',
         });
         return;
       }
@@ -2100,7 +2100,7 @@ export function registerAIHandlers({
     const room = await store.getRoomById(data.roomId);
     const isCodeAgentRoom = room?.type === 'codeAgent';
     if (isCodeAgentRoom && !codeAgentSessionService) {
-      callback?.({ success: false, error: 'Code agent is unavailable' });
+      callback?.({ success: false, error: 'Coco Agent is unavailable' });
       return;
     }
 

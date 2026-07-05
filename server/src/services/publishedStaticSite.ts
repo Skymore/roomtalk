@@ -413,7 +413,7 @@ export class PublishedStaticSiteService {
       throw new PublishedStaticSiteError('Static site publishing requires full access mode', 403);
     }
     if (input.roomId !== claims.roomId || input.turnId !== claims.turnId) {
-      throw new PublishedStaticSiteError('Publish token does not match this code-agent turn', 403);
+      throw new PublishedStaticSiteError('Publish token does not match this Coco Agent turn', 403);
     }
     if (!Array.isArray(input.files) || input.files.length === 0) {
       throw new PublishedStaticSiteError('At least one static file is required');

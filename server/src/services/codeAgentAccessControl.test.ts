@@ -9,7 +9,7 @@ describe('createCodeAgentAccessControl', () => {
     assert.deepEqual(access.canUse('client-1'), {
       allowed: false,
       reason: 'disabled',
-      message: 'Code agent is disabled',
+      message: 'Coco Agent is disabled',
     });
     assert.deepEqual(access.toFeaturePayload('client-1'), {
       enabled: false,
@@ -35,12 +35,12 @@ describe('createCodeAgentAccessControl', () => {
     assert.deepEqual(access.canUse('client-2'), {
       allowed: false,
       reason: 'not_allowed',
-      message: 'Code agent is not enabled for this user',
+      message: 'Coco Agent is not enabled for this user',
     });
     assert.deepEqual(access.canUse(null), {
       allowed: false,
       reason: 'missing_client_id',
-      message: 'Code agent requires a registered client',
+      message: 'Coco Agent requires a registered client',
     });
     assert.deepEqual(access.toFeaturePayload('client-2'), {
       enabled: false,

@@ -1396,8 +1396,8 @@ export const interruptCodeAgentTurn = (roomId: string, reason?: string): Promise
   emitWithAck<SocketAckResponse>(
     'interrupt_code_agent_turn',
     { roomId, reason },
-    'Timed out while interrupting code agent',
-    'Failed to interrupt code agent',
+    'Timed out while interrupting Coco Agent',
+    'Failed to interrupt Coco Agent',
   ).then(() => undefined)
 );
 
@@ -1405,8 +1405,8 @@ export const steerCodeAgentTurn = (roomId: string, prompt: string): Promise<void
   emitWithAck<SocketAckResponse>(
     'steer_code_agent_turn',
     { roomId, prompt },
-    'Timed out while steering code agent',
-    'Failed to steer code agent',
+    'Timed out while steering Coco Agent',
+    'Failed to steer Coco Agent',
   ).then(() => undefined)
 );
 

@@ -955,7 +955,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
           reason: access.reason,
           ip: req.ip,
         });
-        return res.status(403).json({ error: access.message || 'Code agent is unavailable' });
+        return res.status(403).json({ error: access.message || 'Coco Agent is unavailable' });
       }
     }
 

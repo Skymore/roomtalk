@@ -35,6 +35,7 @@ describe('code agent runner event mapper', () => {
     if (mapped.kind !== 'message') return;
     assert.equal(mapped.message.id, 'tool-1');
     assert.equal(mapped.message.messageType, 'tool_call');
+    assert.equal(mapped.message.username, 'Coco');
     assert.equal(mapped.message.toolCallId, 'tool-1');
     assert.equal(mapped.message.toolName, 'Read');
     assert.deepEqual(mapped.message.toolArgs, { file_path: 'README.md' });

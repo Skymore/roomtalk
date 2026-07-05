@@ -47,7 +47,7 @@ const defaultCreateMessageId = (prefix: string) => `${prefix}_${Date.now()}`;
 
 const timestampFor = (context: CodeAgentEventMapperContext) => (context.now || new Date()).toISOString();
 const clientIdFor = (context: CodeAgentEventMapperContext) => context.clientId || 'code_agent_runner';
-const usernameFor = (context: CodeAgentEventMapperContext) => context.username || 'Code Agent';
+const usernameFor = (context: CodeAgentEventMapperContext) => context.username || 'Coco';
 
 const stringifyArgs = (args: Record<string, unknown>) => {
   try {

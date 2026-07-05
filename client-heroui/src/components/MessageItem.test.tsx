@@ -163,7 +163,7 @@ describe('MessageItem replies', () => {
           ...message,
           id: 'ai-message',
           clientId: 'provider-worker',
-          username: 'Code Agent',
+          username: 'Coco',
           content: 'assistant response',
           messageType: 'ai',
           status: 'complete',
@@ -178,7 +178,7 @@ describe('MessageItem replies', () => {
 
     const item = screen.getByTestId('message-item');
     expect(item.getAttribute('data-message-id')).toBe('ai-message');
-    expect(screen.getByText('Code Agent')).toBeTruthy();
+    expect(screen.getByText('Coco')).toBeTruthy();
     expect(screen.getByText('assistant response')).toBeTruthy();
     expect(screen.getByLabelText('retry')).toBeTruthy();
   });

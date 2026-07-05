@@ -124,17 +124,22 @@ const POSTGRES_CODE_AGENT_NAMING_SQL = [
     SET client_id = 'code_agent_runner'
     WHERE client_id = 'coco_runner'`,
   `UPDATE room_messages
-    SET username = 'Code Agent'
+    SET username = 'Coco'
     WHERE client_id = 'code_agent_runner'
-      AND username = 'Coco'`,
+      AND username IN ('Coco', 'Code Agent')`,
   `UPDATE room_messages
-    SET username = 'Code Agent'
+    SET username = 'Coco'
     WHERE client_id = 'ai_assistant'
-      AND username = 'Coco'`,
+      AND username IN ('Coco', 'Code Agent')`,
   `UPDATE room_messages
-    SET content = replace(content, 'Unable to persist Coco', 'Unable to persist code-agent')
+    SET content = replace(content, 'Unable to persist code-agent', 'Unable to persist Coco Agent')
     WHERE client_id = 'code_agent_runner'
-      AND content LIKE 'Unable to persist Coco%'`,
+      AND content LIKE 'Unable to persist code-agent%'`,
+  `UPDATE room_messages
+    SET content = replace(content, 'Unable to persist Coco', 'Unable to persist Coco Agent')
+    WHERE client_id = 'code_agent_runner'
+      AND content LIKE 'Unable to persist Coco%'
+      AND content NOT LIKE 'Unable to persist Coco Agent%'`,
   `UPDATE observability_events
     SET event = 'code_agent.' || substring(event from 6)
     WHERE event LIKE 'coco.%'`,
@@ -146,44 +151,80 @@ const POSTGRES_CODE_AGENT_NAMING_SQL = [
             replace(
               replace(
                 replace(
-                  replace(error_message, 'roomtalk_coco_runner', 'roomtalk_code_agent_runner'),
-                  'Coco runner', 'code agent runner'
+                  replace(
+                    replace(
+                      replace(
+                        replace(
+                          replace(error_message, 'roomtalk_coco_runner', 'roomtalk_code_agent_runner'),
+                          'Coco runner', 'code agent runner'
+                        ),
+                        'coco runner', 'code agent runner'
+                      ),
+                      'Code agent is', 'Coco Agent is'
+                    ),
+                    'Coco is', 'Coco Agent is'
+                  ),
+                  'Code agent requires', 'Coco Agent requires'
                 ),
-                'coco runner', 'code agent runner'
+                'Coco requires', 'Coco Agent requires'
               ),
-              'Coco is', 'Code agent is'
+              'Code agent mode', 'Coco Agent mode'
             ),
-            'Coco requires', 'Code agent requires'
+            'Coco mode', 'Coco Agent mode'
           ),
-          'Coco mode', 'Code agent mode'
+          'code-agent room', 'Coco Agent room'
         ),
-        'Coco room', 'code-agent room'
+        'Coco room', 'Coco Agent room'
       ),
-      'Coco sandbox', 'code-agent sandbox'
+      'code-agent sandbox', 'Coco Agent sandbox'
     )
     WHERE error_message IS NOT NULL
-      AND (error_message LIKE '%Coco%' OR error_message LIKE '%roomtalk_coco_runner%')`,
+      AND (
+        error_message LIKE '%Coco%'
+        OR error_message LIKE '%Code agent%'
+        OR error_message LIKE '%code-agent room%'
+        OR error_message LIKE '%code-agent sandbox%'
+        OR error_message LIKE '%roomtalk_coco_runner%'
+      )`,
   `UPDATE observability_events
     SET payload = replace(
       replace(
         replace(
           replace(
-            payload::text,
-            'roomtalk_coco_runner',
-            'roomtalk_code_agent_runner'
-          ),
+            replace(
+              replace(
+                replace(
+                  replace(
+                    payload::text,
+                    'roomtalk_coco_runner',
+                    'roomtalk_code_agent_runner'
+                  ),
+                  'Code agent runner starting',
+                  'Coco Agent runner starting'
+                ),
           'Coco runner starting',
-          'Code agent runner starting'
+                'Coco Agent runner starting'
+              ),
+              'Code agent engine',
+              'Coco Agent engine'
+            ),
+            'Coco engine',
+            'Coco Agent engine'
+          ),
+          'Code agent runner',
+          'Coco Agent runner'
         ),
-        'Coco engine',
-        'Code agent engine'
+        'Coco runner',
+        'Coco Agent runner'
       ),
-      'Coco runner',
+      'coco runner',
       'code agent runner'
     )::jsonb
     WHERE payload::text LIKE '%roomtalk_coco_runner%'
       OR payload::text LIKE '%Coco runner%'
-      OR payload::text LIKE '%Coco engine%'`,
+      OR payload::text LIKE '%Coco engine%'
+      OR payload::text LIKE '%Code agent runner%'
+      OR payload::text LIKE '%Code agent engine%'`,
   `UPDATE observability_events
     SET payload = replace(
       payload::text,
@@ -260,16 +301,26 @@ const migrateMessagePayload = (message: Record<string, any>): { changed: boolean
     next.clientId = 'code_agent_runner';
     changed = true;
   }
-  if ((next.clientId === 'code_agent_runner' || next.clientId === 'ai_assistant') && next.username === 'Coco') {
-    next.username = 'Code Agent';
+  if (
+    (next.clientId === 'code_agent_runner' || next.clientId === 'ai_assistant')
+    && (next.username === 'Coco' || next.username === 'Code Agent')
+  ) {
+    next.username = 'Coco';
     changed = true;
   }
   if (
     next.clientId === 'code_agent_runner'
     && typeof next.content === 'string'
-    && next.content.startsWith('Unable to persist Coco')
+    && (
+      next.content.startsWith('Unable to persist Coco')
+      || next.content.startsWith('Unable to persist code-agent')
+    )
   ) {
-    next.content = next.content.replace('Unable to persist Coco', 'Unable to persist code-agent');
+    next.content = next.content
+      .replace('Unable to persist code-agent', 'Unable to persist Coco Agent')
+      .replace('Unable to persist Coco Agent Agent', 'Unable to persist Coco Agent')
+      .replace('Unable to persist Coco', 'Unable to persist Coco Agent')
+      .replace('Unable to persist Coco Agent Agent', 'Unable to persist Coco Agent');
     changed = true;
   }
 

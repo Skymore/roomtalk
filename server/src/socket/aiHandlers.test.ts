@@ -536,7 +536,7 @@ describe('AI socket handlers', () => {
       response = ack;
     });
 
-    assert.deepEqual(response, { success: false, error: 'Code agent is unavailable' });
+    assert.deepEqual(response, { success: false, error: 'Coco Agent is unavailable' });
     assert.equal(store.upsertedMessages.length, 0);
     assert.equal(store.assistantRuns.length, 0);
   });
@@ -1150,7 +1150,7 @@ describe('AI socket handlers', () => {
       response = ack;
     });
 
-    assert.deepEqual(response, { success: false, error: 'Code agent is unavailable' });
+    assert.deepEqual(response, { success: false, error: 'Coco Agent is unavailable' });
     assert.deepEqual(store.editAndTruncateCalls, []);
   });
 
@@ -1291,7 +1291,7 @@ describe('AI socket handlers', () => {
     assert.equal(store.upsertedMessages.length, 0);
     assert.equal(calls.length, 0);
     assert.equal(io.roomEmits.length, 0);
-    assert.deepEqual(response, { success: false, error: 'You do not have access to this code agent room' });
+    assert.deepEqual(response, { success: false, error: 'You do not have access to this Coco Agent room' });
   });
 
   it('rejects code-agent ask-ai requests before starting when the member cannot use code agent', async () => {
@@ -1316,7 +1316,7 @@ describe('AI socket handlers', () => {
     });
 
     assert.equal(calls.length, 0);
-    assert.deepEqual(response, { success: false, error: 'You do not have access to this code agent room' });
+    assert.deepEqual(response, { success: false, error: 'You do not have access to this Coco Agent room' });
   });
 
   it('acknowledges the saved user message when AI startup fails afterward', async () => {
