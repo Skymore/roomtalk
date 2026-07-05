@@ -449,9 +449,6 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
       <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <h3 className="truncate text-sm font-semibold uppercase tracking-normal text-[#5e5d59] dark:text-[#b0aea5]">
-              {t('codeAgentWorkspace')}
-            </h3>
             <Dropdown placement="bottom-start">
               <DropdownTrigger>
                 <Button

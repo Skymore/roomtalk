@@ -275,7 +275,7 @@ describe('CodeAgentWorkspacePanel', () => {
 
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(details.getAttribute('hidden')).toBe('');
-    expect(screen.getByText('codeAgentWorkspace')).toBeTruthy();
+    expect(screen.queryByText('codeAgentWorkspace')).toBeNull();
     expect(screen.getByText('Plan')).toBeTruthy();
     expect(screen.getByText('sandboxStatusReady')).toBeTruthy();
     expect(screen.getByText('codeAgentStatusIdle')).toBeTruthy();
