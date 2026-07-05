@@ -24,7 +24,7 @@ server/build/
 backups/
 tmp/
 
-# Python caches (coco runner)
+# Python caches (code-agent runner)
 __pycache__/
 .pytest_cache/
 *.pyc

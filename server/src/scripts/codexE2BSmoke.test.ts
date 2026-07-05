@@ -6,10 +6,10 @@ import { DEFAULT_CODEX_CLI_RUNNER_COMMAND } from '../services/codeAgentRuntimeCo
 const baseEnv = {
   RUN_CODEX_E2B_SMOKE: 'true',
   E2B_API_KEY: 'e2b-test-key',
-  COCO_E2B_TEMPLATE_ID: 'roomtalk-coco-dual-cli',
-  COCO_ARTIFACT_MODE: 'production',
-  COCO_ARTIFACT_VERSION: 'roomtalk-coco-2026-07-04-dual-cli-candidate',
-  COCO_SOURCE_REF: '0d783dd662c823d6a671c6bba596a3ec5ef00491',
+  CODE_AGENT_E2B_TEMPLATE_ID: 'roomtalk-code-agent-dual-cli',
+  CODE_AGENT_ARTIFACT_MODE: 'production',
+  CODE_AGENT_ARTIFACT_VERSION: 'roomtalk-code-agent-2026-07-04-dual-cli-candidate',
+  CODE_AGENT_SOURCE_REF: '0d783dd662c823d6a671c6bba596a3ec5ef00491',
   CODEX_E2B_SMOKE_AUTH_JSON_PATH: '/tmp/codex-auth.json',
   CODEX_CLI_BIN: '/usr/local/bin/codex',
   CODEX_CLI_TIMEOUT_MS: '45000',
@@ -38,14 +38,14 @@ describe('buildCodexE2BSmokePlan', () => {
   });
 
   it('skips without E2B template, credentials, or Codex auth JSON', () => {
-    assertSkipped({ RUN_CODEX_E2B_SMOKE: 'true' }, /COCO_E2B_TEMPLATE_ID/);
+    assertSkipped({ RUN_CODEX_E2B_SMOKE: 'true' }, /CODE_AGENT_E2B_TEMPLATE_ID/);
     assertSkipped({
       RUN_CODEX_E2B_SMOKE: 'true',
-      COCO_E2B_TEMPLATE_ID: 'roomtalk-coco-dual-cli',
+      CODE_AGENT_E2B_TEMPLATE_ID: 'roomtalk-code-agent-dual-cli',
     }, /E2B_API_KEY/);
     assertSkipped({
       RUN_CODEX_E2B_SMOKE: 'true',
-      COCO_E2B_TEMPLATE_ID: 'roomtalk-coco-dual-cli',
+      CODE_AGENT_E2B_TEMPLATE_ID: 'roomtalk-code-agent-dual-cli',
       E2B_API_KEY: 'e2b-test-key',
       HOME: '',
     }, /CODEX_E2B_SMOKE_AUTH_JSON_PATH/);
@@ -71,8 +71,8 @@ describe('buildCodexE2BSmokePlan', () => {
   it('fails fast when production E2B artifact metadata is missing', () => {
     assert.throws(() => buildCodexE2BSmokePlan({
       ...baseEnv,
-      COCO_ARTIFACT_VERSION: undefined,
-      COCO_SOURCE_REF: undefined,
-    }), /Production Coco E2B JSONL mode requires/);
+      CODE_AGENT_ARTIFACT_VERSION: undefined,
+      CODE_AGENT_SOURCE_REF: undefined,
+    }), /Production code agent E2B JSONL mode requires/);
   });
 });

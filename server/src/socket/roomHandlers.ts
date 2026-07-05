@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { createCocoAccessControl } from '../services/cocoAccessControl';
+import { createCodeAgentAccessControl } from '../services/codeAgentAccessControl';
 import { hashRoomPassword, verifyRoomPassword } from '../services/roomSecurity';
 import { createRoomMemberEvent, createRoomRecord } from '../services/messageDomain';
 import { isClientRequestAuthorized } from '../services/clientAuth';
@@ -93,7 +93,7 @@ const validateRoomName = (name: unknown): { ok: true; name: string } | { ok: fal
 };
 
 const normalizeRoomType = (type: unknown): RoomType | undefined => (
-  type === 'coco' ? 'coco' : undefined
+  type === 'codeAgent' ? 'codeAgent' : undefined
 );
 
 const getRoomIdFromPayload = (payload: unknown): string | null => {
@@ -228,8 +228,8 @@ export function registerRoomHandlers({
   socket,
   store,
   socketLogger,
-  cocoAccess = createCocoAccessControl({ enabled: false }),
-  cocoSandboxService,
+  codeAgentAccess = createCodeAgentAccessControl({ enabled: false }),
+  codeAgentSandboxService,
   publishedStaticSiteService,
 }: SocketConnectionContext) {
   socket.on('register', async (payload: unknown, callback?: (result: RegisterAck) => void) => {
@@ -402,7 +402,7 @@ export function registerRoomHandlers({
       return;
     }
 
-    if (roomData?.type !== undefined && roomData.type !== 'chat' && roomData.type !== 'coco') {
+    if (roomData?.type !== undefined && roomData.type !== 'chat' && roomData.type !== 'codeAgent') {
       socketLogger.warn('Unknown room type ignored during room creation', {
         socketId: socket.id,
         clientId,
@@ -410,15 +410,15 @@ export function registerRoomHandlers({
       });
     }
 
-    if (roomData?.type === 'coco') {
-      const access = cocoAccess.canUse(clientId);
+    if (roomData?.type === 'codeAgent') {
+      const access = codeAgentAccess.canUse(clientId);
       if (!access.allowed) {
-        socketLogger.warn('Coco room creation rejected by rollout controls', {
+        socketLogger.warn('Code-agent room creation rejected by rollout controls', {
           socketId: socket.id,
           clientId,
           reason: access.reason,
         });
-        callback?.({ success: false, error: access.message || 'Coco is unavailable' });
+        callback?.({ success: false, error: access.message || 'Code agent is unavailable' });
         return;
       }
     }
@@ -488,17 +488,17 @@ export function registerRoomHandlers({
       return;
     }
 
-    if (room.type === 'coco') {
-      const access = cocoAccess.canUse(userId);
+    if (room.type === 'codeAgent') {
+      const access = codeAgentAccess.canUse(userId);
       if (!access.allowed) {
-        socketLogger.warn('Coco room join rejected by rollout controls', {
+        socketLogger.warn('Code-agent room join rejected by rollout controls', {
           socketId: socket.id,
           userId,
           roomId,
           reason: access.reason,
         });
-        socket.emit('error', { message: access.message || 'Coco is unavailable' });
-        callback?.({ success: false, error: access.message || 'Coco is unavailable' });
+        socket.emit('error', { message: access.message || 'Code agent is unavailable' });
+        callback?.({ success: false, error: access.message || 'Code agent is unavailable' });
         return;
       }
     }
@@ -688,9 +688,9 @@ export function registerRoomHandlers({
 
       socketLogger.info('Attempting to delete room', { socketId: socket.id, clientId, roomId, roomName: room.name });
 
-      if (room.type === 'coco' && room.sandboxId && cocoSandboxService) {
-        await cocoSandboxService.destroy(room.sandboxId).catch(error => {
-          socketLogger.warn('Failed to destroy Coco sandbox while deleting room', {
+      if (room.type === 'codeAgent' && room.sandboxId && codeAgentSandboxService) {
+        await codeAgentSandboxService.destroy(room.sandboxId).catch(error => {
+          socketLogger.warn('Failed to destroy code-agent sandbox while deleting room', {
             error: error instanceof Error ? error.message : String(error),
             socketId: socket.id,
             clientId,
@@ -966,7 +966,7 @@ export function registerRoomHandlers({
   });
 
   socket.on('update_room_settings', async (
-    data: { roomId?: string; password?: string; clearPassword?: boolean; postingSchedule?: unknown; cocoAccess?: unknown; codeAgentMode?: unknown; codeAgentBackend?: unknown },
+    data: { roomId?: string; password?: string; clearPassword?: boolean; postingSchedule?: unknown; codeAgentAccess?: unknown; codeAgentMode?: unknown; codeAgentBackend?: unknown },
     callback?: (result: BasicRoomAck) => void,
   ) => {
     const clientId = await store.getClientId(socket.id);
@@ -992,9 +992,9 @@ export function registerRoomHandlers({
       return;
     }
 
-    const hasCocoAccessUpdate = Object.prototype.hasOwnProperty.call(data || {}, 'cocoAccess');
-    if (hasCocoAccessUpdate && auth.actor.role !== 'owner') {
-      callback?.({ success: false, error: 'Only the room owner can manage Coco access' });
+    const hasCodeAgentAccessUpdate = Object.prototype.hasOwnProperty.call(data || {}, 'codeAgentAccess');
+    if (hasCodeAgentAccessUpdate && auth.actor.role !== 'owner') {
+      callback?.({ success: false, error: 'Only the room owner can manage code-agent access' });
       return;
     }
 
@@ -1010,11 +1010,11 @@ export function registerRoomHandlers({
         updates.postingSchedule = normalizePostingSchedule(data.postingSchedule);
       }
 
-      const VALID_COCO_ACCESS = ['owner', 'admin', 'member'] as const;
-      if (typeof data.cocoAccess === 'string' && VALID_COCO_ACCESS.includes(data.cocoAccess as any)) {
-        updates.cocoAccess = data.cocoAccess as typeof VALID_COCO_ACCESS[number];
-      } else if (data.cocoAccess === null) {
-        updates.cocoAccess = null;
+      const VALID_CODE_AGENT_ACCESS = ['owner', 'admin', 'member'] as const;
+      if (typeof data.codeAgentAccess === 'string' && VALID_CODE_AGENT_ACCESS.includes(data.codeAgentAccess as any)) {
+        updates.codeAgentAccess = data.codeAgentAccess as typeof VALID_CODE_AGENT_ACCESS[number];
+      } else if (data.codeAgentAccess === null) {
+        updates.codeAgentAccess = null;
       }
 
       const normalizedMode = normalizeCodeAgentMode(data.codeAgentMode);
@@ -1024,7 +1024,7 @@ export function registerRoomHandlers({
         updates.codeAgentMode = null;
       }
 
-      const VALID_CODE_AGENT_BACKENDS = ['coco', 'codex', 'codex-app-server'] as const;
+      const VALID_CODE_AGENT_BACKENDS = ['code-agent', 'codex', 'codex-app-server'] as const;
       if (typeof data.codeAgentBackend === 'string' && VALID_CODE_AGENT_BACKENDS.includes(data.codeAgentBackend as any)) {
         updates.codeAgentBackend = data.codeAgentBackend as typeof VALID_CODE_AGENT_BACKENDS[number];
       } else if (data.codeAgentBackend === null) {
@@ -1254,10 +1254,10 @@ export function registerRoomHandlers({
     const userId = await store.getClientId(socket.id);
 
     if (room) {
-      if (room.type === 'coco') {
-        const access = cocoAccess.canUse(userId);
+      if (room.type === 'codeAgent') {
+        const access = codeAgentAccess.canUse(userId);
         if (!access.allowed) {
-          socketLogger.warn('Coco room info lookup rejected by rollout controls', {
+          socketLogger.warn('Code-agent room info lookup rejected by rollout controls', {
             socketId: socket.id,
             userId,
             roomId,

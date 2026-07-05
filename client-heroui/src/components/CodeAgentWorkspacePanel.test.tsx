@@ -55,17 +55,17 @@ vi.mock('./CodeAgentWorkspaceDiffViewer', () => ({
 
 const room: Room = {
   id: 'room-1',
-  name: 'Coco',
+  name: 'Code Agent',
   createdAt: '2026-05-26T00:00:00.000Z',
   creatorId: 'client-1',
-  type: 'coco',
+  type: 'codeAgent',
   sandboxStatus: 'ready',
-  cocoStatus: 'idle',
+  codeAgentStatus: 'idle',
 };
 
 const toolCall: Message = {
   id: 'tool-1',
-  clientId: 'coco_runner',
+  clientId: 'code_agent_runner',
   content: '',
   roomId: 'room-1',
   timestamp: '2026-05-26T00:00:00.000Z',
@@ -148,7 +148,7 @@ describe('CodeAgentWorkspacePanel', () => {
         room={room}
         messages={[]}
         mode="plan"
-        backend="coco"
+        backend="code-agent"
         canSwitchBackend
         onBackendChange={onBackendChange}
         sessionCostUsd={0}
@@ -213,7 +213,7 @@ describe('CodeAgentWorkspacePanel', () => {
     const onRefreshWorkspace = vi.fn();
     render(
       <CodeAgentWorkspacePanel
-        room={{ ...room, cocoStatus: 'running' }}
+        room={{ ...room, codeAgentStatus: 'running' }}
         messages={[toolCall]}
         mode="edit"
         sessionCostUsd={0.25}
@@ -273,7 +273,7 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(screen.getByText('codeAgentWorkspace')).toBeTruthy();
     expect(screen.getByText('codexPermissionPlan')).toBeTruthy();
     expect(screen.getByText('sandboxStatusReady')).toBeTruthy();
-    expect(screen.getByText('cocoStatusIdle')).toBeTruthy();
+    expect(screen.getByText('codeAgentStatusIdle')).toBeTruthy();
     expect(screen.queryByText('codexPermissionPlanDescription')).toBeNull();
 
     fireEvent.click(toggle);
@@ -292,7 +292,7 @@ describe('CodeAgentWorkspacePanel', () => {
         sessionCostUsd={0}
         workspaceSnapshot={{
           roomId: 'room-1',
-          backend: 'coco',
+          backend: 'code-agent',
           source: 'sandbox',
           generatedAt: '2026-05-29T00:00:00.000Z',
           status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: false },
@@ -361,7 +361,7 @@ describe('CodeAgentWorkspacePanel', () => {
         sessionCostUsd={0}
         workspaceSnapshot={{
           roomId: 'room-1',
-          backend: 'coco',
+          backend: 'code-agent',
           source: 'sandbox',
           generatedAt: '2026-06-30T12:00:00.000Z',
           status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: true },
@@ -417,7 +417,7 @@ describe('CodeAgentWorkspacePanel', () => {
         sessionCostUsd={0}
         workspaceSnapshot={{
           roomId: 'room-1',
-          backend: 'coco',
+          backend: 'code-agent',
           source: 'sandbox',
           generatedAt: '2026-06-30T12:00:00.000Z',
           status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: true },
@@ -474,7 +474,7 @@ describe('CodeAgentWorkspacePanel', () => {
         sessionCostUsd={0}
         workspaceSnapshot={{
           roomId: 'room-1',
-          backend: 'coco',
+          backend: 'code-agent',
           source: 'sandbox',
           generatedAt: '2026-06-30T12:00:00.000Z',
           status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: true },
@@ -513,7 +513,7 @@ describe('CodeAgentWorkspacePanel', () => {
   it('persists changed-file tree collapse state for the same workspace scope', () => {
     const workspaceSnapshot = {
       roomId: 'room-1',
-      backend: 'coco' as const,
+      backend: 'code-agent' as const,
       source: 'sandbox' as const,
       generatedAt: '2026-06-30T12:00:00.000Z',
       status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: true },
@@ -567,7 +567,7 @@ describe('CodeAgentWorkspacePanel', () => {
         sessionCostUsd={0}
         workspaceSnapshot={{
           roomId: 'room-1',
-          backend: 'coco',
+          backend: 'code-agent',
           source: 'sandbox',
           generatedAt: '2026-06-30T12:00:00.000Z',
           status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: true },
@@ -606,7 +606,7 @@ describe('CodeAgentWorkspacePanel', () => {
         sessionCostUsd={0}
         workspaceSnapshot={{
           roomId: 'room-1',
-          backend: 'coco',
+          backend: 'code-agent',
           source: 'sandbox',
           generatedAt: '2026-06-30T12:00:00.000Z',
           status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: true },
@@ -642,7 +642,7 @@ describe('CodeAgentWorkspacePanel', () => {
         sessionCostUsd={0}
         workspaceSnapshot={{
           roomId: 'room-1',
-          backend: 'coco',
+          backend: 'code-agent',
           source: 'sandbox',
           generatedAt: '2026-06-30T12:00:00.000Z',
           status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: true },

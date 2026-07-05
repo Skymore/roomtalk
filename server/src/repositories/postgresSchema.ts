@@ -9,14 +9,14 @@ export const POSTGRES_SCHEMA_SQL = [
     message_version BIGINT NOT NULL DEFAULT 0,
     password_hash TEXT,
     posting_schedule JSONB,
-    type TEXT NOT NULL DEFAULT 'chat' CHECK (type IN ('chat', 'coco')),
+    type TEXT NOT NULL DEFAULT 'chat' CHECK (type IN ('chat', 'codeAgent')),
     sandbox_id TEXT,
     sandbox_status TEXT CHECK (sandbox_status IS NULL OR sandbox_status IN ('none', 'creating', 'ready', 'expired', 'error')),
     sandbox_updated_at TIMESTAMPTZ,
     sandbox_artifact_version TEXT,
-    sandbox_coco_source_ref TEXT,
-    coco_session_id TEXT,
-    coco_status TEXT CHECK (coco_status IS NULL OR coco_status IN ('idle', 'running', 'error'))
+    sandbox_code_agent_source_ref TEXT,
+    code_agent_session_id TEXT,
+    code_agent_status TEXT CHECK (code_agent_status IS NULL OR code_agent_status IN ('idle', 'running', 'error'))
   )`,
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS message_version BIGINT NOT NULL DEFAULT 0`,
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS password_hash TEXT`,
@@ -28,13 +28,13 @@ export const POSTGRES_SCHEMA_SQL = [
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS sandbox_status TEXT`,
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS sandbox_updated_at TIMESTAMPTZ`,
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS sandbox_artifact_version TEXT`,
-  `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS sandbox_coco_source_ref TEXT`,
-  `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS coco_session_id TEXT`,
-  `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS coco_status TEXT`,
-  `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS coco_access TEXT`,
-  `ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_coco_access_check`,
-  `ALTER TABLE rooms ADD CONSTRAINT rooms_coco_access_check
-    CHECK (coco_access IS NULL OR coco_access IN ('owner', 'admin', 'member'))`,
+  `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS sandbox_code_agent_source_ref TEXT`,
+  `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS code_agent_session_id TEXT`,
+  `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS code_agent_status TEXT`,
+  `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS code_agent_access TEXT`,
+  `ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_code_agent_access_check`,
+  `ALTER TABLE rooms ADD CONSTRAINT rooms_code_agent_access_check
+    CHECK (code_agent_access IS NULL OR code_agent_access IN ('owner', 'admin', 'member'))`,
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS code_agent_mode TEXT`,
   `ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_code_agent_mode_check`,
   `ALTER TABLE rooms ADD CONSTRAINT rooms_code_agent_mode_check
@@ -42,20 +42,20 @@ export const POSTGRES_SCHEMA_SQL = [
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS code_agent_backend TEXT`,
   `ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_code_agent_backend_check`,
   `ALTER TABLE rooms ADD CONSTRAINT rooms_code_agent_backend_check
-    CHECK (code_agent_backend IS NULL OR code_agent_backend IN ('coco', 'codex', 'codex-app-server'))`,
+    CHECK (code_agent_backend IS NULL OR code_agent_backend IN ('code-agent', 'codex', 'codex-app-server'))`,
   `ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_type_check`,
   `ALTER TABLE rooms ADD CONSTRAINT rooms_type_check
-    CHECK (type IN ('chat', 'coco'))`,
+    CHECK (type IN ('chat', 'codeAgent'))`,
   `ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_sandbox_status_check`,
   `ALTER TABLE rooms ADD CONSTRAINT rooms_sandbox_status_check
     CHECK (sandbox_status IS NULL OR sandbox_status IN ('none', 'creating', 'ready', 'expired', 'error'))`,
-  `ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_coco_status_check`,
-  `ALTER TABLE rooms ADD CONSTRAINT rooms_coco_status_check
-    CHECK (coco_status IS NULL OR coco_status IN ('idle', 'running', 'error'))`,
+  `ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_code_agent_status_check`,
+  `ALTER TABLE rooms ADD CONSTRAINT rooms_code_agent_status_check
+    CHECK (code_agent_status IS NULL OR code_agent_status IN ('idle', 'running', 'error'))`,
   `CREATE INDEX IF NOT EXISTS idx_rooms_creator_activity
     ON rooms (creator_id, last_activity_at DESC)`,
-  `CREATE INDEX IF NOT EXISTS idx_rooms_coco_recovery
-    ON rooms (type, sandbox_status, coco_status)`,
+  `CREATE INDEX IF NOT EXISTS idx_rooms_code_agent_recovery
+    ON rooms (type, sandbox_status, code_agent_status)`,
   `CREATE TABLE IF NOT EXISTS room_members (
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     client_id TEXT NOT NULL,

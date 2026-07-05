@@ -52,7 +52,17 @@ test('connects, cancels, completes, and disconnects Codex through the settings U
 
   await startCodexLogin(page);
   await expect(page.getByText('ABCD-EFGH').first()).toBeVisible();
-  await expect(page.getByText('Connected').first()).toBeVisible({ timeout: 12_000 });
+  await expect.poll(async () => {
+    const response = await request.get(`${serverURL}/api/codex/connection`, {
+      headers: { 'X-Client-Id': clientId },
+    });
+    if (!response.ok()) {
+      return `http-${response.status()}`;
+    }
+    const payload = await response.json() as { status?: string };
+    return payload.status;
+  }, { timeout: 12_000 }).toBe('connected');
+  await expect(page.getByText('Connected', { exact: true }).first()).toBeVisible();
 
   const connectedStatus = await request.get(`${serverURL}/api/codex/connection`, {
     headers: { 'X-Client-Id': clientId },

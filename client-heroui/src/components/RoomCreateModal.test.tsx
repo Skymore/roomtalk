@@ -10,7 +10,7 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-const renderModal = (isCocoEnabled: boolean) => {
+const renderModal = (isCodeAgentEnabled: boolean) => {
   const props = {
     isOpen: true,
     onClose: vi.fn(),
@@ -20,7 +20,7 @@ const renderModal = (isCocoEnabled: boolean) => {
     nameError: null,
     createError: null,
     isCreating: false,
-    isCocoEnabled,
+    isCodeAgentEnabled,
     onRoomNameChange: vi.fn(),
     onRoomDescriptionChange: vi.fn(),
     onRoomTypeChange: vi.fn(),
@@ -36,19 +36,19 @@ describe('RoomCreateModal', () => {
     cleanup();
   });
 
-  it('hides Coco room creation when the feature is disabled', () => {
+  it('hides code-agent room creation when the feature is disabled', () => {
     renderModal(false);
 
     expect(screen.getByRole('radio', { name: /chatRoomType/ })).toBeTruthy();
-    expect(screen.queryByRole('radio', { name: /cocoRoomType/ })).toBeNull();
+    expect(screen.queryByRole('radio', { name: /codeAgentRoomType/ })).toBeNull();
   });
 
-  it('shows and selects Coco room creation when the feature is enabled', () => {
+  it('shows and selects code-agent room creation when the feature is enabled', () => {
     const props = renderModal(true);
 
-    fireEvent.click(screen.getByRole('radio', { name: /cocoRoomType/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /codeAgentRoomType/ }));
 
-    expect(props.onRoomTypeChange).toHaveBeenCalledWith('coco');
+    expect(props.onRoomTypeChange).toHaveBeenCalledWith('codeAgent');
   });
 
   it('uses a full-height mobile modal shell', () => {

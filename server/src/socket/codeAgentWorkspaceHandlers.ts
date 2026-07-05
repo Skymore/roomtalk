@@ -1,17 +1,17 @@
-import { createCocoAccessControl } from '../services/cocoAccessControl';
+import { createCodeAgentAccessControl } from '../services/codeAgentAccessControl';
 import { CodeWorkspaceAssetError } from '../services/codeWorkspaceAssetAccess';
 import {
-  CocoSandboxHandle,
-  CocoWorkspaceChanges,
-  CocoWorkspaceDiff,
-  CocoWorkspaceDiffScope,
-  CocoWorkspaceEntry,
-  CocoWorkspaceFile,
-  CocoWorkspacePreviewServer,
-  CocoWorkspacePreviewTargetResolution,
-  CocoWorkspaceRefs,
-  ResolveCocoWorkspacePreviewTargetInput,
-} from '../services/cocoSandboxService';
+  CodeAgentSandboxHandle,
+  CodeAgentWorkspaceChanges,
+  CodeAgentWorkspaceDiff,
+  CodeAgentWorkspaceDiffScope,
+  CodeAgentWorkspaceEntry,
+  CodeAgentWorkspaceFile,
+  CodeAgentWorkspacePreviewServer,
+  CodeAgentWorkspacePreviewTargetResolution,
+  CodeAgentWorkspaceRefs,
+  ResolveCodeAgentWorkspacePreviewTargetInput,
+} from '../services/codeAgentSandboxService';
 import { buildCodeAgentWorkspaceSnapshot, CodeAgentWorkspaceSnapshot } from '../services/codeAgentWorkspace';
 import { CodeAgentRunnerApprovalDecision } from '../services/codeAgentRunnerProtocol';
 import { Room } from '../types';
@@ -26,32 +26,32 @@ type WorkspaceSnapshotAck = {
 
 type WorkspaceEntriesAck = {
   success: boolean;
-  entries?: CocoWorkspaceEntry[];
+  entries?: CodeAgentWorkspaceEntry[];
   truncated?: boolean;
   error?: string;
 };
 
 type WorkspaceFileAck = {
   success: boolean;
-  file?: CocoWorkspaceFile;
+  file?: CodeAgentWorkspaceFile;
   error?: string;
 };
 
 type WorkspaceDiffAck = {
   success: boolean;
-  diff?: CocoWorkspaceDiff;
+  diff?: CodeAgentWorkspaceDiff;
   error?: string;
 };
 
 type WorkspaceRefsAck = {
   success: boolean;
-  refs?: CocoWorkspaceRefs;
+  refs?: CodeAgentWorkspaceRefs;
   error?: string;
 };
 
 type WorkspaceEntryAck = {
   success: boolean;
-  entry?: CocoWorkspaceEntry;
+  entry?: CodeAgentWorkspaceEntry;
   error?: string;
 };
 
@@ -119,11 +119,11 @@ type WorkspacePreviewSessionAck = {
 
 type WorkspacePreviewTarget =
   | { kind: 'url'; url: string }
-  | ResolveCocoWorkspacePreviewTargetInput;
+  | ResolveCodeAgentWorkspacePreviewTargetInput;
 
 type WorkspacePreviewTargetResolution =
   | { requestedUrl: string; resolvedUrl: string; resolutionKind: 'direct' }
-  | CocoWorkspacePreviewTargetResolution;
+  | CodeAgentWorkspacePreviewTargetResolution;
 
 type WorkspacePreviewTargetAck = {
   success: boolean;
@@ -133,7 +133,7 @@ type WorkspacePreviewTargetAck = {
 
 type WorkspacePreviewServersAck = {
   success: boolean;
-  servers?: CocoWorkspacePreviewServer[];
+  servers?: CodeAgentWorkspacePreviewServer[];
   error?: string;
 };
 
@@ -162,9 +162,9 @@ const parsePositiveIntegerEnv = (name: string, fallback: number) => {
   const value = Number.parseInt(process.env[name] || '', 10);
   return Number.isFinite(value) && value > 0 ? value : fallback;
 };
-const WORKSPACE_FILE_MAX_BYTES = parsePositiveIntegerEnv('COCO_WORKSPACE_FILE_READ_MAX_BYTES', 10 * 1024 * 1024);
-const WORKSPACE_DIFF_MAX_BYTES = parsePositiveIntegerEnv('COCO_WORKSPACE_DIFF_READ_MAX_BYTES', 10 * 1024 * 1024);
-const unavailableWorkspaceChanges: CocoWorkspaceChanges = {
+const WORKSPACE_FILE_MAX_BYTES = parsePositiveIntegerEnv('CODE_AGENT_WORKSPACE_FILE_READ_MAX_BYTES', 10 * 1024 * 1024);
+const WORKSPACE_DIFF_MAX_BYTES = parsePositiveIntegerEnv('CODE_AGENT_WORKSPACE_DIFF_READ_MAX_BYTES', 10 * 1024 * 1024);
+const unavailableWorkspaceChanges: CodeAgentWorkspaceChanges = {
   available: false,
   changedFiles: [],
   changedFileStats: [],
@@ -238,7 +238,7 @@ const parsePreviewUrl = (payload: unknown): string | null => {
   if (!value || value.length > PREVIEW_URL_MAX_LENGTH) {
     return null;
   }
-  if (value.startsWith('/api/coco/workspace-assets/')) {
+  if (value.startsWith('/api/code-agent/workspace-assets/')) {
     return value;
   }
   try {
@@ -436,7 +436,7 @@ const rememberPreviewHistory = (
   workspacePreviewHistoryByRoomAndTabId.set(key, [...current, url]);
 };
 
-const parseWorkspaceDiffScope = (payload: unknown): CocoWorkspaceDiffScope => {
+const parseWorkspaceDiffScope = (payload: unknown): CodeAgentWorkspaceDiffScope => {
   if (!payload || typeof payload !== 'object') {
     return 'branch';
   }
@@ -467,13 +467,13 @@ export function registerCodeAgentWorkspaceHandlers({
   socket,
   store,
   socketLogger,
-  cocoAccess = createCocoAccessControl({ enabled: false }),
-  cocoSandboxService,
+  codeAgentAccess = createCodeAgentAccessControl({ enabled: false }),
+  codeAgentSandboxService,
   codeAgentSessionService,
   codeWorkspaceAssetAccess,
   publishedStaticSiteService,
 }: SocketConnectionContext) {
-  const loadAuthorizedCocoRoom = async (
+  const loadAuthorizedCodeAgentRoom = async (
     roomId: string | null,
     action: string
   ): Promise<{ success: true; clientId: string; room: Room } | { success: false; error: string; clientId?: string | null }> => {
@@ -493,7 +493,7 @@ export function registerCodeAgentWorkspaceHandlers({
       return { success: false, error: 'You are not authorized to access this room', clientId };
     }
 
-    const access = cocoAccess.canUse(clientId);
+    const access = codeAgentAccess.canUse(clientId);
     if (!access.allowed) {
       socketLogger.warn(`Code workspace ${action} rejected by rollout controls`, {
         socketId: socket.id,
@@ -501,7 +501,7 @@ export function registerCodeAgentWorkspaceHandlers({
         roomId,
         reason: access.reason,
       });
-      return { success: false, error: access.message || 'Coco is unavailable', clientId };
+      return { success: false, error: access.message || 'Code agent is unavailable', clientId };
     }
 
     const room = await store.getRoomById(roomId);
@@ -509,8 +509,8 @@ export function registerCodeAgentWorkspaceHandlers({
       return { success: false, error: 'Room not found', clientId };
     }
 
-    if (room.type !== 'coco') {
-      return { success: false, error: 'Code workspaces are only available for Coco rooms', clientId };
+    if (room.type !== 'codeAgent') {
+      return { success: false, error: 'Code workspaces are only available for code-agent rooms', clientId };
     }
 
     return { success: true, clientId, room };
@@ -518,25 +518,25 @@ export function registerCodeAgentWorkspaceHandlers({
 
   const connectReadyWorkspace = async (
     room: Room
-  ): Promise<{ success: true; handle: CocoSandboxHandle } | { success: false; error: string }> => {
+  ): Promise<{ success: true; handle: CodeAgentSandboxHandle } | { success: false; error: string }> => {
     if (!room.sandboxId || room.sandboxStatus !== 'ready') {
       return { success: false, error: 'Workspace sandbox is not ready' };
     }
-    if (!cocoSandboxService) {
+    if (!codeAgentSandboxService) {
       return { success: false, error: 'Workspace sandbox service is unavailable' };
     }
-    return { success: true, handle: await cocoSandboxService.connect(room.sandboxId) };
+    return { success: true, handle: await codeAgentSandboxService.connect(room.sandboxId) };
   };
 
   socket.on('interrupt_code_agent_turn', async (payload: unknown, callback?: (response: CodeAgentControlAck) => void) => {
     const roomId = parseRoomId(payload);
-    const authorized = await loadAuthorizedCocoRoom(roomId, 'interrupt code agent turn');
+    const authorized = await loadAuthorizedCodeAgentRoom(roomId, 'interrupt code agent turn');
     if (!authorized.success) {
       callback?.({ success: false, error: authorized.error });
       return;
     }
     if (!codeAgentSessionService) {
-      callback?.({ success: false, error: 'Coco is unavailable' });
+      callback?.({ success: false, error: 'Code agent is unavailable' });
       return;
     }
     const reason = parseWorkspaceOptionalString(payload, 'reason')?.slice(0, 500);
@@ -546,13 +546,13 @@ export function registerCodeAgentWorkspaceHandlers({
 
   socket.on('steer_code_agent_turn', async (payload: unknown, callback?: (response: CodeAgentControlAck) => void) => {
     const roomId = parseRoomId(payload);
-    const authorized = await loadAuthorizedCocoRoom(roomId, 'steer code agent turn');
+    const authorized = await loadAuthorizedCodeAgentRoom(roomId, 'steer code agent turn');
     if (!authorized.success) {
       callback?.({ success: false, error: authorized.error });
       return;
     }
     if (!codeAgentSessionService) {
-      callback?.({ success: false, error: 'Coco is unavailable' });
+      callback?.({ success: false, error: 'Code agent is unavailable' });
       return;
     }
     const prompt = parseWorkspaceString(payload, 'prompt');
@@ -566,13 +566,13 @@ export function registerCodeAgentWorkspaceHandlers({
 
   socket.on('respond_code_agent_approval', async (payload: unknown, callback?: (response: CodeAgentControlAck) => void) => {
     const roomId = parseRoomId(payload);
-    const authorized = await loadAuthorizedCocoRoom(roomId, 'respond to code agent approval');
+    const authorized = await loadAuthorizedCodeAgentRoom(roomId, 'respond to code agent approval');
     if (!authorized.success) {
       callback?.({ success: false, error: authorized.error });
       return;
     }
     if (!codeAgentSessionService) {
-      callback?.({ success: false, error: 'Coco is unavailable' });
+      callback?.({ success: false, error: 'Code agent is unavailable' });
       return;
     }
     const approvalId = parseWorkspaceString(payload, 'approvalId');
@@ -587,13 +587,13 @@ export function registerCodeAgentWorkspaceHandlers({
 
   socket.on('list_codex_threads', async (payload: unknown, callback?: (response: CodexThreadListAck) => void) => {
     const roomId = parseRoomId(payload);
-    const authorized = await loadAuthorizedCocoRoom(roomId, 'list Codex threads');
+    const authorized = await loadAuthorizedCodeAgentRoom(roomId, 'list Codex threads');
     if (!authorized.success) {
       callback?.({ success: false, error: authorized.error });
       return;
     }
     if (!codeAgentSessionService) {
-      callback?.({ success: false, error: 'Coco is unavailable' });
+      callback?.({ success: false, error: 'Code agent is unavailable' });
       return;
     }
     const limit = parseWorkspacePositiveInteger(payload, 'limit', 25, 100);
@@ -616,13 +616,13 @@ export function registerCodeAgentWorkspaceHandlers({
 
   socket.on('read_codex_thread', async (payload: unknown, callback?: (response: CodexThreadReadAck) => void) => {
     const roomId = parseRoomId(payload);
-    const authorized = await loadAuthorizedCocoRoom(roomId, 'read Codex thread');
+    const authorized = await loadAuthorizedCodeAgentRoom(roomId, 'read Codex thread');
     if (!authorized.success) {
       callback?.({ success: false, error: authorized.error });
       return;
     }
     if (!codeAgentSessionService) {
-      callback?.({ success: false, error: 'Coco is unavailable' });
+      callback?.({ success: false, error: 'Code agent is unavailable' });
       return;
     }
     const threadId = parseWorkspaceString(payload, 'threadId');
@@ -645,10 +645,10 @@ export function registerCodeAgentWorkspaceHandlers({
   });
 
   const loadWorkspaceSnapshotState = async (room: Room): Promise<{
-    changes: CocoWorkspaceChanges;
+    changes: CodeAgentWorkspaceChanges;
     workspaceRoot: string | null;
   }> => {
-    if (!cocoSandboxService || !room.sandboxId || room.sandboxStatus !== 'ready') {
+    if (!codeAgentSandboxService || !room.sandboxId || room.sandboxStatus !== 'ready') {
       return { changes: unavailableWorkspaceChanges, workspaceRoot: null };
     }
     try {
@@ -657,12 +657,12 @@ export function registerCodeAgentWorkspaceHandlers({
         return { changes: unavailableWorkspaceChanges, workspaceRoot: null };
       }
       const workspaceRoot = workspace.handle.workspace || null;
-      if (!cocoSandboxService.getWorkspaceChanges) {
+      if (!codeAgentSandboxService.getWorkspaceChanges) {
         return { changes: unavailableWorkspaceChanges, workspaceRoot };
       }
       try {
         return {
-          changes: await cocoSandboxService.getWorkspaceChanges(workspace.handle),
+          changes: await codeAgentSandboxService.getWorkspaceChanges(workspace.handle),
           workspaceRoot,
         };
       } catch (error) {
@@ -686,14 +686,14 @@ export function registerCodeAgentWorkspaceHandlers({
         resolutionKind: 'direct',
       };
     }
-    if (!cocoSandboxService?.resolveWorkspacePreviewTarget) {
+    if (!codeAgentSandboxService?.resolveWorkspacePreviewTarget) {
       throw new Error('Workspace preview port targets are unavailable for this sandbox');
     }
     const workspace = await connectReadyWorkspace(room);
     if (!workspace.success) {
       throw new Error(workspace.error);
     }
-    return cocoSandboxService.resolveWorkspacePreviewTarget(workspace.handle, target);
+    return codeAgentSandboxService.resolveWorkspacePreviewTarget(workspace.handle, target);
   };
 
   const loadPublishedArtifacts = async (room: Room) => {
@@ -770,7 +770,7 @@ export function registerCodeAgentWorkspaceHandlers({
     let clientId: string | null = null;
 
     try {
-      const access = await loadAuthorizedCocoRoom(roomId, 'open code workspace preview');
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'open code workspace preview');
       clientId = access.clientId ?? null;
       if (!access.success) {
         callback?.({ success: false, error: access.error });
@@ -802,7 +802,7 @@ export function registerCodeAgentWorkspaceHandlers({
     let clientId: string | null = null;
 
     try {
-      const access = await loadAuthorizedCocoRoom(roomId, 'navigate code workspace preview');
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'navigate code workspace preview');
       clientId = access.clientId ?? null;
       if (!access.success) {
         callback?.({ success: false, error: access.error });
@@ -839,7 +839,7 @@ export function registerCodeAgentWorkspaceHandlers({
     let clientId: string | null = null;
 
     try {
-      const access = await loadAuthorizedCocoRoom(roomId, 'resize code workspace preview');
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'resize code workspace preview');
       clientId = access.clientId ?? null;
       if (!access.success) {
         callback?.({ success: false, error: access.error });
@@ -876,7 +876,7 @@ export function registerCodeAgentWorkspaceHandlers({
     let clientId: string | null = null;
 
     try {
-      const access = await loadAuthorizedCocoRoom(roomId, 'report code workspace preview status');
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'report code workspace preview status');
       clientId = access.clientId ?? null;
       if (!access.success) {
         callback?.({ success: false, error: access.error });
@@ -915,7 +915,7 @@ export function registerCodeAgentWorkspaceHandlers({
     let clientId: string | null = null;
 
     try {
-      const access = await loadAuthorizedCocoRoom(roomId, 'refresh code workspace preview');
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'refresh code workspace preview');
       clientId = access.clientId ?? null;
       if (!access.success) {
         callback?.({ success: false, error: access.error });
@@ -950,7 +950,7 @@ export function registerCodeAgentWorkspaceHandlers({
     let clientId: string | null = null;
 
     try {
-      const access = await loadAuthorizedCocoRoom(roomId, 'list code workspace previews');
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'list code workspace previews');
       clientId = access.clientId ?? null;
       if (!access.success) {
         callback?.({ success: false, error: access.error });
@@ -972,7 +972,7 @@ export function registerCodeAgentWorkspaceHandlers({
     let clientId: string | null = null;
 
     try {
-      const access = await loadAuthorizedCocoRoom(roomId, 'close code workspace preview');
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'close code workspace preview');
       clientId = access.clientId ?? null;
       if (!access.success) {
         callback?.({ success: false, error: access.error });
@@ -1013,7 +1013,7 @@ export function registerCodeAgentWorkspaceHandlers({
     let clientId: string | null = null;
 
     try {
-      const access = await loadAuthorizedCocoRoom(roomId, 'resolve code workspace preview target');
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'resolve code workspace preview target');
       clientId = access.clientId ?? null;
       if (!access.success) {
         callback?.({ success: false, error: access.error });
@@ -1038,13 +1038,13 @@ export function registerCodeAgentWorkspaceHandlers({
     let clientId: string | null = null;
 
     try {
-      const access = await loadAuthorizedCocoRoom(roomId, 'list code workspace preview servers');
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'list code workspace preview servers');
       clientId = access.clientId ?? null;
       if (!access.success) {
         callback?.({ success: false, error: access.error });
         return;
       }
-      if (!cocoSandboxService?.listWorkspacePreviewServers) {
+      if (!codeAgentSandboxService?.listWorkspacePreviewServers) {
         callback?.({ success: true, servers: [] });
         return;
       }
@@ -1055,7 +1055,7 @@ export function registerCodeAgentWorkspaceHandlers({
       }
       callback?.({
         success: true,
-        servers: await cocoSandboxService.listWorkspacePreviewServers(workspace.handle),
+        servers: await codeAgentSandboxService.listWorkspacePreviewServers(workspace.handle),
       });
     } catch (error) {
       socketLogger.error('Failed to list code workspace preview servers', { error, clientId, roomId, socketId: socket.id });
@@ -1068,7 +1068,7 @@ export function registerCodeAgentWorkspaceHandlers({
     let clientId: string | null = null;
 
     try {
-      const access = await loadAuthorizedCocoRoom(roomId, 'refresh code workspace');
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'refresh code workspace');
       clientId = access.clientId ?? null;
       if (!access.success) {
         callback?.({ success: false, error: access.error });
@@ -1100,13 +1100,13 @@ export function registerCodeAgentWorkspaceHandlers({
     let clientId: string | null = null;
 
     try {
-      const access = await loadAuthorizedCocoRoom(roomId, 'browse code workspace');
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'browse code workspace');
       clientId = access.clientId ?? null;
       if (!access.success) {
         callback?.({ success: false, error: access.error });
         return;
       }
-      if (!cocoSandboxService?.listWorkspaceEntries) {
+      if (!codeAgentSandboxService?.listWorkspaceEntries) {
         callback?.({ success: false, error: 'Workspace file browsing is unavailable' });
         return;
       }
@@ -1116,7 +1116,7 @@ export function registerCodeAgentWorkspaceHandlers({
         return;
       }
 
-      const entries = await cocoSandboxService.listWorkspaceEntries(workspace.handle, {
+      const entries = await codeAgentSandboxService.listWorkspaceEntries(workspace.handle, {
         maxDepth: WORKSPACE_ENTRY_DEPTH,
         maxEntries: WORKSPACE_ENTRY_LIMIT + 1,
       });
@@ -1138,7 +1138,7 @@ export function registerCodeAgentWorkspaceHandlers({
     let clientId: string | null = null;
 
     try {
-      const access = await loadAuthorizedCocoRoom(roomId, 'search code workspace');
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'search code workspace');
       clientId = access.clientId ?? null;
       if (!access.success) {
         callback?.({ success: false, error: access.error });
@@ -1148,7 +1148,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: true, entries: [], truncated: false });
         return;
       }
-      if (!cocoSandboxService?.searchWorkspaceEntries) {
+      if (!codeAgentSandboxService?.searchWorkspaceEntries) {
         callback?.({ success: false, error: 'Workspace file search is unavailable' });
         return;
       }
@@ -1158,7 +1158,7 @@ export function registerCodeAgentWorkspaceHandlers({
         return;
       }
 
-      const entries = await cocoSandboxService.searchWorkspaceEntries(workspace.handle, {
+      const entries = await codeAgentSandboxService.searchWorkspaceEntries(workspace.handle, {
         query,
         maxDepth: WORKSPACE_ENTRY_DEPTH,
         maxEntries: limit + 1,
@@ -1181,13 +1181,13 @@ export function registerCodeAgentWorkspaceHandlers({
     let clientId: string | null = null;
 
     try {
-      const access = await loadAuthorizedCocoRoom(roomId, 'list code workspace refs');
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'list code workspace refs');
       clientId = access.clientId ?? null;
       if (!access.success) {
         callback?.({ success: false, error: access.error });
         return;
       }
-      if (!cocoSandboxService?.listWorkspaceRefs) {
+      if (!codeAgentSandboxService?.listWorkspaceRefs) {
         callback?.({ success: false, error: 'Workspace refs are unavailable' });
         return;
       }
@@ -1199,7 +1199,7 @@ export function registerCodeAgentWorkspaceHandlers({
 
       callback?.({
         success: true,
-        refs: await cocoSandboxService.listWorkspaceRefs(workspace.handle, {
+        refs: await codeAgentSandboxService.listWorkspaceRefs(workspace.handle, {
           query,
           maxRefs: limit,
         }),
@@ -1216,7 +1216,7 @@ export function registerCodeAgentWorkspaceHandlers({
     let clientId: string | null = null;
 
     try {
-      const access = await loadAuthorizedCocoRoom(roomId, 'read code workspace file');
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'read code workspace file');
       clientId = access.clientId ?? null;
       if (!access.success) {
         callback?.({ success: false, error: access.error });
@@ -1226,7 +1226,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'File path is required' });
         return;
       }
-      if (!cocoSandboxService?.readWorkspaceFile) {
+      if (!codeAgentSandboxService?.readWorkspaceFile) {
         callback?.({ success: false, error: 'Workspace file reading is unavailable' });
         return;
       }
@@ -1238,7 +1238,7 @@ export function registerCodeAgentWorkspaceHandlers({
 
       callback?.({
         success: true,
-        file: await cocoSandboxService.readWorkspaceFile(workspace.handle, path, {
+        file: await codeAgentSandboxService.readWorkspaceFile(workspace.handle, path, {
           maxBytes: WORKSPACE_FILE_MAX_BYTES,
         }),
       });
@@ -1256,13 +1256,13 @@ export function registerCodeAgentWorkspaceHandlers({
     let clientId: string | null = null;
 
     try {
-      const access = await loadAuthorizedCocoRoom(roomId, 'read code workspace diff');
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'read code workspace diff');
       clientId = access.clientId ?? null;
       if (!access.success) {
         callback?.({ success: false, error: access.error });
         return;
       }
-      if (!cocoSandboxService?.getWorkspaceDiff) {
+      if (!codeAgentSandboxService?.getWorkspaceDiff) {
         callback?.({ success: false, error: 'Workspace diff viewing is unavailable' });
         return;
       }
@@ -1274,7 +1274,7 @@ export function registerCodeAgentWorkspaceHandlers({
 
       callback?.({
         success: true,
-        diff: await cocoSandboxService.getWorkspaceDiff(workspace.handle, {
+        diff: await codeAgentSandboxService.getWorkspaceDiff(workspace.handle, {
           maxBytes: WORKSPACE_DIFF_MAX_BYTES,
           ignoreWhitespace,
           scope,
@@ -1293,7 +1293,7 @@ export function registerCodeAgentWorkspaceHandlers({
     let clientId: string | null = null;
 
     try {
-      const access = await loadAuthorizedCocoRoom(roomId, 'create code workspace asset URL');
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'create code workspace asset URL');
       clientId = access.clientId ?? null;
       if (!access.success) {
         callback?.({ success: false, error: access.error });
@@ -1307,7 +1307,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'Workspace file preview is unavailable' });
         return;
       }
-      if (!cocoSandboxService?.readWorkspaceFile) {
+      if (!codeAgentSandboxService?.readWorkspaceFile) {
         callback?.({ success: false, error: 'Workspace file reading is unavailable' });
         return;
       }
@@ -1317,7 +1317,7 @@ export function registerCodeAgentWorkspaceHandlers({
         return;
       }
 
-      const previewFile = await cocoSandboxService.readWorkspaceFile(workspace.handle, path, { maxBytes: 1 });
+      const previewFile = await codeAgentSandboxService.readWorkspaceFile(workspace.handle, path, { maxBytes: 1 });
       callback?.({
         success: true,
         asset: codeWorkspaceAssetAccess.issueAssetUrl({
@@ -1344,7 +1344,7 @@ export function registerCodeAgentWorkspaceHandlers({
     let clientId: string | null = null;
 
     try {
-      const access = await loadAuthorizedCocoRoom(roomId, 'write code workspace file');
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'write code workspace file');
       clientId = access.clientId ?? null;
       if (!access.success) {
         callback?.({ success: false, error: access.error });
@@ -1362,7 +1362,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'File encoding is invalid' });
         return;
       }
-      if (!cocoSandboxService?.writeWorkspaceFile) {
+      if (!codeAgentSandboxService?.writeWorkspaceFile) {
         callback?.({ success: false, error: 'Workspace file writing is unavailable' });
         return;
       }
@@ -1374,7 +1374,7 @@ export function registerCodeAgentWorkspaceHandlers({
 
       callback?.({
         success: true,
-        entry: await cocoSandboxService.writeWorkspaceFile(workspace.handle, {
+        entry: await codeAgentSandboxService.writeWorkspaceFile(workspace.handle, {
           path,
           content,
           encoding: encoding === 'base64' ? 'base64' : 'utf-8',
@@ -1392,7 +1392,7 @@ export function registerCodeAgentWorkspaceHandlers({
     let clientId: string | null = null;
 
     try {
-      const access = await loadAuthorizedCocoRoom(roomId, 'create code workspace directory');
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'create code workspace directory');
       clientId = access.clientId ?? null;
       if (!access.success) {
         callback?.({ success: false, error: access.error });
@@ -1402,7 +1402,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'Directory path is required' });
         return;
       }
-      if (!cocoSandboxService?.createWorkspaceDirectory) {
+      if (!codeAgentSandboxService?.createWorkspaceDirectory) {
         callback?.({ success: false, error: 'Workspace directory creation is unavailable' });
         return;
       }
@@ -1414,7 +1414,7 @@ export function registerCodeAgentWorkspaceHandlers({
 
       callback?.({
         success: true,
-        entry: await cocoSandboxService.createWorkspaceDirectory(workspace.handle, path),
+        entry: await codeAgentSandboxService.createWorkspaceDirectory(workspace.handle, path),
       });
     } catch (error) {
       socketLogger.error('Failed to create code workspace directory', { error, clientId, roomId, path, socketId: socket.id });
@@ -1429,7 +1429,7 @@ export function registerCodeAgentWorkspaceHandlers({
     let clientId: string | null = null;
 
     try {
-      const access = await loadAuthorizedCocoRoom(roomId, 'rename code workspace entry');
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'rename code workspace entry');
       clientId = access.clientId ?? null;
       if (!access.success) {
         callback?.({ success: false, error: access.error });
@@ -1439,7 +1439,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'Source and destination paths are required' });
         return;
       }
-      if (!cocoSandboxService?.renameWorkspaceEntry) {
+      if (!codeAgentSandboxService?.renameWorkspaceEntry) {
         callback?.({ success: false, error: 'Workspace entry rename is unavailable' });
         return;
       }
@@ -1451,7 +1451,7 @@ export function registerCodeAgentWorkspaceHandlers({
 
       callback?.({
         success: true,
-        entry: await cocoSandboxService.renameWorkspaceEntry(workspace.handle, { fromPath, toPath }),
+        entry: await codeAgentSandboxService.renameWorkspaceEntry(workspace.handle, { fromPath, toPath }),
       });
     } catch (error) {
       socketLogger.error('Failed to rename code workspace entry', { error, clientId, roomId, fromPath, toPath, socketId: socket.id });
@@ -1465,7 +1465,7 @@ export function registerCodeAgentWorkspaceHandlers({
     let clientId: string | null = null;
 
     try {
-      const access = await loadAuthorizedCocoRoom(roomId, 'delete code workspace entry');
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'delete code workspace entry');
       clientId = access.clientId ?? null;
       if (!access.success) {
         callback?.({ success: false, error: access.error });
@@ -1475,7 +1475,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'Workspace path is required' });
         return;
       }
-      if (!cocoSandboxService?.deleteWorkspaceEntry) {
+      if (!codeAgentSandboxService?.deleteWorkspaceEntry) {
         callback?.({ success: false, error: 'Workspace entry deletion is unavailable' });
         return;
       }
@@ -1485,7 +1485,7 @@ export function registerCodeAgentWorkspaceHandlers({
         return;
       }
 
-      await cocoSandboxService.deleteWorkspaceEntry(workspace.handle, path);
+      await codeAgentSandboxService.deleteWorkspaceEntry(workspace.handle, path);
       callback?.({ success: true });
     } catch (error) {
       socketLogger.error('Failed to delete code workspace entry', { error, clientId, roomId, path, socketId: socket.id });

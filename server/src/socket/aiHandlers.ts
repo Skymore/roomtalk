@@ -21,7 +21,7 @@ import {
 } from '../services/messageDomain';
 import { notifyRoomMessageBestEffort } from '../services/pushNotifications';
 import { withAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
-import { COCO_ACCESS_DENIED_MESSAGE } from '../services/cocoRoomAccess';
+import { CODE_AGENT_ACCESS_DENIED_MESSAGE } from '../services/codeAgentRoomAccess';
 import { normalizeCodexRunSettings } from '../services/codexRunSettings';
 import type { CodeAgentRunnerMode } from '../services/codeAgentRunnerProtocol';
 import type { CodeAgentTurnInput } from '../services/codeAgentSessionService';
@@ -1833,7 +1833,7 @@ export function registerAIHandlers({
     }
 
     const room = await store.getRoomById(data.roomId);
-    if (room?.type === 'coco') {
+    if (room?.type === 'codeAgent') {
       const postAuth = await authorizeRoomAction({
         store,
         roomId: data.roomId,
@@ -1845,14 +1845,14 @@ export function registerAIHandlers({
         return;
       }
       const permissions = buildRoomPermissions(postAuth.actor, data.roomId, clientId, postAuth.actor.room);
-      if (!permissions.canUseCoco) {
-        callback?.({ success: false, error: COCO_ACCESS_DENIED_MESSAGE });
+      if (!permissions.canUseCodeAgent) {
+        callback?.({ success: false, error: CODE_AGENT_ACCESS_DENIED_MESSAGE });
         return;
       }
 
       if (!codeAgentSessionService) {
-        socket.emit('error', { message: 'Coco is unavailable' });
-        callback?.({ success: false, error: 'Coco is unavailable' });
+        socket.emit('error', { message: 'Code agent is unavailable' });
+        callback?.({ success: false, error: 'Code agent is unavailable' });
         return;
       }
 
@@ -1954,10 +1954,10 @@ export function registerAIHandlers({
     }
 
     const roomForAIRequest = postAuth.actor.room;
-    if (roomForAIRequest.type === 'coco') {
+    if (roomForAIRequest.type === 'codeAgent') {
       const permissions = buildRoomPermissions(postAuth.actor, data.roomId, clientId, roomForAIRequest);
-      if (!permissions.canUseCoco) {
-        callback?.({ success: false, error: COCO_ACCESS_DENIED_MESSAGE });
+      if (!permissions.canUseCodeAgent) {
+        callback?.({ success: false, error: CODE_AGENT_ACCESS_DENIED_MESSAGE });
         return;
       }
     }
@@ -2001,13 +2001,13 @@ export function registerAIHandlers({
     io.to(data.roomId).emit('new_message', userMessage);
     notifyRoomMessageBestEffort({ store, room: updatedRoom, message: userMessage, logger: socketLogger });
 
-    if (roomForAIRequest?.type === 'coco') {
+    if (roomForAIRequest?.type === 'codeAgent') {
       if (!codeAgentSessionService) {
         callback?.({
           success: true,
           userMessage,
           aiStarted: false,
-          aiError: 'Coco is unavailable',
+          aiError: 'Code agent is unavailable',
         });
         return;
       }
@@ -2036,7 +2036,7 @@ export function registerAIHandlers({
           success: true,
           userMessage,
           aiStarted: false,
-          aiError: response.error || 'Failed to start Coco response',
+          aiError: response.error || 'Failed to start code-agent response',
         });
       });
       return;
@@ -2098,9 +2098,9 @@ export function registerAIHandlers({
     }
 
     const room = await store.getRoomById(data.roomId);
-    const isCocoRoom = room?.type === 'coco';
-    if (isCocoRoom && !codeAgentSessionService) {
-      callback?.({ success: false, error: 'Coco is unavailable' });
+    const isCodeAgentRoom = room?.type === 'codeAgent';
+    if (isCodeAgentRoom && !codeAgentSessionService) {
+      callback?.({ success: false, error: 'Code agent is unavailable' });
       return;
     }
 
@@ -2121,8 +2121,8 @@ export function registerAIHandlers({
       return;
     }
 
-    const messagesBeforeEdit = isCocoRoom ? await store.readMessagesByRoom(data.roomId) : [];
-    const requestedMode = isCocoRoom ? findNextCodeAgentTurnMode(messagesBeforeEdit, data.messageId) : undefined;
+    const messagesBeforeEdit = isCodeAgentRoom ? await store.readMessagesByRoom(data.roomId) : [];
+    const requestedMode = isCodeAgentRoom ? findNextCodeAgentTurnMode(messagesBeforeEdit, data.messageId) : undefined;
     const editResult = await store.updateMessageAndTruncateAfter(data.roomId, data.messageId, data.newContent);
     if (!editResult) {
       callback?.({ success: false, error: 'Failed to save edited message' });
@@ -2138,7 +2138,7 @@ export function registerAIHandlers({
     io.to(data.roomId).emit('message_edited', editResult.updatedMessage);
     await emitLatestHistoryPage(data.roomId);
 
-    if (isCocoRoom) {
+    if (isCodeAgentRoom) {
       await codeAgentSessionService!.startTurn(buildCodeAgentTurnInput({
         roomId: data.roomId,
         clientId,
@@ -2192,7 +2192,7 @@ export function registerAIHandlers({
     }
 
     const room = await store.getRoomById(roomId);
-    if (room?.type === 'coco') {
+    if (room?.type === 'codeAgent') {
       return;
     }
 

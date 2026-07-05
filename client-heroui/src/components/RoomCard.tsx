@@ -7,7 +7,7 @@ import { Room } from '../utils/types';
 import { formatDate } from '../utils/formatters';
 import { getRoomActivityAt } from '../utils/roomState';
 import { getCodeAgentBackend, getCodeAgentStatus, isSupportedCodeAgentBackend } from '../utils/codeAgent';
-import { getCocoAgentStatusClassName, getCocoStatusLabelKey, getSandboxStatusClassName, getSandboxStatusLabelKey } from '../utils/cocoRoom';
+import { getCodeAgentStatusClassName, getCodeAgentStatusLabelKey, getSandboxStatusClassName, getSandboxStatusLabelKey } from '../utils/codeAgentRoom';
 
 interface RoomCardProps {
   room: Room;
@@ -96,9 +96,9 @@ export const RoomCard: React.FC<RoomCardProps> = ({
                   <Icon icon="lucide:box" className="h-3 w-3 flex-shrink-0" />
                   <span className="truncate">{t(getSandboxStatusLabelKey(room.sandboxStatus))}</span>
                 </span>
-                <span className={`inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${getCocoAgentStatusClassName(agentStatus)}`}>
+                <span className={`inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${getCodeAgentStatusClassName(agentStatus)}`}>
                   <Icon icon="lucide:bot" className="h-3 w-3 flex-shrink-0" />
-                  <span className="truncate">{t(getCocoStatusLabelKey(agentStatus))}</span>
+                  <span className="truncate">{t(getCodeAgentStatusLabelKey(agentStatus))}</span>
                 </span>
               </div>
             )}

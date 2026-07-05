@@ -1,5 +1,5 @@
 import { FeatureFlags } from './features';
-import { CodeAgentBackend, CodeAgentMode, Room, RoomCocoStatus } from './types';
+import { CodeAgentBackend, CodeAgentMode, Room, RoomCodeAgentStatus } from './types';
 import {
   normalizeCodeAgentMode,
   normalizeCodeAgentModeList,
@@ -15,7 +15,7 @@ export {
   normalizeCodeAgentModeList,
 } from './codeAgentModes';
 
-export const CODE_AGENT_BACKEND_OPTIONS = ['coco', 'codex', 'codex-app-server'] as const satisfies readonly CodeAgentBackend[];
+export const CODE_AGENT_BACKEND_OPTIONS = ['code-agent', 'codex', 'codex-app-server'] as const satisfies readonly CodeAgentBackend[];
 const CODE_AGENT_BACKENDS = new Set<CodeAgentBackend>(CODE_AGENT_BACKEND_OPTIONS);
 
 const runtimeRoomType = (room: Room | null | undefined): string | undefined => (
@@ -28,8 +28,8 @@ const storedCodeAgentBackend = (room: Room | null | undefined): CodeAgentBackend
 
 export const getCodeAgentBackend = (room: Room | null | undefined): CodeAgentBackend | null => {
   const roomType = runtimeRoomType(room);
-  if (roomType === 'coco') {
-    return storedCodeAgentBackend(room) || 'coco';
+  if (roomType === 'codeAgent') {
+    return storedCodeAgentBackend(room) || 'code-agent';
   }
   if (roomType === 'codex') {
     return storedCodeAgentBackend(room) || 'codex';
@@ -42,16 +42,16 @@ export const isCodeAgentRoom = (room: Room | null | undefined): boolean => (
 );
 
 export const getCodeAgentMode = (featureFlags: FeatureFlags): CodeAgentMode => (
-  normalizeCodeAgentMode(featureFlags.coco.mode)
+  normalizeCodeAgentMode(featureFlags.codeAgent.mode)
 );
 
 export const getCodeAgentAvailableModes = (featureFlags: FeatureFlags): CodeAgentMode[] => (
-  normalizeCodeAgentModeList(featureFlags.coco.availableModes)
+  normalizeCodeAgentModeList(featureFlags.codeAgent.availableModes)
 );
 
 export const getCodeAgentDefaultMode = (featureFlags: FeatureFlags): CodeAgentMode => (
-  getCodeAgentAvailableModes(featureFlags).includes(normalizeCodeAgentMode(featureFlags.coco.defaultMode))
-    ? normalizeCodeAgentMode(featureFlags.coco.defaultMode)
+  getCodeAgentAvailableModes(featureFlags).includes(normalizeCodeAgentMode(featureFlags.codeAgent.defaultMode))
+    ? normalizeCodeAgentMode(featureFlags.codeAgent.defaultMode)
     : 'plan'
 );
 
@@ -67,9 +67,9 @@ export const getCodeAgentBackendLabelKey = (backend: CodeAgentBackend): string =
   if (backend === 'codex-app-server') {
     return 'codeAgentEngineCodexAppServer';
   }
-  return backend === 'codex' ? 'codeAgentEngineCodex' : 'codeAgentEngineCoco';
+  return backend === 'codex' ? 'codeAgentEngineCodex' : 'codeAgentEngineCodeAgent';
 };
 
-export const getCodeAgentStatus = (room: Room | null | undefined): RoomCocoStatus | undefined => (
-  getCodeAgentBackend(room) !== null ? (room?.cocoStatus || 'idle') : undefined
+export const getCodeAgentStatus = (room: Room | null | undefined): RoomCodeAgentStatus | undefined => (
+  getCodeAgentBackend(room) !== null ? (room?.codeAgentStatus || 'idle') : undefined
 );

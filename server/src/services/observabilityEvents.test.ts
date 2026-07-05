@@ -54,7 +54,7 @@ describe('PostgresObservabilityEventRecorder', () => {
         id: 'event-1',
         created_at: '2026-07-01T00:00:00.000Z',
         level: 'warn',
-        event: 'coco.turn.failed',
+        event: 'code_agent.turn.failed',
         room_id: 'room-1',
         turn_id: 'turn-1',
         session_id: 'session-1',
@@ -71,7 +71,7 @@ describe('PostgresObservabilityEventRecorder', () => {
         assert.match(call.sql, /INSERT INTO observability_events/);
         assert.equal(call.params?.[0], 'event-1');
         assert.equal(call.params?.[2], 'warn');
-        assert.equal(call.params?.[3], 'coco.turn.failed');
+        assert.equal(call.params?.[3], 'code_agent.turn.failed');
         assert.equal(call.params?.[10], 123);
         assert.equal(call.params?.[11], 0.42);
       },
@@ -83,7 +83,7 @@ describe('PostgresObservabilityEventRecorder', () => {
 
     const record = await recorder.recordEvent({
       level: 'warn',
-      event: 'coco.turn.failed',
+      event: 'code_agent.turn.failed',
       roomId: 'room-1',
       turnId: 'turn-1',
       sessionId: 'session-1',

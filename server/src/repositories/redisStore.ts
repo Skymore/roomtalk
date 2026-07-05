@@ -132,9 +132,9 @@ else
   room['sandboxArtifactVersion'] = ARGV[6]
 end
 if ARGV[7] == '' then
-  room['sandboxCocoSourceRef'] = nil
+  room['sandboxCodeAgentSourceRef'] = nil
 else
-  room['sandboxCocoSourceRef'] = ARGV[7]
+  room['sandboxCodeAgentSourceRef'] = ARGV[7]
 end
 room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
 room['updatedAt'] = ARGV[8]
@@ -175,11 +175,11 @@ elseif postingScheduleMode == 'clear' then
   room['postingSchedule'] = nil
 end
 
-local cocoAccessMode = ARGV[7]
-if cocoAccessMode == 'set' then
-  room['cocoAccess'] = ARGV[8]
-elseif cocoAccessMode == 'clear' then
-  room['cocoAccess'] = nil
+local codeAgentAccessMode = ARGV[7]
+if codeAgentAccessMode == 'set' then
+  room['codeAgentAccess'] = ARGV[8]
+elseif codeAgentAccessMode == 'clear' then
+  room['codeAgentAccess'] = nil
 end
 
 local codeAgentModeMode = ARGV[9]
@@ -1718,10 +1718,10 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
           sandboxStatus: room.sandboxStatus ?? existingRoom.sandboxStatus,
           sandboxUpdatedAt: room.sandboxUpdatedAt ?? existingRoom.sandboxUpdatedAt,
           sandboxArtifactVersion: room.sandboxArtifactVersion ?? existingRoom.sandboxArtifactVersion,
-          sandboxCocoSourceRef: room.sandboxCocoSourceRef ?? existingRoom.sandboxCocoSourceRef,
-          cocoSessionId: room.cocoSessionId ?? existingRoom.cocoSessionId,
-          cocoStatus: room.cocoStatus ?? existingRoom.cocoStatus,
-          cocoAccess: room.cocoAccess ?? existingRoom.cocoAccess,
+          sandboxCodeAgentSourceRef: room.sandboxCodeAgentSourceRef ?? existingRoom.sandboxCodeAgentSourceRef,
+          codeAgentSessionId: room.codeAgentSessionId ?? existingRoom.codeAgentSessionId,
+          codeAgentStatus: room.codeAgentStatus ?? existingRoom.codeAgentStatus,
+          codeAgentAccess: room.codeAgentAccess ?? existingRoom.codeAgentAccess,
           codeAgentMode: room.codeAgentMode ?? existingRoom.codeAgentMode,
           codeAgentBackend: room.codeAgentBackend ?? existingRoom.codeAgentBackend,
         }
@@ -2082,8 +2082,8 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
           ? 'set'
           : 'clear'
         : 'keep';
-      const cocoAccessMode = Object.prototype.hasOwnProperty.call(updates, 'cocoAccess')
-        ? updates.cocoAccess
+      const codeAgentAccessMode = Object.prototype.hasOwnProperty.call(updates, 'codeAgentAccess')
+        ? updates.codeAgentAccess
           ? 'set'
           : 'clear'
         : 'keep';
@@ -2106,8 +2106,8 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
           updates.passwordHash || '',
           postingScheduleMode,
           updates.postingSchedule ? JSON.stringify(updates.postingSchedule) : '',
-          cocoAccessMode,
-          updates.cocoAccess || '',
+          codeAgentAccessMode,
+          updates.codeAgentAccess || '',
           codeAgentModeMode,
           updates.codeAgentMode || '',
           codeAgentBackendMode,
@@ -2640,7 +2640,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
           next.sandboxStatus,
           next.sandboxUpdatedAt,
           next.sandboxArtifactVersion || '',
-          next.sandboxCocoSourceRef || '',
+          next.sandboxCodeAgentSourceRef || '',
           updatedAt,
         ],
       });
@@ -2651,7 +2651,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     }
   }
 
-  async findInterruptedCocoRooms(): Promise<Room[]> {
+  async findInterruptedCodeAgentRooms(): Promise<Room[]> {
     try {
       const roomValues = await this.redisClient.hVals('rooms');
       return roomValues
@@ -2664,11 +2664,11 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         })
         .filter((room): room is Room => Boolean(
           room
-          && room.type === 'coco'
-          && (room.sandboxStatus === 'creating' || room.cocoStatus === 'running')
+          && room.type === 'codeAgent'
+          && (room.sandboxStatus === 'creating' || room.codeAgentStatus === 'running')
         ));
     } catch (error) {
-      this.logger.error('Error finding interrupted Redis Coco rooms', { error });
+      this.logger.error('Error finding interrupted Redis code-agent rooms', { error });
       return [];
     }
   }

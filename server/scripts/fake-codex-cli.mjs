@@ -23,10 +23,11 @@ const main = async () => {
 }
 
 const runDeviceAuth = async () => {
+  const holdAfterCode = await shouldHoldAfterCode()
   console.log(`Open ${DEVICE_URL}`)
   console.log(`Code: ${DEVICE_CODE}`)
 
-  if (await shouldHoldAfterCode()) {
+  if (holdAfterCode) {
     await new Promise(resolve => {
       const timer = setInterval(() => undefined, 1000)
       const finish = () => {

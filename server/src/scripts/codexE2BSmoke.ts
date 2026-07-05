@@ -8,7 +8,7 @@ import { DEFAULT_AI_MODEL_ID, createAIModelRegistry } from '../services/aiModels
 import { resolveCodexCliRunnerConfig } from '../services/codexCliRunnerConfig';
 import { CODE_AGENT_RUNNER_SCHEMA_VERSION } from '../services/codeAgentRunnerProtocol';
 import { resolveCodeAgentRuntimeConfig, CodeAgentRuntimeConfig } from '../services/codeAgentRuntimeConfig';
-import { E2BCocoSandboxService } from '../services/e2bCocoSandboxService';
+import { E2BCodeAgentSandboxService } from '../services/e2bCodeAgentSandboxService';
 import { createE2BSdkDriver } from '../services/e2bSdkDriver';
 import { JsonlCodeAgentRunnerClient } from '../services/jsonlCodeAgentRunner';
 
@@ -46,8 +46,8 @@ export const buildCodexE2BSmokePlan = (env: NodeJS.ProcessEnv): CodexE2BSmokePla
   if (env.RUN_CODEX_E2B_SMOKE !== 'true') {
     return { run: false, reason: 'RUN_CODEX_E2B_SMOKE is not true' };
   }
-  if (!env.COCO_E2B_TEMPLATE_ID) {
-    return { run: false, reason: 'COCO_E2B_TEMPLATE_ID is not set' };
+  if (!env.CODE_AGENT_E2B_TEMPLATE_ID) {
+    return { run: false, reason: 'CODE_AGENT_E2B_TEMPLATE_ID is not set' };
   }
   if (!env.E2B_API_KEY && !env.E2B_ACCESS_TOKEN) {
     return { run: false, reason: 'E2B_API_KEY or E2B_ACCESS_TOKEN is not set' };
@@ -60,9 +60,9 @@ export const buildCodexE2BSmokePlan = (env: NodeJS.ProcessEnv): CodexE2BSmokePla
 
   const smokeEnv = {
     ...env,
-    COCO_ENABLED: 'true',
-    COCO_SANDBOX_PROVIDER: 'e2b',
-    COCO_RUNNER_CLIENT: 'jsonl',
+    CODE_AGENT_ENABLED: 'true',
+    CODE_AGENT_SANDBOX_PROVIDER: 'e2b',
+    CODE_AGENT_RUNNER_CLIENT: 'jsonl',
     CODE_AGENT_BACKEND: 'codex',
     CODEX_CLI_BACKEND_ENABLED: 'true',
   };
@@ -92,8 +92,8 @@ export const buildCodexE2BSmokePlan = (env: NodeJS.ProcessEnv): CodexE2BSmokePla
     turnId,
     prompt: env.CODEX_E2B_SMOKE_PROMPT || DEFAULT_SMOKE_PROMPT,
     expectedText: env.CODEX_E2B_SMOKE_EXPECTED || 'codex e2b smoke ok',
-    turnTimeoutMs: parsePositiveMs(env.COCO_TURN_TIMEOUT_MS, DEFAULT_TURN_TIMEOUT_MS),
-    sandboxTtlMs: parsePositiveMs(env.COCO_SANDBOX_TTL_MS, DEFAULT_SANDBOX_TTL_MS),
+    turnTimeoutMs: parsePositiveMs(env.CODE_AGENT_TURN_TIMEOUT_MS, DEFAULT_TURN_TIMEOUT_MS),
+    sandboxTtlMs: parsePositiveMs(env.CODE_AGENT_SANDBOX_TTL_MS, DEFAULT_SANDBOX_TTL_MS),
     e2bConnection: {
       apiKey: env.E2B_API_KEY,
       accessToken: env.E2B_ACCESS_TOKEN,
@@ -109,7 +109,7 @@ export const runCodexE2BSmoke = async (
   plan: Extract<CodexE2BSmokePlan, { run: true }>,
   logger = new Logger('CodexE2BSmoke')
 ) => {
-  const sandboxService = new E2BCocoSandboxService(createE2BSdkDriver({
+  const sandboxService = new E2BCodeAgentSandboxService(createE2BSdkDriver({
     apiKey: plan.e2bConnection.apiKey,
     accessToken: plan.e2bConnection.accessToken,
     domain: plan.e2bConnection.domain,
@@ -120,7 +120,7 @@ export const runCodexE2BSmoke = async (
     templateId: plan.config.e2bTemplateId || '',
     workspace: plan.config.e2bWorkspace,
     artifactVersion: plan.config.artifactVersion,
-    cocoSourceRef: plan.config.cocoSourceRef,
+    codeAgentSourceRef: plan.config.codeAgentSourceRef,
     lifecycle: plan.config.e2bLifecycle,
     logger,
   });
@@ -130,7 +130,7 @@ export const runCodexE2BSmoke = async (
     creatorId: 'codex-e2b-smoke',
     ttlMs: plan.sandboxTtlMs,
   });
-  let runnerProcess: Awaited<ReturnType<E2BCocoSandboxService['startRunner']>> | undefined;
+  let runnerProcess: Awaited<ReturnType<E2BCodeAgentSandboxService['startRunner']>> | undefined;
 
   try {
     logger.info('Created E2B Codex smoke sandbox', { sandboxId: handle.id, roomId: plan.roomId });

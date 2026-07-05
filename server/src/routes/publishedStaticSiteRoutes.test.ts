@@ -70,7 +70,7 @@ describe('published static site routes', () => {
       mode: 'fullAccess',
     });
 
-    const publishResponse = await fetch(`${server.baseUrl}/api/coco/publish-static-site`, {
+    const publishResponse = await fetch(`${server.baseUrl}/api/code-agent/publish-static-site`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -114,7 +114,7 @@ describe('published static site routes', () => {
       mode: 'fullAccess',
     });
 
-    const publishResponse = await fetch(`${server.baseUrl}/api/coco/publish-static-site`, {
+    const publishResponse = await fetch(`${server.baseUrl}/api/code-agent/publish-static-site`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -137,7 +137,7 @@ describe('published static site routes', () => {
   });
 
   it('rejects missing tokens and returns 404 for missing sites', async () => {
-    const publishResponse = await fetch(`${server.baseUrl}/api/coco/publish-static-site`, {
+    const publishResponse = await fetch(`${server.baseUrl}/api/code-agent/publish-static-site`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({}),

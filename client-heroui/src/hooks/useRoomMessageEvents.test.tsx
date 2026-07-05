@@ -278,7 +278,7 @@ describe('useRoomMessageEvents', () => {
     ]);
   });
 
-  it('preserves interleaved Coco text and tool history after refresh', () => {
+  it('preserves interleaved code-agent text and tool history after refresh', () => {
     const props = createHarnessProps();
     render(<Harness {...props} />);
     props.updateMessages.mockClear();
@@ -293,14 +293,14 @@ describe('useRoomMessageEvents', () => {
     });
     const toolCall = message({
       id: 'a-tool-call',
-      clientId: 'coco_runner',
+      clientId: 'code_agent_runner',
       messageType: 'tool_call',
       content: 'Read README.md',
       timestamp: sameTimestamp,
     });
     const toolResult = message({
       id: 'b-tool-result',
-      clientId: 'coco_runner',
+      clientId: 'code_agent_runner',
       messageType: 'tool_result',
       content: '# RoomTalk',
       timestamp: sameTimestamp,

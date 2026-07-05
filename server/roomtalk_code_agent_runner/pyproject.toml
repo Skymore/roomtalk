@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "roomtalk-code-agent-runner"
+version = "0.1.9"
+description = "RoomTalk JSONL adapter for code-agent backends"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+roomtalk-code-agent-runner = "roomtalk_code_agent_runner.runner:main"
+roomtalk-codex-cli-runner = "roomtalk_code_agent_runner.codex_cli:main"
+roomtalk-codex-app-server-runner = "roomtalk_code_agent_runner.codex_app_server:main"
+roomtalk-codex-sdk-app-server-runner = "roomtalk_code_agent_runner.codex_sdk_app_server:main"
+roomtalk = "roomtalk_code_agent_runner.platform_tools:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["roomtalk_code_agent_runner*"]

@@ -56,12 +56,12 @@ export interface MessageReplyReference {
 }
 
 export type MediaKind = 'image' | 'video' | 'audio' | 'file';
-export type RoomType = 'chat' | 'coco';
+export type RoomType = 'chat' | 'codeAgent';
 export type RoomSandboxStatus = 'none' | 'creating' | 'ready' | 'expired' | 'error';
-export type RoomCocoStatus = 'idle' | 'running' | 'error';
-export type CocoAccessLevel = 'owner' | 'admin' | 'member';
+export type RoomCodeAgentStatus = 'idle' | 'running' | 'error';
+export type CodeAgentAccessLevel = 'owner' | 'admin' | 'member';
 export type CodeAgentMode = 'plan' | 'edit' | 'approveForMe' | 'fullAccess' | 'acceptEdits';
-export type CodeAgentBackend = 'coco' | 'codex' | 'codex-app-server';
+export type CodeAgentBackend = 'code-agent' | 'codex' | 'codex-app-server';
 export type CodexReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
 export type CodexPermissionMode = 'plan' | 'edit' | 'approveForMe' | 'fullAccess';
 export type MessageType = 'text' | 'ai' | 'media' | 'sticker' | 'tool_call' | 'tool_result' | 'sandbox_status';
@@ -154,10 +154,10 @@ export interface Room {
   sandboxStatus?: RoomSandboxStatus;
   sandboxUpdatedAt?: string;
   sandboxArtifactVersion?: string;
-  sandboxCocoSourceRef?: string;
-  cocoSessionId?: string;
-  cocoStatus?: RoomCocoStatus;
-  cocoAccess?: CocoAccessLevel;
+  sandboxCodeAgentSourceRef?: string;
+  codeAgentSessionId?: string;
+  codeAgentStatus?: RoomCodeAgentStatus;
+  codeAgentAccess?: CodeAgentAccessLevel;
   codeAgentMode?: CodeAgentMode;
   codeAgentBackend?: CodeAgentBackend;
   // 行级单调版本号:每次房间写入 +1,客户端 last-write-wins 的主比较键
@@ -200,7 +200,7 @@ export interface RoomPermissions {
   canManageAdmins: boolean;
   canManageMembers: boolean;
   canTransferOwnership: boolean;
-  canUseCoco: boolean;
+  canUseCodeAgent: boolean;
   postingRestrictionReason?: string;
 }
 

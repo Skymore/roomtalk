@@ -1,8 +1,8 @@
 import { Message, Room, RoomMember, RoomPermissions, RoomPostingSchedule } from '../types';
 import { RoomStore } from '../repositories/store';
-import { canUseCocoRoom } from '../services/cocoRoomAccess';
+import { canUseCodeAgentRoom } from '../services/codeAgentRoomAccess';
 
-export { canUseCocoRoom } from '../services/cocoRoomAccess';
+export { canUseCodeAgentRoom } from '../services/codeAgentRoomAccess';
 
 export type RoomActor = {
   room: Room;
@@ -198,7 +198,7 @@ export function buildRoomPermissions(actor: RoomActor | null, roomId: string, cl
     canManageAdmins: Boolean(isOwner),
     canManageMembers: Boolean(isOwner || isAdmin),
     canTransferOwnership: Boolean(isOwner),
-    canUseCoco: Boolean(actor && targetRoom && canUseCocoRoom(targetRoom, clientId, actor.role)),
+    canUseCodeAgent: Boolean(actor && targetRoom && canUseCodeAgentRoom(targetRoom, clientId, actor.role)),
     postingRestrictionReason: posting.allowed ? undefined : posting.reason,
   };
 }

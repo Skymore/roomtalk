@@ -1,7 +1,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import path from 'path';
 
-export const CODE_WORKSPACE_ASSET_ROUTE_PREFIX = '/api/coco/workspace-assets';
+export const CODE_WORKSPACE_ASSET_ROUTE_PREFIX = '/api/code-agent/workspace-assets';
 export const DEFAULT_CODE_WORKSPACE_ASSET_TOKEN_TTL_SECONDS = 60 * 60;
 
 // Mirrored from T3's shared workspace file preview classification.
@@ -372,15 +372,15 @@ export class CodeWorkspaceAssetAccess {
 
 export const createCodeWorkspaceAssetAccessFromEnv = (env: NodeJS.ProcessEnv = process.env) => {
   const tokenSecret = (
-    env.COCO_WORKSPACE_ASSET_TOKEN_SECRET ||
+    env.CODE_AGENT_WORKSPACE_ASSET_TOKEN_SECRET ||
     env.ROOMTALK_WORKSPACE_ASSET_TOKEN_SECRET ||
-    env.COCO_MODEL_GATEWAY_SECRET ||
-    env.COCO_STATIC_PUBLISH_TOKEN_SECRET ||
+    env.CODE_AGENT_MODEL_GATEWAY_SECRET ||
+    env.CODE_AGENT_STATIC_PUBLISH_TOKEN_SECRET ||
     randomUUID()
   ).trim();
   return new CodeWorkspaceAssetAccess({
     tokenSecret,
-    tokenTtlSeconds: Number(env.COCO_WORKSPACE_ASSET_TOKEN_TTL_SECONDS) || DEFAULT_CODE_WORKSPACE_ASSET_TOKEN_TTL_SECONDS,
+    tokenTtlSeconds: Number(env.CODE_AGENT_WORKSPACE_ASSET_TOKEN_TTL_SECONDS) || DEFAULT_CODE_WORKSPACE_ASSET_TOKEN_TTL_SECONDS,
   });
 };
 

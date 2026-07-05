@@ -23,7 +23,7 @@ export class CodeAgentRunnerAdapter implements CodeAgentRunner {
 
   constructor(
     private readonly client: CodeAgentRunnerClient,
-    backend: CodeAgentBackend = 'coco'
+    backend: CodeAgentBackend = 'code-agent'
   ) {
     this.backend = backend;
   }
@@ -51,7 +51,7 @@ export const createCodeAgentRunner = (
   options: CodeAgentRunnerFactoryOptions = {}
 ): CodeAgentRunner => {
   switch (backend) {
-    case 'coco':
+    case 'code-agent':
       return new CodeAgentRunnerAdapter(sharedClient);
     case 'codex':
       if (options.codexRunner) {

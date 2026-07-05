@@ -10,12 +10,12 @@ export interface MessageReplyReference {
 }
 
 export type MediaKind = 'image' | 'video' | 'audio' | 'file';
-export type RoomType = 'chat' | 'coco';
+export type RoomType = 'chat' | 'codeAgent';
 export type RoomSandboxStatus = 'none' | 'creating' | 'ready' | 'expired' | 'error';
-export type RoomCocoStatus = 'idle' | 'running' | 'error';
-export type CocoAccessLevel = 'owner' | 'admin' | 'member';
+export type RoomCodeAgentStatus = 'idle' | 'running' | 'error';
+export type CodeAgentAccessLevel = 'owner' | 'admin' | 'member';
 export type CodeAgentMode = 'plan' | 'edit' | 'approveForMe' | 'fullAccess' | 'acceptEdits';
-export type CodeAgentBackend = 'coco' | 'codex' | 'codex-app-server';
+export type CodeAgentBackend = 'code-agent' | 'codex' | 'codex-app-server';
 export type MessageType = 'text' | 'ai' | 'media' | 'sticker' | 'tool_call' | 'tool_result' | 'sandbox_status';
 export type AIModelProvider = 'openai' | 'openrouter' | 'deepseek' | 'anthropic';
 
@@ -135,9 +135,9 @@ export interface Room {
   sandboxId?: string;
   sandboxStatus?: RoomSandboxStatus;
   sandboxUpdatedAt?: string;
-  cocoSessionId?: string;
-  cocoStatus?: RoomCocoStatus;
-  cocoAccess?: CocoAccessLevel;
+  codeAgentSessionId?: string;
+  codeAgentStatus?: RoomCodeAgentStatus;
+  codeAgentAccess?: CodeAgentAccessLevel;
   codeAgentMode?: CodeAgentMode;
   codeAgentBackend?: CodeAgentBackend;
   messageVersion?: number;
@@ -175,7 +175,7 @@ export interface RoomPermissions {
   canManageAdmins: boolean;
   canManageMembers: boolean;
   canTransferOwnership: boolean;
-  canUseCoco: boolean;
+  canUseCodeAgent: boolean;
   postingRestrictionReason?: string;
 }
 

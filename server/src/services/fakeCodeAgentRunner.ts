@@ -5,7 +5,7 @@ import {
   CodeAgentRunnerRunRequest,
   parseCodeAgentRunnerEventLine,
 } from './codeAgentRunnerProtocol';
-import { CodeAgentRunnerProcess, CocoSandboxHandle } from './cocoSandboxService';
+import { CodeAgentRunnerProcess, CodeAgentSandboxHandle } from './codeAgentSandboxService';
 
 export interface CodeAgentRunnerHandlers {
   onEvent: (event: CodeAgentRunnerEvent) => void | Promise<void>;
@@ -13,7 +13,7 @@ export interface CodeAgentRunnerHandlers {
 
 export interface CodeAgentRunnerRunContext {
   process: CodeAgentRunnerProcess;
-  sandbox: CocoSandboxHandle;
+  sandbox: CodeAgentSandboxHandle;
 }
 
 export interface CodeAgentRunnerClient {

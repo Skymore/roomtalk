@@ -31,7 +31,7 @@ describe('code agent runner protocol', () => {
     assert.deepEqual(JSON.parse(serialized), request);
   });
 
-  it('serializes Coco prior messages in run requests', () => {
+  it('serializes code-agent prior messages in run requests', () => {
     const withPrior: CodeAgentRunnerRunRequest = {
       ...request,
       codexModel: 'gpt-5.5',

@@ -1,4 +1,4 @@
-import type { CodeAgentWorkspaceRef } from './cocoWorkspace';
+import type { CodeAgentWorkspaceRef } from './codeAgentWorkspace';
 
 export interface CodeAgentBaseRefChoice {
   readonly id: string;

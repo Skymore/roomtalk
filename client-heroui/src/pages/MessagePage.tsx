@@ -954,7 +954,7 @@ export const MessagePage: React.FC = () => {
               handleRenameRoom={handleRenameRoom}
               clientId={clientId}
               username={username}
-              isCocoEnabled={featureFlags.coco.enabled}
+              isCodeAgentEnabled={featureFlags.codeAgent.enabled}
             />
           </div>
         );
@@ -1069,7 +1069,7 @@ export const MessagePage: React.FC = () => {
           onDeleteRoom={handleDeleteRoom}
           onUnsaveRoom={handleUnsaveRoom}
           onRenameRoom={handleRenameRoom}
-          isCocoEnabled={featureFlags.coco.enabled}
+          isCodeAgentEnabled={featureFlags.codeAgent.enabled}
         />
 
         {/* 主内容区域， flex-1 使其填充剩余空间，overflow-hidden 避免双重滚动条 */}

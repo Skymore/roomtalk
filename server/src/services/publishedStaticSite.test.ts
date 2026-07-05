@@ -159,7 +159,7 @@ describe('PublishedStaticSiteService', () => {
 
     assert.equal(
       service.publishApiUrlForRequest('https://room.ruit.me/rooms/abc', 'http://127.0.0.1:3012'),
-      'https://room.ruit.me/api/coco/publish-static-site'
+      'https://room.ruit.me/api/code-agent/publish-static-site'
     );
     assert.equal(
       service.publicBaseUrlForRequest('https://room.ruit.me/rooms/abc', 'http://127.0.0.1:3012'),
@@ -167,7 +167,7 @@ describe('PublishedStaticSiteService', () => {
     );
     assert.equal(
       service.publishApiUrlForRequest('https://evil.example', 'http://127.0.0.1:3012'),
-      'https://room.ruit.me/api/coco/publish-static-site'
+      'https://room.ruit.me/api/code-agent/publish-static-site'
     );
   });
 
@@ -179,7 +179,7 @@ describe('PublishedStaticSiteService', () => {
 
     assert.equal(
       service.publishApiUrlForRequest('https://room.ruit.me', 'http://127.0.0.1:3012'),
-      'http://127.0.0.1:3012/api/coco/publish-static-site'
+      'http://127.0.0.1:3012/api/code-agent/publish-static-site'
     );
     assert.equal(
       service.publicBaseUrlForRequest('https://room.ruit.me', 'http://127.0.0.1:3012'),
@@ -187,21 +187,21 @@ describe('PublishedStaticSiteService', () => {
     );
   });
 
-  it('does not let COCO_STATIC_PUBLISH_PUBLIC_URL override local request origins from env', () => {
+  it('does not let CODE_AGENT_STATIC_PUBLISH_PUBLIC_URL override local request origins from env', () => {
     const service = createPublishedStaticSiteServiceFromEnv({
       mediaObjectStorage: new MemoryMediaObjectStorage(),
       logger,
       env: {
         NODE_ENV: 'development',
         CLIENT_URL: 'http://localhost:3011',
-        COCO_STATIC_PUBLISH_PUBLIC_URL: 'https://room.ruit.me',
-        COCO_STATIC_PUBLISH_TOKEN_SECRET: 'static-publish-secret',
+        CODE_AGENT_STATIC_PUBLISH_PUBLIC_URL: 'https://room.ruit.me',
+        CODE_AGENT_STATIC_PUBLISH_TOKEN_SECRET: 'static-publish-secret',
       } as NodeJS.ProcessEnv,
     });
 
     assert.equal(
       service.publishApiUrlForRequest('http://localhost:3011', 'http://127.0.0.1:3012'),
-      'http://127.0.0.1:3012/api/coco/publish-static-site'
+      'http://127.0.0.1:3012/api/code-agent/publish-static-site'
     );
     assert.equal(
       service.publicUrlForSlug('roomtalk-demo', 'http://127.0.0.1:3012'),
@@ -217,18 +217,18 @@ describe('PublishedStaticSiteService', () => {
         NODE_ENV: 'production',
         CLIENT_URL: 'https://room.ruit.me',
         CLIENT_URLS: 'https://room.ruit.me, https://room.ruit.me',
-        COCO_STATIC_PUBLISH_PUBLIC_URL: 'https://room.ruit.me',
-        COCO_STATIC_PUBLISH_TOKEN_SECRET: 'static-publish-secret',
+        CODE_AGENT_STATIC_PUBLISH_PUBLIC_URL: 'https://room.ruit.me',
+        CODE_AGENT_STATIC_PUBLISH_TOKEN_SECRET: 'static-publish-secret',
       } as NodeJS.ProcessEnv,
     });
 
     assert.equal(
       service.publishApiUrlForRequest('https://room.ruit.me', 'http://127.0.0.1:3012'),
-      'https://room.ruit.me/api/coco/publish-static-site'
+      'https://room.ruit.me/api/code-agent/publish-static-site'
     );
     assert.equal(
       service.publishApiUrlForRequest('https://not-allowed.example', 'http://127.0.0.1:3012'),
-      'https://room.ruit.me/api/coco/publish-static-site'
+      'https://room.ruit.me/api/code-agent/publish-static-site'
     );
   });
 

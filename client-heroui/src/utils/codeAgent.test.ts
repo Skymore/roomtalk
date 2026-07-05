@@ -32,19 +32,19 @@ describe('codeAgent room adapters', () => {
     expect(getCodeAgentBackend(room({ type: 'unknown' as Room['type'] }))).toBeNull();
   });
 
-  it('adapts persisted Coco rooms to the generic code-agent model', () => {
-    const cocoRoom = room({ type: 'coco', cocoStatus: 'running' });
+  it('adapts persisted code-agent rooms to the generic code-agent model', () => {
+    const codeAgentRoom = room({ type: 'codeAgent', codeAgentStatus: 'running' });
 
-    expect(isCodeAgentRoom(cocoRoom)).toBe(true);
-    expect(getCodeAgentBackend(cocoRoom)).toBe('coco');
-    expect(getCodeAgentStatus(cocoRoom)).toBe('running');
-    expect(getCodeAgentStatus(room({ type: 'coco' }))).toBe('idle');
+    expect(isCodeAgentRoom(codeAgentRoom)).toBe(true);
+    expect(getCodeAgentBackend(codeAgentRoom)).toBe('code-agent');
+    expect(getCodeAgentStatus(codeAgentRoom)).toBe('running');
+    expect(getCodeAgentStatus(room({ type: 'codeAgent' }))).toBe('idle');
   });
 
   it('reads code-agent mode from feature/config state', () => {
     expect(getCodeAgentMode(FALLBACK_FEATURE_FLAGS)).toBe('plan');
     const editCapableFlags: FeatureFlags = {
-      coco: {
+      codeAgent: {
         enabled: true,
         mode: 'acceptEdits',
         availableModes: ['plan', 'acceptEdits'],
@@ -64,18 +64,18 @@ describe('codeAgent room adapters', () => {
   it('recognizes Codex-backed code-agent rooms as supported', () => {
     const unsupportedRoom = room({ type: 'codex' as Room['type'] });
     const legacyCodexAppRoom = room({ type: 'codex' as Room['type'], codeAgentBackend: 'codex-app-server' });
-    const cocoCodexRoom = room({ type: 'coco', codeAgentBackend: 'codex', cocoStatus: 'running' });
-    const cocoCodexAppRoom = room({ type: 'coco', codeAgentBackend: 'codex-app-server' });
+    const codeAgentCodexRoom = room({ type: 'codeAgent', codeAgentBackend: 'codex', codeAgentStatus: 'running' });
+    const codeAgentCodexAppRoom = room({ type: 'codeAgent', codeAgentBackend: 'codex-app-server' });
 
     expect(isCodeAgentRoom(unsupportedRoom)).toBe(true);
     expect(getCodeAgentBackend(unsupportedRoom)).toBe('codex');
     expect(getCodeAgentBackend(legacyCodexAppRoom)).toBe('codex-app-server');
     expect(isSupportedCodeAgentBackend('codex')).toBe(true);
     expect(isSupportedCodeAgentBackend('codex-app-server')).toBe(true);
-    expect(isSupportedCodeAgentBackend('coco')).toBe(true);
+    expect(isSupportedCodeAgentBackend('code-agent')).toBe(true);
     expect(getCodeAgentStatus(unsupportedRoom)).toBe('idle');
-    expect(getCodeAgentBackend(cocoCodexRoom)).toBe('codex');
-    expect(getCodeAgentBackend(cocoCodexAppRoom)).toBe('codex-app-server');
-    expect(getCodeAgentStatus(cocoCodexRoom)).toBe('running');
+    expect(getCodeAgentBackend(codeAgentCodexRoom)).toBe('codex');
+    expect(getCodeAgentBackend(codeAgentCodexAppRoom)).toBe('codex-app-server');
+    expect(getCodeAgentStatus(codeAgentCodexRoom)).toBe('running');
   });
 });

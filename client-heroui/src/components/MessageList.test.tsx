@@ -40,8 +40,8 @@ vi.mock('../utils/socket', () => ({
   requestEditMessageAndAIResponse: requestEditMessageAndAIResponseMock,
 }));
 
-vi.mock('../utils/cocoWorkspace', async () => {
-  const actual = await vi.importActual<typeof import('../utils/cocoWorkspace')>('../utils/cocoWorkspace');
+vi.mock('../utils/codeAgentWorkspace', async () => {
+  const actual = await vi.importActual<typeof import('../utils/codeAgentWorkspace')>('../utils/codeAgentWorkspace');
   return {
     ...actual,
     loadCodeAgentWorkspaceSnapshot: loadCodeAgentWorkspaceSnapshotMock,
@@ -139,7 +139,7 @@ describe('MessageList optimistic messages', () => {
     requestEditMessageAndAIResponseMock.mockResolvedValue(undefined);
     loadCodeAgentWorkspaceSnapshotMock.mockResolvedValue({
       roomId: 'room-1',
-      backend: 'coco',
+      backend: 'code-agent',
       source: 'sandbox',
       generatedAt: '2026-05-29T00:00:00.000Z',
       status: { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: false },
@@ -443,12 +443,12 @@ describe('MessageList optimistic messages', () => {
         presentation="code-agent"
         currentRoom={{
           id: 'room-1',
-          name: 'Coco',
+          name: 'Code Agent',
           createdAt: '2026-05-26T00:00:00.000Z',
           creatorId: 'client-1',
-          type: 'coco',
+          type: 'codeAgent',
           sandboxStatus: 'ready',
-          cocoStatus: 'idle',
+          codeAgentStatus: 'idle',
         }}
       />
     );
@@ -474,7 +474,7 @@ describe('MessageList optimistic messages', () => {
       canManageAdmins: false,
       canManageMembers: false,
       canTransferOwnership: false,
-      canUseCoco: true,
+      canUseCodeAgent: true,
     };
 
     render(
@@ -485,12 +485,12 @@ describe('MessageList optimistic messages', () => {
         presentation="code-agent"
         currentRoom={{
           id: 'room-1',
-          name: 'Coco',
+          name: 'Code Agent',
           createdAt: '2026-05-26T00:00:00.000Z',
           creatorId: 'client-1',
-          type: 'coco',
+          type: 'codeAgent',
           sandboxStatus: 'ready',
-          cocoStatus: 'idle',
+          codeAgentStatus: 'idle',
         }}
         codeAgentMode="plan"
         codeAgentAvailableModes={['plan', 'edit']}
@@ -506,11 +506,11 @@ describe('MessageList optimistic messages', () => {
   it('refreshes the code workspace snapshot when the sandbox becomes ready', async () => {
     const baseRoom = {
       id: 'room-1',
-      name: 'Coco',
+      name: 'Code Agent',
       createdAt: '2026-05-26T00:00:00.000Z',
       creatorId: 'client-1',
-      type: 'coco' as const,
-      cocoStatus: 'idle' as const,
+      type: 'codeAgent' as const,
+      codeAgentStatus: 'idle' as const,
     };
 
     const { rerender } = render(
@@ -558,13 +558,13 @@ describe('MessageList optimistic messages', () => {
         presentation="code-agent"
         currentRoom={{
           id: 'room-1',
-          name: 'Coco',
+          name: 'Code Agent',
           createdAt: '2026-05-26T00:00:00.000Z',
           creatorId: 'client-1',
-          type: 'coco',
+          type: 'codeAgent',
           sandboxStatus: 'ready',
           sandboxUpdatedAt: '2026-06-30T10:00:00.000Z',
-          cocoStatus: 'running',
+          codeAgentStatus: 'running',
         }}
       />
     );
@@ -634,7 +634,7 @@ describe('MessageList optimistic messages', () => {
     });
   });
 
-  it('uses Coco AI request settings when retrying in a code-agent room', async () => {
+  it('uses code-agent AI request settings when retrying in a code-agent room', async () => {
     window.localStorage.setItem('aiRoles', JSON.stringify([
       { id: 'default', name: 'Assistant', systemPrompt: 'You are helpful', color: 'secondary', icon: 'lucide:bot' },
       { id: 'coder', name: 'Code Expert', systemPrompt: 'Review code', color: 'primary', icon: 'lucide:code' },
@@ -664,7 +664,7 @@ describe('MessageList optimistic messages', () => {
       });
     });
 
-    expect((await screen.findByTestId('message-item')).dataset.aiRequestRoomKind).toBe('coco');
+    expect((await screen.findByTestId('message-item')).dataset.aiRequestRoomKind).toBe('codeAgent');
     fireEvent.click(screen.getByText('retry-ai-1'));
 
     await waitFor(() => {
@@ -715,7 +715,7 @@ describe('MessageList optimistic messages', () => {
     });
   });
 
-  it('uses Coco AI request settings when editing and asking in a code-agent room', async () => {
+  it('uses code-agent AI request settings when editing and asking in a code-agent room', async () => {
     window.localStorage.setItem('aiRoles', JSON.stringify([
       { id: 'default', name: 'Assistant', systemPrompt: 'You are helpful', color: 'secondary', icon: 'lucide:bot' },
       { id: 'a2ui-demo', name: 'A2UI Demo', systemPrompt: 'Use A2UI', color: 'warning', icon: 'lucide:layout-dashboard' },
@@ -757,7 +757,7 @@ describe('MessageList optimistic messages', () => {
         maxContextMessages: 2,
       });
     });
-    expect(screen.getByTestId('message-item').dataset.aiRequestRoomKind).toBe('coco');
+    expect(screen.getByTestId('message-item').dataset.aiRequestRoomKind).toBe('codeAgent');
   });
 
   it('does not force the room back to the bottom after the user scrolls away', () => {

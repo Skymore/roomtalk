@@ -68,17 +68,17 @@ describe('RoomCard', () => {
     expect(props.onDelete).toHaveBeenCalledWith(room);
   });
 
-  it('shows Coco room status without changing card shape', () => {
+  it('shows code-agent room status without changing card shape', () => {
     renderRoomCard({
       ...room,
-      type: 'coco',
+      type: 'codeAgent',
       sandboxStatus: 'ready',
-      cocoStatus: 'running',
+      codeAgentStatus: 'running',
     });
 
     expect(screen.getByText('codeAgentRoomType')).toBeTruthy();
     expect(screen.getByText('sandboxStatusReady')).toBeTruthy();
-    expect(screen.getByText('cocoStatusRunning')).toBeTruthy();
+    expect(screen.getByText('codeAgentStatusRunning')).toBeTruthy();
     expect(screen.getByTestId('room-card').className).toContain('rounded-lg');
   });
 });

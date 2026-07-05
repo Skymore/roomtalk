@@ -34,7 +34,7 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-vi.mock('../utils/cocoWorkspace', () => ({
+vi.mock('../utils/codeAgentWorkspace', () => ({
   loadCodeAgentWorkspaceDiff: loadCodeAgentWorkspaceDiffMock,
   loadCodeAgentWorkspaceRefs: loadCodeAgentWorkspaceRefsMock,
 }));

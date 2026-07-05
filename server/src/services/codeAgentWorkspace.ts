@@ -1,5 +1,5 @@
-import { Message, Room, RoomCocoStatus, RoomSandboxStatus } from '../types';
-import { CocoWorkspaceChanges } from './cocoSandboxService';
+import { Message, Room, RoomCodeAgentStatus, RoomSandboxStatus } from '../types';
+import { CodeAgentWorkspaceChanges } from './codeAgentSandboxService';
 
 export interface CodeAgentWorkspaceCommand {
   id: string;
@@ -30,13 +30,13 @@ export interface CodeAgentWorkspaceArtifact {
 
 export interface CodeAgentWorkspaceSnapshot {
   roomId: string;
-  backend: 'coco';
+  backend: 'code-agent';
   source: 'sandbox';
   generatedAt: string;
   workspaceRoot?: string;
   status: {
     sandboxStatus: RoomSandboxStatus;
-    agentStatus: RoomCocoStatus;
+    agentStatus: RoomCodeAgentStatus;
     hasSession: boolean;
   };
   summary: CodeAgentWorkspaceSummary;
@@ -44,8 +44,8 @@ export interface CodeAgentWorkspaceSnapshot {
   changes: {
     available: boolean;
     changedFiles: string[];
-    changedFileStats: CocoWorkspaceChanges['changedFileStats'];
-    diffSummary: CocoWorkspaceChanges['diffSummary'];
+    changedFileStats: CodeAgentWorkspaceChanges['changedFileStats'];
+    diffSummary: CodeAgentWorkspaceChanges['diffSummary'];
   };
   commands: CodeAgentWorkspaceCommand[];
 }
@@ -140,7 +140,7 @@ export const buildCodeAgentWorkspaceSnapshot = (
   room: Room,
   messages: Message[],
   now = new Date(),
-  changes: CocoWorkspaceChanges = {
+  changes: CodeAgentWorkspaceChanges = {
     available: false,
     changedFiles: [],
     changedFileStats: [],
@@ -151,14 +151,14 @@ export const buildCodeAgentWorkspaceSnapshot = (
 ): CodeAgentWorkspaceSnapshot => {
   return {
     roomId: room.id,
-    backend: 'coco',
+    backend: 'code-agent',
     source: 'sandbox',
     generatedAt: now.toISOString(),
     ...(workspaceRoot ? { workspaceRoot } : {}),
     status: {
       sandboxStatus: room.sandboxStatus || 'none',
-      agentStatus: room.cocoStatus || 'idle',
-      hasSession: Boolean(room.cocoSessionId),
+      agentStatus: room.codeAgentStatus || 'idle',
+      hasSession: Boolean(room.codeAgentSessionId),
     },
     summary: summarizeWorkspaceMessages(messages),
     artifacts,

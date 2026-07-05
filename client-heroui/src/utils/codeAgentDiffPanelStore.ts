@@ -1,5 +1,5 @@
 import { useEffect, useSyncExternalStore } from 'react';
-import type { CodeAgentWorkspaceDiffScope } from './cocoWorkspace';
+import type { CodeAgentWorkspaceDiffScope } from './codeAgentWorkspace';
 
 export type CodeAgentDiffPanelSelection =
   | { kind: 'branch'; baseRef: string | null; filePath: string | null; revealRequestId: number }

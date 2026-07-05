@@ -89,9 +89,9 @@ const durableMutationStubs = () => ({
   async truncateBeforeMessage() { return { room: room(), messages: [message()], targetFound: true }; },
   async truncateAfterMessage() { return { room: room(), messages: [message()], targetFound: true }; },
   async updateMessageAndTruncateAfter() { return { room: room(), messages: [message()], targetFound: true, updatedMessage: message() }; },
-  async compareAndSetRoomSandboxStatus() { return room({ type: 'coco', sandboxStatus: 'creating' }); },
-  async replaceRoomSandbox() { return room({ type: 'coco', sandboxStatus: 'ready', sandboxId: 'new-sandbox' }); },
-  async findInterruptedCocoRooms() { return []; },
+  async compareAndSetRoomSandboxStatus() { return room({ type: 'codeAgent', sandboxStatus: 'creating' }); },
+  async replaceRoomSandbox() { return room({ type: 'codeAgent', sandboxStatus: 'ready', sandboxId: 'new-sandbox' }); },
+  async findInterruptedCodeAgentRooms() { return []; },
   async findDanglingToolCalls() { return []; },
 });
 
@@ -384,9 +384,9 @@ describe('CompositeRoomStore', () => {
       async updateRoomName(_roomId: string, _creatorId: string, _name: string) { calls.push('durable.updateRoomName'); return room({ name: 'Renamed' }); },
       async deleteRoom(_roomId: string, _creatorId: string) { calls.push('durable.deleteRoom'); },
       async countRooms() { calls.push('durable.countRooms'); return 1; },
-      async compareAndSetRoomSandboxStatus() { calls.push('durable.compareAndSetRoomSandboxStatus'); return room({ type: 'coco', sandboxStatus: 'creating' }); },
-      async replaceRoomSandbox() { calls.push('durable.replaceRoomSandbox'); return room({ type: 'coco', sandboxStatus: 'ready', sandboxId: 'new-sandbox' }); },
-      async findInterruptedCocoRooms() { calls.push('durable.findInterruptedCocoRooms'); return [room({ type: 'coco', sandboxStatus: 'creating' })]; },
+      async compareAndSetRoomSandboxStatus() { calls.push('durable.compareAndSetRoomSandboxStatus'); return room({ type: 'codeAgent', sandboxStatus: 'creating' }); },
+      async replaceRoomSandbox() { calls.push('durable.replaceRoomSandbox'); return room({ type: 'codeAgent', sandboxStatus: 'ready', sandboxId: 'new-sandbox' }); },
+      async findInterruptedCodeAgentRooms() { calls.push('durable.findInterruptedCodeAgentRooms'); return [room({ type: 'codeAgent', sandboxStatus: 'creating' })]; },
       async findDanglingToolCalls() { calls.push('durable.findDanglingToolCalls'); return [message({ messageType: 'tool_call', toolCallId: 'tool-1' })]; },
       async setClientNickname(_clientId: string, _nickname: string) { calls.push('durable.setClientNickname'); },
       async getClientNicknames(_clientIds: string[]) { calls.push('durable.getClientNicknames'); return { 'client-1': 'Ada' }; },
@@ -506,13 +506,13 @@ describe('CompositeRoomStore', () => {
     assert.deepEqual(await store.updateRoomName('room-1', 'client-1', 'Renamed'), room({ name: 'Renamed' }));
     await store.deleteRoom('room-1', 'client-1');
     assert.equal(await store.countRooms(), 1);
-    assert.deepEqual(await store.compareAndSetRoomSandboxStatus('room-1', ['none'], 'creating'), room({ type: 'coco', sandboxStatus: 'creating' }));
+    assert.deepEqual(await store.compareAndSetRoomSandboxStatus('room-1', ['none'], 'creating'), room({ type: 'codeAgent', sandboxStatus: 'creating' }));
     assert.deepEqual(await store.replaceRoomSandbox('room-1', 'old-sandbox', {
       sandboxId: 'new-sandbox',
       sandboxStatus: 'ready',
       sandboxUpdatedAt: '2026-05-03T00:00:00.000Z',
-    }), room({ type: 'coco', sandboxStatus: 'ready', sandboxId: 'new-sandbox' }));
-    assert.deepEqual(await store.findInterruptedCocoRooms(), [room({ type: 'coco', sandboxStatus: 'creating' })]);
+    }), room({ type: 'codeAgent', sandboxStatus: 'ready', sandboxId: 'new-sandbox' }));
+    assert.deepEqual(await store.findInterruptedCodeAgentRooms(), [room({ type: 'codeAgent', sandboxStatus: 'creating' })]);
     assert.deepEqual(await store.findDanglingToolCalls(), [message({ messageType: 'tool_call', toolCallId: 'tool-1' })]);
     assert.equal(await store.updateRoomMemberCount('room-1', 'client-1', 'socket-1', true), 1);
     await store.updateRoomBrowserPresence('room-1', 'browser-1', 'socket-1', true);
@@ -596,7 +596,7 @@ describe('CompositeRoomStore', () => {
       'durable.countRooms',
       'durable.compareAndSetRoomSandboxStatus',
       'durable.replaceRoomSandbox',
-      'durable.findInterruptedCocoRooms',
+      'durable.findInterruptedCodeAgentRooms',
       'durable.findDanglingToolCalls',
       'realtime.updateRoomMemberCount',
       'realtime.updateRoomBrowserPresence',
@@ -755,7 +755,7 @@ describe('CompositeRoomStore', () => {
       async countRooms() { return 0; },
       async compareAndSetRoomSandboxStatus() { return null; },
       async replaceRoomSandbox() { return null; },
-      async findInterruptedCocoRooms() { return []; },
+      async findInterruptedCodeAgentRooms() { return []; },
       async findDanglingToolCalls() { return []; },
       async failInterruptedStreamingMessages() { calls.push('durable.failInterrupted'); return 2; },
     };

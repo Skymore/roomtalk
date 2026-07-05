@@ -6,8 +6,8 @@ import { formatUsdCost } from '../utils/formatters';
 import {
   CodeAgentWorkspaceCommand,
   CodeAgentWorkspaceSnapshot,
-  summarizeCocoMessages,
-} from '../utils/cocoWorkspace';
+  summarizeCodeAgentMessages,
+} from '../utils/codeAgentWorkspace';
 import { Message, Room } from '../utils/types';
 import {
   CODE_AGENT_BACKEND_OPTIONS,
@@ -22,11 +22,11 @@ import {
   normalizeCodeAgentModeList,
 } from '../utils/codeAgent';
 import {
-  getCocoAgentStatusClassName,
-  getCocoStatusLabelKey,
+  getCodeAgentStatusClassName,
+  getCodeAgentStatusLabelKey,
   getSandboxStatusClassName,
   getSandboxStatusLabelKey,
-} from '../utils/cocoRoom';
+} from '../utils/codeAgentRoom';
 import { CodeAgentChangedFilesTree } from './CodeAgentChangedFilesTree';
 import { CodeAgentDiffStatLabel, hasNonZeroChangedFileStat } from './CodeAgentDiffStatLabel';
 import {
@@ -149,7 +149,7 @@ const commandStatusLabelKey: Record<CodeAgentWorkspaceCommand['status'], string>
 };
 
 const backendShortLabels: Record<CodeAgentBackend, string> = {
-  coco: 'Coco',
+  'code-agent': 'Agent',
   codex: 'CLI',
   'codex-app-server': 'App',
 };
@@ -223,7 +223,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
     scopeKey: '',
     summaries: [],
   }));
-  const messageSummary = React.useMemo(() => summarizeCocoMessages(messages), [messages]);
+  const messageSummary = React.useMemo(() => summarizeCodeAgentMessages(messages), [messages]);
   const summary = React.useMemo(
     () => {
       if (!workspaceSnapshot?.summary) {
@@ -393,7 +393,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
     { label: t('codeAgentErrors'), value: summary.toolErrors, icon: 'lucide:circle-alert' },
   ];
   const canToggleMode = canSwitchMode && normalizedAvailableModes.length > 1 && Boolean(onModeChange);
-  const currentBackend: CodeAgentBackend = backend || room.codeAgentBackend || 'coco';
+  const currentBackend: CodeAgentBackend = backend || room.codeAgentBackend || 'code-agent';
   const canToggleBackend = canSwitchBackend && Boolean(onBackendChange);
   const canBrowseCodexThreads = currentBackend === 'codex-app-server';
   const loadCodexThreads = React.useCallback(async (cursor?: string | null) => {
@@ -582,9 +582,9 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
             <Icon icon="lucide:box" className="h-3 w-3 flex-shrink-0" />
             <span className="truncate">{t(getSandboxStatusLabelKey(room.sandboxStatus))}</span>
           </span>
-          <span className={`inline-flex max-w-[150px] items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium ${getCocoAgentStatusClassName(agentStatus)}`}>
+          <span className={`inline-flex max-w-[150px] items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium ${getCodeAgentStatusClassName(agentStatus)}`}>
             <Icon icon="lucide:bot" className="h-3 w-3 flex-shrink-0" />
-            <span className="truncate">{t(getCocoStatusLabelKey(agentStatus))}</span>
+            <span className="truncate">{t(getCodeAgentStatusLabelKey(agentStatus))}</span>
           </span>
           <span className="inline-flex items-center gap-1 rounded-full border border-[#dedbd0] bg-[#faf9f5] px-2 py-1 text-[11px] font-medium text-[#4d4c48] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#e8e6dc]">
             <Icon icon="lucide:coins" className="h-3 w-3" />

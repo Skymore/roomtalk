@@ -171,7 +171,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   onAskAI,
   onSend,
   isCodeAgentRoom = false,
-  codeAgentBackend = 'coco',
+  codeAgentBackend = 'code-agent',
   codeAgentMode = 'plan',
   codeAgentAvailableModes = ['plan'],
   canSwitchCodeAgentMode = codeAgentAvailableModes.length > 1,

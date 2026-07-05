@@ -459,18 +459,18 @@ describe('AI socket handlers', () => {
     assert.deepEqual(response, { success: true, messageId: store.upsertedMessages[0].id });
   });
 
-  it('routes Coco room AI requests to the Coco session service', async () => {
+  it('routes code-agent room AI requests to the code-agent session service', async () => {
     const calls: unknown[][] = [];
     const codeAgentSessionService = {
       async startTurn(...args: unknown[]) {
         calls.push(args);
         const callback = args[1] as ((response: { success: boolean; messageId?: string }) => void) | undefined;
-        callback?.({ success: true, messageId: 'coco-ai-1' });
-        return { success: true, messageId: 'coco-ai-1' };
+        callback?.({ success: true, messageId: 'code-agent-ai-1' });
+        return { success: true, messageId: 'code-agent-ai-1' };
       },
     };
     const { socket, store } = createHarness({
-      currentRoom: room({ type: 'coco' }),
+      currentRoom: room({ type: 'codeAgent' }),
       codeAgentSessionService,
       headers: roomtalkOriginHeaders,
     });
@@ -490,13 +490,13 @@ describe('AI socket handlers', () => {
       serverOrigin: 'https://room.ruit.me',
     });
     assert.equal(Object.prototype.hasOwnProperty.call(calls[0][0], 'roleName'), false);
-    assert.deepEqual(response, { success: true, messageId: 'coco-ai-1' });
+    assert.deepEqual(response, { success: true, messageId: 'code-agent-ai-1' });
     assert.equal(store.upsertedMessages.length, 0);
     assert.equal(store.assistantRuns.length, 0);
     assert.equal(store.outboxEvents.length, 0);
   });
 
-  it('passes Codex model and reasoning settings to Coco session service for Codex-backed rooms', async () => {
+  it('passes Codex model and reasoning settings to code-agent session service for Codex-backed rooms', async () => {
     const calls: unknown[][] = [];
     const codeAgentSessionService = {
       async startTurn(...args: unknown[]) {
@@ -507,7 +507,7 @@ describe('AI socket handlers', () => {
       },
     };
     const { socket } = createHarness({
-      currentRoom: room({ type: 'coco', codeAgentBackend: 'codex' }),
+      currentRoom: room({ type: 'codeAgent', codeAgentBackend: 'codex' }),
       codeAgentSessionService,
       headers: roomtalkOriginHeaders,
     });
@@ -528,15 +528,15 @@ describe('AI socket handlers', () => {
     });
   });
 
-  it('reports Coco unavailability without falling back to ordinary chat AI', async () => {
-    const { socket, store } = createHarness({ currentRoom: room({ type: 'coco' }) });
+  it('reports code-agent unavailability without falling back to ordinary chat AI', async () => {
+    const { socket, store } = createHarness({ currentRoom: room({ type: 'codeAgent' }) });
 
     let response: unknown;
     await socket.invoke('ask_ai', { roomId: 'room-1', model: selectedModel.id }, (ack: unknown) => {
       response = ack;
     });
 
-    assert.deepEqual(response, { success: false, error: 'Coco is unavailable' });
+    assert.deepEqual(response, { success: false, error: 'Code agent is unavailable' });
     assert.equal(store.upsertedMessages.length, 0);
     assert.equal(store.assistantRuns.length, 0);
   });
@@ -1081,25 +1081,25 @@ describe('AI socket handlers', () => {
     assert.deepEqual(response, { success: true, messageId: store.upsertedMessages[0].id });
   });
 
-  it('edits, truncates, and routes Coco edit-and-ask to the Coco session service', async () => {
+  it('edits, truncates, and routes code-agent edit-and-ask to the code-agent session service', async () => {
     const calls: unknown[][] = [];
     const codeAgentSessionService = {
       async startTurn(...args: unknown[]) {
         calls.push(args);
         const callback = args[1] as ((response: { success: boolean; messageId?: string }) => void) | undefined;
-        callback?.({ success: true, messageId: 'coco-ai-edit-1' });
-        return { success: true, messageId: 'coco-ai-edit-1' };
+        callback?.({ success: true, messageId: 'code-agent-ai-edit-1' });
+        return { success: true, messageId: 'code-agent-ai-edit-1' };
       },
     };
     const { io, socket, store } = createHarness({
-      currentRoom: room({ type: 'coco' }),
+      currentRoom: room({ type: 'codeAgent' }),
       codeAgentSessionService,
       headers: roomtalkOriginHeaders,
     });
     const editedUser = message({ id: 'message-edited', content: 'original prompt' });
     const staleTool = message({
       id: 'tool-stale',
-      clientId: 'coco',
+      clientId: 'code-agent',
       content: 'stale tool result',
       messageType: 'tool_result',
     });
@@ -1134,11 +1134,11 @@ describe('AI socket handlers', () => {
     const historyEvent = io.roomEmits.find(event => event.event === 'message_history');
     const historyPayload = historyEvent?.args[0] as { messages: Message[] };
     assert.deepEqual(historyPayload.messages.map(item => item.id), ['message-1', 'message-edited']);
-    assert.deepEqual(response, { success: true, messageId: 'coco-ai-edit-1' });
+    assert.deepEqual(response, { success: true, messageId: 'code-agent-ai-edit-1' });
   });
 
-  it('does not edit Coco messages when the Coco session service is unavailable', async () => {
-    const { socket, store } = createHarness({ currentRoom: room({ type: 'coco' }) });
+  it('does not edit code-agent messages when the code-agent session service is unavailable', async () => {
+    const { socket, store } = createHarness({ currentRoom: room({ type: 'codeAgent' }) });
 
     let response: unknown;
     await socket.invoke('edit_message_and_ask_ai', {
@@ -1150,7 +1150,7 @@ describe('AI socket handlers', () => {
       response = ack;
     });
 
-    assert.deepEqual(response, { success: false, error: 'Coco is unavailable' });
+    assert.deepEqual(response, { success: false, error: 'Code agent is unavailable' });
     assert.deepEqual(store.editAndTruncateCalls, []);
   });
 
@@ -1216,18 +1216,18 @@ describe('AI socket handlers', () => {
     assert.deepEqual(response, { success: false, error: 'Posting closed' });
   });
 
-  it('saves a user message before routing Coco ask requests to the Coco session service', async () => {
+  it('saves a user message before routing code-agent ask requests to the code-agent session service', async () => {
     const calls: unknown[][] = [];
     const codeAgentSessionService = {
       async startTurn(...args: unknown[]) {
         calls.push(args);
         const callback = args[1] as ((response: { success: boolean; messageId?: string }) => void) | undefined;
-        callback?.({ success: true, messageId: 'coco-ai-2' });
-        return { success: true, messageId: 'coco-ai-2' };
+        callback?.({ success: true, messageId: 'code-agent-ai-2' });
+        return { success: true, messageId: 'code-agent-ai-2' };
       },
     };
     const { io, socket, store } = createHarness({
-      currentRoom: room({ type: 'coco' }),
+      currentRoom: room({ type: 'codeAgent' }),
       codeAgentSessionService,
       headers: roomtalkOriginHeaders,
     });
@@ -1258,23 +1258,23 @@ describe('AI socket handlers', () => {
     assert.equal(Object.prototype.hasOwnProperty.call(calls[0][0], 'roleName'), false);
     assert.equal(response?.success, true);
     assert.equal(response?.userMessage, store.appendedMessages[0]);
-    assert.equal(response?.aiMessageId, 'coco-ai-2');
+    assert.equal(response?.aiMessageId, 'code-agent-ai-2');
     assert.equal(response?.aiStarted, true);
     assert.equal(io.roomEmits.some(event =>
       event.event === 'new_message' && (event.args[0] as Message).id === store.appendedMessages[0].id
     ), true);
   });
 
-  it('rejects Coco send-message-and-ask-ai before saving when the member cannot use Coco', async () => {
+  it('rejects code-agent send-message-and-ask-ai before saving when the member cannot use code agent', async () => {
     const calls: unknown[][] = [];
     const codeAgentSessionService = {
       async startTurn(...args: unknown[]) {
         calls.push(args);
-        return { success: true, messageId: 'coco-ai-2' };
+        return { success: true, messageId: 'code-agent-ai-2' };
       },
     };
     const { io, socket, store } = createHarness({
-      currentRoom: room({ type: 'coco', creatorId: 'owner-1' }),
+      currentRoom: room({ type: 'codeAgent', creatorId: 'owner-1' }),
       codeAgentSessionService,
     });
 
@@ -1291,19 +1291,19 @@ describe('AI socket handlers', () => {
     assert.equal(store.upsertedMessages.length, 0);
     assert.equal(calls.length, 0);
     assert.equal(io.roomEmits.length, 0);
-    assert.deepEqual(response, { success: false, error: 'You do not have access to this Coco room' });
+    assert.deepEqual(response, { success: false, error: 'You do not have access to this code agent room' });
   });
 
-  it('rejects Coco ask-ai requests before starting when the member cannot use Coco', async () => {
+  it('rejects code-agent ask-ai requests before starting when the member cannot use code agent', async () => {
     const calls: unknown[][] = [];
     const codeAgentSessionService = {
       async startTurn(...args: unknown[]) {
         calls.push(args);
-        return { success: true, messageId: 'coco-ai-2' };
+        return { success: true, messageId: 'code-agent-ai-2' };
       },
     };
     const { socket } = createHarness({
-      currentRoom: room({ type: 'coco', creatorId: 'owner-1' }),
+      currentRoom: room({ type: 'codeAgent', creatorId: 'owner-1' }),
       codeAgentSessionService,
     });
 
@@ -1316,7 +1316,7 @@ describe('AI socket handlers', () => {
     });
 
     assert.equal(calls.length, 0);
-    assert.deepEqual(response, { success: false, error: 'You do not have access to this Coco room' });
+    assert.deepEqual(response, { success: false, error: 'You do not have access to this code agent room' });
   });
 
   it('acknowledges the saved user message when AI startup fails afterward', async () => {
@@ -1454,9 +1454,9 @@ describe('AI socket handlers', () => {
     assert.ok(io.roomEmits.some(event => event.event === 'ai_stream_end'), 'expected a new AI turn to complete');
   });
 
-  it('does not route Coco room A2UI follow-up actions to ordinary chat AI', async () => {
+  it('does not route code-agent room A2UI follow-up actions to ordinary chat AI', async () => {
     const { io, socket, store } = createHarness({
-      currentRoom: room({ type: 'coco' }),
+      currentRoom: room({ type: 'codeAgent' }),
       messages: [message(), a2uiOwningMessage()],
     });
 

@@ -56,7 +56,7 @@ interface DesktopSidebarProps {
   onDeleteRoom: (roomId: string) => void;
   onUnsaveRoom: (roomId: string) => void;
   onRenameRoom: RoomRenameHandler;
-  isCocoEnabled: boolean;
+  isCodeAgentEnabled: boolean;
 }
 
 const DESKTOP_SIDEBAR_COLLAPSED_WIDTH = 72;
@@ -446,7 +446,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
   onDeleteRoom,
   onUnsaveRoom,
   onRenameRoom,
-  isCocoEnabled,
+  isCodeAgentEnabled,
 }) => {
   const { t } = useTranslation();
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -465,7 +465,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
   const [roomToDelete, setRoomToDelete] = useState<Room | null>(null);
   const [roomToRename, setRoomToRename] = useState<Room | null>(null);
   const currentLanguage = getLanguageOption(i18n.language);
-  const reserveCodeAgentLayoutForSidebar = currentRoom?.type === 'coco';
+  const reserveCodeAgentLayoutForSidebar = currentRoom?.type === 'codeAgent';
 
   React.useEffect(() => {
     sidebarWidthRef.current = sidebarWidth;
@@ -614,7 +614,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
       const roomId = await createRoom(validation.name, newRoomDescription, {
         password: options.password,
         postingSchedule: options.postingSchedule,
-        type: isCocoEnabled ? (options.type || newRoomType) : 'chat',
+        type: isCodeAgentEnabled ? (options.type || newRoomType) : 'chat',
       });
       setNewRoomName('');
       setNewRoomDescription('');
@@ -993,7 +993,7 @@ export const DesktopSidebar: React.FC<DesktopSidebarProps> = ({
         nameError={nameError}
         createError={createError}
         isCreating={isCreating}
-        isCocoEnabled={isCocoEnabled}
+        isCodeAgentEnabled={isCodeAgentEnabled}
         onRoomNameChange={handleRoomNameChange}
         onRoomDescriptionChange={setNewRoomDescription}
         onRoomTypeChange={setNewRoomType}

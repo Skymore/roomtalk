@@ -5,17 +5,17 @@ import { Logger } from '../logger';
 import { createPostgresPool } from '../repositories/postgresPool';
 import { PostgresPool } from '../repositories/postgresStore';
 import { Room } from '../types';
-import { CocoSandboxHandle, CocoSandboxService } from '../services/cocoSandboxService';
+import { CodeAgentSandboxHandle, CodeAgentSandboxService } from '../services/codeAgentSandboxService';
 import {
-  DEFAULT_COCO_E2B_KILL_TIMEOUT_MS,
-  DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS,
-  DEFAULT_COCO_RUNNER_PYTHONPATH,
-  DEFAULT_COCO_WORKSPACE_ROOT,
+  DEFAULT_CODE_AGENT_E2B_KILL_TIMEOUT_MS,
+  DEFAULT_CODE_AGENT_E2B_PAUSE_TIMEOUT_MS,
+  DEFAULT_CODE_AGENT_RUNNER_PYTHONPATH,
+  DEFAULT_CODE_AGENT_WORKSPACE_ROOT,
   DEFAULT_NODE_PATH,
   DEFAULT_PLAYWRIGHT_BROWSERS_PATH,
   resolveCodeAgentRuntimeConfig,
 } from '../services/codeAgentRuntimeConfig';
-import { E2BCocoSandboxService } from '../services/e2bCocoSandboxService';
+import { E2BCodeAgentSandboxService } from '../services/e2bCodeAgentSandboxService';
 import { createE2BSdkDriver } from '../services/e2bSdkDriver';
 
 interface SandboxMigrationCandidate {
@@ -47,7 +47,7 @@ type CodexSandboxMigrationPlan =
     e2bTemplateId: string;
     e2bWorkspace?: string;
     artifactVersion?: string;
-    cocoSourceRef?: string;
+    codeAgentSourceRef?: string;
     e2bLifecycle: {
       onTimeout: 'kill' | 'pause';
       autoResume: boolean;
@@ -91,8 +91,8 @@ export const buildCodexSandboxMigrationPlan = (env: NodeJS.ProcessEnv): CodexSan
   if (env.RUN_CODEX_SANDBOX_MIGRATION !== 'true') {
     return { run: false, reason: 'RUN_CODEX_SANDBOX_MIGRATION is not true' };
   }
-  if (!env.COCO_E2B_TEMPLATE_ID) {
-    return { run: false, reason: 'COCO_E2B_TEMPLATE_ID is not set' };
+  if (!env.CODE_AGENT_E2B_TEMPLATE_ID) {
+    return { run: false, reason: 'CODE_AGENT_E2B_TEMPLATE_ID is not set' };
   }
   if (!env.E2B_API_KEY && !env.E2B_ACCESS_TOKEN) {
     return { run: false, reason: 'E2B_API_KEY or E2B_ACCESS_TOKEN is not set' };
@@ -100,9 +100,9 @@ export const buildCodexSandboxMigrationPlan = (env: NodeJS.ProcessEnv): CodexSan
 
   const migrationEnv = {
     ...env,
-    COCO_ENABLED: 'true',
-    COCO_SANDBOX_PROVIDER: 'e2b',
-    COCO_RUNNER_CLIENT: 'jsonl',
+    CODE_AGENT_ENABLED: 'true',
+    CODE_AGENT_SANDBOX_PROVIDER: 'e2b',
+    CODE_AGENT_RUNNER_CLIENT: 'jsonl',
   };
   const config = resolveCodeAgentRuntimeConfig(migrationEnv);
   const persistenceStore = (env.PERSISTENCE_STORE || 'redis').toLowerCase();
@@ -114,8 +114,8 @@ export const buildCodexSandboxMigrationPlan = (env: NodeJS.ProcessEnv): CodexSan
   }
 
   const defaultSandboxTtlMs = config.e2bLifecycle.onTimeout === 'pause'
-    ? DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS
-    : DEFAULT_COCO_E2B_KILL_TIMEOUT_MS;
+    ? DEFAULT_CODE_AGENT_E2B_PAUSE_TIMEOUT_MS
+    : DEFAULT_CODE_AGENT_E2B_KILL_TIMEOUT_MS;
 
   return {
     run: true,
@@ -125,11 +125,11 @@ export const buildCodexSandboxMigrationPlan = (env: NodeJS.ProcessEnv): CodexSan
     destroyOld: env.CODEX_SANDBOX_MIGRATION_DESTROY_OLD === 'true',
     maxArchiveBytes: parsePositiveInteger(env.CODEX_SANDBOX_MIGRATION_MAX_ARCHIVE_BYTES, DEFAULT_MAX_ARCHIVE_BYTES),
     archiveTimeoutMs: parsePositiveInteger(env.CODEX_SANDBOX_MIGRATION_ARCHIVE_TIMEOUT_MS, DEFAULT_ARCHIVE_TIMEOUT_MS),
-    sandboxTtlMs: parsePositiveInteger(env.COCO_SANDBOX_TTL_MS, defaultSandboxTtlMs),
+    sandboxTtlMs: parsePositiveInteger(env.CODE_AGENT_SANDBOX_TTL_MS, defaultSandboxTtlMs),
     runnerEnv: {
       PYTHONUNBUFFERED: '1',
-      PYTHONPATH: config.runnerEnv.PYTHONPATH || DEFAULT_COCO_RUNNER_PYTHONPATH,
-      COCO_WORKSPACE_ROOT: config.runnerEnv.COCO_WORKSPACE_ROOT || config.e2bWorkspace || DEFAULT_COCO_WORKSPACE_ROOT,
+      PYTHONPATH: config.runnerEnv.PYTHONPATH || DEFAULT_CODE_AGENT_RUNNER_PYTHONPATH,
+      CODE_AGENT_WORKSPACE_ROOT: config.runnerEnv.CODE_AGENT_WORKSPACE_ROOT || config.e2bWorkspace || DEFAULT_CODE_AGENT_WORKSPACE_ROOT,
       PLAYWRIGHT_BROWSERS_PATH: config.runnerEnv.PLAYWRIGHT_BROWSERS_PATH || DEFAULT_PLAYWRIGHT_BROWSERS_PATH,
       NODE_PATH: config.runnerEnv.NODE_PATH || DEFAULT_NODE_PATH,
     },
@@ -137,7 +137,7 @@ export const buildCodexSandboxMigrationPlan = (env: NodeJS.ProcessEnv): CodexSan
     e2bTemplateId: config.e2bTemplateId || '',
     e2bWorkspace: config.e2bWorkspace,
     artifactVersion: config.artifactVersion,
-    cocoSourceRef: config.cocoSourceRef,
+    codeAgentSourceRef: config.codeAgentSourceRef,
     e2bLifecycle: config.e2bLifecycle,
     e2bConnection: {
       apiKey: env.E2B_API_KEY,
@@ -157,7 +157,7 @@ export const runCodexSandboxMigration = async (
   logger = new Logger('CodexSandboxMigration')
 ): Promise<MigrationResult[]> => {
   const roomIndex = await createRoomIndex(plan, logger);
-  const sandboxService = new E2BCocoSandboxService(createE2BSdkDriver({
+  const sandboxService = new E2BCodeAgentSandboxService(createE2BSdkDriver({
     apiKey: plan.e2bConnection.apiKey,
     accessToken: plan.e2bConnection.accessToken,
     domain: plan.e2bConnection.domain,
@@ -168,7 +168,7 @@ export const runCodexSandboxMigration = async (
     templateId: plan.e2bTemplateId,
     workspace: plan.e2bWorkspace,
     artifactVersion: plan.artifactVersion,
-    cocoSourceRef: plan.cocoSourceRef,
+    codeAgentSourceRef: plan.codeAgentSourceRef,
     lifecycle: plan.e2bLifecycle,
     logger,
   });
@@ -196,10 +196,10 @@ const migrateCandidate = async (
   candidate: SandboxMigrationCandidate,
   plan: Extract<CodexSandboxMigrationPlan, { run: true }>,
   roomIndex: SandboxMigrationRoomIndex,
-  sandboxService: E2BCocoSandboxService,
+  sandboxService: E2BCodeAgentSandboxService,
   logger: Logger
 ): Promise<MigrationResult> => {
-  let oldHandle: CocoSandboxHandle;
+  let oldHandle: CodeAgentSandboxHandle;
   try {
     oldHandle = await sandboxService.connect(candidate.sandboxId);
   } catch (error) {
@@ -223,7 +223,7 @@ const migrateCandidate = async (
     return failed(candidate, new Error('Sandbox service does not support workspace archive migration'));
   }
 
-  let newHandle: CocoSandboxHandle | undefined;
+  let newHandle: CodeAgentSandboxHandle | undefined;
   try {
     const archive = await sandboxService.exportWorkspaceArchive(oldHandle, {
       maxBytes: plan.maxArchiveBytes,
@@ -279,12 +279,12 @@ const migrateCandidate = async (
 };
 
 export const probeCodexCapability = async (
-  sandboxService: Pick<CocoSandboxService, 'startRunner'>,
-  handle: CocoSandboxHandle,
+  sandboxService: Pick<CodeAgentSandboxService, 'startRunner'>,
+  handle: CodeAgentSandboxHandle,
   runnerEnv: Record<string, string>,
   expectedArtifactVersion?: string
 ): Promise<CodexProbeResult> => {
-  let process: Awaited<ReturnType<CocoSandboxService['startRunner']>> | undefined;
+  let process: Awaited<ReturnType<CodeAgentSandboxService['startRunner']>> | undefined;
   try {
     process = await sandboxService.startRunner({
       handle,
@@ -324,9 +324,9 @@ const codexProbeCommand = (expectedArtifactVersion?: string) => [
   'import shutil',
   'import subprocess',
   'import sys',
-  'importlib.import_module("roomtalk_coco_runner.codex_cli")',
-  'importlib.import_module("roomtalk_coco_runner.codex_app_server")',
-  'importlib.import_module("roomtalk_coco_runner.codex_sdk_app_server")',
+  'importlib.import_module("roomtalk_code_agent_runner.codex_cli")',
+  'importlib.import_module("roomtalk_code_agent_runner.codex_app_server")',
+  'importlib.import_module("roomtalk_code_agent_runner.codex_sdk_app_server")',
   'importlib.import_module("openai_codex")',
   'codex = shutil.which("codex")',
   'if not codex:',
@@ -338,8 +338,8 @@ const codexProbeCommand = (expectedArtifactVersion?: string) => [
   '    raise SystemExit(result.returncode)',
   `expected_artifact_version = ${JSON.stringify(expectedArtifactVersion || '')}`,
   'if expected_artifact_version:',
-  '    artifact_version = os.environ.get("ROOMTALK_COCO_ARTIFACT_VERSION", "")',
-  '    artifact_lock_path = Path("/opt/roomtalk-coco-artifact.lock.json")',
+  '    artifact_version = os.environ.get("ROOMTALK_CODE_AGENT_ARTIFACT_VERSION", "")',
+  '    artifact_lock_path = Path("/opt/roomtalk-code-agent-artifact.lock.json")',
   '    if artifact_lock_path.exists():',
   '        try:',
   '            artifact_version = json.loads(artifact_lock_path.read_text()).get("artifactVersion") or artifact_version',
@@ -379,10 +379,10 @@ class PostgresSandboxMigrationRoomIndex implements SandboxMigrationRoomIndex {
     }>(
       `SELECT id, creator_id, sandbox_id, sandbox_status
       FROM rooms
-      WHERE type = 'coco'
+      WHERE type = 'codeAgent'
         AND sandbox_id IS NOT NULL
         AND COALESCE(sandbox_status, 'none') <> 'creating'
-        AND COALESCE(coco_status, 'idle') <> 'running'
+        AND COALESCE(code_agent_status, 'idle') <> 'running'
         AND ($1::text IS NULL OR id = $1)
       ORDER BY updated_at DESC
       LIMIT $2`,
@@ -470,10 +470,10 @@ const parseRoom = (value: string | null | undefined): Room | null => {
 
 export const isCodexSandboxMigrationCandidateRoom = (room: Room | null | undefined): room is Room & { sandboxId: string } => Boolean(
   room &&
-  room.type === 'coco' &&
+  room.type === 'codeAgent' &&
   room.sandboxId &&
   room.sandboxStatus !== 'creating' &&
-  room.cocoStatus !== 'running'
+  room.codeAgentStatus !== 'running'
 );
 
 const failed = (candidate: SandboxMigrationCandidate, error: unknown): MigrationResult => ({

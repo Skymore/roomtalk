@@ -62,12 +62,12 @@ vi.mock('../utils/socket', () => ({
   createRoom: vi.fn(),
 }));
 
-const cocoRoom: Room = {
-  id: 'coco-room',
-  name: 'Coco Room',
+const codeAgentRoom: Room = {
+  id: 'code-agent-room',
+  name: 'Code Agent Room',
   creatorId: 'client-1',
   createdAt: '2026-05-26T00:00:00.000Z',
-  type: 'coco',
+  type: 'codeAgent',
 };
 
 const renderSidebar = (currentRoom: Room | null, options?: RenderOptions) => render(
@@ -90,7 +90,7 @@ const renderSidebar = (currentRoom: Room | null, options?: RenderOptions) => ren
       onDeleteRoom={vi.fn()}
       onUnsaveRoom={vi.fn()}
       onRenameRoom={vi.fn()}
-      isCocoEnabled
+      isCodeAgentEnabled
     />
     <div
       data-code-agent-workspace-layout="true"
@@ -125,7 +125,7 @@ describe('DesktopSidebar', () => {
     vi.restoreAllMocks();
   });
 
-  it('reconstrains a persisted sidebar width when entering a Coco room', () => {
+  it('reconstrains a persisted sidebar width when entering a code-agent room', () => {
     Object.defineProperty(window, 'innerWidth', {
       configurable: true,
       value: 1600,
@@ -146,7 +146,7 @@ describe('DesktopSidebar', () => {
     });
     document.body.appendChild(host);
 
-    renderSidebar(cocoRoom, { container: host });
+    renderSidebar(codeAgentRoom, { container: host });
 
     const sidebar = screen.getByLabelText('resizeSidebar').closest('aside') as HTMLElement;
     const workspaceLayout = document.querySelector<HTMLElement>('[data-code-agent-workspace-layout="true"]');
@@ -177,7 +177,7 @@ describe('DesktopSidebar', () => {
     });
     document.body.appendChild(host);
 
-    renderSidebar(cocoRoom, { container: host });
+    renderSidebar(codeAgentRoom, { container: host });
 
     const resizeHandle = screen.getByLabelText('resizeSidebar');
     const sidebar = resizeHandle.closest('aside') as HTMLElement;
@@ -197,7 +197,7 @@ describe('DesktopSidebar', () => {
   });
 
   it('keeps the desktop sidebar resize affordance visual separate from the hitbox', () => {
-    renderSidebar(cocoRoom);
+    renderSidebar(codeAgentRoom);
 
     const resizeHandle = screen.getByLabelText('resizeSidebar');
     expect(resizeHandle.className).toContain('w-8');
@@ -229,7 +229,7 @@ describe('DesktopSidebar', () => {
     });
     document.body.appendChild(host);
 
-    renderSidebar(cocoRoom, { container: host });
+    renderSidebar(codeAgentRoom, { container: host });
 
     const sidebar = screen.getByLabelText('resizeSidebar').closest('aside') as HTMLElement;
     const workspaceLayout = document.querySelector<HTMLElement>('[data-code-agent-workspace-layout="true"]');

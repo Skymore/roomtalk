@@ -83,11 +83,11 @@ export function createRoomRecord(input: {
     lastActivityAt: timestamp,
     creatorId: input.creatorId,
   };
-  if (input.type === 'coco') {
-    room.type = 'coco';
+  if (input.type === 'codeAgent') {
+    room.type = 'codeAgent';
     room.sandboxStatus = 'none';
     room.sandboxUpdatedAt = timestamp;
-    room.cocoStatus = 'idle';
+    room.codeAgentStatus = 'idle';
   }
   return room;
 }

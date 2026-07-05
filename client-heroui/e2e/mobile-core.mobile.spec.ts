@@ -66,8 +66,7 @@ test('keeps the chat scroller expanded behind the mobile input overlay', async (
   });
 
   expect(layout.messageList.height).toBeGreaterThan(layout.viewportHeight * 0.2);
-  expect(layout.inputPanel.top).toBeLessThan(layout.messageList.bottom);
-  expect(layout.inputPanel.bottom).toBeCloseTo(layout.messageList.bottom, 1);
+  expect(layout.inputPanel.top).toBeCloseTo(layout.messageList.bottom, 1);
   expect(layout.bottomNav.top - layout.inputPanel.bottom).toBeLessThanOrEqual(4);
 });
 

@@ -43,7 +43,7 @@ export interface RoomSandboxReplacement {
   sandboxStatus: RoomSandboxStatus;
   sandboxUpdatedAt: string;
   sandboxArtifactVersion?: string;
-  sandboxCocoSourceRef?: string;
+  sandboxCodeAgentSourceRef?: string;
 }
 
 export interface MediaHistoryPageCursor {
@@ -235,7 +235,7 @@ export interface CreateGoogleAccountInput extends GoogleAccountProfile {
 export interface RoomSettingsUpdate {
   passwordHash?: string | null;
   postingSchedule?: RoomPostingSchedule | null;
-  cocoAccess?: Room['cocoAccess'] | null;
+  codeAgentAccess?: Room['codeAgentAccess'] | null;
   codeAgentMode?: Room['codeAgentMode'] | null;
   codeAgentBackend?: Room['codeAgentBackend'] | null;
 }
@@ -312,7 +312,7 @@ export interface DurableRoomStore {
   countRooms(): Promise<number>;
   compareAndSetRoomSandboxStatus(roomId: string, expectedStatuses: RoomSandboxStatus[], nextStatus: RoomSandboxStatus, updatedAt?: string): Promise<Room | null>;
   replaceRoomSandbox(roomId: string, expectedSandboxId: string, next: RoomSandboxReplacement): Promise<Room | null>;
-  findInterruptedCocoRooms(): Promise<Room[]>;
+  findInterruptedCodeAgentRooms(): Promise<Room[]>;
   findDanglingToolCalls(): Promise<Message[]>;
   // Durable client profile data. Nicknames live in the durable store so they
   // survive Redis flushes; presence (who is online) stays in the realtime store.
@@ -732,8 +732,8 @@ export class CompositeRoomStore implements RoomStore {
     return this.durableStore.replaceRoomSandbox(roomId, expectedSandboxId, next);
   }
 
-  findInterruptedCocoRooms() {
-    return this.durableStore.findInterruptedCocoRooms();
+  findInterruptedCodeAgentRooms() {
+    return this.durableStore.findInterruptedCodeAgentRooms();
   }
 
   findDanglingToolCalls() {

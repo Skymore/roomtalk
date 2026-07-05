@@ -219,7 +219,7 @@ const permissions = (overrides: Partial<RoomPermissions> = {}): RoomPermissions 
   canManageAdmins: true,
   canManageMembers: true,
   canTransferOwnership: true,
-  canUseCoco: true,
+  canUseCodeAgent: true,
   ...overrides,
 });
 

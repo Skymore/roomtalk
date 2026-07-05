@@ -191,7 +191,7 @@ class MemoryRedis {
     }
 
     if (script.includes("room['sandboxArtifactVersion']")) {
-      const [roomId, expectedSandboxId, sandboxId, sandboxStatus, sandboxUpdatedAt, artifactVersion, cocoSourceRef, updatedAt] = options.arguments;
+      const [roomId, expectedSandboxId, sandboxId, sandboxStatus, sandboxUpdatedAt, artifactVersion, codeAgentSourceRef, updatedAt] = options.arguments;
       const roomJson = this.hash('rooms').get(roomId);
       if (!roomJson) return '';
       const room = JSON.parse(roomJson);
@@ -209,10 +209,10 @@ class MemoryRedis {
       } else {
         delete updatedRoom.sandboxArtifactVersion;
       }
-      if (cocoSourceRef) {
-        updatedRoom.sandboxCocoSourceRef = cocoSourceRef;
+      if (codeAgentSourceRef) {
+        updatedRoom.sandboxCodeAgentSourceRef = codeAgentSourceRef;
       } else {
-        delete updatedRoom.sandboxCocoSourceRef;
+        delete updatedRoom.sandboxCodeAgentSourceRef;
       }
       const encoded = JSON.stringify(updatedRoom);
       this.hash('rooms').set(roomId, encoded);
@@ -498,10 +498,10 @@ type RoomRow = {
   sandbox_status?: Room['sandboxStatus'] | null;
   sandbox_updated_at?: string | null;
   sandbox_artifact_version?: string | null;
-  sandbox_coco_source_ref?: string | null;
-  coco_session_id?: string | null;
-  coco_status?: Room['cocoStatus'] | null;
-  coco_access?: Room['cocoAccess'] | null;
+  sandbox_code_agent_source_ref?: string | null;
+  code_agent_session_id?: string | null;
+  code_agent_status?: Room['codeAgentStatus'] | null;
+  code_agent_access?: Room['codeAgentAccess'] | null;
   code_agent_mode?: Room['codeAgentMode'] | null;
   code_agent_backend?: Room['codeAgentBackend'] | null;
 };
@@ -625,10 +625,10 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         sandboxStatus,
         sandboxUpdatedAt,
         sandboxArtifactVersion,
-        sandboxCocoSourceRef,
-        cocoSessionId,
-        cocoStatus,
-        cocoAccess,
+        sandboxCodeAgentSourceRef,
+        codeAgentSessionId,
+        codeAgentStatus,
+        codeAgentAccess,
         codeAgentMode,
         codeAgentBackend,
         shouldUpdateType,
@@ -646,10 +646,10 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
           sandbox_status: sandboxStatus === null || sandboxStatus === undefined ? existing.sandbox_status : sandboxStatus as Room['sandboxStatus'],
           sandbox_updated_at: sandboxUpdatedAt === null || sandboxUpdatedAt === undefined ? existing.sandbox_updated_at : String(sandboxUpdatedAt),
           sandbox_artifact_version: sandboxArtifactVersion === null || sandboxArtifactVersion === undefined ? existing.sandbox_artifact_version : String(sandboxArtifactVersion),
-          sandbox_coco_source_ref: sandboxCocoSourceRef === null || sandboxCocoSourceRef === undefined ? existing.sandbox_coco_source_ref : String(sandboxCocoSourceRef),
-          coco_session_id: cocoSessionId === null || cocoSessionId === undefined ? existing.coco_session_id : String(cocoSessionId),
-          coco_status: cocoStatus === null || cocoStatus === undefined ? existing.coco_status : cocoStatus as Room['cocoStatus'],
-          coco_access: cocoAccess === null || cocoAccess === undefined ? existing.coco_access : cocoAccess as Room['cocoAccess'],
+          sandbox_code_agent_source_ref: sandboxCodeAgentSourceRef === null || sandboxCodeAgentSourceRef === undefined ? existing.sandbox_code_agent_source_ref : String(sandboxCodeAgentSourceRef),
+          code_agent_session_id: codeAgentSessionId === null || codeAgentSessionId === undefined ? existing.code_agent_session_id : String(codeAgentSessionId),
+          code_agent_status: codeAgentStatus === null || codeAgentStatus === undefined ? existing.code_agent_status : codeAgentStatus as Room['codeAgentStatus'],
+          code_agent_access: codeAgentAccess === null || codeAgentAccess === undefined ? existing.code_agent_access : codeAgentAccess as Room['codeAgentAccess'],
           code_agent_mode: codeAgentMode === null || codeAgentMode === undefined ? existing.code_agent_mode : codeAgentMode as Room['codeAgentMode'],
           code_agent_backend: codeAgentBackend === null || codeAgentBackend === undefined ? existing.code_agent_backend : codeAgentBackend as Room['codeAgentBackend'],
           room_version: (existing.room_version || 0) + 1,
@@ -668,10 +668,10 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
           sandbox_status: sandboxStatus === null || sandboxStatus === undefined ? null : sandboxStatus as Room['sandboxStatus'],
           sandbox_updated_at: sandboxUpdatedAt === null || sandboxUpdatedAt === undefined ? null : String(sandboxUpdatedAt),
           sandbox_artifact_version: sandboxArtifactVersion === null || sandboxArtifactVersion === undefined ? null : String(sandboxArtifactVersion),
-          sandbox_coco_source_ref: sandboxCocoSourceRef === null || sandboxCocoSourceRef === undefined ? null : String(sandboxCocoSourceRef),
-          coco_session_id: cocoSessionId === null || cocoSessionId === undefined ? null : String(cocoSessionId),
-          coco_status: cocoStatus === null || cocoStatus === undefined ? null : cocoStatus as Room['cocoStatus'],
-          coco_access: cocoAccess === null || cocoAccess === undefined ? null : cocoAccess as Room['cocoAccess'],
+          sandbox_code_agent_source_ref: sandboxCodeAgentSourceRef === null || sandboxCodeAgentSourceRef === undefined ? null : String(sandboxCodeAgentSourceRef),
+          code_agent_session_id: codeAgentSessionId === null || codeAgentSessionId === undefined ? null : String(codeAgentSessionId),
+          code_agent_status: codeAgentStatus === null || codeAgentStatus === undefined ? null : codeAgentStatus as Room['codeAgentStatus'],
+          code_agent_access: codeAgentAccess === null || codeAgentAccess === undefined ? null : codeAgentAccess as Room['codeAgentAccess'],
           code_agent_mode: codeAgentMode === null || codeAgentMode === undefined ? null : codeAgentMode as Room['codeAgentMode'],
           code_agent_backend: codeAgentBackend === null || codeAgentBackend === undefined ? null : codeAgentBackend as Room['codeAgentBackend'],
           room_version: 1,
@@ -989,7 +989,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         sandbox_status: params[3] as Room['sandboxStatus'],
         sandbox_updated_at: String(params[4]),
         sandbox_artifact_version: params[5] === null || params[5] === undefined ? null : String(params[5]),
-        sandbox_coco_source_ref: params[6] === null || params[6] === undefined ? null : String(params[6]),
+        sandbox_code_agent_source_ref: params[6] === null || params[6] === undefined ? null : String(params[6]),
         room_version: (room.room_version || 0) + 1,
         updated_at: new Date().toISOString(),
       };
@@ -1161,9 +1161,9 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       return { rows: rows as T[], rowCount: rows.length };
     }
 
-    if (/FROM rooms WHERE type = 'coco'/.test(compactSql)) {
+    if (/FROM rooms WHERE type = 'codeAgent'/.test(compactSql)) {
       const rows = [...this.rooms.values()]
-        .filter(room => room.type === 'coco' && (room.sandbox_status === 'creating' || room.coco_status === 'running'));
+        .filter(room => room.type === 'codeAgent' && (room.sandbox_status === 'creating' || room.code_agent_status === 'running'));
       return { rows: rows as T[], rowCount: rows.length };
     }
 
@@ -1741,17 +1741,17 @@ for (const [storeName, createFixture] of storeFactories) {
       assert.deepEqual(await store.readMessagesByRoom('missing-room'), []);
     });
 
-    it('preserves Coco room fields and tool message metadata', async () => {
+    it('preserves code-agent room fields and tool message metadata', async () => {
       const { store } = createFixture();
-      const cocoRoom = room({
-        type: 'coco',
+      const codeAgentRoom = room({
+        type: 'codeAgent',
         sandboxId: 'sandbox-1',
         sandboxStatus: 'ready',
         sandboxUpdatedAt: '2026-05-03T00:01:00.000Z',
         sandboxArtifactVersion: 'artifact-v1',
-        sandboxCocoSourceRef: 'source-ref-1',
-        cocoSessionId: 'coco-session-1',
-        cocoStatus: 'idle',
+        sandboxCodeAgentSourceRef: 'source-ref-1',
+        codeAgentSessionId: 'code-agent-session-1',
+        codeAgentStatus: 'idle',
       });
       const toolCall = message({
         id: 'tool-call-1',
@@ -1781,36 +1781,36 @@ for (const [storeName, createFixture] of storeFactories) {
         timestamp: '2026-05-03T00:00:02.000Z',
       });
 
-      assert.deepEqual(stripRoomStamp(await store.saveRoom(cocoRoom)), cocoRoom);
-      assert.deepEqual(stripRoomStamp(await store.getRoomById(cocoRoom.id)), cocoRoom);
+      assert.deepEqual(stripRoomStamp(await store.saveRoom(codeAgentRoom)), codeAgentRoom);
+      assert.deepEqual(stripRoomStamp(await store.getRoomById(codeAgentRoom.id)), codeAgentRoom);
 
-      const legacyRoomSave = room({ id: cocoRoom.id, name: 'Legacy save' });
-      const preservedCocoRoom = { ...cocoRoom, name: 'Legacy save' };
-      assert.deepEqual(stripRoomStamp(await store.saveRoom(legacyRoomSave)), preservedCocoRoom);
-      assert.deepEqual(stripRoomStamp(await store.getRoomById(cocoRoom.id)), preservedCocoRoom);
+      const legacyRoomSave = room({ id: codeAgentRoom.id, name: 'Legacy save' });
+      const preservedCodeAgentRoom = { ...codeAgentRoom, name: 'Legacy save' };
+      assert.deepEqual(stripRoomStamp(await store.saveRoom(legacyRoomSave)), preservedCodeAgentRoom);
+      assert.deepEqual(stripRoomStamp(await store.getRoomById(codeAgentRoom.id)), preservedCodeAgentRoom);
 
       await store.appendMessageWithAtomicPosition(toolCall);
       await store.appendMessageWithAtomicPosition(toolResult);
       await store.upsertMessage(sandboxStatus);
 
-      assert.deepEqual(await store.readMessagesByRoom(cocoRoom.id), [toolCall, toolResult, sandboxStatus]);
+      assert.deepEqual(await store.readMessagesByRoom(codeAgentRoom.id), [toolCall, toolResult, sandboxStatus]);
     });
 
-    it('compares sandbox status and finds Coco recovery work', async () => {
+    it('compares sandbox status and finds code-agent recovery work', async () => {
       const { store } = createFixture();
-      const readyRoom = room({ id: 'ready-room', type: 'coco', sandboxStatus: 'ready', sandboxUpdatedAt: '2026-05-03T00:00:00.000Z' });
+      const readyRoom = room({ id: 'ready-room', type: 'codeAgent', sandboxStatus: 'ready', sandboxUpdatedAt: '2026-05-03T00:00:00.000Z' });
       const replaceRoom = room({
         id: 'replace-room',
-        type: 'coco',
+        type: 'codeAgent',
         sandboxId: 'old-sandbox',
         sandboxStatus: 'ready',
         sandboxUpdatedAt: '2026-05-03T00:00:00.000Z',
         sandboxArtifactVersion: 'artifact-old',
-        sandboxCocoSourceRef: 'source-old',
+        sandboxCodeAgentSourceRef: 'source-old',
       });
-      const creatingRoom = room({ id: 'creating-room', type: 'coco', sandboxStatus: 'creating' });
-      const runningRoom = room({ id: 'running-room', type: 'coco', sandboxStatus: 'ready', cocoStatus: 'running' });
-      const legacyNoneRoom = room({ id: 'legacy-none-room', type: 'coco' });
+      const creatingRoom = room({ id: 'creating-room', type: 'codeAgent', sandboxStatus: 'creating' });
+      const runningRoom = room({ id: 'running-room', type: 'codeAgent', sandboxStatus: 'ready', codeAgentStatus: 'running' });
+      const legacyNoneRoom = room({ id: 'legacy-none-room', type: 'codeAgent' });
       const chatRoom = room({ id: 'chat-room', type: 'chat' });
       const statusChangedAt = '2026-05-03T00:02:00.000Z';
       const danglingCall = message({
@@ -1870,27 +1870,27 @@ for (const [storeName, createFixture] of storeFactories) {
         sandboxStatus: 'ready',
         sandboxUpdatedAt: statusChangedAt,
         sandboxArtifactVersion: 'artifact-new',
-        sandboxCocoSourceRef: 'source-new',
+        sandboxCodeAgentSourceRef: 'source-new',
       }), null);
       assert.deepEqual(stripRoomStamp(await store.replaceRoomSandbox(replaceRoom.id, 'old-sandbox', {
         sandboxId: 'new-sandbox',
         sandboxStatus: 'ready',
         sandboxUpdatedAt: statusChangedAt,
         sandboxArtifactVersion: 'artifact-new',
-        sandboxCocoSourceRef: 'source-new',
+        sandboxCodeAgentSourceRef: 'source-new',
       })), {
         ...replaceRoom,
         sandboxId: 'new-sandbox',
         sandboxStatus: 'ready',
         sandboxUpdatedAt: statusChangedAt,
         sandboxArtifactVersion: 'artifact-new',
-        sandboxCocoSourceRef: 'source-new',
+        sandboxCodeAgentSourceRef: 'source-new',
       });
 
-      const interruptedIds = (await store.findInterruptedCocoRooms()).map(item => item.id).sort();
+      const interruptedIds = (await store.findInterruptedCodeAgentRooms()).map(item => item.id).sort();
       assert.deepEqual(interruptedIds, ['creating-room', 'running-room']);
       assert.ok(await store.compareAndSetRoomSandboxStatus(creatingRoom.id, ['creating'], 'error', statusChangedAt));
-      assert.deepEqual((await store.findInterruptedCocoRooms()).map(item => item.id), ['running-room']);
+      assert.deepEqual((await store.findInterruptedCodeAgentRooms()).map(item => item.id), ['running-room']);
 
       assert.deepEqual((await store.findDanglingToolCalls()).map(item => item.id), ['dangling-call']);
     });

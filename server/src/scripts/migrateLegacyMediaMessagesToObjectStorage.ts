@@ -8,7 +8,7 @@ import { createPostgresPool } from '../repositories/postgresPool';
 import { PostgresPool, PostgresStore } from '../repositories/postgresStore';
 import { MessageUpdateResult } from '../repositories/store';
 import { createMediaObjectStorageFromEnv, MediaObjectStorage } from '../services/mediaObjectStorage';
-import { MediaAsset, Message, Room, RoomCocoStatus, RoomSandboxStatus, RoomType } from '../types';
+import { MediaAsset, Message, Room, RoomCodeAgentStatus, RoomSandboxStatus, RoomType } from '../types';
 
 dotenv.config();
 
@@ -28,8 +28,8 @@ type RoomRow = {
   sandbox_id?: string | null;
   sandbox_status?: RoomSandboxStatus | null;
   sandbox_updated_at?: string | Date | null;
-  coco_session_id?: string | null;
-  coco_status?: RoomCocoStatus | null;
+  code_agent_session_id?: string | null;
+  code_agent_status?: RoomCodeAgentStatus | null;
   room_version?: number | string | null;
   updated_at?: string | Date | null;
 };
@@ -87,7 +87,7 @@ type ParsedDataUrl = {
   body: Buffer;
 };
 
-const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, coco_session_id, coco_status, room_version, updated_at';
+const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, code_agent_session_id, code_agent_status, room_version, updated_at';
 
 const LEGACY_IMAGE_DATA_URL_RE = /^data:(image\/[A-Za-z0-9.+-]+);base64,([\s\S]+)$/;
 
@@ -149,8 +149,8 @@ const mapRoom = (row: RoomRow): Room => {
   if (row.sandbox_id) room.sandboxId = row.sandbox_id;
   if (row.sandbox_status) room.sandboxStatus = row.sandbox_status;
   if (row.sandbox_updated_at) room.sandboxUpdatedAt = toIsoString(row.sandbox_updated_at);
-  if (row.coco_session_id) room.cocoSessionId = row.coco_session_id;
-  if (row.coco_status) room.cocoStatus = row.coco_status;
+  if (row.code_agent_session_id) room.codeAgentSessionId = row.code_agent_session_id;
+  if (row.code_agent_status) room.codeAgentStatus = row.code_agent_status;
   const roomVersion = Number(row.room_version || 0);
   if (roomVersion > 0) room.roomVersion = roomVersion;
   if (row.updated_at) room.updatedAt = toIsoString(row.updated_at);

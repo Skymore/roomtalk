@@ -1,4 +1,4 @@
-import type { CodeAgentWorkspaceDiff, CodeAgentWorkspaceDiffScope, CodeAgentWorkspaceRefs } from './cocoWorkspace';
+import type { CodeAgentWorkspaceDiff, CodeAgentWorkspaceDiffScope, CodeAgentWorkspaceRefs } from './codeAgentWorkspace';
 import {
   CODE_AGENT_BRANCH_RANGE_REVIEW_SECTION_ID,
   CODE_AGENT_WORKING_TREE_REVIEW_SECTION_ID,

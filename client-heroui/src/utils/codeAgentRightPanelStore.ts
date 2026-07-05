@@ -299,6 +299,21 @@ function previewTargetFromSessionSnapshot(
   return normalizePreviewNavigationTarget({ kind: 'url', url: snapshot.navStatus.url });
 }
 
+function isWorkspaceAssetPreviewUrl(value: string): boolean {
+  const workspaceAssetPrefixes = [
+    '/api/code-agent/workspace-assets/',
+  ];
+  if (workspaceAssetPrefixes.some((prefix) => value.startsWith(prefix))) {
+    return true;
+  }
+  try {
+    const url = new URL(value);
+    return workspaceAssetPrefixes.some((prefix) => url.pathname.startsWith(prefix));
+  } catch {
+    return false;
+  }
+}
+
 function browserSurface(
   relativePath: string | null,
   navigationState?: CodeAgentPreviewNavigationState,
@@ -412,15 +427,23 @@ function previewSurfaceFromSessionSnapshot(
   };
   const target = previewTargetFromSessionSnapshot(snapshot);
   if (!target) {
-    const blank = existingSurface && !previewTargetFromSurface(existingSurface)
-      ? existingSurface
-      : blankSurface ?? browserSurface(null);
+    const blank = existingSurface ?? blankSurface ?? browserSurface(null);
     return {
       ...blank,
       ...sessionState,
     };
   }
   const sourceSurface = existingSurface ?? null;
+  if (
+    target.kind === 'url' &&
+    sourceSurface?.relativePath &&
+    isWorkspaceAssetPreviewUrl(target.url)
+  ) {
+    return {
+      ...sourceSurface,
+      ...sessionState,
+    };
+  }
   return previewSurfaceFromTarget(target, {
     ...navigationStateAfterPreviewTarget(sourceSurface, target),
     ...sessionState,

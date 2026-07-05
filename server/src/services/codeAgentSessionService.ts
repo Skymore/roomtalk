@@ -3,8 +3,8 @@ import { Logger } from '../logger';
 import { RoomStore } from '../repositories/store';
 import { AIModelOption, CodeAgentBackend, Message, Room, RoomMemberRole } from '../types';
 import { calculateAICost, getMessageAIModel } from './aiModels';
-import { CocoSandboxLifecycleService, EnsureCocoSandboxResult } from './cocoSandboxLifecycle';
-import { CocoSandboxHandle, CocoSandboxService, CodeAgentRunnerProcess } from './cocoSandboxService';
+import { CodeAgentSandboxLifecycleService, EnsureCodeAgentSandboxResult } from './codeAgentSandboxLifecycle';
+import { CodeAgentSandboxHandle, CodeAgentSandboxService, CodeAgentRunnerProcess } from './codeAgentSandboxService';
 import { mapCodeAgentRunnerEvent } from './codeAgentEventMapper';
 import { CodeAgentRunner } from './codeAgentRunner';
 import {
@@ -19,14 +19,14 @@ import {
   CodeAgentRunnerThreadReadRequest,
   CodeAgentRunnerThreadReadResultEvent,
 } from './codeAgentRunnerProtocol';
-import { DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND, DEFAULT_CODEX_CLI_RUNNER_COMMAND, DEFAULT_COCO_RUNNER_COMMAND } from './codeAgentRuntimeConfig';
+import { DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND, DEFAULT_CODEX_CLI_RUNNER_COMMAND, DEFAULT_CODE_AGENT_RUNNER_COMMAND } from './codeAgentRuntimeConfig';
 import { createAIPlaceholderMessage } from './messageDomain';
 import { stripAIStreamRecoveryMetadata, withAIStreamRecoveryMetadata } from './aiStreamRecovery';
-import { CocoModelGateway } from './cocoModelGateway';
-import { buildCocoPriorMessages } from './cocoTranscript';
+import { CodeAgentModelGateway } from './codeAgentModelGateway';
+import { buildCodeAgentPriorMessages } from './codeAgentTranscript';
 import { PublishedStaticSiteService } from './publishedStaticSite';
 import { ObservabilityEventInput, ObservabilityEventRecorder } from './observabilityEvents';
-import { canUseCocoRoom, COCO_ACCESS_DENIED_MESSAGE } from './cocoRoomAccess';
+import { canUseCodeAgentRoom, CODE_AGENT_ACCESS_DENIED_MESSAGE } from './codeAgentRoomAccess';
 import { CodexConnectionService } from './codexConnection';
 import { CodeAgentRunnerHandlers, CodeAgentRunnerRunResult } from './fakeCodeAgentRunner';
 import { writeCodeAgentRunnerRequest } from './jsonlCodeAgentRunner';
@@ -55,7 +55,7 @@ export interface CodeAgentSessionServiceOptions {
   mode?: CodeAgentRunnerMode;
   availableModes?: CodeAgentRunnerMode[];
   defaultMode?: CodeAgentRunnerMode;
-  modelGateway?: CocoModelGateway;
+  modelGateway?: CodeAgentModelGateway;
   backend?: CodeAgentBackend;
   runnerCommand?: string;
   runnerCommandByBackend?: Partial<Record<CodeAgentBackend, string>>;
@@ -105,7 +105,7 @@ interface ActiveCodeAgentTurn {
   clientId: string;
   turnId: string;
   backend: CodeAgentBackend;
-  sandbox?: CocoSandboxHandle;
+  sandbox?: CodeAgentSandboxHandle;
   process?: CodeAgentRunnerProcess;
 }
 
@@ -126,8 +126,8 @@ export class CodeAgentSessionService {
   constructor(
     private readonly store: RoomStore,
     private readonly emitter: CodeAgentRoomEmitter,
-    private readonly sandboxLifecycle: CocoSandboxLifecycleService,
-    private readonly sandboxService: CocoSandboxService,
+    private readonly sandboxLifecycle: CodeAgentSandboxLifecycleService,
+    private readonly sandboxService: CodeAgentSandboxService,
     private readonly runner: CodeAgentRunner,
     private readonly logger: Logger,
     private readonly options: CodeAgentSessionServiceOptions
@@ -150,7 +150,7 @@ export class CodeAgentSessionService {
     const rejectTurn = async (error: string, payload: Record<string, unknown> = {}) => {
       await this.recordObservabilityEvent({
         level: 'warn',
-        event: 'coco.turn.rejected',
+        event: 'code_agent.turn.rejected',
         roomId: input.roomId,
         clientId: input.clientId,
         provider: input.selectedModel.provider,
@@ -162,21 +162,21 @@ export class CodeAgentSessionService {
     };
 
     if (!this.options.enabled) {
-      return rejectTurn('Coco is disabled', { reason: 'disabled' });
+      return rejectTurn('Code agent is disabled', { reason: 'disabled' });
     }
     if (this.options.allowedClientIds?.length && !this.options.allowedClientIds.includes(input.clientId)) {
-      return rejectTurn('Coco is not enabled for this user', { reason: 'not_allowed' });
+      return rejectTurn('Code agent is not enabled for this user', { reason: 'not_allowed' });
     }
 
     const room = await this.store.getRoomById(input.roomId);
     const member = room ? await this.store.getRoomMember(input.roomId, input.clientId) : null;
     const validation = this.validateRoom(room, input.clientId, member?.role);
     if (!validation.success) {
-      return rejectTurn(validation.error || 'Coco turn rejected', { reason: 'room_validation_failed' });
+      return rejectTurn(validation.error || 'code-agent turn rejected', { reason: 'room_validation_failed' });
     }
 
     if (this.activeTurns.has(input.roomId)) {
-      return rejectTurn('A Coco task is already running in this room', { reason: 'room_already_running' });
+      return rejectTurn('A code-agent task is already running in this room', { reason: 'room_already_running' });
     }
 
     const turnMode = this.resolveTurnMode(input.requestedMode ?? room!.codeAgentMode, input.requestedModeSource);
@@ -227,14 +227,14 @@ export class CodeAgentSessionService {
 
       const promptContext = await this.readLatestPromptContext(input.roomId, input.clientId, input.maxContextMessages);
       if (!promptContext) {
-        await this.recordTurnEvent('warn', 'coco.turn.rejected', input, turnId, turnStartedAtMs, {
-          errorMessage: 'Coco requires a text prompt in the room history',
+        await this.recordTurnEvent('warn', 'code_agent.turn.rejected', input, turnId, turnStartedAtMs, {
+          errorMessage: 'Code agent requires a text prompt in the room history',
           payload: { reason: 'missing_prompt', mode: turnMode.mode },
         });
-        return ack({ success: false, error: 'Coco requires a text prompt in the room history' });
+        return ack({ success: false, error: 'Code agent requires a text prompt in the room history' });
       }
 
-      await this.recordTurnEvent('info', 'coco.turn.started', input, turnId, turnStartedAtMs, {
+      await this.recordTurnEvent('info', 'code_agent.turn.started', input, turnId, turnStartedAtMs, {
         payload: {
           backend: turnBackend,
           mode: turnMode.mode,
@@ -242,7 +242,7 @@ export class CodeAgentSessionService {
           priorMessageCount: promptContext.priorMessages.length,
           maxContextMessages: input.maxContextMessages,
           usesModelGateway: Boolean(this.options.modelGateway),
-          previousSessionId: room!.cocoSessionId || null,
+          previousSessionId: room!.codeAgentSessionId || null,
           codexRunSettings: isCodexBackend(turnBackend) ? codexRunSettings : undefined,
         },
       });
@@ -250,7 +250,7 @@ export class CodeAgentSessionService {
       const sandbox = await this.sandboxLifecycle.ensureReadySandbox(input.roomId, input.clientId);
       if (!sandbox.ok) {
         const error = this.describeSandboxFailure(sandbox);
-        await this.recordTurnEvent('warn', 'coco.sandbox.ensure_failed', input, turnId, turnStartedAtMs, {
+        await this.recordTurnEvent('warn', 'code_agent.sandbox.ensure_failed', input, turnId, turnStartedAtMs, {
           errorCode: sandbox.reason,
           errorMessage: error,
           payload: {
@@ -261,7 +261,7 @@ export class CodeAgentSessionService {
         });
         return ack({ success: false, error });
       }
-      await this.recordTurnEvent('info', 'coco.sandbox.ensure', input, turnId, turnStartedAtMs, {
+      await this.recordTurnEvent('info', 'code_agent.sandbox.ensure', input, turnId, turnStartedAtMs, {
         payload: {
           backend: turnBackend,
           sandboxId: sandbox.handle.id,
@@ -275,28 +275,28 @@ export class CodeAgentSessionService {
         activeTurn.sandbox = sandbox.handle;
       }
 
-      const runningRoom = await this.patchRoom(input.roomId, { cocoStatus: 'running' });
+      const runningRoom = await this.patchRoom(input.roomId, { codeAgentStatus: 'running' });
       if (!runningRoom) {
-        await this.recordTurnEvent('error', 'coco.turn.failed', input, turnId, turnStartedAtMs, {
+        await this.recordTurnEvent('error', 'code_agent.turn.failed', input, turnId, turnStartedAtMs, {
           errorCode: 'mark_running_failed',
-          errorMessage: 'Unable to mark Coco room as running',
+          errorMessage: 'Unable to mark code-agent room as running',
         });
-        return ack({ success: false, error: 'Unable to mark Coco room as running' });
+        return ack({ success: false, error: 'Unable to mark code-agent room as running' });
       }
       roomMarkedRunning = true;
       this.emitter.to(runningRoom.creatorId).emit('room_updated', runningRoom);
 
       const placeholderRoom = await this.store.upsertMessage(aiMessage);
       if (!placeholderRoom) {
-        const errorRoom = await this.patchRoom(input.roomId, { cocoStatus: 'error' });
+        const errorRoom = await this.patchRoom(input.roomId, { codeAgentStatus: 'error' });
         if (errorRoom) {
           this.emitter.to(errorRoom.creatorId).emit('room_updated', errorRoom);
         }
-        await this.recordTurnEvent('error', 'coco.turn.failed', input, turnId, turnStartedAtMs, {
+        await this.recordTurnEvent('error', 'code_agent.turn.failed', input, turnId, turnStartedAtMs, {
           errorCode: 'placeholder_persist_failed',
-          errorMessage: 'Unable to start a durable Coco response',
+          errorMessage: 'Unable to start a durable code-agent response',
         });
-        return ack({ success: false, error: 'Unable to start a durable Coco response' });
+        return ack({ success: false, error: 'Unable to start a durable code-agent response' });
       }
       this.emitter.to(placeholderRoom.creatorId).emit('room_updated', placeholderRoom);
       this.emitter.to(input.roomId).emit('new_message', stripAIStreamRecoveryMetadata(aiMessage));
@@ -328,7 +328,7 @@ export class CodeAgentSessionService {
         roomId: input.roomId,
         clientId: input.clientId,
         turnId,
-        sessionId: room!.cocoSessionId || null,
+        sessionId: room!.codeAgentSessionId || null,
         prompt: promptContext.prompt,
         priorMessages: promptContext.priorMessages,
         mode: turnMode.mode,
@@ -357,7 +357,7 @@ export class CodeAgentSessionService {
           active.process = runnerProcess;
           active.sandbox = sandbox.handle;
         }
-        await this.recordTurnEvent('info', 'coco.runner.started', input, turnId, turnStartedAtMs, {
+        await this.recordTurnEvent('info', 'code_agent.runner.started', input, turnId, turnStartedAtMs, {
           payload: {
             backend: turnBackend,
             sandboxId: sandbox.handle.id,
@@ -435,7 +435,7 @@ export class CodeAgentSessionService {
       };
       const finalRoom = await this.store.upsertMessage(finalMessage);
       if (!finalRoom) {
-        throw new Error('Unable to save the completed Coco response');
+        throw new Error('Unable to save the completed code-agent response');
       }
 
       // Clean up unused initial placeholder if streaming moved to a new segment
@@ -443,15 +443,15 @@ export class CodeAgentSessionService {
         const firstSegmentUsed = streamState.nonEmptySegmentIds.has(aiMessageId);
         if (!firstSegmentUsed) {
           await this.store.deleteMessageById(input.roomId, aiMessageId).catch(err => {
-            this.logger.warn('Failed to clean up unused Coco placeholder', { error: err, roomId: input.roomId, messageId: aiMessageId });
+            this.logger.warn('Failed to clean up unused code-agent placeholder', { error: err, roomId: input.roomId, messageId: aiMessageId });
           });
           this.emitter.to(input.roomId).emit('message_deleted', { roomId: input.roomId, messageId: aiMessageId });
         }
       }
 
       const idleRoom = await this.patchRoom(input.roomId, {
-        cocoStatus: 'idle',
-        cocoSessionId: runResult.finalEvent.sessionId,
+        codeAgentStatus: 'idle',
+        codeAgentSessionId: runResult.finalEvent.sessionId,
       });
       if (runnerProcess) {
         await this.stopRunnerProcess(runnerProcess, input.roomId);
@@ -469,7 +469,7 @@ export class CodeAgentSessionService {
       });
       this.emitter.to(input.roomId).emit('ai_cost_total', roomCostTotal);
       this.emitter.to((idleRoom || finalRoom).creatorId).emit('room_updated', idleRoom || finalRoom);
-      await this.recordTurnEvent('info', 'coco.turn.completed', input, turnId, turnStartedAtMs, {
+      await this.recordTurnEvent('info', 'code_agent.turn.completed', input, turnId, turnStartedAtMs, {
         sessionId: runResult.finalEvent.sessionId,
         provider: isCodexBackend(turnBackend) ? 'codex' : input.selectedModel.provider,
         model: isCodexBackend(turnBackend) ? codexRunSettings.model : input.selectedModel.id,
@@ -491,7 +491,7 @@ export class CodeAgentSessionService {
     } catch (error) {
       const errorTargetId = streamState?.activeMessageId || aiMessageId;
       this.logger.error('Code agent turn failed', { error, roomId: input.roomId, messageId: errorTargetId, backend: turnBackend });
-      await this.recordTurnEvent('error', 'coco.turn.failed', input, turnId, turnStartedAtMs, {
+      await this.recordTurnEvent('error', 'code_agent.turn.failed', input, turnId, turnStartedAtMs, {
         errorCode: 'turn_failed',
         errorMessage: error instanceof Error ? error.message : String(error),
         payload: {
@@ -503,9 +503,9 @@ export class CodeAgentSessionService {
       });
       if (placeholderAnnounced && aiMessage) {
         const errorTargetMessage: Message = { ...aiMessage, id: errorTargetId };
-        await this.saveCocoError(input.roomId, errorTargetMessage, error, turnBackend);
+        await this.saveCodeAgentError(input.roomId, errorTargetMessage, error, turnBackend);
       } else if (roomMarkedRunning) {
-        const errorRoom = await this.patchRoom(input.roomId, { cocoStatus: 'error' });
+        const errorRoom = await this.patchRoom(input.roomId, { codeAgentStatus: 'error' });
         if (errorRoom) {
           this.emitter.to(errorRoom.creatorId).emit('room_updated', errorRoom);
         }
@@ -678,7 +678,7 @@ export class CodeAgentSessionService {
     }
   }
 
-  private async prepareCodexThreadQuery(roomId: string, clientId: string): Promise<{ room: Room; sandbox: CocoSandboxHandle }> {
+  private async prepareCodexThreadQuery(roomId: string, clientId: string): Promise<{ room: Room; sandbox: CodeAgentSandboxHandle }> {
     if (this.activeTurns.has(roomId)) {
       throw new Error('Codex thread browser is available after the current turn finishes');
     }
@@ -701,7 +701,7 @@ export class CodeAgentSessionService {
 
   private async runCodexThreadQuery<T extends CodeAgentRunnerThreadListResultEvent | CodeAgentRunnerThreadReadResultEvent>(input: {
     clientId: string;
-    sandbox: CocoSandboxHandle;
+    sandbox: CodeAgentSandboxHandle;
     request: CodeAgentRunnerThreadListRequest | CodeAgentRunnerThreadReadRequest;
     expectedType: T['type'];
   }): Promise<T> {
@@ -804,7 +804,7 @@ export class CodeAgentSessionService {
     runnerEnv: Record<string, string>;
     request: CodeAgentRunnerRunRequest;
     handlers: CodeAgentRunnerHandlers;
-    sandbox: CocoSandboxHandle;
+    sandbox: CodeAgentSandboxHandle;
     startRunnerProcess: (env: Record<string, string>) => Promise<CodeAgentRunnerProcess>;
   }): Promise<CodeAgentRunnerRunResult> {
     if (!isCodexBackend(input.backend)) {
@@ -859,7 +859,7 @@ export class CodeAgentSessionService {
     });
   }
 
-  private async readOptionalCodexRefreshedAuth(sandbox: CocoSandboxHandle, path: string): Promise<string | undefined> {
+  private async readOptionalCodexRefreshedAuth(sandbox: CodeAgentSandboxHandle, path: string): Promise<string | undefined> {
     if (!this.sandboxService.readSecretFile) {
       return undefined;
     }
@@ -875,7 +875,7 @@ export class CodeAgentSessionService {
     }
   }
 
-  private async deleteCodexSecretFile(sandbox: CocoSandboxHandle, path: string): Promise<void> {
+  private async deleteCodexSecretFile(sandbox: CodeAgentSandboxHandle, path: string): Promise<void> {
     await this.sandboxService.deleteSecretFile?.(sandbox, path).catch(error => {
       this.logger.warn('Failed to delete Codex sandbox secret file', {
         error,
@@ -894,11 +894,11 @@ export class CodeAgentSessionService {
     if (!room) {
       return { success: false, error: 'Room not found' };
     }
-    if (room.type !== 'coco') {
-      return { success: false, error: 'Room is not a Coco room' };
+    if (room.type !== 'codeAgent') {
+      return { success: false, error: 'Room is not a code-agent room' };
     }
-    if (!canUseCocoRoom(room, clientId, memberRole)) {
-      return { success: false, error: COCO_ACCESS_DENIED_MESSAGE };
+    if (!canUseCodeAgentRoom(room, clientId, memberRole)) {
+      return { success: false, error: CODE_AGENT_ACCESS_DENIED_MESSAGE };
     }
     return { success: true };
   }
@@ -914,7 +914,7 @@ export class CodeAgentSessionService {
     }
     const normalizedMode = normalizeCodeAgentMode(requestedMode);
     if (!normalizedMode) {
-      return { ok: false, error: `Coco mode is not enabled: ${requestedMode}` };
+      return { ok: false, error: `Code agent mode is not enabled: ${requestedMode}` };
     }
     if (availableModes.includes(normalizedMode)) {
       return { ok: true, mode: normalizedMode };
@@ -923,13 +923,13 @@ export class CodeAgentSessionService {
       if (source === 'originalTurn') {
         return { ok: false, error: 'This response was originally run in Edit mode, but Edit mode is no longer available.' };
       }
-      return { ok: false, error: 'Coco edit mode is not enabled' };
+      return { ok: false, error: 'code-agent edit mode is not enabled' };
     }
-    return { ok: false, error: `Coco mode is not enabled: ${normalizedMode}` };
+    return { ok: false, error: `Code agent mode is not enabled: ${normalizedMode}` };
   }
 
   private resolveTurnBackend(room: Room): CodeAgentBackend {
-    return room.codeAgentBackend || this.options.backend || this.runner.backend || 'coco';
+    return room.codeAgentBackend || this.options.backend || this.runner.backend || 'code-agent';
   }
 
   private validateTurnBackend(backend: CodeAgentBackend): { ok: true } | { ok: false; error: string } {
@@ -940,7 +940,7 @@ export class CodeAgentSessionService {
   }
 
   private displayBackendName(backend: CodeAgentBackend): string {
-    return isCodexBackend(backend) ? 'Codex' : 'Coco';
+    return isCodexBackend(backend) ? 'Codex' : 'Code Agent';
   }
 
   private messageAIModelForBackend(
@@ -973,7 +973,7 @@ export class CodeAgentSessionService {
     if (command) {
       return command;
     }
-    const defaultBackend = this.options.backend || this.runner.backend || 'coco';
+    const defaultBackend = this.options.backend || this.runner.backend || 'code-agent';
     if (backend === defaultBackend && this.options.runnerCommand) {
       return this.options.runnerCommand;
     }
@@ -983,7 +983,7 @@ export class CodeAgentSessionService {
     if (backend === 'codex-app-server') {
       return DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND;
     }
-    return DEFAULT_COCO_RUNNER_COMMAND;
+    return DEFAULT_CODE_AGENT_RUNNER_COMMAND;
   }
 
   private availableModes(): CodeAgentRunnerMode[] {
@@ -1021,32 +1021,32 @@ export class CodeAgentSessionService {
           : prior;
         return {
           prompt: message.content.trim(),
-          priorMessages: buildCocoPriorMessages(limited),
+          priorMessages: buildCodeAgentPriorMessages(limited),
         };
       }
     }
     return null;
   }
 
-  private describeSandboxFailure(result: EnsureCocoSandboxResult) {
+  private describeSandboxFailure(result: EnsureCodeAgentSandboxResult) {
     if (result.ok) {
       return '';
     }
     switch (result.reason) {
       case 'creating':
-        return 'Coco sandbox is still being prepared';
+        return 'Code-agent sandbox is still being prepared';
       case 'limit_exceeded':
-        return 'Coco sandbox limit exceeded';
+        return 'Code-agent sandbox limit exceeded';
       case 'forbidden':
-        return 'You do not have access to this Coco room';
-      case 'not_coco_room':
-        return 'Room is not a Coco room';
+        return 'You do not have access to this code agent room';
+      case 'not_code_agent_room':
+        return 'Room is not a code-agent room';
       case 'missing_room':
         return 'Room not found';
       case 'store_conflict':
-        return 'Unable to reserve a Coco sandbox';
+        return 'Unable to reserve a code-agent sandbox';
       case 'sandbox_error':
-        return 'Unable to prepare a Coco sandbox';
+        return 'Unable to prepare a code-agent sandbox';
     }
   }
 
@@ -1111,7 +1111,7 @@ export class CodeAgentSessionService {
 
       const updatedRoom = await this.store.appendMessageWithAtomicPosition(mapped.message);
       if (!updatedRoom) {
-        throw new Error(`Unable to persist Coco ${mapped.message.messageType} event`);
+        throw new Error(`Unable to persist code-agent ${mapped.message.messageType} event`);
       }
       this.emitter.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
       this.emitter.to(roomId).emit('new_message', mapped.message);
@@ -1139,8 +1139,8 @@ export class CodeAgentSessionService {
     });
   }
 
-  private async saveCocoError(roomId: string, aiMessage: Message, error: unknown, backend: CodeAgentBackend) {
-    const content = error instanceof Error ? error.message : 'Coco task failed';
+  private async saveCodeAgentError(roomId: string, aiMessage: Message, error: unknown, backend: CodeAgentBackend) {
+    const content = error instanceof Error ? error.message : 'code-agent task failed';
     const errorMessage: Message = {
       ...aiMessage,
       content,
@@ -1148,13 +1148,13 @@ export class CodeAgentSessionService {
       timestamp: this.now().toISOString(),
     };
     const updatedRoom = await this.store.upsertMessage(errorMessage).catch(saveError => {
-      this.logger.error('Failed to persist Coco AI error state', { error: saveError, roomId, messageId: aiMessage.id });
+      this.logger.error('Failed to persist code-agent AI error state', { error: saveError, roomId, messageId: aiMessage.id });
       return null;
     });
     if (updatedRoom) {
       this.emitter.to(roomId).emit('new_message', stripAIStreamRecoveryMetadata(errorMessage));
     }
-    const errorRoom = await this.patchRoom(roomId, { cocoStatus: 'error' });
+    const errorRoom = await this.patchRoom(roomId, { codeAgentStatus: 'error' });
     if (errorRoom) {
       this.emitter.to(errorRoom.creatorId).emit('room_updated', errorRoom);
     }
@@ -1209,7 +1209,7 @@ export class CodeAgentSessionService {
     const payload = this.summarizeRunnerEvent(event);
     await this.recordObservabilityEvent({
       level: event.type === 'error' ? 'error' : 'info',
-      event: `coco.runner.${event.type}`,
+      event: `code_agent.runner.${event.type}`,
       roomId,
       turnId,
       provider: isCodexBackend(backend) ? 'codex' : selectedModel.provider,
@@ -1278,7 +1278,7 @@ export class CodeAgentSessionService {
       return;
     }
     await this.options.observability.recordEvent(event).catch(error => {
-      this.logger.error('Failed to record Coco session observability event', {
+      this.logger.error('Failed to record code-agent session observability event', {
         error,
         event: event.event,
         roomId: event.roomId,
@@ -1296,15 +1296,15 @@ export class CodeAgentSessionService {
     serverOrigin?: string;
   }) {
     // This is the complete runner environment. Do not merge process.env here:
-    // Coco subprocesses must only receive explicit sandbox/model credentials.
+    // code-agent subprocesses must only receive explicit sandbox/model credentials.
     const env: Record<string, string> = {
       PYTHONUNBUFFERED: '1',
       ...(this.options.runnerEnv || {}),
     };
     const normalizedMode = normalizeCodeAgentMode(context.mode) || 'plan';
     if (this.options.modelGateway) {
-      env.COCO_MODEL_PROXY_URL = `${this.options.modelGateway.publicBaseUrl}/v1`;
-      env.COCO_MODEL_PROXY_TOKEN = this.options.modelGateway.issueTurnToken({
+      env.CODE_AGENT_MODEL_PROXY_URL = `${this.options.modelGateway.publicBaseUrl}/v1`;
+      env.CODE_AGENT_MODEL_PROXY_TOKEN = this.options.modelGateway.issueTurnToken({
         roomId: context.roomId,
         clientId: context.clientId,
         turnId: context.turnId,
@@ -1320,7 +1320,7 @@ export class CodeAgentSessionService {
         context.clientOrigin,
         context.serverOrigin
       );
-      env.ROOMTALK_COCO_ENABLE_STATIC_PUBLISH = 'true';
+      env.ROOMTALK_CODE_AGENT_ENABLE_STATIC_PUBLISH = 'true';
       env.ROOMTALK_STATIC_PUBLISH_URL = this.options.staticSitePublisher.publishApiUrlForRequest(
         context.clientOrigin,
         context.serverOrigin
@@ -1335,14 +1335,14 @@ export class CodeAgentSessionService {
     }
 
     if (codeAgentModeAllowsWriteTools(normalizedMode)) {
-      env.ROOMTALK_COCO_ALLOW_WRITE_TOOLS = 'true';
-    } else if (env.ROOMTALK_COCO_ALLOW_WRITE_TOOLS === 'true') {
-      delete env.ROOMTALK_COCO_ALLOW_WRITE_TOOLS;
+      env.ROOMTALK_CODE_AGENT_ALLOW_WRITE_TOOLS = 'true';
+    } else if (env.ROOMTALK_CODE_AGENT_ALLOW_WRITE_TOOLS === 'true') {
+      delete env.ROOMTALK_CODE_AGENT_ALLOW_WRITE_TOOLS;
     }
     if (codeAgentModeAllowsShell(normalizedMode)) {
-      env.ROOMTALK_COCO_ALLOW_SHELL = 'true';
-    } else if (env.ROOMTALK_COCO_ALLOW_SHELL === 'true') {
-      delete env.ROOMTALK_COCO_ALLOW_SHELL;
+      env.ROOMTALK_CODE_AGENT_ALLOW_SHELL = 'true';
+    } else if (env.ROOMTALK_CODE_AGENT_ALLOW_SHELL === 'true') {
+      delete env.ROOMTALK_CODE_AGENT_ALLOW_SHELL;
     }
 
     return env;

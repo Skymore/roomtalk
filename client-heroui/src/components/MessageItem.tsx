@@ -22,7 +22,7 @@ import { getVideoPreviewUrl } from "../utils/videoPreview";
 import { buildMediaFilename, saveUrlAsFile } from "../utils/mediaDownload";
 import { A2UIRenderer } from "./A2UIRenderer";
 import { getRoomAIRequestSettingsForKind, type AIRequestRoomKind } from "../utils/aiRequestSettings";
-import { CocoToolMessage } from './CocoToolMessage';
+import { CodeAgentToolMessage } from './CodeAgentToolMessage';
 import { getSenderColorTheme } from "../utils/userProfile";
 import { parseReviewCommentMessageSegments } from "../utils/codeAgentReviewComments";
 import { CodeAgentReviewCommentMessage } from "./CodeAgentReviewCommentMessage";
@@ -285,7 +285,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const isVideo = isMedia && mediaKind === "video";
   const isFile = isMedia && mediaKind === "file";
   const isSticker = message.messageType === "sticker";
-  const isCocoEvent = message.messageType === 'tool_call' || message.messageType === 'tool_result' || message.messageType === 'sandbox_status';
+  const isCodeAgentEvent = message.messageType === 'tool_call' || message.messageType === 'tool_result' || message.messageType === 'sandbox_status';
   const stickerUrl = useStickerUrl(isSticker ? message.content : undefined);
   const stickerName = useStickerName(isSticker ? message.content : undefined);
   const isText = message.messageType === "text";
@@ -858,7 +858,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     );
   };
 
-  if (isCocoEvent) {
+  if (isCodeAgentEvent) {
     return (
       <div
         data-testid="message-item"
@@ -874,7 +874,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
           }}
         />
         <div className="flex max-w-[82%] flex-col min-w-0 sm:max-w-[70%] items-start">
-          <CocoToolMessage message={message} pairedResult={pairedToolResult} />
+          <CodeAgentToolMessage message={message} pairedResult={pairedToolResult} />
         </div>
       </div>
     );

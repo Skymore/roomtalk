@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 import { registerRoomHandlers } from './roomHandlers';
 import { Message, Room, RoomAICostTotal, RoomMemberRole } from '../types';
 import { hashClientAuthToken } from '../services/clientAuth';
-import { createCocoAccessControl } from '../services/cocoAccessControl';
+import { createCodeAgentAccessControl } from '../services/codeAgentAccessControl';
 
 type SocketEmit = {
   event: string;
@@ -118,7 +118,7 @@ type HarnessOptions = {
 
 const createHarness = (
   clientId: string | null = 'client-1',
-  cocoAccess = createCocoAccessControl({ enabled: true }),
+  codeAgentAccess = createCodeAgentAccessControl({ enabled: true }),
   options: HarnessOptions = {},
 ) => {
   const socket = new FakeSocket();
@@ -358,7 +358,7 @@ const createHarness = (
     socket: socket as any,
     store: store as any,
     socketLogger: logger as any,
-    cocoAccess,
+    codeAgentAccess,
     publishedStaticSiteService: options.publishedStaticSiteService as any,
   } as any);
 
@@ -786,36 +786,36 @@ describe('room socket handlers', () => {
     assert.deepEqual(valid.io.roomEmits, [{ roomId: 'client-1', event: 'new_room', args: [valid.store.savedRooms[0]] }]);
   });
 
-  it('creates Coco rooms with initial sandbox state and rejects rollout-denied users', async () => {
+  it('creates code-agent rooms with initial sandbox state and rejects rollout-denied users', async () => {
     const valid = createHarness('client-1');
 
     let createdResult: { success: boolean; roomId?: string } | undefined;
-    await valid.socket.invoke('create_room', { name: 'Coco', description: 'Code work', type: 'coco' }, (result: { success: boolean; roomId?: string }) => {
+    await valid.socket.invoke('create_room', { name: 'Code Agent', description: 'Code work', type: 'codeAgent' }, (result: { success: boolean; roomId?: string }) => {
       createdResult = result;
     });
 
     const savedRoom = valid.store.savedRooms[0];
     assert.deepEqual(createdResult, { success: true, roomId: 'generated-room' });
-    assert.equal(savedRoom.type, 'coco');
+    assert.equal(savedRoom.type, 'codeAgent');
     assert.equal(savedRoom.sandboxStatus, 'none');
-    assert.equal(savedRoom.cocoStatus, 'idle');
+    assert.equal(savedRoom.codeAgentStatus, 'idle');
     assert.ok(savedRoom.sandboxUpdatedAt);
     assert.deepEqual(valid.io.roomEmits, [{ roomId: 'client-1', event: 'new_room', args: [savedRoom] }]);
 
-    const disabled = createHarness('client-1', createCocoAccessControl({ enabled: false }));
+    const disabled = createHarness('client-1', createCodeAgentAccessControl({ enabled: false }));
     let disabledResult: { success: boolean; error?: string } | undefined;
-    await disabled.socket.invoke('create_room', { name: 'Coco', type: 'coco' }, (result: { success: boolean; error?: string }) => {
+    await disabled.socket.invoke('create_room', { name: 'Code Agent', type: 'codeAgent' }, (result: { success: boolean; error?: string }) => {
       disabledResult = result;
     });
-    assert.deepEqual(disabledResult, { success: false, error: 'Coco is disabled' });
+    assert.deepEqual(disabledResult, { success: false, error: 'Code agent is disabled' });
     assert.equal(disabled.store.savedRooms.length, 0);
 
-    const notAllowed = createHarness('client-2', createCocoAccessControl({ enabled: true, allowedClientIds: ['client-1'] }));
+    const notAllowed = createHarness('client-2', createCodeAgentAccessControl({ enabled: true, allowedClientIds: ['client-1'] }));
     let notAllowedResult: { success: boolean; error?: string } | undefined;
-    await notAllowed.socket.invoke('create_room', { name: 'Coco', type: 'coco' }, (result: { success: boolean; error?: string }) => {
+    await notAllowed.socket.invoke('create_room', { name: 'Code Agent', type: 'codeAgent' }, (result: { success: boolean; error?: string }) => {
       notAllowedResult = result;
     });
-    assert.deepEqual(notAllowedResult, { success: false, error: 'Coco is not enabled for this user' });
+    assert.deepEqual(notAllowedResult, { success: false, error: 'Code agent is not enabled for this user' });
     assert.equal(notAllowed.store.savedRooms.length, 0);
   });
 
@@ -869,7 +869,7 @@ describe('room socket handlers', () => {
         canManageAdmins: true,
         canManageMembers: true,
         canTransferOwnership: true,
-        canUseCoco: false,
+        canUseCodeAgent: false,
         postingRestrictionReason: undefined,
       },
       memberCount: 2,
@@ -893,18 +893,18 @@ describe('room socket handlers', () => {
     assert.deepEqual((joinResponse as { memberCount?: number }).memberCount, 2);
   });
 
-  it('rejects joining Coco rooms when rollout controls deny access before leaving the current room', async () => {
-    const denied = createHarness('client-2', createCocoAccessControl({ enabled: true, allowedClientIds: ['client-1'] }));
-    denied.store.rooms.push(room({ id: 'coco-room', name: 'Coco Room', type: 'coco' }));
+  it('rejects joining code-agent rooms when rollout controls deny access before leaving the current room', async () => {
+    const denied = createHarness('client-2', createCodeAgentAccessControl({ enabled: true, allowedClientIds: ['client-1'] }));
+    denied.store.rooms.push(room({ id: 'code-agent-room', name: 'Code Agent Room', type: 'codeAgent' }));
     denied.store.socketRooms = ['room-1'];
 
     let joinResponse: unknown;
-    await denied.socket.invoke('join_room', 'coco-room', (result: unknown) => {
+    await denied.socket.invoke('join_room', 'code-agent-room', (result: unknown) => {
       joinResponse = result;
     });
 
-    assert.deepEqual(joinResponse, { success: false, error: 'Coco is not enabled for this user' });
-    assert.deepEqual(denied.socket.emitted, [{ event: 'error', args: [{ message: 'Coco is not enabled for this user' }] }]);
+    assert.deepEqual(joinResponse, { success: false, error: 'Code agent is not enabled for this user' });
+    assert.deepEqual(denied.socket.emitted, [{ event: 'error', args: [{ message: 'Code agent is not enabled for this user' }] }]);
     assert.deepEqual(denied.socket.joined, []);
     assert.deepEqual(denied.socket.left, []);
     assert.deepEqual(denied.store.socketRooms, ['room-1']);
@@ -951,7 +951,7 @@ describe('room socket handlers', () => {
     assert.deepEqual(unauthorizedResponse, { success: false, message: 'You are not authorized to delete this room' });
 
     const deletedStaticSiteRooms: string[] = [];
-    const valid = createHarness('client-1', createCocoAccessControl({ enabled: true }), {
+    const valid = createHarness('client-1', createCodeAgentAccessControl({ enabled: true }), {
       publishedStaticSiteService: {
         async deleteSitesForRoom(roomId: string) {
           deletedStaticSiteRooms.push(roomId);
@@ -977,7 +977,7 @@ describe('room socket handlers', () => {
   });
 
   it('does not delete a room when published static site cleanup fails', async () => {
-    const harness = createHarness('client-1', createCocoAccessControl({ enabled: true }), {
+    const harness = createHarness('client-1', createCodeAgentAccessControl({ enabled: true }), {
       publishedStaticSiteService: {
         async deleteSitesForRoom() {
           throw new Error('static cleanup failed');
@@ -1015,22 +1015,22 @@ describe('room socket handlers', () => {
     assert.equal(io.roomEmits.some(item => item.event === 'room_permissions_invalidated'), true);
   });
 
-  it('rejects Coco access setting updates from administrators', async () => {
+  it('rejects code-agent access setting updates from administrators', async () => {
     const { socket, store } = createHarness('client-2');
-    store.rooms[0] = { ...store.rooms[0], type: 'coco' };
+    store.rooms[0] = { ...store.rooms[0], type: 'codeAgent' };
     store.members.add('room-1:client-2');
     store.memberRoles.set('room-1:client-2', 'admin');
     let response: unknown;
 
     await socket.invoke('update_room_settings', {
       roomId: 'room-1',
-      cocoAccess: 'member',
+      codeAgentAccess: 'member',
     }, (result: unknown) => {
       response = result;
     });
 
-    assert.deepEqual(response, { success: false, error: 'Only the room owner can manage Coco access' });
-    assert.equal(store.rooms[0].cocoAccess, undefined);
+    assert.deepEqual(response, { success: false, error: 'Only the room owner can manage code-agent access' });
+    assert.equal(store.rooms[0].codeAgentAccess, undefined);
   });
 
   it('returns the room without writing or broadcasting for empty settings updates', async () => {
@@ -1124,10 +1124,10 @@ describe('room socket handlers', () => {
     });
     assert.equal(missingRoom, null);
 
-    const denied = createHarness('client-2', createCocoAccessControl({ enabled: true, allowedClientIds: ['client-1'] }));
-    denied.store.rooms.push(room({ id: 'coco-room', name: 'Coco Room', type: 'coco' }));
+    const denied = createHarness('client-2', createCodeAgentAccessControl({ enabled: true, allowedClientIds: ['client-1'] }));
+    denied.store.rooms.push(room({ id: 'code-agent-room', name: 'Code Agent Room', type: 'codeAgent' }));
     let deniedRoom: Room | null | undefined;
-    await denied.socket.invoke('get_room_by_id', 'coco-room', (result: Room | null) => {
+    await denied.socket.invoke('get_room_by_id', 'code-agent-room', (result: Room | null) => {
       deniedRoom = result;
     });
     assert.equal(deniedRoom, null);

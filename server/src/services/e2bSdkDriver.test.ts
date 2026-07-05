@@ -111,14 +111,14 @@ describe('E2B SDK driver', () => {
     });
 
     const handle = await driver.create({
-      templateId: 'roomtalk-coco',
+      templateId: 'roomtalk-code-agent',
       timeoutMs: 60_000,
       metadata: { roomId: 'room-1', creatorId: 'client-1' },
     });
     assert.equal(handle.id, 'sdk-created-1');
     assert.equal(handle.getHost?.(5000), '5000-sdk-created-1.e2b.dev');
     assert.deepEqual(fake.calls.create[0], {
-      template: 'roomtalk-coco',
+      template: 'roomtalk-code-agent',
       options: {
         apiKey: 'e2b-test-key',
         requestTimeoutMs: 12_000,
@@ -128,13 +128,13 @@ describe('E2B SDK driver', () => {
     });
 
     await driver.create({
-      templateId: 'roomtalk-coco',
+      templateId: 'roomtalk-code-agent',
       timeoutMs: 300_000,
       metadata: { roomId: 'room-2', creatorId: 'client-1' },
       lifecycle: { onTimeout: 'pause', autoResume: true, keepMemory: true },
     });
     assert.deepEqual(fake.calls.create[1], {
-      template: 'roomtalk-coco',
+      template: 'roomtalk-code-agent',
       options: {
         apiKey: 'e2b-test-key',
         requestTimeoutMs: 12_000,
@@ -154,7 +154,7 @@ describe('E2B SDK driver', () => {
       options: { apiKey: 'e2b-test-key', requestTimeoutMs: 12_000 },
     });
 
-    const command = await connected.commands!.run('python -m roomtalk_coco_runner', {
+    const command = await connected.commands!.run('python -m roomtalk_code_agent_runner', {
       env: { PYTHONUNBUFFERED: '1' },
       timeoutMs: 300_000,
     });
@@ -168,7 +168,7 @@ describe('E2B SDK driver', () => {
     assert.equal(command.pid, 77);
     assert.deepEqual(await command.completed, { exitCode: 0, signal: null });
     assert.deepEqual(fake.calls.run[0], {
-      command: 'python -m roomtalk_coco_runner',
+      command: 'python -m roomtalk_code_agent_runner',
       options: {
         background: true,
         stdin: true,
@@ -220,7 +220,7 @@ describe('E2B SDK driver', () => {
     };
     const driver = createE2BSdkDriver({ sandboxClass });
     const connected = await driver.connect('sdk-existing-1');
-    const command = await connected.commands!.run('python -m roomtalk_coco_runner');
+    const command = await connected.commands!.run('python -m roomtalk_code_agent_runner');
 
     command.stdin!.end('{"schemaVersion":1}\n');
     await once(command.stdin!, 'finish');
@@ -248,7 +248,7 @@ describe('E2B SDK driver', () => {
     };
     const driver = createE2BSdkDriver({ sandboxClass });
     const connected = await driver.connect('sdk-existing-1');
-    const command = await connected.commands!.run('python -m roomtalk_coco_runner');
+    const command = await connected.commands!.run('python -m roomtalk_code_agent_runner');
 
     command.stdin!.end('{"schemaVersion":1}\n');
     await once(command.stdin!, 'finish');

@@ -97,9 +97,9 @@ Push to `master` triggers CI (`.github/workflows/fly-deploy.yml`): builds server
 
 Production: Fly.io app `message-system` in `dfw` region, Node 22 Alpine, 512MB VM. PostgreSQL on Supabase, Redis on Upstash, media on Tigris (S3-compatible).
 
-### Coco / E2B Artifact Rule
+### Code Agent / E2B Artifact Rule
 
-Production Coco runs from a pinned E2B sandbox artifact, not directly from the deployed Node app source or a local Coco checkout. Any change to `server/roomtalk_coco_runner`, runner tools, runner system prompts, the sandbox Dockerfile, or files copied by `scripts/coco/prepare-sandbox-context.mjs` must bump `ops/coco-sandbox/artifact.lock.json` and `ops/coco-sandbox/Dockerfile`, rebuild the E2B template, update `COCO_E2B_TEMPLATE_ID` / `COCO_ARTIFACT_VERSION`, and verify with an E2B smoke or direct runner check. Any Coco engine change in `/Users/sky/projects/coco` must first be committed and pushed there, then RoomTalk must update `ops/coco-sandbox/artifact.lock.json` `coco.sourceRef` and production `COCO_SOURCE_REF`, rebuild the E2B template, and verify it. Otherwise production sandboxes will keep using the old runner or old Coco engine even after app deploys.
+Production code-agent rooms run from a pinned E2B sandbox artifact, not directly from the deployed Node app source or a local code-agent engine checkout. Any change to `server/roomtalk_code_agent_runner`, runner tools, runner system prompts, the sandbox Dockerfile, or files copied by `scripts/code-agent/prepare-sandbox-context.mjs` must bump `ops/code-agent-sandbox/artifact.lock.json` and `ops/code-agent-sandbox/Dockerfile`, rebuild the E2B template, update `CODE_AGENT_E2B_TEMPLATE_ID` / `CODE_AGENT_ARTIFACT_VERSION`, and verify with an E2B smoke or direct runner check. Any code-agent engine change in `/Users/sky/projects/code-agent-engine` must first be committed and pushed there, then RoomTalk must update `ops/code-agent-sandbox/artifact.lock.json` `codeAgentEngine.sourceRef` and production `CODE_AGENT_SOURCE_REF`, rebuild the E2B template, and verify it. Otherwise production sandboxes will keep using the old runner or old code-agent engine even after app deploys.
 
 ## Coding Conventions
 

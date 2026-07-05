@@ -13,7 +13,7 @@ export interface AIModelContextRequestSettings {
   maxContextMessages: number;
 }
 
-export type AIRequestRoomKind = 'chat' | 'coco';
+export type AIRequestRoomKind = 'chat' | 'codeAgent';
 export type RoomAIRequestSettings = AIRequestSettings | AIModelContextRequestSettings;
 
 export const getRoomAIRequestSettings = (
@@ -31,13 +31,13 @@ export const getRoomAIRequestSettings = (
 };
 
 export function selectRoomAIRequestSettings(settings: AIRequestSettings, roomKind: 'chat'): AIRequestSettings;
-export function selectRoomAIRequestSettings(settings: AIRequestSettings, roomKind: 'coco'): AIModelContextRequestSettings;
+export function selectRoomAIRequestSettings(settings: AIRequestSettings, roomKind: 'codeAgent'): AIModelContextRequestSettings;
 export function selectRoomAIRequestSettings(settings: AIRequestSettings, roomKind: AIRequestRoomKind): RoomAIRequestSettings;
 export function selectRoomAIRequestSettings(
   settings: AIRequestSettings,
   roomKind: AIRequestRoomKind,
 ): RoomAIRequestSettings {
-  if (roomKind === 'coco') {
+  if (roomKind === 'codeAgent') {
     return {
       model: settings.model,
       maxContextMessages: settings.maxContextMessages,
@@ -48,7 +48,7 @@ export function selectRoomAIRequestSettings(
 }
 
 export function getRoomAIRequestSettingsForKind(roomId: string, roomKind: 'chat', defaultModel?: string): AIRequestSettings;
-export function getRoomAIRequestSettingsForKind(roomId: string, roomKind: 'coco', defaultModel?: string): AIModelContextRequestSettings;
+export function getRoomAIRequestSettingsForKind(roomId: string, roomKind: 'codeAgent', defaultModel?: string): AIModelContextRequestSettings;
 export function getRoomAIRequestSettingsForKind(roomId: string, roomKind: AIRequestRoomKind, defaultModel?: string): RoomAIRequestSettings;
 export function getRoomAIRequestSettingsForKind(
   roomId: string,

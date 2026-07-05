@@ -49,7 +49,9 @@ async function askAI(page: Parameters<typeof openRoomsPage>[0], prompt: string) 
 test('requires both confirmations before switching to a premium model', async ({ page, context, request }) => {
   await openOwnedRoom(page, context, request);
 
-  await page.getByTestId('ai-model-select').click();
+  await page.getByRole('button', { name: 'AI Settings' }).click();
+  const settingsDialog = page.getByRole('dialog', { name: 'AI Settings' });
+  await settingsDialog.getByTestId('ai-model-select').click();
   await page.getByRole('option', { name: /GPT-5\.5/ }).click();
 
   const pricingDialog = page.getByRole('dialog', { name: 'Confirm premium model pricing' });
@@ -61,7 +63,8 @@ test('requires both confirmations before switching to a premium model', async ({
   await expect(switchDialog).toBeVisible();
   await switchDialog.getByRole('button', { name: 'Switch model' }).click();
 
-  await expect(page.getByTestId('ai-model-select')).toContainText('GPT-5.5');
+  await expect(settingsDialog.getByTestId('ai-model-select')).toContainText('GPT-5.5');
+  await settingsDialog.getByRole('button', { name: 'Apply' }).click();
 });
 
 test('streams a fake AI response and shows cost and cache metadata', async ({ page, context, request }) => {

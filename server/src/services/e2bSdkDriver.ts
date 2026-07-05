@@ -6,7 +6,7 @@ import {
   E2BSandboxLifecyclePolicy,
   E2BSandboxDriver,
   E2BSandboxDriverHandle,
-} from './e2bCocoSandboxService';
+} from './e2bCodeAgentSandboxService';
 
 interface E2BSdkCommandResult {
   exitCode: number;

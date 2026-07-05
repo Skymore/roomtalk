@@ -20,7 +20,7 @@ import {
 import { getAvatarColor, getAvatarText } from '../utils/userProfile';
 import { updateRoomSettings } from '../utils/socket';
 import { Message, Room, RoomPermissions, RoomRenameHandler } from '../utils/types';
-import type { CodeAgentWorkspaceSnapshot } from '../utils/cocoWorkspace';
+import type { CodeAgentWorkspaceSnapshot } from '../utils/codeAgentWorkspace';
 import { beginHorizontalResize } from '../utils/horizontalResize';
 import {
   addCodeAgentReviewCommentDraft,
@@ -154,11 +154,11 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
     ? normalizedRoomMode
     : effectiveDefaultMode;
   const canManageCodeAgentMode = Boolean(roomPermissions?.canManageRoom);
-  const canUseCoco = roomPermissions?.canUseCoco ?? true;
-  const canUseComposer = (roomPermissions?.canPost ?? true) && canUseCoco;
-  const composerRestrictionReason = canUseCoco
+  const canUseCodeAgent = roomPermissions?.canUseCodeAgent ?? true;
+  const canUseComposer = (roomPermissions?.canPost ?? true) && canUseCodeAgent;
+  const composerRestrictionReason = canUseCodeAgent
     ? roomPermissions?.postingRestrictionReason
-    : t('cocoAccessDenied');
+    : t('codeAgentAccessDenied');
 
   React.useEffect(() => {
     setReplyToMessage(null);

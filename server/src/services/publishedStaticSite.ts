@@ -5,8 +5,8 @@ import { MediaObjectStorage } from './mediaObjectStorage';
 import { CodeAgentRunnerMode } from './codeAgentRunnerProtocol';
 import { codeAgentModeAllowsStaticPublish, normalizeCodeAgentMode } from './codeAgentModes';
 
-export const COCO_STATIC_PUBLISH_API_PATH = '/api/coco/publish-static-site';
-export const COCO_STATIC_PUBLISH_ROUTE_PREFIX = '/p';
+export const CODE_AGENT_STATIC_PUBLISH_API_PATH = '/api/code-agent/publish-static-site';
+export const CODE_AGENT_STATIC_PUBLISH_ROUTE_PREFIX = '/p';
 
 export const DEFAULT_STATIC_PUBLISH_MAX_FILES = 100;
 export const DEFAULT_STATIC_PUBLISH_MAX_TOTAL_BYTES = 5 * 1024 * 1024;
@@ -236,7 +236,7 @@ const roomIndexObjectKey = (roomId: string) => (
   `published-sites/by-room/${base64UrlEncode(roomId)}/index.json`
 );
 
-const routePathForSlug = (slug: string) => `${COCO_STATIC_PUBLISH_ROUTE_PREFIX}/${slug}/`;
+const routePathForSlug = (slug: string) => `${CODE_AGENT_STATIC_PUBLISH_ROUTE_PREFIX}/${slug}/`;
 
 const joinPublicUrl = (baseUrl: string, routePath: string) => (
   `${baseUrl.replace(/\/+$/, '')}/${routePath.replace(/^\/+/, '')}`
@@ -324,12 +324,12 @@ export class PublishedStaticSiteService {
   }
 
   get publishApiUrl() {
-    return this.publicBaseUrl ? joinPublicUrl(this.publicBaseUrl, COCO_STATIC_PUBLISH_API_PATH) : COCO_STATIC_PUBLISH_API_PATH;
+    return this.publicBaseUrl ? joinPublicUrl(this.publicBaseUrl, CODE_AGENT_STATIC_PUBLISH_API_PATH) : CODE_AGENT_STATIC_PUBLISH_API_PATH;
   }
 
   publishApiUrlForRequest(clientOrigin?: string, serverOrigin?: string) {
     const publicBaseUrl = this.publicBaseUrlForRequest(clientOrigin, serverOrigin);
-    return publicBaseUrl ? joinPublicUrl(publicBaseUrl, COCO_STATIC_PUBLISH_API_PATH) : COCO_STATIC_PUBLISH_API_PATH;
+    return publicBaseUrl ? joinPublicUrl(publicBaseUrl, CODE_AGENT_STATIC_PUBLISH_API_PATH) : CODE_AGENT_STATIC_PUBLISH_API_PATH;
   }
 
   publicBaseUrlForRequest(clientOrigin?: string, serverOrigin?: string) {
@@ -413,7 +413,7 @@ export class PublishedStaticSiteService {
       throw new PublishedStaticSiteError('Static site publishing requires full access mode', 403);
     }
     if (input.roomId !== claims.roomId || input.turnId !== claims.turnId) {
-      throw new PublishedStaticSiteError('Publish token does not match this Coco turn', 403);
+      throw new PublishedStaticSiteError('Publish token does not match this code-agent turn', 403);
     }
     if (!Array.isArray(input.files) || input.files.length === 0) {
       throw new PublishedStaticSiteError('At least one static file is required');
@@ -538,7 +538,7 @@ export class PublishedStaticSiteService {
       throw error;
     }
 
-    this.options.logger.info('Published Coco static site', {
+    this.options.logger.info('Published code-agent static site', {
       roomId: input.roomId,
       turnId: input.turnId,
       slug,
@@ -759,13 +759,13 @@ export const createPublishedStaticSiteServiceFromEnv = (input: {
 }) => {
   const env = input.env || process.env;
   const tokenSecret = (
-    env.COCO_STATIC_PUBLISH_TOKEN_SECRET ||
+    env.CODE_AGENT_STATIC_PUBLISH_TOKEN_SECRET ||
     env.ROOMTALK_STATIC_PUBLISH_TOKEN_SECRET ||
-    env.COCO_MODEL_GATEWAY_SECRET ||
+    env.CODE_AGENT_MODEL_GATEWAY_SECRET ||
     randomUUID()
   ).trim();
   const publicBaseUrl = (
-    env.COCO_STATIC_PUBLISH_PUBLIC_URL ||
+    env.CODE_AGENT_STATIC_PUBLISH_PUBLIC_URL ||
     env.ROOMTALK_STATIC_PUBLISH_PUBLIC_URL ||
     ((env.NODE_ENV || 'development') === 'production' ? env.CLIENT_URL : '') ||
     ''
@@ -780,6 +780,6 @@ export const createPublishedStaticSiteServiceFromEnv = (input: {
       ...parseOriginList(env.CLIENT_URL),
     ],
     nodeEnv: env.NODE_ENV || 'development',
-    tokenTtlSeconds: Number(env.COCO_STATIC_PUBLISH_TOKEN_TTL_SECONDS) || DEFAULT_STATIC_PUBLISH_TOKEN_TTL_SECONDS,
+    tokenTtlSeconds: Number(env.CODE_AGENT_STATIC_PUBLISH_TOKEN_TTL_SECONDS) || DEFAULT_STATIC_PUBLISH_TOKEN_TTL_SECONDS,
   });
 };

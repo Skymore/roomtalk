@@ -1,6 +1,6 @@
 import { Express, Request, Response } from 'express';
 import { Logger } from '../logger';
-import { CocoSandboxService, CocoWorkspaceAsset } from '../services/cocoSandboxService';
+import { CodeAgentSandboxService, CodeAgentWorkspaceAsset } from '../services/codeAgentSandboxService';
 import {
   CODE_WORKSPACE_ASSET_ROUTE_PREFIX,
   CodeWorkspaceAssetAccess,
@@ -13,7 +13,7 @@ export interface CodeWorkspaceAssetRouteOptions {
   assetAccess: CodeWorkspaceAssetAccess;
   logger: Logger;
   getRoomById: (roomId: string) => Promise<Room | null>;
-  cocoSandboxService?: CocoSandboxService;
+  codeAgentSandboxService?: CodeAgentSandboxService;
   maxAssetBytes?: number;
 }
 
@@ -23,11 +23,11 @@ const requestAssetPath = (req: Request) => {
 };
 
 const readWorkspaceAsset = async (
-  service: CocoSandboxService,
+  service: CodeAgentSandboxService,
   sandboxId: string,
   workspacePath: string,
   maxBytes: number
-): Promise<CocoWorkspaceAsset> => {
+): Promise<CodeAgentWorkspaceAsset> => {
   const handle = await service.connect(sandboxId);
   if (service.readWorkspaceAsset) {
     return service.readWorkspaceAsset(handle, workspacePath, { maxBytes });
@@ -59,19 +59,19 @@ export function registerCodeWorkspaceAssetRoutes(app: Express, options: CodeWork
     const room = await options.getRoomById(resolved.roomId);
     if (
       !room ||
-      room.type !== 'coco' ||
+      room.type !== 'codeAgent' ||
       room.sandboxStatus !== 'ready' ||
       room.sandboxId !== resolved.sandboxId
     ) {
       return res.status(404).send('Workspace asset not found');
     }
 
-    if (!options.cocoSandboxService) {
+    if (!options.codeAgentSandboxService) {
       return res.status(503).send('Workspace sandbox service is unavailable');
     }
 
     try {
-      const asset = await readWorkspaceAsset(options.cocoSandboxService, resolved.sandboxId, resolved.path, maxAssetBytes);
+      const asset = await readWorkspaceAsset(options.codeAgentSandboxService, resolved.sandboxId, resolved.path, maxAssetBytes);
       if (asset.truncated) {
         return res.status(413).send('Workspace asset is too large to preview');
       }

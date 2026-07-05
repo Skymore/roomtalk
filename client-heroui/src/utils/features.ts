@@ -2,7 +2,7 @@ import { normalizeCodeAgentMode, normalizeCodeAgentModeList } from './codeAgentM
 import type { CodeAgentMode } from './types';
 
 export interface FeatureFlags {
-  coco: {
+  codeAgent: {
     enabled: boolean;
     mode: CodeAgentMode;
     availableModes: CodeAgentMode[];
@@ -18,7 +18,7 @@ export interface FeatureFlags {
 }
 
 export const FALLBACK_FEATURE_FLAGS: FeatureFlags = {
-  coco: { enabled: false, mode: 'plan', availableModes: ['plan'], defaultMode: 'plan', rollout: 'disabled' },
+  codeAgent: { enabled: false, mode: 'plan', availableModes: ['plan'], defaultMode: 'plan', rollout: 'disabled' },
   codex: { connections: { enabled: false } },
 };
 
@@ -41,23 +41,23 @@ export const fetchFeatureFlags = async (clientId: string): Promise<FeatureFlags>
   }
 
   const data = await response.json();
-  if (typeof data?.coco?.enabled !== 'boolean') {
+  if (typeof data?.codeAgent?.enabled !== 'boolean') {
     throw new Error('Feature flag response is invalid');
   }
-  const cocoMode = normalizeCodeAgentMode(data.coco.mode);
+  const codeAgentMode = normalizeCodeAgentMode(data.codeAgent.mode);
   const normalizedAvailableModes = normalizeCodeAgentModeList(
-    Array.isArray(data.coco.availableModes) ? data.coco.availableModes : [cocoMode]
+    Array.isArray(data.codeAgent.availableModes) ? data.codeAgent.availableModes : [codeAgentMode]
   );
-  const defaultMode = normalizeCodeAgentMode(data.coco.defaultMode);
+  const defaultMode = normalizeCodeAgentMode(data.codeAgent.defaultMode);
 
   return {
-    coco: {
-      enabled: data.coco.enabled,
-      mode: cocoMode,
+    codeAgent: {
+      enabled: data.codeAgent.enabled,
+      mode: codeAgentMode,
       availableModes: normalizedAvailableModes,
       defaultMode: normalizedAvailableModes.includes(defaultMode) ? defaultMode : 'plan',
-      rollout: data.coco.rollout,
-      reason: data.coco.reason,
+      rollout: data.codeAgent.rollout,
+      reason: data.codeAgent.reason,
     },
     codex: {
       connections: {

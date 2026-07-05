@@ -47,7 +47,7 @@ const validatePreviewUrl = (value: unknown): string | null => {
   if (!trimmed) {
     return null;
   }
-  if (trimmed.startsWith('/api/coco/workspace-assets/')) {
+  if (trimmed.startsWith('/api/code-agent/workspace-assets/')) {
     return trimmed;
   }
   try {

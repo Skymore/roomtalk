@@ -742,7 +742,7 @@ export const updateRoomSettings = (params: {
   password?: string;
   clearPassword?: boolean;
   postingSchedule?: RoomPostingSchedule | null;
-  cocoAccess?: Room['cocoAccess'] | null;
+  codeAgentAccess?: Room['codeAgentAccess'] | null;
   codeAgentMode?: Room['codeAgentMode'] | null;
   codeAgentBackend?: Room['codeAgentBackend'] | null;
 }): Promise<Room> => {

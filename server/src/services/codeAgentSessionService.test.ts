@@ -3,14 +3,14 @@ import { describe, it } from 'node:test';
 import { Logger } from '../logger';
 import { AIModelOption, CodeAgentMode, Message, Room, RoomAICostTotal } from '../types';
 import { CodeAgentRunnerAdapter, CodeAgentBackend } from './codeAgentRunner';
-import { CocoSandboxLifecycleService } from './cocoSandboxLifecycle';
+import { CodeAgentSandboxLifecycleService } from './codeAgentSandboxLifecycle';
 import { CodeAgentSessionService } from './codeAgentSessionService';
 import { CODE_AGENT_RUNNER_SCHEMA_VERSION, CodeAgentRunnerEvent, CodeAgentRunnerRunRequest } from './codeAgentRunnerProtocol';
 import { CodeAgentRunnerClient, CodeAgentRunnerRunResult } from './fakeCodeAgentRunner';
 import { FakeCodeAgentRunnerClient } from './fakeCodeAgentRunner';
-import { FakeCocoSandboxService } from './fakeCocoSandboxService';
-import { DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND, DEFAULT_CODEX_CLI_RUNNER_COMMAND, DEFAULT_COCO_RUNNER_COMMAND } from './codeAgentRuntimeConfig';
-import { CocoModelGateway, InMemoryCocoModelGatewayTokenStateStore } from './cocoModelGateway';
+import { FakeCodeAgentSandboxService } from './fakeCodeAgentSandboxService';
+import { DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND, DEFAULT_CODEX_CLI_RUNNER_COMMAND, DEFAULT_CODE_AGENT_RUNNER_COMMAND } from './codeAgentRuntimeConfig';
+import { CodeAgentModelGateway, InMemoryCodeAgentModelGatewayTokenStateStore } from './codeAgentModelGateway';
 import { PublishedStaticSiteService } from './publishedStaticSite';
 import { MemoryMediaObjectStorage } from '../testUtils/memoryMediaObjectStorage';
 import { ObservabilityEventInput } from './observabilityEvents';
@@ -54,7 +54,7 @@ const createMemoryObservability = () => {
   };
 };
 
-class MemoryCocoStore {
+class MemoryCodeAgentStore {
   rooms = new Map<string, Room>();
   messages = new Map<string, Message[]>();
   members = new Map<string, { roomId: string; clientId: string; role: string; joinedAt: string }[]>();
@@ -211,12 +211,12 @@ const selectedModel: AIModelOption = {
 
 const room = (overrides: Partial<Room> = {}): Room => ({
   id: 'room-1',
-  name: 'Coco Room',
+  name: 'Code Agent Room',
   description: '',
   createdAt: '2026-05-03T00:00:00.000Z',
   lastActivityAt: '2026-05-03T00:00:00.000Z',
   creatorId: 'client-1',
-  type: 'coco',
+  type: 'codeAgent',
   ...overrides,
 });
 
@@ -230,7 +230,7 @@ const userMessage = (content = 'inspect the project'): Message => ({
 });
 
 const createService = (options: {
-  store?: MemoryCocoStore;
+  store?: MemoryCodeAgentStore;
   runner?: CodeAgentRunnerClient;
   backend?: CodeAgentBackend;
   enabled?: boolean;
@@ -246,15 +246,15 @@ const createService = (options: {
   mode?: CodeAgentMode;
   availableModes?: CodeAgentMode[];
   defaultMode?: CodeAgentMode;
-  modelGateway?: CocoModelGateway;
+  modelGateway?: CodeAgentModelGateway;
   staticSitePublisher?: PublishedStaticSiteService;
   observability?: ReturnType<typeof createMemoryObservability>['recorder'];
   aiStreamOwnerId?: string;
 } = {}) => {
-  const store = options.store || new MemoryCocoStore(room(), [userMessage()]);
+  const store = options.store || new MemoryCodeAgentStore(room(), [userMessage()]);
   const emitter = new FakeEmitter();
-  const sandboxService = new FakeCocoSandboxService(() => new Date('2026-05-03T00:00:00.000Z'));
-  const lifecycle = new CocoSandboxLifecycleService(store as any, sandboxService, logger, {
+  const sandboxService = new FakeCodeAgentSandboxService(() => new Date('2026-05-03T00:00:00.000Z'));
+  const lifecycle = new CodeAgentSandboxLifecycleService(store as any, sandboxService, logger, {
     sandboxTtlMs: 60 * 60 * 1000,
     turnTimeoutMs: 5 * 60 * 1000,
     creatingStaleMs: 2 * 60 * 1000,
@@ -267,7 +267,7 @@ const createService = (options: {
     emitter,
     lifecycle,
     sandboxService,
-    new CodeAgentRunnerAdapter(options.runner || new FakeCodeAgentRunnerClient([]), options.backend || 'coco'),
+    new CodeAgentRunnerAdapter(options.runner || new FakeCodeAgentRunnerClient([]), options.backend || 'code-agent'),
     logger,
     {
       enabled: options.enabled ?? true,
@@ -295,7 +295,7 @@ const createService = (options: {
 };
 
 describe('CodeAgentSessionService', () => {
-  it('runs a full fake Coco turn and persists runner events', async () => {
+  it('runs a full fake code-agent turn and persists runner events', async () => {
     const runner = new FakeCodeAgentRunnerClient([
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'status', turnId: 'turn-1', status: 'starting', message: 'starting' },
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Working...' },
@@ -324,7 +324,7 @@ describe('CodeAgentSessionService', () => {
 
     assert.deepEqual(ack, { success: true, messageId: 'ai-1' });
     assert.deepEqual(result, { success: true, messageId: 'ai-1' });
-    assert.equal(sandboxService.startedRunnerCommands[0], DEFAULT_COCO_RUNNER_COMMAND);
+    assert.equal(sandboxService.startedRunnerCommands[0], DEFAULT_CODE_AGENT_RUNNER_COMMAND);
     assert.deepEqual(sandboxService.startedRunnerEnvs[0], { PYTHONUNBUFFERED: '1' });
     assert.equal(runner.requests[0].prompt, 'inspect the project');
     assert.equal(runner.requests[0].clientId, 'client-1');
@@ -344,24 +344,24 @@ describe('CodeAgentSessionService', () => {
     assert.equal(messages[3].content, '# RoomTalk');
     assert.equal(messages[4].status, 'complete');
     assert.equal(messages[4].content, 'Done');
-    assert.equal((await store.getRoomById('room-1'))?.cocoStatus, 'idle');
-    assert.equal((await store.getRoomById('room-1'))?.cocoSessionId, 'session-1');
+    assert.equal((await store.getRoomById('room-1'))?.codeAgentStatus, 'idle');
+    assert.equal((await store.getRoomById('room-1'))?.codeAgentSessionId, 'session-1');
     assert.equal(emitter.roomEmits.some(event => event.event === 'ai_chunk'), true);
     assert.equal(emitter.roomEmits.some(event => event.event === 'ai_stream_end'), true);
     assert.equal(sandboxService.stoppedRunnerCommands.length, 1);
     assert.deepEqual(observability.events.map(event => event.event), [
-      'coco.turn.started',
-      'coco.sandbox.ensure',
-      'coco.runner.started',
-      'coco.runner.status',
-      'coco.runner.tool_call',
-      'coco.runner.tool_result',
-      'coco.runner.final',
-      'coco.turn.completed',
+      'code_agent.turn.started',
+      'code_agent.sandbox.ensure',
+      'code_agent.runner.started',
+      'code_agent.runner.status',
+      'code_agent.runner.tool_call',
+      'code_agent.runner.tool_result',
+      'code_agent.runner.final',
+      'code_agent.turn.completed',
     ]);
     assert.equal((observability.events[3].payload as any)?.message, 'starting');
     assert.equal((observability.events[5].payload as any)?.outputLength, '# RoomTalk'.length);
-    assert.equal(observability.events.some(event => event.event === 'coco.runner.text_delta'), false);
+    assert.equal(observability.events.some(event => event.event === 'code_agent.runner.text_delta'), false);
   });
 
   it('runs Codex backend turns with sandbox secret auth injection and refreshed auth persistence', async () => {
@@ -369,7 +369,7 @@ describe('CodeAgentSessionService', () => {
     const refreshedAuthJson = JSON.stringify({ OPENAI_AUTH: { access_token: 'refreshed-access', refresh_token: 'initial-refresh' } });
     const authCalls: Array<{ clientId: string; runId: string }> = [];
     const refreshedAuths: Array<string | undefined> = [];
-    let sandboxService: FakeCocoSandboxService;
+    let sandboxService: FakeCodeAgentSandboxService;
     const runner: CodeAgentRunnerClient = {
       async run(request, handlers, context): Promise<CodeAgentRunnerRunResult> {
         assert.equal(request.codexModel, 'gpt-5.3-codex-spark');
@@ -458,9 +458,9 @@ describe('CodeAgentSessionService', () => {
     assert.equal(setup.store.roomCost.totalUsd, 0);
   });
 
-  it('lets a room select Codex while the service default backend remains Coco', async () => {
+  it('lets a room select Codex while the service default backend remains the code-agent backend', async () => {
     const authCalls: Array<{ clientId: string; runId: string }> = [];
-    let sandboxService: FakeCocoSandboxService;
+    let sandboxService: FakeCodeAgentSandboxService;
     const runner: CodeAgentRunnerClient = {
       async run(_request, handlers): Promise<CodeAgentRunnerRunResult> {
         const env = sandboxService.startedRunnerEnvs[sandboxService.startedRunnerEnvs.length - 1];
@@ -485,11 +485,11 @@ describe('CodeAgentSessionService', () => {
       },
     };
     const setup = createService({
-      store: new MemoryCocoStore(room({ codeAgentBackend: 'codex' }), [userMessage()]),
+      store: new MemoryCodeAgentStore(room({ codeAgentBackend: 'codex' }), [userMessage()]),
       runner,
-      backend: 'coco',
+      backend: 'code-agent',
       runnerCommandByBackend: {
-        coco: DEFAULT_COCO_RUNNER_COMMAND,
+        'code-agent': DEFAULT_CODE_AGENT_RUNNER_COMMAND,
         codex: DEFAULT_CODEX_CLI_RUNNER_COMMAND,
       },
       runnerEnvByBackend: {
@@ -517,7 +517,7 @@ describe('CodeAgentSessionService', () => {
 
   it('lets a room select Codex app-server while reusing Codex subscription auth', async () => {
     const authCalls: Array<{ clientId: string; runId: string }> = [];
-    let sandboxService: FakeCocoSandboxService;
+    let sandboxService: FakeCodeAgentSandboxService;
     const runner: CodeAgentRunnerClient = {
       async run(request, handlers): Promise<CodeAgentRunnerRunResult> {
         assert.equal(request.codexModel, 'gpt-5.5');
@@ -544,11 +544,11 @@ describe('CodeAgentSessionService', () => {
       },
     };
     const setup = createService({
-      store: new MemoryCocoStore(room({ codeAgentBackend: 'codex-app-server' }), [userMessage()]),
+      store: new MemoryCodeAgentStore(room({ codeAgentBackend: 'codex-app-server' }), [userMessage()]),
       runner,
-      backend: 'coco',
+      backend: 'code-agent',
       runnerCommandByBackend: {
-        coco: DEFAULT_COCO_RUNNER_COMMAND,
+        'code-agent': DEFAULT_CODE_AGENT_RUNNER_COMMAND,
         codex: DEFAULT_CODEX_CLI_RUNNER_COMMAND,
         'codex-app-server': DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND,
       },
@@ -643,7 +643,7 @@ describe('CodeAgentSessionService', () => {
     assert.equal(messages[4].turnId, messages[1].turnId);
   });
 
-  it('passes prior RoomTalk Coco history to the runner and excludes the current prompt', async () => {
+  it('passes prior RoomTalk Code Agent history to the runner and excludes the current prompt', async () => {
     const initialMessages: Message[] = [
       userMessage('list files'),
       {
@@ -658,12 +658,12 @@ describe('CodeAgentSessionService', () => {
       },
       {
         id: 'tool-prev-1',
-        clientId: 'coco_runner',
+        clientId: 'code_agent_runner',
         content: 'Glob {"pattern":"**/*"}',
         roomId: 'room-1',
         timestamp: '2026-05-03T00:00:02.000Z',
         messageType: 'tool_call',
-        username: 'Coco',
+        username: 'Code Agent',
         status: 'complete',
         turnId: 'turn-prev',
         toolCallId: 'tool-prev',
@@ -672,12 +672,12 @@ describe('CodeAgentSessionService', () => {
       },
       {
         id: 'tool-result-prev-1',
-        clientId: 'coco_runner',
+        clientId: 'code_agent_runner',
         content: 'No files found matching the pattern.',
         roomId: 'room-1',
         timestamp: '2026-05-03T00:00:03.000Z',
         messageType: 'tool_result',
-        username: 'Coco',
+        username: 'Code Agent',
         status: 'complete',
         turnId: 'turn-prev',
         toolCallId: 'tool-prev',
@@ -700,7 +700,7 @@ describe('CodeAgentSessionService', () => {
         timestamp: '2026-05-03T00:00:05.000Z',
       },
     ];
-    const store = new MemoryCocoStore(room({ cocoSessionId: 'session-prev' }), initialMessages);
+    const store = new MemoryCodeAgentStore(room({ codeAgentSessionId: 'session-prev' }), initialMessages);
     const runner = new FakeCodeAgentRunnerClient([
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'You asked me to list files.', sessionId: 'session-prev' },
     ]);
@@ -749,12 +749,12 @@ describe('CodeAgentSessionService', () => {
       },
       {
         id: 'tool-prev-1',
-        clientId: 'coco_runner',
+        clientId: 'code_agent_runner',
         content: 'Glob {"pattern":"**/*"}',
         roomId: 'room-1',
         timestamp: '2026-05-03T00:00:02.000Z',
         messageType: 'tool_call',
-        username: 'Coco',
+        username: 'Code Agent',
         status: 'complete',
         turnId: 'turn-prev',
         toolCallId: 'tool-prev',
@@ -763,12 +763,12 @@ describe('CodeAgentSessionService', () => {
       },
       {
         id: 'tool-result-prev-1',
-        clientId: 'coco_runner',
+        clientId: 'code_agent_runner',
         content: 'No files found matching the pattern.',
         roomId: 'room-1',
         timestamp: '2026-05-03T00:00:03.000Z',
         messageType: 'tool_result',
-        username: 'Coco',
+        username: 'Code Agent',
         status: 'complete',
         turnId: 'turn-prev',
         toolCallId: 'tool-prev',
@@ -791,7 +791,7 @@ describe('CodeAgentSessionService', () => {
         timestamp: '2026-05-03T00:00:05.000Z',
       },
     ];
-    const store = new MemoryCocoStore(room(), initialMessages);
+    const store = new MemoryCodeAgentStore(room(), initialMessages);
     const runner = new FakeCodeAgentRunnerClient([
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'You asked about files.', sessionId: 'session-1' },
     ]);
@@ -828,7 +828,7 @@ describe('CodeAgentSessionService', () => {
         timestamp: '2026-05-03T00:00:02.000Z',
       },
     ];
-    const store = new MemoryCocoStore(room(), initialMessages);
+    const store = new MemoryCodeAgentStore(room(), initialMessages);
     const runner = new FakeCodeAgentRunnerClient([
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'ok', sessionId: 'session-1' },
     ]);
@@ -948,14 +948,14 @@ describe('CodeAgentSessionService', () => {
       ]);
       const { sandboxService, service } = createService({
         runner,
-        runnerEnv: { COCO_SOURCE_DIR: '/sandbox/coco/src' },
+        runnerEnv: { CODE_AGENT_SOURCE_DIR: '/sandbox/code-agent-engine/src' },
       });
 
       await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
 
       assert.deepEqual(sandboxService.startedRunnerEnvs[0], {
         PYTHONUNBUFFERED: '1',
-        COCO_SOURCE_DIR: '/sandbox/coco/src',
+        CODE_AGENT_SOURCE_DIR: '/sandbox/code-agent-engine/src',
       });
       assert.equal('ANTHROPIC_API_KEY' in sandboxService.startedRunnerEnvs[0], false);
     } finally {
@@ -987,11 +987,11 @@ describe('CodeAgentSessionService', () => {
     });
   });
 
-  it('allows each Coco turn to choose plan mode within an edit-capable server configuration', async () => {
+  it('allows each code-agent turn to choose plan mode within an edit-capable server configuration', async () => {
     const runner = new FakeCodeAgentRunnerClient([
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
     ]);
-    const store = new MemoryCocoStore(room({ codeAgentMode: 'plan' }), [userMessage()]);
+    const store = new MemoryCodeAgentStore(room({ codeAgentMode: 'plan' }), [userMessage()]);
     const { service } = createService({ store, runner, mode: 'acceptEdits' });
 
     await service.startTurn({
@@ -1007,7 +1007,7 @@ describe('CodeAgentSessionService', () => {
     const runner = new FakeCodeAgentRunnerClient([
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
     ]);
-    const store = new MemoryCocoStore(room({ codeAgentMode: 'acceptEdits' }), [userMessage()]);
+    const store = new MemoryCodeAgentStore(room({ codeAgentMode: 'acceptEdits' }), [userMessage()]);
     const { service } = createService({ store, runner, mode: 'plan' });
 
     const result = await service.startTurn({
@@ -1016,7 +1016,7 @@ describe('CodeAgentSessionService', () => {
       selectedModel,
     });
 
-    assert.deepEqual(result, { success: false, error: 'Coco edit mode is not enabled' });
+    assert.deepEqual(result, { success: false, error: 'code-agent edit mode is not enabled' });
     assert.equal(runner.requests.length, 0);
   });
 
@@ -1032,8 +1032,8 @@ describe('CodeAgentSessionService', () => {
       const { sandboxService, service } = createService({
         runner,
         runnerEnv: {
-          COCO_MODEL_PROXY_URL: 'https://model-proxy.internal',
-          COCO_MODEL_PROXY_TOKEN: 'short-lived-proxy-token',
+          CODE_AGENT_MODEL_PROXY_URL: 'https://model-proxy.internal',
+          CODE_AGENT_MODEL_PROXY_TOKEN: 'short-lived-proxy-token',
         },
       });
 
@@ -1041,8 +1041,8 @@ describe('CodeAgentSessionService', () => {
 
       assert.deepEqual(sandboxService.startedRunnerEnvs[0], {
         PYTHONUNBUFFERED: '1',
-        COCO_MODEL_PROXY_URL: 'https://model-proxy.internal',
-        COCO_MODEL_PROXY_TOKEN: 'short-lived-proxy-token',
+        CODE_AGENT_MODEL_PROXY_URL: 'https://model-proxy.internal',
+        CODE_AGENT_MODEL_PROXY_TOKEN: 'short-lived-proxy-token',
       });
       assert.equal('OPENAI_API_KEY' in sandboxService.startedRunnerEnvs[0], false);
       assert.equal('ANTHROPIC_API_KEY' in sandboxService.startedRunnerEnvs[0], false);
@@ -1064,15 +1064,15 @@ describe('CodeAgentSessionService', () => {
     const runner = new FakeCodeAgentRunnerClient([
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
     ]);
-    const gateway = new CocoModelGateway({
-      publicBaseUrl: 'https://room.example/api/coco/model-gateway',
+    const gateway = new CodeAgentModelGateway({
+      publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
       tokenSecret: 'gateway-secret',
       providerApiKeys: { deepseek: 'deepseek-provider-key' },
       nowMs: () => 1_800_000_000_000,
-      stateStore: new InMemoryCocoModelGatewayTokenStateStore(() => 1_800_000_000_000),
+      stateStore: new InMemoryCodeAgentModelGatewayTokenStateStore(() => 1_800_000_000_000),
     });
     const { sandboxService, service } = createService({
-      store: new MemoryCocoStore(room({ codeAgentMode: 'acceptEdits' }), [userMessage()]),
+      store: new MemoryCodeAgentStore(room({ codeAgentMode: 'acceptEdits' }), [userMessage()]),
       runner,
       availableModes: ['plan', 'acceptEdits'],
       defaultMode: 'plan',
@@ -1089,10 +1089,10 @@ describe('CodeAgentSessionService', () => {
     });
 
     const env = sandboxService.startedRunnerEnvs[0];
-    assert.equal(env.COCO_MODEL_PROXY_URL, 'https://room.example/api/coco/model-gateway/v1');
-    assert.equal(typeof env.COCO_MODEL_PROXY_TOKEN, 'string');
-    assert.notEqual(env.COCO_MODEL_PROXY_TOKEN, 'deepseek-provider-key');
-    assert.equal(env.ROOMTALK_COCO_ALLOW_WRITE_TOOLS, 'true');
+    assert.equal(env.CODE_AGENT_MODEL_PROXY_URL, 'https://room.example/api/code-agent/model-gateway/v1');
+    assert.equal(typeof env.CODE_AGENT_MODEL_PROXY_TOKEN, 'string');
+    assert.notEqual(env.CODE_AGENT_MODEL_PROXY_TOKEN, 'deepseek-provider-key');
+    assert.equal(env.ROOMTALK_CODE_AGENT_ALLOW_WRITE_TOOLS, 'true');
     assert.equal('DEEPSEEK_API_KEY' in env, false);
     assert.equal(runner.requests[0].mode, 'edit');
   });
@@ -1109,7 +1109,7 @@ describe('CodeAgentSessionService', () => {
       nowMs: () => Date.parse('2026-05-03T00:00:00.000Z'),
       createId: () => 'static-publish-token-id',
     });
-    const store = new MemoryCocoStore(room({ codeAgentMode: 'fullAccess' }), [userMessage()]);
+    const store = new MemoryCodeAgentStore(room({ codeAgentMode: 'fullAccess' }), [userMessage()]);
     const { sandboxService, service } = createService({
       store,
       runner,
@@ -1125,8 +1125,8 @@ describe('CodeAgentSessionService', () => {
     });
 
     const env = sandboxService.startedRunnerEnvs[0];
-    assert.equal(env.ROOMTALK_COCO_ENABLE_STATIC_PUBLISH, 'true');
-    assert.equal(env.ROOMTALK_STATIC_PUBLISH_URL, 'https://room.example/api/coco/publish-static-site');
+    assert.equal(env.ROOMTALK_CODE_AGENT_ENABLE_STATIC_PUBLISH, 'true');
+    assert.equal(env.ROOMTALK_STATIC_PUBLISH_URL, 'https://room.example/api/code-agent/publish-static-site');
     assert.equal(env.ROOMTALK_STATIC_PUBLISH_PUBLIC_BASE_URL, 'https://room.example');
     const claims = staticSitePublisher.verifyTurnToken(env.ROOMTALK_STATIC_PUBLISH_TOKEN);
     assert.equal(claims?.roomId, 'room-1');
@@ -1149,7 +1149,7 @@ describe('CodeAgentSessionService', () => {
       nowMs: () => Date.parse('2026-05-03T00:00:00.000Z'),
       createId: () => 'static-publish-token-id',
     });
-    const store = new MemoryCocoStore(room({ codeAgentMode: 'fullAccess' }), [userMessage()]);
+    const store = new MemoryCodeAgentStore(room({ codeAgentMode: 'fullAccess' }), [userMessage()]);
     const { sandboxService, service } = createService({
       store,
       runner,
@@ -1167,7 +1167,7 @@ describe('CodeAgentSessionService', () => {
     });
 
     const env = sandboxService.startedRunnerEnvs[0];
-    assert.equal(env.ROOMTALK_STATIC_PUBLISH_URL, 'https://room.ruit.me/api/coco/publish-static-site');
+    assert.equal(env.ROOMTALK_STATIC_PUBLISH_URL, 'https://room.ruit.me/api/code-agent/publish-static-site');
     assert.equal(env.ROOMTALK_STATIC_PUBLISH_PUBLIC_BASE_URL, 'https://room.ruit.me');
   });
 
@@ -1184,7 +1184,7 @@ describe('CodeAgentSessionService', () => {
       nowMs: () => Date.parse('2026-05-03T00:00:00.000Z'),
       createId: () => 'static-publish-token-id',
     });
-    const store = new MemoryCocoStore(room({ codeAgentMode: 'fullAccess' }), [userMessage()]);
+    const store = new MemoryCodeAgentStore(room({ codeAgentMode: 'fullAccess' }), [userMessage()]);
     const { sandboxService, service } = createService({
       store,
       runner,
@@ -1202,7 +1202,7 @@ describe('CodeAgentSessionService', () => {
     });
 
     const env = sandboxService.startedRunnerEnvs[0];
-    assert.equal(env.ROOMTALK_STATIC_PUBLISH_URL, 'http://127.0.0.1:3012/api/coco/publish-static-site');
+    assert.equal(env.ROOMTALK_STATIC_PUBLISH_URL, 'http://127.0.0.1:3012/api/code-agent/publish-static-site');
     assert.equal(env.ROOMTALK_STATIC_PUBLISH_PUBLIC_BASE_URL, 'http://127.0.0.1:3012');
   });
 
@@ -1226,11 +1226,11 @@ describe('CodeAgentSessionService', () => {
     await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
 
     const env = sandboxService.startedRunnerEnvs[0];
-    assert.equal('ROOMTALK_COCO_ENABLE_STATIC_PUBLISH' in env, false);
+    assert.equal('ROOMTALK_CODE_AGENT_ENABLE_STATIC_PUBLISH' in env, false);
     assert.equal('ROOMTALK_STATIC_PUBLISH_TOKEN' in env, false);
   });
 
-  it('defaults Coco turns to plan even when edit mode is available', async () => {
+  it('defaults code-agent turns to plan even when edit mode is available', async () => {
     const runner = new FakeCodeAgentRunnerClient([
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
     ]);
@@ -1238,49 +1238,49 @@ describe('CodeAgentSessionService', () => {
       runner,
       availableModes: ['fullAccess'],
       defaultMode: 'plan',
-      runnerEnv: { ROOMTALK_COCO_ALLOW_WRITE_TOOLS: 'true' },
+      runnerEnv: { ROOMTALK_CODE_AGENT_ALLOW_WRITE_TOOLS: 'true' },
     });
 
     await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
 
     assert.equal(runner.requests[0].mode, 'plan');
-    assert.equal('ROOMTALK_COCO_ALLOW_WRITE_TOOLS' in sandboxService.startedRunnerEnvs[0], false);
+    assert.equal('ROOMTALK_CODE_AGENT_ALLOW_WRITE_TOOLS' in sandboxService.startedRunnerEnvs[0], false);
   });
 
-  it('rejects concurrent turns in the same Coco room', async () => {
+  it('rejects concurrent turns in the same code-agent room', async () => {
     const runner = new BlockingRunner();
     const { service } = createService({ runner });
     const first = service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
     await runner.started;
 
     const second = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
-    assert.deepEqual(second, { success: false, error: 'A Coco task is already running in this room' });
+    assert.deepEqual(second, { success: false, error: 'A code-agent task is already running in this room' });
 
     runner.release();
     assert.deepEqual(await first, { success: true, messageId: 'ai-1' });
   });
 
-  it('rejects disabled, unauthorized, non-Coco, and allowlist-mismatched turns', async () => {
+  it('rejects disabled, unauthorized, non-code-agent, and allowlist-mismatched turns', async () => {
     assert.deepEqual(await createService({ enabled: false }).service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel }), {
       success: false,
-      error: 'Coco is disabled',
+      error: 'Code agent is disabled',
     });
     assert.deepEqual(await createService({ allowedClientIds: ['other-client'] }).service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel }), {
       success: false,
-      error: 'Coco is not enabled for this user',
+      error: 'Code agent is not enabled for this user',
     });
-    assert.deepEqual(await createService({ store: new MemoryCocoStore(room({ creatorId: 'client-2' }), [userMessage()]) }).service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel }), {
+    assert.deepEqual(await createService({ store: new MemoryCodeAgentStore(room({ creatorId: 'client-2' }), [userMessage()]) }).service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel }), {
       success: false,
-      error: 'You do not have access to this Coco room',
+      error: 'You do not have access to this code agent room',
     });
-    assert.deepEqual(await createService({ store: new MemoryCocoStore(room({ type: 'chat' }), [userMessage()]) }).service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel }), {
+    assert.deepEqual(await createService({ store: new MemoryCodeAgentStore(room({ type: 'chat' }), [userMessage()]) }).service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel }), {
       success: false,
-      error: 'Room is not a Coco room',
+      error: 'Room is not a code-agent room',
     });
   });
 
-  it('allows admins when cocoAccess is admin', async () => {
-    const store = new MemoryCocoStore(room({ cocoAccess: 'admin' }), [
+  it('allows admins when codeAgentAccess is admin', async () => {
+    const store = new MemoryCodeAgentStore(room({ codeAgentAccess: 'admin' }), [
       { ...userMessage(), clientId: 'admin-1' },
     ]);
     store.addMember('room-1', 'admin-1', 'admin');
@@ -1293,19 +1293,19 @@ describe('CodeAgentSessionService', () => {
     assert.equal(result.success, true);
   });
 
-  it('rejects regular members when cocoAccess is admin', async () => {
-    const store = new MemoryCocoStore(room({ cocoAccess: 'admin' }), [
+  it('rejects regular members when codeAgentAccess is admin', async () => {
+    const store = new MemoryCodeAgentStore(room({ codeAgentAccess: 'admin' }), [
       { ...userMessage(), clientId: 'member-1' },
     ]);
     store.addMember('room-1', 'member-1', 'member');
     const { service } = createService({ store });
 
     const result = await service.startTurn({ roomId: 'room-1', clientId: 'member-1', selectedModel });
-    assert.deepEqual(result, { success: false, error: 'You do not have access to this Coco room' });
+    assert.deepEqual(result, { success: false, error: 'You do not have access to this code agent room' });
   });
 
-  it('allows all members when cocoAccess is member', async () => {
-    const store = new MemoryCocoStore(room({ cocoAccess: 'member' }), [
+  it('allows all members when codeAgentAccess is member', async () => {
+    const store = new MemoryCodeAgentStore(room({ codeAgentAccess: 'member' }), [
       { ...userMessage(), clientId: 'member-1' },
     ]);
     store.addMember('room-1', 'member-1', 'member');
@@ -1318,12 +1318,12 @@ describe('CodeAgentSessionService', () => {
     assert.equal(result.success, true);
   });
 
-  it('defaults to owner-only access when cocoAccess is not set', async () => {
-    const store = new MemoryCocoStore(room(), [userMessage()]);
+  it('defaults to owner-only access when codeAgentAccess is not set', async () => {
+    const store = new MemoryCodeAgentStore(room(), [userMessage()]);
     store.addMember('room-1', 'member-1', 'member');
 
     const result = await createService({ store }).service.startTurn({ roomId: 'room-1', clientId: 'member-1', selectedModel });
-    assert.deepEqual(result, { success: false, error: 'You do not have access to this Coco room' });
+    assert.deepEqual(result, { success: false, error: 'You do not have access to this code agent room' });
   });
 
   it('stops runner processing when a tool event cannot be persisted', async () => {
@@ -1331,7 +1331,7 @@ describe('CodeAgentSessionService', () => {
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Read', args: { file_path: 'README.md' } },
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-1', name: 'Read', success: true, output: '# RoomTalk' },
     ]);
-    const store = new MemoryCocoStore(room(), [userMessage()]);
+    const store = new MemoryCodeAgentStore(room(), [userMessage()]);
     store.appendFailures = 1;
     const { emitter, service } = createService({ runner, store });
 
@@ -1342,22 +1342,22 @@ describe('CodeAgentSessionService', () => {
     const messages = store.messages.get('room-1') || [];
     assert.deepEqual(messages.map(message => message.messageType), ['text', 'ai']);
     assert.equal(messages[1].status, 'error');
-    assert.equal(messages[1].content, 'Unable to persist Coco tool_call event');
+    assert.equal(messages[1].content, 'Unable to persist code-agent tool_call event');
     assert.equal(emitter.roomEmits.some(event => event.event === 'ai_stream_error'), true);
   });
 
   it('broadcasts room error state when placeholder persistence is rejected after running state was emitted', async () => {
-    const store = new MemoryCocoStore(room(), [userMessage()]);
+    const store = new MemoryCodeAgentStore(room(), [userMessage()]);
     store.upsertFailures = 1;
     const { emitter, service } = createService({ store });
 
     const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
 
-    assert.deepEqual(result, { success: false, error: 'Unable to start a durable Coco response' });
-    assert.equal((await store.getRoomById('room-1'))?.cocoStatus, 'error');
+    assert.deepEqual(result, { success: false, error: 'Unable to start a durable code-agent response' });
+    assert.equal((await store.getRoomById('room-1'))?.codeAgentStatus, 'error');
     const roomUpdates = emitter.roomEmits.filter(event => event.event === 'room_updated');
-    assert.equal((roomUpdates[0].args[0] as Room).cocoStatus, 'running');
-    assert.equal((roomUpdates[1].args[0] as Room).cocoStatus, 'error');
+    assert.equal((roomUpdates[0].args[0] as Room).codeAgentStatus, 'running');
+    assert.equal((roomUpdates[1].args[0] as Room).codeAgentStatus, 'error');
     assert.equal(emitter.roomEmits.some(event => event.event === 'ai_stream_error'), false);
   });
 
@@ -1376,7 +1376,7 @@ describe('CodeAgentSessionService', () => {
     assert.equal(messages[1].content, 'runner crashed');
     assert.equal(messages[2].messageType, 'sandbox_status');
     assert.equal(messages[2].isError, true);
-    assert.equal((await store.getRoomById('room-1'))?.cocoStatus, 'error');
+    assert.equal((await store.getRoomById('room-1'))?.codeAgentStatus, 'error');
     const errorBroadcast = emitter.roomEmits.find(event =>
       event.event === 'new_message' && (event.args[0] as Message).id === messages[1].id
       && (event.args[0] as Message).status === 'error'

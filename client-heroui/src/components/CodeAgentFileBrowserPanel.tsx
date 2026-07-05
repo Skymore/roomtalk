@@ -33,7 +33,7 @@ import {
   type CodeWorkspaceFile,
 } from '../utils/codeWorkspaceFiles';
 import { appendWorkspaceAssetPreviewRevision } from '../utils/codeWorkspaceFilePreview';
-import type { CodeAgentWorkspaceSnapshot } from '../utils/cocoWorkspace';
+import type { CodeAgentWorkspaceSnapshot } from '../utils/codeAgentWorkspace';
 import type { RoomSandboxStatus } from '../utils/types';
 import { codeAgentFaviconUrlForOrigin } from '../utils/codeAgentFavicon';
 import { beginHorizontalResize } from '../utils/horizontalResize';

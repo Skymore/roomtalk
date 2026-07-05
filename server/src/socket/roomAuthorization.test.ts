@@ -1,6 +1,6 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
-import { canUseCocoRoom, getPostingAvailability } from './roomAuthorization';
+import { canUseCodeAgentRoom, getPostingAvailability } from './roomAuthorization';
 import { Room, RoomPostingSchedule } from '../types';
 
 // 对拍向量:与 client-heroui/src/utils/postingSchedule.test.ts 使用同一组场景
@@ -66,34 +66,34 @@ describe('getPostingAvailability', () => {
   });
 });
 
-describe('canUseCocoRoom', () => {
-  const cocoRoom = (overrides: Partial<Room> = {}): Room => ({
+describe('canUseCodeAgentRoom', () => {
+  const codeAgentRoom = (overrides: Partial<Room> = {}): Room => ({
     ...room(),
-    type: 'coco',
+    type: 'codeAgent',
     ...overrides,
   });
 
-  it('defaults Coco access to owner only', () => {
-    const target = cocoRoom();
+  it('defaults code-agent access to owner only', () => {
+    const target = codeAgentRoom();
 
-    assert.equal(canUseCocoRoom(target, 'client-1', 'owner'), true);
-    assert.equal(canUseCocoRoom(target, 'client-2', 'member'), false);
+    assert.equal(canUseCodeAgentRoom(target, 'client-1', 'owner'), true);
+    assert.equal(canUseCodeAgentRoom(target, 'client-2', 'member'), false);
   });
 
-  it('allows administrators only when Coco access is admin', () => {
-    const target = cocoRoom({ cocoAccess: 'admin' });
+  it('allows administrators only when code-agent access is admin', () => {
+    const target = codeAgentRoom({ codeAgentAccess: 'admin' });
 
-    assert.equal(canUseCocoRoom(target, 'client-2', 'admin'), true);
-    assert.equal(canUseCocoRoom(target, 'client-3', 'member'), false);
+    assert.equal(canUseCodeAgentRoom(target, 'client-2', 'admin'), true);
+    assert.equal(canUseCodeAgentRoom(target, 'client-3', 'member'), false);
   });
 
-  it('allows all room members when Coco access is member', () => {
-    const target = cocoRoom({ cocoAccess: 'member' });
+  it('allows all room members when code-agent access is member', () => {
+    const target = codeAgentRoom({ codeAgentAccess: 'member' });
 
-    assert.equal(canUseCocoRoom(target, 'client-2', 'member'), true);
+    assert.equal(canUseCodeAgentRoom(target, 'client-2', 'member'), true);
   });
 
-  it('rejects non-Coco rooms', () => {
-    assert.equal(canUseCocoRoom(room(), 'client-1', 'owner'), false);
+  it('rejects non-code-agent rooms', () => {
+    assert.equal(canUseCodeAgentRoom(room(), 'client-1', 'owner'), false);
   });
 });

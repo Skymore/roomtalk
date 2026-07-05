@@ -2,21 +2,21 @@ import assert from 'assert/strict';
 import { Readable } from 'stream';
 import { describe, it } from 'node:test';
 import { buildCodexSandboxMigrationPlan, isCodexSandboxMigrationCandidateRoom, probeCodexCapability } from './migrateCodexSandboxes';
-import { CocoSandboxHandle, CocoSandboxService } from '../services/cocoSandboxService';
+import { CodeAgentSandboxHandle, CodeAgentSandboxService } from '../services/codeAgentSandboxService';
 import { Room } from '../types';
 
 const baseEnv = {
   RUN_CODEX_SANDBOX_MIGRATION: 'true',
   E2B_API_KEY: 'e2b-test-key',
-  COCO_E2B_TEMPLATE_ID: 'roomtalk-coco-dual-cli',
-  COCO_ARTIFACT_VERSION: 'roomtalk-coco-2026-07-04-dual-cli-candidate',
-  COCO_SOURCE_REF: 'a4e70e674e46d59a63874371276f5fec0fcd3f41',
-  COCO_SANDBOX_PROVIDER: 'e2b',
-  COCO_RUNNER_CLIENT: 'jsonl',
+  CODE_AGENT_E2B_TEMPLATE_ID: 'roomtalk-code-agent-dual-cli',
+  CODE_AGENT_ARTIFACT_VERSION: 'roomtalk-code-agent-2026-07-04-dual-cli-candidate',
+  CODE_AGENT_SOURCE_REF: 'a4e70e674e46d59a63874371276f5fec0fcd3f41',
+  CODE_AGENT_SANDBOX_PROVIDER: 'e2b',
+  CODE_AGENT_RUNNER_CLIENT: 'jsonl',
   CODEX_CLI_BACKEND_ENABLED: 'true',
 } as const;
 
-const handle: CocoSandboxHandle = {
+const handle: CodeAgentSandboxHandle = {
   id: 'sandbox-1',
   provider: 'e2b',
   roomId: 'room-1',
@@ -39,8 +39,8 @@ describe('buildCodexSandboxMigrationPlan', () => {
     if (!plan.run) return;
     assert.equal(plan.dryRun, true);
     assert.equal(plan.persistenceStore, 'redis');
-    assert.equal(plan.e2bTemplateId, 'roomtalk-coco-dual-cli');
-    assert.equal(plan.runnerEnv.PYTHONPATH, '/opt/coco/src:/opt/roomtalk_coco_runner');
+    assert.equal(plan.e2bTemplateId, 'roomtalk-code-agent-dual-cli');
+    assert.equal(plan.runnerEnv.PYTHONPATH, '/opt/code-agent-engine/src:/opt/roomtalk_code_agent_runner');
     assert.equal(plan.runnerEnv.PLAYWRIGHT_BROWSERS_PATH, '/ms-playwright');
     assert.equal(plan.runnerEnv.NODE_PATH, '/usr/lib/node_modules');
   });
@@ -63,10 +63,10 @@ describe('isCodexSandboxMigrationCandidateRoom', () => {
     description: '',
     createdAt: '2026-05-03T00:00:00.000Z',
     creatorId: 'client-1',
-    type: 'coco',
+    type: 'codeAgent',
     sandboxId: 'sandbox-1',
     sandboxStatus: 'ready',
-    cocoStatus: 'idle',
+    codeAgentStatus: 'idle',
   };
 
   it('includes paused or expired sandboxes with no active runner', () => {
@@ -83,7 +83,7 @@ describe('isCodexSandboxMigrationCandidateRoom', () => {
 
   it('excludes rooms that are creating, running, missing a sandbox, or not code-agent rooms', () => {
     assert.equal(isCodexSandboxMigrationCandidateRoom({ ...room, sandboxStatus: 'creating' }), false);
-    assert.equal(isCodexSandboxMigrationCandidateRoom({ ...room, cocoStatus: 'running' }), false);
+    assert.equal(isCodexSandboxMigrationCandidateRoom({ ...room, codeAgentStatus: 'running' }), false);
     assert.equal(isCodexSandboxMigrationCandidateRoom({ ...room, sandboxId: undefined }), false);
     assert.equal(isCodexSandboxMigrationCandidateRoom({ ...room, type: 'chat' }), false);
   });
@@ -96,9 +96,9 @@ describe('probeCodexCapability', () => {
     const result = await probeCodexCapability(service, handle, { PYTHONPATH: '/runner' });
 
     assert.equal(result.ok, true);
-    assert.match(service.commands[0], /roomtalk_coco_runner\.codex_cli/);
-    assert.match(service.commands[0], /roomtalk_coco_runner\.codex_app_server/);
-    assert.match(service.commands[0], /roomtalk_coco_runner\.codex_sdk_app_server/);
+    assert.match(service.commands[0], /roomtalk_code_agent_runner\.codex_cli/);
+    assert.match(service.commands[0], /roomtalk_code_agent_runner\.codex_app_server/);
+    assert.match(service.commands[0], /roomtalk_code_agent_runner\.codex_sdk_app_server/);
     assert.match(service.commands[0], /openai_codex/);
   });
 
@@ -109,16 +109,16 @@ describe('probeCodexCapability', () => {
       service,
       handle,
       { PYTHONPATH: '/runner' },
-      'roomtalk-coco-2026-07-04-codex-app-server-v2'
+      'roomtalk-code-agent-2026-07-04-codex-app-server-v2'
     );
 
     assert.equal(result.ok, true);
-    assert.match(service.commands[0], /expected_artifact_version = "roomtalk-coco-2026-07-04-codex-app-server-v2"/);
-    assert.match(service.commands[0], /roomtalk-coco-artifact\.lock\.json/);
+    assert.match(service.commands[0], /expected_artifact_version = "roomtalk-code-agent-2026-07-04-codex-app-server-v2"/);
+    assert.match(service.commands[0], /roomtalk-code-agent-artifact\.lock\.json/);
   });
 
   it('rejects sandboxes missing the codex runner module', async () => {
-    const service = createProbeService('', '/usr/local/bin/python: No module named roomtalk_coco_runner.codex_app_server\n', 1);
+    const service = createProbeService('', '/usr/local/bin/python: No module named roomtalk_code_agent_runner.codex_app_server\n', 1);
 
     const result = await probeCodexCapability(service, handle, { PYTHONPATH: '/runner' });
 
@@ -129,7 +129,7 @@ describe('probeCodexCapability', () => {
   it('rejects sandboxes with an older artifact version', async () => {
     const service = createProbeService(
       '',
-      'artifact version mismatch: expected roomtalk-coco-2026-07-04-codex-app-server-v2, got roomtalk-coco-2026-07-04-dual-cli-candidate\n',
+      'artifact version mismatch: expected roomtalk-code-agent-2026-07-04-codex-app-server-v2, got roomtalk-code-agent-2026-07-04-dual-cli-candidate\n',
       44
     );
 
@@ -137,7 +137,7 @@ describe('probeCodexCapability', () => {
       service,
       handle,
       { PYTHONPATH: '/runner' },
-      'roomtalk-coco-2026-07-04-codex-app-server-v2'
+      'roomtalk-code-agent-2026-07-04-codex-app-server-v2'
     );
 
     assert.equal(result.ok, false);
@@ -147,7 +147,7 @@ describe('probeCodexCapability', () => {
 
 const createProbeService = (stdoutText: string, stderrText: string, exitCode: number) => {
   const commands: string[] = [];
-  const service: Pick<CocoSandboxService, 'startRunner'> & { commands: string[] } = {
+  const service: Pick<CodeAgentSandboxService, 'startRunner'> & { commands: string[] } = {
     commands,
     async startRunner(input) {
       commands.push(input.command);

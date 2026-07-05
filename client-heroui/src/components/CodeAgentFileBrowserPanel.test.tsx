@@ -507,7 +507,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     writeCodeWorkspaceFileMock.mockResolvedValue({ path: 'src/App.tsx', name: 'App.tsx', type: 'file' });
     const open = vi.spyOn(window, 'open');
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
 
     expect(await screen.findByText(/files/)).toBeTruthy();
     await waitFor(() => {
@@ -517,7 +517,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     fireEvent.click(screen.getByLabelText('codeAgentSearchWorkspaceFiles'));
     expect(openSearchMock).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     const diffFile = await screen.findByTestId('diff-file');
     expect(diffFile.textContent).toBe('src/App.tsx:export default function App() {}');
     expect(diffFile.dataset.cacheKey).toMatch(/^room-1:src\/App\.tsx:/);
@@ -545,14 +545,14 @@ describe('CodeAgentFileBrowserPanel', () => {
       truncated: false,
     });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
 
     const desktopHeader = await screen.findByTestId('code-agent-desktop-file-tree-header');
     const desktopActions = within(desktopHeader).getByTestId('code-agent-desktop-file-tree-actions');
     expect(desktopHeader.className).toContain('min-h-10');
     expect(desktopHeader.className).toContain('overflow-x-auto');
     expect(desktopHeader.contains(desktopActions)).toBe(true);
-    expect(within(desktopHeader).getByText('Coco')).toBeTruthy();
+    expect(within(desktopHeader).getByText('Code Agent')).toBeTruthy();
     expect(within(desktopHeader).getByText('2 files')).toBeTruthy();
     expect(within(desktopActions).getByLabelText('codeAgentNewFile')).toBeTruthy();
     expect(within(desktopActions).getByLabelText('codeAgentNewFolder')).toBeTruthy();
@@ -582,10 +582,10 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
     const prompt = vi.spyOn(window, 'prompt').mockReturnValue('src/New.tsx');
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" workspaceEditable={false} />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" workspaceEditable={false} />);
 
     await screen.findByText('1 files');
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     await screen.findByTestId('diff-file');
 
     const desktopActions = within(screen.getByTestId('code-agent-desktop-file-tree-header'))
@@ -625,9 +625,9 @@ describe('CodeAgentFileBrowserPanel', () => {
       encoding: 'utf-8',
     });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('1 files');
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     expect(await screen.findByTestId('diff-file')).toBeTruthy();
 
     const panel = document.querySelector<HTMLElement>('[data-file-browser-panel="room-1:workspace"]');
@@ -669,15 +669,15 @@ describe('CodeAgentFileBrowserPanel', () => {
       encoding: 'utf-8',
     }));
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('2 files');
 
     fileTreeSelectionPathRef.current = 'src/App.tsx';
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:contents:src/App.tsx');
 
     fileTreeSelectionPathRef.current = 'docs/Guide.md';
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     await waitFor(() => {
       expect(screen.getByTestId('diff-file').textContent).toBe('docs/Guide.md:contents:docs/Guide.md');
     });
@@ -729,7 +729,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     openCodeAgentRightPanelFile('room-1', 'docs/Guide.md');
     openCodeAgentRightPanelFile('room-1', 'docs/Notes.md');
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" surface="mobile" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" surface="mobile" />);
     await waitFor(() => {
       expect(screen.getByTestId('diff-file').textContent).toBe('docs/Notes.md:contents:docs/Notes.md');
     });
@@ -778,7 +778,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     }));
     openCodeAgentRightPanelFile('room-1', 'src/App.tsx');
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" surface="mobile" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" surface="mobile" />);
     await waitFor(() => {
       expect(screen.getByTestId('diff-file').textContent).toBe('src/App.tsx:contents:src/App.tsx');
     });
@@ -788,7 +788,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     const previewHeader = screen.getByTestId('code-agent-mobile-file-preview-header');
     expect(previewHeader.dataset.mobileFilePreviewHeader).toBe('true');
     const mobileBreadcrumbRow = screen.getByTestId('code-agent-mobile-file-preview-breadcrumb-row');
-    expect(within(mobileBreadcrumbRow).queryByText('Coco')).toBeNull();
+    expect(within(mobileBreadcrumbRow).queryByText('Code Agent')).toBeNull();
     expect(within(mobileBreadcrumbRow).getByText('src')).toBeTruthy();
     expect(within(mobileBreadcrumbRow).getByText('App.tsx')).toBeTruthy();
     const mobilePreviewActionRow = screen.getByTestId('code-agent-mobile-file-preview-action-row');
@@ -803,7 +803,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(previewBody.dataset.mobileView).toBe('preview');
     expect(previewContent.classList.contains('flex')).toBe(true);
     expect(previewContent.classList.contains('hidden')).toBe(false);
-    expect(screen.queryByLabelText('Coco files')).toBeNull();
+    expect(screen.queryByLabelText('codeAgentWorkspaceFiles')).toBeNull();
     expect(screen.queryByLabelText('codeAgentResizeFileExplorer')).toBeNull();
 
     fireEvent.click(screen.getByLabelText('codeAgentShowFileExplorer'));
@@ -826,7 +826,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(mobileFileTreeHeader.className).not.toContain('py-1');
     expect(mobileFileTreeHeader.className).toContain('overflow-x-auto');
     expect(mobileFileTreeHeader.contains(mobileFileTreeActions)).toBe(true);
-    expect(within(mobileFileTreeHeader).queryByText('Coco')).toBeNull();
+    expect(within(mobileFileTreeHeader).queryByText('Code Agent')).toBeNull();
     expect(within(mobileFileTreeHeader).getByText('2 files')).toBeTruthy();
     const mobileBackToPreview = within(mobileFileTreeHeader).getByLabelText('codeAgentBackToFilePreview');
     expect(mobileBackToPreview.className).toContain('h-8');
@@ -889,7 +889,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
     openCodeAgentRightPanelFile('room-1', 'src/App.tsx');
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" surface="mobile" workspaceEditable={false} />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" surface="mobile" workspaceEditable={false} />);
     await waitFor(() => {
       expect(screen.getByTestId('diff-file').textContent).toBe('src/App.tsx:export default function App() {}');
     });
@@ -941,7 +941,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     }));
     openCodeAgentRightPanelFile('room-1', 'src/nested/Deep.tsx');
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" surface="mobile" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" surface="mobile" />);
     await waitFor(() => {
       expect(screen.getByTestId('diff-file').textContent).toBe('src/nested/Deep.tsx:contents:src/nested/Deep.tsx');
     });
@@ -991,15 +991,15 @@ describe('CodeAgentFileBrowserPanel', () => {
       encoding: 'utf-8',
     }));
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('2 files');
 
     fileTreeSelectionPathRef.current = 'src/App.tsx';
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:contents:src/App.tsx');
 
     fileTreeSelectionPathRef.current = 'docs/Guide.md';
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
 
     await waitFor(() => {
       const tabs = within(screen.getByTestId('code-agent-file-surface-tabs'));
@@ -1017,7 +1017,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       truncated: false,
     });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('1 files');
 
     expect(screen.getByTestId('code-agent-file-surface-tabs-frame')).toBeTruthy();
@@ -1057,13 +1057,13 @@ describe('CodeAgentFileBrowserPanel', () => {
       encoding: 'utf-8',
     });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('1 files');
     expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('codeAgentWorkspaceFiles');
     expect(screen.queryByTestId('diff-file')).toBeNull();
 
     fileTreeSelectionPathRef.current = 'src/App.tsx';
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     await waitFor(() => {
       expect(screen.getByTestId('diff-file').textContent).toBe('src/App.tsx:contents:src/App.tsx');
     });
@@ -1108,7 +1108,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       truncated: false,
     });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" surface="mobile" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" surface="mobile" />);
 
     const mobileFileTreeHeader = await screen.findByTestId('code-agent-mobile-file-tree-header');
     expect(within(mobileFileTreeHeader).getByText('1 files')).toBeTruthy();
@@ -1134,7 +1134,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       updatedAt: '2026-07-02T00:00:00.000Z',
     }]);
 
-    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
 
     await screen.findByText('0 files');
     await waitFor(() => {
@@ -1175,7 +1175,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       updatedAt: '2026-07-02T00:00:00.000Z',
     }]);
 
-    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" surface="mobile" />);
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" surface="mobile" />);
 
     await screen.findByText('0 files');
     await waitFor(() => {
@@ -1226,7 +1226,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       },
     });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
 
     await screen.findByText('0 files');
     await waitFor(() => {
@@ -1268,7 +1268,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       },
     });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" surface="mobile" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" surface="mobile" />);
 
     await screen.findByText('0 files');
     await waitFor(() => {
@@ -1288,7 +1288,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       truncated: false,
     });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('0 files');
 
     fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
@@ -1315,7 +1315,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       truncated: false,
     });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" surface="mobile" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" surface="mobile" />);
     await screen.findByText('0 files');
 
     fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
@@ -1340,7 +1340,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
     const open = vi.spyOn(window, 'open').mockImplementation(() => null);
 
-    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
 
     await screen.findByText('0 files');
     fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
@@ -1527,7 +1527,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
     const open = vi.spyOn(window, 'open').mockImplementation(() => null);
 
-    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" surface="mobile" />);
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" surface="mobile" />);
 
     await screen.findByText('0 files');
     fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
@@ -1600,7 +1600,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       truncated: false,
     });
 
-    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
 
     await screen.findByText('0 files');
     fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
@@ -1663,7 +1663,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       truncated: false,
     });
 
-    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
 
     await screen.findByText('0 files');
     fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
@@ -1710,7 +1710,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       },
     ]);
 
-    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
 
     await screen.findByText('0 files');
     fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
@@ -1752,7 +1752,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       },
     ]);
 
-    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" surface="mobile" />);
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" surface="mobile" />);
 
     await screen.findByText('0 files');
     fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
@@ -1786,12 +1786,12 @@ describe('CodeAgentFileBrowserPanel', () => {
       truncated: false,
     });
     createCodeWorkspaceAssetUrlMock.mockResolvedValue({
-      relativeUrl: '/api/coco/workspace-assets/token/report.html',
+      relativeUrl: '/api/code-agent/workspace-assets/token/report.html',
       expiresAt: '2026-06-30T12:15:00.000Z',
     });
-    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/coco/workspace-assets/token/report.html');
+    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/code-agent/workspace-assets/token/report.html');
 
-    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
 
     await screen.findByText('1 files');
     fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
@@ -1805,7 +1805,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       expect(createCodeWorkspaceAssetUrlMock).toHaveBeenCalledWith('room-1', 'output/report.html', expect.any(Object));
     });
     await waitFor(() => {
-      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/coco/workspace-assets/token/report.html');
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/code-agent/workspace-assets/token/report.html');
     });
     expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('report.html');
   });
@@ -1818,7 +1818,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       truncated: false,
     });
 
-    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
 
     await screen.findByText('1 files');
     fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
@@ -1848,7 +1848,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       encoding: 'utf-8',
     });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('1 files');
     fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
     fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentChanges'));
@@ -1875,7 +1875,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       truncated: false,
     });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('2 files');
     fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
     fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentChanges'));
@@ -1927,7 +1927,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     render(
       <CodeAgentFileBrowserPanel
         roomId="room-1"
-        projectName="Coco"
+        projectName="Code Agent"
         surface="mobile"
         workspaceChanges={{
           available: true,
@@ -2006,7 +2006,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       truncated: false,
     });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('2 files');
     fireEvent.click(screen.getByLabelText('codeAgentAddWorkspaceSurface'));
     fireEvent.click(within(screen.getByTestId('code-agent-file-surface-add-menu')).getByText('codeAgentChanges'));
@@ -2050,7 +2050,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     render(
       <CodeAgentFileBrowserPanel
         roomId="room-1"
-        projectName="Coco"
+        projectName="Code Agent"
         workspaceChanges={{
           available: true,
           changedFiles: ['src/App.tsx'],
@@ -2082,7 +2082,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     render(
       <CodeAgentFileBrowserPanel
         roomId="room-1"
-        projectName="Coco"
+        projectName="Code Agent"
         sandboxStatus="ready"
         sandboxUpdatedAt="2026-07-01T00:00:00.000Z"
         workspaceChanges={{
@@ -2126,13 +2126,13 @@ describe('CodeAgentFileBrowserPanel', () => {
 
     const openFile = async (path: string) => {
       fileTreeSelectionPathRef.current = path;
-      fireEvent.click(screen.getByLabelText('Coco files'));
+      fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
       await waitFor(() => {
         expect(screen.getByTestId('diff-file').textContent).toBe(`${path}:contents:${path}`);
       });
     };
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('3 files');
     await openFile('src/App.tsx');
     await openFile('docs/Guide.md');
@@ -2226,11 +2226,11 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
 
     try {
-      render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+      render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
       await screen.findByText('1 files');
 
       fileTreeSelectionPathRef.current = 'src/App.tsx';
-      fireEvent.click(screen.getByLabelText('Coco files'));
+      fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
       expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:contents:src/App.tsx');
 
       const addSurfaceButton = screen.getByLabelText('codeAgentAddWorkspaceSurface') as HTMLButtonElement;
@@ -2289,15 +2289,15 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
     const prompt = vi.spyOn(window, 'prompt').mockReturnValue(null);
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
 
     expect(await screen.findByText('1 files')).toBeTruthy();
     fileTreeSelectionPathRef.current = 'src/App.tsx';
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:export default function App() {}');
 
     fileTreeSelectionPathRef.current = 'src/components/';
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
 
     expect(screen.getByTestId('diff-file').textContent).toBe('src/App.tsx:export default function App() {}');
     fireEvent.click(screen.getByLabelText('codeAgentNewFile'));
@@ -2319,9 +2319,9 @@ describe('CodeAgentFileBrowserPanel', () => {
       encoding: 'utf-8',
     });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('1 files');
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
 
     expect((await screen.findByTestId('diff-file')).dataset.overflow).toBe('scroll');
 
@@ -2348,9 +2348,9 @@ describe('CodeAgentFileBrowserPanel', () => {
       encoding: 'utf-8',
     });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('1 files');
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     await screen.findByTestId('diff-file');
 
     expect(diffFileOptionsRef.current?.theme).toBe('pierre-dark');
@@ -2372,9 +2372,9 @@ describe('CodeAgentFileBrowserPanel', () => {
       expiresAt: string;
     }>();
     createCodeWorkspaceAssetUrlMock.mockReturnValue(assetUrl.promise);
-    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/coco/workspace-assets/token/report.html');
+    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/code-agent/workspace-assets/token/report.html');
 
-    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
 
     expect(await screen.findByText('1 files')).toBeTruthy();
     selectionHandlerRef.current?.(['output/report.html']);
@@ -2387,14 +2387,14 @@ describe('CodeAgentFileBrowserPanel', () => {
 
     await act(async () => {
       assetUrl.resolve({
-        relativeUrl: '/api/coco/workspace-assets/token/report.html',
+        relativeUrl: '/api/code-agent/workspace-assets/token/report.html',
         expiresAt: '2026-06-30T12:15:00.000Z',
       });
     });
 
     const iframe = container.querySelector('iframe') as HTMLIFrameElement | null;
     expect(iframe).toBeTruthy();
-    expect(iframe?.getAttribute('src')).toBe('/api/coco/workspace-assets/token/report.html');
+    expect(iframe?.getAttribute('src')).toBe('/api/code-agent/workspace-assets/token/report.html');
     expect(screen.getByRole('status', { name: 'codeAgentLoadingBrowserPreview' })).toBeTruthy();
     fireEvent.load(iframe as HTMLIFrameElement);
     await waitFor(() => {
@@ -2415,9 +2415,9 @@ describe('CodeAgentFileBrowserPanel', () => {
       expiresAt: string;
     }>();
     createCodeWorkspaceAssetUrlMock.mockReturnValue(assetUrl.promise);
-    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/coco/workspace-assets/token/logo.png');
+    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/code-agent/workspace-assets/token/logo.png');
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
 
     expect(await screen.findByText('1 files')).toBeTruthy();
     selectionHandlerRef.current?.(['assets/logo.png']);
@@ -2425,13 +2425,13 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(await screen.findByRole('status', { name: 'codeAgentPreparingImagePreview' })).toBeTruthy();
     await act(async () => {
       assetUrl.resolve({
-        relativeUrl: '/api/coco/workspace-assets/token/logo.png',
+        relativeUrl: '/api/code-agent/workspace-assets/token/logo.png',
         expiresAt: '2026-06-30T12:15:00.000Z',
       });
     });
 
     const image = await screen.findByAltText('assets/logo.png') as HTMLImageElement;
-    expect(image.getAttribute('src')).toBe('/api/coco/workspace-assets/token/logo.png');
+    expect(image.getAttribute('src')).toBe('/api/code-agent/workspace-assets/token/logo.png');
     expect(screen.queryByLabelText('codeAgentShowSource')).toBeNull();
     expect(screen.getByRole('status', { name: 'codeAgentLoadingImagePreview' })).toBeTruthy();
 
@@ -2480,7 +2480,7 @@ describe('CodeAgentFileBrowserPanel', () => {
 
     fireEvent.click(screen.getByLabelText('codeAgentRefreshWorkspaceFile'));
     await waitFor(() => {
-      expect(image.getAttribute('src')).toBe('/api/coco/workspace-assets/token/logo.png?revision=1');
+      expect(image.getAttribute('src')).toBe('/api/code-agent/workspace-assets/token/logo.png?revision=1');
     });
 
     fireEvent.error(image);
@@ -2498,12 +2498,12 @@ describe('CodeAgentFileBrowserPanel', () => {
       truncated: false,
     });
     createCodeWorkspaceAssetUrlMock.mockResolvedValue({
-      relativeUrl: '/api/coco/workspace-assets/token/diagram.svg',
+      relativeUrl: '/api/code-agent/workspace-assets/token/diagram.svg',
       expiresAt: '2026-06-30T12:15:00.000Z',
     });
-    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/coco/workspace-assets/token/diagram.svg');
+    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/code-agent/workspace-assets/token/diagram.svg');
 
-    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
 
     expect(await screen.findByText('1 files')).toBeTruthy();
     selectionHandlerRef.current?.(['assets/diagram.svg']);
@@ -2515,7 +2515,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(screen.queryByLabelText('codeAgentShowSource')).toBeNull();
     const iframe = container.querySelector('iframe') as HTMLIFrameElement | null;
     expect(iframe).toBeTruthy();
-    expect(iframe?.getAttribute('src')).toBe('/api/coco/workspace-assets/token/diagram.svg');
+    expect(iframe?.getAttribute('src')).toBe('/api/code-agent/workspace-assets/token/diagram.svg');
     fireEvent.error(iframe as HTMLIFrameElement);
     await waitFor(() => {
       expect(screen.getByText('codeAgentBrowserPreviewFailed')).toBeTruthy();
@@ -2532,23 +2532,23 @@ describe('CodeAgentFileBrowserPanel', () => {
       truncated: false,
     });
     createCodeWorkspaceAssetUrlMock.mockResolvedValue({
-      relativeUrl: '/api/coco/workspace-assets/token/report.html',
+      relativeUrl: '/api/code-agent/workspace-assets/token/report.html',
       expiresAt: '2026-06-30T12:15:00.000Z',
     });
-    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/coco/workspace-assets/token/report.html');
+    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/code-agent/workspace-assets/token/report.html');
 
-    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
 
     expect(await screen.findByText('1 files')).toBeTruthy();
     selectionHandlerRef.current?.(['output/report.html']);
     await waitFor(() => {
-      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/coco/workspace-assets/token/report.html');
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/code-agent/workspace-assets/token/report.html');
     });
 
     fireEvent.click(screen.getByLabelText('codeAgentRefreshWorkspaceFile'));
 
     await waitFor(() => {
-      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/coco/workspace-assets/token/report.html?revision=1');
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/code-agent/workspace-assets/token/report.html?revision=1');
     });
     expect(loadCodeWorkspaceFileMock).not.toHaveBeenCalled();
     expect(createCodeWorkspaceAssetUrlMock).toHaveBeenCalledTimes(1);
@@ -2570,7 +2570,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       encoding: 'utf-8',
     }));
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
 
     expect(await screen.findByText('1 files')).toBeTruthy();
     selectionHandlerRef.current?.(['src/App.tsx']);
@@ -2595,10 +2595,10 @@ describe('CodeAgentFileBrowserPanel', () => {
       truncated: false,
     });
     createCodeWorkspaceAssetUrlMock.mockResolvedValue({
-      relativeUrl: '/api/coco/workspace-assets/token/report.html',
+      relativeUrl: '/api/code-agent/workspace-assets/token/report.html',
       expiresAt: '2026-06-30T12:15:00.000Z',
     });
-    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/coco/workspace-assets/token/report.html');
+    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/code-agent/workspace-assets/token/report.html');
     loadCodeWorkspaceFileMock.mockResolvedValue({
       path: 'output/report.html',
       content: '<!doctype html><main>Report</main>',
@@ -2608,12 +2608,12 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
     writeCodeWorkspaceFileMock.mockResolvedValue({ path: 'output/report.html', name: 'report.html', type: 'file' });
 
-    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
 
     expect(await screen.findByText('1 files')).toBeTruthy();
     selectionHandlerRef.current?.(['output/report.html']);
     await waitFor(() => {
-      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/coco/workspace-assets/token/report.html');
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/code-agent/workspace-assets/token/report.html');
     });
 
     fireEvent.click(screen.getByLabelText('codeAgentShowSource'));
@@ -2632,7 +2632,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
 
     await waitFor(() => {
-      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/coco/workspace-assets/token/report.html?revision=1');
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/code-agent/workspace-assets/token/report.html?revision=1');
     });
   });
 
@@ -2644,10 +2644,10 @@ describe('CodeAgentFileBrowserPanel', () => {
       truncated: false,
     });
     createCodeWorkspaceAssetUrlMock.mockResolvedValue({
-      relativeUrl: '/api/coco/workspace-assets/token/report.html',
+      relativeUrl: '/api/code-agent/workspace-assets/token/report.html',
       expiresAt: '2026-06-30T12:15:00.000Z',
     });
-    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/coco/workspace-assets/token/report.html');
+    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/code-agent/workspace-assets/token/report.html');
     loadCodeWorkspaceFileMock.mockResolvedValue({
       path: 'output/report.html',
       content: '<!doctype html><main>Report</main>',
@@ -2656,7 +2656,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       encoding: 'utf-8',
     });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
 
     expect(await screen.findByText('1 files')).toBeTruthy();
     selectionHandlerRef.current?.(['output/report.html']);
@@ -2682,10 +2682,10 @@ describe('CodeAgentFileBrowserPanel', () => {
       truncated: false,
     });
     createCodeWorkspaceAssetUrlMock.mockResolvedValue({
-      relativeUrl: '/api/coco/workspace-assets/token/report.html',
+      relativeUrl: '/api/code-agent/workspace-assets/token/report.html',
       expiresAt: '2026-06-30T12:15:00.000Z',
     });
-    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/coco/workspace-assets/token/report.html');
+    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/code-agent/workspace-assets/token/report.html');
     loadCodeWorkspaceFileMock.mockResolvedValue({
       path: 'output/report.html',
       content: '<!doctype html><main>Report</main>',
@@ -2696,7 +2696,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     const open = vi.spyOn(window, 'open').mockImplementation(() => null);
 
     openCodeAgentRightPanelFile('room-1', 'output/report.html');
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" surface="mobile" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" surface="mobile" />);
 
     const mobileHeader = await screen.findByTestId('code-agent-mobile-file-preview-header');
     await waitFor(() => {
@@ -2708,7 +2708,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(externalOpenButton.className).toContain('w-8');
 
     fireEvent.click(externalOpenButton);
-    expect(open).toHaveBeenCalledWith('/api/coco/workspace-assets/token/report.html', '_blank', 'noopener,noreferrer');
+    expect(open).toHaveBeenCalledWith('/api/code-agent/workspace-assets/token/report.html', '_blank', 'noopener,noreferrer');
 
     fireEvent.click(within(mobileHeader).getByLabelText('codeAgentShowSource'));
     expect(await screen.findByTestId('diff-file')).toBeTruthy();
@@ -2728,13 +2728,13 @@ describe('CodeAgentFileBrowserPanel', () => {
       truncated: false,
     });
     createCodeWorkspaceAssetUrlMock.mockResolvedValue({
-      relativeUrl: '/api/coco/workspace-assets/token/report.html',
+      relativeUrl: '/api/code-agent/workspace-assets/token/report.html',
       expiresAt: '2026-06-30T12:15:00.000Z',
     });
-    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/coco/workspace-assets/token/report.html');
+    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/code-agent/workspace-assets/token/report.html');
     const open = vi.spyOn(window, 'open');
 
-    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
 
     expect(await screen.findByText('1 files')).toBeTruthy();
     selectionHandlerRef.current?.(['output/report.html']);
@@ -2751,7 +2751,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(createCodeWorkspaceAssetUrlMock).toHaveBeenLastCalledWith('room-1', 'output/report.html', expect.any(Object));
     expect(screen.queryByLabelText('codeAgentShowSource')).toBeNull();
     expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('report.html');
-    expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/coco/workspace-assets/token/report.html');
+    expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/code-agent/workspace-assets/token/report.html');
   });
 
   it('opens a requested workspace file from an external diff action', async () => {
@@ -2773,7 +2773,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     render(
       <CodeAgentFileBrowserPanel
         roomId="room-1"
-        projectName="Coco"
+        projectName="Code Agent"
         openFileRequest={{ path: '/workspace/src/App.tsx', requestId: 1 }}
       />,
     );
@@ -2803,7 +2803,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     render(
       <CodeAgentFileBrowserPanel
         roomId="room-1"
-        projectName="Coco"
+        projectName="Code Agent"
         openFileRequest={{ path: '/workspace/src/App.tsx', requestId: 1 }}
       />,
     );
@@ -2840,21 +2840,21 @@ describe('CodeAgentFileBrowserPanel', () => {
       return new Promise(() => undefined);
     });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('2 files');
 
     fileTreeSelectionPathRef.current = 'src/App.tsx';
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:cached app');
 
     fileTreeSelectionPathRef.current = 'src/Other.ts';
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     await waitFor(() => {
       expect(screen.queryByText('src/App.tsx:cached app')).toBeNull();
     });
 
     fileTreeSelectionPathRef.current = 'src/App.tsx';
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
 
     expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:cached app');
     expect(await screen.findByText('socket read failed')).toBeTruthy();
@@ -2879,17 +2879,17 @@ describe('CodeAgentFileBrowserPanel', () => {
     }));
     writeCodeWorkspaceFileMock.mockRejectedValue(new Error('save failed for app'));
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('2 files');
 
     fileTreeSelectionPathRef.current = 'src/App.tsx';
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     const appFile = await screen.findByTestId('diff-file');
     expect(appFile.textContent).toBe('src/App.tsx:app content');
     fireEvent.click(appFile);
 
     fileTreeSelectionPathRef.current = 'src/Other.ts';
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
 
     expect((await screen.findByTestId('diff-file')).textContent).toBe('src/Other.ts:other content');
     await waitFor(() => {
@@ -2925,9 +2925,9 @@ describe('CodeAgentFileBrowserPanel', () => {
       encoding: 'utf-8',
     });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('1 files');
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
 
     expect((await screen.findByTestId('diff-file')).textContent).toBe(`${deepPath}:export function Button() {}`);
     const breadcrumbs = screen.getByTestId('code-agent-file-breadcrumbs');
@@ -2955,7 +2955,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
     fileTreeSearchStateRef.current = { isOpen: true, value: 'cmp' };
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
 
     expect(await screen.findByText(/^2 files · partial/)).toBeTruthy();
     await waitFor(() => {
@@ -3005,7 +3005,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     const { rerender } = render(
       <CodeAgentFileBrowserPanel
         roomId="room-1"
-        projectName="Coco"
+        projectName="Code Agent"
         sandboxStatus="ready"
         sandboxUpdatedAt="2026-06-30T10:00:00.000Z"
       />,
@@ -3023,7 +3023,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     rerender(
       <CodeAgentFileBrowserPanel
         roomId="room-1"
-        projectName="Coco"
+        projectName="Code Agent"
         sandboxStatus="ready"
         sandboxUpdatedAt="2026-06-30T10:01:00.000Z"
       />,
@@ -3061,7 +3061,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     loadCodeWorkspaceEntriesMock.mockReturnValue(new Promise(() => {}));
     loadCodeWorkspaceFileMock.mockReturnValue(new Promise(() => {}));
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
 
     await waitFor(() => {
       expect(loadCodeWorkspaceEntriesMock).toHaveBeenCalledTimes(1);
@@ -3078,7 +3078,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     loadCodeWorkspaceEntriesMock.mockRejectedValue(new Error('Workspace sandbox is not ready'));
     loadCodeWorkspaceFileMock.mockReturnValue(new Promise(() => {}));
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
 
     await waitFor(() => {
       expect(readCodeAgentRightPanelState('room-1')).toMatchObject({
@@ -3102,7 +3102,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     const { rerender } = render(
       <CodeAgentFileBrowserPanel
         roomId="room-1"
-        projectName="Coco"
+        projectName="Code Agent"
         sandboxStatus="none"
       />,
     );
@@ -3112,7 +3112,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     rerender(
       <CodeAgentFileBrowserPanel
         roomId="room-1"
-        projectName="Coco"
+        projectName="Code Agent"
         sandboxStatus="ready"
         sandboxUpdatedAt="2026-06-30T10:00:00.000Z"
       />,
@@ -3149,7 +3149,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     const { rerender } = render(
       <CodeAgentFileBrowserPanel
         roomId="room-1"
-        projectName="Coco"
+        projectName="Code Agent"
         sandboxStatus="ready"
         sandboxUpdatedAt="2026-06-30T10:00:00.000Z"
       />,
@@ -3162,7 +3162,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     rerender(
       <CodeAgentFileBrowserPanel
         roomId="room-1"
-        projectName="Coco"
+        projectName="Code Agent"
         sandboxStatus="ready"
         sandboxUpdatedAt="2026-06-30T10:01:00.000Z"
       />,
@@ -3213,7 +3213,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     const { rerender } = render(
       <CodeAgentFileBrowserPanel
         roomId="room-1"
-        projectName="Coco"
+        projectName="Code Agent"
         sandboxStatus="ready"
         sandboxUpdatedAt="2026-06-30T10:00:00.000Z"
       />,
@@ -3230,7 +3230,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     rerender(
       <CodeAgentFileBrowserPanel
         roomId="room-1"
-        projectName="Coco"
+        projectName="Code Agent"
         sandboxStatus="ready"
         sandboxUpdatedAt="2026-06-30T10:01:00.000Z"
       />,
@@ -3267,7 +3267,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
     createCodeWorkspaceAssetUrlMock
       .mockResolvedValueOnce({
-        relativeUrl: '/api/coco/workspace-assets/old/report.html',
+        relativeUrl: '/api/code-agent/workspace-assets/old/report.html',
         expiresAt: '2026-06-30T12:15:00.000Z',
       })
       .mockReturnValueOnce(nextAsset.promise);
@@ -3276,7 +3276,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     const { container, rerender } = render(
       <CodeAgentFileBrowserPanel
         roomId="room-1"
-        projectName="Coco"
+        projectName="Code Agent"
         sandboxStatus="ready"
         sandboxUpdatedAt="2026-06-30T10:00:00.000Z"
       />,
@@ -3285,13 +3285,13 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(await screen.findByText('1 files')).toBeTruthy();
     selectionHandlerRef.current?.(['output/report.html']);
     await waitFor(() => {
-      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/coco/workspace-assets/old/report.html');
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/code-agent/workspace-assets/old/report.html');
     });
 
     rerender(
       <CodeAgentFileBrowserPanel
         roomId="room-1"
-        projectName="Coco"
+        projectName="Code Agent"
         sandboxStatus="ready"
         sandboxUpdatedAt="2026-06-30T10:01:00.000Z"
       />,
@@ -3305,13 +3305,13 @@ describe('CodeAgentFileBrowserPanel', () => {
 
     await act(async () => {
       nextAsset.resolve({
-        relativeUrl: '/api/coco/workspace-assets/new/report.html',
+        relativeUrl: '/api/code-agent/workspace-assets/new/report.html',
         expiresAt: '2026-06-30T12:16:00.000Z',
       });
     });
 
     await waitFor(() => {
-      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/coco/workspace-assets/new/report.html');
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/code-agent/workspace-assets/new/report.html');
     });
   });
 
@@ -3331,9 +3331,9 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
     writeCodeWorkspaceFileMock.mockResolvedValue({ path: 'src/App.tsx', name: 'App.tsx', type: 'file' });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('1 files');
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     const diffFile = await screen.findByTestId('diff-file');
 
     vi.useFakeTimers();
@@ -3366,9 +3366,9 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
     writeCodeWorkspaceFileMock.mockReturnValue(pendingWrite.promise);
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('1 files');
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     await screen.findByTestId('diff-file');
 
     vi.useFakeTimers();
@@ -3400,9 +3400,9 @@ describe('CodeAgentFileBrowserPanel', () => {
       encoding: 'utf-8',
     });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('1 files');
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:export default function App() {}');
 
     fireEvent.pointerDown(document.body);
@@ -3429,12 +3429,12 @@ describe('CodeAgentFileBrowserPanel', () => {
     render(
       <CodeAgentFileBrowserPanel
         roomId="room-1"
-        projectName="Coco"
+        projectName="Code Agent"
         onAddReviewComment={onAddReviewComment}
       />,
     );
     await screen.findByText('1 files');
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:line 1\nline 2\nline 3\nline 4');
 
     fireEvent.click(screen.getByLabelText('select-lines'));
@@ -3475,7 +3475,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     render(
       <CodeAgentFileBrowserPanel
         roomId="room-1"
-        projectName="Coco"
+        projectName="Code Agent"
         surface="mobile"
         onAddReviewComment={onAddReviewComment}
       />,
@@ -3533,7 +3533,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
     openCodeAgentRightPanelFile('room-1', 'src/App.tsx');
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" surface="mobile" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" surface="mobile" />);
     await screen.findByTestId('diff-file');
 
     fireEvent.click(screen.getByLabelText('select-lines'));
@@ -3575,12 +3575,12 @@ describe('CodeAgentFileBrowserPanel', () => {
     const { rerender } = render(
       <CodeAgentFileBrowserPanel
         roomId="room-1"
-        projectName="Coco"
+        projectName="Code Agent"
         reviewComments={[reviewComment]}
       />,
     );
     await screen.findByText('1 files');
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:line 1\nline 2\nline 3\nline 4');
 
     expect(await screen.findByText('Persisted file note.')).toBeTruthy();
@@ -3589,7 +3589,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     rerender(
       <CodeAgentFileBrowserPanel
         roomId="room-1"
-        projectName="Coco"
+        projectName="Code Agent"
         reviewComments={[]}
       />,
     );
@@ -3618,12 +3618,12 @@ describe('CodeAgentFileBrowserPanel', () => {
     render(
       <CodeAgentFileBrowserPanel
         roomId="room-1"
-        projectName="Coco"
+        projectName="Code Agent"
         onAddReviewComment={onAddReviewComment}
       />,
     );
     await screen.findByText('1 files');
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     await screen.findByTestId('diff-file');
 
     fireEvent.click(screen.getByLabelText('select-lines'));
@@ -3683,9 +3683,9 @@ describe('CodeAgentFileBrowserPanel', () => {
       encoding: 'utf-8',
     });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('1 files');
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     await screen.findByTestId('diff-file');
 
     fireEvent.click(screen.getByLabelText('select-lines'));
@@ -3717,9 +3717,9 @@ describe('CodeAgentFileBrowserPanel', () => {
       .mockReturnValueOnce(firstWrite.promise)
       .mockResolvedValueOnce({ path: 'src/App.tsx', name: 'App.tsx', type: 'file' });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('1 files');
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     await screen.findByTestId('diff-file');
 
     vi.useFakeTimers();
@@ -3775,9 +3775,9 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
     writeCodeWorkspaceFileMock.mockReturnValue(pendingWrite.promise);
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('1 files');
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:export default function App() {}');
 
     vi.useFakeTimers();
@@ -3797,7 +3797,7 @@ describe('CodeAgentFileBrowserPanel', () => {
 
     fireEvent.click(screen.getByLabelText('close src/App.tsx'));
     fireEvent.click(within(screen.getByTestId('code-agent-file-surface-empty')).getByText('codeAgentWorkspaceFiles'));
-    fireEvent.click(await screen.findByLabelText('Coco files'));
+    fireEvent.click(await screen.findByLabelText('codeAgentWorkspaceFiles'));
 
     await waitFor(() => {
       expect(screen.getByTestId('diff-file').textContent).toBe('src/App.tsx:export const pending = true;');
@@ -3825,9 +3825,9 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
     writeCodeWorkspaceFileMock.mockResolvedValue({ path: 'src/App.tsx', name: 'App.tsx', type: 'file' });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('1 files');
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:export default function App() {}');
 
     vi.useFakeTimers();
@@ -3889,9 +3889,9 @@ describe('CodeAgentFileBrowserPanel', () => {
       });
     writeCodeWorkspaceFileMock.mockResolvedValue({ path: 'src/App.tsx', name: 'App.tsx', type: 'file' });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('1 files');
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:export default function App() {}');
 
     vi.useFakeTimers();
@@ -3930,11 +3930,11 @@ describe('CodeAgentFileBrowserPanel', () => {
     }));
     writeCodeWorkspaceFileMock.mockReturnValueOnce(appWrite.promise);
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('2 files');
 
     fileTreeSelectionPathRef.current = 'src/App.tsx';
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     expect((await screen.findByTestId('diff-file')).textContent).toBe('src/App.tsx:app content');
     vi.useFakeTimers();
     nextEditorContentsRef.current = 'export const app = true;';
@@ -3945,7 +3945,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     vi.useRealTimers();
 
     fileTreeSelectionPathRef.current = 'src/Other.ts';
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     expect((await screen.findByTestId('diff-file')).textContent).toBe('src/Other.ts:other content');
 
     await act(async () => {
@@ -3973,9 +3973,9 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
     writeCodeWorkspaceFileMock.mockResolvedValue({ path: 'README.md', name: 'README.md', type: 'file' });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('1 files');
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     expect((await screen.findByTestId('diff-file')).textContent).toBe('README.md:- [ ] First\n- [x] Second\n');
     expect(screen.queryByRole('checkbox')).toBeNull();
 
@@ -4015,9 +4015,9 @@ describe('CodeAgentFileBrowserPanel', () => {
       encoding: 'utf-8',
     }));
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('2 files');
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     expect((await screen.findByTestId('diff-file')).textContent).toBe('README.md:[Guide](docs/Guide.md#L2)');
 
     fireEvent.click(screen.getByLabelText('codeAgentShowRenderedMarkdown'));
@@ -4046,15 +4046,15 @@ describe('CodeAgentFileBrowserPanel', () => {
       encoding: 'utf-8',
     });
     createCodeWorkspaceAssetUrlMock.mockResolvedValue({
-      relativeUrl: '/api/coco/workspace-assets/token/report.html',
+      relativeUrl: '/api/code-agent/workspace-assets/token/report.html',
       expiresAt: '2026-06-30T12:15:00.000Z',
     });
-    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/coco/workspace-assets/token/report.html');
+    resolveCodeWorkspaceAssetUrlMock.mockReturnValue('/api/code-agent/workspace-assets/token/report.html');
     const open = vi.spyOn(window, 'open');
 
-    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('2 files');
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     expect((await screen.findByTestId('diff-file')).textContent).toBe('README.md:[Report](output/report.html)');
 
     fireEvent.click(screen.getByLabelText('codeAgentShowRenderedMarkdown'));
@@ -4065,7 +4065,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       expect(createCodeWorkspaceAssetUrlMock).toHaveBeenCalledWith('room-1', 'output/report.html', expect.any(Object));
     });
     expect(screen.getByTestId('code-agent-file-surface-tabs').textContent).toContain('report.html');
-    expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/coco/workspace-assets/token/report.html');
+    expect(container.querySelector('iframe')?.getAttribute('src')).toBe('/api/code-agent/workspace-assets/token/report.html');
     expect(loadCodeWorkspaceFileMock).toHaveBeenCalledTimes(1);
     expect(loadCodeWorkspaceFileMock).not.toHaveBeenCalledWith('room-1', 'output/report.html', expect.any(Object));
   });
@@ -4085,7 +4085,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       encoding: 'utf-8',
     });
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('1 files');
     selectionHandlerRef.current?.(['logs/big.log']);
 
@@ -4149,9 +4149,9 @@ describe('CodeAgentFileBrowserPanel', () => {
       .mockReturnValueOnce('src/Main.tsx');
     vi.spyOn(window, 'confirm').mockReturnValue(true);
 
-    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Coco" />);
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
     await screen.findByText('1 files');
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
 
     fireEvent.click(screen.getByLabelText('codeAgentNewFile'));
     fireEvent.click(screen.getByLabelText('codeAgentNewFolder'));
@@ -4160,7 +4160,7 @@ describe('CodeAgentFileBrowserPanel', () => {
       expect(createCodeWorkspaceDirectoryMock).toHaveBeenCalledWith('room-1', 'src/components');
     });
 
-    fireEvent.click(screen.getByLabelText('Coco files'));
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
     fireEvent.click(screen.getByLabelText('codeAgentRenameFile'));
     await waitFor(() => {
       expect(renameCodeWorkspaceEntryMock).toHaveBeenCalledWith('room-1', 'src/App.tsx', 'src/Main.tsx');

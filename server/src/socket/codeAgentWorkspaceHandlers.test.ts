@@ -1,8 +1,8 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
-import { createCocoAccessControl } from '../services/cocoAccessControl';
+import { createCodeAgentAccessControl } from '../services/codeAgentAccessControl';
 import { CodeWorkspaceAssetAccess } from '../services/codeWorkspaceAssetAccess';
-import { CocoWorkspaceChanges, CocoWorkspaceEntry, CocoWorkspacePreviewServer, CocoWorkspaceRef } from '../services/cocoSandboxService';
+import { CodeAgentWorkspaceChanges, CodeAgentWorkspaceEntry, CodeAgentWorkspacePreviewServer, CodeAgentWorkspaceRef } from '../services/codeAgentSandboxService';
 import { Message, Room, RoomMember } from '../types';
 import { registerCodeAgentWorkspaceHandlers } from './codeAgentWorkspaceHandlers';
 
@@ -46,21 +46,21 @@ const logger = {
 
 const room = (overrides: Partial<Room> = {}): Room => ({
   id: 'room-1',
-  name: 'Coco',
+  name: 'Code Agent',
   description: '',
   createdAt: '2026-05-03T00:00:00.000Z',
   creatorId: 'client-1',
-  type: 'coco',
+  type: 'codeAgent',
   sandboxStatus: 'ready',
   sandboxId: 'sandbox-1',
-  cocoStatus: 'idle',
-  cocoSessionId: 'session-1',
+  codeAgentStatus: 'idle',
+  codeAgentSessionId: 'session-1',
   ...overrides,
 });
 
 const message = (overrides: Partial<Message>): Message => ({
   id: overrides.id || 'message-1',
-  clientId: overrides.clientId || 'coco_runner',
+  clientId: overrides.clientId || 'code_agent_runner',
   content: overrides.content || '',
   roomId: overrides.roomId || 'room-1',
   timestamp: '2026-05-03T00:00:00.000Z',
@@ -90,16 +90,16 @@ const createHarness = (options: {
   currentRoom?: Room;
   members?: RoomMember[];
   messages?: Message[];
-  workspaceEntries?: CocoWorkspaceEntry[];
-  workspaceRefs?: CocoWorkspaceRef[];
+  workspaceEntries?: CodeAgentWorkspaceEntry[];
+  workspaceRefs?: CodeAgentWorkspaceRef[];
   workspaceHeadRef?: string;
-  workspaceChanges?: CocoWorkspaceChanges;
+  workspaceChanges?: CodeAgentWorkspaceChanges;
   workspaceDiffPatch?: string;
   workspaceFileContent?: string;
-  workspacePreviewServers?: CocoWorkspacePreviewServer[];
+  workspacePreviewServers?: CodeAgentWorkspacePreviewServer[];
   workspaceRoot?: string;
   workspacePreviewTargetResolvedUrl?: string;
-  cocoAccess?: ReturnType<typeof createCocoAccessControl>;
+  codeAgentAccess?: ReturnType<typeof createCodeAgentAccessControl>;
   codeWorkspaceAssetAccess?: CodeWorkspaceAssetAccess;
   publishedArtifacts?: any[];
 } = {}) => {
@@ -146,7 +146,7 @@ const createHarness = (options: {
     openaiLogger: logger as any,
     normalizeAIModel: (() => ({})) as any,
     getAIClientForModel: (() => ({})) as any,
-    cocoAccess: options.cocoAccess ?? createCocoAccessControl({ enabled: true }),
+    codeAgentAccess: options.codeAgentAccess ?? createCodeAgentAccessControl({ enabled: true }),
     codeWorkspaceAssetAccess: options.codeWorkspaceAssetAccess,
     publishedStaticSiteService: {
       publicBaseUrlForRequest: (clientOrigin?: string) => clientOrigin,
@@ -155,7 +155,7 @@ const createHarness = (options: {
         return options.publishedArtifacts || [];
       },
     } as any,
-    cocoSandboxService: {
+    codeAgentSandboxService: {
       create: async () => ({
         id: 'sandbox-1',
         provider: 'e2b',
@@ -173,7 +173,7 @@ const createHarness = (options: {
         createdAt: '2026-05-03T00:00:00.000Z',
       }),
       startRunner: async () => ({
-        command: 'coco',
+        command: 'code-agent',
         stop: async () => {},
       }),
       getWorkspaceChanges: async (handle) => {
@@ -322,7 +322,7 @@ const createHarness = (options: {
 };
 
 describe('code-agent workspace socket handlers', () => {
-  it('returns Coco workspace snapshots through the registered socket session', async () => {
+  it('returns code-agent workspace snapshots through the registered socket session', async () => {
     const { socket, getWorkspaceChangesCalls, listWorkspaceEntriesCalls, listSitesForRoomCalls } = createHarness({
       workspaceRoot: '/workspace/room-1',
       workspaceChanges: {
@@ -369,7 +369,7 @@ describe('code-agent workspace socket handlers', () => {
 
     assert.equal(response.success, true);
     assert.equal(response.snapshot.roomId, 'room-1');
-    assert.equal(response.snapshot.backend, 'coco');
+    assert.equal(response.snapshot.backend, 'code-agent');
     assert.equal(response.snapshot.workspaceRoot, '/workspace/room-1');
     assert.deepEqual(response.snapshot.status, { sandboxStatus: 'ready', agentStatus: 'idle', hasSession: true });
     assert.deepEqual(response.snapshot.summary, { toolCalls: 1, toolResults: 1, toolErrors: 0, lastToolName: 'Read' });
@@ -401,7 +401,7 @@ describe('code-agent workspace socket handlers', () => {
     assert.deepEqual(listWorkspaceEntriesCalls, []);
   });
 
-  it('lists Coco workspace entries through the registered socket session', async () => {
+  it('lists code-agent workspace entries through the registered socket session', async () => {
     const { socket, listWorkspaceEntriesCalls } = createHarness({
       workspaceEntries: [
         { path: 'output', name: 'output', type: 'directory' },
@@ -420,7 +420,7 @@ describe('code-agent workspace socket handlers', () => {
     assert.deepEqual(listWorkspaceEntriesCalls, [{ sandboxId: 'sandbox-1', maxDepth: 24, maxEntries: 25001 }]);
   });
 
-  it('searches Coco workspace entries through the registered socket session', async () => {
+  it('searches code-agent workspace entries through the registered socket session', async () => {
     const { socket, searchWorkspaceEntriesCalls } = createHarness({
       workspaceEntries: [
         { path: 'src/components/Composer.tsx', name: 'Composer.tsx', type: 'file' },
@@ -614,7 +614,7 @@ describe('code-agent workspace socket handlers', () => {
     assert.deepEqual(listWorkspacePreviewServersCalls, [{ sandboxId: 'sandbox-1' }]);
   });
 
-  it('reads Coco workspace files through the registered socket session', async () => {
+  it('reads code-agent workspace files through the registered socket session', async () => {
     const { socket, readWorkspaceFileCalls } = createHarness({
       workspaceFileContent: 'export default {}',
     });
@@ -635,7 +635,7 @@ describe('code-agent workspace socket handlers', () => {
     assert.deepEqual(readWorkspaceFileCalls, [{ sandboxId: 'sandbox-1', path: 'src/App.tsx', maxBytes: 10485760 }]);
   });
 
-  it('reads Coco workspace diffs through the registered socket session', async () => {
+  it('reads code-agent workspace diffs through the registered socket session', async () => {
     const patch = [
       'diff --git a/src/App.tsx b/src/App.tsx',
       'index 1111111..2222222 100644',
@@ -728,7 +728,7 @@ describe('code-agent workspace socket handlers', () => {
 
     assert.equal(response.success, true);
     assert.equal(response.asset.expiresAt, '2026-06-30T13:00:00.000Z');
-    assert.match(response.asset.relativeUrl, /^\/api\/coco\/workspace-assets\/[^/]+\/report\.html$/);
+    assert.match(response.asset.relativeUrl, /^\/api\/code-agent\/workspace-assets\/[^/]+\/report\.html$/);
     assert.deepEqual(readWorkspaceFileCalls, [{ sandboxId: 'sandbox-1', path: 'output/report.html', maxBytes: 1 }]);
 
     const token = response.asset.relativeUrl.split('/')[4];
@@ -757,7 +757,7 @@ describe('code-agent workspace socket handlers', () => {
     });
 
     assert.equal(response.success, true);
-    assert.match(response.asset.relativeUrl, /^\/api\/coco\/workspace-assets\/[^/]+\/report\.html$/);
+    assert.match(response.asset.relativeUrl, /^\/api\/code-agent\/workspace-assets\/[^/]+\/report\.html$/);
     assert.deepEqual(readWorkspaceFileCalls, [{ sandboxId: 'sandbox-1', path: '/workspace/output/report.html', maxBytes: 1 }]);
 
     const token = response.asset.relativeUrl.split('/')[4];
@@ -769,7 +769,7 @@ describe('code-agent workspace socket handlers', () => {
     });
   });
 
-  it('mutates Coco workspace entries through the registered socket session', async () => {
+  it('mutates code-agent workspace entries through the registered socket session', async () => {
     const {
       socket,
       writeWorkspaceFileCalls,
@@ -826,13 +826,13 @@ describe('code-agent workspace socket handlers', () => {
     assert.deepEqual(response, { success: false, error: 'You are not registered' });
   });
 
-  it('applies Coco rollout controls to workspace snapshots', async () => {
+  it('applies code-agent rollout controls to workspace snapshots', async () => {
     const { socket } = createHarness({
-      cocoAccess: createCocoAccessControl({ enabled: true, allowedClientIds: ['client-2'] }),
+      codeAgentAccess: createCodeAgentAccessControl({ enabled: true, allowedClientIds: ['client-2'] }),
     });
 
     const response = await socket.invoke<any>('get_code_workspace_snapshot', { roomId: 'room-1' });
 
-    assert.deepEqual(response, { success: false, error: 'Coco is not enabled for this user' });
+    assert.deepEqual(response, { success: false, error: 'Code agent is not enabled for this user' });
   });
 });

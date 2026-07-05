@@ -1,6 +1,6 @@
 import { customAlphabet } from 'nanoid';
 import { Logger } from '../logger';
-import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomCocoStatus, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomType } from '../types';
+import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomCodeAgentStatus, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomType } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
 import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
@@ -39,10 +39,10 @@ type RoomRow = {
   sandbox_status?: RoomSandboxStatus | null;
   sandbox_updated_at?: string | Date | null;
   sandbox_artifact_version?: string | null;
-  sandbox_coco_source_ref?: string | null;
-  coco_session_id?: string | null;
-  coco_status?: RoomCocoStatus | null;
-  coco_access?: string | null;
+  sandbox_code_agent_source_ref?: string | null;
+  code_agent_session_id?: string | null;
+  code_agent_status?: RoomCodeAgentStatus | null;
+  code_agent_access?: string | null;
   code_agent_mode?: string | null;
   code_agent_backend?: string | null;
   room_version?: number | string | null;
@@ -197,7 +197,7 @@ type ClientAccountRow = {
   email_verified: boolean | null;
 };
 
-const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_coco_source_ref, coco_session_id, coco_status, coco_access, code_agent_mode, code_agent_backend, room_version, updated_at';
+const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, room_version, updated_at';
 const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ui_payload, code_agent_mode';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, filename, width, height, duration_ms, uploaded_by_client_id, created_at';
@@ -297,10 +297,10 @@ const mapRoom = (row: RoomRow): Room => {
   if (row.sandbox_status) room.sandboxStatus = row.sandbox_status;
   if (row.sandbox_updated_at) room.sandboxUpdatedAt = toIsoString(row.sandbox_updated_at);
   if (row.sandbox_artifact_version) room.sandboxArtifactVersion = row.sandbox_artifact_version;
-  if (row.sandbox_coco_source_ref) room.sandboxCocoSourceRef = row.sandbox_coco_source_ref;
-  if (row.coco_session_id) room.cocoSessionId = row.coco_session_id;
-  if (row.coco_status) room.cocoStatus = row.coco_status;
-  if (row.coco_access) room.cocoAccess = row.coco_access as Room['cocoAccess'];
+  if (row.sandbox_code_agent_source_ref) room.sandboxCodeAgentSourceRef = row.sandbox_code_agent_source_ref;
+  if (row.code_agent_session_id) room.codeAgentSessionId = row.code_agent_session_id;
+  if (row.code_agent_status) room.codeAgentStatus = row.code_agent_status;
+  if (row.code_agent_access) room.codeAgentAccess = row.code_agent_access as Room['codeAgentAccess'];
   if (row.code_agent_mode) room.codeAgentMode = row.code_agent_mode as Room['codeAgentMode'];
   if (row.code_agent_backend) room.codeAgentBackend = row.code_agent_backend as Room['codeAgentBackend'];
   const roomVersion = Number(row.room_version || 0);
@@ -1919,10 +1919,10 @@ export class PostgresStore implements DurableRoomStore {
             sandbox_status,
             sandbox_updated_at,
             sandbox_artifact_version,
-            sandbox_coco_source_ref,
-            coco_session_id,
-            coco_status,
-            coco_access,
+            sandbox_code_agent_source_ref,
+            code_agent_session_id,
+            code_agent_status,
+            code_agent_access,
             code_agent_mode,
             code_agent_backend,
             room_version,
@@ -1938,10 +1938,10 @@ export class PostgresStore implements DurableRoomStore {
             sandbox_status = COALESCE(EXCLUDED.sandbox_status, rooms.sandbox_status),
             sandbox_updated_at = COALESCE(EXCLUDED.sandbox_updated_at, rooms.sandbox_updated_at),
             sandbox_artifact_version = COALESCE(EXCLUDED.sandbox_artifact_version, rooms.sandbox_artifact_version),
-            sandbox_coco_source_ref = COALESCE(EXCLUDED.sandbox_coco_source_ref, rooms.sandbox_coco_source_ref),
-            coco_session_id = COALESCE(EXCLUDED.coco_session_id, rooms.coco_session_id),
-            coco_status = COALESCE(EXCLUDED.coco_status, rooms.coco_status),
-            coco_access = COALESCE(EXCLUDED.coco_access, rooms.coco_access),
+            sandbox_code_agent_source_ref = COALESCE(EXCLUDED.sandbox_code_agent_source_ref, rooms.sandbox_code_agent_source_ref),
+            code_agent_session_id = COALESCE(EXCLUDED.code_agent_session_id, rooms.code_agent_session_id),
+            code_agent_status = COALESCE(EXCLUDED.code_agent_status, rooms.code_agent_status),
+            code_agent_access = COALESCE(EXCLUDED.code_agent_access, rooms.code_agent_access),
             code_agent_mode = COALESCE(EXCLUDED.code_agent_mode, rooms.code_agent_mode),
             code_agent_backend = COALESCE(EXCLUDED.code_agent_backend, rooms.code_agent_backend),
             room_version = rooms.room_version + 1, updated_at = NOW()
@@ -1958,10 +1958,10 @@ export class PostgresStore implements DurableRoomStore {
             room.sandboxStatus || null,
             room.sandboxUpdatedAt || null,
             room.sandboxArtifactVersion || null,
-            room.sandboxCocoSourceRef || null,
-            room.cocoSessionId || null,
-            room.cocoStatus || null,
-            room.cocoAccess || null,
+            room.sandboxCodeAgentSourceRef || null,
+            room.codeAgentSessionId || null,
+            room.codeAgentStatus || null,
+            room.codeAgentAccess || null,
             room.codeAgentMode || null,
             room.codeAgentBackend || null,
             room.type !== undefined,
@@ -2347,7 +2347,7 @@ export class PostgresStore implements DurableRoomStore {
   async updateRoomSettings(roomId: string, updates: RoomSettingsUpdate): Promise<Room | null> {
     const hasPasswordHashUpdate = Object.prototype.hasOwnProperty.call(updates, 'passwordHash');
     const hasPostingScheduleUpdate = Object.prototype.hasOwnProperty.call(updates, 'postingSchedule');
-    const hasCocoAccessUpdate = Object.prototype.hasOwnProperty.call(updates, 'cocoAccess');
+    const hasCodeAgentAccessUpdate = Object.prototype.hasOwnProperty.call(updates, 'codeAgentAccess');
     const hasCodeAgentModeUpdate = Object.prototype.hasOwnProperty.call(updates, 'codeAgentMode');
     const hasCodeAgentBackendUpdate = Object.prototype.hasOwnProperty.call(updates, 'codeAgentBackend');
 
@@ -2356,7 +2356,7 @@ export class PostgresStore implements DurableRoomStore {
         `UPDATE rooms
         SET password_hash = CASE WHEN $2::boolean THEN $3 ELSE password_hash END,
           posting_schedule = CASE WHEN $4::boolean THEN $5::jsonb ELSE posting_schedule END,
-          coco_access = CASE WHEN $6::boolean THEN $7 ELSE coco_access END,
+          code_agent_access = CASE WHEN $6::boolean THEN $7 ELSE code_agent_access END,
           code_agent_mode = CASE WHEN $8::boolean THEN $9 ELSE code_agent_mode END,
           code_agent_backend = CASE WHEN $10::boolean THEN $11 ELSE code_agent_backend END,
           room_version = room_version + 1, updated_at = NOW()
@@ -2368,8 +2368,8 @@ export class PostgresStore implements DurableRoomStore {
           updates.passwordHash ?? null,
           hasPostingScheduleUpdate,
           toJsonb(updates.postingSchedule ?? null),
-          hasCocoAccessUpdate,
-          updates.cocoAccess ?? null,
+          hasCodeAgentAccessUpdate,
+          updates.codeAgentAccess ?? null,
           hasCodeAgentModeUpdate,
           updates.codeAgentMode ?? null,
           hasCodeAgentBackendUpdate,
@@ -2672,7 +2672,7 @@ export class PostgresStore implements DurableRoomStore {
           sandbox_status = $4,
           sandbox_updated_at = $5::timestamptz,
           sandbox_artifact_version = $6,
-          sandbox_coco_source_ref = $7,
+          sandbox_code_agent_source_ref = $7,
           room_version = room_version + 1,
           updated_at = NOW()
         WHERE id = $1
@@ -2685,7 +2685,7 @@ export class PostgresStore implements DurableRoomStore {
           next.sandboxStatus,
           next.sandboxUpdatedAt,
           next.sandboxArtifactVersion || null,
-          next.sandboxCocoSourceRef || null,
+          next.sandboxCodeAgentSourceRef || null,
         ]
       );
       return result.rows[0] ? mapRoom(result.rows[0]) : null;
@@ -2695,17 +2695,17 @@ export class PostgresStore implements DurableRoomStore {
     }
   }
 
-  async findInterruptedCocoRooms(): Promise<Room[]> {
+  async findInterruptedCodeAgentRooms(): Promise<Room[]> {
     try {
       const result = await this.pool.query<RoomRow>(
         `SELECT ${ROOM_COLUMNS}
         FROM rooms
-        WHERE type = 'coco'
-          AND (sandbox_status = 'creating' OR coco_status = 'running')`
+        WHERE type = 'codeAgent'
+          AND (sandbox_status = 'creating' OR code_agent_status = 'running')`
       );
       return result.rows.map(mapRoom);
     } catch (error) {
-      this.logger.error('Error finding interrupted PostgreSQL Coco rooms', { error });
+      this.logger.error('Error finding interrupted PostgreSQL code-agent rooms', { error });
       return [];
     }
   }

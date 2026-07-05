@@ -163,7 +163,7 @@ describe('MessageItem replies', () => {
           ...message,
           id: 'ai-message',
           clientId: 'provider-worker',
-          username: 'Coco',
+          username: 'Code Agent',
           content: 'assistant response',
           messageType: 'ai',
           status: 'complete',
@@ -178,7 +178,7 @@ describe('MessageItem replies', () => {
 
     const item = screen.getByTestId('message-item');
     expect(item.getAttribute('data-message-id')).toBe('ai-message');
-    expect(screen.getByText('Coco')).toBeTruthy();
+    expect(screen.getByText('Code Agent')).toBeTruthy();
     expect(screen.getByText('assistant response')).toBeTruthy();
     expect(screen.getByLabelText('retry')).toBeTruthy();
   });
@@ -247,7 +247,8 @@ describe('MessageItem replies', () => {
     expect(await screen.findByTestId('code-agent-review-comment-card')).toBeTruthy();
     expect(screen.getByText('workspace/docs/plan.md')).toBeTruthy();
     expect(screen.getByText('File comment · L1 to L2')).toBeTruthy();
-    expect(screen.getByText(/```md/)).toBeTruthy();
+    expect(document.body.textContent).toContain('# Plan');
+    expect(document.body.textContent).toContain('- Step one');
     expect(screen.queryByTestId('file-diff')).toBeNull();
     expect(document.body.textContent).not.toContain('<review_comment');
   });
@@ -282,13 +283,13 @@ describe('MessageItem replies', () => {
     expect(document.body.textContent).not.toContain('/workspace/package.json');
   });
 
-  it('keeps Coco tool events addressable as normal message items', () => {
+  it('keeps code-agent tool events addressable as normal message items', () => {
     render(
       <MessageItem
         message={{
           ...message,
           id: 'tool-call-message',
-          clientId: 'coco_runner',
+          clientId: 'code_agent_runner',
           content: '',
           messageType: 'tool_call',
           toolName: 'Read',
@@ -428,7 +429,7 @@ describe('MessageItem replies', () => {
           canManageAdmins: true,
           canManageMembers: true,
           canTransferOwnership: true,
-          canUseCoco: true,
+          canUseCodeAgent: true,
         }}
         onStartEdit={vi.fn()}
         onDeleteMessage={vi.fn()}
@@ -535,7 +536,7 @@ describe('MessageItem replies', () => {
     });
   });
 
-  it('omits chat role settings from Coco A2UI actions', async () => {
+  it('omits chat role settings from code-agent A2UI actions', async () => {
     localStorage.setItem('aiRoles', JSON.stringify([
       {
         id: 'default',
@@ -571,7 +572,7 @@ describe('MessageItem replies', () => {
             messages: [],
           },
         }}
-        aiRequestRoomKind="coco"
+        aiRequestRoomKind="codeAgent"
         roomPermissions={null}
         onStartEdit={vi.fn()}
         onDeleteMessage={vi.fn()}

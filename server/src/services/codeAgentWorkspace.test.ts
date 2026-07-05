@@ -5,19 +5,19 @@ import { Message, Room } from '../types';
 
 const room: Room = {
   id: 'room-1',
-  name: 'Coco',
+  name: 'Code Agent',
   description: '',
   createdAt: '2026-05-29T00:00:00.000Z',
   creatorId: 'client-1',
-  type: 'coco',
+  type: 'codeAgent',
   sandboxStatus: 'ready',
-  cocoStatus: 'idle',
-  cocoSessionId: 'session-1',
+  codeAgentStatus: 'idle',
+  codeAgentSessionId: 'session-1',
 };
 
 const toolCall = (overrides: Partial<Message> = {}): Message => ({
   id: 'tool-call-1',
-  clientId: 'coco_runner',
+  clientId: 'code_agent_runner',
   content: '',
   roomId: 'room-1',
   timestamp: '2026-05-29T00:00:00.000Z',
@@ -30,7 +30,7 @@ const toolCall = (overrides: Partial<Message> = {}): Message => ({
 
 const toolResult = (overrides: Partial<Message> = {}): Message => ({
   id: 'tool-result-1',
-  clientId: 'coco_runner',
+  clientId: 'code_agent_runner',
   content: '',
   roomId: 'room-1',
   timestamp: '2026-05-29T00:00:01.000Z',
@@ -42,14 +42,14 @@ const toolResult = (overrides: Partial<Message> = {}): Message => ({
 });
 
 describe('code-agent workspace snapshots', () => {
-  it('derives read-only workspace state from persisted Coco messages', () => {
+  it('derives read-only workspace state from persisted code-agent messages', () => {
     const snapshot = buildCodeAgentWorkspaceSnapshot(room, [
       toolCall(),
       toolResult({ isError: true, exitCode: 2, toolOutputPreview: 'failed\nwith details' }),
     ], new Date('2026-05-29T01:00:00.000Z'));
 
     assert.equal(snapshot.roomId, 'room-1');
-    assert.equal(snapshot.backend, 'coco');
+    assert.equal(snapshot.backend, 'code-agent');
     assert.equal(snapshot.source, 'sandbox');
     assert.equal(snapshot.generatedAt, '2026-05-29T01:00:00.000Z');
     assert.deepEqual(snapshot.status, {

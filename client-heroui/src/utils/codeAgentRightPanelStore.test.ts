@@ -170,6 +170,67 @@ describe('codeAgentRightPanelStore', () => {
     });
   });
 
+  it('keeps a workspace browser target when a matching session reports idle', () => {
+    openCodeAgentRightPanelPreview('room-1', 'index.html');
+
+    reconcileCodeAgentPreviewSessionSurfaces('room-1', [
+      {
+        tabId: 'browser:index.html',
+        navStatus: { _tag: 'Idle' },
+        viewport: { _tag: 'fill' },
+      },
+    ]);
+
+    expect(readCodeAgentRightPanelState('room-1')).toEqual({
+      isOpen: true,
+      activeSurfaceId: 'browser:index.html',
+      surfaces: [
+        {
+          id: 'browser:index.html',
+          kind: 'preview',
+          relativePath: 'index.html',
+          navigationHistory: [{ kind: 'workspace-file', relativePath: 'index.html' }],
+          navigationIndex: 0,
+          previewSessionId: 'browser:index.html',
+        },
+      ],
+    });
+  });
+
+  it.each([
+    'https://room.ruit.me/api/code-agent/workspace-assets/token/index.html?roomtalkTheme=dark',
+    'https://room.ruit.me/api/code-agent/workspace-assets/token/index.html?roomtalkTheme=dark',
+  ])('keeps a workspace browser target when its session reports signed asset URL %s', (url) => {
+    openCodeAgentRightPanelPreview('room-1', 'index.html');
+
+    reconcileCodeAgentPreviewSessionSurfaces('room-1', [
+      {
+        tabId: 'browser:index.html',
+        navStatus: {
+          _tag: 'Success',
+          url,
+          title: 'index.html',
+        },
+        viewport: { _tag: 'fill' },
+      },
+    ]);
+
+    expect(readCodeAgentRightPanelState('room-1')).toEqual({
+      isOpen: true,
+      activeSurfaceId: 'browser:index.html',
+      surfaces: [
+        {
+          id: 'browser:index.html',
+          kind: 'preview',
+          relativePath: 'index.html',
+          navigationHistory: [{ kind: 'workspace-file', relativePath: 'index.html' }],
+          navigationIndex: 0,
+          previewSessionId: 'browser:index.html',
+        },
+      ],
+    });
+  });
+
   it('updates and closes reconciled cloud preview session surfaces by tab id', () => {
     reconcileCodeAgentPreviewSessionSurfaces('room-1', [
       {

@@ -42,7 +42,7 @@ describe('CodeAgentRunner', () => {
       },
     });
 
-    assert.equal(runner.backend, 'coco');
+    assert.equal(runner.backend, 'code-agent');
     assert.deepEqual(sharedClient.requests, [request]);
     assert.equal(result.finalEvent?.answer, 'Done');
     assert.deepEqual(emitted.map(event => event.type), ['status', 'final']);
@@ -66,7 +66,7 @@ describe('CodeAgentRunner', () => {
     const runner = new CodeAgentRunnerAdapter(sharedClient);
     const context: CodeAgentRunnerRunContext = {
       process: {
-        command: 'python -m roomtalk_coco_runner',
+        command: 'python -m roomtalk_code_agent_runner',
         stdin: new Writable({
           write(_chunk, _encoding, callback) {
             callback();
@@ -93,19 +93,19 @@ describe('CodeAgentRunner', () => {
     assert.equal(sharedClient.context, context);
   });
 
-  it('creates Coco by default and lets Codex reuse the shared runner client', () => {
+  it('creates the code-agent backend by default and lets Codex reuse the shared runner client', () => {
     const sharedClient = new FakeCodeAgentRunnerClient([]);
     const codexRunner = {
       backend: 'codex' as const,
       run: async () => ({ events: [] }),
     };
 
-    assert.equal(createCodeAgentRunner('coco', sharedClient).backend, 'coco');
+    assert.equal(createCodeAgentRunner('code-agent', sharedClient).backend, 'code-agent');
     assert.equal(createCodeAgentRunner('codex', sharedClient).backend, 'codex');
     assert.equal(createCodeAgentRunner('codex-app-server', sharedClient).backend, 'codex-app-server');
     assert.equal(createCodeAgentRunner('codex', sharedClient, { codexRunner }).backend, 'codex');
     assert.throws(
-      () => createCodeAgentRunner('codex', sharedClient, { codexRunner: createCodeAgentRunner('coco', sharedClient) }),
+      () => createCodeAgentRunner('codex', sharedClient, { codexRunner: createCodeAgentRunner('code-agent', sharedClient) }),
       /backend=codex/
     );
   });

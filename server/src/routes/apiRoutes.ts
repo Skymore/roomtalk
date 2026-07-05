@@ -24,7 +24,7 @@ import {
 } from '../services/clientAuth';
 import { VerifyGoogleCredentialResult, resolveGoogleClientIds, verifyGoogleCredential } from '../services/googleAuth';
 import { getStickerCatalog } from '../stickers/catalog';
-import { CocoAccessControl, createCocoAccessControl } from '../services/cocoAccessControl';
+import { CodeAgentAccessControl, createCodeAgentAccessControl } from '../services/codeAgentAccessControl';
 import { CodeAgentRunnerMode } from '../services/codeAgentRunnerProtocol';
 import { normalizeCodeAgentMode, normalizeCodeAgentModeSet } from '../services/codeAgentModes';
 import { CodexConnectionService } from '../services/codexConnection';
@@ -43,7 +43,7 @@ interface ApiRouteOptions {
   audioTranscriptionRunner?: AudioTranscriptionRunner;
   googleClientIds?: string[];
   verifyGoogleCredential?: (credential: string, clientIds: string[]) => Promise<VerifyGoogleCredentialResult>;
-  cocoAccess?: CocoAccessControl;
+  codeAgentAccess?: CodeAgentAccessControl;
   codeAgentMode?: CodeAgentRunnerMode;
   codeAgentAvailableModes?: CodeAgentRunnerMode[];
   codeAgentDefaultMode?: CodeAgentRunnerMode;
@@ -292,7 +292,7 @@ const consumeMediaUploadRateLimit = (clientId: string, ip: string | undefined, n
 
 export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   const { store, io, redisClient, routeLogger, getAIModelResponse, generateAIRoleDraft, persistenceStore = 'redis', mediaObjectStorage, audioTranscriptionRunner } = options;
-  const cocoAccess = options.cocoAccess ?? createCocoAccessControl({ enabled: false });
+  const codeAgentAccess = options.codeAgentAccess ?? createCodeAgentAccessControl({ enabled: false });
   const codeAgentMode = normalizeCodeAgentMode(options.codeAgentMode) || 'plan';
   const codeAgentAvailableModes = normalizeCodeAgentModeSet(
     options.codeAgentAvailableModes?.length ? options.codeAgentAvailableModes : [codeAgentMode]
@@ -936,7 +936,7 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       return res.status(400).json({ error: roomName.error });
     }
 
-    if (roomData.type !== undefined && roomData.type !== 'chat' && roomData.type !== 'coco') {
+    if (roomData.type !== undefined && roomData.type !== 'chat' && roomData.type !== 'codeAgent') {
       routeLogger.warn('Unknown room type ignored during API room creation', {
         endpoint: 'POST /api/clients/:clientId/rooms',
         clientId,
@@ -945,17 +945,17 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
       });
     }
 
-    const roomType = roomData.type === 'coco' ? 'coco' : undefined;
-    if (roomType === 'coco') {
-      const access = cocoAccess.canUse(clientId);
+    const roomType = roomData.type === 'codeAgent' ? 'codeAgent' : undefined;
+    if (roomType === 'codeAgent') {
+      const access = codeAgentAccess.canUse(clientId);
       if (!access.allowed) {
-        routeLogger.warn('Coco room creation rejected by rollout controls', {
+        routeLogger.warn('Code agent room creation rejected by rollout controls', {
           endpoint: 'POST /api/clients/:clientId/rooms',
           clientId,
           reason: access.reason,
           ip: req.ip,
         });
-        return res.status(403).json({ error: access.message || 'Coco is unavailable' });
+        return res.status(403).json({ error: access.message || 'Code agent is unavailable' });
       }
     }
 
@@ -1323,8 +1323,8 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
   app.get('/api/features', (req: Request, res: Response) => {
     const clientId = getQueryClientId(req) ?? undefined;
     return res.json({
-      coco: {
-        ...cocoAccess.toFeaturePayload(clientId),
+      codeAgent: {
+        ...codeAgentAccess.toFeaturePayload(clientId),
         mode: codeAgentMode,
         availableModes: codeAgentAvailableModes,
         defaultMode: codeAgentDefaultMode,
@@ -1472,9 +1472,9 @@ export function registerApiRoutes(app: Express, options: ApiRouteOptions) {
         redis: redisStatus,
         socketAdapterReady: io.of('/').adapter ? true : false,
         features: {
-          coco: {
-            enabled: cocoAccess.enabled,
-            rollout: !cocoAccess.enabled ? 'disabled' : cocoAccess.hasAllowlist ? 'allowlist' : 'all',
+          codeAgent: {
+            enabled: codeAgentAccess.enabled,
+            rollout: !codeAgentAccess.enabled ? 'disabled' : codeAgentAccess.hasAllowlist ? 'allowlist' : 'all',
             mode: codeAgentMode,
             availableModes: codeAgentAvailableModes,
             defaultMode: codeAgentDefaultMode,

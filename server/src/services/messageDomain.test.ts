@@ -39,19 +39,19 @@ describe('message domain', () => {
     });
   });
 
-  it('initializes Coco room lifecycle fields when requested', () => {
+  it('initializes code-agent room lifecycle fields when requested', () => {
     const room = createRoomRecord({
-      roomId: 'coco-1',
-      name: 'Coco',
+      roomId: 'code-agent-1',
+      name: 'Code Agent',
       creatorId: 'client-1',
-      type: 'coco',
+      type: 'codeAgent',
       now: at,
     });
 
-    assert.equal(room.type, 'coco');
+    assert.equal(room.type, 'codeAgent');
     assert.equal(room.sandboxStatus, 'none');
     assert.equal(room.sandboxUpdatedAt, at.toISOString());
-    assert.equal(room.cocoStatus, 'idle');
+    assert.equal(room.codeAgentStatus, 'idle');
   });
 
   it('validates room names consistently for create and rename flows', () => {

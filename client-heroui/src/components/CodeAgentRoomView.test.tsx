@@ -40,7 +40,7 @@ vi.mock('./MessageList', async () => {
       codeAgentBackend?: string;
       bottomInsetPx?: number;
       onOpenWorkspaceFile?: (path: string) => void;
-      onCodeAgentBackendChange?: (backend: 'coco' | 'codex' | 'codex-app-server') => void;
+      onCodeAgentBackendChange?: (backend: 'code-agent' | 'codex' | 'codex-app-server') => void;
     }, ref: React.ForwardedRef<unknown>) => {
     React.useImperativeHandle(ref, () => ({ scrollToBottom: vi.fn() }));
     return (
@@ -207,12 +207,12 @@ vi.mock('./CodeAgentFileBrowserPanel', () => ({
 }));
 
 vi.mock('../utils/socket', () => ({
-  updateRoomSettings: vi.fn(async ({ roomId, codeAgentMode, codeAgentBackend }: { roomId: string; codeAgentMode?: 'plan' | 'edit' | 'approveForMe' | 'fullAccess' | 'acceptEdits'; codeAgentBackend?: 'coco' | 'codex' | 'codex-app-server' }) => ({
+  updateRoomSettings: vi.fn(async ({ roomId, codeAgentMode, codeAgentBackend }: { roomId: string; codeAgentMode?: 'plan' | 'edit' | 'approveForMe' | 'fullAccess' | 'acceptEdits'; codeAgentBackend?: 'code-agent' | 'codex' | 'codex-app-server' }) => ({
     id: roomId,
-    name: 'Coco Room',
+    name: 'Code Agent Room',
     creatorId: 'client-1',
     createdAt: '2026-05-26T00:00:00.000Z',
-    type: 'coco',
+    type: 'codeAgent',
     ...(codeAgentMode ? { codeAgentMode } : {}),
     ...(codeAgentBackend ? { codeAgentBackend } : {}),
   })),
@@ -226,19 +226,19 @@ const unsupportedRoom: Room = {
   type: 'codex' as Room['type'],
 };
 
-const cocoRoom: Room = {
-  id: 'coco-room',
-  name: 'Coco Room',
+const codeAgentRoom: Room = {
+  id: 'code-agent-room',
+  name: 'Code Agent Room',
   creatorId: 'client-1',
   createdAt: '2026-05-26T00:00:00.000Z',
-  type: 'coco',
+  type: 'codeAgent',
   sandboxStatus: 'ready',
   sandboxUpdatedAt: '2026-06-30T10:00:00.000Z',
-  cocoStatus: 'idle',
+  codeAgentStatus: 'idle',
 };
 
 const permissions = (overrides: Partial<RoomPermissions> = {}): RoomPermissions => ({
-  roomId: 'coco-room',
+  roomId: 'code-agent-room',
   clientId: 'client-1',
   role: 'owner',
   canPost: true,
@@ -249,7 +249,7 @@ const permissions = (overrides: Partial<RoomPermissions> = {}): RoomPermissions 
   canManageAdmins: true,
   canManageMembers: true,
   canTransferOwnership: true,
-  canUseCoco: true,
+  canUseCodeAgent: true,
   ...overrides,
 });
 
@@ -281,7 +281,7 @@ const renderCodeAgentRoom = (
     isRestoringRoom={false}
     username="User"
     clientId="client-1"
-    backend={room.codeAgentBackend || (room.type === 'coco' ? 'coco' : 'codex')}
+    backend={room.codeAgentBackend || (room.type === 'codeAgent' ? 'code-agent' : 'codex')}
     availableModes={availableModes}
     defaultMode={defaultMode}
     handleCopyToClipboard={vi.fn()}
@@ -316,8 +316,8 @@ describe('CodeAgentRoomView', () => {
     expect(screen.getByTestId('message-input-panel')).toBeTruthy();
   });
 
-  it('passes the selected Coco run mode to the workspace and composer', () => {
-    renderCodeAgentRoom({ ...cocoRoom, codeAgentMode: 'edit' }, ['plan', 'edit'], 'plan', permissions());
+  it('passes the selected code-agent run mode to the workspace and composer', () => {
+    renderCodeAgentRoom({ ...codeAgentRoom, codeAgentMode: 'edit' }, ['plan', 'edit'], 'plan', permissions());
 
     expect(screen.getByTestId('message-list').dataset.codeAgentMode).toBe('edit');
     expect(screen.getByTestId('message-input').dataset.codeAgentRoom).toBe('true');
@@ -333,22 +333,22 @@ describe('CodeAgentRoomView', () => {
 
   it('updates the room engine when the workspace header switches backend', async () => {
     const { updateRoomSettings } = await import('../utils/socket');
-    renderCodeAgentRoom(cocoRoom, ['plan'], 'plan', permissions());
+    renderCodeAgentRoom(codeAgentRoom, ['plan'], 'plan', permissions());
 
     fireEvent.click(screen.getByTestId('message-list-switch-codex'));
     await act(async () => {});
 
-    expect(updateRoomSettings).toHaveBeenCalledWith({ roomId: 'coco-room', codeAgentBackend: 'codex' });
+    expect(updateRoomSettings).toHaveBeenCalledWith({ roomId: 'code-agent-room', codeAgentBackend: 'codex' });
   });
 
   it('updates the room engine when the workspace header switches to Codex app-server', async () => {
     const { updateRoomSettings } = await import('../utils/socket');
-    renderCodeAgentRoom(cocoRoom, ['plan'], 'plan', permissions());
+    renderCodeAgentRoom(codeAgentRoom, ['plan'], 'plan', permissions());
 
     fireEvent.click(screen.getByTestId('message-list-switch-app'));
     await act(async () => {});
 
-    expect(updateRoomSettings).toHaveBeenCalledWith({ roomId: 'coco-room', codeAgentBackend: 'codex-app-server' });
+    expect(updateRoomSettings).toHaveBeenCalledWith({ roomId: 'code-agent-room', codeAgentBackend: 'codex-app-server' });
   });
 
   it('keeps the message scrollbar above the floating composer', () => {
@@ -363,7 +363,7 @@ describe('CodeAgentRoomView', () => {
     }
     vi.stubGlobal('ResizeObserver', MockResizeObserver);
 
-    renderCodeAgentRoom(cocoRoom);
+    renderCodeAgentRoom(codeAgentRoom);
 
     const composer = screen.getByTestId('message-input-panel') as HTMLDivElement;
     vi.spyOn(composer, 'getBoundingClientRect').mockReturnValue({
@@ -387,7 +387,7 @@ describe('CodeAgentRoomView', () => {
   });
 
   it('keeps composer mode switching locked for non-managers while preserving edit capability', () => {
-    renderCodeAgentRoom({ ...cocoRoom, codeAgentMode: 'edit' }, ['plan', 'edit'], 'plan', permissions({
+    renderCodeAgentRoom({ ...codeAgentRoom, codeAgentMode: 'edit' }, ['plan', 'edit'], 'plan', permissions({
       role: 'member',
       canManageRoom: false,
       canManageAdmins: false,
@@ -400,15 +400,15 @@ describe('CodeAgentRoomView', () => {
     expect(screen.getByTestId('message-input').dataset.canSwitchCodeAgentMode).toBe('false');
   });
 
-  it('disables the composer when room permissions cannot use Coco', () => {
-    renderCodeAgentRoom(cocoRoom, ['plan'], 'plan', permissions({
+  it('disables the composer when room permissions cannot use code agent', () => {
+    renderCodeAgentRoom(codeAgentRoom, ['plan'], 'plan', permissions({
       role: 'member',
-      canUseCoco: false,
+      canUseCodeAgent: false,
     }));
 
     const input = screen.getByTestId('message-input');
     expect(input.dataset.canPost).toBe('false');
-    expect(input.dataset.postingRestrictionReason).toBe('cocoAccessDenied');
+    expect(input.dataset.postingRestrictionReason).toBe('codeAgentAccessDenied');
   });
 
   it('gives desktop and mobile file managers a flex height context', () => {
@@ -427,7 +427,7 @@ describe('CodeAgentRoomView', () => {
       dispatchEvent: vi.fn(),
     })));
 
-    renderCodeAgentRoom(cocoRoom);
+    renderCodeAgentRoom(codeAgentRoom);
 
     const desktopFileBrowser = screen.getByTestId('file-browser');
     expect(desktopFileBrowser.dataset.surface).toBe('desktop');
@@ -471,7 +471,7 @@ describe('CodeAgentRoomView', () => {
       dispatchEvent: vi.fn(),
     })));
 
-    renderCodeAgentRoom(cocoRoom);
+    renderCodeAgentRoom(codeAgentRoom);
 
     const desktopFileBrowser = screen.getByTestId('file-browser');
     expect(desktopFileBrowser.dataset.surface).toBe('desktop');
@@ -519,7 +519,7 @@ describe('CodeAgentRoomView', () => {
       dispatchEvent: vi.fn(),
     })));
 
-    renderCodeAgentRoom(cocoRoom);
+    renderCodeAgentRoom(codeAgentRoom);
 
     expect(screen.queryByTestId('code-agent-mobile-file-manager-sheet')).toBeNull();
 
@@ -539,7 +539,7 @@ describe('CodeAgentRoomView', () => {
   });
 
   it('keeps the workspace files resize affordance from being clipped by the panel edge', () => {
-    renderCodeAgentRoom(cocoRoom);
+    renderCodeAgentRoom(codeAgentRoom);
 
     const resizeHandle = screen.getByLabelText('codeAgentResizeWorkspaceFiles');
     const filesPanel = resizeHandle.closest('[data-code-agent-files-panel="true"]') as HTMLElement;
@@ -557,7 +557,7 @@ describe('CodeAgentRoomView', () => {
   });
 
   it('resizes the workspace panel against the available layout width and releases drag state', () => {
-    renderCodeAgentRoom(cocoRoom);
+    renderCodeAgentRoom(codeAgentRoom);
 
     const resizeHandle = screen.getByLabelText('codeAgentResizeWorkspaceFiles');
     const layout = resizeHandle.closest('aside')?.parentElement as HTMLDivElement;
@@ -588,7 +588,7 @@ describe('CodeAgentRoomView', () => {
   });
 
   it('lets the workspace panel grow to the chat-preserving cap', () => {
-    renderCodeAgentRoom(cocoRoom);
+    renderCodeAgentRoom(codeAgentRoom);
 
     const resizeHandle = screen.getByLabelText('codeAgentResizeWorkspaceFiles');
     const layout = resizeHandle.closest('aside')?.parentElement as HTMLDivElement;
@@ -613,7 +613,7 @@ describe('CodeAgentRoomView', () => {
   });
 
   it('finishes after a pressed viewport exit at the cap and ignores later movement', () => {
-    renderCodeAgentRoom(cocoRoom);
+    renderCodeAgentRoom(codeAgentRoom);
 
     const resizeHandle = screen.getByLabelText('codeAgentResizeWorkspaceFiles');
     const layout = resizeHandle.closest('aside')?.parentElement as HTMLDivElement;
@@ -644,7 +644,7 @@ describe('CodeAgentRoomView', () => {
   });
 
   it('lets the workspace panel use wide layouts while preserving the chat pane', () => {
-    renderCodeAgentRoom(cocoRoom);
+    renderCodeAgentRoom(codeAgentRoom);
 
     const resizeHandle = screen.getByLabelText('codeAgentResizeWorkspaceFiles');
     const layout = resizeHandle.closest('aside')?.parentElement as HTMLDivElement;
@@ -681,7 +681,7 @@ describe('CodeAgentRoomView', () => {
     vi.stubGlobal('ResizeObserver', MockResizeObserver);
     localStorage.setItem('roomtalk.codeWorkspace.fileManagerWidth', '760');
 
-    renderCodeAgentRoom(cocoRoom);
+    renderCodeAgentRoom(codeAgentRoom);
 
     const resizeHandle = screen.getByLabelText('codeAgentResizeWorkspaceFiles');
     const layout = resizeHandle.closest('aside')?.parentElement as HTMLDivElement;
@@ -707,7 +707,7 @@ describe('CodeAgentRoomView', () => {
 
   it('syncs the workspace files panel width after sidebar resizing compresses it', () => {
     localStorage.setItem('roomtalk.codeWorkspace.fileManagerWidth', '760');
-    renderCodeAgentRoom(cocoRoom);
+    renderCodeAgentRoom(codeAgentRoom);
 
     const resizeHandle = screen.getByLabelText('codeAgentResizeWorkspaceFiles');
     const layout = resizeHandle.closest('aside')?.parentElement as HTMLDivElement;
@@ -737,7 +737,7 @@ describe('CodeAgentRoomView', () => {
   it('opens the right file manager when a workspace diff file is selected', () => {
     localStorage.setItem('roomtalk.codeWorkspace.fileManagerCollapsed', 'true');
 
-    renderCodeAgentRoom(cocoRoom);
+    renderCodeAgentRoom(codeAgentRoom);
 
     expect(screen.queryByTestId('file-browser')).toBeNull();
 
@@ -754,7 +754,7 @@ describe('CodeAgentRoomView', () => {
   it('passes T3-style file reveal requests into the right file manager', () => {
     localStorage.setItem('roomtalk.codeWorkspace.fileManagerCollapsed', 'true');
 
-    renderCodeAgentRoom(cocoRoom);
+    renderCodeAgentRoom(codeAgentRoom);
 
     fireEvent.click(screen.getByTestId('message-list-line-link'));
 
@@ -789,7 +789,7 @@ describe('CodeAgentRoomView', () => {
       dispatchEvent: vi.fn(),
     })));
 
-    renderCodeAgentRoom(cocoRoom);
+    renderCodeAgentRoom(codeAgentRoom);
 
     expect(screen.queryByTestId('code-agent-file-save-pending-indicator')).toBeNull();
     expect(screen.queryByTestId('code-agent-mobile-file-save-pending-indicator')).toBeNull();
@@ -830,19 +830,19 @@ describe('CodeAgentRoomView', () => {
       removeEventListener: vi.fn(),
       dispatchEvent: vi.fn(),
     })));
-    addCodeAgentRightPanelPreviewSurface('coco-room');
-    expect(readCodeAgentRightPanelState('coco-room').activeSurfaceId).toBe('browser:new');
+    addCodeAgentRightPanelPreviewSurface('code-agent-room');
+    expect(readCodeAgentRightPanelState('code-agent-room').activeSurfaceId).toBe('browser:new');
 
-    renderCodeAgentRoom(cocoRoom);
+    renderCodeAgentRoom(codeAgentRoom);
     fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
 
     expect(screen.getByTestId('code-agent-mobile-file-manager-sheet').dataset.open).toBe('true');
-    expect(readCodeAgentRightPanelState('coco-room').activeSurfaceId).toBe('files');
+    expect(readCodeAgentRightPanelState('code-agent-room').activeSurfaceId).toBe('files');
   });
 
   it('persists review comment drafts by room', () => {
-    const storageKey = 'roomtalk.codeAgent.reviewComments.coco-room';
-    const firstRender = renderCodeAgentRoom(cocoRoom);
+    const storageKey = 'roomtalk.codeAgent.reviewComments.code-agent-room';
+    const firstRender = renderCodeAgentRoom(codeAgentRoom);
 
     expect(screen.getByTestId('message-input').dataset.reviewComments).toBe('0');
 
@@ -853,13 +853,13 @@ describe('CodeAgentRoomView', () => {
     expect(localStorage.getItem(storageKey)).toContain('Persist this review comment.');
 
     firstRender.unmount();
-    const otherRoomRender = renderCodeAgentRoom({ ...cocoRoom, id: 'other-coco-room' });
+    const otherRoomRender = renderCodeAgentRoom({ ...codeAgentRoom, id: 'other-code-agent-room' });
 
     expect(screen.getByTestId('message-input').dataset.reviewComments).toBe('0');
-    expect(localStorage.getItem('roomtalk.codeAgent.reviewComments.other-coco-room')).toBeNull();
+    expect(localStorage.getItem('roomtalk.codeAgent.reviewComments.other-code-agent-room')).toBeNull();
 
     otherRoomRender.unmount();
-    renderCodeAgentRoom(cocoRoom);
+    renderCodeAgentRoom(codeAgentRoom);
 
     expect(screen.getByTestId('message-input').dataset.reviewComments).toBe('1');
     expect(screen.getByText('Persist this review comment.')).toBeTruthy();
@@ -893,9 +893,9 @@ describe('CodeAgentRoomView', () => {
       removeEventListener: vi.fn(),
       dispatchEvent: vi.fn(),
     })));
-    const reviewStorageKey = 'roomtalk.codeAgent.reviewComments.coco-room';
+    const reviewStorageKey = 'roomtalk.codeAgent.reviewComments.code-agent-room';
 
-    renderCodeAgentRoom(cocoRoom);
+    renderCodeAgentRoom(codeAgentRoom);
 
     expect(screen.queryByTestId('code-agent-mobile-review-drafts')).toBeNull();
 
@@ -917,9 +917,9 @@ describe('CodeAgentRoomView', () => {
   });
 
   it('constrains room edit mode when the server only allows plan mode', () => {
-    localStorage.setItem('roomtalk_code_agent_mode_coco-room', 'acceptEdits');
+    localStorage.setItem('roomtalk_code_agent_mode_code-agent-room', 'acceptEdits');
 
-    renderCodeAgentRoom({ ...cocoRoom, codeAgentMode: 'acceptEdits' }, ['plan']);
+    renderCodeAgentRoom({ ...codeAgentRoom, codeAgentMode: 'acceptEdits' }, ['plan']);
 
     expect(screen.getByTestId('message-list').dataset.codeAgentMode).toBe('plan');
     expect(screen.getByTestId('message-input').dataset.codeAgentAvailableModes).toBe('plan');

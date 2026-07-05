@@ -4,7 +4,7 @@ import { AddressInfo } from 'net';
 import { Server as HttpServer } from 'http';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { Logger } from '../logger';
-import { CocoSandboxHandle, CocoSandboxService } from '../services/cocoSandboxService';
+import { CodeAgentSandboxHandle, CodeAgentSandboxService } from '../services/codeAgentSandboxService';
 import { CodeWorkspaceAssetAccess } from '../services/codeWorkspaceAssetAccess';
 import { Room } from '../types';
 import { registerCodeWorkspaceAssetRoutes } from './codeWorkspaceAssetRoutes';
@@ -19,18 +19,18 @@ type TestServer = {
 
 const createRoom = (overrides: Partial<Room> = {}): Room => ({
   id: 'room-1',
-  name: 'Coco',
+  name: 'Code Agent',
   description: '',
   createdAt: '2026-06-30T12:00:00.000Z',
   creatorId: 'client-1',
-  type: 'coco',
+  type: 'codeAgent',
   sandboxId: 'sandbox-1',
   sandboxStatus: 'ready',
-  cocoStatus: 'idle',
+  codeAgentStatus: 'idle',
   ...overrides,
 });
 
-const createSandboxService = (files: Map<string, Buffer>): CocoSandboxService => ({
+const createSandboxService = (files: Map<string, Buffer>): CodeAgentSandboxService => ({
   create: async () => ({
     id: 'sandbox-1',
     provider: 'fake',
@@ -39,7 +39,7 @@ const createSandboxService = (files: Map<string, Buffer>): CocoSandboxService =>
     workspace: '/workspace',
     createdAt: '2026-06-30T12:00:00.000Z',
   }),
-  connect: async (sandboxId: string): Promise<CocoSandboxHandle> => ({
+  connect: async (sandboxId: string): Promise<CodeAgentSandboxHandle> => ({
     id: sandboxId,
     provider: 'fake',
     roomId: 'room-1',
@@ -48,7 +48,7 @@ const createSandboxService = (files: Map<string, Buffer>): CocoSandboxService =>
     createdAt: '2026-06-30T12:00:00.000Z',
   }),
   startRunner: async () => ({
-    command: 'coco',
+    command: 'code-agent',
     stop: async () => {},
   }),
   readWorkspaceAsset: async (_handle, workspacePath, options) => {
@@ -81,7 +81,7 @@ const createTestServer = async (maxAssetBytes?: number): Promise<TestServer> => 
     assetAccess,
     logger: new Logger('CodeWorkspaceAssetRoutesTest'),
     getRoomById: async roomId => roomId === room.id ? room : null,
-    cocoSandboxService: createSandboxService(files),
+    codeAgentSandboxService: createSandboxService(files),
     ...(maxAssetBytes !== undefined ? { maxAssetBytes } : {}),
   });
 

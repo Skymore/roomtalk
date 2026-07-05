@@ -27,10 +27,10 @@ interface RoomListProps {
   handleRenameRoom: RoomRenameHandler;
   clientId: string;
   username: string;
-  isCocoEnabled: boolean;
+  isCodeAgentEnabled: boolean;
 }
 
-export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, onRoomSelect, onRoomSelectById, handleDeleteRoom, handleRenameRoom, clientId, username, isCocoEnabled }) => {
+export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, onRoomSelect, onRoomSelectById, handleDeleteRoom, handleRenameRoom, clientId, username, isCodeAgentEnabled }) => {
   const { t } = useTranslation();
   const { isOpen, onOpen, onClose } = useDisclosure();
   const [newRoomName, setNewRoomName] = useState('');
@@ -97,7 +97,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
       const roomId = await createRoom(validation.name, newRoomDescription, {
         password: options.password,
         postingSchedule: options.postingSchedule,
-        type: isCocoEnabled ? (options.type || newRoomType) : 'chat',
+        type: isCodeAgentEnabled ? (options.type || newRoomType) : 'chat',
       });
       setNewRoomName('');
       setNewRoomDescription('');
@@ -174,7 +174,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
       nameError={nameError}
       createError={createError}
       isCreating={isCreating}
-      isCocoEnabled={isCocoEnabled}
+      isCodeAgentEnabled={isCodeAgentEnabled}
       onRoomNameChange={handleRoomNameChange}
       onRoomDescriptionChange={setNewRoomDescription}
       onRoomTypeChange={setNewRoomType}

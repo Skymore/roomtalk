@@ -6,7 +6,7 @@ import {
   normalizeCodeAgentMode,
   normalizeCodeAgentModeSet,
 } from './codeAgentModes';
-import { CocoSandboxProvider } from './cocoSandboxService';
+import { CodeAgentSandboxProvider } from './codeAgentSandboxService';
 import { CodeAgentRunnerMode } from './codeAgentRunnerProtocol';
 
 export type CodeAgentRunnerClientKind = 'fake' | 'jsonl';
@@ -16,11 +16,11 @@ export type CodeAgentE2BOnTimeout = 'kill' | 'pause';
 export interface CodeAgentRuntimeConfig {
   enabled: boolean;
   backend: CodeAgentBackend;
-  sandboxProvider: CocoSandboxProvider;
+  sandboxProvider: CodeAgentSandboxProvider;
   runnerClient: CodeAgentRunnerClientKind;
   artifactMode: CodeAgentArtifactMode;
   artifactVersion?: string;
-  cocoSourceRef?: string;
+  codeAgentSourceRef?: string;
   allowedClientIds: string[];
   mode: CodeAgentRunnerMode;
   availableModes: CodeAgentRunnerMode[];
@@ -46,15 +46,15 @@ export interface CodeAgentRuntimeConfig {
   };
 }
 
-export const DEFAULT_COCO_RUNNER_COMMAND = 'python -m roomtalk_coco_runner';
-export const DEFAULT_CODEX_CLI_RUNNER_COMMAND = 'python -m roomtalk_coco_runner.codex_cli';
-export const DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND = 'python -m roomtalk_coco_runner.codex_sdk_app_server';
-export const DEFAULT_COCO_RUNNER_PYTHONPATH = '/opt/coco/src:/opt/roomtalk_coco_runner';
-export const DEFAULT_COCO_WORKSPACE_ROOT = '/workspace';
+export const DEFAULT_CODE_AGENT_RUNNER_COMMAND = 'python -m roomtalk_code_agent_runner';
+export const DEFAULT_CODEX_CLI_RUNNER_COMMAND = 'python -m roomtalk_code_agent_runner.codex_cli';
+export const DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND = 'python -m roomtalk_code_agent_runner.codex_sdk_app_server';
+export const DEFAULT_CODE_AGENT_RUNNER_PYTHONPATH = '/opt/code-agent-engine/src:/opt/roomtalk_code_agent_runner';
+export const DEFAULT_CODE_AGENT_WORKSPACE_ROOT = '/workspace';
 export const DEFAULT_PLAYWRIGHT_BROWSERS_PATH = '/ms-playwright';
 export const DEFAULT_NODE_PATH = '/usr/lib/node_modules';
-export const DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS = 5 * 60 * 1000;
-export const DEFAULT_COCO_E2B_KILL_TIMEOUT_MS = 60 * 60 * 1000;
+export const DEFAULT_CODE_AGENT_E2B_PAUSE_TIMEOUT_MS = 5 * 60 * 1000;
+export const DEFAULT_CODE_AGENT_E2B_KILL_TIMEOUT_MS = 60 * 60 * 1000;
 
 const parseCsvEnv = (value?: string) =>
   value?.split(',').map(item => item.trim()).filter(Boolean) || [];
@@ -79,17 +79,17 @@ const pickEnv = (env: NodeJS.ProcessEnv, names: string[]) => Object.fromEntries(
     .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].length > 0)
 );
 
-const readSandboxProvider = (env: NodeJS.ProcessEnv): CocoSandboxProvider => {
-  const value = (env.COCO_SANDBOX_PROVIDER || 'fake').toLowerCase();
+const readSandboxProvider = (env: NodeJS.ProcessEnv): CodeAgentSandboxProvider => {
+  const value = (env.CODE_AGENT_SANDBOX_PROVIDER || 'fake').toLowerCase();
   if (value === 'fake' || value === 'e2b') {
     return value;
   }
-  throw new Error(`Unsupported COCO_SANDBOX_PROVIDER: ${value}`);
+  throw new Error(`Unsupported CODE_AGENT_SANDBOX_PROVIDER: ${value}`);
 };
 
 const readCodeAgentBackend = (env: NodeJS.ProcessEnv): CodeAgentBackend => {
-  const value = (env.CODE_AGENT_BACKEND || 'coco').toLowerCase();
-  if (value === 'coco') {
+  const value = (env.CODE_AGENT_BACKEND || 'code-agent').toLowerCase();
+  if (value === 'code-agent') {
     return value;
   }
   if (value === 'codex' || value === 'codex-app-server') {
@@ -102,11 +102,11 @@ const readCodeAgentBackend = (env: NodeJS.ProcessEnv): CodeAgentBackend => {
 };
 
 const readRunnerClient = (env: NodeJS.ProcessEnv): CodeAgentRunnerClientKind => {
-  const value = (env.COCO_RUNNER_CLIENT || 'fake').toLowerCase();
+  const value = (env.CODE_AGENT_RUNNER_CLIENT || 'fake').toLowerCase();
   if (value === 'fake' || value === 'jsonl') {
     return value;
   }
-  throw new Error(`Unsupported COCO_RUNNER_CLIENT: ${value}`);
+  throw new Error(`Unsupported CODE_AGENT_RUNNER_CLIENT: ${value}`);
 };
 
 const defaultRunnerCommandForBackend = (backend: CodeAgentBackend) => {
@@ -116,42 +116,42 @@ const defaultRunnerCommandForBackend = (backend: CodeAgentBackend) => {
   if (backend === 'codex-app-server') {
     return DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND;
   }
-  return DEFAULT_COCO_RUNNER_COMMAND;
+  return DEFAULT_CODE_AGENT_RUNNER_COMMAND;
 };
 
 const readArtifactMode = (env: NodeJS.ProcessEnv): CodeAgentArtifactMode => {
-  const value = (env.COCO_ARTIFACT_MODE || 'production').toLowerCase();
+  const value = (env.CODE_AGENT_ARTIFACT_MODE || 'production').toLowerCase();
   if (value === 'production' || value === 'development') {
     return value;
   }
-  throw new Error(`Unsupported COCO_ARTIFACT_MODE: ${value}`);
+  throw new Error(`Unsupported CODE_AGENT_ARTIFACT_MODE: ${value}`);
 };
 
 const readE2BOnTimeout = (env: NodeJS.ProcessEnv): CodeAgentE2BOnTimeout => {
-  const value = (env.COCO_E2B_ON_TIMEOUT || 'pause').trim();
+  const value = (env.CODE_AGENT_E2B_ON_TIMEOUT || 'pause').trim();
   if (value === 'pause' || value === 'kill') {
     return value;
   }
-  throw new Error(`Unsupported COCO_E2B_ON_TIMEOUT: ${value}`);
+  throw new Error(`Unsupported CODE_AGENT_E2B_ON_TIMEOUT: ${value}`);
 };
 
 const readE2BLifecycle = (env: NodeJS.ProcessEnv): CodeAgentRuntimeConfig['e2bLifecycle'] => {
   const onTimeout = readE2BOnTimeout(env);
-  const keepMemory = parseBooleanEnv(env.COCO_E2B_KEEP_MEMORY, true);
-  const autoResume = parseBooleanEnv(env.COCO_E2B_AUTO_RESUME, onTimeout === 'pause');
+  const keepMemory = parseBooleanEnv(env.CODE_AGENT_E2B_KEEP_MEMORY, true);
+  const autoResume = parseBooleanEnv(env.CODE_AGENT_E2B_AUTO_RESUME, onTimeout === 'pause');
 
   if (autoResume && onTimeout !== 'pause') {
-    throw new Error('COCO_E2B_AUTO_RESUME=true requires COCO_E2B_ON_TIMEOUT=pause');
+    throw new Error('CODE_AGENT_E2B_AUTO_RESUME=true requires CODE_AGENT_E2B_ON_TIMEOUT=pause');
   }
   if (autoResume && !keepMemory) {
-    throw new Error('COCO_E2B_AUTO_RESUME=true requires COCO_E2B_KEEP_MEMORY=true');
+    throw new Error('CODE_AGENT_E2B_AUTO_RESUME=true requires CODE_AGENT_E2B_KEEP_MEMORY=true');
   }
 
   return { onTimeout, autoResume, keepMemory };
 };
 
 const readMode = (env: NodeJS.ProcessEnv): CodeAgentRunnerMode => {
-  const value = env.COCO_MODE?.trim();
+  const value = env.CODE_AGENT_MODE?.trim();
   if (!value) {
     return 'plan';
   }
@@ -159,7 +159,7 @@ const readMode = (env: NodeJS.ProcessEnv): CodeAgentRunnerMode => {
   if (normalized) {
     return normalized;
   }
-  console.warn(`Unsupported COCO_MODE: ${value}; falling back to plan`);
+  console.warn(`Unsupported CODE_AGENT_MODE: ${value}; falling back to plan`);
   return 'plan';
 };
 
@@ -172,11 +172,11 @@ const normalizeModeSet = (modes: CodeAgentRunnerMode[]) => {
 };
 
 const readAvailableModes = (env: NodeJS.ProcessEnv): CodeAgentRunnerMode[] => {
-  const configured = parseCsvEnv(env.COCO_ALLOWED_RUN_MODES);
+  const configured = parseCsvEnv(env.CODE_AGENT_ALLOWED_RUN_MODES);
   if (configured.length > 0) {
     const invalid = configured.find(mode => !isCodeAgentRunnerMode(mode));
     if (invalid) {
-      throw new Error(`Unsupported COCO_ALLOWED_RUN_MODES entry: ${invalid}`);
+      throw new Error(`Unsupported CODE_AGENT_ALLOWED_RUN_MODES entry: ${invalid}`);
     }
     return normalizeModeSet(configured as CodeAgentRunnerMode[]);
   }
@@ -186,16 +186,16 @@ const readAvailableModes = (env: NodeJS.ProcessEnv): CodeAgentRunnerMode[] => {
 };
 
 const readDefaultMode = (env: NodeJS.ProcessEnv, availableModes: CodeAgentRunnerMode[]): CodeAgentRunnerMode => {
-  const configured = env.COCO_DEFAULT_MODE?.trim();
+  const configured = env.CODE_AGENT_DEFAULT_MODE?.trim();
   if (!configured) {
     return 'plan';
   }
   const normalized = normalizeCodeAgentMode(configured);
   if (!normalized) {
-    throw new Error(`Unsupported COCO_DEFAULT_MODE: ${configured}`);
+    throw new Error(`Unsupported CODE_AGENT_DEFAULT_MODE: ${configured}`);
   }
   if (!availableModes.includes(normalized)) {
-    throw new Error(`COCO_DEFAULT_MODE=${configured} must be included in COCO_ALLOWED_RUN_MODES`);
+    throw new Error(`CODE_AGENT_DEFAULT_MODE=${configured} must be included in CODE_AGENT_ALLOWED_RUN_MODES`);
   }
   return normalized;
 };
@@ -224,36 +224,36 @@ const isHttpsUrl = (value?: string) => {
 };
 
 const hasModelProxySettings = (env: NodeJS.ProcessEnv) => (
-  Boolean(env.COCO_MODEL_PROXY_URL) || Boolean(env.COCO_MODEL_PROXY_TOKEN)
+  Boolean(env.CODE_AGENT_MODEL_PROXY_URL) || Boolean(env.CODE_AGENT_MODEL_PROXY_TOKEN)
 );
 
 const hasRoomTalkModelGatewaySettings = (env: NodeJS.ProcessEnv) => (
-  env.COCO_MODEL_ACCESS_STRATEGY === 'roomtalk_gateway' ||
-  Boolean(env.COCO_MODEL_GATEWAY_SECRET) ||
-  Boolean(env.COCO_MODEL_GATEWAY_PUBLIC_URL)
+  env.CODE_AGENT_MODEL_ACCESS_STRATEGY === 'roomtalk_gateway' ||
+  Boolean(env.CODE_AGENT_MODEL_GATEWAY_SECRET) ||
+  Boolean(env.CODE_AGENT_MODEL_GATEWAY_PUBLIC_URL)
 );
 
 const hasModelProxyContract = (env: NodeJS.ProcessEnv) => (
-  env.COCO_MODEL_ACCESS_STRATEGY === 'proxy' &&
-  isHttpsUrl(env.COCO_MODEL_PROXY_URL) &&
-  typeof env.COCO_MODEL_PROXY_TOKEN === 'string' &&
-  env.COCO_MODEL_PROXY_TOKEN.trim().length > 0
+  env.CODE_AGENT_MODEL_ACCESS_STRATEGY === 'proxy' &&
+  isHttpsUrl(env.CODE_AGENT_MODEL_PROXY_URL) &&
+  typeof env.CODE_AGENT_MODEL_PROXY_TOKEN === 'string' &&
+  env.CODE_AGENT_MODEL_PROXY_TOKEN.trim().length > 0
 );
 
 const hasScopedProviderKeyContract = (env: NodeJS.ProcessEnv) => (
-  env.COCO_SCOPED_PROVIDER_KEY === 'true' &&
-  hasPositiveNumber(env.COCO_SCOPED_PROVIDER_KEY_TTL_SECONDS) &&
-  hasPositiveNumber(env.COCO_SCOPED_PROVIDER_KEY_BUDGET_USD) &&
-  typeof env.COCO_SCOPED_PROVIDER_KEY_AUDIT_ID === 'string' &&
-  env.COCO_SCOPED_PROVIDER_KEY_AUDIT_ID.length > 0
+  env.CODE_AGENT_SCOPED_PROVIDER_KEY === 'true' &&
+  hasPositiveNumber(env.CODE_AGENT_SCOPED_PROVIDER_KEY_TTL_SECONDS) &&
+  hasPositiveNumber(env.CODE_AGENT_SCOPED_PROVIDER_KEY_BUDGET_USD) &&
+  typeof env.CODE_AGENT_SCOPED_PROVIDER_KEY_AUDIT_ID === 'string' &&
+  env.CODE_AGENT_SCOPED_PROVIDER_KEY_AUDIT_ID.length > 0
 );
 
 const usesOutOfBandModelAccess = (env: NodeJS.ProcessEnv) => (
-  env.COCO_MODEL_ACCESS_STRATEGY === 'proxy' ||
-  env.COCO_MODEL_ACCESS_STRATEGY === 'roomtalk_gateway' ||
+  env.CODE_AGENT_MODEL_ACCESS_STRATEGY === 'proxy' ||
+  env.CODE_AGENT_MODEL_ACCESS_STRATEGY === 'roomtalk_gateway' ||
   hasRoomTalkModelGatewaySettings(env) ||
   hasModelProxySettings(env) ||
-  env.COCO_SCOPED_PROVIDER_KEY === 'true'
+  env.CODE_AGENT_SCOPED_PROVIDER_KEY === 'true'
 );
 
 const hasApprovedModelAccess = (config: CodeAgentRuntimeConfig, env: NodeJS.ProcessEnv) => {
@@ -270,27 +270,27 @@ const hasApprovedModelAccess = (config: CodeAgentRuntimeConfig, env: NodeJS.Proc
 };
 
 const pickRunnerEnv = (env: NodeJS.ProcessEnv) => pickEnv(env, [
-  'COCO_SOURCE_DIR',
-  'COCO_WORKSPACE_ROOT',
-  'COCO_MAX_TOKENS',
-  'ROOMTALK_COCO_MAX_TOKENS',
-  'ROOMTALK_COCO_ALLOW_WRITE_TOOLS',
-  'ROOMTALK_COCO_ALLOW_SHELL',
-  'COCO_MODEL_PROXY_URL',
-  'COCO_MODEL_PROXY_TOKEN',
+  'CODE_AGENT_SOURCE_DIR',
+  'CODE_AGENT_WORKSPACE_ROOT',
+  'CODE_AGENT_MAX_TOKENS',
+  'ROOMTALK_CODE_AGENT_MAX_TOKENS',
+  'ROOMTALK_CODE_AGENT_ALLOW_WRITE_TOOLS',
+  'ROOMTALK_CODE_AGENT_ALLOW_SHELL',
+  'CODE_AGENT_MODEL_PROXY_URL',
+  'CODE_AGENT_MODEL_PROXY_TOKEN',
 ]);
 
 const baseRunnerEnv = (
   env: NodeJS.ProcessEnv,
-  sandboxProvider: CocoSandboxProvider,
+  sandboxProvider: CodeAgentSandboxProvider,
   runnerClient: CodeAgentRunnerClientKind
 ): Record<string, string> => {
   if (sandboxProvider !== 'e2b' || runnerClient !== 'jsonl') {
     return {};
   }
   return {
-    PYTHONPATH: env.COCO_RUNNER_PYTHONPATH || DEFAULT_COCO_RUNNER_PYTHONPATH,
-    COCO_WORKSPACE_ROOT: env.COCO_WORKSPACE_ROOT || env.COCO_E2B_WORKSPACE || DEFAULT_COCO_WORKSPACE_ROOT,
+    PYTHONPATH: env.CODE_AGENT_RUNNER_PYTHONPATH || DEFAULT_CODE_AGENT_RUNNER_PYTHONPATH,
+    CODE_AGENT_WORKSPACE_ROOT: env.CODE_AGENT_WORKSPACE_ROOT || env.CODE_AGENT_E2B_WORKSPACE || DEFAULT_CODE_AGENT_WORKSPACE_ROOT,
     PLAYWRIGHT_BROWSERS_PATH: env.PLAYWRIGHT_BROWSERS_PATH || DEFAULT_PLAYWRIGHT_BROWSERS_PATH,
     NODE_PATH: env.NODE_PATH || DEFAULT_NODE_PATH,
   };
@@ -323,44 +323,44 @@ const readModelGatewayConfig = (env: NodeJS.ProcessEnv): CodeAgentRuntimeConfig[
   if (!hasRoomTalkModelGatewaySettings(env)) {
     return undefined;
   }
-  if (env.COCO_MODEL_ACCESS_STRATEGY && env.COCO_MODEL_ACCESS_STRATEGY !== 'roomtalk_gateway') {
+  if (env.CODE_AGENT_MODEL_ACCESS_STRATEGY && env.CODE_AGENT_MODEL_ACCESS_STRATEGY !== 'roomtalk_gateway') {
     return undefined;
   }
 
-  const tokenSecret = env.COCO_MODEL_GATEWAY_SECRET?.trim();
+  const tokenSecret = env.CODE_AGENT_MODEL_GATEWAY_SECRET?.trim();
   if (!tokenSecret) {
-    throw new Error('RoomTalk Coco model gateway requires COCO_MODEL_GATEWAY_SECRET');
+    throw new Error('RoomTalk Code agent model gateway requires CODE_AGENT_MODEL_GATEWAY_SECRET');
   }
-  const baseUrl = (env.COCO_MODEL_GATEWAY_PUBLIC_URL || (env.CLIENT_URL ? `${env.CLIENT_URL.replace(/\/+$/, '')}/api/coco/model-gateway` : '')).trim();
+  const baseUrl = (env.CODE_AGENT_MODEL_GATEWAY_PUBLIC_URL || (env.CLIENT_URL ? `${env.CLIENT_URL.replace(/\/+$/, '')}/api/code-agent/model-gateway` : '')).trim();
   if (!baseUrl) {
-    throw new Error('RoomTalk Coco model gateway requires COCO_MODEL_GATEWAY_PUBLIC_URL or CLIENT_URL');
+    throw new Error('RoomTalk Code agent model gateway requires CODE_AGENT_MODEL_GATEWAY_PUBLIC_URL or CLIENT_URL');
   }
   if (!isHttpsUrl(baseUrl) && env.E2E_TEST_MODE !== 'true') {
-    throw new Error('RoomTalk Coco model gateway public URL must be HTTPS');
+    throw new Error('RoomTalk Code agent model gateway public URL must be HTTPS');
   }
 
   return {
     publicBaseUrl: baseUrl.replace(/\/+$/, ''),
     tokenSecret,
-    tokenTtlSeconds: parsePositiveIntegerEnv(env, 'COCO_MODEL_GATEWAY_TOKEN_TTL_SECONDS', 15 * 60),
-    maxRequestsPerTurn: parsePositiveIntegerEnv(env, 'COCO_MODEL_GATEWAY_MAX_REQUESTS_PER_TURN', 20),
-    turnBudgetUsd: parsePositiveNumberEnv(env, 'COCO_MODEL_GATEWAY_TURN_BUDGET_USD', 2),
+    tokenTtlSeconds: parsePositiveIntegerEnv(env, 'CODE_AGENT_MODEL_GATEWAY_TOKEN_TTL_SECONDS', 15 * 60),
+    maxRequestsPerTurn: parsePositiveIntegerEnv(env, 'CODE_AGENT_MODEL_GATEWAY_MAX_REQUESTS_PER_TURN', 20),
+    turnBudgetUsd: parsePositiveNumberEnv(env, 'CODE_AGENT_MODEL_GATEWAY_TURN_BUDGET_USD', 2),
   };
 };
 
 const validateEnabledConfig = (config: CodeAgentRuntimeConfig, env: NodeJS.ProcessEnv) => {
   if (config.runnerClient === 'jsonl' && config.sandboxProvider === 'fake') {
-    throw new Error('COCO_RUNNER_CLIENT=jsonl requires a non-fake sandbox provider');
+    throw new Error('CODE_AGENT_RUNNER_CLIENT=jsonl requires a non-fake sandbox provider');
   }
   if (
     config.sandboxProvider === 'e2b' &&
     config.runnerClient === 'fake' &&
     env.E2E_TEST_MODE !== 'true'
   ) {
-    throw new Error('COCO_SANDBOX_PROVIDER=e2b requires COCO_RUNNER_CLIENT=jsonl outside explicit test mode');
+    throw new Error('CODE_AGENT_SANDBOX_PROVIDER=e2b requires CODE_AGENT_RUNNER_CLIENT=jsonl outside explicit test mode');
   }
   if (config.sandboxProvider === 'e2b' && !config.e2bTemplateId) {
-    throw new Error('COCO_SANDBOX_PROVIDER=e2b requires COCO_E2B_TEMPLATE_ID');
+    throw new Error('CODE_AGENT_SANDBOX_PROVIDER=e2b requires CODE_AGENT_E2B_TEMPLATE_ID');
   }
   if (
     config.sandboxProvider === 'e2b' &&
@@ -368,47 +368,47 @@ const validateEnabledConfig = (config: CodeAgentRuntimeConfig, env: NodeJS.Proce
     !env.E2B_API_KEY &&
     !env.E2B_ACCESS_TOKEN
   ) {
-    throw new Error('COCO_SANDBOX_PROVIDER=e2b requires E2B_API_KEY or E2B_ACCESS_TOKEN');
+    throw new Error('CODE_AGENT_SANDBOX_PROVIDER=e2b requires E2B_API_KEY or E2B_ACCESS_TOKEN');
   }
 
-  const shellEnabled = config.runnerEnv.ROOMTALK_COCO_ALLOW_SHELL === 'true';
-  const writeToolsEnabled = config.runnerEnv.ROOMTALK_COCO_ALLOW_WRITE_TOOLS === 'true' ||
+  const shellEnabled = config.runnerEnv.ROOMTALK_CODE_AGENT_ALLOW_SHELL === 'true';
+  const writeToolsEnabled = config.runnerEnv.ROOMTALK_CODE_AGENT_ALLOW_WRITE_TOOLS === 'true' ||
     config.availableModes.some(codeAgentModeAllowsWriteTools);
   const requiresModelAccessContract = shellEnabled || writeToolsEnabled;
   if (
     hasRoomTalkModelGatewaySettings(env) &&
-    env.COCO_MODEL_ACCESS_STRATEGY &&
-    env.COCO_MODEL_ACCESS_STRATEGY !== 'roomtalk_gateway'
+    env.CODE_AGENT_MODEL_ACCESS_STRATEGY &&
+    env.CODE_AGENT_MODEL_ACCESS_STRATEGY !== 'roomtalk_gateway'
   ) {
-    throw new Error('RoomTalk Coco model gateway settings require COCO_MODEL_ACCESS_STRATEGY=roomtalk_gateway');
+    throw new Error('RoomTalk Code agent model gateway settings require CODE_AGENT_MODEL_ACCESS_STRATEGY=roomtalk_gateway');
   }
   if (
     hasModelProxySettings(env) &&
-    env.COCO_MODEL_ACCESS_STRATEGY !== 'proxy'
+    env.CODE_AGENT_MODEL_ACCESS_STRATEGY !== 'proxy'
   ) {
-    throw new Error('Coco model proxy settings require COCO_MODEL_ACCESS_STRATEGY=proxy');
+    throw new Error('Code agent model proxy settings require CODE_AGENT_MODEL_ACCESS_STRATEGY=proxy');
   }
-  if (env.COCO_MODEL_ACCESS_STRATEGY === 'proxy' && !hasModelProxyContract(env)) {
-    throw new Error('Coco model proxy mode requires HTTPS COCO_MODEL_PROXY_URL and COCO_MODEL_PROXY_TOKEN');
+  if (env.CODE_AGENT_MODEL_ACCESS_STRATEGY === 'proxy' && !hasModelProxyContract(env)) {
+    throw new Error('Code agent model proxy mode requires HTTPS CODE_AGENT_MODEL_PROXY_URL and CODE_AGENT_MODEL_PROXY_TOKEN');
   }
-  if (config.runnerClient === 'jsonl' && env.COCO_SCOPED_PROVIDER_KEY === 'true' && !hasScopedProviderKeyContract(env)) {
-    throw new Error('JSONL Coco scoped provider key mode requires TTL, budget, and audit id');
+  if (config.runnerClient === 'jsonl' && env.CODE_AGENT_SCOPED_PROVIDER_KEY === 'true' && !hasScopedProviderKeyContract(env)) {
+    throw new Error('JSONL code-agent scoped provider key mode requires TTL, budget, and audit id');
   }
   if (config.runnerClient === 'jsonl' && requiresModelAccessContract && !hasApprovedModelAccess(config, env)) {
-    throw new Error('JSONL Coco write or shell mode requires RoomTalk model gateway, model proxy with token, or scoped provider key contract');
+    throw new Error('JSONL code-agent write or shell mode requires RoomTalk model gateway, model proxy with token, or scoped provider key contract');
   }
 
   if (config.sandboxProvider === 'e2b' && config.runnerClient === 'jsonl') {
     if (config.artifactMode === 'production') {
-      if (!config.artifactVersion || !config.cocoSourceRef) {
-        throw new Error('Production Coco E2B JSONL mode requires COCO_ARTIFACT_VERSION and COCO_SOURCE_REF');
+      if (!config.artifactVersion || !config.codeAgentSourceRef) {
+        throw new Error('Production code agent E2B JSONL mode requires CODE_AGENT_ARTIFACT_VERSION and CODE_AGENT_SOURCE_REF');
       }
-      if (config.runnerEnv.COCO_SOURCE_DIR) {
-        throw new Error('Production Coco E2B JSONL mode must use the pinned sandbox artifact, not COCO_SOURCE_DIR');
+      if (config.runnerEnv.CODE_AGENT_SOURCE_DIR) {
+        throw new Error('Production code agent E2B JSONL mode must use the pinned sandbox artifact, not CODE_AGENT_SOURCE_DIR');
       }
     }
-    if (config.artifactMode === 'development' && !config.runnerEnv.COCO_SOURCE_DIR) {
-      throw new Error('Development Coco E2B JSONL mode requires COCO_SOURCE_DIR for the mounted Coco source');
+    if (config.artifactMode === 'development' && !config.runnerEnv.CODE_AGENT_SOURCE_DIR) {
+      throw new Error('Development code agent E2B JSONL mode requires CODE_AGENT_SOURCE_DIR for the mounted code-agent engine source');
     }
   }
 };
@@ -423,35 +423,35 @@ export const resolveCodeAgentRuntimeConfig = (env: NodeJS.ProcessEnv): CodeAgent
   const artifactMode = readArtifactMode(env);
   const e2bLifecycle = readE2BLifecycle(env);
   const modelGateway = readModelGatewayConfig(env);
-  const runnerCommand = env.COCO_RUNNER_COMMAND || defaultRunnerCommandForBackend(backend);
+  const runnerCommand = env.CODE_AGENT_RUNNER_COMMAND || defaultRunnerCommandForBackend(backend);
   const runnerCommandByBackend = {
-    coco: backend === 'coco' ? runnerCommand : DEFAULT_COCO_RUNNER_COMMAND,
+    'code-agent': backend === 'code-agent' ? runnerCommand : DEFAULT_CODE_AGENT_RUNNER_COMMAND,
     codex: env.CODEX_CLI_RUNNER_COMMAND || (backend === 'codex' ? runnerCommand : DEFAULT_CODEX_CLI_RUNNER_COMMAND),
     'codex-app-server': env.CODEX_APP_SERVER_RUNNER_COMMAND || (backend === 'codex-app-server' ? runnerCommand : DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND),
   } satisfies Partial<Record<CodeAgentBackend, string>>;
   const config: CodeAgentRuntimeConfig = {
-    enabled: env.COCO_ENABLED === 'true',
+    enabled: env.CODE_AGENT_ENABLED === 'true',
     backend,
     sandboxProvider,
     runnerClient,
     artifactMode,
-    artifactVersion: env.COCO_ARTIFACT_VERSION,
-    cocoSourceRef: env.COCO_SOURCE_REF,
-    allowedClientIds: parseCsvEnv(env.COCO_ALLOWED_USER_IDS),
+    artifactVersion: env.CODE_AGENT_ARTIFACT_VERSION,
+    codeAgentSourceRef: env.CODE_AGENT_SOURCE_REF,
+    allowedClientIds: parseCsvEnv(env.CODE_AGENT_ALLOWED_USER_IDS),
     mode,
     availableModes,
     defaultMode,
     modelGateway,
     runnerCommand,
     runnerCommandByBackend,
-    allowedPaths: parseCsvEnv(env.COCO_ALLOWED_PATHS || '.'),
+    allowedPaths: parseCsvEnv(env.CODE_AGENT_ALLOWED_PATHS || '.'),
     runnerEnv: {
       ...baseRunnerEnv(env, sandboxProvider, runnerClient),
       ...pickRunnerEnv(env),
     },
     runnerProviderEnvByProvider: shouldForwardProviderEnv(env, runnerClient, availableModes) ? providerEnv(env) : {},
-    e2bTemplateId: env.COCO_E2B_TEMPLATE_ID,
-    e2bWorkspace: env.COCO_E2B_WORKSPACE,
+    e2bTemplateId: env.CODE_AGENT_E2B_TEMPLATE_ID,
+    e2bWorkspace: env.CODE_AGENT_E2B_WORKSPACE,
     e2bLifecycle,
   };
 

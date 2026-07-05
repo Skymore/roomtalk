@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "artifactName": "roomtalk-code-agent",
+  "artifactVersion": "roomtalk-code-agent-2026-07-05-naming-v7",
+  "pythonVersion": "3.12",
+  "baseImage": {
+    "name": "python",
+    "tag": "3.12-slim-bookworm",
+    "digest": "sha256:42ada43c4265e1ed6db62ad8df62af99a4abb9a9d49622032522ac76efb0bcef"
+  },
+  "codeAgentEngine": {
+    "packageName": "coco",
+    "packageVersion": "0.1.3a0",
+    "sourceRepo": "https://github.com/Venti0325/Coco.git",
+    "sourceRef": "a4e70e674e46d59a63874371276f5fec0fcd3f41"
+  },
+  "runner": {
+    "packageName": "roomtalk-code-agent-runner",
+    "packageVersion": "0.1.9",
+    "sourcePath": "server/roomtalk_code_agent_runner",
+    "command": "python -m roomtalk_code_agent_runner",
+    "backends": {
+      "code_agent_cli": {
+        "command": "python -m roomtalk_code_agent_runner"
+      },
+      "codex_cli": {
+        "command": "python -m roomtalk_code_agent_runner.codex_cli",
+        "codexCliVersion": "0.142.5"
+      },
+      "codex_app_server": {
+        "command": "python -m roomtalk_code_agent_runner.codex_app_server",
+        "codexCliVersion": "0.142.5"
+      },
+      "codex_sdk_app_server": {
+        "command": "python -m roomtalk_code_agent_runner.codex_sdk_app_server",
+        "codexCliVersion": "0.142.5",
+        "pythonSdkVersion": "0.1.0b3"
+      }
+    }
+  },
+  "browserRuntime": {
+    "playwrightVersion": "1.61.1",
+    "browsers": [
+      "chromium"
+    ],
+    "browsersPath": "/ms-playwright",
+    "nodePath": "/usr/lib/node_modules"
+  },
+  "runtimeTools": {
+    "cli": [
+      "bash",
+      "curl",
+      "wget",
+      "git",
+      "git-lfs",
+      "openssh-client",
+      "jq",
+      "ripgrep",
+      "fd",
+      "tree",
+      "file",
+      "less",
+      "lsof",
+      "procps",
+      "psmisc",
+      "iproute2",
+      "iputils-ping",
+      "dnsutils",
+      "netcat-openbsd",
+      "rsync",
+      "sqlite3",
+      "postgresql-client",
+      "redis-tools",
+      "shellcheck",
+      "zip",
+      "unzip",
+      "xz-utils"
+    ],
+    "build": [
+      "build-essential",
+      "pkg-config",
+      "cmake",
+      "ninja-build"
+    ],
+    "languages": {
+      "python": "3.12",
+      "node": "22",
+      "go": "debian-bookworm golang-go",
+      "rust": "debian-bookworm rustc+cargo",
+      "java": "openjdk-17-jdk-headless+maven",
+      "ruby": "debian-bookworm ruby-full",
+      "php": "debian-bookworm php-cli+composer"
+    },
+    "nodeGlobalPackages": {
+      "pnpm": "11.10.0",
+      "yarn": "1.22.22",
+      "typescript": "6.0.3",
+      "tsx": "4.23.0"
+    }
+  },
+  "image": {
+    "dockerfile": "ops/code-agent-sandbox/Dockerfile",
+    "requirementsLock": "ops/code-agent-sandbox/requirements.lock",
+    "codexSdkRequirementsLock": "ops/code-agent-sandbox/codex-sdk.requirements.lock",
+    "workspace": "/workspace",
+    "engineInstallPath": "/opt/code-agent-engine",
+    "runnerInstallPath": "/opt/roomtalk_code_agent_runner"
+  }
+}

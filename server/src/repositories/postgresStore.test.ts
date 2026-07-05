@@ -228,36 +228,36 @@ describe('PostgresStore', () => {
     await store.deleteRoom('room-1', 'client-1');
   });
 
-  it('saves Coco room fields without letting legacy room saves clear them', async () => {
-    const cocoRoom = room({
-      type: 'coco',
+  it('saves code-agent room fields without letting legacy room saves clear them', async () => {
+    const codeAgentRoom = room({
+      type: 'codeAgent',
       sandboxId: 'sandbox-1',
       sandboxStatus: 'ready',
       sandboxUpdatedAt: '2026-05-03T00:01:00.000Z',
       sandboxArtifactVersion: 'artifact-v1',
-      sandboxCocoSourceRef: 'source-ref-1',
-      cocoSessionId: 'coco-session-1',
-      cocoStatus: 'idle',
+      sandboxCodeAgentSourceRef: 'source-ref-1',
+      codeAgentSessionId: 'code-agent-session-1',
+      codeAgentStatus: 'idle',
     });
-    const legacyRoom = room({ id: cocoRoom.id, name: 'Legacy save' });
-    const preservedLegacyRoom = { ...cocoRoom, name: 'Legacy save' };
+    const legacyRoom = room({ id: codeAgentRoom.id, name: 'Legacy save' });
+    const preservedLegacyRoom = { ...codeAgentRoom, name: 'Legacy save' };
     const client = new ScriptedClient([
       { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
       {
         rows: [roomRow({
-          type: 'coco',
+          type: 'codeAgent',
           sandbox_id: 'sandbox-1',
           sandbox_status: 'ready',
           sandbox_updated_at: '2026-05-03T00:01:00.000Z',
           sandbox_artifact_version: 'artifact-v1',
-          sandbox_coco_source_ref: 'source-ref-1',
-          coco_session_id: 'coco-session-1',
-          coco_status: 'idle',
+          sandbox_code_agent_source_ref: 'source-ref-1',
+          code_agent_session_id: 'code-agent-session-1',
+          code_agent_status: 'idle',
         })],
         assertCall(call) {
           assert.match(call.sql, /type = CASE WHEN \$18::boolean THEN EXCLUDED\.type ELSE rooms\.type END/);
           assert.match(call.sql, /sandbox_id = COALESCE\(EXCLUDED\.sandbox_id, rooms\.sandbox_id\)/);
-          assert.equal(call.params?.[6], 'coco');
+          assert.equal(call.params?.[6], 'codeAgent');
           assert.equal(call.params?.[7], 'sandbox-1');
           assert.equal(call.params?.[10], 'artifact-v1');
           assert.equal(call.params?.[11], 'source-ref-1');
@@ -270,14 +270,14 @@ describe('PostgresStore', () => {
       {
         rows: [roomRow({
           name: 'Legacy save',
-          type: 'coco',
+          type: 'codeAgent',
           sandbox_id: 'sandbox-1',
           sandbox_status: 'ready',
           sandbox_updated_at: '2026-05-03T00:01:00.000Z',
           sandbox_artifact_version: 'artifact-v1',
-          sandbox_coco_source_ref: 'source-ref-1',
-          coco_session_id: 'coco-session-1',
-          coco_status: 'idle',
+          sandbox_code_agent_source_ref: 'source-ref-1',
+          code_agent_session_id: 'code-agent-session-1',
+          code_agent_status: 'idle',
         })],
         assertCall(call) {
           assert.equal(call.params?.[1], 'Legacy save');
@@ -290,7 +290,7 @@ describe('PostgresStore', () => {
     ]);
     const store = new PostgresStore(new ScriptedPool([], client), logger as any);
 
-    assert.deepEqual(await store.saveRoom(cocoRoom), cocoRoom);
+    assert.deepEqual(await store.saveRoom(codeAgentRoom), codeAgentRoom);
     assert.deepEqual(await store.saveRoom(legacyRoom), preservedLegacyRoom);
   });
 
@@ -397,7 +397,7 @@ describe('PostgresStore', () => {
       {
         rows: [roomRow()],
         assertCall(call) {
-          assert.match(call.sql, /SELECT id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_coco_source_ref, coco_session_id, coco_status, coco_access, code_agent_mode, code_agent_backend, room_version, updated_at FROM rooms WHERE id = \$1/);
+          assert.match(call.sql, /SELECT id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, room_version, updated_at FROM rooms WHERE id = \$1/);
           assert.deepEqual(call.params, ['room-1']);
         },
       },
@@ -887,7 +887,7 @@ describe('PostgresStore', () => {
     assert.equal(client.released, true);
   });
 
-  it('supports Coco recovery queries and sandbox status CAS', async () => {
+  it('supports code-agent recovery queries and sandbox status CAS', async () => {
     const statusChangedAt = '2026-05-03T00:02:00.000Z';
     const danglingToolCall = message({
       id: 'tool-call-1',
@@ -899,7 +899,7 @@ describe('PostgresStore', () => {
     });
     const pool = new ScriptedPool([
       {
-        rows: [roomRow({ type: 'coco', sandbox_status: 'creating', sandbox_updated_at: statusChangedAt })],
+        rows: [roomRow({ type: 'codeAgent', sandbox_status: 'creating', sandbox_updated_at: statusChangedAt })],
         assertCall(call) {
           assert.match(call.sql, /UPDATE rooms/);
           assert.match(call.sql, /COALESCE\(sandbox_status, 'none'\) = ANY/);
@@ -908,12 +908,12 @@ describe('PostgresStore', () => {
       },
       {
         rows: [
-          roomRow({ id: 'coco-creating', type: 'coco', sandbox_status: 'creating' }),
-          roomRow({ id: 'coco-running', type: 'coco', coco_status: 'running' }),
+          roomRow({ id: 'code-agent-creating', type: 'codeAgent', sandbox_status: 'creating' }),
+          roomRow({ id: 'code-agent-running', type: 'codeAgent', code_agent_status: 'running' }),
         ],
         assertCall(call) {
-          assert.match(call.sql, /WHERE type = 'coco'/);
-          assert.match(call.sql, /coco_status = 'running'/);
+          assert.match(call.sql, /WHERE type = 'codeAgent'/);
+          assert.match(call.sql, /code_agent_status = 'running'/);
         },
       },
       {
@@ -952,11 +952,11 @@ describe('PostgresStore', () => {
     const store = new PostgresStore(pool, logger as any);
 
     assert.deepEqual(await store.compareAndSetRoomSandboxStatus('room-1', ['none'], 'creating', statusChangedAt), room({
-      type: 'coco',
+      type: 'codeAgent',
       sandboxStatus: 'creating',
       sandboxUpdatedAt: statusChangedAt,
     }));
-    assert.deepEqual((await store.findInterruptedCocoRooms()).map(item => item.id), ['coco-creating', 'coco-running']);
+    assert.deepEqual((await store.findInterruptedCodeAgentRooms()).map(item => item.id), ['code-agent-creating', 'code-agent-running']);
     assert.deepEqual(await store.findDanglingToolCalls(), [danglingToolCall]);
   });
 

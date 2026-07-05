@@ -179,7 +179,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   postingSchedule,
   isRoomAIProcessing = false,
   isCodeAgentRoom = false,
-  codeAgentBackend = 'coco',
+  codeAgentBackend = 'code-agent',
   codeAgentMode = 'plan',
   codeAgentAvailableModes = ['plan'],
   canSwitchCodeAgentMode = codeAgentAvailableModes.length > 1,
@@ -556,7 +556,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         roleName: selectedRole.name,
         model: selectedAIModel || defaultAIModel,
         maxContextMessages: aiContextMessageLimit,
-      }, isCodeAgentRoom ? 'coco' : 'chat');
+      }, isCodeAgentRoom ? 'codeAgent' : 'chat');
       const codeAgentRunSettings = isCodeAgentRoom && isCodexCodeAgentBackend(codeAgentBackend)
         ? {
             codexModel: codexRunSettings.model,
@@ -1732,7 +1732,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                 defaultAIModel={defaultAIModel}
                 isSending={isSending}
                 isAiProcessing={isAiProcessing}
-                isInputLocked={isAIInputLocked}
+                isInputLocked={isAIInputLocked || isSteeringCodeAgent}
                 canPost={canPost}
                 isMacOS={isMacOS}
                 currentInputText={currentInputText}

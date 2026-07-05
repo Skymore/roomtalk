@@ -3,8 +3,8 @@ import type { Logger } from '../logger';
 import type { RoomStore } from '../repositories/store';
 import type { AIModelOption } from '../types';
 import type { AIClientWrapper } from '../services/aiClients';
-import type { CocoAccessControl } from '../services/cocoAccessControl';
-import type { CocoSandboxService } from '../services/cocoSandboxService';
+import type { CodeAgentAccessControl } from '../services/codeAgentAccessControl';
+import type { CodeAgentSandboxService } from '../services/codeAgentSandboxService';
 import type { CodeAgentSessionService } from '../services/codeAgentSessionService';
 import type { CodeWorkspaceAssetAccess } from '../services/codeWorkspaceAssetAccess';
 import type { PublishedStaticSiteService } from '../services/publishedStaticSite';
@@ -19,8 +19,8 @@ export interface SocketHandlerDeps {
   aiStreamOwnerId?: string;
   assemblyAIApiKey?: string;
   codeAgentSessionService?: CodeAgentSessionService;
-  cocoAccess?: CocoAccessControl;
-  cocoSandboxService?: CocoSandboxService;
+  codeAgentAccess?: CodeAgentAccessControl;
+  codeAgentSandboxService?: CodeAgentSandboxService;
   codeWorkspaceAssetAccess?: CodeWorkspaceAssetAccess;
   publishedStaticSiteService?: PublishedStaticSiteService;
 }

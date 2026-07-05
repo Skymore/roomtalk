@@ -2,17 +2,17 @@
 
 > Status: accepted as a docs-only spike; runtime remains disabled
 > Date: 2026-05-30
-> Scope: evaluate whether RoomTalk can support a future `codeAgentBackend = coco | codex` without replacing Coco or weakening sandbox boundaries.
+> Scope: evaluate whether RoomTalk can support a future `codeAgentBackend = code-agent | codex | codex-app-server` without replacing Code Agent or weakening sandbox boundaries.
 
-> 2026-07-04 update: this spike predates the Codex CLI subscription-auth POC. The first implementation path is now documented in `docs/codex-cli-subscription-backend-plan.zh.md`: keep one Coco engine / E2B template, run `coco_cli` and `codex_cli` as parallel backend commands inside that template, and use per-user ChatGPT/Codex subscription auth for `codex_cli`. The current branch has also wired server-side auth injection through `CocoSessionService` using sandbox secret files under `/tmp/roomtalk-codex`; the app-server notes below are retained as historical/longer-term background, not the first-batch implementation decision.
+> 2026-07-04 update: this spike predates the Codex CLI subscription-auth POC. The first implementation path is now documented in `docs/codex-cli-subscription-backend-plan.zh.md`: keep one Code Agent engine / E2B template, run `code_agent_cli` and `codex_cli` as parallel backend commands inside that template, and use per-user ChatGPT/Codex subscription auth for `codex_cli`. The current branch has also wired server-side auth injection through `CodeAgentSessionService` using sandbox secret files under `/tmp/roomtalk-codex`; the app-server notes below are retained as historical/longer-term background, not the first-batch implementation decision.
 
 ## Historical Decision
 
-This was the decision at the time of the May 2026 spike. It is retained as background for app-server and provider-runtime concerns, but the first-batch implementation has since been superseded by the dual-CLI Coco/E2B route in `docs/codex-cli-subscription-backend-plan.zh.md`.
+This was the decision at the time of the May 2026 spike. It is retained as background for app-server and provider-runtime concerns, but the first-batch implementation has since been superseded by the dual-CLI Code Agent/E2B route in `docs/codex-cli-subscription-backend-plan.zh.md`.
 
 Codex was technically feasible as a future second code-agent backend, but it was not ready to enable in RoomTalk at that checkpoint.
 
-At that time, RoomTalk was expected to keep the current Coco backend as the only runnable backend and keep `CODE_AGENT_BACKEND=codex` rejected at startup. The next implementation step was expected to be a protocol-neutral `CodeAgentRunner` contract that stopped exposing Coco-specific request, handler, and result types at the generic boundary.
+At that time, RoomTalk was expected to keep the current Code Agent backend as the only runnable backend and keep `CODE_AGENT_BACKEND=codex` rejected at startup. The next implementation step was expected to be a protocol-neutral `CodeAgentRunner` contract that stopped exposing Code Agent-specific request, handler, and result types at the generic boundary.
 
 First-batch implementation shape:
 
@@ -20,9 +20,9 @@ First-batch implementation shape:
 Browser UI
   -> RoomTalk API / Socket.IO
   -> room, permission, budget, and audit checks
-  -> CocoSessionService
-  -> Coco engine / E2B template
-       -> coco_cli backend
+  -> CodeAgentSessionService
+  -> Code Agent engine / E2B template
+       -> code_agent_cli backend
        -> codex_cli backend
 ```
 
@@ -74,19 +74,19 @@ This is a larger integration than calling `codex exec`.
 RoomTalk already has a named backend boundary:
 
 ```ts
-export type CodeAgentBackend = 'coco' | 'codex';
+export type CodeAgentBackend = 'code-agent' | 'codex' | 'codex-app-server';
 ```
 
-But the boundary is still Coco-shaped:
+But the boundary is still Code Agent-shaped:
 
-- `CodeAgentRunner.run(...)` accepts `CocoRunnerRunRequest`.
-- handlers are `CocoRunnerHandlers`.
-- results are `CocoRunnerRunResult`.
-- room persistence still stores `type: 'coco'`, `cocoStatus`, and `cocoSessionId`.
-- workspace snapshots are derived from persisted Coco-style messages.
+- `CodeAgentRunner.run(...)` accepts `CodeAgentRunnerRunRequest`.
+- handlers are `CodeAgentRunnerHandlers`.
+- results are `CodeAgentRunnerRunResult`.
+- room persistence still stores `type: 'codeAgent'`, `codeAgentStatus`, and `codeAgentSessionId`.
+- workspace snapshots are derived from persisted Code Agent-style messages.
 - there is no provider-neutral event schema for approvals, user input, file changes, diffs, rollback, cancel, or tool permissions.
 
-This is acceptable for the current Coco product. It is not enough to safely enable Codex.
+This is acceptable for the current Code Agent product. It is not enough to safely enable Codex.
 
 ## Rejected Integration Options
 
@@ -112,7 +112,7 @@ Reasons:
 
 ### `codex exec` as the product backend
 
-Rejected for the app-server integration path described by this historical spike. The first-batch dual-CLI implementation intentionally uses `codex exec --json` inside the existing Coco/E2B sandbox because it is scoped to one-turn task execution and preserves the current Coco runner protocol.
+Rejected for the app-server integration path described by this historical spike. The first-batch dual-CLI implementation intentionally uses `codex exec --json` inside the existing Code Agent/E2B sandbox because it is scoped to one-turn task execution and preserves the current Code Agent runner protocol.
 
 Historical reasons:
 
@@ -163,7 +163,7 @@ RoomTalk should own:
 
 ## Historical Security Requirements Before App-Server Enablement
 
-For the app-server integration path described by this spike, Codex had to stay disabled until these were true. The first-batch dual-CLI route addresses the process boundary differently by running `codex exec --json` inside the existing Coco/E2B sandbox and keeping subscription auth in per-run secret files.
+For the app-server integration path described by this spike, Codex had to stay disabled until these were true. The first-batch dual-CLI route addresses the process boundary differently by running `codex exec --json` inside the existing Code Agent/E2B sandbox and keeping subscription auth in per-run secret files.
 
 1. Browser clients can only control Codex through RoomTalk APIs or Socket.IO events.
 2. Codex app-server never listens on a public remote endpoint without RoomTalk mediation.
@@ -216,7 +216,7 @@ export interface CodeAgentEventHandlers {
 
 Then implement:
 
-- `CocoCodeAgentRunner`: maps neutral input/events to the current Coco JSONL protocol.
+- `Code AgentCodeAgentRunner`: maps neutral input/events to the current Code Agent JSONL protocol.
 - `CodexCodeAgentRunner`: maps neutral input/events to Codex app-server protocol.
 
 This prevents future Codex work from leaking app-server details into the RoomTalk UI or room model.
@@ -228,14 +228,14 @@ This prevents future Codex work from leaking app-server details into the RoomTal
 Scope:
 
 - Introduce `CodeAgentRunInput`, `CodeAgentEventHandlers`, and `CodeAgentRunResult`.
-- Keep Coco behavior unchanged by adapting the existing Coco protocol behind `CocoCodeAgentRunner`.
+- Keep Code Agent behavior unchanged by adapting the existing Code Agent protocol behind `Code AgentCodeAgentRunner`.
 - Keep `CODE_AGENT_BACKEND=codex` disabled.
 
 Acceptance:
 
-- Existing Coco E2E flows still pass.
-- Existing Coco runner protocol tests still pass.
-- `CodeAgentRunner` no longer exposes `Coco*` types.
+- Existing Code Agent E2E flows still pass.
+- Existing Code Agent runner protocol tests still pass.
+- `CodeAgentRunner` no longer exposes `Code Agent*` types.
 
 ### Codex Phase B: Runtime Controls Contract
 
@@ -246,7 +246,7 @@ Scope:
 
 Acceptance:
 
-- Coco may no-op unsupported controls, but unsupported state is explicit.
+- Code Agent may no-op unsupported controls, but unsupported state is explicit.
 - UI never renders a control that the selected backend cannot support.
 
 ### Codex Phase C: Disabled Codex Adapter Skeleton
@@ -280,6 +280,6 @@ Acceptance:
 
 ## Final Recommendation
 
-Historical recommendation for the app-server path: proceed with Codex only after the neutral runner contract is implemented, and keep Coco as the production backend.
+Historical recommendation for the app-server path: proceed with Codex only after the neutral runner contract is implemented, and keep Code Agent as the production backend.
 
-Current first-batch route: `CODE_AGENT_BACKEND=codex` may be enabled only with `CODEX_CONNECTIONS_ENABLED=true`, `CODEX_CLI_BACKEND_ENABLED=true`, a configured `CODEX_AUTH_ENCRYPTION_KEY`, and a verified dual-CLI Coco/E2B template.
+Current first-batch route: `CODE_AGENT_BACKEND=codex` may be enabled only with `CODEX_CONNECTIONS_ENABLED=true`, `CODEX_CLI_BACKEND_ENABLED=true`, a configured `CODEX_AUTH_ENCRYPTION_KEY`, and a verified dual-CLI Code Agent/E2B template.

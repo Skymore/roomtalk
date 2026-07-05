@@ -397,11 +397,11 @@ describe('MessageInput optimistic send flow', () => {
     await expectAskAIShortcut('中文问题');
   });
 
-  it('uses code-agent mode without ordinary role prompts for Coco Ask AI', async () => {
-    const savedMessage = message({ id: 'server-message-coco', content: 'write python' });
+  it('uses code-agent mode without ordinary role prompts for Code Agent Ask AI', async () => {
+    const savedMessage = message({ id: 'server-message-code-agent', content: 'write python' });
     socketMocks.sendMessageAndAskAI.mockResolvedValue({
       userMessage: savedMessage,
-      aiMessageId: 'coco-ai-message-1',
+      aiMessageId: 'code-agent-ai-message-1',
       aiStarted: true,
     });
 
@@ -418,7 +418,7 @@ describe('MessageInput optimistic send flow', () => {
     const payload = socketMocks.sendMessageAndAskAI.mock.calls[0][0];
 
     expect(screen.getByTestId('message-input-ai-controls').dataset.codeAgentRoom).toBe('true');
-    expect(screen.getByTestId('message-input-ai-controls').dataset.codeAgentBackend).toBe('coco');
+    expect(screen.getByTestId('message-input-ai-controls').dataset.codeAgentBackend).toBe('code-agent');
     expect(screen.getByTestId('message-input-ai-controls').dataset.codeAgentMode).toBe('plan');
     expect(payload).toMatchObject({
       roomId: 'room-1',
@@ -463,13 +463,13 @@ describe('MessageInput optimistic send flow', () => {
     expect(payload).not.toHaveProperty('roleName');
   });
 
-  it('appends code review comments to Coco Ask AI prompts and clears them after send', async () => {
+  it('appends code review comments to Code Agent Ask AI prompts and clears them after send', async () => {
     const onClearReviewComments = vi.fn();
     const onRemoveReviewComment = vi.fn();
     const savedMessage = message({ id: 'server-message-review', content: 'review this' });
     socketMocks.sendMessageAndAskAI.mockResolvedValue({
       userMessage: savedMessage,
-      aiMessageId: 'coco-ai-message-review',
+      aiMessageId: 'code-agent-ai-message-review',
       aiStarted: true,
     });
 

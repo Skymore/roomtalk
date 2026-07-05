@@ -1,8 +1,8 @@
 import express, { Express, Request, Response } from 'express';
 import { Logger } from '../logger';
 import {
-  COCO_STATIC_PUBLISH_API_PATH,
-  COCO_STATIC_PUBLISH_ROUTE_PREFIX,
+  CODE_AGENT_STATIC_PUBLISH_API_PATH,
+  CODE_AGENT_STATIC_PUBLISH_ROUTE_PREFIX,
   PublishedStaticSiteError,
   PublishedStaticSitePublishInput,
   PublishedStaticSiteService,
@@ -48,9 +48,9 @@ const publishedPathFromRequest = (req: Request) => {
 
 export function registerPublishedStaticSiteRoutes(app: Express, options: PublishedStaticSiteRouteOptions) {
   const { service, logger } = options;
-  const jsonParser = express.json({ limit: options.bodyLimit || process.env.COCO_STATIC_PUBLISH_BODY_LIMIT || '7mb' });
+  const jsonParser = express.json({ limit: options.bodyLimit || process.env.CODE_AGENT_STATIC_PUBLISH_BODY_LIMIT || '7mb' });
 
-  app.post(COCO_STATIC_PUBLISH_API_PATH, jsonParser, async (req: Request, res: Response) => {
+  app.post(CODE_AGENT_STATIC_PUBLISH_API_PATH, jsonParser, async (req: Request, res: Response) => {
     const token = readBearerToken(req);
     const claims = token ? service.verifyTurnToken(token) : null;
     if (!claims) {
@@ -61,13 +61,13 @@ export function registerPublishedStaticSiteRoutes(app: Express, options: Publish
       const result = await service.publish(req.body as PublishedStaticSitePublishInput, claims, requestBaseUrl(req));
       return res.status(201).json(result);
     } catch (error) {
-      return sendPublishError(res, error, logger, { endpoint: COCO_STATIC_PUBLISH_API_PATH, roomId: claims.roomId, turnId: claims.turnId });
+      return sendPublishError(res, error, logger, { endpoint: CODE_AGENT_STATIC_PUBLISH_API_PATH, roomId: claims.roomId, turnId: claims.turnId });
     }
   });
 
   app.get([
-    `${COCO_STATIC_PUBLISH_ROUTE_PREFIX}/:slug`,
-    `${COCO_STATIC_PUBLISH_ROUTE_PREFIX}/:slug/*`,
+    `${CODE_AGENT_STATIC_PUBLISH_ROUTE_PREFIX}/:slug`,
+    `${CODE_AGENT_STATIC_PUBLISH_ROUTE_PREFIX}/:slug/*`,
   ], async (req: Request, res: Response) => {
     const slug = normalizePublishedSiteSlug(req.params.slug, '');
     if (!slug || slug !== req.params.slug) {

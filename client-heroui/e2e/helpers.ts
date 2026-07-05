@@ -9,9 +9,9 @@ export interface TestRoom {
   description: string;
   createdAt: string;
   creatorId: string;
-  type?: 'chat' | 'coco';
+  type?: 'chat' | 'codeAgent';
   sandboxStatus?: 'none' | 'creating' | 'ready' | 'expired' | 'error';
-  cocoStatus?: 'idle' | 'running' | 'error';
+  codeAgentStatus?: 'idle' | 'running' | 'error';
 }
 
 export const uniqueName = (prefix: string) =>
@@ -28,13 +28,13 @@ export async function resetE2EData(request: APIRequestContext) {
   expect(response.ok()).toBeTruthy();
 }
 
-export async function expectCocoFeatureEnabled(request: APIRequestContext, clientId: string) {
+export async function expectCodeAgentFeatureEnabled(request: APIRequestContext, clientId: string) {
   const response = await request.get(`${serverURL}/api/features?clientId=${encodeURIComponent(clientId)}`);
   expect(response.ok()).toBeTruthy();
   const features = await response.json();
   expect(
-    features.coco?.enabled,
-    `Coco E2E tests require the seeded client to be rollout-enabled. clientId=${clientId} response=${JSON.stringify(features.coco)}`,
+    features.codeAgent?.enabled,
+    `code-agent E2E tests require the seeded client to be rollout-enabled. clientId=${clientId} response=${JSON.stringify(features.codeAgent)}`,
   ).toBe(true);
 }
 
@@ -59,7 +59,7 @@ export async function createRoomViaApi(
   clientId: string,
   name = shortName('room'),
   description = '',
-  type: 'chat' | 'coco' = 'chat',
+  type: 'chat' | 'codeAgent' = 'chat',
 ) {
   const response = await request.post(`${serverURL}/api/clients/${clientId}/rooms`, {
     data: { name, description, type },
@@ -141,8 +141,11 @@ export async function editMessage(page: Page, originalText: string, updatedText:
   const item = messageItem(page, originalText);
   await item.hover();
   await item.getByLabel('Edit Message').click();
-  await page.getByPlaceholder('Enter your message').fill(updatedText);
-  await page.getByRole('button', { name: askAI ? 'Save & Ask AI' : 'Save', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Edit Message' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByPlaceholder('Enter your message').fill(updatedText);
+  await dialog.getByRole('button', { name: askAI ? 'Save & Ask AI' : 'Save', exact: true }).click();
+  await expect(dialog).toBeHidden();
   await expectMessage(page, updatedText).toBeVisible();
 }
 

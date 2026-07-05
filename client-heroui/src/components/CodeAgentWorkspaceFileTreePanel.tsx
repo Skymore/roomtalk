@@ -656,7 +656,7 @@ export function CodeAgentWorkspaceFileTreePanel({
           ) : (
             <FileTree
               model={model}
-              aria-label={`${projectName} files`}
+              aria-label={t('codeAgentWorkspaceFiles')}
               className="min-h-0 flex-1 overflow-hidden"
               style={{
                 colorScheme: resolvedTheme,

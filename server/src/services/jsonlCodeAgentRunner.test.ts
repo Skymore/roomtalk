@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { PassThrough, Writable } from 'stream';
 import { CODE_AGENT_RUNNER_SCHEMA_VERSION, CodeAgentRunnerEvent, CodeAgentRunnerRunRequest } from './codeAgentRunnerProtocol';
-import { CodeAgentRunnerProcess, CodeAgentRunnerProcessExit, CocoSandboxHandle } from './cocoSandboxService';
+import { CodeAgentRunnerProcess, CodeAgentRunnerProcessExit, CodeAgentSandboxHandle } from './codeAgentSandboxService';
 import { JsonlCodeAgentRunnerClient } from './jsonlCodeAgentRunner';
 
 const request: CodeAgentRunnerRunRequest = {
@@ -20,7 +20,7 @@ const request: CodeAgentRunnerRunRequest = {
   allowedPaths: ['.'],
 };
 
-const sandbox: CocoSandboxHandle = {
+const sandbox: CodeAgentSandboxHandle = {
   id: 'sandbox-1',
   provider: 'fake',
   roomId: 'room-1',
@@ -30,7 +30,7 @@ const sandbox: CocoSandboxHandle = {
 };
 
 class MemoryRunnerProcess implements CodeAgentRunnerProcess {
-  readonly command = 'python -m roomtalk_coco_runner';
+  readonly command = 'python -m roomtalk_code_agent_runner';
   readonly stdin = new PassThrough();
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
@@ -56,12 +56,14 @@ class MemoryRunnerProcess implements CodeAgentRunnerProcess {
   }
 
   complete(exitCode = 0, signal: string | null = null) {
+    this.stdin.end();
     this.stdout.end();
     this.stderr.end();
     this.resolveExit({ exitCode, signal });
   }
 
   failCompletion(error: unknown) {
+    this.stdin.end();
     this.stdout.end();
     this.stderr.end();
     this.rejectExit(error);
@@ -73,7 +75,7 @@ class MemoryRunnerProcess implements CodeAgentRunnerProcess {
 }
 
 class StdinFailureRunnerProcess implements CodeAgentRunnerProcess {
-  readonly command = 'python -m roomtalk_coco_runner';
+  readonly command = 'python -m roomtalk_code_agent_runner';
   readonly stdin: Writable;
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
@@ -180,13 +182,13 @@ describe('JsonlCodeAgentRunnerClient', () => {
       },
     }, createContext(process));
 
-    process.stderr.write('ModuleNotFoundError: roomtalk_coco_runner.codex_cli');
+    process.stderr.write('ModuleNotFoundError: roomtalk_code_agent_runner.codex_cli');
     process.complete(1);
 
     const result = await run;
     assert.equal(result.errorEvent?.code, 'runner_stdin_write_failed');
     assert.match(result.errorEvent?.message || '', /broken pipe/);
-    assert.match(result.errorEvent?.message || '', /roomtalk_coco_runner\.codex_cli/);
+    assert.match(result.errorEvent?.message || '', /roomtalk_code_agent_runner\.codex_cli/);
     assert.deepEqual(emitted.map(event => event.type), ['error']);
   });
 

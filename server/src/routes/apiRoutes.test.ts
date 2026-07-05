@@ -12,7 +12,7 @@ import { LocalMediaObjectStorage } from '../services/mediaObjectStorage';
 import { Logger } from '../logger';
 import { AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CreateGoogleAccountInput, GoogleAccountProfile, PendingMediaUpload } from '../repositories/store';
 import { AudioTranscriptionJob } from '../services/audioTranscription';
-import { createCocoAccessControl } from '../services/cocoAccessControl';
+import { createCodeAgentAccessControl } from '../services/codeAgentAccessControl';
 import { MemoryMediaObjectStorage } from '../testUtils/memoryMediaObjectStorage';
 
 type EmittedEvent = {
@@ -192,7 +192,7 @@ async function createTestServer(overrides: {
   audioTranscriptionRunner?: Parameters<typeof registerApiRoutes>[1]['audioTranscriptionRunner'];
   googleClientIds?: Parameters<typeof registerApiRoutes>[1]['googleClientIds'];
   verifyGoogleCredential?: Parameters<typeof registerApiRoutes>[1]['verifyGoogleCredential'];
-  cocoAccess?: Parameters<typeof registerApiRoutes>[1]['cocoAccess'];
+  codeAgentAccess?: Parameters<typeof registerApiRoutes>[1]['codeAgentAccess'];
 } = {}): Promise<TestServer> {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
@@ -564,7 +564,7 @@ async function createTestServer(overrides: {
     audioTranscriptionRunner,
     googleClientIds: overrides.googleClientIds,
     verifyGoogleCredential: overrides.verifyGoogleCredential,
-    cocoAccess: overrides.cocoAccess ?? createCocoAccessControl({ enabled: true }),
+    codeAgentAccess: overrides.codeAgentAccess ?? createCodeAgentAccessControl({ enabled: true }),
     codeAgentMode: 'acceptEdits',
     codeAgentAvailableModes: ['plan', 'acceptEdits'],
     codeAgentDefaultMode: 'plan',
@@ -625,7 +625,7 @@ describe('API routes', () => {
       redis: string;
       rooms: number;
       features: {
-        coco: { enabled: boolean; rollout: string; mode: string; availableModes: string[]; defaultMode: string };
+        codeAgent: { enabled: boolean; rollout: string; mode: string; availableModes: string[]; defaultMode: string };
         codex: { connections: { enabled: boolean } };
       };
     };
@@ -633,13 +633,13 @@ describe('API routes', () => {
     assert.equal(status.persistenceStore, 'redis');
     assert.equal(status.redis, 'connected');
     assert.equal(status.rooms, 1);
-    assert.deepEqual(status.features.coco, { enabled: true, rollout: 'all', mode: 'edit', availableModes: ['plan', 'edit'], defaultMode: 'plan' });
+    assert.deepEqual(status.features.codeAgent, { enabled: true, rollout: 'all', mode: 'edit', availableModes: ['plan', 'edit'], defaultMode: 'plan' });
     assert.deepEqual(status.features.codex, { connections: { enabled: false } });
 
     const featuresResponse = await fetch(`${server.baseUrl}/api/features?clientId=client-1`);
     assert.equal(featuresResponse.status, 200);
     assert.deepEqual(await featuresResponse.json(), {
-      coco: {
+      codeAgent: {
         enabled: true,
         rollout: 'all',
         mode: 'edit',
@@ -1183,36 +1183,36 @@ describe('API routes', () => {
     assert.deepEqual(server.emitted, [{ target: 'client-2', event: 'new_room', payload: room }]);
   });
 
-  it('creates Coco rooms through the API only when rollout controls allow it', async () => {
+  it('creates code-agent rooms through the API only when rollout controls allow it', async () => {
     const response = await fetch(`${server.baseUrl}/api/clients/client-2/rooms`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'API Coco', description: 'Code work', type: 'coco' }),
+      body: JSON.stringify({ name: 'API Code Agent', description: 'Code work', type: 'codeAgent' }),
     });
 
     assert.equal(response.status, 201);
     const room = await response.json() as Room;
     assert.equal(room.id, 'generated-room');
-    assert.equal(room.name, 'API Coco');
+    assert.equal(room.name, 'API Code Agent');
     assert.equal(room.description, 'Code work');
-    assert.equal(room.type, 'coco');
+    assert.equal(room.type, 'codeAgent');
     assert.equal(room.sandboxStatus, 'none');
-    assert.equal(room.cocoStatus, 'idle');
+    assert.equal(room.codeAgentStatus, 'idle');
     assert.ok(room.sandboxUpdatedAt);
     assert.deepEqual(server.emitted, [{ target: 'client-2', event: 'new_room', payload: room }]);
 
     const deniedServer = await createTestServer({
-      cocoAccess: createCocoAccessControl({ enabled: false }),
+      codeAgentAccess: createCodeAgentAccessControl({ enabled: false }),
     });
     try {
       const deniedResponse = await fetch(`${deniedServer.baseUrl}/api/clients/client-2/rooms`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: 'API Coco', type: 'coco' }),
+        body: JSON.stringify({ name: 'API Code Agent', type: 'codeAgent' }),
       });
 
       assert.equal(deniedResponse.status, 403);
-      assert.deepEqual(await deniedResponse.json(), { error: 'Coco is disabled' });
+      assert.deepEqual(await deniedResponse.json(), { error: 'Code agent is disabled' });
       assert.equal(deniedServer.store.savedRooms.length, 0);
       assert.deepEqual(deniedServer.emitted, []);
     } finally {

@@ -203,7 +203,7 @@ describe('CodexCliEventMapper', () => {
     assert.equal(call.type === 'tool_call' ? call.name : '', 'shell');
   });
 
-  test('maps turn failures to Coco error events', () => {
+  test('maps turn failures to code-agent error events', () => {
     const mapper = new CodexCliEventMapper({ turnId: 'turn-1', messageId: 'ai-1', workspace });
     const events = mapper.mapEvent({ type: 'turn.failed', message: 'model failed' });
 

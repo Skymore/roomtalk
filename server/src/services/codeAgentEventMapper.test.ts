@@ -54,7 +54,7 @@ describe('code agent runner event mapper', () => {
 
     assert.equal(mapped.kind, 'message');
     if (mapped.kind !== 'message') return;
-    assert.equal(mapped.message.clientId, 'coco_runner');
+    assert.equal(mapped.message.clientId, 'code_agent_runner');
     assert.equal(mapped.message.username, 'Codex');
   });
 

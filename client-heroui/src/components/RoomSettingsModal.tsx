@@ -44,7 +44,7 @@ import {
 import { PostingScheduleEditor } from './PostingScheduleEditor';
 
 const backendIcons: Record<CodeAgentBackend, string> = {
-  coco: 'lucide:sparkles',
+  'code-agent': 'lucide:sparkles',
   codex: 'lucide:terminal',
   'codex-app-server': 'lucide:server',
 };
@@ -638,12 +638,12 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
             </div>
           )}
 
-          {isOwner && room.type === 'coco' && (
+          {isOwner && room.type === 'codeAgent' && (
             <div className="space-y-2">
-              {renderSectionLabel('lucide:bot', t('cocoAccess'))}
+              {renderSectionLabel('lucide:bot', t('codeAgentAccess'))}
               <div className="flex gap-1.5">
                 {(['owner', 'admin', 'member'] as const).map(level => {
-                  const current = room.cocoAccess || 'owner';
+                  const current = room.codeAgentAccess || 'owner';
                   const selected = current === level;
                   return (
                     <Button
@@ -659,7 +659,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                         if (selected) return;
                         setIsSaving(true);
                         try {
-                          const updated = await updateRoomSettings({ roomId: room.id, cocoAccess: level });
+                          const updated = await updateRoomSettings({ roomId: room.id, codeAgentAccess: level });
                           onRoomUpdated?.(updated);
                         } catch {
                           setStatusMessage(t('settingsUpdateFailed'));
@@ -674,17 +674,17 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                 })}
               </div>
               <div className="text-xs text-[#87867f] dark:text-[#b0aea5]">
-                {t('cocoAccessDescription')}
+                {t('codeAgentAccessDescription')}
               </div>
             </div>
           )}
 
-          {(isOwner || isAdmin) && (runtimeRoomType === 'coco' || runtimeRoomType === 'codex') && (
+          {(isOwner || isAdmin) && (runtimeRoomType === 'codeAgent' || runtimeRoomType === 'codex') && (
             <div className="space-y-2">
               {renderSectionLabel('lucide:terminal', t('codeAgentEngine'))}
               <div className="flex flex-wrap gap-1.5">
                 {CODE_AGENT_BACKEND_OPTIONS.map(backend => {
-                  const current = getCodeAgentBackend(room) || 'coco';
+                  const current = getCodeAgentBackend(room) || 'code-agent';
                   const selected = current === backend;
                   const labelKey = getCodeAgentBackendLabelKey(backend);
                   return (
@@ -722,7 +722,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
             </div>
           )}
 
-          {(isOwner || isAdmin) && room.type === 'coco' && (
+          {(isOwner || isAdmin) && room.type === 'codeAgent' && (
             <div className="space-y-2">
               {renderSectionLabel('lucide:settings-2', t('codeAgentMode'))}
               <div className="flex flex-wrap gap-1.5">

@@ -46,8 +46,8 @@ export type CodeAgentMappedRunnerEvent =
 const defaultCreateMessageId = (prefix: string) => `${prefix}_${Date.now()}`;
 
 const timestampFor = (context: CodeAgentEventMapperContext) => (context.now || new Date()).toISOString();
-const clientIdFor = (context: CodeAgentEventMapperContext) => context.clientId || 'coco_runner';
-const usernameFor = (context: CodeAgentEventMapperContext) => context.username || 'Coco';
+const clientIdFor = (context: CodeAgentEventMapperContext) => context.clientId || 'code_agent_runner';
+const usernameFor = (context: CodeAgentEventMapperContext) => context.username || 'Code Agent';
 
 const stringifyArgs = (args: Record<string, unknown>) => {
   try {
@@ -169,7 +169,7 @@ export const mapCodeAgentRunnerEvent = (
       return {
         kind: 'message',
         message: {
-          id: createMessageId('coco_error'),
+          id: createMessageId('code_agent_error'),
           clientId: clientIdFor(context),
           content: event.message,
           roomId: context.roomId,
@@ -190,7 +190,7 @@ export const mapCodeAgentRunnerEvent = (
       return {
         kind: 'message',
         message: {
-          id: createMessageId(`coco_status_${event.status}`),
+          id: createMessageId(`code_agent_status_${event.status}`),
           clientId: clientIdFor(context),
           content: event.message || event.status,
           roomId: context.roomId,

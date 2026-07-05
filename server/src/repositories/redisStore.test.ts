@@ -204,8 +204,8 @@ class MemoryRedis {
         passwordHash,
         postingScheduleMode,
         postingScheduleJson,
-        cocoAccessMode,
-        cocoAccess,
+        codeAgentAccessMode,
+        codeAgentAccess,
         codeAgentModeMode,
         codeAgentMode,
         codeAgentBackendMode,
@@ -228,10 +228,10 @@ class MemoryRedis {
       } else if (postingScheduleMode === 'clear') {
         delete room.postingSchedule;
       }
-      if (cocoAccessMode === 'set') {
-        room.cocoAccess = cocoAccess;
-      } else if (cocoAccessMode === 'clear') {
-        delete room.cocoAccess;
+      if (codeAgentAccessMode === 'set') {
+        room.codeAgentAccess = codeAgentAccess;
+      } else if (codeAgentAccessMode === 'clear') {
+        delete room.codeAgentAccess;
       }
       if (codeAgentModeMode === 'set') {
         room.codeAgentMode = codeAgentMode;

@@ -35,7 +35,7 @@ describe('AI request settings', () => {
     });
   });
 
-  it('keeps ordinary role prompts for chat rooms and strips them for Coco rooms', () => {
+  it('keeps ordinary role prompts for chat rooms and strips them for code-agent rooms', () => {
     const settings = {
       systemPrompt: 'Use A2UI',
       roleName: 'A2UI Demo',
@@ -44,24 +44,24 @@ describe('AI request settings', () => {
     };
 
     expect(selectRoomAIRequestSettings(settings, 'chat')).toEqual(settings);
-    expect(selectRoomAIRequestSettings(settings, 'coco')).toEqual({
+    expect(selectRoomAIRequestSettings(settings, 'codeAgent')).toEqual({
       model: 'deepseek-v4-pro',
       maxContextMessages: 2,
     });
   });
 
-  it('resolves Coco room request settings without ordinary role prompts', () => {
+  it('resolves code-agent room request settings without ordinary role prompts', () => {
     localStorage.setItem('aiRoles', JSON.stringify([
       { id: 'default', name: 'Assistant', systemPrompt: 'You are helpful', color: 'secondary', icon: 'lucide:bot' },
       { id: 'coder', name: 'Code Expert', systemPrompt: 'Review code', color: 'primary', icon: 'lucide:code' },
     ]));
-    localStorage.setItem('roomtalk:ai-settings:coco-room', JSON.stringify({
+    localStorage.setItem('roomtalk:ai-settings:code-agent-room', JSON.stringify({
       selectedRoleId: 'coder',
       selectedModel: 'deepseek-v4-pro',
       maxContextMessages: 1,
     }));
 
-    expect(getRoomAIRequestSettingsForKind('coco-room', 'coco')).toEqual({
+    expect(getRoomAIRequestSettingsForKind('code-agent-room', 'codeAgent')).toEqual({
       model: 'deepseek-v4-pro',
       maxContextMessages: 1,
     });

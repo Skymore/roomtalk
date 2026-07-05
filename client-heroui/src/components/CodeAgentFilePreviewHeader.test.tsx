@@ -11,7 +11,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 const defaultProps = {
-  projectName: 'Coco',
+  projectName: 'Code Agent',
   relativePath: 'docs/Guide.md',
   renderPreview: false,
   wordWrap: false,
@@ -45,7 +45,7 @@ describe('CodeAgentFilePreviewHeader', () => {
     render(<CodeAgentFilePreviewHeader {...defaultProps} />);
 
     const breadcrumbs = screen.getByTestId('code-agent-file-breadcrumbs');
-    expect(within(breadcrumbs).getByText('Coco')).toBeTruthy();
+    expect(within(breadcrumbs).getByText('Code Agent')).toBeTruthy();
     expect(within(breadcrumbs).getByText('docs')).toBeTruthy();
     expect(within(breadcrumbs).getByText('Guide.md')).toBeTruthy();
     expect(breadcrumbs.querySelector('[data-current-file-crumb="true"]')?.textContent).toContain('Guide.md');
@@ -114,7 +114,7 @@ describe('CodeAgentFilePreviewHeader', () => {
     expect(header.className).not.toContain('h-9');
 
     const breadcrumbRow = screen.getByTestId('code-agent-mobile-file-preview-breadcrumb-row');
-    expect(within(breadcrumbRow).queryByText('Coco')).toBeNull();
+    expect(within(breadcrumbRow).queryByText('Code Agent')).toBeNull();
     expect(within(breadcrumbRow).getByText('docs')).toBeTruthy();
     expect(within(breadcrumbRow).getByText('Guide.md')).toBeTruthy();
 

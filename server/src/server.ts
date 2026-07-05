@@ -28,33 +28,33 @@ import { createMediaObjectStorageFromEnv } from './services/mediaObjectStorage';
 import { createAssemblyAIAudioTranscriptionRunner } from './services/audioTranscription';
 import { resolveCorsOrigin } from './services/corsConfig';
 import { createOutboxWorkerFromEnv, OutboxWorker } from './services/outboxWorker';
-import { createCocoAccessControl } from './services/cocoAccessControl';
+import { createCodeAgentAccessControl } from './services/codeAgentAccessControl';
 import { createCodeAgentRunner } from './services/codeAgentRunner';
-import { CocoSandboxLifecycleService } from './services/cocoSandboxLifecycle';
+import { CodeAgentSandboxLifecycleService } from './services/codeAgentSandboxLifecycle';
 import { CodeAgentSessionService } from './services/codeAgentSessionService';
-import { E2BCocoSandboxService, E2BSandboxDriver } from './services/e2bCocoSandboxService';
+import { E2BCodeAgentSandboxService, E2BSandboxDriver } from './services/e2bCodeAgentSandboxService';
 import { createE2BSdkDriver } from './services/e2bSdkDriver';
 import { CODE_AGENT_RUNNER_SCHEMA_VERSION } from './services/codeAgentRunnerProtocol';
 import { createCodeWorkspaceAssetAccessFromEnv } from './services/codeWorkspaceAssetAccess';
 import {
-  DEFAULT_COCO_E2B_KILL_TIMEOUT_MS,
-  DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS,
-  DEFAULT_COCO_RUNNER_PYTHONPATH,
-  DEFAULT_COCO_WORKSPACE_ROOT,
+  DEFAULT_CODE_AGENT_E2B_KILL_TIMEOUT_MS,
+  DEFAULT_CODE_AGENT_E2B_PAUSE_TIMEOUT_MS,
+  DEFAULT_CODE_AGENT_RUNNER_PYTHONPATH,
+  DEFAULT_CODE_AGENT_WORKSPACE_ROOT,
   resolveCodeAgentRuntimeConfig,
 } from './services/codeAgentRuntimeConfig';
 import {
-  CocoModelGateway,
-  DEFAULT_COCO_MODEL_GATEWAY_BASE_PATH,
-  DEFAULT_COCO_MODEL_GATEWAY_BODY_LIMIT,
-  RedisCocoModelGatewayTokenStateStore,
-  registerCocoModelGatewayRoutes,
-} from './services/cocoModelGateway';
+  CodeAgentModelGateway,
+  DEFAULT_CODE_AGENT_MODEL_GATEWAY_BASE_PATH,
+  DEFAULT_CODE_AGENT_MODEL_GATEWAY_BODY_LIMIT,
+  RedisCodeAgentModelGatewayTokenStateStore,
+  registerCodeAgentModelGatewayRoutes,
+} from './services/codeAgentModelGateway';
 import { FakeCodeAgentRunnerClient } from './services/fakeCodeAgentRunner';
-import { FakeCocoSandboxService } from './services/fakeCocoSandboxService';
+import { FakeCodeAgentSandboxService } from './services/fakeCodeAgentSandboxService';
 import { JsonlCodeAgentRunnerClient } from './services/jsonlCodeAgentRunner';
 import {
-  COCO_STATIC_PUBLISH_API_PATH,
+  CODE_AGENT_STATIC_PUBLISH_API_PATH,
   createPublishedStaticSiteServiceFromEnv,
 } from './services/publishedStaticSite';
 import { NoopObservabilityEventRecorder, PostgresObservabilityEventRecorder } from './services/observabilityEvents';
@@ -75,7 +75,7 @@ const socketLogger = new Logger('SocketIO');
 const routeLogger = new Logger('Routes');
 const openaiLogger = new Logger('OpenAI');
 const outboxLogger = new Logger('OutboxWorker');
-const cocoLogger = new Logger('Coco');
+const codeAgentLogger = new Logger('CodeAgent');
 const codexLogger = new Logger('Codex');
 const mediaStorageLogger = new Logger('MediaStorage');
 const staticPublishLogger = new Logger('StaticPublish');
@@ -120,11 +120,11 @@ console.log(`process.env.CLIENT_URL: ${process.env.CLIENT_URL}`);
 console.log(`process.env.CLIENT_URLS: ${process.env.CLIENT_URLS}`);
 const defaultJsonParser = express.json();
 app.use((req: Request, res: Response, next: NextFunction) => {
-  if (req.path === DEFAULT_COCO_MODEL_GATEWAY_BASE_PATH || req.path.startsWith(`${DEFAULT_COCO_MODEL_GATEWAY_BASE_PATH}/`)) {
+  if (req.path === DEFAULT_CODE_AGENT_MODEL_GATEWAY_BASE_PATH || req.path.startsWith(`${DEFAULT_CODE_AGENT_MODEL_GATEWAY_BASE_PATH}/`)) {
     next();
     return;
   }
-  if (req.path === COCO_STATIC_PUBLISH_API_PATH) {
+  if (req.path === CODE_AGENT_STATIC_PUBLISH_API_PATH) {
     next();
     return;
   }
@@ -215,12 +215,12 @@ assertCodexBackendStartupGate({
 const observabilityRecorder = postgresPool
   ? new PostgresObservabilityEventRecorder(postgresPool, new Logger('Observability'))
   : new NoopObservabilityEventRecorder();
-const cocoAccess = createCocoAccessControl({
+const codeAgentAccess = createCodeAgentAccessControl({
   enabled: codeAgentRuntimeConfig.enabled,
   allowedClientIds: codeAgentRuntimeConfig.allowedClientIds,
 });
-const cocoModelGateway = codeAgentRuntimeConfig.modelGateway
-  ? new CocoModelGateway({
+const codeAgentModelGateway = codeAgentRuntimeConfig.modelGateway
+  ? new CodeAgentModelGateway({
     publicBaseUrl: codeAgentRuntimeConfig.modelGateway.publicBaseUrl,
     tokenSecret: codeAgentRuntimeConfig.modelGateway.tokenSecret,
     tokenTtlSeconds: codeAgentRuntimeConfig.modelGateway.tokenTtlSeconds,
@@ -238,8 +238,8 @@ const cocoModelGateway = codeAgentRuntimeConfig.modelGateway
       openai: process.env.OPENAI_BASE_URL,
       openrouter: process.env.OPENROUTER_BASE_URL,
     },
-    stateStore: new RedisCocoModelGatewayTokenStateStore(redisClient),
-    logger: cocoLogger,
+    stateStore: new RedisCodeAgentModelGatewayTokenStateStore(redisClient),
+    logger: codeAgentLogger,
     observability: observabilityRecorder,
   })
   : undefined;
@@ -283,32 +283,32 @@ const createE2BDriver = (): E2BSandboxDriver => createE2BSdkDriver({
 });
 
 if (codeAgentRuntimeConfig.enabled && codeAgentRuntimeConfig.sandboxProvider === 'e2b') {
-  cocoLogger.info('E2B sandbox provider selected', { artifactMode: codeAgentRuntimeConfig.artifactMode });
+  codeAgentLogger.info('E2B sandbox provider selected', { artifactMode: codeAgentRuntimeConfig.artifactMode });
 }
 
-const cocoSandboxService = codeAgentRuntimeConfig.enabled && codeAgentRuntimeConfig.sandboxProvider === 'e2b'
-  ? new E2BCocoSandboxService(createE2BDriver(), {
+const codeAgentSandboxService = codeAgentRuntimeConfig.enabled && codeAgentRuntimeConfig.sandboxProvider === 'e2b'
+  ? new E2BCodeAgentSandboxService(createE2BDriver(), {
     templateId: codeAgentRuntimeConfig.e2bTemplateId || '',
     workspace: codeAgentRuntimeConfig.e2bWorkspace,
     artifactVersion: codeAgentRuntimeConfig.artifactVersion,
-    cocoSourceRef: codeAgentRuntimeConfig.cocoSourceRef,
+    codeAgentSourceRef: codeAgentRuntimeConfig.codeAgentSourceRef,
     lifecycle: codeAgentRuntimeConfig.e2bLifecycle,
-    logger: cocoLogger,
+    logger: codeAgentLogger,
   })
-  : new FakeCocoSandboxService();
-const cocoTurnTimeoutMs = parsePositiveIntegerEnv('COCO_TURN_TIMEOUT_MS', 10 * 60 * 1000);
-const defaultCocoSandboxTtlMs = codeAgentRuntimeConfig.e2bLifecycle.onTimeout === 'pause'
-  ? DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS
-  : DEFAULT_COCO_E2B_KILL_TIMEOUT_MS;
-const cocoSandboxLifecycle = new CocoSandboxLifecycleService(store, cocoSandboxService, cocoLogger, {
-  sandboxTtlMs: parsePositiveIntegerEnv('COCO_SANDBOX_TTL_MS', defaultCocoSandboxTtlMs),
-  turnTimeoutMs: cocoTurnTimeoutMs,
-  creatingStaleMs: parsePositiveIntegerEnv('COCO_CREATING_STALE_MS', 2 * 60 * 1000),
-  maxActiveSandboxes: parsePositiveIntegerEnv('COCO_MAX_ACTIVE_SANDBOXES', Number.POSITIVE_INFINITY),
-  maxActiveSandboxesPerUser: parsePositiveIntegerEnv('COCO_MAX_ACTIVE_SANDBOXES_PER_USER', Number.POSITIVE_INFINITY),
+  : new FakeCodeAgentSandboxService();
+const codeAgentTurnTimeoutMs = parsePositiveIntegerEnv('CODE_AGENT_TURN_TIMEOUT_MS', 10 * 60 * 1000);
+const defaultCodeAgentSandboxTtlMs = codeAgentRuntimeConfig.e2bLifecycle.onTimeout === 'pause'
+  ? DEFAULT_CODE_AGENT_E2B_PAUSE_TIMEOUT_MS
+  : DEFAULT_CODE_AGENT_E2B_KILL_TIMEOUT_MS;
+const codeAgentSandboxLifecycle = new CodeAgentSandboxLifecycleService(store, codeAgentSandboxService, codeAgentLogger, {
+  sandboxTtlMs: parsePositiveIntegerEnv('CODE_AGENT_SANDBOX_TTL_MS', defaultCodeAgentSandboxTtlMs),
+  turnTimeoutMs: codeAgentTurnTimeoutMs,
+  creatingStaleMs: parsePositiveIntegerEnv('CODE_AGENT_CREATING_STALE_MS', 2 * 60 * 1000),
+  maxActiveSandboxes: parsePositiveIntegerEnv('CODE_AGENT_MAX_ACTIVE_SANDBOXES', Number.POSITIVE_INFINITY),
+  maxActiveSandboxesPerUser: parsePositiveIntegerEnv('CODE_AGENT_MAX_ACTIVE_SANDBOXES_PER_USER', Number.POSITIVE_INFINITY),
   reconnectTimedOutSandboxes: codeAgentRuntimeConfig.e2bLifecycle.onTimeout === 'pause',
   artifactVersion: codeAgentRuntimeConfig.artifactVersion,
-  cocoSourceRef: codeAgentRuntimeConfig.cocoSourceRef,
+  codeAgentSourceRef: codeAgentRuntimeConfig.codeAgentSourceRef,
 });
 const fakeCodeAgentToolOutput = [
   'stdout: hello from code agent fake runner',
@@ -321,32 +321,32 @@ const codeAgentRunnerClient = codeAgentRuntimeConfig.runnerClient === 'jsonl' ? 
   { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'fake-tool-1', name: 'Shell', args: { command: 'printf "hello from code agent fake runner\\n"' } },
   { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'fake-tool-1', name: 'Shell', success: false, output: fakeCodeAgentToolOutput, exitCode: 2, truncated: true },
   { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'fake-ai', answer: 'Code agent fake runner received the task.', sessionId: 'fake-code-agent-session' },
-], { eventDelayMs: parsePositiveIntegerEnv('COCO_FAKE_RUNNER_EVENT_DELAY_MS', 0) });
+], { eventDelayMs: parsePositiveIntegerEnv('CODE_AGENT_FAKE_RUNNER_EVENT_DELAY_MS', 0) });
 const codeAgentRunner = createCodeAgentRunner(codeAgentRuntimeConfig.backend, codeAgentRunnerClient);
 const codexRunnerEnv = {
-  PYTHONPATH: codeAgentRuntimeConfig.runnerEnv.PYTHONPATH || DEFAULT_COCO_RUNNER_PYTHONPATH,
-  COCO_WORKSPACE_ROOT: codeAgentRuntimeConfig.runnerEnv.COCO_WORKSPACE_ROOT || codeAgentRuntimeConfig.e2bWorkspace || DEFAULT_COCO_WORKSPACE_ROOT,
+  PYTHONPATH: codeAgentRuntimeConfig.runnerEnv.PYTHONPATH || DEFAULT_CODE_AGENT_RUNNER_PYTHONPATH,
+  CODE_AGENT_WORKSPACE_ROOT: codeAgentRuntimeConfig.runnerEnv.CODE_AGENT_WORKSPACE_ROOT || codeAgentRuntimeConfig.e2bWorkspace || DEFAULT_CODE_AGENT_WORKSPACE_ROOT,
   CODEX_CLI_BIN: codexCliRunnerConfig.cliBin,
   ROOMTALK_CODEX_TIMEOUT_MS: String(codexCliRunnerConfig.timeoutMs),
 };
 const codeAgentSessionService = new CodeAgentSessionService(
   store,
   io,
-  cocoSandboxLifecycle,
-  cocoSandboxService,
+  codeAgentSandboxLifecycle,
+  codeAgentSandboxService,
   codeAgentRunner,
-  cocoLogger,
+  codeAgentLogger,
   {
     enabled: codeAgentRuntimeConfig.enabled,
     allowedClientIds: codeAgentRuntimeConfig.allowedClientIds,
     mode: codeAgentRuntimeConfig.mode,
     availableModes: codeAgentRuntimeConfig.availableModes,
     defaultMode: codeAgentRuntimeConfig.defaultMode,
-    modelGateway: cocoModelGateway,
+    modelGateway: codeAgentModelGateway,
     backend: codeAgentRuntimeConfig.backend,
     runnerCommand: codeAgentRuntimeConfig.runnerCommand,
     runnerCommandByBackend: codeAgentRuntimeConfig.runnerCommandByBackend,
-    turnTimeoutMs: cocoTurnTimeoutMs,
+    turnTimeoutMs: codeAgentTurnTimeoutMs,
     allowedPaths: codeAgentRuntimeConfig.allowedPaths,
     runnerEnv: codeAgentRuntimeConfig.runnerEnv,
     runnerEnvByBackend: {
@@ -392,7 +392,7 @@ const infrastructureReady = (async () => {
     }
     await store.clearRealtimeRoomMembers?.();
     await store.failInterruptedStreamingMessages?.('Response interrupted.', { aiStreamOwnerId });
-    await cocoSandboxLifecycle.recoverInterruptedSandboxes();
+    await codeAgentSandboxLifecycle.recoverInterruptedSandboxes();
     
     redisLogger.info('Connected to Redis and Socket.IO adapter initialized', { persistenceStore: activePersistenceStore });
   } catch (err) {
@@ -422,8 +422,8 @@ registerSocketHandlers({
   aiStreamOwnerId,
   assemblyAIApiKey,
   codeAgentSessionService,
-  cocoAccess,
-  cocoSandboxService,
+  codeAgentAccess,
+  codeAgentSandboxService,
   codeWorkspaceAssetAccess,
   publishedStaticSiteService,
 });
@@ -446,7 +446,7 @@ if (process.env.OUTBOX_WORKER_ENABLED === 'true') {
         aiStreamOwnerId,
         assemblyAIApiKey,
         codeAgentSessionService,
-        cocoAccess,
+        codeAgentAccess,
       }),
     },
   });
@@ -461,12 +461,12 @@ if (process.env.OUTBOX_WORKER_ENABLED === 'true') {
 
 loadStickerCatalog();
 
-if (cocoModelGateway) {
-  registerCocoModelGatewayRoutes(
+if (codeAgentModelGateway) {
+  registerCodeAgentModelGatewayRoutes(
     app,
-    cocoModelGateway,
-    DEFAULT_COCO_MODEL_GATEWAY_BASE_PATH,
-    process.env.COCO_MODEL_GATEWAY_BODY_LIMIT || DEFAULT_COCO_MODEL_GATEWAY_BODY_LIMIT,
+    codeAgentModelGateway,
+    DEFAULT_CODE_AGENT_MODEL_GATEWAY_BASE_PATH,
+    process.env.CODE_AGENT_MODEL_GATEWAY_BODY_LIMIT || DEFAULT_CODE_AGENT_MODEL_GATEWAY_BODY_LIMIT,
   );
 }
 
@@ -480,7 +480,7 @@ registerApiRoutes(app, {
   persistenceStore: activePersistenceStore,
   mediaObjectStorage,
   audioTranscriptionRunner,
-  cocoAccess,
+  codeAgentAccess,
   codeAgentMode: codeAgentRuntimeConfig.mode,
   codeAgentAvailableModes: codeAgentRuntimeConfig.availableModes,
   codeAgentDefaultMode: codeAgentRuntimeConfig.defaultMode,
@@ -501,8 +501,8 @@ registerCodeWorkspaceAssetRoutes(app, {
   assetAccess: codeWorkspaceAssetAccess,
   logger: routeLogger,
   getRoomById: roomId => store.getRoomById(roomId),
-  cocoSandboxService,
-  maxAssetBytes: parsePositiveIntegerEnv('COCO_WORKSPACE_ASSET_MAX_BYTES', 25 * 1024 * 1024),
+  codeAgentSandboxService,
+  maxAssetBytes: parsePositiveIntegerEnv('CODE_AGENT_WORKSPACE_ASSET_MAX_BYTES', 25 * 1024 * 1024),
 });
 
 // Catch-all 路由，返回前端应用的入口 HTML 文件（支持前端路由）

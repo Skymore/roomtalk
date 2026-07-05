@@ -23,7 +23,7 @@ import {
 } from '../utils/messageState';
 import { useRoomMessageEvents } from '../hooks/useRoomMessageEvents';
 import { CodeAgentBackend, CodeAgentMode } from '../utils/codeAgent';
-import { CodeAgentWorkspaceSnapshot, loadCodeAgentWorkspaceSnapshot } from '../utils/cocoWorkspace';
+import { CodeAgentWorkspaceSnapshot, loadCodeAgentWorkspaceSnapshot } from '../utils/codeAgentWorkspace';
 import type { ReviewCommentContext } from '../utils/codeAgentReviewComments';
 
 // Import your new modals
@@ -131,7 +131,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const workspaceRefreshKey = `${currentRoomId || ''}:${codeAgentRoom?.sandboxStatus || 'none'}:${codeAgentRoom?.sandboxUpdatedAt || ''}`;
   const workspaceRoot = workspaceSnapshot?.workspaceRoot ?? null;
   const canManageSenderActions = Boolean(roomPermissions?.canManageMembers || roomPermissions?.canManageAdmins || roomPermissions?.canTransferOwnership);
-  const aiRequestRoomKind: AIRequestRoomKind = presentation === 'code-agent' ? 'coco' : 'chat';
+  const aiRequestRoomKind: AIRequestRoomKind = presentation === 'code-agent' ? 'codeAgent' : 'chat';
   const getAIRequestSettingsForRoom = useCallback(() => (
     getRoomAIRequestSettingsForKind(roomId, aiRequestRoomKind)
   ), [aiRequestRoomKind, roomId]);
@@ -475,6 +475,8 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       messageId,
       newContent,
       ...getAIRequestSettingsForRoom(),
+    }).then(() => {
+      socket.emit('get_room_messages', { roomId });
     }).catch((error) => {
       console.error('Failed to save edit before asking AI:', error);
       updateMessages(originalMessages);
