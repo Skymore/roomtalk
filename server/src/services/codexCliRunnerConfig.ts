@@ -10,7 +10,7 @@ export interface CodexCliRunnerConfig {
 }
 
 const DEFAULT_CODEX_CLI_BIN = 'codex';
-const DEFAULT_CODEX_CLI_TIMEOUT_MS = 120_000;
+const DEFAULT_CODEX_CLI_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_CODEX_CLI_MAX_STDERR_TAIL_CHARS = 4000;
 
 export function resolveCodexCliRunnerConfig(env: NodeJS.ProcessEnv = process.env): CodexCliRunnerConfig {

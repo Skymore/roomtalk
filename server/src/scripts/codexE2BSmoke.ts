@@ -13,7 +13,7 @@ import { createE2BSdkDriver } from '../services/e2bSdkDriver';
 import { JsonlCodeAgentRunnerClient } from '../services/jsonlCodeAgentRunner';
 
 const DEFAULT_SMOKE_PROMPT = 'Reply exactly: codex e2b smoke ok';
-const DEFAULT_TURN_TIMEOUT_MS = 3 * 60 * 1000;
+const DEFAULT_TURN_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_SANDBOX_TTL_MS = 10 * 60 * 1000;
 
 type CodexE2BSmokePlan =

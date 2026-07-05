@@ -51,6 +51,8 @@ export const DEFAULT_CODEX_CLI_RUNNER_COMMAND = 'python -m roomtalk_coco_runner.
 export const DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND = 'python -m roomtalk_coco_runner.codex_sdk_app_server';
 export const DEFAULT_COCO_RUNNER_PYTHONPATH = '/opt/coco/src:/opt/roomtalk_coco_runner';
 export const DEFAULT_COCO_WORKSPACE_ROOT = '/workspace';
+export const DEFAULT_PLAYWRIGHT_BROWSERS_PATH = '/ms-playwright';
+export const DEFAULT_NODE_PATH = '/usr/lib/node_modules';
 export const DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS = 5 * 60 * 1000;
 export const DEFAULT_COCO_E2B_KILL_TIMEOUT_MS = 60 * 60 * 1000;
 
@@ -289,6 +291,8 @@ const baseRunnerEnv = (
   return {
     PYTHONPATH: env.COCO_RUNNER_PYTHONPATH || DEFAULT_COCO_RUNNER_PYTHONPATH,
     COCO_WORKSPACE_ROOT: env.COCO_WORKSPACE_ROOT || env.COCO_E2B_WORKSPACE || DEFAULT_COCO_WORKSPACE_ROOT,
+    PLAYWRIGHT_BROWSERS_PATH: env.PLAYWRIGHT_BROWSERS_PATH || DEFAULT_PLAYWRIGHT_BROWSERS_PATH,
+    NODE_PATH: env.NODE_PATH || DEFAULT_NODE_PATH,
   };
 };
 

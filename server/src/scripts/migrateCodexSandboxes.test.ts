@@ -41,6 +41,8 @@ describe('buildCodexSandboxMigrationPlan', () => {
     assert.equal(plan.persistenceStore, 'redis');
     assert.equal(plan.e2bTemplateId, 'roomtalk-coco-dual-cli');
     assert.equal(plan.runnerEnv.PYTHONPATH, '/opt/coco/src:/opt/roomtalk_coco_runner');
+    assert.equal(plan.runnerEnv.PLAYWRIGHT_BROWSERS_PATH, '/ms-playwright');
+    assert.equal(plan.runnerEnv.NODE_PATH, '/usr/lib/node_modules');
   });
 
   it('requires DATABASE_URL for postgres migration state', () => {

@@ -9,7 +9,7 @@ import { E2BCocoSandboxService } from '../services/e2bCocoSandboxService';
 import { createE2BSdkDriver } from '../services/e2bSdkDriver';
 
 const DEFAULT_SMOKE_PROMPT = 'Reply with a short confirmation that RoomTalk Coco E2B smoke is working. Do not modify files.';
-const DEFAULT_TURN_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_TURN_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_SANDBOX_TTL_MS = 10 * 60 * 1000;
 
 type CocoE2BSmokePlan =

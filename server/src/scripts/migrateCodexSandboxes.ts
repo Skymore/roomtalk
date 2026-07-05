@@ -6,7 +6,15 @@ import { createPostgresPool } from '../repositories/postgresPool';
 import { PostgresPool } from '../repositories/postgresStore';
 import { Room } from '../types';
 import { CocoSandboxHandle, CocoSandboxService } from '../services/cocoSandboxService';
-import { DEFAULT_COCO_E2B_KILL_TIMEOUT_MS, DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS, DEFAULT_COCO_RUNNER_PYTHONPATH, DEFAULT_COCO_WORKSPACE_ROOT, resolveCodeAgentRuntimeConfig } from '../services/codeAgentRuntimeConfig';
+import {
+  DEFAULT_COCO_E2B_KILL_TIMEOUT_MS,
+  DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS,
+  DEFAULT_COCO_RUNNER_PYTHONPATH,
+  DEFAULT_COCO_WORKSPACE_ROOT,
+  DEFAULT_NODE_PATH,
+  DEFAULT_PLAYWRIGHT_BROWSERS_PATH,
+  resolveCodeAgentRuntimeConfig,
+} from '../services/codeAgentRuntimeConfig';
 import { E2BCocoSandboxService } from '../services/e2bCocoSandboxService';
 import { createE2BSdkDriver } from '../services/e2bSdkDriver';
 
@@ -122,6 +130,8 @@ export const buildCodexSandboxMigrationPlan = (env: NodeJS.ProcessEnv): CodexSan
       PYTHONUNBUFFERED: '1',
       PYTHONPATH: config.runnerEnv.PYTHONPATH || DEFAULT_COCO_RUNNER_PYTHONPATH,
       COCO_WORKSPACE_ROOT: config.runnerEnv.COCO_WORKSPACE_ROOT || config.e2bWorkspace || DEFAULT_COCO_WORKSPACE_ROOT,
+      PLAYWRIGHT_BROWSERS_PATH: config.runnerEnv.PLAYWRIGHT_BROWSERS_PATH || DEFAULT_PLAYWRIGHT_BROWSERS_PATH,
+      NODE_PATH: config.runnerEnv.NODE_PATH || DEFAULT_NODE_PATH,
     },
     persistenceStore,
     e2bTemplateId: config.e2bTemplateId || '',

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "artifactName": "roomtalk-coco",
-  "artifactVersion": "roomtalk-coco-2026-07-05-codex-trust-workspace-v1",
+  "artifactVersion": "roomtalk-coco-2026-07-05-playwright-chromium-timeout-v1",
   "pythonVersion": "3.12",
   "baseImage": {
     "name": "python",
@@ -37,6 +37,14 @@
         "pythonSdkVersion": "0.1.0b3"
       }
     }
+  },
+  "browserRuntime": {
+    "playwrightVersion": "1.61.1",
+    "browsers": [
+      "chromium"
+    ],
+    "browsersPath": "/ms-playwright",
+    "nodePath": "/usr/lib/node_modules"
   },
   "image": {
     "dockerfile": "ops/coco-sandbox/Dockerfile",

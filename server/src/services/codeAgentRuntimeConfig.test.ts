@@ -8,6 +8,8 @@ import {
   DEFAULT_CODEX_CLI_RUNNER_COMMAND,
   DEFAULT_COCO_RUNNER_PYTHONPATH,
   DEFAULT_COCO_WORKSPACE_ROOT,
+  DEFAULT_NODE_PATH,
+  DEFAULT_PLAYWRIGHT_BROWSERS_PATH,
   resolveCodeAgentRuntimeConfig,
 } from './codeAgentRuntimeConfig';
 
@@ -257,6 +259,8 @@ describe('resolveCodeAgentRuntimeConfig', () => {
 
     assert.equal(config.artifactMode, 'development');
     assert.equal(config.runnerEnv.PYTHONPATH, DEFAULT_COCO_RUNNER_PYTHONPATH);
+    assert.equal(config.runnerEnv.PLAYWRIGHT_BROWSERS_PATH, DEFAULT_PLAYWRIGHT_BROWSERS_PATH);
+    assert.equal(config.runnerEnv.NODE_PATH, DEFAULT_NODE_PATH);
     assert.equal(config.runnerEnv.COCO_SOURCE_DIR, '/Users/sky/projects/coco/src');
     assert.equal(config.artifactVersion, undefined);
     assert.equal(config.cocoSourceRef, undefined);
@@ -280,6 +284,8 @@ describe('resolveCodeAgentRuntimeConfig', () => {
     assert.deepEqual(config.runnerEnv, {
       PYTHONPATH: DEFAULT_COCO_RUNNER_PYTHONPATH,
       COCO_WORKSPACE_ROOT: DEFAULT_COCO_WORKSPACE_ROOT,
+      PLAYWRIGHT_BROWSERS_PATH: DEFAULT_PLAYWRIGHT_BROWSERS_PATH,
+      NODE_PATH: DEFAULT_NODE_PATH,
     });
     assert.equal(config.artifactVersion, pinnedArtifactEnv.COCO_ARTIFACT_VERSION);
     assert.equal(config.cocoSourceRef, pinnedArtifactEnv.COCO_SOURCE_REF);
@@ -461,6 +467,8 @@ describe('resolveCodeAgentRuntimeConfig', () => {
     assert.deepEqual(proxied.runnerEnv, {
       PYTHONPATH: DEFAULT_COCO_RUNNER_PYTHONPATH,
       COCO_WORKSPACE_ROOT: DEFAULT_COCO_WORKSPACE_ROOT,
+      PLAYWRIGHT_BROWSERS_PATH: DEFAULT_PLAYWRIGHT_BROWSERS_PATH,
+      NODE_PATH: DEFAULT_NODE_PATH,
       COCO_MODEL_PROXY_URL: 'https://model-proxy.internal',
       COCO_MODEL_PROXY_TOKEN: 'short-lived-proxy-token',
     });
@@ -482,6 +490,8 @@ describe('resolveCodeAgentRuntimeConfig', () => {
     assert.deepEqual(proxy.availableModes, ['plan', 'edit']);
     assert.equal(proxy.runnerEnv.PYTHONPATH, DEFAULT_COCO_RUNNER_PYTHONPATH);
     assert.equal(proxy.runnerEnv.COCO_WORKSPACE_ROOT, DEFAULT_COCO_WORKSPACE_ROOT);
+    assert.equal(proxy.runnerEnv.PLAYWRIGHT_BROWSERS_PATH, DEFAULT_PLAYWRIGHT_BROWSERS_PATH);
+    assert.equal(proxy.runnerEnv.NODE_PATH, DEFAULT_NODE_PATH);
     assert.equal(proxy.runnerEnv.COCO_MODEL_PROXY_URL, 'https://model-proxy.internal');
     assert.equal(proxy.runnerEnv.COCO_MODEL_PROXY_TOKEN, 'short-lived-proxy-token');
     assert.deepEqual(proxy.runnerProviderEnvByProvider, {});

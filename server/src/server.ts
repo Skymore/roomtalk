@@ -296,7 +296,7 @@ const cocoSandboxService = codeAgentRuntimeConfig.enabled && codeAgentRuntimeCon
     logger: cocoLogger,
   })
   : new FakeCocoSandboxService();
-const cocoTurnTimeoutMs = parsePositiveIntegerEnv('COCO_TURN_TIMEOUT_MS', 5 * 60 * 1000);
+const cocoTurnTimeoutMs = parsePositiveIntegerEnv('COCO_TURN_TIMEOUT_MS', 10 * 60 * 1000);
 const defaultCocoSandboxTtlMs = codeAgentRuntimeConfig.e2bLifecycle.onTimeout === 'pause'
   ? DEFAULT_COCO_E2B_PAUSE_TIMEOUT_MS
   : DEFAULT_COCO_E2B_KILL_TIMEOUT_MS;

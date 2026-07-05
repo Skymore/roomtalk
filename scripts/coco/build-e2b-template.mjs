@@ -21,6 +21,8 @@ const options = {
   readyCmd: process.env.COCO_E2B_TEMPLATE_READY_CMD || [
     'codex --version >/dev/null',
     'codex-linux-sandbox --help >/dev/null',
+    'playwright --version >/dev/null',
+    'node -e "const { chromium } = require(\\"playwright\\"); const fs = require(\\"fs\\"); const executable = chromium.executablePath(); if (!fs.existsSync(executable)) { console.error(`missing Chromium executable: ${executable}`); process.exit(1); }"',
     'roomtalk --help >/dev/null',
     'python -c "import importlib; importlib.import_module(\\"roomtalk_coco_runner.runner\\"); importlib.import_module(\\"roomtalk_coco_runner.codex_cli\\"); importlib.import_module(\\"roomtalk_coco_runner.codex_app_server\\"); importlib.import_module(\\"roomtalk_coco_runner.codex_sdk_app_server\\"); importlib.import_module(\\"openai_codex\\")"',
   ].join(' && '),

@@ -1,12 +1,16 @@
 FROM python:3.12-slim-bookworm@sha256:42ada43c4265e1ed6db62ad8df62af99a4abb9a9d49622032522ac76efb0bcef
 
 ARG CODEX_CLI_NPM_VERSION=0.142.5
+ARG PLAYWRIGHT_NPM_VERSION=1.61.1
 
 ENV PYTHONUNBUFFERED=1
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
-ENV ROOMTALK_COCO_ARTIFACT_VERSION=roomtalk-coco-2026-07-05-codex-trust-workspace-v1
+ENV ROOMTALK_COCO_ARTIFACT_VERSION=roomtalk-coco-2026-07-05-playwright-chromium-timeout-v1
 ENV ROOMTALK_COCO_SOURCE_REF=a4e70e674e46d59a63874371276f5fec0fcd3f41
 ENV ROOMTALK_CODEX_CLI_VERSION=${CODEX_CLI_NPM_VERSION}
+ENV ROOMTALK_PLAYWRIGHT_VERSION=${PLAYWRIGHT_NPM_VERSION}
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV NODE_PATH=/usr/lib/node_modules
 ENV PYTHONPATH=/opt/coco/src:/opt/roomtalk_coco_runner
 
 WORKDIR /workspace
@@ -24,7 +28,9 @@ RUN apt-get update \
   && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
   && apt-get update \
   && apt-get install -y --no-install-recommends nodejs \
-  && npm install -g @openai/codex@${CODEX_CLI_NPM_VERSION} \
+  && npm install -g @openai/codex@${CODEX_CLI_NPM_VERSION} playwright@${PLAYWRIGHT_NPM_VERSION} \
+  && mkdir -p "${PLAYWRIGHT_BROWSERS_PATH}" \
+  && playwright install --with-deps chromium \
   && { echo '#!/bin/sh'; echo 'exec python -m roomtalk_coco_runner.platform_tools "$@"'; } > /usr/local/bin/roomtalk \
   && chmod 755 /usr/local/bin/roomtalk \
   && CODEX_NATIVE_BIN="$(find "$(npm root -g)/@openai/codex" -path '*/vendor/x86_64-unknown-linux-musl/bin/codex' -type f -perm /111 | head -n 1)" \
@@ -32,6 +38,8 @@ RUN apt-get update \
   && ln -sf "${CODEX_NATIVE_BIN}" /usr/local/bin/codex-linux-sandbox \
   && codex --version \
   && codex-linux-sandbox --help >/dev/null \
+  && playwright --version >/dev/null \
+  && node -e 'const { chromium } = require("playwright"); const fs = require("fs"); const executable = chromium.executablePath(); if (!fs.existsSync(executable)) { console.error(`missing Chromium executable: ${executable}`); process.exit(1); }' \
   && roomtalk --help >/dev/null \
   && python -m pip install --no-cache-dir --require-hashes -r /opt/roomtalk-coco-requirements.lock \
   && python -m pip install --no-cache-dir --no-deps --require-hashes -r /opt/roomtalk-codex-sdk-requirements.lock \
@@ -42,7 +50,7 @@ RUN apt-get update \
 
 RUN useradd --create-home --uid 10001 roomtalk \
   && mkdir -p /tmp/roomtalk-codex \
-  && chown -R roomtalk:roomtalk /workspace /tmp/roomtalk-codex \
+  && chown -R roomtalk:roomtalk /workspace /tmp/roomtalk-codex "${PLAYWRIGHT_BROWSERS_PATH}" \
   && chmod 700 /tmp/roomtalk-codex
 
 USER roomtalk

@@ -8,7 +8,7 @@ describe('resolveCodexCliRunnerConfig', () => {
       enabled: false,
       cliBin: 'codex',
       sandbox: 'workspace-write',
-      timeoutMs: 120_000,
+      timeoutMs: 600_000,
       maxStderrTailChars: 4000,
     });
   });
