@@ -154,6 +154,13 @@ const backendShortLabels: Record<CodeAgentBackend, string> = {
   'codex-app-server': 'App',
 };
 
+const modePillLabels: Record<ReturnType<typeof normalizeCodeAgentMode>, string> = {
+  plan: 'Plan',
+  edit: 'Edit',
+  approveForMe: 'Auto',
+  fullAccess: 'Full',
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 };
@@ -455,12 +462,11 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                   title={t('codeAgentModeControl')}
                   data-testid="code-agent-mode-toggle"
                   isDisabled={!canToggleMode}
-                  className={`h-6 min-w-0 gap-1 border border-[#dedbd0] bg-[#faf9f5] px-1.5 text-[11px] font-semibold text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242421] dark:text-[#faf9f5] ${
+                  className={`h-6 min-w-0 gap-1 border border-[#dedbd0] bg-[#faf9f5] px-2 text-[11px] font-semibold text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242421] dark:text-[#faf9f5] ${
                     canToggleMode ? 'cursor-pointer' : 'cursor-default opacity-100'
                   }`}
                 >
-                  <Icon icon={getCodeAgentModeIcon(selectedMode)} className="h-3 w-3 flex-shrink-0" />
-                  {t(getCodeAgentModeLabelKey(selectedMode))}
+                  {modePillLabels[selectedMode]}
                   {canToggleMode ? <Icon icon="lucide:chevron-down" className="h-3 w-3 flex-shrink-0 opacity-70" /> : null}
                 </Button>
               </DropdownTrigger>
@@ -521,15 +527,15 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                 size="sm"
                 variant="flat"
                 radius="full"
+                isIconOnly
                 isLoading={isRefreshingWorkspace}
                 aria-label={t('codeAgentRefreshWorkspace')}
                 title={t('codeAgentRefreshWorkspace')}
                 data-testid="code-agent-refresh-workspace"
-                className="h-6 min-w-0 gap-1 border border-[#dedbd0] bg-[#faf9f5] px-2 text-[11px] font-semibold text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242421] dark:text-[#faf9f5]"
+                className="h-6 w-6 min-w-6 border border-[#dedbd0] bg-[#faf9f5] p-0 text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242421] dark:text-[#faf9f5]"
                 onPress={onRefreshWorkspace}
               >
                 <Icon icon="lucide:refresh-cw" className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">{t('codeAgentRefreshWorkspace')}</span>
               </Button>
             )}
             {agentStatus === 'running' && onInterruptTurn ? (

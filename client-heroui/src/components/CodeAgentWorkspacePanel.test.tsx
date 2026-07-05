@@ -110,7 +110,7 @@ describe('CodeAgentWorkspacePanel', () => {
       />
     );
 
-    expect(screen.getByText('codexPermissionPlan')).toBeTruthy();
+    expect(screen.getByText('Plan')).toBeTruthy();
     expect(screen.getByText('codexPermissionPlanDescription')).toBeTruthy();
     expect(screen.getByText('codeAgentTools')).toBeTruthy();
     expect(screen.getByText('codeAgentResults')).toBeTruthy();
@@ -221,12 +221,13 @@ describe('CodeAgentWorkspacePanel', () => {
       />
     );
 
-    expect(screen.getByText('codexPermissionEdit')).toBeTruthy();
+    expect(screen.getByText('Edit')).toBeTruthy();
     expect(screen.getByText('codexPermissionEditDescription')).toBeTruthy();
 
     fireEvent.click(screen.getByText('codeAgentActivity'));
     expect(screen.getByText('Read')).toBeTruthy();
     expect(screen.getByLabelText('codeAgentRefreshWorkspace')).toBeTruthy();
+    expect(screen.queryByText('codeAgentRefreshWorkspace')).toBeNull();
   });
 
   it('allows workspace refresh and shows non-blocking refresh errors', async () => {
@@ -271,7 +272,7 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(details.getAttribute('hidden')).toBe('');
     expect(screen.getByText('codeAgentWorkspace')).toBeTruthy();
-    expect(screen.getByText('codexPermissionPlan')).toBeTruthy();
+    expect(screen.getByText('Plan')).toBeTruthy();
     expect(screen.getByText('sandboxStatusReady')).toBeTruthy();
     expect(screen.getByText('codeAgentStatusIdle')).toBeTruthy();
     expect(screen.queryByText('codexPermissionPlanDescription')).toBeNull();
