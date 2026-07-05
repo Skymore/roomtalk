@@ -186,6 +186,23 @@ describe('CodexCliEventMapper', () => {
     ]);
   });
 
+  test('does not present removed RoomTalk background helper as a platform tool', () => {
+    const mapper = new CodexCliEventMapper({ turnId: 'turn-1', messageId: 'ai-1', workspace });
+    const events = mapper.mapEvent({
+      type: 'item.started',
+      item: {
+        id: 'cmd-background',
+        type: 'command_execution',
+        command: 'roomtalk background-shell list',
+      },
+    });
+
+    assert.equal(events.length, 1);
+    const call = events[0];
+    assert.equal(call.type, 'tool_call');
+    assert.equal(call.type === 'tool_call' ? call.name : '', 'shell');
+  });
+
   test('maps turn failures to Coco error events', () => {
     const mapper = new CodexCliEventMapper({ turnId: 'turn-1', messageId: 'ai-1', workspace });
     const events = mapper.mapEvent({ type: 'turn.failed', message: 'model failed' });

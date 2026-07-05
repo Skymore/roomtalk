@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, TextIO
 
 from .runner import (
-    BACKGROUND_SHELL_TOOL,
     EventEmitter,
     PUBLISH_STATIC_SITE_TOOL,
     RunnerError,
@@ -501,14 +500,9 @@ def _prompt_with_roomtalk_tools(request: RunnerRequest, env: dict[str, str]) -> 
     ]
     if _codex_static_publish_enabled(env):
         tool_lines.extend([
-            "- To publish a plain static HTML/CSS/JS site, run `roomtalk publish-static-site --root <dir> --entry index.html` after creating the site directory.",
-            "- Do not use static publishing for Flask, Node, Python, databases, or any server-side app.",
-        ])
-    if request.mode != "plan":
-        tool_lines.extend([
-            "- For long-running dev servers or watchers, Codex may use its native background terminal support when available.",
-            "- If a persistent RoomTalk job or preview URL is needed, run `roomtalk background-shell start --command \"<foreground command>\" --port <port>`.",
-            "- Check jobs with `roomtalk background-shell list` or `roomtalk background-shell status --job-id <id>`; stop them with `roomtalk background-shell stop --job-id <id>`.",
+            "- To publish a plain static site or frontend build output, run `roomtalk publish-static-site --root <dir> --entry index.html` after creating the site directory.",
+            "- Use static publishing for HTML/CSS/JS sites and frontend apps that produce static build output.",
+            "- Do not use static publishing for apps that require a long-running server process, database, backend API, WebSocket server, or runtime-only framework behavior.",
         ])
     return "\n".join(tool_lines) + "\n\nUser request:\n" + request.prompt
 
@@ -525,8 +519,6 @@ def _roomtalk_tool_name(command: str) -> str | None:
     normalized = " ".join(command.split()).lower()
     if "roomtalk publish-static-site" in normalized or "platform_tools publish-static-site" in normalized:
         return PUBLISH_STATIC_SITE_TOOL
-    if "roomtalk background-shell" in normalized or "platform_tools background-shell" in normalized:
-        return BACKGROUND_SHELL_TOOL
     return None
 
 

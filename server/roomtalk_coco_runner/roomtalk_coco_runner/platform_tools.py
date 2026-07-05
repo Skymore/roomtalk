@@ -22,8 +22,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "publish-static-site":
             result = _publish_static_site(args, env)
-        elif args.command == "background-shell":
-            result = _background_shell(args, env)
         else:  # pragma: no cover - argparse prevents this.
             parser.error("missing command")
             return 2
@@ -54,25 +52,6 @@ def _build_parser() -> argparse.ArgumentParser:
     publish.add_argument("--title", default="", help="Optional display title.")
     publish.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
 
-    background = subparsers.add_parser(
-        "background-shell",
-        help="Start or manage a tracked long-running background shell command.",
-    )
-    background.add_argument(
-        "action",
-        nargs="?",
-        default="list",
-        choices=("start", "status", "stop", "list"),
-        help="Background command action.",
-    )
-    background.add_argument("--command", default="", help="Foreground command to start in the background.")
-    background.add_argument("--cwd", default="", help="Working directory inside the workspace.")
-    background.add_argument("--name", default="", help="Human-readable job name.")
-    background.add_argument("--port", dest="ports", action="append", type=int, default=[], help="Expected served port. Repeatable.")
-    background.add_argument("--job-id", default="", help="Job id for status or stop.")
-    background.add_argument("--wait-ms", type=int, default=None, help="Maximum wait time for start/status.")
-    background.add_argument("--log-tail-chars", type=int, default=None, help="Recent log characters to include.")
-    background.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
     return parser
 
 
@@ -115,38 +94,6 @@ def _publish_static_site(args: argparse.Namespace, env: dict[str, str]) -> dict[
         "versionId": response.get("versionId") or "",
         "fileCount": response.get("fileCount", len(files)),
         "totalBytes": response.get("totalBytes", total_bytes),
-    }
-
-
-def _background_shell(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
-    try:
-        from core.tools import BackgroundShellTool
-    except Exception as exc:
-        raise RunnerError("BackgroundShell is not available in this sandbox", code="background_shell_unavailable") from exc
-
-    workspace = _workspace_from_env(env)
-    arguments: dict[str, Any] = {"action": args.action}
-    if args.command:
-        arguments["command"] = args.command
-    if args.cwd:
-        arguments["cwd"] = args.cwd
-    if args.name:
-        arguments["name"] = args.name
-    if args.ports:
-        arguments["ports"] = args.ports
-    if args.job_id:
-        arguments["job_id"] = args.job_id
-    if args.wait_ms is not None:
-        arguments["wait_ms"] = args.wait_ms
-    if args.log_tail_chars is not None:
-        arguments["log_tail_chars"] = args.log_tail_chars
-
-    outcome = BackgroundShellTool(workspace).invoke(arguments)
-    return {
-        "success": bool(getattr(outcome, "success", False)),
-        "tool": "BackgroundShell",
-        "content": str(getattr(outcome, "content", "")),
-        "metadata": getattr(outcome, "metadata", None) or {},
     }
 
 

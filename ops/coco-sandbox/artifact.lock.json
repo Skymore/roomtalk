@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "artifactName": "roomtalk-coco",
-  "artifactVersion": "roomtalk-coco-2026-07-04-codex-sdk-app-server-poc-v3",
+  "artifactVersion": "roomtalk-coco-2026-07-05-remove-roomtalk-background-shell-v1",
   "pythonVersion": "3.12",
   "baseImage": {
     "name": "python",

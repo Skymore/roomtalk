@@ -295,9 +295,6 @@ const roomtalkToolName = (command: string) => {
   if (normalized.includes('roomtalk publish-static-site') || normalized.includes('platform_tools publish-static-site')) {
     return 'PublishStaticSite';
   }
-  if (normalized.includes('roomtalk background-shell') || normalized.includes('platform_tools background-shell')) {
-    return 'BackgroundShell';
-  }
   return undefined;
 };
 

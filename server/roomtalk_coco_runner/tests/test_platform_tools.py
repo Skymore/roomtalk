@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from roomtalk_coco_runner import platform_tools
 
 
@@ -56,3 +58,11 @@ def test_publish_static_site_command_posts_roomtalk_payload(tmp_path: Path, monk
     assert posted["payload"]["entry"] == "index.html"
     assert posted["payload"]["title"] == "Codex demo"
     assert [file["path"] for file in posted["payload"]["files"]] == ["index.html"]
+
+
+def test_background_shell_command_is_not_exposed(capsys):
+    with pytest.raises(SystemExit) as exc:
+        platform_tools.main(["background-shell", "list"])
+
+    assert exc.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
