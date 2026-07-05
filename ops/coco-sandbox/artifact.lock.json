@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "artifactName": "roomtalk-coco",
-  "artifactVersion": "roomtalk-coco-2026-07-05-codex-sdk-bin-resolve-v1",
+  "artifactVersion": "roomtalk-coco-2026-07-05-codex-trust-workspace-v1",
   "pythonVersion": "3.12",
   "baseImage": {
     "name": "python",
@@ -16,7 +16,7 @@
   },
   "runner": {
     "packageName": "roomtalk-coco-runner",
-    "packageVersion": "0.1.6",
+    "packageVersion": "0.1.7",
     "sourcePath": "server/roomtalk_coco_runner",
     "command": "python -m roomtalk_coco_runner",
     "backends": {

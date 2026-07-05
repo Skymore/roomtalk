@@ -1365,7 +1365,7 @@ describe('CodeAgentSessionService', () => {
     const runner = new FakeCodeAgentRunnerClient([
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'error', message: 'runner crashed', code: 'runner_exit', retryable: false },
     ]);
-    const { service, store } = createService({ runner });
+    const { emitter, service, store } = createService({ runner });
 
     const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
 
@@ -1377,5 +1377,11 @@ describe('CodeAgentSessionService', () => {
     assert.equal(messages[2].messageType, 'sandbox_status');
     assert.equal(messages[2].isError, true);
     assert.equal((await store.getRoomById('room-1'))?.cocoStatus, 'error');
+    const errorBroadcast = emitter.roomEmits.find(event =>
+      event.event === 'new_message' && (event.args[0] as Message).id === messages[1].id
+      && (event.args[0] as Message).status === 'error'
+    );
+    assert.equal((errorBroadcast?.args[0] as Message | undefined)?.status, 'error');
+    assert.equal((errorBroadcast?.args[0] as Message | undefined)?.content, 'runner crashed');
   });
 });

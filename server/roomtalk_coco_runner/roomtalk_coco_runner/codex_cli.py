@@ -431,6 +431,15 @@ def _write_codex_config(codex_home: Path, request: RunnerRequest, env: dict[str,
         for key in sorted(tool_env):
             lines.append(f"{key} = {_toml_string(tool_env[key])}")
         lines.append("")
+    trusted_projects = _trusted_project_paths(workspace, env)
+    if trusted_projects:
+        lines.append("[projects]")
+        for project_path in trusted_projects:
+            lines.extend([
+                f"[projects.{_toml_string(project_path)}]",
+                'trust_level = "trusted"',
+            ])
+        lines.append("")
     _write_private_file(codex_home / "config.toml", "\n".join(lines))
 
 
@@ -453,6 +462,18 @@ def _build_child_env(env: dict[str, str], codex_home: Path) -> dict[str, str]:
         child_env[key] = value
     child_env["CODEX_HOME"] = str(codex_home)
     return child_env
+
+
+def _trusted_project_paths(workspace: Path, env: dict[str, str]) -> list[str]:
+    paths: list[str] = []
+    workspace_path = str(workspace)
+    workspace_root = (env.get("COCO_WORKSPACE_ROOT") or "").strip()
+    if workspace_root:
+        paths.append(workspace_root)
+    if workspace_path == "/workspace" or workspace_path.startswith("/workspace/"):
+        paths.append("/workspace")
+    paths.append(workspace_path)
+    return list(dict.fromkeys(paths))
 
 
 def _roomtalk_tool_env(request: RunnerRequest, env: dict[str, str], workspace: Path) -> dict[str, str]:

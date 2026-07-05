@@ -1147,10 +1147,13 @@ export class CodeAgentSessionService {
       status: 'error',
       timestamp: this.now().toISOString(),
     };
-    await this.store.upsertMessage(errorMessage).catch(saveError => {
+    const updatedRoom = await this.store.upsertMessage(errorMessage).catch(saveError => {
       this.logger.error('Failed to persist Coco AI error state', { error: saveError, roomId, messageId: aiMessage.id });
       return null;
     });
+    if (updatedRoom) {
+      this.emitter.to(roomId).emit('new_message', stripAIStreamRecoveryMetadata(errorMessage));
+    }
     const errorRoom = await this.patchRoom(roomId, { cocoStatus: 'error' });
     if (errorRoom) {
       this.emitter.to(errorRoom.creatorId).emit('room_updated', errorRoom);
