@@ -324,7 +324,10 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   const shouldLoadDiff = selectedWorkspaceTab === 'changes';
   const changesScrollClassName = isMobileWorkspaceLayout
     ? 'flex max-h-[min(42dvh,22rem)] min-h-0 flex-col overflow-y-auto overscroll-contain p-0 [-webkit-overflow-scrolling:touch] touch-pan-y'
-    : 'flex max-h-[min(44vh,30rem)] min-h-0 flex-col overflow-y-auto px-3 py-2';
+    : 'flex min-h-0 flex-col overflow-y-auto overscroll-contain px-3 py-2';
+  const changesScrollStyle: React.CSSProperties | undefined = isMobileWorkspaceLayout
+    ? undefined
+    : { height: 'min(44vh, 30rem)' };
   const changesContentClassName = isMobileWorkspaceLayout
     ? 'flex min-w-0 flex-col gap-2'
     : 'flex min-h-0 flex-1 flex-col gap-2';
@@ -821,6 +824,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
           >
             <div
               className={changesScrollClassName}
+              style={changesScrollStyle}
               data-testid="code-agent-workspace-changes-scroll"
               data-mobile-layout={isMobileWorkspaceLayout ? 'true' : undefined}
             >

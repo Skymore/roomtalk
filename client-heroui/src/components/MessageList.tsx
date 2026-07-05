@@ -302,6 +302,13 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     });
   }, [roomId, t]);
 
+  const handleCodeAgentTurnSettled = useCallback(() => {
+    if (presentation !== 'code-agent') {
+      return;
+    }
+    void refreshWorkspaceSnapshot();
+  }, [presentation, refreshWorkspaceSnapshot]);
+
   useEffect(() => {
     if (presentation !== 'code-agent' || !currentRoomId) {
       setWorkspaceSnapshot(null);
@@ -578,6 +585,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     closeEditModal: handleCloseEditModal,
     messageToDeleteId: messageToDelete?.id,
     messageToEditId: messageToEdit?.id,
+    onAIStreamSettled: presentation === 'code-agent' ? handleCodeAgentTurnSettled : undefined,
     warningPrefix: t('warningPrefix'),
   });
 

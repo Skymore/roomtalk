@@ -395,8 +395,11 @@ describe('CodeAgentWorkspacePanel', () => {
     expect(diffViewer.dataset.mobileLayout).toBe('false');
     expect(diffViewer.dataset.compactLayout).toBe('true');
     expect(diffViewer.parentElement?.className).toContain('flex-1');
-    expect(diffViewer.parentElement?.parentElement?.className).toContain('max-h-[min(44vh,30rem)]');
-    expect(diffViewer.parentElement?.parentElement?.className).not.toContain('max-h-44');
+    const changesScroll = screen.getByTestId('code-agent-workspace-changes-scroll');
+    expect(changesScroll.className).toContain('overflow-y-auto');
+    expect(changesScroll.className).toContain('overscroll-contain');
+    expect((changesScroll as HTMLElement).style.height).toBe('min(44vh, 30rem)');
+    expect(changesScroll.className).not.toContain('max-h-44');
 
     fireEvent.click(screen.getByText('App.tsx'));
     expect(diffViewer.dataset.selectedFile).toBe('src/App.tsx');

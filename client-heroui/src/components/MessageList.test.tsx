@@ -549,6 +549,55 @@ describe('MessageList optimistic messages', () => {
     });
   });
 
+  it('refreshes the code workspace snapshot when a code-agent turn settles', async () => {
+    render(
+      <MessageList
+        roomId="room-1"
+        onReply={vi.fn()}
+        roomPermissions={null}
+        presentation="code-agent"
+        currentRoom={{
+          id: 'room-1',
+          name: 'Coco',
+          createdAt: '2026-05-26T00:00:00.000Z',
+          creatorId: 'client-1',
+          type: 'coco',
+          sandboxStatus: 'ready',
+          sandboxUpdatedAt: '2026-06-30T10:00:00.000Z',
+          cocoStatus: 'running',
+        }}
+      />
+    );
+
+    await waitFor(() => {
+      expect(loadCodeAgentWorkspaceSnapshotMock).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      socketMock.trigger('ai_stream_end', {
+        roomId: 'room-1',
+        messageId: 'ai-message-1',
+        content: 'done',
+      });
+    });
+
+    await waitFor(() => {
+      expect(loadCodeAgentWorkspaceSnapshotMock).toHaveBeenCalledTimes(2);
+    });
+
+    act(() => {
+      socketMock.trigger('ai_stream_error', {
+        roomId: 'room-1',
+        messageId: 'ai-message-2',
+        error: 'failed',
+      });
+    });
+
+    await waitFor(() => {
+      expect(loadCodeAgentWorkspaceSnapshotMock).toHaveBeenCalledTimes(3);
+    });
+  });
+
   it('uses current room AI settings when retrying an AI message', async () => {
     window.localStorage.setItem('aiRoles', JSON.stringify([
       { id: 'default', name: 'Assistant', systemPrompt: 'You are helpful', color: 'secondary', icon: 'lucide:bot' },

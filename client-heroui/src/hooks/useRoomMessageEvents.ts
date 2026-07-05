@@ -23,6 +23,7 @@ interface UseRoomMessageEventsArgs {
   closeEditModal: () => void;
   messageToDeleteId?: string;
   messageToEditId?: string;
+  onAIStreamSettled?: () => void;
   warningPrefix: string;
 }
 
@@ -43,6 +44,7 @@ export const useRoomMessageEvents = ({
   closeEditModal,
   messageToDeleteId,
   messageToEditId,
+  onAIStreamSettled,
   warningPrefix,
 }: UseRoomMessageEventsArgs) => {
   const messageToDeleteIdRef = useRef(messageToDeleteId);
@@ -252,6 +254,7 @@ export const useRoomMessageEvents = ({
       if (data.sessionCost) {
         setSessionCostUsd(data.sessionCost.totalUsd);
       }
+      onAIStreamSettled?.();
     };
 
     const handleAICostTotal = (data: AICostTotalEvent) => {
@@ -272,6 +275,7 @@ export const useRoomMessageEvents = ({
         cacheCurrentWindow(next, nextHistoryVersion);
         return next;
       });
+      onAIStreamSettled?.();
     };
 
     const handleMessagesCleared = (clearedRoomId: string) => {
@@ -381,6 +385,7 @@ export const useRoomMessageEvents = ({
     scrollToBottom,
     closeDeleteModal,
     closeEditModal,
+    onAIStreamSettled,
     warningPrefix,
   ]);
 
