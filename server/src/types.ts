@@ -153,6 +153,8 @@ export interface Room {
   sandboxId?: string;
   sandboxStatus?: RoomSandboxStatus;
   sandboxUpdatedAt?: string;
+  sandboxArtifactVersion?: string;
+  sandboxCocoSourceRef?: string;
   cocoSessionId?: string;
   cocoStatus?: RoomCocoStatus;
   cocoAccess?: CocoAccessLevel;

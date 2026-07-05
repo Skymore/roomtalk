@@ -307,6 +307,8 @@ const cocoSandboxLifecycle = new CocoSandboxLifecycleService(store, cocoSandboxS
   maxActiveSandboxes: parsePositiveIntegerEnv('COCO_MAX_ACTIVE_SANDBOXES', Number.POSITIVE_INFINITY),
   maxActiveSandboxesPerUser: parsePositiveIntegerEnv('COCO_MAX_ACTIVE_SANDBOXES_PER_USER', Number.POSITIVE_INFINITY),
   reconnectTimedOutSandboxes: codeAgentRuntimeConfig.e2bLifecycle.onTimeout === 'pause',
+  artifactVersion: codeAgentRuntimeConfig.artifactVersion,
+  cocoSourceRef: codeAgentRuntimeConfig.cocoSourceRef,
 });
 const fakeCodeAgentToolOutput = [
   'stdout: hello from code agent fake runner',

@@ -185,10 +185,10 @@ describe('PostgresStore', () => {
         assertCall(call) {
           assert.match(call.sql, /INSERT INTO rooms/);
           assert.match(call.sql, /room_version = rooms\.room_version \+ 1/);
-          assert.match(call.sql, /type = CASE WHEN \$16::boolean THEN EXCLUDED\.type ELSE rooms\.type END/);
+          assert.match(call.sql, /type = CASE WHEN \$18::boolean THEN EXCLUDED\.type ELSE rooms\.type END/);
           assert.doesNotMatch(call.sql, /creator_id = EXCLUDED\.creator_id/);
           assert.equal(call.params?.[1], 'Saved Room');
-          assert.equal(call.params?.[15], false);
+          assert.equal(call.params?.[17], false);
         },
       },
       {
@@ -234,6 +234,8 @@ describe('PostgresStore', () => {
       sandboxId: 'sandbox-1',
       sandboxStatus: 'ready',
       sandboxUpdatedAt: '2026-05-03T00:01:00.000Z',
+      sandboxArtifactVersion: 'artifact-v1',
+      sandboxCocoSourceRef: 'source-ref-1',
       cocoSessionId: 'coco-session-1',
       cocoStatus: 'idle',
     });
@@ -247,15 +249,19 @@ describe('PostgresStore', () => {
           sandbox_id: 'sandbox-1',
           sandbox_status: 'ready',
           sandbox_updated_at: '2026-05-03T00:01:00.000Z',
+          sandbox_artifact_version: 'artifact-v1',
+          sandbox_coco_source_ref: 'source-ref-1',
           coco_session_id: 'coco-session-1',
           coco_status: 'idle',
         })],
         assertCall(call) {
-          assert.match(call.sql, /type = CASE WHEN \$16::boolean THEN EXCLUDED\.type ELSE rooms\.type END/);
+          assert.match(call.sql, /type = CASE WHEN \$18::boolean THEN EXCLUDED\.type ELSE rooms\.type END/);
           assert.match(call.sql, /sandbox_id = COALESCE\(EXCLUDED\.sandbox_id, rooms\.sandbox_id\)/);
           assert.equal(call.params?.[6], 'coco');
           assert.equal(call.params?.[7], 'sandbox-1');
-          assert.equal(call.params?.[15], true);
+          assert.equal(call.params?.[10], 'artifact-v1');
+          assert.equal(call.params?.[11], 'source-ref-1');
+          assert.equal(call.params?.[17], true);
         },
       },
       { rowCount: 1 },
@@ -268,13 +274,15 @@ describe('PostgresStore', () => {
           sandbox_id: 'sandbox-1',
           sandbox_status: 'ready',
           sandbox_updated_at: '2026-05-03T00:01:00.000Z',
+          sandbox_artifact_version: 'artifact-v1',
+          sandbox_coco_source_ref: 'source-ref-1',
           coco_session_id: 'coco-session-1',
           coco_status: 'idle',
         })],
         assertCall(call) {
           assert.equal(call.params?.[1], 'Legacy save');
           assert.equal(call.params?.[6], 'chat');
-          assert.equal(call.params?.[15], false);
+          assert.equal(call.params?.[17], false);
         },
       },
       { rowCount: 1 },
@@ -389,7 +397,7 @@ describe('PostgresStore', () => {
       {
         rows: [roomRow()],
         assertCall(call) {
-          assert.match(call.sql, /SELECT id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, coco_session_id, coco_status, coco_access, code_agent_mode, code_agent_backend, room_version, updated_at FROM rooms WHERE id = \$1/);
+          assert.match(call.sql, /SELECT id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_coco_source_ref, coco_session_id, coco_status, coco_access, code_agent_mode, code_agent_backend, room_version, updated_at FROM rooms WHERE id = \$1/);
           assert.deepEqual(call.params, ['room-1']);
         },
       },

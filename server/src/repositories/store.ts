@@ -38,6 +38,14 @@ export interface MediaMessageAppendResult {
   asset: MediaAsset;
 }
 
+export interface RoomSandboxReplacement {
+  sandboxId: string;
+  sandboxStatus: RoomSandboxStatus;
+  sandboxUpdatedAt: string;
+  sandboxArtifactVersion?: string;
+  sandboxCocoSourceRef?: string;
+}
+
 export interface MediaHistoryPageCursor {
   createdAt: string;
   assetId: string;
@@ -303,6 +311,7 @@ export interface DurableRoomStore {
   deleteRoom(roomId: string, creatorId: string): Promise<void>;
   countRooms(): Promise<number>;
   compareAndSetRoomSandboxStatus(roomId: string, expectedStatuses: RoomSandboxStatus[], nextStatus: RoomSandboxStatus, updatedAt?: string): Promise<Room | null>;
+  replaceRoomSandbox(roomId: string, expectedSandboxId: string, next: RoomSandboxReplacement): Promise<Room | null>;
   findInterruptedCocoRooms(): Promise<Room[]>;
   findDanglingToolCalls(): Promise<Message[]>;
   // Durable client profile data. Nicknames live in the durable store so they
@@ -717,6 +726,10 @@ export class CompositeRoomStore implements RoomStore {
 
   compareAndSetRoomSandboxStatus(roomId: string, expectedStatuses: RoomSandboxStatus[], nextStatus: RoomSandboxStatus, updatedAt?: string) {
     return this.durableStore.compareAndSetRoomSandboxStatus(roomId, expectedStatuses, nextStatus, updatedAt);
+  }
+
+  replaceRoomSandbox(roomId: string, expectedSandboxId: string, next: RoomSandboxReplacement) {
+    return this.durableStore.replaceRoomSandbox(roomId, expectedSandboxId, next);
   }
 
   findInterruptedCocoRooms() {

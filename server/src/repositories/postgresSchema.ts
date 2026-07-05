@@ -13,6 +13,8 @@ export const POSTGRES_SCHEMA_SQL = [
     sandbox_id TEXT,
     sandbox_status TEXT CHECK (sandbox_status IS NULL OR sandbox_status IN ('none', 'creating', 'ready', 'expired', 'error')),
     sandbox_updated_at TIMESTAMPTZ,
+    sandbox_artifact_version TEXT,
+    sandbox_coco_source_ref TEXT,
     coco_session_id TEXT,
     coco_status TEXT CHECK (coco_status IS NULL OR coco_status IN ('idle', 'running', 'error'))
   )`,
@@ -25,6 +27,8 @@ export const POSTGRES_SCHEMA_SQL = [
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS sandbox_id TEXT`,
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS sandbox_status TEXT`,
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS sandbox_updated_at TIMESTAMPTZ`,
+  `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS sandbox_artifact_version TEXT`,
+  `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS sandbox_coco_source_ref TEXT`,
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS coco_session_id TEXT`,
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS coco_status TEXT`,
   `ALTER TABLE rooms ADD COLUMN IF NOT EXISTS coco_access TEXT`,

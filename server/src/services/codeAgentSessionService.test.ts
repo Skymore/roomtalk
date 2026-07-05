@@ -153,6 +153,14 @@ class MemoryCocoStore {
     this.rooms.set(roomId, updated);
     return updated;
   }
+
+  async replaceRoomSandbox(roomId: string, expectedSandboxId: string, next: any) {
+    const room = this.rooms.get(roomId);
+    if (!room || room.sandboxId !== expectedSandboxId) return null;
+    const updated = { ...room, ...next };
+    this.rooms.set(roomId, updated);
+    return updated;
+  }
 }
 
 class BlockingRunner implements CodeAgentRunnerClient {

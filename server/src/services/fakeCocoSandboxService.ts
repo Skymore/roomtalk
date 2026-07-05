@@ -8,10 +8,13 @@ import {
   CocoWorkspaceDiff,
   CocoWorkspaceEntry,
   CocoWorkspaceFile,
+  CocoWorkspaceArchive,
   CocoWorkspacePreviewServer,
   CocoWorkspaceRef,
   CocoWorkspaceRefs,
   CreateCocoSandboxInput,
+  ExportCocoWorkspaceArchiveOptions,
+  ImportCocoWorkspaceArchiveOptions,
   ListCocoWorkspaceRefsOptions,
   ListCocoWorkspaceEntriesOptions,
   RenameCocoWorkspaceEntryInput,
@@ -26,7 +29,12 @@ import {
   searchCocoWorkspaceEntries,
 } from './cocoSandboxService';
 
-type FakeSandboxFailure = 'create' | 'connect' | 'initializeWorkspaceVersionControl' | 'startRunner' | 'destroy';
+type FakeSandboxFailure = 'create' | 'connect' | 'initializeWorkspaceVersionControl' | 'startRunner' | 'exportWorkspaceArchive' | 'importWorkspaceArchive' | 'destroy';
+
+interface FakeWorkspaceArchivePayload {
+  entries: CocoWorkspaceEntry[];
+  files: Array<{ path: string; bodyBase64: string }>;
+}
 
 export class FakeCocoSandboxService implements CocoSandboxService {
   private readonly sandboxes = new Map<string, CocoSandboxHandle>();
@@ -37,6 +45,8 @@ export class FakeCocoSandboxService implements CocoSandboxService {
   readonly startedRunnerEnvs: Record<string, string>[] = [];
   readonly stoppedRunnerCommands: string[] = [];
   readonly deletedSecretFilePaths: string[] = [];
+  readonly exportedWorkspaceArchiveSandboxIds: string[] = [];
+  readonly importedWorkspaceArchiveSandboxIds: string[] = [];
   private readonly workspaceEntriesBySandboxId = new Map<string, CocoWorkspaceEntry[]>();
   private readonly workspaceFileContentsBySandboxId = new Map<string, Map<string, string>>();
   private readonly workspaceFileBytesBySandboxId = new Map<string, Map<string, Buffer>>();
@@ -288,6 +298,57 @@ export class FakeCocoSandboxService implements CocoSandboxService {
       byteSize: body.byteLength,
       truncated,
     };
+  }
+
+  async exportWorkspaceArchive(
+    handle: CocoSandboxHandle,
+    options: ExportCocoWorkspaceArchiveOptions = {}
+  ): Promise<CocoWorkspaceArchive> {
+    this.consumeFailure('exportWorkspaceArchive');
+    if (!this.sandboxes.has(handle.id)) {
+      throw new Error(`Fake Coco sandbox not found: ${handle.id}`);
+    }
+    const files = this.workspaceFileBytesBySandboxId.get(handle.id) || new Map<string, Buffer>();
+    const payload: FakeWorkspaceArchivePayload = {
+      entries: (this.workspaceEntriesBySandboxId.get(handle.id) || []).map(entry => ({ ...entry })),
+      files: [...files.entries()].map(([path, body]) => ({
+        path,
+        bodyBase64: body.toString('base64'),
+      })),
+    };
+    const body = Buffer.from(JSON.stringify(payload), 'utf8');
+    if (options.maxBytes !== undefined && body.byteLength > options.maxBytes) {
+      throw new Error(`Fake Coco workspace archive exceeds maxBytes: ${body.byteLength}`);
+    }
+    this.exportedWorkspaceArchiveSandboxIds.push(handle.id);
+    return { body, byteSize: body.byteLength };
+  }
+
+  async importWorkspaceArchive(
+    handle: CocoSandboxHandle,
+    archive: CocoWorkspaceArchive,
+    _options: ImportCocoWorkspaceArchiveOptions = {}
+  ): Promise<void> {
+    this.consumeFailure('importWorkspaceArchive');
+    if (!this.sandboxes.has(handle.id)) {
+      throw new Error(`Fake Coco sandbox not found: ${handle.id}`);
+    }
+    const payload = JSON.parse(archive.body.toString('utf8')) as FakeWorkspaceArchivePayload;
+    const fileContents = new Map<string, string>();
+    const fileBytes = new Map<string, Buffer>();
+    for (const file of payload.files || []) {
+      const normalizedPath = normalizeFakeWorkspacePath(file.path);
+      const body = Buffer.from(file.bodyBase64, 'base64');
+      fileBytes.set(normalizedPath, body);
+      fileContents.set(normalizedPath, body.toString('utf8'));
+    }
+    this.workspaceEntriesBySandboxId.set(handle.id, (payload.entries || []).map(entry => ({
+      ...entry,
+      path: normalizeFakeWorkspacePath(entry.path),
+    })));
+    this.workspaceFileContentsBySandboxId.set(handle.id, fileContents);
+    this.workspaceFileBytesBySandboxId.set(handle.id, fileBytes);
+    this.importedWorkspaceArchiveSandboxIds.push(handle.id);
   }
 
   setWorkspacePreviewServers(sandboxId: string, servers: CocoWorkspacePreviewServer[]) {

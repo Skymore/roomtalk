@@ -13,6 +13,10 @@ export interface CocoSandboxLifecycleOptions {
   maxActiveSandboxes: number;
   maxActiveSandboxesPerUser: number;
   reconnectTimedOutSandboxes: boolean;
+  artifactVersion?: string;
+  cocoSourceRef?: string;
+  artifactMigrationMaxArchiveBytes: number;
+  artifactMigrationTimeoutMs: number;
 }
 
 export interface CocoSandboxLifecycleStore {
@@ -24,8 +28,22 @@ export interface CocoSandboxLifecycleStore {
     nextStatus: RoomSandboxStatus,
     updatedAt?: string
   ): Promise<Room | null>;
+  replaceRoomSandbox(
+    roomId: string,
+    expectedSandboxId: string,
+    next: {
+      sandboxId: string;
+      sandboxStatus: RoomSandboxStatus;
+      sandboxUpdatedAt: string;
+      sandboxArtifactVersion?: string;
+      sandboxCocoSourceRef?: string;
+    }
+  ): Promise<Room | null>;
   findInterruptedCocoRooms(): Promise<Room[]>;
 }
+
+const DEFAULT_ARTIFACT_MIGRATION_MAX_ARCHIVE_BYTES = 500 * 1024 * 1024;
+const DEFAULT_ARTIFACT_MIGRATION_TIMEOUT_MS = 5 * 60 * 1000;
 
 const defaultOptions: CocoSandboxLifecycleOptions = {
   sandboxTtlMs: 60 * 60 * 1000,
@@ -34,6 +52,8 @@ const defaultOptions: CocoSandboxLifecycleOptions = {
   maxActiveSandboxes: Number.POSITIVE_INFINITY,
   maxActiveSandboxesPerUser: Number.POSITIVE_INFINITY,
   reconnectTimedOutSandboxes: false,
+  artifactMigrationMaxArchiveBytes: DEFAULT_ARTIFACT_MIGRATION_MAX_ARCHIVE_BYTES,
+  artifactMigrationTimeoutMs: DEFAULT_ARTIFACT_MIGRATION_TIMEOUT_MS,
 };
 
 export class CocoSandboxLifecycleService {
@@ -64,8 +84,11 @@ export class CocoSandboxLifecycleService {
 
     if (this.isReadyAndUsable(room)) {
       try {
-        const handle = await this.sandboxService.connect(room.sandboxId!);
-        return { ok: true, room, handle: this.withRoomIdentity(handle, room), created: false };
+        const handle = this.withRoomIdentity(await this.sandboxService.connect(room.sandboxId!), room);
+        if (!this.isSandboxArtifactCompatible(room)) {
+          return this.migrateReadySandboxArtifact(room, handle);
+        }
+        return { ok: true, room, handle, created: false };
       } catch (error) {
         await this.store.compareAndSetRoomSandboxStatus(room.id, ['ready'], 'expired', this.now().toISOString());
         this.logger.warn('Coco sandbox reconnect failed; marking sandbox expired', { roomId: room.id, sandboxId: room.sandboxId, error });
@@ -167,6 +190,7 @@ export class CocoSandboxLifecycleService {
         sandboxId: handle.id,
         sandboxStatus: 'ready',
         sandboxUpdatedAt: handle.createdAt,
+        ...this.currentSandboxArtifactMetadata(),
       });
       if (!readyRoom) {
         await this.sandboxService.destroy(handle.id);
@@ -183,6 +207,90 @@ export class CocoSandboxLifecycleService {
       }
       await this.store.compareAndSetRoomSandboxStatus(room.id, ['creating'], 'error', this.now().toISOString());
       this.logger.error('Error creating Coco sandbox', { error, roomId: room.id });
+      return { ok: false, reason: 'sandbox_error', room, error: error as Error };
+    }
+  }
+
+  private async migrateReadySandboxArtifact(room: Room, oldHandle: CocoSandboxHandle): Promise<EnsureCocoSandboxResult> {
+    if (!room.sandboxId) {
+      return { ok: false, reason: 'sandbox_error', room, error: new Error('Ready Coco room is missing sandboxId') };
+    }
+    if (!this.sandboxService.exportWorkspaceArchive || !this.sandboxService.importWorkspaceArchive) {
+      const error = new Error('Coco sandbox service does not support workspace archive migration');
+      this.logger.error('Coco sandbox artifact migration unavailable', {
+        roomId: room.id,
+        sandboxId: room.sandboxId,
+        error,
+      });
+      return { ok: false, reason: 'sandbox_error', room, error };
+    }
+
+    const limitError = await this.checkActiveLimits(room.creatorId, 1);
+    if (limitError) {
+      return { ok: false, reason: 'limit_exceeded', room, error: new Error(limitError) };
+    }
+
+    let newHandle: CocoSandboxHandle | null = null;
+    try {
+      const archive = await this.sandboxService.exportWorkspaceArchive(oldHandle, {
+        maxBytes: this.options.artifactMigrationMaxArchiveBytes,
+        timeoutMs: this.options.artifactMigrationTimeoutMs,
+      });
+      newHandle = await this.sandboxService.create({
+        roomId: room.id,
+        creatorId: room.creatorId,
+        ttlMs: this.options.sandboxTtlMs,
+      });
+      await this.sandboxService.importWorkspaceArchive(newHandle, archive, {
+        timeoutMs: this.options.artifactMigrationTimeoutMs,
+      });
+      await this.initializeNewSandboxWorkspace(newHandle);
+
+      const readyRoom = await this.store.replaceRoomSandbox(room.id, room.sandboxId, {
+        sandboxId: newHandle.id,
+        sandboxStatus: 'ready',
+        sandboxUpdatedAt: newHandle.createdAt,
+        ...this.currentSandboxArtifactMetadata(),
+      });
+      if (!readyRoom) {
+        await this.sandboxService.destroy(newHandle.id);
+        return { ok: false, reason: 'store_conflict', room };
+      }
+
+      await this.sandboxService.destroy(room.sandboxId).catch(error => {
+        this.logger.warn('Unable to destroy old Coco sandbox after artifact migration', {
+          error,
+          roomId: room.id,
+          sandboxId: room.sandboxId,
+        });
+      });
+
+      this.logger.info('Migrated Coco sandbox artifact for room', {
+        roomId: room.id,
+        oldSandboxId: room.sandboxId,
+        newSandboxId: newHandle.id,
+        archiveBytes: archive.byteSize,
+        expectedArtifactVersion: this.options.artifactVersion,
+        expectedCocoSourceRef: this.options.cocoSourceRef,
+      });
+      return { ok: true, room: readyRoom, handle: this.withRoomIdentity(newHandle, readyRoom), created: true };
+    } catch (error) {
+      if (newHandle) {
+        await this.sandboxService.destroy(newHandle.id).catch(destroyError => {
+          this.logger.error('Error destroying replacement Coco sandbox after migration failure', {
+            error: destroyError,
+            roomId: room.id,
+            sandboxId: newHandle?.id,
+          });
+        });
+      }
+      this.logger.error('Error migrating Coco sandbox artifact', {
+        error,
+        roomId: room.id,
+        sandboxId: room.sandboxId,
+        expectedArtifactVersion: this.options.artifactVersion,
+        expectedCocoSourceRef: this.options.cocoSourceRef,
+      });
       return { ok: false, reason: 'sandbox_error', room, error: error as Error };
     }
   }
@@ -218,6 +326,23 @@ export class CocoSandboxLifecycleService {
     return remainingTtlMs >= this.options.turnTimeoutMs;
   }
 
+  private isSandboxArtifactCompatible(room: Room): boolean {
+    if (this.options.artifactVersion && room.sandboxArtifactVersion !== this.options.artifactVersion) {
+      return false;
+    }
+    if (this.options.cocoSourceRef && room.sandboxCocoSourceRef !== this.options.cocoSourceRef) {
+      return false;
+    }
+    return true;
+  }
+
+  private currentSandboxArtifactMetadata(): Pick<Room, 'sandboxArtifactVersion' | 'sandboxCocoSourceRef'> {
+    return {
+      ...(this.options.artifactVersion ? { sandboxArtifactVersion: this.options.artifactVersion } : {}),
+      ...(this.options.cocoSourceRef ? { sandboxCocoSourceRef: this.options.cocoSourceRef } : {}),
+    };
+  }
+
   private isCreatingStale(room: Room): boolean {
     const updatedAt = Date.parse(room.sandboxUpdatedAt || '');
     if (!Number.isFinite(updatedAt)) {
@@ -226,14 +351,14 @@ export class CocoSandboxLifecycleService {
     return this.now().getTime() - updatedAt >= this.options.creatingStaleMs;
   }
 
-  private async checkActiveLimits(creatorId: string): Promise<string | null> {
+  private async checkActiveLimits(creatorId: string, replacingActiveSandboxes = 0): Promise<string | null> {
     const globalCount = await this.sandboxService.countActiveSandboxes?.();
-    if (globalCount !== undefined && globalCount >= this.options.maxActiveSandboxes) {
+    if (globalCount !== undefined && Math.max(0, globalCount - replacingActiveSandboxes) >= this.options.maxActiveSandboxes) {
       return 'Coco sandbox global limit exceeded';
     }
 
     const userCount = await this.sandboxService.countActiveSandboxesForUser?.(creatorId);
-    if (userCount !== undefined && userCount >= this.options.maxActiveSandboxesPerUser) {
+    if (userCount !== undefined && Math.max(0, userCount - replacingActiveSandboxes) >= this.options.maxActiveSandboxesPerUser) {
       return 'Coco sandbox per-user limit exceeded';
     }
 

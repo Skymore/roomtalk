@@ -6,7 +6,6 @@ import {
   DEFAULT_COCO_RUNNER_COMMAND,
   DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND,
   DEFAULT_CODEX_CLI_RUNNER_COMMAND,
-  DEFAULT_CODEX_SDK_APP_SERVER_RUNNER_COMMAND,
   DEFAULT_COCO_RUNNER_PYTHONPATH,
   DEFAULT_COCO_WORKSPACE_ROOT,
   resolveCodeAgentRuntimeConfig,
@@ -79,8 +78,7 @@ describe('resolveCodeAgentRuntimeConfig', () => {
     }).runnerCommand, DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND);
     assert.equal(resolveCodeAgentRuntimeConfig({
       CODE_AGENT_BACKEND: 'coco',
-      CODEX_APP_SERVER_RUNNER_COMMAND: DEFAULT_CODEX_SDK_APP_SERVER_RUNNER_COMMAND,
-    }).runnerCommandByBackend['codex-app-server'], DEFAULT_CODEX_SDK_APP_SERVER_RUNNER_COMMAND);
+    }).runnerCommandByBackend['codex-app-server'], DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND);
     assert.equal(resolveCodeAgentRuntimeConfig({
       CODE_AGENT_BACKEND: 'codex',
       CODEX_CLI_BACKEND_ENABLED: 'true',

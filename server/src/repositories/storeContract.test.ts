@@ -190,6 +190,35 @@ class MemoryRedis {
       return encoded;
     }
 
+    if (script.includes("room['sandboxArtifactVersion']")) {
+      const [roomId, expectedSandboxId, sandboxId, sandboxStatus, sandboxUpdatedAt, artifactVersion, cocoSourceRef, updatedAt] = options.arguments;
+      const roomJson = this.hash('rooms').get(roomId);
+      if (!roomJson) return '';
+      const room = JSON.parse(roomJson);
+      if (room.sandboxId !== expectedSandboxId) return '';
+      const updatedRoom = {
+        ...room,
+        sandboxId,
+        sandboxStatus,
+        sandboxUpdatedAt,
+        roomVersion: (Number(room.roomVersion) || 0) + 1,
+        updatedAt,
+      };
+      if (artifactVersion) {
+        updatedRoom.sandboxArtifactVersion = artifactVersion;
+      } else {
+        delete updatedRoom.sandboxArtifactVersion;
+      }
+      if (cocoSourceRef) {
+        updatedRoom.sandboxCocoSourceRef = cocoSourceRef;
+      } else {
+        delete updatedRoom.sandboxCocoSourceRef;
+      }
+      const encoded = JSON.stringify(updatedRoom);
+      this.hash('rooms').set(roomId, encoded);
+      return encoded;
+    }
+
     if (script.includes('local passwordMode = ARGV[3]')) {
       const [roomId, updatedAt, passwordMode, passwordHash, postingScheduleMode, postingScheduleJson] = options.arguments;
       const roomJson = this.hash('rooms').get(roomId);
@@ -468,6 +497,8 @@ type RoomRow = {
   sandbox_id?: string | null;
   sandbox_status?: Room['sandboxStatus'] | null;
   sandbox_updated_at?: string | null;
+  sandbox_artifact_version?: string | null;
+  sandbox_coco_source_ref?: string | null;
   coco_session_id?: string | null;
   coco_status?: Room['cocoStatus'] | null;
   coco_access?: Room['cocoAccess'] | null;
@@ -593,6 +624,8 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         sandboxId,
         sandboxStatus,
         sandboxUpdatedAt,
+        sandboxArtifactVersion,
+        sandboxCocoSourceRef,
         cocoSessionId,
         cocoStatus,
         cocoAccess,
@@ -612,6 +645,8 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
           sandbox_id: sandboxId === null || sandboxId === undefined ? existing.sandbox_id : String(sandboxId),
           sandbox_status: sandboxStatus === null || sandboxStatus === undefined ? existing.sandbox_status : sandboxStatus as Room['sandboxStatus'],
           sandbox_updated_at: sandboxUpdatedAt === null || sandboxUpdatedAt === undefined ? existing.sandbox_updated_at : String(sandboxUpdatedAt),
+          sandbox_artifact_version: sandboxArtifactVersion === null || sandboxArtifactVersion === undefined ? existing.sandbox_artifact_version : String(sandboxArtifactVersion),
+          sandbox_coco_source_ref: sandboxCocoSourceRef === null || sandboxCocoSourceRef === undefined ? existing.sandbox_coco_source_ref : String(sandboxCocoSourceRef),
           coco_session_id: cocoSessionId === null || cocoSessionId === undefined ? existing.coco_session_id : String(cocoSessionId),
           coco_status: cocoStatus === null || cocoStatus === undefined ? existing.coco_status : cocoStatus as Room['cocoStatus'],
           coco_access: cocoAccess === null || cocoAccess === undefined ? existing.coco_access : cocoAccess as Room['cocoAccess'],
@@ -632,6 +667,8 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
           sandbox_id: sandboxId === null || sandboxId === undefined ? null : String(sandboxId),
           sandbox_status: sandboxStatus === null || sandboxStatus === undefined ? null : sandboxStatus as Room['sandboxStatus'],
           sandbox_updated_at: sandboxUpdatedAt === null || sandboxUpdatedAt === undefined ? null : String(sandboxUpdatedAt),
+          sandbox_artifact_version: sandboxArtifactVersion === null || sandboxArtifactVersion === undefined ? null : String(sandboxArtifactVersion),
+          sandbox_coco_source_ref: sandboxCocoSourceRef === null || sandboxCocoSourceRef === undefined ? null : String(sandboxCocoSourceRef),
           coco_session_id: cocoSessionId === null || cocoSessionId === undefined ? null : String(cocoSessionId),
           coco_status: cocoStatus === null || cocoStatus === undefined ? null : cocoStatus as Room['cocoStatus'],
           coco_access: cocoAccess === null || cocoAccess === undefined ? null : cocoAccess as Room['cocoAccess'],
@@ -937,6 +974,25 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       const room = this.rooms.get(roomId);
       if (!room || room.creator_id !== creatorId) return { rows: [], rowCount: 0 };
       const updated = { ...room, name, room_version: (room.room_version || 0) + 1, updated_at: new Date().toISOString() };
+      this.rooms.set(roomId, updated);
+      return { rows: [updated] as T[], rowCount: 1 };
+    }
+
+    if (/UPDATE rooms SET sandbox_id = \$3/.test(compactSql)) {
+      const roomId = String(params[0]);
+      const expectedSandboxId = String(params[1]);
+      const room = this.rooms.get(roomId);
+      if (!room || room.sandbox_id !== expectedSandboxId) return { rows: [], rowCount: 0 };
+      const updated = {
+        ...room,
+        sandbox_id: String(params[2]),
+        sandbox_status: params[3] as Room['sandboxStatus'],
+        sandbox_updated_at: String(params[4]),
+        sandbox_artifact_version: params[5] === null || params[5] === undefined ? null : String(params[5]),
+        sandbox_coco_source_ref: params[6] === null || params[6] === undefined ? null : String(params[6]),
+        room_version: (room.room_version || 0) + 1,
+        updated_at: new Date().toISOString(),
+      };
       this.rooms.set(roomId, updated);
       return { rows: [updated] as T[], rowCount: 1 };
     }
@@ -1692,6 +1748,8 @@ for (const [storeName, createFixture] of storeFactories) {
         sandboxId: 'sandbox-1',
         sandboxStatus: 'ready',
         sandboxUpdatedAt: '2026-05-03T00:01:00.000Z',
+        sandboxArtifactVersion: 'artifact-v1',
+        sandboxCocoSourceRef: 'source-ref-1',
         cocoSessionId: 'coco-session-1',
         cocoStatus: 'idle',
       });
@@ -1741,6 +1799,15 @@ for (const [storeName, createFixture] of storeFactories) {
     it('compares sandbox status and finds Coco recovery work', async () => {
       const { store } = createFixture();
       const readyRoom = room({ id: 'ready-room', type: 'coco', sandboxStatus: 'ready', sandboxUpdatedAt: '2026-05-03T00:00:00.000Z' });
+      const replaceRoom = room({
+        id: 'replace-room',
+        type: 'coco',
+        sandboxId: 'old-sandbox',
+        sandboxStatus: 'ready',
+        sandboxUpdatedAt: '2026-05-03T00:00:00.000Z',
+        sandboxArtifactVersion: 'artifact-old',
+        sandboxCocoSourceRef: 'source-old',
+      });
       const creatingRoom = room({ id: 'creating-room', type: 'coco', sandboxStatus: 'creating' });
       const runningRoom = room({ id: 'running-room', type: 'coco', sandboxStatus: 'ready', cocoStatus: 'running' });
       const legacyNoneRoom = room({ id: 'legacy-none-room', type: 'coco' });
@@ -1769,6 +1836,7 @@ for (const [storeName, createFixture] of storeFactories) {
       });
 
       await store.saveRoom(readyRoom);
+      await store.saveRoom(replaceRoom);
       await store.saveRoom(creatingRoom);
       await store.saveRoom(runningRoom);
       await store.saveRoom(legacyNoneRoom);
@@ -1796,6 +1864,28 @@ for (const [storeName, createFixture] of storeFactories) {
         sandboxUpdatedAt: statusChangedAt,
       });
       assert.equal(await store.compareAndSetRoomSandboxStatus(readyRoom.id, ['ready'], 'error', statusChangedAt), null);
+
+      assert.equal(await store.replaceRoomSandbox(replaceRoom.id, 'wrong-sandbox', {
+        sandboxId: 'new-sandbox',
+        sandboxStatus: 'ready',
+        sandboxUpdatedAt: statusChangedAt,
+        sandboxArtifactVersion: 'artifact-new',
+        sandboxCocoSourceRef: 'source-new',
+      }), null);
+      assert.deepEqual(stripRoomStamp(await store.replaceRoomSandbox(replaceRoom.id, 'old-sandbox', {
+        sandboxId: 'new-sandbox',
+        sandboxStatus: 'ready',
+        sandboxUpdatedAt: statusChangedAt,
+        sandboxArtifactVersion: 'artifact-new',
+        sandboxCocoSourceRef: 'source-new',
+      })), {
+        ...replaceRoom,
+        sandboxId: 'new-sandbox',
+        sandboxStatus: 'ready',
+        sandboxUpdatedAt: statusChangedAt,
+        sandboxArtifactVersion: 'artifact-new',
+        sandboxCocoSourceRef: 'source-new',
+      });
 
       const interruptedIds = (await store.findInterruptedCocoRooms()).map(item => item.id).sort();
       assert.deepEqual(interruptedIds, ['creating-room', 'running-room']);

@@ -1,14 +1,16 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { AICost, Message, Room, RoomAICostTotal, RoomSandboxStatus } from '../types';
-import { CocoSandboxLifecycleService, CocoSandboxLifecycleStore } from './cocoSandboxLifecycle';
+import { CocoSandboxLifecycleOptions, CocoSandboxLifecycleService, CocoSandboxLifecycleStore } from './cocoSandboxLifecycle';
 import { FakeCocoSandboxService } from './fakeCocoSandboxService';
 
 class MemoryRoomStore implements CocoSandboxLifecycleStore {
   rooms = new Map<string, Room>();
   messages = new Map<string, Message[]>();
   failNextSaveRoom = false;
+  failNextReplaceRoomSandbox = false;
   forceStatusBeforeNextSandboxCas: RoomSandboxStatus | null = null;
+  forceSandboxIdBeforeNextReplace: string | null = null;
 
   constructor(initialRooms: Room[] = []) {
     initialRooms.forEach(room => this.rooms.set(room.id, room));
@@ -79,6 +81,29 @@ class MemoryRoomStore implements CocoSandboxLifecycleStore {
     this.rooms.set(roomId, updatedRoom);
     return updatedRoom;
   }
+  async replaceRoomSandbox(roomId: string, expectedSandboxId: string, next: {
+    sandboxId: string;
+    sandboxStatus: RoomSandboxStatus;
+    sandboxUpdatedAt: string;
+    sandboxArtifactVersion?: string;
+    sandboxCocoSourceRef?: string;
+  }) {
+    if (this.failNextReplaceRoomSandbox) {
+      this.failNextReplaceRoomSandbox = false;
+      return null;
+    }
+    let room = this.rooms.get(roomId);
+    if (!room) return null;
+    if (this.forceSandboxIdBeforeNextReplace) {
+      room = { ...room, sandboxId: this.forceSandboxIdBeforeNextReplace };
+      this.rooms.set(roomId, room);
+      this.forceSandboxIdBeforeNextReplace = null;
+    }
+    if (room.sandboxId !== expectedSandboxId) return null;
+    const updatedRoom = { ...room, ...next };
+    this.rooms.set(roomId, updatedRoom);
+    return updatedRoom;
+  }
   async findInterruptedCocoRooms() {
     return [...this.rooms.values()].filter(room => room.type === 'coco' && (room.sandboxStatus === 'creating' || room.cocoStatus === 'running'));
   }
@@ -110,7 +135,12 @@ const room = (overrides: Partial<Room> = {}): Room => ({
   ...overrides,
 });
 
-const createLifecycle = (store: MemoryRoomStore, sandboxService = new FakeCocoSandboxService(() => new Date('2026-05-03T00:00:00.000Z')), now = () => new Date('2026-05-03T00:00:00.000Z')) => ({
+const createLifecycle = (
+  store: MemoryRoomStore,
+  sandboxService = new FakeCocoSandboxService(() => new Date('2026-05-03T00:00:00.000Z')),
+  now = () => new Date('2026-05-03T00:00:00.000Z'),
+  options: Partial<CocoSandboxLifecycleOptions> = {},
+) => ({
   sandboxService,
   lifecycle: new CocoSandboxLifecycleService(store, sandboxService, logger as any, {
     sandboxTtlMs: 60 * 60 * 1000,
@@ -118,6 +148,7 @@ const createLifecycle = (store: MemoryRoomStore, sandboxService = new FakeCocoSa
     creatingStaleMs: 2 * 60 * 1000,
     maxActiveSandboxes: 10,
     maxActiveSandboxesPerUser: 10,
+    ...options,
   }, now),
 });
 
@@ -150,6 +181,115 @@ describe('CocoSandboxLifecycleService', () => {
     assert.equal(second.ok && first.ok && second.handle.id, first.ok && first.handle.id);
     assert.equal(await sandboxService.countActiveSandboxes(), 1);
     assert.deepEqual(sandboxService.initializedWorkspaceVersionControlSandboxIds, [first.ok && first.handle.id]);
+  });
+
+  it('persists the current sandbox artifact metadata when creating a sandbox', async () => {
+    const store = new MemoryRoomStore([room()]);
+    const { lifecycle } = createLifecycle(
+      store,
+      new FakeCocoSandboxService(() => new Date('2026-05-03T00:00:00.000Z')),
+      () => new Date('2026-05-03T00:00:00.000Z'),
+      {
+        artifactVersion: 'artifact-v2',
+        cocoSourceRef: 'source-v2',
+      },
+    );
+
+    const result = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+
+    assert.equal(result.ok, true);
+    const savedRoom = await store.getRoomById('room-1');
+    assert.equal(savedRoom?.sandboxArtifactVersion, 'artifact-v2');
+    assert.equal(savedRoom?.sandboxCocoSourceRef, 'source-v2');
+  });
+
+  it('migrates a ready sandbox with stale artifact metadata without losing workspace files', async () => {
+    const sandboxService = new FakeCocoSandboxService(() => new Date('2026-05-03T00:00:00.000Z'));
+    const oldHandle = await sandboxService.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60 * 60 * 1000 });
+    sandboxService.setWorkspaceFileContent(oldHandle.id, 'src/app.ts', 'console.log("old workspace");');
+    const store = new MemoryRoomStore([room({
+      sandboxStatus: 'ready',
+      sandboxId: oldHandle.id,
+      sandboxUpdatedAt: '2026-05-03T00:00:00.000Z',
+      sandboxArtifactVersion: 'artifact-v1',
+      sandboxCocoSourceRef: 'source-v1',
+    })]);
+    const { lifecycle } = createLifecycle(
+      store,
+      sandboxService,
+      () => new Date('2026-05-03T00:01:00.000Z'),
+      {
+        artifactVersion: 'artifact-v2',
+        cocoSourceRef: 'source-v2',
+      },
+    );
+
+    const result = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.created, true);
+    assert.notEqual(result.ok && result.handle.id, oldHandle.id);
+    assert.deepEqual(sandboxService.exportedWorkspaceArchiveSandboxIds, [oldHandle.id]);
+    assert.deepEqual(sandboxService.importedWorkspaceArchiveSandboxIds, [result.ok ? result.handle.id : '']);
+    assert.deepEqual(sandboxService.destroyedSandboxIds, [oldHandle.id]);
+    const savedRoom = await store.getRoomById('room-1');
+    assert.equal(savedRoom?.sandboxId, result.ok && result.handle.id);
+    assert.equal(savedRoom?.sandboxArtifactVersion, 'artifact-v2');
+    assert.equal(savedRoom?.sandboxCocoSourceRef, 'source-v2');
+    assert.equal(result.ok && (await sandboxService.readWorkspaceFile(result.handle, 'src/app.ts')).content, 'console.log("old workspace");');
+  });
+
+  it('keeps the old sandbox when artifact migration fails after creating a replacement', async () => {
+    const sandboxService = new FakeCocoSandboxService(() => new Date('2026-05-03T00:00:00.000Z'));
+    const oldHandle = await sandboxService.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60 * 60 * 1000 });
+    sandboxService.setWorkspaceFileContent(oldHandle.id, 'README.md', 'old');
+    sandboxService.failNext('importWorkspaceArchive');
+    const store = new MemoryRoomStore([room({
+      sandboxStatus: 'ready',
+      sandboxId: oldHandle.id,
+      sandboxUpdatedAt: '2026-05-03T00:00:00.000Z',
+      sandboxArtifactVersion: 'artifact-v1',
+    })]);
+    const { lifecycle } = createLifecycle(
+      store,
+      sandboxService,
+      () => new Date('2026-05-03T00:01:00.000Z'),
+      { artifactVersion: 'artifact-v2' },
+    );
+
+    const result = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+
+    assert.equal(failureReason(result), 'sandbox_error');
+    assert.equal((await store.getRoomById('room-1'))?.sandboxId, oldHandle.id);
+    assert.equal((await store.getRoomById('room-1'))?.sandboxArtifactVersion, 'artifact-v1');
+    assert.equal(sandboxService.destroyedSandboxIds.length, 1);
+    assert.notEqual(sandboxService.destroyedSandboxIds[0], oldHandle.id);
+    assert.equal(await sandboxService.countActiveSandboxes(), 1);
+  });
+
+  it('destroys the replacement sandbox when artifact migration loses the sandbox CAS race', async () => {
+    const sandboxService = new FakeCocoSandboxService(() => new Date('2026-05-03T00:00:00.000Z'));
+    const oldHandle = await sandboxService.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60 * 60 * 1000 });
+    const store = new MemoryRoomStore([room({
+      sandboxStatus: 'ready',
+      sandboxId: oldHandle.id,
+      sandboxUpdatedAt: '2026-05-03T00:00:00.000Z',
+      sandboxArtifactVersion: 'artifact-v1',
+    })]);
+    store.forceSandboxIdBeforeNextReplace = 'other-sandbox';
+    const { lifecycle } = createLifecycle(
+      store,
+      sandboxService,
+      () => new Date('2026-05-03T00:01:00.000Z'),
+      { artifactVersion: 'artifact-v2' },
+    );
+
+    const result = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+
+    assert.equal(failureReason(result), 'store_conflict');
+    assert.equal((await store.getRoomById('room-1'))?.sandboxId, 'other-sandbox');
+    assert.equal(sandboxService.destroyedSandboxIds.length, 1);
+    assert.notEqual(sandboxService.destroyedSandboxIds[0], oldHandle.id);
   });
 
   it('rejects missing, non-Coco, and unauthorized rooms', async () => {

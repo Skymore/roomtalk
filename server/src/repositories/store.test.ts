@@ -90,6 +90,7 @@ const durableMutationStubs = () => ({
   async truncateAfterMessage() { return { room: room(), messages: [message()], targetFound: true }; },
   async updateMessageAndTruncateAfter() { return { room: room(), messages: [message()], targetFound: true, updatedMessage: message() }; },
   async compareAndSetRoomSandboxStatus() { return room({ type: 'coco', sandboxStatus: 'creating' }); },
+  async replaceRoomSandbox() { return room({ type: 'coco', sandboxStatus: 'ready', sandboxId: 'new-sandbox' }); },
   async findInterruptedCocoRooms() { return []; },
   async findDanglingToolCalls() { return []; },
 });
@@ -384,6 +385,7 @@ describe('CompositeRoomStore', () => {
       async deleteRoom(_roomId: string, _creatorId: string) { calls.push('durable.deleteRoom'); },
       async countRooms() { calls.push('durable.countRooms'); return 1; },
       async compareAndSetRoomSandboxStatus() { calls.push('durable.compareAndSetRoomSandboxStatus'); return room({ type: 'coco', sandboxStatus: 'creating' }); },
+      async replaceRoomSandbox() { calls.push('durable.replaceRoomSandbox'); return room({ type: 'coco', sandboxStatus: 'ready', sandboxId: 'new-sandbox' }); },
       async findInterruptedCocoRooms() { calls.push('durable.findInterruptedCocoRooms'); return [room({ type: 'coco', sandboxStatus: 'creating' })]; },
       async findDanglingToolCalls() { calls.push('durable.findDanglingToolCalls'); return [message({ messageType: 'tool_call', toolCallId: 'tool-1' })]; },
       async setClientNickname(_clientId: string, _nickname: string) { calls.push('durable.setClientNickname'); },
@@ -505,6 +507,11 @@ describe('CompositeRoomStore', () => {
     await store.deleteRoom('room-1', 'client-1');
     assert.equal(await store.countRooms(), 1);
     assert.deepEqual(await store.compareAndSetRoomSandboxStatus('room-1', ['none'], 'creating'), room({ type: 'coco', sandboxStatus: 'creating' }));
+    assert.deepEqual(await store.replaceRoomSandbox('room-1', 'old-sandbox', {
+      sandboxId: 'new-sandbox',
+      sandboxStatus: 'ready',
+      sandboxUpdatedAt: '2026-05-03T00:00:00.000Z',
+    }), room({ type: 'coco', sandboxStatus: 'ready', sandboxId: 'new-sandbox' }));
     assert.deepEqual(await store.findInterruptedCocoRooms(), [room({ type: 'coco', sandboxStatus: 'creating' })]);
     assert.deepEqual(await store.findDanglingToolCalls(), [message({ messageType: 'tool_call', toolCallId: 'tool-1' })]);
     assert.equal(await store.updateRoomMemberCount('room-1', 'client-1', 'socket-1', true), 1);
@@ -588,6 +595,7 @@ describe('CompositeRoomStore', () => {
       'durable.deleteRoom',
       'durable.countRooms',
       'durable.compareAndSetRoomSandboxStatus',
+      'durable.replaceRoomSandbox',
       'durable.findInterruptedCocoRooms',
       'durable.findDanglingToolCalls',
       'realtime.updateRoomMemberCount',
@@ -746,6 +754,7 @@ describe('CompositeRoomStore', () => {
       async deleteRoom() { calls.push('durable.delete'); },
       async countRooms() { return 0; },
       async compareAndSetRoomSandboxStatus() { return null; },
+      async replaceRoomSandbox() { return null; },
       async findInterruptedCocoRooms() { return []; },
       async findDanglingToolCalls() { return []; },
       async failInterruptedStreamingMessages() { calls.push('durable.failInterrupted'); return 2; },

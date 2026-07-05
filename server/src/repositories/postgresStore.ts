@@ -2,7 +2,7 @@ import { customAlphabet } from 'nanoid';
 import { Logger } from '../logger';
 import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomCocoStatus, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomType } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
-import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessagePageOptions, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
+import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 
@@ -38,6 +38,8 @@ type RoomRow = {
   sandbox_id?: string | null;
   sandbox_status?: RoomSandboxStatus | null;
   sandbox_updated_at?: string | Date | null;
+  sandbox_artifact_version?: string | null;
+  sandbox_coco_source_ref?: string | null;
   coco_session_id?: string | null;
   coco_status?: RoomCocoStatus | null;
   coco_access?: string | null;
@@ -195,7 +197,7 @@ type ClientAccountRow = {
   email_verified: boolean | null;
 };
 
-const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, coco_session_id, coco_status, coco_access, code_agent_mode, code_agent_backend, room_version, updated_at';
+const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_coco_source_ref, coco_session_id, coco_status, coco_access, code_agent_mode, code_agent_backend, room_version, updated_at';
 const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ui_payload, code_agent_mode';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, filename, width, height, duration_ms, uploaded_by_client_id, created_at';
@@ -294,6 +296,8 @@ const mapRoom = (row: RoomRow): Room => {
   if (row.sandbox_id) room.sandboxId = row.sandbox_id;
   if (row.sandbox_status) room.sandboxStatus = row.sandbox_status;
   if (row.sandbox_updated_at) room.sandboxUpdatedAt = toIsoString(row.sandbox_updated_at);
+  if (row.sandbox_artifact_version) room.sandboxArtifactVersion = row.sandbox_artifact_version;
+  if (row.sandbox_coco_source_ref) room.sandboxCocoSourceRef = row.sandbox_coco_source_ref;
   if (row.coco_session_id) room.cocoSessionId = row.coco_session_id;
   if (row.coco_status) room.cocoStatus = row.coco_status;
   if (row.coco_access) room.cocoAccess = row.coco_access as Room['cocoAccess'];
@@ -1914,6 +1918,8 @@ export class PostgresStore implements DurableRoomStore {
             sandbox_id,
             sandbox_status,
             sandbox_updated_at,
+            sandbox_artifact_version,
+            sandbox_coco_source_ref,
             coco_session_id,
             coco_status,
             coco_access,
@@ -1922,15 +1928,17 @@ export class PostgresStore implements DurableRoomStore {
             room_version,
             updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 1, NOW())
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 1, NOW())
           ON CONFLICT (id) DO UPDATE SET
             name = EXCLUDED.name,
             description = EXCLUDED.description,
             last_activity_at = GREATEST(rooms.last_activity_at, EXCLUDED.last_activity_at),
-            type = CASE WHEN $16::boolean THEN EXCLUDED.type ELSE rooms.type END,
+            type = CASE WHEN $18::boolean THEN EXCLUDED.type ELSE rooms.type END,
             sandbox_id = COALESCE(EXCLUDED.sandbox_id, rooms.sandbox_id),
             sandbox_status = COALESCE(EXCLUDED.sandbox_status, rooms.sandbox_status),
             sandbox_updated_at = COALESCE(EXCLUDED.sandbox_updated_at, rooms.sandbox_updated_at),
+            sandbox_artifact_version = COALESCE(EXCLUDED.sandbox_artifact_version, rooms.sandbox_artifact_version),
+            sandbox_coco_source_ref = COALESCE(EXCLUDED.sandbox_coco_source_ref, rooms.sandbox_coco_source_ref),
             coco_session_id = COALESCE(EXCLUDED.coco_session_id, rooms.coco_session_id),
             coco_status = COALESCE(EXCLUDED.coco_status, rooms.coco_status),
             coco_access = COALESCE(EXCLUDED.coco_access, rooms.coco_access),
@@ -1949,6 +1957,8 @@ export class PostgresStore implements DurableRoomStore {
             room.sandboxId || null,
             room.sandboxStatus || null,
             room.sandboxUpdatedAt || null,
+            room.sandboxArtifactVersion || null,
+            room.sandboxCocoSourceRef || null,
             room.cocoSessionId || null,
             room.cocoStatus || null,
             room.cocoAccess || null,
@@ -2646,6 +2656,41 @@ export class PostgresStore implements DurableRoomStore {
       return result.rows[0] ? mapRoom(result.rows[0]) : null;
     } catch (error) {
       this.logger.error('Error comparing and setting PostgreSQL room sandbox status', { error, roomId, expectedStatuses, nextStatus });
+      return null;
+    }
+  }
+
+  async replaceRoomSandbox(
+    roomId: string,
+    expectedSandboxId: string,
+    next: RoomSandboxReplacement
+  ): Promise<Room | null> {
+    try {
+      const result = await this.pool.query<RoomRow>(
+        `UPDATE rooms
+        SET sandbox_id = $3,
+          sandbox_status = $4,
+          sandbox_updated_at = $5::timestamptz,
+          sandbox_artifact_version = $6,
+          sandbox_coco_source_ref = $7,
+          room_version = room_version + 1,
+          updated_at = NOW()
+        WHERE id = $1
+          AND sandbox_id = $2
+        RETURNING ${ROOM_COLUMNS}`,
+        [
+          roomId,
+          expectedSandboxId,
+          next.sandboxId,
+          next.sandboxStatus,
+          next.sandboxUpdatedAt,
+          next.sandboxArtifactVersion || null,
+          next.sandboxCocoSourceRef || null,
+        ]
+      );
+      return result.rows[0] ? mapRoom(result.rows[0]) : null;
+    } catch (error) {
+      this.logger.error('Error replacing PostgreSQL room sandbox', { error, roomId, expectedSandboxId, nextSandboxId: next.sandboxId });
       return null;
     }
   }

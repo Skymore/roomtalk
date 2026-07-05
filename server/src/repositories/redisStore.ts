@@ -3,7 +3,7 @@ import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
 import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember, RoomSandboxStatus } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, stripAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
-import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput } from './store';
+import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput } from './store';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 const DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS = 30;
@@ -103,6 +103,42 @@ if storedJson then
 end
 
 room['roomVersion'] = storedVersion + 1
+local encoded = cjson.encode(room)
+redis.call('HSET', KEYS[1], ARGV[1], encoded)
+return encoded
+`;
+
+const REPLACE_ROOM_SANDBOX_SCRIPT = `
+local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
+if not roomJson then
+  return ''
+end
+
+local ok, room = pcall(cjson.decode, roomJson)
+if not ok then
+  return ''
+end
+
+if room['sandboxId'] ~= ARGV[2] then
+  return ''
+end
+
+room['sandboxId'] = ARGV[3]
+room['sandboxStatus'] = ARGV[4]
+room['sandboxUpdatedAt'] = ARGV[5]
+if ARGV[6] == '' then
+  room['sandboxArtifactVersion'] = nil
+else
+  room['sandboxArtifactVersion'] = ARGV[6]
+end
+if ARGV[7] == '' then
+  room['sandboxCocoSourceRef'] = nil
+else
+  room['sandboxCocoSourceRef'] = ARGV[7]
+end
+room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
+room['updatedAt'] = ARGV[8]
+
 local encoded = cjson.encode(room)
 redis.call('HSET', KEYS[1], ARGV[1], encoded)
 return encoded
@@ -1681,6 +1717,8 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
           sandboxId: room.sandboxId ?? existingRoom.sandboxId,
           sandboxStatus: room.sandboxStatus ?? existingRoom.sandboxStatus,
           sandboxUpdatedAt: room.sandboxUpdatedAt ?? existingRoom.sandboxUpdatedAt,
+          sandboxArtifactVersion: room.sandboxArtifactVersion ?? existingRoom.sandboxArtifactVersion,
+          sandboxCocoSourceRef: room.sandboxCocoSourceRef ?? existingRoom.sandboxCocoSourceRef,
           cocoSessionId: room.cocoSessionId ?? existingRoom.cocoSessionId,
           cocoStatus: room.cocoStatus ?? existingRoom.cocoStatus,
           cocoAccess: room.cocoAccess ?? existingRoom.cocoAccess,
@@ -2582,6 +2620,33 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       });
     } catch (error) {
       this.logger.error('Error comparing and setting Redis room sandbox status', { error, roomId, expectedStatuses, nextStatus });
+      return null;
+    }
+  }
+
+  async replaceRoomSandbox(
+    roomId: string,
+    expectedSandboxId: string,
+    next: RoomSandboxReplacement
+  ): Promise<Room | null> {
+    try {
+      const updatedAt = new Date().toISOString();
+      const result = await (this.redisClient as any).eval(REPLACE_ROOM_SANDBOX_SCRIPT, {
+        keys: ['rooms'],
+        arguments: [
+          roomId,
+          expectedSandboxId,
+          next.sandboxId,
+          next.sandboxStatus,
+          next.sandboxUpdatedAt,
+          next.sandboxArtifactVersion || '',
+          next.sandboxCocoSourceRef || '',
+          updatedAt,
+        ],
+      });
+      return typeof result === 'string' && result ? JSON.parse(result) as Room : null;
+    } catch (error) {
+      this.logger.error('Error replacing Redis room sandbox', { error, roomId, expectedSandboxId, nextSandboxId: next.sandboxId });
       return null;
     }
   }

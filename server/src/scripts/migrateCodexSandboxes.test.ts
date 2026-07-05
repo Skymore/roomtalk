@@ -96,6 +96,8 @@ describe('probeCodexCapability', () => {
     assert.equal(result.ok, true);
     assert.match(service.commands[0], /roomtalk_coco_runner\.codex_cli/);
     assert.match(service.commands[0], /roomtalk_coco_runner\.codex_app_server/);
+    assert.match(service.commands[0], /roomtalk_coco_runner\.codex_sdk_app_server/);
+    assert.match(service.commands[0], /openai_codex/);
   });
 
   it('checks the sandbox artifact version when an expected version is provided', async () => {
