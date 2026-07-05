@@ -501,7 +501,7 @@ export function registerCodeAgentWorkspaceHandlers({
         roomId,
         reason: access.reason,
       });
-      return { success: false, error: access.message || 'Coco Agent is unavailable', clientId };
+      return { success: false, error: access.message || 'Workspace is unavailable', clientId };
     }
 
     const room = await store.getRoomById(roomId);
@@ -510,7 +510,7 @@ export function registerCodeAgentWorkspaceHandlers({
     }
 
     if (room.type !== 'codeAgent') {
-      return { success: false, error: 'Code workspaces are only available for Coco Agent rooms', clientId };
+      return { success: false, error: 'Code workspaces are only available for Workspace rooms', clientId };
     }
 
     return { success: true, clientId, room };
@@ -536,7 +536,7 @@ export function registerCodeAgentWorkspaceHandlers({
       return;
     }
     if (!codeAgentSessionService) {
-      callback?.({ success: false, error: 'Coco Agent is unavailable' });
+      callback?.({ success: false, error: 'Workspace is unavailable' });
       return;
     }
     const reason = parseWorkspaceOptionalString(payload, 'reason')?.slice(0, 500);
@@ -552,7 +552,7 @@ export function registerCodeAgentWorkspaceHandlers({
       return;
     }
     if (!codeAgentSessionService) {
-      callback?.({ success: false, error: 'Coco Agent is unavailable' });
+      callback?.({ success: false, error: 'Workspace is unavailable' });
       return;
     }
     const prompt = parseWorkspaceString(payload, 'prompt');
@@ -572,7 +572,7 @@ export function registerCodeAgentWorkspaceHandlers({
       return;
     }
     if (!codeAgentSessionService) {
-      callback?.({ success: false, error: 'Coco Agent is unavailable' });
+      callback?.({ success: false, error: 'Workspace is unavailable' });
       return;
     }
     const approvalId = parseWorkspaceString(payload, 'approvalId');
@@ -593,7 +593,7 @@ export function registerCodeAgentWorkspaceHandlers({
       return;
     }
     if (!codeAgentSessionService) {
-      callback?.({ success: false, error: 'Coco Agent is unavailable' });
+      callback?.({ success: false, error: 'Workspace is unavailable' });
       return;
     }
     const limit = parseWorkspacePositiveInteger(payload, 'limit', 25, 100);
@@ -622,7 +622,7 @@ export function registerCodeAgentWorkspaceHandlers({
       return;
     }
     if (!codeAgentSessionService) {
-      callback?.({ success: false, error: 'Coco Agent is unavailable' });
+      callback?.({ success: false, error: 'Workspace is unavailable' });
       return;
     }
     const threadId = parseWorkspaceString(payload, 'threadId');

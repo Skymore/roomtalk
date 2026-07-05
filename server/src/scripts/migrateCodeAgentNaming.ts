@@ -132,14 +132,19 @@ const POSTGRES_CODE_AGENT_NAMING_SQL = [
     WHERE client_id = 'ai_assistant'
       AND username IN ('Coco', 'Code Agent')`,
   `UPDATE room_messages
-    SET content = replace(content, 'Unable to persist code-agent', 'Unable to persist Coco Agent')
+    SET content = replace(
+      replace(
+        replace(content, 'Unable to persist code-agent', 'Unable to persist agent'),
+        'Unable to persist Coco Agent', 'Unable to persist agent'
+      ),
+      'Unable to persist Coco', 'Unable to persist agent'
+    )
     WHERE client_id = 'code_agent_runner'
-      AND content LIKE 'Unable to persist code-agent%'`,
-  `UPDATE room_messages
-    SET content = replace(content, 'Unable to persist Coco', 'Unable to persist Coco Agent')
-    WHERE client_id = 'code_agent_runner'
-      AND content LIKE 'Unable to persist Coco%'
-      AND content NOT LIKE 'Unable to persist Coco Agent%'`,
+      AND (
+        content LIKE 'Unable to persist code-agent%'
+        OR content LIKE 'Unable to persist Coco Agent%'
+        OR content LIKE 'Unable to persist Coco%'
+      )`,
   `UPDATE observability_events
     SET event = 'code_agent.' || substring(event from 6)
     WHERE event LIKE 'coco.%'`,
@@ -155,33 +160,52 @@ const POSTGRES_CODE_AGENT_NAMING_SQL = [
                     replace(
                       replace(
                         replace(
-                          replace(error_message, 'roomtalk_coco_runner', 'roomtalk_code_agent_runner'),
-                          'Coco runner', 'code agent runner'
+                          replace(
+                            replace(
+                              replace(
+                                replace(
+                                  replace(
+                                    replace(
+                                      replace(error_message, 'roomtalk_coco_runner', 'roomtalk_code_agent_runner'),
+                                      'Coco runner', 'code agent runner'
+                                    ),
+                                    'coco runner', 'code agent runner'
+                                  ),
+                                  'Code agent is', 'Workspace is'
+                                ),
+                                'Coco Agent is', 'Workspace is'
+                              ),
+                              'Coco is', 'Workspace is'
+                            ),
+                            'Code agent requires', 'Workspace requires'
+                          ),
+                          'Coco Agent requires', 'Workspace requires'
                         ),
-                        'coco runner', 'code agent runner'
+                        'Coco requires', 'Workspace requires'
                       ),
-                      'Code agent is', 'Coco Agent is'
+                      'Code agent mode', 'Agent mode'
                     ),
-                    'Coco is', 'Coco Agent is'
+                    'Coco Agent mode', 'Agent mode'
                   ),
-                  'Code agent requires', 'Coco Agent requires'
+                  'Coco mode', 'Agent mode'
                 ),
-                'Coco requires', 'Coco Agent requires'
+                'code-agent room', 'Workspace room'
               ),
-              'Code agent mode', 'Coco Agent mode'
+              'Coco Agent room', 'Workspace room'
             ),
-            'Coco mode', 'Coco Agent mode'
+            'Coco room', 'Workspace room'
           ),
-          'code-agent room', 'Coco Agent room'
+          'code-agent sandbox', 'Workspace sandbox'
         ),
-        'Coco room', 'Coco Agent room'
+        'Coco Agent sandbox', 'Workspace sandbox'
       ),
-      'code-agent sandbox', 'Coco Agent sandbox'
+      'Coco sandbox', 'Workspace sandbox'
     )
     WHERE error_message IS NOT NULL
       AND (
         error_message LIKE '%Coco%'
         OR error_message LIKE '%Code agent%'
+        OR error_message LIKE '%Coco Agent%'
         OR error_message LIKE '%code-agent room%'
         OR error_message LIKE '%code-agent sandbox%'
         OR error_message LIKE '%roomtalk_coco_runner%'
@@ -195,32 +219,46 @@ const POSTGRES_CODE_AGENT_NAMING_SQL = [
               replace(
                 replace(
                   replace(
-                    payload::text,
-                    'roomtalk_coco_runner',
-                    'roomtalk_code_agent_runner'
+                    replace(
+                      replace(
+                        replace(
+                          payload::text,
+                          'roomtalk_coco_runner',
+                          'roomtalk_code_agent_runner'
+                        ),
+                        'Coco Agent runner starting',
+                        'code agent runner starting'
+                      ),
+                      'Code agent runner starting',
+                      'code agent runner starting'
+                    ),
+                    'Coco runner starting',
+                    'code agent runner starting'
                   ),
-                  'Code agent runner starting',
-                  'Coco Agent runner starting'
+                  'Coco Agent engine',
+                  'code agent engine'
                 ),
-          'Coco runner starting',
-                'Coco Agent runner starting'
+                'Code agent engine',
+                'code agent engine'
               ),
-              'Code agent engine',
-              'Coco Agent engine'
+              'Coco engine',
+              'code agent engine'
             ),
-            'Coco engine',
-            'Coco Agent engine'
+            'Coco Agent runner',
+            'code agent runner'
           ),
           'Code agent runner',
-          'Coco Agent runner'
+          'code agent runner'
         ),
         'Coco runner',
-        'Coco Agent runner'
+        'code agent runner'
       ),
       'coco runner',
       'code agent runner'
     )::jsonb
     WHERE payload::text LIKE '%roomtalk_coco_runner%'
+      OR payload::text LIKE '%Coco Agent runner%'
+      OR payload::text LIKE '%Coco Agent engine%'
       OR payload::text LIKE '%Coco runner%'
       OR payload::text LIKE '%Coco engine%'
       OR payload::text LIKE '%Code agent runner%'
@@ -317,10 +355,9 @@ const migrateMessagePayload = (message: Record<string, any>): { changed: boolean
     )
   ) {
     next.content = next.content
-      .replace('Unable to persist code-agent', 'Unable to persist Coco Agent')
-      .replace('Unable to persist Coco Agent Agent', 'Unable to persist Coco Agent')
-      .replace('Unable to persist Coco', 'Unable to persist Coco Agent')
-      .replace('Unable to persist Coco Agent Agent', 'Unable to persist Coco Agent');
+      .replace('Unable to persist code-agent', 'Unable to persist agent')
+      .replace('Unable to persist Coco Agent', 'Unable to persist agent')
+      .replace('Unable to persist Coco', 'Unable to persist agent');
     changed = true;
   }
 

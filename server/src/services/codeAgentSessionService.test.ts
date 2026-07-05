@@ -572,7 +572,7 @@ describe('CodeAgentSessionService', () => {
     assert.deepEqual(authCalls, [{ clientId: 'client-1', runId: 'turn-1' }]);
     assert.equal(sandboxService.startedRunnerCommands[0], DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND);
     const messages = setup.store.messages.get('room-1') || [];
-    assert.equal(messages[1].username, 'Codex-app');
+    assert.equal(messages[1].username, 'CodexApp');
     assert.equal(messages[messages.length - 1].content, 'Codex app-server done');
     assert.deepEqual(messages[messages.length - 1].aiModel, {
       id: 'gpt-5.5',
@@ -643,7 +643,7 @@ describe('CodeAgentSessionService', () => {
     assert.equal(messages[4].turnId, messages[1].turnId);
   });
 
-  it('passes prior RoomTalk Coco Agent history to the runner and excludes the current prompt', async () => {
+  it('passes prior RoomTalk Workspace history to the runner and excludes the current prompt', async () => {
     const initialMessages: Message[] = [
       userMessage('list files'),
       {
@@ -1016,7 +1016,7 @@ describe('CodeAgentSessionService', () => {
       selectedModel,
     });
 
-    assert.deepEqual(result, { success: false, error: 'Coco Agent edit mode is not enabled' });
+    assert.deepEqual(result, { success: false, error: 'Agent edit mode is not enabled' });
     assert.equal(runner.requests.length, 0);
   });
 
@@ -1254,7 +1254,7 @@ describe('CodeAgentSessionService', () => {
     await runner.started;
 
     const second = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
-    assert.deepEqual(second, { success: false, error: 'A Coco Agent task is already running in this room' });
+    assert.deepEqual(second, { success: false, error: 'An agent task is already running in this workspace' });
 
     runner.release();
     assert.deepEqual(await first, { success: true, messageId: 'ai-1' });
@@ -1263,19 +1263,19 @@ describe('CodeAgentSessionService', () => {
   it('rejects disabled, unauthorized, non-code-agent, and allowlist-mismatched turns', async () => {
     assert.deepEqual(await createService({ enabled: false }).service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel }), {
       success: false,
-      error: 'Coco Agent is disabled',
+      error: 'Workspace is disabled',
     });
     assert.deepEqual(await createService({ allowedClientIds: ['other-client'] }).service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel }), {
       success: false,
-      error: 'Coco Agent is not enabled for this user',
+      error: 'Workspace is not enabled for this user',
     });
     assert.deepEqual(await createService({ store: new MemoryCodeAgentStore(room({ creatorId: 'client-2' }), [userMessage()]) }).service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel }), {
       success: false,
-      error: 'You do not have access to this Coco Agent room',
+      error: 'You do not have access to this Workspace room',
     });
     assert.deepEqual(await createService({ store: new MemoryCodeAgentStore(room({ type: 'chat' }), [userMessage()]) }).service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel }), {
       success: false,
-      error: 'Room is not a Coco Agent room',
+      error: 'Room is not a Workspace room',
     });
   });
 
@@ -1301,7 +1301,7 @@ describe('CodeAgentSessionService', () => {
     const { service } = createService({ store });
 
     const result = await service.startTurn({ roomId: 'room-1', clientId: 'member-1', selectedModel });
-    assert.deepEqual(result, { success: false, error: 'You do not have access to this Coco Agent room' });
+    assert.deepEqual(result, { success: false, error: 'You do not have access to this Workspace room' });
   });
 
   it('allows all members when codeAgentAccess is member', async () => {
@@ -1323,7 +1323,7 @@ describe('CodeAgentSessionService', () => {
     store.addMember('room-1', 'member-1', 'member');
 
     const result = await createService({ store }).service.startTurn({ roomId: 'room-1', clientId: 'member-1', selectedModel });
-    assert.deepEqual(result, { success: false, error: 'You do not have access to this Coco Agent room' });
+    assert.deepEqual(result, { success: false, error: 'You do not have access to this Workspace room' });
   });
 
   it('stops runner processing when a tool event cannot be persisted', async () => {
@@ -1342,7 +1342,7 @@ describe('CodeAgentSessionService', () => {
     const messages = store.messages.get('room-1') || [];
     assert.deepEqual(messages.map(message => message.messageType), ['text', 'ai']);
     assert.equal(messages[1].status, 'error');
-    assert.equal(messages[1].content, 'Unable to persist code-agent tool_call event');
+    assert.equal(messages[1].content, 'Unable to persist agent tool_call event');
     assert.equal(emitter.roomEmits.some(event => event.event === 'ai_stream_error'), true);
   });
 
@@ -1353,7 +1353,7 @@ describe('CodeAgentSessionService', () => {
 
     const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
 
-    assert.deepEqual(result, { success: false, error: 'Unable to start a durable code-agent response' });
+    assert.deepEqual(result, { success: false, error: 'Unable to start a durable agent response' });
     assert.equal((await store.getRoomById('room-1'))?.codeAgentStatus, 'error');
     const roomUpdates = emitter.roomEmits.filter(event => event.event === 'room_updated');
     assert.equal((roomUpdates[0].args[0] as Room).codeAgentStatus, 'running');

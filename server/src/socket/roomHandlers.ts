@@ -418,7 +418,7 @@ export function registerRoomHandlers({
           clientId,
           reason: access.reason,
         });
-        callback?.({ success: false, error: access.message || 'Coco Agent is unavailable' });
+        callback?.({ success: false, error: access.message || 'Workspace is unavailable' });
         return;
       }
     }
@@ -497,8 +497,8 @@ export function registerRoomHandlers({
           roomId,
           reason: access.reason,
         });
-        socket.emit('error', { message: access.message || 'Coco Agent is unavailable' });
-        callback?.({ success: false, error: access.message || 'Coco Agent is unavailable' });
+        socket.emit('error', { message: access.message || 'Workspace is unavailable' });
+        callback?.({ success: false, error: access.message || 'Workspace is unavailable' });
         return;
       }
     }
@@ -994,7 +994,7 @@ export function registerRoomHandlers({
 
     const hasCodeAgentAccessUpdate = Object.prototype.hasOwnProperty.call(data || {}, 'codeAgentAccess');
     if (hasCodeAgentAccessUpdate && auth.actor.role !== 'owner') {
-      callback?.({ success: false, error: 'Only the room owner can manage code-agent access' });
+      callback?.({ success: false, error: 'Only the room owner can manage Workspace access' });
       return;
     }
 

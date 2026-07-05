@@ -833,6 +833,6 @@ describe('code-agent workspace socket handlers', () => {
 
     const response = await socket.invoke<any>('get_code_workspace_snapshot', { roomId: 'room-1' });
 
-    assert.deepEqual(response, { success: false, error: 'Coco Agent is not enabled for this user' });
+    assert.deepEqual(response, { success: false, error: 'Workspace is not enabled for this user' });
   });
 });

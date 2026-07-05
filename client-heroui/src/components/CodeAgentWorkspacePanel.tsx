@@ -151,7 +151,7 @@ const commandStatusLabelKey: Record<CodeAgentWorkspaceCommand['status'], string>
 const backendShortLabels: Record<CodeAgentBackend, string> = {
   'code-agent': 'Coco',
   codex: 'Codex',
-  'codex-app-server': 'Codex-app',
+  'codex-app-server': 'CodexApp',
 };
 
 const modePillLabels: Record<ReturnType<typeof normalizeCodeAgentMode>, string> = {

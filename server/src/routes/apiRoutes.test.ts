@@ -1212,7 +1212,7 @@ describe('API routes', () => {
       });
 
       assert.equal(deniedResponse.status, 403);
-      assert.deepEqual(await deniedResponse.json(), { error: 'Coco Agent is disabled' });
+      assert.deepEqual(await deniedResponse.json(), { error: 'Workspace is disabled' });
       assert.equal(deniedServer.store.savedRooms.length, 0);
       assert.deepEqual(deniedServer.emitted, []);
     } finally {

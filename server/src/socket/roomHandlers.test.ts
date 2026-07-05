@@ -807,7 +807,7 @@ describe('room socket handlers', () => {
     await disabled.socket.invoke('create_room', { name: 'Code Agent', type: 'codeAgent' }, (result: { success: boolean; error?: string }) => {
       disabledResult = result;
     });
-    assert.deepEqual(disabledResult, { success: false, error: 'Coco Agent is disabled' });
+    assert.deepEqual(disabledResult, { success: false, error: 'Workspace is disabled' });
     assert.equal(disabled.store.savedRooms.length, 0);
 
     const notAllowed = createHarness('client-2', createCodeAgentAccessControl({ enabled: true, allowedClientIds: ['client-1'] }));
@@ -815,7 +815,7 @@ describe('room socket handlers', () => {
     await notAllowed.socket.invoke('create_room', { name: 'Code Agent', type: 'codeAgent' }, (result: { success: boolean; error?: string }) => {
       notAllowedResult = result;
     });
-    assert.deepEqual(notAllowedResult, { success: false, error: 'Coco Agent is not enabled for this user' });
+    assert.deepEqual(notAllowedResult, { success: false, error: 'Workspace is not enabled for this user' });
     assert.equal(notAllowed.store.savedRooms.length, 0);
   });
 
@@ -903,8 +903,8 @@ describe('room socket handlers', () => {
       joinResponse = result;
     });
 
-    assert.deepEqual(joinResponse, { success: false, error: 'Coco Agent is not enabled for this user' });
-    assert.deepEqual(denied.socket.emitted, [{ event: 'error', args: [{ message: 'Coco Agent is not enabled for this user' }] }]);
+    assert.deepEqual(joinResponse, { success: false, error: 'Workspace is not enabled for this user' });
+    assert.deepEqual(denied.socket.emitted, [{ event: 'error', args: [{ message: 'Workspace is not enabled for this user' }] }]);
     assert.deepEqual(denied.socket.joined, []);
     assert.deepEqual(denied.socket.left, []);
     assert.deepEqual(denied.store.socketRooms, ['room-1']);
@@ -1029,7 +1029,7 @@ describe('room socket handlers', () => {
       response = result;
     });
 
-    assert.deepEqual(response, { success: false, error: 'Only the room owner can manage code-agent access' });
+    assert.deepEqual(response, { success: false, error: 'Only the room owner can manage Workspace access' });
     assert.equal(store.rooms[0].codeAgentAccess, undefined);
   });
 

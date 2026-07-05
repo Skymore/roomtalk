@@ -157,7 +157,7 @@ describe('CodeAgentWorkspacePanel', () => {
 
     expect(screen.getByText('Coco')).toBeTruthy();
     expect(screen.getByText('Codex')).toBeTruthy();
-    expect(screen.getByText('Codex-app')).toBeTruthy();
+    expect(screen.getByText('CodexApp')).toBeTruthy();
 
     fireEvent.click(screen.getByTestId('code-agent-backend-codex'));
 

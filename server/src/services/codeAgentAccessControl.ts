@@ -28,16 +28,16 @@ export const createCodeAgentAccessControl = (options: CodeAgentAccessControlOpti
 
   const canUse = (clientId?: string | null): CodeAgentAccessResult => {
     if (!options.enabled) {
-      return { allowed: false, reason: 'disabled', message: 'Coco Agent is disabled' };
+      return { allowed: false, reason: 'disabled', message: 'Workspace is disabled' };
     }
     if (!hasAllowlist) {
       return { allowed: true };
     }
     if (!clientId) {
-      return { allowed: false, reason: 'missing_client_id', message: 'Coco Agent requires a registered client' };
+      return { allowed: false, reason: 'missing_client_id', message: 'Workspace requires a registered client' };
     }
     if (!allowedClientIds.includes(clientId)) {
-      return { allowed: false, reason: 'not_allowed', message: 'Coco Agent is not enabled for this user' };
+      return { allowed: false, reason: 'not_allowed', message: 'Workspace is not enabled for this user' };
     }
     return { allowed: true };
   };

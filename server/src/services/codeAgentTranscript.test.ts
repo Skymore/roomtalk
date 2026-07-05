@@ -152,7 +152,7 @@ describe('code-agent transcript projection', () => {
   it('skips non-terminal and failed AI placeholders', () => {
     const transcript = buildCodeAgentPriorMessages([
       message({ id: 'ai-streaming', clientId: 'ai_assistant', messageType: 'ai', content: 'partial', status: 'streaming' }),
-      message({ id: 'ai-error', clientId: 'ai_assistant', messageType: 'ai', content: 'Coco Agent task failed', status: 'error' }),
+      message({ id: 'ai-error', clientId: 'ai_assistant', messageType: 'ai', content: 'Agent task failed', status: 'error' }),
       message({ id: 'ai-complete', clientId: 'ai_assistant', messageType: 'ai', content: 'Recovered answer.', status: 'complete' }),
     ]);
 
