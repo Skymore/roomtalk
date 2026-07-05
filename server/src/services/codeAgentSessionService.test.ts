@@ -241,6 +241,7 @@ const createService = (options: {
   modelGateway?: CocoModelGateway;
   staticSitePublisher?: PublishedStaticSiteService;
   observability?: ReturnType<typeof createMemoryObservability>['recorder'];
+  aiStreamOwnerId?: string;
 } = {}) => {
   const store = options.store || new MemoryCocoStore(room(), [userMessage()]);
   const emitter = new FakeEmitter();
@@ -279,6 +280,7 @@ const createService = (options: {
       now: () => new Date('2026-05-03T00:00:00.000Z'),
       createId: () => ids.shift() || 'id-fallback',
       observability: options.observability,
+      aiStreamOwnerId: options.aiStreamOwnerId,
     }
   );
   return { emitter, lifecycle, sandboxService, service, store };
@@ -301,7 +303,7 @@ describe('CodeAgentSessionService', () => {
       },
     ]);
     const observability = createMemoryObservability();
-    const { emitter, sandboxService, service, store } = createService({ runner, observability: observability.recorder });
+    const { emitter, sandboxService, service, store } = createService({ runner, observability: observability.recorder, aiStreamOwnerId: 'owner-1' });
     let ack: unknown;
 
     const result = await service.startTurn({
@@ -326,6 +328,9 @@ describe('CodeAgentSessionService', () => {
     assert.deepEqual(messages.map(message => message.messageType), ['text', 'ai', 'tool_call', 'tool_result', 'ai']);
     assert.equal(messages[1].status, 'complete');
     assert.equal(messages[1].content, 'Working...');
+    assert.equal((messages[1] as any).aiStreamOwnerId, 'owner-1');
+    const emittedPlaceholder = emitter.roomEmits.find(event => event.event === 'new_message')?.args[0] as Message;
+    assert.equal((emittedPlaceholder as any).aiStreamOwnerId, undefined);
     assert.equal(messages[2].toolCallId, 'tool-1');
     assert.equal(messages[3].toolOutputPreview, '# RoomTalk');
     assert.equal(messages[3].content, '# RoomTalk');

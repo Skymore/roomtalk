@@ -21,6 +21,7 @@ import {
 } from './codeAgentRunnerProtocol';
 import { DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND, DEFAULT_CODEX_CLI_RUNNER_COMMAND, DEFAULT_COCO_RUNNER_COMMAND } from './codeAgentRuntimeConfig';
 import { createAIPlaceholderMessage } from './messageDomain';
+import { stripAIStreamRecoveryMetadata, withAIStreamRecoveryMetadata } from './aiStreamRecovery';
 import { CocoModelGateway } from './cocoModelGateway';
 import { buildCocoPriorMessages } from './cocoTranscript';
 import { PublishedStaticSiteService } from './publishedStaticSite';
@@ -67,6 +68,7 @@ export interface CodeAgentSessionServiceOptions {
   codexConnectionService?: Pick<CodexConnectionService, 'withCodexAuth'>;
   staticSitePublisher?: PublishedStaticSiteService;
   observability?: ObservabilityEventRecorder;
+  aiStreamOwnerId?: string;
   now?: () => Date;
   createId?: () => string;
 }
@@ -217,11 +219,11 @@ export class CodeAgentSessionService {
           now: this.now(),
       });
       placeholderMessage.aiModel = this.messageAIModelForBackend(turnBackend, input.selectedModel, codexRunSettings);
-      aiMessage = {
+      aiMessage = withAIStreamRecoveryMetadata({
         ...placeholderMessage,
         turnId,
         codeAgentMode: turnMode.mode,
-      };
+      }, this.options.aiStreamOwnerId);
 
       const promptContext = await this.readLatestPromptContext(input.roomId, input.clientId, input.maxContextMessages);
       if (!promptContext) {
@@ -297,7 +299,7 @@ export class CodeAgentSessionService {
         return ack({ success: false, error: 'Unable to start a durable Coco response' });
       }
       this.emitter.to(placeholderRoom.creatorId).emit('room_updated', placeholderRoom);
-      this.emitter.to(input.roomId).emit('new_message', aiMessage);
+      this.emitter.to(input.roomId).emit('new_message', stripAIStreamRecoveryMetadata(aiMessage));
       placeholderAnnounced = true;
       ack({ success: true, messageId: aiMessageId });
 
@@ -406,7 +408,7 @@ export class CodeAgentSessionService {
           const segmentRoom = await this.store.appendMessageWithAtomicPosition(segmentMessage);
           if (segmentRoom) {
             this.emitter.to(segmentRoom.creatorId).emit('room_updated', segmentRoom);
-            this.emitter.to(input.roomId).emit('new_message', segmentMessage);
+            this.emitter.to(input.roomId).emit('new_message', stripAIStreamRecoveryMetadata(segmentMessage));
           }
           streamState.activeMessageId = newId;
           streamState.segmentContent = finalAnswer;
@@ -1084,7 +1086,7 @@ export class CodeAgentSessionService {
           throw new Error('Unable to create new AI segment message');
         }
         this.emitter.to(segmentRoom.creatorId).emit('room_updated', segmentRoom);
-        this.emitter.to(roomId).emit('new_message', segmentMessage);
+        this.emitter.to(roomId).emit('new_message', stripAIStreamRecoveryMetadata(segmentMessage));
         state.activeMessageId = newId;
         state.segmentContent = '';
         state.needsNewSegment = false;

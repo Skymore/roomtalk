@@ -356,6 +356,7 @@ const codeAgentSessionService = new CodeAgentSessionService(
     codexConnectionService,
     staticSitePublisher: publishedStaticSiteService,
     observability: observabilityRecorder,
+    aiStreamOwnerId,
   }
 );
 
