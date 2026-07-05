@@ -426,7 +426,7 @@ const resources: Record<string, { translation: Record<string, string> }> = {
       "codeAgentLargeDiffSuppressedMessage": "Large diffs are not rendered by default.",
       "codeAgentNonTextDiff": "Non-text file",
       "codeAgentNonTextDiffSuppressedMessage": "Diff preview is not available for this file format.",
-      "codeAgentNonTextDiffContentsUnavailable": "Unsupported format. Diff contents are not available.",
+      "codeAgentNonTextDiffContentsUnavailable": "Unsupported format",
       "codeAgentLoadDiff": "Load diff",
       "codeAgentRenameOnlyDiffMessage": "This file was renamed without modifications.",
       "codeAgentChangedFilesCount": "{{count}} changed files",
