@@ -228,6 +228,41 @@ def test_codex_sdk_app_server_maps_sdk_notifications_and_sanitizes_env(tmp_path:
     assert events[-1]["usage"]["source"] == "reported"
 
 
+def test_codex_sdk_app_server_resolves_relative_codex_bin_from_path(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    auth_json = tmp_path / "auth.json"
+    auth_json.write_text('{"accessToken":"initial"}', encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    codex_bin = bin_dir / "codex"
+    codex_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    codex_bin.chmod(0o755)
+    stdout = io.StringIO()
+    factory = FakeSdkClientFactory(notifications=[
+        FakeNotification("turn/completed", {"threadId": "thread-sdk-1", "turn": {"id": "turn-sdk-1", "status": "completed", "items": []}}),
+    ])
+
+    codex_sdk_app_server.run_request(
+        codex_sdk_request(workspace),
+        emitter=EventEmitter(stdout),
+        config=codex_sdk_app_server.CodexCliRunConfig(
+            cli_bin="codex",
+            secret_parent=tmp_path / "secrets",
+            auth_json_path=auth_json,
+        ),
+        client_factory=factory,
+        env={
+            "PATH": str(bin_dir),
+            "HOME": "/home/roomtalk",
+            "COCO_WORKSPACE_ROOT": str(tmp_path),
+            "ROOMTALK_CODEX_AUTH_JSON_PATH": str(auth_json),
+        },
+    )
+
+    assert factory.clients[0].sdk_config.codex_bin == str(codex_bin)
+
+
 def test_codex_sdk_app_server_falls_back_to_new_thread_when_resume_fails(tmp_path: Path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()

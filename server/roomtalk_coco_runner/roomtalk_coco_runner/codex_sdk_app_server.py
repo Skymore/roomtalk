@@ -157,7 +157,7 @@ def run_request(
         _restore_auth_json(config, codex_home)
 
         child_env = _build_child_env(env, codex_home)
-        sdk_config = _build_sdk_config(config, workspace)
+        sdk_config = _build_sdk_config(config, workspace, child_env)
         client = (client_factory or _default_sdk_client_factory)(sdk_config, approvals.handle)
 
         def close_after_timeout() -> None:
@@ -244,7 +244,7 @@ def run_thread_query_request(
     try:
         _restore_auth_json(config, codex_home)
         child_env = _build_child_env(env, codex_home)
-        sdk_config = _build_sdk_config(config, workspace)
+        sdk_config = _build_sdk_config(config, workspace, child_env)
         client = (client_factory or _default_sdk_client_factory)(sdk_config, approvals.handle)
 
         def close_after_timeout() -> None:
@@ -433,15 +433,23 @@ def _default_server_request_result(
     return {}
 
 
-def _build_sdk_config(config: CodexCliRunConfig, workspace: Path) -> Any:
+def _build_sdk_config(config: CodexCliRunConfig, workspace: Path, env: dict[str, str] | None = None) -> Any:
     return _RoomTalkSdkConfig(
-        codex_bin=config.cli_bin,
+        codex_bin=_resolve_codex_bin(config.cli_bin, env),
         cwd=str(workspace),
         client_name=APP_SERVER_CLIENT_INFO["name"],
         client_title=APP_SERVER_CLIENT_INFO["title"],
         client_version=APP_SERVER_CLIENT_INFO["version"],
         experimental_api=True,
     )
+
+
+def _resolve_codex_bin(cli_bin: str, env: dict[str, str] | None = None) -> str:
+    candidate = cli_bin.strip() or "codex"
+    if Path(candidate).is_absolute():
+        return candidate
+    resolved = shutil.which(candidate, path=(env or os.environ).get("PATH"))
+    return resolved or candidate
 
 
 def _default_sdk_client_factory(
