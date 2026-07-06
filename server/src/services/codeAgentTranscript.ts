@@ -32,14 +32,9 @@ const appendToolResultBlock = (messages: CodeAgentRunnerPriorMessage[], block: C
 
 export const buildCodeAgentPriorMessages = (messages: Message[]): CodeAgentRunnerPriorMessage[] => {
   const priorMessages: CodeAgentRunnerPriorMessage[] = [];
-  const completedToolCallIds = new Set(
-    messages
-      .filter(message => message.messageType === 'tool_result' && message.toolCallId)
-      .map(message => message.toolCallId as string)
-  );
-  const emittedToolCallIds = new Set<string>();
 
-  for (const message of messages) {
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
     if (message.messageType === 'text') {
       if (isNonEmptyText(message.content)) {
         priorMessages.push({ role: 'user', content: message.content.trim() });
@@ -58,38 +53,57 @@ export const buildCodeAgentPriorMessages = (messages: Message[]): CodeAgentRunne
     }
 
     if (message.messageType === 'tool_call') {
-      if (!message.toolCallId || !message.toolName) {
-        continue;
+      const calls: Message[] = [];
+      while (index < messages.length && messages[index].messageType === 'tool_call') {
+        calls.push(messages[index]);
+        index += 1;
       }
-      if (!completedToolCallIds.has(message.toolCallId)) {
-        continue;
-      }
-      appendAssistantBlock(priorMessages, {
-        type: 'tool_use',
-        id: message.toolCallId,
-        name: message.toolName,
-        input: message.toolArgs || {},
-      });
-      emittedToolCallIds.add(message.toolCallId);
-      continue;
-    }
 
-    if (message.messageType === 'tool_result') {
-      if (!message.toolCallId) {
+      const results: Message[] = [];
+      while (index < messages.length && messages[index].messageType === 'tool_result') {
+        results.push(messages[index]);
+        index += 1;
+      }
+      index -= 1;
+
+      const resultByCallId = new Map(
+        results
+          .filter(result => result.toolCallId)
+          .map(result => [result.toolCallId as string, result])
+      );
+      const matchedCalls = calls.filter(call => (
+        call.toolCallId &&
+        call.toolName &&
+        resultByCallId.has(call.toolCallId)
+      ));
+      if (matchedCalls.length === 0) {
         continue;
       }
-      if (!emittedToolCallIds.has(message.toolCallId)) {
-        continue;
+
+      for (const call of matchedCalls) {
+        appendAssistantBlock(priorMessages, {
+          type: 'tool_use',
+          id: call.toolCallId!,
+          name: call.toolName!,
+          input: call.toolArgs || {},
+        });
       }
-      const content = isNonEmptyText(message.content)
-        ? message.content
-        : message.toolOutputPreview || '';
-      appendToolResultBlock(priorMessages, {
-        type: 'tool_result',
-        tool_use_id: message.toolCallId,
-        content,
-        ...(message.isError || message.status === 'error' ? { is_error: true } : {}),
-      });
+      for (const call of matchedCalls) {
+        const result = resultByCallId.get(call.toolCallId!);
+        if (!result) {
+          continue;
+        }
+        const content = isNonEmptyText(result.content)
+          ? result.content
+          : result.toolOutputPreview || '';
+        appendToolResultBlock(priorMessages, {
+          type: 'tool_result',
+          tool_use_id: call.toolCallId!,
+          content,
+          ...(result.isError || result.status === 'error' ? { is_error: true } : {}),
+        });
+      }
+      continue;
     }
   }
 

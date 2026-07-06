@@ -197,4 +197,62 @@ describe('code-agent transcript projection', () => {
       },
     ]);
   });
+
+  it('keeps only tool calls with immediately following tool results from a mixed group', () => {
+    const transcript = buildCodeAgentPriorMessages([
+      message({ id: 'ai1', clientId: 'ai_assistant', messageType: 'ai', content: 'I will verify.', status: 'complete' }),
+      message({
+        id: 'call1',
+        clientId: 'code_agent_runner',
+        messageType: 'tool_call',
+        content: 'Shell',
+        toolCallId: 'tool-long-running',
+        toolName: 'Shell',
+        toolArgs: { command: 'npm run preview -- --port 4173' },
+      }),
+      message({ id: 'ai2', clientId: 'ai_assistant', messageType: 'ai', content: 'Preview is up.', status: 'complete' }),
+      message({
+        id: 'call2',
+        clientId: 'code_agent_runner',
+        messageType: 'tool_call',
+        content: 'Shell',
+        toolCallId: 'tool-check',
+        toolName: 'Shell',
+        toolArgs: { command: 'node check.js' },
+      }),
+      message({
+        id: 'result2',
+        clientId: 'code_agent_runner',
+        messageType: 'tool_result',
+        content: 'ok',
+        toolCallId: 'tool-check',
+        toolName: 'Shell',
+      }),
+      message({
+        id: 'late-result1',
+        clientId: 'code_agent_runner',
+        messageType: 'tool_result',
+        content: 'server stopped',
+        toolCallId: 'tool-long-running',
+        toolName: 'Shell',
+      }),
+    ]);
+
+    assert.deepEqual(transcript, [
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'I will verify.' },
+          { type: 'text', text: 'Preview is up.' },
+          { type: 'tool_use', id: 'tool-check', name: 'Shell', input: { command: 'node check.js' } },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'tool-check', content: 'ok' },
+        ],
+      },
+    ]);
+  });
 });
