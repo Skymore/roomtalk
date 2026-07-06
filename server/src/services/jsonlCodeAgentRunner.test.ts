@@ -209,11 +209,14 @@ describe('JsonlCodeAgentRunnerClient', () => {
     const runner = new JsonlCodeAgentRunnerClient();
 
     const run = runner.run(request, { onEvent: () => {} }, createContext(process));
+    process.stderr.write('sdk stderr tail');
     process.failCompletion(new Error('completion rejected'));
 
     const result = await run;
     assert.equal(result.errorEvent?.code, 'runner_process_error');
     assert.match(result.errorEvent?.message || '', /completion rejected/);
+    assert.match(result.errorEvent?.message || '', /sdk stderr tail/);
+    assert.match(result.errorEvent?.message || '', /stack=/);
   });
 
   it('propagates handler failures so the session can stop the owned runner process', async () => {

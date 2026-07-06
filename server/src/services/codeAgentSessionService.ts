@@ -116,6 +116,7 @@ interface CodeAgentTurnStreamState {
   needsNewSegment: boolean;
   segmentIds: string[];
   nonEmptySegmentIds: Set<string>;
+  pendingToolCalls: Map<string, { name: string }>;
 }
 
 export class CodeAgentSessionService {
@@ -310,6 +311,7 @@ export class CodeAgentSessionService {
         needsNewSegment: false,
         segmentIds: [aiMessageId],
         nonEmptySegmentIds: new Set(),
+        pendingToolCalls: new Map(),
       };
       const runnerEnv = {
         ...this.buildRunnerEnv(input.selectedModel, {
@@ -497,6 +499,9 @@ export class CodeAgentSessionService {
         },
       });
       if (placeholderAnnounced && aiMessage) {
+        if (streamState) {
+          await this.flushInterruptedToolCalls(input.roomId, turnId, streamState, error, aiMessage, turnBackend);
+        }
         const errorTargetMessage: Message = { ...aiMessage, id: errorTargetId };
         await this.saveCodeAgentError(input.roomId, errorTargetMessage, error, turnBackend);
       } else if (roomMarkedRunning) {
@@ -1059,6 +1064,9 @@ export class CodeAgentSessionService {
     codexRunSettings: CodexRunSettings
   ) {
     await this.recordRunnerEvent(event, roomId, turnId, selectedModel, backend, codexRunSettings);
+    if (event.type === 'error') {
+      await this.flushInterruptedToolCalls(roomId, turnId, state, event.message, baseAIMessage, backend);
+    }
     const mapped = mapCodeAgentRunnerEvent(event, {
       roomId,
       turnId,
@@ -1111,8 +1119,71 @@ export class CodeAgentSessionService {
       if (!updatedRoom) {
         throw new Error(`Unable to persist agent ${mapped.message.messageType} event`);
       }
+      if (event.type === 'tool_call') {
+        state.pendingToolCalls.set(event.id, { name: event.name });
+      } else if (event.type === 'tool_result') {
+        state.pendingToolCalls.delete(event.id);
+      }
       this.emitter.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
       this.emitter.to(roomId).emit('new_message', mapped.message);
+    }
+  }
+
+  private async flushInterruptedToolCalls(
+    roomId: string,
+    turnId: string,
+    state: CodeAgentTurnStreamState,
+    error: unknown,
+    baseAIMessage: Message,
+    backend: CodeAgentBackend
+  ) {
+    if (state.pendingToolCalls.size === 0) {
+      return;
+    }
+    const reason = error instanceof Error ? error.message : String(error);
+    const pending = Array.from(state.pendingToolCalls.entries());
+    state.pendingToolCalls.clear();
+    for (const [toolCallId, toolCall] of pending) {
+      const message: Message = {
+        id: `tool_result_${toolCallId}_${this.createId()}`,
+        clientId: 'code_agent_runner',
+        content: `Tool interrupted before completion: ${reason}`,
+        roomId,
+        timestamp: this.now().toISOString(),
+        messageType: 'tool_result',
+        username: this.displayBackendName(backend),
+        status: 'error',
+        turnId,
+        toolCallId,
+        toolName: toolCall.name,
+        toolOutputPreview: `Tool interrupted before completion: ${reason}`,
+        exitCode: 1,
+        isError: true,
+        codeAgentMode: baseAIMessage.codeAgentMode,
+      };
+      const updatedRoom = await this.store.appendMessageWithAtomicPosition(message).catch(err => {
+        this.logger.warn('Failed to persist interrupted tool result', { error: err, roomId, turnId, toolCallId });
+        return null;
+      });
+      if (updatedRoom) {
+        this.emitter.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+        this.emitter.to(roomId).emit('new_message', message);
+      }
+      await this.recordObservabilityEvent({
+        level: 'warn',
+        event: 'code_agent.runner.tool_result',
+        roomId,
+        turnId,
+        payload: {
+          backend,
+          toolCallId,
+          toolName: toolCall.name,
+          success: false,
+          exitCode: 1,
+          interrupted: true,
+          reason,
+        },
+      });
     }
   }
 

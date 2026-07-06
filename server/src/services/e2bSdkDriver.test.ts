@@ -6,10 +6,13 @@ import { createE2BSdkDriver } from './e2bSdkDriver';
 class FakeCommandHandle {
   killed = false;
 
-  constructor(readonly pid: number, private readonly exitCode = 0) {}
+  constructor(readonly pid: number, private readonly waitExitCode = 0, private readonly waitError?: Error) {}
 
   async wait() {
-    return { exitCode: this.exitCode, stdout: '', stderr: '' };
+    if (this.waitError) {
+      throw this.waitError;
+    }
+    return { exitCode: this.waitExitCode, stdout: '', stderr: '' };
   }
 
   async kill() {
@@ -99,6 +102,33 @@ const createFakeSandboxClass = () => {
   };
 
   return { calls, commandHandles, sandboxClass };
+};
+
+const createRejectingCommandSandboxClass = () => {
+  const fake = createFakeSandboxClass();
+  const sandboxClass = {
+    ...fake.sandboxClass,
+    connect: async (sandboxId: string, options: Record<string, unknown>) => {
+      const sandbox = await fake.sandboxClass.connect(sandboxId, options);
+      return {
+        ...sandbox,
+        commands: {
+          ...sandbox.commands,
+          run: async (command: string, runOptions: any) => {
+            fake.calls.run.push({ command, options: runOptions });
+            runOptions.onStdout('runner stdout before failure\n');
+            runOptions.onStderr('runner stderr before failure\n');
+            const error = new Error('[unknown] terminated') as Error & { code?: number; metadata?: unknown };
+            error.name = 'TimeoutError';
+            error.code = 2;
+            error.metadata = { phase: 'wait' };
+            return new FakeCommandHandle(91, 0, error);
+          },
+        },
+      };
+    },
+  };
+  return { ...fake, sandboxClass };
 };
 
 describe('E2B SDK driver', () => {
@@ -255,5 +285,27 @@ describe('E2B SDK driver', () => {
 
     assert.deepEqual(fake.calls.sentStdin, [{ pid: 77, data: '{"schemaVersion":1}\n' }]);
     assert.deepEqual(fake.calls.closedStdin, []);
+  });
+
+  it('enriches E2B command wait rejections with process context and output tails', async () => {
+    const fake = createRejectingCommandSandboxClass();
+    const driver = createE2BSdkDriver({ sandboxClass: fake.sandboxClass });
+    const connected = await driver.connect('sdk-existing-1');
+    const command = await connected.commands!.run('python -m roomtalk_code_agent_runner');
+
+    await assert.rejects(
+      command.completed!,
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /E2B command wait failed: TimeoutError: \[unknown\] terminated/);
+        assert.match(error.message, /command=python -m roomtalk_code_agent_runner/);
+        assert.match(error.message, /pid=91/);
+        assert.match(error.message, /code=2/);
+        assert.match(error.message, /metadata=\{"phase":"wait"\}/);
+        assert.match(error.message, /stdoutTail=runner stdout before failure/);
+        assert.match(error.message, /stderrTail=runner stderr before failure/);
+        return true;
+      }
+    );
   });
 });

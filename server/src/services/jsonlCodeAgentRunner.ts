@@ -88,11 +88,16 @@ export class JsonlCodeAgentRunnerClient implements CodeAgentRunnerClient {
 
     const completed = await completion;
     if (!completed.ok) {
+      const stderr = stderrTail();
+      const details = [
+        `code agent runner process failed: ${describeUnknownError(completed.error)}`,
+        stderr ? `stderr: ${stderr}` : '',
+      ].filter(Boolean).join('; ');
       return emitRunnerError(
         events,
         request,
         handlers,
-        `code agent runner process failed: ${completed.error instanceof Error ? completed.error.message : String(completed.error)}`,
+        details,
         'runner_process_error'
       );
     }
@@ -188,9 +193,38 @@ const describeCompletion = (
   completed: { ok: true; exit: { exitCode: number | null; signal?: string | null } } | { ok: false; error: unknown }
 ): string => {
   if (!completed.ok) {
-    return `runner process failed: ${completed.error instanceof Error ? completed.error.message : String(completed.error)}`;
+    return `runner process failed: ${describeUnknownError(completed.error)}`;
   }
   return `runner process exited with code ${completed.exit.exitCode ?? 'null'}${completed.exit.signal ? ` and signal ${completed.exit.signal}` : ''}`;
+};
+
+const describeUnknownError = (error: unknown) => {
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
+  const fields = Object.entries(error as Error & Record<string, unknown>)
+    .filter(([key, value]) => (
+      !['name', 'message', 'stack'].includes(key) &&
+      value !== undefined &&
+      typeof value !== 'function'
+    ))
+    .map(([key, value]) => `${key}=${stringifyErrorField(value)}`);
+  return [
+    error.name && error.name !== 'Error' ? `${error.name}: ${error.message}` : error.message,
+    ...fields,
+    error.stack ? `stack=${error.stack}` : '',
+  ].filter(Boolean).join('; ');
+};
+
+const stringifyErrorField = (value: unknown) => {
+  if (typeof value === 'string') {
+    return value;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 };
 
 const bufferToString = (chunk: unknown) => {

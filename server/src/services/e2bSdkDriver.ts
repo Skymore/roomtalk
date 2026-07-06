@@ -23,6 +23,10 @@ interface E2BSdkCommandError extends Error {
 
 interface E2BSdkCommandHandle {
   pid: number;
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+  exitCode?: number;
   wait(): Promise<E2BSdkCommandResult>;
   kill(): Promise<boolean>;
 }
@@ -205,13 +209,21 @@ const startE2BCommand = async (
 ): Promise<E2BCommandResult> => {
   const stdout = new PassThrough();
   const stderr = new PassThrough();
+  let stdoutTail = '';
+  let stderrTail = '';
   const commandHandle = await sandbox.commands.run(command, {
     background: true,
     stdin: true,
     envs: env,
     timeoutMs,
-    onStdout: data => stdout.write(data),
-    onStderr: data => stderr.write(data),
+    onStdout: data => {
+      stdoutTail = appendTail(stdoutTail, data);
+      stdout.write(data);
+    },
+    onStderr: data => {
+      stderrTail = appendTail(stderrTail, data);
+      stderr.write(data);
+    },
   });
 
   const completed = commandHandle.wait().then(
@@ -220,7 +232,14 @@ const startE2BCommand = async (
       if (isCommandExitError(error)) {
         return { exitCode: error.exitCode, signal: null };
       }
-      throw error;
+      throw enrichE2BCommandWaitError(error, {
+        command,
+        pid: commandHandle.pid,
+        stdoutTail: stdoutTail || commandHandle.stdout || undefined,
+        stderrTail: stderrTail || commandHandle.stderr || undefined,
+        handleError: commandHandle.error,
+        handleExitCode: commandHandle.exitCode,
+      });
     }
   ).finally(() => {
     stdout.end();
@@ -277,4 +296,56 @@ const isE2BProcessAlreadyClosedError = (error: unknown) => {
   }
   const message = error.message.toLowerCase();
   return message.includes('[not_found]') && message.includes('process') && message.includes('not found');
+};
+
+const MAX_E2B_WAIT_ERROR_TAIL_CHARS = 4000;
+
+const appendTail = (tail: string, chunk: string) => (
+  `${tail}${chunk}`.slice(-MAX_E2B_WAIT_ERROR_TAIL_CHARS)
+);
+
+const enrichE2BCommandWaitError = (
+  error: unknown,
+  context: {
+    command: string;
+    pid?: number;
+    stdoutTail?: string;
+    stderrTail?: string;
+    handleError?: string;
+    handleExitCode?: number;
+  }
+) => {
+  if (!(error instanceof Error)) {
+    return new Error(`E2B command wait failed: ${String(error)}`);
+  }
+  const fields = [
+    `command=${context.command}`,
+    context.pid !== undefined ? `pid=${context.pid}` : '',
+    context.handleExitCode !== undefined ? `handleExitCode=${context.handleExitCode}` : '',
+    context.handleError ? `handleError=${context.handleError}` : '',
+    ...Object.entries(error as Error & Record<string, unknown>)
+      .filter(([key, value]) => (
+        !['name', 'message', 'stack'].includes(key) &&
+        value !== undefined &&
+        typeof value !== 'function'
+      ))
+      .map(([key, value]) => `${key}=${stringifyErrorField(value)}`),
+    context.stdoutTail ? `stdoutTail=${context.stdoutTail.trim()}` : '',
+    context.stderrTail ? `stderrTail=${context.stderrTail.trim()}` : '',
+    error.stack ? `originalStack=${error.stack}` : '',
+  ].filter(Boolean);
+  const enriched = new Error(`E2B command wait failed: ${error.name}: ${error.message}; ${fields.join('; ')}`);
+  (enriched as Error & { cause?: unknown }).cause = error;
+  return enriched;
+};
+
+const stringifyErrorField = (value: unknown) => {
+  if (typeof value === 'string') {
+    return value;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 };

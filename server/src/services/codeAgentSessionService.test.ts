@@ -1404,4 +1404,28 @@ describe('CodeAgentSessionService', () => {
     assert.equal((errorBroadcast?.args[0] as Message | undefined)?.status, 'error');
     assert.equal((errorBroadcast?.args[0] as Message | undefined)?.content, 'runner crashed');
   });
+
+  it('closes pending tool calls with failed results when the runner errors', async () => {
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Shell', args: { command: 'python3 -m http.server 4173 --directory dist' } },
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'error', message: 'code agent runner process failed: E2B command wait failed', code: 'runner_process_error', retryable: false },
+    ]);
+    const { emitter, service, store } = createService({ runner });
+
+    const result = await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.equal(result.success, false);
+    const messages = store.messages.get('room-1') || [];
+    assert.deepEqual(messages.map(message => message.messageType), ['text', 'ai', 'tool_call', 'tool_result', 'sandbox_status']);
+    assert.equal(messages[3].toolCallId, 'tool-1');
+    assert.equal(messages[3].toolName, 'Shell');
+    assert.equal(messages[3].status, 'error');
+    assert.equal(messages[3].isError, true);
+    assert.match(messages[3].content, /Tool interrupted before completion/);
+    assert.match(messages[3].content, /E2B command wait failed/);
+    const toolResultBroadcast = emitter.roomEmits.find(event =>
+      event.event === 'new_message' && (event.args[0] as Message).messageType === 'tool_result'
+    );
+    assert.equal((toolResultBroadcast?.args[0] as Message | undefined)?.toolCallId, 'tool-1');
+  });
 });
