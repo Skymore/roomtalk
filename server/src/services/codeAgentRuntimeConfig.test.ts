@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import {
   DEFAULT_CODE_AGENT_E2B_KILL_TIMEOUT_MS,
   DEFAULT_CODE_AGENT_E2B_PAUSE_TIMEOUT_MS,
+  DEFAULT_CODE_AGENT_DAEMON_COMMAND,
   DEFAULT_CODE_AGENT_RUNNER_COMMAND,
   DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND,
   DEFAULT_CODEX_CLI_RUNNER_COMMAND,
@@ -49,6 +50,7 @@ describe('resolveCodeAgentRuntimeConfig', () => {
     assert.equal(config.defaultMode, 'plan');
     assert.equal(config.modelGateway, undefined);
     assert.equal(config.runnerCommand, DEFAULT_CODE_AGENT_RUNNER_COMMAND);
+    assert.equal(config.daemonCommand, DEFAULT_CODE_AGENT_DAEMON_COMMAND);
     assert.deepEqual(config.allowedPaths, ['.']);
     assert.deepEqual(config.runnerEnv, {});
     assert.deepEqual(config.e2bLifecycle, { onTimeout: 'pause', autoResume: true, keepMemory: true });
@@ -138,6 +140,11 @@ describe('resolveCodeAgentRuntimeConfig', () => {
       CODE_AGENT_RUNNER_CLIENT: 'jsonl',
       CODE_AGENT_MODE: 'plan',
     }), /requires a non-fake sandbox provider/);
+    assert.throws(() => resolveCodeAgentRuntimeConfig({
+      CODE_AGENT_ENABLED: 'true',
+      CODE_AGENT_RUNNER_CLIENT: 'daemon',
+      CODE_AGENT_MODE: 'plan',
+    }), /requires a non-fake sandbox provider/);
   });
 
   it('rejects E2B fake-runner pairing outside explicit test mode', () => {
@@ -189,6 +196,27 @@ describe('resolveCodeAgentRuntimeConfig', () => {
       ...e2bCredentialEnv,
       ...pinnedArtifactEnv,
     }), /must use the pinned sandbox artifact/);
+  });
+
+  it('supports daemon runner mode with the same E2B artifact contract as JSONL', () => {
+    const config = resolveCodeAgentRuntimeConfig({
+      CODE_AGENT_ENABLED: 'true',
+      CODE_AGENT_SANDBOX_PROVIDER: 'e2b',
+      CODE_AGENT_RUNNER_CLIENT: 'daemon',
+      CODE_AGENT_E2B_TEMPLATE_ID: 'roomtalk-code-agent',
+      CODE_AGENT_DAEMON_COMMAND: 'python -m custom_daemon',
+      ...e2bCredentialEnv,
+      ...pinnedArtifactEnv,
+    });
+
+    assert.equal(config.runnerClient, 'daemon');
+    assert.equal(config.daemonCommand, 'python -m custom_daemon');
+    assert.deepEqual(config.runnerEnv, {
+      PYTHONPATH: DEFAULT_CODE_AGENT_RUNNER_PYTHONPATH,
+      CODE_AGENT_WORKSPACE_ROOT: DEFAULT_CODE_AGENT_WORKSPACE_ROOT,
+      PLAYWRIGHT_BROWSERS_PATH: DEFAULT_PLAYWRIGHT_BROWSERS_PATH,
+      NODE_PATH: DEFAULT_NODE_PATH,
+    });
   });
 
   it('requires E2B credentials for enabled E2B JSONL mode', () => {

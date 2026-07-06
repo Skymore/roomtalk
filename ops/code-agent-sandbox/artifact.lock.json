@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "artifactName": "roomtalk-code-agent",
-  "artifactVersion": "roomtalk-code-agent-2026-07-06-final-text-v1",
+  "artifactVersion": "roomtalk-code-agent-2026-07-06-sandbox-daemon-v1",
   "pythonVersion": "3.12",
   "baseImage": {
     "name": "python",
@@ -35,6 +35,9 @@
         "command": "python -m roomtalk_code_agent_runner.codex_sdk_app_server",
         "codexCliVersion": "0.142.5",
         "pythonSdkVersion": "0.1.0b3"
+      },
+      "daemon": {
+        "command": "python -m roomtalk_code_agent_runner.daemon"
       }
     }
   },

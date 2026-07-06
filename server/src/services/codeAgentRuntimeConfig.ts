@@ -9,7 +9,7 @@ import {
 import { CodeAgentSandboxProvider } from './codeAgentSandboxService';
 import { CodeAgentRunnerMode } from './codeAgentRunnerProtocol';
 
-export type CodeAgentRunnerClientKind = 'fake' | 'jsonl';
+export type CodeAgentRunnerClientKind = 'fake' | 'jsonl' | 'daemon';
 export type CodeAgentArtifactMode = 'production' | 'development';
 export type CodeAgentE2BOnTimeout = 'kill' | 'pause';
 
@@ -34,6 +34,7 @@ export interface CodeAgentRuntimeConfig {
   };
   runnerCommand: string;
   runnerCommandByBackend: Partial<Record<CodeAgentBackend, string>>;
+  daemonCommand: string;
   allowedPaths: string[];
   runnerEnv: Record<string, string>;
   runnerProviderEnvByProvider: Partial<Record<AIModelProvider, Record<string, string>>>;
@@ -49,6 +50,7 @@ export interface CodeAgentRuntimeConfig {
 export const DEFAULT_CODE_AGENT_RUNNER_COMMAND = 'python -m roomtalk_code_agent_runner';
 export const DEFAULT_CODEX_CLI_RUNNER_COMMAND = 'python -m roomtalk_code_agent_runner.codex_cli';
 export const DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND = 'python -m roomtalk_code_agent_runner.codex_sdk_app_server';
+export const DEFAULT_CODE_AGENT_DAEMON_COMMAND = 'python -m roomtalk_code_agent_runner.daemon';
 export const DEFAULT_CODE_AGENT_RUNNER_PYTHONPATH = '/opt/code-agent-engine/src:/opt/roomtalk_code_agent_runner';
 export const DEFAULT_CODE_AGENT_WORKSPACE_ROOT = '/workspace';
 export const DEFAULT_PLAYWRIGHT_BROWSERS_PATH = '/ms-playwright';
@@ -103,7 +105,7 @@ const readCodeAgentBackend = (env: NodeJS.ProcessEnv): CodeAgentBackend => {
 
 const readRunnerClient = (env: NodeJS.ProcessEnv): CodeAgentRunnerClientKind => {
   const value = (env.CODE_AGENT_RUNNER_CLIENT || 'fake').toLowerCase();
-  if (value === 'fake' || value === 'jsonl') {
+  if (value === 'fake' || value === 'jsonl' || value === 'daemon') {
     return value;
   }
   throw new Error(`Unsupported CODE_AGENT_RUNNER_CLIENT: ${value}`);
@@ -285,7 +287,7 @@ const baseRunnerEnv = (
   sandboxProvider: CodeAgentSandboxProvider,
   runnerClient: CodeAgentRunnerClientKind
 ): Record<string, string> => {
-  if (sandboxProvider !== 'e2b' || runnerClient !== 'jsonl') {
+  if (sandboxProvider !== 'e2b' || (runnerClient !== 'jsonl' && runnerClient !== 'daemon')) {
     return {};
   }
   return {
@@ -304,7 +306,7 @@ const providerEnv = (env: NodeJS.ProcessEnv): Partial<Record<AIModelProvider, Re
 });
 
 const shouldForwardProviderEnv = (env: NodeJS.ProcessEnv, runnerClient: CodeAgentRunnerClientKind, availableModes: CodeAgentRunnerMode[]) => (
-  runnerClient === 'jsonl' &&
+  (runnerClient === 'jsonl' || runnerClient === 'daemon') &&
   !availableModes.some(codeAgentModeAllowsWriteTools) &&
   !usesOutOfBandModelAccess(env)
 );
@@ -349,8 +351,8 @@ const readModelGatewayConfig = (env: NodeJS.ProcessEnv): CodeAgentRuntimeConfig[
 };
 
 const validateEnabledConfig = (config: CodeAgentRuntimeConfig, env: NodeJS.ProcessEnv) => {
-  if (config.runnerClient === 'jsonl' && config.sandboxProvider === 'fake') {
-    throw new Error('CODE_AGENT_RUNNER_CLIENT=jsonl requires a non-fake sandbox provider');
+  if ((config.runnerClient === 'jsonl' || config.runnerClient === 'daemon') && config.sandboxProvider === 'fake') {
+    throw new Error(`CODE_AGENT_RUNNER_CLIENT=${config.runnerClient} requires a non-fake sandbox provider`);
   }
   if (
     config.sandboxProvider === 'e2b' &&
@@ -364,7 +366,7 @@ const validateEnabledConfig = (config: CodeAgentRuntimeConfig, env: NodeJS.Proce
   }
   if (
     config.sandboxProvider === 'e2b' &&
-    config.runnerClient === 'jsonl' &&
+    (config.runnerClient === 'jsonl' || config.runnerClient === 'daemon') &&
     !env.E2B_API_KEY &&
     !env.E2B_ACCESS_TOKEN
   ) {
@@ -391,14 +393,14 @@ const validateEnabledConfig = (config: CodeAgentRuntimeConfig, env: NodeJS.Proce
   if (env.CODE_AGENT_MODEL_ACCESS_STRATEGY === 'proxy' && !hasModelProxyContract(env)) {
     throw new Error('Code agent model proxy mode requires HTTPS CODE_AGENT_MODEL_PROXY_URL and CODE_AGENT_MODEL_PROXY_TOKEN');
   }
-  if (config.runnerClient === 'jsonl' && env.CODE_AGENT_SCOPED_PROVIDER_KEY === 'true' && !hasScopedProviderKeyContract(env)) {
-    throw new Error('JSONL code-agent scoped provider key mode requires TTL, budget, and audit id');
+  if ((config.runnerClient === 'jsonl' || config.runnerClient === 'daemon') && env.CODE_AGENT_SCOPED_PROVIDER_KEY === 'true' && !hasScopedProviderKeyContract(env)) {
+    throw new Error('JSONL/daemon code-agent scoped provider key mode requires TTL, budget, and audit id');
   }
-  if (config.runnerClient === 'jsonl' && requiresModelAccessContract && !hasApprovedModelAccess(config, env)) {
-    throw new Error('JSONL code-agent write or shell mode requires RoomTalk model gateway, model proxy with token, or scoped provider key contract');
+  if ((config.runnerClient === 'jsonl' || config.runnerClient === 'daemon') && requiresModelAccessContract && !hasApprovedModelAccess(config, env)) {
+    throw new Error('JSONL/daemon code-agent write or shell mode requires RoomTalk model gateway, model proxy with token, or scoped provider key contract');
   }
 
-  if (config.sandboxProvider === 'e2b' && config.runnerClient === 'jsonl') {
+  if (config.sandboxProvider === 'e2b' && (config.runnerClient === 'jsonl' || config.runnerClient === 'daemon')) {
     if (config.artifactMode === 'production') {
       if (!config.artifactVersion || !config.codeAgentSourceRef) {
         throw new Error('Production code agent E2B JSONL mode requires CODE_AGENT_ARTIFACT_VERSION and CODE_AGENT_SOURCE_REF');
@@ -429,6 +431,7 @@ export const resolveCodeAgentRuntimeConfig = (env: NodeJS.ProcessEnv): CodeAgent
     codex: env.CODEX_CLI_RUNNER_COMMAND || (backend === 'codex' ? runnerCommand : DEFAULT_CODEX_CLI_RUNNER_COMMAND),
     'codex-app-server': env.CODEX_APP_SERVER_RUNNER_COMMAND || (backend === 'codex-app-server' ? runnerCommand : DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND),
   } satisfies Partial<Record<CodeAgentBackend, string>>;
+  const daemonCommand = env.CODE_AGENT_DAEMON_COMMAND || DEFAULT_CODE_AGENT_DAEMON_COMMAND;
   const config: CodeAgentRuntimeConfig = {
     enabled: env.CODE_AGENT_ENABLED === 'true',
     backend,
@@ -444,6 +447,7 @@ export const resolveCodeAgentRuntimeConfig = (env: NodeJS.ProcessEnv): CodeAgent
     modelGateway,
     runnerCommand,
     runnerCommandByBackend,
+    daemonCommand,
     allowedPaths: parseCsvEnv(env.CODE_AGENT_ALLOWED_PATHS || '.'),
     runnerEnv: {
       ...baseRunnerEnv(env, sandboxProvider, runnerClient),

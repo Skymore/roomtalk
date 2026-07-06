@@ -38,7 +38,6 @@ import { CODE_AGENT_RUNNER_SCHEMA_VERSION } from './services/codeAgentRunnerProt
 import { createCodeWorkspaceAssetAccessFromEnv } from './services/codeWorkspaceAssetAccess';
 import {
   DEFAULT_CODE_AGENT_E2B_KILL_TIMEOUT_MS,
-  DEFAULT_CODE_AGENT_E2B_PAUSE_TIMEOUT_MS,
   DEFAULT_CODE_AGENT_RUNNER_PYTHONPATH,
   DEFAULT_CODE_AGENT_WORKSPACE_ROOT,
   resolveCodeAgentRuntimeConfig,
@@ -52,6 +51,8 @@ import {
 } from './services/codeAgentModelGateway';
 import { FakeCodeAgentRunnerClient } from './services/fakeCodeAgentRunner';
 import { FakeCodeAgentSandboxService } from './services/fakeCodeAgentSandboxService';
+import { CodeAgentDaemonProcessRegistry } from './services/codeAgentDaemonRegistry';
+import { JsonlCodeAgentDaemonRunnerClient } from './services/jsonlCodeAgentDaemonRunner';
 import { JsonlCodeAgentRunnerClient } from './services/jsonlCodeAgentRunner';
 import {
   CODE_AGENT_STATIC_PUBLISH_API_PATH,
@@ -297,11 +298,19 @@ const codeAgentSandboxService = codeAgentRuntimeConfig.enabled && codeAgentRunti
   })
   : new FakeCodeAgentSandboxService();
 const codeAgentTurnTimeoutMs = parsePositiveIntegerEnv('CODE_AGENT_TURN_TIMEOUT_MS', 10 * 60 * 1000);
-const defaultCodeAgentSandboxTtlMs = codeAgentRuntimeConfig.e2bLifecycle.onTimeout === 'pause'
-  ? DEFAULT_CODE_AGENT_E2B_PAUSE_TIMEOUT_MS
-  : DEFAULT_CODE_AGENT_E2B_KILL_TIMEOUT_MS;
+const defaultCodeAgentIdleSandboxTtlMs = 2 * 60 * 1000;
+const codeAgentIdleSandboxTtlMs = parsePositiveIntegerEnv(
+  'CODE_AGENT_IDLE_SANDBOX_TTL_MS',
+  parsePositiveIntegerEnv('CODE_AGENT_SANDBOX_TTL_MS', defaultCodeAgentIdleSandboxTtlMs)
+);
+const codeAgentActiveSandboxTtlMs = parsePositiveIntegerEnv(
+  'CODE_AGENT_ACTIVE_SANDBOX_TTL_MS',
+  DEFAULT_CODE_AGENT_E2B_KILL_TIMEOUT_MS
+);
 const codeAgentSandboxLifecycle = new CodeAgentSandboxLifecycleService(store, codeAgentSandboxService, codeAgentLogger, {
-  sandboxTtlMs: parsePositiveIntegerEnv('CODE_AGENT_SANDBOX_TTL_MS', defaultCodeAgentSandboxTtlMs),
+  sandboxTtlMs: codeAgentIdleSandboxTtlMs,
+  idleSandboxTtlMs: codeAgentIdleSandboxTtlMs,
+  activeSandboxTtlMs: codeAgentActiveSandboxTtlMs,
   turnTimeoutMs: codeAgentTurnTimeoutMs,
   creatingStaleMs: parsePositiveIntegerEnv('CODE_AGENT_CREATING_STALE_MS', 2 * 60 * 1000),
   maxActiveSandboxes: parsePositiveIntegerEnv('CODE_AGENT_MAX_ACTIVE_SANDBOXES', Number.POSITIVE_INFINITY),
@@ -315,7 +324,15 @@ const fakeCodeAgentToolOutput = [
   'stderr: simulated warning for UI coverage',
   'line '.repeat(260).trim(),
 ].join('\n');
-const codeAgentRunnerClient = codeAgentRuntimeConfig.runnerClient === 'jsonl' ? new JsonlCodeAgentRunnerClient() : new FakeCodeAgentRunnerClient([
+const codeAgentDaemonRegistry = codeAgentRuntimeConfig.runnerClient === 'daemon'
+  ? new CodeAgentDaemonProcessRegistry()
+  : undefined;
+const codeAgentDaemonRunnerClient = codeAgentRuntimeConfig.runnerClient === 'daemon'
+  ? new JsonlCodeAgentDaemonRunnerClient()
+  : undefined;
+const codeAgentRunnerClient = codeAgentRuntimeConfig.runnerClient === 'daemon'
+  ? codeAgentDaemonRunnerClient!
+  : codeAgentRuntimeConfig.runnerClient === 'jsonl' ? new JsonlCodeAgentRunnerClient() : new FakeCodeAgentRunnerClient([
   { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'status', turnId: 'fake', status: 'starting', message: 'Coco Agent fake runner starting' },
   { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'fake-ai', delta: 'Coco Agent fake runner received the task.' },
   { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'fake-tool-1', name: 'Shell', args: { command: 'printf "hello from Coco Agent fake runner\\n"' } },
@@ -344,8 +361,12 @@ const codeAgentSessionService = new CodeAgentSessionService(
     defaultMode: codeAgentRuntimeConfig.defaultMode,
     modelGateway: codeAgentModelGateway,
     backend: codeAgentRuntimeConfig.backend,
+    runnerClient: codeAgentRuntimeConfig.runnerClient,
     runnerCommand: codeAgentRuntimeConfig.runnerCommand,
     runnerCommandByBackend: codeAgentRuntimeConfig.runnerCommandByBackend,
+    daemonCommand: codeAgentRuntimeConfig.daemonCommand,
+    daemonRegistry: codeAgentDaemonRegistry,
+    daemonRunnerClient: codeAgentDaemonRunnerClient,
     turnTimeoutMs: codeAgentTurnTimeoutMs,
     allowedPaths: codeAgentRuntimeConfig.allowedPaths,
     runnerEnv: codeAgentRuntimeConfig.runnerEnv,

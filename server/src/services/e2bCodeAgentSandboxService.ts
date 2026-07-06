@@ -35,6 +35,7 @@ import { Readable, Writable } from 'stream';
 export interface E2BSandboxDriverHandle {
   id: string;
   getHost?(port: number): string;
+  setTimeout?(timeoutMs: number): Promise<void>;
   commands?: {
     run(command: string, options?: { env?: Record<string, string>; timeoutMs?: number }): Promise<E2BCommandResult>;
   };
@@ -179,6 +180,18 @@ export class E2BCodeAgentSandboxService implements CodeAgentSandboxService {
     if (completed && completed.exitCode !== 0) {
       throw new Error(`E2B workspace version control initialization failed with exit code ${completed.exitCode}`);
     }
+  }
+
+  async setSandboxTimeout(handle: CodeAgentSandboxHandle, ttlMs: number): Promise<CodeAgentSandboxHandle> {
+    const connected = await this.driver.connect(handle.id);
+    if (!connected.setTimeout) {
+      throw new Error('E2B sandbox driver handle does not support timeout updates');
+    }
+    await connected.setTimeout(ttlMs);
+    return {
+      ...handle,
+      expiresAt: new Date(this.now().getTime() + ttlMs).toISOString(),
+    };
   }
 
   async startRunner(input: StartCodeAgentRunnerInput): Promise<CodeAgentRunnerProcess> {

@@ -7,6 +7,7 @@ import { CodeAgentSandboxLifecycleService, EnsureCodeAgentSandboxResult } from '
 import { CodeAgentSandboxHandle, CodeAgentSandboxService, CodeAgentRunnerProcess } from './codeAgentSandboxService';
 import { mapCodeAgentRunnerEvent } from './codeAgentEventMapper';
 import { CodeAgentRunner } from './codeAgentRunner';
+import { CodeAgentDaemonProcessRegistry } from './codeAgentDaemonRegistry';
 import {
   CODE_AGENT_RUNNER_SCHEMA_VERSION,
   CodeAgentRunnerApprovalDecision,
@@ -19,7 +20,13 @@ import {
   CodeAgentRunnerThreadReadRequest,
   CodeAgentRunnerThreadReadResultEvent,
 } from './codeAgentRunnerProtocol';
-import { DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND, DEFAULT_CODEX_CLI_RUNNER_COMMAND, DEFAULT_CODE_AGENT_RUNNER_COMMAND } from './codeAgentRuntimeConfig';
+import {
+  CodeAgentRunnerClientKind,
+  DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND,
+  DEFAULT_CODEX_CLI_RUNNER_COMMAND,
+  DEFAULT_CODE_AGENT_DAEMON_COMMAND,
+  DEFAULT_CODE_AGENT_RUNNER_COMMAND,
+} from './codeAgentRuntimeConfig';
 import { createAIPlaceholderMessage } from './messageDomain';
 import { stripAIStreamRecoveryMetadata, withAIStreamRecoveryMetadata } from './aiStreamRecovery';
 import { CodeAgentModelGateway } from './codeAgentModelGateway';
@@ -30,6 +37,7 @@ import { canUseCodeAgentRoom, CODE_AGENT_ACCESS_DENIED_MESSAGE } from './codeAge
 import { CodexConnectionService } from './codexConnection';
 import { CodeAgentRunnerHandlers, CodeAgentRunnerRunResult } from './fakeCodeAgentRunner';
 import { writeCodeAgentRunnerRequest } from './jsonlCodeAgentRunner';
+import { JsonlCodeAgentDaemonRunnerClient } from './jsonlCodeAgentDaemonRunner';
 import { CodexRunSettings, getCodexMessageAIModel, normalizeCodexRunSettings } from './codexRunSettings';
 import {
   codeAgentModeAllowsShell,
@@ -57,8 +65,12 @@ export interface CodeAgentSessionServiceOptions {
   defaultMode?: CodeAgentRunnerMode;
   modelGateway?: CodeAgentModelGateway;
   backend?: CodeAgentBackend;
+  runnerClient?: CodeAgentRunnerClientKind;
   runnerCommand?: string;
   runnerCommandByBackend?: Partial<Record<CodeAgentBackend, string>>;
+  daemonCommand?: string;
+  daemonRegistry?: CodeAgentDaemonProcessRegistry;
+  daemonRunnerClient?: JsonlCodeAgentDaemonRunnerClient;
   turnTimeoutMs?: number;
   allowedPaths?: string[];
   runnerEnv?: Record<string, string>;
@@ -199,6 +211,7 @@ export class CodeAgentSessionService {
     let turnId = '';
     let aiMessage: Message | null = null;
     let runnerProcess: CodeAgentRunnerProcess | null = null;
+    let turnSandbox: CodeAgentSandboxHandle | null = null;
     let placeholderAnnounced = false;
     let roomMarkedRunning = false;
     let streamState: CodeAgentTurnStreamState | null = null;
@@ -271,9 +284,10 @@ export class CodeAgentSessionService {
           workspace: sandbox.handle.workspace,
         },
       });
+      turnSandbox = await this.sandboxLifecycle.extendSandboxForActiveTurn(sandbox.handle);
       const activeTurn = this.activeTurns.get(input.roomId);
       if (activeTurn) {
-        activeTurn.sandbox = sandbox.handle;
+        activeTurn.sandbox = turnSandbox;
       }
 
       const runningRoom = await this.patchRoom(input.roomId, { codeAgentStatus: 'running' });
@@ -344,27 +358,33 @@ export class CodeAgentSessionService {
               codexPermissionMode: codexRunSettings.permissionMode,
             }
           : {}),
-        workspace: sandbox.handle.workspace,
+        workspace: turnSandbox.workspace,
         allowedPaths: this.options.allowedPaths || ['.'],
       };
       const startRunnerProcess = async (env: Record<string, string>) => {
-        runnerProcess = await this.sandboxService.startRunner({
-          handle: sandbox.handle,
-          command: this.runnerCommandForBackend(turnBackend),
-          env,
-          timeoutMs: this.options.turnTimeoutMs,
-        });
+        const command = this.runnerCommandForBackend(turnBackend);
+        if (this.options.runnerClient === 'daemon') {
+          runnerProcess = await this.startDaemonProcess(turnSandbox!, env);
+        } else {
+          runnerProcess = await this.sandboxService.startRunner({
+            handle: turnSandbox!,
+            command,
+            env,
+            timeoutMs: this.options.turnTimeoutMs,
+          });
+        }
         const active = this.activeTurns.get(input.roomId);
         if (active?.turnId === turnId) {
           active.process = runnerProcess;
-          active.sandbox = sandbox.handle;
+          active.sandbox = turnSandbox!;
         }
         await this.recordTurnEvent('info', 'code_agent.runner.started', input, turnId, turnStartedAtMs, {
           payload: {
             backend: turnBackend,
-            sandboxId: sandbox.handle.id,
+            sandboxId: turnSandbox!.id,
             command: runnerProcess.command,
             mode: turnMode.mode,
+            runnerClient: this.options.runnerClient || 'jsonl',
           },
         });
         return runnerProcess;
@@ -381,7 +401,7 @@ export class CodeAgentSessionService {
         runnerEnv,
         request: runnerRequest,
         handlers: runnerHandlers,
-        sandbox: sandbox.handle,
+        sandbox: turnSandbox,
         startRunnerProcess,
       });
 
@@ -518,6 +538,9 @@ export class CodeAgentSessionService {
       if (runnerProcess) {
         await this.stopRunnerProcess(runnerProcess, input.roomId);
       }
+      if (turnSandbox) {
+        await this.sandboxLifecycle.shortenSandboxAfterTurn(turnSandbox);
+      }
       this.activeTurns.delete(input.roomId);
     }
   }
@@ -531,6 +554,14 @@ export class CodeAgentSessionService {
       this.logger.info('Code agent interrupt requested by another room member', { roomId, startedBy: active.clientId, requestedBy: clientId });
     }
     if (active.backend !== 'codex-app-server') {
+      if (this.options.runnerClient === 'daemon') {
+        return this.writeActiveControl(roomId, {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'interrupt',
+          turnId: active.turnId,
+          ...(reason ? { reason } : {}),
+        });
+      }
       if (active.process) {
         await this.stopRunnerProcess(active.process, roomId);
         return { success: true };
@@ -727,27 +758,34 @@ export class CodeAgentSessionService {
 
       let refreshedAuthJson: string | undefined;
       try {
-        const runnerProcess = await this.sandboxService.startRunner({
-          handle: input.sandbox,
-          command: DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND,
-          env: {
-            PYTHONUNBUFFERED: '1',
-            ...(this.options.runnerEnv || {}),
-            ...(this.options.runnerEnvByBackend?.['codex-app-server'] || {}),
-            ROOMTALK_CODEX_AUTH_JSON_PATH: authPath,
-            ROOMTALK_CODEX_REFRESHED_AUTH_JSON_PATH: refreshedAuthPath,
-          },
-          timeoutMs: this.options.turnTimeoutMs,
-        });
+        const runnerEnv = {
+          PYTHONUNBUFFERED: '1',
+          ...(this.options.runnerEnv || {}),
+          ...(this.options.runnerEnvByBackend?.['codex-app-server'] || {}),
+          ROOMTALK_CODEX_AUTH_JSON_PATH: authPath,
+          ROOMTALK_CODEX_REFRESHED_AUTH_JSON_PATH: refreshedAuthPath,
+        };
+        const runnerProcess = this.options.runnerClient === 'daemon'
+          ? await this.startDaemonProcess(input.sandbox, runnerEnv)
+          : await this.sandboxService.startRunner({
+              handle: input.sandbox,
+              command: DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND,
+              env: runnerEnv,
+              timeoutMs: this.options.turnTimeoutMs,
+            });
         try {
-          const result = await this.collectCodexThreadQueryResult<T>(runnerProcess, input.request, input.expectedType);
+          const result = this.options.runnerClient === 'daemon'
+            ? await this.collectCodexDaemonThreadQueryResult<T>(runnerProcess, input.request, input.expectedType, runnerEnv)
+            : await this.collectCodexThreadQueryResult<T>(runnerProcess, input.request, input.expectedType);
           refreshedAuthJson = await this.readOptionalCodexRefreshedAuth(input.sandbox, refreshedAuthPath);
           return {
             result,
             ...(refreshedAuthJson ? { refreshedAuthJson } : {}),
           };
         } finally {
-          await this.stopRunnerProcess(runnerProcess, input.request.roomId);
+          if (this.options.runnerClient !== 'daemon') {
+            await this.stopRunnerProcess(runnerProcess, input.request.roomId);
+          }
         }
       } finally {
         await Promise.all([
@@ -756,6 +794,37 @@ export class CodeAgentSessionService {
         ]);
       }
     });
+  }
+
+  private async startDaemonProcess(
+    sandbox: CodeAgentSandboxHandle,
+    env: Record<string, string>
+  ): Promise<CodeAgentRunnerProcess> {
+    if (!this.options.daemonRegistry) {
+      throw new Error('Daemon process registry is not configured');
+    }
+    return this.options.daemonRegistry.ensure({
+      handle: sandbox,
+      command: this.daemonCommand(),
+      env,
+      start: daemonEnv => this.sandboxService.startRunner({
+        handle: sandbox,
+        command: this.daemonCommand(),
+        env: daemonEnv,
+      }),
+    });
+  }
+
+  private async collectCodexDaemonThreadQueryResult<T extends CodeAgentRunnerThreadListResultEvent | CodeAgentRunnerThreadReadResultEvent>(
+    runnerProcess: CodeAgentRunnerProcess,
+    request: CodeAgentRunnerThreadListRequest | CodeAgentRunnerThreadReadRequest,
+    expectedType: T['type'],
+    runnerEnv: Record<string, string>
+  ): Promise<T> {
+    if (!this.options.daemonRunnerClient) {
+      throw new Error('Daemon runner client is not configured');
+    }
+    return this.options.daemonRunnerClient.query<T>(runnerProcess, request, expectedType, runnerEnv);
   }
 
   private async collectCodexThreadQueryResult<T extends CodeAgentRunnerThreadListResultEvent | CodeAgentRunnerThreadReadResultEvent>(
@@ -812,6 +881,7 @@ export class CodeAgentSessionService {
       return this.runner.run(input.request, input.handlers, {
         process,
         sandbox: input.sandbox,
+        runnerEnv: input.runnerEnv,
       });
     }
     if (this.options.codexBackendEnabled === false) {
@@ -836,14 +906,16 @@ export class CodeAgentSessionService {
 
       let refreshedAuthJson: string | undefined;
       try {
-        const process = await input.startRunnerProcess({
+        const effectiveRunnerEnv = {
           ...input.runnerEnv,
           ROOMTALK_CODEX_AUTH_JSON_PATH: authPath,
           ROOMTALK_CODEX_REFRESHED_AUTH_JSON_PATH: refreshedAuthPath,
-        });
+        };
+        const process = await input.startRunnerProcess(effectiveRunnerEnv);
         const result = await this.runner.run(input.request, input.handlers, {
           process,
           sandbox: input.sandbox,
+          runnerEnv: effectiveRunnerEnv,
         });
         refreshedAuthJson = await this.readOptionalCodexRefreshedAuth(input.sandbox, refreshedAuthPath);
         return {
@@ -987,6 +1059,10 @@ export class CodeAgentSessionService {
       return DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND;
     }
     return DEFAULT_CODE_AGENT_RUNNER_COMMAND;
+  }
+
+  private daemonCommand(): string {
+    return this.options.daemonCommand || DEFAULT_CODE_AGENT_DAEMON_COMMAND;
   }
 
   private availableModes(): CodeAgentRunnerMode[] {

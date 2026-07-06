@@ -9,11 +9,15 @@ description = "RoomTalk JSONL adapter for code-agent backends"
 requires-python = ">=3.10"
 dependencies = []
 
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
 [project.scripts]
 roomtalk-code-agent-runner = "roomtalk_code_agent_runner.runner:main"
 roomtalk-codex-cli-runner = "roomtalk_code_agent_runner.codex_cli:main"
 roomtalk-codex-app-server-runner = "roomtalk_code_agent_runner.codex_app_server:main"
 roomtalk-codex-sdk-app-server-runner = "roomtalk_code_agent_runner.codex_sdk_app_server:main"
+roomtalk-sandbox-daemon = "roomtalk_code_agent_runner.daemon:main"
 roomtalk = "roomtalk_code_agent_runner.platform_tools:main"
 
 [tool.setuptools.packages.find]

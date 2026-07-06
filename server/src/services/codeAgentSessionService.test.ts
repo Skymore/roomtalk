@@ -3,13 +3,14 @@ import { describe, it } from 'node:test';
 import { Logger } from '../logger';
 import { AIModelOption, CodeAgentMode, Message, Room, RoomAICostTotal } from '../types';
 import { CodeAgentRunnerAdapter, CodeAgentBackend } from './codeAgentRunner';
+import { CodeAgentDaemonProcessRegistry } from './codeAgentDaemonRegistry';
 import { CodeAgentSandboxLifecycleService } from './codeAgentSandboxLifecycle';
 import { CodeAgentSessionService } from './codeAgentSessionService';
 import { CODE_AGENT_RUNNER_SCHEMA_VERSION, CodeAgentRunnerEvent, CodeAgentRunnerRunRequest } from './codeAgentRunnerProtocol';
 import { CodeAgentRunnerClient, CodeAgentRunnerRunResult } from './fakeCodeAgentRunner';
 import { FakeCodeAgentRunnerClient } from './fakeCodeAgentRunner';
 import { FakeCodeAgentSandboxService } from './fakeCodeAgentSandboxService';
-import { DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND, DEFAULT_CODEX_CLI_RUNNER_COMMAND, DEFAULT_CODE_AGENT_RUNNER_COMMAND } from './codeAgentRuntimeConfig';
+import { DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND, DEFAULT_CODEX_CLI_RUNNER_COMMAND, DEFAULT_CODE_AGENT_DAEMON_COMMAND, DEFAULT_CODE_AGENT_RUNNER_COMMAND } from './codeAgentRuntimeConfig';
 import { CodeAgentModelGateway, InMemoryCodeAgentModelGatewayTokenStateStore } from './codeAgentModelGateway';
 import { PublishedStaticSiteService } from './publishedStaticSite';
 import { MemoryMediaObjectStorage } from '../testUtils/memoryMediaObjectStorage';
@@ -237,8 +238,11 @@ const createService = (options: {
   allowedClientIds?: string[];
   ids?: string[];
   runnerEnv?: Record<string, string>;
+  runnerClient?: 'fake' | 'jsonl' | 'daemon';
   runnerCommand?: string;
   runnerCommandByBackend?: Partial<Record<CodeAgentBackend, string>>;
+  daemonCommand?: string;
+  daemonRegistry?: CodeAgentDaemonProcessRegistry;
   runnerEnvByBackend?: Partial<Record<CodeAgentBackend, Record<string, string>>>;
   runnerProviderEnvByProvider?: Partial<Record<AIModelOption['provider'], Record<string, string>>>;
   codexBackendEnabled?: boolean;
@@ -250,12 +254,16 @@ const createService = (options: {
   staticSitePublisher?: PublishedStaticSiteService;
   observability?: ReturnType<typeof createMemoryObservability>['recorder'];
   aiStreamOwnerId?: string;
+  activeSandboxTtlMs?: number;
+  idleSandboxTtlMs?: number;
 } = {}) => {
   const store = options.store || new MemoryCodeAgentStore(room(), [userMessage()]);
   const emitter = new FakeEmitter();
   const sandboxService = new FakeCodeAgentSandboxService(() => new Date('2026-05-03T00:00:00.000Z'));
   const lifecycle = new CodeAgentSandboxLifecycleService(store as any, sandboxService, logger, {
     sandboxTtlMs: 60 * 60 * 1000,
+    activeSandboxTtlMs: options.activeSandboxTtlMs ?? 60 * 60 * 1000,
+    idleSandboxTtlMs: options.idleSandboxTtlMs ?? 2 * 60 * 1000,
     turnTimeoutMs: 5 * 60 * 1000,
     creatingStaleMs: 2 * 60 * 1000,
     maxActiveSandboxes: 10,
@@ -277,8 +285,11 @@ const createService = (options: {
       defaultMode: options.defaultMode,
       modelGateway: options.modelGateway,
       backend: options.backend,
+      runnerClient: options.runnerClient,
       runnerCommand: options.runnerCommand,
       runnerCommandByBackend: options.runnerCommandByBackend,
+      daemonCommand: options.daemonCommand,
+      daemonRegistry: options.daemonRegistry,
       staticSitePublisher: options.staticSitePublisher,
       runnerEnv: options.runnerEnv,
       runnerEnvByBackend: options.runnerEnvByBackend,
@@ -363,6 +374,74 @@ describe('CodeAgentSessionService', () => {
     assert.equal((observability.events[3].payload as any)?.message, 'starting');
     assert.equal((observability.events[5].payload as any)?.outputLength, '# RoomTalk'.length);
     assert.equal(observability.events.some(event => event.event === 'code_agent.runner.text_delta'), false);
+  });
+
+  it('extends sandbox timeout while a turn is active and shortens it after completion', async () => {
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Done' },
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    ]);
+    const { sandboxService, service } = createService({
+      runner,
+      activeSandboxTtlMs: 60 * 60 * 1000,
+      idleSandboxTtlMs: 2 * 60 * 1000,
+    });
+
+    await service.startTurn({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      selectedModel,
+    });
+
+    assert.deepEqual(sandboxService.sandboxTimeoutUpdates.map(update => update.ttlMs), [
+      60 * 60 * 1000,
+      2 * 60 * 1000,
+    ]);
+  });
+
+  it('reuses one sandbox daemon process across sequential turns while passing per-turn env', async () => {
+    const contexts: Array<{ command?: string; backend?: CodeAgentBackend; runnerEnv?: Record<string, string> }> = [];
+    const runner: CodeAgentRunnerClient = {
+      async run(_request, handlers, context): Promise<CodeAgentRunnerRunResult> {
+        contexts.push({
+          command: context?.process.command,
+          backend: context?.backend,
+          runnerEnv: context?.runnerEnv,
+        });
+        const finalEvent = {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'final' as const,
+          messageId: 'ai-1',
+          answer: 'Done',
+          sessionId: `session-${contexts.length}`,
+        };
+        await handlers.onEvent(finalEvent);
+        return { events: [finalEvent], finalEvent };
+      },
+    };
+    const { sandboxService, service } = createService({
+      runner,
+      runnerClient: 'daemon',
+      daemonRegistry: new CodeAgentDaemonProcessRegistry(),
+      daemonCommand: DEFAULT_CODE_AGENT_DAEMON_COMMAND,
+      runnerEnv: { PYTHONUNBUFFERED: '1' },
+      ids: ['ai-1', 'turn-1', 'ai-2', 'turn-2'],
+    });
+
+    await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    assert.deepEqual(sandboxService.startedRunnerCommands, [DEFAULT_CODE_AGENT_DAEMON_COMMAND]);
+    assert.deepEqual(sandboxService.stoppedRunnerCommands, []);
+    assert.deepEqual(contexts.map(context => context.command), [
+      DEFAULT_CODE_AGENT_DAEMON_COMMAND,
+      DEFAULT_CODE_AGENT_DAEMON_COMMAND,
+    ]);
+    assert.deepEqual(contexts.map(context => context.backend), ['code-agent', 'code-agent']);
+    assert.deepEqual(contexts.map(context => context.runnerEnv), [
+      { PYTHONUNBUFFERED: '1' },
+      { PYTHONUNBUFFERED: '1' },
+    ]);
   });
 
   it('runs Codex backend turns with sandbox secret auth injection and refreshed auth persistence', async () => {

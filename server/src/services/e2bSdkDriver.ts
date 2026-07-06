@@ -47,6 +47,7 @@ interface E2BSdkCommands {
 interface E2BSdkSandbox {
   sandboxId: string;
   getHost?(port: number): string;
+  setTimeout?(timeoutMs: number): Promise<void>;
   commands: E2BSdkCommands;
   files?: {
     list(path: string, opts?: { depth?: number }): Promise<E2BFileEntry[]>;
@@ -172,6 +173,7 @@ class E2BSdkDriver implements E2BSandboxDriver {
     return {
       id: sandbox.sandboxId,
       getHost: sandbox.getHost ? (port: number) => sandbox.getHost!(port) : undefined,
+      setTimeout: sandbox.setTimeout ? (timeoutMs: number) => sandbox.setTimeout!(timeoutMs) : undefined,
       commands: {
         run: (command, options) => startE2BCommand(sandbox, command, options?.env || {}, options?.timeoutMs),
       },

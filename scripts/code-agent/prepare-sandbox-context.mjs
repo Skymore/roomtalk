@@ -32,6 +32,7 @@ const codeAgentCliBackend = lock.runner?.backends?.code_agent_cli;
 const codexCliBackend = lock.runner?.backends?.codex_cli;
 const codexAppServerBackend = lock.runner?.backends?.codex_app_server;
 const codexSdkAppServerBackend = lock.runner?.backends?.codex_sdk_app_server;
+const daemonBackend = lock.runner?.backends?.daemon;
 const runnerPyprojectPath = resolve(repoRoot, lock.runner?.sourcePath || '', 'pyproject.toml');
 const runnerPyproject = readFileSync(runnerPyprojectPath, 'utf8');
 const runnerName = runnerPyproject.match(/^\s*name\s*=\s*"([^"]+)"/m)?.[1] || '';
@@ -69,6 +70,9 @@ if (codexSdkAppServerBackend.codexCliVersion !== codexCliBackend.codexCliVersion
 }
 if (codexSdkAppServerBackend.pythonSdkVersion !== '0.1.0b3') {
   throw new Error(`Codex SDK app-server backend must pin openai-codex 0.1.0b3, got: ${codexSdkAppServerBackend.pythonSdkVersion || ''}`);
+}
+if (!daemonBackend || daemonBackend.command !== 'python -m roomtalk_code_agent_runner.daemon') {
+  throw new Error('Code-agent artifact lock must declare runner.backends.daemon.command');
 }
 
 const isInside = (child, parent) => {

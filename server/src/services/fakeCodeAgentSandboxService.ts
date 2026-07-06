@@ -44,6 +44,7 @@ export class FakeCodeAgentSandboxService implements CodeAgentSandboxService {
   readonly startedRunnerCommands: string[] = [];
   readonly startedRunnerEnvs: Record<string, string>[] = [];
   readonly stoppedRunnerCommands: string[] = [];
+  readonly sandboxTimeoutUpdates: Array<{ sandboxId: string; ttlMs: number }> = [];
   readonly deletedSecretFilePaths: string[] = [];
   readonly exportedWorkspaceArchiveSandboxIds: string[] = [];
   readonly importedWorkspaceArchiveSandboxIds: string[] = [];
@@ -104,6 +105,21 @@ export class FakeCodeAgentSandboxService implements CodeAgentSandboxService {
       throw new Error(`Fake code-agent sandbox not found: ${handle.id}`);
     }
     this.initializedWorkspaceVersionControlSandboxIds.push(handle.id);
+  }
+
+  async setSandboxTimeout(handle: CodeAgentSandboxHandle, ttlMs: number): Promise<CodeAgentSandboxHandle> {
+    this.consumeFailure('connect');
+    const current = this.sandboxes.get(handle.id);
+    if (!current) {
+      throw new Error(`Fake code-agent sandbox not found: ${handle.id}`);
+    }
+    this.sandboxTimeoutUpdates.push({ sandboxId: handle.id, ttlMs });
+    const updated = {
+      ...current,
+      expiresAt: new Date(this.now().getTime() + ttlMs).toISOString(),
+    };
+    this.sandboxes.set(handle.id, updated);
+    return updated;
   }
 
   async startRunner(input: StartCodeAgentRunnerInput): Promise<CodeAgentRunnerProcess> {

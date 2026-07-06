@@ -29,6 +29,7 @@ const createFakeSandboxClass = () => {
     filesList: [] as Array<{ path: string; options?: { depth?: number } }>,
     sentStdin: [] as Array<{ pid: number; data: string }>,
     closedStdin: [] as number[],
+    setTimeouts: [] as Array<{ sandboxId: string; timeoutMs: number }>,
     killed: [] as string[],
     listed: [] as Record<string, unknown>[],
   };
@@ -39,6 +40,9 @@ const createFakeSandboxClass = () => {
     const sandbox = {
       sandboxId,
       getHost: (port: number) => `${port}-${sandboxId}.e2b.dev`,
+      setTimeout: async (timeoutMs: number) => {
+        calls.setTimeouts.push({ sandboxId, timeoutMs });
+      },
       commands: {
         run: async (command: string, options: any) => {
           calls.run.push({ command, options });
@@ -183,6 +187,8 @@ describe('E2B SDK driver', () => {
       sandboxId: 'sdk-created-1',
       options: { apiKey: 'e2b-test-key', requestTimeoutMs: 12_000 },
     });
+    await connected.setTimeout?.(3_600_000);
+    assert.deepEqual(fake.calls.setTimeouts, [{ sandboxId: 'sdk-created-1', timeoutMs: 3_600_000 }]);
 
     const command = await connected.commands!.run('python -m roomtalk_code_agent_runner', {
       env: { PYTHONUNBUFFERED: '1' },

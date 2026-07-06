@@ -56,7 +56,7 @@ const options = {
     'redis-cli --version >/dev/null',
     'shellcheck --version >/dev/null',
     'roomtalk --help >/dev/null',
-    'python -c "import importlib; importlib.import_module(\\"roomtalk_code_agent_runner.runner\\"); importlib.import_module(\\"roomtalk_code_agent_runner.codex_cli\\"); importlib.import_module(\\"roomtalk_code_agent_runner.codex_app_server\\"); importlib.import_module(\\"roomtalk_code_agent_runner.codex_sdk_app_server\\"); importlib.import_module(\\"openai_codex\\")"',
+    'python -c "import importlib; importlib.import_module(\\"roomtalk_code_agent_runner.runner\\"); importlib.import_module(\\"roomtalk_code_agent_runner.codex_cli\\"); importlib.import_module(\\"roomtalk_code_agent_runner.codex_app_server\\"); importlib.import_module(\\"roomtalk_code_agent_runner.codex_sdk_app_server\\"); importlib.import_module(\\"roomtalk_code_agent_runner.daemon\\"); importlib.import_module(\\"openai_codex\\")"',
   ].join(' && '),
 };
 

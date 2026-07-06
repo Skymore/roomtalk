@@ -6,6 +6,7 @@ import {
   parseCodeAgentRunnerEventLine,
 } from './codeAgentRunnerProtocol';
 import { CodeAgentRunnerProcess, CodeAgentSandboxHandle } from './codeAgentSandboxService';
+import { CodeAgentBackend } from '../types';
 
 export interface CodeAgentRunnerHandlers {
   onEvent: (event: CodeAgentRunnerEvent) => void | Promise<void>;
@@ -14,6 +15,8 @@ export interface CodeAgentRunnerHandlers {
 export interface CodeAgentRunnerRunContext {
   process: CodeAgentRunnerProcess;
   sandbox: CodeAgentSandboxHandle;
+  backend?: CodeAgentBackend;
+  runnerEnv?: Record<string, string>;
 }
 
 export interface CodeAgentRunnerClient {

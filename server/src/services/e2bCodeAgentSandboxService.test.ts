@@ -11,6 +11,7 @@ class FakeE2BDriver implements E2BSandboxDriver {
   readonly commands: string[] = [];
   readonly commandOptions: Record<string, unknown>[] = [];
   readonly createInputs: unknown[] = [];
+  readonly timeoutUpdates: Array<{ sandboxId: string; timeoutMs: number }> = [];
   readonly fileListRequests: Array<{ path: string; options?: { depth?: number } }> = [];
   readonly fileReadRequests: Array<{ path: string; options?: { format?: 'text' | 'bytes' | 'stream' } }> = [];
   readonly fileWriteRequests: Array<{ path: string; data: string | Uint8Array }> = [];
@@ -58,6 +59,9 @@ class FakeE2BDriver implements E2BSandboxDriver {
     return {
       id,
       getHost: (port: number) => `${port}-${id}.sandbox.e2b.dev`,
+      setTimeout: async (timeoutMs: number) => {
+        this.timeoutUpdates.push({ sandboxId: id, timeoutMs });
+      },
       commands: {
         run: async (command, options) => {
           this.commands.push(command);
@@ -243,6 +247,10 @@ describe('E2BCodeAgentSandboxService', () => {
       },
       lifecycle: { onTimeout: 'pause', autoResume: true, keepMemory: true },
     });
+
+    const extendedHandle = await service.setSandboxTimeout(handle, 3_600_000);
+    assert.equal(extendedHandle.expiresAt, '2026-05-03T01:00:00.000Z');
+    assert.deepEqual(driver.timeoutUpdates, [{ sandboxId: 'e2b-1', timeoutMs: 3_600_000 }]);
 
     const runner = await service.startRunner({
       handle,
