@@ -117,6 +117,7 @@ class CodexAppServerJsonRpcMapper:
     fallback_session_id: str | None = None
     session_id: str | None = None
     answer_parts: list[str] = field(default_factory=list)
+    streamed_agent_message_text: dict[str, str] = field(default_factory=dict)
     completed_agent_message_ids: set[str] = field(default_factory=set)
     streamed_agent_message_ids: set[str] = field(default_factory=set)
     command_tool_names: dict[str, str] = field(default_factory=dict)
@@ -157,6 +158,8 @@ class CodexAppServerJsonRpcMapper:
             if delta:
                 normalized = _normalize_workspace_text(self.workspace, delta)
                 self.answer_parts.append(normalized)
+                if item_id:
+                    self.streamed_agent_message_text[item_id] = self.streamed_agent_message_text.get(item_id, "") + normalized
                 return [{
                     "schemaVersion": SCHEMA_VERSION,
                     "type": "text_delta",
@@ -241,16 +244,23 @@ class CodexAppServerJsonRpcMapper:
 
         if item_type == "agentMessage" and completed:
             text = str(item.get("text") or "")
-            if text and item_id not in self.streamed_agent_message_ids and item_id not in self.completed_agent_message_ids:
-                self.completed_agent_message_ids.add(item_id)
+            if text and item_id not in self.completed_agent_message_ids:
                 normalized = _normalize_workspace_text(self.workspace, text)
-                self.answer_parts.append(normalized)
+                streamed_text = self.streamed_agent_message_text.get(item_id, "")
+                delta = normalized
+                if streamed_text:
+                    delta = normalized[len(streamed_text):] if normalized.startswith(streamed_text) else ""
+                if not delta:
+                    self.completed_agent_message_ids.add(item_id)
+                    return []
+                self.completed_agent_message_ids.add(item_id)
+                self.answer_parts.append(delta)
                 return [{
                     "schemaVersion": SCHEMA_VERSION,
                     "type": "text_delta",
                     "messageId": self.message_id,
                     "turnId": self.turn_id,
-                    "delta": normalized,
+                    "delta": delta,
                 }]
             return []
 

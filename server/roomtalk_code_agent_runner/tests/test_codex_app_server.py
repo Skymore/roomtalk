@@ -107,6 +107,7 @@ def test_codex_app_server_drives_json_rpc_and_maps_notifications(tmp_path: Path)
         {"method": "item/started", "params": {"threadId": "thread-app-1", "turnId": "turn-app-1", "item": {"id": "cmd-1", "type": "commandExecution", "command": "ls", "status": "running", "commandActions": [], "cwd": str(workspace)}}},
         {"method": "item/commandExecution/outputDelta", "params": {"threadId": "thread-app-1", "turnId": "turn-app-1", "itemId": "cmd-1", "delta": f"{workspace}/demo.txt\n"}},
         {"method": "item/completed", "params": {"threadId": "thread-app-1", "turnId": "turn-app-1", "item": {"id": "cmd-1", "type": "commandExecution", "command": "ls", "status": "completed", "exitCode": 0, "aggregatedOutput": "", "commandActions": [], "cwd": str(workspace), "durationMs": 12}}},
+        {"method": "item/completed", "params": {"threadId": "thread-app-1", "turnId": "turn-app-1", "item": {"id": "msg-1", "type": "agentMessage", "text": f"I read {workspace}/demo.txt after the tool"}}},
         {"method": "item/completed", "params": {"threadId": "thread-app-1", "turnId": "turn-app-1", "item": {"id": "file-1", "type": "fileChange", "status": "completed", "changes": [{"type": "update", "path": f"{workspace}/demo.txt"}]}}},
         {"method": "thread/tokenUsage/updated", "params": {"threadId": "thread-app-1", "turnId": "turn-app-1", "tokenUsage": {"last": {"totalTokens": 12, "inputTokens": 8, "cachedInputTokens": 2, "outputTokens": 4, "reasoningOutputTokens": 1}, "total": {"totalTokens": 50, "inputTokens": 40, "cachedInputTokens": 5, "outputTokens": 10, "reasoningOutputTokens": 2}, "modelContextWindow": 200000}}},
         {"method": "turn/completed", "params": {"threadId": "thread-app-1", "turn": {"id": "turn-app-1", "status": "completed", "items": []}}},
@@ -138,13 +139,15 @@ def test_codex_app_server_drives_json_rpc_and_maps_notifications(tmp_path: Path)
         "text_delta",
         "tool_call",
         "tool_result",
+        "text_delta",
         "tool_result",
         "status",
         "final",
     ]
     assert events[2]["delta"] == "I read demo.txt"
     assert events[4]["output"] == "demo.txt\n"
-    assert events[-1]["answer"] == "I read demo.txt"
+    assert events[5]["delta"] == " after the tool"
+    assert events[-1]["answer"] == "I read demo.txt after the tool"
     assert events[-1]["sessionId"] == "thread-app-1"
     assert events[-1]["usage"] == {
         "promptTokens": 8,

@@ -301,6 +301,7 @@ describe('CodeAgentSessionService', () => {
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Working...' },
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Read', args: { file_path: 'README.md' } },
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-1', name: 'Read', success: true, output: '# RoomTalk' },
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Done' },
       {
         schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'final',
@@ -382,6 +383,12 @@ describe('CodeAgentSessionService', () => {
           path: env.ROOMTALK_CODEX_REFRESHED_AUTH_JSON_PATH,
           content: refreshedAuthJson,
         });
+        const textEvent = {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'text_delta' as const,
+          messageId: 'codex-turn-1',
+          delta: 'Codex done',
+        };
         const finalEvent = {
           schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
           type: 'final' as const,
@@ -397,8 +404,9 @@ describe('CodeAgentSessionService', () => {
             source: 'reported' as const,
           },
         };
+        await handlers.onEvent(textEvent);
         await handlers.onEvent(finalEvent);
-        return { events: [finalEvent], finalEvent };
+        return { events: [textEvent, finalEvent], finalEvent };
       },
     };
     const codexConnectionService = {
@@ -466,6 +474,12 @@ describe('CodeAgentSessionService', () => {
         const env = sandboxService.startedRunnerEnvs[sandboxService.startedRunnerEnvs.length - 1];
         assert.equal(env.CODEX_CLI_BIN, '/usr/local/bin/codex');
         assert.ok(env.ROOMTALK_CODEX_AUTH_JSON_PATH);
+        const textEvent = {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'text_delta' as const,
+          messageId: 'codex-turn-1',
+          delta: 'Room-level Codex done',
+        };
         const finalEvent = {
           schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
           type: 'final' as const,
@@ -473,8 +487,9 @@ describe('CodeAgentSessionService', () => {
           answer: 'Room-level Codex done',
           sessionId: 'codex-session-1',
         };
+        await handlers.onEvent(textEvent);
         await handlers.onEvent(finalEvent);
-        return { events: [finalEvent], finalEvent };
+        return { events: [textEvent, finalEvent], finalEvent };
       },
     };
     const codexConnectionService = {
@@ -525,6 +540,12 @@ describe('CodeAgentSessionService', () => {
         const env = sandboxService.startedRunnerEnvs[sandboxService.startedRunnerEnvs.length - 1];
         assert.equal(env.CODEX_CLI_BIN, '/usr/local/bin/codex');
         assert.ok(env.ROOMTALK_CODEX_AUTH_JSON_PATH);
+        const textEvent = {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'text_delta' as const,
+          messageId: 'codex-app-turn-1',
+          delta: 'Codex app-server done',
+        };
         const finalEvent = {
           schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
           type: 'final' as const,
@@ -532,8 +553,9 @@ describe('CodeAgentSessionService', () => {
           answer: 'Codex app-server done',
           sessionId: 'codex-app-session-1',
         };
+        await handlers.onEvent(textEvent);
         await handlers.onEvent(finalEvent);
-        return { events: [finalEvent], finalEvent };
+        return { events: [textEvent, finalEvent], finalEvent };
       },
     };
     const codexConnectionService = {
@@ -617,7 +639,7 @@ describe('CodeAgentSessionService', () => {
         schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'final',
         messageId: 'ai-1',
-        answer: 'The current directory is empty.',
+        answer: 'I will inspect.The current directory is empty.',
         sessionId: 'session-1',
       },
     ]);
@@ -879,12 +901,12 @@ describe('CodeAgentSessionService', () => {
     assert.deepEqual(
       emitter.roomEmits
         .filter(event => event.event === 'message_deleted')
-        .map(event => (event.args[0] as { messageId: string }).messageId),
+        .map(event => event.args[0]),
       ['ai-1']
     );
   });
 
-  it('removes the unused AI placeholder when a tool-only turn completes with a final answer', async () => {
+  it('does not render final answers when a tool-only turn sends no text delta', async () => {
     const runner = new FakeCodeAgentRunnerClient([
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Shell', args: { command: 'python3 hello.py' } },
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-1', name: 'Shell', success: true, output: 'Hello, World!' },
@@ -909,21 +931,19 @@ describe('CodeAgentSessionService', () => {
 
     assert.deepEqual(result, { success: true, messageId: 'ai-1' });
     const messages = store.messages.get('room-1') || [];
-    assert.deepEqual(messages.map(message => message.messageType), ['text', 'tool_call', 'tool_result', 'ai']);
+    assert.deepEqual(messages.map(message => message.messageType), ['text', 'tool_call', 'tool_result']);
     assert.equal(messages.some(message => message.id === 'ai-1'), false);
-    assert.equal(messages[3].id, 'ai-2');
-    assert.equal(messages[3].status, 'complete');
-    assert.equal(messages[3].content, 'The script printed Hello, World!');
     assert.deepEqual(
       emitter.roomEmits
         .filter(event => event.event === 'message_deleted')
-        .map(event => (event.args[0] as { messageId: string }).messageId),
+        .map(event => event.args[0]),
       ['ai-1']
     );
   });
 
   it('stops the runner before broadcasting the final stream end', async () => {
     const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Done' },
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
     ]);
     const { emitter, sandboxService, service } = createService({ runner });

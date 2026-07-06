@@ -390,62 +390,52 @@ export class CodeAgentSessionService {
         throw new Error('code agent runner exited without a final event');
       }
 
-      // Seal the current segment and create a new one for the final answer
-      // if tool calls occurred after the last text
       if (streamState.needsNewSegment) {
         await this.sealCurrentSegment(input.roomId, aiMessage, streamState);
-        const finalAnswer = runResult.finalEvent.answer;
-        if (finalAnswer) {
-          const newId = this.createId();
-          const segmentMessage: Message = {
-            ...aiMessage,
-            id: newId,
-            content: '',
-            status: 'streaming',
-            timestamp: this.now().toISOString(),
-            aiModel: this.messageAIModelForBackend(turnBackend, input.selectedModel, codexRunSettings),
-          };
-          const segmentRoom = await this.store.appendMessageWithAtomicPosition(segmentMessage);
-          if (segmentRoom) {
-            this.emitter.to(segmentRoom.creatorId).emit('room_updated', segmentRoom);
-            this.emitter.to(input.roomId).emit('new_message', stripAIStreamRecoveryMetadata(segmentMessage));
-          }
-          streamState.activeMessageId = newId;
-          streamState.segmentContent = finalAnswer;
-          streamState.segmentIds.push(newId);
-          streamState.nonEmptySegmentIds.add(newId);
-        }
       }
 
-      const answer = runResult.finalEvent.answer || streamState.segmentContent || streamState.fullContent;
+      const answer = streamState.segmentContent || streamState.fullContent;
       const usage = runResult.finalEvent.usage;
       const completionMetadata = this.completionMetadataForBackend(turnBackend, input.selectedModel, codexRunSettings, usage);
       const roomCostTotal = await this.store.incrementRoomAICost(input.roomId, completionMetadata.cost || null);
 
       const finalActiveId = streamState.activeMessageId;
-      const finalMessage: Message = {
-        ...aiMessage,
-        id: finalActiveId,
-        content: answer,
-        status: 'complete',
-        timestamp: this.now().toISOString(),
-        aiModel: completionMetadata.aiModel,
-        usage: completionMetadata.usage,
-        cost: completionMetadata.cost,
-      };
-      const finalRoom = await this.store.upsertMessage(finalMessage);
-      if (!finalRoom) {
-        throw new Error('Unable to save the completed agent response');
+      const hasVisibleText = streamState.nonEmptySegmentIds.size > 0;
+      let finalMessage: Message | null = null;
+      let finalRoom: Room | null = null;
+      if (hasVisibleText) {
+        finalMessage = {
+          ...aiMessage,
+          id: finalActiveId,
+          content: answer,
+          status: 'complete',
+          timestamp: this.now().toISOString(),
+          aiModel: completionMetadata.aiModel,
+          usage: completionMetadata.usage,
+          cost: completionMetadata.cost,
+        };
+        finalRoom = await this.store.upsertMessage(finalMessage);
+        if (!finalRoom) {
+          throw new Error('Unable to save the completed agent response');
+        }
+      } else {
+        const deleteResult = await this.store.deleteMessageById(input.roomId, aiMessageId).catch(err => {
+          this.logger.warn('Failed to clean up empty code-agent placeholder', { error: err, roomId: input.roomId, messageId: aiMessageId });
+          return null;
+        });
+        if (deleteResult) {
+          this.emitter.to(input.roomId).emit('message_deleted', aiMessageId, input.roomId);
+        }
       }
 
       // Clean up unused initial placeholder if streaming moved to a new segment
-      if (finalActiveId !== aiMessageId) {
+      if (hasVisibleText && finalActiveId !== aiMessageId) {
         const firstSegmentUsed = streamState.nonEmptySegmentIds.has(aiMessageId);
         if (!firstSegmentUsed) {
           await this.store.deleteMessageById(input.roomId, aiMessageId).catch(err => {
             this.logger.warn('Failed to clean up unused code-agent placeholder', { error: err, roomId: input.roomId, messageId: aiMessageId });
           });
-          this.emitter.to(input.roomId).emit('message_deleted', { roomId: input.roomId, messageId: aiMessageId });
+          this.emitter.to(input.roomId).emit('message_deleted', aiMessageId, input.roomId);
         }
       }
 
@@ -458,17 +448,22 @@ export class CodeAgentSessionService {
         runnerProcess = null;
       }
       this.activeTurns.delete(input.roomId);
-      this.emitter.to(input.roomId).emit('ai_stream_end', {
-        messageId: finalActiveId,
-        roomId: input.roomId,
-        content: finalMessage.content,
-        aiModel: finalMessage.aiModel,
-        usage: finalMessage.usage,
-        cost: finalMessage.cost,
-        sessionCost: roomCostTotal,
-      });
+      if (finalMessage) {
+        this.emitter.to(input.roomId).emit('ai_stream_end', {
+          messageId: finalActiveId,
+          roomId: input.roomId,
+          content: finalMessage.content,
+          aiModel: finalMessage.aiModel,
+          usage: finalMessage.usage,
+          cost: finalMessage.cost,
+          sessionCost: roomCostTotal,
+        });
+      }
       this.emitter.to(input.roomId).emit('ai_cost_total', roomCostTotal);
-      this.emitter.to((idleRoom || finalRoom).creatorId).emit('room_updated', idleRoom || finalRoom);
+      const roomForUpdate = idleRoom || finalRoom;
+      if (roomForUpdate) {
+        this.emitter.to(roomForUpdate.creatorId).emit('room_updated', roomForUpdate);
+      }
       await this.recordTurnEvent('info', 'code_agent.turn.completed', input, turnId, turnStartedAtMs, {
         sessionId: runResult.finalEvent.sessionId,
         provider: isCodexBackend(turnBackend) ? 'codex' : input.selectedModel.provider,
