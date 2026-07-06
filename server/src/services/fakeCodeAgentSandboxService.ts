@@ -43,6 +43,7 @@ export class FakeCodeAgentSandboxService implements CodeAgentSandboxService {
   readonly initializedWorkspaceVersionControlSandboxIds: string[] = [];
   readonly startedRunnerCommands: string[] = [];
   readonly startedRunnerEnvs: Record<string, string>[] = [];
+  readonly startedRunnerTimeouts: Array<number | undefined> = [];
   readonly stoppedRunnerCommands: string[] = [];
   readonly sandboxTimeoutUpdates: Array<{ sandboxId: string; ttlMs: number }> = [];
   readonly deletedSecretFilePaths: string[] = [];
@@ -126,6 +127,7 @@ export class FakeCodeAgentSandboxService implements CodeAgentSandboxService {
     this.consumeFailure('startRunner');
     this.startedRunnerCommands.push(input.command);
     this.startedRunnerEnvs.push({ ...(input.env || {}) });
+    this.startedRunnerTimeouts.push(input.timeoutMs);
     return {
       command: input.command,
       stop: async () => {

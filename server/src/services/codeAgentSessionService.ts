@@ -811,6 +811,7 @@ export class CodeAgentSessionService {
         handle: sandbox,
         command: this.daemonCommand(),
         env: daemonEnv,
+        timeoutMs: 0,
       }),
     });
   }

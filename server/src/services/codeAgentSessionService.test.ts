@@ -432,6 +432,7 @@ describe('CodeAgentSessionService', () => {
     await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
 
     assert.deepEqual(sandboxService.startedRunnerCommands, [DEFAULT_CODE_AGENT_DAEMON_COMMAND]);
+    assert.deepEqual(sandboxService.startedRunnerTimeouts, [0]);
     assert.deepEqual(sandboxService.stoppedRunnerCommands, []);
     assert.deepEqual(contexts.map(context => context.command), [
       DEFAULT_CODE_AGENT_DAEMON_COMMAND,
