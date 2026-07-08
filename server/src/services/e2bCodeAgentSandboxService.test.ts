@@ -1,6 +1,9 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { spawnSync } from 'child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import path from 'path';
 import { PassThrough } from 'stream';
 import { E2BCodeAgentSandboxService, E2BSandboxDriver, E2BSandboxDriverHandle } from './e2bCodeAgentSandboxService';
 
@@ -219,6 +222,31 @@ class FakeE2BDriver implements E2BSandboxDriver {
     };
   }
 }
+
+const runGit = (workspace: string, args: string[]) => spawnSync('git', args, {
+  cwd: workspace,
+  encoding: 'utf8',
+  env: {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'RoomTalk Test',
+    GIT_AUTHOR_EMAIL: 'roomtalk-test@example.invalid',
+    GIT_COMMITTER_NAME: 'RoomTalk Test',
+    GIT_COMMITTER_EMAIL: 'roomtalk-test@example.invalid',
+  },
+});
+
+const captureWorkspaceVersionControlCommand = async (workspace: string): Promise<string> => {
+  const driver = new FakeE2BDriver();
+  const service = new E2BCodeAgentSandboxService(driver, {
+    templateId: 'roomtalk-code-agent',
+    workspace,
+  });
+  const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
+
+  await service.initializeWorkspaceVersionControl(handle);
+
+  return driver.commands[0];
+};
 
 describe('E2BCodeAgentSandboxService', () => {
   it('creates, starts commands, and destroys E2B sandboxes through the driver', async () => {
@@ -482,7 +510,7 @@ describe('E2BCodeAgentSandboxService', () => {
     );
   });
 
-  it('initializes workspace version control with a baseline commit', async () => {
+  it('initializes an empty workspace with a baseline commit', async () => {
     const driver = new FakeE2BDriver();
     const service = new E2BCodeAgentSandboxService(driver, { templateId: 'roomtalk-code-agent' });
     const handle = await service.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60_000 });
@@ -492,9 +520,45 @@ describe('E2BCodeAgentSandboxService', () => {
     assert.equal(driver.commands.length, 1);
     assert.match(driver.commands[0], /cd '\/workspace'/);
     assert.match(driver.commands[0], /git init -b main/);
-    assert.match(driver.commands[0], /git add -A/);
     assert.match(driver.commands[0], /git commit --allow-empty -m "workspace baseline"/);
+    assert.doesNotMatch(driver.commands[0], /git add -A/);
+    assert.doesNotMatch(driver.commands[0], /git commit -m "workspace baseline"/);
     assert.deepEqual(driver.commandOptions, [{ timeoutMs: 30_000 }]);
+  });
+
+  it('creates the baseline only for a newly initialized empty workspace', async () => {
+    const workspace = mkdtempSync(path.join(tmpdir(), 'roomtalk-empty-workspace-'));
+    try {
+      const command = await captureWorkspaceVersionControlCommand(workspace);
+
+      const result = spawnSync('bash', ['-lc', command], { encoding: 'utf8' });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(runGit(workspace, ['log', '--format=%s']).stdout.trim(), 'workspace baseline');
+      assert.equal(runGit(workspace, ['status', '--porcelain=v1']).stdout, '');
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('does not create a new baseline for an imported workspace with existing git history', async () => {
+    const workspace = mkdtempSync(path.join(tmpdir(), 'roomtalk-imported-workspace-'));
+    try {
+      assert.equal(runGit(workspace, ['init', '-b', 'main']).status, 0);
+      writeFileSync(path.join(workspace, 'README.md'), 'before\n');
+      assert.equal(runGit(workspace, ['add', 'README.md']).status, 0);
+      assert.equal(runGit(workspace, ['commit', '-m', 'original baseline']).status, 0);
+      writeFileSync(path.join(workspace, 'README.md'), 'after\n');
+
+      const command = await captureWorkspaceVersionControlCommand(workspace);
+      const result = spawnSync('bash', ['-lc', command], { encoding: 'utf8' });
+
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(runGit(workspace, ['rev-list', '--count', 'HEAD']).stdout.trim(), '1');
+      assert.equal(runGit(workspace, ['log', '-1', '--format=%s']).stdout.trim(), 'original baseline');
+      assert.match(runGit(workspace, ['status', '--porcelain=v1']).stdout, /^ M README\.md/m);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
   });
 
   it('reads workspace changed files from git status output', async () => {
