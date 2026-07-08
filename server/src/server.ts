@@ -30,7 +30,11 @@ import { resolveCorsOrigin } from './services/corsConfig';
 import { createOutboxWorkerFromEnv, OutboxWorker } from './services/outboxWorker';
 import { createCodeAgentAccessControl } from './services/codeAgentAccessControl';
 import { createCodeAgentRunner } from './services/codeAgentRunner';
-import { CodeAgentSandboxLifecycleService } from './services/codeAgentSandboxLifecycle';
+import {
+  CodeAgentSandboxLifecycleService,
+  DEFAULT_ARTIFACT_MIGRATION_MAX_ARCHIVE_BYTES,
+  DEFAULT_ARTIFACT_MIGRATION_TIMEOUT_MS,
+} from './services/codeAgentSandboxLifecycle';
 import { CodeAgentSessionService } from './services/codeAgentSessionService';
 import { E2BCodeAgentSandboxService, E2BSandboxDriver } from './services/e2bCodeAgentSandboxService';
 import { createE2BSdkDriver } from './services/e2bSdkDriver';
@@ -318,6 +322,14 @@ const codeAgentSandboxLifecycle = new CodeAgentSandboxLifecycleService(store, co
   reconnectTimedOutSandboxes: codeAgentRuntimeConfig.e2bLifecycle.onTimeout === 'pause',
   artifactVersion: codeAgentRuntimeConfig.artifactVersion,
   codeAgentSourceRef: codeAgentRuntimeConfig.codeAgentSourceRef,
+  artifactMigrationMaxArchiveBytes: parsePositiveIntegerEnv(
+    'CODE_AGENT_ARTIFACT_MIGRATION_MAX_ARCHIVE_BYTES',
+    DEFAULT_ARTIFACT_MIGRATION_MAX_ARCHIVE_BYTES
+  ),
+  artifactMigrationTimeoutMs: parsePositiveIntegerEnv(
+    'CODE_AGENT_ARTIFACT_MIGRATION_TIMEOUT_MS',
+    DEFAULT_ARTIFACT_MIGRATION_TIMEOUT_MS
+  ),
 });
 const fakeCodeAgentToolOutput = [
   'stdout: hello from Coco Agent fake runner',

@@ -267,6 +267,38 @@ describe('CodeAgentSandboxLifecycleService', () => {
     assert.equal(await sandboxService.countActiveSandboxes(), 1);
   });
 
+  it('keeps the old sandbox when artifact migration archive exceeds the configured limit', async () => {
+    const sandboxService = new FakeCodeAgentSandboxService(() => new Date('2026-05-03T00:00:00.000Z'));
+    const oldHandle = await sandboxService.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60 * 60 * 1000 });
+    sandboxService.setWorkspaceFileContent(oldHandle.id, 'src/app.ts', 'console.log("old workspace");');
+    const store = new MemoryRoomStore([room({
+      sandboxStatus: 'ready',
+      sandboxId: oldHandle.id,
+      sandboxUpdatedAt: '2026-05-03T00:00:00.000Z',
+      sandboxArtifactVersion: 'artifact-v1',
+    })]);
+    const { lifecycle } = createLifecycle(
+      store,
+      sandboxService,
+      () => new Date('2026-05-03T00:01:00.000Z'),
+      {
+        artifactVersion: 'artifact-v2',
+        artifactMigrationMaxArchiveBytes: 8,
+      },
+    );
+
+    const result = await lifecycle.ensureReadySandbox('room-1', 'client-1');
+
+    assert.equal(failureReason(result), 'sandbox_error');
+    assert.deepEqual(sandboxService.exportedWorkspaceArchiveSandboxIds, []);
+    assert.deepEqual(sandboxService.importedWorkspaceArchiveSandboxIds, []);
+    assert.deepEqual(sandboxService.destroyedSandboxIds, []);
+    assert.equal(await sandboxService.countActiveSandboxes(), 1);
+    const savedRoom = await store.getRoomById('room-1');
+    assert.equal(savedRoom?.sandboxId, oldHandle.id);
+    assert.equal(savedRoom?.sandboxArtifactVersion, 'artifact-v1');
+  });
+
   it('destroys the replacement sandbox when artifact migration loses the sandbox CAS race', async () => {
     const sandboxService = new FakeCodeAgentSandboxService(() => new Date('2026-05-03T00:00:00.000Z'));
     const oldHandle = await sandboxService.create({ roomId: 'room-1', creatorId: 'client-1', ttlMs: 60 * 60 * 1000 });

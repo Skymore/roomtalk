@@ -44,8 +44,8 @@ export interface CodeAgentSandboxLifecycleStore {
   findInterruptedCodeAgentRooms(): Promise<Room[]>;
 }
 
-const DEFAULT_ARTIFACT_MIGRATION_MAX_ARCHIVE_BYTES = 500 * 1024 * 1024;
-const DEFAULT_ARTIFACT_MIGRATION_TIMEOUT_MS = 5 * 60 * 1000;
+export const DEFAULT_ARTIFACT_MIGRATION_MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
+export const DEFAULT_ARTIFACT_MIGRATION_TIMEOUT_MS = 5 * 60 * 1000;
 
 const defaultOptions: CodeAgentSandboxLifecycleOptions = {
   sandboxTtlMs: 60 * 60 * 1000,
