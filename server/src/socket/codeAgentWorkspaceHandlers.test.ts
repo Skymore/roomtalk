@@ -103,6 +103,7 @@ const createHarness = (options: {
   codeAgentAccess?: ReturnType<typeof createCodeAgentAccessControl>;
   codeWorkspaceAssetAccess?: CodeWorkspaceAssetAccess;
   publishedArtifacts?: any[];
+  lifecycleSandboxId?: string;
 } = {}) => {
   const socket = new FakeSocket(options.socketId);
   const currentRoom = options.currentRoom || room();
@@ -125,6 +126,7 @@ const createHarness = (options: {
   const createWorkspaceDirectoryCalls: Array<{ sandboxId: string; path: string }> = [];
   const renameWorkspaceEntryCalls: Array<{ sandboxId: string; fromPath: string; toPath: string }> = [];
   const deleteWorkspaceEntryCalls: Array<{ sandboxId: string; path: string }> = [];
+  const ensureReadySandboxCalls: Array<{ roomId: string; clientId: string }> = [];
   const listSitesForRoomCalls: Array<{ roomId: string; requestBaseUrl?: string }> = [];
   const socketEvents: Array<{ roomId: string; event: string; payload: unknown }> = [];
   const io = {
@@ -153,6 +155,26 @@ const createHarness = (options: {
     normalizeAIModel: (() => ({})) as any,
     getAIClientForModel: (() => ({})) as any,
     codeAgentAccess: options.codeAgentAccess ?? createCodeAgentAccessControl({ enabled: true }),
+    ...(options.lifecycleSandboxId ? {
+      codeAgentSandboxLifecycle: {
+        ensureReadySandbox: async (roomId: string, clientId: string) => {
+          ensureReadySandboxCalls.push({ roomId, clientId });
+          return {
+            ok: true,
+            room: currentRoom,
+            created: options.lifecycleSandboxId !== currentRoom.sandboxId,
+            handle: {
+              id: options.lifecycleSandboxId!,
+              provider: 'e2b',
+              roomId: currentRoom.id,
+              creatorId: currentRoom.creatorId,
+              workspace: workspaceRoot,
+              createdAt: '2026-05-03T00:00:00.000Z',
+            },
+          };
+        },
+      },
+    } : {}),
     codeWorkspaceAssetAccess: options.codeWorkspaceAssetAccess,
     publishedStaticSiteService: {
       publicBaseUrlForRequest: (clientOrigin?: string) => clientOrigin,
@@ -358,6 +380,7 @@ const createHarness = (options: {
     workspaceTerminalInputs,
     workspaceTerminalResizes,
     stoppedWorkspaceTerminals,
+    ensureReadySandboxCalls,
     resolveWorkspacePreviewTargetCalls,
     listWorkspacePreviewServersCalls,
     writeWorkspaceFileCalls,
@@ -691,6 +714,25 @@ describe('code-agent workspace socket handlers', () => {
     assert.equal(closed.session.status, 'closed');
     assert.deepEqual(stoppedWorkspaceTerminals, ['sandbox-1']);
     assert.equal((socketEvents.at(-1)?.payload as any).type, 'closed');
+  });
+
+  it('ensures the latest workspace sandbox before opening a terminal', async () => {
+    const {
+      socket,
+      ensureReadySandboxCalls,
+      startWorkspaceTerminalCalls,
+    } = createHarness({ lifecycleSandboxId: 'sandbox-new' });
+
+    const opened = await socket.invoke<any>('open_code_workspace_terminal_session', {
+      roomId: 'room-1',
+      terminalId: 'terminal',
+      cols: 100,
+      rows: 32,
+    });
+
+    assert.equal(opened.success, true);
+    assert.deepEqual(ensureReadySandboxCalls, [{ roomId: 'room-1', clientId: 'client-1' }]);
+    assert.deepEqual(startWorkspaceTerminalCalls, [{ sandboxId: 'sandbox-new', cols: 100, rows: 32 }]);
   });
 
   it('lists browser preview servers through the ready sandbox', async () => {

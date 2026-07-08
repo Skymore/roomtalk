@@ -547,6 +547,7 @@ export function registerCodeAgentWorkspaceHandlers({
   store,
   socketLogger,
   codeAgentAccess = createCodeAgentAccessControl({ enabled: false }),
+  codeAgentSandboxLifecycle,
   codeAgentSandboxService,
   codeAgentSessionService,
   codeWorkspaceAssetAccess,
@@ -603,8 +604,22 @@ export function registerCodeAgentWorkspaceHandlers({
   };
 
   const connectReadyWorkspace = async (
-    room: Room
+    room: Room,
+    clientId?: string
   ): Promise<{ success: true; handle: CodeAgentSandboxHandle } | { success: false; error: string }> => {
+    if (clientId && codeAgentSandboxLifecycle) {
+      const ready = await codeAgentSandboxLifecycle.ensureReadySandbox(room.id, clientId);
+      if (ready.ok) {
+        return { success: true, handle: ready.handle };
+      }
+      if (ready.reason === 'creating') {
+        return { success: false, error: 'Workspace sandbox is still starting' };
+      }
+      if (ready.reason === 'forbidden') {
+        return { success: false, error: 'You are not authorized to access this workspace sandbox' };
+      }
+      return { success: false, error: 'Workspace sandbox is not ready' };
+    }
     if (!room.sandboxId || room.sandboxStatus !== 'ready') {
       return { success: false, error: 'Workspace sandbox is not ready' };
     }
@@ -1168,7 +1183,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: true, servers: [] });
         return;
       }
-      const workspace = await connectReadyWorkspace(access.room);
+      const workspace = await connectReadyWorkspace(access.room, access.clientId);
       if (!workspace.success) {
         callback?.({ success: false, error: workspace.error });
         return;
@@ -1204,7 +1219,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'Workspace terminal is unavailable' });
         return;
       }
-      const workspace = await connectReadyWorkspace(access.room);
+      const workspace = await connectReadyWorkspace(access.room, access.clientId);
       if (!workspace.success) {
         callback?.({ success: false, error: workspace.error });
         return;
@@ -1469,7 +1484,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'Workspace file browsing is unavailable' });
         return;
       }
-      const workspace = await connectReadyWorkspace(access.room);
+      const workspace = await connectReadyWorkspace(access.room, access.clientId);
       if (!workspace.success) {
         callback?.({ success: false, error: workspace.error });
         return;
@@ -1511,7 +1526,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'Workspace file search is unavailable' });
         return;
       }
-      const workspace = await connectReadyWorkspace(access.room);
+      const workspace = await connectReadyWorkspace(access.room, access.clientId);
       if (!workspace.success) {
         callback?.({ success: false, error: workspace.error });
         return;
@@ -1550,7 +1565,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'Workspace refs are unavailable' });
         return;
       }
-      const workspace = await connectReadyWorkspace(access.room);
+      const workspace = await connectReadyWorkspace(access.room, access.clientId);
       if (!workspace.success) {
         callback?.({ success: false, error: workspace.error });
         return;
@@ -1589,7 +1604,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'Workspace file reading is unavailable' });
         return;
       }
-      const workspace = await connectReadyWorkspace(access.room);
+      const workspace = await connectReadyWorkspace(access.room, access.clientId);
       if (!workspace.success) {
         callback?.({ success: false, error: workspace.error });
         return;
@@ -1625,7 +1640,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'Workspace diff viewing is unavailable' });
         return;
       }
-      const workspace = await connectReadyWorkspace(access.room);
+      const workspace = await connectReadyWorkspace(access.room, access.clientId);
       if (!workspace.success) {
         callback?.({ success: false, error: workspace.error });
         return;
@@ -1670,7 +1685,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'Workspace file reading is unavailable' });
         return;
       }
-      const workspace = await connectReadyWorkspace(access.room);
+      const workspace = await connectReadyWorkspace(access.room, access.clientId);
       if (!workspace.success) {
         callback?.({ success: false, error: workspace.error });
         return;
@@ -1715,7 +1730,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'Workspace file preview is unavailable' });
         return;
       }
-      const workspace = await connectReadyWorkspace(access.room);
+      const workspace = await connectReadyWorkspace(access.room, access.clientId);
       if (!workspace.success) {
         callback?.({ success: false, error: workspace.error });
         return;
@@ -1775,7 +1790,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'Workspace file writing is unavailable' });
         return;
       }
-      const workspace = await connectReadyWorkspace(access.room);
+      const workspace = await connectReadyWorkspace(access.room, access.clientId);
       if (!workspace.success) {
         callback?.({ success: false, error: workspace.error });
         return;
@@ -1815,7 +1830,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'Workspace directory creation is unavailable' });
         return;
       }
-      const workspace = await connectReadyWorkspace(access.room);
+      const workspace = await connectReadyWorkspace(access.room, access.clientId);
       if (!workspace.success) {
         callback?.({ success: false, error: workspace.error });
         return;
@@ -1852,7 +1867,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'Workspace entry rename is unavailable' });
         return;
       }
-      const workspace = await connectReadyWorkspace(access.room);
+      const workspace = await connectReadyWorkspace(access.room, access.clientId);
       if (!workspace.success) {
         callback?.({ success: false, error: workspace.error });
         return;
@@ -1888,7 +1903,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'Workspace entry deletion is unavailable' });
         return;
       }
-      const workspace = await connectReadyWorkspace(access.room);
+      const workspace = await connectReadyWorkspace(access.room, access.clientId);
       if (!workspace.success) {
         callback?.({ success: false, error: workspace.error });
         return;

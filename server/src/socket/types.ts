@@ -4,6 +4,7 @@ import type { RoomStore } from '../repositories/store';
 import type { AIModelOption } from '../types';
 import type { AIClientWrapper } from '../services/aiClients';
 import type { CodeAgentAccessControl } from '../services/codeAgentAccessControl';
+import type { CodeAgentSandboxLifecycleService } from '../services/codeAgentSandboxLifecycle';
 import type { CodeAgentSandboxService } from '../services/codeAgentSandboxService';
 import type { CodeAgentSessionService } from '../services/codeAgentSessionService';
 import type { CodeWorkspaceAssetAccess } from '../services/codeWorkspaceAssetAccess';
@@ -20,6 +21,7 @@ export interface SocketHandlerDeps {
   assemblyAIApiKey?: string;
   codeAgentSessionService?: CodeAgentSessionService;
   codeAgentAccess?: CodeAgentAccessControl;
+  codeAgentSandboxLifecycle?: Pick<CodeAgentSandboxLifecycleService, 'ensureReadySandbox'>;
   codeAgentSandboxService?: CodeAgentSandboxService;
   codeWorkspaceAssetAccess?: CodeWorkspaceAssetAccess;
   publishedStaticSiteService?: PublishedStaticSiteService;

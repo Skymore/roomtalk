@@ -444,6 +444,7 @@ registerSocketHandlers({
   assemblyAIApiKey,
   codeAgentSessionService,
   codeAgentAccess,
+  codeAgentSandboxLifecycle,
   codeAgentSandboxService,
   codeWorkspaceAssetAccess,
   publishedStaticSiteService,
