@@ -30,6 +30,42 @@ describe('codeWorkspaceTerminalLocalEcho', () => {
     expect(writes).toEqual([]);
   });
 
+  it('keeps pending local echo across terminal control sequences', () => {
+    const writes: string[] = [];
+    const localEcho = createTerminalLocalEchoController({
+      write: (data) => writes.push(data),
+    });
+
+    expect(localEcho.handleInput('ls')).toBe(true);
+    expect(localEcho.handleRemoteData('\x1b[?2004h\x1b]133;A\x07')).toBe('\x1b[?2004h\x1b]133;A\x07');
+    expect(localEcho.handleRemoteData('\x1b[?2004hl')).toBe('\x1b[?2004h');
+    expect(localEcho.handleRemoteData('s\r\ncss\r\n')).toBe('\r\ncss\r\n');
+    expect(writes).toEqual(['ls']);
+  });
+
+  it('keeps pending local echo across prompt status text before the PTY echo arrives', () => {
+    const writes: string[] = [];
+    const localEcho = createTerminalLocalEchoController({
+      write: (data) => writes.push(data),
+    });
+
+    expect(localEcho.handleInput('l')).toBe(true);
+    expect(localEcho.handleRemoteData('[powerlevel10k] fetching gitstatusd .. [ok]\r')).toBe('[powerlevel10k] fetching gitstatusd .. [ok]\r');
+    expect(localEcho.handleRemoteData('l')).toBe('');
+    expect(writes).toEqual(['l']);
+  });
+
+  it('clears stale local echo when remote output moves to a new line without echoing it', () => {
+    const writes: string[] = [];
+    const localEcho = createTerminalLocalEchoController({
+      write: (data) => writes.push(data),
+    });
+
+    expect(localEcho.handleInput('x')).toBe(true);
+    expect(localEcho.handleRemoteData('command output\n')).toBe('command output\n');
+    expect(localEcho.handleRemoteData('x')).toBe('x');
+  });
+
   it('stops local echo while a sensitive prompt is active', () => {
     const writes: string[] = [];
     const localEcho = createTerminalLocalEchoController({

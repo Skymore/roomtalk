@@ -42,23 +42,30 @@ export function createTerminalLocalEchoController({
       return data;
     }
 
-    if (data.startsWith(pendingEcho)) {
-      const remainder = data.slice(pendingEcho.length);
+    const printableText = stripTerminalControls(data);
+    if (!printableText) {
+      return data;
+    }
+
+    if (printableText.startsWith(pendingEcho)) {
+      const remainder = removeLeadingPrintableChars(data, pendingEcho.length);
       pendingEcho = '';
       return remainder;
     }
-    if (pendingEcho.startsWith(data)) {
-      pendingEcho = pendingEcho.slice(data.length);
-      return '';
+    if (pendingEcho.startsWith(printableText)) {
+      pendingEcho = pendingEcho.slice(printableText.length);
+      return removeLeadingPrintableChars(data, printableText.length);
     }
 
-    const sharedPrefixLength = commonPrefixLength(data, pendingEcho);
+    const sharedPrefixLength = commonPrefixLength(printableText, pendingEcho);
     if (sharedPrefixLength > 0) {
       pendingEcho = pendingEcho.slice(sharedPrefixLength);
-      return data.slice(sharedPrefixLength);
+      return removeLeadingPrintableChars(data, sharedPrefixLength);
     }
 
-    pendingEcho = '';
+    if (data.includes('\n')) {
+      pendingEcho = '';
+    }
     return data;
   };
 
@@ -114,4 +121,60 @@ function stripAnsi(value: string): string {
   return value
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
     .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '');
+}
+
+function stripTerminalControls(value: string): string {
+  return stripAnsi(value).replace(/[\x00-\x1f\x7f-\x9f]/g, '');
+}
+
+function removeLeadingPrintableChars(value: string, count: number): string {
+  if (count <= 0) {
+    return value;
+  }
+
+  let removed = 0;
+  let index = 0;
+  let filtered = '';
+  while (index < value.length && removed < count) {
+    const escapeLength = terminalEscapeSequenceLength(value, index);
+    if (escapeLength > 0) {
+      filtered += value.slice(index, index + escapeLength);
+      index += escapeLength;
+      continue;
+    }
+
+    const code = value.charCodeAt(index);
+    if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) {
+      filtered += value[index];
+      index += 1;
+      continue;
+    }
+
+    index += 1;
+    removed += 1;
+  }
+
+  return `${filtered}${value.slice(index)}`;
+}
+
+function terminalEscapeSequenceLength(value: string, index: number): number {
+  if (value.charCodeAt(index) !== 0x1b) {
+    return 0;
+  }
+
+  const next = value[index + 1];
+  if (next === '[') {
+    const match = /\x1b\[[0-?]*[ -/]*[@-~]/.exec(value.slice(index));
+    return match?.index === 0 ? match[0].length : 1;
+  }
+  if (next === ']') {
+    const rest = value.slice(index);
+    const bellIndex = rest.indexOf('\x07');
+    const stIndex = rest.indexOf('\x1b\\');
+    const endCandidates = [bellIndex >= 0 ? bellIndex + 1 : -1, stIndex >= 0 ? stIndex + 2 : -1]
+      .filter(candidate => candidate > 0);
+    return endCandidates.length > 0 ? Math.min(...endCandidates) : value.length - index;
+  }
+
+  return Math.min(2, value.length - index);
 }
