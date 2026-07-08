@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "artifactName": "roomtalk-code-agent",
-  "artifactVersion": "roomtalk-code-agent-2026-07-06-sandbox-daemon-v1",
+  "artifactVersion": "roomtalk-code-agent-2026-07-08-shell-timeout-10m-v1",
   "pythonVersion": "3.12",
   "baseImage": {
     "name": "python",
@@ -11,8 +11,8 @@
   "codeAgentEngine": {
     "packageName": "coco",
     "packageVersion": "0.1.3a0",
-    "sourceRepo": "https://github.com/Venti0325/Coco.git",
-    "sourceRef": "a4e70e674e46d59a63874371276f5fec0fcd3f41"
+    "sourceRepo": "https://github.com/Skymore/roomtalk.git",
+    "sourceRef": "d7048779e43aaade9fa0abccf42fcca9c6857e1a"
   },
   "runner": {
     "packageName": "roomtalk-code-agent-runner",
