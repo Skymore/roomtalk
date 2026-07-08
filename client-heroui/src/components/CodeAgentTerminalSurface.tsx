@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Terminal as XTermTerminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { createTerminalLocalEchoController } from '../utils/codeWorkspaceTerminalLocalEcho';
 import {
   inputCodeWorkspaceTerminalSession,
   openCodeWorkspaceTerminalSession,
@@ -52,6 +53,9 @@ export function CodeAgentTerminalSurface({
     terminal.open(container);
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
+    const localEcho = createTerminalLocalEchoController({
+      write: (data) => terminal.write(data),
+    });
 
     const sendResize = () => {
       try {
@@ -84,6 +88,7 @@ export function CodeAgentTerminalSurface({
     };
 
     const dataSubscription = terminal.onData((data) => {
+      localEcho.handleInput(data);
       void inputCodeWorkspaceTerminalSession({ roomId, terminalId, data }).catch((nextError) => {
         setError(nextError instanceof Error ? nextError.message : 'Terminal input failed');
       });
@@ -94,9 +99,13 @@ export function CodeAgentTerminalSurface({
         return;
       }
       if (event.type === 'data' && typeof event.data === 'string') {
-        terminal.write(event.data);
+        const remoteData = localEcho.handleRemoteData(event.data);
+        if (remoteData) {
+          terminal.write(remoteData);
+        }
       }
       if ((event.type === 'closed' || event.type === 'exited') && event.snapshot) {
+        localEcho.reset();
         terminal.writeln('');
         terminal.writeln(`[terminal ${event.snapshot.status}]`);
       }
@@ -123,6 +132,7 @@ export function CodeAgentTerminalSurface({
       }).then((session) => {
         setError(null);
         if (session.output) {
+          localEcho.reset();
           terminal.write(session.output);
         }
       }).catch((nextError) => {
