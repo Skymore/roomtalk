@@ -22,8 +22,10 @@ import {
   ReadCodeAgentSandboxSecretFileOptions,
   ReadCodeAgentWorkspaceDiffOptions,
   ReadCodeAgentWorkspaceFileOptions,
+  ResolveCodeAgentWorkspacePreviewTargetInput,
   SearchCodeAgentWorkspaceEntriesOptions,
   StartCodeAgentRunnerInput,
+  StartCodeAgentWorkspaceCommandInput,
   WriteCodeAgentSandboxSecretFileInput,
   WriteCodeAgentWorkspaceFileInput,
   searchCodeAgentWorkspaceEntries,
@@ -44,7 +46,12 @@ export class FakeCodeAgentSandboxService implements CodeAgentSandboxService {
   readonly startedRunnerCommands: string[] = [];
   readonly startedRunnerEnvs: Record<string, string>[] = [];
   readonly startedRunnerTimeouts: Array<number | undefined> = [];
+  readonly startedWorkspaceCommands: string[] = [];
+  readonly startedWorkspaceCommandEnvs: Record<string, string>[] = [];
+  readonly startedWorkspaceCommandTimeouts: Array<number | undefined> = [];
   readonly stoppedRunnerCommands: string[] = [];
+  readonly stoppedWorkspaceCommands: string[] = [];
+  readonly resolvedWorkspacePreviewTargets: Array<{ sandboxId: string; port: number; protocol?: 'http' | 'https'; path?: string }> = [];
   readonly sandboxTimeoutUpdates: Array<{ sandboxId: string; ttlMs: number }> = [];
   readonly deletedSecretFilePaths: string[] = [];
   readonly exportedWorkspaceArchiveSandboxIds: string[] = [];
@@ -132,6 +139,19 @@ export class FakeCodeAgentSandboxService implements CodeAgentSandboxService {
       command: input.command,
       stop: async () => {
         this.stoppedRunnerCommands.push(input.command);
+      },
+    };
+  }
+
+  async startWorkspaceCommand(input: StartCodeAgentWorkspaceCommandInput): Promise<CodeAgentRunnerProcess> {
+    this.consumeFailure('startRunner');
+    this.startedWorkspaceCommands.push(input.command);
+    this.startedWorkspaceCommandEnvs.push({ ...(input.env || {}) });
+    this.startedWorkspaceCommandTimeouts.push(input.timeoutMs);
+    return {
+      command: input.command,
+      stop: async () => {
+        this.stoppedWorkspaceCommands.push(input.command);
       },
     };
   }
@@ -379,6 +399,29 @@ export class FakeCodeAgentSandboxService implements CodeAgentSandboxService {
       throw new Error(`Fake code-agent sandbox not found: ${handle.id}`);
     }
     return (this.workspacePreviewServersBySandboxId.get(handle.id) || []).map(server => ({ ...server }));
+  }
+
+  async resolveWorkspacePreviewTarget(
+    handle: CodeAgentSandboxHandle,
+    input: ResolveCodeAgentWorkspacePreviewTargetInput
+  ) {
+    this.consumeFailure('connect');
+    if (!this.sandboxes.has(handle.id)) {
+      throw new Error(`Fake code-agent sandbox not found: ${handle.id}`);
+    }
+    this.resolvedWorkspacePreviewTargets.push({
+      sandboxId: handle.id,
+      port: input.port,
+      protocol: input.protocol,
+      path: input.path,
+    });
+    const protocol = input.protocol ?? 'http';
+    const targetPath = input.path || '/';
+    return {
+      requestedUrl: `${protocol}://localhost:${input.port}${targetPath}`,
+      resolvedUrl: `https://${input.port}-${handle.id}.example.test${targetPath}`,
+      resolutionKind: 'e2b-port-host' as const,
+    };
   }
 
   async writeWorkspaceFile(

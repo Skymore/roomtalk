@@ -126,6 +126,10 @@ type CodeWorkspaceAssetUrlAckResponse = SocketAckResponse & {
   asset?: unknown;
 };
 
+type CodeWorkspaceFilePreviewAckResponse = SocketAckResponse & {
+  preview?: unknown;
+};
+
 type CodeWorkspacePreviewSessionAckResponse = SocketAckResponse & {
   session?: unknown;
   sessions?: unknown[];
@@ -1135,6 +1139,22 @@ export const requestCodeWorkspaceAssetUrl = (roomId: string, path: string): Prom
     }
 
     return response.asset;
+  })
+);
+
+export const requestResolveCodeWorkspaceFilePreview = (roomId: string, path: string): Promise<unknown> => (
+  emitWithAck<CodeWorkspaceFilePreviewAckResponse>(
+    'resolve_code_workspace_file_preview',
+    { roomId, path },
+    'Timed out while resolving workspace file preview',
+    'Failed to resolve workspace file preview',
+    { retryOnSocketReconnect: true },
+  ).then((response) => {
+    if (!response.preview) {
+      throw new Error('Server did not return workspace file preview');
+    }
+
+    return response.preview;
   })
 );
 

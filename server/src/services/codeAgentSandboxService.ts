@@ -40,6 +40,13 @@ export interface StartCodeAgentRunnerInput {
   timeoutMs?: number;
 }
 
+export interface StartCodeAgentWorkspaceCommandInput {
+  handle: CodeAgentSandboxHandle;
+  command: string;
+  env?: Record<string, string>;
+  timeoutMs?: number;
+}
+
 export interface ListCodeAgentWorkspaceEntriesOptions {
   maxDepth?: number;
   maxEntries?: number;
@@ -196,6 +203,7 @@ export interface CodeAgentSandboxService {
   initializeWorkspaceVersionControl?(handle: CodeAgentSandboxHandle): Promise<void>;
   setSandboxTimeout?(handle: CodeAgentSandboxHandle, ttlMs: number): Promise<CodeAgentSandboxHandle>;
   startRunner(input: StartCodeAgentRunnerInput): Promise<CodeAgentRunnerProcess>;
+  startWorkspaceCommand?(input: StartCodeAgentWorkspaceCommandInput): Promise<CodeAgentRunnerProcess>;
   getWorkspaceChanges?(handle: CodeAgentSandboxHandle): Promise<CodeAgentWorkspaceChanges>;
   getWorkspaceDiff?(handle: CodeAgentSandboxHandle, options?: ReadCodeAgentWorkspaceDiffOptions): Promise<CodeAgentWorkspaceDiff>;
   listWorkspaceRefs?(handle: CodeAgentSandboxHandle, options?: ListCodeAgentWorkspaceRefsOptions): Promise<CodeAgentWorkspaceRefs>;

@@ -3,6 +3,7 @@ import {
   requestCodeWorkspaceEntries,
   requestCodeWorkspaceEntrySearch,
   requestCodeWorkspaceFile,
+  requestResolveCodeWorkspaceFilePreview,
   requestCreateCodeWorkspaceDirectory,
   requestDeleteCodeWorkspaceEntry,
   requestRenameCodeWorkspaceEntry,
@@ -30,6 +31,30 @@ export interface CodeWorkspaceAssetUrl {
   relativeUrl: string;
   expiresAt: string;
 }
+
+export type CodeWorkspaceFilePreview =
+  | {
+      kind: 'static-file';
+      asset: CodeWorkspaceAssetUrl;
+    }
+  | {
+      kind: 'dev-server';
+      frameworkId: string;
+      frameworkName: string;
+      projectRoot: string;
+      command: string;
+      port: number;
+      status: 'running' | 'starting';
+      requestedUrl: string;
+      resolvedUrl?: string;
+      server?: {
+        host: string;
+        port: number;
+        url: string;
+        processName?: string | null;
+        pid?: number | null;
+      };
+    };
 
 export const loadCodeWorkspaceEntries = async (
   roomId: string,
@@ -104,6 +129,23 @@ export const createCodeWorkspaceAssetUrl = async (
   return validateWorkspaceAssetUrl(asset);
 };
 
+export const resolveCodeWorkspaceFilePreview = async (
+  roomId: string,
+  path: string,
+  options: { signal?: AbortSignal } = {}
+): Promise<CodeWorkspaceFilePreview> => {
+  if (options.signal?.aborted) {
+    throw new Error('Workspace preview request aborted');
+  }
+
+  const preview = await requestResolveCodeWorkspaceFilePreview(roomId, path);
+  if (options.signal?.aborted) {
+    throw new Error('Workspace preview request aborted');
+  }
+
+  return validateWorkspaceFilePreview(preview);
+};
+
 export const resolveCodeWorkspaceAssetUrl = (asset: CodeWorkspaceAssetUrl): string => (
   apiPath(asset.relativeUrl)
 );
@@ -154,6 +196,69 @@ const validateWorkspaceAssetUrl = (value: unknown): CodeWorkspaceAssetUrl => {
   return {
     relativeUrl: asset.relativeUrl,
     expiresAt: asset.expiresAt,
+  };
+};
+
+const validateWorkspaceFilePreview = (value: unknown): CodeWorkspaceFilePreview => {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Workspace preview response is invalid');
+  }
+  const preview = value as Partial<CodeWorkspaceFilePreview>;
+  if (preview.kind === 'static-file') {
+    if (!('asset' in preview)) {
+      throw new Error('Workspace preview response is invalid');
+    }
+    return {
+      kind: 'static-file',
+      asset: validateWorkspaceAssetUrl(preview.asset),
+    };
+  }
+  if (preview.kind === 'dev-server') {
+    if (
+      typeof preview.frameworkId !== 'string' ||
+      typeof preview.frameworkName !== 'string' ||
+      typeof preview.projectRoot !== 'string' ||
+      typeof preview.command !== 'string' ||
+      typeof preview.port !== 'number' ||
+      (preview.status !== 'running' && preview.status !== 'starting') ||
+      typeof preview.requestedUrl !== 'string'
+    ) {
+      throw new Error('Workspace preview response is invalid');
+    }
+    return {
+      kind: 'dev-server',
+      frameworkId: preview.frameworkId,
+      frameworkName: preview.frameworkName,
+      projectRoot: preview.projectRoot,
+      command: preview.command,
+      port: preview.port,
+      status: preview.status,
+      requestedUrl: preview.requestedUrl,
+      ...(typeof preview.resolvedUrl === 'string' ? { resolvedUrl: preview.resolvedUrl } : {}),
+      ...(validateWorkspacePreviewServer(preview.server) ? { server: validateWorkspacePreviewServer(preview.server)! } : {}),
+    };
+  }
+  throw new Error('Workspace preview response is invalid');
+};
+
+const validateWorkspacePreviewServer = (value: unknown): Extract<CodeWorkspaceFilePreview, { kind: 'dev-server' }>['server'] | null => {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const server = value as Partial<NonNullable<Extract<CodeWorkspaceFilePreview, { kind: 'dev-server' }>['server']>>;
+  if (
+    typeof server.host !== 'string' ||
+    typeof server.port !== 'number' ||
+    typeof server.url !== 'string'
+  ) {
+    return null;
+  }
+  return {
+    host: server.host,
+    port: server.port,
+    url: server.url,
+    ...(typeof server.processName === 'string' || server.processName === null ? { processName: server.processName } : {}),
+    ...(typeof server.pid === 'number' || server.pid === null ? { pid: server.pid } : {}),
   };
 };
 

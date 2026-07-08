@@ -11,12 +11,14 @@ import {
 } from "./mediaCache";
 
 const readBlobText = (blob: Blob) => (
-  new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(reader.error || new Error("Failed to read blob"));
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.readAsText(blob);
-  })
+  typeof blob.text === "function"
+    ? blob.text()
+    : new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error || new Error("Failed to read blob"));
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.readAsText(blob);
+    })
 );
 
 describe("mediaCache", () => {

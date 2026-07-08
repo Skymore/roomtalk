@@ -1,5 +1,6 @@
 import { createCodeAgentAccessControl } from '../services/codeAgentAccessControl';
 import { CodeWorkspaceAssetError } from '../services/codeWorkspaceAssetAccess';
+import { CodeWorkspaceFilePreview, CodeWorkspaceFilePreviewService } from '../services/codeWorkspaceFilePreview';
 import {
   CodeAgentSandboxHandle,
   CodeAgentWorkspaceChanges,
@@ -61,6 +62,12 @@ type WorkspaceAssetUrlAck = {
     relativeUrl: string;
     expiresAt: string;
   };
+  error?: string;
+};
+
+type WorkspaceFilePreviewAck = {
+  success: boolean;
+  preview?: CodeWorkspaceFilePreview;
   error?: string;
 };
 
@@ -473,6 +480,13 @@ export function registerCodeAgentWorkspaceHandlers({
   codeWorkspaceAssetAccess,
   publishedStaticSiteService,
 }: SocketConnectionContext) {
+  const codeWorkspaceFilePreviewService = codeAgentSandboxService && codeWorkspaceAssetAccess
+    ? new CodeWorkspaceFilePreviewService({
+      sandboxService: codeAgentSandboxService,
+      assetAccess: codeWorkspaceAssetAccess,
+    })
+    : null;
+
   const loadAuthorizedCodeAgentRoom = async (
     roomId: string | null,
     action: string
@@ -1333,6 +1347,55 @@ export function registerCodeAgentWorkspaceHandlers({
       }
       socketLogger.error('Failed to create code workspace asset URL', { error, clientId, roomId, path, socketId: socket.id });
       callback?.({ success: false, error: 'Failed to create workspace file preview URL' });
+    }
+  });
+
+  socket.on('resolve_code_workspace_file_preview', async (payload: unknown, callback?: (response: WorkspaceFilePreviewAck) => void) => {
+    const roomId = parseRoomId(payload);
+    const path = parseWorkspacePath(payload);
+    let clientId: string | null = null;
+
+    try {
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'resolve code workspace file preview');
+      clientId = access.clientId ?? null;
+      if (!access.success) {
+        callback?.({ success: false, error: access.error });
+        return;
+      }
+      if (!path) {
+        callback?.({ success: false, error: 'File path is required' });
+        return;
+      }
+      if (!codeWorkspaceFilePreviewService) {
+        callback?.({ success: false, error: 'Workspace file preview is unavailable' });
+        return;
+      }
+      const workspace = await connectReadyWorkspace(access.room);
+      if (!workspace.success) {
+        callback?.({ success: false, error: workspace.error });
+        return;
+      }
+      if (!access.room.sandboxId) {
+        callback?.({ success: false, error: 'Workspace sandbox is unavailable' });
+        return;
+      }
+
+      callback?.({
+        success: true,
+        preview: await codeWorkspaceFilePreviewService.resolve({
+          roomId: access.room.id,
+          sandboxId: access.room.sandboxId,
+          handle: workspace.handle,
+          path,
+        }),
+      });
+    } catch (error) {
+      if (error instanceof CodeWorkspaceAssetError) {
+        callback?.({ success: false, error: error.message });
+        return;
+      }
+      socketLogger.error('Failed to resolve code workspace file preview', { error, clientId, roomId, path, socketId: socket.id });
+      callback?.({ success: false, error: 'Failed to resolve workspace file preview' });
     }
   });
 

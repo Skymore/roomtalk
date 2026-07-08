@@ -26,6 +26,7 @@ import {
   CodeAgentWorkspacePreviewTargetResolution,
   SearchCodeAgentWorkspaceEntriesOptions,
   StartCodeAgentRunnerInput,
+  StartCodeAgentWorkspaceCommandInput,
   WriteCodeAgentSandboxSecretFileInput,
   WriteCodeAgentWorkspaceFileInput,
   searchCodeAgentWorkspaceEntries,
@@ -195,6 +196,17 @@ export class E2BCodeAgentSandboxService implements CodeAgentSandboxService {
   }
 
   async startRunner(input: StartCodeAgentRunnerInput): Promise<CodeAgentRunnerProcess> {
+    return this.startCommand(input);
+  }
+
+  async startWorkspaceCommand(input: StartCodeAgentWorkspaceCommandInput): Promise<CodeAgentRunnerProcess> {
+    return this.startCommand({
+      ...input,
+      timeoutMs: input.timeoutMs ?? 0,
+    });
+  }
+
+  private async startCommand(input: StartCodeAgentRunnerInput | StartCodeAgentWorkspaceCommandInput): Promise<CodeAgentRunnerProcess> {
     const handle = await this.driver.connect(input.handle.id);
     if (!handle.commands?.run) {
       throw new Error('E2B sandbox driver handle does not support command execution');

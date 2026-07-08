@@ -25,6 +25,7 @@ const loadCodeWorkspaceEntriesMock = vi.hoisted(() => vi.fn());
 const searchCodeWorkspaceEntriesMock = vi.hoisted(() => vi.fn());
 const loadCodeWorkspaceFileMock = vi.hoisted(() => vi.fn());
 const createCodeWorkspaceAssetUrlMock = vi.hoisted(() => vi.fn());
+const resolveCodeWorkspaceFilePreviewMock = vi.hoisted(() => vi.fn());
 const resolveCodeWorkspaceAssetUrlMock = vi.hoisted(() => vi.fn());
 const writeCodeWorkspaceFileMock = vi.hoisted(() => vi.fn());
 const createCodeWorkspaceDirectoryMock = vi.hoisted(() => vi.fn());
@@ -110,6 +111,7 @@ vi.mock('../utils/codeWorkspaceFiles', () => ({
   searchCodeWorkspaceEntries: searchCodeWorkspaceEntriesMock,
   loadCodeWorkspaceFile: loadCodeWorkspaceFileMock,
   createCodeWorkspaceAssetUrl: createCodeWorkspaceAssetUrlMock,
+  resolveCodeWorkspaceFilePreview: resolveCodeWorkspaceFilePreviewMock,
   resolveCodeWorkspaceAssetUrl: resolveCodeWorkspaceAssetUrlMock,
   writeCodeWorkspaceFile: writeCodeWorkspaceFileMock,
   createCodeWorkspaceDirectory: createCodeWorkspaceDirectoryMock,
@@ -420,6 +422,12 @@ describe('CodeAgentFileBrowserPanel', () => {
         value: vi.fn(),
       });
     }
+    resolveCodeWorkspaceFilePreviewMock.mockImplementation((roomId: string, path: string, options: unknown) => (
+      createCodeWorkspaceAssetUrlMock(roomId, path, options).then((asset: unknown) => ({
+        kind: 'static-file',
+        asset,
+      }))
+    ));
   });
 
   afterEach(() => {
@@ -430,6 +438,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     searchCodeWorkspaceEntriesMock.mockReset();
     loadCodeWorkspaceFileMock.mockReset();
     createCodeWorkspaceAssetUrlMock.mockReset();
+    resolveCodeWorkspaceFilePreviewMock.mockReset();
     resolveCodeWorkspaceAssetUrlMock.mockReset();
     writeCodeWorkspaceFileMock.mockReset();
     createCodeWorkspaceDirectoryMock.mockReset();
@@ -2401,6 +2410,37 @@ describe('CodeAgentFileBrowserPanel', () => {
       expect(screen.queryByRole('status', { name: 'codeAgentLoadingBrowserPreview' })).toBeNull();
     });
     expect(loadCodeWorkspaceFileMock).not.toHaveBeenCalled();
+  });
+
+  it('uses a resolved dev server URL for source app HTML previews', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'index.html', name: 'index.html', type: 'file' },
+      ],
+      truncated: false,
+    });
+    resolveCodeWorkspaceFilePreviewMock.mockResolvedValue({
+      kind: 'dev-server',
+      frameworkId: 'vite',
+      frameworkName: 'Vite',
+      projectRoot: '.',
+      command: "cd '/workspace' && npm run dev -- --host 0.0.0.0 --port 5173",
+      port: 5173,
+      status: 'running',
+      requestedUrl: 'http://localhost:5173/',
+      resolvedUrl: 'https://5173-sandbox.e2b.dev/',
+    });
+
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
+
+    expect(await screen.findByText('1 files')).toBeTruthy();
+    selectionHandlerRef.current?.(['index.html']);
+
+    await waitFor(() => {
+      expect(resolveCodeWorkspaceFilePreviewMock).toHaveBeenCalledWith('room-1', 'index.html', expect.any(Object));
+    });
+    expect(createCodeWorkspaceAssetUrlMock).not.toHaveBeenCalled();
+    expect(container.querySelector('iframe')?.getAttribute('src')).toBe('https://5173-sandbox.e2b.dev/');
   });
 
   it('shows T3-style image preview loading and failure states for signed asset URLs', async () => {

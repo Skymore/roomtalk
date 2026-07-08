@@ -96,6 +96,7 @@ const createHarness = (options: {
   workspaceChanges?: CodeAgentWorkspaceChanges;
   workspaceDiffPatch?: string;
   workspaceFileContent?: string;
+  workspaceFileContents?: Record<string, string>;
   workspacePreviewServers?: CodeAgentWorkspacePreviewServer[];
   workspaceRoot?: string;
   workspacePreviewTargetResolvedUrl?: string;
@@ -113,6 +114,7 @@ const createHarness = (options: {
   const getWorkspaceChangesCalls: Array<{ sandboxId: string }> = [];
   const getWorkspaceDiffCalls: Array<{ sandboxId: string; maxBytes?: number; ignoreWhitespace?: boolean; scope?: string; baseRef?: string }> = [];
   const readWorkspaceFileCalls: Array<{ sandboxId: string; path: string; maxBytes?: number }> = [];
+  const startWorkspaceCommandCalls: Array<{ sandboxId: string; command: string; timeoutMs?: number }> = [];
   const resolveWorkspacePreviewTargetCalls: Array<{ sandboxId: string; port: number; protocol?: 'http' | 'https'; path?: string }> = [];
   const listWorkspacePreviewServersCalls: Array<{ sandboxId: string }> = [];
   const writeWorkspaceFileCalls: Array<{ sandboxId: string; path: string; content: string; encoding?: 'utf-8' | 'base64' }> = [];
@@ -236,13 +238,28 @@ const createHarness = (options: {
           path,
           maxBytes: readOptions?.maxBytes,
         });
-        const content = options.workspaceFileContent ?? 'hello';
+        const normalizedPath = normalizeHarnessWorkspacePath(path, workspaceRoot);
+        if (options.workspaceFileContents && !Object.prototype.hasOwnProperty.call(options.workspaceFileContents, normalizedPath)) {
+          throw new Error(`Workspace file not found: ${normalizedPath}`);
+        }
+        const content = options.workspaceFileContents?.[normalizedPath] ?? options.workspaceFileContent ?? 'hello';
         return {
-          path: normalizeHarnessWorkspacePath(path, workspaceRoot),
+          path: normalizedPath,
           content,
           byteSize: Buffer.byteLength(content),
           truncated: false,
           encoding: 'utf-8' as const,
+        };
+      },
+      startWorkspaceCommand: async (input) => {
+        startWorkspaceCommandCalls.push({
+          sandboxId: input.handle.id,
+          command: input.command,
+          timeoutMs: input.timeoutMs,
+        });
+        return {
+          command: input.command,
+          stop: async () => undefined,
         };
       },
       resolveWorkspacePreviewTarget: async (handle, input) => {
@@ -310,6 +327,7 @@ const createHarness = (options: {
     searchWorkspaceEntriesCalls,
     listWorkspaceRefsCalls,
     readWorkspaceFileCalls,
+    startWorkspaceCommandCalls,
     resolveWorkspacePreviewTargetCalls,
     listWorkspacePreviewServersCalls,
     writeWorkspaceFileCalls,
@@ -767,6 +785,77 @@ describe('code-agent workspace socket handlers', () => {
       path: 'output/assets/app.js',
       mimeType: 'text/javascript; charset=utf-8',
     });
+  });
+
+  it('resolves built workspace HTML previews as static files', async () => {
+    const assetAccess = new CodeWorkspaceAssetAccess({
+      tokenSecret: 'workspace-asset-secret',
+      nowMs: () => Date.parse('2026-06-30T12:00:00.000Z'),
+      createId: () => 'asset-token-id',
+    });
+    const { socket, startWorkspaceCommandCalls } = createHarness({
+      codeWorkspaceAssetAccess: assetAccess,
+      workspaceFileContents: {
+        'package.json': JSON.stringify({
+          scripts: { dev: 'vite' },
+          dependencies: { vite: '^6.0.0' },
+        }),
+        'dist/index.html': '<!doctype html><script type="module" src="/assets/app.js"></script>',
+      },
+    });
+
+    const response = await socket.invoke<any>('resolve_code_workspace_file_preview', {
+      roomId: 'room-1',
+      path: 'dist/index.html',
+    });
+
+    assert.equal(response.success, true);
+    assert.equal(response.preview.kind, 'static-file');
+    assert.match(response.preview.asset.relativeUrl, /^\/api\/code-agent\/workspace-assets\/[^/]+\/index\.html$/);
+    assert.deepEqual(startWorkspaceCommandCalls, []);
+  });
+
+  it('resolves source app HTML previews through a workspace dev server', async () => {
+    const assetAccess = new CodeWorkspaceAssetAccess({
+      tokenSecret: 'workspace-asset-secret',
+      nowMs: () => Date.parse('2026-06-30T12:00:00.000Z'),
+      createId: () => 'asset-token-id',
+    });
+    const { socket, startWorkspaceCommandCalls, resolveWorkspacePreviewTargetCalls } = createHarness({
+      codeWorkspaceAssetAccess: assetAccess,
+      workspaceFileContents: {
+        'package.json': JSON.stringify({
+          scripts: { dev: 'vite' },
+          dependencies: { vite: '^6.0.0' },
+        }),
+        'index.html': '<div id="root"></div><script type="module" src="/src/main.jsx"></script>',
+      },
+      workspacePreviewServers: [{
+        host: 'localhost',
+        port: 5173,
+        url: 'http://localhost:5173/',
+        processName: 'vite',
+        pid: 42,
+      }],
+    });
+
+    const response = await socket.invoke<any>('resolve_code_workspace_file_preview', {
+      roomId: 'room-1',
+      path: 'index.html',
+    });
+
+    assert.equal(response.success, true);
+    assert.equal(response.preview.kind, 'dev-server');
+    assert.equal(response.preview.frameworkId, 'vite');
+    assert.equal(response.preview.status, 'running');
+    assert.equal(response.preview.resolvedUrl, 'https://5173-sandbox.e2b.dev/');
+    assert.deepEqual(startWorkspaceCommandCalls, []);
+    assert.deepEqual(resolveWorkspacePreviewTargetCalls, [{
+      sandboxId: 'sandbox-1',
+      port: 5173,
+      protocol: 'http',
+      path: '/',
+    }]);
   });
 
   it('mutates code-agent workspace entries through the registered socket session', async () => {

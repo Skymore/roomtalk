@@ -19,18 +19,18 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
-  createCodeWorkspaceAssetUrl,
   createCodeWorkspaceDirectory,
   deleteCodeWorkspaceEntry,
   loadCodeWorkspaceEntries,
   loadCodeWorkspaceFile,
   renameCodeWorkspaceEntry,
   resolveCodeWorkspaceAssetUrl,
+  resolveCodeWorkspaceFilePreview,
   searchCodeWorkspaceEntries,
   writeCodeWorkspaceFile,
-  type CodeWorkspaceAssetUrl,
   type CodeWorkspaceEntry,
   type CodeWorkspaceFile,
+  type CodeWorkspaceFilePreview,
 } from '../utils/codeWorkspaceFiles';
 import { appendWorkspaceAssetPreviewRevision } from '../utils/codeWorkspaceFilePreview';
 import type { CodeAgentWorkspaceSnapshot } from '../utils/codeAgentWorkspace';
@@ -179,10 +179,11 @@ type FileQueryState = {
 };
 
 type AssetUrlQueryState = {
-  data: CodeWorkspaceAssetUrl | null;
+  data: CodeWorkspaceFilePreview | null;
   resolvedUrl: string | null;
   error: string | null;
   isPending: boolean;
+  refresh: () => void;
 };
 
 type WorkspaceRemoteSearchState = {
@@ -922,6 +923,48 @@ function CodeAgentBrowserUnreachable({
   );
 }
 
+function CodeAgentDevServerPreviewPending({
+  preview,
+  onRefresh,
+}: {
+  preview: Extract<CodeWorkspaceFilePreview, { kind: 'dev-server' }>;
+  onRefresh: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div
+      className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-white px-6 py-8 dark:bg-[#141413]"
+      data-testid="code-agent-dev-server-preview-pending"
+    >
+      <div className="flex w-full max-w-xl flex-col items-start gap-4">
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-md border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]">
+            <TerminalSquare className="h-4 w-4 text-[#5e5d59] dark:text-[#b0aea5]" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-[#141413] dark:text-[#faf9f5]">
+              {t('codeAgentPreparingBrowserPreview')}
+            </div>
+            <div className="mt-0.5 truncate text-xs text-[#87867f] dark:text-[#8f8d86]">
+              {preview.frameworkName} - {preview.requestedUrl}
+            </div>
+          </div>
+        </div>
+        <code className="block w-full overflow-x-auto rounded-md border border-[#dedbd0] bg-[#f5f4ed] px-3 py-2 text-xs text-[#4d4c48] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#d7d4ca]">
+          {preview.command}
+        </code>
+        <button
+          type="button"
+          className="inline-flex h-8 items-center rounded-md border border-[#dedbd0] px-3 text-xs font-medium text-[#4d4c48] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:border-[#30302e] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+          onClick={onRefresh}
+        >
+          {t('refresh')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function CodeAgentBrowserSurfaceChrome({
   value,
   loading,
@@ -1194,10 +1237,11 @@ function CodeAgentPreviewSurface({
   const viewport = surface.viewport ?? FILL_CODE_AGENT_PREVIEW_VIEWPORT;
   const viewportRef = useRef(viewport);
   const currentAddress = previewUrl ?? relativePath ?? '';
-  const resolvedWorkspacePreviewUrl = relativePath && assetUrlQuery.resolvedUrl
+  const resolvedWorkspacePreviewUrl = relativePath && assetUrlQuery.resolvedUrl && assetUrlQuery.data?.kind === 'static-file'
     ? appendWorkspaceAssetPreviewRevision(assetUrlQuery.resolvedUrl, assetPreviewRevision)
-    : null;
+    : assetUrlQuery.resolvedUrl;
   const resolvedPreviewUrl = previewUrl ?? resolvedWorkspacePreviewUrl;
+  const devServerPreview = assetUrlQuery.data?.kind === 'dev-server' ? assetUrlQuery.data : null;
   const canRefreshPreview = Boolean(resolvedPreviewUrl || relativePath || isBrowserEmptyPreview);
   const browserChromeLoading = assetUrlQuery.isPending || (Boolean(resolvedPreviewUrl) && browserFrameLoading);
   const { canGoBack, canGoForward } = getCodeAgentPreviewSurfaceNavigationState(surface);
@@ -1364,10 +1408,11 @@ function CodeAgentPreviewSurface({
     }
     void refreshCodeWorkspacePreviewSession({ roomId, tabId: previewSessionTabId }).catch(() => undefined);
     if (relativePath) {
+      assetUrlQuery.refresh();
       onRefreshWorkspacePreview(relativePath);
     }
     setBrowserReloadNonce((current) => current + 1);
-  }, [isBrowserEmptyPreview, onRefreshWorkspacePreview, previewSessionTabId, relativePath, roomId]);
+  }, [assetUrlQuery, isBrowserEmptyPreview, onRefreshWorkspacePreview, previewSessionTabId, relativePath, roomId]);
 
   const handleBack = useCallback(() => {
     ensurePreviewSessionTabId();
@@ -1632,7 +1677,7 @@ function CodeAgentPreviewSurface({
     );
   }
 
-  if (relativePath && (assetUrlQuery.isPending || !assetUrlQuery.resolvedUrl)) {
+  if (relativePath && (assetUrlQuery.isPending || (!assetUrlQuery.data && !assetUrlQuery.resolvedUrl))) {
     return (
       <div className="flex min-h-0 flex-1 flex-col bg-[#faf9f5] dark:bg-[#1d1d1b]">
         {chrome}
@@ -1644,6 +1689,18 @@ function CodeAgentPreviewSurface({
           <LoaderCircle className="h-5 w-5 animate-spin" />
           <div className="text-sm">{t('codeAgentPreparingBrowserPreview')}</div>
         </div>
+      </div>
+    );
+  }
+
+  if (devServerPreview && !resolvedPreviewUrl) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col bg-[#faf9f5] dark:bg-[#1d1d1b]">
+        {chrome}
+        <CodeAgentDevServerPreviewPending
+          preview={devServerPreview}
+          onRefresh={assetUrlQuery.refresh}
+        />
       </div>
     );
   }
@@ -2006,16 +2063,16 @@ function useCodeWorkspaceAssetUrlQuery(
   scopeKey = '',
 ): AssetUrlQueryState {
   const requestIdRef = useRef(0);
-  const [data, setData] = useState<CodeWorkspaceAssetUrl | null>(null);
+  const [data, setData] = useState<CodeWorkspaceFilePreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
 
-  useEffect(() => {
+  const refresh = useCallback(() => {
     if (!relativePath || !enabled) {
       setData(null);
       setError(null);
       setIsPending(false);
-      return undefined;
+      return () => undefined;
     }
 
     const requestId = requestIdRef.current + 1;
@@ -2025,12 +2082,12 @@ function useCodeWorkspaceAssetUrlQuery(
     setError(null);
     setIsPending(true);
 
-    createCodeWorkspaceAssetUrl(roomId, relativePath, { signal: controller.signal }).then(
-      (asset) => {
+    resolveCodeWorkspaceFilePreview(roomId, relativePath, { signal: controller.signal }).then(
+      (preview) => {
         if (controller.signal.aborted || requestIdRef.current !== requestId) {
           return;
         }
-        setData(asset);
+        setData(preview);
       },
       (nextError) => {
         if (controller.signal.aborted || requestIdRef.current !== requestId) {
@@ -2045,13 +2102,24 @@ function useCodeWorkspaceAssetUrlQuery(
     });
 
     return () => controller.abort();
-  }, [enabled, roomId, relativePath, scopeKey]);
+  }, [enabled, roomId, relativePath]);
+
+  useEffect(() => {
+    return refresh();
+  }, [refresh, scopeKey]);
 
   return {
     data,
-    resolvedUrl: data ? resolveCodeWorkspaceAssetUrl(data) : null,
+    resolvedUrl: data?.kind === 'static-file'
+      ? resolveCodeWorkspaceAssetUrl(data.asset)
+      : data?.kind === 'dev-server'
+        ? data.resolvedUrl ?? null
+        : null,
     error,
     isPending,
+    refresh: () => {
+      refresh();
+    },
   };
 }
 
