@@ -224,7 +224,23 @@ function packageManagerCommand(packageManager: ProjectInfo['packageManager'], sc
   return [packageManager, 'run', script, '--', ...args];
 }
 
-function buildDevServerCommand(handle: CodeAgentSandboxHandle, project: ProjectInfo, framework: FrameworkDefinition) {
+function previewAllowedHostFromResolution(resolution: CodeAgentWorkspacePreviewTargetResolution | null) {
+  if (!resolution?.resolvedUrl) {
+    return null;
+  }
+  try {
+    return new URL(resolution.resolvedUrl).hostname || null;
+  } catch {
+    return null;
+  }
+}
+
+function buildDevServerCommand(
+  handle: CodeAgentSandboxHandle,
+  project: ProjectInfo,
+  framework: FrameworkDefinition,
+  previewAllowedHost: string | null = null,
+) {
   const scripts = project.packageJson.scripts;
   const script = framework.scriptCandidates.find(candidate => scripts[candidate]);
   const args = framework.scriptArgs(framework.port);
@@ -236,6 +252,7 @@ function buildDevServerCommand(handle: CodeAgentSandboxHandle, project: ProjectI
   const envPrefix = [
     `PORT=${shellQuote(String(framework.port))}`,
     `HOST=${shellQuote('0.0.0.0')}`,
+    ...(previewAllowedHost ? [`__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=${shellQuote(previewAllowedHost)}`] : []),
   ].join(' ');
   return `cd ${shellQuote(projectDirectory)} && ${envPrefix} ${commandLine(executable)}`;
 }
@@ -357,23 +374,25 @@ export class CodeWorkspaceFilePreviewService {
     project: ProjectInfo,
     framework: FrameworkDefinition,
   ): Promise<CodeWorkspaceFilePreview> {
-    const command = buildDevServerCommand(input.handle, project, framework);
+    const previewTarget = await this.resolveDevServerTarget(input.handle, framework.port);
+    const previewAllowedHost = previewAllowedHostFromResolution(previewTarget);
+    const command = buildDevServerCommand(input.handle, project, framework, previewAllowedHost);
     const existing = await this.findListeningServer(input.handle, framework.port);
     if (existing) {
-      return this.devServerResult(input.handle, project, framework, command, existing, 'running');
+      return this.devServerResult(input.handle, project, framework, command, existing, 'running', previewTarget);
     }
 
     if (!input.startDevServer && !this.processesByKey.has(this.previewProcessKey(input, project, framework))) {
-      return this.devServerResult(input.handle, project, framework, command, null, 'stopped', workspacePath);
+      return this.devServerResult(input.handle, project, framework, command, null, 'stopped', null, workspacePath);
     }
 
-    await this.ensureDevServerProcess(input, project, framework, command);
+    await this.ensureDevServerProcess(input, project, framework, command, previewAllowedHost);
 
     const deadline = Date.now() + this.startTimeoutMs;
     do {
       const server = await this.findListeningServer(input.handle, framework.port);
       if (server) {
-        return this.devServerResult(input.handle, project, framework, command, server, 'running');
+        return this.devServerResult(input.handle, project, framework, command, server, 'running', previewTarget);
       }
       if (this.pollIntervalMs <= 0) {
         break;
@@ -381,7 +400,7 @@ export class CodeWorkspaceFilePreviewService {
       await sleep(this.pollIntervalMs);
     } while (Date.now() < deadline);
 
-    return this.devServerResult(input.handle, project, framework, command, null, 'starting', workspacePath);
+    return this.devServerResult(input.handle, project, framework, command, null, 'starting', null, workspacePath);
   }
 
   private async ensureDevServerProcess(
@@ -389,6 +408,7 @@ export class CodeWorkspaceFilePreviewService {
     project: ProjectInfo,
     framework: FrameworkDefinition,
     command: string,
+    previewAllowedHost: string | null,
   ) {
     const key = this.previewProcessKey(input, project, framework);
     if (this.processesByKey.has(key) || !this.options.sandboxService.startWorkspaceCommand) {
@@ -400,6 +420,7 @@ export class CodeWorkspaceFilePreviewService {
       env: {
         PORT: String(framework.port),
         HOST: '0.0.0.0',
+        ...(previewAllowedHost ? { __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: previewAllowedHost } : {}),
       },
       timeoutMs: 0,
     });
@@ -421,6 +442,22 @@ export class CodeWorkspaceFilePreviewService {
     return `${input.sandboxId}\0${project.root}\0${framework.id}\0${framework.port}`;
   }
 
+  private async resolveDevServerTarget(handle: CodeAgentSandboxHandle, port: number) {
+    if (!this.options.sandboxService.resolveWorkspacePreviewTarget) {
+      return null;
+    }
+    try {
+      return await this.options.sandboxService.resolveWorkspacePreviewTarget(handle, {
+        kind: 'environment-port',
+        port,
+        protocol: 'http',
+        path: '/',
+      });
+    } catch {
+      return null;
+    }
+  }
+
   private async findListeningServer(handle: CodeAgentSandboxHandle, port: number) {
     if (!this.options.sandboxService.listWorkspacePreviewServers) {
       return null;
@@ -436,17 +473,10 @@ export class CodeWorkspaceFilePreviewService {
     command: string,
     server: CodeAgentWorkspacePreviewServer | null,
     status: 'running' | 'starting' | 'stopped',
+    previewTarget?: CodeAgentWorkspacePreviewTargetResolution | null,
     _workspacePath?: string,
   ): Promise<CodeWorkspaceFilePreview> {
-    let resolved: CodeAgentWorkspacePreviewTargetResolution | null = null;
-    if (server && this.options.sandboxService.resolveWorkspacePreviewTarget) {
-      resolved = await this.options.sandboxService.resolveWorkspacePreviewTarget(handle, {
-        kind: 'environment-port',
-        port: framework.port,
-        protocol: 'http',
-        path: '/',
-      });
-    }
+    const resolved = server ? previewTarget ?? await this.resolveDevServerTarget(handle, framework.port) : null;
     return {
       kind: 'dev-server',
       frameworkId: framework.id,

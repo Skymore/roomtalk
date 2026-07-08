@@ -89,6 +89,14 @@ describe('CodeWorkspaceFilePreviewService', () => {
     assert.equal(preview.kind, 'dev-server');
     assert.equal(preview.kind === 'dev-server' ? preview.status : '', 'starting');
     assert.equal(sandboxService.startedWorkspaceCommandTimeouts[0], 0);
+    assert.equal(
+      sandboxService.startedWorkspaceCommandEnvs[0]?.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS,
+      `5173-${handle.id}.example.test`,
+    );
+    assert.match(
+      sandboxService.startedWorkspaceCommands[0],
+      new RegExp(`__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS='5173-${handle.id}\\.example\\.test'`),
+    );
     assert.match(sandboxService.startedWorkspaceCommands[0], /npm' 'run' 'dev' '--' '--host' '0\.0\.0\.0' '--port' '5173'/);
   });
 
