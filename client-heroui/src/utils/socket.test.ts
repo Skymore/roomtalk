@@ -90,6 +90,7 @@ const {
   requestAudioTranscription,
   requestCodeWorkspaceEntries,
   requestCodeWorkspaceEntrySearch,
+  requestResolveCodeWorkspaceFilePreview,
   requestResolveCodeWorkspacePreviewTarget,
   requestCodeWorkspaceRefs,
   setClientPassword,
@@ -346,6 +347,32 @@ describe('socket message acknowledgement helpers', () => {
       { roomId: 'room-1', query: 'main', limit: 25 },
       expect.any(Function),
     );
+  });
+
+  it('allows workspace file preview resolution to wait up to ten minutes', async () => {
+    const setTimeoutSpy = vi.spyOn(window, 'setTimeout');
+    socketMock.ackResponses.set('resolve_code_workspace_file_preview', {
+      success: true,
+      preview: {
+        kind: 'static-file',
+        asset: { relativeUrl: '/api/code-agent/workspace-assets/token/index.html' },
+      },
+    });
+
+    await expect(
+      requestResolveCodeWorkspaceFilePreview('room-1', 'index.html', { startDevServer: true })
+    ).resolves.toEqual({
+      kind: 'static-file',
+      asset: { relativeUrl: '/api/code-agent/workspace-assets/token/index.html' },
+    });
+
+    expect(socketMock.emit).toHaveBeenCalledWith(
+      'resolve_code_workspace_file_preview',
+      { roomId: 'room-1', path: 'index.html', startDevServer: true },
+      expect.any(Function),
+    );
+    expect(setTimeoutSpy.mock.calls.map((call) => call[1])).toContain(600_000);
+    setTimeoutSpy.mockRestore();
   });
 
   it('resolves workspace preview targets through the socket request', async () => {

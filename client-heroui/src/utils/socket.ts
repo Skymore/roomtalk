@@ -61,7 +61,7 @@ let pendingRegistration: Promise<void> | null = null;
 let suppressNextConnectAutoRegistration = false;
 const SEND_MESSAGE_ACK_TIMEOUT_MS = 15000;
 const SEND_MESSAGE_CONNECT_TIMEOUT_MS = 15000;
-const WORKSPACE_FILE_PREVIEW_ACK_TIMEOUT_MS = 45000;
+const WORKSPACE_FILE_PREVIEW_ACK_TIMEOUT_MS = 10 * 60 * 1000;
 const ROOM_LOOKUP_TIMEOUT_MS = 30000;
 const CLIENT_AUTH_TOKEN_KEY = 'clientAuthToken';
 
