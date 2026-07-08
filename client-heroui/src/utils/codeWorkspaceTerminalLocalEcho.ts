@@ -17,6 +17,7 @@ export function createTerminalLocalEchoController({
   let pendingEcho = '';
   let pendingRemoteErases = 0;
   let localVisibleInputLength = 0;
+  let remoteEchoActive = false;
   let sensitivePromptActive = false;
   let recentRemoteText = '';
 
@@ -24,6 +25,7 @@ export function createTerminalLocalEchoController({
     pendingEcho = '';
     pendingRemoteErases = 0;
     localVisibleInputLength = 0;
+    remoteEchoActive = false;
     sensitivePromptActive = false;
     recentRemoteText = '';
   };
@@ -47,6 +49,9 @@ export function createTerminalLocalEchoController({
     }
     write(data);
     pendingEcho = trimPendingEcho(`${pendingEcho}${data}`);
+    if (!pendingEcho) {
+      remoteEchoActive = false;
+    }
     localVisibleInputLength += printableCharCount(data);
     return true;
   };
@@ -76,24 +81,46 @@ export function createTerminalLocalEchoController({
       return data;
     }
 
-    if (printableText.startsWith(pendingEcho)) {
+    if (printableText === pendingEcho) {
       const remainder = removeLeadingPrintableChars(data, pendingEcho.length);
       pendingEcho = '';
+      remoteEchoActive = false;
       return remainder;
     }
     if (pendingEcho.startsWith(printableText)) {
       pendingEcho = pendingEcho.slice(printableText.length);
+      remoteEchoActive = true;
       return removeLeadingPrintableChars(data, printableText.length);
+    }
+    if (pendingEcho.length > 1 && printableText.startsWith(pendingEcho)) {
+      const remainder = removeLeadingPrintableChars(data, pendingEcho.length);
+      pendingEcho = '';
+      remoteEchoActive = false;
+      return remainder;
     }
 
     const sharedPrefixLength = commonPrefixLength(printableText, pendingEcho);
-    if (sharedPrefixLength > 0) {
+    if (sharedPrefixLength > 1) {
       pendingEcho = pendingEcho.slice(sharedPrefixLength);
+      remoteEchoActive = pendingEcho.length > 0;
       return removeLeadingPrintableChars(data, sharedPrefixLength);
+    }
+
+    const embeddedEcho = removeEmbeddedPendingEcho(
+      data,
+      pendingEcho,
+      remoteEchoActive || pendingEcho.length > 1,
+      remoteEchoActive,
+    );
+    if (embeddedEcho.consumed > 0) {
+      pendingEcho = pendingEcho.slice(embeddedEcho.consumed);
+      remoteEchoActive = pendingEcho.length > 0;
+      return embeddedEcho.output;
     }
 
     if (data.includes('\n')) {
       pendingEcho = '';
+      remoteEchoActive = false;
     }
     return data;
   };
@@ -136,6 +163,7 @@ export function createTerminalLocalEchoController({
     recentRemoteText = `${recentRemoteText}${text}`.slice(-160);
     if (SENSITIVE_PROMPT_PATTERN.test(recentRemoteText)) {
       pendingEcho = '';
+      remoteEchoActive = false;
       sensitivePromptActive = true;
     }
   };
@@ -222,6 +250,109 @@ function removeLeadingPrintableChars(value: string, count: number): string {
   }
 
   return `${filtered}${value.slice(index)}`;
+}
+
+function removeEmbeddedPendingEcho(
+  value: string,
+  pendingEcho: string,
+  allowEmbedded: boolean,
+  preferEarliest: boolean,
+): { output: string; consumed: number } {
+  if (!allowEmbedded || !pendingEcho) {
+    return { output: value, consumed: 0 };
+  }
+
+  let bestStart = -1;
+  let bestConsumed = 0;
+  let index = 0;
+  while (index < value.length) {
+    const escapeLength = terminalEscapeSequenceLength(value, index);
+    if (escapeLength > 0) {
+      index += escapeLength;
+      continue;
+    }
+
+    if (isTerminalControlChar(value, index)) {
+      index += 1;
+      continue;
+    }
+
+    const consumed = countPendingEchoMatch(value, index, pendingEcho);
+    const isBetterTie = preferEarliest ? bestStart < 0 || index < bestStart : index > bestStart;
+    if (consumed > bestConsumed || (consumed === bestConsumed && consumed > 0 && isBetterTie)) {
+      bestStart = index;
+      bestConsumed = consumed;
+    }
+    index += 1;
+  }
+
+  if (bestStart < 0 || bestConsumed <= 0) {
+    return { output: value, consumed: 0 };
+  }
+  return {
+    output: removePrintableCharsFrom(value, bestStart, bestConsumed),
+    consumed: bestConsumed,
+  };
+}
+
+function countPendingEchoMatch(value: string, start: number, pendingEcho: string): number {
+  let index = start;
+  let consumed = 0;
+  while (index < value.length && consumed < pendingEcho.length) {
+    const escapeLength = terminalEscapeSequenceLength(value, index);
+    if (escapeLength > 0) {
+      index += escapeLength;
+      continue;
+    }
+
+    if (isTerminalControlChar(value, index)) {
+      index += 1;
+      continue;
+    }
+
+    if (value[index] !== pendingEcho[consumed]) {
+      break;
+    }
+
+    consumed += 1;
+    index += 1;
+  }
+  return consumed;
+}
+
+function removePrintableCharsFrom(value: string, start: number, count: number): string {
+  let removed = 0;
+  let index = 0;
+  let output = '';
+  while (index < value.length) {
+    const escapeLength = terminalEscapeSequenceLength(value, index);
+    if (escapeLength > 0) {
+      output += value.slice(index, index + escapeLength);
+      index += escapeLength;
+      continue;
+    }
+
+    if (isTerminalControlChar(value, index)) {
+      output += value[index];
+      index += 1;
+      continue;
+    }
+
+    if (index >= start && removed < count) {
+      removed += 1;
+      index += 1;
+      continue;
+    }
+
+    output += value[index];
+    index += 1;
+  }
+  return output;
+}
+
+function isTerminalControlChar(value: string, index: number): boolean {
+  const code = value.charCodeAt(index);
+  return code < 0x20 || (code >= 0x7f && code <= 0x9f);
 }
 
 function terminalEscapeSequenceLength(value: string, index: number): number {

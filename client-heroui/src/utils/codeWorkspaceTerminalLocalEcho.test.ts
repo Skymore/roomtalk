@@ -91,6 +91,30 @@ describe('codeWorkspaceTerminalLocalEcho', () => {
     expect(writes).toEqual(['l']);
   });
 
+  it('suppresses PTY echo embedded after prompt repaint controls', () => {
+    const writes: string[] = [];
+    const localEcho = createTerminalLocalEchoController({
+      write: (data) => writes.push(data),
+    });
+
+    expect(localEcho.handleInput('ls')).toBe(true);
+    expect(localEcho.handleRemoteData('\x1b[2Dok\x1b[4Cl')).toBe('\x1b[2Dok\x1b[4C');
+    expect(localEcho.handleRemoteData('\x1b[1Ds')).toBe('\x1b[1D');
+    expect(writes).toEqual(['ls']);
+  });
+
+  it('does not consume longer status text for a single pending character', () => {
+    const writes: string[] = [];
+    const localEcho = createTerminalLocalEchoController({
+      write: (data) => writes.push(data),
+    });
+
+    expect(localEcho.handleInput('o')).toBe(true);
+    expect(localEcho.handleRemoteData('ok\r')).toBe('ok\r');
+    expect(localEcho.handleRemoteData('o')).toBe('');
+    expect(writes).toEqual(['o']);
+  });
+
   it('clears stale local echo when remote output moves to a new line without echoing it', () => {
     const writes: string[] = [];
     const localEcho = createTerminalLocalEchoController({
