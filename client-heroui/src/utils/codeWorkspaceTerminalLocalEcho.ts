@@ -15,33 +15,62 @@ export function createTerminalLocalEchoController({
   write,
 }: TerminalLocalEchoControllerOptions): TerminalLocalEchoController {
   let pendingEcho = '';
+  let pendingRemoteErases = 0;
+  let localVisibleInputLength = 0;
   let sensitivePromptActive = false;
   let recentRemoteText = '';
 
   const reset = () => {
     pendingEcho = '';
+    pendingRemoteErases = 0;
+    localVisibleInputLength = 0;
     sensitivePromptActive = false;
     recentRemoteText = '';
   };
 
   const handleInput = (data: string): boolean => {
     if (data === '\r' || data === '\n') {
+      localVisibleInputLength = 0;
       sensitivePromptActive = false;
+    }
+    if (isBackspaceInput(data)) {
+      if (sensitivePromptActive || localVisibleInputLength <= 0) {
+        return false;
+      }
+      write('\b \b');
+      localVisibleInputLength -= 1;
+      pendingRemoteErases += 1;
+      return true;
     }
     if (!canLocalEchoInput(data) || sensitivePromptActive) {
       return false;
     }
     write(data);
     pendingEcho = trimPendingEcho(`${pendingEcho}${data}`);
+    localVisibleInputLength += printableCharCount(data);
     return true;
   };
 
   const handleRemoteData = (data: string): string => {
     observeRemoteText(data);
-    if (!pendingEcho || !data) {
+    if ((!pendingEcho && pendingRemoteErases <= 0) || !data) {
       return data;
     }
 
+    let output = data;
+    if (pendingEcho) {
+      output = consumePendingEcho(output);
+    }
+    if (pendingRemoteErases > 0 && output) {
+      output = consumePendingRemoteErases(output);
+    }
+    if (output.includes('\n')) {
+      localVisibleInputLength = 0;
+    }
+    return output;
+  };
+
+  const consumePendingEcho = (data: string): string => {
     const printableText = stripTerminalControls(data);
     if (!printableText) {
       return data;
@@ -67,6 +96,36 @@ export function createTerminalLocalEchoController({
       pendingEcho = '';
     }
     return data;
+  };
+
+  const consumePendingRemoteErases = (data: string): string => {
+    let output = '';
+    let index = 0;
+    while (index < data.length && pendingRemoteErases > 0) {
+      const eraseLength = remoteEraseSequenceLength(data, index);
+      if (eraseLength > 0) {
+        index += eraseLength;
+        pendingRemoteErases -= 1;
+        continue;
+      }
+
+      const escapeLength = terminalEscapeSequenceLength(data, index);
+      if (escapeLength > 0) {
+        output += data.slice(index, index + escapeLength);
+        index += escapeLength;
+        continue;
+      }
+
+      const code = data.charCodeAt(index);
+      if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) {
+        output += data[index];
+        index += 1;
+        continue;
+      }
+
+      break;
+    }
+    return `${output}${data.slice(index)}`;
   };
 
   const observeRemoteText = (data: string) => {
@@ -99,6 +158,14 @@ export function canLocalEchoInput(data: string): boolean {
     }
   }
   return true;
+}
+
+function isBackspaceInput(data: string): boolean {
+  return data === '\x7f' || data === '\b';
+}
+
+function printableCharCount(value: string): number {
+  return Array.from(stripTerminalControls(value)).length;
 }
 
 function commonPrefixLength(left: string, right: string): number {
@@ -177,4 +244,26 @@ function terminalEscapeSequenceLength(value: string, index: number): number {
   }
 
   return Math.min(2, value.length - index);
+}
+
+function remoteEraseSequenceLength(value: string, index: number): number {
+  const rest = value.slice(index);
+  if (rest.startsWith('\b \b')) {
+    return 3;
+  }
+  if (rest.startsWith('\x7f')) {
+    return 1;
+  }
+
+  const cursorEraseMatch = /^\x1b\[(?:\d+)?D \x1b\[(?:\d+)?D/.exec(rest);
+  if (cursorEraseMatch) {
+    return cursorEraseMatch[0].length;
+  }
+
+  const deleteCharMatch = /^\x1b\[(?:\d+)?P/.exec(rest);
+  if (deleteCharMatch) {
+    return deleteCharMatch[0].length;
+  }
+
+  return 0;
 }

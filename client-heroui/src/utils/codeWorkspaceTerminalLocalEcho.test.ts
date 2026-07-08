@@ -30,6 +30,42 @@ describe('codeWorkspaceTerminalLocalEcho', () => {
     expect(writes).toEqual([]);
   });
 
+  it('locally erases backspace and suppresses the later remote erase echo', () => {
+    const writes: string[] = [];
+    const localEcho = createTerminalLocalEchoController({
+      write: (data) => writes.push(data),
+    });
+
+    expect(localEcho.handleInput('abc')).toBe(true);
+    expect(localEcho.handleInput('\x7f')).toBe(true);
+    expect(writes).toEqual(['abc', '\b \b']);
+    expect(localEcho.handleRemoteData('abc\b \b')).toBe('');
+  });
+
+  it('suppresses a deleted character that the PTY echoes after local backspace', () => {
+    const writes: string[] = [];
+    const localEcho = createTerminalLocalEchoController({
+      write: (data) => writes.push(data),
+    });
+
+    expect(localEcho.handleInput('ab')).toBe(true);
+    expect(localEcho.handleRemoteData('a')).toBe('');
+    expect(localEcho.handleInput('\x7f')).toBe(true);
+    expect(localEcho.handleRemoteData('b')).toBe('');
+    expect(localEcho.handleRemoteData('\b \b')).toBe('');
+    expect(writes).toEqual(['ab', '\b \b']);
+  });
+
+  it('does not locally erase when there is no local input to delete', () => {
+    const writes: string[] = [];
+    const localEcho = createTerminalLocalEchoController({
+      write: (data) => writes.push(data),
+    });
+
+    expect(localEcho.handleInput('\x7f')).toBe(false);
+    expect(writes).toEqual([]);
+  });
+
   it('keeps pending local echo across terminal control sequences', () => {
     const writes: string[] = [];
     const localEcho = createTerminalLocalEchoController({
