@@ -111,8 +111,22 @@ describe('codeWorkspaceTerminalLocalEcho', () => {
 
     expect(localEcho.handleInput('ls')).toBe(true);
     expect(localEcho.handleRemoteData('l')).toBe('');
-    expect(localEcho.handleRemoteData('\x1b[4Dls')).toBe('\x1b[4D');
+    expect(localEcho.handleRemoteData('\x1b[4Dls')).toBe('');
     expect(writes).toEqual(['ls']);
+  });
+
+  it('suppresses a current-line repaint after local backspace', () => {
+    const writes: string[] = [];
+    const localEcho = createTerminalLocalEchoController({
+      write: (data) => writes.push(data),
+    });
+
+    expect(localEcho.handleInput('ls')).toBe(true);
+    expect(localEcho.handleRemoteData('l')).toBe('');
+    expect(localEcho.handleRemoteData('\x1b[4Dls')).toBe('');
+    expect(localEcho.handleInput('\x7f')).toBe(true);
+    expect(localEcho.handleRemoteData('\x1b[4Dl')).toBe('');
+    expect(writes).toEqual(['ls', '\b \b']);
   });
 
   it('does not consume longer status text for a single pending character', () => {

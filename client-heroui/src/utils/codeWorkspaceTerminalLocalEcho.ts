@@ -71,6 +71,13 @@ export function createTerminalLocalEchoController({
     if (pendingEcho) {
       output = consumePendingEcho(output);
     }
+    if (pendingRemoteErases > 0 && output && localInputText) {
+      const fullLineEraseEcho = removeEmbeddedPendingEcho(output, localInputText, true, true);
+      if (fullLineEraseEcho.consumed === localInputText.length) {
+        pendingRemoteErases = Math.max(0, pendingRemoteErases - 1);
+        output = printableOutputOrEmpty(fullLineEraseEcho.output);
+      }
+    }
     if (pendingRemoteErases > 0 && output) {
       output = consumePendingRemoteErases(output);
     }
@@ -121,7 +128,7 @@ export function createTerminalLocalEchoController({
     if (fullLineEcho.consumed === localInputText.length) {
       pendingEcho = '';
       remoteEchoActive = false;
-      return fullLineEcho.output;
+      return printableOutputOrEmpty(fullLineEcho.output);
     }
 
     const embeddedEcho = removeEmbeddedPendingEcho(
@@ -246,6 +253,10 @@ function stripAnsi(value: string): string {
 
 function stripTerminalControls(value: string): string {
   return stripAnsi(value).replace(/[\x00-\x1f\x7f-\x9f]/g, '');
+}
+
+function printableOutputOrEmpty(value: string): string {
+  return stripTerminalControls(value) ? value : '';
 }
 
 function removeLeadingPrintableChars(value: string, count: number): string {
