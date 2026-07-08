@@ -197,17 +197,30 @@ function isSourceHtmlEntry(projectRoot: string, workspacePath: string, html: str
 }
 
 function detectFramework(project: ProjectInfo): FrameworkDefinition | null {
-  for (const framework of FRAMEWORKS) {
-    if (framework.excludedPackages?.some(packageName => project.packageJson.dependencies[packageName])) {
-      continue;
-    }
-    const packageMatched = framework.packages.some(packageName => project.packageJson.dependencies[packageName]);
-    const configMatched = framework.configFiles?.some(configFile => project.configFiles.has(configFile)) ?? false;
-    if (packageMatched || configMatched) {
-      return framework;
-    }
-  }
-  return null;
+  const candidates = FRAMEWORKS.filter(framework => !framework.excludedPackages?.some(packageName => project.packageJson.dependencies[packageName]));
+  return candidates.find(framework => framework.packages.some(packageName => project.packageJson.dependencies[packageName]))
+    ?? candidates.find(framework => frameworkConfigMatched(project, framework) && frameworkScriptMatched(project, framework))
+    ?? candidates.find(framework => frameworkConfigMatched(project, framework))
+    ?? null;
+}
+
+function frameworkConfigMatched(project: ProjectInfo, framework: FrameworkDefinition) {
+  return framework.configFiles?.some(configFile => project.configFiles.has(configFile)) ?? false;
+}
+
+function frameworkScriptMatched(project: ProjectInfo, framework: FrameworkDefinition) {
+  const commandNames = new Set([
+    ...framework.directCommand(framework.port).slice(0, 2),
+    framework.id,
+  ]);
+  return framework.scriptCandidates.some(candidate => {
+    const script = project.packageJson.scripts[candidate];
+    return typeof script === 'string' && [...commandNames].some(command => new RegExp(`(^|\\s)${escapeRegExp(command)}(\\s|$)`).test(script));
+  });
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function choosePackageManager(project: ProjectInfo) {
@@ -302,6 +315,7 @@ export class CodeWorkspaceFilePreviewService {
   }
 
   private async findProject(handle: CodeAgentSandboxHandle, workspacePath: string): Promise<ProjectInfo | null> {
+    const allEntries = await this.listWorkspaceEntries(handle);
     for (const root of projectAncestors(workspacePath)) {
       const packageFile = await this.readTextFile(handle, workspacePathJoin(root, 'package.json'));
       if (!packageFile) {
@@ -311,14 +325,7 @@ export class CodeWorkspaceFilePreviewService {
       if (!packageJson) {
         continue;
       }
-      const configFiles = new Set<string>();
-      const configCandidates = new Set(FRAMEWORKS.flatMap(framework => framework.configFiles || []));
-      for (const configFile of configCandidates) {
-        const file = await this.readTextFile(handle, workspacePathJoin(root, configFile), 1);
-        if (file !== null) {
-          configFiles.add(configFile);
-        }
-      }
+      const configFiles = this.configFilesForRoot(allEntries, root);
       return {
         root,
         packageJson,
@@ -327,6 +334,35 @@ export class CodeWorkspaceFilePreviewService {
       };
     }
     return null;
+  }
+
+  private async listWorkspaceEntries(handle: CodeAgentSandboxHandle) {
+    try {
+      return await this.options.sandboxService.listWorkspaceEntries?.(handle, {
+        maxDepth: 5,
+        maxEntries: 10_000,
+      }) || [];
+    } catch {
+      return [];
+    }
+  }
+
+  private configFilesForRoot(entries: { path: string; type: 'file' | 'directory' }[], root: string) {
+    const configCandidates = new Set(FRAMEWORKS.flatMap(framework => framework.configFiles || []));
+    const configFiles = new Set<string>();
+    for (const entry of entries) {
+      if (entry.type !== 'file') {
+        continue;
+      }
+      if (parentWorkspacePath(entry.path) !== root) {
+        continue;
+      }
+      const name = path.posix.basename(entry.path);
+      if (configCandidates.has(name)) {
+        configFiles.add(name);
+      }
+    }
+    return configFiles;
   }
 
   private async detectPackageManager(handle: CodeAgentSandboxHandle, root: string): Promise<ProjectInfo['packageManager']> {

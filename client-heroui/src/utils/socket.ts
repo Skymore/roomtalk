@@ -61,6 +61,7 @@ let pendingRegistration: Promise<void> | null = null;
 let suppressNextConnectAutoRegistration = false;
 const SEND_MESSAGE_ACK_TIMEOUT_MS = 15000;
 const SEND_MESSAGE_CONNECT_TIMEOUT_MS = 15000;
+const WORKSPACE_FILE_PREVIEW_ACK_TIMEOUT_MS = 45000;
 const ROOM_LOOKUP_TIMEOUT_MS = 30000;
 const CLIENT_AUTH_TOKEN_KEY = 'clientAuthToken';
 
@@ -514,6 +515,7 @@ export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS):
 
 type EmitWithAckOptions = {
   retryOnSocketReconnect?: boolean;
+  timeoutMs?: number;
 };
 
 const isRetryableSocketDisconnectError = (error: unknown): boolean => {
@@ -562,7 +564,7 @@ const emitWithAck = <TResponse extends SocketAckResponse>(
 
     timeoutId = window.setTimeout(() => {
       settle(() => reject(new Error(timeoutMessage)));
-    }, SEND_MESSAGE_ACK_TIMEOUT_MS);
+    }, options.timeoutMs ?? SEND_MESSAGE_ACK_TIMEOUT_MS);
 
     socket.once('disconnect', handleDisconnect);
     socket.emit(event, payload, (response: TResponse) => {
@@ -1152,7 +1154,7 @@ export const requestResolveCodeWorkspaceFilePreview = (
     { roomId, path, ...(options.startDevServer ? { startDevServer: true } : {}) },
     'Timed out while resolving workspace file preview',
     'Failed to resolve workspace file preview',
-    { retryOnSocketReconnect: true },
+    { retryOnSocketReconnect: true, timeoutMs: WORKSPACE_FILE_PREVIEW_ACK_TIMEOUT_MS },
   ).then((response) => {
     if (!response.preview) {
       throw new Error('Server did not return workspace file preview');
