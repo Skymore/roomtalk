@@ -2453,6 +2453,40 @@ describe('CodeAgentFileBrowserPanel', () => {
     });
     expect(createCodeWorkspaceAssetUrlMock).not.toHaveBeenCalled();
     expect(container.querySelector('iframe')?.getAttribute('src')).toBe('https://5173-sandbox.e2b.dev/');
+    const serverPill = await screen.findByTestId('code-agent-file-preview-dev-server-pill');
+    expect(serverPill.textContent).toContain('Vite');
+    expect(serverPill.textContent).toContain(':5173');
+    expect(serverPill.dataset.status).toBe('running');
+  });
+
+  it('opens the already selected desktop file when the tree selection does not change', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'src/App.tsx', name: 'App.tsx', type: 'file' },
+      ],
+      truncated: false,
+    });
+    loadCodeWorkspaceFileMock.mockResolvedValue({
+      path: 'src/App.tsx',
+      content: 'export default function App() { return null; }',
+      byteSize: 44,
+      truncated: false,
+      encoding: 'utf-8',
+    });
+
+    render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
+
+    expect(await screen.findByText('1 files')).toBeTruthy();
+    fileTreeSelectedPathsRef.current = ['src/App.tsx'];
+    const selectionHandler = selectionHandlerRef.current;
+    selectionHandlerRef.current = null;
+    fireEvent.click(screen.getByLabelText('codeAgentWorkspaceFiles'));
+    selectionHandlerRef.current = selectionHandler;
+
+    await waitFor(() => {
+      expect(readCodeAgentRightPanelState('room-1').activeSurfaceId).toBe('file:src/App.tsx');
+    });
+    expect(await screen.findByText(/App.tsx:/)).toBeTruthy();
   });
 
   it('waits for an explicit start before launching source app HTML dev server previews', async () => {

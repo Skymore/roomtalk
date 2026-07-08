@@ -1150,6 +1150,7 @@ export function CodeAgentFilePreviewPanel({
           wordWrap={wordWrap}
           explorerOpen={explorerOpen}
           browserPreviewPending={browserPreviewPending}
+          devServerPreview={devServerPreview}
           externalPreviewUrl={externalPreviewUrl}
           externalPreviewPending={externalPreviewPending}
           canToggleFileWordWrap={canToggleFileWordWrap}

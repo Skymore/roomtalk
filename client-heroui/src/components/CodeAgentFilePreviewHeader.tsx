@@ -10,10 +10,12 @@ import {
   Globe2,
   LoaderCircle,
   RefreshCw,
+  TerminalSquare,
   WrapText,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { type CodeWorkspaceFilePreview } from '../utils/codeWorkspaceFiles';
 import { fileBreadcrumbs, isMarkdownPreviewFile } from './codeAgentFilePath';
 
 const COPY_FEEDBACK_DURATION_MS = 1200;
@@ -25,6 +27,7 @@ interface CodeAgentFilePreviewHeaderProps {
   wordWrap: boolean;
   explorerOpen: boolean;
   browserPreviewPending: boolean;
+  devServerPreview?: Extract<CodeWorkspaceFilePreview, { kind: 'dev-server' }> | null;
   externalPreviewUrl?: string | null;
   externalPreviewPending?: boolean;
   canToggleFileWordWrap: boolean;
@@ -47,6 +50,7 @@ export function CodeAgentFilePreviewHeader({
   wordWrap,
   explorerOpen,
   browserPreviewPending,
+  devServerPreview = null,
   externalPreviewUrl,
   externalPreviewPending = false,
   canToggleFileWordWrap,
@@ -85,6 +89,19 @@ export function CodeAgentFilePreviewHeader({
   const refreshCurrentFileLabel = t('codeAgentRefreshWorkspaceFile');
   const copyFilePathLabel = copiedPath ? t('copied') : t('codeAgentCopyFilePath');
   const openExternalPreviewLabel = t('codeAgentOpenBrowserPreviewExternally');
+  const devServerLabel = devServerPreview
+    ? `${devServerPreview.frameworkName} · :${devServerPreview.port}`
+    : null;
+  const devServerTitle = devServerPreview
+    ? `${t(
+      devServerPreview.status === 'running'
+        ? 'codeAgentPreviewServerRunning'
+        : devServerPreview.status === 'starting'
+          ? 'codeAgentPreviewServerStarting'
+          : 'codeAgentPreviewServerStopped',
+      { server: devServerLabel || '' },
+    )}\n${devServerPreview.command}`
+    : '';
 
   const clearCopyFeedbackTimer = useCallback(() => {
     if (copyFeedbackTimerRef.current) {
@@ -243,6 +260,30 @@ export function CodeAgentFilePreviewHeader({
     </button>
   );
 
+  const devServerPill = devServerPreview && devServerLabel ? (
+    <span
+      className="inline-flex h-7 max-w-44 shrink-0 items-center gap-1.5 rounded-md border border-[#dedbd0] bg-[#f5f4ed] px-2 text-[11px] font-medium text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242422] dark:text-[#d7d4ca]"
+      data-status={devServerPreview.status}
+      data-testid="code-agent-file-preview-dev-server-pill"
+      title={devServerTitle}
+    >
+      {devServerPreview.status === 'starting' ? (
+        <LoaderCircle className="h-3 w-3 shrink-0 animate-spin text-[#c96442] dark:text-[#d97757]" />
+      ) : (
+        <span
+          aria-hidden="true"
+          className={`h-2 w-2 shrink-0 rounded-full ${
+            devServerPreview.status === 'running'
+              ? 'bg-[#1f9d68]'
+              : 'bg-[#b8b4aa] dark:bg-[#5e5d59]'
+          }`}
+        />
+      )}
+      <TerminalSquare className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+      <span className="min-w-0 truncate">{devServerLabel}</span>
+    </span>
+  ) : null;
+
   if (mobileLayout) {
     const mobileIconButtonClass = 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-wait disabled:opacity-60 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]';
     const mobileActiveIconButtonClass = `${mobileIconButtonClass} text-[#9f462c] dark:text-[#ffb197]`;
@@ -257,6 +298,7 @@ export function CodeAgentFilePreviewHeader({
         <div className="min-w-[7rem] flex-1" data-testid="code-agent-mobile-file-preview-breadcrumb-row">
           {breadcrumbStrip}
         </div>
+        {devServerPill}
         <div className="flex min-w-max shrink-0 items-center gap-1" data-testid="code-agent-mobile-file-preview-action-row">
           {copyButton}
           {supportsPreview ? (
@@ -348,6 +390,7 @@ export function CodeAgentFilePreviewHeader({
   return (
     <div className="surface-subheader flex h-9 shrink-0 items-center gap-2 border-b border-[#dedbd0] px-3 dark:border-[#30302e]" data-surface-subheader>
       {breadcrumbStrip}
+      {devServerPill}
       {copyButton}
       <button
         type="button"

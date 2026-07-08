@@ -443,6 +443,8 @@ export function CodeAgentWorkspaceFileTreePanel({
   const { t } = useTranslation();
   const entryKindsRef = useRef<ReadonlyMap<string, CodeAgentProjectEntry['kind']>>(entryKinds);
   const selectionSyncingRef = useRef(false);
+  const desktopTreeClickSerialRef = useRef(0);
+  const desktopSelectionChangeClickSerialRef = useRef(0);
   const mobileSearchInputRef = useRef<HTMLInputElement | null>(null);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [mobileSearchQuery, setMobileSearchQuery] = useState('');
@@ -460,6 +462,7 @@ export function CodeAgentWorkspaceFileTreePanel({
     initialExpansion: 1,
     icons: T3_PIERRE_ICONS,
     onSelectionChange: (selectedPaths) => {
+      desktopSelectionChangeClickSerialRef.current = desktopTreeClickSerialRef.current;
       if (selectionSyncingRef.current) {
         return;
       }
@@ -519,6 +522,21 @@ export function CodeAgentWorkspaceFileTreePanel({
   useEffect(() => {
     onSearchQueryChange(mobileLayout ? (mobileSearchOpen ? mobileSearchQuery : '') : (treeSearch.isOpen ? treeSearch.value : ''));
   }, [mobileLayout, mobileSearchOpen, mobileSearchQuery, onSearchQueryChange, treeSearch.isOpen, treeSearch.value]);
+
+  const handleDesktopTreeClickCapture = useCallback(() => {
+    const clickSerial = desktopTreeClickSerialRef.current + 1;
+    desktopTreeClickSerialRef.current = clickSerial;
+    window.setTimeout(() => {
+      if (desktopSelectionChangeClickSerialRef.current === clickSerial) {
+        return;
+      }
+      const selected = model.getSelectedPaths().at(-1)?.replace(/\/$/, '');
+      const kind = selected ? entryKindsRef.current.get(selected) : undefined;
+      if (selected && kind === 'file') {
+        onOpenEntry(selected, kind);
+      }
+    }, 0);
+  }, [model, onOpenEntry]);
 
   useEffect(() => {
     if (!mobileLayout || !mobileSearchOpen) {
@@ -654,15 +672,20 @@ export function CodeAgentWorkspaceFileTreePanel({
               onOpenEntry={onOpenEntry}
             />
           ) : (
-            <FileTree
-              model={model}
-              aria-label={t('codeAgentWorkspaceFiles')}
+            <div
               className="min-h-0 flex-1 overflow-hidden"
-              style={{
-                colorScheme: resolvedTheme,
-                ['--trees-fg-override' as string]: resolvedTheme === 'dark' ? '#faf9f5' : '#141413',
-              }}
-            />
+              onClickCapture={handleDesktopTreeClickCapture}
+            >
+              <FileTree
+                model={model}
+                aria-label={t('codeAgentWorkspaceFiles')}
+                className="h-full min-h-0 overflow-hidden"
+                style={{
+                  colorScheme: resolvedTheme,
+                  ['--trees-fg-override' as string]: resolvedTheme === 'dark' ? '#faf9f5' : '#141413',
+                }}
+              />
+            </div>
           )}
         </>
       )}
