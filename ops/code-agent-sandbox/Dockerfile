@@ -6,10 +6,12 @@ ARG PNPM_NPM_VERSION=11.10.0
 ARG YARN_NPM_VERSION=1.22.22
 ARG TYPESCRIPT_NPM_VERSION=6.0.3
 ARG TSX_NPM_VERSION=4.23.0
+ARG OH_MY_ZSH_REF=677a4592b18c08ddea737f8aca70bac0e9fc9313
+ARG POWERLEVEL10K_REF=9253fb1c5034410c43a0c681ff8294181c54016c
 
 ENV PYTHONUNBUFFERED=1
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
-ENV ROOMTALK_CODE_AGENT_ARTIFACT_VERSION=roomtalk-code-agent-2026-07-08-shell-timeout-10m-v1
+ENV ROOMTALK_CODE_AGENT_ARTIFACT_VERSION=roomtalk-code-agent-2026-07-08-zsh-terminal-v1
 ENV ROOMTALK_CODE_AGENT_SOURCE_REF=d7048779e43aaade9fa0abccf42fcca9c6857e1a
 ENV ROOMTALK_CODEX_CLI_VERSION=${CODEX_CLI_NPM_VERSION}
 ENV ROOMTALK_PLAYWRIGHT_VERSION=${PLAYWRIGHT_NPM_VERSION}
@@ -67,6 +69,7 @@ RUN apt-get update \
     unzip \
     wget \
     xz-utils \
+    zsh \
     zip \
   && mkdir -p /etc/apt/keyrings \
   && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
@@ -126,6 +129,7 @@ RUN apt-get update \
   && psql --version >/dev/null \
   && redis-cli --version >/dev/null \
   && shellcheck --version >/dev/null \
+  && zsh --version >/dev/null \
   && roomtalk --help >/dev/null \
   && python -m pip install --no-cache-dir --require-hashes -r /opt/roomtalk-code-agent-requirements.lock \
   && python -m pip install --no-cache-dir --no-deps --require-hashes -r /opt/roomtalk-codex-sdk-requirements.lock \
@@ -135,7 +139,46 @@ RUN apt-get update \
 
 RUN useradd --create-home --uid 10001 roomtalk \
   && mkdir -p /tmp/roomtalk-codex \
+  && git init -q /home/roomtalk/.oh-my-zsh \
+  && git -C /home/roomtalk/.oh-my-zsh remote add origin https://github.com/ohmyzsh/ohmyzsh.git \
+  && git -C /home/roomtalk/.oh-my-zsh fetch --depth=1 origin "${OH_MY_ZSH_REF}" \
+  && git -C /home/roomtalk/.oh-my-zsh checkout --detach FETCH_HEAD \
+  && mkdir -p /home/roomtalk/.oh-my-zsh/custom/themes/powerlevel10k \
+  && git init -q /home/roomtalk/.oh-my-zsh/custom/themes/powerlevel10k \
+  && git -C /home/roomtalk/.oh-my-zsh/custom/themes/powerlevel10k remote add origin https://github.com/romkatv/powerlevel10k.git \
+  && git -C /home/roomtalk/.oh-my-zsh/custom/themes/powerlevel10k fetch --depth=1 origin "${POWERLEVEL10K_REF}" \
+  && git -C /home/roomtalk/.oh-my-zsh/custom/themes/powerlevel10k checkout --detach FETCH_HEAD \
+  && { \
+    echo 'if [ -t 0 ] && [ -z "${ROOMTALK_TERMINAL_STAY_IN_BASH:-}" ] && command -v zsh >/dev/null 2>&1; then'; \
+    echo '  export SHELL="$(command -v zsh)"'; \
+    echo '  exec "$SHELL" -l'; \
+    echo 'fi'; \
+  } > /home/roomtalk/.bash_profile \
+  && { \
+    echo 'export ZSH="$HOME/.oh-my-zsh"'; \
+    echo 'ZSH_THEME="powerlevel10k/powerlevel10k"'; \
+    echo 'POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=true'; \
+    echo 'plugins=(git)'; \
+    echo 'source "$ZSH/oh-my-zsh.sh"'; \
+    echo '[[ ! -f "$HOME/.p10k.zsh" ]] || source "$HOME/.p10k.zsh"'; \
+  } > /home/roomtalk/.zshrc \
+  && { \
+    echo 'typeset -g POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=true'; \
+    echo 'typeset -g POWERLEVEL9K_INSTANT_PROMPT=off'; \
+    echo 'typeset -g POWERLEVEL9K_MODE=ascii'; \
+    echo 'typeset -g POWERLEVEL9K_LEFT_PROMPT_ELEMENTS=(dir vcs prompt_char)'; \
+    echo 'typeset -g POWERLEVEL9K_RIGHT_PROMPT_ELEMENTS=(status command_execution_time background_jobs time)'; \
+    echo 'typeset -g POWERLEVEL9K_PROMPT_ADD_NEWLINE=true'; \
+    echo 'typeset -g POWERLEVEL9K_PROMPT_CHAR_OK_VIINS_CONTENT_EXPANSION=">"'; \
+    echo 'typeset -g POWERLEVEL9K_PROMPT_CHAR_ERROR_VIINS_CONTENT_EXPANSION=">"'; \
+    echo 'typeset -g POWERLEVEL9K_TIME_FORMAT="%D{%H:%M}"'; \
+    echo 'typeset -g POWERLEVEL9K_DIR_MAX_LENGTH=48'; \
+    echo 'typeset -g POWERLEVEL9K_SHORTEN_STRATEGY=truncate_to_unique'; \
+  } > /home/roomtalk/.p10k.zsh \
   && chown -R roomtalk:roomtalk /workspace /tmp/roomtalk-codex "${PLAYWRIGHT_BROWSERS_PATH}" \
+  && chown -R roomtalk:roomtalk /home/roomtalk/.oh-my-zsh /home/roomtalk/.bash_profile /home/roomtalk/.zshrc /home/roomtalk/.p10k.zsh \
+  && test -f /home/roomtalk/.oh-my-zsh/oh-my-zsh.sh \
+  && test -f /home/roomtalk/.oh-my-zsh/custom/themes/powerlevel10k/powerlevel10k.zsh-theme \
   && chmod 700 /tmp/roomtalk-codex
 
 USER roomtalk

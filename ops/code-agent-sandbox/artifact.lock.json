@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "artifactName": "roomtalk-code-agent",
-  "artifactVersion": "roomtalk-code-agent-2026-07-08-shell-timeout-10m-v1",
+  "artifactVersion": "roomtalk-code-agent-2026-07-08-zsh-terminal-v1",
   "pythonVersion": "3.12",
   "baseImage": {
     "name": "python",
@@ -52,6 +52,7 @@
   "runtimeTools": {
     "cli": [
       "bash",
+      "zsh",
       "curl",
       "wget",
       "git",
@@ -99,6 +100,20 @@
       "yarn": "1.22.22",
       "typescript": "6.0.3",
       "tsx": "4.23.0"
+    }
+  },
+  "terminal": {
+    "shell": "zsh",
+    "theme": "powerlevel10k",
+    "framework": "oh-my-zsh",
+    "mode": "ascii",
+    "ohMyZsh": {
+      "repo": "https://github.com/ohmyzsh/ohmyzsh.git",
+      "ref": "677a4592b18c08ddea737f8aca70bac0e9fc9313"
+    },
+    "powerlevel10k": {
+      "repo": "https://github.com/romkatv/powerlevel10k.git",
+      "ref": "9253fb1c5034410c43a0c681ff8294181c54016c"
     }
   },
   "image": {
