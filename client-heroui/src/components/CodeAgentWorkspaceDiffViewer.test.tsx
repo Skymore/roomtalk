@@ -1295,7 +1295,7 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(within(screen.getByTestId('diff-file-file:big')).queryByTestId('code-agent-diff-file-suppression-notice')).toBeNull();
   });
 
-  it('keeps the large diff reason visible in the mobile diff header before loading', async () => {
+  it('keeps the mobile large diff header compact before loading', async () => {
     loadCodeAgentWorkspaceDiffMock.mockResolvedValue({
       available: true,
       patch: 'diff --git a/src/big.ts b/src/big.ts\n',
@@ -1333,7 +1333,9 @@ describe('CodeAgentWorkspaceDiffViewer', () => {
     expect(suppression.className).not.toContain('h-5');
     expect(suppression.textContent).toContain('codeAgentLoadDiff');
     const notice = within(file).getByTestId('code-agent-diff-file-suppression-notice');
-    expect(notice.textContent).toContain('codeAgentLargeDiffSuppressedMessage');
+    expect(notice.textContent).toContain('codeAgentLargeDiff');
+    expect(notice.textContent).not.toContain('codeAgentLargeDiffSuppressedMessage');
+    expect(notice.getAttribute('title')).toBe('codeAgentLargeDiffSuppressedMessage');
     expect(notice.className).toContain('inline-flex');
     expect(notice.className).not.toContain('hidden sm:inline-flex');
   });

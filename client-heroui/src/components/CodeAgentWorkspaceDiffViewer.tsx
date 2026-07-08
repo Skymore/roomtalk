@@ -1615,6 +1615,9 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
               const messageKey = previewState.reason === 'large'
                 ? 'codeAgentLargeDiffSuppressedMessage'
                 : 'codeAgentNonTextDiffContentsUnavailable';
+              const visibleMessageKey = mobileLayout && previewState.reason === 'large'
+                ? 'codeAgentLargeDiff'
+                : messageKey;
               return (
                 <span
                   className={`${previewState.reason === 'large' && !mobileLayout ? 'hidden sm:inline-flex' : 'inline-flex'} max-w-[18rem] items-center gap-2 overflow-hidden rounded-sm bg-[#f0eee6] px-2 py-1 text-[11px] leading-4 text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5] sm:max-w-[28rem]`}
@@ -1622,7 +1625,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                   title={t(messageKey)}
                 >
                   <span className="min-w-0 truncate">
-                    {t(messageKey)}
+                    {t(visibleMessageKey)}
                   </span>
                   {previewState.reason === 'large' ? (
                     <button
