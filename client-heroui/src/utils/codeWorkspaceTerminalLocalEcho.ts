@@ -17,6 +17,7 @@ export function createTerminalLocalEchoController({
   let pendingEcho = '';
   let pendingRemoteErases = 0;
   let localVisibleInputLength = 0;
+  let localInputText = '';
   let remoteEchoActive = false;
   let sensitivePromptActive = false;
   let recentRemoteText = '';
@@ -25,6 +26,7 @@ export function createTerminalLocalEchoController({
     pendingEcho = '';
     pendingRemoteErases = 0;
     localVisibleInputLength = 0;
+    localInputText = '';
     remoteEchoActive = false;
     sensitivePromptActive = false;
     recentRemoteText = '';
@@ -33,6 +35,7 @@ export function createTerminalLocalEchoController({
   const handleInput = (data: string): boolean => {
     if (data === '\r' || data === '\n') {
       localVisibleInputLength = 0;
+      localInputText = '';
       sensitivePromptActive = false;
     }
     if (isBackspaceInput(data)) {
@@ -41,6 +44,7 @@ export function createTerminalLocalEchoController({
       }
       write('\b \b');
       localVisibleInputLength -= 1;
+      localInputText = removeLastPrintableChar(localInputText);
       pendingRemoteErases += 1;
       return true;
     }
@@ -53,6 +57,7 @@ export function createTerminalLocalEchoController({
       remoteEchoActive = false;
     }
     localVisibleInputLength += printableCharCount(data);
+    localInputText = trimPendingEcho(`${localInputText}${stripTerminalControls(data)}`);
     return true;
   };
 
@@ -71,6 +76,7 @@ export function createTerminalLocalEchoController({
     }
     if (output.includes('\n')) {
       localVisibleInputLength = 0;
+      localInputText = '';
     }
     return output;
   };
@@ -106,6 +112,18 @@ export function createTerminalLocalEchoController({
       return removeLeadingPrintableChars(data, sharedPrefixLength);
     }
 
+    const fullLineEcho = removeEmbeddedPendingEcho(
+      data,
+      localInputText,
+      localInputText.length > 1 && pendingEcho.length > 0,
+      remoteEchoActive,
+    );
+    if (fullLineEcho.consumed === localInputText.length) {
+      pendingEcho = '';
+      remoteEchoActive = false;
+      return fullLineEcho.output;
+    }
+
     const embeddedEcho = removeEmbeddedPendingEcho(
       data,
       pendingEcho,
@@ -120,6 +138,7 @@ export function createTerminalLocalEchoController({
 
     if (data.includes('\n')) {
       pendingEcho = '';
+      localInputText = '';
       remoteEchoActive = false;
     }
     return data;
@@ -163,6 +182,7 @@ export function createTerminalLocalEchoController({
     recentRemoteText = `${recentRemoteText}${text}`.slice(-160);
     if (SENSITIVE_PROMPT_PATTERN.test(recentRemoteText)) {
       pendingEcho = '';
+      localInputText = '';
       remoteEchoActive = false;
       sensitivePromptActive = true;
     }
@@ -210,6 +230,12 @@ function trimPendingEcho(value: string): string {
     return value;
   }
   return value.slice(-MAX_LOCAL_ECHO_CHUNK_LENGTH);
+}
+
+function removeLastPrintableChar(value: string): string {
+  const chars = Array.from(value);
+  chars.pop();
+  return chars.join('');
 }
 
 function stripAnsi(value: string): string {

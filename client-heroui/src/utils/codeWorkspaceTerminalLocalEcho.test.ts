@@ -103,6 +103,18 @@ describe('codeWorkspaceTerminalLocalEcho', () => {
     expect(writes).toEqual(['ls']);
   });
 
+  it('suppresses a full input-line repaint after an earlier partial echo', () => {
+    const writes: string[] = [];
+    const localEcho = createTerminalLocalEchoController({
+      write: (data) => writes.push(data),
+    });
+
+    expect(localEcho.handleInput('ls')).toBe(true);
+    expect(localEcho.handleRemoteData('l')).toBe('');
+    expect(localEcho.handleRemoteData('\x1b[4Dls')).toBe('\x1b[4D');
+    expect(writes).toEqual(['ls']);
+  });
+
   it('does not consume longer status text for a single pending character', () => {
     const writes: string[] = [];
     const localEcho = createTerminalLocalEchoController({
