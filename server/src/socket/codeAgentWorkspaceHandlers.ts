@@ -11,6 +11,7 @@ import {
   CodeAgentWorkspacePreviewServer,
   CodeAgentWorkspacePreviewTargetResolution,
   CodeAgentWorkspaceRefs,
+  CodeAgentWorkspaceTerminal,
   ResolveCodeAgentWorkspacePreviewTargetInput,
 } from '../services/codeAgentSandboxService';
 import { buildCodeAgentWorkspaceSnapshot, CodeAgentWorkspaceSnapshot } from '../services/codeAgentWorkspace';
@@ -144,6 +145,39 @@ type WorkspacePreviewServersAck = {
   error?: string;
 };
 
+type WorkspaceTerminalStatus = 'running' | 'closed' | 'exited';
+
+type WorkspaceTerminalSessionSnapshot = {
+  roomId: string;
+  terminalId: string;
+  status: WorkspaceTerminalStatus;
+  cols: number;
+  rows: number;
+  pid?: number;
+  output: string;
+  updatedAt: string;
+};
+
+type WorkspaceTerminalSessionAck = {
+  success: boolean;
+  session?: WorkspaceTerminalSessionSnapshot;
+  sessions?: WorkspaceTerminalSessionSnapshot[];
+  error?: string;
+};
+
+type WorkspaceTerminalEvent = {
+  type: 'opened' | 'data' | 'resized' | 'closed' | 'exited';
+  roomId: string;
+  terminalId: string;
+  createdAt: string;
+  data?: string;
+  snapshot?: WorkspaceTerminalSessionSnapshot;
+};
+
+type WorkspaceTerminalRuntime = WorkspaceTerminalSessionSnapshot & {
+  terminal: CodeAgentWorkspaceTerminal;
+};
+
 type WorkspacePreviewEvent = {
   type: 'opened' | 'navigated' | 'resized' | 'status' | 'refreshed' | 'closed';
   roomId: string;
@@ -162,9 +196,19 @@ const PREVIEW_URL_MAX_LENGTH = 2048;
 const PREVIEW_VIEWPORT_MIN_DIMENSION = 240;
 const PREVIEW_VIEWPORT_MAX_DIMENSION = 3840;
 const PREVIEW_VIEWPORT_MAX_AREA = 3840 * 2160;
+const TERMINAL_ID_MAX_LENGTH = 128;
+const TERMINAL_INPUT_MAX_LENGTH = 64 * 1024;
+const TERMINAL_OUTPUT_TAIL_MAX_LENGTH = 200 * 1024;
+const TERMINAL_MIN_COLS = 20;
+const TERMINAL_MAX_COLS = 500;
+const TERMINAL_MIN_ROWS = 4;
+const TERMINAL_MAX_ROWS = 200;
+const DEFAULT_TERMINAL_COLS = 80;
+const DEFAULT_TERMINAL_ROWS = 24;
 const FILL_PREVIEW_VIEWPORT: WorkspacePreviewViewportSetting = { _tag: 'fill' };
 const workspacePreviewSessionsByRoomId = new Map<string, Map<string, WorkspacePreviewSessionSnapshot>>();
 const workspacePreviewHistoryByRoomAndTabId = new Map<string, string[]>();
+const workspaceTerminalSessionsByRoomId = new Map<string, Map<string, WorkspaceTerminalRuntime>>();
 const parsePositiveIntegerEnv = (name: string, fallback: number) => {
   const value = Number.parseInt(process.env[name] || '', 10);
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -233,6 +277,34 @@ const parseWorkspaceBoolean = (payload: unknown, key: string): boolean => {
 const parsePreviewTabId = (payload: unknown): string | null => {
   const tabId = parseWorkspaceString(payload, 'tabId');
   return tabId && tabId.length <= PREVIEW_TAB_ID_MAX_LENGTH ? tabId : null;
+};
+
+const parseTerminalId = (payload: unknown): string | null => {
+  const terminalId = parseWorkspaceString(payload, 'terminalId') || 'terminal';
+  return terminalId.length <= TERMINAL_ID_MAX_LENGTH ? terminalId : null;
+};
+
+const parseTerminalInput = (payload: unknown): string | null => {
+  const data = parseWorkspaceOptionalString(payload, 'data');
+  if (data === undefined || data.length > TERMINAL_INPUT_MAX_LENGTH) {
+    return null;
+  }
+  return data;
+};
+
+const parseTerminalSize = (payload: unknown): { cols: number; rows: number } => {
+  if (!payload || typeof payload !== 'object') {
+    return { cols: DEFAULT_TERMINAL_COLS, rows: DEFAULT_TERMINAL_ROWS };
+  }
+  const rawCols = Number((payload as { cols?: unknown }).cols);
+  const rawRows = Number((payload as { rows?: unknown }).rows);
+  const cols = Number.isFinite(rawCols)
+    ? Math.max(TERMINAL_MIN_COLS, Math.min(TERMINAL_MAX_COLS, Math.trunc(rawCols)))
+    : DEFAULT_TERMINAL_COLS;
+  const rows = Number.isFinite(rawRows)
+    ? Math.max(TERMINAL_MIN_ROWS, Math.min(TERMINAL_MAX_ROWS, Math.trunc(rawRows)))
+    : DEFAULT_TERMINAL_ROWS;
+  return { cols, rows };
 };
 
 const parsePreviewTitle = (payload: unknown): string => {
@@ -739,6 +811,40 @@ export function registerCodeAgentWorkspaceHandlers({
     io.to(event.roomId).emit('code_workspace_preview_event', event);
   };
 
+  const getTerminalSessionsForRoom = (roomId: string): Map<string, WorkspaceTerminalRuntime> => {
+    const existing = workspaceTerminalSessionsByRoomId.get(roomId);
+    if (existing) {
+      return existing;
+    }
+    const sessions = new Map<string, WorkspaceTerminalRuntime>();
+    workspaceTerminalSessionsByRoomId.set(roomId, sessions);
+    return sessions;
+  };
+
+  const terminalSnapshot = (session: WorkspaceTerminalRuntime): WorkspaceTerminalSessionSnapshot => ({
+    roomId: session.roomId,
+    terminalId: session.terminalId,
+    status: session.status,
+    cols: session.cols,
+    rows: session.rows,
+    ...(session.pid !== undefined ? { pid: session.pid } : {}),
+    output: session.output,
+    updatedAt: session.updatedAt,
+  });
+
+  const emitTerminalEvent = (event: WorkspaceTerminalEvent) => {
+    io.to(event.roomId).emit('code_workspace_terminal_event', event);
+  };
+
+  const appendTerminalOutput = (
+    session: WorkspaceTerminalRuntime,
+    data: string,
+  ): WorkspaceTerminalRuntime => ({
+    ...session,
+    output: `${session.output}${data}`.slice(-TERMINAL_OUTPUT_TAIL_MAX_LENGTH),
+    updatedAt: new Date().toISOString(),
+  });
+
   const putPreviewSession = (
     roomId: string,
     tabId: string,
@@ -1074,6 +1180,245 @@ export function registerCodeAgentWorkspaceHandlers({
     } catch (error) {
       socketLogger.error('Failed to list code workspace preview servers', { error, clientId, roomId, socketId: socket.id });
       callback?.({ success: false, error: 'Failed to list workspace preview servers' });
+    }
+  });
+
+  socket.on('open_code_workspace_terminal_session', async (payload: unknown, callback?: (response: WorkspaceTerminalSessionAck) => void) => {
+    const roomId = parseRoomId(payload);
+    const terminalId = parseTerminalId(payload);
+    const size = parseTerminalSize(payload);
+    let clientId: string | null = null;
+
+    try {
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'open code workspace terminal');
+      clientId = access.clientId ?? null;
+      if (!access.success) {
+        callback?.({ success: false, error: access.error });
+        return;
+      }
+      if (!terminalId) {
+        callback?.({ success: false, error: 'Terminal id is invalid' });
+        return;
+      }
+      if (!codeAgentSandboxService?.startWorkspaceTerminal) {
+        callback?.({ success: false, error: 'Workspace terminal is unavailable' });
+        return;
+      }
+      const workspace = await connectReadyWorkspace(access.room);
+      if (!workspace.success) {
+        callback?.({ success: false, error: workspace.error });
+        return;
+      }
+
+      const sessions = getTerminalSessionsForRoom(access.room.id);
+      const existing = sessions.get(terminalId);
+      if (existing && existing.status === 'running') {
+        if (existing.cols !== size.cols || existing.rows !== size.rows) {
+          await existing.terminal.resize(size);
+          const resized = {
+            ...existing,
+            cols: size.cols,
+            rows: size.rows,
+            updatedAt: new Date().toISOString(),
+          };
+          sessions.set(terminalId, resized);
+        }
+        callback?.({ success: true, session: terminalSnapshot(sessions.get(terminalId)!) });
+        return;
+      }
+
+      let earlyOutput = '';
+      const terminal = await codeAgentSandboxService.startWorkspaceTerminal({
+        handle: workspace.handle,
+        cols: size.cols,
+        rows: size.rows,
+        onData: (data) => {
+          const text = Buffer.from(data).toString('utf8');
+          const current = sessions.get(terminalId);
+          if (!current || current.status !== 'running') {
+            earlyOutput = `${earlyOutput}${text}`.slice(-TERMINAL_OUTPUT_TAIL_MAX_LENGTH);
+            return;
+          }
+          const next = appendTerminalOutput(current, text);
+          sessions.set(terminalId, next);
+          emitTerminalEvent({
+            type: 'data',
+            roomId: access.room.id,
+            terminalId,
+            createdAt: next.updatedAt,
+            data: text,
+            snapshot: terminalSnapshot(next),
+          });
+        },
+      });
+      const now = new Date().toISOString();
+      const session: WorkspaceTerminalRuntime = {
+        roomId: access.room.id,
+        terminalId,
+        status: 'running',
+        cols: size.cols,
+        rows: size.rows,
+        ...(terminal.pid !== undefined ? { pid: terminal.pid } : {}),
+        output: earlyOutput,
+        updatedAt: now,
+        terminal,
+      };
+      sessions.set(terminalId, session);
+      const snapshot = terminalSnapshot(session);
+      emitTerminalEvent({
+        type: 'opened',
+        roomId: access.room.id,
+        terminalId,
+        createdAt: now,
+        snapshot,
+      });
+      callback?.({ success: true, session: snapshot });
+    } catch (error) {
+      socketLogger.error('Failed to open code workspace terminal', { error, clientId, roomId, socketId: socket.id });
+      callback?.({ success: false, error: 'Failed to open workspace terminal' });
+    }
+  });
+
+  socket.on('input_code_workspace_terminal_session', async (payload: unknown, callback?: (response: WorkspaceMutationAck) => void) => {
+    const roomId = parseRoomId(payload);
+    const terminalId = parseTerminalId(payload);
+    const data = parseTerminalInput(payload);
+    let clientId: string | null = null;
+
+    try {
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'write code workspace terminal input');
+      clientId = access.clientId ?? null;
+      if (!access.success) {
+        callback?.({ success: false, error: access.error });
+        return;
+      }
+      if (!terminalId || data === null) {
+        callback?.({ success: false, error: 'Terminal input is invalid' });
+        return;
+      }
+      const session = getTerminalSessionsForRoom(access.room.id).get(terminalId);
+      if (!session || session.status !== 'running') {
+        callback?.({ success: false, error: 'Workspace terminal is not running' });
+        return;
+      }
+      await session.terminal.write(data);
+      callback?.({ success: true });
+    } catch (error) {
+      socketLogger.error('Failed to write code workspace terminal input', { error, clientId, roomId, terminalId, socketId: socket.id });
+      callback?.({ success: false, error: 'Failed to write workspace terminal input' });
+    }
+  });
+
+  socket.on('resize_code_workspace_terminal_session', async (payload: unknown, callback?: (response: WorkspaceTerminalSessionAck) => void) => {
+    const roomId = parseRoomId(payload);
+    const terminalId = parseTerminalId(payload);
+    const size = parseTerminalSize(payload);
+    let clientId: string | null = null;
+
+    try {
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'resize code workspace terminal');
+      clientId = access.clientId ?? null;
+      if (!access.success) {
+        callback?.({ success: false, error: access.error });
+        return;
+      }
+      if (!terminalId) {
+        callback?.({ success: false, error: 'Terminal id is invalid' });
+        return;
+      }
+      const sessions = getTerminalSessionsForRoom(access.room.id);
+      const session = sessions.get(terminalId);
+      if (!session || session.status !== 'running') {
+        callback?.({ success: false, error: 'Workspace terminal is not running' });
+        return;
+      }
+      await session.terminal.resize(size);
+      const next = {
+        ...session,
+        cols: size.cols,
+        rows: size.rows,
+        updatedAt: new Date().toISOString(),
+      };
+      sessions.set(terminalId, next);
+      const snapshot = terminalSnapshot(next);
+      emitTerminalEvent({
+        type: 'resized',
+        roomId: access.room.id,
+        terminalId,
+        createdAt: snapshot.updatedAt,
+        snapshot,
+      });
+      callback?.({ success: true, session: snapshot });
+    } catch (error) {
+      socketLogger.error('Failed to resize code workspace terminal', { error, clientId, roomId, terminalId, socketId: socket.id });
+      callback?.({ success: false, error: 'Failed to resize workspace terminal' });
+    }
+  });
+
+  socket.on('close_code_workspace_terminal_session', async (payload: unknown, callback?: (response: WorkspaceTerminalSessionAck) => void) => {
+    const roomId = parseRoomId(payload);
+    const terminalId = parseTerminalId(payload);
+    let clientId: string | null = null;
+
+    try {
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'close code workspace terminal');
+      clientId = access.clientId ?? null;
+      if (!access.success) {
+        callback?.({ success: false, error: access.error });
+        return;
+      }
+      if (!terminalId) {
+        callback?.({ success: false, error: 'Terminal id is invalid' });
+        return;
+      }
+      const sessions = getTerminalSessionsForRoom(access.room.id);
+      const session = sessions.get(terminalId);
+      if (!session) {
+        callback?.({ success: true, sessions: [...sessions.values()].map(terminalSnapshot) });
+        return;
+      }
+      if (session.status === 'running') {
+        await session.terminal.stop();
+      }
+      const next = {
+        ...session,
+        status: 'closed' as const,
+        updatedAt: new Date().toISOString(),
+      };
+      sessions.set(terminalId, next);
+      const snapshot = terminalSnapshot(next);
+      emitTerminalEvent({
+        type: 'closed',
+        roomId: access.room.id,
+        terminalId,
+        createdAt: snapshot.updatedAt,
+        snapshot,
+      });
+      callback?.({ success: true, session: snapshot, sessions: [...sessions.values()].map(terminalSnapshot) });
+    } catch (error) {
+      socketLogger.error('Failed to close code workspace terminal', { error, clientId, roomId, terminalId, socketId: socket.id });
+      callback?.({ success: false, error: 'Failed to close workspace terminal' });
+    }
+  });
+
+  socket.on('list_code_workspace_terminal_sessions', async (payload: unknown, callback?: (response: WorkspaceTerminalSessionAck) => void) => {
+    const roomId = parseRoomId(payload);
+    let clientId: string | null = null;
+
+    try {
+      const access = await loadAuthorizedCodeAgentRoom(roomId, 'list code workspace terminals');
+      clientId = access.clientId ?? null;
+      if (!access.success) {
+        callback?.({ success: false, error: access.error });
+        return;
+      }
+      callback?.({
+        success: true,
+        sessions: [...getTerminalSessionsForRoom(access.room.id).values()].map(terminalSnapshot),
+      });
+    } catch (error) {
+      socketLogger.error('Failed to list code workspace terminals', { error, clientId, roomId, socketId: socket.id });
+      callback?.({ success: false, error: 'Failed to list workspace terminals' });
     }
   });
 

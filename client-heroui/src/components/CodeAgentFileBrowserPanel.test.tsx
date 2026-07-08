@@ -40,6 +40,7 @@ const resolvePreviewTargetMock = vi.hoisted(() => vi.fn());
 const refreshPreviewSessionMock = vi.hoisted(() => vi.fn());
 const closePreviewSessionMock = vi.hoisted(() => vi.fn());
 const subscribePreviewEventsMock = vi.hoisted(() => vi.fn());
+const closeTerminalSessionMock = vi.hoisted(() => vi.fn());
 const getRoomMediaHistoryMock = vi.hoisted(() => vi.fn());
 const requestCodeWorkspacePreviewServersMock = vi.hoisted(() => vi.fn());
 const openSearchMock = vi.hoisted(() => vi.fn());
@@ -166,9 +167,19 @@ vi.mock('../utils/codeWorkspacePreviewSessions', () => {
   };
 });
 
+vi.mock('../utils/codeWorkspaceTerminalSessions', () => ({
+  closeCodeWorkspaceTerminalSession: closeTerminalSessionMock.mockImplementation(() => Promise.resolve(null)),
+}));
+
 vi.mock('../utils/socket', () => ({
   getRoomMediaHistory: getRoomMediaHistoryMock,
   requestCodeWorkspacePreviewServers: requestCodeWorkspacePreviewServersMock,
+}));
+
+vi.mock('./CodeAgentTerminalSurface', () => ({
+  CodeAgentTerminalSurface: ({ terminalId }: { terminalId: string }) => (
+    <div data-testid="code-agent-terminal-surface">{terminalId}</div>
+  ),
 }));
 
 vi.mock('./MarkdownContent', () => ({
@@ -454,6 +465,7 @@ describe('CodeAgentFileBrowserPanel', () => {
     refreshPreviewSessionMock.mockClear();
     closePreviewSessionMock.mockClear();
     subscribePreviewEventsMock.mockClear();
+    closeTerminalSessionMock.mockClear();
     getRoomMediaHistoryMock.mockReset();
     getRoomMediaHistoryMock.mockResolvedValue({
       roomId: 'room-1',
@@ -1088,9 +1100,9 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(browserSurfaceButton.disabled).toBe(false);
     expect(browserSurfaceButton.getAttribute('aria-disabled')).toBeNull();
     expect(browserSurfaceButton.getAttribute('title')).toBeNull();
-    expect(terminalSurfaceButton.disabled).toBe(true);
-    expect(terminalSurfaceButton.getAttribute('aria-disabled')).toBe('true');
-    expect(terminalSurfaceButton.getAttribute('title')).toBe('codeAgentTerminalSurfaceUnavailable');
+    expect(terminalSurfaceButton.disabled).toBe(false);
+    expect(terminalSurfaceButton.getAttribute('aria-disabled')).toBeNull();
+    expect(terminalSurfaceButton.getAttribute('title')).toBeNull();
     fireEvent.click(browserSurfaceButton);
     await waitFor(() => {
       expect(screen.getByTestId('code-agent-browser-surface-empty')).toBeTruthy();
@@ -2197,8 +2209,8 @@ describe('CodeAgentFileBrowserPanel', () => {
     const terminalSurfaceButton = within(emptyState).getByText('codeAgentTerminalSurface').closest('button')!;
     expect(browserSurfaceButton.disabled).toBe(false);
     expect(browserSurfaceButton.getAttribute('title')).toBeNull();
-    expect(terminalSurfaceButton.disabled).toBe(true);
-    expect(terminalSurfaceButton.getAttribute('title')).toBe('codeAgentTerminalSurfaceUnavailable');
+    expect(terminalSurfaceButton.disabled).toBe(false);
+    expect(terminalSurfaceButton.getAttribute('title')).toBeNull();
 
     fireEvent.click(within(emptyState).getByText('codeAgentChanges'));
     await waitFor(() => {

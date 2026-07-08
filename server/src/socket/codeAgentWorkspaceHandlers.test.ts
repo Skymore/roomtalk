@@ -115,6 +115,10 @@ const createHarness = (options: {
   const getWorkspaceDiffCalls: Array<{ sandboxId: string; maxBytes?: number; ignoreWhitespace?: boolean; scope?: string; baseRef?: string }> = [];
   const readWorkspaceFileCalls: Array<{ sandboxId: string; path: string; maxBytes?: number }> = [];
   const startWorkspaceCommandCalls: Array<{ sandboxId: string; command: string; timeoutMs?: number }> = [];
+  const startWorkspaceTerminalCalls: Array<{ sandboxId: string; cols: number; rows: number }> = [];
+  const workspaceTerminalInputs: string[] = [];
+  const workspaceTerminalResizes: Array<{ cols: number; rows: number }> = [];
+  const stoppedWorkspaceTerminals: string[] = [];
   const resolveWorkspacePreviewTargetCalls: Array<{ sandboxId: string; port: number; protocol?: 'http' | 'https'; path?: string }> = [];
   const listWorkspacePreviewServersCalls: Array<{ sandboxId: string }> = [];
   const writeWorkspaceFileCalls: Array<{ sandboxId: string; path: string; content: string; encoding?: 'utf-8' | 'base64' }> = [];
@@ -262,6 +266,28 @@ const createHarness = (options: {
           stop: async () => undefined,
         };
       },
+      startWorkspaceTerminal: async (input) => {
+        startWorkspaceTerminalCalls.push({
+          sandboxId: input.handle.id,
+          cols: input.cols,
+          rows: input.rows,
+        });
+        queueMicrotask(() => {
+          void input.onData(Buffer.from('ready\r\n', 'utf8'));
+        });
+        return {
+          pid: 123,
+          write: async (data: string | Uint8Array) => {
+            workspaceTerminalInputs.push(typeof data === 'string' ? data : Buffer.from(data).toString('utf8'));
+          },
+          resize: async (size: { cols: number; rows: number }) => {
+            workspaceTerminalResizes.push(size);
+          },
+          stop: async () => {
+            stoppedWorkspaceTerminals.push(input.handle.id);
+          },
+        };
+      },
       resolveWorkspacePreviewTarget: async (handle, input) => {
         resolveWorkspacePreviewTargetCalls.push({
           sandboxId: handle.id,
@@ -328,6 +354,10 @@ const createHarness = (options: {
     listWorkspaceRefsCalls,
     readWorkspaceFileCalls,
     startWorkspaceCommandCalls,
+    startWorkspaceTerminalCalls,
+    workspaceTerminalInputs,
+    workspaceTerminalResizes,
+    stoppedWorkspaceTerminals,
     resolveWorkspacePreviewTargetCalls,
     listWorkspacePreviewServersCalls,
     writeWorkspaceFileCalls,
@@ -600,6 +630,67 @@ describe('code-agent workspace socket handlers', () => {
       protocol: undefined,
       path: '/dashboard?tab=preview',
     }]);
+  });
+
+  it('opens and controls workspace terminal sessions through the ready sandbox', async () => {
+    const {
+      socket,
+      socketEvents,
+      startWorkspaceTerminalCalls,
+      workspaceTerminalInputs,
+      workspaceTerminalResizes,
+      stoppedWorkspaceTerminals,
+    } = createHarness();
+
+    const opened = await socket.invoke<any>('open_code_workspace_terminal_session', {
+      roomId: 'room-1',
+      terminalId: 'terminal',
+      cols: 100,
+      rows: 32,
+    });
+
+    assert.equal(opened.success, true);
+    assert.equal(opened.session.terminalId, 'terminal');
+    assert.equal(opened.session.status, 'running');
+    assert.equal(opened.session.pid, 123);
+    assert.deepEqual(startWorkspaceTerminalCalls, [{ sandboxId: 'sandbox-1', cols: 100, rows: 32 }]);
+    assert.equal((socketEvents.at(-1)?.payload as any).type, 'opened');
+
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal((socketEvents.at(-1)?.payload as any).type, 'opened');
+    assert.equal(((socketEvents.at(-1)?.payload as any).snapshot as any).output, 'ready\r\n');
+
+    const input = await socket.invoke<any>('input_code_workspace_terminal_session', {
+      roomId: 'room-1',
+      terminalId: 'terminal',
+      data: 'npm test\r',
+    });
+    assert.equal(input.success, true);
+    assert.deepEqual(workspaceTerminalInputs, ['npm test\r']);
+
+    const resized = await socket.invoke<any>('resize_code_workspace_terminal_session', {
+      roomId: 'room-1',
+      terminalId: 'terminal',
+      cols: 120,
+      rows: 40,
+    });
+    assert.equal(resized.success, true);
+    assert.deepEqual(workspaceTerminalResizes, [{ cols: 120, rows: 40 }]);
+    assert.equal((socketEvents.at(-1)?.payload as any).type, 'resized');
+
+    const listed = await socket.invoke<any>('list_code_workspace_terminal_sessions', { roomId: 'room-1' });
+    assert.equal(listed.success, true);
+    assert.equal(listed.sessions.length, 1);
+    assert.equal(listed.sessions[0].output, 'ready\r\n');
+
+    const closed = await socket.invoke<any>('close_code_workspace_terminal_session', {
+      roomId: 'room-1',
+      terminalId: 'terminal',
+    });
+    assert.equal(closed.success, true);
+    assert.equal(closed.session.status, 'closed');
+    assert.deepEqual(stoppedWorkspaceTerminals, ['sandbox-1']);
+    assert.equal((socketEvents.at(-1)?.payload as any).type, 'closed');
   });
 
   it('lists browser preview servers through the ready sandbox', async () => {

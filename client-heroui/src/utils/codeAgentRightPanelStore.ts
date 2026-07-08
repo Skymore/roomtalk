@@ -26,6 +26,7 @@ export type CodeAgentRightPanelSurface =
   } & CodeAgentPreviewNavigationState)
   | { id: 'diff'; kind: 'diff' }
   | { id: 'files'; kind: 'files' }
+  | { id: 'terminal'; kind: 'terminal'; terminalId: 'terminal' }
   | {
     id: `file:${string}`;
     kind: 'file';
@@ -450,10 +451,12 @@ function previewSurfaceFromSessionSnapshot(
   });
 }
 
-function singletonSurface(kind: 'diff' | 'files'): CodeAgentRightPanelSurface {
+function singletonSurface(kind: 'diff' | 'files' | 'terminal'): CodeAgentRightPanelSurface {
   return kind === 'diff'
     ? { id: 'diff', kind: 'diff' }
-    : { id: 'files', kind: 'files' };
+    : kind === 'files'
+      ? { id: 'files', kind: 'files' }
+      : { id: 'terminal', kind: 'terminal', terminalId: 'terminal' };
 }
 
 function emptyStoreState(): CodeAgentRightPanelStoreState {
@@ -470,6 +473,9 @@ function coerceSurface(value: unknown): CodeAgentRightPanelSurface | null {
   }
   if (surface.kind === 'files' || surface.id === 'files') {
     return { id: 'files', kind: 'files' };
+  }
+  if (surface.kind === 'terminal' || surface.id === 'terminal') {
+    return { id: 'terminal', kind: 'terminal', terminalId: 'terminal' };
   }
   if (surface.kind === 'preview' || (typeof surface.id === 'string' && surface.id.startsWith('browser:'))) {
     const previewSurface = surface as Partial<CodeAgentPreviewSurface>;
@@ -740,7 +746,7 @@ export function selectActiveCodeAgentRightPanelKind(roomId: string): CodeAgentRi
   return selectActiveCodeAgentRightPanelSurface(roomId)?.kind ?? null;
 }
 
-export function openCodeAgentRightPanel(roomId: string, kind: 'diff' | 'files') {
+export function openCodeAgentRightPanel(roomId: string, kind: 'diff' | 'files' | 'terminal') {
   const roomKey = normalizeRoomId(roomId);
   if (!roomKey) {
     return;
@@ -1222,7 +1228,7 @@ export function toggleCodeAgentRightPanelVisibility(roomId: string) {
   }));
 }
 
-export function toggleCodeAgentRightPanel(roomId: string, kind: 'diff' | 'files' | 'preview') {
+export function toggleCodeAgentRightPanel(roomId: string, kind: 'diff' | 'files' | 'preview' | 'terminal') {
   const roomKey = normalizeRoomId(roomId);
   if (!roomKey) {
     return;

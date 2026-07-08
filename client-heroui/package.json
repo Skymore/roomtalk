@@ -36,6 +36,8 @@
     "@types/react-modal": "^3.16.3",
     "@types/socket.io-client": "^1.4.36",
     "@types/uuid": "^10.0.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "browser-image-compression": "^2.0.2",
     "framer-motion": "^11.18.2",
     "heroicons": "^2.2.0",

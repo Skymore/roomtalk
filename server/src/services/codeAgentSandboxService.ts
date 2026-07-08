@@ -47,6 +47,22 @@ export interface StartCodeAgentWorkspaceCommandInput {
   timeoutMs?: number;
 }
 
+export interface StartCodeAgentWorkspaceTerminalInput {
+  handle: CodeAgentSandboxHandle;
+  cols: number;
+  rows: number;
+  env?: Record<string, string>;
+  timeoutMs?: number;
+  onData(data: Uint8Array): void | Promise<void>;
+}
+
+export interface CodeAgentWorkspaceTerminal {
+  pid?: number;
+  write(data: string | Uint8Array): Promise<void>;
+  resize(size: { cols: number; rows: number }): Promise<void>;
+  stop(): Promise<void>;
+}
+
 export interface ListCodeAgentWorkspaceEntriesOptions {
   maxDepth?: number;
   maxEntries?: number;
@@ -204,6 +220,7 @@ export interface CodeAgentSandboxService {
   setSandboxTimeout?(handle: CodeAgentSandboxHandle, ttlMs: number): Promise<CodeAgentSandboxHandle>;
   startRunner(input: StartCodeAgentRunnerInput): Promise<CodeAgentRunnerProcess>;
   startWorkspaceCommand?(input: StartCodeAgentWorkspaceCommandInput): Promise<CodeAgentRunnerProcess>;
+  startWorkspaceTerminal?(input: StartCodeAgentWorkspaceTerminalInput): Promise<CodeAgentWorkspaceTerminal>;
   getWorkspaceChanges?(handle: CodeAgentSandboxHandle): Promise<CodeAgentWorkspaceChanges>;
   getWorkspaceDiff?(handle: CodeAgentSandboxHandle, options?: ReadCodeAgentWorkspaceDiffOptions): Promise<CodeAgentWorkspaceDiff>;
   listWorkspaceRefs?(handle: CodeAgentSandboxHandle, options?: ListCodeAgentWorkspaceRefsOptions): Promise<CodeAgentWorkspaceRefs>;

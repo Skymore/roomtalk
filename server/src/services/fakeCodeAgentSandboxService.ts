@@ -12,6 +12,7 @@ import {
   CodeAgentWorkspacePreviewServer,
   CodeAgentWorkspaceRef,
   CodeAgentWorkspaceRefs,
+  CodeAgentWorkspaceTerminal,
   CreateCodeAgentSandboxInput,
   ExportCodeAgentWorkspaceArchiveOptions,
   ImportCodeAgentWorkspaceArchiveOptions,
@@ -26,6 +27,7 @@ import {
   SearchCodeAgentWorkspaceEntriesOptions,
   StartCodeAgentRunnerInput,
   StartCodeAgentWorkspaceCommandInput,
+  StartCodeAgentWorkspaceTerminalInput,
   WriteCodeAgentSandboxSecretFileInput,
   WriteCodeAgentWorkspaceFileInput,
   searchCodeAgentWorkspaceEntries,
@@ -51,6 +53,10 @@ export class FakeCodeAgentSandboxService implements CodeAgentSandboxService {
   readonly startedWorkspaceCommandTimeouts: Array<number | undefined> = [];
   readonly stoppedRunnerCommands: string[] = [];
   readonly stoppedWorkspaceCommands: string[] = [];
+  readonly startedWorkspaceTerminals: Array<{ sandboxId: string; cols: number; rows: number }> = [];
+  readonly workspaceTerminalInputs: Array<{ sandboxId: string; data: string }> = [];
+  readonly workspaceTerminalResizes: Array<{ sandboxId: string; cols: number; rows: number }> = [];
+  readonly stoppedWorkspaceTerminals: string[] = [];
   readonly resolvedWorkspacePreviewTargets: Array<{ sandboxId: string; port: number; protocol?: 'http' | 'https'; path?: string }> = [];
   readonly sandboxTimeoutUpdates: Array<{ sandboxId: string; ttlMs: number }> = [];
   readonly deletedSecretFilePaths: string[] = [];
@@ -152,6 +158,37 @@ export class FakeCodeAgentSandboxService implements CodeAgentSandboxService {
       command: input.command,
       stop: async () => {
         this.stoppedWorkspaceCommands.push(input.command);
+      },
+    };
+  }
+
+  async startWorkspaceTerminal(input: StartCodeAgentWorkspaceTerminalInput): Promise<CodeAgentWorkspaceTerminal> {
+    this.consumeFailure('startRunner');
+    this.startedWorkspaceTerminals.push({
+      sandboxId: input.handle.id,
+      cols: input.cols,
+      rows: input.rows,
+    });
+    queueMicrotask(() => {
+      void input.onData(Buffer.from('fake terminal ready\r\n', 'utf8'));
+    });
+    return {
+      pid: this.startedWorkspaceTerminals.length,
+      write: async (data) => {
+        this.workspaceTerminalInputs.push({
+          sandboxId: input.handle.id,
+          data: typeof data === 'string' ? data : Buffer.from(data).toString('utf8'),
+        });
+      },
+      resize: async (size) => {
+        this.workspaceTerminalResizes.push({
+          sandboxId: input.handle.id,
+          cols: size.cols,
+          rows: size.rows,
+        });
+      },
+      stop: async () => {
+        this.stoppedWorkspaceTerminals.push(input.handle.id);
       },
     };
   }

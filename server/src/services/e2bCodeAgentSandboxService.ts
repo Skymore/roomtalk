@@ -24,9 +24,11 @@ import {
   ResolveCodeAgentWorkspacePreviewTargetInput,
   CodeAgentWorkspacePreviewServer,
   CodeAgentWorkspacePreviewTargetResolution,
+  CodeAgentWorkspaceTerminal,
   SearchCodeAgentWorkspaceEntriesOptions,
   StartCodeAgentRunnerInput,
   StartCodeAgentWorkspaceCommandInput,
+  StartCodeAgentWorkspaceTerminalInput,
   WriteCodeAgentSandboxSecretFileInput,
   WriteCodeAgentWorkspaceFileInput,
   searchCodeAgentWorkspaceEntries,
@@ -39,6 +41,9 @@ export interface E2BSandboxDriverHandle {
   setTimeout?(timeoutMs: number): Promise<void>;
   commands?: {
     run(command: string, options?: { env?: Record<string, string>; timeoutMs?: number }): Promise<E2BCommandResult>;
+  };
+  pty?: {
+    create(options: E2BTerminalCreateOptions): Promise<E2BTerminalResult>;
   };
   files?: {
     list(path: string, options?: { depth?: number }): Promise<E2BFileEntry[]>;
@@ -78,6 +83,22 @@ export interface E2BCommandResult {
   stderr?: Readable;
   completed?: Promise<CodeAgentRunnerProcessExit>;
   stop?(): Promise<void>;
+}
+
+export interface E2BTerminalCreateOptions {
+  cols: number;
+  rows: number;
+  cwd?: string;
+  env?: Record<string, string>;
+  timeoutMs?: number;
+  onData(data: Uint8Array): void | Promise<void>;
+}
+
+export interface E2BTerminalResult {
+  pid?: number;
+  write(data: string | Uint8Array): Promise<void>;
+  resize(size: { cols: number; rows: number }): Promise<void>;
+  stop(): Promise<void>;
 }
 
 export interface E2BSandboxDriver {
@@ -203,6 +224,24 @@ export class E2BCodeAgentSandboxService implements CodeAgentSandboxService {
     return this.startCommand({
       ...input,
       timeoutMs: input.timeoutMs ?? 0,
+    });
+  }
+
+  async startWorkspaceTerminal(input: StartCodeAgentWorkspaceTerminalInput): Promise<CodeAgentWorkspaceTerminal> {
+    const connected = await this.driver.connect(input.handle.id);
+    if (!connected.pty?.create) {
+      throw new Error('E2B sandbox driver handle does not support terminal PTYs');
+    }
+    return connected.pty.create({
+      cols: input.cols,
+      rows: input.rows,
+      cwd: input.handle.workspace || this.options.workspace || '/workspace',
+      env: {
+        ...(input.env || {}),
+        ...portHostTemplateEnv(connected),
+      },
+      timeoutMs: input.timeoutMs ?? 0,
+      onData: input.onData,
     });
   }
 

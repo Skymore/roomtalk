@@ -144,6 +144,11 @@ type CodeWorkspacePreviewServersAckResponse = SocketAckResponse & {
   servers?: unknown[];
 };
 
+type CodeWorkspaceTerminalSessionAckResponse = SocketAckResponse & {
+  session?: unknown;
+  sessions?: unknown[];
+};
+
 type CodexThreadListAckResponse = SocketAckResponse & {
   threads?: unknown[];
   nextCursor?: string | null;
@@ -1172,6 +1177,15 @@ export type CodeWorkspacePreviewEvent = {
   snapshot?: unknown;
 };
 
+export type CodeWorkspaceTerminalEvent = {
+  type: 'opened' | 'data' | 'resized' | 'closed' | 'exited';
+  roomId: string;
+  terminalId: string;
+  createdAt: string;
+  data?: string;
+  snapshot?: unknown;
+};
+
 export type CodeWorkspacePreviewNavigationTarget =
   | { kind: 'url'; url: string }
   | { kind: 'environment-port'; port: number; protocol?: 'http' | 'https'; path?: string };
@@ -1331,6 +1345,71 @@ export const requestCloseCodeWorkspacePreviewSession = (
     payload,
     'Timed out while closing workspace preview',
     'Failed to close workspace preview',
+    { retryOnSocketReconnect: true },
+  ).then((response) => response.sessions || [])
+);
+
+export const requestOpenCodeWorkspaceTerminalSession = (
+  payload: { roomId: string; terminalId?: string; cols?: number; rows?: number },
+): Promise<unknown> => (
+  emitWithAck<CodeWorkspaceTerminalSessionAckResponse>(
+    'open_code_workspace_terminal_session',
+    payload,
+    'Timed out while opening workspace terminal',
+    'Failed to open workspace terminal',
+    { retryOnSocketReconnect: true },
+  ).then((response) => {
+    if (!response.session) {
+      throw new Error('Server did not return workspace terminal session');
+    }
+    return response.session;
+  })
+);
+
+export const requestInputCodeWorkspaceTerminalSession = (
+  payload: { roomId: string; terminalId: string; data: string },
+): Promise<void> => (
+  emitWithAck<SocketAckResponse>(
+    'input_code_workspace_terminal_session',
+    payload,
+    'Timed out while writing workspace terminal input',
+    'Failed to write workspace terminal input',
+  ).then(() => undefined)
+);
+
+export const requestResizeCodeWorkspaceTerminalSession = (
+  payload: { roomId: string; terminalId: string; cols: number; rows: number },
+): Promise<unknown> => (
+  emitWithAck<CodeWorkspaceTerminalSessionAckResponse>(
+    'resize_code_workspace_terminal_session',
+    payload,
+    'Timed out while resizing workspace terminal',
+    'Failed to resize workspace terminal',
+  ).then((response) => {
+    if (!response.session) {
+      throw new Error('Server did not return workspace terminal session');
+    }
+    return response.session;
+  })
+);
+
+export const requestCloseCodeWorkspaceTerminalSession = (
+  payload: { roomId: string; terminalId: string },
+): Promise<unknown> => (
+  emitWithAck<CodeWorkspaceTerminalSessionAckResponse>(
+    'close_code_workspace_terminal_session',
+    payload,
+    'Timed out while closing workspace terminal',
+    'Failed to close workspace terminal',
+  ).then((response) => response.session || null)
+);
+
+export const requestCodeWorkspaceTerminalSessions = (roomId: string): Promise<unknown[]> => (
+  emitWithAck<CodeWorkspaceTerminalSessionAckResponse>(
+    'list_code_workspace_terminal_sessions',
+    { roomId },
+    'Timed out while loading workspace terminals',
+    'Failed to load workspace terminals',
     { retryOnSocketReconnect: true },
   ).then((response) => response.sessions || [])
 );
@@ -1709,6 +1788,15 @@ export const onCodeWorkspacePreviewEvent = (
   socket.on('code_workspace_preview_event', callback);
   return () => {
     socket.off('code_workspace_preview_event', callback);
+  };
+};
+
+export const onCodeWorkspaceTerminalEvent = (
+  callback: (event: CodeWorkspaceTerminalEvent) => void,
+) => {
+  socket.on('code_workspace_terminal_event', callback);
+  return () => {
+    socket.off('code_workspace_terminal_event', callback);
   };
 };
 

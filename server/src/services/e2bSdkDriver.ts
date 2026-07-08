@@ -6,6 +6,8 @@ import {
   E2BSandboxLifecyclePolicy,
   E2BSandboxDriver,
   E2BSandboxDriverHandle,
+  E2BTerminalCreateOptions,
+  E2BTerminalResult,
 } from './e2bCodeAgentSandboxService';
 
 interface E2BSdkCommandResult {
@@ -44,11 +46,26 @@ interface E2BSdkCommands {
   closeStdin?(pid: number): Promise<void>;
 }
 
+interface E2BSdkPty {
+  create(options: {
+    cols: number;
+    rows: number;
+    cwd?: string;
+    envs?: Record<string, string>;
+    timeoutMs?: number;
+    onData: (data: Uint8Array) => void | Promise<void>;
+  }): Promise<E2BSdkCommandHandle>;
+  sendInput(pid: number, data: Uint8Array): Promise<void>;
+  resize(pid: number, size: { cols: number; rows: number }): Promise<void>;
+  kill(pid: number): Promise<boolean>;
+}
+
 interface E2BSdkSandbox {
   sandboxId: string;
   getHost?(port: number): string;
   setTimeout?(timeoutMs: number): Promise<void>;
   commands: E2BSdkCommands;
+  pty?: E2BSdkPty;
   files?: {
     list(path: string, opts?: { depth?: number }): Promise<E2BFileEntry[]>;
     read?(path: string, opts?: { format?: 'text' | 'bytes' | 'stream' }): Promise<string | Uint8Array | ReadableStream<Uint8Array>>;
@@ -177,6 +194,11 @@ class E2BSdkDriver implements E2BSandboxDriver {
       commands: {
         run: (command, options) => startE2BCommand(sandbox, command, options?.env || {}, options?.timeoutMs),
       },
+      ...(sandbox.pty ? {
+        pty: {
+          create: (options) => startE2BTerminal(sandbox, options),
+        },
+      } : {}),
       files: sandbox.files
         ? {
             list: (path, options) => sandbox.files!.list(path, { depth: options?.depth }),
@@ -200,6 +222,34 @@ const sdkLifecycle = (policy: E2BSandboxLifecyclePolicy): Record<string, unknown
   return {
     onTimeout: { action: 'pause', keepMemory: policy.keepMemory ?? true },
     ...(policy.autoResume !== undefined ? { autoResume: policy.autoResume } : {}),
+  };
+};
+
+const startE2BTerminal = async (
+  sandbox: E2BSdkSandbox,
+  options: E2BTerminalCreateOptions
+): Promise<E2BTerminalResult> => {
+  if (!sandbox.pty) {
+    throw new Error('E2B SDK Sandbox PTY export is unavailable');
+  }
+  const ptyHandle = await sandbox.pty.create({
+    cols: options.cols,
+    rows: options.rows,
+    ...(options.cwd ? { cwd: options.cwd } : {}),
+    envs: options.env || {},
+    ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+    onData: options.onData,
+  });
+  return {
+    pid: ptyHandle.pid,
+    write: (data) => sandbox.pty!.sendInput(
+      ptyHandle.pid,
+      typeof data === 'string' ? Buffer.from(data, 'utf8') : Buffer.from(data)
+    ),
+    resize: (size) => sandbox.pty!.resize(ptyHandle.pid, size),
+    stop: async () => {
+      await sandbox.pty!.kill(ptyHandle.pid);
+    },
   };
 };
 

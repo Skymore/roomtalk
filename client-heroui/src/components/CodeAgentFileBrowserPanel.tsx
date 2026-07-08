@@ -123,12 +123,16 @@ import {
   type PreviewableCodeWorkspacePreviewServer,
 } from '../utils/codeWorkspacePreviewServers';
 import {
+  closeCodeWorkspaceTerminalSession,
+} from '../utils/codeWorkspaceTerminalSessions';
+import {
   FILL_CODE_AGENT_PREVIEW_VIEWPORT,
   type CodeAgentPreviewViewportSetting,
 } from '../utils/codeAgentPreviewViewport';
 import {
   resolveResponsiveCodeAgentBrowserViewportSize,
 } from '../utils/codeAgentBrowserViewportLayout';
+import { CodeAgentTerminalSurface } from './CodeAgentTerminalSurface';
 
 interface CodeAgentFileBrowserPanelProps {
   roomId: string;
@@ -198,16 +202,24 @@ type WorkspaceRemoteSearchState = {
 
 interface CodeAgentRightPanelEmptyStateProps {
   onAddBrowser: () => void;
+  onAddTerminal: () => void;
   onAddFiles: () => void;
   onAddDiff: () => void;
 }
 
 type CodeAgentPreviewPanelSurface = Extract<CodeAgentRightPanelSurface, { kind: 'preview' }>;
+type CodeAgentTerminalPanelSurface = Extract<CodeAgentRightPanelSurface, { kind: 'terminal' }>;
 
 function isCodeAgentPreviewSurface(
   surface: CodeAgentRightPanelSurface,
 ): surface is CodeAgentPreviewPanelSurface {
   return surface.kind === 'preview';
+}
+
+function isCodeAgentTerminalSurface(
+  surface: CodeAgentRightPanelSurface,
+): surface is CodeAgentTerminalPanelSurface {
+  return surface.kind === 'terminal';
 }
 
 function previewSessionTabIdFromSurface(surface: CodeAgentPreviewPanelSurface): string {
@@ -659,6 +671,7 @@ function CodeAgentBrowserMoreMenu({
 
 function CodeAgentRightPanelEmptyState({
   onAddBrowser,
+  onAddTerminal,
   onAddFiles,
   onAddDiff,
 }: CodeAgentRightPanelEmptyStateProps) {
@@ -674,9 +687,9 @@ function CodeAgentRightPanelEmptyState({
     {
       label: t('codeAgentTerminalSurface'),
       description: t('codeAgentTerminalSurfaceDescription'),
-      disabledReason: t('codeAgentTerminalSurfaceUnavailable'),
+      disabledReason: null,
       icon: TerminalSquare,
-      onClick: null,
+      onClick: onAddTerminal,
     },
     {
       label: t('codeAgentWorkspaceFiles'),
@@ -2272,6 +2285,12 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     )) ?? null,
     [rightPanelState.activeSurfaceId, rightPanelSurfaces],
   );
+  const activeTerminalSurface = useMemo(
+    () => rightPanelSurfaces.find((surface): surface is CodeAgentTerminalPanelSurface => (
+      surface.id === rightPanelState.activeSurfaceId && isCodeAgentTerminalSurface(surface)
+    )) ?? null,
+    [rightPanelState.activeSurfaceId, rightPanelSurfaces],
+  );
 
   useEffect(() => {
     let disposed = false;
@@ -3137,13 +3156,31 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     }
   }, [roomId]);
 
+  const closeTerminalSessionsForSurfaces = useCallback((
+    surfaces: readonly CodeAgentRightPanelSurface[],
+  ) => {
+    const terminalIds = new Set<string>();
+    for (const surface of surfaces) {
+      if (surface.kind !== 'terminal') {
+        continue;
+      }
+      terminalIds.add(surface.terminalId);
+    }
+    for (const terminalId of terminalIds) {
+      void closeCodeWorkspaceTerminalSession({ roomId, terminalId }).catch(() => {
+        // Closing the local surface should not be blocked by a stale cloud terminal session.
+      });
+    }
+  }, [roomId]);
+
   const closeFileSurface = useCallback((surfaceId: string) => {
     const surface = rightPanelSurfaces.find((entry) => entry.id === surfaceId);
     if (surface) {
       closePreviewSessionsForSurfaces([surface]);
+      closeTerminalSessionsForSurfaces([surface]);
     }
     closeCodeAgentRightPanelSurface(roomId, surfaceId);
-  }, [closePreviewSessionsForSurfaces, rightPanelSurfaces, roomId]);
+  }, [closePreviewSessionsForSurfaces, closeTerminalSessionsForSurfaces, rightPanelSurfaces, roomId]);
 
   const closeFileSurfaceAddMenu = useCallback(() => {
     setFileSurfaceAddMenuPosition(null);
@@ -3172,6 +3209,11 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
     closeFileSurfaceAddMenu();
     pendingBrowserAddressFocusRef.current = true;
     addCodeAgentRightPanelPreviewSurface(roomId);
+  }, [closeFileSurfaceAddMenu, roomId]);
+
+  const openTerminalSurface = useCallback(() => {
+    closeFileSurfaceAddMenu();
+    openCodeAgentRightPanel(roomId, 'terminal');
   }, [closeFileSurfaceAddMenu, roomId]);
 
   const openDiffSurface = useCallback(() => {
@@ -3282,24 +3324,29 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
 
   const closeOtherFileSurfaces = useCallback((surfaceId: string) => {
     closeFileSurfaceTabMenu();
-    closePreviewSessionsForSurfaces(rightPanelSurfaces.filter((surface) => surface.id !== surfaceId));
+    const surfacesToClose = rightPanelSurfaces.filter((surface) => surface.id !== surfaceId);
+    closePreviewSessionsForSurfaces(surfacesToClose);
+    closeTerminalSessionsForSurfaces(surfacesToClose);
     closeOtherCodeAgentRightPanelSurfaces(roomId, surfaceId);
-  }, [closeFileSurfaceTabMenu, closePreviewSessionsForSurfaces, rightPanelSurfaces, roomId]);
+  }, [closeFileSurfaceTabMenu, closePreviewSessionsForSurfaces, closeTerminalSessionsForSurfaces, rightPanelSurfaces, roomId]);
 
   const closeFileSurfacesToRight = useCallback((surfaceId: string) => {
     closeFileSurfaceTabMenu();
     const surfaceIndex = rightPanelSurfaces.findIndex((surface) => surface.id === surfaceId);
     if (surfaceIndex >= 0) {
-      closePreviewSessionsForSurfaces(rightPanelSurfaces.slice(surfaceIndex + 1));
+      const surfacesToClose = rightPanelSurfaces.slice(surfaceIndex + 1);
+      closePreviewSessionsForSurfaces(surfacesToClose);
+      closeTerminalSessionsForSurfaces(surfacesToClose);
     }
     closeCodeAgentRightPanelSurfacesToRight(roomId, surfaceId);
-  }, [closeFileSurfaceTabMenu, closePreviewSessionsForSurfaces, rightPanelSurfaces, roomId]);
+  }, [closeFileSurfaceTabMenu, closePreviewSessionsForSurfaces, closeTerminalSessionsForSurfaces, rightPanelSurfaces, roomId]);
 
   const closeAllFileSurfaces = useCallback(() => {
     closeFileSurfaceTabMenu();
     closePreviewSessionsForSurfaces(rightPanelSurfaces);
+    closeTerminalSessionsForSurfaces(rightPanelSurfaces);
     closeAllCodeAgentRightPanelSurfaces(roomId);
-  }, [closeFileSurfaceTabMenu, closePreviewSessionsForSurfaces, rightPanelSurfaces, roomId]);
+  }, [closeFileSurfaceTabMenu, closePreviewSessionsForSurfaces, closeTerminalSessionsForSurfaces, rightPanelSurfaces, roomId]);
 
   useEffect(() => {
     if (!fileSurfaceTabMenu || fileSurfaceTabMenuSurface) {
@@ -3489,15 +3536,19 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                   ? t('codeAgentChanges')
                   : surface.kind === 'files'
                     ? t('codeAgentWorkspaceFiles')
-                    : surface.kind === 'preview'
-                      ? (surface.relativePath
-                        ? basename(surface.relativePath)
-                        : surface.url
-                          ? formatBrowserSurfaceUrlTitle(surface.url)
-                          : t('codeAgentBrowserSurface'))
-                      : basename(surface.relativePath);
+                    : surface.kind === 'terminal'
+                      ? t('codeAgentTerminalSurface')
+                      : surface.kind === 'preview'
+                        ? (surface.relativePath
+                          ? basename(surface.relativePath)
+                          : surface.url
+                            ? formatBrowserSurfaceUrlTitle(surface.url)
+                            : t('codeAgentBrowserSurface'))
+                        : basename(surface.relativePath);
                 const fullTitle = surface.kind === 'file'
                   ? surface.relativePath
+                  : surface.kind === 'terminal'
+                    ? t('codeAgentTerminalSurface')
                   : surface.kind === 'preview'
                     ? surface.relativePath ?? surface.url ?? title
                     : title;
@@ -3527,6 +3578,8 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                         <FileDiff className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
                       ) : surface.kind === 'files' ? (
                         <Files className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                      ) : surface.kind === 'terminal' ? (
+                        <TerminalSquare className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
                       ) : surface.kind === 'preview' ? (
                         <CodeAgentBrowserTabIcon url={surface.url} />
                       ) : surface.kind === 'file' ? (
@@ -3631,11 +3684,9 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
           </button>
           <button
             type="button"
-            className="flex w-full cursor-not-allowed items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] opacity-45 disabled:hover:bg-transparent dark:text-[#faf9f5] dark:disabled:hover:bg-transparent"
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#141413] hover:bg-[#f0eee6] dark:text-[#faf9f5] dark:hover:bg-[#30302e]"
             role="menuitem"
-            aria-disabled="true"
-            title={t('codeAgentTerminalSurfaceUnavailable')}
-            disabled
+            onClick={openTerminalSurface}
           >
             <TerminalSquare className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
             <span className="min-w-0 truncate">{t('codeAgentTerminalSurface')}</span>
@@ -3728,6 +3779,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
       {rightPanelSurfaces.length === 0 ? (
         <CodeAgentRightPanelEmptyState
           onAddBrowser={openPreviewSurface}
+          onAddTerminal={openTerminalSurface}
           onAddFiles={openFilesSurface}
           onAddDiff={openDiffSurface}
         />
@@ -3744,6 +3796,11 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
           onNavigate={handleNavigatePreviewSurface}
           onNavigateHistory={handleNavigatePreviewHistory}
           onRefreshWorkspacePreview={handleAssetPreviewChanged}
+        />
+      ) : activeTerminalSurface ? (
+        <CodeAgentTerminalSurface
+          roomId={roomId}
+          terminalId={activeTerminalSurface.terminalId}
         />
       ) : activeDiffSurface ? (
         <div
