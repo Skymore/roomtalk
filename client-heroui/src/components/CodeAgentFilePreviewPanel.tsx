@@ -3,12 +3,14 @@ import { File as DiffFile, type FileOptions, Virtualizer } from '@pierre/diffs/r
 import {
   Download,
   LoaderCircle,
+  TerminalSquare,
 } from 'lucide-react';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   writeCodeWorkspaceFile,
   type CodeWorkspaceFile,
+  type CodeWorkspaceFilePreview,
 } from '../utils/codeWorkspaceFiles';
 import { resolveCodeAgentDiffThemeName } from '../utils/codeAgentDiffRendering';
 import {
@@ -805,6 +807,7 @@ interface FilePreviewSurfaceProps {
   assetPreviewError: string | null;
   assetPreviewPending: boolean;
   assetPreviewResolvedUrl: string | null;
+  devServerPreview?: Extract<CodeWorkspaceFilePreview, { kind: 'dev-server' }> | null;
   assetPreviewRevision: number;
   resolvedTheme: 'light' | 'dark';
   renderPreview: boolean;
@@ -818,6 +821,7 @@ interface FilePreviewSurfaceProps {
   onFileSavePendingChange?: (relativePath: string, pending: boolean) => void;
   onEntriesChanged: () => void;
   onAssetPreviewChanged: (relativePath: string) => void;
+  onStartDevServerPreview?: () => void;
   onOpenWorkspaceFile: (path: string) => void;
   onOpenWorkspaceFileInBrowserPreview?: (path: string) => void;
   reviewComments: readonly ReviewCommentContext[];
@@ -837,6 +841,7 @@ function FilePreviewSurface({
   assetPreviewError,
   assetPreviewPending,
   assetPreviewResolvedUrl,
+  devServerPreview,
   assetPreviewRevision,
   resolvedTheme,
   renderPreview,
@@ -850,6 +855,7 @@ function FilePreviewSurface({
   onFileSavePendingChange,
   onEntriesChanged,
   onAssetPreviewChanged,
+  onStartDevServerPreview,
   onOpenWorkspaceFile,
   onOpenWorkspaceFileInBrowserPreview,
   reviewComments,
@@ -883,6 +889,43 @@ function FilePreviewSurface({
       return (
         <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-[#9f462c] dark:text-[#ff9b78]">
           {assetPreviewError}
+        </div>
+      );
+    }
+
+    if (devServerPreview && !assetPreviewResolvedUrl) {
+      return (
+        <div
+          className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-white px-6 py-8 dark:bg-[#141413]"
+          data-testid="code-agent-file-dev-server-preview-pending"
+        >
+          <div className="flex w-full max-w-xl flex-col items-start gap-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-md border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]">
+                <TerminalSquare className="h-4 w-4 text-[#5e5d59] dark:text-[#b0aea5]" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-[#141413] dark:text-[#faf9f5]">
+                  {t('codeAgentPreparingBrowserPreview')}
+                </div>
+                <div className="mt-0.5 truncate text-xs text-[#87867f] dark:text-[#8f8d86]">
+                  {devServerPreview.frameworkName} - {devServerPreview.requestedUrl}
+                </div>
+              </div>
+            </div>
+            <code className="block w-full overflow-x-auto rounded-md border border-[#dedbd0] bg-[#f5f4ed] px-3 py-2 text-xs text-[#4d4c48] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#d7d4ca]">
+              {devServerPreview.command}
+            </code>
+            {onStartDevServerPreview ? (
+              <button
+                type="button"
+                className="inline-flex h-8 items-center rounded-md border border-[#dedbd0] px-3 text-xs font-medium text-[#4d4c48] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:border-[#30302e] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+                onClick={onStartDevServerPreview}
+              >
+                {devServerPreview.status === 'starting' ? t('refresh') : t('codeAgentStartPreview')}
+              </button>
+            ) : null}
+          </div>
         </div>
       );
     }
@@ -1008,6 +1051,7 @@ interface CodeAgentFilePreviewPanelProps {
   assetPreviewError: string | null;
   assetPreviewPending: boolean;
   assetPreviewResolvedUrl: string | null;
+  devServerPreview?: Extract<CodeWorkspaceFilePreview, { kind: 'dev-server' }> | null;
   assetPreviewRevision: number;
   resolvedTheme: 'light' | 'dark';
   renderPreview: boolean;
@@ -1035,6 +1079,7 @@ interface CodeAgentFilePreviewPanelProps {
   onFileSavePendingChange?: (relativePath: string, pending: boolean) => void;
   onEntriesChanged: () => void;
   onAssetPreviewChanged: (relativePath: string) => void;
+  onStartDevServerPreview?: () => void;
   onOpenWorkspaceFile: (path: string) => void;
   onOpenWorkspaceFileInBrowserPreview?: (path: string) => void;
   reviewComments: readonly ReviewCommentContext[];
@@ -1055,6 +1100,7 @@ export function CodeAgentFilePreviewPanel({
   assetPreviewError,
   assetPreviewPending,
   assetPreviewResolvedUrl,
+  devServerPreview,
   assetPreviewRevision,
   resolvedTheme,
   renderPreview,
@@ -1082,6 +1128,7 @@ export function CodeAgentFilePreviewPanel({
   onFileSavePendingChange,
   onEntriesChanged,
   onAssetPreviewChanged,
+  onStartDevServerPreview,
   onOpenWorkspaceFile,
   onOpenWorkspaceFileInBrowserPreview,
   reviewComments,
@@ -1151,6 +1198,7 @@ export function CodeAgentFilePreviewPanel({
             assetPreviewError={assetPreviewError}
             assetPreviewPending={assetPreviewPending}
             assetPreviewResolvedUrl={assetPreviewResolvedUrl}
+            devServerPreview={devServerPreview}
             assetPreviewRevision={assetPreviewRevision}
             resolvedTheme={resolvedTheme}
             renderPreview={renderPreview}
@@ -1164,6 +1212,7 @@ export function CodeAgentFilePreviewPanel({
             onFileSavePendingChange={onFileSavePendingChange}
             onEntriesChanged={onEntriesChanged}
             onAssetPreviewChanged={onAssetPreviewChanged}
+            onStartDevServerPreview={onStartDevServerPreview}
             onOpenWorkspaceFile={onOpenWorkspaceFile}
             onOpenWorkspaceFileInBrowserPreview={onOpenWorkspaceFileInBrowserPreview}
             reviewComments={reviewComments}

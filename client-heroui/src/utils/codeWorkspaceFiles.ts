@@ -44,7 +44,7 @@ export type CodeWorkspaceFilePreview =
       projectRoot: string;
       command: string;
       port: number;
-      status: 'running' | 'starting';
+      status: 'running' | 'starting' | 'stopped';
       requestedUrl: string;
       resolvedUrl?: string;
       server?: {
@@ -132,13 +132,15 @@ export const createCodeWorkspaceAssetUrl = async (
 export const resolveCodeWorkspaceFilePreview = async (
   roomId: string,
   path: string,
-  options: { signal?: AbortSignal } = {}
+  options: { signal?: AbortSignal; startDevServer?: boolean } = {}
 ): Promise<CodeWorkspaceFilePreview> => {
   if (options.signal?.aborted) {
     throw new Error('Workspace preview request aborted');
   }
 
-  const preview = await requestResolveCodeWorkspaceFilePreview(roomId, path);
+  const preview = await requestResolveCodeWorkspaceFilePreview(roomId, path, {
+    startDevServer: options.startDevServer,
+  });
   if (options.signal?.aborted) {
     throw new Error('Workspace preview request aborted');
   }
@@ -220,7 +222,7 @@ const validateWorkspaceFilePreview = (value: unknown): CodeWorkspaceFilePreview 
       typeof preview.projectRoot !== 'string' ||
       typeof preview.command !== 'string' ||
       typeof preview.port !== 'number' ||
-      (preview.status !== 'running' && preview.status !== 'starting') ||
+      (preview.status !== 'running' && preview.status !== 'starting' && preview.status !== 'stopped') ||
       typeof preview.requestedUrl !== 'string'
     ) {
       throw new Error('Workspace preview response is invalid');

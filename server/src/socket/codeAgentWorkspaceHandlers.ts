@@ -1387,6 +1387,7 @@ export function registerCodeAgentWorkspaceHandlers({
           sandboxId: access.room.sandboxId,
           handle: workspace.handle,
           path,
+          startDevServer: parseWorkspaceBoolean(payload, 'startDevServer') || parseWorkspaceBoolean(payload, 'start'),
         }),
       });
     } catch (error) {

@@ -2443,6 +2443,55 @@ describe('CodeAgentFileBrowserPanel', () => {
     expect(container.querySelector('iframe')?.getAttribute('src')).toBe('https://5173-sandbox.e2b.dev/');
   });
 
+  it('waits for an explicit start before launching source app HTML dev server previews', async () => {
+    loadCodeWorkspaceEntriesMock.mockResolvedValue({
+      entries: [
+        { path: 'index.html', name: 'index.html', type: 'file' },
+      ],
+      truncated: false,
+    });
+    resolveCodeWorkspaceFilePreviewMock
+      .mockResolvedValueOnce({
+        kind: 'dev-server',
+        frameworkId: 'vite',
+        frameworkName: 'Vite',
+        projectRoot: '.',
+        command: "cd '/workspace' && npm run dev -- --host 0.0.0.0 --port 5173",
+        port: 5173,
+        status: 'stopped',
+        requestedUrl: 'http://localhost:5173/',
+      })
+      .mockResolvedValueOnce({
+        kind: 'dev-server',
+        frameworkId: 'vite',
+        frameworkName: 'Vite',
+        projectRoot: '.',
+        command: "cd '/workspace' && npm run dev -- --host 0.0.0.0 --port 5173",
+        port: 5173,
+        status: 'running',
+        requestedUrl: 'http://localhost:5173/',
+        resolvedUrl: 'https://5173-sandbox.e2b.dev/',
+      });
+
+    const { container } = render(<CodeAgentFileBrowserPanel roomId="room-1" projectName="Code Agent" />);
+
+    expect(await screen.findByText('1 files')).toBeTruthy();
+    selectionHandlerRef.current?.(['index.html']);
+
+    expect(await screen.findByTestId('code-agent-file-dev-server-preview-pending')).toBeTruthy();
+    expect(container.querySelector('iframe')).toBeNull();
+    fireEvent.click(screen.getByText('codeAgentStartPreview'));
+
+    await waitFor(() => {
+      expect(resolveCodeWorkspaceFilePreviewMock).toHaveBeenLastCalledWith('room-1', 'index.html', expect.objectContaining({
+        startDevServer: true,
+      }));
+    });
+    await waitFor(() => {
+      expect(container.querySelector('iframe')?.getAttribute('src')).toBe('https://5173-sandbox.e2b.dev/');
+    });
+  });
+
   it('shows T3-style image preview loading and failure states for signed asset URLs', async () => {
     loadCodeWorkspaceEntriesMock.mockResolvedValue({
       entries: [

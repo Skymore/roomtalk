@@ -1142,10 +1142,14 @@ export const requestCodeWorkspaceAssetUrl = (roomId: string, path: string): Prom
   })
 );
 
-export const requestResolveCodeWorkspaceFilePreview = (roomId: string, path: string): Promise<unknown> => (
+export const requestResolveCodeWorkspaceFilePreview = (
+  roomId: string,
+  path: string,
+  options: { startDevServer?: boolean } = {},
+): Promise<unknown> => (
   emitWithAck<CodeWorkspaceFilePreviewAckResponse>(
     'resolve_code_workspace_file_preview',
-    { roomId, path },
+    { roomId, path, ...(options.startDevServer ? { startDevServer: true } : {}) },
     'Timed out while resolving workspace file preview',
     'Failed to resolve workspace file preview',
     { retryOnSocketReconnect: true },

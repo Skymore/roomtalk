@@ -1,6 +1,7 @@
 import path from 'path';
 import { CodeWorkspaceAssetAccess, CodeWorkspaceAssetUrl, isWorkspaceBrowserPreviewPath, isWorkspaceImagePreviewPath } from './codeWorkspaceAssetAccess';
 import {
+  CodeAgentRunnerProcess,
   CodeAgentSandboxHandle,
   CodeAgentSandboxService,
   CodeAgentWorkspacePreviewServer,
@@ -19,7 +20,7 @@ export type CodeWorkspaceFilePreview =
       projectRoot: string;
       command: string;
       port: number;
-      status: 'running' | 'starting';
+      status: 'running' | 'starting' | 'stopped';
       requestedUrl: string;
       resolvedUrl?: string;
       server?: CodeAgentWorkspacePreviewServer;
@@ -42,6 +43,7 @@ export interface ResolveCodeWorkspaceFilePreviewInput {
   sandboxId: string;
   handle: CodeAgentSandboxHandle;
   path: string;
+  startDevServer?: boolean;
 }
 
 export interface CodeWorkspaceFilePreviewServiceOptions {
@@ -242,6 +244,7 @@ export class CodeWorkspaceFilePreviewService {
   private readonly startTimeoutMs: number;
   private readonly pollIntervalMs: number;
   private readonly startingByKey = new Map<string, Promise<CodeWorkspaceFilePreview>>();
+  private readonly processesByKey = new Map<string, CodeAgentRunnerProcess>();
 
   constructor(private readonly options: CodeWorkspaceFilePreviewServiceOptions) {
     this.startTimeoutMs = options.startTimeoutMs ?? DEFAULT_PREVIEW_START_TIMEOUT_MS;
@@ -360,19 +363,11 @@ export class CodeWorkspaceFilePreviewService {
       return this.devServerResult(input.handle, project, framework, command, existing, 'running');
     }
 
-    if (!this.options.sandboxService.startWorkspaceCommand) {
-      return this.devServerResult(input.handle, project, framework, command, null, 'starting');
+    if (!input.startDevServer && !this.processesByKey.has(this.previewProcessKey(input, project, framework))) {
+      return this.devServerResult(input.handle, project, framework, command, null, 'stopped', workspacePath);
     }
 
-    await this.options.sandboxService.startWorkspaceCommand({
-      handle: input.handle,
-      command,
-      env: {
-        PORT: String(framework.port),
-        HOST: '0.0.0.0',
-      },
-      timeoutMs: 0,
-    });
+    await this.ensureDevServerProcess(input, project, framework, command);
 
     const deadline = Date.now() + this.startTimeoutMs;
     do {
@@ -389,6 +384,43 @@ export class CodeWorkspaceFilePreviewService {
     return this.devServerResult(input.handle, project, framework, command, null, 'starting', workspacePath);
   }
 
+  private async ensureDevServerProcess(
+    input: ResolveCodeWorkspaceFilePreviewInput,
+    project: ProjectInfo,
+    framework: FrameworkDefinition,
+    command: string,
+  ) {
+    const key = this.previewProcessKey(input, project, framework);
+    if (this.processesByKey.has(key) || !this.options.sandboxService.startWorkspaceCommand) {
+      return;
+    }
+    const process = await this.options.sandboxService.startWorkspaceCommand({
+      handle: input.handle,
+      command,
+      env: {
+        PORT: String(framework.port),
+        HOST: '0.0.0.0',
+      },
+      timeoutMs: 0,
+    });
+    process.stdout?.resume();
+    process.stderr?.resume();
+    this.processesByKey.set(key, process);
+    process.completed?.finally(() => {
+      if (this.processesByKey.get(key) === process) {
+        this.processesByKey.delete(key);
+      }
+    }).catch(() => undefined);
+  }
+
+  private previewProcessKey(
+    input: ResolveCodeWorkspaceFilePreviewInput,
+    project: ProjectInfo,
+    framework: FrameworkDefinition,
+  ) {
+    return `${input.sandboxId}\0${project.root}\0${framework.id}\0${framework.port}`;
+  }
+
   private async findListeningServer(handle: CodeAgentSandboxHandle, port: number) {
     if (!this.options.sandboxService.listWorkspacePreviewServers) {
       return null;
@@ -403,7 +435,7 @@ export class CodeWorkspaceFilePreviewService {
     framework: FrameworkDefinition,
     command: string,
     server: CodeAgentWorkspacePreviewServer | null,
-    status: 'running' | 'starting',
+    status: 'running' | 'starting' | 'stopped',
     _workspacePath?: string,
   ): Promise<CodeWorkspaceFilePreview> {
     let resolved: CodeAgentWorkspacePreviewTargetResolution | null = null;

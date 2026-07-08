@@ -184,6 +184,7 @@ type AssetUrlQueryState = {
   error: string | null;
   isPending: boolean;
   refresh: () => void;
+  startDevServer: () => void;
 };
 
 type WorkspaceRemoteSearchState = {
@@ -925,10 +926,10 @@ function CodeAgentBrowserUnreachable({
 
 function CodeAgentDevServerPreviewPending({
   preview,
-  onRefresh,
+  onStart,
 }: {
   preview: Extract<CodeWorkspaceFilePreview, { kind: 'dev-server' }>;
-  onRefresh: () => void;
+  onStart: () => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -956,9 +957,9 @@ function CodeAgentDevServerPreviewPending({
         <button
           type="button"
           className="inline-flex h-8 items-center rounded-md border border-[#dedbd0] px-3 text-xs font-medium text-[#4d4c48] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:border-[#30302e] dark:text-[#b0aea5] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
-          onClick={onRefresh}
+          onClick={onStart}
         >
-          {t('refresh')}
+          {preview.status === 'starting' ? t('refresh') : t('codeAgentStartPreview')}
         </button>
       </div>
     </div>
@@ -1699,7 +1700,7 @@ function CodeAgentPreviewSurface({
         {chrome}
         <CodeAgentDevServerPreviewPending
           preview={devServerPreview}
-          onRefresh={assetUrlQuery.refresh}
+          onStart={assetUrlQuery.startDevServer}
         />
       </div>
     );
@@ -2067,7 +2068,7 @@ function useCodeWorkspaceAssetUrlQuery(
   const [error, setError] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
 
-  const refresh = useCallback(() => {
+  const refresh = useCallback((options: { startDevServer?: boolean } = {}) => {
     if (!relativePath || !enabled) {
       setData(null);
       setError(null);
@@ -2082,7 +2083,10 @@ function useCodeWorkspaceAssetUrlQuery(
     setError(null);
     setIsPending(true);
 
-    resolveCodeWorkspaceFilePreview(roomId, relativePath, { signal: controller.signal }).then(
+    resolveCodeWorkspaceFilePreview(roomId, relativePath, {
+      signal: controller.signal,
+      startDevServer: options.startDevServer,
+    }).then(
       (preview) => {
         if (controller.signal.aborted || requestIdRef.current !== requestId) {
           return;
@@ -2119,6 +2123,9 @@ function useCodeWorkspaceAssetUrlQuery(
     isPending,
     refresh: () => {
       refresh();
+    },
+    startDevServer: () => {
+      refresh({ startDevServer: true });
     },
   };
 }
@@ -3829,6 +3836,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
           assetPreviewError={assetUrlQuery.error}
           assetPreviewPending={assetUrlQuery.isPending}
           assetPreviewResolvedUrl={assetUrlQuery.resolvedUrl}
+          devServerPreview={assetUrlQuery.data?.kind === 'dev-server' ? assetUrlQuery.data : null}
           assetPreviewRevision={activeAssetPreviewRevision}
           resolvedTheme={resolvedTheme}
           renderPreview={renderPreview}
@@ -3856,6 +3864,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
           onFileSavePendingChange={onFileSavePendingChange}
           onEntriesChanged={refreshAfterFileContentsChanged}
           onAssetPreviewChanged={handleAssetPreviewChanged}
+          onStartDevServerPreview={assetUrlQuery.startDevServer}
           onOpenWorkspaceFile={handleOpenWorkspaceFileFromMarkdown}
           onOpenWorkspaceFileInBrowserPreview={openBrowserPreviewPath}
           reviewComments={reviewComments}

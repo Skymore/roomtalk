@@ -55,7 +55,7 @@ describe('CodeWorkspaceFilePreviewService', () => {
     assert.deepEqual(sandboxService.startedWorkspaceCommands, []);
   });
 
-  it('starts a framework dev server for source app HTML entries', async () => {
+  it('returns an explicit start state for source app HTML entries', async () => {
     const { sandboxService, handle, service } = await createHarness();
     sandboxService.setWorkspaceFileContent(handle.id, 'package.json', vitePackageJson);
     sandboxService.setWorkspaceFileContent(handle.id, 'index.html', '<div id="root"></div><script type="module" src="/src/main.jsx"></script>');
@@ -69,6 +69,24 @@ describe('CodeWorkspaceFilePreviewService', () => {
 
     assert.equal(preview.kind, 'dev-server');
     assert.equal(preview.kind === 'dev-server' ? preview.frameworkId : '', 'vite');
+    assert.equal(preview.kind === 'dev-server' ? preview.status : '', 'stopped');
+    assert.deepEqual(sandboxService.startedWorkspaceCommands, []);
+  });
+
+  it('starts a framework dev server only when requested', async () => {
+    const { sandboxService, handle, service } = await createHarness();
+    sandboxService.setWorkspaceFileContent(handle.id, 'package.json', vitePackageJson);
+    sandboxService.setWorkspaceFileContent(handle.id, 'index.html', '<div id="root"></div><script type="module" src="/src/main.jsx"></script>');
+
+    const preview = await service.resolve({
+      roomId: 'room-1',
+      sandboxId: handle.id,
+      handle,
+      path: 'index.html',
+      startDevServer: true,
+    });
+
+    assert.equal(preview.kind, 'dev-server');
     assert.equal(preview.kind === 'dev-server' ? preview.status : '', 'starting');
     assert.equal(sandboxService.startedWorkspaceCommandTimeouts[0], 0);
     assert.match(sandboxService.startedWorkspaceCommands[0], /npm' 'run' 'dev' '--' '--host' '0\.0\.0\.0' '--port' '5173'/);
