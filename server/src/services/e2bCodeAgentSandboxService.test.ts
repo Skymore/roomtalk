@@ -1,7 +1,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { spawnSync } from 'child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { PassThrough } from 'stream';
@@ -522,12 +522,13 @@ describe('E2BCodeAgentSandboxService', () => {
     assert.match(driver.commands[0], /cd '\/workspace'/);
     assert.match(driver.commands[0], /git init -b main/);
     assert.match(driver.commands[0], /git commit --allow-empty -m "workspace baseline"/);
-    assert.doesNotMatch(driver.commands[0], /git add -A/);
-    assert.doesNotMatch(driver.commands[0], /git commit -m "workspace baseline"/);
+    assert.match(driver.commands[0], /node_modules\/ \.npm\/ \.pnpm-store\/ \.yarn\/ dist\/ build\/ \.next\/ \.nuxt\/ coverage\/ \.cache\//);
+    assert.match(driver.commands[0], /git add -A/);
+    assert.match(driver.commands[0], /git commit -m "workspace baseline"/);
     assert.deepEqual(driver.commandOptions, [{ timeoutMs: 30_000 }]);
   });
 
-  it('creates the baseline only for a newly initialized empty workspace', async () => {
+  it('creates an empty baseline for a newly initialized empty workspace', async () => {
     const workspace = mkdtempSync(path.join(tmpdir(), 'roomtalk-empty-workspace-'));
     try {
       const command = await captureWorkspaceVersionControlCommand(workspace);
@@ -535,6 +536,56 @@ describe('E2BCodeAgentSandboxService', () => {
       const result = spawnSync('bash', ['-lc', command], { encoding: 'utf8' });
       assert.equal(result.status, 0, result.stderr);
       assert.equal(runGit(workspace, ['log', '--format=%s']).stdout.trim(), 'workspace baseline');
+      assert.equal(runGit(workspace, ['status', '--porcelain=v1']).stdout, '');
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('creates a baseline for a populated unborn git workspace without tracking dependency outputs', async () => {
+    const workspace = mkdtempSync(path.join(tmpdir(), 'roomtalk-unborn-workspace-'));
+    try {
+      assert.equal(runGit(workspace, ['init', '-b', 'main']).status, 0);
+      mkdirSync(path.join(workspace, 'src'), { recursive: true });
+      mkdirSync(path.join(workspace, 'node_modules/pkg'), { recursive: true });
+      mkdirSync(path.join(workspace, 'dist'), { recursive: true });
+      writeFileSync(path.join(workspace, 'package.json'), '{"scripts":{"dev":"vite"}}\n');
+      writeFileSync(path.join(workspace, 'src/App.tsx'), 'export default function App() { return null }\n');
+      writeFileSync(path.join(workspace, 'node_modules/pkg/index.js'), 'module.exports = {}\n');
+      writeFileSync(path.join(workspace, 'dist/app.js'), 'console.log("built")\n');
+
+      const command = await captureWorkspaceVersionControlCommand(workspace);
+      const result = spawnSync('bash', ['-lc', command], { encoding: 'utf8' });
+
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(runGit(workspace, ['log', '--format=%s']).stdout.trim(), 'workspace baseline');
+      assert.deepEqual(
+        runGit(workspace, ['ls-files']).stdout.trim().split('\n').filter(Boolean).sort(),
+        ['package.json', 'src/App.tsx'],
+      );
+      assert.equal(runGit(workspace, ['status', '--porcelain=v1']).stdout, '');
+      const exclude = readFileSync(path.join(workspace, '.git/info/exclude'), 'utf8');
+      assert.match(exclude, /^node_modules\/$/m);
+      assert.match(exclude, /^dist\/$/m);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('creates a baseline for a populated workspace that is not yet a git repository', async () => {
+    const workspace = mkdtempSync(path.join(tmpdir(), 'roomtalk-populated-workspace-'));
+    try {
+      mkdirSync(path.join(workspace, 'src'), { recursive: true });
+      mkdirSync(path.join(workspace, 'node_modules/pkg'), { recursive: true });
+      writeFileSync(path.join(workspace, 'src/App.tsx'), 'export default function App() { return null }\n');
+      writeFileSync(path.join(workspace, 'node_modules/pkg/index.js'), 'module.exports = {}\n');
+
+      const command = await captureWorkspaceVersionControlCommand(workspace);
+      const result = spawnSync('bash', ['-lc', command], { encoding: 'utf8' });
+
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(runGit(workspace, ['log', '--format=%s']).stdout.trim(), 'workspace baseline');
+      assert.deepEqual(runGit(workspace, ['ls-files']).stdout.trim().split('\n').filter(Boolean), ['src/App.tsx']);
       assert.equal(runGit(workspace, ['status', '--porcelain=v1']).stdout, '');
     } finally {
       rmSync(workspace, { recursive: true, force: true });
