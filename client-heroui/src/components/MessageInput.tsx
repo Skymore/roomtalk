@@ -51,6 +51,7 @@ import { Message, RoomPostingSchedule } from '../utils/types';
 import {
   CodeAgentBackend,
   CodeAgentMode,
+  getCodeAgentAssistantDisplayName,
   isCodexCodeAgentBackend,
   normalizeCodeAgentMode,
   normalizeCodeAgentModeList,
@@ -1410,7 +1411,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     };
   }, [parseEditorContent]);
 
-  const replySenderName = replyToMessage?.username
+  const replySenderName = (replyToMessage?.messageType === 'ai'
+    ? getCodeAgentAssistantDisplayName(replyToMessage.username)
+    : replyToMessage?.username)
     || (replyToMessage?.messageType === 'ai' ? t('aiAssistantName') : t('participant'));
   const replyPreview = replyToMessage?.messageType === 'media'
     ? (replyToMessage.mediaAsset?.kind === 'audio'

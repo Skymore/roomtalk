@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { FALLBACK_FEATURE_FLAGS, FeatureFlags } from './features';
 import {
   CODE_AGENT_BACKEND_OPTIONS,
+  getCodeAgentAssistantDisplayName,
   getCodeAgentBackend,
   getCodeAgentAvailableModes,
   getCodeAgentDefaultMode,
@@ -21,6 +22,12 @@ const room = (overrides: Partial<Room> = {}): Room => ({
 });
 
 describe('codeAgent room adapters', () => {
+  it('normalizes the legacy Codex app-server display name', () => {
+    expect(getCodeAgentAssistantDisplayName('CodexApp')).toBe('Codex');
+    expect(getCodeAgentAssistantDisplayName(' Codex ')).toBe('Codex');
+    expect(getCodeAgentAssistantDisplayName(undefined)).toBeUndefined();
+  });
+
   it('leaves ordinary chat rooms outside the code-agent path', () => {
     const chatRoom = room({ type: 'chat' });
 

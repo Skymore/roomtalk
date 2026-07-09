@@ -183,6 +183,29 @@ describe('MessageItem replies', () => {
     expect(screen.getByLabelText('retry')).toBeTruthy();
   });
 
+  it('renders the legacy CodexApp assistant name as Codex', () => {
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'legacy-codex-app-message',
+          clientId: 'ai_assistant',
+          username: 'CodexApp',
+          content: 'legacy assistant response',
+          messageType: 'ai',
+          status: 'complete',
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Codex')).toBeTruthy();
+    expect(screen.queryByText('CodexApp')).toBeNull();
+  });
+
   it('renders T3 review comment contexts as structured cards instead of raw tags', async () => {
     render(
       <MessageItem

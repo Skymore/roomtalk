@@ -18,6 +18,14 @@ export {
 export const CODE_AGENT_BACKEND_OPTIONS = ['code-agent', 'codex-app-server'] as const satisfies readonly CodeAgentBackend[];
 const CODE_AGENT_BACKENDS = new Set<CodeAgentBackend>(['code-agent', 'codex', 'codex-app-server']);
 
+export const getCodeAgentAssistantDisplayName = (username: string | null | undefined): string | undefined => {
+  const trimmed = username?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed === 'CodexApp' ? 'Codex' : trimmed;
+};
+
 const runtimeRoomType = (room: Room | null | undefined): string | undefined => (
   room?.type as string | undefined
 );

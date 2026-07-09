@@ -26,7 +26,7 @@ import { CodeAgentToolMessage } from './CodeAgentToolMessage';
 import { getSenderColorTheme } from "../utils/userProfile";
 import { parseReviewCommentMessageSegments } from "../utils/codeAgentReviewComments";
 import { CodeAgentReviewCommentMessage } from "./CodeAgentReviewCommentMessage";
-import { getCodeAgentModeLabelKey, normalizeCodeAgentMode } from "../utils/codeAgent";
+import { getCodeAgentAssistantDisplayName, getCodeAgentModeLabelKey, normalizeCodeAgentMode } from "../utils/codeAgent";
 
 interface MessageItemProps {
   message: Message;
@@ -161,7 +161,9 @@ const ReplyReference: React.FC<{
   const mediaAsset = replyTo.mediaAsset;
   const playableMediaKind = getPlayableMediaKind(mediaAsset);
   const canRenderMedia = replyTo.messageType === "media" && Boolean(mediaAsset?.id && playableMediaKind);
-  const replySenderName = replyTo.username
+  const replySenderName = (replyTo.messageType === 'ai'
+    ? getCodeAgentAssistantDisplayName(replyTo.username)
+    : replyTo.username)
     || (replyTo.messageType === "ai" ? t("aiAssistantName") : t("participant"));
   const fallbackPreview = getReplyMediaLabel(replyTo, t);
   const { cacheBodyFetchKey, markMediaLoadedForCache } = useDeferredMediaCacheFetchKey(signedUrl);
@@ -296,7 +298,10 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const canEditMessage = canBeEdited && (isMine || Boolean(roomPermissions?.canEditAnyMessage));
   const canDeleteMessage = isMine || Boolean(roomPermissions?.canDeleteAnyMessage);
   const { t, i18n } = useTranslation();
-  const displayName = message.username?.trim() || t('participant');
+  const assistantDisplayName = isAI
+    ? getCodeAgentAssistantDisplayName(message.username) || t('aiAssistantName')
+    : undefined;
+  const displayName = assistantDisplayName || message.username?.trim() || t('participant');
   const displayId = senderDisplayId || `${displayName}#${message.clientId.slice(-4)}`;
   const canActOnSender = !isAI && !isMine && Boolean(onUserAction);
   const canKickSender = canActOnSender && Boolean(roomPermissions?.canManageMembers) && senderRole !== 'owner' && (
@@ -908,7 +913,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
         {/* Username or AI name */}
         {(!isMine || isAI) && !isMine && (message.username || isAI) && (
           <div className="mb-1 ml-1 text-tiny text-[#5e5d59] dark:text-[#b0aea5]">
-            {isAI ? (message.username || t('aiAssistantName')) : message.username}
+            {isAI ? assistantDisplayName : message.username}
           </div>
         )}
 
