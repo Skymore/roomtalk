@@ -515,16 +515,18 @@ describe('AI socket handlers', () => {
     await socket.invoke('ask_ai', {
       roomId: 'room-1',
       model: selectedModel.id,
-      codexModel: 'gpt-5.3-codex-spark',
+      codexModel: 'gpt-5.6-sol',
       codexReasoningEffort: 'high',
       codexPermissionMode: 'fullAccess',
+      codexServiceTier: 'priority',
     });
 
     assert.equal(calls.length, 1);
     assert.deepEqual((calls[0][0] as any).codexRunSettings, {
-      model: 'gpt-5.3-codex-spark',
+      model: 'gpt-5.6-sol',
       reasoningEffort: 'high',
       permissionMode: 'fullAccess',
+      serviceTier: 'priority',
     });
   });
 

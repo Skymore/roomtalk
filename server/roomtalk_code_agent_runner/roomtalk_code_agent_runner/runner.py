@@ -5,9 +5,11 @@ import base64
 import json
 import os
 import posixpath
+import queue
 import re
 import sys
 import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +29,8 @@ DEFAULT_WORKSPACE_ROOT = "/workspace"
 MAX_STATIC_PUBLISH_FILES = 100
 MAX_STATIC_PUBLISH_TOTAL_BYTES = 5 * 1024 * 1024
 MAX_STATIC_PUBLISH_FILE_BYTES = 2 * 1024 * 1024
+
+ControlQueue = queue.Queue[dict[str, Any] | None]
 
 
 class RunnerError(Exception):
@@ -50,6 +54,7 @@ class RunnerRequest:
     codex_model: str | None
     codex_reasoning_effort: str | None
     codex_permission_mode: str | None
+    codex_service_tier: str | None
     workspace: Path
     allowed_paths: tuple[str, ...]
 
@@ -110,6 +115,7 @@ def parse_request(line: str) -> RunnerRequest:
         codex_model=_optional_string(raw.get("codexModel"), "codexModel", turn_id=raw.get("turnId")),
         codex_reasoning_effort=_optional_string(raw.get("codexReasoningEffort"), "codexReasoningEffort", turn_id=raw.get("turnId")),
         codex_permission_mode=_optional_string(raw.get("codexPermissionMode"), "codexPermissionMode", turn_id=raw.get("turnId")),
+        codex_service_tier=_optional_string(raw.get("codexServiceTier"), "codexServiceTier", turn_id=raw.get("turnId")),
         workspace=Path(string_field("workspace")),
         allowed_paths=tuple(allowed_paths_raw),
     )
@@ -924,11 +930,162 @@ def _usage_to_event_usage(usage: Any) -> dict[str, Any] | None:
     return result
 
 
+class _CodeAgentControlState:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._stop_requested = False
+        self._pending_steers: list[str] = []
+        self.run_active = threading.Event()
+        self.done = threading.Event()
+
+    def request_interrupt(self) -> None:
+        with self._lock:
+            self._stop_requested = True
+            self._pending_steers.clear()
+
+    def request_steer(self, prompt: str) -> None:
+        with self._lock:
+            if not self._stop_requested:
+                self._pending_steers.append(prompt)
+
+    def _consume_action_locked(self) -> tuple[str, str | None]:
+        if self._stop_requested:
+            return "interrupt", None
+        if self._pending_steers:
+            prompt = "\n\n".join(self._pending_steers)
+            self._pending_steers.clear()
+            return "steer", prompt
+        return "none", None
+
+    def begin_run(self) -> tuple[str, str | None]:
+        with self._lock:
+            action = self._consume_action_locked()
+            if action[0] == "none":
+                self.run_active.set()
+            return action
+
+    def consume_action(self) -> tuple[str, str | None]:
+        with self._lock:
+            return self._consume_action_locked()
+
+
+def _start_code_agent_control_dispatcher(
+    control_queue: ControlQueue,
+    engine: Any,
+    state: _CodeAgentControlState,
+    emitter: EventEmitter,
+    turn_id: str,
+) -> threading.Thread:
+    def abort_active_run() -> None:
+        abort = getattr(engine, "abort", None)
+        if not callable(abort):
+            emitter.emit({
+                "type": "status",
+                "turnId": turn_id,
+                "status": "error",
+                "message": "Coco engine does not support live control",
+            })
+            return
+        # Engine.run clears its abort flag at entry. Repeating briefly closes the
+        # race where a control arrives just as the next model call starts.
+        for _ in range(50):
+            if state.done.is_set() or not state.run_active.is_set():
+                return
+            abort()
+            time.sleep(0.02)
+
+    def dispatch() -> None:
+        while not state.done.is_set():
+            try:
+                control = control_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if control is None:
+                return
+            if control.get("schemaVersion") != SCHEMA_VERSION or control.get("turnId") != turn_id:
+                continue
+            control_type = control.get("type")
+            if control_type == "interrupt":
+                state.request_interrupt()
+                emitter.emit({
+                    "type": "status",
+                    "turnId": turn_id,
+                    "status": "running",
+                    "message": "Coco interrupt queued",
+                })
+                abort_active_run()
+            elif control_type == "steer":
+                prompt = control.get("prompt")
+                if not isinstance(prompt, str) or not prompt.strip():
+                    continue
+                state.request_steer(prompt.strip())
+                emitter.emit({
+                    "type": "status",
+                    "turnId": turn_id,
+                    "status": "running",
+                    "message": "Coco steer queued",
+                })
+                abort_active_run()
+
+    thread = threading.Thread(target=dispatch, daemon=True)
+    thread.start()
+    return thread
+
+
+def _merge_runner_usage(current: dict[str, Any] | None, incoming: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not incoming:
+        return current
+    if not current:
+        return dict(incoming)
+    prompt_tokens = int(current.get("promptTokens", 0)) + int(incoming.get("promptTokens", 0))
+    completion_tokens = int(current.get("completionTokens", 0)) + int(incoming.get("completionTokens", 0))
+    cached_prompt_tokens = int(current.get("cachedPromptTokens", 0)) + int(incoming.get("cachedPromptTokens", 0))
+    return {
+        "promptTokens": prompt_tokens,
+        "completionTokens": completion_tokens,
+        "totalTokens": prompt_tokens + completion_tokens,
+        "cachedPromptTokens": cached_prompt_tokens,
+        "cacheHitRate": cached_prompt_tokens / prompt_tokens if prompt_tokens > 0 else 0,
+        "source": "reported",
+    }
+
+
+def _partial_history_for_steer(
+    prior_messages: list[dict[str, Any]],
+    prompt: str,
+    partial_answer: str,
+) -> list[dict[str, Any]]:
+    history = list(prior_messages)
+    history.append({"role": "user", "content": prompt})
+    if partial_answer.strip():
+        history.append({"role": "assistant", "content": partial_answer})
+    return history
+
+
+def _start_runner_control_reader(stdin: TextIO, control_queue: ControlQueue) -> threading.Thread:
+    def read_controls() -> None:
+        for line in stdin:
+            if not line.strip():
+                continue
+            try:
+                raw = json.loads(line)
+                if isinstance(raw, dict):
+                    control_queue.put(raw)
+            except Exception:
+                continue
+        control_queue.put(None)
+
+    thread = threading.Thread(target=read_controls, daemon=True)
+    thread.start()
+    return thread
+
+
 def run_request(
     request: RunnerRequest,
     *,
     emitter: EventEmitter,
     engine_factory: Callable[[RunnerRequest], Any] = create_code_agent_engine,
+    control_queue: ControlQueue | None = None,
 ) -> None:
     message_id = request.turn_id
     emitter.emit({
@@ -947,30 +1104,120 @@ def run_request(
             "message": "Code agent engine running",
         })
 
-        def on_text_chunk(delta: str) -> None:
-            emitter.emit({"type": "text_delta", "messageId": message_id, "turnId": request.turn_id, "delta": delta})
-
-        def on_tool_event(event: dict[str, Any]) -> None:
-            emitter.emit(_live_tool_event_to_runner_event(event, request.turn_id))
-
         live_tool_events_enabled = _engine_supports_tool_events(engine)
-        run_kwargs: dict[str, Any] = {"on_text_chunk": on_text_chunk}
-        if _engine_supports_prior_messages(engine):
-            run_kwargs["prior_messages"] = request.prior_messages or None
-        if live_tool_events_enabled:
-            run_kwargs["on_tool_event"] = on_tool_event
+        supports_prior_messages = _engine_supports_prior_messages(engine)
+        controls = _CodeAgentControlState()
+        control_thread = (
+            _start_code_agent_control_dispatcher(control_queue, engine, controls, emitter, request.turn_id)
+            if control_queue is not None
+            else None
+        )
+        current_prompt = request.prompt
+        prior_messages = list(request.prior_messages)
+        all_answer_parts: list[str] = []
+        usage: dict[str, Any] | None = None
+        final_answer = ""
+        interrupted = False
 
-        result = engine.run(prompt_with_background_jobs(request.prompt), **run_kwargs)
-        if not live_tool_events_enabled:
-            for event in replay_tool_events(getattr(result, "messages", []) or [], turn_id=request.turn_id):
-                emitter.emit(event)
+        try:
+            while True:
+                queued_action, queued_prompt = controls.begin_run()
+                if queued_action == "interrupt":
+                    interrupted = True
+                    break
+                if queued_action == "steer" and queued_prompt:
+                    prior_messages = _partial_history_for_steer(prior_messages, current_prompt, "")
+                    current_prompt = queued_prompt
+                    continue
 
-        usage = _usage_to_event_usage(getattr(result, "usage", None))
+                attempt_answer_parts: list[str] = []
+
+                def on_text_chunk(delta: str) -> None:
+                    attempt_answer_parts.append(delta)
+                    all_answer_parts.append(delta)
+                    emitter.emit({"type": "text_delta", "messageId": message_id, "turnId": request.turn_id, "delta": delta})
+
+                def on_tool_event(event: dict[str, Any]) -> None:
+                    emitter.emit(_live_tool_event_to_runner_event(event, request.turn_id))
+
+                run_kwargs: dict[str, Any] = {"on_text_chunk": on_text_chunk}
+                if supports_prior_messages:
+                    run_kwargs["prior_messages"] = prior_messages or None
+                if live_tool_events_enabled:
+                    run_kwargs["on_tool_event"] = on_tool_event
+
+                try:
+                    result = engine.run(prompt_with_background_jobs(current_prompt), **run_kwargs)
+                except Exception:
+                    controls.run_active.clear()
+                    action, steer_prompt = controls.consume_action()
+                    if action == "interrupt":
+                        interrupted = True
+                        break
+                    if action == "steer" and steer_prompt:
+                        prior_messages = _partial_history_for_steer(
+                            prior_messages,
+                            current_prompt,
+                            "".join(attempt_answer_parts),
+                        )
+                        current_prompt = steer_prompt
+                        emitter.emit({
+                            "type": "status",
+                            "turnId": request.turn_id,
+                            "status": "running",
+                            "message": "Coco applying steer",
+                        })
+                        continue
+                    raise
+                finally:
+                    controls.run_active.clear()
+
+                result_messages = getattr(result, "messages", []) or []
+                if not live_tool_events_enabled:
+                    for event in replay_tool_events(result_messages, turn_id=request.turn_id):
+                        emitter.emit(event)
+                usage = _merge_runner_usage(usage, _usage_to_event_usage(getattr(result, "usage", None)))
+
+                action, steer_prompt = controls.consume_action()
+                if action == "interrupt":
+                    interrupted = True
+                    break
+                if action == "steer" and steer_prompt:
+                    prior_messages = list(result_messages) if supports_prior_messages and result_messages else _partial_history_for_steer(
+                        prior_messages,
+                        current_prompt,
+                        "".join(attempt_answer_parts),
+                    )
+                    current_prompt = steer_prompt
+                    emitter.emit({
+                        "type": "status",
+                        "turnId": request.turn_id,
+                        "status": "running",
+                        "message": "Coco applying steer",
+                    })
+                    continue
+
+                final_answer = str(getattr(result, "answer", "") or "")
+                break
+        finally:
+            controls.done.set()
+            if control_thread is not None:
+                control_thread.join(timeout=0.5)
+
+        if interrupted:
+            final_answer = "".join(all_answer_parts)
+            emitter.emit({
+                "type": "status",
+                "turnId": request.turn_id,
+                "status": "complete",
+                "message": "Coco turn interrupted",
+            })
+
         final_event: dict[str, Any] = {
             "type": "final",
             "messageId": message_id,
             "turnId": request.turn_id,
-            "answer": str(getattr(result, "answer", "") or ""),
+            "answer": final_answer,
             "sessionId": request.session_id or request.turn_id,
         }
         if usage:
@@ -1002,7 +1249,9 @@ def main(stdin: TextIO | None = None, stdout: TextIO | None = None) -> int:
         return 1
     try:
         request = parse_request(line)
-        run_request(request, emitter=EventEmitter(stdout))
+        control_queue: ControlQueue = queue.Queue()
+        _start_runner_control_reader(stdin, control_queue)
+        run_request(request, emitter=EventEmitter(stdout), control_queue=control_queue)
         return 0
     except Exception as exc:
         turn_id = request.turn_id if request else None

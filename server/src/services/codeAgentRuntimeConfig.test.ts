@@ -466,6 +466,24 @@ describe('resolveCodeAgentRuntimeConfig', () => {
     assert.equal('DEEPSEEK_API_KEY' in config.runnerEnv, false);
   });
 
+  it('defaults the built-in RoomTalk model gateway request count to unlimited', () => {
+    const config = resolveCodeAgentRuntimeConfig({
+      CODE_AGENT_ENABLED: 'true',
+      CODE_AGENT_SANDBOX_PROVIDER: 'e2b',
+      CODE_AGENT_RUNNER_CLIENT: 'jsonl',
+      CODE_AGENT_ALLOWED_RUN_MODES: 'plan,acceptEdits',
+      CODE_AGENT_DEFAULT_MODE: 'plan',
+      CODE_AGENT_E2B_TEMPLATE_ID: 'roomtalk-code-agent',
+      CODE_AGENT_MODEL_ACCESS_STRATEGY: 'roomtalk_gateway',
+      CODE_AGENT_MODEL_GATEWAY_PUBLIC_URL: 'https://room.example/api/code-agent/model-gateway',
+      CODE_AGENT_MODEL_GATEWAY_SECRET: 'gateway-secret',
+      ...e2bCredentialEnv,
+      ...pinnedArtifactEnv,
+    });
+
+    assert.equal(config.modelGateway?.maxRequestsPerTurn, 0);
+  });
+
   it('does not forward provider keys in plan mode when a scoped key or proxy is configured', () => {
     const scoped = resolveCodeAgentRuntimeConfig({
       CODE_AGENT_ENABLED: 'true',

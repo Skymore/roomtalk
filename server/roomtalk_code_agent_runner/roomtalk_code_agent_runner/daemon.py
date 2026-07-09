@@ -265,11 +265,10 @@ def _run_code_agent(
     env: dict[str, str],
     control_queue: "queue.Queue[dict[str, Any] | None]",
 ) -> None:
-    del control_queue
     from .runner import run_request
 
     with _temporary_environ(env):
-        run_request(request, emitter=emitter)
+        run_request(request, emitter=emitter, control_queue=control_queue)
 
 
 def _run_codex_cli(

@@ -145,6 +145,7 @@ def test_codex_cli_maps_exec_jsonl_and_saves_refreshed_auth(tmp_path: Path):
     assert "--ask-for-approval" not in call_args
     assert 'approval_policy="never"' in call_args
     assert 'model_reasoning_effort="xhigh"' in call_args
+    assert 'service_tier="default"' in call_args
     assert "sandbox_workspace_write.network_access=true" not in call_args
     assert call_args[call_args.index("--sandbox") + 1] == "read-only"
     assert call_args[call_args.index("--cd") + 1] == str(workspace)
@@ -236,7 +237,7 @@ def test_codex_config_trusts_roomtalk_workspace_root(tmp_path: Path):
     assert 'trust_level = "trusted"' in config_toml
 
 
-def test_codex_cli_passes_requested_model_and_reasoning_effort(tmp_path: Path):
+def test_codex_cli_passes_requested_model_reasoning_and_speed(tmp_path: Path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     auth_json = tmp_path / "auth.json"
@@ -249,8 +250,9 @@ def test_codex_cli_passes_requested_model_and_reasoning_effort(tmp_path: Path):
     run_request = parse_request(json.dumps(request(
         turnId="turn-codex",
         workspace=str(workspace),
-        codexModel="gpt-5.3-codex-spark",
+        codexModel="gpt-5.6-sol",
         codexReasoningEffort="high",
+        codexServiceTier="priority",
     )))
 
     codex_cli.run_request(
@@ -265,8 +267,9 @@ def test_codex_cli_passes_requested_model_and_reasoning_effort(tmp_path: Path):
     )
 
     call_args = popen.calls[0]["args"]
-    assert call_args[call_args.index("--model") + 1] == "gpt-5.3-codex-spark"
+    assert call_args[call_args.index("--model") + 1] == "gpt-5.6-sol"
     assert 'model_reasoning_effort="high"' in call_args
+    assert 'service_tier="priority"' in call_args
 
 
 @pytest.mark.parametrize(

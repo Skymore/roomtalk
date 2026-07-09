@@ -72,7 +72,7 @@ export interface CodeAgentModelGatewayOptions {
 }
 
 const DEFAULT_TOKEN_TTL_SECONDS = 15 * 60;
-const DEFAULT_MAX_REQUESTS_PER_TURN = 20;
+const DEFAULT_MAX_REQUESTS_PER_TURN = 0;
 const DEFAULT_TURN_BUDGET_USD = 2;
 export const DEFAULT_CODE_AGENT_MODEL_GATEWAY_BASE_PATH = '/api/code-agent/model-gateway';
 export const DEFAULT_CODE_AGENT_MODEL_GATEWAY_BODY_LIMIT = '2mb';
@@ -125,6 +125,10 @@ const readFiniteNumber = (value: unknown) => (
 
 const parsePositiveInteger = (value: number | undefined, fallback: number) => (
   Number.isFinite(value) && value && value > 0 ? Math.floor(value) : fallback
+);
+
+const parseNonNegativeInteger = (value: number | undefined, fallback: number) => (
+  Number.isFinite(value) && value !== undefined && value >= 0 ? Math.floor(value) : fallback
 );
 
 const parsePositiveNumber = (value: number | undefined, fallback: number) => (
@@ -186,7 +190,7 @@ export class InMemoryCodeAgentModelGatewayTokenStateStore implements CodeAgentMo
     if (current.actualCostUsd > input.budgetUsd) {
       return { ok: false, error: 'budget_exceeded', requestCount: current.requestCount, actualCostUsd: current.actualCostUsd };
     }
-    if (requestCount > input.maxRequests) {
+    if (input.maxRequests > 0 && requestCount > input.maxRequests) {
       return { ok: false, error: 'request_limit_exceeded', requestCount: current.requestCount, actualCostUsd: current.actualCostUsd };
     }
 
@@ -276,7 +280,7 @@ local next_request_count = request_count + 1
 if actual_micro_usd > budget_micro_usd then
   return {0, 'budget_exceeded', request_count, actual_micro_usd}
 end
-if next_request_count > max_requests then
+if max_requests > 0 and next_request_count > max_requests then
   return {0, 'request_limit_exceeded', request_count, actual_micro_usd}
 end
 redis.call('HSET', KEYS[1], 'requestCount', next_request_count, 'actualMicroUsd', actual_micro_usd)
@@ -466,7 +470,7 @@ export class CodeAgentModelGateway {
   constructor(private readonly options: CodeAgentModelGatewayOptions) {
     this.publicBaseUrl = normalizeBaseUrl(options.publicBaseUrl);
     this.tokenTtlSeconds = parsePositiveInteger(options.tokenTtlSeconds, DEFAULT_TOKEN_TTL_SECONDS);
-    this.maxRequestsPerTurn = parsePositiveInteger(options.maxRequestsPerTurn, DEFAULT_MAX_REQUESTS_PER_TURN);
+    this.maxRequestsPerTurn = parseNonNegativeInteger(options.maxRequestsPerTurn, DEFAULT_MAX_REQUESTS_PER_TURN);
     this.turnBudgetUsd = parsePositiveNumber(options.turnBudgetUsd, DEFAULT_TURN_BUDGET_USD);
     this.fetchFn = options.fetchFn || fetch;
     this.nowMs = options.nowMs || (() => Date.now());

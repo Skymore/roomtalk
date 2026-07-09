@@ -205,6 +205,7 @@ export const mapCodeAgentRunnerEvent = (
     }
     case 'thread_list_result':
     case 'thread_read_result':
+    case 'usage':
       return { kind: 'ignored' };
   }
 };

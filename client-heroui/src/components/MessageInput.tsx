@@ -8,7 +8,7 @@ import {
   useDisclosure,
 } from "@heroui/react";
 import { Icon } from '@iconify/react';
-import { requestAIResponse, sendMessage, sendMessageAndAskAI, sendSticker, steerCodeAgentTurn, uploadMediaMessage } from '../utils/socket';
+import { interruptCodeAgentTurn, requestAIResponse, sendMessage, sendMessageAndAskAI, sendSticker, steerCodeAgentTurn, uploadMediaMessage } from '../utils/socket';
 import { useRecentStickers, useStickerSearch } from '../hooks/useStickers';
 import { inlineStickerQuery, loadStickerCatalog } from '../utils/stickerCatalog';
 import { apiPath } from '../utils/apiBase';
@@ -207,7 +207,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   const [isAiProcessing, setIsAiProcessing] = useState(false); // 新增: 跟踪 AI 处理状态
   const isSteeringCodeAgent = isCodeAgentRoom && isRoomAIProcessing;
   const isAIInputLocked = isAiProcessing || (isRoomAIProcessing && !isCodeAgentRoom);
-  const isNonTextInputDisabled = isSending || isAIInputLocked || isSteeringCodeAgent || !canPost;
+  const isNonTextInputDisabled = isSending || isAIInputLocked || !canPost;
 
   // Voice recording state
   const [isVoiceMode, setIsVoiceMode] = useState(false);
@@ -532,14 +532,14 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
   // 发送AI消息的新方法
   const handleAskAI = async () => {
-    if (!canPost) {
+    if (!canPost && !isSteeringCodeAgent) {
       setErrorMessage(postingClosedMessage);
       return;
     }
 
     const latestContentItems = parseEditorContent();
 
-    if (isSending || isAIInputLocked || isSteeringCodeAgent) return;
+    if (isSending || isAIInputLocked) return;
 
     let optimisticClientMessageId: string | null = null;
     setIsAiProcessing(true);
@@ -548,6 +548,14 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       const avatar = { text: avatarText, color: avatarColor };
 
       const prompt = buildAIPrompt(latestContentItems);
+      if (isSteeringCodeAgent && !prompt) {
+        await interruptCodeAgentTurn(roomId);
+        return;
+      }
+      if (isSteeringCodeAgent && imageCountRef.current > 0) {
+        setErrorMessage(t('codeAgentSteerTextOnly'));
+        return;
+      }
       const promptForSend = isCodeAgentRoom
         ? appendReviewCommentsToPrompt(prompt, reviewComments)
         : prompt;
@@ -562,6 +570,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
             codexModel: codexRunSettings.model,
             codexReasoningEffort: codexRunSettings.reasoningEffort,
             codexPermissionMode: selectedCodexPermissionMode,
+            codexServiceTier: codexRunSettings.serviceTier,
           }
         : {};
 
@@ -658,9 +667,6 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       sendMessage(singleTextItem.content, roomId, 'text', username, avatar, replyToMessage?.id, clientMessageId)
         .then((savedMessage) => {
           onOptimisticMessageSaved?.(clientMessageId, savedMessage);
-          if (isSteeringCodeAgent) {
-            return steerCodeAgentTurn(roomId, singleTextItem.content);
-          }
           return undefined;
         })
         .catch((error) => {
@@ -676,11 +682,6 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         editorRef.current?.focus();
         focusTimerRef.current = null;
       }, 0);
-      return;
-    }
-
-    if (isSteeringCodeAgent) {
-      setErrorMessage(t('codeAgentSteerTextOnly'));
       return;
     }
 
@@ -1060,7 +1061,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       return;
     }
 
-    if (isSending || isAIInputLocked || isSteeringCodeAgent) return;
+    if (isSending || isAIInputLocked) return;
 
     setIsSending(true);
     try {
@@ -1732,7 +1733,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                 defaultAIModel={defaultAIModel}
                 isSending={isSending}
                 isAiProcessing={isAiProcessing}
-                isInputLocked={isAIInputLocked || isSteeringCodeAgent}
+                isAgentRunning={isCodeAgentRoom && isRoomAIProcessing}
+                isInputLocked={isAIInputLocked}
                 canPost={canPost}
                 isMacOS={isMacOS}
                 currentInputText={currentInputText}

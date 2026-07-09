@@ -7,9 +7,11 @@ import { Message } from '../utils/types';
 import { MessageInput } from './MessageInput';
 
 const socketMocks = vi.hoisted(() => ({
+  interruptCodeAgentTurn: vi.fn(),
   requestAIResponse: vi.fn(),
   sendMessage: vi.fn(),
   sendMessageAndAskAI: vi.fn(),
+  steerCodeAgentTurn: vi.fn(),
   uploadMediaMessage: vi.fn(),
 }));
 
@@ -228,12 +230,14 @@ describe('MessageInput optimistic send flow', () => {
     setNavigatorPlatform('Win32');
     localStorage.removeItem('roomtalk:ai-context-message-limit');
     socketMocks.requestAIResponse.mockResolvedValue(undefined);
+    socketMocks.interruptCodeAgentTurn.mockResolvedValue(undefined);
     socketMocks.sendMessage.mockResolvedValue(message());
     socketMocks.sendMessageAndAskAI.mockResolvedValue({
       userMessage: message(),
       aiMessageId: 'ai-message-1',
       aiStarted: true,
     });
+    socketMocks.steerCodeAgentTurn.mockResolvedValue(undefined);
     socketMocks.uploadMediaMessage.mockResolvedValue(message({
       id: 'audio-message',
       content: '',
@@ -440,7 +444,7 @@ describe('MessageInput optimistic send flow', () => {
 
     const { editor } = renderMessageInput({
       isCodeAgentRoom: true,
-      codeAgentBackend: 'codex',
+      codeAgentBackend: 'codex-app-server',
       codeAgentMode: 'plan',
       codeAgentAvailableModes: ['plan', 'edit', 'approveForMe', 'fullAccess'],
     });
@@ -451,16 +455,63 @@ describe('MessageInput optimistic send flow', () => {
     await waitFor(() => expect(socketMocks.sendMessageAndAskAI).toHaveBeenCalledTimes(1));
     const payload = socketMocks.sendMessageAndAskAI.mock.calls[0][0];
 
-    expect(screen.getByTestId('message-input-ai-controls').dataset.codeAgentBackend).toBe('codex');
+    expect(screen.getByTestId('message-input-ai-controls').dataset.codeAgentBackend).toBe('codex-app-server');
     expect(payload).toMatchObject({
       roomId: 'room-1',
       content: 'who are you',
       codexModel: 'gpt-5.5',
       codexReasoningEffort: 'xhigh',
       codexPermissionMode: 'plan',
+      codexServiceTier: 'default',
     });
     expect(payload).not.toHaveProperty('systemPrompt');
     expect(payload).not.toHaveProperty('roleName');
+  });
+
+  it('uses the agent control action to stop a running turn when the input is empty', async () => {
+    renderMessageInput({
+      isCodeAgentRoom: true,
+      isRoomAIProcessing: true,
+      codeAgentBackend: 'codex-app-server',
+    });
+
+    fireEvent.click(screen.getByText('ask-ai'));
+
+    await waitFor(() => expect(socketMocks.interruptCodeAgentTurn).toHaveBeenCalledWith('room-1'));
+    expect(socketMocks.steerCodeAgentTurn).not.toHaveBeenCalled();
+    expect(socketMocks.sendMessageAndAskAI).not.toHaveBeenCalled();
+  });
+
+  it('uses the agent control action to steer a running turn with text', async () => {
+    const { editor } = renderMessageInput({
+      isCodeAgentRoom: true,
+      isRoomAIProcessing: true,
+      codeAgentBackend: 'codex-app-server',
+    });
+    setEditorText(editor, 'use Bing instead');
+
+    fireEvent.click(screen.getByText('ask-ai'));
+
+    await waitFor(() => expect(socketMocks.steerCodeAgentTurn).toHaveBeenCalledWith('room-1', 'use Bing instead'));
+    expect(socketMocks.sendMessage).toHaveBeenCalledTimes(1);
+    expect(socketMocks.sendMessageAndAskAI).not.toHaveBeenCalled();
+    expect(socketMocks.interruptCodeAgentTurn).not.toHaveBeenCalled();
+  });
+
+  it('keeps Send as a chat-only action while an agent turn is running', async () => {
+    const { editor } = renderMessageInput({
+      isCodeAgentRoom: true,
+      isRoomAIProcessing: true,
+      codeAgentBackend: 'codex-app-server',
+    });
+    setEditorText(editor, 'just a room message');
+
+    fireEvent.click(screen.getByText('send-message'));
+
+    await waitFor(() => expect(socketMocks.sendMessage).toHaveBeenCalledTimes(1));
+    expect(socketMocks.steerCodeAgentTurn).not.toHaveBeenCalled();
+    expect(socketMocks.interruptCodeAgentTurn).not.toHaveBeenCalled();
+    expect(socketMocks.sendMessageAndAskAI).not.toHaveBeenCalled();
   });
 
   it('appends code review comments to Code Agent Ask AI prompts and clears them after send', async () => {

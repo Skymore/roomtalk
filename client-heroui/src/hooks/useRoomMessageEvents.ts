@@ -1,6 +1,6 @@
 import { Dispatch, RefObject, SetStateAction, useEffect, useRef } from 'react';
 import { clientId, socket } from '../utils/socket';
-import { A2UIUpdateEvent, AICostTotalEvent, AIChunkEvent, AIStreamEndEvent, AIStreamErrorEvent, Message, RoomMessageHistoryPayload } from '../utils/types';
+import { A2UIUpdateEvent, AICostTotalEvent, AIChunkEvent, AIStreamEndEvent, AIStreamErrorEvent, AIUsageUpdateEvent, Message, RoomMessageHistoryPayload } from '../utils/types';
 import { appendA2UIPayload, appendAIChunk, completeAIMessage, upsertMessage } from '../utils/messageState';
 import { deleteCachedRoomMessageWindow, readCachedRoomMessageWindow, readMemoryRoomMessageWindow, writeCachedRoomMessageWindow } from '../utils/messageHistoryCache';
 
@@ -257,6 +257,13 @@ export const useRoomMessageEvents = ({
       onAIStreamSettled?.();
     };
 
+    const handleAIUsageUpdate = (data: AIUsageUpdateEvent) => {
+      if (data.roomId !== roomId) return;
+      updateMessages(prev => prev.map(message => (
+        message.id === data.messageId ? { ...message, usage: data.usage } : message
+      )));
+    };
+
     const handleAICostTotal = (data: AICostTotalEvent) => {
       if (data.roomId !== roomId) return;
       setSessionCostUsd(data.totalUsd);
@@ -341,6 +348,7 @@ export const useRoomMessageEvents = ({
     socket.on('ai_chunk', handleAIChunk);
     socket.on('a2ui_update', handleA2UIUpdate);
     socket.on('ai_stream_end', handleAIStreamEnd);
+    socket.on('ai_usage_update', handleAIUsageUpdate);
     socket.on('ai_cost_total', handleAICostTotal);
     socket.on('ai_stream_error', handleAIStreamError);
     socket.on('messages_cleared', handleMessagesCleared);
@@ -364,6 +372,7 @@ export const useRoomMessageEvents = ({
       socket.off('ai_chunk', handleAIChunk);
       socket.off('a2ui_update', handleA2UIUpdate);
       socket.off('ai_stream_end', handleAIStreamEnd);
+      socket.off('ai_usage_update', handleAIUsageUpdate);
       socket.off('ai_cost_total', handleAICostTotal);
       socket.off('ai_stream_error', handleAIStreamError);
       socket.off('messages_cleared', handleMessagesCleared);

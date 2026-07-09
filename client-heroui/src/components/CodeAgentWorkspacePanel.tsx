@@ -61,7 +61,6 @@ interface CodeAgentWorkspacePanelProps {
   isRefreshingWorkspace?: boolean;
   workspaceRefreshError?: string | null;
   onRefreshWorkspace?: () => void;
-  onInterruptTurn?: () => void;
   onOpenWorkspaceFile?: (path: string) => void;
   reviewComments?: readonly ReviewCommentContext[];
   onAddReviewComment?: (comment: ReviewCommentContext) => void;
@@ -151,7 +150,7 @@ const commandStatusLabelKey: Record<CodeAgentWorkspaceCommand['status'], string>
 const backendShortLabels: Record<CodeAgentBackend, string> = {
   'code-agent': 'Coco',
   codex: 'Codex',
-  'codex-app-server': 'CodexApp',
+  'codex-app-server': 'Codex',
 };
 
 const modePillLabels: Record<ReturnType<typeof normalizeCodeAgentMode>, string> = {
@@ -159,6 +158,33 @@ const modePillLabels: Record<ReturnType<typeof normalizeCodeAgentMode>, string> 
   edit: 'Edit',
   approveForMe: 'Auto',
   fullAccess: 'Full',
+};
+
+const CODEX_CONTEXT_BASELINE_TOKENS = 12_000;
+
+export const latestCodexContextUsage = (messages: readonly Message[]) => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const usage = messages[index].usage;
+    const usedTokens = usage?.totalTokens;
+    const contextWindow = usage?.modelContextWindow;
+    if (
+      typeof usedTokens !== 'number'
+      || !Number.isFinite(usedTokens)
+      || typeof contextWindow !== 'number'
+      || !Number.isFinite(contextWindow)
+      || contextWindow <= 0
+    ) {
+      continue;
+    }
+    const effectiveWindow = Math.max(contextWindow - CODEX_CONTEXT_BASELINE_TOKENS, 1);
+    const effectiveUsed = Math.max(usedTokens - CODEX_CONTEXT_BASELINE_TOKENS, 0);
+    return {
+      usedTokens,
+      contextWindow,
+      usedPercent: Math.min(100, Math.max(0, Math.round((effectiveUsed / effectiveWindow) * 100))),
+    };
+  }
+  return null;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
@@ -207,7 +233,6 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   isRefreshingWorkspace = false,
   workspaceRefreshError,
   onRefreshWorkspace,
-  onInterruptTurn,
   onOpenWorkspaceFile,
   reviewComments = [],
   onAddReviewComment,
@@ -403,6 +428,10 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   const currentBackend: CodeAgentBackend = backend || room.codeAgentBackend || 'code-agent';
   const canToggleBackend = canSwitchBackend && Boolean(onBackendChange);
   const canBrowseCodexThreads = currentBackend === 'codex-app-server';
+  const contextUsage = React.useMemo(
+    () => currentBackend === 'codex-app-server' ? latestCodexContextUsage(messages) : null,
+    [currentBackend, messages]
+  );
   const loadCodexThreads = React.useCallback(async (cursor?: string | null) => {
     if (!canBrowseCodexThreads) {
       setCodexThreads([]);
@@ -535,21 +564,6 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                 <Icon icon="lucide:refresh-cw" className="h-3.5 w-3.5" />
               </Button>
             )}
-            {agentStatus === 'running' && onInterruptTurn ? (
-              <Button
-                isIconOnly
-                size="sm"
-                variant="flat"
-                radius="full"
-                aria-label={t('codeAgentInterrupt')}
-                title={t('codeAgentInterrupt')}
-                data-testid="code-agent-interrupt-turn"
-                className="h-6 w-6 min-w-6 border border-[#f0b49e] bg-[#fff1eb] text-[#a44428] dark:border-[#6f3526] dark:bg-[#321f19] dark:text-[#ffb197]"
-                onPress={onInterruptTurn}
-              >
-                <Icon icon="lucide:square" className="h-3.5 w-3.5" />
-              </Button>
-            ) : null}
             <Button
               isIconOnly
               size="sm"
@@ -593,6 +607,16 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
             <Icon icon="lucide:coins" className="h-3 w-3" />
             {t('sessionCost')}: {formatUsdCost(sessionCostUsd)}
           </span>
+          {contextUsage ? (
+            <span
+              data-testid="code-agent-context-usage"
+              title={`${contextUsage.usedTokens.toLocaleString()} / ${contextUsage.contextWindow.toLocaleString()}`}
+              className="inline-flex items-center gap-1 rounded-full border border-[#b9c7ba] bg-[#f4f8f3] px-2 py-1 text-[11px] font-medium text-[#31533b] dark:border-[#405744] dark:bg-[#1c2820] dark:text-[#9fd3aa]"
+            >
+              <Icon icon="lucide:gauge" className="h-3 w-3" />
+              {t('codeAgentContextUsed')}: {contextUsage.usedPercent}%
+            </span>
+          ) : null}
         </div>
       </div>
 

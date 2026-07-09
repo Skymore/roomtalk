@@ -114,7 +114,12 @@ def test_codex_app_server_drives_json_rpc_and_maps_notifications(tmp_path: Path)
     ])
 
     codex_app_server.run_request(
-        codex_app_request(workspace, codexModel="gpt-5.3-codex-spark", codexReasoningEffort="high"),
+        codex_app_request(
+            workspace,
+            codexModel="gpt-5.6-sol",
+            codexReasoningEffort="high",
+            codexServiceTier="priority",
+        ),
         emitter=EventEmitter(stdout),
         config=codex_app_server.CodexCliRunConfig(
             secret_parent=tmp_path / "secrets",
@@ -141,6 +146,7 @@ def test_codex_app_server_drives_json_rpc_and_maps_notifications(tmp_path: Path)
         "tool_result",
         "text_delta",
         "tool_result",
+        "usage",
         "status",
         "final",
     ]
@@ -156,6 +162,7 @@ def test_codex_app_server_drives_json_rpc_and_maps_notifications(tmp_path: Path)
         "source": "reported",
         "cachedPromptTokens": 2,
         "cacheHitRate": 0.25,
+        "modelContextWindow": 200000,
     }
 
     call = popen.calls[0]
@@ -171,11 +178,13 @@ def test_codex_app_server_drives_json_rpc_and_maps_notifications(tmp_path: Path)
     assert sent[1]["method"] == "initialized"
     assert sent[2]["method"] == "thread/resume"
     assert sent[2]["params"]["threadId"] == "session-prev"
-    assert sent[2]["params"]["model"] == "gpt-5.3-codex-spark"
+    assert sent[2]["params"]["model"] == "gpt-5.6-sol"
+    assert sent[2]["params"]["serviceTier"] == "priority"
     assert sent[3]["method"] == "turn/start"
     assert sent[3]["params"]["threadId"] == "thread-app-1"
-    assert sent[3]["params"]["model"] == "gpt-5.3-codex-spark"
+    assert sent[3]["params"]["model"] == "gpt-5.6-sol"
     assert sent[3]["params"]["effort"] == "high"
+    assert sent[3]["params"]["serviceTier"] == "priority"
     assert sent[3]["params"]["sandboxPolicy"]["type"] == "readOnly"
     assert "roomtalk publish-static-site" not in sent[3]["params"]["input"][0]["text"]
     assert not (Path(call["env"]["CODEX_HOME"]) / "auth.json").exists()

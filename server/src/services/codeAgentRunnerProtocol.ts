@@ -1,4 +1,4 @@
-import { AIModelProvider, AIUsage, CodexPermissionMode, CodexReasoningEffort } from '../types';
+import { AIModelProvider, AIUsage, CodexPermissionMode, CodexReasoningEffort, CodexServiceTier } from '../types';
 
 export const CODE_AGENT_RUNNER_SCHEMA_VERSION = 1 as const;
 
@@ -29,6 +29,7 @@ export interface CodeAgentRunnerRunRequest {
   codexModel?: string;
   codexReasoningEffort?: CodexReasoningEffort;
   codexPermissionMode?: CodexPermissionMode;
+  codexServiceTier?: CodexServiceTier;
   workspace: string;
   allowedPaths: string[];
   priorMessages?: CodeAgentRunnerPriorMessage[];
@@ -136,6 +137,13 @@ export interface CodeAgentRunnerFinalEvent {
   usage?: AIUsage;
 }
 
+export interface CodeAgentRunnerUsageEvent {
+  schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
+  type: 'usage';
+  turnId: string;
+  usage: AIUsage;
+}
+
 export interface CodeAgentRunnerErrorEvent {
   schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
   type: 'error';
@@ -179,6 +187,7 @@ export type CodeAgentRunnerEvent =
   | CodeAgentRunnerToolCallEvent
   | CodeAgentRunnerToolResultEvent
   | CodeAgentRunnerFinalEvent
+  | CodeAgentRunnerUsageEvent
   | CodeAgentRunnerErrorEvent
   | CodeAgentRunnerApprovalRequestEvent
   | CodeAgentRunnerThreadListResultEvent
@@ -296,6 +305,9 @@ const readOptionalUsage = (value: Record<string, unknown>): AIUsage | undefined 
   if (typeof usage.cacheHitRate === 'number') {
     parsed.cacheHitRate = usage.cacheHitRate;
   }
+  if (typeof usage.modelContextWindow === 'number') {
+    parsed.modelContextWindow = usage.modelContextWindow;
+  }
 
   return parsed;
 };
@@ -381,6 +393,18 @@ export const parseCodeAgentRunnerEventLine = (line: string): CodeAgentRunnerEven
         sessionId: readRequiredString(raw, 'sessionId'),
         usage: readOptionalUsage(raw),
       };
+    case 'usage': {
+      const usage = readOptionalUsage(raw);
+      if (!usage) {
+        throw new CodeAgentRunnerProtocolError('Expected object field "usage".');
+      }
+      return {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type,
+        turnId: readRequiredString(raw, 'turnId'),
+        usage,
+      };
+    }
     case 'error':
       return {
         schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,

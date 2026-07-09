@@ -209,6 +209,7 @@ def test_codex_sdk_app_server_maps_sdk_notifications_and_sanitizes_env(tmp_path:
     assert turn_start["thread_id"] == "thread-sdk-1"
     assert turn_start["params"]["model"] == "gpt-5.3-codex-spark"
     assert turn_start["params"]["effort"] == "high"
+    assert turn_start["params"]["serviceTier"] == "default"
     assert turn_start["params"]["sandboxPolicy"]["type"] == "readOnly"
 
     events = event_lines(stdout)
@@ -218,6 +219,7 @@ def test_codex_sdk_app_server_maps_sdk_notifications_and_sanitizes_env(tmp_path:
         "text_delta",
         "tool_call",
         "tool_result",
+        "usage",
         "status",
         "final",
     ]

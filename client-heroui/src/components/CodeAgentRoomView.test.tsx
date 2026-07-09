@@ -57,13 +57,6 @@ vi.mock('./MessageList', async () => {
       </button>
       <button
         type="button"
-        data-testid="message-list-switch-codex"
-        onClick={() => onCodeAgentBackendChange?.('codex')}
-      >
-        switch-codex
-      </button>
-      <button
-        type="button"
         data-testid="message-list-switch-app"
         onClick={() => onCodeAgentBackendChange?.('codex-app-server')}
       >
@@ -331,17 +324,7 @@ describe('CodeAgentRoomView', () => {
     expect(screen.getByLabelText('codeAgentCollapseWorkspaceFiles')).toBeTruthy();
   });
 
-  it('updates the room engine when the workspace header switches backend', async () => {
-    const { updateRoomSettings } = await import('../utils/socket');
-    renderCodeAgentRoom(codeAgentRoom, ['plan'], 'plan', permissions());
-
-    fireEvent.click(screen.getByTestId('message-list-switch-codex'));
-    await act(async () => {});
-
-    expect(updateRoomSettings).toHaveBeenCalledWith({ roomId: 'code-agent-room', codeAgentBackend: 'codex' });
-  });
-
-  it('updates the room engine when the workspace header switches to Codex app-server', async () => {
+  it('updates the room engine when the workspace header switches to Codex', async () => {
     const { updateRoomSettings } = await import('../utils/socket');
     renderCodeAgentRoom(codeAgentRoom, ['plan'], 'plan', permissions());
 

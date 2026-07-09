@@ -247,6 +247,12 @@ export interface AIStreamEndEvent {
   sessionCost?: AICostTotalEvent;
 }
 
+export interface AIUsageUpdateEvent {
+  messageId: string;
+  roomId: string;
+  usage: AIUsage;
+}
+
 export interface A2UIUpdateEvent {
   messageId: string;
   roomId: string;
@@ -265,6 +271,7 @@ export interface AIUsage {
   totalTokens: number;
   cachedPromptTokens?: number;
   cacheHitRate?: number;
+  modelContextWindow?: number;
   source: 'reported' | 'estimated';
 }
 

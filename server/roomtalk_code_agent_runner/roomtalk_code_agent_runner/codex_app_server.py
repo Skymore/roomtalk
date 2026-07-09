@@ -20,6 +20,7 @@ from .codex_cli import (
     _create_codex_home,
     _normalize_codex_model,
     _normalize_codex_reasoning_effort,
+    _normalize_codex_service_tier,
     _normalize_workspace_text,
     _restore_auth_json,
     _roomtalk_tool_name,
@@ -185,7 +186,14 @@ class CodexAppServerJsonRpcMapper:
 
         if method == "thread/tokenUsage/updated":
             self.usage = _to_runner_usage(params.get("tokenUsage")) or self.usage
-            return []
+            if not self.usage:
+                return []
+            return [{
+                "schemaVersion": SCHEMA_VERSION,
+                "type": "usage",
+                "turnId": self.turn_id,
+                "usage": self.usage,
+            }]
 
         if method == "item/plan/delta":
             delta = str(params.get("delta") or "").strip()
@@ -843,6 +851,7 @@ def _thread_start_params(request: RunnerRequest, workspace: Path) -> dict[str, A
         "ephemeral": False,
         "sandbox": permission.sandbox,
         "approvalPolicy": permission.approval_policy,
+        "serviceTier": _normalize_codex_service_tier(request.codex_service_tier),
     }
 
 
@@ -854,6 +863,7 @@ def _thread_resume_params(request: RunnerRequest, workspace: Path) -> dict[str, 
         "cwd": str(workspace),
         "sandbox": permission.sandbox,
         "approvalPolicy": permission.approval_policy,
+        "serviceTier": _normalize_codex_service_tier(request.codex_service_tier),
     }
 
 
@@ -865,6 +875,7 @@ def _turn_start_params(request: RunnerRequest, env: dict[str, str], workspace: P
         "cwd": str(workspace),
         "model": _normalize_codex_model(request.codex_model),
         "effort": _normalize_codex_reasoning_effort(request.codex_reasoning_effort),
+        "serviceTier": _normalize_codex_service_tier(request.codex_service_tier),
         "approvalPolicy": permission.approval_policy,
         "sandboxPolicy": _sandbox_policy_for_permission(permission.sandbox, workspace),
     }
@@ -1375,6 +1386,9 @@ def _to_runner_usage(value: Any) -> dict[str, Any] | None:
     if isinstance(cached, int):
         result["cachedPromptTokens"] = cached
         result["cacheHitRate"] = cached / input_tokens if input_tokens > 0 else 0
+    model_context_window = value.get("modelContextWindow")
+    if isinstance(model_context_window, int) and model_context_window > 0:
+        result["modelContextWindow"] = model_context_window
     return result
 
 

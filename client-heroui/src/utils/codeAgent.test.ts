@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { FALLBACK_FEATURE_FLAGS, FeatureFlags } from './features';
 import {
+  CODE_AGENT_BACKEND_OPTIONS,
   getCodeAgentBackend,
   getCodeAgentAvailableModes,
   getCodeAgentDefaultMode,
@@ -68,7 +69,7 @@ describe('codeAgent room adapters', () => {
     const codeAgentCodexAppRoom = room({ type: 'codeAgent', codeAgentBackend: 'codex-app-server' });
 
     expect(isCodeAgentRoom(unsupportedRoom)).toBe(true);
-    expect(getCodeAgentBackend(unsupportedRoom)).toBe('codex');
+    expect(getCodeAgentBackend(unsupportedRoom)).toBe('codex-app-server');
     expect(getCodeAgentBackend(legacyCodexAppRoom)).toBe('codex-app-server');
     expect(isSupportedCodeAgentBackend('codex')).toBe(true);
     expect(isSupportedCodeAgentBackend('codex-app-server')).toBe(true);
@@ -77,5 +78,6 @@ describe('codeAgent room adapters', () => {
     expect(getCodeAgentBackend(codeAgentCodexRoom)).toBe('codex');
     expect(getCodeAgentBackend(codeAgentCodexAppRoom)).toBe('codex-app-server');
     expect(getCodeAgentStatus(codeAgentCodexRoom)).toBe('running');
+    expect(CODE_AGENT_BACKEND_OPTIONS).toEqual(['code-agent', 'codex-app-server']);
   });
 });

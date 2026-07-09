@@ -33,8 +33,9 @@ vi.mock('@heroui/react', () => ({
     const nextKeyByLabel: Record<string, string> = {
       codeAgentModeControl: 'edit',
       selectCodexPermission: 'fullAccess',
-      selectCodexModel: 'gpt-5.3-codex-spark',
+      selectCodexModel: 'gpt-5.6-sol',
       selectCodexReasoning: 'xhigh',
+      selectCodexSpeed: 'priority',
     };
     return (
       <div
@@ -194,26 +195,29 @@ describe('MessageInputAIControls', () => {
         isSettingsOpen
         onSettingsClose={onSettingsClose}
         isCodeAgentRoom
-        codeAgentBackend="codex"
+        codeAgentBackend="codex-app-server"
         codeAgentMode="approveForMe"
         codeAgentAvailableModes={['plan', 'edit', 'approveForMe', 'fullAccess']}
-        codexRunSettings={{ model: 'gpt-5.5', reasoningEffort: 'medium', permissionMode: 'approveForMe' }}
+        codexRunSettings={{ model: 'gpt-5.5', reasoningEffort: 'medium', permissionMode: 'approveForMe', serviceTier: 'default' }}
         onCodexRunSettingsChange={onCodexRunSettingsChange}
       />
     );
 
     expect(screen.getByTestId('codex-model-select')).toBeTruthy();
     expect(screen.getByTestId('codex-reasoning-select')).toBeTruthy();
+    expect(screen.getByTestId('codex-speed-select')).toBeTruthy();
     expect(screen.queryByTestId('ai-model-select')).toBeNull();
 
     fireEvent.click(screen.getByTestId('change-selectCodexModel'));
     fireEvent.click(screen.getByTestId('change-selectCodexReasoning'));
+    fireEvent.click(screen.getByTestId('change-selectCodexSpeed'));
     fireEvent.click(screen.getByRole('button', { name: 'apply' }));
 
     expect(onCodexRunSettingsChange).toHaveBeenCalledWith({
-      model: 'gpt-5.3-codex-spark',
+      model: 'gpt-5.6-sol',
       reasoningEffort: 'xhigh',
       permissionMode: 'approveForMe',
+      serviceTier: 'priority',
     });
     expect(onSettingsClose).toHaveBeenCalled();
   });
@@ -226,10 +230,10 @@ describe('MessageInputAIControls', () => {
         {...baseProps}
         isSettingsOpen
         isCodeAgentRoom
-        codeAgentBackend="codex"
+        codeAgentBackend="codex-app-server"
         codeAgentMode="approveForMe"
         codeAgentAvailableModes={['plan', 'edit', 'approveForMe', 'fullAccess']}
-        codexRunSettings={{ model: 'gpt-5.5', reasoningEffort: 'xhigh', permissionMode: 'approveForMe' }}
+        codexRunSettings={{ model: 'gpt-5.5', reasoningEffort: 'xhigh', permissionMode: 'approveForMe', serviceTier: 'default' }}
         onCodexRunSettingsChange={onCodexRunSettingsChange}
         onCodeAgentModeChange={onCodeAgentModeChange}
       />
@@ -242,8 +246,43 @@ describe('MessageInputAIControls', () => {
       model: 'gpt-5.5',
       reasoningEffort: 'xhigh',
       permissionMode: 'fullAccess',
+      serviceTier: 'default',
     });
     expect(onCodeAgentModeChange).toHaveBeenCalledWith('fullAccess');
+  });
+
+  it('keeps Send as chat while the agent control switches between Stop and Steer', () => {
+    const onAskAI = vi.fn();
+    const onSend = vi.fn();
+    const { rerender } = render(
+      <MessageInputAIControls
+        {...baseProps}
+        isCodeAgentRoom
+        isAgentRunning
+        onAskAI={onAskAI}
+        onSend={onSend}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'codeAgentInterrupt' }));
+    expect(onAskAI).toHaveBeenCalledTimes(1);
+    expect((screen.getByRole('button', { name: 'send' }) as HTMLButtonElement).disabled).toBe(true);
+
+    rerender(
+      <MessageInputAIControls
+        {...baseProps}
+        isCodeAgentRoom
+        isAgentRunning
+        currentInputText="use Bing instead"
+        onAskAI={onAskAI}
+        onSend={onSend}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'codeAgentSteer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'send' }));
+    expect(onAskAI).toHaveBeenCalledTimes(2);
+    expect(onSend).toHaveBeenCalledTimes(1);
   });
 
   it('disables Apply until settings change', () => {

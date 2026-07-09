@@ -37,6 +37,7 @@ describe('code agent runner protocol', () => {
       codexModel: 'gpt-5.5',
       codexReasoningEffort: 'xhigh',
       codexPermissionMode: 'approveForMe',
+      codexServiceTier: 'priority',
       priorMessages: [
         { role: 'user', content: 'list files' },
         {
@@ -137,6 +138,30 @@ describe('code agent runner protocol', () => {
       answer: 'done',
       sessionId: 'session-1',
       usage: { promptTokens: 3, completionTokens: 4, totalTokens: 7, source: 'reported' },
+    });
+
+    assert.deepEqual(parseCodeAgentRunnerEventLine(JSON.stringify({
+      schemaVersion: 1,
+      type: 'usage',
+      turnId: 'turn-1',
+      usage: {
+        promptTokens: 106000,
+        completionTokens: 0,
+        totalTokens: 106000,
+        modelContextWindow: 200000,
+        source: 'reported',
+      },
+    })), {
+      schemaVersion: 1,
+      type: 'usage',
+      turnId: 'turn-1',
+      usage: {
+        promptTokens: 106000,
+        completionTokens: 0,
+        totalTokens: 106000,
+        modelContextWindow: 200000,
+        source: 'reported',
+      },
     });
   });
 

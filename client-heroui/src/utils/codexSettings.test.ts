@@ -13,11 +13,12 @@ describe('room Codex settings', () => {
     localStorage.clear();
   });
 
-  it('defaults to GPT-5.5 Extra High per room', () => {
+  it('follows the Codex default model per room', () => {
     expect(getStoredRoomCodexSettings('room-a')).toEqual({
       model: 'gpt-5.5',
       reasoningEffort: 'xhigh',
       permissionMode: 'approveForMe',
+      serviceTier: 'default',
     });
   });
 
@@ -26,22 +27,26 @@ describe('room Codex settings', () => {
       model: 'gpt-5.4-mini',
       reasoningEffort: 'low',
       permissionMode: 'edit',
+      serviceTier: 'priority',
     });
     saveRoomCodexSettings('room-b', {
-      model: 'gpt-5.3-codex-spark',
+      model: 'gpt-5.6-sol',
       reasoningEffort: 'high',
       permissionMode: 'fullAccess',
+      serviceTier: 'priority',
     });
 
     expect(getStoredRoomCodexSettings('room-a')).toEqual({
       model: 'gpt-5.4-mini',
       reasoningEffort: 'low',
       permissionMode: 'edit',
+      serviceTier: 'default',
     });
     expect(getStoredRoomCodexSettings('room-b')).toEqual({
-      model: 'gpt-5.3-codex-spark',
+      model: 'gpt-5.6-sol',
       reasoningEffort: 'high',
       permissionMode: 'fullAccess',
+      serviceTier: 'priority',
     });
   });
 
@@ -50,12 +55,14 @@ describe('room Codex settings', () => {
       model: 'unknown-model',
       reasoningEffort: 'invalid' as never,
       permissionMode: 'invalid' as never,
+      serviceTier: 'invalid' as never,
     }, defaultCodexRunSettings());
 
     expect(updated).toEqual({
       model: 'gpt-5.5',
       reasoningEffort: 'xhigh',
       permissionMode: 'approveForMe',
+      serviceTier: 'default',
     });
   });
 });

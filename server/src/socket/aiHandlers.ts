@@ -25,7 +25,7 @@ import { CODE_AGENT_ACCESS_DENIED_MESSAGE } from '../services/codeAgentRoomAcces
 import { normalizeCodexRunSettings } from '../services/codexRunSettings';
 import type { CodeAgentRunnerMode } from '../services/codeAgentRunnerProtocol';
 import type { CodeAgentTurnInput } from '../services/codeAgentSessionService';
-import type { A2UIActionEvent, AIModelOption, CodexPermissionMode, CodexReasoningEffort, Message } from '../types';
+import type { A2UIActionEvent, AIModelOption, CodexPermissionMode, CodexReasoningEffort, CodexServiceTier, Message } from '../types';
 import { hasRoomAccess } from './roomAccess';
 import { authorizeRoomAction, buildRoomPermissions, getRoomMessage } from './roomAuthorization';
 import { SocketConnectionContext, SocketHandlerDeps } from './types';
@@ -86,6 +86,7 @@ const buildCodeAgentTurnInput = ({
   codexModel,
   codexReasoningEffort,
   codexPermissionMode,
+  codexServiceTier,
   maxContextMessages,
   socket,
   requestedMode,
@@ -96,6 +97,7 @@ const buildCodeAgentTurnInput = ({
   codexModel?: string;
   codexReasoningEffort?: CodexReasoningEffort;
   codexPermissionMode?: CodexPermissionMode;
+  codexServiceTier?: CodexServiceTier;
   maxContextMessages?: number;
   socket: SocketConnectionContext['socket'];
   requestedMode?: CodeAgentRunnerMode;
@@ -103,8 +105,8 @@ const buildCodeAgentTurnInput = ({
   roomId,
   clientId,
   selectedModel,
-  ...((codexModel || codexReasoningEffort || codexPermissionMode)
-    ? { codexRunSettings: normalizeCodexRunSettings(codexModel, codexReasoningEffort, codexPermissionMode) }
+  ...((codexModel || codexReasoningEffort || codexPermissionMode || codexServiceTier)
+    ? { codexRunSettings: normalizeCodexRunSettings(codexModel, codexReasoningEffort, codexPermissionMode, codexServiceTier) }
     : {}),
   maxContextMessages,
   ...getCodeAgentTurnOriginInput(socket),
@@ -391,6 +393,7 @@ type AIRequestData = {
   codexModel?: string;
   codexReasoningEffort?: CodexReasoningEffort;
   codexPermissionMode?: CodexPermissionMode;
+  codexServiceTier?: CodexServiceTier;
   userMessageId?: string;
   editedMessageId?: string;
   retryForMessageId?: string;
@@ -1893,6 +1896,7 @@ export function registerAIHandlers({
         codexModel: data.codexModel,
         codexReasoningEffort: data.codexReasoningEffort,
         codexPermissionMode: data.codexPermissionMode,
+        codexServiceTier: data.codexServiceTier,
         maxContextMessages: data.maxContextMessages,
         socket,
         requestedMode,
@@ -2019,6 +2023,7 @@ export function registerAIHandlers({
         codexModel: data.codexModel,
         codexReasoningEffort: data.codexReasoningEffort,
         codexPermissionMode: data.codexPermissionMode,
+        codexServiceTier: data.codexServiceTier,
         maxContextMessages: data.maxContextMessages,
         socket,
       }), (response) => {
@@ -2146,6 +2151,7 @@ export function registerAIHandlers({
         codexModel: data.codexModel,
         codexReasoningEffort: data.codexReasoningEffort,
         codexPermissionMode: data.codexPermissionMode,
+        codexServiceTier: data.codexServiceTier,
         maxContextMessages: data.maxContextMessages,
         socket,
         requestedMode,

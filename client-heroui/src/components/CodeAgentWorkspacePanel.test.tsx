@@ -157,11 +157,42 @@ describe('CodeAgentWorkspacePanel', () => {
 
     expect(screen.getByText('Coco')).toBeTruthy();
     expect(screen.getByText('Codex')).toBeTruthy();
-    expect(screen.getByText('CodexApp')).toBeTruthy();
+    expect(screen.queryByTestId('code-agent-backend-codex')).toBeNull();
 
-    fireEvent.click(screen.getByTestId('code-agent-backend-codex'));
+    fireEvent.click(screen.getByTestId('code-agent-backend-codex-app-server'));
 
-    expect(onBackendChange).toHaveBeenCalledWith('codex');
+    expect(onBackendChange).toHaveBeenCalledWith('codex-app-server');
+  });
+
+  it('shows the latest Codex context usage', () => {
+    const aiMessage: Message = {
+      id: 'ai-1',
+      clientId: 'ai_assistant',
+      content: 'Working',
+      roomId: room.id,
+      timestamp: '2026-07-09T00:00:00.000Z',
+      messageType: 'ai',
+      status: 'streaming',
+      usage: {
+        promptTokens: 106_000,
+        completionTokens: 0,
+        totalTokens: 106_000,
+        modelContextWindow: 200_000,
+        source: 'reported',
+      },
+    };
+
+    render(
+      <CodeAgentWorkspacePanel
+        room={{ ...room, codeAgentBackend: 'codex-app-server' }}
+        messages={[aiMessage]}
+        mode="plan"
+        backend="codex-app-server"
+        sessionCostUsd={0}
+      />
+    );
+
+    expect(screen.getByTestId('code-agent-context-usage').textContent).toContain('50%');
   });
 
   it('keeps workspace tabs horizontally scrollable on narrow screens', () => {

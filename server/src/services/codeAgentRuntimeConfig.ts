@@ -316,6 +316,11 @@ const parsePositiveIntegerEnv = (env: NodeJS.ProcessEnv, name: string, fallback:
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
+const parseNonNegativeIntegerEnv = (env: NodeJS.ProcessEnv, name: string, fallback: number) => {
+  const parsed = Number.parseInt(env[name] || '', 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+};
+
 const parsePositiveNumberEnv = (env: NodeJS.ProcessEnv, name: string, fallback: number) => {
   const parsed = Number(env[name] || '');
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -345,7 +350,8 @@ const readModelGatewayConfig = (env: NodeJS.ProcessEnv): CodeAgentRuntimeConfig[
     publicBaseUrl: baseUrl.replace(/\/+$/, ''),
     tokenSecret,
     tokenTtlSeconds: parsePositiveIntegerEnv(env, 'CODE_AGENT_MODEL_GATEWAY_TOKEN_TTL_SECONDS', 15 * 60),
-    maxRequestsPerTurn: parsePositiveIntegerEnv(env, 'CODE_AGENT_MODEL_GATEWAY_MAX_REQUESTS_PER_TURN', 20),
+    // Zero disables request-count limiting; timeout and USD budget limits still apply.
+    maxRequestsPerTurn: parseNonNegativeIntegerEnv(env, 'CODE_AGENT_MODEL_GATEWAY_MAX_REQUESTS_PER_TURN', 0),
     turnBudgetUsd: parsePositiveNumberEnv(env, 'CODE_AGENT_MODEL_GATEWAY_TURN_BUDGET_USD', 2),
   };
 };

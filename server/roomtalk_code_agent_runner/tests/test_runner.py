@@ -3,7 +3,9 @@ from __future__ import annotations
 import io
 import json
 import os
+import queue
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -66,15 +68,18 @@ def test_parse_request_validates_schema_and_required_fields():
     assert parsed.codex_model is None
     assert parsed.codex_reasoning_effort is None
     assert parsed.codex_permission_mode is None
+    assert parsed.codex_service_tier is None
 
     parsed_codex = parse_request(json.dumps(request(
         codexModel="gpt-5.5",
         codexReasoningEffort="xhigh",
         codexPermissionMode="approveForMe",
+        codexServiceTier="priority",
     )))
     assert parsed_codex.codex_model == "gpt-5.5"
     assert parsed_codex.codex_reasoning_effort == "xhigh"
     assert parsed_codex.codex_permission_mode == "approveForMe"
+    assert parsed_codex.codex_service_tier == "priority"
 
     prior_messages = [
         {"role": "user", "content": "list files"},
@@ -284,6 +289,7 @@ def test_publish_static_site_tool_posts_payload_and_returns_url(tmp_path: Path, 
         codex_model=None,
         codex_reasoning_effort=None,
         codex_permission_mode=None,
+        codex_service_tier=None,
         workspace=workspace,
         allowed_paths=(".",),
     )
@@ -717,6 +723,108 @@ def test_scoped_workspace_cwd_restores_cwd_after_error(tmp_path: Path, monkeypat
     assert Path.cwd() == original_cwd
 
 
+def test_run_request_applies_coco_steer_without_ending_the_turn(tmp_path: Path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("CODE_AGENT_WORKSPACE_ROOT", str(tmp_path))
+    parsed = parse_request(json.dumps(request(workspace=str(workspace))))
+    controls: "queue.Queue[dict[str, Any] | None]" = queue.Queue()
+    output = io.StringIO()
+
+    class SteerableEngine:
+        def __init__(self):
+            self.started = threading.Event()
+            self.aborted = threading.Event()
+            self.prompts: list[str] = []
+            self.prior_messages: list[list[dict] | None] = []
+
+        def abort(self):
+            self.aborted.set()
+
+        def run(self, prompt, prior_messages=None, on_text_chunk=None):
+            self.prompts.append(prompt)
+            self.prior_messages.append(prior_messages)
+            if len(self.prompts) == 1:
+                on_text_chunk("before steer ")
+                self.started.set()
+                assert self.aborted.wait(timeout=2)
+                self.aborted.clear()
+                raise RuntimeError("aborted for steer")
+            assert "use Bing instead" in prompt
+            on_text_chunk("after steer")
+            return EngineResult(answer="after steer", messages=[], usage=Usage())
+
+    engine = SteerableEngine()
+    thread = threading.Thread(
+        target=run_request,
+        kwargs={
+            "request": parsed,
+            "emitter": EventEmitter(output),
+            "engine_factory": lambda _request: engine,
+            "control_queue": controls,
+        },
+    )
+    thread.start()
+    assert engine.started.wait(timeout=2)
+    controls.put({"schemaVersion": 1, "type": "steer", "turnId": parsed.turn_id, "prompt": "use Bing instead"})
+    thread.join(timeout=3)
+
+    assert not thread.is_alive()
+    assert len(engine.prompts) == 2
+    assert engine.prior_messages[1][-2:] == [
+        {"role": "user", "content": "inspect the project"},
+        {"role": "assistant", "content": "before steer "},
+    ]
+    events = event_lines(output)
+    assert [event["delta"] for event in events if event["type"] == "text_delta"] == ["before steer ", "after steer"]
+    assert events[-1]["type"] == "final"
+    assert events[-1]["answer"] == "after steer"
+
+
+def test_run_request_interrupts_coco_cleanly(tmp_path: Path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("CODE_AGENT_WORKSPACE_ROOT", str(tmp_path))
+    parsed = parse_request(json.dumps(request(workspace=str(workspace))))
+    controls: "queue.Queue[dict[str, Any] | None]" = queue.Queue()
+    output = io.StringIO()
+
+    class InterruptibleEngine:
+        def __init__(self):
+            self.started = threading.Event()
+            self.aborted = threading.Event()
+
+        def abort(self):
+            self.aborted.set()
+
+        def run(self, prompt, on_text_chunk=None):
+            on_text_chunk("partial")
+            self.started.set()
+            assert self.aborted.wait(timeout=2)
+            raise RuntimeError("aborted")
+
+    engine = InterruptibleEngine()
+    thread = threading.Thread(
+        target=run_request,
+        kwargs={
+            "request": parsed,
+            "emitter": EventEmitter(output),
+            "engine_factory": lambda _request: engine,
+            "control_queue": controls,
+        },
+    )
+    thread.start()
+    assert engine.started.wait(timeout=2)
+    controls.put({"schemaVersion": 1, "type": "interrupt", "turnId": parsed.turn_id})
+    thread.join(timeout=3)
+
+    assert not thread.is_alive()
+    events = event_lines(output)
+    assert any(event.get("message") == "Coco turn interrupted" for event in events)
+    assert events[-1]["type"] == "final"
+    assert events[-1]["answer"] == "partial"
+
+
 def test_current_code_agent_engine_file_tools_resolve_relative_paths_against_scoped_cwd(tmp_path: Path, monkeypatch):
     engine_source = Path(os.environ.get("CODE_AGENT_SOURCE_DIR") or "/Users/sky/projects/code-agent-engine/src")
     if not (engine_source / "core/tools/file_read.py").exists():
@@ -764,7 +872,8 @@ def test_main_emits_error_for_empty_stdin():
 def test_main_preserves_turn_id_when_engine_raises_after_request_parse(monkeypatch):
     from roomtalk_code_agent_runner import runner
 
-    def fail_run_request(parsed_request, *, emitter):
+    def fail_run_request(parsed_request, *, emitter, **kwargs):
+        del kwargs
         raise RuntimeError("engine failed")
 
     monkeypatch.setattr(runner, "run_request", fail_run_request)

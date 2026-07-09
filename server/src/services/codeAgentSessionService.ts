@@ -204,7 +204,8 @@ export class CodeAgentSessionService {
     const codexRunSettings = normalizeCodexRunSettings(
       input.codexRunSettings?.model,
       input.codexRunSettings?.reasoningEffort,
-      input.codexRunSettings?.permissionMode
+      input.codexRunSettings?.permissionMode,
+      input.codexRunSettings?.serviceTier
     );
 
     let aiMessageId = '';
@@ -356,6 +357,7 @@ export class CodeAgentSessionService {
               codexModel: codexRunSettings.model,
               codexReasoningEffort: codexRunSettings.reasoningEffort,
               codexPermissionMode: codexRunSettings.permissionMode,
+              codexServiceTier: codexRunSettings.serviceTier,
             }
           : {}),
         workspace: turnSandbox.workspace,
@@ -553,27 +555,22 @@ export class CodeAgentSessionService {
     if (active.clientId !== clientId) {
       this.logger.info('Code agent interrupt requested by another room member', { roomId, startedBy: active.clientId, requestedBy: clientId });
     }
-    if (active.backend !== 'codex-app-server') {
-      if (this.options.runnerClient === 'daemon') {
-        return this.writeActiveControl(roomId, {
-          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
-          type: 'interrupt',
-          turnId: active.turnId,
-          ...(reason ? { reason } : {}),
-        });
-      }
+    if (active.backend === 'code-agent' || active.backend === 'codex-app-server') {
+      return this.writeActiveControl(roomId, {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type: 'interrupt',
+        turnId: active.turnId,
+        ...(reason ? { reason } : {}),
+      });
+    }
+    if (active.backend === 'codex') {
       if (active.process) {
         await this.stopRunnerProcess(active.process, roomId);
         return { success: true };
       }
       return { success: false, error: 'The current engine does not support interactive interrupt yet' };
     }
-    return this.writeActiveControl(roomId, {
-      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
-      type: 'interrupt',
-      turnId: active.turnId,
-      ...(reason ? { reason } : {}),
-    });
+    return { success: false, error: 'The current engine does not support interactive interrupt yet' };
   }
 
   async steerTurn(roomId: string, clientId: string, prompt: string): Promise<CodeAgentControlAck> {
@@ -581,8 +578,8 @@ export class CodeAgentSessionService {
     if (!active) {
       return { success: false, error: 'No agent turn is running in this workspace' };
     }
-    if (active.backend !== 'codex-app-server') {
-      return { success: false, error: 'Turn steering requires the Codex App engine' };
+    if (active.backend !== 'code-agent' && active.backend !== 'codex-app-server') {
+      return { success: false, error: 'The current engine does not support turn steering' };
     }
     const trimmedPrompt = prompt.trim();
     if (!trimmedPrompt) {
@@ -610,7 +607,7 @@ export class CodeAgentSessionService {
       return { success: false, error: 'No agent turn is running in this workspace' };
     }
     if (active.backend !== 'codex-app-server') {
-      return { success: false, error: 'Interactive approval requires the Codex App engine' };
+      return { success: false, error: 'Interactive approval requires the Codex engine' };
     }
     if (active.clientId !== clientId) {
       this.logger.info('Code agent approval response from another room member', { roomId, startedBy: active.clientId, requestedBy: clientId, approvalId });
@@ -721,7 +718,7 @@ export class CodeAgentSessionService {
     }
     const backend = this.resolveTurnBackend(room);
     if (backend !== 'codex-app-server') {
-      throw new Error('Codex thread browser requires the Codex App engine');
+      throw new Error('Codex thread browser requires the Codex engine');
     }
     const sandbox = await this.sandboxLifecycle.ensureReadySandbox(roomId, clientId);
     if (!sandbox.ok) {
@@ -1002,7 +999,13 @@ export class CodeAgentSessionService {
   }
 
   private resolveTurnBackend(room: Room): CodeAgentBackend {
-    return room.codeAgentBackend || this.options.backend || this.runner.backend || 'code-agent';
+    if (room.codeAgentBackend) {
+      return room.codeAgentBackend;
+    }
+    if ((room.type as string | undefined) === 'codex') {
+      return 'codex-app-server';
+    }
+    return this.options.backend || this.runner.backend || 'code-agent';
   }
 
   private validateTurnBackend(backend: CodeAgentBackend): { ok: true } | { ok: false; error: string } {
@@ -1013,10 +1016,7 @@ export class CodeAgentSessionService {
   }
 
   private displayBackendName(backend: CodeAgentBackend): string {
-    if (backend === 'codex-app-server') {
-      return 'CodexApp';
-    }
-    return backend === 'codex' ? 'Codex' : 'Coco';
+    return isCodexBackend(backend) ? 'Codex' : 'Coco';
   }
 
   private messageAIModelForBackend(
@@ -1141,6 +1141,14 @@ export class CodeAgentSessionService {
     codexRunSettings: CodexRunSettings
   ) {
     await this.recordRunnerEvent(event, roomId, turnId, selectedModel, backend, codexRunSettings);
+    if (event.type === 'usage') {
+      this.emitter.to(roomId).emit('ai_usage_update', {
+        messageId: state.activeMessageId,
+        roomId,
+        usage: event.usage,
+      });
+      return;
+    }
     if (event.type === 'error') {
       await this.flushInterruptedToolCalls(roomId, turnId, state, event.message, baseAIMessage, backend);
     }
@@ -1391,6 +1399,8 @@ export class CodeAgentSessionService {
           answerLength: event.answer.length,
           usage: event.usage,
         };
+      case 'usage':
+        return { usage: event.usage };
       case 'error':
         return {
           message: event.message,

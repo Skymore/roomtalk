@@ -35,6 +35,7 @@ import {
   CODEX_PERMISSION_OPTIONS,
   CODEX_MODEL_OPTIONS,
   CODEX_REASONING_OPTIONS,
+  CODEX_SPEED_OPTIONS,
   defaultCodexRunSettings,
   type CodexPermissionMode,
   type CodexRunSettings,
@@ -119,6 +120,7 @@ interface MessageInputAIControlsProps {
   defaultAIModel: string;
   isSending: boolean;
   isAiProcessing: boolean;
+  isAgentRunning?: boolean;
   isInputLocked?: boolean;
   canPost: boolean;
   isMacOS: boolean;
@@ -154,6 +156,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   defaultAIModel,
   isSending,
   isAiProcessing,
+  isAgentRunning = false,
   isInputLocked = false,
   canPost,
   isMacOS,
@@ -192,10 +195,16 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   const [premiumConfirmationStep, setPremiumConfirmationStep] = React.useState<1 | 2>(1);
   const pendingPremiumModel = aiModels.find(model => model.id === pendingPremiumModelId);
   const hasInputContent = currentInputText.trim().length > 0 || imageCount > 0;
+  const hasSteerText = isAgentRunning && currentInputText.trim().length > 0;
   const isControlLocked = isSending || isAiProcessing || isInputLocked || !canPost;
-  const askActionLabel = isCodeAgentRoom ? t('runAgent') : t('askAI');
-  const askActionIcon = isCodeAgentRoom ? 'lucide:bot' : selectedRole.icon;
+  const askActionLabel = isAgentRunning
+    ? t(hasSteerText ? 'codeAgentSteer' : 'codeAgentInterrupt')
+    : (isCodeAgentRoom ? t('runAgent') : t('askAI'));
+  const askActionIcon = isAgentRunning
+    ? (hasSteerText ? 'lucide:corner-down-right' : 'lucide:square')
+    : (isCodeAgentRoom ? 'lucide:bot' : selectedRole.icon);
   const isCodexCodeAgent = isCodeAgentRoom && isCodexCodeAgentBackend(codeAgentBackend);
+  const isCodexAppServer = isCodeAgentRoom && codeAgentBackend === 'codex-app-server';
   const effectiveAvailableCodeAgentModes = normalizeCodeAgentModeList(codeAgentAvailableModes);
   const normalizedCodeAgentMode = normalizeCodeAgentMode(codeAgentMode);
   const effectiveCodeAgentMode = effectiveAvailableCodeAgentModes.includes(normalizedCodeAgentMode)
@@ -217,6 +226,9 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
     || codexPermissionOptions[0]
     || CODEX_PERMISSION_OPTIONS[0]
   );
+  const selectedCodexModelSupportsFast = CODEX_MODEL_OPTIONS.find(
+    option => option.id === codexRunSettingsDraft.model
+  )?.supportsFast === true;
   const compactItemClassNames = {
     base: "w-full px-2 py-2",
     title: "text-xs font-medium leading-4 text-[#141413] dark:text-[#faf9f5]",
@@ -302,8 +314,13 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   const handleCodexModelSelection = (keys: 'all' | Set<React.Key>) => {
     if (keys === 'all') return;
     const selectedKey = Array.from(keys)[0]?.toString();
-    if (selectedKey && CODEX_MODEL_OPTIONS.some(option => option.id === selectedKey)) {
-      setCodexRunSettingsDraft(current => ({ ...current, model: selectedKey }));
+    const selectedModel = CODEX_MODEL_OPTIONS.find(option => option.id === selectedKey);
+    if (selectedModel) {
+      setCodexRunSettingsDraft(current => ({
+        ...current,
+        model: selectedModel.id,
+        serviceTier: selectedModel.supportsFast ? current.serviceTier : 'default',
+      }));
     }
   };
   const handleCodexReasoningSelection = (keys: 'all' | Set<React.Key>) => {
@@ -311,6 +328,13 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
     const selectedKey = Array.from(keys)[0]?.toString();
     if (selectedKey === 'low' || selectedKey === 'medium' || selectedKey === 'high' || selectedKey === 'xhigh') {
       setCodexRunSettingsDraft(current => ({ ...current, reasoningEffort: selectedKey }));
+    }
+  };
+  const handleCodexSpeedSelection = (keys: 'all' | Set<React.Key>) => {
+    if (keys === 'all') return;
+    const selectedKey = Array.from(keys)[0]?.toString();
+    if (selectedKey === 'default' || (selectedKey === 'priority' && selectedCodexModelSupportsFast)) {
+      setCodexRunSettingsDraft(current => ({ ...current, serviceTier: selectedKey }));
     }
   };
   const normalizedAIContextMessageLimitDraft = normalizeAIContextMessageLimit(aiContextMessageLimitDraft);
@@ -324,6 +348,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
       codexRunSettingsDraft.model !== codexRunSettings.model
       || codexRunSettingsDraft.reasoningEffort !== codexRunSettings.reasoningEffort
       || codexRunSettingsDraft.permissionMode !== codexRunSettings.permissionMode
+      || codexRunSettingsDraft.serviceTier !== codexRunSettings.serviceTier
     ))
   );
   const handleSettingsApply = () => {
@@ -336,6 +361,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
       codexRunSettingsDraft.model !== codexRunSettings.model
       || codexRunSettingsDraft.reasoningEffort !== codexRunSettings.reasoningEffort
       || codexRunSettingsDraft.permissionMode !== codexRunSettings.permissionMode
+      || codexRunSettingsDraft.serviceTier !== codexRunSettings.serviceTier
     )) {
       onCodexRunSettingsChange?.(codexRunSettingsDraft);
     }
@@ -360,7 +386,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
             color={isCodeAgentRoom ? 'default' : selectedRole.color}
             size="sm"
             onPress={onAskAI}
-            isDisabled={isControlLocked}
+            isDisabled={isAgentRunning ? isSending || isAiProcessing || (hasSteerText && !canPost) : isControlLocked}
             aria-label={askActionLabel}
             className="relative !h-7 !w-7 !min-w-7 overflow-hidden rounded-full bg-[#30302e] px-0 text-[#faf9f5] shadow-[0_0_0_1px_rgba(48,48,46,0.7)] dark:bg-[#faf9f5] dark:text-[#141413] dark:shadow-[0_0_0_1px_rgba(250,249,245,0.7)] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"
           >
@@ -384,6 +410,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
             size="sm"
             isDisabled={isControlLocked || !hasInputContent}
             aria-label={t('send')}
+            data-testid="send-button"
             className="relative !h-7 !w-7 !min-w-7 overflow-hidden rounded-full bg-[#c96442] px-0 text-[#faf9f5] shadow-[0_0_0_1px_rgba(201,100,66,0.7)] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"
           >
             <span className={`flex items-center justify-center gap-1.5 ${isSending ? 'opacity-0' : 'opacity-100'}`}>
@@ -472,6 +499,37 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                     </SelectItem>
                   ))}
                 </Select>
+                {isCodexAppServer ? (
+                  <Select
+                    size="sm"
+                    label={t('selectCodexSpeed')}
+                    aria-label={t('selectCodexSpeed')}
+                    data-testid="codex-speed-select"
+                    selectedKeys={[codexRunSettingsDraft.serviceTier]}
+                    onSelectionChange={handleCodexSpeedSelection}
+                    classNames={{
+                      trigger: "min-h-11 rounded-lg border border-[#dedbd0] bg-[#faf9f5] text-[#4d4c48] dark:border-[#30302e] dark:bg-[#242421] dark:text-[#faf9f5]",
+                      label: "text-[#5e5d59] dark:text-[#b0aea5]",
+                      value: "text-sm font-semibold",
+                      popoverContent: "w-[min(18rem,calc(100vw-2rem))] border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
+                    }}
+                    startContent={<Icon icon="lucide:gauge-circle" className="h-4 w-4" />}
+                  >
+                    {CODEX_SPEED_OPTIONS.map((option) => (
+                      <SelectItem
+                        key={option.id}
+                        classNames={compactItemClassNames}
+                        textValue={t(option.labelKey)}
+                        isDisabled={option.id === 'priority' && !selectedCodexModelSupportsFast}
+                      >
+                        <span className="block min-w-0">
+                          <span className="block truncate text-xs font-semibold leading-4">{t(option.labelKey)}</span>
+                          <span className="block text-[11px] leading-4 text-[#87867f] dark:text-[#b0aea5]">{t(option.descriptionKey)}</span>
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </Select>
+                ) : null}
               </div>
             ) : (
               <Select

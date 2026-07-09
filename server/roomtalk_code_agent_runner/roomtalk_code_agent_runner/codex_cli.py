@@ -27,7 +27,15 @@ DEFAULT_CODEX_TIMEOUT_MS = 120_000
 DEFAULT_CODEX_MODEL = "gpt-5.5"
 DEFAULT_CODEX_REASONING_EFFORT = "xhigh"
 DEFAULT_CODEX_PERMISSION_MODE = "approveForMe"
-ALLOWED_CODEX_MODELS = {"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"}
+ALLOWED_CODEX_MODELS = {
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.3-codex-spark",
+}
 ALLOWED_CODEX_REASONING_EFFORTS = {"low", "medium", "high", "xhigh"}
 ALLOWED_CODEX_PERMISSION_MODES = {"plan", "edit", "approveForMe", "fullAccess"}
 MAX_STDERR_TAIL_CHARS = 4_000
@@ -288,6 +296,7 @@ def _build_codex_exec_args(
 ) -> list[str]:
     model = _normalize_codex_model(request.codex_model)
     reasoning_effort = _normalize_codex_reasoning_effort(request.codex_reasoning_effort)
+    service_tier = _normalize_codex_service_tier(request.codex_service_tier)
     permission = _codex_exec_permissions(request)
     args = [
         config.cli_bin,
@@ -300,6 +309,8 @@ def _build_codex_exec_args(
         f'approval_policy="{permission.approval_policy}"',
         "-c",
         f'model_reasoning_effort="{reasoning_effort}"',
+        "-c",
+        f'service_tier="{service_tier}"',
     ]
     if permission.sandbox == "workspace-write":
         args.extend([
@@ -328,6 +339,10 @@ def _normalize_codex_reasoning_effort(value: str | None) -> str:
     if not value:
         return DEFAULT_CODEX_REASONING_EFFORT
     return value if value in ALLOWED_CODEX_REASONING_EFFORTS else DEFAULT_CODEX_REASONING_EFFORT
+
+
+def _normalize_codex_service_tier(value: str | None) -> str:
+    return "priority" if value == "priority" else "default"
 
 
 @dataclass(frozen=True)

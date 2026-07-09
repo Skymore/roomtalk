@@ -288,6 +288,33 @@ describe('CodeAgentModelGateway', () => {
     assert.ok((observability.events[1].costUsd || 0) > 0.000001);
   });
 
+  it('allows unlimited per-turn requests when the limit is zero', async () => {
+    const gateway = new CodeAgentModelGateway({
+      publicBaseUrl: 'https://room.example/api/code-agent/model-gateway',
+      tokenSecret: 'test-secret',
+      providerApiKeys: { deepseek: 'deepseek-provider-key' },
+      maxRequestsPerTurn: 0,
+      nowMs: () => 1_800_000_000_000,
+      stateStore: new InMemoryCodeAgentModelGatewayTokenStateStore(() => 1_800_000_000_000),
+      fetchFn: async () => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }),
+    });
+    const token = gateway.issueTurnToken({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      turnId: 'turn-unlimited',
+      mode: 'plan',
+      model: deepseekModel,
+    });
+    server = await createTestServer(gateway);
+
+    for (let request = 0; request < 25; request += 1) {
+      const response: globalThis.Response = await fetch(`${server.baseUrl}/api/code-agent/model-gateway/v1/models`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      assert.equal(response.status, 200);
+    }
+  });
+
   it('does not charge code-agent gateway budget without reported usage', async () => {
     let calls = 0;
     const gateway = new CodeAgentModelGateway({

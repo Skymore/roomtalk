@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "artifactName": "roomtalk-code-agent",
-  "artifactVersion": "roomtalk-code-agent-2026-07-08-zsh-terminal-v1",
+  "artifactVersion": "roomtalk-code-agent-2026-07-09-codex-0-144-controls-v1",
   "pythonVersion": "3.12",
   "baseImage": {
     "name": "python",
@@ -16,7 +16,7 @@
   },
   "runner": {
     "packageName": "roomtalk-code-agent-runner",
-    "packageVersion": "0.1.9",
+    "packageVersion": "0.1.10",
     "sourcePath": "server/roomtalk_code_agent_runner",
     "command": "python -m roomtalk_code_agent_runner",
     "backends": {
@@ -25,15 +25,15 @@
       },
       "codex_cli": {
         "command": "python -m roomtalk_code_agent_runner.codex_cli",
-        "codexCliVersion": "0.142.5"
+        "codexCliVersion": "0.144.0"
       },
       "codex_app_server": {
         "command": "python -m roomtalk_code_agent_runner.codex_app_server",
-        "codexCliVersion": "0.142.5"
+        "codexCliVersion": "0.144.0"
       },
       "codex_sdk_app_server": {
         "command": "python -m roomtalk_code_agent_runner.codex_sdk_app_server",
-        "codexCliVersion": "0.142.5",
+        "codexCliVersion": "0.144.0",
         "pythonSdkVersion": "0.1.0b3"
       },
       "daemon": {

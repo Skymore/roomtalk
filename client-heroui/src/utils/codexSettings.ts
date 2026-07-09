@@ -1,15 +1,18 @@
 export type CodexReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
 export type CodexPermissionMode = 'plan' | 'edit' | 'approveForMe' | 'fullAccess';
+export type CodexServiceTier = 'default' | 'priority';
 
 export interface CodexRunSettings {
   model: string;
   reasoningEffort: CodexReasoningEffort;
   permissionMode: CodexPermissionMode;
+  serviceTier: CodexServiceTier;
 }
 
 export interface CodexModelOption {
   id: string;
   label: string;
+  supportsFast: boolean;
 }
 
 export interface CodexReasoningOption {
@@ -24,17 +27,27 @@ export interface CodexPermissionOption {
   icon: string;
 }
 
+export interface CodexSpeedOption {
+  id: CodexServiceTier;
+  labelKey: string;
+  descriptionKey: string;
+}
+
 const ROOM_CODEX_SETTINGS_PREFIX = 'roomtalk:codex-settings:';
 
 export const DEFAULT_CODEX_MODEL = 'gpt-5.5';
 export const DEFAULT_CODEX_REASONING_EFFORT: CodexReasoningEffort = 'xhigh';
 export const DEFAULT_CODEX_PERMISSION_MODE: CodexPermissionMode = 'approveForMe';
+export const DEFAULT_CODEX_SERVICE_TIER: CodexServiceTier = 'default';
 
 export const CODEX_MODEL_OPTIONS: CodexModelOption[] = [
-  { id: 'gpt-5.5', label: 'GPT-5.5' },
-  { id: 'gpt-5.4', label: 'GPT-5.4' },
-  { id: 'gpt-5.4-mini', label: 'GPT-5.4-Mini' },
-  { id: 'gpt-5.3-codex-spark', label: 'GPT-5.3-Codex-Spark' },
+  { id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol', supportsFast: true },
+  { id: 'gpt-5.6-terra', label: 'GPT-5.6-Terra', supportsFast: true },
+  { id: 'gpt-5.6-luna', label: 'GPT-5.6-Luna', supportsFast: true },
+  { id: 'gpt-5.5', label: 'GPT-5.5', supportsFast: true },
+  { id: 'gpt-5.4', label: 'GPT-5.4', supportsFast: true },
+  { id: 'gpt-5.4-mini', label: 'GPT-5.4-Mini', supportsFast: false },
+  { id: 'gpt-5.3-codex-spark', label: 'GPT-5.3-Codex-Spark', supportsFast: false },
 ];
 
 export const CODEX_REASONING_OPTIONS: CodexReasoningOption[] = [
@@ -42,6 +55,11 @@ export const CODEX_REASONING_OPTIONS: CodexReasoningOption[] = [
   { id: 'medium', labelKey: 'codexReasoningMedium' },
   { id: 'high', labelKey: 'codexReasoningHigh' },
   { id: 'xhigh', labelKey: 'codexReasoningExtraHigh' },
+];
+
+export const CODEX_SPEED_OPTIONS: CodexSpeedOption[] = [
+  { id: 'default', labelKey: 'codexSpeedStandard', descriptionKey: 'codexSpeedStandardDescription' },
+  { id: 'priority', labelKey: 'codexSpeedFast', descriptionKey: 'codexSpeedFastDescription' },
 ];
 
 export const CODEX_PERMISSION_OPTIONS: CodexPermissionOption[] = [
@@ -74,6 +92,7 @@ export const CODEX_PERMISSION_OPTIONS: CodexPermissionOption[] = [
 const CODEX_MODEL_IDS = new Set(CODEX_MODEL_OPTIONS.map(option => option.id));
 const CODEX_REASONING_EFFORTS = new Set<CodexReasoningEffort>(CODEX_REASONING_OPTIONS.map(option => option.id));
 const CODEX_PERMISSION_MODES = new Set<CodexPermissionMode>(CODEX_PERMISSION_OPTIONS.map(option => option.id));
+const CODEX_SERVICE_TIERS = new Set<CodexServiceTier>(CODEX_SPEED_OPTIONS.map(option => option.id));
 
 const isRecord = (value: unknown): value is Record<string, unknown> => (
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -115,6 +134,7 @@ export const defaultCodexRunSettings = (): CodexRunSettings => ({
   model: DEFAULT_CODEX_MODEL,
   reasoningEffort: DEFAULT_CODEX_REASONING_EFFORT,
   permissionMode: DEFAULT_CODEX_PERMISSION_MODE,
+  serviceTier: DEFAULT_CODEX_SERVICE_TIER,
 });
 
 export const normalizeCodexRunSettings = (
@@ -126,6 +146,7 @@ export const normalizeCodexRunSettings = (
     ? input.model.trim()
     : fallback.model;
   const fallbackModel = CODEX_MODEL_IDS.has(fallback.model) ? fallback.model : DEFAULT_CODEX_MODEL;
+  const normalizedModel = CODEX_MODEL_IDS.has(requestedModel) ? requestedModel : fallbackModel;
   const reasoningEffort = normalizeCodexReasoningEffort(input.reasoningEffort);
   const fallbackReasoningEffort = CODEX_REASONING_EFFORTS.has(fallback.reasoningEffort)
     ? fallback.reasoningEffort
@@ -134,11 +155,18 @@ export const normalizeCodexRunSettings = (
   const fallbackPermissionMode = CODEX_PERMISSION_MODES.has(fallback.permissionMode)
     ? fallback.permissionMode
     : DEFAULT_CODEX_PERMISSION_MODE;
+  const serviceTier = input.serviceTier === 'priority' ? 'priority' : input.serviceTier === 'default' ? 'default' : null;
+  const fallbackServiceTier = CODEX_SERVICE_TIERS.has(fallback.serviceTier)
+    ? fallback.serviceTier
+    : DEFAULT_CODEX_SERVICE_TIER;
 
   return {
-    model: CODEX_MODEL_IDS.has(requestedModel) ? requestedModel : fallbackModel,
+    model: normalizedModel,
     reasoningEffort: CODEX_REASONING_EFFORTS.has(reasoningEffort) ? reasoningEffort : fallbackReasoningEffort,
     permissionMode: CODEX_PERMISSION_MODES.has(permissionMode) ? permissionMode : fallbackPermissionMode,
+    serviceTier: CODEX_MODEL_OPTIONS.find(option => option.id === normalizedModel)?.supportsFast
+      ? (serviceTier || fallbackServiceTier)
+      : 'default',
   };
 };
 

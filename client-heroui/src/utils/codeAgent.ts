@@ -15,8 +15,8 @@ export {
   normalizeCodeAgentModeList,
 } from './codeAgentModes';
 
-export const CODE_AGENT_BACKEND_OPTIONS = ['code-agent', 'codex', 'codex-app-server'] as const satisfies readonly CodeAgentBackend[];
-const CODE_AGENT_BACKENDS = new Set<CodeAgentBackend>(CODE_AGENT_BACKEND_OPTIONS);
+export const CODE_AGENT_BACKEND_OPTIONS = ['code-agent', 'codex-app-server'] as const satisfies readonly CodeAgentBackend[];
+const CODE_AGENT_BACKENDS = new Set<CodeAgentBackend>(['code-agent', 'codex', 'codex-app-server']);
 
 const runtimeRoomType = (room: Room | null | undefined): string | undefined => (
   room?.type as string | undefined
@@ -32,7 +32,7 @@ export const getCodeAgentBackend = (room: Room | null | undefined): CodeAgentBac
     return storedCodeAgentBackend(room) || 'code-agent';
   }
   if (roomType === 'codex') {
-    return storedCodeAgentBackend(room) || 'codex';
+    return storedCodeAgentBackend(room) || 'codex-app-server';
   }
   return null;
 };

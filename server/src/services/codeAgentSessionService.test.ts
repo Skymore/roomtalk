@@ -453,9 +453,10 @@ describe('CodeAgentSessionService', () => {
     let sandboxService: FakeCodeAgentSandboxService;
     const runner: CodeAgentRunnerClient = {
       async run(request, handlers, context): Promise<CodeAgentRunnerRunResult> {
-        assert.equal(request.codexModel, 'gpt-5.3-codex-spark');
+        assert.equal(request.codexModel, 'gpt-5.6-sol');
         assert.equal(request.codexReasoningEffort, 'high');
         assert.equal(request.codexPermissionMode, 'fullAccess');
+        assert.equal(request.codexServiceTier, 'priority');
         const env = sandboxService.startedRunnerEnvs[sandboxService.startedRunnerEnvs.length - 1];
         assert.ok(env.ROOMTALK_CODEX_AUTH_JSON_PATH);
         assert.ok(env.ROOMTALK_CODEX_REFRESHED_AUTH_JSON_PATH);
@@ -511,7 +512,7 @@ describe('CodeAgentSessionService', () => {
       roomId: 'room-1',
       clientId: 'client-1',
       selectedModel,
-      codexRunSettings: { model: 'gpt-5.3-codex-spark', reasoningEffort: 'high', permissionMode: 'fullAccess' },
+      codexRunSettings: { model: 'gpt-5.6-sol', reasoningEffort: 'high', permissionMode: 'fullAccess', serviceTier: 'priority' },
     });
 
     assert.deepEqual(result, { success: true, messageId: 'ai-1' });
@@ -529,10 +530,10 @@ describe('CodeAgentSessionService', () => {
     const messages = setup.store.messages.get('room-1') || [];
     assert.equal(messages[messages.length - 1].content, 'Codex done');
     assert.deepEqual(messages[messages.length - 1].aiModel, {
-      id: 'gpt-5.3-codex-spark',
-      apiModel: 'gpt-5.3-codex-spark',
+      id: 'gpt-5.6-sol',
+      apiModel: 'gpt-5.6-sol',
       provider: 'openai',
-      label: 'GPT-5.3-Codex-Spark High',
+      label: 'GPT-5.6-Sol High',
     });
     assert.deepEqual(messages[messages.length - 1].usage, {
       promptTokens: 1200,
@@ -617,6 +618,7 @@ describe('CodeAgentSessionService', () => {
       async run(request, handlers): Promise<CodeAgentRunnerRunResult> {
         assert.equal(request.codexModel, 'gpt-5.5');
         assert.equal(request.codexReasoningEffort, 'xhigh');
+        assert.equal(request.codexServiceTier, 'default');
         const env = sandboxService.startedRunnerEnvs[sandboxService.startedRunnerEnvs.length - 1];
         assert.equal(env.CODEX_CLI_BIN, '/usr/local/bin/codex');
         assert.ok(env.ROOMTALK_CODEX_AUTH_JSON_PATH);
@@ -633,9 +635,22 @@ describe('CodeAgentSessionService', () => {
           answer: 'Codex app-server done',
           sessionId: 'codex-app-session-1',
         };
+        const usageEvent = {
+          schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+          type: 'usage' as const,
+          turnId: request.turnId,
+          usage: {
+            promptTokens: 106_000,
+            completionTokens: 0,
+            totalTokens: 106_000,
+            modelContextWindow: 200_000,
+            source: 'reported' as const,
+          },
+        };
+        await handlers.onEvent(usageEvent);
         await handlers.onEvent(textEvent);
         await handlers.onEvent(finalEvent);
-        return { events: [textEvent, finalEvent], finalEvent };
+        return { events: [usageEvent, textEvent, finalEvent], finalEvent };
       },
     };
     const codexConnectionService = {
@@ -667,14 +682,26 @@ describe('CodeAgentSessionService', () => {
       roomId: 'room-1',
       clientId: 'client-1',
       selectedModel,
-      codexRunSettings: { model: 'gpt-5.5', reasoningEffort: 'xhigh', permissionMode: 'approveForMe' },
+      codexRunSettings: { model: 'gpt-5.5', reasoningEffort: 'xhigh', permissionMode: 'approveForMe', serviceTier: 'default' },
     });
 
     assert.deepEqual(result, { success: true, messageId: 'ai-1' });
     assert.deepEqual(authCalls, [{ clientId: 'client-1', runId: 'turn-1' }]);
     assert.equal(sandboxService.startedRunnerCommands[0], DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND);
+    const usageUpdate = setup.emitter.roomEmits.find(event => event.event === 'ai_usage_update');
+    assert.deepEqual(usageUpdate?.args[0], {
+      messageId: 'ai-1',
+      roomId: 'room-1',
+      usage: {
+        promptTokens: 106_000,
+        completionTokens: 0,
+        totalTokens: 106_000,
+        modelContextWindow: 200_000,
+        source: 'reported',
+      },
+    });
     const messages = setup.store.messages.get('room-1') || [];
-    assert.equal(messages[1].username, 'CodexApp');
+    assert.equal(messages[1].username, 'Codex');
     assert.equal(messages[messages.length - 1].content, 'Codex app-server done');
     assert.deepEqual(messages[messages.length - 1].aiModel, {
       id: 'gpt-5.5',

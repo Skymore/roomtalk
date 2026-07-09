@@ -24,6 +24,7 @@ export interface AIUsage {
   totalTokens: number;
   cachedPromptTokens?: number;
   cacheHitRate?: number;
+  modelContextWindow?: number;
   source: 'reported' | 'estimated';
 }
 
@@ -64,6 +65,7 @@ export type CodeAgentMode = 'plan' | 'edit' | 'approveForMe' | 'fullAccess' | 'a
 export type CodeAgentBackend = 'code-agent' | 'codex' | 'codex-app-server';
 export type CodexReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
 export type CodexPermissionMode = 'plan' | 'edit' | 'approveForMe' | 'fullAccess';
+export type CodexServiceTier = 'default' | 'priority';
 export type MessageType = 'text' | 'ai' | 'media' | 'sticker' | 'tool_call' | 'tool_result' | 'sandbox_status';
 
 export interface MessageMediaAsset {
