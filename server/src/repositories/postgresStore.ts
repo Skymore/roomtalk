@@ -1,8 +1,8 @@
 import { customAlphabet } from 'nanoid';
 import { Logger } from '../logger';
-import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomType } from '../types';
+import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomType } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
-import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
+import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 
@@ -77,6 +77,7 @@ type MessageRow = {
   ui_payload?: unknown;
   ai_stream_owner_id?: string | null;
   code_agent_mode?: string | null;
+  code_agent_queued_input?: unknown;
   position?: number | string;
 };
 
@@ -212,7 +213,7 @@ type ClientAccountRow = {
 };
 
 const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, room_version, updated_at';
-const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ui_payload, code_agent_mode, model_step_id, model_step_sequence';
+const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ui_payload, code_agent_mode, code_agent_queued_input, model_step_id, model_step_sequence';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, filename, width, height, duration_ms, uploaded_by_client_id, created_at';
 const PENDING_MEDIA_UPLOAD_COLUMNS = 'id, room_id, object_key, kind, mime_type, byte_size, filename, uploaded_by_client_id, expires_at, created_at';
@@ -511,6 +512,7 @@ const mapMessage = (row: MessageRow): Message => {
   const cost = parseJsonValue<Message['cost']>(row.cost);
   const replyTo = parseJsonValue<Message['replyTo']>(row.reply_to);
   const uiPayload = parseJsonValue<Message['uiPayload']>(row.ui_payload);
+  const codeAgentQueuedInput = parseJsonValue<Message['codeAgentQueuedInput']>(row.code_agent_queued_input);
 
   const message: Message = {
     id: row.id,
@@ -542,6 +544,7 @@ const mapMessage = (row: MessageRow): Message => {
   if (usage) message.usage = usage;
   if (cost) message.cost = cost;
   if (row.code_agent_mode) message.codeAgentMode = row.code_agent_mode as Message['codeAgentMode'];
+  if (codeAgentQueuedInput) message.codeAgentQueuedInput = codeAgentQueuedInput;
   if (replyTo) message.replyTo = replyTo;
   if (uiPayload) message.uiPayload = uiPayload;
 
@@ -574,6 +577,7 @@ const messageParams = (message: Message, position: number): unknown[] => [
   toJsonb(message.uiPayload),
   getAIStreamOwnerId(message) || null,
   message.codeAgentMode || null,
+  toJsonb(message.codeAgentQueuedInput),
   position,
   message.modelStepId || null,
   message.modelStepSequence ?? null,
@@ -647,11 +651,12 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   ui_payload,
   ai_stream_owner_id,
   code_agent_mode,
+  code_agent_queued_input,
   position,
   model_step_id,
   model_step_sequence
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22::jsonb, $23::jsonb, $24, $25, $26, $27, $28
+  $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22::jsonb, $23::jsonb, $24, $25, $26::jsonb, $27, $28, $29
 ) ON CONFLICT (id) DO UPDATE SET
   room_id = EXCLUDED.room_id,
   client_id = EXCLUDED.client_id,
@@ -679,6 +684,7 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   ui_payload = EXCLUDED.ui_payload,
   ai_stream_owner_id = EXCLUDED.ai_stream_owner_id,
   code_agent_mode = EXCLUDED.code_agent_mode,
+  code_agent_queued_input = EXCLUDED.code_agent_queued_input,
   position = room_messages.position`;
 
 const INSERT_ASSISTANT_RUN_SQL = `INSERT INTO assistant_runs (
@@ -1006,6 +1012,154 @@ export class PostgresStore implements DurableRoomStore {
     } catch (error) {
       this.logger.error('Error updating message in PostgreSQL', { error, roomId, messageId });
       return null;
+    }
+  }
+
+  async updateCodeAgentQueuedMessage(
+    roomId: string,
+    messageId: string,
+    update: CodeAgentQueueMessageUpdate
+  ) {
+    const updatedAt = update.updatedAt || new Date().toISOString();
+    try {
+      return await this.transaction(async client => {
+        const room = await client.query<RoomRow>(
+          `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
+          [roomId]
+        );
+        if (room.rows.length === 0) {
+          return null;
+        }
+
+        const updated = await client.query<MessageRow>(
+          `UPDATE room_messages
+          SET code_agent_queued_input = $5::jsonb,
+            updated_at = $4,
+            content = CASE WHEN $6::boolean THEN $7 ELSE content END
+          WHERE room_id = $1
+            AND id = $2
+            AND code_agent_queued_input->>'state' = $3
+          RETURNING ${MESSAGE_COLUMNS}`,
+          [
+            roomId,
+            messageId,
+            update.expectedState,
+            updatedAt,
+            toJsonb(update.queuedInput),
+            update.content !== undefined,
+            update.content || '',
+          ]
+        );
+        if (updated.rows.length === 0) {
+          return { room: mapRoom(room.rows[0]), found: false };
+        }
+
+        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at), true);
+        return updatedRoom
+          ? { room: updatedRoom, found: true, updatedMessage: mapMessage(updated.rows[0]) }
+          : null;
+      });
+    } catch (error) {
+      this.logger.error('Error transitioning PostgreSQL queued code-agent message', { error, roomId, messageId, expectedState: update.expectedState });
+      return null;
+    }
+  }
+
+  async claimNextCodeAgentQueuedMessage(roomId: string, updatedAt = new Date().toISOString()) {
+    try {
+      return await this.transaction(async client => {
+        const room = await client.query<RoomRow>(
+          `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
+          [roomId]
+        );
+        if (room.rows.length === 0) {
+          return null;
+        }
+
+        const queued = await client.query<MessageRow>(
+          `SELECT ${MESSAGE_COLUMNS}
+          FROM room_messages
+          WHERE room_id = $1 AND code_agent_queued_input->>'state' = 'queued'
+          ORDER BY position ASC
+          LIMIT 1
+          FOR UPDATE SKIP LOCKED`,
+          [roomId]
+        );
+        if (queued.rows.length === 0) {
+          return null;
+        }
+        const message = mapMessage(queued.rows[0]);
+        if (!message.codeAgentQueuedInput) {
+          return null;
+        }
+        const claimedInput = {
+          ...message.codeAgentQueuedInput,
+          state: 'starting' as const,
+          updatedAt,
+          lastError: undefined,
+        };
+        const claimed = await client.query<MessageRow>(
+          `UPDATE room_messages
+          SET code_agent_queued_input = $3::jsonb, updated_at = $4
+          WHERE room_id = $1 AND id = $2 AND code_agent_queued_input->>'state' = 'queued'
+          RETURNING ${MESSAGE_COLUMNS}`,
+          [roomId, message.id, toJsonb(claimedInput), updatedAt]
+        );
+        if (claimed.rows.length === 0) {
+          return null;
+        }
+        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at), true);
+        return updatedRoom ? { room: updatedRoom, message: mapMessage(claimed.rows[0]) } : null;
+      });
+    } catch (error) {
+      this.logger.error('Error claiming PostgreSQL queued code-agent message', { error, roomId });
+      return null;
+    }
+  }
+
+  async deleteCodeAgentQueuedMessage(
+    roomId: string,
+    messageId: string,
+    expectedState: CodeAgentQueueState = 'queued'
+  ) {
+    try {
+      return await this.transaction(async client => {
+        const room = await client.query<RoomRow>(
+          `SELECT ${ROOM_COLUMNS} FROM rooms WHERE id = $1 FOR UPDATE`,
+          [roomId]
+        );
+        if (room.rows.length === 0) {
+          return null;
+        }
+        const deleted = await client.query<{ id: string }>(
+          `DELETE FROM room_messages
+          WHERE room_id = $1 AND id = $2 AND code_agent_queued_input->>'state' = $3
+          RETURNING id`,
+          [roomId, messageId, expectedState]
+        );
+        if (deleted.rows.length === 0) {
+          return { room: mapRoom(room.rows[0]), deleted: false };
+        }
+        const updatedRoom = await this.updateRoomLastActivityFromMessages(client, roomId, toIsoString(room.rows[0].created_at), true);
+        return updatedRoom ? { room: updatedRoom, deleted: true } : null;
+      });
+    } catch (error) {
+      this.logger.error('Error deleting PostgreSQL queued code-agent message', { error, roomId, messageId, expectedState });
+      return null;
+    }
+  }
+
+  async findRoomsWithQueuedCodeAgentMessages(): Promise<string[]> {
+    try {
+      const result = await this.pool.query<{ room_id: string }>(
+        `SELECT DISTINCT room_id
+        FROM room_messages
+        WHERE code_agent_queued_input->>'state' = 'queued'`
+      );
+      return result.rows.map(row => row.room_id);
+    } catch (error) {
+      this.logger.error('Error finding PostgreSQL rooms with queued code-agent messages', { error });
+      return [];
     }
   }
 

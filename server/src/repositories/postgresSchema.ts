@@ -119,6 +119,10 @@ export const POSTGRES_SCHEMA_SQL = [
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS exit_code INTEGER`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS is_error BOOLEAN`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS code_agent_mode TEXT`,
+  `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS code_agent_queued_input JSONB`,
+  `CREATE INDEX IF NOT EXISTS idx_room_messages_code_agent_queue
+    ON room_messages (room_id, position)
+    WHERE code_agent_queued_input->>'state' = 'queued'`,
   // Legacy media rows can predate the unified 'media' message type. Normalize
   // them after dropping older checks so the narrower constraint is startup-safe.
   `ALTER TABLE room_messages DROP CONSTRAINT IF EXISTS room_messages_message_type_check`,

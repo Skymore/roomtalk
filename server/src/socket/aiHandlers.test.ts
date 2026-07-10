@@ -166,7 +166,10 @@ const createHarness = (options: {
   aiClientWrapper?: any;
   messages?: Message[];
   currentRoom?: Room | null;
-  codeAgentSessionService?: { startTurn: (...args: any[]) => Promise<unknown> };
+  codeAgentSessionService?: {
+    startTurn?: (...args: any[]) => Promise<unknown>;
+    queueTurn?: (...args: any[]) => Promise<unknown>;
+  };
   headers?: Record<string, string | string[] | undefined>;
 } = {}) => {
   const socket = new FakeSocket(options.headers);
@@ -494,6 +497,57 @@ describe('AI socket handlers', () => {
     assert.equal(store.upsertedMessages.length, 0);
     assert.equal(store.assistantRuns.length, 0);
     assert.equal(store.outboxEvents.length, 0);
+  });
+
+  it('queues a durable follow-up input without starting another concurrent turn', async () => {
+    const calls: unknown[][] = [];
+    const codeAgentSessionService = {
+      async queueTurn(...args: unknown[]) {
+        calls.push(args);
+        return { success: true, message: args[1] };
+      },
+    };
+    const { socket } = createHarness({
+      currentRoom: room({ type: 'codeAgent', codeAgentStatus: 'running' }),
+      codeAgentSessionService,
+      headers: roomtalkOriginHeaders,
+    });
+
+    let response: unknown;
+    await socket.invoke('queue_code_agent_input', {
+      roomId: 'room-1',
+      content: 'use Bing for the next pass',
+      model: selectedModel.id,
+      codexModel: 'gpt-5.6-sol',
+      codexReasoningEffort: 'high',
+      codexPermissionMode: 'fullAccess',
+      codexServiceTier: 'priority',
+      codeAgentMode: 'fullAccess',
+      clientMessageId: 'client-message-1',
+    }, (ack: unknown) => {
+      response = ack;
+    });
+
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0][0], {
+      roomId: 'room-1',
+      clientId: 'client-1',
+      selectedModel,
+      codexRunSettings: {
+        model: 'gpt-5.6-sol',
+        reasoningEffort: 'high',
+        permissionMode: 'fullAccess',
+        serviceTier: 'priority',
+      },
+      maxContextMessages: undefined,
+      clientOrigin: 'https://room.ruit.me',
+      serverOrigin: 'https://room.ruit.me',
+      requestedMode: 'fullAccess',
+      requestedModeSource: 'originalTurn',
+    });
+    assert.equal((calls[0][1] as Message).content, 'use Bing for the next pass');
+    assert.equal((calls[0][1] as Message).clientMessageId, 'client-message-1');
+    assert.deepEqual(response, { success: true, message: calls[0][1] });
   });
 
   it('passes Codex model and reasoning settings to code-agent session service for Codex-backed rooms', async () => {

@@ -333,6 +333,61 @@ class MemoryRedis {
       return [1, 1, roomJson, list[index]];
     }
 
+    if (script.includes("queued['state'] = 'starting'")) {
+      const [, messageKey] = options.keys;
+      const [roomId, updatedAt] = options.arguments;
+      const roomJson = this.hash('rooms').get(roomId);
+      if (!roomJson) return [0, 0, '', ''];
+      const list = this.lists.get(messageKey) || [];
+      const index = list.findIndex(item => JSON.parse(item).codeAgentQueuedInput?.state === 'queued');
+      if (index === -1) return [1, 0, roomJson, ''];
+      const message = JSON.parse(list[index]);
+      message.codeAgentQueuedInput = { ...message.codeAgentQueuedInput, state: 'starting', updatedAt };
+      delete message.codeAgentQueuedInput.lastError;
+      message.updatedAt = updatedAt;
+      list[index] = JSON.stringify(message);
+      const updatedRoom = this.updateRoomActivity(roomId, JSON.parse(roomJson).lastActivityAt);
+      return [1, 1, JSON.stringify(updatedRoom), list[index]];
+    }
+
+    if (script.includes("decoded['updatedAt'] = ARGV[5]") && script.includes('codeAgentQueuedInput')) {
+      const [, messageKey] = options.keys;
+      const [roomId, messageId, expectedState, queuedJson, updatedAt, contentMode, content] = options.arguments;
+      const roomJson = this.hash('rooms').get(roomId);
+      if (!roomJson) return [0, 0, '', ''];
+      const list = this.lists.get(messageKey) || [];
+      const index = list.findIndex(item => {
+        const parsed = JSON.parse(item);
+        return parsed.id === messageId && parsed.codeAgentQueuedInput?.state === expectedState;
+      });
+      if (index === -1) return [1, 0, roomJson, ''];
+      const message = JSON.parse(list[index]);
+      if (queuedJson) message.codeAgentQueuedInput = JSON.parse(queuedJson);
+      else delete message.codeAgentQueuedInput;
+      message.updatedAt = updatedAt;
+      if (contentMode === '1') message.content = content;
+      list[index] = JSON.stringify(message);
+      const updatedRoom = this.updateRoomActivity(roomId, JSON.parse(roomJson).lastActivityAt);
+      return [1, 1, JSON.stringify(updatedRoom), list[index]];
+    }
+
+    if (script.includes("queued['state'] == ARGV[3]") && script.includes('local remaining = {}')) {
+      const [, messageKey] = options.keys;
+      const [roomId, messageId, expectedState] = options.arguments;
+      const roomJson = this.hash('rooms').get(roomId);
+      if (!roomJson) return [0, 0, '', 0];
+      const list = this.lists.get(messageKey) || [];
+      const index = list.findIndex(item => {
+        const parsed = JSON.parse(item);
+        return parsed.id === messageId && parsed.codeAgentQueuedInput?.state === expectedState;
+      });
+      if (index === -1) return [1, 0, roomJson, list.length];
+      list.splice(index, 1);
+      this.lists.set(messageKey, list);
+      const updatedRoom = this.updateRoomActivity(roomId, JSON.parse(roomJson).lastActivityAt);
+      return [1, 1, JSON.stringify(updatedRoom), list.length];
+    }
+
     if (script.includes('local messagePayload')) {
       const [, messageKey] = options.keys;
       const [roomId, payload, lastActivityAt] = options.arguments;
@@ -789,6 +844,40 @@ describe('RedisStore', () => {
     assert.deepEqual(await store.readMessagesByRoom('room-1'), [replacement]);
 
     assert.equal(await store.clearRoomMessages('room-1'), 1);
+    assert.deepEqual(await store.readMessagesByRoom('room-1'), []);
+  });
+
+  it('claims, transitions, finds, and deletes queued code-agent messages atomically', async () => {
+    const { store } = createStore();
+    const queuedInput = {
+      state: 'queued' as const,
+      queuedAt: '2026-05-04T00:00:00.000Z',
+      updatedAt: '2026-05-04T00:00:00.000Z',
+      selectedModel: {
+        id: 'deepseek-v4-pro',
+        apiModel: 'deepseek-v4-pro',
+        provider: 'deepseek' as const,
+        label: 'DeepSeek V4 Pro',
+        description: 'Test model',
+      },
+    };
+    await store.saveRoom(room({ type: 'codeAgent' }));
+    await store.appendMessage(message({ id: 'queued-1', content: 'first', codeAgentQueuedInput: queuedInput }));
+
+    assert.deepEqual(await store.findRoomsWithQueuedCodeAgentMessages(), ['room-1']);
+    const claimed = await store.claimNextCodeAgentQueuedMessage('room-1', '2026-05-04T00:00:01.000Z');
+    assert.equal(claimed?.message.codeAgentQueuedInput?.state, 'starting');
+
+    const requeued = await store.updateCodeAgentQueuedMessage('room-1', 'queued-1', {
+      expectedState: 'starting',
+      content: 'edited',
+      updatedAt: '2026-05-04T00:00:02.000Z',
+      queuedInput: { ...queuedInput, updatedAt: '2026-05-04T00:00:02.000Z' },
+    });
+    assert.equal(requeued?.updatedMessage?.content, 'edited');
+    assert.equal(requeued?.updatedMessage?.codeAgentQueuedInput?.state, 'queued');
+
+    assert.equal((await store.deleteCodeAgentQueuedMessage('room-1', 'queued-1'))?.deleted, true);
     assert.deepEqual(await store.readMessagesByRoom('room-1'), []);
   });
 

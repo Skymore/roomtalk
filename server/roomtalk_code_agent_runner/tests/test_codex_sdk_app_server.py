@@ -102,6 +102,13 @@ class FakeSdkClient:
             assert result_holder
             self.approval_results.append(result_holder[0])
             return self.next_turn_notification(turn_id)
+        if isinstance(item, ControlStep):
+            assert self.control_queue is not None
+            self.control_queue.put(item.control)
+            deadline = time.time() + 2
+            while not any(name == item.expected_call for name, _payload in self.calls) and time.time() < deadline:
+                time.sleep(0.01)
+            return self.next_turn_notification(turn_id)
         return item
 
     def thread_list(self, params: dict[str, Any]):
@@ -149,6 +156,12 @@ class ApprovalStep:
             "cwd": "/workspace/project",
             "startedAtMs": 123,
         }
+
+
+class ControlStep:
+    def __init__(self, control: dict[str, Any], expected_call: str):
+        self.control = control
+        self.expected_call = expected_call
 
 
 def codex_sdk_request(workspace: Path, **overrides: Any):
@@ -328,6 +341,41 @@ def test_codex_sdk_app_server_routes_interactive_approval_response(tmp_path: Pat
     assert approval["args"]["approvalId"] == "cmd-approval"
     approval_result = next(event for event in events if event["type"] == "tool_result" and event["name"] == "approval_request")
     assert approval_result["success"] is True
+
+
+def test_codex_sdk_app_server_acknowledges_steer_controls(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    auth_json = tmp_path / "auth.json"
+    auth_json.write_text('{"accessToken":"initial"}', encoding="utf-8")
+    stdout = io.StringIO()
+    controls: "queue.Queue[dict[str, Any] | None]" = queue.Queue()
+    factory = FakeSdkClientFactory(
+        control_queue=controls,
+        notifications=[
+            ControlStep({
+                "schemaVersion": 1,
+                "type": "steer",
+                "turnId": "turn-sdk",
+                "controlId": "control-steer-1",
+                "prompt": "use Bing instead",
+            }, "turn_steer"),
+            FakeNotification("turn/completed", {"threadId": "thread-sdk-1", "turn": {"id": "turn-sdk-1", "status": "completed", "items": []}}),
+        ],
+    )
+
+    codex_sdk_app_server.run_request(
+        codex_sdk_request(workspace),
+        emitter=EventEmitter(stdout),
+        config=codex_sdk_app_server.CodexCliRunConfig(secret_parent=tmp_path / "secrets", auth_json_path=auth_json),
+        client_factory=factory,
+        control_queue=controls,
+        env={"CODE_AGENT_WORKSPACE_ROOT": str(tmp_path)},
+    )
+
+    result = next(event for event in event_lines(stdout) if event.get("controlId") == "control-steer-1")
+    assert result["type"] == "control_result"
+    assert result["accepted"] is True
 
 
 def test_codex_sdk_app_server_runs_thread_list_query(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

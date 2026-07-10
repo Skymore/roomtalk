@@ -1,4 +1,4 @@
-import { AICost, AIModelProvider, MediaAsset, Message, Room, RoomAgentTurn, RoomAICostTotal, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus } from '../types';
+import { AICost, AIModelProvider, CodeAgentQueuedInput, CodeAgentQueueState, MediaAsset, Message, Room, RoomAgentTurn, RoomAICostTotal, RoomMember, RoomMemberRole, RoomMessagePage, RoomOnlineMember, RoomPostingSchedule, RoomSandboxStatus } from '../types';
 import { InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
 
 export const DEFAULT_ROOM_MESSAGE_PAGE_LIMIT = 80;
@@ -14,6 +14,18 @@ export interface MessageUpdateResult {
   room: Room;
   found: boolean;
   updatedMessage?: Message;
+}
+
+export interface CodeAgentQueueClaimResult {
+  room: Room;
+  message: Message;
+}
+
+export interface CodeAgentQueueMessageUpdate {
+  expectedState: CodeAgentQueueState;
+  queuedInput: CodeAgentQueuedInput | null;
+  content?: string;
+  updatedAt?: string;
 }
 
 export interface MessageDeleteResult {
@@ -249,6 +261,10 @@ export interface DurableRoomStore {
   appendMediaMessageWithAsset(message: Message, asset: MediaAsset): Promise<MediaMessageAppendResult | null>;
   upsertMessage(message: Message): Promise<Room | null>;
   updateMessageContent(roomId: string, messageId: string, updatedContent: string, updatedAt?: string): Promise<MessageUpdateResult | null>;
+  updateCodeAgentQueuedMessage?(roomId: string, messageId: string, update: CodeAgentQueueMessageUpdate): Promise<MessageUpdateResult | null>;
+  claimNextCodeAgentQueuedMessage?(roomId: string, updatedAt?: string): Promise<CodeAgentQueueClaimResult | null>;
+  deleteCodeAgentQueuedMessage?(roomId: string, messageId: string, expectedState?: CodeAgentQueueState): Promise<MessageDeleteResult | null>;
+  findRoomsWithQueuedCodeAgentMessages?(): Promise<string[]>;
   deleteMessageById(roomId: string, messageId: string): Promise<MessageDeleteResult | null>;
   truncateBeforeMessage(roomId: string, messageId: string): Promise<MessageTruncateResult | null>;
   truncateAfterMessage(roomId: string, messageId: string): Promise<MessageTruncateResult | null>;
@@ -430,6 +446,43 @@ export class CompositeRoomStore implements RoomStore {
       await this.invalidateRoomMessagesCache(roomId);
     }
     return result;
+  }
+
+  async updateCodeAgentQueuedMessage(roomId: string, messageId: string, update: CodeAgentQueueMessageUpdate) {
+    if (!this.durableStore.updateCodeAgentQueuedMessage) {
+      return null;
+    }
+    const result = await this.durableStore.updateCodeAgentQueuedMessage(roomId, messageId, update);
+    if (result?.found) {
+      await this.invalidateRoomMessagesCache(roomId);
+    }
+    return result;
+  }
+
+  async claimNextCodeAgentQueuedMessage(roomId: string, updatedAt?: string) {
+    if (!this.durableStore.claimNextCodeAgentQueuedMessage) {
+      return null;
+    }
+    const result = await this.durableStore.claimNextCodeAgentQueuedMessage(roomId, updatedAt);
+    if (result) {
+      await this.invalidateRoomMessagesCache(roomId);
+    }
+    return result;
+  }
+
+  async deleteCodeAgentQueuedMessage(roomId: string, messageId: string, expectedState?: CodeAgentQueueState) {
+    if (!this.durableStore.deleteCodeAgentQueuedMessage) {
+      return null;
+    }
+    const result = await this.durableStore.deleteCodeAgentQueuedMessage(roomId, messageId, expectedState);
+    if (result?.deleted) {
+      await this.invalidateRoomMessagesCache(roomId);
+    }
+    return result;
+  }
+
+  findRoomsWithQueuedCodeAgentMessages() {
+    return this.durableStore.findRoomsWithQueuedCodeAgentMessages?.() || Promise.resolve([]);
   }
 
   async deleteMessageById(roomId: string, messageId: string) {

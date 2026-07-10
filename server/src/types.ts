@@ -67,6 +67,23 @@ export type CodexReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
 export type CodexPermissionMode = 'plan' | 'edit' | 'approveForMe' | 'fullAccess';
 export type CodexServiceTier = 'default' | 'priority';
 export type MessageType = 'text' | 'ai' | 'media' | 'sticker' | 'tool_call' | 'tool_result' | 'sandbox_status';
+export type CodeAgentQueueState = 'queued' | 'steering' | 'starting';
+
+export interface CodeAgentQueuedInput {
+  state: CodeAgentQueueState;
+  queuedAt: string;
+  updatedAt: string;
+  selectedModel: AIModelOption;
+  codexModel?: string;
+  codexReasoningEffort?: CodexReasoningEffort;
+  codexPermissionMode?: CodexPermissionMode;
+  codexServiceTier?: CodexServiceTier;
+  maxContextMessages?: number;
+  requestedMode?: CodeAgentMode;
+  clientOrigin?: string;
+  serverOrigin?: string;
+  lastError?: string;
+}
 
 export interface MessageMediaAsset {
   id: string;
@@ -138,6 +155,7 @@ export interface Message {
   usage?: AIUsage;
   cost?: AICost;
   codeAgentMode?: CodeAgentMode;
+  codeAgentQueuedInput?: CodeAgentQueuedInput;
   replyTo?: MessageReplyReference;
   mediaAsset?: MessageMediaAsset;
   uiPayload?: A2UIPayload;

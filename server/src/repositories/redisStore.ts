@@ -1,9 +1,9 @@
 import { customAlphabet } from 'nanoid';
 import { RedisClientType } from 'redis';
 import { Logger } from '../logger';
-import { AICost, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember, RoomSandboxStatus } from '../types';
+import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomMember, RoomMemberRole, RoomOnlineMember, RoomSandboxStatus } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions, stripAIStreamRecoveryMetadata } from '../services/aiStreamRecovery';
-import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput } from './store';
+import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageCursor, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessageCacheStore, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, RoomStore, SavePushSubscriptionInput } from './store';
 
 const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 10);
 const DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS = 30;
@@ -491,6 +491,134 @@ end
 return { 1, found, #remaining, cjson.encode(room) }
 `;
 
+const UPDATE_CODE_AGENT_QUEUED_MESSAGE_SCRIPT = `
+local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
+if not roomJson then
+  return { 0, 0, '', '' }
+end
+local roomOk, room = pcall(cjson.decode, roomJson)
+if not roomOk then
+  return { 0, 0, '', '' }
+end
+
+local existing = redis.call('LRANGE', KEYS[2], 0, -1)
+local updatedPayload = ''
+local found = 0
+for i = 1, #existing do
+  local ok, decoded = pcall(cjson.decode, existing[i])
+  local queued = ok and decoded['codeAgentQueuedInput'] or nil
+  if ok and decoded['id'] == ARGV[2] and queued and queued['state'] == ARGV[3] then
+    if ARGV[4] == '' then
+      decoded['codeAgentQueuedInput'] = nil
+    else
+      local nextOk, nextQueued = pcall(cjson.decode, ARGV[4])
+      if not nextOk then
+        return { 0, 0, '', '' }
+      end
+      decoded['codeAgentQueuedInput'] = nextQueued
+    end
+    decoded['updatedAt'] = ARGV[5]
+    if ARGV[6] == '1' then
+      decoded['content'] = ARGV[7]
+    end
+    updatedPayload = cjson.encode(decoded)
+    redis.call('LSET', KEYS[2], i - 1, updatedPayload)
+    found = 1
+    break
+  end
+end
+
+if found == 1 then
+  room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
+  room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
+  room['updatedAt'] = ARGV[5]
+  roomJson = cjson.encode(room)
+  redis.call('HSET', KEYS[1], ARGV[1], roomJson)
+end
+return { 1, found, roomJson, updatedPayload }
+`;
+
+const CLAIM_CODE_AGENT_QUEUED_MESSAGE_SCRIPT = `
+local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
+if not roomJson then
+  return { 0, 0, '', '' }
+end
+local roomOk, room = pcall(cjson.decode, roomJson)
+if not roomOk then
+  return { 0, 0, '', '' }
+end
+
+local existing = redis.call('LRANGE', KEYS[2], 0, -1)
+local claimedPayload = ''
+local found = 0
+for i = 1, #existing do
+  local ok, decoded = pcall(cjson.decode, existing[i])
+  local queued = ok and decoded['codeAgentQueuedInput'] or nil
+  if ok and queued and queued['state'] == 'queued' then
+    queued['state'] = 'starting'
+    queued['updatedAt'] = ARGV[2]
+    queued['lastError'] = nil
+    decoded['codeAgentQueuedInput'] = queued
+    decoded['updatedAt'] = ARGV[2]
+    claimedPayload = cjson.encode(decoded)
+    redis.call('LSET', KEYS[2], i - 1, claimedPayload)
+    found = 1
+    break
+  end
+end
+
+if found == 1 then
+  room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
+  room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
+  room['updatedAt'] = ARGV[2]
+  roomJson = cjson.encode(room)
+  redis.call('HSET', KEYS[1], ARGV[1], roomJson)
+end
+return { 1, found, roomJson, claimedPayload }
+`;
+
+const DELETE_CODE_AGENT_QUEUED_MESSAGE_SCRIPT = `
+local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
+if not roomJson then
+  return { 0, 0, '', 0 }
+end
+local roomOk, room = pcall(cjson.decode, roomJson)
+if not roomOk then
+  return { 0, 0, '', 0 }
+end
+
+local existing = redis.call('LRANGE', KEYS[2], 0, -1)
+local remaining = {}
+local found = 0
+local latestTimestamp = ''
+for i = 1, #existing do
+  local ok, decoded = pcall(cjson.decode, existing[i])
+  local queued = ok and decoded['codeAgentQueuedInput'] or nil
+  if ok and decoded['id'] == ARGV[2] and queued and queued['state'] == ARGV[3] then
+    found = 1
+  else
+    table.insert(remaining, existing[i])
+    if ok and decoded['timestamp'] and decoded['timestamp'] > latestTimestamp then
+      latestTimestamp = decoded['timestamp']
+    end
+  end
+end
+
+if found == 1 then
+  room['lastActivityAt'] = latestTimestamp ~= '' and latestTimestamp or room['createdAt']
+  room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
+  room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
+  room['updatedAt'] = ARGV[4]
+  roomJson = cjson.encode(room)
+  redis.call('HSET', KEYS[1], ARGV[1], roomJson)
+  redis.call('DEL', KEYS[2])
+  for i = 1, #remaining do
+    redis.call('RPUSH', KEYS[2], remaining[i])
+  end
+end
+return { 1, found, roomJson, #remaining }
+`;
+
 const TRUNCATE_MESSAGE_LIST_SCRIPT = `
 local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
 if not roomJson then
@@ -960,6 +1088,93 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     } catch (error) {
       this.logger.error('Error updating message in Redis', { error, messageId, roomId });
       return null;
+    }
+  }
+
+  async updateCodeAgentQueuedMessage(
+    roomId: string,
+    messageId: string,
+    update: CodeAgentQueueMessageUpdate
+  ) {
+    const updatedAt = update.updatedAt || new Date().toISOString();
+    try {
+      const result = await (this.redisClient as any).eval(UPDATE_CODE_AGENT_QUEUED_MESSAGE_SCRIPT, {
+        keys: ['rooms', `room:${roomId}:messages`],
+        arguments: [
+          roomId,
+          messageId,
+          update.expectedState,
+          update.queuedInput ? JSON.stringify(update.queuedInput) : '',
+          updatedAt,
+          update.content !== undefined ? '1' : '0',
+          update.content || '',
+        ],
+      });
+      const room = parseScriptRoom(result, 2);
+      if (!room) {
+        return null;
+      }
+      const found = Array.isArray(result) ? Number(result[1]) === 1 : false;
+      const updatedMessage = found ? parseScriptMessage(result[3]) : null;
+      return found && updatedMessage
+        ? { room, found: true, updatedMessage }
+        : { room, found: false };
+    } catch (error) {
+      this.logger.error('Error transitioning Redis queued code-agent message', { error, roomId, messageId, expectedState: update.expectedState });
+      return null;
+    }
+  }
+
+  async claimNextCodeAgentQueuedMessage(roomId: string, updatedAt = new Date().toISOString()) {
+    try {
+      const result = await (this.redisClient as any).eval(CLAIM_CODE_AGENT_QUEUED_MESSAGE_SCRIPT, {
+        keys: ['rooms', `room:${roomId}:messages`],
+        arguments: [roomId, updatedAt],
+      });
+      const room = parseScriptRoom(result, 2);
+      const message = parseScriptMessage(Array.isArray(result) ? result[3] : undefined);
+      return room && message ? { room, message } : null;
+    } catch (error) {
+      this.logger.error('Error claiming Redis queued code-agent message', { error, roomId });
+      return null;
+    }
+  }
+
+  async deleteCodeAgentQueuedMessage(
+    roomId: string,
+    messageId: string,
+    expectedState: CodeAgentQueueState = 'queued'
+  ) {
+    try {
+      const result = await (this.redisClient as any).eval(DELETE_CODE_AGENT_QUEUED_MESSAGE_SCRIPT, {
+        keys: ['rooms', `room:${roomId}:messages`],
+        arguments: [roomId, messageId, expectedState, new Date().toISOString()],
+      });
+      const room = parseScriptRoom(result, 2);
+      if (!room) {
+        return null;
+      }
+      return { room, deleted: Array.isArray(result) ? Number(result[1]) === 1 : false };
+    } catch (error) {
+      this.logger.error('Error deleting Redis queued code-agent message', { error, roomId, messageId, expectedState });
+      return null;
+    }
+  }
+
+  async findRoomsWithQueuedCodeAgentMessages(): Promise<string[]> {
+    try {
+      const roomIds = await this.redisClient.hKeys('rooms');
+      const queuedRoomIds: string[] = [];
+      for (const roomId of roomIds) {
+        const messages = await this.readMessagesByRoom(roomId);
+        if (messages.some(message => message.codeAgentQueuedInput?.state === 'queued')) {
+          queuedRoomIds.push(roomId);
+        }
+      }
+      return queuedRoomIds;
+    } catch (error) {
+      this.logger.error('Error finding Redis rooms with queued code-agent messages', { error });
+      return [];
     }
   }
 

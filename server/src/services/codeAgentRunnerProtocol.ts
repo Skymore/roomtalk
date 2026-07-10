@@ -57,6 +57,7 @@ export interface CodeAgentRunnerApprovalResponseRequest {
   schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
   type: 'approval_response';
   turnId: string;
+  controlId?: string;
   approvalId: string;
   decision: CodeAgentRunnerApprovalDecision;
 }

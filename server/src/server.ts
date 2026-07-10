@@ -427,6 +427,7 @@ const infrastructureReady = (async () => {
     await store.failInterruptedStreamingMessages?.('Response interrupted.', { aiStreamOwnerId });
     await store.failInterruptedRoomAgentTurns?.();
     await codeAgentSandboxLifecycle.recoverInterruptedSandboxes();
+    await codeAgentSessionService.resumeQueuedTurns();
     
     redisLogger.info('Connected to Redis and Socket.IO adapter initialized', { persistenceStore: activePersistenceStore });
   } catch (err) {

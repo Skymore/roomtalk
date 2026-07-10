@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../logger';
-import { RoomStore } from '../repositories/store';
-import { AIModelOption, CodeAgentBackend, Message, Room, RoomAgentTurn, RoomAICostTotal, RoomMemberRole } from '../types';
+import { MessageUpdateResult, RoomStore } from '../repositories/store';
+import { AIModelOption, CodeAgentBackend, CodeAgentQueuedInput, CodeAgentQueueState, Message, Room, RoomAgentTurn, RoomAICostTotal, RoomMemberRole } from '../types';
 import { calculateAICost, getMessageAIModel } from './aiModels';
 import { CodeAgentSandboxLifecycleService, EnsureCodeAgentSandboxResult } from './codeAgentSandboxLifecycle';
 import { CodeAgentSandboxHandle, CodeAgentSandboxService, CodeAgentRunnerProcess } from './codeAgentSandboxService';
@@ -11,6 +11,7 @@ import { CodeAgentDaemonProcessRegistry } from './codeAgentDaemonRegistry';
 import {
   CODE_AGENT_RUNNER_SCHEMA_VERSION,
   CodeAgentRunnerApprovalDecision,
+  CodeAgentRunnerControlRequest,
   CodeAgentRunnerEvent,
   CodeAgentRunnerJsonlParser,
   CodeAgentRunnerModelStepEvent,
@@ -102,6 +103,7 @@ export interface CodeAgentTurnInput {
   requestedModeSource?: 'originalTurn';
   clientOrigin?: string;
   serverOrigin?: string;
+  promptMessageId?: string;
 }
 
 export type CodeAgentTurnAck = { success: boolean; messageId?: string; error?: string };
@@ -126,6 +128,11 @@ interface ActiveCodeAgentTurn {
   backend: CodeAgentBackend;
   sandbox?: CodeAgentSandboxHandle;
   process?: CodeAgentRunnerProcess;
+  interruptedByUser: boolean;
+  pendingControls: Map<string, {
+    resolve: (result: CodeAgentControlAck) => void;
+    timeout: NodeJS.Timeout;
+  }>;
 }
 
 interface CodeAgentTurnStreamState {
@@ -151,6 +158,7 @@ interface CodeAgentTurnStreamState {
 
 export class CodeAgentSessionService {
   private readonly activeTurns = new Map<string, ActiveCodeAgentTurn>();
+  private readonly queueDrains = new Set<string>();
   private readonly now: () => Date;
   private readonly createId: () => string;
 
@@ -244,6 +252,8 @@ export class CodeAgentSessionService {
         clientId: input.clientId,
         turnId,
         backend: turnBackend,
+        interruptedByUser: false,
+        pendingControls: new Map(),
       });
       const placeholderMessage = createAIPlaceholderMessage({
           id: aiMessageId,
@@ -259,7 +269,7 @@ export class CodeAgentSessionService {
         codeAgentMode: turnMode.mode,
       }, this.options.aiStreamOwnerId);
 
-      const promptContext = await this.readLatestPromptContext(input.roomId, input.clientId, input.maxContextMessages);
+      const promptContext = await this.readLatestPromptContext(input.roomId, input.clientId, input.maxContextMessages, input.promptMessageId);
       if (!promptContext) {
         await this.recordTurnEvent('warn', 'code_agent.turn.rejected', input, turnId, turnStartedAtMs, {
           errorMessage: 'Workspace requires a text prompt in the room history',
@@ -552,7 +562,6 @@ export class CodeAgentSessionService {
           updatedAt: turnCompletedAt,
         });
       }
-      this.activeTurns.delete(input.roomId);
       if (finalMessage) {
         this.emitter.to(input.roomId).emit('ai_stream_end', {
           messageId: finalActiveId,
@@ -628,13 +637,145 @@ export class CodeAgentSessionService {
       }
       return { success: false, messageId: aiMessageId || undefined, error: `${this.displayBackendName(turnBackend)} task failed` };
     } finally {
+      const active = this.activeTurns.get(input.roomId);
+      const isCurrentTurn = active?.turnId === turnId;
+      const shouldDrainQueue = Boolean(
+        isCurrentTurn &&
+        !active.interruptedByUser &&
+        (!input.promptMessageId || placeholderAnnounced)
+      );
       if (runnerProcess) {
         await this.stopRunnerProcess(runnerProcess, input.roomId);
       }
       if (turnSandbox) {
         await this.sandboxLifecycle.shortenSandboxAfterTurn(turnSandbox);
       }
-      this.activeTurns.delete(input.roomId);
+      if (isCurrentTurn) {
+        this.rejectPendingControls(active, 'The target turn is no longer active');
+        this.activeTurns.delete(input.roomId);
+      }
+      if (shouldDrainQueue) {
+        this.scheduleQueuedTurn(input.roomId);
+      }
+    }
+  }
+
+  async queueTurn(input: CodeAgentTurnInput, message: Message): Promise<{ success: boolean; message?: Message; error?: string }> {
+    if (!this.activeTurns.has(input.roomId)) {
+      return { success: false, error: 'No agent turn is running in this workspace' };
+    }
+    if (!this.store.updateCodeAgentQueuedMessage || !this.store.claimNextCodeAgentQueuedMessage) {
+      return { success: false, error: 'Queued agent inputs are unavailable' };
+    }
+
+    const now = this.now().toISOString();
+    const queuedInput: CodeAgentQueuedInput = {
+      state: 'queued',
+      queuedAt: now,
+      updatedAt: now,
+      selectedModel: input.selectedModel,
+      ...(input.codexRunSettings?.model ? { codexModel: input.codexRunSettings.model } : {}),
+      ...(input.codexRunSettings?.reasoningEffort ? { codexReasoningEffort: input.codexRunSettings.reasoningEffort } : {}),
+      ...(input.codexRunSettings?.permissionMode ? { codexPermissionMode: input.codexRunSettings.permissionMode } : {}),
+      ...(input.codexRunSettings?.serviceTier ? { codexServiceTier: input.codexRunSettings.serviceTier } : {}),
+      ...(input.maxContextMessages ? { maxContextMessages: input.maxContextMessages } : {}),
+      ...(input.requestedMode ? { requestedMode: input.requestedMode } : {}),
+      ...(input.clientOrigin ? { clientOrigin: input.clientOrigin } : {}),
+      ...(input.serverOrigin ? { serverOrigin: input.serverOrigin } : {}),
+    };
+    const queuedMessage: Message = {
+      ...message,
+      codeAgentQueuedInput: queuedInput,
+    };
+    const room = await this.store.appendMessage(queuedMessage);
+    if (!room) {
+      return { success: false, error: 'Failed to save queued agent input' };
+    }
+    this.emitter.to(room.creatorId).emit('room_updated', room);
+    this.emitter.to(input.roomId).emit('new_message', queuedMessage);
+
+    // The active turn can complete between the initial check and durable append.
+    if (!this.activeTurns.has(input.roomId)) {
+      this.scheduleQueuedTurn(input.roomId);
+    }
+    return { success: true, message: queuedMessage };
+  }
+
+  async editQueuedTurn(roomId: string, clientId: string, messageId: string, content: string): Promise<CodeAgentControlAck> {
+    const message = await this.readOwnedQueuedMessage(roomId, clientId, messageId, 'queued');
+    const trimmed = content.trim();
+    if (!message || !message.codeAgentQueuedInput) {
+      return { success: false, error: 'Queued agent input is no longer editable' };
+    }
+    if (!trimmed) {
+      return { success: false, error: 'Queued agent input cannot be empty' };
+    }
+    const updatedAt = this.now().toISOString();
+    const result = await this.store.updateCodeAgentQueuedMessage?.(roomId, messageId, {
+      expectedState: 'queued',
+      content: trimmed,
+      updatedAt,
+      queuedInput: { ...message.codeAgentQueuedInput, updatedAt, lastError: undefined },
+    });
+    return this.emitQueuedMessageTransition(roomId, result, 'Queued agent input is no longer editable');
+  }
+
+  async cancelQueuedTurn(roomId: string, clientId: string, messageId: string): Promise<CodeAgentControlAck> {
+    const message = await this.readOwnedQueuedMessage(roomId, clientId, messageId, 'queued');
+    if (!message) {
+      return { success: false, error: 'Queued agent input is no longer cancellable' };
+    }
+    const result = await this.store.deleteCodeAgentQueuedMessage?.(roomId, messageId, 'queued');
+    if (!result?.deleted) {
+      return { success: false, error: 'Queued agent input is no longer cancellable' };
+    }
+    this.emitter.to(result.room.creatorId).emit('room_updated', result.room);
+    this.emitter.to(roomId).emit('message_deleted', messageId, roomId);
+    return { success: true };
+  }
+
+  async steerQueuedTurn(roomId: string, clientId: string, messageId: string): Promise<CodeAgentControlAck> {
+    const message = await this.readOwnedQueuedMessage(roomId, clientId, messageId, 'queued');
+    if (!message?.codeAgentQueuedInput) {
+      return { success: false, error: 'Queued agent input is no longer available to steer' };
+    }
+    const steeringAt = this.now().toISOString();
+    const steering = await this.store.updateCodeAgentQueuedMessage?.(roomId, messageId, {
+      expectedState: 'queued',
+      updatedAt: steeringAt,
+      queuedInput: { ...message.codeAgentQueuedInput, state: 'steering', updatedAt: steeringAt, lastError: undefined },
+    });
+    const steeringAck = this.emitQueuedMessageTransition(roomId, steering, 'Queued agent input is no longer available to steer');
+    if (!steeringAck.success) {
+      return steeringAck;
+    }
+
+    const response = await this.steerTurn(roomId, clientId, message.content);
+    const latest = steering?.updatedMessage?.codeAgentQueuedInput;
+    const updatedAt = this.now().toISOString();
+    const settled = await this.store.updateCodeAgentQueuedMessage?.(roomId, messageId, {
+      expectedState: 'steering',
+      updatedAt,
+      queuedInput: response.success
+        ? null
+        : {
+            ...(latest || message.codeAgentQueuedInput),
+            state: 'queued',
+            updatedAt,
+            lastError: response.error,
+          },
+    });
+    this.emitQueuedMessageTransition(roomId, settled, response.error || 'Unable to settle queued steer input');
+    if (!response.success && !this.activeTurns.has(roomId)) {
+      this.scheduleQueuedTurn(roomId);
+    }
+    return response;
+  }
+
+  async resumeQueuedTurns(): Promise<void> {
+    const roomIds = await this.store.findRoomsWithQueuedCodeAgentMessages?.() || [];
+    for (const roomId of roomIds) {
+      this.scheduleQueuedTurn(roomId);
     }
   }
 
@@ -647,15 +788,23 @@ export class CodeAgentSessionService {
       this.logger.info('Code agent interrupt requested by another room member', { roomId, startedBy: active.clientId, requestedBy: clientId });
     }
     if (active.backend === 'code-agent' || active.backend === 'codex-app-server') {
-      return this.writeActiveControl(roomId, {
+      const response = await this.writeActiveControl(roomId, {
         schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'interrupt',
         turnId: active.turnId,
         ...(reason ? { reason } : {}),
       });
+      if (response.success) {
+        const current = this.activeTurns.get(roomId);
+        if (current?.turnId === active.turnId) {
+          current.interruptedByUser = true;
+        }
+      }
+      return response;
     }
     if (active.backend === 'codex') {
       if (active.process) {
+        active.interruptedByUser = true;
         await this.stopRunnerProcess(active.process, roomId);
         return { success: true };
       }
@@ -776,17 +925,30 @@ export class CodeAgentSessionService {
 
   private async writeActiveControl(
     roomId: string,
-    request: Parameters<typeof writeCodeAgentRunnerRequest>[1]
+    request: CodeAgentRunnerControlRequest
   ): Promise<CodeAgentControlAck> {
     const active = this.activeTurns.get(roomId);
     const stdin = active?.process?.stdin;
     if (!active || !stdin) {
       return { success: false, error: 'The running agent is not ready for control input' };
     }
+    const controlId = this.createId();
+    const result = new Promise<CodeAgentControlAck>(resolve => {
+      const timeout = setTimeout(() => {
+        active.pendingControls.delete(controlId);
+        resolve({ success: false, error: 'Timed out waiting for the running agent to accept control input' });
+      }, 10_000);
+      active.pendingControls.set(controlId, { resolve, timeout });
+    });
     try {
-      await writeCodeAgentRunnerRequest(stdin, request);
-      return { success: true };
+      await writeCodeAgentRunnerRequest(stdin, { ...request, controlId });
+      return await result;
     } catch (error) {
+      const pending = active.pendingControls.get(controlId);
+      if (pending) {
+        clearTimeout(pending.timeout);
+        active.pendingControls.delete(controlId);
+      }
       this.logger.warn('Failed to write code agent control request', {
         error,
         roomId,
@@ -1178,8 +1340,29 @@ export class CodeAgentSessionService {
     return 'plan';
   }
 
-  private async readLatestPromptContext(roomId: string, clientId: string, maxContextMessages?: number) {
+  private async readLatestPromptContext(roomId: string, clientId: string, maxContextMessages?: number, promptMessageId?: string) {
     const messages = await this.store.readMessagesByRoom(roomId);
+    if (promptMessageId) {
+      const index = messages.findIndex(message => message.id === promptMessageId);
+      const message = index >= 0 ? messages[index] : undefined;
+      if (
+        !message ||
+        message.clientId !== clientId ||
+        message.messageType !== 'text' ||
+        typeof message.content !== 'string' ||
+        !message.content.trim()
+      ) {
+        return null;
+      }
+      const prior = messages.slice(0, index);
+      const limited = maxContextMessages && maxContextMessages > 0
+        ? prior.slice(-maxContextMessages)
+        : prior;
+      return {
+        prompt: message.content.trim(),
+        priorMessages: buildCodeAgentPriorMessages(limited),
+      };
+    }
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const message = messages[index];
       if (
@@ -1199,6 +1382,121 @@ export class CodeAgentSessionService {
       }
     }
     return null;
+  }
+
+  private async readOwnedQueuedMessage(
+    roomId: string,
+    clientId: string,
+    messageId: string,
+    expectedState: CodeAgentQueueState
+  ): Promise<Message | null> {
+    const message = (await this.store.readMessagesByRoom(roomId)).find(item => item.id === messageId);
+    if (message?.clientId !== clientId || message.codeAgentQueuedInput?.state !== expectedState) {
+      return null;
+    }
+    return message;
+  }
+
+  private emitQueuedMessageTransition(
+    roomId: string,
+    result: MessageUpdateResult | null | undefined,
+    missingError: string
+  ): CodeAgentControlAck {
+    if (!result?.found || !result.updatedMessage) {
+      return { success: false, error: missingError };
+    }
+    this.emitter.to(result.room.creatorId).emit('room_updated', result.room);
+    this.emitter.to(roomId).emit('message_edited', result.updatedMessage);
+    return { success: true };
+  }
+
+  private scheduleQueuedTurn(roomId: string): void {
+    if (this.activeTurns.has(roomId) || this.queueDrains.has(roomId)) {
+      return;
+    }
+    this.queueDrains.add(roomId);
+    void this.drainQueuedTurn(roomId).catch(error => {
+      this.logger.error('Failed to drain queued code-agent input', { error, roomId });
+    }).finally(() => {
+      this.queueDrains.delete(roomId);
+    });
+  }
+
+  private async drainQueuedTurn(roomId: string): Promise<void> {
+    if (this.activeTurns.has(roomId)) {
+      return;
+    }
+    const claim = await this.store.claimNextCodeAgentQueuedMessage?.(roomId, this.now().toISOString());
+    const queuedInput = claim?.message.codeAgentQueuedInput;
+    if (!claim || !queuedInput || queuedInput.state !== 'starting') {
+      return;
+    }
+    this.emitter.to(claim.room.creatorId).emit('room_updated', claim.room);
+    this.emitter.to(roomId).emit('message_edited', claim.message);
+
+    const hasCodexSettings = Boolean(
+      queuedInput.codexModel ||
+      queuedInput.codexReasoningEffort ||
+      queuedInput.codexPermissionMode ||
+      queuedInput.codexServiceTier
+    );
+    const input: CodeAgentTurnInput = {
+      roomId,
+      clientId: claim.message.clientId,
+      selectedModel: queuedInput.selectedModel,
+      ...(hasCodexSettings ? {
+        codexRunSettings: normalizeCodexRunSettings(
+          queuedInput.codexModel,
+          queuedInput.codexReasoningEffort,
+          queuedInput.codexPermissionMode,
+          queuedInput.codexServiceTier
+        ),
+      } : {}),
+      maxContextMessages: queuedInput.maxContextMessages,
+      requestedMode: queuedInput.requestedMode,
+      clientOrigin: queuedInput.clientOrigin,
+      serverOrigin: queuedInput.serverOrigin,
+      promptMessageId: claim.message.id,
+    };
+
+    await new Promise<void>(resolve => {
+      let settled = false;
+      const settle = (response: CodeAgentTurnAck) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        void this.settleClaimedQueuedTurn(claim.message, response).finally(resolve);
+      };
+      void this.startTurn(input, settle).then(response => {
+        if (!settled) {
+          settle(response);
+        }
+      }).catch(error => {
+        settle({ success: false, error: error instanceof Error ? error.message : String(error) });
+      });
+    });
+  }
+
+  private async settleClaimedQueuedTurn(message: Message, response: CodeAgentTurnAck): Promise<void> {
+    const queuedInput = message.codeAgentQueuedInput;
+    if (!queuedInput) {
+      return;
+    }
+    const updatedAt = this.now().toISOString();
+    const result = await this.store.updateCodeAgentQueuedMessage?.(message.roomId, message.id, {
+      expectedState: 'starting',
+      updatedAt,
+      queuedInput: response.success
+        ? null
+        : {
+            ...queuedInput,
+            state: 'queued',
+            updatedAt,
+            lastError: response.error || 'Unable to start queued agent turn',
+          },
+    });
+    this.emitQueuedMessageTransition(message.roomId, result, 'Queued agent input changed before the turn started');
   }
 
   private describeSandboxFailure(result: EnsureCodeAgentSandboxResult) {
@@ -1234,6 +1532,22 @@ export class CodeAgentSessionService {
     codexRunSettings: CodexRunSettings
   ) {
     await this.recordRunnerEvent(event, roomId, turnId, selectedModel, backend, codexRunSettings);
+    if (event.type === 'control_result') {
+      const active = this.activeTurns.get(roomId);
+      if (active?.turnId !== turnId) {
+        return;
+      }
+      const pending = active.pendingControls.get(event.controlId);
+      if (!pending) {
+        return;
+      }
+      clearTimeout(pending.timeout);
+      active.pendingControls.delete(event.controlId);
+      pending.resolve(event.accepted
+        ? { success: true }
+        : { success: false, error: event.message || 'Control input was rejected' });
+      return;
+    }
     if (event.type === 'usage') {
       this.emitter.to(roomId).emit('ai_usage_update', {
         messageId: state.activeMessageId,
@@ -1551,6 +1865,17 @@ export class CodeAgentSessionService {
     const published = persisted || turn;
     this.emitter.to(turn.roomId).emit('agent_turn_updated', published);
     return published;
+  }
+
+  private rejectPendingControls(active: ActiveCodeAgentTurn | undefined, error: string) {
+    if (!active) {
+      return;
+    }
+    for (const pending of active.pendingControls.values()) {
+      clearTimeout(pending.timeout);
+      pending.resolve({ success: false, error });
+    }
+    active.pendingControls.clear();
   }
 
   private async recordTurnEvent(

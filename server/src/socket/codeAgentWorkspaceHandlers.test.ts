@@ -104,6 +104,7 @@ const createHarness = (options: {
   codeWorkspaceAssetAccess?: CodeWorkspaceAssetAccess;
   publishedArtifacts?: any[];
   lifecycleSandboxId?: string;
+  codeAgentSessionService?: any;
 } = {}) => {
   const socket = new FakeSocket(options.socketId);
   const currentRoom = options.currentRoom || room();
@@ -168,6 +169,7 @@ const createHarness = (options: {
     normalizeAIModel: (() => ({})) as any,
     getAIClientForModel: (() => ({})) as any,
     codeAgentAccess: options.codeAgentAccess ?? createCodeAgentAccessControl({ enabled: true }),
+    codeAgentSessionService: options.codeAgentSessionService,
     ...(options.lifecycleSandboxId ? {
       codeAgentSandboxLifecycle: {
         ensureReadySandbox: async (roomId: string, clientId: string) => {
@@ -1070,6 +1072,44 @@ describe('code-agent workspace socket handlers', () => {
     assert.deepEqual(createWorkspaceDirectoryCalls, [{ sandboxId: 'sandbox-1', path: 'src/components' }]);
     assert.deepEqual(renameWorkspaceEntryCalls, [{ sandboxId: 'sandbox-1', fromPath: 'src/App.tsx', toPath: 'src/Main.tsx' }]);
     assert.deepEqual(deleteWorkspaceEntryCalls, [{ sandboxId: 'sandbox-1', path: 'src/Main.tsx' }]);
+  });
+
+  it('routes queued input edit, steer, and cancel actions to the session scheduler', async () => {
+    const calls: Array<{ action: string; args: unknown[] }> = [];
+    const codeAgentSessionService = {
+      async editQueuedTurn(...args: unknown[]) {
+        calls.push({ action: 'edit', args });
+        return { success: true };
+      },
+      async steerQueuedTurn(...args: unknown[]) {
+        calls.push({ action: 'steer', args });
+        return { success: true };
+      },
+      async cancelQueuedTurn(...args: unknown[]) {
+        calls.push({ action: 'cancel', args });
+        return { success: true };
+      },
+    };
+    const { socket } = createHarness({ codeAgentSessionService });
+
+    assert.deepEqual(await socket.invoke('edit_queued_code_agent_input', {
+      roomId: 'room-1',
+      messageId: 'queued-1',
+      content: 'edited follow-up',
+    }), { success: true });
+    assert.deepEqual(await socket.invoke('steer_queued_code_agent_input', {
+      roomId: 'room-1',
+      messageId: 'queued-1',
+    }), { success: true });
+    assert.deepEqual(await socket.invoke('cancel_queued_code_agent_input', {
+      roomId: 'room-1',
+      messageId: 'queued-1',
+    }), { success: true });
+    assert.deepEqual(calls, [
+      { action: 'edit', args: ['room-1', 'client-1', 'queued-1', 'edited follow-up'] },
+      { action: 'steer', args: ['room-1', 'client-1', 'queued-1'] },
+      { action: 'cancel', args: ['room-1', 'client-1', 'queued-1'] },
+    ]);
   });
 
   it('rejects workspace snapshots before socket registration', async () => {

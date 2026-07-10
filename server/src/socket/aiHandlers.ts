@@ -1815,6 +1815,86 @@ export function registerAIHandlers({
     }
   };
 
+  socket.on('queue_code_agent_input', async (
+    data: SendMessageAndAskAIData,
+    callback?: (response: { success: boolean; message?: Message; error?: string }) => void
+  ) => {
+    const clientId = await store.getClientId(socket.id);
+    if (!clientId) {
+      callback?.({ success: false, error: 'You are not registered' });
+      return;
+    }
+    if (!data.roomId || typeof data.content !== 'string' || !data.content.trim()) {
+      callback?.({ success: false, error: 'Room ID and queued input are required' });
+      return;
+    }
+    if (!(await hasRoomAccess(store, data.roomId, clientId))) {
+      callback?.({ success: false, error: 'You are not authorized to access this room' });
+      return;
+    }
+    const room = await store.getRoomById(data.roomId);
+    if (room?.type !== 'codeAgent') {
+      callback?.({ success: false, error: 'Queued inputs are only available in Workspace rooms' });
+      return;
+    }
+    const postAuth = await authorizeRoomAction({
+      store,
+      roomId: data.roomId,
+      clientId,
+      action: { type: 'message.post' },
+    });
+    if (!postAuth.ok) {
+      callback?.({ success: false, error: postAuth.message });
+      return;
+    }
+    const permissions = buildRoomPermissions(postAuth.actor, data.roomId, clientId, postAuth.actor.room);
+    if (!permissions.canUseCodeAgent || !codeAgentSessionService) {
+      callback?.({ success: false, error: codeAgentSessionService ? CODE_AGENT_ACCESS_DENIED_MESSAGE : 'Workspace is unavailable' });
+      return;
+    }
+
+    let replyTo;
+    if (data.replyToMessageId) {
+      const quotedMessage = await getRoomMessage(store, data.roomId, data.replyToMessageId);
+      if (!quotedMessage) {
+        callback?.({ success: false, error: 'Quoted message not found' });
+        return;
+      }
+      replyTo = createReplyReference(quotedMessage);
+    }
+    const message = createUserMessage({
+      id: uuidv4(),
+      clientId,
+      content: data.content.trim(),
+      roomId: data.roomId,
+      username: data.username,
+      avatar: data.avatar,
+      replyTo,
+      clientMessageId: data.clientMessageId,
+    });
+    const codexRunSettings = normalizeCodexRunSettings(
+      data.codexModel,
+      data.codexReasoningEffort,
+      data.codexPermissionMode,
+      data.codexServiceTier
+    );
+    const result = await codeAgentSessionService.queueTurn({
+      ...buildCodeAgentTurnInput({
+        roomId: data.roomId,
+        clientId,
+        selectedModel: normalizeAIModel(data.model),
+        codexModel: codexRunSettings.model,
+        codexReasoningEffort: codexRunSettings.reasoningEffort,
+        codexPermissionMode: codexRunSettings.permissionMode,
+        codexServiceTier: codexRunSettings.serviceTier,
+        maxContextMessages: data.maxContextMessages,
+        socket,
+        requestedMode: data.codeAgentMode,
+      }),
+    }, message);
+    callback?.(result);
+  });
+
   socket.on('ask_ai', async (data: AIRequestData, callback?: AIAckCallback) => {
     const clientId = await store.getClientId(socket.id);
     if (!clientId) {
@@ -2112,6 +2192,10 @@ export function registerAIHandlers({
     const targetMessage = await getRoomMessage(store, data.roomId, data.messageId);
     if (!targetMessage) {
       callback?.({ success: false, error: 'Message not found' });
+      return;
+    }
+    if (targetMessage.codeAgentQueuedInput) {
+      callback?.({ success: false, error: 'Queued agent inputs must be edited from their queue controls' });
       return;
     }
 

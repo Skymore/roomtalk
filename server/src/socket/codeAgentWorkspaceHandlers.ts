@@ -710,6 +710,52 @@ export function registerCodeAgentWorkspaceHandlers({
     callback?.(response);
   });
 
+  socket.on('edit_queued_code_agent_input', async (payload: unknown, callback?: (response: CodeAgentControlAck) => void) => {
+    const roomId = parseRoomId(payload);
+    const authorized = await loadAuthorizedCodeAgentRoom(roomId, 'edit queued code agent input');
+    if (!authorized.success || !codeAgentSessionService) {
+      callback?.({ success: false, error: authorized.success ? 'Workspace is unavailable' : authorized.error });
+      return;
+    }
+    const messageId = parseWorkspaceString(payload, 'messageId');
+    const content = parseWorkspaceString(payload, 'content');
+    if (!messageId || !content) {
+      callback?.({ success: false, error: 'Queued message and content are required' });
+      return;
+    }
+    callback?.(await codeAgentSessionService.editQueuedTurn(authorized.room.id, authorized.clientId, messageId, content));
+  });
+
+  socket.on('cancel_queued_code_agent_input', async (payload: unknown, callback?: (response: CodeAgentControlAck) => void) => {
+    const roomId = parseRoomId(payload);
+    const authorized = await loadAuthorizedCodeAgentRoom(roomId, 'cancel queued code agent input');
+    if (!authorized.success || !codeAgentSessionService) {
+      callback?.({ success: false, error: authorized.success ? 'Workspace is unavailable' : authorized.error });
+      return;
+    }
+    const messageId = parseWorkspaceString(payload, 'messageId');
+    if (!messageId) {
+      callback?.({ success: false, error: 'Queued message is required' });
+      return;
+    }
+    callback?.(await codeAgentSessionService.cancelQueuedTurn(authorized.room.id, authorized.clientId, messageId));
+  });
+
+  socket.on('steer_queued_code_agent_input', async (payload: unknown, callback?: (response: CodeAgentControlAck) => void) => {
+    const roomId = parseRoomId(payload);
+    const authorized = await loadAuthorizedCodeAgentRoom(roomId, 'steer with queued code agent input');
+    if (!authorized.success || !codeAgentSessionService) {
+      callback?.({ success: false, error: authorized.success ? 'Workspace is unavailable' : authorized.error });
+      return;
+    }
+    const messageId = parseWorkspaceString(payload, 'messageId');
+    if (!messageId) {
+      callback?.({ success: false, error: 'Queued message is required' });
+      return;
+    }
+    callback?.(await codeAgentSessionService.steerQueuedTurn(authorized.room.id, authorized.clientId, messageId));
+  });
+
   socket.on('respond_code_agent_approval', async (payload: unknown, callback?: (response: CodeAgentControlAck) => void) => {
     const roomId = parseRoomId(payload);
     const authorized = await loadAuthorizedCodeAgentRoom(roomId, 'respond to code agent approval');

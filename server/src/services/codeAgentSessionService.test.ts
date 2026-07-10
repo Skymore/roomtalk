@@ -1,5 +1,6 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
+import { Writable } from 'node:stream';
 import { Logger } from '../logger';
 import { AIModelOption, CodeAgentMode, Message, Room, RoomAgentTurn, RoomAICostTotal } from '../types';
 import { CodeAgentRunnerAdapter, CodeAgentBackend } from './codeAgentRunner';
@@ -134,6 +135,53 @@ class MemoryCodeAgentStore {
     return turn;
   }
 
+  async appendMessage(message: Message) {
+    return this.appendMessageWithAtomicPosition(message);
+  }
+
+  async updateCodeAgentQueuedMessage(roomId: string, messageId: string, update: any) {
+    const room = this.rooms.get(roomId);
+    const messages = this.messages.get(roomId);
+    if (!room || !messages) return null;
+    const index = messages.findIndex(item => item.id === messageId && item.codeAgentQueuedInput?.state === update.expectedState);
+    if (index === -1) return { room, found: false };
+    const updatedMessage: Message = {
+      ...messages[index],
+      ...(update.content !== undefined ? { content: update.content } : {}),
+      updatedAt: update.updatedAt,
+      codeAgentQueuedInput: update.queuedInput || undefined,
+    };
+    messages[index] = updatedMessage;
+    return { room, found: true, updatedMessage };
+  }
+
+  async claimNextCodeAgentQueuedMessage(roomId: string, updatedAt = '2026-05-03T00:00:00.000Z') {
+    const room = this.rooms.get(roomId);
+    const messages = this.messages.get(roomId);
+    if (!room || !messages) return null;
+    const message = messages.find(item => item.codeAgentQueuedInput?.state === 'queued');
+    if (!message?.codeAgentQueuedInput) return null;
+    message.codeAgentQueuedInput = { ...message.codeAgentQueuedInput, state: 'starting', updatedAt, lastError: undefined };
+    message.updatedAt = updatedAt;
+    return { room, message: { ...message, codeAgentQueuedInput: { ...message.codeAgentQueuedInput } } };
+  }
+
+  async deleteCodeAgentQueuedMessage(roomId: string, messageId: string, expectedState = 'queued') {
+    const room = this.rooms.get(roomId);
+    const messages = this.messages.get(roomId);
+    if (!room || !messages) return null;
+    const index = messages.findIndex(item => item.id === messageId && item.codeAgentQueuedInput?.state === expectedState);
+    if (index === -1) return { room, deleted: false };
+    messages.splice(index, 1);
+    return { room, deleted: true };
+  }
+
+  async findRoomsWithQueuedCodeAgentMessages() {
+    return Array.from(this.messages.entries())
+      .filter(([, messages]) => messages.some(message => message.codeAgentQueuedInput?.state === 'queued'))
+      .map(([roomId]) => roomId);
+  }
+
   async deleteMessageById(roomId: string, messageId: string) {
     const messages = this.messages.get(roomId);
     if (!messages) return null;
@@ -219,6 +267,135 @@ class BlockingRunner implements CodeAgentRunnerClient {
       messageId: 'ai',
       answer: 'done',
       sessionId: 'session-blocking',
+      usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' as const },
+    };
+    await handlers.onEvent(textEvent);
+    await handlers.onEvent(stepEvent);
+    await handlers.onEvent(finalEvent);
+    return { events: [textEvent, stepEvent, finalEvent], finalEvent };
+  }
+}
+
+class SequencedBlockingRunner implements CodeAgentRunnerClient {
+  requests: CodeAgentRunnerRunRequest[] = [];
+  completed = 0;
+  private releases: Array<() => void> = [];
+
+  release(index: number) {
+    this.releases[index]?.();
+  }
+
+  async waitForRuns(count: number) {
+    const deadline = Date.now() + 2_000;
+    while (this.requests.length < count && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(this.requests.length >= count, true, `expected ${count} runner requests`);
+  }
+
+  async waitForCompletions(count: number) {
+    const deadline = Date.now() + 2_000;
+    while (this.completed < count && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(this.completed >= count, true, `expected ${count} completed runner requests`);
+  }
+
+  async run(request: CodeAgentRunnerRunRequest, handlers: CodeAgentRunnerHandlers): Promise<CodeAgentRunnerRunResult> {
+    this.requests.push(request);
+    await new Promise<void>(resolve => this.releases.push(resolve));
+    const textEvent: CodeAgentRunnerEvent = {
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'text_delta',
+      messageId: request.turnId,
+      delta: `done ${this.requests.length}`,
+    };
+    const stepEvent: CodeAgentRunnerEvent = {
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'model_step',
+      turnId: request.turnId,
+      stepId: `${request.turnId}:step:1`,
+      sequence: 1,
+      hasText: true,
+      toolCallIds: [],
+      usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' },
+    };
+    const finalEvent = {
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'final' as const,
+      messageId: request.turnId,
+      answer: `done ${this.requests.length}`,
+      sessionId: `session-${this.requests.length}`,
+      usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' as const },
+    };
+    await handlers.onEvent(textEvent);
+    await handlers.onEvent(stepEvent);
+    await handlers.onEvent(finalEvent);
+    this.completed += 1;
+    return { events: [textEvent, stepEvent, finalEvent], finalEvent };
+  }
+}
+
+class ControlBlockingRunner implements CodeAgentRunnerClient {
+  requests: CodeAgentRunnerRunRequest[] = [];
+  handlers?: CodeAgentRunnerHandlers;
+  private releaseRun!: () => void;
+  started = new Promise<void>(resolve => {
+    this.markStarted = resolve;
+  });
+  private markStarted!: () => void;
+  private blocked = new Promise<void>(resolve => {
+    this.releaseRun = resolve;
+  });
+
+  constructor(private readonly acceptControls = true) {}
+
+  async receiveControl(control: any) {
+    await this.handlers?.onEvent({
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'control_result',
+      turnId: control.turnId,
+      controlId: control.controlId,
+      controlType: control.type,
+      accepted: this.acceptControls,
+      message: this.acceptControls ? undefined : 'turn already completed',
+    });
+    if (control.type === 'interrupt' && this.acceptControls) {
+      this.releaseRun();
+    }
+  }
+
+  release() {
+    this.releaseRun();
+  }
+
+  async run(request: CodeAgentRunnerRunRequest, handlers: CodeAgentRunnerHandlers): Promise<CodeAgentRunnerRunResult> {
+    this.requests.push(request);
+    this.handlers = handlers;
+    this.markStarted();
+    await this.blocked;
+    const textEvent: CodeAgentRunnerEvent = {
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'text_delta',
+      messageId: request.turnId,
+      delta: 'stopped',
+    };
+    const stepEvent: CodeAgentRunnerEvent = {
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'model_step',
+      turnId: request.turnId,
+      stepId: `${request.turnId}:step:1`,
+      sequence: 1,
+      hasText: true,
+      toolCallIds: [],
+      usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' },
+    };
+    const finalEvent = {
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'final' as const,
+      messageId: request.turnId,
+      answer: 'stopped',
+      sessionId: 'session-controlled',
       usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' as const },
     };
     await handlers.onEvent(textEvent);
@@ -1541,6 +1718,115 @@ describe('CodeAgentSessionService', () => {
 
     runner.release();
     assert.deepEqual(await first, { success: true, messageId: 'ai-1' });
+  });
+
+  it('persists follow-up input and starts it as the next complete turn', async () => {
+    const runner = new SequencedBlockingRunner();
+    const { service, store } = createService({
+      runner,
+      ids: ['ai-1', 'turn-1', 'ai-2', 'turn-2'],
+    });
+    const first = service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    await runner.waitForRuns(1);
+
+    const queuedMessage: Message = {
+      id: 'queued-1',
+      clientId: 'client-1',
+      content: 'run the tests next',
+      roomId: 'room-1',
+      timestamp: '2026-05-03T00:00:01.000Z',
+      messageType: 'text',
+    };
+    const queued = await service.queueTurn({
+      roomId: 'room-1',
+      clientId: 'client-1',
+      selectedModel,
+      requestedMode: 'plan',
+    }, queuedMessage);
+    assert.equal(queued.success, true);
+    assert.equal(queued.message?.codeAgentQueuedInput?.state, 'queued');
+
+    runner.release(0);
+    assert.deepEqual(await first, { success: true, messageId: 'ai-1' });
+    await runner.waitForRuns(2);
+    assert.equal(runner.requests[1].prompt, 'run the tests next');
+    assert.equal(runner.requests[1].mode, 'plan');
+    assert.equal(runner.requests[1].priorMessages?.some(item => item.role === 'user' && item.content === 'run the tests next') ?? false, false);
+
+    const deadline = Date.now() + 1_000;
+    while (store.messages.get('room-1')?.find(item => item.id === 'queued-1')?.codeAgentQueuedInput && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(store.messages.get('room-1')?.find(item => item.id === 'queued-1')?.codeAgentQueuedInput, undefined);
+
+    runner.release(1);
+    await runner.waitForCompletions(2);
+  });
+
+  it('keeps queued follow-up input after an explicit user interrupt', async () => {
+    const runner = new ControlBlockingRunner();
+    const { service, store, sandboxService } = createService({ runner });
+    sandboxService.startRunner = async input => ({
+      command: input.command,
+      stdin: new Writable({
+        write(chunk, _encoding, callback) {
+          void runner.receiveControl(JSON.parse(String(chunk))).then(() => callback(), callback);
+        },
+      }),
+      stop: async () => {},
+    });
+
+    const first = service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    await runner.started;
+    await service.queueTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel }, {
+      id: 'queued-stop-1',
+      clientId: 'client-1',
+      content: 'do this after the current task',
+      roomId: 'room-1',
+      timestamp: '2026-05-03T00:00:01.000Z',
+      messageType: 'text',
+    });
+
+    assert.deepEqual(await service.interruptTurn('room-1', 'client-1'), { success: true });
+    await first;
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    assert.equal(runner.requests.length, 1);
+    assert.equal(store.messages.get('room-1')?.find(item => item.id === 'queued-stop-1')?.codeAgentQueuedInput?.state, 'queued');
+  });
+
+  it('returns a rejected steer to queued state instead of losing it', async () => {
+    const runner = new ControlBlockingRunner(false);
+    const { service, store, sandboxService } = createService({ runner });
+    sandboxService.startRunner = async input => ({
+      command: input.command,
+      stdin: new Writable({
+        write(chunk, _encoding, callback) {
+          void runner.receiveControl(JSON.parse(String(chunk))).then(() => callback(), callback);
+        },
+      }),
+      stop: async () => {},
+    });
+
+    const first = service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+    await runner.started;
+    await service.queueTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel }, {
+      id: 'queued-steer-1',
+      clientId: 'client-1',
+      content: 'use Bing instead',
+      roomId: 'room-1',
+      timestamp: '2026-05-03T00:00:01.000Z',
+      messageType: 'text',
+    });
+
+    const response = await service.steerQueuedTurn('room-1', 'client-1', 'queued-steer-1');
+    assert.deepEqual(response, { success: false, error: 'turn already completed' });
+    const queued = store.messages.get('room-1')?.find(item => item.id === 'queued-steer-1')?.codeAgentQueuedInput;
+    assert.equal(queued?.state, 'queued');
+    assert.equal(queued?.lastError, 'turn already completed');
+
+    runner.release();
+    await first;
   });
 
   it('rejects disabled, unauthorized, non-code-agent, and allowlist-mismatched turns', async () => {

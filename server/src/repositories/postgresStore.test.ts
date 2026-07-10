@@ -707,7 +707,8 @@ describe('PostgresStore', () => {
           assert.equal(call.params?.[15], null);
           assert.equal(call.params?.[16], null);
           assert.equal(call.params?.[17], null);
-          assert.equal(call.params?.[25], 2);
+          assert.equal(call.params?.[25], null);
+          assert.equal(call.params?.[26], 2);
         },
       },
       { rows: [roomRow({ last_activity_at: '2026-05-04T00:00:00.000Z' })] },
@@ -719,6 +720,59 @@ describe('PostgresStore', () => {
     assert.deepEqual(await store.appendMessage(message()), room({ lastActivityAt: '2026-05-04T00:00:00.000Z' }));
     assert.equal(pool.connectCalls, 1);
     assert.equal(client.released, true);
+  });
+
+  it('claims the oldest queued code-agent message and discovers queued rooms', async () => {
+    const queuedInput = {
+      state: 'queued' as const,
+      queuedAt: '2026-05-04T00:00:00.000Z',
+      updatedAt: '2026-05-04T00:00:00.000Z',
+      selectedModel: {
+        id: 'deepseek-v4-pro',
+        apiModel: 'deepseek-v4-pro',
+        provider: 'deepseek' as const,
+        label: 'DeepSeek V4 Pro',
+        description: 'Test model',
+      },
+    };
+    const queuedRow = {
+      id: 'queued-1',
+      room_id: 'room-1',
+      client_id: 'client-1',
+      content: 'follow up',
+      timestamp: '2026-05-04T00:00:00.000Z',
+      message_type: 'text',
+      username: null,
+      avatar: null,
+      mime_type: null,
+      status: null,
+      ai_model: null,
+      usage: null,
+      cost: null,
+      reply_to: null,
+      code_agent_queued_input: queuedInput,
+    };
+    const claimedRow = {
+      ...queuedRow,
+      updated_at: '2026-05-04T00:00:01.000Z',
+      code_agent_queued_input: { ...queuedInput, state: 'starting', updatedAt: '2026-05-04T00:00:01.000Z' },
+    };
+    const client = new ScriptedClient([
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'BEGIN') },
+      { rows: [roomRow()] },
+      { rows: [queuedRow], assertCall: call => assert.match(call.sql, /FOR UPDATE SKIP LOCKED/) },
+      { rows: [claimedRow], assertCall: call => assert.match(call.sql, /code_agent_queued_input = \$3::jsonb/) },
+      { rows: [{ timestamp: '2026-05-04T00:00:00.000Z' }] },
+      { rows: [roomRow({ last_activity_at: '2026-05-04T00:00:00.000Z' })] },
+      { rowCount: 0, assertCall: call => assert.equal(call.sql, 'COMMIT') },
+    ]);
+    const pool = new ScriptedPool([{ rows: [{ room_id: 'room-1' }] }], client);
+    const store = new PostgresStore(pool, logger as any);
+
+    const claimed = await store.claimNextCodeAgentQueuedMessage('room-1', '2026-05-04T00:00:01.000Z');
+    assert.equal(claimed?.message.id, 'queued-1');
+    assert.equal(claimed?.message.codeAgentQueuedInput?.state, 'starting');
+    assert.deepEqual(await store.findRoomsWithQueuedCodeAgentMessages(), ['room-1']);
   });
 
   it('appends media messages and assets in one transaction with the message inserted first', async () => {
@@ -736,7 +790,8 @@ describe('PostgresStore', () => {
           assert.equal(call.params?.[15], null);
           assert.equal(call.params?.[16], null);
           assert.equal(call.params?.[17], null);
-          assert.equal(call.params?.[25], 4);
+          assert.equal(call.params?.[25], null);
+          assert.equal(call.params?.[26], 4);
         },
       },
       {
@@ -854,7 +909,8 @@ describe('PostgresStore', () => {
           assert.equal(call.params?.[15], null);
           assert.equal(call.params?.[16], null);
           assert.equal(call.params?.[17], null);
-          assert.equal(call.params?.[25], 3);
+          assert.equal(call.params?.[25], null);
+          assert.equal(call.params?.[26], 3);
         },
       },
       {
@@ -1022,7 +1078,8 @@ describe('PostgresStore', () => {
           assert.equal(call.params?.[21], JSON.stringify(aiMessage.replyTo));
           assert.equal(call.params?.[22], JSON.stringify(aiMessage.uiPayload));
           assert.equal(call.params?.[23], null);
-          assert.equal(call.params?.[25], 0);
+          assert.equal(call.params?.[25], null);
+          assert.equal(call.params?.[26], 0);
         },
       },
       { rows: [roomRow({ last_activity_at: '2026-05-04T00:00:00.000Z' })] },

@@ -72,6 +72,7 @@ class _AppServerRunState:
     thread_id: str | None = None
     app_turn_id: str | None = None
     pending_approvals: dict[str, _PendingApproval] = field(default_factory=dict)
+    pending_controls: dict[int, tuple[str, str]] = field(default_factory=dict)
     stopped: bool = False
     condition: threading.Condition = field(default_factory=threading.Condition)
 
@@ -110,6 +111,16 @@ class _AppServerRunState:
     def pop_pending_approval(self, approval_id: str) -> _PendingApproval | None:
         with self.condition:
             return self.pending_approvals.pop(approval_id, None)
+
+    def add_pending_control(self, request_id: int, control_id: str, control_type: str) -> None:
+        with self.condition:
+            self.pending_controls[request_id] = (control_id, control_type)
+
+    def pop_pending_control(self, request_id: Any) -> tuple[str, str] | None:
+        if not isinstance(request_id, int):
+            return None
+        with self.condition:
+            return self.pending_controls.pop(request_id, None)
 
 
 @dataclass
@@ -572,7 +583,13 @@ def _drive_app_server(
     send_lock = threading.Lock()
     state = _AppServerRunState(roomtalk_turn_id=request.turn_id)
 
-    def send(method: str, params: dict[str, Any] | None = None, *, request_id: int | None = None) -> int | None:
+    def send(
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        request_id: int | None = None,
+        control: tuple[str, str] | None = None,
+    ) -> int | None:
         nonlocal next_id
         with send_lock:
             payload: dict[str, Any] = {"method": method, "params": params or {}}
@@ -581,6 +598,9 @@ def _drive_app_server(
             elif method != "initialized":
                 payload["id"] = next_id
                 next_id += 1
+            payload_id = payload.get("id")
+            if control and isinstance(payload_id, int):
+                state.add_pending_control(payload_id, control[0], control[1])
             process.stdin.write(json.dumps(payload, separators=(",", ":")) + "\n")
             process.stdin.flush()
         return payload.get("id") if isinstance(payload.get("id"), int) else None
@@ -624,6 +644,18 @@ def _drive_app_server(
                 continue
 
             if "id" in message:
+                pending_control = state.pop_pending_control(message.get("id"))
+                if pending_control:
+                    control_id, control_type = pending_control
+                    error = message.get("error") if isinstance(message.get("error"), dict) else {}
+                    emitter.emit(_control_result(
+                        state.roomtalk_turn_id,
+                        control_id,
+                        control_type,
+                        not bool(message.get("error")),
+                        str(error.get("message") or "") or None,
+                    ))
+                    continue
                 if message.get("error"):
                     if message.get("id") == thread_open_id and thread_open_method == "thread/resume":
                         for mapped in [mapper._status("running", "codex app-server resume failed; starting a new thread")]:
@@ -934,7 +966,7 @@ def _start_runner_control_reader(stdin: TextIO, control_queue: ControlQueue) -> 
 
 def _start_control_dispatch_thread(
     control_queue: ControlQueue,
-    send: Callable[[str, dict[str, Any] | None], int | None],
+    send: Callable[..., int | None],
     write_response: Callable[[dict[str, Any]], None],
     state: _AppServerRunState,
     emitter: EventEmitter,
@@ -947,32 +979,39 @@ def _start_control_dispatch_thread(
                 return
             if control is None:
                 return
+            control_type = str(control.get("type") or "unknown")
+            control_id = control.get("controlId")
             if control.get("schemaVersion") != SCHEMA_VERSION or control.get("turnId") != state.roomtalk_turn_id:
+                if isinstance(control_id, str) and control_id:
+                    emitter.emit(_control_result(state.roomtalk_turn_id, control_id, control_type, False, "The target turn is no longer active"))
                 continue
-            control_type = control.get("type")
             try:
                 if control_type == "interrupt":
                     active_ids = state.active_ids()
                     if not active_ids:
-                        emitter.emit(_control_status(state.roomtalk_turn_id, "error", "Codex turn is not ready to interrupt"))
+                        if isinstance(control_id, str) and control_id:
+                            emitter.emit(_control_result(state.roomtalk_turn_id, control_id, control_type, False, "Codex turn is not ready to interrupt"))
                         continue
                     thread_id, app_turn_id = active_ids
-                    send("turn/interrupt", {"threadId": thread_id, "turnId": app_turn_id})
+                    send("turn/interrupt", {"threadId": thread_id, "turnId": app_turn_id}, control=(control_id, control_type) if isinstance(control_id, str) and control_id else None)
                     emitter.emit(_control_status(state.roomtalk_turn_id, "running", "Codex interrupt sent"))
                 elif control_type == "steer":
                     prompt = control.get("prompt")
                     if not isinstance(prompt, str) or not prompt.strip():
+                        if isinstance(control_id, str) and control_id:
+                            emitter.emit(_control_result(state.roomtalk_turn_id, control_id, control_type, False, "Steer prompt is required"))
                         continue
                     active_ids = state.active_ids()
                     if not active_ids:
-                        emitter.emit(_control_status(state.roomtalk_turn_id, "error", "Codex turn is not ready to steer"))
+                        if isinstance(control_id, str) and control_id:
+                            emitter.emit(_control_result(state.roomtalk_turn_id, control_id, control_type, False, "Codex turn is not ready to steer"))
                         continue
                     thread_id, app_turn_id = active_ids
                     send("turn/steer", {
                         "threadId": thread_id,
                         "expectedTurnId": app_turn_id,
                         "input": [{"type": "text", "text": prompt.strip(), "text_elements": []}],
-                    })
+                    }, control=(control_id, control_type) if isinstance(control_id, str) and control_id else None)
                     emitter.emit(_control_status(state.roomtalk_turn_id, "running", "Codex steer sent"))
                 elif control_type == "approval_response":
                     approval_id = control.get("approvalId")
@@ -982,18 +1021,16 @@ def _start_control_dispatch_thread(
                     pending = state.pop_pending_approval(approval_id)
                     if not pending:
                         emitter.emit(_approval_result_event(approval_id, decision, success=False, output="Approval request is no longer pending."))
+                        if isinstance(control_id, str) and control_id:
+                            emitter.emit(_control_result(state.roomtalk_turn_id, control_id, control_type, False, "Approval request is no longer pending"))
                         continue
                     write_response({"id": pending.json_rpc_id, "result": _approval_response_result(pending, decision)})
                     emitter.emit(_approval_result_event(approval_id, decision, success=decision in ("accept", "acceptForSession")))
+                    if isinstance(control_id, str) and control_id:
+                        emitter.emit(_control_result(state.roomtalk_turn_id, control_id, control_type, True))
             except Exception as exc:
-                emitter.emit({
-                    "schemaVersion": SCHEMA_VERSION,
-                    "type": "error",
-                    "turnId": state.roomtalk_turn_id,
-                    "message": str(exc),
-                    "code": "codex_app_server_control_error",
-                    "retryable": False,
-                })
+                if isinstance(control_id, str) and control_id:
+                    emitter.emit(_control_result(state.roomtalk_turn_id, control_id, control_type, False, str(exc)))
 
     thread = threading.Thread(target=dispatch_controls, daemon=True)
     thread.start()
@@ -1008,6 +1045,26 @@ def _control_status(turn_id: str, status: str, message: str) -> dict[str, Any]:
         "status": status,
         "message": message,
     }
+
+
+def _control_result(
+    turn_id: str,
+    control_id: str,
+    control_type: str,
+    accepted: bool,
+    message: str | None = None,
+) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "schemaVersion": SCHEMA_VERSION,
+        "type": "control_result",
+        "turnId": turn_id,
+        "controlId": control_id,
+        "controlType": control_type,
+        "accepted": accepted,
+    }
+    if message:
+        event["message"] = message
+    return event
 
 
 def _is_interactive_approval_method(method: str) -> bool:

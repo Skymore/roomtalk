@@ -204,6 +204,9 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
     if (!targetMessage) {
       return callback?.({ success: false, error: 'Message not found' });
     }
+    if (targetMessage.codeAgentQueuedInput) {
+      return callback?.({ success: false, error: 'Use queued agent input controls to edit this message' });
+    }
 
     const auth = await authorizeRoomAction({
       store,
@@ -257,6 +260,9 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
     if (!targetMessage) {
       socketLogger.warn('Attempted to delete message not found', { ...data, deleterClientId: clientId });
       return callback?.({ success: true });
+    }
+    if (targetMessage.codeAgentQueuedInput) {
+      return callback?.({ success: false, error: 'Use queued agent input controls to cancel this message' });
     }
 
     const auth = await authorizeRoomAction({
