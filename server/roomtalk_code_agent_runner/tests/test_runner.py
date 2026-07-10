@@ -240,12 +240,14 @@ def test_read_only_shell_uses_os_sandbox_and_disables_network_by_default(tmp_pat
 def test_read_only_shell_keeps_network_off_and_exposes_scoped_room_context_socket(tmp_path: Path):
     socket_path = str(tmp_path / "room-context.sock")
     argv = _read_only_shell_argv("roomtalk room history --json", tmp_path, {
+        "PYTHONPATH": "/opt/code-agent-engine/src:/opt/roomtalk_code_agent_runner",
         "ROOMTALK_ROOM_CONTEXT_SOCKET": socket_path,
     })
 
     assert "--share-net" not in argv
     assert "ROOMTALK_ROOM_CONTEXT_SOCKET" in argv
     assert argv[argv.index("ROOMTALK_ROOM_CONTEXT_SOCKET") + 1] == socket_path
+    assert argv[argv.index("PYTHONPATH") + 1] == "/opt/code-agent-engine/src:/opt/roomtalk_code_agent_runner"
     assert "ROOMTALK_STATIC_PUBLISH_TOKEN" not in argv
     assert argv[argv.index("ROOMTALK_CODE_AGENT_CLI_ACCESS") + 1] == "read-only"
 

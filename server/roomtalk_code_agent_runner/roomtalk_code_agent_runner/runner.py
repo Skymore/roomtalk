@@ -691,7 +691,7 @@ def _read_only_shell_argv(command: str, cwd: Path, env: dict[str, str]) -> list[
         "--setenv", "ROOMTALK_WORKSPACE", str(cwd),
         "--setenv", "ROOMTALK_CODE_AGENT_CLI_ACCESS", "read-only",
     ])
-    for key in ("ROOMTALK_ROOM_CONTEXT_SOCKET",):
+    for key in ("PYTHONPATH", "ROOMTALK_ROOM_CONTEXT_SOCKET"):
         value = (env.get(key) or "").strip()
         if value:
             argv.extend(["--setenv", key, value])
