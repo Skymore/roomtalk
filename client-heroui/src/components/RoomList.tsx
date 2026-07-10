@@ -28,9 +28,10 @@ interface RoomListProps {
   clientId: string;
   username: string;
   isCodeAgentEnabled: boolean;
+  onModalTaskStart?: () => void;
 }
 
-export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, onRoomSelect, onRoomSelectById, handleDeleteRoom, handleRenameRoom, clientId, username, isCodeAgentEnabled }) => {
+export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, onRoomSelect, onRoomSelectById, handleDeleteRoom, handleRenameRoom, clientId, username, isCodeAgentEnabled, onModalTaskStart }) => {
   const { t } = useTranslation();
   const { isOpen, onOpen, onClose } = useDisclosure();
   const [newRoomName, setNewRoomName] = useState('');
@@ -120,6 +121,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
   };
 
   const handleOpenCreateModal = () => {
+    onModalTaskStart?.();
     setNewRoomName(`${username}'s Room`);
     setNewRoomDescription('');
     setNewRoomType('chat');
@@ -129,8 +131,14 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
   };
 
   const openDeleteModal = (room: Room) => {
+    onModalTaskStart?.();
     setRoomToDelete(room);
     onOpenDeleteConfirm();
+  };
+
+  const openRenameModal = (room: Room) => {
+    onModalTaskStart?.();
+    setRoomToRename(room);
   };
 
   const confirmRoomDelete = () => {
@@ -225,7 +233,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
           <Button
             color="secondary"
             onPress={handleOpenCreateModal}
-            className="h-12 min-w-[120px] bg-[#c96442] px-4 text-sm text-[#faf9f5] shadow-[0_0_0_1px_#c96442]"
+            className="h-12 min-w-[120px] bg-secondary px-4 text-sm text-secondary-foreground shadow-[0_0_0_1px_#c96442]"
           >
             {t('create')}
           </Button>
@@ -243,7 +251,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
           <Button
             color="secondary"
             onPress={handleOpenCreateModal}
-            className="h-12 w-full bg-[#c96442] text-sm text-[#faf9f5] shadow-[0_0_0_1px_#c96442]"
+            className="h-12 w-full bg-secondary text-sm text-secondary-foreground shadow-[0_0_0_1px_#c96442]"
           >
             {t('create')}
           </Button>
@@ -267,7 +275,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
           <Button
             color="secondary"
             onPress={handleOpenCreateModal}
-            className="h-10 min-w-[100px] bg-[#c96442] px-4 text-sm text-[#faf9f5] shadow-[0_0_0_1px_#c96442]"
+            className="h-10 min-w-[100px] bg-secondary px-4 text-sm text-secondary-foreground shadow-[0_0_0_1px_#c96442]"
           >
             {t('create')}
           </Button>
@@ -285,7 +293,7 @@ export const RoomList: React.FC<RoomListProps> = ({ rooms, isLoading = false, on
             onSelect={onRoomSelect}
             onCopyRoomId={handleCopyRoomId}
             onCopyRoomLink={handleCopyRoomLink}
-            onRename={setRoomToRename}
+            onRename={openRenameModal}
             onDelete={openDeleteModal}
           />
         ))}

@@ -121,6 +121,7 @@ export interface Message {
   clientMessageId?: string;
   deliveryStatus?: 'pending' | 'sent' | 'failed';
   deliveryError?: string;
+  deliveryAction?: 'send' | 'ask-ai';
   aiModel?: {
     id: string;
     apiModel: string;
@@ -215,6 +216,9 @@ export interface RoomMessageHistoryPayload {
   hasMore: boolean;
   oldestMessageId?: string;
   mode?: 'replace' | 'prepend';
+  // Echoed from the request. It binds a page to the client window that asked
+  // for it, so a clear/new mutation cannot be overwritten by a late page.
+  requestedHistoryVersion?: number;
 }
 
 export type RoomRenameHandler = (roomId: string, name: string) => Promise<void>;

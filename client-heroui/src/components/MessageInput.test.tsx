@@ -12,10 +12,25 @@ const socketMocks = vi.hoisted(() => ({
   requestAIResponse: vi.fn(),
   sendMessage: vi.fn(),
   sendMessageAndAskAI: vi.fn(),
+  sendSticker: vi.fn(),
   uploadMediaMessage: vi.fn(),
 }));
 
+const stickerMocks = vi.hoisted(() => ({
+  suggestions: [] as Array<{ id: string; keywords: string[]; url: string }>,
+}));
+const disclosureMocks = vi.hoisted(() => ({
+  isOpen: false,
+  onOpen: vi.fn(),
+  onClose: vi.fn(),
+}));
+const streamingTranscriptionMocks = vi.hoisted(() => ({
+  startStreamingTranscription: vi.fn(),
+}));
+
 vi.mock('../utils/socket', () => socketMocks);
+
+vi.mock('../utils/streamingTranscription', () => streamingTranscriptionMocks);
 
 vi.mock('browser-image-compression', () => ({
   default: vi.fn(async (file: File) => file),
@@ -40,18 +55,20 @@ vi.mock('@heroui/react', () => ({
       {children}
     </span>
   ),
-  useDisclosure: () => ({
-    isOpen: false,
-    onOpen: vi.fn(),
-    onClose: vi.fn(),
-  }),
+  useDisclosure: () => disclosureMocks,
 }));
 
 vi.mock('../hooks/useStickers', () => ({
   useStickerCatalog: () => null,
   useStickerUrl: () => undefined,
-  useStickerSearch: () => [],
+  useStickerSearch: () => stickerMocks.suggestions,
   useRecentStickers: () => ({ recentIds: [], pushRecent: vi.fn() }),
+}));
+
+vi.mock('./StickerPicker', () => ({
+  StickerPicker: ({ onSelect }: { onSelect: (stickerId: string) => void }) => (
+    <button type="button" onClick={() => onSelect('sticker-1')}>picker-sticker</button>
+  ),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -226,11 +243,15 @@ const installVoiceRecordingMocks = () => {
     configurable: true,
     value: vi.fn(),
   });
+
+  return { trackStop };
 };
 
 describe('MessageInput optimistic send flow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    stickerMocks.suggestions = [];
+    disclosureMocks.isOpen = false;
     setNavigatorPlatform('Win32');
     localStorage.removeItem('roomtalk:ai-context-message-limit');
     socketMocks.requestAIResponse.mockResolvedValue(undefined);
@@ -249,6 +270,11 @@ describe('MessageInput optimistic send flow', () => {
       aiMessageId: 'ai-message-1',
       aiStarted: true,
     });
+  socketMocks.sendSticker.mockResolvedValue(message({
+      id: 'sticker-message',
+      content: 'sticker-1',
+    messageType: 'sticker',
+  }));
     socketMocks.uploadMediaMessage.mockResolvedValue(message({
       id: 'audio-message',
       content: '',
@@ -260,10 +286,15 @@ describe('MessageInput optimistic send flow', () => {
         byteSize: 2048,
       },
     }));
+    streamingTranscriptionMocks.startStreamingTranscription.mockResolvedValue({
+      stop: vi.fn().mockResolvedValue(undefined),
+      getText: vi.fn(() => ''),
+    });
   });
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -285,6 +316,7 @@ describe('MessageInput optimistic send flow', () => {
     expect(optimisticMessage).toMatchObject({
       content: 'hello',
       deliveryStatus: 'pending',
+      deliveryAction: 'send',
       clientId: 'client-1',
       roomId: 'room-1',
       username: 'Ada',
@@ -334,6 +366,7 @@ describe('MessageInput optimistic send flow', () => {
     const optimisticMessage = (props.onOptimisticMessage as ReturnType<typeof vi.fn>).mock.calls[0][0] as Message;
 
     expect(editor.textContent).toBe('');
+    expect(optimisticMessage.deliveryAction).toBe('ask-ai');
     expect(socketMocks.sendMessage).not.toHaveBeenCalled();
     expect(socketMocks.requestAIResponse).not.toHaveBeenCalled();
     expect(socketMocks.sendMessageAndAskAI).toHaveBeenCalledWith({
@@ -359,6 +392,45 @@ describe('MessageInput optimistic send flow', () => {
         savedMessage
       );
     });
+  });
+
+  it('keeps a failed text-send card visible without announcing the same optimistic failure twice', async () => {
+    socketMocks.sendMessage.mockRejectedValueOnce(new Error('offline'));
+    const { editor, props } = renderMessageInput();
+    setEditorText(editor, 'will fail');
+
+    fireEvent.click(screen.getByText('send-message'));
+
+    await waitFor(() => expect(props.onOptimisticMessageFailed).toHaveBeenCalledTimes(1));
+    const errorText = screen.getByText('errorSendingMessage');
+    expect(errorText).toBeTruthy();
+    expect(errorText.closest('[aria-live]')?.getAttribute('aria-live')).toBe('off');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('keeps a failed Ask AI card visible without a second live alert', async () => {
+    socketMocks.sendMessageAndAskAI.mockRejectedValueOnce(new Error('AI offline'));
+    const { editor, props } = renderMessageInput();
+    setEditorText(editor, 'ask and fail');
+
+    fireEvent.click(screen.getByText('ask-ai'));
+
+    await waitFor(() => expect(props.onOptimisticMessageFailed).toHaveBeenCalledTimes(1));
+    const errorText = screen.getByText('errorSendingAiRequest');
+    expect(errorText.closest('[aria-live]')?.getAttribute('aria-live')).toBe('off');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('keeps composer errors live when no optimistic failure announcer is present', async () => {
+    socketMocks.sendMessage.mockRejectedValueOnce(new Error('offline'));
+    const { editor } = renderMessageInput({ onOptimisticMessageFailed: undefined });
+    setEditorText(editor, 'will fail loudly');
+
+    fireEvent.click(screen.getByText('send-message'));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('errorSendingMessage');
+    expect(alert.getAttribute('aria-live')).toBe('assertive');
   });
 
   it('uses Ask AI for Ctrl+Enter on non-macOS platforms', async () => {
@@ -499,6 +571,117 @@ describe('MessageInput optimistic send flow', () => {
     });
   });
 
+  it('does not carry a pending stop lock into another running room', async () => {
+    let rejectFirstStop!: (reason?: unknown) => void;
+    socketMocks.interruptCodeAgentTurn.mockImplementation((targetRoomId: string) => {
+      if (targetRoomId === 'room-1') {
+        return new Promise<void>((_resolve, reject) => {
+          rejectFirstStop = reject;
+        });
+      }
+      return new Promise<void>(() => {});
+    });
+    const rendered = renderMessageInput({
+      isCodeAgentRoom: true,
+      isRoomAIProcessing: true,
+      codeAgentBackend: 'codex-app-server',
+    });
+
+    fireEvent.click(screen.getByText('ask-ai'));
+    await waitFor(() => expect(socketMocks.interruptCodeAgentTurn).toHaveBeenCalledWith('room-1'));
+    expect(screen.getByTestId('message-input-ai-controls').dataset.aiProcessing).toBe('true');
+
+    rendered.rerender(
+      <MessageInput {...rendered.props} roomId="room-2" isRoomAIProcessing={true} />
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('message-input-ai-controls').dataset.aiProcessing).toBe('false');
+    });
+
+    fireEvent.click(screen.getByText('ask-ai'));
+    await waitFor(() => expect(socketMocks.interruptCodeAgentTurn).toHaveBeenCalledWith('room-2'));
+    expect(screen.getByTestId('message-input-ai-controls').dataset.aiProcessing).toBe('true');
+
+    await act(async () => {
+      rejectFirstStop(new Error('stale room stop failed'));
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId('message-input-ai-controls').dataset.aiProcessing).toBe('true');
+  });
+
+  it('clears a pending stop lock when the room session becomes unverified', async () => {
+    socketMocks.interruptCodeAgentTurn.mockImplementation(() => new Promise<void>(() => {}));
+    const rendered = renderMessageInput({
+      isCodeAgentRoom: true,
+      isRoomAIProcessing: true,
+      isRoomSessionReady: true,
+      codeAgentBackend: 'codex-app-server',
+    });
+
+    fireEvent.click(screen.getByText('ask-ai'));
+    await waitFor(() => expect(socketMocks.interruptCodeAgentTurn).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId('message-input-ai-controls').dataset.aiProcessing).toBe('true');
+
+    rendered.rerender(
+      <MessageInput {...rendered.props} isRoomSessionReady={false} />
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('message-input-ai-controls').dataset.aiProcessing).toBe('false');
+    });
+    fireEvent.click(screen.getByText('ask-ai'));
+    expect(socketMocks.interruptCodeAgentTurn).toHaveBeenCalledTimes(1);
+
+    rendered.rerender(
+      <MessageInput {...rendered.props} isRoomSessionReady={true} />
+    );
+    fireEvent.click(screen.getByText('ask-ai'));
+    await waitFor(() => expect(socketMocks.interruptCodeAgentTurn).toHaveBeenCalledTimes(2));
+  });
+
+  it('still allows a verified posting-closed room to stop its running agent', async () => {
+    renderMessageInput({
+      isCodeAgentRoom: true,
+      isRoomAIProcessing: true,
+      isRoomSessionReady: true,
+      canPost: false,
+      codeAgentBackend: 'codex-app-server',
+    });
+
+    fireEvent.click(screen.getByText('ask-ai'));
+
+    await waitFor(() => expect(socketMocks.interruptCodeAgentTurn).toHaveBeenCalledWith('room-1'));
+  });
+
+  it('blocks stop and queue actions while the restored room session is unverified', async () => {
+    const { editor } = renderMessageInput({
+      isCodeAgentRoom: true,
+      isRoomAIProcessing: true,
+      isRoomSessionReady: false,
+      canPost: false,
+      codeAgentBackend: 'codex-app-server',
+    });
+
+    fireEvent.click(screen.getByText('ask-ai'));
+    setEditorText(editor, 'stale room queue');
+    fireEvent.click(screen.getByText('ask-ai'));
+
+    expect(socketMocks.interruptCodeAgentTurn).not.toHaveBeenCalled();
+    expect(socketMocks.queueCodeAgentInput).not.toHaveBeenCalled();
+    expect(socketMocks.sendMessage).not.toHaveBeenCalled();
+    expect(socketMocks.sendMessageAndAskAI).not.toHaveBeenCalled();
+  });
+
+  it('closes AI settings when the room session becomes unverified', () => {
+    disclosureMocks.isOpen = true;
+    const rendered = renderMessageInput({ isRoomSessionReady: true });
+
+    rendered.rerender(
+      <MessageInput {...rendered.props} isRoomSessionReady={false} />
+    );
+
+    expect(disclosureMocks.onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('queues a complete next turn when the agent is running with text', async () => {
     const { editor } = renderMessageInput({
       isCodeAgentRoom: true,
@@ -542,7 +725,7 @@ describe('MessageInput optimistic send flow', () => {
     setEditorText(editor, 'inspect this screenshot');
     const file = new File([new Uint8Array([1, 2, 3])], 'screen.png', { type: 'image/png' });
     fireEvent.change(screen.getByTestId('image-upload-input'), { target: { files: [file] } });
-    await waitFor(() => expect(editor.querySelectorAll('img')).toHaveLength(1));
+    await waitFor(() => expect(screen.getByTestId('attachment-draft').querySelectorAll('img')).toHaveLength(1));
 
     fireEvent.click(screen.getByText('ask-ai'));
 
@@ -574,14 +757,14 @@ describe('MessageInput optimistic send flow', () => {
       messageType: 'media',
       mediaAsset: { id: 'asset-image-queued', kind: 'image', mimeType: 'image/png', byteSize: 3 },
     }));
-    const { editor } = renderMessageInput({
+    renderMessageInput({
       isCodeAgentRoom: true,
       isRoomAIProcessing: true,
       codeAgentBackend: 'codex-app-server',
     });
     const file = new File([new Uint8Array([1, 2, 3])], 'queued.png', { type: 'image/png' });
     fireEvent.change(screen.getByTestId('image-upload-input'), { target: { files: [file] } });
-    await waitFor(() => expect(editor.querySelectorAll('img')).toHaveLength(1));
+    await waitFor(() => expect(screen.getByTestId('attachment-draft').querySelectorAll('img')).toHaveLength(1));
 
     fireEvent.click(screen.getByText('ask-ai'));
 
@@ -737,7 +920,7 @@ describe('MessageInput optimistic send flow', () => {
     expect(socketMocks.uploadMediaMessage.mock.calls[0][0].file).toBeInstanceOf(Blob);
   });
 
-  it('uploads arbitrary files from the file picker', async () => {
+  it('stages arbitrary files and uploads them only after Send', async () => {
     renderMessageInput();
     const file = new File(['# notes'], 'notes.md', { type: 'text/markdown' });
 
@@ -745,9 +928,13 @@ describe('MessageInput optimistic send flow', () => {
       target: { files: [file] },
     });
 
-    await waitFor(() => {
-      expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1);
-    });
+    expect(await screen.findByText('notes.md')).toBeTruthy();
+    expect(screen.getByText(/7 B/)).toBeTruthy();
+    expect(socketMocks.uploadMediaMessage).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('send-message'));
+
+    await waitFor(() => expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1));
     expect(socketMocks.uploadMediaMessage.mock.calls[0][0]).toMatchObject({
       file,
       roomId: 'room-1',
@@ -760,7 +947,7 @@ describe('MessageInput optimistic send flow', () => {
     });
   });
 
-  it('uploads multiple arbitrary picker files as file attachments', async () => {
+  it('stages and sends multiple arbitrary picker files as a batch', async () => {
     renderMessageInput();
     const textFile = new File(['# notes'], 'notes.md', { type: 'text/markdown' });
     const movFile = new File(['mov'], 'IMG_0135.mov', { type: 'video/quicktime' });
@@ -769,9 +956,12 @@ describe('MessageInput optimistic send flow', () => {
       target: { files: [textFile, movFile] },
     });
 
-    await waitFor(() => {
-      expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(2);
-    });
+    expect(await screen.findAllByTestId('attachment-draft')).toHaveLength(2);
+    expect(socketMocks.uploadMediaMessage).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('send-message'));
+
+    await waitFor(() => expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(2));
     expect(socketMocks.uploadMediaMessage.mock.calls[0][0]).toMatchObject({
       file: textFile,
       roomId: 'room-1',
@@ -789,7 +979,7 @@ describe('MessageInput optimistic send flow', () => {
     expect((screen.getByTestId('file-upload-input') as HTMLInputElement).multiple).toBe(true);
   });
 
-  it('uploads extension-only MOV selections from the media picker as videos', async () => {
+  it('stages extension-only MOV selections from the media picker as videos', async () => {
     renderMessageInput();
     const file = new File(['mov'], 'IMG_0135.mov');
 
@@ -797,9 +987,12 @@ describe('MessageInput optimistic send flow', () => {
       target: { files: [file] },
     });
 
-    await waitFor(() => {
-      expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1);
-    });
+    expect(await screen.findByText('IMG_0135.mov')).toBeTruthy();
+    expect(socketMocks.uploadMediaMessage).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('send-message'));
+
+    await waitFor(() => expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1));
     expect(socketMocks.uploadMediaMessage.mock.calls[0][0]).toMatchObject({
       file,
       roomId: 'room-1',
@@ -828,7 +1021,34 @@ describe('MessageInput optimistic send flow', () => {
     expect(socketMocks.uploadMediaMessage).not.toHaveBeenCalled();
   });
 
-  it('keeps image drafts visible when media upload fails', async () => {
+  it('lets users dismiss validation errors and otherwise clears them after five seconds', async () => {
+    vi.useFakeTimers();
+    renderMessageInput();
+    const file = new File(['x'], 'oversized.zip', { type: 'application/zip' });
+    Object.defineProperty(file, 'size', {
+      configurable: true,
+      value: 50 * 1024 * 1024 + 1,
+    });
+    const fileInput = screen.getByTestId('file-upload-input');
+
+    await act(async () => {
+      fireEvent.change(fileInput, { target: { files: [file] } });
+    });
+    expect(screen.getByRole('alert').textContent).toContain('fileTooLarge');
+    fireEvent.click(screen.getByLabelText('dismissError'));
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    await act(async () => {
+      fireEvent.change(fileInput, { target: { files: [file] } });
+    });
+    expect(screen.getByRole('alert').textContent).toContain('fileTooLarge');
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('keeps image drafts visible with a retry action when media upload fails', async () => {
     Object.defineProperty(URL, 'createObjectURL', {
       configurable: true,
       value: vi.fn(() => 'blob:image-preview'),
@@ -846,9 +1066,8 @@ describe('MessageInput optimistic send flow', () => {
       target: { files: [file] },
     });
 
-    await waitFor(() => {
-      expect(editor.querySelectorAll('img')).toHaveLength(1);
-    });
+    expect(await screen.findByText('image.png')).toBeTruthy();
+    expect(screen.getByTestId('attachment-draft').getAttribute('data-attachment-status')).toBe('ready');
 
     fireEvent.click(screen.getByText('send-message'));
 
@@ -856,10 +1075,452 @@ describe('MessageInput optimistic send flow', () => {
       expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1);
     });
     await waitFor(() => {
-      expect(screen.getByText(/errorSendingMessage/)).toBeTruthy();
+      expect(screen.getByText(/attachmentBatchFailed/)).toBeTruthy();
     });
 
-    expect(editor.querySelectorAll('img')).toHaveLength(1);
+    expect(editor.querySelectorAll('img')).toHaveLength(0);
+    expect(screen.getByTestId('attachment-draft').getAttribute('data-attachment-status')).toBe('failed');
+    expect(screen.getByLabelText('retryAttachment:image.png')).toBeTruthy();
     expect(URL.revokeObjectURL).not.toHaveBeenCalledWith('blob:image-preview');
+
+    socketMocks.uploadMediaMessage.mockResolvedValueOnce(message({ id: 'image-retry-saved' }));
+    fireEvent.click(screen.getByLabelText('retryAttachment:image.png'));
+    await waitFor(() => expect(screen.queryByTestId('attachment-draft')).toBeNull());
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:image-preview');
+  });
+
+  it('removes a staged attachment without uploading it', async () => {
+    renderMessageInput();
+    const file = new File(['draft'], 'remove-me.txt', { type: 'text/plain' });
+
+    fireEvent.change(screen.getByTestId('file-upload-input'), { target: { files: [file] } });
+    expect(await screen.findByText('remove-me.txt')).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText('removeAttachment:remove-me.txt'));
+
+    expect(screen.queryByText('remove-me.txt')).toBeNull();
+    expect(socketMocks.uploadMediaMessage).not.toHaveBeenCalled();
+  });
+
+  it('shows per-item progress, continues after partial failure, and retries only the failed item', async () => {
+    let resolveFirstUpload!: (value: Message) => void;
+    socketMocks.uploadMediaMessage
+      .mockImplementationOnce((params: { onUploadProgress?: (progress: number) => void }) => {
+        params.onUploadProgress?.(37);
+        return new Promise<Message>(resolve => { resolveFirstUpload = resolve; });
+      })
+      .mockRejectedValueOnce(new Error('second upload failed'));
+    renderMessageInput();
+    const first = new File(['first'], 'first.txt', { type: 'text/plain' });
+    const second = new File(['second'], 'second.txt', { type: 'text/plain' });
+
+    fireEvent.change(screen.getByTestId('file-upload-input'), { target: { files: [first, second] } });
+    fireEvent.click(screen.getByText('send-message'));
+
+    const progressbar = await screen.findByRole('progressbar', { name: 'uploadProgress:first.txt' });
+    expect(progressbar.getAttribute('aria-valuenow')).toBe('37');
+    expect(screen.getByText('second.txt').closest('[data-attachment-status]')?.getAttribute('data-attachment-status')).toBe('ready');
+
+    await act(async () => {
+      resolveFirstUpload(message({ id: 'first-saved' }));
+    });
+
+    await waitFor(() => expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getAllByTestId('attachment-draft')).toHaveLength(1));
+    expect(screen.queryByText('first.txt')).toBeNull();
+    expect(screen.getByText('second.txt').closest('[data-attachment-status]')?.getAttribute('data-attachment-status')).toBe('failed');
+
+    socketMocks.uploadMediaMessage.mockResolvedValueOnce(message({ id: 'second-saved' }));
+    fireEvent.click(screen.getByLabelText('retryAttachment:second.txt'));
+    await waitFor(() => expect(screen.queryByTestId('attachment-draft')).toBeNull());
+    expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(3);
+  });
+
+  it('can cancel an attachment that has not started while an earlier upload is active', async () => {
+    let resolveFirstUpload!: (value: Message) => void;
+    socketMocks.uploadMediaMessage.mockImplementationOnce(() => new Promise<Message>(resolve => {
+      resolveFirstUpload = resolve;
+    }));
+    renderMessageInput();
+    const first = new File(['first'], 'active.txt', { type: 'text/plain' });
+    const second = new File(['second'], 'queued.txt', { type: 'text/plain' });
+
+    fireEvent.change(screen.getByTestId('file-upload-input'), { target: { files: [first, second] } });
+    fireEvent.click(screen.getByText('send-message'));
+    await waitFor(() => expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByLabelText('removeAttachment:queued.txt'));
+    await act(async () => {
+      resolveFirstUpload(message({ id: 'active-saved' }));
+    });
+
+    await waitFor(() => expect(screen.queryByTestId('attachment-draft')).toBeNull());
+    expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears attachment drafts and revokes previews when the room changes', async () => {
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: vi.fn(() => 'blob:room-one-image'),
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    const rendered = renderMessageInput();
+    const file = new File(['image'], 'room-one.png', { type: 'image/png' });
+    fireEvent.change(screen.getByTestId('image-upload-input'), { target: { files: [file] } });
+    expect(await screen.findByText('room-one.png')).toBeTruthy();
+
+    rendered.rerender(<MessageInput {...rendered.props} roomId="room-2" />);
+
+    await waitFor(() => expect(screen.queryByTestId('attachment-draft')).toBeNull());
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:room-one-image');
+    expect(socketMocks.uploadMediaMessage).not.toHaveBeenCalled();
+  });
+
+  it('never uploads queued attachments into the previous room after a room switch', async () => {
+    let resolveFirstUpload!: (value: Message) => void;
+    socketMocks.uploadMediaMessage.mockImplementationOnce(() => new Promise<Message>(resolve => {
+      resolveFirstUpload = resolve;
+    }));
+    const rendered = renderMessageInput();
+    const first = new File(['first'], 'first-room-one.txt', { type: 'text/plain' });
+    const second = new File(['second'], 'second-room-one.txt', { type: 'text/plain' });
+
+    fireEvent.change(screen.getByTestId('file-upload-input'), { target: { files: [first, second] } });
+    fireEvent.click(screen.getByText('send-message'));
+    await waitFor(() => expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1));
+    expect(socketMocks.uploadMediaMessage.mock.calls[0][0].roomId).toBe('room-1');
+
+    rendered.rerender(<MessageInput {...rendered.props} roomId="room-2" />);
+    await waitFor(() => expect(screen.queryByTestId('attachment-draft')).toBeNull());
+    await act(async () => {
+      resolveFirstUpload(message({ id: 'first-room-one-saved' }));
+    });
+
+    await waitFor(() => expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1));
+    expect(socketMocks.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('aborts an attachment upload and keeps the draft retryable when the same room session becomes unverified', async () => {
+    let resolveUpload!: (value: Message) => void;
+    socketMocks.uploadMediaMessage.mockImplementationOnce(() => new Promise<Message>(resolve => {
+      resolveUpload = resolve;
+    }));
+    const rendered = renderMessageInput({ isRoomSessionReady: true });
+    const file = new File(['session attachment'], 'session.txt', { type: 'text/plain' });
+
+    fireEvent.change(screen.getByTestId('file-upload-input'), { target: { files: [file] } });
+    fireEvent.click(screen.getByText('send-message'));
+    await waitFor(() => expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1));
+    const signal = socketMocks.uploadMediaMessage.mock.calls[0][0].signal as AbortSignal;
+
+    rendered.rerender(
+      <MessageInput {...rendered.props} isRoomSessionReady={false} />
+    );
+
+    expect(signal.aborted).toBe(true);
+    await waitFor(() => {
+      expect(screen.getByTestId('attachment-draft').getAttribute('data-attachment-status')).toBe('ready');
+    });
+
+    await act(async () => resolveUpload(message({ id: 'late-session-attachment' })));
+    expect(screen.getByTestId('attachment-draft').getAttribute('data-attachment-status')).toBe('ready');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('clears room-one text before an immediate room-two Send action', async () => {
+    const rendered = renderMessageInput();
+    setEditorText(rendered.editor, 'room-one-only text');
+
+    rendered.rerender(<MessageInput {...rendered.props} roomId="room-2" />);
+    fireEvent.click(screen.getByText('send-message'));
+
+    expect(socketMocks.sendMessage).not.toHaveBeenCalled();
+    const nextEditor = screen.getByTestId('message-editor');
+    expect(nextEditor.textContent).toBe('');
+
+    setEditorText(nextEditor, 'room-two text');
+    fireEvent.click(screen.getByText('send-message'));
+    await waitFor(() => expect(socketMocks.sendMessage).toHaveBeenCalledTimes(1));
+    expect(socketMocks.sendMessage.mock.calls[0][1]).toBe('room-2');
+  });
+
+  it('does not reuse room-one text for an immediate room-two Ask AI action', async () => {
+    const rendered = renderMessageInput();
+    setEditorText(rendered.editor, 'room-one-only question');
+
+    rendered.rerender(<MessageInput {...rendered.props} roomId="room-2" />);
+    fireEvent.click(screen.getByText('ask-ai'));
+
+    await waitFor(() => expect(socketMocks.requestAIResponse).toHaveBeenCalledTimes(1));
+    expect(socketMocks.requestAIResponse.mock.calls[0][0].roomId).toBe('room-2');
+    expect(socketMocks.sendMessageAndAskAI).not.toHaveBeenCalled();
+  });
+
+  it('ignores a text-send failure that arrives after switching rooms', async () => {
+    let rejectSend!: (error: Error) => void;
+    socketMocks.sendMessage.mockImplementationOnce(() => new Promise<Message>((_resolve, reject) => {
+      rejectSend = reject;
+    }));
+    const rendered = renderMessageInput();
+    setEditorText(rendered.editor, 'old room text');
+    fireEvent.click(screen.getByText('send-message'));
+    await waitFor(() => expect(socketMocks.sendMessage).toHaveBeenCalledTimes(1));
+
+    rendered.rerender(<MessageInput {...rendered.props} roomId="room-2" />);
+    await act(async () => rejectSend(new Error('old room failed')));
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(rendered.props.onOptimisticMessageFailed).not.toHaveBeenCalled();
+  });
+
+  it('unlocks the new room and ignores stale Ask AI failures after switching rooms', async () => {
+    let rejectAskAI!: (error: Error) => void;
+    socketMocks.sendMessageAndAskAI.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      rejectAskAI = reject;
+    }));
+    const rendered = renderMessageInput();
+    setEditorText(rendered.editor, 'old room question');
+    fireEvent.click(screen.getByText('ask-ai'));
+    await waitFor(() => expect(socketMocks.sendMessageAndAskAI).toHaveBeenCalledTimes(1));
+    expect((screen.getByTestId('file-upload-input') as HTMLInputElement).disabled).toBe(true);
+
+    rendered.rerender(<MessageInput {...rendered.props} roomId="room-2" />);
+    await waitFor(() => {
+      expect((screen.getByTestId('file-upload-input') as HTMLInputElement).disabled).toBe(false);
+    });
+    await act(async () => rejectAskAI(new Error('old AI request failed')));
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect((screen.getByTestId('file-upload-input') as HTMLInputElement).disabled).toBe(false);
+    expect(rendered.props.onOptimisticMessageFailed).not.toHaveBeenCalled();
+  });
+
+  it('stops an active recording and clears the voice editor snapshot when the room changes', async () => {
+    const { trackStop } = installVoiceRecordingMocks();
+    const rendered = renderMessageInput();
+    setEditorText(rendered.editor, 'private room-one draft');
+    fireEvent.click(screen.getByLabelText('voiceInput'));
+    fireEvent.click(screen.getByText('recordVoice'));
+    await waitFor(() => expect(screen.getByText('stopRecording')).toBeTruthy());
+
+    rendered.rerender(<MessageInput {...rendered.props} roomId="room-2" />);
+
+    const nextEditor = await screen.findByTestId('message-editor');
+    await waitFor(() => expect(trackStop).toHaveBeenCalled());
+    expect(nextEditor.textContent).toBe('');
+    expect(screen.queryByText('stopRecording')).toBeNull();
+    expect(screen.queryByText('private room-one draft')).toBeNull();
+  });
+
+  it('stops the microphone and streaming transcriber when the same room session becomes unverified', async () => {
+    const { trackStop } = installVoiceRecordingMocks();
+    const transcriberStop = vi.fn().mockResolvedValue(undefined);
+    streamingTranscriptionMocks.startStreamingTranscription.mockResolvedValueOnce({
+      stop: transcriberStop,
+      getText: vi.fn(() => 'private transcript'),
+    });
+    const rendered = renderMessageInput({ isRoomSessionReady: true });
+
+    fireEvent.click(screen.getByLabelText('voiceInput'));
+    fireEvent.click(screen.getByText('voiceToText'));
+    await waitFor(() => expect(streamingTranscriptionMocks.startStreamingTranscription).toHaveBeenCalledTimes(1));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByText('stopRecording')).toBeTruthy();
+
+    rendered.rerender(
+      <MessageInput {...rendered.props} isRoomSessionReady={false} />
+    );
+
+    await waitFor(() => expect(trackStop).toHaveBeenCalled());
+    await waitFor(() => expect(transcriberStop).toHaveBeenCalled());
+    expect(screen.queryByText('stopRecording')).toBeNull();
+  });
+
+  it('revokes an unsent voice preview instead of carrying it into the next room', async () => {
+    installVoiceRecordingMocks();
+    const rendered = renderMessageInput();
+    setEditorText(rendered.editor, 'room-one voice snapshot');
+    fireEvent.click(screen.getByLabelText('voiceInput'));
+    fireEvent.click(screen.getByText('recordVoice'));
+    await waitFor(() => expect(screen.getByText('stopRecording')).toBeTruthy());
+    fireEvent.click(screen.getByText('stopRecording'));
+    await waitFor(() => expect(screen.getByText('doNotSend')).toBeTruthy());
+
+    rendered.rerender(<MessageInput {...rendered.props} roomId="room-2" />);
+
+    const nextEditor = await screen.findByTestId('message-editor');
+    expect(nextEditor.textContent).toBe('');
+    expect(screen.queryByText('doNotSend')).toBeNull();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:voice-preview');
+  });
+
+  it('aborts a room-one voice upload and ignores a late success after switching rooms', async () => {
+    installVoiceRecordingMocks();
+    let resolveUpload!: (value: Message) => void;
+    socketMocks.uploadMediaMessage.mockImplementationOnce(() => new Promise<Message>(resolve => {
+      resolveUpload = resolve;
+    }));
+    const rendered = renderMessageInput();
+    setEditorText(rendered.editor, 'must stay in room one');
+    fireEvent.click(screen.getByLabelText('voiceInput'));
+    fireEvent.click(screen.getByText('recordVoice'));
+    await waitFor(() => expect(screen.getByText('stopRecording')).toBeTruthy());
+    fireEvent.click(screen.getByText('stopRecording'));
+    await waitFor(() => expect(screen.getByText('doNotSend')).toBeTruthy());
+    fireEvent.click(screen.getByText('send'));
+    await waitFor(() => expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1));
+    const signal = socketMocks.uploadMediaMessage.mock.calls[0][0].signal as AbortSignal;
+
+    rendered.rerender(<MessageInput {...rendered.props} roomId="room-2" />);
+    expect(signal.aborted).toBe(true);
+    await act(async () => resolveUpload(message({ id: 'late-room-one-voice' })));
+
+    expect((await screen.findByTestId('message-editor')).textContent).toBe('');
+    expect(screen.queryByText('must stay in room one')).toBeNull();
+    expect(rendered.props.onCancelReply).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('aborts an in-flight voice upload when the same room session becomes unverified', async () => {
+    installVoiceRecordingMocks();
+    let resolveUpload!: (value: Message) => void;
+    socketMocks.uploadMediaMessage.mockImplementationOnce(() => new Promise<Message>(resolve => {
+      resolveUpload = resolve;
+    }));
+    const rendered = renderMessageInput({ isRoomSessionReady: true });
+    fireEvent.click(screen.getByLabelText('voiceInput'));
+    fireEvent.click(screen.getByText('recordVoice'));
+    await waitFor(() => expect(screen.getByText('stopRecording')).toBeTruthy());
+    fireEvent.click(screen.getByText('stopRecording'));
+    await waitFor(() => expect(screen.getByText('doNotSend')).toBeTruthy());
+    fireEvent.click(screen.getByText('send'));
+    await waitFor(() => expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1));
+    const signal = socketMocks.uploadMediaMessage.mock.calls[0][0].signal as AbortSignal;
+
+    rendered.rerender(
+      <MessageInput {...rendered.props} isRoomSessionReady={false} />
+    );
+
+    expect(signal.aborted).toBe(true);
+    await act(async () => resolveUpload(message({ id: 'late-session-voice' })));
+    expect(screen.getByText('doNotSend')).toBeTruthy();
+    expect(rendered.props.onCancelReply).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('cancels and generation-guards a pending editor restore frame across rooms', async () => {
+    let nextFrameId = 1;
+    const frameCallbacks = new Map<number, FrameRequestCallback>();
+    const requestFrame = vi.fn((callback: FrameRequestCallback) => {
+      const frameId = nextFrameId;
+      nextFrameId += 1;
+      frameCallbacks.set(frameId, callback);
+      return frameId;
+    });
+    const cancelFrame = vi.fn((frameId: number) => {
+      frameCallbacks.delete(frameId);
+    });
+    vi.stubGlobal('requestAnimationFrame', requestFrame);
+    vi.stubGlobal('cancelAnimationFrame', cancelFrame);
+    installVoiceRecordingMocks();
+    const rendered = renderMessageInput();
+    setEditorText(rendered.editor, 'room-one private snapshot');
+    fireEvent.click(screen.getByLabelText('voiceInput'));
+    fireEvent.click(screen.getByText('recordVoice'));
+    await waitFor(() => expect(screen.getByText('stopRecording')).toBeTruthy());
+    fireEvent.click(screen.getByText('stopRecording'));
+    await waitFor(() => expect(screen.getByText('doNotSend')).toBeTruthy());
+    fireEvent.click(screen.getByText('doNotSend'));
+    await waitFor(() => expect(requestFrame).toHaveBeenCalledTimes(1));
+    const staleFrame = requestFrame.mock.calls[0][0];
+
+    rendered.rerender(<MessageInput {...rendered.props} roomId="room-2" />);
+    expect(cancelFrame).toHaveBeenCalledWith(1);
+    act(() => staleFrame(0));
+
+    const nextEditor = await screen.findByTestId('message-editor');
+    expect(nextEditor.textContent).toBe('');
+    expect(screen.queryByText('room-one private snapshot')).toBeNull();
+  });
+
+  it('ignores a late room-one voice upload failure after switching rooms', async () => {
+    installVoiceRecordingMocks();
+    let rejectUpload!: (error: Error) => void;
+    socketMocks.uploadMediaMessage.mockImplementationOnce(() => new Promise<Message>((_resolve, reject) => {
+      rejectUpload = reject;
+    }));
+    const rendered = renderMessageInput();
+    setEditorText(rendered.editor, 'old room failure snapshot');
+    fireEvent.click(screen.getByLabelText('voiceInput'));
+    fireEvent.click(screen.getByText('recordVoice'));
+    await waitFor(() => expect(screen.getByText('stopRecording')).toBeTruthy());
+    fireEvent.click(screen.getByText('stopRecording'));
+    await waitFor(() => expect(screen.getByText('doNotSend')).toBeTruthy());
+    fireEvent.click(screen.getByText('send'));
+    await waitFor(() => expect(socketMocks.uploadMediaMessage).toHaveBeenCalledTimes(1));
+
+    rendered.rerender(<MessageInput {...rendered.props} roomId="room-2" />);
+    await act(async () => rejectUpload(new Error('late room-one upload failure')));
+
+    expect((await screen.findByTestId('message-editor')).textContent).toBe('');
+    expect(rendered.props.onCancelReply).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('blocks picker and inline stickers while posting or AI input is locked', async () => {
+    stickerMocks.suggestions = [{ id: 'sticker-wave', keywords: ['wave'], url: '/wave.webp' }];
+    const rendered = renderMessageInput({ canPost: false });
+
+    expect(screen.queryByLabelText('wave')).toBeNull();
+    fireEvent.click(screen.getByText('picker-sticker'));
+    expect(socketMocks.sendSticker).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert').textContent).toContain('postingClosed');
+
+    rendered.rerender(
+      <MessageInput
+        {...rendered.props}
+        canPost={true}
+        isRoomAIProcessing={true}
+      />
+    );
+    fireEvent.click(screen.getByText('picker-sticker'));
+    expect(socketMocks.sendSticker).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText('wave')).toBeNull();
+  });
+
+  it('does not apply a late sticker success to the next room', async () => {
+    let resolveSticker!: (value: Message) => void;
+    socketMocks.sendSticker.mockImplementationOnce(() => new Promise<Message>(resolve => {
+      resolveSticker = resolve;
+    }));
+    const rendered = renderMessageInput();
+    fireEvent.click(screen.getByText('picker-sticker'));
+    await waitFor(() => expect(socketMocks.sendSticker).toHaveBeenCalledTimes(1));
+    expect(rendered.props.onOptimisticMessage).toHaveBeenCalledTimes(1);
+
+    rendered.rerender(<MessageInput {...rendered.props} roomId="room-2" />);
+    await act(async () => resolveSticker(message({ id: 'late-sticker', messageType: 'sticker' })));
+
+    expect(rendered.props.onOptimisticMessageSaved).not.toHaveBeenCalled();
+    expect(rendered.props.onCancelReply).not.toHaveBeenCalled();
+  });
+
+  it('does not apply a late sticker failure to the next room', async () => {
+    let rejectSticker!: (error: Error) => void;
+    socketMocks.sendSticker.mockImplementationOnce(() => new Promise<Message>((_resolve, reject) => {
+      rejectSticker = reject;
+    }));
+    const rendered = renderMessageInput();
+    fireEvent.click(screen.getByText('picker-sticker'));
+    await waitFor(() => expect(socketMocks.sendSticker).toHaveBeenCalledTimes(1));
+
+    rendered.rerender(<MessageInput {...rendered.props} roomId="room-2" />);
+    await act(async () => rejectSticker(new Error('late sticker failure')));
+
+    expect(rendered.props.onOptimisticMessageFailed).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

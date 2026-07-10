@@ -70,7 +70,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               color={view === 'rooms' || view === 'chat' ? 'secondary' : 'default'}
               aria-label={t('home')}
               onPress={() => setView('rooms')}
-              className={`rounded-xl ${view === 'rooms' || view === 'chat' ? 'bg-[#c96442] text-[#faf9f5]' : 'text-[#5e5d59] dark:text-[#b0aea5]'}`}
+              className={`rounded-xl ${view === 'rooms' || view === 'chat' ? 'bg-secondary text-secondary-foreground' : 'text-[#5e5d59] dark:text-[#b0aea5]'}`}
             >
               <Icon icon="lucide:home" width={18}/>
             </Button>
@@ -84,7 +84,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               color={view === 'saved' ? 'secondary' : 'default'}
               aria-label={t('savedRooms')}
               onPress={() => setView('saved')}
-              className={`rounded-xl ${view === 'saved' ? 'bg-[#c96442] text-[#faf9f5]' : 'text-[#5e5d59] dark:text-[#b0aea5]'}`}
+              className={`rounded-xl ${view === 'saved' ? 'bg-secondary text-secondary-foreground' : 'text-[#5e5d59] dark:text-[#b0aea5]'}`}
             >
               <Icon icon="lucide:bookmark" width={18}/>
             </Button>
@@ -97,7 +97,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               color={view === 'settings' ? 'secondary' : 'default'}
               aria-label={t('settings')}
               onPress={() => setView('settings')}
-              className={`rounded-xl ${view === 'settings' ? 'bg-[#c96442] text-[#faf9f5]' : 'text-[#5e5d59] dark:text-[#b0aea5]'}`}
+              className={`rounded-xl ${view === 'settings' ? 'bg-secondary text-secondary-foreground' : 'text-[#5e5d59] dark:text-[#b0aea5]'}`}
             >
               <Icon icon="lucide:settings" width={18}/>
             </Button>

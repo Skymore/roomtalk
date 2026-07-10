@@ -185,6 +185,50 @@ describe('StickerPicker (grouped, one note per page)', () => {
     }
   });
 
+  it('centers the selected note tab without smooth motion when reduced motion is requested', () => {
+    const originalMatchMedia = window.matchMedia;
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn().mockReturnValue({
+        matches: true,
+        media: '(prefers-reduced-motion: reduce)',
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      }),
+    });
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    try {
+      render(<StickerPicker onSelect={vi.fn()} />);
+      scrollIntoView.mockClear();
+      fireEvent.click(screen.getByRole('button', { name: 'NoteB' }));
+
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'nearest', inline: 'center' });
+    } finally {
+      Object.defineProperty(window, 'matchMedia', {
+        configurable: true,
+        value: originalMatchMedia,
+      });
+      if (originalScrollIntoView) {
+        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+          configurable: true,
+          value: originalScrollIntoView,
+        });
+      } else {
+        Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView');
+      }
+    }
+  });
+
   it('searches across all groups', () => {
     const onSelect = vi.fn();
     render(<StickerPicker onSelect={onSelect} />);

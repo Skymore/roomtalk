@@ -12,6 +12,10 @@ import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 import { RoomPostingSchedule, RoomType } from '../utils/types';
 import { PostingScheduleEditor } from './PostingScheduleEditor';
+import { validateRoomName } from '../utils/roomState';
+import { HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE } from '../utils/accessibility';
+
+const ROOM_NAME_MAX_LENGTH = 20;
 
 const getLocalTimezone = () => {
   try {
@@ -90,6 +94,10 @@ export const RoomCreateModal: React.FC<RoomCreateModalProps> = ({
   });
 
   const scheduleReady = !scheduleEnabled || (selectedDays.length > 0 && startTime !== endTime);
+  const roomNameValidation = validateRoomName(roomName, ROOM_NAME_MAX_LENGTH);
+  const displayedNameError = nameError || (
+    roomName && !roomNameValidation.ok ? t(roomNameValidation.errorKey) : null
+  );
 
   return (
     <Modal
@@ -119,8 +127,8 @@ export const RoomCreateModal: React.FC<RoomCreateModalProps> = ({
                   color={isSelected ? 'secondary' : 'default'}
                   className={`h-auto min-h-20 justify-start whitespace-normal rounded-lg border px-3 py-3 text-left ${
                     isSelected
-                      ? 'border-[#c96442] bg-[#f3d8ca] text-[#7f3f29] dark:bg-[#44271f] dark:text-[#faf9f5]'
-                      : 'border-[#dedbd0] bg-transparent text-[#4d4c48] dark:border-[#30302e] dark:text-[#b0aea5]'
+                      ? 'border-[#c96442] bg-[#f3d8ca] text-[#7f3f29] data-[hover=true]:!opacity-100 data-[hover=true]:bg-[#eac8b8] dark:bg-[#44271f] dark:text-[#faf9f5] dark:data-[hover=true]:bg-[#553127]'
+                      : 'border-[#dedbd0] bg-transparent text-[#4d4c48] data-[hover=true]:!opacity-100 data-[hover=true]:bg-[#efede5] dark:border-[#30302e] dark:text-[#b0aea5] dark:data-[hover=true]:bg-[#282826]'
                   }`}
                   onPress={() => onRoomTypeChange(option.type)}
                   role="radio"
@@ -129,7 +137,7 @@ export const RoomCreateModal: React.FC<RoomCreateModalProps> = ({
                 >
                   <span className="flex min-w-0 flex-col">
                     <span className="text-sm font-semibold">{option.label}</span>
-                    <span className="mt-1 whitespace-normal text-xs leading-5 opacity-75">{option.description}</span>
+                    <span className="mt-1 whitespace-normal text-xs leading-5">{option.description}</span>
                   </span>
                 </Button>
               );
@@ -137,13 +145,17 @@ export const RoomCreateModal: React.FC<RoomCreateModalProps> = ({
           </div>
           <Input
             label={t('roomName')}
+            aria-label={HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE}
             placeholder={t('enterRoomName')}
             value={roomName}
             onChange={(event) => onRoomNameChange(event.target.value)}
+            maxLength={ROOM_NAME_MAX_LENGTH}
             isRequired
-            isInvalid={!!nameError}
-            errorMessage={nameError}
-            description={t('roomNameMaxLength')}
+            isInvalid={Boolean(displayedNameError)}
+            errorMessage={displayedNameError}
+            description={displayedNameError ? undefined : t('roomNameCharactersRemaining', {
+              count: Math.max(0, ROOM_NAME_MAX_LENGTH - roomName.length),
+            })}
           />
           {createError && (
             <p role="alert" className="text-sm text-danger">
@@ -152,6 +164,7 @@ export const RoomCreateModal: React.FC<RoomCreateModalProps> = ({
           )}
           <Input
             label={`${t('description')} (${t('optional')})`}
+            aria-label={HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE}
             placeholder={t('describeRoom')}
             value={roomDescription}
             onChange={(event) => onRoomDescriptionChange(event.target.value)}
@@ -165,6 +178,7 @@ export const RoomCreateModal: React.FC<RoomCreateModalProps> = ({
             <Input
               type="password"
               label={`${t('password')} (${t('optional')})`}
+              aria-label={HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               autoComplete="new-password"
@@ -193,8 +207,8 @@ export const RoomCreateModal: React.FC<RoomCreateModalProps> = ({
             color="secondary"
             onPress={() => onCreate(buildCreateOptions())}
             isLoading={isCreating}
-            isDisabled={!roomName.trim() || isCreating || !scheduleReady}
-            className="bg-[#c96442] text-[#faf9f5]"
+            isDisabled={!roomNameValidation.ok || isCreating || !scheduleReady}
+            className="bg-secondary text-secondary-foreground"
           >
             {t('create')}
           </Button>

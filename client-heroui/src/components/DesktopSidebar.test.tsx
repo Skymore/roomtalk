@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import React from 'react';
-import { cleanup, render, screen, type RenderOptions } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, type RenderOptions } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Room } from '../utils/types';
 import { DesktopSidebar } from './DesktopSidebar';
@@ -70,7 +70,11 @@ const codeAgentRoom: Room = {
   type: 'codeAgent',
 };
 
-const renderSidebar = (currentRoom: Room | null, options?: RenderOptions) => render(
+const renderSidebar = (
+  currentRoom: Room | null,
+  options?: RenderOptions,
+  propOverrides: Partial<React.ComponentProps<typeof DesktopSidebar>> = {},
+) => render(
   <>
     <DesktopSidebar
       clientId="client-1"
@@ -91,6 +95,7 @@ const renderSidebar = (currentRoom: Room | null, options?: RenderOptions) => ren
       onUnsaveRoom={vi.fn()}
       onRenameRoom={vi.fn()}
       isCodeAgentEnabled
+      {...propOverrides}
     />
     <div
       data-code-agent-workspace-layout="true"
@@ -206,6 +211,26 @@ describe('DesktopSidebar', () => {
     expect(highlight?.className).toContain('w-0.5');
     expect(highlight?.className).toContain('ml-px');
     expect(highlight?.className).toContain('z-50');
+  });
+
+  it('preserves the compact collapsed sidebar and its accessible expand control', () => {
+    renderSidebar(null);
+
+    const sidebar = screen.getByLabelText('resizeSidebar').closest('aside') as HTMLElement;
+    fireEvent.click(screen.getByRole('button', { name: 'collapseSidebar' }));
+
+    expect(sidebar.style.width).toBe('72px');
+    expect(screen.getByRole('button', { name: 'expandSidebar' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'createRoomFromSidebar' })).toBeTruthy();
+  });
+
+  it('announces a modal task before opening room creation', () => {
+    const onModalTaskStart = vi.fn();
+    renderSidebar(null, undefined, { onModalTaskStart });
+
+    fireEvent.click(screen.getByRole('button', { name: 'createRoomFromSidebar' }));
+
+    expect(onModalTaskStart).toHaveBeenCalledTimes(1);
   });
 
   it('only shrinks the right file panel when the shell cannot fit the current three-column layout', () => {

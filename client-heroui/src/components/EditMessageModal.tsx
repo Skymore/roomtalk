@@ -12,9 +12,6 @@ import {
 // --- Remove Modal Styling object ---
 // const customStyles: Modal.Styles = { /* ... */ };
 
-// Make sure to bind modal to your appElement
-// Modal.setAppElement('#root');
-
 interface EditMessageModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -130,7 +127,6 @@ export const EditMessageModal: React.FC<EditMessageModalProps> = ({
       // Apply content classes directly
       className="relative m-4 w-full max-w-lg rounded-2xl border border-[#dedbd0] bg-[#faf9f5] p-5 text-[#141413] shadow-xl outline-none transition-all duration-200 dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5]"
       contentLabel={t('editMessage')}
-      ariaHideApp={false} // Set to true if you configure appElement
     >
       {message && ( // Only render content if message exists
         <div className="flex flex-col">
@@ -152,7 +148,7 @@ export const EditMessageModal: React.FC<EditMessageModalProps> = ({
             variant="bordered"
             className="text-sm mb-4" // Use text-sm for consistency
             classNames={{
-              input: "text-[#141413] dark:text-[#faf9f5] text-sm leading-normal placeholder:text-[#87867f]",
+              input: "text-[#141413] dark:text-[#faf9f5] text-sm leading-normal placeholder:text-[#5e5d59]",
               inputWrapper: "p-2 bg-[#e8e6dc] dark:bg-[#30302e] border-[#dedbd0] dark:border-[#4d4c48] focus-within:border-[#c96442] transition-colors",
             }}
             placeholder={t('enterYourMessage')} // Use translation for placeholder
@@ -183,7 +179,7 @@ export const EditMessageModal: React.FC<EditMessageModalProps> = ({
                 size="sm"
                 onPress={handleSaveAndAskAIClick}
                 title={t('saveAndAskAITitle')}
-                className="bg-[#c96442] text-[#faf9f5] transition-colors hover:bg-[#b85737]"
+                className="bg-secondary text-secondary-foreground transition-colors hover:bg-[#94462f] dark:hover:bg-[#e08a6a]"
               >
                 <Icon icon="lucide:sparkles" className="mr-1" width={14} height={14}/> {t('saveAndAskAI')}
               </Button>

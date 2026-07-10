@@ -2,6 +2,7 @@ import React from 'react';
 import { Button, Select, SelectItem, Switch } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
+import { HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE } from '../utils/accessibility';
 
 const DAY_OPTIONS = [
   { value: 0, labelKey: 'daySun' },
@@ -71,7 +72,7 @@ const selectClassNames = {
   trigger: 'min-h-11 h-11 rounded-lg border border-[#dedbd0] bg-[#faf9f5] shadow-none dark:border-[#30302e] dark:bg-[#1d1d1b]',
   value: 'text-sm font-semibold text-[#141413] dark:text-[#faf9f5]',
   popoverContent: 'border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]',
-  listboxWrapper: 'max-h-56 overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]',
+  listboxWrapper: 'max-h-56 overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#5e5d59_transparent]',
 } as const;
 
 const HOUR_OPTIONS = Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, '0'));
@@ -112,7 +113,7 @@ const TimeField: React.FC<TimeFieldProps> = ({ label, value, onChange }) => {
             <SelectItem key={item} textValue={item}>{item}</SelectItem>
           ))}
         </Select>
-        <span className="text-sm font-semibold text-[#87867f] dark:text-[#8f8d86]">:</span>
+        <span className="text-sm font-semibold text-[#5e5d59] dark:text-[#8f8d86]">:</span>
         <Select
           aria-label={`${label} (minute)`}
           selectedKeys={[minute]}
@@ -173,7 +174,7 @@ export const PostingScheduleEditor: React.FC<PostingScheduleEditorProps> = ({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[#87867f] dark:text-[#b0aea5]">
+        <div className="flex min-w-0 items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[#5e5d59] dark:text-[#b0aea5]">
           <Icon icon="lucide:clock-3" className="h-3.5 w-3.5 flex-shrink-0" />
           <span className="truncate">{t('postingSchedule')}</span>
         </div>
@@ -194,7 +195,7 @@ export const PostingScheduleEditor: React.FC<PostingScheduleEditorProps> = ({
         <div className="space-y-3">
           <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,1fr)_2rem_minmax(0,1fr)]">
             <TimeField label={t('startTime')} value={startTime} onChange={onStartTimeChange} />
-            <div className="hidden h-11 items-center justify-center text-[#87867f] dark:text-[#8f8d86] sm:flex">
+            <div className="hidden h-11 items-center justify-center text-[#5e5d59] dark:text-[#8f8d86] sm:flex">
               <Icon icon="lucide:arrow-right" className="h-4 w-4" />
             </div>
             <TimeField label={t('endTime')} value={endTime} onChange={onEndTimeChange} />
@@ -202,6 +203,7 @@ export const PostingScheduleEditor: React.FC<PostingScheduleEditorProps> = ({
 
           <Select
             label={t('timezone')}
+            aria-label={HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE}
             selectedKeys={[timezone]}
             onSelectionChange={(keys) => {
               const selected = Array.from(keys)[0]?.toString();
@@ -211,7 +213,7 @@ export const PostingScheduleEditor: React.FC<PostingScheduleEditorProps> = ({
               trigger: 'min-h-11 rounded-lg border border-[#dedbd0] bg-[#faf9f5] shadow-none dark:border-[#30302e] dark:bg-[#1d1d1b]',
               value: 'text-sm font-semibold text-[#141413] dark:text-[#faf9f5]',
               popoverContent: 'border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]',
-              listboxWrapper: 'max-h-64 overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]',
+              listboxWrapper: 'max-h-64 overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#5e5d59_transparent]',
             }}
           >
             {timezoneOptions.map((item) => (
@@ -231,7 +233,7 @@ export const PostingScheduleEditor: React.FC<PostingScheduleEditorProps> = ({
                   variant={selected ? 'solid' : 'flat'}
                   className={`h-8 min-w-0 rounded-lg px-0 text-xs font-semibold ${
                     selected
-                      ? 'bg-[#c96442] text-[#faf9f5] shadow-[0_0_0_1px_rgba(201,100,66,0.65)]'
+                      ? 'bg-secondary text-secondary-foreground shadow-[0_0_0_1px_rgba(173,82,55,0.65)]'
                       : 'bg-[#e8e6dc] text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]'
                   }`}
                   onPress={() => toggleDay(day.value)}

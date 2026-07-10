@@ -34,19 +34,19 @@ export function CodeAgentMobileReviewSelectionActionBar({
       {onOpenComment ? (
         <button
           type="button"
-          className="pointer-events-auto inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-full bg-[#c96442] px-4 text-sm font-semibold text-[#faf9f5] shadow-lg shadow-[#141413]/15 transition-colors hover:bg-[#ad5237] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c96442] dark:bg-[#d97757] dark:text-[#141413] dark:hover:bg-[#ffb197]"
+          className="pointer-events-auto inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-full bg-secondary px-4 text-sm font-semibold text-secondary-foreground shadow-lg shadow-[#141413]/15 transition-colors hover:bg-[#94462f] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c96442] dark:hover:bg-[#ffb197]"
           onClick={onOpenComment}
         >
           {content}
         </button>
       ) : (
-        <div className="pointer-events-auto inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-full bg-[#c96442] px-4 text-sm font-semibold text-[#faf9f5] shadow-lg shadow-[#141413]/15 dark:bg-[#d97757] dark:text-[#141413]">
+        <div className="pointer-events-auto inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-full bg-secondary px-4 text-sm font-semibold text-secondary-foreground shadow-lg shadow-[#141413]/15">
           {content}
         </div>
       )}
       <button
         type="button"
-        className="pointer-events-auto inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#c96442] text-[#faf9f5] shadow-lg shadow-[#141413]/15 transition-colors hover:bg-[#ad5237] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c96442] dark:bg-[#d97757] dark:text-[#141413] dark:hover:bg-[#ffb197]"
+        className="pointer-events-auto inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-secondary text-secondary-foreground shadow-lg shadow-[#141413]/15 transition-colors hover:bg-[#94462f] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c96442] dark:hover:bg-[#ffb197]"
         aria-label={clearLabel}
         onClick={onClear}
       >

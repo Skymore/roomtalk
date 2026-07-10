@@ -2,7 +2,7 @@ import { customAlphabet } from 'nanoid';
 import { Logger } from '../logger';
 import { AICost, CodeAgentQueueState, MediaAsset, Message, MessageMediaAsset, Room, RoomAgentTurn, RoomAICostTotal, RoomCodeAgentStatus, RoomMember, RoomMemberRole, RoomPostingSchedule, RoomSandboxStatus, RoomType } from '../types';
 import { getAIStreamOwnerId, InterruptedStreamingMessageRecoveryOptions } from '../services/aiStreamRecovery';
-import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
+import { AssistantRunRecord, AssistantRunUpdate, AudioTranscriptionRecord, AudioTranscriptionUpdate, ClientAccount, ClientAuthTokenRecord, CodeAgentQueueMessageUpdate, CreateGoogleAccountInput, DEFAULT_ROOM_MESSAGE_PAGE_LIMIT, DurableRoomStore, GoogleAccountProfile, IdempotentMessageAppendResult, MediaHistoryPage, MediaHistoryPageOptions, MediaMessageAppendResult, OutboxClaimOptions, OutboxEventRecord, OutboxFailOptions, PendingMediaUpload, PushSubscriptionRecord, RoomMessagePageOptions, RoomSandboxReplacement, RoomSettingsUpdate, SavePushSubscriptionInput } from './store';
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_SQL } from './postgresSchema';
 import { MediaObjectStorage } from '../services/mediaObjectStorage';
 
@@ -53,6 +53,7 @@ type MessageRow = {
   id: string;
   room_id: string;
   client_id: string;
+  client_message_id?: string | null;
   content: string;
   timestamp: string | Date;
   updated_at?: string | Date | null;
@@ -214,7 +215,7 @@ type ClientAccountRow = {
 };
 
 const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, room_version, updated_at';
-const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ui_payload, code_agent_mode, code_agent_queued_input, code_agent_image_message_ids, model_step_id, model_step_sequence';
+const MESSAGE_COLUMNS = 'id, room_id, client_id, client_message_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ui_payload, code_agent_mode, code_agent_queued_input, code_agent_image_message_ids, model_step_id, model_step_sequence';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, filename, width, height, duration_ms, uploaded_by_client_id, created_at';
 const PENDING_MEDIA_UPLOAD_COLUMNS = 'id, room_id, object_key, kind, mime_type, byte_size, filename, uploaded_by_client_id, expires_at, created_at';
@@ -525,6 +526,7 @@ const mapMessage = (row: MessageRow): Message => {
     messageType: row.message_type,
   };
 
+  if (row.client_message_id) message.clientMessageId = row.client_message_id;
   if (row.updated_at) message.updatedAt = toIsoString(row.updated_at);
   if (row.username) message.username = row.username;
   if (avatar) message.avatar = avatar;
@@ -585,6 +587,7 @@ const messageParams = (message: Message, position: number): unknown[] => [
   position,
   message.modelStepId || null,
   message.modelStepSequence ?? null,
+  message.clientMessageId || null,
 ];
 
 const assistantRunParams = (run: AssistantRunRecord): unknown[] => [
@@ -659,9 +662,10 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   code_agent_image_message_ids,
   position,
   model_step_id,
-  model_step_sequence
+  model_step_sequence,
+  client_message_id
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22::jsonb, $23::jsonb, $24, $25, $26::jsonb, $27::jsonb, $28, $29, $30
+  $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22::jsonb, $23::jsonb, $24, $25, $26::jsonb, $27::jsonb, $28, $29, $30, $31
 ) ON CONFLICT (id) DO UPDATE SET
   room_id = EXCLUDED.room_id,
   client_id = EXCLUDED.client_id,
@@ -691,6 +695,7 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   code_agent_mode = EXCLUDED.code_agent_mode,
   code_agent_queued_input = EXCLUDED.code_agent_queued_input,
   code_agent_image_message_ids = EXCLUDED.code_agent_image_message_ids,
+  client_message_id = EXCLUDED.client_message_id,
   position = room_messages.position`;
 
 const INSERT_ASSISTANT_RUN_SQL = `INSERT INTO assistant_runs (
@@ -847,6 +852,11 @@ export class PostgresStore implements DurableRoomStore {
   }
 
   async appendMessage(message: Message): Promise<Room | null> {
+    const result = await this.appendMessageIdempotent(message);
+    return result?.room || null;
+  }
+
+  async appendMessageIdempotent(message: Message): Promise<IdempotentMessageAppendResult | null> {
     try {
       return await this.transaction(async client => {
         const room = await client.query<RoomRow>(
@@ -856,6 +866,23 @@ export class PostgresStore implements DurableRoomStore {
         if (room.rows.length === 0) {
           this.logger.warn('Cannot append message to missing PostgreSQL room', { roomId: message.roomId, messageId: message.id });
           return null;
+        }
+
+        if (message.clientMessageId) {
+          const existing = await client.query<MessageRow>(
+            `SELECT ${MESSAGE_COLUMNS}
+            FROM room_messages
+            WHERE room_id = $1 AND client_id = $2 AND client_message_id = $3
+            LIMIT 1`,
+            [message.roomId, message.clientId, message.clientMessageId]
+          );
+          if (existing.rows[0]) {
+            return {
+              room: mapRoom(room.rows[0]),
+              message: mapMessage(existing.rows[0]),
+              inserted: false,
+            };
+          }
         }
 
         const nextPosition = await client.query<{ position: number | string }>(
@@ -875,7 +902,9 @@ export class PostgresStore implements DurableRoomStore {
           [message.roomId, message.timestamp]
         );
         this.logger.debug('Message appended to PostgreSQL', { roomId: message.roomId, messageId: message.id });
-        return updatedRoom.rows[0] ? mapRoom(updatedRoom.rows[0]) : null;
+        return updatedRoom.rows[0]
+          ? { room: mapRoom(updatedRoom.rows[0]), message, inserted: true }
+          : null;
       });
     } catch (error) {
       this.logger.error('Error appending message to PostgreSQL', { error, roomId: message.roomId, messageId: message.id });

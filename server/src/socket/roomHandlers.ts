@@ -13,6 +13,24 @@ const MAX_ROOM_NAME_LENGTH = 20;
 const MAX_CLIENT_ID_LENGTH = 128;
 const CLIENT_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
 
+// Socket.IO awaits neither sibling listeners nor listeners on other sockets.
+// Serialize access-changing operations by room as well as by socket so a join
+// cannot commit from a room/member snapshot that was deleted or revoked while
+// it awaited password/member storage.
+const roomAccessMutationQueues = new Map<string, Promise<void>>();
+const serializeRoomAccessMutation = <T>(roomId: string, operation: () => Promise<T>): Promise<T> => {
+  const previous = roomAccessMutationQueues.get(roomId) ?? Promise.resolve();
+  const result = previous.then(operation);
+  const tail = result.then(() => undefined, () => undefined);
+  roomAccessMutationQueues.set(roomId, tail);
+  void tail.then(() => {
+    if (roomAccessMutationQueues.get(roomId) === tail) {
+      roomAccessMutationQueues.delete(roomId);
+    }
+  });
+  return result;
+};
+
 type RenameRoomAck = {
   success: boolean;
   room?: Room;
@@ -232,7 +250,31 @@ export function registerRoomHandlers({
   codeAgentSandboxService,
   publishedStaticSiteService,
 }: SocketConnectionContext) {
-  socket.on('register', async (payload: unknown, callback?: (result: RegisterAck) => void) => {
+  // Socket.IO invokes async listeners independently; it does not await one
+  // room mutation before dispatching the next packet. Keep every operation
+  // that changes this socket's room/presence state on one per-socket chain so
+  // join A, join B, leave, re-register, and disconnect cannot commit out of
+  // order after awaiting the store.
+  let roomMembershipMutationQueue: Promise<void> = Promise.resolve();
+  let disconnectingRoomIds: string[] = [];
+  const serializeRoomMembershipMutation = <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = roomMembershipMutationQueue.then(operation);
+    roomMembershipMutationQueue = result.then(() => undefined, () => undefined);
+    return result;
+  };
+
+  const getTrackedChatRoomIds = async (userId: string): Promise<string[]> => {
+    const storedRoomIds = await store.getUserRooms(socket.id);
+    // The realtime store can be briefly incomplete after an older deployment
+    // or interrupted mutation. Union it with Socket.IO's actual memberships so
+    // a repair join also removes an otherwise untracked ghost subscription.
+    const socketRoomIds = [...socket.rooms].filter(roomId => (
+      roomId !== socket.id && roomId !== userId
+    ));
+    return [...new Set([...storedRoomIds, ...socketRoomIds])];
+  };
+
+  socket.on('register', (payload: unknown, callback?: (result: RegisterAck) => void) => serializeRoomMembershipMutation(async () => {
     const { clientId, username, clientAuthToken, browserInstanceId } = parseRegisterPayload(payload);
     const userId = clientId || uuidv4();
     try {
@@ -246,7 +288,7 @@ export function registerRoomHandlers({
       const isSwitchingUser = Boolean(previousUserId && previousUserId !== userId);
       if (isSwitchingUser && previousUserId) {
         const [previousRooms, previousBrowserInstanceId] = await Promise.all([
-          store.getUserRooms(socket.id),
+          getTrackedChatRoomIds(previousUserId),
           store.getBrowserInstanceId(socket.id),
         ]);
 
@@ -297,7 +339,7 @@ export function registerRoomHandlers({
       socketLogger.error('Failed to register client', { socketId: socket.id, clientId: userId, error });
       callback?.({ success: false, error: 'Failed to register client' });
     }
-  });
+  }));
 
   socket.on('set_username', async (rawUsername: unknown) => {
     const nickname = normalizeNickname(rawUsername);
@@ -463,7 +505,7 @@ export function registerRoomHandlers({
     }
   });
 
-  socket.on('join_room', async (payload: unknown, callback?: (result: JoinRoomAck) => void) => {
+  socket.on('join_room', (payload: unknown, callback?: (result: JoinRoomAck) => void) => serializeRoomMembershipMutation(async () => {
     const { roomId, password } = parseJoinRoomPayload(payload);
     const userId = await store.getClientId(socket.id);
     if (!userId) {
@@ -479,6 +521,8 @@ export function registerRoomHandlers({
       callback?.({ success: false, error: 'Room ID is required' });
       return;
     }
+
+    return serializeRoomAccessMutation(roomId, async () => {
 
     const room = await store.getRoomById(roomId);
     if (!room) {
@@ -503,8 +547,55 @@ export function registerRoomHandlers({
       }
     }
 
-    const prevRooms = await store.getUserRooms(socket.id);
+    const existingMember = await store.getRoomMember(roomId, userId);
+    const isCreator = room.creatorId === userId;
+    if (room.hasPassword && !existingMember && !isCreator) {
+      const passwordHash = await store.readRoomPasswordHash(roomId);
+      const passwordOk = await verifyRoomPassword(password || '', passwordHash);
+      if (!passwordOk) {
+        socketLogger.warn('Client tried to join password-protected room with invalid password', { socketId: socket.id, userId, roomId });
+        socket.emit('error', { message: 'Room password is required or incorrect' });
+        callback?.({ success: false, error: 'Room password is required or incorrect' });
+        return;
+      }
+    }
+
+    const persistentMember = existingMember || await store.addRoomMember(roomId, userId, isCreator ? 'owner' : 'member');
+    if (!persistentMember) {
+      socketLogger.error('Failed to persist room membership while joining room', { socketId: socket.id, userId, roomId });
+      socket.emit('error', { message: 'Failed to join room' });
+      callback?.({ success: false, error: 'Failed to join room' });
+      return;
+    }
+
+    // Join the target subscription provisionally, then re-read durable room
+    // access. This closes the cross-process window where another Socket.IO
+    // worker deletes the room or removes the member after our first snapshot.
+    // The previous healthy room is left only after this commit-time check.
+    const prevRooms = await getTrackedChatRoomIds(userId);
     const browserInstanceId = await store.getBrowserInstanceId(socket.id);
+    socket.join(roomId);
+    const memberCount = await store.updateRoomMemberCount(roomId, userId, socket.id, true);
+    if (browserInstanceId) {
+      await store.updateRoomBrowserPresence(roomId, browserInstanceId, socket.id, true);
+    }
+
+    const [committedRoom, committedMember] = await Promise.all([
+      store.getRoomById(roomId),
+      store.getRoomMember(roomId, userId),
+    ]);
+    if (!committedRoom || !committedMember) {
+      socket.leave(roomId);
+      await store.updateRoomMemberCount(roomId, userId, socket.id, false);
+      if (browserInstanceId) {
+        await store.updateRoomBrowserPresence(roomId, browserInstanceId, socket.id, false);
+      }
+      const error = committedRoom ? 'Room access was removed' : 'Room not found';
+      socket.emit('error', { message: error });
+      callback?.({ success: false, error });
+      return;
+    }
+
     for (const r of prevRooms.filter((previousRoomId) => previousRoomId !== roomId)) {
       const memberCount = await store.updateRoomMemberCount(r, userId, socket.id, false);
       if (browserInstanceId) {
@@ -528,34 +619,7 @@ export function registerRoomHandlers({
       socket.leave(r);
     }
 
-    const existingMember = await store.getRoomMember(roomId, userId);
-    const isCreator = room.creatorId === userId;
-    if (room.hasPassword && !existingMember && !isCreator) {
-      const passwordHash = await store.readRoomPasswordHash(roomId);
-      const passwordOk = await verifyRoomPassword(password || '', passwordHash);
-      if (!passwordOk) {
-        socketLogger.warn('Client tried to join password-protected room with invalid password', { socketId: socket.id, userId, roomId });
-        socket.emit('error', { message: 'Room password is required or incorrect' });
-        callback?.({ success: false, error: 'Room password is required or incorrect' });
-        return;
-      }
-    }
-
-    const persistentMember = existingMember || await store.addRoomMember(roomId, userId, isCreator ? 'owner' : 'member');
-    if (!persistentMember) {
-      socketLogger.error('Failed to persist room membership while joining room', { socketId: socket.id, userId, roomId });
-      socket.emit('error', { message: 'Failed to join room' });
-      callback?.({ success: false, error: 'Failed to join room' });
-      return;
-    }
-
-    socket.join(roomId);
     await store.storeUserRooms(socket.id, [roomId]);
-
-    const memberCount = await store.updateRoomMemberCount(roomId, userId, socket.id, true);
-    if (browserInstanceId) {
-      await store.updateRoomBrowserPresence(roomId, browserInstanceId, socket.id, true);
-    }
     const joinEvent = createRoomMemberEvent({
       roomId,
       userId,
@@ -565,22 +629,22 @@ export function registerRoomHandlers({
 
     io.to(roomId).emit('room_member_change', joinEvent);
     const actor = await getRoomActor(store, roomId, userId);
-    const permissions = buildRoomPermissions(actor, roomId, userId, room);
+    const permissions = buildRoomPermissions(actor, roomId, userId, committedRoom);
     socket.emit('room_permissions', permissions);
 
     socketLogger.info('User joined room', {
       socketId: socket.id,
       userId,
       roomId,
-      roomName: room.name,
+      roomName: committedRoom.name,
       memberCount,
     });
 
-    callback?.({ success: true, room, permissions, memberCount });
+    callback?.({ success: true, room: committedRoom, permissions, memberCount });
+    });
+  }));
 
-  });
-
-  socket.on('leave_room', async (roomId: string) => {
+  socket.on('leave_room', (roomId: string) => serializeRoomMembershipMutation(async () => {
     const userId = await store.getClientId(socket.id);
     if (!userId) return;
 
@@ -608,7 +672,7 @@ export function registerRoomHandlers({
 
     // Leaving a room only changes realtime presence. Durable membership is the
     // access grant for password-protected rooms and administrator roles.
-  });
+  }));
 
   socket.on('save_room', async (payload: unknown, callback?: (result: RoomSaveAck) => void) => {
     const clientId = await store.getClientId(socket.id);
@@ -658,7 +722,8 @@ export function registerRoomHandlers({
     callback?.({ success: true, rooms: savedRooms });
   });
 
-  socket.on('delete_room', async (roomId: string, callback?: (result: { success: boolean; message?: string }) => void) => {
+  socket.on('delete_room', (roomId: string, callback?: (result: { success: boolean; message?: string }) => void) => serializeRoomMembershipMutation(
+    () => serializeRoomAccessMutation(roomId || `invalid:${socket.id}`, async () => {
     const clientId = await store.getClientId(socket.id);
     if (!clientId) {
       socketLogger.warn('Unregistered client tried to delete room', { socketId: socket.id, roomId });
@@ -688,6 +753,8 @@ export function registerRoomHandlers({
 
       socketLogger.info('Attempting to delete room', { socketId: socket.id, clientId, roomId, roomName: room.name });
 
+      const subscribedSocketIds = await io.in(roomId).allSockets();
+
       if (room.type === 'codeAgent' && room.sandboxId && codeAgentSandboxService) {
         await codeAgentSandboxService.destroy(room.sandboxId).catch(error => {
           socketLogger.warn('Failed to destroy code-agent sandbox while deleting room', {
@@ -701,8 +768,21 @@ export function registerRoomHandlers({
       }
       await publishedStaticSiteService?.deleteSitesForRoom(roomId);
       await store.deleteRoom(roomId, clientId);
+      if (await store.getRoomById(roomId)) {
+        throw new Error('Room deletion did not commit');
+      }
 
       socketLogger.info('Room deleted successfully', { socketId: socket.id, clientId, roomId });
+
+      // Notify every live subscriber before removing the Socket.IO room. The
+      // client treats this as the authoritative invalidation boundary.
+      io.to(roomId).emit('room_removed', roomId);
+      io.to(roomId).emit('room_permissions_invalidated', roomId);
+      for (const subscribedSocketId of subscribedSocketIds) {
+        const trackedRooms = await store.getUserRooms(subscribedSocketId);
+        await store.storeUserRooms(subscribedSocketId, trackedRooms.filter(id => id !== roomId));
+      }
+      io.in(roomId).socketsLeave(roomId);
 
       const userSockets = await io.in(clientId).allSockets();
       const updatedRooms = await store.readRoomsByUser(clientId);
@@ -723,7 +803,8 @@ export function registerRoomHandlers({
       });
       callback?.({ success: false, message: 'Failed to delete room due to server error' });
     }
-  });
+    })
+  ));
 
   socket.on('rename_room', async (
     data: { roomId?: string; name?: string },
@@ -845,10 +926,10 @@ export function registerRoomHandlers({
     callback?.({ success: true, members });
   });
 
-  socket.on('remove_room_member', async (
+  socket.on('remove_room_member', (
     data: { roomId?: string; targetClientId?: unknown },
     callback?: (result: { success: boolean; error?: string }) => void,
-  ) => {
+  ) => serializeRoomMembershipMutation(() => serializeRoomAccessMutation(data?.roomId || `invalid:${socket.id}`, async () => {
     const clientId = await store.getClientId(socket.id);
     const roomId = data?.roomId;
     const target = parseTargetClientId(data?.targetClientId);
@@ -901,10 +982,10 @@ export function registerRoomHandlers({
     const targetSockets = await io.in(target.clientId).allSockets();
     for (const targetSocketId of targetSockets) {
       const targetRooms = await store.getUserRooms(targetSocketId);
-      if (!targetRooms.includes(roomId)) {
-        continue;
-      }
-
+      // Do not gate invalidation on tracked rooms. A socket can already be in
+      // the provisional Socket.IO subscription while a cross-worker join has
+      // not reached storeUserRooms yet; that is exactly the socket that must
+      // observe this removal before a late successful join acknowledgement.
       const memberCount = await store.updateRoomMemberCount(roomId, target.clientId, targetSocketId, false);
       const targetBrowserInstanceId = await store.getBrowserInstanceId(targetSocketId);
       if (targetBrowserInstanceId) {
@@ -928,7 +1009,7 @@ export function registerRoomHandlers({
     io.to(roomId).emit('room_role_members_updated', roomId);
     io.to(target.clientId).emit('room_list', await store.readRoomsByUser(target.clientId));
     callback?.({ success: true });
-  });
+  })));
 
   socket.on('lookup_room_client', async (
     data: { roomId?: string; targetClientId?: unknown },
@@ -1222,11 +1303,22 @@ export function registerRoomHandlers({
     callback?.({ success: true, room: updatedRoom });
   });
 
-  socket.on('disconnect', async (reason: string) => {
+  // Socket.IO has already cleared socket.rooms by the time `disconnect` fires.
+  // Snapshot them one event earlier so cleanup can repair presence records that
+  // were missing from the realtime store as well.
+  socket.on('disconnecting', () => {
+    disconnectingRoomIds = [...socket.rooms].filter(roomId => roomId !== socket.id);
+  });
+
+  socket.on('disconnect', (reason: string) => serializeRoomMembershipMutation(async () => {
     const userId = await store.getClientId(socket.id);
     if (userId) {
       socketLogger.info('Client disconnected', { socketId: socket.id, userId, reason });
-      const rooms = await store.getUserRooms(socket.id);
+      const storedRooms = await store.getUserRooms(socket.id);
+      const rooms = [...new Set([
+        ...storedRooms,
+        ...disconnectingRoomIds.filter(roomId => roomId !== userId),
+      ])];
       const browserInstanceId = await store.getBrowserInstanceId(socket.id);
       for (const roomId of rooms) {
         const memberCount = await store.updateRoomMemberCount(roomId, userId, socket.id, false);
@@ -1247,7 +1339,7 @@ export function registerRoomHandlers({
     } else {
       socketLogger.info(`Unidentified socket disconnected: ${socket.id}`, { reason });
     }
-  });
+  }));
 
   socket.on('get_room_by_id', async (roomId: string, callback: (room: Room | null) => void) => {
     const room = await store.getRoomById(roomId);

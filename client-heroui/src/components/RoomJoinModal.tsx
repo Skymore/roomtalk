@@ -2,6 +2,7 @@ import React from 'react';
 import { Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Button, Input } from "@heroui/react";
 import { useTranslation } from "react-i18next";
 import { Room } from '../utils/types';
+import { HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE } from '../utils/accessibility';
 
 interface RoomJoinModalProps {
   roomToJoin: Room | null;
@@ -33,6 +34,7 @@ export const RoomJoinModal: React.FC<RoomJoinModalProps> = ({
             <Input
               type="password"
               label={t('password')}
+              aria-label={HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE}
               placeholder={t('enterPassword')}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
@@ -48,7 +50,7 @@ export const RoomJoinModal: React.FC<RoomJoinModalProps> = ({
             color="secondary"
             onPress={() => handleConfirmJoin(true, password)}
             isDisabled={requiresPassword && !password.trim()}
-            className="bg-[#c96442] text-[#faf9f5]"
+            className="bg-secondary text-secondary-foreground"
           >
             {t("join")}
           </Button>

@@ -10,6 +10,10 @@ const DEFAULT_ROOM_MESSAGES_CACHE_TTL_SECONDS = 30;
 export const DEFAULT_ROOM_MESSAGES_CACHE_MAX_BYTES = 8 * 1024 * 1024;
 const ROOM_MESSAGES_CACHE_KEY_PREFIX = 'cache:room:';
 const ROOM_MESSAGES_CACHE_KEY_SUFFIX = ':messages';
+const getRoomClientMessageIdsKey = (roomId: string) => `room:${roomId}:client_message_ids`;
+const getClientMessageIdField = (clientId: string, clientMessageId: string) => (
+  `${clientId.length}:${clientId}${clientMessageId}`
+);
 const getPersistentRoomMembersKey = (roomId: string) => `room:${roomId}:room_members`;
 const CLIENT_NICKNAMES_KEY = 'client:nicknames';
 const getRoomMediaAssetsKey = (roomId: string) => `room:${roomId}:media_assets`;
@@ -309,12 +313,49 @@ return redis.call('SCARD', KEYS[1])
 const APPEND_MESSAGE_LIST_SCRIPT = `
 local roomJson = redis.call('HGET', KEYS[1], ARGV[1])
 if not roomJson then
-  return { 0, '' }
+  return { 0, '', '' }
 end
 
 local ok, room = pcall(cjson.decode, roomJson)
 if not ok then
-  return { 0, '' }
+  return { 0, '', '' }
+end
+
+local messagePayload = ARGV[2]
+local dedupeField = ARGV[4]
+if dedupeField ~= '' then
+  local existingMessageId = redis.call('HGET', KEYS[3], dedupeField)
+  local indexReadyField = '__roomtalk_index_ready__'
+  local indexReady = redis.call('HEXISTS', KEYS[3], indexReadyField)
+  if existingMessageId or indexReady == 0 then
+    local existing = redis.call('LRANGE', KEYS[2], 0, -1)
+    local canonicalPayload = ''
+    for i = 1, #existing do
+      local existingOk, decoded = pcall(cjson.decode, existing[i])
+      if existingOk then
+        if existingMessageId and decoded['id'] == existingMessageId then
+          canonicalPayload = existing[i]
+        end
+        if indexReady == 0 and decoded['clientId'] and decoded['clientMessageId'] and decoded['id'] then
+          local clientId = tostring(decoded['clientId'])
+          local historicalField = tostring(string.len(clientId)) .. ':' .. clientId .. tostring(decoded['clientMessageId'])
+          redis.call('HSETNX', KEYS[3], historicalField, tostring(decoded['id']))
+          if historicalField == dedupeField and canonicalPayload == '' then
+            canonicalPayload = existing[i]
+          end
+        end
+      end
+    end
+    if indexReady == 0 then
+      redis.call('HSET', KEYS[3], indexReadyField, '1')
+    end
+    if canonicalPayload ~= '' then
+      return { 2, roomJson, canonicalPayload }
+    end
+    if existingMessageId then
+      redis.call('HDEL', KEYS[3], dedupeField)
+    end
+  end
 end
 
 local currentLastActivityAt = room['lastActivityAt'] or room['createdAt'] or ''
@@ -323,10 +364,13 @@ if ARGV[3] > currentLastActivityAt then
 end
 room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
 room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
-local messagePayload = ARGV[2]
 redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
 redis.call('RPUSH', KEYS[2], messagePayload)
-return { 1, cjson.encode(room) }
+if dedupeField ~= '' then
+  redis.call('HSET', KEYS[3], dedupeField, ARGV[5])
+  redis.call('HSET', KEYS[3], '__roomtalk_index_ready__', '1')
+end
+return { 1, cjson.encode(room), messagePayload }
 `;
 
 const APPEND_MEDIA_MESSAGE_WITH_ASSET_SCRIPT = `
@@ -370,8 +414,16 @@ room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
 room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
 redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
 redis.call('DEL', KEYS[2])
+redis.call('DEL', KEYS[3])
+redis.call('HSET', KEYS[3], '__roomtalk_index_ready__', '1')
 for i = 3, #ARGV do
   redis.call('RPUSH', KEYS[2], ARGV[i])
+  local messageOk, message = pcall(cjson.decode, ARGV[i])
+  if messageOk and message['clientId'] and message['clientMessageId'] and message['id'] then
+    local clientId = tostring(message['clientId'])
+    local dedupeField = tostring(string.len(clientId)) .. ':' .. clientId .. tostring(message['clientMessageId'])
+    redis.call('HSETNX', KEYS[3], dedupeField, tostring(message['id']))
+  end
 end
 return { 1, #ARGV - 2, cjson.encode(room) }
 `;
@@ -383,8 +435,16 @@ if not roomJson then
 end
 
 redis.call('DEL', KEYS[2])
+redis.call('DEL', KEYS[3])
+redis.call('HSET', KEYS[3], '__roomtalk_index_ready__', '1')
 for i = 2, #ARGV do
   redis.call('RPUSH', KEYS[2], ARGV[i])
+  local messageOk, message = pcall(cjson.decode, ARGV[i])
+  if messageOk and message['clientId'] and message['clientMessageId'] and message['id'] then
+    local clientId = tostring(message['clientId'])
+    local dedupeField = tostring(string.len(clientId)) .. ':' .. clientId .. tostring(message['clientMessageId'])
+    redis.call('HSETNX', KEYS[3], dedupeField, tostring(message['id']))
+  end
 end
 return { 1, #ARGV - 1 }
 `;
@@ -426,8 +486,16 @@ room['messageVersion'] = (tonumber(room['messageVersion']) or 0) + 1
 room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
 redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
 redis.call('DEL', KEYS[2])
+redis.call('DEL', KEYS[3])
+redis.call('HSET', KEYS[3], '__roomtalk_index_ready__', '1')
 for i = 1, #existing do
   redis.call('RPUSH', KEYS[2], existing[i])
+  local messageOk, message = pcall(cjson.decode, existing[i])
+  if messageOk and message['clientId'] and message['clientMessageId'] and message['id'] then
+    local clientId = tostring(message['clientId'])
+    local dedupeField = tostring(string.len(clientId)) .. ':' .. clientId .. tostring(message['clientMessageId'])
+    redis.call('HSETNX', KEYS[3], dedupeField, tostring(message['id']))
+  end
 end
 
 return { 1, found, #existing, cjson.encode(room) }
@@ -526,6 +594,11 @@ for i = 1, #existing do
   local ok, decoded = pcall(cjson.decode, existing[i])
   if ok and decoded['id'] == targetId then
     found = 1
+    if decoded['clientId'] and decoded['clientMessageId'] then
+      local clientId = tostring(decoded['clientId'])
+      local dedupeField = tostring(string.len(clientId)) .. ':' .. clientId .. tostring(decoded['clientMessageId'])
+      redis.call('HDEL', KEYS[3], dedupeField)
+    end
   else
     table.insert(remaining, existing[i])
     if ok and decoded['timestamp'] and decoded['timestamp'] > latestTimestamp then
@@ -540,8 +613,16 @@ if found == 1 then
   room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
   redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
   redis.call('DEL', KEYS[2])
+  redis.call('DEL', KEYS[3])
+  redis.call('HSET', KEYS[3], '__roomtalk_index_ready__', '1')
   for i = 1, #remaining do
     redis.call('RPUSH', KEYS[2], remaining[i])
+    local messageOk, message = pcall(cjson.decode, remaining[i])
+    if messageOk and message['clientId'] and message['clientMessageId'] and message['id'] then
+      local clientId = tostring(message['clientId'])
+      local dedupeField = tostring(string.len(clientId)) .. ':' .. clientId .. tostring(message['clientMessageId'])
+      redis.call('HSETNX', KEYS[3], dedupeField, tostring(message['id']))
+    end
   end
 end
 
@@ -719,8 +800,16 @@ if found == 1 then
   room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
   redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
   redis.call('DEL', KEYS[2])
+  redis.call('DEL', KEYS[3])
+  redis.call('HSET', KEYS[3], '__roomtalk_index_ready__', '1')
   for i = 1, #remaining do
     redis.call('RPUSH', KEYS[2], remaining[i])
+    local messageOk, message = pcall(cjson.decode, remaining[i])
+    if messageOk and message['clientId'] and message['clientMessageId'] and message['id'] then
+      local clientId = tostring(message['clientId'])
+      local dedupeField = tostring(string.len(clientId)) .. ':' .. clientId .. tostring(message['clientMessageId'])
+      redis.call('HSETNX', KEYS[3], dedupeField, tostring(message['id']))
+    end
   end
 else
   remaining = existing
@@ -780,8 +869,16 @@ if found == 1 then
   room['roomVersion'] = (tonumber(room['roomVersion']) or 0) + 1
   redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(room))
   redis.call('DEL', KEYS[2])
+  redis.call('DEL', KEYS[3])
+  redis.call('HSET', KEYS[3], '__roomtalk_index_ready__', '1')
   for i = 1, #remaining do
     redis.call('RPUSH', KEYS[2], remaining[i])
+    local messageOk, message = pcall(cjson.decode, remaining[i])
+    if messageOk and message['clientId'] and message['clientMessageId'] and message['id'] then
+      local clientId = tostring(message['clientId'])
+      local dedupeField = tostring(string.len(clientId)) .. ':' .. clientId .. tostring(message['clientMessageId'])
+      redis.call('HSETNX', KEYS[3], dedupeField, tostring(message['id']))
+    end
   end
 else
   remaining = existing
@@ -832,8 +929,8 @@ const stampRoomRecord = (room: Room): Room => ({
   updatedAt: new Date().toISOString(),
 });
 
-const parseScriptRoom = (result: unknown, index: number): Room | null => {
-  if (!Array.isArray(result) || Number(result[0]) !== 1 || typeof result[index] !== 'string' || !result[index]) {
+const parseScriptRoom = (result: unknown, index: number, successStatuses: readonly number[] = [1]): Room | null => {
+  if (!Array.isArray(result) || !successStatuses.includes(Number(result[0])) || typeof result[index] !== 'string' || !result[index]) {
     return null;
   }
 
@@ -1044,20 +1141,34 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
   }
 
   async appendMessage(message: Message): Promise<Room | null> {
+    const result = await this.appendMessageIdempotent(message);
+    return result?.room || null;
+  }
+
+  async appendMessageIdempotent(message: Message) {
     try {
+      const dedupeField = message.clientMessageId
+        ? getClientMessageIdField(message.clientId, message.clientMessageId)
+        : '';
       const result = await (this.redisClient as any).eval(APPEND_MESSAGE_LIST_SCRIPT, {
-        keys: ['rooms', `room:${message.roomId}:messages`],
-        arguments: [message.roomId, JSON.stringify(message), message.timestamp],
+        keys: ['rooms', `room:${message.roomId}:messages`, getRoomClientMessageIdsKey(message.roomId)],
+        arguments: [message.roomId, JSON.stringify(message), message.timestamp, dedupeField, message.id],
       });
-      const updatedRoom = parseScriptRoom(result, 1);
-      if (!updatedRoom) {
+      const updatedRoom = parseScriptRoom(result, 1, [1, 2]);
+      const persistedMessage = parseScriptMessage(Array.isArray(result) ? result[2] : undefined);
+      if (!updatedRoom || !persistedMessage) {
         this.logger.warn('Cannot append message for missing or invalid Redis room', { messageId: message.id, roomId: message.roomId });
         return null;
       }
-      this.logger.debug('Message appended to Redis list', { messageId: message.id, roomId: message.roomId });
-      return updatedRoom;
+      const inserted = Array.isArray(result) && Number(result[0]) === 1;
+      this.logger.debug(inserted ? 'Message appended to Redis list' : 'Duplicate client message resolved from Redis list', {
+        messageId: persistedMessage.id,
+        clientMessageId: message.clientMessageId,
+        roomId: message.roomId,
+      });
+      return { room: updatedRoom, message: persistedMessage, inserted };
     } catch (error) {
-      this.logger.error('Error appending message to Redis', { error, messageId: message.id, roomId: message.roomId });
+      this.logger.error('Error appending message idempotently to Redis', { error, messageId: message.id, roomId: message.roomId });
       return null;
     }
   }
@@ -1113,7 +1224,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     try {
       const messageKey = `room:${message.roomId}:messages`;
       const result = await (this.redisClient as any).eval(UPSERT_MESSAGE_LIST_SCRIPT, {
-        keys: ['rooms', messageKey],
+        keys: ['rooms', messageKey, getRoomClientMessageIdsKey(message.roomId)],
         arguments: [message.roomId, message.id, JSON.stringify(message), message.timestamp],
       });
 
@@ -1252,7 +1363,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
   async deleteMessageById(roomId: string, messageId: string) {
     try {
       const result = await (this.redisClient as any).eval(DELETE_MESSAGE_BY_ID_SCRIPT, {
-        keys: ['rooms', `room:${roomId}:messages`],
+        keys: ['rooms', `room:${roomId}:messages`, getRoomClientMessageIdsKey(roomId)],
         arguments: [roomId, messageId],
       });
       const updatedRoom = parseScriptRoom(result, 3);
@@ -1273,7 +1384,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
   private async truncateMessages(roomId: string, messageId: string, mode: 'before' | 'after') {
     try {
       const result = await (this.redisClient as any).eval(TRUNCATE_MESSAGE_LIST_SCRIPT, {
-        keys: ['rooms', `room:${roomId}:messages`],
+        keys: ['rooms', `room:${roomId}:messages`, getRoomClientMessageIdsKey(roomId)],
         arguments: [roomId, messageId, mode],
       });
       const updatedRoom = parseScriptRoom(result, 3);
@@ -1303,7 +1414,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
   async updateMessageAndTruncateAfter(roomId: string, messageId: string, updatedContent: string, updatedAt = new Date().toISOString()) {
     try {
       const result = await (this.redisClient as any).eval(UPDATE_AND_TRUNCATE_AFTER_SCRIPT, {
-        keys: ['rooms', `room:${roomId}:messages`],
+        keys: ['rooms', `room:${roomId}:messages`, getRoomClientMessageIdsKey(roomId)],
         arguments: [roomId, messageId, updatedContent, updatedAt],
       });
       const updatedRoom = parseScriptRoom(result, 3);
@@ -1337,7 +1448,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
       const messageKey = `room:${roomId}:messages`;
       const fallbackRoom = await this.getRoomById(roomId);
       const result = await (this.redisClient as any).eval(REPLACE_MESSAGE_LIST_SCRIPT, {
-        keys: ['rooms', messageKey],
+        keys: ['rooms', messageKey, getRoomClientMessageIdsKey(roomId)],
         arguments: [
           roomId,
           getLatestMessageTimestamp(messages) || fallbackRoom?.createdAt || new Date().toISOString(),
@@ -1363,6 +1474,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
     await Promise.all([
       this.redisClient.del(getRoomAgentTurnsKey(roomId)),
       this.redisClient.sRem(ROOM_AGENT_TURN_ROOMS_KEY, roomId),
+      this.redisClient.del(getRoomClientMessageIdsKey(roomId)),
     ]);
     if (count > 0) {
       const room = await this.getRoomById(roomId);
@@ -2922,6 +3034,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
         this.redisClient.del(`room:${roomId}:messages`),
         this.redisClient.del(getRoomAgentTurnsKey(roomId)),
         this.redisClient.sRem(ROOM_AGENT_TURN_ROOMS_KEY, roomId),
+        this.redisClient.del(getRoomClientMessageIdsKey(roomId)),
         this.redisClient.del(this.getRoomMessagesCacheKey(roomId)),
         this.redisClient.del(this.getRoomAICostKey(roomId)),
         this.redisClient.del(getRoomPasswordHashKey(roomId)),
@@ -3108,7 +3221,7 @@ export class RedisStore implements RoomStore, RoomMessageCacheStore {
 
         if (changed) {
           const result = await (this.redisClient as any).eval(REPLACE_MESSAGE_LIST_ONLY_SCRIPT, {
-            keys: ['rooms', `room:${roomId}:messages`],
+            keys: ['rooms', `room:${roomId}:messages`, getRoomClientMessageIdsKey(roomId)],
             arguments: [
               roomId,
               ...updatedMessages.map(message => JSON.stringify(message)),

@@ -89,7 +89,9 @@ export default {
               foreground: "#faf9f5",
             },
             secondary: {
-              DEFAULT: "#c96442",
+              // Action terracotta is intentionally darker than the decorative
+              // brand accent so 12-14px ivory labels meet WCAG AA (4.94:1).
+              DEFAULT: "#ad5237",
               foreground: "#faf9f5",
             },
           },

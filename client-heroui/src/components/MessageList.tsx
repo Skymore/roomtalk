@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback, useImperativeHandle } from 'react';
 import { Icon } from '@iconify/react';
-import { cancelQueuedCodeAgentInput, editQueuedCodeAgentInput, getMediaDownloadUrl, getRoomMessagesForExport, getRoomRoleMembers, removeRoomAdmin, removeRoomMember, requestAIResponse, requestEditMessageAndAIResponse, setRoomAdmin, socket, steerQueuedCodeAgentInput, transferRoomOwnership } from '../utils/socket';
+import { cancelQueuedCodeAgentInput, editQueuedCodeAgentInput, getMediaDownloadUrl, getRoomMessagesForExport, getRoomRoleMembers, removeRoomAdmin, removeRoomMember, requestAIResponse, requestEditMessageAndAIResponse, sendMessage, sendSticker, setRoomAdmin, socket, steerQueuedCodeAgentInput, transferRoomOwnership } from '../utils/socket';
 import { MessageItem, MessageUserAction, preloadMarkdownContent } from './MessageItem';
 import { Message, Room, RoomAgentTurn, RoomPermissions, RoomRoleMember } from '../utils/types';
 import { AgentTurnItem } from './AgentTurnItem';
@@ -32,7 +32,8 @@ import { DeleteConfirmationModal } from './DeleteConfirmationModal';
 import { EditMessageModal } from './EditMessageModal';
 import { CodeAgentWorkspacePanel } from './CodeAgentWorkspacePanel';
 
-const LOAD_MORE_HISTORY_UNIT_COUNT = 80;
+const LOAD_MORE_MESSAGE_COUNT = 80;
+const AI_COMPLETION_ANNOUNCEMENT_MAX_CHARACTERS = 160;
 
 type MessageTimelineItem =
   | { kind: 'message'; message: Message }
@@ -109,6 +110,23 @@ export const buildMessageTimeline = (
   return timeline;
 };
 
+const buildAccessibleMessageSummary = (content: string) => {
+  const plainText = content
+    .replace(/```(?:[a-z0-9_-]+)?/gi, ' ')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/^[#>*+\-]+\s*/gm, '')
+    .replace(/[*_~]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const characters = Array.from(plainText);
+  if (characters.length <= AI_COMPLETION_ANNOUNCEMENT_MAX_CHARACTERS) {
+    return plainText;
+  }
+  return `${characters.slice(0, AI_COMPLETION_ANNOUNCEMENT_MAX_CHARACTERS).join('')}…`;
+};
+
 // Reminder: Set the app element for react-modal for accessibility
 // Ideally in your root component file (e.g., App.tsx or main.tsx)
 // Modal.setAppElement('#root');
@@ -134,6 +152,7 @@ interface MessageListProps {
   reviewComments?: readonly ReviewCommentContext[];
   onAddReviewComment?: (comment: ReviewCommentContext) => void;
   onRemoveReviewComment?: (commentId: string) => void;
+  isRoomSessionReady?: boolean;
 }
 
 export interface MessageListHandle {
@@ -164,6 +183,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   reviewComments = [],
   onAddReviewComment,
   onRemoveReviewComment,
+  isRoomSessionReady = true,
 }, ref) => {
   const { t } = useTranslation();
   // generate a stable ID for the scroll container
@@ -180,15 +200,18 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const [isLoading, setIsLoading] = useState(() => !readMemoryRoomMessageWindow(roomId));
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(() => readMemoryRoomMessageWindow(roomId)?.hasMore ?? false);
-  const [, setHistoryVersion] = useState(() => readMemoryRoomMessageWindow(roomId)?.historyVersion ?? 0);
+  const [historyVersion, setHistoryVersion] = useState(() => readMemoryRoomMessageWindow(roomId)?.historyVersion ?? 0);
   const [oldestMessageId, setOldestMessageId] = useState<string | undefined>(() => readMemoryRoomMessageWindow(roomId)?.oldestMessageId);
   // Always points at the latest messages so item handlers can stay reference-stable.
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
+  const roomSessionReadyRef = useRef(isRoomSessionReady);
+  roomSessionReadyRef.current = isRoomSessionReady;
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const retryScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryingClientMessageIdsRef = useRef(new Set<string>());
   const isNearBottomRef = useRef(true);
   const preserveScrollRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
   const pendingScrollFrameRef = useRef<number | null>(null);
@@ -200,6 +223,15 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [messageToEdit, setMessageToEdit] = useState<Message | null>(null);
   const [sessionCostUsd, setSessionCostUsd] = useState<number | null>(null);
+  const [isSessionCostUnavailable, setIsSessionCostUnavailable] = useState(false);
+  const [exportNotice, setExportNotice] = useState<{ tone: 'success' | 'error'; message: string } | null>(null);
+  const exportNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const accessibilityMessageStateRef = useRef(new Map<string, { status?: Message['status']; deliveryStatus?: Message['deliveryStatus'] }>());
+  const accessibilityRoomRef = useRef(roomId);
+  const announcementSequenceRef = useRef(0);
+  const [statusAnnouncement, setStatusAnnouncement] = useState<{ id: number; text: string } | null>(null);
+  const [errorAnnouncement, setErrorAnnouncement] = useState<{ id: number; text: string } | null>(null);
+  const [isMessageLogLive, setIsMessageLogLive] = useState(false);
   const [workspaceSnapshot, setWorkspaceSnapshot] = useState<CodeAgentWorkspaceSnapshot | null>(null);
   const [isWorkspaceRefreshing, setIsWorkspaceRefreshing] = useState(false);
   const [workspaceRefreshError, setWorkspaceRefreshError] = useState<string | null>(null);
@@ -270,12 +302,17 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
     const container = containerRef.current;
     if (container) {
+      const effectiveBehavior = behavior === 'smooth'
+        && typeof window.matchMedia === 'function'
+        && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        ? 'auto'
+        : behavior;
       isNearBottomRef.current = true;
       setShowScrollButton(false);
       if (typeof container.scrollTo === 'function') {
         container.scrollTo({
           top: container.scrollHeight,
-          behavior,
+          behavior: effectiveBehavior,
         });
       } else {
         container.scrollTop = container.scrollHeight;
@@ -318,7 +355,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   }), [scheduleScrollToBottom, scrollToBottom, updateMessages]);
 
   const handleLoadMore = useCallback(() => {
-    if (isLoadingMore || !hasMoreMessages || messages.length === 0) {
+    if (!roomSessionReadyRef.current || isLoadingMore || !hasMoreMessages || messages.length === 0) {
       return;
     }
 
@@ -334,9 +371,10 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     socket.emit('get_room_messages', {
       roomId,
       beforeMessageId: oldestMessageId || messages[0].id,
-      limit: LOAD_MORE_HISTORY_UNIT_COUNT,
+      limit: LOAD_MORE_MESSAGE_COUNT,
+      baseHistoryVersion: historyVersion,
     });
-  }, [hasMoreMessages, isLoadingMore, messages, oldestMessageId, roomId]);
+  }, [hasMoreMessages, historyVersion, isLoadingMore, messages, oldestMessageId, roomId]);
 
   useEffect(() => {
     onScrollButtonVisibilityChange?.(showScrollButton);
@@ -350,12 +388,91 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       if (pendingScrollFrameRef.current !== null && typeof cancelAnimationFrame === 'function') {
         cancelAnimationFrame(pendingScrollFrameRef.current);
       }
-      workspaceFetchAbortRef.current?.abort();
+      const workspaceController = workspaceFetchAbortRef.current;
+      workspaceFetchAbortRef.current = null;
+      workspaceController?.abort();
+      if (exportNoticeTimerRef.current) {
+        clearTimeout(exportNoticeTimerRef.current);
+      }
     };
   }, []);
 
+  useEffect(() => {
+    setIsSessionCostUnavailable(false);
+    if (sessionCostUsd !== null) return;
+    const timer = setTimeout(() => setIsSessionCostUnavailable(true), 8000);
+    return () => clearTimeout(timer);
+  }, [roomId, sessionCostUsd]);
+
+  useEffect(() => {
+    setIsMessageLogLive(false);
+    if (isLoading) return undefined;
+
+    let cancelled = false;
+    const enableLiveMessages = () => {
+      if (!cancelled) setIsMessageLogLive(true);
+    };
+    if (typeof requestAnimationFrame === 'function') {
+      const frame = requestAnimationFrame(enableLiveMessages);
+      return () => {
+        cancelled = true;
+        if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
+      };
+    }
+
+    const timer = setTimeout(enableLiveMessages, 0);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [isLoading, roomId]);
+
+  useEffect(() => {
+    if (accessibilityRoomRef.current !== roomId) {
+      accessibilityRoomRef.current = roomId;
+      accessibilityMessageStateRef.current.clear();
+      setStatusAnnouncement(null);
+      setErrorAnnouncement(null);
+    }
+
+    const previous = accessibilityMessageStateRef.current;
+    let nextStatusAnnouncement = '';
+    let nextErrorAnnouncement = '';
+
+    messages.forEach(message => {
+      const previousState = previous.get(message.id);
+      if (previousState && previousState.deliveryStatus !== 'failed' && message.deliveryStatus === 'failed') {
+        nextErrorAnnouncement = t('messageDeliveryFailedAnnouncement', {
+          message: message.content.trim().slice(0, 80),
+        });
+      }
+      if (previousState?.status === 'streaming' && message.status === 'complete') {
+        const summary = buildAccessibleMessageSummary(message.content);
+        nextStatusAnnouncement = summary
+          ? t('aiResponseCompleteSummaryAnnouncement', { message: summary })
+          : t('aiResponseCompleteAnnouncement');
+      } else if (previousState?.status === 'streaming' && message.status === 'error') {
+        nextErrorAnnouncement = t('aiResponseFailedAnnouncement');
+      }
+    });
+
+    accessibilityMessageStateRef.current = new Map(messages.map(message => [message.id, {
+      status: message.status,
+      deliveryStatus: message.deliveryStatus,
+    }]));
+
+    if (nextStatusAnnouncement) {
+      announcementSequenceRef.current += 1;
+      setStatusAnnouncement({ id: announcementSequenceRef.current, text: nextStatusAnnouncement });
+    }
+    if (nextErrorAnnouncement) {
+      announcementSequenceRef.current += 1;
+      setErrorAnnouncement({ id: announcementSequenceRef.current, text: nextErrorAnnouncement });
+    }
+  }, [messages, roomId, t]);
+
   const refreshWorkspaceSnapshot = useCallback(async () => {
-    if (presentation !== 'code-agent' || !currentRoomId) {
+    if (!roomSessionReadyRef.current || presentation !== 'code-agent' || !currentRoomId) {
       return;
     }
 
@@ -393,7 +510,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   }, [presentation, refreshWorkspaceSnapshot]);
 
   useEffect(() => {
-    if (presentation !== 'code-agent' || !currentRoomId) {
+    if (!isRoomSessionReady || presentation !== 'code-agent' || !currentRoomId) {
       setWorkspaceSnapshot(null);
       setWorkspaceRefreshError(null);
       onWorkspaceRootChange?.(null);
@@ -404,9 +521,11 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     void refreshWorkspaceSnapshot();
 
     return () => {
-      workspaceFetchAbortRef.current?.abort();
+      const workspaceController = workspaceFetchAbortRef.current;
+      workspaceFetchAbortRef.current = null;
+      workspaceController?.abort();
     };
-  }, [currentRoomId, onWorkspaceChangesChange, onWorkspaceRootChange, presentation, refreshWorkspaceSnapshot, workspaceRefreshKey]);
+  }, [currentRoomId, isRoomSessionReady, onWorkspaceChangesChange, onWorkspaceRootChange, presentation, refreshWorkspaceSnapshot, workspaceRefreshKey]);
 
   // Warm the lazily-loaded markdown chunk on mount so the first message renders
   // as markdown immediately instead of flashing plain text. The component
@@ -494,6 +613,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
 
   // --- Modal Handlers (Keep dependencies as they are or simplify if possible) ---
   const handleOpenDeleteModal = useCallback((messageId: string) => {
+    if (!roomSessionReadyRef.current) return;
     const msg = getMessageById(messagesRef.current, messageId);
     if (msg) {
       setMessageToDelete(msg);
@@ -505,6 +625,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     setMessageToDelete(null);
    }, []);
   const handleOpenEditModal = useCallback((messageId: string) => {
+    if (!roomSessionReadyRef.current) return;
       const msg = getMessageById(messagesRef.current, messageId);
     if (msg) {
       setMessageToEdit(msg);
@@ -516,8 +637,15 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     setMessageToEdit(null);
    }, []);
 
+  useEffect(() => {
+    if (isRoomSessionReady) return;
+    handleCloseDeleteModal();
+    handleCloseEditModal();
+  }, [handleCloseDeleteModal, handleCloseEditModal, isRoomSessionReady]);
+
   // --- Edit/Delete Logic ---
   const handleSaveEdit = useCallback((messageId: string, newContent: string) => {
+    if (!roomSessionReadyRef.current) return;
     console.log('Saving edit (from modal):', messageId, newContent);
     const originalMessages = messages;
     updateMessages(prev => editMessageContent(prev, messageId, newContent));
@@ -568,6 +696,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   }, [roomId, t]);
 
   const handleSaveEditAndAskAI = useCallback((messageId: string, newContent: string) => {
+    if (!roomSessionReadyRef.current) return;
     console.log('Saving edit and triggering AI (from modal):', messageId, newContent);
     const originalMessages = messages;
     const optimisticResult = editMessageAndTruncateAfter(messages, messageId, newContent);
@@ -589,17 +718,17 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       newContent,
       ...getAIRequestSettingsForRoom(),
     }).then(() => {
-      socket.emit('get_room_messages', { roomId });
+      socket.emit('get_room_messages', { roomId, baseHistoryVersion: historyVersion });
     }).catch((error) => {
       console.error('Failed to save edit before asking AI:', error);
       updateMessages(originalMessages);
       alert(t('errorEditingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
     });
-  }, [roomId, messages, updateMessages, getAIRequestSettingsForRoom, t]);
+  }, [roomId, messages, updateMessages, getAIRequestSettingsForRoom, historyVersion, t]);
 
   // Define handleConfirmDelete within useCallback, accessing messageToDelete state
   const handleConfirmDelete = useCallback(() => {
-    if (!messageToDelete) return;
+    if (!roomSessionReadyRef.current || !messageToDelete) return;
 
     const messageIdToDelete = messageToDelete.id;
     console.log('Confirmed deleting message:', messageIdToDelete);
@@ -613,14 +742,15 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       if (!response.success) {
         console.error('Failed to delete message on server:', response.error);
         // Refetch history on error to ensure consistency
-        socket.emit('get_room_messages', { roomId });
+        socket.emit('get_room_messages', { roomId, baseHistoryVersion: historyVersion });
          // Use translation key for alert
         alert(t('errorDeletingMessage', { error: response.error || t('unknownError') }));
       }
     });
-  }, [roomId, messageToDelete, handleCloseDeleteModal, updateMessages, t]);
+  }, [roomId, messageToDelete, handleCloseDeleteModal, updateMessages, historyVersion, t]);
 
   const handleUserAction = useCallback(async (action: MessageUserAction, message: Message) => {
+    if (!roomSessionReadyRef.current) return;
     try {
       if (action === 'setAdmin') {
         await setRoomAdmin(roomId, message.clientId);
@@ -644,8 +774,67 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     }
   }, [loadRoleMembers, roomId, t]);
 
+  const handleRetryDelivery = useCallback(async (failedMessage: Message) => {
+    const clientMessageId = failedMessage.clientMessageId;
+    if (
+      !roomSessionReadyRef.current
+      || roomPermissions?.canPost !== true
+      || failedMessage.roomId !== roomId
+      || failedMessage.deliveryStatus !== 'failed'
+      || !clientMessageId
+      || (failedMessage.messageType !== 'text' && failedMessage.messageType !== 'sticker')
+      || failedMessage.deliveryAction === 'ask-ai'
+      || retryingClientMessageIdsRef.current.has(clientMessageId)
+    ) {
+      return;
+    }
+
+    retryingClientMessageIdsRef.current.add(clientMessageId);
+    updateMessages(previous => previous.map(message => (
+      message.clientMessageId === clientMessageId && message.deliveryStatus === 'failed'
+        ? { ...message, deliveryStatus: 'pending' as const, deliveryError: undefined }
+        : message
+    )));
+
+    try {
+      const savedMessage = failedMessage.messageType === 'sticker'
+        ? await sendSticker(
+            failedMessage.content,
+            roomId,
+            failedMessage.username,
+            failedMessage.avatar,
+            failedMessage.replyTo?.messageId,
+            clientMessageId,
+          )
+        : await sendMessage(
+            failedMessage.content,
+            roomId,
+            'text',
+            failedMessage.username,
+            failedMessage.avatar,
+            failedMessage.replyTo?.messageId,
+            clientMessageId,
+          );
+      updateMessages(previous => replaceOptimisticMessage(previous, clientMessageId, savedMessage));
+    } catch (error) {
+      const deliveryError = error instanceof Error
+        ? error.message
+        : t(failedMessage.messageType === 'sticker' ? 'failedToSendSticker' : 'errorSendingMessage');
+      // A new_message broadcast can replace the optimistic row before its ack
+      // times out. Never turn that already-saved canonical row back into failed.
+      updateMessages(previous => previous.map(message => (
+        message.clientMessageId === clientMessageId && message.deliveryStatus === 'pending'
+          ? { ...message, deliveryStatus: 'failed' as const, deliveryError }
+          : message
+      )));
+    } finally {
+      retryingClientMessageIdsRef.current.delete(clientMessageId);
+    }
+  }, [roomId, roomPermissions?.canPost, t, updateMessages]);
+
   // 添加刷新AI的处理函数
   const handleRefreshAI = useCallback((messageId: string) => {
+    if (!roomSessionReadyRef.current) return;
     console.log('Retrying AI response for message ID:', messageId);
 
     // 找到消息的索引位置
@@ -669,7 +858,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       ...getAIRequestSettingsForRoom(),
     }).catch((error) => {
       console.error('Failed to retry AI response:', error);
-      socket.emit('get_room_messages', { roomId });
+      socket.emit('get_room_messages', { roomId, baseHistoryVersion: historyVersion });
     });
     console.log('Emitted ask_ai for retry with retryForMessageId:', messageId);
 
@@ -681,10 +870,11 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       scrollToBottom('smooth');
       retryScrollTimerRef.current = null;
     }, 100);
-  }, [roomId, updateMessages, scrollToBottom, getAIRequestSettingsForRoom]);
+  }, [roomId, updateMessages, scrollToBottom, getAIRequestSettingsForRoom, historyVersion]);
 
   useRoomMessageEvents({
     roomId,
+    isRoomSessionReady,
     containerRef,
     getCurrentMessages,
     updateMessages,
@@ -718,14 +908,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const [isExporting, setIsExporting] = useState(false);
 
   // Fall back to roomId when tests or older call sites do not provide room metadata.
-  const loadMessagesForExport = useCallback(async () => {
-    setIsExporting(true);
-    try {
-      return sortMessages(await getRoomMessagesForExport(roomId));
-    } finally {
-      setIsExporting(false);
-    }
-  }, [roomId]);
+  const loadMessagesForExport = useCallback(async () => (
+    sortMessages(await getRoomMessagesForExport(roomId))
+  ), [roomId]);
 
   const resolveExportMediaUrl = useCallback<ExportMediaResolver>(async (message) => {
     if (!message.mediaAsset?.id) {
@@ -735,23 +920,44 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     return url;
   }, []);
 
+  const showExportNotice = useCallback((notice: { tone: 'success' | 'error'; message: string }) => {
+    setExportNotice(notice);
+    if (exportNoticeTimerRef.current) clearTimeout(exportNoticeTimerRef.current);
+    exportNoticeTimerRef.current = setTimeout(() => {
+      setExportNotice(null);
+      exportNoticeTimerRef.current = null;
+    }, notice.tone === 'error' ? 8000 : 4000);
+  }, []);
+
   const handleExportHtml = useCallback(async () => {
+    if (!roomSessionReadyRef.current || isExporting) return;
+    setIsExporting(true);
+    setExportNotice(null);
     try {
       await downloadTranscriptHtml(room || { id: roomId, name: roomId }, await loadMessagesForExport(), resolveExportMediaUrl);
+      showExportNotice({ tone: 'success', message: t('exportSucceeded', { format: 'HTML' }) });
     } catch (error) {
       console.error('Failed to export HTML transcript:', error);
-      alert(t('exportFailed'));
+      showExportNotice({ tone: 'error', message: t('exportFormatFailed', { format: 'HTML' }) });
+    } finally {
+      setIsExporting(false);
     }
-  }, [loadMessagesForExport, resolveExportMediaUrl, room, roomId, t]);
+  }, [isExporting, loadMessagesForExport, resolveExportMediaUrl, room, roomId, showExportNotice, t]);
 
   const handleExportZip = useCallback(async () => {
+    if (!roomSessionReadyRef.current || isExporting) return;
+    setIsExporting(true);
+    setExportNotice(null);
     try {
       await downloadTranscriptZip(room || { id: roomId, name: roomId }, await loadMessagesForExport(), resolveExportMediaUrl);
+      showExportNotice({ tone: 'success', message: t('exportSucceeded', { format: 'ZIP' }) });
     } catch (error) {
       console.error('Failed to export ZIP transcript:', error);
-      alert(t('exportFailed'));
+      showExportNotice({ tone: 'error', message: t('exportFormatFailed', { format: 'ZIP' }) });
+    } finally {
+      setIsExporting(false);
     }
-  }, [loadMessagesForExport, resolveExportMediaUrl, room, roomId, t]);
+  }, [isExporting, loadMessagesForExport, resolveExportMediaUrl, room, roomId, showExportNotice, t]);
 
   // ... loading/empty states ...
   // ... return statement with JSX ...
@@ -759,7 +965,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   return (
     <>
       {presentation !== 'code-agent' && (
-      <div className="absolute right-3 top-3 z-20">
+      <div className="absolute right-3 top-3 z-20 flex max-w-[min(28rem,calc(100%-1.5rem))] flex-col items-end gap-1.5">
         <div className="flex items-center gap-1.5">
           <Dropdown placement="bottom-end">
             <DropdownTrigger>
@@ -767,7 +973,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                 size="sm"
                 variant="flat"
                 radius="full"
-                isDisabled={isExporting}
+                isDisabled={isExporting || !isRoomSessionReady}
+                aria-busy={isExporting}
+                aria-label={isExporting ? t('exportingChat') : t('exportChat')}
                 className="h-7 min-w-0 border border-[#dedbd0] bg-[#faf9f5]/95 px-2 text-tiny font-medium text-[#4d4c48] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc]"
                 startContent={<Icon icon={isExporting ? 'lucide:loader-circle' : 'lucide:download'} className={`h-3.5 w-3.5 ${isExporting ? 'animate-spin' : ''}`} />}
               >
@@ -785,9 +993,28 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
           </Dropdown>
           <div className="flex items-center gap-1 rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-2.5 py-1 text-tiny font-medium text-[#4d4c48] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc]">
             <Icon icon="lucide:coins" className="h-3.5 w-3.5" />
-            <span>{t('sessionCost')}: {sessionCostUsd === null ? '...' : formatUsdCost(sessionCostUsd)}</span>
+            <span className="flex items-center gap-1">
+              {t('sessionCost')}:
+              {sessionCostUsd !== null ? formatUsdCost(sessionCostUsd) : isSessionCostUnavailable ? t('costUnavailable') : (
+                <>
+                  <span className="sr-only">{t('loadingSessionCost')}</span>
+                  <span aria-hidden="true" className="inline-block h-2 w-8 animate-pulse rounded-full bg-[#c2c0b6] dark:bg-[#4d4c48]" />
+                </>
+              )}
+            </span>
           </div>
         </div>
+        {exportNotice && (
+          <div
+            role={exportNotice.tone === 'error' ? 'alert' : 'status'}
+            aria-atomic="true"
+            className={`max-w-full rounded-lg border px-2.5 py-1.5 text-xs shadow-sm backdrop-blur ${exportNotice.tone === 'error'
+              ? 'border-danger-300 bg-danger-50 text-danger-700 dark:border-danger-700 dark:bg-danger-950/90 dark:text-danger-200'
+              : 'border-success-300 bg-success-50 text-success-700 dark:border-success-700 dark:bg-success-950/90 dark:text-success-200'}`}
+          >
+            {exportNotice.message}
+          </div>
+        )}
       </div>
       )}
       <div
@@ -805,11 +1032,13 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
             canSwitchBackend={canManageCodeAgentMode}
             onModeChange={onCodeAgentModeChange}
             onBackendChange={onCodeAgentBackendChange}
-            sessionCostUsd={sessionCostUsd ?? 0}
+            sessionCostUsd={sessionCostUsd}
+            isSessionCostUnavailable={isSessionCostUnavailable}
+            isRoomSessionReady={isRoomSessionReady}
             workspaceSnapshot={workspaceSnapshot}
             isRefreshingWorkspace={isWorkspaceRefreshing}
             workspaceRefreshError={workspaceRefreshError}
-            onRefreshWorkspace={refreshWorkspaceSnapshot}
+            onRefreshWorkspace={isRoomSessionReady ? refreshWorkspaceSnapshot : undefined}
             onOpenWorkspaceFile={onOpenWorkspaceFile}
             onOpenWorkspaceArtifact={onOpenWorkspaceArtifact}
             reviewComments={reviewComments}
@@ -821,6 +1050,11 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
           id={scrollContainerId}
           data-testid="message-list-scroll"
           ref={containerRef}
+          role="log"
+          aria-label={t('messageLog')}
+          aria-live={isMessageLogLive ? 'polite' : 'off'}
+          aria-relevant="additions"
+          aria-busy={isLoading}
           className="relative flex min-h-0 w-full flex-1 flex-col overflow-y-auto px-3 pt-3"
           onScroll={handleScroll}
         >
@@ -830,7 +1064,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                 <button
                   type="button"
                   onClick={handleLoadMore}
-                  disabled={isLoadingMore}
+                  disabled={isLoadingMore || !isRoomSessionReady}
                   className="rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 px-3 py-1.5 text-xs font-medium text-[#4d4c48] shadow-sm backdrop-blur transition hover:border-[#c2c0b6] hover:text-[#141413] dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#e8e6dc] dark:hover:text-[#faf9f5]"
                 >
                   {isLoadingMore ? t('loadingMore') : t('loadMoreHistory')}
@@ -844,7 +1078,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
             )}
             {!isLoading && messages.length === 0 && (
               <div className="flex min-h-[220px] flex-1 flex-col items-center justify-center text-center">
-                <Icon icon="lucide:message-circle" className="mb-3 h-8 w-8 text-[#87867f] dark:text-[#8f8d86]" />
+                <Icon icon="lucide:message-circle" className="mb-3 h-8 w-8 text-[#5e5d59] dark:text-[#8f8d86]" />
                 <p className="font-serif text-lg font-medium text-[#141413] dark:text-[#faf9f5]">{t('noMessages')}</p>
                 <p className="mt-1 text-sm text-[#5e5d59] dark:text-[#b0aea5]">{t('beFirstToMessage')}</p>
               </div>
@@ -871,11 +1105,13 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                       onSteerQueuedMessage={handleSteerQueuedMessage}
                       onCancelQueuedMessage={handleCancelQueuedMessage}
                       onRefreshAI={handleRefreshAI}
+                      onRetryDelivery={handleRetryDelivery}
                       onReply={onReply}
                       onUserAction={handleUserAction}
                       onOpenWorkspaceFile={onOpenWorkspaceFile}
                       workspaceRoot={workspaceRoot}
                       turnGrouped={turnGrouped}
+                      isInteractionDisabled={!isRoomSessionReady}
                     />
                   );
                   if (item.kind === 'agent-turn') {
@@ -903,6 +1139,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
           </div>
         </div>
       </div>
+
+      {statusAnnouncement && <span key={statusAnnouncement.id} className="sr-only" role="status" aria-atomic="true">{statusAnnouncement.text}</span>}
+      {errorAnnouncement && <span key={errorAnnouncement.id} className="sr-only" role="alert" aria-atomic="true">{errorAnnouncement.text}</span>}
 
       {/* Render Modals */}
       <DeleteConfirmationModal

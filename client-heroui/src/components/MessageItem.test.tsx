@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Message } from '../utils/types';
 import { getSenderColorTheme } from '../utils/userProfile';
@@ -11,6 +11,8 @@ const getRoomMediaHistoryMock = vi.hoisted(() => vi.fn());
 const getAudioTranscriptionMock = vi.hoisted(() => vi.fn());
 const requestAudioTranscriptionMock = vi.hoisted(() => vi.fn());
 const saveUrlAsFileMock = vi.hoisted(() => vi.fn());
+const downloadMediaUrlMock = vi.hoisted(() => vi.fn());
+const downloadMediaBlobMock = vi.hoisted(() => vi.fn());
 const sendA2UIActionMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../utils/socket', () => ({
@@ -25,6 +27,8 @@ vi.mock('../utils/socket', () => ({
 vi.mock('../utils/mediaDownload', () => ({
   buildMediaFilename: (message: Message) => message.mediaAsset?.filename || 'download.bin',
   saveUrlAsFile: saveUrlAsFileMock,
+  downloadMediaUrl: downloadMediaUrlMock,
+  downloadMediaBlob: downloadMediaBlobMock,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -108,12 +112,15 @@ describe('MessageItem replies', () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     document.getElementById('roomtalk-pierre-file-icon-sprite')?.remove();
     getMediaDownloadUrlMock.mockReset();
     getRoomMediaHistoryMock.mockReset();
     getAudioTranscriptionMock.mockReset();
     requestAudioTranscriptionMock.mockReset();
     saveUrlAsFileMock.mockReset();
+    downloadMediaUrlMock.mockReset();
+    downloadMediaBlobMock.mockReset();
     sendA2UIActionMock.mockReset();
   });
 
@@ -134,6 +141,67 @@ describe('MessageItem replies', () => {
 
     fireEvent.click(screen.getByLabelText('replyToMessage'));
     expect(onReply).toHaveBeenCalledWith(message);
+  });
+
+  it('exposes sender, time, and delivery state on the message article', () => {
+    render(
+      <MessageItem
+        message={{ ...message, deliveryStatus: 'pending' }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    const article = screen.getByRole('article', { name: /Grace.*messageSending/ });
+    expect(article.getAttribute('aria-busy')).toBe('true');
+  });
+
+  it('leaves delivery and AI lifecycle announcements to the message list', () => {
+    const rendered = render(
+      <MessageItem
+        message={{ ...message, deliveryStatus: 'failed', deliveryError: 'network down' }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole('article', { name: /network down/ })).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    rendered.rerender(
+      <MessageItem
+        message={{ ...message, clientId: 'ai_assistant', messageType: 'ai', status: 'complete', content: 'final answer' }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('article')).toBeTruthy();
+    expect(screen.queryAllByRole('status').every(status => status.textContent === '')).toBe(true);
+  });
+
+  it('disables room mutations while the restored room session is unverified', () => {
+    render(
+      <MessageItem
+        message={{ ...message, clientId: 'viewer', messageType: 'ai', status: 'complete' }}
+        roomPermissions={null}
+        isInteractionDisabled
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onRefreshAI={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByLabelText('editMessage')).toBeNull();
+    expect(screen.queryByLabelText('deleteMessage')).toBeNull();
+    expect((screen.getByLabelText('retry') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByLabelText('replyToMessage') as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('applies a stable sender outline to text message bubbles from clientId', () => {
@@ -517,7 +585,7 @@ describe('MessageItem replies', () => {
       />
     );
 
-    expect(screen.getByText(/messageSending/)).toBeTruthy();
+    expect(screen.getAllByText(/messageSending/).length).toBeGreaterThan(0);
 
     rerender(
       <MessageItem
@@ -534,7 +602,74 @@ describe('MessageItem replies', () => {
       />
     );
 
-    expect(screen.getByText(/network down/)).toBeTruthy();
+    expect(screen.getAllByText(/network down/).length).toBeGreaterThan(0);
+  });
+
+  it('offers Retry for a failed owned text message and locks it with the room session', () => {
+    const failedMessage: Message = {
+      ...message,
+      id: 'temp-client-message',
+      clientId: 'viewer',
+      clientMessageId: 'client-message-1',
+      deliveryStatus: 'failed',
+      deliveryError: 'network down',
+    };
+    const onRetryDelivery = vi.fn();
+    const roomPermissions = {
+      roomId: 'room-1',
+      clientId: 'viewer',
+      role: 'member' as const,
+      canPost: true,
+      canEditAnyMessage: false,
+      canDeleteAnyMessage: false,
+      canClearHistory: false,
+      canManageRoom: false,
+      canManageAdmins: false,
+      canManageMembers: false,
+      canTransferOwnership: false,
+      canUseCodeAgent: true,
+    };
+    const rendered = render(
+      <MessageItem
+        message={failedMessage}
+        roomPermissions={roomPermissions}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onRetryDelivery={onRetryDelivery}
+        onReply={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText('retry'));
+    expect(onRetryDelivery).toHaveBeenCalledWith(failedMessage);
+
+    rendered.rerender(
+      <MessageItem
+        message={failedMessage}
+        roomPermissions={roomPermissions}
+        isInteractionDisabled
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onRetryDelivery={onRetryDelivery}
+        onReply={vi.fn()}
+      />
+    );
+    const retry = screen.getByLabelText('retry') as HTMLButtonElement;
+    expect(retry.disabled).toBe(true);
+    fireEvent.click(retry);
+    expect(onRetryDelivery).toHaveBeenCalledTimes(1);
+
+    rendered.rerender(
+      <MessageItem
+        message={{ ...failedMessage, deliveryAction: 'ask-ai' }}
+        roomPermissions={roomPermissions}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onRetryDelivery={onRetryDelivery}
+        onReply={vi.fn()}
+      />
+    );
+    expect(screen.queryByLabelText('retry')).toBeNull();
   });
 
   it('sends current room AI settings with A2UI actions', async () => {
@@ -668,6 +803,57 @@ describe('MessageItem replies', () => {
     expect(payload).not.toHaveProperty('roleName');
   });
 
+  it('makes restored-shell A2UI surfaces inert and blocks their action handler', () => {
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'cached-a2ui-message',
+          messageType: 'ai',
+          uiPayload: { format: 'a2ui', version: 'v0.9', messages: [] },
+        }}
+        roomPermissions={null}
+        isInteractionDisabled
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    const action = screen.getByText('a2ui-action');
+    expect(action.parentElement?.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(action);
+    expect(sendA2UIActionMock).not.toHaveBeenCalled();
+  });
+
+  it('waits for restored room verification before requesting a signed media URL', async () => {
+    getMediaDownloadUrlMock.mockResolvedValue({ url: 'https://signed.example/verified.webp' });
+    const mediaMessage: Message = {
+      ...message,
+      id: 'cached-image-message',
+      content: '',
+      messageType: 'media',
+      mediaAsset: { id: 'cached-image', kind: 'image', mimeType: 'image/webp', byteSize: 100 },
+    };
+    const props = {
+      message: mediaMessage,
+      roomPermissions: null,
+      onStartEdit: vi.fn(),
+      onDeleteMessage: vi.fn(),
+      onReply: vi.fn(),
+    };
+    const rendered = render(<MessageItem {...props} isInteractionDisabled />);
+
+    await act(async () => {});
+    expect(getMediaDownloadUrlMock).not.toHaveBeenCalled();
+
+    rendered.rerender(<MessageItem {...props} isInteractionDisabled={false} />);
+    await waitFor(() => {
+      expect(getMediaDownloadUrlMock).toHaveBeenCalledTimes(1);
+      expect(getMediaDownloadUrlMock).toHaveBeenCalledWith({ roomId: 'room-1', assetId: 'cached-image' });
+    });
+  });
+
   it('loads signed URLs for asset-backed images without using legacy base64 content', async () => {
     getMediaDownloadUrlMock.mockResolvedValue({
       url: 'https://signed.example/rooms/room-1/asset-1.webp',
@@ -706,6 +892,100 @@ describe('MessageItem replies', () => {
         .find(element => element.getAttribute('aria-hidden') !== 'true');
       expect(primaryImage?.getAttribute('src')).toBe('https://signed.example/rooms/room-1/asset-1.webp');
     });
+  });
+
+  it('keeps a visible image loading skeleton until the media element loads', async () => {
+    getMediaDownloadUrlMock.mockResolvedValue({ url: 'https://signed.example/loading.webp' });
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'image-loading-message',
+          content: '',
+          messageType: 'media',
+          mediaAsset: { id: 'image-loading', kind: 'image', mimeType: 'image/webp', byteSize: 123 },
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    const image = await screen.findByAltText('sharedImage');
+    const shell = image.closest('.relative.inline-block') as HTMLElement;
+    expect(shell.className).toContain('h-24');
+    expect(shell.className).toContain('w-36');
+    expect(screen.getByText('loadingMedia')).toBeTruthy();
+
+    fireEvent.load(image);
+
+    expect(shell.className).not.toContain('h-24');
+    expect(screen.queryByText('loadingMedia')).toBeNull();
+  });
+
+  it('times out a stalled signed URL, offers retry, and ignores the late stale response', async () => {
+    vi.useFakeTimers();
+    let resolveStale!: (value: { url: string }) => void;
+    getMediaDownloadUrlMock
+      .mockImplementationOnce(() => new Promise(resolve => { resolveStale = resolve; }))
+      .mockResolvedValueOnce({ url: 'https://signed.example/retried.webp' });
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'image-timeout-message',
+          content: '',
+          messageType: 'media',
+          mediaAsset: { id: 'image-timeout', kind: 'image', mimeType: 'image/webp', byteSize: 123 },
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    await act(async () => { vi.advanceTimersByTime(12000); });
+    expect(screen.getByRole('alert').textContent).toContain('mediaLoadFailed');
+
+    fireEvent.click(screen.getByLabelText('retryMedia'));
+    await act(async () => { await Promise.resolve(); });
+    const retriedImage = screen.getByAltText('sharedImage');
+    expect(retriedImage.getAttribute('src')).toBe('https://signed.example/retried.webp');
+
+    await act(async () => {
+      resolveStale({ url: 'https://signed.example/stale.webp' });
+      await Promise.resolve();
+    });
+    expect(screen.getByAltText('sharedImage').getAttribute('src')).toBe('https://signed.example/retried.webp');
+  });
+
+  it('times out a signed media element that never loads', async () => {
+    vi.useFakeTimers();
+    getMediaDownloadUrlMock.mockResolvedValue({ url: 'https://signed.example/hanging.webp' });
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'image-element-timeout-message',
+          content: '',
+          messageType: 'media',
+          mediaAsset: { id: 'image-element-timeout', kind: 'image', mimeType: 'image/webp', byteSize: 123 },
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByAltText('sharedImage')).toBeTruthy();
+
+    await act(async () => { vi.advanceTimersByTime(15000); });
+
+    expect(screen.getByRole('alert').textContent).toContain('mediaLoadFailed');
+    expect(screen.getByLabelText('retryMedia')).toBeTruthy();
   });
 
   it('renders file attachments as a download card', async () => {
@@ -749,7 +1029,40 @@ describe('MessageItem replies', () => {
     await waitFor(() => {
       expect(saveUrlAsFileMock).toHaveBeenCalledWith('https://signed.example/rooms/room-1/file-1?token=abc', 'notes.md');
     });
+    const success = await screen.findByText('downloadSucceeded');
+    expect(success.getAttribute('role')).toBe('status');
     expect(screen.queryByRole('dialog', { name: 'mediaViewer' })).toBeNull();
+  });
+
+  it('announces a file download in progress and keeps a visible failure result', async () => {
+    getMediaDownloadUrlMock.mockResolvedValue({ url: 'https://signed.example/failure.txt' });
+    let rejectDownload!: (error: Error) => void;
+    saveUrlAsFileMock.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => {
+      rejectDownload = reject;
+    }));
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'failed-file-download',
+          content: '',
+          messageType: 'media',
+          mediaAsset: { id: 'failed-file', kind: 'file', mimeType: 'text/plain', byteSize: 100, filename: 'failure.txt' },
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    const downloadButton = await screen.findByLabelText('downloadFile');
+    fireEvent.click(downloadButton);
+    expect((await screen.findByText('downloadStarted')).getAttribute('role')).toBe('status');
+
+    await act(async () => rejectDownload(new Error('network failed')));
+    expect((await screen.findByText('downloadFailed')).getAttribute('role')).toBe('alert');
+    expect(screen.getByLabelText('downloadFailed')).toBeTruthy();
   });
 
   it('opens asset-backed images in the full-screen media viewer', async () => {
@@ -809,6 +1122,34 @@ describe('MessageItem replies', () => {
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: 'mediaViewer' })).toBeNull();
     });
+  });
+
+  it('closes media access and discards the signed URL when the room session locks', async () => {
+    getMediaDownloadUrlMock.mockResolvedValue({ url: 'https://signed.example/session-locked.webp' });
+    const props = {
+      message: {
+        ...message,
+        id: 'image-session-lock-message',
+        content: '',
+        messageType: 'media' as const,
+        mediaAsset: { id: 'session-lock-asset', kind: 'image' as const, mimeType: 'image/webp', byteSize: 123 },
+      },
+      roomPermissions: null,
+      onStartEdit: vi.fn(),
+      onDeleteMessage: vi.fn(),
+      onReply: vi.fn(),
+    };
+    const rendered = render(<MessageItem {...props} />);
+    const openViewer = await screen.findByLabelText('openMediaViewer');
+    fireEvent.click(openViewer);
+    expect(screen.getByRole('dialog', { name: 'mediaViewer' })).toBeTruthy();
+
+    rendered.rerender(<MessageItem {...props} isInteractionDisabled />);
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'mediaViewer' })).toBeNull());
+    expect(screen.queryByLabelText('openMediaViewer')).toBeNull();
+    expect(screen.queryByLabelText('downloadMedia')).toBeNull();
+    expect(getMediaDownloadUrlMock).toHaveBeenCalledTimes(1);
   });
 
   it('shrinks the media and fades viewer chrome while dragging down to dismiss', async () => {
@@ -950,6 +1291,122 @@ describe('MessageItem replies', () => {
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: 'mediaViewer' })).toBeNull();
     });
+  });
+
+  it('isolates the app, removes covered viewer controls, and restores the original trigger after nested history closes', async () => {
+    getMediaDownloadUrlMock.mockResolvedValue({ url: 'https://signed.example/focus-current.webp' });
+    getRoomMediaHistoryMock.mockResolvedValue({
+      roomId: 'room-1',
+      items: [{
+        assetId: 'focus-history',
+        messageId: 'focus-history-message',
+        kind: 'image',
+        mimeType: 'image/webp',
+        byteSize: 100,
+        createdAt: '2026-06-01T10:00:00.000Z',
+        url: 'https://signed.example/focus-history.webp',
+      }],
+      hasMore: false,
+      nextCursor: null,
+      windowMonths: 6,
+    });
+    const appRoot = document.createElement('div');
+    appRoot.id = 'root';
+    document.body.appendChild(appRoot);
+    const rendered = render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'focus-viewer-message',
+          content: '',
+          messageType: 'media',
+          mediaAsset: { id: 'focus-current', kind: 'image', mimeType: 'image/webp', byteSize: 100 },
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />,
+      { container: appRoot },
+    );
+
+    const trigger = await screen.findByLabelText('openMediaViewer');
+    trigger.focus();
+    fireEvent.click(trigger);
+    const dialog = await screen.findByRole('dialog', { name: 'mediaViewer' });
+    await waitFor(() => expect(appRoot.getAttribute('aria-hidden')).toBe('true'));
+    expect(appRoot.inert).toBe(true);
+
+    const viewerButtons = within(dialog).getAllByRole('button');
+    viewerButtons[0].focus();
+    fireEvent.keyDown(window, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(viewerButtons[viewerButtons.length - 1]);
+    fireEvent.keyDown(window, { key: 'Tab' });
+    expect(document.activeElement).toBe(viewerButtons[0]);
+
+    fireEvent.click(within(dialog).getByLabelText('openMediaHistory'));
+    await screen.findByLabelText('openMediaItem');
+    expect(within(dialog).queryByLabelText('openMediaHistory')).toBeNull();
+    fireEvent.click(screen.getByLabelText('openMediaItem'));
+    expect(within(dialog).getAllByLabelText('backToMediaHistory').length).toBeGreaterThan(0);
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(await screen.findByLabelText('openMediaItem')).toBeTruthy();
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'mediaViewer' })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(appRoot.hasAttribute('aria-hidden')).toBe(false);
+    expect(appRoot.inert).toBe(false);
+    rendered.unmount();
+    appRoot.remove();
+  });
+
+  it('shows visible and announced media action results, with the latest action taking precedence', async () => {
+    getMediaDownloadUrlMock.mockResolvedValue({ url: 'https://signed.example/action.webp' });
+    downloadMediaUrlMock.mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'share', {
+      configurable: true,
+      value: vi.fn().mockRejectedValue(new Error('share unavailable')),
+    });
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: undefined,
+    });
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'action-viewer-message',
+          content: '',
+          messageType: 'media',
+          mediaAsset: { id: 'action-current', kind: 'image', mimeType: 'image/webp', byteSize: 100 },
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onReply={vi.fn()}
+      />
+    );
+
+    fireEvent.click(await screen.findByLabelText('openMediaViewer'));
+    const dialog = screen.getByRole('dialog', { name: 'mediaViewer' });
+    fireEvent.click(within(dialog).getByLabelText('downloadMedia'));
+    const downloadStatus = await within(dialog).findByText('downloadSucceeded');
+    expect(downloadStatus.getAttribute('role')).toBe('status');
+
+    fireEvent.click(within(dialog).getByLabelText('shareMedia'));
+    const shareStatus = await within(dialog).findByText('shareFailed');
+    expect(shareStatus.getAttribute('role')).toBe('alert');
+    expect(within(dialog).queryByText('downloadSucceeded')).toBeNull();
+    expect(within(dialog).getByLabelText('shareFailed')).toBeTruthy();
+
+    fireEvent.click(within(dialog).getByLabelText('close'));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'mediaViewer' })).toBeNull());
+    fireEvent.click(screen.getByLabelText('openMediaViewer'));
+    const reopenedDialog = await screen.findByRole('dialog', { name: 'mediaViewer' });
+    expect(within(reopenedDialog).queryByText('shareFailed')).toBeNull();
+    expect(within(reopenedDialog).getByLabelText('shareMedia')).toBeTruthy();
   });
 
   it('orders media history from oldest to newest so latest appears last', async () => {
@@ -1465,6 +1922,94 @@ describe('MessageItem replies', () => {
 
     fireEvent.click(screen.getByText('showAudioTranscript'));
     expect(await screen.findByText('你好 hello')).toBeTruthy();
+  });
+
+  it('disables audio transcription when a ready room returns to restoring', async () => {
+    getMediaDownloadUrlMock.mockResolvedValue({ url: 'https://signed.example/rooms/room-1/audio-locked.webm' });
+    const audioMessage: Message = {
+      ...message,
+      id: 'audio-locked-message',
+      content: '',
+      messageType: 'media',
+      mediaAsset: {
+        id: 'audio-locked',
+        kind: 'audio',
+        mimeType: 'audio/webm',
+        byteSize: 456,
+      },
+    };
+    const props = {
+      message: audioMessage,
+      roomPermissions: null,
+      onStartEdit: vi.fn(),
+      onDeleteMessage: vi.fn(),
+      onReply: vi.fn(),
+    };
+    const rendered = render(<MessageItem {...props} />);
+    const transcribe = await screen.findByText('transcribeAudio');
+
+    rendered.rerender(<MessageItem {...props} isInteractionDisabled />);
+    await waitFor(() => expect(screen.queryByText('transcribeAudio')).toBeNull());
+    fireEvent.click(transcribe);
+
+    expect(requestAudioTranscriptionMock).not.toHaveBeenCalled();
+    expect(getMediaDownloadUrlMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('delays transcription reads until ready and stops pending polling when the session locks again', async () => {
+    vi.useFakeTimers();
+    getMediaDownloadUrlMock.mockResolvedValue({ url: 'https://signed.example/rooms/room-1/audio-poll.webm' });
+    getAudioTranscriptionMock.mockResolvedValue({
+      assetId: 'audio-poll',
+      roomId: 'room-1',
+      messageId: 'audio-poll-message',
+      status: 'pending',
+    });
+    const audioMessage: Message = {
+      ...message,
+      id: 'audio-poll-message',
+      content: '',
+      messageType: 'media',
+      mediaAsset: {
+        id: 'audio-poll',
+        kind: 'audio',
+        mimeType: 'audio/webm',
+        byteSize: 456,
+      },
+    };
+    const props = {
+      message: audioMessage,
+      roomPermissions: null,
+      onStartEdit: vi.fn(),
+      onDeleteMessage: vi.fn(),
+      onReply: vi.fn(),
+    };
+
+    const rendered = render(<MessageItem {...props} isInteractionDisabled />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(getAudioTranscriptionMock).not.toHaveBeenCalled();
+
+    rendered.rerender(<MessageItem {...props} />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(getAudioTranscriptionMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(2500);
+      await Promise.resolve();
+    });
+    expect(getAudioTranscriptionMock).toHaveBeenCalledTimes(2);
+
+    rendered.rerender(<MessageItem {...props} isInteractionDisabled />);
+    await act(async () => {
+      vi.advanceTimersByTime(7500);
+      await Promise.resolve();
+    });
+    expect(getAudioTranscriptionMock).toHaveBeenCalledTimes(2);
   });
 
   it('renders videos as tap-to-open previews and plays them inside the media viewer', async () => {

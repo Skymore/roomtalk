@@ -2,8 +2,25 @@
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+// @ts-expect-error The client tsconfig intentionally excludes Node typings, while Vitest runs in Node.
+import { readFileSync } from 'node:fs';
 import { A2UIPayload } from '../utils/types';
 import { A2UIRenderer } from './A2UIRenderer';
+
+const a2uiStyles = readFileSync('src/components/A2UIRenderer.css', 'utf8');
+
+const relativeLuminance = (hex: string) => {
+  const channels = [1, 3, 5].map(offset => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255);
+  const [red, green, blue] = channels.map(channel => (
+    channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+  ));
+  return (0.2126 * red) + (0.7152 * green) + (0.0722 * blue);
+};
+
+const contrastRatio = (first: string, second: string) => {
+  const luminances = [relativeLuminance(first), relativeLuminance(second)].sort((left, right) => right - left);
+  return (luminances[0] + 0.05) / (luminances[1] + 0.05);
+};
 
 const payload: A2UIPayload = {
   format: 'a2ui',
@@ -147,6 +164,19 @@ const payload: A2UIPayload = {
 describe('A2UIRenderer', () => {
   afterEach(() => {
     cleanup();
+  });
+
+  it('keeps generated action labels at WCAG AA contrast in both themes', () => {
+    expect(a2uiStyles).toContain('--a2ui-color-primary: #ad5237');
+    expect(a2uiStyles).toContain('--a2ui-color-primary-hover: #b55335');
+    expect(a2uiStyles).toContain('--a2ui-color-on-primary: #faf9f5');
+    expect(a2uiStyles).toContain('--a2ui-color-primary: #d97757');
+    expect(a2uiStyles).toContain('--a2ui-color-primary-hover: #df7653');
+    expect(a2uiStyles).toContain('--a2ui-color-on-primary: #141413');
+    expect(contrastRatio('#ad5237', '#faf9f5')).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio('#b55335', '#faf9f5')).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio('#d97757', '#141413')).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio('#df7653', '#141413')).toBeGreaterThanOrEqual(4.5);
   });
 
   it('renders the full official A2UI basic catalog and sends actions through the callback', async () => {

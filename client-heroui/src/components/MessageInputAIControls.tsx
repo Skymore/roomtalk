@@ -51,7 +51,7 @@ const formatPriceRate = (value: number | undefined) => {
 const ModelPriceGrid: React.FC<{ model: AIModelOption }> = ({ model }) => {
   if (!model.pricing) {
     return (
-      <div className="mt-1 text-[11px] leading-4 text-[#87867f] dark:text-[#b0aea5]">
+      <div className="mt-1 text-[11px] leading-4 text-[#5e5d59] dark:text-[#b0aea5]">
         —
       </div>
     );
@@ -70,7 +70,7 @@ const ModelPriceGrid: React.FC<{ model: AIModelOption }> = ({ model }) => {
           key={item.label}
           className="min-w-0"
         >
-          <span className="block truncate text-[8px] font-semibold leading-3 text-[#87867f] dark:text-[#8f8d86]">
+          <span className="block truncate text-[8px] font-semibold leading-3 text-[#5e5d59] dark:text-[#8f8d86]">
             {item.label}
           </span>
           <span className="block truncate text-[10px] font-semibold leading-3 text-[#141413] dark:text-[#faf9f5]">
@@ -195,6 +195,8 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   const [codexRunSettingsDraft, setCodexRunSettingsDraft] = React.useState<CodexRunSettings>(codexRunSettings);
   const [pendingPremiumModelId, setPendingPremiumModelId] = React.useState<string | null>(null);
   const [premiumConfirmationStep, setPremiumConfirmationStep] = React.useState<1 | 2>(1);
+  const settingsMutationLockedRef = React.useRef(isInputLocked || isSending || isAiProcessing);
+  settingsMutationLockedRef.current = isInputLocked || isSending || isAiProcessing;
   const pendingPremiumModel = aiModels.find(model => model.id === pendingPremiumModelId);
   const hasInputContent = currentInputText.trim().length > 0 || imageCount > 0;
   const hasQueueContent = isAgentRunning && hasInputContent;
@@ -251,7 +253,11 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   }, []);
 
   React.useEffect(() => {
-    if (!isSettingsOpen) return;
+    if (!isSettingsOpen || isInputLocked) {
+      setPendingPremiumModelId(null);
+      setPremiumConfirmationStep(1);
+      return;
+    }
     setAIContextMessageLimitDraft(normalizeAIContextMessageLimit(aiContextMessageLimit));
     setSelectedAIModelDraft(appliedAIModelId);
     setSelectedRoleIdDraft(selectedRoleId);
@@ -264,7 +270,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
     });
     setPendingPremiumModelId(null);
     setPremiumConfirmationStep(1);
-  }, [aiContextMessageLimit, appliedAIModelId, codexRunSettings, effectiveCodeAgentMode, isCodexCodeAgent, selectedRoleId, isSettingsOpen]);
+  }, [aiContextMessageLimit, appliedAIModelId, codexRunSettings, effectiveCodeAgentMode, isCodexCodeAgent, isInputLocked, selectedRoleId, isSettingsOpen]);
 
   const closePremiumConfirmation = () => {
     setPendingPremiumModelId(null);
@@ -272,6 +278,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   };
 
   const requestModelChange = (modelId: string) => {
+    if (settingsMutationLockedRef.current || !isSettingsOpen) return;
     if (modelId === selectedAIModelDraft) return;
 
     const model = aiModels.find(item => item.id === modelId);
@@ -285,6 +292,10 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   };
 
   const confirmPremiumModelChange = () => {
+    if (settingsMutationLockedRef.current || !isSettingsOpen) {
+      closePremiumConfirmation();
+      return;
+    }
     if (!pendingPremiumModel) {
       closePremiumConfirmation();
       return;
@@ -357,7 +368,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
     ))
   );
   const handleSettingsApply = () => {
-    if (!settingsChanged) return;
+    if (settingsMutationLockedRef.current || !settingsChanged) return;
 
     if (!isCodexCodeAgent && selectedAIModelDraft !== appliedAIModelId) {
       onModelChange(selectedAIModelDraft);
@@ -391,7 +402,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
             color={isCodeAgentRoom ? 'default' : selectedRole.color}
             size="sm"
             onPress={() => onAskAI(askAction)}
-            isDisabled={isAgentRunning ? isSending || isAiProcessing || (hasQueueContent && !canPost) : isControlLocked}
+            isDisabled={isAgentRunning ? isSending || isAiProcessing || isInputLocked || (hasQueueContent && !canPost) : isControlLocked}
             aria-label={askActionLabel}
             className="relative !h-7 !w-7 !min-w-7 overflow-hidden rounded-full bg-[#30302e] px-0 text-[#faf9f5] shadow-[0_0_0_1px_rgba(48,48,46,0.7)] dark:bg-[#faf9f5] dark:text-[#141413] dark:shadow-[0_0_0_1px_rgba(250,249,245,0.7)] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"
           >
@@ -416,7 +427,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
             isDisabled={isControlLocked || !hasInputContent}
             aria-label={t('send')}
             data-testid="send-button"
-            className="relative !h-7 !w-7 !min-w-7 overflow-hidden rounded-full bg-[#c96442] px-0 text-[#faf9f5] shadow-[0_0_0_1px_rgba(201,100,66,0.7)] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"
+            className="relative !h-7 !w-7 !min-w-7 overflow-hidden rounded-full bg-secondary px-0 text-secondary-foreground shadow-[0_0_0_1px_rgba(201,100,66,0.7)] hover:bg-[#94462f] dark:hover:bg-[#e08a6a] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"
           >
             <span className={`flex items-center justify-center gap-1.5 ${isSending ? 'opacity-0' : 'opacity-100'}`}>
               <Icon icon="lucide:arrow-up" className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
@@ -454,7 +465,6 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                 <Select
                   size="sm"
                   label={t('selectCodexModel')}
-                  aria-label={t('selectCodexModel')}
                   data-testid="codex-model-select"
                   selectedKeys={[codexRunSettingsDraft.model]}
                   onSelectionChange={handleCodexModelSelection}
@@ -463,7 +473,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                     label: "text-[#5e5d59] dark:text-[#b0aea5]",
                     value: "text-sm font-semibold",
                     popoverContent: "w-[min(18rem,calc(100vw-2rem))] border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
-                    listboxWrapper: "relative max-h-[14rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]",
+                    listboxWrapper: "relative max-h-[14rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#5e5d59_transparent]",
                   }}
                   startContent={<Icon icon="lucide:terminal" className="h-4 w-4" />}
                 >
@@ -482,7 +492,6 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                 <Select
                   size="sm"
                   label={t('selectCodexReasoning')}
-                  aria-label={t('selectCodexReasoning')}
                   data-testid="codex-reasoning-select"
                   selectedKeys={[codexRunSettingsDraft.reasoningEffort]}
                   onSelectionChange={handleCodexReasoningSelection}
@@ -508,7 +517,6 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                   <Select
                     size="sm"
                     label={t('selectCodexSpeed')}
-                    aria-label={t('selectCodexSpeed')}
                     data-testid="codex-speed-select"
                     selectedKeys={[codexRunSettingsDraft.serviceTier]}
                     onSelectionChange={handleCodexSpeedSelection}
@@ -529,7 +537,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                       >
                         <span className="block min-w-0">
                           <span className="block truncate text-xs font-semibold leading-4">{t(option.labelKey)}</span>
-                          <span className="block text-[11px] leading-4 text-[#87867f] dark:text-[#b0aea5]">{t(option.descriptionKey)}</span>
+                          <span className="block text-[11px] leading-4 text-[#5e5d59] dark:text-[#b0aea5]">{t(option.descriptionKey)}</span>
                         </span>
                       </SelectItem>
                     ))}
@@ -540,7 +548,6 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               <Select
                 size="sm"
                 label={t('selectAIModel')}
-                aria-label={t('selectAIModel')}
                 data-testid="ai-model-select"
                 selectedKeys={[selectedAIModelDraft]}
                 onSelectionChange={(keys) => {
@@ -552,7 +559,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                   label: "text-[#5e5d59] dark:text-[#b0aea5]",
                   value: "text-sm font-semibold",
                   popoverContent: "w-[min(22rem,calc(100vw-2rem))] border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
-                  listboxWrapper: "relative max-h-[16rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]",
+                  listboxWrapper: "relative max-h-[16rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#5e5d59_transparent]",
                 }}
                 startContent={<Icon icon="lucide:brain-circuit" className="h-4 w-4" />}
               >
@@ -591,7 +598,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
             )}
             {isCodeAgentRoom && (
               <div className="space-y-2 rounded-lg border border-[#dedbd0] bg-[#f0eee6] p-3 dark:border-[#30302e] dark:bg-[#242421]">
-                <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[#87867f] dark:text-[#b0aea5]">
+                <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[#5e5d59] dark:text-[#b0aea5]">
                   <Icon
                     icon={isCodexCodeAgent ? selectedCodexPermissionOption.icon : getCodeAgentModeIcon(codeAgentModeDraft)}
                     className="h-3.5 w-3.5"
@@ -645,7 +652,6 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               <Select
                 size="sm"
                 label={t('selectAIRole')}
-                aria-label={t('selectAIRole')}
                 selectedKeys={[selectedRoleIdDraft]}
                 onSelectionChange={(keys) => {
                   const selectedKey = Array.from(keys)[0]?.toString();
@@ -656,7 +662,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
                   label: "text-[#5e5d59] dark:text-[#b0aea5]",
                   value: "text-sm font-semibold",
                   popoverContent: "w-52 border border-[#dedbd0] bg-[#faf9f5] dark:border-[#30302e] dark:bg-[#1d1d1b]",
-                  listboxWrapper: "relative max-h-[14rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#87867f_transparent]",
+                  listboxWrapper: "relative max-h-[14rem] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#5e5d59_transparent]",
                 }}
                 startContent={<Icon icon={selectedRoleDraft.icon} className="h-4 w-4" />}
               >
@@ -672,7 +678,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
               </Select>
             )}
             <div className="space-y-2 rounded-lg border border-[#dedbd0] bg-[#f0eee6] p-3 dark:border-[#30302e] dark:bg-[#242421]">
-              <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[#87867f] dark:text-[#b0aea5]">
+              <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[#5e5d59] dark:text-[#b0aea5]">
                 <Icon icon="lucide:brain-circuit" className="h-3.5 w-3.5" aria-hidden="true" />
                 {t('aiContextLimit')}
               </div>
@@ -703,8 +709,8 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
             <Button
               color="secondary"
               onPress={handleSettingsApply}
-              isDisabled={!settingsChanged}
-              className="bg-[#c96442] text-[#faf9f5]"
+              isDisabled={!settingsChanged || isInputLocked || isSending || isAiProcessing}
+              className="bg-secondary text-secondary-foreground hover:bg-[#94462f] dark:hover:bg-[#e08a6a]"
             >
               {t('apply')}
             </Button>
@@ -713,7 +719,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
       </Modal>
 
       <Modal
-        isOpen={Boolean(pendingPremiumModel)}
+        isOpen={isSettingsOpen && !isInputLocked && Boolean(pendingPremiumModel)}
         onClose={closePremiumConfirmation}
         isDismissable={false}
         size="md"
@@ -746,7 +752,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
           </ModalBody>
           <ModalFooter>
             <Button variant="light" onPress={closePremiumConfirmation}>{t('cancel')}</Button>
-            <Button color="warning" onPress={confirmPremiumModelChange}>
+            <Button color="warning" onPress={confirmPremiumModelChange} isDisabled={isInputLocked || isSending || isAiProcessing}>
               {premiumConfirmationStep === 1 ? t('premiumModelPriceConfirmationContinue') : t('switchPremiumModel')}
             </Button>
           </ModalFooter>

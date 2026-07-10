@@ -15,6 +15,8 @@ interface ChatRoomViewProps {
   currentRoom: Room;
   memberCount: number | null;
   isRestoringRoom: boolean;
+  isRoomSessionReady: boolean;
+  onRetryRoomSession: () => void;
   username: string;
   clientId: string;
   handleCopyToClipboard: (text: string) => void;
@@ -35,6 +37,8 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
   currentRoom,
   memberCount,
   isRestoringRoom,
+  isRoomSessionReady,
+  onRetryRoomSession,
   username,
   clientId,
   handleCopyToClipboard,
@@ -56,6 +60,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
   const messageListRef = React.useRef<MessageListHandle>(null);
   const [composerHeight, setComposerHeight] = React.useState(96);
   const [showScrollButton, setShowScrollButton] = React.useState(false);
+  const effectiveRoomPermissions = isRoomSessionReady ? roomPermissions : null;
 
   React.useEffect(() => {
     setReplyToMessage(null);
@@ -89,6 +94,8 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
         currentRoom={currentRoom}
         memberCount={memberCount}
         isRestoringRoom={isRestoringRoom}
+        isRoomSessionReady={isRoomSessionReady}
+        onRetryRoomSession={onRetryRoomSession}
         handleCopyToClipboard={handleCopyToClipboard}
         handleShareRoom={handleShareRoom}
         handleToggleSave={handleToggleSave}
@@ -100,7 +107,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
         handleDeleteRoom={handleDeleteRoom}
         handleRenameRoom={handleRenameRoom}
         clientId={clientId}
-        roomPermissions={roomPermissions}
+        roomPermissions={effectiveRoomPermissions}
         onRoomUpdated={onRoomUpdated}
       />
 
@@ -116,7 +123,8 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
             roomId={currentRoom.id}
             room={currentRoom}
             onReply={setReplyToMessage}
-            roomPermissions={roomPermissions}
+            roomPermissions={effectiveRoomPermissions}
+            isRoomSessionReady={isRoomSessionReady}
             bottomInsetPx={MESSAGE_LIST_BOTTOM_GAP_PX}
             onScrollButtonVisibilityChange={setShowScrollButton}
           />
@@ -158,8 +166,11 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
             onOptimisticMessageFailed={(clientMessageId, error) =>
               messageListRef.current?.markOptimisticMessageFailed(clientMessageId, error)
             }
-            canPost={roomPermissions?.canPost ?? true}
-            postingRestrictionReason={roomPermissions?.postingRestrictionReason}
+            isRoomSessionReady={isRoomSessionReady}
+            canPost={isRoomSessionReady && Boolean(roomPermissions?.canPost)}
+            postingRestrictionReason={isRoomSessionReady
+              ? roomPermissions?.postingRestrictionReason
+              : t(isRestoringRoom ? 'loading' : 'errorRestoringRoom')}
             postingSchedule={currentRoom.postingSchedule}
           />
         </div>

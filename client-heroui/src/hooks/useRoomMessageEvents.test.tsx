@@ -34,7 +34,7 @@ const cacheMock = vi.hoisted(() => ({
   readMemoryRoomMessageWindow: vi.fn(),
   readCachedRoomMessageWindow: vi.fn(),
   writeCachedRoomMessageWindow: vi.fn(),
-  deleteCachedRoomMessageWindow: vi.fn(),
+  clearCachedRoomMessageWindow: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../utils/socket', () => ({
@@ -175,7 +175,7 @@ describe('useRoomMessageEvents', () => {
 
     expect(props.closeEditModal).toHaveBeenCalledTimes(1);
     expect(props.closeDeleteModal).toHaveBeenCalledTimes(1);
-    expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', { roomId: 'room-1', limit: 80 });
+    expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', { roomId: 'room-1', limit: 80, baseHistoryVersion: 0 });
 
     props.closeEditModal.mockClear();
     props.closeDeleteModal.mockClear();
@@ -216,7 +216,7 @@ describe('useRoomMessageEvents', () => {
     expect(props.setHasMoreMessages).toHaveBeenCalledWith(true);
     expect(props.setHistoryVersion).toHaveBeenCalledWith(7);
     expect(cacheMock.readCachedRoomMessageWindow).not.toHaveBeenCalled();
-    expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', { roomId: 'room-1', limit: 80 });
+    expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', { roomId: 'room-1', limit: 80, baseHistoryVersion: 7 });
   });
 
   it('does not replace or scroll again when server history matches the displayed cached window', () => {
@@ -278,6 +278,90 @@ describe('useRoomMessageEvents', () => {
       message({ id: 'later', timestamp: '2026-05-03T10:00:02.000Z' }),
       message({ id: 'first', timestamp: '2026-05-03T10:00:00.000Z' }),
     ]);
+  });
+
+  it('ignores a late history payload from the previously active room', async () => {
+    const props = createHarnessProps();
+    render(<Harness {...props} roomId="room-2" />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    props.updateMessages.mockClear();
+    props.setHistoryVersion.mockClear();
+    props.setHasMoreMessages.mockClear();
+    props.setOldestMessageId.mockClear();
+    props.setIsLoading.mockClear();
+    props.setIsLoadingMore.mockClear();
+    cacheMock.writeCachedRoomMessageWindow.mockClear();
+
+    act(() => {
+      socketMock.trigger('message_history', {
+        roomId: 'room-1',
+        messages: [message({ id: 'late-room-1-message', roomId: 'room-1' })],
+        historyVersion: 99,
+        hasMore: true,
+        oldestMessageId: 'late-room-1-message',
+        mode: 'replace',
+      });
+    });
+
+    expect(props.updateMessages).not.toHaveBeenCalled();
+    expect(props.setHistoryVersion).not.toHaveBeenCalled();
+    expect(props.setHasMoreMessages).not.toHaveBeenCalled();
+    expect(props.setOldestMessageId).not.toHaveBeenCalled();
+    expect(props.setIsLoading).not.toHaveBeenCalled();
+    expect(props.setIsLoadingMore).not.toHaveBeenCalled();
+    expect(cacheMock.writeCachedRoomMessageWindow).not.toHaveBeenCalled();
+  });
+
+  it('does not let an older replace response erase a newer live message', () => {
+    const props = createHarnessProps();
+    render(<Harness {...props} />);
+
+    socketMock.trigger('message_history', {
+      roomId: 'room-1',
+      messages: [message({ id: 'initial' })],
+      historyVersion: 4,
+      requestedHistoryVersion: 0,
+      hasMore: false,
+      mode: 'replace',
+    });
+    socketMock.trigger('new_message', message({ id: 'newer-live-message' }));
+    props.updateMessages.mockClear();
+    cacheMock.writeCachedRoomMessageWindow.mockClear();
+
+    socketMock.trigger('message_history', {
+      roomId: 'room-1',
+      messages: [message({ id: 'stale-replacement' })],
+      historyVersion: 4,
+      requestedHistoryVersion: 4,
+      hasMore: false,
+      mode: 'replace',
+    });
+
+    expect(props.updateMessages).not.toHaveBeenCalled();
+    expect(cacheMock.writeCachedRoomMessageWindow).not.toHaveBeenCalled();
+    expect(props.setIsLoadingMore).toHaveBeenLastCalledWith(false);
+  });
+
+  it('does not prepend a page requested before the room history was cleared', () => {
+    const props = createHarnessProps();
+    render(<Harness {...props} />);
+    socketMock.trigger('messages_cleared', 'room-1');
+    props.updateMessages.mockClear();
+
+    socketMock.trigger('message_history', {
+      roomId: 'room-1',
+      messages: [message({ id: 'cleared-old-message' })],
+      historyVersion: 1,
+      requestedHistoryVersion: 0,
+      hasMore: false,
+      mode: 'prepend',
+    });
+
+    expect(props.updateMessages).not.toHaveBeenCalled();
+    expect(props.setIsLoadingMore).toHaveBeenLastCalledWith(false);
   });
 
   it('preserves interleaved code-agent text and tool history after refresh', () => {
@@ -394,6 +478,33 @@ describe('useRoomMessageEvents', () => {
       historyVersion: 5,
       hasMore: false,
       messages: currentMessages,
+    }));
+  });
+
+  it('advances the cache boundary on clear and caches later messages normally', () => {
+    const initialMessage = message({ id: 'before-clear', content: 'before' });
+    const afterClear = message({ id: 'after-clear', content: 'after' });
+    let currentMessages = [initialMessage];
+    const props = createHarnessProps();
+    props.updateMessages.mockImplementation(updater => {
+      currentMessages = typeof updater === 'function'
+        ? updater(currentMessages)
+        : updater;
+    });
+    render(<Harness {...props} currentMessages={currentMessages} />);
+    cacheMock.writeCachedRoomMessageWindow.mockClear();
+
+    socketMock.trigger('messages_cleared', 'room-1');
+
+    expect(currentMessages).toEqual([]);
+    expect(cacheMock.clearCachedRoomMessageWindow).toHaveBeenCalledWith('room-1');
+
+    socketMock.trigger('new_message', afterClear);
+
+    expect(currentMessages).toEqual([afterClear]);
+    expect(cacheMock.writeCachedRoomMessageWindow).toHaveBeenLastCalledWith(expect.objectContaining({
+      roomId: 'room-1',
+      messages: [afterClear],
     }));
   });
 

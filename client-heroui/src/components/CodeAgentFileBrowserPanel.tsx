@@ -427,7 +427,7 @@ function CodeAgentBrowserTabIcon({
   if (!faviconUrl || failedUrl === faviconUrl) {
     return (
       <Globe2
-        className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]"
+        className="h-3.5 w-3.5 shrink-0 text-[#5e5d59] dark:text-[#8f8d86]"
         data-testid="code-agent-browser-tab-favicon-fallback"
       />
     );
@@ -574,7 +574,7 @@ function CodeAgentBrowserMoreMenu({
       <button
         ref={buttonRef}
         type="button"
-        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
         aria-label={t('moreActions')}
         aria-haspopup="menu"
         aria-expanded={menuOpen}
@@ -601,7 +601,7 @@ function CodeAgentBrowserMoreMenu({
               closeMenu();
             }}
           >
-            <RefreshCw className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+            <RefreshCw className="h-3.5 w-3.5 shrink-0 text-[#5e5d59] dark:text-[#8f8d86]" />
             <span className="min-w-0 truncate">{t('codeAgentBrowserHardReload')}</span>
           </button>
           <button
@@ -614,7 +614,7 @@ function CodeAgentBrowserMoreMenu({
               closeMenu();
             }}
           >
-            <Globe2 className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+            <Globe2 className="h-3.5 w-3.5 shrink-0 text-[#5e5d59] dark:text-[#8f8d86]" />
             <span className="min-w-0 truncate">
               {deviceToolbarVisible
                 ? t('codeAgentBrowserHideDeviceToolbar')
@@ -624,7 +624,7 @@ function CodeAgentBrowserMoreMenu({
           <div className="my-1 h-px bg-[#dedbd0] dark:bg-[#30302e]" />
           <div
             className={`flex items-center justify-between gap-3 rounded px-2 py-1.5 text-xs ${
-              canZoom ? 'text-[#141413] dark:text-[#faf9f5]' : 'text-[#87867f] opacity-60 dark:text-[#8f8d86]'
+              canZoom ? 'text-[#141413] dark:text-[#faf9f5]' : 'text-[#5e5d59] opacity-60 dark:text-[#8f8d86]'
             }`}
             role="group"
             aria-label={t('codeAgentBrowserZoom')}
@@ -640,7 +640,7 @@ function CodeAgentBrowserMoreMenu({
               >
                 <Minus className="h-3.5 w-3.5" />
               </button>
-              <span className="min-w-12 text-center text-[11px] tabular-nums text-[#87867f] dark:text-[#8f8d86]">
+              <span className="min-w-12 text-center text-[11px] tabular-nums text-[#5e5d59] dark:text-[#8f8d86]">
                 {zoomLabel}
               </span>
               <button
@@ -717,7 +717,7 @@ function CodeAgentRightPanelEmptyState({
           <h3 className="text-sm font-medium text-[#141413] dark:text-[#faf9f5]">
             {t('codeAgentOpenWorkspaceSurface')}
           </h3>
-          <p className="mt-1 text-xs text-[#87867f] dark:text-[#8f8d86]">
+          <p className="mt-1 text-xs text-[#5e5d59] dark:text-[#8f8d86]">
             {t('codeAgentChooseWorkspaceSurface')}
           </p>
         </div>
@@ -743,7 +743,7 @@ function CodeAgentRightPanelEmptyState({
                 <span className="text-sm font-medium text-[#141413] dark:text-[#faf9f5]">
                   {action.label}
                 </span>
-                <span className="mt-1 text-xs leading-relaxed text-[#87867f] dark:text-[#8f8d86]">
+                <span className="mt-1 text-xs leading-relaxed text-[#5e5d59] dark:text-[#8f8d86]">
                   {action.description}
                 </span>
               </button>
@@ -887,7 +887,7 @@ function CodeAgentBrowserUnreachable({
       data-testid="code-agent-browser-preview-unreachable"
     >
       <div className="mx-auto flex w-full max-w-xl flex-1 flex-col px-8 py-12 sm:py-16">
-        <FileWarning className="mb-6 h-12 w-12 text-[#87867f] dark:text-[#8f8d86]" />
+        <FileWarning className="mb-6 h-12 w-12 text-[#5e5d59] dark:text-[#8f8d86]" />
         <h1 className="mb-3 text-2xl font-semibold leading-tight text-[#141413] dark:text-[#faf9f5]">
           {t('codeAgentBrowserUnreachableTitle')}
         </h1>
@@ -909,7 +909,7 @@ function CodeAgentBrowserUnreachable({
           </div>
         ) : null}
 
-        <div className="mt-8 text-xs uppercase tracking-wide text-[#87867f] dark:text-[#8f8d86]">
+        <div className="mt-8 text-xs uppercase tracking-wide text-[#5e5d59] dark:text-[#8f8d86]">
           {errorLabel}
         </div>
 
@@ -926,7 +926,7 @@ function CodeAgentBrowserUnreachable({
           <div className="flex-1" />
           <button
             type="button"
-            className="inline-flex h-8 items-center rounded-md bg-[#c96442] px-3 text-xs font-semibold text-white transition-colors hover:bg-[#b95334] dark:bg-[#d97757] dark:hover:bg-[#c96442]"
+            className="inline-flex h-8 items-center rounded-md bg-secondary px-3 text-xs font-semibold text-secondary-foreground transition-colors hover:bg-[#94462f] dark:hover:bg-[#ffb197]"
             onClick={onReload}
           >
             {t('codeAgentBrowserUnreachableReload')}
@@ -959,7 +959,7 @@ function CodeAgentDevServerPreviewPending({
             <div className="text-sm font-medium text-[#141413] dark:text-[#faf9f5]">
               {t('codeAgentPreparingBrowserPreview')}
             </div>
-            <div className="mt-0.5 truncate text-xs text-[#87867f] dark:text-[#8f8d86]">
+            <div className="mt-0.5 truncate text-xs text-[#5e5d59] dark:text-[#8f8d86]">
               {preview.frameworkName} - {preview.requestedUrl}
             </div>
           </div>
@@ -1034,12 +1034,12 @@ function CodeAgentBrowserSurfaceChrome({
 
   const displayValue = inputFocused ? draft : formatBrowserSurfaceAddressDisplay(value);
   const displayTitle = !inputFocused && displayValue !== value ? value : undefined;
-  const browserChromeButtonClass = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-45 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]';
+  const browserChromeButtonClass = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-45 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]';
   const addressInput = (
     <input
       ref={inputRef}
       aria-label={t('codeAgentBrowserAddressLabel')}
-      className="h-7 min-w-0 flex-1 rounded-md border border-transparent bg-[#f0eee6] px-2 text-xs text-[#141413] outline-none transition-colors placeholder:text-[#87867f] focus:border-[#c96442]/70 focus:bg-[#faf9f5] dark:bg-[#242422] dark:text-[#faf9f5] dark:placeholder:text-[#8f8d86] dark:focus:border-[#d97757]/70 dark:focus:bg-[#1d1d1b]"
+      className="h-7 min-w-0 flex-1 rounded-md border border-transparent bg-[#f0eee6] px-2 text-xs text-[#141413] outline-none transition-colors placeholder:text-[#5e5d59] focus:border-[#c96442]/70 focus:bg-[#faf9f5] dark:bg-[#242422] dark:text-[#faf9f5] dark:placeholder:text-[#8f8d86] dark:focus:border-[#d97757]/70 dark:focus:bg-[#1d1d1b]"
       placeholder={t('codeAgentBrowserAddressPlaceholder')}
       spellCheck={false}
       title={displayTitle}
@@ -1586,12 +1586,12 @@ function CodeAgentPreviewSurface({
                         title={server.url}
                         onClick={() => handleOpenWorkspacePreviewServer(server)}
                       >
-                        <TerminalSquare className="h-4 w-4 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                        <TerminalSquare className="h-4 w-4 shrink-0 text-[#5e5d59] dark:text-[#8f8d86]" />
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-xs font-medium text-[#141413] dark:text-[#faf9f5]">
                             {label}
                           </span>
-                          <span className="block truncate text-[11px] text-[#87867f] dark:text-[#8f8d86]">
+                          <span className="block truncate text-[11px] text-[#5e5d59] dark:text-[#8f8d86]">
                             {subtitle}
                           </span>
                         </span>
@@ -1613,23 +1613,23 @@ function CodeAgentPreviewSurface({
                     );
                   })}
                 </div>
-                <p className="mt-2 px-1 text-xs leading-relaxed text-[#87867f] dark:text-[#8f8d86]">
+                <p className="mt-2 px-1 text-xs leading-relaxed text-[#5e5d59] dark:text-[#8f8d86]">
                   {t('codeAgentWorkspacePreviewServersHint')}
                 </p>
               </div>
             ) : (
               <>
-                <Globe2 className="h-5 w-5 text-[#87867f] dark:text-[#8f8d86]" />
+                <Globe2 className="h-5 w-5 text-[#5e5d59] dark:text-[#8f8d86]" />
                 <div className="text-sm font-medium text-[#141413] dark:text-[#faf9f5]">
                   {t('codeAgentNoPreviewLoaded')}
                 </div>
-                <div className="max-w-sm text-xs leading-relaxed text-[#87867f] dark:text-[#8f8d86]">
+                <div className="max-w-sm text-xs leading-relaxed text-[#5e5d59] dark:text-[#8f8d86]">
                   {t('codeAgentBrowserSurfaceDescription')}
                 </div>
               </>
             )}
             {workspacePreviewServersPending ? (
-              <div className="flex items-center gap-2 text-xs text-[#87867f] dark:text-[#8f8d86]">
+              <div className="flex items-center gap-2 text-xs text-[#5e5d59] dark:text-[#8f8d86]">
                 <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
                 <span>{t('codeAgentWorkspacePreviewServersScanning')}</span>
               </div>
@@ -1659,12 +1659,12 @@ function CodeAgentPreviewSurface({
                       title={subtitle}
                       onClick={() => onNavigate(surface.id, target)}
                     >
-                      <Globe2 className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                      <Globe2 className="h-3.5 w-3.5 shrink-0 text-[#5e5d59] dark:text-[#8f8d86]" />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-xs font-medium text-[#141413] dark:text-[#faf9f5]">
                           {title}
                         </span>
-                        <span className="block truncate text-[11px] text-[#87867f] dark:text-[#8f8d86]">
+                        <span className="block truncate text-[11px] text-[#5e5d59] dark:text-[#8f8d86]">
                           {subtitle}
                         </span>
                       </span>
@@ -1696,7 +1696,7 @@ function CodeAgentPreviewSurface({
       <div className="flex min-h-0 flex-1 flex-col bg-[#faf9f5] dark:bg-[#1d1d1b]">
         {chrome}
         <div
-          className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-[#87867f] dark:text-[#8f8d86]"
+          className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-[#5e5d59] dark:text-[#8f8d86]"
           role="status"
           aria-label={t('codeAgentPreparingBrowserPreview')}
         >
@@ -3575,11 +3575,11 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                       onClick={() => activateFileSurface(surface.id)}
                     >
                       {surface.kind === 'diff' ? (
-                        <FileDiff className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                        <FileDiff className="h-3.5 w-3.5 shrink-0 text-[#5e5d59] dark:text-[#8f8d86]" />
                       ) : surface.kind === 'files' ? (
-                        <Files className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                        <Files className="h-3.5 w-3.5 shrink-0 text-[#5e5d59] dark:text-[#8f8d86]" />
                       ) : surface.kind === 'terminal' ? (
-                        <TerminalSquare className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                        <TerminalSquare className="h-3.5 w-3.5 shrink-0 text-[#5e5d59] dark:text-[#8f8d86]" />
                       ) : surface.kind === 'preview' ? (
                         <CodeAgentBrowserTabIcon url={surface.url} />
                       ) : surface.kind === 'file' ? (
@@ -3595,7 +3595,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                     {isMobileSurface ? (
                       <button
                         type="button"
-                        className="mr-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[#87867f] hover:bg-[#dedbd0] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+                        className="mr-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[#5e5d59] hover:bg-[#dedbd0] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
                         aria-label={`${t('moreActions')} ${fullTitle}`}
                         title={t('moreActions')}
                         data-testid="code-agent-mobile-file-tab-actions"
@@ -3606,7 +3606,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                     ) : null}
                     <button
                       type="button"
-                      className={`relative mr-0.5 inline-flex shrink-0 items-center justify-center rounded text-[#87867f] hover:bg-[#dedbd0] hover:text-[#141413] focus:opacity-100 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
+                      className={`relative mr-0.5 inline-flex shrink-0 items-center justify-center rounded text-[#5e5d59] hover:bg-[#dedbd0] hover:text-[#141413] focus:opacity-100 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
                         isMobileSurface ? 'h-6 w-6 p-1 opacity-100' : `h-4 w-4 p-0.5 ${pending ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`
                       }`}
                       aria-label={`${t('close')} ${fullTitle}`}
@@ -3635,7 +3635,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                 <button
                   ref={fileSurfaceAddMenuButtonRef}
                   type="button"
-                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#faf9f5] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:bg-[#1d1d1b] dark:hover:text-[#faf9f5]"
+                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[#5e5d59] transition-colors hover:bg-[#faf9f5] hover:text-[#141413] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] dark:text-[#8f8d86] dark:hover:bg-[#1d1d1b] dark:hover:text-[#faf9f5]"
                   aria-label={t('codeAgentAddWorkspaceSurface')}
                   aria-haspopup="menu"
                   aria-expanded={fileSurfaceAddMenuOpen}
@@ -3679,7 +3679,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
             role="menuitem"
             onClick={openPreviewSurface}
           >
-            <Globe2 className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+            <Globe2 className="h-3.5 w-3.5 shrink-0 text-[#5e5d59] dark:text-[#8f8d86]" />
             <span className="min-w-0 truncate">{t('codeAgentBrowserSurface')}</span>
           </button>
           <button
@@ -3688,7 +3688,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
             role="menuitem"
             onClick={openTerminalSurface}
           >
-            <TerminalSquare className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+            <TerminalSquare className="h-3.5 w-3.5 shrink-0 text-[#5e5d59] dark:text-[#8f8d86]" />
             <span className="min-w-0 truncate">{t('codeAgentTerminalSurface')}</span>
           </button>
           <button
@@ -3697,7 +3697,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
             role="menuitem"
             onClick={openFilesSurface}
           >
-            <Files className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+            <Files className="h-3.5 w-3.5 shrink-0 text-[#5e5d59] dark:text-[#8f8d86]" />
             <span className="min-w-0 truncate">{t('codeAgentWorkspaceFiles')}</span>
           </button>
           <button
@@ -3706,7 +3706,7 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
             role="menuitem"
             onClick={openDiffSurface}
           >
-            <FileDiff className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+            <FileDiff className="h-3.5 w-3.5 shrink-0 text-[#5e5d59] dark:text-[#8f8d86]" />
             <span className="min-w-0 truncate">{t('codeAgentChanges')}</span>
           </button>
         </div>
@@ -3820,9 +3820,9 @@ export const CodeAgentFileBrowserPanel: React.FC<CodeAgentFileBrowserPanelProps>
                 onClick={() => setMobileDiffFileListOpen((open) => !open)}
               >
                 {showMobileDiffFileList ? (
-                  <FileDiff className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                  <FileDiff className="h-3.5 w-3.5 shrink-0 text-[#5e5d59] dark:text-[#8f8d86]" />
                 ) : (
-                  <Files className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                  <Files className="h-3.5 w-3.5 shrink-0 text-[#5e5d59] dark:text-[#8f8d86]" />
                 )}
                 <span className="min-w-0 truncate">
                   {showMobileDiffFileList ? t('codeAgentChanges') : t('codeAgentChangedFiles')}

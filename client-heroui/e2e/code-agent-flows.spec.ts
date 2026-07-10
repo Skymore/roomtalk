@@ -29,7 +29,7 @@ async function createCodeAgentRoom(page: Parameters<typeof openRoomsPage>[0], co
   await page.locator('[role="dialog"]').getByRole('button', { name: 'Create Room' }).click();
 
   await expectChatRoom(page, roomName);
-  await expect(page.getByText(/code agent/i).first()).toBeVisible();
+  await expect(page.getByTestId('code-agent-workspace')).toBeVisible();
   return roomName;
 }
 
@@ -70,7 +70,7 @@ test('runs a fake code agent turn and restores tool history after refresh', asyn
   await expect(page.getByText('Command')).toBeVisible();
   await expect(page.getByText('Tool failed')).toBeVisible();
   await expect(page.getByText('Exit 2')).toBeVisible();
-  await expect(page.getByText(/stdout: hello from code agent fake runner/)).toBeVisible();
+  await expect(page.getByText(/stdout: hello from Coco Agent fake runner/)).toBeVisible();
   await expect(page.getByText('Show more')).toBeVisible();
   await page.getByText('Show more').click();
   await expect(page.getByText('Show less')).toBeVisible();
@@ -78,12 +78,12 @@ test('runs a fake code agent turn and restores tool history after refresh', asyn
 
   await page.reload();
   await expectChatRoom(page, roomName);
-  await expect(messageItem(page, 'code agent fake runner received the task.')).toBeVisible();
+  await expect(messageItem(page, 'Coco Agent fake runner received the task.')).toBeVisible();
   await (await expectCodeAgentToolCall(page)).click();
   await expect(page.getByText('Tool failed')).toBeVisible();
 });
 
-test('locks code agent ask controls while the room turn is running', async ({ page, context, request }) => {
+test('exposes the interrupt control while a code agent turn is running', async ({ page, context, request }) => {
   await createCodeAgentRoom(page, context, request);
 
   const prompt = uniqueName('codeAgent-first');
@@ -93,16 +93,13 @@ test('locks code agent ask controls while the room turn is running', async ({ pa
   await editor.click();
   await page.keyboard.insertText(prompt);
   await askButton.click();
-  await expect(askButton).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Interrupt turn', exact: true })).toBeEnabled();
   await expectMessage(page, prompt).toBeVisible();
 
   await expectCodeAgentToolCall(page);
-  await expect(messageItem(page, 'code agent fake runner received the task.')).toBeVisible();
-  await expect(page.getByText('code agent fake runner received the task.')).toHaveCount(1);
-  await expect(editor).toHaveAttribute('contenteditable', 'true');
-  await editor.click();
-  await page.keyboard.insertText(uniqueName('codeAgent-next'));
-  await expect(askButton).toBeEnabled();
+  await expect(messageItem(page, 'Coco Agent fake runner received the task.')).toBeVisible();
+  await expect(page.getByTestId('message-item').filter({ hasText: 'Coco Agent fake runner received the task.' })).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'Run', exact: true })).toBeEnabled();
 });
 
 test('edits a code agent prompt and starts a new code agent turn', async ({ page, context, request }) => {
@@ -116,14 +113,16 @@ test('edits a code agent prompt and starts a new code agent turn', async ({ page
   });
 
   await askCodeAgent(page, originalPrompt);
-  await expect(messageItem(page, 'code agent fake runner received the task.')).toBeVisible();
+  await expect(messageItem(page, 'Coco Agent fake runner received the task.')).toBeVisible();
   await expect(page.getByText('Running')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Run', exact: true })).toBeEnabled();
   await editMessage(page, originalPrompt, editedPrompt, true);
 
   await expectMessage(page, editedPrompt).toBeVisible();
-  await expect(messageItem(page, 'code agent fake runner received the task.')).toBeVisible();
-  await expect(page.getByText('Code agent fake runner received the task.')).toHaveCount(2);
+  await expect(messageItem(page, 'Coco Agent fake runner received the task.')).toBeVisible();
+  // Edit-and-run truncates the previous answer before starting the replacement
+  // turn, so only the new canonical answer should remain in the message log.
+  await expect(page.getByTestId('message-item').filter({ hasText: 'Coco Agent fake runner received the task.' })).toHaveCount(1);
   await expectCodeAgentToolCall(page);
   expect(dialogs).toEqual([]);
 });

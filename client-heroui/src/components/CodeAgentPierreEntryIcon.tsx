@@ -79,9 +79,9 @@ export const CodeAgentPierreEntryIcon = React.memo(function CodeAgentPierreEntry
 
   if (!icon) {
     return kind === 'directory' ? (
-      <FolderIcon className={`size-4 text-[#87867f] dark:text-[#8f8d86] ${className}`} />
+      <FolderIcon className={`size-4 text-[#5e5d59] dark:text-[#8f8d86] ${className}`} />
     ) : (
-      <FileIcon className={`size-4 text-[#87867f] dark:text-[#8f8d86] ${className}`} />
+      <FileIcon className={`size-4 text-[#5e5d59] dark:text-[#8f8d86] ${className}`} />
     );
   }
 

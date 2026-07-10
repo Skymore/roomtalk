@@ -56,6 +56,13 @@ export class FakeCodeAgentRunnerClient implements CodeAgentRunnerClient {
       }
 
       const cloned = cloneEvent(event);
+      // Server-level E2E scripts are created once at process startup, before a
+      // request turn id exists. Treat the explicit "fake" sentinel as the
+      // current request turn so model-step accounting exercises the same
+      // invariant as a real runner.
+      if ('turnId' in cloned && cloned.turnId === 'fake') {
+        cloned.turnId = request.turnId;
+      }
       emitted.push(cloned);
       await handlers.onEvent(cloned);
 

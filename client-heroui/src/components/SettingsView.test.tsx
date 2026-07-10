@@ -156,6 +156,31 @@ describe('SettingsView Codex connection controls', () => {
     expect(window.open).toHaveBeenCalledWith('https://auth.openai.com/codex/device', '_blank', 'noopener,noreferrer');
   });
 
+  it('announces successful settings results once without an explicit live override', async () => {
+    render(<SettingsView {...baseProps} isCodexConnectionsEnabled />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'connectCodex' }));
+    await screen.findByText('codexLoginTitle');
+    fireEvent.click(screen.getAllByRole('button', { name: 'cancelCodexLogin' })[0]);
+
+    const result = await screen.findByRole('status');
+    expect(result.textContent).toBe('codexConnectionCancelled');
+    expect(result.getAttribute('aria-atomic')).toBe('true');
+    expect(result.hasAttribute('aria-live')).toBe(false);
+  });
+
+  it('announces settings errors once without an explicit live override', async () => {
+    codexApiMock.startCodexDeviceAuth.mockRejectedValueOnce(new Error('codex failed'));
+    render(<SettingsView {...baseProps} isCodexConnectionsEnabled />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'connectCodex' }));
+
+    const result = await screen.findByRole('alert');
+    expect(result.textContent).toBe('codex failed');
+    expect(result.getAttribute('aria-atomic')).toBe('true');
+    expect(result.hasAttribute('aria-live')).toBe(false);
+  });
+
   it('shows the connected Codex account summary', async () => {
     codexApiMock.getCodexConnectionStatus.mockResolvedValueOnce({
       clientId: 'client-1',
@@ -187,5 +212,68 @@ describe('SettingsView Codex connection controls', () => {
 
     await waitFor(() => expect(codexApiMock.cancelCodexDeviceAuth).toHaveBeenCalledWith('client-1'));
     expect(await screen.findByText('codexConnectionCancelled')).toBeTruthy();
+  });
+
+  it('labels the username editor from the visible settings label', () => {
+    render(<SettingsView {...baseProps} showEditUsername />);
+
+    expect(screen.getByRole('textbox', { name: 'username' })).toBeTruthy();
+  });
+
+  it('uses compact, collapsed account guidance', () => {
+    render(<SettingsView {...baseProps} />);
+
+    const googleHelp = screen.getByText('googleAccountIntroTitle').closest('details') as HTMLDetailsElement;
+    const userIdHelp = screen.getByText('userIdLoginIntroTitle').closest('details') as HTMLDetailsElement;
+
+    expect(googleHelp.open).toBe(false);
+    expect(userIdHelp.open).toBe(false);
+  });
+
+  it('places high-frequency preferences before account login forms', () => {
+    render(<SettingsView {...baseProps} />);
+
+    const language = screen.getByText('language');
+    const appearance = screen.getByText('appearance');
+    const googleAccount = screen.getByText('googleAccount');
+    const userIdLogin = screen.getByText('userIdLogin');
+    const appearsBefore = (first: Element, second: Element) => Boolean(
+      first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING
+    );
+
+    expect(appearsBefore(language, googleAccount)).toBe(true);
+    expect(appearsBefore(appearance, googleAccount)).toBe(true);
+    expect(appearsBefore(language, userIdLogin)).toBe(true);
+    expect(appearsBefore(appearance, userIdLogin)).toBe(true);
+  });
+
+  it('enables identity actions only when their basic local requirements are met', async () => {
+    render(<SettingsView {...baseProps} />);
+
+    const passwordButton = await screen.findByRole('button', { name: 'setUserIdPassword' }) as HTMLButtonElement;
+    const passwordInput = document.querySelector<HTMLInputElement>('input[autocomplete="new-password"]');
+    const existingIdInput = screen.getByRole('textbox', { name: 'existingUserId' });
+    const loginPasswordInput = document.querySelector<HTMLInputElement>('input[autocomplete="current-password"]');
+    const loginButton = screen.getByRole('button', { name: 'useExistingUserId' }) as HTMLButtonElement;
+
+    expect(passwordInput).toBeTruthy();
+    expect(loginPasswordInput).toBeTruthy();
+    passwordInput!.type = 'text';
+    loginPasswordInput!.type = 'text';
+    expect(screen.getAllByRole('textbox', { name: 'userIdPassword' })).toEqual(
+      expect.arrayContaining([passwordInput, loginPasswordInput]),
+    );
+    expect(passwordButton.disabled).toBe(true);
+    expect(loginButton.disabled).toBe(true);
+
+    fireEvent.change(passwordInput!, { target: { value: 'short' } });
+    expect(passwordButton.disabled).toBe(true);
+    fireEvent.change(passwordInput!, { target: { value: '12345678' } });
+    expect(passwordButton.disabled).toBe(false);
+
+    fireEvent.change(existingIdInput, { target: { value: 'client-2' } });
+    expect(loginButton.disabled).toBe(true);
+    fireEvent.change(loginPasswordInput!, { target: { value: 'password' } });
+    expect(loginButton.disabled).toBe(false);
   });
 });

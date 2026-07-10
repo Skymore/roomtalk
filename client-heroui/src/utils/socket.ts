@@ -50,10 +50,24 @@ const roomMemberCounts = new Map<string, number>();
 // Store callbacks for room member change events
 const roomMemberChangeCallbacks: ((event: RoomMemberEvent) => void)[] = [];
 const usernameAdoptedCallbacks: ((username: string) => void)[] = [];
+const roomMembershipRepairFailureCallbacks: ((roomId: string, error: Error) => void)[] = [];
 
 // Store current active room to rejoin after reconnection
 let activeRoomId: string | null = null;
 let activeRoomPassword: string | null = null;
+type RoomJoinIntent = {
+  version: number;
+  roomId: string;
+  password?: string;
+  state: 'pending' | 'success' | 'failed';
+  promise?: Promise<RoomJoinResult>;
+  error?: Error;
+  failureNotified?: boolean;
+};
+let roomJoinIntentVersion = 0;
+let desiredRoomJoin: RoomJoinIntent | null = null;
+let roomJoinRepairPromise: Promise<void> | null = null;
+const staleSettledRoomIds = new Set<string>();
 // Store the latest username so it can be re-sent on every (re)connection
 let currentUsername = '';
 let registeredSocketId: string | null = null;
@@ -64,6 +78,7 @@ const SEND_MESSAGE_CONNECT_TIMEOUT_MS = 15000;
 const WORKSPACE_FILE_PREVIEW_ACK_TIMEOUT_MS = 10 * 60 * 1000;
 const ROOM_LOOKUP_TIMEOUT_MS = 30000;
 const CLIENT_AUTH_TOKEN_KEY = 'clientAuthToken';
+const ROOM_MEMBERSHIP_REPAIR_ATTEMPTS = 2;
 
 export type RoomJoinResult = {
   room?: Room;
@@ -521,6 +536,7 @@ export const ensureRegisteredSocket = (timeoutMs = SEND_MESSAGE_ACK_TIMEOUT_MS):
 type EmitWithAckOptions = {
   retryOnSocketReconnect?: boolean;
   timeoutMs?: number;
+  onLateResponse?: (response: SocketAckResponse) => void;
 };
 
 const isRetryableSocketDisconnectError = (error: unknown): boolean => {
@@ -573,6 +589,10 @@ const emitWithAck = <TResponse extends SocketAckResponse>(
 
     socket.once('disconnect', handleDisconnect);
     socket.emit(event, payload, (response: TResponse) => {
+      if (settled) {
+        options.onLateResponse?.(response);
+        return;
+      }
       settle(() => {
         if (response?.success) {
           resolve(response);
@@ -592,15 +612,51 @@ const emitWithAck = <TResponse extends SocketAckResponse>(
   });
 };
 
-// Join a chat room
-export const joinRoom = (roomId: string, password?: string): Promise<RoomJoinResult> => {
-  const previousRoomId = activeRoomId;
-  const previousRoomPassword = activeRoomPassword;
-  return emitWithAck<JoinRoomAckResponse>(
+type EmitJoinRoomRawOptions = {
+  reconcileLateResponse?: boolean;
+};
+
+const roomJoinAckError = (response: SocketAckResponse, fallback = 'Failed to join room') => {
+  const message = typeof response?.message === 'string' ? response.message : undefined;
+  return new Error(response?.error || message || fallback);
+};
+
+const isUncertainRoomJoinError = (error?: Error) => Boolean(error && (
+  error.message === 'Timed out while joining room'
+  || error.message === 'Socket disconnected before sending message'
+  || error.message === 'Socket disconnected while waiting for server acknowledgement'
+));
+
+const emitJoinRoomRaw = (
+  roomId: string,
+  password?: string,
+  options: EmitJoinRoomRawOptions = {},
+): Promise<RoomJoinResult> => (
+  emitWithAck<JoinRoomAckResponse>(
     'join_room',
     { roomId, password },
     'Timed out while joining room',
     'Failed to join room',
+    {
+      onLateResponse: options.reconcileLateResponse === false
+        ? undefined
+        : (response) => {
+          if (!response?.success) {
+            const intent = desiredRoomJoin;
+            if (
+              intent?.roomId === roomId
+              && intent.state === 'failed'
+              && isUncertainRoomJoinError(intent.error)
+            ) {
+              // Replace the earlier uncertain timeout/disconnect with the
+              // server's definitive late answer and notify session owners again.
+              intent.error = roomJoinAckError(response);
+              intent.failureNotified = false;
+            }
+          }
+          requestRoomJoinReconciliation(roomId);
+        },
+    },
   ).then((response) => ({
     room: response.room,
     permissions: response.permissions,
@@ -609,28 +665,167 @@ export const joinRoom = (roomId: string, password?: string): Promise<RoomJoinRes
     if (typeof result.memberCount === 'number') {
       roomMemberCounts.set(roomId, result.memberCount);
     }
-    activeRoomId = roomId; // 记录当前活动房间ID，用于重连后重新加入
-    activeRoomPassword = password || null;
     return result;
-  }).catch((error) => {
-    activeRoomId = previousRoomId;
-    activeRoomPassword = previousRoomPassword;
-    throw error;
+  })
+);
+
+const requestRoomJoinReconciliation = (staleRoomId: string) => {
+  staleSettledRoomIds.add(staleRoomId);
+  if (roomJoinRepairPromise) return;
+
+  roomJoinRepairPromise = Promise.resolve().then(async () => {
+    while (staleSettledRoomIds.size > 0) {
+      const staleRoomIds = [...staleSettledRoomIds];
+      staleSettledRoomIds.clear();
+      const desiredSnapshot = desiredRoomJoin;
+
+      if (!desiredSnapshot) {
+        staleRoomIds.forEach(roomId => socket.emit('leave_room', roomId));
+        continue;
+      }
+
+      if (desiredSnapshot.state === 'pending' && desiredSnapshot.promise) {
+        await desiredSnapshot.promise.catch(() => undefined);
+        if (desiredRoomJoin !== desiredSnapshot) {
+          staleRoomIds.forEach(roomId => staleSettledRoomIds.add(roomId));
+          continue;
+        }
+      }
+
+      if (desiredRoomJoin !== desiredSnapshot) {
+        staleRoomIds.forEach(roomId => staleSettledRoomIds.add(roomId));
+        continue;
+      }
+
+      const desiredState: RoomJoinIntent['state'] = (desiredSnapshot as RoomJoinIntent).state;
+      if (desiredState === 'success') {
+        // A concurrent server can transiently subscribe the socket to more than
+        // one room even when its persisted room list only records the latest.
+        // Remove every known stale room explicitly, then replay the desired join
+        // after all user intents have settled. Do not infer mutation order from
+        // acknowledgement order: the server performs awaited work between its
+        // membership write and ack.
+        staleRoomIds
+          .filter(roomId => roomId !== desiredSnapshot.roomId)
+          .forEach(roomId => socket.emit('leave_room', roomId));
+        let repairError: Error | null = null;
+        for (let attempt = 0; attempt < ROOM_MEMBERSHIP_REPAIR_ATTEMPTS; attempt += 1) {
+          if (desiredRoomJoin !== desiredSnapshot) break;
+          try {
+            // Repair attempts have one bounded budget. A late acknowledgement
+            // from a timed-out repair may have converged server state, but must
+            // not recursively open another repair epoch after the UI was locked.
+            await emitJoinRoomRaw(desiredSnapshot.roomId, desiredSnapshot.password, {
+              reconcileLateResponse: false,
+            });
+            repairError = null;
+            break;
+          } catch (error) {
+            repairError = error instanceof Error ? error : new Error('Failed to reconcile room membership');
+          }
+        }
+        if (desiredRoomJoin !== desiredSnapshot) {
+          staleSettledRoomIds.add(desiredSnapshot.roomId);
+        } else if (repairError) {
+          console.error('Failed to reconcile latest room membership after a stale join acknowledgement:', repairError);
+          roomMembershipRepairFailureCallbacks.forEach(callback => callback(desiredSnapshot.roomId, repairError));
+        }
+        continue;
+      }
+
+      // The latest join failed. Do not silently turn it into a success; only
+      // remove rooms that a superseded request may have joined late.
+      staleRoomIds.forEach(roomId => socket.emit('leave_room', roomId));
+      const failedIntentError = desiredSnapshot.error;
+      if (failedIntentError && !desiredSnapshot.failureNotified) {
+        desiredSnapshot.failureNotified = true;
+        roomMembershipRepairFailureCallbacks.forEach(callback => (
+          callback(desiredSnapshot.roomId, failedIntentError)
+        ));
+      }
+    }
+  }).finally(() => {
+    roomJoinRepairPromise = null;
+    if (staleSettledRoomIds.size > 0) {
+      const [nextRoomId] = staleSettledRoomIds;
+      staleSettledRoomIds.delete(nextRoomId);
+      requestRoomJoinReconciliation(nextRoomId);
+    }
   });
 };
 
+// Join a chat room. Membership acknowledgements can complete out of order, so
+// the latest user intent is recorded synchronously and stale completions repair
+// (or leave) their server-side membership without taking ownership of the UI.
+export const joinRoom = (roomId: string, password?: string): Promise<RoomJoinResult> => {
+  const intent: RoomJoinIntent = {
+    version: ++roomJoinIntentVersion,
+    roomId,
+    password,
+    state: 'pending',
+  };
+  desiredRoomJoin = intent;
+  activeRoomId = roomId;
+  activeRoomPassword = password || null;
+
+  const promise = emitJoinRoomRaw(roomId, password).then((result) => {
+    intent.state = 'success';
+    if (desiredRoomJoin !== intent) {
+      requestRoomJoinReconciliation(roomId);
+    }
+    return result;
+  }).catch((error) => {
+    intent.state = 'failed';
+    const joinError = error instanceof Error ? error : new Error('Failed to join room');
+    intent.error = joinError;
+    const outcomeIsUncertain = isUncertainRoomJoinError(joinError);
+    if (desiredRoomJoin !== intent || outcomeIsUncertain) {
+      requestRoomJoinReconciliation(roomId);
+    }
+    throw error;
+  });
+  intent.promise = promise;
+  return promise;
+};
+
 export const ensureRoomJoined = (roomId: string): Promise<RoomJoinResult> => {
-  const password = activeRoomId === roomId ? activeRoomPassword || undefined : undefined;
+  const password = desiredRoomJoin?.roomId === roomId
+    ? desiredRoomJoin.password
+    : activeRoomId === roomId
+      ? activeRoomPassword || undefined
+      : undefined;
   return joinRoom(roomId, password);
 };
 
 // Leave a chat room
 export const leaveRoom = (roomId: string) => {
+  if (desiredRoomJoin?.roomId === roomId) {
+    desiredRoomJoin = null;
+    roomJoinIntentVersion += 1;
+  }
   if (activeRoomId === roomId) {
     activeRoomId = null; // 清除活动房间ID
     activeRoomPassword = null;
   }
   socket.emit('leave_room', roomId);
+};
+
+export const resetRoomJoinStateForTests = () => {
+  roomJoinIntentVersion += 1;
+  desiredRoomJoin = null;
+  activeRoomId = null;
+  activeRoomPassword = null;
+  staleSettledRoomIds.clear();
+  roomJoinRepairPromise = null;
+  roomMembershipRepairFailureCallbacks.length = 0;
+};
+
+export const onRoomMembershipRepairFailure = (callback: (roomId: string, error: Error) => void) => {
+  roomMembershipRepairFailureCallbacks.push(callback);
+  return () => {
+    const index = roomMembershipRepairFailureCallbacks.indexOf(callback);
+    if (index !== -1) roomMembershipRepairFailureCallbacks.splice(index, 1);
+  };
 };
 
 // Create a new room
@@ -879,11 +1074,12 @@ const parseApiError = async (response: Response, fallback: string) => {
   return fallback;
 };
 
-const postJson = async <T>(path: string, body: unknown): Promise<T> => {
+const postJson = async <T>(path: string, body: unknown, options: { signal?: AbortSignal } = {}): Promise<T> => {
   const response = await fetch(apiPath(path), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    ...(options.signal ? { signal: options.signal } : {}),
   });
   if (!response.ok) {
     throw new Error(await parseApiError(response, 'Request failed'));
@@ -973,7 +1169,49 @@ export const logoutClientPasswordSession = async (): Promise<void> => {
   clearClientAuthToken();
 };
 
-const putMediaObject = async (uploadUrl: string, file: Blob, mimeType: string) => {
+const putMediaObject = async (
+  uploadUrl: string,
+  file: Blob,
+  mimeType: string,
+  options: { signal?: AbortSignal; onUploadProgress?: (progress: number) => void } = {},
+) => {
+  if (options.onUploadProgress || options.signal) {
+    await new Promise<void>((resolve, reject) => {
+      if (options.signal?.aborted) {
+        reject(new DOMException('Media upload cancelled', 'AbortError'));
+        return;
+      }
+      const request = new XMLHttpRequest();
+      const handleAbort = () => request.abort();
+      request.open('PUT', apiPath(uploadUrl));
+      request.setRequestHeader('Content-Type', mimeType);
+      request.upload.onprogress = (event) => {
+        if (!event.lengthComputable || event.total <= 0) return;
+        options.onUploadProgress?.(Math.min(100, Math.round((event.loaded / event.total) * 100)));
+      };
+      request.onload = () => {
+        options.signal?.removeEventListener('abort', handleAbort);
+        if (request.status >= 200 && request.status < 300) {
+          options.onUploadProgress?.(100);
+          resolve();
+        } else {
+          reject(new Error('Failed to upload media object'));
+        }
+      };
+      request.onerror = () => {
+        options.signal?.removeEventListener('abort', handleAbort);
+        reject(new Error('Failed to upload media object'));
+      };
+      request.onabort = () => {
+        options.signal?.removeEventListener('abort', handleAbort);
+        reject(new DOMException('Media upload cancelled', 'AbortError'));
+      };
+      options.signal?.addEventListener('abort', handleAbort, { once: true });
+      request.send(file);
+    });
+    return;
+  }
+
   const response = await fetch(apiPath(uploadUrl), {
     method: 'PUT',
     headers: { 'Content-Type': mimeType },
@@ -998,6 +1236,8 @@ export const uploadMediaMessage = async (params: {
   width?: number;
   height?: number;
   durationMs?: number;
+  signal?: AbortSignal;
+  onUploadProgress?: (progress: number) => void;
 }): Promise<Message> => {
   const mimeType = (params.mimeType || params.file.type || `${params.kind}/octet-stream`).toLowerCase();
   const byteSize = params.file.size;
@@ -1008,9 +1248,18 @@ export const uploadMediaMessage = async (params: {
     mimeType,
     byteSize,
     filename: params.filename,
-  }));
+  }), { signal: params.signal });
 
-  await putMediaObject(upload.uploadUrl, params.file, mimeType);
+  if (params.signal?.aborted) {
+    throw new DOMException('Media upload cancelled', 'AbortError');
+  }
+  await putMediaObject(upload.uploadUrl, params.file, mimeType, {
+    signal: params.signal,
+    onUploadProgress: params.onUploadProgress,
+  });
+  if (params.signal?.aborted) {
+    throw new DOMException('Media upload cancelled', 'AbortError');
+  }
 
   return postJson<Message>(`/api/media/uploads/${encodeURIComponent(upload.assetId)}/complete`, withClientAuthBody({
     clientId,
@@ -1028,7 +1277,7 @@ export const uploadMediaMessage = async (params: {
     width: params.width,
     height: params.height,
     durationMs: params.durationMs,
-  }));
+  }), { signal: params.signal });
 };
 
 export const requestAIResponse = (data: {

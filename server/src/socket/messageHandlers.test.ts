@@ -157,6 +157,21 @@ const createHarness = (clientId: string | null = 'client-1') => {
       this.messages.push(newMessage);
       return room({ lastActivityAt: newMessage.timestamp });
     },
+    async appendMessageIdempotent(newMessage: Message) {
+      const existing = newMessage.clientMessageId
+        ? this.messages.find(item => (
+            item.roomId === newMessage.roomId
+            && item.clientId === newMessage.clientId
+            && item.clientMessageId === newMessage.clientMessageId
+          ))
+        : undefined;
+      if (existing) {
+        return { room: roomActivityForMessages(this.messages), message: existing, inserted: false };
+      }
+      this.appendedMessages.push(newMessage);
+      this.messages.push(newMessage);
+      return { room: room({ lastActivityAt: newMessage.timestamp }), message: newMessage, inserted: true };
+    },
     async saveMessageHistory(_roomId: string, messages: Message[]) {
       this.savedHistory.push(messages);
       this.messages = messages;
@@ -208,7 +223,7 @@ describe('message socket handlers', () => {
   it('returns message history and AI cost totals for a room', async () => {
     const { socket } = createHarness();
 
-    await socket.invoke('get_room_messages', { roomId: 'room-1' });
+    await socket.invoke('get_room_messages', { roomId: 'room-1', baseHistoryVersion: 7 });
 
     assert.deepEqual(socket.emitted, [
       {
@@ -220,6 +235,7 @@ describe('message socket handlers', () => {
           hasMore: false,
           oldestMessageId: 'message-1',
           mode: 'replace',
+          requestedHistoryVersion: 7,
         }],
       },
       { event: 'ai_cost_total', args: [roomCost()] },
@@ -319,6 +335,52 @@ describe('message socket handlers', () => {
     assert.deepEqual(validResponse, { success: true, message: created });
   });
 
+  it('returns the canonical text message for duplicate client message IDs without rebroadcasting', async () => {
+    const text = createHarness('client-2');
+    const textResponses: Array<{ success: boolean; message?: Message }> = [];
+    const textPayload = {
+      roomId: 'room-1',
+      content: 'retry-safe text',
+      username: 'Ada',
+      avatar: { text: 'A', color: 'primary' },
+      clientMessageId: 'client-message-retry-1',
+    };
+
+    await text.socket.invoke('send_message', textPayload, (response: { success: boolean; message?: Message }) => {
+      textResponses.push(response);
+    });
+    await text.socket.invoke('send_message', { ...textPayload, content: 'must not overwrite' }, (response: { success: boolean; message?: Message }) => {
+      textResponses.push(response);
+    });
+
+    assert.equal(text.store.appendedMessages.length, 1);
+    assert.equal(text.io.roomEmits.length, 2);
+    assert.equal(textResponses.length, 2);
+    assert.equal(textResponses[1].message?.id, textResponses[0].message?.id);
+    assert.equal(textResponses[1].message?.content, 'retry-safe text');
+  });
+
+  it('rejects empty or oversized client message IDs', async () => {
+    const h = createHarness('client-2');
+    const responses: unknown[] = [];
+    await h.socket.invoke('send_message', {
+      roomId: 'room-1',
+      content: 'invalid id',
+      clientMessageId: '   ',
+    }, (response: unknown) => responses.push(response));
+    await h.socket.invoke('send_message', {
+      roomId: 'room-1',
+      content: 'invalid id',
+      clientMessageId: 'x'.repeat(129),
+    }, (response: unknown) => responses.push(response));
+
+    assert.deepEqual(responses, [
+      { success: false, error: 'Invalid client message ID' },
+      { success: false, error: 'Invalid client message ID' },
+    ]);
+    assert.equal(h.store.appendedMessages.length, 0);
+  });
+
   it('rejects new messages when the room posting schedule is closed', async () => {
     const closed = createHarness('client-2');
     closed.store.rooms = [
@@ -343,7 +405,7 @@ describe('message socket handlers', () => {
 
   it('does not broadcast WebSocket messages when persistence fails', async () => {
     const failing = createHarness('client-2');
-    failing.store.appendMessage = async (newMessage: Message) => {
+    failing.store.appendMessageIdempotent = async (newMessage: Message) => {
       failing.store.appendedMessages.push(newMessage);
       return null as any;
     };
@@ -682,6 +744,24 @@ describe('sticker messages over send_message', () => {
       { roomId: 'room-1', event: 'new_message', args: [created] },
     ]);
     assert.deepEqual(response, { success: true, message: created });
+  });
+
+  it('returns the canonical sticker for a duplicate client message ID without rebroadcasting', async () => {
+    const h = createHarness('client-2');
+    const responses: Array<{ success: boolean; message?: Message }> = [];
+    const payload = {
+      roomId: 'room-1',
+      content: 'xiaokumao/001/01',
+      messageType: 'sticker' as const,
+      clientMessageId: 'cm-sticker-retry-1',
+    };
+
+    await h.socket.invoke('send_message', payload, (response: { success: boolean; message?: Message }) => responses.push(response));
+    await h.socket.invoke('send_message', payload, (response: { success: boolean; message?: Message }) => responses.push(response));
+
+    assert.equal(h.store.appendedMessages.length, 1);
+    assert.equal(h.io.roomEmits.length, 2);
+    assert.equal(responses[1].message?.id, responses[0].message?.id);
   });
 
   it('lets a text message reply to a sticker with a sticker reply reference', async () => {

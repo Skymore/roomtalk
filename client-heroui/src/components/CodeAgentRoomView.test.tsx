@@ -98,6 +98,7 @@ vi.mock('./MessageInput', () => ({
     canSwitchCodeAgentMode,
     isCodeAgentRoom,
     canPost,
+    isRoomSessionReady,
     postingRestrictionReason,
     reviewComments = [],
     onRemoveReviewComment,
@@ -108,6 +109,7 @@ vi.mock('./MessageInput', () => ({
     canSwitchCodeAgentMode?: boolean;
     isCodeAgentRoom?: boolean;
     canPost?: boolean;
+    isRoomSessionReady?: boolean;
     postingRestrictionReason?: string;
     reviewComments?: readonly ReviewCommentContext[];
     onRemoveReviewComment?: (commentId: string) => void;
@@ -120,6 +122,7 @@ vi.mock('./MessageInput', () => ({
       data-code-agent-available-modes={(codeAgentAvailableModes || []).join(',')}
       data-can-switch-code-agent-mode={String(Boolean(canSwitchCodeAgentMode))}
       data-can-post={String(Boolean(canPost))}
+      data-session-ready={String(Boolean(isRoomSessionReady))}
       data-posting-restriction-reason={postingRestrictionReason || ''}
       data-review-comments={String(reviewComments.length)}
     >
@@ -276,11 +279,14 @@ const renderCodeAgentRoom = (
   availableModes: Array<'plan' | 'edit' | 'approveForMe' | 'fullAccess' | 'acceptEdits'> = room.codeAgentMode === 'edit' ? ['plan', 'edit'] : ['plan'],
   defaultMode: 'plan' | 'edit' | 'approveForMe' | 'fullAccess' | 'acceptEdits' = 'plan',
   roomPermissions: RoomPermissions | null = null,
+  isRoomSessionReady = true,
 ) => render(
   <CodeAgentRoomView
     currentRoom={room}
     memberCount={1}
     isRestoringRoom={false}
+    isRoomSessionReady={isRoomSessionReady}
+    onRetryRoomSession={vi.fn()}
     username="User"
     clientId="client-1"
     backend={room.codeAgentBackend || (room.type === 'codeAgent' ? 'code-agent' : 'codex')}
@@ -318,6 +324,26 @@ describe('CodeAgentRoomView', () => {
     expect(screen.getByTestId('message-input-panel')).toBeTruthy();
   });
 
+  it('keeps cached code-agent rooms read-only until the room session is verified', async () => {
+    const { updateRoomSettings } = await import('../utils/socket');
+    vi.mocked(updateRoomSettings).mockClear();
+    renderCodeAgentRoom(
+      { ...codeAgentRoom, codeAgentMode: 'edit' },
+      ['plan', 'edit'],
+      'edit',
+      permissions(),
+      false,
+    );
+
+    expect(screen.getByTestId('message-input').dataset.canPost).toBe('false');
+    expect(screen.getByTestId('message-input').dataset.sessionReady).toBe('false');
+    expect(screen.getByTestId('message-input').dataset.postingRestrictionReason).toBe('errorRestoringRoom');
+    expect(screen.queryByTestId('file-browser')).toBeNull();
+    expect(screen.getByTestId('code-agent-file-browser-session-locked')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('message-list-switch-app'));
+    expect(updateRoomSettings).not.toHaveBeenCalled();
+  });
+
   it('passes the selected code-agent run mode to the workspace and composer', () => {
     renderCodeAgentRoom({ ...codeAgentRoom, codeAgentMode: 'edit' }, ['plan', 'edit'], 'plan', permissions());
 
@@ -325,6 +351,7 @@ describe('CodeAgentRoomView', () => {
     expect(screen.getByTestId('message-input').dataset.codeAgentRoom).toBe('true');
     expect(screen.getByTestId('message-input').dataset.codeAgentMode).toBe('edit');
     expect(screen.getByTestId('message-input').dataset.codeAgentAvailableModes).toBe('plan,edit');
+    expect(screen.getByTestId('message-input').dataset.sessionReady).toBe('true');
     expect(screen.getByTestId('message-input').dataset.canSwitchCodeAgentMode).toBe('true');
     expect(screen.getByTestId('file-browser').dataset.sandboxStatus).toBe('ready');
     expect(screen.getByTestId('file-browser').dataset.sandboxUpdatedAt).toBe('2026-06-30T10:00:00.000Z');

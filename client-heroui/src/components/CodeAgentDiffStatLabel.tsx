@@ -22,7 +22,7 @@ export const CodeAgentDiffStatLabel = React.memo(function CodeAgentDiffStatLabel
 }: CodeAgentDiffStatLabelProps) {
   return (
     <>
-      {showParentheses ? <span className="text-[#87867f]/70 dark:text-[#8f8d86]/70">(</span> : null}
+      {showParentheses ? <span className="text-[#5e5d59]/70 dark:text-[#8f8d86]/70">(</span> : null}
       <span
         className={`${
           layout === 'inline'
@@ -33,7 +33,7 @@ export const CodeAgentDiffStatLabel = React.memo(function CodeAgentDiffStatLabel
         <span className="font-mono text-[#2f6f4e] dark:text-[#65d08a]">+{formatCompactDiffCount(additions)}</span>
         <span className="font-mono text-[#9f462c] dark:text-[#ff9b78]">-{formatCompactDiffCount(deletions)}</span>
       </span>
-      {showParentheses ? <span className="text-[#87867f]/70 dark:text-[#8f8d86]/70">)</span> : null}
+      {showParentheses ? <span className="text-[#5e5d59]/70 dark:text-[#8f8d86]/70">)</span> : null}
     </>
   );
 });

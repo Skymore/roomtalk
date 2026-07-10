@@ -41,11 +41,13 @@ interface MessageItemProps {
   onSteerQueuedMessage?: (messageId: string) => void;
   onCancelQueuedMessage?: (messageId: string) => void;
   onRefreshAI?: (messageId: string, content: string) => void;
+  onRetryDelivery?: (message: Message) => void;
   onReply: (message: Message) => void;
   onUserAction?: (action: MessageUserAction, message: Message) => void;
   onOpenWorkspaceFile?: (path: string) => void;
   workspaceRoot?: string | null;
   turnGrouped?: boolean;
+  isInteractionDisabled?: boolean;
 }
 
 export type MessageUserAction = 'setAdmin' | 'removeAdmin' | 'removeMember' | 'transferOwnership';
@@ -158,7 +160,8 @@ const useDeferredMediaCacheFetchKey = (resetKey: string | null) => {
 const ReplyReference: React.FC<{
   replyTo: ReplyReferenceValue;
   roomId: string;
-}> = ({ replyTo, roomId }) => {
+  isInteractionDisabled?: boolean;
+}> = ({ replyTo, roomId, isInteractionDisabled = false }) => {
   const { t } = useTranslation();
   const [signedUrl, setSignedUrl] = React.useState<string | null>(null);
   const [mediaError, setMediaError] = React.useState(false);
@@ -171,7 +174,7 @@ const ReplyReference: React.FC<{
     || (replyTo.messageType === "ai" ? t("aiAssistantName") : t("participant"));
   const fallbackPreview = getReplyMediaLabel(replyTo, t);
   const { cacheBodyFetchKey, markMediaLoadedForCache } = useDeferredMediaCacheFetchKey(signedUrl);
-  const { mediaUrl: displayMediaUrl, posterUrl } = useCachedMedia({
+  const { mediaUrl: cachedDisplayMediaUrl, posterUrl } = useCachedMedia({
     assetId: mediaAsset?.id,
     url: signedUrl,
     kind: playableMediaKind,
@@ -179,9 +182,10 @@ const ReplyReference: React.FC<{
     byteSize: mediaAsset?.byteSize,
     cacheBodyFetchKey,
   });
+  const displayMediaUrl = isInteractionDisabled ? null : cachedDisplayMediaUrl;
 
   React.useEffect(() => {
-    if (!canRenderMedia || !mediaAsset?.id) {
+    if (isInteractionDisabled || !canRenderMedia || !mediaAsset?.id) {
       setSignedUrl(null);
       setMediaError(false);
       return () => {};
@@ -207,7 +211,7 @@ const ReplyReference: React.FC<{
     return () => {
       cancelled = true;
     };
-  }, [canRenderMedia, mediaAsset?.id, roomId]);
+  }, [canRenderMedia, isInteractionDisabled, mediaAsset?.id, roomId]);
 
   let content: React.ReactNode = <div className="truncate">{fallbackPreview}</div>;
   if (canRenderMedia && displayMediaUrl && !mediaError) {
@@ -271,23 +275,33 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   onSteerQueuedMessage,
   onCancelQueuedMessage,
   onRefreshAI,
+  onRetryDelivery,
   onReply,
   onUserAction,
   onOpenWorkspaceFile,
   workspaceRoot,
   turnGrouped = false,
+  isInteractionDisabled = false,
 }) => {
   const isAI = message.messageType === 'ai' || message.clientId === 'ai_assistant';
   const isMine = !isAI && message.clientId === clientId;
   const isTouchDevice = useIsTouchDevice();
   const [mediaError, setMediaError] = React.useState(false);
+  const [isMediaUrlLoading, setIsMediaUrlLoading] = React.useState(false);
+  const [isMediaElementLoading, setIsMediaElementLoading] = React.useState(false);
+  const [mediaLoadAttempt, setMediaLoadAttempt] = React.useState(0);
   const [videoPreviewError, setVideoPreviewError] = React.useState(false);
   const [signedMediaUrl, setSignedMediaUrl] = React.useState<string | null>(null);
   const [isMediaViewerOpen, setIsMediaViewerOpen] = React.useState(false);
   const [audioTranscription, setAudioTranscription] = React.useState<AudioTranscription | null>(null);
   const [isAudioTranscriptionLoading, setIsAudioTranscriptionLoading] = React.useState(false);
   const [isAudioTranscriptHidden, setIsAudioTranscriptHidden] = React.useState(false);
+  const [fileDownloadStatus, setFileDownloadStatus] = React.useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const mediaRetryCountRef = React.useRef(0);
+  const componentMountedRef = React.useRef(true);
+  const interactionDisabledRef = React.useRef(isInteractionDisabled);
+  interactionDisabledRef.current = isInteractionDisabled;
+  const accessibilityLabelId = React.useId();
   const isMedia = message.messageType === "media";
   const mediaKind = message.mediaAsset?.kind;
   const isImage = isMedia && mediaKind === "image";
@@ -306,16 +320,34 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const isQueuedInput = Boolean(queuedInput && queuedInput.state !== 'started');
   const canControlQueuedInput = isMine && queuedInput?.state === 'queued';
   const canSteerQueuedInput = canControlQueuedInput && !message.codeAgentImageMessageIds?.length;
+  const showsDeliveryRetry = isFailed
+    && isMine
+    && Boolean(message.clientMessageId)
+    && (isText || isSticker)
+    && message.deliveryAction !== 'ask-ai'
+    && Boolean(onRetryDelivery);
   const canBeEdited = isText || (message.messageType === 'ai' && message.status !== 'streaming');
-  const canEditMessage = !isQueuedInput && canBeEdited && (isMine || Boolean(roomPermissions?.canEditAnyMessage));
-  const canDeleteMessage = !isQueuedInput && (isMine || Boolean(roomPermissions?.canDeleteAnyMessage));
+  const canEditMessage = !isInteractionDisabled && !isQueuedInput && canBeEdited && (isMine || Boolean(roomPermissions?.canEditAnyMessage));
+  const canDeleteMessage = !isInteractionDisabled && !isQueuedInput && (isMine || Boolean(roomPermissions?.canDeleteAnyMessage));
   const { t, i18n } = useTranslation();
   const assistantDisplayName = isAI
     ? getCodeAgentAssistantDisplayName(message.username) || t('aiAssistantName')
     : undefined;
   const displayName = assistantDisplayName || message.username?.trim() || t('participant');
+  const accessibilityState = isStreaming
+    ? t('typing')
+    : isPending
+      ? t('messageSending')
+      : isFailed
+        ? message.deliveryError || t('messageFailedToSend')
+        : '';
+  const accessibilityLabel = [
+    displayName,
+    formatTime(message.timestamp, i18n.language),
+    accessibilityState,
+  ].filter(Boolean).join(', ');
   const displayId = senderDisplayId || `${displayName}#${message.clientId.slice(-4)}`;
-  const canActOnSender = !isAI && !isMine && Boolean(onUserAction);
+  const canActOnSender = !isInteractionDisabled && !isAI && !isMine && Boolean(onUserAction);
   const canKickSender = canActOnSender && Boolean(roomPermissions?.canManageMembers) && senderRole !== 'owner' && (
     roomPermissions?.role === 'owner' || senderRole === 'member'
   );
@@ -357,9 +389,10 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     : [];
   const aiCostLabel = aiMetadataParts.join(' · ');
   const replyReference = message.replyTo ? (
-    <ReplyReference replyTo={message.replyTo} roomId={message.roomId} />
+    <ReplyReference replyTo={message.replyTo} roomId={message.roomId} isInteractionDisabled={isInteractionDisabled} />
   ) : null;
   const handleA2UIAction = React.useCallback((action: A2UIActionEvent) => {
+    if (interactionDisabledRef.current) return;
     sendA2UIAction({
       roomId: message.roomId,
       messageId: message.id,
@@ -374,61 +407,133 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const [liked, setLiked] = useState(false);
   const [disliked, setDisliked] = useState(false);
   const copyResetTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fileDownloadResetTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const a2uiInteractionRootRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useEffect(() => {
+    componentMountedRef.current = true;
     return () => {
+      componentMountedRef.current = false;
       if (copyResetTimerRef.current) {
         clearTimeout(copyResetTimerRef.current);
+      }
+      if (fileDownloadResetTimerRef.current) {
+        clearTimeout(fileDownloadResetTimerRef.current);
       }
     };
   }, []);
 
   React.useEffect(() => {
-    if (!signedMediaUrl || mediaError || (!isImage && !isVideo)) {
+    setFileDownloadStatus('idle');
+    if (fileDownloadResetTimerRef.current) {
+      clearTimeout(fileDownloadResetTimerRef.current);
+      fileDownloadResetTimerRef.current = null;
+    }
+  }, [message.mediaAsset?.id]);
+
+  React.useEffect(() => {
+    if (a2uiInteractionRootRef.current) {
+      a2uiInteractionRootRef.current.inert = isInteractionDisabled;
+    }
+  }, [isInteractionDisabled, message.uiPayload]);
+
+  React.useEffect(() => {
+    if (isInteractionDisabled || !signedMediaUrl || mediaError || (!isImage && !isVideo)) {
       setIsMediaViewerOpen(false);
     }
-  }, [isImage, isVideo, mediaError, signedMediaUrl]);
+  }, [isImage, isInteractionDisabled, isVideo, mediaError, signedMediaUrl]);
+
+  const { cacheBodyFetchKey, markMediaLoadedForCache } = useDeferredMediaCacheFetchKey(signedMediaUrl);
 
   const loadSignedMediaUrl = React.useCallback(() => {
     if (!isMedia || !message.mediaAsset?.id) {
       setSignedMediaUrl(null);
       setMediaError(false);
+      setIsMediaUrlLoading(false);
+      setIsMediaElementLoading(false);
       return () => {};
     }
 
-    let cancelled = false;
+    // Cached messages can render before the restored room membership has been
+    // verified. Do not request a signed URL until that session is ready; the
+    // callback dependency below makes the ready transition start the first
+    // load (or retry after a reconnect) exactly once.
+    if (isInteractionDisabled) {
+      setSignedMediaUrl(null);
+      setIsMediaViewerOpen(false);
+      setFileDownloadStatus('idle');
+      setMediaError(false);
+      setIsMediaUrlLoading(false);
+      setIsMediaElementLoading(false);
+      return () => {};
+    }
+
+    let settled = false;
     setSignedMediaUrl(null);
     setMediaError(false);
     setVideoPreviewError(false);
+    setIsMediaUrlLoading(true);
+    setIsMediaElementLoading(true);
+    const timeout = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      setMediaError(true);
+      setIsMediaUrlLoading(false);
+      setIsMediaElementLoading(false);
+    }, 12000);
 
     getMediaDownloadUrl({ roomId: message.roomId, assetId: message.mediaAsset.id })
       .then(({ url }) => {
-        if (!cancelled) {
-          setSignedMediaUrl(url);
-        }
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        setSignedMediaUrl(url);
+        setIsMediaUrlLoading(false);
+        if (isFile) setIsMediaElementLoading(false);
       })
       .catch((error) => {
         console.error("Failed to get media URL:", error);
-        if (!cancelled) {
-          setMediaError(true);
-        }
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        setMediaError(true);
+        setIsMediaUrlLoading(false);
+        setIsMediaElementLoading(false);
       });
 
     return () => {
-      cancelled = true;
+      settled = true;
+      window.clearTimeout(timeout);
     };
-  }, [isMedia, message.mediaAsset?.id, message.roomId]);
+  }, [isFile, isInteractionDisabled, isMedia, message.mediaAsset?.id, message.roomId]);
+
+  React.useEffect(() => {
+    return loadSignedMediaUrl();
+  }, [loadSignedMediaUrl, mediaLoadAttempt]);
 
   React.useEffect(() => {
     mediaRetryCountRef.current = 0;
-    return loadSignedMediaUrl();
-  }, [loadSignedMediaUrl]);
+  }, [message.mediaAsset?.id]);
+
+  React.useEffect(() => {
+    if (!signedMediaUrl || !isMediaElementLoading || (!isImage && !isAudio && !isVideo)) return;
+    const timeout = window.setTimeout(() => {
+      setMediaError(true);
+      setIsMediaElementLoading(false);
+    }, 15000);
+    return () => window.clearTimeout(timeout);
+  }, [isAudio, isImage, isMediaElementLoading, isVideo, signedMediaUrl]);
 
   React.useEffect(() => {
     if (!isAudio) {
       setAudioTranscription(null);
       setIsAudioTranscriptionLoading(false);
       setIsAudioTranscriptHidden(false);
+      return () => {};
+    }
+
+    if (isInteractionDisabled) {
+      setIsAudioTranscriptionLoading(false);
       return () => {};
     }
 
@@ -439,7 +544,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
 
     getAudioTranscription({ roomId: message.roomId, messageId: message.id })
       .then((record) => {
-        if (!cancelled) {
+        if (!cancelled && !interactionDisabledRef.current) {
           setAudioTranscription(record);
         }
       })
@@ -450,18 +555,23 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [isAudio, message.id, message.roomId]);
+  }, [isAudio, isInteractionDisabled, message.id, message.roomId]);
 
   React.useEffect(() => {
-    if (!isAudio || (audioTranscription?.status !== 'pending' && audioTranscription?.status !== 'processing')) {
+    if (
+      !isAudio
+      || isInteractionDisabled
+      || (audioTranscription?.status !== 'pending' && audioTranscription?.status !== 'processing')
+    ) {
       return () => {};
     }
 
     let cancelled = false;
     const poll = () => {
+      if (interactionDisabledRef.current) return;
       getAudioTranscription({ roomId: message.roomId, messageId: message.id })
         .then((record) => {
-          if (!cancelled) {
+          if (!cancelled && !interactionDisabledRef.current) {
             setAudioTranscription(record);
           }
         })
@@ -474,22 +584,33 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [audioTranscription?.status, isAudio, message.id, message.roomId]);
+  }, [audioTranscription?.status, isAudio, isInteractionDisabled, message.id, message.roomId]);
 
   const handleMediaError = () => {
     if (message.mediaAsset?.id && mediaRetryCountRef.current < 1) {
       mediaRetryCountRef.current += 1;
-      loadSignedMediaUrl();
+      setMediaLoadAttempt(value => value + 1);
       return;
     }
 
     setMediaError(true);
+    setIsMediaElementLoading(false);
+  };
+
+  const handleRetryMedia = () => {
+    mediaRetryCountRef.current = 0;
+    setMediaLoadAttempt(value => value + 1);
+  };
+
+  const handleMediaLoaded = () => {
+    setIsMediaElementLoading(false);
+    markMediaLoadedForCache();
   };
 
   const handleVideoPreviewError = () => {
     if (message.mediaAsset?.id && mediaRetryCountRef.current < 1) {
       mediaRetryCountRef.current += 1;
-      loadSignedMediaUrl();
+      setMediaLoadAttempt(value => value + 1);
       return;
     }
 
@@ -497,16 +618,18 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   };
 
   const handleRequestAudioTranscription = async () => {
-    if (!isAudio || isAudioTranscriptionLoading) {
+    if (interactionDisabledRef.current || !isAudio || isAudioTranscriptionLoading) {
       return;
     }
 
     setIsAudioTranscriptionLoading(true);
     try {
       const record = await requestAudioTranscription({ roomId: message.roomId, messageId: message.id });
+      if (!componentMountedRef.current || interactionDisabledRef.current) return;
       setAudioTranscription(record);
       setIsAudioTranscriptHidden(false);
     } catch (error) {
+      if (!componentMountedRef.current || interactionDisabledRef.current) return;
       console.error("Failed to request audio transcription:", error);
       setAudioTranscription({
         assetId: message.mediaAsset?.id || '',
@@ -516,20 +639,49 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
         error: error instanceof Error ? error.message : t('audioTranscriptionFailed'),
       });
     } finally {
-      setIsAudioTranscriptionLoading(false);
+      if (componentMountedRef.current) {
+        setIsAudioTranscriptionLoading(false);
+      }
     }
   };
 
   const handleDownloadFile = async () => {
-    if (!signedMediaUrl) {
+    if (interactionDisabledRef.current || !signedMediaUrl || fileDownloadStatus === 'loading') {
       return;
     }
-    await saveUrlAsFile(signedMediaUrl, buildMediaFilename(message));
+    setFileDownloadStatus('loading');
+    if (fileDownloadResetTimerRef.current) {
+      clearTimeout(fileDownloadResetTimerRef.current);
+    }
+    try {
+      await saveUrlAsFile(signedMediaUrl, buildMediaFilename(message));
+      if (!componentMountedRef.current || interactionDisabledRef.current) return;
+      setFileDownloadStatus('done');
+      fileDownloadResetTimerRef.current = setTimeout(() => {
+        setFileDownloadStatus('idle');
+        fileDownloadResetTimerRef.current = null;
+      }, 3500);
+    } catch (error) {
+      if (!componentMountedRef.current || interactionDisabledRef.current) return;
+      console.error("Failed to download media attachment:", error);
+      setFileDownloadStatus('error');
+      fileDownloadResetTimerRef.current = setTimeout(() => {
+        setFileDownloadStatus('idle');
+        fileDownloadResetTimerRef.current = null;
+      }, 6000);
+    }
   };
 
-  const canOpenMediaViewer = Boolean(signedMediaUrl && !mediaError && (isImage || isVideo));
-  const { cacheBodyFetchKey, markMediaLoadedForCache } = useDeferredMediaCacheFetchKey(signedMediaUrl);
-  const { mediaUrl: displayMediaUrl, posterUrl: videoPosterUrl } = useCachedMedia({
+  const fileDownloadLabel = fileDownloadStatus === 'loading'
+    ? t('downloadStarted')
+    : fileDownloadStatus === 'done'
+      ? t('downloadSucceeded')
+      : fileDownloadStatus === 'error'
+        ? t('downloadFailed')
+        : null;
+
+  const canOpenMediaViewer = Boolean(!isInteractionDisabled && signedMediaUrl && !mediaError && (isImage || isVideo));
+  const { mediaUrl: cachedDisplayMediaUrl, posterUrl: videoPosterUrl } = useCachedMedia({
     assetId: message.mediaAsset?.id,
     url: signedMediaUrl,
     kind: isImage ? "image" : isAudio ? "audio" : isVideo ? "video" : undefined,
@@ -537,6 +689,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     byteSize: message.mediaAsset?.byteSize,
     cacheBodyFetchKey,
   });
+  const displayMediaUrl = isInteractionDisabled ? null : cachedDisplayMediaUrl;
   const videoPreviewUrl = displayMediaUrl && isVideo ? getVideoPreviewUrl(displayMediaUrl) : null;
 
   const audioTranscriptionStatus = audioTranscription?.status || 'not_requested';
@@ -559,19 +712,19 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
           startContent={<Icon icon={audioTranscriptionStatus === 'failed' ? "lucide:refresh-cw" : "lucide:captions"} className="h-3.5 w-3.5" />}
           onPress={audioTranscriptionStatus === 'completed' ? () => setIsAudioTranscriptHidden(false) : handleRequestAudioTranscription}
           isLoading={isAudioTranscriptionLoading}
-          isDisabled={isAudioTranscriptionLoading}
+          isDisabled={isAudioTranscriptionLoading || isInteractionDisabled}
         >
           {audioTranscriptionStatus === 'completed' ? t('showAudioTranscript') : audioTranscriptionStatus === 'failed' ? t('retryAudioTranscription') : t('transcribeAudio')}
         </Button>
       )}
       {isAudioTranscriptionRunning && (
-        <div className="flex items-center gap-1 rounded-md bg-[#e8e6dc] px-2 py-1 text-xs text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]">
+        <div role="status" className="flex items-center gap-1 rounded-md bg-[#e8e6dc] px-2 py-1 text-xs text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]">
           <Icon icon="lucide:loader-2" className="h-3.5 w-3.5 animate-spin" />
           {t('audioTranscribing')}
         </div>
       )}
       {audioTranscriptionStatus === 'failed' && audioTranscription?.error && (
-        <div className="max-w-full rounded-md bg-danger-500/10 px-2 py-1 text-xs text-danger-600 dark:text-danger-300">
+        <div role="alert" className="max-w-full rounded-md bg-danger-500/10 px-2 py-1 text-xs text-danger-600 dark:text-danger-300">
           {audioTranscription.error}
         </div>
       )}
@@ -604,13 +757,28 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   let mediaContent: React.ReactNode = null;
   if (isMedia) {
     if (mediaError) {
+      const failedFileName = message.mediaAsset?.filename || buildMediaFilename(message);
       mediaContent = (
         <div
-          className={`w-fit rounded-lg bg-[#e8e6dc] px-3 py-2 text-sm text-danger shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e] ${senderOutlineClassName}`}
+          role="alert"
+          className={`flex w-fit max-w-[20rem] items-center gap-2 rounded-lg bg-[#e8e6dc] px-3 py-2 text-sm text-danger shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e] ${senderOutlineClassName}`}
           style={senderOutlineElementStyle}
         >
-          <Icon icon="lucide:alert-triangle" className="inline mr-1" />
-          {t('mediaLoadFailed')}
+          <Icon icon="lucide:alert-triangle" className="h-4 w-4 flex-shrink-0" />
+          <span className="min-w-0 flex-1">
+            <span className="block">{t('mediaLoadFailed')}</span>
+            <span className="block truncate text-xs opacity-75" title={failedFileName}>{failedFileName}</span>
+          </span>
+          <Button
+            isIconOnly
+            size="sm"
+            variant="light"
+            aria-label={t('retryMedia')}
+            className="h-7 w-7 min-w-7 flex-shrink-0 text-danger"
+            onPress={handleRetryMedia}
+          >
+            <Icon icon="lucide:refresh-cw" className="h-3.5 w-3.5" />
+          </Button>
         </div>
       );
     } else if (isFile) {
@@ -626,19 +794,24 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
           </div>
           <div className="min-w-0 flex-1 text-left">
             <div className="truncate text-sm font-medium">{fileName}</div>
-            {fileSize && <div className="text-xs text-[#5e5d59] dark:text-[#b0aea5]">{fileSize}</div>}
+            <div className="text-xs text-[#5e5d59] dark:text-[#b0aea5]">
+              {fileSize && <span>{fileSize}</span>}
+              {fileSize && isMediaUrlLoading && <span aria-hidden="true"> · </span>}
+              {isMediaUrlLoading && <span>{t('preparingMedia')}</span>}
+            </div>
           </div>
           <Tooltip content={t('downloadFile')} placement="top" size="sm" delay={500} classNames={tooltipClassNames} isDisabled={isTouchDevice}>
             <Button
               isIconOnly
               size="sm"
               variant="light"
-              aria-label={t('downloadFile')}
+              aria-label={fileDownloadLabel || t('downloadFile')}
               className="h-8 w-8 min-w-8 flex-shrink-0 text-[#c96442] dark:text-[#d97757]"
               onPress={handleDownloadFile}
-              isDisabled={!signedMediaUrl}
+              isDisabled={isInteractionDisabled || !signedMediaUrl || fileDownloadStatus === 'loading'}
+              isLoading={fileDownloadStatus === 'loading'}
             >
-              <Icon icon="lucide:download" className="h-4 w-4" />
+              <Icon icon={fileDownloadStatus === 'done' ? "lucide:check" : fileDownloadStatus === 'error' ? "lucide:alert-circle" : "lucide:download"} className="h-4 w-4" />
             </Button>
           </Tooltip>
         </div>
@@ -646,7 +819,8 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     } else if (displayMediaUrl && isImage) {
       mediaContent = (
         <div
-          className={`relative inline-block max-w-full overflow-hidden rounded-xl bg-black/5 shadow-[0_0_0_1px_rgba(194,192,182,0.45)] dark:bg-white/5 dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)] ${senderOutlineClassName}`}
+          aria-busy={isMediaElementLoading}
+          className={`relative inline-block max-w-full overflow-hidden rounded-xl bg-black/5 shadow-[0_0_0_1px_rgba(194,192,182,0.45)] dark:bg-white/5 dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)] ${isMediaElementLoading ? 'h-24 w-36' : ''} ${senderOutlineClassName}`}
           style={senderOutlineElementStyle}
         >
           <button
@@ -660,10 +834,16 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
               alt={t('sharedImage')}
               crossOrigin="anonymous"
               className="block max-h-[300px] max-w-full object-contain"
-              onLoad={markMediaLoadedForCache}
+              onLoad={handleMediaLoaded}
               onError={handleMediaError}
             />
           </button>
+          {isMediaElementLoading && (
+            <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-[#e8e6dc]/85 text-xs text-[#5e5d59] dark:bg-[#30302e]/85 dark:text-[#b0aea5]">
+              <Icon icon="lucide:image" className="mr-1 h-4 w-4" />
+              {t('loadingMedia')}
+            </span>
+          )}
         </div>
       );
     } else if (displayMediaUrl && isAudio) {
@@ -675,9 +855,12 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
             crossOrigin="anonymous"
             className={`roomtalk-audio-player block h-9 min-w-[180px] max-w-[240px] ${senderOutlineClassName}`}
             style={senderOutlineElementStyle}
-            onCanPlay={markMediaLoadedForCache}
+            onCanPlay={handleMediaLoaded}
             onError={handleMediaError}
           />
+          {isMediaElementLoading && (
+            <span role="status" className="mt-1 text-xs text-[#5e5d59] dark:text-[#b0aea5]">{t('loadingMedia')}</span>
+          )}
           {audioTranscriptionContent}
         </div>
       );
@@ -713,12 +896,13 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
               isIconOnly
               size="sm"
               variant="light"
-              aria-label={t('downloadMedia')}
+              aria-label={fileDownloadLabel || t('downloadMedia')}
               className="h-8 w-8 min-w-8 flex-shrink-0 text-[#c96442] dark:text-[#d97757]"
               onPress={handleDownloadFile}
-              isDisabled={!signedMediaUrl}
+              isDisabled={isInteractionDisabled || !signedMediaUrl || fileDownloadStatus === 'loading'}
+              isLoading={fileDownloadStatus === 'loading'}
             >
-              <Icon icon="lucide:download" className="h-4 w-4" />
+              <Icon icon={fileDownloadStatus === 'done' ? "lucide:check" : fileDownloadStatus === 'error' ? "lucide:alert-circle" : "lucide:download"} className="h-4 w-4" />
             </Button>
           </Tooltip>
         </div>
@@ -741,7 +925,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
               preload="metadata"
               muted
               playsInline
-              onLoadedData={markMediaLoadedForCache}
+              onLoadedData={handleMediaLoaded}
               onError={handleVideoPreviewError}
             />
             <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/10 transition group-hover/video:bg-black/20">
@@ -755,16 +939,20 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     } else {
       mediaContent = (
         <div
-          className={`flex h-24 w-36 items-center justify-center rounded-xl bg-[#e8e6dc] text-[#87867f] shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e] dark:text-[#b0aea5] dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)] ${senderOutlineClassName}`}
+          role="status"
+          aria-atomic="true"
+          className={`flex h-24 w-36 flex-col items-center justify-center gap-1 rounded-xl bg-[#e8e6dc] text-[#5e5d59] shadow-[0_0_0_1px_rgba(194,192,182,0.75)] dark:bg-[#30302e] dark:text-[#b0aea5] dark:shadow-[0_0_0_1px_rgba(77,76,72,0.8)] ${senderOutlineClassName}`}
           style={senderOutlineElementStyle}
         >
           <Icon icon={isAudio ? "lucide:audio-lines" : isVideo ? "lucide:video" : isFile ? "lucide:file" : "lucide:image"} className="h-5 w-5" />
+          <span className="text-xs">{isMediaUrlLoading ? t('loadingMedia') : t('preparingMedia')}</span>
         </div>
       );
     }
   }
 
   const handleCopyMessage = async () => {
+    if (interactionDisabledRef.current) return;
     const success = isImage
       ? signedMediaUrl
         ? await copyImageToClipboard(signedMediaUrl)
@@ -774,6 +962,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
         return false;
       });
 
+    if (!componentMountedRef.current) return;
     setCopyStatus(success ? 'success' : 'error');
     if (copyResetTimerRef.current) {
       clearTimeout(copyResetTimerRef.current);
@@ -847,7 +1036,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
           <DropdownItem key="identity" isDisabled textValue={displayId}>
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold text-[#141413] dark:text-[#faf9f5]">{displayName}</div>
-              <div className="truncate text-xs text-[#87867f] dark:text-[#b0aea5]">{displayId}</div>
+              <div className="truncate text-xs text-[#5e5d59] dark:text-[#b0aea5]">{displayId}</div>
             </div>
           </DropdownItem>
           {canPromoteSender ? (
@@ -880,8 +1069,11 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       <div
         data-testid="message-item"
         data-message-id={message.id}
+        role="article"
+        aria-labelledby={accessibilityLabelId}
         className="group mb-1 flex w-full items-start justify-start"
       >
+        <span id={accessibilityLabelId} className="sr-only">{accessibilityLabel}</span>
         {!turnGrouped ? <Avatar
           icon={<Icon icon="lucide:bot" />}
           color="secondary"
@@ -901,8 +1093,12 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
     <div
       data-testid="message-item"
       data-message-id={message.id}
+      role="article"
+      aria-labelledby={accessibilityLabelId}
+      aria-busy={isStreaming || isPending}
       className={`group mb-1 flex w-full items-start ${isMine ? "justify-end" : "justify-start"}`}
       >
+        <span id={accessibilityLabelId} className="sr-only">{accessibilityLabel}</span>
         {/* Opponent's avatar or AI avatar */}
         {!turnGrouped && (!isMine || isAI) && !isMine && (
           isAI ? (
@@ -935,6 +1131,15 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
             <div className="w-fit max-w-full">
               {replyReference}
               {mediaContent}
+              {fileDownloadLabel && (
+                <div
+                  role={fileDownloadStatus === 'error' ? 'alert' : 'status'}
+                  aria-atomic="true"
+                  className={`mt-1 text-xs ${fileDownloadStatus === 'error' ? 'text-danger-600 dark:text-danger-300' : 'text-[#5e5d59] dark:text-[#b0aea5]'}`}
+                >
+                  {fileDownloadLabel}
+                </div>
+              )}
             </div>
           ) : isSticker ? (
             // ========== Sticker Message ==========
@@ -1030,12 +1235,18 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                 </div>
               </Card>
               {message.uiPayload && (
-                <A2UIRenderer
-                  payload={message.uiPayload}
-                  roomId={message.roomId}
-                  messageId={message.id}
-                  onAction={handleA2UIAction}
-                />
+                <div
+                  ref={a2uiInteractionRootRef}
+                  aria-disabled={isInteractionDisabled || undefined}
+                  className={isInteractionDisabled ? 'pointer-events-none opacity-60' : undefined}
+                >
+                  <A2UIRenderer
+                    payload={message.uiPayload}
+                    roomId={message.roomId}
+                    messageId={message.id}
+                    onAction={isInteractionDisabled ? undefined : handleA2UIAction}
+                  />
+                </div>
               )}
             </>
           )}
@@ -1051,7 +1262,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
               </span>
             )}
             {/* Timestamp */}
-            <span className="mr-1 max-w-full text-tiny text-[#87867f] dark:text-[#b0aea5]">
+            <span className="mr-1 max-w-full text-tiny text-[#5e5d59] dark:text-[#b0aea5]">
               {formatTime(message.timestamp, i18n.language)}
               {isStreaming && ` • ${t('typing')}`}
               {isPending && ` • ${t('messageSending')}`}
@@ -1115,14 +1326,17 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                   isIconOnly
                   size="sm"
                   variant="light"
-                  aria-label={isImage ? t('copyImage') : t('copy')}
+                  aria-label={copyStatus === 'success' ? t('copied') : copyStatus === 'error' ? t('copyFailed') : isImage ? t('copyImage') : t('copy')}
                   className={`h-5 w-5 min-w-0 ${copyStatus === 'success' ? 'text-[#c96442] dark:text-[#d97757]' : 'text-[#5e5d59] dark:text-[#b0aea5]'}`}
                   onPress={handleCopyMessage}
-                  isDisabled={isMedia && (!isImage || !signedMediaUrl || mediaError)}
+                  isDisabled={isInteractionDisabled || (isMedia && (!isImage || !signedMediaUrl || mediaError))}
                 >
                   <Icon icon={copyStatus === 'success' ? "lucide:check" : "lucide:copy"} width={12} height={12}/>
                 </Button>
               </Tooltip>
+              <span className="sr-only" role={copyStatus === 'error' ? 'alert' : 'status'} aria-atomic="true">
+                {copyStatus === 'success' ? t('copied') : copyStatus === 'error' ? t('copyFailed') : ''}
+              </span>
               <Tooltip content={t('replyToMessage')} placement="top" size="sm" delay={500} classNames={tooltipClassNames} isDisabled={isTouchDevice}>
                 <Button
                   isIconOnly
@@ -1131,7 +1345,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                   aria-label={t('replyToMessage')}
                   className="h-5 w-5 min-w-0 text-[#5e5d59] dark:text-[#b0aea5]"
                   onPress={() => onReply(message)}
-                  isDisabled={isStreaming}
+                  isDisabled={isStreaming || isInteractionDisabled}
                 >
                   <Icon icon="lucide:reply" width={12} height={12}/>
                 </Button>
@@ -1164,6 +1378,21 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                   </Button>
                 </Tooltip>
               )}
+              {showsDeliveryRetry && (
+                <Tooltip content={t('retry')} placement="top" size="sm" delay={500} classNames={tooltipClassNames} isDisabled={isTouchDevice}>
+                  <Button
+                    isIconOnly
+                    size="sm"
+                    variant="light"
+                    aria-label={t('retry')}
+                    className="h-5 w-5 min-w-0 text-danger-600 dark:text-danger-300"
+                    onPress={() => onRetryDelivery?.(message)}
+                    isDisabled={isInteractionDisabled || roomPermissions?.canPost !== true}
+                  >
+                    <Icon icon="lucide:rotate-ccw" width={12} height={12}/>
+                  </Button>
+                </Tooltip>
+              )}
               {/* 刷新按钮 - 仅对AI消息显示 */}
               {isAI && !isStreaming && onRefreshAI && (
                 <Tooltip content={t('retry')} placement="top" size="sm" delay={500} classNames={tooltipClassNames} isDisabled={isTouchDevice}>
@@ -1174,7 +1403,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                     aria-label={t('retry')}
                     className="h-5 w-5 min-w-0 text-[#c96442] dark:text-[#d97757]"
                     onPress={handleRefreshAIClick}
-                    isDisabled={isStreaming}
+                    isDisabled={isStreaming || isInteractionDisabled}
                   >
                     <Icon icon="lucide:refresh-cw" width={12} height={12}/>
                   </Button>
@@ -1188,7 +1417,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                     variant="light"
                     aria-label={t('moreActions')}
                     className="h-5 w-5 min-w-0 text-[#5e5d59] dark:text-[#b0aea5]"
-                    isDisabled={isStreaming}
+                    isDisabled={isStreaming || isInteractionDisabled}
                   >
                     <Icon icon="lucide:more-horizontal" width={12} height={12}/>
                   </Button>

@@ -48,6 +48,8 @@ interface CodeAgentRoomViewProps {
   currentRoom: Room;
   memberCount: number | null;
   isRestoringRoom: boolean;
+  isRoomSessionReady: boolean;
+  onRetryRoomSession: () => void;
   username: string;
   clientId: string;
   backend: CodeAgentBackend;
@@ -109,6 +111,8 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   currentRoom,
   memberCount,
   isRestoringRoom,
+  isRoomSessionReady,
+  onRetryRoomSession,
   username,
   clientId,
   backend,
@@ -156,11 +160,14 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   const selectedMode: CodeAgentMode = normalizedAvailableModes.includes(normalizedRoomMode)
     ? normalizedRoomMode
     : effectiveDefaultMode;
-  const canManageCodeAgentMode = Boolean(roomPermissions?.canManageRoom);
-  const canUseCodeAgent = roomPermissions?.canUseCodeAgent ?? true;
-  const canUseComposer = (roomPermissions?.canPost ?? true) && canUseCodeAgent;
-  const composerRestrictionReason = canUseCodeAgent
-    ? roomPermissions?.postingRestrictionReason
+  const canManageCodeAgentMode = isRoomSessionReady && Boolean(roomPermissions?.canManageRoom);
+  const effectiveRoomPermissions = isRoomSessionReady ? roomPermissions : null;
+  const canUseCodeAgent = Boolean(roomPermissions?.canUseCodeAgent);
+  const canUseComposer = isRoomSessionReady && Boolean(roomPermissions?.canPost) && canUseCodeAgent;
+  const composerRestrictionReason = !isRoomSessionReady
+    ? t(isRestoringRoom ? 'loading' : 'errorRestoringRoom')
+    : canUseCodeAgent
+      ? roomPermissions?.postingRestrictionReason
     : t('codeAgentAccessDenied');
 
   React.useEffect(() => {
@@ -171,6 +178,14 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
     setWorkspaceRoot(null);
     setPendingWorkspaceFileSaves(new Set());
   }, [currentRoom.id]);
+
+  React.useEffect(() => {
+    if (isRoomSessionReady) return;
+    setIsMobileFileManagerOpen(false);
+    setHasMobileFileManagerMounted(false);
+    setWorkspaceFileOpenRequest(null);
+    setPendingWorkspaceFileSaves(new Set());
+  }, [isRoomSessionReady]);
 
   const handleWorkspaceFileSavePendingChange = React.useCallback((relativePath: string, pending: boolean) => {
     setPendingWorkspaceFileSaves((current) => {
@@ -211,23 +226,26 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   }, []);
 
   const handleCodeAgentModeChange = React.useCallback((nextMode: CodeAgentMode) => {
+    if (!isRoomSessionReady) {
+      return;
+    }
     const normalizedNextMode = normalizeCodeAgentMode(nextMode);
     const constrainedMode = normalizedAvailableModes.includes(normalizedNextMode) ? normalizedNextMode : effectiveDefaultMode;
     updateRoomSettings({ roomId: currentRoom.id, codeAgentMode: constrainedMode }).then(
       (room) => onRoomUpdated(room),
       (error) => console.error('Failed to update code agent mode', error),
     );
-  }, [currentRoom.id, effectiveDefaultMode, normalizedAvailableModes, onRoomUpdated]);
+  }, [currentRoom.id, effectiveDefaultMode, isRoomSessionReady, normalizedAvailableModes, onRoomUpdated]);
 
   const handleCodeAgentBackendChange = React.useCallback((nextBackend: CodeAgentBackend) => {
-    if (!isSupportedCodeAgentBackend(nextBackend)) {
+    if (!isRoomSessionReady || !isSupportedCodeAgentBackend(nextBackend)) {
       return;
     }
     updateRoomSettings({ roomId: currentRoom.id, codeAgentBackend: nextBackend }).then(
       (room) => onRoomUpdated(room),
       (error) => console.error('Failed to update code agent backend', error),
     );
-  }, [currentRoom.id, onRoomUpdated]);
+  }, [currentRoom.id, isRoomSessionReady, onRoomUpdated]);
 
   const setFileManagerCollapsed = React.useCallback((collapsed: boolean) => {
     setIsFileManagerCollapsed(collapsed);
@@ -247,6 +265,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
   }, []);
 
   const handleOpenWorkspaceFile = React.useCallback((path: string) => {
+    if (!isRoomSessionReady) return;
     const target = parseWorkspaceFileOpenTarget(path, { workspaceRoot: workspaceRoot ?? undefined });
     if (!target) {
       return;
@@ -265,7 +284,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       line: target.line,
       requestId: workspaceFileOpenRequestIdRef.current,
     });
-  }, [setFileManagerCollapsed, workspaceRoot]);
+  }, [isRoomSessionReady, setFileManagerCollapsed, workspaceRoot]);
 
   const handleOpenWorkspaceArtifact = React.useCallback((url: string) => {
     if (!openCodeAgentRightPanelPreviewUrl(currentRoom.id, url)) {
@@ -415,6 +434,8 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       currentRoom={currentRoom}
       memberCount={memberCount}
       isRestoringRoom={isRestoringRoom}
+      isRoomSessionReady={isRoomSessionReady}
+      onRetryRoomSession={onRetryRoomSession}
       handleCopyToClipboard={handleCopyToClipboard}
       handleShareRoom={handleShareRoom}
       handleToggleSave={handleToggleSave}
@@ -426,7 +447,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       handleDeleteRoom={handleDeleteRoom}
       handleRenameRoom={handleRenameRoom}
       clientId={clientId}
-      roomPermissions={roomPermissions}
+      roomPermissions={effectiveRoomPermissions}
       codeAgentAvailableModes={normalizedAvailableModes}
       codeAgentDefaultMode={effectiveDefaultMode}
       onRoomUpdated={onRoomUpdated}
@@ -446,8 +467,20 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
     );
   }
 
-  const renderFileManagerPanel = (surface: 'desktop' | 'mobile') => (
-    <CodeAgentFileBrowserPanel
+  const renderFileManagerPanel = (surface: 'desktop' | 'mobile') => {
+    if (!isRoomSessionReady) {
+      return (
+        <div
+          data-testid="code-agent-file-browser-session-locked"
+          role="status"
+          className="flex min-h-0 flex-1 items-center justify-center px-4 text-center text-xs text-[#5e5d59] dark:text-[#b0aea5]"
+        >
+          {t(isRestoringRoom ? 'loading' : 'errorRestoringRoom')}
+        </div>
+      );
+    }
+
+    return <CodeAgentFileBrowserPanel
       key={`${currentRoom.id}:${surface}`}
       roomId={currentRoom.id}
       projectName={currentRoom.name || 'Workspace'}
@@ -456,7 +489,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       sandboxUpdatedAt={currentRoom.sandboxUpdatedAt}
       workspaceRoot={workspaceRoot}
       workspaceChanges={workspaceChanges}
-      workspaceEditable={selectedMode !== 'plan'}
+      workspaceEditable={isRoomSessionReady && selectedMode !== 'plan'}
       openFileRequest={workspaceFileOpenRequest}
       revealLine={workspaceFileOpenRequest?.line ?? null}
       revealRequestId={workspaceFileOpenRequest?.requestId ?? 0}
@@ -464,8 +497,8 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
       onAddReviewComment={handleAddReviewComment}
       onRemoveReviewComment={handleRemoveReviewComment}
       onFileSavePendingChange={handleWorkspaceFileSavePendingChange}
-    />
-  );
+    />;
+  };
 
   const hasPendingWorkspaceFileSaves = pendingWorkspaceFileSaves.size > 0;
   const fileManagerToggleLabel = isFileManagerCollapsed
@@ -522,7 +555,8 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
               onAddReviewComment={handleAddReviewComment}
               onRemoveReviewComment={handleRemoveReviewComment}
               onReply={setReplyToMessage}
-              roomPermissions={roomPermissions}
+              roomPermissions={effectiveRoomPermissions}
+              isRoomSessionReady={isRoomSessionReady}
               bottomInsetPx={MESSAGE_LIST_BOTTOM_GAP_PX}
               onScrollButtonVisibilityChange={setShowScrollButton}
             />
@@ -552,6 +586,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
             className="absolute right-3 top-3 z-40 bg-[#30302e] text-[#faf9f5] shadow-[0_0_0_1px_rgba(194,192,182,0.7),0_10px_24px_rgba(20,20,19,0.16)] dark:bg-[#faf9f5] dark:text-[#141413] lg:hidden"
             aria-label={mobileFileManagerTitle}
             title={mobileFileManagerTitle}
+            isDisabled={!isRoomSessionReady}
             onPress={() => {
               openCodeAgentRightPanel(currentRoom.id, 'files');
               setHasMobileFileManagerMounted(true);
@@ -588,6 +623,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
               onOptimisticMessageFailed={(clientMessageId, error) =>
                 messageListRef.current?.markOptimisticMessageFailed(clientMessageId, error)
               }
+              isRoomSessionReady={isRoomSessionReady}
               canPost={canUseComposer}
               postingRestrictionReason={composerRestrictionReason}
               postingSchedule={currentRoom.postingSchedule}
@@ -688,7 +724,7 @@ export const CodeAgentRoomView: React.FC<CodeAgentRoomViewProps> = ({
               data-testid="code-agent-mobile-review-drafts"
               className="shrink-0 border-b border-[#dedbd0] px-3 py-2 dark:border-[#30302e]"
             >
-              <div className="mb-1.5 flex min-w-0 items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#87867f] dark:text-[#8f8d86]">
+              <div className="mb-1.5 flex min-w-0 items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#5e5d59] dark:text-[#8f8d86]">
                 <Icon icon="lucide:message-circle" className="h-3.5 w-3.5 shrink-0" />
                 <span className="min-w-0 truncate">{t('codeAgentPendingReviewComments')}</span>
                 <span className="ml-auto shrink-0 rounded-full border border-[#dedbd0] px-1.5 py-px text-[10px] leading-none text-[#5e5d59] dark:border-[#30302e] dark:text-[#b0aea5]">

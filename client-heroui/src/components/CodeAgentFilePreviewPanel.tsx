@@ -338,7 +338,7 @@ function WorkspaceImageAssetPreview({ roomId, src, alt }: { roomId: string; src:
       </button>
       {imageLoading && !loadError ? (
         <div
-          className="absolute inset-0 flex items-center justify-center bg-[#f0eee6]/80 text-[#87867f] dark:bg-[#141413]/80 dark:text-[#8f8d86]"
+          className="absolute inset-0 flex items-center justify-center bg-[#f0eee6]/80 text-[#5e5d59] dark:bg-[#141413]/80 dark:text-[#8f8d86]"
           role="status"
           aria-label={t('codeAgentLoadingImagePreview')}
         >
@@ -351,7 +351,7 @@ function WorkspaceImageAssetPreview({ roomId, src, alt }: { roomId: string; src:
             <div className="text-sm font-semibold text-[#141413] dark:text-[#faf9f5]">
               {t('codeAgentImagePreviewUnavailable')}
             </div>
-            <div className="mt-1 text-xs leading-relaxed text-[#87867f] dark:text-[#8f8d86]">
+            <div className="mt-1 text-xs leading-relaxed text-[#5e5d59] dark:text-[#8f8d86]">
               {t('codeAgentImagePreviewLoadFailed')}
             </div>
           </div>
@@ -615,7 +615,7 @@ export function WorkspaceBrowserAssetPreview({
       </div>
       {isLoading ? (
         <div
-          className="absolute inset-0 flex items-center justify-center bg-white/80 text-[#87867f] dark:bg-[#141413]/80 dark:text-[#8f8d86]"
+          className="absolute inset-0 flex items-center justify-center bg-white/80 text-[#5e5d59] dark:bg-[#141413]/80 dark:text-[#8f8d86]"
           role="status"
           aria-label={t('codeAgentLoadingBrowserPreview')}
         >
@@ -767,7 +767,7 @@ function RenderedMarkdownSurface({
   return (
     <div className="min-h-0 flex-1 overflow-auto">
       <div className="mx-auto max-w-4xl px-6 py-5 text-[#141413] dark:text-[#faf9f5]">
-        <React.Suspense fallback={<LoaderCircle className="h-5 w-5 animate-spin text-[#87867f] dark:text-[#8f8d86]" />}>
+        <React.Suspense fallback={<LoaderCircle className="h-5 w-5 animate-spin text-[#5e5d59] dark:text-[#8f8d86]" />}>
           <MarkdownContent
             content={file.content}
             onOpenWorkspaceFile={onOpenWorkspaceFile}
@@ -908,7 +908,7 @@ function FilePreviewSurface({
                 <div className="text-sm font-medium text-[#141413] dark:text-[#faf9f5]">
                   {t('codeAgentPreparingBrowserPreview')}
                 </div>
-                <div className="mt-0.5 truncate text-xs text-[#87867f] dark:text-[#8f8d86]">
+                <div className="mt-0.5 truncate text-xs text-[#5e5d59] dark:text-[#8f8d86]">
                   {devServerPreview.frameworkName} - {devServerPreview.requestedUrl}
                 </div>
               </div>
@@ -936,7 +936,7 @@ function FilePreviewSurface({
         : t('codeAgentPreparingBrowserPreview');
       return (
         <div
-          className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-[#87867f] dark:text-[#8f8d86]"
+          className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-[#5e5d59] dark:text-[#8f8d86]"
           role="status"
           aria-label={pendingLabel}
         >
@@ -965,7 +965,7 @@ function FilePreviewSurface({
 
   if (filePending || !file) {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center text-[#87867f] dark:text-[#8f8d86]">
+      <div className="flex min-h-0 flex-1 items-center justify-center text-[#5e5d59] dark:text-[#8f8d86]">
         <LoaderCircle className="h-5 w-5 animate-spin" />
       </div>
     );
@@ -979,12 +979,12 @@ function FilePreviewSurface({
         </div>
       ) : null}
       {saveState !== 'idle' && saveState !== 'saved' ? (
-        <div className="shrink-0 border-b border-[#dedbd0] px-3 py-1.5 text-[11px] text-[#87867f] dark:border-[#30302e] dark:text-[#8f8d86]">
+        <div className="shrink-0 border-b border-[#dedbd0] px-3 py-1.5 text-[11px] text-[#5e5d59] dark:border-[#30302e] dark:text-[#8f8d86]">
           {saveState === 'pending' ? t('codeAgentSavePending') : saveState === 'saving' ? t('codeAgentSaving') : saveError || 'File save failed.'}
         </div>
       ) : null}
       {file.encoding === 'base64' ? (
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-xs text-[#87867f] dark:text-[#8f8d86]">
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-xs text-[#5e5d59] dark:text-[#8f8d86]">
           <div>{t('codeAgentBinaryPreviewUnavailable')}</div>
           <button type="button" className="inline-flex items-center gap-1.5 rounded-md border border-[#dedbd0] px-2 py-1 text-[#141413] hover:bg-[#f0eee6] dark:border-[#30302e] dark:text-[#faf9f5] dark:hover:bg-[#30302e]" onClick={() => createDownload(file)}>
             <Download className="h-3.5 w-3.5" />

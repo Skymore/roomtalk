@@ -103,14 +103,14 @@ export const RoomCard: React.FC<RoomCardProps> = ({
               </div>
             )}
             <div className="mt-2 flex min-w-0 items-center gap-2">
-              <p className="min-w-0 flex-shrink truncate text-xs text-[#87867f] dark:text-[#b0aea5]">
+              <p className="min-w-0 flex-shrink truncate text-xs text-[#5e5d59] dark:text-[#b0aea5]">
                 <span className="hidden md:inline">ID: </span>
                 <span className="md:hidden">{room.id.substring(0, 8)}...</span>
                 <span className="hidden md:inline">{room.id}</span>
               </p>
 
               {activityAt && (
-                <span className="ml-2 hidden whitespace-nowrap text-xs text-[#87867f] dark:text-[#b0aea5] md:inline-block">
+                <span className="ml-2 hidden whitespace-nowrap text-xs text-[#5e5d59] dark:text-[#b0aea5] md:inline-block">
                   {formatDate(activityAt, i18n.language)}
                 </span>
               )}

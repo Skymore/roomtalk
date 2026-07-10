@@ -9,6 +9,7 @@ import {
   ModalHeader,
 } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
+import { HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE } from '../utils/accessibility';
 import { validateRoomName } from '../utils/roomState';
 import { Room, RoomRenameHandler } from '../utils/types';
 
@@ -30,6 +31,10 @@ export const RoomRenameModal: React.FC<RoomRenameModalProps> = ({
   const [nameError, setNameError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isRenaming, setIsRenaming] = useState(false);
+  const roomNameValidation = validateRoomName(roomName, 20);
+  const displayedNameError = nameError || (
+    roomName && !roomNameValidation.ok ? t(roomNameValidation.errorKey) : null
+  );
 
   useEffect(() => {
     if (!isOpen) {
@@ -50,7 +55,8 @@ export const RoomRenameModal: React.FC<RoomRenameModalProps> = ({
 
   const handleNameChange = (value: string) => {
     setRoomName(value);
-    setNameError(null);
+    const validation = validateRoomName(value, 20);
+    setNameError(value && !validation.ok ? t(validation.errorKey) : null);
     setSubmitError(null);
   };
 
@@ -91,9 +97,11 @@ export const RoomRenameModal: React.FC<RoomRenameModalProps> = ({
           <Input
             autoFocus
             label={t('roomName')}
+            aria-label={HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE}
             placeholder={t('enterRoomName')}
             value={roomName}
             onChange={(event) => handleNameChange(event.target.value)}
+            maxLength={20}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
                 event.preventDefault();
@@ -101,9 +109,11 @@ export const RoomRenameModal: React.FC<RoomRenameModalProps> = ({
               }
             }}
             isRequired
-            isInvalid={!!nameError || !!submitError}
-            errorMessage={nameError || submitError}
-            description={t('roomNameMaxLength')}
+            isInvalid={Boolean(displayedNameError || submitError)}
+            errorMessage={displayedNameError || submitError}
+            description={displayedNameError ? undefined : t('roomNameCharactersRemaining', {
+              count: Math.max(0, 20 - roomName.length),
+            })}
           />
         </ModalBody>
         <ModalFooter>
@@ -114,8 +124,8 @@ export const RoomRenameModal: React.FC<RoomRenameModalProps> = ({
             color="secondary"
             onPress={handleRename}
             isLoading={isRenaming}
-            isDisabled={!roomName.trim() || isRenaming}
-            className="bg-[#c96442] text-[#faf9f5]"
+            isDisabled={!roomNameValidation.ok || roomNameValidation.name === room?.name || isRenaming}
+            className="bg-secondary text-secondary-foreground"
           >
             {t('save')}
           </Button>

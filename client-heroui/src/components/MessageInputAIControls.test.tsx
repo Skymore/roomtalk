@@ -29,8 +29,11 @@ vi.mock('@heroui/react', () => ({
   ModalContent: ({ children }: any) => <div>{children}</div>,
   ModalFooter: ({ children }: any) => <div>{children}</div>,
   ModalHeader: ({ children }: any) => <div>{children}</div>,
-  Select: ({ children, 'aria-label': ariaLabel, onSelectionChange, isDisabled, ...props }: any) => {
+  Select: ({ children, label, 'aria-label': ariaLabel, onSelectionChange, isDisabled, ...props }: any) => {
+    const accessibleLabel = ariaLabel || label;
+    const labelId = label ? `label-${String(label)}` : undefined;
     const nextKeyByLabel: Record<string, string> = {
+      selectAIModel: 'premium-model',
       codeAgentModeControl: 'edit',
       selectCodexPermission: 'fullAccess',
       selectCodexModel: 'gpt-5.6-sol',
@@ -40,15 +43,18 @@ vi.mock('@heroui/react', () => ({
     return (
       <div
         aria-label={ariaLabel}
-        data-testid={props['data-testid'] || ariaLabel}
+        aria-labelledby={!ariaLabel ? labelId : undefined}
+        role="combobox"
+        data-testid={props['data-testid'] || accessibleLabel}
         data-disabled={String(Boolean(isDisabled))}
       >
+        {label && <span id={labelId}>{label}</span>}
         {children}
         <button
           type="button"
-          data-testid={`change-${ariaLabel}`}
+          data-testid={`change-${accessibleLabel}`}
           disabled={isDisabled}
-          onClick={() => onSelectionChange?.(new Set([nextKeyByLabel[ariaLabel] || 'edit']))}
+          onClick={() => onSelectionChange?.(new Set([nextKeyByLabel[accessibleLabel] || 'edit']))}
         >
           change
         </button>
@@ -299,6 +305,99 @@ describe('MessageInputAIControls', () => {
     expect(screen.queryByRole('button', { name: 'codeAgentStop' })).toBeNull();
   });
 
+  it('disables the running-agent control when the room session input is locked', () => {
+    const onAskAI = vi.fn();
+    render(
+      <MessageInputAIControls
+        {...baseProps}
+        isCodeAgentRoom
+        isAgentRunning
+        isInputLocked
+        onAskAI={onAskAI}
+      />
+    );
+
+    const interrupt = screen.getByRole('button', { name: 'codeAgentStop' }) as HTMLButtonElement;
+    expect(interrupt.disabled).toBe(true);
+    fireEvent.click(interrupt);
+    expect(onAskAI).not.toHaveBeenCalled();
+  });
+
+  it('blocks a stale AI Settings Apply action when the room session input becomes locked', () => {
+    const onRoleChange = vi.fn();
+    const rendered = render(
+      <MessageInputAIControls
+        {...baseProps}
+        isSettingsOpen
+        onRoleChange={onRoleChange}
+      />
+    );
+    fireEvent.click(screen.getByText('select critic'));
+
+    rendered.rerender(
+      <MessageInputAIControls
+        {...baseProps}
+        isSettingsOpen
+        isInputLocked
+        onRoleChange={onRoleChange}
+      />
+    );
+
+    const apply = screen.getByRole('button', { name: 'apply' }) as HTMLButtonElement;
+    expect(apply.disabled).toBe(true);
+    fireEvent.click(apply);
+    expect(onRoleChange).not.toHaveBeenCalled();
+  });
+
+  it('closes the nested premium confirmation when the room session locks', () => {
+    const premiumModel = {
+      ...model,
+      id: 'premium-model',
+      label: 'Premium Model',
+      isPremium: true,
+      pricing: { currency: 'USD' as const, inputPerMillion: 10, outputPerMillion: 30 },
+    };
+    const rendered = render(
+      <MessageInputAIControls
+        {...baseProps}
+        aiModels={[model, premiumModel]}
+        isSettingsOpen
+      />
+    );
+
+    fireEvent.click(screen.getByTestId('change-selectAIModel'));
+    expect(screen.getByText('premiumModelPriceConfirmationTitle')).toBeTruthy();
+
+    rendered.rerender(
+      <MessageInputAIControls
+        {...baseProps}
+        aiModels={[model, premiumModel]}
+        isSettingsOpen
+        isInputLocked
+      />
+    );
+
+    expect(screen.queryByText('premiumModelPriceConfirmationTitle')).toBeNull();
+  });
+
+  it('keeps local AI Settings editable when posting is closed but the session is ready', () => {
+    const onRoleChange = vi.fn();
+    render(
+      <MessageInputAIControls
+        {...baseProps}
+        isSettingsOpen
+        canPost={false}
+        onRoleChange={onRoleChange}
+      />
+    );
+
+    fireEvent.click(screen.getByText('select critic'));
+    const apply = screen.getByRole('button', { name: 'apply' }) as HTMLButtonElement;
+    expect(apply.disabled).toBe(false);
+    fireEvent.click(apply);
+    expect(onRoleChange).toHaveBeenCalledWith('critic');
+  });
+
   it('disables Apply until settings change', () => {
     render(<MessageInputAIControls {...baseProps} isSettingsOpen />);
 
@@ -332,5 +431,16 @@ describe('MessageInputAIControls', () => {
 
     expect(screen.getByLabelText('selectAIRole')).toBeTruthy();
     expect(screen.queryByTestId('code-agent-mode-select')).toBeNull();
+  });
+
+  it('uses visible select labels as the single accessible name source', () => {
+    render(<MessageInputAIControls {...baseProps} isSettingsOpen />);
+
+    const modelSelect = screen.getByTestId('ai-model-select');
+    const roleSelect = screen.getByTestId('selectAIRole');
+    expect(modelSelect.getAttribute('aria-label')).toBeNull();
+    expect(roleSelect.getAttribute('aria-label')).toBeNull();
+    expect(screen.getByRole('combobox', { name: 'selectAIModel' })).toBe(modelSelect);
+    expect(screen.getByRole('combobox', { name: 'selectAIRole' })).toBe(roleSelect);
   });
 });

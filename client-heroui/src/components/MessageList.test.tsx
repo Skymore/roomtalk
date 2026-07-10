@@ -5,6 +5,7 @@ import { createRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Message, RoomPermissions } from '../utils/types';
 import { buildMessageTimeline, MessageList, MessageListHandle } from './MessageList';
+import { clearCachedRoomMessageWindow } from '../utils/messageHistoryCache';
 
 const requestAIResponseMock = vi.hoisted(() => vi.fn());
 const requestEditMessageAndAIResponseMock = vi.hoisted(() => vi.fn());
@@ -12,6 +13,12 @@ const editQueuedCodeAgentInputMock = vi.hoisted(() => vi.fn());
 const steerQueuedCodeAgentInputMock = vi.hoisted(() => vi.fn());
 const cancelQueuedCodeAgentInputMock = vi.hoisted(() => vi.fn());
 const loadCodeAgentWorkspaceSnapshotMock = vi.hoisted(() => vi.fn());
+const getRoomMessagesForExportMock = vi.hoisted(() => vi.fn());
+const getMediaDownloadUrlMock = vi.hoisted(() => vi.fn());
+const downloadTranscriptHtmlMock = vi.hoisted(() => vi.fn());
+const downloadTranscriptZipMock = vi.hoisted(() => vi.fn());
+const sendMessageMock = vi.hoisted(() => vi.fn());
+const sendStickerMock = vi.hoisted(() => vi.fn());
 const socketMock = vi.hoisted(() => {
   const handlers = new Map<string, Set<(...args: any[]) => void>>();
 
@@ -108,6 +115,15 @@ vi.mock('../utils/socket', () => ({
   editQueuedCodeAgentInput: editQueuedCodeAgentInputMock,
   steerQueuedCodeAgentInput: steerQueuedCodeAgentInputMock,
   cancelQueuedCodeAgentInput: cancelQueuedCodeAgentInputMock,
+  getRoomMessagesForExport: getRoomMessagesForExportMock,
+  getMediaDownloadUrl: getMediaDownloadUrlMock,
+  sendMessage: sendMessageMock,
+  sendSticker: sendStickerMock,
+}));
+
+vi.mock('../utils/chatExport', () => ({
+  downloadTranscriptHtml: downloadTranscriptHtmlMock,
+  downloadTranscriptZip: downloadTranscriptZipMock,
 }));
 
 vi.mock('../utils/codeAgentWorkspace', async () => {
@@ -120,7 +136,7 @@ vi.mock('../utils/codeAgentWorkspace', async () => {
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: (key: string, values?: { message?: string }) => values?.message ? `${key}:${values.message}` : key,
   }),
 }));
 
@@ -128,25 +144,36 @@ vi.mock('@iconify/react', () => ({
   Icon: ({ icon }: { icon: string }) => <span data-icon={icon} />,
 }));
 
+const modalMocks = vi.hoisted(() => ({
+  onConfirmDelete: undefined as (() => void) | undefined,
+  onSaveAndAskAI: undefined as ((messageId: string, content: string) => void) | undefined,
+}));
+
 vi.mock('./MessageItem', () => ({
   MessageItem: ({
     message,
     aiRequestRoomKind,
     onRefreshAI,
+    onRetryDelivery,
     onStartEdit,
     onEditQueuedMessage,
     onSteerQueuedMessage,
     onCancelQueuedMessage,
+    onDeleteMessage,
     onOpenWorkspaceFile,
+    isInteractionDisabled,
   }: {
     message: Message;
     aiRequestRoomKind?: string;
     onRefreshAI?: (messageId: string) => void;
+    onRetryDelivery?: (message: Message) => void;
     onStartEdit?: (messageId: string) => void;
     onEditQueuedMessage?: (messageId: string) => void;
     onSteerQueuedMessage?: (messageId: string) => void;
     onCancelQueuedMessage?: (messageId: string) => void;
+    onDeleteMessage?: (messageId: string) => void;
     onOpenWorkspaceFile?: (path: string) => void;
+    isInteractionDisabled?: boolean;
   }) => (
     <div
       data-testid="message-item"
@@ -154,14 +181,18 @@ vi.mock('./MessageItem', () => ({
       data-client-message-id={message.clientMessageId || ''}
       data-delivery-status={message.deliveryStatus || ''}
       data-delivery-error={message.deliveryError || ''}
+      data-delivery-action={message.deliveryAction || ''}
       data-ai-request-room-kind={aiRequestRoomKind || ''}
+      data-interaction-disabled={String(Boolean(isInteractionDisabled))}
     >
       {message.content}
       <button type="button" onClick={() => onRefreshAI?.(message.id)}>retry-{message.id}</button>
+      <button type="button" onClick={() => onRetryDelivery?.(message)}>retry-delivery-{message.id}</button>
       <button type="button" onClick={() => onStartEdit?.(message.id)}>edit-{message.id}</button>
       <button type="button" onClick={() => onEditQueuedMessage?.(message.id)}>edit-queued-{message.id}</button>
       <button type="button" onClick={() => onSteerQueuedMessage?.(message.id)}>steer-queued-{message.id}</button>
       <button type="button" onClick={() => onCancelQueuedMessage?.(message.id)}>cancel-queued-{message.id}</button>
+      <button type="button" onClick={() => onDeleteMessage?.(message.id)}>delete-{message.id}</button>
       <button type="button" onClick={() => onOpenWorkspaceFile?.('src/App.tsx#L42')}>open-workspace-{message.id}</button>
     </div>
   ),
@@ -169,16 +200,20 @@ vi.mock('./MessageItem', () => ({
 }));
 
 vi.mock('./DeleteConfirmationModal', () => ({
-  DeleteConfirmationModal: () => null,
+  DeleteConfirmationModal: ({ isOpen, onConfirm }: { isOpen: boolean; onConfirm?: () => void }) => {
+    modalMocks.onConfirmDelete = onConfirm;
+    return isOpen ? <button type="button" onClick={onConfirm}>confirm-delete</button> : null;
+  },
 }));
 
 vi.mock('./EditMessageModal', () => ({
-  EditMessageModal: ({ message, onSave, onSaveAndAskAI, showSaveAndAskAI = true }: { message?: Message | null; onSave?: (messageId: string, content: string) => void; onSaveAndAskAI?: (messageId: string, content: string) => void; showSaveAndAskAI?: boolean }) => (
-    message ? <>
+  EditMessageModal: ({ message, onSave, onSaveAndAskAI, showSaveAndAskAI = true }: { message?: Message | null; onSave?: (messageId: string, content: string) => void; onSaveAndAskAI?: (messageId: string, content: string) => void; showSaveAndAskAI?: boolean }) => {
+    modalMocks.onSaveAndAskAI = onSaveAndAskAI;
+    return message ? <>
       <button type="button" onClick={() => onSave?.(message.id, 'edited content')}>save-edit</button>
       {showSaveAndAskAI && <button type="button" onClick={() => onSaveAndAskAI?.(message.id, 'edited content')}>edit-and-ask</button>}
-    </> : null
-  ),
+    </> : null;
+  },
 }));
 
 const message = (overrides: Partial<Message> = {}): Message => ({
@@ -190,6 +225,21 @@ const message = (overrides: Partial<Message> = {}): Message => ({
   messageType: 'text',
   ...overrides,
 });
+
+const postingPermissions: RoomPermissions = {
+  roomId: 'room-1',
+  clientId: 'client-1',
+  role: 'member',
+  canPost: true,
+  canEditAnyMessage: false,
+  canDeleteAnyMessage: false,
+  canClearHistory: false,
+  canManageRoom: false,
+  canManageAdmins: false,
+  canManageMembers: false,
+  canTransferOwnership: false,
+  canUseCodeAgent: true,
+};
 
 const createLocalStorageMock = (): Storage => {
   const store = new Map<string, string>();
@@ -210,18 +260,28 @@ const createLocalStorageMock = (): Storage => {
 };
 
 describe('MessageList optimistic messages', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    cleanup();
     const localStorageMock = createLocalStorageMock();
     Object.defineProperty(window, 'localStorage', { configurable: true, value: localStorageMock });
     Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: localStorageMock });
     socketMock.reset();
     vi.clearAllMocks();
+    modalMocks.onConfirmDelete = undefined;
+    modalMocks.onSaveAndAskAI = undefined;
     window.localStorage.clear();
+    await clearCachedRoomMessageWindow('room-1');
     requestAIResponseMock.mockResolvedValue(undefined);
     requestEditMessageAndAIResponseMock.mockResolvedValue(undefined);
     editQueuedCodeAgentInputMock.mockResolvedValue(undefined);
     steerQueuedCodeAgentInputMock.mockResolvedValue(undefined);
     cancelQueuedCodeAgentInputMock.mockResolvedValue(undefined);
+    getRoomMessagesForExportMock.mockResolvedValue([]);
+    getMediaDownloadUrlMock.mockResolvedValue({ url: 'https://signed.example/media' });
+    downloadTranscriptHtmlMock.mockResolvedValue(undefined);
+    downloadTranscriptZipMock.mockResolvedValue(undefined);
+    sendMessageMock.mockReset();
+    sendStickerMock.mockReset();
     loadCodeAgentWorkspaceSnapshotMock.mockResolvedValue({
       roomId: 'room-1',
       backend: 'code-agent',
@@ -243,6 +303,7 @@ describe('MessageList optimistic messages', () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -346,6 +407,172 @@ describe('MessageList optimistic messages', () => {
     expect(screen.getByTestId('message-item').getAttribute('data-delivery-error')).toBe('network down');
   });
 
+  it('retries a failed text message with its original id, content, reply, and avatar', async () => {
+    let resolveRetry: (message: Message) => void = () => {};
+    sendMessageMock.mockImplementation(() => new Promise<Message>((resolve) => {
+      resolveRetry = resolve;
+    }));
+    const ref = createRef<MessageListHandle>();
+    render(
+      <MessageList
+        ref={ref}
+        roomId="room-1"
+        onReply={vi.fn()}
+        roomPermissions={postingPermissions}
+        isRoomSessionReady
+      />,
+    );
+
+    const failed = message({
+      id: 'temp-client-message-3',
+      content: 'retry this text',
+      clientMessageId: 'client-message-3',
+      deliveryStatus: 'failed',
+      deliveryError: 'network down',
+      username: 'Ada',
+      avatar: { text: 'A', color: 'primary' },
+      replyTo: { messageId: 'quoted-1', messageType: 'text', preview: 'quoted' },
+    });
+    act(() => {
+      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], historyVersion: 0, hasMore: false, mode: 'replace' });
+      ref.current?.addOptimisticMessage(failed);
+    });
+
+    fireEvent.click(await screen.findByText('retry-delivery-temp-client-message-3'));
+
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      'retry this text',
+      'room-1',
+      'text',
+      'Ada',
+      { text: 'A', color: 'primary' },
+      'quoted-1',
+      'client-message-3',
+    );
+    expect(screen.getByTestId('message-item').getAttribute('data-delivery-status')).toBe('pending');
+
+    const saved = message({
+      id: 'server-message-3',
+      content: failed.content,
+      clientMessageId: failed.clientMessageId,
+      username: failed.username,
+      avatar: failed.avatar,
+      replyTo: failed.replyTo,
+    });
+    await act(async () => resolveRetry(saved));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('message-item').getAttribute('data-message-id')).toBe('server-message-3');
+      expect(screen.getByTestId('message-item').getAttribute('data-delivery-status')).toBe('sent');
+    });
+  });
+
+  it('retries a failed sticker and keeps a retry failure visible', async () => {
+    sendStickerMock.mockRejectedValueOnce(new Error('still offline'));
+    const ref = createRef<MessageListHandle>();
+    render(
+      <MessageList
+        ref={ref}
+        roomId="room-1"
+        onReply={vi.fn()}
+        roomPermissions={postingPermissions}
+        isRoomSessionReady
+      />,
+    );
+    act(() => {
+      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], historyVersion: 0, hasMore: false, mode: 'replace' });
+      ref.current?.addOptimisticMessage(message({
+        id: 'temp-sticker-1',
+        content: 'xiaokumao/001/01',
+        messageType: 'sticker',
+        clientMessageId: 'client-sticker-1',
+        deliveryStatus: 'failed',
+        deliveryError: 'offline',
+        username: 'Ada',
+        avatar: { text: 'A', color: 'primary' },
+      }));
+    });
+
+    fireEvent.click(await screen.findByText('retry-delivery-temp-sticker-1'));
+
+    expect(sendStickerMock).toHaveBeenCalledWith(
+      'xiaokumao/001/01',
+      'room-1',
+      'Ada',
+      { text: 'A', color: 'primary' },
+      undefined,
+      'client-sticker-1',
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('message-item').getAttribute('data-delivery-status')).toBe('failed');
+      expect(screen.getByTestId('message-item').getAttribute('data-delivery-error')).toBe('still offline');
+    });
+  });
+
+  it('does not retry delivery while posting is unavailable', async () => {
+    const ref = createRef<MessageListHandle>();
+    render(
+      <MessageList
+        ref={ref}
+        roomId="room-1"
+        onReply={vi.fn()}
+        roomPermissions={{ ...postingPermissions, canPost: false }}
+        isRoomSessionReady
+      />,
+    );
+    act(() => {
+      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], historyVersion: 0, hasMore: false, mode: 'replace' });
+      ref.current?.addOptimisticMessage(message({
+        id: 'temp-locked',
+        clientMessageId: 'client-locked',
+        deliveryStatus: 'failed',
+      }));
+    });
+
+    fireEvent.click(await screen.findByText('retry-delivery-temp-locked'));
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  it('does not downgrade Ask AI to ordinary delivery retry when broadcast arrives before a failed ack', async () => {
+    const ref = createRef<MessageListHandle>();
+    render(
+      <MessageList
+        ref={ref}
+        roomId="room-1"
+        onReply={vi.fn()}
+        roomPermissions={postingPermissions}
+        isRoomSessionReady
+      />,
+    );
+    const clientMessageId = 'ask-ai-client-message';
+
+    act(() => {
+      socketMock.trigger('message_history', { roomId: 'room-1', messages: [], historyVersion: 0, hasMore: false, mode: 'replace' });
+      ref.current?.addOptimisticMessage(message({
+        id: 'temp-ask-ai',
+        clientMessageId,
+        deliveryStatus: 'pending',
+        deliveryAction: 'ask-ai',
+      }));
+    });
+    act(() => {
+      socketMock.trigger('new_message', message({
+        id: 'canonical-ask-ai',
+        clientMessageId,
+      }));
+    });
+    act(() => {
+      ref.current?.markOptimisticMessageFailed(clientMessageId, 'ack timeout');
+    });
+
+    const item = await screen.findByTestId('message-item');
+    expect(item.getAttribute('data-message-id')).toBe('canonical-ask-ai');
+    expect(item.getAttribute('data-delivery-status')).toBe('sent');
+    expect(item.getAttribute('data-delivery-action')).toBe('ask-ai');
+    fireEvent.click(screen.getByText('retry-delivery-canonical-ask-ai'));
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
   it('passes workspace file link openings down to rendered messages', async () => {
     const onOpenWorkspaceFile = vi.fn();
     render(
@@ -407,6 +634,7 @@ describe('MessageList optimistic messages', () => {
       roomId: 'room-1',
       beforeMessageId: 'm-6',
       limit: 80,
+      baseHistoryVersion: 1,
     });
 
     act(() => {
@@ -458,6 +686,7 @@ describe('MessageList optimistic messages', () => {
       roomId: 'room-1',
       beforeMessageId: 'position-oldest',
       limit: 80,
+      baseHistoryVersion: 1,
     });
   });
 
@@ -552,6 +781,261 @@ describe('MessageList optimistic messages', () => {
     expect(screen.getByText('exportChat').closest('[data-testid="message-list-scroll"]')).toBeNull();
   });
 
+  it('keeps export busy through generation and reports success or format-specific failure without alert()', async () => {
+    let resolveHtml!: () => void;
+    downloadTranscriptHtmlMock.mockImplementationOnce(() => new Promise<void>(resolve => { resolveHtml = resolve; }));
+    const nativeAlert = vi.spyOn(window, 'alert').mockImplementation(() => undefined);
+    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'exportChat' }));
+    fireEvent.click(await screen.findByText('exportHtml'));
+    await waitFor(() => expect(downloadTranscriptHtmlMock).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('button', { name: 'exportingChat' }).getAttribute('aria-busy')).toBe('true');
+
+    await act(async () => resolveHtml());
+    expect((await screen.findByRole('status')).textContent).toContain('exportSucceeded');
+
+    downloadTranscriptZipMock.mockRejectedValueOnce(new Error('zip failed'));
+    fireEvent.click(screen.getByRole('button', { name: 'exportChat' }));
+    fireEvent.click(await screen.findByText('exportZip'));
+    expect((await screen.findByRole('alert')).textContent).toContain('exportFormatFailed');
+    expect(nativeAlert).not.toHaveBeenCalled();
+    nativeAlert.mockRestore();
+  });
+
+  it('keeps initial history hydration silent, then enables the realtime chat log', () => {
+    const animationFrames: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      animationFrames.push(callback);
+      return animationFrames.length;
+    });
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
+
+    const log = screen.getByRole('log', { name: 'messageLog' });
+    expect(log.getAttribute('aria-live')).toBe('off');
+    expect(log.getAttribute('aria-relevant')).toBe('additions');
+
+    act(() => {
+      socketMock.trigger('message_history', {
+        roomId: 'room-1',
+        messages: [message({ id: 'historical-message', content: 'existing history' })],
+        historyVersion: 1,
+        hasMore: false,
+        mode: 'replace',
+      });
+    });
+    expect(log.getAttribute('aria-live')).toBe('off');
+
+    act(() => {
+      while (animationFrames.length > 0) animationFrames.shift()?.(0);
+    });
+    expect(log.getAttribute('aria-live')).toBe('polite');
+  });
+
+  it('distinguishes loading session cost from an unavailable total', async () => {
+    vi.useFakeTimers();
+    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
+
+    expect(screen.getByText('loadingSessionCost')).toBeTruthy();
+    expect(screen.queryByText('costUnavailable')).toBeNull();
+
+    await act(async () => { vi.advanceTimersByTime(8000); });
+
+    expect(document.body.textContent).toContain('costUnavailable');
+    vi.useRealTimers();
+  });
+
+  it('does not announce a historical failed message as a fresh delivery failure', async () => {
+    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
+    act(() => {
+      socketMock.trigger('message_history', {
+        roomId: 'room-1',
+        messages: [message({ id: 'old-failure', deliveryStatus: 'failed', deliveryError: 'old network error' })],
+        historyVersion: 1,
+        hasMore: false,
+        mode: 'replace',
+      });
+    });
+
+    await screen.findByText('hello');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('announces delivery failures and AI completion transitions', async () => {
+    const ref = createRef<MessageListHandle>();
+    render(<MessageList ref={ref} roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
+    act(() => {
+      socketMock.trigger('message_history', {
+        roomId: 'room-1',
+        messages: [
+          message({ id: 'pending-message', clientMessageId: 'pending-client', deliveryStatus: 'pending' }),
+          message({ id: 'streaming-ai', clientId: 'ai_assistant', messageType: 'ai', status: 'streaming', content: '' }),
+        ],
+        historyVersion: 1,
+        hasMore: false,
+        mode: 'replace',
+      });
+    });
+
+    act(() => ref.current?.markOptimisticMessageFailed('pending-client', 'network down'));
+    const deliveryAlert = await screen.findByRole('alert');
+    expect(deliveryAlert.textContent).toContain('messageDeliveryFailedAnnouncement');
+    expect(deliveryAlert.getAttribute('aria-live')).toBeNull();
+    expect(deliveryAlert.getAttribute('aria-atomic')).toBe('true');
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+
+    act(() => {
+      socketMock.trigger('ai_stream_end', {
+        roomId: 'room-1',
+        messageId: 'streaming-ai',
+        content: '## Finished\n[answer](https://example.com) with `code`',
+      });
+    });
+    const completionStatus = await screen.findByRole('status');
+    expect(completionStatus.textContent).toContain('aiResponseCompleteSummaryAnnouncement');
+    expect(completionStatus.textContent).toContain('Finished answer with code');
+    expect(completionStatus.textContent).not.toContain('https://example.com');
+    expect(completionStatus.getAttribute('aria-live')).toBeNull();
+    expect(completionStatus.getAttribute('aria-atomic')).toBe('true');
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+  });
+
+  it('uses instant scrolling when reduced motion is requested', () => {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn(() => ({
+        matches: true,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+      })),
+    });
+    const ref = createRef<MessageListHandle>();
+    render(<MessageList ref={ref} roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
+    const container = screen.getByTestId('message-list-scroll');
+    const scrollTo = vi.fn();
+    Object.defineProperty(container, 'scrollHeight', { configurable: true, value: 500 });
+    Object.defineProperty(container, 'scrollTo', { configurable: true, value: scrollTo });
+
+    act(() => ref.current?.scrollToBottom('smooth'));
+
+    expect(scrollTo).toHaveBeenCalledWith({ top: 500, behavior: 'auto' });
+  });
+
+  it('locks export and message actions while a restored room shell is unverified', async () => {
+    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} isRoomSessionReady={false} />);
+    act(() => {
+      socketMock.trigger('message_history', {
+        roomId: 'room-1',
+        messages: [message()],
+        historyVersion: 1,
+        hasMore: false,
+        mode: 'replace',
+      });
+    });
+
+    const item = await screen.findByTestId('message-item');
+    expect(item.getAttribute('data-interaction-disabled')).toBe('true');
+    expect((screen.getByRole('button', { name: 'exportChat' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('does not request message history until the restored room session is verified', async () => {
+    const rendered = render(
+      <MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} isRoomSessionReady={false} />
+    );
+    await act(async () => {});
+    expect(socketMock.emit).not.toHaveBeenCalledWith(
+      'get_room_messages',
+      expect.objectContaining({ roomId: 'room-1' }),
+    );
+
+    rendered.rerender(
+      <MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} isRoomSessionReady />
+    );
+    await waitFor(() => {
+      expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', { roomId: 'room-1', limit: 80, baseHistoryVersion: 0 });
+    });
+  });
+
+  it('disables cached-history Load more until verification and enables it afterward', async () => {
+    const rendered = render(
+      <MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} isRoomSessionReady={false} />
+    );
+    act(() => {
+      socketMock.trigger('message_history', {
+        roomId: 'room-1',
+        messages: [message({ id: 'cached-oldest' })],
+        historyVersion: 1,
+        hasMore: true,
+        oldestMessageId: 'cached-oldest',
+        mode: 'replace',
+      });
+    });
+    const loadMore = await screen.findByText('loadMoreHistory');
+    expect((loadMore as HTMLButtonElement).disabled).toBe(true);
+    socketMock.emit.mockClear();
+    fireEvent.click(loadMore);
+    expect(socketMock.emit).not.toHaveBeenCalled();
+
+    rendered.rerender(
+      <MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} isRoomSessionReady />
+    );
+    await waitFor(() => expect((screen.getByText('loadMoreHistory') as HTMLButtonElement).disabled).toBe(false));
+    socketMock.emit.mockClear();
+    fireEvent.click(screen.getByText('loadMoreHistory'));
+    expect(socketMock.emit).toHaveBeenCalledWith('get_room_messages', {
+      roomId: 'room-1',
+      beforeMessageId: 'cached-oldest',
+      limit: 80,
+      baseHistoryVersion: 1,
+    });
+  });
+
+  it('closes open edit and delete modals and rejects their stale callbacks when the session becomes unverified', async () => {
+    const rendered = render(
+      <MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} isRoomSessionReady />
+    );
+    act(() => {
+      socketMock.trigger('message_history', {
+        roomId: 'room-1',
+        messages: [message({ id: 'modal-message', content: 'editable' })],
+        historyVersion: 1,
+        hasMore: false,
+        mode: 'replace',
+      });
+    });
+
+    fireEvent.click(await screen.findByText('edit-modal-message'));
+    expect(screen.getByText('edit-and-ask')).toBeTruthy();
+    const staleEdit = modalMocks.onSaveAndAskAI;
+
+    fireEvent.click(screen.getByText('delete-modal-message'));
+    expect(screen.getByText('confirm-delete')).toBeTruthy();
+    const staleDelete = modalMocks.onConfirmDelete;
+
+    rendered.rerender(
+      <MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} isRoomSessionReady={false} />
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText('edit-and-ask')).toBeNull();
+      expect(screen.queryByText('confirm-delete')).toBeNull();
+    });
+    act(() => {
+      staleEdit?.('modal-message', 'late edit');
+      staleDelete?.();
+    });
+
+    expect(requestEditMessageAndAIResponseMock).not.toHaveBeenCalled();
+    expect(socketMock.emit).not.toHaveBeenCalledWith(
+      'delete_message',
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it('keeps the code workspace panel outside the message scroll container', () => {
     render(
       <MessageList
@@ -576,6 +1060,44 @@ describe('MessageList optimistic messages', () => {
     expect(screen.getByTestId('code-agent-workspace').closest('[data-testid="message-list-scroll"]')).toBeNull();
     expect(screen.getByTestId('code-agent-workspace').className).toContain('sticky');
     expect(screen.getByTestId('code-agent-workspace').className).toContain('top-0');
+  });
+
+  it('defers code workspace requests and refresh UI until the room session is verified', async () => {
+    const currentRoom = {
+      id: 'room-1',
+      name: 'Code Agent',
+      createdAt: '2026-05-26T00:00:00.000Z',
+      creatorId: 'client-1',
+      type: 'codeAgent' as const,
+      sandboxStatus: 'ready' as const,
+      codeAgentStatus: 'idle' as const,
+    };
+    const rendered = render(
+      <MessageList
+        roomId="room-1"
+        onReply={vi.fn()}
+        roomPermissions={null}
+        presentation="code-agent"
+        currentRoom={currentRoom}
+        isRoomSessionReady={false}
+      />
+    );
+    await act(async () => {});
+    expect(loadCodeAgentWorkspaceSnapshotMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('code-agent-refresh-workspace')).toBeNull();
+
+    rendered.rerender(
+      <MessageList
+        roomId="room-1"
+        onReply={vi.fn()}
+        roomPermissions={null}
+        presentation="code-agent"
+        currentRoom={currentRoom}
+        isRoomSessionReady
+      />
+    );
+    await waitFor(() => expect(loadCodeAgentWorkspaceSnapshotMock).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId('code-agent-refresh-workspace')).toBeTruthy();
   });
 
   it('does not expose code-agent mode switching to non-managers', () => {

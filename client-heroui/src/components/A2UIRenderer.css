@@ -3,7 +3,9 @@
   --a2ui-color-on-surface: #141413;
   --a2ui-color-background: #fbfaf6;
   --a2ui-color-on-background: #141413;
-  --a2ui-color-primary: #c96442;
+  /* Action colors are intentionally darker than the decorative brand accent so
+     13px ivory button labels meet WCAG AA (4.94:1). */
+  --a2ui-color-primary: #ad5237;
   --a2ui-color-primary-hover: #b55335;
   --a2ui-color-on-primary: #faf9f5;
   --a2ui-color-secondary: #e8e6dc;
@@ -42,9 +44,10 @@
   --a2ui-color-on-surface: #faf9f5;
   --a2ui-color-background: #1d1d1b;
   --a2ui-color-on-background: #faf9f5;
-  --a2ui-color-primary: #c96442;
+  /* Dark actions use a light terracotta with ink text (5.90:1). */
+  --a2ui-color-primary: #d97757;
   --a2ui-color-primary-hover: #df7653;
-  --a2ui-color-on-primary: #faf9f5;
+  --a2ui-color-on-primary: #141413;
   --a2ui-color-secondary: #30302e;
   --a2ui-color-on-secondary: #faf9f5;
   --a2ui-color-border: #3d3d3a;

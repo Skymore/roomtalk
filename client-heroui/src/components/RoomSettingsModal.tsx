@@ -42,6 +42,8 @@ import {
   RoomRenameHandler,
 } from '../utils/types';
 import { PostingScheduleEditor } from './PostingScheduleEditor';
+import { HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE } from '../utils/accessibility';
+import { validateRoomName } from '../utils/roomState';
 
 const backendIcons: Record<CodeAgentBackend, string> = {
   'code-agent': 'lucide:sparkles',
@@ -105,6 +107,8 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   onRoomUpdated,
 }) => {
   const { t } = useTranslation();
+  const tabSetId = React.useId();
+  const tabRefs = React.useRef<Partial<Record<SettingsTabKey, HTMLButtonElement | null>>>({});
   const canManageSettings = Boolean(roomPermissions?.canManageRoom);
   const canManageAdmins = Boolean(roomPermissions?.canManageAdmins);
   const canManageMembers = Boolean(roomPermissions?.canManageMembers);
@@ -279,11 +283,15 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   };
 
   const handleRenameRoom = () => {
-    const nextName = roomName.trim();
-    if (!nextName || nextName === room.name) return;
+    const validation = validateRoomName(roomName, 20);
+    if (!validation.ok) {
+      setStatus({ type: 'error', message: t(validation.errorKey) });
+      return;
+    }
+    if (validation.name === room.name) return;
 
     void runAction(async () => {
-      await onRenameRoom(room.id, nextName);
+      await onRenameRoom(room.id, validation.name);
     }, t('roomRenamedSuccess'));
   };
 
@@ -449,8 +457,33 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     ] : []),
   ], [canManageGeneral, canManageMembers, canManageSettings, canTransferOwnership, t]);
 
+  React.useEffect(() => {
+    if (availableTabs.length > 0 && !availableTabs.some(tab => tab.key === activeTab)) {
+      setActiveTab(availableTabs[0].key);
+    }
+  }, [activeTab, availableTabs]);
+
+  const tabId = (key: SettingsTabKey) => `${tabSetId}-${key}-tab`;
+  const tabPanelId = (key: SettingsTabKey) => `${tabSetId}-${key}-panel`;
+  const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, currentKey: SettingsTabKey) => {
+    const currentIndex = availableTabs.findIndex(tab => tab.key === currentKey);
+    if (currentIndex < 0) return;
+
+    let nextIndex: number | null = null;
+    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % availableTabs.length;
+    if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + availableTabs.length) % availableTabs.length;
+    if (event.key === 'Home') nextIndex = 0;
+    if (event.key === 'End') nextIndex = availableTabs.length - 1;
+    if (nextIndex === null) return;
+
+    event.preventDefault();
+    const nextTab = availableTabs[nextIndex];
+    setActiveTab(nextTab.key);
+    tabRefs.current[nextTab.key]?.focus();
+  };
+
   const renderSectionLabel = (icon: string, label: string, className?: string) => (
-    <div className={`flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide ${className || 'text-[#87867f] dark:text-[#b0aea5]'}`}>
+    <div className={`flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide ${className || 'text-[#5e5d59] dark:text-[#b0aea5]'}`}>
       <Icon icon={icon} className="h-3.5 w-3.5" aria-hidden="true" />
       {label}
     </div>
@@ -459,6 +492,8 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   const renderStatusBanner = () => (
     status ? (
       <div
+        role={status.type === 'error' ? 'alert' : 'status'}
+        aria-atomic="true"
         className={`rounded-lg px-3 py-2 text-sm ${
           status.type === 'error'
             ? 'bg-danger-50 text-danger-700 dark:bg-danger-950/30 dark:text-danger-200'
@@ -490,7 +525,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
           <div className="truncate text-sm font-semibold text-[#141413] dark:text-[#faf9f5]">
             {displayUser(member)}
           </div>
-          <div className="truncate text-[11px] text-[#87867f] dark:text-[#b0aea5]">{displayUserId(member)}</div>
+          <div className="truncate text-[11px] text-[#5e5d59] dark:text-[#b0aea5]">{displayUserId(member)}</div>
         </div>
       </div>
       <div className="flex flex-shrink-0 items-center gap-1.5">
@@ -555,7 +590,9 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
 
   const renderTabPanel = (tabKey: SettingsTabKey) => {
     if (tabKey === 'general' && canManageGeneral) {
-      const roomNameChanged = roomName.trim() && roomName.trim() !== room.name;
+      const roomNameValidation = validateRoomName(roomName, 20);
+      const roomNameChanged = roomNameValidation.ok && roomNameValidation.name !== room.name;
+      const roomNameError = roomName && !roomNameValidation.ok ? t(roomNameValidation.errorKey) : null;
 
       const showDangerZone = canClearHistory || isOwner;
 
@@ -570,13 +607,19 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                   placeholder={t('enterRoomName')}
                   value={roomName}
                   onChange={(event) => setRoomName(event.target.value)}
+                  maxLength={20}
+                  isInvalid={Boolean(roomNameError)}
+                  errorMessage={roomNameError}
+                  description={roomNameError ? undefined : t('roomNameCharactersRemaining', {
+                    count: Math.max(0, 20 - roomName.length),
+                  })}
                   classNames={{ inputWrapper: 'h-12' }}
                 />
                 <HoverTooltip content={t('save')}>
                   <Button
                     isIconOnly
                     aria-label={t('save')}
-                    className="h-12 w-12 min-w-12 rounded-lg bg-[#c96442] text-[#faf9f5]"
+                    className="h-12 w-12 min-w-12 rounded-lg bg-secondary text-secondary-foreground"
                     isDisabled={!roomNameChanged || isSaving}
                     isLoading={isSaving}
                     onPress={handleRenameRoom}
@@ -602,7 +645,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                   classNames={{ inputWrapper: 'h-12' }}
                 />
                 <Button
-                  className="h-12 rounded-lg bg-[#c96442] px-4 font-semibold text-[#faf9f5]"
+                  className="h-12 rounded-lg bg-secondary px-4 font-semibold text-secondary-foreground"
                   startContent={!isSaving && <Icon icon="lucide:check" className="h-4 w-4" />}
                   isDisabled={!password.trim() || isSaving}
                   isLoading={isSaving}
@@ -630,7 +673,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                   </Button>
                 </div>
               ) : (
-                <div className="flex items-center gap-1.5 text-xs text-[#87867f] dark:text-[#b0aea5]">
+                <div className="flex items-center gap-1.5 text-xs text-[#5e5d59] dark:text-[#b0aea5]">
                   <Icon icon="lucide:lock-open" className="h-3 w-3" />
                   {t('noPasswordSet')}
                 </div>
@@ -651,7 +694,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                       size="sm"
                       className={`h-8 rounded-lg px-3 text-xs font-semibold ${
                         selected
-                          ? 'bg-[#c96442] text-[#faf9f5]'
+                          ? 'bg-secondary text-secondary-foreground'
                           : 'bg-[#e8e6dc] text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]'
                       }`}
                       isDisabled={isSaving}
@@ -673,7 +716,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                   );
                 })}
               </div>
-              <div className="text-xs text-[#87867f] dark:text-[#b0aea5]">
+              <div className="text-xs text-[#5e5d59] dark:text-[#b0aea5]">
                 {t('codeAgentAccessDescription')}
               </div>
             </div>
@@ -693,7 +736,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                       size="sm"
                       className={`h-8 rounded-lg px-3 text-xs font-semibold ${
                         selected
-                          ? 'bg-[#c96442] text-[#faf9f5]'
+                          ? 'bg-secondary text-secondary-foreground'
                           : 'bg-[#e8e6dc] text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]'
                       }`}
                       startContent={<Icon icon={backendIcons[backend]} className="h-3.5 w-3.5" />}
@@ -716,7 +759,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                   );
                 })}
               </div>
-              <div className="text-xs text-[#87867f] dark:text-[#b0aea5]">
+              <div className="text-xs text-[#5e5d59] dark:text-[#b0aea5]">
                 {t('codeAgentEngineDescription')}
               </div>
             </div>
@@ -735,7 +778,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                       startContent={<Icon icon={getCodeAgentModeIcon(mode)} className="h-3.5 w-3.5" />}
                       className={`h-8 rounded-lg px-3 text-xs font-semibold ${
                         selected
-                          ? 'bg-[#c96442] text-[#faf9f5]'
+                          ? 'bg-secondary text-secondary-foreground'
                           : 'bg-[#e8e6dc] text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]'
                       }`}
                       isDisabled={isSaving}
@@ -757,7 +800,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                   );
                 })}
               </div>
-              <div className="text-xs text-[#87867f] dark:text-[#b0aea5]">
+              <div className="text-xs text-[#5e5d59] dark:text-[#b0aea5]">
                 {t('codeAgentModeDescription')}
               </div>
             </div>
@@ -815,7 +858,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
           />
           <div className="flex justify-end border-t border-[#dedbd0] pt-4 dark:border-[#30302e]">
             <Button
-              className="rounded-lg bg-[#c96442] px-5 font-semibold text-[#faf9f5]"
+              className="rounded-lg bg-secondary px-5 font-semibold text-secondary-foreground"
               startContent={!isSaving && <Icon icon="lucide:check" className="h-4 w-4" />}
               isDisabled={!scheduleReady || isSaving}
               isLoading={isSaving}
@@ -833,8 +876,8 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
       return (
         <section className="space-y-5">
           <div className="space-y-2">
-            {renderSectionLabel('lucide:users', t('memberManagement'), 'text-[#c96442] dark:text-[#e08a6a]')}
-            <p className="text-xs leading-relaxed text-[#87867f] dark:text-[#b0aea5]">
+            {renderSectionLabel('lucide:users', t('memberManagement'), 'text-secondary')}
+            <p className="text-xs leading-relaxed text-[#5e5d59] dark:text-[#b0aea5]">
               {canManageAdmins ? t('adminPermissionsHint') : t('memberPermissionsHint')}
             </p>
             {canManageAdmins && (
@@ -850,7 +893,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                   <Button
                     isIconOnly
                     aria-label={t('addAdmin')}
-                    className="h-12 w-12 min-w-12 rounded-lg bg-[#c96442] text-[#faf9f5]"
+                    className="h-12 w-12 min-w-12 rounded-lg bg-secondary text-secondary-foreground"
                     isDisabled={!adminClientId.trim() || isSaving}
                     isLoading={isSaving}
                     onPress={handleAddAdmin}
@@ -865,7 +908,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
           <div className="space-y-2">
             {renderSectionLabel('lucide:users', t('persistentMembers'))}
             {isLoadingMembers ? (
-              <div className="flex items-center gap-2 text-sm text-[#87867f] dark:text-[#b0aea5]">
+              <div className="flex items-center gap-2 text-sm text-[#5e5d59] dark:text-[#b0aea5]">
                 <Icon icon="lucide:loader-circle" className="h-4 w-4 animate-spin" />
                 {t('loading')}
               </div>
@@ -875,7 +918,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                 {adminMembers.map(renderMemberRow)}
                 {regularMembers.map(renderMemberRow)}
                 {roleMembers.length === 0 && (
-                  <div className="rounded-lg border border-dashed border-[#dedbd0] px-3 py-2 text-sm text-[#87867f] dark:border-[#30302e] dark:text-[#b0aea5]">
+                  <div className="rounded-lg border border-dashed border-[#dedbd0] px-3 py-2 text-sm text-[#5e5d59] dark:border-[#30302e] dark:text-[#b0aea5]">
                     {t('noMembers')}
                   </div>
                 )}
@@ -940,13 +983,14 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
             </span>
             <span className="flex min-w-0 flex-col">
               <span className="text-base font-semibold text-[#141413] dark:text-[#faf9f5]">{t('settings')}</span>
-              <span className="truncate text-xs font-normal text-[#87867f] dark:text-[#b0aea5]">{room.name}</span>
+              <span className="truncate text-xs font-normal text-[#5e5d59] dark:text-[#b0aea5]">{room.name}</span>
             </span>
           </ModalHeader>
           <ModalBody className="min-h-0 flex-1 overflow-hidden px-6 pb-6 pt-0">
             <div className="flex h-full min-h-0 flex-col overflow-hidden">
               <div
                 aria-label={t('settings')}
+                aria-orientation="horizontal"
                 className="flex w-full max-w-full gap-1 rounded-xl bg-[#e8e6dc] p-1 dark:bg-[#262624]"
                 role="tablist"
               >
@@ -955,17 +999,24 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                   return (
                     <button
                       key={tab.key}
+                      ref={(node) => {
+                        tabRefs.current[tab.key] = node;
+                      }}
                       type="button"
+                      id={tabId(tab.key)}
                       aria-label={tab.label}
+                      aria-controls={tabPanelId(tab.key)}
                       aria-selected={selected}
                       className={`flex h-9 min-w-0 flex-1 items-center justify-center rounded-lg transition-all ${
                         selected
-                          ? 'bg-[#faf9f5] text-[#c96442] shadow-sm dark:bg-[#1d1d1b] dark:text-[#e08a6a]'
+                          ? 'bg-[#faf9f5] text-secondary shadow-sm dark:bg-[#1d1d1b]'
                           : 'text-[#6f6e68] hover:text-[#141413] dark:text-[#b0aea5] dark:hover:text-[#faf9f5]'
                       }`}
                       role="tab"
+                      tabIndex={selected ? 0 : -1}
                       title={tab.label}
                       onClick={() => setActiveTab(tab.key)}
+                      onKeyDown={(event) => handleTabKeyDown(event, tab.key)}
                     >
                       <Icon icon={tab.icon} className="h-5 w-5 flex-shrink-0" aria-hidden="true" />
                     </button>
@@ -974,7 +1025,21 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
               </div>
 
               <div className="relative min-h-0 flex-1 overflow-y-auto pt-5 [scrollbar-gutter:stable]">
-                {renderTabPanel(activeTab)}
+                {availableTabs.map((tab) => {
+                  const selected = activeTab === tab.key;
+                  return (
+                    <div
+                      key={tab.key}
+                      id={tabPanelId(tab.key)}
+                      aria-labelledby={tabId(tab.key)}
+                      hidden={!selected}
+                      role="tabpanel"
+                      tabIndex={selected ? 0 : -1}
+                    >
+                      {selected ? renderTabPanel(tab.key) : null}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </ModalBody>
@@ -999,6 +1064,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
               <p>{t('confirmClearChatDescription', { roomName: room.name })}</p>
               <Input
                 label={t('confirmClearChatInputLabel')}
+                aria-label={HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE}
                 description={t('typeRoomNameToConfirm', { roomName: room.name })}
                 value={clearConfirmation}
                 onChange={(event) => setClearConfirmation(event.target.value)}
@@ -1040,6 +1106,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
               <p>{t('confirmDeleteRoomDescription', { roomName: room.name })}</p>
               <Input
                 label={t('confirmClearChatInputLabel')}
+                aria-label={HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE}
                 description={t('typeRoomNameToConfirm', { roomName: room.name })}
                 value={deleteConfirmation}
                 onChange={(event) => setDeleteConfirmation(event.target.value)}
@@ -1085,7 +1152,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                   <div className="font-semibold text-[#141413] dark:text-[#faf9f5]">
                     {displayUser(pendingTransfer)}
                   </div>
-                  <div className="text-[11px] text-[#87867f] dark:text-[#b0aea5]">
+                  <div className="text-[11px] text-[#5e5d59] dark:text-[#b0aea5]">
                     {displayUserId(pendingTransfer)}
                   </div>
                 </div>

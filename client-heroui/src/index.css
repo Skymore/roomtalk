@@ -140,7 +140,7 @@ body {
 
 [contenteditable]:empty:before {
   content: attr(data-placeholder);
-  color: #87867f;
+  color: #5e5d59;
   cursor: text;
 }
 
@@ -180,4 +180,34 @@ body {
 
 [contenteditable]:focus {
   outline: none;
+}
+
+/* HeroUI fades solid buttons to 80% opacity on hover in the light theme.
+   That fade would pull the AA-compliant secondary action pair below 4.5:1.
+   Keep semantic secondary actions opaque and provide a real hover color; the
+   compound selector intentionally leaves primary, danger, flat, and text
+   controls on HeroUI's normal interaction treatment. */
+.bg-secondary.text-secondary-foreground[data-hover="true"] {
+  background-color: #94462f !important;
+  opacity: 1 !important;
+}
+
+.dark .bg-secondary.text-secondary-foreground[data-hover="true"] {
+  background-color: #e08a6a !important;
+  color: #141413 !important;
+}
+
+/* Custom RoomTalk motion must follow the same reduced-motion contract as
+   HeroUI controls. Keep state changes visible, but remove continuous spinners,
+   pulses, transforms and smooth scrolling when the OS requests less motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

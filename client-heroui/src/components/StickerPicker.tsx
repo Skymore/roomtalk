@@ -173,7 +173,8 @@ export const StickerPicker: React.FC<StickerPickerProps> = ({ onSelect }) => {
   React.useLayoutEffect(() => {
     if (isSearching || !hasGroups) return;
     const selectedTab = onRecentPage ? recentTabRef.current : groupTabRefs.current[groupIndex];
-    selectedTab?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    selectedTab?.scrollIntoView?.({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'nearest', inline: 'center' });
   }, [groupIndex, hasGroups, isSearching, onRecentPage]);
 
   React.useEffect(() => {

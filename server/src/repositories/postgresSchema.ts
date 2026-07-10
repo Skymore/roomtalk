@@ -80,6 +80,7 @@ export const POSTGRES_SCHEMA_SQL = [
     id TEXT PRIMARY KEY,
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     client_id TEXT NOT NULL,
+    client_message_id TEXT,
     content TEXT NOT NULL,
     timestamp TIMESTAMPTZ NOT NULL,
     message_type TEXT NOT NULL CHECK (message_type IN ('text', 'ai', 'media', 'sticker', 'tool_call', 'tool_result', 'sandbox_status')),
@@ -125,6 +126,7 @@ export const POSTGRES_SCHEMA_SQL = [
   `CREATE INDEX IF NOT EXISTS idx_room_messages_code_agent_queue
     ON room_messages (room_id, position)
     WHERE code_agent_queued_input->>'state' = 'queued'`,
+  `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS client_message_id TEXT`,
   // Legacy media rows can predate the unified 'media' message type. Normalize
   // them after dropping older checks so the narrower constraint is startup-safe.
   `ALTER TABLE room_messages DROP CONSTRAINT IF EXISTS room_messages_message_type_check`,
@@ -135,6 +137,9 @@ export const POSTGRES_SCHEMA_SQL = [
     CHECK (message_type IN ('text', 'ai', 'media', 'sticker', 'tool_call', 'tool_result', 'sandbox_status'))`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_room_messages_room_position
     ON room_messages (room_id, position)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_room_messages_client_message_id
+    ON room_messages (room_id, client_id, client_message_id)
+    WHERE client_message_id IS NOT NULL`,
   `CREATE INDEX IF NOT EXISTS idx_room_messages_room_timestamp
     ON room_messages (room_id, timestamp)`,
   `CREATE INDEX IF NOT EXISTS idx_room_messages_type_tool_call

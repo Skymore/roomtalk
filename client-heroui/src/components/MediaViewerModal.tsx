@@ -1265,11 +1265,12 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
 }) => {
   const { t, i18n } = useTranslation();
   const dialogRef = React.useRef<HTMLDivElement | null>(null);
+  const previouslyFocusedElementRef = React.useRef<HTMLElement | null>(null);
   const statusResetTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialHistoryRequestKeyRef = React.useRef<string | null>(null);
   const historyRequestSequenceRef = React.useRef(0);
   const [activeMedia, setActiveMedia] = React.useState<ActiveMedia | null>(null);
-  const [downloadStatus, setDownloadStatus] = React.useState<"idle" | "done">("idle");
+  const [downloadStatus, setDownloadStatus] = React.useState<"idle" | "done" | "error">("idle");
   const [shareStatus, setShareStatus] = React.useState<"idle" | "done" | "error">("idle");
   const [isHistoryOpen, setIsHistoryOpen] = React.useState(false);
   const [isHistoryPreviewOpen, setIsHistoryPreviewOpen] = React.useState(false);
@@ -1282,6 +1283,14 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
   const [historyFilter, setHistoryFilter] = React.useState<MediaHistoryFilter>("all");
   const [imageZoom, setImageZoom] = React.useState(MIN_IMAGE_ZOOM);
   const [imagePan, setImagePan] = React.useState<ImagePan>(ZERO_IMAGE_PAN);
+  const isHistoryOpenRef = React.useRef(isHistoryOpen);
+  const isHistoryPreviewOpenRef = React.useRef(isHistoryPreviewOpen);
+  const hasViewedHistoryItemRef = React.useRef(hasViewedHistoryItem);
+  const onCloseRef = React.useRef(onClose);
+  isHistoryOpenRef.current = isHistoryOpen;
+  isHistoryPreviewOpenRef.current = isHistoryPreviewOpen;
+  hasViewedHistoryItemRef.current = hasViewedHistoryItem;
+  onCloseRef.current = onClose;
 
   const resetImageZoom = React.useCallback(() => {
     setImageZoom(MIN_IMAGE_ZOOM);
@@ -1378,30 +1387,87 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
       setIsHistoryOpen(false);
       setIsHistoryPreviewOpen(false);
       resetImageZoom();
-      return undefined;
+    }
+  }, [isOpen, resetImageZoom]);
+
+  React.useEffect(() => {
+    if (statusResetTimerRef.current) {
+      clearTimeout(statusResetTimerRef.current);
+      statusResetTimerRef.current = null;
+    }
+    setDownloadStatus("idle");
+    setShareStatus("idle");
+  }, [activeMedia?.assetId, activeMedia?.src, isOpen]);
+
+  React.useEffect(() => {
+    if (!isOpen) return undefined;
+
+    previouslyFocusedElementRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const appElement = document.getElementById("root");
+    const previousAppAriaHidden = appElement?.getAttribute("aria-hidden") ?? null;
+    const previousAppInert = appElement?.inert ?? false;
+    if (appElement) {
+      appElement.inert = true;
+      appElement.setAttribute("aria-hidden", "true");
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target;
-      if (target instanceof Element && target.closest("input,textarea,select")) {
-        return;
-      }
-
       if (event.key === "Escape") {
         event.preventDefault();
-        if (isHistoryPreviewOpen) {
+        if (isHistoryPreviewOpenRef.current) {
           setIsHistoryPreviewOpen(false);
           return;
         }
-        if (isHistoryOpen) {
-          if (hasViewedHistoryItem) {
-            onClose();
+        if (isHistoryOpenRef.current) {
+          if (hasViewedHistoryItemRef.current) {
+            onCloseRef.current();
           } else {
             setIsHistoryOpen(false);
           }
           return;
         }
-        onClose();
+        onCloseRef.current();
+        return;
+      }
+
+      if (event.key === "Tab") {
+        const dialog = dialogRef.current;
+        if (!dialog) return;
+        const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]),a[href],input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])'
+        )).filter((element) => {
+          const styles = window.getComputedStyle(element);
+          return !element.hidden
+            && element.getAttribute("aria-hidden") !== "true"
+            && element.closest('[aria-hidden="true"], [inert]') === null
+            && styles.display !== "none"
+            && styles.visibility !== "hidden";
+        });
+        if (focusable.length === 0) {
+          event.preventDefault();
+          dialog.focus();
+          return;
+        }
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (!dialog.contains(document.activeElement)) {
+          event.preventDefault();
+          first.focus();
+        } else if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+        return;
+      }
+
+      if (target instanceof Element && target.closest("input,textarea,select")) {
+        return;
       }
     };
 
@@ -1416,8 +1482,20 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
     return () => {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", handleKeyDown);
+      if (appElement) {
+        appElement.inert = previousAppInert;
+        if (previousAppAriaHidden === null) {
+          appElement.removeAttribute("aria-hidden");
+        } else {
+          appElement.setAttribute("aria-hidden", previousAppAriaHidden);
+        }
+      }
+      const previousFocus = previouslyFocusedElementRef.current;
+      requestAnimationFrame(() => {
+        if (previousFocus?.isConnected) previousFocus.focus();
+      });
     };
-  }, [hasViewedHistoryItem, isHistoryOpen, isHistoryPreviewOpen, isOpen, onClose, resetImageZoom]);
+  }, [isOpen]);
 
   React.useEffect(() => {
     if (!isHistoryOpen) {
@@ -1530,8 +1608,10 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
 
   const showTemporaryStatus = (type: "download" | "share", value: "done" | "error") => {
     if (type === "download") {
-      setDownloadStatus("done");
+      setDownloadStatus(value);
+      setShareStatus("idle");
     } else {
+      setDownloadStatus("idle");
       setShareStatus(value === "done" ? "done" : "error");
     }
 
@@ -1542,7 +1622,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
       setDownloadStatus("idle");
       setShareStatus("idle");
       statusResetTimerRef.current = null;
-    }, 1500);
+    }, value === "error" ? 6000 : 3500);
   };
 
   const handleOpenHistory = () => {
@@ -1576,14 +1656,19 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
 
   const handleDownload = async () => {
     if (!activeMedia) return;
-    const fileName = getMediaFileName(activeMedia);
-    const cachedBlob = await getCachedMediaBlob(activeMedia.assetId);
-    if (cachedBlob) {
-      downloadMediaBlob(cachedBlob, fileName);
-    } else {
-      await downloadMediaUrl(activeMedia.src, fileName);
+    try {
+      const fileName = getMediaFileName(activeMedia);
+      const cachedBlob = await getCachedMediaBlob(activeMedia.assetId);
+      if (cachedBlob) {
+        downloadMediaBlob(cachedBlob, fileName);
+      } else {
+        await downloadMediaUrl(activeMedia.src, fileName);
+      }
+      showTemporaryStatus("download", "done");
+    } catch (error) {
+      console.error("Failed to download media:", error);
+      showTemporaryStatus("download", "error");
     }
-    showTemporaryStatus("download", "done");
   };
 
   const handleShare = async () => {
@@ -1644,7 +1729,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
     return null;
   }
 
-  const downloadIcon = downloadStatus === "done" ? "lucide:check" : "lucide:download";
+  const downloadIcon = downloadStatus === "done" ? "lucide:check" : downloadStatus === "error" ? "lucide:alert-circle" : "lucide:download";
   const shareIcon = shareStatus === "done"
     ? "lucide:check"
     : shareStatus === "error"
@@ -1654,11 +1739,31 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
   const canGoPrevious = historyEnabled && (activeMediaIndex > 0 || hasMoreHistory);
   const canGoNext = historyEnabled && activeMediaIndex >= 0 && activeMediaIndex < carouselItems.length - 1;
   const activePosition = activeMediaIndex >= 0 ? `${activeMediaIndex + 1} / ${Math.max(carouselItems.length, activeMediaIndex + 1)}` : "";
+  const actionStatus = downloadStatus === "done"
+    ? { tone: "success" as const, text: t("downloadSucceeded") }
+    : downloadStatus === "error"
+      ? { tone: "error" as const, text: t("downloadFailed") }
+      : shareStatus === "done"
+        ? { tone: "success" as const, text: t("shareSucceeded") }
+        : shareStatus === "error"
+          ? { tone: "error" as const, text: t("shareFailed") }
+          : null;
   const renderActionToolbar = (centerAction: { label: string; icon: string; onPress: () => void }) => (
-    <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-white/10 bg-white/10 px-3 py-2 shadow-2xl backdrop-blur-xl">
-      <ViewerButton label={t("downloadMedia")} icon={downloadIcon} onPress={() => { void handleDownload(); }} />
-      <ViewerButton label={centerAction.label} icon={centerAction.icon} onPress={centerAction.onPress} />
-      <ViewerButton label={t("shareMedia")} icon={shareIcon} onPress={() => { void handleShare(); }} />
+    <div className="pointer-events-auto flex flex-col items-center gap-1.5">
+      <div className="flex items-center gap-3 rounded-full border border-white/10 bg-white/10 px-3 py-2 shadow-2xl backdrop-blur-xl">
+        <ViewerButton label={downloadStatus === "done" ? t("downloadSucceeded") : downloadStatus === "error" ? t("downloadFailed") : t("downloadMedia")} icon={downloadIcon} onPress={() => { void handleDownload(); }} />
+        <ViewerButton label={centerAction.label} icon={centerAction.icon} onPress={centerAction.onPress} />
+        <ViewerButton label={shareStatus === "done" ? t("shareSucceeded") : shareStatus === "error" ? t("shareFailed") : t("shareMedia")} icon={shareIcon} onPress={() => { void handleShare(); }} />
+      </div>
+      {actionStatus && (
+        <span
+          role={actionStatus.tone === "error" ? "alert" : "status"}
+          aria-atomic="true"
+          className={`rounded-full px-2.5 py-1 text-xs font-medium ${actionStatus.tone === "error" ? "bg-danger-500/90 text-white" : "bg-black/65 text-white"}`}
+        >
+          {actionStatus.text}
+        </span>
+      )}
     </div>
   );
 
@@ -1673,6 +1778,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
       className="fixed inset-0 z-[1000] flex h-[var(--app-height,100dvh)] w-screen flex-col overflow-hidden bg-[#080807] text-white outline-none"
       onMouseDown={handleBackdropMouseDown}
     >
+      {!isHistoryOpen && (<>
       <header
         className="safe-top pointer-events-none absolute inset-x-0 top-0 z-20 bg-gradient-to-b from-black/80 to-transparent px-3 pb-8"
         style={{
@@ -1721,6 +1827,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
           </div>
         </footer>
       ) : null}
+      </>)}
 
       <span className="sr-only" aria-live="polite">{activePosition}</span>
 

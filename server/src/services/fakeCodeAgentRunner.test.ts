@@ -49,4 +49,28 @@ describe('FakeCodeAgentRunnerClient', () => {
     assert.equal(result.errorEvent?.message, 'runner crashed');
     assert.deepEqual(emitted, ['error']);
   });
+
+  it('binds fake scripted turn ids to the current request', async () => {
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: 1, type: 'status', turnId: 'fake', status: 'starting' },
+      {
+        schemaVersion: 1,
+        type: 'model_step',
+        turnId: 'fake',
+        stepId: 'fake:step:1',
+        sequence: 1,
+        hasText: false,
+        toolCallIds: ['tool-1'],
+        usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2, source: 'reported' },
+      },
+    ]);
+    const emitted: CodeAgentRunnerEvent[] = [];
+
+    await runner.run(request, { onEvent: event => { emitted.push(event); } });
+
+    assert.deepEqual(
+      emitted.map(event => ('turnId' in event ? event.turnId : null)),
+      ['turn-1', 'turn-1'],
+    );
+  });
 });

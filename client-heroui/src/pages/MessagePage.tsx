@@ -12,6 +12,7 @@ import {
   clientId,
   getRoomMemberCount,
   onRoomMemberChange,
+  onRoomMembershipRepairFailure,
   onUsernameAdopted,
   setUsername as emitUsername,
   reconnectSocket,
@@ -32,6 +33,7 @@ import { buildRoomShareUrl, getRoomMemberUpdate, isNewerRoom, pickNewerRoom, sor
 import { getNextPostingBoundaryDelayMs } from "../utils/postingSchedule";
 import { FALLBACK_FEATURE_FLAGS, fetchFeatureFlags, FeatureFlags } from "../utils/features";
 import { getCodeAgentAvailableModes, getCodeAgentBackend, getCodeAgentDefaultMode } from "../utils/codeAgent";
+import { invalidateCachedRoomMessageWindow, reactivateCachedRoomMessageWindow } from "../utils/messageHistoryCache";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { SettingsView } from "../components/SettingsView";
@@ -53,6 +55,12 @@ const BACKGROUND_RESTORE_SUPPRESSION_MS = 250;
 // 后台 rejoin 超过这个时长仍未完成才显示"重连中"转圈:
 // 健康连接下的 rejoin 是毫秒级的,立即显示会在每次切前台时闪一下(回归 #6)
 const RECONNECT_INDICATOR_DELAY_MS = 400;
+const ERROR_AUTO_DISMISS_MS = 8000;
+
+type ActiveRoomSessionState = {
+  roomId: string;
+  status: "restoring" | "ready" | "unavailable";
+};
 
 type InFlightBackgroundRestore = {
   roomId: string;
@@ -79,8 +87,14 @@ export const MessagePage: React.FC = () => {
   const [isLoadingSavedRooms, setIsLoadingSavedRooms] = useState(true);
   const [currentRoom, setCurrentRoom] = useState<Room | null>(null);
   const currentRoomRef = useRef<Room | null>(null);
+  const [activeRoomSession, setActiveRoomSession] = useState<ActiveRoomSessionState | null>(null);
+  const activeRoomSessionRef = useRef<ActiveRoomSessionState | null>(null);
   const roomSessionGenerationRef = useRef(0);
+  // Room metadata lookups are their own intent stream. A late response from an
+  // older URL/manual lookup must never reopen its modal or start a stale join.
+  const roomLookupGenerationRef = useRef(0);
   const [roomPermissions, setRoomPermissions] = useState<RoomPermissions | null>(null);
+  const roomPermissionsRequestGenerationRef = useRef(0);
   // 初始化视图状态，默认从localStorage读取
   const [view, setView] = useState<AppView>(() => {
     const storedView = getStoredView();
@@ -111,6 +125,10 @@ export const MessagePage: React.FC = () => {
 
   // 修改处：同时获取 setSearchParams 方法
   const [searchParams, setSearchParams] = useSearchParams();
+  const roomIdFromUrl = searchParams.get("room");
+  const currentRoomId = currentRoom?.id ?? null;
+  const translationRef = useRef(t);
+  translationRef.current = t;
 
   const toggleTheme = () => setTheme(isDark ? "light" : "dark");
 
@@ -119,12 +137,24 @@ export const MessagePage: React.FC = () => {
       clearTimeout(successTimerRef.current);
     }
 
+    setError(null);
     setSuccess(message);
     successTimerRef.current = setTimeout(() => {
       setSuccess(null);
       successTimerRef.current = null;
     }, durationMs);
   }, []);
+
+  useEffect(() => {
+    if (!error) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setError((current) => current === error ? null : current);
+    }, ERROR_AUTO_DISMISS_MS);
+    return () => window.clearTimeout(timer);
+  }, [error]);
 
   useEffect(() => {
     return () => {
@@ -200,6 +230,11 @@ export const MessagePage: React.FC = () => {
     clearReconnectIndicator();
   }, [clearReconnectIndicator]);
 
+  const commitActiveRoomSession = useCallback((next: ActiveRoomSessionState | null) => {
+    activeRoomSessionRef.current = next;
+    setActiveRoomSession(next);
+  }, []);
+
   // 服务端返回的房间对象是完整真值(room_updated 广播、join/settings/rename ack)。
   // 必须整体替换而不能 spread 合并:被清除的字段(关闭排期后的 postingSchedule、
   // 清除密码后的 hasPassword)在新对象里是"键不存在",spread 永远删不掉它们。
@@ -230,15 +265,24 @@ export const MessagePage: React.FC = () => {
   }, [commitNewerCurrentRoom]);
 
   const refreshRoomPermissions = useCallback((roomId: string) => {
+    const requestGeneration = roomPermissionsRequestGenerationRef.current + 1;
+    roomPermissionsRequestGenerationRef.current = requestGeneration;
     getRoomPermissions(roomId)
       .then((permissions) => {
-        if (currentRoomRef.current?.id === roomId) {
+        if (
+          roomPermissionsRequestGenerationRef.current === requestGeneration
+          && currentRoomRef.current?.id === roomId
+          && permissions.roomId === roomId
+        ) {
           setRoomPermissions(permissions);
         }
       })
       .catch((error) => {
         console.error("Failed to load room permissions:", error);
-        if (currentRoomRef.current?.id === roomId) {
+        if (
+          roomPermissionsRequestGenerationRef.current === requestGeneration
+          && currentRoomRef.current?.id === roomId
+        ) {
           setRoomPermissions(null);
         }
       });
@@ -284,6 +328,7 @@ export const MessagePage: React.FC = () => {
       current?.id === roomId ? pickNewerRoom(roomToApply, current) : roomToApply
     ));
 
+    roomPermissionsRequestGenerationRef.current += 1;
     if (result.permissions) {
       setRoomPermissions(result.permissions);
     } else {
@@ -299,7 +344,6 @@ export const MessagePage: React.FC = () => {
     } else if (previousRoomId !== roomId) {
       setMemberCount(null);
     }
-    socket.emit("get_room_messages", { roomId });
     return joinedRoom;
   }, [refreshRoomPermissions]);
 
@@ -312,24 +356,31 @@ export const MessagePage: React.FC = () => {
     const { roomId, password, fallbackRoom, source } = options;
     const generation = roomSessionGenerationRef.current + 1;
     const previousRoomId = currentRoomRef.current?.id ?? null;
+    const previousRoom = currentRoomRef.current;
     const showRestoreIndicator = VISIBLE_RESTORE_SOURCES.has(source);
+    const previousSession = activeRoomSessionRef.current;
+    const shouldGuardRoomShell = showRestoreIndicator || previousSession?.roomId !== roomId || previousSession.status !== "ready";
     roomSessionGenerationRef.current = generation;
     pendingRestoreRoomIdRef.current = roomId;
+    if (shouldGuardRoomShell) {
+      commitActiveRoomSession({ roomId, status: "restoring" });
+    }
     if (showRestoreIndicator) {
       visibleRestoreGenerationRef.current = generation;
       setIsRestoringRoom(true);
       setError(null);
     }
 
-    if (fallbackRoom) {
+    const isSwitchingRoom = Boolean(previousRoom && previousRoom.id !== roomId);
+    if (fallbackRoom && !isSwitchingRoom) {
       currentRoomRef.current = fallbackRoom;
       setCurrentRoom(fallbackRoom);
     }
 
     const cachedMemberCount = getRoomMemberCount(roomId);
-    if (typeof cachedMemberCount === "number") {
+    if (!isSwitchingRoom && typeof cachedMemberCount === "number") {
       setMemberCount(cachedMemberCount);
-    } else if (previousRoomId !== roomId) {
+    } else if (previousRoomId !== roomId && !isSwitchingRoom) {
       setMemberCount(null);
     }
 
@@ -344,6 +395,8 @@ export const MessagePage: React.FC = () => {
       const joinedRoom = applyRoomSessionResult(roomId, result, fallbackRoom);
       pendingRestoreRoomIdRef.current = null;
       if (joinedRoom) {
+        reactivateCachedRoomMessageWindow(roomId);
+        commitActiveRoomSession({ roomId, status: "ready" });
         setError(null);
       }
       return joinedRoom;
@@ -353,21 +406,59 @@ export const MessagePage: React.FC = () => {
       }
 
       const message = error instanceof Error ? error.message : t("errorLoading");
+      const outcomeIsUncertain = /timed out while joining room|socket disconnected/i.test(message);
+      const canRollbackToPreviousRoom = Boolean(
+        isSwitchingRoom
+        && previousRoom
+        && previousSession?.roomId === previousRoom.id
+        && previousSession?.status === "ready"
+        && !outcomeIsUncertain
+      );
       console.error(`Failed to ensure active room session from ${source}:`, error);
-      setRoomPermissions(null);
 
       if (/room not found/i.test(message)) {
         leaveRoom(roomId);
-        if (currentRoomRef.current?.id === roomId || fallbackRoom?.id === roomId) {
+        setRooms((previous) => previous.filter(room => room.id !== roomId));
+        setSavedRooms((previous) => previous.filter(room => room.id !== roomId));
+        void invalidateCachedRoomMessageWindow(roomId);
+        if (canRollbackToPreviousRoom && previousRoom && previousSession) {
+          currentRoomRef.current = previousRoom;
+          setCurrentRoom(previousRoom);
+          commitActiveRoomSession(previousSession);
+          clearRoomUrlParam();
+          setError(message);
+        } else {
           currentRoomRef.current = null;
           setCurrentRoom(null);
+          setRoomPermissions(null);
+          setMemberCount(null);
+          commitActiveRoomSession(null);
+          setView("rooms");
+          saveCurrentRoom(null);
+          clearRoomUrlParam();
+          setError(t("errorRoomNoLongerExists"));
         }
-        setMemberCount(null);
-        saveCurrentRoom(null);
-        clearRoomUrlParam();
-        setError(t("errorRoomNoLongerExists"));
+      } else if (canRollbackToPreviousRoom && previousRoom && previousSession) {
+        currentRoomRef.current = previousRoom;
+        setCurrentRoom(previousRoom);
+        commitActiveRoomSession(previousSession);
+        if (/password is required or incorrect/i.test(message) && fallbackRoom) {
+          setRoomToJoin(fallbackRoom);
+        }
+        setError(message);
       } else if (showRestoreIndicator) {
+        if (fallbackRoom && isSwitchingRoom) {
+          currentRoomRef.current = fallbackRoom;
+          setCurrentRoom(fallbackRoom);
+          setRoomPermissions(null);
+        }
         setError(source === "storage" ? t("errorRestoringRoom") : message);
+      }
+      if (!/room not found/i.test(message) && !canRollbackToPreviousRoom) {
+        const latestSession = activeRoomSessionRef.current;
+        if (latestSession?.roomId === roomId && latestSession.status !== "ready") {
+          commitActiveRoomSession({ roomId, status: "unavailable" });
+        }
       }
 
       return null;
@@ -380,7 +471,7 @@ export const MessagePage: React.FC = () => {
         setIsRestoringRoom(false);
       }
     }
-  }, [applyRoomSessionResult, clearRoomUrlParam, t]);
+  }, [applyRoomSessionResult, clearRoomUrlParam, commitActiveRoomSession, t]);
 
   const scheduleRoomRestore = useCallback((source: RoomRestoreSource) => {
     const activeRoom = currentRoomRef.current;
@@ -473,9 +564,20 @@ export const MessagePage: React.FC = () => {
     }
   }, [view]);
 
+  const handleViewChange = useCallback((nextView: AppView) => {
+    setError(null);
+    setView(nextView);
+  }, []);
+
+  const clearStatusForTask = useCallback(() => {
+    setError(null);
+    setSuccess(null);
+  }, []);
+
   useEffect(() => {
     const handleHistoryBack = () => {
       if (viewRef.current === "chat" && currentRoomRef.current) {
+        setError(null);
         setView("rooms");
       }
     };
@@ -553,25 +655,40 @@ export const MessagePage: React.FC = () => {
 
   // 当组件加载或 URL 参数变化时，如果 URL 包含 room 参数，则先加载房间信息并要求确认
   useEffect(() => {
-    const roomIdFromUrl = searchParams.get("room");
-    if (roomIdFromUrl && !currentRoom) {
-      setIsLoadingRoom(true);
-      getRoomById(roomIdFromUrl)
-        .then((roomInfo) => {
-          setIsLoadingRoom(false);
-          if (roomInfo) {
-            // 始终要求用户确认后进入房间
-            setRoomToJoin(roomInfo);
-          } else {
-            setError(t("errorRoomNotFound", { roomId: roomIdFromUrl }));
-          }
-        })
-        .catch(() => {
-          setIsLoadingRoom(false);
-          setError(t("errorLoading"));
-        });
+    const generation = roomLookupGenerationRef.current + 1;
+    roomLookupGenerationRef.current = generation;
+    let cancelled = false;
+
+    if (!roomIdFromUrl || currentRoomId === roomIdFromUrl) {
+      setIsLoadingRoom(false);
+      return () => {
+        cancelled = true;
+      };
     }
-  }, [searchParams, currentRoom, t]);
+
+    setRoomToJoin(null);
+    setIsLoadingRoom(true);
+    getRoomById(roomIdFromUrl)
+      .then((roomInfo) => {
+        if (cancelled || roomLookupGenerationRef.current !== generation) return;
+        setIsLoadingRoom(false);
+        if (roomInfo) {
+          // 始终要求用户确认后进入房间
+          setRoomToJoin(roomInfo);
+        } else {
+          setError(translationRef.current("errorRoomNotFound", { roomId: roomIdFromUrl }));
+        }
+      })
+      .catch(() => {
+        if (cancelled || roomLookupGenerationRef.current !== generation) return;
+        setIsLoadingRoom(false);
+        setError(translationRef.current("errorLoading"));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentRoomId, roomIdFromUrl]);
 
   // 监听服务器返回的房间列表和新增房间
   useEffect(() => {
@@ -588,17 +705,23 @@ export const MessagePage: React.FC = () => {
       setIsLoadingRooms(false);
     };
     const handleRoomPermissions = (permissions: RoomPermissions) => {
-      setRoomPermissions((current) => (
-        !current || current.roomId === permissions.roomId ? permissions : current
-      ));
+      if (currentRoomRef.current?.id === permissions.roomId) {
+        roomPermissionsRequestGenerationRef.current += 1;
+        setRoomPermissions(permissions);
+      }
     };
     const handleRoomPermissionsInvalidated = (roomId: string) => {
-      if (currentRoom?.id === roomId) {
+      if (currentRoomRef.current?.id === roomId) {
         refreshRoomPermissions(roomId);
       }
     };
     const handleRoomRemoved = (roomId: string) => {
-      if (currentRoom?.id !== roomId) {
+      setRooms((previous) => previous.filter(room => room.id !== roomId));
+      setSavedRooms((previous) => previous.filter(room => room.id !== roomId));
+      void invalidateCachedRoomMessageWindow(roomId);
+      const currentRoomAtRemoval = currentRoomRef.current;
+      const removedPendingTarget = pendingRestoreRoomIdRef.current === roomId;
+      if (currentRoomAtRemoval?.id !== roomId && !removedPendingTarget) {
         return;
       }
 
@@ -606,15 +729,39 @@ export const MessagePage: React.FC = () => {
       roomSessionGenerationRef.current += 1;
       pendingRestoreRoomIdRef.current = null;
       visibleRestoreGenerationRef.current = null;
-      currentRoomRef.current = null;
-      setCurrentRoom(null);
       setRoomPermissions(null);
-      setMemberCount(null);
       setIsRestoringRoom(false);
-      setView("rooms");
-      saveCurrentRoom(null);
       clearRoomUrlParam();
       setError(t("roomAccessRemoved"));
+      if (removedPendingTarget) {
+        leaveRoom(roomId);
+      }
+
+      if (removedPendingTarget && currentRoomAtRemoval && currentRoomAtRemoval.id !== roomId) {
+        // A cross-worker delete/remove can be broadcast after the target join's
+        // final durable read but before its acknowledgement. Cancel that join
+        // generation and repair the previously active room: the target handler
+        // may already have left its old Socket.IO membership before the late
+        // success ack reaches this client.
+        commitActiveRoomSession({ roomId: currentRoomAtRemoval.id, status: "restoring" });
+        void ensureActiveRoomSession({
+          roomId: currentRoomAtRemoval.id,
+          fallbackRoom: currentRoomAtRemoval,
+          source: "online",
+        }).then((restoredRoom) => {
+          if (restoredRoom?.id === currentRoomAtRemoval.id && currentRoomRef.current?.id === currentRoomAtRemoval.id) {
+            setError(t("roomAccessRemoved"));
+          }
+        });
+        return;
+      }
+
+      currentRoomRef.current = null;
+      setCurrentRoom(null);
+      setMemberCount(null);
+      commitActiveRoomSession(null);
+      setView("rooms");
+      saveCurrentRoom(null);
     };
 
     socket.on("room_list", handleRoomList);
@@ -631,10 +778,41 @@ export const MessagePage: React.FC = () => {
     socket.on("room_permissions", handleRoomPermissions);
     socket.on("room_permissions_invalidated", handleRoomPermissionsInvalidated);
     socket.on("room_removed", handleRoomRemoved);
+    const unsubscribeRepairFailure = onRoomMembershipRepairFailure((roomId, repairError) => {
+      const roomIsMissing = /room not found/i.test(repairError.message);
+      if (roomIsMissing) {
+        leaveRoom(roomId);
+        setRooms((previous) => previous.filter(room => room.id !== roomId));
+        setSavedRooms((previous) => previous.filter(room => room.id !== roomId));
+        void invalidateCachedRoomMessageWindow(roomId);
+      }
+      if (currentRoomRef.current?.id !== roomId) return;
+      clearBackgroundRestoreState(roomId);
+      if (roomIsMissing) {
+        roomSessionGenerationRef.current += 1;
+        pendingRestoreRoomIdRef.current = null;
+        visibleRestoreGenerationRef.current = null;
+        currentRoomRef.current = null;
+        setCurrentRoom(null);
+        setRoomPermissions(null);
+        setMemberCount(null);
+        commitActiveRoomSession(null);
+        setIsRestoringRoom(false);
+        setView("rooms");
+        saveCurrentRoom(null);
+        clearRoomUrlParam();
+        setError(t("errorRoomNoLongerExists"));
+        return;
+      }
+      commitActiveRoomSession({ roomId, status: "unavailable" });
+      setRoomPermissions(null);
+      setIsRestoringRoom(false);
+      setError(t("errorRestoringRoom"));
+    });
 
     // 取消注册回调的清理函数
     const unsubscribe = onRoomMemberChange((event: RoomMemberEvent) => {
-      const memberUpdate = getRoomMemberUpdate(currentRoom, event);
+      const memberUpdate = getRoomMemberUpdate(currentRoomRef.current, event);
       if (memberUpdate) {
         setMemberCount(memberUpdate.count);
         setIsRestoringRoom(false);
@@ -649,9 +827,10 @@ export const MessagePage: React.FC = () => {
       socket.off("room_permissions", handleRoomPermissions);
       socket.off("room_permissions_invalidated", handleRoomPermissionsInvalidated);
       socket.off("room_removed", handleRoomRemoved);
+      unsubscribeRepairFailure();
       unsubscribe();
     };
-  }, [applyServerRoom, clearBackgroundRestoreState, clearRoomUrlParam, currentRoom, refreshRoomPermissions, t]);
+  }, [applyServerRoom, clearBackgroundRestoreState, clearRoomUrlParam, commitActiveRoomSession, ensureActiveRoomSession, refreshRoomPermissions, t]);
 
   // 添加页面可见性、BFCache 和网络恢复处理
   useEffect(() => {
@@ -674,7 +853,19 @@ export const MessagePage: React.FC = () => {
     const handleOnline = () => restoreCurrentRoom("online");
     const handleSocketConnect = () => restoreCurrentRoom("socket-connect");
     const handleSocketDisconnect = () => {
-      clearBackgroundRestoreState(currentRoomRef.current?.id ?? null);
+      const activeRoom = currentRoomRef.current;
+      clearBackgroundRestoreState(activeRoom?.id ?? null);
+      // A reconnect gets a new Socket.IO membership. Invalidate any restore
+      // tied to the old transport immediately and keep room side effects locked
+      // until the new socket's join acknowledgement succeeds.
+      roomSessionGenerationRef.current += 1;
+      pendingRestoreRoomIdRef.current = null;
+      visibleRestoreGenerationRef.current = null;
+      setIsRestoringRoom(false);
+      setRoomPermissions(null);
+      if (activeRoom) {
+        commitActiveRoomSession({ roomId: activeRoom.id, status: "restoring" });
+      }
     };
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -690,7 +881,7 @@ export const MessagePage: React.FC = () => {
       socket.off("connect", handleSocketConnect);
       socket.off("disconnect", handleSocketDisconnect);
     };
-  }, [clearBackgroundRestoreState, scheduleRoomRestore]);
+  }, [clearBackgroundRestoreState, commitActiveRoomSession, scheduleRoomRestore]);
 
   // posting 窗口跨越边界时,本地排期数据足以算出边界时刻;到点后向服务端
   // 重新拉取权限快照,让输入框的 canPost 状态自动翻转(真值仍由服务端判定)。
@@ -724,6 +915,11 @@ export const MessagePage: React.FC = () => {
   // --- 添加清空聊天记录的处理函数 (Stays the same) ---
   const handleClearChatMessages = useCallback(async (confirmation: string) => {
     if (currentRoom) {
+      if (activeRoomSessionRef.current?.roomId !== currentRoom.id || activeRoomSessionRef.current.status !== "ready") {
+        const message = t('errorRestoringRoom');
+        setError(message);
+        throw new Error(message);
+      }
       console.log(`Emitting clear_room_messages for room ${currentRoom.id}`);
       try {
         await clearRoomMessagesFromServer(currentRoom.id, confirmation);
@@ -741,6 +937,9 @@ export const MessagePage: React.FC = () => {
 
   // 直接加入房间：点击房间卡片或确认弹窗后调用
   const handleRoomSelect = async (room: Room, password?: string) => {
+    roomLookupGenerationRef.current += 1;
+    setIsLoadingRoom(false);
+    setRoomToJoin(null);
     clearBackgroundRestoreState(room.id);
     setError(null);
     try {
@@ -761,15 +960,15 @@ export const MessagePage: React.FC = () => {
   };
 
   const handleRoomSelectById = async (roomId: string) => {
-    clearBackgroundRestoreState();
-    roomSessionGenerationRef.current += 1;
-    pendingRestoreRoomIdRef.current = null;
-    visibleRestoreGenerationRef.current = null;
-    setIsRestoringRoom(false);
+    const lookupGeneration = roomLookupGenerationRef.current + 1;
+    roomLookupGenerationRef.current = lookupGeneration;
+    setIsLoadingRoom(false);
+    setRoomToJoin(null);
     setError(null);
 
     try {
       const roomInfo = await getRoomById(roomId);
+      if (roomLookupGenerationRef.current !== lookupGeneration) return;
       if (!roomInfo) {
         setError(t("errorRoomNotFound", { roomId }));
         return;
@@ -782,6 +981,7 @@ export const MessagePage: React.FC = () => {
 
       void handleRoomSelect(roomInfo);
     } catch (error) {
+      if (roomLookupGenerationRef.current !== lookupGeneration) return;
       console.error("Error loading room by ID:", error);
       setError(t("errorLoading"));
     }
@@ -790,6 +990,7 @@ export const MessagePage: React.FC = () => {
   // URL 加载的房间确认操作
   const handleConfirmJoin = (confirmed: boolean, password?: string) => {
     if (!confirmed || !roomToJoin) {
+      roomLookupGenerationRef.current += 1;
       setRoomToJoin(null);
       clearRoomUrlParam();
       return;
@@ -805,6 +1006,7 @@ export const MessagePage: React.FC = () => {
     pendingRestoreRoomIdRef.current = null;
     visibleRestoreGenerationRef.current = null;
     setIsRestoringRoom(false);
+    commitActiveRoomSession(null);
     setError(null);
 
     if (currentRoom) {
@@ -823,6 +1025,10 @@ export const MessagePage: React.FC = () => {
   // 分享当前房间链接
   const handleShareRoom = () => {
     if (!currentRoom) return;
+    if (activeRoomSessionRef.current?.roomId !== currentRoom.id || activeRoomSessionRef.current.status !== "ready") {
+      setError(t("errorRestoringRoom"));
+      return;
+    }
     const url = buildRoomShareUrl(window.location.origin, window.location.pathname, currentRoom.id);
     navigator.clipboard
       .writeText(url)
@@ -840,6 +1046,10 @@ export const MessagePage: React.FC = () => {
   // 切换保存/取消保存房间
   const handleToggleSave = async () => {
     if (!currentRoom) return;
+    if (activeRoomSessionRef.current?.roomId !== currentRoom.id || activeRoomSessionRef.current.status !== "ready") {
+      setError(t("errorRestoringRoom"));
+      return;
+    }
 
     try {
       if (isRoomSavedById(currentRoom.id)) {
@@ -894,16 +1104,20 @@ export const MessagePage: React.FC = () => {
     socket.emit('delete_room', roomId, (response: { success: boolean; message?: string }) => {
       if (response.success) {
         console.log('Server confirmed PERMANENT room deletion:', roomId);
+        // A deleted room's cached shell is invalid regardless of which room is
+        // active when the acknowledgement arrives.
+        void invalidateCachedRoomMessageWindow(roomId);
         // No need to update savedRooms here, that's handled by unsave.
         // The room list (`rooms` state) will be updated automatically
         // when the server sends the new 'room_list' event.
 
         // If currently in the deleted room, navigate away
-        if (currentRoom && currentRoom.id === roomId) {
+        if (currentRoomRef.current?.id === roomId) {
           clearBackgroundRestoreState(roomId);
           roomSessionGenerationRef.current += 1;
           setCurrentRoom(null);
           currentRoomRef.current = null;
+          commitActiveRoomSession(null);
           setView('rooms');
           setIsRestoringRoom(false);
           setMemberCount(null);
@@ -916,9 +1130,14 @@ export const MessagePage: React.FC = () => {
         setError(response.message || t('errorDeletingRoom')); // Use a new key? e.g., errorDeletingRoomPermanently
       }
     });
-  }, [clearBackgroundRestoreState, currentRoom, setView, clearRoomUrlParam, showSuccess, t]); // Dependencies
+  }, [clearBackgroundRestoreState, commitActiveRoomSession, setView, clearRoomUrlParam, showSuccess, t]); // Dependencies
 
   const handleRenameRoom = useCallback(async (roomId: string, name: string) => {
+    if (currentRoomRef.current?.id === roomId && (
+      activeRoomSessionRef.current?.roomId !== roomId || activeRoomSessionRef.current.status !== "ready"
+    )) {
+      throw new Error(t('errorRestoringRoom'));
+    }
     try {
       const updatedRoom = await renameRoom(roomId, name);
       applyServerRoom(updatedRoom);
@@ -928,6 +1147,33 @@ export const MessagePage: React.FC = () => {
       throw new Error(message);
     }
   }, [applyServerRoom, showSuccess, t]);
+
+  const isCurrentRoomSessionReady = Boolean(
+    currentRoom && activeRoomSession?.roomId === currentRoom.id && activeRoomSession.status === "ready"
+  );
+  const isCurrentRoomSessionRestoring = Boolean(
+    currentRoom && activeRoomSession?.roomId === currentRoom.id && activeRoomSession.status === "restoring"
+  );
+
+  const handleRetryRoomSession = useCallback(() => {
+    const room = currentRoomRef.current;
+    if (!room) return;
+    clearBackgroundRestoreState(room.id);
+    setError(null);
+    void ensureActiveRoomSession({
+      roomId: room.id,
+      fallbackRoom: room,
+      source: "manual",
+    });
+  }, [clearBackgroundRestoreState, ensureActiveRoomSession]);
+
+  const mainViewTitle = view === "rooms"
+    ? t("chatRooms")
+    : view === "saved"
+      ? t("savedRooms")
+      : view === "settings"
+        ? t("settings")
+        : currentRoom?.name || t("welcomeMessage");
 
   // Render content based on current view
   const renderContent = () => {
@@ -955,6 +1201,7 @@ export const MessagePage: React.FC = () => {
               clientId={clientId}
               username={username}
               isCodeAgentEnabled={featureFlags.codeAgent.enabled}
+              onModalTaskStart={clearStatusForTask}
             />
           </div>
         );
@@ -989,7 +1236,7 @@ export const MessagePage: React.FC = () => {
         );
       case "chat": {
         if (!currentRoom) {
-          return <WelcomeView onEnterRooms={() => setView("rooms")} />;
+          return <WelcomeView onEnterRooms={() => handleViewChange("rooms")} />;
         }
 
         const codeAgentBackend = getCodeAgentBackend(currentRoom);
@@ -998,7 +1245,9 @@ export const MessagePage: React.FC = () => {
             <CodeAgentRoomView
               currentRoom={currentRoom}
               memberCount={memberCount}
-              isRestoringRoom={isRestoringRoom || isReconnecting}
+              isRestoringRoom={isRestoringRoom || isReconnecting || isCurrentRoomSessionRestoring}
+              isRoomSessionReady={isCurrentRoomSessionReady}
+              onRetryRoomSession={handleRetryRoomSession}
               onRoomUpdated={applyServerRoom}
               username={username}
               clientId={clientId}
@@ -1010,7 +1259,7 @@ export const MessagePage: React.FC = () => {
               handleToggleSave={handleToggleSave}
               handleLeaveRoom={handleLeaveRoom}
               isRoomSaved={isRoomSavedById}
-              setView={setView}
+              setView={handleViewChange}
               clearRoomUrlParam={clearRoomUrlParam}
               handleClearChatMessages={handleClearChatMessages}
               handleDeleteRoom={handleDeleteRoom}
@@ -1024,7 +1273,9 @@ export const MessagePage: React.FC = () => {
           <ChatRoomView
             currentRoom={currentRoom}
             memberCount={memberCount}
-            isRestoringRoom={isRestoringRoom || isReconnecting}
+            isRestoringRoom={isRestoringRoom || isReconnecting || isCurrentRoomSessionRestoring}
+            isRoomSessionReady={isCurrentRoomSessionReady}
+            onRetryRoomSession={handleRetryRoomSession}
             onRoomUpdated={applyServerRoom}
             username={username}
             clientId={clientId}
@@ -1033,7 +1284,7 @@ export const MessagePage: React.FC = () => {
             handleToggleSave={handleToggleSave}
             handleLeaveRoom={handleLeaveRoom}
             isRoomSaved={isRoomSavedById}
-            setView={setView}
+            setView={handleViewChange}
             clearRoomUrlParam={clearRoomUrlParam}
             handleClearChatMessages={handleClearChatMessages}
             handleDeleteRoom={handleDeleteRoom}
@@ -1043,7 +1294,7 @@ export const MessagePage: React.FC = () => {
         );
       }
       default:
-        return <WelcomeView onEnterRooms={() => setView("rooms")} />;
+        return <WelcomeView onEnterRooms={() => handleViewChange("rooms")} />;
     }
   };
 
@@ -1054,7 +1305,7 @@ export const MessagePage: React.FC = () => {
           clientId={clientId}
           username={username}
           view={view}
-          setView={setView}
+          setView={handleViewChange}
           rooms={rooms}
           savedRooms={savedRooms}
           isLoadingRooms={isLoadingRooms}
@@ -1071,10 +1322,12 @@ export const MessagePage: React.FC = () => {
           onUnsaveRoom={handleUnsaveRoom}
           onRenameRoom={handleRenameRoom}
           isCodeAgentEnabled={featureFlags.codeAgent.enabled}
+          onModalTaskStart={clearStatusForTask}
         />
 
         {/* 主内容区域， flex-1 使其填充剩余空间，overflow-hidden 避免双重滚动条 */}
-        <main className="flex min-h-0 min-w-0 flex-1 overflow-hidden md:min-w-[480px]">
+        <main aria-labelledby="main-view-title" className="flex min-h-0 min-w-0 flex-1 overflow-hidden md:min-w-[480px]">
+          <h1 id="main-view-title" className="sr-only">{mainViewTitle}</h1>
           {renderContent()} {/* 渲染当前视图 */}
         </main>
       </div>
@@ -1082,7 +1335,7 @@ export const MessagePage: React.FC = () => {
       <StatusMessage error={error} success={success} setError={setError} />
 
       {/* 底部导航栏 - 移除 view !== "settings" 条件 */}
-      <BottomNav view={view} setView={setView} currentRoom={currentRoom} />
+      <BottomNav view={view} setView={handleViewChange} currentRoom={currentRoom} />
 
       {/* 加入房间确认弹窗 - 恢复之前的属性传递 */}
       {roomToJoin && (

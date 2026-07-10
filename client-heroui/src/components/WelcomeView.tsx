@@ -21,7 +21,7 @@ export const WelcomeView: React.FC<WelcomeViewProps> = ({ onEnterRooms }) => {
         color="secondary"
         onPress={onEnterRooms}
         startContent={<Icon icon="lucide:users" />}
-        className="bg-[#c96442] text-[#faf9f5] shadow-[0_0_0_1px_#c96442]"
+        className="bg-secondary text-secondary-foreground shadow-[0_0_0_1px_#c96442]"
       >
         {t('home')}
       </Button>

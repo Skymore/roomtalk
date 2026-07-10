@@ -108,7 +108,7 @@ export const SavedRoomList: React.FC<SavedRoomListProps> = ({
                   {room.description && (
                     <p className="mt-1 text-sm text-[#5e5d59] dark:text-[#b0aea5]">{room.description}</p>
                   )}
-                  <p className="text-xs text-[#87867f] dark:text-[#b0aea5]">
+                  <p className="text-xs text-[#5e5d59] dark:text-[#b0aea5]">
                     {t('created')}: {formatDate(room.createdAt, i18n.language)}
                   </p>
                 </div>
@@ -119,7 +119,7 @@ export const SavedRoomList: React.FC<SavedRoomListProps> = ({
                         size="sm"
                         variant="light"
                         color="warning"
-                        className="h-8 rounded-md px-2 text-[#c96442] dark:text-[#d97757]"
+                        className="h-8 rounded-md px-2 text-secondary"
                         onPress={() => openDeleteConfirm(room.id)}
                         aria-label={t('unsave')}
                         startContent={<Icon icon="lucide:bookmark-minus" className="h-4 w-4" />}

@@ -57,7 +57,9 @@ interface CodeAgentWorkspacePanelProps {
   canSwitchBackend?: boolean;
   onModeChange?: (mode: CodeAgentMode) => void;
   onBackendChange?: (backend: CodeAgentBackend) => void;
-  sessionCostUsd: number;
+  sessionCostUsd: number | null;
+  isSessionCostUnavailable?: boolean;
+  isRoomSessionReady?: boolean;
   workspaceSnapshot?: CodeAgentWorkspaceSnapshot | null;
   isRefreshingWorkspace?: boolean;
   workspaceRefreshError?: string | null;
@@ -232,6 +234,8 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   onModeChange,
   onBackendChange,
   sessionCostUsd,
+  isSessionCostUnavailable = false,
+  isRoomSessionReady = true,
   workspaceSnapshot,
   isRefreshingWorkspace = false,
   workspaceRefreshError,
@@ -357,7 +361,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
     : normalizedAvailableModes[0];
   const agentStatus = getCodeAgentStatus(room);
   const detailsId = 'code-agent-workspace-details';
-  const shouldLoadDiff = selectedWorkspaceTab === 'changes';
+  const shouldLoadDiff = isRoomSessionReady && selectedWorkspaceTab === 'changes';
   const changesScrollClassName = isMobileWorkspaceLayout
     ? 'flex max-h-[min(42dvh,22rem)] min-h-0 flex-col overflow-y-auto overscroll-contain p-0 [-webkit-overflow-scrolling:touch] touch-pan-y'
     : 'flex min-h-0 flex-col overflow-y-auto overscroll-contain px-3 py-2';
@@ -431,7 +435,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   const canToggleMode = canSwitchMode && normalizedAvailableModes.length > 1 && Boolean(onModeChange);
   const currentBackend: CodeAgentBackend = backend || room.codeAgentBackend || 'code-agent';
   const canToggleBackend = canSwitchBackend && Boolean(onBackendChange);
-  const canBrowseCodexThreads = currentBackend === 'codex-app-server';
+  const canBrowseCodexThreads = isRoomSessionReady && currentBackend === 'codex-app-server';
   const contextUsage = React.useMemo(
     () => currentBackend === 'codex-app-server' ? latestCodexContextUsage(messages) : null,
     [currentBackend, messages]
@@ -462,6 +466,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
   }, [loadCodexThreads, selectedWorkspaceTab]);
 
   const handleOpenCodexThread = React.useCallback(async (threadId: string) => {
+    if (!isRoomSessionReady) return;
     setSelectedCodexThreadId(threadId);
     setIsLoadingSelectedCodexThread(true);
     try {
@@ -471,7 +476,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
     } finally {
       setIsLoadingSelectedCodexThread(false);
     }
-  }, [room.id, t]);
+  }, [isRoomSessionReady, room.id, t]);
 
   return (
     <section
@@ -609,7 +614,13 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
           </span>
           <span className="inline-flex items-center gap-1 rounded-full border border-[#dedbd0] bg-[#faf9f5] px-2 py-1 text-[11px] font-medium text-[#4d4c48] dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#e8e6dc]">
             <Icon icon="lucide:coins" className="h-3 w-3" />
-            Cost: {formatUsdCost(sessionCostUsd)}
+            {t('sessionCost')}:
+            {sessionCostUsd !== null ? formatUsdCost(sessionCostUsd) : isSessionCostUnavailable ? t('costUnavailable') : (
+              <>
+                <span className="sr-only">{t('loadingSessionCost')}</span>
+                <span aria-hidden="true" className="inline-block h-2 w-8 animate-pulse rounded-full bg-[#c2c0b6] dark:bg-[#4d4c48]" />
+              </>
+            )}
           </span>
           {contextUsage ? (
             <span
@@ -657,7 +668,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
             <div className="grid divide-y divide-[#dedbd0] dark:divide-[#30302e] sm:grid-cols-3 sm:divide-x sm:divide-y-0">
               {stats.map((item) => (
                 <div key={item.label} className="flex min-w-0 items-center justify-between gap-3 px-3 py-2.5">
-                  <div className="flex min-w-0 items-center gap-2 text-xs text-[#87867f] dark:text-[#b0aea5]">
+                  <div className="flex min-w-0 items-center gap-2 text-xs text-[#5e5d59] dark:text-[#b0aea5]">
                     <Icon icon={item.icon} className="h-3.5 w-3.5 flex-shrink-0" />
                     <span className="truncate">{item.label}</span>
                   </div>
@@ -671,12 +682,12 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
             key="artifacts"
             title={
               <span
-                className={`inline-flex items-center gap-1.5 ${publishedArtifacts.length > 0 ? 'text-[#c96442] dark:text-[#ff9b78]' : ''}`}
+                className={`inline-flex items-center gap-1.5 ${publishedArtifacts.length > 0 ? 'text-secondary' : ''}`}
               >
                 <Icon icon="lucide:package-open" className="h-3.5 w-3.5" />
                 {t('codeAgentArtifacts')}
                 {publishedArtifacts.length > 0 ? (
-                  <span className="rounded-full bg-[#d66a43] px-1.5 py-0.5 font-mono text-[10px] font-bold leading-none text-white">
+                  <span className="rounded-full bg-secondary px-1.5 py-0.5 font-mono text-[10px] font-bold leading-none text-secondary-foreground">
                     {publishedArtifacts.length}
                   </span>
                 ) : null}
@@ -685,7 +696,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
           >
             <div className="max-h-44 overflow-y-auto px-3 py-2">
               {publishedArtifacts.length === 0 ? (
-                <p className="text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentNoArtifacts')}</p>
+                <p className="text-xs text-[#5e5d59] dark:text-[#8f8d86]">{t('codeAgentNoArtifacts')}</p>
               ) : (
                 <div className="space-y-1.5">
                   {publishedArtifacts.map((artifact) => (
@@ -750,7 +761,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                           <span className="truncate">{command.name}</span>
                         </div>
                         {command.preview && (
-                          <p className="mt-0.5 truncate font-mono text-[10px] text-[#87867f] dark:text-[#8f8d86]" title={command.preview}>
+                          <p className="mt-0.5 truncate font-mono text-[10px] text-[#5e5d59] dark:text-[#8f8d86]" title={command.preview}>
                             {command.preview}
                           </p>
                         )}
@@ -762,13 +773,14 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                   ))}
                 </div>
               ) : (
-                <p className="px-1 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentNoActivity')}</p>
+                <p className="px-1 text-xs text-[#5e5d59] dark:text-[#8f8d86]">{t('codeAgentNoActivity')}</p>
               )}
             </div>
               </Tab>
 
-              <Tab
-                key="threads"
+          <Tab
+            key="threads"
+            isDisabled={!isRoomSessionReady}
             title={
               <span className="inline-flex items-center gap-1.5">
                 <Icon icon="lucide:messages-square" className="h-3.5 w-3.5" />
@@ -779,13 +791,13 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
             <div className="grid max-h-56 min-h-0 divide-y divide-[#dedbd0] overflow-y-auto dark:divide-[#30302e] lg:grid-cols-[minmax(0,1fr)_minmax(12rem,0.8fr)] lg:divide-x lg:divide-y-0">
               <div className="min-w-0 px-2 py-2">
                 {!canBrowseCodexThreads ? (
-                  <p className="px-1 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentThreadBrowserUnavailable')}</p>
+                  <p className="px-1 text-xs text-[#5e5d59] dark:text-[#8f8d86]">{t('codeAgentThreadBrowserUnavailable')}</p>
                 ) : codexThreadsError ? (
                   <p className="px-1 text-xs font-medium text-[#9f462c] dark:text-[#ff9b78]">{codexThreadsError}</p>
                 ) : isLoadingCodexThreads && codexThreads.length === 0 ? (
-                  <p className="px-1 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('loading')}</p>
+                  <p className="px-1 text-xs text-[#5e5d59] dark:text-[#8f8d86]">{t('loading')}</p>
                 ) : codexThreads.length === 0 ? (
-                  <p className="px-1 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentNoThreads')}</p>
+                  <p className="px-1 text-xs text-[#5e5d59] dark:text-[#8f8d86]">{t('codeAgentNoThreads')}</p>
                 ) : (
                   <div className="space-y-1">
                     {codexThreads.map((thread) => {
@@ -804,7 +816,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                         >
                           <span className="min-w-0">
                             <span className="block truncate font-semibold">{threadTitleFor(thread)}</span>
-                            <span className="block truncate font-mono text-[10px] text-[#87867f] dark:text-[#8f8d86]">{threadUpdatedAtFor(thread)}</span>
+                            <span className="block truncate font-mono text-[10px] text-[#5e5d59] dark:text-[#8f8d86]">{threadUpdatedAtFor(thread)}</span>
                           </span>
                           <Icon icon="lucide:chevron-right" className="mt-0.5 h-3.5 w-3.5 text-[#b0aea5]" />
                         </button>
@@ -826,12 +838,12 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
               </div>
               <div className="min-w-0 px-3 py-2">
                 {isLoadingSelectedCodexThread ? (
-                  <p className="text-xs text-[#87867f] dark:text-[#8f8d86]">{t('loading')}</p>
+                  <p className="text-xs text-[#5e5d59] dark:text-[#8f8d86]">{t('loading')}</p>
                 ) : selectedCodexThread ? (
                   <div className="space-y-2 text-xs">
                     <div>
                       <div className="truncate font-semibold text-[#4d4c48] dark:text-[#e8e6dc]">{threadTitleFor(selectedCodexThread)}</div>
-                      <div className="mt-0.5 truncate font-mono text-[10px] text-[#87867f] dark:text-[#8f8d86]">{threadIdFor(selectedCodexThread)}</div>
+                      <div className="mt-0.5 truncate font-mono text-[10px] text-[#5e5d59] dark:text-[#8f8d86]">{threadIdFor(selectedCodexThread)}</div>
                     </div>
                     {threadPreviewFor(selectedCodexThread) ? (
                       <p className="line-clamp-3 text-[#5e5d59] dark:text-[#b0aea5]">{threadPreviewFor(selectedCodexThread)}</p>
@@ -848,7 +860,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
                     </div>
                   </div>
                 ) : (
-                  <p className="text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentSelectThread')}</p>
+                  <p className="text-xs text-[#5e5d59] dark:text-[#8f8d86]">{t('codeAgentSelectThread')}</p>
                 )}
               </div>
             </div>
@@ -858,6 +870,7 @@ export const CodeAgentWorkspacePanel: React.FC<CodeAgentWorkspacePanelProps> = (
 
           <Tab
             key="changes"
+            isDisabled={!isRoomSessionReady}
             title={
               <span className="inline-flex items-center gap-1.5">
                 <Icon icon="lucide:git-compare-arrows" className="h-3.5 w-3.5" />

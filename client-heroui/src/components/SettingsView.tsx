@@ -19,6 +19,7 @@ import { useTranslation } from "react-i18next";
 import { getAvatarText, getAvatarColor } from "../utils/userProfile";
 import { getLanguageOption, languageOptions } from "../utils/languages";
 import { FeatureIntro } from "./FeatureIntro";
+import { HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE } from "../utils/accessibility";
 import {
   ClientAccountStatus,
   ClientAuthStatus,
@@ -160,6 +161,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   isGitHubConnectionsEnabled = false
 }) => {
   const { t } = useTranslation();
+  const usernameLabelId = React.useId();
   const currentLanguage = getLanguageOption(i18n.language);
   const [pushStatus, setPushStatus] = React.useState<PushNotificationStatus>('unsupported');
   const [pushError, setPushError] = React.useState('');
@@ -665,6 +667,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
     return t('codexDeviceCodeExpiresIn', { time: formatCountdown(codexDeviceAuthSecondsRemaining) });
   }, [codexDeviceAuthSecondsRemaining, t]);
+  const isNewClientPasswordValid = newClientPassword.length >= 8 && newClientPassword.length <= 128;
+  const canSubmitExistingClientLogin = Boolean(loginClientId.trim() && loginPassword);
 
   return (
     <>
@@ -685,7 +689,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
         <section className="border-t border-[#dedbd0] dark:border-[#30302e]">
           <div className="flex min-h-[72px] flex-col gap-3 border-b border-[#dedbd0] py-4 dark:border-[#30302e] sm:flex-row sm:items-center">
-            <div className="w-full text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5] sm:w-32">
+            <div id={usernameLabelId} className="w-full text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5] sm:w-32">
               {t("username")}
             </div>
             {showEditUsername ? (
@@ -695,6 +699,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   size="sm"
                   className="min-w-0 flex-1"
                   value={username}
+                  aria-labelledby={usernameLabelId}
                   onChange={(e) => setUsername(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") handleSaveUsername();
@@ -702,7 +707,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   }}
                 />
                 <div className="flex flex-shrink-0 gap-1">
-                  <Button isIconOnly size="sm" color="secondary" onPress={handleSaveUsername} aria-label={t("save")}>
+                  <Button
+                    isIconOnly
+                    size="sm"
+                    color="secondary"
+                    isDisabled={!username.trim()}
+                    onPress={handleSaveUsername}
+                    aria-label={t("save")}
+                  >
                     <Icon icon="lucide:check" className="text-sm" />
                   </Button>
                   <Button isIconOnly size="sm" variant="flat" onPress={() => setShowEditUsername(false)} aria-label={t("cancel")}>
@@ -719,7 +731,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   isIconOnly
                   size="sm"
                   variant="light"
-                  className="h-8 w-8 min-w-8 flex-shrink-0 text-[#c96442] dark:text-[#d97757]"
+                  className="h-8 w-8 min-w-8 flex-shrink-0 text-secondary"
                   onPress={() => setShowEditUsername(true)}
                   aria-label={t("editUsername")}
                 >
@@ -741,11 +753,65 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 isIconOnly
                 size="sm"
                 variant="light"
-                className="h-8 w-8 min-w-8 flex-shrink-0 text-[#c96442] dark:text-[#d97757]"
+                className="h-8 w-8 min-w-8 flex-shrink-0 text-secondary"
                 onPress={() => handleCopyToClipboard(clientId)}
                 aria-label={t("copyUserId")}
               >
                 <Icon icon="lucide:copy" className="text-sm" />
+              </Button>
+            </div>
+          </div>
+
+          <div className="flex min-h-[72px] flex-col gap-3 border-b border-[#dedbd0] py-4 dark:border-[#30302e] sm:flex-row sm:items-center">
+            <div className="w-full text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5] sm:w-32">
+              {t("language")}
+            </div>
+            <Dropdown>
+              <DropdownTrigger>
+                <Button
+                  variant="flat"
+                  className="w-full justify-start rounded-lg bg-[#e8e6dc] text-[#4d4c48] dark:bg-[#30302e] dark:text-[#faf9f5] sm:max-w-sm"
+                  startContent={<Icon icon={currentLanguage.icon} />}
+                  endContent={<Icon icon="lucide:chevron-down" width={14} />}
+                >
+                  {t(currentLanguage.labelKey)}
+                </Button>
+              </DropdownTrigger>
+              <DropdownMenu
+                aria-label={t("languageSelection")}
+                onAction={(key) => changeLanguage(String(key))}
+              >
+                {languageOptions.map((option) => (
+                  <DropdownItem key={option.key} textValue={t(option.labelKey)} startContent={<Icon icon={option.icon} />}>
+                    {t(option.labelKey)}
+                  </DropdownItem>
+                ))}
+              </DropdownMenu>
+            </Dropdown>
+          </div>
+
+          <div className="flex min-h-[72px] flex-col gap-3 border-b border-[#dedbd0] py-4 dark:border-[#30302e] sm:flex-row sm:items-center">
+            <div className="w-full text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5] sm:w-32">
+              {t("appearance")}
+            </div>
+            <div className="flex w-full gap-2 sm:max-w-sm">
+              <Button
+                className={`flex-1 ${!isDark ? "bg-secondary text-secondary-foreground" : ""}`}
+                variant={isDark ? "flat" : "solid"}
+                color="secondary"
+                startContent={<Icon icon="lucide:sun" />}
+                onPress={() => isDark && setTheme("light")}
+              >
+                {t("lightMode")}
+              </Button>
+              <Button
+                className={`flex-1 ${isDark ? "bg-secondary text-secondary-foreground" : ""}`}
+                variant={!isDark ? "flat" : "solid"}
+                color="secondary"
+                startContent={<Icon icon="lucide:moon" />}
+                onPress={() => !isDark && setTheme("dark")}
+              >
+                {t("darkMode")}
               </Button>
             </div>
           </div>
@@ -759,6 +825,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 featureKey="google-account-login"
                 title={t("googleAccountIntroTitle")}
                 description={t("googleAccountIntroDescription")}
+                compact
               />
               <div className="flex flex-wrap items-center gap-2">
                 <Chip
@@ -791,7 +858,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       {accountStatus.account.displayName || accountStatus.account.email || "Google"}
                     </p>
                     {accountStatus.account.email && (
-                      <p className="truncate text-xs text-[#77756f] dark:text-[#b0aea5]">{accountStatus.account.email}</p>
+                      <p className="truncate text-xs text-[#5e5d59] dark:text-[#b0aea5]">{accountStatus.account.email}</p>
                     )}
                   </div>
                 </div>
@@ -807,16 +874,20 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 />
               )}
               {accountStatus && !isGoogleLoginAvailable && !accountStatus.account && (
-                <p className="text-xs leading-5 text-[#77756f] dark:text-[#b0aea5]">{t("googleAccountUnavailable")}</p>
+                <p className="text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">{t("googleAccountUnavailable")}</p>
               )}
               {isUpdatingGoogleAuth && (
-                <p className="text-xs leading-5 text-[#77756f] dark:text-[#b0aea5]">{t("googleSignInInProgress")}</p>
+                <p className="text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">{t("googleSignInInProgress")}</p>
               )}
               {googleAuthMessage && (
-                <p className="text-xs leading-5 text-[#2f7d4f] dark:text-[#7ed9a3]">{googleAuthMessage}</p>
+                <p role="status" aria-atomic="true" className="text-xs leading-5 text-[#2f7d4f] dark:text-[#7ed9a3]">
+                  {googleAuthMessage}
+                </p>
               )}
               {googleAuthError && (
-                <p className="text-xs leading-5 text-[#b54832] dark:text-[#ff8b6e]">{googleAuthError}</p>
+                <p role="alert" aria-atomic="true" className="text-xs leading-5 text-[#b54832] dark:text-[#ff8b6e]">
+                  {googleAuthError}
+                </p>
               )}
             </div>
           </div>
@@ -830,6 +901,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 featureKey="user-id-password-login"
                 title={t("userIdLoginIntroTitle")}
                 description={t("userIdLoginIntroDescription")}
+                compact
               />
               <div className="flex flex-wrap items-center gap-2">
                 <Chip
@@ -846,6 +918,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     size="sm"
                     type="password"
                     label={t("currentUserIdPassword")}
+                    aria-label={HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE}
                     value={currentClientPassword}
                     onChange={(event) => setCurrentClientPassword(event.target.value)}
                     autoComplete="current-password"
@@ -855,14 +928,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   size="sm"
                   type="password"
                   label={clientAuthStatus?.hasPassword ? t("newUserIdPassword") : t("userIdPassword")}
+                  aria-label={HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE}
                   value={newClientPassword}
                   onChange={(event) => setNewClientPassword(event.target.value)}
+                  minLength={8}
+                  maxLength={128}
+                  description={t("userIdPasswordLengthError")}
                   autoComplete="new-password"
                 />
                 <Button
                   size="sm"
                   color="secondary"
-                  className="justify-self-start bg-[#c96442] text-[#faf9f5]"
+                  className="justify-self-start bg-secondary text-secondary-foreground"
+                  isDisabled={!isNewClientPasswordValid || isUpdatingClientAuth}
                   isLoading={isUpdatingClientAuth}
                   startContent={!isUpdatingClientAuth ? <Icon icon="lucide:key-round" /> : undefined}
                   onPress={handleSetClientPassword}
@@ -871,12 +949,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </Button>
               </div>
               <div className="grid gap-2 border-t border-[#dedbd0] pt-3 dark:border-[#30302e]">
-                <p className="text-xs leading-5 text-[#77756f] dark:text-[#b0aea5]">
+                <p className="text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">
                   {t("userIdLoginHelp")}
                 </p>
                 <Input
                   size="sm"
                   label={t("existingUserId")}
+                  aria-label={HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE}
                   value={loginClientId}
                   onChange={(event) => setLoginClientId(event.target.value)}
                   autoComplete="username"
@@ -885,6 +964,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   size="sm"
                   type="password"
                   label={t("userIdPassword")}
+                  aria-label={HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE}
                   value={loginPassword}
                   onChange={(event) => setLoginPassword(event.target.value)}
                   autoComplete="current-password"
@@ -893,6 +973,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   size="sm"
                   variant="flat"
                   className="justify-self-start"
+                  isDisabled={!canSubmitExistingClientLogin || isUpdatingClientAuth}
                   isLoading={isUpdatingClientAuth}
                   startContent={!isUpdatingClientAuth ? <Icon icon="lucide:log-in" /> : undefined}
                   onPress={handleLoginExistingClientId}
@@ -901,10 +982,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </Button>
               </div>
               {clientAuthMessage && (
-                <p className="text-xs leading-5 text-[#2f7d4f] dark:text-[#7ed9a3]">{clientAuthMessage}</p>
+                <p role="status" aria-atomic="true" className="text-xs leading-5 text-[#2f7d4f] dark:text-[#7ed9a3]">
+                  {clientAuthMessage}
+                </p>
               )}
               {clientAuthError && (
-                <p className="text-xs leading-5 text-[#b54832] dark:text-[#ff8b6e]">{clientAuthError}</p>
+                <p role="alert" aria-atomic="true" className="text-xs leading-5 text-[#b54832] dark:text-[#ff8b6e]">
+                  {clientAuthError}
+                </p>
               )}
             </div>
           </div>
@@ -1026,7 +1111,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     <Button
                       size="sm"
                       color="secondary"
-                      className="bg-[#c96442] text-[#faf9f5]"
+                      className="bg-secondary text-secondary-foreground"
                       isLoading={isUpdatingCodex}
                       startContent={!isUpdatingCodex ? <Icon icon="lucide:terminal" /> : undefined}
                       onPress={handleStartCodexConnection}
@@ -1043,7 +1128,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       {codexAccountIdentity}
                     </span>
                     {codexAccountPlan && (
-                      <span className="shrink-0 text-[#77756f] dark:text-[#b0aea5]">
+                      <span className="shrink-0 text-[#5e5d59] dark:text-[#b0aea5]">
                         · {codexAccountPlan}
                       </span>
                     )}
@@ -1056,7 +1141,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       {t("codexDeviceCodeInstruction")}
                     </p>
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-xs font-medium uppercase text-[#77756f] dark:text-[#b0aea5]">
+                      <span className="text-xs font-medium uppercase text-[#5e5d59] dark:text-[#b0aea5]">
                         {t("codexDeviceCode")}
                       </span>
                       <code className="rounded-md bg-[#f7f5ed] px-2 py-1 text-sm font-semibold tracking-normal text-[#141413] dark:bg-[#30302e] dark:text-[#faf9f5]">
@@ -1099,10 +1184,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 )}
 
                 {codexMessage && (
-                  <p className="text-xs leading-5 text-[#2f7d4f] dark:text-[#7ed9a3]">{codexMessage}</p>
+                  <p role="status" aria-atomic="true" className="text-xs leading-5 text-[#2f7d4f] dark:text-[#7ed9a3]">
+                    {codexMessage}
+                  </p>
                 )}
                 {codexError && (
-                  <p className="text-xs leading-5 text-[#b54832] dark:text-[#ff8b6e]">{codexError}</p>
+                  <p role="alert" aria-atomic="true" className="text-xs leading-5 text-[#b54832] dark:text-[#ff8b6e]">
+                    {codexError}
+                  </p>
                 )}
               </div>
             </div>
@@ -1147,7 +1236,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <Button
                     size="sm"
                     color="secondary"
-                    className="bg-[#c96442] text-[#faf9f5]"
+                    className="bg-secondary text-secondary-foreground"
                     isDisabled={pushStatus === 'unsupported' || pushStatus === 'ios-install-required' || pushStatus === 'server-disabled' || pushStatus === 'denied'}
                     isLoading={isUpdatingPush}
                     startContent={!isUpdatingPush ? <Icon icon="lucide:bell" /> : undefined}
@@ -1157,7 +1246,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </Button>
                 )}
               </div>
-              <p className="text-xs leading-5 text-[#77756f] dark:text-[#b0aea5]">
+              <p className="text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">
                 {pushStatus === 'denied'
                   ? t("notificationDeniedHelp")
                   : pushStatus === 'ios-install-required'
@@ -1165,64 +1254,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     : t("notificationHelp")}
               </p>
               {pushError && (
-                <p className="text-xs leading-5 text-[#b54832] dark:text-[#ff8b6e]">{pushError}</p>
+                <p role="alert" aria-atomic="true" className="text-xs leading-5 text-[#b54832] dark:text-[#ff8b6e]">
+                  {pushError}
+                </p>
               )}
             </div>
           </div>
 
-          <div className="flex min-h-[72px] flex-col gap-3 border-b border-[#dedbd0] py-4 dark:border-[#30302e] sm:flex-row sm:items-center">
-            <div className="w-full text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5] sm:w-32">
-              {t("language")}
-            </div>
-            <Dropdown>
-              <DropdownTrigger>
-                <Button
-                  variant="flat"
-                  className="w-full justify-start rounded-lg bg-[#e8e6dc] text-[#4d4c48] dark:bg-[#30302e] dark:text-[#faf9f5] sm:max-w-sm"
-                  startContent={<Icon icon={currentLanguage.icon} />}
-                  endContent={<Icon icon="lucide:chevron-down" width={14} />}
-                >
-                  {t(currentLanguage.labelKey)}
-                </Button>
-              </DropdownTrigger>
-              <DropdownMenu
-                aria-label={t("languageSelection")}
-                onAction={(key) => changeLanguage(String(key))}
-              >
-                {languageOptions.map((option) => (
-                  <DropdownItem key={option.key} textValue={t(option.labelKey)} startContent={<Icon icon={option.icon} />}>
-                    {t(option.labelKey)}
-                  </DropdownItem>
-                ))}
-              </DropdownMenu>
-            </Dropdown>
-          </div>
-
-          <div className="flex min-h-[72px] flex-col gap-3 border-b border-[#dedbd0] py-4 dark:border-[#30302e] sm:flex-row sm:items-center">
-            <div className="w-full text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5] sm:w-32">
-              {t("appearance")}
-            </div>
-            <div className="flex w-full gap-2 sm:max-w-sm">
-              <Button
-                className={`flex-1 ${!isDark ? "bg-[#c96442] text-[#faf9f5]" : ""}`}
-                variant={isDark ? "flat" : "solid"}
-                color="secondary"
-                startContent={<Icon icon="lucide:sun" />}
-                onPress={() => isDark && setTheme("light")}
-              >
-                {t("lightMode")}
-              </Button>
-              <Button
-                className={`flex-1 ${isDark ? "bg-[#c96442] text-[#faf9f5]" : ""}`}
-                variant={!isDark ? "flat" : "solid"}
-                color="secondary"
-                startContent={<Icon icon="lucide:moon" />}
-                onPress={() => !isDark && setTheme("dark")}
-              >
-                {t("darkMode")}
-              </Button>
-            </div>
-          </div>
         </section>
       </div>
     </div>
@@ -1244,7 +1282,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             {codexDeviceAuth && (
               <div className="grid gap-3 rounded-lg bg-[#e8e6dc] p-4 dark:bg-[#242423]">
                 <div className="grid gap-1">
-                  <span className="text-xs font-medium uppercase text-[#77756f] dark:text-[#b0aea5]">
+                  <span className="text-xs font-medium uppercase text-[#5e5d59] dark:text-[#b0aea5]">
                     {t("codexDeviceCode")}
                   </span>
                   <code className="w-full rounded-md bg-[#f7f5ed] px-3 py-2 text-center text-lg font-semibold tracking-normal text-[#141413] dark:bg-[#30302e] dark:text-[#faf9f5]">
@@ -1255,7 +1293,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   {t("codexDeviceCodeInstruction")}
                 </p>
                 {codexExpiryLabel && (
-                  <p className="text-xs leading-5 text-[#77756f] dark:text-[#b0aea5]">
+                  <p className="text-xs leading-5 text-[#5e5d59] dark:text-[#b0aea5]">
                     {codexExpiryLabel}
                   </p>
                 )}
@@ -1271,7 +1309,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               target="_blank"
               rel="noreferrer"
               color="secondary"
-              className="min-w-0 bg-[#c96442] text-[#faf9f5] sm:col-span-2"
+              className="min-w-0 bg-secondary text-secondary-foreground sm:col-span-2"
               startContent={<Icon icon="lucide:external-link" />}
             >
               {t("openCodexLoginShort")}

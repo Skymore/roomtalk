@@ -17,6 +17,7 @@ import {
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 import { AIRole, AIRoleColor, generateAIRoleDraft, getAIRoleDisplayName, getAIRoleDisplayPrompt } from '../utils/aiRoles';
+import { HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE } from '../utils/accessibility';
 
 // AI角色管理组件接口
 export interface AIRoleManagerProps {
@@ -211,11 +212,13 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
           <h3 className="font-serif text-lg font-medium text-[#141413] dark:text-[#faf9f5]">{t('editRole')}</h3>
           <Input
             label={t('roleName')}
+            aria-label={HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE}
             value={editingRole.name}
             onChange={(e) => setEditingRole({...editingRole, name: e.target.value})}
           />
           <Textarea
             label={t('systemPrompt')}
+            aria-label={HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE}
             value={editingRole.systemPrompt}
             onChange={(e) => setEditingRole({...editingRole, systemPrompt: e.target.value})}
             minRows={3}
@@ -254,7 +257,7 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
           </div>
           <div className="flex justify-end space-x-2">
             <Button variant="light" onPress={handleCancelEdit}>{t('cancel')}</Button>
-            <Button color="secondary" className="bg-[#c96442] text-[#faf9f5]" onPress={handleSaveEdit}>{t('save')}</Button>
+            <Button color="secondary" className="bg-secondary text-secondary-foreground" onPress={handleSaveEdit}>{t('save')}</Button>
           </div>
         </Card>
       )}
@@ -266,7 +269,7 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
             color="secondary"
             startContent={<Icon icon="lucide:plus" />}
             onPress={() => setShowCreateForm(true)}
-            className="w-full bg-[#c96442] text-[#faf9f5] sm:w-auto"
+            className="w-full bg-secondary text-secondary-foreground sm:w-auto"
           >
             {t('createNewRole')}
           </Button>
@@ -298,19 +301,21 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
               <span className="text-xs font-normal text-[#5e5d59] dark:text-[#b0aea5]">{t('poweredByGeminiFlash')}</span>
             </span>
           </Button>
-          <div className="flex items-center gap-3 text-xs text-[#87867f] dark:text-[#b0aea5]">
+          <div className="flex items-center gap-3 text-xs text-[#5e5d59] dark:text-[#b0aea5]">
             <span className="h-px flex-1 bg-[#dedbd0] dark:bg-[#30302e]" />
             <span>{t('orCreateManually')}</span>
             <span className="h-px flex-1 bg-[#dedbd0] dark:bg-[#30302e]" />
           </div>
           <Input
             label={t('roleName')}
+            aria-label={HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE}
             placeholder={t('enterRoleName')}
             value={newRole.name}
             onChange={(e) => setNewRole({...newRole, name: e.target.value})}
           />
           <Textarea
             label={t('systemPrompt')}
+            aria-label={HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE}
             placeholder={t('describeAIRole')}
             value={newRole.systemPrompt}
             onChange={(e) => setNewRole({...newRole, systemPrompt: e.target.value})}
@@ -351,7 +356,7 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
           <div className="flex justify-end">
             <Button
               color="secondary"
-              className="bg-[#c96442] text-[#faf9f5]"
+              className="bg-secondary text-secondary-foreground"
               onPress={() => {
                 handleCreateRole();
                 setShowCreateForm(false);
@@ -373,6 +378,7 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
           <ModalBody>
             <Textarea
               label={t('aiRoleIntentQuestion')}
+              aria-label={HEROUI_VISIBLE_LABEL_ARIA_OVERRIDE}
               placeholder={t('aiRoleIntentPlaceholder')}
               value={roleIdea}
               onChange={(event) => setRoleIdea(event.target.value)}
@@ -391,7 +397,7 @@ export const AIRoleManager: React.FC<AIRoleManagerProps> = ({
             </Button>
             <Button
               color="secondary"
-              className="bg-[#c96442] text-[#faf9f5]"
+              className="bg-secondary text-secondary-foreground"
               onPress={handleGenerateRole}
               isDisabled={!roleIdea.trim() || isGeneratingRole}
               isLoading={isGeneratingRole}

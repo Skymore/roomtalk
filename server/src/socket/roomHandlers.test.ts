@@ -4,6 +4,7 @@ import { registerRoomHandlers } from './roomHandlers';
 import { Message, Room, RoomAICostTotal, RoomMemberRole } from '../types';
 import { hashClientAuthToken } from '../services/clientAuth';
 import { createCodeAgentAccessControl } from '../services/codeAgentAccessControl';
+import { hashRoomPassword } from '../services/roomSecurity';
 
 type SocketEmit = {
   event: string;
@@ -18,6 +19,7 @@ type RoomEmit = {
 
 class FakeSocket {
   id = 'socket-1';
+  rooms = new Set<string>([this.id]);
   handlers = new Map<string, (...args: any[]) => unknown>();
   emitted: SocketEmit[] = [];
   roomEmits: RoomEmit[] = [];
@@ -34,10 +36,12 @@ class FakeSocket {
 
   join(roomId: string) {
     this.joined.push(roomId);
+    this.rooms.add(roomId);
   }
 
   leave(roomId: string) {
     this.left.push(roomId);
+    this.rooms.delete(roomId);
   }
 
   to(roomId: string) {
@@ -141,6 +145,7 @@ const createHarness = (
     nicknames: new Map<string, string>(),
     nicknameWrites: [] as Array<{ clientId: string; nickname: string }>,
     memberCountUpdates: [] as Array<{ roomId: string; userId: string; socketId: string; isJoining: boolean }>,
+    roomPasswordHashes: new Map<string, string>(),
     clientPasswords: new Map<string, string>(),
     clientAccounts: new Set<string>(),
     clientAuthTokens: new Map<string, { clientId: string; tokenHash: string; createdAt: string }>(),
@@ -328,6 +333,9 @@ const createHarness = (
     },
     async getRoomById(roomId: string) {
       return this.rooms.find(item => item.id === roomId) || null;
+    },
+    async readRoomPasswordHash(roomId: string) {
+      return this.roomPasswordHashes.get(roomId) || null;
     },
     async updateRoomName(roomId: string, creatorId: string, name: string) {
       const index = this.rooms.findIndex(item => item.id === roomId && item.creatorId === creatorId);
@@ -681,6 +689,41 @@ describe('room socket handlers', () => {
     assert.deepEqual(ownerBlockedResponse, { success: false, error: 'The room owner cannot be removed' });
   });
 
+  it('invalidates every target socket even before a provisional join is tracked', async () => {
+    const harness = createHarness('client-1');
+    harness.store.members.add('room-1:client-2');
+    harness.store.memberRoles.set('room-1:client-2', 'member');
+    harness.io.socketsByRoom.set('client-2', new Set(['socket-pending-join']));
+    harness.store.socketRooms = [];
+
+    let response: unknown;
+    await harness.socket.invoke('remove_room_member', {
+      roomId: 'room-1',
+      targetClientId: 'client-2',
+    }, (result: unknown) => {
+      response = result;
+    });
+
+    assert.deepEqual(response, { success: true });
+    assert.deepEqual(harness.store.memberCountUpdates, [{
+      roomId: 'room-1',
+      userId: 'client-2',
+      socketId: 'socket-pending-join',
+      isJoining: false,
+    }]);
+    assert.deepEqual(harness.io.socketsLeaveCalls, [{
+      socketId: 'socket-pending-join',
+      roomId: 'room-1',
+    }]);
+    assert.deepEqual(
+      harness.io.roomEmits
+        .filter(item => item.roomId === 'socket-pending-join')
+        .map(item => item.event),
+      ['room_removed', 'room_permissions_invalidated'],
+    );
+    assert.deepEqual(harness.store.socketRooms, []);
+  });
+
   it('checks target users before adding administrators', async () => {
     const unknown = createHarness('client-1');
     let unknownResponse: unknown;
@@ -876,6 +919,89 @@ describe('room socket handlers', () => {
     });
   });
 
+  it('serializes overlapping joins through their final acknowledgement', async () => {
+    const valid = createHarness('client-1');
+    const roomA = room({ id: 'room-a', name: 'Room A' });
+    const roomB = room({ id: 'room-b', name: 'Room B' });
+    valid.store.rooms.push(roomA, roomB);
+
+    let releaseFirstJoin = () => {};
+    let markFirstJoinStalled = () => {};
+    const firstJoinGate = new Promise<void>((resolve) => {
+      releaseFirstJoin = resolve;
+    });
+    const firstJoinStalled = new Promise<void>((resolve) => {
+      markFirstJoinStalled = resolve;
+    });
+    const updateRoomMemberCount = valid.store.updateRoomMemberCount.bind(valid.store);
+    let didStallFirstJoin = false;
+    valid.store.updateRoomMemberCount = async (roomId, userId, socketId, isJoining) => {
+      if (roomId === roomA.id && isJoining && !didStallFirstJoin) {
+        didStallFirstJoin = true;
+        markFirstJoinStalled();
+        await firstJoinGate;
+      }
+      return updateRoomMemberCount(roomId, userId, socketId, isJoining);
+    };
+
+    const acknowledgements: string[] = [];
+    const joinA = valid.socket.invoke('join_room', roomA.id, () => acknowledgements.push(roomA.id));
+    const joinB = valid.socket.invoke('join_room', roomB.id, () => acknowledgements.push(roomB.id));
+
+    await firstJoinStalled;
+    await Promise.resolve();
+    assert.deepEqual(acknowledgements, []);
+    assert.deepEqual(valid.store.socketRooms, []);
+    assert.equal(valid.socket.rooms.has(roomA.id), true);
+    assert.equal(valid.socket.rooms.has(roomB.id), false);
+
+    releaseFirstJoin();
+    await Promise.all([joinA, joinB]);
+
+    assert.deepEqual(acknowledgements, [roomA.id, roomB.id]);
+    assert.deepEqual(valid.store.socketRooms, [roomB.id]);
+    assert.equal(valid.socket.rooms.has(roomA.id), false);
+    assert.equal(valid.socket.rooms.has(roomB.id), true);
+  });
+
+  it('cleans an untracked Socket.IO room while repairing the desired room', async () => {
+    const valid = createHarness('client-1');
+    const staleRoom = room({ id: 'room-a', name: 'Room A' });
+    const desiredRoom = room({ id: 'room-b', name: 'Room B' });
+    valid.store.rooms.push(staleRoom, desiredRoom);
+    valid.store.socketRooms = [desiredRoom.id];
+    valid.socket.rooms.add(staleRoom.id);
+    valid.socket.rooms.add(desiredRoom.id);
+
+    await valid.socket.invoke('join_room', desiredRoom.id, () => {});
+
+    assert.deepEqual(valid.store.socketRooms, [desiredRoom.id]);
+    assert.equal(valid.socket.rooms.has(staleRoom.id), false);
+    assert.equal(valid.socket.rooms.has(desiredRoom.id), true);
+    assert.ok(valid.socket.left.includes(staleRoom.id));
+  });
+
+  it('keeps the current room when a password-protected join is rejected', async () => {
+    const valid = createHarness('client-2');
+    const currentRoom = room({ id: 'room-a', name: 'Room A', creatorId: 'client-2' });
+    const protectedRoom = room({ id: 'room-b', name: 'Room B', creatorId: 'client-1', hasPassword: true });
+    valid.store.rooms.push(currentRoom, protectedRoom);
+    valid.store.socketRooms = [currentRoom.id];
+    valid.socket.rooms.add(currentRoom.id);
+    valid.store.roomPasswordHashes.set(protectedRoom.id, await hashRoomPassword('correct'));
+    let joinResponse: unknown;
+
+    await valid.socket.invoke('join_room', { roomId: protectedRoom.id, password: 'wrong' }, (result: unknown) => {
+      joinResponse = result;
+    });
+
+    assert.deepEqual(joinResponse, { success: false, error: 'Room password is required or incorrect' });
+    assert.deepEqual(valid.store.socketRooms, [currentRoom.id]);
+    assert.equal(valid.socket.rooms.has(currentRoom.id), true);
+    assert.equal(valid.socket.rooms.has(protectedRoom.id), false);
+    assert.deepEqual(valid.socket.left, []);
+  });
+
   it('rejoining the current room is idempotent and returns the member count', async () => {
     const valid = createHarness('client-1');
     valid.store.socketRooms = ['room-1'];
@@ -926,6 +1052,46 @@ describe('room socket handlers', () => {
     assert.equal(io.roomEmits[0].event, 'room_member_change');
   });
 
+  it('serializes leave after an in-flight join so leave is the final state', async () => {
+    const valid = createHarness('client-1');
+    const joinedRoom = room({ id: 'room-a', name: 'Room A' });
+    valid.store.rooms.push(joinedRoom);
+
+    let releaseJoin = () => {};
+    let markJoinStalled = () => {};
+    const joinGate = new Promise<void>((resolve) => {
+      releaseJoin = resolve;
+    });
+    const joinStalled = new Promise<void>((resolve) => {
+      markJoinStalled = resolve;
+    });
+    const updateRoomMemberCount = valid.store.updateRoomMemberCount.bind(valid.store);
+    let stalled = false;
+    valid.store.updateRoomMemberCount = async (roomId, userId, socketId, isJoining) => {
+      if (roomId === joinedRoom.id && isJoining && !stalled) {
+        stalled = true;
+        markJoinStalled();
+        await joinGate;
+      }
+      return updateRoomMemberCount(roomId, userId, socketId, isJoining);
+    };
+
+    const join = valid.socket.invoke('join_room', joinedRoom.id, () => {});
+    const leave = valid.socket.invoke('leave_room', joinedRoom.id);
+    await joinStalled;
+    assert.deepEqual(valid.socket.left, []);
+
+    releaseJoin();
+    await Promise.all([join, leave]);
+
+    assert.deepEqual(valid.store.socketRooms, []);
+    assert.equal(valid.socket.rooms.has(joinedRoom.id), false);
+    assert.deepEqual(
+      valid.store.memberCountUpdates.filter(update => update.roomId === joinedRoom.id).map(update => update.isJoining),
+      [true, false],
+    );
+  });
+
   it('keeps owner membership when owners leave rooms', async () => {
     const { socket, store } = createHarness('client-1');
     store.socketRooms = ['room-1'];
@@ -960,6 +1126,8 @@ describe('room socket handlers', () => {
       },
     });
     valid.io.socketsByRoom.set('client-1', new Set(['socket-1', 'socket-2']));
+    valid.io.socketsByRoom.set('room-1', new Set(['socket-1', 'socket-member']));
+    valid.store.socketRooms = ['room-1'];
     let response: unknown;
     await valid.socket.invoke('delete_room', 'room-1', (result: unknown) => {
       response = result;
@@ -969,11 +1137,60 @@ describe('room socket handlers', () => {
     assert.deepEqual(deletedStaticSiteRooms, ['room-1']);
     assert.deepEqual(valid.store.deletedRooms, [{ roomId: 'room-1', creatorId: 'client-1' }]);
     assert.deepEqual(valid.io.roomEmits, [
+      { roomId: 'room-1', event: 'room_removed', args: ['room-1'] },
+      { roomId: 'room-1', event: 'room_permissions_invalidated', args: ['room-1'] },
       { roomId: 'socket-1', event: 'room_list', args: [[]] },
       { roomId: 'socket-1', event: 'saved_room_list', args: [[]] },
       { roomId: 'socket-2', event: 'room_list', args: [[]] },
       { roomId: 'socket-2', event: 'saved_room_list', args: [[]] },
     ]);
+    assert.deepEqual(valid.io.socketsLeaveCalls, [{ socketId: 'room-1', roomId: 'room-1' }]);
+    assert.deepEqual(valid.store.socketRooms, []);
+  });
+
+  it('does not let a join commit from a room snapshot after another socket deletes the room', async () => {
+    const harness = createHarness('client-1');
+    const joiningSocket = new FakeSocket();
+    joiningSocket.id = 'socket-joining';
+    joiningSocket.rooms = new Set([joiningSocket.id]);
+    registerRoomHandlers({
+      io: harness.io as any,
+      socket: joiningSocket as any,
+      store: harness.store as any,
+      socketLogger: logger as any,
+      codeAgentAccess: createCodeAgentAccessControl({ enabled: true }),
+    } as any);
+
+    let releaseDelete = () => {};
+    let markDeleteStalled = () => {};
+    const deleteGate = new Promise<void>((resolve) => {
+      releaseDelete = resolve;
+    });
+    const deleteStalled = new Promise<void>((resolve) => {
+      markDeleteStalled = resolve;
+    });
+    const deleteRoom = harness.store.deleteRoom.bind(harness.store);
+    harness.store.deleteRoom = async (roomId: string, creatorId: string) => {
+      markDeleteStalled();
+      await deleteGate;
+      await deleteRoom(roomId, creatorId);
+    };
+
+    let joinResponse: unknown;
+    const deleting = harness.socket.invoke('delete_room', 'room-1', () => {});
+    await deleteStalled;
+    const joining = joiningSocket.invoke('join_room', 'room-1', (response: unknown) => {
+      joinResponse = response;
+    });
+    await Promise.resolve();
+    assert.equal(joinResponse, undefined);
+
+    releaseDelete();
+    await Promise.all([deleting, joining]);
+
+    assert.deepEqual(joinResponse, { success: false, error: 'Room not found' });
+    assert.equal(joiningSocket.rooms.has('room-1'), false);
+    assert.equal(harness.store.rooms.some(item => item.id === 'room-1'), false);
   });
 
   it('does not delete a room when published static site cleanup fails', async () => {
@@ -1131,5 +1348,46 @@ describe('room socket handlers', () => {
       deniedRoom = result;
     });
     assert.equal(deniedRoom, null);
+  });
+
+  it('runs disconnect cleanup after an in-flight join and uses the disconnecting room snapshot', async () => {
+    const valid = createHarness('client-1');
+    const joinedRoom = room({ id: 'room-a', name: 'Room A' });
+    valid.store.rooms.push(joinedRoom);
+
+    let releaseJoin = () => {};
+    let markJoinStalled = () => {};
+    const joinGate = new Promise<void>((resolve) => {
+      releaseJoin = resolve;
+    });
+    const joinStalled = new Promise<void>((resolve) => {
+      markJoinStalled = resolve;
+    });
+    const updateRoomMemberCount = valid.store.updateRoomMemberCount.bind(valid.store);
+    let stalled = false;
+    valid.store.updateRoomMemberCount = async (roomId, userId, socketId, isJoining) => {
+      if (roomId === joinedRoom.id && isJoining && !stalled) {
+        stalled = true;
+        markJoinStalled();
+        await joinGate;
+      }
+      return updateRoomMemberCount(roomId, userId, socketId, isJoining);
+    };
+
+    const join = valid.socket.invoke('join_room', joinedRoom.id, () => {});
+    await joinStalled;
+    await valid.socket.invoke('disconnecting');
+    valid.socket.rooms.clear();
+    const disconnect = valid.socket.invoke('disconnect', 'transport close');
+
+    releaseJoin();
+    await Promise.all([join, disconnect]);
+
+    assert.deepEqual(valid.store.removedSessions, ['socket-1']);
+    assert.deepEqual(valid.store.socketRooms, []);
+    assert.deepEqual(
+      valid.store.memberCountUpdates.filter(update => update.roomId === joinedRoom.id).map(update => update.isJoining),
+      [true, false],
+    );
   });
 });

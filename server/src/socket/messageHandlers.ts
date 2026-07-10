@@ -11,6 +11,16 @@ import { hasRoomAccess } from './roomAccess';
 import { authorizeRoomAction, getRoomMessage } from './roomAuthorization';
 import { SocketConnectionContext } from './types';
 
+const MAX_CLIENT_MESSAGE_ID_LENGTH = 128;
+
+const parseClientMessageId = (value: unknown): string | undefined => {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !value.trim() || value.length > MAX_CLIENT_MESSAGE_ID_LENGTH) {
+    return undefined;
+  }
+  return value;
+};
+
 const parseClearRoomPayload = (payload: unknown): { roomId: string | null; confirmation?: string } => {
   if (typeof payload === 'string') {
     return { roomId: payload };
@@ -44,7 +54,7 @@ const isA2UIActionEvent = (value: unknown): value is A2UIActionEvent => (
 );
 
 export function registerMessageHandlers({ io, socket, store, socketLogger }: SocketConnectionContext) {
-  socket.on('get_room_messages', async (request: { roomId: string; beforeMessageId?: string; limit?: number }) => {
+  socket.on('get_room_messages', async (request: { roomId: string; beforeMessageId?: string; limit?: number; baseHistoryVersion?: number }) => {
     const roomId = request?.roomId;
     const beforeMessageId = request?.beforeMessageId;
     const limit = request?.limit;
@@ -65,6 +75,9 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
     socket.emit('message_history', {
       ...page,
       mode: beforeMessageId ? 'prepend' : 'replace',
+      ...(typeof request.baseHistoryVersion === 'number'
+        ? { requestedHistoryVersion: request.baseHistoryVersion }
+        : {}),
     });
     socket.emit('ai_cost_total', await store.readRoomAICost(roomId));
   });
@@ -96,6 +109,12 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
       socketLogger.warn('Client tried to send message without room ID', { socketId: socket.id, clientId });
       socket.emit('error', { message: 'Room ID is required' });
       callback?.({ success: false, error: 'Room ID is required' });
+      return;
+    }
+
+    const clientMessageId = parseClientMessageId(messageData.clientMessageId);
+    if (messageData.clientMessageId !== undefined && !clientMessageId) {
+      callback?.({ success: false, error: 'Invalid client message ID' });
       return;
     }
 
@@ -156,7 +175,7 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
           username: messageData.username,
           avatar: messageData.avatar,
           replyTo,
-          clientMessageId: messageData.clientMessageId,
+          clientMessageId,
         })
       : createUserMessage({
           id: uuidv4(),
@@ -166,24 +185,27 @@ export function registerMessageHandlers({ io, socket, store, socketLogger }: Soc
           username: messageData.username,
           avatar: messageData.avatar,
           replyTo,
-          clientMessageId: messageData.clientMessageId,
+          clientMessageId,
         });
 
     const loggableMessage = socketLogger.formatMessageForLog(message);
     socketLogger.info('Received WebSocket message', loggableMessage);
 
-    const updatedRoom = await store.appendMessage(message);
-    if (!updatedRoom) {
+    const appendResult = await store.appendMessageIdempotent(message);
+    if (!appendResult) {
       socketLogger.error('Failed to append WebSocket message', { messageId: message.id, roomId: message.roomId, clientId });
       socket.emit('error', { message: 'Failed to save message' });
       callback?.({ success: false, error: 'Failed to save message' });
       return;
     }
 
-    io.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
-    io.to(messageData.roomId).emit('new_message', message);
-    notifyRoomMessageBestEffort({ store, room: updatedRoom, message, logger: socketLogger });
-    callback?.({ success: true, message });
+    const persistedMessage = appendResult.message;
+    if (appendResult.inserted) {
+      io.to(appendResult.room.creatorId).emit('room_updated', appendResult.room);
+      io.to(messageData.roomId).emit('new_message', persistedMessage);
+      notifyRoomMessageBestEffort({ store, room: appendResult.room, message: persistedMessage, logger: socketLogger });
+    }
+    callback?.({ success: true, message: persistedMessage });
   });
 
   socket.on('edit_message', async (data: { roomId: string; messageId: string; newContent: string }, callback?: (response: { success: boolean; updatedMessage?: Message; error?: string }) => void) => {

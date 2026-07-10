@@ -14,6 +14,14 @@ import {
 } from '../utils/codeAgentRightPanelStore';
 import { CodeAgentWorkspacePanel } from './CodeAgentWorkspacePanel';
 
+const requestCodexThreadsMock = vi.hoisted(() => vi.fn());
+const requestCodexThreadMock = vi.hoisted(() => vi.fn());
+
+vi.mock('../utils/socket', () => ({
+  requestCodexThreads: requestCodexThreadsMock,
+  requestCodexThread: requestCodexThreadMock,
+}));
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string) => key,
@@ -93,7 +101,10 @@ function mockWorkspacePanelMobileLayout(matches: boolean) {
 
 describe('CodeAgentWorkspacePanel', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.stubGlobal('CSS', { escape: (value: string) => value });
+    requestCodexThreadsMock.mockResolvedValue({ threads: [], nextCursor: null });
+    requestCodexThreadMock.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -103,6 +114,41 @@ describe('CodeAgentWorkspacePanel', () => {
     resetCodeAgentDiffPanelStoreForTests();
     resetCodeAgentRightPanelStoreForTests();
     vi.unstubAllGlobals();
+  });
+
+  it('distinguishes loading, unavailable, and real session costs', () => {
+    const rendered = render(
+      <CodeAgentWorkspacePanel
+        room={room}
+        messages={[]}
+        mode="plan"
+        sessionCostUsd={null}
+      />
+    );
+
+    expect(screen.getByText('loadingSessionCost')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('$0.00');
+
+    rendered.rerender(
+      <CodeAgentWorkspacePanel
+        room={room}
+        messages={[]}
+        mode="plan"
+        sessionCostUsd={null}
+        isSessionCostUnavailable
+      />
+    );
+    expect(document.body.textContent).toContain('costUnavailable');
+
+    rendered.rerender(
+      <CodeAgentWorkspacePanel
+        room={room}
+        messages={[]}
+        mode="plan"
+        sessionCostUsd={0.25}
+      />
+    );
+    expect(document.body.textContent).toContain('$0.25');
   });
 
   it('renders plan mode as read-only workspace state', () => {
@@ -199,7 +245,28 @@ describe('CodeAgentWorkspacePanel', () => {
     );
 
     expect(screen.getByTestId('code-agent-context-usage').textContent).toBe('Context: 50%');
-    expect(screen.getByText('Cost: $0.000000')).toBeTruthy();
+    expect(screen.getByTestId('code-agent-workspace').textContent).toContain('sessionCost:$0.000000');
+  });
+
+  it('keeps network-backed workspace tabs disabled until the room session is verified', async () => {
+    const props = {
+      room: { ...room, codeAgentBackend: 'codex-app-server' as const },
+      messages: [] as Message[],
+      mode: 'plan' as const,
+      backend: 'codex-app-server' as const,
+      sessionCostUsd: 0,
+    };
+    const rendered = render(
+      <CodeAgentWorkspacePanel {...props} isRoomSessionReady={false} />
+    );
+
+    const changesTab = screen.getByRole('tab', { name: 'codeAgentChanges' }) as HTMLButtonElement;
+    expect(screen.queryByRole('tab', { name: 'codeAgentThreads' })).toBeNull();
+    expect(changesTab.getAttribute('aria-disabled')).toBe('true');
+
+    rendered.rerender(<CodeAgentWorkspacePanel {...props} isRoomSessionReady />);
+    const readyChangesTab = screen.getByRole('tab', { name: 'codeAgentChanges' }) as HTMLButtonElement;
+    expect(readyChangesTab.getAttribute('aria-disabled')).not.toBe('true');
   });
 
   it('keeps workspace tabs horizontally scrollable on narrow screens', () => {

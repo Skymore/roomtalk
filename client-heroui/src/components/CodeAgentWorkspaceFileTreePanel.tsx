@@ -329,7 +329,7 @@ function CodeAgentMobileFileTreeList({
           data-testid="code-agent-mobile-file-tree-pull-refresh"
           style={{ transform: `translateY(${Math.min(pullDistance, MOBILE_PULL_REFRESH_MAX_DISTANCE)}px)` }}
         >
-          <div className="flex h-7 w-7 items-center justify-center rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 text-[#87867f] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#8f8d86]">
+          <div className="flex h-7 w-7 items-center justify-center rounded-full border border-[#dedbd0] bg-[#faf9f5]/95 text-[#5e5d59] shadow-sm backdrop-blur dark:border-[#30302e] dark:bg-[#1d1d1b]/95 dark:text-[#8f8d86]">
             <RefreshCw
               className={`h-3.5 w-3.5 transition-transform ${
                 pullDistance >= MOBILE_PULL_REFRESH_THRESHOLD ? 'rotate-180 text-[#9f462c] dark:text-[#ffb197]' : ''
@@ -339,7 +339,7 @@ function CodeAgentMobileFileTreeList({
         </div>
       ) : null}
       {entriesPending ? (
-        <div className="mx-2 mb-1 flex items-center justify-between rounded-lg border border-[#dedbd0] px-2 py-1.5 text-[11px] text-[#87867f] dark:border-[#30302e] dark:text-[#8f8d86]">
+        <div className="mx-2 mb-1 flex items-center justify-between rounded-lg border border-[#dedbd0] px-2 py-1.5 text-[11px] text-[#5e5d59] dark:border-[#30302e] dark:text-[#8f8d86]">
           <span>{t('codeAgentWorkspaceIndexing')}</span>
           <button
             type="button"
@@ -353,7 +353,7 @@ function CodeAgentMobileFileTreeList({
       {visibleNodes.length === 0 ? (
         <div className="px-4 py-5">
           <div className="text-sm font-semibold text-[#141413] dark:text-[#faf9f5]">{t('codeAgentNoWorkspaceFiles')}</div>
-          <div className="mt-1 text-xs leading-5 text-[#87867f] dark:text-[#8f8d86]">
+          <div className="mt-1 text-xs leading-5 text-[#5e5d59] dark:text-[#8f8d86]">
             {searchQuery.trim().length > 0 ? t('codeAgentNoWorkspaceSearchResults') : t('codeAgentWorkspaceIndexEmpty')}
           </div>
         </div>
@@ -387,7 +387,7 @@ function CodeAgentMobileFileTreeList({
               >
                 {node.kind === 'directory' ? (
                   <ChevronRight
-                    className={`h-3.5 w-3.5 shrink-0 text-[#87867f] transition-transform dark:text-[#8f8d86] ${expanded ? 'rotate-90' : ''}`}
+                    className={`h-3.5 w-3.5 shrink-0 text-[#5e5d59] transition-transform dark:text-[#8f8d86] ${expanded ? 'rotate-90' : ''}`}
                   />
                 ) : (
                   <span aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
@@ -402,7 +402,7 @@ function CodeAgentMobileFileTreeList({
                   {node.name}
                 </span>
                 {node.kind === 'directory' ? (
-                  <span className="shrink-0 font-mono text-[10px] font-medium text-[#87867f] dark:text-[#8f8d86]">
+                  <span className="shrink-0 font-mono text-[10px] font-medium text-[#5e5d59] dark:text-[#8f8d86]">
                     {node.children.length}
                   </span>
                 ) : null}
@@ -484,11 +484,11 @@ export function CodeAgentWorkspaceFileTreePanel({
     ? 'flex h-9 min-h-9 shrink-0 items-center gap-2 overflow-x-auto border-b border-[#dedbd0] px-2 py-0 [scrollbar-width:none] dark:border-[#30302e] [&::-webkit-scrollbar]:hidden'
     : 'flex min-h-10 shrink-0 items-center gap-2 overflow-x-auto border-b border-[#dedbd0] px-2 py-1 [scrollbar-width:none] dark:border-[#30302e] [&::-webkit-scrollbar]:hidden';
   const toolbarButtonClassName = mobileLayout
-    ? 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-40 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]'
-    : 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-40 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]';
+    ? 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[#5e5d59] hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-40 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]'
+    : 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#5e5d59] hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-not-allowed disabled:opacity-40 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]';
   const fileCountClassName = mobileLayout
     ? 'max-w-[7rem] shrink-0 truncate text-sm font-medium text-[#5e5d59] dark:text-[#b0aea5]'
-    : 'shrink-0 truncate text-[11px] text-[#87867f] dark:text-[#8f8d86]';
+    : 'shrink-0 truncate text-[11px] text-[#5e5d59] dark:text-[#8f8d86]';
   const readOnlyTitle = workspaceEditable ? undefined : t('codeAgentReadOnlyDescription');
 
   useEffect(() => {
@@ -626,11 +626,11 @@ export function CodeAgentWorkspaceFileTreePanel({
           {mobileLayout && mobileSearchOpen ? (
             <div className="shrink-0 border-b border-[#dedbd0] px-2 py-2 dark:border-[#30302e]" data-testid="code-agent-mobile-file-tree-search-row">
               <div className="flex min-h-9 items-center gap-2 rounded-lg border border-[#dedbd0] bg-[#f5f4ed] px-2 dark:border-[#30302e] dark:bg-[#141413]">
-                <Search className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+                <Search className="h-3.5 w-3.5 shrink-0 text-[#5e5d59] dark:text-[#8f8d86]" />
                 <input
                   ref={mobileSearchInputRef}
                   value={mobileSearchQuery}
-                  className="min-w-0 flex-1 bg-transparent text-sm text-[#141413] outline-none placeholder:text-[#87867f] dark:text-[#faf9f5] dark:placeholder:text-[#8f8d86]"
+                  className="min-w-0 flex-1 bg-transparent text-sm text-[#141413] outline-none placeholder:text-[#5e5d59] dark:text-[#faf9f5] dark:placeholder:text-[#8f8d86]"
                   placeholder={t('codeAgentSearchWorkspaceFiles')}
                   aria-label={t('codeAgentSearchWorkspaceFiles')}
                   onChange={(event) => setMobileSearchQuery(event.currentTarget.value)}
@@ -643,7 +643,7 @@ export function CodeAgentWorkspaceFileTreePanel({
                 />
                 <button
                   type="button"
-                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#87867f] hover:bg-[#dedbd0] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#5e5d59] hover:bg-[#dedbd0] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
                   aria-label={t('close')}
                   onClick={() => {
                     setMobileSearchQuery('');

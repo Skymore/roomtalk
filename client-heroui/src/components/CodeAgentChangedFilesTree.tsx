@@ -119,25 +119,25 @@ export const CodeAgentChangedFilesTree: React.FC<CodeAgentChangedFilesTreeProps>
             onClick={() => toggleDirectory(node.path)}
           >
             <ChevronRight
-              className={`${mobileLayout ? 'h-4 w-4' : 'h-3.5 w-3.5'} shrink-0 text-[#87867f] transition-transform dark:text-[#8f8d86] ${isExpanded ? 'rotate-90' : ''}`}
+              className={`${mobileLayout ? 'h-4 w-4' : 'h-3.5 w-3.5'} shrink-0 text-[#5e5d59] transition-transform dark:text-[#8f8d86] ${isExpanded ? 'rotate-90' : ''}`}
             />
             {mobileLayout ? (
               <CodeAgentPierreEntryIcon
                 pathValue={node.path}
                 kind="directory"
                 theme={resolvedTheme}
-                className="size-4 shrink-0 text-[#87867f] dark:text-[#8f8d86]"
+                className="size-4 shrink-0 text-[#5e5d59] dark:text-[#8f8d86]"
               />
             ) : isExpanded ? (
-              <Folder className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+              <Folder className="h-3.5 w-3.5 shrink-0 text-[#5e5d59] dark:text-[#8f8d86]" />
             ) : (
-              <FolderClosed className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+              <FolderClosed className="h-3.5 w-3.5 shrink-0 text-[#5e5d59] dark:text-[#8f8d86]" />
             )}
             <span className={`${mobileLayout ? 'text-sm font-medium leading-[19px]' : 'font-mono text-[11px]'} min-w-0 flex-1 truncate text-[#4d4c48] dark:text-[#e8e6dc]`}>
               {node.name}
             </span>
             {mobileLayout ? (
-              <span className="shrink-0 font-mono text-[10px] font-medium text-[#87867f] dark:text-[#8f8d86]">
+              <span className="shrink-0 font-mono text-[10px] font-medium text-[#5e5d59] dark:text-[#8f8d86]">
                 {node.children.length}
               </span>
             ) : null}
@@ -184,7 +184,7 @@ export const CodeAgentChangedFilesTree: React.FC<CodeAgentChangedFilesTreeProps>
           pathValue={node.path}
           kind="file"
           theme={resolvedTheme}
-          className={`${mobileLayout ? 'size-4' : 'h-3.5 w-3.5'} shrink-0 text-[#87867f] dark:text-[#8f8d86]`}
+          className={`${mobileLayout ? 'size-4' : 'h-3.5 w-3.5'} shrink-0 text-[#5e5d59] dark:text-[#8f8d86]`}
         />
         <span className={`${mobileLayout ? 'text-sm font-medium leading-[19px]' : 'font-mono text-[11px]'} min-w-0 flex-1 truncate`} title={node.path}>
           {node.name}

@@ -4,10 +4,6 @@ import { Button } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { useTranslation } from 'react-i18next';
 
-// Make sure to bind modal to your appElement (usually '#root')
-// Do this once in your main App component or index.tsx
-// Modal.setAppElement('#root'); // Example
-
 interface DeleteConfirmationModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -30,7 +26,6 @@ export const DeleteConfirmationModal: React.FC<DeleteConfirmationModalProps> = (
       overlayClassName="fixed inset-0 bg-black/50 backdrop-blur-sm z-[1000] flex items-center justify-center"
       className="relative m-4 w-full max-w-md rounded-2xl border border-[#dedbd0] bg-[#faf9f5] p-5 text-[#141413] shadow-xl outline-none transition-all duration-200 dark:border-[#30302e] dark:bg-[#1d1d1b] dark:text-[#faf9f5]"
       contentLabel={t('confirmDeletion')}
-      ariaHideApp={false} // Set to true if you configure appElement
     >
       <div className="flex flex-col">
         <h2 className="mb-3 font-serif text-lg font-medium text-[#141413] dark:text-[#faf9f5]">

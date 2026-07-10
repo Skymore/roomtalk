@@ -16,8 +16,9 @@ export const BottomNav: React.FC<BottomNavProps> = ({ view, setView, currentRoom
   const inactiveClass = "text-[#5e5d59] data-[hover=true]:bg-[#e8e6dc] dark:text-[#b0aea5] dark:data-[hover=true]:bg-[#30302e]";
 
   return (
-    <div
+    <nav
       data-testid="bottom-nav"
+      aria-label={t("menu")}
       className="mobile-bottom-nav z-10 flex-shrink-0 border-t border-[#dedbd0] bg-[#faf9f5]/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-md dark:border-[#30302e] dark:bg-[#1d1d1b]/95 md:hidden"
     >
       <div className="flex justify-center">
@@ -29,6 +30,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({ view, setView, currentRoom
             onPress={() => setView("rooms")}
             className={`h-7 w-7 min-w-0 rounded-xl ${view === "rooms" ? activeClass : inactiveClass}`}
             aria-label={t("home")}
+            aria-current={view === "rooms" ? "page" : undefined}
           >
             <Icon icon="lucide:home" className="text-base" />
           </Button>
@@ -40,6 +42,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({ view, setView, currentRoom
             onPress={() => setView("saved")}
             className={`h-7 w-7 min-w-0 rounded-xl ${view === "saved" ? activeClass : inactiveClass}`}
             aria-label={t("savedRooms")}
+            aria-current={view === "saved" ? "page" : undefined}
           >
             <Icon icon="lucide:bookmark" className="text-base" />
           </Button>
@@ -51,8 +54,9 @@ export const BottomNav: React.FC<BottomNavProps> = ({ view, setView, currentRoom
             color="default"
             onPress={() => currentRoom ? setView("chat") : null}
             isDisabled={!currentRoom}
-            className={`h-7 w-7 min-w-0 rounded-xl ${view === "chat" ? "bg-[#c96442] text-[#faf9f5] shadow-[0_0_0_1px_#c96442]" : inactiveClass}`}
+            className={`h-7 w-7 min-w-0 rounded-xl ${view === "chat" ? "bg-secondary text-secondary-foreground shadow-[0_0_0_1px_hsl(var(--heroui-secondary))]" : inactiveClass}`}
             aria-label={currentRoom ? currentRoom.name : t("chatRooms")}
+            aria-current={view === "chat" ? "page" : undefined}
           >
             <Icon icon="lucide:message-circle" className="text-sm" />
           </Button>
@@ -64,11 +68,12 @@ export const BottomNav: React.FC<BottomNavProps> = ({ view, setView, currentRoom
             onPress={() => setView("settings")}
             className={`h-7 w-7 min-w-0 rounded-xl ${view === "settings" ? activeClass : inactiveClass}`}
             aria-label={t("settings")}
+            aria-current={view === "settings" ? "page" : undefined}
           >
             <Icon icon="lucide:settings" className="text-base" />
           </Button>
         </div>
       </div>
-    </div>
+    </nav>
   );
 };

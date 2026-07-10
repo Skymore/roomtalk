@@ -210,9 +210,9 @@ export function CodeAgentFilePreviewHeader({
               className="flex min-w-0 shrink-0 items-center"
               data-current-file-crumb={crumb.kind === 'file'}
             >
-              {index > 0 ? <ChevronRight className="mx-1 h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" /> : null}
+              {index > 0 ? <ChevronRight className="mx-1 h-3.5 w-3.5 shrink-0 text-[#5e5d59] dark:text-[#8f8d86]" /> : null}
               <span
-                className={`max-w-40 truncate ${crumb.kind === 'file' ? 'font-medium text-[#141413] dark:text-[#faf9f5]' : 'text-[#87867f] dark:text-[#8f8d86]'}`}
+                className={`max-w-40 truncate ${crumb.kind === 'file' ? 'font-medium text-[#141413] dark:text-[#faf9f5]' : 'text-[#5e5d59] dark:text-[#8f8d86]'}`}
                 title={crumb.path || projectName}
               >
                 {crumb.label}
@@ -244,7 +244,7 @@ export function CodeAgentFilePreviewHeader({
   } shrink-0 transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
     copiedPath
       ? 'text-[#9f462c] dark:text-[#ffb197]'
-      : 'text-[#87867f] dark:text-[#8f8d86]'
+      : 'text-[#5e5d59] dark:text-[#8f8d86]'
   }`;
 
   const copyButton = (
@@ -279,13 +279,13 @@ export function CodeAgentFilePreviewHeader({
           }`}
         />
       )}
-      <TerminalSquare className="h-3.5 w-3.5 shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
+      <TerminalSquare className="h-3.5 w-3.5 shrink-0 text-[#5e5d59] dark:text-[#8f8d86]" />
       <span className="min-w-0 truncate">{devServerLabel}</span>
     </span>
   ) : null;
 
   if (mobileLayout) {
-    const mobileIconButtonClass = 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[#87867f] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-wait disabled:opacity-60 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]';
+    const mobileIconButtonClass = 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[#5e5d59] transition-colors hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-wait disabled:opacity-60 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]';
     const mobileActiveIconButtonClass = `${mobileIconButtonClass} text-[#9f462c] dark:text-[#ffb197]`;
 
     return (
@@ -394,7 +394,7 @@ export function CodeAgentFilePreviewHeader({
       {copyButton}
       <button
         type="button"
-        className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-wait disabled:opacity-60 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+        className="rounded-md p-1.5 text-[#5e5d59] hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-wait disabled:opacity-60 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
         aria-label={refreshCurrentFileLabel}
         title={refreshCurrentFileLabel}
         disabled={refreshCurrentFilePending}
@@ -405,7 +405,7 @@ export function CodeAgentFilePreviewHeader({
       {onDownloadFile ? (
         <button
           type="button"
-          className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+          className="rounded-md p-1.5 text-[#5e5d59] hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
           aria-label={t('codeAgentDownloadFile')}
           title={t('codeAgentDownloadFile')}
           onClick={onDownloadFile}
@@ -419,7 +419,7 @@ export function CodeAgentFilePreviewHeader({
           className={`rounded-md p-1.5 transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
             wordWrap
               ? 'text-[#9f462c] dark:text-[#ffb197]'
-              : 'text-[#87867f] dark:text-[#8f8d86]'
+              : 'text-[#5e5d59] dark:text-[#8f8d86]'
           }`}
           aria-label={wordWrapLabel}
           aria-pressed={wordWrap}
@@ -432,7 +432,7 @@ export function CodeAgentFilePreviewHeader({
       {canOpenInBrowserPreview ? (
         <button
           type="button"
-          className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-wait disabled:opacity-60 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+          className="rounded-md p-1.5 text-[#5e5d59] hover:bg-[#f0eee6] hover:text-[#141413] disabled:cursor-wait disabled:opacity-60 dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
           aria-label={t('codeAgentOpenFileInPreview')}
           title={t('codeAgentOpenFileInPreview')}
           disabled={browserPreviewPending}
@@ -444,7 +444,7 @@ export function CodeAgentFilePreviewHeader({
       {supportsPreview ? (
         <button
           type="button"
-          className="rounded-md p-1.5 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
+          className="rounded-md p-1.5 text-[#5e5d59] hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]"
           aria-label={previewToggleLabel}
           aria-pressed={renderPreview}
           title={previewToggleLabel}
@@ -458,7 +458,7 @@ export function CodeAgentFilePreviewHeader({
         className={`rounded-md p-1.5 transition-colors hover:bg-[#f0eee6] hover:text-[#141413] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5] ${
           explorerOpen
             ? 'text-[#9f462c] dark:text-[#ffb197]'
-            : 'text-[#87867f] dark:text-[#8f8d86]'
+            : 'text-[#5e5d59] dark:text-[#8f8d86]'
         }`}
         aria-label={explorerOpen ? t('codeAgentHideFileExplorer') : t('codeAgentShowFileExplorer')}
         aria-pressed={explorerOpen}

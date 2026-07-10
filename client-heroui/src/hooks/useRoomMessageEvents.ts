@@ -2,12 +2,13 @@ import { Dispatch, RefObject, SetStateAction, useEffect, useRef } from 'react';
 import { clientId, socket } from '../utils/socket';
 import { A2UIUpdateEvent, AICostTotalEvent, AIChunkEvent, AIStreamEndEvent, AIStreamErrorEvent, AIUsageUpdateEvent, Message, RoomAgentTurn, RoomMessageHistoryPayload } from '../utils/types';
 import { appendA2UIPayload, appendAIChunk, completeAIMessage, upsertMessage } from '../utils/messageState';
-import { deleteCachedRoomMessageWindow, readCachedRoomMessageWindow, readMemoryRoomMessageWindow, writeCachedRoomMessageWindow } from '../utils/messageHistoryCache';
+import { clearCachedRoomMessageWindow, readCachedRoomMessageWindow, readMemoryRoomMessageWindow, writeCachedRoomMessageWindow } from '../utils/messageHistoryCache';
 
 const ROOM_MESSAGE_PAGE_LIMIT = 80;
 
 interface UseRoomMessageEventsArgs {
   roomId: string;
+  isRoomSessionReady?: boolean;
   containerRef: RefObject<HTMLDivElement>;
   getCurrentMessages: () => Message[];
   updateMessages: (updater: SetStateAction<Message[]>) => void;
@@ -30,6 +31,7 @@ interface UseRoomMessageEventsArgs {
 
 export const useRoomMessageEvents = ({
   roomId,
+  isRoomSessionReady = true,
   containerRef,
   getCurrentMessages,
   updateMessages,
@@ -164,7 +166,17 @@ export const useRoomMessageEvents = ({
     }
 
     const handleMessageHistory = (historyPayload: RoomMessageHistoryPayload) => {
+      if (historyPayload.roomId !== roomId) return;
+
       serverHistoryLoaded = true;
+      const requestedWindowChanged = typeof historyPayload.requestedHistoryVersion === 'number'
+        && historyPayload.requestedHistoryVersion !== historyVersionRef.current;
+      const serverWindowIsOlder = historyPayload.historyVersion < historyVersionRef.current;
+      if (requestedWindowChanged || serverWindowIsOlder) {
+        setIsLoading(false);
+        setIsLoadingMore(false);
+        return;
+      }
       const mode = historyPayload.mode || 'replace';
       const roomMessages = filterRoomMessages(historyPayload.messages);
 
@@ -202,6 +214,7 @@ export const useRoomMessageEvents = ({
     const handleNewMessage = (message: Message) => {
       if (message.roomId !== roomId) return;
 
+      serverHistoryLoaded = true;
       const nextHistoryVersion = bumpLocalHistoryVersion();
       updateMessages(prev => {
         const next = upsertMessage(prev, message);
@@ -259,6 +272,7 @@ export const useRoomMessageEvents = ({
 
     const handleAIStreamEnd = (data: AIStreamEndEvent) => {
       if (data.roomId !== roomId) return;
+      serverHistoryLoaded = true;
       const nextHistoryVersion = bumpLocalHistoryVersion();
       updateMessages(prev => {
         const next = completeAIMessage(prev, data.messageId, {
@@ -291,6 +305,7 @@ export const useRoomMessageEvents = ({
 
     const handleAIStreamError = (data: AIStreamErrorEvent) => {
       if (data.roomId !== roomId) return;
+      serverHistoryLoaded = true;
       console.error('AI stream error for message:', data.messageId, data.error);
       const nextHistoryVersion = bumpLocalHistoryVersion();
       updateMessages(prev => {
@@ -307,9 +322,10 @@ export const useRoomMessageEvents = ({
 
     const handleMessagesCleared = (clearedRoomId: string) => {
       if (clearedRoomId === roomId) {
+        serverHistoryLoaded = true;
         updateMessages([]);
         setAgentTurns([]);
-        deleteCachedRoomMessageWindow(roomId);
+        void clearCachedRoomMessageWindow(roomId);
         bumpLocalHistoryVersion();
         setHasMoreMessagesState(false);
         setOldestMessageIdState(undefined);
@@ -321,6 +337,7 @@ export const useRoomMessageEvents = ({
 
     const handleMessageEdited = (updatedMessage: Message) => {
       if (updatedMessage.roomId === roomId) {
+        serverHistoryLoaded = true;
         const nextHistoryVersion = bumpLocalHistoryVersion();
         updateMessages(prev => {
           let changed = false;
@@ -344,6 +361,7 @@ export const useRoomMessageEvents = ({
 
     const handleMessageDeleted = (deletedMessageId: string, deletedRoomId: string) => {
       if (deletedRoomId === roomId) {
+        serverHistoryLoaded = true;
         const nextHistoryVersion = bumpLocalHistoryVersion();
         updateMessages(prev => {
           const next = prev.filter(msg => msg.id !== deletedMessageId);
@@ -377,7 +395,13 @@ export const useRoomMessageEvents = ({
     socket.on('message_edited', handleMessageEdited);
     socket.on('message_deleted', handleMessageDeleted);
 
-    socket.emit('get_room_messages', { roomId, limit: ROOM_MESSAGE_PAGE_LIMIT });
+    if (isRoomSessionReady) {
+      socket.emit('get_room_messages', {
+        roomId,
+        limit: ROOM_MESSAGE_PAGE_LIMIT,
+        baseHistoryVersion: historyVersionRef.current,
+      });
+    }
 
     const loadingTimeout = setTimeout(() => {
       setIsLoading(false);
@@ -420,15 +444,22 @@ export const useRoomMessageEvents = ({
     closeEditModal,
     onAIStreamSettled,
     warningPrefix,
+    isRoomSessionReady,
   ]);
 
   useEffect(() => {
     const handleConnect = () => {
-      socket.emit('get_room_messages', { roomId, limit: ROOM_MESSAGE_PAGE_LIMIT });
+      if (isRoomSessionReady) {
+        socket.emit('get_room_messages', {
+          roomId,
+          limit: ROOM_MESSAGE_PAGE_LIMIT,
+          baseHistoryVersion: historyVersionRef.current,
+        });
+      }
     };
     socket.on('connect', handleConnect);
     return () => {
       socket.off('connect', handleConnect);
     };
-  }, [roomId]);
+  }, [isRoomSessionReady, roomId]);
 };

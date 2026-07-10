@@ -47,13 +47,13 @@ export const PostingScheduleDetails: React.FC<PostingScheduleDetailsProps> = ({
             </div>
           ))}
           {postingSchedule?.timezone && (
-            <div className="text-[11px] text-[#87867f] dark:text-[#b0aea5]">
+            <div className="text-[11px] text-[#5e5d59] dark:text-[#b0aea5]">
               {postingSchedule.timezone}
             </div>
           )}
         </div>
       ) : (
-        <div className="text-[#87867f] dark:text-[#b0aea5]">{t('noPostingWindows')}</div>
+        <div className="text-[#5e5d59] dark:text-[#b0aea5]">{t('noPostingWindows')}</div>
       )}
     </div>
   );

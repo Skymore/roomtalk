@@ -29,6 +29,8 @@ interface ChatHeaderProps {
   currentRoom: Room;
   memberCount: number | null;
   isRestoringRoom: boolean;
+  isRoomSessionReady: boolean;
+  onRetryRoomSession: () => void;
   handleCopyToClipboard: (text: string) => void;
   handleShareRoom: () => void;
   handleToggleSave: () => void;
@@ -50,6 +52,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   currentRoom,
   memberCount,
   isRestoringRoom,
+  isRoomSessionReady,
+  onRetryRoomSession,
   handleCopyToClipboard,
   handleShareRoom,
   handleToggleSave,
@@ -86,6 +90,12 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
     if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
   }, []);
 
+  useEffect(() => {
+    if (!isRoomSessionReady || !canManageRoom) {
+      setIsSettingsOpen(false);
+    }
+  }, [canManageRoom, isRoomSessionReady]);
+
   const handleCopyRoomId = () => {
     handleCopyToClipboard(currentRoom.id);
     setCopiedRoomId(true);
@@ -94,7 +104,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   };
 
   const handleMembersOpenChange = (isOpen: boolean) => {
-    if (!isOpen) {
+    if (!isOpen || !isRoomSessionReady) {
       return;
     }
     setIsLoadingMembers(true);
@@ -131,6 +141,18 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             <Icon icon="lucide:loader-circle" className="h-4 w-4 flex-shrink-0 animate-spin text-[#c96442] dark:text-[#d97757]" />
           ) : null}
           <h2 data-testid="chat-room-title" className="w-[38vw] max-w-[148px] flex-shrink-0 truncate font-serif text-base font-medium leading-tight text-[#141413] dark:text-[#faf9f5] md:w-[360px] md:max-w-[360px] md:text-lg">{currentRoom.name}</h2>
+          {!isRoomSessionReady && !isRestoringRoom ? (
+            <Button
+              size="sm"
+              variant="flat"
+              aria-label={t('retry')}
+              onPress={onRetryRoomSession}
+              className="h-7 min-w-7 flex-shrink-0 px-1.5 text-xs"
+              startContent={<Icon icon="lucide:refresh-cw" className="h-3.5 w-3.5" />}
+            >
+              <span className="hidden sm:inline">{t('retry')}</span>
+            </Button>
+          ) : null}
           {isCodeAgent && (
             <Chip
               size="sm"
@@ -148,9 +170,10 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             <PopoverTrigger>
               <button
                 type="button"
+                disabled={!isRoomSessionReady}
                 data-testid="room-member-count"
                 aria-label={t('onlineMembers')}
-                className="flex flex-shrink-0 items-center rounded-md px-1 text-xs text-[#5e5d59] transition-colors hover:bg-[#e8e6dc] dark:text-[#b0aea5] dark:hover:bg-[#30302e]"
+                className="flex flex-shrink-0 items-center rounded-md px-1 text-xs text-[#5e5d59] transition-colors hover:bg-[#e8e6dc] disabled:cursor-not-allowed disabled:opacity-50 dark:text-[#b0aea5] dark:hover:bg-[#30302e]"
               >
                 <Icon icon="lucide:users" className="mr-1" width={14} />
                 {memberCount ?? "..."}
@@ -165,7 +188,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                   <Icon icon="lucide:loader-circle" className="h-4 w-4 animate-spin text-[#c96442] dark:text-[#d97757]" />
                 </div>
               ) : onlineMembers.length === 0 ? (
-                <div className="px-1 py-2 text-xs text-[#87867f] dark:text-[#b0aea5]">{t('noOnlineMembers')}</div>
+                <div className="px-1 py-2 text-xs text-[#5e5d59] dark:text-[#b0aea5]">{t('noOnlineMembers')}</div>
               ) : (
                 <ul className="flex flex-col gap-0.5">
                   {onlineMembers.map((member) => (
@@ -208,7 +231,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               </span>
               <Icon
                 icon={copiedRoomId ? 'lucide:check' : 'lucide:copy'}
-                className={`ml-1 flex-shrink-0 transition-colors ${copiedRoomId ? 'text-[#3aa76d]' : 'text-[#87867f] dark:text-[#b0aea5]'}`}
+                className={`ml-1 flex-shrink-0 transition-colors ${copiedRoomId ? 'text-[#3aa76d]' : 'text-[#5e5d59] dark:text-[#b0aea5]'}`}
                 width={12}
               />
             </div>
@@ -232,6 +255,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           <Button
             size="sm"
             variant={isSaved ? 'flat' : 'light'}
+            isDisabled={!isRoomSessionReady}
             onPress={handleToggleSave}
             aria-label={`${isSaved ? t('unsave') : t('saveAction')} ${t('room')}`}
             className={`hidden rounded-lg px-3 md:inline-flex ${
@@ -251,7 +275,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             </Button>
           </DropdownTrigger>
           <DropdownMenu aria-label={t('ariaLabelRoomActions')}>
-            <DropdownItem key="share" startContent={<Icon icon="lucide:share-2" />} onPress={handleShareRoom}>
+            <DropdownItem key="share" isDisabled={!isRoomSessionReady} startContent={<Icon icon="lucide:share-2" />} onPress={handleShareRoom}>
               {t('share')}
             </DropdownItem>
             {hasPostingSchedule ? (
@@ -260,12 +284,13 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               </DropdownItem>
             ) : null}
             {canManageRoom ? (
-              <DropdownItem key="roomSettings" startContent={<Icon icon="lucide:settings-2" />} onPress={() => setIsSettingsOpen(true)}>
+              <DropdownItem key="roomSettings" isDisabled={!isRoomSessionReady} startContent={<Icon icon="lucide:settings-2" />} onPress={() => setIsSettingsOpen(true)}>
                 {t('settings')}
               </DropdownItem>
             ) : null}
             <DropdownItem
               key="save"
+              isDisabled={!isRoomSessionReady}
               startContent={<Icon icon={isSaved ? "lucide:bookmark-minus" : "lucide:bookmark-plus"} />}
               onPress={handleToggleSave}
               className={isSaved ? "text-warning-600 dark:text-warning-500" : ""}
@@ -286,7 +311,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
       </div>
     </div>
     <RoomSettingsModal
-      isOpen={isSettingsOpen}
+      isOpen={isSettingsOpen && isRoomSessionReady}
       room={currentRoom}
       roomPermissions={roomPermissions}
       clientId={clientId}
@@ -302,7 +327,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
       <ModalContent>
         <ModalHeader className="flex flex-col gap-1">
           {t('postingScheduleDetails')}
-          <span className="text-xs font-normal text-[#87867f] dark:text-[#b0aea5]">{currentRoom.name}</span>
+          <span className="text-xs font-normal text-[#5e5d59] dark:text-[#b0aea5]">{currentRoom.name}</span>
         </ModalHeader>
         <ModalBody className="pb-5 pt-0">
           <PostingScheduleDetails postingSchedule={currentRoom.postingSchedule} showTitle={false} />

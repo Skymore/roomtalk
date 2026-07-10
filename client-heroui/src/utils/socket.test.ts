@@ -9,6 +9,12 @@ const socketMock = vi.hoisted(() => {
   const handlers = new Map<string, Set<(...args: any[]) => void>>();
   const ackResponses = new Map<string, AckResponse>();
   let nextSocketId = 1;
+  function defaultEmit(event: string, _payload?: unknown, callback?: (response: AckResponse) => void) {
+    if (typeof callback === 'function') {
+      callback(ackResponses.get(event) || { success: true });
+    }
+    return socket;
+  }
 
   const socket = {
     id: 'socket-1',
@@ -35,12 +41,7 @@ const socketMock = vi.hoisted(() => {
       handlers.get(event)?.delete(handler);
       return socket;
     }),
-    emit: vi.fn((event: string, _payload?: unknown, callback?: (response: AckResponse) => void) => {
-      if (typeof callback === 'function') {
-        callback(ackResponses.get(event) || { success: true });
-      }
-      return socket;
-    }),
+    emit: vi.fn(defaultEmit),
     connect: vi.fn(() => {
       socket.connected = true;
       handlers.get('connect')?.forEach(handler => handler());
@@ -52,6 +53,7 @@ const socketMock = vi.hoisted(() => {
       nextSocketId += 1;
       socket.id = `socket-${nextSocketId}`;
       socket.connected = true;
+      socket.emit.mockImplementation(defaultEmit);
     },
   };
 
@@ -80,8 +82,10 @@ const {
   getRoomRoleMembers,
   getSavedRoomsFromServer,
   joinRoom,
+  leaveRoom,
   loginWithClientPassword,
   loginWithGoogleCredential,
+  onRoomMembershipRepairFailure,
   onUsernameAdopted,
   removeRoomMember,
   saveRoomToServer,
@@ -93,6 +97,7 @@ const {
   requestResolveCodeWorkspaceFilePreview,
   requestResolveCodeWorkspacePreviewTarget,
   requestCodeWorkspaceRefs,
+  resetRoomJoinStateForTests,
   setClientPassword,
   setClientAuthToken,
   setUsername,
@@ -119,6 +124,28 @@ const room = (overrides: Partial<Room> = {}): Room => ({
   ...overrides,
 });
 
+const deferRoomJoinAcknowledgements = () => {
+  const joins: Array<{
+    payload: { roomId: string; password?: string };
+    acknowledge: (response: AckResponse) => void;
+  }> = [];
+  const leaves: string[] = [];
+  socketMock.emit.mockImplementation((event: string, payload?: unknown, callback?: (response: AckResponse) => void) => {
+    if (event === 'register') {
+      callback?.({ success: true });
+    } else if (event === 'join_room' && callback) {
+      joins.push({
+        payload: payload as { roomId: string; password?: string },
+        acknowledge: callback,
+      });
+    } else if (event === 'leave_room') {
+      leaves.push(payload as string);
+    }
+    return socketMock;
+  });
+  return { joins, leaves };
+};
+
 describe('socket message acknowledgement helpers', () => {
   beforeEach(() => {
     socketMock.reset();
@@ -128,6 +155,7 @@ describe('socket message acknowledgement helpers', () => {
     localStorage.setItem('clientId', 'client-uuid');
     localStorage.removeItem('clientAuthToken');
     localStorage.removeItem('roomtalk_username');
+    resetRoomJoinStateForTests();
   });
 
   it('returns the saved message from send_message acknowledgements', async () => {
@@ -734,6 +762,119 @@ describe('socket message acknowledgement helpers', () => {
     });
   });
 
+  it('reports object upload progress and completes after the XHR upload', async () => {
+    const progress = vi.fn();
+    const savedMessage = message({ id: 'media-progress-1', messageType: 'media', content: '' });
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        assetId: 'asset-progress-1',
+        uploadUrl: '/api/media/local-objects/progress-key',
+        objectKey: 'rooms/room-1/media/file/asset-progress-1',
+      }), { status: 201, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(savedMessage), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+
+    class ProgressXMLHttpRequest {
+      upload: { onprogress: ((event: ProgressEvent) => void) | null } = { onprogress: null };
+      status = 0;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      onabort: (() => void) | null = null;
+      open = vi.fn();
+      setRequestHeader = vi.fn();
+      abort = vi.fn(() => this.onabort?.());
+      send = vi.fn(() => {
+        this.upload.onprogress?.({ lengthComputable: true, loaded: 5, total: 10 } as ProgressEvent);
+        this.status = 204;
+        this.onload?.();
+      });
+    }
+    vi.stubGlobal('XMLHttpRequest', ProgressXMLHttpRequest);
+
+    await expect(uploadMediaMessage({
+      file: new Blob(['0123456789'], { type: 'text/plain' }),
+      roomId: 'room-1',
+      kind: 'file',
+      filename: 'progress.txt',
+      onUploadProgress: progress,
+    })).resolves.toEqual(savedMessage);
+
+    expect(progress).toHaveBeenNthCalledWith(1, 50);
+    expect(progress).toHaveBeenLastCalledWith(100);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('aborts during upload creation without starting the object PUT or completion request', async () => {
+    const send = vi.fn();
+    class AbortXMLHttpRequest {
+      upload = { onprogress: null };
+      open = vi.fn();
+      setRequestHeader = vi.fn();
+      send = send;
+      abort = vi.fn();
+    }
+    vi.stubGlobal('XMLHttpRequest', AbortXMLHttpRequest);
+    fetchMock.mockImplementationOnce((_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    }));
+    const controller = new AbortController();
+
+    const uploadPromise = uploadMediaMessage({
+      file: new Blob(['cancel me'], { type: 'text/plain' }),
+      roomId: 'room-1',
+      kind: 'file',
+      filename: 'cancel.txt',
+      signal: controller.signal,
+      onUploadProgress: vi.fn(),
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    controller.abort();
+
+    await expect(uploadPromise).rejects.toMatchObject({ name: 'AbortError' });
+    expect(send).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a signal that becomes aborted before the object PUT is opened', async () => {
+    const xhrConstructed = vi.fn();
+    class UnexpectedXMLHttpRequest {
+      constructor() {
+        xhrConstructed();
+      }
+    }
+    vi.stubGlobal('XMLHttpRequest', UnexpectedXMLHttpRequest);
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      assetId: 'asset-cancelled-before-put',
+      uploadUrl: '/api/media/local-objects/cancelled-before-put',
+      objectKey: 'rooms/room-1/media/file/asset-cancelled-before-put',
+    }), { status: 201, headers: { 'Content-Type': 'application/json' } }));
+
+    let abortedReads = 0;
+    const stagedSignal = {
+      get aborted() {
+        abortedReads += 1;
+        return abortedReads >= 2;
+      },
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as AbortSignal;
+
+    await expect(uploadMediaMessage({
+      file: new Blob(['cancel before PUT'], { type: 'text/plain' }),
+      roomId: 'room-1',
+      kind: 'file',
+      filename: 'cancel-before-put.txt',
+      signal: stagedSignal,
+      onUploadProgress: vi.fn(),
+    })).rejects.toMatchObject({ name: 'AbortError' });
+
+    expect(xhrConstructed).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('includes the client auth token when creating and completing media uploads', async () => {
     setClientAuthToken('auth-token-1');
     const savedMessage = message({
@@ -1105,5 +1246,269 @@ describe('socket message acknowledgement helpers', () => {
       { roomId: joinedRoom.id, password: 'secret' },
       expect.any(Function)
     );
+  });
+
+  it('repairs the latest room when an older join acknowledgement arrives last', async () => {
+    const { joins, leaves } = deferRoomJoinAcknowledgements();
+    const roomA = room({ id: 'room-a', name: 'Room A' });
+    const roomB = room({ id: 'room-b', name: 'Room B' });
+
+    const joinA = joinRoom(roomA.id, 'a-secret');
+    const joinB = joinRoom(roomB.id, 'b-secret');
+    await vi.waitFor(() => expect(joins).toHaveLength(2));
+
+    joins[1].acknowledge({ success: true, room: roomB, memberCount: 2 });
+    await expect(joinB).resolves.toMatchObject({ room: roomB });
+    joins[0].acknowledge({ success: true, room: roomA, memberCount: 1 });
+    await expect(joinA).resolves.toMatchObject({ room: roomA });
+
+    await vi.waitFor(() => expect(joins).toHaveLength(3));
+    expect(leaves).toEqual([roomA.id]);
+    expect(joins[2].payload).toEqual({ roomId: roomB.id, password: 'b-secret' });
+    joins[2].acknowledge({ success: true, room: roomB, memberCount: 4 });
+    await vi.waitFor(() => expect(getRoomMemberCount(roomB.id)).toBe(4));
+  });
+
+  it('repairs after the latest join settles because ack order does not prove mutation order', async () => {
+    const { joins, leaves } = deferRoomJoinAcknowledgements();
+    const roomA = room({ id: 'room-a', name: 'Room A' });
+    const roomB = room({ id: 'room-b', name: 'Room B' });
+
+    const joinA = joinRoom(roomA.id);
+    const joinB = joinRoom(roomB.id);
+    await vi.waitFor(() => expect(joins).toHaveLength(2));
+
+    joins[0].acknowledge({ success: true, room: roomA });
+    await expect(joinA).resolves.toMatchObject({ room: roomA });
+    await Promise.resolve();
+    expect(joins).toHaveLength(2);
+
+    joins[1].acknowledge({ success: true, room: roomB });
+    await expect(joinB).resolves.toMatchObject({ room: roomB });
+    await vi.waitFor(() => expect(joins).toHaveLength(3));
+    expect(leaves).toEqual([roomA.id]);
+    expect(joins[2].payload).toEqual({ roomId: roomB.id, password: undefined });
+    joins[2].acknowledge({ success: true, room: roomB, memberCount: 3 });
+    await vi.waitFor(() => expect(getRoomMemberCount(roomB.id)).toBe(3));
+  });
+
+  it('repairs the latest room after a stale join fails because the server outcome may be partial', async () => {
+    const { joins, leaves } = deferRoomJoinAcknowledgements();
+    const roomA = room({ id: 'room-a', name: 'Room A' });
+    const roomB = room({ id: 'room-b', name: 'Room B' });
+
+    const joinA = joinRoom(roomA.id);
+    const joinB = joinRoom(roomB.id);
+    await vi.waitFor(() => expect(joins).toHaveLength(2));
+
+    joins[1].acknowledge({ success: true, room: roomB, memberCount: 2 });
+    await expect(joinB).resolves.toMatchObject({ room: roomB });
+    joins[0].acknowledge({ success: false, error: 'stale join failed' });
+    await expect(joinA).rejects.toThrow('stale join failed');
+
+    await vi.waitFor(() => expect(joins).toHaveLength(3));
+    expect(leaves).toEqual([roomA.id]);
+    expect(joins[2].payload).toEqual({ roomId: roomB.id, password: undefined });
+    joins[2].acknowledge({ success: true, room: roomB, memberCount: 4 });
+    await vi.waitFor(() => expect(getRoomMemberCount(roomB.id)).toBe(4));
+  });
+
+  it('leaves a room again when its join acknowledgement arrives after leave', async () => {
+    const { joins, leaves } = deferRoomJoinAcknowledgements();
+    const roomA = room({ id: 'room-a', name: 'Room A' });
+
+    const pendingJoin = joinRoom(roomA.id);
+    await vi.waitFor(() => expect(joins).toHaveLength(1));
+    leaveRoom(roomA.id);
+    expect(leaves).toEqual([roomA.id]);
+
+    joins[0].acknowledge({ success: true, room: roomA });
+    await expect(pendingJoin).resolves.toMatchObject({ room: roomA });
+    await vi.waitFor(() => expect(leaves).toEqual([roomA.id, roomA.id]));
+  });
+
+  it('keeps the latest failed intent and password for an explicit retry', async () => {
+    const { joins } = deferRoomJoinAcknowledgements();
+    const roomB = room({ id: 'room-b', name: 'Room B' });
+
+    const failedJoin = joinRoom(roomB.id, 'b-secret');
+    await vi.waitFor(() => expect(joins).toHaveLength(1));
+    joins[0].acknowledge({ success: false, error: 'temporary failure' });
+    await expect(failedJoin).rejects.toThrow('temporary failure');
+
+    const retry = ensureRoomJoined(roomB.id);
+    await vi.waitFor(() => expect(joins).toHaveLength(2));
+    expect(joins[1].payload).toEqual({ roomId: roomB.id, password: 'b-secret' });
+    joins[1].acknowledge({ success: true, room: roomB });
+    await expect(retry).resolves.toMatchObject({ room: roomB });
+  });
+
+  it('leaves a latest join whose timeout has an uncertain server outcome even without a late ack', async () => {
+    vi.useFakeTimers();
+    try {
+      const { joins, leaves } = deferRoomJoinAcknowledgements();
+      const onRepairFailure = vi.fn();
+      onRoomMembershipRepairFailure(onRepairFailure);
+      const roomB = room({ id: 'room-b', name: 'Room B' });
+      const timedOutJoin = joinRoom(roomB.id);
+      const timeoutExpectation = expect(timedOutJoin).rejects.toThrow('Timed out while joining room');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(joins).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(15000);
+      await timeoutExpectation;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(leaves).toEqual([roomB.id]);
+      expect(joins).toHaveLength(1);
+      expect(onRepairFailure).toHaveBeenCalledOnce();
+      expect(onRepairFailure).toHaveBeenCalledWith(
+        roomB.id,
+        expect.objectContaining({ message: 'Timed out while joining room' }),
+      );
+
+      const explicitRetry = ensureRoomJoined(roomB.id);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(joins).toHaveLength(2);
+      joins[1].acknowledge({ success: true, room: roomB, memberCount: 2 });
+      await expect(explicitRetry).resolves.toMatchObject({ room: roomB });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reconciles a join acknowledgement that arrives after the client timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const { joins, leaves } = deferRoomJoinAcknowledgements();
+      const onRepairFailure = vi.fn();
+      onRoomMembershipRepairFailure(onRepairFailure);
+      const roomA = room({ id: 'room-a', name: 'Room A' });
+      const timedOutJoin = joinRoom(roomA.id);
+      const timeoutExpectation = expect(timedOutJoin).rejects.toThrow('Timed out while joining room');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(joins).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(15000);
+      await timeoutExpectation;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(leaves).toEqual([roomA.id]);
+
+      joins[0].acknowledge({ success: true, room: roomA });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(leaves).toEqual([roomA.id, roomA.id]);
+      expect(onRepairFailure).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('propagates a definitive late room-not-found acknowledgement after an earlier timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const { joins } = deferRoomJoinAcknowledgements();
+      const onRepairFailure = vi.fn();
+      onRoomMembershipRepairFailure(onRepairFailure);
+      const missingRoom = room({ id: 'missing-late-room', name: 'Missing Room' });
+      const timedOutJoin = joinRoom(missingRoom.id);
+      const timeoutExpectation = expect(timedOutJoin).rejects.toThrow('Timed out while joining room');
+      await vi.advanceTimersByTimeAsync(0);
+
+      await vi.advanceTimersByTimeAsync(15000);
+      await timeoutExpectation;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onRepairFailure).toHaveBeenCalledWith(
+        missingRoom.id,
+        expect.objectContaining({ message: 'Timed out while joining room' }),
+      );
+
+      joins[0].acknowledge({ success: false, error: 'Room not found' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onRepairFailure).toHaveBeenLastCalledWith(
+        missingRoom.id,
+        expect.objectContaining({ message: 'Room not found' }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not let late repair acknowledgements reopen the bounded repair budget', async () => {
+    vi.useFakeTimers();
+    try {
+      const { joins, leaves } = deferRoomJoinAcknowledgements();
+      const onRepairFailure = vi.fn();
+      onRoomMembershipRepairFailure(onRepairFailure);
+      const roomA = room({ id: 'room-a', name: 'Room A' });
+      const roomB = room({ id: 'room-b', name: 'Room B' });
+
+      const joinA = joinRoom(roomA.id);
+      const joinB = joinRoom(roomB.id);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(joins).toHaveLength(2);
+
+      joins[1].acknowledge({ success: true, room: roomB, memberCount: 2 });
+      await joinB;
+      joins[0].acknowledge({ success: true, room: roomA, memberCount: 1 });
+      await joinA;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(leaves).toEqual([roomA.id]);
+      expect(joins).toHaveLength(3);
+
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(joins).toHaveLength(4);
+      await vi.advanceTimersByTimeAsync(15000);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onRepairFailure).toHaveBeenCalledTimes(1);
+      expect(onRepairFailure).toHaveBeenCalledWith(
+        roomB.id,
+        expect.objectContaining({ message: 'Timed out while joining room' }),
+      );
+      expect(joins).toHaveLength(4);
+
+      joins[2].acknowledge({ success: true, room: roomB, memberCount: 3 });
+      joins[3].acknowledge({ success: true, room: roomB, memberCount: 4 });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(joins).toHaveLength(4);
+      expect(onRepairFailure).toHaveBeenCalledTimes(1);
+
+      const explicitRetry = ensureRoomJoined(roomB.id);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(joins).toHaveLength(5);
+      joins[4].acknowledge({ success: true, room: roomB, memberCount: 5 });
+      await expect(explicitRetry).resolves.toMatchObject({ room: roomB });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports a bounded repair failure instead of silently keeping the room ready', async () => {
+    const { joins } = deferRoomJoinAcknowledgements();
+    const onRepairFailure = vi.fn();
+    onRoomMembershipRepairFailure(onRepairFailure);
+    const roomA = room({ id: 'room-a', name: 'Room A' });
+    const roomB = room({ id: 'room-b', name: 'Room B' });
+
+    const joinA = joinRoom(roomA.id);
+    const joinB = joinRoom(roomB.id);
+    await vi.waitFor(() => expect(joins).toHaveLength(2));
+    joins[1].acknowledge({ success: true, room: roomB });
+    await joinB;
+    joins[0].acknowledge({ success: true, room: roomA });
+    await joinA;
+
+    await vi.waitFor(() => expect(joins).toHaveLength(3));
+    joins[2].acknowledge({ success: false, error: 'repair one failed' });
+    await vi.waitFor(() => expect(joins).toHaveLength(4));
+    joins[3].acknowledge({ success: false, error: 'repair two failed' });
+
+    await vi.waitFor(() => {
+      expect(onRepairFailure).toHaveBeenCalledWith(roomB.id, expect.objectContaining({ message: 'repair two failed' }));
+    });
+    expect(joins).toHaveLength(4);
   });
 });

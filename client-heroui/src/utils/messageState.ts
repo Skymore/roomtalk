@@ -39,7 +39,10 @@ export const upsertMessage = (messages: Message[], message: Message) => {
 
     if (clientMessageIndex !== -1) {
       const next = [...messages];
-      next[clientMessageIndex] = serverMessage;
+      const optimisticAction = messages[clientMessageIndex].deliveryAction;
+      next[clientMessageIndex] = serverMessage.deliveryAction || !optimisticAction
+        ? serverMessage
+        : { ...serverMessage, deliveryAction: optimisticAction };
       return sortMessages(next);
     }
   }
@@ -83,7 +86,7 @@ export const markOptimisticMessageFailed = (
   deliveryError?: string
 ) => {
   return messages.map(message =>
-    message.clientMessageId === clientMessageId
+    message.clientMessageId === clientMessageId && message.deliveryStatus === "pending"
       ? { ...message, deliveryStatus: "failed" as const, deliveryError }
       : message
   );

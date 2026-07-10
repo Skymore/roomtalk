@@ -33,6 +33,24 @@ class MemoryRedis {
     return this.zsets.get(key)!;
   }
 
+  private rebuildClientMessageIds(messageKey: string, clientMessageIdsKey?: string) {
+    if (!clientMessageIdsKey) return;
+    this.hashes.delete(clientMessageIdsKey);
+    const index = this.hash(clientMessageIdsKey);
+    index.set('__roomtalk_index_ready__', '1');
+    for (const payload of this.lists.get(messageKey) || []) {
+      try {
+        const item = JSON.parse(payload) as Message;
+        if (item.clientMessageId) {
+          const field = `${item.clientId.length}:${item.clientId}${item.clientMessageId}`;
+          if (!index.has(field)) index.set(field, item.id);
+        }
+      } catch {
+        // Invalid legacy list entries do not participate in idempotency.
+      }
+    }
+  }
+
   private updateRoomActivity(roomId: string, lastActivityAt: string) {
     const roomJson = this.hash('rooms').get(roomId);
     if (!roomJson) {
@@ -294,7 +312,40 @@ class MemoryRedis {
       return this.set(roomMembersKey).size;
     }
 
-    if (script.includes("redis.call('HSET', KEYS[3]")) {
+    if (script.includes('local dedupeField = ARGV[4]')) {
+      const [roomsKey, messageKey, clientMessageIdsKey] = options.keys;
+      const [roomId, payload, lastActivityAt, dedupeField, messageId] = options.arguments;
+      const roomJson = this.hash(roomsKey).get(roomId);
+      if (!roomJson) return [0, '', ''];
+      if (dedupeField) {
+        const index = this.hash(clientMessageIdsKey);
+        const existingId = index.get(dedupeField);
+        if (!existingId && !index.has('__roomtalk_index_ready__')) {
+          this.rebuildClientMessageIds(messageKey, clientMessageIdsKey);
+        }
+        const indexedId = this.hash(clientMessageIdsKey).get(dedupeField);
+        const existingPayload = indexedId && (this.lists.get(messageKey) || []).find(item => {
+          try {
+            return JSON.parse(item).id === indexedId;
+          } catch {
+            return false;
+          }
+        });
+        if (existingPayload) return [2, roomJson, existingPayload];
+      }
+      const updatedRoom = this.updateRoomActivity(roomId, lastActivityAt);
+      if (!updatedRoom) return [0, '', ''];
+      const list = this.lists.get(messageKey) || [];
+      list.push(payload);
+      this.lists.set(messageKey, list);
+      if (dedupeField) {
+        this.hash(clientMessageIdsKey).set(dedupeField, messageId);
+        this.hash(clientMessageIdsKey).set('__roomtalk_index_ready__', '1');
+      }
+      return [1, JSON.stringify(updatedRoom), payload];
+    }
+
+    if (script.includes("redis.call('ZADD', KEYS[5]")) {
       const [, messageKey, mediaAssetsKey, roomMediaAssetsKey, roomMediaAssetsTimelineKey] = options.keys;
       const [roomId, messagePayload, lastActivityAt, assetId, assetPayload, assetScore] = options.arguments;
       const updatedRoom = this.updateRoomActivity(roomId, lastActivityAt);
@@ -406,7 +457,7 @@ class MemoryRedis {
     }
 
     if (script.includes('local targetId')) {
-      const [, messageKey] = options.keys;
+      const [, messageKey, clientMessageIdsKey] = options.keys;
       const [roomId, targetId, payload, lastActivityAt] = options.arguments;
       const updatedRoom = this.updateRoomActivity(roomId, lastActivityAt);
       if (!updatedRoom) {
@@ -423,30 +474,34 @@ class MemoryRedis {
       if (index === -1) {
         list.push(payload);
         this.lists.set(messageKey, list);
+        this.rebuildClientMessageIds(messageKey, clientMessageIdsKey);
         return [1, 0, list.length, JSON.stringify(updatedRoom)];
       }
       list[index] = payload;
       this.lists.set(messageKey, list);
+      this.rebuildClientMessageIds(messageKey, clientMessageIdsKey);
       return [1, 1, list.length, JSON.stringify(updatedRoom)];
     }
 
     if (script.includes('return { 1, #ARGV - 1 }')) {
-      const [, messageKey] = options.keys;
+      const [, messageKey, clientMessageIdsKey] = options.keys;
       const [roomId, ...messages] = options.arguments;
       if (!this.hash('rooms').has(roomId)) {
         return [0, 0];
       }
       this.lists.set(messageKey, messages);
+      this.rebuildClientMessageIds(messageKey, clientMessageIdsKey);
       return [1, messages.length];
     }
 
-    const [, messageKey] = options.keys;
+    const [, messageKey, clientMessageIdsKey] = options.keys;
     const [roomId, lastActivityAt, ...messages] = options.arguments;
     const updatedRoom = this.updateRoomActivity(roomId, lastActivityAt);
     if (!updatedRoom) {
       return [0, 0, ''];
     }
     this.lists.set(messageKey, messages);
+    this.rebuildClientMessageIds(messageKey, clientMessageIdsKey);
     return [1, messages.length, JSON.stringify(updatedRoom)];
   }
 
@@ -889,6 +944,33 @@ describe('RedisStore', () => {
 
     assert.equal((await store.deleteCodeAgentQueuedMessage('room-1', 'queued-1'))?.deleted, true);
     assert.deepEqual(await store.readMessagesByRoom('room-1'), []);
+  });
+
+  it('backfills a legacy client message id before resolving a retry', async () => {
+    const { redis, store } = createStore();
+    const legacy = message({
+      id: 'legacy-canonical',
+      clientMessageId: 'legacy-client-message',
+      content: 'already persisted',
+    });
+    await store.saveRoom(room());
+    await redis.rPush('room:room-1:messages', JSON.stringify(legacy));
+    const versionBeforeRetry = (await store.getRoomById('room-1'))?.roomVersion;
+
+    const result = await store.appendMessageIdempotent(message({
+      id: 'retry-server-id',
+      clientMessageId: legacy.clientMessageId,
+      content: 'must not duplicate',
+    }));
+
+    assert.equal(result?.inserted, false);
+    assert.deepEqual(result?.message, legacy);
+    assert.equal(result?.room.roomVersion, versionBeforeRetry);
+    assert.deepEqual(await store.readMessagesByRoom('room-1'), [legacy]);
+    assert.equal(
+      await redis.hGet('room:room-1:client_message_ids', '8:client-1legacy-client-message'),
+      legacy.id,
+    );
   });
 
   it('stores media assets and attaches metadata to media messages', async () => {

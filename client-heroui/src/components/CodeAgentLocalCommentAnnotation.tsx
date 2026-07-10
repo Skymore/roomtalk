@@ -77,16 +77,16 @@ export function CodeAgentLocalCommentAnnotation({
         onPointerDown={(event) => event.stopPropagation()}
       >
         <div className={mobileLayout ? 'flex min-h-10 items-center gap-2' : 'flex items-center gap-2'}>
-          <MessageCircle className={`${mobileLayout ? 'h-5 w-5' : 'h-4 w-4'} text-[#87867f] dark:text-[#8f8d86]`} />
+          <MessageCircle className={`${mobileLayout ? 'h-5 w-5' : 'h-4 w-4'} text-[#5e5d59] dark:text-[#8f8d86]`} />
           <span className={`${mobileLayout ? 'text-sm' : 'text-xs'} font-medium text-[#141413] dark:text-[#faf9f5]`}>{t('codeAgentLocalComment')}</span>
-          <span className={`${mobileLayout ? 'text-xs' : 'text-[11px]'} ml-auto text-[#87867f] dark:text-[#8f8d86]`}>{rangeLabel}</span>
+          <span className={`${mobileLayout ? 'text-xs' : 'text-[11px]'} ml-auto text-[#5e5d59] dark:text-[#8f8d86]`}>{rangeLabel}</span>
           <button
             type="button"
             aria-label={t('codeAgentDeleteComment')}
             onClick={onDelete}
             className={mobileLayout
-              ? 'inline-flex h-10 w-10 items-center justify-center rounded-full text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]'
-              : 'rounded-md p-1 text-[#87867f] hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]'}
+              ? 'inline-flex h-10 w-10 items-center justify-center rounded-full text-[#5e5d59] hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]'
+              : 'rounded-md p-1 text-[#5e5d59] hover:bg-[#f0eee6] hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#30302e] dark:hover:text-[#faf9f5]'}
           >
             <Trash2 className={mobileLayout ? 'h-4 w-4' : 'h-3.5 w-3.5'} />
           </button>
@@ -128,13 +128,13 @@ export function CodeAgentLocalCommentAnnotation({
           </button>
           <div className="min-w-0 text-center">
             <div className="text-base font-semibold text-[#141413] dark:text-[#faf9f5]">{t('codeAgentLocalComment')}</div>
-            <div className="mt-0.5 truncate text-xs text-[#87867f] dark:text-[#8f8d86]">{rangeLabel}</div>
+            <div className="mt-0.5 truncate text-xs text-[#5e5d59] dark:text-[#8f8d86]">{rangeLabel}</div>
           </div>
           <div className="h-10 w-10 shrink-0" />
         </div>
         <div className="max-h-[calc(min(80dvh,32rem)-7.5rem)] overflow-y-auto px-4 py-3 [-webkit-overflow-scrolling:touch]">
           <div className="space-y-1 px-1">
-            <div className="text-[11px] font-semibold uppercase text-[#87867f] dark:text-[#8f8d86]">{commentOnLinesLabel}</div>
+            <div className="text-[11px] font-semibold uppercase text-[#5e5d59] dark:text-[#8f8d86]">{commentOnLinesLabel}</div>
             {filePath ? (
               <div className="line-clamp-2 break-all font-mono text-xs leading-[17px] text-[#5e5d59] dark:text-[#b0aea5]">
                 {filePath}
@@ -169,7 +169,7 @@ export function CodeAgentLocalCommentAnnotation({
                             ? 'bg-[#b8b4a8] dark:bg-[#4a4842]'
                             : 'bg-transparent'
                     }`} />
-                    <span className="select-none px-2 py-0.5 text-right text-[11px] tabular-nums text-[#87867f] dark:text-[#8f8d86]">
+                    <span className="select-none px-2 py-0.5 text-right text-[11px] tabular-nums text-[#5e5d59] dark:text-[#8f8d86]">
                       {line.lineNumberLabel}
                     </span>
                     <span className="whitespace-pre px-2 py-0.5 text-[#141413] dark:text-[#faf9f5]">
@@ -215,7 +215,7 @@ export function CodeAgentLocalCommentAnnotation({
           <button
             type="button"
             disabled={!text.trim()}
-            className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-full bg-[#c96442] px-4 text-sm font-semibold text-[#faf9f5] shadow-lg shadow-[#141413]/10 transition-colors hover:bg-[#ad5237] disabled:cursor-not-allowed disabled:opacity-50 dark:bg-[#d97757] dark:text-[#141413] dark:hover:bg-[#ffb197]"
+            className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-full bg-secondary px-4 text-sm font-semibold text-secondary-foreground shadow-lg shadow-[#141413]/10 transition-colors hover:bg-[#94462f] disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-[#ffb197]"
             onClick={() => onComment(text.trim())}
           >
             <Send className="h-4 w-4" />
@@ -236,10 +236,10 @@ export function CodeAgentLocalCommentAnnotation({
       onPointerDown={(event) => event.stopPropagation()}
     >
       <div className="flex items-center gap-2">
-        <MessageCircle className="h-4 w-4 text-[#87867f] dark:text-[#8f8d86]" />
+        <MessageCircle className="h-4 w-4 text-[#5e5d59] dark:text-[#8f8d86]" />
         <span className="text-sm font-medium text-[#141413] dark:text-[#faf9f5]">{t('codeAgentLocalComment')}</span>
       </div>
-      <div className="mt-1 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentCommentOnLines', { range: rangeLabel })}</div>
+      <div className="mt-1 text-xs text-[#5e5d59] dark:text-[#8f8d86]">{t('codeAgentCommentOnLines', { range: rangeLabel })}</div>
       <textarea
         autoFocus
         className="mt-3 min-h-20 w-full resize-y rounded-md border border-[#dedbd0] bg-[#faf9f5] px-2 py-1.5 text-sm text-[#141413] outline-none focus:border-[#c96442] dark:border-[#30302e] dark:bg-[#141413] dark:text-[#faf9f5]"
@@ -269,7 +269,7 @@ export function CodeAgentLocalCommentAnnotation({
         <button
           type="button"
           disabled={!text.trim()}
-          className="rounded-md bg-[#c96442] px-2 py-1 text-sm text-[#faf9f5] disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-md bg-secondary px-2 py-1 text-sm text-secondary-foreground disabled:cursor-not-allowed disabled:opacity-50"
           onClick={() => onComment(text.trim())}
         >
           {t('codeAgentSubmitComment')}

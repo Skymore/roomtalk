@@ -285,6 +285,7 @@ describe('CompositeRoomStore', () => {
     const durable: DurableRoomStore = {
       async generateUniqueRoomId() { calls.push('durable.generateUniqueRoomId'); return 'room-1'; },
       async appendMessage(_message: Message) { calls.push('durable.appendMessage'); return room(); },
+      async appendMessageIdempotent(newMessage: Message) { calls.push('durable.appendMessageIdempotent'); return { room: room(), message: newMessage, inserted: true }; },
       async appendMessageWithAtomicPosition(_message: Message) { calls.push('durable.appendMessageWithAtomicPosition'); return room(); },
       async appendMediaMessageWithAsset(newMessage: Message, asset: MediaAsset) {
         calls.push('durable.appendMediaMessageWithAsset');
@@ -412,6 +413,7 @@ describe('CompositeRoomStore', () => {
 
     assert.equal(await store.generateUniqueRoomId(), 'room-1');
     assert.deepEqual(await store.appendMessage(message()), room());
+    assert.deepEqual(await store.appendMessageIdempotent(message()), { room: room(), message: message(), inserted: true });
     assert.deepEqual(await store.appendMessageWithAtomicPosition(message()), room());
     assert.deepEqual(await store.appendMediaMessageWithAsset(message({ content: '', messageType: 'media' }), mediaAsset()), {
       room: room(),
@@ -535,6 +537,7 @@ describe('CompositeRoomStore', () => {
     assert.deepEqual(calls, [
       'durable.generateUniqueRoomId',
       'durable.appendMessage',
+      'durable.appendMessageIdempotent',
       'durable.appendMessageWithAtomicPosition',
       'durable.appendMediaMessageWithAsset',
       'durable.upsertMessage',
@@ -624,6 +627,7 @@ describe('CompositeRoomStore', () => {
     const durable: DurableRoomStore = {
       async generateUniqueRoomId() { return 'room-1'; },
       async appendMessage() { return room(); },
+      async appendMessageIdempotent(newMessage: Message) { return { room: room(), message: newMessage, inserted: true }; },
       async upsertMessage() { return room(); },
       ...durableMutationStubs(),
       async saveMessageHistory() { return room(); },
@@ -680,6 +684,7 @@ describe('CompositeRoomStore', () => {
     const durable: DurableRoomStore = {
       async generateUniqueRoomId() { return 'room-1'; },
       async appendMessage() { return room(); },
+      async appendMessageIdempotent(newMessage: Message) { return { room: room(), message: newMessage, inserted: true }; },
       async upsertMessage() { return room(); },
       ...durableMutationStubs(),
       async saveMessageHistory() { return room(); },
@@ -728,6 +733,12 @@ describe('CompositeRoomStore', () => {
     const durable: DurableRoomStore = {
       async generateUniqueRoomId() { return 'room-1'; },
       async appendMessage(newMessage: Message) { calls.push(`durable.append:${newMessage.id}`); return newMessage.id === 'fail' ? null : room(); },
+      async appendMessageIdempotent(newMessage: Message) {
+        calls.push(`durable.idempotentAppend:${newMessage.id}`);
+        return newMessage.id === 'fail-idempotent'
+          ? null
+          : { room: room(), message: newMessage, inserted: newMessage.id !== 'duplicate-idempotent' };
+      },
       async appendMessageWithAtomicPosition(newMessage: Message) { calls.push(`durable.atomicAppend:${newMessage.id}`); return newMessage.id === 'fail-atomic' ? null : room(); },
       async upsertMessage(newMessage: Message) { calls.push(`durable.upsert:${newMessage.id}`); return room(); },
       async updateMessageContent() { calls.push('durable.updateMessageContent'); return { room: room(), found: true, updatedMessage: message() }; },
@@ -783,6 +794,17 @@ describe('CompositeRoomStore', () => {
 
     assert.deepEqual(await store.appendMessage(message({ id: 'ok' })), room());
     assert.equal(await store.appendMessage(message({ id: 'fail' })), null);
+    assert.deepEqual(await store.appendMessageIdempotent(message({ id: 'ok-idempotent' })), {
+      room: room(),
+      message: message({ id: 'ok-idempotent' }),
+      inserted: true,
+    });
+    assert.deepEqual(await store.appendMessageIdempotent(message({ id: 'duplicate-idempotent' })), {
+      room: room(),
+      message: message({ id: 'duplicate-idempotent' }),
+      inserted: false,
+    });
+    assert.equal(await store.appendMessageIdempotent(message({ id: 'fail-idempotent' })), null);
     assert.deepEqual(await store.appendMessageWithAtomicPosition(message({ id: 'ok-atomic' })), room());
     assert.equal(await store.appendMessageWithAtomicPosition(message({ id: 'fail-atomic' })), null);
     assert.deepEqual(await store.appendMediaMessageWithAsset(message({ id: 'media-ok', messageType: 'media' }), mediaAsset()), { room: room(), message: message({ id: 'media-ok', messageType: 'media' }), asset: mediaAsset() });
@@ -802,6 +824,10 @@ describe('CompositeRoomStore', () => {
       'durable.append:ok',
       'cache.invalidate:room-1',
       'durable.append:fail',
+      'durable.idempotentAppend:ok-idempotent',
+      'cache.invalidate:room-1',
+      'durable.idempotentAppend:duplicate-idempotent',
+      'durable.idempotentAppend:fail-idempotent',
       'durable.atomicAppend:ok-atomic',
       'cache.invalidate:room-1',
       'durable.atomicAppend:fail-atomic',
@@ -835,6 +861,7 @@ describe('CompositeRoomStore', () => {
     const durable: DurableRoomStore = {
       async generateUniqueRoomId() { return 'room-1'; },
       async appendMessage() { return room(); },
+      async appendMessageIdempotent(newMessage: Message) { return { room: room(), message: newMessage, inserted: true }; },
       async upsertMessage() { return room(); },
       ...durableMutationStubs(),
       async saveMessageHistory() { return room(); },
@@ -886,6 +913,7 @@ describe('CompositeRoomStore', () => {
     const durable: DurableRoomStore = {
       async generateUniqueRoomId() { return 'room-1'; },
       async appendMessage() { return room(); },
+      async appendMessageIdempotent(newMessage: Message) { return { room: room(), message: newMessage, inserted: true }; },
       async upsertMessage() { return room(); },
       ...durableMutationStubs(),
       async saveMessageHistory() { return room(); },

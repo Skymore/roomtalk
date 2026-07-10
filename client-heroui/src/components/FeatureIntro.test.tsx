@@ -58,4 +58,21 @@ describe('FeatureIntro', () => {
 
     expect(screen.queryByText('Dismiss me')).toBeNull();
   });
+
+  it('keeps compact help collapsed until the user asks for details', () => {
+    render(
+      <FeatureIntro
+        featureKey="compact-feature"
+        title="Account help"
+        description="Long account setup guidance."
+        compact
+      />
+    );
+
+    const details = screen.getByText('Account help').closest('details') as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+
+    fireEvent.click(screen.getByText('Account help'));
+    expect(details.open).toBe(true);
+  });
 });

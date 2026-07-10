@@ -111,12 +111,12 @@ test('uploads and sends an image message', async ({ page, context, request }) =>
 
   await page.getByTestId('message-editor').click();
   await page.getByTestId('image-upload-input').setInputFiles(tinyPng);
-  await expect(page.getByTestId('message-editor').locator('img')).toHaveCount(1);
+  await expect(page.getByTestId('attachment-draft')).toHaveCount(1);
   const sendButton = page.getByRole('button', { name: 'Send' });
   await expect(sendButton).toBeEnabled();
   await sendButton.click();
   await expect(sendButton).not.toHaveAttribute('data-loading', 'true', { timeout: 20000 });
-  await expect(page.getByTestId('message-editor').locator('img')).toHaveCount(0, { timeout: 20000 });
+  await expect(page.getByTestId('attachment-draft')).toHaveCount(0, { timeout: 20000 });
 
   await expect(page.getByRole('img', { name: 'Shared image' }).first()).toBeVisible();
 });

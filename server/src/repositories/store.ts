@@ -254,9 +254,16 @@ export interface RoomSettingsUpdate {
   codeAgentBackend?: Room['codeAgentBackend'] | null;
 }
 
+export interface IdempotentMessageAppendResult {
+  room: Room;
+  message: Message;
+  inserted: boolean;
+}
+
 export interface DurableRoomStore {
   generateUniqueRoomId(): Promise<string>;
   appendMessage(message: Message): Promise<Room | null>;
+  appendMessageIdempotent(message: Message): Promise<IdempotentMessageAppendResult | null>;
   appendMessageWithAtomicPosition(message: Message): Promise<Room | null>;
   appendMediaMessageWithAsset(message: Message, asset: MediaAsset): Promise<MediaMessageAppendResult | null>;
   upsertMessage(message: Message): Promise<Room | null>;
@@ -406,6 +413,14 @@ export class CompositeRoomStore implements RoomStore {
       await this.invalidateRoomMessagesCache(message.roomId);
     }
     return updatedRoom;
+  }
+
+  async appendMessageIdempotent(message: Message) {
+    const result = await this.durableStore.appendMessageIdempotent(message);
+    if (result?.inserted) {
+      await this.invalidateRoomMessagesCache(message.roomId);
+    }
+    return result;
   }
 
   async appendMessageWithAtomicPosition(message: Message) {

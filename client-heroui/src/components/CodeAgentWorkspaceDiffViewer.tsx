@@ -1040,10 +1040,10 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     }
     : undefined;
   const mobileDiffToolbarMenuKind = mobileDiffToolbarMenu?.kind ?? null;
-  const diffScopeChevronClassName = `${controlIconClassName} shrink-0 text-[#87867f] transition-transform dark:text-[#8f8d86] ${
+  const diffScopeChevronClassName = `${controlIconClassName} shrink-0 text-[#5e5d59] transition-transform dark:text-[#8f8d86] ${
     mobileDiffToolbarMenuKind === 'scope' ? 'rotate-180' : 'group-open:rotate-180'
   }`;
-  const diffBaseRefChevronClassName = `${controlIconClassName} shrink-0 text-[#87867f] transition-transform dark:text-[#8f8d86] ${
+  const diffBaseRefChevronClassName = `${controlIconClassName} shrink-0 text-[#5e5d59] transition-transform dark:text-[#8f8d86] ${
     mobileDiffToolbarMenuKind === 'baseRef' ? 'rotate-180' : 'group-open:rotate-180'
   }`;
   const diffScopeSectionItems = reviewSections.map((section) => (
@@ -1059,7 +1059,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     >
       <span className="min-w-0 flex-1">
         <span className="block truncate font-semibold">{getReviewSectionLabel(section)}</span>
-        <span className="block truncate text-[11px] font-normal text-[#87867f] dark:text-[#8f8d86]">
+        <span className="block truncate text-[11px] font-normal text-[#5e5d59] dark:text-[#8f8d86]">
           {getReviewSectionSubtitle(section)}
         </span>
       </span>
@@ -1075,17 +1075,17 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
     <>
       <div className="px-3 pt-2.5">
         <label className="relative block border-b border-[#dedbd0] pb-1.5 transition-colors focus-within:border-[#c96442] dark:border-[#30302e]">
-          <Search className="pointer-events-none absolute left-0 top-1.5 h-4 w-4 text-[#87867f]/70 dark:text-[#8f8d86]/70" />
+          <Search className="pointer-events-none absolute left-0 top-1.5 h-4 w-4 text-[#5e5d59]/70 dark:text-[#8f8d86]/70" />
           <input
             aria-label={t('codeAgentDiffBaseRefSearch')}
-            className="h-7 w-full bg-transparent pl-5 pr-1 text-sm text-[#141413] outline-none placeholder:text-[#87867f] dark:text-[#faf9f5] dark:placeholder:text-[#8f8d86]"
+            className="h-7 w-full bg-transparent pl-5 pr-1 text-sm text-[#141413] outline-none placeholder:text-[#5e5d59] dark:text-[#faf9f5] dark:placeholder:text-[#8f8d86]"
             placeholder={t('codeAgentDiffBaseRefSearch')}
             value={baseRefQuery}
             onChange={(event) => setBaseRefQuery(event.target.value)}
           />
         </label>
       </div>
-      <div className="grid grid-cols-[1rem_minmax(0,1fr)] items-center gap-2 border-b border-[#dedbd0] px-3 pb-1.5 pt-2 text-[10px] font-semibold uppercase text-[#87867f] dark:border-[#30302e] dark:text-[#8f8d86]">
+      <div className="grid grid-cols-[1rem_minmax(0,1fr)] items-center gap-2 border-b border-[#dedbd0] px-3 pb-1.5 pt-2 text-[10px] font-semibold uppercase text-[#5e5d59] dark:border-[#30302e] dark:text-[#8f8d86]">
         <span aria-hidden="true" />
         <div className="inline-grid max-w-full grid-cols-[minmax(0,9rem)_3rem] items-center gap-3">
           <span>{t('codeAgentDiffBaseRefBranch')}</span>
@@ -1094,13 +1094,13 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
       </div>
       <div className="max-h-64 min-w-0 overflow-y-auto overflow-x-hidden p-1">
         {isWorkspaceRefsPending && !workspaceRefs ? (
-          <div className="px-2 py-2 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentDiffBaseRefLoading')}</div>
+          <div className="px-2 py-2 text-xs text-[#5e5d59] dark:text-[#8f8d86]">{t('codeAgentDiffBaseRefLoading')}</div>
         ) : workspaceRefsError ? (
           <div className="px-2 py-2 text-xs text-[#9f462c] dark:text-[#ff9b78]">{t('codeAgentDiffBaseRefUnavailable')}</div>
         ) : !workspaceRefs?.available ? (
-          <div className="px-2 py-2 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentDiffBaseRefUnavailable')}</div>
+          <div className="px-2 py-2 text-xs text-[#5e5d59] dark:text-[#8f8d86]">{t('codeAgentDiffBaseRefUnavailable')}</div>
         ) : filteredBaseRefItems.length === 0 ? (
-          <div className="px-2 py-2 text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentNoMatchingRefs')}</div>
+          <div className="px-2 py-2 text-xs text-[#5e5d59] dark:text-[#8f8d86]">{t('codeAgentNoMatchingRefs')}</div>
         ) : (
           <>
             {filteredBaseRefItems.includes(AUTOMATIC_BASE_REF) ? (
@@ -1174,7 +1174,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                         </label>
                       </span>
                     ) : choice.remote ? (
-                      <span className="flex justify-end text-[#87867f] dark:text-[#8f8d86]" title={t('codeAgentDiffBaseRefRemoteOnly')}>
+                      <span className="flex justify-end text-[#5e5d59] dark:text-[#8f8d86]" title={t('codeAgentDiffBaseRefRemoteOnly')}>
                         <Check className="h-3.5 w-3.5" />
                       </span>
                     ) : null}
@@ -1258,7 +1258,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
             )}
           {diffScope === 'branch' ? (
             <div
-              className={`flex min-w-0 max-w-full ${mobileLayout ? 'shrink-0' : 'shrink'} items-center ${controlClusterGap} overflow-visible text-xs text-[#87867f] dark:text-[#8f8d86]`}
+              className={`flex min-w-0 max-w-full ${mobileLayout ? 'shrink-0' : 'shrink'} items-center ${controlClusterGap} overflow-visible text-xs text-[#5e5d59] dark:text-[#8f8d86]`}
               title={`${diffHeadRefLabel} -> ${diffBaseRefLabel}`}
               aria-label={`${t('codeAgentDiffComparing')}: ${diffHeadRefLabel} -> ${diffBaseRefLabel}`}
             >
@@ -1391,7 +1391,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
         data-testid="code-agent-mobile-workspace-diff-header"
       >
         <div
-          className={`flex ${compactLayout ? 'min-h-7 gap-1 pr-5 text-[10px]' : 'min-h-9 gap-1.5 pr-7 text-[11px]'} min-w-max items-center leading-4 text-[#87867f] dark:text-[#8f8d86]`}
+          className={`flex ${compactLayout ? 'min-h-7 gap-1 pr-5 text-[10px]' : 'min-h-9 gap-1.5 pr-7 text-[11px]'} min-w-max items-center leading-4 text-[#5e5d59] dark:text-[#8f8d86]`}
           data-testid="code-agent-mobile-workspace-diff-controls-row"
         >
           {headerControls}
@@ -1469,16 +1469,16 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
             ) : null}
             {!diff?.available ? (
         <div className="flex min-h-0 flex-1 items-center justify-center px-4 py-3 text-center">
-          <p className="text-xs text-[#87867f] dark:text-[#8f8d86]">{t('codeAgentChangesUnavailable')}</p>
+          <p className="text-xs text-[#5e5d59] dark:text-[#8f8d86]">{t('codeAgentChangesUnavailable')}</p>
         </div>
       ) : !renderablePatch ? (
         <div className="flex min-h-0 flex-1 items-center justify-center px-4 py-3 text-center">
-          <p className="text-xs text-[#87867f] dark:text-[#8f8d86]">{emptyPatchLabel}</p>
+          <p className="text-xs text-[#5e5d59] dark:text-[#8f8d86]">{emptyPatchLabel}</p>
         </div>
       ) : renderablePatch.kind === 'raw' ? (
         <div className="min-h-0 flex-1 overflow-auto p-2" data-testid="code-agent-workspace-raw-diff-shell">
           <div className="space-y-2">
-            <p className="text-[11px] text-[#87867f] dark:text-[#8f8d86]">{renderablePatch.reason}</p>
+            <p className="text-[11px] text-[#5e5d59] dark:text-[#8f8d86]">{renderablePatch.reason}</p>
             <pre
               className={`max-h-[72vh] overflow-auto rounded-md border border-[#dedbd0] bg-[#f5f4ed] p-3 font-mono text-[11px] leading-relaxed text-[#5e5d59] dark:border-[#30302e] dark:bg-[#141413] dark:text-[#b0aea5] ${
                 wordWrap ? 'whitespace-pre-wrap break-words' : ''
@@ -1537,7 +1537,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                     }}
                     className={`inline-flex ${diffFileHeaderIconButtonSizeClassName} shrink-0 items-center justify-center border-0 bg-transparent p-0 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] disabled:cursor-not-allowed disabled:opacity-50 ${
                       isCollapseButtonDisabled
-                        ? 'text-[#87867f] dark:text-[#8f8d86]'
+                        ? 'text-[#5e5d59] dark:text-[#8f8d86]'
                         : `cursor-pointer hover:bg-[#141413]/10 dark:hover:bg-[#faf9f5]/10 ${canLoadSuppressedDiff ? 'text-[#9f462c] dark:text-[#ffb197]' : getDiffCollapseIconClassName(fileDiff)}`
                     }`}
                   >
@@ -1555,7 +1555,7 @@ export const CodeAgentWorkspaceDiffViewer: React.FC<CodeAgentWorkspaceDiffViewer
                     className={`inline-flex ${diffFileHeaderIconButtonSizeClassName} shrink-0 cursor-pointer items-center justify-center border-0 p-0 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#c96442] ${
                       viewed
                         ? 'bg-[#2f7d46]/10 text-[#2f7d46] hover:bg-[#2f7d46]/20 dark:bg-[#48a868]/15 dark:text-[#8bd59e] dark:hover:bg-[#48a868]/25'
-                        : 'bg-transparent text-[#87867f] hover:bg-[#141413]/10 hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#faf9f5]/10 dark:hover:text-[#faf9f5]'
+                        : 'bg-transparent text-[#5e5d59] hover:bg-[#141413]/10 hover:text-[#141413] dark:text-[#8f8d86] dark:hover:bg-[#faf9f5]/10 dark:hover:text-[#faf9f5]'
                     }`}
                   >
                     <Check className={diffFileHeaderViewedIconClassName} />

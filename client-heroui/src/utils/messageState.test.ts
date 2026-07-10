@@ -94,6 +94,32 @@ describe("messageState", () => {
     });
   });
 
+  it("keeps an Ask AI delivery action when the canonical message arrives before a failed ack", () => {
+    const pending = message({
+      id: "temp-ask-ai",
+      clientMessageId: "ask-ai-client-message",
+      deliveryStatus: "pending",
+      deliveryAction: "ask-ai",
+    });
+    const canonical = message({
+      id: "canonical-ask-ai",
+      clientMessageId: "ask-ai-client-message",
+    });
+
+    const replaced = upsertMessage([pending], canonical);
+    const stateAfterAckTimeout = markOptimisticMessageFailed(
+      replaced,
+      "ask-ai-client-message",
+      "ack timeout",
+    );
+
+    expect(stateAfterAckTimeout).toEqual([{
+      ...canonical,
+      deliveryStatus: "sent",
+      deliveryAction: "ask-ai",
+    }]);
+  });
+
   it("appends AI chunks and marks completion metadata", () => {
     const ai = message({ id: "ai1", clientId: "ai_assistant", content: "hel", messageType: "ai", status: "streaming" });
     const chunked = appendAIChunk([ai], "ai1", "lo");

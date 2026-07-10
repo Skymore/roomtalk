@@ -404,7 +404,7 @@ const CodeSnippet: React.FC<CodeSnippetProps> = ({
       </div>
       <button
         type="button"
-        className="absolute right-1 top-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[#87867f] opacity-0 transition-opacity hover:bg-[#dedbd0]/60 hover:text-[#4d4c48] group-hover/code:opacity-100 dark:text-[#8f8d86] dark:hover:bg-[#30302e]/60 dark:hover:text-[#c8c6be]"
+        className="absolute right-1 top-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[#5e5d59] opacity-0 transition-opacity hover:bg-[#dedbd0]/60 hover:text-[#4d4c48] group-hover/code:opacity-100 dark:text-[#8f8d86] dark:hover:bg-[#30302e]/60 dark:hover:text-[#c8c6be]"
         onClick={handleCopy}
       >
         {copied ? copiedLabel : copyLabel}
@@ -427,8 +427,8 @@ export const CodeAgentToolMessage: React.FC<CodeAgentToolMessageProps> = ({ mess
   if (isSandboxStatus) {
     return (
       <div className="flex items-center gap-1.5 px-1 py-0.5">
-        <Icon icon="lucide:box" className="h-3 w-3 flex-shrink-0 text-[#87867f] dark:text-[#8f8d86]" />
-        <span className="text-xs text-[#87867f] dark:text-[#8f8d86]">
+        <Icon icon="lucide:box" className="h-3 w-3 flex-shrink-0 text-[#5e5d59] dark:text-[#8f8d86]" />
+        <span className="text-xs text-[#5e5d59] dark:text-[#8f8d86]">
           {message.content || t('sandboxStatusEvent')}
         </span>
       </div>
@@ -496,12 +496,12 @@ export const CodeAgentToolMessage: React.FC<CodeAgentToolMessageProps> = ({ mess
       >
         <Icon
           icon={icon}
-          className={`h-3.5 w-3.5 flex-shrink-0 ${isError ? 'text-danger-500 dark:text-danger-400' : 'text-[#87867f] dark:text-[#8f8d86]'}`}
+          className={`h-3.5 w-3.5 flex-shrink-0 ${isError ? 'text-danger-500 dark:text-danger-400' : 'text-[#5e5d59] dark:text-[#8f8d86]'}`}
         />
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-[#4d4c48] dark:text-[#c8c6be]">
           {toolName}
           {summary && (
-            <span className="ml-1 font-normal text-[#87867f] dark:text-[#8f8d86]">{summary}</span>
+            <span className="ml-1 font-normal text-[#5e5d59] dark:text-[#8f8d86]">{summary}</span>
           )}
         </span>
 
@@ -512,13 +512,13 @@ export const CodeAgentToolMessage: React.FC<CodeAgentToolMessageProps> = ({ mess
         )}
 
         {message.cost && (
-          <span className="flex-shrink-0 text-[10px] font-medium text-[#87867f] dark:text-[#8f8d86]">
+          <span className="flex-shrink-0 text-[10px] font-medium text-[#5e5d59] dark:text-[#8f8d86]">
             {[message.aiModel?.label, formatUsdCost(message.cost.totalUsd)].filter(Boolean).join(' · ')}
           </span>
         )}
 
         {isPending && (
-          <span className="ml-auto inline-block h-3 w-3 flex-shrink-0 animate-spin rounded-full border-[1.5px] border-[#87867f] border-t-transparent dark:border-[#8f8d86] dark:border-t-transparent" />
+          <span className="ml-auto inline-block h-3 w-3 flex-shrink-0 animate-spin rounded-full border-[1.5px] border-[#5e5d59] border-t-transparent dark:border-[#8f8d86] dark:border-t-transparent" />
         )}
         {isSuccess && (
           <Icon icon="lucide:check" className="ml-auto h-3.5 w-3.5 flex-shrink-0 text-emerald-500 dark:text-emerald-400" />
@@ -567,7 +567,7 @@ export const CodeAgentToolMessage: React.FC<CodeAgentToolMessageProps> = ({ mess
             {t('codeAgentDecline')}
           </button>
           {approvalInFlight ? (
-            <span className="text-[11px] font-medium text-[#87867f] dark:text-[#8f8d86]">{t('saving')}</span>
+            <span className="text-[11px] font-medium text-[#5e5d59] dark:text-[#8f8d86]">{t('saving')}</span>
           ) : null}
           {approvalError ? (
             <span className="basis-full text-[11px] font-medium text-danger-500 dark:text-danger-400">{approvalError}</span>
@@ -579,7 +579,7 @@ export const CodeAgentToolMessage: React.FC<CodeAgentToolMessageProps> = ({ mess
         <div className="mt-1 space-y-1.5 pl-6 pr-1">
           {argsView?.rows.map(row => (
             <div key={row.key} className="flex items-baseline gap-2 text-xs">
-              <span className="flex-shrink-0 text-[10px] font-semibold uppercase tracking-wide text-[#87867f] dark:text-[#8f8d86]">
+              <span className="flex-shrink-0 text-[10px] font-semibold uppercase tracking-wide text-[#5e5d59] dark:text-[#8f8d86]">
                 {row.label}
               </span>
               <span className="min-w-0 break-all font-mono text-[11px] text-[#4d4c48] dark:text-[#c8c6be]">
@@ -590,7 +590,7 @@ export const CodeAgentToolMessage: React.FC<CodeAgentToolMessageProps> = ({ mess
 
           {argsView?.codeBlocks.map(block => (
             <div key={block.key}>
-              <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#87867f] dark:text-[#8f8d86]">
+              <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#5e5d59] dark:text-[#8f8d86]">
                 {block.label}
               </div>
               <CodeSnippet
@@ -609,12 +609,12 @@ export const CodeAgentToolMessage: React.FC<CodeAgentToolMessageProps> = ({ mess
             <div className={`${argsView?.hasContent ? 'border-t border-[#dedbd0]/40 pt-1.5 dark:border-[#3a3a37]/40' : ''}`}>
               <div className="mb-0.5 flex items-center gap-1.5">
                 <span className={`text-[10px] font-semibold uppercase tracking-wide ${
-                  isError ? 'text-danger-500 dark:text-danger-400' : 'text-[#87867f] dark:text-[#8f8d86]'
+                  isError ? 'text-danger-500 dark:text-danger-400' : 'text-[#5e5d59] dark:text-[#8f8d86]'
                 }`}>
                   {t(isError ? 'toolResultFailed' : 'toolOutput')}
                 </span>
                 {typeof result.exitCode === 'number' && (
-                  <span className="text-[10px] font-mono text-[#87867f] dark:text-[#8f8d86]">
+                  <span className="text-[10px] font-mono text-[#5e5d59] dark:text-[#8f8d86]">
                     {t('exitCode')} {result.exitCode}
                   </span>
                 )}
@@ -632,7 +632,7 @@ export const CodeAgentToolMessage: React.FC<CodeAgentToolMessageProps> = ({ mess
               {shouldCollapseOutput && (
                 <button
                   type="button"
-                  className="mt-1 text-[11px] font-medium text-[#87867f] hover:text-[#4d4c48] dark:text-[#8f8d86] dark:hover:text-[#c8c6be]"
+                  className="mt-1 text-[11px] font-medium text-[#5e5d59] hover:text-[#4d4c48] dark:text-[#8f8d86] dark:hover:text-[#c8c6be]"
                   onClick={(e) => { e.stopPropagation(); setIsOutputExpanded(v => !v); }}
                 >
                   {isOutputExpanded ? t('showLess') : t('showMore')}

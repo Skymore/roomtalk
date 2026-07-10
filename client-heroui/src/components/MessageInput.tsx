@@ -81,6 +81,7 @@ interface MessageInputProps {
   onOptimisticMessageSaved?: (clientMessageId: string, message: Message) => void;
   onOptimisticMessageFailed?: (clientMessageId: string, error?: string) => void;
   canPost?: boolean;
+  isRoomSessionReady?: boolean;
   postingRestrictionReason?: string;
   postingSchedule?: RoomPostingSchedule;
   isRoomAIProcessing?: boolean;
@@ -94,9 +95,6 @@ interface MessageInputProps {
   onRemoveReviewComment?: (commentId: string) => void;
   onClearReviewComments?: () => void;
 }
-
-// 使用WeakMap存储图片元素和对应的File对象
-const imageFileMap = new WeakMap<HTMLImageElement, File>();
 
 const createClientMessageId = () => {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -119,6 +117,18 @@ const getErrorMessage = (error: unknown, fallback: string) => (
 );
 
 const MAX_FILE_UPLOAD_BYTES = 50 * 1024 * 1024;
+const formatAttachmentSize = (byteSize: number) => {
+  if (!Number.isFinite(byteSize) || byteSize < 0) return '';
+  if (byteSize < 1024) return `${byteSize} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let value = byteSize / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: value < 10 ? 1 : 0 }).format(value)} ${units[unitIndex]}`;
+};
 const VIDEO_MIME_TYPE_BY_EXTENSION: Record<string, string> = {
   m4v: 'video/x-m4v',
   mov: 'video/quicktime',
@@ -164,6 +174,19 @@ const getTranscriptionErrorKey = (error: unknown) => {
 type VoiceWorkflow = 'choice' | 'recording-voice' | 'recording-transcript' | 'voice-preview';
 type VoiceRecordingIntent = 'voice' | 'transcript';
 type VoiceStopAction = 'preview' | 'insert' | 'cancel';
+type AttachmentDraftStatus = 'ready' | 'compressing' | 'uploading' | 'failed';
+
+interface AttachmentDraft {
+  id: string;
+  file: File;
+  kind: 'image' | 'video' | 'file';
+  mimeType: string;
+  filename: string;
+  previewUrl?: string;
+  status: AttachmentDraftStatus;
+  progress: number;
+  error?: string;
+}
 
 export const MessageInput: React.FC<MessageInputProps> = ({
   roomId,
@@ -177,6 +200,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   onOptimisticMessageSaved,
   onOptimisticMessageFailed,
   canPost = true,
+  isRoomSessionReady = true,
   postingSchedule,
   isRoomAIProcessing = false,
   isCodeAgentRoom = false,
@@ -192,24 +216,36 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   const { t } = useTranslation();
   const [_contentItems, setContentItems] = useState<MessageContentItem[]>(emptyMessageContent());
   const [isSending, setIsSending] = useState(false);
+  const isSendingRef = useRef(isSending);
+  isSendingRef.current = isSending;
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isErrorPersistent, setIsErrorPersistent] = useState(false);
+  const [shouldAnnounceError, setShouldAnnounceError] = useState(true);
+  const [attachmentDrafts, setAttachmentDrafts] = useState<AttachmentDraft[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const arbitraryFileInputRef = useRef<HTMLInputElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
-  const [imageCount, setImageCount] = useState(0);
   const [currentInputText, setCurrentInputText] = useState('');
   const imageCountRef = useRef(0); // 用于实时跟踪图片数量，避免状态更新延迟
   const lastPasteTime = useRef(0); // 用于限制粘贴频率
   const pasteCountRef = useRef(0); // 用于跟踪连续粘贴次数
   const pasteResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const editorFocusFrameRef = useRef<number | null>(null);
+  const attachmentDraftsRef = useRef<AttachmentDraft[]>([]);
+  const componentMountedRef = useRef(true);
+  const attachmentRoomIdRef = useRef(roomId);
+  const attachmentRoomGenerationRef = useRef(0);
+  const roomSessionSnapshotRef = useRef({ roomId, isReady: isRoomSessionReady });
+  const attachmentAbortControllersRef = useRef(new Map<string, AbortController>());
+  const cancelledAttachmentIdsRef = useRef(new Set<string>());
   const isComposingRef = useRef(false);
   const lastCompositionEndAtRef = useRef(0);
   const [isAiProcessing, setIsAiProcessing] = useState(false); // 新增: 跟踪 AI 处理状态
   const [isInterruptingCodeAgent, setIsInterruptingCodeAgent] = useState(false);
   const isAgentRunning = isCodeAgentRoom && isRoomAIProcessing;
   const isAIInputLocked = isAiProcessing || isInterruptingCodeAgent || (isRoomAIProcessing && !isCodeAgentRoom);
-  const isNonTextInputDisabled = isSending || isAIInputLocked || !canPost;
+  const isNonTextInputDisabled = isSending || isAIInputLocked || !canPost || !isRoomSessionReady;
 
   useEffect(() => {
     if (!isRoomAIProcessing) {
@@ -237,6 +273,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   const recordingMimeTypeRef = useRef('audio/webm');
   const voiceEditorSnapshotRef = useRef('');
   const recordedVoiceUrlRef = useRef<string | null>(null);
+  const voiceUploadAbortControllerRef = useRef<AbortController | null>(null);
   const transcriberRef = useRef<StreamingTranscriber | null>(null);
   const recognizedTextRef = useRef('');
   const MAX_RECORDING_SECONDS = 60;
@@ -280,8 +317,216 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     getStoredRoomCodexSettings(roomId, defaultCodexRunSettings())
   ));
 
+  const dismissError = useCallback(() => {
+    setErrorMessage(null);
+    setIsErrorPersistent(false);
+    setShouldAnnounceError(true);
+  }, []);
+
+  const showTransientError = useCallback((message: string) => {
+    setErrorMessage(message);
+    setIsErrorPersistent(false);
+    setShouldAnnounceError(true);
+  }, []);
+
+  const showPersistentError = useCallback((message: string, options: { announce?: boolean } = {}) => {
+    setErrorMessage(message);
+    setIsErrorPersistent(true);
+    setShouldAnnounceError(options.announce !== false);
+  }, []);
+
+  useEffect(() => {
+    attachmentDraftsRef.current = attachmentDrafts;
+  }, [attachmentDrafts]);
+
+  React.useLayoutEffect(() => {
+    if (attachmentRoomIdRef.current === roomId) return;
+    attachmentRoomGenerationRef.current += 1;
+    attachmentDraftsRef.current.forEach(draft => {
+      cancelledAttachmentIdsRef.current.add(draft.id);
+    });
+    attachmentRoomIdRef.current = roomId;
+    attachmentAbortControllersRef.current.forEach(controller => controller.abort());
+    attachmentAbortControllersRef.current.clear();
+    cancelledAttachmentIdsRef.current.clear();
+    attachmentDraftsRef.current.forEach(draft => {
+      if (draft.previewUrl) URL.revokeObjectURL(draft.previewUrl);
+    });
+    attachmentDraftsRef.current = [];
+    setAttachmentDrafts([]);
+
+    // Voice state belongs to the room where recording/upload started. Detach
+    // recorder callbacks before stopping so an old async `onstop` cannot
+    // overwrite the next room's composer state.
+    recordingSessionRef.current += 1;
+    recordingStopActionRef.current = 'cancel';
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    const recorder = mediaRecorderRef.current;
+    mediaRecorderRef.current = null;
+    if (recorder) {
+      recorder.ondataavailable = null;
+      recorder.onstop = null;
+      if (recorder.state !== 'inactive') {
+        try { recorder.stop(); } catch { /* recorder may already be stopping */ }
+      }
+    }
+    transcriberRef.current?.stop().catch(() => { /* ignore */ });
+    transcriberRef.current = null;
+    audioStreamRef.current?.getTracks().forEach(track => track.stop());
+    audioStreamRef.current = null;
+    audioChunksRef.current = [];
+    recognizedTextRef.current = '';
+    voiceUploadAbortControllerRef.current?.abort();
+    voiceUploadAbortControllerRef.current = null;
+    if (recordedVoiceUrlRef.current) {
+      URL.revokeObjectURL(recordedVoiceUrlRef.current);
+      recordedVoiceUrlRef.current = null;
+    }
+    voiceEditorSnapshotRef.current = '';
+    setIsVoiceMode(false);
+    setVoiceWorkflow('choice');
+    setIsRecording(false);
+    setRecordingSeconds(0);
+    recordingSecondsRef.current = 0;
+    setLiveTranscript('');
+    setRecordedVoiceBlob(null);
+    setRecordedVoiceUrl(null);
+    setRecordedVoiceDuration(0);
+
+    if (editorRef.current) editorRef.current.innerHTML = '';
+    setContentItems(emptyMessageContent());
+    setCurrentInputText('');
+    imageCountRef.current = 0;
+    setIsSending(false);
+    setIsAiProcessing(false);
+    setIsInterruptingCodeAgent(false);
+    if (focusTimerRef.current) {
+      clearTimeout(focusTimerRef.current);
+      focusTimerRef.current = null;
+    }
+    if (editorFocusFrameRef.current !== null) {
+      window.cancelAnimationFrame(editorFocusFrameRef.current);
+      editorFocusFrameRef.current = null;
+    }
+    dismissError();
+  }, [dismissError, roomId]);
+
+  // A transport loss changes the trust boundary even when the room id stays
+  // the same. Invalidate every in-flight composer callback first, then stop
+  // privacy-sensitive capture and network work as one synchronous transition.
+  // Draft files and a completed voice preview remain available for an explicit
+  // retry after the room session is verified again.
+  React.useLayoutEffect(() => {
+    const previous = roomSessionSnapshotRef.current;
+    roomSessionSnapshotRef.current = { roomId, isReady: isRoomSessionReady };
+    if (previous.roomId !== roomId || !previous.isReady || isRoomSessionReady) {
+      return;
+    }
+
+    attachmentRoomGenerationRef.current += 1;
+    attachmentAbortControllersRef.current.forEach(controller => controller.abort());
+    attachmentAbortControllersRef.current.clear();
+    cancelledAttachmentIdsRef.current.clear();
+    const resetDrafts = attachmentDraftsRef.current.map(draft => (
+      draft.status === 'compressing' || draft.status === 'uploading'
+        ? { ...draft, status: 'ready' as const, progress: 0, error: undefined }
+        : draft
+    ));
+    attachmentDraftsRef.current = resetDrafts;
+    setAttachmentDrafts(resetDrafts);
+
+    recordingSessionRef.current += 1;
+    recordingStopActionRef.current = 'cancel';
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    const recorder = mediaRecorderRef.current;
+    mediaRecorderRef.current = null;
+    if (recorder) {
+      recorder.ondataavailable = null;
+      recorder.onstop = null;
+      if (recorder.state !== 'inactive') {
+        try { recorder.stop(); } catch { /* recorder may already be stopping */ }
+      }
+    }
+    transcriberRef.current?.stop().catch(() => { /* ignore */ });
+    transcriberRef.current = null;
+    audioStreamRef.current?.getTracks().forEach(track => track.stop());
+    audioStreamRef.current = null;
+    audioChunksRef.current = [];
+    recognizedTextRef.current = '';
+    voiceUploadAbortControllerRef.current?.abort();
+    voiceUploadAbortControllerRef.current = null;
+    setIsRecording(false);
+    setRecordingSeconds(0);
+    recordingSecondsRef.current = 0;
+    setLiveTranscript('');
+    setVoiceWorkflow(current => (
+      current === 'recording-voice' || current === 'recording-transcript' ? 'choice' : current
+    ));
+    setIsSending(false);
+    setIsAiProcessing(false);
+    setIsInterruptingCodeAgent(false);
+
+    if (focusTimerRef.current) {
+      clearTimeout(focusTimerRef.current);
+      focusTimerRef.current = null;
+    }
+    if (editorFocusFrameRef.current !== null) {
+      window.cancelAnimationFrame(editorFocusFrameRef.current);
+      editorFocusFrameRef.current = null;
+    }
+  }, [isRoomSessionReady, roomId]);
+
+  const updateAttachmentDraft = useCallback((id: string, updates: Partial<AttachmentDraft>) => {
+    setAttachmentDrafts(current => current.map(draft => (
+      draft.id === id ? { ...draft, ...updates } : draft
+    )));
+  }, []);
+
+  const removeAttachmentDraft = useCallback((id: string) => {
+    cancelledAttachmentIdsRef.current.add(id);
+    attachmentAbortControllersRef.current.get(id)?.abort();
+    attachmentAbortControllersRef.current.delete(id);
+    setAttachmentDrafts(current => {
+      const removed = current.find(draft => draft.id === id);
+      if (removed?.previewUrl) {
+        URL.revokeObjectURL(removed.previewUrl);
+      }
+      const next = current.filter(draft => draft.id !== id);
+      attachmentDraftsRef.current = next;
+      return next;
+    });
+    if (!isSendingRef.current) {
+      cancelledAttachmentIdsRef.current.delete(id);
+    }
+  }, []);
+
+  const completeAttachmentDraft = useCallback((id: string) => {
+    attachmentAbortControllersRef.current.delete(id);
+    cancelledAttachmentIdsRef.current.delete(id);
+    setAttachmentDrafts(current => {
+      const completed = current.find(draft => draft.id === id);
+      if (completed?.previewUrl) {
+        URL.revokeObjectURL(completed.previewUrl);
+      }
+      const next = current.filter(draft => draft.id !== id);
+      attachmentDraftsRef.current = next;
+      return next;
+    });
+  }, []);
+
   // 新增角色设置模态框的状态
   const { isOpen: isAISettingsOpen, onOpen: onAISettingsOpen, onClose: onAISettingsClose } = useDisclosure();
+  useEffect(() => {
+    if (!isRoomSessionReady && isAISettingsOpen) {
+      onAISettingsClose();
+    }
+  }, [isAISettingsOpen, isRoomSessionReady, onAISettingsClose]);
   const postingClosedMessage = t('postingClosed');
   const normalizedCodeAgentAvailableModes = normalizeCodeAgentModeList(codeAgentAvailableModes);
   const normalizedCodeAgentMode = normalizeCodeAgentMode(codeAgentMode);
@@ -336,6 +581,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     clientMessageId: string,
     avatar: { text: string; color: string },
     replyTo: Message | null,
+    deliveryAction: NonNullable<Message['deliveryAction']> = 'send',
   ): Message => ({
     id: `temp-${clientMessageId}`,
     clientMessageId,
@@ -348,6 +594,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     avatar,
     replyTo: buildReplyReference(replyTo),
     deliveryStatus: 'pending',
+    deliveryAction,
   }), [buildReplyReference, clientId, roomId, username]);
 
   const [isStickerPickerOpen, setIsStickerPickerOpen] = useState(false);
@@ -378,32 +625,42 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     avatar,
     replyTo: buildReplyReference(replyTo),
     deliveryStatus: 'pending',
+    deliveryAction: 'send',
   }), [buildReplyReference, clientId, roomId, username]);
 
   const handleSelectSticker = useCallback(async (stickerId: string) => {
     setIsStickerPickerOpen(false);
+    const requestRoomId = roomId;
+    const requestRoomGeneration = attachmentRoomGenerationRef.current;
+    const isRequestRoomCurrent = () => (
+      componentMountedRef.current
+      && attachmentRoomIdRef.current === requestRoomId
+      && attachmentRoomGenerationRef.current === requestRoomGeneration
+    );
+    if (!isRoomSessionReady || !isRequestRoomCurrent() || isSending || isAIInputLocked) return;
+    if (!canPost) {
+      showTransientError(postingClosedMessage);
+      return;
+    }
+
     pushRecent(stickerId);
     const avatar = { text: avatarText, color: avatarColor };
     const clientMessageId = createClientMessageId();
     const optimistic = buildOptimisticStickerMessage(stickerId, clientMessageId, avatar, replyToMessage);
     onOptimisticMessage?.(optimistic);
     try {
-      const saved = await sendSticker(stickerId, roomId, username, avatar, replyToMessage?.id, clientMessageId);
+      const saved = await sendSticker(stickerId, requestRoomId, username, avatar, replyToMessage?.id, clientMessageId);
+      if (!isRequestRoomCurrent()) return;
       onOptimisticMessageSaved?.(clientMessageId, saved);
       onCancelReply();
     } catch (error) {
+      if (!isRequestRoomCurrent()) return;
       onOptimisticMessageFailed?.(clientMessageId, getErrorMessage(error, t('failedToSendSticker')));
     }
-  }, [avatarColor, avatarText, buildOptimisticStickerMessage, onCancelReply, onOptimisticMessage, onOptimisticMessageFailed, onOptimisticMessageSaved, pushRecent, replyToMessage, roomId, t, username]);
+  }, [avatarColor, avatarText, buildOptimisticStickerMessage, canPost, isAIInputLocked, isRoomSessionReady, isSending, onCancelReply, onOptimisticMessage, onOptimisticMessageFailed, onOptimisticMessageSaved, postingClosedMessage, pushRecent, replyToMessage, roomId, showTransientError, t, username]);
 
   const clearEditorImmediately = useCallback((options: { blur?: boolean } = {}) => {
     if (editorRef.current) {
-      const images = editorRef.current.querySelectorAll('img');
-      images.forEach(img => {
-        if (img.src.startsWith('blob:')) {
-          URL.revokeObjectURL(img.src);
-        }
-      });
       editorRef.current.innerHTML = '';
       if (options.blur) {
         editorRef.current.blur();
@@ -411,11 +668,10 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     }
 
     setContentItems(emptyMessageContent());
-    setImageCount(0);
     imageCountRef.current = 0;
     setCurrentInputText('');
-    setErrorMessage(null);
-  }, []);
+    dismissError();
+  }, [dismissError]);
 
   // Inline sticker hint: when the editor holds just a short keyword (1-2 CJK
   // chars), surface matching stickers above the input for one-tap sending.
@@ -431,77 +687,34 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   const parseEditorContent = useCallback((): MessageContentItem[] => {
     const editor = editorRef.current;
     if (!editor) return emptyMessageContent();
-
-    // 暂存解析结果
-    const newItems: MessageContentItem[] = [];
-    let images = 0;
-
-    // 遍历所有子节点
-    editor.childNodes.forEach(node => {
-      if (node.nodeType === Node.TEXT_NODE) {
-        // 文本节点
-        if (node.textContent && node.textContent.trim() !== '') {
-          newItems.push({ type: 'text', content: node.textContent });
-        }
-      } else if (node.nodeType === Node.ELEMENT_NODE) {
-        const element = node as HTMLElement;
-        if (element.tagName === 'IMG') {
-          // 图片节点
-          const img = element as HTMLImageElement;
-          if (images < MAX_MESSAGE_IMAGES) {
-            const file = imageFileMap.get(img);
-            if (file) {
-              newItems.push({
-                type: 'image',
-                content: img.src,
-                previewUrl: img.src,
-                file: file
-              });
-            } else {
-              newItems.push({ type: 'image', content: img.src });
-            }
-            images++;
-          } else if (element.parentNode) {
-            // 如果超出最大图片数，移除多余图片
-            if (img.src.startsWith('blob:')) {
-              URL.revokeObjectURL(img.src);
-              imageFileMap.delete(img);
-            }
-            element.parentNode.removeChild(element);
-          }
-        } else if (element.tagName === 'DIV' || element.tagName === 'P') {
-          // 段落节点，可能包含文本
-          if (element.textContent && element.textContent.trim() !== '') {
-            newItems.push({ type: 'text', content: element.textContent });
-          }
-        }
-      }
-    });
-
-    // 确保至少有一个文本项
-    if (newItems.length === 0) {
-      newItems.push(...emptyMessageContent());
-    }
+    const text = editor.innerText || '';
+    const newItems: MessageContentItem[] = text.trim()
+      ? [{ type: 'text', content: text }]
+      : emptyMessageContent();
 
     // 更新内容项状态
     setContentItems(newItems);
     return newItems;
   }, []);
 
-  // 清除错误信息的定时器
+  // Validation and other transient notices clear themselves. Network/send
+  // failures remain until the user dismisses or retries them.
   useEffect(() => {
-    if (errorMessage) {
+    if (errorMessage && !isErrorPersistent) {
       const timer = setTimeout(() => {
-        setErrorMessage(null);
-      }, 3000);
+        dismissError();
+      }, 5000);
       return () => clearTimeout(timer);
     }
-  }, [errorMessage]);
+  }, [dismissError, errorMessage, isErrorPersistent]);
 
-  // 同步imageCountRef和imageCount
+  // Attachment drafts are the source of truth for send-button state and the
+  // image limit. This also gives images, videos and files the same explicit
+  // confirmation step.
   useEffect(() => {
-    imageCountRef.current = imageCount;
-  }, [imageCount]);
+    const nextImageCount = attachmentDrafts.filter(draft => draft.kind === 'image').length;
+    imageCountRef.current = nextImageCount;
+  }, [attachmentDrafts]);
 
   // 监听编辑器内容变化
   useEffect(() => {
@@ -510,13 +723,6 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
     const syncEditorState = () => {
       setCurrentInputText(editor.innerText || '');
-
-      const currentImageCount = editor.querySelectorAll('img').length;
-      if (currentImageCount !== imageCountRef.current) {
-        imageCountRef.current = currentImageCount;
-        setImageCount(currentImageCount);
-      }
-
       parseEditorContent();
     };
 
@@ -539,43 +745,55 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   }, [parseEditorContent]);
 
   const uploadCodeAgentImageMessages = async (
-    items: MessageContentItem[],
     avatar: { text: string; color: string },
   ): Promise<string[]> => {
-    const imageItems = buildOutgoingMessageItems(items).filter(
-      (item): item is Extract<ReturnType<typeof buildOutgoingMessageItems>[number], { type: 'image' }> => item.type === 'image'
-    );
-    if (imageItems.length !== imageCountRef.current) {
+    const imageDrafts = attachmentDraftsRef.current.filter(draft => draft.kind === 'image');
+    if (imageDrafts.length !== imageCountRef.current) {
       throw new Error('One or more attached images are unavailable');
     }
 
     const imageMessageIds: string[] = [];
-    for (const item of imageItems) {
-      const supportedMimeType = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(item.file.type)
-        ? item.file.type
+    for (const draft of imageDrafts) {
+      const controller = new AbortController();
+      attachmentAbortControllersRef.current.set(draft.id, controller);
+      const supportedMimeType = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(draft.file.type)
+        ? draft.file.type
         : 'image/webp';
-      const compressedFile = await imageCompression(item.file, {
-        maxSizeMB: 2,
-        useWebWorker: true,
-        fileType: supportedMimeType,
-      });
-      const savedMessage = await uploadMediaMessage({
-        file: compressedFile,
-        roomId,
-        kind: 'image',
-        mimeType: compressedFile.type || supportedMimeType,
-        filename: item.file.name,
-        username,
-        avatar,
-        replyToMessageId: replyToMessage?.id,
-      });
-      imageMessageIds.push(savedMessage.id);
+      try {
+        updateAttachmentDraft(draft.id, { status: 'compressing', progress: 0, error: undefined });
+        const compressedFile = await imageCompression(draft.file, {
+          maxSizeMB: 2,
+          useWebWorker: true,
+          fileType: supportedMimeType,
+        });
+        updateAttachmentDraft(draft.id, { status: 'uploading', progress: 0, error: undefined });
+        const savedMessage = await uploadMediaMessage({
+          file: compressedFile,
+          roomId,
+          kind: 'image',
+          mimeType: compressedFile.type || supportedMimeType,
+          filename: draft.filename,
+          username,
+          avatar,
+          replyToMessageId: replyToMessage?.id,
+          signal: controller.signal,
+          onUploadProgress: progress => updateAttachmentDraft(draft.id, { status: 'uploading', progress }),
+        });
+        completeAttachmentDraft(draft.id);
+        imageMessageIds.push(savedMessage.id);
+      } catch (error) {
+        attachmentAbortControllersRef.current.delete(draft.id);
+        const failure = getErrorMessage(error, t('errorSendingAiRequest'));
+        updateAttachmentDraft(draft.id, { status: 'failed', error: failure });
+        throw error;
+      }
     }
     return imageMessageIds;
   };
 
   // 发送AI消息的新方法
   const handleAskAI = async (requestedAction?: MessageInputAIAction) => {
+    if (!isRoomSessionReady) return;
     const latestContentItems = parseEditorContent();
     const prompt = buildAIPrompt(latestContentItems);
     const hasInputContent = hasMessageContent(latestContentItems);
@@ -584,12 +802,20 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       : 'run';
 
     if (!canPost && agentAction !== 'stop') {
-      setErrorMessage(postingClosedMessage);
+      showTransientError(postingClosedMessage);
       return;
     }
 
     if (isSending || isAIInputLocked) return;
 
+    const requestRoomId = roomId;
+    const requestRoomGeneration = attachmentRoomGenerationRef.current;
+    const isRequestRoomCurrent = () => (
+      componentMountedRef.current
+      && attachmentRoomIdRef.current === requestRoomId
+      && attachmentRoomGenerationRef.current === requestRoomGeneration
+    );
+    if (!isRequestRoomCurrent()) return;
     let optimisticClientMessageId: string | null = null;
     setIsAiProcessing(true);
     try {
@@ -599,9 +825,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       if (agentAction === 'stop') {
         setIsInterruptingCodeAgent(true);
         try {
-          await interruptCodeAgentTurn(roomId);
+          await interruptCodeAgentTurn(requestRoomId);
         } catch (error) {
-          setIsInterruptingCodeAgent(false);
+          if (isRequestRoomCurrent()) {
+            setIsInterruptingCodeAgent(false);
+          }
           throw error;
         }
         return;
@@ -624,7 +852,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           }
         : {};
       const imageMessageIds = isCodeAgentRoom && imageCountRef.current > 0
-        ? await uploadCodeAgentImageMessages(latestContentItems, avatar)
+        ? await uploadCodeAgentImageMessages(avatar)
         : [];
       const promptForSend = basePromptForSend || (imageMessageIds.length > 0 ? t('codeAgentInspectAttachedImages') : '');
 
@@ -634,7 +862,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         }
         const clientMessageId = createClientMessageId();
         optimisticClientMessageId = clientMessageId;
-        const optimisticMessage = buildOptimisticTextMessage(promptForSend, clientMessageId, avatar, replyToMessage);
+        const optimisticMessage = buildOptimisticTextMessage(promptForSend, clientMessageId, avatar, replyToMessage, 'ask-ai');
         if (imageMessageIds.length > 0) optimisticMessage.codeAgentImageMessageIds = imageMessageIds;
         const queuedAt = new Date().toISOString();
         optimisticMessage.codeAgentQueuedInput = {
@@ -666,7 +894,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
       if (!promptForSend) {
         await requestAIResponse({
-          roomId,
+          roomId: requestRoomId,
           ...aiRequestSettings,
           ...codeAgentRunSettings,
         });
@@ -675,13 +903,13 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
       const clientMessageId = createClientMessageId();
       optimisticClientMessageId = clientMessageId;
-      const optimisticMessage = buildOptimisticTextMessage(promptForSend, clientMessageId, avatar, replyToMessage);
+      const optimisticMessage = buildOptimisticTextMessage(promptForSend, clientMessageId, avatar, replyToMessage, 'ask-ai');
       if (imageMessageIds.length > 0) optimisticMessage.codeAgentImageMessageIds = imageMessageIds;
       onOptimisticMessage?.(optimisticMessage);
       clearEditorImmediately({ blur: true });
 
       const { userMessage, aiError } = await sendMessageAndAskAI({
-        roomId,
+        roomId: requestRoomId,
         content: promptForSend,
         username,
         avatar,
@@ -692,47 +920,138 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         ...codeAgentRunSettings,
       });
 
+      if (!isRequestRoomCurrent()) return;
       onOptimisticMessageSaved?.(clientMessageId, userMessage);
       if (isCodeAgentRoom && reviewComments.length > 0) {
         onClearReviewComments?.();
       }
       if (aiError) {
-        setErrorMessage(aiError);
+        showPersistentError(aiError);
       }
       onCancelReply();
       console.log('Sent AI request (without prompt) with model:', selectedAIModel || defaultAIModel);
 
     } catch (error) {
+      if (!isRequestRoomCurrent()) return;
       console.error('Error sending AI request:', error);
+      let announcedByOptimisticMessage = false;
       if (optimisticClientMessageId) {
         onOptimisticMessageFailed?.(optimisticClientMessageId, getErrorMessage(error, t('errorSendingAiRequest')));
+        announcedByOptimisticMessage = Boolean(onOptimisticMessageFailed);
       }
-      setErrorMessage(t('errorSendingAiRequest'));
+      showPersistentError(t('errorSendingAiRequest'), { announce: !announcedByOptimisticMessage });
     } finally {
-      setIsAiProcessing(false);
+      if (isRequestRoomCurrent()) {
+        setIsAiProcessing(false);
+      }
+    }
+  };
+
+  const uploadAttachmentDraft = async (
+    draft: AttachmentDraft,
+    avatar: { text: string; color: string },
+    replyToMessageId?: string,
+    targetRoomId = roomId,
+    roomGeneration = attachmentRoomGenerationRef.current,
+  ): Promise<boolean> => {
+    const isCurrentRoom = () => (
+      componentMountedRef.current
+      && attachmentRoomIdRef.current === targetRoomId
+      && attachmentRoomGenerationRef.current === roomGeneration
+    );
+    if (!isCurrentRoom() || cancelledAttachmentIdsRef.current.has(draft.id)) {
+      return false;
+    }
+    const controller = new AbortController();
+    attachmentAbortControllersRef.current.set(draft.id, controller);
+
+    try {
+      let file: Blob = draft.file;
+      let mimeType = draft.mimeType;
+      if (draft.kind === 'image') {
+        updateAttachmentDraft(draft.id, { status: 'compressing', progress: 0, error: undefined });
+        file = await imageCompression(draft.file, { maxSizeMB: 2, useWebWorker: true });
+        mimeType = file.type || draft.mimeType || 'image/webp';
+      }
+
+      if (!isCurrentRoom() || cancelledAttachmentIdsRef.current.has(draft.id)) {
+        return false;
+      }
+
+      updateAttachmentDraft(draft.id, { status: 'uploading', progress: 0, error: undefined });
+      await uploadMediaMessage({
+        file,
+        roomId: targetRoomId,
+        kind: draft.kind,
+        mimeType,
+        filename: draft.filename,
+        username,
+        avatar,
+        replyToMessageId,
+        signal: controller.signal,
+        onUploadProgress: progress => {
+          if (isCurrentRoom()) {
+            updateAttachmentDraft(draft.id, { status: 'uploading', progress });
+          }
+        },
+      });
+
+      if (!isCurrentRoom()) {
+        return false;
+      }
+      completeAttachmentDraft(draft.id);
+      return true;
+    } catch (error) {
+      attachmentAbortControllersRef.current.delete(draft.id);
+      if (!isCurrentRoom() || controller.signal.aborted || cancelledAttachmentIdsRef.current.has(draft.id)) {
+        return false;
+      }
+      const failure = getErrorMessage(error, t('errorSendingMessage'));
+      updateAttachmentDraft(draft.id, { status: 'failed', error: failure });
+      return false;
     }
   };
 
   // Handle regular message submission
   const handleSubmit = async () => {
+    if (!isRoomSessionReady) return;
+    if (!componentMountedRef.current) return;
+    if (attachmentRoomIdRef.current !== roomId) return;
     if (!canPost) {
-      setErrorMessage(postingClosedMessage);
+      showTransientError(postingClosedMessage);
       return;
     }
 
     // Parse latest content (might be redundant if useEffect handles it well)
     const latestContentItems = parseEditorContent();
 
-    if (!hasMessageContent(latestContentItems) || isSending || isAIInputLocked) return;
+    const currentAttachmentDrafts = attachmentDraftsRef.current;
+    if ((!hasMessageContent(latestContentItems) && currentAttachmentDrafts.length === 0) || isSending || isAIInputLocked) return;
 
     const avatar = { text: avatarText, color: avatarColor };
+    const submitRoomId = roomId;
+    const submitRoomGeneration = attachmentRoomGenerationRef.current;
+    const isSubmitRoomCurrent = () => (
+      componentMountedRef.current
+      && attachmentRoomIdRef.current === submitRoomId
+      && attachmentRoomGenerationRef.current === submitRoomGeneration
+    );
+    if (!isSubmitRoomCurrent()) return;
     const outgoingItems = buildOutgoingMessageItems(latestContentItems);
     const singleTextItem =
       outgoingItems.length === 1 && outgoingItems[0].type === 'text'
         ? outgoingItems[0]
         : null;
 
-    if (singleTextItem) {
+    if (singleTextItem && currentAttachmentDrafts.length === 0) {
+      const textSendRoomId = roomId;
+      const textSendRoomGeneration = attachmentRoomGenerationRef.current;
+      const isTextSendRoomCurrent = () => (
+        componentMountedRef.current
+        && attachmentRoomIdRef.current === textSendRoomId
+        && attachmentRoomGenerationRef.current === textSendRoomGeneration
+      );
+      if (!isTextSendRoomCurrent()) return;
       const clientMessageId = createClientMessageId();
       const optimisticMessage = buildOptimisticTextMessage(singleTextItem.content, clientMessageId, avatar, replyToMessage);
 
@@ -740,98 +1059,159 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       clearEditorImmediately();
       onCancelReply();
 
-      sendMessage(singleTextItem.content, roomId, 'text', username, avatar, replyToMessage?.id, clientMessageId)
+      sendMessage(singleTextItem.content, textSendRoomId, 'text', username, avatar, replyToMessage?.id, clientMessageId)
         .then((savedMessage) => {
+          if (!isTextSendRoomCurrent()) return undefined;
           onOptimisticMessageSaved?.(clientMessageId, savedMessage);
           return undefined;
         })
         .catch((error) => {
+          if (!isTextSendRoomCurrent()) return;
           console.error('Error sending message:', error);
           onOptimisticMessageFailed?.(clientMessageId, getErrorMessage(error, t('errorSendingMessage')));
-          setErrorMessage(t('errorSendingMessage'));
+          showPersistentError(t('errorSendingMessage'), { announce: !onOptimisticMessageFailed });
         });
 
       if (focusTimerRef.current) {
         clearTimeout(focusTimerRef.current);
       }
       focusTimerRef.current = setTimeout(() => {
-        editorRef.current?.focus();
+        if (isTextSendRoomCurrent()) {
+          editorRef.current?.focus();
+        }
         focusTimerRef.current = null;
       }, 0);
       return;
     }
 
     setIsSending(true);
+    dismissError();
     try {
       let replyToMessageId = replyToMessage?.id;
+      let failedCount = 0;
+      let attemptedCount = 0;
+      let sentText = false;
 
       for (const item of outgoingItems) {
+        if (!isSubmitRoomCurrent()) return;
         if (item.type === 'text') {
-          await sendMessage(item.content, roomId, 'text', username, avatar, replyToMessageId);
-          if (replyToMessageId) {
-            replyToMessageId = undefined;
-            onCancelReply();
-          }
-        } else {
           try {
-            // 压缩图片
-            const options = {
-              maxSizeMB: 2,
-              useWebWorker: true
-            };
-
-            const compressedFile = await imageCompression(item.file, options);
-
-            await uploadMediaMessage({
-              file: compressedFile,
-              roomId,
-              kind: 'image',
-              mimeType: compressedFile.type || item.file.type || 'image/webp',
-              username,
-              avatar,
-              replyToMessageId,
-            });
+            attemptedCount += 1;
+            await sendMessage(item.content, submitRoomId, 'text', username, avatar, replyToMessageId);
+            if (!isSubmitRoomCurrent()) return;
+            sentText = true;
             if (replyToMessageId) {
               replyToMessageId = undefined;
               onCancelReply();
             }
-
-            // 如果有预览URL，释放它
-            if (item.previewUrl) {
-              URL.revokeObjectURL(item.previewUrl);
-            }
           } catch (error) {
-            console.error('Error sending image:', error);
-            throw error;
+            failedCount += 1;
+            console.error('Error sending text in attachment batch:', error);
           }
         }
       }
 
-      clearEditorImmediately();
-      setErrorMessage(null);
-
-    } catch (error) {
-      console.error('Error sending message:', error);
-      setErrorMessage(t('errorSendingMessage'));
-    } finally {
-      setIsSending(false);
-      if (focusTimerRef.current) {
-        clearTimeout(focusTimerRef.current);
+      if (!isSubmitRoomCurrent()) return;
+      if (sentText) {
+        clearEditorImmediately();
       }
-      focusTimerRef.current = setTimeout(() => {
-        editorRef.current?.focus();
-        focusTimerRef.current = null;
-      }, 0);
+
+      for (const draft of currentAttachmentDrafts) {
+        if (!isSubmitRoomCurrent()) return;
+        if (cancelledAttachmentIdsRef.current.has(draft.id)) continue;
+        attemptedCount += 1;
+        const sent = await uploadAttachmentDraft(
+          draft,
+          avatar,
+          replyToMessageId,
+          submitRoomId,
+          submitRoomGeneration,
+        );
+        if (!isSubmitRoomCurrent()) return;
+        if (sent) {
+          if (replyToMessageId) {
+            replyToMessageId = undefined;
+            onCancelReply();
+          }
+        } else if (!cancelledAttachmentIdsRef.current.has(draft.id)) {
+          failedCount += 1;
+        }
+      }
+
+      if (!isSubmitRoomCurrent()) return;
+      if (failedCount > 0) {
+        showPersistentError(t('attachmentBatchFailed', { failed: failedCount, total: attemptedCount }));
+      } else {
+        dismissError();
+      }
+    } catch (error) {
+      if (!isSubmitRoomCurrent()) return;
+      console.error('Error sending message:', error);
+      showPersistentError(t('errorSendingMessage'));
+    } finally {
+      const liveDraftIds = new Set(attachmentDraftsRef.current.map(draft => draft.id));
+      currentAttachmentDrafts.forEach(draft => {
+        if (!liveDraftIds.has(draft.id)) {
+          cancelledAttachmentIdsRef.current.delete(draft.id);
+        }
+      });
+      if (isSubmitRoomCurrent()) {
+        setIsSending(false);
+        if (focusTimerRef.current) {
+          clearTimeout(focusTimerRef.current);
+        }
+        focusTimerRef.current = setTimeout(() => {
+          if (isSubmitRoomCurrent()) {
+            editorRef.current?.focus();
+          }
+          focusTimerRef.current = null;
+        }, 0);
+      }
     }
   };
 
   const setImageInputError = (error: ImageInputValidationError) => {
     if (error.errorKey === 'maxImagesReached') {
-      setErrorMessage(t(error.errorKey, { max: error.max ?? MAX_MESSAGE_IMAGES }));
+      showTransientError(t(error.errorKey, { max: error.max ?? MAX_MESSAGE_IMAGES }));
       return;
     }
 
-    setErrorMessage(t(error.errorKey));
+    showTransientError(t(error.errorKey));
+  };
+
+  const handleRetryAttachment = async (draft: AttachmentDraft) => {
+    if (!isRoomSessionReady || isSending || isAIInputLocked || !canPost) return;
+    setIsSending(true);
+    dismissError();
+    const retryRoomId = roomId;
+    const retryRoomGeneration = attachmentRoomGenerationRef.current;
+    try {
+      const sent = await uploadAttachmentDraft(
+        draft,
+        { text: avatarText, color: avatarColor },
+        replyToMessage?.id,
+        retryRoomId,
+        retryRoomGeneration,
+      );
+      if (
+        !componentMountedRef.current
+        || attachmentRoomIdRef.current !== retryRoomId
+        || attachmentRoomGenerationRef.current !== retryRoomGeneration
+      ) return;
+      if (sent) {
+        onCancelReply();
+      } else if (!cancelledAttachmentIdsRef.current.has(draft.id)) {
+        showPersistentError(t('attachmentUploadFailed', { name: draft.filename }));
+      }
+    } finally {
+      if (
+        componentMountedRef.current
+        && attachmentRoomIdRef.current === retryRoomId
+        && attachmentRoomGenerationRef.current === retryRoomGeneration
+      ) {
+        setIsSending(false);
+      }
+    }
   };
 
   const resetVoiceDraft = useCallback(() => {
@@ -845,7 +1225,20 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   }, []);
 
   const focusEditorAtEnd = useCallback((text: string) => {
-    requestAnimationFrame(() => {
+    const targetRoomId = attachmentRoomIdRef.current;
+    const targetRoomGeneration = attachmentRoomGenerationRef.current;
+    if (editorFocusFrameRef.current !== null) {
+      window.cancelAnimationFrame(editorFocusFrameRef.current);
+    }
+    editorFocusFrameRef.current = window.requestAnimationFrame(() => {
+      editorFocusFrameRef.current = null;
+      if (
+        !componentMountedRef.current
+        || attachmentRoomIdRef.current !== targetRoomId
+        || attachmentRoomGenerationRef.current !== targetRoomGeneration
+      ) {
+        return;
+      }
       const editor = editorRef.current;
       if (!editor) return;
 
@@ -906,8 +1299,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   }, [insertTranscriptIntoEditor]);
 
   const startVoiceRecording = useCallback(async (intent: VoiceRecordingIntent) => {
+    if (!isRoomSessionReady) return;
     if (!canPost) {
-      setErrorMessage(postingClosedMessage);
+      showTransientError(postingClosedMessage);
       return;
     }
 
@@ -923,7 +1317,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     recordingSecondsRef.current = 0;
     setRecordingSeconds(0);
     setLiveTranscript('');
-    setErrorMessage(null);
+    dismissError();
     setVoiceWorkflow(intent === 'voice' ? 'recording-voice' : 'recording-transcript');
 
     try {
@@ -955,8 +1349,10 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         const stoppedIntent = recordingIntentRef.current;
         const stoppedDuration = Math.max(1, recordingSecondsRef.current);
 
-        const transcriber = transcriberRef.current;
-        transcriberRef.current = null;
+        const transcriber = recordingSessionRef.current === sessionId ? transcriberRef.current : null;
+        if (transcriberRef.current === transcriber) {
+          transcriberRef.current = null;
+        }
         if (transcriber) {
           try { await transcriber.stop(); } catch { /* ignore */ }
           const finalText = transcriber.getText().trim();
@@ -964,8 +1360,15 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         }
 
         stream.getTracks().forEach(track => track.stop());
-        audioStreamRef.current = null;
-        mediaRecorderRef.current = null;
+        if (!componentMountedRef.current || recordingSessionRef.current !== sessionId) {
+          return;
+        }
+        if (audioStreamRef.current === stream) {
+          audioStreamRef.current = null;
+        }
+        if (mediaRecorderRef.current === recorder) {
+          mediaRecorderRef.current = null;
+        }
         setIsRecording(false);
         setRecordingSeconds(0);
         recordingSecondsRef.current = 0;
@@ -987,7 +1390,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
         const blob = new Blob(audioChunksRef.current, { type: recordingMimeTypeRef.current });
         if (blob.size < 1000) {
-          setErrorMessage(t('voiceRecordingTooShort'));
+          showTransientError(t('voiceRecordingTooShort'));
           setVoiceWorkflow('choice');
           return;
         }
@@ -1032,7 +1435,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
             return;
           }
           console.warn('Voice transcription unavailable', error);
-          setErrorMessage(t(getTranscriptionErrorKey(error)));
+          showPersistentError(t(getTranscriptionErrorKey(error)));
           stopVoiceRecording('cancel');
         });
       }
@@ -1046,9 +1449,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       setRecordingSeconds(0);
       recordingSecondsRef.current = 0;
       setVoiceWorkflow('choice');
-      setErrorMessage(t('errorMicPermission'));
+      showTransientError(t('errorMicPermission'));
     }
-  }, [canPost, insertTranscriptIntoEditor, isRecording, isSending, postingClosedMessage, resetVoiceDraft, stopVoiceRecording, t]);
+  }, [canPost, dismissError, insertTranscriptIntoEditor, isRecording, isRoomSessionReady, isSending, postingClosedMessage, resetVoiceDraft, showPersistentError, showTransientError, stopVoiceRecording, t]);
 
   const handleStopVoiceRecording = useCallback(() => {
     stopVoiceRecording(recordingIntentRef.current === 'voice' ? 'preview' : 'insert');
@@ -1066,47 +1469,90 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   }, [resetVoiceDraft, restoreEditorSnapshot]);
 
   const handleSendVoiceDraft = useCallback(async () => {
+    if (!isRoomSessionReady) return;
     if (!canPost) {
-      setErrorMessage(postingClosedMessage);
+      showTransientError(postingClosedMessage);
       return;
     }
 
     if (!recordedVoiceBlob || isSending) return;
 
+    const requestRoomId = roomId;
+    const requestRoomGeneration = attachmentRoomGenerationRef.current;
+    const isRequestRoomCurrent = () => (
+      componentMountedRef.current
+      && attachmentRoomIdRef.current === requestRoomId
+      && attachmentRoomGenerationRef.current === requestRoomGeneration
+    );
+    if (!isRequestRoomCurrent()) return;
+
+    const controller = new AbortController();
+    voiceUploadAbortControllerRef.current?.abort();
+    voiceUploadAbortControllerRef.current = controller;
     setIsSending(true);
     try {
       const avatar = { text: avatarText, color: avatarColor };
       await uploadMediaMessage({
         file: recordedVoiceBlob,
-        roomId,
+        roomId: requestRoomId,
         kind: 'audio',
         mimeType: recordedVoiceBlob.type || recordingMimeTypeRef.current || 'audio/webm',
         username,
         avatar,
         replyToMessageId: replyToMessage?.id,
         durationMs: Math.round(recordedVoiceDuration * 1000),
+        signal: controller.signal,
       });
+      if (!isRequestRoomCurrent() || controller.signal.aborted) return;
       resetVoiceDraft();
       setVoiceWorkflow('choice');
       setIsVoiceMode(false);
       onCancelReply();
       restoreEditorSnapshot();
     } catch {
-      setErrorMessage(t('errorSendingMessage'));
+      if (!isRequestRoomCurrent() || controller.signal.aborted) return;
+      showPersistentError(t('errorSendingMessage'));
     } finally {
-      setIsSending(false);
+      if (voiceUploadAbortControllerRef.current === controller) {
+        voiceUploadAbortControllerRef.current = null;
+      }
+      if (isRequestRoomCurrent()) {
+        setIsSending(false);
+      }
     }
-  }, [avatarColor, avatarText, canPost, isSending, onCancelReply, postingClosedMessage, recordedVoiceBlob, recordedVoiceDuration, replyToMessage?.id, resetVoiceDraft, restoreEditorSnapshot, roomId, t, username]);
+  }, [avatarColor, avatarText, canPost, isRoomSessionReady, isSending, onCancelReply, postingClosedMessage, recordedVoiceBlob, recordedVoiceDuration, replyToMessage?.id, resetVoiceDraft, restoreEditorSnapshot, roomId, showPersistentError, showTransientError, t, username]);
 
   // Release the mic stream / transcription session if unmounted mid-recording.
   useEffect(() => {
+    const attachmentAbortControllers = attachmentAbortControllersRef.current;
+    componentMountedRef.current = true;
     return () => {
+      componentMountedRef.current = false;
+      recordingSessionRef.current += 1;
       if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+      const recorder = mediaRecorderRef.current;
+      mediaRecorderRef.current = null;
+      if (recorder) {
+        recorder.ondataavailable = null;
+        recorder.onstop = null;
+        if (recorder.state !== 'inactive') {
+          try { recorder.stop(); } catch { /* recorder may already be stopping */ }
+        }
+      }
       transcriberRef.current?.stop().catch(() => { /* ignore */ });
       audioStreamRef.current?.getTracks().forEach(track => track.stop());
       if (recordedVoiceUrlRef.current) {
         URL.revokeObjectURL(recordedVoiceUrlRef.current);
       }
+      voiceUploadAbortControllerRef.current?.abort();
+      attachmentAbortControllers.forEach(controller => controller.abort());
+      if (editorFocusFrameRef.current !== null) {
+        window.cancelAnimationFrame(editorFocusFrameRef.current);
+        editorFocusFrameRef.current = null;
+      }
+      attachmentDraftsRef.current.forEach(draft => {
+        if (draft.previewUrl) URL.revokeObjectURL(draft.previewUrl);
+      });
     };
   }, []);
 
@@ -1121,7 +1567,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         recordingSessionRef.current += 1;
         resetVoiceDraft();
         setVoiceWorkflow('choice');
-        requestAnimationFrame(restoreEditorSnapshot);
+        restoreEditorSnapshot();
         return false;
       }
 
@@ -1131,76 +1577,29 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     });
   }, [currentInputText, isRecording, resetVoiceDraft, restoreEditorSnapshot, stopVoiceRecording]);
 
-  const sendVideoFile = async (file: File) => {
-    if (!canPost) {
-      setErrorMessage(postingClosedMessage);
-      return;
-    }
-
-    if (isSending || isAIInputLocked) return;
-
-    setIsSending(true);
-    try {
-      const avatar = { text: avatarText, color: avatarColor };
-      await uploadMediaMessage({
+  const enqueueAttachmentDraft = (file: File, kind: AttachmentDraft['kind']) => {
+    const previewUrl = kind === 'image' ? URL.createObjectURL(file) : undefined;
+    const mimeType = kind === 'video'
+      ? getVideoMimeType(file) || 'video/mp4'
+      : file.type || (kind === 'image' ? 'image/webp' : 'application/octet-stream');
+    setAttachmentDrafts(current => [
+      ...current,
+      {
+        id: createClientMessageId(),
         file,
-        roomId,
-        kind: 'video',
-        mimeType: getVideoMimeType(file) || 'video/mp4',
-        filename: file.name,
-        username,
-        avatar,
-        replyToMessageId: replyToMessage?.id,
-      });
-      onCancelReply();
-      setErrorMessage(null);
-    } catch (error) {
-      console.error('Error sending video:', error);
-      setErrorMessage(t('errorSendingMessage'));
-    } finally {
-      setIsSending(false);
-    }
+        kind,
+        mimeType,
+        filename: file.name || t(kind === 'image' ? 'sharedImage' : kind === 'video' ? 'videoMessage' : 'fileAttachment'),
+        previewUrl,
+        status: 'ready',
+        progress: 0,
+      },
+    ]);
   };
 
-  const sendArbitraryFile = async (file: File) => {
-    if (!canPost) {
-      setErrorMessage(postingClosedMessage);
-      return;
-    }
-
-    if (isSending || isAIInputLocked) return;
-
-    if (file.size > MAX_FILE_UPLOAD_BYTES) {
-      setErrorMessage(t('fileTooLarge'));
-      return;
-    }
-
-    setIsSending(true);
-    try {
-      const avatar = { text: avatarText, color: avatarColor };
-      await uploadMediaMessage({
-        file,
-        roomId,
-        kind: 'file',
-        mimeType: file.type || 'application/octet-stream',
-        filename: file.name,
-        username,
-        avatar,
-        replyToMessageId: replyToMessage?.id,
-      });
-      onCancelReply();
-      setErrorMessage(null);
-    } catch (error) {
-      console.error('Error sending file:', error);
-      setErrorMessage(t('errorSendingMessage'));
-    } finally {
-      setIsSending(false);
-    }
-  };
-
-  const handleArbitraryFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!canPost) {
-      setErrorMessage(postingClosedMessage);
+  const handleArbitraryFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!isRoomSessionReady || !canPost) {
+      showTransientError(postingClosedMessage);
       if (arbitraryFileInputRef.current) {
         arbitraryFileInputRef.current.value = '';
       }
@@ -1209,9 +1608,13 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
     const files = e.target.files;
     if (files) {
-      for (const file of Array.from(files)) {
-        await sendArbitraryFile(file);
-      }
+      Array.from(files).forEach(file => {
+        if (file.size > MAX_FILE_UPLOAD_BYTES) {
+          showTransientError(t('fileTooLarge'));
+          return;
+        }
+        enqueueAttachmentDraft(file, 'file');
+      });
     }
 
     if (arbitraryFileInputRef.current) {
@@ -1220,9 +1623,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   };
 
   // 处理媒体上传
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!canPost) {
-      setErrorMessage(postingClosedMessage);
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!isRoomSessionReady || !canPost) {
+      showTransientError(postingClosedMessage);
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
@@ -1239,7 +1642,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     const supportedFileSet = new Set([...imageFiles, ...videoFiles]);
     const unsupportedFiles = fileList.filter(file => !supportedFileSet.has(file)).length;
     if (unsupportedFiles > 0) {
-      setErrorMessage(t('unsupportedMediaType'));
+      showTransientError(t('unsupportedMediaType'));
     }
 
     // 使用ref获取当前实际图片数量
@@ -1255,9 +1658,13 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       });
     }
 
-    for (const file of videoFiles) {
-      await sendVideoFile(file);
-    }
+    videoFiles.forEach(file => {
+      if (file.size > MAX_FILE_UPLOAD_BYTES) {
+        showTransientError(t('fileTooLarge'));
+        return;
+      }
+      enqueueAttachmentDraft(file, 'video');
+    });
 
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -1272,81 +1679,15 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       return;
     }
 
-    // 创建预览URL
-    const previewUrl = URL.createObjectURL(file);
-
-    // 创建并插入图片元素
     if (imageCountRef.current < MAX_MESSAGE_IMAGES) {
-      insertImageToEditor(previewUrl, file);
+      imageCountRef.current += 1;
+      enqueueAttachmentDraft(file, 'image');
 
       // 重置文件输入
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
     }
-  };
-
-  // 向编辑器插入图片 - 优化性能
-  const insertImageToEditor = (previewUrl: string, file: File) => {
-    const editor = editorRef.current;
-    if (!editor) return;
-
-    // 再次检查图片数量限制
-    if (imageCountRef.current >= MAX_MESSAGE_IMAGES) {
-      setImageInputError({ errorKey: 'maxImagesReached', max: MAX_MESSAGE_IMAGES });
-      return;
-    }
-
-    // 更新内部引用计数
-    imageCountRef.current += 1;
-
-    const img = document.createElement('img');
-    img.src = previewUrl;
-    img.className = 'max-w-32 max-h-32 inline-block object-contain m-1 align-middle';
-
-    // 将File对象存储在WeakMap中
-    imageFileMap.set(img, file);
-
-    // 获取当前选中区域并插入图片
-    const selection = window.getSelection();
-    const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
-    const shouldInsertAtSelection = range && editor.contains(range.commonAncestorContainer);
-
-    if (shouldInsertAtSelection) {
-      // 插入图片到选中位置
-      range.insertNode(img);
-
-      // 将光标移动到图片后面
-      range.setStartAfter(img);
-      range.setEndAfter(img);
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-
-      // 插入一个空格以便继续输入文字
-      const space = document.createTextNode('\u00A0');
-      range.insertNode(space);
-      range.setStartAfter(space);
-      range.setEndAfter(space);
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-    } else {
-      // 如果没有选区，追加到编辑器末尾
-      editor.appendChild(img);
-
-      // 添加空格
-      const space = document.createTextNode('\u00A0');
-      editor.appendChild(space);
-
-      // 将光标设置到图片后
-      const newRange = document.createRange();
-      newRange.setStartAfter(space);
-      newRange.setEndAfter(space);
-      selection?.removeAllRanges();
-      selection?.addRange(newRange);
-    }
-
-    // 同步更新状态
-    setImageCount(imageCountRef.current);
   };
 
   // 处理粘贴事件 - 防止快速粘贴和同步更新计数
@@ -1499,20 +1840,40 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           ? t('fileAttachment')
           : t('sharedImage'))
     : replyToMessage?.content.replace(/\s+/g, ' ').trim().slice(0, 120);
+  const getAttachmentStatusLabel = (draft: AttachmentDraft) => {
+    if (draft.status === 'compressing') return t('compressingAttachment');
+    if (draft.status === 'uploading') return t('uploadingAttachment', { progress: draft.progress });
+    if (draft.status === 'failed') return t('attachmentUploadFailedShort');
+    return t('attachmentReady');
+  };
 
   return (
     <div className="relative w-full">
       {/* 错误消息显示 */}
       {errorMessage && (
-        <div className="absolute -top-10 left-0 right-0 flex justify-center">
-          <Card className="px-3 py-1.5 text-xs text-danger bg-danger-100 shadow-[0_0_0_1px_rgba(181,51,51,0.18)]">
-            <Icon icon="lucide:alert-circle" className="inline-block mr-1 text-xs" />{errorMessage}
+        <div className="absolute bottom-full left-0 right-0 z-40 mb-2 flex justify-center px-2">
+          <Card
+            role={shouldAnnounceError ? 'alert' : undefined}
+            aria-live={shouldAnnounceError ? 'assertive' : 'off'}
+            aria-atomic="true"
+            className="flex max-w-full flex-row items-center gap-2 bg-danger-100 px-3 py-1.5 text-xs text-danger shadow-[0_0_0_1px_rgba(181,51,51,0.18)]"
+          >
+            <Icon icon="lucide:alert-circle" className="flex-shrink-0 text-xs" />
+            <span className="min-w-0 break-words">{errorMessage}</span>
+            <button
+              type="button"
+              aria-label={t('dismissError')}
+              className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-danger transition-colors hover:bg-danger-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger"
+              onClick={dismissError}
+            >
+              <Icon icon="lucide:x" className="h-3.5 w-3.5" />
+            </button>
           </Card>
         </div>
       )}
 
       {/* 表情候选:悬浮在输入框上方,不挤压聊天布局 */}
-      {!isVoiceMode && inlineStickerSuggestions.length > 0 && (
+      {!isVoiceMode && !isNonTextInputDisabled && inlineStickerSuggestions.length > 0 && (
         <div
           role="listbox"
           aria-label={t('stickers')}
@@ -1525,6 +1886,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               aria-label={s.keywords[0] || t('sticker')}
               title={s.keywords[0] || ''}
               onClick={() => handleInlineStickerSelect(s.id)}
+              disabled={isNonTextInputDisabled}
               className="flex h-[72px] w-[72px] flex-shrink-0 items-center justify-center rounded-xl p-1.5 transition-colors hover:bg-[#e8e6dc] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#c96442] dark:hover:bg-[#30302e] dark:focus-visible:ring-[#d97757]"
             >
               <img src={apiPath(s.url)} alt="" loading="lazy" draggable={false} className="max-h-full max-w-full object-contain" />
@@ -1551,6 +1913,71 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                 <PostingScheduleDetails postingSchedule={postingSchedule} />
               </PopoverContent>
             </Popover>
+          )}
+
+          {attachmentDrafts.length > 0 && (
+            <div
+              role="list"
+              aria-label={t('attachmentDrafts')}
+              className="flex basis-full gap-1.5 overflow-x-auto px-1 py-1 sm:mx-3 sm:mt-2 sm:px-0"
+            >
+              {attachmentDrafts.map(draft => (
+                <div
+                  key={draft.id}
+                  role="listitem"
+                  data-testid="attachment-draft"
+                  data-attachment-status={draft.status}
+                  className={`flex min-w-[10rem] max-w-[13rem] items-center gap-2 rounded-xl border px-2 py-1.5 ${draft.status === 'failed'
+                    ? 'border-danger-300 bg-danger-50 text-danger-700 dark:border-danger-700 dark:bg-danger-950/40 dark:text-danger-200'
+                    : 'border-[#dedbd0] bg-[#f0eee6] text-[#141413] dark:border-[#3d3d3a] dark:bg-[#242421] dark:text-[#faf9f5]'}`}
+                >
+                  {draft.previewUrl ? (
+                    <img src={draft.previewUrl} alt="" className="h-8 w-8 flex-shrink-0 rounded-md object-cover" />
+                  ) : (
+                    <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-[#e8e6dc] text-[#5e5d59] dark:bg-[#30302e] dark:text-[#b0aea5]">
+                      <Icon icon={draft.kind === 'video' ? 'lucide:video' : 'lucide:file'} className="h-4 w-4" />
+                    </span>
+                  )}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-medium" title={draft.filename}>{draft.filename}</span>
+                    <span className="block text-[10px] leading-4 opacity-75">
+                      {formatAttachmentSize(draft.file.size)} · {getAttachmentStatusLabel(draft)}
+                    </span>
+                    {draft.status === 'uploading' && (
+                      <span
+                        role="progressbar"
+                        aria-label={t('uploadProgress', { name: draft.filename })}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={draft.progress}
+                        className="mt-0.5 block h-1 overflow-hidden rounded-full bg-black/10 dark:bg-white/10"
+                      >
+                        <span className="block h-full rounded-full bg-secondary" style={{ width: `${draft.progress}%` }} />
+                      </span>
+                    )}
+                  </span>
+                  {draft.status === 'failed' && (
+                    <button
+                      type="button"
+                      aria-label={t('retryAttachment', { name: draft.filename })}
+                      className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary dark:hover:bg-white/10"
+                      onClick={() => { void handleRetryAttachment(draft); }}
+                      disabled={isSending || isAIInputLocked || !canPost}
+                    >
+                      <Icon icon="lucide:refresh-cw" className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    aria-label={t('removeAttachment', { name: draft.filename })}
+                    className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary dark:hover:bg-white/10"
+                    onClick={() => removeAttachmentDraft(draft.id)}
+                  >
+                    <Icon icon="lucide:x" className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
           )}
 
           {replyToMessage && (
@@ -1582,7 +2009,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           )}
 
           {isVoiceMode ? (
-            <div className="flex min-h-7 min-w-0 flex-1 px-2 py-0.5 sm:min-h-16 sm:px-4 sm:pb-2 sm:pt-4">
+            <div key="voice-input" className="flex min-h-7 min-w-0 flex-1 px-2 py-0.5 sm:min-h-16 sm:px-4 sm:pb-2 sm:pt-4">
               <div className="w-full min-w-0">
                 {voiceWorkflow === 'choice' && (
                   <div className="grid w-full grid-cols-2 gap-2">
@@ -1663,7 +2090,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                     <div className="grid grid-cols-2 gap-2">
                       <Button
                         type="button"
-                        className="h-10 rounded-xl bg-[#c96442] text-sm font-medium text-[#faf9f5] shadow-[0_0_0_1px_rgba(201,100,66,0.9)]"
+                        className="h-10 rounded-xl bg-secondary text-sm font-medium text-secondary-foreground shadow-[0_0_0_1px_rgba(201,100,66,0.9)] hover:bg-[#94462f] dark:hover:bg-[#e08a6a]"
                         onPress={handleSendVoiceDraft}
                         isDisabled={isNonTextInputDisabled || !recordedVoiceBlob}
                       >
@@ -1687,8 +2114,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           ) : (
             /* ===== Text mode: normal editor ===== */
             <div
+              key="text-input"
               className="min-h-7 max-h-28 min-w-0 flex-1 overflow-y-auto px-2 py-0.5 text-base leading-5 text-[#141413] dark:text-[#faf9f5] sm:min-h-16 sm:max-h-36 sm:w-full sm:flex-none sm:px-4 sm:pb-2 sm:pt-4 sm:text-sm"
-              contentEditable={!isSending && !isAIInputLocked && canPost}
+              contentEditable={isRoomSessionReady && !isSending && !isAIInputLocked && canPost}
               onInput={parseEditorContent}
               onPaste={handlePaste}
               onKeyDown={handleKeyDown}
@@ -1714,7 +2142,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               aria-label={isVoiceMode ? t('keyboardInput') : t('voiceInput')}
               className="h-7 w-7 min-w-7 rounded-full text-[#5e5d59] dark:text-[#b0aea5] sm:h-9 sm:w-9 sm:min-w-9"
               onPress={handleToggleVoiceMode}
-              isDisabled={isNonTextInputDisabled}
+              isDisabled={isNonTextInputDisabled || attachmentDrafts.length > 0}
             >
               <Icon icon={isVoiceMode ? 'lucide:keyboard' : 'lucide:mic'} className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
             </Button>
@@ -1773,7 +2201,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                 {/* AI设置按钮 */}
                 <MessageInputAISettingsButton
                   onOpen={onAISettingsOpen}
-                  isDisabled={isSending || isAIInputLocked || isAgentRunning}
+                  isDisabled={isSending || isAIInputLocked || isAgentRunning || !isRoomSessionReady}
                 />
               </>
             )}
@@ -1812,11 +2240,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                 isSending={isSending}
                 isAiProcessing={isAiProcessing || isInterruptingCodeAgent}
                 isAgentRunning={isCodeAgentRoom && isRoomAIProcessing}
-                isInputLocked={isAIInputLocked}
+                isInputLocked={isAIInputLocked || !isRoomSessionReady}
                 canPost={canPost}
                 isMacOS={isMacOS}
                 currentInputText={currentInputText}
-                imageCount={imageCount}
+                imageCount={attachmentDrafts.length}
                 aiContextMessageLimit={aiContextMessageLimit}
                 isSettingsOpen={isAISettingsOpen}
                 onSettingsClose={onAISettingsClose}

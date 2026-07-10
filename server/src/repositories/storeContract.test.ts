@@ -27,6 +27,24 @@ class MemoryRedis {
     return this.zsets.get(key)!;
   }
 
+  private rebuildClientMessageIds(messageKey: string, clientMessageIdsKey?: string) {
+    if (!clientMessageIdsKey) return;
+    this.hashes.delete(clientMessageIdsKey);
+    const index = this.hash(clientMessageIdsKey);
+    index.set('__roomtalk_index_ready__', '1');
+    for (const payload of this.lists.get(messageKey) || []) {
+      try {
+        const item = JSON.parse(payload) as Message;
+        if (item.clientMessageId) {
+          const field = `${item.clientId.length}:${item.clientId}${item.clientMessageId}`;
+          if (!index.has(field)) index.set(field, item.id);
+        }
+      } catch {
+        // Invalid legacy list entries do not participate in idempotency.
+      }
+    }
+  }
+
   private updateRoomActivity(roomId: string, lastActivityAt: string, useGreatest: boolean) {
     const roomJson = this.hash('rooms').get(roomId);
     if (!roomJson) return null;
@@ -281,7 +299,51 @@ class MemoryRedis {
       return this.set(roomMembersKey).size;
     }
 
-    if (script.includes("redis.call('HSET', KEYS[3]")) {
+    if (script.includes('local dedupeField = ARGV[4]')) {
+      const [roomsKey, messageKey, clientMessageIdsKey] = options.keys;
+      const [roomId, messagePayload, lastActivityAt, dedupeField, messageId] = options.arguments;
+      const roomJson = this.hash(roomsKey).get(roomId);
+      if (!roomJson) return [0, '', ''];
+
+      if (dedupeField) {
+        const index = this.hash(clientMessageIdsKey);
+        const existingMessageId = index.get(dedupeField);
+        if (!existingMessageId && !index.has('__roomtalk_index_ready__')) {
+          this.rebuildClientMessageIds(messageKey, clientMessageIdsKey);
+        }
+        const indexedMessageId = this.hash(clientMessageIdsKey).get(dedupeField);
+        if (indexedMessageId) {
+          const existingPayload = (this.lists.get(messageKey) || []).find(item => {
+            try {
+              return JSON.parse(item).id === indexedMessageId;
+            } catch {
+              return false;
+            }
+          });
+          if (existingPayload) return [2, roomJson, existingPayload];
+          this.hash(clientMessageIdsKey).delete(dedupeField);
+        }
+      }
+
+      const room = JSON.parse(roomJson);
+      const updatedRoom = {
+        ...room,
+        lastActivityAt: latest(room.lastActivityAt || room.createdAt, lastActivityAt),
+        messageVersion: (Number(room.messageVersion) || 0) + 1,
+        roomVersion: (Number(room.roomVersion) || 0) + 1,
+      };
+      this.hash(roomsKey).set(roomId, JSON.stringify(updatedRoom));
+      const list = this.lists.get(messageKey) || [];
+      list.push(messagePayload);
+      this.lists.set(messageKey, list);
+      if (dedupeField) {
+        this.hash(clientMessageIdsKey).set(dedupeField, messageId);
+        this.hash(clientMessageIdsKey).set('__roomtalk_index_ready__', '1');
+      }
+      return [1, JSON.stringify(updatedRoom), messagePayload];
+    }
+
+    if (script.includes("redis.call('ZADD', KEYS[5]")) {
       const [, messageKey, mediaAssetsKey, roomMediaAssetsKey, roomMediaAssetsTimelineKey] = options.keys;
       const [roomId, messagePayload, lastActivityAt, assetId, assetPayload, assetScore] = options.arguments;
       const updatedRoom = this.updateRoomActivity(roomId, lastActivityAt, true);
@@ -296,7 +358,7 @@ class MemoryRedis {
     }
 
     if (script.includes('local mediaMessageId')) {
-      const [, messageKey] = options.keys;
+      const [, messageKey, clientMessageIdsKey] = options.keys;
       const [roomId, messageId, mimeType] = options.arguments;
       const roomJson = this.hash('rooms').get(roomId);
       if (!roomJson) return [0, 0, '', ''];
@@ -353,7 +415,7 @@ class MemoryRedis {
     }
 
     if (script.includes('return { 1, found, #remaining, cjson.encode(room) }')) {
-      const [, messageKey] = options.keys;
+      const [, messageKey, clientMessageIdsKey] = options.keys;
       const [roomId, messageId] = options.arguments;
       const roomJson = this.hash('rooms').get(roomId);
       if (!roomJson) return [0, 0, 0, ''];
@@ -376,11 +438,12 @@ class MemoryRedis {
       };
       this.hash('rooms').set(roomId, JSON.stringify(updatedRoom));
       this.lists.set(messageKey, remaining);
+      this.rebuildClientMessageIds(messageKey, clientMessageIdsKey);
       return [1, 1, remaining.length, JSON.stringify(updatedRoom)];
     }
 
     if (script.includes('local mode = ARGV[3]')) {
-      const [, messageKey] = options.keys;
+      const [, messageKey, clientMessageIdsKey] = options.keys;
       const [roomId, messageId, mode] = options.arguments;
       const roomJson = this.hash('rooms').get(roomId);
       if (!roomJson) return [0, 0, 0, ''];
@@ -404,11 +467,12 @@ class MemoryRedis {
       };
       this.hash('rooms').set(roomId, JSON.stringify(updatedRoom));
       this.lists.set(messageKey, remaining);
+      this.rebuildClientMessageIds(messageKey, clientMessageIdsKey);
       return [1, 1, remaining.length, JSON.stringify(updatedRoom), ...remaining];
     }
 
     if (script.includes('cjson.encode(room), updatedPayload')) {
-      const [, messageKey] = options.keys;
+      const [, messageKey, clientMessageIdsKey] = options.keys;
       const [roomId, messageId, newContent, updatedAt] = options.arguments;
       const roomJson = this.hash('rooms').get(roomId);
       if (!roomJson) return [0, 0, 0, '', ''];
@@ -432,11 +496,12 @@ class MemoryRedis {
       };
       this.hash('rooms').set(roomId, JSON.stringify(updatedRoom));
       this.lists.set(messageKey, remaining);
+      this.rebuildClientMessageIds(messageKey, clientMessageIdsKey);
       return [1, 1, remaining.length, JSON.stringify(updatedRoom), JSON.stringify(updatedMessage), ...remaining];
     }
 
     if (script.includes('local payload = ARGV[3]')) {
-      const [, messageKey] = options.keys;
+      const [, messageKey, clientMessageIdsKey] = options.keys;
       const [roomId, targetId, payload, lastActivityAt] = options.arguments;
       const updatedRoom = this.updateRoomActivity(roomId, lastActivityAt, true);
       if (!updatedRoom) return [0, 0, 0, ''];
@@ -451,26 +516,30 @@ class MemoryRedis {
       if (index === -1) {
         list.push(payload);
         this.lists.set(messageKey, list);
+        this.rebuildClientMessageIds(messageKey, clientMessageIdsKey);
         return [1, 0, list.length, JSON.stringify(updatedRoom)];
       }
       list[index] = payload;
       this.lists.set(messageKey, list);
+      this.rebuildClientMessageIds(messageKey, clientMessageIdsKey);
       return [1, 1, list.length, JSON.stringify(updatedRoom)];
     }
 
     if (script.includes('return { 1, #ARGV - 1 }')) {
-      const [, messageKey] = options.keys;
+      const [, messageKey, clientMessageIdsKey] = options.keys;
       const [roomId, ...messages] = options.arguments;
       if (!this.hash('rooms').has(roomId)) return [0, 0];
       this.lists.set(messageKey, messages);
+      this.rebuildClientMessageIds(messageKey, clientMessageIdsKey);
       return [1, messages.length];
     }
 
-    const [, messageKey] = options.keys;
+    const [, messageKey, clientMessageIdsKey] = options.keys;
     const [roomId, lastActivityAt, ...messages] = options.arguments;
     const updatedRoom = this.updateRoomActivity(roomId, lastActivityAt, false);
     if (!updatedRoom) return [0, 0, ''];
     this.lists.set(messageKey, messages);
+    this.rebuildClientMessageIds(messageKey, clientMessageIdsKey);
     return [1, messages.length, JSON.stringify(updatedRoom)];
   }
 
@@ -510,6 +579,7 @@ type MessageRow = {
   id: string;
   room_id: string;
   client_id: string;
+  client_message_id?: string | null;
   content: string;
   timestamp: string;
   updated_at: string | null;
@@ -736,6 +806,14 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
       return { rows: (room ? [room] : []) as T[], rowCount: room ? 1 : 0 };
     }
 
+    if (/FROM room_messages WHERE room_id = \$1 AND client_id = \$2 AND client_message_id = \$3 LIMIT 1/.test(compactSql)) {
+      const [roomId, clientId, clientMessageId] = params.map(String);
+      const existing = (this.messages.get(roomId) || []).find(row => (
+        row.client_id === clientId && row.client_message_id === clientMessageId
+      ));
+      return { rows: (existing ? [existing] : []) as T[], rowCount: existing ? 1 : 0 };
+    }
+
     if (/SELECT COALESCE\(MAX\(position\), -1\) \+ 1 AS position FROM room_messages WHERE room_id = \$1/.test(compactSql)) {
       const rows = this.messages.get(String(params[0])) || [];
       const maxPosition = rows.reduce((max, row) => Math.max(max, row.position), -1);
@@ -774,6 +852,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         position,
         modelStepId,
         modelStepSequence,
+        clientMessageId,
       ] = params;
       const roomMessages = this.messages.get(String(roomId)) || [];
       const existingIndex = roomMessages.findIndex(message => message.id === id);
@@ -782,6 +861,7 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         id: String(id),
         room_id: String(roomId),
         client_id: String(clientId),
+        client_message_id: clientMessageId === null || clientMessageId === undefined ? null : String(clientMessageId),
         content: String(content),
         timestamp: String(timestamp),
         updated_at: updatedAt === null || updatedAt === undefined ? null : String(updatedAt),
@@ -791,6 +871,8 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         mime_type: mimeType === null || mimeType === undefined ? null : String(mimeType),
         status: status === null || status === undefined ? null : status as Message['status'],
         turn_id: turnId === null || turnId === undefined ? null : String(turnId),
+        model_step_id: modelStepId === null || modelStepId === undefined ? null : String(modelStepId),
+        model_step_sequence: modelStepSequence === null || modelStepSequence === undefined ? null : Number(modelStepSequence),
         tool_call_id: toolCallId === null || toolCallId === undefined ? null : String(toolCallId),
         tool_name: toolName === null || toolName === undefined ? null : String(toolName),
         tool_args: jsonValue(toolArgs),
@@ -806,8 +888,6 @@ class StatefulPostgresPool implements PostgresPool, PostgresClient {
         code_agent_mode: codeAgentMode === null || codeAgentMode === undefined ? null : String(codeAgentMode),
         code_agent_queued_input: jsonValue(codeAgentQueuedInput),
         code_agent_image_message_ids: jsonValue(codeAgentImageMessageIds),
-        model_step_id: modelStepId === null || modelStepId === undefined ? null : String(modelStepId),
-        model_step_sequence: modelStepSequence === null || modelStepSequence === undefined ? null : Number(modelStepSequence),
         position: existingPosition,
       };
       if (existingIndex === -1) {
@@ -1353,11 +1433,11 @@ const message = (overrides: Partial<Message> = {}): Message => ({
 });
 
 // 房间写入路径统一盖 updatedAt;形状断言剥离它,另以 typeof 断言其存在
-const stripRoomStamp = <T extends { roomVersion?: number; updatedAt?: string }>(value: T | null | undefined) => {
+const stripRoomStamp = <T extends { roomVersion?: number; updatedAt?: string; messageVersion?: number }>(value: T | null | undefined) => {
   if (!value) {
     return value;
   }
-  const { roomVersion: _roomVersion, updatedAt: _updatedAt, ...rest } = value;
+  const { roomVersion: _roomVersion, updatedAt: _updatedAt, messageVersion: _messageVersion, ...rest } = value;
   return rest;
 };
 
@@ -1466,6 +1546,49 @@ for (const [storeName, createFixture] of storeFactories) {
       assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), []);
       const versionAfterClear = (await store.readMessagePageByRoom(initialRoom.id)).historyVersion;
       assert.equal(versionAfterClear, versionBeforeClear + 1);
+    });
+
+    it('appends client messages idempotently without bumping room versions twice', async () => {
+      const { store } = createFixture();
+      const initialRoom = room();
+      await store.saveRoom(initialRoom);
+
+      const first = message({
+        id: 'canonical-message',
+        clientId: 'client-1',
+        clientMessageId: 'client-message-1',
+        content: 'first write wins',
+      });
+      const duplicate = message({
+        id: 'duplicate-server-id',
+        clientId: 'client-1',
+        clientMessageId: 'client-message-1',
+        content: 'must not overwrite',
+      });
+
+      const firstResult = await store.appendMessageIdempotent(first);
+      const versionAfterFirst = firstResult?.room.roomVersion;
+      const duplicateResult = await store.appendMessageIdempotent(duplicate);
+
+      assert.equal(firstResult?.inserted, true);
+      assert.equal(duplicateResult?.inserted, false);
+      assert.equal(duplicateResult?.message.id, first.id);
+      assert.equal(duplicateResult?.message.content, first.content);
+      assert.equal(duplicateResult?.room.roomVersion, versionAfterFirst);
+      assert.deepEqual(await store.readMessagesByRoom(initialRoom.id), [first]);
+
+      const otherClient = message({
+        id: 'other-client-message',
+        clientId: 'client-2',
+        clientMessageId: 'client-message-1',
+      });
+      assert.equal((await store.appendMessageIdempotent(otherClient))?.inserted, true);
+
+      const withoutKeyOne = message({ id: 'without-key-1', clientMessageId: undefined });
+      const withoutKeyTwo = message({ id: 'without-key-2', clientMessageId: undefined });
+      assert.equal((await store.appendMessageIdempotent(withoutKeyOne))?.inserted, true);
+      assert.equal((await store.appendMessageIdempotent(withoutKeyTwo))?.inserted, true);
+      assert.equal((await store.readMessagesByRoom(initialRoom.id)).length, 4);
     });
 
     it('reads latest message windows and older pages in durable order', async () => {
@@ -1775,6 +1898,38 @@ for (const [storeName, createFixture] of storeFactories) {
       assert.deepEqual(lastTargetTruncation?.messages.map(item => item.id), ['u1', 'ai1', 'u2', 'ai2', 'tail']);
       await store.upsertMessage(message({ id: 'after-last-target', clientId: 'ai_assistant', content: '', messageType: 'ai', status: 'streaming', timestamp: '2026-05-03T00:00:10.000Z' }));
       assert.deepEqual((await store.readMessagesByRoom(baseRoom.id)).map(item => item.id), ['u1', 'ai1', 'u2', 'ai2', 'tail', 'after-last-target']);
+    });
+
+    it('keeps client-message idempotency indexes aligned with truncated history', async () => {
+      const { store } = createFixture();
+      const mutableStore = store as DurableRoomStoreWithMessageMutations;
+      const baseRoom = room();
+      const first = message({ id: 'indexed-first', clientMessageId: 'client-first', content: 'first' });
+      const target = message({ id: 'indexed-target', clientMessageId: 'client-target', content: 'target' });
+      const removed = message({ id: 'indexed-removed', clientMessageId: 'client-removed', content: 'removed' });
+      await store.saveRoom(baseRoom);
+      await store.saveMessageHistory(baseRoom.id, [first, target, removed]);
+
+      await mutableStore.truncateAfterMessage(baseRoom.id, target.id);
+      assert.equal((await store.appendMessageIdempotent(message({
+        ...target,
+        id: 'target-retry',
+      })))?.inserted, false);
+      assert.equal((await store.appendMessageIdempotent(message({
+        ...removed,
+        id: 'removed-retry',
+      })))?.inserted, true);
+
+      await store.saveMessageHistory(baseRoom.id, [first, target, removed]);
+      await mutableStore.updateMessageAndTruncateAfter(baseRoom.id, first.id, 'edited first');
+      assert.equal((await store.appendMessageIdempotent(message({
+        ...first,
+        id: 'first-retry',
+      })))?.inserted, false);
+      assert.equal((await store.appendMessageIdempotent(message({
+        ...target,
+        id: 'target-after-edit-retry',
+      })))?.inserted, true);
     });
 
     it('updates and deletes individual messages without replacing whole histories', async () => {

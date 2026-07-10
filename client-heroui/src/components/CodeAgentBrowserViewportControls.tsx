@@ -183,7 +183,7 @@ export function CodeAgentBrowserDeviceToolbar({
       data-testid="code-agent-browser-device-toolbar"
     >
       {width >= 560 ? (
-        <span className="mr-0.5 shrink-0 text-[11px] font-medium text-[#87867f] dark:text-[#8f8d86]">
+        <span className="mr-0.5 shrink-0 text-[11px] font-medium text-[#5e5d59] dark:text-[#8f8d86]">
           {t('codeAgentBrowserDimensions')}
         </span>
       ) : null}
@@ -231,7 +231,7 @@ export function CodeAgentBrowserDeviceToolbar({
           onChange={(event) => updateCustomDimension('width', event.target.value)}
           onBlur={applyCustomSize}
         />
-        <span className="text-xs text-[#87867f] dark:text-[#8f8d86]" aria-hidden="true">
+        <span className="text-xs text-[#5e5d59] dark:text-[#8f8d86]" aria-hidden="true">
           {'×'}
         </span>
         <input
@@ -653,7 +653,7 @@ function ResizeHandle({
       onKeyDown={(event) => onKeyDown(direction, event)}
     >
       <span
-        className={`pointer-events-none absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center text-[#87867f]/60 transition-colors duration-150 group-hover:text-[#141413]/85 group-focus-visible:text-[#141413] group-active:text-[#141413] dark:text-[#8f8d86]/60 dark:group-hover:text-[#faf9f5]/85 dark:group-focus-visible:text-[#faf9f5] dark:group-active:text-[#faf9f5] ${
+        className={`pointer-events-none absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center text-[#5e5d59]/60 transition-colors duration-150 group-hover:text-[#141413]/85 group-focus-visible:text-[#141413] group-active:text-[#141413] dark:text-[#8f8d86]/60 dark:group-hover:text-[#faf9f5]/85 dark:group-focus-visible:text-[#faf9f5] dark:group-active:text-[#faf9f5] ${
           kind === 'vertical' ? 'h-8 w-1.5' : ''
         } ${kind === 'horizontal' ? 'h-1.5 w-8' : ''} ${
           kind === 'corner' ? 'size-3' : ''

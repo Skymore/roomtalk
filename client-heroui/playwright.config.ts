@@ -22,7 +22,10 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      testIgnore: /.*(mobile|postgres|codex).*\.spec\.ts/,
+      // Match only the spec basename. This checkout commonly lives below a
+      // `.codex/worktrees` directory; testing the full absolute path would
+      // otherwise exclude every desktop spec as if it were a Codex spec.
+      testIgnore: /(?:^|[\\/])[^\\/]*(?:mobile|postgres|codex)[^\\/]*\.spec\.ts$/,
       use: { ...devices['Desktop Chrome'] },
     },
     {
