@@ -17,6 +17,7 @@ from .codex_cli import (
     CodexCliRunConfig,
     _build_child_env,
     _codex_exec_permissions,
+    _codex_room_context_enabled,
     _create_codex_home,
     _normalize_codex_model,
     _normalize_codex_reasoning_effort,
@@ -841,13 +842,22 @@ def _turn_start_params(request: RunnerRequest, env: dict[str, str], workspace: P
         "effort": _normalize_codex_reasoning_effort(request.codex_reasoning_effort),
         "serviceTier": _normalize_codex_service_tier(request.codex_service_tier),
         "approvalPolicy": permission.approval_policy,
-        "sandboxPolicy": _sandbox_policy_for_permission(permission.sandbox, workspace),
+        "sandboxPolicy": _sandbox_policy_for_permission(
+            permission.sandbox,
+            workspace,
+            allow_read_only_network=_codex_room_context_enabled(env),
+        ),
     }
 
 
-def _sandbox_policy_for_permission(sandbox: str, workspace: Path) -> dict[str, Any]:
+def _sandbox_policy_for_permission(
+    sandbox: str,
+    workspace: Path,
+    *,
+    allow_read_only_network: bool = False,
+) -> dict[str, Any]:
     if sandbox == "read-only":
-        return {"type": "readOnly", "networkAccess": False}
+        return {"type": "readOnly", "networkAccess": allow_read_only_network}
     if sandbox == "danger-full-access":
         return {"type": "dangerFullAccess"}
     return {

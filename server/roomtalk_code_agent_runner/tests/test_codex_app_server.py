@@ -190,9 +190,43 @@ def test_codex_app_server_drives_json_rpc_and_maps_notifications(tmp_path: Path,
     assert sent[3]["params"]["effort"] == "high"
     assert sent[3]["params"]["serviceTier"] == "priority"
     assert sent[3]["params"]["sandboxPolicy"]["type"] == "readOnly"
+    assert sent[3]["params"]["sandboxPolicy"]["networkAccess"] is False
     assert "roomtalk publish-static-site" not in sent[3]["params"]["input"][0]["text"]
     assert not (Path(call["env"]["CODEX_HOME"]) / "auth.json").exists()
     assert not (Path(call["env"]["CODEX_HOME"]) / "config.toml").exists()
+
+
+def test_codex_app_server_allows_read_only_network_when_room_context_is_available(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    auth_json = tmp_path / "auth.json"
+    auth_json.write_text('{"accessToken":"initial"}', encoding="utf-8")
+    stdout = io.StringIO()
+    popen = FakeAppServerPopenFactory([
+        {"id": 0, "result": {}},
+        {"id": 1, "result": {"thread": {"id": "thread-room-context"}}},
+        {"id": 2, "result": {"turn": {"id": "turn-room-context"}}},
+        {"method": "turn/completed", "params": {"threadId": "thread-room-context", "turn": {"id": "turn-room-context", "status": "completed", "items": []}}},
+    ])
+
+    codex_app_server.run_request(
+        codex_app_request(workspace, mode="plan", codexPermissionMode="plan"),
+        emitter=EventEmitter(stdout),
+        config=codex_app_server.CodexCliRunConfig(
+            secret_parent=tmp_path / "secrets",
+            auth_json_path=auth_json,
+        ),
+        popen_factory=popen,
+        env={
+            "CODE_AGENT_WORKSPACE_ROOT": str(tmp_path),
+            "ROOMTALK_ROOM_CONTEXT_URL": "https://room.example/api/code-agent/room-context",
+            "ROOMTALK_ROOM_CONTEXT_TOKEN": "room-context-token",
+        },
+    )
+
+    sent = jsonrpc_lines(popen.processes[0])
+    turn_start = next(message for message in sent if message.get("method") == "turn/start")
+    assert turn_start["params"]["sandboxPolicy"] == {"type": "readOnly", "networkAccess": True}
 
 
 def test_codex_app_server_uses_workspace_write_for_approve_for_me_and_declines_approval_requests(tmp_path: Path):

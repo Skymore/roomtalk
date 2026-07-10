@@ -76,6 +76,8 @@ token 使用 HMAC 签名并包含：
 
 API 不接受调用者指定 `roomId`，只读取 token 声明中的房间。这样即使 Codex 修改命令参数，也不能跨房间读取。
 
+默认 Plan 模式仍是文件只读；只有该 turn 同时具备房间上下文 URL 和 token 时，Codex 的只读 sandbox 才开放网络，让 CLI 可以访问 RoomTalk API。没有房间上下文能力的普通 Plan turn 继续保持断网。
+
 ### 消息投影
 
 API 不直接返回数据库 `Message`：
