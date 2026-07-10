@@ -33,7 +33,7 @@ export class CodeAgentRunnerAdapter implements CodeAgentRunner {
     handlers: CodeAgentRunnerHandlers,
     context?: CodeAgentRunnerRunContext
   ): Promise<CodeAgentRunnerRunResult> {
-    return this.client.run(request, handlers, context ? { ...context, backend: this.backend } : context);
+    return this.client.run(request, handlers, context ? { ...context, backend: context.backend ?? this.backend } : context);
   }
 }
 

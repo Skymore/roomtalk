@@ -93,6 +93,10 @@ describe('CodeAgentRunner', () => {
     assert.equal(sharedClient.context?.process, context.process);
     assert.equal(sharedClient.context?.sandbox, context.sandbox);
     assert.equal(sharedClient.context?.backend, 'code-agent');
+
+    await runner.run(request, { onEvent: () => {} }, { ...context, backend: 'codex-app-server' });
+
+    assert.equal(sharedClient.context?.backend, 'codex-app-server');
   });
 
   it('creates the code-agent backend by default and lets Codex reuse the shared runner client', () => {

@@ -615,10 +615,11 @@ describe('CodeAgentSessionService', () => {
     const authCalls: Array<{ clientId: string; runId: string }> = [];
     let sandboxService: FakeCodeAgentSandboxService;
     const runner: CodeAgentRunnerClient = {
-      async run(request, handlers): Promise<CodeAgentRunnerRunResult> {
+      async run(request, handlers, context): Promise<CodeAgentRunnerRunResult> {
         assert.equal(request.codexModel, 'gpt-5.5');
         assert.equal(request.codexReasoningEffort, 'xhigh');
         assert.equal(request.codexServiceTier, 'default');
+        assert.equal(context?.backend, 'codex-app-server');
         const env = sandboxService.startedRunnerEnvs[sandboxService.startedRunnerEnvs.length - 1];
         assert.equal(env.CODEX_CLI_BIN, '/usr/local/bin/codex');
         assert.ok(env.ROOMTALK_CODEX_AUTH_JSON_PATH);

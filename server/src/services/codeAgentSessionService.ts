@@ -879,6 +879,7 @@ export class CodeAgentSessionService {
       return this.runner.run(input.request, input.handlers, {
         process,
         sandbox: input.sandbox,
+        backend: input.backend,
         runnerEnv: input.runnerEnv,
       });
     }
@@ -913,6 +914,7 @@ export class CodeAgentSessionService {
         const result = await this.runner.run(input.request, input.handlers, {
           process,
           sandbox: input.sandbox,
+          backend: input.backend,
           runnerEnv: effectiveRunnerEnv,
         });
         refreshedAuthJson = await this.readOptionalCodexRefreshedAuth(input.sandbox, refreshedAuthPath);
