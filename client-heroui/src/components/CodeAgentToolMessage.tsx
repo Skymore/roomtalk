@@ -5,6 +5,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Message } from '../utils/types';
 import { getCodeAgentModeLabelKey, normalizeCodeAgentMode } from '../utils/codeAgent';
+import { formatUsdCost } from '../utils/formatters';
 import { respondCodeAgentApproval } from '../utils/socket';
 
 interface CodeAgentToolMessageProps {
@@ -507,6 +508,12 @@ export const CodeAgentToolMessage: React.FC<CodeAgentToolMessageProps> = ({ mess
         {modeLabel && (
           <span className="rounded-full border border-[#dedbd0] px-1.5 py-0.5 text-[10px] font-semibold text-[#5e5d59] dark:border-[#3a3a37] dark:text-[#b0aea5]">
             {modeLabel}
+          </span>
+        )}
+
+        {message.cost && (
+          <span className="flex-shrink-0 text-[10px] font-medium text-[#87867f] dark:text-[#8f8d86]">
+            {[message.aiModel?.label, formatUsdCost(message.cost.totalUsd)].filter(Boolean).join(' · ')}
           </span>
         )}
 

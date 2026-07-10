@@ -13,6 +13,7 @@
     "migrate:media-to-object-storage": "ts-node src/scripts/migrateLegacyMediaMessagesToObjectStorage.ts",
     "migrate:code-agent-naming": "ts-node src/scripts/migrateCodeAgentNaming.ts",
     "backfill:misrouted-coco-costs": "ts-node src/scripts/backfillMisroutedCocoCosts.ts",
+    "backfill:misrouted-coco-model-steps": "ts-node src/scripts/backfillMisroutedCocoModelSteps.ts",
     "migrate:codex-sandboxes": "ts-node src/scripts/migrateCodexSandboxes.ts",
     "provision:postgres-app-user": "ts-node src/scripts/provisionPostgresAppUser.ts",
     "smoke:codex:e2b": "ts-node src/scripts/codexE2BSmoke.ts",

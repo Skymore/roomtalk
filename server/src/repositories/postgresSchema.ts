@@ -88,6 +88,8 @@ export const POSTGRES_SCHEMA_SQL = [
     mime_type TEXT,
     status TEXT CHECK (status IS NULL OR status IN ('streaming', 'complete', 'error')),
     turn_id TEXT,
+    model_step_id TEXT,
+    model_step_sequence INTEGER,
     tool_call_id TEXT,
     tool_name TEXT,
     tool_args JSONB,
@@ -108,6 +110,8 @@ export const POSTGRES_SCHEMA_SQL = [
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS ai_stream_owner_id TEXT`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS turn_id TEXT`,
+  `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS model_step_id TEXT`,
+  `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS model_step_sequence INTEGER`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS tool_call_id TEXT`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS tool_name TEXT`,
   `ALTER TABLE room_messages ADD COLUMN IF NOT EXISTS tool_args JSONB`,
@@ -129,6 +133,8 @@ export const POSTGRES_SCHEMA_SQL = [
     ON room_messages (room_id, timestamp)`,
   `CREATE INDEX IF NOT EXISTS idx_room_messages_type_tool_call
     ON room_messages (message_type, room_id, tool_call_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_room_messages_turn_model_step
+    ON room_messages (room_id, turn_id, model_step_sequence)`,
   `CREATE TABLE IF NOT EXISTS media_assets (
     id TEXT PRIMARY KEY,
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,

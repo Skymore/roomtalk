@@ -120,6 +120,8 @@ export interface Message {
   status?: 'streaming' | 'complete' | 'error';
   clientMessageId?: string;
   turnId?: string;
+  modelStepId?: string;
+  modelStepSequence?: number;
   toolCallId?: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;

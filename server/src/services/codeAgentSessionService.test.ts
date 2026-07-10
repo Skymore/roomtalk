@@ -7,7 +7,7 @@ import { CodeAgentDaemonProcessRegistry } from './codeAgentDaemonRegistry';
 import { CodeAgentSandboxLifecycleService } from './codeAgentSandboxLifecycle';
 import { CodeAgentSessionService } from './codeAgentSessionService';
 import { CODE_AGENT_RUNNER_SCHEMA_VERSION, CodeAgentRunnerEvent, CodeAgentRunnerRunRequest } from './codeAgentRunnerProtocol';
-import { CodeAgentRunnerClient, CodeAgentRunnerRunResult } from './fakeCodeAgentRunner';
+import { CodeAgentRunnerClient, CodeAgentRunnerHandlers, CodeAgentRunnerRunResult } from './fakeCodeAgentRunner';
 import { FakeCodeAgentRunnerClient } from './fakeCodeAgentRunner';
 import { FakeCodeAgentSandboxService } from './fakeCodeAgentSandboxService';
 import { DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND, DEFAULT_CODEX_CLI_RUNNER_COMMAND, DEFAULT_CODE_AGENT_DAEMON_COMMAND, DEFAULT_CODE_AGENT_RUNNER_COMMAND } from './codeAgentRuntimeConfig';
@@ -164,6 +164,22 @@ class MemoryCodeAgentStore {
   }
 }
 
+const cocoModelStep = (
+  sequence: number,
+  hasText: boolean,
+  toolCallIds: string[],
+  usage: { promptTokens: number; completionTokens: number; totalTokens: number; cachedPromptTokens?: number }
+): CodeAgentRunnerEvent => ({
+  schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+  type: 'model_step',
+  turnId: 'turn-1',
+  stepId: `turn-1:step:${sequence}`,
+  sequence,
+  hasText,
+  toolCallIds,
+  usage: { ...usage, source: 'reported' },
+});
+
 class BlockingRunner implements CodeAgentRunnerClient {
   requests: CodeAgentRunnerRunRequest[] = [];
   private releaseRun!: () => void;
@@ -179,10 +195,17 @@ class BlockingRunner implements CodeAgentRunnerClient {
     this.releaseRun();
   }
 
-  async run(request: CodeAgentRunnerRunRequest): Promise<CodeAgentRunnerRunResult> {
+  async run(request: CodeAgentRunnerRunRequest, handlers: CodeAgentRunnerHandlers): Promise<CodeAgentRunnerRunResult> {
     this.requests.push(request);
     this.markStarted();
     await this.blocked;
+    const textEvent: CodeAgentRunnerEvent = {
+      schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+      type: 'text_delta',
+      messageId: 'ai',
+      delta: 'done',
+    };
+    const stepEvent = cocoModelStep(1, true, [], { promptTokens: 10, completionTokens: 2, totalTokens: 12 });
     const finalEvent = {
       schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
       type: 'final' as const,
@@ -191,7 +214,10 @@ class BlockingRunner implements CodeAgentRunnerClient {
       sessionId: 'session-blocking',
       usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, source: 'reported' as const },
     };
-    return { events: [finalEvent], finalEvent };
+    await handlers.onEvent(textEvent);
+    await handlers.onEvent(stepEvent);
+    await handlers.onEvent(finalEvent);
+    return { events: [textEvent, stepEvent, finalEvent], finalEvent };
   }
 }
 
@@ -311,9 +337,11 @@ describe('CodeAgentSessionService', () => {
     const runner = new FakeCodeAgentRunnerClient([
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'status', turnId: 'turn-1', status: 'starting', message: 'starting' },
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Working...' },
+      cocoModelStep(1, true, ['tool-1'], { promptTokens: 60, completionTokens: 10, totalTokens: 70 }),
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Read', args: { file_path: 'README.md' } },
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-1', name: 'Read', success: true, output: '# RoomTalk' },
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Done' },
+      cocoModelStep(2, true, [], { promptTokens: 40, completionTokens: 10, totalTokens: 50 }),
       {
         schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'final',
@@ -357,10 +385,11 @@ describe('CodeAgentSessionService', () => {
     assert.equal(messages[3].content, '# RoomTalk');
     assert.equal(messages[4].status, 'complete');
     assert.equal(messages[4].content, 'Done');
-    assert.ok(Math.abs((messages[4].cost?.totalUsd || 0) - 0.000049) < 1e-12);
+    assert.ok(Math.abs((messages[1].cost?.totalUsd || 0) - 0.0000272) < 1e-12);
+    assert.ok(Math.abs((messages[4].cost?.totalUsd || 0) - 0.0000218) < 1e-12);
     assert.ok(Math.abs(store.roomCost.totalUsd - 0.000049) < 1e-12);
     const streamEnd = emitter.roomEmits.find(event => event.event === 'ai_stream_end' && (event.args[0] as any)?.messageId === messages[4].id);
-    assert.ok(Math.abs(((streamEnd?.args[0] as any)?.cost?.totalUsd || 0) - 0.000049) < 1e-12);
+    assert.ok(Math.abs(((streamEnd?.args[0] as any)?.cost?.totalUsd || 0) - 0.0000218) < 1e-12);
     assert.equal((await store.getRoomById('room-1'))?.codeAgentStatus, 'idle');
     assert.equal((await store.getRoomById('room-1'))?.codeAgentSessionId, 'session-1');
     assert.equal(emitter.roomEmits.some(event => event.event === 'ai_chunk'), true);
@@ -371,13 +400,15 @@ describe('CodeAgentSessionService', () => {
       'code_agent.sandbox.ensure',
       'code_agent.runner.started',
       'code_agent.runner.status',
+      'code_agent.runner.model_step',
       'code_agent.runner.tool_call',
       'code_agent.runner.tool_result',
+      'code_agent.runner.model_step',
       'code_agent.runner.final',
       'code_agent.turn.completed',
     ]);
     assert.equal((observability.events[3].payload as any)?.message, 'starting');
-    assert.equal((observability.events[5].payload as any)?.outputLength, '# RoomTalk'.length);
+    assert.equal((observability.events[6].payload as any)?.outputLength, '# RoomTalk'.length);
     assert.equal(observability.events.some(event => event.event === 'code_agent.runner.text_delta'), false);
   });
 
@@ -784,9 +815,11 @@ describe('CodeAgentSessionService', () => {
   it('persists interleaved AI text and tool events in runner order', async () => {
     const runner = new FakeCodeAgentRunnerClient([
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'I will inspect.' },
+      cocoModelStep(1, true, ['tool-1'], { promptTokens: 6, completionTokens: 1, totalTokens: 7 }),
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Glob', args: { pattern: '**/*' } },
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-1', name: 'Glob', success: true, output: 'No files found matching the pattern.' },
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'The current directory is empty.' },
+      cocoModelStep(2, true, [], { promptTokens: 4, completionTokens: 1, totalTokens: 5 }),
       {
         schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'final',
@@ -1020,11 +1053,13 @@ describe('CodeAgentSessionService', () => {
 
   it('removes the unused AI placeholder when tool events arrive before text', async () => {
     const runner = new FakeCodeAgentRunnerClient([
+      cocoModelStep(1, false, ['tool-1', 'tool-2'], { promptTokens: 6, completionTokens: 1, totalTokens: 7 }),
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Write', args: { file_path: 'hello.py' } },
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-1', name: 'Write', success: true, output: 'wrote hello.py' },
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-2', name: 'Shell', args: { command: 'python3 hello.py' } },
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-2', name: 'Shell', success: true, output: 'Hello, World!' },
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Done. The program prints Hello, World!' },
+      cocoModelStep(2, true, [], { promptTokens: 4, completionTokens: 1, totalTokens: 5 }),
       {
         schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'final',
@@ -1062,6 +1097,7 @@ describe('CodeAgentSessionService', () => {
 
   it('does not render final answers when a tool-only turn sends no text delta', async () => {
     const runner = new FakeCodeAgentRunnerClient([
+      cocoModelStep(1, false, ['tool-1'], { promptTokens: 10, completionTokens: 2, totalTokens: 12 }),
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Shell', args: { command: 'python3 hello.py' } },
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-1', name: 'Shell', success: true, output: 'Hello, World!' },
       {
@@ -1088,6 +1124,9 @@ describe('CodeAgentSessionService', () => {
     const messages = store.messages.get('room-1') || [];
     assert.deepEqual(messages.map(message => message.messageType), ['text', 'tool_call', 'tool_result']);
     assert.equal(messages.some(message => message.id === 'ai-1'), false);
+    assert.ok((messages[1].cost?.totalUsd || 0) > 0);
+    assert.equal(messages[1].modelStepId, 'turn-1:step:1');
+    assert.equal(store.roomCost.totalUsd, messages[1].cost?.totalUsd);
     assert.deepEqual(
       emitter.roomEmits
         .filter(event => event.event === 'message_deleted')
@@ -1099,6 +1138,7 @@ describe('CodeAgentSessionService', () => {
   it('stops the runner before broadcasting the final stream end', async () => {
     const runner = new FakeCodeAgentRunnerClient([
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'Done' },
+      cocoModelStep(1, true, [], { promptTokens: 10, completionTokens: 2, totalTokens: 12 }),
       {
         schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'final',
@@ -1467,6 +1507,8 @@ describe('CodeAgentSessionService', () => {
     ]);
     store.addMember('room-1', 'admin-1', 'admin');
     const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'ok' },
+      cocoModelStep(1, true, [], { promptTokens: 10, completionTokens: 2, totalTokens: 12 }),
       {
         schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'final',
@@ -1499,6 +1541,8 @@ describe('CodeAgentSessionService', () => {
     ]);
     store.addMember('room-1', 'member-1', 'member');
     const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'text_delta', messageId: 'ai-1', delta: 'ok' },
+      cocoModelStep(1, true, [], { promptTokens: 10, completionTokens: 2, totalTokens: 12 }),
       {
         schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type: 'final',
@@ -1524,6 +1568,7 @@ describe('CodeAgentSessionService', () => {
 
   it('stops runner processing when a tool event cannot be persisted', async () => {
     const runner = new FakeCodeAgentRunnerClient([
+      cocoModelStep(1, false, ['tool-1'], { promptTokens: 10, completionTokens: 2, totalTokens: 12 }),
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Read', args: { file_path: 'README.md' } },
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_result', id: 'tool-1', name: 'Read', success: true, output: '# RoomTalk' },
     ]);
@@ -1583,6 +1628,7 @@ describe('CodeAgentSessionService', () => {
 
   it('closes pending tool calls with failed results when the runner errors', async () => {
     const runner = new FakeCodeAgentRunnerClient([
+      cocoModelStep(1, false, ['tool-1'], { promptTokens: 10, completionTokens: 2, totalTokens: 12 }),
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'tool_call', id: 'tool-1', name: 'Shell', args: { command: 'python3 -m http.server 4173 --directory dist' } },
       { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'error', message: 'code agent runner process failed: E2B command wait failed', code: 'runner_process_error', retryable: false },
     ]);
@@ -1597,6 +1643,8 @@ describe('CodeAgentSessionService', () => {
     assert.equal(messages[3].toolName, 'Shell');
     assert.equal(messages[3].status, 'error');
     assert.equal(messages[3].isError, true);
+    assert.ok((messages[2].cost?.totalUsd || 0) > 0);
+    assert.equal(store.roomCost.totalUsd, messages[2].cost?.totalUsd);
     assert.match(messages[3].content, /Tool interrupted before completion/);
     assert.match(messages[3].content, /E2B command wait failed/);
     const toolResultBroadcast = emitter.roomEmits.find(event =>

@@ -21,6 +21,7 @@ from roomtalk_code_agent_runner.runner import (
     _base_url_for,
     _collect_static_publish_files,
     _create_publish_static_site_tool,
+    _model_step_event_from_response,
     canonical_allowed_paths_for_engine,
     main,
     parse_request,
@@ -475,6 +476,56 @@ class EngineResult:
     answer: str
     messages: list[dict]
     usage: Usage | None = None
+
+
+@dataclass
+class ModelResponse:
+    content: list[dict[str, Any]]
+    usage: Usage | None = None
+
+
+def test_model_step_event_preserves_text_tools_and_per_hop_usage():
+    event = _model_step_event_from_response(ModelResponse(
+        content=[
+            {"type": "text", "text": "I will inspect."},
+            {"type": "tool_use", "id": "tool-1", "name": "Read", "input": {}},
+            {"type": "tool_use", "id": "tool-2", "name": "Glob", "input": {}},
+        ],
+        usage=Usage(input_tokens=30, output_tokens=7, cache_read=10),
+    ), "turn-1", 3)
+
+    assert event == {
+        "type": "model_step",
+        "turnId": "turn-1",
+        "stepId": "turn-1:step:3",
+        "sequence": 3,
+        "hasText": True,
+        "toolCallIds": ["tool-1", "tool-2"],
+        "usage": {
+            "promptTokens": 30,
+            "completionTokens": 7,
+            "totalTokens": 37,
+            "cachedPromptTokens": 10,
+            "cacheHitRate": 1 / 3,
+            "source": "reported",
+        },
+    }
+
+
+def test_model_step_event_keeps_tool_only_hop_billable():
+    event = _model_step_event_from_response(ModelResponse(
+        content=[{"type": "tool_use", "id": "tool-1", "name": "Shell", "input": {}}],
+        usage=Usage(),
+    ), "turn-1", 1)
+
+    assert event["hasText"] is False
+    assert event["toolCallIds"] == ["tool-1"]
+    assert event["usage"]["source"] == "reported"
+
+
+def test_model_step_event_rejects_unbillable_empty_response():
+    with pytest.raises(RunnerError, match="neither text nor tool calls"):
+        _model_step_event_from_response(ModelResponse(content=[], usage=Usage()), "turn-1", 1)
 
 
 class FakeEngine:

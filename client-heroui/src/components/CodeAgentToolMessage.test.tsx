@@ -47,6 +47,37 @@ describe('CodeAgentToolMessage', () => {
     expect(document.body.textContent).not.toContain('"file_path"');
   });
 
+  it('shows model and cost when a tool-only model step is billed on the tool card', () => {
+    render(
+      <CodeAgentToolMessage
+        message={{
+          ...baseMessage,
+          messageType: 'tool_call',
+          toolName: 'Shell',
+          modelStepId: 'turn-1:step:2',
+          modelStepSequence: 2,
+          aiModel: {
+            id: 'deepseek-v4-pro',
+            apiModel: 'deepseek-v4-pro',
+            provider: 'deepseek',
+            label: 'DeepSeek V4 Pro',
+          },
+          cost: {
+            currency: 'USD',
+            inputUsd: 0.00001,
+            outputUsd: 0.000002,
+            totalUsd: 0.000012,
+            inputPerMillion: 1,
+            outputPerMillion: 2,
+            estimated: false,
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByText('DeepSeek V4 Pro · $0.000012')).toBeTruthy();
+  });
+
   it('renders writable file content as a highlighted code block', () => {
     render(
       <CodeAgentToolMessage

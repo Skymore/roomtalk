@@ -6,6 +6,7 @@ import {
   CodeAgentRunnerToolCallEvent,
   CodeAgentRunnerToolResultEvent,
 } from './codeAgentRunnerProtocol';
+import { AICost, AIUsage, Message } from '../types';
 
 export type CodeAgentMessageDraftType = 'tool_call' | 'tool_result' | 'sandbox_status';
 
@@ -19,12 +20,17 @@ export interface CodeAgentMessageDraft {
   username: string;
   status: 'complete' | 'error';
   turnId: string;
+  modelStepId?: string;
+  modelStepSequence?: number;
   toolCallId?: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   toolOutputPreview?: string;
   exitCode?: number;
   isError?: boolean;
+  aiModel?: Message['aiModel'];
+  usage?: AIUsage;
+  cost?: AICost;
   codeAgentMode?: 'plan' | 'edit' | 'approveForMe' | 'fullAccess' | 'acceptEdits';
 }
 
@@ -205,6 +211,7 @@ export const mapCodeAgentRunnerEvent = (
     }
     case 'thread_list_result':
     case 'thread_read_result':
+    case 'model_step':
     case 'usage':
       return { kind: 'ignored' };
   }

@@ -100,6 +100,8 @@ export interface Message {
   mimeType?: string;
   status?: 'streaming' | 'complete' | 'error';
   turnId?: string;
+  modelStepId?: string;
+  modelStepSequence?: number;
   toolCallId?: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;

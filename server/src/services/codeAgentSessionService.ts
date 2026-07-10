@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '../logger';
 import { RoomStore } from '../repositories/store';
-import { AIModelOption, CodeAgentBackend, Message, Room, RoomMemberRole } from '../types';
+import { AIModelOption, CodeAgentBackend, Message, Room, RoomAICostTotal, RoomMemberRole } from '../types';
 import { calculateAICost, getMessageAIModel } from './aiModels';
 import { CodeAgentSandboxLifecycleService, EnsureCodeAgentSandboxResult } from './codeAgentSandboxLifecycle';
 import { CodeAgentSandboxHandle, CodeAgentSandboxService, CodeAgentRunnerProcess } from './codeAgentSandboxService';
@@ -13,6 +13,7 @@ import {
   CodeAgentRunnerApprovalDecision,
   CodeAgentRunnerEvent,
   CodeAgentRunnerJsonlParser,
+  CodeAgentRunnerModelStepEvent,
   CodeAgentRunnerMode,
   CodeAgentRunnerRunRequest,
   CodeAgentRunnerThreadListRequest,
@@ -46,6 +47,11 @@ import {
   normalizeCodeAgentMode,
   normalizeCodeAgentModeSet,
 } from './codeAgentModes';
+import {
+  buildCocoModelStepCost,
+  CocoModelStepCostRecord,
+  summarizeCocoModelStepCosts,
+} from './codeAgentModelStepCosts';
 
 const isCodexBackend = (backend: CodeAgentBackend) => (
   backend === 'codex' || backend === 'codex-app-server'
@@ -125,10 +131,20 @@ interface CodeAgentTurnStreamState {
   activeMessageId: string;
   segmentContent: string;
   fullContent: string;
+  segmentHasUnsealedText: boolean;
   needsNewSegment: boolean;
   segmentIds: string[];
   nonEmptySegmentIds: Set<string>;
   pendingToolCalls: Map<string, { name: string }>;
+  modelSteps: Map<string, CocoModelStepCostRecord & {
+    hasText: boolean;
+    toolCallIds: string[];
+    aiModel: Message['aiModel'];
+    costCommitted?: boolean;
+  }>;
+  modelStepIdByToolCallId: Map<string, string>;
+  completedAIMessageById: Map<string, Message>;
+  roomCostTotal?: RoomAICostTotal;
 }
 
 export class CodeAgentSessionService {
@@ -323,10 +339,14 @@ export class CodeAgentSessionService {
         activeMessageId: aiMessageId,
         segmentContent: '',
         fullContent: '',
+        segmentHasUnsealedText: false,
         needsNewSegment: false,
         segmentIds: [aiMessageId],
         nonEmptySegmentIds: new Set(),
         pendingToolCalls: new Map(),
+        modelSteps: new Map(),
+        modelStepIdByToolCallId: new Map(),
+        completedAIMessageById: new Map(),
       };
       const runnerEnv = {
         ...this.buildRunnerEnv(input.selectedModel, {
@@ -414,7 +434,7 @@ export class CodeAgentSessionService {
         throw new Error('code agent runner exited without a final event');
       }
 
-      if (streamState.needsNewSegment) {
+      if (turnBackend !== 'code-agent' && streamState.needsNewSegment) {
         await this.sealCurrentSegment(input.roomId, aiMessage, streamState);
       }
 
@@ -424,29 +444,43 @@ export class CodeAgentSessionService {
         throw new Error('Coco runner completed without provider-reported usage');
       }
       const completionMetadata = this.completionMetadataForBackend(turnBackend, input.selectedModel, codexRunSettings, usage);
-      if (turnBackend === 'code-agent' && !completionMetadata.cost) {
-        throw new Error(`Coco model pricing is unavailable: ${input.selectedModel.id}`);
+      let turnUsage = completionMetadata.usage;
+      let turnCost = completionMetadata.cost;
+      if (turnBackend === 'code-agent') {
+        const uncommittedStep = Array.from(streamState.modelSteps.values()).find(step => !step.costCommitted);
+        if (uncommittedStep) {
+          throw new Error(`Coco model-step cost was not committed: ${uncommittedStep.stepId}`);
+        }
+        const stepSummary = summarizeCocoModelStepCosts(Array.from(streamState.modelSteps.values()), usage!);
+        turnUsage = stepSummary.usage;
+        turnCost = stepSummary.cost;
       }
-      const roomCostTotal = await this.store.incrementRoomAICost(input.roomId, completionMetadata.cost || null);
 
       const finalActiveId = streamState.activeMessageId;
       const hasVisibleText = streamState.nonEmptySegmentIds.size > 0;
       let finalMessage: Message | null = null;
       let finalRoom: Room | null = null;
       if (hasVisibleText) {
-        finalMessage = {
-          ...aiMessage,
-          id: finalActiveId,
-          content: answer,
-          status: 'complete',
-          timestamp: this.now().toISOString(),
-          aiModel: completionMetadata.aiModel,
-          usage: completionMetadata.usage,
-          cost: completionMetadata.cost,
-        };
-        finalRoom = await this.store.upsertMessage(finalMessage);
-        if (!finalRoom) {
-          throw new Error('Unable to save the completed agent response');
+        if (turnBackend === 'code-agent') {
+          finalMessage = streamState.completedAIMessageById.get(finalActiveId) || null;
+          if (!finalMessage) {
+            throw new Error(`Coco final AI segment has no model-step accounting: ${finalActiveId}`);
+          }
+        } else {
+          finalMessage = {
+            ...aiMessage,
+            id: finalActiveId,
+            content: answer,
+            status: 'complete',
+            timestamp: this.now().toISOString(),
+            aiModel: completionMetadata.aiModel,
+            usage: completionMetadata.usage,
+            cost: completionMetadata.cost,
+          };
+          finalRoom = await this.store.upsertMessage(finalMessage);
+          if (!finalRoom) {
+            throw new Error('Unable to save the completed agent response');
+          }
         }
       } else {
         const deleteResult = await this.store.deleteMessageById(input.roomId, aiMessageId).catch(err => {
@@ -468,6 +502,10 @@ export class CodeAgentSessionService {
           this.emitter.to(input.roomId).emit('message_deleted', aiMessageId, input.roomId);
         }
       }
+
+      const roomCostTotal = turnBackend === 'code-agent'
+        ? streamState.roomCostTotal || await this.store.readRoomAICost(input.roomId)
+        : await this.store.incrementRoomAICost(input.roomId, turnCost || null);
 
       const idleRoom = await this.patchRoom(input.roomId, {
         codeAgentStatus: 'idle',
@@ -498,7 +536,7 @@ export class CodeAgentSessionService {
         sessionId: runResult.finalEvent.sessionId,
         provider: isCodexBackend(turnBackend) ? 'codex' : input.selectedModel.provider,
         model: isCodexBackend(turnBackend) ? codexRunSettings.model : input.selectedModel.id,
-        costUsd: completionMetadata.cost?.totalUsd,
+        costUsd: turnCost?.totalUsd,
         payload: {
           backend: turnBackend,
           messageId: finalActiveId,
@@ -508,8 +546,8 @@ export class CodeAgentSessionService {
           answerLength: answer.length,
           roomCostTotalUsd: roomCostTotal.totalUsd,
           codexRunSettings: isCodexBackend(turnBackend) ? codexRunSettings : undefined,
-          usage,
-          cost: completionMetadata.cost,
+          usage: turnUsage,
+          cost: turnCost,
         },
       });
       return { success: true, messageId: aiMessageId };
@@ -530,7 +568,7 @@ export class CodeAgentSessionService {
         if (streamState) {
           await this.flushInterruptedToolCalls(input.roomId, turnId, streamState, error, aiMessage, turnBackend);
         }
-        const errorTargetMessage: Message = { ...aiMessage, id: errorTargetId };
+        const errorTargetMessage = streamState?.completedAIMessageById.get(errorTargetId) || { ...aiMessage, id: errorTargetId };
         await this.saveCodeAgentError(input.roomId, errorTargetMessage, error, turnBackend);
       } else if (roomMarkedRunning) {
         const errorRoom = await this.patchRoom(input.roomId, { codeAgentStatus: 'error' });
@@ -1157,6 +1195,13 @@ export class CodeAgentSessionService {
       });
       return;
     }
+    if (event.type === 'model_step') {
+      if (backend !== 'code-agent') {
+        throw new Error(`Unexpected model_step event from ${backend}`);
+      }
+      await this.handleCocoModelStep(event, roomId, turnId, baseAIMessage, selectedModel, state);
+      return;
+    }
     if (event.type === 'error') {
       await this.flushInterruptedToolCalls(roomId, turnId, state, event.message, baseAIMessage, backend);
     }
@@ -1188,11 +1233,15 @@ export class CodeAgentSessionService {
         this.emitter.to(roomId).emit('new_message', stripAIStreamRecoveryMetadata(segmentMessage));
         state.activeMessageId = newId;
         state.segmentContent = '';
+        state.segmentHasUnsealedText = false;
         state.needsNewSegment = false;
         state.segmentIds.push(newId);
       }
       state.segmentContent += mapped.delta;
       state.fullContent += mapped.delta;
+      if (mapped.delta.length > 0) {
+        state.segmentHasUnsealedText = true;
+      }
       if (state.segmentContent.trim()) {
         state.nonEmptySegmentIds.add(state.activeMessageId);
       }
@@ -1207,6 +1256,24 @@ export class CodeAgentSessionService {
       if (baseAIMessage.codeAgentMode) {
         mapped.message.codeAgentMode = baseAIMessage.codeAgentMode;
       }
+      if (backend === 'code-agent' && (event.type === 'tool_call' || event.type === 'tool_result')) {
+        const stepId = state.modelStepIdByToolCallId.get(event.id);
+        const step = stepId ? state.modelSteps.get(stepId) : undefined;
+        if (!stepId || !step) {
+          throw new Error(`Coco tool event has no model-step accounting: ${event.id}`);
+        }
+        mapped.message.modelStepId = step.stepId;
+        mapped.message.modelStepSequence = step.sequence;
+        if (event.type === 'tool_call' && !step.anchorMessageId) {
+          if (step.hasText || event.id !== step.toolCallIds[0]) {
+            throw new Error(`Coco model step cannot anchor tool call ${event.id}: ${step.stepId}`);
+          }
+          mapped.message.aiModel = step.aiModel;
+          mapped.message.usage = step.usage;
+          mapped.message.cost = step.cost;
+          step.anchorMessageId = mapped.message.id;
+        }
+      }
 
       const updatedRoom = await this.store.appendMessageWithAtomicPosition(mapped.message);
       if (!updatedRoom) {
@@ -1214,12 +1281,100 @@ export class CodeAgentSessionService {
       }
       if (event.type === 'tool_call') {
         state.pendingToolCalls.set(event.id, { name: event.name });
+        if (backend === 'code-agent') {
+          const stepId = state.modelStepIdByToolCallId.get(event.id)!;
+          const step = state.modelSteps.get(stepId)!;
+          if (step.anchorMessageId === mapped.message.id) {
+            await this.commitCocoModelStepCost(roomId, state, step);
+          }
+        }
       } else if (event.type === 'tool_result') {
         state.pendingToolCalls.delete(event.id);
       }
       this.emitter.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
       this.emitter.to(roomId).emit('new_message', mapped.message);
     }
+  }
+
+  private async handleCocoModelStep(
+    event: CodeAgentRunnerModelStepEvent,
+    roomId: string,
+    turnId: string,
+    baseAIMessage: Message,
+    selectedModel: AIModelOption,
+    state: CodeAgentTurnStreamState
+  ) {
+    if (event.turnId !== turnId) {
+      throw new Error(`Coco model-step turn mismatch: expected ${turnId}, got ${event.turnId}`);
+    }
+    if (state.modelSteps.has(event.stepId)) {
+      throw new Error(`Duplicate Coco model step: ${event.stepId}`);
+    }
+    if (event.sequence !== state.modelSteps.size + 1) {
+      throw new Error(`Out-of-order Coco model step: ${event.stepId}`);
+    }
+    if (new Set(event.toolCallIds).size !== event.toolCallIds.length) {
+      throw new Error(`Coco model step repeats a tool call id: ${event.stepId}`);
+    }
+    for (const toolCallId of event.toolCallIds) {
+      if (state.modelStepIdByToolCallId.has(toolCallId)) {
+        throw new Error(`Coco tool call belongs to multiple model steps: ${toolCallId}`);
+      }
+    }
+
+    const step = {
+      ...buildCocoModelStepCost(event, selectedModel),
+      hasText: event.hasText,
+      toolCallIds: [...event.toolCallIds],
+      aiModel: getMessageAIModel(selectedModel),
+    };
+    state.modelSteps.set(step.stepId, step);
+    for (const toolCallId of step.toolCallIds) {
+      state.modelStepIdByToolCallId.set(toolCallId, step.stepId);
+    }
+
+    if (event.hasText) {
+      if (!state.segmentHasUnsealedText || !state.segmentContent.trim()) {
+        throw new Error(`Coco model step reported text without a streamed AI segment: ${event.stepId}`);
+      }
+      const completedMessage: Message = {
+        ...baseAIMessage,
+        id: state.activeMessageId,
+        content: state.segmentContent,
+        status: 'complete',
+        timestamp: this.now().toISOString(),
+        modelStepId: event.stepId,
+        modelStepSequence: event.sequence,
+        aiModel: step.aiModel,
+        usage: step.usage,
+        cost: step.cost,
+      };
+      const updatedRoom = await this.store.upsertMessage(completedMessage);
+      if (!updatedRoom) {
+        throw new Error(`Unable to persist Coco model-step message: ${event.stepId}`);
+      }
+      step.anchorMessageId = completedMessage.id;
+      state.completedAIMessageById.set(completedMessage.id, completedMessage);
+      state.segmentHasUnsealedText = false;
+      await this.commitCocoModelStepCost(roomId, state, step);
+      this.emitter.to(updatedRoom.creatorId).emit('room_updated', updatedRoom);
+      this.emitter.to(roomId).emit('new_message', stripAIStreamRecoveryMetadata(completedMessage));
+    } else if (event.toolCallIds.length === 0) {
+      throw new Error(`Coco model step has no text or tool calls: ${event.stepId}`);
+    }
+    state.needsNewSegment = true;
+  }
+
+  private async commitCocoModelStepCost(
+    roomId: string,
+    state: CodeAgentTurnStreamState,
+    step: CocoModelStepCostRecord & { costCommitted?: boolean }
+  ) {
+    if (step.costCommitted) return;
+    const roomCostTotal = await this.store.incrementRoomAICost(roomId, step.cost);
+    step.costCommitted = true;
+    state.roomCostTotal = roomCostTotal;
+    this.emitter.to(roomId).emit('ai_cost_total', roomCostTotal);
   }
 
   private async flushInterruptedToolCalls(
@@ -1237,6 +1392,7 @@ export class CodeAgentSessionService {
     const pending = Array.from(state.pendingToolCalls.entries());
     state.pendingToolCalls.clear();
     for (const [toolCallId, toolCall] of pending) {
+      const modelStepId = state.modelStepIdByToolCallId.get(toolCallId);
       const message: Message = {
         id: `tool_result_${toolCallId}_${this.createId()}`,
         clientId: 'code_agent_runner',
@@ -1247,6 +1403,8 @@ export class CodeAgentSessionService {
         username: this.displayBackendName(backend),
         status: 'error',
         turnId,
+        modelStepId,
+        modelStepSequence: modelStepId ? state.modelSteps.get(modelStepId)?.sequence : undefined,
         toolCallId,
         toolName: toolCall.name,
         toolOutputPreview: `Tool interrupted before completion: ${reason}`,
@@ -1281,7 +1439,7 @@ export class CodeAgentSessionService {
   }
 
   private async sealCurrentSegment(roomId: string, baseAIMessage: Message, state: CodeAgentTurnStreamState) {
-    if (!state.segmentContent.trim()) return;
+    if (!state.segmentHasUnsealedText || !state.segmentContent.trim()) return;
 
     this.emitter.to(roomId).emit('ai_stream_end', {
       messageId: state.activeMessageId,
@@ -1299,6 +1457,7 @@ export class CodeAgentSessionService {
     await this.store.upsertMessage(sealedMessage).catch(err => {
       this.logger.warn('Failed to seal AI segment', { error: err, roomId, messageId: state.activeMessageId });
     });
+    state.segmentHasUnsealedText = false;
   }
 
   private async saveCodeAgentError(roomId: string, aiMessage: Message, error: unknown, backend: CodeAgentBackend) {
@@ -1385,6 +1544,14 @@ export class CodeAgentSessionService {
     switch (event.type) {
       case 'status':
         return { status: event.status, message: event.message };
+      case 'model_step':
+        return {
+          stepId: event.stepId,
+          sequence: event.sequence,
+          hasText: event.hasText,
+          toolCallIds: event.toolCallIds,
+          usage: event.usage,
+        };
       case 'tool_call':
         return {
           toolCallId: event.id,

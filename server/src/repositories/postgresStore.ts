@@ -62,6 +62,8 @@ type MessageRow = {
   mime_type: string | null;
   status: Message['status'] | null;
   turn_id?: string | null;
+  model_step_id?: string | null;
+  model_step_sequence?: number | string | null;
   tool_call_id?: string | null;
   tool_name?: string | null;
   tool_args?: unknown;
@@ -198,7 +200,7 @@ type ClientAccountRow = {
 };
 
 const ROOM_COLUMNS = 'id, name, description, created_at, last_activity_at, creator_id, message_version, password_hash, posting_schedule, type, sandbox_id, sandbox_status, sandbox_updated_at, sandbox_artifact_version, sandbox_code_agent_source_ref, code_agent_session_id, code_agent_status, code_agent_access, code_agent_mode, code_agent_backend, room_version, updated_at';
-const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ui_payload, code_agent_mode';
+const MESSAGE_COLUMNS = 'id, room_id, client_id, content, timestamp, updated_at, message_type, username, avatar, mime_type, status, turn_id, tool_call_id, tool_name, tool_args, tool_output_preview, exit_code, is_error, ai_model, usage, cost, reply_to, ai_stream_owner_id, ui_payload, code_agent_mode, model_step_id, model_step_sequence';
 const ROOM_MEMBER_COLUMNS = 'room_id, client_id, role, joined_at';
 const MEDIA_ASSET_COLUMNS = 'id, room_id, message_id, object_key, kind, mime_type, byte_size, filename, width, height, duration_ms, uploaded_by_client_id, created_at';
 const PENDING_MEDIA_UPLOAD_COLUMNS = 'id, room_id, object_key, kind, mime_type, byte_size, filename, uploaded_by_client_id, expires_at, created_at';
@@ -500,6 +502,9 @@ const mapMessage = (row: MessageRow): Message => {
   if (row.mime_type) message.mimeType = row.mime_type;
   if (row.status) message.status = row.status;
   if (row.turn_id) message.turnId = row.turn_id;
+  if (row.model_step_id) message.modelStepId = row.model_step_id;
+  const modelStepSequence = toOptionalNumber(row.model_step_sequence ?? null);
+  if (modelStepSequence !== undefined) message.modelStepSequence = modelStepSequence;
   if (row.tool_call_id) message.toolCallId = row.tool_call_id;
   if (row.tool_name) message.toolName = row.tool_name;
   const toolArgs = parseJsonValue<Record<string, unknown>>(row.tool_args);
@@ -545,6 +550,8 @@ const messageParams = (message: Message, position: number): unknown[] => [
   getAIStreamOwnerId(message) || null,
   message.codeAgentMode || null,
   position,
+  message.modelStepId || null,
+  message.modelStepSequence ?? null,
 ];
 
 const assistantRunParams = (run: AssistantRunRecord): unknown[] => [
@@ -615,9 +622,11 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   ui_payload,
   ai_stream_owner_id,
   code_agent_mode,
-  position
+  position,
+  model_step_id,
+  model_step_sequence
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22::jsonb, $23::jsonb, $24, $25, $26
+  $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22::jsonb, $23::jsonb, $24, $25, $26, $27, $28
 ) ON CONFLICT (id) DO UPDATE SET
   room_id = EXCLUDED.room_id,
   client_id = EXCLUDED.client_id,
@@ -630,6 +639,8 @@ const INSERT_MESSAGE_SQL = `INSERT INTO room_messages (
   mime_type = EXCLUDED.mime_type,
   status = EXCLUDED.status,
   turn_id = EXCLUDED.turn_id,
+  model_step_id = EXCLUDED.model_step_id,
+  model_step_sequence = EXCLUDED.model_step_sequence,
   tool_call_id = EXCLUDED.tool_call_id,
   tool_name = EXCLUDED.tool_name,
   tool_args = EXCLUDED.tool_args,

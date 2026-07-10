@@ -672,7 +672,54 @@ def scoped_workspace_cwd(workspace: Path):
         os.chdir(previous_cwd)
 
 
-def create_code_agent_engine(request: RunnerRequest, env: dict[str, str] | None = None):
+class _ObservedLLMStream:
+    def __init__(self, stream: Any, on_response: Callable[[Any], None]):
+        self._stream = stream
+        self._entered: Any = None
+        self._on_response = on_response
+        self._reported = False
+        self.text_stream: Iterable[str] = ()
+
+    def __enter__(self):
+        self._entered = self._stream.__enter__()
+        self.text_stream = self._entered.text_stream
+        return self
+
+    def __exit__(self, *args):
+        return self._stream.__exit__(*args)
+
+    def close(self) -> None:
+        target = self._entered or self._stream
+        close = getattr(target, "close", None)
+        if callable(close):
+            close()
+
+    def get_final_message(self):
+        target = self._entered or self._stream
+        response = target.get_final_message()
+        if not self._reported:
+            self._reported = True
+            self._on_response(response)
+        return response
+
+
+class _ObservedLLMClient:
+    def __init__(self, client: Any, on_response: Callable[[Any], None]):
+        self._client = client
+        self._on_response = on_response
+
+    def stream(self, **kwargs):
+        return _ObservedLLMStream(self._client.stream(**kwargs), self._on_response)
+
+    def __getattr__(self, name: str):
+        return getattr(self._client, name)
+
+
+def create_code_agent_engine(
+    request: RunnerRequest,
+    env: dict[str, str] | None = None,
+    on_model_response: Callable[[Any], None] | None = None,
+):
     if env is None:
         env = os.environ
     _add_code_agent_source_to_path(env)
@@ -723,6 +770,8 @@ def create_code_agent_engine(request: RunnerRequest, env: dict[str, str] | None 
         max_tokens=_max_tokens(env),
     )
     llm = LLMClient.from_settings(settings)
+    if on_model_response is not None:
+        llm = _ObservedLLMClient(llm, on_model_response)
     # File access enforcement is delegated to engine tools plus the outer sandbox.
     # This adapter validates requested roots but does not intercept each tool IO.
     permissions = PermissionChecker(auto_approve=True, mode="plan" if request.mode == "plan" else "acceptEdits")
@@ -930,6 +979,46 @@ def _usage_to_event_usage(usage: Any) -> dict[str, Any] | None:
     return result
 
 
+def _model_step_event_from_response(response: Any, turn_id: str, sequence: int) -> dict[str, Any]:
+    usage = _usage_to_event_usage(getattr(response, "usage", None))
+    if usage is None:
+        raise RunnerError(
+            "Coco model response did not include provider-reported usage",
+            code="missing_model_step_usage",
+            turn_id=turn_id,
+        )
+
+    raw_content = getattr(response, "content", None)
+    blocks = raw_content if isinstance(raw_content, list) else []
+    text = "".join(
+        str(block.get("text") or "")
+        for block in blocks
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
+    tool_call_ids = [
+        str(block.get("id") or "")
+        for block in blocks
+        if isinstance(block, dict) and block.get("type") == "tool_use"
+    ]
+    if any(not tool_call_id for tool_call_id in tool_call_ids):
+        raise RunnerError("Coco model response included an empty tool call id", code="invalid_model_step", turn_id=turn_id)
+    if len(set(tool_call_ids)) != len(tool_call_ids):
+        raise RunnerError("Coco model response repeated a tool call id", code="invalid_model_step", turn_id=turn_id)
+
+    has_text = bool(text.strip())
+    if not has_text and not tool_call_ids:
+        raise RunnerError("Coco model response contained neither text nor tool calls", code="empty_model_step", turn_id=turn_id)
+    return {
+        "type": "model_step",
+        "turnId": turn_id,
+        "stepId": f"{turn_id}:step:{sequence}",
+        "sequence": sequence,
+        "hasText": has_text,
+        "toolCallIds": tool_call_ids,
+        "usage": usage,
+    }
+
+
 class _CodeAgentControlState:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -1096,7 +1185,21 @@ def run_request(
     })
 
     with scoped_workspace_cwd(request.workspace):
-        engine = engine_factory(request)
+        model_step_sequence = 0
+        model_step_usage: dict[str, Any] | None = None
+
+        def on_model_response(response: Any) -> None:
+            nonlocal model_step_sequence, model_step_usage
+            model_step_sequence += 1
+            event = _model_step_event_from_response(response, request.turn_id, model_step_sequence)
+            model_step_usage = _merge_runner_usage(model_step_usage, event["usage"])
+            emitter.emit(event)
+
+        engine = (
+            create_code_agent_engine(request, on_model_response=on_model_response)
+            if engine_factory is create_code_agent_engine
+            else engine_factory(request)
+        )
         emitter.emit({
             "type": "status",
             "turnId": request.turn_id,
@@ -1220,8 +1323,9 @@ def run_request(
             "answer": final_answer,
             "sessionId": request.session_id or request.turn_id,
         }
-        if usage:
-            final_event["usage"] = usage
+        final_usage = model_step_usage or usage
+        if final_usage:
+            final_event["usage"] = final_usage
         emitter.emit(final_event)
 
 

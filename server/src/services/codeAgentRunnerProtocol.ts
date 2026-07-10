@@ -106,6 +106,17 @@ export interface CodeAgentRunnerTextDeltaEvent {
   delta: string;
 }
 
+export interface CodeAgentRunnerModelStepEvent {
+  schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
+  type: 'model_step';
+  turnId: string;
+  stepId: string;
+  sequence: number;
+  hasText: boolean;
+  toolCallIds: string[];
+  usage: AIUsage;
+}
+
 export interface CodeAgentRunnerToolCallEvent {
   schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
   type: 'tool_call';
@@ -184,6 +195,7 @@ export interface CodeAgentRunnerThreadReadResultEvent {
 export type CodeAgentRunnerEvent =
   | CodeAgentRunnerStatusEvent
   | CodeAgentRunnerTextDeltaEvent
+  | CodeAgentRunnerModelStepEvent
   | CodeAgentRunnerToolCallEvent
   | CodeAgentRunnerToolResultEvent
   | CodeAgentRunnerFinalEvent
@@ -224,6 +236,22 @@ const readRequiredBoolean = (value: Record<string, unknown>, key: string): boole
   const field = value[key];
   if (typeof field !== 'boolean') {
     throw new CodeAgentRunnerProtocolError(`Expected boolean field "${key}".`);
+  }
+  return field;
+};
+
+const readRequiredPositiveInteger = (value: Record<string, unknown>, key: string): number => {
+  const field = value[key];
+  if (typeof field !== 'number' || !Number.isInteger(field) || field < 1) {
+    throw new CodeAgentRunnerProtocolError(`Expected positive integer field "${key}".`);
+  }
+  return field;
+};
+
+const readRequiredStringArray = (value: Record<string, unknown>, key: string): string[] => {
+  const field = value[key];
+  if (!Array.isArray(field) || field.some(item => typeof item !== 'string' || item.length === 0)) {
+    throw new CodeAgentRunnerProtocolError(`Expected non-empty string array field "${key}".`);
   }
   return field;
 };
@@ -362,6 +390,25 @@ export const parseCodeAgentRunnerEventLine = (line: string): CodeAgentRunnerEven
         messageId: readRequiredString(raw, 'messageId'),
         delta: readString(raw, 'delta'),
       };
+    case 'model_step': {
+      const usage = readOptionalUsage(raw);
+      if (!usage) {
+        throw new CodeAgentRunnerProtocolError('Expected object field "usage".');
+      }
+      if (usage.source !== 'reported') {
+        throw new CodeAgentRunnerProtocolError('model_step usage must be provider-reported.');
+      }
+      return {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type,
+        turnId: readRequiredString(raw, 'turnId'),
+        stepId: readRequiredString(raw, 'stepId'),
+        sequence: readRequiredPositiveInteger(raw, 'sequence'),
+        hasText: readRequiredBoolean(raw, 'hasText'),
+        toolCallIds: readRequiredStringArray(raw, 'toolCallIds'),
+        usage,
+      };
+    }
     case 'tool_call':
       return {
         schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,

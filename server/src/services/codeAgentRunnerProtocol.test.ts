@@ -87,6 +87,26 @@ describe('code agent runner protocol', () => {
 
     assert.deepEqual(parseCodeAgentRunnerEventLine(JSON.stringify({
       schemaVersion: 1,
+      type: 'model_step',
+      turnId: 'turn-1',
+      stepId: 'turn-1:step:1',
+      sequence: 1,
+      hasText: false,
+      toolCallIds: ['tool-1', 'tool-2'],
+      usage: { promptTokens: 30, completionTokens: 5, totalTokens: 35, source: 'reported' },
+    })), {
+      schemaVersion: 1,
+      type: 'model_step',
+      turnId: 'turn-1',
+      stepId: 'turn-1:step:1',
+      sequence: 1,
+      hasText: false,
+      toolCallIds: ['tool-1', 'tool-2'],
+      usage: { promptTokens: 30, completionTokens: 5, totalTokens: 35, source: 'reported' },
+    });
+
+    assert.deepEqual(parseCodeAgentRunnerEventLine(JSON.stringify({
+      schemaVersion: 1,
       type: 'tool_call',
       id: 'tool-1',
       name: 'Read',
@@ -200,6 +220,26 @@ describe('code agent runner protocol', () => {
       message: 'boom',
       code: '',
     })), /Expected non-empty string field "code"/);
+    assert.throws(() => parseCodeAgentRunnerEventLine(JSON.stringify({
+      schemaVersion: 1,
+      type: 'model_step',
+      turnId: 'turn-1',
+      stepId: 'turn-1:step:0',
+      sequence: 0,
+      hasText: true,
+      toolCallIds: [],
+      usage: { promptTokens: 3, completionTokens: 4, totalTokens: 7, source: 'reported' },
+    })), /Expected positive integer field "sequence"/);
+    assert.throws(() => parseCodeAgentRunnerEventLine(JSON.stringify({
+      schemaVersion: 1,
+      type: 'model_step',
+      turnId: 'turn-1',
+      stepId: 'turn-1:step:1',
+      sequence: 1,
+      hasText: true,
+      toolCallIds: [],
+      usage: { promptTokens: 3, completionTokens: 4, totalTokens: 7, source: 'estimated' },
+    })), /must be provider-reported/);
   });
 
   it('parses JSONL chunks without losing partial lines', () => {
