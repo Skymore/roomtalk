@@ -87,6 +87,24 @@ describe('code agent runner protocol', () => {
 
     assert.deepEqual(parseCodeAgentRunnerEventLine(JSON.stringify({
       schemaVersion: 1,
+      type: 'control_result',
+      turnId: 'turn-1',
+      controlId: 'control-1',
+      controlType: 'steer',
+      accepted: false,
+      message: 'Turn already completed',
+    })), {
+      schemaVersion: 1,
+      type: 'control_result',
+      turnId: 'turn-1',
+      controlId: 'control-1',
+      controlType: 'steer',
+      accepted: false,
+      message: 'Turn already completed',
+    });
+
+    assert.deepEqual(parseCodeAgentRunnerEventLine(JSON.stringify({
+      schemaVersion: 1,
       type: 'model_step',
       turnId: 'turn-1',
       stepId: 'turn-1:step:1',

@@ -39,6 +39,7 @@ export interface CodeAgentRunnerInterruptRequest {
   schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
   type: 'interrupt';
   turnId: string;
+  controlId?: string;
   reason?: string;
 }
 
@@ -46,6 +47,7 @@ export interface CodeAgentRunnerSteerRequest {
   schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
   type: 'steer';
   turnId: string;
+  controlId?: string;
   prompt: string;
 }
 
@@ -96,6 +98,16 @@ export interface CodeAgentRunnerStatusEvent {
   type: 'status';
   turnId: string;
   status: 'starting' | 'ready' | 'running' | 'complete' | 'error';
+  message?: string;
+}
+
+export interface CodeAgentRunnerControlResultEvent {
+  schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
+  type: 'control_result';
+  turnId: string;
+  controlId: string;
+  controlType: 'interrupt' | 'steer' | 'approval_response';
+  accepted: boolean;
   message?: string;
 }
 
@@ -194,6 +206,7 @@ export interface CodeAgentRunnerThreadReadResultEvent {
 
 export type CodeAgentRunnerEvent =
   | CodeAgentRunnerStatusEvent
+  | CodeAgentRunnerControlResultEvent
   | CodeAgentRunnerTextDeltaEvent
   | CodeAgentRunnerModelStepEvent
   | CodeAgentRunnerToolCallEvent
@@ -380,6 +393,21 @@ export const parseCodeAgentRunnerEventLine = (line: string): CodeAgentRunnerEven
         type,
         turnId: readRequiredString(raw, 'turnId'),
         status: status as CodeAgentRunnerStatusEvent['status'],
+        message: readOptionalString(raw, 'message'),
+      };
+    }
+    case 'control_result': {
+      const controlType = readRequiredString(raw, 'controlType');
+      if (!['interrupt', 'steer', 'approval_response'].includes(controlType)) {
+        throw new CodeAgentRunnerProtocolError(`Invalid control result type: ${controlType}.`);
+      }
+      return {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type,
+        turnId: readRequiredString(raw, 'turnId'),
+        controlId: readRequiredString(raw, 'controlId'),
+        controlType: controlType as CodeAgentRunnerControlResultEvent['controlType'],
+        accepted: readRequiredBoolean(raw, 'accepted'),
         message: readOptionalString(raw, 'message'),
       };
     }

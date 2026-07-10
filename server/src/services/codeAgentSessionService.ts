@@ -1603,6 +1603,13 @@ export class CodeAgentSessionService {
     switch (event.type) {
       case 'status':
         return { status: event.status, message: event.message };
+      case 'control_result':
+        return {
+          controlId: event.controlId,
+          controlType: event.controlType,
+          accepted: event.accepted,
+          message: event.message,
+        };
       case 'model_step':
         return {
           stepId: event.stepId,

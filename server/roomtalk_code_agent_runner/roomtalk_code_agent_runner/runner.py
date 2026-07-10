@@ -31,6 +31,9 @@ DEFAULT_WORKSPACE_ROOT = "/workspace"
 MAX_STATIC_PUBLISH_FILES = 100
 MAX_STATIC_PUBLISH_TOTAL_BYTES = 5 * 1024 * 1024
 MAX_STATIC_PUBLISH_FILE_BYTES = 2 * 1024 * 1024
+# Coco's engine requires integer loop bounds. Python's platform maximum is the
+# default, while deployments can opt into explicit simple/complex safety caps.
+UNBOUNDED_MODEL_STEPS = sys.maxsize
 
 ControlQueue = queue.Queue[dict[str, Any] | None]
 
@@ -417,6 +420,22 @@ def _max_tokens(env: dict[str, str]) -> int:
         return max(1, int(env.get("ROOMTALK_CODE_AGENT_MAX_TOKENS") or env.get("CODE_AGENT_MAX_TOKENS") or "16384"))
     except ValueError:
         return 16384
+
+
+def _coco_step_limits(env: dict[str, str]) -> tuple[int, int]:
+    def read(name: str) -> int:
+        raw = (env.get(name) or "").strip()
+        if not raw:
+            return UNBOUNDED_MODEL_STEPS
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise RunnerError(f"{name} must be a positive integer", code="invalid_config") from exc
+        if value < 1:
+            raise RunnerError(f"{name} must be a positive integer", code="invalid_config")
+        return value
+
+    return read("COCO_MAX_STEPS_SIMPLE"), read("COCO_MAX_STEPS_COMPLEX")
 
 
 def _add_code_agent_source_to_path(env: dict[str, str]) -> None:
@@ -843,9 +862,12 @@ def create_code_agent_engine(
     # This adapter validates requested roots but does not intercept each tool IO.
     permissions = PermissionChecker(auto_approve=True, mode="plan" if request.mode == "plan" else "acceptEdits")
     allowed_tools = set(tool_names) if request.mode == "plan" else None
+    max_steps, max_steps_complex = _coco_step_limits(env)
     return Engine(
         llm,
         tools,
+        max_steps=max_steps,
+        max_steps_complex=max_steps_complex,
         system=system_prompt_for_tools(
             tool_names,
             request.mode,
@@ -1099,15 +1121,20 @@ class _CodeAgentControlState:
         self.run_active = threading.Event()
         self.done = threading.Event()
 
-    def request_interrupt(self) -> None:
+    def request_interrupt(self) -> bool:
         with self._lock:
+            if self.done.is_set() or self._stop_requested:
+                return False
             self._stop_requested = True
             self._pending_steers.clear()
+            return True
 
-    def request_steer(self, prompt: str) -> None:
+    def request_steer(self, prompt: str) -> bool:
         with self._lock:
-            if not self._stop_requested:
-                self._pending_steers.append(prompt)
+            if self.done.is_set() or self._stop_requested:
+                return False
+            self._pending_steers.append(prompt)
+            return True
 
     def _consume_action_locked(self) -> tuple[str, str | None]:
         if self._stop_requested:
@@ -1137,15 +1164,32 @@ def _start_code_agent_control_dispatcher(
     emitter: EventEmitter,
     turn_id: str,
 ) -> threading.Thread:
+    def emit_control_result(
+        control: dict[str, Any],
+        control_type: str,
+        accepted: bool,
+        message: str | None = None,
+    ) -> None:
+        control_id = control.get("controlId")
+        if not isinstance(control_id, str) or not control_id:
+            return
+        event: dict[str, Any] = {
+            "type": "control_result",
+            "turnId": turn_id,
+            "controlId": control_id,
+            "controlType": control_type,
+            "accepted": accepted,
+        }
+        if message:
+            event["message"] = message
+        emitter.emit(event)
+
+    def can_abort_active_run() -> bool:
+        return callable(getattr(engine, "abort", None))
+
     def abort_active_run() -> None:
         abort = getattr(engine, "abort", None)
         if not callable(abort):
-            emitter.emit({
-                "type": "status",
-                "turnId": turn_id,
-                "status": "error",
-                "message": "Coco engine does not support live control",
-            })
             return
         # Engine.run clears its abort flag at entry. Repeating briefly closes the
         # race where a control arrives just as the next model call starts.
@@ -1163,11 +1207,21 @@ def _start_code_agent_control_dispatcher(
                 continue
             if control is None:
                 return
-            if control.get("schemaVersion") != SCHEMA_VERSION or control.get("turnId") != turn_id:
-                continue
             control_type = control.get("type")
+            if control.get("schemaVersion") != SCHEMA_VERSION:
+                emit_control_result(control, str(control_type or "unknown"), False, "Unsupported control schema")
+                continue
+            if control.get("turnId") != turn_id:
+                emit_control_result(control, str(control_type or "unknown"), False, "The target turn is no longer active")
+                continue
             if control_type == "interrupt":
-                state.request_interrupt()
+                if state.run_active.is_set() and not can_abort_active_run():
+                    emit_control_result(control, control_type, False, "Coco engine does not support live interrupt")
+                    continue
+                if not state.request_interrupt():
+                    emit_control_result(control, control_type, False, "The target turn is no longer controllable")
+                    continue
+                emit_control_result(control, control_type, True)
                 emitter.emit({
                     "type": "status",
                     "turnId": turn_id,
@@ -1178,8 +1232,15 @@ def _start_code_agent_control_dispatcher(
             elif control_type == "steer":
                 prompt = control.get("prompt")
                 if not isinstance(prompt, str) or not prompt.strip():
+                    emit_control_result(control, control_type, False, "Steer prompt is required")
                     continue
-                state.request_steer(prompt.strip())
+                if state.run_active.is_set() and not can_abort_active_run():
+                    emit_control_result(control, control_type, False, "Coco engine does not support live steer")
+                    continue
+                if not state.request_steer(prompt.strip()):
+                    emit_control_result(control, control_type, False, "The target turn is no longer controllable")
+                    continue
+                emit_control_result(control, control_type, True)
                 emitter.emit({
                     "type": "status",
                     "turnId": turn_id,
@@ -1187,6 +1248,8 @@ def _start_code_agent_control_dispatcher(
                     "message": "Coco steer queued",
                 })
                 abort_active_run()
+            else:
+                emit_control_result(control, str(control_type or "unknown"), False, "Unsupported control type")
 
     thread = threading.Thread(target=dispatch, daemon=True)
     thread.start()

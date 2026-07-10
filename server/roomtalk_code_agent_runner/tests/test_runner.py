@@ -6,6 +6,7 @@ import os
 import queue
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,9 +17,11 @@ from roomtalk_code_agent_runner.runner import (
     EventEmitter,
     RunnerError,
     RunnerRequest,
+    UNBOUNDED_MODEL_STEPS,
     _add_code_agent_source_to_path,
     _api_key_for,
     _base_url_for,
+    _coco_step_limits,
     _collect_static_publish_files,
     _read_only_shell_argv,
     _model_step_event_from_response,
@@ -56,6 +59,18 @@ def request(**overrides):
 
 def event_lines(buffer: io.StringIO):
     return [json.loads(line) for line in buffer.getvalue().splitlines() if line.strip()]
+
+
+def test_coco_model_step_limits_are_unbounded_by_default_and_configurable():
+    assert UNBOUNDED_MODEL_STEPS == sys.maxsize
+    assert _coco_step_limits({}) == (sys.maxsize, sys.maxsize)
+    assert _coco_step_limits({
+        "COCO_MAX_STEPS_SIMPLE": "40",
+        "COCO_MAX_STEPS_COMPLEX": "100",
+    }) == (40, 100)
+
+    with pytest.raises(RunnerError, match="COCO_MAX_STEPS_SIMPLE must be a positive integer"):
+        _coco_step_limits({"COCO_MAX_STEPS_SIMPLE": "0"})
 
 
 def test_parse_request_validates_schema_and_required_fields():
@@ -769,7 +784,13 @@ def test_run_request_applies_coco_steer_without_ending_the_turn(tmp_path: Path, 
     )
     thread.start()
     assert engine.started.wait(timeout=2)
-    controls.put({"schemaVersion": 1, "type": "steer", "turnId": parsed.turn_id, "prompt": "use Bing instead"})
+    controls.put({
+        "schemaVersion": 1,
+        "type": "steer",
+        "turnId": parsed.turn_id,
+        "controlId": "control-steer-1",
+        "prompt": "use Bing instead",
+    })
     thread.join(timeout=3)
 
     assert not thread.is_alive()
@@ -779,6 +800,14 @@ def test_run_request_applies_coco_steer_without_ending_the_turn(tmp_path: Path, 
         {"role": "assistant", "content": "before steer "},
     ]
     events = event_lines(output)
+    assert any(event == {
+        "schemaVersion": 1,
+        "type": "control_result",
+        "turnId": parsed.turn_id,
+        "controlId": "control-steer-1",
+        "controlType": "steer",
+        "accepted": True,
+    } for event in events)
     assert [event["delta"] for event in events if event["type"] == "text_delta"] == ["before steer ", "after steer"]
     assert events[-1]["type"] == "final"
     assert events[-1]["answer"] == "after steer"
@@ -818,14 +847,69 @@ def test_run_request_interrupts_coco_cleanly(tmp_path: Path, monkeypatch):
     )
     thread.start()
     assert engine.started.wait(timeout=2)
-    controls.put({"schemaVersion": 1, "type": "interrupt", "turnId": parsed.turn_id})
+    controls.put({
+        "schemaVersion": 1,
+        "type": "interrupt",
+        "turnId": parsed.turn_id,
+        "controlId": "control-interrupt-1",
+    })
     thread.join(timeout=3)
 
     assert not thread.is_alive()
     events = event_lines(output)
+    assert any(event.get("controlId") == "control-interrupt-1" and event.get("accepted") is True for event in events)
     assert any(event.get("message") == "Coco turn interrupted" for event in events)
     assert events[-1]["type"] == "final"
     assert events[-1]["answer"] == "partial"
+
+
+def test_run_request_rejects_coco_steer_when_engine_cannot_abort(tmp_path: Path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("CODE_AGENT_WORKSPACE_ROOT", str(tmp_path))
+    parsed = parse_request(json.dumps(request(workspace=str(workspace))))
+    controls: "queue.Queue[dict[str, Any] | None]" = queue.Queue()
+    output = io.StringIO()
+
+    class NonInterruptibleEngine:
+        def __init__(self):
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        def run(self, prompt, on_text_chunk=None):
+            self.started.set()
+            assert self.release.wait(timeout=2)
+            return EngineResult(answer="done", messages=[], usage=Usage())
+
+    engine = NonInterruptibleEngine()
+    thread = threading.Thread(
+        target=run_request,
+        kwargs={
+            "request": parsed,
+            "emitter": EventEmitter(output),
+            "engine_factory": lambda _request: engine,
+            "control_queue": controls,
+        },
+    )
+    thread.start()
+    assert engine.started.wait(timeout=2)
+    controls.put({
+        "schemaVersion": 1,
+        "type": "steer",
+        "turnId": parsed.turn_id,
+        "controlId": "control-steer-rejected",
+        "prompt": "change direction",
+    })
+
+    deadline = time.time() + 2
+    while "control-steer-rejected" not in output.getvalue() and time.time() < deadline:
+        time.sleep(0.01)
+    engine.release.set()
+    thread.join(timeout=3)
+
+    result = next(event for event in event_lines(output) if event.get("controlId") == "control-steer-rejected")
+    assert result["accepted"] is False
+    assert "does not support live steer" in result["message"]
 
 
 def test_current_code_agent_engine_file_tools_resolve_relative_paths_against_scoped_cwd(tmp_path: Path, monkeypatch):
