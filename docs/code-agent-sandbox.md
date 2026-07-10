@@ -408,7 +408,7 @@ export interface CodeAgentSandboxService {
    - 创建成功：保存 `sandboxId` 和 `ready`。
    - 保存失败：销毁新建 sandbox。
    - 复连失败：标记 `expired`，按产品策略自动重建或提示用户重置。
-   - 开始 turn 前检查 sandbox 剩余 TTL；小于 `CODE_AGENT_TURN_TIMEOUT_MS` 时先重建或拒绝。
+   - 开始 turn 前确认 sandbox 仍存活，并把它延长到 active TTL；不使用 turn 级绝对超时。
 7. 启动或复用沙盒内 Code Agent runner。
 8. 持久化 AI placeholder。
 9. 发送 `run` 请求给 Code Agent runner。
@@ -518,7 +518,7 @@ CODE_AGENT_MODEL=deepseek/deepseek-v4-pro
 
 | 限制 | 默认值 |
 | --- | --- |
-| 单 turn 最大时长 | 5 min |
+| 单 turn 最大时长 | 无 RoomTalk watchdog；完成或用户 Stop 时结束 |
 | 单工具输出保存上限 | 64 KB |
 | 单 stdout/stderr event 上限 | 16 KB |
 | 单 turn JSONL 总输出上限 | 4 MB |
@@ -527,7 +527,7 @@ CODE_AGENT_MODEL=deepseek/deepseek-v4-pro
 | 全局最大 active sandbox | 配置项 |
 | 单用户最大 active sandbox | 配置项 |
 
-E2B 必须设置 hard timeout，避免房间删除或服务崩溃后产生长期孤儿沙盒。开始一个 turn 前要检查 sandbox 剩余 TTL；剩余时间小于 `CODE_AGENT_TURN_TIMEOUT_MS` 时先重建或拒绝，避免 mid-turn 过期。
+E2B sandbox TTL 负责回收房间删除或服务崩溃后遗留的资源。开始 turn 时确认 sandbox 仍存活并延长到 active TTL；runner 命令和 Codex/Coco turn 本身不设置绝对时限，用户通过 Stop/interrupt 主动终止。
 
 runner 启动失败时必须尽量输出结构化 `error` JSONL 事件，再退出。只有进程崩溃到无法写 JSONL 时，RoomTalk 才使用通用的 “runner exited before ready” 错误。
 
@@ -882,7 +882,6 @@ CODE_AGENT_MAX_ACTIVE_SANDBOXES_PER_USER=1
 # Runner
 CODE_AGENT_RUNNER_CLIENT=jsonl
 CODE_AGENT_RUNNER_COMMAND=python -m roomtalk_code_agent_runner
-CODE_AGENT_TURN_TIMEOUT_MS=300000
 CODE_AGENT_EVENT_MAX_BYTES=65536
 CODE_AGENT_TURN_OUTPUT_MAX_BYTES=4194304
 

@@ -301,7 +301,6 @@ const codeAgentSandboxService = codeAgentRuntimeConfig.enabled && codeAgentRunti
     logger: codeAgentLogger,
   })
   : new FakeCodeAgentSandboxService();
-const codeAgentTurnTimeoutMs = parsePositiveIntegerEnv('CODE_AGENT_TURN_TIMEOUT_MS', 10 * 60 * 1000);
 const defaultCodeAgentIdleSandboxTtlMs = 2 * 60 * 1000;
 const codeAgentIdleSandboxTtlMs = parsePositiveIntegerEnv(
   'CODE_AGENT_IDLE_SANDBOX_TTL_MS',
@@ -315,7 +314,6 @@ const codeAgentSandboxLifecycle = new CodeAgentSandboxLifecycleService(store, co
   sandboxTtlMs: codeAgentIdleSandboxTtlMs,
   idleSandboxTtlMs: codeAgentIdleSandboxTtlMs,
   activeSandboxTtlMs: codeAgentActiveSandboxTtlMs,
-  turnTimeoutMs: codeAgentTurnTimeoutMs,
   creatingStaleMs: parsePositiveIntegerEnv('CODE_AGENT_CREATING_STALE_MS', 2 * 60 * 1000),
   maxActiveSandboxes: parsePositiveIntegerEnv('CODE_AGENT_MAX_ACTIVE_SANDBOXES', Number.POSITIVE_INFINITY),
   maxActiveSandboxesPerUser: parsePositiveIntegerEnv('CODE_AGENT_MAX_ACTIVE_SANDBOXES_PER_USER', Number.POSITIVE_INFINITY),
@@ -356,7 +354,6 @@ const codexRunnerEnv = {
   PYTHONPATH: codeAgentRuntimeConfig.runnerEnv.PYTHONPATH || DEFAULT_CODE_AGENT_RUNNER_PYTHONPATH,
   CODE_AGENT_WORKSPACE_ROOT: codeAgentRuntimeConfig.runnerEnv.CODE_AGENT_WORKSPACE_ROOT || codeAgentRuntimeConfig.e2bWorkspace || DEFAULT_CODE_AGENT_WORKSPACE_ROOT,
   CODEX_CLI_BIN: codexCliRunnerConfig.cliBin,
-  ROOMTALK_CODEX_TIMEOUT_MS: String(codexCliRunnerConfig.timeoutMs),
 };
 const codeAgentSessionService = new CodeAgentSessionService(
   store,
@@ -379,7 +376,6 @@ const codeAgentSessionService = new CodeAgentSessionService(
     daemonCommand: codeAgentRuntimeConfig.daemonCommand,
     daemonRegistry: codeAgentDaemonRegistry,
     daemonRunnerClient: codeAgentDaemonRunnerClient,
-    turnTimeoutMs: codeAgentTurnTimeoutMs,
     allowedPaths: codeAgentRuntimeConfig.allowedPaths,
     runnerEnv: codeAgentRuntimeConfig.runnerEnv,
     runnerEnvByBackend: {

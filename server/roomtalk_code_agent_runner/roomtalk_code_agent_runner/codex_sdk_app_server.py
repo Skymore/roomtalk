@@ -6,7 +6,6 @@ import queue
 import shutil
 import sys
 import threading
-import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -113,13 +112,9 @@ class _SdkApprovalCoordinator:
         self.state.add_pending_approval(pending)
         self.emitter.emit(_approval_request_event(self.request.turn_id, pending))
 
-        deadline = time.monotonic() + max(self.config.timeout_ms / 1000, 1)
         with self._condition:
             while not self._stopped and not self.state.stopped and pending.approval_id not in self._decisions:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                self._condition.wait(timeout=min(remaining, 0.5))
+                self._condition.wait(timeout=0.5)
             decision = self._decisions.pop(pending.approval_id, "decline")
 
         return _approval_response_result(pending, decision)
@@ -142,8 +137,6 @@ def run_request(
     state = _AppServerRunState(roomtalk_turn_id=request.turn_id)
     approvals = _SdkApprovalCoordinator(request=request, emitter=emitter, state=state, config=config, codex_home=codex_home)
     client: Any | None = None
-    timeout: threading.Timer | None = None
-    timed_out = False
 
     emitter.emit({
         "type": "status",
@@ -160,56 +153,34 @@ def run_request(
         sdk_config = _build_sdk_config(config, workspace, child_env)
         client = (client_factory or _default_sdk_client_factory)(sdk_config, approvals.handle)
 
-        def close_after_timeout() -> None:
-            nonlocal timed_out
-            timed_out = True
+        _start_client_with_env(client, child_env)
+        client.initialize()
+        control_thread = _start_sdk_control_dispatch_thread(control_queue, client, state, approvals, emitter) if control_queue else None
+        try:
+            mapper = CodexAppServerJsonRpcMapper(
+                turn_id=request.turn_id,
+                message_id=f"codex_sdk_app_{request.turn_id}",
+                workspace=workspace,
+                fallback_session_id=request.session_id,
+            )
+            thread_id = _open_thread(client, request, workspace, emitter, mapper)
+            mapper.session_id = thread_id
+            state.set_thread_id(thread_id)
+
+            turn_params = _turn_start_params(request, env, workspace, thread_id)
+            turn_response = client.turn_start(thread_id, turn_params["input"], params=turn_params)
+            app_turn_id = _extract_nested_string(turn_response, "turn", "id")
+            if not app_turn_id:
+                raise RunnerError("Codex SDK turn/start response did not include turn.id", code="codex_sdk_app_server_protocol_error", turn_id=request.turn_id)
+            state.set_turn_id(app_turn_id)
+
+            _consume_turn_notifications(client, app_turn_id, mapper, emitter)
+            emitter.emit(mapper.final_event())
+        finally:
             state.stop()
             approvals.stop()
-            _close_client(client)
-
-        timeout = threading.Timer(config.timeout_ms / 1000, close_after_timeout)
-        timeout.daemon = True
-        timeout.start()
-
-        try:
-            _start_client_with_env(client, child_env)
-            client.initialize()
-            control_thread = _start_sdk_control_dispatch_thread(control_queue, client, state, approvals, emitter) if control_queue else None
-            try:
-                mapper = CodexAppServerJsonRpcMapper(
-                    turn_id=request.turn_id,
-                    message_id=f"codex_sdk_app_{request.turn_id}",
-                    workspace=workspace,
-                    fallback_session_id=request.session_id,
-                )
-                thread_id = _open_thread(client, request, workspace, emitter, mapper)
-                mapper.session_id = thread_id
-                state.set_thread_id(thread_id)
-
-                turn_params = _turn_start_params(request, env, workspace, thread_id)
-                turn_response = client.turn_start(thread_id, turn_params["input"], params=turn_params)
-                app_turn_id = _extract_nested_string(turn_response, "turn", "id")
-                if not app_turn_id:
-                    raise RunnerError("Codex SDK turn/start response did not include turn.id", code="codex_sdk_app_server_protocol_error", turn_id=request.turn_id)
-                state.set_turn_id(app_turn_id)
-
-                _consume_turn_notifications(client, app_turn_id, mapper, emitter)
-                emitter.emit(mapper.final_event())
-            finally:
-                state.stop()
-                approvals.stop()
-                if control_thread is not None:
-                    control_thread.join(timeout=1)
-        finally:
-            if timeout is not None:
-                timeout.cancel()
-
-        if timed_out:
-            raise RunnerError(
-                f"Codex SDK app-server timed out after {config.timeout_ms}ms",
-                code="codex_sdk_app_server_timeout",
-                turn_id=request.turn_id,
-            )
+            if control_thread is not None:
+                control_thread.join(timeout=1)
 
         refreshed_auth = codex_home / "auth.json"
         if refreshed_auth.exists() and config.refreshed_auth_json_path:
@@ -238,8 +209,6 @@ def run_thread_query_request(
     codex_home = _create_persistent_app_server_home(config, request)
     approvals = _SdkApprovalCoordinator(request=None, emitter=None, state=None, config=config, codex_home=codex_home)
     client: Any | None = None
-    timeout: threading.Timer | None = None
-    timed_out = False
 
     try:
         _restore_auth_json(config, codex_home)
@@ -247,44 +216,27 @@ def run_thread_query_request(
         sdk_config = _build_sdk_config(config, workspace, child_env)
         client = (client_factory or _default_sdk_client_factory)(sdk_config, approvals.handle)
 
-        def close_after_timeout() -> None:
-            nonlocal timed_out
-            timed_out = True
-            approvals.stop()
-            _close_client(client)
-
-        timeout = threading.Timer(config.timeout_ms / 1000, close_after_timeout)
-        timeout.daemon = True
-        timeout.start()
-
-        try:
-            _start_client_with_env(client, child_env)
-            client.initialize()
-            if request.type == "thread_list":
-                result = _response_to_dict(client.thread_list(_thread_query_params(request, workspace)))
-                emitter.emit({
-                    "schemaVersion": SCHEMA_VERSION,
-                    "type": "thread_list_result",
-                    "roomId": request.room_id,
-                    "threads": result.get("data") if isinstance(result.get("data"), list) else [],
-                    "nextCursor": result.get("nextCursor") if isinstance(result.get("nextCursor"), str) else None,
-                    "backwardsCursor": result.get("backwardsCursor") if isinstance(result.get("backwardsCursor"), str) else None,
-                })
-            else:
-                result = _response_to_dict(client.thread_read(str(request.thread_id), include_turns=request.include_turns))
-                thread = result.get("thread")
-                emitter.emit({
-                    "schemaVersion": SCHEMA_VERSION,
-                    "type": "thread_read_result",
-                    "roomId": request.room_id,
-                    "thread": thread if isinstance(thread, dict) else {},
-                })
-        finally:
-            if timeout is not None:
-                timeout.cancel()
-
-        if timed_out:
-            raise RunnerError("Codex SDK app-server timed out during thread query", code="codex_sdk_app_server_timeout")
+        _start_client_with_env(client, child_env)
+        client.initialize()
+        if request.type == "thread_list":
+            result = _response_to_dict(client.thread_list(_thread_query_params(request, workspace)))
+            emitter.emit({
+                "schemaVersion": SCHEMA_VERSION,
+                "type": "thread_list_result",
+                "roomId": request.room_id,
+                "threads": result.get("data") if isinstance(result.get("data"), list) else [],
+                "nextCursor": result.get("nextCursor") if isinstance(result.get("nextCursor"), str) else None,
+                "backwardsCursor": result.get("backwardsCursor") if isinstance(result.get("backwardsCursor"), str) else None,
+            })
+        else:
+            result = _response_to_dict(client.thread_read(str(request.thread_id), include_turns=request.include_turns))
+            thread = result.get("thread")
+            emitter.emit({
+                "schemaVersion": SCHEMA_VERSION,
+                "type": "thread_read_result",
+                "roomId": request.room_id,
+                "thread": thread if isinstance(thread, dict) else {},
+            })
 
         refreshed_auth = codex_home / "auth.json"
         if refreshed_auth.exists() and config.refreshed_auth_json_path:

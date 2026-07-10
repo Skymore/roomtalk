@@ -199,7 +199,7 @@ Implementation note:
 - Production startup validation requires `CODE_AGENT_ARTIFACT_VERSION` and `CODE_AGENT_SOURCE_REF` for E2B JSONL mode and rejects `CODE_AGENT_SOURCE_DIR`.
 - Development artifact mode is the only accepted way to use `/Users/sky/projects/code-agent-engine/src`.
 - RoomTalk now uses the official `e2b` TypeScript SDK for create/connect/list/kill and background command execution. `CODE_AGENT_SANDBOX_PROVIDER=e2b` with `CODE_AGENT_RUNNER_CLIENT=jsonl` requires `E2B_API_KEY` or `E2B_ACCESS_TOKEN` at startup.
-- Runner commands receive `CODE_AGENT_TURN_TIMEOUT_MS` as the E2B command timeout so real Code Agent turns are not limited by the SDK's shorter default command timeout.
+- Runner commands use no command deadline (`timeoutMs: 0`). A turn ends only when the agent completes, the user stops it, the runner exits, or the sandbox itself is reclaimed.
 - Active sandbox limits count E2B's currently running sandboxes through metadata filters (`creatorId`, plus global running state). If the SDK list call is unavailable, lifecycle code treats the count as unknown instead of enforcing a misleading local-only count.
 
 ### Phase 6.5: Model Access Strategy

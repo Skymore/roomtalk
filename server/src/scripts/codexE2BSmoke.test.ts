@@ -1,7 +1,10 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 import { buildCodexE2BSmokePlan } from './codexE2BSmoke';
-import { DEFAULT_CODEX_CLI_RUNNER_COMMAND } from '../services/codeAgentRuntimeConfig';
+import {
+  DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND,
+  DEFAULT_CODEX_CLI_RUNNER_COMMAND,
+} from '../services/codeAgentRuntimeConfig';
 
 const baseEnv = {
   RUN_CODEX_E2B_SMOKE: 'true',
@@ -12,7 +15,6 @@ const baseEnv = {
   CODE_AGENT_SOURCE_REF: '0d783dd662c823d6a671c6bba596a3ec5ef00491',
   CODEX_E2B_SMOKE_AUTH_JSON_PATH: '/tmp/codex-auth.json',
   CODEX_CLI_BIN: '/usr/local/bin/codex',
-  CODEX_CLI_TIMEOUT_MS: '45000',
   CODEX_E2B_SMOKE_TURN_ID: 'turn/test:codex',
 };
 
@@ -51,21 +53,37 @@ describe('buildCodexE2BSmokePlan', () => {
     }, /CODEX_E2B_SMOKE_AUTH_JSON_PATH/);
   });
 
-  it('builds a Codex backend smoke plan without forwarding E2B credentials to the runner', () => {
+  it('builds a Codex app-server smoke plan without forwarding E2B credentials to the runner', () => {
     const plan = assertRunnable(baseEnv);
 
-    assert.equal(plan.config.backend, 'codex');
-    assert.equal(plan.config.runnerCommand, DEFAULT_CODEX_CLI_RUNNER_COMMAND);
+    assert.equal(plan.config.backend, 'codex-app-server');
+    assert.equal(plan.config.runnerCommand, DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND);
     assert.equal(plan.config.sandboxProvider, 'e2b');
     assert.equal(plan.config.runnerClient, 'jsonl');
     assert.equal(plan.authJsonPath, '/tmp/codex-auth.json');
     assert.equal(plan.authSecretPath, '/tmp/roomtalk-codex/turn_test_codex-auth.json');
     assert.equal(plan.refreshedAuthSecretPath, '/tmp/roomtalk-codex/turn_test_codex-refreshed-auth.json');
     assert.equal(plan.runnerEnv.CODEX_CLI_BIN, '/usr/local/bin/codex');
-    assert.equal(plan.runnerEnv.ROOMTALK_CODEX_TIMEOUT_MS, '45000');
     assert.equal(plan.runnerEnv.E2B_API_KEY, undefined);
     assert.equal(plan.runnerEnv.E2B_ACCESS_TOKEN, undefined);
     assert.equal(plan.e2bConnection.apiKey, 'e2b-test-key');
+  });
+
+  it('can explicitly smoke the legacy Codex CLI backend', () => {
+    const plan = assertRunnable({
+      ...baseEnv,
+      CODEX_E2B_SMOKE_BACKEND: 'codex',
+    });
+
+    assert.equal(plan.config.backend, 'codex');
+    assert.equal(plan.config.runnerCommand, DEFAULT_CODEX_CLI_RUNNER_COMMAND);
+  });
+
+  it('rejects unsupported Codex smoke backends', () => {
+    assert.throws(() => buildCodexE2BSmokePlan({
+      ...baseEnv,
+      CODEX_E2B_SMOKE_BACKEND: 'other',
+    }), /Unsupported CODEX_E2B_SMOKE_BACKEND/);
   });
 
   it('fails fast when production E2B artifact metadata is missing', () => {

@@ -291,7 +291,6 @@ const createService = (options: {
     sandboxTtlMs: 60 * 60 * 1000,
     activeSandboxTtlMs: options.activeSandboxTtlMs ?? 60 * 60 * 1000,
     idleSandboxTtlMs: options.idleSandboxTtlMs ?? 2 * 60 * 1000,
-    turnTimeoutMs: 5 * 60 * 1000,
     creatingStaleMs: 2 * 60 * 1000,
     maxActiveSandboxes: 10,
     maxActiveSandboxesPerUser: 10,
@@ -366,6 +365,7 @@ describe('CodeAgentSessionService', () => {
     assert.deepEqual(ack, { success: true, messageId: 'ai-1' });
     assert.deepEqual(result, { success: true, messageId: 'ai-1' });
     assert.equal(sandboxService.startedRunnerCommands[0], DEFAULT_CODE_AGENT_RUNNER_COMMAND);
+    assert.deepEqual(sandboxService.startedRunnerTimeouts, [0]);
     assert.deepEqual(sandboxService.startedRunnerEnvs[0], { PYTHONUNBUFFERED: '1' });
     assert.equal(runner.requests[0].prompt, 'inspect the project');
     assert.equal(runner.requests[0].clientId, 'client-1');

@@ -8,7 +8,6 @@ describe('resolveCodexCliRunnerConfig', () => {
       enabled: false,
       cliBin: 'codex',
       sandbox: 'workspace-write',
-      timeoutMs: 600_000,
       maxStderrTailChars: 4000,
     });
   });
@@ -18,13 +17,11 @@ describe('resolveCodexCliRunnerConfig', () => {
       CODEX_CLI_BACKEND_ENABLED: 'true',
       CODEX_CLI_BIN: '/usr/local/bin/codex',
       CODEX_CLI_SANDBOX: 'workspace-write',
-      CODEX_CLI_TIMEOUT_MS: '30000',
       CODEX_CLI_MAX_STDERR_TAIL_CHARS: '1000',
     }), {
       enabled: true,
       cliBin: '/usr/local/bin/codex',
       sandbox: 'workspace-write',
-      timeoutMs: 30_000,
       maxStderrTailChars: 1000,
     });
   });
@@ -54,10 +51,6 @@ describe('resolveCodexCliRunnerConfig', () => {
     assert.throws(
       () => resolveCodexCliRunnerConfig({ CODEX_CLI_SANDBOX: 'read-only' }),
       /Unsupported Codex CLI sandbox mode/
-    );
-    assert.throws(
-      () => resolveCodexCliRunnerConfig({ CODEX_CLI_TIMEOUT_MS: '0' }),
-      /CODEX_CLI_TIMEOUT_MS must be a positive integer/
     );
     assert.throws(
       () => resolveCodexCliRunnerConfig({ CODEX_CLI_MAX_STDERR_TAIL_CHARS: '-1' }),

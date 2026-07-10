@@ -10,7 +10,6 @@ export interface CodeAgentSandboxLifecycleOptions {
   sandboxTtlMs: number;
   activeSandboxTtlMs: number;
   idleSandboxTtlMs: number;
-  turnTimeoutMs: number;
   creatingStaleMs: number;
   maxActiveSandboxes: number;
   maxActiveSandboxesPerUser: number;
@@ -51,7 +50,6 @@ const defaultOptions: CodeAgentSandboxLifecycleOptions = {
   sandboxTtlMs: 60 * 60 * 1000,
   activeSandboxTtlMs: 60 * 60 * 1000,
   idleSandboxTtlMs: 2 * 60 * 1000,
-  turnTimeoutMs: 5 * 60 * 1000,
   creatingStaleMs: 2 * 60 * 1000,
   maxActiveSandboxes: Number.POSITIVE_INFINITY,
   maxActiveSandboxesPerUser: Number.POSITIVE_INFINITY,
@@ -357,7 +355,7 @@ export class CodeAgentSandboxLifecycleService {
       return false;
     }
     const remainingTtlMs = updatedAt + this.options.sandboxTtlMs - this.now().getTime();
-    return remainingTtlMs >= this.options.turnTimeoutMs;
+    return remainingTtlMs > 0;
   }
 
   private isSandboxArtifactCompatible(room: Room): boolean {

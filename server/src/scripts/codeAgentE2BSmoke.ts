@@ -9,8 +9,7 @@ import { E2BCodeAgentSandboxService } from '../services/e2bCodeAgentSandboxServi
 import { createE2BSdkDriver } from '../services/e2bSdkDriver';
 
 const DEFAULT_SMOKE_PROMPT = 'Reply with a short confirmation that RoomTalk Coco Agent E2B smoke is working. Do not modify files.';
-const DEFAULT_TURN_TIMEOUT_MS = 10 * 60 * 1000;
-const DEFAULT_SANDBOX_TTL_MS = 10 * 60 * 1000;
+const DEFAULT_SANDBOX_TTL_MS = 60 * 60 * 1000;
 
 type CodeAgentE2BSmokePlan =
   | { run: false; reason: string }
@@ -24,7 +23,6 @@ type CodeAgentE2BSmokePlan =
     turnId: string;
     prompt: string;
     expectedText?: string;
-    turnTimeoutMs: number;
     sandboxTtlMs: number;
     e2bConnection: {
       apiKey?: string;
@@ -88,7 +86,6 @@ export const buildCodeAgentE2BSmokePlan = (env: NodeJS.ProcessEnv): CodeAgentE2B
     turnId: env.CODE_AGENT_SMOKE_TURN_ID || `turn-${suffix}`,
     prompt: env.CODE_AGENT_SMOKE_PROMPT || DEFAULT_SMOKE_PROMPT,
     expectedText: env.CODE_AGENT_SMOKE_EXPECTED,
-    turnTimeoutMs: parsePositiveMs(env.CODE_AGENT_TURN_TIMEOUT_MS, DEFAULT_TURN_TIMEOUT_MS),
     sandboxTtlMs: parsePositiveMs(env.CODE_AGENT_SANDBOX_TTL_MS, DEFAULT_SANDBOX_TTL_MS),
     e2bConnection: {
       apiKey: env.E2B_API_KEY,
@@ -131,7 +128,7 @@ export const runCodeAgentE2BSmoke = async (plan: Extract<CodeAgentE2BSmokePlan, 
       handle,
       command: plan.config.runnerCommand,
       env: plan.runnerEnv,
-      timeoutMs: plan.turnTimeoutMs,
+      timeoutMs: 0,
     });
     const result = await runnerClient.run({
       schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,

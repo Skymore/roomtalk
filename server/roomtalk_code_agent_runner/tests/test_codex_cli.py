@@ -51,7 +51,11 @@ def codex_request(workspace: Path):
     )))
 
 
-def test_codex_cli_maps_exec_jsonl_and_saves_refreshed_auth(tmp_path: Path):
+def test_codex_cli_maps_exec_jsonl_and_saves_refreshed_auth(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def fail_turn_watchdog(*_args, **_kwargs):
+        raise AssertionError("Codex CLI turns must not create a watchdog timer")
+
+    monkeypatch.setattr(codex_cli.threading, "Timer", fail_turn_watchdog)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     auth_json = tmp_path / "auth.json"

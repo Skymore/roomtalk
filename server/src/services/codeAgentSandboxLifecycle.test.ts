@@ -144,7 +144,6 @@ const createLifecycle = (
   sandboxService,
   lifecycle: new CodeAgentSandboxLifecycleService(store, sandboxService, logger as any, {
     sandboxTtlMs: 60 * 60 * 1000,
-    turnTimeoutMs: 5 * 60 * 1000,
     creatingStaleMs: 2 * 60 * 1000,
     maxActiveSandboxes: 10,
     maxActiveSandboxesPerUser: 10,
@@ -352,7 +351,7 @@ describe('CodeAgentSandboxLifecycleService', () => {
     assert.equal((await store.getRoomById('room-1'))?.sandboxStatus, 'ready');
   });
 
-  it('marks expired reconnects and near-expiry sandboxes before creating a new sandbox', async () => {
+  it('recreates missing sandboxes but reuses live near-expiry sandboxes before extending them', async () => {
     const store = new MemoryRoomStore([
       room({ sandboxStatus: 'ready', sandboxId: 'missing-sandbox', sandboxUpdatedAt: '2026-05-03T00:00:00.000Z' }),
     ]);
@@ -367,8 +366,8 @@ describe('CodeAgentSandboxLifecycleService', () => {
     await store.saveRoom(room({ sandboxStatus: 'ready', sandboxId: firstNewSandboxId, sandboxUpdatedAt: '2026-05-03T00:00:00.000Z' }));
     const ttlRecovered = await lifecycle.ensureReadySandbox('room-1', 'client-1');
     assert.equal(ttlRecovered.ok, true);
-    assert.equal(ttlRecovered.ok && ttlRecovered.created, true);
-    assert.notEqual((await store.getRoomById('room-1'))?.sandboxId, firstNewSandboxId);
+    assert.equal(ttlRecovered.ok && ttlRecovered.created, false);
+    assert.equal((await store.getRoomById('room-1'))?.sandboxId, firstNewSandboxId);
   });
 
   it('reconnects timed-out sandboxes when the provider can resume them', async () => {
@@ -382,7 +381,6 @@ describe('CodeAgentSandboxLifecycleService', () => {
     }));
     const lifecycle = new CodeAgentSandboxLifecycleService(store, sandboxService, logger as any, {
       sandboxTtlMs: 5 * 60 * 1000,
-      turnTimeoutMs: 5 * 60 * 1000,
       creatingStaleMs: 1_000,
       maxActiveSandboxes: 10,
       maxActiveSandboxesPerUser: 10,
@@ -428,7 +426,6 @@ describe('CodeAgentSandboxLifecycleService', () => {
     await sandboxService.create({ roomId: 'existing', creatorId: 'client-1', ttlMs: 60_000 });
     const lifecycle = new CodeAgentSandboxLifecycleService(store, sandboxService, logger as any, {
       sandboxTtlMs: 60_000,
-      turnTimeoutMs: 1_000,
       creatingStaleMs: 1_000,
       maxActiveSandboxes: 1,
       maxActiveSandboxesPerUser: 10,
@@ -438,7 +435,6 @@ describe('CodeAgentSandboxLifecycleService', () => {
 
     const perUserLifecycle = new CodeAgentSandboxLifecycleService(store, sandboxService, logger as any, {
       sandboxTtlMs: 60_000,
-      turnTimeoutMs: 1_000,
       creatingStaleMs: 1_000,
       maxActiveSandboxes: 10,
       maxActiveSandboxesPerUser: 1,

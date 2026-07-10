@@ -13,8 +13,7 @@ import { createE2BSdkDriver } from '../services/e2bSdkDriver';
 import { JsonlCodeAgentRunnerClient } from '../services/jsonlCodeAgentRunner';
 
 const DEFAULT_SMOKE_PROMPT = 'Reply exactly: codex e2b smoke ok';
-const DEFAULT_TURN_TIMEOUT_MS = 10 * 60 * 1000;
-const DEFAULT_SANDBOX_TTL_MS = 10 * 60 * 1000;
+const DEFAULT_SANDBOX_TTL_MS = 60 * 60 * 1000;
 
 type CodexE2BSmokePlan =
   | { run: false; reason: string }
@@ -30,7 +29,6 @@ type CodexE2BSmokePlan =
     turnId: string;
     prompt: string;
     expectedText?: string;
-    turnTimeoutMs: number;
     sandboxTtlMs: number;
     e2bConnection: {
       apiKey?: string;
@@ -57,13 +55,14 @@ export const buildCodexE2BSmokePlan = (env: NodeJS.ProcessEnv): CodexE2BSmokePla
   if (!authJsonPath) {
     return { run: false, reason: 'CODEX_E2B_SMOKE_AUTH_JSON_PATH is not set and ~/.codex/auth.json is unavailable' };
   }
+  const smokeBackend = resolveSmokeBackend(env.CODEX_E2B_SMOKE_BACKEND);
 
   const smokeEnv = {
     ...env,
     CODE_AGENT_ENABLED: 'true',
     CODE_AGENT_SANDBOX_PROVIDER: 'e2b',
     CODE_AGENT_RUNNER_CLIENT: 'jsonl',
-    CODE_AGENT_BACKEND: 'codex',
+    CODE_AGENT_BACKEND: smokeBackend,
     CODEX_CLI_BACKEND_ENABLED: 'true',
   };
   const config = resolveCodeAgentRuntimeConfig(smokeEnv);
@@ -86,13 +85,11 @@ export const buildCodexE2BSmokePlan = (env: NodeJS.ProcessEnv): CodexE2BSmokePla
       PYTHONUNBUFFERED: '1',
       ...config.runnerEnv,
       CODEX_CLI_BIN: codexCli.cliBin,
-      ROOMTALK_CODEX_TIMEOUT_MS: String(codexCli.timeoutMs),
     },
     roomId: env.CODEX_E2B_SMOKE_ROOM_ID || `codex-e2b-smoke-${suffix}`,
     turnId,
     prompt: env.CODEX_E2B_SMOKE_PROMPT || DEFAULT_SMOKE_PROMPT,
     expectedText: env.CODEX_E2B_SMOKE_EXPECTED || 'codex e2b smoke ok',
-    turnTimeoutMs: parsePositiveMs(env.CODE_AGENT_TURN_TIMEOUT_MS, DEFAULT_TURN_TIMEOUT_MS),
     sandboxTtlMs: parsePositiveMs(env.CODE_AGENT_SANDBOX_TTL_MS, DEFAULT_SANDBOX_TTL_MS),
     e2bConnection: {
       apiKey: env.E2B_API_KEY,
@@ -103,6 +100,14 @@ export const buildCodexE2BSmokePlan = (env: NodeJS.ProcessEnv): CodexE2BSmokePla
       requestTimeoutMs: parsePositiveMs(env.E2B_REQUEST_TIMEOUT_MS, 60_000),
     },
   };
+};
+
+const resolveSmokeBackend = (value: string | undefined): 'codex' | 'codex-app-server' => {
+  const normalized = (value || 'codex-app-server').trim().toLowerCase();
+  if (normalized === 'codex' || normalized === 'codex-app-server') {
+    return normalized;
+  }
+  throw new Error(`Unsupported CODEX_E2B_SMOKE_BACKEND: ${value}`);
 };
 
 export const runCodexE2BSmoke = async (
@@ -149,7 +154,7 @@ export const runCodexE2BSmoke = async (
         ROOMTALK_CODEX_AUTH_JSON_PATH: plan.authSecretPath,
         ROOMTALK_CODEX_REFRESHED_AUTH_JSON_PATH: plan.refreshedAuthSecretPath,
       },
-      timeoutMs: plan.turnTimeoutMs,
+      timeoutMs: 0,
     });
     const result = await runnerClient.run({
       schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,

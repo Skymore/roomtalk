@@ -401,9 +401,6 @@ def run_request(
     })
 
     process: Any | None = None
-    timeout: threading.Timer | None = None
-    timed_out = False
-
     try:
         _write_codex_config(codex_home, request, env, workspace)
         _restore_auth_json(config, codex_home)
@@ -420,15 +417,6 @@ def run_request(
         )
         stderr_thread = _start_stderr_tail_thread(process.stderr, stderr_tail)
 
-        def kill_after_timeout() -> None:
-            nonlocal timed_out
-            timed_out = True
-            process.kill()
-
-        timeout = threading.Timer(config.timeout_ms / 1000, kill_after_timeout)
-        timeout.daemon = True
-        timeout.start()
-
         try:
             mapper = CodexAppServerJsonRpcMapper(
                 turn_id=request.turn_id,
@@ -439,15 +427,7 @@ def run_request(
             _drive_app_server(process, request, mapper, emitter, env, workspace, config, codex_home, control_queue=control_queue)
             exit_code = _stop_app_server(process)
         finally:
-            timeout.cancel()
             stderr_thread.join(timeout=1)
-
-        if timed_out:
-            raise RunnerError(
-                f"Codex app-server timed out after {config.timeout_ms}ms",
-                code="codex_app_server_timeout",
-                turn_id=request.turn_id,
-            )
 
         refreshed_auth = codex_home / "auth.json"
         if refreshed_auth.exists() and config.refreshed_auth_json_path:
@@ -533,9 +513,6 @@ def run_thread_query_request(
     codex_home = _create_persistent_app_server_home(config, request)
     stderr_tail = _Tail(MAX_STDERR_TAIL_CHARS)
     process: Any | None = None
-    timeout: threading.Timer | None = None
-    timed_out = False
-
     try:
         _restore_auth_json(config, codex_home)
         process = popen_factory(
@@ -550,24 +527,11 @@ def run_thread_query_request(
         )
         stderr_thread = _start_stderr_tail_thread(process.stderr, stderr_tail)
 
-        def kill_after_timeout() -> None:
-            nonlocal timed_out
-            timed_out = True
-            process.kill()
-
-        timeout = threading.Timer(config.timeout_ms / 1000, kill_after_timeout)
-        timeout.daemon = True
-        timeout.start()
-
         try:
             _drive_app_server_thread_query(process, request, emitter, config, codex_home, workspace)
             exit_code = _stop_app_server(process)
         finally:
-            timeout.cancel()
             stderr_thread.join(timeout=1)
-
-        if timed_out:
-            raise RunnerError(f"Codex app-server timed out after {config.timeout_ms}ms", code="codex_app_server_timeout")
 
         refreshed_auth = codex_home / "auth.json"
         if refreshed_auth.exists() and config.refreshed_auth_json_path:

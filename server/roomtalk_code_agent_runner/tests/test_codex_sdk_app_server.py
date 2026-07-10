@@ -161,7 +161,11 @@ def codex_sdk_request(workspace: Path, **overrides: Any):
     )))
 
 
-def test_codex_sdk_app_server_maps_sdk_notifications_and_sanitizes_env(tmp_path: Path):
+def test_codex_sdk_app_server_maps_sdk_notifications_and_sanitizes_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def fail_turn_watchdog(*_args, **_kwargs):
+        raise AssertionError("Codex SDK app-server turns must not create a watchdog timer")
+
+    monkeypatch.setattr(codex_sdk_app_server.threading, "Timer", fail_turn_watchdog)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     auth_json = tmp_path / "auth.json"
@@ -326,7 +330,11 @@ def test_codex_sdk_app_server_routes_interactive_approval_response(tmp_path: Pat
     assert approval_result["success"] is True
 
 
-def test_codex_sdk_app_server_runs_thread_list_query(tmp_path: Path):
+def test_codex_sdk_app_server_runs_thread_list_query(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def fail_turn_watchdog(*_args, **_kwargs):
+        raise AssertionError("Codex SDK app-server thread queries must not create a watchdog timer")
+
+    monkeypatch.setattr(codex_sdk_app_server.threading, "Timer", fail_turn_watchdog)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     auth_json = tmp_path / "auth.json"

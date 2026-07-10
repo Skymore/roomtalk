@@ -77,7 +77,6 @@ export interface CodeAgentSessionServiceOptions {
   daemonCommand?: string;
   daemonRegistry?: CodeAgentDaemonProcessRegistry;
   daemonRunnerClient?: JsonlCodeAgentDaemonRunnerClient;
-  turnTimeoutMs?: number;
   allowedPaths?: string[];
   runnerEnv?: Record<string, string>;
   runnerEnvByBackend?: Partial<Record<CodeAgentBackend, Record<string, string>>>;
@@ -392,7 +391,7 @@ export class CodeAgentSessionService {
             handle: turnSandbox!,
             command,
             env,
-            timeoutMs: this.options.turnTimeoutMs,
+            timeoutMs: 0,
           });
         }
         const active = this.activeTurns.get(input.roomId);
@@ -812,7 +811,7 @@ export class CodeAgentSessionService {
               handle: input.sandbox,
               command: DEFAULT_CODEX_APP_SERVER_RUNNER_COMMAND,
               env: runnerEnv,
-              timeoutMs: this.options.turnTimeoutMs,
+              timeoutMs: 0,
             });
         try {
           const result = this.options.runnerClient === 'daemon'

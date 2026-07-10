@@ -91,7 +91,11 @@ def jsonrpc_lines(process: FakeAppServerProcess) -> list[dict[str, Any]]:
     return [json.loads(line) for line in process.stdin.lines]
 
 
-def test_codex_app_server_drives_json_rpc_and_maps_notifications(tmp_path: Path):
+def test_codex_app_server_drives_json_rpc_and_maps_notifications(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def fail_turn_watchdog(*_args, **_kwargs):
+        raise AssertionError("Codex app-server turns must not create a watchdog timer")
+
+    monkeypatch.setattr(codex_app_server.threading, "Timer", fail_turn_watchdog)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     auth_json = tmp_path / "auth.json"
@@ -379,7 +383,11 @@ def test_codex_app_server_emits_interactive_approval_request_in_edit_mode(tmp_pa
     assert all(message.get("id") != 88 for message in jsonrpc_lines(popen.processes[0]))
 
 
-def test_codex_app_server_runs_thread_list_query(tmp_path: Path):
+def test_codex_app_server_runs_thread_list_query(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def fail_turn_watchdog(*_args, **_kwargs):
+        raise AssertionError("Codex app-server thread queries must not create a watchdog timer")
+
+    monkeypatch.setattr(codex_app_server.threading, "Timer", fail_turn_watchdog)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     auth_json = tmp_path / "auth.json"

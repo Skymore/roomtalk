@@ -23,7 +23,6 @@ from .runner import (
 SCHEMA_VERSION = 1
 DEFAULT_CODEX_CLI_BIN = "codex"
 DEFAULT_CODEX_SECRET_PARENT = "/tmp/roomtalk-codex"
-DEFAULT_CODEX_TIMEOUT_MS = 120_000
 DEFAULT_CODEX_MODEL = "gpt-5.5"
 DEFAULT_CODEX_REASONING_EFFORT = "xhigh"
 DEFAULT_CODEX_PERMISSION_MODE = "approveForMe"
@@ -47,7 +46,6 @@ class CodexCliRunConfig:
     secret_parent: Path = Path(DEFAULT_CODEX_SECRET_PARENT)
     auth_json_path: Path | None = None
     refreshed_auth_json_path: Path | None = None
-    timeout_ms: int = DEFAULT_CODEX_TIMEOUT_MS
     keep_codex_home: bool = False
 
 
@@ -194,7 +192,6 @@ def config_from_env(env: dict[str, str] | None = None) -> CodexCliRunConfig:
         secret_parent=Path(env.get("ROOMTALK_CODEX_SECRET_PARENT") or DEFAULT_CODEX_SECRET_PARENT),
         auth_json_path=auth_json_path,
         refreshed_auth_json_path=refreshed_auth_json_path,
-        timeout_ms=_positive_int(env.get("ROOMTALK_CODEX_TIMEOUT_MS"), DEFAULT_CODEX_TIMEOUT_MS),
         keep_codex_home=env.get("ROOMTALK_CODEX_KEEP_HOME") == "true",
     )
 
@@ -242,30 +239,11 @@ def run_request(
             workspace=workspace,
             fallback_session_id=request.session_id,
         )
-        timed_out = False
-
-        def kill_after_timeout() -> None:
-            nonlocal timed_out
-            timed_out = True
-            process.kill()
-
-        timeout = threading.Timer(config.timeout_ms / 1000, kill_after_timeout)
-        timeout.daemon = True
-        timeout.start()
-
         try:
             _consume_codex_stdout(process.stdout, mapper, emitter)
             exit_code = process.wait()
         finally:
-            timeout.cancel()
             stderr_thread.join(timeout=1)
-
-        if timed_out:
-            raise RunnerError(
-                f"Codex CLI timed out after {config.timeout_ms}ms",
-                code="codex_timeout",
-                turn_id=request.turn_id,
-            )
 
         refreshed_auth = codex_home / "auth.json"
         if refreshed_auth.exists() and config.refreshed_auth_json_path:
@@ -644,18 +622,6 @@ def _path_from_env(value: str | None) -> Path | None:
     if not path.is_absolute():
         raise RunnerError("Codex auth paths must be absolute", code="invalid_codex_auth_path")
     return path
-
-
-def _positive_int(value: str | None, fallback: int) -> int:
-    if not value or not value.strip():
-        return fallback
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise RunnerError("ROOMTALK_CODEX_TIMEOUT_MS must be a positive integer", code="invalid_codex_timeout") from exc
-    if parsed <= 0:
-        raise RunnerError("ROOMTALK_CODEX_TIMEOUT_MS must be a positive integer", code="invalid_codex_timeout")
-    return parsed
 
 
 def _emit_error(stream: TextIO, error: Exception, turn_id: str | None = None) -> None:

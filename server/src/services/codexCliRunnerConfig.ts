@@ -5,12 +5,10 @@ export interface CodexCliRunnerConfig {
   enabled: boolean;
   cliBin: string;
   sandbox: 'workspace-write';
-  timeoutMs: number;
   maxStderrTailChars: number;
 }
 
 const DEFAULT_CODEX_CLI_BIN = 'codex';
-const DEFAULT_CODEX_CLI_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_CODEX_CLI_MAX_STDERR_TAIL_CHARS = 4000;
 
 export function resolveCodexCliRunnerConfig(env: NodeJS.ProcessEnv = process.env): CodexCliRunnerConfig {
@@ -32,11 +30,6 @@ export function resolveCodexCliRunnerConfig(env: NodeJS.ProcessEnv = process.env
     enabled,
     cliBin: env.CODEX_CLI_BIN?.trim() || DEFAULT_CODEX_CLI_BIN,
     sandbox: 'workspace-write',
-    timeoutMs: parsePositiveIntegerEnv(
-      env.CODEX_CLI_TIMEOUT_MS,
-      DEFAULT_CODEX_CLI_TIMEOUT_MS,
-      'CODEX_CLI_TIMEOUT_MS'
-    ),
     maxStderrTailChars: parsePositiveIntegerEnv(
       env.CODEX_CLI_MAX_STDERR_TAIL_CHARS,
       DEFAULT_CODEX_CLI_MAX_STDERR_TAIL_CHARS,
