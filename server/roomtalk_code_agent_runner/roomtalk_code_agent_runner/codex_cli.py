@@ -470,27 +470,32 @@ def _trusted_project_paths(workspace: Path, env: dict[str, str]) -> list[str]:
 
 
 def _roomtalk_tool_env(request: RunnerRequest, env: dict[str, str], workspace: Path) -> dict[str, str]:
+    read_only = _codex_exec_permissions(request).mode == "plan"
     values: dict[str, str] = {
         "ROOMTALK_CODE_AGENT_ROOM_ID": request.room_id,
         "ROOMTALK_CODE_AGENT_TURN_ID": request.turn_id,
+        "ROOMTALK_CODE_AGENT_CLI_ACCESS": "read-only" if read_only else "full",
         "ROOMTALK_WORKSPACE": str(workspace),
     }
-    for key in (
+    read_only_keys = (
         "PYTHONPATH",
         "CODE_AGENT_WORKSPACE_ROOT",
+        "ROOMTALK_ROOM_CONTEXT_URL",
+        "ROOMTALK_ROOM_CONTEXT_TOKEN",
+    )
+    write_keys = (
         "ROOMTALK_CODE_AGENT_ENABLE_STATIC_PUBLISH",
         "ROOMTALK_STATIC_PUBLISH_URL",
         "ROOMTALK_STATIC_PUBLISH_PUBLIC_BASE_URL",
         "ROOMTALK_STATIC_PUBLISH_TOKEN",
-        "ROOMTALK_ROOM_CONTEXT_URL",
-        "ROOMTALK_ROOM_CONTEXT_TOKEN",
         "ROOMTALK_E2B_PORT_HOST_TEMPLATE",
         "ROOMTALK_E2B_PORT_URL_TEMPLATE",
         "CODE_AGENT_PORT_HOST_TEMPLATE",
         "CODE_AGENT_PORT_URL_TEMPLATE",
         "ROOMTALK_CODE_AGENT_BACKGROUND_JOBS_DIR",
         "CODE_AGENT_BACKGROUND_JOBS_DIR",
-    ):
+    )
+    for key in read_only_keys + (() if read_only else write_keys):
         value = (env.get(key) or "").strip()
         if value:
             values[key] = value

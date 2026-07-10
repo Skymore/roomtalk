@@ -76,7 +76,9 @@ token 使用 HMAC 签名并包含：
 
 API 不接受调用者指定 `roomId`，只读取 token 声明中的房间。这样即使 Codex 修改命令参数，也不能跨房间读取。
 
-默认 Plan 模式仍是文件只读；只有该 turn 同时具备房间上下文 URL 和 token 时，Codex 的只读 sandbox 才开放网络，让 CLI 可以访问 RoomTalk API。没有房间上下文能力的普通 Plan turn 继续保持断网。
+CLI 按能力分为只读面和写入面：`roomtalk room ...` 属于只读面，`roomtalk publish-static-site` 等属于写入面。Plan 的 shell environment 只拿到 room-context 凭证，并设置 `ROOMTALK_CODE_AGENT_CLI_ACCESS=read-only`；写命令会在 CLI 入口再次拒绝。Edit、Approve for me 和 Full access 才能拿到对应写入凭证。
+
+默认 Plan 模式仍是文件只读；只有该 turn 同时具备房间上下文 URL 和 token 时，Codex 的只读 sandbox 才开放网络，让只读 CLI 可以访问 RoomTalk API。没有房间上下文能力的普通 Plan turn 继续保持断网。
 
 ### 消息投影
 

@@ -23,6 +23,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     env = dict(os.environ)
     try:
         if args.command == "publish-static-site":
+            _require_write_access(env)
             result = _publish_static_site(args, env)
         elif args.command == "room":
             result = _read_room_context(args, env)
@@ -37,6 +38,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     except Exception as exc:
         _print_result({"success": False, "error": str(exc), "code": "roomtalk_tool_error"}, json_output=bool(getattr(args, "json", False)))
         return 1
+
+
+def _require_write_access(env: dict[str, str]) -> None:
+    if (env.get("ROOMTALK_CODE_AGENT_CLI_ACCESS") or "").strip().lower() == "read-only":
+        raise RunnerError(
+            "This RoomTalk CLI command is not available in Plan mode",
+            code="roomtalk_cli_read_only",
+        )
 
 
 def _build_parser() -> argparse.ArgumentParser:
