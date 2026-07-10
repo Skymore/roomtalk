@@ -89,6 +89,11 @@ describe('code agent daemon protocol', () => {
       status: 'ok',
       activeTurnId: null,
     }));
+    const released = parseCodeAgentDaemonEventLine(JSON.stringify({
+      schemaVersion: 1,
+      type: 'turn_released',
+      turnId: 'turn-1',
+    }));
     const final = parseCodeAgentDaemonEventLine(JSON.stringify({
       schemaVersion: 1,
       type: 'final',
@@ -99,6 +104,7 @@ describe('code agent daemon protocol', () => {
 
     assert.equal(isCodeAgentDaemonControlEvent(ready), true);
     assert.equal(isCodeAgentDaemonControlEvent(health), true);
+    assert.equal(isCodeAgentDaemonControlEvent(released), true);
     assert.equal(isCodeAgentDaemonRunnerEvent(final), true);
     assert.deepEqual(ready, {
       schemaVersion: 1,
@@ -113,6 +119,11 @@ describe('code agent daemon protocol', () => {
       requestId: 'health-1',
       status: 'ok',
       activeTurnId: null,
+    });
+    assert.deepEqual(released, {
+      schemaVersion: 1,
+      type: 'turn_released',
+      turnId: 'turn-1',
     });
     assert.deepEqual(final, {
       schemaVersion: 1,

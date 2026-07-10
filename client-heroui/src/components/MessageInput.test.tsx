@@ -104,9 +104,10 @@ vi.mock('./MessageInputAIControls', () => ({
       settings
     </button>
   ),
-  MessageInputAIControls: ({ onAskAI, onSend, isCodeAgentRoom, codeAgentBackend, codeAgentMode, codeAgentAvailableModes }: any) => (
+  MessageInputAIControls: ({ onAskAI, onSend, isAiProcessing, isCodeAgentRoom, codeAgentBackend, codeAgentMode, codeAgentAvailableModes }: any) => (
     <div
       data-testid="message-input-ai-controls"
+      data-ai-processing={String(Boolean(isAiProcessing))}
       data-code-agent-room={String(Boolean(isCodeAgentRoom))}
       data-code-agent-backend={codeAgentBackend || ''}
       data-code-agent-mode={codeAgentMode || ''}
@@ -469,7 +470,7 @@ describe('MessageInput optimistic send flow', () => {
   });
 
   it('uses the agent control action to stop a running turn when the input is empty', async () => {
-    renderMessageInput({
+    const rendered = renderMessageInput({
       isCodeAgentRoom: true,
       isRoomAIProcessing: true,
       codeAgentBackend: 'codex-app-server',
@@ -478,8 +479,14 @@ describe('MessageInput optimistic send flow', () => {
     fireEvent.click(screen.getByText('ask-ai'));
 
     await waitFor(() => expect(socketMocks.interruptCodeAgentTurn).toHaveBeenCalledWith('room-1'));
+    expect(screen.getByTestId('message-input-ai-controls').dataset.aiProcessing).toBe('true');
     expect(socketMocks.steerCodeAgentTurn).not.toHaveBeenCalled();
     expect(socketMocks.sendMessageAndAskAI).not.toHaveBeenCalled();
+
+    rendered.rerender(<MessageInput {...rendered.props} isRoomAIProcessing={false} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('message-input-ai-controls').dataset.aiProcessing).toBe('false');
+    });
   });
 
   it('uses the agent control action to steer a running turn with text', async () => {

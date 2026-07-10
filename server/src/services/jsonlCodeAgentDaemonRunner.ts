@@ -234,6 +234,8 @@ class DaemonConnection {
     if (isCodeAgentDaemonControlEvent(event)) {
       if (event.type === 'daemon_ready') {
         this.readyResolve();
+      } else if (event.type === 'turn_released') {
+        this.activeRun?.handleReleased(event.turnId);
       }
       return;
     }
@@ -275,6 +277,7 @@ class ActiveDaemonRun {
   errorEvent?: CodeAgentRunnerErrorEvent;
   readonly result: Promise<CodeAgentRunnerRunResult>;
   private resolve!: (result: CodeAgentRunnerRunResult) => void;
+  private released = false;
 
   constructor(
     readonly turnId: string,
@@ -297,9 +300,19 @@ class ActiveDaemonRun {
       this.errorEvent = event;
     }
     await this.handlers.onEvent(event);
-    if (this.finalEvent || this.errorEvent) {
-      this.resolve({ events: this.events, finalEvent: this.finalEvent, errorEvent: this.errorEvent });
+    if (this.errorEvent && doesDaemonErrorBypassRelease(this.errorEvent.code)) {
+      this.resolve({ events: this.events, errorEvent: this.errorEvent });
+      return;
     }
+    this.resolveIfReleased();
+  }
+
+  handleReleased(turnId: string) {
+    if (turnId !== this.turnId) {
+      return;
+    }
+    this.released = true;
+    this.resolveIfReleased();
   }
 
   fail(message: string, code: string) {
@@ -321,7 +334,21 @@ class ActiveDaemonRun {
       () => this.resolve({ events: this.events, errorEvent })
     );
   }
+
+  private resolveIfReleased() {
+    if (this.released && (this.finalEvent || this.errorEvent)) {
+      this.resolve({ events: this.events, finalEvent: this.finalEvent, errorEvent: this.errorEvent });
+    }
+  }
 }
+
+const doesDaemonErrorBypassRelease = (code: string | undefined): boolean => (
+  code === 'daemon_busy'
+  || code === 'invalid_json'
+  || code === 'invalid_request'
+  || code === 'unsupported_daemon_request'
+  || code === 'unsupported_backend'
+);
 
 class ActiveDaemonQuery {
   readonly result: Promise<CodeAgentDaemonThreadQueryResult>;

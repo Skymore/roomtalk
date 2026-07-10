@@ -169,10 +169,17 @@ class SandboxDaemon:
             self._emit_error(exc, turn_id=request.turn_id)
         finally:
             control_queue.put(None)
+            released = False
             with self._lock:
                 active = self._active
                 if active is not None and active.turn_id == request.turn_id:
                     self._active = None
+                    released = True
+            if released:
+                self.emitter.emit({
+                    "type": "turn_released",
+                    "turnId": request.turn_id,
+                })
 
     def _reap_finished_active_locked(self) -> None:
         active = self._active

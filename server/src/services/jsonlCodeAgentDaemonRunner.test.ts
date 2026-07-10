@@ -105,6 +105,11 @@ describe('JsonlCodeAgentDaemonRunnerClient', () => {
     await waitFor(() => process.written.length === 1);
     process.emit({ schemaVersion: 1, type: 'text_delta', messageId: 'ai-1', delta: 'done' });
     process.emit({ schemaVersion: 1, type: 'final', messageId: 'ai-1', answer: 'done', sessionId: 'session-1' });
+    let firstSettled = false;
+    void firstRun.then(() => { firstSettled = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(firstSettled, false);
+    process.emit({ schemaVersion: 1, type: 'turn_released', turnId: 'turn-1' });
 
     const first = await firstRun;
     assert.equal(first.finalEvent?.sessionId, 'session-1');
@@ -121,6 +126,7 @@ describe('JsonlCodeAgentDaemonRunnerClient', () => {
     }));
     await waitFor(() => process.written.length === 2);
     process.emit({ schemaVersion: 1, type: 'final', messageId: 'ai-2', answer: 'next', sessionId: 'session-2' });
+    process.emit({ schemaVersion: 1, type: 'turn_released', turnId: 'turn-2' });
 
     const second = await secondRun;
     assert.equal(second.finalEvent?.sessionId, 'session-2');
@@ -153,6 +159,26 @@ describe('JsonlCodeAgentDaemonRunnerClient', () => {
     assert.equal(result.errorEvent?.code, 'daemon_process_error');
     assert.match(result.errorEvent?.message || '', /daemon stderr tail/);
     assert.deepEqual(emitted.map(event => event.type), ['error']);
+  });
+
+  it('returns a daemon rejection without waiting for a turn release', async () => {
+    const process = new MemoryDaemonProcess();
+    const runner = new JsonlCodeAgentDaemonRunnerClient();
+
+    const run = runner.run(request, { onEvent: () => undefined }, createContext(process));
+    process.emit({ schemaVersion: 1, type: 'daemon_ready', daemonId: 'daemon-1', backends: ['codex-app-server'] });
+    await waitFor(() => process.written.length === 1);
+    process.emit({
+      schemaVersion: 1,
+      type: 'error',
+      turnId: 'turn-1',
+      message: 'Sandbox daemon is busy with turn old-turn',
+      code: 'daemon_busy',
+      retryable: false,
+    });
+
+    const result = await run;
+    assert.equal(result.errorEvent?.code, 'daemon_busy');
   });
 
   it('runs a thread query through the daemon connection', async () => {

@@ -206,9 +206,16 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   const isComposingRef = useRef(false);
   const lastCompositionEndAtRef = useRef(0);
   const [isAiProcessing, setIsAiProcessing] = useState(false); // 新增: 跟踪 AI 处理状态
+  const [isInterruptingCodeAgent, setIsInterruptingCodeAgent] = useState(false);
   const isSteeringCodeAgent = isCodeAgentRoom && isRoomAIProcessing;
-  const isAIInputLocked = isAiProcessing || (isRoomAIProcessing && !isCodeAgentRoom);
+  const isAIInputLocked = isAiProcessing || isInterruptingCodeAgent || (isRoomAIProcessing && !isCodeAgentRoom);
   const isNonTextInputDisabled = isSending || isAIInputLocked || !canPost;
+
+  useEffect(() => {
+    if (!isRoomAIProcessing) {
+      setIsInterruptingCodeAgent(false);
+    }
+  }, [isRoomAIProcessing]);
 
   // Voice recording state
   const [isVoiceMode, setIsVoiceMode] = useState(false);
@@ -550,7 +557,13 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
       const prompt = buildAIPrompt(latestContentItems);
       if (isSteeringCodeAgent && !prompt) {
-        await interruptCodeAgentTurn(roomId);
+        setIsInterruptingCodeAgent(true);
+        try {
+          await interruptCodeAgentTurn(roomId);
+        } catch (error) {
+          setIsInterruptingCodeAgent(false);
+          throw error;
+        }
         return;
       }
       if (isSteeringCodeAgent && imageCountRef.current > 0) {
@@ -1735,7 +1748,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                 selectedAIModel={selectedAIModel}
                 defaultAIModel={defaultAIModel}
                 isSending={isSending}
-                isAiProcessing={isAiProcessing}
+                isAiProcessing={isAiProcessing || isInterruptingCodeAgent}
                 isAgentRunning={isCodeAgentRoom && isRoomAIProcessing}
                 isInputLocked={isAIInputLocked}
                 canPost={canPost}

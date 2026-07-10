@@ -104,9 +104,11 @@ def test_daemon_handles_health_and_multiple_sequential_runs():
 
     stdin.write_json(request(turnId="turn-1", prompt="first", env={"ROOMTALK_TEST_TURN_ENV": "first-env"}))
     wait_for_event(stdout, lambda event: event["type"] == "final" and event["turnId"] == "turn-1")
+    wait_for_event(stdout, lambda event: event["type"] == "turn_released" and event["turnId"] == "turn-1")
 
     stdin.write_json(request(turnId="turn-2", prompt="second", backend="codex", env={"ROOMTALK_TEST_TURN_ENV": "second-env"}))
     wait_for_event(stdout, lambda event: event["type"] == "final" and event["turnId"] == "turn-2")
+    wait_for_event(stdout, lambda event: event["type"] == "turn_released" and event["turnId"] == "turn-2")
 
     stdin.write_json({"schemaVersion": 1, "type": "shutdown"})
     thread.join(timeout=2)
@@ -123,6 +125,7 @@ def test_daemon_handles_health_and_multiple_sequential_runs():
         "activeTurnId": None,
     }
     assert [event["turnId"] for event in events if event["type"] == "final"] == ["turn-1", "turn-2"]
+    assert [event["turnId"] for event in events if event["type"] == "turn_released"] == ["turn-1", "turn-2"]
     assert calls == [("turn-1", "first"), ("turn-2", "second")]
 
 
@@ -228,6 +231,7 @@ def test_daemon_routes_control_messages_to_active_turn():
     events = event_lines(stdout)
     assert any(event.get("message") == "control:interrupt" for event in events)
     assert any(event.get("type") == "final" and event.get("turnId") == "turn-1" for event in events)
+    assert any(event.get("type") == "turn_released" and event.get("turnId") == "turn-1" for event in events)
 
 
 def test_daemon_runs_thread_query_with_per_request_env(monkeypatch: Any):

@@ -71,10 +71,17 @@ export interface CodeAgentDaemonStoppingEvent {
   reason?: string;
 }
 
+export interface CodeAgentDaemonTurnReleasedEvent {
+  schemaVersion: typeof CODE_AGENT_RUNNER_SCHEMA_VERSION;
+  type: 'turn_released';
+  turnId: string;
+}
+
 export type CodeAgentDaemonControlEvent =
   | CodeAgentDaemonReadyEvent
   | CodeAgentDaemonHealthResultEvent
-  | CodeAgentDaemonStoppingEvent;
+  | CodeAgentDaemonStoppingEvent
+  | CodeAgentDaemonTurnReleasedEvent;
 
 export type CodeAgentDaemonOutputEvent = CodeAgentRunnerEvent | CodeAgentDaemonControlEvent;
 
@@ -126,6 +133,12 @@ export const parseCodeAgentDaemonEventLine = (line: string): CodeAgentDaemonOutp
         schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
         type,
         reason: readOptionalString(raw, 'reason'),
+      };
+    case 'turn_released':
+      return {
+        schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION,
+        type,
+        turnId: readRequiredString(raw, 'turnId'),
       };
     default:
       return parseCodeAgentRunnerEventLine(line);
@@ -231,7 +244,10 @@ const isCodeAgentDaemonBackend = (value: unknown): value is CodeAgentDaemonBacke
 export const isCodeAgentDaemonControlEvent = (
   event: CodeAgentDaemonOutputEvent
 ): event is CodeAgentDaemonControlEvent => (
-  event.type === 'daemon_ready' || event.type === 'health_result' || event.type === 'daemon_stopping'
+  event.type === 'daemon_ready'
+  || event.type === 'health_result'
+  || event.type === 'daemon_stopping'
+  || event.type === 'turn_released'
 );
 
 export const isCodeAgentDaemonRunnerEvent = (
