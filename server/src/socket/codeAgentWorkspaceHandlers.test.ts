@@ -117,6 +117,7 @@ const createHarness = (options: {
   const readWorkspaceFileCalls: Array<{ sandboxId: string; path: string; maxBytes?: number }> = [];
   const startWorkspaceCommandCalls: Array<{ sandboxId: string; command: string; timeoutMs?: number }> = [];
   const startWorkspaceTerminalCalls: Array<{ sandboxId: string; cols: number; rows: number }> = [];
+  const workspaceTerminalDataHandlers: Array<(data: Uint8Array) => void | Promise<void>> = [];
   const workspaceTerminalInputs: string[] = [];
   const workspaceTerminalResizes: Array<{ cols: number; rows: number }> = [];
   const stoppedWorkspaceTerminals: string[] = [];
@@ -129,6 +130,11 @@ const createHarness = (options: {
   const ensureReadySandboxCalls: Array<{ roomId: string; clientId: string }> = [];
   const listSitesForRoomCalls: Array<{ roomId: string; requestBaseUrl?: string }> = [];
   const socketEvents: Array<{ roomId: string; event: string; payload: unknown }> = [];
+  const storeCallCounts = {
+    getClientId: 0,
+    getRoomById: 0,
+    getRoomMember: 0,
+  };
   const io = {
     to: (roomId: string) => ({
       emit: (event: string, payload: unknown) => {
@@ -138,11 +144,18 @@ const createHarness = (options: {
   };
   const workspaceRoot = options.workspaceRoot || '/workspace';
   const store = {
-    getClientId: async () => options.clientId === undefined ? 'client-1' : options.clientId,
-    getRoomById: async (roomId: string) => roomId === currentRoom.id ? currentRoom : null,
-    getRoomMember: async (roomId: string, clientId: string) => (
-      members.find(item => item.roomId === roomId && item.clientId === clientId) || null
-    ),
+    getClientId: async () => {
+      storeCallCounts.getClientId += 1;
+      return options.clientId === undefined ? 'client-1' : options.clientId;
+    },
+    getRoomById: async (roomId: string) => {
+      storeCallCounts.getRoomById += 1;
+      return roomId === currentRoom.id ? currentRoom : null;
+    },
+    getRoomMember: async (roomId: string, clientId: string) => {
+      storeCallCounts.getRoomMember += 1;
+      return members.find(item => item.roomId === roomId && item.clientId === clientId) || null;
+    },
     readMessagesByRoom: async (roomId: string) => messages.filter(item => item.roomId === roomId),
   };
 
@@ -294,6 +307,7 @@ const createHarness = (options: {
           cols: input.cols,
           rows: input.rows,
         });
+        workspaceTerminalDataHandlers.push(input.onData);
         queueMicrotask(() => {
           void input.onData(Buffer.from('ready\r\n', 'utf8'));
         });
@@ -377,6 +391,7 @@ const createHarness = (options: {
     readWorkspaceFileCalls,
     startWorkspaceCommandCalls,
     startWorkspaceTerminalCalls,
+    workspaceTerminalDataHandlers,
     workspaceTerminalInputs,
     workspaceTerminalResizes,
     stoppedWorkspaceTerminals,
@@ -389,6 +404,7 @@ const createHarness = (options: {
     deleteWorkspaceEntryCalls,
     listSitesForRoomCalls,
     socketEvents,
+    storeCallCounts,
   };
 };
 
@@ -660,9 +676,11 @@ describe('code-agent workspace socket handlers', () => {
       socket,
       socketEvents,
       startWorkspaceTerminalCalls,
+      workspaceTerminalDataHandlers,
       workspaceTerminalInputs,
       workspaceTerminalResizes,
       stoppedWorkspaceTerminals,
+      storeCallCounts,
     } = createHarness();
 
     const opened = await socket.invoke<any>('open_code_workspace_terminal_session', {
@@ -683,13 +701,27 @@ describe('code-agent workspace socket handlers', () => {
     assert.equal((socketEvents.at(-1)?.payload as any).type, 'opened');
     assert.equal(((socketEvents.at(-1)?.payload as any).snapshot as any).output, 'ready\r\n');
 
+    await workspaceTerminalDataHandlers[0](Buffer.from('$ ', 'utf8'));
+    const dataEvent = socketEvents.at(-1)?.payload as any;
+    assert.equal(dataEvent.type, 'data');
+    assert.equal(dataEvent.data, '$ ');
+    assert.equal('snapshot' in dataEvent, false);
+
+    const authorizationCallsBeforeInput = { ...storeCallCounts };
     const input = await socket.invoke<any>('input_code_workspace_terminal_session', {
       roomId: 'room-1',
       terminalId: 'terminal',
       data: 'npm test\r',
     });
     assert.equal(input.success, true);
-    assert.deepEqual(workspaceTerminalInputs, ['npm test\r']);
+    const secondInput = await socket.invoke<any>('input_code_workspace_terminal_session', {
+      roomId: 'room-1',
+      terminalId: 'terminal',
+      data: 'pwd\r',
+    });
+    assert.equal(secondInput.success, true);
+    assert.deepEqual(workspaceTerminalInputs, ['npm test\r', 'pwd\r']);
+    assert.deepEqual(storeCallCounts, authorizationCallsBeforeInput);
 
     const resized = await socket.invoke<any>('resize_code_workspace_terminal_session', {
       roomId: 'room-1',
@@ -704,7 +736,7 @@ describe('code-agent workspace socket handlers', () => {
     const listed = await socket.invoke<any>('list_code_workspace_terminal_sessions', { roomId: 'room-1' });
     assert.equal(listed.success, true);
     assert.equal(listed.sessions.length, 1);
-    assert.equal(listed.sessions[0].output, 'ready\r\n');
+    assert.equal(listed.sessions[0].output, 'ready\r\n$ ');
 
     const closed = await socket.invoke<any>('close_code_workspace_terminal_session', {
       roomId: 'room-1',

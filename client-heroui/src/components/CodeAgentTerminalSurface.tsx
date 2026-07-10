@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Terminal as XTermTerminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { createTerminalInputBuffer } from '../utils/codeWorkspaceTerminalInputBuffer';
 import { createTerminalLocalEchoController } from '../utils/codeWorkspaceTerminalLocalEcho';
 import {
   inputCodeWorkspaceTerminalSession,
@@ -56,6 +57,12 @@ export function CodeAgentTerminalSurface({
     const localEcho = createTerminalLocalEchoController({
       write: (data) => terminal.write(data),
     });
+    const inputBuffer = createTerminalInputBuffer({
+      send: (data) => inputCodeWorkspaceTerminalSession({ roomId, terminalId, data }),
+      onError: (nextError) => {
+        setError(nextError instanceof Error ? nextError.message : 'Terminal input failed');
+      },
+    });
 
     const sendResize = () => {
       try {
@@ -89,9 +96,7 @@ export function CodeAgentTerminalSurface({
 
     const dataSubscription = terminal.onData((data) => {
       localEcho.handleInput(data);
-      void inputCodeWorkspaceTerminalSession({ roomId, terminalId, data }).catch((nextError) => {
-        setError(nextError instanceof Error ? nextError.message : 'Terminal input failed');
-      });
+      inputBuffer.push(data);
     });
 
     const unsubscribeEvents = subscribeCodeWorkspaceTerminalEvents(roomId, (event) => {
@@ -147,6 +152,7 @@ export function CodeAgentTerminalSurface({
       observer?.disconnect();
       unsubscribeEvents();
       dataSubscription.dispose();
+      inputBuffer.dispose();
       terminal.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;

@@ -198,6 +198,7 @@ const PREVIEW_VIEWPORT_MAX_DIMENSION = 3840;
 const PREVIEW_VIEWPORT_MAX_AREA = 3840 * 2160;
 const TERMINAL_ID_MAX_LENGTH = 128;
 const TERMINAL_INPUT_MAX_LENGTH = 64 * 1024;
+const TERMINAL_INPUT_ACCESS_CACHE_MS = 2_000;
 const TERMINAL_OUTPUT_TAIL_MAX_LENGTH = 200 * 1024;
 const TERMINAL_MIN_COLS = 20;
 const TERMINAL_MAX_COLS = 500;
@@ -209,6 +210,20 @@ const FILL_PREVIEW_VIEWPORT: WorkspacePreviewViewportSetting = { _tag: 'fill' };
 const workspacePreviewSessionsByRoomId = new Map<string, Map<string, WorkspacePreviewSessionSnapshot>>();
 const workspacePreviewHistoryByRoomAndTabId = new Map<string, string[]>();
 const workspaceTerminalSessionsByRoomId = new Map<string, Map<string, WorkspaceTerminalRuntime>>();
+const workspaceTerminalInputQueues = new WeakMap<CodeAgentWorkspaceTerminal, Promise<void>>();
+
+const enqueueTerminalInput = async (terminal: CodeAgentWorkspaceTerminal, data: string): Promise<void> => {
+  const previous = workspaceTerminalInputQueues.get(terminal) || Promise.resolve();
+  const next = previous.catch(() => undefined).then(() => terminal.write(data));
+  workspaceTerminalInputQueues.set(terminal, next);
+  try {
+    await next;
+  } finally {
+    if (workspaceTerminalInputQueues.get(terminal) === next) {
+      workspaceTerminalInputQueues.delete(terminal);
+    }
+  }
+};
 const parsePositiveIntegerEnv = (name: string, fallback: number) => {
   const value = Number.parseInt(process.env[name] || '', 10);
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -601,6 +616,36 @@ export function registerCodeAgentWorkspaceHandlers({
     }
 
     return { success: true, clientId, room };
+  };
+
+  const terminalInputAccessCacheByRoomId = new Map<string, {
+    expiresAt: number;
+    promise: ReturnType<typeof loadAuthorizedCodeAgentRoom>;
+  }>();
+
+  const loadAuthorizedTerminalInputRoom = (roomId: string | null) => {
+    if (!roomId) {
+      return loadAuthorizedCodeAgentRoom(roomId, 'write code workspace terminal input');
+    }
+    const cached = terminalInputAccessCacheByRoomId.get(roomId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.promise;
+    }
+    const promise = loadAuthorizedCodeAgentRoom(roomId, 'write code workspace terminal input');
+    terminalInputAccessCacheByRoomId.set(roomId, {
+      expiresAt: Date.now() + TERMINAL_INPUT_ACCESS_CACHE_MS,
+      promise,
+    });
+    void promise.then((access) => {
+      if (!access.success && terminalInputAccessCacheByRoomId.get(roomId)?.promise === promise) {
+        terminalInputAccessCacheByRoomId.delete(roomId);
+      }
+    }, () => {
+      if (terminalInputAccessCacheByRoomId.get(roomId)?.promise === promise) {
+        terminalInputAccessCacheByRoomId.delete(roomId);
+      }
+    });
+    return promise;
   };
 
   const connectReadyWorkspace = async (
@@ -1211,6 +1256,10 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: access.error });
         return;
       }
+      terminalInputAccessCacheByRoomId.set(access.room.id, {
+        expiresAt: Date.now() + TERMINAL_INPUT_ACCESS_CACHE_MS,
+        promise: Promise.resolve(access),
+      });
       if (!terminalId) {
         callback?.({ success: false, error: 'Terminal id is invalid' });
         return;
@@ -1262,7 +1311,6 @@ export function registerCodeAgentWorkspaceHandlers({
             terminalId,
             createdAt: next.updatedAt,
             data: text,
-            snapshot: terminalSnapshot(next),
           });
         },
       });
@@ -1301,7 +1349,7 @@ export function registerCodeAgentWorkspaceHandlers({
     let clientId: string | null = null;
 
     try {
-      const access = await loadAuthorizedCodeAgentRoom(roomId, 'write code workspace terminal input');
+      const access = await loadAuthorizedTerminalInputRoom(roomId);
       clientId = access.clientId ?? null;
       if (!access.success) {
         callback?.({ success: false, error: access.error });
@@ -1316,7 +1364,7 @@ export function registerCodeAgentWorkspaceHandlers({
         callback?.({ success: false, error: 'Workspace terminal is not running' });
         return;
       }
-      await session.terminal.write(data);
+      await enqueueTerminalInput(session.terminal, data);
       callback?.({ success: true });
     } catch (error) {
       socketLogger.error('Failed to write code workspace terminal input', { error, clientId, roomId, terminalId, socketId: socket.id });

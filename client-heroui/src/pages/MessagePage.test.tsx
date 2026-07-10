@@ -51,6 +51,7 @@ const socketApiMock = vi.hoisted(() => ({
   getSavedRoomsFromServer: vi.fn(),
   getRoomPermissions: vi.fn(),
   clearRoomMessages: vi.fn(),
+  requestInputCodeWorkspaceTerminalSession: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../utils/socket', () => ({
