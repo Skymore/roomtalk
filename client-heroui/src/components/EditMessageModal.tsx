@@ -21,6 +21,7 @@ interface EditMessageModalProps {
   message: Message | null; // Message to edit
   onSave: (messageId: string, newContent: string) => void;
   onSaveAndAskAI: (messageId: string, newContent: string) => void;
+  showSaveAndAskAI?: boolean;
 }
 
 export const EditMessageModal: React.FC<EditMessageModalProps> = ({
@@ -29,6 +30,7 @@ export const EditMessageModal: React.FC<EditMessageModalProps> = ({
   message,
   onSave,
   onSaveAndAskAI,
+  showSaveAndAskAI = true,
 }) => {
   const { t } = useTranslation(); // Get t function
   const [editedContent, setEditedContent] = useState('');
@@ -103,7 +105,7 @@ export const EditMessageModal: React.FC<EditMessageModalProps> = ({
         return;
       }
 
-      if (e.ctrlKey || e.metaKey) { // Ctrl+Enter or Cmd+Enter
+      if ((e.ctrlKey || e.metaKey) && showSaveAndAskAI) { // Ctrl+Enter or Cmd+Enter
         e.preventDefault();
         handleSaveAndAskAIClick();
       } else if (!e.shiftKey) { // Just Enter
@@ -175,15 +177,17 @@ export const EditMessageModal: React.FC<EditMessageModalProps> = ({
             >
               <Icon icon="lucide:save" className="mr-1" width={14} height={14}/> {t('save')}
             </Button>
-            <Button
-              color="primary"
-              size="sm"
-              onPress={handleSaveAndAskAIClick}
-              title={t('saveAndAskAITitle')}
-              className="bg-[#c96442] text-[#faf9f5] transition-colors hover:bg-[#b85737]"
-            >
-               <Icon icon="lucide:sparkles" className="mr-1" width={14} height={14}/> {t('saveAndAskAI')}
-            </Button>
+            {showSaveAndAskAI && (
+              <Button
+                color="primary"
+                size="sm"
+                onPress={handleSaveAndAskAIClick}
+                title={t('saveAndAskAITitle')}
+                className="bg-[#c96442] text-[#faf9f5] transition-colors hover:bg-[#b85737]"
+              >
+                <Icon icon="lucide:sparkles" className="mr-1" width={14} height={14}/> {t('saveAndAskAI')}
+              </Button>
+            )}
           </div>
         </div>
       )}

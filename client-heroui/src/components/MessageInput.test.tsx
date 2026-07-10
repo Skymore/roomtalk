@@ -8,10 +8,10 @@ import { MessageInput } from './MessageInput';
 
 const socketMocks = vi.hoisted(() => ({
   interruptCodeAgentTurn: vi.fn(),
+  queueCodeAgentInput: vi.fn(),
   requestAIResponse: vi.fn(),
   sendMessage: vi.fn(),
   sendMessageAndAskAI: vi.fn(),
-  steerCodeAgentTurn: vi.fn(),
   uploadMediaMessage: vi.fn(),
 }));
 
@@ -232,13 +232,20 @@ describe('MessageInput optimistic send flow', () => {
     localStorage.removeItem('roomtalk:ai-context-message-limit');
     socketMocks.requestAIResponse.mockResolvedValue(undefined);
     socketMocks.interruptCodeAgentTurn.mockResolvedValue(undefined);
+    socketMocks.queueCodeAgentInput.mockResolvedValue(message({
+      id: 'queued-message',
+      codeAgentQueuedInput: {
+        state: 'queued',
+        queuedAt: '2026-07-10T00:00:00.000Z',
+        updatedAt: '2026-07-10T00:00:00.000Z',
+      },
+    }));
     socketMocks.sendMessage.mockResolvedValue(message());
     socketMocks.sendMessageAndAskAI.mockResolvedValue({
       userMessage: message(),
       aiMessageId: 'ai-message-1',
       aiStarted: true,
     });
-    socketMocks.steerCodeAgentTurn.mockResolvedValue(undefined);
     socketMocks.uploadMediaMessage.mockResolvedValue(message({
       id: 'audio-message',
       content: '',
@@ -480,7 +487,7 @@ describe('MessageInput optimistic send flow', () => {
 
     await waitFor(() => expect(socketMocks.interruptCodeAgentTurn).toHaveBeenCalledWith('room-1'));
     expect(screen.getByTestId('message-input-ai-controls').dataset.aiProcessing).toBe('true');
-    expect(socketMocks.steerCodeAgentTurn).not.toHaveBeenCalled();
+    expect(socketMocks.queueCodeAgentInput).not.toHaveBeenCalled();
     expect(socketMocks.sendMessageAndAskAI).not.toHaveBeenCalled();
 
     rendered.rerender(<MessageInput {...rendered.props} isRoomAIProcessing={false} />);
@@ -489,7 +496,7 @@ describe('MessageInput optimistic send flow', () => {
     });
   });
 
-  it('uses the agent control action to steer a running turn with text', async () => {
+  it('queues a complete next turn when the agent is running with text', async () => {
     const { editor } = renderMessageInput({
       isCodeAgentRoom: true,
       isRoomAIProcessing: true,
@@ -499,8 +506,13 @@ describe('MessageInput optimistic send flow', () => {
 
     fireEvent.click(screen.getByText('ask-ai'));
 
-    await waitFor(() => expect(socketMocks.steerCodeAgentTurn).toHaveBeenCalledWith('room-1', 'use Bing instead'));
-    expect(socketMocks.sendMessage).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(socketMocks.queueCodeAgentInput).toHaveBeenCalledWith(expect.objectContaining({
+      roomId: 'room-1',
+      content: 'use Bing instead',
+      codexModel: 'gpt-5.5',
+      codeAgentMode: 'plan',
+    })));
+    expect(socketMocks.sendMessage).not.toHaveBeenCalled();
     expect(socketMocks.sendMessageAndAskAI).not.toHaveBeenCalled();
     expect(socketMocks.interruptCodeAgentTurn).not.toHaveBeenCalled();
   });
@@ -516,7 +528,7 @@ describe('MessageInput optimistic send flow', () => {
     fireEvent.click(screen.getByText('send-message'));
 
     await waitFor(() => expect(socketMocks.sendMessage).toHaveBeenCalledTimes(1));
-    expect(socketMocks.steerCodeAgentTurn).not.toHaveBeenCalled();
+    expect(socketMocks.queueCodeAgentInput).not.toHaveBeenCalled();
     expect(socketMocks.interruptCodeAgentTurn).not.toHaveBeenCalled();
     expect(socketMocks.sendMessageAndAskAI).not.toHaveBeenCalled();
   });

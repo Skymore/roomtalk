@@ -464,6 +464,48 @@ describe('MessageItem replies', () => {
     expect(screen.getByLabelText('deleteMessage')).toBeTruthy();
   });
 
+  it('shows queued state and routes queued message actions separately', async () => {
+    const onEditQueuedMessage = vi.fn();
+    const onSteerQueuedMessage = vi.fn();
+    const onCancelQueuedMessage = vi.fn();
+
+    render(
+      <MessageItem
+        message={{
+          ...message,
+          id: 'queued-1',
+          clientId: 'viewer',
+          codeAgentQueuedInput: {
+            state: 'queued',
+            queuedAt: '2026-07-10T00:00:00.000Z',
+            updatedAt: '2026-07-10T00:00:00.000Z',
+          },
+        }}
+        roomPermissions={null}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+        onEditQueuedMessage={onEditQueuedMessage}
+        onSteerQueuedMessage={onSteerQueuedMessage}
+        onCancelQueuedMessage={onCancelQueuedMessage}
+        onReply={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('codeAgentQueued')).toBeTruthy();
+    expect(screen.queryByLabelText('editMessage')).toBeNull();
+    expect(screen.queryByLabelText('deleteMessage')).toBeNull();
+
+    fireEvent.click(screen.getByLabelText('codeAgentQueuedActions'));
+    fireEvent.click(await screen.findByText('editMessage'));
+    expect(onEditQueuedMessage).toHaveBeenCalledWith('queued-1');
+
+    fireEvent.click(await screen.findByText('codeAgentSteerInstead'));
+    expect(onSteerQueuedMessage).toHaveBeenCalledWith('queued-1');
+
+    fireEvent.click(await screen.findByText('codeAgentCancelQueued'));
+    expect(onCancelQueuedMessage).toHaveBeenCalledWith('queued-1');
+  });
+
   it('shows optimistic pending and failed delivery states', () => {
     const { rerender } = render(
       <MessageItem

@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback, useImperativeHandle } from 'react';
 import { Icon } from '@iconify/react';
-import { getMediaDownloadUrl, getRoomMessagesForExport, getRoomRoleMembers, removeRoomAdmin, removeRoomMember, requestAIResponse, requestEditMessageAndAIResponse, setRoomAdmin, socket, transferRoomOwnership } from '../utils/socket';
+import { cancelQueuedCodeAgentInput, editQueuedCodeAgentInput, getMediaDownloadUrl, getRoomMessagesForExport, getRoomRoleMembers, removeRoomAdmin, removeRoomMember, requestAIResponse, requestEditMessageAndAIResponse, setRoomAdmin, socket, steerQueuedCodeAgentInput, transferRoomOwnership } from '../utils/socket';
 import { MessageItem, MessageUserAction, preloadMarkdownContent } from './MessageItem';
 import { Message, Room, RoomAgentTurn, RoomPermissions, RoomRoleMember } from '../utils/types';
 import { AgentTurnItem } from './AgentTurnItem';
@@ -498,6 +498,17 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     updateMessages(prev => editMessageContent(prev, messageId, newContent));
     // No need to close modal here, EditMessageModal handles it
 
+    const targetMessage = getMessageById(messagesRef.current, messageId);
+    if (targetMessage?.codeAgentQueuedInput) {
+      editQueuedCodeAgentInput(roomId, messageId, newContent).catch((error) => {
+        console.error('Failed to edit queued agent input:', error);
+        updateMessages(originalMessages);
+        socket.emit('get_room_messages', { roomId });
+        alert(t('errorEditingMessage', { error: error instanceof Error ? error.message : t('unknownError') }));
+      });
+      return;
+    }
+
     socket.emit('edit_message', { roomId, messageId, newContent }, (response: { success: boolean; updatedMessage?: Message; error?: string }) => {
       if (response.success && response.updatedMessage) {
         console.log('Edit successful on server.');
@@ -510,6 +521,26 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       }
     });
   }, [roomId, messages, updateMessages, t]);
+
+  const handleSteerQueuedMessage = useCallback(async (messageId: string) => {
+    try {
+      await steerQueuedCodeAgentInput(roomId, messageId);
+    } catch (error) {
+      console.error('Failed to steer with queued agent input:', error);
+      socket.emit('get_room_messages', { roomId });
+      alert(t('codeAgentQueuedActionFailed'));
+    }
+  }, [roomId, t]);
+
+  const handleCancelQueuedMessage = useCallback(async (messageId: string) => {
+    try {
+      await cancelQueuedCodeAgentInput(roomId, messageId);
+    } catch (error) {
+      console.error('Failed to cancel queued agent input:', error);
+      socket.emit('get_room_messages', { roomId });
+      alert(t('codeAgentQueuedActionFailed'));
+    }
+  }, [roomId, t]);
 
   const handleSaveEditAndAskAI = useCallback((messageId: string, newContent: string) => {
     console.log('Saving edit and triggering AI (from modal):', messageId, newContent);
@@ -810,6 +841,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                       aiRequestRoomKind={aiRequestRoomKind}
                       onStartEdit={handleOpenEditModal}
                       onDeleteMessage={handleOpenDeleteModal}
+                      onEditQueuedMessage={handleOpenEditModal}
+                      onSteerQueuedMessage={handleSteerQueuedMessage}
+                      onCancelQueuedMessage={handleCancelQueuedMessage}
                       onRefreshAI={handleRefreshAI}
                       onReply={onReply}
                       onUserAction={handleUserAction}
@@ -857,6 +891,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
         message={messageToEdit}
         onSave={handleSaveEdit}
         onSaveAndAskAI={handleSaveEditAndAskAI}
+        showSaveAndAskAI={!messageToEdit?.codeAgentQueuedInput}
       />
     </>
   );

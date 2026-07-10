@@ -8,6 +8,9 @@ import { buildMessageTimeline, MessageList, MessageListHandle } from './MessageL
 
 const requestAIResponseMock = vi.hoisted(() => vi.fn());
 const requestEditMessageAndAIResponseMock = vi.hoisted(() => vi.fn());
+const editQueuedCodeAgentInputMock = vi.hoisted(() => vi.fn());
+const steerQueuedCodeAgentInputMock = vi.hoisted(() => vi.fn());
+const cancelQueuedCodeAgentInputMock = vi.hoisted(() => vi.fn());
 const loadCodeAgentWorkspaceSnapshotMock = vi.hoisted(() => vi.fn());
 const socketMock = vi.hoisted(() => {
   const handlers = new Map<string, Set<(...args: any[]) => void>>();
@@ -59,6 +62,9 @@ vi.mock('../utils/socket', () => ({
   clientId: 'client-1',
   requestAIResponse: requestAIResponseMock,
   requestEditMessageAndAIResponse: requestEditMessageAndAIResponseMock,
+  editQueuedCodeAgentInput: editQueuedCodeAgentInputMock,
+  steerQueuedCodeAgentInput: steerQueuedCodeAgentInputMock,
+  cancelQueuedCodeAgentInput: cancelQueuedCodeAgentInputMock,
 }));
 
 vi.mock('../utils/codeAgentWorkspace', async () => {
@@ -85,12 +91,18 @@ vi.mock('./MessageItem', () => ({
     aiRequestRoomKind,
     onRefreshAI,
     onStartEdit,
+    onEditQueuedMessage,
+    onSteerQueuedMessage,
+    onCancelQueuedMessage,
     onOpenWorkspaceFile,
   }: {
     message: Message;
     aiRequestRoomKind?: string;
     onRefreshAI?: (messageId: string) => void;
     onStartEdit?: (messageId: string) => void;
+    onEditQueuedMessage?: (messageId: string) => void;
+    onSteerQueuedMessage?: (messageId: string) => void;
+    onCancelQueuedMessage?: (messageId: string) => void;
     onOpenWorkspaceFile?: (path: string) => void;
   }) => (
     <div
@@ -104,6 +116,9 @@ vi.mock('./MessageItem', () => ({
       {message.content}
       <button type="button" onClick={() => onRefreshAI?.(message.id)}>retry-{message.id}</button>
       <button type="button" onClick={() => onStartEdit?.(message.id)}>edit-{message.id}</button>
+      <button type="button" onClick={() => onEditQueuedMessage?.(message.id)}>edit-queued-{message.id}</button>
+      <button type="button" onClick={() => onSteerQueuedMessage?.(message.id)}>steer-queued-{message.id}</button>
+      <button type="button" onClick={() => onCancelQueuedMessage?.(message.id)}>cancel-queued-{message.id}</button>
       <button type="button" onClick={() => onOpenWorkspaceFile?.('src/App.tsx#L42')}>open-workspace-{message.id}</button>
     </div>
   ),
@@ -115,8 +130,11 @@ vi.mock('./DeleteConfirmationModal', () => ({
 }));
 
 vi.mock('./EditMessageModal', () => ({
-  EditMessageModal: ({ message, onSaveAndAskAI }: { message?: Message | null; onSaveAndAskAI?: (messageId: string, content: string) => void }) => (
-    message ? <button type="button" onClick={() => onSaveAndAskAI?.(message.id, 'edited content')}>edit-and-ask</button> : null
+  EditMessageModal: ({ message, onSave, onSaveAndAskAI, showSaveAndAskAI = true }: { message?: Message | null; onSave?: (messageId: string, content: string) => void; onSaveAndAskAI?: (messageId: string, content: string) => void; showSaveAndAskAI?: boolean }) => (
+    message ? <>
+      <button type="button" onClick={() => onSave?.(message.id, 'edited content')}>save-edit</button>
+      {showSaveAndAskAI && <button type="button" onClick={() => onSaveAndAskAI?.(message.id, 'edited content')}>edit-and-ask</button>}
+    </> : null
   ),
 }));
 
@@ -158,6 +176,9 @@ describe('MessageList optimistic messages', () => {
     window.localStorage.clear();
     requestAIResponseMock.mockResolvedValue(undefined);
     requestEditMessageAndAIResponseMock.mockResolvedValue(undefined);
+    editQueuedCodeAgentInputMock.mockResolvedValue(undefined);
+    steerQueuedCodeAgentInputMock.mockResolvedValue(undefined);
+    cancelQueuedCodeAgentInputMock.mockResolvedValue(undefined);
     loadCodeAgentWorkspaceSnapshotMock.mockResolvedValue({
       roomId: 'room-1',
       backend: 'code-agent',
@@ -224,6 +245,39 @@ describe('MessageList optimistic messages', () => {
     expect(screen.getAllByTestId('message-item')).toHaveLength(1);
     expect(screen.getByTestId('message-item').getAttribute('data-message-id')).toBe('server-message-1');
     expect(screen.getByTestId('message-item').getAttribute('data-delivery-status')).toBe('sent');
+  });
+
+  it('wires queued edit, steer, and cancel actions to their dedicated APIs', async () => {
+    render(<MessageList roomId="room-1" onReply={vi.fn()} roomPermissions={null} />);
+    const queuedMessage = message({
+      id: 'queued-1',
+      codeAgentQueuedInput: {
+        state: 'queued',
+        queuedAt: '2026-07-10T00:00:00.000Z',
+        updatedAt: '2026-07-10T00:00:00.000Z',
+      },
+    });
+
+    act(() => {
+      socketMock.trigger('message_history', {
+        roomId: 'room-1',
+        messages: [queuedMessage],
+        historyVersion: 1,
+        hasMore: false,
+        mode: 'replace',
+      });
+    });
+
+    fireEvent.click(await screen.findByText('steer-queued-queued-1'));
+    await waitFor(() => expect(steerQueuedCodeAgentInputMock).toHaveBeenCalledWith('room-1', 'queued-1'));
+
+    fireEvent.click(screen.getByText('cancel-queued-queued-1'));
+    await waitFor(() => expect(cancelQueuedCodeAgentInputMock).toHaveBeenCalledWith('room-1', 'queued-1'));
+
+    fireEvent.click(screen.getByText('edit-queued-queued-1'));
+    expect(screen.queryByText('edit-and-ask')).toBeNull();
+    fireEvent.click(await screen.findByText('save-edit'));
+    await waitFor(() => expect(editQueuedCodeAgentInputMock).toHaveBeenCalledWith('room-1', 'queued-1', 'edited content'));
   });
 
   it('can mark pending messages as failed', async () => {

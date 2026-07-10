@@ -37,6 +37,9 @@ interface MessageItemProps {
   aiRequestRoomKind?: AIRequestRoomKind;
   onStartEdit: (messageId: string) => void;
   onDeleteMessage: (messageId: string) => void;
+  onEditQueuedMessage?: (messageId: string) => void;
+  onSteerQueuedMessage?: (messageId: string) => void;
+  onCancelQueuedMessage?: (messageId: string) => void;
   onRefreshAI?: (messageId: string, content: string) => void;
   onReply: (message: Message) => void;
   onUserAction?: (action: MessageUserAction, message: Message) => void;
@@ -264,6 +267,9 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   aiRequestRoomKind = 'chat',
   onStartEdit,
   onDeleteMessage,
+  onEditQueuedMessage,
+  onSteerQueuedMessage,
+  onCancelQueuedMessage,
   onRefreshAI,
   onReply,
   onUserAction,
@@ -296,9 +302,12 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   const isStreaming = isAI && message.status === 'streaming';
   const isPending = message.deliveryStatus === 'pending';
   const isFailed = message.deliveryStatus === 'failed';
+  const queuedInput = message.codeAgentQueuedInput;
+  const isQueuedInput = Boolean(queuedInput);
+  const canControlQueuedInput = isMine && queuedInput?.state === 'queued';
   const canBeEdited = isText || (message.messageType === 'ai' && message.status !== 'streaming');
-  const canEditMessage = canBeEdited && (isMine || Boolean(roomPermissions?.canEditAnyMessage));
-  const canDeleteMessage = isMine || Boolean(roomPermissions?.canDeleteAnyMessage);
+  const canEditMessage = !isQueuedInput && canBeEdited && (isMine || Boolean(roomPermissions?.canEditAnyMessage));
+  const canDeleteMessage = !isQueuedInput && (isMine || Boolean(roomPermissions?.canDeleteAnyMessage));
   const { t, i18n } = useTranslation();
   const assistantDisplayName = isAI
     ? getCodeAgentAssistantDisplayName(message.username) || t('aiAssistantName')
@@ -1034,6 +1043,12 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
         <div
             className={`mt-0.5 flex min-h-5 max-w-full flex-wrap items-center ${isMine ? 'justify-end' : 'justify-start'}`}
         >
+            {isMine && queuedInput && (
+              <span className="mr-1 inline-flex items-center gap-1 text-tiny font-medium text-[#87867f] dark:text-[#b0aea5]">
+                <Icon icon="lucide:list-end" width={12} height={12} />
+                {t('codeAgentQueued')}
+              </span>
+            )}
             {/* Timestamp */}
             <span className="mr-1 max-w-full text-tiny text-[#87867f] dark:text-[#b0aea5]">
               {formatTime(message.timestamp, i18n.language)}
@@ -1044,6 +1059,49 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
             </span>
 
             <div className="ml-1 flex items-center gap-0.5">
+              {isMine && queuedInput && (
+                <Dropdown placement="top-end">
+                  <DropdownTrigger>
+                    <Button
+                      isIconOnly
+                      size="sm"
+                      variant="light"
+                      aria-label={t('codeAgentQueuedActions')}
+                      className="h-5 w-5 min-w-0 text-[#5e5d59] dark:text-[#b0aea5]"
+                    >
+                      <Icon icon="lucide:more-horizontal" width={12} height={12} />
+                    </Button>
+                  </DropdownTrigger>
+                  <DropdownMenu aria-label={t('codeAgentQueuedActions')}>
+                    <DropdownItem
+                      key="edit-queued"
+                      startContent={<Icon icon="lucide:pencil" />}
+                      onPress={() => onEditQueuedMessage?.(message.id)}
+                      isDisabled={!canControlQueuedInput}
+                    >
+                      {t('editMessage')}
+                    </DropdownItem>
+                    <DropdownItem
+                      key="steer-queued"
+                      startContent={<Icon icon="lucide:corner-down-right" />}
+                      onPress={() => onSteerQueuedMessage?.(message.id)}
+                      isDisabled={!canControlQueuedInput}
+                    >
+                      {t('codeAgentSteerInstead')}
+                    </DropdownItem>
+                    <DropdownItem
+                      key="cancel-queued"
+                      color="danger"
+                      className="text-danger"
+                      startContent={<Icon icon="lucide:trash-2" />}
+                      onPress={() => onCancelQueuedMessage?.(message.id)}
+                      isDisabled={!canControlQueuedInput}
+                    >
+                      {t('codeAgentCancelQueued')}
+                    </DropdownItem>
+                  </DropdownMenu>
+                </Dropdown>
+              )}
               <Tooltip
                 content={copyStatus === 'success' ? t('copied') : (copyStatus === 'error' ? t('copyFailed') : (isImage ? t('copyImage') : t('copy')))}
                 placement="top"

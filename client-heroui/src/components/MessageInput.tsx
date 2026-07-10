@@ -8,7 +8,7 @@ import {
   useDisclosure,
 } from "@heroui/react";
 import { Icon } from '@iconify/react';
-import { interruptCodeAgentTurn, requestAIResponse, sendMessage, sendMessageAndAskAI, sendSticker, steerCodeAgentTurn, uploadMediaMessage } from '../utils/socket';
+import { interruptCodeAgentTurn, queueCodeAgentInput, requestAIResponse, sendMessage, sendMessageAndAskAI, sendSticker, uploadMediaMessage } from '../utils/socket';
 import { useRecentStickers, useStickerSearch } from '../hooks/useStickers';
 import { inlineStickerQuery, loadStickerCatalog } from '../utils/stickerCatalog';
 import { apiPath } from '../utils/apiBase';
@@ -207,7 +207,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   const lastCompositionEndAtRef = useRef(0);
   const [isAiProcessing, setIsAiProcessing] = useState(false); // 新增: 跟踪 AI 处理状态
   const [isInterruptingCodeAgent, setIsInterruptingCodeAgent] = useState(false);
-  const isSteeringCodeAgent = isCodeAgentRoom && isRoomAIProcessing;
+  const isAgentRunning = isCodeAgentRoom && isRoomAIProcessing;
   const isAIInputLocked = isAiProcessing || isInterruptingCodeAgent || (isRoomAIProcessing && !isCodeAgentRoom);
   const isNonTextInputDisabled = isSending || isAIInputLocked || !canPost;
 
@@ -540,12 +540,14 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
   // 发送AI消息的新方法
   const handleAskAI = async () => {
-    if (!canPost && !isSteeringCodeAgent) {
+    const latestContentItems = parseEditorContent();
+    const prompt = buildAIPrompt(latestContentItems);
+    const hasInputContent = hasMessageContent(latestContentItems);
+
+    if (!canPost && !(isAgentRunning && !hasInputContent)) {
       setErrorMessage(postingClosedMessage);
       return;
     }
-
-    const latestContentItems = parseEditorContent();
 
     if (isSending || isAIInputLocked) return;
 
@@ -555,8 +557,11 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       // 创建头像信息对象
       const avatar = { text: avatarText, color: avatarColor };
 
-      const prompt = buildAIPrompt(latestContentItems);
-      if (isSteeringCodeAgent && !prompt) {
+      if (isAgentRunning && imageCountRef.current > 0) {
+        setErrorMessage(t('codeAgentQueueTextOnly'));
+        return;
+      }
+      if (isAgentRunning && !prompt) {
         setIsInterruptingCodeAgent(true);
         try {
           await interruptCodeAgentTurn(roomId);
@@ -564,10 +569,6 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           setIsInterruptingCodeAgent(false);
           throw error;
         }
-        return;
-      }
-      if (isSteeringCodeAgent && imageCountRef.current > 0) {
-        setErrorMessage(t('codeAgentSteerTextOnly'));
         return;
       }
       const promptForSend = isCodeAgentRoom
@@ -588,18 +589,36 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           }
         : {};
 
-      if (isSteeringCodeAgent) {
+      if (isAgentRunning) {
         if (!promptForSend) {
           return;
         }
         const clientMessageId = createClientMessageId();
         optimisticClientMessageId = clientMessageId;
         const optimisticMessage = buildOptimisticTextMessage(promptForSend, clientMessageId, avatar, replyToMessage);
+        const queuedAt = new Date().toISOString();
+        optimisticMessage.codeAgentQueuedInput = {
+          state: 'queued',
+          queuedAt,
+          updatedAt: queuedAt,
+        };
         onOptimisticMessage?.(optimisticMessage);
         clearEditorImmediately({ blur: true });
-        const savedMessage = await sendMessage(promptForSend, roomId, 'text', username, avatar, replyToMessage?.id, clientMessageId);
+        const savedMessage = await queueCodeAgentInput({
+          roomId,
+          content: promptForSend,
+          username,
+          avatar,
+          replyToMessageId: replyToMessage?.id,
+          clientMessageId,
+          ...aiRequestSettings,
+          ...codeAgentRunSettings,
+          codeAgentMode,
+        });
         onOptimisticMessageSaved?.(clientMessageId, savedMessage);
-        await steerCodeAgentTurn(roomId, promptForSend);
+        if (reviewComments.length > 0) {
+          onClearReviewComments?.();
+        }
         onCancelReply();
         return;
       }
@@ -1711,7 +1730,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
                 {/* AI设置按钮 */}
                 <MessageInputAISettingsButton
                   onOpen={onAISettingsOpen}
-                  isDisabled={isSending || isAIInputLocked || isSteeringCodeAgent}
+                  isDisabled={isSending || isAIInputLocked || isAgentRunning}
                 />
               </>
             )}

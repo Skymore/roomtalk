@@ -195,13 +195,13 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
   const [premiumConfirmationStep, setPremiumConfirmationStep] = React.useState<1 | 2>(1);
   const pendingPremiumModel = aiModels.find(model => model.id === pendingPremiumModelId);
   const hasInputContent = currentInputText.trim().length > 0 || imageCount > 0;
-  const hasSteerText = isAgentRunning && currentInputText.trim().length > 0;
+  const hasQueueContent = isAgentRunning && hasInputContent;
   const isControlLocked = isSending || isAiProcessing || isInputLocked || !canPost;
   const askActionLabel = isAgentRunning
-    ? t(hasSteerText ? 'codeAgentSteer' : 'codeAgentInterrupt')
+    ? t(hasQueueContent ? 'codeAgentQueue' : 'codeAgentStop')
     : (isCodeAgentRoom ? t('runAgent') : t('askAI'));
   const askActionIcon = isAgentRunning
-    ? (hasSteerText ? 'lucide:corner-down-right' : 'lucide:square')
+    ? (hasQueueContent ? 'lucide:list-end' : 'lucide:square')
     : (isCodeAgentRoom ? 'lucide:bot' : selectedRole.icon);
   const isCodexCodeAgent = isCodeAgentRoom && isCodexCodeAgentBackend(codeAgentBackend);
   const isCodexAppServer = isCodeAgentRoom && codeAgentBackend === 'codex-app-server';
@@ -386,7 +386,7 @@ export const MessageInputAIControls: React.FC<MessageInputAIControlsProps> = ({
             color={isCodeAgentRoom ? 'default' : selectedRole.color}
             size="sm"
             onPress={onAskAI}
-            isDisabled={isAgentRunning ? isSending || isAiProcessing || (hasSteerText && !canPost) : isControlLocked}
+            isDisabled={isAgentRunning ? isSending || isAiProcessing || (hasQueueContent && !canPost) : isControlLocked}
             aria-label={askActionLabel}
             className="relative !h-7 !w-7 !min-w-7 overflow-hidden rounded-full bg-[#30302e] px-0 text-[#faf9f5] shadow-[0_0_0_1px_rgba(48,48,46,0.7)] dark:bg-[#faf9f5] dark:text-[#141413] dark:shadow-[0_0_0_1px_rgba(250,249,245,0.7)] sm:!h-9 sm:!w-auto sm:!min-w-9 sm:px-3"
           >

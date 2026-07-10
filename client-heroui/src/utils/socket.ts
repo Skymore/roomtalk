@@ -1516,6 +1516,61 @@ export const steerCodeAgentTurn = (roomId: string, prompt: string): Promise<void
   ).then(() => undefined)
 );
 
+export const queueCodeAgentInput = (params: {
+  roomId: string;
+  content: string;
+  username?: string;
+  avatar?: { text: string; color: string };
+  replyToMessageId?: string;
+  clientMessageId?: string;
+  model?: string;
+  codexModel?: string;
+  codexReasoningEffort?: CodexReasoningEffort;
+  codexPermissionMode?: CodexPermissionMode;
+  codexServiceTier?: CodexServiceTier;
+  maxContextMessages?: number;
+  codeAgentMode?: CodeAgentMode;
+}): Promise<Message> => (
+  emitWithAck<SendMessageAckResponse>(
+    'queue_code_agent_input',
+    params,
+    'Timed out while queueing agent input',
+    'Failed to queue agent input',
+  ).then((response) => {
+    if (!response.message) {
+      throw new Error('Server did not return queued message');
+    }
+    return response.message;
+  })
+);
+
+export const editQueuedCodeAgentInput = (roomId: string, messageId: string, content: string): Promise<void> => (
+  emitWithAck<SocketAckResponse>(
+    'edit_queued_code_agent_input',
+    { roomId, messageId, content },
+    'Timed out while editing queued agent input',
+    'Failed to edit queued agent input',
+  ).then(() => undefined)
+);
+
+export const steerQueuedCodeAgentInput = (roomId: string, messageId: string): Promise<void> => (
+  emitWithAck<SocketAckResponse>(
+    'steer_queued_code_agent_input',
+    { roomId, messageId },
+    'Timed out while steering with queued agent input',
+    'Failed to steer with queued agent input',
+  ).then(() => undefined)
+);
+
+export const cancelQueuedCodeAgentInput = (roomId: string, messageId: string): Promise<void> => (
+  emitWithAck<SocketAckResponse>(
+    'cancel_queued_code_agent_input',
+    { roomId, messageId },
+    'Timed out while cancelling queued agent input',
+    'Failed to cancel queued agent input',
+  ).then(() => undefined)
+);
+
 export const respondCodeAgentApproval = (
   roomId: string,
   approvalId: string,

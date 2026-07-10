@@ -251,7 +251,7 @@ describe('MessageInputAIControls', () => {
     expect(onCodeAgentModeChange).toHaveBeenCalledWith('fullAccess');
   });
 
-  it('keeps Send as chat while the agent control switches between Stop and Steer', () => {
+  it('keeps Send as chat while the agent control switches between Stop and Queue', () => {
     const onAskAI = vi.fn();
     const onSend = vi.fn();
     const { rerender } = render(
@@ -264,7 +264,7 @@ describe('MessageInputAIControls', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'codeAgentInterrupt' }));
+    fireEvent.click(screen.getByRole('button', { name: 'codeAgentStop' }));
     expect(onAskAI).toHaveBeenCalledTimes(1);
     expect((screen.getByRole('button', { name: 'send' }) as HTMLButtonElement).disabled).toBe(true);
 
@@ -279,10 +279,24 @@ describe('MessageInputAIControls', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'codeAgentSteer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'codeAgentQueue' }));
     fireEvent.click(screen.getByRole('button', { name: 'send' }));
     expect(onAskAI).toHaveBeenCalledTimes(2);
     expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not expose Stop while unsupported image content is waiting in the composer', () => {
+    render(
+      <MessageInputAIControls
+        {...baseProps}
+        isCodeAgentRoom
+        isAgentRunning
+        imageCount={1}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'codeAgentQueue' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'codeAgentStop' })).toBeNull();
   });
 
   it('disables Apply until settings change', () => {

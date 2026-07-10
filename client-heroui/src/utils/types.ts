@@ -84,6 +84,15 @@ export interface AudioTranscription {
   completedAt?: string;
 }
 
+export type CodeAgentQueueState = 'queued' | 'steering' | 'starting';
+
+export interface CodeAgentQueuedInput {
+  state: CodeAgentQueueState;
+  queuedAt: string;
+  updatedAt: string;
+  lastError?: string;
+}
+
 export interface Message {
   id: string;
   clientId: string;
@@ -121,6 +130,7 @@ export interface Message {
   usage?: AIUsage;
   cost?: AICost;
   codeAgentMode?: CodeAgentMode;
+  codeAgentQueuedInput?: CodeAgentQueuedInput;
   replyTo?: MessageReplyReference;
   mediaAsset?: MessageMediaAsset;
   uiPayload?: A2UIPayload;
