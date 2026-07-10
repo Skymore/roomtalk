@@ -15,6 +15,7 @@ import { CodeAgentModelGateway, InMemoryCodeAgentModelGatewayTokenStateStore } f
 import { PublishedStaticSiteService } from './publishedStaticSite';
 import { MemoryMediaObjectStorage } from '../testUtils/memoryMediaObjectStorage';
 import { ObservabilityEventInput } from './observabilityEvents';
+import { CodeAgentRoomContextService } from './codeAgentRoomContext';
 
 type RoomEmit = {
   roomId: string;
@@ -279,6 +280,7 @@ const createService = (options: {
   defaultMode?: CodeAgentMode;
   modelGateway?: CodeAgentModelGateway;
   staticSitePublisher?: PublishedStaticSiteService;
+  roomContext?: CodeAgentRoomContextService;
   observability?: ReturnType<typeof createMemoryObservability>['recorder'];
   aiStreamOwnerId?: string;
   activeSandboxTtlMs?: number;
@@ -317,6 +319,7 @@ const createService = (options: {
       daemonCommand: options.daemonCommand,
       daemonRegistry: options.daemonRegistry,
       staticSitePublisher: options.staticSitePublisher,
+      roomContext: options.roomContext,
       runnerEnv: options.runnerEnv,
       runnerEnvByBackend: options.runnerEnvByBackend,
       runnerProviderEnvByProvider: options.runnerProviderEnvByProvider,
@@ -1355,6 +1358,50 @@ describe('CodeAgentSessionService', () => {
     assert.equal(claims?.clientId, 'client-1');
     assert.equal(claims?.turnId, 'turn-1');
     assert.equal(claims?.mode, 'fullAccess');
+  });
+
+  it('injects a read-only room context CLI token in every agent mode', async () => {
+    const runner = new FakeCodeAgentRunnerClient([
+      { schemaVersion: CODE_AGENT_RUNNER_SCHEMA_VERSION, type: 'final', messageId: 'ai-1', answer: 'Done', sessionId: 'session-1' },
+    ]);
+    const store = new MemoryCodeAgentStore(room({ codeAgentMode: 'plan', codeAgentBackend: 'codex-app-server' }), [userMessage()]);
+    const staticSitePublisher = new PublishedStaticSiteService({
+      mediaObjectStorage: new MemoryMediaObjectStorage(),
+      logger,
+      tokenSecret: 'static-publish-secret',
+      publicBaseUrl: 'https://room.example',
+    });
+    const roomContext = new CodeAgentRoomContextService(store as any, {
+      tokenSecret: 'room-context-secret',
+      nowMs: () => Date.parse('2026-05-03T00:00:00.000Z'),
+      createId: () => 'room-context-token-id',
+    });
+    const { sandboxService, service } = createService({
+      store,
+      runner,
+      availableModes: ['plan'],
+      defaultMode: 'plan',
+      staticSitePublisher,
+      roomContext,
+      codexBackendEnabled: true,
+      codexConnectionService: {
+        async withCodexAuth(_clientId: string, _runId: string, work: (authJson: string) => Promise<any>) {
+          const result = await work('{"tokens":{}}');
+          return result.result;
+        },
+      },
+    });
+
+    await service.startTurn({ roomId: 'room-1', clientId: 'client-1', selectedModel });
+
+    const env = sandboxService.startedRunnerEnvs[0];
+    assert.equal(env.ROOMTALK_ROOM_CONTEXT_URL, 'https://room.example/api/code-agent/room-context');
+    const claims = roomContext.verifyTurnToken(env.ROOMTALK_ROOM_CONTEXT_TOKEN);
+    assert.equal(claims?.roomId, 'room-1');
+    assert.equal(claims?.clientId, 'client-1');
+    assert.equal(claims?.turnId, 'turn-1');
+    assert.equal(claims?.mode, 'plan');
+    assert.equal(env.ROOMTALK_CODE_AGENT_ENABLE_STATIC_PUBLISH, undefined);
   });
 
   it('injects static publish URLs using the allowed production client origin', async () => {

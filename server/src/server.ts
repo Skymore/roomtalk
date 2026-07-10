@@ -18,6 +18,7 @@ import { AI_ROLE_GENERATOR_MODEL_ID, createAIModelRegistry, DEFAULT_AI_MODEL_ID 
 import { registerApiRoutes } from './routes/apiRoutes';
 import { registerCodeWorkspaceAssetRoutes } from './routes/codeWorkspaceAssetRoutes';
 import { registerPublishedStaticSiteRoutes } from './routes/publishedStaticSiteRoutes';
+import { registerCodeAgentRoomContextRoutes } from './routes/codeAgentRoomContextRoutes';
 import { loadStickerCatalog } from './stickers/catalog';
 import { registerSocketHandlers } from './socket/registerSocketHandlers';
 import { executeQueuedAssistantRun } from './socket/aiHandlers';
@@ -63,6 +64,7 @@ import {
   createPublishedStaticSiteServiceFromEnv,
 } from './services/publishedStaticSite';
 import { NoopObservabilityEventRecorder, PostgresObservabilityEventRecorder } from './services/observabilityEvents';
+import { createCodeAgentRoomContextServiceFromEnv } from './services/codeAgentRoomContext';
 import { CodexAuthCipher, CodexConnectionService } from './services/codexConnection';
 import { resolveCodexConnectionConfig } from './services/codexConnectionConfig';
 import { CodexCliDeviceAuthDriver } from './services/codexCliDeviceAuthDriver';
@@ -211,6 +213,7 @@ if (codexConnectionConfig.enabled) {
 }
 
 const codeAgentRuntimeConfig = resolveCodeAgentRuntimeConfig(process.env);
+const codeAgentRoomContextService = createCodeAgentRoomContextServiceFromEnv(store);
 assertCodexBackendStartupGate({
   codeAgentRuntimeConfig,
   codexCliRunnerConfig,
@@ -386,6 +389,7 @@ const codeAgentSessionService = new CodeAgentSessionService(
     codexBackendEnabled: codexCliRunnerConfig.enabled && Boolean(codexConnectionService),
     codexConnectionService,
     staticSitePublisher: publishedStaticSiteService,
+    roomContext: codeAgentRoomContextService,
     observability: observabilityRecorder,
     aiStreamOwnerId,
   }
@@ -525,6 +529,11 @@ registerPublishedStaticSiteRoutes(app, {
   service: publishedStaticSiteService,
   logger: staticPublishLogger,
   getRoomById: roomId => store.getRoomById(roomId),
+});
+
+registerCodeAgentRoomContextRoutes(app, {
+  service: codeAgentRoomContextService,
+  logger: codeAgentLogger,
 });
 
 registerCodeWorkspaceAssetRoutes(app, {

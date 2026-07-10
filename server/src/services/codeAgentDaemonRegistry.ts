@@ -56,6 +56,8 @@ const PER_TURN_ENV_KEYS = new Set([
   'ROOMTALK_STATIC_PUBLISH_PUBLIC_BASE_URL',
   'ROOMTALK_STATIC_PUBLISH_PUBLIC_URL',
   'ROOMTALK_STATIC_PUBLISH_MODE',
+  'ROOMTALK_ROOM_CONTEXT_TOKEN',
+  'ROOMTALK_ROOM_CONTEXT_URL',
 ]);
 
 const baseDaemonEnv = (env: Record<string, string>) => Object.fromEntries(

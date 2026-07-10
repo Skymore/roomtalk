@@ -4,6 +4,8 @@ import argparse
 import json
 import os
 import sys
+from urllib import parse as urllib_parse
+from urllib import request as urllib_request
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -22,6 +24,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "publish-static-site":
             result = _publish_static_site(args, env)
+        elif args.command == "room":
+            result = _read_room_context(args, env)
         else:  # pragma: no cover - argparse prevents this.
             parser.error("missing command")
             return 2
@@ -52,7 +56,68 @@ def _build_parser() -> argparse.ArgumentParser:
     publish.add_argument("--title", default="", help="Optional display title.")
     publish.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
 
+    room = subparsers.add_parser("room", help="Read the current RoomTalk room context.")
+    room_subparsers = room.add_subparsers(dest="room_command", required=True)
+
+    history = room_subparsers.add_parser("history", help="Read recent room messages.")
+    history.add_argument("--limit", type=int, default=20)
+    history.add_argument("--before", default="", help="Read messages before this message ID.")
+    history.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+
+    delta = room_subparsers.add_parser("delta", help="Read messages after a known message ID.")
+    delta.add_argument("--since", required=True, help="Read messages after this message ID.")
+    delta.add_argument("--limit", type=int, default=50)
+    delta.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+
+    search = room_subparsers.add_parser("search", help="Search recent room messages.")
+    search.add_argument("--query", required=True, help="Text to search for.")
+    search.add_argument("--limit", type=int, default=20)
+    search.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+
+    message = room_subparsers.add_parser("message", help="Read one room message by ID.")
+    message.add_argument("message_id")
+    message.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+
     return parser
+
+
+def _read_room_context(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
+    base_url = (env.get("ROOMTALK_ROOM_CONTEXT_URL") or "").strip().rstrip("/")
+    token = (env.get("ROOMTALK_ROOM_CONTEXT_TOKEN") or "").strip()
+    if not base_url or not token:
+        raise RunnerError("Room context is not available for this turn", code="room_context_unavailable")
+
+    if args.room_command == "history":
+        query: dict[str, Any] = {"limit": args.limit}
+        if args.before:
+            query["beforeMessageId"] = args.before
+        path = f"/history?{urllib_parse.urlencode(query)}"
+    elif args.room_command == "delta":
+        path = f"/delta?{urllib_parse.urlencode({'sinceMessageId': args.since, 'limit': args.limit})}"
+    elif args.room_command == "search":
+        path = f"/search?{urllib_parse.urlencode({'query': args.query, 'limit': args.limit})}"
+    elif args.room_command == "message":
+        path = f"/messages/{urllib_parse.quote(args.message_id, safe='')}"
+    else:  # pragma: no cover - argparse prevents this.
+        raise RunnerError("Unsupported room context command", code="room_context_command_invalid")
+
+    return _get_room_context(f"{base_url}{path}", token)
+
+
+def _get_room_context(url: str, token: str) -> dict[str, Any]:
+    request = urllib_request.Request(url, method="GET", headers={
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "User-Agent": "roomtalk-code-agent-runner/1",
+    })
+    try:
+        with urllib_request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        raise RunnerError(f"Room context request failed: {exc}", code="room_context_request_failed") from exc
+    if not isinstance(payload, dict):
+        raise RunnerError("Room context response was not a JSON object", code="invalid_room_context_response")
+    return {"success": True, "tool": "RoomContext", **payload}
 
 
 def _publish_static_site(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
@@ -116,6 +181,9 @@ def _print_result(result: dict[str, Any], *, json_output: bool) -> None:
                 "Files: {fileCount}\n"
                 "Bytes: {totalBytes}".format(**result)
             )
+            return
+        if result.get("tool") == "RoomContext":
+            print(json.dumps(result, ensure_ascii=False, indent=2))
             return
         content = result.get("content")
         print(str(content or "OK"))

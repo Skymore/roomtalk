@@ -482,6 +482,8 @@ def _roomtalk_tool_env(request: RunnerRequest, env: dict[str, str], workspace: P
         "ROOMTALK_STATIC_PUBLISH_URL",
         "ROOMTALK_STATIC_PUBLISH_PUBLIC_BASE_URL",
         "ROOMTALK_STATIC_PUBLISH_TOKEN",
+        "ROOMTALK_ROOM_CONTEXT_URL",
+        "ROOMTALK_ROOM_CONTEXT_TOKEN",
         "ROOMTALK_E2B_PORT_HOST_TEMPLATE",
         "ROOMTALK_E2B_PORT_URL_TEMPLATE",
         "CODE_AGENT_PORT_HOST_TEMPLATE",
@@ -509,9 +511,16 @@ def _prompt_with_roomtalk_tools(request: RunnerRequest, env: dict[str, str]) -> 
     tool_lines = [
         "RoomTalk sandbox context:",
         f"- {mode_guidance}",
+        f"- Current RoomTalk room: {request.room_id}.",
         "- Keep generated files, downloaded references, and publish roots inside the current workspace.",
         "- This is a non-interactive cloud sandbox. Work within the configured sandbox permissions for this turn.",
     ]
+    if _codex_room_context_enabled(env):
+        tool_lines.extend([
+            "- RoomTalk is the source of truth for room conversation history; the Codex thread may not include messages from before this thread or from other participants.",
+            "- When prior discussion is needed, run `roomtalk room history --limit 20 --json`. Do not read the full room history by default.",
+            "- To find older discussion, run `roomtalk room search --query <text> --limit 20 --json`; use `roomtalk room delta --since <message-id> --json` for messages after a known point.",
+        ])
     if _codex_static_publish_enabled(env):
         tool_lines.extend([
             "- To publish a plain static site or frontend build output, run `roomtalk publish-static-site --root <dir> --entry index.html` after creating the site directory.",
@@ -529,10 +538,19 @@ def _codex_static_publish_enabled(env: dict[str, str]) -> bool:
     )
 
 
+def _codex_room_context_enabled(env: dict[str, str]) -> bool:
+    return (
+        bool((env.get("ROOMTALK_ROOM_CONTEXT_URL") or "").strip())
+        and bool((env.get("ROOMTALK_ROOM_CONTEXT_TOKEN") or "").strip())
+    )
+
+
 def _roomtalk_tool_name(command: str) -> str | None:
     normalized = " ".join(command.split()).lower()
     if "roomtalk publish-static-site" in normalized or "platform_tools publish-static-site" in normalized:
         return PUBLISH_STATIC_SITE_TOOL
+    if "roomtalk room " in normalized or "platform_tools room " in normalized:
+        return "RoomContext"
     return None
 
 

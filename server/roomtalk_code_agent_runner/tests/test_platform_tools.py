@@ -60,6 +60,37 @@ def test_publish_static_site_command_posts_roomtalk_payload(tmp_path: Path, monk
     assert [file["path"] for file in posted["payload"]["files"]] == ["index.html"]
 
 
+@pytest.mark.parametrize(("argv", "expected_suffix"), [
+    (["room", "history", "--limit", "12", "--before", "m-20", "--json"], "/history?limit=12&beforeMessageId=m-20"),
+    (["room", "delta", "--since", "m-10", "--limit", "30", "--json"], "/delta?sinceMessageId=m-10&limit=30"),
+    (["room", "search", "--query", "deploy failed", "--limit", "8", "--json"], "/search?query=deploy+failed&limit=8"),
+    (["room", "message", "message/with space", "--json"], "/messages/message%2Fwith%20space"),
+])
+def test_room_context_commands_use_scoped_api(argv, expected_suffix, monkeypatch, capsys):
+    requested: dict[str, str] = {}
+
+    def fake_get(url: str, token: str):
+        requested["url"] = url
+        requested["token"] = token
+        return {"success": True, "tool": "RoomContext", "messages": []}
+
+    monkeypatch.setattr(platform_tools, "_get_room_context", fake_get)
+    monkeypatch.setenv("ROOMTALK_ROOM_CONTEXT_URL", "https://room.example/api/code-agent/room-context")
+    monkeypatch.setenv("ROOMTALK_ROOM_CONTEXT_TOKEN", "room-token")
+
+    assert platform_tools.main(argv) == 0
+    assert requested["url"] == f"https://room.example/api/code-agent/room-context{expected_suffix}"
+    assert requested["token"] == "room-token"
+    assert json.loads(capsys.readouterr().out)["tool"] == "RoomContext"
+
+
+def test_room_context_command_fails_without_turn_token(capsys, monkeypatch):
+    monkeypatch.delenv("ROOMTALK_ROOM_CONTEXT_URL", raising=False)
+    monkeypatch.delenv("ROOMTALK_ROOM_CONTEXT_TOKEN", raising=False)
+    assert platform_tools.main(["room", "history", "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["code"] == "room_context_unavailable"
+
+
 def test_background_shell_command_is_not_exposed(capsys):
     with pytest.raises(SystemExit) as exc:
         platform_tools.main(["background-shell", "list"])

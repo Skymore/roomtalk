@@ -33,6 +33,7 @@ import { stripAIStreamRecoveryMetadata, withAIStreamRecoveryMetadata } from './a
 import { CodeAgentModelGateway } from './codeAgentModelGateway';
 import { buildCodeAgentPriorMessages } from './codeAgentTranscript';
 import { PublishedStaticSiteService } from './publishedStaticSite';
+import { CODE_AGENT_ROOM_CONTEXT_API_PREFIX, CodeAgentRoomContextService } from './codeAgentRoomContext';
 import { ObservabilityEventInput, ObservabilityEventRecorder } from './observabilityEvents';
 import { canUseCodeAgentRoom, CODE_AGENT_ACCESS_DENIED_MESSAGE } from './codeAgentRoomAccess';
 import { CodexConnectionService } from './codexConnection';
@@ -84,6 +85,7 @@ export interface CodeAgentSessionServiceOptions {
   codexBackendEnabled?: boolean;
   codexConnectionService?: Pick<CodexConnectionService, 'withCodexAuth'>;
   staticSitePublisher?: PublishedStaticSiteService;
+  roomContext?: CodeAgentRoomContextService;
   observability?: ObservabilityEventRecorder;
   aiStreamOwnerId?: string;
   now?: () => Date;
@@ -352,6 +354,7 @@ export class CodeAgentSessionService {
           roomId: input.roomId,
           clientId: input.clientId,
           turnId,
+          backend: turnBackend,
           mode: turnMode.mode,
           clientOrigin: input.clientOrigin,
           serverOrigin: input.serverOrigin,
@@ -1621,6 +1624,7 @@ export class CodeAgentSessionService {
     roomId: string;
     clientId: string;
     turnId: string;
+    backend: CodeAgentBackend;
     mode: CodeAgentRunnerMode;
     clientOrigin?: string;
     serverOrigin?: string;
@@ -1657,6 +1661,22 @@ export class CodeAgentSessionService {
       );
       env.ROOMTALK_STATIC_PUBLISH_PUBLIC_BASE_URL = staticPublishPublicBaseUrl || '';
       env.ROOMTALK_STATIC_PUBLISH_TOKEN = this.options.staticSitePublisher.issueTurnToken({
+        roomId: context.roomId,
+        clientId: context.clientId,
+        turnId: context.turnId,
+        mode: normalizedMode,
+      });
+    }
+
+    if (this.options.roomContext && isCodexBackend(context.backend)) {
+      const publicBaseUrl = this.options.staticSitePublisher?.publicBaseUrlForRequest(
+        context.clientOrigin,
+        context.serverOrigin
+      );
+      env.ROOMTALK_ROOM_CONTEXT_URL = publicBaseUrl
+        ? `${publicBaseUrl}${CODE_AGENT_ROOM_CONTEXT_API_PREFIX}`
+        : CODE_AGENT_ROOM_CONTEXT_API_PREFIX;
+      env.ROOMTALK_ROOM_CONTEXT_TOKEN = this.options.roomContext.issueTurnToken({
         roomId: context.roomId,
         clientId: context.clientId,
         turnId: context.turnId,
