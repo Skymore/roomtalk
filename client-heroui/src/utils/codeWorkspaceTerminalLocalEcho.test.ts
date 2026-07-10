@@ -129,6 +129,26 @@ describe('codeWorkspaceTerminalLocalEcho', () => {
     expect(writes).toEqual(['ls', '\b \b']);
   });
 
+  it('buffers remote erase sequences split across socket events', () => {
+    const writes: string[] = [];
+    const localEcho = createTerminalLocalEchoController({
+      write: (data) => writes.push(data),
+    });
+
+    expect(localEcho.handleInput('abcd')).toBe(true);
+    for (let index = 0; index < 4; index += 1) {
+      expect(localEcho.handleInput('\x7f')).toBe(true);
+    }
+
+    const remoteEcho = `abcd${'\b \b'.repeat(4)}`;
+    const visibleOutput = Array.from(remoteEcho)
+      .map(char => localEcho.handleRemoteData(char))
+      .join('');
+
+    expect(visibleOutput).toBe('');
+    expect(writes).toEqual(['abcd', '\b \b', '\b \b', '\b \b', '\b \b']);
+  });
+
   it('does not consume longer status text for a single pending character', () => {
     const writes: string[] = [];
     const localEcho = createTerminalLocalEchoController({

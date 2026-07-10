@@ -16,6 +16,7 @@ export function createTerminalLocalEchoController({
 }: TerminalLocalEchoControllerOptions): TerminalLocalEchoController {
   let pendingEcho = '';
   let pendingRemoteErases = 0;
+  let pendingRemoteEraseData = '';
   let localVisibleInputLength = 0;
   let localInputText = '';
   let remoteEchoActive = false;
@@ -25,6 +26,7 @@ export function createTerminalLocalEchoController({
   const reset = () => {
     pendingEcho = '';
     pendingRemoteErases = 0;
+    pendingRemoteEraseData = '';
     localVisibleInputLength = 0;
     localInputText = '';
     remoteEchoActive = false;
@@ -75,6 +77,7 @@ export function createTerminalLocalEchoController({
       const fullLineEraseEcho = removeEmbeddedPendingEcho(output, localInputText, true, true);
       if (fullLineEraseEcho.consumed === localInputText.length) {
         pendingRemoteErases = Math.max(0, pendingRemoteErases - 1);
+        pendingRemoteEraseData = '';
         output = '';
       }
     }
@@ -82,6 +85,8 @@ export function createTerminalLocalEchoController({
       output = consumePendingRemoteErases(output);
     }
     if (output.includes('\n')) {
+      pendingRemoteErases = 0;
+      pendingRemoteEraseData = '';
       localVisibleInputLength = 0;
       localInputText = '';
     }
@@ -152,33 +157,41 @@ export function createTerminalLocalEchoController({
   };
 
   const consumePendingRemoteErases = (data: string): string => {
+    const bufferedData = `${pendingRemoteEraseData}${data}`;
+    pendingRemoteEraseData = '';
     let output = '';
     let index = 0;
-    while (index < data.length && pendingRemoteErases > 0) {
-      const eraseLength = remoteEraseSequenceLength(data, index);
+    while (index < bufferedData.length && pendingRemoteErases > 0) {
+      const remaining = bufferedData.slice(index);
+      if (isIncompleteRemoteEraseSequence(remaining)) {
+        pendingRemoteEraseData = remaining;
+        return output;
+      }
+
+      const eraseLength = remoteEraseSequenceLength(bufferedData, index);
       if (eraseLength > 0) {
         index += eraseLength;
         pendingRemoteErases -= 1;
         continue;
       }
 
-      const escapeLength = terminalEscapeSequenceLength(data, index);
+      const escapeLength = terminalEscapeSequenceLength(bufferedData, index);
       if (escapeLength > 0) {
-        output += data.slice(index, index + escapeLength);
+        output += bufferedData.slice(index, index + escapeLength);
         index += escapeLength;
         continue;
       }
 
-      const code = data.charCodeAt(index);
+      const code = bufferedData.charCodeAt(index);
       if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) {
-        output += data[index];
+        output += bufferedData[index];
         index += 1;
         continue;
       }
 
       break;
     }
-    return `${output}${data.slice(index)}`;
+    return `${output}${bufferedData.slice(index)}`;
   };
 
   const observeRemoteText = (data: string) => {
@@ -430,4 +443,8 @@ function remoteEraseSequenceLength(value: string, index: number): number {
   }
 
   return 0;
+}
+
+function isIncompleteRemoteEraseSequence(value: string): boolean {
+  return value === '\b' || value === '\b ';
 }
