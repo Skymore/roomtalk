@@ -161,6 +161,67 @@ describe('JsonlCodeAgentDaemonRunnerClient', () => {
     assert.deepEqual(emitted.map(event => event.type), ['error']);
   });
 
+  it('finishes a terminal turn when the daemon release event is lost', async () => {
+    const process = new MemoryDaemonProcess();
+    const runner = new JsonlCodeAgentDaemonRunnerClient(10);
+
+    const run = runner.run(request, { onEvent: () => undefined }, createContext(process));
+    process.emit({ schemaVersion: 1, type: 'daemon_ready', daemonId: 'daemon-1', backends: ['codex-app-server'] });
+    await waitFor(() => process.written.length === 1);
+    process.emit({ schemaVersion: 1, type: 'final', messageId: 'ai-1', answer: '', sessionId: 'session-1' });
+
+    const result = await run;
+    assert.equal(result.finalEvent?.sessionId, 'session-1');
+  });
+
+  it('waits for terminal event handling even when release arrives first', async () => {
+    const process = new MemoryDaemonProcess();
+    const runner = new JsonlCodeAgentDaemonRunnerClient();
+    let finishHandler!: () => void;
+    let handlerStarted = false;
+    const handlerBlock = new Promise<void>(resolve => { finishHandler = resolve; });
+
+    const run = runner.run(request, {
+      onEvent: async event => {
+        if (event.type === 'final') {
+          handlerStarted = true;
+          await handlerBlock;
+        }
+      },
+    }, createContext(process));
+    process.emit({ schemaVersion: 1, type: 'daemon_ready', daemonId: 'daemon-1', backends: ['codex-app-server'] });
+    await waitFor(() => process.written.length === 1);
+    process.emit({ schemaVersion: 1, type: 'final', messageId: 'ai-1', answer: '', sessionId: 'session-1' });
+    await waitFor(() => handlerStarted);
+    process.emit({ schemaVersion: 1, type: 'turn_released', turnId: 'turn-1' });
+    let settled = false;
+    void run.then(() => { settled = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(settled, false);
+
+    finishHandler();
+    assert.equal((await run).finalEvent?.sessionId, 'session-1');
+  });
+
+  it('fails instead of hanging when a terminal event handler rejects', async () => {
+    const process = new MemoryDaemonProcess();
+    const runner = new JsonlCodeAgentDaemonRunnerClient();
+
+    const run = runner.run(request, {
+      onEvent: event => {
+        if (event.type === 'final') throw new Error('persist final failed');
+      },
+    }, createContext(process));
+    process.emit({ schemaVersion: 1, type: 'daemon_ready', daemonId: 'daemon-1', backends: ['codex-app-server'] });
+    await waitFor(() => process.written.length === 1);
+    process.emit({ schemaVersion: 1, type: 'final', messageId: 'ai-1', answer: '', sessionId: 'session-1' });
+    process.emit({ schemaVersion: 1, type: 'turn_released', turnId: 'turn-1' });
+
+    const result = await run;
+    assert.equal(result.errorEvent?.code, 'daemon_process_error');
+    assert.match(result.errorEvent?.message || '', /persist final failed/);
+  });
+
   it('returns a daemon rejection without waiting for a turn release', async () => {
     const process = new MemoryDaemonProcess();
     const runner = new JsonlCodeAgentDaemonRunnerClient();

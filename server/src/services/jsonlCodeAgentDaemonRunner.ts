@@ -31,6 +31,7 @@ import {
 
 const STDERR_TAIL_CHARS = 4000;
 const DAEMON_READY_TIMEOUT_MS = 30_000;
+const DAEMON_TURN_RELEASE_TIMEOUT_MS = 10_000;
 
 export type CodeAgentDaemonThreadQueryResult =
   | CodeAgentRunnerThreadListResultEvent
@@ -38,6 +39,8 @@ export type CodeAgentDaemonThreadQueryResult =
 
 export class JsonlCodeAgentDaemonRunnerClient implements CodeAgentRunnerClient {
   private readonly connections = new WeakMap<CodeAgentRunnerProcess, DaemonConnection>();
+
+  constructor(private readonly turnReleaseTimeoutMs = DAEMON_TURN_RELEASE_TIMEOUT_MS) {}
 
   async run(
     request: CodeAgentRunnerRunRequest,
@@ -51,7 +54,7 @@ export class JsonlCodeAgentDaemonRunnerClient implements CodeAgentRunnerClient {
 
     let connection = this.connections.get(process);
     if (!connection) {
-      connection = new DaemonConnection(process);
+      connection = new DaemonConnection(process, this.turnReleaseTimeoutMs);
       this.connections.set(process, connection);
     }
     await connection.ready();
@@ -77,7 +80,7 @@ export class JsonlCodeAgentDaemonRunnerClient implements CodeAgentRunnerClient {
 
     let connection = this.connections.get(process);
     if (!connection) {
-      connection = new DaemonConnection(process);
+      connection = new DaemonConnection(process, this.turnReleaseTimeoutMs);
       this.connections.set(process, connection);
     }
     await connection.ready();
@@ -96,7 +99,10 @@ class DaemonConnection {
   private eventChain: Promise<void> = Promise.resolve();
   private closed = false;
 
-  constructor(private readonly process: CodeAgentRunnerProcess) {
+  constructor(
+    private readonly process: CodeAgentRunnerProcess,
+    private readonly turnReleaseTimeoutMs: number
+  ) {
     this.stderrTail = collectStderrTail(process.stderr);
     this.readyPromise = new Promise<void>((resolve, reject) => {
       this.readyResolve = resolve;
@@ -139,7 +145,7 @@ class DaemonConnection {
       return emitRunnerError([], request.turnId, handlers, 'sandbox daemon client is already running a thread query', 'daemon_busy');
     }
 
-    const activeRun = new ActiveDaemonRun(request.turnId, handlers);
+    const activeRun = new ActiveDaemonRun(request.turnId, handlers, this.turnReleaseTimeoutMs);
     this.activeRun = activeRun;
     const writeError = await writeCodeAgentDaemonRequest(this.process.stdin!, request).then(
       () => undefined,
@@ -278,10 +284,14 @@ class ActiveDaemonRun {
   readonly result: Promise<CodeAgentRunnerRunResult>;
   private resolve!: (result: CodeAgentRunnerRunResult) => void;
   private released = false;
+  private settled = false;
+  private terminalHandled = false;
+  private releaseTimer?: ReturnType<typeof setTimeout>;
 
   constructor(
     readonly turnId: string,
-    private readonly handlers: CodeAgentRunnerHandlers
+    private readonly handlers: CodeAgentRunnerHandlers,
+    private readonly releaseTimeoutMs: number
   ) {
     this.result = new Promise<CodeAgentRunnerRunResult>(resolve => {
       this.resolve = resolve;
@@ -300,11 +310,18 @@ class ActiveDaemonRun {
       this.errorEvent = event;
     }
     await this.handlers.onEvent(event);
+    if (this.finalEvent || this.errorEvent) {
+      this.terminalHandled = true;
+    }
     if (this.errorEvent && doesDaemonErrorBypassRelease(this.errorEvent.code)) {
-      this.resolve({ events: this.events, errorEvent: this.errorEvent });
+      this.finish({ events: this.events, errorEvent: this.errorEvent });
       return;
     }
-    this.resolveIfReleased();
+    if (this.released) {
+      this.finishTerminal();
+    } else if (this.finalEvent || this.errorEvent) {
+      this.releaseTimer = setTimeout(() => this.finishTerminal(), Math.max(1, this.releaseTimeoutMs));
+    }
   }
 
   handleReleased(turnId: string) {
@@ -312,11 +329,11 @@ class ActiveDaemonRun {
       return;
     }
     this.released = true;
-    this.resolveIfReleased();
+    this.finishTerminal();
   }
 
   fail(message: string, code: string) {
-    if (this.finalEvent || this.errorEvent) {
+    if (this.settled) {
       return;
     }
     const errorEvent: CodeAgentRunnerErrorEvent = {
@@ -327,18 +344,32 @@ class ActiveDaemonRun {
       code,
       retryable: false,
     };
+    if (this.finalEvent || this.errorEvent) {
+      this.finalEvent = undefined;
+      this.errorEvent = errorEvent;
+      this.events.push(errorEvent);
+      this.finish({ events: this.events, errorEvent });
+      return;
+    }
     this.events.push(errorEvent);
     this.errorEvent = errorEvent;
     Promise.resolve(this.handlers.onEvent(errorEvent)).then(
-      () => this.resolve({ events: this.events, errorEvent }),
-      () => this.resolve({ events: this.events, errorEvent })
+      () => this.finish({ events: this.events, errorEvent }),
+      () => this.finish({ events: this.events, errorEvent })
     );
   }
 
-  private resolveIfReleased() {
-    if (this.released && (this.finalEvent || this.errorEvent)) {
-      this.resolve({ events: this.events, finalEvent: this.finalEvent, errorEvent: this.errorEvent });
+  private finishTerminal() {
+    if (this.terminalHandled && (this.finalEvent || this.errorEvent)) {
+      this.finish({ events: this.events, finalEvent: this.finalEvent, errorEvent: this.errorEvent });
     }
+  }
+
+  private finish(result: CodeAgentRunnerRunResult) {
+    if (this.settled) return;
+    this.settled = true;
+    if (this.releaseTimer) clearTimeout(this.releaseTimer);
+    this.resolve(result);
   }
 }
 
